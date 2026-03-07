@@ -1,0 +1,45 @@
+# OS and editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Node.js
+node_modules/
+dist/
+coverage/
+
+# Build and temp
+tmp/
+temp/
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Reports and artifacts
+reports/
+screenshots/
+playwright-report/
+test-results/
+
+# Package manager locks generated per app
+backend/.python-version
