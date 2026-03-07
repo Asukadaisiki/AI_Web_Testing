@@ -1,0 +1,16 @@
+[project]
+name = "ai-web-testing-backend"
+version = "0.1.0"
+description = "Backend skeleton for AI-enhanced web UI testing platform"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
