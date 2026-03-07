@@ -3,7 +3,16 @@ name = "ai-web-testing-backend"
 version = "0.1.0"
 description = "Backend skeleton for AI-enhanced web UI testing platform"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.116,<1.0",
+    "sqlalchemy>=2.0,<3.0",
+    "alembic>=1.16,<2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<9.0",
+]
 
 [build-system]
 requires = ["hatchling"]
