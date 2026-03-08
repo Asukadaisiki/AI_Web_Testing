@@ -1,5 +1,12 @@
 # AI Web Testing
 
+## Docs
+
+- `docs/project-plan.md`: 项目规划
+- `docs/frontend-design.md`: 前端设计
+- `docs/execution-log.md`: 执行过程沉淀
+- `docs/bug-log.md`: 缺陷发现与处理记录
+
 当前仓库采用前后端分离的单仓结构。
 
 - `backend/`：Python 后端骨架，后续按 `uv + FastAPI + SQLAlchemy` 推进

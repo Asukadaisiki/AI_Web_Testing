@@ -81,6 +81,15 @@ When responding:
 - Include `Summary`, `Changes`, `How to run`, `Tests`, and `Notes` in final responses.
 - State assumptions and limitations clearly.
 
+## Task Logging Rules
+
+- After completing any meaningful task, append one record to `docs/execution-log.md`.
+- If a clear defect, failure, inconsistency, or follow-up fix item is found during the task, append one record to `docs/bug-log.md`.
+- Update the log files before sending the final response.
+- If the task only involves analysis, debugging, validation, or documentation updates, it should still be recorded in `docs/execution-log.md`.
+- The user may explicitly opt out for a specific task; otherwise logging is the default behavior.
+- After completing a requirement or bug-related task, explicitly ask the user whether to sync the current changes to GitHub.
+
 ## Non-Goals for the First Milestone
 
 - Do not turn the product into a generic browser agent.
