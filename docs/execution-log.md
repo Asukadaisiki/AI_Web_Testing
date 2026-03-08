@@ -62,3 +62,16 @@
 - 验证：检查规则文本已写入 `AGENTS.md`，并核对待提交文件范围
 - 关联文件：`AGENTS.md`、`docs/execution-log.md`
 - 后续：完成提交后推送到 `origin/main`
+
+## 2026-03-08 | 补提交遗留文档改动
+
+- 任务：将工作区中遗留的文档删除/新增改动补做一次独立提交
+- 背景：前一次同步时刻意排除了不属于日志工作流的文档变更；现按用户要求单独提交
+- 执行动作：
+  - 确认遗留改动为删除 `docs/ai_test_agent_project_roadmap.docx`
+  - 确认遗留改动为新增 `docs/AI 自动化测试增强项目规划.md`
+  - 追加本次执行日志，准备单独提交
+- 结果：遗留文档改动已整理为可单独提交的范围
+- 验证：检查 `git status` 仅包含目标文档变更与本条执行日志
+- 关联文件：`docs/AI 自动化测试增强项目规划.md`、`docs/ai_test_agent_project_roadmap.docx`、`docs/execution-log.md`
+- 后续：提交完成后询问是否同步到 GitHub
