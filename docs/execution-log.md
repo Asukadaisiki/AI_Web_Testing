@@ -215,3 +215,56 @@
   - 直连 PostgreSQL 查询 `test_cases` 得到记录 `(1, '运行时验证用例', 1, 1)`；当前记录数为 `1`
 - 关联文件：`backend/.env`、`backend/app/core/config.py`、`backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`docs/execution-log.md`
 - 后续：可继续验证 DSL 校验接口、Suite 建模接口，或补充数据库健康检查接口
+
+## 2026-03-09 01:01
+
+- 任务：解释当前项目中 DSL 与 schemas 的含义、职责和实际用途
+- 背景：用户在阅读 `backend/app/schemas/dsl.py` 与 `backend/app/schemas/cases.py` 时，希望结合仓库现状理解概念，而不是只看抽象定义
+- 执行动作：
+  - 阅读 `backend/app/schemas/README.md`、`backend/app/schemas/dsl.py`、`backend/app/schemas/cases.py`
+  - 补充查看 `backend/app/services/dsl.py`、`backend/app/services/cases.py`、`backend/app/api/routes/dsl.py`、`backend/app/api/routes/cases.py`
+  - 检索 `DSLCase`、`DSLStep`、`CaseCreateRequest` 等类型在后端中的调用位置，梳理“请求校验 -> 服务处理 -> 持久化/返回”的链路
+- 结果：确认项目里的 `DSL` 是“可执行测试用例的结构化步骤语言”，`schemas` 是“用 Pydantic 定义的输入/输出/内部数据结构约束”，其中 `dsl.py` 负责定义步骤格式，`cases.py` 负责定义用例创建和返回的数据结构
+- 验证：通过代码检索和路由/服务实现交叉确认，定位到 `/api/v1/dsl/validate` 与 `/api/v1/cases` 两条实际使用链路
+- 关联文件：`backend/app/schemas/README.md`、`backend/app/schemas/dsl.py`、`backend/app/schemas/cases.py`、`backend/app/services/dsl.py`、`backend/app/services/cases.py`、`backend/app/api/routes/dsl.py`、`backend/app/api/routes/cases.py`
+- 后续：如需继续深入，可进一步讲解 `Pydantic schema`、`SQLAlchemy model`、`API response model` 三者的分工
+
+## 2026-03-09 01:07
+
+- 任务：解释当前项目里 Pydantic 的校验逻辑与校验触发时机
+- 背景：用户继续追问 schema 背后的实际校验流程，希望理解“字段规则是如何生效的”，尤其是 FastAPI 路由入参和 DSL 联合类型的校验行为
+- 执行动作：
+  - 检索 `BaseModel`、`Field`、`model_validate`、`model_dump` 在后端中的使用位置
+  - 阅读 `backend/app/schemas/dsl.py`、`backend/app/schemas/cases.py`，确认当前 schema 约束写法属于 Pydantic v2 风格
+  - 阅读 `backend/app/api/routes/dsl.py`、`backend/app/api/routes/cases.py` 与 `backend/tests/unit/test_dsl_validation.py`，确认请求到路由前的自动校验链路与错误响应行为
+- 结果：确认当前项目的 Pydantic 校验主要分为三层：FastAPI 对请求体做入参校验、服务层使用 `model_validate()` 对数据库 JSON 做二次结构校验、返回阶段通过 `response_model` 再约束响应结构
+- 验证：代码中已存在无效 DSL 请求返回 `422` 的测试用例，且 `cases` 服务在读取持久化 DSL 时显式调用了 `DSLCase.model_validate(record.dsl)`
+- 关联文件：`backend/pyproject.toml`、`backend/app/schemas/dsl.py`、`backend/app/schemas/cases.py`、`backend/app/api/routes/dsl.py`、`backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/tests/unit/test_dsl_validation.py`
+- 后续：如需继续深入，可进一步演示某个具体 JSON 在 Pydantic 中一步步通过或失败的过程
+## 2026-03-09 01:19
+
+- 任务：核对项目规划与当前仓库结构是否一致
+- 背景：用户观察到当前目录结构和规划描述看起来不完全一致，需要区分“阶段性未实现”与“结构方向跑偏”
+- 执行动作：
+  - 阅读 `docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`
+  - 检查仓库根目录、`backend/`、`frontend/` 的实际文件结构与入口文件
+  - 对照后端已落地模块、路由、模型、迁移、测试覆盖范围
+  - 对照前端依赖声明和 `src/` 目录现状，确认是否已实现平台页面与技术栈
+- 结果：确认项目大方向与规划一致，仍是“前后端分离的 AI Web 自动化测试平台”；但当前实现只覆盖到阶段 1 的局部，尤其前端仍处于占位骨架状态，和规划文档中描述的页面、依赖、平台能力存在明显落差
+- 验证：人工核对 `backend/app/main.py`、`backend/app/api/router.py`、`backend/app/schemas/dsl.py`、`backend/app/services/cases.py`、`backend/alembic/versions/20260309_0001_stage1_domain_models.py`、`frontend/package.json` 与规划文档内容
+- 关联文件：`docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`、`backend/app/main.py`、`backend/app/api/router.py`、`backend/app/schemas/dsl.py`、`backend/app/services/cases.py`、`backend/alembic/versions/20260309_0001_stage1_domain_models.py`、`frontend/package.json`、`docs/bug-log.md`
+- 后续：建议补一份“当前里程碑状态”文档，或先统一 `README` / 规划文档中的“已完成 / 规划中”标注，避免继续产生认知偏差
+## 2026-03-09 01:31
+
+- 任务：统一规划、执行计划与说明文档的口径，并明确“项目规划是核心”
+- 背景：用户要求文档体系以 `docs/AI 自动化测试增强项目规划.md` 为中心，避免执行计划和说明文档偏离核心规划
+- 执行动作：
+  - 在核心规划文档中补充“文档定位”，明确其为最高优先级的规划来源
+  - 重写 `docs/project-plan.md`，将其调整为从属于核心规划的执行计划，并按五层架构与五个阶段重新组织
+  - 更新 `docs/frontend-design.md`，补充“目标态设计”和“当前状态说明”的边界
+  - 更新 `README.md`、`backend/README.md`、`frontend/README.md`，统一仓库级说明、当前状态和落地顺序
+  - 将 `docs/bug-log.md` 中 BUG-003 从 `open` 更新为 `fixed`
+- 结果：文档体系已统一为“核心规划 -> 执行计划 -> 前端设计/README 说明”的从属关系，且显式补充了当前完成度说明
+- 验证：人工核对更新后的 `docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`、`README.md`、`backend/README.md`、`frontend/README.md`
+- 关联文件：`docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`、`README.md`、`backend/README.md`、`frontend/README.md`、`docs/bug-log.md`
+- 后续：后续新增计划或页面设计时，必须先核对是否与核心规划一致；如出现偏差，优先修正规划从属文档而不是另起一套口径
