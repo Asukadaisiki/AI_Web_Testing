@@ -89,3 +89,17 @@
 - 验证：在 `backend/` 下执行 `uv lock` 成功；执行 `uv run pytest` 通过，结果为 `2 passed`
 - 关联文件：`backend/app/main.py`、`backend/app/core/config.py`、`backend/app/api/router.py`、`backend/app/api/routes/health.py`、`backend/tests/unit/test_health.py`、`backend/pyproject.toml`、`backend/uv.lock`
 - 后续：继续按阶段 1 计划补齐数据库配置与首批结构化 DSL schema
+
+## 2026-03-08 23:40
+
+- 任务：简化后端本地启动方式，避免每次手输完整 `uvicorn` 命令
+- 背景：当前 backend 已可运行，但 `uv run uvicorn app.main:app --reload` 对日常开发偏冗长，适合补一个项目内脚本入口
+- 执行动作：
+  - 在 `backend/app/main.py` 中新增 `main()`，封装默认的 host、port 与 `reload=True`
+  - 在 `backend/pyproject.toml` 中注册 `backend-dev` 脚本入口
+  - 执行 `uv run pytest` 确认现有测试未受影响
+  - 通过短超时启动 `uv run backend-dev`，确认命令进入常驻服务模式
+- 结果：backend 现在可使用更短的 `uv run backend-dev` 直接启动开发服务
+- 验证：执行 `cd backend && uv run pytest` 通过，结果为 `2 passed`；执行 `uv run backend-dev` 未立即退出，符合服务启动预期
+- 关联文件：`backend/app/main.py`、`backend/pyproject.toml`、`docs/execution-log.md`
+- 后续：如需进一步简化，可继续补 `backend-test`、`backend-lint` 等统一脚本入口
