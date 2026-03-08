@@ -1,14 +1,6 @@
 """Smoke tests for the FastAPI application."""
 
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-
-client = TestClient(app)
-
-
-def test_root_metadata() -> None:
+def test_root_metadata(client) -> None:
     response = client.get("/")
 
     assert response.status_code == 200
@@ -18,8 +10,7 @@ def test_root_metadata() -> None:
         "docs_url": "/docs",
     }
 
-
-def test_health_endpoint() -> None:
+def test_health_endpoint(client) -> None:
     response = client.get("/api/v1/health")
 
     assert response.status_code == 200

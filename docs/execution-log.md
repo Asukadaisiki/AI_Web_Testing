@@ -103,3 +103,18 @@
 - 验证：执行 `cd backend && uv run pytest` 通过，结果为 `2 passed`；执行 `uv run backend-dev` 未立即退出，符合服务启动预期
 - 关联文件：`backend/app/main.py`、`backend/pyproject.toml`、`docs/execution-log.md`
 - 后续：如需进一步简化，可继续补 `backend-test`、`backend-lint` 等统一脚本入口
+
+## 2026-03-09 00:22
+
+- 任务：按阶段 1 计划补齐领域模型骨架，并落地最小 `Case` 持久化 API
+- 背景：现有执行计划要求先稳定数据库模型与资源归属边界，再继续 DSL 与执行链路；此前仓库虽已具备 DSL 校验能力，但缺少项目、用户、Suite 等基础领域结构与用例落库能力
+- 执行动作：
+  - 在 `backend/app/models` 下新增 `users`、`projects`、`project_members`、`test_cases`、`test_suites`、`suite_cases` 六个 SQLAlchemy 模型，并为 SQLite 打开外键校验
+  - 新增 `backend/alembic.ini`、`backend/alembic/env.py` 与首个迁移脚本，创建基础表结构并写入本地默认种子用户/项目/成员记录
+  - 新增 `cases` schema、service 与 API 路由，开放 `POST /api/v1/cases`、`GET /api/v1/cases`、`GET /api/v1/cases/{case_id}`
+  - 新增模型元数据测试和 `cases` API 测试，复用临时 SQLite 数据库夹具覆盖创建、列表、详情、非法 DSL 与缺失项目场景
+  - 在自测中发现 SQLite 测试种子插入顺序导致外键失败，修复夹具为先 `flush()` 父记录再写入成员关系，并登记到 `docs/bug-log.md`
+- 结果：后端现在已具备与执行计划一致的最小领域骨架，以及可创建、可查询的用例持久化链路；同时 Alembic 迁移与本地测试数据库夹具已可用
+- 验证：执行 `cd backend && uv run pytest` 通过，结果为 `14 passed`；执行 `cd backend && uv run alembic upgrade head` 成功完成首个迁移
+- 关联文件：`backend/app/models/`、`backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/app/schemas/cases.py`、`backend/alembic.ini`、`backend/alembic/env.py`、`backend/alembic/versions/20260309_0001_stage1_domain_models.py`、`backend/tests/conftest.py`、`backend/tests/unit/test_cases_api.py`、`backend/tests/unit/test_models.py`、`docs/bug-log.md`
+- 后续：继续按阶段 1 计划补齐登录接口与基础权限模型，或在现有领域骨架上推进 Suite 管理与执行任务链路

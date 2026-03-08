@@ -30,5 +30,17 @@
 
 ## 当前状态
 
-- 暂无已登记 Bug。
-- 后续发现问题后，按 `BUG-001`、`BUG-002` 递增记录。
+## BUG-001 | SQLite 测试种子数据插入顺序触发外键失败
+
+- 日期：2026-03-09
+- 状态：fixed
+- 来源：自测
+- 描述：新增项目/用户/成员关系模型后，`pytest` 在测试夹具初始化阶段插入 `project_members` 时报 `FOREIGN KEY constraint failed`。
+- 复现步骤：
+  1. 使用临时 SQLite 数据库执行测试夹具建表与种子插入
+  2. 在同一批次 flush 中插入 `users`、`projects`、`project_members`
+- 影响：`backend` API 测试、模型测试与健康检查测试全部无法启动
+- 根因：启用 SQLite 外键校验后，测试夹具未先持久化父记录，导致成员关系记录在约束检查时找不到对应的用户和项目
+- 处理：在 `tests/conftest.py` 中先对 `users` 与 `projects` 执行 `flush()`，再插入 `project_members`
+- 验证：执行 `cd backend && uv run pytest`，结果 `14 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-09 00:22
