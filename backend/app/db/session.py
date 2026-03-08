@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from functools import lru_cache
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -52,3 +52,11 @@ def get_db_session() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+
+
+def verify_database_connection() -> None:
+    """Fail fast if the configured database is unreachable."""
+
+    engine = get_engine()
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))

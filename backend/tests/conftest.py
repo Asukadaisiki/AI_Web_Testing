@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.db import Base, get_db_session
 from app.core.config import get_settings
 from app.db.session import get_engine, get_session_factory
-from app.main import app
+from app.main import create_app
 from app.models import Project, ProjectMember, User
 
 
@@ -52,13 +52,18 @@ def db_session(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Generator[Session, 
 
 
 @pytest.fixture
-def client(db_session: Session) -> Generator[TestClient, None, None]:
+def app_instance(db_session: Session):
+    return create_app()
+
+
+@pytest.fixture
+def client(app_instance, db_session: Session) -> Generator[TestClient, None, None]:
     def override_get_db_session() -> Generator[Session, None, None]:
         yield db_session
 
-    app.dependency_overrides[get_db_session] = override_get_db_session
+    app_instance.dependency_overrides[get_db_session] = override_get_db_session
     try:
-        with TestClient(app) as test_client:
+        with TestClient(app_instance) as test_client:
             yield test_client
     finally:
-        app.dependency_overrides.clear()
+        app_instance.dependency_overrides.clear()

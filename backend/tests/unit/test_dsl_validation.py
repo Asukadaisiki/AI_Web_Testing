@@ -2,15 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-
-client = TestClient(app)
-
-
-def test_validate_dsl_case_success() -> None:
+def test_validate_dsl_case_success(client) -> None:
     response = client.post(
         "/api/v1/dsl/validate",
         json={
@@ -47,8 +39,7 @@ def test_validate_dsl_case_success() -> None:
         ],
     }
 
-
-def test_validate_dsl_case_rejects_invalid_payload() -> None:
+def test_validate_dsl_case_rejects_invalid_payload(client) -> None:
     response = client.post(
         "/api/v1/dsl/validate",
         json={

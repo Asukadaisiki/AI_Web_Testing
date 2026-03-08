@@ -118,3 +118,45 @@
 - 验证：执行 `cd backend && uv run pytest` 通过，结果为 `14 passed`；执行 `cd backend && uv run alembic upgrade head` 成功完成首个迁移
 - 关联文件：`backend/app/models/`、`backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/app/schemas/cases.py`、`backend/alembic.ini`、`backend/alembic/env.py`、`backend/alembic/versions/20260309_0001_stage1_domain_models.py`、`backend/tests/conftest.py`、`backend/tests/unit/test_cases_api.py`、`backend/tests/unit/test_models.py`、`docs/bug-log.md`
 - 后续：继续按阶段 1 计划补齐登录接口与基础权限模型，或在现有领域骨架上推进 Suite 管理与执行任务链路
+
+## 2026-03-09 00:38
+
+- 任务：核对现有执行计划中数据库连接时机是否已有明确安排
+- 背景：用户追问“没有连接数据库时表如何生效”，需要区分当前实现、迁移机制与计划文档本身是否定义了数据库连接时机
+- 执行动作：
+  - 重新阅读 `docs/project-plan.md` 中阶段 1、开发顺序与技术栈相关章节
+  - 对照当前后端实现，核对数据库连接发生在 Alembic 迁移和请求期 session 懒加载，而非应用启动阶段
+  - 提炼计划缺口：现有文档规定了数据库模型与迁移方向，但未显式规定“启动时检查数据库”或“首个运行前必须完成迁移”
+- 结果：确认执行计划包含数据库建设方向，但没有把数据库真实连接时机写成明确的交付项或约束
+- 验证：人工核对 `docs/project-plan.md` 与 `backend/app/db/session.py`、`backend/alembic/env.py` 的现状一致性
+- 关联文件：`docs/project-plan.md`、`backend/app/db/session.py`、`backend/alembic/env.py`、`docs/execution-log.md`
+- 后续：如需消除歧义，可在计划或 README 中补“数据库初始化与连通性检查”这一条明确任务
+
+## 2026-03-09 00:46
+
+- 任务：补齐数据库连接时机的计划安排，并将后端启动改为应用创建阶段即校验数据库可达
+- 背景：用户明确要求实际生产中后端启动后必须连上数据库，并说明本地开发数据库为 PostgreSQL `5432`；需要把数据库连接时机从隐含约定提升为显式计划和运行行为
+- 执行动作：
+  - 在 `backend/app/main.py` 中移除模块级惰性 `app` 实例，改为使用 `create_app` factory，并在 `create_app()` 内调用数据库连通性校验
+  - 在 `backend/app/db/session.py` 中新增 `verify_database_connection()`，通过 `SELECT 1` fail fast 检查数据库可达性
+  - 在 `backend/pyproject.toml` 中新增 PostgreSQL 驱动 `psycopg[binary]`，更新 `.env.example` 为本地 PostgreSQL `5432` 示例
+  - 调整测试夹具改为按需创建 app factory，新增启动阶段连库校验测试
+  - 更新 `docs/project-plan.md` 与 `backend/README.md`，明确阶段 1 需要在应用创建阶段校验数据库连接，且首次运行前执行 Alembic 迁移
+  - 执行 `uv lock` 与 `uv run pytest` 验证依赖和测试链路
+- 结果：计划层已经明确数据库连接时机；实现层在应用创建阶段就会连接数据库，不再等到首个数据库请求才暴露连库问题
+- 验证：执行 `cd backend && uv lock` 成功；执行 `cd backend && uv run pytest` 通过，结果为 `16 passed`
+- 关联文件：`backend/app/main.py`、`backend/app/db/session.py`、`backend/pyproject.toml`、`backend/.env.example`、`backend/tests/conftest.py`、`backend/tests/unit/test_main.py`、`docs/project-plan.md`、`backend/README.md`、`docs/execution-log.md`
+- 后续：如需进一步贴近生产，可继续补数据库迁移状态检查或独立的数据库健康检查接口
+
+## 2026-03-09 00:47
+
+- 任务：写入本地 PostgreSQL 开发库账号密码到 `.env`，并让后端配置自动读取该文件
+- 背景：用户提供本地数据库账号 `postgres` 与密码 `123456`，希望直接写入 `.env`；当前配置仅读取系统环境变量，若不补充 `.env` 加载逻辑，文件内容不会被应用实际使用
+- 执行动作：
+  - 在 `backend/.env` 中写入本地 PostgreSQL 连接串 `postgresql+psycopg://postgres:123456@127.0.0.1:5432/ai_web_testing`
+  - 在 `backend/app/core/config.py` 中新增最小 `.env` 读取逻辑，默认从 `backend/.env` 加载，且不覆盖已经显式注入的系统环境变量
+  - 追加本次执行日志，保留 `.env` 继续受 `.gitignore` 保护
+- 结果：本地运行 `backend-dev` 或直接调用 `get_settings()` 时，后端会自动读取 `backend/.env` 中的 PostgreSQL 连接配置
+- 验证：待执行 `cd backend && uv run pytest`；未对真实 PostgreSQL 做在线连通性验证
+- 关联文件：`backend/.env`、`backend/app/core/config.py`、`docs/execution-log.md`
+- 后续：如数据库名不是 `ai_web_testing`，需再按实际本地库名调整 `DATABASE_URL`

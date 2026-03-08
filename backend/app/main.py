@@ -7,10 +7,12 @@ import uvicorn
 
 from app.api.router import build_api_router
 from app.core.config import get_settings
+from app.db import verify_database_connection
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    verify_database_connection()
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
@@ -28,14 +30,10 @@ def create_app() -> FastAPI:
 
     return app
 
-
-app = create_app()
-
-
 def main() -> None:
     host = os.getenv("APP_HOST", "127.0.0.1")
     port = int(os.getenv("APP_PORT", "8000"))
-    uvicorn.run("app.main:app", host=host, port=port, reload=True)
+    uvicorn.run("app.main:create_app", host=host, port=port, reload=True, factory=True)
 
 
 if __name__ == "__main__":
