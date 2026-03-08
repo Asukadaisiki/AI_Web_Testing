@@ -160,3 +160,58 @@
 - 验证：待执行 `cd backend && uv run pytest`；未对真实 PostgreSQL 做在线连通性验证
 - 关联文件：`backend/.env`、`backend/app/core/config.py`、`docs/execution-log.md`
 - 后续：如数据库名不是 `ai_web_testing`，需再按实际本地库名调整 `DATABASE_URL`
+
+## 2026-03-09 00:52
+
+- 任务：验证后端服务是否能启动、数据库是否能连接、数据库是否能正常初始化
+- 背景：用户希望确认当前“启动即连库”改动在本地 PostgreSQL 环境中的真实可用性，而不仅是单元测试通过
+- 执行动作：
+  - 执行 `cd backend && uv run python -c "from app.db.session import verify_database_connection; verify_database_connection(); print('DB_OK')"` 验证当前配置数据库连通性
+  - 执行 `cd backend && uv run alembic upgrade head` 验证数据库迁移初始化
+  - 执行 `cd backend && uv run python -c "from app.main import create_app; create_app(); print('APP_OK')"` 验证应用创建阶段启动
+  - 额外连接 `postgres` 默认库并列出数据库列表，区分是服务不可达、账号密码错误，还是目标库名不存在
+- 结果：PostgreSQL 服务本身可连接，账号密码有效，但当前配置的目标数据库 `ai_web_testing` 不存在；因此数据库连通性检查失败，Alembic 初始化失败，后端服务也无法在 `create_app()` 阶段启动
+- 验证：
+  - 连接 `postgres` 默认库成功，并列出数据库：`easytest_dev`、`postgres`、`template0`、`template1`
+  - 当前配置下 `verify_database_connection()` 失败
+  - 当前配置下 `alembic upgrade head` 失败
+  - 当前配置下 `create_app()` 失败
+- 关联文件：`backend/.env`、`backend/app/main.py`、`backend/app/db/session.py`、`backend/alembic/env.py`、`docs/bug-log.md`
+- 后续：创建 `ai_web_testing` 数据库，或将 `DATABASE_URL` 指向现有开发库后重新验证迁移与启动
+
+## 2026-03-09 00:56
+
+- 任务：创建 `ai_web_testing` 数据库并重新验证后端启动、数据库连接与数据库初始化
+- 背景：上一轮验证已确认 PostgreSQL 服务和账号密码有效，阻塞点仅剩目标库不存在
+- 执行动作：
+  - 连接 `postgres` 默认库，检查并创建 `ai_web_testing` 数据库
+  - 执行 `cd backend && uv run python -c "from app.db.session import verify_database_connection; verify_database_connection(); print('DB_OK')"` 验证连库
+  - 执行 `cd backend && uv run alembic upgrade head` 初始化数据库结构
+  - 连接 `ai_web_testing` 数据库查询 `information_schema.tables`，确认核心表已创建
+  - 启动临时 Uvicorn 进程并请求 `http://127.0.0.1:8001/api/v1/health` 验证服务可正常启动并响应
+- 结果：`ai_web_testing` 数据库已创建完成；后端可连接数据库；Alembic 迁移成功；服务可正常启动并返回健康检查结果
+- 验证：
+  - `verify_database_connection()` 输出 `DB_OK`
+  - `alembic upgrade head` 成功执行
+  - 数据库表数量为 `7`：`alembic_version`、`project_members`、`projects`、`suite_cases`、`test_cases`、`test_suites`、`users`
+  - `GET /api/v1/health` 返回 `{"status":"ok","service":"AI Web Testing Backend","environment":"development","version":"0.1.0"}`
+- 关联文件：`backend/.env`、`backend/app/main.py`、`backend/alembic/env.py`、`docs/bug-log.md`、`docs/execution-log.md`
+- 后续：如需继续验证业务链路，可进一步实测 `POST /api/v1/cases` 与 `GET /api/v1/cases`
+
+## 2026-03-09 00:57
+
+- 任务：继续验证 `cases` 业务接口的真实运行链路
+- 背景：基础健康检查、数据库连接和迁移已经通过，还需要确认后端在真实 PostgreSQL 环境下能完成用例创建、查询和持久化
+- 执行动作：
+  - 启动临时 Uvicorn 进程，实测 `POST /api/v1/cases`、`GET /api/v1/cases`、`GET /api/v1/cases/{id}`
+  - 使用 PostgreSQL 直连查询 `test_cases` 表，确认记录已真实落库
+  - 补充检查 `get_settings().database_url`，确认服务运行时读取的是 PostgreSQL 而非 SQLite
+- 结果：`cases` 接口在真实运行链路下工作正常；新建用例返回 `201`，列表与详情接口返回 `200`；PostgreSQL 中已存在对应 `test_cases` 记录
+- 验证：
+  - `POST /api/v1/cases` 返回创建结果，`id=1`
+  - `GET /api/v1/cases` 返回列表，最新记录即本次创建用例
+  - `GET /api/v1/cases/1` 返回详情
+  - `get_settings().database_url` 输出 `postgresql+psycopg://postgres:123456@127.0.0.1:5432/ai_web_testing`
+  - 直连 PostgreSQL 查询 `test_cases` 得到记录 `(1, '运行时验证用例', 1, 1)`；当前记录数为 `1`
+- 关联文件：`backend/.env`、`backend/app/core/config.py`、`backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`docs/execution-log.md`
+- 后续：可继续验证 DSL 校验接口、Suite 建模接口，或补充数据库健康检查接口

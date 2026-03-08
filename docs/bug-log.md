@@ -44,3 +44,19 @@
 - 处理：在 `tests/conftest.py` 中先对 `users` 与 `projects` 执行 `flush()`，再插入 `project_members`
 - 验证：执行 `cd backend && uv run pytest`，结果 `14 passed`
 - 关联记录：`docs/execution-log.md` 2026-03-09 00:22
+
+## BUG-002 | 配置的 PostgreSQL 数据库名不存在导致启动与迁移失败
+
+- 日期：2026-03-09
+- 状态：fixed
+- 来源：自测
+- 描述：后端当前 `DATABASE_URL` 指向 `ai_web_testing`，但本地 PostgreSQL 中不存在该数据库，导致应用创建阶段连库失败，Alembic 迁移也无法执行。
+- 复现步骤：
+  1. 在 `backend/.env` 中使用 `postgresql+psycopg://postgres:123456@127.0.0.1:5432/ai_web_testing`
+  2. 执行 `cd backend && uv run python -c "from app.main import create_app; create_app()"`
+  3. 或执行 `cd backend && uv run alembic upgrade head`
+- 影响：后端服务无法启动；数据库迁移无法初始化；依赖真实开发库的联调被阻塞
+- 根因：本地 PostgreSQL 服务可达，账号密码有效，但目标库 `ai_web_testing` 尚未创建；现有实例中仅探测到 `easytest_dev`、`postgres`、`template0`、`template1`
+- 处理：已连接 `postgres` 默认库并创建 `ai_web_testing` 数据库，随后重新执行连库校验、Alembic 初始化和服务启动验证
+- 验证：`verify_database_connection()` 成功；`alembic upgrade head` 成功；`/api/v1/health` 返回 `200`
+- 关联记录：`docs/execution-log.md` 2026-03-09 00:52、`docs/execution-log.md` 2026-03-09 00:56
