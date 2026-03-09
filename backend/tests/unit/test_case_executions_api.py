@@ -5,7 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 import app.services.executions as execution_service
-from app.schemas.executions import StepExecutionEvidence
+from app.schemas.executions import (
+    ConsoleEvent,
+    DOMSummary,
+    LocatorCandidateAttributes,
+    LocatorCandidateEvidence,
+    LocatorTrace,
+    NetworkEvent,
+    StepExecutionEvidence,
+    ViewportSnapshot,
+)
 from app.runners import RunnerExecutionError
 
 
@@ -30,7 +39,49 @@ def test_execute_case_success(client, monkeypatch) -> None:
                 action="goto",
                 value="/login",
                 status="passed",
+                duration_ms=42,
                 url="http://example.com/login",
+                page_title="登录页",
+                viewport=ViewportSnapshot(width=1280, height=720),
+                dom_summary=DOMSummary(
+                    text_preview="登录页面 请输入账号密码",
+                    button_count=1,
+                    input_count=2,
+                    link_count=1,
+                ),
+                console_events=[
+                    ConsoleEvent(level="warning", text="Deprecated warning", source_url="http://example.com/app.js")
+                ],
+                network_events=[
+                    NetworkEvent(
+                        url="http://example.com/api/login",
+                        method="POST",
+                        status=500,
+                        resource_type="xhr",
+                    )
+                ],
+                locator_trace=LocatorTrace(
+                    target="登录按钮",
+                    match_strategy="button_role",
+                    candidates=[
+                        LocatorCandidateEvidence(
+                            strategy="button_role",
+                            preview_text="登录",
+                            role="button",
+                            attributes=LocatorCandidateAttributes(aria_label="登录按钮"),
+                            visible=True,
+                            enabled=True,
+                        )
+                    ],
+                    selected_candidate=LocatorCandidateEvidence(
+                        strategy="button_role",
+                        preview_text="登录",
+                        role="button",
+                        attributes=LocatorCandidateAttributes(aria_label="登录按钮"),
+                        visible=True,
+                        enabled=True,
+                    ),
+                ),
                 screenshot_path="artifacts/executions/1/step-01.png",
             )
         ]
@@ -50,6 +101,11 @@ def test_execute_case_success(client, monkeypatch) -> None:
     assert response.json()["case_name"] == "执行用例"
     assert response.json()["status"] == "passed"
     assert response.json()["report"]["steps"][0]["status"] == "passed"
+    assert response.json()["report"]["steps"][0]["duration_ms"] == 42
+    assert response.json()["report"]["steps"][0]["page_title"] == "登录页"
+    assert response.json()["report"]["steps"][0]["locator_trace"]["match_strategy"] == "button_role"
+    assert response.json()["report"]["steps"][0]["console_events"][0]["level"] == "warning"
+    assert response.json()["report"]["steps"][0]["network_events"][0]["status"] == 500
     assert response.json()["report"]["steps"][0]["screenshot_url"] == "/artifacts/executions/1/step-01.png"
 
     detail = client.get("/api/v1/executions/1")
@@ -83,6 +139,11 @@ def test_execute_case_returns_failed_execution_when_runner_fails(client, monkeyp
                     action="goto",
                     value="/missing",
                     status="failed",
+                    locator_trace=LocatorTrace(
+                        target="不存在的按钮",
+                        candidates=[],
+                        failure_reason="No locator candidates matched target.",
+                    ),
                     error_message="Relative goto step requires base_url or EXECUTION_BASE_URL.",
                 )
             ],
@@ -104,6 +165,7 @@ def test_execute_case_returns_failed_execution_when_runner_fails(client, monkeyp
     assert response.json()["status"] == "failed"
     assert response.json()["error_message"] == "Relative goto step requires base_url or EXECUTION_BASE_URL."
     assert response.json()["report"]["steps"][0]["status"] == "failed"
+    assert response.json()["report"]["steps"][0]["locator_trace"]["failure_reason"] == "No locator candidates matched target."
 
 
 def test_execute_case_returns_not_found_for_unknown_case(client) -> None:

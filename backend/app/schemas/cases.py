@@ -14,6 +14,11 @@ class CaseCreateRequest(DSLCase):
     actor_user_id: int = Field(default=1, ge=1)
 
 
+class CaseUpdateRequest(DSLCase):
+    project_id: int = Field(ge=1)
+    actor_user_id: int = Field(default=1, ge=1)
+
+
 class StoredCaseSummary(DSLModel):
     id: int
     project_id: int

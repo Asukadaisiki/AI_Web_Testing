@@ -1,5 +1,9 @@
 import type {
+  CaseMutationPayload,
   CaseExecutionRequest,
+  DSLCasePayload,
+  DSLValidationResult,
+  StoredCaseDetail,
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
   StoredCaseSummary,
@@ -34,6 +38,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getCases() {
   return request<StoredCaseSummary[]>("/api/v1/cases");
+}
+
+export function getCaseDetail(caseId: number) {
+  return request<StoredCaseDetail>(`/api/v1/cases/${caseId}`);
+}
+
+export function createCase(payload: CaseMutationPayload) {
+  return request<StoredCaseDetail>("/api/v1/cases", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateCase(caseId: number, payload: CaseMutationPayload) {
+  return request<StoredCaseDetail>(`/api/v1/cases/${caseId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function validateDslCase(payload: DSLCasePayload) {
+  return request<DSLValidationResult>("/api/v1/dsl/validate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function executeCase(caseId: number, payload: CaseExecutionRequest) {

@@ -33,6 +33,16 @@ function renderStatus(status: ExecutionStatus) {
   );
 }
 
+function truncateText(value: string | null, maxLength = 72) {
+  if (!value) {
+    return "-";
+  }
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
 const columns: ColumnsType<StoredCaseExecutionSummary> = [
   {
     title: "执行 ID",
@@ -71,7 +81,9 @@ const columns: ColumnsType<StoredCaseExecutionSummary> = [
     title: "错误摘要",
     dataIndex: "error_message",
     key: "error_message",
-    render: (value: string | null) => value || "-",
+    render: (value: string | null) => (
+      <Typography.Text title={value || undefined}>{truncateText(value)}</Typography.Text>
+    ),
   },
 ];
 

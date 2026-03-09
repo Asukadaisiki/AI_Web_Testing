@@ -1,5 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { Card, Col, Descriptions, Divider, Empty, Row, Space, Tag, Timeline, Typography } from "antd";
+import {
+  Card,
+  Col,
+  Descriptions,
+  Empty,
+  List,
+  Row,
+  Space,
+  Tag,
+  Timeline,
+  Typography,
+} from "antd";
 import { useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
@@ -25,26 +36,156 @@ function renderStatus(status: ExecutionStatus) {
 }
 
 function StepEvidenceCard({ step }: { step: StepExecutionEvidence }) {
+  const locatorTrace = step.locator_trace;
+  const assertionResult = step.action.startsWith("assert")
+    ? step.status === "passed"
+      ? "断言通过"
+      : "断言失败"
+    : "非断言步骤";
+
   return (
     <Card
       className="step-card"
       title={`Step ${step.step_index + 1} · ${step.action}`}
       extra={renderStatus(step.status)}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        <Descriptions column={1} size="small" bordered>
-          <Descriptions.Item label="目标">{step.target || "-"}</Descriptions.Item>
-          <Descriptions.Item label="值">{step.value || "-"}</Descriptions.Item>
-          <Descriptions.Item label="URL">{step.url || "-"}</Descriptions.Item>
-          <Descriptions.Item label="定位策略">{step.resolved_by || "-"}</Descriptions.Item>
-          <Descriptions.Item label="错误信息">{step.error_message || "-"}</Descriptions.Item>
-        </Descriptions>
-        {step.screenshot_url ? (
-          <img src={step.screenshot_url} alt={`step-${step.step_index + 1}`} />
-        ) : (
-          <div className="screenshot-empty">该步骤没有截图</div>
-        )}
-      </Space>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={11}>
+          <Card size="small" title="页面信息" className="evidence-card">
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="URL">{step.url || "-"}</Descriptions.Item>
+                <Descriptions.Item label="页面标题">{step.page_title || "-"}</Descriptions.Item>
+                <Descriptions.Item label="耗时">{step.duration_ms ?? "-"} ms</Descriptions.Item>
+                <Descriptions.Item label="视口">
+                  {step.viewport ? `${step.viewport.width} × ${step.viewport.height}` : "-"}
+                </Descriptions.Item>
+                <Descriptions.Item label="DOM 摘要">
+                  {step.dom_summary ? (
+                    <Space direction="vertical" size={2}>
+                      <Typography.Text>{step.dom_summary.text_preview || "-"}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        button {step.dom_summary.button_count} / input {step.dom_summary.input_count} / link{" "}
+                        {step.dom_summary.link_count}
+                      </Typography.Text>
+                    </Space>
+                  ) : (
+                    "-"
+                  )}
+                </Descriptions.Item>
+              </Descriptions>
+              {step.screenshot_url ? (
+                <img src={step.screenshot_url} alt={`step-${step.step_index + 1}`} />
+              ) : (
+                <div className="screenshot-empty">该步骤没有截图</div>
+              )}
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} lg={13}>
+          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Card size="small" title="定位信息" className="evidence-card">
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="目标">{step.target || locatorTrace?.target || "-"}</Descriptions.Item>
+                <Descriptions.Item label="命中策略">
+                  {locatorTrace?.match_strategy || step.resolved_by || "-"}
+                </Descriptions.Item>
+                <Descriptions.Item label="失败原因">
+                  {locatorTrace?.failure_reason || step.error_message || "-"}
+                </Descriptions.Item>
+                <Descriptions.Item label="最终命中">
+                  {locatorTrace?.selected_candidate
+                    ? `${locatorTrace.selected_candidate.strategy} · ${
+                        locatorTrace.selected_candidate.preview_text || locatorTrace.selected_candidate.role || "-"
+                      }`
+                    : "-"}
+                </Descriptions.Item>
+              </Descriptions>
+              <Typography.Title level={5} style={{ marginTop: 16 }}>
+                候选列表
+              </Typography.Title>
+              {locatorTrace?.candidates.length ? (
+                <List
+                  size="small"
+                  dataSource={locatorTrace.candidates}
+                  renderItem={(candidate, index) => (
+                    <List.Item>
+                      <Space direction="vertical" size={0}>
+                        <Typography.Text>
+                          #{index + 1} {candidate.strategy} · {candidate.preview_text || candidate.role || "-"}
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          role={candidate.role || "-"} / visible={candidate.visible ? "true" : "false"} /
+                          enabled={candidate.enabled ? "true" : "false"} / aria-label=
+                          {candidate.attributes.aria_label || "-"}
+                        </Typography.Text>
+                      </Space>
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有候选元素证据" />
+              )}
+            </Card>
+
+            <Card size="small" title="运行信息" className="evidence-card">
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="断言结果">{assertionResult}</Descriptions.Item>
+                <Descriptions.Item label="错误信息">{step.error_message || "-"}</Descriptions.Item>
+              </Descriptions>
+
+              <Typography.Title level={5} style={{ marginTop: 16 }}>
+                Console 事件
+              </Typography.Title>
+              {step.console_events.length ? (
+                <List
+                  size="small"
+                  dataSource={step.console_events}
+                  renderItem={(event) => (
+                    <List.Item>
+                      <Space direction="vertical" size={0}>
+                        <Typography.Text>
+                          {event.level} · {event.text}
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          {event.source_url || "-"} {event.line_number ?? ""}
+                        </Typography.Text>
+                      </Space>
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有 console 告警或错误" />
+              )}
+
+              <Typography.Title level={5} style={{ marginTop: 16 }}>
+                Network 事件
+              </Typography.Title>
+              {step.network_events.length ? (
+                <List
+                  size="small"
+                  dataSource={step.network_events}
+                  renderItem={(event) => (
+                    <List.Item>
+                      <Space direction="vertical" size={0}>
+                        <Typography.Text>
+                          {event.method} {event.url}
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          status={event.status ?? "-"} / resource={event.resource_type || "-"} / failure=
+                          {event.failure_text || "-"}
+                        </Typography.Text>
+                      </Space>
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有失败请求证据" />
+              )}
+            </Card>
+          </Space>
+        </Col>
+      </Row>
     </Card>
   );
 }
@@ -75,7 +216,7 @@ export function ExecutionDetailPage() {
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <div className="page-header">
         <h1 className="page-title">{detail.case_name}</h1>
-        <p className="page-subtitle">查看步骤时间线、截图证据、URL 与失败原因。</p>
+        <p className="page-subtitle">查看步骤时间线、定位候选、截图证据、URL 与失败原因。</p>
       </div>
 
       <div className="summary-strip">
@@ -111,22 +252,17 @@ export function ExecutionDetailPage() {
 
       <Card title="步骤时间线">
         {steps.length ? (
-          <>
+          <Space direction="vertical" size="large" style={{ width: "100%" }}>
             <Timeline
               items={steps.map((step) => ({
                 color: step.status === "passed" ? "green" : "red",
                 children: `Step ${step.step_index + 1} · ${step.action}`,
               }))}
             />
-            <Divider />
-            <Row gutter={[16, 16]}>
-              {steps.map((step) => (
-                <Col xs={24} xl={12} key={`${step.step_index}-${step.action}`}>
-                  <StepEvidenceCard step={step} />
-                </Col>
-              ))}
-            </Row>
-          </>
+            {steps.map((step) => (
+              <StepEvidenceCard step={step} key={`${step.step_index}-${step.action}`} />
+            ))}
+          </Space>
         ) : (
           <Empty description="当前执行没有步骤证据。" />
         )}

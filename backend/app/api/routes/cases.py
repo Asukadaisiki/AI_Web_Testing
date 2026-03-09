@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db_session
-from app.schemas.cases import CaseCreateRequest, StoredCaseDetail, StoredCaseSummary
-from app.services import EntityNotFoundError, create_case, get_case, list_cases
+from app.schemas.cases import CaseCreateRequest, CaseUpdateRequest, StoredCaseDetail, StoredCaseSummary
+from app.services import EntityNotFoundError, create_case, get_case, list_cases, update_case
 
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -42,3 +42,15 @@ def get_case_route(
     if stored_case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found.")
     return stored_case
+
+
+@router.put("/{case_id}", response_model=StoredCaseDetail)
+def update_case_route(
+    case_id: int,
+    payload: CaseUpdateRequest,
+    session: Session = Depends(get_db_session),
+) -> StoredCaseDetail:
+    try:
+        return update_case(session, case_id, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

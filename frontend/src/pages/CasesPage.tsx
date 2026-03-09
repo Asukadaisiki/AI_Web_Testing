@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Space, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { executeCase, getCases } from "../services/api";
@@ -38,15 +38,20 @@ const columns = (
   {
     title: "操作",
     key: "actions",
-    width: 140,
+    width: 220,
     render: (_, record) => (
-      <Button
-        type="primary"
-        loading={runningCaseId === record.id}
-        onClick={() => onExecute(record.id)}
-      >
-        执行
-      </Button>
+      <Space>
+        <Button
+          type="primary"
+          loading={runningCaseId === record.id}
+          onClick={() => onExecute(record.id)}
+        >
+          执行
+        </Button>
+        <Button>
+          <Link to={`/cases/${record.id}/edit`}>编辑</Link>
+        </Button>
+      </Space>
     ),
   },
 ];
@@ -74,8 +79,15 @@ export function CasesPage() {
     <>
       {contextHolder}
       <div className="page-header">
-        <h1 className="page-title">用例列表</h1>
-        <p className="page-subtitle">展示已落库的 DSL 用例，并直接触发后端同步执行。</p>
+        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
+          <div>
+            <h1 className="page-title">用例列表</h1>
+            <p className="page-subtitle">展示已落库的 DSL 用例，并直接触发后端同步执行。</p>
+          </div>
+          <Button type="primary">
+            <Link to="/cases/new">新建用例</Link>
+          </Button>
+        </Space>
       </div>
       <Card>
         {casesQuery.isLoading ? <LoadingBlock /> : null}

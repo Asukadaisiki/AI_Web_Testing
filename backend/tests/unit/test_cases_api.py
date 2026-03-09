@@ -80,6 +80,55 @@ def test_get_case_detail_returns_not_found_for_unknown_case(client) -> None:
     assert response.json() == {"detail": "Case not found."}
 
 
+def test_update_case_success(client) -> None:
+    create_response = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "待更新用例",
+            "steps": [{"action": "goto", "value": "/before"}],
+        },
+    )
+
+    response = client.put(
+        f"/api/v1/cases/{create_response.json()['id']}",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "已更新用例",
+            "description": "更新后的描述",
+            "steps": [
+                {"action": "goto", "value": "/after"},
+                {"action": "assert_url_contains", "value": "/after"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "已更新用例"
+    assert response.json()["description"] == "更新后的描述"
+    assert response.json()["steps"] == [
+        {"action": "goto", "value": "/after"},
+        {"action": "assert_url_contains", "value": "/after"},
+    ]
+
+
+def test_update_case_returns_not_found_for_unknown_case(client) -> None:
+    response = client.put(
+        "/api/v1/cases/999",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "未知用例",
+            "steps": [{"action": "goto", "value": "/unknown"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Case 999 not found."}
+
+
 def test_create_case_rejects_invalid_dsl(client) -> None:
     response = client.post(
         "/api/v1/cases",

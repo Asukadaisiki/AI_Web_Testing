@@ -373,3 +373,23 @@
   - `Get-NetTCPConnection -LocalPort 5173` 显示监听地址为 `127.0.0.1`
 - 关联文件：`frontend/vite.config.ts`、`frontend/README.md`、`docs/bug-log.md`、`docs/execution-log.md`
 - 后续：如后续需要局域网联调，再评估是否切换为 `0.0.0.0`
+
+## 2026-03-09 22:00
+
+- 任务：实现报告增强、定位证据闭环与最小用例工作台
+- 背景：当前仓库已具备最小执行闭环，但执行报告证据过薄、定位过程不可解释，且前端还不能完成最小用例编辑与保存执行
+- 执行动作：
+  - 扩展 `executions` schema，为步骤证据补充 `duration_ms`、`locator_trace`、`dom_summary`、`console_events`、`network_events`、`page_title`、`viewport`
+  - 重写 `semantic locator` 逻辑，将元素定位升级为“候选召回 -> 规则筛选 -> 命中/失败原因落证据”，并新增独立单元测试
+  - 增强 Playwright runner，在同步执行模式下采集步骤耗时、页面摘要、console 告警/错误、失败请求和定位轨迹
+  - 为 `cases` 增加 `PUT /api/v1/cases/{id}`，补齐最小用例编辑后端能力，并补更新接口测试
+  - 前端新增 `CaseWorkbenchPage`，支持表单 + DSL Steps JSON 编辑、DSL 校验、保存、保存并执行
+  - 重做执行详情页，增加“定位信息 / 页面信息 / 运行信息”三块证据面板；执行列表页补失败摘要截断；用例列表页补新建/编辑入口
+  - 更新前后端测试，覆盖增强报告字段、locator 失败原因、工作台保存执行跳转
+- 结果：项目现在已具备可排障的增强报告详情与最小用例工作台，用户可以在前端创建/编辑 DSL 用例、校验 DSL、保存并执行，并在报告详情中查看定位候选、页面摘要、console/network 证据
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `27 passed`
+  - 执行 `cd frontend && npm test`，结果 `4 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/schemas/executions.py`、`backend/app/locators/semantic.py`、`backend/app/runners/playwright_runner.py`、`backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/tests/unit/test_locator_semantic.py`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`docs/execution-log.md`
+- 后续：下一步可继续补定位候选评分细化、报告字段分页/折叠优化，以及更完整的工作台编辑体验；`Suite`、AI 生成 DSL、Vision 定位仍按既定策略暂缓

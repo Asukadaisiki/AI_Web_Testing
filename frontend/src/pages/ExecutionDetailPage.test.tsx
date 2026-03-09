@@ -32,6 +32,39 @@ test("展示步骤时间线、截图和失败原因", async () => {
           action: "click",
           target: "登录按钮",
           status: "failed",
+          duration_ms: 31,
+          page_title: "登录页",
+          viewport: { width: 1280, height: 720 },
+          dom_summary: {
+            text_preview: "请登录系统",
+            button_count: 1,
+            input_count: 2,
+            link_count: 1,
+          },
+          locator_trace: {
+            target: "登录按钮",
+            match_strategy: null,
+            candidates: [],
+            selected_candidate: null,
+            failure_reason: "No locator candidates matched target.",
+          },
+          console_events: [
+            {
+              level: "warning",
+              text: "Console warning",
+              source_url: "http://example.com/app.js",
+              line_number: 9,
+            },
+          ],
+          network_events: [
+            {
+              url: "http://example.com/api/login",
+              method: "POST",
+              status: 500,
+              resource_type: "xhr",
+              failure_text: null,
+            },
+          ],
           url: "http://example.com/login",
           screenshot_url: "/artifacts/executions/12/step-01.png",
           error_message: "按钮未找到",
@@ -48,6 +81,10 @@ test("展示步骤时间线、截图和失败原因", async () => {
   expect(await screen.findByRole("heading", { name: "失败用例" })).toBeInTheDocument();
   expect(screen.getAllByText("Step 1 · click")).toHaveLength(2);
   expect(screen.getAllByText("按钮未找到").length).toBeGreaterThan(0);
+  expect(screen.getByText("定位信息")).toBeInTheDocument();
+  expect(screen.getByText("No locator candidates matched target.")).toBeInTheDocument();
+  expect(screen.getByText(/warning .*Console warning/)).toBeInTheDocument();
+  expect(screen.getByText(/status=500/)).toBeInTheDocument();
   expect(screen.getByRole("img", { name: "step-1" })).toHaveAttribute(
     "src",
     "/artifacts/executions/12/step-01.png",

@@ -18,14 +18,71 @@ class CaseExecutionRequest(DSLModel):
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
 
 
+class ViewportSnapshot(DSLModel):
+    width: int = Field(ge=0)
+    height: int = Field(ge=0)
+
+
+class LocatorCandidateAttributes(DSLModel):
+    aria_label: str | None = None
+    placeholder: str | None = None
+    data_testid: str | None = None
+
+
+class LocatorCandidateEvidence(DSLModel):
+    strategy: str
+    preview_text: str | None = None
+    role: str | None = None
+    attributes: LocatorCandidateAttributes = Field(default_factory=LocatorCandidateAttributes)
+    visible: bool = False
+    enabled: bool = False
+
+
+class LocatorTrace(DSLModel):
+    target: str
+    match_strategy: str | None = None
+    candidates: list[LocatorCandidateEvidence] = Field(default_factory=list)
+    selected_candidate: LocatorCandidateEvidence | None = None
+    failure_reason: str | None = None
+
+
+class DOMSummary(DSLModel):
+    text_preview: str | None = None
+    button_count: int = Field(default=0, ge=0)
+    input_count: int = Field(default=0, ge=0)
+    link_count: int = Field(default=0, ge=0)
+
+
+class ConsoleEvent(DSLModel):
+    level: Literal["error", "warning"]
+    text: str
+    source_url: str | None = None
+    line_number: int | None = None
+
+
+class NetworkEvent(DSLModel):
+    url: str
+    method: str
+    status: int | None = None
+    resource_type: str | None = None
+    failure_text: str | None = None
+
+
 class StepExecutionEvidence(DSLModel):
     step_index: int = Field(ge=0)
     action: str
     target: str | None = None
     value: str | None = None
     status: Literal["passed", "failed"]
+    duration_ms: int | None = Field(default=None, ge=0)
     resolved_by: str | None = None
+    locator_trace: LocatorTrace | None = None
     url: str | None = None
+    page_title: str | None = None
+    viewport: ViewportSnapshot | None = None
+    dom_summary: DOMSummary | None = None
+    console_events: list[ConsoleEvent] = Field(default_factory=list)
+    network_events: list[NetworkEvent] = Field(default_factory=list)
     screenshot_path: str | None = None
     screenshot_url: str | None = None
     error_message: str | None = None

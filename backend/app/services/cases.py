@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Project, TestCase, User
-from app.schemas.cases import CaseCreateRequest, StoredCaseDetail, StoredCaseSummary
+from app.schemas.cases import CaseCreateRequest, CaseUpdateRequest, StoredCaseDetail, StoredCaseSummary
 from app.schemas.dsl import DSLCase
 
 
@@ -26,6 +26,25 @@ def create_case(session: Session, payload: CaseCreateRequest) -> StoredCaseDetai
         description=payload.description,
         dsl=payload.model_dump(mode="json", exclude={"project_id", "actor_user_id"}),
     )
+    session.add(case)
+    session.commit()
+    session.refresh(case)
+    return _to_stored_case_detail(case)
+
+
+def update_case(session: Session, case_id: int, payload: CaseUpdateRequest) -> StoredCaseDetail:
+    case = session.get(TestCase, case_id)
+    if case is None:
+        raise EntityNotFoundError(f"Case {case_id} not found.")
+
+    _ensure_project_exists(session, payload.project_id)
+    _ensure_user_exists(session, payload.actor_user_id)
+
+    case.project_id = payload.project_id
+    case.updated_by = payload.actor_user_id
+    case.name = payload.name
+    case.description = payload.description
+    case.dsl = payload.model_dump(mode="json", exclude={"project_id", "actor_user_id"})
     session.add(case)
     session.commit()
     session.refresh(case)
