@@ -90,3 +90,19 @@
 - 处理：在 `frontend/src/setupTests.ts` 中补充 `matchMedia` 与 `getComputedStyle` 的测试环境兼容桩，恢复 Vitest 下的组件渲染能力
 - 验证：执行 `cd frontend && npm test`，结果 `3 passed`
 - 关联记录：`docs/execution-log.md` 2026-03-09 21:35
+
+## BUG-005 | Vite 开发服务器在当前 Windows 环境下仅监听 IPv6 回环地址，导致浏览器访问 localhost 被拒绝
+
+- 日期：2026-03-09
+- 状态：fixed
+- 来源：联调
+- 描述：前端执行 `npm run dev` 后，浏览器访问 `localhost` 提示拒绝连接，本机 `Invoke-WebRequest` 访问 `127.0.0.1:5173` 也失败。
+- 复现步骤：
+  1. 在 `frontend/` 下执行 `npm run dev`
+  2. 访问 `http://localhost:5173` 或 `http://127.0.0.1:5173`
+  3. 观察开发服务未正常响应
+- 影响：前端开发环境无法直接通过浏览器访问，阻塞本地联调
+- 根因：Vite 在当前 Windows 环境下默认仅监听 `::1:5173`，没有同时绑定 `127.0.0.1:5173`，浏览器或命令行按 IPv4 路径访问时被拒绝
+- 处理：在 `frontend/vite.config.ts` 中显式设置 `server.host = "127.0.0.1"`，并同步设置 `preview.host`
+- 验证：以 `vite --host 127.0.0.1` 启动后，监听地址变为 `127.0.0.1:5173`，HTTP 访问恢复正常
+- 关联记录：`docs/execution-log.md` 2026-03-09 21:47

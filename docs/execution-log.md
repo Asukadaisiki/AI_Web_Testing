@@ -356,3 +356,20 @@
   - 执行 `cd frontend && npm run build` 成功
 - 关联文件：`backend/app/main.py`、`backend/app/api/routes/executions.py`、`backend/app/services/executions.py`、`backend/app/schemas/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`backend/tests/unit/test_main.py`、`frontend/package.json`、`frontend/vite.config.ts`、`frontend/src/app/App.tsx`、`frontend/src/layouts/AppLayout.tsx`、`frontend/src/pages/`、`frontend/src/services/api.ts`、`frontend/src/setupTests.ts`、`docs/project-plan.md`、`frontend/README.md`、`docs/bug-log.md`
 - 后续：下一步可优先补执行详情的报告增强、Locator 候选证据展示与更完整的前端平台页，而不是立即扩展 Suite 或 AI 生成链路
+
+## 2026-03-09 21:47
+
+- 任务：修复前端开发服务器启动后浏览器无法访问的问题
+- 背景：用户反馈前端启动后浏览器访问 `localhost` 被拒绝，需要区分是服务未启动还是监听地址异常
+- 执行动作：
+  - 本地复现 `npm run dev`，并检查 `5173` 端口监听状态与 `Invoke-WebRequest` 访问结果
+  - 确认服务仅监听在 IPv6 回环地址 `::1`，没有监听 `127.0.0.1`
+  - 以 `vite --host 127.0.0.1` 对照验证，确认显式绑定 IPv4 后页面可正常访问
+  - 更新 `frontend/vite.config.ts`，显式设置 `server.host` 与 `preview.host` 为 `127.0.0.1`
+  - 更新 `frontend/README.md` 并在 `docs/bug-log.md` 记录问题
+- 结果：前端开发服务默认改为绑定 `127.0.0.1`，避免当前 Windows 环境下的 IPv6-only 监听导致浏览器拒绝连接
+- 验证：
+  - 启动日志显示 `Local: http://127.0.0.1:5173/`
+  - `Get-NetTCPConnection -LocalPort 5173` 显示监听地址为 `127.0.0.1`
+- 关联文件：`frontend/vite.config.ts`、`frontend/README.md`、`docs/bug-log.md`、`docs/execution-log.md`
+- 后续：如后续需要局域网联调，再评估是否切换为 `0.0.0.0`

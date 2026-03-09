@@ -27,3 +27,17 @@
 3. 阶段 3：DSL 编辑与 AI 生成入口
 4. 阶段 4：报告中心与失败分析展示
 5. 阶段 5：Suite 管理、执行中心、历史结果对比
+
+## 本地启动
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+默认访问地址：
+
+- `http://127.0.0.1:5173`
+
+当前 Vite 已显式绑定 `127.0.0.1`，用于避免部分 Windows 环境只监听 IPv6 `::1` 导致浏览器访问 `localhost`/IPv4 时被拒绝。
