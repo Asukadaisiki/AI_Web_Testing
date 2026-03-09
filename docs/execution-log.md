@@ -314,3 +314,27 @@
   - 执行临时本地静态页烟雾验证，`execute_case_with_playwright()` 在真实 Chromium 下完成 5 个步骤并返回 `passed`
 - 关联文件：`backend/app/models/test_case_run.py`、`backend/alembic/versions/20260309_0002_case_execution_runs.py`、`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/api/routes/executions.py`、`backend/app/runners/playwright_runner.py`、`backend/app/locators/semantic.py`、`backend/app/reporters/json_report.py`、`backend/tests/unit/test_case_executions_api.py`、`backend/tests/unit/test_models.py`、`backend/pyproject.toml`、`backend/.env.example`
 - 后续：如需真实浏览器联调，还需执行 `playwright install chromium`；后续可在此基础上补报告详情页、前端执行结果查看与更完整的 Locator 服务
+
+## 2026-03-09 21:02
+
+- 任务：核对规划文档中是否已定义前端展示执行路径的方式
+- 背景：用户追问无头执行与前端可视化之间的关系，需要区分“文档已规划的展示方式”与“尚未写入规划的技术实现方式”
+- 执行动作：
+  - 检索 `docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md` 中与执行路径展示、页面预览、截图、报告、定位调试、回放相关的关键词
+  - 对照核心规划、执行计划和前端设计文档，确认哪些内容明确写入，哪些内容没有被写成正式要求
+- 结果：确认文档已经明确规划“工作台预览、执行结果展示、执行过程回放、执行轨迹展示、截图/页面快照/URL/日志/候选元素等证据展示”；但没有明确写成“前端实时串流远端 VPS 上的有头浏览器窗口”
+- 验证：人工核对 `docs/project-plan.md`、`docs/AI 自动化测试增强项目规划.md`、`docs/frontend-design.md` 的相关章节与关键词命中结果
+- 关联文件：`docs/project-plan.md`、`docs/AI 自动化测试增强项目规划.md`、`docs/frontend-design.md`、`docs/execution-log.md`
+- 后续：如需进一步避免歧义，可在规划中补充一句“执行路径展示以截图、页面快照、执行回放和结构化证据为主，而非远程浏览器窗口串流”
+
+## 2026-03-09 21:06
+
+- 任务：分析 Midscene.js 的思路中哪些适合当前项目借鉴，哪些不适合直接照搬
+- 背景：用户希望参考 Midscene.js，但当前项目的目标是“AI 增强的测试平台”，不是通用浏览器 Agent；需要把可复用的方法论和不应直接复制的产品取向区分开
+- 执行动作：
+  - 基于 Midscene.js 官方文档与仓库说明，梳理其核心链路：页面截图/可选 DOM 输入、受约束动作空间、AI 决策、底层 Playwright/Puppeteer 执行、可视化报告
+  - 对照仓库中的核心规划、执行计划与前端设计文档，分析当前项目在 Locator、Executor、Reporter、工作台展示方面与 Midscene.js 的重合点和差异点
+- 结果：确认当前项目适合借鉴 Midscene.js 的“结构化动作空间、截图+DOM 融合定位、步骤级报告、工作台回放”思路；但不适合直接照搬其“自然语言直接驱动执行”的 Agent 倾向，仍应坚持 DSL 先校验、后执行的测试平台路线
+- 验证：人工对照 `docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md` 与 Midscene.js 官方文档描述
+- 关联文件：`docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`、`docs/execution-log.md`
+- 后续：后续若继续参考 Midscene.js，应优先吸收其 Locator/Reporter/工作台设计，而不是把产品做成开放式浏览器 Agent
