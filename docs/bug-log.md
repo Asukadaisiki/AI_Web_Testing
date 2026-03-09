@@ -75,3 +75,18 @@
 - 处理：已将 `docs/AI 自动化测试增强项目规划.md` 明确为核心规划文档；重写 `docs/project-plan.md` 作为从属执行计划；更新 `docs/frontend-design.md`、`README.md`、`backend/README.md`、`frontend/README.md`，统一“核心规划优先、当前状态单独说明”的口径
 - 验证：人工核对更新后的文档，已明确区分核心规划、执行计划、前端目标设计和当前实现状态
 - 关联记录：`docs/execution-log.md` 2026-03-09 01:19、`docs/execution-log.md` 2026-03-09 01:31
+
+## BUG-004 | Ant Design 组件在 Vitest/jsdom 下缺少浏览器 API 模拟导致前端测试无法运行
+
+- 日期：2026-03-09
+- 状态：fixed
+- 来源：自测
+- 描述：引入 Ant Design 表格、描述列表和栅格后，前端页面测试在 Vitest/jsdom 环境下报 `window.matchMedia is not a function` 与 `window.getComputedStyle` 相关异常，导致页面无法渲染。
+- 复现步骤：
+  1. 在 `frontend/` 下执行 `npm test`
+  2. 渲染包含 `Table`、`Descriptions`、`Row/Col` 的页面组件
+- 影响：前端页面测试全部失败，无法验证“Case 列表 / 执行列表 / 报告详情”的最小演示链路
+- 根因：Ant Design 的响应式与表格内部逻辑依赖浏览器环境中的 `matchMedia` 与完整 `getComputedStyle` 行为，而 jsdom 默认未提供这些能力
+- 处理：在 `frontend/src/setupTests.ts` 中补充 `matchMedia` 与 `getComputedStyle` 的测试环境兼容桩，恢复 Vitest 下的组件渲染能力
+- 验证：执行 `cd frontend && npm test`，结果 `3 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-09 21:35

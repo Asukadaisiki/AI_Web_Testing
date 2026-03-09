@@ -338,3 +338,21 @@
 - 验证：人工对照 `docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md` 与 Midscene.js 官方文档描述
 - 关联文件：`docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`、`docs/execution-log.md`
 - 后续：后续若继续参考 Midscene.js，应优先吸收其 Locator/Reporter/工作台设计，而不是把产品做成开放式浏览器 Agent
+
+## 2026-03-09 21:35
+
+- 任务：实现“前端可演示闭环”并补齐前端所需的后端契约
+- 背景：后端单 Case 执行闭环已可用，但前端仍停留在骨架目录，且执行汇总接口与截图访问方式不足以支撑最小平台演示
+- 执行动作：
+  - 补齐后端执行契约：为执行汇总/详情补充 `case_name`，新增 `GET /api/v1/executions` 全局执行列表接口，并将步骤截图转换为前端可访问的 `/artifacts/...` URL
+  - 在 `app.main` 中挂载 artifact 只读静态目录，补充后端测试覆盖执行筛选、截图 URL 和静态访问
+  - 在 `frontend/` 下接入 Vite、React、React Router、TanStack Query、Ant Design 与 Vitest，新增基础平台布局、API 请求层与类型定义
+  - 实现 Case 列表页、执行列表页、报告详情页，并补前端页面测试；联调中发现 Ant Design 依赖浏览器 API，补充 jsdom 兼容桩并登记到 `docs/bug-log.md`
+  - 更新 `docs/project-plan.md` 与 `frontend/README.md`，同步当前里程碑状态与“前端可演示闭环 v1”目标
+- 结果：项目现在已具备从前端查看 Case、触发执行、查看执行列表、打开报告详情与步骤截图证据的最小可演示闭环
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `23 passed`
+  - 执行 `cd frontend && npm test`，结果 `3 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/main.py`、`backend/app/api/routes/executions.py`、`backend/app/services/executions.py`、`backend/app/schemas/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`backend/tests/unit/test_main.py`、`frontend/package.json`、`frontend/vite.config.ts`、`frontend/src/app/App.tsx`、`frontend/src/layouts/AppLayout.tsx`、`frontend/src/pages/`、`frontend/src/services/api.ts`、`frontend/src/setupTests.ts`、`docs/project-plan.md`、`frontend/README.md`、`docs/bug-log.md`
+- 后续：下一步可优先补执行详情的报告增强、Locator 候选证据展示与更完整的前端平台页，而不是立即扩展 Suite 或 AI 生成链路

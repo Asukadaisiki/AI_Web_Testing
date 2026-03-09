@@ -16,6 +16,7 @@ from app.schemas.executions import (
     CaseExecutionRequest,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
+    StepExecutionEvidence,
 )
 from app.services.cases import EntityNotFoundError
 
@@ -42,12 +43,14 @@ def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) 
             execution_id=execution.id,
             base_url=payload.base_url or get_settings().execution_base_url,
         )
+        step_results = [_with_artifact_url(step) for step in step_results]
         report = build_execution_report(status="passed", steps=step_results)
         execution.status = "passed"
         execution.report = report.model_dump(mode="json")
         execution.error_message = None
     except RunnerExecutionError as exc:
-        report = build_execution_report(status="failed", steps=exc.step_results)
+        step_results = [_with_artifact_url(step) for step in exc.step_results]
+        report = build_execution_report(status="failed", steps=step_results)
         execution.status = "failed"
         execution.report = report.model_dump(mode="json")
         execution.error_message = str(exc)
@@ -55,11 +58,12 @@ def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) 
     session.add(execution)
     session.commit()
     session.refresh(execution)
-    return _to_execution_detail(execution)
+    return _to_execution_detail(execution, case_name=record.name)
 
 
 def list_case_executions(session: Session, case_id: int) -> list[StoredCaseExecutionSummary]:
-    if session.get(TestCase, case_id) is None:
+    case = session.get(TestCase, case_id)
+    if case is None:
         raise EntityNotFoundError(f"Case {case_id} not found.")
 
     statement = (
@@ -68,14 +72,40 @@ def list_case_executions(session: Session, case_id: int) -> list[StoredCaseExecu
         .order_by(TestCaseRun.started_at.desc(), TestCaseRun.id.desc())
     )
     records = session.scalars(statement).all()
-    return [_to_execution_summary(record) for record in records]
+    return [_to_execution_summary(record, case_name=case.name) for record in records]
+
+
+def list_executions(
+    session: Session,
+    *,
+    project_id: int | None = None,
+    status: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[StoredCaseExecutionSummary]:
+    statement = (
+        select(TestCaseRun, TestCase.name)
+        .join(TestCase, TestCase.id == TestCaseRun.case_id)
+        .order_by(TestCaseRun.started_at.desc(), TestCaseRun.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    if project_id is not None:
+        statement = statement.where(TestCaseRun.project_id == project_id)
+    if status is not None:
+        statement = statement.where(TestCaseRun.status == status)
+
+    rows = session.execute(statement).all()
+    return [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
 
 
 def get_case_execution(session: Session, execution_id: int) -> StoredCaseExecutionDetail | None:
     record = session.get(TestCaseRun, execution_id)
     if record is None:
         return None
-    return _to_execution_detail(record)
+    case = session.get(TestCase, record.case_id)
+    case_name = case.name if case is not None else f"Case {record.case_id}"
+    return _to_execution_detail(record, case_name=case_name)
 
 
 def _ensure_user_exists(session: Session, user_id: int) -> None:
@@ -83,10 +113,11 @@ def _ensure_user_exists(session: Session, user_id: int) -> None:
         raise EntityNotFoundError(f"User {user_id} not found.")
 
 
-def _to_execution_summary(record: TestCaseRun) -> StoredCaseExecutionSummary:
+def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionSummary:
     return StoredCaseExecutionSummary(
         id=record.id,
         case_id=record.case_id,
+        case_name=case_name,
         project_id=record.project_id,
         triggered_by=record.triggered_by,
         status=record.status,
@@ -96,9 +127,25 @@ def _to_execution_summary(record: TestCaseRun) -> StoredCaseExecutionSummary:
     )
 
 
-def _to_execution_detail(record: TestCaseRun) -> StoredCaseExecutionDetail:
-    summary = _to_execution_summary(record)
+def _to_execution_detail(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionDetail:
+    summary = _to_execution_summary(record, case_name=case_name)
     return StoredCaseExecutionDetail(
         **summary.model_dump(),
-        report=record.report,
+        report=_normalize_report(record.report),
     )
+
+
+def _normalize_report(report: dict | None):
+    if report is None:
+        return None
+    steps = [_with_artifact_url(StepExecutionEvidence.model_validate(step)) for step in report.get("steps", [])]
+    return build_execution_report(status=report["status"], steps=steps)
+
+
+def _with_artifact_url(step: StepExecutionEvidence) -> StepExecutionEvidence:
+    if step.screenshot_url or not step.screenshot_path:
+        return step
+
+    normalized = step.screenshot_path.replace("\\", "/").lstrip("/")
+    screenshot_url = f"/{normalized}" if normalized.startswith("artifacts/") else None
+    return step.model_copy(update={"screenshot_url": screenshot_url})

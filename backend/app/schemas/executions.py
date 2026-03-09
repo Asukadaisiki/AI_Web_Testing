@@ -27,6 +27,7 @@ class StepExecutionEvidence(DSLModel):
     resolved_by: str | None = None
     url: str | None = None
     screenshot_path: str | None = None
+    screenshot_url: str | None = None
     error_message: str | None = None
 
 
@@ -38,6 +39,7 @@ class ExecutionReport(DSLModel):
 class StoredCaseExecutionSummary(DSLModel):
     id: int
     case_id: int
+    case_name: str
     project_id: int
     triggered_by: int
     status: ExecutionStatus

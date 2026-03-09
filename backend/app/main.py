@@ -1,8 +1,10 @@
 """FastAPI application entrypoint."""
 
 import os
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from app.api.router import build_api_router
@@ -10,15 +12,20 @@ from app.core.config import get_settings
 from app.db import verify_database_connection
 
 
+ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "artifacts"
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     verify_database_connection()
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         debug=settings.debug,
     )
     app.include_router(build_api_router())
+    app.mount("/artifacts", StaticFiles(directory=ARTIFACTS_DIR), name="artifacts")
 
     @app.get("/", tags=["meta"], summary="Service metadata")
     def read_root() -> dict[str, str]:

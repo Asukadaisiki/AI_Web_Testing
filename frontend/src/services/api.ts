@@ -1,0 +1,70 @@
+import type {
+  CaseExecutionRequest,
+  StoredCaseExecutionDetail,
+  StoredCaseExecutionSummary,
+  StoredCaseSummary,
+} from "../types/api";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  });
+
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      if (payload.detail) {
+        message = payload.detail;
+      }
+    } catch {
+      // Ignore non-JSON errors.
+    }
+    throw new Error(message);
+  }
+
+  return (await response.json()) as T;
+}
+
+export function getCases() {
+  return request<StoredCaseSummary[]>("/api/v1/cases");
+}
+
+export function executeCase(caseId: number, payload: CaseExecutionRequest) {
+  return request<StoredCaseExecutionDetail>(`/api/v1/cases/${caseId}/execute`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getExecutions(params: {
+  project_id?: number;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const search = new URLSearchParams();
+  if (params.project_id) {
+    search.set("project_id", String(params.project_id));
+  }
+  if (params.status) {
+    search.set("status", params.status);
+  }
+  if (params.limit) {
+    search.set("limit", String(params.limit));
+  }
+  if (params.offset) {
+    search.set("offset", String(params.offset));
+  }
+  return request<StoredCaseExecutionSummary[]>(`/api/v1/executions?${search.toString()}`);
+}
+
+export function getExecutionDetail(executionId: number) {
+  return request<StoredCaseExecutionDetail>(`/api/v1/executions/${executionId}`);
+}

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db_session
@@ -16,6 +16,7 @@ from app.services import (
     execute_case,
     get_case_execution,
     list_case_executions,
+    list_executions,
 )
 
 
@@ -43,6 +44,23 @@ def list_case_executions_route(
         return list_case_executions(session, case_id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/executions", response_model=list[StoredCaseExecutionSummary])
+def list_executions_route(
+    project_id: int | None = Query(default=None, ge=1),
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_db_session),
+) -> list[StoredCaseExecutionSummary]:
+    return list_executions(
+        session,
+        project_id=project_id,
+        status=status_filter,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/executions/{execution_id}", response_model=StoredCaseExecutionDetail)

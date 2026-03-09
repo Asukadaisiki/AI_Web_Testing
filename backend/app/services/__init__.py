@@ -2,7 +2,12 @@
 
 from app.services.cases import EntityNotFoundError, create_case, get_case, list_cases
 from app.services.dsl import SUPPORTED_DSL_ACTIONS, validate_dsl_case
-from app.services.executions import execute_case, get_case_execution, list_case_executions
+from app.services.executions import (
+    execute_case,
+    get_case_execution,
+    list_case_executions,
+    list_executions,
+)
 
 __all__ = [
     "EntityNotFoundError",
@@ -13,5 +18,6 @@ __all__ = [
     "get_case_execution",
     "list_cases",
     "list_case_executions",
+    "list_executions",
     "validate_dsl_case",
 ]
