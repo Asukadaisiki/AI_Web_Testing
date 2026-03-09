@@ -14,6 +14,7 @@ def test_stage1_tables_exist(db_session: Session) -> None:
         "projects",
         "suite_cases",
         "test_cases",
+        "test_case_runs",
         "test_suites",
         "users",
     }
@@ -37,3 +38,14 @@ def test_suite_case_supports_ordering_relation(db_session: Session) -> None:
         constraint["column_names"] == ["suite_id", "order_index"]
         for constraint in unique_constraints
     )
+
+
+def test_test_case_run_foreign_keys_are_declared(db_session: Session) -> None:
+    inspector = inspect(db_session.bind)
+    foreign_keys = inspector.get_foreign_keys("test_case_runs")
+
+    assert {foreign_key["referred_table"] for foreign_key in foreign_keys} == {
+        "projects",
+        "test_cases",
+        "users",
+    }

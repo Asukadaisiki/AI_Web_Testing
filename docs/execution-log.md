@@ -268,3 +268,49 @@
 - 验证：人工核对更新后的 `docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`、`README.md`、`backend/README.md`、`frontend/README.md`
 - 关联文件：`docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/frontend-design.md`、`README.md`、`backend/README.md`、`frontend/README.md`、`docs/bug-log.md`
 - 后续：后续新增计划或页面设计时，必须先核对是否与核心规划一致；如出现偏差，优先修正规划从属文档而不是另起一套口径
+
+## 2026-03-09 20:18
+
+- 任务：阅读执行计划与执行日志，规划项目下一步安排
+- 背景：当前仓库已完成阶段 1 的一部分基础能力，但 `runners`、`locators`、`reporters` 与前端真实页面仍未落地；需要基于现状而不是目标态文档，判断下一步的最小推进路径
+- 执行动作：
+  - 重新阅读 `docs/project-plan.md`、`docs/execution-log.md`、`docs/bug-log.md`，核对阶段目标、已完成事项与已知风险
+  - 补充检查后端入口、API 路由、DSL schema、Case service，以及 `runners`/`locators`/`reporters` 占位模块，确认当前主链路止于“DSL 校验 + Case 落库”
+  - 检查 `backend/pyproject.toml` 与代码检索结果，确认仓库尚未接入 Playwright、执行任务模型、报告模型与执行查询接口
+  - 基于“优先打通 DSL -> Executor -> Evidence -> Report 主链路”的执行原则，整理下一阶段建议顺序、边界与验收重点
+- 结果：确认项目下一步应优先推进单 Case 执行闭环，而不是先扩展 Suite、认证或前端平台壳；建议先补执行任务与报告数据结构，再接入 Playwright Runner、步骤级证据和最小执行 API，最后再补前端结果查看与 Suite 能力
+- 验证：人工核对规划文档、执行日志与现有代码入口的一致性；确认 `backend/app/runners`、`backend/app/locators`、`backend/app/reporters` 仍为占位目录，且 `backend/pyproject.toml` 尚无 Playwright 依赖
+- 关联文件：`docs/project-plan.md`、`docs/execution-log.md`、`docs/bug-log.md`、`backend/app/main.py`、`backend/app/api/router.py`、`backend/app/services/cases.py`、`backend/app/schemas/dsl.py`、`backend/app/runners/README.md`、`backend/app/locators/README.md`、`backend/app/reporters/README.md`、`backend/pyproject.toml`
+- 后续：优先拆分并实现执行域模型与 `POST /api/v1/cases/{id}/execute` 最小接口；随后补 Playwright 动作执行、步骤证据持久化与结构化报告查询
+
+## 2026-03-09 20:36
+
+- 任务：细化下一阶段实施规格，锁定单 Case 执行闭环的实现边界
+- 背景：在确认项目应先打通 `DSL -> Executor -> Evidence -> Report` 主链路后，仍需进一步确定执行模式、前端范围与 `target` 处理策略，否则实现时会在接口形态和定位策略上反复摇摆
+- 执行动作：
+  - 基于前一轮探索结果收敛高影响决策，明确下一阶段只做后端，不同时推进前端结果页
+  - 锁定执行模式为“同步闭环”，即通过单次执行接口直接完成 Case 执行并持久化结果，而不先引入异步任务调度
+  - 锁定 `target` 第一版采用“简化语义匹配”，支持 text、label、placeholder 等少量启发式，兼容现有 DSL 示例中的中文语义目标
+  - 复核 `backend/pyproject.toml` 与 `backend/app/runners`、`backend/app/locators`、`backend/app/reporters` 现状，确认这些决策与当前仓库缺口一致
+- 结果：下一阶段的实现规格已收敛为“后端优先、同步执行、简化语义定位”的单 Case 执行闭环，可直接据此拆分执行模型、Runner、Reporter 与 API
+- 验证：人工复核 `docs/project-plan.md` 的阶段 1 目标与执行原则；核对 `backend/pyproject.toml` 尚无 Playwright 依赖，`backend/app/runners`、`backend/app/locators`、`backend/app/reporters` 仍为占位模块
+- 关联文件：`docs/project-plan.md`、`docs/execution-log.md`、`backend/pyproject.toml`、`backend/app/runners/README.md`、`backend/app/locators/README.md`、`backend/app/reporters/README.md`
+- 后续：按该规格进入实现时，应先补执行结果模型与迁移，再落 `POST /api/v1/cases/{id}/execute`、步骤证据存储、Playwright 动作映射与查询接口
+
+## 2026-03-09 20:47
+
+- 任务：实现单 Case 执行闭环的后端最小版本
+- 背景：根据上一轮收敛后的规格，本阶段需优先打通后端侧 `DSL -> Executor -> Evidence -> Report` 主链路，先实现同步执行、后端优先、简化语义 target 的最小可运行版本
+- 执行动作：
+  - 新增 `test_case_runs` 模型与 Alembic 迁移，持久化执行状态、错误信息、步骤证据报告
+  - 新增执行请求/响应 schema、执行 service 与 API 路由，开放 `POST /api/v1/cases/{case_id}/execute`、`GET /api/v1/executions/{execution_id}`、`GET /api/v1/cases/{case_id}/executions`
+  - 接入 Playwright 依赖，实现同步 Runner v0，支持 `goto`、`click`、`input`、`wait_for`、`assert_text`、`assert_url_contains`
+  - 新增简化语义定位与 JSON 报告构建逻辑，支持显式 selector 以及 text、label、placeholder、button role 等少量启发式匹配
+  - 增加 `EXECUTION_BASE_URL` 配置入口与执行 API 测试、模型测试；执行 `uv lock`、`uv run pytest`、`uv run alembic upgrade head`
+- 结果：后端已具备单 Case 同步执行闭环的基础能力，能够持久化执行记录并返回结构化步骤证据；执行失败时也会记录失败状态与失败步骤报告
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `21 passed`
+  - 执行 `cd backend && uv run alembic upgrade head` 成功，新增迁移 `20260309_0002`
+  - 执行临时本地静态页烟雾验证，`execute_case_with_playwright()` 在真实 Chromium 下完成 5 个步骤并返回 `passed`
+- 关联文件：`backend/app/models/test_case_run.py`、`backend/alembic/versions/20260309_0002_case_execution_runs.py`、`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/api/routes/executions.py`、`backend/app/runners/playwright_runner.py`、`backend/app/locators/semantic.py`、`backend/app/reporters/json_report.py`、`backend/tests/unit/test_case_executions_api.py`、`backend/tests/unit/test_models.py`、`backend/pyproject.toml`、`backend/.env.example`
+- 后续：如需真实浏览器联调，还需执行 `playwright install chromium`；后续可在此基础上补报告详情页、前端执行结果查看与更完整的 Locator 服务
