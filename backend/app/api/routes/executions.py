@@ -49,6 +49,7 @@ def list_case_executions_route(
 @router.get("/executions", response_model=list[StoredCaseExecutionSummary])
 def list_executions_route(
     project_id: int | None = Query(default=None, ge=1),
+    case_id: int | None = Query(default=None, ge=1),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -57,6 +58,7 @@ def list_executions_route(
     return list_executions(
         session,
         project_id=project_id,
+        case_id=case_id,
         status=status_filter,
         limit=limit,
         offset=offset,

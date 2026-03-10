@@ -74,6 +74,7 @@ export function executeCase(caseId: number, payload: CaseExecutionRequest) {
 
 export function getExecutions(params: {
   project_id?: number;
+  case_id?: number;
   status?: string;
   limit?: number;
   offset?: number;
@@ -81,6 +82,9 @@ export function getExecutions(params: {
   const search = new URLSearchParams();
   if (params.project_id) {
     search.set("project_id", String(params.project_id));
+  }
+  if (params.case_id) {
+    search.set("case_id", String(params.case_id));
   }
   if (params.status) {
     search.set("status", params.status);

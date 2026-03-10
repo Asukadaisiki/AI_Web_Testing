@@ -34,6 +34,9 @@ class LocatorCandidateEvidence(DSLModel):
     preview_text: str | None = None
     role: str | None = None
     attributes: LocatorCandidateAttributes = Field(default_factory=LocatorCandidateAttributes)
+    score: int = Field(default=0, ge=0)
+    matched_rules: list[str] = Field(default_factory=list)
+    rejected_reasons: list[str] = Field(default_factory=list)
     visible: bool = False
     enabled: bool = False
 
@@ -41,6 +44,7 @@ class LocatorCandidateEvidence(DSLModel):
 class LocatorTrace(DSLModel):
     target: str
     match_strategy: str | None = None
+    selection_reason: str | None = None
     candidates: list[LocatorCandidateEvidence] = Field(default_factory=list)
     selected_candidate: LocatorCandidateEvidence | None = None
     failure_reason: str | None = None
@@ -103,6 +107,10 @@ class StoredCaseExecutionSummary(DSLModel):
     error_message: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+    total_steps: int = Field(default=0, ge=0)
+    failed_step_index: int | None = Field(default=None, ge=0)
+    latest_screenshot_url: str | None = None
 
 
 class StoredCaseExecutionDetail(StoredCaseExecutionSummary):

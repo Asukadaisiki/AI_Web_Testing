@@ -102,10 +102,30 @@ a {
   font-weight: 700;
 }
 
+.table-footer-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.execution-thumbnail {
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #d9e2f0;
+}
+
 .workbench-grid {
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr);
+}
+
+.structured-step-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 @media (max-width: 900px) {
@@ -119,5 +139,9 @@ a {
 
   .workbench-grid {
     grid-template-columns: 1fr;
+  }
+
+  .table-footer-actions {
+    align-items: flex-start;
   }
 }

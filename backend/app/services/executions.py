@@ -79,6 +79,7 @@ def list_executions(
     session: Session,
     *,
     project_id: int | None = None,
+    case_id: int | None = None,
     status: str | None = None,
     limit: int = 20,
     offset: int = 0,
@@ -92,6 +93,8 @@ def list_executions(
     )
     if project_id is not None:
         statement = statement.where(TestCaseRun.project_id == project_id)
+    if case_id is not None:
+        statement = statement.where(TestCaseRun.case_id == case_id)
     if status is not None:
         statement = statement.where(TestCaseRun.status == status)
 
@@ -114,6 +117,7 @@ def _ensure_user_exists(session: Session, user_id: int) -> None:
 
 
 def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionSummary:
+    report = _normalize_report(record.report)
     return StoredCaseExecutionSummary(
         id=record.id,
         case_id=record.case_id,
@@ -124,6 +128,10 @@ def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseE
         error_message=record.error_message,
         started_at=record.started_at,
         finished_at=record.finished_at,
+        duration_ms=_derive_duration_ms(record.started_at, record.finished_at),
+        total_steps=len(report.steps) if report is not None else 0,
+        failed_step_index=_derive_failed_step_index(report),
+        latest_screenshot_url=_derive_latest_screenshot_url(report),
     )
 
 
@@ -149,3 +157,27 @@ def _with_artifact_url(step: StepExecutionEvidence) -> StepExecutionEvidence:
     normalized = step.screenshot_path.replace("\\", "/").lstrip("/")
     screenshot_url = f"/{normalized}" if normalized.startswith("artifacts/") else None
     return step.model_copy(update={"screenshot_url": screenshot_url})
+
+
+def _derive_duration_ms(started_at: datetime, finished_at: datetime | None) -> int | None:
+    if finished_at is None:
+        return None
+    return max(0, int((finished_at - started_at).total_seconds() * 1000))
+
+
+def _derive_failed_step_index(report) -> int | None:
+    if report is None:
+        return None
+    for step in report.steps:
+        if step.status == "failed":
+            return step.step_index
+    return None
+
+
+def _derive_latest_screenshot_url(report) -> str | None:
+    if report is None:
+        return None
+    for step in reversed(report.steps):
+        if step.screenshot_url:
+            return step.screenshot_url
+    return None

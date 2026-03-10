@@ -1,7 +1,10 @@
+import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Card,
   Col,
+  Collapse,
   Descriptions,
   Empty,
   List,
@@ -11,11 +14,18 @@ import {
   Timeline,
   Typography,
 } from "antd";
-import { useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getExecutionDetail } from "../services/api";
-import type { ExecutionStatus, StepExecutionEvidence } from "../types/api";
+import type {
+  ConsoleEvent,
+  ExecutionStatus,
+  NetworkEvent,
+  StepExecutionEvidence,
+} from "../types/api";
+
+const DEFAULT_EVENT_PREVIEW_COUNT = 2;
 
 function renderStatus(status: ExecutionStatus) {
   const colorMap: Record<ExecutionStatus, string> = {
@@ -35,7 +45,42 @@ function renderStatus(status: ExecutionStatus) {
   );
 }
 
-function StepEvidenceCard({ step }: { step: StepExecutionEvidence }) {
+function EventList<T>({
+  title,
+  events,
+  renderItem,
+  emptyDescription,
+}: {
+  title: string;
+  events: T[];
+  renderItem: (event: T) => ReactNode;
+  emptyDescription: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleEvents = expanded ? events : events.slice(0, DEFAULT_EVENT_PREVIEW_COUNT);
+
+  return (
+    <>
+      <Typography.Title level={5} style={{ marginTop: 16 }}>
+        {title}
+      </Typography.Title>
+      {events.length ? (
+        <Space direction="vertical" size="small" style={{ width: "100%" }}>
+          <List size="small" dataSource={visibleEvents} renderItem={(event) => <List.Item>{renderItem(event)}</List.Item>} />
+          {events.length > DEFAULT_EVENT_PREVIEW_COUNT ? (
+            <Typography.Link onClick={() => setExpanded((value) => !value)}>
+              {expanded ? "收起" : `显示全部 ${events.length} 条`}
+            </Typography.Link>
+          ) : null}
+        </Space>
+      ) : (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />
+      )}
+    </>
+  );
+}
+
+function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
   const locatorTrace = step.locator_trace;
   const assertionResult = step.action.startsWith("assert")
     ? step.status === "passed"
@@ -44,11 +89,7 @@ function StepEvidenceCard({ step }: { step: StepExecutionEvidence }) {
     : "非断言步骤";
 
   return (
-    <Card
-      className="step-card"
-      title={`Step ${step.step_index + 1} · ${step.action}`}
-      extra={renderStatus(step.status)}
-    >
+    <div id={`step-${step.step_index + 1}`}>
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={11}>
           <Card size="small" title="页面信息" className="evidence-card">
@@ -90,6 +131,9 @@ function StepEvidenceCard({ step }: { step: StepExecutionEvidence }) {
                 <Descriptions.Item label="命中策略">
                   {locatorTrace?.match_strategy || step.resolved_by || "-"}
                 </Descriptions.Item>
+                <Descriptions.Item label="命中说明">
+                  {locatorTrace?.selection_reason || "-"}
+                </Descriptions.Item>
                 <Descriptions.Item label="失败原因">
                   {locatorTrace?.failure_reason || step.error_message || "-"}
                 </Descriptions.Item>
@@ -112,12 +156,16 @@ function StepEvidenceCard({ step }: { step: StepExecutionEvidence }) {
                     <List.Item>
                       <Space direction="vertical" size={0}>
                         <Typography.Text>
-                          #{index + 1} {candidate.strategy} · {candidate.preview_text || candidate.role || "-"}
+                          #{index + 1} {candidate.strategy} · {candidate.preview_text || candidate.role || "-"} ·
+                          score={candidate.score}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          role={candidate.role || "-"} / visible={candidate.visible ? "true" : "false"} /
-                          enabled={candidate.enabled ? "true" : "false"} / aria-label=
-                          {candidate.attributes.aria_label || "-"}
+                          role={candidate.role || "-"} / visible={candidate.visible ? "true" : "false"} / enabled=
+                          {candidate.enabled ? "true" : "false"} / matched=
+                          {candidate.matched_rules.length ? candidate.matched_rules.join(", ") : "-"}
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          rejected={candidate.rejected_reasons.length ? candidate.rejected_reasons.join(", ") : "-"}
                         </Typography.Text>
                       </Space>
                     </List.Item>
@@ -134,70 +182,78 @@ function StepEvidenceCard({ step }: { step: StepExecutionEvidence }) {
                 <Descriptions.Item label="错误信息">{step.error_message || "-"}</Descriptions.Item>
               </Descriptions>
 
-              <Typography.Title level={5} style={{ marginTop: 16 }}>
-                Console 事件
-              </Typography.Title>
-              {step.console_events.length ? (
-                <List
-                  size="small"
-                  dataSource={step.console_events}
-                  renderItem={(event) => (
-                    <List.Item>
-                      <Space direction="vertical" size={0}>
-                        <Typography.Text>
-                          {event.level} · {event.text}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          {event.source_url || "-"} {event.line_number ?? ""}
-                        </Typography.Text>
-                      </Space>
-                    </List.Item>
-                  )}
-                />
-              ) : (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有 console 告警或错误" />
-              )}
+              <EventList<ConsoleEvent>
+                title="Console 事件"
+                events={step.console_events}
+                emptyDescription="没有 console 告警或错误"
+                renderItem={(event) => (
+                  <Space direction="vertical" size={0}>
+                    <Typography.Text>
+                      {event.level} · {event.text}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      {event.source_url || "-"} {event.line_number ?? ""}
+                    </Typography.Text>
+                  </Space>
+                )}
+              />
 
-              <Typography.Title level={5} style={{ marginTop: 16 }}>
-                Network 事件
-              </Typography.Title>
-              {step.network_events.length ? (
-                <List
-                  size="small"
-                  dataSource={step.network_events}
-                  renderItem={(event) => (
-                    <List.Item>
-                      <Space direction="vertical" size={0}>
-                        <Typography.Text>
-                          {event.method} {event.url}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          status={event.status ?? "-"} / resource={event.resource_type || "-"} / failure=
-                          {event.failure_text || "-"}
-                        </Typography.Text>
-                      </Space>
-                    </List.Item>
-                  )}
-                />
-              ) : (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有失败请求证据" />
-              )}
+              <EventList<NetworkEvent>
+                title="Network 事件"
+                events={step.network_events}
+                emptyDescription="没有失败请求证据"
+                renderItem={(event) => (
+                  <Space direction="vertical" size={0}>
+                    <Typography.Text>
+                      {event.method} {event.url}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      status={event.status ?? "-"} / resource={event.resource_type || "-"} / failure=
+                      {event.failure_text || "-"}
+                    </Typography.Text>
+                  </Space>
+                )}
+              />
             </Card>
           </Space>
         </Col>
       </Row>
-    </Card>
+    </div>
   );
 }
 
 export function ExecutionDetailPage() {
   const params = useParams<{ executionId: string }>();
+  const location = useLocation();
   const executionId = Number(params.executionId);
   const query = useQuery({
     queryKey: ["execution-detail", executionId],
     queryFn: () => getExecutionDetail(executionId),
     enabled: Number.isFinite(executionId),
   });
+
+  const failedStepKeys = useMemo(
+    () =>
+      (query.data?.report?.steps ?? [])
+        .filter((step) => step.status === "failed")
+        .map((step) => String(step.step_index)),
+    [query.data?.report?.steps],
+  );
+  const [activeKeys, setActiveKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    setActiveKeys(failedStepKeys);
+  }, [failedStepKeys]);
+
+  useEffect(() => {
+    if (!query.data || !location.hash) {
+      return;
+    }
+    const element = document.querySelector(location.hash);
+    if (element && "scrollIntoView" in element) {
+      element.scrollIntoView({ block: "start" });
+    }
+  }, [location.hash, query.data]);
 
   if (query.isLoading) {
     return <LoadingBlock />;
@@ -244,6 +300,12 @@ export function ExecutionDetailPage() {
           <Descriptions.Item label="结束时间">
             {detail.finished_at ? new Date(detail.finished_at).toLocaleString() : "-"}
           </Descriptions.Item>
+          <Descriptions.Item label="总耗时">{detail.duration_ms ?? "-"} ms</Descriptions.Item>
+          <Descriptions.Item label="失败步骤">
+            {detail.failed_step_index === null || detail.failed_step_index === undefined
+              ? "-"
+              : `Step ${detail.failed_step_index + 1}`}
+          </Descriptions.Item>
           <Descriptions.Item label="错误摘要" span={2}>
             {detail.error_message || "-"}
           </Descriptions.Item>
@@ -259,9 +321,20 @@ export function ExecutionDetailPage() {
                 children: `Step ${step.step_index + 1} · ${step.action}`,
               }))}
             />
-            {steps.map((step) => (
-              <StepEvidenceCard step={step} key={`${step.step_index}-${step.action}`} />
-            ))}
+            <Collapse
+              activeKey={activeKeys}
+              onChange={(keys) => setActiveKeys(Array.isArray(keys) ? keys : [keys])}
+              items={steps.map((step) => ({
+                key: String(step.step_index),
+                label: (
+                  <Space>
+                    <Typography.Text strong>{`Step ${step.step_index + 1} · ${step.action}`}</Typography.Text>
+                    {renderStatus(step.status)}
+                  </Space>
+                ),
+                children: <StepEvidenceBody step={step} />,
+              }))}
+            />
           </Space>
         ) : (
           <Empty description="当前执行没有步骤证据。" />

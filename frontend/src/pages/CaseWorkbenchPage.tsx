@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -7,6 +7,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Select,
   Space,
   Tag,
   Typography,
@@ -30,15 +31,66 @@ type WorkbenchFormValues = {
   project_id: number;
 };
 
+type EditorMode = "structured" | "json";
+type StepAction = "goto" | "click" | "input" | "wait_for" | "assert_text" | "assert_url_contains";
+
+const ACTION_OPTIONS: { label: string; value: StepAction }[] = [
+  { label: "goto", value: "goto" },
+  { label: "click", value: "click" },
+  { label: "input", value: "input" },
+  { label: "wait_for", value: "wait_for" },
+  { label: "assert_text", value: "assert_text" },
+  { label: "assert_url_contains", value: "assert_url_contains" },
+];
+
+const STEP_TEMPLATES: { label: string; value: string; steps: DSLStep[] }[] = [
+  {
+    label: "登录冒烟模板",
+    value: "login-smoke",
+    steps: [
+      { action: "goto", value: "/login" },
+      { action: "input", target: "用户名输入框", value: "admin" },
+      { action: "input", target: "密码输入框", value: "123456" },
+      { action: "click", target: "登录按钮" },
+      { action: "assert_url_contains", value: "/dashboard" },
+    ],
+  },
+  {
+    label: "跳转断言模板",
+    value: "goto-assert",
+    steps: [
+      { action: "goto", value: "/" },
+      { action: "assert_text", target: "欢迎文案", value: "欢迎使用" },
+    ],
+  },
+];
+
+function createDefaultStep(action: StepAction = "goto"): DSLStep {
+  switch (action) {
+    case "goto":
+      return { action, value: "/" };
+    case "click":
+      return { action, target: "按钮" };
+    case "input":
+      return { action, target: "输入框", value: "" };
+    case "wait_for":
+      return { action, target: "目标元素", timeout_ms: 5000 };
+    case "assert_text":
+      return { action, target: "目标元素", value: "期望文本" };
+    case "assert_url_contains":
+      return { action, value: "/expected" };
+  }
+}
+
 function formatStepsJson(steps: DSLStep[]) {
   return JSON.stringify(steps, null, 2);
 }
 
-function buildDslPayload(values: WorkbenchFormValues, stepsJson: string): DSLCasePayload {
+function parseStepsJson(stepsJson: string): DSLStep[] {
   let parsedSteps: unknown;
   try {
     parsedSteps = JSON.parse(stepsJson);
-  } catch (error) {
+  } catch {
     throw new Error("DSL Steps JSON 不是合法的 JSON。");
   }
 
@@ -46,11 +98,41 @@ function buildDslPayload(values: WorkbenchFormValues, stepsJson: string): DSLCas
     throw new Error("DSL Steps JSON 必须是数组。");
   }
 
+  return parsedSteps as DSLStep[];
+}
+
+function buildDslPayload(values: WorkbenchFormValues, stepsJson: string): DSLCasePayload {
   return {
     name: values.name,
     description: values.description || null,
-    steps: parsedSteps as DSLStep[],
+    steps: parseStepsJson(stepsJson),
   };
+}
+
+function actionNeedsTarget(action: StepAction) {
+  return action === "click" || action === "input" || action === "wait_for" || action === "assert_text";
+}
+
+function actionNeedsValue(action: StepAction) {
+  return action === "goto" || action === "input" || action === "assert_text" || action === "assert_url_contains";
+}
+
+function actionNeedsTimeout(action: StepAction) {
+  return action === "wait_for";
+}
+
+function normalizeStepForAction(step: DSLStep, action: StepAction): DSLStep {
+  const nextStep = createDefaultStep(action);
+  if (actionNeedsTarget(action) && typeof step.target === "string") {
+    nextStep.target = step.target;
+  }
+  if (actionNeedsValue(action) && typeof step.value === "string") {
+    nextStep.value = step.value;
+  }
+  if (actionNeedsTimeout(action) && typeof step.timeout_ms === "number") {
+    nextStep.timeout_ms = step.timeout_ms;
+  }
+  return nextStep;
 }
 
 export function CaseWorkbenchPage() {
@@ -60,7 +142,10 @@ export function CaseWorkbenchPage() {
   const queryClient = useQueryClient();
   const [form] = Form.useForm<WorkbenchFormValues>();
   const [messageApi, contextHolder] = message.useMessage();
-  const [stepsJson, setStepsJson] = useState<string>(formatStepsJson([{ action: "goto", value: "/login" }]));
+  const [editorMode, setEditorMode] = useState<EditorMode>("structured");
+  const [templateValue, setTemplateValue] = useState<string>(STEP_TEMPLATES[0].value);
+  const [structuredSteps, setStructuredSteps] = useState<DSLStep[]>([createDefaultStep()]);
+  const [stepsJson, setStepsJson] = useState<string>(formatStepsJson([createDefaultStep()]));
   const [validationResult, setValidationResult] = useState<DSLValidationResult | null>(null);
 
   const caseQuery = useQuery({
@@ -78,13 +163,60 @@ export function CaseWorkbenchPage() {
       description: caseQuery.data.description ?? "",
       project_id: caseQuery.data.project_id,
     });
+    setStructuredSteps(caseQuery.data.steps);
     setStepsJson(formatStepsJson(caseQuery.data.steps));
   }, [caseQuery.data, form]);
+
+  const syncStructuredSteps = (nextSteps: DSLStep[]) => {
+    setStructuredSteps(nextSteps);
+    setStepsJson(formatStepsJson(nextSteps));
+  };
+
+  const buildStepsJsonForSubmit = () => (editorMode === "json" ? stepsJson : formatStepsJson(structuredSteps));
+
+  const changeEditorMode = (nextMode: EditorMode) => {
+    if (nextMode === editorMode) {
+      return;
+    }
+    if (nextMode === "structured") {
+      try {
+        const parsedSteps = parseStepsJson(stepsJson);
+        setStructuredSteps(parsedSteps);
+      } catch (error) {
+        void messageApi.error((error as Error).message);
+        return;
+      }
+    } else {
+      setStepsJson(formatStepsJson(structuredSteps));
+    }
+    setEditorMode(nextMode);
+  };
+
+  const updateStructuredStep = (index: number, updater: (step: DSLStep) => DSLStep) => {
+    const nextSteps = structuredSteps.map((step, stepIndex) => (stepIndex === index ? updater(step) : step));
+    syncStructuredSteps(nextSteps);
+  };
+
+  const moveStep = (index: number, direction: -1 | 1) => {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= structuredSteps.length) {
+      return;
+    }
+    const nextSteps = [...structuredSteps];
+    const [removed] = nextSteps.splice(index, 1);
+    nextSteps.splice(targetIndex, 0, removed);
+    syncStructuredSteps(nextSteps);
+  };
+
+  const templateOptions = useMemo(
+    () => STEP_TEMPLATES.map((template) => ({ label: template.label, value: template.value })),
+    [],
+  );
 
   const saveMutation = useMutation({
     mutationFn: async ({ executeAfterSave }: { executeAfterSave: boolean }) => {
       const values = await form.validateFields();
-      const dslPayload = buildDslPayload(values, stepsJson);
+      const dslPayload = buildDslPayload(values, buildStepsJsonForSubmit());
       const validated = await validateDslCase(dslPayload);
       setValidationResult(validated);
 
@@ -127,8 +259,7 @@ export function CaseWorkbenchPage() {
   const validateMutation = useMutation({
     mutationFn: async () => {
       const values = await form.validateFields();
-      const payload = buildDslPayload(values, stepsJson);
-      return validateDslCase(payload);
+      return validateDslCase(buildDslPayload(values, buildStepsJsonForSubmit()));
     },
     onSuccess: (result) => {
       setValidationResult(result);
@@ -153,7 +284,7 @@ export function CaseWorkbenchPage() {
       {contextHolder}
       <div className="page-header">
         <h1 className="page-title">{isEditMode ? "用例工作台" : "新建用例"}</h1>
-        <p className="page-subtitle">编辑基础元数据与 DSL Steps JSON，先校验，再保存或执行。</p>
+        <p className="page-subtitle">默认使用结构化步骤编辑；必要时可切到原始 JSON 模式。</p>
       </div>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
         <Card>
@@ -177,20 +308,170 @@ export function CaseWorkbenchPage() {
         </Card>
 
         <Card
-          title="DSL Steps JSON"
+          title="步骤编辑器"
           extra={
-            <Typography.Text type="secondary">
-              只编辑 `steps` 数组，名称和描述走上面的表单
-            </Typography.Text>
+            <Space.Compact>
+              <Button
+                type={editorMode === "structured" ? "primary" : "default"}
+                aria-pressed={editorMode === "structured"}
+                onClick={() => changeEditorMode("structured")}
+              >
+                结构化编辑
+              </Button>
+              <Button
+                type={editorMode === "json" ? "primary" : "default"}
+                aria-pressed={editorMode === "json"}
+                onClick={() => changeEditorMode("json")}
+              >
+                原始 JSON
+              </Button>
+            </Space.Compact>
           }
         >
-          <Input.TextArea
-            value={stepsJson}
-            rows={18}
-            onChange={(event) => setStepsJson(event.target.value)}
-            spellCheck={false}
-            style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
-          />
+          <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            <Space wrap>
+              <Select
+                value={templateValue}
+                options={templateOptions}
+                style={{ width: 220 }}
+                onChange={(value) => setTemplateValue(value)}
+              />
+              <Button
+                onClick={() => {
+                  const selectedTemplate = STEP_TEMPLATES.find((item) => item.value === templateValue);
+                  if (!selectedTemplate) {
+                    return;
+                  }
+                  syncStructuredSteps(selectedTemplate.steps);
+                  setEditorMode("structured");
+                }}
+              >
+                应用模板
+              </Button>
+              <Button
+                onClick={() => {
+                  syncStructuredSteps([...structuredSteps, createDefaultStep()]);
+                  setEditorMode("structured");
+                }}
+              >
+                新增步骤
+              </Button>
+            </Space>
+
+            {editorMode === "structured" ? (
+              <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                {structuredSteps.map((step, index) => {
+                  const action = step.action as StepAction;
+                  return (
+                    <Card
+                      key={`step-${index}`}
+                      size="small"
+                      title={`Step ${index + 1}`}
+                      extra={<Tag>{action}</Tag>}
+                    >
+                      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                        <div className="structured-step-grid">
+                          <div>
+                            <Typography.Text type="secondary">动作</Typography.Text>
+                            <Select
+                              value={action}
+                              options={ACTION_OPTIONS}
+                              style={{ width: "100%", marginTop: 8 }}
+                              onChange={(nextAction) =>
+                                updateStructuredStep(index, (currentStep) =>
+                                  normalizeStepForAction(currentStep, nextAction),
+                                )
+                              }
+                            />
+                          </div>
+                          {actionNeedsTarget(action) ? (
+                            <div>
+                              <Typography.Text type="secondary">目标</Typography.Text>
+                              <Input
+                                style={{ marginTop: 8 }}
+                                value={typeof step.target === "string" ? step.target : ""}
+                                onChange={(event) =>
+                                  updateStructuredStep(index, (currentStep) => ({
+                                    ...currentStep,
+                                    target: event.target.value,
+                                  }))
+                                }
+                              />
+                            </div>
+                          ) : null}
+                          {actionNeedsValue(action) ? (
+                            <div>
+                              <Typography.Text type="secondary">
+                                {action === "goto" || action === "assert_url_contains" ? "值 / URL" : "值"}
+                              </Typography.Text>
+                              <Input
+                                style={{ marginTop: 8 }}
+                                value={typeof step.value === "string" ? step.value : ""}
+                                onChange={(event) =>
+                                  updateStructuredStep(index, (currentStep) => ({
+                                    ...currentStep,
+                                    value: event.target.value,
+                                  }))
+                                }
+                              />
+                            </div>
+                          ) : null}
+                          {actionNeedsTimeout(action) ? (
+                            <div>
+                              <Typography.Text type="secondary">超时 (ms)</Typography.Text>
+                              <InputNumber
+                                min={1}
+                                max={60000}
+                                style={{ width: "100%", marginTop: 8 }}
+                                value={typeof step.timeout_ms === "number" ? step.timeout_ms : 5000}
+                                onChange={(value) =>
+                                  updateStructuredStep(index, (currentStep) => ({
+                                    ...currentStep,
+                                    timeout_ms: typeof value === "number" ? value : 5000,
+                                  }))
+                                }
+                              />
+                            </div>
+                          ) : null}
+                        </div>
+                        <Space wrap>
+                          <Button onClick={() => moveStep(index, -1)} disabled={index === 0}>
+                            上移
+                          </Button>
+                          <Button
+                            onClick={() => moveStep(index, 1)}
+                            disabled={index === structuredSteps.length - 1}
+                          >
+                            下移
+                          </Button>
+                          <Button
+                            danger
+                            onClick={() => {
+                              if (structuredSteps.length === 1) {
+                                syncStructuredSteps([createDefaultStep()]);
+                                return;
+                              }
+                              syncStructuredSteps(structuredSteps.filter((_, stepIndex) => stepIndex !== index));
+                            }}
+                          >
+                            删除
+                          </Button>
+                        </Space>
+                      </Space>
+                    </Card>
+                  );
+                })}
+              </Space>
+            ) : (
+              <Input.TextArea
+                value={stepsJson}
+                rows={18}
+                onChange={(event) => setStepsJson(event.target.value)}
+                spellCheck={false}
+                style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
+              />
+            )}
+          </Space>
         </Card>
 
         {validationResult ? (

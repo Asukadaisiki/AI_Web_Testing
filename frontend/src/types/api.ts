@@ -60,6 +60,9 @@ export interface LocatorCandidateEvidence {
   preview_text?: string | null;
   role?: string | null;
   attributes: LocatorCandidateAttributes;
+  score: number;
+  matched_rules: string[];
+  rejected_reasons: string[];
   visible: boolean;
   enabled: boolean;
 }
@@ -67,6 +70,7 @@ export interface LocatorCandidateEvidence {
 export interface LocatorTrace {
   target: string;
   match_strategy?: string | null;
+  selection_reason?: string | null;
   candidates: LocatorCandidateEvidence[];
   selected_candidate?: LocatorCandidateEvidence | null;
   failure_reason?: string | null;
@@ -129,6 +133,10 @@ export interface StoredCaseExecutionSummary {
   error_message: string | null;
   started_at: string;
   finished_at: string | null;
+  duration_ms?: number | null;
+  total_steps: number;
+  failed_step_index?: number | null;
+  latest_screenshot_url?: string | null;
 }
 
 export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {

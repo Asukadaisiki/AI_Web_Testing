@@ -38,6 +38,7 @@ def resolve_semantic_locator(
     candidate_builders = _build_candidate_builders(page, normalized_target, prefer_input=prefer_input)
 
     candidates: list[LocatorCandidateEvidence] = []
+    ranked_candidates: list[tuple[int, int, object, LocatorCandidateEvidence, str]] = []
     selected_locator = None
     selected_candidate = None
     selected_strategy = None
@@ -56,15 +57,22 @@ def resolve_semantic_locator(
             except Exception:
                 continue
 
-            candidates.append(candidate)
-            if selected_locator is None and _candidate_matches_requirements(
+            scored_candidate = _score_candidate(
                 candidate,
+                strategy=strategy,
                 require_visible=require_visible,
                 require_enabled=require_enabled,
-            ):
-                selected_locator = candidate_locator
-                selected_candidate = candidate
-                selected_strategy = strategy
+            )
+            candidates.append(scored_candidate)
+            if not scored_candidate.rejected_reasons:
+                ranked_candidates.append((scored_candidate.score, -len(ranked_candidates), candidate_locator, scored_candidate, strategy))
+
+    if ranked_candidates:
+        _, _, selected_locator, selected_candidate, selected_strategy = max(ranked_candidates, key=lambda item: (item[0], item[1]))
+    candidates = sorted(candidates, key=lambda item: item.score, reverse=True)
+    if selected_candidate is not None and all(candidate != selected_candidate for candidate in candidates[:5]):
+        candidates = [selected_candidate, *[candidate for candidate in candidates if candidate != selected_candidate]]
+    candidates = candidates[:5]
 
     if selected_locator is not None and selected_candidate is not None and selected_strategy is not None:
         return ResolvedLocator(
@@ -75,6 +83,7 @@ def resolve_semantic_locator(
                 match_strategy=selected_strategy,
                 candidates=candidates,
                 selected_candidate=selected_candidate,
+                selection_reason=_build_selection_reason(selected_candidate),
             ),
         )
 
@@ -139,11 +148,11 @@ def _candidate_matches_requirements(
     require_visible: bool,
     require_enabled: bool,
 ) -> bool:
-    if require_visible and not candidate.visible:
-        return False
-    if require_enabled and not candidate.enabled:
-        return False
-    return True
+    return not _build_rejected_reasons(
+        candidate,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
 
 
 def _resolve_failure_reason(
@@ -192,3 +201,87 @@ def _build_candidate_evidence(locator, strategy: str) -> LocatorCandidateEvidenc
         visible=bool(payload.get("visible")),
         enabled=bool(payload.get("enabled")),
     )
+
+
+def _score_candidate(
+    candidate: LocatorCandidateEvidence,
+    *,
+    strategy: str,
+    require_visible: bool,
+    require_enabled: bool,
+) -> LocatorCandidateEvidence:
+    matched_rules = _build_matched_rules(candidate, strategy)
+    rejected_reasons = _build_rejected_reasons(
+        candidate,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+    score = _strategy_base_score(strategy)
+    if candidate.visible:
+        score += 10
+    if candidate.enabled:
+        score += 5
+    if candidate.preview_text:
+        score += 3
+
+    return candidate.model_copy(
+        update={
+            "score": score,
+            "matched_rules": matched_rules,
+            "rejected_reasons": rejected_reasons,
+        }
+    )
+
+
+def _build_matched_rules(candidate: LocatorCandidateEvidence, strategy: str) -> list[str]:
+    matched_rules = [_strategy_rule_name(strategy)]
+    if candidate.visible:
+        matched_rules.append("visible")
+    if candidate.enabled:
+        matched_rules.append("enabled")
+    if candidate.preview_text:
+        matched_rules.append("has-preview-text")
+    return matched_rules
+
+
+def _build_rejected_reasons(
+    candidate: LocatorCandidateEvidence,
+    *,
+    require_visible: bool,
+    require_enabled: bool,
+) -> list[str]:
+    rejected_reasons: list[str] = []
+    if require_visible and not candidate.visible:
+        rejected_reasons.append("element-not-visible")
+    if require_enabled and not candidate.enabled:
+        rejected_reasons.append("element-not-enabled")
+    return rejected_reasons
+
+
+def _strategy_base_score(strategy: str) -> int:
+    return {
+        "css": 120,
+        "xpath": 120,
+        "data-testid": 115,
+        "button_role": 90,
+        "label": 80,
+        "placeholder": 75,
+        "text": 70,
+    }.get(strategy, 50)
+
+
+def _strategy_rule_name(strategy: str) -> str:
+    return {
+        "css": "explicit-css-selector",
+        "xpath": "explicit-xpath-selector",
+        "data-testid": "explicit-data-testid",
+        "button_role": "exact-button-role-match",
+        "label": "exact-label-match",
+        "placeholder": "exact-placeholder-match",
+        "text": "exact-text-match",
+    }.get(strategy, strategy)
+
+
+def _build_selection_reason(candidate: LocatorCandidateEvidence) -> str:
+    rules = ", ".join(candidate.matched_rules) if candidate.matched_rules else candidate.strategy
+    return f"Selected highest-scoring candidate ({candidate.score}) with rules: {rules}."

@@ -40,6 +40,10 @@ test("渲染用例列表并支持执行后跳转", async () => {
     error_message: null,
     started_at: "2026-03-09T10:00:00",
     finished_at: "2026-03-09T10:00:01",
+    duration_ms: 1000,
+    total_steps: 0,
+    failed_step_index: null,
+    latest_screenshot_url: null,
     report: {
       status: "passed",
       steps: [],

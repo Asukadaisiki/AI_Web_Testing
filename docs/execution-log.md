@@ -393,3 +393,34 @@
   - 执行 `cd frontend && npm run build` 成功
 - 关联文件：`backend/app/schemas/executions.py`、`backend/app/locators/semantic.py`、`backend/app/runners/playwright_runner.py`、`backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/tests/unit/test_locator_semantic.py`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`docs/execution-log.md`
 - 后续：下一步可继续补定位候选评分细化、报告字段分页/折叠优化，以及更完整的工作台编辑体验；`Suite`、AI 生成 DSL、Vision 定位仍按既定策略暂缓
+
+## 2026-03-10 21:12
+
+- 任务：落地“执行中心与工作台增强 v1.5”，补齐执行摘要、定位评分证据、工作台双模式编辑与文档同步
+- 背景：上一轮已经打通单 Case 主链路，但执行列表摘要不足、定位证据解释性不够、工作台仍偏 JSON 原始编辑，影响连续使用和失败排障效率
+- 执行动作：
+  - 扩展后端执行契约，为执行摘要补充 `duration_ms`、`total_steps`、`failed_step_index`、`latest_screenshot_url`，并为 `GET /api/v1/executions` 增加 `case_id` 查询
+  - 重写 `semantic locator` 的候选选择逻辑，升级为“候选召回 -> 规则打分 -> 拒绝原因记录 -> 最高分命中”，并新增 `score`、`matched_rules`、`rejected_reasons`、`selection_reason`
+  - 升级前端执行中心与报告详情页，补充筛选、分页、失败步骤锚点跳转、失败步骤默认展开、console/network 按需展开和定位证据分数展示
+  - 重写 `CaseWorkbenchPage`，实现结构化步骤编辑与原始 JSON 双模式、模板插入、步骤增删改排序，并保留现有校验/保存/保存并执行链路
+  - 调整工作台模式切换控件，去掉在测试环境中不稳定的 `Radio.Group` 方案，改为显式按钮切换，并更新前后端测试与文档状态说明
+- 结果：项目现在具备更完整的执行中心、可解释的定位证据和可维护的用例工作台，v1.5 计划中的三项核心增强已完成落地
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `30 passed`
+  - 执行 `cd frontend && npm test`，结果 `6 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/api/routes/executions.py`、`backend/app/locators/semantic.py`、`backend/tests/unit/test_case_executions_api.py`、`backend/tests/unit/test_locator_semantic.py`、`frontend/src/types/api.ts`、`frontend/src/services/api.ts`、`frontend/src/pages/ExecutionsPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`frontend/src/pages/ExecutionsPage.test.tsx`、`frontend/src/pages/ExecutionDetailPage.test.tsx`、`docs/project-plan.md`、`docs/frontend-design.md`、`docs/bug-log.md`
+- 后续：下一步继续围绕单 Case 主链路补强稳定性和可观测性，暂不切入 Suite、AI 生成 DSL 和 Vision 定位
+
+## 2026-03-10 21:15
+
+- 任务：将 v1.5 改动同步到 GitHub 远端仓库
+- 背景：用户确认同步当前实现，但明确说明 `backend/artifacts/` 中的执行截图不需要进入版本控制
+- 执行动作：
+  - 复核工作区状态、远端地址与当前分支，确认同步目标为 `origin/main`
+  - 保持 `backend/artifacts/` 为未跟踪状态，不纳入本次提交范围
+  - 提交本轮实现与文档日志更新，并推送到 GitHub
+- 结果：v1.5 改动已整理为单次提交并准备同步到远端，执行产物目录继续留在本地
+- 验证：通过 `git status`、`git remote -v`、`git branch --show-current` 核对同步范围与目标分支
+- 关联文件：`docs/execution-log.md`
+- 后续：如需避免后续误提交流水产物，可再单独评估是否将 `backend/artifacts/` 加入忽略规则

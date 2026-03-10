@@ -19,22 +19,30 @@ vi.mock("../services/api", async () => {
   };
 });
 
-test("支持 DSL 校验、保存并执行后跳转", async () => {
+test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", async () => {
+  const templateSteps = [
+    { action: "goto", value: "/login" },
+    { action: "input", target: "用户名输入框", value: "admin" },
+    { action: "input", target: "密码输入框", value: "123456" },
+    { action: "click", target: "登录按钮" },
+    { action: "assert_url_contains", value: "/dashboard" },
+  ];
+
   vi.mocked(api.validateDslCase).mockResolvedValue({
     valid: true,
     case: {
       name: "登录冒烟",
       description: "检查登录链路",
-      steps: [{ action: "goto", value: "/login" }],
+      steps: templateSteps,
     },
-    supported_actions: ["goto", "click", "input"],
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
   });
   vi.mocked(api.createCase).mockResolvedValue({
     id: 3,
     project_id: 1,
     name: "登录冒烟",
     description: "检查登录链路",
-    steps: [{ action: "goto", value: "/login" }],
+    steps: templateSteps,
     created_by: 1,
     updated_by: 1,
     created_at: "2026-03-09T10:00:00",
@@ -50,6 +58,10 @@ test("支持 DSL 校验、保存并执行后跳转", async () => {
     error_message: null,
     started_at: "2026-03-09T10:00:00",
     finished_at: "2026-03-09T10:00:02",
+    duration_ms: 2000,
+    total_steps: 5,
+    failed_step_index: null,
+    latest_screenshot_url: "/artifacts/executions/55/step-05.png",
     report: {
       status: "passed",
       steps: [],
@@ -67,8 +79,22 @@ test("支持 DSL 校验、保存并执行后跳转", async () => {
   await userEvent.clear(screen.getByLabelText("描述"));
   await userEvent.type(screen.getByLabelText("描述"), "检查登录链路");
 
-  await userEvent.click(screen.getByRole("button", { name: "校验 DSL" }));
+  await userEvent.click(screen.getByRole("button", { name: "应用模板" }));
+  expect(screen.getByText("Step 5")).toBeInTheDocument();
 
+  await userEvent.click(screen.getByRole("button", { name: "原始 JSON" }));
+  await waitFor(() => {
+    const textboxes = screen.getAllByRole("textbox");
+    const jsonEditor = textboxes[textboxes.length - 1] as HTMLTextAreaElement;
+    expect(jsonEditor.value).toContain('"action": "goto"');
+    expect(jsonEditor.value).toContain('"assert_url_contains"');
+    expect(jsonEditor.value).toContain('"/dashboard"');
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "结构化编辑" }));
+  expect(await screen.findByText("Step 5")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "校验 DSL" }));
   expect(await screen.findByText("DSL 校验通过")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "保存并执行" }));
@@ -80,10 +106,28 @@ test("支持 DSL 校验、保存并执行后跳转", async () => {
       actor_user_id: 1,
       name: "登录冒烟",
       description: "检查登录链路",
-      steps: [{ action: "goto", value: "/login" }],
+      steps: templateSteps,
     });
     expect(api.executeCase).toHaveBeenCalledWith(3, { actor_user_id: 1 });
   });
 
   expect(await screen.findByText("execution-view")).toBeInTheDocument();
+});
+
+test("结构化步骤编辑支持新增、移动和删除", async () => {
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "新增步骤" }));
+  expect(screen.getByText("Step 2")).toBeInTheDocument();
+
+  await userEvent.click(screen.getAllByRole("button", { name: /下\s*移/ })[0]);
+  const stepTitles = screen.getAllByText(/Step \d/).map((node) => node.textContent);
+  expect(stepTitles).toContain("Step 1");
+  expect(stepTitles).toContain("Step 2");
+
+  await userEvent.click(screen.getAllByRole("button", { name: /删\s*除/ })[1]);
+  expect(screen.queryByText("Step 2")).not.toBeInTheDocument();
 });

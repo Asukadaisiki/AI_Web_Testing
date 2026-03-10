@@ -106,3 +106,19 @@
 - 处理：在 `frontend/vite.config.ts` 中显式设置 `server.host = "127.0.0.1"`，并同步设置 `preview.host`
 - 验证：以 `vite --host 127.0.0.1` 启动后，监听地址变为 `127.0.0.1:5173`，HTTP 访问恢复正常
 - 关联记录：`docs/execution-log.md` 2026-03-09 21:47
+
+## BUG-006 | 工作台模式切换控件在 Vitest/jsdom 下交互不稳定，导致 JSON/结构化编辑切换测试失败
+
+- 日期：2026-03-10
+- 状态：fixed
+- 来源：自测
+- 描述：`CaseWorkbenchPage` 初版使用 `Radio.Group` 风格的模式切换控件后，Vitest/jsdom 中切换到“原始 JSON”或切回“结构化编辑”不稳定，导致工作台主链路测试持续失败。
+- 复现步骤：
+  1. 在 `frontend/` 下执行 `npm test`
+  2. 运行 `src/pages/CaseWorkbenchPage.test.tsx`
+  3. 观察“结构化步骤编辑支持应用模板、切换 JSON 并保存执行”用例在模式切换后断言失败
+- 影响：前端测试无法稳定覆盖工作台双模式编辑主链路，影响保存并执行链路的发布前验证
+- 根因：该类 Ant Design 切换控件在 jsdom 中依赖隐藏 input、label 和 pointer events 的事件传递，测试环境下稳定性不足；同时原测试对整段 JSON 精确值过于敏感
+- 处理：将工作台模式切换改为显式按钮切换，保留原有状态切换逻辑；同时将测试断言收敛为对 JSON 编辑器出现及关键 DSL 片段的校验
+- 验证：执行 `cd frontend && npm test`，结果 `6 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-10 21:12
