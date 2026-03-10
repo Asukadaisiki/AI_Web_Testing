@@ -495,3 +495,49 @@
   - 执行 `cd frontend && npm run build` 成功
 - 关联文件：`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/index.css`、`frontend/src/pages/ExecutionDetailPage.test.tsx`、`docs/bug-log.md`
 - 后续：如后续还需提升可读性，可继续评估为截图增加缩略图 + 弹层预览模式，而不是在详情卡片中直接展示原图
+
+## 2026-03-10 22:45
+
+- 任务：阅读执行日志并分析项目下一步目标之一
+- 背景：最近几轮已经连续完成单 Case 主链路的稳定化、观测性增强和执行中心聚合，需要基于实际落地情况收敛下一步目标，避免过早切入 Suite、AI 生成 DSL 或 Vision 定位
+- 执行动作：
+  - 阅读 `docs/execution-log.md`、`docs/project-plan.md` 与 `docs/bug-log.md`，聚焦 2026-03-10 最近几轮迭代
+  - 对照执行日志中的“后续”与计划文档中的“当前状态快照 / 下一里程碑”，核对已完成范围和未完成能力
+  - 归纳候选方向：`Dashboard/报告中心入口`、失败趋势可视化、报告聚合细化，对比 `Suite`、AI 生成 DSL、Vision 定位的当前前置条件
+  - 识别到 `docs/project-plan.md` 的“下一里程碑”仍停留在“前端可演示闭环 v1”，与当前实际进度存在文档滞后
+- 结果：确认下一步目标之一应优先推进“`Dashboard/报告中心入口 + 失败趋势可视化 + 更细粒度报告聚合`”，继续围绕单 Case 主链路完善平台级观察入口，而不是立即扩展到 `Suite`、AI 生成 DSL 或 Vision 定位
+- 验证：人工核对 2026-03-10 21:12、21:48、22:35、22:42 四条执行记录，以及 `docs/project-plan.md` 中的“当前状态快照”“下一里程碑”“阶段 4/5”章节
+- 关联文件：`docs/execution-log.md`、`docs/project-plan.md`、`docs/bug-log.md`
+- 后续：如要继续减少目标歧义，下一轮应同步更新 `docs/project-plan.md` 的“下一里程碑”和状态描述，使其与最新执行日志保持一致
+
+## 2026-03-10 23:12
+
+- 任务：落实“单 Case 平台化 v1.8”，补齐 Dashboard、报告中心和趋势聚合
+- 背景：上一轮已完成单 Case 稳定化与执行中心 overview/list/detail 聚合，但平台入口仍缺 Dashboard 与独立报告中心，文档里的里程碑描述也落后于最新实现
+- 执行动作：
+  - 扩展 `backend/app/schemas/executions.py`、`backend/app/services/executions.py` 与 `backend/app/api/routes/executions.py`，为 `GET /api/v1/executions/overview` 增加 `window_days`、`trend_points`、`failure_step_actions`、`top_failed_cases`
+  - 补充 `backend/tests/unit/test_case_executions_api.py`，覆盖 overview 空状态、新聚合字段、Top Failed Cases 排序与 `7/14/30` 天趋势窗口
+  - 在前端新增 `DashboardPage`、`ReportCenterPage`、`OverviewChart` 与公共执行展示工具，更新 `AppRouter`、`AppLayout`、`api.ts`、`types/api.ts`、全局样式与现有测试契约
+  - 新增 `frontend/src/app/AppRouter.test.tsx`、`frontend/src/pages/DashboardPage.test.tsx`、`frontend/src/pages/ReportCenterPage.test.tsx`，并更新 `frontend/src/pages/ExecutionsPage.test.tsx`
+  - 通过 `npm install` 引入 `echarts`，同步更新 `frontend/package-lock.json`
+  - 更新 `docs/project-plan.md`、`docs/frontend-design.md`、`frontend/README.md`、`backend/README.md`，并将 `BUG-009` 标记为已修复
+- 结果：项目现在具备独立仪表盘、报告中心、近 7/14/30 天趋势聚合和高频失败用例分析入口；根路由默认进入仪表盘，执行中心继续专注明细筛选与分页；文档状态也已与 v1.8 实现对齐
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `34 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果 `15 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/api/routes/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`frontend/src/app/AppRouter.tsx`、`frontend/src/layouts/AppLayout.tsx`、`frontend/src/pages/DashboardPage.tsx`、`frontend/src/pages/ReportCenterPage.tsx`、`frontend/src/components/OverviewChart.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`docs/project-plan.md`、`docs/frontend-design.md`、`frontend/README.md`、`backend/README.md`、`docs/bug-log.md`
+- 后续：下一步可继续围绕报告中心细化历史趋势对比、失败根因聚合和执行中心/仪表盘的体验打磨，仍暂不切入 Suite、AI 生成 DSL 和 Vision 定位
+
+## 2026-03-10 23:15
+
+- 任务：将单 Case 平台化 v1.8 改动同步到 GitHub 远端仓库
+- 背景：v1.8 的后端聚合、前端页面、测试与文档已经完成并验证通过，需要按仓库工作流同步到 `origin/main`
+- 执行动作：
+  - 核对 `git status`、`git branch --show-current` 与 `git remote -v`，确认待同步范围和目标分支为 `origin/main`
+  - 保留本轮实现涉及的代码、测试、依赖和文档更新，准备单次提交
+  - 提交 v1.8 改动并推送到 GitHub
+- 结果：v1.8 改动已整理为一次可追溯提交，并同步到远端主分支
+- 验证：通过 `git status`、`git branch --show-current`、`git remote -v` 及提交/推送命令结果核对同步状态
+- 关联文件：`docs/execution-log.md`
+- 后续：如需继续推进，可在下一轮围绕报告中心趋势对比、失败根因聚合和前端拆包优化继续迭代

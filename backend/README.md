@@ -11,7 +11,7 @@
 - DSL 校验接口
 - `cases` 创建、列表、详情、更新 API
 - 单 Case 执行与执行记录查询
-- `executions overview` 聚合接口，可输出通过率、平均耗时、最近失败与失败分类分布
+- `executions overview` 聚合接口，可输出通过率、平均耗时、最近失败、失败分类分布、按天趋势、失败动作分布与高频失败用例
 - Playwright Runner、基础 Locator 与结构化执行报告
 - 用例级 `base_url`，用于承载相对路径 `goto` 的正式执行地址
 
@@ -40,6 +40,7 @@
 - Runner 能正常执行真实页面
 - 执行详情中的 `latest_url` 与步骤证据是否完整
 - `GET /api/v1/executions/overview`、`GET /api/v1/executions`、`GET /api/v1/executions/{id}` 三处口径是否一致
+- 仪表盘与报告中心读取 `overview` 聚合字段时，趋势、失败动作和高频失败用例是否与明细一致
 
 ## 后端落地顺序
 

@@ -1,5 +1,6 @@
 export type ExecutionStatus = "running" | "passed" | "failed";
 export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
+export type OverviewWindowDays = 7 | 14 | 30;
 
 export interface DSLStep {
   action: string;
@@ -154,6 +155,28 @@ export interface FailureCategoryCount {
   count: number;
 }
 
+export interface ExecutionTrendPoint {
+  date: string;
+  total_count: number;
+  passed_count: number;
+  failed_count: number;
+  pass_rate: number;
+  avg_duration_ms: number;
+}
+
+export interface FailureStepActionCount {
+  action: string;
+  count: number;
+}
+
+export interface TopFailedCase {
+  case_id: number;
+  case_name: string;
+  failure_count: number;
+  latest_execution_id: number;
+  latest_failure_category?: FailureCategory | null;
+}
+
 export interface ExecutionsOverview {
   total_count: number;
   passed_count: number;
@@ -163,4 +186,7 @@ export interface ExecutionsOverview {
   avg_duration_ms: number;
   latest_failed_runs: StoredCaseExecutionSummary[];
   failure_categories: FailureCategoryCount[];
+  trend_points: ExecutionTrendPoint[];
+  failure_step_actions: FailureStepActionCount[];
+  top_failed_cases: TopFailedCase[];
 }

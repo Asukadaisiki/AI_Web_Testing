@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, UTC
+from datetime import date, datetime, timedelta, UTC
 from typing import cast
 
 from sqlalchemy import select
@@ -15,11 +15,14 @@ from app.runners import RunnerExecutionError, execute_case_with_playwright
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
+    ExecutionTrendPoint,
     ExecutionsOverview,
     FailureCategoryCount,
+    FailureStepActionCount,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
     StepExecutionEvidence,
+    TopFailedCase,
 )
 from app.services.cases import EntityNotFoundError
 
@@ -32,6 +35,7 @@ FAILURE_CATEGORY_ORDER = [
     "runner",
 ]
 LATEST_FAILED_RUNS_LIMIT = 5
+TOP_FAILED_CASES_LIMIT = 5
 
 
 def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) -> StoredCaseExecutionDetail:
@@ -129,6 +133,7 @@ def get_executions_overview(
     *,
     project_id: int | None = None,
     case_id: int | None = None,
+    window_days: int | None = None,
 ) -> ExecutionsOverview:
     rows = _list_execution_rows(
         session,
@@ -140,27 +145,35 @@ def get_executions_overview(
         apply_pagination=False,
     )
     summaries = [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
-    passed_count = sum(1 for item in summaries if item.status == "passed")
-    failed_count = sum(1 for item in summaries if item.status == "failed")
-    running_count = sum(1 for item in summaries if item.status == "running")
+    filtered_summaries = _filter_summaries_by_window(summaries, window_days)
+    passed_count = sum(1 for item in filtered_summaries if item.status == "passed")
+    failed_count = sum(1 for item in filtered_summaries if item.status == "failed")
+    running_count = sum(1 for item in filtered_summaries if item.status == "running")
     finished_total = passed_count + failed_count
-    durations = [item.duration_ms for item in summaries if item.status != "running" and item.duration_ms is not None]
+    durations = [
+        item.duration_ms for item in filtered_summaries if item.status != "running" and item.duration_ms is not None
+    ]
     category_counter = Counter(
-        item.failure_category for item in summaries if item.status == "failed" and item.failure_category is not None
+        item.failure_category
+        for item in filtered_summaries
+        if item.status == "failed" and item.failure_category is not None
     )
 
     return ExecutionsOverview(
-        total_count=len(summaries),
+        total_count=len(filtered_summaries),
         passed_count=passed_count,
         failed_count=failed_count,
         running_count=running_count,
         pass_rate=round(passed_count / finished_total, 4) if finished_total else 0,
         avg_duration_ms=int(sum(durations) / len(durations)) if durations else 0,
-        latest_failed_runs=[item for item in summaries if item.status == "failed"][:LATEST_FAILED_RUNS_LIMIT],
+        latest_failed_runs=[item for item in filtered_summaries if item.status == "failed"][:LATEST_FAILED_RUNS_LIMIT],
         failure_categories=[
             FailureCategoryCount(category=category, count=category_counter.get(category, 0))
             for category in FAILURE_CATEGORY_ORDER
         ],
+        trend_points=_build_trend_points(filtered_summaries, window_days),
+        failure_step_actions=_build_failure_step_actions(filtered_summaries),
+        top_failed_cases=_build_top_failed_cases(filtered_summaries),
     )
 
 
@@ -202,6 +215,17 @@ def _list_execution_rows(
 def _ensure_user_exists(session: Session, user_id: int) -> None:
     if session.get(User, user_id) is None:
         raise EntityNotFoundError(f"User {user_id} not found.")
+
+
+def _filter_summaries_by_window(
+    summaries: list[StoredCaseExecutionSummary],
+    window_days: int | None,
+) -> list[StoredCaseExecutionSummary]:
+    if window_days is None:
+        return summaries
+
+    cutoff = datetime.now(UTC).date() - timedelta(days=window_days - 1)
+    return [summary for summary in summaries if summary.started_at.date() >= cutoff]
 
 
 def _build_missing_base_url_error(case: DSLCase, base_url: str | None) -> StepExecutionEvidence | None:
@@ -339,3 +363,91 @@ def _derive_latest_screenshot_url(report) -> str | None:
         if step.screenshot_url:
             return step.screenshot_url
     return None
+
+
+def _build_trend_points(
+    summaries: list[StoredCaseExecutionSummary],
+    window_days: int | None,
+) -> list[ExecutionTrendPoint]:
+    daily_buckets: dict[date, list[StoredCaseExecutionSummary]] = {}
+    for summary in summaries:
+        bucket = summary.started_at.date()
+        daily_buckets.setdefault(bucket, []).append(summary)
+
+    dates = _build_trend_dates(daily_buckets, window_days)
+    trend_points: list[ExecutionTrendPoint] = []
+    for bucket in dates:
+        items = daily_buckets.get(bucket, [])
+        passed_count = sum(1 for item in items if item.status == "passed")
+        failed_count = sum(1 for item in items if item.status == "failed")
+        finished_total = passed_count + failed_count
+        durations = [item.duration_ms for item in items if item.status != "running" and item.duration_ms is not None]
+        trend_points.append(
+            ExecutionTrendPoint(
+                date=bucket,
+                total_count=len(items),
+                passed_count=passed_count,
+                failed_count=failed_count,
+                pass_rate=round(passed_count / finished_total, 4) if finished_total else 0,
+                avg_duration_ms=int(sum(durations) / len(durations)) if durations else 0,
+            )
+        )
+    return trend_points
+
+
+def _build_trend_dates(
+    daily_buckets: dict[date, list[StoredCaseExecutionSummary]],
+    window_days: int | None,
+) -> list[date]:
+    if window_days is not None:
+        today = datetime.now(UTC).date()
+        start = today - timedelta(days=window_days - 1)
+        return [start + timedelta(days=offset) for offset in range(window_days)]
+    return sorted(daily_buckets.keys())
+
+
+def _build_failure_step_actions(
+    summaries: list[StoredCaseExecutionSummary],
+) -> list[FailureStepActionCount]:
+    action_counter = Counter(
+        item.failure_step_action for item in summaries if item.status == "failed" and item.failure_step_action
+    )
+    return [
+        FailureStepActionCount(action=action, count=count)
+        for action, count in sorted(action_counter.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _build_top_failed_cases(
+    summaries: list[StoredCaseExecutionSummary],
+) -> list[TopFailedCase]:
+    failed_summaries = [item for item in summaries if item.status == "failed"]
+    grouped: dict[int, list[StoredCaseExecutionSummary]] = {}
+    for summary in failed_summaries:
+        grouped.setdefault(summary.case_id, []).append(summary)
+
+    ranked_cases: list[TopFailedCase] = []
+    for case_id, case_summaries in grouped.items():
+        latest_summary = max(case_summaries, key=lambda item: (item.started_at, item.id))
+        ranked_cases.append(
+            TopFailedCase(
+                case_id=case_id,
+                case_name=latest_summary.case_name,
+                failure_count=len(case_summaries),
+                latest_execution_id=latest_summary.id,
+                latest_failure_category=latest_summary.failure_category,
+            )
+        )
+
+    return sorted(
+        ranked_cases,
+        key=lambda item: (
+            -item.failure_count,
+            -next(
+                summary.started_at.timestamp()
+                for summary in grouped[item.case_id]
+                if summary.id == item.latest_execution_id
+            ),
+            -item.latest_execution_id,
+        ),
+    )[:TOP_FAILED_CASES_LIMIT]

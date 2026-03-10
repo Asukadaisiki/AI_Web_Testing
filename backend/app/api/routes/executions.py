@@ -73,12 +73,19 @@ def list_executions_route(
 def get_executions_overview_route(
     project_id: int | None = Query(default=None, ge=1),
     case_id: int | None = Query(default=None, ge=1),
+    window_days: int | None = Query(default=None),
     session: Session = Depends(get_db_session),
 ) -> ExecutionsOverview:
+    if window_days not in {None, 7, 14, 30}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="window_days must be one of: 7, 14, 30.",
+        )
     return get_executions_overview(
         session,
         project_id=project_id,
         case_id=case_id,
+        window_days=window_days,
     )
 
 

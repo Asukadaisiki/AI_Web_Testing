@@ -6,18 +6,33 @@ const { Content, Header, Sider } = Layout;
 
 const items: ItemType[] = [
   {
+    key: "/dashboard",
+    label: <Link to="/dashboard">仪表盘</Link>,
+  },
+  {
     key: "/cases",
     label: <Link to="/cases">用例列表</Link>,
   },
   {
     key: "/executions",
-    label: <Link to="/executions">执行报告</Link>,
+    label: <Link to="/executions">执行中心</Link>,
+  },
+  {
+    key: "/reports",
+    label: <Link to="/reports">报告中心</Link>,
   },
 ];
 
 export function AppLayout() {
   const location = useLocation();
-  const selectedKey = location.pathname.startsWith("/executions") ? "/executions" : "/cases";
+  let selectedKey = "/dashboard";
+  if (location.pathname.startsWith("/cases")) {
+    selectedKey = "/cases";
+  } else if (location.pathname.startsWith("/executions")) {
+    selectedKey = "/executions";
+  } else if (location.pathname.startsWith("/reports")) {
+    selectedKey = "/reports";
+  }
 
   return (
     <Layout style={{ minHeight: "100vh", background: "transparent" }}>
@@ -33,7 +48,7 @@ export function AppLayout() {
           <Typography.Title level={4} style={{ color: "#f7fbff", margin: 0 }}>
             AI Web Testing
           </Typography.Title>
-          <Typography.Text style={{ color: "#9db0cb" }}>前端可演示闭环 v1</Typography.Text>
+          <Typography.Text style={{ color: "#9db0cb" }}>单 Case 平台化 v1.8</Typography.Text>
         </div>
         <Menu
           mode="inline"

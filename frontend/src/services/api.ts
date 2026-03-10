@@ -4,6 +4,7 @@ import type {
   DSLCasePayload,
   DSLValidationResult,
   ExecutionsOverview,
+  OverviewWindowDays,
   StoredCaseDetail,
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
@@ -106,6 +107,7 @@ export function getExecutions(params: {
 export function getExecutionOverview(params: {
   project_id?: number;
   case_id?: number;
+  window_days?: OverviewWindowDays;
 }) {
   const search = new URLSearchParams();
   if (params.project_id) {
@@ -113,6 +115,9 @@ export function getExecutionOverview(params: {
   }
   if (params.case_id) {
     search.set("case_id", String(params.case_id));
+  }
+  if (params.window_days) {
+    search.set("window_days", String(params.window_days));
   }
   const query = search.toString();
   return request<ExecutionsOverview>(`/api/v1/executions/overview${query ? `?${query}` : ""}`);

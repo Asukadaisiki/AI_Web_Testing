@@ -386,6 +386,9 @@ def test_get_executions_overview_returns_zero_counts_when_no_runs_exist(client) 
             {"category": "network", "count": 0},
             {"category": "runner", "count": 0},
         ],
+        "trend_points": [],
+        "failure_step_actions": [],
+        "top_failed_cases": [],
     }
 
 
@@ -610,3 +613,199 @@ def test_get_executions_overview_aggregates_counts_categories_and_recent_failure
     assert payload["latest_failed_runs"][4]["failure_category"] == "locator"
     assert payload["latest_failed_runs"][0]["failure_step_action"] == "click"
     assert payload["latest_failed_runs"][0]["latest_url"] == "https://example.com/save"
+    assert payload["trend_points"] == [
+        {
+            "date": "2026-03-10",
+            "total_count": 8,
+            "passed_count": 1,
+            "failed_count": 6,
+            "pass_rate": 0.1429,
+            "avg_duration_ms": 400,
+        }
+    ]
+    assert payload["failure_step_actions"] == [
+        {"action": "click", "count": 3},
+        {"action": "goto", "count": 2},
+        {"action": "assert_text", "count": 1},
+    ]
+    assert payload["top_failed_cases"] == [
+        {
+            "case_id": case_id,
+            "case_name": "聚合用例",
+            "failure_count": 6,
+            "latest_execution_id": 6,
+            "latest_failure_category": "runner",
+        }
+    ]
+
+
+def test_get_executions_overview_supports_window_days_trends_and_top_failed_cases(client, db_session) -> None:
+    case_ids: list[int] = []
+    for name in ["近七天高频失败", "近七天较新失败", "过期失败"]:
+        response = client.post(
+            "/api/v1/cases",
+            json={
+                "project_id": 1,
+                "actor_user_id": 1,
+                "name": name,
+                "base_url": "https://example.com",
+                "steps": [{"action": "goto", "value": "/"}],
+            },
+        )
+        case_ids.append(response.json()["id"])
+
+    now = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+    runs = [
+        TestCaseRun(
+            id=1,
+            case_id=case_ids[0],
+            project_id=1,
+            triggered_by=1,
+            status="failed",
+            error_message="click boom",
+            report={
+                "status": "failed",
+                "steps": [
+                    {
+                        "step_index": 0,
+                        "action": "click",
+                        "target": "登录按钮",
+                        "status": "failed",
+                        "error_message": "click boom",
+                    }
+                ],
+            },
+            started_at=now - timedelta(days=1),
+            finished_at=now - timedelta(days=1) + timedelta(milliseconds=100),
+        ),
+        TestCaseRun(
+            id=2,
+            case_id=case_ids[0],
+            project_id=1,
+            triggered_by=1,
+            status="failed",
+            error_message="goto boom",
+            report={
+                "status": "failed",
+                "steps": [
+                    {
+                        "step_index": 0,
+                        "action": "goto",
+                        "value": "/dashboard",
+                        "status": "failed",
+                        "error_message": "goto boom",
+                    }
+                ],
+            },
+            started_at=now - timedelta(days=3),
+            finished_at=now - timedelta(days=3) + timedelta(milliseconds=200),
+        ),
+        TestCaseRun(
+            id=3,
+            case_id=case_ids[1],
+            project_id=1,
+            triggered_by=1,
+            status="failed",
+            error_message="assert boom",
+            report={
+                "status": "failed",
+                "steps": [
+                    {
+                        "step_index": 0,
+                        "action": "assert_text",
+                        "target": "欢迎语",
+                        "value": "欢迎回来",
+                        "status": "failed",
+                        "error_message": "assert boom",
+                    }
+                ],
+            },
+            started_at=now - timedelta(days=1) + timedelta(hours=1),
+            finished_at=now - timedelta(days=1) + timedelta(hours=1, milliseconds=300),
+        ),
+        TestCaseRun(
+            id=4,
+            case_id=case_ids[1],
+            project_id=1,
+            triggered_by=1,
+            status="passed",
+            error_message=None,
+            report={
+                "status": "passed",
+                "steps": [
+                    {
+                        "step_index": 0,
+                        "action": "goto",
+                        "value": "/",
+                        "status": "passed",
+                    }
+                ],
+            },
+            started_at=now,
+            finished_at=now + timedelta(milliseconds=400),
+        ),
+        TestCaseRun(
+            id=5,
+            case_id=case_ids[2],
+            project_id=1,
+            triggered_by=1,
+            status="failed",
+            error_message="expired boom",
+            report={
+                "status": "failed",
+                "steps": [
+                    {
+                        "step_index": 0,
+                        "action": "click",
+                        "target": "旧按钮",
+                        "status": "failed",
+                        "error_message": "expired boom",
+                    }
+                ],
+            },
+            started_at=now - timedelta(days=10),
+            finished_at=now - timedelta(days=10) + timedelta(milliseconds=500),
+        ),
+    ]
+    db_session.add_all(runs)
+    db_session.commit()
+
+    response = client.get("/api/v1/executions/overview", params={"project_id": 1, "window_days": 7})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_count"] == 4
+    assert payload["passed_count"] == 1
+    assert payload["failed_count"] == 3
+    assert payload["running_count"] == 0
+    assert len(payload["trend_points"]) == 7
+    assert payload["trend_points"][-1]["date"] == now.date().isoformat()
+    assert payload["trend_points"][-1]["passed_count"] == 1
+    assert payload["trend_points"][-2]["failed_count"] == 2
+    assert payload["trend_points"][-4]["failed_count"] == 1
+    assert payload["failure_step_actions"] == [
+        {"action": "assert_text", "count": 1},
+        {"action": "click", "count": 1},
+        {"action": "goto", "count": 1},
+    ]
+    assert payload["top_failed_cases"] == [
+        {
+            "case_id": case_ids[0],
+            "case_name": "近七天高频失败",
+            "failure_count": 2,
+            "latest_execution_id": 1,
+            "latest_failure_category": "runner",
+        },
+        {
+            "case_id": case_ids[1],
+            "case_name": "近七天较新失败",
+            "failure_count": 1,
+            "latest_execution_id": 3,
+            "latest_failure_category": "assertion",
+        },
+    ]
+
+    for days in [14, 30]:
+        extra_response = client.get("/api/v1/executions/overview", params={"project_id": 1, "window_days": days})
+        assert extra_response.status_code == 200
+        assert len(extra_response.json()["trend_points"]) == days

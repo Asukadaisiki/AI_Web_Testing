@@ -154,3 +154,19 @@
 - 处理：为步骤截图增加固定展示框、滚动边界和自适应缩放样式；在卡片下方补“打开原图”入口，兼顾阅读稳定性与原图查看
 - 验证：执行 `cd frontend && npm test -- --run`，结果 `11 passed`；执行 `cd frontend && npm run build` 成功
 - 关联记录：`docs/execution-log.md` 2026-03-10 22:42
+
+## BUG-009 | `project-plan` 的“下一里程碑”仍停留在旧阶段，和最新执行进度不一致
+
+- 日期：2026-03-10
+- 状态：fixed
+- 来源：分析 / 文档核对
+- 描述：最近执行日志已经完成单 Case 稳定化 `v1.6`、观测性增强 `v1.7`、执行中心 overview/list/detail 联调和执行详情页体验优化，但 `docs/project-plan.md` 的“下一里程碑”仍写成“从后端执行闭环 v0 切换为前端可演示闭环 v1”，容易让后续阅读者误判当前阶段。
+- 复现步骤：
+  1. 阅读 `docs/project-plan.md` 中“当前状态快照”与“下一里程碑”章节
+  2. 再阅读 `docs/execution-log.md` 中 2026-03-10 21:12、21:48、22:35、22:42 的记录
+  3. 对比可见文档里程碑表述已落后于实际完成内容
+- 影响：会影响任务拆分和优先级判断，后续成员可能继续围绕已完成的“前端可演示闭环 v1”组织任务，而不是收敛到当前真正待做的 Dashboard/报告中心入口与趋势分析增强
+- 根因：执行日志持续更新，但 `docs/project-plan.md` 的里程碑摘要未随最近几轮迭代同步刷新
+- 处理：已同步刷新 `docs/project-plan.md` 的“当前状态快照”“进行中”“未开始或未落地”“下一里程碑”描述，并在 `docs/frontend-design.md`、`frontend/README.md`、`backend/README.md` 中补齐 v1.8 的平台入口状态说明
+- 验证：人工核对 `docs/project-plan.md`、`docs/frontend-design.md`、`frontend/README.md`、`backend/README.md`，内容已与 Dashboard/报告中心落地后的最新实现一致
+- 关联记录：`docs/execution-log.md` 2026-03-10 22:45、`docs/execution-log.md` 2026-03-10 23:12

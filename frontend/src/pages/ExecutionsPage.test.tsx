@@ -76,6 +76,9 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       { category: "network", count: 0 },
       { category: "runner", count: 0 },
     ],
+    trend_points: [],
+    failure_step_actions: [],
+    top_failed_cases: [],
   });
   vi.mocked(api.getExecutions).mockImplementation(async (params) => {
     if (params.status === "failed" && params.case_id === 2 && params.failure_category === "navigation") {
@@ -237,6 +240,9 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
       { category: "network", count: 0 },
       { category: "runner", count: 0 },
     ],
+    trend_points: [],
+    failure_step_actions: [],
+    top_failed_cases: [],
   });
   vi.mocked(api.getExecutions).mockImplementation(async (params) => {
     if (params.offset === 10) {
@@ -322,6 +328,9 @@ test("执行中心在空状态下稳定展示 overview 与空列表", async () =
       { category: "network", count: 0 },
       { category: "runner", count: 0 },
     ],
+    trend_points: [],
+    failure_step_actions: [],
+    top_failed_cases: [],
   });
   vi.mocked(api.getExecutions).mockResolvedValue([]);
 
