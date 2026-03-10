@@ -40,6 +40,7 @@ reports/
 screenshots/
 playwright-report/
 test-results/
+backend/artifacts/
 
 # Package manager locks generated per app
 backend/.python-version

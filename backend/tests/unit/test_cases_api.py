@@ -11,6 +11,7 @@ def test_create_case_success(client) -> None:
             "actor_user_id": 1,
             "name": "登录冒烟",
             "description": "验证登录成功后跳转仪表盘",
+            "base_url": "https://example.com",
             "steps": [
                 {"action": "goto", "value": "/login"},
                 {"action": "input", "target": "用户名输入框", "value": "admin"},
@@ -25,6 +26,7 @@ def test_create_case_success(client) -> None:
     assert response.json()["project_id"] == 1
     assert response.json()["created_by"] == 1
     assert response.json()["updated_by"] == 1
+    assert response.json()["base_url"] == "https://example.com"
     assert response.json()["steps"] == [
         {"action": "goto", "value": "/login"},
         {"action": "input", "target": "用户名输入框", "value": "admin"},
@@ -38,12 +40,14 @@ def test_list_cases_returns_latest_first(client) -> None:
         "project_id": 1,
         "actor_user_id": 1,
         "name": "第一个用例",
+        "base_url": "https://first.example.com",
         "steps": [{"action": "goto", "value": "/first"}],
     }
     second = {
         "project_id": 1,
         "actor_user_id": 1,
         "name": "第二个用例",
+        "base_url": "https://second.example.com",
         "steps": [{"action": "goto", "value": "/second"}],
     }
 
@@ -63,6 +67,7 @@ def test_get_case_detail_returns_case(client) -> None:
             "project_id": 1,
             "actor_user_id": 1,
             "name": "详情用例",
+            "base_url": "https://detail.example.com",
             "steps": [{"action": "goto", "value": "/detail"}],
         },
     )
@@ -71,6 +76,7 @@ def test_get_case_detail_returns_case(client) -> None:
 
     assert response.status_code == 200
     assert response.json()["name"] == "详情用例"
+    assert response.json()["base_url"] == "https://detail.example.com"
 
 
 def test_get_case_detail_returns_not_found_for_unknown_case(client) -> None:
@@ -87,6 +93,7 @@ def test_update_case_success(client) -> None:
             "project_id": 1,
             "actor_user_id": 1,
             "name": "待更新用例",
+            "base_url": "https://before.example.com",
             "steps": [{"action": "goto", "value": "/before"}],
         },
     )
@@ -98,6 +105,7 @@ def test_update_case_success(client) -> None:
             "actor_user_id": 1,
             "name": "已更新用例",
             "description": "更新后的描述",
+            "base_url": "https://after.example.com",
             "steps": [
                 {"action": "goto", "value": "/after"},
                 {"action": "assert_url_contains", "value": "/after"},
@@ -108,6 +116,7 @@ def test_update_case_success(client) -> None:
     assert response.status_code == 200
     assert response.json()["name"] == "已更新用例"
     assert response.json()["description"] == "更新后的描述"
+    assert response.json()["base_url"] == "https://after.example.com"
     assert response.json()["steps"] == [
         {"action": "goto", "value": "/after"},
         {"action": "assert_url_contains", "value": "/after"},

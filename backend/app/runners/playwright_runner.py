@@ -175,7 +175,7 @@ def _resolve_url(value: str, base_url: str | None) -> str:
     if value.startswith(("http://", "https://")):
         return value
     if not base_url:
-        raise RunnerExecutionError("Relative goto step requires base_url or EXECUTION_BASE_URL.")
+        raise RunnerExecutionError("Relative goto step requires case.base_url or execution request base_url.")
     return urljoin(base_url.rstrip("/") + "/", value.lstrip("/"))
 
 

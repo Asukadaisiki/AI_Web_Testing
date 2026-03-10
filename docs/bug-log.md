@@ -122,3 +122,19 @@
 - 处理：将工作台模式切换改为显式按钮切换，保留原有状态切换逻辑；同时将测试断言收敛为对 JSON 编辑器出现及关键 DSL 片段的校验
 - 验证：执行 `cd frontend && npm test`，结果 `6 passed`
 - 关联记录：`docs/execution-log.md` 2026-03-10 21:12
+
+## BUG-007 | 相对 URL 的 `goto` 未绑定用例级地址时会在首步全部失败
+
+- 日期：2026-03-10
+- 状态：fixed
+- 来源：联调 / 自测
+- 描述：当前真实执行记录中的用例使用相对路径 `goto`（如 `/login`、`/`），但旧实现把地址来源放在执行请求 `base_url` 或后端 `EXECUTION_BASE_URL`，而不是用例本身，导致未显式传参时所有这类用例都在第 1 步失败。
+- 复现步骤：
+  1. 创建未配置用例级 `base_url`、但包含 `{"action": "goto", "value": "/login"}` 或 `{"action": "goto", "value": "/"}` 的用例
+  2. 不在执行请求中传入 `base_url`
+  3. 查看执行记录与截图
+- 影响：现有相对 URL 用例无法作为可维护测试资产长期复用，执行报告会全部在首步失败；用户也容易误判为 Runner、截图或报告展示故障
+- 根因：URL 归属设计不对，执行地址被放在请求期或后端环境变量，而不是 DSLCase 本身；相对路径 `goto` 因此无法稳定复用
+- 处理：已将 `base_url` 下沉到 DSLCase / Case 表单；执行优先级改为“执行请求 `base_url` 覆盖值 > 用例自身 `base_url`”；若两者都缺失则在 service 层直接返回明确失败信息，不再依赖 `EXECUTION_BASE_URL`
+- 验证：执行 `cd backend && uv run pytest`，结果 `31 passed`；执行 `cd frontend && npm test`，结果 `10 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-10 21:20、`docs/execution-log.md` 2026-03-10 21:48

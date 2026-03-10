@@ -13,6 +13,7 @@ export interface StoredCaseSummary {
   project_id: number;
   name: string;
   description: string | null;
+  base_url?: string | null;
   steps: DSLStep[];
   created_by: number;
   updated_by: number;
@@ -25,6 +26,7 @@ export interface StoredCaseDetail extends StoredCaseSummary {}
 export interface DSLCasePayload {
   name: string;
   description?: string | null;
+  base_url?: string | null;
   steps: DSLStep[];
 }
 

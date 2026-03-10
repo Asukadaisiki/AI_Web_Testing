@@ -1,5 +1,5 @@
 import { Route } from "react-router-dom";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -58,7 +58,9 @@ test("渲染用例列表并支持执行后跳转", async () => {
 
   expect(await screen.findByText("登录冒烟")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: /执\s*行/ }));
+  const caseRow = screen.getByText("登录冒烟").closest("tr");
+  expect(caseRow).not.toBeNull();
+  await userEvent.click(within(caseRow as HTMLElement).getByRole("button", { name: /执\s*行/ }));
 
   await waitFor(() => {
     expect(api.executeCase).toHaveBeenCalledWith(1, { actor_user_id: 1 });

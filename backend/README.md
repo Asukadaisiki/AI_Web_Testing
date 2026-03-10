@@ -9,17 +9,16 @@
 - Alembic 初始迁移
 - 第一批领域模型
 - DSL 校验接口
-- `cases` 基础持久化 API
+- `cases` 创建、列表、详情、更新 API
+- 单 Case 执行与执行记录查询
+- Playwright Runner、基础 Locator 与结构化执行报告
+- 用例级 `base_url`，用于承载相对路径 `goto` 的正式执行地址
 
 ## 当前未完成
 
-- Playwright Runner
-- Step 级真实执行
-- Locator 服务
-- Reporter 服务
-- 任务与报告查询
 - Suite 批量执行链路
 - AI 接入层
+- 更完整的环境配置、Suite 编排和历史对比能力
 
 ## 本地开发约定
 

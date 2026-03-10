@@ -81,6 +81,7 @@ def _to_stored_case_summary(record: TestCase) -> StoredCaseSummary:
         project_id=record.project_id,
         name=record.name,
         description=record.description,
+        base_url=normalized_case.base_url,
         steps=normalized_case.steps,
         created_by=record.created_by,
         updated_by=record.updated_by,

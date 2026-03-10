@@ -23,16 +23,39 @@ import {
   updateCase,
   validateDslCase,
 } from "../services/api";
-import type { CaseMutationPayload, DSLCasePayload, DSLValidationResult, DSLStep } from "../types/api";
+import type {
+  CaseMutationPayload,
+  DSLCasePayload,
+  DSLStep,
+  DSLValidationResult,
+  StoredCaseDetail,
+} from "../types/api";
 
 type WorkbenchFormValues = {
   name: string;
   description?: string;
   project_id: number;
+  base_url?: string;
+};
+
+type WorkbenchDraft = {
+  name: string;
+  description?: string;
+  project_id: number;
+  base_url?: string;
+  editorMode: EditorMode;
+  structuredSteps: DSLStep[];
+  stepsJson: string;
 };
 
 type EditorMode = "structured" | "json";
 type StepAction = "goto" | "click" | "input" | "wait_for" | "assert_text" | "assert_url_contains";
+type StepTemplate = {
+  label: string;
+  value: string;
+  baseUrl: string;
+  steps: DSLStep[];
+};
 
 const ACTION_OPTIONS: { label: string; value: StepAction }[] = [
   { label: "goto", value: "goto" },
@@ -43,24 +66,24 @@ const ACTION_OPTIONS: { label: string; value: StepAction }[] = [
   { label: "assert_url_contains", value: "assert_url_contains" },
 ];
 
-const STEP_TEMPLATES: { label: string; value: string; steps: DSLStep[] }[] = [
+const STEP_TEMPLATES: StepTemplate[] = [
   {
-    label: "登录冒烟模板",
-    value: "login-smoke",
+    label: "公共冒烟模板",
+    value: "public-smoke",
+    baseUrl: "https://example.com",
     steps: [
-      { action: "goto", value: "/login" },
-      { action: "input", target: "用户名输入框", value: "admin" },
-      { action: "input", target: "密码输入框", value: "123456" },
-      { action: "click", target: "登录按钮" },
-      { action: "assert_url_contains", value: "/dashboard" },
+      { action: "goto", value: "/" },
+      { action: "assert_url_contains", value: "example.com" },
     ],
   },
   {
-    label: "跳转断言模板",
-    value: "goto-assert",
+    label: "基础跳转模板",
+    value: "basic-navigation",
+    baseUrl: "https://example.com",
     steps: [
       { action: "goto", value: "/" },
-      { action: "assert_text", target: "欢迎文案", value: "欢迎使用" },
+      { action: "wait_for", target: "Example Domain", timeout_ms: 5000 },
+      { action: "assert_url_contains", value: "example.com" },
     ],
   },
 ];
@@ -105,6 +128,7 @@ function buildDslPayload(values: WorkbenchFormValues, stepsJson: string): DSLCas
   return {
     name: values.name,
     description: values.description || null,
+    base_url: values.base_url?.trim() || null,
     steps: parseStepsJson(stepsJson),
   };
 }
@@ -135,6 +159,70 @@ function normalizeStepForAction(step: DSLStep, action: StepAction): DSLStep {
   return nextStep;
 }
 
+function buildDraftKey(caseId?: string) {
+  return caseId ? `case-draft:${caseId}` : "case-draft:new";
+}
+
+function createDefaultDraft(): WorkbenchDraft {
+  const steps = [createDefaultStep()];
+  return {
+    name: "",
+    description: "",
+    project_id: 1,
+    base_url: "",
+    editorMode: "structured",
+    structuredSteps: steps,
+    stepsJson: formatStepsJson(steps),
+  };
+}
+
+const DEFAULT_FORM_VALUES: WorkbenchFormValues = {
+  name: "",
+  description: "",
+  project_id: 1,
+  base_url: "",
+};
+
+function readDraft(key: string): WorkbenchDraft | null {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as WorkbenchDraft;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(key: string, draft: WorkbenchDraft) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(draft));
+  } catch {
+    // Ignore storage failures in the workbench.
+  }
+}
+
+function removeDraft(key: string) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures in the workbench.
+  }
+}
+
+function isAbsoluteUrl(value: string) {
+  return value.startsWith("http://") || value.startsWith("https://");
+}
+
+function hasRelativeGotoStep(steps: DSLStep[]) {
+  return steps.some((step) => step.action === "goto" && typeof step.value === "string" && !isAbsoluteUrl(step.value));
+}
+
+function buildDraftSignature(draft: WorkbenchDraft) {
+  return JSON.stringify(draft);
+}
+
 export function CaseWorkbenchPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const isEditMode = Boolean(caseId);
@@ -147,6 +235,14 @@ export function CaseWorkbenchPage() {
   const [structuredSteps, setStructuredSteps] = useState<DSLStep[]>([createDefaultStep()]);
   const [stepsJson, setStepsJson] = useState<string>(formatStepsJson([createDefaultStep()]));
   const [validationResult, setValidationResult] = useState<DSLValidationResult | null>(null);
+  const [pendingDraft, setPendingDraft] = useState<WorkbenchDraft | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [baselineSignature, setBaselineSignature] = useState<string>(buildDraftSignature(createDefaultDraft()));
+  const draftKey = useMemo(() => buildDraftKey(caseId), [caseId]);
+  const watchedName = Form.useWatch("name", form);
+  const watchedDescription = Form.useWatch("description", form);
+  const watchedProjectId = Form.useWatch("project_id", form);
+  const watchedBaseUrl = Form.useWatch("base_url", form);
 
   const caseQuery = useQuery({
     queryKey: ["case-detail", caseId],
@@ -154,22 +250,107 @@ export function CaseWorkbenchPage() {
     enabled: isEditMode,
   });
 
+  const applyStoredCase = (storedCase: StoredCaseDetail) => {
+    form.setFieldsValue({
+      name: storedCase.name,
+      description: storedCase.description ?? "",
+      project_id: storedCase.project_id,
+      base_url: storedCase.base_url ?? "",
+    });
+    setStructuredSteps(storedCase.steps);
+    setStepsJson(formatStepsJson(storedCase.steps));
+    setEditorMode("structured");
+    setValidationResult(null);
+  };
+
+  const toDraftFromStoredCase = (storedCase: StoredCaseDetail): WorkbenchDraft => ({
+    name: storedCase.name,
+    description: storedCase.description ?? "",
+    project_id: storedCase.project_id,
+    base_url: storedCase.base_url ?? "",
+    editorMode: "structured",
+    structuredSteps: storedCase.steps,
+    stepsJson: formatStepsJson(storedCase.steps),
+  });
+
+  const applyDraft = (draft: WorkbenchDraft) => {
+    form.setFieldsValue({
+      name: draft.name,
+      description: draft.description ?? "",
+      project_id: draft.project_id,
+      base_url: draft.base_url ?? "",
+    });
+    setStructuredSteps(draft.structuredSteps);
+    setStepsJson(draft.stepsJson);
+    setEditorMode(draft.editorMode);
+    setValidationResult(null);
+  };
+
   useEffect(() => {
-    if (!caseQuery.data) {
+    setIsHydrated(false);
+    setPendingDraft(null);
+
+    if (isEditMode) {
+      if (!caseQuery.data) {
+        return;
+      }
+      applyStoredCase(caseQuery.data);
+      setBaselineSignature(buildDraftSignature(toDraftFromStoredCase(caseQuery.data)));
+      setPendingDraft(readDraft(draftKey));
+      setIsHydrated(true);
       return;
     }
-    form.setFieldsValue({
-      name: caseQuery.data.name,
-      description: caseQuery.data.description ?? "",
-      project_id: caseQuery.data.project_id,
-    });
-    setStructuredSteps(caseQuery.data.steps);
-    setStepsJson(formatStepsJson(caseQuery.data.steps));
-  }, [caseQuery.data, form]);
+
+    const savedDraft = readDraft(draftKey);
+    if (savedDraft) {
+      applyDraft(savedDraft);
+    } else {
+      const defaultDraft = createDefaultDraft();
+      applyDraft(defaultDraft);
+    }
+    setBaselineSignature(buildDraftSignature(createDefaultDraft()));
+    setIsHydrated(true);
+  }, [caseQuery.data, draftKey, form, isEditMode]);
+
+  useEffect(() => {
+    if (!isHydrated || pendingDraft !== null || watchedProjectId === undefined) {
+      return;
+    }
+
+    const draft = {
+      name: watchedName ?? "",
+      description: watchedDescription ?? "",
+      project_id: watchedProjectId,
+      base_url: watchedBaseUrl ?? "",
+      editorMode,
+      structuredSteps,
+      stepsJson,
+    };
+
+    if (buildDraftSignature(draft) === baselineSignature) {
+      removeDraft(draftKey);
+      return;
+    }
+
+    writeDraft(draftKey, draft);
+  }, [
+    baselineSignature,
+    draftKey,
+    editorMode,
+    isHydrated,
+    pendingDraft,
+    stepsJson,
+    structuredSteps,
+    watchedBaseUrl,
+    watchedDescription,
+    watchedName,
+    watchedProjectId,
+  ]);
 
   const syncStructuredSteps = (nextSteps: DSLStep[]) => {
     setStructuredSteps(nextSteps);
     setStepsJson(formatStepsJson(nextSteps));
+    setValidationResult(null);
   };
 
   const buildStepsJsonForSubmit = () => (editorMode === "json" ? stepsJson : formatStepsJson(structuredSteps));
@@ -190,6 +371,7 @@ export function CaseWorkbenchPage() {
       setStepsJson(formatStepsJson(structuredSteps));
     }
     setEditorMode(nextMode);
+    setValidationResult(null);
   };
 
   const updateStructuredStep = (index: number, updater: (step: DSLStep) => DSLStep) => {
@@ -212,6 +394,22 @@ export function CaseWorkbenchPage() {
     () => STEP_TEMPLATES.map((template) => ({ label: template.label, value: template.value })),
     [],
   );
+
+  const currentStepsForWarning = useMemo(() => {
+    if (editorMode === "json") {
+      try {
+        return parseStepsJson(stepsJson);
+      } catch {
+        return null;
+      }
+    }
+    return structuredSteps;
+  }, [editorMode, stepsJson, structuredSteps]);
+
+  const shouldWarnMissingBaseUrl =
+    !String(watchedBaseUrl ?? "").trim() &&
+    currentStepsForWarning !== null &&
+    hasRelativeGotoStep(currentStepsForWarning);
 
   const saveMutation = useMutation({
     mutationFn: async ({ executeAfterSave }: { executeAfterSave: boolean }) => {
@@ -244,6 +442,8 @@ export function CaseWorkbenchPage() {
       return { mode: "save" as const, storedCaseId: storedCase.id, executionId: null };
     },
     onSuccess: ({ mode, storedCaseId, executionId }) => {
+      removeDraft(draftKey);
+      setPendingDraft(null);
       if (mode === "execute" && executionId) {
         void navigate(`/executions/${executionId}`);
         return;
@@ -283,15 +483,81 @@ export function CaseWorkbenchPage() {
     <>
       {contextHolder}
       <div className="page-header">
-        <h1 className="page-title">{isEditMode ? "用例工作台" : "新建用例"}</h1>
-        <p className="page-subtitle">默认使用结构化步骤编辑；必要时可切到原始 JSON 模式。</p>
+        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }} wrap>
+          <div>
+            <h1 className="page-title">{isEditMode ? "用例工作台" : "新建用例"}</h1>
+            <p className="page-subtitle">默认使用结构化步骤编辑；必要时可切到原始 JSON 模式。</p>
+          </div>
+          <Space wrap>
+            <Button onClick={() => navigate("/cases")}>返回用例列表</Button>
+            <Button loading={validateMutation.isPending} onClick={() => validateMutation.mutate()}>
+              校验 DSL
+            </Button>
+            <Button
+              type="primary"
+              loading={saveMutation.isPending}
+              onClick={() => saveMutation.mutate({ executeAfterSave: false })}
+            >
+              保存
+            </Button>
+            <Button
+              type="primary"
+              ghost
+              loading={saveMutation.isPending}
+              onClick={() => saveMutation.mutate({ executeAfterSave: true })}
+            >
+              保存并执行
+            </Button>
+          </Space>
+        </Space>
       </div>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
+        {pendingDraft ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="检测到本地草稿"
+            description={
+              <Space wrap>
+                <Typography.Text>当前编辑页存在未保存的本地草稿，可恢复或丢弃。</Typography.Text>
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => {
+                    applyDraft(pendingDraft);
+                    setPendingDraft(null);
+                  }}
+                >
+                  恢复草稿
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    removeDraft(draftKey);
+                    setPendingDraft(null);
+                  }}
+                >
+                  丢弃草稿
+                </Button>
+              </Space>
+            }
+          />
+        ) : null}
+
+        {shouldWarnMissingBaseUrl ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="当前用例包含相对路径 goto"
+            description="请先填写用例 Base URL，否则执行时会直接失败。"
+          />
+        ) : null}
+
         <Card>
-          <Form form={form} layout="vertical" initialValues={{ project_id: 1 }}>
+          <Form form={form} layout="vertical" initialValues={DEFAULT_FORM_VALUES}>
             <div className="workbench-grid">
               <Form.Item label="用例名称" name="name" rules={[{ required: true, message: "请输入用例名称" }]}>
-                <Input placeholder="例如：登录冒烟" />
+                <Input placeholder="例如：公共冒烟" />
               </Form.Item>
               <Form.Item
                 label="项目 ID"
@@ -301,6 +567,9 @@ export function CaseWorkbenchPage() {
                 <InputNumber min={1} style={{ width: "100%" }} />
               </Form.Item>
             </div>
+            <Form.Item label="用例 Base URL" name="base_url">
+              <Input placeholder="例如：https://example.com" />
+            </Form.Item>
             <Form.Item label="描述" name="description">
               <Input.TextArea rows={3} placeholder="说明该用例验证的业务链路" />
             </Form.Item>
@@ -342,6 +611,7 @@ export function CaseWorkbenchPage() {
                   if (!selectedTemplate) {
                     return;
                   }
+                  form.setFieldValue("base_url", selectedTemplate.baseUrl);
                   syncStructuredSteps(selectedTemplate.steps);
                   setEditorMode("structured");
                 }}
@@ -466,7 +736,10 @@ export function CaseWorkbenchPage() {
               <Input.TextArea
                 value={stepsJson}
                 rows={18}
-                onChange={(event) => setStepsJson(event.target.value)}
+                onChange={(event) => {
+                  setStepsJson(event.target.value);
+                  setValidationResult(null);
+                }}
                 spellCheck={false}
                 style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
               />
@@ -489,27 +762,6 @@ export function CaseWorkbenchPage() {
             }
           />
         ) : null}
-
-        <Space wrap>
-          <Button loading={validateMutation.isPending} onClick={() => validateMutation.mutate()}>
-            校验 DSL
-          </Button>
-          <Button
-            type="primary"
-            loading={saveMutation.isPending}
-            onClick={() => saveMutation.mutate({ executeAfterSave: false })}
-          >
-            保存
-          </Button>
-          <Button
-            type="primary"
-            ghost
-            loading={saveMutation.isPending}
-            onClick={() => saveMutation.mutate({ executeAfterSave: true })}
-          >
-            保存并执行
-          </Button>
-        </Space>
       </Space>
     </>
   );

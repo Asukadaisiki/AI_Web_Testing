@@ -144,6 +144,8 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
   });
 
   expect(await screen.findByRole("heading", { name: "失败用例" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "返回执行中心" })).toHaveAttribute("href", "/executions");
+  expect(screen.getByRole("link", { name: "返回用例" })).toHaveAttribute("href", "/cases/1/edit");
   expect(screen.getByText("No locator candidates matched target.")).toBeInTheDocument();
   expect(screen.getByText(/score=108/)).toBeInTheDocument();
   expect(screen.getByText(/rejected=element-not-enabled/)).toBeInTheDocument();
@@ -166,4 +168,44 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
   await waitFor(() => {
     expect(screen.getByRole("img", { name: "step-2" })).toBeInTheDocument();
   });
+});
+
+test("缺少用例 Base URL 的执行会显示修复提示", async () => {
+  vi.mocked(api.getExecutionDetail).mockResolvedValue({
+    id: 20,
+    case_id: 8,
+    case_name: "Base URL 缺失用例",
+    project_id: 1,
+    triggered_by: 1,
+    status: "failed",
+    error_message: "Relative goto step requires case.base_url or execution request base_url.",
+    started_at: "2026-03-10T12:00:00",
+    finished_at: "2026-03-10T12:00:01",
+    duration_ms: 1000,
+    total_steps: 1,
+    failed_step_index: 0,
+    latest_screenshot_url: null,
+    report: {
+      status: "failed",
+      steps: [
+        {
+          step_index: 0,
+          action: "goto",
+          value: "/",
+          status: "failed",
+          console_events: [],
+          network_events: [],
+          error_message: "Relative goto step requires case.base_url or execution request base_url.",
+        },
+      ],
+    },
+  });
+
+  renderWithProviders(<ExecutionDetailPage />, {
+    route: "/executions/20",
+    path: "/executions/:executionId",
+  });
+
+  expect(await screen.findByText("该用例的相对路径 goto 缺少用例 Base URL")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "返回用例" })).toHaveAttribute("href", "/cases/8/edit");
 });

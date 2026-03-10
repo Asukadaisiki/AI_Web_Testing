@@ -19,6 +19,7 @@ const columns = (
       <Space direction="vertical" size={2}>
         <Typography.Text strong>{value}</Typography.Text>
         <Typography.Text type="secondary">{record.description || "未填写描述"}</Typography.Text>
+        <Typography.Text type="secondary">Base URL：{record.base_url || "未配置"}</Typography.Text>
       </Space>
     ),
   },
@@ -84,9 +85,14 @@ export function CasesPage() {
             <h1 className="page-title">用例列表</h1>
             <p className="page-subtitle">展示已落库的 DSL 用例，并直接触发后端同步执行。</p>
           </div>
-          <Button type="primary">
-            <Link to="/cases/new">新建用例</Link>
-          </Button>
+          <Space>
+            <Button>
+              <Link to="/executions">执行中心</Link>
+            </Button>
+            <Button type="primary">
+              <Link to="/cases/new">新建用例</Link>
+            </Button>
+          </Space>
         </Space>
       </div>
       <Card>

@@ -424,3 +424,39 @@
 - 验证：通过 `git status`、`git remote -v`、`git branch --show-current` 核对同步范围与目标分支
 - 关联文件：`docs/execution-log.md`
 - 后续：如需避免后续误提交流水产物，可再单独评估是否将 `backend/artifacts/` 加入忽略规则
+
+## 2026-03-10 21:20
+
+- 任务：排查现有执行截图为何看起来都处于失败状态
+- 背景：用户观察到 `backend/artifacts/` 下的截图看起来都是失败态，需要确认这是正常行为、配置问题，还是截图机制本身异常
+- 执行动作：
+  - 检查 `backend/artifacts/executions/` 目录下的实际截图文件与最近执行目录
+  - 阅读 `backend/app/runners/playwright_runner.py` 和 `backend/app/services/executions.py`，确认截图在成功/失败步骤都会尝试落盘
+  - 连接当前配置的 PostgreSQL 数据库，查询 `test_case_runs` 和 `test_cases`，核对最近执行状态、失败原因和用例 DSL
+  - 额外核对执行 1/2 的报告路径与本地文件存在性，确认报告中记录了截图路径，但本地只保留了执行 3/4 的实际 PNG 文件
+- 结果：当前截图看起来都失败是“现有执行记录本身都失败了”的结果，而不是截图逻辑只支持失败截图；4 次执行均在第 1 步 `goto` 失败，原因都是缺少 `base_url` 或 `EXECUTION_BASE_URL`，而用例使用的是相对路径 `/login` 和 `/`
+- 验证：
+  - 查询 PostgreSQL 中 `test_case_runs`，4 条执行均为 `failed`
+  - 每条失败信息均为 `Relative goto step requires base_url or EXECUTION_BASE_URL.`
+  - `playwright_runner.py` 中通过和失败分支都会调用 `_take_step_screenshot()`
+- 关联文件：`backend/app/runners/playwright_runner.py`、`backend/app/services/executions.py`、`docs/bug-log.md`、`docs/execution-log.md`
+- 后续：补充 `EXECUTION_BASE_URL` 后重新执行相对路径用例；如仍需保留旧执行记录，可考虑清理失效的截图路径或重新跑一轮基准用例
+
+## 2026-03-10 21:48
+
+- 任务：落实“单 Case 稳定化 v1.6”，把请求 URL 下沉到用例并补齐工作台草稿缓存与页面返回入口
+- 背景：上一轮确认相对路径 `goto` 的失败根因在于地址来源设计错误；同时工作台缺少返回入口与切页后的表单恢复能力，影响连续编辑体验
+- 执行动作：
+  - 在 `backend/app/schemas/dsl.py`、`backend/app/schemas/cases.py` 与前端类型中新增用例级 `base_url`，同步打通 DSL 校验、Case 创建/更新/详情返回
+  - 调整 `backend/app/services/executions.py` 与 `backend/app/runners/playwright_runner.py`：执行优先使用请求 `base_url` 覆盖值，否则使用用例自身 `base_url`；若相对路径 `goto` 缺少两者，则在 service 层直接返回明确失败结果
+  - 重写 `frontend/src/pages/CaseWorkbenchPage.tsx`，加入 Base URL 表单、公共冒烟模板、本地草稿缓存、编辑页恢复/丢弃草稿、保存后清理草稿，以及“返回用例列表”入口
+  - 增强 `frontend/src/pages/ExecutionDetailPage.tsx` 与 `frontend/src/pages/CasesPage.tsx`，补“返回执行中心 / 返回用例”入口和更顺手的跨页切换
+  - 更新后端/前端测试、`docs/project-plan.md`、`backend/README.md`、`frontend/README.md`，并将 `BUG-007` 标记为已修复
+- 结果：项目现在以“用例自身携带执行地址”为正式口径，前端工作台具备可恢复的编辑态，跨页面切换后的继续编辑和回看路径更顺畅
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `31 passed`
+  - 执行 `cd frontend && npm test`，结果 `10 passed`
+  - 执行 `cd frontend && npm run build` 成功
+  - 执行 `cd backend && uv run python -` 调用 `execute_case_with_playwright()`，使用 `https://example.com` + `goto "/"` + `assert_url_contains "example.com"` 的真实 DSL，2 个步骤均返回 `passed`
+- 关联文件：`backend/app/schemas/dsl.py`、`backend/app/services/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`frontend/src/types/api.ts`、`docs/project-plan.md`、`backend/README.md`、`frontend/README.md`、`docs/bug-log.md`
+- 后续：下一步可继续围绕单 Case 主链路做真实执行联调、报告字段细化与执行中心聚合增强，暂不切入 Suite、AI 生成 DSL 和 Vision 定位

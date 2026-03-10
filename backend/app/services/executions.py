@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime, UTC
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models import TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, execute_case_with_playwright
-from app.schemas.dsl import DSLCase
+from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
     StoredCaseExecutionDetail,
@@ -26,6 +26,7 @@ def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) 
     if record is None:
         raise EntityNotFoundError(f"Case {case_id} not found.")
     _ensure_user_exists(session, payload.actor_user_id)
+    normalized_case = DSLCase.model_validate(record.dsl)
 
     execution = TestCaseRun(
         case_id=record.id,
@@ -37,17 +38,26 @@ def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) 
     session.commit()
     session.refresh(execution)
 
+    effective_base_url = payload.base_url or normalized_case.base_url
+    missing_base_url_error = _build_missing_base_url_error(normalized_case, effective_base_url)
+
     try:
-        step_results = execute_case_with_playwright(
-            case=DSLCase.model_validate(record.dsl),
-            execution_id=execution.id,
-            base_url=payload.base_url or get_settings().execution_base_url,
-        )
-        step_results = [_with_artifact_url(step) for step in step_results]
-        report = build_execution_report(status="passed", steps=step_results)
-        execution.status = "passed"
-        execution.report = report.model_dump(mode="json")
-        execution.error_message = None
+        if missing_base_url_error is not None:
+            report = build_execution_report(status="failed", steps=[missing_base_url_error])
+            execution.status = "failed"
+            execution.report = report.model_dump(mode="json")
+            execution.error_message = missing_base_url_error.error_message
+        else:
+            step_results = execute_case_with_playwright(
+                case=normalized_case,
+                execution_id=execution.id,
+                base_url=effective_base_url,
+            )
+            step_results = [_with_artifact_url(step) for step in step_results]
+            report = build_execution_report(status="passed", steps=step_results)
+            execution.status = "passed"
+            execution.report = report.model_dump(mode="json")
+            execution.error_message = None
     except RunnerExecutionError as exc:
         step_results = [_with_artifact_url(step) for step in exc.step_results]
         report = build_execution_report(status="failed", steps=step_results)
@@ -114,6 +124,31 @@ def get_case_execution(session: Session, execution_id: int) -> StoredCaseExecuti
 def _ensure_user_exists(session: Session, user_id: int) -> None:
     if session.get(User, user_id) is None:
         raise EntityNotFoundError(f"User {user_id} not found.")
+
+
+def _build_missing_base_url_error(case: DSLCase, base_url: str | None) -> StepExecutionEvidence | None:
+    if base_url:
+        return None
+
+    for index, step in enumerate(case.steps):
+        if step.action != "goto":
+            continue
+        goto_step = cast(GotoStep, step)
+        if _is_absolute_url(goto_step.value):
+            continue
+        return StepExecutionEvidence(
+            step_index=index,
+            action="goto",
+            value=goto_step.value,
+            status="failed",
+            duration_ms=0,
+            error_message="Relative goto step requires case.base_url or execution request base_url.",
+        )
+    return None
+
+
+def _is_absolute_url(value: str) -> bool:
+    return value.startswith(("http://", "https://"))
 
 
 def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionSummary:

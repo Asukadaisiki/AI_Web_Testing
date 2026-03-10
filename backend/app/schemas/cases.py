@@ -24,6 +24,7 @@ class StoredCaseSummary(DSLModel):
     project_id: int
     name: str
     description: str | None = None
+    base_url: str | None = None
     steps: list[DSLStep]
     created_by: int
     updated_by: int

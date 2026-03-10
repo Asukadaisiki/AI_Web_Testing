@@ -24,6 +24,7 @@ def test_execute_case_success(client, monkeypatch) -> None:
             "project_id": 1,
             "actor_user_id": 1,
             "name": "执行用例",
+            "base_url": "https://case.example.com",
             "steps": [{"action": "goto", "value": "/login"}],
         },
     )
@@ -130,7 +131,47 @@ def test_execute_case_success(client, monkeypatch) -> None:
     assert case_runs.json()[0]["case_name"] == "执行用例"
 
 
-def test_execute_case_returns_failed_execution_when_runner_fails(client, monkeypatch) -> None:
+def test_execute_case_uses_case_base_url_when_request_does_not_override(client, monkeypatch) -> None:
+    create_response = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "默认地址用例",
+            "base_url": "https://case.example.com",
+            "steps": [{"action": "goto", "value": "/from-case"}],
+        },
+    )
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+        assert case.base_url == "https://case.example.com"
+        assert execution_id == 1
+        assert base_url == "https://case.example.com"
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="goto",
+                value="/from-case",
+                status="passed",
+            )
+        ]
+
+    monkeypatch.setattr(
+        execution_service,
+        "execute_case_with_playwright",
+        fake_execute_case_with_playwright,
+    )
+
+    response = client.post(
+        f"/api/v1/cases/{create_response.json()['id']}/execute",
+        json={"actor_user_id": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "passed"
+
+
+def test_execute_case_fails_early_when_relative_goto_has_no_case_base_url(client, monkeypatch) -> None:
     create_response = client.post(
         "/api/v1/cases",
         json={
@@ -142,23 +183,7 @@ def test_execute_case_returns_failed_execution_when_runner_fails(client, monkeyp
     )
 
     def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
-        raise RunnerExecutionError(
-            "Relative goto step requires base_url or EXECUTION_BASE_URL.",
-            step_results=[
-                StepExecutionEvidence(
-                    step_index=0,
-                    action="goto",
-                    value="/missing",
-                    status="failed",
-                    locator_trace=LocatorTrace(
-                        target="不存在的按钮",
-                        candidates=[],
-                        failure_reason="No locator candidates matched target.",
-                    ),
-                    error_message="Relative goto step requires base_url or EXECUTION_BASE_URL.",
-                )
-            ],
-        )
+        raise AssertionError("runner should not be called when case base_url is missing")
 
     monkeypatch.setattr(
         execution_service,
@@ -174,9 +199,9 @@ def test_execute_case_returns_failed_execution_when_runner_fails(client, monkeyp
     assert response.status_code == 200
     assert response.json()["case_name"] == "失败用例"
     assert response.json()["status"] == "failed"
-    assert response.json()["error_message"] == "Relative goto step requires base_url or EXECUTION_BASE_URL."
+    assert response.json()["error_message"] == "Relative goto step requires case.base_url or execution request base_url."
     assert response.json()["report"]["steps"][0]["status"] == "failed"
-    assert response.json()["report"]["steps"][0]["locator_trace"]["failure_reason"] == "No locator candidates matched target."
+    assert response.json()["report"]["steps"][0]["locator_trace"] is None
     assert response.json()["failed_step_index"] == 0
 
 
@@ -203,6 +228,7 @@ def test_list_executions_supports_filters_limit_offset_and_case_id(client, monke
                 "project_id": 1,
                 "actor_user_id": 1,
                 "name": name,
+                "base_url": "https://example.com",
                 "steps": [{"action": "goto", "value": "/"}],
             },
         )
@@ -281,6 +307,7 @@ def test_get_execution_detail_compatible_with_legacy_report_payload(client, db_s
             "project_id": 1,
             "actor_user_id": 1,
             "name": "旧报告用例",
+            "base_url": "https://legacy.example.com",
             "steps": [{"action": "goto", "value": "/legacy"}],
         },
     )

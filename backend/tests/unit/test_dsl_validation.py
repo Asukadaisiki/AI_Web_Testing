@@ -7,6 +7,7 @@ def test_validate_dsl_case_success(client) -> None:
         "/api/v1/dsl/validate",
         json={
             "name": "登录冒烟",
+            "base_url": "https://example.com",
             "steps": [
                 {"action": "goto", "value": "/login"},
                 {"action": "input", "target": "用户名输入框", "value": "admin"},
@@ -22,6 +23,7 @@ def test_validate_dsl_case_success(client) -> None:
         "case": {
             "name": "登录冒烟",
             "description": None,
+            "base_url": "https://example.com",
             "steps": [
                 {"action": "goto", "value": "/login"},
                 {"action": "input", "target": "用户名输入框", "value": "admin"},

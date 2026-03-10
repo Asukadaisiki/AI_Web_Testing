@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Alert,
+  Button,
   Card,
   Col,
   Collapse,
@@ -14,7 +16,7 @@ import {
   Timeline,
   Typography,
 } from "antd";
-import { useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getExecutionDetail } from "../services/api";
@@ -26,6 +28,13 @@ import type {
 } from "../types/api";
 
 const DEFAULT_EVENT_PREVIEW_COUNT = 2;
+
+function isBaseUrlError(message: string | null) {
+  if (!message) {
+    return false;
+  }
+  return message.includes("case.base_url") || message.includes("Relative goto step requires");
+}
 
 function renderStatus(status: ExecutionStatus) {
   const colorMap: Record<ExecutionStatus, string> = {
@@ -271,9 +280,30 @@ export function ExecutionDetailPage() {
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <div className="page-header">
-        <h1 className="page-title">{detail.case_name}</h1>
-        <p className="page-subtitle">查看步骤时间线、定位候选、截图证据、URL 与失败原因。</p>
+        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }} wrap>
+          <div>
+            <h1 className="page-title">{detail.case_name}</h1>
+            <p className="page-subtitle">查看步骤时间线、定位候选、截图证据、URL 与失败原因。</p>
+          </div>
+          <Space wrap>
+            <Button>
+              <Link to="/executions">返回执行中心</Link>
+            </Button>
+            <Button>
+              <Link to={`/cases/${detail.case_id}/edit`}>返回用例</Link>
+            </Button>
+          </Space>
+        </Space>
       </div>
+
+      {isBaseUrlError(detail.error_message) ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="该用例的相对路径 goto 缺少用例 Base URL"
+          description="请回到用例工作台补充 Base URL，或在调试执行接口时显式传入 base_url。"
+        />
+      ) : null}
 
       <div className="summary-strip">
         <div className="summary-tile">
