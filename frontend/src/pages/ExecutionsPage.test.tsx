@@ -48,6 +48,30 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
     running_count: 0,
     pass_rate: 0.5,
     avg_duration_ms: 1500,
+    current_window_range: {
+      start_date: "2026-03-03",
+      end_date: "2026-03-09",
+    },
+    previous_window_range: {
+      start_date: "2026-02-25",
+      end_date: "2026-03-02",
+    },
+    previous_window_stats: {
+      total_count: 1,
+      passed_count: 1,
+      failed_count: 0,
+      running_count: 0,
+      pass_rate: 1,
+      avg_duration_ms: 1200,
+    },
+    window_comparison: {
+      total_count_delta: 1,
+      passed_count_delta: 0,
+      failed_count_delta: 1,
+      running_count_delta: 0,
+      pass_rate_delta: -0.5,
+      avg_duration_ms_delta: 300,
+    },
     latest_failed_runs: [
       {
         id: 4,
@@ -79,6 +103,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
     trend_points: [],
     failure_step_actions: [],
     top_failed_cases: [],
+    failure_root_causes: [],
   });
   vi.mocked(api.getExecutions).mockImplementation(async (params) => {
     if (params.status === "failed" && params.case_id === 2 && params.failure_category === "navigation") {
@@ -160,12 +185,14 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
   expect(api.getExecutionOverview).toHaveBeenCalledWith({
     project_id: 1,
     case_id: undefined,
+    failure_fingerprint: undefined,
   });
   expect(api.getExecutions).toHaveBeenCalledWith({
     project_id: 1,
     case_id: undefined,
     status: undefined,
     failure_category: undefined,
+    failure_fingerprint: undefined,
     limit: 10,
     offset: 0,
   });
@@ -180,6 +207,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       case_id: undefined,
       status: "failed",
       failure_category: undefined,
+      failure_fingerprint: undefined,
       limit: 10,
       offset: 0,
     });
@@ -194,6 +222,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       case_id: 2,
       status: "failed",
       failure_category: undefined,
+      failure_fingerprint: undefined,
       limit: 10,
       offset: 0,
     });
@@ -207,6 +236,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       case_id: 2,
       status: "failed",
       failure_category: "navigation",
+      failure_fingerprint: undefined,
       limit: 10,
       offset: 0,
     });
@@ -231,6 +261,24 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
     running_count: 0,
     pass_rate: 1,
     avg_duration_ms: 100,
+    current_window_range: null,
+    previous_window_range: null,
+    previous_window_stats: {
+      total_count: 0,
+      passed_count: 0,
+      failed_count: 0,
+      running_count: 0,
+      pass_rate: 0,
+      avg_duration_ms: 0,
+    },
+    window_comparison: {
+      total_count_delta: 0,
+      passed_count_delta: 0,
+      failed_count_delta: 0,
+      running_count_delta: 0,
+      pass_rate_delta: 0,
+      avg_duration_ms_delta: 0,
+    },
     latest_failed_runs: [],
     failure_categories: [
       { category: "configuration", count: 0 },
@@ -243,6 +291,7 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
     trend_points: [],
     failure_step_actions: [],
     top_failed_cases: [],
+    failure_root_causes: [],
   });
   vi.mocked(api.getExecutions).mockImplementation(async (params) => {
     if (params.offset === 10) {
@@ -302,12 +351,117 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
       case_id: undefined,
       status: undefined,
       failure_category: undefined,
+      failure_fingerprint: undefined,
       limit: 10,
       offset: 10,
     });
   });
 
   expect(await screen.findByText("执行 11")).toBeInTheDocument();
+});
+
+test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选并清除", async () => {
+  vi.mocked(api.getCases).mockResolvedValue([]);
+  vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    total_count: 2,
+    passed_count: 0,
+    failed_count: 2,
+    running_count: 0,
+    pass_rate: 0,
+    avg_duration_ms: 800,
+    current_window_range: null,
+    previous_window_range: null,
+    previous_window_stats: {
+      total_count: 0,
+      passed_count: 0,
+      failed_count: 0,
+      running_count: 0,
+      pass_rate: 0,
+      avg_duration_ms: 0,
+    },
+    window_comparison: {
+      total_count_delta: 0,
+      passed_count_delta: 0,
+      failed_count_delta: 0,
+      running_count_delta: 0,
+      pass_rate_delta: 0,
+      avg_duration_ms_delta: 0,
+    },
+    latest_failed_runs: [],
+    failure_categories: [
+      { category: "configuration", count: 0 },
+      { category: "locator", count: 0 },
+      { category: "assertion", count: 0 },
+      { category: "navigation", count: 0 },
+      { category: "network", count: 0 },
+      { category: "runner", count: 2 },
+    ],
+    trend_points: [],
+    failure_step_actions: [],
+    top_failed_cases: [],
+    failure_root_causes: [],
+  });
+  vi.mocked(api.getExecutions).mockImplementation(async (params) => {
+    if (params.failure_fingerprint === "fp-1234") {
+      return [
+        {
+          id: 9,
+          case_id: 3,
+          case_name: "共享根因场景",
+          project_id: 1,
+          triggered_by: 1,
+          status: "failed",
+          error_message: "shared runner boom",
+          started_at: "2026-03-10T10:00:00",
+          finished_at: "2026-03-10T10:00:01",
+          duration_ms: 1000,
+          total_steps: 2,
+          failed_step_index: 0,
+          failure_category: "runner",
+          failure_step_action: "click",
+          latest_url: null,
+          latest_screenshot_url: null,
+        },
+      ];
+    }
+    return [];
+  });
+
+  renderWithProviders(<ExecutionsPage />, {
+    route: "/executions?status=failed&failure_fingerprint=fp-1234&root_cause_title=shared%20runner%20boom",
+    path: "/executions",
+  });
+
+  expect(await screen.findByText("根因筛选已启用")).toBeInTheDocument();
+  expect(screen.getByText("shared runner boom")).toBeInTheDocument();
+  expect(api.getExecutionOverview).toHaveBeenCalledWith({
+    project_id: 1,
+    case_id: undefined,
+    failure_fingerprint: "fp-1234",
+  });
+  expect(api.getExecutions).toHaveBeenCalledWith({
+    project_id: 1,
+    case_id: undefined,
+    status: "failed",
+    failure_category: undefined,
+    failure_fingerprint: "fp-1234",
+    limit: 10,
+    offset: 0,
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "清除根因筛选" }));
+
+  await waitFor(() => {
+    expect(api.getExecutions).toHaveBeenLastCalledWith({
+      project_id: 1,
+      case_id: undefined,
+      status: "failed",
+      failure_category: undefined,
+      failure_fingerprint: undefined,
+      limit: 10,
+      offset: 0,
+    });
+  });
 });
 
 test("执行中心在空状态下稳定展示 overview 与空列表", async () => {
@@ -319,6 +473,24 @@ test("执行中心在空状态下稳定展示 overview 与空列表", async () =
     running_count: 0,
     pass_rate: 0,
     avg_duration_ms: 0,
+    current_window_range: null,
+    previous_window_range: null,
+    previous_window_stats: {
+      total_count: 0,
+      passed_count: 0,
+      failed_count: 0,
+      running_count: 0,
+      pass_rate: 0,
+      avg_duration_ms: 0,
+    },
+    window_comparison: {
+      total_count_delta: 0,
+      passed_count_delta: 0,
+      failed_count_delta: 0,
+      running_count_delta: 0,
+      pass_rate_delta: 0,
+      avg_duration_ms_delta: 0,
+    },
     latest_failed_runs: [],
     failure_categories: [
       { category: "configuration", count: 0 },
@@ -331,6 +503,7 @@ test("执行中心在空状态下稳定展示 overview 与空列表", async () =
     trend_points: [],
     failure_step_actions: [],
     top_failed_cases: [],
+    failure_root_causes: [],
   });
   vi.mocked(api.getExecutions).mockResolvedValue([]);
 

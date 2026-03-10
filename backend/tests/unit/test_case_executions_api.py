@@ -377,6 +377,24 @@ def test_get_executions_overview_returns_zero_counts_when_no_runs_exist(client) 
         "running_count": 0,
         "pass_rate": 0.0,
         "avg_duration_ms": 0,
+        "current_window_range": None,
+        "previous_window_range": None,
+        "previous_window_stats": {
+            "total_count": 0,
+            "passed_count": 0,
+            "failed_count": 0,
+            "running_count": 0,
+            "pass_rate": 0.0,
+            "avg_duration_ms": 0,
+        },
+        "window_comparison": {
+            "total_count_delta": 0,
+            "passed_count_delta": 0,
+            "failed_count_delta": 0,
+            "running_count_delta": 0,
+            "pass_rate_delta": 0.0,
+            "avg_duration_ms_delta": 0,
+        },
         "latest_failed_runs": [],
         "failure_categories": [
             {"category": "configuration", "count": 0},
@@ -389,6 +407,7 @@ def test_get_executions_overview_returns_zero_counts_when_no_runs_exist(client) 
         "trend_points": [],
         "failure_step_actions": [],
         "top_failed_cases": [],
+        "failure_root_causes": [],
     }
 
 
@@ -596,6 +615,24 @@ def test_get_executions_overview_aggregates_counts_categories_and_recent_failure
     assert payload["running_count"] == 1
     assert payload["pass_rate"] == 0.1429
     assert payload["avg_duration_ms"] == 400
+    assert payload["current_window_range"] is None
+    assert payload["previous_window_range"] is None
+    assert payload["previous_window_stats"] == {
+        "total_count": 0,
+        "passed_count": 0,
+        "failed_count": 0,
+        "running_count": 0,
+        "pass_rate": 0.0,
+        "avg_duration_ms": 0,
+    }
+    assert payload["window_comparison"] == {
+        "total_count_delta": 0,
+        "passed_count_delta": 0,
+        "failed_count_delta": 0,
+        "running_count_delta": 0,
+        "pass_rate_delta": 0.0,
+        "avg_duration_ms_delta": 0,
+    }
     assert [item["category"] for item in payload["failure_categories"]] == [
         "configuration",
         "locator",
@@ -637,6 +674,137 @@ def test_get_executions_overview_aggregates_counts_categories_and_recent_failure
             "latest_failure_category": "runner",
         }
     ]
+    assert [item["latest_execution_id"] for item in payload["failure_root_causes"]] == [6, 5, 4, 3, 2, 1]
+    assert [item["title"] for item in payload["failure_root_causes"]] == [
+        "runner boom",
+        "network boom",
+        "navigation boom",
+        "assert boom",
+        "locator boom",
+        "Relative goto step requires case.base_url or execution request base_url.",
+    ]
+    assert all(len(item["fingerprint"]) == 16 for item in payload["failure_root_causes"])
+    assert all(item["count"] == 1 for item in payload["failure_root_causes"])
+    assert all(item["affected_case_count"] == 1 for item in payload["failure_root_causes"])
+
+
+def test_get_executions_overview_supports_failure_fingerprint_filter(client, db_session) -> None:
+    case_ids: list[int] = []
+    for name in ["共享根因 A", "共享根因 B", "不同根因"]:
+        response = client.post(
+            "/api/v1/cases",
+            json={
+                "project_id": 1,
+                "actor_user_id": 1,
+                "name": name,
+                "base_url": "https://example.com",
+                "steps": [{"action": "click", "target": "提交"}],
+            },
+        )
+        case_ids.append(response.json()["id"])
+
+    now = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    db_session.add_all(
+        [
+            TestCaseRun(
+                id=1,
+                case_id=case_ids[0],
+                project_id=1,
+                triggered_by=1,
+                status="failed",
+                error_message="shared runner boom",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "提交",
+                            "status": "failed",
+                            "error_message": "shared runner boom",
+                        }
+                    ],
+                },
+                started_at=now - timedelta(hours=1),
+                finished_at=now - timedelta(hours=1) + timedelta(milliseconds=200),
+            ),
+            TestCaseRun(
+                id=2,
+                case_id=case_ids[1],
+                project_id=1,
+                triggered_by=1,
+                status="failed",
+                error_message="shared runner boom",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "提交",
+                            "status": "failed",
+                            "error_message": "shared runner boom",
+                        }
+                    ],
+                },
+                started_at=now,
+                finished_at=now + timedelta(milliseconds=220),
+            ),
+            TestCaseRun(
+                id=3,
+                case_id=case_ids[2],
+                project_id=1,
+                triggered_by=1,
+                status="failed",
+                error_message="other runner boom",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "提交",
+                            "status": "failed",
+                            "error_message": "other runner boom",
+                        }
+                    ],
+                },
+                started_at=now + timedelta(minutes=1),
+                finished_at=now + timedelta(minutes=1, milliseconds=240),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    overview_response = client.get("/api/v1/executions/overview", params={"project_id": 1, "window_days": 7})
+
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.json()
+    assert overview_payload["failure_root_causes"][0]["title"] == "shared runner boom"
+    assert overview_payload["failure_root_causes"][0]["count"] == 2
+    assert overview_payload["failure_root_causes"][0]["affected_case_count"] == 2
+    assert overview_payload["failure_root_causes"][0]["latest_execution_id"] == 2
+    assert overview_payload["failure_root_causes"][1]["title"] == "other runner boom"
+    assert overview_payload["failure_root_causes"][1]["count"] == 1
+
+    shared_fingerprint = overview_payload["failure_root_causes"][0]["fingerprint"]
+    filtered_response = client.get(
+        "/api/v1/executions/overview",
+        params={"project_id": 1, "window_days": 7, "failure_fingerprint": shared_fingerprint},
+    )
+
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert filtered_payload["total_count"] == 2
+    assert filtered_payload["failed_count"] == 2
+    assert filtered_payload["failure_root_causes"] == [overview_payload["failure_root_causes"][0]]
+
+    list_response = client.get(
+        "/api/v1/executions",
+        params={"project_id": 1, "failure_fingerprint": shared_fingerprint},
+    )
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()] == [2, 1]
 
 
 def test_get_executions_overview_supports_window_days_trends_and_top_failed_cases(client, db_session) -> None:
@@ -778,6 +946,30 @@ def test_get_executions_overview_supports_window_days_trends_and_top_failed_case
     assert payload["passed_count"] == 1
     assert payload["failed_count"] == 3
     assert payload["running_count"] == 0
+    assert payload["current_window_range"] == {
+        "start_date": (now.date() - timedelta(days=6)).isoformat(),
+        "end_date": now.date().isoformat(),
+    }
+    assert payload["previous_window_range"] == {
+        "start_date": (now.date() - timedelta(days=13)).isoformat(),
+        "end_date": (now.date() - timedelta(days=7)).isoformat(),
+    }
+    assert payload["previous_window_stats"] == {
+        "total_count": 1,
+        "passed_count": 0,
+        "failed_count": 1,
+        "running_count": 0,
+        "pass_rate": 0.0,
+        "avg_duration_ms": 500,
+    }
+    assert payload["window_comparison"] == {
+        "total_count_delta": 3,
+        "passed_count_delta": 1,
+        "failed_count_delta": 2,
+        "running_count_delta": 0,
+        "pass_rate_delta": 0.25,
+        "avg_duration_ms_delta": -250,
+    }
     assert len(payload["trend_points"]) == 7
     assert payload["trend_points"][-1]["date"] == now.date().isoformat()
     assert payload["trend_points"][-1]["passed_count"] == 1
@@ -804,6 +996,12 @@ def test_get_executions_overview_supports_window_days_trends_and_top_failed_case
             "latest_failure_category": "assertion",
         },
     ]
+    assert [item["title"] for item in payload["failure_root_causes"]] == [
+        "assert boom",
+        "goto boom",
+        "click boom",
+    ]
+    assert [item["count"] for item in payload["failure_root_causes"]] == [1, 1, 1]
 
     for days in [14, 30]:
         extra_response = client.get("/api/v1/executions/overview", params={"project_id": 1, "window_days": days})

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
+import hashlib
+import re
 from typing import cast
 
 from sqlalchemy import select
@@ -15,10 +18,14 @@ from app.runners import RunnerExecutionError, execute_case_with_playwright
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
+    ExecutionAggregateSnapshot,
     ExecutionTrendPoint,
     ExecutionsOverview,
     FailureCategoryCount,
+    FailureRootCause,
     FailureStepActionCount,
+    ExecutionWindowComparison,
+    ExecutionWindowRange,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
     StepExecutionEvidence,
@@ -36,6 +43,13 @@ FAILURE_CATEGORY_ORDER = [
 ]
 LATEST_FAILED_RUNS_LIMIT = 5
 TOP_FAILED_CASES_LIMIT = 5
+FAILURE_ROOT_CAUSES_LIMIT = 10
+
+
+@dataclass(frozen=True)
+class ExecutionFailureDescriptor:
+    fingerprint: str | None = None
+    title: str | None = None
 
 
 def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) -> StoredCaseExecutionDetail:
@@ -109,6 +123,7 @@ def list_executions(
     case_id: int | None = None,
     status: str | None = None,
     failure_category: str | None = None,
+    failure_fingerprint: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[StoredCaseExecutionSummary]:
@@ -119,12 +134,22 @@ def list_executions(
         status=status,
         limit=limit,
         offset=offset,
-        apply_pagination=failure_category is None,
+        apply_pagination=failure_category is None and failure_fingerprint is None,
     )
-    summaries = [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
-    if failure_category is None:
-        return summaries
-    filtered = [summary for summary in summaries if summary.failure_category == failure_category]
+
+    if failure_category is None and failure_fingerprint is None:
+        return [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
+
+    filtered: list[StoredCaseExecutionSummary] = []
+    for record, case_name in rows:
+        report = _normalize_report(record.report)
+        summary = _to_execution_summary(record, case_name=case_name, report=report)
+        failure_descriptor = _describe_failure(summary=summary, report=report, error_message=record.error_message)
+        if failure_category is not None and summary.failure_category != failure_category:
+            continue
+        if failure_fingerprint is not None and failure_descriptor.fingerprint != failure_fingerprint:
+            continue
+        filtered.append(summary)
     return filtered[offset : offset + limit]
 
 
@@ -134,6 +159,7 @@ def get_executions_overview(
     project_id: int | None = None,
     case_id: int | None = None,
     window_days: int | None = None,
+    failure_fingerprint: str | None = None,
 ) -> ExecutionsOverview:
     rows = _list_execution_rows(
         session,
@@ -144,15 +170,32 @@ def get_executions_overview(
         offset=0,
         apply_pagination=False,
     )
-    summaries = [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
-    filtered_summaries = _filter_summaries_by_window(summaries, window_days)
-    passed_count = sum(1 for item in filtered_summaries if item.status == "passed")
-    failed_count = sum(1 for item in filtered_summaries if item.status == "failed")
-    running_count = sum(1 for item in filtered_summaries if item.status == "running")
-    finished_total = passed_count + failed_count
-    durations = [
-        item.duration_ms for item in filtered_summaries if item.status != "running" and item.duration_ms is not None
-    ]
+    summary_entries: list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]] = []
+    for record, case_name in rows:
+        report = _normalize_report(record.report)
+        summary = _to_execution_summary(record, case_name=case_name, report=report)
+        failure_descriptor = _describe_failure(summary=summary, report=report, error_message=record.error_message)
+        if failure_fingerprint is not None and failure_descriptor.fingerprint != failure_fingerprint:
+            continue
+        summary_entries.append((summary, failure_descriptor))
+
+    current_window_range = _build_window_range(window_days)
+    previous_window_range = _build_previous_window_range(window_days)
+    filtered_entries = _filter_entries_by_window(summary_entries, window_days)
+    filtered_summaries = [summary for summary, _ in filtered_entries]
+    previous_entries = (
+        _filter_entries_by_range(summary_entries, previous_window_range)
+        if previous_window_range is not None
+        else []
+    )
+    previous_summaries = [summary for summary, _ in previous_entries]
+    current_stats = _build_aggregate_snapshot(filtered_summaries)
+    previous_stats = _build_aggregate_snapshot(previous_summaries)
+    window_comparison = (
+        _build_window_comparison(current_stats, previous_stats)
+        if previous_window_range is not None
+        else ExecutionWindowComparison()
+    )
     category_counter = Counter(
         item.failure_category
         for item in filtered_summaries
@@ -160,12 +203,16 @@ def get_executions_overview(
     )
 
     return ExecutionsOverview(
-        total_count=len(filtered_summaries),
-        passed_count=passed_count,
-        failed_count=failed_count,
-        running_count=running_count,
-        pass_rate=round(passed_count / finished_total, 4) if finished_total else 0,
-        avg_duration_ms=int(sum(durations) / len(durations)) if durations else 0,
+        total_count=current_stats.total_count,
+        passed_count=current_stats.passed_count,
+        failed_count=current_stats.failed_count,
+        running_count=current_stats.running_count,
+        pass_rate=current_stats.pass_rate,
+        avg_duration_ms=current_stats.avg_duration_ms,
+        current_window_range=current_window_range,
+        previous_window_range=previous_window_range,
+        previous_window_stats=previous_stats,
+        window_comparison=window_comparison,
         latest_failed_runs=[item for item in filtered_summaries if item.status == "failed"][:LATEST_FAILED_RUNS_LIMIT],
         failure_categories=[
             FailureCategoryCount(category=category, count=category_counter.get(category, 0))
@@ -174,6 +221,7 @@ def get_executions_overview(
         trend_points=_build_trend_points(filtered_summaries, window_days),
         failure_step_actions=_build_failure_step_actions(filtered_summaries),
         top_failed_cases=_build_top_failed_cases(filtered_summaries),
+        failure_root_causes=_build_failure_root_causes(filtered_entries),
     )
 
 
@@ -217,15 +265,65 @@ def _ensure_user_exists(session: Session, user_id: int) -> None:
         raise EntityNotFoundError(f"User {user_id} not found.")
 
 
+def _build_window_range(window_days: int | None) -> ExecutionWindowRange | None:
+    if window_days is None:
+        return None
+
+    end_date = datetime.now(UTC).date()
+    start_date = end_date - timedelta(days=window_days - 1)
+    return ExecutionWindowRange(start_date=start_date, end_date=end_date)
+
+
+def _build_previous_window_range(window_days: int | None) -> ExecutionWindowRange | None:
+    current_window = _build_window_range(window_days)
+    if current_window is None or current_window.start_date is None:
+        return None
+
+    end_date = current_window.start_date - timedelta(days=1)
+    start_date = end_date - timedelta(days=window_days - 1)
+    return ExecutionWindowRange(start_date=start_date, end_date=end_date)
+
+
 def _filter_summaries_by_window(
     summaries: list[StoredCaseExecutionSummary],
     window_days: int | None,
 ) -> list[StoredCaseExecutionSummary]:
-    if window_days is None:
+    return _filter_summaries_by_range(summaries, _build_window_range(window_days))
+
+
+def _filter_summaries_by_range(
+    summaries: list[StoredCaseExecutionSummary],
+    window_range: ExecutionWindowRange | None,
+) -> list[StoredCaseExecutionSummary]:
+    if window_range is None or window_range.start_date is None or window_range.end_date is None:
         return summaries
 
-    cutoff = datetime.now(UTC).date() - timedelta(days=window_days - 1)
-    return [summary for summary in summaries if summary.started_at.date() >= cutoff]
+    return [
+        summary
+        for summary in summaries
+        if window_range.start_date <= summary.started_at.date() <= window_range.end_date
+    ]
+
+
+def _filter_entries_by_window(
+    entries: list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]],
+    window_days: int | None,
+) -> list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]]:
+    return _filter_entries_by_range(entries, _build_window_range(window_days))
+
+
+def _filter_entries_by_range(
+    entries: list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]],
+    window_range: ExecutionWindowRange | None,
+) -> list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]]:
+    if window_range is None or window_range.start_date is None or window_range.end_date is None:
+        return entries
+
+    return [
+        entry
+        for entry in entries
+        if window_range.start_date <= entry[0].started_at.date() <= window_range.end_date
+    ]
 
 
 def _build_missing_base_url_error(case: DSLCase, base_url: str | None) -> StepExecutionEvidence | None:
@@ -253,8 +351,13 @@ def _is_absolute_url(value: str) -> bool:
     return value.startswith(("http://", "https://"))
 
 
-def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionSummary:
-    report = _normalize_report(record.report)
+def _to_execution_summary(
+    record: TestCaseRun,
+    *,
+    case_name: str,
+    report=None,
+) -> StoredCaseExecutionSummary:
+    report = _normalize_report(record.report) if report is None else report
     failed_step = _derive_failed_step(report)
     return StoredCaseExecutionSummary(
         id=record.id,
@@ -277,10 +380,11 @@ def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseE
 
 
 def _to_execution_detail(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionDetail:
-    summary = _to_execution_summary(record, case_name=case_name)
+    report = _normalize_report(record.report)
+    summary = _to_execution_summary(record, case_name=case_name, report=report)
     return StoredCaseExecutionDetail(
         **summary.model_dump(),
-        report=_normalize_report(record.report),
+        report=report,
     )
 
 
@@ -343,8 +447,73 @@ def _derive_failure_category(report, error_message: str | None) -> str | None:
     return "runner"
 
 
+def _describe_failure(
+    *,
+    summary: StoredCaseExecutionSummary,
+    report,
+    error_message: str | None,
+) -> ExecutionFailureDescriptor:
+    if summary.status != "failed":
+        return ExecutionFailureDescriptor()
+
+    title = _derive_failure_title(
+        report,
+        error_message=error_message,
+        failure_category=summary.failure_category,
+        failure_step_action=summary.failure_step_action,
+    )
+    fingerprint = _build_failure_fingerprint(
+        failure_category=summary.failure_category,
+        failure_step_action=summary.failure_step_action,
+        title=title,
+    )
+    return ExecutionFailureDescriptor(fingerprint=fingerprint, title=title)
+
+
 def _is_configuration_error(error_message: str) -> bool:
     return "Relative goto step requires" in error_message or "case.base_url" in error_message
+
+
+def _derive_failure_title(
+    report,
+    *,
+    error_message: str | None,
+    failure_category: str | None,
+    failure_step_action: str | None,
+) -> str:
+    failed_step = _derive_failed_step(report)
+    raw_title = failed_step.error_message if failed_step is not None and failed_step.error_message else error_message
+    normalized_title = _normalize_error_message(raw_title)
+    if normalized_title:
+        return normalized_title
+
+    category_label = failure_category or "runner"
+    action_label = failure_step_action or "unknown"
+    return f"{category_label}:{action_label}"
+
+
+def _normalize_error_message(error_message: str | None) -> str | None:
+    if not error_message:
+        return None
+
+    normalized = re.sub(r"\s+", " ", error_message).strip()
+    return normalized or None
+
+
+def _build_failure_fingerprint(
+    *,
+    failure_category: str | None,
+    failure_step_action: str | None,
+    title: str,
+) -> str:
+    source = "|".join(
+        [
+            failure_category or "unknown",
+            failure_step_action or "unknown",
+            title.casefold(),
+        ]
+    )
+    return hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
 
 
 def _derive_latest_url(report) -> str | None:
@@ -363,6 +532,36 @@ def _derive_latest_screenshot_url(report) -> str | None:
         if step.screenshot_url:
             return step.screenshot_url
     return None
+
+
+def _build_aggregate_snapshot(summaries: list[StoredCaseExecutionSummary]) -> ExecutionAggregateSnapshot:
+    passed_count = sum(1 for item in summaries if item.status == "passed")
+    failed_count = sum(1 for item in summaries if item.status == "failed")
+    running_count = sum(1 for item in summaries if item.status == "running")
+    finished_total = passed_count + failed_count
+    durations = [item.duration_ms for item in summaries if item.status != "running" and item.duration_ms is not None]
+    return ExecutionAggregateSnapshot(
+        total_count=len(summaries),
+        passed_count=passed_count,
+        failed_count=failed_count,
+        running_count=running_count,
+        pass_rate=round(passed_count / finished_total, 4) if finished_total else 0,
+        avg_duration_ms=int(sum(durations) / len(durations)) if durations else 0,
+    )
+
+
+def _build_window_comparison(
+    current: ExecutionAggregateSnapshot,
+    previous: ExecutionAggregateSnapshot,
+) -> ExecutionWindowComparison:
+    return ExecutionWindowComparison(
+        total_count_delta=current.total_count - previous.total_count,
+        passed_count_delta=current.passed_count - previous.passed_count,
+        failed_count_delta=current.failed_count - previous.failed_count,
+        running_count_delta=current.running_count - previous.running_count,
+        pass_rate_delta=round(current.pass_rate - previous.pass_rate, 4),
+        avg_duration_ms_delta=current.avg_duration_ms - previous.avg_duration_ms,
+    )
 
 
 def _build_trend_points(
@@ -416,6 +615,40 @@ def _build_failure_step_actions(
         FailureStepActionCount(action=action, count=count)
         for action, count in sorted(action_counter.items(), key=lambda item: (-item[1], item[0]))
     ]
+
+
+def _build_failure_root_causes(
+    entries: list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]],
+) -> list[FailureRootCause]:
+    grouped: dict[str, list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]]] = {}
+    for summary, descriptor in entries:
+        if summary.status != "failed" or descriptor.fingerprint is None or descriptor.title is None:
+            continue
+        grouped.setdefault(descriptor.fingerprint, []).append((summary, descriptor))
+
+    root_causes: list[FailureRootCause] = []
+    for fingerprint, group_entries in grouped.items():
+        latest_summary, latest_descriptor = max(group_entries, key=lambda item: (item[0].started_at, item[0].id))
+        root_causes.append(
+            FailureRootCause(
+                fingerprint=fingerprint,
+                title=latest_descriptor.title or fingerprint,
+                count=len(group_entries),
+                affected_case_count=len({summary.case_id for summary, _ in group_entries}),
+                latest_execution_id=latest_summary.id,
+                latest_failure_category=latest_summary.failure_category,
+            )
+        )
+
+    return sorted(
+        root_causes,
+        key=lambda item: (
+            -item.count,
+            -item.affected_case_count,
+            -item.latest_execution_id,
+            item.title,
+        ),
+    )[:FAILURE_ROOT_CAUSES_LIMIT]
 
 
 def _build_top_failed_cases(

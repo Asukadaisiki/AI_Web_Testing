@@ -52,6 +52,30 @@ test("仪表盘展示 KPI、趋势图、最近失败和失败最多用例入口"
     running_count: 0,
     pass_rate: 0.6667,
     avg_duration_ms: 1200,
+    current_window_range: {
+      start_date: "2026-03-04",
+      end_date: "2026-03-10",
+    },
+    previous_window_range: {
+      start_date: "2026-02-26",
+      end_date: "2026-03-03",
+    },
+    previous_window_stats: {
+      total_count: 3,
+      passed_count: 2,
+      failed_count: 1,
+      running_count: 0,
+      pass_rate: 0.6667,
+      avg_duration_ms: 1100,
+    },
+    window_comparison: {
+      total_count_delta: 3,
+      passed_count_delta: 2,
+      failed_count_delta: 1,
+      running_count_delta: 0,
+      pass_rate_delta: 0,
+      avg_duration_ms_delta: 100,
+    },
     latest_failed_runs: [
       {
         id: 8,
@@ -108,6 +132,7 @@ test("仪表盘展示 KPI、趋势图、最近失败和失败最多用例入口"
         latest_failure_category: "locator",
       },
     ],
+    failure_root_causes: [],
   });
 
   renderWithProviders(<DashboardPage />, {

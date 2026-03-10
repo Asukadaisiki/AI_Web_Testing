@@ -541,3 +541,34 @@
 - 验证：通过 `git status`、`git branch --show-current`、`git remote -v` 及提交/推送命令结果核对同步状态
 - 关联文件：`docs/execution-log.md`
 - 后续：如需继续推进，可在下一轮围绕报告中心趋势对比、失败根因聚合和前端拆包优化继续迭代
+
+## 2026-03-10 23:45
+
+- 任务：落实“单 Case 平台化 v1.9”，补齐报告中心历史对比、失败根因聚合与执行中心回流筛选
+- 背景：`v1.8` 已完成 Dashboard / 报告中心入口和基础趋势聚合，但报告中心仍缺“当前窗口 vs 上一窗口”对比，也缺少可直接回流到执行中心的失败根因榜
+- 执行动作：
+  - 扩展 `backend/app/schemas/executions.py`、`backend/app/services/executions.py` 与 `backend/app/api/routes/executions.py`，为 `GET /api/v1/executions/overview` 增加 `current_window_range`、`previous_window_range`、`previous_window_stats`、`window_comparison`、`failure_root_causes`，并为 `GET /api/v1/executions` / `overview` 补 `failure_fingerprint` 过滤
+  - 更新 `backend/tests/unit/test_case_executions_api.py`，覆盖空状态、新增窗口对比字段、失败根因聚合、相同根因归并与 `failure_fingerprint` 筛选
+  - 更新 `frontend/src/types/api.ts`、`frontend/src/services/api.ts`、`frontend/src/pages/ReportCenterPage.tsx`、`frontend/src/pages/ExecutionsPage.tsx` 与 `frontend/src/index.css`，补报告中心环比摘要、根因榜、执行中心根因筛选提示与清除交互
+  - 重写并扩展 `frontend/src/pages/ReportCenterPage.test.tsx`，同时更新 `frontend/src/pages/ExecutionsPage.test.tsx`、`frontend/src/pages/DashboardPage.test.tsx` 的 overview 契约
+  - 同步刷新 `docs/project-plan.md`、`docs/frontend-design.md`、`backend/README.md`、`frontend/README.md`，并将构建时发现的前端大包告警记录到 `docs/bug-log.md`（`BUG-010`）
+- 结果：项目现在具备报告中心“当前窗口 / 上一窗口”对比、失败根因聚合榜，以及从根因榜回流到执行中心的筛选链路；单 Case 平台入口从 `v1.8` 继续推进到 `v1.9`
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `35 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果 `18 passed`
+  - 执行 `cd frontend && npm run build` 成功；同时识别到前端 chunk size warning，并登记为 `BUG-010`
+- 关联文件：`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/api/routes/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`frontend/src/types/api.ts`、`frontend/src/services/api.ts`、`frontend/src/pages/ReportCenterPage.tsx`、`frontend/src/pages/ExecutionsPage.tsx`、`frontend/src/pages/ReportCenterPage.test.tsx`、`frontend/src/pages/ExecutionsPage.test.tsx`、`docs/project-plan.md`、`docs/frontend-design.md`、`backend/README.md`、`frontend/README.md`、`docs/bug-log.md`
+- 后续：下一轮可继续围绕仪表盘 / 报告中心 / 执行中心的深链联动体验与前端拆包优化推进，仍暂不切入 Suite、AI 生成 DSL 和 Vision 定位
+
+## 2026-03-10 23:53
+
+- 任务：将 `v1.9` 报告中心历史对比与失败根因聚合改动同步到 GitHub
+- 背景：`v1.9` 的后端聚合、前端页面、测试与文档已完成并通过本地验证，需要按仓库工作流同步到 `origin/main`
+- 执行动作：
+  - 核对 `git status --short`、`git branch --show-current` 与 `git remote -v`，确认待同步改动位于当前仓库的 `main` 分支并指向 `origin`
+  - 追加执行日志，记录本次同步动作与结果
+  - 准备单次提交并推送到 GitHub 远端主分支
+- 结果：`v1.9` 改动已整理为可追溯的同步批次，准备提交并推送到 `origin/main`
+- 验证：通过 `git status`、分支信息、远端信息以及后续提交/推送命令结果核对同步状态
+- 关联文件：`docs/execution-log.md`
+- 后续：如需继续推进，下一轮可围绕前端拆包优化与报告分析体验细化继续迭代

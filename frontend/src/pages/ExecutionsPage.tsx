@@ -13,7 +13,7 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getCases, getExecutionOverview, getExecutions } from "../services/api";
@@ -40,6 +40,18 @@ const STATUS_OPTIONS: { label: string; value: ExecutionStatus | "all" }[] = [
   { label: "失败", value: "failed" },
   { label: "运行中", value: "running" },
 ];
+
+function parseStatus(value: string | null): ExecutionStatus | "all" {
+  if (value === "passed" || value === "failed" || value === "running") {
+    return value;
+  }
+  return "all";
+}
+
+function normalizeSearchValue(value: string | null) {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
 
 function renderStatus(status: ExecutionStatus) {
   const colorMap: Record<ExecutionStatus, string> = {
@@ -175,9 +187,16 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
 }
 
 export function ExecutionsPage() {
-  const [status, setStatus] = useState<ExecutionStatus | "all">("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [status, setStatus] = useState<ExecutionStatus | "all">(() => parseStatus(searchParams.get("status")));
   const [caseId, setCaseId] = useState<number | undefined>(undefined);
   const [failureCategory, setFailureCategory] = useState<FailureCategory | "all">("all");
+  const [failureFingerprint, setFailureFingerprint] = useState<string | undefined>(() =>
+    normalizeSearchValue(searchParams.get("failure_fingerprint")),
+  );
+  const [failureFingerprintTitle, setFailureFingerprintTitle] = useState<string | undefined>(() =>
+    normalizeSearchValue(searchParams.get("root_cause_title")),
+  );
   const [page, setPage] = useState(1);
   const columns = useMemo(() => buildColumns(), []);
   const casesQuery = useQuery({
@@ -185,21 +204,23 @@ export function ExecutionsPage() {
     queryFn: getCases,
   });
   const overviewQuery = useQuery({
-    queryKey: ["executions-overview", caseId],
+    queryKey: ["executions-overview", caseId, failureFingerprint],
     queryFn: () =>
       getExecutionOverview({
         project_id: 1,
         case_id: caseId,
+        failure_fingerprint: failureFingerprint,
       }),
   });
   const executionsQuery = useQuery({
-    queryKey: ["executions", status, caseId, failureCategory, page],
+    queryKey: ["executions", status, caseId, failureCategory, failureFingerprint, page],
     queryFn: () =>
       getExecutions({
         project_id: 1,
         case_id: caseId,
         status: status === "all" ? undefined : status,
         failure_category: failureCategory === "all" ? undefined : failureCategory,
+        failure_fingerprint: failureFingerprint,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       }),
@@ -207,7 +228,7 @@ export function ExecutionsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [status, caseId, failureCategory]);
+  }, [status, caseId, failureCategory, failureFingerprint]);
 
   const caseOptions = useMemo(
     () => [
@@ -222,6 +243,15 @@ export function ExecutionsPage() {
   const failureCategoryCounts = overviewQuery.data?.failure_categories ?? [];
   const hasNextPage = (executionsQuery.data?.length ?? 0) === PAGE_SIZE;
   const paginationTotal = hasNextPage ? page * PAGE_SIZE + 1 : (page - 1) * PAGE_SIZE + (executionsQuery.data?.length ?? 0);
+
+  const clearFailureFingerprintFilter = () => {
+    setFailureFingerprint(undefined);
+    setFailureFingerprintTitle(undefined);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("failure_fingerprint");
+    nextParams.delete("root_cause_title");
+    setSearchParams(nextParams, { replace: true });
+  };
 
   return (
     <>
@@ -315,6 +345,21 @@ export function ExecutionsPage() {
               style={{ width: 220 }}
             />
           </Space>
+          {failureFingerprint ? (
+            <div className="active-filter-panel">
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                <Typography.Text strong>根因筛选已启用</Typography.Text>
+                <Space wrap>
+                  <Typography.Text title={failureFingerprintTitle ?? failureFingerprint}>
+                    {truncateText(failureFingerprintTitle ?? failureFingerprint, 96)}
+                  </Typography.Text>
+                  <Button size="small" onClick={clearFailureFingerprintFilter}>
+                    清除根因筛选
+                  </Button>
+                </Space>
+              </Space>
+            </div>
+          ) : null}
           <Space direction="vertical" size="small" style={{ width: "100%" }}>
             <Typography.Text type="secondary">失败分类</Typography.Text>
             <Space wrap>

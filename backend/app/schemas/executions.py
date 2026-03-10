@@ -126,6 +126,29 @@ class FailureCategoryCount(DSLModel):
     count: int = Field(default=0, ge=0)
 
 
+class ExecutionAggregateSnapshot(DSLModel):
+    total_count: int = Field(default=0, ge=0)
+    passed_count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    running_count: int = Field(default=0, ge=0)
+    pass_rate: float = Field(default=0, ge=0)
+    avg_duration_ms: int = Field(default=0, ge=0)
+
+
+class ExecutionWindowRange(DSLModel):
+    start_date: date | None = None
+    end_date: date | None = None
+
+
+class ExecutionWindowComparison(DSLModel):
+    total_count_delta: int = 0
+    passed_count_delta: int = 0
+    failed_count_delta: int = 0
+    running_count_delta: int = 0
+    pass_rate_delta: float = 0
+    avg_duration_ms_delta: int = 0
+
+
 class ExecutionTrendPoint(DSLModel):
     date: date
     total_count: int = Field(default=0, ge=0)
@@ -148,6 +171,15 @@ class TopFailedCase(DSLModel):
     latest_failure_category: FailureCategory | None = None
 
 
+class FailureRootCause(DSLModel):
+    fingerprint: str
+    title: str
+    count: int = Field(default=0, ge=0)
+    affected_case_count: int = Field(default=0, ge=0)
+    latest_execution_id: int = Field(ge=1)
+    latest_failure_category: FailureCategory | None = None
+
+
 class ExecutionsOverview(DSLModel):
     total_count: int = Field(default=0, ge=0)
     passed_count: int = Field(default=0, ge=0)
@@ -155,8 +187,13 @@ class ExecutionsOverview(DSLModel):
     running_count: int = Field(default=0, ge=0)
     pass_rate: float = Field(default=0, ge=0)
     avg_duration_ms: int = Field(default=0, ge=0)
+    current_window_range: ExecutionWindowRange | None = None
+    previous_window_range: ExecutionWindowRange | None = None
+    previous_window_stats: ExecutionAggregateSnapshot = Field(default_factory=ExecutionAggregateSnapshot)
+    window_comparison: ExecutionWindowComparison = Field(default_factory=ExecutionWindowComparison)
     latest_failed_runs: list[StoredCaseExecutionSummary] = Field(default_factory=list)
     failure_categories: list[FailureCategoryCount] = Field(default_factory=list)
     trend_points: list[ExecutionTrendPoint] = Field(default_factory=list)
     failure_step_actions: list[FailureStepActionCount] = Field(default_factory=list)
     top_failed_cases: list[TopFailedCase] = Field(default_factory=list)
+    failure_root_causes: list[FailureRootCause] = Field(default_factory=list)

@@ -155,6 +155,29 @@ export interface FailureCategoryCount {
   count: number;
 }
 
+export interface ExecutionAggregateSnapshot {
+  total_count: number;
+  passed_count: number;
+  failed_count: number;
+  running_count: number;
+  pass_rate: number;
+  avg_duration_ms: number;
+}
+
+export interface ExecutionWindowRange {
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export interface ExecutionWindowComparison {
+  total_count_delta: number;
+  passed_count_delta: number;
+  failed_count_delta: number;
+  running_count_delta: number;
+  pass_rate_delta: number;
+  avg_duration_ms_delta: number;
+}
+
 export interface ExecutionTrendPoint {
   date: string;
   total_count: number;
@@ -177,6 +200,15 @@ export interface TopFailedCase {
   latest_failure_category?: FailureCategory | null;
 }
 
+export interface FailureRootCause {
+  fingerprint: string;
+  title: string;
+  count: number;
+  affected_case_count: number;
+  latest_execution_id: number;
+  latest_failure_category?: FailureCategory | null;
+}
+
 export interface ExecutionsOverview {
   total_count: number;
   passed_count: number;
@@ -184,9 +216,14 @@ export interface ExecutionsOverview {
   running_count: number;
   pass_rate: number;
   avg_duration_ms: number;
+  current_window_range?: ExecutionWindowRange | null;
+  previous_window_range?: ExecutionWindowRange | null;
+  previous_window_stats: ExecutionAggregateSnapshot;
+  window_comparison: ExecutionWindowComparison;
   latest_failed_runs: StoredCaseExecutionSummary[];
   failure_categories: FailureCategoryCount[];
   trend_points: ExecutionTrendPoint[];
   failure_step_actions: FailureStepActionCount[];
   top_failed_cases: TopFailedCase[];
+  failure_root_causes: FailureRootCause[];
 }

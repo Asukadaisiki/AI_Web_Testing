@@ -15,9 +15,40 @@ import {
 } from "../components/executionPresentation";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getExecutionOverview } from "../services/api";
-import type { OverviewWindowDays, TopFailedCase } from "../types/api";
+import type { FailureRootCause, OverviewWindowDays, TopFailedCase } from "../types/api";
 
 const WINDOW_OPTIONS: OverviewWindowDays[] = [7, 14, 30];
+
+function formatWindowRange(
+  startDate?: string | null,
+  endDate?: string | null,
+) {
+  if (!startDate || !endDate) {
+    return "全部历史";
+  }
+  return `${startDate.slice(5)} ~ ${endDate.slice(5)}`;
+}
+
+function formatSignedInteger(value: number) {
+  return `${value > 0 ? "+" : ""}${value}`;
+}
+
+function formatSignedDuration(value: number) {
+  return `${value > 0 ? "+" : ""}${value} ms`;
+}
+
+function formatPassRateDelta(value: number) {
+  return `${value > 0 ? "+" : ""}${(value * 100).toFixed(1)} pp`;
+}
+
+function buildFailureFingerprintLink(record: FailureRootCause) {
+  const search = new URLSearchParams({
+    status: "failed",
+    failure_fingerprint: record.fingerprint,
+    root_cause_title: record.title,
+  });
+  return `/executions?${search.toString()}`;
+}
 
 export function ReportCenterPage() {
   const [windowDays, setWindowDays] = useState<OverviewWindowDays>(7);
@@ -29,6 +60,38 @@ export function ReportCenterPage() {
         window_days: windowDays,
       }),
   });
+
+  const trendOption = useMemo<EChartsOption>(
+    () => ({
+      tooltip: { trigger: "axis" },
+      legend: { data: ["通过", "失败"] },
+      grid: { left: 32, right: 18, top: 32, bottom: 24, containLabel: true },
+      xAxis: {
+        type: "category" as const,
+        data: (overviewQuery.data?.trend_points ?? []).map((item) => item.date.slice(5)),
+      },
+      yAxis: { type: "value" as const, minInterval: 1 },
+      series: [
+        {
+          name: "通过",
+          type: "line" as const,
+          smooth: true,
+          data: (overviewQuery.data?.trend_points ?? []).map((item) => item.passed_count),
+          lineStyle: { color: "#1f9d55", width: 3 },
+          itemStyle: { color: "#1f9d55" },
+        },
+        {
+          name: "失败",
+          type: "line" as const,
+          smooth: true,
+          data: (overviewQuery.data?.trend_points ?? []).map((item) => item.failed_count),
+          lineStyle: { color: "#c2410c", width: 3 },
+          itemStyle: { color: "#c2410c" },
+        },
+      ],
+    }),
+    [overviewQuery.data?.trend_points],
+  );
 
   const failureCategoryOption = useMemo<EChartsOption>(
     () => ({
@@ -106,13 +169,73 @@ export function ReportCenterPage() {
     [],
   );
 
+  const rootCauseColumns = useMemo<ColumnsType<FailureRootCause>>(
+    () => [
+      {
+        title: "失败根因",
+        dataIndex: "title",
+        key: "title",
+        render: (value: string, record) => (
+          <Space direction="vertical" size={4}>
+            <Typography.Text title={value}>{truncateText(value, 48)}</Typography.Text>
+            <Space wrap>
+              {record.latest_failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[record.latest_failure_category]}</Tag> : null}
+              <Typography.Text type="secondary">指纹 {record.fingerprint}</Typography.Text>
+            </Space>
+          </Space>
+        ),
+      },
+      {
+        title: "失败次数",
+        dataIndex: "count",
+        key: "count",
+        width: 120,
+        render: (value: number) => <Tag color="error">{value}</Tag>,
+      },
+      {
+        title: "影响用例",
+        dataIndex: "affected_case_count",
+        key: "affected_case_count",
+        width: 120,
+      },
+      {
+        title: "最近执行",
+        dataIndex: "latest_execution_id",
+        key: "latest_execution_id",
+        width: 140,
+        render: (value: number) => <Link to={`/executions/${value}`}>#{value}</Link>,
+      },
+      {
+        title: "操作",
+        key: "actions",
+        width: 180,
+        render: (_, record) => (
+          <Space wrap>
+            <Link to={`/executions/${record.latest_execution_id}`}>查看详情</Link>
+            <Link to={buildFailureFingerprintLink(record)}>筛选执行</Link>
+          </Space>
+        ),
+      },
+    ],
+    [],
+  );
+
+  const currentWindowRange = formatWindowRange(
+    overviewQuery.data?.current_window_range?.start_date,
+    overviewQuery.data?.current_window_range?.end_date,
+  );
+  const previousWindowRange = formatWindowRange(
+    overviewQuery.data?.previous_window_range?.start_date,
+    overviewQuery.data?.previous_window_range?.end_date,
+  );
+
   return (
     <>
       <div className="page-header">
         <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
           <div>
             <h1 className="page-title">报告中心</h1>
-            <p className="page-subtitle">按时间窗口查看失败分类、失败动作和高频失败用例聚合。</p>
+            <p className="page-subtitle">围绕时间窗口查看趋势、环比、失败分类和根因聚合，快速回流到执行明细排障。</p>
           </div>
           <Space>
             {WINDOW_OPTIONS.map((option) => (
@@ -137,22 +260,39 @@ export function ReportCenterPage() {
             <div className="summary-tile">
               <div className="summary-label">窗口总执行数</div>
               <div className="summary-value">{overviewQuery.data.total_count}</div>
+              <div className="summary-meta">较上一窗口 {formatSignedInteger(overviewQuery.data.window_comparison.total_count_delta)}</div>
             </div>
             <div className="summary-tile">
               <div className="summary-label">失败数</div>
               <div className="summary-value">{overviewQuery.data.failed_count}</div>
+              <div className="summary-meta">较上一窗口 {formatSignedInteger(overviewQuery.data.window_comparison.failed_count_delta)}</div>
             </div>
             <div className="summary-tile">
               <div className="summary-label">通过率</div>
               <div className="summary-value">{formatPassRate(overviewQuery.data.pass_rate)}</div>
+              <div className="summary-meta">较上一窗口 {formatPassRateDelta(overviewQuery.data.window_comparison.pass_rate_delta)}</div>
             </div>
             <div className="summary-tile">
               <div className="summary-label">平均耗时</div>
               <div className="summary-value">{formatDuration(overviewQuery.data.avg_duration_ms)}</div>
+              <div className="summary-meta">较上一窗口 {formatSignedDuration(overviewQuery.data.window_comparison.avg_duration_ms_delta)}</div>
             </div>
           </div>
 
+          <Card className="dashboard-card" style={{ marginBottom: 20 }} title="窗口对比">
+            <Space direction="vertical" size={6}>
+              <Typography.Text>当前窗口：{currentWindowRange}</Typography.Text>
+              <Typography.Text>上一窗口：{previousWindowRange}</Typography.Text>
+              <Typography.Text type="secondary">
+                上一窗口执行 {overviewQuery.data.previous_window_stats.total_count} 次，失败 {overviewQuery.data.previous_window_stats.failed_count} 次。
+              </Typography.Text>
+            </Space>
+          </Card>
+
           <div className="analytics-grid">
+            <Card className="dashboard-card" title="窗口趋势">
+              <OverviewChart option={trendOption} testId="report-trend-chart" />
+            </Card>
             <Card className="dashboard-card" title="失败分类分布">
               <OverviewChart option={failureCategoryOption} testId="report-category-chart" />
             </Card>
@@ -161,43 +301,58 @@ export function ReportCenterPage() {
             </Card>
           </div>
 
-          <Card title="高频失败用例" style={{ marginBottom: 20 }}>
-            {overviewQuery.data.top_failed_cases.length ? (
+          <Card title="失败根因榜" style={{ marginBottom: 20 }}>
+            {overviewQuery.data.failure_root_causes.length ? (
               <Table
-                rowKey="case_id"
+                rowKey="fingerprint"
                 pagination={false}
-                columns={topFailedColumns}
-                dataSource={overviewQuery.data.top_failed_cases}
+                columns={rootCauseColumns}
+                dataSource={overviewQuery.data.failure_root_causes}
               />
             ) : (
-              <EmptyBlock description="当前窗口内暂无高频失败用例。" />
+              <EmptyBlock description="当前窗口内暂无可聚合的失败根因。" />
             )}
           </Card>
 
-          <Card title="最近失败执行">
-            {overviewQuery.data.latest_failed_runs.length ? (
-              <List
-                size="small"
-                dataSource={overviewQuery.data.latest_failed_runs}
-                renderItem={(item) => (
-                  <List.Item>
-                    <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                      <Space wrap>
-                        <Link to={buildExecutionLink(item)}>{item.case_name}</Link>
-                        {item.failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[item.failure_category]}</Tag> : null}
+          <div className="analytics-grid">
+            <Card className="dashboard-card" title="高频失败用例">
+              {overviewQuery.data.top_failed_cases.length ? (
+                <Table
+                  rowKey="case_id"
+                  pagination={false}
+                  columns={topFailedColumns}
+                  dataSource={overviewQuery.data.top_failed_cases}
+                />
+              ) : (
+                <EmptyBlock description="当前窗口内暂无高频失败用例。" />
+              )}
+            </Card>
+
+            <Card className="dashboard-card" title="最近失败执行">
+              {overviewQuery.data.latest_failed_runs.length ? (
+                <List
+                  size="small"
+                  dataSource={overviewQuery.data.latest_failed_runs}
+                  renderItem={(item) => (
+                    <List.Item>
+                      <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                        <Space wrap>
+                          <Link to={buildExecutionLink(item)}>{item.case_name}</Link>
+                          {item.failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[item.failure_category]}</Tag> : null}
+                        </Space>
+                        <Typography.Text type="secondary">
+                          {truncateText(item.error_message)}
+                          {item.latest_url ? ` · ${item.latest_url}` : ""}
+                        </Typography.Text>
                       </Space>
-                      <Typography.Text type="secondary">
-                        {truncateText(item.error_message)}
-                        {item.latest_url ? ` · ${item.latest_url}` : ""}
-                      </Typography.Text>
-                    </Space>
-                  </List.Item>
-                )}
-              />
-            ) : (
-              <EmptyBlock description="当前窗口内暂无失败执行。" />
-            )}
-          </Card>
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <EmptyBlock description="当前窗口内暂无失败执行。" />
+              )}
+            </Card>
+          </div>
         </>
       ) : null}
     </>

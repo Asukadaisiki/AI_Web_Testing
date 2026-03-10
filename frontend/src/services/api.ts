@@ -79,6 +79,7 @@ export function getExecutions(params: {
   case_id?: number;
   status?: string;
   failure_category?: string;
+  failure_fingerprint?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -95,6 +96,9 @@ export function getExecutions(params: {
   if (params.failure_category) {
     search.set("failure_category", params.failure_category);
   }
+  if (params.failure_fingerprint) {
+    search.set("failure_fingerprint", params.failure_fingerprint);
+  }
   if (params.limit) {
     search.set("limit", String(params.limit));
   }
@@ -108,6 +112,7 @@ export function getExecutionOverview(params: {
   project_id?: number;
   case_id?: number;
   window_days?: OverviewWindowDays;
+  failure_fingerprint?: string;
 }) {
   const search = new URLSearchParams();
   if (params.project_id) {
@@ -118,6 +123,9 @@ export function getExecutionOverview(params: {
   }
   if (params.window_days) {
     search.set("window_days", String(params.window_days));
+  }
+  if (params.failure_fingerprint) {
+    search.set("failure_fingerprint", params.failure_fingerprint);
   }
   const query = search.toString();
   return request<ExecutionsOverview>(`/api/v1/executions/overview${query ? `?${query}` : ""}`);

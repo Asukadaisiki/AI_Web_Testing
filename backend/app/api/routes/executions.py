@@ -54,6 +54,7 @@ def list_executions_route(
     case_id: int | None = Query(default=None, ge=1),
     status_filter: str | None = Query(default=None, alias="status"),
     failure_category: str | None = Query(default=None),
+    failure_fingerprint: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
@@ -64,6 +65,7 @@ def list_executions_route(
         case_id=case_id,
         status=status_filter,
         failure_category=failure_category,
+        failure_fingerprint=failure_fingerprint,
         limit=limit,
         offset=offset,
     )
@@ -74,6 +76,7 @@ def get_executions_overview_route(
     project_id: int | None = Query(default=None, ge=1),
     case_id: int | None = Query(default=None, ge=1),
     window_days: int | None = Query(default=None),
+    failure_fingerprint: str | None = Query(default=None, min_length=1),
     session: Session = Depends(get_db_session),
 ) -> ExecutionsOverview:
     if window_days not in {None, 7, 14, 30}:
@@ -86,6 +89,7 @@ def get_executions_overview_route(
         project_id=project_id,
         case_id=case_id,
         window_days=window_days,
+        failure_fingerprint=failure_fingerprint,
     )
 
 
