@@ -1,4 +1,5 @@
 export type ExecutionStatus = "running" | "passed" | "failed";
+export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
 
 export interface DSLStep {
   action: string;
@@ -138,9 +139,28 @@ export interface StoredCaseExecutionSummary {
   duration_ms?: number | null;
   total_steps: number;
   failed_step_index?: number | null;
+  failure_category?: FailureCategory | null;
+  failure_step_action?: string | null;
+  latest_url?: string | null;
   latest_screenshot_url?: string | null;
 }
 
 export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {
   report: ExecutionReport | null;
+}
+
+export interface FailureCategoryCount {
+  category: FailureCategory;
+  count: number;
+}
+
+export interface ExecutionsOverview {
+  total_count: number;
+  passed_count: number;
+  failed_count: number;
+  running_count: number;
+  pass_rate: number;
+  avg_duration_ms: number;
+  latest_failed_runs: StoredCaseExecutionSummary[];
+  failure_categories: FailureCategoryCount[];
 }

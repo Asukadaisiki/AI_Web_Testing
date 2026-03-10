@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Image,
+  List,
   Pagination,
   Select,
   Space,
@@ -15,10 +16,23 @@ import type { ColumnsType } from "antd/es/table";
 import { Link } from "react-router-dom";
 
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { getCases, getExecutions } from "../services/api";
-import type { ExecutionStatus, StoredCaseExecutionSummary, StoredCaseSummary } from "../types/api";
+import { getCases, getExecutionOverview, getExecutions } from "../services/api";
+import type {
+  ExecutionStatus,
+  FailureCategory,
+  StoredCaseExecutionSummary,
+  StoredCaseSummary,
+} from "../types/api";
 
 const PAGE_SIZE = 10;
+const FAILURE_CATEGORY_LABELS: Record<FailureCategory, string> = {
+  configuration: "配置",
+  locator: "定位",
+  assertion: "断言",
+  navigation: "导航",
+  network: "网络",
+  runner: "运行器",
+};
 
 const STATUS_OPTIONS: { label: string; value: ExecutionStatus | "all" }[] = [
   { label: "全部状态", value: "all" },
@@ -62,6 +76,10 @@ function formatDuration(durationMs?: number | null) {
   return `${durationMs} ms`;
 }
 
+function formatPassRate(passRate: number) {
+  return `${(passRate * 100).toFixed(1)}%`;
+}
+
 function buildExecutionLink(record: StoredCaseExecutionSummary) {
   if (record.failed_step_index === null || record.failed_step_index === undefined) {
     return `/executions/${record.id}`;
@@ -101,6 +119,14 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
       key: "status",
       width: 120,
       render: renderStatus,
+    },
+    {
+      title: "失败分类",
+      dataIndex: "failure_category",
+      key: "failure_category",
+      width: 120,
+      render: (value: FailureCategory | null | undefined) =>
+        value ? <Tag>{FAILURE_CATEGORY_LABELS[value]}</Tag> : <Typography.Text type="secondary">-</Typography.Text>,
     },
     {
       title: "耗时",
@@ -151,19 +177,29 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
 export function ExecutionsPage() {
   const [status, setStatus] = useState<ExecutionStatus | "all">("all");
   const [caseId, setCaseId] = useState<number | undefined>(undefined);
+  const [failureCategory, setFailureCategory] = useState<FailureCategory | "all">("all");
   const [page, setPage] = useState(1);
   const columns = useMemo(() => buildColumns(), []);
   const casesQuery = useQuery({
     queryKey: ["cases"],
     queryFn: getCases,
   });
+  const overviewQuery = useQuery({
+    queryKey: ["executions-overview", caseId],
+    queryFn: () =>
+      getExecutionOverview({
+        project_id: 1,
+        case_id: caseId,
+      }),
+  });
   const executionsQuery = useQuery({
-    queryKey: ["executions", status, caseId, page],
+    queryKey: ["executions", status, caseId, failureCategory, page],
     queryFn: () =>
       getExecutions({
         project_id: 1,
         case_id: caseId,
         status: status === "all" ? undefined : status,
+        failure_category: failureCategory === "all" ? undefined : failureCategory,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       }),
@@ -171,7 +207,7 @@ export function ExecutionsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [status, caseId]);
+  }, [status, caseId, failureCategory]);
 
   const caseOptions = useMemo(
     () => [
@@ -183,6 +219,7 @@ export function ExecutionsPage() {
     ],
     [casesQuery.data],
   );
+  const failureCategoryCounts = overviewQuery.data?.failure_categories ?? [];
   const hasNextPage = (executionsQuery.data?.length ?? 0) === PAGE_SIZE;
   const paginationTotal = hasNextPage ? page * PAGE_SIZE + 1 : (page - 1) * PAGE_SIZE + (executionsQuery.data?.length ?? 0);
 
@@ -192,6 +229,71 @@ export function ExecutionsPage() {
         <h1 className="page-title">执行中心</h1>
         <p className="page-subtitle">按用例、状态和分页查看执行结果，并直接跳到失败步骤详情。</p>
       </div>
+      {overviewQuery.isLoading ? <LoadingBlock /> : null}
+      {overviewQuery.isError ? <ErrorBlock message={overviewQuery.error.message} /> : null}
+      {overviewQuery.data ? (
+        <div className="summary-strip">
+          <div className="summary-tile">
+            <div className="summary-label">总执行数</div>
+            <div className="summary-value">{overviewQuery.data.total_count}</div>
+          </div>
+          <div className="summary-tile">
+            <div className="summary-label">通过数</div>
+            <div className="summary-value">{overviewQuery.data.passed_count}</div>
+          </div>
+          <div className="summary-tile">
+            <div className="summary-label">失败数</div>
+            <div className="summary-value">{overviewQuery.data.failed_count}</div>
+          </div>
+          <div className="summary-tile">
+            <div className="summary-label">通过率</div>
+            <div className="summary-value">{formatPassRate(overviewQuery.data.pass_rate)}</div>
+          </div>
+          <div className="summary-tile">
+            <div className="summary-label">平均耗时</div>
+            <div className="summary-value">{formatDuration(overviewQuery.data.avg_duration_ms)}</div>
+          </div>
+        </div>
+      ) : null}
+
+      <Card style={{ marginBottom: 20 }}>
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <div>
+            <Typography.Title level={5} style={{ marginTop: 0 }}>
+              最近失败
+            </Typography.Title>
+            <Typography.Text type="secondary">
+              聚焦最近的失败执行，直接跳到失败步骤。
+            </Typography.Text>
+          </div>
+          {overviewQuery.data && overviewQuery.data.latest_failed_runs.length ? (
+            <List
+              size="small"
+              dataSource={overviewQuery.data.latest_failed_runs}
+              renderItem={(item) => (
+                <List.Item>
+                  <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                    <Space wrap>
+                      <Link to={buildExecutionLink(item)}>{item.case_name}</Link>
+                      {item.failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[item.failure_category]}</Tag> : null}
+                      {item.failed_step_index !== null && item.failed_step_index !== undefined ? (
+                        <Typography.Text type="secondary">Step {item.failed_step_index + 1}</Typography.Text>
+                      ) : null}
+                    </Space>
+                    <Typography.Text type="secondary">
+                      {truncateText(item.error_message)}
+                      {item.latest_url ? ` · ${item.latest_url}` : ""}
+                    </Typography.Text>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          ) : (
+            <EmptyBlock description="暂无失败执行记录。" />
+          )}
+        </Space>
+      </Card>
+
       <Card>
         <Space direction="vertical" size="large" style={{ width: "100%" }}>
           <Space wrap>
@@ -212,6 +314,26 @@ export function ExecutionsPage() {
               onChange={(value) => setCaseId(value === 0 ? undefined : value)}
               style={{ width: 220 }}
             />
+          </Space>
+          <Space direction="vertical" size="small" style={{ width: "100%" }}>
+            <Typography.Text type="secondary">失败分类</Typography.Text>
+            <Space wrap>
+              <Button
+                type={failureCategory === "all" ? "primary" : "default"}
+                onClick={() => setFailureCategory("all")}
+              >
+                全部失败类型
+              </Button>
+              {failureCategoryCounts.map((item) => (
+                <Button
+                  key={item.category}
+                  type={failureCategory === item.category ? "primary" : "default"}
+                  onClick={() => setFailureCategory(item.category)}
+                >
+                  {FAILURE_CATEGORY_LABELS[item.category]} ({item.count})
+                </Button>
+              ))}
+            </Space>
           </Space>
           {executionsQuery.isLoading ? <LoadingBlock /> : null}
           {executionsQuery.isError ? <ErrorBlock message={executionsQuery.error.message} /> : null}

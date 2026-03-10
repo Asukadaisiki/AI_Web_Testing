@@ -460,3 +460,38 @@
   - 执行 `cd backend && uv run python -` 调用 `execute_case_with_playwright()`，使用 `https://example.com` + `goto "/"` + `assert_url_contains "example.com"` 的真实 DSL，2 个步骤均返回 `passed`
 - 关联文件：`backend/app/schemas/dsl.py`、`backend/app/services/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`frontend/src/types/api.ts`、`docs/project-plan.md`、`backend/README.md`、`frontend/README.md`、`docs/bug-log.md`
 - 后续：下一步可继续围绕单 Case 主链路做真实执行联调、报告字段细化与执行中心聚合增强，暂不切入 Suite、AI 生成 DSL 和 Vision 定位
+
+## 2026-03-10 22:35
+
+- 任务：落实“单 Case 观测性增强 v1.7”，补齐执行中心聚合接口、失败分类摘要与前端总览展示
+- 背景：`v1.6` 已完成单 Case 稳定化，但执行中心仍以明细列表为主，缺少通过率、平均耗时、失败分类与最近失败聚合，难以快速识别问题热点和回归趋势
+- 执行动作：
+  - 扩展 `backend/app/schemas/executions.py` 与 `backend/app/services/executions.py`，为执行摘要新增 `failure_category`、`failure_step_action`、`latest_url`，并按既定规则统一失败分类
+  - 在 `backend/app/api/routes/executions.py` 中新增 `GET /api/v1/executions/overview`，同时为 `GET /api/v1/executions` 增加 `failure_category` 过滤
+  - 升级 `frontend/src/pages/ExecutionsPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`，补执行中心总览卡片、失败分类快速筛选与最近失败区
+  - 扩展后端与前端测试，覆盖 overview 空状态/聚合统计/失败分类派生/前端筛选与跳转
+  - 更新 `docs/project-plan.md`、`backend/README.md`、`frontend/README.md`，明确 `example.com` 冒烟基准和 `overview/list/detail` 三处联调口径
+- 结果：项目现在具备执行中心聚合视图，能够基于现有 report JSON 输出通过率、平均耗时、最近失败和失败分类分布；前端执行中心可以直接从最近失败跳到失败步骤，并按失败分类缩小排查范围
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `33 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果 `11 passed`
+  - 执行 `cd frontend && npm run build` 成功
+  - 执行 `cd backend && uv run python -` 创建并运行 `example.com` smoke case，结果 `detail/list/overview` 均返回 `passed` 且统计一致
+- 关联文件：`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/api/routes/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`frontend/src/pages/ExecutionsPage.tsx`、`frontend/src/pages/ExecutionsPage.test.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`docs/project-plan.md`、`backend/README.md`、`frontend/README.md`
+- 后续：下一步可继续围绕单 Case 主链路补 Dashboard/报告中心入口、失败趋势可视化与更细粒度的报告聚合，仍暂不切入 Suite、AI 生成 DSL 和 Vision 定位
+
+## 2026-03-10 22:42
+
+- 任务：优化执行详情页的步骤截图展示边界，避免与相邻证据模块冲突
+- 背景：用户反馈执行日志界面中的截图区域缺少展示范围限制，较大的页面截图会撑开卡片，影响“定位信息 / 运行信息”等模块并排阅读
+- 执行动作：
+  - 阅读 `frontend/src/pages/ExecutionDetailPage.tsx` 与 `frontend/src/index.css`，确认当前截图直接使用原始 `<img>` 输出，没有容器边界或缩放限制
+  - 在执行详情页中为步骤截图增加固定展示框，补充“打开原图”入口，保持现有证据结构不变
+  - 在全局样式中为截图框补 `max-height`、`overflow`、`object-fit` 与移动端缩小规则，控制截图展示范围
+  - 更新 `frontend/src/pages/ExecutionDetailPage.test.tsx`，覆盖截图容器 class 与“打开原图”入口
+- 结果：执行详情页的截图现在会在固定区域内缩放显示，超出区域走容器滚动，不再直接撑破页面信息卡片；用户仍可通过“打开原图”查看完整截图
+- 验证：
+  - 执行 `cd frontend && npm test -- --run`，结果 `11 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/index.css`、`frontend/src/pages/ExecutionDetailPage.test.tsx`、`docs/bug-log.md`
+- 后续：如后续还需提升可读性，可继续评估为截图增加缩略图 + 弹层预览模式，而不是在详情卡片中直接展示原图

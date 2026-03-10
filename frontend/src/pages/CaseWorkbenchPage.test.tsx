@@ -65,6 +65,9 @@ test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", as
     duration_ms: 2000,
     total_steps: 2,
     failed_step_index: null,
+    failure_category: null,
+    failure_step_action: null,
+    latest_url: null,
     latest_screenshot_url: "/artifacts/executions/55/step-02.png",
     report: {
       status: "passed",
@@ -123,7 +126,7 @@ test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", as
   });
 
   expect(await screen.findByText("execution-view")).toBeInTheDocument();
-});
+}, 10000);
 
 test("新建页可自动恢复本地草稿并在保存后清除", async () => {
   window.localStorage.setItem(

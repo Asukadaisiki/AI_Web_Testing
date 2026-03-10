@@ -28,6 +28,9 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
     duration_ms: 3000,
     total_steps: 2,
     failed_step_index: 0,
+    failure_category: "locator",
+    failure_step_action: "click",
+    latest_url: "http://example.com/login",
     latest_screenshot_url: "/artifacts/executions/12/step-01.png",
     report: {
       status: "failed",
@@ -149,8 +152,11 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
   expect(screen.getByText("No locator candidates matched target.")).toBeInTheDocument();
   expect(screen.getByText(/score=108/)).toBeInTheDocument();
   expect(screen.getByText(/rejected=element-not-enabled/)).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: "step-1" })).toHaveAttribute(
-    "src",
+  const screenshot = screen.getByRole("img", { name: "step-1" });
+  expect(screenshot).toHaveAttribute("src", "/artifacts/executions/12/step-01.png");
+  expect(screenshot).toHaveClass("step-screenshot-image");
+  expect(screen.getByRole("link", { name: "打开原图" })).toHaveAttribute(
+    "href",
     "/artifacts/executions/12/step-01.png",
   );
 
@@ -184,6 +190,9 @@ test("缺少用例 Base URL 的执行会显示修复提示", async () => {
     duration_ms: 1000,
     total_steps: 1,
     failed_step_index: 0,
+    failure_category: "configuration",
+    failure_step_action: "goto",
+    latest_url: null,
     latest_screenshot_url: null,
     report: {
       status: "failed",

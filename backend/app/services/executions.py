@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, UTC
 from typing import cast
 
@@ -14,11 +15,23 @@ from app.runners import RunnerExecutionError, execute_case_with_playwright
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
+    ExecutionsOverview,
+    FailureCategoryCount,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
     StepExecutionEvidence,
 )
 from app.services.cases import EntityNotFoundError
+
+FAILURE_CATEGORY_ORDER = [
+    "configuration",
+    "locator",
+    "assertion",
+    "navigation",
+    "network",
+    "runner",
+]
+LATEST_FAILED_RUNS_LIMIT = 5
 
 
 def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) -> StoredCaseExecutionDetail:
@@ -91,25 +104,64 @@ def list_executions(
     project_id: int | None = None,
     case_id: int | None = None,
     status: str | None = None,
+    failure_category: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[StoredCaseExecutionSummary]:
-    statement = (
-        select(TestCaseRun, TestCase.name)
-        .join(TestCase, TestCase.id == TestCaseRun.case_id)
-        .order_by(TestCaseRun.started_at.desc(), TestCaseRun.id.desc())
-        .offset(offset)
-        .limit(limit)
+    rows = _list_execution_rows(
+        session,
+        project_id=project_id,
+        case_id=case_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+        apply_pagination=failure_category is None,
     )
-    if project_id is not None:
-        statement = statement.where(TestCaseRun.project_id == project_id)
-    if case_id is not None:
-        statement = statement.where(TestCaseRun.case_id == case_id)
-    if status is not None:
-        statement = statement.where(TestCaseRun.status == status)
+    summaries = [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
+    if failure_category is None:
+        return summaries
+    filtered = [summary for summary in summaries if summary.failure_category == failure_category]
+    return filtered[offset : offset + limit]
 
-    rows = session.execute(statement).all()
-    return [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
+
+def get_executions_overview(
+    session: Session,
+    *,
+    project_id: int | None = None,
+    case_id: int | None = None,
+) -> ExecutionsOverview:
+    rows = _list_execution_rows(
+        session,
+        project_id=project_id,
+        case_id=case_id,
+        status=None,
+        limit=None,
+        offset=0,
+        apply_pagination=False,
+    )
+    summaries = [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
+    passed_count = sum(1 for item in summaries if item.status == "passed")
+    failed_count = sum(1 for item in summaries if item.status == "failed")
+    running_count = sum(1 for item in summaries if item.status == "running")
+    finished_total = passed_count + failed_count
+    durations = [item.duration_ms for item in summaries if item.status != "running" and item.duration_ms is not None]
+    category_counter = Counter(
+        item.failure_category for item in summaries if item.status == "failed" and item.failure_category is not None
+    )
+
+    return ExecutionsOverview(
+        total_count=len(summaries),
+        passed_count=passed_count,
+        failed_count=failed_count,
+        running_count=running_count,
+        pass_rate=round(passed_count / finished_total, 4) if finished_total else 0,
+        avg_duration_ms=int(sum(durations) / len(durations)) if durations else 0,
+        latest_failed_runs=[item for item in summaries if item.status == "failed"][:LATEST_FAILED_RUNS_LIMIT],
+        failure_categories=[
+            FailureCategoryCount(category=category, count=category_counter.get(category, 0))
+            for category in FAILURE_CATEGORY_ORDER
+        ],
+    )
 
 
 def get_case_execution(session: Session, execution_id: int) -> StoredCaseExecutionDetail | None:
@@ -119,6 +171,32 @@ def get_case_execution(session: Session, execution_id: int) -> StoredCaseExecuti
     case = session.get(TestCase, record.case_id)
     case_name = case.name if case is not None else f"Case {record.case_id}"
     return _to_execution_detail(record, case_name=case_name)
+
+
+def _list_execution_rows(
+    session: Session,
+    *,
+    project_id: int | None,
+    case_id: int | None,
+    status: str | None,
+    limit: int | None,
+    offset: int,
+    apply_pagination: bool,
+):
+    statement = (
+        select(TestCaseRun, TestCase.name)
+        .join(TestCase, TestCase.id == TestCaseRun.case_id)
+        .order_by(TestCaseRun.started_at.desc(), TestCaseRun.id.desc())
+    )
+    if project_id is not None:
+        statement = statement.where(TestCaseRun.project_id == project_id)
+    if case_id is not None:
+        statement = statement.where(TestCaseRun.case_id == case_id)
+    if status is not None:
+        statement = statement.where(TestCaseRun.status == status)
+    if apply_pagination and limit is not None:
+        statement = statement.offset(offset).limit(limit)
+    return session.execute(statement).all()
 
 
 def _ensure_user_exists(session: Session, user_id: int) -> None:
@@ -153,6 +231,7 @@ def _is_absolute_url(value: str) -> bool:
 
 def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionSummary:
     report = _normalize_report(record.report)
+    failed_step = _derive_failed_step(report)
     return StoredCaseExecutionSummary(
         id=record.id,
         case_id=record.case_id,
@@ -165,7 +244,10 @@ def _to_execution_summary(record: TestCaseRun, *, case_name: str) -> StoredCaseE
         finished_at=record.finished_at,
         duration_ms=_derive_duration_ms(record.started_at, record.finished_at),
         total_steps=len(report.steps) if report is not None else 0,
-        failed_step_index=_derive_failed_step_index(report),
+        failed_step_index=failed_step.step_index if failed_step is not None else None,
+        failure_category=_derive_failure_category(report, record.error_message),
+        failure_step_action=failed_step.action if failed_step is not None else None,
+        latest_url=_derive_latest_url(report),
         latest_screenshot_url=_derive_latest_screenshot_url(report),
     )
 
@@ -201,11 +283,52 @@ def _derive_duration_ms(started_at: datetime, finished_at: datetime | None) -> i
 
 
 def _derive_failed_step_index(report) -> int | None:
+    failed_step = _derive_failed_step(report)
+    return failed_step.step_index if failed_step is not None else None
+
+
+def _derive_failed_step(report) -> StepExecutionEvidence | None:
     if report is None:
         return None
     for step in report.steps:
         if step.status == "failed":
-            return step.step_index
+            return step
+    return None
+
+
+def _derive_failure_category(report, error_message: str | None) -> str | None:
+    failed_step = _derive_failed_step(report)
+    if failed_step is None:
+        if error_message and _is_configuration_error(error_message):
+            return "configuration"
+        if error_message:
+            return "runner"
+        return None
+
+    step_error_message = failed_step.error_message or error_message
+    if step_error_message and _is_configuration_error(step_error_message):
+        return "configuration"
+    if failed_step.locator_trace and failed_step.locator_trace.failure_reason:
+        return "locator"
+    if failed_step.action.startswith("assert_"):
+        return "assertion"
+    if failed_step.action == "goto":
+        return "navigation"
+    if any(event.failure_text or (event.status is not None and event.status >= 400) for event in failed_step.network_events):
+        return "network"
+    return "runner"
+
+
+def _is_configuration_error(error_message: str) -> bool:
+    return "Relative goto step requires" in error_message or "case.base_url" in error_message
+
+
+def _derive_latest_url(report) -> str | None:
+    if report is None:
+        return None
+    for step in reversed(report.steps):
+        if step.url:
+            return step.url
     return None
 
 

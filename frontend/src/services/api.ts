@@ -3,6 +3,7 @@ import type {
   CaseExecutionRequest,
   DSLCasePayload,
   DSLValidationResult,
+  ExecutionsOverview,
   StoredCaseDetail,
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
@@ -76,6 +77,7 @@ export function getExecutions(params: {
   project_id?: number;
   case_id?: number;
   status?: string;
+  failure_category?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -89,6 +91,9 @@ export function getExecutions(params: {
   if (params.status) {
     search.set("status", params.status);
   }
+  if (params.failure_category) {
+    search.set("failure_category", params.failure_category);
+  }
   if (params.limit) {
     search.set("limit", String(params.limit));
   }
@@ -96,6 +101,21 @@ export function getExecutions(params: {
     search.set("offset", String(params.offset));
   }
   return request<StoredCaseExecutionSummary[]>(`/api/v1/executions?${search.toString()}`);
+}
+
+export function getExecutionOverview(params: {
+  project_id?: number;
+  case_id?: number;
+}) {
+  const search = new URLSearchParams();
+  if (params.project_id) {
+    search.set("project_id", String(params.project_id));
+  }
+  if (params.case_id) {
+    search.set("case_id", String(params.case_id));
+  }
+  const query = search.toString();
+  return request<ExecutionsOverview>(`/api/v1/executions/overview${query ? `?${query}` : ""}`);
 }
 
 export function getExecutionDetail(executionId: number) {

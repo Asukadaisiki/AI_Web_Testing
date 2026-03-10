@@ -43,6 +43,9 @@ test("渲染用例列表并支持执行后跳转", async () => {
     duration_ms: 1000,
     total_steps: 0,
     failed_step_index: null,
+    failure_category: null,
+    failure_step_action: null,
+    latest_url: null,
     latest_screenshot_url: null,
     report: {
       status: "passed",

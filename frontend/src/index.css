@@ -60,10 +60,36 @@ a {
   border-radius: 12px;
 }
 
+.evidence-card .ant-card-body {
+  min-width: 0;
+}
+
 .step-card img {
   width: 100%;
   border-radius: 10px;
   border: 1px solid #d9e2f0;
+}
+
+.step-screenshot-frame {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+  max-height: 420px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid #d9e2f0;
+  background: #f8fbff;
+}
+
+.step-screenshot-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: 380px;
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 .screenshot-empty {
@@ -143,5 +169,13 @@ a {
 
   .table-footer-actions {
     align-items: flex-start;
+  }
+
+  .step-screenshot-frame {
+    max-height: 320px;
+  }
+
+  .step-screenshot-image {
+    max-height: 280px;
   }
 }

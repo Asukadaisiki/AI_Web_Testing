@@ -8,12 +8,14 @@ from sqlalchemy.orm import Session
 from app.db import get_db_session
 from app.schemas.executions import (
     CaseExecutionRequest,
+    ExecutionsOverview,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
 )
 from app.services import (
     EntityNotFoundError,
     execute_case,
+    get_executions_overview,
     get_case_execution,
     list_case_executions,
     list_executions,
@@ -51,6 +53,7 @@ def list_executions_route(
     project_id: int | None = Query(default=None, ge=1),
     case_id: int | None = Query(default=None, ge=1),
     status_filter: str | None = Query(default=None, alias="status"),
+    failure_category: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
@@ -60,8 +63,22 @@ def list_executions_route(
         project_id=project_id,
         case_id=case_id,
         status=status_filter,
+        failure_category=failure_category,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/executions/overview", response_model=ExecutionsOverview)
+def get_executions_overview_route(
+    project_id: int | None = Query(default=None, ge=1),
+    case_id: int | None = Query(default=None, ge=1),
+    session: Session = Depends(get_db_session),
+) -> ExecutionsOverview:
+    return get_executions_overview(
+        session,
+        project_id=project_id,
+        case_id=case_id,
     )
 
 

@@ -125,7 +125,22 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
                 </Descriptions.Item>
               </Descriptions>
               {step.screenshot_url ? (
-                <img src={step.screenshot_url} alt={`step-${step.step_index + 1}`} />
+                <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                  <div className="step-screenshot-frame">
+                    <img
+                      className="step-screenshot-image"
+                      src={step.screenshot_url}
+                      alt={`step-${step.step_index + 1}`}
+                    />
+                  </div>
+                  <Typography.Text type="secondary">
+                    截图按固定展示框缩放，避免与其他证据面板重叠。
+                    {" "}
+                    <a href={step.screenshot_url} target="_blank" rel="noreferrer">
+                      打开原图
+                    </a>
+                  </Typography.Text>
+                </Space>
               ) : (
                 <div className="screenshot-empty">该步骤没有截图</div>
               )}

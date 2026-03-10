@@ -11,6 +11,7 @@ from app.schemas.dsl import DSLModel
 
 
 ExecutionStatus = Literal["running", "passed", "failed"]
+FailureCategory = Literal["configuration", "locator", "assertion", "navigation", "network", "runner"]
 
 
 class CaseExecutionRequest(DSLModel):
@@ -110,8 +111,27 @@ class StoredCaseExecutionSummary(DSLModel):
     duration_ms: int | None = Field(default=None, ge=0)
     total_steps: int = Field(default=0, ge=0)
     failed_step_index: int | None = Field(default=None, ge=0)
+    failure_category: FailureCategory | None = None
+    failure_step_action: str | None = None
+    latest_url: str | None = None
     latest_screenshot_url: str | None = None
 
 
 class StoredCaseExecutionDetail(StoredCaseExecutionSummary):
     report: ExecutionReport | None = None
+
+
+class FailureCategoryCount(DSLModel):
+    category: FailureCategory
+    count: int = Field(default=0, ge=0)
+
+
+class ExecutionsOverview(DSLModel):
+    total_count: int = Field(default=0, ge=0)
+    passed_count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    running_count: int = Field(default=0, ge=0)
+    pass_rate: float = Field(default=0, ge=0)
+    avg_duration_ms: int = Field(default=0, ge=0)
+    latest_failed_runs: list[StoredCaseExecutionSummary] = Field(default_factory=list)
+    failure_categories: list[FailureCategoryCount] = Field(default_factory=list)

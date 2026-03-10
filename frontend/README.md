@@ -7,6 +7,7 @@
 当前 `frontend/` 已落地最小可演示平台壳，仍未进入完整产品态。
 
 - 已有：Vite + React + TypeScript 工程、React Router、TanStack Query、Ant Design、Case 列表页、执行列表页、报告详情页、Case 工作台、基础前端测试
+- 已补强：执行中心总览卡片、失败分类快速筛选、最近失败区，以及与后端 `executions overview` 契约对齐的聚合展示
 - 已补强：用例级 `base_url` 编辑、工作台返回入口、执行详情返回入口、本地草稿缓存与恢复/丢弃交互
 - 未落地：登录页、Suite 管理、图表看板、完整定位调试面板、AI 生成入口
 
@@ -42,3 +43,17 @@ npm run dev
 - `http://127.0.0.1:5173`
 
 当前 Vite 已显式绑定 `127.0.0.1`，用于避免部分 Windows 环境只监听 IPv6 `::1` 导致浏览器访问 `localhost`/IPv4 时被拒绝。
+
+## Smoke 基准联调
+
+前端工作台内置“公共冒烟模板”，默认对应 `example.com` 基准：
+
+- Base URL：`https://example.com`
+- 步骤 1：`goto /`
+- 步骤 2：`assert_url_contains example.com`
+
+建议使用这条用例验证：
+
+- 工作台保存并执行链路
+- 执行中心总览、失败分类与列表筛选
+- 执行详情页的步骤证据、截图与跳转行为
