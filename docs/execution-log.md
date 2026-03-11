@@ -680,3 +680,15 @@
   - 执行 `cd frontend && npm run build` 成功
 - 关联文件：`backend/app/models/`、`backend/app/services/suites.py`、`backend/app/services/executions.py`、`backend/app/api/routes/suites.py`、`backend/app/schemas/suites.py`、`backend/app/schemas/executions.py`、`backend/alembic/versions/20260311_0003_suite_run_history.py`、`backend/tests/unit/test_suites_api.py`、`frontend/src/pages/SuitesPage.tsx`、`frontend/src/pages/SuiteWorkbenchPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`docs/project-plan.md`
 - 后续：下一步进入 `Suite Context 与参数传递 v2.3` 的结构设计与最小实现边界收敛。
+
+## 2026-03-11 22:48
+
+- 任务：更新仓库根目录 `README.md`
+- 背景：根 README 仍停留在早期状态说明，且内容与当前仓库能力不一致，缺少 `Suite v2.2`、启动命令和测试入口的最新说明。
+- 执行动作：
+  - 读取根目录 README、项目计划与前后端 README，对照当前已实现能力梳理仓库入口信息。
+  - 重写根目录 `README.md`，补齐项目简介、当前能力、未完成方向、后端/前端启动方式、测试命令、推荐联调路径和文档索引。
+- 结果：根目录 README 已能作为当前仓库入口文档，内容与现阶段实现保持一致。
+- 验证：人工检查 `README.md` 结构与命令，确认与当前项目目录和运行方式一致。
+- 关联文件：`README.md`、`docs/execution-log.md`
+- 后续：如后续进入 `Suite Context v2.3` 或调整启动方式，需要继续同步刷新根 README。
