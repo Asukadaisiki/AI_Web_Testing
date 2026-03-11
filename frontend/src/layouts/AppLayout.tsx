@@ -48,7 +48,7 @@ export function AppLayout() {
           <Typography.Title level={4} style={{ color: "#f7fbff", margin: 0 }}>
             AI Web Testing
           </Typography.Title>
-          <Typography.Text style={{ color: "#9db0cb" }}>单 Case 平台化 v1.8</Typography.Text>
+          <Typography.Text style={{ color: "#9db0cb" }}>单 Case 平台体验打磨 v2.0</Typography.Text>
         </div>
         <Menu
           mode="inline"

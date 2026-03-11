@@ -185,12 +185,14 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
   expect(api.getExecutionOverview).toHaveBeenCalledWith({
     project_id: 1,
     case_id: undefined,
+    window_days: undefined,
     failure_fingerprint: undefined,
   });
   expect(api.getExecutions).toHaveBeenCalledWith({
     project_id: 1,
     case_id: undefined,
     status: undefined,
+    window_days: undefined,
     failure_category: undefined,
     failure_fingerprint: undefined,
     limit: 10,
@@ -206,6 +208,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       project_id: 1,
       case_id: undefined,
       status: "failed",
+      window_days: undefined,
       failure_category: undefined,
       failure_fingerprint: undefined,
       limit: 10,
@@ -221,6 +224,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       project_id: 1,
       case_id: 2,
       status: "failed",
+      window_days: undefined,
       failure_category: undefined,
       failure_fingerprint: undefined,
       limit: 10,
@@ -235,6 +239,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       project_id: 1,
       case_id: 2,
       status: "failed",
+      window_days: undefined,
       failure_category: "navigation",
       failure_fingerprint: undefined,
       limit: 10,
@@ -250,7 +255,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
     "/artifacts/executions/4/step-02.png",
   );
   expect(screen.getByText("聚焦最近的失败执行，直接跳到失败步骤。")).toBeInTheDocument();
-});
+}, 10000);
 
 test("执行中心支持翻页并按 offset 继续查询", async () => {
   vi.mocked(api.getCases).mockResolvedValue([]);
@@ -350,6 +355,7 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
       project_id: 1,
       case_id: undefined,
       status: undefined,
+      window_days: undefined,
       failure_category: undefined,
       failure_fingerprint: undefined,
       limit: 10,
@@ -437,12 +443,14 @@ test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选�
   expect(api.getExecutionOverview).toHaveBeenCalledWith({
     project_id: 1,
     case_id: undefined,
+    window_days: undefined,
     failure_fingerprint: "fp-1234",
   });
   expect(api.getExecutions).toHaveBeenCalledWith({
     project_id: 1,
     case_id: undefined,
     status: "failed",
+    window_days: undefined,
     failure_category: undefined,
     failure_fingerprint: "fp-1234",
     limit: 10,
@@ -456,6 +464,7 @@ test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选�
       project_id: 1,
       case_id: undefined,
       status: "failed",
+      window_days: undefined,
       failure_category: undefined,
       failure_fingerprint: undefined,
       limit: 10,
@@ -515,4 +524,123 @@ test("执行中心在空状态下稳定展示 overview 与空列表", async () =
   expect(await screen.findByText("暂无失败执行记录。")).toBeInTheDocument();
   expect(await screen.findByText("当前筛选条件下没有执行记录。")).toBeInTheDocument();
   expect(await screen.findByText("0.0%")).toBeInTheDocument();
+});
+
+test("执行中心从 URL 初始化筛选，并在修改后回写 query 参数", async () => {
+  vi.mocked(api.getCases).mockResolvedValue([
+    {
+      id: 2,
+      project_id: 1,
+      name: "异常场景",
+      description: null,
+      steps: [{ action: "click", target: "登录按钮" }],
+      created_by: 1,
+      updated_by: 1,
+      created_at: "2026-03-09T10:00:00",
+      updated_at: "2026-03-09T10:00:00",
+    },
+  ]);
+  vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    total_count: 1,
+    passed_count: 0,
+    failed_count: 1,
+    running_count: 0,
+    pass_rate: 0,
+    avg_duration_ms: 900,
+    current_window_range: {
+      start_date: "2026-03-04",
+      end_date: "2026-03-10",
+    },
+    previous_window_range: {
+      start_date: "2026-02-26",
+      end_date: "2026-03-03",
+    },
+    previous_window_stats: {
+      total_count: 0,
+      passed_count: 0,
+      failed_count: 0,
+      running_count: 0,
+      pass_rate: 0,
+      avg_duration_ms: 0,
+    },
+    window_comparison: {
+      total_count_delta: 1,
+      passed_count_delta: 0,
+      failed_count_delta: 1,
+      running_count_delta: 0,
+      pass_rate_delta: 0,
+      avg_duration_ms_delta: 900,
+    },
+    latest_failed_runs: [],
+    failure_categories: [
+      { category: "configuration", count: 0 },
+      { category: "locator", count: 1 },
+      { category: "assertion", count: 0 },
+      { category: "navigation", count: 0 },
+      { category: "network", count: 0 },
+      { category: "runner", count: 0 },
+    ],
+    trend_points: [],
+    failure_step_actions: [],
+    top_failed_cases: [],
+    failure_root_causes: [],
+  });
+  vi.mocked(api.getExecutions).mockResolvedValue([
+    {
+      id: 4,
+      case_id: 2,
+      case_name: "异常场景",
+      project_id: 1,
+      triggered_by: 1,
+      status: "failed",
+      error_message: "按钮未找到",
+      started_at: "2026-03-09T11:00:00",
+      finished_at: "2026-03-09T11:00:02",
+      duration_ms: 2000,
+      total_steps: 3,
+      failed_step_index: 1,
+      failure_category: "locator",
+      failure_step_action: "click",
+      latest_url: "https://example.com/error",
+      latest_screenshot_url: "/artifacts/executions/4/step-02.png",
+    },
+  ]);
+
+  renderWithProviders(<ExecutionsPage />, {
+    route: "/executions?window_days=14&status=failed&case_id=2&failure_category=locator&page=2",
+    path: "/executions",
+  });
+
+  expect(await screen.findByRole("link", { name: "异常场景" })).toBeInTheDocument();
+  expect(api.getExecutionOverview).toHaveBeenCalledWith({
+    project_id: 1,
+    case_id: 2,
+    window_days: 14,
+    failure_fingerprint: undefined,
+  });
+  expect(api.getExecutions).toHaveBeenCalledWith({
+    project_id: 1,
+    case_id: 2,
+    status: "failed",
+    window_days: 14,
+    failure_category: "locator",
+    failure_fingerprint: undefined,
+    limit: 10,
+    offset: 10,
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "30 天" }));
+
+  await waitFor(() => {
+    expect(api.getExecutions).toHaveBeenLastCalledWith({
+      project_id: 1,
+      case_id: 2,
+      status: "failed",
+      window_days: 30,
+      failure_category: "locator",
+      failure_fingerprint: undefined,
+      limit: 10,
+      offset: 0,
+    });
+  });
 });

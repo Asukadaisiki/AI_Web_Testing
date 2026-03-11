@@ -53,17 +53,24 @@ def list_executions_route(
     project_id: int | None = Query(default=None, ge=1),
     case_id: int | None = Query(default=None, ge=1),
     status_filter: str | None = Query(default=None, alias="status"),
+    window_days: int | None = Query(default=None),
     failure_category: str | None = Query(default=None),
     failure_fingerprint: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> list[StoredCaseExecutionSummary]:
+    if window_days not in {None, 7, 14, 30}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="window_days must be one of: 7, 14, 30.",
+        )
     return list_executions(
         session,
         project_id=project_id,
         case_id=case_id,
         status=status_filter,
+        window_days=window_days,
         failure_category=failure_category,
         failure_fingerprint=failure_fingerprint,
         limit=limit,

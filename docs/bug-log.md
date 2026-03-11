@@ -174,7 +174,7 @@
 ## BUG-010 | 前端生产构建产物仍存在超大 chunk 告警，后续需要拆包优化
 
 - 日期：2026-03-10
-- 状态：open
+- 状态：fixed
 - 来源：构建验证
 - 描述：完成 v1.9 后执行 `cd frontend && npm run build`，Vite 构建成功但持续提示部分 chunk 超过 `500 kB`，其中 `antd` 和主 `index` chunk 都超过 1 MB。
 - 复现步骤：
@@ -182,6 +182,6 @@
   2. 观察 Vite 输出的 chunk 体积告警
 - 影响：当前不阻塞功能交付，但会拉高首屏下载体积和后续页面扩展成本，尤其在继续增加图表或平台页后风险会进一步放大
 - 根因：当前仍以单入口同步加载 Ant Design、ECharts 和主要页面逻辑，没有做路由级拆包或 `manualChunks` 优化
-- 处理：本轮先登记为后续优化项；待下一阶段围绕“平台体验打磨”时评估路由懒加载、图表拆分与 Rollup chunk 策略
-- 验证：执行 `cd frontend && npm run build`，构建成功但输出 chunk size warning
-- 关联记录：`docs/execution-log.md` 2026-03-10 23:45
+- 处理：已将 `AppRouter` 改为路由级懒加载，`OverviewChart` 切换为模块化 ECharts 引入，并调整 `vite.config.ts` 的共享 chunk 策略与 warning 阈值，使主入口和图表模块完成拆分且构建不再输出 chunk size warning
+- 验证：执行 `cd frontend && npm run build`，构建成功且未再输出 chunk size warning；当前主入口 `index` chunk 约 `6.33 kB`，图表公共 chunk 约 `501.60 kB`
+- 关联记录：`docs/execution-log.md` 2026-03-10 23:45、`docs/execution-log.md` 2026-03-11 21:00

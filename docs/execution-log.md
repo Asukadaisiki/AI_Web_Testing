@@ -572,3 +572,34 @@
 - 验证：通过 `git status`、分支信息、远端信息以及后续提交/推送命令结果核对同步状态
 - 关联文件：`docs/execution-log.md`
 - 后续：如需继续推进，下一轮可围绕前端拆包优化与报告分析体验细化继续迭代
+
+## 2026-03-11 21:00
+
+- 任务：落实“单 Case 平台体验打磨 v2.0”，补齐执行入口深链联动、筛选状态闭环与前端拆包优化
+- 背景：`v1.9` 已完成报告中心窗口对比与失败根因聚合，但执行中心筛选状态仍未完全进入 URL，仪表盘 / 报告中心快捷入口仍多为直达详情页；同时 `BUG-010` 记录的前端 chunk 告警尚未关闭
+- 执行动作：
+  - 扩展 `GET /api/v1/executions`，新增 `window_days=7/14/30` 过滤，并补充后端测试覆盖 `window_days` 与 `status / case_id / failure_fingerprint` 组合过滤
+  - 重写 `frontend/src/pages/ExecutionsPage.tsx` 的筛选状态管理，将 `window_days / status / case_id / failure_category / failure_fingerprint / page` 统一放入 URL query，并补充来源列表到详情页的回跳 state
+  - 更新 `DashboardPage`、`ReportCenterPage` 与 `ExecutionDetailPage`，让最近失败、高频失败和根因榜优先回流到带筛选参数的执行中心，详情页优先返回原筛选列表
+  - 将 `AppRouter` 改为路由级懒加载；将 `OverviewChart` 切换为模块化 ECharts 引入，并调整 `frontend/vite.config.ts` 的共享 chunk 策略，消除构建时的 chunk size warning
+  - 更新前端与后端测试契约，补 URL 初始化、query 回写、详情回跳与新跳转链接断言；同步刷新 `docs/project-plan.md` 与 `docs/bug-log.md`
+- 结果：项目已完成 `v2.0` 范围内的 URL 状态闭环、平台入口深链联动与构建拆包收口；执行中心可以作为单一筛选入口承接仪表盘和报告中心的回流排查
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `36 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果 `20 passed`
+  - 执行 `cd frontend && npm run build` 成功，且未再输出 chunk size warning
+- 关联文件：`backend/app/api/routes/executions.py`、`backend/app/services/executions.py`、`backend/tests/unit/test_case_executions_api.py`、`frontend/src/app/AppRouter.tsx`、`frontend/src/pages/ExecutionsPage.tsx`、`frontend/src/pages/ReportCenterPage.tsx`、`frontend/src/pages/DashboardPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/components/OverviewChart.tsx`、`frontend/vite.config.ts`、`docs/project-plan.md`、`docs/bug-log.md`
+- 后续：下一轮可切入 `Suite 基础闭环 v2.1`，围绕 Suite 列表、关联 Case 与批量执行入口推进
+
+## 2026-03-11 21:35
+
+- 任务：将 `单 Case 平台体验打磨 v2.0` 改动同步到 GitHub
+- 背景：`v2.0` 的后端过滤、前端联动、测试和文档更新已完成并通过本地验证，需要按仓库工作流同步到 `origin/main`
+- 执行动作：
+  - 核对 `git branch --show-current`、`git remote -v` 与 `git status --short`，确认当前位于 `main` 且远端为 `origin`
+  - 追加本次执行日志，记录同步动作和结果
+  - 准备提交并推送 `v2.0` 改动到 GitHub
+- 结果：`v2.0` 改动已整理为可追溯的同步批次，准备提交并推送到 `origin/main`
+- 验证：通过分支、远端与工作区状态检查核对同步前状态
+- 关联文件：`docs/execution-log.md`
+- 后续：如需继续推进，可在下一轮围绕 `Suite 基础闭环 v2.1` 继续迭代

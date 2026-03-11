@@ -78,6 +78,7 @@ export function getExecutions(params: {
   project_id?: number;
   case_id?: number;
   status?: string;
+  window_days?: OverviewWindowDays;
   failure_category?: string;
   failure_fingerprint?: string;
   limit?: number;
@@ -92,6 +93,9 @@ export function getExecutions(params: {
   }
   if (params.status) {
     search.set("status", params.status);
+  }
+  if (params.window_days) {
+    search.set("window_days", String(params.window_days));
   }
   if (params.failure_category) {
     search.set("failure_category", params.failure_category);

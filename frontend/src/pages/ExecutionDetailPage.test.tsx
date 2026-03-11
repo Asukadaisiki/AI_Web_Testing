@@ -218,3 +218,54 @@ test("缺少用例 Base URL 的执行会显示修复提示", async () => {
   expect(await screen.findByText("该用例的相对路径 goto 缺少用例 Base URL")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "返回用例" })).toHaveAttribute("href", "/cases/8/edit");
 });
+
+test("执行详情页优先返回带筛选条件的执行中心来源链接", async () => {
+  vi.mocked(api.getExecutionDetail).mockResolvedValue({
+    id: 21,
+    case_id: 5,
+    case_name: "来源回流用例",
+    project_id: 1,
+    triggered_by: 1,
+    status: "failed",
+    error_message: "runner boom",
+    started_at: "2026-03-10T12:00:00",
+    finished_at: "2026-03-10T12:00:01",
+    duration_ms: 1000,
+    total_steps: 1,
+    failed_step_index: 0,
+    failure_category: "runner",
+    failure_step_action: "click",
+    latest_url: null,
+    latest_screenshot_url: null,
+    report: {
+      status: "failed",
+      steps: [
+        {
+          step_index: 0,
+          action: "click",
+          target: "提交按钮",
+          status: "failed",
+          console_events: [],
+          network_events: [],
+          error_message: "runner boom",
+        },
+      ],
+    },
+  });
+
+  renderWithProviders(<ExecutionDetailPage />, {
+    route: {
+      pathname: "/executions/21",
+      state: {
+        fromExecutions: "/executions?window_days=7&status=failed&case_id=5",
+      },
+    },
+    path: "/executions/:executionId",
+  });
+
+  expect(await screen.findByRole("heading", { name: "来源回流用例" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "返回执行中心" })).toHaveAttribute(
+    "href",
+    "/executions?window_days=7&status=failed&case_id=5",
+  );
+});

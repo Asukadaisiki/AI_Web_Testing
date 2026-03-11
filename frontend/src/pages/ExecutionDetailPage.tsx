@@ -28,6 +28,11 @@ import type {
 } from "../types/api";
 
 const DEFAULT_EVENT_PREVIEW_COUNT = 2;
+const DEFAULT_EXECUTIONS_PATH = "/executions";
+
+type ExecutionDetailLocationState = {
+  fromExecutions?: string;
+};
 
 function isBaseUrlError(message: string | null) {
   if (!message) {
@@ -249,6 +254,7 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
 export function ExecutionDetailPage() {
   const params = useParams<{ executionId: string }>();
   const location = useLocation();
+  const state = location.state as ExecutionDetailLocationState | null;
   const executionId = Number(params.executionId);
   const query = useQuery({
     queryKey: ["execution-detail", executionId],
@@ -264,6 +270,10 @@ export function ExecutionDetailPage() {
     [query.data?.report?.steps],
   );
   const [activeKeys, setActiveKeys] = useState<string[]>([]);
+  const backToExecutions =
+    typeof state?.fromExecutions === "string" && state.fromExecutions
+      ? state.fromExecutions
+      : DEFAULT_EXECUTIONS_PATH;
 
   useEffect(() => {
     setActiveKeys(failedStepKeys);
@@ -302,7 +312,7 @@ export function ExecutionDetailPage() {
           </div>
           <Space wrap>
             <Button>
-              <Link to="/executions">返回执行中心</Link>
+              <Link to={backToExecutions}>返回执行中心</Link>
             </Button>
             <Button>
               <Link to={`/cases/${detail.case_id}/edit`}>返回用例</Link>

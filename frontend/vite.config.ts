@@ -16,12 +16,36 @@ export default defineConfig({
     port: 4173,
   },
   build: {
+    chunkSizeWarningLimit: 950,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ["react", "react-dom", "react-router-dom"],
-          antd: ["antd"],
-          query: ["@tanstack/react-query"],
+        manualChunks(id) {
+          if (!id.includes("node_modules")) {
+            return undefined;
+          }
+          if (id.includes("node_modules/echarts")) {
+            return "charts-vendor";
+          }
+          if (
+            id.includes("node_modules/react") ||
+            id.includes("node_modules/react-dom") ||
+            id.includes("node_modules/react-router") ||
+            id.includes("node_modules/scheduler")
+          ) {
+            return "react-vendor";
+          }
+          if (id.includes("node_modules/@tanstack")) {
+            return "query-vendor";
+          }
+          if (
+            id.includes("node_modules/antd") ||
+            id.includes("node_modules/@ant-design") ||
+            id.includes("node_modules/rc-") ||
+            id.includes("node_modules/@rc-component")
+          ) {
+            return "ui-vendor";
+          }
+          return undefined;
         },
       },
     },

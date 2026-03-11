@@ -3,6 +3,7 @@ import { Tag } from "antd";
 import type {
   ExecutionStatus,
   FailureCategory,
+  OverviewWindowDays,
   StoredCaseExecutionSummary,
 } from "../types/api";
 
@@ -59,4 +60,45 @@ export function buildExecutionLink(record: Pick<StoredCaseExecutionSummary, "id"
     return `/executions/${record.id}`;
   }
   return `/executions/${record.id}#step-${record.failed_step_index + 1}`;
+}
+
+export interface ExecutionListQueryState {
+  window_days?: OverviewWindowDays;
+  status?: ExecutionStatus;
+  case_id?: number;
+  failure_category?: FailureCategory;
+  failure_fingerprint?: string;
+  root_cause_title?: string;
+  page?: number;
+}
+
+export function buildExecutionsSearch(query: ExecutionListQueryState) {
+  const search = new URLSearchParams();
+  if (query.window_days) {
+    search.set("window_days", String(query.window_days));
+  }
+  if (query.status) {
+    search.set("status", query.status);
+  }
+  if (query.case_id) {
+    search.set("case_id", String(query.case_id));
+  }
+  if (query.failure_category) {
+    search.set("failure_category", query.failure_category);
+  }
+  if (query.failure_fingerprint) {
+    search.set("failure_fingerprint", query.failure_fingerprint);
+  }
+  if (query.root_cause_title) {
+    search.set("root_cause_title", query.root_cause_title);
+  }
+  if (query.page && query.page > 1) {
+    search.set("page", String(query.page));
+  }
+  return search.toString();
+}
+
+export function buildExecutionsPath(query: ExecutionListQueryState) {
+  const search = buildExecutionsSearch(query);
+  return search ? `/executions?${search}` : "/executions";
 }

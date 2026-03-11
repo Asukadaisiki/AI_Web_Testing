@@ -142,6 +142,7 @@ test("报告中心支持窗口切换，并展示环比、根因榜和回流执�
   expect(screen.getByText(truncateText(longRootCauseTitle, 48))).toBeInTheDocument();
 
   const rootCauseSearch = new URLSearchParams({
+    window_days: "7",
     status: "failed",
     failure_fingerprint: "fingerprint-1234",
     root_cause_title: longRootCauseTitle,
@@ -150,8 +151,11 @@ test("报告中心支持窗口切换，并展示环比、根因榜和回流执�
     "href",
     `/executions?${rootCauseSearch}`,
   );
-  expect(screen.getAllByRole("link", { name: "异常场景" })[0]).toHaveAttribute("href", "/executions/6");
-  expect(screen.getAllByRole("link", { name: "#6" })[0]).toHaveAttribute("href", "/executions/6");
+  expect(screen.getAllByRole("link", { name: "异常场景" })[0]).toHaveAttribute(
+    "href",
+    "/executions?window_days=7&status=failed&case_id=2",
+  );
+  expect(screen.getAllByRole("link", { name: "#6" })[0]).toHaveAttribute("href", `/executions?${rootCauseSearch}`);
   expect(screen.getByText("断言失败 · https://example.com/dashboard")).toBeInTheDocument();
   expect(api.getExecutionOverview).toHaveBeenCalledWith({
     project_id: 1,

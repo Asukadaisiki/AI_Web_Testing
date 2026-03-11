@@ -1007,3 +1007,159 @@ def test_get_executions_overview_supports_window_days_trends_and_top_failed_case
         extra_response = client.get("/api/v1/executions/overview", params={"project_id": 1, "window_days": days})
         assert extra_response.status_code == 200
         assert len(extra_response.json()["trend_points"]) == days
+
+
+def test_list_executions_supports_window_days_and_matches_overview_filters(client, db_session) -> None:
+    case_ids: list[int] = []
+    for name in ["窗口内共享根因", "窗口外共享根因", "不同根因通过用例"]:
+        response = client.post(
+            "/api/v1/cases",
+            json={
+                "project_id": 1,
+                "actor_user_id": 1,
+                "name": name,
+                "base_url": "https://example.com",
+                "steps": [{"action": "click", "target": "提交按钮"}],
+            },
+        )
+        case_ids.append(response.json()["id"])
+
+    now = datetime.now().replace(hour=14, minute=0, second=0, microsecond=0)
+    db_session.add_all(
+        [
+            TestCaseRun(
+                id=1,
+                case_id=case_ids[0],
+                project_id=1,
+                triggered_by=1,
+                status="failed",
+                error_message="shared runner boom",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "提交按钮",
+                            "status": "failed",
+                            "error_message": "shared runner boom",
+                        }
+                    ],
+                },
+                started_at=now - timedelta(days=1),
+                finished_at=now - timedelta(days=1) + timedelta(milliseconds=180),
+            ),
+            TestCaseRun(
+                id=2,
+                case_id=case_ids[1],
+                project_id=1,
+                triggered_by=1,
+                status="failed",
+                error_message="shared runner boom",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "提交按钮",
+                            "status": "failed",
+                            "error_message": "shared runner boom",
+                        }
+                    ],
+                },
+                started_at=now - timedelta(days=10),
+                finished_at=now - timedelta(days=10) + timedelta(milliseconds=220),
+            ),
+            TestCaseRun(
+                id=3,
+                case_id=case_ids[0],
+                project_id=1,
+                triggered_by=1,
+                status="passed",
+                error_message=None,
+                report={
+                    "status": "passed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "提交按钮",
+                            "status": "passed",
+                        }
+                    ],
+                },
+                started_at=now - timedelta(days=2),
+                finished_at=now - timedelta(days=2) + timedelta(milliseconds=160),
+            ),
+            TestCaseRun(
+                id=4,
+                case_id=case_ids[2],
+                project_id=1,
+                triggered_by=1,
+                status="failed",
+                error_message="assert boom",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "assert_text",
+                            "target": "结果文案",
+                            "value": "成功",
+                            "status": "failed",
+                            "error_message": "assert boom",
+                        }
+                    ],
+                },
+                started_at=now,
+                finished_at=now + timedelta(milliseconds=200),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    overview_response = client.get("/api/v1/executions/overview", params={"project_id": 1, "window_days": 7})
+
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.json()
+    assert overview_payload["total_count"] == 3
+    assert overview_payload["failed_count"] == 2
+    assert [item["title"] for item in overview_payload["failure_root_causes"]] == [
+        "assert boom",
+        "shared runner boom",
+    ]
+
+    shared_fingerprint = next(
+        item["fingerprint"]
+        for item in overview_payload["failure_root_causes"]
+        if item["title"] == "shared runner boom"
+    )
+
+    filtered_response = client.get(
+        "/api/v1/executions",
+        params={
+            "project_id": 1,
+            "window_days": 7,
+            "status": "failed",
+            "failure_fingerprint": shared_fingerprint,
+        },
+    )
+
+    assert filtered_response.status_code == 200
+    assert [item["id"] for item in filtered_response.json()] == [1]
+
+    case_response = client.get(
+        "/api/v1/executions",
+        params={
+            "project_id": 1,
+            "window_days": 7,
+            "case_id": case_ids[0],
+        },
+    )
+    assert case_response.status_code == 200
+    assert [item["id"] for item in case_response.json()] == [1, 3]
+
+    invalid_response = client.get("/api/v1/executions", params={"project_id": 1, "window_days": 5})
+    assert invalid_response.status_code == 422
+    assert invalid_response.json() == {"detail": "window_days must be one of: 7, 14, 30."}

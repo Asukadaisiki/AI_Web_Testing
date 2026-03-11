@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Button,
@@ -9,36 +9,49 @@ import {
   Select,
   Space,
   Table,
-  Tag,
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 
+import {
+  FAILURE_CATEGORY_LABELS,
+  buildExecutionLink,
+  formatDuration,
+  formatPassRate,
+  renderExecutionStatus,
+  truncateText,
+} from "../components/executionPresentation";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getCases, getExecutionOverview, getExecutions } from "../services/api";
 import type {
   ExecutionStatus,
   FailureCategory,
+  OverviewWindowDays,
   StoredCaseExecutionSummary,
   StoredCaseSummary,
 } from "../types/api";
 
 const PAGE_SIZE = 10;
-const FAILURE_CATEGORY_LABELS: Record<FailureCategory, string> = {
-  configuration: "配置",
-  locator: "定位",
-  assertion: "断言",
-  navigation: "导航",
-  network: "网络",
-  runner: "运行器",
-};
-
+const FAILURE_CATEGORY_VALUES: FailureCategory[] = [
+  "configuration",
+  "locator",
+  "assertion",
+  "navigation",
+  "network",
+  "runner",
+];
 const STATUS_OPTIONS: { label: string; value: ExecutionStatus | "all" }[] = [
   { label: "全部状态", value: "all" },
   { label: "通过", value: "passed" },
   { label: "失败", value: "failed" },
   { label: "运行中", value: "running" },
+];
+const WINDOW_OPTIONS: { label: string; value: OverviewWindowDays | "all" }[] = [
+  { label: "全部时间", value: "all" },
+  { label: "7 天", value: 7 },
+  { label: "14 天", value: 14 },
+  { label: "30 天", value: 30 },
 ];
 
 function parseStatus(value: string | null): ExecutionStatus | "all" {
@@ -48,58 +61,36 @@ function parseStatus(value: string | null): ExecutionStatus | "all" {
   return "all";
 }
 
+function parseWindowDays(value: string | null): OverviewWindowDays | undefined {
+  if (value === "7" || value === "14" || value === "30") {
+    return Number(value) as OverviewWindowDays;
+  }
+  return undefined;
+}
+
+function parseCaseId(value: string | null) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseFailureCategory(value: string | null): FailureCategory | "all" {
+  if (value && FAILURE_CATEGORY_VALUES.includes(value as FailureCategory)) {
+    return value as FailureCategory;
+  }
+  return "all";
+}
+
+function parsePage(value: string | null) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
 function normalizeSearchValue(value: string | null) {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
 }
 
-function renderStatus(status: ExecutionStatus) {
-  const colorMap: Record<ExecutionStatus, string> = {
-    passed: "success",
-    failed: "error",
-    running: "processing",
-  };
-  const labelMap: Record<ExecutionStatus, string> = {
-    passed: "通过",
-    failed: "失败",
-    running: "运行中",
-  };
-  return (
-    <Tag className="status-tag" color={colorMap[status]}>
-      {labelMap[status]}
-    </Tag>
-  );
-}
-
-function truncateText(value: string | null, maxLength = 72) {
-  if (!value) {
-    return "-";
-  }
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${value.slice(0, maxLength - 1)}…`;
-}
-
-function formatDuration(durationMs?: number | null) {
-  if (durationMs === null || durationMs === undefined) {
-    return "-";
-  }
-  return `${durationMs} ms`;
-}
-
-function formatPassRate(passRate: number) {
-  return `${(passRate * 100).toFixed(1)}%`;
-}
-
-function buildExecutionLink(record: StoredCaseExecutionSummary) {
-  if (record.failed_step_index === null || record.failed_step_index === undefined) {
-    return `/executions/${record.id}`;
-  }
-  return `/executions/${record.id}#step-${record.failed_step_index + 1}`;
-}
-
-function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
+function buildColumns(currentExecutionsPath: string): ColumnsType<StoredCaseExecutionSummary> {
   return [
     {
       title: "执行 ID",
@@ -114,7 +105,9 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
       key: "case_name",
       render: (value: string, record) => (
         <Space direction="vertical" size={2}>
-          <Link to={buildExecutionLink(record)}>{value}</Link>
+          <Link to={buildExecutionLink(record)} state={{ fromExecutions: currentExecutionsPath }}>
+            {value}
+          </Link>
           {record.failed_step_index !== null && record.failed_step_index !== undefined ? (
             <Typography.Text type="secondary">
               失败步骤：Step {record.failed_step_index + 1}
@@ -130,7 +123,7 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
       dataIndex: "status",
       key: "status",
       width: 120,
-      render: renderStatus,
+      render: renderExecutionStatus,
     },
     {
       title: "失败分类",
@@ -138,7 +131,11 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
       key: "failure_category",
       width: 120,
       render: (value: FailureCategory | null | undefined) =>
-        value ? <Tag>{FAILURE_CATEGORY_LABELS[value]}</Tag> : <Typography.Text type="secondary">-</Typography.Text>,
+        value ? (
+          <span>{FAILURE_CATEGORY_LABELS[value]}</span>
+        ) : (
+          <Typography.Text type="secondary">-</Typography.Text>
+        ),
     },
     {
       title: "耗时",
@@ -154,7 +151,7 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
       width: 140,
       render: (value: string | null | undefined, record) =>
         value ? (
-          <Link to={buildExecutionLink(record)}>
+          <Link to={buildExecutionLink(record)} state={{ fromExecutions: currentExecutionsPath }}>
             <Image
               src={value}
               alt={`execution-${record.id}-latest`}
@@ -187,48 +184,82 @@ function buildColumns(): ColumnsType<StoredCaseExecutionSummary> {
 }
 
 export function ExecutionsPage() {
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [status, setStatus] = useState<ExecutionStatus | "all">(() => parseStatus(searchParams.get("status")));
-  const [caseId, setCaseId] = useState<number | undefined>(undefined);
-  const [failureCategory, setFailureCategory] = useState<FailureCategory | "all">("all");
-  const [failureFingerprint, setFailureFingerprint] = useState<string | undefined>(() =>
-    normalizeSearchValue(searchParams.get("failure_fingerprint")),
-  );
-  const [failureFingerprintTitle, setFailureFingerprintTitle] = useState<string | undefined>(() =>
-    normalizeSearchValue(searchParams.get("root_cause_title")),
-  );
-  const [page, setPage] = useState(1);
-  const columns = useMemo(() => buildColumns(), []);
+  const status = parseStatus(searchParams.get("status"));
+  const caseId = parseCaseId(searchParams.get("case_id"));
+  const failureCategory = parseFailureCategory(searchParams.get("failure_category"));
+  const failureFingerprint = normalizeSearchValue(searchParams.get("failure_fingerprint"));
+  const failureFingerprintTitle = normalizeSearchValue(searchParams.get("root_cause_title"));
+  const windowDays = parseWindowDays(searchParams.get("window_days"));
+  const page = parsePage(searchParams.get("page"));
+  const currentExecutionsPath = `${location.pathname}${location.search}`;
+  const columns = useMemo(() => buildColumns(currentExecutionsPath), [currentExecutionsPath]);
+
+  const updateSearchState = (
+    updates: {
+      status?: ExecutionStatus | "all";
+      case_id?: number;
+      failure_category?: FailureCategory | "all";
+      failure_fingerprint?: string;
+      root_cause_title?: string;
+      window_days?: OverviewWindowDays;
+      page?: number;
+    },
+    { resetPage = true }: { resetPage?: boolean } = {},
+  ) => {
+    const nextParams = new URLSearchParams(searchParams);
+    const entries = Object.entries(updates) as Array<[string, string | number | undefined]>;
+
+    for (const [key, rawValue] of entries) {
+      const shouldDelete =
+        rawValue === undefined ||
+        rawValue === null ||
+        rawValue === "" ||
+        rawValue === "all" ||
+        (key === "page" && rawValue === 1);
+      if (shouldDelete) {
+        nextParams.delete(key);
+      } else {
+        nextParams.set(key, String(rawValue));
+      }
+    }
+
+    if (resetPage && !("page" in updates)) {
+      nextParams.delete("page");
+    }
+
+    setSearchParams(nextParams, { replace: true });
+  };
+
   const casesQuery = useQuery({
     queryKey: ["cases"],
     queryFn: getCases,
   });
   const overviewQuery = useQuery({
-    queryKey: ["executions-overview", caseId, failureFingerprint],
+    queryKey: ["executions-overview", caseId, failureFingerprint, windowDays],
     queryFn: () =>
       getExecutionOverview({
         project_id: 1,
         case_id: caseId,
+        window_days: windowDays,
         failure_fingerprint: failureFingerprint,
       }),
   });
   const executionsQuery = useQuery({
-    queryKey: ["executions", status, caseId, failureCategory, failureFingerprint, page],
+    queryKey: ["executions", status, caseId, failureCategory, failureFingerprint, windowDays, page],
     queryFn: () =>
       getExecutions({
         project_id: 1,
         case_id: caseId,
         status: status === "all" ? undefined : status,
+        window_days: windowDays,
         failure_category: failureCategory === "all" ? undefined : failureCategory,
         failure_fingerprint: failureFingerprint,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       }),
   });
-
-  useEffect(() => {
-    setPage(1);
-  }, [status, caseId, failureCategory, failureFingerprint]);
 
   const caseOptions = useMemo(
     () => [
@@ -242,23 +273,43 @@ export function ExecutionsPage() {
   );
   const failureCategoryCounts = overviewQuery.data?.failure_categories ?? [];
   const hasNextPage = (executionsQuery.data?.length ?? 0) === PAGE_SIZE;
-  const paginationTotal = hasNextPage ? page * PAGE_SIZE + 1 : (page - 1) * PAGE_SIZE + (executionsQuery.data?.length ?? 0);
+  const paginationTotal = hasNextPage
+    ? page * PAGE_SIZE + 1
+    : (page - 1) * PAGE_SIZE + (executionsQuery.data?.length ?? 0);
 
   const clearFailureFingerprintFilter = () => {
-    setFailureFingerprint(undefined);
-    setFailureFingerprintTitle(undefined);
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.delete("failure_fingerprint");
-    nextParams.delete("root_cause_title");
-    setSearchParams(nextParams, { replace: true });
+    updateSearchState({
+      failure_fingerprint: undefined,
+      root_cause_title: undefined,
+    });
   };
 
   return (
     <>
       <div className="page-header">
         <h1 className="page-title">执行中心</h1>
-        <p className="page-subtitle">按用例、状态和分页查看执行结果，并直接跳到失败步骤详情。</p>
+        <p className="page-subtitle">按用例、时间窗口、状态和分页查看执行结果，并直接跳到失败步骤详情。</p>
       </div>
+
+      <Card style={{ marginBottom: 20 }}>
+        <Space wrap>
+          <Typography.Text type="secondary">时间窗口</Typography.Text>
+          {WINDOW_OPTIONS.map((item) => (
+            <Button
+              key={String(item.value)}
+              type={windowDays === item.value || (item.value === "all" && !windowDays) ? "primary" : "default"}
+              onClick={() =>
+                updateSearchState({
+                  window_days: item.value === "all" ? undefined : item.value,
+                })
+              }
+            >
+              {item.label}
+            </Button>
+          ))}
+        </Space>
+      </Card>
+
       {overviewQuery.isLoading ? <LoadingBlock /> : null}
       {overviewQuery.isError ? <ErrorBlock message={overviewQuery.error.message} /> : null}
       {overviewQuery.data ? (
@@ -304,8 +355,12 @@ export function ExecutionsPage() {
                 <List.Item>
                   <Space direction="vertical" size={2} style={{ width: "100%" }}>
                     <Space wrap>
-                      <Link to={buildExecutionLink(item)}>{item.case_name}</Link>
-                      {item.failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[item.failure_category]}</Tag> : null}
+                      <Link to={buildExecutionLink(item)} state={{ fromExecutions: currentExecutionsPath }}>
+                        {item.case_name}
+                      </Link>
+                      {item.failure_category ? (
+                        <span>{FAILURE_CATEGORY_LABELS[item.failure_category]}</span>
+                      ) : null}
                       {item.failed_step_index !== null && item.failed_step_index !== undefined ? (
                         <Typography.Text type="secondary">Step {item.failed_step_index + 1}</Typography.Text>
                       ) : null}
@@ -332,7 +387,7 @@ export function ExecutionsPage() {
               value={status}
               virtual={false}
               options={STATUS_OPTIONS}
-              onChange={(value) => setStatus(value)}
+              onChange={(value) => updateSearchState({ status: value })}
               style={{ width: 160 }}
             />
             <Typography.Text type="secondary">用例筛选</Typography.Text>
@@ -341,7 +396,7 @@ export function ExecutionsPage() {
               virtual={false}
               options={caseOptions}
               loading={casesQuery.isLoading}
-              onChange={(value) => setCaseId(value === 0 ? undefined : value)}
+              onChange={(value) => updateSearchState({ case_id: value === 0 ? undefined : value })}
               style={{ width: 220 }}
             />
           </Space>
@@ -365,7 +420,7 @@ export function ExecutionsPage() {
             <Space wrap>
               <Button
                 type={failureCategory === "all" ? "primary" : "default"}
-                onClick={() => setFailureCategory("all")}
+                onClick={() => updateSearchState({ failure_category: undefined })}
               >
                 全部失败类型
               </Button>
@@ -373,7 +428,7 @@ export function ExecutionsPage() {
                 <Button
                   key={item.category}
                   type={failureCategory === item.category ? "primary" : "default"}
-                  onClick={() => setFailureCategory(item.category)}
+                  onClick={() => updateSearchState({ failure_category: item.category })}
                 >
                   {FAILURE_CATEGORY_LABELS[item.category]} ({item.count})
                 </Button>
@@ -394,7 +449,7 @@ export function ExecutionsPage() {
                   pageSize={PAGE_SIZE}
                   total={paginationTotal}
                   showSizeChanger={false}
-                  onChange={(nextPage) => setPage(nextPage)}
+                  onChange={(nextPage) => updateSearchState({ page: nextPage }, { resetPage: false })}
                 />
                 <Typography.Text type="secondary">
                   每页 {PAGE_SIZE} 条{hasNextPage ? "，还有更多记录" : ""}

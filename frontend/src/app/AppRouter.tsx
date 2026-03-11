@@ -1,26 +1,43 @@
+import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppLayout } from "../layouts/AppLayout";
-import { CaseWorkbenchPage } from "../pages/CaseWorkbenchPage";
-import { CasesPage } from "../pages/CasesPage";
-import { DashboardPage } from "../pages/DashboardPage";
-import { ExecutionDetailPage } from "../pages/ExecutionDetailPage";
-import { ExecutionsPage } from "../pages/ExecutionsPage";
-import { ReportCenterPage } from "../pages/ReportCenterPage";
+import { LoadingBlock } from "../components/PageFeedback";
+
+const DashboardPage = lazy(() =>
+  import("../pages/DashboardPage").then((module) => ({ default: module.DashboardPage })),
+);
+const CasesPage = lazy(() =>
+  import("../pages/CasesPage").then((module) => ({ default: module.CasesPage })),
+);
+const CaseWorkbenchPage = lazy(() =>
+  import("../pages/CaseWorkbenchPage").then((module) => ({ default: module.CaseWorkbenchPage })),
+);
+const ExecutionsPage = lazy(() =>
+  import("../pages/ExecutionsPage").then((module) => ({ default: module.ExecutionsPage })),
+);
+const ExecutionDetailPage = lazy(() =>
+  import("../pages/ExecutionDetailPage").then((module) => ({ default: module.ExecutionDetailPage })),
+);
+const ReportCenterPage = lazy(() =>
+  import("../pages/ReportCenterPage").then((module) => ({ default: module.ReportCenterPage })),
+);
 
 export function AppRouter() {
   return (
-    <Routes>
-      <Route element={<AppLayout />}>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/cases" element={<CasesPage />} />
-        <Route path="/cases/new" element={<CaseWorkbenchPage />} />
-        <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
-        <Route path="/executions" element={<ExecutionsPage />} />
-        <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
-        <Route path="/reports" element={<ReportCenterPage />} />
-      </Route>
-    </Routes>
+    <Suspense fallback={<LoadingBlock />}>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/cases" element={<CasesPage />} />
+          <Route path="/cases/new" element={<CaseWorkbenchPage />} />
+          <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
+          <Route path="/executions" element={<ExecutionsPage />} />
+          <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
+          <Route path="/reports" element={<ReportCenterPage />} />
+        </Route>
+      </Routes>
+    </Suspense>
   );
 }

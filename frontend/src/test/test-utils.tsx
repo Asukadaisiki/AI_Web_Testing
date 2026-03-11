@@ -11,7 +11,7 @@ export function renderWithProviders(
     path = "/",
     extraRoutes = [],
   }: {
-    route?: string;
+    route?: string | { pathname: string; search?: string; hash?: string; state?: unknown };
     path?: string;
     extraRoutes?: ReactElement[];
   } = {},

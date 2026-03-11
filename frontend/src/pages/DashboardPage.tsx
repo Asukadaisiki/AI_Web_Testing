@@ -7,7 +7,7 @@ import { Link } from "react-router-dom";
 import { OverviewChart } from "../components/OverviewChart";
 import {
   FAILURE_CATEGORY_LABELS,
-  buildExecutionLink,
+  buildExecutionsPath,
   formatDuration,
   formatPassRate,
   truncateText,
@@ -74,10 +74,10 @@ export function DashboardPage() {
           </div>
           <Space>
             <Button>
-              <Link to="/executions">执行中心</Link>
+              <Link to={buildExecutionsPath({ window_days: 7 })}>执行中心</Link>
             </Button>
             <Button type="primary">
-              <Link to="/reports">报告中心</Link>
+              <Link to="/reports?window_days=7">报告中心</Link>
             </Button>
           </Space>
         </Space>
@@ -131,7 +131,16 @@ export function DashboardPage() {
                   <List.Item>
                     <Space direction="vertical" size={4} style={{ width: "100%" }}>
                       <Space wrap>
-                        <Link to={buildExecutionLink(item)}>{item.case_name}</Link>
+                        <Link
+                          to={buildExecutionsPath({
+                            window_days: 7,
+                            status: "failed",
+                            case_id: item.case_id,
+                            failure_category: item.failure_category ?? undefined,
+                          })}
+                        >
+                          {item.case_name}
+                        </Link>
                         {item.failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[item.failure_category]}</Tag> : null}
                       </Space>
                       <Typography.Text type="secondary">
@@ -155,7 +164,15 @@ export function DashboardPage() {
                   <List.Item>
                     <Space direction="vertical" size={4} style={{ width: "100%" }}>
                       <Space wrap>
-                        <Link to={`/executions/${item.latest_execution_id}`}>{item.case_name}</Link>
+                        <Link
+                          to={buildExecutionsPath({
+                            window_days: 7,
+                            status: "failed",
+                            case_id: item.case_id,
+                          })}
+                        >
+                          {item.case_name}
+                        </Link>
                         <Tag color="error">{item.failure_count} 次失败</Tag>
                         {item.latest_failure_category ? (
                           <Tag>{FAILURE_CATEGORY_LABELS[item.latest_failure_category]}</Tag>

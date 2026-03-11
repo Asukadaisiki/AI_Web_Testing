@@ -52,11 +52,11 @@ function renderRouter(initialEntries: string[]) {
   );
 }
 
-test("根路由默认跳转到 dashboard，并展示 v1.8 导航入口", async () => {
+test("根路由默认跳转到 dashboard，并展示 v2.0 导航入口", async () => {
   renderRouter(["/"]);
 
   expect(await screen.findByText("Dashboard Mock")).toBeInTheDocument();
-  expect(screen.getByText("单 Case 平台化 v1.8")).toBeInTheDocument();
+  expect(screen.getByText("单 Case 平台体验打磨 v2.0")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "仪表盘" })).toHaveAttribute("href", "/dashboard");
   expect(screen.getByRole("link", { name: "报告中心" })).toHaveAttribute("href", "/reports");
 });

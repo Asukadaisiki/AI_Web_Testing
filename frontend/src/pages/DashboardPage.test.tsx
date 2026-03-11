@@ -146,9 +146,12 @@ test("仪表盘展示 KPI、趋势图、最近失败和失败最多用例入口"
   expect(screen.getByText("66.7%")).toBeInTheDocument();
   expect(screen.getByText("1200 ms")).toBeInTheDocument();
   expect(screen.getByTestId("dashboard-trend-chart")).toBeInTheDocument();
-  expect(screen.getAllByRole("link", { name: "异常场景" })[0]).toHaveAttribute("href", "/executions/8#step-2");
+  expect(screen.getAllByRole("link", { name: "异常场景" })[0]).toHaveAttribute(
+    "href",
+    "/executions?window_days=7&status=failed&case_id=2&failure_category=locator",
+  );
   expect(screen.getByText("2 次失败")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "报告中心" })).toHaveAttribute("href", "/reports");
+  expect(screen.getByRole("link", { name: "报告中心" })).toHaveAttribute("href", "/reports?window_days=7");
   expect(api.getExecutionOverview).toHaveBeenCalledWith({
     project_id: 1,
     window_days: 7,

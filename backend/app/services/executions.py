@@ -122,11 +122,15 @@ def list_executions(
     project_id: int | None = None,
     case_id: int | None = None,
     status: str | None = None,
+    window_days: int | None = None,
     failure_category: str | None = None,
     failure_fingerprint: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[StoredCaseExecutionSummary]:
+    requires_post_filtering = (
+        failure_category is not None or failure_fingerprint is not None or window_days is not None
+    )
     rows = _list_execution_rows(
         session,
         project_id=project_id,
@@ -134,10 +138,10 @@ def list_executions(
         status=status,
         limit=limit,
         offset=offset,
-        apply_pagination=failure_category is None and failure_fingerprint is None,
+        apply_pagination=not requires_post_filtering,
     )
 
-    if failure_category is None and failure_fingerprint is None:
+    if not requires_post_filtering:
         return [_to_execution_summary(record, case_name=case_name) for record, case_name in rows]
 
     filtered: list[StoredCaseExecutionSummary] = []
@@ -150,6 +154,7 @@ def list_executions(
         if failure_fingerprint is not None and failure_descriptor.fingerprint != failure_fingerprint:
             continue
         filtered.append(summary)
+    filtered = _filter_summaries_by_window(filtered, window_days)
     return filtered[offset : offset + limit]
 
 

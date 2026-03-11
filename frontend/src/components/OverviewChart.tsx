@@ -1,13 +1,17 @@
 import { useEffect, useRef } from "react";
-import * as echarts from "echarts";
-import type { EChartsOption } from "echarts";
+import { BarChart, LineChart } from "echarts/charts";
+import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import { type EChartsCoreOption, getInstanceByDom, init, use } from "echarts/core";
+import { CanvasRenderer } from "echarts/renderers";
+
+use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 export function OverviewChart({
   option,
   testId,
   height = 280,
 }: {
-  option: EChartsOption;
+  option: EChartsCoreOption;
   testId?: string;
   height?: number;
 }) {
@@ -18,7 +22,7 @@ export function OverviewChart({
       return;
     }
 
-    const chart = echarts.getInstanceByDom(containerRef.current) ?? echarts.init(containerRef.current);
+    const chart = getInstanceByDom(containerRef.current) ?? init(containerRef.current);
     chart.setOption(option, true);
 
     const handleResize = () => {

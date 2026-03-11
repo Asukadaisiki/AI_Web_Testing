@@ -1,14 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Card, List, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { EChartsOption } from "echarts";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { OverviewChart } from "../components/OverviewChart";
 import {
   FAILURE_CATEGORY_LABELS,
-  buildExecutionLink,
+  buildExecutionsPath,
   formatDuration,
   formatPassRate,
   truncateText,
@@ -18,6 +18,16 @@ import { getExecutionOverview } from "../services/api";
 import type { FailureRootCause, OverviewWindowDays, TopFailedCase } from "../types/api";
 
 const WINDOW_OPTIONS: OverviewWindowDays[] = [7, 14, 30];
+
+function parseWindowDays(value: string | null): OverviewWindowDays {
+  if (value === "14") {
+    return 14;
+  }
+  if (value === "30") {
+    return 30;
+  }
+  return 7;
+}
 
 function formatWindowRange(
   startDate?: string | null,
@@ -41,17 +51,18 @@ function formatPassRateDelta(value: number) {
   return `${value > 0 ? "+" : ""}${(value * 100).toFixed(1)} pp`;
 }
 
-function buildFailureFingerprintLink(record: FailureRootCause) {
-  const search = new URLSearchParams({
+function buildFailureFingerprintLink(record: FailureRootCause, windowDays: OverviewWindowDays) {
+  return buildExecutionsPath({
+    window_days: windowDays,
     status: "failed",
     failure_fingerprint: record.fingerprint,
     root_cause_title: record.title,
   });
-  return `/executions?${search.toString()}`;
 }
 
 export function ReportCenterPage() {
-  const [windowDays, setWindowDays] = useState<OverviewWindowDays>(7);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const windowDays = parseWindowDays(searchParams.get("window_days"));
   const overviewQuery = useQuery({
     queryKey: ["executions-overview", "reports", windowDays],
     queryFn: () =>
@@ -141,7 +152,17 @@ export function ReportCenterPage() {
         title: "用例",
         dataIndex: "case_name",
         key: "case_name",
-        render: (value: string, record) => <Link to={`/executions/${record.latest_execution_id}`}>{value}</Link>,
+        render: (value: string, record) => (
+          <Link
+            to={buildExecutionsPath({
+              window_days: windowDays,
+              status: "failed",
+              case_id: record.case_id,
+            })}
+          >
+            {value}
+          </Link>
+        ),
       },
       {
         title: "失败次数",
@@ -163,10 +184,20 @@ export function ReportCenterPage() {
         dataIndex: "latest_execution_id",
         key: "latest_execution_id",
         width: 140,
-        render: (value: number) => <Link to={`/executions/${value}`}>#{value}</Link>,
+        render: (_value: number, record) => (
+          <Link
+            to={buildExecutionsPath({
+              window_days: windowDays,
+              status: "failed",
+              case_id: record.case_id,
+            })}
+          >
+            #{record.latest_execution_id}
+          </Link>
+        ),
       },
     ],
-    [],
+    [windowDays],
   );
 
   const rootCauseColumns = useMemo<ColumnsType<FailureRootCause>>(
@@ -203,7 +234,7 @@ export function ReportCenterPage() {
         dataIndex: "latest_execution_id",
         key: "latest_execution_id",
         width: 140,
-        render: (value: number) => <Link to={`/executions/${value}`}>#{value}</Link>,
+        render: (_value: number, record) => <Link to={buildFailureFingerprintLink(record, windowDays)}>#{record.latest_execution_id}</Link>,
       },
       {
         title: "操作",
@@ -211,13 +242,13 @@ export function ReportCenterPage() {
         width: 180,
         render: (_, record) => (
           <Space wrap>
+            <Link to={buildFailureFingerprintLink(record, windowDays)}>筛选执行</Link>
             <Link to={`/executions/${record.latest_execution_id}`}>查看详情</Link>
-            <Link to={buildFailureFingerprintLink(record)}>筛选执行</Link>
           </Space>
         ),
       },
     ],
-    [],
+    [windowDays],
   );
 
   const currentWindowRange = formatWindowRange(
@@ -242,7 +273,7 @@ export function ReportCenterPage() {
               <Button
                 key={option}
                 type={windowDays === option ? "primary" : "default"}
-                onClick={() => setWindowDays(option)}
+                onClick={() => setSearchParams(new URLSearchParams({ window_days: String(option) }), { replace: true })}
               >
                 {option} 天
               </Button>
@@ -337,7 +368,16 @@ export function ReportCenterPage() {
                     <List.Item>
                       <Space direction="vertical" size={4} style={{ width: "100%" }}>
                         <Space wrap>
-                          <Link to={buildExecutionLink(item)}>{item.case_name}</Link>
+                          <Link
+                            to={buildExecutionsPath({
+                              window_days: windowDays,
+                              status: "failed",
+                              case_id: item.case_id,
+                              failure_category: item.failure_category ?? undefined,
+                            })}
+                          >
+                            {item.case_name}
+                          </Link>
                           {item.failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[item.failure_category]}</Tag> : null}
                         </Space>
                         <Typography.Text type="secondary">
