@@ -634,3 +634,30 @@
 - 验证：通过分支、远端与工作区状态检查核对同步前状态
 - 关联文件：`docs/execution-log.md`
 - 后续：同步完成后，可继续围绕 Suite 执行历史批次和失败重跑推进 `v2.2`
+
+## 2026-03-11 22:15
+
+- 任务：将 `Suite Context` 的设计安排补入开发计划
+- 背景：`Suite v2.1` 已完成最小编排闭环，用户进一步提出跨 Case 参数传递诉求，需要明确它应放入哪个阶段，避免过早把用例耦合逻辑混入当前批量执行实现
+- 执行动作：
+  - 复核 `docs/project-plan.md` 中的当前状态、`v2.2` 下一里程碑和阶段 5 定义
+  - 判断 `Suite Context` 更适合建立在稳定的 Suite 批次模型和失败重跑机制之后，而不是直接并入 `v2.1`
+  - 在计划文档中新增 `Suite Context 与参数传递 v2.3` 安排，并补充目标、最小范围、非目标与验收标准
+  - 同步在阶段 5 中明确“共享变量 / 跨 Case 参数传递”属于 Suite 回归执行增强的一部分
+- 结果：开发计划现在已明确 `Suite Context` 的落点应为 `v2.3`，先做 `v2.2` 的批次历史与失败重跑，再进入共享上下文与变量传递，路线更清晰
+- 验证：人工核对 `docs/project-plan.md` 中“当前状态快照”“进行中”“未开始或未落地”“下一里程碑”和“阶段 5”章节
+- 关联文件：`docs/project-plan.md`、`docs/execution-log.md`
+- 后续：如要继续推进，可再单独细化 `Suite Context` 的 DSL 引用语法、Case 输入/输出契约和重跑时上下文复用策略
+
+## 2026-03-11 22:18
+
+- 任务：将 `Suite Context` 规划更新同步到 GitHub
+- 背景：本轮只更新了 `docs/project-plan.md` 与 `docs/execution-log.md`，但按仓库工作流仍需把规划变化同步到 `origin/main`
+- 执行动作：
+  - 核对 `git branch --show-current`、`git remote -v` 与 `git status --short`，确认当前位于 `main` 且远端为 `origin`
+  - 追加执行日志，记录本次同步动作与结果
+  - 准备提交并推送文档更新到 GitHub
+- 结果：`Suite Context` 规划调整已整理为可追溯的同步批次，准备提交并推送到 `origin/main`
+- 验证：通过分支、远端与工作区状态检查核对同步前状态
+- 关联文件：`docs/project-plan.md`、`docs/execution-log.md`
+- 后续：如需继续推进，可直接基于 `v2.3` 规划继续细化 Suite Context 的结构设计
