@@ -6,6 +6,7 @@ from app.api.routes.cases import router as cases_router
 from app.api.routes.dsl import router as dsl_router
 from app.api.routes.executions import router as executions_router
 from app.api.routes.health import router as health_router
+from app.api.routes.suites import router as suites_router
 from app.core.config import get_settings
 
 
@@ -14,6 +15,7 @@ def build_api_router() -> APIRouter:
     api_router = APIRouter(prefix=settings.api_v1_prefix)
     api_router.include_router(health_router)
     api_router.include_router(cases_router)
+    api_router.include_router(suites_router)
     api_router.include_router(dsl_router)
     api_router.include_router(executions_router)
     return api_router

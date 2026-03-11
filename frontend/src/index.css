@@ -160,6 +160,16 @@ a {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.suite-selection-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.suite-case-card {
+  border-radius: 12px;
+}
+
 .dashboard-grid,
 .analytics-grid {
   display: grid;
@@ -194,6 +204,10 @@ a {
   }
 
   .workbench-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .suite-selection-grid {
     grid-template-columns: 1fr;
   }
 

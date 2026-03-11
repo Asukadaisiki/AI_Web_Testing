@@ -37,6 +37,64 @@ export interface CaseMutationPayload extends DSLCasePayload {
   actor_user_id: number;
 }
 
+export interface SuiteCaseRefPayload {
+  case_id: number;
+}
+
+export interface StoredSuiteCase {
+  case_id: number;
+  case_name: string;
+  order_index: number;
+}
+
+export interface StoredSuiteSummary {
+  id: number;
+  project_id: number;
+  name: string;
+  description: string | null;
+  case_count: number;
+  created_by: number;
+  updated_by: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoredSuiteDetail extends StoredSuiteSummary {
+  cases: StoredSuiteCase[];
+}
+
+export interface SuiteMutationPayload {
+  project_id: number;
+  actor_user_id: number;
+  name: string;
+  description?: string | null;
+  cases: SuiteCaseRefPayload[];
+}
+
+export interface SuiteExecutionRequest {
+  actor_user_id: number;
+  base_url?: string;
+}
+
+export interface SuiteExecutionItem {
+  execution_id: number;
+  case_id: number;
+  case_name: string;
+  status: ExecutionStatus;
+}
+
+export interface SuiteExecutionResult {
+  suite_id: number;
+  suite_name: string;
+  started_at: string;
+  finished_at: string;
+  total_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  status: ExecutionStatus;
+  executions: SuiteExecutionItem[];
+}
+
 export interface DSLValidationResult {
   valid: boolean;
   case: DSLCasePayload;

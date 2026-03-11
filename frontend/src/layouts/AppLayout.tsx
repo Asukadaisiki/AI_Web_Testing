@@ -14,6 +14,10 @@ const items: ItemType[] = [
     label: <Link to="/cases">用例列表</Link>,
   },
   {
+    key: "/suites",
+    label: <Link to="/suites">Suite 管理</Link>,
+  },
+  {
     key: "/executions",
     label: <Link to="/executions">执行中心</Link>,
   },
@@ -28,6 +32,8 @@ export function AppLayout() {
   let selectedKey = "/dashboard";
   if (location.pathname.startsWith("/cases")) {
     selectedKey = "/cases";
+  } else if (location.pathname.startsWith("/suites")) {
+    selectedKey = "/suites";
   } else if (location.pathname.startsWith("/executions")) {
     selectedKey = "/executions";
   } else if (location.pathname.startsWith("/reports")) {
@@ -48,7 +54,7 @@ export function AppLayout() {
           <Typography.Title level={4} style={{ color: "#f7fbff", margin: 0 }}>
             AI Web Testing
           </Typography.Title>
-          <Typography.Text style={{ color: "#9db0cb" }}>单 Case 平台体验打磨 v2.0</Typography.Text>
+          <Typography.Text style={{ color: "#9db0cb" }}>Suite 基础闭环 v2.1</Typography.Text>
         </div>
         <Menu
           mode="inline"

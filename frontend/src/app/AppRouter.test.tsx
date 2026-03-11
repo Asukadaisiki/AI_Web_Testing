@@ -14,6 +14,14 @@ vi.mock("../pages/CasesPage", () => ({
   CasesPage: () => <div>Cases Mock</div>,
 }));
 
+vi.mock("../pages/SuitesPage", () => ({
+  SuitesPage: () => <div>Suites Mock</div>,
+}));
+
+vi.mock("../pages/SuiteWorkbenchPage", () => ({
+  SuiteWorkbenchPage: () => <div>Suite Workbench Mock</div>,
+}));
+
 vi.mock("../pages/ExecutionsPage", () => ({
   ExecutionsPage: () => <div>Executions Mock</div>,
 }));
@@ -52,12 +60,13 @@ function renderRouter(initialEntries: string[]) {
   );
 }
 
-test("根路由默认跳转到 dashboard，并展示 v2.0 导航入口", async () => {
+test("根路由默认跳转到 dashboard，并展示 v2.1 导航入口", async () => {
   renderRouter(["/"]);
 
   expect(await screen.findByText("Dashboard Mock")).toBeInTheDocument();
-  expect(screen.getByText("单 Case 平台体验打磨 v2.0")).toBeInTheDocument();
+  expect(screen.getByText("Suite 基础闭环 v2.1")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "仪表盘" })).toHaveAttribute("href", "/dashboard");
+  expect(screen.getByRole("link", { name: "Suite 管理" })).toHaveAttribute("href", "/suites");
   expect(screen.getByRole("link", { name: "报告中心" })).toHaveAttribute("href", "/reports");
 });
 
@@ -66,4 +75,11 @@ test("报告中心路由激活时菜单选中正确", async () => {
 
   expect(await screen.findByText("Reports Mock")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "报告中心" }).closest("li")).toHaveClass("ant-menu-item-selected");
+});
+
+test("suite 路由激活时菜单选中正确", async () => {
+  renderRouter(["/suites"]);
+
+  expect(await screen.findByText("Suites Mock")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Suite 管理" }).closest("li")).toHaveClass("ant-menu-item-selected");
 });

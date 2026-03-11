@@ -24,10 +24,13 @@
 
 ### 2026-03-11 补充
 
+- 已完成 `Suite 基础闭环 v2.1`：后端已新增 `GET/POST/PUT /api/v1/suites` 与 `POST /api/v1/suites/{id}/execute`，前端已新增 `Suite 管理` 列表页与 `Suite 工作台`。
+- `Suite` 当前采用“同步串行编排 + 复用现有 Case 执行记录”的最小实现：按 `order_index` 顺序执行全部 Case，单条失败后继续执行后续 Case，不单独持久化 `suite_runs`。
+- 前端侧边导航已扩展为“仪表盘 / 用例列表 / Suite 管理 / 执行中心 / 报告中心”；Suite 页面支持选择已有 Case、上移/下移调整顺序、保存和直接执行，并展示子执行跳转链接。
+- 当前 `v2.1` 已完成最小范围，下一步应收口到 `v2.2`：补 Suite 执行历史批次、失败重跑入口和更明确的 Suite 结果回看链路。
 - 已完成 `单 Case 平台体验打磨 v2.0`：`GET /api/v1/executions` 已支持 `window_days=7/14/30`，执行中心把 `window_days / status / case_id / failure_category / failure_fingerprint / page` 统一提升为 URL 查询状态。
 - 仪表盘与报告中心中的“最近失败 / 高频失败 / 根因榜”已统一回流到带筛选参数的执行中心；执行详情页现在会优先保留来源执行中心的返回路径，没有来源信息时才回退默认 `/executions`。
 - `AppRouter` 已切换为路由级懒加载，`OverviewChart` 已切换到模块化 ECharts 引入；前端构建不再输出 chunk size warning，`BUG-010` 已关闭。
-- 下一步主线已从 `v2.0` 收口到 `v2.1`：围绕 Suite 基础管理与批量执行入口建立最小闭环，仍暂不切入 AI 生成 DSL 和 Vision 定位。
 
 ### 2026-03-10 补充
 
@@ -61,28 +64,29 @@
 - `executions overview` 聚合：支持通过率、平均耗时、最近失败、失败分类、按天趋势、失败动作分布、高频失败用例、上一窗口对比与失败根因聚合
 - 执行入口深链联动：Dashboard / 报告中心 / 执行中心 / 执行详情之间已支持基于 URL query 与路由 state 的筛选回流
 - 前端平台体验打磨 v2.0：执行中心 URL 状态闭环、详情回跳、路由懒加载与构建拆包优化
+- Suite 基础闭环 v2.1：Suite CRUD、Suite 工作台、批量执行入口与执行摘要跳转
 - 后端与前端最小测试链路
 
 ### 进行中
 
-- Suite 基础管理与批量执行入口设计
 - 报告聚合与平台联动体验的小幅细化
+- Suite 执行历史批次与失败重跑方案设计
 
 ### 未开始或未落地
 
-- Suite 批量执行
 - AI 生成 DSL
 - Vision 辅助定位
-- Suite 管理页、登录页、环境配置页
+- 登录页、环境配置页
 - 更完整的 Locator 候选召回、评分与失败原因展示
+- Suite 历史批次持久化、失败重跑与历史结果对比
 
 ## 下一里程碑
 
-下一里程碑已从“单 Case 平台体验打磨 v2.0”推进为“Suite 基础闭环 v2.1”。
+下一里程碑已从“Suite 基础闭环 v2.1”推进为“Suite 执行历史与失败重跑 v2.2”。
 
-- 目标：围绕既有 `Case -> Execution -> Report` 链路补齐 Suite 组织与批量执行的最小产品闭环。
-- 范围：Suite 列表、Suite 详情、关联 Case、批量执行入口和结果查看；继续复用当前执行中心与报告链路，不重造执行器。
-- 展示原则：Suite 仍然建立在结构化 DSL 与后端 Runner 之上，前端继续只做管理入口与结果展示。
+- 目标：围绕既有 `Suite -> Cases -> Executions` 链路补齐历史批次记录、失败重跑和更完整的 Suite 结果回看。
+- 范围：`suite_runs` 或等价批次模型、最近批次列表、失败重跑入口、从 Suite 执行结果跳转回执行中心/详情页的稳定链路。
+- 展示原则：继续复用现有 Case 执行器和执行详情，不把 Suite 扩展成新的执行引擎。
 
 ## 执行原则
 

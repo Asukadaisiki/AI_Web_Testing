@@ -603,3 +603,34 @@
 - 验证：通过分支、远端与工作区状态检查核对同步前状态
 - 关联文件：`docs/execution-log.md`
 - 后续：如需继续推进，可在下一轮围绕 `Suite 基础闭环 v2.1` 继续迭代
+
+## 2026-03-11 22:03
+
+- 任务：落实 `Suite 基础闭环 v2.1`，补齐 Suite 管理、批量执行入口与文档同步
+- 背景：`v2.0` 已完成单 Case 平台体验打磨，但仓库仍只有 `test_suites / suite_cases` 数据模型，没有 Suite API、前端入口或批量执行能力；`docs/project-plan.md` 已明确下一阶段应切入 Suite 最小闭环
+- 执行动作：
+  - 新增后端 `suites` 契约、服务与路由，落地 `GET/POST/PUT /api/v1/suites` 与 `POST /api/v1/suites/{id}/execute`，并在服务层补齐“至少 1 个 Case / 不允许重复 / 不能跨项目 / 顺序归一化”的校验
+  - 以“同步串行编排 + 复用 `execute_case()`”实现 Suite 批量执行，返回 Suite 聚合状态与子执行列表，不新增独立 `suite_runs` 表
+  - 前端新增 `SuitesPage` 与 `SuiteWorkbenchPage`，接入导航和路由，支持选择已有 Case、上移/下移调整顺序、保存 Suite、执行 Suite，并在页面内展示执行摘要和子执行详情跳转
+  - 新增后端 `test_suites_api.py` 与前端 `SuitesPage.test.tsx`、`SuiteWorkbenchPage.test.tsx`，同时更新 `AppRouter.test.tsx`
+  - 同步刷新 `docs/project-plan.md`、`docs/frontend-design.md`、`backend/README.md`、`frontend/README.md`
+- 结果：项目现在已具备 Suite 最小产品闭环，用户可在平台内管理 Suite、维护 Case 顺序、触发同步批量执行，并复用现有执行详情页查看每个子执行结果
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果 `41 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果 `24 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/schemas/suites.py`、`backend/app/services/suites.py`、`backend/app/api/routes/suites.py`、`backend/tests/unit/test_suites_api.py`、`frontend/src/pages/SuitesPage.tsx`、`frontend/src/pages/SuiteWorkbenchPage.tsx`、`frontend/src/pages/SuitesPage.test.tsx`、`frontend/src/pages/SuiteWorkbenchPage.test.tsx`、`docs/project-plan.md`
+- 后续：下一步可围绕 Suite 执行历史批次、失败重跑和更稳定的 Suite 结果回看链路推进 `v2.2`
+
+## 2026-03-11 22:08
+
+- 任务：将 `Suite 基础闭环 v2.1` 改动同步到 GitHub
+- 背景：`v2.1` 的后端接口、前端页面、测试和文档更新已完成并通过本地验证，需要按仓库工作流同步到 `origin/main`
+- 执行动作：
+  - 核对 `git branch --show-current`、`git remote -v` 与 `git status --short`，确认当前位于 `main` 且远端为 `origin`
+  - 追加执行日志，记录本次同步动作与结果
+  - 准备提交并推送 `v2.1` 改动到 GitHub
+- 结果：`v2.1` 改动已整理为可追溯的同步批次，准备提交并推送到 `origin/main`
+- 验证：通过分支、远端与工作区状态检查核对同步前状态
+- 关联文件：`docs/execution-log.md`
+- 后续：同步完成后，可继续围绕 Suite 执行历史批次和失败重跑推进 `v2.2`

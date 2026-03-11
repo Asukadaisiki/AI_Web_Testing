@@ -9,6 +9,11 @@ import type {
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
   StoredCaseSummary,
+  StoredSuiteDetail,
+  StoredSuiteSummary,
+  SuiteExecutionRequest,
+  SuiteExecutionResult,
+  SuiteMutationPayload,
 } from "../types/api";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -48,6 +53,35 @@ export function getCaseDetail(caseId: number) {
 
 export function createCase(payload: CaseMutationPayload) {
   return request<StoredCaseDetail>("/api/v1/cases", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getSuites() {
+  return request<StoredSuiteSummary[]>("/api/v1/suites");
+}
+
+export function getSuiteDetail(suiteId: number) {
+  return request<StoredSuiteDetail>(`/api/v1/suites/${suiteId}`);
+}
+
+export function createSuite(payload: SuiteMutationPayload) {
+  return request<StoredSuiteDetail>("/api/v1/suites", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateSuite(suiteId: number, payload: SuiteMutationPayload) {
+  return request<StoredSuiteDetail>(`/api/v1/suites/${suiteId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function executeSuite(suiteId: number, payload: SuiteExecutionRequest) {
+  return request<SuiteExecutionResult>(`/api/v1/suites/${suiteId}/execute`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

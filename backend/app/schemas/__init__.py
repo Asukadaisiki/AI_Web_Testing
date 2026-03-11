@@ -9,6 +9,14 @@ from app.schemas.executions import (
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
 )
+from app.schemas.suites import (
+    StoredSuiteDetail,
+    StoredSuiteSummary,
+    SuiteCreateRequest,
+    SuiteExecutionRequest,
+    SuiteExecutionResult,
+    SuiteUpdateRequest,
+)
 
 __all__ = [
     "CaseCreateRequest",
@@ -22,4 +30,10 @@ __all__ = [
     "StoredCaseExecutionSummary",
     "StoredCaseDetail",
     "StoredCaseSummary",
+    "StoredSuiteDetail",
+    "StoredSuiteSummary",
+    "SuiteCreateRequest",
+    "SuiteExecutionRequest",
+    "SuiteExecutionResult",
+    "SuiteUpdateRequest",
 ]
