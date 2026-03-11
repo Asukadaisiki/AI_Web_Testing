@@ -12,12 +12,13 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import TestCase, TestCaseRun, User
+from app.models import SuiteRun, SuiteRunItem, TestCase, TestCaseRun, TestSuite, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, execute_case_with_playwright
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
+    ExecutionOriginSuiteRun,
     ExecutionAggregateSnapshot,
     ExecutionTrendPoint,
     ExecutionsOverview,
@@ -99,7 +100,7 @@ def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) 
     session.add(execution)
     session.commit()
     session.refresh(execution)
-    return _to_execution_detail(execution, case_name=record.name)
+    return _to_execution_detail(session, execution, case_name=record.name)
 
 
 def list_case_executions(session: Session, case_id: int) -> list[StoredCaseExecutionSummary]:
@@ -236,7 +237,7 @@ def get_case_execution(session: Session, execution_id: int) -> StoredCaseExecuti
         return None
     case = session.get(TestCase, record.case_id)
     case_name = case.name if case is not None else f"Case {record.case_id}"
-    return _to_execution_detail(record, case_name=case_name)
+    return _to_execution_detail(session, record, case_name=case_name)
 
 
 def _list_execution_rows(
@@ -384,12 +385,32 @@ def _to_execution_summary(
     )
 
 
-def _to_execution_detail(record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionDetail:
+def _to_execution_detail(session: Session, record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionDetail:
     report = _normalize_report(record.report)
     summary = _to_execution_summary(record, case_name=case_name, report=report)
     return StoredCaseExecutionDetail(
         **summary.model_dump(),
         report=report,
+        origin_suite_run=_get_origin_suite_run(session, execution_id=record.id),
+    )
+
+
+def _get_origin_suite_run(session: Session, *, execution_id: int) -> ExecutionOriginSuiteRun | None:
+    statement = (
+        select(SuiteRunItem, SuiteRun, TestSuite.name)
+        .join(SuiteRun, SuiteRun.id == SuiteRunItem.suite_run_id)
+        .join(TestSuite, TestSuite.id == SuiteRun.suite_id)
+        .where(SuiteRunItem.execution_id == execution_id)
+    )
+    row = session.execute(statement).first()
+    if row is None:
+        return None
+
+    _item, suite_run, suite_name = row
+    return ExecutionOriginSuiteRun(
+        suite_id=suite_run.suite_id,
+        suite_name=suite_name,
+        suite_run_id=suite_run.id,
     )
 
 

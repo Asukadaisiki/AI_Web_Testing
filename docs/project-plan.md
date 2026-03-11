@@ -338,3 +338,13 @@
 端到端：
 
 - 至少保留一条登录冒烟用例作为主回归链路
+## 2026-03-11 | v2.2 实施更新
+
+- 已完成 `Suite 执行历史与失败重跑 v2.2`。
+- 后端已新增 `suite_runs`、`suite_run_items` 两张批次表，并通过 Alembic 迁移落库。
+- `POST /api/v1/suites/{id}/execute` 已改为先创建 Suite 批次、逐条执行 Case、逐项落库，再回写聚合状态。
+- 已新增 `GET /api/v1/suites/{id}/runs`、`GET /api/v1/suites/{id}/runs/{run_id}` 与 `POST /api/v1/suites/{id}/runs/{run_id}/rerun-failed`。
+- `失败重跑` 当前默认重跑“当前 Case 最新 DSL”，不会回放历史 DSL 快照；该策略是 v2.2 的最小实现。
+- 前端已新增 `SuiteRunDetailPage`，`SuitesPage` 会展示最近批次摘要，`SuiteWorkbenchPage` 会展示最近批次列表并在执行后跳转到批次详情页。
+- `ExecutionDetailPage` 已支持优先返回来源 Suite 批次；无来源时仍回到执行中心。
+- `v2.3` 继续保持为 `Suite Context 与参数传递`，不在本轮引入上下文共享、变量占位符解析或跨 Case 状态复用。

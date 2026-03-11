@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db_session
 from app.schemas.suites import (
     StoredSuiteDetail,
+    StoredSuiteRunDetail,
+    StoredSuiteRunSummary,
     StoredSuiteSummary,
     SuiteCreateRequest,
     SuiteExecutionRequest,
@@ -20,7 +22,10 @@ from app.services import (
     create_suite,
     execute_suite,
     get_suite,
+    get_suite_run,
     list_suites,
+    list_suite_runs,
+    rerun_failed_suite_run,
     update_suite,
 )
 
@@ -80,6 +85,47 @@ def execute_suite_route(
 ) -> SuiteExecutionResult:
     try:
         return execute_suite(session, suite_id, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except SuiteValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.get("/{suite_id}/runs", response_model=list[StoredSuiteRunSummary])
+def list_suite_runs_route(
+    suite_id: int,
+    session: Session = Depends(get_db_session),
+) -> list[StoredSuiteRunSummary]:
+    try:
+        return list_suite_runs(session, suite_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/{suite_id}/runs/{run_id}", response_model=StoredSuiteRunDetail)
+def get_suite_run_route(
+    suite_id: int,
+    run_id: int,
+    session: Session = Depends(get_db_session),
+) -> StoredSuiteRunDetail:
+    try:
+        run = get_suite_run(session, suite_id, run_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suite run not found.")
+    return run
+
+
+@router.post("/{suite_id}/runs/{run_id}/rerun-failed", response_model=SuiteExecutionResult)
+def rerun_failed_suite_run_route(
+    suite_id: int,
+    run_id: int,
+    payload: SuiteExecutionRequest,
+    session: Session = Depends(get_db_session),
+) -> SuiteExecutionResult:
+    try:
+        return rerun_failed_suite_run(session, suite_id, run_id, payload)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except SuiteValidationError as exc:

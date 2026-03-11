@@ -117,8 +117,15 @@ class StoredCaseExecutionSummary(DSLModel):
     latest_screenshot_url: str | None = None
 
 
+class ExecutionOriginSuiteRun(DSLModel):
+    suite_id: int
+    suite_name: str
+    suite_run_id: int
+
+
 class StoredCaseExecutionDetail(StoredCaseExecutionSummary):
     report: ExecutionReport | None = None
+    origin_suite_run: ExecutionOriginSuiteRun | None = None
 
 
 class FailureCategoryCount(DSLModel):

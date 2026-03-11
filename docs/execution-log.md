@@ -661,3 +661,22 @@
 - 验证：通过分支、远端与工作区状态检查核对同步前状态
 - 关联文件：`docs/project-plan.md`、`docs/execution-log.md`
 - 后续：如需继续推进，可直接基于 `v2.3` 规划继续细化 Suite Context 的结构设计
+## 2026-03-11 22:44
+
+- 任务：落实 `Suite 执行历史与失败重跑 v2.2`
+- 背景：`Suite v2.1` 已完成最小编排闭环，但执行结果仍是临时聚合，缺少可追溯的批次历史、失败重跑入口和稳定的回看链路。
+- 执行动作：
+  - 新增后端 `suite_runs`、`suite_run_items` 模型与 Alembic 迁移，落地 Suite 批次聚合记录和批次内 Case 快照。
+  - 重构 `backend/app/services/suites.py` 与 `backend/app/api/routes/suites.py`，让 `POST /api/v1/suites/{id}/execute` 写入批次历史，并新增批次列表、批次详情和失败重跑接口。
+  - 扩展执行详情 schema / service，为 `GET /api/v1/executions/{id}` 增加 `origin_suite_run` 元数据，支持从子执行详情稳定返回 Suite 批次。
+  - 更新前端类型与 API 层，新增 `SuiteRunDetailPage`，并重写 `SuitesPage`、`SuiteWorkbenchPage`、`ExecutionDetailPage` 的批次展示与跳转逻辑。
+  - 补充后端与前端测试，覆盖批次持久化、失败重跑、Suite 历史入口、批次详情页以及 Execution 详情回链。
+  - 更新 `docs/project-plan.md`，追加本轮 `v2.2` 的落地状态说明。
+- 结果：项目现在具备真实可回看的 Suite 批次历史、失败重跑能力，以及从 Suite 到子执行详情再返回批次的完整链路。
+- 验证：
+  - 执行 `cd backend && uv run alembic upgrade head` 成功
+  - 执行 `cd backend && uv run pytest`，结果为 `44 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `28 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/models/`、`backend/app/services/suites.py`、`backend/app/services/executions.py`、`backend/app/api/routes/suites.py`、`backend/app/schemas/suites.py`、`backend/app/schemas/executions.py`、`backend/alembic/versions/20260311_0003_suite_run_history.py`、`backend/tests/unit/test_suites_api.py`、`frontend/src/pages/SuitesPage.tsx`、`frontend/src/pages/SuiteWorkbenchPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`docs/project-plan.md`
+- 后续：下一步进入 `Suite Context 与参数传递 v2.3` 的结构设计与最小实现边界收敛。

@@ -13,6 +13,8 @@ def test_stage1_tables_exist(db_session: Session) -> None:
         "project_members",
         "projects",
         "suite_cases",
+        "suite_run_items",
+        "suite_runs",
         "test_cases",
         "test_case_runs",
         "test_suites",
@@ -48,4 +50,22 @@ def test_test_case_run_foreign_keys_are_declared(db_session: Session) -> None:
         "projects",
         "test_cases",
         "users",
+    }
+
+
+def test_suite_run_tables_foreign_keys_are_declared(db_session: Session) -> None:
+    inspector = inspect(db_session.bind)
+
+    suite_run_foreign_keys = inspector.get_foreign_keys("suite_runs")
+    assert {foreign_key["referred_table"] for foreign_key in suite_run_foreign_keys} == {
+        "suite_runs",
+        "test_suites",
+        "users",
+    }
+
+    suite_run_item_foreign_keys = inspector.get_foreign_keys("suite_run_items")
+    assert {foreign_key["referred_table"] for foreign_key in suite_run_item_foreign_keys} == {
+        "suite_runs",
+        "test_case_runs",
+        "test_cases",
     }

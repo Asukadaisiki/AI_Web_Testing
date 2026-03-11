@@ -47,6 +47,37 @@ export interface StoredSuiteCase {
   order_index: number;
 }
 
+export type SuiteRunSource = "manual" | "rerun_failed";
+
+export interface StoredSuiteRunItem {
+  id: number;
+  case_id: number;
+  case_name_snapshot: string;
+  order_index: number;
+  execution_id: number;
+  status: ExecutionStatus;
+}
+
+export interface StoredSuiteRunSummary {
+  id: number;
+  suite_id: number;
+  suite_name: string;
+  triggered_by: number;
+  source: SuiteRunSource;
+  source_suite_run_id?: number | null;
+  status: ExecutionStatus;
+  total_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  base_url_override?: string | null;
+  started_at: string;
+  finished_at?: string | null;
+}
+
+export interface StoredSuiteRunDetail extends StoredSuiteRunSummary {
+  items: StoredSuiteRunItem[];
+}
+
 export interface StoredSuiteSummary {
   id: number;
   project_id: number;
@@ -57,6 +88,7 @@ export interface StoredSuiteSummary {
   updated_by: number;
   created_at: string;
   updated_at: string;
+  latest_run?: StoredSuiteRunSummary | null;
 }
 
 export interface StoredSuiteDetail extends StoredSuiteSummary {
@@ -84,14 +116,20 @@ export interface SuiteExecutionItem {
 }
 
 export interface SuiteExecutionResult {
+  id: number;
   suite_id: number;
   suite_name: string;
+  triggered_by: number;
+  source: SuiteRunSource;
+  source_suite_run_id?: number | null;
   started_at: string;
-  finished_at: string;
+  finished_at?: string | null;
   total_cases: number;
   passed_cases: number;
   failed_cases: number;
+  base_url_override?: string | null;
   status: ExecutionStatus;
+  items: StoredSuiteRunItem[];
   executions: SuiteExecutionItem[];
 }
 
@@ -206,6 +244,11 @@ export interface StoredCaseExecutionSummary {
 
 export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {
   report: ExecutionReport | null;
+  origin_suite_run?: {
+    suite_id: number;
+    suite_name: string;
+    suite_run_id: number;
+  } | null;
 }
 
 export interface FailureCategoryCount {

@@ -32,6 +32,7 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
     failure_step_action: "click",
     latest_url: "http://example.com/login",
     latest_screenshot_url: "/artifacts/executions/12/step-01.png",
+    origin_suite_run: null,
     report: {
       status: "failed",
       steps: [
@@ -81,47 +82,14 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
             failure_reason: "No locator candidates matched target.",
           },
           console_events: [
-            {
-              level: "warning",
-              text: "Console warning 1",
-              source_url: "http://example.com/app.js",
-              line_number: 9,
-            },
-            {
-              level: "warning",
-              text: "Console warning 2",
-              source_url: "http://example.com/app.js",
-              line_number: 10,
-            },
-            {
-              level: "error",
-              text: "Console warning 3",
-              source_url: "http://example.com/app.js",
-              line_number: 11,
-            },
+            { level: "warning", text: "Console warning 1", source_url: "http://example.com/app.js", line_number: 9 },
+            { level: "warning", text: "Console warning 2", source_url: "http://example.com/app.js", line_number: 10 },
+            { level: "error", text: "Console warning 3", source_url: "http://example.com/app.js", line_number: 11 },
           ],
           network_events: [
-            {
-              url: "http://example.com/api/login-1",
-              method: "POST",
-              status: 500,
-              resource_type: "xhr",
-              failure_text: null,
-            },
-            {
-              url: "http://example.com/api/login-2",
-              method: "POST",
-              status: 500,
-              resource_type: "xhr",
-              failure_text: null,
-            },
-            {
-              url: "http://example.com/api/login-3",
-              method: "POST",
-              status: 500,
-              resource_type: "xhr",
-              failure_text: null,
-            },
+            { url: "http://example.com/api/login-1", method: "POST", status: 500, resource_type: "xhr", failure_text: null },
+            { url: "http://example.com/api/login-2", method: "POST", status: 500, resource_type: "xhr", failure_text: null },
+            { url: "http://example.com/api/login-3", method: "POST", status: 500, resource_type: "xhr", failure_text: null },
           ],
           url: "http://example.com/login",
           screenshot_url: "/artifacts/executions/12/step-01.png",
@@ -155,10 +123,7 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
   const screenshot = screen.getByRole("img", { name: "step-1" });
   expect(screenshot).toHaveAttribute("src", "/artifacts/executions/12/step-01.png");
   expect(screenshot).toHaveClass("step-screenshot-image");
-  expect(screen.getByRole("link", { name: "打开原图" })).toHaveAttribute(
-    "href",
-    "/artifacts/executions/12/step-01.png",
-  );
+  expect(screen.getByRole("link", { name: "打开原图" })).toHaveAttribute("href", "/artifacts/executions/12/step-01.png");
 
   const runtimeCard = screen.getByText("运行信息").closest(".ant-card");
   expect(runtimeCard).not.toBeNull();
@@ -170,7 +135,7 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
   expect(await screen.findByText(/api\/login-3/)).toBeInTheDocument();
 
   expect(screen.queryByRole("img", { name: "step-2" })).not.toBeInTheDocument();
-  await userEvent.click(screen.getAllByText("Step 2 · assert_url_contains")[1]);
+  await userEvent.click(screen.getAllByText("Step 2 / assert_url_contains")[1]);
   await waitFor(() => {
     expect(screen.getByRole("img", { name: "step-2" })).toBeInTheDocument();
   });
@@ -194,6 +159,7 @@ test("缺少用例 Base URL 的执行会显示修复提示", async () => {
     failure_step_action: "goto",
     latest_url: null,
     latest_screenshot_url: null,
+    origin_suite_run: null,
     report: {
       status: "failed",
       steps: [
@@ -219,7 +185,7 @@ test("缺少用例 Base URL 的执行会显示修复提示", async () => {
   expect(screen.getByRole("link", { name: "返回用例" })).toHaveAttribute("href", "/cases/8/edit");
 });
 
-test("执行详情页优先返回带筛选条件的执行中心来源链接", async () => {
+test("执行详情页优先显示返回 Suite 批次链接", async () => {
   vi.mocked(api.getExecutionDetail).mockResolvedValue({
     id: 21,
     case_id: 5,
@@ -237,6 +203,11 @@ test("执行详情页优先返回带筛选条件的执行中心来源链接", as
     failure_step_action: "click",
     latest_url: null,
     latest_screenshot_url: null,
+    origin_suite_run: {
+      suite_id: 3,
+      suite_name: "订单套件",
+      suite_run_id: 14,
+    },
     report: {
       status: "failed",
       steps: [
@@ -264,8 +235,6 @@ test("执行详情页优先返回带筛选条件的执行中心来源链接", as
   });
 
   expect(await screen.findByRole("heading", { name: "来源回流用例" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "返回执行中心" })).toHaveAttribute(
-    "href",
-    "/executions?window_days=7&status=failed&case_id=5",
-  );
+  expect(screen.getByRole("link", { name: "返回 Suite 批次" })).toHaveAttribute("href", "/suites/3/runs/14");
+  expect(screen.getByRole("link", { name: "订单套件 / #14" })).toHaveAttribute("href", "/suites/3/runs/14");
 });

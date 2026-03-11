@@ -20,12 +20,7 @@ import { Link, useLocation, useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getExecutionDetail } from "../services/api";
-import type {
-  ConsoleEvent,
-  ExecutionStatus,
-  NetworkEvent,
-  StepExecutionEvidence,
-} from "../types/api";
+import type { ConsoleEvent, ExecutionStatus, NetworkEvent, StepExecutionEvidence } from "../types/api";
 
 const DEFAULT_EVENT_PREVIEW_COUNT = 2;
 const DEFAULT_EXECUTIONS_PATH = "/executions";
@@ -113,7 +108,7 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
                 <Descriptions.Item label="页面标题">{step.page_title || "-"}</Descriptions.Item>
                 <Descriptions.Item label="耗时">{step.duration_ms ?? "-"} ms</Descriptions.Item>
                 <Descriptions.Item label="视口">
-                  {step.viewport ? `${step.viewport.width} × ${step.viewport.height}` : "-"}
+                  {step.viewport ? `${step.viewport.width} x ${step.viewport.height}` : "-"}
                 </Descriptions.Item>
                 <Descriptions.Item label="DOM 摘要">
                   {step.dom_summary ? (
@@ -139,8 +134,7 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
                     />
                   </div>
                   <Typography.Text type="secondary">
-                    截图按固定展示框缩放，避免与其他证据面板重叠。
-                    {" "}
+                    截图按固定展示框缩放，避免与其他证据面板重叠。{" "}
                     <a href={step.screenshot_url} target="_blank" rel="noreferrer">
                       打开原图
                     </a>
@@ -168,7 +162,7 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
                 </Descriptions.Item>
                 <Descriptions.Item label="最终命中">
                   {locatorTrace?.selected_candidate
-                    ? `${locatorTrace.selected_candidate.strategy} · ${
+                    ? `${locatorTrace.selected_candidate.strategy} / ${
                         locatorTrace.selected_candidate.preview_text || locatorTrace.selected_candidate.role || "-"
                       }`
                     : "-"}
@@ -185,7 +179,7 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
                     <List.Item>
                       <Space direction="vertical" size={0}>
                         <Typography.Text>
-                          #{index + 1} {candidate.strategy} · {candidate.preview_text || candidate.role || "-"} ·
+                          #{index + 1} {candidate.strategy} / {candidate.preview_text || candidate.role || "-"} /
                           score={candidate.score}
                         </Typography.Text>
                         <Typography.Text type="secondary">
@@ -218,7 +212,7 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
                 renderItem={(event) => (
                   <Space direction="vertical" size={0}>
                     <Typography.Text>
-                      {event.level} · {event.text}
+                      {event.level} / {event.text}
                     </Typography.Text>
                     <Typography.Text type="secondary">
                       {event.source_url || "-"} {event.line_number ?? ""}
@@ -270,10 +264,6 @@ export function ExecutionDetailPage() {
     [query.data?.report?.steps],
   );
   const [activeKeys, setActiveKeys] = useState<string[]>([]);
-  const backToExecutions =
-    typeof state?.fromExecutions === "string" && state.fromExecutions
-      ? state.fromExecutions
-      : DEFAULT_EXECUTIONS_PATH;
 
   useEffect(() => {
     setActiveKeys(failedStepKeys);
@@ -301,6 +291,13 @@ export function ExecutionDetailPage() {
 
   const detail = query.data;
   const steps = detail.report?.steps ?? [];
+  const suiteBackTarget = detail.origin_suite_run
+    ? `/suites/${detail.origin_suite_run.suite_id}/runs/${detail.origin_suite_run.suite_run_id}`
+    : null;
+  const backHref =
+    suiteBackTarget ||
+    (typeof state?.fromExecutions === "string" && state.fromExecutions ? state.fromExecutions : DEFAULT_EXECUTIONS_PATH);
+  const backLabel = suiteBackTarget ? "返回 Suite 批次" : "返回执行中心";
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -312,7 +309,7 @@ export function ExecutionDetailPage() {
           </div>
           <Space wrap>
             <Button>
-              <Link to={backToExecutions}>返回执行中心</Link>
+              <Link to={backHref}>{backLabel}</Link>
             </Button>
             <Button>
               <Link to={`/cases/${detail.case_id}/edit`}>返回用例</Link>
@@ -349,9 +346,7 @@ export function ExecutionDetailPage() {
         <Descriptions bordered column={2}>
           <Descriptions.Item label="用例名称">{detail.case_name}</Descriptions.Item>
           <Descriptions.Item label="项目 ID">{detail.project_id}</Descriptions.Item>
-          <Descriptions.Item label="开始时间">
-            {new Date(detail.started_at).toLocaleString()}
-          </Descriptions.Item>
+          <Descriptions.Item label="开始时间">{new Date(detail.started_at).toLocaleString()}</Descriptions.Item>
           <Descriptions.Item label="结束时间">
             {detail.finished_at ? new Date(detail.finished_at).toLocaleString() : "-"}
           </Descriptions.Item>
@@ -360,6 +355,15 @@ export function ExecutionDetailPage() {
             {detail.failed_step_index === null || detail.failed_step_index === undefined
               ? "-"
               : `Step ${detail.failed_step_index + 1}`}
+          </Descriptions.Item>
+          <Descriptions.Item label="来源批次" span={2}>
+            {detail.origin_suite_run ? (
+              <Link to={`/suites/${detail.origin_suite_run.suite_id}/runs/${detail.origin_suite_run.suite_run_id}`}>
+                {detail.origin_suite_run.suite_name} / #{detail.origin_suite_run.suite_run_id}
+              </Link>
+            ) : (
+              "-"
+            )}
           </Descriptions.Item>
           <Descriptions.Item label="错误摘要" span={2}>
             {detail.error_message || "-"}
@@ -373,7 +377,7 @@ export function ExecutionDetailPage() {
             <Timeline
               items={steps.map((step) => ({
                 color: step.status === "passed" ? "green" : "red",
-                children: `Step ${step.step_index + 1} · ${step.action}`,
+                children: `Step ${step.step_index + 1} / ${step.action}`,
               }))}
             />
             <Collapse
@@ -383,7 +387,7 @@ export function ExecutionDetailPage() {
                 key: String(step.step_index),
                 label: (
                   <Space>
-                    <Typography.Text strong>{`Step ${step.step_index + 1} · ${step.action}`}</Typography.Text>
+                    <Typography.Text strong>{`Step ${step.step_index + 1} / ${step.action}`}</Typography.Text>
                     {renderStatus(step.status)}
                   </Space>
                 ),

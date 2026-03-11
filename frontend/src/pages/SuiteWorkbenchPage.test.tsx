@@ -1,5 +1,5 @@
 import { Route } from "react-router-dom";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -13,6 +13,7 @@ vi.mock("../services/api", async () => {
     ...actual,
     getCases: vi.fn(),
     getSuiteDetail: vi.fn(),
+    getSuiteRuns: vi.fn(),
     createSuite: vi.fn(),
     updateSuite: vi.fn(),
     executeSuite: vi.fn(),
@@ -54,6 +55,7 @@ test("suite 工作台支持创建、排序并保存", async () => {
     updated_by: 1,
     created_at: "2026-03-11T20:00:00",
     updated_at: "2026-03-11T20:00:00",
+    latest_run: null,
     cases: [
       { case_id: 2, case_name: "退出用例", order_index: 1 },
       { case_id: 1, case_name: "登录用例", order_index: 2 },
@@ -71,8 +73,7 @@ test("suite 工作台支持创建、排序并保存", async () => {
   await userEvent.click(screen.getAllByRole("button", { name: "加入 Suite" })[0]);
   await userEvent.click(screen.getAllByRole("button", { name: "加入 Suite" })[0]);
 
-  const selectedCards = screen.getAllByText(/Case \d/);
-  expect(selectedCards).toHaveLength(2);
+  expect(screen.getAllByText(/Case \d/)).toHaveLength(2);
   await userEvent.click(screen.getAllByRole("button", { name: /上\s*移/ })[1]);
   await userEvent.click(screen.getByRole("button", { name: /保\s*存/ }));
 
@@ -88,7 +89,7 @@ test("suite 工作台支持创建、排序并保存", async () => {
   expect(await screen.findByText("suite-edit-view")).toBeInTheDocument();
 });
 
-test("suite 工作台支持编辑并执行 suite", async () => {
+test("suite 工作台展示最近批次并在执行后跳转详情页", async () => {
   vi.mocked(api.getCases).mockResolvedValue([
     {
       id: 1,
@@ -112,34 +113,72 @@ test("suite 工作台支持编辑并执行 suite", async () => {
     updated_by: 1,
     created_at: "2026-03-11T20:00:00",
     updated_at: "2026-03-11T20:00:00",
+    latest_run: {
+      id: 30,
+      suite_id: 3,
+      suite_name: "已有 Suite",
+      triggered_by: 1,
+      source: "manual",
+      source_suite_run_id: null,
+      status: "passed",
+      total_cases: 1,
+      passed_cases: 1,
+      failed_cases: 0,
+      base_url_override: null,
+      started_at: "2026-03-11T20:05:00",
+      finished_at: "2026-03-11T20:05:01",
+    },
     cases: [{ case_id: 1, case_name: "登录用例", order_index: 1 }],
   });
+  vi.mocked(api.getSuiteRuns).mockResolvedValue([
+    {
+      id: 30,
+      suite_id: 3,
+      suite_name: "已有 Suite",
+      triggered_by: 1,
+      source: "manual",
+      source_suite_run_id: null,
+      status: "passed",
+      total_cases: 1,
+      passed_cases: 1,
+      failed_cases: 0,
+      base_url_override: null,
+      started_at: "2026-03-11T20:05:00",
+      finished_at: "2026-03-11T20:05:01",
+    },
+  ]);
   vi.mocked(api.executeSuite).mockResolvedValue({
+    id: 31,
     suite_id: 3,
     suite_name: "已有 Suite",
-    started_at: "2026-03-11T20:05:00",
-    finished_at: "2026-03-11T20:05:01",
+    triggered_by: 1,
+    source: "manual",
+    source_suite_run_id: null,
+    started_at: "2026-03-11T20:10:00",
+    finished_at: "2026-03-11T20:10:01",
     total_cases: 1,
     passed_cases: 1,
     failed_cases: 0,
+    base_url_override: null,
     status: "passed",
+    items: [{ id: 91, execution_id: 31, case_id: 1, case_name_snapshot: "登录用例", order_index: 1, status: "passed" }],
     executions: [{ execution_id: 31, case_id: 1, case_name: "登录用例", status: "passed" }],
   });
 
   renderWithProviders(<SuiteWorkbenchPage />, {
     route: "/suites/3/edit",
     path: "/suites/:suiteId/edit",
-    extraRoutes: [
-      <Route key="execution-detail" path="/executions/:executionId" element={<div>execution-detail</div>} />,
-    ],
+    extraRoutes: [<Route key="suite-run-detail" path="/suites/:suiteId/runs/:runId" element={<div>suite-run-detail</div>} />],
   });
 
   expect(await screen.findByDisplayValue("已有 Suite")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: /执\s*行 Suite/ }));
+  expect(screen.getByText("最近批次")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "查看详情" })).toHaveAttribute("href", "/suites/3/runs/30");
+
+  await userEvent.click(screen.getByRole("button", { name: /执\s*行\s*Suite/ }));
 
   await waitFor(() => {
     expect(api.executeSuite).toHaveBeenCalledWith(3, { actor_user_id: 1 });
   });
-  expect(await screen.findByText("最近一次执行：已有 Suite")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "登录用例 (passed)" })).toHaveAttribute("href", "/executions/31");
+  expect(await screen.findByText("suite-run-detail")).toBeInTheDocument();
 });

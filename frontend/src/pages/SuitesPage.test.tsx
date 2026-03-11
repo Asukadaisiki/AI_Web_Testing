@@ -16,7 +16,7 @@ vi.mock("../services/api", async () => {
   };
 });
 
-test("渲染 suite 列表并展示执行摘要链接", async () => {
+test("渲染 suite 列表并展示最近批次入口", async () => {
   vi.mocked(api.getSuites).mockResolvedValue([
     {
       id: 1,
@@ -28,17 +28,67 @@ test("渲染 suite 列表并展示执行摘要链接", async () => {
       updated_by: 1,
       created_at: "2026-03-11T20:00:00",
       updated_at: "2026-03-11T20:00:00",
+      latest_run: {
+        id: 7,
+        suite_id: 1,
+        suite_name: "登录回归套件",
+        triggered_by: 1,
+        source: "manual",
+        source_suite_run_id: null,
+        status: "failed",
+        total_cases: 2,
+        passed_cases: 1,
+        failed_cases: 1,
+        base_url_override: null,
+        started_at: "2026-03-11T20:01:00",
+        finished_at: "2026-03-11T20:01:03",
+      },
+    },
+  ]);
+
+  renderWithProviders(<SuitesPage />, {
+    route: "/suites",
+    path: "/suites",
+  });
+
+  expect(await screen.findByText("登录回归套件")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "查看历史" })).toHaveAttribute("href", "/suites/1/runs/7");
+  expect(screen.getByRole("link", { name: "历史" })).toHaveAttribute("href", "/suites/1/runs/7");
+});
+
+test("执行 suite 后跳转到批次详情页", async () => {
+  vi.mocked(api.getSuites).mockResolvedValue([
+    {
+      id: 1,
+      project_id: 1,
+      name: "登录回归套件",
+      description: "包含登录与退出",
+      case_count: 2,
+      created_by: 1,
+      updated_by: 1,
+      created_at: "2026-03-11T20:00:00",
+      updated_at: "2026-03-11T20:00:00",
+      latest_run: null,
     },
   ]);
   vi.mocked(api.executeSuite).mockResolvedValue({
+    id: 11,
     suite_id: 1,
     suite_name: "登录回归套件",
+    triggered_by: 1,
+    source: "manual",
+    source_suite_run_id: null,
     started_at: "2026-03-11T20:01:00",
     finished_at: "2026-03-11T20:01:03",
     total_cases: 2,
     passed_cases: 1,
     failed_cases: 1,
+    base_url_override: null,
     status: "failed",
+    items: [
+      { id: 21, execution_id: 11, case_id: 1, case_name_snapshot: "登录用例", order_index: 1, status: "failed" },
+      { id: 22, execution_id: 12, case_id: 2, case_name_snapshot: "退出用例", order_index: 2, status: "passed" },
+    ],
     executions: [
       { execution_id: 11, case_id: 1, case_name: "登录用例", status: "failed" },
       { execution_id: 12, case_id: 2, case_name: "退出用例", status: "passed" },
@@ -49,19 +99,17 @@ test("渲染 suite 列表并展示执行摘要链接", async () => {
     route: "/suites",
     path: "/suites",
     extraRoutes: [
-      <Route key="execution-detail" path="/executions/:executionId" element={<div>execution-detail</div>} />,
+      <Route key="suite-run-detail" path="/suites/:suiteId/runs/:runId" element={<div>suite-run-detail</div>} />,
     ],
   });
 
-  expect(await screen.findByText("登录回归套件")).toBeInTheDocument();
-  const suiteRow = screen.getByText("登录回归套件").closest("tr");
-  expect(suiteRow).not.toBeNull();
+  const row = (await screen.findByText("登录回归套件")).closest("tr");
+  expect(row).not.toBeNull();
 
-  await userEvent.click(within(suiteRow as HTMLElement).getByRole("button", { name: /执\s*行/ }));
+  await userEvent.click(within(row as HTMLElement).getByRole("button", { name: /执\s*行/ }));
 
   await waitFor(() => {
     expect(api.executeSuite).toHaveBeenCalledWith(1, { actor_user_id: 1 });
   });
-  expect(await screen.findByText("Suite 执行完成：登录回归套件")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "登录用例 (failed)" })).toHaveAttribute("href", "/executions/11");
+  expect(await screen.findByText("suite-run-detail")).toBeInTheDocument();
 });

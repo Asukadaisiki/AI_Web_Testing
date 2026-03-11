@@ -22,6 +22,10 @@ vi.mock("../pages/SuiteWorkbenchPage", () => ({
   SuiteWorkbenchPage: () => <div>Suite Workbench Mock</div>,
 }));
 
+vi.mock("../pages/SuiteRunDetailPage", () => ({
+  SuiteRunDetailPage: () => <div>Suite Run Detail Mock</div>,
+}));
+
 vi.mock("../pages/ExecutionsPage", () => ({
   ExecutionsPage: () => <div>Executions Mock</div>,
 }));
@@ -82,4 +86,10 @@ test("suite 路由激活时菜单选中正确", async () => {
 
   expect(await screen.findByText("Suites Mock")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Suite 管理" }).closest("li")).toHaveClass("ant-menu-item-selected");
+});
+
+test("suite run 详情路由可正常渲染", async () => {
+  renderRouter(["/suites/2/runs/8"]);
+
+  expect(await screen.findByText("Suite Run Detail Mock")).toBeInTheDocument();
 });

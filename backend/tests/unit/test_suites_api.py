@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import app.services.executions as execution_service
-from app.models import Project, TestSuite as SuiteModel
+from app.models import SuiteRun, SuiteRunItem, TestSuite
 from app.schemas.executions import StepExecutionEvidence
 from app.runners import RunnerExecutionError
 
@@ -22,7 +22,7 @@ def _create_case(
             "project_id": project_id,
             "actor_user_id": 1,
             "name": name,
-            "description": f"{name} 描述",
+            "description": f"{name} description",
             "base_url": base_url,
             "steps": steps or [{"action": "goto", "value": "/"}],
         },
@@ -32,16 +32,16 @@ def _create_case(
 
 
 def test_create_get_and_update_suite_success(client) -> None:
-    case_id_1 = _create_case(client, name="登录冒烟")
-    case_id_2 = _create_case(client, name="退出冒烟")
+    case_id_1 = _create_case(client, name="Login Smoke")
+    case_id_2 = _create_case(client, name="Logout Smoke")
 
     create_response = client.post(
         "/api/v1/suites",
         json={
             "project_id": 1,
             "actor_user_id": 1,
-            "name": "基础冒烟套件",
-            "description": "登录与退出",
+            "name": "Basic Smoke Suite",
+            "description": "Login and logout",
             "cases": [{"case_id": case_id_1}, {"case_id": case_id_2}],
         },
     )
@@ -49,62 +49,53 @@ def test_create_get_and_update_suite_success(client) -> None:
     assert create_response.status_code == 201
     assert create_response.headers["Location"] == "/api/v1/suites/1"
     assert create_response.json()["case_count"] == 2
+    assert create_response.json()["latest_run"] is None
     assert create_response.json()["cases"] == [
-        {"case_id": case_id_1, "case_name": "登录冒烟", "order_index": 1},
-        {"case_id": case_id_2, "case_name": "退出冒烟", "order_index": 2},
+        {"case_id": case_id_1, "case_name": "Login Smoke", "order_index": 1},
+        {"case_id": case_id_2, "case_name": "Logout Smoke", "order_index": 2},
     ]
 
     list_response = client.get("/api/v1/suites")
     assert list_response.status_code == 200
-    assert list_response.json() == [
-        {
-            "id": 1,
-            "project_id": 1,
-            "name": "基础冒烟套件",
-            "description": "登录与退出",
-            "case_count": 2,
-            "created_by": 1,
-            "updated_by": 1,
-            "created_at": create_response.json()["created_at"],
-            "updated_at": create_response.json()["updated_at"],
-        }
-    ]
+    assert list_response.json()[0]["latest_run"] is None
 
     get_response = client.get("/api/v1/suites/1")
     assert get_response.status_code == 200
-    assert get_response.json()["cases"][0]["case_name"] == "登录冒烟"
+    assert get_response.json()["cases"][0]["case_name"] == "Login Smoke"
 
     update_response = client.put(
         "/api/v1/suites/1",
         json={
             "project_id": 1,
             "actor_user_id": 1,
-            "name": "回归套件",
-            "description": "顺序反转",
+            "name": "Regression Suite",
+            "description": "Reverse order",
             "cases": [{"case_id": case_id_2}, {"case_id": case_id_1}],
         },
     )
 
     assert update_response.status_code == 200
-    assert update_response.json()["name"] == "回归套件"
+    assert update_response.json()["name"] == "Regression Suite"
     assert update_response.json()["cases"] == [
-        {"case_id": case_id_2, "case_name": "退出冒烟", "order_index": 1},
-        {"case_id": case_id_1, "case_name": "登录冒烟", "order_index": 2},
+        {"case_id": case_id_2, "case_name": "Logout Smoke", "order_index": 1},
+        {"case_id": case_id_1, "case_name": "Login Smoke", "order_index": 2},
     ]
 
 
 def test_create_suite_rejects_duplicate_case_ids_and_cross_project_cases(client, db_session) -> None:
-    case_id = _create_case(client, name="主项目用例")
-    db_session.add(Project(id=2, name="Other Project", description="跨项目"))
+    case_id = _create_case(client, name="Project One Case")
+    from app.models import Project
+
+    db_session.add(Project(id=2, name="Other Project", description="Other"))
     db_session.commit()
-    other_case_id = _create_case(client, name="跨项目用例", project_id=2)
+    other_case_id = _create_case(client, name="Other Project Case", project_id=2)
 
     duplicate_response = client.post(
         "/api/v1/suites",
         json={
             "project_id": 1,
             "actor_user_id": 1,
-            "name": "重复套件",
+            "name": "Duplicate Suite",
             "cases": [{"case_id": case_id}, {"case_id": case_id}],
         },
     )
@@ -116,7 +107,7 @@ def test_create_suite_rejects_duplicate_case_ids_and_cross_project_cases(client,
         json={
             "project_id": 1,
             "actor_user_id": 1,
-            "name": "跨项目套件",
+            "name": "Cross Project Suite",
             "cases": [{"case_id": case_id}, {"case_id": other_case_id}],
         },
     )
@@ -130,7 +121,7 @@ def test_create_suite_requires_at_least_one_case(client) -> None:
         json={
             "project_id": 1,
             "actor_user_id": 1,
-            "name": "空套件",
+            "name": "Empty Suite",
             "cases": [],
         },
     )
@@ -138,15 +129,15 @@ def test_create_suite_requires_at_least_one_case(client) -> None:
     assert response.status_code == 422
 
 
-def test_execute_suite_runs_all_cases_and_returns_aggregate_result(client, monkeypatch) -> None:
-    case_id_1 = _create_case(client, name="步骤一")
-    case_id_2 = _create_case(client, name="步骤二")
+def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client, db_session, monkeypatch) -> None:
+    case_id_1 = _create_case(client, name="Step One")
+    case_id_2 = _create_case(client, name="Step Two")
     suite_response = client.post(
         "/api/v1/suites",
         json={
             "project_id": 1,
             "actor_user_id": 1,
-            "name": "顺序执行套件",
+            "name": "Ordered Suite",
             "cases": [{"case_id": case_id_1}, {"case_id": case_id_2}],
         },
     )
@@ -174,50 +165,169 @@ def test_execute_suite_runs_all_cases_and_returns_aggregate_result(client, monke
     )
 
     assert response.status_code == 200
-    assert call_sequence == ["步骤一", "步骤二"]
-    assert response.json()["suite_id"] == 1
-    assert response.json()["suite_name"] == "顺序执行套件"
-    assert response.json()["total_cases"] == 2
-    assert response.json()["passed_cases"] == 2
-    assert response.json()["failed_cases"] == 0
-    assert response.json()["status"] == "passed"
-    assert response.json()["executions"] == [
-        {"execution_id": 1, "case_id": case_id_1, "case_name": "步骤一", "status": "passed"},
-        {"execution_id": 2, "case_id": case_id_2, "case_name": "步骤二", "status": "passed"},
+    payload = response.json()
+    assert call_sequence == ["Step One", "Step Two"]
+    assert payload["id"] == 1
+    assert payload["suite_id"] == 1
+    assert payload["suite_name"] == "Ordered Suite"
+    assert payload["source"] == "manual"
+    assert payload["source_suite_run_id"] is None
+    assert payload["total_cases"] == 2
+    assert payload["passed_cases"] == 2
+    assert payload["failed_cases"] == 0
+    assert payload["status"] == "passed"
+    assert payload["base_url_override"] == "https://override.example.com"
+    assert payload["items"] == [
+        {
+            "id": 1,
+            "case_id": case_id_1,
+            "case_name_snapshot": "Step One",
+            "order_index": 1,
+            "execution_id": 1,
+            "status": "passed",
+        },
+        {
+            "id": 2,
+            "case_id": case_id_2,
+            "case_name_snapshot": "Step Two",
+            "order_index": 2,
+            "execution_id": 2,
+            "status": "passed",
+        },
+    ]
+    assert payload["executions"] == [
+        {"execution_id": 1, "case_id": case_id_1, "case_name": "Step One", "status": "passed"},
+        {"execution_id": 2, "case_id": case_id_2, "case_name": "Step Two", "status": "passed"},
     ]
 
+    stored_runs = db_session.query(SuiteRun).order_by(SuiteRun.id.asc()).all()
+    assert len(stored_runs) == 1
+    assert stored_runs[0].status == "passed"
+    assert stored_runs[0].base_url_override == "https://override.example.com"
 
-def test_execute_suite_continues_after_failure_and_rejects_empty_seeded_suite(client, db_session, monkeypatch) -> None:
-    case_id_1 = _create_case(client, name="先失败")
-    case_id_2 = _create_case(client, name="后通过")
+    stored_items = db_session.query(SuiteRunItem).order_by(SuiteRunItem.id.asc()).all()
+    assert len(stored_items) == 2
+    assert [item.execution_id for item in stored_items] == [1, 2]
+
+    list_runs_response = client.get("/api/v1/suites/1/runs")
+    assert list_runs_response.status_code == 200
+    assert list_runs_response.json()[0]["id"] == 1
+    assert list_runs_response.json()[0]["status"] == "passed"
+
+    get_run_response = client.get("/api/v1/suites/1/runs/1")
+    assert get_run_response.status_code == 200
+    assert get_run_response.json()["items"][0]["execution_id"] == 1
+
+    suites_response = client.get("/api/v1/suites")
+    assert suites_response.status_code == 200
+    assert suites_response.json()[0]["latest_run"]["id"] == 1
+
+    execution_response = client.get("/api/v1/executions/1")
+    assert execution_response.status_code == 200
+    assert execution_response.json()["origin_suite_run"] == {
+        "suite_id": 1,
+        "suite_name": "Ordered Suite",
+        "suite_run_id": 1,
+    }
+
+
+def test_rerun_failed_suite_run_only_reruns_failed_items(client, monkeypatch) -> None:
+    case_id_1 = _create_case(client, name="First Fails")
+    case_id_2 = _create_case(client, name="Second Passes")
     suite_response = client.post(
         "/api/v1/suites",
         json={
             "project_id": 1,
             "actor_user_id": 1,
-            "name": "继续执行套件",
+            "name": "Rerun Suite",
             "cases": [{"case_id": case_id_1}, {"case_id": case_id_2}],
         },
     )
     assert suite_response.status_code == 201
 
     call_sequence: list[str] = []
+    case_one_attempt = {"count": 0}
 
     def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
         call_sequence.append(case.name)
-        if case.name == "先失败":
-            raise RunnerExecutionError(
-                "runner boom",
-                step_results=[
-                    StepExecutionEvidence(
-                        step_index=0,
-                        action="click",
-                        target="提交按钮",
-                        status="failed",
-                        error_message="runner boom",
-                    )
-                ],
+        if case.name == "First Fails":
+            case_one_attempt["count"] += 1
+            if case_one_attempt["count"] == 1:
+                raise RunnerExecutionError(
+                    "runner boom",
+                    step_results=[
+                        StepExecutionEvidence(
+                            step_index=0,
+                            action="click",
+                            target="Submit",
+                            status="failed",
+                            error_message="runner boom",
+                        )
+                    ],
+                )
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="goto",
+                value="/",
+                status="passed",
             )
+        ]
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    initial_response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+    assert initial_response.status_code == 200
+    assert initial_response.json()["status"] == "failed"
+    assert initial_response.json()["failed_cases"] == 1
+
+    rerun_response = client.post("/api/v1/suites/1/runs/1/rerun-failed", json={"actor_user_id": 1})
+    assert rerun_response.status_code == 200
+    rerun_payload = rerun_response.json()
+    assert call_sequence == ["First Fails", "Second Passes", "First Fails"]
+    assert rerun_payload["id"] == 2
+    assert rerun_payload["source"] == "rerun_failed"
+    assert rerun_payload["source_suite_run_id"] == 1
+    assert rerun_payload["total_cases"] == 1
+    assert rerun_payload["passed_cases"] == 1
+    assert rerun_payload["failed_cases"] == 0
+    assert rerun_payload["items"] == [
+        {
+            "id": 3,
+            "case_id": case_id_1,
+            "case_name_snapshot": "First Fails",
+            "order_index": 1,
+            "execution_id": 3,
+            "status": "passed",
+        }
+    ]
+    assert rerun_payload["executions"] == [
+        {"execution_id": 3, "case_id": case_id_1, "case_name": "First Fails", "status": "passed"}
+    ]
+
+    list_runs_response = client.get("/api/v1/suites/1/runs")
+    assert list_runs_response.status_code == 200
+    assert [item["id"] for item in list_runs_response.json()] == [2, 1]
+
+    rerun_detail_response = client.get("/api/v1/suites/1/runs/2")
+    assert rerun_detail_response.status_code == 200
+    assert rerun_detail_response.json()["source_suite_run_id"] == 1
+
+
+def test_rerun_failed_suite_run_rejects_run_without_failures(client, monkeypatch) -> None:
+    case_id = _create_case(client, name="Always Passes")
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Passing Suite",
+            "cases": [{"case_id": case_id}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
         return [
             StepExecutionEvidence(
                 step_index=0,
@@ -230,19 +340,17 @@ def test_execute_suite_continues_after_failure_and_rejects_empty_seeded_suite(cl
     monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
 
     execute_response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
-
     assert execute_response.status_code == 200
-    assert call_sequence == ["先失败", "后通过"]
-    assert execute_response.json()["passed_cases"] == 1
-    assert execute_response.json()["failed_cases"] == 1
-    assert execute_response.json()["status"] == "failed"
-    assert execute_response.json()["executions"] == [
-        {"execution_id": 1, "case_id": case_id_1, "case_name": "先失败", "status": "failed"},
-        {"execution_id": 2, "case_id": case_id_2, "case_name": "后通过", "status": "passed"},
-    ]
 
-    db_session.add(SuiteModel(id=2, project_id=1, created_by=1, updated_by=1, name="空白套件"))
+    rerun_response = client.post("/api/v1/suites/1/runs/1/rerun-failed", json={"actor_user_id": 1})
+    assert rerun_response.status_code == 422
+    assert rerun_response.json() == {"detail": "Suite run does not contain failed cases to rerun."}
+
+
+def test_execute_suite_rejects_empty_seeded_suite(client, db_session) -> None:
+    db_session.add(TestSuite(id=2, project_id=1, created_by=1, updated_by=1, name="Empty Suite"))
     db_session.commit()
-    empty_response = client.post("/api/v1/suites/2/execute", json={"actor_user_id": 1})
-    assert empty_response.status_code == 422
-    assert empty_response.json() == {"detail": "Suite must contain at least one case before execution."}
+
+    response = client.post("/api/v1/suites/2/execute", json={"actor_user_id": 1})
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Suite must contain at least one case before execution."}

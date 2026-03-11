@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Empty, Form, Input, InputNumber, Space, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Empty, Form, Input, InputNumber, List, Space, Tag, Typography, message } from "antd";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
@@ -9,13 +9,14 @@ import {
   executeSuite,
   getCases,
   getSuiteDetail,
+  getSuiteRuns,
   updateSuite,
 } from "../services/api";
 import type {
   StoredCaseSummary,
   StoredSuiteCase,
   StoredSuiteDetail,
-  SuiteExecutionResult,
+  StoredSuiteRunSummary,
   SuiteMutationPayload,
 } from "../types/api";
 
@@ -36,30 +37,6 @@ const DEFAULT_FORM_VALUES: SuiteWorkbenchFormValues = {
   project_id: 1,
 };
 
-function SuiteExecutionSummary({ result }: { result: SuiteExecutionResult }) {
-  return (
-    <Alert
-      type={result.status === "passed" ? "success" : "warning"}
-      showIcon
-      message={`最近一次执行：${result.suite_name}`}
-      description={
-        <Space direction="vertical" size="small" style={{ width: "100%" }}>
-          <Typography.Text>
-            共 {result.total_cases} 条，用例通过 {result.passed_cases} 条，失败 {result.failed_cases} 条。
-          </Typography.Text>
-          <Space wrap>
-            {result.executions.map((item) => (
-              <Link key={item.execution_id} to={`/executions/${item.execution_id}`}>
-                {item.case_name} ({item.status})
-              </Link>
-            ))}
-          </Space>
-        </Space>
-      }
-    />
-  );
-}
-
 function toSelectedCases(storedSuiteCases: StoredSuiteCase[]): SelectedSuiteCase[] {
   return storedSuiteCases.map((item) => ({
     case_id: item.case_id,
@@ -77,18 +54,75 @@ function buildPayload(values: SuiteWorkbenchFormValues, selectedCases: SelectedS
   };
 }
 
+function formatTime(value?: string | null) {
+  return value ? new Date(value).toLocaleString() : "-";
+}
+
+function renderStatus(status: "running" | "passed" | "failed") {
+  const color = {
+    running: "processing",
+    passed: "success",
+    failed: "error",
+  }[status];
+  const label = {
+    running: "运行中",
+    passed: "通过",
+    failed: "失败",
+  }[status];
+  return <Tag color={color}>{label}</Tag>;
+}
+
+function RecentRuns({ suiteId, runs }: { suiteId: number; runs: StoredSuiteRunSummary[] }) {
+  return (
+    <Card title="最近批次">
+      {runs.length ? (
+        <List
+          dataSource={runs.slice(0, 5)}
+          renderItem={(item) => (
+            <List.Item
+              actions={[
+                <Link key="detail" to={`/suites/${suiteId}/runs/${item.id}`}>
+                  查看详情
+                </Link>,
+              ]}
+            >
+              <Space direction="vertical" size={2}>
+                <Space size="small">
+                  <Typography.Text strong>#{item.id}</Typography.Text>
+                  {renderStatus(item.status)}
+                </Space>
+                <Typography.Text type="secondary">
+                  {formatTime(item.started_at)} / {item.passed_cases} 通过 / {item.failed_cases} 失败
+                </Typography.Text>
+              </Space>
+            </List.Item>
+          )}
+        />
+      ) : (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有执行过该 Suite" />
+      )}
+    </Card>
+  );
+}
+
 export function SuiteWorkbenchPage() {
   const { suiteId } = useParams<{ suiteId: string }>();
   const isEditMode = Boolean(suiteId);
+  const numericSuiteId = Number(suiteId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [form] = Form.useForm<SuiteWorkbenchFormValues>();
   const [messageApi, contextHolder] = message.useMessage();
   const [selectedCases, setSelectedCases] = useState<SelectedSuiteCase[]>([]);
-  const [latestExecution, setLatestExecution] = useState<SuiteExecutionResult | null>(null);
+
   const suiteQuery = useQuery({
     queryKey: ["suite-detail", suiteId],
     queryFn: () => getSuiteDetail(Number(suiteId)),
+    enabled: isEditMode,
+  });
+  const suiteRunsQuery = useQuery({
+    queryKey: ["suite-runs", suiteId],
+    queryFn: () => getSuiteRuns(Number(suiteId)),
     enabled: isEditMode,
   });
   const casesQuery = useQuery({
@@ -118,8 +152,8 @@ export function SuiteWorkbenchPage() {
       const payload = buildPayload(values, selectedCases);
       return isEditMode ? updateSuite(Number(suiteId), payload) : createSuite(payload);
     },
-    onSuccess: (suite) => {
-      void Promise.all([
+    onSuccess: async (suite) => {
+      await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["suites"] }),
         queryClient.invalidateQueries({ queryKey: ["suite-detail", String(suite.id)] }),
       ]);
@@ -132,23 +166,31 @@ export function SuiteWorkbenchPage() {
   });
 
   const executionMutation = useMutation({
-    mutationFn: () => executeSuite(Number(suiteId), { actor_user_id: 1 }),
-    onSuccess: (result) => {
-      setLatestExecution(result);
-      void queryClient.invalidateQueries({ queryKey: ["executions"] });
+    mutationFn: () => executeSuite(numericSuiteId, { actor_user_id: 1 }),
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["suites"] }),
+        queryClient.invalidateQueries({ queryKey: ["suite-runs", String(numericSuiteId)] }),
+        queryClient.invalidateQueries({ queryKey: ["executions"] }),
+      ]);
       void messageApi.success("Suite 执行完成。");
+      void navigate(`/suites/${numericSuiteId}/runs/${result.id}`);
     },
     onError: (error: Error) => {
       void messageApi.error(error.message);
     },
   });
 
-  if (suiteQuery.isLoading || casesQuery.isLoading) {
+  if (suiteQuery.isLoading || casesQuery.isLoading || suiteRunsQuery.isLoading) {
     return <LoadingBlock />;
   }
 
   if (suiteQuery.isError) {
     return <ErrorBlock message={suiteQuery.error.message} />;
+  }
+
+  if (suiteRunsQuery.isError) {
+    return <ErrorBlock message={suiteRunsQuery.error.message} />;
   }
 
   if (casesQuery.isError) {
@@ -187,7 +229,7 @@ export function SuiteWorkbenchPage() {
         <Space align="start" style={{ justifyContent: "space-between", width: "100%" }} wrap>
           <div>
             <h1 className="page-title">{isEditMode ? "Suite 工作台" : "新建 Suite"}</h1>
-            <p className="page-subtitle">选择已有用例，维护顺序，并复用现有执行链路进行批量运行。</p>
+            <p className="page-subtitle">选择已有用例、维护顺序，并基于真实批次记录查看历史结果。</p>
           </div>
           <Space wrap>
             <Button onClick={() => navigate("/suites")}>返回 Suite 列表</Button>
@@ -208,7 +250,7 @@ export function SuiteWorkbenchPage() {
         </Space>
       </div>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
-        {latestExecution ? <SuiteExecutionSummary result={latestExecution} /> : null}
+        {isEditMode && suiteRunsQuery.data ? <RecentRuns suiteId={numericSuiteId} runs={suiteRunsQuery.data} /> : null}
 
         <Card>
           <Form form={form} layout="vertical" initialValues={DEFAULT_FORM_VALUES}>
@@ -234,10 +276,7 @@ export function SuiteWorkbenchPage() {
           <Card className="suite-case-card" title="可选用例">
             <Space direction="vertical" size="middle" style={{ width: "100%" }}>
               {allCases.length === 0 ? (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="当前还没有可加入的 Case"
-                />
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前还没有可加入的 Case" />
               ) : (
                 allCases.map((record) => (
                   <Card key={record.id} size="small">
@@ -273,7 +312,7 @@ export function SuiteWorkbenchPage() {
                       <div>
                         <Typography.Text strong>{item.case_name}</Typography.Text>
                         <div>
-                          <Typography.Text type="secondary">Case ID：{item.case_id}</Typography.Text>
+                          <Typography.Text type="secondary">Case ID: {item.case_id}</Typography.Text>
                         </div>
                       </div>
                       <Space wrap>

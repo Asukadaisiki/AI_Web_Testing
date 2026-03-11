@@ -10,6 +10,8 @@ import type {
   StoredCaseExecutionSummary,
   StoredCaseSummary,
   StoredSuiteDetail,
+  StoredSuiteRunDetail,
+  StoredSuiteRunSummary,
   StoredSuiteSummary,
   SuiteExecutionRequest,
   SuiteExecutionResult,
@@ -82,6 +84,21 @@ export function updateSuite(suiteId: number, payload: SuiteMutationPayload) {
 
 export function executeSuite(suiteId: number, payload: SuiteExecutionRequest) {
   return request<SuiteExecutionResult>(`/api/v1/suites/${suiteId}/execute`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getSuiteRuns(suiteId: number) {
+  return request<StoredSuiteRunSummary[]>(`/api/v1/suites/${suiteId}/runs`);
+}
+
+export function getSuiteRunDetail(suiteId: number, runId: number) {
+  return request<StoredSuiteRunDetail>(`/api/v1/suites/${suiteId}/runs/${runId}`);
+}
+
+export function rerunFailedSuiteRun(suiteId: number, runId: number, payload: SuiteExecutionRequest) {
+  return request<SuiteExecutionResult>(`/api/v1/suites/${suiteId}/runs/${runId}/rerun-failed`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

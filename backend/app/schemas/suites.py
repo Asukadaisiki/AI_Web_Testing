@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field
 
 from app.schemas.dsl import DSLModel
 from app.schemas.executions import ExecutionStatus
+
+
+SuiteRunSource = Literal["manual", "rerun_failed"]
 
 
 class SuiteCaseRef(DSLModel):
@@ -32,6 +36,35 @@ class StoredSuiteCase(DSLModel):
     order_index: int
 
 
+class StoredSuiteRunItem(DSLModel):
+    id: int
+    case_id: int
+    case_name_snapshot: str
+    order_index: int
+    execution_id: int
+    status: ExecutionStatus
+
+
+class StoredSuiteRunSummary(DSLModel):
+    id: int
+    suite_id: int
+    suite_name: str
+    triggered_by: int
+    source: SuiteRunSource
+    source_suite_run_id: int | None = None
+    status: ExecutionStatus
+    total_cases: int
+    passed_cases: int
+    failed_cases: int
+    base_url_override: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+
+
+class StoredSuiteRunDetail(StoredSuiteRunSummary):
+    items: list[StoredSuiteRunItem]
+
+
 class StoredSuiteSummary(DSLModel):
     id: int
     project_id: int
@@ -42,6 +75,7 @@ class StoredSuiteSummary(DSLModel):
     updated_by: int
     created_at: datetime
     updated_at: datetime
+    latest_run: StoredSuiteRunSummary | None = None
 
 
 class StoredSuiteDetail(StoredSuiteSummary):
@@ -60,13 +94,5 @@ class SuiteExecutionItem(DSLModel):
     status: ExecutionStatus
 
 
-class SuiteExecutionResult(DSLModel):
-    suite_id: int
-    suite_name: str
-    started_at: datetime
-    finished_at: datetime
-    total_cases: int
-    passed_cases: int
-    failed_cases: int
-    status: ExecutionStatus
-    executions: list[SuiteExecutionItem]
+class SuiteExecutionResult(StoredSuiteRunDetail):
+    executions: list[SuiteExecutionItem] = Field(default_factory=list)
