@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import Field
 
-from app.schemas.dsl import DSLCase, DSLModel, DSLStep
+from app.schemas.dsl import DSLCase, DSLCaseInputContract, DSLCaseOutputContract, DSLModel, DSLStep
 
 
 class CaseCreateRequest(DSLCase):
@@ -25,6 +25,8 @@ class StoredCaseSummary(DSLModel):
     name: str
     description: str | None = None
     base_url: str | None = None
+    input_contract: list[DSLCaseInputContract] = Field(default_factory=list)
+    output_contract: list[DSLCaseOutputContract] = Field(default_factory=list)
     steps: list[DSLStep]
     created_by: int
     updated_by: int

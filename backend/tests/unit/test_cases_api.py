@@ -12,6 +12,21 @@ def test_create_case_success(client) -> None:
             "name": "登录冒烟",
             "description": "验证登录成功后跳转仪表盘",
             "base_url": "https://example.com",
+            "input_contract": [
+                {
+                    "name": "username",
+                    "context_key": "login_username",
+                    "value_type": "string",
+                    "required": True,
+                }
+            ],
+            "output_contract": [
+                {
+                    "name": "sessionToken",
+                    "context_key": "session_token",
+                    "value_type": "string",
+                }
+            ],
             "steps": [
                 {"action": "goto", "value": "/login"},
                 {"action": "input", "target": "用户名输入框", "value": "admin"},
@@ -27,6 +42,23 @@ def test_create_case_success(client) -> None:
     assert response.json()["created_by"] == 1
     assert response.json()["updated_by"] == 1
     assert response.json()["base_url"] == "https://example.com"
+    assert response.json()["input_contract"] == [
+        {
+            "name": "username",
+            "context_key": "login_username",
+            "value_type": "string",
+            "required": True,
+            "description": None,
+        }
+    ]
+    assert response.json()["output_contract"] == [
+        {
+            "name": "sessionToken",
+            "context_key": "session_token",
+            "value_type": "string",
+            "description": None,
+        }
+    ]
     assert response.json()["steps"] == [
         {"action": "goto", "value": "/login"},
         {"action": "input", "target": "用户名输入框", "value": "admin"},
@@ -77,6 +109,8 @@ def test_get_case_detail_returns_case(client) -> None:
     assert response.status_code == 200
     assert response.json()["name"] == "详情用例"
     assert response.json()["base_url"] == "https://detail.example.com"
+    assert response.json()["input_contract"] == []
+    assert response.json()["output_contract"] == []
 
 
 def test_get_case_detail_returns_not_found_for_unknown_case(client) -> None:
@@ -106,6 +140,21 @@ def test_update_case_success(client) -> None:
             "name": "已更新用例",
             "description": "更新后的描述",
             "base_url": "https://after.example.com",
+            "input_contract": [
+                {
+                    "name": "orderId",
+                    "context_key": "order_id",
+                    "value_type": "string",
+                    "required": False,
+                }
+            ],
+            "output_contract": [
+                {
+                    "name": "confirmationCode",
+                    "context_key": "confirmation_code",
+                    "value_type": "string",
+                }
+            ],
             "steps": [
                 {"action": "goto", "value": "/after"},
                 {"action": "assert_url_contains", "value": "/after"},
@@ -117,6 +166,23 @@ def test_update_case_success(client) -> None:
     assert response.json()["name"] == "已更新用例"
     assert response.json()["description"] == "更新后的描述"
     assert response.json()["base_url"] == "https://after.example.com"
+    assert response.json()["input_contract"] == [
+        {
+            "name": "orderId",
+            "context_key": "order_id",
+            "value_type": "string",
+            "required": False,
+            "description": None,
+        }
+    ]
+    assert response.json()["output_contract"] == [
+        {
+            "name": "confirmationCode",
+            "context_key": "confirmation_code",
+            "value_type": "string",
+            "description": None,
+        }
+    ]
     assert response.json()["steps"] == [
         {"action": "goto", "value": "/after"},
         {"action": "assert_url_contains", "value": "/after"},

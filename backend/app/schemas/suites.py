@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
 from app.schemas.dsl import DSLModel
-from app.schemas.executions import ExecutionStatus
+from app.schemas.executions import (
+    ContextVariableReadEvidence,
+    ContextVariableWriteEvidence,
+    ExecutionStatus,
+)
 
 
 SuiteRunSource = Literal["manual", "rerun_failed"]
+SuiteRunContextSource = Literal["empty", "suite_run_snapshot"]
+SuiteRerunContextMode = Literal["not_applicable", "reuse_source_context", "empty_context"]
 
 
 class SuiteCaseRef(DSLModel):
@@ -43,6 +49,9 @@ class StoredSuiteRunItem(DSLModel):
     order_index: int
     execution_id: int
     status: ExecutionStatus
+    context_reads: list[ContextVariableReadEvidence] = Field(default_factory=list)
+    context_writes: list[ContextVariableWriteEvidence] = Field(default_factory=list)
+    context_resolution_error: str | None = None
 
 
 class StoredSuiteRunSummary(DSLModel):
@@ -57,6 +66,10 @@ class StoredSuiteRunSummary(DSLModel):
     passed_cases: int
     failed_cases: int
     base_url_override: str | None = None
+    context_source: SuiteRunContextSource
+    context_source_suite_run_id: int | None = None
+    rerun_context_mode: SuiteRerunContextMode
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime
     finished_at: datetime | None = None
 
@@ -85,6 +98,7 @@ class StoredSuiteDetail(StoredSuiteSummary):
 class SuiteExecutionRequest(DSLModel):
     actor_user_id: int = Field(default=1, ge=1)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    rerun_context_mode: Literal["reuse_source_context", "empty_context"] | None = None
 
 
 class SuiteExecutionItem(DSLModel):

@@ -18,9 +18,12 @@ from app.runners import RunnerExecutionError, execute_case_with_playwright
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
+    ContextVariableReadEvidence,
+    ContextVariableWriteEvidence,
     ExecutionOriginSuiteRun,
     ExecutionAggregateSnapshot,
     ExecutionTrendPoint,
+    ExecutionSuiteContextTrace,
     ExecutionsOverview,
     FailureCategoryCount,
     FailureRootCause,
@@ -392,6 +395,7 @@ def _to_execution_detail(session: Session, record: TestCaseRun, *, case_name: st
         **summary.model_dump(),
         report=report,
         origin_suite_run=_get_origin_suite_run(session, execution_id=record.id),
+        suite_context=_get_suite_context_trace(session, execution_id=record.id),
     )
 
 
@@ -419,6 +423,19 @@ def _normalize_report(report: dict | None):
         return None
     steps = [_with_artifact_url(StepExecutionEvidence.model_validate(step)) for step in report.get("steps", [])]
     return build_execution_report(status=report["status"], steps=steps)
+
+
+def _get_suite_context_trace(session: Session, *, execution_id: int) -> ExecutionSuiteContextTrace | None:
+    statement = select(SuiteRunItem).where(SuiteRunItem.execution_id == execution_id)
+    item = session.scalar(statement)
+    if item is None:
+        return None
+
+    return ExecutionSuiteContextTrace(
+        reads=[ContextVariableReadEvidence.model_validate(entry) for entry in (item.context_reads or [])],
+        writes=[ContextVariableWriteEvidence.model_validate(entry) for entry in (item.context_writes or [])],
+        resolution_error=item.context_resolution_error,
+    )
 
 
 def _with_artifact_url(step: StepExecutionEvidence) -> StepExecutionEvidence:

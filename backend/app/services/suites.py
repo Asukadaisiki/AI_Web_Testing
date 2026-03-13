@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models import Project, SuiteCase, SuiteRun, SuiteRunItem, TestCase, TestSuite, User
+from app.schemas.dsl import DSLCase
+from app.schemas.executions import ContextVariableReadEvidence, ContextVariableWriteEvidence
 from app.schemas.executions import CaseExecutionRequest
 from app.schemas.suites import (
     StoredSuiteCase,
@@ -20,6 +23,7 @@ from app.schemas.suites import (
     SuiteExecutionItem,
     SuiteExecutionRequest,
     SuiteExecutionResult,
+    SuiteRerunContextMode,
     SuiteRunSource,
     SuiteUpdateRequest,
 )
@@ -121,6 +125,10 @@ def execute_suite(session: Session, suite_id: int, payload: SuiteExecutionReques
         payload=payload,
         source="manual",
         source_suite_run_id=None,
+        context_source="empty",
+        context_source_suite_run_id=None,
+        rerun_context_mode="not_applicable",
+        context_snapshot={},
     )
 
 
@@ -145,6 +153,10 @@ def rerun_failed_suite_run(
         raise SuiteValidationError("Suite run does not contain failed cases to rerun.")
 
     suite_cases = _build_suite_cases_from_run_items(session, suite.project_id, failed_items)
+    rerun_context_mode = payload.rerun_context_mode or "reuse_source_context"
+    context_source = "suite_run_snapshot" if rerun_context_mode == "reuse_source_context" else "empty"
+    context_source_suite_run_id = source_run.id if context_source == "suite_run_snapshot" else None
+    context_snapshot = source_run.context_snapshot if context_source == "suite_run_snapshot" else {}
     return _execute_suite_batch(
         session,
         suite=suite,
@@ -152,6 +164,10 @@ def rerun_failed_suite_run(
         payload=payload,
         source="rerun_failed",
         source_suite_run_id=source_run.id,
+        context_source=context_source,
+        context_source_suite_run_id=context_source_suite_run_id,
+        rerun_context_mode=rerun_context_mode,
+        context_snapshot=context_snapshot,
     )
 
 
@@ -163,6 +179,10 @@ def _execute_suite_batch(
     payload: SuiteExecutionRequest,
     source: SuiteRunSource,
     source_suite_run_id: int | None,
+    context_source: str,
+    context_source_suite_run_id: int | None,
+    rerun_context_mode: SuiteRerunContextMode,
+    context_snapshot: dict[str, Any],
 ) -> SuiteExecutionResult:
     started_at = datetime.now(UTC).replace(tzinfo=None)
     run = SuiteRun(
@@ -170,6 +190,10 @@ def _execute_suite_batch(
         triggered_by=payload.actor_user_id,
         source=source,
         source_suite_run_id=source_suite_run_id,
+        context_source=context_source,
+        context_source_suite_run_id=context_source_suite_run_id,
+        rerun_context_mode=rerun_context_mode,
+        context_snapshot=dict(context_snapshot),
         status="running",
         total_cases=len(suite_cases),
         passed_cases=0,
@@ -184,6 +208,7 @@ def _execute_suite_batch(
     passed_cases = 0
     failed_cases = 0
     for suite_case in suite_cases:
+        context_reads, context_writes = _build_context_contract_snapshots(session, case_id=suite_case.case_id)
         execution = execute_case(
             session,
             suite_case.case_id,
@@ -202,6 +227,9 @@ def _execute_suite_batch(
                 order_index=suite_case.order_index,
                 execution_id=execution.id,
                 status=execution.status,
+                context_reads=[item.model_dump(mode="json") for item in context_reads],
+                context_writes=[item.model_dump(mode="json") for item in context_writes],
+                context_resolution_error=None,
             )
         )
         session.commit()
@@ -314,6 +342,15 @@ def _get_stored_suite_run_items(session: Session, run_id: int) -> list[StoredSui
             order_index=item.order_index,
             execution_id=item.execution_id,
             status=item.status,
+            context_reads=[
+                ContextVariableReadEvidence.model_validate(entry)
+                for entry in (item.context_reads or [])
+            ],
+            context_writes=[
+                ContextVariableWriteEvidence.model_validate(entry)
+                for entry in (item.context_writes or [])
+            ],
+            context_resolution_error=item.context_resolution_error,
         )
         for item in _get_suite_run_item_models(session, run_id)
     ]
@@ -388,6 +425,10 @@ def _to_stored_suite_run_summary(*, run: SuiteRun, suite_name: str) -> StoredSui
         passed_cases=run.passed_cases,
         failed_cases=run.failed_cases,
         base_url_override=run.base_url_override,
+        context_source=run.context_source,
+        context_source_suite_run_id=run.context_source_suite_run_id,
+        rerun_context_mode=run.rerun_context_mode,
+        context_snapshot=run.context_snapshot or {},
         started_at=run.started_at,
         finished_at=run.finished_at,
     )
@@ -429,3 +470,37 @@ def _ensure_project_exists(session: Session, project_id: int) -> None:
 def _ensure_user_exists(session: Session, user_id: int) -> None:
     if session.get(User, user_id) is None:
         raise EntityNotFoundError(f"User {user_id} not found.")
+
+
+def _build_context_contract_snapshots(
+    session: Session,
+    *,
+    case_id: int,
+) -> tuple[list[ContextVariableReadEvidence], list[ContextVariableWriteEvidence]]:
+    case = session.get(TestCase, case_id)
+    if case is None:
+        raise EntityNotFoundError(f"Case {case_id} not found.")
+
+    normalized_case = DSLCase.model_validate(case.dsl)
+    reads = [
+        ContextVariableReadEvidence(
+            name=item.name,
+            context_key=item.context_key,
+            value_type=item.value_type,
+            resolved=False,
+            source_suite_run_id=None,
+            error_message=None,
+        )
+        for item in normalized_case.input_contract
+    ]
+    writes = [
+        ContextVariableWriteEvidence(
+            name=item.name,
+            context_key=item.context_key,
+            value_type=item.value_type,
+            status="pending",
+            error_message=None,
+        )
+        for item in normalized_case.output_contract
+    ]
+    return reads, writes

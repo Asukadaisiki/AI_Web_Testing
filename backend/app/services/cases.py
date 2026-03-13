@@ -82,6 +82,8 @@ def _to_stored_case_summary(record: TestCase) -> StoredCaseSummary:
         name=record.name,
         description=record.description,
         base_url=normalized_case.base_url,
+        input_contract=normalized_case.input_contract,
+        output_contract=normalized_case.output_contract,
         steps=normalized_case.steps,
         created_by=record.created_by,
         updated_by=record.updated_by,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
+from typing import Any
+
+from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -36,3 +38,6 @@ class SuiteRunItem(Base):
         nullable=False,
     )
     status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    context_reads: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    context_writes: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    context_resolution_error: Mapped[str | None] = mapped_column(String(2000), nullable=True)

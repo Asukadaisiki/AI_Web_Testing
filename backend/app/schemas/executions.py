@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 from typing import Literal
+from datetime import date, datetime
 
 from pydantic import Field
 
-from app.schemas.dsl import DSLModel
+from app.schemas.dsl import DSLModel, DSLVariableType
 
 
 ExecutionStatus = Literal["running", "passed", "failed"]
@@ -73,6 +73,29 @@ class NetworkEvent(DSLModel):
     failure_text: str | None = None
 
 
+class ContextVariableReadEvidence(DSLModel):
+    name: str
+    context_key: str
+    value_type: DSLVariableType
+    resolved: bool = False
+    source_suite_run_id: int | None = None
+    error_message: str | None = None
+
+
+class ContextVariableWriteEvidence(DSLModel):
+    name: str
+    context_key: str
+    value_type: DSLVariableType
+    status: Literal["pending", "written", "skipped"] = "pending"
+    error_message: str | None = None
+
+
+class ExecutionSuiteContextTrace(DSLModel):
+    reads: list[ContextVariableReadEvidence] = Field(default_factory=list)
+    writes: list[ContextVariableWriteEvidence] = Field(default_factory=list)
+    resolution_error: str | None = None
+
+
 class StepExecutionEvidence(DSLModel):
     step_index: int = Field(ge=0)
     action: str
@@ -126,6 +149,7 @@ class ExecutionOriginSuiteRun(DSLModel):
 class StoredCaseExecutionDetail(StoredCaseExecutionSummary):
     report: ExecutionReport | None = None
     origin_suite_run: ExecutionOriginSuiteRun | None = None
+    suite_context: ExecutionSuiteContextTrace | None = None
 
 
 class FailureCategoryCount(DSLModel):

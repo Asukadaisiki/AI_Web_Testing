@@ -732,3 +732,17 @@
 - 验证：通过 Git 状态、分支和远端检查确认同步目标正确
 - 关联文件：`docs/project-plan.md`、`docs/bug-log.md`、`docs/execution-log.md`
 - 后续：同步完成后，可直接按 `v2.3a` 开始进入 `Suite Context` 的契约与数据层实现
+
+## 2026-03-13 11:45
+
+- 任务：开始执行 `Suite Context 与参数传递 v2.3a`
+- 背景：`docs/project-plan.md` 已将 `v2.3a` 定义为“契约与数据层收口”；本轮目标是先补齐 `DSLCase` 契约、`suite_runs` 上下文字段以及批次/执行返回结构，不提前实现真实变量替换。
+- 执行动作：
+  - 在 `backend/app/schemas/dsl.py` 为 `DSLCase` 增加显式 `input_contract` / `output_contract`，并同步 `cases` API 返回结构
+  - 在 `backend/app/models/suite_run.py`、`backend/app/models/suite_run_item.py` 和 Alembic 迁移中增加 `context_snapshot`、`context_source`、`context_source_suite_run_id`、`rerun_context_mode` 以及 case 级变量读写证据字段
+  - 更新 `backend/app/services/suites.py`、`backend/app/services/executions.py`，让 suite run、suite run item 和 execution detail 返回结构化上下文元数据与变量读写占位证据
+  - 补充并更新后端单元测试，覆盖 DSL 校验、Case API、Suite 执行/重跑返回结构和 ORM 列定义
+- 结果：`v2.3a` 的后端契约、模型、迁移和 API 返回结构已就位；当前已能追踪 suite 批次上下文来源与重跑模式，并为后续 `v2.3b` 的真实变量解析预留稳定数据结构。
+- 验证：执行 `cd backend && uv run --group dev pytest tests/unit`，45 个单元测试全部通过。
+- 关联文件：`backend/app/schemas/dsl.py`、`backend/app/schemas/cases.py`、`backend/app/schemas/executions.py`、`backend/app/schemas/suites.py`、`backend/app/models/suite_run.py`、`backend/app/models/suite_run_item.py`、`backend/app/services/cases.py`、`backend/app/services/executions.py`、`backend/app/services/suites.py`、`backend/alembic/versions/20260313_0004_suite_context_contracts.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/unit/test_cases_api.py`、`backend/tests/unit/test_suites_api.py`、`backend/tests/unit/test_models.py`
+- 后续：下一步进入 `v2.3b` 时，可直接在 `suites.py` 的批次编排层接入变量解析、缺失变量 fail-fast 和输出回写逻辑，无需再改动本轮定义的返回契约。

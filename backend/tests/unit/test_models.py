@@ -69,3 +69,22 @@ def test_suite_run_tables_foreign_keys_are_declared(db_session: Session) -> None
         "test_case_runs",
         "test_cases",
     }
+
+
+def test_suite_context_columns_exist(db_session: Session) -> None:
+    inspector = inspect(db_session.bind)
+
+    suite_run_columns = {column["name"] for column in inspector.get_columns("suite_runs")}
+    assert {
+        "context_source",
+        "context_source_suite_run_id",
+        "rerun_context_mode",
+        "context_snapshot",
+    }.issubset(suite_run_columns)
+
+    suite_run_item_columns = {column["name"] for column in inspector.get_columns("suite_run_items")}
+    assert {
+        "context_reads",
+        "context_writes",
+        "context_resolution_error",
+    }.issubset(suite_run_item_columns)

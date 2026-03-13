@@ -44,6 +44,24 @@ class AssertUrlContainsStep(DSLModel):
     value: str = Field(min_length=1, description="Expected URL fragment.")
 
 
+DSLVariableType = Literal["string", "number", "boolean", "object", "array"]
+
+
+class DSLCaseInputContract(DSLModel):
+    name: str = Field(min_length=1, max_length=100)
+    context_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    value_type: DSLVariableType
+    required: bool = True
+    description: str | None = Field(default=None, max_length=500)
+
+
+class DSLCaseOutputContract(DSLModel):
+    name: str = Field(min_length=1, max_length=100)
+    context_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    value_type: DSLVariableType
+    description: str | None = Field(default=None, max_length=500)
+
+
 DSLStep = Annotated[
     GotoStep
     | ClickStep
@@ -59,6 +77,8 @@ class DSLCase(DSLModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    input_contract: list[DSLCaseInputContract] = Field(default_factory=list)
+    output_contract: list[DSLCaseOutputContract] = Field(default_factory=list)
     steps: list[DSLStep] = Field(min_length=1)
 
 

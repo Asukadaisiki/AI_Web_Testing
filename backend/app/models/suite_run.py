@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -35,6 +36,15 @@ class SuiteRun(Base):
         index=True,
         nullable=True,
     )
+    context_source: Mapped[str] = mapped_column(String(50), nullable=False, default="empty")
+    context_source_suite_run_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("suite_runs.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    rerun_context_mode: Mapped[str] = mapped_column(String(50), nullable=False, default="not_applicable")
+    context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     total_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     passed_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

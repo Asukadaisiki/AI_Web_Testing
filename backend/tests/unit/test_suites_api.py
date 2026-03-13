@@ -14,6 +14,8 @@ def _create_case(
     name: str,
     project_id: int = 1,
     base_url: str = "https://example.com",
+    input_contract: list[dict] | None = None,
+    output_contract: list[dict] | None = None,
     steps: list[dict] | None = None,
 ) -> int:
     response = client.post(
@@ -24,6 +26,8 @@ def _create_case(
             "name": name,
             "description": f"{name} description",
             "base_url": base_url,
+            "input_contract": input_contract or [],
+            "output_contract": output_contract or [],
             "steps": steps or [{"action": "goto", "value": "/"}],
         },
     )
@@ -130,8 +134,29 @@ def test_create_suite_requires_at_least_one_case(client) -> None:
 
 
 def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client, db_session, monkeypatch) -> None:
-    case_id_1 = _create_case(client, name="Step One")
-    case_id_2 = _create_case(client, name="Step Two")
+    case_id_1 = _create_case(
+        client,
+        name="Step One",
+        output_contract=[
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "string",
+            }
+        ],
+    )
+    case_id_2 = _create_case(
+        client,
+        name="Step Two",
+        input_contract=[
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "string",
+                "required": True,
+            }
+        ],
+    )
     suite_response = client.post(
         "/api/v1/suites",
         json={
@@ -172,6 +197,10 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
     assert payload["suite_name"] == "Ordered Suite"
     assert payload["source"] == "manual"
     assert payload["source_suite_run_id"] is None
+    assert payload["context_source"] == "empty"
+    assert payload["context_source_suite_run_id"] is None
+    assert payload["rerun_context_mode"] == "not_applicable"
+    assert payload["context_snapshot"] == {}
     assert payload["total_cases"] == 2
     assert payload["passed_cases"] == 2
     assert payload["failed_cases"] == 0
@@ -185,6 +214,17 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
             "order_index": 1,
             "execution_id": 1,
             "status": "passed",
+            "context_reads": [],
+            "context_writes": [
+                {
+                    "name": "sessionToken",
+                    "context_key": "session_token",
+                    "value_type": "string",
+                    "status": "pending",
+                    "error_message": None,
+                }
+            ],
+            "context_resolution_error": None,
         },
         {
             "id": 2,
@@ -193,6 +233,18 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
             "order_index": 2,
             "execution_id": 2,
             "status": "passed",
+            "context_reads": [
+                {
+                    "name": "sessionToken",
+                    "context_key": "session_token",
+                    "value_type": "string",
+                    "resolved": False,
+                    "source_suite_run_id": None,
+                    "error_message": None,
+                }
+            ],
+            "context_writes": [],
+            "context_resolution_error": None,
         },
     ]
     assert payload["executions"] == [
@@ -204,23 +256,48 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
     assert len(stored_runs) == 1
     assert stored_runs[0].status == "passed"
     assert stored_runs[0].base_url_override == "https://override.example.com"
+    assert stored_runs[0].context_source == "empty"
+    assert stored_runs[0].rerun_context_mode == "not_applicable"
+    assert stored_runs[0].context_snapshot == {}
 
     stored_items = db_session.query(SuiteRunItem).order_by(SuiteRunItem.id.asc()).all()
     assert len(stored_items) == 2
     assert [item.execution_id for item in stored_items] == [1, 2]
+    assert stored_items[0].context_writes == [
+        {
+            "name": "sessionToken",
+            "context_key": "session_token",
+            "value_type": "string",
+            "status": "pending",
+            "error_message": None,
+        }
+    ]
+    assert stored_items[1].context_reads == [
+        {
+            "name": "sessionToken",
+            "context_key": "session_token",
+            "value_type": "string",
+            "resolved": False,
+            "source_suite_run_id": None,
+            "error_message": None,
+        }
+    ]
 
     list_runs_response = client.get("/api/v1/suites/1/runs")
     assert list_runs_response.status_code == 200
     assert list_runs_response.json()[0]["id"] == 1
     assert list_runs_response.json()[0]["status"] == "passed"
+    assert list_runs_response.json()[0]["context_source"] == "empty"
 
     get_run_response = client.get("/api/v1/suites/1/runs/1")
     assert get_run_response.status_code == 200
     assert get_run_response.json()["items"][0]["execution_id"] == 1
+    assert get_run_response.json()["items"][1]["context_reads"][0]["context_key"] == "session_token"
 
     suites_response = client.get("/api/v1/suites")
     assert suites_response.status_code == 200
     assert suites_response.json()[0]["latest_run"]["id"] == 1
+    assert suites_response.json()[0]["latest_run"]["context_snapshot"] == {}
 
     execution_response = client.get("/api/v1/executions/1")
     assert execution_response.status_code == 200
@@ -228,6 +305,19 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
         "suite_id": 1,
         "suite_name": "Ordered Suite",
         "suite_run_id": 1,
+    }
+    assert execution_response.json()["suite_context"] == {
+        "reads": [],
+        "writes": [
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "string",
+                "status": "pending",
+                "error_message": None,
+            }
+        ],
+        "resolution_error": None,
     }
 
 
@@ -288,6 +378,10 @@ def test_rerun_failed_suite_run_only_reruns_failed_items(client, monkeypatch) ->
     assert rerun_payload["id"] == 2
     assert rerun_payload["source"] == "rerun_failed"
     assert rerun_payload["source_suite_run_id"] == 1
+    assert rerun_payload["context_source"] == "suite_run_snapshot"
+    assert rerun_payload["context_source_suite_run_id"] == 1
+    assert rerun_payload["rerun_context_mode"] == "reuse_source_context"
+    assert rerun_payload["context_snapshot"] == {}
     assert rerun_payload["total_cases"] == 1
     assert rerun_payload["passed_cases"] == 1
     assert rerun_payload["failed_cases"] == 0
@@ -299,6 +393,9 @@ def test_rerun_failed_suite_run_only_reruns_failed_items(client, monkeypatch) ->
             "order_index": 1,
             "execution_id": 3,
             "status": "passed",
+            "context_reads": [],
+            "context_writes": [],
+            "context_resolution_error": None,
         }
     ]
     assert rerun_payload["executions"] == [
@@ -312,6 +409,7 @@ def test_rerun_failed_suite_run_only_reruns_failed_items(client, monkeypatch) ->
     rerun_detail_response = client.get("/api/v1/suites/1/runs/2")
     assert rerun_detail_response.status_code == 200
     assert rerun_detail_response.json()["source_suite_run_id"] == 1
+    assert rerun_detail_response.json()["context_source_suite_run_id"] == 1
 
 
 def test_rerun_failed_suite_run_rejects_run_without_failures(client, monkeypatch) -> None:
