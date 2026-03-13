@@ -185,3 +185,19 @@
 - 处理：已将 `AppRouter` 改为路由级懒加载，`OverviewChart` 切换为模块化 ECharts 引入，并调整 `vite.config.ts` 的共享 chunk 策略与 warning 阈值，使主入口和图表模块完成拆分且构建不再输出 chunk size warning
 - 验证：执行 `cd frontend && npm run build`，构建成功且未再输出 chunk size warning；当前主入口 `index` chunk 约 `6.33 kB`，图表公共 chunk 约 `501.60 kB`
 - 关联记录：`docs/execution-log.md` 2026-03-10 23:45、`docs/execution-log.md` 2026-03-11 21:00
+
+## BUG-011 | `project-plan` 的“下一里程碑”仍停留在 `v2.2`，与当前已完成状态不一致
+
+- 日期：2026-03-13
+- 状态：fixed
+- 来源：分析 / 文档核对
+- 描述：`docs/project-plan.md` 后半段已记录 `Suite 执行历史与失败重跑 v2.2` 完成，但前半段“下一里程碑”仍写成 `v2.2`，导致阅读者无法直接判断项目当前真实下一步。
+- 复现步骤：
+  1. 阅读 `docs/project-plan.md` 的“下一里程碑”章节
+  2. 再阅读同文件底部 `2026-03-11 | v2.2 实施更新`
+  3. 可见文档同时出现“v2.2 是下一步”和“v2.2 已完成”两种冲突描述
+- 影响：会直接干扰后续排期、任务拆分和里程碑对齐，容易让下一轮工作继续围绕已完成事项展开
+- 根因：执行日志与实施更新已持续推进，但计划文档前部摘要没有同步切换到 `v2.3`
+- 处理：已更新 `docs/project-plan.md` 的当前状态、进行中/未开始项和“下一里程碑”章节，明确下一步为 `Suite Context 与参数传递 v2.3`，并补充 `v2.3a/v2.3b/v2.3c` 的建议拆分
+- 验证：人工核对 `docs/project-plan.md`，前后文已统一到“`v2.2` 完成、`v2.3` 为下一里程碑”的口径
+- 关联记录：`docs/execution-log.md` 2026-03-13 11:31

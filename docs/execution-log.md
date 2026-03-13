@@ -705,3 +705,30 @@
 - 验证：通过 Git 状态、分支、远端和 diff 检查确认同步范围仅包含文档文件
 - 关联文件：`docs/project-plan.md`、`docs/AI 自动化测试增强项目规划.md`、`docs/hybrid-locate-and-intervention-design.md`、`docs/execution-log.md`
 - 后续：若按该规划进入实现阶段，可直接以 `v3.0-v3.3` 作为混合定位系统的落地拆分
+
+## 2026-03-13 11:31
+
+- 任务：阅读现有规划与执行日志，收敛项目下一步安排
+- 背景：当前仓库已经完成 `Suite 执行历史与失败重跑 v2.2`，但 `docs/project-plan.md` 前部“下一里程碑”仍停留在 `v2.2`，不利于后续排期和开发排序。
+- 执行动作：
+  - 阅读 `docs/AI 自动化测试增强项目规划.md`、`docs/project-plan.md`、`docs/execution-log.md` 与 `docs/bug-log.md`，梳理当前目标、已完成里程碑和遗留方向。
+  - 进一步检查 `backend/app/schemas/dsl.py`、`backend/app/services/suites.py`、`backend/app/services/executions.py` 等实现边界，确认 `Suite Context` 需要先补契约和批次上下文字段，再补运行时解析。
+  - 更新 `docs/project-plan.md`，将下一里程碑调整为 `Suite Context 与参数传递 v2.3`，并拆分为 `v2.3a/v2.3b/v2.3c` 的建议执行顺序。
+  - 在 `docs/bug-log.md` 记录并关闭“下一里程碑表述滞后”的文档一致性问题。
+- 结果：项目下一步已明确收敛到 `v2.3`，并形成“契约与数据层 -> 运行时解析与失败策略 -> 前端可观测性”的具体推进顺序；`v3.0` 混合定位系统继续顺延到 `v2.3` 之后。
+- 验证：人工核对 `docs/project-plan.md` 与 `docs/bug-log.md` 的 diff，确认里程碑状态、进行中项和建议拆分已一致。
+- 关联文件：`docs/project-plan.md`、`docs/bug-log.md`、`docs/execution-log.md`
+- 后续：如继续实现，建议先从 `v2.3a` 开始，优先定义 `DSLCase` 输入/输出契约与 `suite_runs` 的上下文存储结构。
+
+## 2026-03-13 11:35
+
+- 任务：将本轮项目计划与日志更新同步到 GitHub
+- 背景：上一轮已完成 `v2.3` 下一步安排收敛和相关文档修正；用户明确要求把当前变更同步到远端仓库。
+- 执行动作：
+  - 核对 `git status --short`、`git branch --show-current` 与 `git remote -v`，确认待同步范围仅包含文档变更，目标分支为 `main`，远端为 `origin`
+  - 追加本次执行日志，保证“分析 -> 文档更新 -> 同步”链路完整可追溯
+  - 准备提交 `docs/project-plan.md`、`docs/bug-log.md`、`docs/execution-log.md` 并推送到 `origin/main`
+- 结果：本轮文档改动已整理为一次独立同步批次，可直接提交并推送到 GitHub
+- 验证：通过 Git 状态、分支和远端检查确认同步目标正确
+- 关联文件：`docs/project-plan.md`、`docs/bug-log.md`、`docs/execution-log.md`
+- 后续：同步完成后，可直接按 `v2.3a` 开始进入 `Suite Context` 的契约与数据层实现
