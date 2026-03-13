@@ -45,26 +45,29 @@
 **目标：**
  解决 AI UI 自动化中最常见的 **元素识别不稳定问题**。
 
-**设计策略：**
+**设计策略：四层降级定位**
 
-- DOM 候选召回
-   通过以下属性召回候选元素：
-  - role
-  - text
-  - aria-label
-  - placeholder
-  - data-testid
-- Vision 排序
-   结合页面截图让模型判断 **最可能目标**
-- 执行前校验
-   检查：
-  - visible
-  - enabled
-  - viewport
-- 失败回退机制
-  - 候选元素重试
-  - 重新识别
-  - 滚动重试
+系统采用四层降级架构，依次尝试直至命中或标记人工干预：
+
+- **Tier 0 — 人工修正记录**
+  查询 `locator_corrections` 表，若有历史人工修正的 selector 且仍活跃，优先使用；命中后 `verified_count++`，连续失败 3 次自动停用。
+
+- **Tier 1 — DOM 语义定位（现有能力）**
+  通过以下属性召回候选元素并打分命中：
+  - role / text / aria-label / placeholder / data-testid
+  - visible / enabled / viewport 校验
+  - 候选打分 → 最高分命中 → 失败原因记录
+
+- **Tier 2 — AI 视觉定位**
+  截图 → 发送给 VLM（qwen-vl / gemini / gpt-4o 等）→ 返回 bbox 坐标 → `elementFromPoint` 获取 DOM 元素 → 交叉验证语义匹配。
+  支持 deepLocate 两阶段定位（先粗区域再裁剪放大精确定位）。
+
+- **Tier 3 — 标记需要人工干预**
+  记录完整上下文（截图、URL、DOM 快照、AI 候选、Tier 1 trace），标记 execution 状态为 `needs_intervention`，等待用户在前端提交修正。
+
+**闭环机制：** 用户提交修正 → 存入 `locator_corrections` → 重跑时 Tier 0 命中 → 后续同页面同目标自动复用。页面改版导致 selector 失效时自动停用，触发新一轮人工干预。
+
+> 详细技术设计参见 [`docs/hybrid-locate-and-intervention-design.md`](./hybrid-locate-and-intervention-design.md)
 
 ------
 
@@ -155,12 +158,14 @@ Step → Case → Suite
 
 ------
 
-## 阶段二：混合定位系统（第3–4周）
+## 阶段二：混合定位系统（第3–5周）
 
-- 实现 **DOM 候选元素召回**
-- 接入 **视觉识别辅助定位**
-- 执行前 **元素校验**
-- 实现 **失败回退策略**
+- 实现 **DOM 候选元素召回**与候选打分命中（Tier 1，已有基础）
+- 新建 **人工修正记录** 数据模型与 API，接入 Tier 0 优先查找
+- 实现 **AI 视觉定位模块**（Tier 2）：VLM API 调用、bbox 归一化、deepLocate 两阶段定位、DOM 交叉验证
+- 实现 **四层降级定位链路** `resolve_with_fallback`，统一替换现有定位调用
+- 实现 **人工干预机制**（Tier 3）：上下文采集、`needs_intervention` 状态、前端干预面板
+- 打通 **修正闭环**：提交修正 → 重跑命中 → 置信度追踪 → 失效自动停用
 
 ------
 

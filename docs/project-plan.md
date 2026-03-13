@@ -77,9 +77,8 @@
 ### 未开始或未落地
 
 - AI 生成 DSL
-- Vision 辅助定位
+- 混合定位系统（v3.0–v3.3）：人工修正记录、AI 视觉定位、四层降级链路、前端干预闭环
 - 登录页、环境配置页
-- 更完整的 Locator 候选召回、评分与失败原因展示
 - Suite 历史批次持久化、失败重跑与历史结果对比
 - Suite Context 运行时落地：共享变量存储、Case 间参数传递、输出回写与结果展示
 
@@ -164,33 +163,39 @@
 
 ### 阶段 2：混合定位系统
 
-本阶段直接对应核心规划中的“混合元素定位系统”。
+本阶段直接对应核心规划中的”混合元素定位系统”，对应里程碑 v3.0–v3.3。
 
 目标：
 
-- 提升定位稳定性
-- 建立可解释的定位过程
+- 建立四层降级定位体系（人工修正 → DOM 语义 → AI 视觉 → 人工干预）
+- 提升定位稳定性，建立可解释的定位过程
+- 形成修正闭环：失败 → 干预 → 修正 → 重跑命中
 
 范围：
 
-- DOM 候选召回
-- 候选打分与命中记录
-- visible/enabled/viewport 校验
-- 候选回退策略
-- Vision 排序接口预留
-- 工作台中的定位调试区
+- 人工修正记录数据模型与 CRUD API（v3.0）
+- 四层降级定位链路 `resolve_with_fallback`（v3.1）
+- AI 视觉定位模块：VLM API、bbox 归一化、deepLocate、DOM 交叉验证（v3.2）
+- 前端干预面板与修正提交闭环（v3.3）
+- `InterventionNeededError` 异常链路与 `needs_intervention` 状态
+- URL 泛化匹配与修正记录置信度追踪
 
 交付物：
 
-- 基础 Locator 服务
+- 四层降级定位服务
+- AI 视觉定位模块
+- 修正记录管理 API
+- 前端干预面板
 - 定位候选与命中证据
-- 工作台调试面板
 
 验收标准：
 
-- 语义 target 能命中简单页面元素
-- 报告中可查看候选、评分和最终命中结果
-- 定位失败时能输出失败原因
+- 有修正记录时 Tier 0 优先命中，跳过后续层
+- 语义 target 能命中简单页面元素（Tier 1 现有能力）
+- AI 视觉定位对截图中的目标元素能返回正确坐标（Tier 2）
+- 全部失败时标记 `needs_intervention`，前端可提交修正
+- 修正提交后重跑能命中，`verified_count` 递增
+- 报告中可查看候选、评分、命中结果和失败原因
 
 ### 阶段 3：测试 DSL 与自然语言生成
 
@@ -348,3 +353,98 @@
 - 前端已新增 `SuiteRunDetailPage`，`SuitesPage` 会展示最近批次摘要，`SuiteWorkbenchPage` 会展示最近批次列表并在执行后跳转到批次详情页。
 - `ExecutionDetailPage` 已支持优先返回来源 Suite 批次；无来源时仍回到执行中心。
 - `v2.3` 继续保持为 `Suite Context 与参数传递`，不在本轮引入上下文共享、变量占位符解析或跨 Case 状态复用。
+
+## 后续规划：混合定位系统 v3.0–v3.3
+
+本系列里程碑直接对应核心规划"阶段二：混合定位系统"，安排在 `v2.3` 之后。
+
+详细技术设计参见 [`docs/hybrid-locate-and-intervention-design.md`](./hybrid-locate-and-intervention-design.md)。
+
+### v3.0: 数据模型与修正记录 API
+
+- 目标：为四层降级定位建立数据基础和修正记录管理能力。
+- 范围：
+  - 新建 `LocatorCorrection` 数据库模型（`locator_corrections` 表）+ Alembic 迁移
+  - `ExecutionStatus` 扩展：新增 `"needs_intervention"` 状态
+  - 新增 schema：`InterventionRequest`、`DOMElementSnapshot`、`AILocateCandidate`
+  - `StepExecutionEvidence` 扩展：新增 `intervention_request` 字段
+  - 修正记录 CRUD API：`POST/GET /api/v1/corrections`、`PUT /{id}/deactivate`
+  - URL 泛化工具 `url_pattern.py`：动态路径段（数字 ID、UUID、长随机串）自动替换为 `*`
+  - `find_active_correction()` 查找函数：按 `page_url_pattern + target_description` 匹配活跃修正
+- 交付物：
+  - 可通过 API 创建、查询、停用修正记录
+  - 数据库迁移脚本可独立执行
+- 验收标准：
+  - `locator_corrections` 表可通过 Alembic 迁移创建
+  - 修正记录 API 可正常增删查
+  - URL 泛化覆盖数字 ID、UUID、长随机串
+- 文件变更：
+  - 新建：`backend/app/models/locator_correction.py`、`backend/app/locators/url_pattern.py`、`backend/app/locators/corrections.py`、`backend/app/api/routes/corrections.py`、Alembic 迁移
+  - 修改：`backend/app/schemas/executions.py`、`backend/app/models/__init__.py`、`backend/app/api/routes/__init__.py`
+
+### v3.1: 四层降级定位链路 (Tier 0 + Tier 3)
+
+- 目标：在现有 DOM 语义定位前后接入 Tier 0（修正记录优先查找）和 Tier 3（人工干预标记），形成完整的降级链路骨架。
+- 范围：
+  - 实现 `resolve_with_fallback()` 定位入口，替换 Runner 中现有 `resolve_semantic_locator()` 直接调用
+  - Tier 0：在定位最前端查询 `locator_corrections`，命中则直接使用修正的 selector，并更新 `verified_count`；连续失败 3 次自动停用
+  - Tier 3：当所有层都失败时，采集完整上下文（截图、URL、DOM 快照、AI 候选、Tier 1 trace），抛出 `InterventionNeededError`
+  - 定义 `InterventionNeededError` 与 `RunnerInterventionError`
+  - 服务层捕获 `RunnerInterventionError`，将 execution 状态设为 `needs_intervention`
+  - DOM 快照采集：提取页面所有可交互元素的 tag、text、role、aria-label、rect 等信息
+- 交付物：
+  - Runner 定位调用统一走 `resolve_with_fallback`
+  - 有修正记录时自动命中；全部失败时标记 `needs_intervention`
+- 验收标准：
+  - 有活跃修正记录时 Tier 0 命中，跳过后续层
+  - 修正 selector 失效时 `consecutive_failures` 递增，3 次后自动停用
+  - 全部失败时 execution 状态为 `needs_intervention`，step evidence 包含完整 `intervention_request`
+- 文件变更：
+  - 修改：`backend/app/runners/playwright_runner.py`、`backend/app/services/executions.py`、`backend/app/locators/__init__.py`
+
+### v3.2: AI 视觉定位 (Tier 2)
+
+- 目标：实现基于 VLM 截图的视觉元素定位，作为 DOM 语义定位的补充层。
+- 范围：
+  - 新建 `ai_visual.py`：核心 AI 视觉定位模块
+  - VLM API 调用：基于 OpenAI 兼容接口，支持 qwen-vl、gemini、gpt-4o、qwen2.5-vl
+  - bbox 归一化适配：不同模型返回不同坐标格式（归一化 0–1000 / 像素坐标 / xy 交换），统一转为像素坐标
+  - deepLocate 两阶段定位（参考 Midscene）：先粗定位区域 → 扩展搜索区域（至少 400×400）→ 裁剪放大 2× → 精确定位 → 坐标回算
+  - AI 定位结果与 DOM 交叉验证：`elementFromPoint` 获取 DOM 元素，验证语义匹配
+  - 将 Tier 2 接入 `resolve_with_fallback`，在 Tier 1 失败后调用
+- 交付物：
+  - AI 视觉定位模块可独立调用
+  - Runner 降级链路 Tier 1 失败后自动尝试 Tier 2
+- 验收标准：
+  - 对截图 + 目标描述能返回 bbox 和中心坐标
+  - deepLocate 模式下精度优于单阶段
+  - 不同模型族的 bbox 格式均能正确归一化
+  - Tier 2 命中后能生成可复用的 Playwright locator
+- 文件变更：
+  - 新建：`backend/app/locators/ai_visual.py`
+  - 修改：`backend/app/runners/playwright_runner.py`（Tier 2 接入）
+- 依赖：需安装 `openai` SDK 和 `Pillow`（图片裁剪缩放）
+
+### v3.3: 前端干预闭环
+
+- 目标：在前端为 `needs_intervention` 状态的失败步骤提供可视化干预面板，完成修正提交 → 重跑 → Tier 0 命中的完整闭环。
+- 范围：
+  - 执行详情页：当 step 有 `intervention_request` 时显示干预面板
+  - 干预面板交互：
+    - 展示失败时的页面截图（用户可点击指定位置）
+    - 手动输入选择器（css / xpath / test_id）
+    - 展示 DOM 快照中的候选可交互元素列表（tag、text、role、visible、enabled）
+    - 提交修正按钮 → 调用 `POST /api/v1/corrections`
+  - 提交修正后引导用户重跑 → Tier 0 命中 → 验证闭环
+  - （可选，后续迭代）独立的修正记录管理页：查看所有修正、筛选、手动启用/停用
+- 交付物：
+  - 执行详情页干预面板组件
+  - 修正提交到重跑成功的完整闭环
+- 验收标准：
+  - `needs_intervention` 状态的步骤在详情页展示干预面板
+  - 用户可通过面板提交修正记录
+  - 重跑后 Tier 0 命中修正的 selector，步骤执行成功
+  - 修正记录的 `verified_count` 正确递增
+- 文件变更：
+  - 修改：`frontend/src/pages/ExecutionDetailPage.tsx`（新增干预面板组件）
+  - 可选新建：`frontend/src/components/InterventionPanel.tsx`、`frontend/src/pages/CorrectionsPage.tsx`
