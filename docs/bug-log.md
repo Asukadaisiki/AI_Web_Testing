@@ -186,6 +186,22 @@
 - 验证：执行 `cd frontend && npm run build`，构建成功且未再输出 chunk size warning；当前主入口 `index` chunk 约 `6.33 kB`，图表公共 chunk 约 `501.60 kB`
 - 关联记录：`docs/execution-log.md` 2026-03-10 23:45、`docs/execution-log.md` 2026-03-11 21:00
 
+## BUG-012 | 执行中心窗口统计测试使用本地时间构造数据，跨 UTC 零点时会误判窗口外样本
+
+- 日期：2026-03-14
+- 状态：fixed
+- 来源：自测 / 全量回归
+- 描述：`backend/tests/unit/test_case_executions_api.py` 中与 `window_days` 和 `failure_root_causes` 相关的 3 个聚合测试使用 `datetime.now().replace(...)` 构造运行时间，而服务层窗口计算使用 `datetime.now(UTC).date()`；在本地时区跨 UTC 零点运行全量 pytest 时，测试样本会落到窗口外，导致统计结果为空或数量偏少。
+- 复现步骤：
+  1. 在 UTC+8 等领先 UTC 的时区，于本地凌晨执行 `cd backend && uv run pytest`
+  2. 触发 `test_get_executions_overview_supports_failure_fingerprint_filter`、`test_get_executions_overview_supports_window_days_trends_and_top_failed_cases`、`test_list_executions_supports_window_days_and_matches_overview_filters`
+  3. 观察 `failure_root_causes` 为空或 `total_count` 少于预期
+- 影响：后端全量回归在特定时区和时间窗口下不稳定，容易误判执行中心统计逻辑回归
+- 根因：测试数据使用本地 naive 时间，服务使用 UTC 日期做窗口过滤，两者时间基准不一致
+- 处理：将上述测试统一改为 `datetime.now(UTC).replace(tzinfo=None, ...)`，与服务层当前 UTC 窗口语义保持一致
+- 验证：执行 `cd backend && uv run pytest`，结果为 `49 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-14 00:44
+
 ## BUG-011 | `project-plan` 的“下一里程碑”仍停留在 `v2.2`，与当前已完成状态不一致
 
 - 日期：2026-03-13

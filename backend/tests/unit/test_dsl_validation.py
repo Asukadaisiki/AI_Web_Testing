@@ -22,6 +22,7 @@ def test_validate_dsl_case_success(client) -> None:
                     "name": "sessionToken",
                     "context_key": "session_token",
                     "value_type": "string",
+                    "source": "latest_url",
                 }
             ],
             "steps": [
@@ -54,6 +55,7 @@ def test_validate_dsl_case_success(client) -> None:
                     "name": "sessionToken",
                     "context_key": "session_token",
                     "value_type": "string",
+                    "source": "latest_url",
                     "description": None,
                 }
             ],

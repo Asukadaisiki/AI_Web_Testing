@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Project, SuiteCase, SuiteRun, SuiteRunItem, TestCase, TestSuite, User
 from app.schemas.dsl import DSLCase
-from app.schemas.executions import ContextVariableReadEvidence, ContextVariableWriteEvidence
+from app.schemas.executions import ContextVariableReadEvidence, ContextVariableWriteEvidence, StepExecutionEvidence
 from app.schemas.executions import CaseExecutionRequest
 from app.schemas.suites import (
     StoredSuiteCase,
@@ -28,11 +30,18 @@ from app.schemas.suites import (
     SuiteUpdateRequest,
 )
 from app.services.cases import EntityNotFoundError
-from app.services.executions import execute_case
+from app.services.executions import execute_case_with_override, mark_execution_failed
 
 
 class SuiteValidationError(ValueError):
     """Raised when suite payload fails domain validation."""
+
+
+class SuiteContextResolutionError(ValueError):
+    """Raised when suite context resolution fails before or after a case execution."""
+
+
+PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def create_suite(session: Session, payload: SuiteCreateRequest) -> StoredSuiteDetail:
@@ -207,18 +216,77 @@ def _execute_suite_batch(
 
     passed_cases = 0
     failed_cases = 0
+    mutable_context_snapshot = dict(context_snapshot)
+    context_sources = {
+        key: context_source_suite_run_id
+        for key in mutable_context_snapshot
+        if context_source_suite_run_id is not None
+    }
     for suite_case in suite_cases:
-        context_reads, context_writes = _build_context_contract_snapshots(session, case_id=suite_case.case_id)
-        execution = execute_case(
-            session,
-            suite_case.case_id,
-            CaseExecutionRequest(actor_user_id=payload.actor_user_id, base_url=payload.base_url),
-        )
+        normalized_case = _get_normalized_case(session, case_id=suite_case.case_id)
+        execution_request = CaseExecutionRequest(actor_user_id=payload.actor_user_id, base_url=payload.base_url)
+        context_reads = _build_context_read_snapshots(normalized_case)
+        context_writes = _build_context_write_snapshots(normalized_case)
+        context_resolution_error: str | None = None
+
+        try:
+            resolved_case = _resolve_case_runtime_dsl(
+                normalized_case,
+                context_snapshot=mutable_context_snapshot,
+                context_sources=context_sources,
+                reads=context_reads,
+            )
+            execution = execute_case_with_override(
+                session,
+                suite_case.case_id,
+                execution_request,
+                case_override=resolved_case,
+            )
+        except SuiteContextResolutionError as exc:
+            context_resolution_error = str(exc)
+            _mark_context_writes_skipped(
+                context_writes,
+                error_message="Context write skipped because suite context resolution failed.",
+                preserve_existing_errors=True,
+            )
+            execution = execute_case_with_override(
+                session,
+                suite_case.case_id,
+                execution_request,
+                precomputed_error=_build_context_resolution_step(normalized_case, str(exc)),
+            )
+
+        if execution.status == "passed":
+            try:
+                output_updates = _resolve_case_output_updates(
+                    normalized_case,
+                    execution,
+                    writes=context_writes,
+                )
+            except SuiteContextResolutionError as exc:
+                context_resolution_error = str(exc)
+                _mark_context_writes_skipped(
+                    context_writes,
+                    error_message="Context write aborted because one or more output values could not be extracted.",
+                    preserve_existing_errors=True,
+                )
+                execution = mark_execution_failed(
+                    session,
+                    execution.id,
+                    error_message=str(exc),
+                    failed_step=_build_context_resolution_step(normalized_case, str(exc)),
+                )
+            else:
+                mutable_context_snapshot.update(output_updates)
+                context_sources.update({key: run.id for key in output_updates})
+
         if execution.status == "passed":
             passed_cases += 1
         else:
             failed_cases += 1
 
+        run.context_snapshot = dict(mutable_context_snapshot)
+        session.add(run)
         session.add(
             SuiteRunItem(
                 suite_run_id=run.id,
@@ -229,7 +297,7 @@ def _execute_suite_batch(
                 status=execution.status,
                 context_reads=[item.model_dump(mode="json") for item in context_reads],
                 context_writes=[item.model_dump(mode="json") for item in context_writes],
-                context_resolution_error=None,
+                context_resolution_error=context_resolution_error,
             )
         )
         session.commit()
@@ -472,17 +540,15 @@ def _ensure_user_exists(session: Session, user_id: int) -> None:
         raise EntityNotFoundError(f"User {user_id} not found.")
 
 
-def _build_context_contract_snapshots(
-    session: Session,
-    *,
-    case_id: int,
-) -> tuple[list[ContextVariableReadEvidence], list[ContextVariableWriteEvidence]]:
+def _get_normalized_case(session: Session, *, case_id: int) -> DSLCase:
     case = session.get(TestCase, case_id)
     if case is None:
         raise EntityNotFoundError(f"Case {case_id} not found.")
+    return DSLCase.model_validate(case.dsl)
 
-    normalized_case = DSLCase.model_validate(case.dsl)
-    reads = [
+
+def _build_context_read_snapshots(case: DSLCase) -> list[ContextVariableReadEvidence]:
+    return [
         ContextVariableReadEvidence(
             name=item.name,
             context_key=item.context_key,
@@ -491,16 +557,239 @@ def _build_context_contract_snapshots(
             source_suite_run_id=None,
             error_message=None,
         )
-        for item in normalized_case.input_contract
+        for item in case.input_contract
     ]
-    writes = [
+
+
+def _build_context_write_snapshots(case: DSLCase) -> list[ContextVariableWriteEvidence]:
+    return [
         ContextVariableWriteEvidence(
             name=item.name,
             context_key=item.context_key,
             value_type=item.value_type,
+            source=item.source,
             status="pending",
             error_message=None,
         )
-        for item in normalized_case.output_contract
+        for item in case.output_contract
     ]
-    return reads, writes
+
+
+def _resolve_case_runtime_dsl(
+    case: DSLCase,
+    *,
+    context_snapshot: dict[str, Any],
+    context_sources: dict[str, int | None],
+    reads: list[ContextVariableReadEvidence],
+) -> DSLCase:
+    contract_by_key = {item.context_key: item for item in case.input_contract}
+    resolved_values: dict[str, Any] = {}
+    errors: list[str] = []
+
+    for evidence in reads:
+        contract = contract_by_key[evidence.context_key]
+        if evidence.context_key not in context_snapshot:
+            if contract.required:
+                evidence.error_message = f"Required context key '{evidence.context_key}' is missing."
+                errors.append(evidence.error_message)
+            continue
+
+        value = context_snapshot[evidence.context_key]
+        if not _matches_value_type(value, evidence.value_type):
+            evidence.error_message = (
+                f"Context key '{evidence.context_key}' expected {evidence.value_type} "
+                f"but received {_infer_value_type(value)}."
+            )
+            errors.append(evidence.error_message)
+            continue
+
+        evidence.resolved = True
+        evidence.source_suite_run_id = context_sources.get(evidence.context_key)
+        resolved_values[evidence.context_key] = value
+
+    if errors:
+        raise SuiteContextResolutionError("; ".join(errors))
+
+    rendered_payload = _render_value_placeholders(
+        case.model_dump(mode="json"),
+        allowed_keys=set(contract_by_key),
+        context_values=resolved_values,
+    )
+    return DSLCase.model_validate(rendered_payload)
+
+
+def _resolve_case_output_updates(
+    case: DSLCase,
+    execution,
+    *,
+    writes: list[ContextVariableWriteEvidence],
+) -> dict[str, Any]:
+    if not case.output_contract:
+        return {}
+
+    if execution.status != "passed":
+        _mark_context_writes_skipped(
+            writes,
+            error_message="Case execution did not complete successfully, so no context values were written.",
+        )
+        return {}
+
+    pending_updates: dict[str, Any] = {}
+    errors: list[str] = []
+    for contract, evidence in zip(case.output_contract, writes, strict=False):
+        value, error_message = _extract_output_value(contract.source, execution)
+        if error_message is not None:
+            evidence.status = "skipped"
+            evidence.error_message = error_message
+            errors.append(error_message)
+            continue
+
+        if not _matches_value_type(value, contract.value_type):
+            evidence.status = "skipped"
+            evidence.error_message = (
+                f"Output source '{contract.source}' expected {contract.value_type} "
+                f"but received {_infer_value_type(value)}."
+            )
+            errors.append(evidence.error_message)
+            continue
+
+        pending_updates[contract.context_key] = value
+
+    if errors:
+        for evidence in writes:
+            if evidence.status == "pending":
+                evidence.status = "skipped"
+                evidence.error_message = "Context write aborted because another output contract failed."
+        raise SuiteContextResolutionError("; ".join(errors))
+
+    for evidence in writes:
+        evidence.status = "written"
+        evidence.error_message = None
+
+    return pending_updates
+
+
+def _extract_output_value(source: str | None, execution) -> tuple[Any, str | None]:
+    last_step = execution.report.steps[-1] if execution.report and execution.report.steps else None
+    source_map = {
+        "latest_url": execution.latest_url,
+        "error_message": execution.error_message,
+        "status": execution.status,
+        "last_step_url": last_step.url if last_step is not None else None,
+        "last_step_page_title": last_step.page_title if last_step is not None else None,
+        "last_step_target": last_step.target if last_step is not None else None,
+        "last_step_value": last_step.value if last_step is not None else None,
+        "last_step_error_message": last_step.error_message if last_step is not None else None,
+    }
+    if source is None:
+        return None, "Output contract source is required for suite context write-back."
+    if source not in source_map:
+        return None, f"Output contract source '{source}' is not supported."
+
+    value = source_map[source]
+    if value is None:
+        return None, f"Output contract source '{source}' did not produce a value."
+    return value, None
+
+
+def _render_value_placeholders(
+    payload: Any,
+    *,
+    allowed_keys: set[str],
+    context_values: dict[str, Any],
+) -> Any:
+    if isinstance(payload, dict):
+        return {
+            key: _render_value_placeholders(value, allowed_keys=allowed_keys, context_values=context_values)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [
+            _render_value_placeholders(value, allowed_keys=allowed_keys, context_values=context_values)
+            for value in payload
+        ]
+    if isinstance(payload, str):
+        errors: list[str] = []
+
+        def replace(match: re.Match[str]) -> str:
+            context_key = match.group(1)
+            if context_key not in allowed_keys:
+                errors.append(f"Placeholder '{context_key}' is not declared in input_contract.")
+                return match.group(0)
+            if context_key not in context_values:
+                errors.append(f"Placeholder '{context_key}' could not be resolved from suite context.")
+                return match.group(0)
+            return _stringify_context_value(context_values[context_key])
+
+        rendered = PLACEHOLDER_PATTERN.sub(replace, payload)
+        if errors:
+            raise SuiteContextResolutionError("; ".join(errors))
+        return rendered
+    return payload
+
+
+def _stringify_context_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=True)
+
+
+def _matches_value_type(value: Any, value_type: str) -> bool:
+    if value_type == "string":
+        return isinstance(value, str)
+    if value_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if value_type == "boolean":
+        return isinstance(value, bool)
+    if value_type == "object":
+        return isinstance(value, dict)
+    if value_type == "array":
+        return isinstance(value, list)
+    return False
+
+
+def _infer_value_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    return type(value).__name__
+
+
+def _mark_context_writes_skipped(
+    writes: list[ContextVariableWriteEvidence],
+    *,
+    error_message: str,
+    preserve_existing_errors: bool = False,
+) -> None:
+    for evidence in writes:
+        if preserve_existing_errors and evidence.error_message:
+            evidence.status = "skipped"
+            continue
+        evidence.status = "skipped"
+        evidence.error_message = error_message
+
+
+def _build_context_resolution_step(case: DSLCase, error_message: str) -> StepExecutionEvidence:
+    first_step = case.steps[0]
+    target = getattr(first_step, "target", None)
+    value = getattr(first_step, "value", None)
+    return StepExecutionEvidence(
+        step_index=0,
+        action="context_resolve",
+        target=target,
+        value=value,
+        status="failed",
+        duration_ms=0,
+        error_message=error_message,
+    )

@@ -33,6 +33,20 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
     latest_url: "http://example.com/login",
     latest_screenshot_url: "/artifacts/executions/12/step-01.png",
     origin_suite_run: null,
+    suite_context: {
+      reads: [
+        {
+          name: "sessionToken",
+          context_key: "session_token",
+          value_type: "string",
+          resolved: true,
+          source_suite_run_id: 7,
+          error_message: null,
+        },
+      ],
+      writes: [],
+      resolution_error: null,
+    },
     report: {
       status: "failed",
       steps: [
@@ -117,6 +131,8 @@ test("失败步骤默认展开，支持查看候选评分并按需展开 console
   expect(await screen.findByRole("heading", { name: "失败用例" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "返回执行中心" })).toHaveAttribute("href", "/executions");
   expect(screen.getByRole("link", { name: "返回用例" })).toHaveAttribute("href", "/cases/1/edit");
+  expect(screen.getByText("Suite Context")).toBeInTheDocument();
+  expect(screen.getByText(/session_token/)).toBeInTheDocument();
   expect(screen.getByText("No locator candidates matched target.")).toBeInTheDocument();
   expect(screen.getByText(/score=108/)).toBeInTheDocument();
   expect(screen.getByText(/rejected=element-not-enabled/)).toBeInTheDocument();
@@ -160,6 +176,7 @@ test("缺少用例 Base URL 的执行会显示修复提示", async () => {
     latest_url: null,
     latest_screenshot_url: null,
     origin_suite_run: null,
+    suite_context: null,
     report: {
       status: "failed",
       steps: [
@@ -208,6 +225,7 @@ test("执行详情页优先显示返回 Suite 批次链接", async () => {
       suite_name: "订单套件",
       suite_run_id: 14,
     },
+    suite_context: null,
     report: {
       status: "failed",
       steps: [

@@ -20,7 +20,14 @@ import { Link, useLocation, useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getExecutionDetail } from "../services/api";
-import type { ConsoleEvent, ExecutionStatus, NetworkEvent, StepExecutionEvidence } from "../types/api";
+import type {
+  ConsoleEvent,
+  ContextVariableReadEvidence,
+  ContextVariableWriteEvidence,
+  ExecutionStatus,
+  NetworkEvent,
+  StepExecutionEvidence,
+} from "../types/api";
 
 const DEFAULT_EVENT_PREVIEW_COUNT = 2;
 const DEFAULT_EXECUTIONS_PATH = "/executions";
@@ -245,6 +252,41 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
   );
 }
 
+function renderContextReads(reads: ContextVariableReadEvidence[]) {
+  if (!reads.length) {
+    return <Typography.Text type="secondary">无</Typography.Text>;
+  }
+
+  return (
+    <Space direction="vertical" size={2}>
+      {reads.map((item) => (
+        <Typography.Text key={`${item.context_key}-${item.name}`}>
+          {item.context_key} / {item.value_type} / {item.resolved ? "已解析" : "未解析"}
+          {item.source_suite_run_id ? ` / 来源批次 #${item.source_suite_run_id}` : ""}
+          {item.error_message ? ` / ${item.error_message}` : ""}
+        </Typography.Text>
+      ))}
+    </Space>
+  );
+}
+
+function renderContextWrites(writes: ContextVariableWriteEvidence[]) {
+  if (!writes.length) {
+    return <Typography.Text type="secondary">无</Typography.Text>;
+  }
+
+  return (
+    <Space direction="vertical" size={2}>
+      {writes.map((item) => (
+        <Typography.Text key={`${item.context_key}-${item.name}`}>
+          {item.context_key} / {item.value_type} / {item.source || "-"} / {item.status}
+          {item.error_message ? ` / ${item.error_message}` : ""}
+        </Typography.Text>
+      ))}
+    </Space>
+  );
+}
+
 export function ExecutionDetailPage() {
   const params = useParams<{ executionId: string }>();
   const location = useLocation();
@@ -370,6 +412,16 @@ export function ExecutionDetailPage() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      {detail.suite_context ? (
+        <Card title="Suite Context">
+          <Descriptions bordered column={1}>
+            <Descriptions.Item label="读取变量">{renderContextReads(detail.suite_context.reads)}</Descriptions.Item>
+            <Descriptions.Item label="写入变量">{renderContextWrites(detail.suite_context.writes)}</Descriptions.Item>
+            <Descriptions.Item label="解析结果">{detail.suite_context.resolution_error || "-"}</Descriptions.Item>
+          </Descriptions>
+        </Card>
+      ) : null}
 
       <Card title="步骤时间线">
         {steps.length ? (

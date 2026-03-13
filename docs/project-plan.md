@@ -22,6 +22,13 @@
 
 ## 当前状态快照
 
+### 2026-03-14 补充
+
+- 已完成 `Suite Context v2.3b`：`backend/app/services/suites.py` 已在 Suite 编排层实现运行时上下文容器、`input_contract` 校验、`${context_key}` 占位符解析、fail-fast 失败策略，以及基于显式 `output_contract.source` 的结构化结果回写。
+- 已完成 `Suite Context v2.3c`：前端已对齐 `input_contract / output_contract`、Suite Run 上下文元数据、Case 执行 `suite_context` 等类型；`SuiteRunDetailPage`、`ExecutionDetailPage` 与 `CaseWorkbenchPage` 已能展示或编辑上下文契约、上下文快照、变量读写证据与解析失败原因。
+- 当前 `v2.3` 的最小闭环已经打通：支持 “Case A 写变量，Case B 读变量”、缺失变量或类型不匹配时在 Suite 层直接失败、`reuse_source_context` / `empty_context` 两类失败重跑上下文策略，以及批次级 `context_snapshot` 持久化与回显。
+- `v3.0-v3.3` 继续顺延。后续若进入混合定位系统，应以当前 `Suite Context` 闭环为前提，只围绕定位链路、人工干预和修正记录推进，不再回头补基础上下文契约。
+
 ### 2026-03-13 补充
 
 - 已完成 `Suite 执行历史与失败重跑 v2.2`，当前代码里已经具备 `suite_runs`、`suite_run_items`、批次详情与失败重跑链路，`Suite -> Run -> Execution Detail` 的主回看路径已打通。

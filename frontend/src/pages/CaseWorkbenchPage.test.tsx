@@ -36,6 +36,8 @@ test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", as
       name: "公共冒烟",
       description: "验证公共站点可访问",
       base_url: "https://example.com",
+      input_contract: [],
+      output_contract: [],
       steps: templateSteps,
     },
     supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
@@ -46,6 +48,8 @@ test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", as
     name: "公共冒烟",
     description: "验证公共站点可访问",
     base_url: "https://example.com",
+    input_contract: [],
+    output_contract: [],
     steps: templateSteps,
     created_by: 1,
     updated_by: 1,
@@ -120,6 +124,8 @@ test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", as
       name: "公共冒烟",
       description: "验证公共站点可访问",
       base_url: "https://example.com",
+      input_contract: [],
+      output_contract: [],
       steps: templateSteps,
     });
     expect(api.executeCase).toHaveBeenCalledWith(3, { actor_user_id: 1 });
@@ -136,6 +142,8 @@ test("新建页可自动恢复本地草稿并在保存后清除", async () => {
       description: "草稿描述",
       project_id: 1,
       base_url: "https://example.com",
+      inputContracts: [],
+      outputContracts: [],
       editorMode: "structured",
       structuredSteps: [{ action: "goto", value: "/" }],
       stepsJson: JSON.stringify([{ action: "goto", value: "/" }], null, 2),
@@ -148,6 +156,8 @@ test("新建页可自动恢复本地草稿并在保存后清除", async () => {
       name: "草稿用例",
       description: "草稿描述",
       base_url: "https://example.com",
+      input_contract: [],
+      output_contract: [],
       steps: [{ action: "goto", value: "/" }],
     },
     supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
@@ -158,6 +168,8 @@ test("新建页可自动恢复本地草稿并在保存后清除", async () => {
     name: "草稿用例",
     description: "草稿描述",
     base_url: "https://example.com",
+    input_contract: [],
+    output_contract: [],
     steps: [{ action: "goto", value: "/" }],
     created_by: 1,
     updated_by: 1,
@@ -190,6 +202,8 @@ test("编辑页检测到本地草稿时可恢复", async () => {
       description: "草稿版本",
       project_id: 1,
       base_url: "https://draft.example.com",
+      inputContracts: [],
+      outputContracts: [],
       editorMode: "structured",
       structuredSteps: [{ action: "goto", value: "/draft" }],
       stepsJson: JSON.stringify([{ action: "goto", value: "/draft" }], null, 2),
@@ -202,6 +216,8 @@ test("编辑页检测到本地草稿时可恢复", async () => {
     name: "服务端版本",
     description: "服务器描述",
     base_url: "https://server.example.com",
+    input_contract: [],
+    output_contract: [],
     steps: [{ action: "goto", value: "/server" }],
     created_by: 1,
     updated_by: 1,
@@ -229,6 +245,8 @@ test("编辑页支持丢弃本地草稿", async () => {
       description: "待丢弃",
       project_id: 1,
       base_url: "https://discard.example.com",
+      inputContracts: [],
+      outputContracts: [],
       editorMode: "structured",
       structuredSteps: [{ action: "goto", value: "/discard" }],
       stepsJson: JSON.stringify([{ action: "goto", value: "/discard" }], null, 2),
@@ -241,6 +259,8 @@ test("编辑页支持丢弃本地草稿", async () => {
     name: "服务端版本",
     description: "服务器描述",
     base_url: "https://server.example.com",
+    input_contract: [],
+    output_contract: [],
     steps: [{ action: "goto", value: "/server" }],
     created_by: 1,
     updated_by: 1,
@@ -278,3 +298,98 @@ test("结构化步骤编辑支持新增、移动和删除", async () => {
   await userEvent.click(screen.getAllByRole("button", { name: /删\s*除/ })[1]);
   expect(screen.queryByText("Step 2")).not.toBeInTheDocument();
 });
+
+test("工作台可编辑输入输出契约并随保存一起提交", async () => {
+  vi.mocked(api.validateDslCase).mockImplementation(async (payload) => ({
+    valid: true,
+    case: payload,
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+  }));
+  vi.mocked(api.createCase).mockResolvedValue({
+    id: 15,
+    project_id: 1,
+    name: "上下文用例",
+    description: null,
+    base_url: "https://example.com",
+    input_contract: [
+      {
+        name: "sessionToken",
+        context_key: "session_token",
+        value_type: "string",
+        required: true,
+        description: null,
+      },
+    ],
+    output_contract: [
+      {
+        name: "latestPage",
+        context_key: "latest_page",
+        value_type: "string",
+        source: "latest_url",
+        description: null,
+      },
+    ],
+    steps: [{ action: "goto", value: "/" }],
+    created_by: 1,
+    updated_by: 1,
+    created_at: "2026-03-14T10:00:00",
+    updated_at: "2026-03-14T10:00:00",
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+    extraRoutes: [<Route key="edit" path="/cases/:caseId/edit" element={<div>edit-view</div>} />],
+  });
+
+  await userEvent.type(screen.getByLabelText("用例名称"), "上下文用例");
+  await userEvent.clear(screen.getByLabelText("用例 Base URL"));
+  await userEvent.type(screen.getByLabelText("用例 Base URL"), "https://example.com");
+
+  await userEvent.click(screen.getByRole("button", { name: "新增输入契约" }));
+  const sessionTokenFields = screen.getAllByDisplayValue("contextVar");
+  await userEvent.clear(sessionTokenFields[0]);
+  await userEvent.type(sessionTokenFields[0], "sessionToken");
+  const sessionKeyFields = screen.getAllByDisplayValue("context_var");
+  await userEvent.clear(sessionKeyFields[0]);
+  await userEvent.type(sessionKeyFields[0], "session_token");
+
+  await userEvent.click(screen.getByRole("button", { name: "新增输出契约" }));
+  const resultNameFields = screen.getAllByDisplayValue("resultVar");
+  await userEvent.clear(resultNameFields[0]);
+  await userEvent.type(resultNameFields[0], "latestPage");
+  const resultKeyFields = screen.getAllByDisplayValue("result_var");
+  await userEvent.clear(resultKeyFields[0]);
+  await userEvent.type(resultKeyFields[0], "latest_page");
+
+  await userEvent.click(screen.getByRole("button", { name: /^保\s*存$/ }));
+
+  await waitFor(() => {
+    expect(api.createCase).toHaveBeenCalledWith({
+      project_id: 1,
+      actor_user_id: 1,
+      name: "上下文用例",
+      description: null,
+      base_url: "https://example.com",
+      input_contract: [
+        {
+          name: "sessionToken",
+          context_key: "session_token",
+          value_type: "string",
+          required: true,
+          description: null,
+        },
+      ],
+      output_contract: [
+        {
+          name: "latestPage",
+          context_key: "latest_page",
+          value_type: "string",
+          source: "latest_url",
+          description: null,
+        },
+      ],
+      steps: [{ action: "goto", value: "/" }],
+    });
+  });
+}, 10000);

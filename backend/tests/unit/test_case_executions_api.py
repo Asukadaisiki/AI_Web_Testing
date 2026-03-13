@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import app.services.executions as execution_service
 from app.models import TestCaseRun
@@ -703,7 +703,7 @@ def test_get_executions_overview_supports_failure_fingerprint_filter(client, db_
         )
         case_ids.append(response.json()["id"])
 
-    now = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    now = datetime.now(UTC).replace(tzinfo=None, hour=9, minute=0, second=0, microsecond=0)
     db_session.add_all(
         [
             TestCaseRun(
@@ -822,7 +822,7 @@ def test_get_executions_overview_supports_window_days_trends_and_top_failed_case
         )
         case_ids.append(response.json()["id"])
 
-    now = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+    now = datetime.now(UTC).replace(tzinfo=None, hour=10, minute=0, second=0, microsecond=0)
     runs = [
         TestCaseRun(
             id=1,
@@ -1024,7 +1024,7 @@ def test_list_executions_supports_window_days_and_matches_overview_filters(clien
         )
         case_ids.append(response.json()["id"])
 
-    now = datetime.now().replace(hour=14, minute=0, second=0, microsecond=0)
+    now = datetime.now(UTC).replace(tzinfo=None, hour=14, minute=0, second=0, microsecond=0)
     db_session.add_all(
         [
             TestCaseRun(

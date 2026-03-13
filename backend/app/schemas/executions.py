@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from pydantic import Field
 
-from app.schemas.dsl import DSLModel, DSLVariableType
+from app.schemas.dsl import DSLModel, DSLVariableSource, DSLVariableType
 
 
 ExecutionStatus = Literal["running", "passed", "failed"]
@@ -86,6 +86,7 @@ class ContextVariableWriteEvidence(DSLModel):
     name: str
     context_key: str
     value_type: DSLVariableType
+    source: DSLVariableSource | None = None
     status: Literal["pending", "written", "skipped"] = "pending"
     error_message: str | None = None
 

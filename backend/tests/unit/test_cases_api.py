@@ -25,6 +25,7 @@ def test_create_case_success(client) -> None:
                     "name": "sessionToken",
                     "context_key": "session_token",
                     "value_type": "string",
+                    "source": "latest_url",
                 }
             ],
             "steps": [
@@ -56,6 +57,7 @@ def test_create_case_success(client) -> None:
             "name": "sessionToken",
             "context_key": "session_token",
             "value_type": "string",
+            "source": "latest_url",
             "description": None,
         }
     ]
@@ -153,6 +155,7 @@ def test_update_case_success(client) -> None:
                     "name": "confirmationCode",
                     "context_key": "confirmation_code",
                     "value_type": "string",
+                    "source": "last_step_value",
                 }
             ],
             "steps": [
@@ -180,6 +183,7 @@ def test_update_case_success(client) -> None:
             "name": "confirmationCode",
             "context_key": "confirmation_code",
             "value_type": "string",
+            "source": "last_step_value",
             "description": None,
         }
     ]

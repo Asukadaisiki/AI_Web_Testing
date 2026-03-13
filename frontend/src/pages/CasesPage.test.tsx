@@ -23,6 +23,8 @@ test("渲染用例列表并支持执行后跳转", async () => {
       project_id: 1,
       name: "登录冒烟",
       description: "检查登录链路",
+      input_contract: [],
+      output_contract: [],
       steps: [{ action: "goto", value: "/login" }],
       created_by: 1,
       updated_by: 1,

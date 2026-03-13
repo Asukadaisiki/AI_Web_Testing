@@ -733,6 +733,24 @@
 - 关联文件：`docs/project-plan.md`、`docs/bug-log.md`、`docs/execution-log.md`
 - 后续：同步完成后，可直接按 `v2.3a` 开始进入 `Suite Context` 的契约与数据层实现
 
+## 2026-03-14 00:44
+
+- 任务：完成 `Suite Context v2.3b/v2.3c`，补齐前后端可运行闭环并同步文档状态
+- 背景：`v2.3a` 已完成契约与数据层收口，但运行时变量解析、失败策略和前端可观测性尚未落地，项目还不能真正执行跨 Case 上下文传递。
+- 执行动作：
+  - 在 `backend/app/services/suites.py` 实现 Suite 运行时上下文容器、`${context_key}` 占位符解析、输入契约校验、输出变量回写、上下文快照更新与 fail-fast 错误落库。
+  - 在 `backend/app/services/executions.py` 增加运行时 DSL 覆盖执行与预计算失败写入能力，使 Suite 编排层能复用现有单 Case 执行模型而不下沉到 runner。
+  - 补齐 `backend/app/schemas/dsl.py`、`backend/app/schemas/executions.py`、`frontend/src/types/api.ts` 的上下文契约与证据类型，并更新 `CaseWorkbenchPage`、`SuiteRunDetailPage`、`ExecutionDetailPage` 的编辑和展示逻辑。
+  - 扩充前后端测试，覆盖跨 Case 变量传递、缺失变量 fail-fast、输出提取失败、重跑上下文模式差异，以及工作台契约编辑随保存提交。
+  - 修复 `test_case_executions_api.py` 中与 UTC 窗口聚合不一致的时间基准测试，消除全量后端回归中的时区敏感失败。
+- 结果：`Suite Context v2.3b/v2.3c` 已形成最小闭环，支持真实上下文读写、`reuse_source_context` / `empty_context` 两类重跑上下文策略、批次级 `context_snapshot` 持久化，以及前端对上下文来源、读写证据和错误原因的可视化。
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `49 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `29 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/schemas/dsl.py`、`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/services/suites.py`、`backend/tests/unit/test_case_executions_api.py`、`backend/tests/unit/test_cases_api.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/unit/test_suites_api.py`、`frontend/src/types/api.ts`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、相关前端测试文件、`docs/project-plan.md`
+- 后续：如继续推进，建议先补 README/使用说明中的 Suite Context 使用方式；确认稳定后再进入 `v3.0-v3.3` 的混合定位系统实现。
+
 ## 2026-03-13 11:45
 
 - 任务：开始执行 `Suite Context 与参数传递 v2.3a`

@@ -61,7 +61,67 @@ def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) 
     if record is None:
         raise EntityNotFoundError(f"Case {case_id} not found.")
     _ensure_user_exists(session, payload.actor_user_id)
-    normalized_case = DSLCase.model_validate(record.dsl)
+    return _execute_case_record(session, record, payload)
+
+
+def execute_case_with_override(
+    session: Session,
+    case_id: int,
+    payload: CaseExecutionRequest,
+    *,
+    case_override: DSLCase | None = None,
+    precomputed_error: StepExecutionEvidence | None = None,
+) -> StoredCaseExecutionDetail:
+    record = session.get(TestCase, case_id)
+    if record is None:
+        raise EntityNotFoundError(f"Case {case_id} not found.")
+    _ensure_user_exists(session, payload.actor_user_id)
+    return _execute_case_record(
+        session,
+        record,
+        payload,
+        case_override=case_override,
+        precomputed_error=precomputed_error,
+    )
+
+
+def mark_execution_failed(
+    session: Session,
+    execution_id: int,
+    *,
+    error_message: str,
+    failed_step: StepExecutionEvidence,
+) -> StoredCaseExecutionDetail:
+    execution = session.get(TestCaseRun, execution_id)
+    if execution is None:
+        raise EntityNotFoundError(f"Execution {execution_id} not found.")
+
+    report = _normalize_report(execution.report)
+    steps = list(report.steps) if report is not None else []
+    steps.append(_with_artifact_url(failed_step))
+    execution.status = "failed"
+    execution.error_message = error_message
+    execution.report = build_execution_report(status="failed", steps=steps).model_dump(mode="json")
+    if execution.finished_at is None:
+        execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
+    session.add(execution)
+    session.commit()
+    session.refresh(execution)
+
+    case = session.get(TestCase, execution.case_id)
+    case_name = case.name if case is not None else f"Case {execution.case_id}"
+    return _to_execution_detail(session, execution, case_name=case_name)
+
+
+def _execute_case_record(
+    session: Session,
+    record: TestCase,
+    payload: CaseExecutionRequest,
+    *,
+    case_override: DSLCase | None = None,
+    precomputed_error: StepExecutionEvidence | None = None,
+) -> StoredCaseExecutionDetail:
+    normalized_case = case_override or DSLCase.model_validate(record.dsl)
 
     execution = TestCaseRun(
         case_id=record.id,
@@ -77,7 +137,12 @@ def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) 
     missing_base_url_error = _build_missing_base_url_error(normalized_case, effective_base_url)
 
     try:
-        if missing_base_url_error is not None:
+        if precomputed_error is not None:
+            report = build_execution_report(status="failed", steps=[_with_artifact_url(precomputed_error)])
+            execution.status = "failed"
+            execution.report = report.model_dump(mode="json")
+            execution.error_message = precomputed_error.error_message
+        elif missing_base_url_error is not None:
             report = build_execution_report(status="failed", steps=[missing_base_url_error])
             execution.status = "failed"
             execution.report = report.model_dump(mode="json")

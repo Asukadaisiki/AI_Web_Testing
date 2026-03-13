@@ -1,6 +1,16 @@
 export type ExecutionStatus = "running" | "passed" | "failed";
 export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
 export type OverviewWindowDays = 7 | 14 | 30;
+export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
+export type DSLVariableSource =
+  | "latest_url"
+  | "error_message"
+  | "status"
+  | "last_step_url"
+  | "last_step_page_title"
+  | "last_step_target"
+  | "last_step_value"
+  | "last_step_error_message";
 
 export interface DSLStep {
   action: string;
@@ -10,12 +20,30 @@ export interface DSLStep {
   [key: string]: unknown;
 }
 
+export interface DSLCaseInputContract {
+  name: string;
+  context_key: string;
+  value_type: DSLVariableType;
+  required: boolean;
+  description?: string | null;
+}
+
+export interface DSLCaseOutputContract {
+  name: string;
+  context_key: string;
+  value_type: DSLVariableType;
+  source?: DSLVariableSource | null;
+  description?: string | null;
+}
+
 export interface StoredCaseSummary {
   id: number;
   project_id: number;
   name: string;
   description: string | null;
   base_url?: string | null;
+  input_contract: DSLCaseInputContract[];
+  output_contract: DSLCaseOutputContract[];
   steps: DSLStep[];
   created_by: number;
   updated_by: number;
@@ -29,6 +57,8 @@ export interface DSLCasePayload {
   name: string;
   description?: string | null;
   base_url?: string | null;
+  input_contract: DSLCaseInputContract[];
+  output_contract: DSLCaseOutputContract[];
   steps: DSLStep[];
 }
 
@@ -48,6 +78,26 @@ export interface StoredSuiteCase {
 }
 
 export type SuiteRunSource = "manual" | "rerun_failed";
+export type SuiteRunContextSource = "empty" | "suite_run_snapshot";
+export type SuiteRerunContextMode = "not_applicable" | "reuse_source_context" | "empty_context";
+
+export interface ContextVariableReadEvidence {
+  name: string;
+  context_key: string;
+  value_type: DSLVariableType;
+  resolved: boolean;
+  source_suite_run_id?: number | null;
+  error_message?: string | null;
+}
+
+export interface ContextVariableWriteEvidence {
+  name: string;
+  context_key: string;
+  value_type: DSLVariableType;
+  source?: DSLVariableSource | null;
+  status: "pending" | "written" | "skipped";
+  error_message?: string | null;
+}
 
 export interface StoredSuiteRunItem {
   id: number;
@@ -56,6 +106,9 @@ export interface StoredSuiteRunItem {
   order_index: number;
   execution_id: number;
   status: ExecutionStatus;
+  context_reads: ContextVariableReadEvidence[];
+  context_writes: ContextVariableWriteEvidence[];
+  context_resolution_error?: string | null;
 }
 
 export interface StoredSuiteRunSummary {
@@ -70,6 +123,10 @@ export interface StoredSuiteRunSummary {
   passed_cases: number;
   failed_cases: number;
   base_url_override?: string | null;
+  context_source: SuiteRunContextSource;
+  context_source_suite_run_id?: number | null;
+  rerun_context_mode: SuiteRerunContextMode;
+  context_snapshot: Record<string, unknown>;
   started_at: string;
   finished_at?: string | null;
 }
@@ -106,6 +163,7 @@ export interface SuiteMutationPayload {
 export interface SuiteExecutionRequest {
   actor_user_id: number;
   base_url?: string;
+  rerun_context_mode?: "reuse_source_context" | "empty_context";
 }
 
 export interface SuiteExecutionItem {
@@ -122,6 +180,10 @@ export interface SuiteExecutionResult {
   triggered_by: number;
   source: SuiteRunSource;
   source_suite_run_id?: number | null;
+  context_source: SuiteRunContextSource;
+  context_source_suite_run_id?: number | null;
+  rerun_context_mode: SuiteRerunContextMode;
+  context_snapshot: Record<string, unknown>;
   started_at: string;
   finished_at?: string | null;
   total_cases: number;
@@ -248,6 +310,11 @@ export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {
     suite_id: number;
     suite_name: string;
     suite_run_id: number;
+  } | null;
+  suite_context?: {
+    reads: ContextVariableReadEvidence[];
+    writes: ContextVariableWriteEvidence[];
+    resolution_error?: string | null;
   } | null;
 }
 

@@ -26,8 +26,12 @@ import {
 import type {
   CaseMutationPayload,
   DSLCasePayload,
+  DSLCaseInputContract,
+  DSLCaseOutputContract,
   DSLStep,
   DSLValidationResult,
+  DSLVariableSource,
+  DSLVariableType,
   StoredCaseDetail,
 } from "../types/api";
 
@@ -43,6 +47,8 @@ type WorkbenchDraft = {
   description?: string;
   project_id: number;
   base_url?: string;
+  inputContracts: DSLCaseInputContract[];
+  outputContracts: DSLCaseOutputContract[];
   editorMode: EditorMode;
   structuredSteps: DSLStep[];
   stepsJson: string;
@@ -64,6 +70,25 @@ const ACTION_OPTIONS: { label: string; value: StepAction }[] = [
   { label: "wait_for", value: "wait_for" },
   { label: "assert_text", value: "assert_text" },
   { label: "assert_url_contains", value: "assert_url_contains" },
+];
+
+const VARIABLE_TYPE_OPTIONS: { label: string; value: DSLVariableType }[] = [
+  { label: "string", value: "string" },
+  { label: "number", value: "number" },
+  { label: "boolean", value: "boolean" },
+  { label: "object", value: "object" },
+  { label: "array", value: "array" },
+];
+
+const OUTPUT_SOURCE_OPTIONS: { label: string; value: DSLVariableSource }[] = [
+  { label: "latest_url", value: "latest_url" },
+  { label: "error_message", value: "error_message" },
+  { label: "status", value: "status" },
+  { label: "last_step_url", value: "last_step_url" },
+  { label: "last_step_page_title", value: "last_step_page_title" },
+  { label: "last_step_target", value: "last_step_target" },
+  { label: "last_step_value", value: "last_step_value" },
+  { label: "last_step_error_message", value: "last_step_error_message" },
 ];
 
 const STEP_TEMPLATES: StepTemplate[] = [
@@ -124,11 +149,38 @@ function parseStepsJson(stepsJson: string): DSLStep[] {
   return parsedSteps as DSLStep[];
 }
 
-function buildDslPayload(values: WorkbenchFormValues, stepsJson: string): DSLCasePayload {
+function createDefaultInputContract(): DSLCaseInputContract {
+  return {
+    name: "contextVar",
+    context_key: "context_var",
+    value_type: "string",
+    required: true,
+    description: null,
+  };
+}
+
+function createDefaultOutputContract(): DSLCaseOutputContract {
+  return {
+    name: "resultVar",
+    context_key: "result_var",
+    value_type: "string",
+    source: "latest_url",
+    description: null,
+  };
+}
+
+function buildDslPayload(
+  values: WorkbenchFormValues,
+  stepsJson: string,
+  inputContracts: DSLCaseInputContract[],
+  outputContracts: DSLCaseOutputContract[],
+): DSLCasePayload {
   return {
     name: values.name,
     description: values.description || null,
     base_url: values.base_url?.trim() || null,
+    input_contract: inputContracts,
+    output_contract: outputContracts,
     steps: parseStepsJson(stepsJson),
   };
 }
@@ -170,6 +222,8 @@ function createDefaultDraft(): WorkbenchDraft {
     description: "",
     project_id: 1,
     base_url: "",
+    inputContracts: [],
+    outputContracts: [],
     editorMode: "structured",
     structuredSteps: steps,
     stepsJson: formatStepsJson(steps),
@@ -232,6 +286,8 @@ export function CaseWorkbenchPage() {
   const [messageApi, contextHolder] = message.useMessage();
   const [editorMode, setEditorMode] = useState<EditorMode>("structured");
   const [templateValue, setTemplateValue] = useState<string>(STEP_TEMPLATES[0].value);
+  const [inputContracts, setInputContracts] = useState<DSLCaseInputContract[]>([]);
+  const [outputContracts, setOutputContracts] = useState<DSLCaseOutputContract[]>([]);
   const [structuredSteps, setStructuredSteps] = useState<DSLStep[]>([createDefaultStep()]);
   const [stepsJson, setStepsJson] = useState<string>(formatStepsJson([createDefaultStep()]));
   const [validationResult, setValidationResult] = useState<DSLValidationResult | null>(null);
@@ -257,6 +313,8 @@ export function CaseWorkbenchPage() {
       project_id: storedCase.project_id,
       base_url: storedCase.base_url ?? "",
     });
+    setInputContracts(storedCase.input_contract);
+    setOutputContracts(storedCase.output_contract);
     setStructuredSteps(storedCase.steps);
     setStepsJson(formatStepsJson(storedCase.steps));
     setEditorMode("structured");
@@ -268,6 +326,8 @@ export function CaseWorkbenchPage() {
     description: storedCase.description ?? "",
     project_id: storedCase.project_id,
     base_url: storedCase.base_url ?? "",
+    inputContracts: storedCase.input_contract,
+    outputContracts: storedCase.output_contract,
     editorMode: "structured",
     structuredSteps: storedCase.steps,
     stepsJson: formatStepsJson(storedCase.steps),
@@ -280,6 +340,8 @@ export function CaseWorkbenchPage() {
       project_id: draft.project_id,
       base_url: draft.base_url ?? "",
     });
+    setInputContracts(draft.inputContracts ?? []);
+    setOutputContracts(draft.outputContracts ?? []);
     setStructuredSteps(draft.structuredSteps);
     setStepsJson(draft.stepsJson);
     setEditorMode(draft.editorMode);
@@ -322,6 +384,8 @@ export function CaseWorkbenchPage() {
       description: watchedDescription ?? "",
       project_id: watchedProjectId,
       base_url: watchedBaseUrl ?? "",
+      inputContracts,
+      outputContracts,
       editorMode,
       structuredSteps,
       stepsJson,
@@ -337,7 +401,9 @@ export function CaseWorkbenchPage() {
     baselineSignature,
     draftKey,
     editorMode,
+    inputContracts,
     isHydrated,
+    outputContracts,
     pendingDraft,
     stepsJson,
     structuredSteps,
@@ -350,6 +416,16 @@ export function CaseWorkbenchPage() {
   const syncStructuredSteps = (nextSteps: DSLStep[]) => {
     setStructuredSteps(nextSteps);
     setStepsJson(formatStepsJson(nextSteps));
+    setValidationResult(null);
+  };
+
+  const syncInputContracts = (nextContracts: DSLCaseInputContract[]) => {
+    setInputContracts(nextContracts);
+    setValidationResult(null);
+  };
+
+  const syncOutputContracts = (nextContracts: DSLCaseOutputContract[]) => {
+    setOutputContracts(nextContracts);
     setValidationResult(null);
   };
 
@@ -414,7 +490,7 @@ export function CaseWorkbenchPage() {
   const saveMutation = useMutation({
     mutationFn: async ({ executeAfterSave }: { executeAfterSave: boolean }) => {
       const values = await form.validateFields();
-      const dslPayload = buildDslPayload(values, buildStepsJsonForSubmit());
+      const dslPayload = buildDslPayload(values, buildStepsJsonForSubmit(), inputContracts, outputContracts);
       const validated = await validateDslCase(dslPayload);
       setValidationResult(validated);
 
@@ -459,7 +535,7 @@ export function CaseWorkbenchPage() {
   const validateMutation = useMutation({
     mutationFn: async () => {
       const values = await form.validateFields();
-      return validateDslCase(buildDslPayload(values, buildStepsJsonForSubmit()));
+      return validateDslCase(buildDslPayload(values, buildStepsJsonForSubmit(), inputContracts, outputContracts));
     },
     onSuccess: (result) => {
       setValidationResult(result);
@@ -574,6 +650,219 @@ export function CaseWorkbenchPage() {
               <Input.TextArea rows={3} placeholder="说明该用例验证的业务链路" />
             </Form.Item>
           </Form>
+        </Card>
+
+        <Card title="上下文契约">
+          <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              <Space align="center" style={{ justifyContent: "space-between", width: "100%" }} wrap>
+                <Typography.Title level={5} style={{ margin: 0 }}>
+                  输入契约
+                </Typography.Title>
+                <Button onClick={() => syncInputContracts([...inputContracts, createDefaultInputContract()])}>
+                  新增输入契约
+                </Button>
+              </Space>
+              {inputContracts.length ? (
+                inputContracts.map((contract, index) => (
+                  <Card key={`input-contract-${index}`} size="small" title={`输入 ${index + 1}`}>
+                    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                      <div className="structured-step-grid">
+                        <div>
+                          <Typography.Text type="secondary">名称</Typography.Text>
+                          <Input
+                            style={{ marginTop: 8 }}
+                            value={contract.name}
+                            onChange={(event) =>
+                              syncInputContracts(
+                                inputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, name: event.target.value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Typography.Text type="secondary">上下文键</Typography.Text>
+                          <Input
+                            style={{ marginTop: 8 }}
+                            value={contract.context_key}
+                            onChange={(event) =>
+                              syncInputContracts(
+                                inputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, context_key: event.target.value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Typography.Text type="secondary">类型</Typography.Text>
+                          <Select
+                            style={{ width: "100%", marginTop: 8 }}
+                            value={contract.value_type}
+                            options={VARIABLE_TYPE_OPTIONS}
+                            onChange={(value) =>
+                              syncInputContracts(
+                                inputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, value_type: value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Typography.Text type="secondary">必填</Typography.Text>
+                          <Select
+                            style={{ width: "100%", marginTop: 8 }}
+                            value={contract.required}
+                            options={[
+                              { label: "是", value: true },
+                              { label: "否", value: false },
+                            ]}
+                            onChange={(value) =>
+                              syncInputContracts(
+                                inputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, required: value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                      <Input.TextArea
+                        rows={2}
+                        placeholder="可选：说明这个变量在 Suite 中的来源或用途"
+                        value={contract.description ?? ""}
+                        onChange={(event) =>
+                          syncInputContracts(
+                            inputContracts.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, description: event.target.value || null } : item,
+                            ),
+                          )
+                        }
+                      />
+                      <Space wrap>
+                        <Button
+                          danger
+                          onClick={() =>
+                            syncInputContracts(inputContracts.filter((_, itemIndex) => itemIndex !== index))
+                          }
+                        >
+                          删除输入契约
+                        </Button>
+                      </Space>
+                    </Space>
+                  </Card>
+                ))
+              ) : (
+                <Alert type="info" showIcon message="当前没有输入契约，Case 将不会从 Suite Context 读取变量。" />
+              )}
+            </Space>
+
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              <Space align="center" style={{ justifyContent: "space-between", width: "100%" }} wrap>
+                <Typography.Title level={5} style={{ margin: 0 }}>
+                  输出契约
+                </Typography.Title>
+                <Button onClick={() => syncOutputContracts([...outputContracts, createDefaultOutputContract()])}>
+                  新增输出契约
+                </Button>
+              </Space>
+              {outputContracts.length ? (
+                outputContracts.map((contract, index) => (
+                  <Card key={`output-contract-${index}`} size="small" title={`输出 ${index + 1}`}>
+                    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                      <div className="structured-step-grid">
+                        <div>
+                          <Typography.Text type="secondary">名称</Typography.Text>
+                          <Input
+                            style={{ marginTop: 8 }}
+                            value={contract.name}
+                            onChange={(event) =>
+                              syncOutputContracts(
+                                outputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, name: event.target.value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Typography.Text type="secondary">上下文键</Typography.Text>
+                          <Input
+                            style={{ marginTop: 8 }}
+                            value={contract.context_key}
+                            onChange={(event) =>
+                              syncOutputContracts(
+                                outputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, context_key: event.target.value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Typography.Text type="secondary">类型</Typography.Text>
+                          <Select
+                            style={{ width: "100%", marginTop: 8 }}
+                            value={contract.value_type}
+                            options={VARIABLE_TYPE_OPTIONS}
+                            onChange={(value) =>
+                              syncOutputContracts(
+                                outputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, value_type: value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Typography.Text type="secondary">提取来源</Typography.Text>
+                          <Select
+                            style={{ width: "100%", marginTop: 8 }}
+                            value={contract.source ?? "latest_url"}
+                            options={OUTPUT_SOURCE_OPTIONS}
+                            onChange={(value) =>
+                              syncOutputContracts(
+                                outputContracts.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, source: value } : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                      <Input.TextArea
+                        rows={2}
+                        placeholder="可选：说明这个变量会回写到哪个上下文键"
+                        value={contract.description ?? ""}
+                        onChange={(event) =>
+                          syncOutputContracts(
+                            outputContracts.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, description: event.target.value || null } : item,
+                            ),
+                          )
+                        }
+                      />
+                      <Space wrap>
+                        <Button
+                          danger
+                          onClick={() =>
+                            syncOutputContracts(outputContracts.filter((_, itemIndex) => itemIndex !== index))
+                          }
+                        >
+                          删除输出契约
+                        </Button>
+                      </Space>
+                    </Space>
+                  </Card>
+                ))
+              ) : (
+                <Alert type="info" showIcon message="当前没有输出契约，Case 执行后不会向 Suite Context 回写变量。" />
+              )}
+            </Space>
+          </Space>
         </Card>
 
         <Card

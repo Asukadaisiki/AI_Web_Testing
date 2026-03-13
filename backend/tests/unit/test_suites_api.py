@@ -142,8 +142,10 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
                 "name": "sessionToken",
                 "context_key": "session_token",
                 "value_type": "string",
+                "source": "latest_url",
             }
         ],
+        steps=[{"action": "goto", "value": "/session"}],
     )
     case_id_2 = _create_case(
         client,
@@ -156,6 +158,7 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
                 "required": True,
             }
         ],
+        steps=[{"action": "assert_url_contains", "value": "${session_token}"}],
     )
     suite_response = client.post(
         "/api/v1/suites",
@@ -173,12 +176,15 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
     def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
         call_sequence.append(case.name)
         assert base_url == "https://override.example.com"
+        if case.name == "Step Two":
+            assert case.steps[0].value == "https://override.example.com/sessions/token-001"
         return [
             StepExecutionEvidence(
                 step_index=0,
                 action="goto",
                 value="/",
                 status="passed",
+                url="https://override.example.com/sessions/token-001",
             )
         ]
 
@@ -200,7 +206,7 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
     assert payload["context_source"] == "empty"
     assert payload["context_source_suite_run_id"] is None
     assert payload["rerun_context_mode"] == "not_applicable"
-    assert payload["context_snapshot"] == {}
+    assert payload["context_snapshot"] == {"session_token": "https://override.example.com/sessions/token-001"}
     assert payload["total_cases"] == 2
     assert payload["passed_cases"] == 2
     assert payload["failed_cases"] == 0
@@ -220,7 +226,8 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
                     "name": "sessionToken",
                     "context_key": "session_token",
                     "value_type": "string",
-                    "status": "pending",
+                    "source": "latest_url",
+                    "status": "written",
                     "error_message": None,
                 }
             ],
@@ -238,8 +245,8 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
                     "name": "sessionToken",
                     "context_key": "session_token",
                     "value_type": "string",
-                    "resolved": False,
-                    "source_suite_run_id": None,
+                    "resolved": True,
+                    "source_suite_run_id": 1,
                     "error_message": None,
                 }
             ],
@@ -258,7 +265,7 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
     assert stored_runs[0].base_url_override == "https://override.example.com"
     assert stored_runs[0].context_source == "empty"
     assert stored_runs[0].rerun_context_mode == "not_applicable"
-    assert stored_runs[0].context_snapshot == {}
+    assert stored_runs[0].context_snapshot == {"session_token": "https://override.example.com/sessions/token-001"}
 
     stored_items = db_session.query(SuiteRunItem).order_by(SuiteRunItem.id.asc()).all()
     assert len(stored_items) == 2
@@ -268,7 +275,8 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
             "name": "sessionToken",
             "context_key": "session_token",
             "value_type": "string",
-            "status": "pending",
+            "source": "latest_url",
+            "status": "written",
             "error_message": None,
         }
     ]
@@ -277,8 +285,8 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
             "name": "sessionToken",
             "context_key": "session_token",
             "value_type": "string",
-            "resolved": False,
-            "source_suite_run_id": None,
+            "resolved": True,
+            "source_suite_run_id": 1,
             "error_message": None,
         }
     ]
@@ -297,7 +305,9 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
     suites_response = client.get("/api/v1/suites")
     assert suites_response.status_code == 200
     assert suites_response.json()[0]["latest_run"]["id"] == 1
-    assert suites_response.json()[0]["latest_run"]["context_snapshot"] == {}
+    assert suites_response.json()[0]["latest_run"]["context_snapshot"] == {
+        "session_token": "https://override.example.com/sessions/token-001"
+    }
 
     execution_response = client.get("/api/v1/executions/1")
     assert execution_response.status_code == 200
@@ -313,7 +323,8 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
                 "name": "sessionToken",
                 "context_key": "session_token",
                 "value_type": "string",
-                "status": "pending",
+                "source": "latest_url",
+                "status": "written",
                 "error_message": None,
             }
         ],
@@ -443,6 +454,296 @@ def test_rerun_failed_suite_run_rejects_run_without_failures(client, monkeypatch
     rerun_response = client.post("/api/v1/suites/1/runs/1/rerun-failed", json={"actor_user_id": 1})
     assert rerun_response.status_code == 422
     assert rerun_response.json() == {"detail": "Suite run does not contain failed cases to rerun."}
+
+
+def test_execute_suite_fails_fast_when_required_context_is_missing(client, monkeypatch) -> None:
+    case_id = _create_case(
+        client,
+        name="Needs Context",
+        input_contract=[
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "string",
+                "required": True,
+            }
+        ],
+        steps=[{"action": "assert_url_contains", "value": "${session_token}"}],
+    )
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Missing Context Suite",
+            "cases": [{"case_id": case_id}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    runner_calls: list[str] = []
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+        runner_calls.append(case.name)
+        return []
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert runner_calls == []
+    assert payload["status"] == "failed"
+    assert payload["failed_cases"] == 1
+    assert payload["context_snapshot"] == {}
+    assert payload["items"][0]["context_reads"] == [
+        {
+            "name": "sessionToken",
+            "context_key": "session_token",
+            "value_type": "string",
+            "resolved": False,
+            "source_suite_run_id": None,
+            "error_message": "Required context key 'session_token' is missing.",
+        }
+    ]
+    assert payload["items"][0]["context_resolution_error"] == "Required context key 'session_token' is missing."
+
+    execution_response = client.get(f"/api/v1/executions/{payload['items'][0]['execution_id']}")
+    assert execution_response.status_code == 200
+    assert execution_response.json()["status"] == "failed"
+    assert execution_response.json()["report"]["steps"][0]["action"] == "context_resolve"
+    assert execution_response.json()["suite_context"]["resolution_error"] == "Required context key 'session_token' is missing."
+
+
+def test_execute_suite_marks_output_write_failure_when_source_value_is_missing(client, monkeypatch) -> None:
+    case_id = _create_case(
+        client,
+        name="Writes Missing Output",
+        output_contract=[
+            {
+                "name": "pageTitle",
+                "context_key": "page_title",
+                "value_type": "string",
+                "source": "last_step_page_title",
+            }
+        ],
+    )
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Output Failure Suite",
+            "cases": [{"case_id": case_id}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="goto",
+                value="/",
+                status="passed",
+                url="https://example.com/final",
+            )
+        ]
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["context_snapshot"] == {}
+    assert payload["items"][0]["context_writes"] == [
+        {
+            "name": "pageTitle",
+            "context_key": "page_title",
+            "value_type": "string",
+            "source": "last_step_page_title",
+            "status": "skipped",
+            "error_message": "Output contract source 'last_step_page_title' did not produce a value.",
+        }
+    ]
+    assert payload["items"][0]["context_resolution_error"] == (
+        "Output contract source 'last_step_page_title' did not produce a value."
+    )
+
+
+def test_execute_suite_rejects_context_type_mismatch(client, monkeypatch) -> None:
+    case_id_1 = _create_case(
+        client,
+        name="Writes String",
+        output_contract=[
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "string",
+                "source": "latest_url",
+            }
+        ],
+    )
+    case_id_2 = _create_case(
+        client,
+        name="Reads Number",
+        input_contract=[
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "number",
+                "required": True,
+            }
+        ],
+        steps=[{"action": "assert_url_contains", "value": "${session_token}"}],
+    )
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Type Mismatch Suite",
+            "cases": [{"case_id": case_id_1}, {"case_id": case_id_2}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="goto",
+                value="/",
+                status="passed",
+                url="https://example.com/string-value",
+            )
+        ]
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["items"][1]["context_reads"] == [
+        {
+            "name": "sessionToken",
+            "context_key": "session_token",
+            "value_type": "number",
+            "resolved": False,
+            "source_suite_run_id": None,
+            "error_message": "Context key 'session_token' expected number but received string.",
+        }
+    ]
+    assert payload["items"][1]["context_resolution_error"] == (
+        "Context key 'session_token' expected number but received string."
+    )
+
+
+def test_rerun_failed_suite_run_supports_reuse_source_context_and_empty_context(client, monkeypatch) -> None:
+    case_id_1 = _create_case(
+        client,
+        name="Write Token",
+        output_contract=[
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "string",
+                "source": "latest_url",
+            }
+        ],
+    )
+    case_id_2 = _create_case(
+        client,
+        name="Flaky Consumer",
+        input_contract=[
+            {
+                "name": "sessionToken",
+                "context_key": "session_token",
+                "value_type": "string",
+                "required": True,
+            }
+        ],
+        steps=[{"action": "assert_url_contains", "value": "${session_token}"}],
+    )
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Rerun Context Suite",
+            "cases": [{"case_id": case_id_1}, {"case_id": case_id_2}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    case_two_attempt = {"count": 0}
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+        if case.name == "Write Token":
+            return [
+                StepExecutionEvidence(
+                    step_index=0,
+                    action="goto",
+                    value="/",
+                    status="passed",
+                    url="https://example.com/session-rerun",
+                )
+            ]
+
+        assert case.steps[0].value == "https://example.com/session-rerun"
+        case_two_attempt["count"] += 1
+        if case_two_attempt["count"] == 1:
+            raise RunnerExecutionError(
+                "runner boom",
+                step_results=[
+                    StepExecutionEvidence(
+                        step_index=0,
+                        action="assert_url_contains",
+                        value="https://example.com/session-rerun",
+                        status="failed",
+                        error_message="runner boom",
+                    )
+                ],
+            )
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="assert_url_contains",
+                value="https://example.com/session-rerun",
+                status="passed",
+                url="https://example.com/session-rerun",
+            )
+        ]
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    initial_response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+    assert initial_response.status_code == 200
+    assert initial_response.json()["status"] == "failed"
+    assert initial_response.json()["context_snapshot"] == {"session_token": "https://example.com/session-rerun"}
+
+    reuse_response = client.post("/api/v1/suites/1/runs/1/rerun-failed", json={"actor_user_id": 1})
+    assert reuse_response.status_code == 200
+    assert reuse_response.json()["status"] == "passed"
+    assert reuse_response.json()["context_source"] == "suite_run_snapshot"
+    assert reuse_response.json()["context_snapshot"] == {"session_token": "https://example.com/session-rerun"}
+
+    empty_response = client.post(
+        "/api/v1/suites/1/runs/1/rerun-failed",
+        json={"actor_user_id": 1, "rerun_context_mode": "empty_context"},
+    )
+    assert empty_response.status_code == 200
+    assert empty_response.json()["status"] == "failed"
+    assert empty_response.json()["context_source"] == "empty"
+    assert empty_response.json()["context_snapshot"] == {}
+    assert empty_response.json()["items"][0]["context_resolution_error"] == (
+        "Required context key 'session_token' is missing."
+    )
 
 
 def test_execute_suite_rejects_empty_seeded_suite(client, db_session) -> None:

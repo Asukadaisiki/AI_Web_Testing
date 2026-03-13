@@ -45,6 +45,16 @@ class AssertUrlContainsStep(DSLModel):
 
 
 DSLVariableType = Literal["string", "number", "boolean", "object", "array"]
+DSLVariableSource = Literal[
+    "latest_url",
+    "error_message",
+    "status",
+    "last_step_url",
+    "last_step_page_title",
+    "last_step_target",
+    "last_step_value",
+    "last_step_error_message",
+]
 
 
 class DSLCaseInputContract(DSLModel):
@@ -59,6 +69,7 @@ class DSLCaseOutputContract(DSLModel):
     name: str = Field(min_length=1, max_length=100)
     context_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     value_type: DSLVariableType
+    source: DSLVariableSource | None = None
     description: str | None = Field(default=None, max_length=500)
 
 
