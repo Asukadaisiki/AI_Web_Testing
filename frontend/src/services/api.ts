@@ -1,6 +1,7 @@
 import type {
   CaseMutationPayload,
   CaseExecutionRequest,
+  CreateCorrectionPayload,
   DSLCasePayload,
   DSLValidationResult,
   ExecutionsOverview,
@@ -9,6 +10,7 @@ import type {
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
   StoredCaseSummary,
+  StoredLocatorCorrection,
   StoredSuiteDetail,
   StoredSuiteRunDetail,
   StoredSuiteRunSummary,
@@ -120,6 +122,13 @@ export function validateDslCase(payload: DSLCasePayload) {
 
 export function executeCase(caseId: number, payload: CaseExecutionRequest) {
   return request<StoredCaseExecutionDetail>(`/api/v1/cases/${caseId}/execute`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createCorrection(payload: CreateCorrectionPayload) {
+  return request<StoredLocatorCorrection>("/api/v1/corrections", {
     method: "POST",
     body: JSON.stringify(payload),
   });

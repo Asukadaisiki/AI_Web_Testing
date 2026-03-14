@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import SuiteRun, SuiteRunItem, TestCase, TestCaseRun, TestSuite, User
 from app.reporters import build_execution_report
-from app.runners import RunnerExecutionError, execute_case_with_playwright
+from app.runners import RunnerExecutionError, RunnerInterventionError, execute_case_with_playwright
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
@@ -152,12 +152,19 @@ def _execute_case_record(
                 case=normalized_case,
                 execution_id=execution.id,
                 base_url=effective_base_url,
+                db_session=session,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
             report = build_execution_report(status="passed", steps=step_results)
             execution.status = "passed"
             execution.report = report.model_dump(mode="json")
             execution.error_message = None
+    except RunnerInterventionError as exc:
+        step_results = [_with_artifact_url(step) for step in exc.step_results]
+        report = build_execution_report(status="failed", steps=step_results)
+        execution.status = "needs_intervention"
+        execution.report = report.model_dump(mode="json")
+        execution.error_message = str(exc)
     except RunnerExecutionError as exc:
         step_results = [_with_artifact_url(step) for step in exc.step_results]
         report = build_execution_report(status="failed", steps=step_results)
@@ -273,7 +280,7 @@ def get_executions_overview(
     category_counter = Counter(
         item.failure_category
         for item in filtered_summaries
-        if item.status == "failed" and item.failure_category is not None
+        if item.status in {"failed", "needs_intervention"} and item.failure_category is not None
     )
 
     return ExecutionsOverview(
@@ -287,7 +294,9 @@ def get_executions_overview(
         previous_window_range=previous_window_range,
         previous_window_stats=previous_stats,
         window_comparison=window_comparison,
-        latest_failed_runs=[item for item in filtered_summaries if item.status == "failed"][:LATEST_FAILED_RUNS_LIMIT],
+        latest_failed_runs=[
+            item for item in filtered_summaries if item.status in {"failed", "needs_intervention"}
+        ][:LATEST_FAILED_RUNS_LIMIT],
         failure_categories=[
             FailureCategoryCount(category=category, count=category_counter.get(category, 0))
             for category in FAILURE_CATEGORY_ORDER
@@ -561,7 +570,7 @@ def _describe_failure(
     report,
     error_message: str | None,
 ) -> ExecutionFailureDescriptor:
-    if summary.status != "failed":
+    if summary.status not in {"failed", "needs_intervention"}:
         return ExecutionFailureDescriptor()
 
     title = _derive_failure_title(
@@ -644,7 +653,7 @@ def _derive_latest_screenshot_url(report) -> str | None:
 
 def _build_aggregate_snapshot(summaries: list[StoredCaseExecutionSummary]) -> ExecutionAggregateSnapshot:
     passed_count = sum(1 for item in summaries if item.status == "passed")
-    failed_count = sum(1 for item in summaries if item.status == "failed")
+    failed_count = sum(1 for item in summaries if item.status in {"failed", "needs_intervention"})
     running_count = sum(1 for item in summaries if item.status == "running")
     finished_total = passed_count + failed_count
     durations = [item.duration_ms for item in summaries if item.status != "running" and item.duration_ms is not None]
@@ -686,7 +695,7 @@ def _build_trend_points(
     for bucket in dates:
         items = daily_buckets.get(bucket, [])
         passed_count = sum(1 for item in items if item.status == "passed")
-        failed_count = sum(1 for item in items if item.status == "failed")
+        failed_count = sum(1 for item in items if item.status in {"failed", "needs_intervention"})
         finished_total = passed_count + failed_count
         durations = [item.duration_ms for item in items if item.status != "running" and item.duration_ms is not None]
         trend_points.append(
@@ -717,7 +726,9 @@ def _build_failure_step_actions(
     summaries: list[StoredCaseExecutionSummary],
 ) -> list[FailureStepActionCount]:
     action_counter = Counter(
-        item.failure_step_action for item in summaries if item.status == "failed" and item.failure_step_action
+        item.failure_step_action
+        for item in summaries
+        if item.status in {"failed", "needs_intervention"} and item.failure_step_action
     )
     return [
         FailureStepActionCount(action=action, count=count)
@@ -730,7 +741,7 @@ def _build_failure_root_causes(
 ) -> list[FailureRootCause]:
     grouped: dict[str, list[tuple[StoredCaseExecutionSummary, ExecutionFailureDescriptor]]] = {}
     for summary, descriptor in entries:
-        if summary.status != "failed" or descriptor.fingerprint is None or descriptor.title is None:
+        if summary.status not in {"failed", "needs_intervention"} or descriptor.fingerprint is None or descriptor.title is None:
             continue
         grouped.setdefault(descriptor.fingerprint, []).append((summary, descriptor))
 
@@ -762,7 +773,7 @@ def _build_failure_root_causes(
 def _build_top_failed_cases(
     summaries: list[StoredCaseExecutionSummary],
 ) -> list[TopFailedCase]:
-    failed_summaries = [item for item in summaries if item.status == "failed"]
+    failed_summaries = [item for item in summaries if item.status in {"failed", "needs_intervention"}]
     grouped: dict[int, list[StoredCaseExecutionSummary]] = {}
     for summary in failed_summaries:
         grouped.setdefault(summary.case_id, []).append(summary)

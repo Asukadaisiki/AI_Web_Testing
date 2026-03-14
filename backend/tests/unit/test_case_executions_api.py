@@ -7,8 +7,11 @@ from datetime import UTC, datetime, timedelta
 import app.services.executions as execution_service
 from app.models import TestCaseRun
 from app.schemas.executions import (
+    AILocateCandidate,
     ConsoleEvent,
+    DOMElementSnapshot,
     DOMSummary,
+    InterventionRequest,
     LocatorCandidateAttributes,
     LocatorCandidateEvidence,
     LocatorTrace,
@@ -16,7 +19,7 @@ from app.schemas.executions import (
     StepExecutionEvidence,
     ViewportSnapshot,
 )
-from app.runners import RunnerExecutionError
+from app.runners import RunnerExecutionError, RunnerInterventionError
 
 
 def test_execute_case_success(client, monkeypatch) -> None:
@@ -31,7 +34,7 @@ def test_execute_case_success(client, monkeypatch) -> None:
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         assert case.name == "执行用例"
         assert execution_id == 1
         assert base_url == "http://example.com"
@@ -148,7 +151,7 @@ def test_execute_case_uses_case_base_url_when_request_does_not_override(client, 
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         assert case.base_url == "https://case.example.com"
         assert execution_id == 1
         assert base_url == "https://case.example.com"
@@ -187,7 +190,7 @@ def test_execute_case_fails_early_when_relative_goto_has_no_case_base_url(client
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         raise AssertionError("runner should not be called when case base_url is missing")
 
     monkeypatch.setattr(
@@ -219,6 +222,79 @@ def test_execute_case_returns_not_found_for_unknown_case(client) -> None:
     assert response.json() == {"detail": "Case 999 not found."}
 
 
+def test_execute_case_marks_needs_intervention_when_all_locator_tiers_fail(client, monkeypatch) -> None:
+    create_response = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "需要人工干预用例",
+            "base_url": "https://case.example.com",
+            "steps": [{"action": "click", "target": "登录按钮"}],
+        },
+    )
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
+        raise RunnerInterventionError(
+            "All locate tiers failed for target: 登录按钮",
+            step_results=[
+                StepExecutionEvidence(
+                    step_index=0,
+                    action="click",
+                    target="登录按钮",
+                    status="failed",
+                    error_message="All locate tiers failed for target: 登录按钮",
+                    locator_trace=LocatorTrace(
+                        target="登录按钮",
+                        candidates=[],
+                        failure_reason="No locator candidates matched target.",
+                    ),
+                    intervention_request=InterventionRequest(
+                        screenshot_url="/artifacts/executions/1/step-01.png",
+                        page_url="https://case.example.com/login",
+                        target_description="登录按钮",
+                        dom_snapshot=[
+                            DOMElementSnapshot(
+                                tag="button",
+                                text="登录",
+                                role="button",
+                                css_selector="#login-btn",
+                                xpath="/html/body/button[1]",
+                                visible=True,
+                                enabled=True,
+                            )
+                        ],
+                        ai_candidate=AILocateCandidate(
+                            center=[320, 160],
+                            bbox=[280, 120, 360, 200],
+                            confidence=0.7,
+                            raw_response='{"bbox":[280,120,360,200]}',
+                        ),
+                    ),
+                    screenshot_path="artifacts/executions/1/step-01.png",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        execution_service,
+        "execute_case_with_playwright",
+        fake_execute_case_with_playwright,
+    )
+
+    response = client.post(
+        f"/api/v1/cases/{create_response.json()['id']}/execute",
+        json={"actor_user_id": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "needs_intervention"
+    assert response.json()["failure_category"] == "locator"
+    assert response.json()["report"]["status"] == "failed"
+    assert response.json()["report"]["steps"][0]["intervention_request"]["page_url"] == "https://case.example.com/login"
+    assert response.json()["report"]["steps"][0]["intervention_request"]["dom_snapshot"][0]["css_selector"] == "#login-btn"
+
+
 def test_get_execution_returns_not_found_for_unknown_id(client) -> None:
     response = client.get("/api/v1/executions/999")
 
@@ -241,7 +317,7 @@ def test_list_executions_supports_filters_limit_offset_and_case_id(client, monke
         )
         created_cases.append(response.json()["id"])
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         if case.name == "失败用例":
             raise RunnerExecutionError(
                 "boom",

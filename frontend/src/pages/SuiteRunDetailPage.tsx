@@ -6,18 +6,25 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ContextReadEvidenceList, ContextWriteEvidenceList } from "../components/ContextEvidenceList";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getSuiteRunDetail, rerunFailedSuiteRun } from "../services/api";
-import type { ContextVariableReadEvidence, ContextVariableWriteEvidence, StoredSuiteRunItem } from "../types/api";
+import type {
+  ContextVariableReadEvidence,
+  ContextVariableWriteEvidence,
+  ExecutionStatus,
+  StoredSuiteRunItem,
+} from "../types/api";
 
-function renderStatus(status: "running" | "passed" | "failed") {
+function renderStatus(status: ExecutionStatus) {
   const color = {
     running: "processing",
     passed: "success",
     failed: "error",
+    needs_intervention: "warning",
   }[status];
   const label = {
     running: "运行中",
     passed: "通过",
     failed: "失败",
+    needs_intervention: "待人工干预",
   }[status];
   return <Tag color={color}>{label}</Tag>;
 }

@@ -5,12 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 from time import perf_counter
 from urllib.parse import urljoin
+from sqlalchemy.orm import Session
 
-from app.locators import LocatorResolutionError, resolve_semantic_locator
+from app.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
 from app.schemas.dsl import DSLCase
 from app.schemas.executions import (
+    AILocateCandidate,
     ConsoleEvent,
     DOMSummary,
+    InterventionRequest,
     NetworkEvent,
     StepExecutionEvidence,
     ViewportSnapshot,
@@ -33,11 +36,25 @@ class RunnerExecutionError(RuntimeError):
         self.step_results = step_results or []
 
 
+class RunnerInterventionError(RuntimeError):
+    """Raised when execution must stop for manual locator intervention."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        step_results: list[StepExecutionEvidence] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.step_results = step_results or []
+
+
 def execute_case_with_playwright(
     *,
     case: DSLCase,
     execution_id: int,
     base_url: str | None,
+    db_session: Session | None = None,
 ) -> list[StepExecutionEvidence]:
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -73,9 +90,10 @@ def execute_case_with_playwright(
                     if step.action == "goto":
                         page.goto(_resolve_url(step.value, base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
-                        resolved = resolve_semantic_locator(
+                        resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            db_session=db_session,
                             require_visible=True,
                             require_enabled=True,
                         )
@@ -83,9 +101,10 @@ def execute_case_with_playwright(
                         locator_trace = resolved.trace
                         resolved.locator.click()
                     elif step.action == "input":
-                        resolved = resolve_semantic_locator(
+                        resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            db_session=db_session,
                             prefer_input=True,
                             require_visible=True,
                             require_enabled=True,
@@ -94,18 +113,20 @@ def execute_case_with_playwright(
                         locator_trace = resolved.trace
                         resolved.locator.fill(step.value)
                     elif step.action == "wait_for":
-                        resolved = resolve_semantic_locator(
+                        resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            db_session=db_session,
                             require_visible=False,
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
                         resolved.locator.wait_for(state="visible", timeout=step.timeout_ms)
                     elif step.action == "assert_text":
-                        resolved = resolve_semantic_locator(
+                        resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            db_session=db_session,
                             require_visible=False,
                         )
                         resolved_by = resolved.strategy
@@ -138,6 +159,46 @@ def execute_case_with_playwright(
                             screenshot_path=_take_step_screenshot(page, artifact_dir, index),
                         )
                     )
+                except InterventionNeededError as exc:
+                    screenshot_path = _take_step_screenshot(page, artifact_dir, index)
+                    step_results.append(
+                        StepExecutionEvidence(
+                            step_index=index,
+                            action=step.action,
+                            target=getattr(step, "target", None),
+                            value=getattr(step, "value", None),
+                            status="failed",
+                            duration_ms=_elapsed_ms(step_started_at),
+                            resolved_by=None,
+                            locator_trace=exc.tier1_trace,
+                            url=page.url or None,
+                            page_title=_safe_page_title(page),
+                            viewport=_safe_viewport(page),
+                            dom_summary=_safe_dom_summary(page),
+                            console_events=console_buffer[console_index:],
+                            network_events=network_buffer[network_index:],
+                            screenshot_path=screenshot_path,
+                            error_message=str(exc),
+                            intervention_request=InterventionRequest(
+                                screenshot_url=_artifact_url_for_path(screenshot_path),
+                                page_url=exc.page_url,
+                                target_description=exc.target,
+                                dom_snapshot=exc.dom_snapshot,
+                                ai_candidate=(
+                                    AILocateCandidate(
+                                        center=list(exc.ai_candidate.center),
+                                        bbox=list(exc.ai_candidate.bbox),
+                                        confidence=exc.ai_candidate.confidence,
+                                        raw_response=exc.ai_candidate.raw_response,
+                                    )
+                                    if exc.ai_candidate is not None
+                                    else None
+                                ),
+                                locator_trace=exc.tier1_trace,
+                            ),
+                        )
+                    )
+                    raise RunnerInterventionError(str(exc), step_results=step_results) from exc
                 except (LocatorResolutionError, PlaywrightTimeoutError, RunnerExecutionError, AssertionError) as exc:
                     if isinstance(exc, LocatorResolutionError):
                         locator_trace = exc.trace
@@ -186,6 +247,13 @@ def _take_step_screenshot(page, artifact_dir: Path, step_index: int) -> str | No
     except Exception:
         return None
     return str(screenshot_path.relative_to(Path(__file__).resolve().parents[2]))
+
+
+def _artifact_url_for_path(screenshot_path: str | None) -> str | None:
+    if not screenshot_path:
+        return None
+    normalized = screenshot_path.replace("\\", "/").lstrip("/")
+    return f"/{normalized}" if normalized.startswith("artifacts/") else None
 
 
 def _elapsed_ms(started_at: float) -> int:

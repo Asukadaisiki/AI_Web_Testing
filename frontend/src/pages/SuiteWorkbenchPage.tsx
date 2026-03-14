@@ -13,6 +13,7 @@ import {
   updateSuite,
 } from "../services/api";
 import type {
+  ExecutionStatus,
   StoredCaseSummary,
   StoredSuiteCase,
   StoredSuiteDetail,
@@ -58,16 +59,18 @@ function formatTime(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "-";
 }
 
-function renderStatus(status: "running" | "passed" | "failed") {
+function renderStatus(status: ExecutionStatus) {
   const color = {
     running: "processing",
     passed: "success",
     failed: "error",
+    needs_intervention: "warning",
   }[status];
   const label = {
     running: "运行中",
     passed: "通过",
     failed: "失败",
+    needs_intervention: "待人工干预",
   }[status];
   return <Tag color={color}>{label}</Tag>;
 }

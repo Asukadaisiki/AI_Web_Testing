@@ -16,13 +16,29 @@ AI 增强的 Web UI 自动化测试平台。
 - 执行中心：列表、筛选、窗口统计、失败分类、根因回流
 - 仪表盘 / 报告中心：趋势、失败聚合、根因榜
 - Suite 管理：Suite CRUD、工作台排序、批量执行
-- Suite v2.2：批次历史持久化、批次详情、失败重跑、从子执行详情返回来源 Suite 批次
+- Suite Context v2.3：Case 输入/输出契约、跨 Case 上下文传递、上下文快照、失败重跑上下文策略、前端上下文证据展示
+- 混合定位闭环第一阶段：`locator_corrections` 修正记录、`needs_intervention` 执行状态、统一降级定位入口、执行详情页人工干预面板
 
 当前未完成的重点方向：
-- Suite Context / 跨 Case 参数传递
 - AI 生成 DSL
-- Vision 辅助定位
+- AI 视觉定位增强（默认关闭，仅保留可接入实现）
 - 更完整的环境配置与登录体系
+
+## Suite Context 使用路径
+
+建议按下面的顺序验证 `Suite Context v2.3`：
+1. 在 `Case 工作台` 为 Case A 配置 `output_contract`
+2. 在 `Case 工作台` 为 Case B 配置 `input_contract`，并在步骤里使用 `${context_key}`
+3. 将两个 Case 放入同一个 Suite，执行后在 `Suite 批次详情` 查看上下文快照和变量读写证据
+4. 打开子执行详情页，确认 `Suite Context` 读写证据、解析失败原因和来源批次展示正常
+
+## 人工干预路径
+
+当定位链路无法命中目标时：
+1. 执行状态会落为 `needs_intervention`
+2. 在 `执行详情页` 的失败步骤中查看失败截图、DOM 快照和建议 selector
+3. 提交修正记录后，直接从页面重跑当前 Case
+4. 后续同页面同目标会优先命中人工修正记录
 
 ## 快速开始
 

@@ -42,6 +42,11 @@ class Settings:
     database_url: str = "sqlite:///./app.db"
     database_echo: bool = False
     execution_base_url: str | None = None
+    enable_ai_visual_locate: bool = False
+    vlm_api_key: str | None = None
+    vlm_base_url: str = "https://api.openai.com/v1"
+    vlm_model: str | None = None
+    vlm_model_family: str = "gpt-4o"
 
 
 @lru_cache
@@ -53,4 +58,9 @@ def get_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL", "sqlite:///./app.db"),
         database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,
+        enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
+        vlm_api_key=os.getenv("VLM_API_KEY") or None,
+        vlm_base_url=os.getenv("VLM_BASE_URL", "https://api.openai.com/v1"),
+        vlm_model=os.getenv("VLM_MODEL") or None,
+        vlm_model_family=os.getenv("VLM_MODEL_FAMILY", "gpt-4o"),
     )

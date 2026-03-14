@@ -21,11 +21,13 @@ export function renderExecutionStatus(status: ExecutionStatus) {
     passed: "success",
     failed: "error",
     running: "processing",
+    needs_intervention: "warning",
   };
   const labelMap: Record<ExecutionStatus, string> = {
     passed: "通过",
     failed: "失败",
     running: "运行中",
+    needs_intervention: "待人工干预",
   };
   return (
     <Tag className="status-tag" color={colorMap[status]}>

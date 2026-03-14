@@ -1,7 +1,8 @@
-export type ExecutionStatus = "running" | "passed" | "failed";
+export type ExecutionStatus = "running" | "passed" | "failed" | "needs_intervention";
 export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
 export type OverviewWindowDays = 7 | 14 | 30;
 export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
+export type CorrectionType = "css" | "xpath" | "test_id";
 export type DSLVariableSource =
   | "latest_url"
   | "error_message"
@@ -260,6 +261,36 @@ export interface NetworkEvent {
   failure_text?: string | null;
 }
 
+export interface DOMElementSnapshot {
+  tag: string;
+  text?: string | null;
+  role?: string | null;
+  aria_label?: string | null;
+  placeholder?: string | null;
+  data_testid?: string | null;
+  css_selector?: string | null;
+  xpath?: string | null;
+  rect?: Record<string, number> | null;
+  visible: boolean;
+  enabled: boolean;
+}
+
+export interface AILocateCandidate {
+  center: number[];
+  bbox: number[];
+  confidence: number;
+  raw_response?: string | null;
+}
+
+export interface InterventionRequest {
+  screenshot_url?: string | null;
+  page_url: string;
+  target_description: string;
+  dom_snapshot: DOMElementSnapshot[];
+  ai_candidate?: AILocateCandidate | null;
+  locator_trace?: LocatorTrace | null;
+}
+
 export interface StepExecutionEvidence {
   step_index: number;
   action: string;
@@ -278,6 +309,7 @@ export interface StepExecutionEvidence {
   screenshot_path?: string | null;
   screenshot_url?: string | null;
   error_message?: string | null;
+  intervention_request?: InterventionRequest | null;
 }
 
 export interface ExecutionReport {
@@ -316,6 +348,30 @@ export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {
     writes: ContextVariableWriteEvidence[];
     resolution_error?: string | null;
   } | null;
+}
+
+export interface CreateCorrectionPayload {
+  page_url: string;
+  target_description: string;
+  correction_type: CorrectionType;
+  correction_value: string;
+  source_execution_id: number;
+  created_by: number;
+}
+
+export interface StoredLocatorCorrection {
+  id: number;
+  page_url_pattern: string;
+  target_description: string;
+  correction_type: CorrectionType;
+  correction_value: string;
+  verified_count: number;
+  consecutive_failures: number;
+  is_active: boolean;
+  source_execution_id: number;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface FailureCategoryCount {

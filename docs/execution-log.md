@@ -769,6 +769,26 @@
 - 关联文件：`backend/app/services/suites.py`、`backend/tests/unit/test_suites_api.py`、`frontend/src/components/ContextEvidenceList.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`docs/bug-log.md`
 - 后续：同步执行的 Suite 运行模型与 `context_snapshot` 大小限制仍属于后续架构优化项，本轮只修复正确性和可观测性问题，不调整现有执行模型。
 
+## 2026-03-14 20:10
+
+- 任务：落实混合定位闭环第一阶段，打通 `needs_intervention -> 提交修正 -> 重跑` 最小链路
+- 背景：`Suite Context v2.3` 已完成，仓库下一步需要先落地 v3.0/v3.1/v3.3 的低风险闭环，再考虑默认关闭的 AI 视觉增强
+- 执行动作：
+  - 新增 `locator_corrections` 数据模型、Alembic 迁移、URL 泛化工具和 corrections CRUD API
+  - 扩展执行 schema，增加 `needs_intervention` 状态、`InterventionRequest`、DOM 快照和 AI 候选结构
+  - 在 `backend/app/locators/` 新增统一 `resolve_with_fallback()` 链路，接入 Tier 0 人工修正记录、Tier 1 现有 DOM 语义定位、Tier 2 可选 AI 视觉定位和 Tier 3 人工干预异常
+  - 改造 `playwright_runner.py` 与 `executions.py`，让执行记录可落库为 `needs_intervention`，并把干预上下文写入步骤证据
+  - 在前端执行详情页新增 `InterventionPanel`，支持展示失败截图和 DOM 快照、提交 selector 修正，并在提交成功后提供“重新执行当前用例”入口
+  - 更新根 `README.md`，同步 `Suite Context v2.3` 已完成和人工干预闭环已落地的现状
+- 结果：项目现在具备从定位失败进入 `needs_intervention`，到人工提交修正、再重跑验证修正命中的最小可用闭环；AI 视觉定位能力已预留实现并默认关闭，不阻塞主流程
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `61 passed`
+  - 执行 `cd backend && uv run alembic upgrade head` 成功，新增 `locator_corrections` 迁移生效
+  - 执行 `cd frontend && npm test -- --run`，结果为 `31 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/models/locator_correction.py`、`backend/app/locators/fallback.py`、`backend/app/locators/ai_visual.py`、`backend/app/api/routes/corrections.py`、`backend/app/services/corrections.py`、`backend/app/services/executions.py`、`backend/app/runners/playwright_runner.py`、`backend/alembic/versions/20260314_0005_locator_corrections.py`、`backend/tests/unit/test_corrections_api.py`、`backend/tests/unit/test_locator_fallback.py`、`backend/tests/unit/test_ai_visual.py`、`frontend/src/components/InterventionPanel.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/ExecutionDetailPage.test.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`README.md`
+- 后续：后续若继续推进，应优先补 corrections 管理页与更多端到端回归，再决定是否打开 `ENABLE_AI_VISUAL_LOCATE` 并引入真实模型配置
+
 ## 2026-03-13 11:45
 
 - 任务：开始执行 `Suite Context 与参数传递 v2.3a`

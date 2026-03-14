@@ -10,7 +10,7 @@ from pydantic import Field
 from app.schemas.dsl import DSLModel, DSLVariableSource, DSLVariableType
 
 
-ExecutionStatus = Literal["running", "passed", "failed"]
+ExecutionStatus = Literal["running", "passed", "failed", "needs_intervention"]
 FailureCategory = Literal["configuration", "locator", "assertion", "navigation", "network", "runner"]
 
 
@@ -97,6 +97,36 @@ class ExecutionSuiteContextTrace(DSLModel):
     resolution_error: str | None = None
 
 
+class DOMElementSnapshot(DSLModel):
+    tag: str
+    text: str | None = None
+    role: str | None = None
+    aria_label: str | None = None
+    placeholder: str | None = None
+    data_testid: str | None = None
+    css_selector: str | None = None
+    xpath: str | None = None
+    rect: dict[str, float] | None = None
+    visible: bool = False
+    enabled: bool = False
+
+
+class AILocateCandidate(DSLModel):
+    center: list[int] = Field(default_factory=list)
+    bbox: list[int] = Field(default_factory=list)
+    confidence: float = 0.0
+    raw_response: str | None = None
+
+
+class InterventionRequest(DSLModel):
+    screenshot_url: str | None = None
+    page_url: str
+    target_description: str
+    dom_snapshot: list[DOMElementSnapshot] = Field(default_factory=list)
+    ai_candidate: AILocateCandidate | None = None
+    locator_trace: LocatorTrace | None = None
+
+
 class StepExecutionEvidence(DSLModel):
     step_index: int = Field(ge=0)
     action: str
@@ -115,6 +145,7 @@ class StepExecutionEvidence(DSLModel):
     screenshot_path: str | None = None
     screenshot_url: str | None = None
     error_message: str | None = None
+    intervention_request: InterventionRequest | None = None
 
 
 class ExecutionReport(DSLModel):

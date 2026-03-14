@@ -19,6 +19,7 @@ import {
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { ContextReadEvidenceList, ContextWriteEvidenceList } from "../components/ContextEvidenceList";
+import { InterventionPanel } from "../components/InterventionPanel";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getExecutionDetail } from "../services/api";
 import type {
@@ -47,11 +48,13 @@ function renderStatus(status: ExecutionStatus) {
     passed: "success",
     failed: "error",
     running: "processing",
+    needs_intervention: "warning",
   };
   const labelMap: Record<ExecutionStatus, string> = {
     passed: "通过",
     failed: "失败",
     running: "运行中",
+    needs_intervention: "待人工干预",
   };
   return (
     <Tag className="status-tag" color={colorMap[status]}>
@@ -95,7 +98,17 @@ function EventList<T>({
   );
 }
 
-function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
+function StepEvidenceBody({
+  step,
+  caseId,
+  executionId,
+  triggeredBy,
+}: {
+  step: StepExecutionEvidence;
+  caseId: number;
+  executionId: number;
+  triggeredBy: number;
+}) {
   const locatorTrace = step.locator_trace;
   const assertionResult = step.action.startsWith("assert")
     ? step.status === "passed"
@@ -247,6 +260,16 @@ function StepEvidenceBody({ step }: { step: StepExecutionEvidence }) {
           </Space>
         </Col>
       </Row>
+      {step.intervention_request ? (
+        <div style={{ marginTop: 16 }}>
+          <InterventionPanel
+            caseId={caseId}
+            executionId={executionId}
+            triggeredBy={triggeredBy}
+            request={step.intervention_request}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -411,7 +434,14 @@ export function ExecutionDetailPage() {
                     {renderStatus(step.status)}
                   </Space>
                 ),
-                children: <StepEvidenceBody step={step} />,
+                children: (
+                  <StepEvidenceBody
+                    step={step}
+                    caseId={detail.case_id}
+                    executionId={detail.id}
+                    triggeredBy={detail.triggered_by}
+                  />
+                ),
               }))}
             />
           </Space>

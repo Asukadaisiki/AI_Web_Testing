@@ -10,6 +10,8 @@ vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
   return {
     ...actual,
+    createCorrection: vi.fn(),
+    executeCase: vi.fn(),
     getExecutionDetail: vi.fn(),
   };
 });
@@ -255,4 +257,110 @@ test("执行详情页优先显示返回 Suite 批次链接", async () => {
   expect(await screen.findByRole("heading", { name: "来源回流用例" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "返回 Suite 批次" })).toHaveAttribute("href", "/suites/3/runs/14");
   expect(screen.getByRole("link", { name: "订单套件 / #14" })).toHaveAttribute("href", "/suites/3/runs/14");
+});
+
+test("needs_intervention 步骤展示干预面板，提交修正后显示重跑入口", async () => {
+  vi.mocked(api.getExecutionDetail).mockResolvedValue({
+    id: 31,
+    case_id: 9,
+    case_name: "人工干预用例",
+    project_id: 1,
+    triggered_by: 1,
+    status: "needs_intervention",
+    error_message: "All locate tiers failed for target: 登录按钮",
+    started_at: "2026-03-14T08:00:00",
+    finished_at: "2026-03-14T08:00:10",
+    duration_ms: 10000,
+    total_steps: 1,
+    failed_step_index: 0,
+    failure_category: "locator",
+    failure_step_action: "click",
+    latest_url: "https://app.example.com/login",
+    latest_screenshot_url: "/artifacts/executions/31/step-01.png",
+    origin_suite_run: null,
+    suite_context: null,
+    report: {
+      status: "failed",
+      steps: [
+        {
+          step_index: 0,
+          action: "click",
+          target: "登录按钮",
+          status: "failed",
+          console_events: [],
+          network_events: [],
+          screenshot_url: "/artifacts/executions/31/step-01.png",
+          error_message: "All locate tiers failed for target: 登录按钮",
+          intervention_request: {
+            screenshot_url: "/artifacts/executions/31/step-01.png",
+            page_url: "https://app.example.com/login",
+            target_description: "登录按钮",
+            dom_snapshot: [
+              {
+                tag: "button",
+                text: "登录按钮",
+                role: "button",
+                aria_label: "登录按钮",
+                placeholder: null,
+                data_testid: null,
+                css_selector: "#login-btn",
+                xpath: "/html/body/button[1]",
+                rect: { x: 10, y: 20, width: 80, height: 24 },
+                visible: true,
+                enabled: true,
+              },
+            ],
+            ai_candidate: {
+              center: [50, 30],
+              bbox: [10, 20, 90, 44],
+              confidence: 0.7,
+              raw_response: '{"bbox":[10,20,90,44]}',
+            },
+            locator_trace: {
+              target: "登录按钮",
+              candidates: [],
+              failure_reason: "No locator candidates matched target.",
+            },
+          },
+        },
+      ],
+    },
+  });
+  vi.mocked(api.createCorrection).mockResolvedValue({
+    id: 5,
+    page_url_pattern: "https://app.example.com/login",
+    target_description: "登录按钮",
+    correction_type: "css",
+    correction_value: "#login-btn",
+    verified_count: 0,
+    consecutive_failures: 0,
+    is_active: true,
+    source_execution_id: 31,
+    created_by: 1,
+    created_at: "2026-03-14T08:01:00",
+    updated_at: "2026-03-14T08:01:00",
+  });
+
+  renderWithProviders(<ExecutionDetailPage />, {
+    route: "/executions/31",
+    path: "/executions/:executionId",
+  });
+
+  expect(await screen.findByText("人工干预")).toBeInTheDocument();
+  expect(screen.getByText("当前步骤已进入人工干预")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "使用该选择器" }));
+  await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
+
+  await waitFor(() => {
+    expect(api.createCorrection).toHaveBeenCalledWith({
+      page_url: "https://app.example.com/login",
+      target_description: "登录按钮",
+      correction_type: "css",
+      correction_value: "#login-btn",
+      source_execution_id: 31,
+      created_by: 1,
+    });
+  });
+  expect(await screen.findByText("修正已保存 #5")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重新执行当前用例" })).toBeInTheDocument();
 });

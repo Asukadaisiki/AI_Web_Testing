@@ -45,6 +45,7 @@ const STATUS_OPTIONS: { label: string; value: ExecutionStatus | "all" }[] = [
   { label: "全部状态", value: "all" },
   { label: "通过", value: "passed" },
   { label: "失败", value: "failed" },
+  { label: "待人工干预", value: "needs_intervention" },
   { label: "运行中", value: "running" },
 ];
 const WINDOW_OPTIONS: { label: string; value: OverviewWindowDays | "all" }[] = [
@@ -55,7 +56,7 @@ const WINDOW_OPTIONS: { label: string; value: OverviewWindowDays | "all" }[] = [
 ];
 
 function parseStatus(value: string | null): ExecutionStatus | "all" {
-  if (value === "passed" || value === "failed" || value === "running") {
+  if (value === "passed" || value === "failed" || value === "needs_intervention" || value === "running") {
     return value;
   }
   return "all";

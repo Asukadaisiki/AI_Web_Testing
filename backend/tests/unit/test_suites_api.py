@@ -174,7 +174,7 @@ def test_execute_suite_persists_suite_run_and_exposes_history_and_origin(client,
 
     call_sequence: list[str] = []
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         call_sequence.append(case.name)
         assert base_url == "https://override.example.com"
         if case.name == "Step Two":
@@ -350,7 +350,7 @@ def test_rerun_failed_suite_run_only_reruns_failed_items(client, monkeypatch) ->
     call_sequence: list[str] = []
     case_one_attempt = {"count": 0}
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         call_sequence.append(case.name)
         if case.name == "First Fails":
             case_one_attempt["count"] += 1
@@ -437,7 +437,7 @@ def test_rerun_failed_suite_run_rejects_run_without_failures(client, monkeypatch
     )
     assert suite_response.status_code == 201
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         return [
             StepExecutionEvidence(
                 step_index=0,
@@ -484,7 +484,7 @@ def test_execute_suite_fails_fast_when_required_context_is_missing(client, monke
 
     runner_calls: list[str] = []
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         runner_calls.append(case.name)
         return []
 
@@ -542,7 +542,7 @@ def test_execute_suite_skips_missing_optional_context_without_failing(client, mo
     )
     assert suite_response.status_code == 201
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         return [
             StepExecutionEvidence(
                 step_index=0,
@@ -597,7 +597,7 @@ def test_execute_suite_marks_output_write_failure_when_source_value_is_missing(c
     )
     assert suite_response.status_code == 201
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         return [
             StepExecutionEvidence(
                 step_index=0,
@@ -661,7 +661,7 @@ def test_execute_suite_aborts_remaining_output_writes_after_first_failure(client
     )
     assert suite_response.status_code == 201
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         return [
             StepExecutionEvidence(
                 step_index=0,
@@ -737,7 +737,7 @@ def test_execute_suite_rejects_context_type_mismatch(client, monkeypatch) -> Non
     )
     assert suite_response.status_code == 201
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         return [
             StepExecutionEvidence(
                 step_index=0,
@@ -809,7 +809,7 @@ def test_rerun_failed_suite_run_supports_reuse_source_context_and_empty_context(
 
     case_two_attempt = {"count": 0}
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, db_session=None):
         if case.name == "Write Token":
             return [
                 StepExecutionEvidence(
