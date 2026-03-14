@@ -64,6 +64,7 @@ def list_corrections(
     session: Session,
     *,
     target_description: str | None = None,
+    page_url: str | None = None,
     is_active: bool | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -73,13 +74,16 @@ def list_corrections(
         statement = statement.where(
             LocatorCorrection.normalized_target_description == normalize_target_description(target_description)
         )
+    if page_url is not None:
+        statement = statement.where(LocatorCorrection.page_url_pattern == generalize_url(page_url))
     if is_active is not None:
         statement = statement.where(LocatorCorrection.is_active.is_(is_active))
     statement = statement.limit(limit).offset(offset)
     records = session.scalars(statement).all()
     logger.warning(
-        "Listed locator corrections target_filter=%s is_active=%s limit=%s offset=%s count=%s",
+        "Listed locator corrections target_filter=%s page_filter=%s is_active=%s limit=%s offset=%s count=%s",
         target_description,
+        page_url,
         is_active,
         limit,
         offset,

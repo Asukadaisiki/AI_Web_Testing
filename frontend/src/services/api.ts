@@ -18,6 +18,7 @@ import type {
   SuiteExecutionRequest,
   SuiteExecutionResult,
   SuiteMutationPayload,
+  UpdateCorrectionStatePayload,
 } from "../types/api";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -130,6 +131,40 @@ export function executeCase(caseId: number, payload: CaseExecutionRequest) {
 export function createCorrection(payload: CreateCorrectionPayload) {
   return request<StoredLocatorCorrection>("/api/v1/corrections", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getCorrections(params: {
+  target_description?: string;
+  page_url?: string;
+  is_active?: boolean;
+  limit?: number;
+  offset?: number;
+}) {
+  const search = new URLSearchParams();
+  if (params.target_description) {
+    search.set("target_description", params.target_description);
+  }
+  if (params.page_url) {
+    search.set("page_url", params.page_url);
+  }
+  if (typeof params.is_active === "boolean") {
+    search.set("is_active", String(params.is_active));
+  }
+  if (params.limit) {
+    search.set("limit", String(params.limit));
+  }
+  if (params.offset) {
+    search.set("offset", String(params.offset));
+  }
+  const query = search.toString();
+  return request<StoredLocatorCorrection[]>(`/api/v1/corrections${query ? `?${query}` : ""}`);
+}
+
+export function updateCorrectionState(correctionId: number, payload: UpdateCorrectionStatePayload) {
+  return request<StoredLocatorCorrection>(`/api/v1/corrections/${correctionId}`, {
+    method: "PATCH",
     body: JSON.stringify(payload),
   });
 }

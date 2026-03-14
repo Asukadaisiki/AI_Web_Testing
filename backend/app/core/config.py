@@ -43,6 +43,10 @@ class Settings:
     database_echo: bool = False
     execution_base_url: str | None = None
     enable_ai_visual_locate: bool = False
+    ai_visual_timeout_ms: int = 10000
+    ai_visual_failure_threshold: int = 3
+    ai_visual_cooldown_seconds: int = 60
+    ai_visual_rate_limit_per_minute: int = 10
     vlm_api_key: str | None = None
     vlm_base_url: str = "https://api.openai.com/v1"
     vlm_model: str | None = None
@@ -59,6 +63,10 @@ def get_settings() -> Settings:
         database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,
         enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
+        ai_visual_timeout_ms=max(1000, int(os.getenv("AI_VISUAL_TIMEOUT_MS", "10000"))),
+        ai_visual_failure_threshold=max(1, int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD", "3"))),
+        ai_visual_cooldown_seconds=max(1, int(os.getenv("AI_VISUAL_COOLDOWN_SECONDS", "60"))),
+        ai_visual_rate_limit_per_minute=max(1, int(os.getenv("AI_VISUAL_RATE_LIMIT_PER_MINUTE", "10"))),
         vlm_api_key=os.getenv("VLM_API_KEY") or None,
         vlm_base_url=os.getenv("VLM_BASE_URL", "https://api.openai.com/v1"),
         vlm_model=os.getenv("VLM_MODEL") or None,

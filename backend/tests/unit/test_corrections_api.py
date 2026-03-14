@@ -147,6 +147,13 @@ def test_list_corrections_supports_case_insensitive_filter_and_pagination(client
     assert len(paged.json()) == 1
     assert paged.json()[0]["id"] == first_response.json()["id"]
 
+    page_filtered = client.get(
+        "/api/v1/corrections",
+        params={"page_url": "https://app.example.com/login?session=xyz98765abc43210"},
+    )
+    assert page_filtered.status_code == 200
+    assert [item["id"] for item in page_filtered.json()] == [second_response.json()["id"], first_response.json()["id"]]
+
 
 def test_create_correction_deactivates_existing_active_duplicate(client, db_session) -> None:
     first_execution_id = _create_source_execution(client, db_session)

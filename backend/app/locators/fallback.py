@@ -6,11 +6,8 @@ import base64
 import logging
 import re
 
-from sqlalchemy.orm import Session
-
-from app.models import LocatorCorrection
 from app.locators.ai_visual import AILocateResult, locate_element_by_vision
-from app.locators.corrections import MAX_CONSECUTIVE_FAILURES, find_active_correction
+from app.locators.corrections import CorrectionRecord, CorrectionStore
 from app.locators.semantic import LocatorResolutionError, ResolvedLocator, resolve_semantic_locator
 from app.schemas.executions import DOMElementSnapshot, LocatorTrace
 
@@ -167,7 +164,7 @@ def resolve_with_fallback(
     page,
     target: str,
     *,
-    db_session: Session | None,
+    correction_store: CorrectionStore | None = None,
     prefer_input: bool = False,
     require_visible: bool = True,
     require_enabled: bool = False,
@@ -177,12 +174,17 @@ def resolve_with_fallback(
     ai_candidate: AILocateResult | None = None
 
     correction = (
-        find_active_correction(db_session, page_url=page_url, target_description=target)
-        if db_session is not None and page_url
+        correction_store.find_active_correction(page_url=page_url, target_description=target)
+        if correction_store is not None and page_url
         else None
     )
     if correction is not None:
-        resolved = _try_resolve_correction(page, target=target, correction=correction, db_session=db_session)
+        resolved = _try_resolve_correction(
+            page,
+            target=target,
+            correction=correction,
+            correction_store=correction_store,
+        )
         if resolved is not None:
             return resolved
 
@@ -216,32 +218,33 @@ def _try_resolve_correction(
     page,
     *,
     target: str,
-    correction: LocatorCorrection,
-    db_session: Session | None,
+    correction: CorrectionRecord,
+    correction_store: CorrectionStore | None,
 ) -> ResolvedLocator | None:
     try:
         locator = _build_locator_from_correction(page, correction)
         locator.wait_for(state="visible", timeout=3000)
     except Exception as exc:
-        correction.consecutive_failures += 1
-        if correction.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-            correction.is_active = False
-        if db_session is not None:
-            db_session.flush()
+        updated_correction = (
+            correction_store.record_failure(correction.id)
+            if correction_store is not None
+            else correction
+        )
         logger.warning(
             "Correction reuse failed id=%s target=%s consecutive_failures=%s is_active=%s error=%s",
             correction.id,
             target,
-            correction.consecutive_failures,
-            correction.is_active,
+            updated_correction.consecutive_failures if updated_correction is not None else correction.consecutive_failures,
+            updated_correction.is_active if updated_correction is not None else correction.is_active,
             exc,
         )
         return None
 
-    correction.verified_count += 1
-    correction.consecutive_failures = 0
-    if db_session is not None:
-        db_session.flush()
+    updated_correction = (
+        correction_store.record_success(correction.id)
+        if correction_store is not None
+        else correction
+    )
     strategy = f"correction:{correction.correction_type}"
     return ResolvedLocator(
         strategy=strategy,
@@ -249,12 +252,16 @@ def _try_resolve_correction(
         trace=LocatorTrace(
             target=target,
             match_strategy=strategy,
-            selection_reason=f"Matched correction #{correction.id} after {correction.verified_count} successful reuses.",
+            selection_reason=(
+                f"Matched correction #{correction.id} after "
+                f"{(updated_correction.verified_count if updated_correction is not None else correction.verified_count)} "
+                "successful reuses."
+            ),
         ),
     )
 
 
-def _build_locator_from_correction(page, correction: LocatorCorrection):
+def _build_locator_from_correction(page, correction: CorrectionRecord):
     if correction.correction_type == "test_id":
         return page.get_by_test_id(correction.correction_value)
     if correction.correction_type == "xpath":

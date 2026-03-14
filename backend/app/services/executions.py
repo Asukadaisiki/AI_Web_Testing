@@ -12,6 +12,7 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.models import SuiteRun, SuiteRunItem, TestCase, TestCaseRun, TestSuite, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, RunnerInterventionError, execute_case_with_playwright
@@ -152,7 +153,7 @@ def _execute_case_record(
                 case=normalized_case,
                 execution_id=execution.id,
                 base_url=effective_base_url,
-                db_session=session,
+                correction_store=SQLAlchemyCorrectionStore(session),
             )
             step_results = [_with_artifact_url(step) for step in step_results]
             report = build_execution_report(status="passed", steps=step_results)

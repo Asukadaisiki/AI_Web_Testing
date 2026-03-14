@@ -24,10 +24,11 @@
 
 ### 2026-03-14 补充
 
-- 已完成 `Suite Context v2.3b`：`backend/app/services/suites.py` 已在 Suite 编排层实现运行时上下文容器、`input_contract` 校验、`${context_key}` 占位符解析、fail-fast 失败策略，以及基于显式 `output_contract.source` 的结构化结果回写。
-- 已完成 `Suite Context v2.3c`：前端已对齐 `input_contract / output_contract`、Suite Run 上下文元数据、Case 执行 `suite_context` 等类型；`SuiteRunDetailPage`、`ExecutionDetailPage` 与 `CaseWorkbenchPage` 已能展示或编辑上下文契约、上下文快照、变量读写证据与解析失败原因。
-- 当前 `v2.3` 的最小闭环已经打通：支持 “Case A 写变量，Case B 读变量”、缺失变量或类型不匹配时在 Suite 层直接失败、`reuse_source_context` / `empty_context` 两类失败重跑上下文策略，以及批次级 `context_snapshot` 持久化与回显。
-- `v3.0-v3.3` 继续顺延。后续若进入混合定位系统，应以当前 `Suite Context` 闭环为前提，只围绕定位链路、人工干预和修正记录推进，不再回头补基础上下文契约。
+- 已完成 `Suite Context v2.3` 全量闭环：运行时上下文容器、输入/输出契约、变量解析、失败重跑上下文策略，以及前端上下文证据展示都已落地。
+- 已完成混合定位闭环的最小可用版本：`locator_corrections`、`needs_intervention`、统一 `resolve_with_fallback()`、执行详情人工干预面板与修正提交重跑链路已打通。
+- 已完成混合定位 correctness / data-integrity 修复：修正记录唯一活动约束、大小写无关查找、分页、`PATCH` 语义、URL 泛化和前端类型对齐已经收口。
+- 已进入 `v3.4 混合定位稳定化与运营入口`：本轮补齐了修正记录管理页、`page_url` 过滤、runner 与 `db_session` 解耦，以及 AI 视觉定位的超时 / 限流 / 熔断保护。
+- 当前主线不再回到 `v2.3`，后续应继续围绕修正运营、混合定位稳定性和真实回归链路推进。
 
 ### 2026-03-13 补充
 
@@ -85,25 +86,25 @@
 
 ### 进行中
 
+- `v3.4` 收尾：README / 计划文档与当前代码状态的同步、修正管理入口的使用说明补齐
+- 混合定位稳定性回归：围绕 `needs_intervention -> correction -> rerun -> Tier 0 hit` 的主链路补更多联调验证
 - 报告聚合与平台联动体验的小幅细化
-- Suite Context 机制设计与里程碑拆分：定义共享变量、Case 输入/输出契约、运行时上下文容器与最小 DSL 引用方式
-- `v2.3` 的失败重跑上下文策略设计：区分“沿用原批次上下文”与“从空上下文重跑”
 
 ### 未开始或未落地
 
 - AI 生成 DSL
-- 混合定位系统（v3.0–v3.3）：人工修正记录、AI 视觉定位、四层降级链路、前端干预闭环
 - 登录页、环境配置页
-- Suite Context 运行时落地：共享变量存储、Case 间参数传递、输出回写与结果展示
-- Case 输入/输出契约的工作台编辑体验与 Suite 上下文可视化展示
+- 默认开启的真实 AI 视觉定位接入与模型配置管理
+- 更完整的 corrections 运营能力：批量治理、历史分析、命中趋势
+- 浏览器级端到端回归基建
 
 ## 下一里程碑
 
-下一里程碑调整为“Suite Context 与参数传递 v2.3”。
+下一里程碑调整为“混合定位稳定化与运营入口 v3.4”。
 
-- 目标：围绕既有 `Suite Run` 批次模型，补齐共享上下文、显式变量引用、Case 输入/输出契约和失败重跑上下文策略。
-- 范围：运行时上下文容器、变量解析与校验、输出回写、上下文相关执行证据、前端上下文展示。
-- 展示原则：继续复用现有 `Suite -> Case -> Execution` 链路；上下文能力属于编排增强，不把 Suite 扩展成第二套执行器。
+- 目标：在既有混合定位闭环上补齐管理入口、运行保护和回归验证，把“能跑”收口为“可持续维护”。
+- 范围：修正记录管理页、`page_url` 筛选、runner / locator 与 `db_session` 解耦、AI 视觉限流与熔断保护、相关测试与文档同步。
+- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎。
 
 ### v2.3 建议执行顺序（2026-03-13）
 

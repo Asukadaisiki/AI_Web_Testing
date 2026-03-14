@@ -18,10 +18,12 @@ AI 增强的 Web UI 自动化测试平台。
 - Suite 管理：Suite CRUD、工作台排序、批量执行
 - Suite Context v2.3：Case 输入/输出契约、跨 Case 上下文传递、上下文快照、失败重跑上下文策略、前端上下文证据展示
 - 混合定位闭环第一阶段：`locator_corrections` 修正记录、`needs_intervention` 执行状态、统一降级定位入口、执行详情页人工干预面板
+- 修正记录管理：前端已提供 `/corrections` 页面，可按目标描述、页面 URL 和状态筛选修正记录，并支持启用/停用
+- AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
 - AI 生成 DSL
-- AI 视觉定位增强（默认关闭，仅保留可接入实现）
+- AI 视觉定位增强（默认关闭，当前仅保留可接入实现与运行保护）
 - 更完整的环境配置与登录体系
 
 ## Suite Context 使用路径
@@ -37,8 +39,20 @@ AI 增强的 Web UI 自动化测试平台。
 当定位链路无法命中目标时：
 1. 执行状态会落为 `needs_intervention`
 2. 在 `执行详情页` 的失败步骤中查看失败截图、DOM 快照和建议 selector
-3. 提交修正记录后，直接从页面重跑当前 Case
-4. 后续同页面同目标会优先命中人工修正记录
+3. 可直接跳到 `修正记录` 页面查看历史修正，或在当前页面提交新修正
+4. 提交修正记录后，直接从页面重跑当前 Case
+5. 后续同页面同目标会优先命中人工修正记录
+
+## AI 视觉保护配置
+
+后端当前支持以下保护性配置，默认都以“不中断主链路”为原则：
+- `ENABLE_AI_VISUAL_LOCATE=false`
+- `AI_VISUAL_TIMEOUT_MS=10000`
+- `AI_VISUAL_FAILURE_THRESHOLD=3`
+- `AI_VISUAL_COOLDOWN_SECONDS=60`
+- `AI_VISUAL_RATE_LIMIT_PER_MINUTE=10`
+
+当 VLM 请求连续失败、超时或超过速率预算时，系统会直接跳过 Tier 2，继续走现有降级链路或进入人工干预。
 
 ## 快速开始
 

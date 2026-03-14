@@ -25,6 +25,9 @@ const CaseWorkbenchPage = lazy(() =>
 const ExecutionsPage = lazy(() =>
   import("../pages/ExecutionsPage").then((module) => ({ default: module.ExecutionsPage })),
 );
+const CorrectionsPage = lazy(() =>
+  import("../pages/CorrectionsPage").then((module) => ({ default: module.CorrectionsPage })),
+);
 const ExecutionDetailPage = lazy(() =>
   import("../pages/ExecutionDetailPage").then((module) => ({ default: module.ExecutionDetailPage })),
 );
@@ -47,6 +50,7 @@ export function AppRouter() {
           <Route path="/cases/new" element={<CaseWorkbenchPage />} />
           <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
           <Route path="/executions" element={<ExecutionsPage />} />
+          <Route path="/corrections" element={<CorrectionsPage />} />
           <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
           <Route path="/reports" element={<ReportCenterPage />} />
         </Route>

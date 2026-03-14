@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Literal
 from urllib import error, request
 
@@ -17,6 +18,17 @@ SYSTEM_PROMPT = """You are an AI assistant that locates a UI element in a screen
 Return JSON only in the shape {"bbox":[xmin,ymin,xmax,ymax],"errors":["..."]?}."""
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AIVisualRuntimeState:
+    window_started_at: float = 0.0
+    window_request_count: int = 0
+    consecutive_failures: int = 0
+    opened_until: float = 0.0
+
+
+RUNTIME_STATE = AIVisualRuntimeState()
 
 
 @dataclass(frozen=True)
@@ -41,21 +53,37 @@ def locate_element_by_vision(
         return None
     if not settings.vlm_api_key or not settings.vlm_model:
         return None
+    if not _can_attempt_request():
+        return None
 
     family = model_family or settings.vlm_model_family
-    response_text = _call_vlm(
-        screenshot_base64=screenshot_base64,
-        target_description=target_description,
-        api_key=settings.vlm_api_key,
-        model=settings.vlm_model,
-        base_url=settings.vlm_base_url,
-    )
-    return _parse_bbox_response(
-        response_text=response_text,
-        image_width=image_width,
-        image_height=image_height,
-        model_family=family,
-    )
+    _record_attempt()
+    try:
+        response_text = _call_vlm(
+            screenshot_base64=screenshot_base64,
+            target_description=target_description,
+            api_key=settings.vlm_api_key,
+            model=settings.vlm_model,
+            base_url=settings.vlm_base_url,
+            timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
+        )
+        result = _parse_bbox_response(
+            response_text=response_text,
+            image_width=image_width,
+            image_height=image_height,
+            model_family=family,
+        )
+    except Exception as exc:
+        _record_failure()
+        logger.warning("AI visual locate request failed: %s", exc)
+        return None
+
+    if result is None:
+        _record_failure()
+        return None
+
+    _record_success()
+    return result
 
 
 def _call_vlm(
@@ -65,6 +93,7 @@ def _call_vlm(
     api_key: str,
     model: str,
     base_url: str,
+    timeout_seconds: float,
 ) -> str:
     payload = {
         "model": model,
@@ -94,11 +123,10 @@ def _call_vlm(
         method="POST",
     )
     try:
-        with request.urlopen(http_request, timeout=30) as response:
+        with request.urlopen(http_request, timeout=timeout_seconds) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
-    except error.URLError as exc:
-        logger.warning("AI visual locate request failed: %s", exc)
-        return ""
+    except error.URLError:
+        raise
 
     return (
         raw_payload.get("choices", [{}])[0]
@@ -184,9 +212,65 @@ def _normalize_bbox(
     )
 
 
+def _can_attempt_request() -> bool:
+    settings = get_settings()
+    now = monotonic()
+    if RUNTIME_STATE.opened_until > now:
+        logger.warning(
+            "AI visual locate breaker open until=%s",
+            round(RUNTIME_STATE.opened_until, 2),
+        )
+        return False
+
+    if now - RUNTIME_STATE.window_started_at >= 60:
+        RUNTIME_STATE.window_started_at = now
+        RUNTIME_STATE.window_request_count = 0
+
+    if (
+        RUNTIME_STATE.window_started_at > 0
+        and RUNTIME_STATE.window_request_count >= settings.ai_visual_rate_limit_per_minute
+    ):
+        logger.warning(
+            "AI visual locate rate limited count=%s window_started_at=%s",
+            RUNTIME_STATE.window_request_count,
+            round(RUNTIME_STATE.window_started_at, 2),
+        )
+        return False
+
+    return True
+
+
+def _record_attempt() -> None:
+    now = monotonic()
+    if now - RUNTIME_STATE.window_started_at >= 60 or RUNTIME_STATE.window_started_at == 0:
+        RUNTIME_STATE.window_started_at = now
+        RUNTIME_STATE.window_request_count = 0
+    RUNTIME_STATE.window_request_count += 1
+
+
+def _record_success() -> None:
+    RUNTIME_STATE.consecutive_failures = 0
+    RUNTIME_STATE.opened_until = 0.0
+
+
+def _record_failure() -> None:
+    settings = get_settings()
+    RUNTIME_STATE.consecutive_failures += 1
+    if RUNTIME_STATE.consecutive_failures >= settings.ai_visual_failure_threshold:
+        RUNTIME_STATE.opened_until = monotonic() + settings.ai_visual_cooldown_seconds
+
+
+def reset_ai_visual_runtime_state() -> None:
+    RUNTIME_STATE.window_started_at = 0.0
+    RUNTIME_STATE.window_request_count = 0
+    RUNTIME_STATE.consecutive_failures = 0
+    RUNTIME_STATE.opened_until = 0.0
+
+
 __all__ = [
     "AILocateResult",
     "ModelFamily",
     "locate_element_by_vision",
     "_normalize_bbox",
+    "reset_ai_visual_runtime_state",
 ]

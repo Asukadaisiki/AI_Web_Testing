@@ -359,6 +359,10 @@ export interface CreateCorrectionPayload {
   created_by: number;
 }
 
+export interface UpdateCorrectionStatePayload {
+  is_active: boolean;
+}
+
 export interface StoredLocatorCorrection {
   id: number;
   page_url_pattern: string;

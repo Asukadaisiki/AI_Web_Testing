@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from time import perf_counter
 from urllib.parse import urljoin
-from sqlalchemy.orm import Session
 
 from app.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
+from app.locators.corrections import CorrectionStore
 from app.schemas.dsl import DSLCase
 from app.schemas.executions import (
     AILocateCandidate,
@@ -54,7 +54,7 @@ def execute_case_with_playwright(
     case: DSLCase,
     execution_id: int,
     base_url: str | None,
-    db_session: Session | None = None,
+    correction_store: CorrectionStore | None = None,
 ) -> list[StepExecutionEvidence]:
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -93,7 +93,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
-                            db_session=db_session,
+                            correction_store=correction_store,
                             require_visible=True,
                             require_enabled=True,
                         )
@@ -104,7 +104,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
-                            db_session=db_session,
+                            correction_store=correction_store,
                             prefer_input=True,
                             require_visible=True,
                             require_enabled=True,
@@ -116,7 +116,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
-                            db_session=db_session,
+                            correction_store=correction_store,
                             require_visible=False,
                         )
                         resolved_by = resolved.strategy
@@ -126,7 +126,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
-                            db_session=db_session,
+                            correction_store=correction_store,
                             require_visible=False,
                         )
                         resolved_by = resolved.strategy

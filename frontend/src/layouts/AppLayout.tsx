@@ -22,6 +22,10 @@ const items: ItemType[] = [
     label: <Link to="/executions">执行中心</Link>,
   },
   {
+    key: "/corrections",
+    label: <Link to="/corrections">修正记录</Link>,
+  },
+  {
     key: "/reports",
     label: <Link to="/reports">报告中心</Link>,
   },
@@ -36,6 +40,8 @@ export function AppLayout() {
     selectedKey = "/suites";
   } else if (location.pathname.startsWith("/executions")) {
     selectedKey = "/executions";
+  } else if (location.pathname.startsWith("/corrections")) {
+    selectedKey = "/corrections";
   } else if (location.pathname.startsWith("/reports")) {
     selectedKey = "/reports";
   }
@@ -54,7 +60,7 @@ export function AppLayout() {
           <Typography.Title level={4} style={{ color: "#f7fbff", margin: 0 }}>
             AI Web Testing
           </Typography.Title>
-          <Typography.Text style={{ color: "#9db0cb" }}>Suite 基础闭环 v2.1</Typography.Text>
+          <Typography.Text style={{ color: "#9db0cb" }}>混合定位稳定化 v3.4</Typography.Text>
         </div>
         <Menu
           mode="inline"

@@ -347,6 +347,12 @@ test("needs_intervention 姝ラ灞曠ず骞查闈㈡澘锛屾彁浜や慨�
   });
 
   expect(await screen.findByText("人工干预")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "查看同目标修正记录" }).getAttribute("href")).toContain(
+    "/corrections?target_description=",
+  );
+  expect(screen.getByRole("link", { name: "查看同目标修正记录" }).getAttribute("href")).toContain(
+    "page_url=https%3A%2F%2Fapp.example.com%2Flogin",
+  );
   expect(screen.getByText("当前步骤已进入人工干预")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "使用该选择器" }));
   await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
@@ -430,6 +436,10 @@ test("needs_intervention step shows creation error when correction submit fails"
   });
 
   expect(await screen.findByText("人工干预")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "查看同目标修正记录" })).toHaveAttribute(
+    "href",
+    "/corrections?target_description=login%20button&page_url=https%3A%2F%2Fapp.example.com%2Flogin",
+  );
   await userEvent.click(screen.getByRole("button", { name: "使用该选择器" }));
   await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
 

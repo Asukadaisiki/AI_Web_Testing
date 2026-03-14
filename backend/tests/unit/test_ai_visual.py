@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+from urllib import error
+
 from app.core.config import get_settings
-from app.locators.ai_visual import AILocateResult, _normalize_bbox, locate_element_by_vision
+from app.locators.ai_visual import (
+    AILocateResult,
+    _normalize_bbox,
+    locate_element_by_vision,
+    reset_ai_visual_runtime_state,
+)
 from app.locators.fallback import _build_locator_from_ai_point, _dom_snapshot_matches_target
 from app.schemas.executions import DOMElementSnapshot
 
@@ -56,6 +63,7 @@ def test_locate_element_by_vision_skips_when_model_not_configured(monkeypatch) -
     monkeypatch.delenv("VLM_API_KEY", raising=False)
     monkeypatch.delenv("VLM_MODEL", raising=False)
     get_settings.cache_clear()
+    reset_ai_visual_runtime_state()
     try:
         assert (
             locate_element_by_vision(
@@ -67,7 +75,91 @@ def test_locate_element_by_vision_skips_when_model_not_configured(monkeypatch) -
             is None
         )
     finally:
+        reset_ai_visual_runtime_state()
         get_settings.cache_clear()
+
+
+def test_locate_element_by_vision_rate_limits_after_configured_budget(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "true")
+    monkeypatch.setenv("VLM_API_KEY", "test-key")
+    monkeypatch.setenv("VLM_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("AI_VISUAL_RATE_LIMIT_PER_MINUTE", "1")
+    get_settings.cache_clear()
+    reset_ai_visual_runtime_state()
+    call_count = {"count": 0}
+
+    monkeypatch.setattr(
+        "app.locators.ai_visual._call_vlm",
+        lambda **_kwargs: call_count.__setitem__("count", call_count["count"] + 1) or '{"bbox":[100,200,400,600]}',
+    )
+
+    try:
+        first = locate_element_by_vision(
+            screenshot_base64="ZmFrZQ==",
+            target_description="登录按钮",
+            image_width=1000,
+            image_height=500,
+        )
+        second = locate_element_by_vision(
+            screenshot_base64="ZmFrZQ==",
+            target_description="登录按钮",
+            image_width=1000,
+            image_height=500,
+        )
+    finally:
+        reset_ai_visual_runtime_state()
+        get_settings.cache_clear()
+
+    assert first is not None
+    assert second is None
+    assert call_count["count"] == 1
+
+
+def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "true")
+    monkeypatch.setenv("VLM_API_KEY", "test-key")
+    monkeypatch.setenv("VLM_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("AI_VISUAL_FAILURE_THRESHOLD", "2")
+    monkeypatch.setenv("AI_VISUAL_COOLDOWN_SECONDS", "60")
+    get_settings.cache_clear()
+    reset_ai_visual_runtime_state()
+    call_count = {"count": 0}
+
+    def fake_call_vlm(**_kwargs):
+        call_count["count"] += 1
+        raise error.URLError("provider boom")
+
+    monotonic_values = iter([1.0, 1.0, 2.0, 2.0, 3.0, 4.0])
+    monkeypatch.setattr("app.locators.ai_visual._call_vlm", fake_call_vlm)
+    monkeypatch.setattr("app.locators.ai_visual.monotonic", lambda: next(monotonic_values))
+
+    try:
+        first = locate_element_by_vision(
+            screenshot_base64="ZmFrZQ==",
+            target_description="登录按钮",
+            image_width=1000,
+            image_height=500,
+        )
+        second = locate_element_by_vision(
+            screenshot_base64="ZmFrZQ==",
+            target_description="登录按钮",
+            image_width=1000,
+            image_height=500,
+        )
+        third = locate_element_by_vision(
+            screenshot_base64="ZmFrZQ==",
+            target_description="登录按钮",
+            image_width=1000,
+            image_height=500,
+        )
+    finally:
+        reset_ai_visual_runtime_state()
+        get_settings.cache_clear()
+
+    assert first is None
+    assert second is None
+    assert third is None
+    assert call_count["count"] == 2
 
 
 def test_build_locator_from_ai_point_requires_dom_cross_verification() -> None:

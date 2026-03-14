@@ -12,7 +12,7 @@ import {
   Space,
   Typography,
 } from "antd";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { createCorrection, executeCase } from "../services/api";
 import type {
@@ -77,6 +77,9 @@ export function InterventionPanel({
       navigate(`/executions/${execution.id}`);
     },
   });
+  const correctionsHref = `/corrections?target_description=${encodeURIComponent(
+    request.target_description,
+  )}&page_url=${encodeURIComponent(request.page_url)}`;
 
   return (
     <Card size="small" title="人工干预">
@@ -152,6 +155,7 @@ export function InterventionPanel({
 
         <Space direction="vertical" size="small" style={{ width: "100%" }}>
           <Typography.Text strong>提交修正</Typography.Text>
+          <Link to={correctionsHref}>查看同目标修正记录</Link>
           <Space wrap>
             <Select<CorrectionType>
               value={correctionType}

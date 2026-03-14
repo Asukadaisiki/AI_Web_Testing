@@ -31,6 +31,7 @@ def create_correction_route(
 @router.get("", response_model=list[StoredLocatorCorrection])
 def list_corrections_route(
     target_description: str | None = Query(default=None, min_length=1),
+    page_url: str | None = Query(default=None, min_length=1),
     is_active: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -39,6 +40,7 @@ def list_corrections_route(
     return list_corrections(
         session,
         target_description=target_description,
+        page_url=page_url,
         is_active=is_active,
         limit=limit,
         offset=offset,

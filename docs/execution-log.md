@@ -24,6 +24,37 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-14 23:20
+
+- 任务：落实 `v3.4` 第一批稳定化工作，补齐修正管理入口、AI 视觉运行保护与 runner 解耦
+- 背景：上一轮已完成 `Suite Context v2.3` 和混合定位最小闭环，但 `project-plan` 仍停留在 `v2.3`，代码层也存在 `runner` 直接依赖 `db_session`、缺少修正记录管理页以及 AI 视觉缺少超时/限流/熔断保护的问题
+- 执行动作：
+  - 在后端引入 `CorrectionStore` / `SQLAlchemyCorrectionStore`，让 `fallback.py` 与 `playwright_runner.py` 不再直接依赖 SQLAlchemy `Session`
+  - 在 `ai_visual.py` 补充运行时限流、连续失败熔断、冷却恢复与可配置超时，并在 `config.py`、`.env.example` 中新增对应环境变量
+  - 扩展 corrections 查询接口，新增 `page_url` 过滤；补充后端单测覆盖新过滤与 AI guardrails
+  - 在前端新增 `CorrectionsPage`、`/corrections` 路由和侧边导航，支持筛选、分页、启用/停用与来源执行跳转
+  - 在 `InterventionPanel` 增加跳转到修正记录页的入口，并同步更新 `README.md` 与 `docs/project-plan.md`
+- 结果：项目现在具备“执行详情人工干预 -> 修正记录管理 -> 启停治理 -> 重跑验证”的可见运营入口；AI 视觉默认关闭但已具备保护性运行约束；执行 runner 与数据库会话的直接耦合已收口到 correction store 适配层
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `74 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `36 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/core/config.py`、`backend/app/locators/ai_visual.py`、`backend/app/locators/corrections.py`、`backend/app/locators/fallback.py`、`backend/app/runners/playwright_runner.py`、`backend/app/services/executions.py`、`backend/app/services/corrections.py`、`backend/app/api/routes/corrections.py`、`backend/tests/unit/test_ai_visual.py`、`backend/tests/unit/test_corrections_api.py`、`backend/tests/unit/test_locator_fallback.py`、`frontend/src/pages/CorrectionsPage.tsx`、`frontend/src/pages/CorrectionsPage.test.tsx`、`frontend/src/components/InterventionPanel.tsx`、`frontend/src/app/AppRouter.tsx`、`frontend/src/layouts/AppLayout.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`、`README.md`、`docs/project-plan.md`
+- 后续：如继续推进，建议优先补真实联调场景下的 `needs_intervention -> correction -> rerun -> Tier 0 hit` 回归用例，并再决定是否接入真实 VLM 配置
+
+## 2026-03-15 00:10
+
+- 任务：将 `v3.4` 稳定化改动同步到 GitHub
+- 背景：本轮已完成代码、测试、构建与文档更新，需要按仓库工作流把当前改动提交并推送到 `origin/main`
+- 执行动作：
+  - 核对 `git branch --show-current`、`git remote -v` 与 `git status --short`，确认当前位于 `main`，远端为 `origin`
+  - 追加执行日志，记录本次同步动作
+  - 统一提交 `v3.4` 稳定化相关代码、测试、配置与文档改动并推送到 GitHub
+- 结果：`v3.4` 第一批稳定化工作已整理为一次可追溯的同步批次
+- 验证：通过分支、远端与工作区状态检查确认同步目标正确；提交与推送结果见本次 Git 同步输出
+- 关联文件：`docs/execution-log.md`
+- 后续：继续推进时，可直接在当前 `main` 基础上补真实联调回归或下一批混合定位稳定化任务
+
 ## 2026-03-08
 
 - 任务：新增项目级执行日志与 Bug 日志文档

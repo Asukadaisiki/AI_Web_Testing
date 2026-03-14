@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.locators import InterventionNeededError, resolve_with_fallback
 from app.locators.semantic import LocatorResolutionError
 from app.models import LocatorCorrection, TestCase, TestCaseRun
@@ -117,7 +118,12 @@ def test_resolve_with_fallback_uses_active_correction(db_session, monkeypatch) -
     monkeypatch.setattr(db_session, "flush", flush_spy)
 
     page = FakePage(url="https://app.example.com/users/123")
-    resolved = resolve_with_fallback(page, "登录按钮", db_session=db_session, require_enabled=True)
+    resolved = resolve_with_fallback(
+        page,
+        "登录按钮",
+        correction_store=SQLAlchemyCorrectionStore(db_session),
+        require_enabled=True,
+    )
 
     assert resolved.strategy == "correction:css"
     assert correction.verified_count == 1
@@ -141,7 +147,12 @@ def test_resolve_with_fallback_matches_correction_case_insensitively(db_session)
     db_session.commit()
 
     page = FakePage(url="https://app.example.com/users/123")
-    resolved = resolve_with_fallback(page, "login button", db_session=db_session, require_enabled=True)
+    resolved = resolve_with_fallback(
+        page,
+        "login button",
+        correction_store=SQLAlchemyCorrectionStore(db_session),
+        require_enabled=True,
+    )
 
     assert resolved.strategy == "correction:css"
 
@@ -167,7 +178,12 @@ def test_resolve_with_fallback_disables_correction_after_three_failures(db_sessi
     page = FakePage(url="https://app.example.com/users/123", correction_should_fail=True)
     for _ in range(3):
         with pytest.raises(InterventionNeededError):
-            resolve_with_fallback(page, "登录按钮", db_session=db_session, require_enabled=True)
+            resolve_with_fallback(
+                page,
+                "登录按钮",
+                correction_store=SQLAlchemyCorrectionStore(db_session),
+                require_enabled=True,
+            )
 
     assert correction.consecutive_failures == 3
     assert correction.is_active is False
@@ -204,7 +220,7 @@ def test_resolve_with_fallback_uses_viewport_screenshot_for_ai_candidate(monkeyp
         MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
     )
 
-    resolved = resolve_with_fallback(page, "登录按钮", db_session=None)
+    resolved = resolve_with_fallback(page, "登录按钮")
 
     assert resolved.strategy == "ai_visual"
     assert page.screenshot_calls == [False]
@@ -221,6 +237,6 @@ def test_resolve_with_fallback_logs_ai_capture_failures(monkeypatch, caplog) -> 
     )
 
     with pytest.raises(InterventionNeededError):
-        resolve_with_fallback(page, "登录按钮", db_session=None)
+        resolve_with_fallback(page, "登录按钮")
 
     assert "AI visual fallback failed" in caplog.text
