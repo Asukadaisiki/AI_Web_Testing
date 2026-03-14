@@ -3,6 +3,7 @@ import { Alert, Button, Card, Descriptions, Empty, Space, Table, Tag, Typography
 import type { ColumnsType } from "antd/es/table";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { ContextReadEvidenceList, ContextWriteEvidenceList } from "../components/ContextEvidenceList";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { getSuiteRunDetail, rerunFailedSuiteRun } from "../services/api";
 import type { ContextVariableReadEvidence, ContextVariableWriteEvidence, StoredSuiteRunItem } from "../types/api";
@@ -23,41 +24,6 @@ function renderStatus(status: "running" | "passed" | "failed") {
 
 function formatTime(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "-";
-}
-
-function renderReadEvidence(reads: ContextVariableReadEvidence[] = []) {
-  if (!reads.length) {
-    return "-";
-  }
-
-  return (
-    <Space direction="vertical" size={2}>
-      {reads.map((item) => (
-        <Typography.Text key={`${item.context_key}-${item.name}`}>
-          {item.context_key} / {item.value_type} / {item.resolved ? "已解析" : "未解析"}
-          {item.source_suite_run_id ? ` / 来源批次 #${item.source_suite_run_id}` : ""}
-          {item.error_message ? ` / ${item.error_message}` : ""}
-        </Typography.Text>
-      ))}
-    </Space>
-  );
-}
-
-function renderWriteEvidence(writes: ContextVariableWriteEvidence[] = []) {
-  if (!writes.length) {
-    return "-";
-  }
-
-  return (
-    <Space direction="vertical" size={2}>
-      {writes.map((item) => (
-        <Typography.Text key={`${item.context_key}-${item.name}`}>
-          {item.context_key} / {item.value_type} / {item.source || "-"} / {item.status}
-          {item.error_message ? ` / ${item.error_message}` : ""}
-        </Typography.Text>
-      ))}
-    </Space>
-  );
 }
 
 const itemColumns: ColumnsType<StoredSuiteRunItem> = [
@@ -96,13 +62,13 @@ const itemColumns: ColumnsType<StoredSuiteRunItem> = [
     title: "上下文读取",
     dataIndex: "context_reads",
     key: "context_reads",
-    render: (value: ContextVariableReadEvidence[]) => renderReadEvidence(value),
+    render: (value: ContextVariableReadEvidence[]) => <ContextReadEvidenceList reads={value} emptyContent="-" />,
   },
   {
     title: "上下文写入",
     dataIndex: "context_writes",
     key: "context_writes",
-    render: (value: ContextVariableWriteEvidence[]) => renderWriteEvidence(value),
+    render: (value: ContextVariableWriteEvidence[]) => <ContextWriteEvidenceList writes={value} emptyContent="-" />,
   },
   {
     title: "解析结果",
@@ -190,10 +156,10 @@ export function SuiteRunDetailPage() {
         ) : null}
 
         <Card>
-            <Descriptions bordered column={2}>
-              <Descriptions.Item label="批次编号">#{run.id}</Descriptions.Item>
-              <Descriptions.Item label="状态">{renderStatus(run.status)}</Descriptions.Item>
-              <Descriptions.Item label="触发来源">{run.source}</Descriptions.Item>
+          <Descriptions bordered column={2}>
+            <Descriptions.Item label="批次编号">#{run.id}</Descriptions.Item>
+            <Descriptions.Item label="状态">{renderStatus(run.status)}</Descriptions.Item>
+            <Descriptions.Item label="触发来源">{run.source}</Descriptions.Item>
             <Descriptions.Item label="来源批次">
               {run.source_suite_run_id ? (
                 <Link to={`/suites/${numericSuiteId}/runs/${run.source_suite_run_id}`}>#{run.source_suite_run_id}</Link>
@@ -201,28 +167,28 @@ export function SuiteRunDetailPage() {
                 "-"
               )}
             </Descriptions.Item>
-              <Descriptions.Item label="开始时间">{formatTime(run.started_at)}</Descriptions.Item>
-              <Descriptions.Item label="结束时间">{formatTime(run.finished_at)}</Descriptions.Item>
-              <Descriptions.Item label="总用例数">{run.total_cases}</Descriptions.Item>
-              <Descriptions.Item label="覆盖 Base URL">{run.base_url_override || "-"}</Descriptions.Item>
-              <Descriptions.Item label="上下文来源">{run.context_source}</Descriptions.Item>
-              <Descriptions.Item label="来源上下文批次">
-                {run.context_source_suite_run_id ? (
-                  <Link to={`/suites/${numericSuiteId}/runs/${run.context_source_suite_run_id}`}>
-                    #{run.context_source_suite_run_id}
-                  </Link>
-                ) : (
-                  "-"
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="重跑上下文模式" span={2}>
-                {run.rerun_context_mode}
-              </Descriptions.Item>
-              <Descriptions.Item label="通过 / 失败" span={2}>
-                {run.passed_cases} / {run.failed_cases}
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
+            <Descriptions.Item label="开始时间">{formatTime(run.started_at)}</Descriptions.Item>
+            <Descriptions.Item label="结束时间">{formatTime(run.finished_at)}</Descriptions.Item>
+            <Descriptions.Item label="总用例数">{run.total_cases}</Descriptions.Item>
+            <Descriptions.Item label="覆盖 Base URL">{run.base_url_override || "-"}</Descriptions.Item>
+            <Descriptions.Item label="上下文来源">{run.context_source}</Descriptions.Item>
+            <Descriptions.Item label="来源上下文批次">
+              {run.context_source_suite_run_id ? (
+                <Link to={`/suites/${numericSuiteId}/runs/${run.context_source_suite_run_id}`}>
+                  #{run.context_source_suite_run_id}
+                </Link>
+              ) : (
+                "-"
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="重跑上下文模式" span={2}>
+              {run.rerun_context_mode}
+            </Descriptions.Item>
+            <Descriptions.Item label="通过 / 失败" span={2}>
+              {run.passed_cases} / {run.failed_cases}
+            </Descriptions.Item>
+          </Descriptions>
+        </Card>
 
           <Card title="上下文快照">
             {Object.keys(contextSnapshot).length ? (

@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 
 from app.models import Project, SuiteCase, SuiteRun, SuiteRunItem, TestCase, TestSuite, User
 from app.schemas.dsl import DSLCase
-from app.schemas.executions import ContextVariableReadEvidence, ContextVariableWriteEvidence, StepExecutionEvidence
+from app.schemas.executions import (
+    ContextVariableReadEvidence,
+    ContextVariableWriteEvidence,
+    StepExecutionEvidence,
+    StoredCaseExecutionDetail,
+)
 from app.schemas.executions import CaseExecutionRequest
 from app.schemas.suites import (
     StoredSuiteCase,
@@ -620,7 +625,7 @@ def _resolve_case_runtime_dsl(
 
 def _resolve_case_output_updates(
     case: DSLCase,
-    execution,
+    execution: StoredCaseExecutionDetail,
     *,
     writes: list[ContextVariableWriteEvidence],
 ) -> dict[str, Any]:
@@ -636,7 +641,7 @@ def _resolve_case_output_updates(
 
     pending_updates: dict[str, Any] = {}
     errors: list[str] = []
-    for contract, evidence in zip(case.output_contract, writes, strict=False):
+    for contract, evidence in zip(case.output_contract, writes, strict=True):
         value, error_message = _extract_output_value(contract.source, execution)
         if error_message is not None:
             evidence.status = "skipped"
@@ -669,7 +674,7 @@ def _resolve_case_output_updates(
     return pending_updates
 
 
-def _extract_output_value(source: str | None, execution) -> tuple[Any, str | None]:
+def _extract_output_value(source: str | None, execution: StoredCaseExecutionDetail) -> tuple[Any, str | None]:
     last_step = execution.report.steps[-1] if execution.report and execution.report.steps else None
     source_map = {
         "latest_url": execution.latest_url,
@@ -781,6 +786,7 @@ def _mark_context_writes_skipped(
 
 
 def _build_context_resolution_step(case: DSLCase, error_message: str) -> StepExecutionEvidence:
+    # DSLCase enforces steps.min_length=1, so using the first step as context is safe here.
     first_step = case.steps[0]
     target = getattr(first_step, "target", None)
     value = getattr(first_step, "value", None)

@@ -751,6 +751,24 @@
 - 关联文件：`backend/app/schemas/dsl.py`、`backend/app/schemas/executions.py`、`backend/app/services/executions.py`、`backend/app/services/suites.py`、`backend/tests/unit/test_case_executions_api.py`、`backend/tests/unit/test_cases_api.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/unit/test_suites_api.py`、`frontend/src/types/api.ts`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、相关前端测试文件、`docs/project-plan.md`
 - 后续：如继续推进，建议先补 README/使用说明中的 Suite Context 使用方式；确认稳定后再进入 `v3.0-v3.3` 的混合定位系统实现。
 
+## 2026-03-14 01:35
+
+- 任务：修复 `Suite Context` 评审问题并补齐遗漏测试
+- 背景：`v2.3b/v2.3c` 首轮落地后，评审指出后端输出回写存在 `zip(..., strict=False)` 静默截断风险，前端输出契约 `source=null` 时会误显示为 `latest_url`，同时 `ExecutionDetailPage` 与 `SuiteRunDetailPage` 存在上下文证据渲染重复，以及可选输入契约、输出级联中止、嵌套占位符替换等测试缺口。
+- 执行动作：
+  - 在 `backend/app/services/suites.py` 将输出契约与写入证据的配对改为 `zip(..., strict=True)`，为 `_resolve_case_output_updates()`、`_extract_output_value()` 补充 `StoredCaseExecutionDetail` 类型注解，并在 `_build_context_resolution_step()` 处注明 `steps.min_length=1` 的前置条件。
+  - 扩充 `backend/tests/unit/test_suites_api.py`，覆盖 `required=false` 且缺失上下文键时的跳过行为、多个输出契约在首个失败后其余写入证据标记为 `skipped` 的级联中止行为，以及嵌套 `list/dict` 中 `${context_key}` 占位符递归替换。
+  - 新增 `frontend/src/components/ContextEvidenceList.tsx`，抽取上下文读写证据的共享渲染逻辑，并在 `ExecutionDetailPage`、`SuiteRunDetailPage` 中复用，消除重复实现。
+  - 在 `frontend/src/pages/CaseWorkbenchPage.tsx` 将输出契约来源选择器改为 `value={contract.source ?? undefined}` 并增加 `placeholder="请选择"`，使旧数据和草稿中的 `source: null` 显示为未选择而不是伪装成 `latest_url`。
+  - 在 `frontend/src/pages/CaseWorkbenchPage.test.tsx` 新增 UI 用例，验证 `source: null` 时显示占位符、手动选择 `latest_url` 后才随保存 payload 提交；并修正测试交互方式以兼容 Ant Design `Select` 的下拉事件模型。
+- 结果：后端静默截断风险已消除，前端 `source=null` 的显示语义与真实数据一致，两个详情页的上下文证据展示已收敛为共享组件，本轮评审指出的 3 组测试缺口均已补齐。
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `52 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `30 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/services/suites.py`、`backend/tests/unit/test_suites_api.py`、`frontend/src/components/ContextEvidenceList.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`docs/bug-log.md`
+- 后续：同步执行的 Suite 运行模型与 `context_snapshot` 大小限制仍属于后续架构优化项，本轮只修复正确性和可观测性问题，不调整现有执行模型。
+
 ## 2026-03-13 11:45
 
 - 任务：开始执行 `Suite Context 与参数传递 v2.3a`

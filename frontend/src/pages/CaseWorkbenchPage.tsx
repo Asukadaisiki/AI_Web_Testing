@@ -821,7 +821,8 @@ export function CaseWorkbenchPage() {
                           <Typography.Text type="secondary">提取来源</Typography.Text>
                           <Select
                             style={{ width: "100%", marginTop: 8 }}
-                            value={contract.source ?? "latest_url"}
+                            value={contract.source ?? undefined}
+                            placeholder="请选择"
                             options={OUTPUT_SOURCE_OPTIONS}
                             onChange={(value) =>
                               syncOutputContracts(

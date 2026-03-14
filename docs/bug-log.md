@@ -217,3 +217,26 @@
 - 处理：已更新 `docs/project-plan.md` 的当前状态、进行中/未开始项和“下一里程碑”章节，明确下一步为 `Suite Context 与参数传递 v2.3`，并补充 `v2.3a/v2.3b/v2.3c` 的建议拆分
 - 验证：人工核对 `docs/project-plan.md`，前后文已统一到“`v2.2` 完成、`v2.3` 为下一里程碑”的口径
 - 关联记录：`docs/execution-log.md` 2026-03-13 11:31
+
+## BUG-013 | `Suite Context` 输出回写会静默截断，且 `source: null` 在工作台被误显示为 `latest_url`
+- 日期：2026-03-14
+- 状态：fixed
+- 来源：代码评审 / 回归修复
+- 描述：`backend/app/services/suites.py` 在将 `output_contract` 与 `context_writes` 配对时使用 `zip(..., strict=False)`，当两者长度不一致时会静默截断，掩盖 Suite 编排层的逻辑错误；同时 `frontend/src/pages/CaseWorkbenchPage.tsx` 对输出契约来源使用 `value={contract.source ?? "latest_url"}`，会把旧数据或草稿中的 `source: null` 错误显示成已选择 `latest_url`，误导用户。
+- 复现步骤：
+  1. 构造一个输出契约提取失败的 Suite 批次，使后续写入证据数组长度或状态与 `output_contract` 不一致
+  2. 观察旧实现中 `zip(..., strict=False)` 不会抛错，而是直接截断配对结果
+  3. 在工作台加载包含 `output_contract[].source = null` 的草稿或历史数据
+  4. 观察来源选择器会显示 `latest_url`，但实际提交 payload 仍保持 `null`
+- 影响：后端会隐藏真正的编排错误，增加排障成本；前端会让用户误以为变量来源已配置，降低契约编辑的可信度。
+- 根因：后端为了兼容占位证据沿用了宽松的 `zip` 语义；前端为了保留默认来源体验，把“未选择”和“默认值”混为同一个展示值。
+- 处理：
+  - 将 `backend/app/services/suites.py` 中的输出回写配对改为 `zip(..., strict=True)`，让长度不一致直接暴露为逻辑错误
+  - 为相关内部函数补充 `StoredCaseExecutionDetail` 类型注解，并补齐可选输入契约、输出级联中止、嵌套占位符替换的回归测试
+  - 将工作台输出来源选择器改为 `value={contract.source ?? undefined}` 并增加 `placeholder="请选择"`，只在用户明确选择后写入 `source`
+  - 抽取共享上下文证据组件，统一详情页和批次页的上下文读写展示，降低后续修复重复成本
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `52 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `30 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联记录：`docs/execution-log.md` 2026-03-14 01:35

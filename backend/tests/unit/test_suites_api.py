@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import app.services.executions as execution_service
+import app.services.suites as suite_service
 from app.models import SuiteRun, SuiteRunItem, TestSuite
 from app.schemas.executions import StepExecutionEvidence
 from app.runners import RunnerExecutionError
@@ -516,6 +517,62 @@ def test_execute_suite_fails_fast_when_required_context_is_missing(client, monke
     assert execution_response.json()["suite_context"]["resolution_error"] == "Required context key 'session_token' is missing."
 
 
+def test_execute_suite_skips_missing_optional_context_without_failing(client, monkeypatch) -> None:
+    case_id = _create_case(
+        client,
+        name="Optional Context",
+        input_contract=[
+            {
+                "name": "optionalToken",
+                "context_key": "optional_token",
+                "value_type": "string",
+                "required": False,
+            }
+        ],
+        steps=[{"action": "assert_url_contains", "value": "example.com"}],
+    )
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Optional Context Suite",
+            "cases": [{"case_id": case_id}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="assert_url_contains",
+                value="example.com",
+                status="passed",
+                url="https://example.com/",
+            )
+        ]
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "passed"
+    assert payload["items"][0]["context_reads"] == [
+        {
+            "name": "optionalToken",
+            "context_key": "optional_token",
+            "value_type": "string",
+            "resolved": False,
+            "source_suite_run_id": None,
+            "error_message": None,
+        }
+    ]
+    assert payload["items"][0]["context_resolution_error"] is None
+
+
 def test_execute_suite_marks_output_write_failure_when_source_value_is_missing(client, monkeypatch) -> None:
     case_id = _create_case(
         client,
@@ -572,6 +629,75 @@ def test_execute_suite_marks_output_write_failure_when_source_value_is_missing(c
     assert payload["items"][0]["context_resolution_error"] == (
         "Output contract source 'last_step_page_title' did not produce a value."
     )
+
+
+def test_execute_suite_aborts_remaining_output_writes_after_first_failure(client, monkeypatch) -> None:
+    case_id = _create_case(
+        client,
+        name="Multiple Outputs",
+        output_contract=[
+            {
+                "name": "pageTitle",
+                "context_key": "page_title",
+                "value_type": "string",
+                "source": "last_step_page_title",
+            },
+            {
+                "name": "latestPage",
+                "context_key": "latest_page",
+                "value_type": "string",
+                "source": "latest_url",
+            },
+        ],
+    )
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Multiple Outputs Suite",
+            "cases": [{"case_id": case_id}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None):
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="goto",
+                value="/",
+                status="passed",
+                url="https://example.com/final",
+            )
+        ]
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["items"][0]["context_writes"] == [
+        {
+            "name": "pageTitle",
+            "context_key": "page_title",
+            "value_type": "string",
+            "source": "last_step_page_title",
+            "status": "skipped",
+            "error_message": "Output contract source 'last_step_page_title' did not produce a value.",
+        },
+        {
+            "name": "latestPage",
+            "context_key": "latest_page",
+            "value_type": "string",
+            "source": "latest_url",
+            "status": "skipped",
+            "error_message": "Context write aborted because another output contract failed.",
+        },
+    ]
+    assert payload["context_snapshot"] == {}
 
 
 def test_execute_suite_rejects_context_type_mismatch(client, monkeypatch) -> None:
@@ -744,6 +870,32 @@ def test_rerun_failed_suite_run_supports_reuse_source_context_and_empty_context(
     assert empty_response.json()["items"][0]["context_resolution_error"] == (
         "Required context key 'session_token' is missing."
     )
+
+
+def test_render_value_placeholders_recurses_into_nested_lists_and_dicts() -> None:
+    rendered = suite_service._render_value_placeholders(
+        {
+            "steps": [{"action": "assert_text", "value": "token=${session_token}"}],
+            "metadata": {
+                "items": [
+                    "prefix-${session_token}",
+                    {"deep": "${session_token}"},
+                ]
+            },
+        },
+        allowed_keys={"session_token"},
+        context_values={"session_token": "abc-123"},
+    )
+
+    assert rendered == {
+        "steps": [{"action": "assert_text", "value": "token=abc-123"}],
+        "metadata": {
+            "items": [
+                "prefix-abc-123",
+                {"deep": "abc-123"},
+            ]
+        },
+    }
 
 
 def test_execute_suite_rejects_empty_seeded_suite(client, db_session) -> None:

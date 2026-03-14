@@ -1,5 +1,5 @@
 import { Route } from "react-router-dom";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -380,6 +380,103 @@ test("工作台可编辑输入输出契约并随保存一起提交", async () =>
           description: null,
         },
       ],
+      output_contract: [
+        {
+          name: "latestPage",
+          context_key: "latest_page",
+          value_type: "string",
+          source: "latest_url",
+          description: null,
+        },
+      ],
+      steps: [{ action: "goto", value: "/" }],
+    });
+  });
+}, 10000);
+
+test("输出契约 source 为空时显示占位符，选择后再随保存提交", async () => {
+  window.localStorage.setItem(
+    "case-draft:new",
+    JSON.stringify({
+      name: "空来源用例",
+      description: null,
+      project_id: 1,
+      base_url: "https://example.com",
+      inputContracts: [],
+      outputContracts: [
+        {
+          name: "latestPage",
+          context_key: "latest_page",
+          value_type: "string",
+          source: null,
+          description: null,
+        },
+      ],
+      editorMode: "structured",
+      structuredSteps: [{ action: "goto", value: "/" }],
+      stepsJson: JSON.stringify([{ action: "goto", value: "/" }], null, 2),
+    }),
+  );
+
+  vi.mocked(api.validateDslCase).mockImplementation(async (payload) => ({
+    valid: true,
+    case: payload,
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+  }));
+  vi.mocked(api.createCase).mockResolvedValue({
+    id: 16,
+    project_id: 1,
+    name: "空来源用例",
+    description: null,
+    base_url: "https://example.com",
+    input_contract: [],
+    output_contract: [
+      {
+        name: "latestPage",
+        context_key: "latest_page",
+        value_type: "string",
+        source: "latest_url",
+        description: null,
+      },
+    ],
+    steps: [{ action: "goto", value: "/" }],
+    created_by: 1,
+    updated_by: 1,
+    created_at: "2026-03-14T10:00:00",
+    updated_at: "2026-03-14T10:00:00",
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+    extraRoutes: [<Route key="edit" path="/cases/:caseId/edit" element={<div>edit-view</div>} />],
+  });
+
+  expect(await screen.findByDisplayValue("空来源用例")).toBeInTheDocument();
+  const outputCard = screen.getByText("输出 1").closest(".ant-card");
+  expect(outputCard).not.toBeNull();
+  expect(within(outputCard as HTMLElement).getByText("请选择")).toBeInTheDocument();
+
+  const outputSelects = (outputCard as HTMLElement).querySelectorAll(".ant-select");
+  expect(outputSelects).toHaveLength(2);
+  const sourceSelect = outputSelects[1]?.querySelector(".ant-select-selector");
+  expect(sourceSelect).not.toBeNull();
+  fireEvent.mouseDown(sourceSelect as HTMLElement);
+  await userEvent.click(await screen.findByText("latest_url", { selector: ".ant-select-item-option-content" }));
+  await waitFor(() => {
+    expect(window.localStorage.getItem("case-draft:new")).toContain('"source":"latest_url"');
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: /^保\s*存$/ }));
+
+  await waitFor(() => {
+    expect(api.createCase).toHaveBeenCalledWith({
+      project_id: 1,
+      actor_user_id: 1,
+      name: "空来源用例",
+      description: null,
+      base_url: "https://example.com",
+      input_contract: [],
       output_contract: [
         {
           name: "latestPage",
