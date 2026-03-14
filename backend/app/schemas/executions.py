@@ -106,14 +106,14 @@ class DOMElementSnapshot(DSLModel):
     data_testid: str | None = None
     css_selector: str | None = None
     xpath: str | None = None
-    rect: dict[str, float] | None = None
+    rect: dict[Literal["x", "y", "width", "height"], float] | None = None
     visible: bool = False
     enabled: bool = False
 
 
 class AILocateCandidate(DSLModel):
-    center: list[int] = Field(default_factory=list)
-    bbox: list[int] = Field(default_factory=list)
+    center: tuple[int, int] = (0, 0)
+    bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
     confidence: float = 0.0
     raw_response: str | None = None
 

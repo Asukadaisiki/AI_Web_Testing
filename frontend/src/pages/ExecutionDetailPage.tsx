@@ -12,7 +12,6 @@ import {
   List,
   Row,
   Space,
-  Tag,
   Timeline,
   Typography,
 } from "antd";
@@ -21,10 +20,10 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { ContextReadEvidenceList, ContextWriteEvidenceList } from "../components/ContextEvidenceList";
 import { InterventionPanel } from "../components/InterventionPanel";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
+import { renderExecutionStatus } from "../components/executionPresentation";
 import { getExecutionDetail } from "../services/api";
 import type {
   ConsoleEvent,
-  ExecutionStatus,
   NetworkEvent,
   StepExecutionEvidence,
 } from "../types/api";
@@ -41,26 +40,6 @@ function isBaseUrlError(message: string | null) {
     return false;
   }
   return message.includes("case.base_url") || message.includes("Relative goto step requires");
-}
-
-function renderStatus(status: ExecutionStatus) {
-  const colorMap: Record<ExecutionStatus, string> = {
-    passed: "success",
-    failed: "error",
-    running: "processing",
-    needs_intervention: "warning",
-  };
-  const labelMap: Record<ExecutionStatus, string> = {
-    passed: "通过",
-    failed: "失败",
-    running: "运行中",
-    needs_intervention: "待人工干预",
-  };
-  return (
-    <Tag className="status-tag" color={colorMap[status]}>
-      {labelMap[status]}
-    </Tag>
-  );
 }
 
 function EventList<T>({
@@ -359,7 +338,7 @@ export function ExecutionDetailPage() {
       <div className="summary-strip">
         <div className="summary-tile">
           <div className="summary-label">执行状态</div>
-          <div className="summary-value">{renderStatus(detail.status)}</div>
+          <div className="summary-value">{renderExecutionStatus(detail.status)}</div>
         </div>
         <div className="summary-tile">
           <div className="summary-label">执行编号</div>
@@ -431,7 +410,7 @@ export function ExecutionDetailPage() {
                 label: (
                   <Space>
                     <Typography.Text strong>{`Step ${step.step_index + 1} / ${step.action}`}</Typography.Text>
-                    {renderStatus(step.status)}
+                    {renderExecutionStatus(step.status)}
                   </Space>
                 ),
                 children: (

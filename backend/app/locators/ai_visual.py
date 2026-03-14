@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib import error, request
@@ -14,6 +15,8 @@ ModelFamily = Literal["qwen-vl", "gemini", "gpt-4o", "qwen2.5-vl"]
 
 SYSTEM_PROMPT = """You are an AI assistant that locates a UI element in a screenshot.
 Return JSON only in the shape {"bbox":[xmin,ymin,xmax,ymax],"errors":["..."]?}."""
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -93,7 +96,8 @@ def _call_vlm(
     try:
         with request.urlopen(http_request, timeout=30) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
-    except error.URLError:
+    except error.URLError as exc:
+        logger.warning("AI visual locate request failed: %s", exc)
         return ""
 
     return (
@@ -114,11 +118,13 @@ def _parse_bbox_response(
         return None
     try:
         payload = json.loads(_extract_json_object(response_text))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        logger.warning("AI visual locate returned invalid JSON: %s", exc)
         return None
 
     bbox = payload.get("bbox")
     if not isinstance(bbox, list) or len(bbox) != 4:
+        logger.warning("AI visual locate response missing valid bbox: %s", response_text)
         return None
     normalized_bbox = _normalize_bbox(
         bbox=bbox,

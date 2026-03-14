@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+import logging
+import re
 
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,134 @@ from app.locators.ai_visual import AILocateResult, locate_element_by_vision
 from app.locators.corrections import MAX_CONSECUTIVE_FAILURES, find_active_correction
 from app.locators.semantic import LocatorResolutionError, ResolvedLocator, resolve_semantic_locator
 from app.schemas.executions import DOMElementSnapshot, LocatorTrace
+
+
+logger = logging.getLogger(__name__)
+TOKEN_PATTERN = re.compile(r"[0-9a-z]+|[\u4e00-\u9fff]+", re.IGNORECASE)
+SELECTOR_HELPERS_JS = """
+const buildCssSelector = (node) => {
+  if (!(node instanceof Element)) {
+    return null;
+  }
+  if (node.id) {
+    return `#${CSS.escape(node.id)}`;
+  }
+  const segments = [];
+  let current = node;
+  while (current instanceof Element && current !== document.body) {
+    const tag = current.tagName.toLowerCase();
+    const parent = current.parentElement;
+    if (!parent) {
+      segments.unshift(tag);
+      break;
+    }
+    const siblings = Array.from(parent.children).filter(
+      (child) => child.tagName === current.tagName,
+    );
+    const index = siblings.indexOf(current);
+    segments.unshift(
+      siblings.length > 1 ? `${tag}:nth-of-type(${index + 1})` : tag,
+    );
+    current = parent;
+  }
+  return segments.join(" > ");
+};
+
+const buildXPath = (node) => {
+  if (!(node instanceof Element)) {
+    return null;
+  }
+  const segments = [];
+  let current = node;
+  while (current instanceof Element) {
+    let index = 1;
+    let sibling = current.previousElementSibling;
+    while (sibling) {
+      if (sibling.tagName === current.tagName) {
+        index += 1;
+      }
+      sibling = sibling.previousElementSibling;
+    }
+    segments.unshift(`${current.tagName.toLowerCase()}[${index}]`);
+    current = current.parentElement;
+  }
+  return `/${segments.join("/")}`;
+};
+"""
+SNAPSHOT_DOM_AT_POINT_SCRIPT = (
+    """
+    ([pointX, pointY]) => {
+    """
+    + SELECTOR_HELPERS_JS
+    + """
+      const element = document.elementFromPoint(pointX, pointY);
+      if (!element) {
+        return null;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      const enabled = !(element.disabled) && element.getAttribute("aria-disabled") !== "true";
+      const text = (element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
+
+      return {
+        tag: element.tagName.toLowerCase(),
+        text: text || null,
+        role: element.getAttribute("role"),
+        aria_label: element.getAttribute("aria-label"),
+        placeholder: element.getAttribute("placeholder"),
+        data_testid: element.getAttribute("data-testid"),
+        css_selector: buildCssSelector(element),
+        xpath: buildXPath(element),
+        rect: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        },
+        visible,
+        enabled,
+      };
+    }
+    """
+)
+EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT = (
+    """
+    () => {
+      const selector = "button, input, select, textarea, a, [role], [data-testid], [onclick]";
+      const nodes = Array.from(document.querySelectorAll(selector)).slice(0, 50);
+    """
+    + SELECTOR_HELPERS_JS
+    + """
+      return nodes.map((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        const enabled = !(element.disabled) && element.getAttribute("aria-disabled") !== "true";
+        const text = (element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160);
+        return {
+          tag: element.tagName.toLowerCase(),
+          text: text || null,
+          role: element.getAttribute("role"),
+          aria_label: element.getAttribute("aria-label"),
+          placeholder: element.getAttribute("placeholder"),
+          data_testid: element.getAttribute("data-testid"),
+          css_selector: buildCssSelector(element),
+          xpath: buildXPath(element),
+          rect: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+          visible,
+          enabled,
+        };
+      });
+    }
+    """
+)
 
 
 class InterventionNeededError(RuntimeError):
@@ -53,7 +182,7 @@ def resolve_with_fallback(
         else None
     )
     if correction is not None:
-        resolved = _try_resolve_correction(page, target=target, correction=correction)
+        resolved = _try_resolve_correction(page, target=target, correction=correction, db_session=db_session)
         if resolved is not None:
             return resolved
 
@@ -83,18 +212,36 @@ def resolve_with_fallback(
     )
 
 
-def _try_resolve_correction(page, *, target: str, correction: LocatorCorrection) -> ResolvedLocator | None:
+def _try_resolve_correction(
+    page,
+    *,
+    target: str,
+    correction: LocatorCorrection,
+    db_session: Session | None,
+) -> ResolvedLocator | None:
     try:
         locator = _build_locator_from_correction(page, correction)
         locator.wait_for(state="visible", timeout=3000)
-    except Exception:
+    except Exception as exc:
         correction.consecutive_failures += 1
         if correction.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
             correction.is_active = False
+        if db_session is not None:
+            db_session.flush()
+        logger.warning(
+            "Correction reuse failed id=%s target=%s consecutive_failures=%s is_active=%s error=%s",
+            correction.id,
+            target,
+            correction.consecutive_failures,
+            correction.is_active,
+            exc,
+        )
         return None
 
     correction.verified_count += 1
     correction.consecutive_failures = 0
+    if db_session is not None:
+        db_session.flush()
     strategy = f"correction:{correction.correction_type}"
     return ResolvedLocator(
         strategy=strategy,
@@ -131,12 +278,13 @@ def _try_ai_visual_locate(page, *, target: str) -> AILocateResult | None:
             image_width=width,
             image_height=height,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("AI visual fallback failed for target=%s error=%s", target, exc)
         return None
 
 
 def _take_screenshot_base64(page) -> str:
-    screenshot_bytes = page.screenshot(full_page=True)
+    screenshot_bytes = page.screenshot(full_page=False)
     return base64.b64encode(screenshot_bytes).decode("utf-8")
 
 
@@ -166,203 +314,43 @@ def _build_locator_from_ai_point(
 
 
 def _snapshot_dom_element_at_point(page, x: int, y: int) -> DOMElementSnapshot | None:
-    payload = page.evaluate(
-        """
-        ([pointX, pointY]) => {
-          const element = document.elementFromPoint(pointX, pointY);
-          if (!element) {
-            return null;
-          }
-
-          const buildCssSelector = (node) => {
-            if (!(node instanceof Element)) {
-              return null;
-            }
-            if (node.id) {
-              return `#${CSS.escape(node.id)}`;
-            }
-            const segments = [];
-            let current = node;
-            while (current instanceof Element && current !== document.body) {
-              const tag = current.tagName.toLowerCase();
-              const parent = current.parentElement;
-              if (!parent) {
-                segments.unshift(tag);
-                break;
-              }
-              const siblings = Array.from(parent.children).filter(
-                (child) => child.tagName === current.tagName,
-              );
-              const index = siblings.indexOf(current);
-              segments.unshift(
-                siblings.length > 1 ? `${tag}:nth-of-type(${index + 1})` : tag,
-              );
-              current = parent;
-            }
-            return segments.join(" > ");
-          };
-
-          const buildXPath = (node) => {
-            if (!(node instanceof Element)) {
-              return null;
-            }
-            const segments = [];
-            let current = node;
-            while (current instanceof Element) {
-              let index = 1;
-              let sibling = current.previousElementSibling;
-              while (sibling) {
-                if (sibling.tagName === current.tagName) {
-                  index += 1;
-                }
-                sibling = sibling.previousElementSibling;
-              }
-              segments.unshift(`${current.tagName.toLowerCase()}[${index}]`);
-              current = current.parentElement;
-            }
-            return `/${segments.join("/")}`;
-          };
-
-          const rect = element.getBoundingClientRect();
-          const style = window.getComputedStyle(element);
-          const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-          const enabled = !(element.disabled) && element.getAttribute("aria-disabled") !== "true";
-          const text = (element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
-
-          return {
-            tag: element.tagName.toLowerCase(),
-            text: text || null,
-            role: element.getAttribute("role"),
-            aria_label: element.getAttribute("aria-label"),
-            placeholder: element.getAttribute("placeholder"),
-            data_testid: element.getAttribute("data-testid"),
-            css_selector: buildCssSelector(element),
-            xpath: buildXPath(element),
-            rect: {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
-            },
-            visible,
-            enabled,
-          };
-        }
-        """,
-        [x, y],
-    )
+    payload = page.evaluate(SNAPSHOT_DOM_AT_POINT_SCRIPT, [x, y])
     if payload is None:
         return None
     return DOMElementSnapshot.model_validate(payload)
 
 
 def _dom_snapshot_matches_target(snapshot: DOMElementSnapshot, target: str) -> bool:
-    normalized_target = target.strip().casefold()
-    if not normalized_target:
+    target_tokens = _tokenize(target)
+    if not target_tokens:
         return False
-    haystacks = [
-        snapshot.text or "",
-        snapshot.aria_label or "",
-        snapshot.placeholder or "",
-        snapshot.data_testid or "",
-        snapshot.role or "",
-        snapshot.tag or "",
+    semantic_fields = [
+        snapshot.text,
+        snapshot.aria_label,
+        snapshot.placeholder,
+        snapshot.data_testid,
     ]
-    return any(normalized_target in value.casefold() for value in haystacks if value)
+    if any(target_tokens.issubset(_tokenize(value)) for value in semantic_fields if value):
+        return True
+
+    fallback_fields = [snapshot.role, snapshot.tag]
+    return any(target_tokens.issubset(_tokenize(value)) for value in fallback_fields if value)
 
 
 def _extract_interactable_elements(page) -> list[DOMElementSnapshot]:
-    payload = page.evaluate(
-        """
-        () => {
-          const selector = "button, input, select, textarea, a, [role], [data-testid], [onclick]";
-          const nodes = Array.from(document.querySelectorAll(selector)).slice(0, 50);
-
-          const buildCssSelector = (node) => {
-            if (!(node instanceof Element)) {
-              return null;
-            }
-            if (node.id) {
-              return `#${CSS.escape(node.id)}`;
-            }
-            const segments = [];
-            let current = node;
-            while (current instanceof Element && current !== document.body) {
-              const tag = current.tagName.toLowerCase();
-              const parent = current.parentElement;
-              if (!parent) {
-                segments.unshift(tag);
-                break;
-              }
-              const siblings = Array.from(parent.children).filter(
-                (child) => child.tagName === current.tagName,
-              );
-              const index = siblings.indexOf(current);
-              segments.unshift(
-                siblings.length > 1 ? `${tag}:nth-of-type(${index + 1})` : tag,
-              );
-              current = parent;
-            }
-            return segments.join(" > ");
-          };
-
-          const buildXPath = (node) => {
-            if (!(node instanceof Element)) {
-              return null;
-            }
-            const segments = [];
-            let current = node;
-            while (current instanceof Element) {
-              let index = 1;
-              let sibling = current.previousElementSibling;
-              while (sibling) {
-                if (sibling.tagName === current.tagName) {
-                  index += 1;
-                }
-                sibling = sibling.previousElementSibling;
-              }
-              segments.unshift(`${current.tagName.toLowerCase()}[${index}]`);
-              current = current.parentElement;
-            }
-            return `/${segments.join("/")}`;
-          };
-
-          return nodes.map((element) => {
-            const rect = element.getBoundingClientRect();
-            const style = window.getComputedStyle(element);
-            const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-            const enabled = !(element.disabled) && element.getAttribute("aria-disabled") !== "true";
-            const text = (element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160);
-            return {
-              tag: element.tagName.toLowerCase(),
-              text: text || null,
-              role: element.getAttribute("role"),
-              aria_label: element.getAttribute("aria-label"),
-              placeholder: element.getAttribute("placeholder"),
-              data_testid: element.getAttribute("data-testid"),
-              css_selector: buildCssSelector(element),
-              xpath: buildXPath(element),
-              rect: {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-              },
-              visible,
-              enabled,
-            };
-          });
-        }
-        """
-    )
+    payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
     if not isinstance(payload, list):
         return []
     return [DOMElementSnapshot.model_validate(entry) for entry in payload]
 
 
+def _tokenize(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {token for token in TOKEN_PATTERN.findall(value.casefold()) if token}
+
+
 __all__ = [
     "InterventionNeededError",
     "resolve_with_fallback",
-    "_build_locator_from_ai_point",
-    "_dom_snapshot_matches_target",
 ]

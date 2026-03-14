@@ -1,33 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Descriptions, Empty, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Descriptions, Empty, Space, Table, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ContextReadEvidenceList, ContextWriteEvidenceList } from "../components/ContextEvidenceList";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
+import { renderExecutionStatus } from "../components/executionPresentation";
 import { getSuiteRunDetail, rerunFailedSuiteRun } from "../services/api";
 import type {
   ContextVariableReadEvidence,
   ContextVariableWriteEvidence,
-  ExecutionStatus,
   StoredSuiteRunItem,
 } from "../types/api";
-
-function renderStatus(status: ExecutionStatus) {
-  const color = {
-    running: "processing",
-    passed: "success",
-    failed: "error",
-    needs_intervention: "warning",
-  }[status];
-  const label = {
-    running: "运行中",
-    passed: "通过",
-    failed: "失败",
-    needs_intervention: "待人工干预",
-  }[status];
-  return <Tag color={color}>{label}</Tag>;
-}
 
 function formatTime(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "-";
@@ -56,7 +40,7 @@ const itemColumns: ColumnsType<StoredSuiteRunItem> = [
     dataIndex: "status",
     key: "status",
     width: 100,
-    render: renderStatus,
+    render: renderExecutionStatus,
   },
   {
     title: "执行详情",
@@ -165,7 +149,7 @@ export function SuiteRunDetailPage() {
         <Card>
           <Descriptions bordered column={2}>
             <Descriptions.Item label="批次编号">#{run.id}</Descriptions.Item>
-            <Descriptions.Item label="状态">{renderStatus(run.status)}</Descriptions.Item>
+            <Descriptions.Item label="状态">{renderExecutionStatus(run.status)}</Descriptions.Item>
             <Descriptions.Item label="触发来源">{run.source}</Descriptions.Item>
             <Descriptions.Item label="来源批次">
               {run.source_suite_run_id ? (

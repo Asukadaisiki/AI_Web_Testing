@@ -46,12 +46,6 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_locator_corrections_created_by"), "locator_corrections", ["created_by"], unique=False)
 
-    op.alter_column("locator_corrections", "verified_count", server_default=None)
-    op.alter_column("locator_corrections", "consecutive_failures", server_default=None)
-    op.alter_column("locator_corrections", "is_active", server_default=None)
-    op.alter_column("locator_corrections", "created_at", server_default=None)
-    op.alter_column("locator_corrections", "updated_at", server_default=None)
-
 
 def downgrade() -> None:
     op.drop_index(op.f("ix_locator_corrections_created_by"), table_name="locator_corrections")

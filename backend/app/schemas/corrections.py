@@ -19,7 +19,7 @@ class CreateCorrectionRequest(DSLModel):
     correction_type: CorrectionType
     correction_value: str = Field(min_length=1, max_length=2000)
     source_execution_id: int = Field(ge=1)
-    created_by: int = Field(default=1, ge=1)
+    created_by: int = Field(ge=1)
 
 
 class UpdateCorrectionStateRequest(DSLModel):
@@ -35,7 +35,7 @@ class StoredLocatorCorrection(DSLModel):
     verified_count: int
     consecutive_failures: int
     is_active: bool
-    source_execution_id: int
+    source_execution_id: int | None = None
     created_by: int
     created_at: datetime
     updated_at: datetime

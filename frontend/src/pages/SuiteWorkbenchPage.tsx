@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Empty, Form, Input, InputNumber, List, Space, Tag, Typography, message } from "antd";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { renderExecutionStatus } from "../components/executionPresentation";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import {
   createSuite,
@@ -13,7 +14,6 @@ import {
   updateSuite,
 } from "../services/api";
 import type {
-  ExecutionStatus,
   StoredCaseSummary,
   StoredSuiteCase,
   StoredSuiteDetail,
@@ -59,22 +59,6 @@ function formatTime(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "-";
 }
 
-function renderStatus(status: ExecutionStatus) {
-  const color = {
-    running: "processing",
-    passed: "success",
-    failed: "error",
-    needs_intervention: "warning",
-  }[status];
-  const label = {
-    running: "运行中",
-    passed: "通过",
-    failed: "失败",
-    needs_intervention: "待人工干预",
-  }[status];
-  return <Tag color={color}>{label}</Tag>;
-}
-
 function RecentRuns({ suiteId, runs }: { suiteId: number; runs: StoredSuiteRunSummary[] }) {
   return (
     <Card title="最近批次">
@@ -92,7 +76,7 @@ function RecentRuns({ suiteId, runs }: { suiteId: number; runs: StoredSuiteRunSu
               <Space direction="vertical" size={2}>
                 <Space size="small">
                   <Typography.Text strong>#{item.id}</Typography.Text>
-                  {renderStatus(item.status)}
+                  {renderExecutionStatus(item.status)}
                 </Space>
                 <Typography.Text type="secondary">
                   {formatTime(item.started_at)} / {item.passed_cases} 通过 / {item.failed_cases} 失败

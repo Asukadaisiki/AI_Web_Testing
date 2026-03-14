@@ -270,14 +270,14 @@ export interface DOMElementSnapshot {
   data_testid?: string | null;
   css_selector?: string | null;
   xpath?: string | null;
-  rect?: Record<string, number> | null;
+  rect?: { x: number; y: number; width: number; height: number } | null;
   visible: boolean;
   enabled: boolean;
 }
 
 export interface AILocateCandidate {
-  center: number[];
-  bbox: number[];
+  center: [number, number];
+  bbox: [number, number, number, number];
   confidence: number;
   raw_response?: string | null;
 }
@@ -368,7 +368,7 @@ export interface StoredLocatorCorrection {
   verified_count: number;
   consecutive_failures: number;
   is_active: boolean;
-  source_execution_id: number;
+  source_execution_id: number | null;
   created_by: number;
   created_at: string;
   updated_at: string;

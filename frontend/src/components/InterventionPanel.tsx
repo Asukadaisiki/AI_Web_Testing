@@ -30,14 +30,14 @@ type InterventionPanelProps = {
 };
 
 function inferSuggestion(element: DOMElementSnapshot): { correctionType: CorrectionType; correctionValue: string } | null {
-  if (element.css_selector) {
-    return { correctionType: "css", correctionValue: element.css_selector };
+  if (element.data_testid) {
+    return { correctionType: "test_id", correctionValue: element.data_testid };
   }
   if (element.xpath) {
     return { correctionType: "xpath", correctionValue: element.xpath };
   }
-  if (element.data_testid) {
-    return { correctionType: "test_id", correctionValue: element.data_testid };
+  if (element.css_selector) {
+    return { correctionType: "css", correctionValue: element.css_selector };
   }
   return null;
 }

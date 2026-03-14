@@ -802,3 +802,23 @@
 - 验证：执行 `cd backend && uv run --group dev pytest tests/unit`，45 个单元测试全部通过。
 - 关联文件：`backend/app/schemas/dsl.py`、`backend/app/schemas/cases.py`、`backend/app/schemas/executions.py`、`backend/app/schemas/suites.py`、`backend/app/models/suite_run.py`、`backend/app/models/suite_run_item.py`、`backend/app/services/cases.py`、`backend/app/services/executions.py`、`backend/app/services/suites.py`、`backend/alembic/versions/20260313_0004_suite_context_contracts.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/unit/test_cases_api.py`、`backend/tests/unit/test_suites_api.py`、`backend/tests/unit/test_models.py`
 - 后续：下一步进入 `v2.3b` 时，可直接在 `suites.py` 的批次编排层接入变量解析、缺失变量 fail-fast 和输出回写逻辑，无需再改动本轮定义的返回契约。
+
+## 2026-03-14 20:52
+
+- 任务：落实 `74f7470` 代码评审后的 correctness / data-integrity 修复批次
+- 背景：上一轮混合定位闭环已可用，但评审指出了 AI 坐标对齐、静默异常、修正记录完整性、API 语义和前端类型一致性等一组会影响正确性或可运维性的缺陷
+- 执行动作：
+  - 后端为 `locator_corrections` 增加 `normalized_target_description`，补充 correction type check、复合查询索引、唯一活动修正索引，并新增 `20260314_0006_locator_correction_integrity.py` 迁移将 `source_execution_id` 调整为 nullable + `ON DELETE SET NULL`
+  - 将 corrections API 改为 `PATCH /api/v1/corrections/{id}`，补充 `limit/offset` 分页、`created_by` 必填、大小写无关查询以及服务层日志
+  - 收紧 `fallback.py`：AI 截图改为 viewport-only、Tier 0 计数显式 `flush()`、warning 日志补齐、DOM 交叉验证改为 token 级匹配，并抽出共享 JS selector helper
+  - 收紧 URL 泛化逻辑，保留并排序 query string，仅对数字 / UUID / 长度足够且同时含字母和数字的 segment 或 query value 做通配
+  - 前端统一复用 `renderExecutionStatus()`，修正 `InterventionPanel` 的建议优先级为 `test_id -> xpath -> css`，并收紧 AI / DOM 相关 TypeScript 类型
+  - 扩展后端与前端测试，覆盖分页、PATCH、大小写命中、唯一活动修正约束、viewport 截图、warning 日志、qwen-vl bbox、人工干预错误路径等回归点
+- 结果：本轮评审中列出的高优先级正确性问题和大部分中优先级数据一致性问题已落地修复；混合定位链路在不打开 AI 的情况下继续保持稳定，同时修正记录的查找、停用和回收语义更明确
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `72 passed`
+  - 执行 `cd backend && uv run alembic upgrade head` 成功，`20260314_0006` 迁移在 PostgreSQL 上通过
+  - 执行 `cd frontend && npm test -- --run`，结果为 `33 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/models/locator_correction.py`、`backend/app/locators/corrections.py`、`backend/app/locators/fallback.py`、`backend/app/locators/url_pattern.py`、`backend/app/locators/ai_visual.py`、`backend/app/api/routes/corrections.py`、`backend/app/services/corrections.py`、`backend/app/schemas/corrections.py`、`backend/app/schemas/executions.py`、`backend/alembic/versions/20260314_0005_locator_corrections.py`、`backend/alembic/versions/20260314_0006_locator_correction_integrity.py`、`backend/tests/unit/test_corrections_api.py`、`backend/tests/unit/test_locator_fallback.py`、`backend/tests/unit/test_ai_visual.py`、`backend/tests/unit/test_models.py`、`backend/tests/unit/test_url_pattern.py`、`frontend/src/components/InterventionPanel.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/SuitesPage.tsx`、`frontend/src/pages/SuiteWorkbenchPage.tsx`、`frontend/src/pages/ExecutionDetailPage.test.tsx`、`frontend/src/types/api.ts`
+- 后续：延后项保持不变，`db_session` 从 runner 解耦和 VLM 限流 / 熔断仍单独作为下一批架构加固任务处理

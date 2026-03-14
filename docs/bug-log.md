@@ -240,3 +240,20 @@
   - 执行 `cd frontend && npm test -- --run`，结果为 `30 passed`
   - 执行 `cd frontend && npm run build` 成功
 - 关联记录：`docs/execution-log.md` 2026-03-14 01:35
+
+## BUG-014 | `20260314_0006` 首次迁移在 PostgreSQL 上因 boolean/int `CASE` 混用失败
+- 日期：2026-03-14
+- 状态：fixed
+- 来源：实现阶段自测 / Alembic 升级验证
+- 描述：新增 `locator_correction_integrity` 迁移时，在去重复制旧表数据的 SQL 中使用了 `CASE WHEN is_active AND active_rank > 1 THEN 0 ELSE is_active END`。SQLite 可容忍 `0/1` 与 boolean 混用，但 PostgreSQL 会直接报 `DatatypeMismatch`
+- 复现步骤：
+  1. 在已处于 `20260314_0005` 的 PostgreSQL 数据库执行 `cd backend && uv run alembic upgrade head`
+  2. 触发 `20260314_0006_locator_correction_integrity.py`
+  3. 观察升级在 `INSERT INTO locator_corrections_v2 ... CASE WHEN ... THEN 0 ELSE is_active END` 处失败
+- 影响：会阻塞真实 PostgreSQL 环境完成本轮 schema 升级，导致修正记录完整性增强无法落库
+- 根因：迁移 SQL 以 SQLite 的 boolean 存储习惯编写，未对 PostgreSQL 严格区分 boolean 与 integer 的类型系统做兼容处理
+- 处理：将去重逻辑改为 `CASE WHEN is_active AND active_rank > 1 THEN FALSE ELSE is_active END`，保持整个表达式类型恒为 boolean
+- 验证：
+  - 执行 `cd backend && uv run alembic upgrade head` 成功
+  - 执行 `cd backend && uv run pytest`，结果为 `72 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-14 20:52

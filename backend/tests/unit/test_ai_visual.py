@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from app.core.config import get_settings
 from app.locators.ai_visual import AILocateResult, _normalize_bbox, locate_element_by_vision
-from app.locators.fallback import _build_locator_from_ai_point
+from app.locators.fallback import _build_locator_from_ai_point, _dom_snapshot_matches_target
+from app.schemas.executions import DOMElementSnapshot
 
 
 class FakePage:
@@ -41,6 +42,13 @@ def test_normalize_bbox_supports_multiple_model_families() -> None:
         image_height=500,
         model_family="qwen2.5-vl",
     ) == (10, 20, 30, 40)
+
+    assert _normalize_bbox(
+        bbox=[100, 200, 400, 600],
+        image_width=1000,
+        image_height=500,
+        model_family="qwen-vl",
+    ) == (100, 100, 400, 300)
 
 
 def test_locate_element_by_vision_skips_when_model_not_configured(monkeypatch) -> None:
@@ -101,3 +109,22 @@ def test_build_locator_from_ai_point_requires_dom_cross_verification() -> None:
     assert matching_page.locator_calls == ["#login-btn"]
 
     assert _build_locator_from_ai_point(mismatching_page, target="登录按钮", ai_candidate=ai_candidate) is None
+
+
+def test_dom_snapshot_target_matching_uses_whole_tokens() -> None:
+    snapshot = DOMElementSnapshot(
+        tag="button",
+        text="Booking",
+        role="button",
+        aria_label=None,
+        placeholder=None,
+        data_testid="booking-submit",
+        css_selector="#booking-submit",
+        xpath="/html/body/button[1]",
+        rect={"x": 0, "y": 0, "width": 10, "height": 10},
+        visible=True,
+        enabled=True,
+    )
+
+    assert _dom_snapshot_matches_target(snapshot, "booking")
+    assert not _dom_snapshot_matches_target(snapshot, "ok")

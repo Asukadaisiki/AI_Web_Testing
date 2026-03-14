@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db_session
-from app.schemas.corrections import CreateCorrectionRequest, StoredLocatorCorrection
-from app.services import EntityNotFoundError, create_correction, deactivate_correction, list_corrections
+from app.schemas.corrections import CreateCorrectionRequest, StoredLocatorCorrection, UpdateCorrectionStateRequest
+from app.services import EntityNotFoundError, create_correction, list_corrections, update_correction_state
 
 
 router = APIRouter(prefix="/corrections", tags=["corrections"])
@@ -32,17 +32,26 @@ def create_correction_route(
 def list_corrections_route(
     target_description: str | None = Query(default=None, min_length=1),
     is_active: bool | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> list[StoredLocatorCorrection]:
-    return list_corrections(session, target_description=target_description, is_active=is_active)
+    return list_corrections(
+        session,
+        target_description=target_description,
+        is_active=is_active,
+        limit=limit,
+        offset=offset,
+    )
 
 
-@router.put("/{correction_id}/deactivate", response_model=StoredLocatorCorrection)
-def deactivate_correction_route(
+@router.patch("/{correction_id}", response_model=StoredLocatorCorrection)
+def update_correction_state_route(
     correction_id: int,
+    payload: UpdateCorrectionStateRequest,
     session: Session = Depends(get_db_session),
 ) -> StoredLocatorCorrection:
     try:
-        return deactivate_correction(session, correction_id)
+        return update_correction_state(session, correction_id, payload)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

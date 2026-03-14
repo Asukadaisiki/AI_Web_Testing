@@ -3,25 +3,10 @@ import { Button, Card, Space, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { Link, useNavigate } from "react-router-dom";
 
+import { renderExecutionStatus } from "../components/executionPresentation";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { executeSuite, getSuites } from "../services/api";
-import type { ExecutionStatus, StoredSuiteSummary } from "../types/api";
-
-function renderStatus(status: ExecutionStatus) {
-  const color = {
-    running: "processing",
-    passed: "success",
-    failed: "error",
-    needs_intervention: "warning",
-  }[status];
-  const label = {
-    running: "运行中",
-    passed: "通过",
-    failed: "失败",
-    needs_intervention: "待人工干预",
-  }[status];
-  return <Tag color={color}>{label}</Tag>;
-}
+import type { StoredSuiteSummary } from "../types/api";
 
 function formatTime(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "-";
@@ -58,7 +43,7 @@ const columns = (
       record.latest_run ? (
         <Space direction="vertical" size={2}>
           <Space size="small">
-            {renderStatus(record.latest_run.status)}
+            {renderExecutionStatus(record.latest_run.status)}
             <Link to={`/suites/${record.id}/runs/${record.latest_run.id}`}>查看历史</Link>
           </Space>
           <Typography.Text type="secondary">{formatTime(record.latest_run.started_at)}</Typography.Text>
