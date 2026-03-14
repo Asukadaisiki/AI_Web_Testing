@@ -155,7 +155,7 @@ export function getCorrections(params: {
   if (params.limit) {
     search.set("limit", String(params.limit));
   }
-  if (params.offset) {
+  if (params.offset != null) {
     search.set("offset", String(params.offset));
   }
   const query = search.toString();
@@ -201,7 +201,7 @@ export function getExecutions(params: {
   if (params.limit) {
     search.set("limit", String(params.limit));
   }
-  if (params.offset) {
+  if (params.offset != null) {
     search.set("offset", String(params.offset));
   }
   return request<StoredCaseExecutionSummary[]>(`/api/v1/executions?${search.toString()}`);

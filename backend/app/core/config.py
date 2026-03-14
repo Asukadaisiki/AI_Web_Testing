@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import logging
 import os
 from pathlib import Path
 
 
 ENV_FILE_PATH = Path(__file__).resolve().parents[2] / ".env"
+logger = logging.getLogger(__name__)
 
 
 def _load_env_file() -> None:
@@ -30,6 +32,16 @@ def _get_bool(value: str | None, default: bool) -> bool:
 
     normalized = value.strip().lower()
     return normalized in {"1", "true", "yes", "on"}
+
+
+def _get_int(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value.strip())
+    except ValueError:
+        logger.warning("Invalid integer config value=%r, fallback=%s", value, default)
+        return default
 
 
 @dataclass(frozen=True)
@@ -63,10 +75,10 @@ def get_settings() -> Settings:
         database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,
         enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
-        ai_visual_timeout_ms=max(1000, int(os.getenv("AI_VISUAL_TIMEOUT_MS", "10000"))),
-        ai_visual_failure_threshold=max(1, int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD", "3"))),
-        ai_visual_cooldown_seconds=max(1, int(os.getenv("AI_VISUAL_COOLDOWN_SECONDS", "60"))),
-        ai_visual_rate_limit_per_minute=max(1, int(os.getenv("AI_VISUAL_RATE_LIMIT_PER_MINUTE", "10"))),
+        ai_visual_timeout_ms=max(1000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=10000)),
+        ai_visual_failure_threshold=max(1, _get_int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD"), default=3)),
+        ai_visual_cooldown_seconds=max(1, _get_int(os.getenv("AI_VISUAL_COOLDOWN_SECONDS"), default=60)),
+        ai_visual_rate_limit_per_minute=max(1, _get_int(os.getenv("AI_VISUAL_RATE_LIMIT_PER_MINUTE"), default=10)),
         vlm_api_key=os.getenv("VLM_API_KEY") or None,
         vlm_base_url=os.getenv("VLM_BASE_URL", "https://api.openai.com/v1"),
         vlm_model=os.getenv("VLM_MODEL") or None,

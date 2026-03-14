@@ -181,7 +181,7 @@ export function CorrectionsPage() {
 
   const columns = useMemo(
     () => buildColumns((record) => toggleMutation.mutate(record), toggleMutation.variables?.id ?? null),
-    [toggleMutation],
+    [toggleMutation.mutate, toggleMutation.variables?.id],
   );
   const hasNextPage = (query.data?.length ?? 0) === PAGE_SIZE;
   const paginationTotal = hasNextPage

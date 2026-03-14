@@ -257,3 +257,25 @@
   - 执行 `cd backend && uv run alembic upgrade head` 成功
   - 执行 `cd backend && uv run pytest`，结果为 `72 passed`
 - 关联记录：`docs/execution-log.md` 2026-03-14 20:52
+
+## BUG-015 | review 指出的 AI visual / corrections 边界问题导致可维护性与查询语义偏差
+- 日期：2026-03-15
+- 状态：fixed
+- 来源：代码评审
+- 描述：`ai_visual.py` 中存在冗余 `except ... raise` 与重复的请求窗口重置逻辑；`config.py` 直接对环境变量做 `int()` 转换，非法值会在启动阶段抛出原始 `ValueError`；前端 corrections 查询对 `offset=0` 使用 truthy 判断导致第一页参数被静默跳过；同时 corrections 常规列表查询被记录为 warning，噪声过高
+- 复现步骤：
+  1. 设置 `AI_VISUAL_TIMEOUT_MS=abc` 后启动后端，观察配置加载阶段抛出 `ValueError`
+  2. 在前端调用 corrections 或 executions 列表接口时传入 `offset: 0`，观察实际请求 URL 未包含 `offset=0`
+  3. 触发 corrections 列表查询，观察正常查询被写入 warning 日志
+  4. 阅读 `ai_visual.py` 中 `_can_attempt_request` 与 `_record_attempt`，可见窗口重置条件逻辑散落两处
+- 影响：会降低配置错误时的可诊断性，造成分页参数语义与代码意图不一致，并增加 AI visual 运行状态逻辑后续演进时引入不一致的风险
+- 根因：上一轮实现优先完成主流程闭环，对异常路径、日志分级和分页参数边界值的收口不够严格
+- 处理：
+  - 为 AI visual 整数配置增加 `_get_int()` 防御性解析与 warning 回退
+  - 修正前端 service 层 `offset` 判断逻辑并补充回归测试
+  - 下调 corrections 列表查询日志级别
+  - 抽取 `_maybe_reset_window()` 统一 AI visual 窗口重置逻辑，并移除冗余异常捕获
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `75 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `38 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-15 11:20

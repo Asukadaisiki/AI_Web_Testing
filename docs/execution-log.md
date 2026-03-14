@@ -853,3 +853,21 @@
   - 执行 `cd frontend && npm run build` 成功
 - 关联文件：`backend/app/models/locator_correction.py`、`backend/app/locators/corrections.py`、`backend/app/locators/fallback.py`、`backend/app/locators/url_pattern.py`、`backend/app/locators/ai_visual.py`、`backend/app/api/routes/corrections.py`、`backend/app/services/corrections.py`、`backend/app/schemas/corrections.py`、`backend/app/schemas/executions.py`、`backend/alembic/versions/20260314_0005_locator_corrections.py`、`backend/alembic/versions/20260314_0006_locator_correction_integrity.py`、`backend/tests/unit/test_corrections_api.py`、`backend/tests/unit/test_locator_fallback.py`、`backend/tests/unit/test_ai_visual.py`、`backend/tests/unit/test_models.py`、`backend/tests/unit/test_url_pattern.py`、`frontend/src/components/InterventionPanel.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/SuitesPage.tsx`、`frontend/src/pages/SuiteWorkbenchPage.tsx`、`frontend/src/pages/ExecutionDetailPage.test.tsx`、`frontend/src/types/api.ts`
 - 后续：延后项保持不变，`db_session` 从 runner 解耦和 VLM 限流 / 熔断仍单独作为下一批架构加固任务处理
+
+## 2026-03-15 11:20
+
+- 任务：修复审查反馈中指出的 AI visual、防御性配置和 corrections 前端查询细节问题
+- 背景：上一批稳定化改动通过后，代码审查继续指出了冗余异常捕获、`offset=0` 被静默跳过、`useMemo` 依赖不稳定、常规查询日志级别过高以及 AI visual 运行时窗口重置逻辑重复等问题；这些问题多数不会立刻阻断主流程，但会影响可维护性、可观测性和边界行为正确性
+- 执行动作：
+  - 在 `backend/app/locators/ai_visual.py` 移除仅重新抛出的冗余 `except ... raise`，抽取 `_maybe_reset_window()` 统一请求窗口重置逻辑，并停止在 `__all__` 中导出私有函数 `_normalize_bbox`
+  - 在 `backend/app/core/config.py` 增加 `_get_int()`，为 AI visual 相关整数环境变量提供非法值回退与 warning 日志，避免启动时直接抛出难懂的 `ValueError`
+  - 在 `backend/app/services/corrections.py` 将常规列表查询日志从 `warning` 下调到 `debug`
+  - 在 `frontend/src/pages/CorrectionsPage.tsx` 收紧 `useMemo` 依赖，避免因为 mutation 对象引用变化导致列定义每次重建
+  - 在 `frontend/src/services/api.ts` 将分页查询中的 `offset` 判断改为 `!= null`，确保 `offset=0` 也会被正确发送，并补充前端服务层回归测试
+  - 新增后端配置测试，覆盖非法整数环境变量的回退行为
+- 结果：审查列出的 6 个主要问题均已修复，AI visual 运行状态管理更集中，配置解析更稳健，corrections 列表查询和前端分页请求的边界行为与实现意图一致
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `75 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `38 passed`
+- 关联文件：`backend/app/core/config.py`、`backend/app/locators/ai_visual.py`、`backend/app/services/corrections.py`、`backend/tests/unit/test_config.py`、`frontend/src/pages/CorrectionsPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`
+- 后续：`RUNTIME_STATE` 仍是单进程全局可变状态，当前执行模型下可接受；若后续 runner 改为并发执行，需要单独引入锁或 worker 级隔离

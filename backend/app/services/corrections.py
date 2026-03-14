@@ -80,7 +80,7 @@ def list_corrections(
         statement = statement.where(LocatorCorrection.is_active.is_(is_active))
     statement = statement.limit(limit).offset(offset)
     records = session.scalars(statement).all()
-    logger.warning(
+    logger.debug(
         "Listed locator corrections target_filter=%s page_filter=%s is_active=%s limit=%s offset=%s count=%s",
         target_description,
         page_url,

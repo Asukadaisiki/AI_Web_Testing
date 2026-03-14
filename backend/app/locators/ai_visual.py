@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Literal
-from urllib import error, request
+from urllib import request
 
 from app.core.config import get_settings
 
@@ -122,11 +122,8 @@ def _call_vlm(
         },
         method="POST",
     )
-    try:
-        with request.urlopen(http_request, timeout=timeout_seconds) as response:
-            raw_payload = json.loads(response.read().decode("utf-8"))
-    except error.URLError:
-        raise
+    with request.urlopen(http_request, timeout=timeout_seconds) as response:
+        raw_payload = json.loads(response.read().decode("utf-8"))
 
     return (
         raw_payload.get("choices", [{}])[0]
@@ -215,16 +212,13 @@ def _normalize_bbox(
 def _can_attempt_request() -> bool:
     settings = get_settings()
     now = monotonic()
+    _maybe_reset_window(now)
     if RUNTIME_STATE.opened_until > now:
         logger.warning(
             "AI visual locate breaker open until=%s",
             round(RUNTIME_STATE.opened_until, 2),
         )
         return False
-
-    if now - RUNTIME_STATE.window_started_at >= 60:
-        RUNTIME_STATE.window_started_at = now
-        RUNTIME_STATE.window_request_count = 0
 
     if (
         RUNTIME_STATE.window_started_at > 0
@@ -242,10 +236,14 @@ def _can_attempt_request() -> bool:
 
 def _record_attempt() -> None:
     now = monotonic()
+    _maybe_reset_window(now)
+    RUNTIME_STATE.window_request_count += 1
+
+
+def _maybe_reset_window(now: float) -> None:
     if now - RUNTIME_STATE.window_started_at >= 60 or RUNTIME_STATE.window_started_at == 0:
         RUNTIME_STATE.window_started_at = now
         RUNTIME_STATE.window_request_count = 0
-    RUNTIME_STATE.window_request_count += 1
 
 
 def _record_success() -> None:
@@ -271,6 +269,5 @@ __all__ = [
     "AILocateResult",
     "ModelFamily",
     "locate_element_by_vision",
-    "_normalize_bbox",
     "reset_ai_visual_runtime_state",
 ]
