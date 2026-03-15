@@ -43,6 +43,28 @@ AI 增强的 Web UI 自动化测试平台。
 4. 提交修正记录后，直接从页面重跑当前 Case
 5. 后续同页面同目标会优先命中人工修正记录
 
+## 本地人工干预回归
+
+仓库现在提供一条本地可控的真实回归链路，用于验证：
+
+- 首次执行落为 `needs_intervention`
+- 提交 correction 后可重跑通过
+- 第二次执行由 Tier 0 命中，而不是页面偶然变化导致成功
+- correction 记录的 `verified_count`、`consecutive_failures` 与 `is_active` 状态正确
+
+运行方式：
+
+```powershell
+cd backend
+uv run pytest tests/integration -m browser_integration
+```
+
+前置条件：
+
+- 已执行 `uv sync`
+- 已执行 `uv run playwright install chromium`
+- 测试会自动启动 `backend/tests/fixtures/` 下的本地静态页，不依赖外部站点
+
 ## AI 视觉保护配置
 
 后端当前支持以下保护性配置，默认都以“不中断主链路”为原则：
@@ -86,6 +108,13 @@ npm run dev
 ```powershell
 cd backend
 uv run pytest
+```
+
+### 后端浏览器级回归
+
+```powershell
+cd backend
+uv run pytest tests/integration -m browser_integration
 ```
 
 ### 前端测试

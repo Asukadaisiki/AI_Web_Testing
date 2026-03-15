@@ -24,6 +24,48 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-15 19:48
+
+- 任务：阅读现有执行计划、执行日志与缺陷日志，收敛项目下一步安排
+- 背景：仓库最近连续完成了 `Suite Context v2.3`、混合定位最小闭环以及 `v3.4` 第一批稳定化，但计划文档仍停留在“v3.4 收尾”层面，需要结合最新日志判断后续应优先补什么，避免在 AI 视觉或新功能上过早发散
+- 执行动作：
+  - 阅读 `docs/project-plan.md`、`docs/execution-log.md`、`docs/bug-log.md` 与根 `README.md`，梳理当前里程碑、已完成能力、进行中事项和已关闭缺陷
+  - 交叉检查 `backend/app/locators/`、`backend/app/services/executions.py`、`frontend/src/pages/ExecutionDetailPage.test.tsx`、`frontend/src/pages/CorrectionsPage.test.tsx` 等入口，确认当前已有单元/页面级回归，但仍缺少浏览器级端到端联调基建
+  - 基于最新日志中的“后续”字段，收敛出下一阶段建议顺序：先补 `needs_intervention -> correction -> rerun -> Tier 0 hit` 真实联调回归，再扩展 corrections 运营分析能力，之后再评估是否接入真实 VLM 配置与更完整环境/登录体系
+- 结果：当前最合理的下一步不是继续扩张功能面，而是先完成 `v3.4` 收尾与回归加固；具体优先级已收敛为“真实回归链路 > corrections 运营增强 > 浏览器级 E2E 基建 > 受控开启 AI visual/模型配置”
+- 验证：人工核对计划文档、日志记录、README 当前状态与测试文件分布；未执行新的自动化测试，因为本次任务仅做现状分析与排期规划
+- 关联文件：`docs/project-plan.md`、`docs/execution-log.md`、`docs/bug-log.md`、`README.md`
+- 后续：如进入实现，建议先落一条可重复执行的真实联调回归用例，覆盖人工干预、修正落库、重跑命中与 corrections 页面回看四个关键节点
+
+## 2026-03-15 20:12
+
+- 任务：落实 `v3.4` 第一批本地夹具页真实回归闭环
+- 背景：当前仓库已具备 `needs_intervention`、修正提交和 corrections 管理入口，但缺少真实浏览器 + 本地可控页面 + 真实后端 API/数据库链路的一体化回归验证，无法稳定证明 `Tier 0` 修正命中闭环
+- 执行动作：
+  - 在 `backend/tests/fixtures/` 新增本地静态页和轻量 HTTP 服务辅助，提供一个保证无法被 Tier 1 语义定位命中的初始页面，以及一个用于验证重跑成功的稳定成功页面
+  - 在 `backend/tests/integration/` 新增真实 Playwright 集成测试，覆盖 `POST /api/v1/cases/{id}/execute` 首次返回 `needs_intervention`、`POST /api/v1/corrections` 提交修正、再次执行由 `correction:test_id` 命中并通过、`GET /api/v1/corrections` 校验 `verified_count`/`consecutive_failures`/`is_active`
+  - 调整 `backend/pyproject.toml` 的 pytest 组织方式，使默认 `uv run pytest` 只跑 `tests/unit`，将浏览器级测试通过 `browser_integration` marker 和显式路径单独执行
+  - 更新 `backend/tests/README.md`、`backend/README.md`、根 `README.md` 与 `docs/project-plan.md`，补齐本地人工干预闭环回归的运行方式、前置依赖和当前里程碑状态
+- 结果：仓库现在具备一条可重复执行的本地真实回归链路，能够稳定验证 `needs_intervention -> correction -> rerun -> Tier 0 hit`，同时不会让默认单元测试依赖浏览器环境
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `75 passed`
+  - 执行 `cd backend && uv run pytest tests/integration -m browser_integration`，结果为 `1 passed`
+- 关联文件：`backend/tests/fixtures/site_server.py`、`backend/tests/fixtures/intervention_flow/index.html`、`backend/tests/fixtures/intervention_flow/success.html`、`backend/tests/integration/test_intervention_regression.py`、`backend/pyproject.toml`、`backend/tests/README.md`、`backend/README.md`、`README.md`、`docs/project-plan.md`
+- 后续：下一步可在当前本地真实回归基线上继续补 corrections 运营能力，例如命中趋势、历史分析或批量治理，而无需再先补浏览器级闭环基建
+
+## 2026-03-15 20:15
+
+- 任务：将本轮本地人工干预回归闭环改动同步到 GitHub
+- 背景：本轮已完成代码、测试和文档更新，用户要求把当前成果同步到远端仓库，同时工作区还存在与本任务无关的未跟踪文件 `CLAUDE.md`
+- 执行动作：
+  - 核对 `git branch --show-current`、`git remote -v` 与 `git status --short`，确认当前位于 `main`，目标远端为 `origin`
+  - 保留与本次任务无关的 `CLAUDE.md`，只提交本轮回归闭环相关代码、测试和文档文件
+  - 准备统一提交并推送到 `origin/main`
+- 结果：本轮本地人工干预回归闭环改动已整理为一次独立同步批次
+- 验证：通过分支、远端和工作区状态检查确认同步目标与提交范围正确；提交与推送结果见本次 Git 同步输出
+- 关联文件：`README.md`、`backend/README.md`、`backend/pyproject.toml`、`backend/tests/README.md`、`backend/tests/fixtures/site_server.py`、`backend/tests/fixtures/intervention_flow/index.html`、`backend/tests/fixtures/intervention_flow/success.html`、`backend/tests/integration/test_intervention_regression.py`、`docs/project-plan.md`、`docs/execution-log.md`
+- 后续：后续若继续推进，可直接在当前 `main` 基础上进入 corrections 运营能力增强
+
 ## 2026-03-14 23:20
 
 - 任务：落实 `v3.4` 第一批稳定化工作，补齐修正管理入口、AI 视觉运行保护与 runner 解耦

@@ -29,4 +29,7 @@ build-backend = "hatchling.build"
 packages = ["app"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit"]
+markers = [
+    "browser_integration: real-browser integration tests for local regression fixtures",
+]

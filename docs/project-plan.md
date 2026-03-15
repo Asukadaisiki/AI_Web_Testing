@@ -86,8 +86,8 @@
 
 ### 进行中
 
-- `v3.4` 收尾：README / 计划文档与当前代码状态的同步、修正管理入口的使用说明补齐
-- 混合定位稳定性回归：围绕 `needs_intervention -> correction -> rerun -> Tier 0 hit` 的主链路补更多联调验证
+- `v3.4` 收尾：本地夹具页真实回归闭环、README / 测试文档与当前代码状态的同步
+- 混合定位稳定性回归：围绕 `needs_intervention -> correction -> rerun -> Tier 0 hit` 的主链路补更多浏览器级联调验证
 - 报告聚合与平台联动体验的小幅细化
 
 ### 未开始或未落地
@@ -102,9 +102,9 @@
 
 下一里程碑调整为“混合定位稳定化与运营入口 v3.4”。
 
-- 目标：在既有混合定位闭环上补齐管理入口、运行保护和回归验证，把“能跑”收口为“可持续维护”。
-- 范围：修正记录管理页、`page_url` 筛选、runner / locator 与 `db_session` 解耦、AI 视觉限流与熔断保护、相关测试与文档同步。
-- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎。
+- 目标：在既有混合定位闭环上补齐本地真实回归验证，把“能跑”收口为“可重复验证、可持续维护”。
+- 范围：本地夹具页、浏览器级 `needs_intervention -> correction -> rerun -> Tier 0 hit` 集成回归、测试组织收口，以及相关 README / 计划文档同步。
+- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎；本轮完成后再进入 corrections 运营增强。
 
 ### v2.3 建议执行顺序（2026-03-13）
 
