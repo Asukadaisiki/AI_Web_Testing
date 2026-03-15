@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db_session
 from app.schemas.corrections import CreateCorrectionRequest, StoredLocatorCorrection, UpdateCorrectionStateRequest
-from app.services import EntityNotFoundError, create_correction, list_corrections, update_correction_state
+from app.services import (
+    CorrectionConflictError,
+    EntityNotFoundError,
+    create_correction,
+    list_corrections,
+    update_correction_state,
+)
 
 
 router = APIRouter(prefix="/corrections", tags=["corrections"])
@@ -23,6 +29,8 @@ def create_correction_route(
         correction = create_correction(session, payload)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CorrectionConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     response.headers["Location"] = f"/api/v1/corrections/{correction.id}"
     return correction
@@ -57,3 +65,5 @@ def update_correction_state_route(
         return update_correction_state(session, correction_id, payload)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CorrectionConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

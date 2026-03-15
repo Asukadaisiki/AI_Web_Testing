@@ -279,3 +279,25 @@
   - 执行 `cd backend && uv run pytest`，结果为 `75 passed`
   - 执行 `cd frontend && npm test -- --run`，结果为 `38 passed`
 - 关联记录：`docs/execution-log.md` 2026-03-15 11:20
+
+## BUG-016 | corrections 并发创建/激活会触发唯一约束冲突，且 0006 迁移未折叠内部空白导致 Tier 0 查找不一致
+
+- 日期：2026-03-15
+- 状态：fixed
+- 来源：代码评审
+- 描述：`create_correction()` 先查活跃记录、再停用、再插入新记录的流程不是原子操作；并发创建时会命中 `uq_locator_corrections_active_lookup` 唯一索引并冒泡为 500。`update_correction_state()` 在 `is_active=True` 时也未检查同键是否已有其他活跃记录，会在激活时触发同一唯一约束。另一个问题是 `20260314_0006` 迁移把 `normalized_target_description` 生成为 `lower(trim(target_description))`，未折叠内部多余空格，和 Python 端 `normalize_target_description()` 的语义不一致，导致已升级数据库中的部分记录无法被 Tier 0 查找命中。
+- 复现步骤：
+  1. 对同一 `(page_url_pattern, normalized_target_description)` 并发创建 corrections，或在已有活跃记录时尝试激活另一个同键 correction
+  2. 观察数据库唯一约束冲突会冒泡为 500，或激活请求直接失败
+  3. 在已升级到 `20260314_0006` 的数据库中插入 `target_description='Login   Button'`、`normalized_target_description='login   button'` 的记录
+  4. 使用运行时查询 `normalize_target_description(' Login   Button ')` 的结果去查找，观察 Tier 0 命中失败
+- 影响：corrections 创建/激活在并发或重复操作场景下不稳定；已升级数据库中的旧规范化数据可能无法命中人工修正记录，影响定位闭环可靠性
+- 根因：服务层缺少面向唯一约束冲突的领域语义和事务收口；迁移脚本与运行时规范化规则在“内部多余空白折叠”上不一致
+- 处理：
+  - 在 `backend/app/services/corrections.py` 新增 `CorrectionConflictError`，对 create/activate 场景做冲突检查、`IntegrityError` 转换与 PostgreSQL 行级锁收口
+  - 在 corrections 路由中新增 `409 Conflict` 映射，避免唯一约束冲突冒泡为 500
+  - 新增 Alembic 前向迁移 `20260315_0007_locator_correction_normalization_fix.py`，统一修复 `normalized_target_description`，并在修复后仅保留每组中最新活跃记录
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `79 passed`
+  - 执行 `cd backend && uv run pytest tests/integration -m browser_integration`，结果为 `1 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-15 20:41

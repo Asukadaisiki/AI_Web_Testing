@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+from sqlalchemy.exc import IntegrityError
+
+import app.api.routes.corrections as corrections_route
 from app.models import TestCaseRun
+from app.schemas.corrections import CreateCorrectionRequest
+from app.services.corrections import CorrectionConflictError, create_correction
 
 
 def _create_source_execution(client, db_session) -> int:
@@ -190,3 +196,94 @@ def test_create_correction_deactivates_existing_active_duplicate(client, db_sess
 
     assert [record["id"] for record in active_records] == [second_response.json()["id"]]
     assert [record["id"] for record in inactive_records] == [first_response.json()["id"]]
+
+
+def test_create_correction_returns_conflict_when_service_reports_duplicate(client, monkeypatch) -> None:
+    def fake_create_correction(*_args, **_kwargs):
+        raise CorrectionConflictError("Another active correction already exists for the same page URL pattern and target description.")
+
+    monkeypatch.setattr(corrections_route, "create_correction", fake_create_correction)
+
+    response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/login",
+            "target_description": "登录按钮",
+            "correction_type": "css",
+            "correction_value": "#login-btn",
+            "source_execution_id": 1,
+            "created_by": 1,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Another active correction already exists for the same page URL pattern and target description."
+    }
+
+
+def test_create_correction_translates_integrity_error_to_conflict(client, db_session, monkeypatch) -> None:
+    execution_id = _create_source_execution(client, db_session)
+    payload = CreateCorrectionRequest(
+        page_url="https://app.example.com/login",
+        target_description="登录按钮",
+        correction_type="css",
+        correction_value="#login-btn",
+        source_execution_id=execution_id,
+        created_by=1,
+    )
+
+    def fake_flush() -> None:
+        raise IntegrityError("INSERT", {}, Exception("duplicate active correction"))
+
+    monkeypatch.setattr(db_session, "flush", fake_flush)
+
+    with pytest.raises(CorrectionConflictError) as exc_info:
+        create_correction(db_session, payload)
+
+    assert str(exc_info.value) == "Another active correction already exists for the same page URL pattern and target description."
+
+
+def test_patch_activate_correction_returns_conflict_when_other_active_record_exists(client, db_session) -> None:
+    first_execution_id = _create_source_execution(client, db_session)
+    second_execution_id = _create_source_execution(client, db_session)
+
+    first_response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/orders/123",
+            "target_description": "Order CTA",
+            "correction_type": "css",
+            "correction_value": "#order-cta",
+            "source_execution_id": first_execution_id,
+            "created_by": 1,
+        },
+    )
+    assert first_response.status_code == 201
+
+    second_response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/orders/456",
+            "target_description": "order cta",
+            "correction_type": "test_id",
+            "correction_value": "order-cta",
+            "source_execution_id": second_execution_id,
+            "created_by": 1,
+        },
+    )
+    assert second_response.status_code == 201
+
+    reactivate_response = client.patch(
+        f"/api/v1/corrections/{first_response.json()['id']}",
+        json={"is_active": True},
+    )
+
+    assert reactivate_response.status_code == 409
+    assert reactivate_response.json() == {
+        "detail": "Another active correction already exists for the same page URL pattern and target description."
+    }
+
+    active_records = client.get("/api/v1/corrections", params={"target_description": "order cta", "is_active": True})
+    assert active_records.status_code == 200
+    assert [record["id"] for record in active_records.json()] == [second_response.json()["id"]]

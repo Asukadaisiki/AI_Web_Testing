@@ -66,6 +66,35 @@
 - 关联文件：`README.md`、`backend/README.md`、`backend/pyproject.toml`、`backend/tests/README.md`、`backend/tests/fixtures/site_server.py`、`backend/tests/fixtures/intervention_flow/index.html`、`backend/tests/fixtures/intervention_flow/success.html`、`backend/tests/integration/test_intervention_regression.py`、`docs/project-plan.md`、`docs/execution-log.md`
 - 后续：后续若继续推进，可直接在当前 `main` 基础上进入 corrections 运营能力增强
 
+## 2026-03-15 20:41
+
+- 任务：修复 corrections 并发安全与 `normalized_target_description` 迁移一致性问题
+- 背景：代码评审指出 `create_correction()` 的停用旧记录与插入新记录不是原子操作、`PATCH` 激活未检查同键活跃记录，以及 `20260314_0006` 迁移未折叠内部多余空格，导致并发下可能返回 500，已升级数据库中部分记录也可能无法被 Tier 0 命中
+- 执行动作：
+  - 在 `backend/app/services/corrections.py` 新增 `CorrectionConflictError`，将 `create_correction()` 与 `update_correction_state()` 收口为可捕获 `IntegrityError` 的冲突语义，并在 PostgreSQL 下对同 `(page_url_pattern, normalized_target_description)` 记录加 `FOR UPDATE` 锁
+  - 在 `backend/app/api/routes/corrections.py` 新增 `409 Conflict` 映射，使 corrections 创建/激活冲突不再冒泡为 500
+  - 新增 Alembic 前向迁移 `20260315_0007_locator_correction_normalization_fix.py`，统一重算 `normalized_target_description`，并在重算后按 `updated_at DESC, id DESC` 保留最新活跃记录、停用其余冲突记录
+  - 扩充后端测试，覆盖 `POST` 冲突 409、`PATCH` 激活冲突 409、服务层 `IntegrityError -> CorrectionConflictError` 转换，以及新迁移对旧规范化数据的修复回归
+- 结果：corrections 相关接口已从“潜在 500 / 唯一约束失败 / Tier 0 查找不一致”收口到“确定性 409 / 已升级数据库可修复 / 活跃记录冲突可预期处理”
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `79 passed`
+  - 执行 `cd backend && uv run pytest tests/integration -m browser_integration`，结果为 `1 passed`
+- 关联文件：`backend/app/services/corrections.py`、`backend/app/services/__init__.py`、`backend/app/api/routes/corrections.py`、`backend/alembic/versions/20260315_0007_locator_correction_normalization_fix.py`、`backend/tests/unit/test_corrections_api.py`、`backend/tests/unit/test_correction_migration.py`、`docs/bug-log.md`
+- 后续：延后项保持不变，`RUNTIME_STATE` 线程安全、LLM JSON 解析、`correction_value` 格式校验、日志级别调整和 `deep_locate` 清理继续留在后续批次处理
+
+## 2026-03-15 20:44
+
+- 任务：将 corrections 修复批次的延后项纳入执行计划，并准备同步到 GitHub
+- 背景：本轮并发安全与迁移一致性问题已修复，但 `RUNTIME_STATE` 线程安全、LLM JSON 提取、`correction_value` 格式校验、日志级别和 `deep_locate` 清理仍明确延后，需要同步写入 `project-plan`，避免后续遗漏
+- 执行动作：
+  - 更新 `docs/project-plan.md` 的“未开始或未落地”与 `v3.4` 说明，显式登记上述延后加固项
+  - 追加执行日志，记录计划收口与同步动作
+  - 准备只提交本轮 corrections 修复、迁移、测试与文档更新，不纳入无关的未跟踪文件 `CLAUDE.md`
+- 结果：并发安全修复和其余延后项现在都已进入仓库计划文档，可直接作为下一批 corrections / AI visual 加固的输入
+- 验证：人工核对 `docs/project-plan.md` 与当前修复范围一致；本轮代码验证沿用上一条记录中的 `79 passed` 与 `1 passed`
+- 关联文件：`docs/project-plan.md`、`docs/execution-log.md`
+- 后续：本次同步完成后，可在 `main` 上继续推进 corrections 运营增强或延后加固项
+
 ## 2026-03-14 23:20
 
 - 任务：落实 `v3.4` 第一批稳定化工作，补齐修正管理入口、AI 视觉运行保护与 runner 解耦

@@ -97,6 +97,12 @@
 - 默认开启的真实 AI 视觉定位接入与模型配置管理
 - 更完整的 corrections 运营能力：批量治理、历史分析、命中趋势
 - 浏览器级端到端回归基建
+- `v3.4` 延后加固项：
+  - `ai_visual.py` 的 `RUNTIME_STATE` 线程安全与并发执行隔离
+  - LLM 返回值 JSON 提取健壮性（替代当前简单大括号截取）
+  - `schemas/corrections.py` 中按 `correction_type` 区分的 `correction_value` 格式校验
+  - corrections 创建/状态更新日志级别从 `WARNING` 收敛到业务操作级别
+  - `ai_visual.py` 中未使用的 `deep_locate` 参数清理或正式接入
 
 ## 下一里程碑
 
@@ -104,7 +110,7 @@
 
 - 目标：在既有混合定位闭环上补齐本地真实回归验证，把“能跑”收口为“可重复验证、可持续维护”。
 - 范围：本地夹具页、浏览器级 `needs_intervention -> correction -> rerun -> Tier 0 hit` 集成回归、测试组织收口，以及相关 README / 计划文档同步。
-- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎；本轮完成后再进入 corrections 运营增强。
+- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎；本轮完成后先进入 corrections 运营增强，再处理 `ai_visual` 线程安全、JSON 提取与 correction schema 校验等延后加固项。
 
 ### v2.3 建议执行顺序（2026-03-13）
 

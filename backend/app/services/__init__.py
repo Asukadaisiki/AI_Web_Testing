@@ -1,7 +1,12 @@
 """Services package."""
 
 from app.services.cases import EntityNotFoundError, create_case, get_case, list_cases, update_case
-from app.services.corrections import create_correction, list_corrections, update_correction_state
+from app.services.corrections import (
+    CorrectionConflictError,
+    create_correction,
+    list_corrections,
+    update_correction_state,
+)
 from app.services.dsl import SUPPORTED_DSL_ACTIONS, validate_dsl_case
 from app.services.executions import (
     execute_case,
@@ -23,6 +28,7 @@ from app.services.suites import (
 )
 
 __all__ = [
+    "CorrectionConflictError",
     "EntityNotFoundError",
     "SUPPORTED_DSL_ACTIONS",
     "SuiteValidationError",
