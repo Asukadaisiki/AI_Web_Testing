@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import threading
 from urllib import error
 
 from app.core.config import get_settings
 from app.locators.ai_visual import (
     AILocateResult,
+    RUNTIME_STATE,
+    _extract_json_object,
     _normalize_bbox,
+    _parse_bbox_response,
     locate_element_by_vision,
     reset_ai_visual_runtime_state,
 )
@@ -220,3 +224,167 @@ def test_dom_snapshot_target_matching_uses_whole_tokens() -> None:
 
     assert _dom_snapshot_matches_target(snapshot, "booking")
     assert not _dom_snapshot_matches_target(snapshot, "ok")
+
+
+# --- _extract_json_object tests ---
+
+
+def test_extract_json_object_clean_json() -> None:
+    assert _extract_json_object('{"bbox":[1,2,3,4]}') == '{"bbox":[1,2,3,4]}'
+
+
+def test_extract_json_object_markdown_wrapped() -> None:
+    text = '```json\n{"bbox":[1,2,3,4]}\n```'
+    assert _extract_json_object(text) == '{"bbox":[1,2,3,4]}'
+
+
+def test_extract_json_object_markdown_without_language_tag() -> None:
+    text = '```\n{"bbox":[1,2,3,4]}\n```'
+    assert _extract_json_object(text) == '{"bbox":[1,2,3,4]}'
+
+
+def test_extract_json_object_leading_trailing_commentary() -> None:
+    text = 'Here is the result: {"bbox":[1,2,3,4]}. Done.'
+    assert _extract_json_object(text) == '{"bbox":[1,2,3,4]}'
+
+
+def test_extract_json_object_nested_braces_in_string_values() -> None:
+    text = '{"bbox":[1,2,3,4],"note":"use {css} selector"}'
+    import json
+    parsed = json.loads(_extract_json_object(text))
+    assert parsed["bbox"] == [1, 2, 3, 4]
+    assert parsed["note"] == "use {css} selector"
+
+
+def test_extract_json_object_multiple_objects_returns_first() -> None:
+    text = '{"bbox":[1,2,3,4]} and also {"other":"data"}'
+    import json
+    parsed = json.loads(_extract_json_object(text))
+    assert parsed["bbox"] == [1, 2, 3, 4]
+
+
+def test_extract_json_object_no_valid_json_returns_original() -> None:
+    text = "No JSON here"
+    assert _extract_json_object(text) == text
+
+
+def test_extract_json_object_empty_string() -> None:
+    assert _extract_json_object("") == ""
+    assert _extract_json_object("   ") == ""
+
+
+def test_extract_json_object_escaped_quotes_in_strings() -> None:
+    text = r'{"key":"value with \"escaped\" quotes"}'
+    import json
+    parsed = json.loads(_extract_json_object(text))
+    assert parsed["key"] == 'value with "escaped" quotes'
+
+
+# --- _parse_bbox_response edge cases ---
+
+
+def test_parse_bbox_response_returns_none_for_empty_text() -> None:
+    assert _parse_bbox_response(response_text="", image_width=1000, image_height=500, model_family="gpt-4o") is None
+
+
+def test_parse_bbox_response_returns_none_for_invalid_json() -> None:
+    assert _parse_bbox_response(response_text="not json", image_width=1000, image_height=500, model_family="gpt-4o") is None
+
+
+def test_parse_bbox_response_returns_none_for_missing_bbox() -> None:
+    assert _parse_bbox_response(response_text='{"errors":["no match"]}', image_width=1000, image_height=500, model_family="gpt-4o") is None
+
+
+def test_parse_bbox_response_returns_none_for_short_bbox() -> None:
+    assert _parse_bbox_response(response_text='{"bbox":[1,2]}', image_width=1000, image_height=500, model_family="gpt-4o") is None
+
+
+def test_parse_bbox_response_returns_none_for_non_list_bbox() -> None:
+    assert _parse_bbox_response(response_text='{"bbox":"not a list"}', image_width=1000, image_height=500, model_family="gpt-4o") is None
+
+
+def test_parse_bbox_response_reduces_confidence_when_errors_present() -> None:
+    result = _parse_bbox_response(
+        response_text='{"bbox":[100,200,400,600],"errors":["uncertain"]}',
+        image_width=1000,
+        image_height=500,
+        model_family="gpt-4o",
+    )
+    assert result is not None
+    assert result.confidence == 0.35
+
+
+def test_parse_bbox_response_full_confidence_without_errors() -> None:
+    result = _parse_bbox_response(
+        response_text='{"bbox":[100,200,400,600]}',
+        image_width=1000,
+        image_height=500,
+        model_family="gpt-4o",
+    )
+    assert result is not None
+    assert result.confidence == 0.7
+
+
+# --- reset_ai_visual_runtime_state ---
+
+
+def test_reset_clears_all_runtime_state_fields() -> None:
+    RUNTIME_STATE.window_started_at = 100.0
+    RUNTIME_STATE.window_request_count = 42
+    RUNTIME_STATE.consecutive_failures = 5
+    RUNTIME_STATE.opened_until = 999.0
+
+    reset_ai_visual_runtime_state()
+
+    assert RUNTIME_STATE.window_started_at == 0.0
+    assert RUNTIME_STATE.window_request_count == 0
+    assert RUNTIME_STATE.consecutive_failures == 0
+    assert RUNTIME_STATE.opened_until == 0.0
+
+
+# --- Thread safety ---
+
+
+def test_concurrent_rate_limit_does_not_exceed_budget(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "true")
+    monkeypatch.setenv("VLM_API_KEY", "test-key")
+    monkeypatch.setenv("VLM_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("AI_VISUAL_RATE_LIMIT_PER_MINUTE", "3")
+    get_settings.cache_clear()
+    reset_ai_visual_runtime_state()
+
+    call_count = {"count": 0}
+    call_lock = threading.Lock()
+
+    def fake_call_vlm(**_kwargs):
+        with call_lock:
+            call_count["count"] += 1
+        return '{"bbox":[100,200,400,600]}'
+
+    monkeypatch.setattr("app.locators.ai_visual._call_vlm", fake_call_vlm)
+
+    results: list[object] = [None] * 10
+    threads = []
+
+    def worker(idx: int):
+        results[idx] = locate_element_by_vision(
+            screenshot_base64="ZmFrZQ==",
+            target_description="button",
+            image_width=1000,
+            image_height=500,
+        )
+
+    try:
+        for i in range(10):
+            t = threading.Thread(target=worker, args=(i,))
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        reset_ai_visual_runtime_state()
+        get_settings.cache_clear()
+
+    successful = sum(1 for r in results if r is not None)
+    assert successful <= 3
+    assert call_count["count"] <= 3

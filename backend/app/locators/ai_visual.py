@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Literal
@@ -29,6 +30,7 @@ class AIVisualRuntimeState:
 
 
 RUNTIME_STATE = AIVisualRuntimeState()
+_STATE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -46,7 +48,6 @@ def locate_element_by_vision(
     image_width: int,
     image_height: int,
     model_family: ModelFamily | None = None,
-    deep_locate: bool = False,
 ) -> AILocateResult | None:
     settings = get_settings()
     if not settings.enable_ai_visual_locate:
@@ -171,13 +172,45 @@ def _parse_bbox_response(
 
 def _extract_json_object(response_text: str) -> str:
     stripped = response_text.strip()
-    if stripped.startswith("{") and stripped.endswith("}"):
+    if not stripped:
         return stripped
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return stripped
-    return stripped[start : end + 1]
+
+    # Strip markdown code fences if present.
+    if stripped.startswith("```"):
+        first_newline = stripped.find("\n")
+        if first_newline != -1:
+            end_fence = stripped.rfind("```", first_newline)
+            if end_fence > first_newline:
+                stripped = stripped[first_newline + 1 : end_fence].strip()
+
+    # Find the first brace-balanced JSON object using depth tracking.
+    in_string = False
+    escape_next = False
+    depth = 0
+    start = -1
+    for i, ch in enumerate(stripped):
+        if escape_next:
+            escape_next = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape_next = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"' and depth > 0:
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start != -1:
+                return stripped[start : i + 1]
+
+    # Fallback: return original text so json.loads produces a clear error.
+    return stripped
 
 
 def _normalize_bbox(
@@ -212,32 +245,34 @@ def _normalize_bbox(
 def _can_attempt_request() -> bool:
     settings = get_settings()
     now = monotonic()
-    _maybe_reset_window(now)
-    if RUNTIME_STATE.opened_until > now:
-        logger.warning(
-            "AI visual locate breaker open until=%s",
-            round(RUNTIME_STATE.opened_until, 2),
-        )
-        return False
+    with _STATE_LOCK:
+        _maybe_reset_window(now)
+        if RUNTIME_STATE.opened_until > now:
+            logger.warning(
+                "AI visual locate breaker open until=%s",
+                round(RUNTIME_STATE.opened_until, 2),
+            )
+            return False
 
-    if (
-        RUNTIME_STATE.window_started_at > 0
-        and RUNTIME_STATE.window_request_count >= settings.ai_visual_rate_limit_per_minute
-    ):
-        logger.warning(
-            "AI visual locate rate limited count=%s window_started_at=%s",
-            RUNTIME_STATE.window_request_count,
-            round(RUNTIME_STATE.window_started_at, 2),
-        )
-        return False
+        if (
+            RUNTIME_STATE.window_started_at > 0
+            and RUNTIME_STATE.window_request_count >= settings.ai_visual_rate_limit_per_minute
+        ):
+            logger.warning(
+                "AI visual locate rate limited count=%s window_started_at=%s",
+                RUNTIME_STATE.window_request_count,
+                round(RUNTIME_STATE.window_started_at, 2),
+            )
+            return False
 
     return True
 
 
 def _record_attempt() -> None:
     now = monotonic()
-    _maybe_reset_window(now)
-    RUNTIME_STATE.window_request_count += 1
+    with _STATE_LOCK:
+        _maybe_reset_window(now)
+        RUNTIME_STATE.window_request_count += 1
 
 
 def _maybe_reset_window(now: float) -> None:
@@ -247,22 +282,25 @@ def _maybe_reset_window(now: float) -> None:
 
 
 def _record_success() -> None:
-    RUNTIME_STATE.consecutive_failures = 0
-    RUNTIME_STATE.opened_until = 0.0
+    with _STATE_LOCK:
+        RUNTIME_STATE.consecutive_failures = 0
+        RUNTIME_STATE.opened_until = 0.0
 
 
 def _record_failure() -> None:
     settings = get_settings()
-    RUNTIME_STATE.consecutive_failures += 1
-    if RUNTIME_STATE.consecutive_failures >= settings.ai_visual_failure_threshold:
-        RUNTIME_STATE.opened_until = monotonic() + settings.ai_visual_cooldown_seconds
+    with _STATE_LOCK:
+        RUNTIME_STATE.consecutive_failures += 1
+        if RUNTIME_STATE.consecutive_failures >= settings.ai_visual_failure_threshold:
+            RUNTIME_STATE.opened_until = monotonic() + settings.ai_visual_cooldown_seconds
 
 
 def reset_ai_visual_runtime_state() -> None:
-    RUNTIME_STATE.window_started_at = 0.0
-    RUNTIME_STATE.window_request_count = 0
-    RUNTIME_STATE.consecutive_failures = 0
-    RUNTIME_STATE.opened_until = 0.0
+    with _STATE_LOCK:
+        RUNTIME_STATE.window_started_at = 0.0
+        RUNTIME_STATE.window_request_count = 0
+        RUNTIME_STATE.consecutive_failures = 0
+        RUNTIME_STATE.opened_until = 0.0
 
 
 __all__ = [

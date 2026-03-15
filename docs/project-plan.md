@@ -22,6 +22,12 @@
 
 ## 当前状态快照
 
+### 2026-03-15 补充
+
+- 已完成 `v3.4 延后加固`：`RUNTIME_STATE` 线程安全（`threading.Lock`）、LLM JSON 提取健壮化（大括号深度追踪替代简单 `find/rfind`）、`correction_value` 按 `correction_type` 格式校验（Pydantic `model_validator`）、corrections 创建/状态更新日志级别从 `WARNING` 收敛到 `INFO`、`deep_locate` 死参数清理。
+- 回归测试从 84 条扩展到 109 条（+25），新增覆盖：JSON 提取边界、`_parse_bbox_response` 边界、`reset_ai_visual_runtime_state` 专项、并发限流线程安全、`correction_value` 格式校验（6 组正反例）、批量激活同键冲突。
+- 当前主线 `v3.4` 加固项已全部收口，后续应围绕 corrections 运维细化或新里程碑推进。
+
 ### 2026-03-14 补充
 
 - 已完成 `corrections 运营增强` 第一批：后端新增 `locator_correction_events` 事件表、`GET /api/v1/corrections/overview`、`GET /api/v1/corrections/{id}/events` 与 `PATCH /api/v1/corrections/bulk`，前端 `CorrectionsPage` 已支持汇总卡片、命中/未命中趋势、批量启停与单条事件时间线抽屉。
@@ -88,7 +94,6 @@
 
 ### 进行中
 
-- `v3.4` 延后加固：`ai_visual.py` 的 `RUNTIME_STATE` 线程安全 / 并发隔离、LLM JSON 提取健壮化、`correction_value` 按 `correction_type` 的格式校验
 - corrections 运维细化：事件聚合之后的跨修正目标分析、批量治理体验打磨与更明确的状态反馈
 - 报告聚合与平台联动体验的小幅细化
 
@@ -98,20 +103,17 @@
 - 登录页、环境配置页
 - 默认开启的真实 AI 视觉定位接入与模型配置管理
 - 浏览器级端到端回归基建
-- `v3.4` 延后加固项：
-  - `ai_visual.py` 的 `RUNTIME_STATE` 线程安全与并发执行隔离
-  - LLM 返回值 JSON 提取健壮性（替代当前简单大括号截取）
-  - `schemas/corrections.py` 中按 `correction_type` 区分的 `correction_value` 格式校验
-  - corrections 创建/状态更新日志级别从 `WARNING` 收敛到业务操作级别
-  - `ai_visual.py` 中未使用的 `deep_locate` 参数清理或正式接入
 
 ## 下一里程碑
 
-下一里程碑调整为“`v3.4` 延后加固与受控 AI visual 准备”。
+`v3.4` 延后加固已全部完成（线程安全、JSON 提取健壮化、格式校验、日志收敛、死参数清理）。
 
-- 目标：在已有 corrections 运营入口和事件数据底座上，继续补齐 AI visual 的并发安全与输入校验，让后续真实模型接入保持受控。
-- 范围：`RUNTIME_STATE` 线程安全 / 并发隔离、JSON 提取健壮化、`correction_value` 格式校验、`deep_locate` 参数收口，以及相关回归测试与文档同步。
-- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎；加固项完成后，再评估真实 VLM 配置页与默认开启策略。
+下一里程碑建议从以下方向中选取：
+
+- **corrections 运维细化**：跨修正目标分析、批量治理体验打磨、更明确的状态反馈。
+- **AI 生成 DSL**：自然语言 → 结构化 DSL 的生成链路。
+- **登录页与环境配置**：平台登录入口与多环境管理。
+- **真实 AI 视觉定位接入**：VLM 配置页、默认开启策略与模型管理。
 
 ### v2.3 建议执行顺序（2026-03-13）
 

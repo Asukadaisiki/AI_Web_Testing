@@ -43,6 +43,24 @@
 - 关联文件：`backend/app/models/locator_correction_event.py`、`backend/app/locators/corrections.py`、`backend/app/locators/fallback.py`、`backend/app/runners/playwright_runner.py`、`backend/app/services/corrections.py`、`backend/app/api/routes/corrections.py`、`backend/alembic/versions/20260315_0008_locator_correction_events.py`、`backend/tests/unit/test_corrections_api.py`、`backend/tests/unit/test_locator_fallback.py`、`backend/tests/unit/test_models.py`、`backend/tests/integration/test_intervention_regression.py`、`frontend/src/pages/CorrectionsPage.tsx`、`frontend/src/pages/CorrectionsPage.test.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`、`frontend/src/types/api.ts`、`README.md`、`backend/README.md`、`backend/tests/README.md`、`docs/project-plan.md`
 - 后续：下一批建议转入 `ai_visual` 延后加固项，优先处理 `RUNTIME_STATE` 线程安全 / 并发隔离、LLM JSON 提取健壮化和 `correction_value` 按类型校验；真实 VLM 默认开启与模型配置页继续后置
 
+## 2026-03-15 00:30
+
+- 任务：完成 v3.4 延后加固全部 5 项：RUNTIME_STATE 线程安全、LLM JSON 提取健壮化、correction_value 格式校验、日志级别收敛、deep_locate 死参数清理
+- 背景：`project-plan.md` 明确下一里程碑为"v3.4 延后加固与受控 AI visual 准备"，近期 BUG-015/016/017 已修复部分边界问题，但核心加固项（线程安全、JSON 提取、格式校验等）仍未落地
+- 执行动作：
+  - 将 `services/corrections.py` 中 corrections 创建和状态更新的两处 `logger.warning` 收敛为 `logger.info`
+  - 移除 `ai_visual.py` 中 `locate_element_by_vision()` 的 `deep_locate: bool = False` 死参数
+  - 为 `schemas/corrections.py` 的 `CreateCorrectionRequest` 新增 `model_validator`，按 `correction_type` 校验 `correction_value` 格式（css 拒绝 XPath 语法、xpath 必须以 `//` 等开头、test_id 仅接受简单标识符）
+  - 重写 `ai_visual.py` 的 `_extract_json_object()`：先剥离 markdown 代码围栏，再用大括号深度追踪扫描提取首个完整 JSON 对象，替代原有 `find('{')/rfind('}')` 策略
+  - 为 `ai_visual.py` 的 `RUNTIME_STATE` 模块级单例新增 `threading.Lock`，在 `_can_attempt_request`、`_record_attempt`、`_record_success`、`_record_failure`、`_maybe_reset_window`、`reset_ai_visual_runtime_state` 中用 `with _STATE_LOCK:` 保护状态读写，锁不覆盖 VLM HTTP 调用
+  - 新增 25 条回归测试：JSON 提取边界（8 组）、`_parse_bbox_response` 边界（7 组）、`reset_ai_visual_runtime_state` 专项、并发限流线程安全、correction_value 格式校验正反例（7 组）、批量激活同键冲突
+  - 更新 `docs/project-plan.md`：v3.4 加固项从"进行中/未开始"移入已完成，下一里程碑切换为后续方向选择
+- 结果：后端单元测试 109 passed（+25），前端 39 passed，构建正常；v3.4 延后加固全部收口
+- 验证：
+  - `cd backend && uv run pytest tests/unit` → 109 passed
+  - `cd frontend && npm test -- --run` → 39 passed
+- 后续：corrections 运维细化（跨修正目标分析、批量治理体验）或切入新里程碑（AI 生成 DSL / 登录页 / 真实 VLM 接入）
+
 ## 2026-03-15 23:49
 
 - 任务：修复 corrections 运营增强批次中的 review 遗留问题

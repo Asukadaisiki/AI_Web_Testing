@@ -75,7 +75,7 @@ def create_correction(session: Session, payload: CreateCorrectionRequest) -> Sto
         session.rollback()
         raise CorrectionConflictError(CONFLICT_DETAIL) from exc
 
-    logger.warning(
+    logger.info(
         "Created locator correction id=%s page_url_pattern=%s target=%s deactivated_existing=%s",
         correction.id,
         correction.page_url_pattern,
@@ -143,7 +143,7 @@ def update_correction_state(
         session.rollback()
         raise CorrectionConflictError(CONFLICT_DETAIL) from exc
 
-    logger.warning(
+    logger.info(
         "Updated locator correction state id=%s is_active=%s",
         correction.id,
         correction.is_active,

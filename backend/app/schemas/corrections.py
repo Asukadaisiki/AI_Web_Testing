@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import Field
+import re
+
+from pydantic import Field, model_validator
 
 from app.schemas.dsl import DSLModel
 
@@ -21,6 +23,29 @@ class CreateCorrectionRequest(DSLModel):
     correction_value: str = Field(min_length=1, max_length=2000)
     source_execution_id: int = Field(ge=1)
     created_by: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_correction_value_format(self) -> "CreateCorrectionRequest":
+        value = self.correction_value.strip()
+        ct = self.correction_type
+        if ct == "css":
+            if value.startswith("//") or value.lower().startswith("/html"):
+                raise ValueError(
+                    f"correction_value '{value}' looks like XPath, not a CSS selector."
+                )
+        elif ct == "xpath":
+            if not re.match(r"^(//|/|\(//|xpath=)", value):
+                raise ValueError(
+                    f"correction_value '{value}' does not look like a valid XPath expression. "
+                    "Expected to start with /, //, (//, or xpath=."
+                )
+        elif ct == "test_id":
+            if not re.match(r"^[a-zA-Z0-9_-]+$", value):
+                raise ValueError(
+                    f"correction_value '{value}' does not look like a valid test ID. "
+                    "Expected a plain identifier (letters, digits, hyphens, underscores)."
+                )
+        return self
 
 
 class UpdateCorrectionStateRequest(DSLModel):

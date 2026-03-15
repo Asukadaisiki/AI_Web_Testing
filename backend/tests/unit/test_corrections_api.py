@@ -396,3 +396,149 @@ def test_batch_patch_correction_state_updates_multiple_records(client, db_sessio
     first_events = client.get(f"/api/v1/corrections/{first_response.json()['id']}/events")
     assert first_events.status_code == 200
     assert [item["event_type"] for item in first_events.json()] == ["deactivated", "created"]
+
+
+# --- correction_value format validation ---
+
+
+def test_create_correction_rejects_xpath_value_for_css_type(client, db_session) -> None:
+    execution_id = _create_source_execution(client, db_session)
+    response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/login",
+            "target_description": "login button",
+            "correction_type": "css",
+            "correction_value": "//button[@id='login']",
+            "source_execution_id": execution_id,
+            "created_by": 1,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_create_correction_accepts_valid_css_value(client, db_session) -> None:
+    execution_id = _create_source_execution(client, db_session)
+    response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/login",
+            "target_description": "login button",
+            "correction_type": "css",
+            "correction_value": "#login-btn",
+            "source_execution_id": execution_id,
+            "created_by": 1,
+        },
+    )
+    assert response.status_code == 201
+
+
+def test_create_correction_rejects_css_value_for_xpath_type(client, db_session) -> None:
+    execution_id = _create_source_execution(client, db_session)
+    response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/login",
+            "target_description": "login button",
+            "correction_type": "xpath",
+            "correction_value": "#login-btn",
+            "source_execution_id": execution_id,
+            "created_by": 1,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_create_correction_accepts_valid_xpath_value(client, db_session) -> None:
+    execution_id = _create_source_execution(client, db_session)
+    response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/login",
+            "target_description": "login button xpath",
+            "correction_type": "xpath",
+            "correction_value": "//button[@id='login']",
+            "source_execution_id": execution_id,
+            "created_by": 1,
+        },
+    )
+    assert response.status_code == 201
+
+
+def test_create_correction_rejects_selector_syntax_for_test_id_type(client, db_session) -> None:
+    execution_id = _create_source_execution(client, db_session)
+    response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/login",
+            "target_description": "login button test_id",
+            "correction_type": "test_id",
+            "correction_value": "#login-btn",
+            "source_execution_id": execution_id,
+            "created_by": 1,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_create_correction_accepts_valid_test_id_value(client, db_session) -> None:
+    execution_id = _create_source_execution(client, db_session)
+    response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/login",
+            "target_description": "login button test_id ok",
+            "correction_type": "test_id",
+            "correction_value": "login-button",
+            "source_execution_id": execution_id,
+            "created_by": 1,
+        },
+    )
+    assert response.status_code == 201
+
+
+# --- batch activation conflict ---
+
+
+def test_batch_activate_corrections_returns_conflict_when_same_key_active(client, db_session) -> None:
+    first_execution_id = _create_source_execution(client, db_session)
+    second_execution_id = _create_source_execution(client, db_session)
+
+    first_response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/orders/123",
+            "target_description": "Batch Conflict CTA",
+            "correction_type": "css",
+            "correction_value": "#batch-cta",
+            "source_execution_id": first_execution_id,
+            "created_by": 1,
+        },
+    )
+    assert first_response.status_code == 201
+
+    second_response = client.post(
+        "/api/v1/corrections",
+        json={
+            "page_url": "https://app.example.com/orders/456",
+            "target_description": "batch conflict cta",
+            "correction_type": "test_id",
+            "correction_value": "batch-cta",
+            "source_execution_id": second_execution_id,
+            "created_by": 1,
+        },
+    )
+    assert second_response.status_code == 201
+
+    first_id = first_response.json()["id"]
+    client.patch(f"/api/v1/corrections/{first_id}", json={"is_active": False})
+
+    bulk_response = client.patch(
+        "/api/v1/corrections/bulk",
+        json={
+            "correction_ids": [first_id],
+            "is_active": True,
+        },
+    )
+
+    assert bulk_response.status_code == 409
