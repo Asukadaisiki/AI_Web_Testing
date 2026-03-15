@@ -3,6 +3,13 @@ export type FailureCategory = "configuration" | "locator" | "assertion" | "navig
 export type OverviewWindowDays = 7 | 14 | 30;
 export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
 export type CorrectionType = "css" | "xpath" | "test_id";
+export type CorrectionEventType =
+  | "created"
+  | "activated"
+  | "deactivated"
+  | "tier0_hit"
+  | "tier0_miss"
+  | "auto_deactivated";
 export type DSLVariableSource =
   | "latest_url"
   | "error_message"
@@ -363,6 +370,11 @@ export interface UpdateCorrectionStatePayload {
   is_active: boolean;
 }
 
+export interface BatchUpdateCorrectionStatePayload {
+  correction_ids: number[];
+  is_active: boolean;
+}
+
 export interface StoredLocatorCorrection {
   id: number;
   page_url_pattern: string;
@@ -376,6 +388,37 @@ export interface StoredLocatorCorrection {
   created_by: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface LocatorCorrectionEventPoint {
+  date: string;
+  hit_count: number;
+  miss_count: number;
+}
+
+export interface StoredLocatorCorrectionEvent {
+  id: number;
+  correction_id: number;
+  event_type: CorrectionEventType;
+  page_url_pattern: string;
+  target_description: string;
+  execution_id: number | null;
+  verified_count_after: number;
+  consecutive_failures_after: number;
+  is_active_after: boolean;
+  created_at: string;
+}
+
+export interface LocatorCorrectionsOverview {
+  total_count: number;
+  active_count: number;
+  inactive_count: number;
+  hit_count: number;
+  miss_count: number;
+  auto_deactivated_count: number;
+  current_window_start?: string | null;
+  current_window_end?: string | null;
+  trend_points: LocatorCorrectionEventPoint[];
 }
 
 export interface FailureCategoryCount {

@@ -14,6 +14,7 @@
 - 单 Case 执行与执行记录查询
 - Suite 同步串行批量执行入口，复用现有 `test_case_runs`
 - `executions overview` 聚合接口，可输出通过率、平均耗时、最近失败、失败分类分布、按天趋势、失败动作分布、高频失败用例、上一窗口对比与失败根因聚合
+- `corrections overview / events / bulk` 运营接口，可输出命中趋势、事件时间线并支持批量启停
 - Playwright Runner、基础 Locator 与结构化执行报告
 - 用例级 `base_url`，用于承载相对路径 `goto` 的正式执行地址
 
@@ -51,6 +52,7 @@
 - 首次执行进入 `needs_intervention`
 - 通过 `POST /api/v1/corrections` 提交修正
 - 重跑后由 Tier 0 命中并执行通过
+- 错误修正连续失败 3 次后会自动停用
 
 运行命令：
 

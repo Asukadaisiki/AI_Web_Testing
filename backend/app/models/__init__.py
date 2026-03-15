@@ -1,6 +1,7 @@
 """Models package."""
 
 from app.models.locator_correction import LocatorCorrection
+from app.models.locator_correction_event import LocatorCorrectionEvent
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.suite_case import SuiteCase
@@ -15,6 +16,7 @@ __all__ = [
     "Project",
     "ProjectMember",
     "LocatorCorrection",
+    "LocatorCorrectionEvent",
     "SuiteCase",
     "SuiteRun",
     "SuiteRunItem",

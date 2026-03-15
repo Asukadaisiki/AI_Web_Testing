@@ -30,6 +30,29 @@
 
 ## 当前状态
 
+## BUG-017 | corrections review 指出的死代码、格式漂移与事件语义说明缺失
+
+- 日期：2026-03-15
+- 状态：fixed
+- 来源：代码评审
+- 描述：`backend/app/services/corrections.py` 中 `_ensure_activation_conflict_free()` 含有一段永远不会命中的激活冲突检查；`backend/app/api/routes/corrections.py` 存在一处函数签名闭合括号缩进漂移；`frontend/src/services/api.ts` 中 `getCorrectionEvents()` 对 `limit` 与 `offset` 的判空风格不一致；同时 `tier0_miss` 与 `auto_deactivated` 可能在同一次失败中连续产出两条事件，但代码中没有明确说明语义。
+- 复现步骤：
+  1. 阅读 `backend/app/services/corrections.py` 中 `_ensure_activation_conflict_free()` 的 `activating_ids` 相关判断
+  2. 阅读 `backend/app/api/routes/corrections.py` 中 `list_corrections_route()` 的函数签名缩进
+  3. 阅读 `frontend/src/services/api.ts` 中 `getCorrectionEvents()` 对 `limit` / `offset` 的 query 拼装
+  4. 阅读 `backend/app/locators/corrections.py` 中 `record_failure()` 的事件写入顺序
+- 影响：会增加后续维护时的理解成本，容易误导冲突校验语义；前端 query 拼装风格不一致也会降低接口层可读性。
+- 根因：上一轮 corrections 运营增强主要聚焦功能闭环和回归覆盖，未进一步清理无效分支、格式漂移和语义注释。
+- 处理：
+  - 删除 `_ensure_activation_conflict_free()` 中无效的激活冲突检查
+  - 恢复 corrections 路由函数签名缩进为项目既有风格
+  - 将 `getCorrectionEvents()` 的 `limit` 判空改为与 `offset` 一致的 `!= null`
+  - 在 `record_failure()` 中补充注释，说明 `tier0_miss` 与 `auto_deactivated` 的双事件语义
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_corrections_api.py tests/unit/test_locator_fallback.py`，结果为 `16 passed`
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/CorrectionsPage.test.tsx`，结果为 `5 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-15 23:49
+
 ## BUG-001 | SQLite 测试种子数据插入顺序触发外键失败
 
 - 日期：2026-03-09

@@ -165,6 +165,7 @@ def resolve_with_fallback(
     target: str,
     *,
     correction_store: CorrectionStore | None = None,
+    execution_id: int | None = None,
     prefer_input: bool = False,
     require_visible: bool = True,
     require_enabled: bool = False,
@@ -184,6 +185,7 @@ def resolve_with_fallback(
             target=target,
             correction=correction,
             correction_store=correction_store,
+            execution_id=execution_id,
         )
         if resolved is not None:
             return resolved
@@ -220,13 +222,14 @@ def _try_resolve_correction(
     target: str,
     correction: CorrectionRecord,
     correction_store: CorrectionStore | None,
+    execution_id: int | None,
 ) -> ResolvedLocator | None:
     try:
         locator = _build_locator_from_correction(page, correction)
         locator.wait_for(state="visible", timeout=3000)
     except Exception as exc:
         updated_correction = (
-            correction_store.record_failure(correction.id)
+            correction_store.record_failure(correction.id, execution_id=execution_id)
             if correction_store is not None
             else correction
         )
@@ -241,7 +244,7 @@ def _try_resolve_correction(
         return None
 
     updated_correction = (
-        correction_store.record_success(correction.id)
+        correction_store.record_success(correction.id, execution_id=execution_id)
         if correction_store is not None
         else correction
     )

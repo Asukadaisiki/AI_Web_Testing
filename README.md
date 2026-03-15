@@ -18,7 +18,7 @@ AI 增强的 Web UI 自动化测试平台。
 - Suite 管理：Suite CRUD、工作台排序、批量执行
 - Suite Context v2.3：Case 输入/输出契约、跨 Case 上下文传递、上下文快照、失败重跑上下文策略、前端上下文证据展示
 - 混合定位闭环第一阶段：`locator_corrections` 修正记录、`needs_intervention` 执行状态、统一降级定位入口、执行详情页人工干预面板
-- 修正记录管理：前端已提供 `/corrections` 页面，可按目标描述、页面 URL 和状态筛选修正记录，并支持启用/停用
+- 修正记录管理：前端已提供 `/corrections` 页面，可按目标描述、页面 URL 和状态筛选修正记录，并支持 overview 卡片、命中趋势、批量启用/停用与事件时间线
 - AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
@@ -50,6 +50,7 @@ AI 增强的 Web UI 自动化测试平台。
 - 首次执行落为 `needs_intervention`
 - 提交 correction 后可重跑通过
 - 第二次执行由 Tier 0 命中，而不是页面偶然变化导致成功
+- 错误 correction 连续失败 3 次后会自动停用
 - correction 记录的 `verified_count`、`consecutive_failures` 与 `is_active` 状态正确
 
 运行方式：

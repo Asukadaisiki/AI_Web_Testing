@@ -24,6 +24,8 @@
 
 ### 2026-03-14 补充
 
+- 已完成 `corrections 运营增强` 第一批：后端新增 `locator_correction_events` 事件表、`GET /api/v1/corrections/overview`、`GET /api/v1/corrections/{id}/events` 与 `PATCH /api/v1/corrections/bulk`，前端 `CorrectionsPage` 已支持汇总卡片、命中/未命中趋势、批量启停与单条事件时间线抽屉。
+- 浏览器级本地夹具回归已从 1 条扩展到 2 条：除 `needs_intervention -> correction -> rerun -> Tier 0 hit` 外，还覆盖了“错误修正连续失败 3 次后自动停用”的真实链路。
 - 已完成 `Suite Context v2.3` 全量闭环：运行时上下文容器、输入/输出契约、变量解析、失败重跑上下文策略，以及前端上下文证据展示都已落地。
 - 已完成混合定位闭环的最小可用版本：`locator_corrections`、`needs_intervention`、统一 `resolve_with_fallback()`、执行详情人工干预面板与修正提交重跑链路已打通。
 - 已完成混合定位 correctness / data-integrity 修复：修正记录唯一活动约束、大小写无关查找、分页、`PATCH` 语义、URL 泛化和前端类型对齐已经收口。
@@ -86,8 +88,8 @@
 
 ### 进行中
 
-- `v3.4` 收尾：本地夹具页真实回归闭环、README / 测试文档与当前代码状态的同步
-- 混合定位稳定性回归：围绕 `needs_intervention -> correction -> rerun -> Tier 0 hit` 的主链路补更多浏览器级联调验证
+- `v3.4` 延后加固：`ai_visual.py` 的 `RUNTIME_STATE` 线程安全 / 并发隔离、LLM JSON 提取健壮化、`correction_value` 按 `correction_type` 的格式校验
+- corrections 运维细化：事件聚合之后的跨修正目标分析、批量治理体验打磨与更明确的状态反馈
 - 报告聚合与平台联动体验的小幅细化
 
 ### 未开始或未落地
@@ -95,7 +97,6 @@
 - AI 生成 DSL
 - 登录页、环境配置页
 - 默认开启的真实 AI 视觉定位接入与模型配置管理
-- 更完整的 corrections 运营能力：批量治理、历史分析、命中趋势
 - 浏览器级端到端回归基建
 - `v3.4` 延后加固项：
   - `ai_visual.py` 的 `RUNTIME_STATE` 线程安全与并发执行隔离
@@ -106,11 +107,11 @@
 
 ## 下一里程碑
 
-下一里程碑调整为“混合定位稳定化与运营入口 v3.4”。
+下一里程碑调整为“`v3.4` 延后加固与受控 AI visual 准备”。
 
-- 目标：在既有混合定位闭环上补齐本地真实回归验证，把“能跑”收口为“可重复验证、可持续维护”。
-- 范围：本地夹具页、浏览器级 `needs_intervention -> correction -> rerun -> Tier 0 hit` 集成回归、测试组织收口，以及相关 README / 计划文档同步。
-- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎；本轮完成后先进入 corrections 运营增强，再处理 `ai_visual` 线程安全、JSON 提取与 correction schema 校验等延后加固项。
+- 目标：在已有 corrections 运营入口和事件数据底座上，继续补齐 AI visual 的并发安全与输入校验，让后续真实模型接入保持受控。
+- 范围：`RUNTIME_STATE` 线程安全 / 并发隔离、JSON 提取健壮化、`correction_value` 格式校验、`deep_locate` 参数收口，以及相关回归测试与文档同步。
+- 展示原则：继续复用现有 `Execution Detail -> InterventionPanel -> Corrections` 链路；不在本阶段默认打开真实 AI 模型，不引入新的执行引擎；加固项完成后，再评估真实 VLM 配置页与默认开启策略。
 
 ### v2.3 建议执行顺序（2026-03-13）
 

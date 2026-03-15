@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { getCorrections, getExecutions } from "./api";
+import { getCorrectionEvents, getCorrections, getExecutions } from "./api";
 
 const fetchMock = vi.fn();
 
@@ -39,6 +39,18 @@ test("getExecutions includes offset=0 in query string", async () => {
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/executions?project_id=1&limit=10&offset=0",
+    expect.any(Object),
+  );
+});
+
+test("getCorrectionEvents includes offset=0 in query string", async () => {
+  await getCorrectionEvents(12, {
+    offset: 0,
+    limit: 20,
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/corrections/12/events?limit=20&offset=0",
     expect.any(Object),
   );
 });

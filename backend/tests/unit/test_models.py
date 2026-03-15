@@ -7,13 +7,14 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import LocatorCorrection, TestCase, TestCaseRun
+from app.models import LocatorCorrection, LocatorCorrectionEvent, TestCase, TestCaseRun
 
 
 def test_stage1_tables_exist(db_session: Session) -> None:
     inspector = inspect(db_session.bind)
 
     assert set(inspector.get_table_names()) == {
+        "locator_correction_events",
         "locator_corrections",
         "project_members",
         "projects",
@@ -173,3 +174,83 @@ def test_locator_corrections_unique_active_lookup_index_enforced(db_session: Ses
 
     with pytest.raises(IntegrityError):
         db_session.commit()
+
+
+def test_locator_correction_events_columns_and_foreign_keys_exist(db_session: Session) -> None:
+    inspector = inspect(db_session.bind)
+
+    event_columns = {column["name"] for column in inspector.get_columns("locator_correction_events")}
+    assert {
+        "correction_id",
+        "event_type",
+        "page_url_pattern",
+        "target_description",
+        "execution_id",
+        "verified_count_after",
+        "consecutive_failures_after",
+        "is_active_after",
+        "created_at",
+    }.issubset(event_columns)
+
+    foreign_keys = inspector.get_foreign_keys("locator_correction_events")
+    assert {foreign_key["referred_table"] for foreign_key in foreign_keys} == {
+        "locator_corrections",
+        "test_case_runs",
+    }
+
+
+def test_locator_correction_event_persists_snapshot_fields(db_session: Session) -> None:
+    case = TestCase(
+        project_id=1,
+        created_by=1,
+        updated_by=1,
+        name="event case",
+        description=None,
+        dsl={"name": "event case", "steps": [{"action": "click", "target": "submit"}]},
+    )
+    db_session.add(case)
+    db_session.commit()
+    db_session.refresh(case)
+
+    execution = TestCaseRun(
+        case_id=case.id,
+        project_id=1,
+        triggered_by=1,
+        status="failed",
+        error_message="boom",
+    )
+    db_session.add(execution)
+    db_session.commit()
+    db_session.refresh(execution)
+
+    correction = LocatorCorrection(
+        page_url_pattern="https://app.example.com/orders/*",
+        target_description="Submit",
+        normalized_target_description="submit",
+        correction_type="css",
+        correction_value="#submit-primary",
+        source_execution_id=execution.id,
+        created_by=1,
+    )
+    db_session.add(correction)
+    db_session.commit()
+    db_session.refresh(correction)
+
+    event = LocatorCorrectionEvent(
+        correction_id=correction.id,
+        event_type="created",
+        page_url_pattern=correction.page_url_pattern,
+        target_description=correction.target_description,
+        execution_id=execution.id,
+        verified_count_after=0,
+        consecutive_failures_after=0,
+        is_active_after=True,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    persisted = db_session.get(LocatorCorrectionEvent, event.id)
+    assert persisted is not None
+    assert persisted.page_url_pattern == "https://app.example.com/orders/*"
+    assert persisted.target_description == "Submit"
+    assert persisted.execution_id == execution.id

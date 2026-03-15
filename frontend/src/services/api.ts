@@ -1,16 +1,19 @@
 import type {
+  BatchUpdateCorrectionStatePayload,
   CaseMutationPayload,
   CaseExecutionRequest,
   CreateCorrectionPayload,
   DSLCasePayload,
   DSLValidationResult,
   ExecutionsOverview,
+  LocatorCorrectionsOverview,
   OverviewWindowDays,
   StoredCaseDetail,
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
   StoredCaseSummary,
   StoredLocatorCorrection,
+  StoredLocatorCorrectionEvent,
   StoredSuiteDetail,
   StoredSuiteRunDetail,
   StoredSuiteRunSummary,
@@ -167,6 +170,31 @@ export function updateCorrectionState(correctionId: number, payload: UpdateCorre
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+}
+
+export function batchUpdateCorrectionState(payload: BatchUpdateCorrectionStatePayload) {
+  return request<StoredLocatorCorrection[]>("/api/v1/corrections/bulk", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getCorrectionsOverview(window_days: OverviewWindowDays) {
+  return request<LocatorCorrectionsOverview>(`/api/v1/corrections/overview?window_days=${window_days}`);
+}
+
+export function getCorrectionEvents(correctionId: number, params?: { limit?: number; offset?: number }) {
+  const search = new URLSearchParams();
+  if (params?.limit != null) {
+    search.set("limit", String(params.limit));
+  }
+  if (params?.offset != null) {
+    search.set("offset", String(params.offset));
+  }
+  const query = search.toString();
+  return request<StoredLocatorCorrectionEvent[]>(
+    `/api/v1/corrections/${correctionId}/events${query ? `?${query}` : ""}`,
+  );
 }
 
 export function getExecutions(params: {

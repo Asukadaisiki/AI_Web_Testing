@@ -9,7 +9,7 @@ import pytest
 from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.locators import InterventionNeededError, resolve_with_fallback
 from app.locators.semantic import LocatorResolutionError
-from app.models import LocatorCorrection, TestCase, TestCaseRun
+from app.models import LocatorCorrection, LocatorCorrectionEvent, TestCase, TestCaseRun
 from app.schemas.executions import LocatorTrace
 
 
@@ -122,6 +122,7 @@ def test_resolve_with_fallback_uses_active_correction(db_session, monkeypatch) -
         page,
         "登录按钮",
         correction_store=SQLAlchemyCorrectionStore(db_session),
+        execution_id=execution_id,
         require_enabled=True,
     )
 
@@ -130,6 +131,9 @@ def test_resolve_with_fallback_uses_active_correction(db_session, monkeypatch) -
     assert correction.consecutive_failures == 0
     assert correction.is_active is True
     assert flush_spy.call_count == 1
+    events = db_session.query(LocatorCorrectionEvent).order_by(LocatorCorrectionEvent.id.asc()).all()
+    assert [event.event_type for event in events] == ["tier0_hit"]
+    assert events[0].execution_id == execution_id
 
 
 def test_resolve_with_fallback_matches_correction_case_insensitively(db_session) -> None:
@@ -151,6 +155,7 @@ def test_resolve_with_fallback_matches_correction_case_insensitively(db_session)
         page,
         "login button",
         correction_store=SQLAlchemyCorrectionStore(db_session),
+        execution_id=execution_id,
         require_enabled=True,
     )
 
@@ -182,6 +187,7 @@ def test_resolve_with_fallback_disables_correction_after_three_failures(db_sessi
                 page,
                 "登录按钮",
                 correction_store=SQLAlchemyCorrectionStore(db_session),
+                execution_id=execution_id,
                 require_enabled=True,
             )
 
@@ -189,6 +195,14 @@ def test_resolve_with_fallback_disables_correction_after_three_failures(db_sessi
     assert correction.is_active is False
     assert flush_spy.call_count == 3
     assert "Correction reuse failed" in caplog.text
+    events = db_session.query(LocatorCorrectionEvent).order_by(LocatorCorrectionEvent.id.asc()).all()
+    assert [event.event_type for event in events] == [
+        "tier0_miss",
+        "tier0_miss",
+        "tier0_miss",
+        "auto_deactivated",
+    ]
+    assert events[-1].is_active_after is False
 
 
 def test_resolve_with_fallback_uses_viewport_screenshot_for_ai_candidate(monkeypatch) -> None:

@@ -6,12 +6,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db_session
-from app.schemas.corrections import CreateCorrectionRequest, StoredLocatorCorrection, UpdateCorrectionStateRequest
+from app.schemas.corrections import (
+    BatchUpdateCorrectionStateRequest,
+    CreateCorrectionRequest,
+    LocatorCorrectionsOverview,
+    StoredLocatorCorrection,
+    StoredLocatorCorrectionEvent,
+    UpdateCorrectionStateRequest,
+)
 from app.services import (
     CorrectionConflictError,
     EntityNotFoundError,
+    batch_update_correction_state,
     create_correction,
+    get_corrections_overview,
     list_corrections,
+    list_correction_events,
     update_correction_state,
 )
 
@@ -53,6 +63,50 @@ def list_corrections_route(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/overview", response_model=LocatorCorrectionsOverview)
+def get_corrections_overview_route(
+    window_days: int = Query(default=7),
+    session: Session = Depends(get_db_session),
+) -> LocatorCorrectionsOverview:
+    if window_days not in {7, 14, 30}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="window_days must be one of: 7, 14, 30.",
+        )
+    return get_corrections_overview(session, window_days=window_days)
+
+
+@router.get("/{correction_id}/events", response_model=list[StoredLocatorCorrectionEvent])
+def list_correction_events_route(
+    correction_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_db_session),
+) -> list[StoredLocatorCorrectionEvent]:
+    try:
+        return list_correction_events(
+            session,
+            correction_id,
+            limit=limit,
+            offset=offset,
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch("/bulk", response_model=list[StoredLocatorCorrection])
+def batch_update_correction_state_route(
+    payload: BatchUpdateCorrectionStateRequest,
+    session: Session = Depends(get_db_session),
+) -> list[StoredLocatorCorrection]:
+    try:
+        return batch_update_correction_state(session, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CorrectionConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.patch("/{correction_id}", response_model=StoredLocatorCorrection)

@@ -94,6 +94,7 @@ def execute_case_with_playwright(
                             page,
                             step.target,
                             correction_store=correction_store,
+                            execution_id=execution_id,
                             require_visible=True,
                             require_enabled=True,
                         )
@@ -105,6 +106,7 @@ def execute_case_with_playwright(
                             page,
                             step.target,
                             correction_store=correction_store,
+                            execution_id=execution_id,
                             prefer_input=True,
                             require_visible=True,
                             require_enabled=True,
@@ -117,6 +119,7 @@ def execute_case_with_playwright(
                             page,
                             step.target,
                             correction_store=correction_store,
+                            execution_id=execution_id,
                             require_visible=False,
                         )
                         resolved_by = resolved.strategy
@@ -127,6 +130,7 @@ def execute_case_with_playwright(
                             page,
                             step.target,
                             correction_store=correction_store,
+                            execution_id=execution_id,
                             require_visible=False,
                         )
                         resolved_by = resolved.strategy

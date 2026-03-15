@@ -24,6 +24,55 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-15 23:42
+
+- 任务：落实 corrections 运营增强批次，补齐事件数据底座、运营接口、页面增强与回归验证
+- 背景：上一轮已完成 `needs_intervention -> correction -> rerun -> Tier 0 hit` 最小闭环与 corrections 并发安全修复，但 corrections 侧仍只有列表与单条启停，无法支撑命中趋势、事件时间线和批量治理；同时 `project-plan` 仍把运营增强之前的阶段写成“进行中”
+- 执行动作：
+  - 在后端新增 `locator_correction_events` 模型与 Alembic 迁移 `20260315_0008`，并在 correction 创建、启停、Tier 0 命中、Tier 0 失败、自动停用路径写入事件
+  - 扩展 corrections API：新增 `GET /api/v1/corrections/overview`、`GET /api/v1/corrections/{id}/events`、`PATCH /api/v1/corrections/bulk`，并补齐对应 schema、service 与单元测试
+  - 增强前端 `CorrectionsPage`：新增 overview 汇总卡片、命中/未命中趋势图、批量启停按钮与单条事件时间线抽屉；同步更新前端类型与 API service 测试
+  - 在浏览器级集成回归中新增“错误修正连续失败 3 次后自动停用”场景，并同步更新 `README.md`、`backend/README.md`、`backend/tests/README.md` 与 `docs/project-plan.md`
+- 结果：仓库现在具备 corrections 运营入口的第一批闭环能力，既能查看命中趋势和单条修正事件历史，也能对列表批量启停；本地真实浏览器回归已覆盖 happy path 与自动停用路径，`project-plan` 的下一里程碑也已收口到延后加固项
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `84 passed`
+  - 执行 `cd backend && uv run pytest tests/integration -m browser_integration`，结果为 `2 passed`
+  - 执行 `cd backend && uv run alembic upgrade head` 成功
+  - 执行 `cd frontend && npm test -- --run`，结果为 `39 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/models/locator_correction_event.py`、`backend/app/locators/corrections.py`、`backend/app/locators/fallback.py`、`backend/app/runners/playwright_runner.py`、`backend/app/services/corrections.py`、`backend/app/api/routes/corrections.py`、`backend/alembic/versions/20260315_0008_locator_correction_events.py`、`backend/tests/unit/test_corrections_api.py`、`backend/tests/unit/test_locator_fallback.py`、`backend/tests/unit/test_models.py`、`backend/tests/integration/test_intervention_regression.py`、`frontend/src/pages/CorrectionsPage.tsx`、`frontend/src/pages/CorrectionsPage.test.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`、`frontend/src/types/api.ts`、`README.md`、`backend/README.md`、`backend/tests/README.md`、`docs/project-plan.md`
+- 后续：下一批建议转入 `ai_visual` 延后加固项，优先处理 `RUNTIME_STATE` 线程安全 / 并发隔离、LLM JSON 提取健壮化和 `correction_value` 按类型校验；真实 VLM 默认开启与模型配置页继续后置
+
+## 2026-03-15 23:49
+
+- 任务：修复 corrections 运营增强批次中的 review 遗留问题
+- 背景：代码评审指出 `_ensure_activation_conflict_free()` 中存在无效死代码、corrections 路由签名有缩进漂移、`record_failure()` 的双事件语义缺少说明，以及前端 `getCorrectionEvents()` 对 `limit` / `offset` 的判空写法不一致
+- 执行动作：
+  - 删除 `backend/app/services/corrections.py` 中基于 `activating_ids` 的无效冲突检查分支
+  - 修正 `backend/app/api/routes/corrections.py` 中 `list_corrections_route()` 的闭合括号缩进
+  - 在 `backend/app/locators/corrections.py` 的 `record_failure()` 中补充注释，明确 `tier0_miss` 与 `auto_deactivated` 的事件顺序语义
+  - 将 `frontend/src/services/api.ts` 中 `getCorrectionEvents()` 的 `limit` 判空改为 `!= null`，与 `offset` 保持一致
+  - 同步登记缺陷日志并执行后端 / 前端定向回归
+- 结果：review 指出的 4 个问题已收口：死代码移除、格式恢复一致、双事件语义已在代码中明确、前端 query 参数判空风格统一
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_corrections_api.py tests/unit/test_locator_fallback.py`，结果为 `16 passed`
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/CorrectionsPage.test.tsx`，结果为 `5 passed`
+- 关联文件：`backend/app/services/corrections.py`、`backend/app/api/routes/corrections.py`、`backend/app/locators/corrections.py`、`frontend/src/services/api.ts`、`docs/bug-log.md`
+- 后续：如继续推进，建议直接进入 `ai_visual` 延后加固项，不再在 corrections 运营批次上留格式或语义债务
+
+## 2026-03-15 23:50
+
+- 任务：将 corrections 运营增强与 review 修复批次同步到 GitHub
+- 背景：本轮已完成 corrections 运营增强、浏览器级回归补强和 review 遗留问题修复，用户要求将当前成果同步到远端仓库；工作区同时存在与本任务无关的未跟踪文件 `CLAUDE.md`
+- 执行动作：
+  - 核对 `git branch --show-current`、`git remote -v` 与 `git status --short`，确认当前位于 `main` 且目标远端为 `origin`
+  - 保留未跟踪文件 `CLAUDE.md`，仅暂存 corrections 运营增强、review 修复、测试与文档同步相关文件
+  - 准备统一提交并推送到 `origin/main`
+- 结果：本轮 corrections 运营增强与 review 修复改动已整理为一次独立同步批次
+- 验证：通过分支、远端和工作区状态检查确认同步目标与提交范围正确；提交与推送结果见本次 Git 同步输出
+- 关联文件：`README.md`、`backend/README.md`、`backend/app/api/routes/corrections.py`、`backend/app/locators/corrections.py`、`backend/app/locators/fallback.py`、`backend/app/models/locator_correction_event.py`、`backend/app/services/corrections.py`、`backend/alembic/versions/20260315_0008_locator_correction_events.py`、`backend/tests/integration/test_intervention_regression.py`、`frontend/src/pages/CorrectionsPage.tsx`、`frontend/src/services/api.ts`、`docs/bug-log.md`、`docs/execution-log.md`、`docs/project-plan.md`
+- 后续：同步完成后，可直接在 `main` 上进入 `ai_visual` 延后加固项
+
 ## 2026-03-15 19:48
 
 - 任务：阅读现有执行计划、执行日志与缺陷日志，收敛项目下一步安排

@@ -8,11 +8,14 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import LocatorCorrection
+from app.models import LocatorCorrection, LocatorCorrectionEvent
 from app.locators.url_pattern import generalize_url
 
 
 MAX_CONSECUTIVE_FAILURES = 3
+EVENT_TIER0_HIT = "tier0_hit"
+EVENT_TIER0_MISS = "tier0_miss"
+EVENT_AUTO_DEACTIVATED = "auto_deactivated"
 
 
 @dataclass(frozen=True)
@@ -28,9 +31,9 @@ class CorrectionRecord:
 class CorrectionStore(Protocol):
     def find_active_correction(self, *, page_url: str, target_description: str) -> CorrectionRecord | None: ...
 
-    def record_success(self, correction_id: int) -> CorrectionRecord | None: ...
+    def record_success(self, correction_id: int, *, execution_id: int | None = None) -> CorrectionRecord | None: ...
 
-    def record_failure(self, correction_id: int) -> CorrectionRecord | None: ...
+    def record_failure(self, correction_id: int, *, execution_id: int | None = None) -> CorrectionRecord | None: ...
 
 
 def normalize_target_description(target_description: str) -> str:
@@ -73,22 +76,60 @@ class SQLAlchemyCorrectionStore:
         )
         return _to_correction_record(record) if record is not None else None
 
-    def record_success(self, correction_id: int) -> CorrectionRecord | None:
+    def record_success(self, correction_id: int, *, execution_id: int | None = None) -> CorrectionRecord | None:
         record = self._session.get(LocatorCorrection, correction_id)
         if record is None:
             return None
         record.verified_count += 1
         record.consecutive_failures = 0
+        self._session.add(
+            LocatorCorrectionEvent(
+                correction_id=record.id,
+                event_type=EVENT_TIER0_HIT,
+                page_url_pattern=record.page_url_pattern,
+                target_description=record.target_description,
+                execution_id=execution_id,
+                verified_count_after=record.verified_count,
+                consecutive_failures_after=record.consecutive_failures,
+                is_active_after=record.is_active,
+            )
+        )
         self._session.flush()
         return _to_correction_record(record)
 
-    def record_failure(self, correction_id: int) -> CorrectionRecord | None:
+    def record_failure(self, correction_id: int, *, execution_id: int | None = None) -> CorrectionRecord | None:
         record = self._session.get(LocatorCorrection, correction_id)
         if record is None:
             return None
         record.consecutive_failures += 1
+        # Keep the miss event tied to the state at failure time. If this same failure also
+        # crosses the auto-disable threshold, a second auto_deactivated event is emitted below.
+        self._session.add(
+            LocatorCorrectionEvent(
+                correction_id=record.id,
+                event_type=EVENT_TIER0_MISS,
+                page_url_pattern=record.page_url_pattern,
+                target_description=record.target_description,
+                execution_id=execution_id,
+                verified_count_after=record.verified_count,
+                consecutive_failures_after=record.consecutive_failures,
+                is_active_after=record.is_active,
+            )
+        )
         if record.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
             record.is_active = False
+            self._session.add(
+                LocatorCorrectionEvent(
+                    correction_id=record.id,
+                    event_type=EVENT_AUTO_DEACTIVATED,
+                    page_url_pattern=record.page_url_pattern,
+                    target_description=record.target_description,
+                    execution_id=execution_id,
+                    verified_count_after=record.verified_count,
+                    consecutive_failures_after=record.consecutive_failures,
+                    is_active_after=record.is_active,
+                )
+            )
         self._session.flush()
         return _to_correction_record(record)
 
