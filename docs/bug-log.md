@@ -345,3 +345,21 @@
   - 执行 `cd backend && uv run pytest`，结果为 `79 passed`
   - 执行 `cd backend && uv run pytest tests/integration -m browser_integration`，结果为 `1 passed`
 - 关联记录：`docs/execution-log.md` 2026-03-15 20:41
+
+## BUG-017 | DSL 生成历史入库提交失败时未回滚会话，可能污染同请求后续数据库操作
+
+- 日期：2026-03-16
+- 状态：fixed
+- 来源：实现阶段自检
+- 描述：`backend/app/services/dsl.py` 中新增的 `_persist_generation_run()` 初版在 `session.commit()` 失败时直接抛错，没有先执行 `session.rollback()`；一旦生成历史落库触发数据库异常，同一请求内复用的 SQLAlchemy `Session` 会停留在 failed transaction 状态。
+- 复现步骤：
+  1. 让 `dsl_generation_runs` 的插入或提交阶段触发数据库异常
+  2. 观察 `_persist_generation_run()` 直接抛出异常返回
+  3. 在同一 `Session` 上继续执行后续数据库操作
+  4. 观察 SQLAlchemy 因事务未回滚而持续报错
+- 影响：会放大单次落库故障的影响范围，导致同一请求内后续数据库操作被脏事务状态连带污染，增加排障难度。
+- 根因：初版实现优先打通“生成后立即落库”的主路径，对提交失败后的事务清理收口不够完整。
+- 处理：在 `_persist_generation_run()` 中为 `session.commit()` 增加 `try/except`，提交失败时显式执行 `session.rollback()` 后再重新抛出异常。
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `123 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-16 23:14

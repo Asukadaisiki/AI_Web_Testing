@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 
 import app.core.config as config_module
+from sqlalchemy.orm import Session
+
 from app.schemas.settings import (
-    AIDslGenerationStats,
     AISettingsOverviewResponse,
     AISettingsResponse,
     AISettingsUpdateRequest,
 )
-from app.services.dsl import get_dsl_generation_runtime_stats
+from app.services.dsl import get_dsl_generation_durable_stats
 
 
 def get_ai_settings() -> AISettingsResponse:
@@ -71,22 +72,14 @@ def update_ai_settings(payload: AISettingsUpdateRequest) -> AISettingsResponse:
     return get_ai_settings()
 
 
-def get_ai_settings_overview() -> AISettingsOverviewResponse:
+def get_ai_settings_overview(session: Session) -> AISettingsOverviewResponse:
     settings = config_module.get_settings()
-    runtime_stats = get_dsl_generation_runtime_stats()
     return AISettingsOverviewResponse(
         ai_dsl_enabled=settings.enable_ai_dsl_generate,
         ai_dsl_model=settings.ai_dsl_model,
         ai_dsl_strict_mode=settings.ai_dsl_strict_mode,
         ai_dsl_allow_auto_repair=settings.ai_dsl_allow_auto_repair,
-        generation_stats=AIDslGenerationStats(
-            total_requests=runtime_stats.total_requests,
-            success_count=runtime_stats.success_count,
-            failure_count=runtime_stats.failure_count,
-            last_model=runtime_stats.last_model,
-            last_error_type=runtime_stats.last_error_type,
-            last_error_message=runtime_stats.last_error_message,
-        ),
+        generation_stats=get_dsl_generation_durable_stats(session),
     )
 
 

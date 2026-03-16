@@ -14,6 +14,7 @@ def test_stage1_tables_exist(db_session: Session) -> None:
     inspector = inspect(db_session.bind)
 
     assert set(inspector.get_table_names()) == {
+        "dsl_generation_runs",
         "locator_correction_events",
         "locator_corrections",
         "project_members",
@@ -254,3 +255,35 @@ def test_locator_correction_event_persists_snapshot_fields(db_session: Session) 
     assert persisted.page_url_pattern == "https://app.example.com/orders/*"
     assert persisted.target_description == "Submit"
     assert persisted.execution_id == execution.id
+
+
+def test_dsl_generation_run_columns_and_foreign_keys_exist(db_session: Session) -> None:
+    inspector = inspect(db_session.bind)
+
+    columns = {column["name"] for column in inspector.get_columns("dsl_generation_runs")}
+    assert {
+        "actor_user_id",
+        "prompt_preview",
+        "prompt_sha256",
+        "request_base_url",
+        "generation_mode",
+        "import_mode",
+        "model_name",
+        "success",
+        "error_type",
+        "error_message",
+        "used_current_case_context",
+        "used_current_steps_context",
+        "base_url_source",
+        "base_url_backfilled",
+        "repaired_invalid_actions",
+        "removed_invalid_steps",
+        "removed_invalid_contracts",
+        "warnings_count",
+        "normalization_notes_count",
+        "generated_case_json",
+        "created_at",
+    }.issubset(columns)
+
+    foreign_keys = inspector.get_foreign_keys("dsl_generation_runs")
+    assert {foreign_key["referred_table"] for foreign_key in foreign_keys} == {"users"}

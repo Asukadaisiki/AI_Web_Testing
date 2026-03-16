@@ -9,15 +9,20 @@ import pytest
 
 import app.core.config as config_module
 import app.main as main_module
+from app.db import Base
+from app.db.session import get_engine
+from app.models import User
 from app.services.dsl import reset_dsl_generation_runtime_stats
 
 
 @pytest.fixture
 def ai_settings_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     env_file = tmp_path / ".env"
+    database_path = tmp_path / "ai-settings-test.db"
     env_file.write_text(
         "\n".join(
             [
+                f"DATABASE_URL=sqlite:///{database_path.as_posix()}",
                 "ENABLE_AI_DSL_GENERATE=false",
                 "AI_DSL_TIMEOUT_MS=15000",
                 "AI_DSL_BASE_URL=https://api.openai.com/v1",
@@ -42,7 +47,13 @@ def ai_settings_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestC
     monkeypatch.setattr(config_module, "ENV_FILE_PATH", env_file)
     monkeypatch.setattr(main_module, "verify_database_connection", lambda: None)
     config_module.get_settings.cache_clear()
+    get_engine.cache_clear()
     reset_dsl_generation_runtime_stats()
+
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        connection.execute(User.__table__.insert().values(id=1, email="seed-owner@example.com", display_name="Seed"))
 
     app = main_module.create_app()
     with TestClient(app) as client:
@@ -169,5 +180,15 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
             "last_model": "gpt-dsl",
             "last_error_type": "DslGenerationConfigError",
             "last_error_message": "AI DSL 生成配置不完整。请提供 AI_DSL_API_KEY 与 AI_DSL_MODEL。",
+            "last_24h_requests": 1,
+            "last_24h_success_count": 0,
+            "last_24h_failure_count": 1,
+            "last_24h_auto_repair_rate": 0.0,
+            "top_error_types": [
+                {
+                    "error_type": "DslGenerationConfigError",
+                    "count": 1,
+                }
+            ],
         },
     }

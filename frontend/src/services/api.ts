@@ -7,12 +7,14 @@ import type {
   CaseExecutionRequest,
   CreateCorrectionPayload,
   DSLCasePayload,
+  DslGenerationRunStatus,
   GenerateDslRequest,
   GenerateDslResponse,
   DSLValidationResult,
   ExecutionsOverview,
   LocatorCorrectionsOverview,
   OverviewWindowDays,
+  StoredDslGenerationRunSummary,
   StoredCaseDetail,
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
@@ -134,6 +136,25 @@ export function generateDslCase(payload: GenerateDslRequest) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getDslGenerationRuns(params?: {
+  status?: DslGenerationRunStatus;
+  limit?: number;
+  offset?: number;
+}) {
+  const search = new URLSearchParams();
+  if (params?.status) {
+    search.set("status", params.status);
+  }
+  if (params?.limit != null) {
+    search.set("limit", String(params.limit));
+  }
+  if (params?.offset != null) {
+    search.set("offset", String(params.offset));
+  }
+  const query = search.toString();
+  return request<StoredDslGenerationRunSummary[]>(`/api/v1/dsl/generations${query ? `?${query}` : ""}`);
 }
 
 export function getAISettings() {

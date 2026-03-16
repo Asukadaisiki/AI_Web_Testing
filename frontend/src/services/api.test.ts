@@ -6,6 +6,7 @@ import {
   getAISettingsOverview,
   getCorrectionEvents,
   getCorrections,
+  getDslGenerationRuns,
   getExecutions,
   updateAISettings,
 } from "./api";
@@ -117,6 +118,19 @@ test("getAISettingsOverview requests the AI settings overview endpoint", async (
   await getAISettingsOverview();
 
   expect(fetchMock).toHaveBeenCalledWith("/api/v1/settings/ai/overview", expect.any(Object));
+});
+
+test("getDslGenerationRuns includes status limit and offset in query string", async () => {
+  await getDslGenerationRuns({
+    status: "failed",
+    limit: 10,
+    offset: 0,
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/dsl/generations?status=failed&limit=10&offset=0",
+    expect.any(Object),
+  );
 });
 
 test("updateAISettings sends the runtime AI settings payload", async () => {

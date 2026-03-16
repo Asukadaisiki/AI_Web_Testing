@@ -62,6 +62,11 @@ class AISettingsUpdateRequest(SettingsModel):
         return self
 
 
+class AIDslGenerationErrorTypeCount(SettingsModel):
+    error_type: str = Field(min_length=1, max_length=200)
+    count: int = Field(ge=1)
+
+
 class AIDslGenerationStats(SettingsModel):
     total_requests: int = Field(ge=0)
     success_count: int = Field(ge=0)
@@ -69,6 +74,11 @@ class AIDslGenerationStats(SettingsModel):
     last_model: str | None = Field(default=None, max_length=200)
     last_error_type: str | None = Field(default=None, max_length=200)
     last_error_message: str | None = Field(default=None, max_length=2000)
+    last_24h_requests: int = Field(default=0, ge=0)
+    last_24h_success_count: int = Field(default=0, ge=0)
+    last_24h_failure_count: int = Field(default=0, ge=0)
+    last_24h_auto_repair_rate: float = Field(default=0.0, ge=0, le=1)
+    top_error_types: list[AIDslGenerationErrorTypeCount] = Field(default_factory=list)
 
 
 class AISettingsOverviewResponse(SettingsModel):

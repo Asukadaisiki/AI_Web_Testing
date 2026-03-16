@@ -1079,3 +1079,38 @@
   - 后续执行 `git push origin main` 完成远端同步
 - 关联文件：`AGENTS.md`、`CLAUDE.md`、`docs/execution-log.md`
 - 后续：无
+
+## 2026-03-16 23:14
+
+- 任务：落实 `AI DSL 生成治理与可观测闭环`
+- 背景：`POST /api/v1/dsl/generate` 已具备可用的最小闭环，但生成观测仍停留在进程内计数器，重启即丢，无法支撑 prompt 调优、模型比较和失败复盘；需要把 AI DSL 生成从“可用”补到“可治理”。
+- 执行动作：
+  - 后端新增 `dsl_generation_runs` 模型与 `20260316_0009_dsl_generation_runs.py` Alembic 迁移，持久化 `prompt_preview`、`prompt_sha256`、生成模式、导入模式、模型名、成功/失败、错误类型、自动修正计数、warning/normalization 计数以及成功时的规范化 DSL JSON
+  - 改造 `backend/app/services/dsl.py`，让 `generate_dsl_case()` 在成功和失败路径都统一落库生成记录，同时保留现有运行时计数器兼容；并新增 `list_dsl_generation_runs()` 与 durable 聚合统计逻辑
+  - 扩展 `POST /api/v1/dsl/generate` 响应，新增 `generation_id`；新增 `GET /api/v1/dsl/generations` 列表接口；将 `GET /api/v1/settings/ai/overview` 改为优先读取数据库聚合，并补充最近 24 小时请求量、成功/失败量、自动修正率和高频错误类型
+  - 前端扩展 `frontend/src/types/api.ts` 与 `frontend/src/services/api.ts`，补齐生成记录类型与 `getDslGenerationRuns()`；在 `AISettingsPage` 的“生成概览”下新增 durable 指标与“最近生成记录”表；`CaseWorkbenchPage` 仅做 `generation_id` 响应兼容，不改现有导入流程
+  - 补充后端与前端测试，覆盖成功/失败落库、列表分页/状态过滤、durable overview 聚合、AI 设置页新增概览与最近记录表，以及工作台生成响应兼容
+- 结果：仓库现在具备可持久化的 AI DSL 生成审计能力；生成历史可按成功/失败回看，AI 设置页可直接查看 durable 指标与最近生成记录，为后续 prompt 调优和模型治理提供稳定依据
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `123 passed`
+  - 执行 `cd backend && uv run alembic upgrade head` 成功，`20260316_0009` 迁移通过
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果为 `20 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/models/dsl_generation_run.py`、`backend/alembic/versions/20260316_0009_dsl_generation_runs.py`、`backend/app/services/dsl.py`、`backend/app/api/routes/dsl.py`、`backend/app/services/settings.py`、`backend/app/api/routes/settings.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/unit/test_ai_settings_api.py`、`frontend/src/pages/AISettingsPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts`
+- 后续：下一步可直接基于 durable 生成历史推进 prompt 调优、模型对比，或再补一小步“生成草案采纳/放弃反馈”以闭合治理回路
+
+## 2026-03-16 23:20
+
+- 任务：将本轮 `AI DSL 生成治理与可观测闭环` 改动同步到 GitHub
+- 背景：本轮后端持久化、概览聚合、前端 AI 设置页展示、测试与日志更新已全部完成，用户明确要求同步当前变更到远端仓库
+- 执行动作：
+  - 复查 `git status --short`、`git branch --show-current` 与 `git remote -v`，确认当前位于 `main`，远端为 `origin`
+  - 追加本条执行日志，确保“实现 -> 验证 -> 同步”链路可追溯
+  - 仅暂存并提交本轮 AI DSL 治理相关代码、测试、迁移与日志文件，显式排除未跟踪的 `.claude/` 目录
+  - 推送提交到 `origin/main`
+- 结果：本轮 AI DSL 生成治理改动已整理为一批可追溯提交，准备同步到 GitHub 主分支
+- 验证：
+  - 执行 `git status --short` 核对暂存范围
+  - 执行 `git push origin main` 完成远端同步
+- 关联文件：`backend/`、`frontend/`、`docs/execution-log.md`、`docs/bug-log.md`
+- 后续：无

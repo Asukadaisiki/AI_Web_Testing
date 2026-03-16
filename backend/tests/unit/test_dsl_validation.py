@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.models import DslGenerationRun
 from app.ai.dsl_generator import build_generation_messages
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
@@ -157,6 +158,7 @@ def test_generate_dsl_case_success(client, monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
+        "generation_id": 1,
         "case": {
             "name": "AI 生成冒烟",
             "description": "验证首页可访问",
@@ -396,3 +398,111 @@ def test_generate_dsl_case_returns_502_for_invalid_dsl_shape_when_auto_repair_di
 
     assert response.status_code == 502
     assert response.json()["detail"] == "步骤 #1 使用了不支持的 action: hover"
+
+
+def test_generate_dsl_case_persists_success_record(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "成功落库",
+  "description": "验证成功记录",
+  "steps": [
+    {"action": "goto", "value": "/"},
+    {"action": "assert_url_contains", "value": "example.com"}
+  ]
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "打开 example.com 首页",
+            "base_url": "https://example.com",
+            "actor_user_id": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    generation_run = db_session.get(DslGenerationRun, response.json()["generation_id"])
+    assert generation_run is not None
+    assert generation_run.success is True
+    assert generation_run.prompt_preview == "打开 example.com 首页"
+    assert generation_run.prompt_sha256
+    assert generation_run.model_name == "gpt-test"
+    assert generation_run.error_type is None
+    assert generation_run.generated_case_json is not None
+    assert generation_run.generated_case_json["name"] == "成功落库"
+    assert generation_run.warnings_count == 1
+    assert generation_run.normalization_notes_count == 0
+
+
+def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.ai.dsl_generator._call_llm", lambda **_: "not-json")
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "这次会失败",
+            "actor_user_id": 1,
+        },
+    )
+
+    assert response.status_code == 502
+    runs = db_session.query(DslGenerationRun).all()
+    assert len(runs) == 1
+    assert runs[0].success is False
+    assert runs[0].error_type == "DslGenerationError"
+    assert runs[0].error_message == "AI 返回了无法解析的 DSL JSON。"
+    assert runs[0].generated_case_json is None
+
+
+def test_list_dsl_generation_runs_supports_status_limit_and_offset(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+
+    responses = iter(
+        [
+            """
+{
+  "name": "第一次成功",
+  "steps": [{"action": "goto", "value": "/first"}]
+}""",
+            "not-json",
+            """
+{
+  "name": "第二次成功",
+  "steps": [{"action": "goto", "value": "/second"}]
+}""",
+        ]
+    )
+    monkeypatch.setattr("app.ai.dsl_generator._call_llm", lambda **_: next(responses))
+
+    client.post("/api/v1/dsl/generate", json={"prompt": "first", "actor_user_id": 1})
+    client.post("/api/v1/dsl/generate", json={"prompt": "second", "actor_user_id": 1})
+    client.post("/api/v1/dsl/generate", json={"prompt": "third", "actor_user_id": 1})
+
+    response = client.get("/api/v1/dsl/generations", params={"limit": 2, "offset": 0})
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 2
+    assert payload[0]["prompt_preview"] == "third"
+    assert payload[1]["prompt_preview"] == "second"
+
+    failed_response = client.get("/api/v1/dsl/generations", params={"status": "failed"})
+    assert failed_response.status_code == 200
+    assert [item["prompt_preview"] for item in failed_response.json()] == ["second"]
+
+    success_response = client.get("/api/v1/dsl/generations", params={"status": "success", "offset": 1, "limit": 1})
+    assert success_response.status_code == 200
+    assert [item["prompt_preview"] for item in success_response.json()] == ["first"]

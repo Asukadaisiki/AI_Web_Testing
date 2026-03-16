@@ -513,6 +513,7 @@ test("输出契约 source 为空时显示占位符，选择后再随保存提交
 
 test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", async () => {
   vi.mocked(api.generateDslCase).mockResolvedValue({
+    generation_id: 11,
     case: {
       name: "AI 生成冒烟",
       description: "验证首页可访问",
@@ -570,6 +571,7 @@ test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", asyn
 
 test("自然语言生成会按上下文来源与策略带上请求 payload", async () => {
   vi.mocked(api.generateDslCase).mockResolvedValue({
+    generation_id: 12,
     case: {
       name: "AI 重写结果",
       description: "基于当前 DSL 重写",

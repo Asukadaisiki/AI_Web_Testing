@@ -7,6 +7,7 @@ export type VLMModelFamily = "qwen-vl" | "gemini" | "gpt-4o" | "qwen2.5-vl";
 export type GenerateDslMode = "draft" | "strict_steps_only";
 export type GenerateDslImportMode = "replace" | "steps_only" | "contracts_only";
 export type GenerateDslBaseUrlSource = "ai_output" | "request" | "current_case" | "none";
+export type DslGenerationRunStatus = "success" | "failed";
 export type CorrectionEventType =
   | "created"
   | "activated"
@@ -100,6 +101,7 @@ export interface GenerateDslMeta {
 }
 
 export interface GenerateDslResponse {
+  generation_id: number;
   case: DSLCasePayload;
   supported_actions: string[];
   warnings: string[];
@@ -154,6 +156,11 @@ export interface AIDslGenerationStats {
   last_model?: string | null;
   last_error_type?: string | null;
   last_error_message?: string | null;
+  last_24h_requests: number;
+  last_24h_success_count: number;
+  last_24h_failure_count: number;
+  last_24h_auto_repair_rate: number;
+  top_error_types: DslGenerationErrorTypeCount[];
 }
 
 export interface AISettingsOverview {
@@ -162,6 +169,28 @@ export interface AISettingsOverview {
   ai_dsl_strict_mode: boolean;
   ai_dsl_allow_auto_repair: boolean;
   generation_stats: AIDslGenerationStats;
+}
+
+export interface DslGenerationErrorTypeCount {
+  error_type: string;
+  count: number;
+}
+
+export interface StoredDslGenerationRunSummary {
+  id: number;
+  created_at: string;
+  success: boolean;
+  model_name?: string | null;
+  generation_mode: GenerateDslMode;
+  import_mode: GenerateDslImportMode;
+  error_type?: string | null;
+  error_message?: string | null;
+  repaired_invalid_actions: number;
+  removed_invalid_steps: number;
+  removed_invalid_contracts: number;
+  warnings_count: number;
+  normalization_notes_count: number;
+  prompt_preview: string;
 }
 
 export interface CaseMutationPayload extends DSLCasePayload {

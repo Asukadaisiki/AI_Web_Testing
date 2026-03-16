@@ -1,5 +1,6 @@
 """Models package."""
 
+from app.models.dsl_generation_run import DslGenerationRun
 from app.models.locator_correction import LocatorCorrection
 from app.models.locator_correction_event import LocatorCorrectionEvent
 from app.models.project import Project
@@ -13,6 +14,7 @@ from app.models.test_suite import TestSuite
 from app.models.user import User
 
 __all__ = [
+    "DslGenerationRun",
     "Project",
     "ProjectMember",
     "LocatorCorrection",

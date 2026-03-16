@@ -12,6 +12,7 @@ vi.mock("../services/api", async () => {
     ...actual,
     getAISettings: vi.fn(),
     getAISettingsOverview: vi.fn(),
+    getDslGenerationRuns: vi.fn(),
     updateAISettings: vi.fn(),
   };
 });
@@ -51,8 +52,36 @@ test("渲染 AI 配置并允许保存修改", async () => {
       last_model: "gpt-4o-mini",
       last_error_type: "DslGenerationError",
       last_error_message: "bad json",
+      last_24h_requests: 3,
+      last_24h_success_count: 2,
+      last_24h_failure_count: 1,
+      last_24h_auto_repair_rate: 0.5,
+      top_error_types: [
+        {
+          error_type: "DslGenerationError",
+          count: 1,
+        },
+      ],
     },
   });
+  vi.mocked(api.getDslGenerationRuns).mockResolvedValue([
+    {
+      id: 7,
+      created_at: "2026-03-16T10:00:00",
+      success: false,
+      model_name: "gpt-4o-mini",
+      generation_mode: "draft",
+      import_mode: "replace",
+      error_type: "DslGenerationError",
+      error_message: "bad json",
+      repaired_invalid_actions: 1,
+      removed_invalid_steps: 2,
+      removed_invalid_contracts: 0,
+      warnings_count: 1,
+      normalization_notes_count: 2,
+      prompt_preview: "打开 example.com 并验证 URL",
+    },
+  ]);
   vi.mocked(api.updateAISettings).mockResolvedValue({
     enable_ai_dsl_generate: true,
     ai_dsl_timeout_ms: 18000,
@@ -82,6 +111,12 @@ test("渲染 AI 配置并允许保存修改", async () => {
   expect(screen.getByText("未配置")).toBeInTheDocument();
   expect(screen.getByText("4")).toBeInTheDocument();
   expect(screen.getByText("3 / 1")).toBeInTheDocument();
+  expect(screen.getByText("2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("50%")).toBeInTheDocument();
+  expect(screen.getByText("DslGenerationError (1)")).toBeInTheDocument();
+  expect(screen.getByText("最近生成记录")).toBeInTheDocument();
+  expect(screen.getByText("打开 example.com 并验证 URL")).toBeInTheDocument();
+  expect(screen.getByText("DslGenerationError: bad json")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("switch", { name: "启用 DSL 生成" }));
   await userEvent.click(screen.getByRole("switch", { name: "严格生成模式" }));
@@ -138,8 +173,14 @@ test("加载失败时展示错误块", async () => {
       last_model: null,
       last_error_type: null,
       last_error_message: null,
+      last_24h_requests: 0,
+      last_24h_success_count: 0,
+      last_24h_failure_count: 0,
+      last_24h_auto_repair_rate: 0,
+      top_error_types: [],
     },
   });
+  vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);
 
   renderWithProviders(<AISettingsPage />, {
     route: "/settings/ai",

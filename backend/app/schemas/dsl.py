@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -96,6 +97,7 @@ class DSLCase(DSLModel):
 GenerateDslMode = Literal["draft", "strict_steps_only"]
 GenerateDslImportMode = Literal["replace", "steps_only", "contracts_only"]
 GenerateDslBaseUrlSource = Literal["ai_output", "request", "current_case", "none"]
+DslGenerationRunStatus = Literal["success", "failed"]
 
 
 class GenerateDslRequest(DSLModel):
@@ -130,8 +132,26 @@ class GenerateDslMeta(DSLModel):
 
 
 class GenerateDslResponse(DSLModel):
+    generation_id: int = Field(ge=1)
     case: DSLCase
     supported_actions: list[str]
     warnings: list[str] = Field(default_factory=list)
     normalization_notes: list[str] = Field(default_factory=list)
     generation_meta: GenerateDslMeta
+
+
+class StoredDslGenerationRunSummary(DSLModel):
+    id: int = Field(ge=1)
+    created_at: datetime
+    success: bool
+    model_name: str | None = Field(default=None, max_length=200)
+    generation_mode: GenerateDslMode
+    import_mode: GenerateDslImportMode
+    error_type: str | None = Field(default=None, max_length=200)
+    error_message: str | None = Field(default=None, max_length=2000)
+    repaired_invalid_actions: int = Field(ge=0)
+    removed_invalid_steps: int = Field(ge=0)
+    removed_invalid_contracts: int = Field(ge=0)
+    warnings_count: int = Field(ge=0)
+    normalization_notes_count: int = Field(ge=0)
+    prompt_preview: str = Field(min_length=1, max_length=200)

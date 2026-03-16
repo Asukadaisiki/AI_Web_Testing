@@ -11,13 +11,14 @@ import {
   Select,
   Space,
   Switch,
+  Table,
   Typography,
   message,
 } from "antd";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { getAISettings, getAISettingsOverview, updateAISettings } from "../services/api";
-import type { AISettingsUpdatePayload, VLMModelFamily } from "../types/api";
+import { getAISettings, getAISettingsOverview, getDslGenerationRuns, updateAISettings } from "../services/api";
+import type { AISettingsUpdatePayload, StoredDslGenerationRunSummary, VLMModelFamily } from "../types/api";
 
 type AISettingsFormValues = AISettingsUpdatePayload;
 
@@ -27,6 +28,16 @@ const VLM_FAMILY_OPTIONS: { label: string; value: VLMModelFamily }[] = [
   { label: "qwen-vl", value: "qwen-vl" },
   { label: "qwen2.5-vl", value: "qwen2.5-vl" },
 ];
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatTimestamp(value: string) {
+  return new Date(value).toLocaleString("zh-CN", {
+    hour12: false,
+  });
+}
 
 export function AISettingsPage() {
   const [form] = Form.useForm<AISettingsFormValues>();
@@ -40,6 +51,10 @@ export function AISettingsPage() {
   const overviewQuery = useQuery({
     queryKey: ["ai-settings-overview"],
     queryFn: getAISettingsOverview,
+  });
+  const generationRunsQuery = useQuery({
+    queryKey: ["dsl-generation-runs", "recent", 10],
+    queryFn: () => getDslGenerationRuns({ limit: 10 }),
   });
 
   useEffect(() => {
@@ -99,6 +114,49 @@ export function AISettingsPage() {
   }
 
   const overviewData = overviewQuery.data;
+  const generationColumns = [
+    {
+      title: "时间",
+      dataIndex: "created_at",
+      key: "created_at",
+      render: (value: string) => formatTimestamp(value),
+    },
+    {
+      title: "结果",
+      dataIndex: "success",
+      key: "success",
+      render: (value: boolean) => (value ? "成功" : "失败"),
+    },
+    {
+      title: "模型",
+      dataIndex: "model_name",
+      key: "model_name",
+      render: (value: string | null | undefined) => value ?? "未配置",
+    },
+    {
+      title: "模式",
+      key: "modes",
+      render: (_: unknown, record: StoredDslGenerationRunSummary) =>
+        `${record.generation_mode} / ${record.import_mode}`,
+    },
+    {
+      title: "自动修正",
+      key: "repairs",
+      render: (_: unknown, record: StoredDslGenerationRunSummary) =>
+        `action ${record.repaired_invalid_actions} / steps ${record.removed_invalid_steps} / contracts ${record.removed_invalid_contracts}`,
+    },
+    {
+      title: "错误",
+      key: "error",
+      render: (_: unknown, record: StoredDslGenerationRunSummary) =>
+        record.error_type ? `${record.error_type}: ${record.error_message ?? ""}` : "无",
+    },
+    {
+      title: "Prompt 摘要",
+      dataIndex: "prompt_preview",
+      key: "prompt_preview",
+    },
+  ];
 
   return (
     <>
@@ -124,40 +182,78 @@ export function AISettingsPage() {
         />
 
         <Card title="生成概览">
-          {overviewQuery.isLoading ? (
-            <Typography.Text type="secondary">正在加载生成概览...</Typography.Text>
-          ) : overviewQuery.isError ? (
-            <Typography.Text type="danger">{overviewQuery.error.message}</Typography.Text>
-          ) : overviewData ? (
-            <Descriptions column={2} size="small">
-              <Descriptions.Item label="当前生成状态">
-                {overviewData.ai_dsl_enabled ? "已启用" : "未启用"}
-              </Descriptions.Item>
-              <Descriptions.Item label="默认模型">
-                {overviewData.ai_dsl_model ?? "未配置"}
-              </Descriptions.Item>
-              <Descriptions.Item label="严格模式">
-                {overviewData.ai_dsl_strict_mode ? "开启" : "关闭"}
-              </Descriptions.Item>
-              <Descriptions.Item label="自动修正">
-                {overviewData.ai_dsl_allow_auto_repair ? "开启" : "关闭"}
-              </Descriptions.Item>
-              <Descriptions.Item label="总请求数">
-                {overviewData.generation_stats.total_requests}
-              </Descriptions.Item>
-              <Descriptions.Item label="成功 / 失败">
-                {overviewData.generation_stats.success_count} / {overviewData.generation_stats.failure_count}
-              </Descriptions.Item>
-              <Descriptions.Item label="最近使用模型">
-                {overviewData.generation_stats.last_model ?? "暂无"}
-              </Descriptions.Item>
-              <Descriptions.Item label="最近错误类型">
-                {overviewData.generation_stats.last_error_type ?? "暂无"}
-              </Descriptions.Item>
-            </Descriptions>
-          ) : (
-            <Typography.Text type="secondary">暂无生成概览数据。</Typography.Text>
-          )}
+          <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            {overviewQuery.isLoading ? (
+              <Typography.Text type="secondary">正在加载生成概览...</Typography.Text>
+            ) : overviewQuery.isError ? (
+              <Typography.Text type="danger">{overviewQuery.error.message}</Typography.Text>
+            ) : overviewData ? (
+              <Descriptions column={2} size="small">
+                <Descriptions.Item label="当前生成状态">
+                  {overviewData.ai_dsl_enabled ? "已启用" : "未启用"}
+                </Descriptions.Item>
+                <Descriptions.Item label="默认模型">
+                  {overviewData.ai_dsl_model ?? "未配置"}
+                </Descriptions.Item>
+                <Descriptions.Item label="严格模式">
+                  {overviewData.ai_dsl_strict_mode ? "开启" : "关闭"}
+                </Descriptions.Item>
+                <Descriptions.Item label="自动修正">
+                  {overviewData.ai_dsl_allow_auto_repair ? "开启" : "关闭"}
+                </Descriptions.Item>
+                <Descriptions.Item label="总请求数">
+                  {overviewData.generation_stats.total_requests}
+                </Descriptions.Item>
+                <Descriptions.Item label="成功 / 失败">
+                  {overviewData.generation_stats.success_count} / {overviewData.generation_stats.failure_count}
+                </Descriptions.Item>
+                <Descriptions.Item label="最近使用模型">
+                  {overviewData.generation_stats.last_model ?? "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="最近错误类型">
+                  {overviewData.generation_stats.last_error_type ?? "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="近 24h 请求数">
+                  {overviewData.generation_stats.last_24h_requests}
+                </Descriptions.Item>
+                <Descriptions.Item label="近 24h 成功 / 失败">
+                  {overviewData.generation_stats.last_24h_success_count} / {overviewData.generation_stats.last_24h_failure_count}
+                </Descriptions.Item>
+                <Descriptions.Item label="近 24h 自动修正率">
+                  {formatPercent(overviewData.generation_stats.last_24h_auto_repair_rate)}
+                </Descriptions.Item>
+                <Descriptions.Item label="近 24h 高频错误类型">
+                  {overviewData.generation_stats.top_error_types.length
+                    ? overviewData.generation_stats.top_error_types
+                        .map((item) => `${item.error_type} (${item.count})`)
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
+              </Descriptions>
+            ) : (
+              <Typography.Text type="secondary">暂无生成概览数据。</Typography.Text>
+            )}
+
+            <div>
+              <Typography.Title level={5} style={{ marginTop: 0 }}>
+                最近生成记录
+              </Typography.Title>
+              {generationRunsQuery.isLoading ? (
+                <Typography.Text type="secondary">正在加载最近生成记录...</Typography.Text>
+              ) : generationRunsQuery.isError ? (
+                <Typography.Text type="danger">{generationRunsQuery.error.message}</Typography.Text>
+              ) : (
+                <Table<StoredDslGenerationRunSummary>
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  columns={generationColumns}
+                  dataSource={generationRunsQuery.data ?? []}
+                  locale={{ emptyText: "暂无生成记录" }}
+                />
+              )}
+            </div>
+          </Space>
         </Card>
 
         <Form form={form} layout="vertical">
