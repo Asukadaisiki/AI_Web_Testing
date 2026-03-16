@@ -30,6 +30,27 @@
 
 ## 当前状态
 
+## BUG-018 | project-plan 与 README 仍将 AI 设置管理写成未落地，和代码现状不一致
+
+- 日期：2026-03-16
+- 状态：fixed
+- 来源：实现 / 文档核对
+- 描述：仓库实际上已经在 `backend/app/api/routes/settings.py` 与 `frontend/src/pages/AISettingsPage.tsx` 落地了 AI 设置管理，但 `docs/project-plan.md` 与根 `README.md` 仍把“环境配置页”列为未开始或未落地，容易误导后续排期判断。
+- 复现步骤：
+  1. 阅读 `docs/project-plan.md` 的“未开始或未落地”与“下一里程碑”
+  2. 对照 `backend/app/api/routes/settings.py`、`backend/app/services/settings.py` 与 `frontend/src/pages/AISettingsPage.tsx`
+  3. 可见文档仍把环境配置页视为未完成，但代码已具备 `/api/v1/settings/ai` 与 `/settings/ai`
+- 影响：会直接干扰后续优先级判断，导致团队继续把已经完成的 AI 设置入口当成待开发项，而不是把注意力放到 AI DSL 深化主线
+- 根因：2026-03-16 10:41 已完成 AI 设置页与后端配置接口，但文档状态没有同步刷新
+- 处理：
+  - 更新 `docs/project-plan.md`，将 AI 设置管理明确标记为已完成
+  - 更新 `README.md`，补充 AI 设置入口、overview 接口与新的 AI DSL 策略配置项
+  - 在本次执行日志中补登记“AI DSL 深化第一批”与文档同步结果
+- 验证：
+  - 人工核对 `docs/project-plan.md` 与 `README.md`，已不再把环境配置页列为未落地
+  - 结合 `frontend/src/pages/AISettingsPage.tsx` 与 `backend/app/api/routes/settings.py`，文档描述与代码现状一致
+- 关联记录：`docs/execution-log.md` 2026-03-16 11:35
+
 ## BUG-017 | corrections review 指出的死代码、格式漂移与事件语义说明缺失
 
 - 日期：2026-03-15

@@ -19,6 +19,8 @@ class AISettingsResponse(SettingsModel):
     ai_dsl_timeout_ms: int = Field(ge=1000)
     ai_dsl_base_url: str = Field(min_length=1, max_length=500)
     ai_dsl_model: str | None = Field(default=None, max_length=200)
+    ai_dsl_strict_mode: bool
+    ai_dsl_allow_auto_repair: bool
     has_ai_dsl_api_key: bool
     enable_ai_visual_locate: bool
     ai_visual_timeout_ms: int = Field(ge=1000)
@@ -36,6 +38,8 @@ class AISettingsUpdateRequest(SettingsModel):
     ai_dsl_timeout_ms: int = Field(ge=1000)
     ai_dsl_base_url: str = Field(min_length=1, max_length=500)
     ai_dsl_model: str | None = Field(default=None, max_length=200)
+    ai_dsl_strict_mode: bool = False
+    ai_dsl_allow_auto_repair: bool = True
     ai_dsl_api_key: str | None = Field(default=None, max_length=1000)
     clear_ai_dsl_api_key: bool = False
     enable_ai_visual_locate: bool
@@ -56,3 +60,20 @@ class AISettingsUpdateRequest(SettingsModel):
         if self.clear_vlm_api_key and self.vlm_api_key:
             raise ValueError("vlm_api_key 不能和 clear_vlm_api_key 同时提交。")
         return self
+
+
+class AIDslGenerationStats(SettingsModel):
+    total_requests: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    last_model: str | None = Field(default=None, max_length=200)
+    last_error_type: str | None = Field(default=None, max_length=200)
+    last_error_message: str | None = Field(default=None, max_length=2000)
+
+
+class AISettingsOverviewResponse(SettingsModel):
+    ai_dsl_enabled: bool
+    ai_dsl_model: str | None = Field(default=None, max_length=200)
+    ai_dsl_strict_mode: bool
+    ai_dsl_allow_auto_repair: bool
+    generation_stats: AIDslGenerationStats

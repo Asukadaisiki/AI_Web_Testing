@@ -93,10 +93,20 @@ class DSLCase(DSLModel):
     steps: list[DSLStep] = Field(min_length=1)
 
 
+GenerateDslMode = Literal["draft", "strict_steps_only"]
+GenerateDslImportMode = Literal["replace", "steps_only", "contracts_only"]
+GenerateDslBaseUrlSource = Literal["ai_output", "request", "current_case", "none"]
+
+
 class GenerateDslRequest(DSLModel):
     prompt: str = Field(min_length=1, max_length=4000)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     actor_user_id: int = Field(ge=1)
+    generation_mode: GenerateDslMode = "draft"
+    import_mode: GenerateDslImportMode = "replace"
+    current_case: DSLCase | None = None
+    current_steps: list[DSLStep] | None = None
+    preserve_contracts: bool = False
 
 
 class DSLValidationResult(DSLModel):
@@ -105,7 +115,23 @@ class DSLValidationResult(DSLModel):
     supported_actions: list[str]
 
 
+class GenerateDslMeta(DSLModel):
+    model: str | None = Field(default=None, max_length=200)
+    generation_mode: GenerateDslMode
+    import_mode: GenerateDslImportMode
+    base_url_source: GenerateDslBaseUrlSource
+    base_url_backfilled: bool = False
+    repaired_invalid_actions: int = Field(default=0, ge=0)
+    removed_invalid_steps: int = Field(default=0, ge=0)
+    removed_invalid_contracts: int = Field(default=0, ge=0)
+    preserve_contracts_applied: bool = False
+    used_current_case_context: bool = False
+    used_current_steps_context: bool = False
+
+
 class GenerateDslResponse(DSLModel):
     case: DSLCase
     supported_actions: list[str]
     warnings: list[str] = Field(default_factory=list)
+    normalization_notes: list[str] = Field(default_factory=list)
+    generation_meta: GenerateDslMeta

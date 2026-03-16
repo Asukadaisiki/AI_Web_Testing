@@ -4,6 +4,9 @@ export type OverviewWindowDays = 7 | 14 | 30;
 export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
 export type CorrectionType = "css" | "xpath" | "test_id";
 export type VLMModelFamily = "qwen-vl" | "gemini" | "gpt-4o" | "qwen2.5-vl";
+export type GenerateDslMode = "draft" | "strict_steps_only";
+export type GenerateDslImportMode = "replace" | "steps_only" | "contracts_only";
+export type GenerateDslBaseUrlSource = "ai_output" | "request" | "current_case" | "none";
 export type CorrectionEventType =
   | "created"
   | "activated"
@@ -75,12 +78,33 @@ export interface GenerateDslRequest {
   prompt: string;
   base_url?: string | null;
   actor_user_id: number;
+  generation_mode?: GenerateDslMode;
+  import_mode?: GenerateDslImportMode;
+  current_case?: DSLCasePayload | null;
+  current_steps?: DSLStep[] | null;
+  preserve_contracts?: boolean;
+}
+
+export interface GenerateDslMeta {
+  model?: string | null;
+  generation_mode: GenerateDslMode;
+  import_mode: GenerateDslImportMode;
+  base_url_source: GenerateDslBaseUrlSource;
+  base_url_backfilled: boolean;
+  repaired_invalid_actions: number;
+  removed_invalid_steps: number;
+  removed_invalid_contracts: number;
+  preserve_contracts_applied: boolean;
+  used_current_case_context: boolean;
+  used_current_steps_context: boolean;
 }
 
 export interface GenerateDslResponse {
   case: DSLCasePayload;
   supported_actions: string[];
   warnings: string[];
+  normalization_notes: string[];
+  generation_meta: GenerateDslMeta;
 }
 
 export interface AISettings {
@@ -88,6 +112,8 @@ export interface AISettings {
   ai_dsl_timeout_ms: number;
   ai_dsl_base_url: string;
   ai_dsl_model?: string | null;
+  ai_dsl_strict_mode: boolean;
+  ai_dsl_allow_auto_repair: boolean;
   has_ai_dsl_api_key: boolean;
   enable_ai_visual_locate: boolean;
   ai_visual_timeout_ms: number;
@@ -105,6 +131,8 @@ export interface AISettingsUpdatePayload {
   ai_dsl_timeout_ms: number;
   ai_dsl_base_url: string;
   ai_dsl_model?: string | null;
+  ai_dsl_strict_mode: boolean;
+  ai_dsl_allow_auto_repair: boolean;
   ai_dsl_api_key?: string | null;
   clear_ai_dsl_api_key: boolean;
   enable_ai_visual_locate: boolean;
@@ -117,6 +145,23 @@ export interface AISettingsUpdatePayload {
   vlm_model_family: VLMModelFamily;
   vlm_api_key?: string | null;
   clear_vlm_api_key: boolean;
+}
+
+export interface AIDslGenerationStats {
+  total_requests: number;
+  success_count: number;
+  failure_count: number;
+  last_model?: string | null;
+  last_error_type?: string | null;
+  last_error_message?: string | null;
+}
+
+export interface AISettingsOverview {
+  ai_dsl_enabled: boolean;
+  ai_dsl_model?: string | null;
+  ai_dsl_strict_mode: boolean;
+  ai_dsl_allow_auto_repair: boolean;
+  generation_stats: AIDslGenerationStats;
 }
 
 export interface CaseMutationPayload extends DSLCasePayload {

@@ -24,6 +24,26 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-16 11:35
+
+- 任务：实现 AI 生成 DSL 深化第一批，补齐生成模式、草案修正、最小模型治理观测与前端工作台联动
+- 背景：仓库已具备 `POST /api/v1/dsl/generate`、工作台草案预览与 AI 设置页，但生成能力仍停留在“最小闭环”，缺少上下文生成、自动修正说明、生成 meta 与可观察性；同时 `project-plan` 仍把环境配置页写成未落地
+- 执行动作：
+  - 扩展后端 `GenerateDslRequest / GenerateDslResponse`：新增 `generation_mode`、`import_mode`、`current_case`、`current_steps`、`preserve_contracts`、`normalization_notes` 与 `generation_meta`
+  - 重写 `backend/app/ai/dsl_generator.py`：补 prompt 上下文注入、非法 action 映射、非法 steps / contracts 过滤、Base URL 回填、strict_steps_only 名称/描述保留与契约沿用逻辑
+  - 在 `backend/app/services/dsl.py` 增加进程内生成统计，并通过 `GET /api/v1/settings/ai/overview` 暴露最近模型、成功/失败计数与最后错误类型
+  - 扩展 AI 设置：新增 `AI_DSL_STRICT_MODE`、`AI_DSL_ALLOW_AUTO_REPAIR` 配置项，前端 `AISettingsPage` 补策略开关与生成概览卡片
+  - 增强 `CaseWorkbenchPage`：新增生成模式/上下文来源/预期导入方式/保留契约控制项，展示当前 AI 生成配置、自动修正项、warning、不可导入错误，并补 `仅合并契约` 导入动作
+  - 更新 `.env.example`、`README.md`、`docs/project-plan.md`，同步记录“AI 设置页已完成、当前主线为 AI DSL 深化”
+- 结果：仓库现在具备“带上下文生成 -> 后端可恢复修正 -> 前端分层展示 -> 生成观测概览”的第一批强化闭环；AI DSL 已不再只是一次性草案接口
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py`，结果为 `12 passed`
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果为 `19 passed`
+  - 执行 `cd backend && uv run pytest`，结果为 `119 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/ai/dsl_generator.py`、`backend/app/services/dsl.py`、`backend/app/schemas/dsl.py`、`backend/app/schemas/settings.py`、`backend/app/services/settings.py`、`backend/app/api/routes/settings.py`、`backend/app/core/config.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/unit/test_ai_settings_api.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`frontend/src/pages/AISettingsPage.tsx`、`frontend/src/pages/AISettingsPage.test.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`、`frontend/src/types/api.ts`、`frontend/vite.config.ts`、`backend/.env.example`、`README.md`、`docs/project-plan.md`
+- 后续：继续围绕 AI DSL 深化推进 prompt 质量、更多草案修正策略与轻量生成历史/观测，而不是回退去做环境配置页或默认开启 AI 视觉定位
+
 ## 2026-03-16 10:29
 
 - 任务：实现 AI 生成 DSL 最小闭环，打通后端生成接口、前端工作台导入草案与回归验证

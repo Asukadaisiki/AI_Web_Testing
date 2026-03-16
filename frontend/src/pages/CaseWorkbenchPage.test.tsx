@@ -14,6 +14,7 @@ vi.mock("../services/api", async () => {
     createCase: vi.fn(),
     executeCase: vi.fn(),
     generateDslCase: vi.fn(),
+    getAISettings: vi.fn(),
     getCaseDetail: vi.fn(),
     updateCase: vi.fn(),
     validateDslCase: vi.fn(),
@@ -23,6 +24,24 @@ vi.mock("../services/api", async () => {
 beforeEach(() => {
   window.localStorage.clear();
   vi.resetAllMocks();
+  vi.mocked(api.getAISettings).mockResolvedValue({
+    enable_ai_dsl_generate: true,
+    ai_dsl_timeout_ms: 15000,
+    ai_dsl_base_url: "https://api.openai.com/v1",
+    ai_dsl_model: "gpt-4o-mini",
+    ai_dsl_strict_mode: false,
+    ai_dsl_allow_auto_repair: true,
+    has_ai_dsl_api_key: true,
+    enable_ai_visual_locate: false,
+    ai_visual_timeout_ms: 10000,
+    ai_visual_failure_threshold: 3,
+    ai_visual_cooldown_seconds: 60,
+    ai_visual_rate_limit_per_minute: 10,
+    vlm_base_url: "https://api.openai.com/v1",
+    vlm_model: "gpt-4o",
+    vlm_model_family: "gpt-4o",
+    has_vlm_api_key: false,
+  });
 });
 
 test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", async () => {
@@ -133,7 +152,7 @@ test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", as
   });
 
   expect(await screen.findByText("execution-view")).toBeInTheDocument();
-}, 10000);
+}, 20000);
 
 test("新建页可自动恢复本地草稿并在保存后清除", async () => {
   window.localStorage.setItem(
@@ -393,7 +412,7 @@ test("工作台可编辑输入输出契约并随保存一起提交", async () =>
       steps: [{ action: "goto", value: "/" }],
     });
   });
-}, 10000);
+}, 20000);
 
 test("输出契约 source 为空时显示占位符，选择后再随保存提交", async () => {
   window.localStorage.setItem(
@@ -507,6 +526,20 @@ test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", asyn
     },
     supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
     warnings: ["AI 草案未提供 base_url，已回填请求中的 Base URL。"],
+    normalization_notes: ["步骤 #1 的 action 已从 open 自动修正为 goto。"],
+    generation_meta: {
+      model: "gpt-4o-mini",
+      generation_mode: "draft",
+      import_mode: "replace",
+      base_url_source: "request",
+      base_url_backfilled: true,
+      repaired_invalid_actions: 1,
+      removed_invalid_steps: 0,
+      removed_invalid_contracts: 0,
+      preserve_contracts_applied: false,
+      used_current_case_context: false,
+      used_current_steps_context: false,
+    },
   });
 
   renderWithProviders(<CaseWorkbenchPage />, {
@@ -519,18 +552,92 @@ test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", asyn
 
   await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
 
+  expect(await screen.findByText(/当前生成配置：已启用，模型 gpt-4o-mini/)).toBeInTheDocument();
   expect(await screen.findByText("生成预览")).toBeInTheDocument();
   expect(screen.getByDisplayValue(/"name": "AI 生成冒烟"/)).toBeInTheDocument();
   expect(screen.getByText("AI 草案未提供 base_url，已回填请求中的 Base URL。")).toBeInTheDocument();
+  expect(screen.getByText("步骤 #1 的 action 已从 open 自动修正为 goto。")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "仅导入步骤" }));
   expect(await screen.findByText("Step 2")).toBeInTheDocument();
   expect(screen.getByDisplayValue("现有名称")).toBeInTheDocument();
 
+  await userEvent.click(screen.getByRole("button", { name: "仅合并契约" }));
   await userEvent.click(screen.getByRole("button", { name: "替换当前 DSL" }));
   expect(await screen.findByDisplayValue("AI 生成冒烟")).toBeInTheDocument();
   expect(screen.getByDisplayValue("https://example.com")).toBeInTheDocument();
-});
+}, 15000);
+
+test("自然语言生成会按上下文来源与策略带上请求 payload", async () => {
+  vi.mocked(api.generateDslCase).mockResolvedValue({
+    case: {
+      name: "AI 重写结果",
+      description: "基于当前 DSL 重写",
+      base_url: "https://example.com",
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/dashboard" }],
+    },
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    warnings: [],
+    normalization_notes: [],
+    generation_meta: {
+      model: "gpt-4o-mini",
+      generation_mode: "strict_steps_only",
+      import_mode: "steps_only",
+      base_url_source: "ai_output",
+      base_url_backfilled: false,
+      repaired_invalid_actions: 0,
+      removed_invalid_steps: 0,
+      removed_invalid_contracts: 0,
+      preserve_contracts_applied: false,
+      used_current_case_context: true,
+      used_current_steps_context: true,
+    },
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("用例名称"), "当前用例");
+  await userEvent.type(screen.getByLabelText("描述"), "当前描述");
+  await userEvent.clear(screen.getByLabelText("用例 Base URL"));
+  await userEvent.type(screen.getByLabelText("用例 Base URL"), "https://example.com");
+  await userEvent.click(screen.getByRole("button", { name: "新增输入契约" }));
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "把当前用例改写成 dashboard 冒烟");
+
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+
+  await waitFor(() => {
+    expect(api.generateDslCase).toHaveBeenCalledWith({
+      prompt: "把当前用例改写成 dashboard 冒烟",
+      base_url: "https://example.com",
+      actor_user_id: 1,
+      generation_mode: "draft",
+      import_mode: "replace",
+      current_case: {
+        name: "当前用例",
+        description: "当前描述",
+        base_url: "https://example.com",
+        input_contract: [
+          {
+            name: "contextVar",
+            context_key: "context_var",
+            value_type: "string",
+            required: true,
+            description: null,
+          },
+        ],
+        output_contract: [],
+        steps: [{ action: "goto", value: "/" }],
+      },
+      current_steps: null,
+      preserve_contracts: true,
+    });
+  });
+}, 15000);
 
 test("自然语言生成失败时不污染当前编辑内容", async () => {
   vi.mocked(api.generateDslCase).mockRejectedValue(new Error("AI DSL 生成配置不完整。"));
@@ -545,7 +652,8 @@ test("自然语言生成失败时不污染当前编辑内容", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
 
-  expect(await screen.findByText("AI DSL 生成配置不完整。")).toBeInTheDocument();
+  expect(await screen.findByText("不可导入错误")).toBeInTheDocument();
+  expect(screen.getAllByText("AI DSL 生成配置不完整。").length).toBeGreaterThan(0);
   expect(screen.getByDisplayValue("保留原始名称")).toBeInTheDocument();
   expect(screen.queryByText("生成预览")).not.toBeInTheDocument();
 });

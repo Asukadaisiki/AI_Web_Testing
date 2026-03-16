@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Descriptions,
   Form,
   Input,
   InputNumber,
@@ -15,7 +16,7 @@ import {
 } from "antd";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { getAISettings, updateAISettings } from "../services/api";
+import { getAISettings, getAISettingsOverview, updateAISettings } from "../services/api";
 import type { AISettingsUpdatePayload, VLMModelFamily } from "../types/api";
 
 type AISettingsFormValues = AISettingsUpdatePayload;
@@ -36,6 +37,10 @@ export function AISettingsPage() {
     queryKey: ["ai-settings"],
     queryFn: getAISettings,
   });
+  const overviewQuery = useQuery({
+    queryKey: ["ai-settings-overview"],
+    queryFn: getAISettingsOverview,
+  });
 
   useEffect(() => {
     if (!settingsQuery.data) {
@@ -47,6 +52,8 @@ export function AISettingsPage() {
       ai_dsl_timeout_ms: settingsQuery.data.ai_dsl_timeout_ms,
       ai_dsl_base_url: settingsQuery.data.ai_dsl_base_url,
       ai_dsl_model: settingsQuery.data.ai_dsl_model ?? "",
+      ai_dsl_strict_mode: settingsQuery.data.ai_dsl_strict_mode,
+      ai_dsl_allow_auto_repair: settingsQuery.data.ai_dsl_allow_auto_repair,
       ai_dsl_api_key: "",
       clear_ai_dsl_api_key: false,
       enable_ai_visual_locate: settingsQuery.data.enable_ai_visual_locate,
@@ -75,6 +82,7 @@ export function AISettingsPage() {
     },
     onSuccess: (result) => {
       queryClient.setQueryData(["ai-settings"], result);
+      void queryClient.invalidateQueries({ queryKey: ["ai-settings-overview"] });
       void messageApi.success("AI 配置已保存，并已应用到当前后端进程。");
     },
     onError: (error: Error) => {
@@ -89,6 +97,8 @@ export function AISettingsPage() {
   if (settingsQuery.isError) {
     return <ErrorBlock message={settingsQuery.error.message} />;
   }
+
+  const overviewData = overviewQuery.data;
 
   return (
     <>
@@ -112,6 +122,43 @@ export function AISettingsPage() {
           message="密钥安全说明"
           description="页面不会回显当前已保存的 API Key；如需修改，请输入新值，留空则保持原值，勾选清空后会移除现有密钥。"
         />
+
+        <Card title="生成概览">
+          {overviewQuery.isLoading ? (
+            <Typography.Text type="secondary">正在加载生成概览...</Typography.Text>
+          ) : overviewQuery.isError ? (
+            <Typography.Text type="danger">{overviewQuery.error.message}</Typography.Text>
+          ) : overviewData ? (
+            <Descriptions column={2} size="small">
+              <Descriptions.Item label="当前生成状态">
+                {overviewData.ai_dsl_enabled ? "已启用" : "未启用"}
+              </Descriptions.Item>
+              <Descriptions.Item label="默认模型">
+                {overviewData.ai_dsl_model ?? "未配置"}
+              </Descriptions.Item>
+              <Descriptions.Item label="严格模式">
+                {overviewData.ai_dsl_strict_mode ? "开启" : "关闭"}
+              </Descriptions.Item>
+              <Descriptions.Item label="自动修正">
+                {overviewData.ai_dsl_allow_auto_repair ? "开启" : "关闭"}
+              </Descriptions.Item>
+              <Descriptions.Item label="总请求数">
+                {overviewData.generation_stats.total_requests}
+              </Descriptions.Item>
+              <Descriptions.Item label="成功 / 失败">
+                {overviewData.generation_stats.success_count} / {overviewData.generation_stats.failure_count}
+              </Descriptions.Item>
+              <Descriptions.Item label="最近使用模型">
+                {overviewData.generation_stats.last_model ?? "暂无"}
+              </Descriptions.Item>
+              <Descriptions.Item label="最近错误类型">
+                {overviewData.generation_stats.last_error_type ?? "暂无"}
+              </Descriptions.Item>
+            </Descriptions>
+          ) : (
+            <Typography.Text type="secondary">暂无生成概览数据。</Typography.Text>
+          )}
+        </Card>
 
         <Form form={form} layout="vertical">
           <Card title="AI DSL 生成">
@@ -140,6 +187,14 @@ export function AISettingsPage() {
                 rules={[{ required: true, message: "请输入 AI DSL 超时" }]}
               >
                 <InputNumber min={1000} style={{ width: "100%" }} />
+              </Form.Item>
+            </div>
+            <div className="workbench-grid">
+              <Form.Item label="严格生成模式" name="ai_dsl_strict_mode" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item label="允许自动修正" name="ai_dsl_allow_auto_repair" valuePropName="checked">
+                <Switch />
               </Form.Item>
             </div>
             <div className="structured-step-grid">

@@ -20,12 +20,14 @@ AI 增强的 Web UI 自动化测试平台。
 - 混合定位闭环第一阶段：`locator_corrections` 修正记录、`needs_intervention` 执行状态、统一降级定位入口、执行详情页人工干预面板
 - 修正记录管理：前端已提供 `/corrections` 页面，可按目标描述、页面 URL 和状态筛选修正记录，并支持 overview 卡片、命中趋势、批量启用/停用与事件时间线
 - AI 生成 DSL 最小闭环：后端已提供 `POST /api/v1/dsl/generate`，前端工作台可输入自然语言生成草案，并选择“替换当前 DSL”或“仅导入步骤”
+- AI 生成 DSL 深化：支持 `generation_mode / import_mode / current_case / current_steps / preserve_contracts`，后端会输出 `normalization_notes` 与 `generation_meta`，前端工作台可展示自动修正项、风险 warning 与三种导入方式
+- AI 设置管理：前端已提供 `/settings/ai` 页面，支持管理 AI DSL / VLM 运行时配置；`GET /api/v1/settings/ai/overview` 可查看 DSL 生成最小观测指标
 - AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
-- AI 生成 DSL 深化（prompt 调优、模型管理、更多草案修正策略）
+- AI 生成 DSL 进一步调优（prompt 质量、草案修正策略继续细化）
 - AI 视觉定位增强（默认关闭，当前仅保留可接入实现与运行保护）
-- 更完整的环境配置与登录体系
+- 登录与更完整的平台认证体系
 
 ## Suite Context 使用路径
 
@@ -75,6 +77,8 @@ uv run pytest tests/integration -m browser_integration
 - `AI_DSL_API_KEY=`
 - `AI_DSL_BASE_URL=https://api.openai.com/v1`
 - `AI_DSL_MODEL=`
+- `AI_DSL_STRICT_MODE=false`
+- `AI_DSL_ALLOW_AUTO_REPAIR=true`
 - `ENABLE_AI_VISUAL_LOCATE=false`
 - `AI_VISUAL_TIMEOUT_MS=10000`
 - `AI_VISUAL_FAILURE_THRESHOLD=3`
@@ -82,6 +86,11 @@ uv run pytest tests/integration -m browser_integration
 - `AI_VISUAL_RATE_LIMIT_PER_MINUTE=10`
 
 当 VLM 请求连续失败、超时或超过速率预算时，系统会直接跳过 Tier 2，继续走现有降级链路或进入人工干预。
+
+AI DSL 生成现在还会输出最小治理信息：
+- `warnings`：风险提示或需人工注意的问题
+- `normalization_notes`：自动修正动作
+- `generation_meta`：使用模型、Base URL 来源、删除非法 steps / contracts 数量等
 
 ## 快速开始
 

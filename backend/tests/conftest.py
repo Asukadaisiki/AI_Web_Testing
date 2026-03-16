@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.db.session import get_engine, get_session_factory
 from app.main import create_app
 from app.models import Project, ProjectMember, User
+from app.services.dsl import reset_dsl_generation_runtime_stats
 
 
 @pytest.fixture(autouse=True)
@@ -26,13 +27,17 @@ def reset_cached_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AI_DSL_API_KEY", raising=False)
     monkeypatch.delenv("AI_DSL_BASE_URL", raising=False)
     monkeypatch.delenv("AI_DSL_MODEL", raising=False)
+    monkeypatch.delenv("AI_DSL_STRICT_MODE", raising=False)
+    monkeypatch.delenv("AI_DSL_ALLOW_AUTO_REPAIR", raising=False)
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    reset_dsl_generation_runtime_stats()
     yield
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    reset_dsl_generation_runtime_stats()
 
 
 @pytest.fixture

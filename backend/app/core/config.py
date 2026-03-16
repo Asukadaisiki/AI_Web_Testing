@@ -59,6 +59,8 @@ class Settings:
     ai_dsl_api_key: str | None = None
     ai_dsl_base_url: str = "https://api.openai.com/v1"
     ai_dsl_model: str | None = None
+    ai_dsl_strict_mode: bool = False
+    ai_dsl_allow_auto_repair: bool = True
     enable_ai_visual_locate: bool = False
     ai_visual_timeout_ms: int = 10000
     ai_visual_failure_threshold: int = 3
@@ -84,6 +86,8 @@ def get_settings() -> Settings:
         ai_dsl_api_key=os.getenv("AI_DSL_API_KEY") or None,
         ai_dsl_base_url=os.getenv("AI_DSL_BASE_URL", "https://api.openai.com/v1"),
         ai_dsl_model=os.getenv("AI_DSL_MODEL") or None,
+        ai_dsl_strict_mode=_get_bool(os.getenv("AI_DSL_STRICT_MODE"), default=False),
+        ai_dsl_allow_auto_repair=_get_bool(os.getenv("AI_DSL_ALLOW_AUTO_REPAIR"), default=True),
         enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
         ai_visual_timeout_ms=max(1000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=10000)),
         ai_visual_failure_threshold=max(1, _get_int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD"), default=3)),

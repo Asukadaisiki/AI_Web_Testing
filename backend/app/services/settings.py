@@ -5,7 +5,13 @@ from __future__ import annotations
 import os
 
 import app.core.config as config_module
-from app.schemas.settings import AISettingsResponse, AISettingsUpdateRequest
+from app.schemas.settings import (
+    AIDslGenerationStats,
+    AISettingsOverviewResponse,
+    AISettingsResponse,
+    AISettingsUpdateRequest,
+)
+from app.services.dsl import get_dsl_generation_runtime_stats
 
 
 def get_ai_settings() -> AISettingsResponse:
@@ -15,6 +21,8 @@ def get_ai_settings() -> AISettingsResponse:
         ai_dsl_timeout_ms=settings.ai_dsl_timeout_ms,
         ai_dsl_base_url=settings.ai_dsl_base_url,
         ai_dsl_model=settings.ai_dsl_model,
+        ai_dsl_strict_mode=settings.ai_dsl_strict_mode,
+        ai_dsl_allow_auto_repair=settings.ai_dsl_allow_auto_repair,
         has_ai_dsl_api_key=bool(settings.ai_dsl_api_key),
         enable_ai_visual_locate=settings.enable_ai_visual_locate,
         ai_visual_timeout_ms=settings.ai_visual_timeout_ms,
@@ -34,6 +42,8 @@ def update_ai_settings(payload: AISettingsUpdateRequest) -> AISettingsResponse:
         "AI_DSL_TIMEOUT_MS": str(payload.ai_dsl_timeout_ms),
         "AI_DSL_BASE_URL": payload.ai_dsl_base_url,
         "AI_DSL_MODEL": payload.ai_dsl_model or "",
+        "AI_DSL_STRICT_MODE": _format_bool(payload.ai_dsl_strict_mode),
+        "AI_DSL_ALLOW_AUTO_REPAIR": _format_bool(payload.ai_dsl_allow_auto_repair),
         "ENABLE_AI_VISUAL_LOCATE": _format_bool(payload.enable_ai_visual_locate),
         "AI_VISUAL_TIMEOUT_MS": str(payload.ai_visual_timeout_ms),
         "AI_VISUAL_FAILURE_THRESHOLD": str(payload.ai_visual_failure_threshold),
@@ -59,6 +69,25 @@ def update_ai_settings(payload: AISettingsUpdateRequest) -> AISettingsResponse:
         os.environ[key] = value
     config_module.get_settings.cache_clear()
     return get_ai_settings()
+
+
+def get_ai_settings_overview() -> AISettingsOverviewResponse:
+    settings = config_module.get_settings()
+    runtime_stats = get_dsl_generation_runtime_stats()
+    return AISettingsOverviewResponse(
+        ai_dsl_enabled=settings.enable_ai_dsl_generate,
+        ai_dsl_model=settings.ai_dsl_model,
+        ai_dsl_strict_mode=settings.ai_dsl_strict_mode,
+        ai_dsl_allow_auto_repair=settings.ai_dsl_allow_auto_repair,
+        generation_stats=AIDslGenerationStats(
+            total_requests=runtime_stats.total_requests,
+            success_count=runtime_stats.success_count,
+            failure_count=runtime_stats.failure_count,
+            last_model=runtime_stats.last_model,
+            last_error_type=runtime_stats.last_error_type,
+            last_error_message=runtime_stats.last_error_message,
+        ),
+    )
 
 
 def _persist_env_updates(updates: dict[str, str]) -> None:

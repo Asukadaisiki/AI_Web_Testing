@@ -1,4 +1,5 @@
 import type {
+  AISettingsOverview,
   AISettings,
   AISettingsUpdatePayload,
   BatchUpdateCorrectionStatePayload,
@@ -137,6 +138,10 @@ export function generateDslCase(payload: GenerateDslRequest) {
 
 export function getAISettings() {
   return request<AISettings>("/api/v1/settings/ai");
+}
+
+export function getAISettingsOverview() {
+  return request<AISettingsOverview>("/api/v1/settings/ai/overview");
 }
 
 export function updateAISettings(payload: AISettingsUpdatePayload) {

@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { generateDslCase, getAISettings, getCorrectionEvents, getCorrections, getExecutions, updateAISettings } from "./api";
+import {
+  generateDslCase,
+  getAISettings,
+  getAISettingsOverview,
+  getCorrectionEvents,
+  getCorrections,
+  getExecutions,
+  updateAISettings,
+} from "./api";
 
 const fetchMock = vi.fn();
 
@@ -60,6 +68,18 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
     prompt: "打开 example.com 并验证 URL",
     base_url: "https://example.com",
     actor_user_id: 1,
+    generation_mode: "strict_steps_only",
+    import_mode: "steps_only",
+    current_case: {
+      name: "当前用例",
+      description: "当前描述",
+      base_url: "https://example.com",
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/" }],
+    },
+    current_steps: [{ action: "goto", value: "/" }],
+    preserve_contracts: true,
   });
 
   expect(fetchMock).toHaveBeenCalledWith(
@@ -70,6 +90,18 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
         prompt: "打开 example.com 并验证 URL",
         base_url: "https://example.com",
         actor_user_id: 1,
+        generation_mode: "strict_steps_only",
+        import_mode: "steps_only",
+        current_case: {
+          name: "当前用例",
+          description: "当前描述",
+          base_url: "https://example.com",
+          input_contract: [],
+          output_contract: [],
+          steps: [{ action: "goto", value: "/" }],
+        },
+        current_steps: [{ action: "goto", value: "/" }],
+        preserve_contracts: true,
       }),
     }),
   );
@@ -81,12 +113,20 @@ test("getAISettings requests the runtime AI settings endpoint", async () => {
   expect(fetchMock).toHaveBeenCalledWith("/api/v1/settings/ai", expect.any(Object));
 });
 
+test("getAISettingsOverview requests the AI settings overview endpoint", async () => {
+  await getAISettingsOverview();
+
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/settings/ai/overview", expect.any(Object));
+});
+
 test("updateAISettings sends the runtime AI settings payload", async () => {
   await updateAISettings({
     enable_ai_dsl_generate: true,
     ai_dsl_timeout_ms: 15000,
     ai_dsl_base_url: "https://api.openai.com/v1",
     ai_dsl_model: "gpt-4o-mini",
+    ai_dsl_strict_mode: true,
+    ai_dsl_allow_auto_repair: false,
     ai_dsl_api_key: "new-dsl-secret",
     clear_ai_dsl_api_key: false,
     enable_ai_visual_locate: true,
@@ -110,6 +150,8 @@ test("updateAISettings sends the runtime AI settings payload", async () => {
         ai_dsl_timeout_ms: 15000,
         ai_dsl_base_url: "https://api.openai.com/v1",
         ai_dsl_model: "gpt-4o-mini",
+        ai_dsl_strict_mode: true,
+        ai_dsl_allow_auto_repair: false,
         ai_dsl_api_key: "new-dsl-secret",
         clear_ai_dsl_api_key: false,
         enable_ai_visual_locate: true,

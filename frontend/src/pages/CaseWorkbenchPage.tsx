@@ -20,11 +20,13 @@ import {
   createCase,
   executeCase,
   generateDslCase,
+  getAISettings,
   getCaseDetail,
   updateCase,
   validateDslCase,
 } from "../services/api";
 import type {
+  AISettings,
   CaseMutationPayload,
   DSLCasePayload,
   DSLCaseInputContract,
@@ -33,6 +35,8 @@ import type {
   DSLValidationResult,
   DSLVariableSource,
   DSLVariableType,
+  GenerateDslImportMode,
+  GenerateDslMode,
   GenerateDslResponse,
   StoredCaseDetail,
 } from "../types/api";
@@ -113,6 +117,23 @@ const STEP_TEMPLATES: StepTemplate[] = [
       { action: "assert_url_contains", value: "example.com" },
     ],
   },
+];
+
+const GENERATION_MODE_OPTIONS: { label: string; value: GenerateDslMode }[] = [
+  { label: "完整草案", value: "draft" },
+  { label: "仅重写步骤", value: "strict_steps_only" },
+];
+
+const GENERATION_CONTEXT_OPTIONS = [
+  { label: "基于空白需求", value: "blank" },
+  { label: "基于当前 DSL 重写", value: "current_case" },
+  { label: "基于当前步骤补全", value: "current_steps" },
+];
+
+const GENERATION_IMPORT_MODE_OPTIONS: { label: string; value: GenerateDslImportMode }[] = [
+  { label: "整单替换", value: "replace" },
+  { label: "仅导入步骤", value: "steps_only" },
+  { label: "仅合并契约", value: "contracts_only" },
 ];
 
 function createDefaultStep(action: StepAction = "goto"): DSLStep {
@@ -283,6 +304,14 @@ function formatGeneratedCase(caseDraft: DSLCasePayload) {
   return JSON.stringify(caseDraft, null, 2);
 }
 
+function formatDslGenerationStatus(settings: AISettings) {
+  const model = settings.ai_dsl_model?.trim() || "未配置";
+  const enabled = settings.enable_ai_dsl_generate ? "已启用" : "未启用";
+  const strictMode = settings.ai_dsl_strict_mode ? "严格模式" : "宽松模式";
+  const autoRepair = settings.ai_dsl_allow_auto_repair ? "自动修正开启" : "自动修正关闭";
+  return `当前生成配置：${enabled}，模型 ${model}，${strictMode}，${autoRepair}`;
+}
+
 export function CaseWorkbenchPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const isEditMode = Boolean(caseId);
@@ -298,6 +327,12 @@ export function CaseWorkbenchPage() {
   const [stepsJson, setStepsJson] = useState<string>(formatStepsJson([createDefaultStep()]));
   const [validationResult, setValidationResult] = useState<DSLValidationResult | null>(null);
   const [generationPrompt, setGenerationPrompt] = useState("");
+  const [generationMode, setGenerationMode] = useState<GenerateDslMode>("draft");
+  const [generationContextSource, setGenerationContextSource] = useState<"blank" | "current_case" | "current_steps">(
+    "blank",
+  );
+  const [generationImportMode, setGenerationImportMode] = useState<GenerateDslImportMode>("replace");
+  const [preserveContracts, setPreserveContracts] = useState(true);
   const [generatedDraft, setGeneratedDraft] = useState<GenerateDslResponse | null>(null);
   const [pendingDraft, setPendingDraft] = useState<WorkbenchDraft | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -312,6 +347,10 @@ export function CaseWorkbenchPage() {
     queryKey: ["case-detail", caseId],
     queryFn: () => getCaseDetail(Number(caseId)),
     enabled: isEditMode,
+  });
+  const aiSettingsQuery = useQuery({
+    queryKey: ["ai-settings"],
+    queryFn: getAISettings,
   });
 
   const applyStoredCase = (storedCase: StoredCaseDetail) => {
@@ -438,6 +477,10 @@ export function CaseWorkbenchPage() {
   };
 
   const buildStepsJsonForSubmit = () => (editorMode === "json" ? stepsJson : formatStepsJson(structuredSteps));
+  const buildCurrentDslCase = (): DSLCasePayload => {
+    const values = form.getFieldsValue();
+    return buildDslPayload(values, buildStepsJsonForSubmit(), inputContracts, outputContracts);
+  };
 
   const changeEditorMode = (nextMode: EditorMode) => {
     if (nextMode === editorMode) {
@@ -558,10 +601,18 @@ export function CaseWorkbenchPage() {
   const generateMutation = useMutation({
     mutationFn: async () => {
       const values = form.getFieldsValue();
+      const shouldIncludeCurrentCase = generationContextSource === "current_case" || preserveContracts;
+      const shouldIncludeCurrentSteps = generationContextSource === "current_steps";
+      const currentCase = shouldIncludeCurrentCase || shouldIncludeCurrentSteps ? buildCurrentDslCase() : null;
       return generateDslCase({
         prompt: generationPrompt,
         base_url: String(values.base_url ?? "").trim() || null,
         actor_user_id: 1,
+        generation_mode: generationMode,
+        import_mode: generationImportMode,
+        current_case: shouldIncludeCurrentCase ? currentCase : null,
+        current_steps: shouldIncludeCurrentSteps && currentCase ? currentCase.steps : null,
+        preserve_contracts: preserveContracts,
       });
     },
     onSuccess: (result) => {
@@ -569,11 +620,12 @@ export function CaseWorkbenchPage() {
       void messageApi.success("AI DSL 草案已生成。");
     },
     onError: (error: Error) => {
+      setGeneratedDraft(null);
       void messageApi.error(error.message);
     },
   });
 
-  const applyGeneratedDraft = (mode: "replace" | "steps_only") => {
+  const applyGeneratedDraft = (mode: GenerateDslImportMode) => {
     if (!generatedDraft) {
       return;
     }
@@ -592,6 +644,14 @@ export function CaseWorkbenchPage() {
       setEditorMode("structured");
       setValidationResult(null);
       void messageApi.success("已替换当前 DSL 草案。");
+      return;
+    }
+
+    if (mode === "contracts_only") {
+      syncInputContracts(generatedDraft.case.input_contract);
+      syncOutputContracts(generatedDraft.case.output_contract);
+      setValidationResult(null);
+      void messageApi.success("已合并 AI 生成契约。");
       return;
     }
 
@@ -712,6 +772,58 @@ export function CaseWorkbenchPage() {
             <Typography.Text type="secondary">
               输入一句自然语言需求，生成可编辑 DSL 草案；生成结果不会直接保存或执行。
             </Typography.Text>
+            {aiSettingsQuery.data ? (
+              <Alert
+                type={aiSettingsQuery.data.enable_ai_dsl_generate ? "info" : "warning"}
+                showIcon
+                message="当前生成配置"
+                description={formatDslGenerationStatus(aiSettingsQuery.data)}
+              />
+            ) : null}
+            <div className="structured-step-grid">
+              <div>
+                <Typography.Text type="secondary">生成模式</Typography.Text>
+                <Select
+                  style={{ marginTop: 8, width: "100%" }}
+                  value={generationMode}
+                  options={GENERATION_MODE_OPTIONS}
+                  onChange={(value) => setGenerationMode(value)}
+                />
+              </div>
+              <div>
+                <Typography.Text type="secondary">上下文来源</Typography.Text>
+                <Select
+                  style={{ marginTop: 8, width: "100%" }}
+                  value={generationContextSource}
+                  options={GENERATION_CONTEXT_OPTIONS}
+                  onChange={(value) => setGenerationContextSource(value)}
+                />
+              </div>
+              <div>
+                <Typography.Text type="secondary">预期导入方式</Typography.Text>
+                <Select
+                  style={{ marginTop: 8, width: "100%" }}
+                  value={generationImportMode}
+                  options={GENERATION_IMPORT_MODE_OPTIONS}
+                  onChange={(value) => setGenerationImportMode(value)}
+                />
+              </div>
+            </div>
+            <div className="workbench-grid">
+              <div>
+                <Typography.Text type="secondary">保留当前契约</Typography.Text>
+                <Select
+                  aria-label="保留当前契约"
+                  style={{ marginTop: 8, width: "100%" }}
+                  value={preserveContracts ? "yes" : "no"}
+                  options={[
+                    { label: "保留", value: "yes" },
+                    { label: "不保留", value: "no" },
+                  ]}
+                  onChange={(value) => setPreserveContracts(value === "yes")}
+                />
+              </div>
+            </div>
             <Input.TextArea
               aria-label="自然语言需求"
               rows={4}
@@ -732,9 +844,32 @@ export function CaseWorkbenchPage() {
                 <>
                   <Button onClick={() => applyGeneratedDraft("replace")}>替换当前 DSL</Button>
                   <Button onClick={() => applyGeneratedDraft("steps_only")}>仅导入步骤</Button>
+                  <Button onClick={() => applyGeneratedDraft("contracts_only")}>仅合并契约</Button>
                 </>
               ) : null}
             </Space>
+            {generateMutation.isError ? (
+              <Alert
+                type="error"
+                showIcon
+                message="不可导入错误"
+                description={generateMutation.error.message}
+              />
+            ) : null}
+            {generatedDraft?.normalization_notes.length ? (
+              <Alert
+                type="success"
+                showIcon
+                message="自动修正项"
+                description={
+                  <Space direction="vertical" size="small">
+                    {generatedDraft.normalization_notes.map((note) => (
+                      <Typography.Text key={note}>{note}</Typography.Text>
+                    ))}
+                  </Space>
+                }
+              />
+            ) : null}
             {generatedDraft?.warnings.length ? (
               <Alert
                 type="warning"
@@ -754,10 +889,17 @@ export function CaseWorkbenchPage() {
                 <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                   <Space wrap>
                     <Tag color="blue">{generatedDraft.case.name}</Tag>
+                    <Tag color="geekblue">{generatedDraft.generation_meta.generation_mode}</Tag>
+                    <Tag color="purple">{generatedDraft.generation_meta.import_mode}</Tag>
+                    <Tag color="gold">{generatedDraft.generation_meta.model ?? "未配置模型"}</Tag>
                     {generatedDraft.supported_actions.map((action) => (
                       <Tag key={action}>{action}</Tag>
                     ))}
                   </Space>
+                  <Typography.Text type="secondary">
+                    Base URL 来源：{generatedDraft.generation_meta.base_url_source}；修正 action {generatedDraft.generation_meta.repaired_invalid_actions} 个；
+                    删除非法步骤 {generatedDraft.generation_meta.removed_invalid_steps} 个；删除非法契约 {generatedDraft.generation_meta.removed_invalid_contracts} 个。
+                  </Typography.Text>
                   <Input.TextArea
                     aria-label="生成 DSL 预览"
                     readOnly
