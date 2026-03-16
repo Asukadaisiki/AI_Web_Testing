@@ -19,6 +19,7 @@ from app.schemas.dsl import (
     DSLStep,
     GenerateDslBaseUrlSource,
     GenerateDslMeta,
+    GenerateDslMode,
     GenerateDslRequest,
     GotoStep,
     InputStep,
@@ -66,6 +67,7 @@ _STEP_MODELS = {
 def build_generation_messages(
     *,
     payload: GenerateDslRequest,
+    generation_mode: GenerateDslMode,
     supported_actions: list[str],
 ) -> list[dict[str, Any]]:
     allowed_actions = ", ".join(supported_actions)
@@ -78,7 +80,7 @@ def build_generation_messages(
         "Use semantic Chinese target descriptions when selectors are not explicitly provided.",
         "Do not include markdown fences or explanations.",
     ]
-    if payload.generation_mode == "strict_steps_only":
+    if generation_mode == "strict_steps_only":
         system_lines.append("In strict_steps_only mode, prioritize returning a high-quality steps array.")
     if payload.import_mode == "contracts_only":
         system_lines.append("When import_mode is contracts_only, include useful input/output contracts when possible.")
@@ -88,7 +90,7 @@ def build_generation_messages(
     user_lines = [
         "请根据下面的测试需求生成可编辑 DSL 草案。",
         f"测试需求：{payload.prompt.strip()}",
-        f"生成模式：{payload.generation_mode}",
+        f"生成模式：{generation_mode}",
         f"预期导入方式：{payload.import_mode}",
         f"建议 Base URL：{payload.base_url.strip() if payload.base_url else '未提供'}",
         f"是否保留当前契约：{'是' if payload.preserve_contracts else '否'}",
@@ -105,6 +107,22 @@ def build_generation_messages(
                 json.dumps(payload.current_case.model_dump(mode="json"), ensure_ascii=False, indent=2),
             ]
         )
+    elif payload.preserve_contracts:
+        current_input_contract, current_output_contract = _resolve_current_contracts(payload)
+        if current_input_contract or current_output_contract:
+            user_lines.extend(
+                [
+                    "当前契约：",
+                    json.dumps(
+                        {
+                            "input_contract": [contract.model_dump(mode="json") for contract in current_input_contract],
+                            "output_contract": [contract.model_dump(mode="json") for contract in current_output_contract],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                ]
+            )
     if payload.current_steps is not None:
         user_lines.extend(
             [
@@ -131,6 +149,7 @@ def generate_case_draft(
     supported_actions: list[str],
 ) -> tuple[DSLCase, list[str], list[str], GenerateDslMeta]:
     settings = get_settings()
+    resolved_generation_mode = resolve_generation_mode(payload.generation_mode, settings=settings)
     if not settings.enable_ai_dsl_generate:
         raise DslGenerationConfigError(
             "AI DSL 生成功能未开启。请设置 ENABLE_AI_DSL_GENERATE=true 并配置 AI_DSL_API_KEY、AI_DSL_MODEL。"
@@ -141,7 +160,11 @@ def generate_case_draft(
         )
 
     response_text = _call_llm(
-        messages=build_generation_messages(payload=payload, supported_actions=supported_actions),
+        messages=build_generation_messages(
+            payload=payload,
+            generation_mode=resolved_generation_mode,
+            supported_actions=supported_actions,
+        ),
         api_key=settings.ai_dsl_api_key,
         model=settings.ai_dsl_model,
         base_url=settings.ai_dsl_base_url,
@@ -159,6 +182,7 @@ def generate_case_draft(
     normalized_case, warnings, normalization_notes, generation_meta = _normalize_generated_case(
         raw_case=raw_case,
         payload=payload,
+        generation_mode=resolved_generation_mode,
         model_name=settings.ai_dsl_model,
         allow_auto_repair=settings.ai_dsl_allow_auto_repair,
     )
@@ -175,6 +199,7 @@ def _normalize_generated_case(
     *,
     raw_case: dict[str, Any],
     payload: GenerateDslRequest,
+    generation_mode: GenerateDslMode,
     model_name: str,
     allow_auto_repair: bool,
 ) -> tuple[dict[str, Any], list[str], list[str], GenerateDslMeta]:
@@ -185,13 +210,14 @@ def _normalize_generated_case(
     repaired_invalid_actions = 0
 
     current_case = payload.current_case
+    current_input_contract, current_output_contract = _resolve_current_contracts(payload)
     used_current_case_context = current_case is not None
     used_current_steps_context = payload.current_steps is not None
 
     normalized_name = _normalize_string(raw_case.get("name"))
     normalized_description = _normalize_optional_string(raw_case.get("description"))
 
-    if payload.generation_mode == "strict_steps_only" and current_case is not None:
+    if generation_mode == "strict_steps_only" and current_case is not None:
         normalized_name = current_case.name
         normalized_description = current_case.description
         normalization_notes.append("strict_steps_only 模式下沿用了当前 DSL 的名称与描述。")
@@ -223,9 +249,9 @@ def _normalize_generated_case(
     removed_invalid_contracts += input_removed + output_removed
 
     preserve_contracts_applied = False
-    if payload.preserve_contracts and current_case is not None and (not input_contract and not output_contract):
-        input_contract = current_case.input_contract
-        output_contract = current_case.output_contract
+    if payload.preserve_contracts and (not input_contract and not output_contract):
+        input_contract = current_input_contract
+        output_contract = current_output_contract
         preserve_contracts_applied = bool(input_contract or output_contract)
         if preserve_contracts_applied:
             normalization_notes.append("AI 草案未提供有效契约，已沿用当前 DSL 的输入/输出契约。")
@@ -242,7 +268,7 @@ def _normalize_generated_case(
 
     generation_meta = GenerateDslMeta(
         model=model_name,
-        generation_mode=payload.generation_mode,
+        generation_mode=generation_mode,
         import_mode=payload.import_mode,
         base_url_source=base_url_source,
         base_url_backfilled=base_url_backfilled,
@@ -412,6 +438,25 @@ def _resolve_base_url(
         normalization_notes.append("AI 草案未提供 base_url，已沿用当前 DSL 的 Base URL。")
         return current_case_base_url, "current_case", True
     return None, "none", False
+
+
+def _resolve_current_contracts(
+    payload: GenerateDslRequest,
+) -> tuple[list[DSLCaseInputContract], list[DSLCaseOutputContract]]:
+    if payload.current_case is not None:
+        return payload.current_case.input_contract, payload.current_case.output_contract
+    return payload.current_input_contract or [], payload.current_output_contract or []
+
+
+def resolve_generation_mode(
+    request_generation_mode: GenerateDslMode | None,
+    *,
+    settings=None,
+) -> GenerateDslMode:
+    if request_generation_mode is not None:
+        return request_generation_mode
+    active_settings = settings or get_settings()
+    return "strict_steps_only" if active_settings.ai_dsl_strict_mode else "draft"
 
 
 def _normalize_string(value: Any) -> str | None:

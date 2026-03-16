@@ -80,6 +80,22 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
       steps: [{ action: "goto", value: "/" }],
     },
     current_steps: [{ action: "goto", value: "/" }],
+    current_input_contract: [
+      {
+        name: "token",
+        context_key: "token",
+        value_type: "string",
+        required: true,
+      },
+    ],
+    current_output_contract: [
+      {
+        name: "latestPage",
+        context_key: "latest_page",
+        value_type: "string",
+        source: "latest_url",
+      },
+    ],
     preserve_contracts: true,
   });
 
@@ -102,6 +118,22 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
           steps: [{ action: "goto", value: "/" }],
         },
         current_steps: [{ action: "goto", value: "/" }],
+        current_input_contract: [
+          {
+            name: "token",
+            context_key: "token",
+            value_type: "string",
+            required: true,
+          },
+        ],
+        current_output_contract: [
+          {
+            name: "latestPage",
+            context_key: "latest_page",
+            value_type: "string",
+            source: "latest_url",
+          },
+        ],
         preserve_contracts: true,
       }),
     }),

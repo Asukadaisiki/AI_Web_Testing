@@ -300,6 +300,24 @@ function buildDraftSignature(draft: WorkbenchDraft) {
   return JSON.stringify(draft);
 }
 
+function mergeContractsByContextKey<T extends { context_key: string }>(currentContracts: T[], nextContracts: T[]) {
+  if (!nextContracts.length) {
+    return currentContracts;
+  }
+
+  const nextContractMap = new Map(nextContracts.map((contract) => [contract.context_key, contract]));
+  const mergedContracts = currentContracts.map((contract) => nextContractMap.get(contract.context_key) ?? contract);
+  const existingContextKeys = new Set(currentContracts.map((contract) => contract.context_key));
+
+  for (const contract of nextContracts) {
+    if (!existingContextKeys.has(contract.context_key)) {
+      mergedContracts.push(contract);
+    }
+  }
+
+  return mergedContracts;
+}
+
 function formatGeneratedCase(caseDraft: DSLCasePayload) {
   return JSON.stringify(caseDraft, null, 2);
 }
@@ -328,6 +346,7 @@ export function CaseWorkbenchPage() {
   const [validationResult, setValidationResult] = useState<DSLValidationResult | null>(null);
   const [generationPrompt, setGenerationPrompt] = useState("");
   const [generationMode, setGenerationMode] = useState<GenerateDslMode>("draft");
+  const [generationModeDirty, setGenerationModeDirty] = useState(false);
   const [generationContextSource, setGenerationContextSource] = useState<"blank" | "current_case" | "current_steps">(
     "blank",
   );
@@ -352,6 +371,13 @@ export function CaseWorkbenchPage() {
     queryKey: ["ai-settings"],
     queryFn: getAISettings,
   });
+
+  useEffect(() => {
+    if (!aiSettingsQuery.data || generationModeDirty) {
+      return;
+    }
+    setGenerationMode(aiSettingsQuery.data.ai_dsl_strict_mode ? "strict_steps_only" : "draft");
+  }, [aiSettingsQuery.data, generationModeDirty]);
 
   const applyStoredCase = (storedCase: StoredCaseDetail) => {
     form.setFieldsValue({
@@ -601,7 +627,7 @@ export function CaseWorkbenchPage() {
   const generateMutation = useMutation({
     mutationFn: async () => {
       const values = form.getFieldsValue();
-      const shouldIncludeCurrentCase = generationContextSource === "current_case" || preserveContracts;
+      const shouldIncludeCurrentCase = generationContextSource === "current_case";
       const shouldIncludeCurrentSteps = generationContextSource === "current_steps";
       const currentCase = shouldIncludeCurrentCase || shouldIncludeCurrentSteps ? buildCurrentDslCase() : null;
       return generateDslCase({
@@ -612,6 +638,8 @@ export function CaseWorkbenchPage() {
         import_mode: generationImportMode,
         current_case: shouldIncludeCurrentCase ? currentCase : null,
         current_steps: shouldIncludeCurrentSteps && currentCase ? currentCase.steps : null,
+        current_input_contract: preserveContracts ? inputContracts : null,
+        current_output_contract: preserveContracts ? outputContracts : null,
         preserve_contracts: preserveContracts,
       });
     },
@@ -648,8 +676,8 @@ export function CaseWorkbenchPage() {
     }
 
     if (mode === "contracts_only") {
-      syncInputContracts(generatedDraft.case.input_contract);
-      syncOutputContracts(generatedDraft.case.output_contract);
+      syncInputContracts(mergeContractsByContextKey(inputContracts, generatedDraft.case.input_contract));
+      syncOutputContracts(mergeContractsByContextKey(outputContracts, generatedDraft.case.output_contract));
       setValidationResult(null);
       void messageApi.success("已合并 AI 生成契约。");
       return;
@@ -787,7 +815,10 @@ export function CaseWorkbenchPage() {
                   style={{ marginTop: 8, width: "100%" }}
                   value={generationMode}
                   options={GENERATION_MODE_OPTIONS}
-                  onChange={(value) => setGenerationMode(value)}
+                  onChange={(value) => {
+                    setGenerationModeDirty(true);
+                    setGenerationMode(value);
+                  }}
                 />
               </div>
               <div>

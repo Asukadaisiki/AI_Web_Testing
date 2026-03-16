@@ -619,27 +619,137 @@ test("自然语言生成会按上下文来源与策略带上请求 payload", asy
       actor_user_id: 1,
       generation_mode: "draft",
       import_mode: "replace",
-      current_case: {
-        name: "当前用例",
-        description: "当前描述",
-        base_url: "https://example.com",
-        input_contract: [
-          {
-            name: "contextVar",
-            context_key: "context_var",
-            value_type: "string",
-            required: true,
-            description: null,
-          },
-        ],
-        output_contract: [],
-        steps: [{ action: "goto", value: "/" }],
-      },
+      current_case: null,
       current_steps: null,
+      current_input_contract: [
+        {
+          name: "contextVar",
+          context_key: "context_var",
+          value_type: "string",
+          required: true,
+          description: null,
+        },
+      ],
+      current_output_contract: [],
       preserve_contracts: true,
     });
   });
 }, 15000);
+
+test("自然语言生成默认模式会跟随 AI strict setting", async () => {
+  vi.mocked(api.getAISettings).mockResolvedValueOnce({
+    enable_ai_dsl_generate: true,
+    ai_dsl_timeout_ms: 15000,
+    ai_dsl_base_url: "https://api.openai.com/v1",
+    ai_dsl_model: "gpt-4o-mini",
+    ai_dsl_strict_mode: true,
+    ai_dsl_allow_auto_repair: true,
+    has_ai_dsl_api_key: true,
+    enable_ai_visual_locate: false,
+    ai_visual_timeout_ms: 10000,
+    ai_visual_failure_threshold: 3,
+    ai_visual_cooldown_seconds: 60,
+    ai_visual_rate_limit_per_minute: 10,
+    vlm_base_url: "https://api.openai.com/v1",
+    vlm_model: "gpt-4o",
+    vlm_model_family: "gpt-4o",
+    has_vlm_api_key: false,
+  });
+  vi.mocked(api.generateDslCase).mockResolvedValue({
+    generation_id: 13,
+    case: {
+      name: "严格模式结果",
+      description: null,
+      base_url: null,
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/strict" }],
+    },
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    warnings: [],
+    normalization_notes: [],
+    generation_meta: {
+      model: "gpt-4o-mini",
+      generation_mode: "strict_steps_only",
+      import_mode: "replace",
+      base_url_source: "none",
+      base_url_backfilled: false,
+      repaired_invalid_actions: 0,
+      removed_invalid_steps: 0,
+      removed_invalid_contracts: 0,
+      preserve_contracts_applied: false,
+      used_current_case_context: false,
+      used_current_steps_context: false,
+    },
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "生成严格模式 DSL");
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+
+  await waitFor(() => {
+    expect(api.generateDslCase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generation_mode: "strict_steps_only",
+      }),
+    );
+  });
+});
+
+test("仅合并契约不会覆盖现有契约", async () => {
+  vi.mocked(api.generateDslCase).mockResolvedValue({
+    generation_id: 14,
+    case: {
+      name: "契约合并结果",
+      description: null,
+      base_url: null,
+      input_contract: [],
+      output_contract: [
+        {
+          name: "latestPage",
+          context_key: "latest_page",
+          value_type: "string",
+          source: "latest_url",
+          description: null,
+        },
+      ],
+      steps: [{ action: "goto", value: "/merge" }],
+    },
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    warnings: [],
+    normalization_notes: [],
+    generation_meta: {
+      model: "gpt-4o-mini",
+      generation_mode: "draft",
+      import_mode: "contracts_only",
+      base_url_source: "none",
+      base_url_backfilled: false,
+      repaired_invalid_actions: 0,
+      removed_invalid_steps: 0,
+      removed_invalid_contracts: 0,
+      preserve_contracts_applied: false,
+      used_current_case_context: false,
+      used_current_steps_context: false,
+    },
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "新增输入契约" }));
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "补充输出契约");
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+  await userEvent.click(await screen.findByRole("button", { name: "仅合并契约" }));
+
+  expect(screen.getByDisplayValue("contextVar")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("latestPage")).toBeInTheDocument();
+});
 
 test("自然语言生成失败时不污染当前编辑内容", async () => {
   vi.mocked(api.generateDslCase).mockRejectedValue(new Error("AI DSL 生成配置不完整。"));

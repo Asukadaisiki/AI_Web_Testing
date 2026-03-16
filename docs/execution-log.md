@@ -1114,3 +1114,58 @@
   - 执行 `git push origin main` 完成远端同步
 - 关联文件：`backend/`、`frontend/`、`docs/execution-log.md`、`docs/bug-log.md`
 - 后续：无
+
+## 2026-03-16 23:26
+
+- 任务：review 执行记录中 `2026-03-16 10:41` 以后的所有代码更改
+- 背景：`docs/execution-log.md` 中 `2026-03-16 10:41` 之后新增了 AI DSL 生成、AI 设置页、生成治理落库与概览聚合等一批改动，需要基于真实 diff 做缺陷导向审查，而不是复述功能说明
+- 执行动作：
+  - 读取 `docs/execution-log.md`，确认本次 review 范围覆盖 `d878464`、`a76bd8a`、`2364575`、`c7b2584`，其中代码主体集中在 AI DSL 生成链路、AI 设置、生成历史治理与前端工作台
+  - 对照 `git diff 1e67695..HEAD`、相关提交 `--stat` 与当前落地代码，重点审查 `backend/app/ai/dsl_generator.py`、`backend/app/services/dsl.py`、`backend/app/services/settings.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/AISettingsPage.tsx`
+  - 结合已有测试用例核对设计意图与未覆盖路径，重点检查生成上下文传递、`contracts_only` 导入语义、`ai_dsl_strict_mode` 配置是否真实生效
+  - 将审查发现整理为缺陷记录，追加到 `docs/bug-log.md`
+- 结果：
+  - 本次 review 识别出 3 个需要后续修复的问题：`blank/current_steps` 生成上下文会被“保留当前契约”隐式升级为完整 `current_case` 上下文；前端 `contracts_only` 实际执行的是整体替换而非合并；`ai_dsl_strict_mode` 已暴露到配置与概览，但当前生成链路没有消费该设置，属于无效开关
+  - 未在本次任务中修改业务代码，仅完成审查与日志留痕
+- 验证：
+  - 执行 `git log --format="%h %ad %s" --date=iso -n 10` 确认提交时间线
+  - 执行 `git diff --stat 1e67695..HEAD` 确认 review 覆盖范围
+  - 通过静态审查与现有测试交叉核对问题路径；本次未额外执行自动化测试
+- 关联文件：`backend/app/ai/dsl_generator.py`、`backend/app/services/dsl.py`、`backend/app/services/settings.py`、`backend/app/core/config.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/AISettingsPage.tsx`、`docs/bug-log.md`
+- 后续：建议下一步先修正生成上下文与 `contracts_only` 语义，再决定 `ai_dsl_strict_mode` 是做成全局默认/强制策略，还是从设置项中移除
+
+## 2026-03-16 23:40
+
+- 任务：修复 review 识别的 3 个 AI DSL 生成问题
+- 背景：上一条 review 记录中确认了 3 个缺陷：`preserveContracts` 会意外注入完整 `current_case` 上下文、`contracts_only` 实际是 replace 而不是 merge、`ai_dsl_strict_mode` 暴露为配置项但未进入真实生成决策；需要在尽量小改动下完成闭环修复并补回归测试
+- 执行动作：
+  - 扩展 `GenerateDslRequest` 契约，在前后端类型中新增 `current_input_contract` / `current_output_contract`，将“保留当前契约”与完整 `current_case` 上下文解耦
+  - 改造 `backend/app/ai/dsl_generator.py`：新增运行时 `generation_mode` 解析逻辑；prompt 构造仅在真正选择 `current_case` 上下文时注入完整 DSL，在仅保留契约时只注入最小契约上下文；生成后契约回填优先使用 `current_case`，否则使用新传入的契约字段
+  - 改造 `backend/app/services/dsl.py`：在成功/失败落库路径都记录实际生效的 `generation_mode`，确保 `ai_dsl_strict_mode` 作为默认值时也能进入 durable 记录
+  - 改造 `frontend/src/pages/CaseWorkbenchPage.tsx`：生成请求仅在 `current_case` 模式下发送完整 DSL，上下文为空或 `current_steps` 模式时只透传当前契约；首次加载工作台时用运行时 AI 设置初始化默认生成模式；`contracts_only` 改为按 `context_key` merge 契约
+  - 补充后端/前端测试，覆盖“仅保留契约不注入 current_case”“strict_mode 默认值生效”“contracts_only 不覆盖既有契约”“工作台默认模式跟随设置”等回归路径
+- 结果：
+  - 3 个问题已全部修复：空白/步骤补全生成不再被旧 DSL 全量污染；“仅合并契约”与实际行为一致；`ai_dsl_strict_mode` 现在既影响后端默认生成策略，也影响前端工作台默认模式
+  - `BUG-018` 已从 `open` 更新为 `fixed`
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py`，结果为 `18 passed`
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/CaseWorkbenchPage.test.tsx`，结果为 `20 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/ai/dsl_generator.py`、`backend/app/services/dsl.py`、`backend/app/schemas/dsl.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/types/api.ts`、`backend/tests/unit/test_dsl_validation.py`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`
+- 后续：如需进一步收口，可再补一轮全量后端 `pytest` 与前端全量 `vitest`，确认没有遗漏的跨模块回归
+
+## 2026-03-16 23:42
+
+- 任务：将本轮 AI DSL 生成问题修复同步到 GitHub
+- 背景：`BUG-018` 对应的 3 个问题已经完成修复，定向后端测试、前端测试和前端构建均已通过；用户要求将当前修复同步到远端仓库
+- 执行动作：
+  - 复查 `git status --short`、`git branch --show-current` 与 `git remote -v`，确认当前位于 `main`，远端为 `origin`
+  - 追加本条执行日志，确保“修复 -> 验证 -> 同步”链路可追溯
+  - 仅暂存本轮修复相关代码、测试与日志文件，显式排除未跟踪的 `.claude/` 目录
+  - 创建提交并推送到 `origin/main`
+- 结果：本轮 AI DSL 生成问题修复已整理为一批可追溯变更，准备同步到 GitHub 主分支
+- 验证：
+  - 执行 `git status --short` 核对提交范围
+  - 执行 `git push origin main` 完成远端同步
+- 关联文件：`backend/`、`frontend/`、`docs/execution-log.md`、`docs/bug-log.md`
+- 后续：无

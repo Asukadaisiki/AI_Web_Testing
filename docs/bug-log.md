@@ -363,3 +363,29 @@
 - 验证：
   - 执行 `cd backend && uv run pytest`，结果为 `123 passed`
 - 关联记录：`docs/execution-log.md` 2026-03-16 23:14
+
+## BUG-018 | review 指出 AI DSL 生成上下文、契约导入与 strict_mode 配置语义不一致
+
+- 日期：2026-03-16
+- 状态：fixed
+- 来源：代码评审
+- 描述：`frontend/src/pages/CaseWorkbenchPage.tsx` 中“保留当前契约”默认开启，且 `shouldIncludeCurrentCase = generationContextSource === "current_case" || preserveContracts`，导致用户即使选择“基于空白需求”或“基于当前步骤补全”，仍会把完整 `current_case` 透传给后端；`backend/app/ai/dsl_generator.py` 会把 `current_case` 原样注入 prompt，实际生成上下文与 UI 选项不一致。另一处问题是 `applyGeneratedDraft("contracts_only")` 直接用 AI 返回值整体覆盖输入/输出契约，但按钮文案是“仅合并契约”，会在 AI 只返回部分契约时静默丢失现有契约。第三个问题是 `ai_dsl_strict_mode` 已在配置读取、设置页表单和概览中完整暴露，但当前生成链路没有消费该设置，用户切换开关不会影响 `generate_dsl_case()` 或工作台默认生成模式，形成无效配置项。
+- 复现步骤：
+  1. 在工作台保持“保留当前契约”为默认开启，生成上下文选择“基于空白需求”，填写已有用例名称/步骤后触发生成
+  2. 观察前端请求 payload 仍携带完整 `current_case`，后端 prompt 中也包含“当前 DSL”
+  3. 准备一个已有输入/输出契约的用例，让 AI 仅返回部分契约后点击“仅合并契约”
+  4. 观察现有契约被整体替换，而不是按“合并”语义保留未返回的部分
+  5. 在 AI 设置页打开/关闭“严格生成模式”，重新进入工作台执行生成
+  6. 观察前端默认仍发送 `generation_mode="draft"`，后端生成逻辑也未读取 `ai_dsl_strict_mode`
+- 影响：会让生成结果被意外的历史 DSL 上下文污染，削弱“空白生成/基于当前步骤补全”的可控性；`contracts_only` 可能静默丢失现有契约；`ai_dsl_strict_mode` 作为可保存配置却不生效，会误导运维与产品判断。
+- 根因：前端把“是否保留契约”与“是否注入完整 current_case 上下文”耦合在一起；`contracts_only` 导入流程缺少真正的 merge 策略；strict mode 设置仅完成了配置暴露与展示，没有贯穿到实际生成决策。
+- 处理：
+  - 在 `GenerateDslRequest` 中新增 `current_input_contract` / `current_output_contract`，将“保留当前契约”与完整 `current_case` prompt 上下文解耦；后端仅在需要时把最小契约上下文注入 prompt，并在生成后回填契约
+  - 在 `frontend/src/pages/CaseWorkbenchPage.tsx` 中修正生成请求组装：只有 `generationContextSource === "current_case"` 时才发送 `current_case`；`preserveContracts` 改为单独透传当前输入/输出契约
+  - 将 `contracts_only` 导入改为按 `context_key` merge，已有契约保留，同键契约更新，新契约追加，避免局部 AI 输出覆盖整组契约
+  - 将 `ai_dsl_strict_mode` 接入真实生成决策：后端在请求未显式传 `generation_mode` 时使用运行时配置作为默认值，前端工作台首次加载时同步该默认模式
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py`，结果为 `18 passed`
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/CaseWorkbenchPage.test.tsx`，结果为 `20 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联记录：`docs/execution-log.md` 2026-03-16 23:40

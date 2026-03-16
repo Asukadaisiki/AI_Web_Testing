@@ -10,7 +10,12 @@ from threading import Lock
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.ai.dsl_generator import DslGenerationConfigError, DslGenerationError, generate_case_draft
+from app.ai.dsl_generator import (
+    DslGenerationConfigError,
+    DslGenerationError,
+    generate_case_draft,
+    resolve_generation_mode,
+)
 from app.core.config import get_settings
 from app.models import DslGenerationRun, User
 from app.schemas.dsl import (
@@ -58,6 +63,7 @@ def validate_dsl_case(test_case: DSLCase) -> DSLValidationResult:
 
 def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> GenerateDslResponse:
     _ensure_user_exists(session, payload.actor_user_id)
+    resolved_generation_mode = resolve_generation_mode(payload.generation_mode)
 
     with _RUNTIME_STATS_LOCK:
         _RUNTIME_STATS.total_requests += 1
@@ -73,6 +79,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
         _persist_generation_run(
             session,
             payload=payload,
+            generation_mode=resolved_generation_mode,
             success=False,
             model_name=model_name,
             warnings_count=0,
@@ -87,6 +94,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
     generation_run = _persist_generation_run(
         session,
         payload=payload,
+        generation_mode=generation_meta.generation_mode,
         success=True,
         model_name=generation_meta.model,
         warnings_count=len(warnings),
@@ -253,6 +261,7 @@ def _persist_generation_run(
     session: Session,
     *,
     payload: GenerateDslRequest,
+    generation_mode: str,
     success: bool,
     model_name: str | None,
     warnings_count: int,
@@ -266,7 +275,7 @@ def _persist_generation_run(
         prompt_preview=_build_prompt_preview(payload.prompt),
         prompt_sha256=_hash_prompt(payload.prompt),
         request_base_url=payload.base_url,
-        generation_mode=payload.generation_mode,
+        generation_mode=generation_mode,
         import_mode=payload.import_mode,
         model_name=model_name,
         success=success,

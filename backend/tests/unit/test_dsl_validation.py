@@ -115,6 +115,7 @@ def test_build_generation_messages_only_list_supported_actions() -> None:
                 },
                 "current_steps": [{"action": "goto", "value": "/old"}],
             }),
+        generation_mode="strict_steps_only",
         supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
     )
 
@@ -124,6 +125,40 @@ def test_build_generation_messages_only_list_supported_actions() -> None:
     assert "strict_steps_only" in messages[1]["content"]
     assert "当前 DSL：" in messages[1]["content"]
     assert "当前步骤：" in messages[1]["content"]
+
+
+def test_build_generation_messages_uses_contract_context_without_current_case() -> None:
+    messages = build_generation_messages(
+        payload=GenerateDslRequest.model_validate(
+            {
+                "prompt": "保留现有契约并补全步骤",
+                "actor_user_id": 1,
+                "import_mode": "contracts_only",
+                "preserve_contracts": True,
+                "current_input_contract": [
+                    {
+                        "name": "token",
+                        "context_key": "token",
+                        "value_type": "string",
+                        "required": True,
+                    }
+                ],
+                "current_output_contract": [
+                    {
+                        "name": "latestPage",
+                        "context_key": "latest_page",
+                        "value_type": "string",
+                        "source": "latest_url",
+                    }
+                ],
+            }
+        ),
+        generation_mode="draft",
+        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    )
+
+    assert "当前契约：" in messages[1]["content"]
+    assert "当前 DSL：" not in messages[1]["content"]
 
 
 def test_generate_dsl_case_success(client, monkeypatch) -> None:
@@ -371,6 +406,71 @@ def test_generate_dsl_case_preserves_contracts_and_current_name_in_strict_steps_
     assert response.json()["generation_meta"]["used_current_steps_context"] is True
 
 
+def test_generate_dsl_case_preserves_contracts_without_current_case_context(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "仅保留契约",
+  "steps": [
+    {"action": "goto", "value": "/dashboard"}
+  ]
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "保留当前契约并补全 dashboard 冒烟",
+            "actor_user_id": 1,
+            "preserve_contracts": True,
+            "current_input_contract": [
+                {
+                    "name": "token",
+                    "context_key": "token",
+                    "value_type": "string",
+                    "required": True,
+                }
+            ],
+            "current_output_contract": [
+                {
+                    "name": "latestPage",
+                    "context_key": "latest_page",
+                    "value_type": "string",
+                    "source": "latest_url",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["case"]["input_contract"] == [
+        {
+            "name": "token",
+            "context_key": "token",
+            "value_type": "string",
+            "required": True,
+            "description": None,
+        }
+    ]
+    assert response.json()["case"]["output_contract"] == [
+        {
+            "name": "latestPage",
+            "context_key": "latest_page",
+            "value_type": "string",
+            "source": "latest_url",
+            "description": None,
+        }
+    ]
+    assert response.json()["generation_meta"]["preserve_contracts_applied"] is True
+    assert response.json()["generation_meta"]["used_current_case_context"] is False
+    assert response.json()["generation_meta"]["used_current_steps_context"] is False
+
+
 def test_generate_dsl_case_returns_502_for_invalid_dsl_shape_when_auto_repair_disabled(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -463,6 +563,40 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert runs[0].error_type == "DslGenerationError"
     assert runs[0].error_message == "AI 返回了无法解析的 DSL JSON。"
     assert runs[0].generated_case_json is None
+
+
+def test_generate_dsl_case_uses_runtime_strict_mode_default_when_request_omits_generation_mode(
+    client,
+    db_session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "严格模式默认值",
+  "steps": [{"action": "goto", "value": "/strict"}]
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "使用默认严格模式生成",
+            "actor_user_id": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["generation_meta"]["generation_mode"] == "strict_steps_only"
+    generation_run = db_session.get(DslGenerationRun, response.json()["generation_id"])
+    assert generation_run is not None
+    assert generation_run.generation_mode == "strict_steps_only"
 
 
 def test_list_dsl_generation_runs_supports_status_limit_and_offset(client, monkeypatch) -> None:

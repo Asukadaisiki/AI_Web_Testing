@@ -104,10 +104,12 @@ class GenerateDslRequest(DSLModel):
     prompt: str = Field(min_length=1, max_length=4000)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     actor_user_id: int = Field(ge=1)
-    generation_mode: GenerateDslMode = "draft"
+    generation_mode: GenerateDslMode | None = None
     import_mode: GenerateDslImportMode = "replace"
     current_case: DSLCase | None = None
     current_steps: list[DSLStep] | None = None
+    current_input_contract: list[DSLCaseInputContract] | None = None
+    current_output_contract: list[DSLCaseOutputContract] | None = None
     preserve_contracts: bool = False
 
 

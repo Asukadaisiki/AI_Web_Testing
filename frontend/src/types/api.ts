@@ -83,6 +83,8 @@ export interface GenerateDslRequest {
   import_mode?: GenerateDslImportMode;
   current_case?: DSLCasePayload | null;
   current_steps?: DSLStep[] | null;
+  current_input_contract?: DSLCaseInputContract[] | null;
+  current_output_contract?: DSLCaseOutputContract[] | null;
   preserve_contracts?: boolean;
 }
 
