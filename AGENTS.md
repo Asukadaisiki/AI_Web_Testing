@@ -43,6 +43,7 @@ Keep the following boundaries:
 - Keep route handlers thin; business logic belongs in services.
 - Keep execution logic, locator logic, and reporting logic in separate modules.
 
+
 ## Frontend Rules
 
 - Use React + TypeScript + Vite.
@@ -68,6 +69,7 @@ Before making changes:
 - Understand local patterns before editing.
 - Prefer minimal changes over broad refactors.
 
+
 When implementing:
 
 - Define or update types and schemas before adding logic.
@@ -80,6 +82,7 @@ When responding:
 - Use Chinese unless the user explicitly requests another language.
 - Include `Summary`, `Changes`, `How to run`, `Tests`, and `Notes` in final responses.
 - State assumptions and limitations clearly.
+- Answer in chinese
 
 ## Task Logging Rules
 

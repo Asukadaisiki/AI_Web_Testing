@@ -1044,3 +1044,18 @@
   - 执行 `cd frontend && npm run build` 成功
 - 关联文件：`backend/app/api/routes/settings.py`、`backend/app/services/settings.py`、`backend/app/schemas/settings.py`、`backend/app/api/router.py`、`backend/tests/unit/test_ai_settings_api.py`、`frontend/src/pages/AISettingsPage.tsx`、`frontend/src/pages/AISettingsPage.test.tsx`、`frontend/src/app/AppRouter.tsx`、`frontend/src/app/AppRouter.test.tsx`、`frontend/src/layouts/AppLayout.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`、`frontend/src/types/api.ts`
 - 后续：当前设置落盘方案基于单实例 `.env` 文件，适合本地开发与单机部署；如果后续切到多实例或容器化部署，建议把这类配置改为专门的配置存储或密钥管理服务
+## 2026-03-16 10:49
+
+- 任务：补提交通用仓库说明文件 `AGENTS.md` 与 `CLAUDE.md` 并同步到 GitHub
+- 背景：上一轮代码同步时为避免误带本地说明文件，临时排除了这两个文件；当前用户明确要求把它们一并入库
+- 执行动作：
+  - 复查 `AGENTS.md` 的未提交改动，确认只是补充 “Answer in chinese” 约束，没有业务代码影响
+  - 检查未跟踪文件 `CLAUDE.md`，确认内容仅为 `AGENTS.md` 映射说明，不含额外敏感信息
+  - 追加本条执行日志后，将这两个文件与日志一起提交并推送到 `origin/main`
+- 结果：仓库说明文件与当前协作约束已和主分支保持一致，后续从其他终端或 AI 代理进入仓库时可复用相同的指令入口
+- 验证：
+  - 执行 `git diff -- AGENTS.md` 确认改动范围
+  - 执行 `type CLAUDE.md` 确认文件内容
+  - 后续执行 `git push origin main` 完成远端同步
+- 关联文件：`AGENTS.md`、`CLAUDE.md`、`docs/execution-log.md`
+- 后续：无
