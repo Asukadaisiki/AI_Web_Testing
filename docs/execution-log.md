@@ -24,6 +24,25 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-16 10:29
+
+- 任务：实现 AI 生成 DSL 最小闭环，打通后端生成接口、前端工作台导入草案与回归验证
+- 背景：`v3.4` 加固和 corrections 运营第一批能力已收口，仓库已有稳定 DSL schema、校验接口和 Case 工作台，但 `backend/app/ai/` 仍是预留目录，尚未把 AI 真正接到测试编排入口
+- 执行动作：
+  - 在后端新增 `ENABLE_AI_DSL_GENERATE`、`AI_DSL_TIMEOUT_MS`、`AI_DSL_API_KEY`、`AI_DSL_BASE_URL`、`AI_DSL_MODEL` 配置，补 `GenerateDslRequest` / `GenerateDslResponse` schema，并在 `POST /api/v1/dsl/generate` 中接入 OpenAI 兼容接口调用、JSON 提取、`DSLCase` 强校验与 503/502 错误映射
+  - 新建 `backend/app/ai/dsl_generator.py`，固定职责为 prompt 组装、LLM 调用、首个 JSON 对象提取、DSL schema 校验和 warning 生成，不直接保存或执行
+  - 在前端 `CaseWorkbenchPage` 新增“自然语言生成”区域，支持输入需求、生成草案、预览 JSON，并在“替换当前 DSL”与“仅导入步骤”之间选择；生成结果继续复用既有校验、保存和执行链路
+  - 更新前后端类型、API 封装和文档状态；同步修正 `project-plan` 中“浏览器级端到端回归基建未落地”的过时表述
+  - 扩充回归测试：后端覆盖 prompt 约束、未配置 503、非法 JSON 502、非法 DSL 502；前端覆盖生成预览、步骤导入、整单替换和生成失败不污染当前编辑态
+- 结果：仓库现在具备“自然语言需求 -> AI DSL 草案 -> 工作台预览/导入 -> 现有保存执行链路”的最小闭环；AI 生成默认仍关闭，未配置时会返回明确诊断错误
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_config.py`，结果为 `8 passed`
+  - 执行 `cd backend && uv run pytest`，结果为 `114 passed`
+  - 执行 `cd frontend && npm test -- --run src/pages/CaseWorkbenchPage.test.tsx src/services/api.test.ts`，结果为 `13 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/ai/dsl_generator.py`、`backend/app/core/config.py`、`backend/app/schemas/dsl.py`、`backend/app/services/dsl.py`、`backend/app/api/routes/dsl.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/conftest.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`、`frontend/src/types/api.ts`、`README.md`、`backend/README.md`、`frontend/README.md`、`docs/project-plan.md`
+- 后续：下一步应围绕 AI 生成 DSL 深化推进 prompt 调优、模型治理和更稳健的草案修正策略，而不是回到 corrections 基础闭环或重复建设浏览器级回归基建
+
 ## 2026-03-15 23:42
 
 - 任务：落实 corrections 运营增强批次，补齐事件数据底座、运营接口、页面增强与回归验证
@@ -1009,3 +1028,19 @@
   - 执行 `cd frontend && npm test -- --run`，结果为 `38 passed`
 - 关联文件：`backend/app/core/config.py`、`backend/app/locators/ai_visual.py`、`backend/app/services/corrections.py`、`backend/tests/unit/test_config.py`、`frontend/src/pages/CorrectionsPage.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`
 - 后续：`RUNTIME_STATE` 仍是单进程全局可变状态，当前执行模型下可接受；若后续 runner 改为并发执行，需要单独引入锁或 worker 级隔离
+## 2026-03-16 10:41
+
+- 任务：补齐前端 AI 配置页，并提供可修改运行时 AI 环境的最小管理闭环
+- 背景：当前仓库已经支持 AI DSL 生成和 AI 视觉定位的后端环境变量配置，但前端没有对应入口，导致本地调试和切换模型只能手工改 `.env`
+- 执行动作：
+  - 后端新增 `GET /api/v1/settings/ai` 与 `PUT /api/v1/settings/ai`，集中返回 AI DSL 与 VLM 运行时配置，并支持把更新写回 `backend/.env`
+  - 新增 `backend/app/services/settings.py`，统一处理布尔值、超时、模型、限流参数以及 API Key 清空/替换逻辑；接口只返回“是否已配置密钥”，不回显密钥本身
+  - 前端新增 `AI 配置` 页面与导航入口，支持查看当前状态、修改 AI DSL / VLM 的 Base URL、模型、超时和视觉限流参数，并可替换或清空密钥
+  - 扩展前端 API 类型与服务层，补齐设置页、路由和服务测试；同时把新测试改为按可访问性标签查询，并为长链路交互场景增加单测超时，避免全量回归时偶发超时
+- 结果：平台现在可直接在前端管理 AI 相关运行时配置，修改后会立即作用于当前后端进程，并持久化到 `.env`；密钥编辑保持遮罩与单向写入，避免前端泄露已有敏感信息
+- 验证：
+  - 执行 `cd backend && uv run pytest`，结果为 `116 passed`
+  - 执行 `cd frontend && npm test -- --run`，结果为 `47 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/api/routes/settings.py`、`backend/app/services/settings.py`、`backend/app/schemas/settings.py`、`backend/app/api/router.py`、`backend/tests/unit/test_ai_settings_api.py`、`frontend/src/pages/AISettingsPage.tsx`、`frontend/src/pages/AISettingsPage.test.tsx`、`frontend/src/app/AppRouter.tsx`、`frontend/src/app/AppRouter.test.tsx`、`frontend/src/layouts/AppLayout.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`、`frontend/src/types/api.ts`
+- 后续：当前设置落盘方案基于单实例 `.env` 文件，适合本地开发与单机部署；如果后续切到多实例或容器化部署，建议把这类配置改为专门的配置存储或密钥管理服务

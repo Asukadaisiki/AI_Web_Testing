@@ -19,6 +19,7 @@ import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import {
   createCase,
   executeCase,
+  generateDslCase,
   getCaseDetail,
   updateCase,
   validateDslCase,
@@ -32,6 +33,7 @@ import type {
   DSLValidationResult,
   DSLVariableSource,
   DSLVariableType,
+  GenerateDslResponse,
   StoredCaseDetail,
 } from "../types/api";
 
@@ -277,6 +279,10 @@ function buildDraftSignature(draft: WorkbenchDraft) {
   return JSON.stringify(draft);
 }
 
+function formatGeneratedCase(caseDraft: DSLCasePayload) {
+  return JSON.stringify(caseDraft, null, 2);
+}
+
 export function CaseWorkbenchPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const isEditMode = Boolean(caseId);
@@ -291,6 +297,8 @@ export function CaseWorkbenchPage() {
   const [structuredSteps, setStructuredSteps] = useState<DSLStep[]>([createDefaultStep()]);
   const [stepsJson, setStepsJson] = useState<string>(formatStepsJson([createDefaultStep()]));
   const [validationResult, setValidationResult] = useState<DSLValidationResult | null>(null);
+  const [generationPrompt, setGenerationPrompt] = useState("");
+  const [generatedDraft, setGeneratedDraft] = useState<GenerateDslResponse | null>(null);
   const [pendingDraft, setPendingDraft] = useState<WorkbenchDraft | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
   const [baselineSignature, setBaselineSignature] = useState<string>(buildDraftSignature(createDefaultDraft()));
@@ -547,6 +555,53 @@ export function CaseWorkbenchPage() {
     },
   });
 
+  const generateMutation = useMutation({
+    mutationFn: async () => {
+      const values = form.getFieldsValue();
+      return generateDslCase({
+        prompt: generationPrompt,
+        base_url: String(values.base_url ?? "").trim() || null,
+        actor_user_id: 1,
+      });
+    },
+    onSuccess: (result) => {
+      setGeneratedDraft(result);
+      void messageApi.success("AI DSL 草案已生成。");
+    },
+    onError: (error: Error) => {
+      void messageApi.error(error.message);
+    },
+  });
+
+  const applyGeneratedDraft = (mode: "replace" | "steps_only") => {
+    if (!generatedDraft) {
+      return;
+    }
+    if (mode === "replace") {
+      const nextCase = generatedDraft.case;
+      form.setFieldsValue({
+        name: nextCase.name,
+        description: nextCase.description ?? "",
+        project_id: form.getFieldValue("project_id") ?? 1,
+        base_url: nextCase.base_url ?? "",
+      });
+      syncInputContracts(nextCase.input_contract);
+      syncOutputContracts(nextCase.output_contract);
+      syncStructuredSteps(nextCase.steps);
+      setStepsJson(formatStepsJson(nextCase.steps));
+      setEditorMode("structured");
+      setValidationResult(null);
+      void messageApi.success("已替换当前 DSL 草案。");
+      return;
+    }
+
+    syncStructuredSteps(generatedDraft.case.steps);
+    setStepsJson(formatStepsJson(generatedDraft.case.steps));
+    setEditorMode("structured");
+    setValidationResult(null);
+    void messageApi.success("已导入 AI 生成步骤。");
+  };
+
   if (caseQuery.isLoading) {
     return <LoadingBlock />;
   }
@@ -650,6 +705,71 @@ export function CaseWorkbenchPage() {
               <Input.TextArea rows={3} placeholder="说明该用例验证的业务链路" />
             </Form.Item>
           </Form>
+        </Card>
+
+        <Card title="自然语言生成">
+          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Typography.Text type="secondary">
+              输入一句自然语言需求，生成可编辑 DSL 草案；生成结果不会直接保存或执行。
+            </Typography.Text>
+            <Input.TextArea
+              aria-label="自然语言需求"
+              rows={4}
+              placeholder="例如：打开 example.com，验证 URL 包含 example.com"
+              value={generationPrompt}
+              onChange={(event) => setGenerationPrompt(event.target.value)}
+            />
+            <Space wrap>
+              <Button
+                type="primary"
+                loading={generateMutation.isPending}
+                disabled={!generationPrompt.trim()}
+                onClick={() => generateMutation.mutate()}
+              >
+                生成 DSL
+              </Button>
+              {generatedDraft ? (
+                <>
+                  <Button onClick={() => applyGeneratedDraft("replace")}>替换当前 DSL</Button>
+                  <Button onClick={() => applyGeneratedDraft("steps_only")}>仅导入步骤</Button>
+                </>
+              ) : null}
+            </Space>
+            {generatedDraft?.warnings.length ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="生成提示"
+                description={
+                  <Space direction="vertical" size="small">
+                    {generatedDraft.warnings.map((warning) => (
+                      <Typography.Text key={warning}>{warning}</Typography.Text>
+                    ))}
+                  </Space>
+                }
+              />
+            ) : null}
+            {generatedDraft ? (
+              <Card size="small" title="生成预览">
+                <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                  <Space wrap>
+                    <Tag color="blue">{generatedDraft.case.name}</Tag>
+                    {generatedDraft.supported_actions.map((action) => (
+                      <Tag key={action}>{action}</Tag>
+                    ))}
+                  </Space>
+                  <Input.TextArea
+                    aria-label="生成 DSL 预览"
+                    readOnly
+                    rows={12}
+                    value={formatGeneratedCase(generatedDraft.case)}
+                    spellCheck={false}
+                    style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
+                  />
+                </Space>
+              </Card>
+            ) : null}
+          </Space>
         </Card>
 
         <Card title="上下文契约">

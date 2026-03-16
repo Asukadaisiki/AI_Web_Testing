@@ -9,6 +9,7 @@
 - Alembic 初始迁移
 - 第一批领域模型
 - DSL 校验接口
+- DSL 生成草案接口（`POST /api/v1/dsl/generate`）
 - `cases` 创建、列表、详情、更新 API
 - `suites` 创建、列表、详情、更新 API
 - 单 Case 执行与执行记录查询
@@ -20,7 +21,7 @@
 
 ## 当前未完成
 
-- AI 接入层
+- 更完整的 AI 接入层治理（模型管理、prompt 调优、审计与回放）
 - 更完整的环境配置、Suite 历史批次、失败重跑和历史对比能力
 
 ## 本地开发约定
@@ -28,6 +29,7 @@
 - 开发数据库默认使用 PostgreSQL
 - 首次启动前先执行 `uv run alembic upgrade head`
 - 后端启动命令：`uv run backend-dev`
+- AI DSL 生成默认关闭；如需启用，额外设置 `ENABLE_AI_DSL_GENERATE=true`、`AI_DSL_API_KEY` 与 `AI_DSL_MODEL`
 
 ## Smoke 基准用例
 

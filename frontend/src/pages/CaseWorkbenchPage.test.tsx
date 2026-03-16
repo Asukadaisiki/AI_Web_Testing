@@ -13,6 +13,7 @@ vi.mock("../services/api", async () => {
     ...actual,
     createCase: vi.fn(),
     executeCase: vi.fn(),
+    generateDslCase: vi.fn(),
     getCaseDetail: vi.fn(),
     updateCase: vi.fn(),
     validateDslCase: vi.fn(),
@@ -490,3 +491,61 @@ test("输出契约 source 为空时显示占位符，选择后再随保存提交
     });
   });
 }, 10000);
+
+test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", async () => {
+  vi.mocked(api.generateDslCase).mockResolvedValue({
+    case: {
+      name: "AI 生成冒烟",
+      description: "验证首页可访问",
+      base_url: "https://example.com",
+      input_contract: [],
+      output_contract: [],
+      steps: [
+        { action: "goto", value: "/" },
+        { action: "assert_url_contains", value: "example.com" },
+      ],
+    },
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    warnings: ["AI 草案未提供 base_url，已回填请求中的 Base URL。"],
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("用例名称"), "现有名称");
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "打开 example.com 并验证 URL 包含 example.com");
+
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+
+  expect(await screen.findByText("生成预览")).toBeInTheDocument();
+  expect(screen.getByDisplayValue(/"name": "AI 生成冒烟"/)).toBeInTheDocument();
+  expect(screen.getByText("AI 草案未提供 base_url，已回填请求中的 Base URL。")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "仅导入步骤" }));
+  expect(await screen.findByText("Step 2")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("现有名称")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "替换当前 DSL" }));
+  expect(await screen.findByDisplayValue("AI 生成冒烟")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("https://example.com")).toBeInTheDocument();
+});
+
+test("自然语言生成失败时不污染当前编辑内容", async () => {
+  vi.mocked(api.generateDslCase).mockRejectedValue(new Error("AI DSL 生成配置不完整。"));
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("用例名称"), "保留原始名称");
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "生成一个登录冒烟测试");
+
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+
+  expect(await screen.findByText("AI DSL 生成配置不完整。")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("保留原始名称")).toBeInTheDocument();
+  expect(screen.queryByText("生成预览")).not.toBeInTheDocument();
+});

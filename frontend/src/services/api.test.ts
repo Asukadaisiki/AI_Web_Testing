@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { getCorrectionEvents, getCorrections, getExecutions } from "./api";
+import { generateDslCase, getAISettings, getCorrectionEvents, getCorrections, getExecutions, updateAISettings } from "./api";
 
 const fetchMock = vi.fn();
 
@@ -52,5 +52,77 @@ test("getCorrectionEvents includes offset=0 in query string", async () => {
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/corrections/12/events?limit=20&offset=0",
     expect.any(Object),
+  );
+});
+
+test("generateDslCase posts prompt payload to DSL generate endpoint", async () => {
+  await generateDslCase({
+    prompt: "打开 example.com 并验证 URL",
+    base_url: "https://example.com",
+    actor_user_id: 1,
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/dsl/generate",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "打开 example.com 并验证 URL",
+        base_url: "https://example.com",
+        actor_user_id: 1,
+      }),
+    }),
+  );
+});
+
+test("getAISettings requests the runtime AI settings endpoint", async () => {
+  await getAISettings();
+
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/settings/ai", expect.any(Object));
+});
+
+test("updateAISettings sends the runtime AI settings payload", async () => {
+  await updateAISettings({
+    enable_ai_dsl_generate: true,
+    ai_dsl_timeout_ms: 15000,
+    ai_dsl_base_url: "https://api.openai.com/v1",
+    ai_dsl_model: "gpt-4o-mini",
+    ai_dsl_api_key: "new-dsl-secret",
+    clear_ai_dsl_api_key: false,
+    enable_ai_visual_locate: true,
+    ai_visual_timeout_ms: 10000,
+    ai_visual_failure_threshold: 3,
+    ai_visual_cooldown_seconds: 60,
+    ai_visual_rate_limit_per_minute: 10,
+    vlm_base_url: "https://api.openai.com/v1",
+    vlm_model: "gpt-4o",
+    vlm_model_family: "gpt-4o",
+    vlm_api_key: null,
+    clear_vlm_api_key: true,
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/settings/ai",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({
+        enable_ai_dsl_generate: true,
+        ai_dsl_timeout_ms: 15000,
+        ai_dsl_base_url: "https://api.openai.com/v1",
+        ai_dsl_model: "gpt-4o-mini",
+        ai_dsl_api_key: "new-dsl-secret",
+        clear_ai_dsl_api_key: false,
+        enable_ai_visual_locate: true,
+        ai_visual_timeout_ms: 10000,
+        ai_visual_failure_threshold: 3,
+        ai_visual_cooldown_seconds: 60,
+        ai_visual_rate_limit_per_minute: 10,
+        vlm_base_url: "https://api.openai.com/v1",
+        vlm_model: "gpt-4o",
+        vlm_model_family: "gpt-4o",
+        vlm_api_key: null,
+        clear_vlm_api_key: true,
+      }),
+    }),
   );
 });

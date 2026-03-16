@@ -28,6 +28,9 @@ const ExecutionsPage = lazy(() =>
 const CorrectionsPage = lazy(() =>
   import("../pages/CorrectionsPage").then((module) => ({ default: module.CorrectionsPage })),
 );
+const AISettingsPage = lazy(() =>
+  import("../pages/AISettingsPage").then((module) => ({ default: module.AISettingsPage })),
+);
 const ExecutionDetailPage = lazy(() =>
   import("../pages/ExecutionDetailPage").then((module) => ({ default: module.ExecutionDetailPage })),
 );
@@ -51,6 +54,7 @@ export function AppRouter() {
           <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
           <Route path="/executions" element={<ExecutionsPage />} />
           <Route path="/corrections" element={<CorrectionsPage />} />
+          <Route path="/settings/ai" element={<AISettingsPage />} />
           <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
           <Route path="/reports" element={<ReportCenterPage />} />
         </Route>

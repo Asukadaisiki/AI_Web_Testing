@@ -93,7 +93,19 @@ class DSLCase(DSLModel):
     steps: list[DSLStep] = Field(min_length=1)
 
 
+class GenerateDslRequest(DSLModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+    base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    actor_user_id: int = Field(ge=1)
+
+
 class DSLValidationResult(DSLModel):
     valid: bool = True
     case: DSLCase
     supported_actions: list[str]
+
+
+class GenerateDslResponse(DSLModel):
+    case: DSLCase
+    supported_actions: list[str]
+    warnings: list[str] = Field(default_factory=list)

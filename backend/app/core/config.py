@@ -54,6 +54,11 @@ class Settings:
     database_url: str = "sqlite:///./app.db"
     database_echo: bool = False
     execution_base_url: str | None = None
+    enable_ai_dsl_generate: bool = False
+    ai_dsl_timeout_ms: int = 15000
+    ai_dsl_api_key: str | None = None
+    ai_dsl_base_url: str = "https://api.openai.com/v1"
+    ai_dsl_model: str | None = None
     enable_ai_visual_locate: bool = False
     ai_visual_timeout_ms: int = 10000
     ai_visual_failure_threshold: int = 3
@@ -74,6 +79,11 @@ def get_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL", "sqlite:///./app.db"),
         database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,
+        enable_ai_dsl_generate=_get_bool(os.getenv("ENABLE_AI_DSL_GENERATE"), default=False),
+        ai_dsl_timeout_ms=max(1000, _get_int(os.getenv("AI_DSL_TIMEOUT_MS"), default=15000)),
+        ai_dsl_api_key=os.getenv("AI_DSL_API_KEY") or None,
+        ai_dsl_base_url=os.getenv("AI_DSL_BASE_URL", "https://api.openai.com/v1"),
+        ai_dsl_model=os.getenv("AI_DSL_MODEL") or None,
         enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
         ai_visual_timeout_ms=max(1000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=10000)),
         ai_visual_failure_threshold=max(1, _get_int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD"), default=3)),

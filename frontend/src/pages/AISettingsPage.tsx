@@ -1,0 +1,226 @@
+import { useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Alert,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Switch,
+  Typography,
+  message,
+} from "antd";
+
+import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
+import { getAISettings, updateAISettings } from "../services/api";
+import type { AISettingsUpdatePayload, VLMModelFamily } from "../types/api";
+
+type AISettingsFormValues = AISettingsUpdatePayload;
+
+const VLM_FAMILY_OPTIONS: { label: string; value: VLMModelFamily }[] = [
+  { label: "gpt-4o", value: "gpt-4o" },
+  { label: "gemini", value: "gemini" },
+  { label: "qwen-vl", value: "qwen-vl" },
+  { label: "qwen2.5-vl", value: "qwen2.5-vl" },
+];
+
+export function AISettingsPage() {
+  const [form] = Form.useForm<AISettingsFormValues>();
+  const [messageApi, contextHolder] = message.useMessage();
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery({
+    queryKey: ["ai-settings"],
+    queryFn: getAISettings,
+  });
+
+  useEffect(() => {
+    if (!settingsQuery.data) {
+      return;
+    }
+
+    form.setFieldsValue({
+      enable_ai_dsl_generate: settingsQuery.data.enable_ai_dsl_generate,
+      ai_dsl_timeout_ms: settingsQuery.data.ai_dsl_timeout_ms,
+      ai_dsl_base_url: settingsQuery.data.ai_dsl_base_url,
+      ai_dsl_model: settingsQuery.data.ai_dsl_model ?? "",
+      ai_dsl_api_key: "",
+      clear_ai_dsl_api_key: false,
+      enable_ai_visual_locate: settingsQuery.data.enable_ai_visual_locate,
+      ai_visual_timeout_ms: settingsQuery.data.ai_visual_timeout_ms,
+      ai_visual_failure_threshold: settingsQuery.data.ai_visual_failure_threshold,
+      ai_visual_cooldown_seconds: settingsQuery.data.ai_visual_cooldown_seconds,
+      ai_visual_rate_limit_per_minute: settingsQuery.data.ai_visual_rate_limit_per_minute,
+      vlm_base_url: settingsQuery.data.vlm_base_url,
+      vlm_model: settingsQuery.data.vlm_model ?? "",
+      vlm_model_family: settingsQuery.data.vlm_model_family,
+      vlm_api_key: "",
+      clear_vlm_api_key: false,
+    });
+  }, [form, settingsQuery.data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const values = await form.validateFields();
+      return updateAISettings({
+        ...values,
+        ai_dsl_model: values.ai_dsl_model?.trim() || null,
+        ai_dsl_api_key: values.ai_dsl_api_key?.trim() || null,
+        vlm_model: values.vlm_model?.trim() || null,
+        vlm_api_key: values.vlm_api_key?.trim() || null,
+      });
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(["ai-settings"], result);
+      void messageApi.success("AI 配置已保存，并已应用到当前后端进程。");
+    },
+    onError: (error: Error) => {
+      void messageApi.error(error.message);
+    },
+  });
+
+  if (settingsQuery.isLoading) {
+    return <LoadingBlock />;
+  }
+
+  if (settingsQuery.isError) {
+    return <ErrorBlock message={settingsQuery.error.message} />;
+  }
+
+  return (
+    <>
+      {contextHolder}
+      <div className="page-header">
+        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }} wrap>
+          <div>
+            <h1 className="page-title">AI 配置</h1>
+            <p className="page-subtitle">管理 AI DSL 生成与 AI 视觉定位的运行时配置。</p>
+          </div>
+          <Button type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+            保存配置
+          </Button>
+        </Space>
+      </div>
+
+      <Space direction="vertical" size="large" style={{ width: "100%" }}>
+        <Alert
+          type="info"
+          showIcon
+          message="密钥安全说明"
+          description="页面不会回显当前已保存的 API Key；如需修改，请输入新值，留空则保持原值，勾选清空后会移除现有密钥。"
+        />
+
+        <Form form={form} layout="vertical">
+          <Card title="AI DSL 生成">
+            <div className="workbench-grid">
+              <Form.Item label="启用 DSL 生成" name="enable_ai_dsl_generate" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item label="当前 DSL API Key 状态">
+                <Typography.Text>{settingsQuery.data?.has_ai_dsl_api_key ? "已配置" : "未配置"}</Typography.Text>
+              </Form.Item>
+            </div>
+            <div className="structured-step-grid">
+              <Form.Item
+                label="AI DSL Base URL"
+                name="ai_dsl_base_url"
+                rules={[{ required: true, message: "请输入 AI DSL Base URL" }]}
+              >
+                <Input />
+              </Form.Item>
+              <Form.Item label="AI DSL Model" name="ai_dsl_model">
+                <Input placeholder="例如：gpt-4o-mini" />
+              </Form.Item>
+              <Form.Item
+                label="AI DSL Timeout (ms)"
+                name="ai_dsl_timeout_ms"
+                rules={[{ required: true, message: "请输入 AI DSL 超时" }]}
+              >
+                <InputNumber min={1000} style={{ width: "100%" }} />
+              </Form.Item>
+            </div>
+            <div className="structured-step-grid">
+              <Form.Item label="替换 DSL API Key" name="ai_dsl_api_key">
+                <Input.Password placeholder="留空则保持原值" />
+              </Form.Item>
+              <Form.Item label="清空 DSL API Key" name="clear_ai_dsl_api_key" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </div>
+          </Card>
+
+          <Card title="AI 视觉定位">
+            <div className="workbench-grid">
+              <Form.Item label="启用视觉定位" name="enable_ai_visual_locate" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item label="当前 VLM API Key 状态">
+                <Typography.Text>{settingsQuery.data?.has_vlm_api_key ? "已配置" : "未配置"}</Typography.Text>
+              </Form.Item>
+            </div>
+            <div className="structured-step-grid">
+              <Form.Item
+                label="VLM Base URL"
+                name="vlm_base_url"
+                rules={[{ required: true, message: "请输入 VLM Base URL" }]}
+              >
+                <Input />
+              </Form.Item>
+              <Form.Item label="VLM Model" name="vlm_model">
+                <Input placeholder="例如：gpt-4o" />
+              </Form.Item>
+              <Form.Item
+                label="Model Family"
+                name="vlm_model_family"
+                rules={[{ required: true, message: "请选择模型家族" }]}
+              >
+                <Select options={VLM_FAMILY_OPTIONS} />
+              </Form.Item>
+            </div>
+            <div className="structured-step-grid">
+              <Form.Item
+                label="视觉超时 (ms)"
+                name="ai_visual_timeout_ms"
+                rules={[{ required: true, message: "请输入视觉超时" }]}
+              >
+                <InputNumber min={1000} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item
+                label="失败阈值"
+                name="ai_visual_failure_threshold"
+                rules={[{ required: true, message: "请输入失败阈值" }]}
+              >
+                <InputNumber min={1} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item
+                label="冷却时间 (s)"
+                name="ai_visual_cooldown_seconds"
+                rules={[{ required: true, message: "请输入冷却时间" }]}
+              >
+                <InputNumber min={1} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item
+                label="每分钟速率上限"
+                name="ai_visual_rate_limit_per_minute"
+                rules={[{ required: true, message: "请输入速率上限" }]}
+              >
+                <InputNumber min={1} style={{ width: "100%" }} />
+              </Form.Item>
+            </div>
+            <div className="structured-step-grid">
+              <Form.Item label="替换 VLM API Key" name="vlm_api_key">
+                <Input.Password placeholder="留空则保持原值" />
+              </Form.Item>
+              <Form.Item label="清空 VLM API Key" name="clear_vlm_api_key" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </div>
+          </Card>
+        </Form>
+      </Space>
+    </>
+  );
+}

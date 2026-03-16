@@ -34,6 +34,10 @@ vi.mock("../pages/CorrectionsPage", () => ({
   CorrectionsPage: () => <div>Corrections Mock</div>,
 }));
 
+vi.mock("../pages/AISettingsPage", () => ({
+  AISettingsPage: () => <div>AI Settings Mock</div>,
+}));
+
 vi.mock("../pages/ExecutionDetailPage", () => ({
   ExecutionDetailPage: () => <div>Execution Detail Mock</div>,
 }));
@@ -76,6 +80,7 @@ test("根路由默认跳转到 dashboard，并展示 v3.4 导航入口", async (
   expect(screen.getByRole("link", { name: "仪表盘" })).toHaveAttribute("href", "/dashboard");
   expect(screen.getByRole("link", { name: "Suite 管理" })).toHaveAttribute("href", "/suites");
   expect(screen.getByRole("link", { name: "修正记录" })).toHaveAttribute("href", "/corrections");
+  expect(screen.getByRole("link", { name: "AI 配置" })).toHaveAttribute("href", "/settings/ai");
   expect(screen.getByRole("link", { name: "报告中心" })).toHaveAttribute("href", "/reports");
 });
 
@@ -104,4 +109,11 @@ test("corrections 路由激活时菜单选中正确", async () => {
 
   expect(await screen.findByText("Corrections Mock")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "修正记录" }).closest("li")).toHaveClass("ant-menu-item-selected");
+});
+
+test("AI 配置路由激活时菜单选中正确", async () => {
+  renderRouter(["/settings/ai"]);
+
+  expect(await screen.findByText("AI Settings Mock")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "AI 配置" }).closest("li")).toHaveClass("ant-menu-item-selected");
 });

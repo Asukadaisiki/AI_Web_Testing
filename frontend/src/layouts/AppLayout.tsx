@@ -26,6 +26,10 @@ const items: ItemType[] = [
     label: <Link to="/corrections">修正记录</Link>,
   },
   {
+    key: "/settings/ai",
+    label: <Link to="/settings/ai">AI 配置</Link>,
+  },
+  {
     key: "/reports",
     label: <Link to="/reports">报告中心</Link>,
   },
@@ -42,6 +46,8 @@ export function AppLayout() {
     selectedKey = "/executions";
   } else if (location.pathname.startsWith("/corrections")) {
     selectedKey = "/corrections";
+  } else if (location.pathname.startsWith("/settings/ai")) {
+    selectedKey = "/settings/ai";
   } else if (location.pathname.startsWith("/reports")) {
     selectedKey = "/reports";
   }

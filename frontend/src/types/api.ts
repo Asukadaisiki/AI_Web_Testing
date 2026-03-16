@@ -3,6 +3,7 @@ export type FailureCategory = "configuration" | "locator" | "assertion" | "navig
 export type OverviewWindowDays = 7 | 14 | 30;
 export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
 export type CorrectionType = "css" | "xpath" | "test_id";
+export type VLMModelFamily = "qwen-vl" | "gemini" | "gpt-4o" | "qwen2.5-vl";
 export type CorrectionEventType =
   | "created"
   | "activated"
@@ -68,6 +69,54 @@ export interface DSLCasePayload {
   input_contract: DSLCaseInputContract[];
   output_contract: DSLCaseOutputContract[];
   steps: DSLStep[];
+}
+
+export interface GenerateDslRequest {
+  prompt: string;
+  base_url?: string | null;
+  actor_user_id: number;
+}
+
+export interface GenerateDslResponse {
+  case: DSLCasePayload;
+  supported_actions: string[];
+  warnings: string[];
+}
+
+export interface AISettings {
+  enable_ai_dsl_generate: boolean;
+  ai_dsl_timeout_ms: number;
+  ai_dsl_base_url: string;
+  ai_dsl_model?: string | null;
+  has_ai_dsl_api_key: boolean;
+  enable_ai_visual_locate: boolean;
+  ai_visual_timeout_ms: number;
+  ai_visual_failure_threshold: number;
+  ai_visual_cooldown_seconds: number;
+  ai_visual_rate_limit_per_minute: number;
+  vlm_base_url: string;
+  vlm_model?: string | null;
+  vlm_model_family: VLMModelFamily;
+  has_vlm_api_key: boolean;
+}
+
+export interface AISettingsUpdatePayload {
+  enable_ai_dsl_generate: boolean;
+  ai_dsl_timeout_ms: number;
+  ai_dsl_base_url: string;
+  ai_dsl_model?: string | null;
+  ai_dsl_api_key?: string | null;
+  clear_ai_dsl_api_key: boolean;
+  enable_ai_visual_locate: boolean;
+  ai_visual_timeout_ms: number;
+  ai_visual_failure_threshold: number;
+  ai_visual_cooldown_seconds: number;
+  ai_visual_rate_limit_per_minute: number;
+  vlm_base_url: string;
+  vlm_model?: string | null;
+  vlm_model_family: VLMModelFamily;
+  vlm_api_key?: string | null;
+  clear_vlm_api_key: boolean;
 }
 
 export interface CaseMutationPayload extends DSLCasePayload {

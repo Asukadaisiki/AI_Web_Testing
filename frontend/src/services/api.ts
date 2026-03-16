@@ -1,9 +1,13 @@
 import type {
+  AISettings,
+  AISettingsUpdatePayload,
   BatchUpdateCorrectionStatePayload,
   CaseMutationPayload,
   CaseExecutionRequest,
   CreateCorrectionPayload,
   DSLCasePayload,
+  GenerateDslRequest,
+  GenerateDslResponse,
   DSLValidationResult,
   ExecutionsOverview,
   LocatorCorrectionsOverview,
@@ -120,6 +124,24 @@ export function updateCase(caseId: number, payload: CaseMutationPayload) {
 export function validateDslCase(payload: DSLCasePayload) {
   return request<DSLValidationResult>("/api/v1/dsl/validate", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function generateDslCase(payload: GenerateDslRequest) {
+  return request<GenerateDslResponse>("/api/v1/dsl/generate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getAISettings() {
+  return request<AISettings>("/api/v1/settings/ai");
+}
+
+export function updateAISettings(payload: AISettingsUpdatePayload) {
+  return request<AISettings>("/api/v1/settings/ai", {
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }

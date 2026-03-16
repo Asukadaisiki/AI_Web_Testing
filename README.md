@@ -19,10 +19,11 @@ AI 增强的 Web UI 自动化测试平台。
 - Suite Context v2.3：Case 输入/输出契约、跨 Case 上下文传递、上下文快照、失败重跑上下文策略、前端上下文证据展示
 - 混合定位闭环第一阶段：`locator_corrections` 修正记录、`needs_intervention` 执行状态、统一降级定位入口、执行详情页人工干预面板
 - 修正记录管理：前端已提供 `/corrections` 页面，可按目标描述、页面 URL 和状态筛选修正记录，并支持 overview 卡片、命中趋势、批量启用/停用与事件时间线
+- AI 生成 DSL 最小闭环：后端已提供 `POST /api/v1/dsl/generate`，前端工作台可输入自然语言生成草案，并选择“替换当前 DSL”或“仅导入步骤”
 - AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
-- AI 生成 DSL
+- AI 生成 DSL 深化（prompt 调优、模型管理、更多草案修正策略）
 - AI 视觉定位增强（默认关闭，当前仅保留可接入实现与运行保护）
 - 更完整的环境配置与登录体系
 
@@ -69,6 +70,11 @@ uv run pytest tests/integration -m browser_integration
 ## AI 视觉保护配置
 
 后端当前支持以下保护性配置，默认都以“不中断主链路”为原则：
+- `ENABLE_AI_DSL_GENERATE=false`
+- `AI_DSL_TIMEOUT_MS=15000`
+- `AI_DSL_API_KEY=`
+- `AI_DSL_BASE_URL=https://api.openai.com/v1`
+- `AI_DSL_MODEL=`
 - `ENABLE_AI_VISUAL_LOCATE=false`
 - `AI_VISUAL_TIMEOUT_MS=10000`
 - `AI_VISUAL_FAILURE_THRESHOLD=3`
