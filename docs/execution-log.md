@@ -24,6 +24,42 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-17 23:26
+
+- 任务：将 AI DSL 生成反馈闭环改动同步到 GitHub
+- 背景：本轮 AI DSL 治理改动、迁移、测试与执行日志已完成，用户要求将当前成果同步到远端仓库；工作区同时存在与本轮无关的未跟踪目录 `.claude/`
+- 执行动作：
+  - 核对 `git status --short`、`git branch --show-current` 与 `git remote -v`，确认当前位于 `main`，远端为 `origin`
+  - 追加本条执行日志，确保“实现 -> 验证 -> 同步”链路可追溯
+  - 仅暂存本轮 AI DSL 反馈闭环相关代码、迁移、测试与日志文件，显式排除未跟踪的 `.claude/`
+  - 创建提交并推送到 `origin/main`
+- 结果：本轮 AI DSL 反馈闭环改动已整理为一批可追溯变更，准备同步到 GitHub 主分支
+- 验证：
+  - 执行 `git status --short` 核对提交范围
+  - 执行 `git push origin main` 完成远端同步
+- 关联文件：`backend/`、`frontend/`、`docs/execution-log.md`
+- 后续：无
+
+## 2026-03-17 23:23
+
+- 任务：实现 AI DSL 生成草案的采纳/放弃反馈闭环，补齐治理结果信号
+- 背景：仓库已具备 AI DSL 生成、自动修正、持久化审计和概览观测，但生成记录仍只能回答“生成过什么”，无法回答“是否被采纳”，不足以支撑 prompt 调优与模型治理
+- 执行动作：
+  - 扩展后端 `dsl_generation_runs` 模型、schema 与 Alembic 迁移 `20260317_0010`，新增 `feedback_status`、`feedback_import_mode`、`feedback_recorded_at` 字段，并通过约束固定为“pending / accepted / rejected”与导入方式匹配语义
+  - 在 `backend/app/services/dsl.py` 新增反馈写入服务，落实“首次决策落库、相同决策幂等、冲突决策返回 409”，同时扩展 durable 概览聚合，新增采纳/放弃/待处理数量、决策覆盖率与采纳导入方式分布
+  - 新增 `PATCH /api/v1/dsl/generations/{id}/feedback`，并扩展生成记录摘要返回反馈字段
+  - 前端 `CaseWorkbenchPage` 接入反馈上报：三种导入动作上报 `accepted`，新增“放弃草案”上报 `rejected`，反馈失败时保留已导入编辑态与草案预览并提示可重试
+  - 前端 `AISettingsPage` 扩展“最近生成记录”反馈状态列与治理指标展示；同步更新前端类型、API 封装与页面测试
+- 结果：仓库现在具备“生成 -> 导入/放弃 -> 反馈落库 -> 治理概览回看”的最小治理闭环；未决策记录保持 `pending`，已记录决策不可被后续冲突反馈覆盖
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py tests/unit/test_models.py`，结果为 `33 passed`
+  - 执行 `cd backend && uv run pytest`，结果为 `130 passed`
+  - 执行 `cd backend && uv run alembic upgrade head` 成功，`20260317_0010` 迁移通过
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果为 `25 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联文件：`backend/app/models/dsl_generation_run.py`、`backend/app/schemas/dsl.py`、`backend/app/schemas/settings.py`、`backend/app/services/dsl.py`、`backend/app/api/routes/dsl.py`、`backend/alembic/versions/20260317_0010_dsl_generation_feedback.py`、`backend/tests/unit/test_dsl_validation.py`、`backend/tests/unit/test_ai_settings_api.py`、`backend/tests/unit/test_models.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.test.tsx`、`frontend/src/pages/AISettingsPage.tsx`、`frontend/src/pages/AISettingsPage.test.tsx`、`frontend/src/services/api.ts`、`frontend/src/services/api.test.ts`、`frontend/src/types/api.ts`
+- 后续：可继续沿 AI DSL 治理主线推进更细的采纳分析，例如按 prompt/hash、模型、错误类型或导入方式做更稳定的治理报表；本轮不扩展到登录认证、corrections 新能力或默认开启 AI visual
+
 ## 2026-03-16 11:35
 
 - 任务：实现 AI 生成 DSL 深化第一批，补齐生成模式、草案修正、最小模型治理观测与前端工作台联动

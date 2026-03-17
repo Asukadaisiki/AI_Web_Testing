@@ -539,6 +539,9 @@ def test_generate_dsl_case_persists_success_record(client, db_session, monkeypat
     assert generation_run.generated_case_json["name"] == "成功落库"
     assert generation_run.warnings_count == 1
     assert generation_run.normalization_notes_count == 0
+    assert generation_run.feedback_status == "pending"
+    assert generation_run.feedback_import_mode is None
+    assert generation_run.feedback_recorded_at is None
 
 
 def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypatch) -> None:
@@ -563,6 +566,7 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert runs[0].error_type == "DslGenerationError"
     assert runs[0].error_message == "AI 返回了无法解析的 DSL JSON。"
     assert runs[0].generated_case_json is None
+    assert runs[0].feedback_status == "pending"
 
 
 def test_generate_dsl_case_uses_runtime_strict_mode_default_when_request_omits_generation_mode(
@@ -640,3 +644,136 @@ def test_list_dsl_generation_runs_supports_status_limit_and_offset(client, monke
     success_response = client.get("/api/v1/dsl/generations", params={"status": "success", "offset": 1, "limit": 1})
     assert success_response.status_code == 200
     assert [item["prompt_preview"] for item in success_response.json()] == ["first"]
+    assert success_response.json()[0]["feedback_status"] == "pending"
+    assert success_response.json()[0]["feedback_import_mode"] is None
+
+
+def test_record_generation_feedback_accepts_first_decision_and_is_idempotent(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "反馈记录",
+  "steps": [{"action": "goto", "value": "/feedback"}]
+}""",
+    )
+
+    generate_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成可反馈草案",
+            "actor_user_id": 1,
+        },
+    )
+    generation_id = generate_response.json()["generation_id"]
+
+    response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+            "feedback_import_mode": "steps_only",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["feedback_status"] == "accepted"
+    assert response.json()["feedback_import_mode"] == "steps_only"
+    assert response.json()["feedback_recorded_at"] is not None
+
+    repeated_response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+            "feedback_import_mode": "steps_only",
+        },
+    )
+
+    assert repeated_response.status_code == 200
+    assert repeated_response.json()["feedback_status"] == "accepted"
+    assert repeated_response.json()["feedback_import_mode"] == "steps_only"
+
+
+def test_record_generation_feedback_rejects_conflicting_decision(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "冲突反馈",
+  "steps": [{"action": "goto", "value": "/feedback"}]
+}""",
+    )
+
+    generate_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成冲突反馈草案",
+            "actor_user_id": 1,
+        },
+    )
+    generation_id = generate_response.json()["generation_id"]
+
+    first_feedback = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+            "feedback_import_mode": "replace",
+        },
+    )
+    assert first_feedback.status_code == 200
+
+    conflict_response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+        },
+    )
+
+    assert conflict_response.status_code == 409
+    assert conflict_response.json()["detail"] == "该生成记录的反馈已写入不同决策，不能覆盖。"
+
+
+def test_record_generation_feedback_requires_import_mode_for_accepted(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "缺少导入方式",
+  "steps": [{"action": "goto", "value": "/feedback"}]
+}""",
+    )
+
+    generate_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成缺少导入方式草案",
+            "actor_user_id": 1,
+        },
+    )
+    generation_id = generate_response.json()["generation_id"]
+
+    response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "accepted 反馈必须提供 feedback_import_mode" in response.text

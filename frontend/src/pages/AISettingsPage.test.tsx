@@ -49,6 +49,10 @@ test("渲染 AI 配置并允许保存修改", async () => {
       total_requests: 4,
       success_count: 3,
       failure_count: 1,
+      accepted_count: 2,
+      rejected_count: 1,
+      pending_count: 1,
+      decision_coverage_rate: 0.75,
       last_model: "gpt-4o-mini",
       last_error_type: "DslGenerationError",
       last_error_message: "bad json",
@@ -59,6 +63,16 @@ test("渲染 AI 配置并允许保存修改", async () => {
       top_error_types: [
         {
           error_type: "DslGenerationError",
+          count: 1,
+        },
+      ],
+      accepted_import_mode_breakdown: [
+        {
+          import_mode: "replace",
+          count: 1,
+        },
+        {
+          import_mode: "steps_only",
           count: 1,
         },
       ],
@@ -80,6 +94,9 @@ test("渲染 AI 配置并允许保存修改", async () => {
       warnings_count: 1,
       normalization_notes_count: 2,
       prompt_preview: "打开 example.com 并验证 URL",
+      feedback_status: "rejected",
+      feedback_import_mode: null,
+      feedback_recorded_at: "2026-03-16T10:02:00",
     },
   ]);
   vi.mocked(api.updateAISettings).mockResolvedValue({
@@ -111,12 +128,16 @@ test("渲染 AI 配置并允许保存修改", async () => {
   expect(screen.getByText("未配置")).toBeInTheDocument();
   expect(screen.getByText("4")).toBeInTheDocument();
   expect(screen.getByText("3 / 1")).toBeInTheDocument();
+  expect(screen.getByText("2 / 1 / 1")).toBeInTheDocument();
   expect(screen.getByText("2 / 1")).toBeInTheDocument();
   expect(screen.getByText("50%")).toBeInTheDocument();
+  expect(screen.getByText("75%")).toBeInTheDocument();
   expect(screen.getByText("DslGenerationError (1)")).toBeInTheDocument();
+  expect(screen.getByText("replace (1)、steps_only (1)")).toBeInTheDocument();
   expect(screen.getByText("最近生成记录")).toBeInTheDocument();
   expect(screen.getByText("打开 example.com 并验证 URL")).toBeInTheDocument();
   expect(screen.getByText("DslGenerationError: bad json")).toBeInTheDocument();
+  expect(screen.getByText("已放弃")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("switch", { name: "启用 DSL 生成" }));
   await userEvent.click(screen.getByRole("switch", { name: "严格生成模式" }));
@@ -170,6 +191,10 @@ test("加载失败时展示错误块", async () => {
       total_requests: 0,
       success_count: 0,
       failure_count: 0,
+      accepted_count: 0,
+      rejected_count: 0,
+      pending_count: 0,
+      decision_coverage_rate: 0,
       last_model: null,
       last_error_type: null,
       last_error_message: null,
@@ -178,6 +203,7 @@ test("加载失败时展示错误块", async () => {
       last_24h_failure_count: 0,
       last_24h_auto_repair_rate: 0,
       top_error_types: [],
+      accepted_import_mode_breakdown: [],
     },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);

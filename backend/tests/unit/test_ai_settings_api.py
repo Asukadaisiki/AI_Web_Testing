@@ -177,6 +177,10 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
             "total_requests": 1,
             "success_count": 0,
             "failure_count": 1,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "pending_count": 1,
+            "decision_coverage_rate": 0.0,
             "last_model": "gpt-dsl",
             "last_error_type": "DslGenerationConfigError",
             "last_error_message": "AI DSL 生成配置不完整。请提供 AI_DSL_API_KEY 与 AI_DSL_MODEL。",
@@ -190,5 +194,90 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
                     "count": 1,
                 }
             ],
+            "accepted_import_mode_breakdown": [],
         },
     }
+
+
+def test_get_ai_settings_overview_includes_feedback_governance_stats(
+    ai_settings_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-dsl")
+    config_module.get_settings.cache_clear()
+
+    responses = iter(
+        [
+            """
+{
+  "name": "accepted replace",
+  "steps": [{"action": "goto", "value": "/replace"}]
+}""",
+            """
+{
+  "name": "accepted steps",
+  "steps": [{"action": "goto", "value": "/steps"}]
+}""",
+            """
+{
+  "name": "rejected",
+  "steps": [{"action": "goto", "value": "/rejected"}]
+}""",
+        ]
+    )
+    monkeypatch.setattr("app.ai.dsl_generator._call_llm", lambda **_: next(responses))
+
+    accepted_replace = ai_settings_client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "accepted replace", "actor_user_id": 1},
+    ).json()["generation_id"]
+    accepted_steps = ai_settings_client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "accepted steps", "actor_user_id": 1},
+    ).json()["generation_id"]
+    rejected = ai_settings_client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "rejected", "actor_user_id": 1},
+    ).json()["generation_id"]
+
+    accepted_replace_response = ai_settings_client.patch(
+        f"/api/v1/dsl/generations/{accepted_replace}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+            "feedback_import_mode": "replace",
+        },
+    )
+    accepted_steps_response = ai_settings_client.patch(
+        f"/api/v1/dsl/generations/{accepted_steps}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+            "feedback_import_mode": "steps_only",
+        },
+    )
+    rejected_response = ai_settings_client.patch(
+        f"/api/v1/dsl/generations/{rejected}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+        },
+    )
+
+    assert accepted_replace_response.status_code == 200
+    assert accepted_steps_response.status_code == 200
+    assert rejected_response.status_code == 200
+
+    overview_response = ai_settings_client.get("/api/v1/settings/ai/overview")
+
+    assert overview_response.status_code == 200
+    assert overview_response.json()["generation_stats"]["accepted_count"] == 2
+    assert overview_response.json()["generation_stats"]["rejected_count"] == 1
+    assert overview_response.json()["generation_stats"]["pending_count"] == 0
+    assert overview_response.json()["generation_stats"]["decision_coverage_rate"] == 1.0
+    assert overview_response.json()["generation_stats"]["accepted_import_mode_breakdown"] == [
+        {"import_mode": "replace", "count": 1},
+        {"import_mode": "steps_only", "count": 1},
+    ]

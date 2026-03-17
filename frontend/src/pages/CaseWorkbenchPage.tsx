@@ -22,6 +22,7 @@ import {
   generateDslCase,
   getAISettings,
   getCaseDetail,
+  recordDslGenerationFeedback,
   updateCase,
   validateDslCase,
 } from "../services/api";
@@ -68,6 +69,10 @@ type StepTemplate = {
   baseUrl: string;
   steps: DSLStep[];
 };
+
+type RecordedGenerationFeedback =
+  | { status: "accepted"; importMode: GenerateDslImportMode }
+  | { status: "rejected" };
 
 const ACTION_OPTIONS: { label: string; value: StepAction }[] = [
   { label: "goto", value: "goto" },
@@ -330,6 +335,16 @@ function formatDslGenerationStatus(settings: AISettings) {
   return `当前生成配置：${enabled}，模型 ${model}，${strictMode}，${autoRepair}`;
 }
 
+function formatImportModeLabel(mode: GenerateDslImportMode) {
+  if (mode === "replace") {
+    return "替换当前 DSL";
+  }
+  if (mode === "steps_only") {
+    return "仅导入步骤";
+  }
+  return "仅合并契约";
+}
+
 export function CaseWorkbenchPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const isEditMode = Boolean(caseId);
@@ -353,6 +368,8 @@ export function CaseWorkbenchPage() {
   const [generationImportMode, setGenerationImportMode] = useState<GenerateDslImportMode>("replace");
   const [preserveContracts, setPreserveContracts] = useState(true);
   const [generatedDraft, setGeneratedDraft] = useState<GenerateDslResponse | null>(null);
+  const [generationFeedbackError, setGenerationFeedbackError] = useState<string | null>(null);
+  const [recordedGenerationFeedback, setRecordedGenerationFeedback] = useState<RecordedGenerationFeedback | null>(null);
   const [pendingDraft, setPendingDraft] = useState<WorkbenchDraft | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
   const [baselineSignature, setBaselineSignature] = useState<string>(buildDraftSignature(createDefaultDraft()));
@@ -645,18 +662,40 @@ export function CaseWorkbenchPage() {
     },
     onSuccess: (result) => {
       setGeneratedDraft(result);
+      setGenerationFeedbackError(null);
+      setRecordedGenerationFeedback(null);
       void messageApi.success("AI DSL 草案已生成。");
     },
     onError: (error: Error) => {
       setGeneratedDraft(null);
+      setGenerationFeedbackError(null);
+      setRecordedGenerationFeedback(null);
       void messageApi.error(error.message);
     },
   });
 
-  const applyGeneratedDraft = (mode: GenerateDslImportMode) => {
+  const feedbackMutation = useMutation({
+    mutationFn: async ({
+      generationId,
+      status,
+      importMode,
+    }: {
+      generationId: number;
+      status: "accepted" | "rejected";
+      importMode?: GenerateDslImportMode;
+    }) =>
+      recordDslGenerationFeedback(generationId, {
+        actor_user_id: 1,
+        feedback_status: status,
+        feedback_import_mode: importMode ?? null,
+      }),
+  });
+
+  const applyGeneratedDraft = async (mode: GenerateDslImportMode) => {
     if (!generatedDraft) {
       return;
     }
+    const generationId = generatedDraft.generation_id;
     if (mode === "replace") {
       const nextCase = generatedDraft.case;
       form.setFieldsValue({
@@ -671,24 +710,52 @@ export function CaseWorkbenchPage() {
       setStepsJson(formatStepsJson(nextCase.steps));
       setEditorMode("structured");
       setValidationResult(null);
-      void messageApi.success("已替换当前 DSL 草案。");
-      return;
-    }
-
-    if (mode === "contracts_only") {
+    } else if (mode === "contracts_only") {
       syncInputContracts(mergeContractsByContextKey(inputContracts, generatedDraft.case.input_contract));
       syncOutputContracts(mergeContractsByContextKey(outputContracts, generatedDraft.case.output_contract));
       setValidationResult(null);
-      void messageApi.success("已合并 AI 生成契约。");
+    } else {
+      syncStructuredSteps(generatedDraft.case.steps);
+      setStepsJson(formatStepsJson(generatedDraft.case.steps));
+      setEditorMode("structured");
+      setValidationResult(null);
+    }
+    setGenerationFeedbackError(null);
+    try {
+      await feedbackMutation.mutateAsync({
+        generationId,
+        status: "accepted",
+        importMode: mode,
+      });
+      setRecordedGenerationFeedback({ status: "accepted", importMode: mode });
+      void messageApi.success(`已记录草案采纳反馈：${formatImportModeLabel(mode)}。`);
+    } catch (error) {
+      setGenerationFeedbackError(`反馈未记录，可重试：${(error as Error).message}`);
+      void messageApi.error(`反馈未记录：${(error as Error).message}`);
+    }
+  };
+
+  const rejectGeneratedDraft = async () => {
+    if (!generatedDraft) {
       return;
     }
-
-    syncStructuredSteps(generatedDraft.case.steps);
-    setStepsJson(formatStepsJson(generatedDraft.case.steps));
-    setEditorMode("structured");
-    setValidationResult(null);
-    void messageApi.success("已导入 AI 生成步骤。");
+    const generationId = generatedDraft.generation_id;
+    setGenerationFeedbackError(null);
+    try {
+      await feedbackMutation.mutateAsync({
+        generationId,
+        status: "rejected",
+      });
+      setRecordedGenerationFeedback({ status: "rejected" });
+      setGeneratedDraft(null);
+      void messageApi.success("已记录草案放弃反馈。");
+    } catch (error) {
+      setGenerationFeedbackError(`反馈未记录，可重试：${(error as Error).message}`);
+      void messageApi.error(`反馈未记录：${(error as Error).message}`);
+    }
   };
+
+  const feedbackLocked = feedbackMutation.isPending || recordedGenerationFeedback?.status === "accepted";
 
   if (caseQuery.isLoading) {
     return <LoadingBlock />;
@@ -866,16 +933,25 @@ export function CaseWorkbenchPage() {
               <Button
                 type="primary"
                 loading={generateMutation.isPending}
-                disabled={!generationPrompt.trim()}
+                disabled={!generationPrompt.trim() || feedbackMutation.isPending}
                 onClick={() => generateMutation.mutate()}
               >
                 生成 DSL
               </Button>
               {generatedDraft ? (
                 <>
-                  <Button onClick={() => applyGeneratedDraft("replace")}>替换当前 DSL</Button>
-                  <Button onClick={() => applyGeneratedDraft("steps_only")}>仅导入步骤</Button>
-                  <Button onClick={() => applyGeneratedDraft("contracts_only")}>仅合并契约</Button>
+                  <Button disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("replace")}>
+                    替换当前 DSL
+                  </Button>
+                  <Button disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("steps_only")}>
+                    仅导入步骤
+                  </Button>
+                  <Button disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("contracts_only")}>
+                    仅合并契约
+                  </Button>
+                  <Button danger disabled={feedbackLocked} onClick={() => void rejectGeneratedDraft()}>
+                    放弃草案
+                  </Button>
                 </>
               ) : null}
             </Space>
@@ -885,6 +961,22 @@ export function CaseWorkbenchPage() {
                 showIcon
                 message="不可导入错误"
                 description={generateMutation.error.message}
+              />
+            ) : null}
+            {generationFeedbackError ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="反馈记录失败"
+                description={generationFeedbackError}
+              />
+            ) : null}
+            {recordedGenerationFeedback?.status === "accepted" ? (
+              <Alert
+                type="info"
+                showIcon
+                message="草案反馈已记录"
+                description={`已采纳当前草案，导入方式：${formatImportModeLabel(recordedGenerationFeedback.importMode)}。`}
               />
             ) : null}
             {generatedDraft?.normalization_notes.length ? (

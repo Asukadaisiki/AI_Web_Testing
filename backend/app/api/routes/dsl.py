@@ -7,6 +7,7 @@ from app.db import get_db_session
 from app.schemas.dsl import (
     DSLCase,
     DSLValidationResult,
+    DslGenerationFeedbackRequest,
     DslGenerationRunStatus,
     GenerateDslRequest,
     GenerateDslResponse,
@@ -16,8 +17,10 @@ from app.services import EntityNotFoundError
 from app.services.dsl import (
     DslGenerationConfigError,
     DslGenerationError,
+    DslGenerationFeedbackConflictError,
     generate_dsl_case,
     list_dsl_generation_runs,
+    record_dsl_generation_feedback,
     validate_dsl_case,
 )
 
@@ -53,3 +56,21 @@ def list_generation_runs_route(
     session: Session = Depends(get_db_session),
 ) -> list[StoredDslGenerationRunSummary]:
     return list_dsl_generation_runs(session, status=status, limit=limit, offset=offset)
+
+
+@router.patch(
+    "/generations/{generation_id}/feedback",
+    response_model=StoredDslGenerationRunSummary,
+    summary="Record DSL generation feedback",
+)
+def record_generation_feedback_route(
+    generation_id: int,
+    payload: DslGenerationFeedbackRequest,
+    session: Session = Depends(get_db_session),
+) -> StoredDslGenerationRunSummary:
+    try:
+        return record_dsl_generation_feedback(session, generation_id, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DslGenerationFeedbackConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

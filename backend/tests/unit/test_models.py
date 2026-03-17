@@ -282,6 +282,9 @@ def test_dsl_generation_run_columns_and_foreign_keys_exist(db_session: Session) 
         "warnings_count",
         "normalization_notes_count",
         "generated_case_json",
+        "feedback_status",
+        "feedback_import_mode",
+        "feedback_recorded_at",
         "created_at",
     }.issubset(columns)
 

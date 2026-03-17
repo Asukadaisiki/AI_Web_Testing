@@ -39,6 +39,16 @@ function formatTimestamp(value: string) {
   });
 }
 
+function formatFeedbackStatus(record: StoredDslGenerationRunSummary) {
+  if (record.feedback_status === "accepted") {
+    return `已采纳${record.feedback_import_mode ? ` (${record.feedback_import_mode})` : ""}`;
+  }
+  if (record.feedback_status === "rejected") {
+    return "已放弃";
+  }
+  return "待处理";
+}
+
 export function AISettingsPage() {
   const [form] = Form.useForm<AISettingsFormValues>();
   const [messageApi, contextHolder] = message.useMessage();
@@ -156,6 +166,11 @@ export function AISettingsPage() {
       dataIndex: "prompt_preview",
       key: "prompt_preview",
     },
+    {
+      title: "反馈",
+      key: "feedback_status",
+      render: (_: unknown, record: StoredDslGenerationRunSummary) => formatFeedbackStatus(record),
+    },
   ];
 
   return (
@@ -207,6 +222,13 @@ export function AISettingsPage() {
                 <Descriptions.Item label="成功 / 失败">
                   {overviewData.generation_stats.success_count} / {overviewData.generation_stats.failure_count}
                 </Descriptions.Item>
+                <Descriptions.Item label="采纳 / 放弃 / 待处理">
+                  {overviewData.generation_stats.accepted_count} / {overviewData.generation_stats.rejected_count} /{" "}
+                  {overviewData.generation_stats.pending_count}
+                </Descriptions.Item>
+                <Descriptions.Item label="决策覆盖率">
+                  {formatPercent(overviewData.generation_stats.decision_coverage_rate)}
+                </Descriptions.Item>
                 <Descriptions.Item label="最近使用模型">
                   {overviewData.generation_stats.last_model ?? "暂无"}
                 </Descriptions.Item>
@@ -226,6 +248,13 @@ export function AISettingsPage() {
                   {overviewData.generation_stats.top_error_types.length
                     ? overviewData.generation_stats.top_error_types
                         .map((item) => `${item.error_type} (${item.count})`)
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="采纳导入方式分布">
+                  {overviewData.generation_stats.accepted_import_mode_breakdown.length
+                    ? overviewData.generation_stats.accepted_import_mode_breakdown
+                        .map((item) => `${item.import_mode} (${item.count})`)
                         .join("、")
                     : "暂无"}
                 </Descriptions.Item>

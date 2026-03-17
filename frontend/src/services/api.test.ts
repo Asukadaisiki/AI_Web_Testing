@@ -8,6 +8,7 @@ import {
   getCorrections,
   getDslGenerationRuns,
   getExecutions,
+  recordDslGenerationFeedback,
   updateAISettings,
 } from "./api";
 
@@ -162,6 +163,26 @@ test("getDslGenerationRuns includes status limit and offset in query string", as
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/dsl/generations?status=failed&limit=10&offset=0",
     expect.any(Object),
+  );
+});
+
+test("recordDslGenerationFeedback posts feedback payload to endpoint", async () => {
+  await recordDslGenerationFeedback(23, {
+    actor_user_id: 1,
+    feedback_status: "accepted",
+    feedback_import_mode: "contracts_only",
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/dsl/generations/23/feedback",
+    expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({
+        actor_user_id: 1,
+        feedback_status: "accepted",
+        feedback_import_mode: "contracts_only",
+      }),
+    }),
   );
 });
 

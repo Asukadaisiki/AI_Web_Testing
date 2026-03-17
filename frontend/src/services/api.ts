@@ -7,6 +7,7 @@ import type {
   CaseExecutionRequest,
   CreateCorrectionPayload,
   DSLCasePayload,
+  DslGenerationFeedbackPayload,
   DslGenerationRunStatus,
   GenerateDslRequest,
   GenerateDslResponse,
@@ -155,6 +156,13 @@ export function getDslGenerationRuns(params?: {
   }
   const query = search.toString();
   return request<StoredDslGenerationRunSummary[]>(`/api/v1/dsl/generations${query ? `?${query}` : ""}`);
+}
+
+export function recordDslGenerationFeedback(generationId: number, payload: DslGenerationFeedbackPayload) {
+  return request<StoredDslGenerationRunSummary>(`/api/v1/dsl/generations/${generationId}/feedback`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getAISettings() {

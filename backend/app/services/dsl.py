@@ -21,12 +21,17 @@ from app.models import DslGenerationRun, User
 from app.schemas.dsl import (
     DSLCase,
     DSLValidationResult,
+    DslGenerationFeedbackRequest,
     GenerateDslMeta,
     GenerateDslRequest,
     GenerateDslResponse,
     StoredDslGenerationRunSummary,
 )
-from app.schemas.settings import AIDslGenerationErrorTypeCount, AIDslGenerationStats
+from app.schemas.settings import (
+    AIDslGenerationErrorTypeCount,
+    AIDslGenerationImportModeCount,
+    AIDslGenerationStats,
+)
 from app.services.cases import EntityNotFoundError
 
 
@@ -52,6 +57,10 @@ class DslGenerationRuntimeStats:
 
 _RUNTIME_STATS = DslGenerationRuntimeStats()
 _RUNTIME_STATS_LOCK = Lock()
+
+
+class DslGenerationFeedbackConflictError(RuntimeError):
+    """Raised when generation feedback was already recorded with a different decision."""
 
 
 def validate_dsl_case(test_case: DSLCase) -> DSLValidationResult:
@@ -152,15 +161,63 @@ def list_dsl_generation_runs(
     return [_to_stored_dsl_generation_run_summary(record) for record in records]
 
 
+def record_dsl_generation_feedback(
+    session: Session,
+    generation_id: int,
+    payload: DslGenerationFeedbackRequest,
+) -> StoredDslGenerationRunSummary:
+    _ensure_user_exists(session, payload.actor_user_id)
+    generation_run = session.get(DslGenerationRun, generation_id)
+    if generation_run is None:
+        raise EntityNotFoundError(f"DSL generation run {generation_id} not found.")
+
+    if generation_run.feedback_status == "pending":
+        generation_run.feedback_status = payload.feedback_status
+        generation_run.feedback_import_mode = payload.feedback_import_mode
+        generation_run.feedback_recorded_at = datetime.now(UTC).replace(tzinfo=None)
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        session.refresh(generation_run)
+        return _to_stored_dsl_generation_run_summary(generation_run)
+
+    if (
+        generation_run.feedback_status == payload.feedback_status
+        and generation_run.feedback_import_mode == payload.feedback_import_mode
+    ):
+        return _to_stored_dsl_generation_run_summary(generation_run)
+
+    raise DslGenerationFeedbackConflictError("该生成记录的反馈已写入不同决策，不能覆盖。")
+
+
 def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
     total_requests = session.scalar(select(func.count()).select_from(DslGenerationRun)) or 0
     success_count = (
         session.scalar(
             select(func.count()).select_from(DslGenerationRun).where(DslGenerationRun.success.is_(True))
+    )
+    or 0
+    )
+    failure_count = max(0, total_requests - success_count)
+    accepted_count = (
+        session.scalar(
+            select(func.count())
+            .select_from(DslGenerationRun)
+            .where(DslGenerationRun.feedback_status == "accepted")
         )
         or 0
     )
-    failure_count = max(0, total_requests - success_count)
+    rejected_count = (
+        session.scalar(
+            select(func.count())
+            .select_from(DslGenerationRun)
+            .where(DslGenerationRun.feedback_status == "rejected")
+        )
+        or 0
+    )
+    pending_count = max(0, total_requests - accepted_count - rejected_count)
 
     latest_record = session.scalar(
         select(DslGenerationRun).order_by(DslGenerationRun.created_at.desc(), DslGenerationRun.id.desc()).limit(1)
@@ -214,11 +271,27 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         .order_by(func.count().desc(), DslGenerationRun.error_type.asc())
         .limit(5)
     ).all()
+    accepted_import_mode_rows = session.execute(
+        select(
+            DslGenerationRun.feedback_import_mode,
+            func.count().label("count"),
+        )
+        .where(
+            DslGenerationRun.feedback_status == "accepted",
+            DslGenerationRun.feedback_import_mode.is_not(None),
+        )
+        .group_by(DslGenerationRun.feedback_import_mode)
+        .order_by(func.count().desc(), DslGenerationRun.feedback_import_mode.asc())
+    ).all()
 
     return AIDslGenerationStats(
         total_requests=total_requests,
         success_count=success_count,
         failure_count=failure_count,
+        accepted_count=accepted_count,
+        rejected_count=rejected_count,
+        pending_count=pending_count,
+        decision_coverage_rate=((accepted_count + rejected_count) / total_requests if total_requests else 0.0),
         last_model=latest_record.model_name if latest_record is not None else None,
         last_error_type=latest_record.error_type if latest_record is not None else None,
         last_error_message=latest_record.error_message if latest_record is not None else None,
@@ -232,6 +305,11 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
             AIDslGenerationErrorTypeCount(error_type=error_type, count=count)
             for error_type, count in top_error_rows
             if error_type is not None
+        ],
+        accepted_import_mode_breakdown=[
+            AIDslGenerationImportModeCount(import_mode=import_mode, count=count)
+            for import_mode, count in accepted_import_mode_rows
+            if import_mode is not None
         ],
     )
 
@@ -295,6 +373,9 @@ def _persist_generation_run(
         warnings_count=warnings_count,
         normalization_notes_count=normalization_notes_count,
         generated_case_json=generated_case.model_dump(mode="json") if generated_case is not None else None,
+        feedback_status="pending",
+        feedback_import_mode=None,
+        feedback_recorded_at=None,
     )
     session.add(generation_run)
     try:
@@ -330,17 +411,22 @@ def _to_stored_dsl_generation_run_summary(record: DslGenerationRun) -> StoredDsl
         warnings_count=record.warnings_count,
         normalization_notes_count=record.normalization_notes_count,
         prompt_preview=record.prompt_preview,
+        feedback_status=record.feedback_status,
+        feedback_import_mode=record.feedback_import_mode,
+        feedback_recorded_at=record.feedback_recorded_at,
     )
 
 
 __all__ = [
     "DslGenerationConfigError",
     "DslGenerationError",
+    "DslGenerationFeedbackConflictError",
     "SUPPORTED_DSL_ACTIONS",
     "get_dsl_generation_durable_stats",
     "generate_dsl_case",
     "get_dsl_generation_runtime_stats",
     "list_dsl_generation_runs",
+    "record_dsl_generation_feedback",
     "reset_dsl_generation_runtime_stats",
     "validate_dsl_case",
 ]

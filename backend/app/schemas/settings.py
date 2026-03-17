@@ -67,10 +67,19 @@ class AIDslGenerationErrorTypeCount(SettingsModel):
     count: int = Field(ge=1)
 
 
+class AIDslGenerationImportModeCount(SettingsModel):
+    import_mode: Literal["replace", "steps_only", "contracts_only"]
+    count: int = Field(ge=1)
+
+
 class AIDslGenerationStats(SettingsModel):
     total_requests: int = Field(ge=0)
     success_count: int = Field(ge=0)
     failure_count: int = Field(ge=0)
+    accepted_count: int = Field(default=0, ge=0)
+    rejected_count: int = Field(default=0, ge=0)
+    pending_count: int = Field(default=0, ge=0)
+    decision_coverage_rate: float = Field(default=0.0, ge=0, le=1)
     last_model: str | None = Field(default=None, max_length=200)
     last_error_type: str | None = Field(default=None, max_length=200)
     last_error_message: str | None = Field(default=None, max_length=2000)
@@ -79,6 +88,7 @@ class AIDslGenerationStats(SettingsModel):
     last_24h_failure_count: int = Field(default=0, ge=0)
     last_24h_auto_repair_rate: float = Field(default=0.0, ge=0, le=1)
     top_error_types: list[AIDslGenerationErrorTypeCount] = Field(default_factory=list)
+    accepted_import_mode_breakdown: list[AIDslGenerationImportModeCount] = Field(default_factory=list)
 
 
 class AISettingsOverviewResponse(SettingsModel):

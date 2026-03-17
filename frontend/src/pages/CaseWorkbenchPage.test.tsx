@@ -16,6 +16,7 @@ vi.mock("../services/api", async () => {
     generateDslCase: vi.fn(),
     getAISettings: vi.fn(),
     getCaseDetail: vi.fn(),
+    recordDslGenerationFeedback: vi.fn(),
     updateCase: vi.fn(),
     validateDslCase: vi.fn(),
   };
@@ -41,6 +42,25 @@ beforeEach(() => {
     vlm_model: "gpt-4o",
     vlm_model_family: "gpt-4o",
     has_vlm_api_key: false,
+  });
+  vi.mocked(api.recordDslGenerationFeedback).mockResolvedValue({
+    id: 999,
+    created_at: "2026-03-17T00:00:00",
+    success: true,
+    model_name: "gpt-4o-mini",
+    generation_mode: "draft",
+    import_mode: "replace",
+    error_type: null,
+    error_message: null,
+    repaired_invalid_actions: 0,
+    removed_invalid_steps: 0,
+    removed_invalid_contracts: 0,
+    warnings_count: 0,
+    normalization_notes_count: 0,
+    prompt_preview: "seed",
+    feedback_status: "accepted",
+    feedback_import_mode: "replace",
+    feedback_recorded_at: "2026-03-17T00:01:00",
   });
 });
 
@@ -562,11 +582,15 @@ test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", asyn
   await userEvent.click(screen.getByRole("button", { name: "仅导入步骤" }));
   expect(await screen.findByText("Step 2")).toBeInTheDocument();
   expect(screen.getByDisplayValue("现有名称")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(api.recordDslGenerationFeedback).toHaveBeenCalledWith(11, {
+      actor_user_id: 1,
+      feedback_status: "accepted",
+      feedback_import_mode: "steps_only",
+    });
+  });
 
-  await userEvent.click(screen.getByRole("button", { name: "仅合并契约" }));
-  await userEvent.click(screen.getByRole("button", { name: "替换当前 DSL" }));
-  expect(await screen.findByDisplayValue("AI 生成冒烟")).toBeInTheDocument();
-  expect(screen.getByDisplayValue("https://example.com")).toBeInTheDocument();
+  expect(screen.getByText("草案反馈已记录")).toBeInTheDocument();
 }, 15000);
 
 test("自然语言生成会按上下文来源与策略带上请求 payload", async () => {
@@ -749,6 +773,126 @@ test("仅合并契约不会覆盖现有契约", async () => {
 
   expect(screen.getByDisplayValue("contextVar")).toBeInTheDocument();
   expect(screen.getByDisplayValue("latestPage")).toBeInTheDocument();
+});
+
+test("放弃草案会记录 rejected 反馈并清空预览", async () => {
+  vi.mocked(api.generateDslCase).mockResolvedValue({
+    generation_id: 15,
+    case: {
+      name: "待放弃草案",
+      description: null,
+      base_url: null,
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/discard" }],
+    },
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    warnings: [],
+    normalization_notes: [],
+    generation_meta: {
+      model: "gpt-4o-mini",
+      generation_mode: "draft",
+      import_mode: "replace",
+      base_url_source: "none",
+      base_url_backfilled: false,
+      repaired_invalid_actions: 0,
+      removed_invalid_steps: 0,
+      removed_invalid_contracts: 0,
+      preserve_contracts_applied: false,
+      used_current_case_context: false,
+      used_current_steps_context: false,
+    },
+  });
+  vi.mocked(api.recordDslGenerationFeedback).mockResolvedValueOnce({
+    id: 15,
+    created_at: "2026-03-17T00:00:00",
+    success: true,
+    model_name: "gpt-4o-mini",
+    generation_mode: "draft",
+    import_mode: "replace",
+    error_type: null,
+    error_message: null,
+    repaired_invalid_actions: 0,
+    removed_invalid_steps: 0,
+    removed_invalid_contracts: 0,
+    warnings_count: 0,
+    normalization_notes_count: 0,
+    prompt_preview: "待放弃草案",
+    feedback_status: "rejected",
+    feedback_import_mode: null,
+    feedback_recorded_at: "2026-03-17T00:01:00",
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "生成一个待放弃草案");
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+  expect(await screen.findByText("生成预览")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "放弃草案" }));
+
+  await waitFor(() => {
+    expect(api.recordDslGenerationFeedback).toHaveBeenCalledWith(15, {
+      actor_user_id: 1,
+      feedback_status: "rejected",
+      feedback_import_mode: null,
+    });
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("生成预览")).not.toBeInTheDocument();
+  });
+});
+
+test("采纳反馈失败时保留草案预览并提示可重试", async () => {
+  vi.mocked(api.generateDslCase).mockResolvedValue({
+    generation_id: 16,
+    case: {
+      name: "反馈失败草案",
+      description: null,
+      base_url: null,
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/retry" }],
+    },
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    warnings: [],
+    normalization_notes: [],
+    generation_meta: {
+      model: "gpt-4o-mini",
+      generation_mode: "draft",
+      import_mode: "replace",
+      base_url_source: "none",
+      base_url_backfilled: false,
+      repaired_invalid_actions: 0,
+      removed_invalid_steps: 0,
+      removed_invalid_contracts: 0,
+      preserve_contracts_applied: false,
+      used_current_case_context: false,
+      used_current_steps_context: false,
+    },
+  });
+  vi.mocked(api.recordDslGenerationFeedback).mockRejectedValueOnce(new Error("409 Conflict"));
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("用例名称"), "保留编辑态");
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "生成一个反馈失败草案");
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+  expect(await screen.findByText("生成预览")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "仅导入步骤" }));
+
+  expect(await screen.findByText("反馈记录失败")).toBeInTheDocument();
+  expect(screen.getByText("反馈未记录，可重试：409 Conflict")).toBeInTheDocument();
+  expect(screen.getByText("Step 1")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("保留编辑态")).toBeInTheDocument();
+  expect(screen.getByText("生成预览")).toBeInTheDocument();
 });
 
 test("自然语言生成失败时不污染当前编辑内容", async () => {

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DSLModel(BaseModel):
@@ -98,6 +98,8 @@ GenerateDslMode = Literal["draft", "strict_steps_only"]
 GenerateDslImportMode = Literal["replace", "steps_only", "contracts_only"]
 GenerateDslBaseUrlSource = Literal["ai_output", "request", "current_case", "none"]
 DslGenerationRunStatus = Literal["success", "failed"]
+DslGenerationFeedbackStatus = Literal["pending", "accepted", "rejected"]
+DslGenerationFeedbackDecision = Literal["accepted", "rejected"]
 
 
 class GenerateDslRequest(DSLModel):
@@ -142,6 +144,20 @@ class GenerateDslResponse(DSLModel):
     generation_meta: GenerateDslMeta
 
 
+class DslGenerationFeedbackRequest(DSLModel):
+    actor_user_id: int = Field(ge=1)
+    feedback_status: DslGenerationFeedbackDecision
+    feedback_import_mode: GenerateDslImportMode | None = None
+
+    @model_validator(mode="after")
+    def validate_feedback_import_mode(self) -> "DslGenerationFeedbackRequest":
+        if self.feedback_status == "accepted" and self.feedback_import_mode is None:
+            raise ValueError("accepted 反馈必须提供 feedback_import_mode。")
+        if self.feedback_status == "rejected" and self.feedback_import_mode is not None:
+            raise ValueError("rejected 反馈不能提供 feedback_import_mode。")
+        return self
+
+
 class StoredDslGenerationRunSummary(DSLModel):
     id: int = Field(ge=1)
     created_at: datetime
@@ -157,3 +173,6 @@ class StoredDslGenerationRunSummary(DSLModel):
     warnings_count: int = Field(ge=0)
     normalization_notes_count: int = Field(ge=0)
     prompt_preview: str = Field(min_length=1, max_length=200)
+    feedback_status: DslGenerationFeedbackStatus
+    feedback_import_mode: GenerateDslImportMode | None = None
+    feedback_recorded_at: datetime | None = None

@@ -8,6 +8,7 @@ export type GenerateDslMode = "draft" | "strict_steps_only";
 export type GenerateDslImportMode = "replace" | "steps_only" | "contracts_only";
 export type GenerateDslBaseUrlSource = "ai_output" | "request" | "current_case" | "none";
 export type DslGenerationRunStatus = "success" | "failed";
+export type DslGenerationFeedbackStatus = "pending" | "accepted" | "rejected";
 export type CorrectionEventType =
   | "created"
   | "activated"
@@ -111,6 +112,12 @@ export interface GenerateDslResponse {
   generation_meta: GenerateDslMeta;
 }
 
+export interface DslGenerationFeedbackPayload {
+  actor_user_id: number;
+  feedback_status: "accepted" | "rejected";
+  feedback_import_mode?: GenerateDslImportMode | null;
+}
+
 export interface AISettings {
   enable_ai_dsl_generate: boolean;
   ai_dsl_timeout_ms: number;
@@ -155,6 +162,10 @@ export interface AIDslGenerationStats {
   total_requests: number;
   success_count: number;
   failure_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  pending_count: number;
+  decision_coverage_rate: number;
   last_model?: string | null;
   last_error_type?: string | null;
   last_error_message?: string | null;
@@ -163,6 +174,7 @@ export interface AIDslGenerationStats {
   last_24h_failure_count: number;
   last_24h_auto_repair_rate: number;
   top_error_types: DslGenerationErrorTypeCount[];
+  accepted_import_mode_breakdown: DslGenerationImportModeCount[];
 }
 
 export interface AISettingsOverview {
@@ -175,6 +187,11 @@ export interface AISettingsOverview {
 
 export interface DslGenerationErrorTypeCount {
   error_type: string;
+  count: number;
+}
+
+export interface DslGenerationImportModeCount {
+  import_mode: GenerateDslImportMode;
   count: number;
 }
 
@@ -193,6 +210,9 @@ export interface StoredDslGenerationRunSummary {
   warnings_count: number;
   normalization_notes_count: number;
   prompt_preview: string;
+  feedback_status: DslGenerationFeedbackStatus;
+  feedback_import_mode?: GenerateDslImportMode | null;
+  feedback_recorded_at?: string | null;
 }
 
 export interface CaseMutationPayload extends DSLCasePayload {
