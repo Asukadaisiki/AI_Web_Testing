@@ -389,3 +389,27 @@
   - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/CaseWorkbenchPage.test.tsx`，结果为 `20 passed`
   - 执行 `cd frontend && npm run build` 成功
 - 关联记录：`docs/execution-log.md` 2026-03-16 23:40
+## BUG-019 | DSL feedback 接口缺少 ownership 校验，且 PostgreSQL 下存在并发竞争窗口
+
+- 日期：2026-03-17
+- 状态：fixed
+- 来源：代码评审
+- 描述：`PATCH /api/v1/dsl/generations/{id}/feedback` 初版只校验 `actor_user_id` 是否存在，没有限制非生成者回写反馈；同时反馈写入在检查 `pending` 后直接提交，PostgreSQL 多写入场景下存在竞争窗口。
+- 复现步骤：
+  1. 由 Actor A 生成一条 DSL 草案记录
+  2. 使用另一个已存在的 Actor B 调用 `/api/v1/dsl/generations/{id}/feedback`
+  3. 观察旧实现会接受反馈，而不是拒绝非生成者回写
+  4. 在 PostgreSQL 下并发发送两个不同反馈请求到同一条 `pending` 记录
+  5. 观察旧实现缺少 `FOR UPDATE` 行锁，两个请求都可能先读到 `pending`
+- 影响：AI DSL 治理数据可能被其他 actor 污染；若后续切到 PostgreSQL 多写入部署，反馈决策存在竞争条件，削弱“首次决策落库、后续冲突拒绝”的治理语义。
+- 根因：初版反馈闭环优先实现最小审计与幂等接口，没有补上“生成者本人”ownership 约束，也没有复用仓库里 corrections 已有的 PostgreSQL 条件行锁模式。
+- 处理：
+  - 在 `backend/app/services/dsl.py` 新增 `DslGenerationFeedbackPermissionError`
+  - 为反馈读取新增 PostgreSQL 条件 `with_for_update()` 查询辅助，SQLite 保持普通查询
+  - 在反馈写入前校验 `payload.actor_user_id == generation_run.actor_user_id`
+  - 在 `backend/app/api/routes/dsl.py` 增加 `403 Forbidden` 映射
+  - 补充 unauthorized、缺失 actor、缺失 generation run 与 `FOR UPDATE` 路径单测
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py`
+  - 执行 `cd backend && uv run pytest`
+- 关联记录：`docs/execution-log.md` 2026-03-17 23:50

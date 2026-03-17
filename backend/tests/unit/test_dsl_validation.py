@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from app.models import DslGenerationRun
+from types import SimpleNamespace
+
+from app.models import DslGenerationRun, User
 from app.ai.dsl_generator import build_generation_messages
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
+from app.services import dsl as dsl_service
 
 
 def test_validate_dsl_case_success(client) -> None:
@@ -777,3 +780,119 @@ def test_record_generation_feedback_requires_import_mode_for_accepted(client, mo
 
     assert response.status_code == 422
     assert "accepted 反馈必须提供 feedback_import_mode" in response.text
+
+def test_record_generation_feedback_returns_403_for_non_owner_actor(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "闈炵敓鎴愯€呭弽棣?",
+  "steps": [{"action": "goto", "value": "/feedback"}]
+}""",
+    )
+    db_session.add(User(id=2, email="other-user@example.com", display_name="Other User"))
+    db_session.commit()
+
+    generate_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "鐢?actor 1 鐢熸垚鑽夋",
+            "actor_user_id": 1,
+        },
+    )
+    generation_id = generate_response.json()["generation_id"]
+
+    response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 2,
+            "feedback_status": "rejected",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Only the actor who generated this draft can record feedback."
+
+
+def test_record_generation_feedback_returns_404_for_missing_generation_run(client) -> None:
+    response = client.patch(
+        "/api/v1/dsl/generations/999/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "DSL generation run 999 not found."
+
+
+def test_record_generation_feedback_returns_404_for_missing_actor(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "缂哄皯 actor",
+  "steps": [{"action": "goto", "value": "/feedback"}]
+}""",
+    )
+
+    generate_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "鍏堢敓鎴愪竴鏉¤褰?",
+            "actor_user_id": 1,
+        },
+    )
+    generation_id = generate_response.json()["generation_id"]
+
+    response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 999,
+            "feedback_status": "rejected",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User 999 not found."
+
+
+def test_get_generation_run_for_feedback_uses_for_update_on_postgresql(db_session, monkeypatch) -> None:
+    captured_statement = None
+
+    def fake_scalars(statement):
+        nonlocal captured_statement
+        captured_statement = statement
+        return SimpleNamespace(first=lambda: None)
+
+    monkeypatch.setattr(dsl_service, "_supports_for_update", lambda session: True)
+    monkeypatch.setattr(db_session, "scalars", fake_scalars)
+
+    dsl_service._get_generation_run_for_feedback(db_session, 123)
+
+    assert captured_statement is not None
+    assert captured_statement._for_update_arg is not None
+
+
+def test_get_generation_run_for_feedback_skips_for_update_on_sqlite(db_session, monkeypatch) -> None:
+    get_calls: list[int] = []
+
+    def fake_get(model, generation_id):
+        get_calls.append(generation_id)
+        return None
+
+    monkeypatch.setattr(dsl_service, "_supports_for_update", lambda session: False)
+    monkeypatch.setattr(db_session, "get", fake_get)
+
+    dsl_service._get_generation_run_for_feedback(db_session, 456)
+
+    assert get_calls == [456]

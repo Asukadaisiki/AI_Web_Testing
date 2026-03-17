@@ -24,6 +24,22 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-17 23:57
+
+- 任务：将 AI DSL feedback ownership 与 PostgreSQL 并发保护修复同步到 GitHub
+- 背景：本轮后端修复、单测回归、缺陷日志与执行日志均已完成，用户要求将当前变更推送到远端仓库；工作区同时存在与本轮无关的未跟踪目录 `.claude/`
+- 执行动作：
+  - 核对 `git status --short`、`git branch --show-current` 与 `git remote -v`，确认当前分支为 `main`、远端为 `origin`
+  - 追加本条执行日志，保持“实现 -> 验证 -> 同步”链路可追溯
+  - 仅暂存本轮相关后端代码、测试与日志文件，显式排除未跟踪的 `.claude/`
+  - 创建提交并推送到 `origin/main`
+- 结果：本轮 AI DSL feedback 安全收口改动被整理为一批可追溯提交，并准备同步到 GitHub 主分支
+- 验证：
+  - 执行 `git status --short` 核对提交范围
+  - 执行 `git push origin main` 完成远端同步
+- 关联文件：`backend/app/services/dsl.py`、`backend/app/api/routes/dsl.py`、`backend/tests/unit/test_dsl_validation.py`、`docs/bug-log.md`、`docs/execution-log.md`
+- 后续：无
+
 ## 2026-03-17 23:26
 
 - 任务：将 AI DSL 生成反馈闭环改动同步到 GitHub
@@ -1205,3 +1221,19 @@
   - 执行 `git push origin main` 完成远端同步
 - 关联文件：`backend/`、`frontend/`、`docs/execution-log.md`、`docs/bug-log.md`
 - 后续：无
+## 2026-03-17 23:50
+
+- 任务：收口 AI DSL feedback 接口的 ownership 防护与 PostgreSQL 并发保护
+- 背景：代码评审指出 `PATCH /api/v1/dsl/generations/{id}/feedback` 仅校验 `actor_user_id` 存在，未限制非生成者回写反馈；同时反馈状态从 `pending` 到最终决策的写入过程在 PostgreSQL 下缺少行级锁，存在并发竞争窗口。
+- 执行动作：
+  - 更新 `backend/app/services/dsl.py`，新增 `DslGenerationFeedbackPermissionError`，并在反馈写入前校验请求 actor 必须等于 `DslGenerationRun.actor_user_id`
+  - 参考 corrections 现有模式新增 `_supports_for_update()` 与 `_get_generation_run_for_feedback()`，在 PostgreSQL 下通过 `select(...).with_for_update()` 锁定目标生成记录，SQLite 保持普通 `session.get()`
+  - 更新 `backend/app/api/routes/dsl.py`，将 ownership 冲突映射为 `403 Forbidden`
+  - 扩展 `backend/tests/unit/test_dsl_validation.py`，覆盖非生成者回写 `403`、缺失 generation run `404`、缺失 actor `404`、PostgreSQL `FOR UPDATE` 路径与 SQLite 非锁路径
+  - 在 `docs/bug-log.md` 追加 `BUG-019`，记录本次 review 缺陷与修复结论
+- 结果：AI DSL feedback 现在只允许草案生成者本人回写，且在 PostgreSQL 设计假设下具备最小行级锁保护，接口语义与“首次决策落库、冲突决策拒绝”规则保持一致；本轮没有扩展到完整认证体系，也没有重构现有 commit/rollback 异常模式。
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py`
+  - 执行 `cd backend && uv run pytest`
+- 关联文件：`backend/app/services/dsl.py`、`backend/app/api/routes/dsl.py`、`backend/tests/unit/test_dsl_validation.py`、`docs/bug-log.md`、`docs/execution-log.md`
+- 后续：仓库仍然缺少真实认证/授权体系；当前 ownership 仅限制为“生成者本人”，如果后续需要项目级协作权限，需要先为 `dsl_generation_runs` 建立明确的 project 归属关系

@@ -63,6 +63,10 @@ class DslGenerationFeedbackConflictError(RuntimeError):
     """Raised when generation feedback was already recorded with a different decision."""
 
 
+class DslGenerationFeedbackPermissionError(RuntimeError):
+    """Raised when a user tries to record feedback for another actor's generation run."""
+
+
 def validate_dsl_case(test_case: DSLCase) -> DSLValidationResult:
     return DSLValidationResult(
         case=test_case,
@@ -167,9 +171,11 @@ def record_dsl_generation_feedback(
     payload: DslGenerationFeedbackRequest,
 ) -> StoredDslGenerationRunSummary:
     _ensure_user_exists(session, payload.actor_user_id)
-    generation_run = session.get(DslGenerationRun, generation_id)
+    generation_run = _get_generation_run_for_feedback(session, generation_id)
     if generation_run is None:
         raise EntityNotFoundError(f"DSL generation run {generation_id} not found.")
+    if generation_run.actor_user_id != payload.actor_user_id:
+        raise DslGenerationFeedbackPermissionError("Only the actor who generated this draft can record feedback.")
 
     if generation_run.feedback_status == "pending":
         generation_run.feedback_status = payload.feedback_status
@@ -335,6 +341,21 @@ def _ensure_user_exists(session: Session, user_id: int) -> None:
         raise EntityNotFoundError(f"User {user_id} not found.")
 
 
+def _get_generation_run_for_feedback(session: Session, generation_id: int) -> DslGenerationRun | None:
+    if _supports_for_update(session):
+        statement = (
+            select(DslGenerationRun)
+            .where(DslGenerationRun.id == generation_id)
+            .with_for_update()
+        )
+        return session.scalars(statement).first()
+    return session.get(DslGenerationRun, generation_id)
+
+
+def _supports_for_update(session: Session) -> bool:
+    return session.get_bind().dialect.name == "postgresql"
+
+
 def _persist_generation_run(
     session: Session,
     *,
@@ -421,6 +442,7 @@ __all__ = [
     "DslGenerationConfigError",
     "DslGenerationError",
     "DslGenerationFeedbackConflictError",
+    "DslGenerationFeedbackPermissionError",
     "SUPPORTED_DSL_ACTIONS",
     "get_dsl_generation_durable_stats",
     "generate_dsl_case",

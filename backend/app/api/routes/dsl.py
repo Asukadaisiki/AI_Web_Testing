@@ -18,6 +18,7 @@ from app.services.dsl import (
     DslGenerationConfigError,
     DslGenerationError,
     DslGenerationFeedbackConflictError,
+    DslGenerationFeedbackPermissionError,
     generate_dsl_case,
     list_dsl_generation_runs,
     record_dsl_generation_feedback,
@@ -72,5 +73,7 @@ def record_generation_feedback_route(
         return record_dsl_generation_feedback(session, generation_id, payload)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DslGenerationFeedbackPermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except DslGenerationFeedbackConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
