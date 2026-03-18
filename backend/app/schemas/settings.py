@@ -77,6 +77,28 @@ class AIDslGenerationRejectionReasonCount(SettingsModel):
     count: int = Field(ge=1)
 
 
+class AIDslGenerationPromptVariantBreakdown(SettingsModel):
+    prompt_variant: Literal["baseline_draft", "rewrite_from_case", "repair_steps", "contracts_focus"]
+    total_requests: int = Field(ge=1)
+    success_count: int = Field(ge=0)
+    accepted_count: int = Field(ge=0)
+    rejected_count: int = Field(ge=0)
+
+
+class AIDslGenerationContextProfileBreakdown(SettingsModel):
+    context_profile: Literal["blank_request", "rewrite_from_case", "repair_steps", "contracts_focus"]
+    total_requests: int = Field(ge=1)
+    success_count: int = Field(ge=0)
+    accepted_count: int = Field(ge=0)
+    rejected_count: int = Field(ge=0)
+
+
+class AIDslGenerationRejectionReasonByVariant(SettingsModel):
+    prompt_variant: Literal["baseline_draft", "rewrite_from_case", "repair_steps", "contracts_focus"]
+    rejection_reason_code: Literal["wrong_actions", "invalid_structure", "context_mismatch", "bad_contracts", "other"]
+    count: int = Field(ge=1)
+
+
 class AIDslGenerationModelOutcome(SettingsModel):
     model_name: str | None = Field(default=None, max_length=200)
     total_requests: int = Field(ge=1)
@@ -111,6 +133,9 @@ class AIDslGenerationStats(SettingsModel):
     top_error_types: list[AIDslGenerationErrorTypeCount] = Field(default_factory=list)
     accepted_import_mode_breakdown: list[AIDslGenerationImportModeCount] = Field(default_factory=list)
     top_rejection_reasons: list[AIDslGenerationRejectionReasonCount] = Field(default_factory=list)
+    prompt_variant_breakdown: list[AIDslGenerationPromptVariantBreakdown] = Field(default_factory=list)
+    context_profile_breakdown: list[AIDslGenerationContextProfileBreakdown] = Field(default_factory=list)
+    rejection_reason_by_variant: list[AIDslGenerationRejectionReasonByVariant] = Field(default_factory=list)
     model_outcome_breakdown: list[AIDslGenerationModelOutcome] = Field(default_factory=list)
     generation_mode_breakdown: list[AIDslGenerationModeBreakdown] = Field(default_factory=list)
 

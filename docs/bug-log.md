@@ -30,6 +30,25 @@
 
 ## 当前状态
 
+## BUG-020 | docs 中的前端路由与页面落地状态未同步到最新实现
+
+- 日期：2026-03-18
+- 状态：fixed
+- 来源：需求 / 文档核对
+- 描述：`docs/frontend-design.md` 仍将 Dashboard 写为 `/`、Case/Suite 工作台写为旧的 `:id/workbench` 路由，并把 Suite 历史批次回看、失败重跑写成未落地；`docs/project-plan.md` 也未反映 Suite 批次详情、修正记录和 AI 配置等当前前端入口，和实际代码不一致。
+- 复现步骤：
+  1. 阅读 `docs/frontend-design.md` 与 `docs/project-plan.md`
+  2. 对照 `frontend/src/app/AppRouter.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`、`frontend/src/pages/SuitesPage.tsx`
+  3. 可见真实路由已是 `/dashboard`、`/cases/new`、`/cases/:caseId/edit`、`/suites/new`、`/suites/:suiteId/edit`、`/suites/:suiteId/runs/:runId`，且 Suite 批次详情与失败项重跑已经落地
+- 影响：会误导后续页面排期、验收口径和测试入口判断，尤其容易把已完成页面当成未开发能力继续排期。
+- 根因：最近几轮功能已持续推进到 Suite 批次详情、AI 设置与 DSL 治理，但文档中的页面路由表和状态摘要没有同步刷新。
+- 处理：
+  - 更新 `docs/frontend-design.md` 的已落地页面路由表与未落地清单
+  - 更新 `docs/project-plan.md` 的前端平台入口与 Suite 能力摘要
+  - 在 `docs/execution-log.md` 补记本次文档同步
+- 验证：人工核对 `docs/frontend-design.md`、`docs/project-plan.md` 与 `frontend/src/app/AppRouter.tsx`、`frontend/src/pages/SuiteRunDetailPage.tsx`，文档已与当前实现一致
+- 关联记录：`docs/execution-log.md` 2026-03-18 14:42
+
 ## BUG-018 | project-plan 与 README 仍将 AI 设置管理写成未落地，和代码现状不一致
 
 - 日期：2026-03-16

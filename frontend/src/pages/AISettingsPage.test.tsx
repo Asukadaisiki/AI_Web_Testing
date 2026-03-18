@@ -78,6 +78,31 @@ test("渲染 AI 配置并允许保存修改", async () => {
         },
       ],
       top_rejection_reasons: [{ rejection_reason_code: "bad_contracts", count: 1 }],
+      prompt_variant_breakdown: [
+        {
+          prompt_variant: "baseline_draft",
+          total_requests: 4,
+          success_count: 3,
+          accepted_count: 2,
+          rejected_count: 1,
+        },
+      ],
+      context_profile_breakdown: [
+        {
+          context_profile: "blank_request",
+          total_requests: 4,
+          success_count: 3,
+          accepted_count: 2,
+          rejected_count: 1,
+        },
+      ],
+      rejection_reason_by_variant: [
+        {
+          prompt_variant: "baseline_draft",
+          rejection_reason_code: "bad_contracts",
+          count: 1,
+        },
+      ],
       model_outcome_breakdown: [
         {
           model_name: "gpt-4o-mini",
@@ -106,9 +131,10 @@ test("渲染 AI 配置并允许保存修改", async () => {
       model_name: "gpt-4o-mini",
       generation_mode: "draft",
       import_mode: "replace",
+      prompt_variant: "baseline_draft",
       project_id: 1,
       case_id: 8,
-      prompt_version: "2026-03-18.governance-v1",
+      prompt_version: "2026-03-18.single-pass-variant-v1",
       error_type: "DslGenerationError",
       error_message: "bad json",
       repaired_invalid_actions: 1,
@@ -117,6 +143,7 @@ test("渲染 AI 配置并允许保存修改", async () => {
       warnings_count: 1,
       normalization_notes_count: 2,
       prompt_preview: "打开 example.com 并验证 URL",
+      risk_flags: ["invalid_steps_removed"],
       feedback_status: "rejected",
       feedback_import_mode: null,
       rejection_reason_code: "bad_contracts",
@@ -130,9 +157,10 @@ test("渲染 AI 配置并允许保存修改", async () => {
     model_name: "gpt-4o-mini",
     generation_mode: "draft",
     import_mode: "replace",
+    prompt_variant: "baseline_draft",
     project_id: 1,
     case_id: 8,
-    prompt_version: "2026-03-18.governance-v1",
+    prompt_version: "2026-03-18.single-pass-variant-v1",
     error_type: "DslGenerationError",
     error_message: "bad json",
     repaired_invalid_actions: 1,
@@ -141,6 +169,7 @@ test("渲染 AI 配置并允许保存修改", async () => {
     warnings_count: 1,
     normalization_notes_count: 2,
     prompt_preview: "打开 example.com 并验证 URL",
+    risk_flags: ["invalid_steps_removed"],
     feedback_status: "rejected",
     feedback_import_mode: null,
     rejection_reason_code: "bad_contracts",
@@ -157,6 +186,7 @@ test("渲染 AI 配置并允许保存修改", async () => {
     warnings_json: ["bad json"],
     normalization_notes_json: ["步骤 #1 已自动修正"],
     feedback_note: "契约不符合预期",
+    context_profile: "blank_request",
     used_current_case_context: true,
     used_current_steps_context: false,
     preserve_contracts_requested: true,
@@ -198,12 +228,23 @@ test("渲染 AI 配置并允许保存修改", async () => {
   expect(screen.getByText("DslGenerationError (1)")).toBeInTheDocument();
   expect(screen.getByText("replace (1)、steps_only (1)")).toBeInTheDocument();
   expect(screen.getByText("bad_contracts (1)")).toBeInTheDocument();
+  expect(screen.getByText("baseline_draft: 4 / 2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("blank_request: 4 / 2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("baseline_draft / bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("gpt-4o-mini: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("draft: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("治理记录")).toBeInTheDocument();
   expect(screen.getByText("已放弃 (bad_contracts)")).toBeInTheDocument();
+  expect(screen.getByText("baseline_draft")).toBeInTheDocument();
+  expect(screen.getByText("invalid_steps_removed")).toBeInTheDocument();
   expect(screen.getByText("详情")).toBeInTheDocument();
 
+  await userEvent.click(screen.getByRole("combobox", { name: "Prompt Variant" }));
+  await userEvent.click(await screen.findByText("baseline_draft", { selector: ".ant-select-item-option-content" }));
+  await userEvent.click(screen.getByRole("combobox", { name: "拒绝原因" }));
+  await userEvent.click(await screen.findByText("bad_contracts", { selector: ".ant-select-item-option-content" }));
+  await userEvent.click(screen.getByRole("combobox", { name: "风险标签" }));
+  await userEvent.click(await screen.findByText("仅高风险", { selector: ".ant-select-item-option-content" }));
   await userEvent.type(screen.getByLabelText("模型名"), "gpt-4o-mini");
   await userEvent.clear(screen.getByLabelText("项目 ID"));
   await userEvent.type(screen.getByLabelText("项目 ID"), "1");
@@ -211,6 +252,9 @@ test("渲染 AI 配置并允许保存修改", async () => {
 
   await waitFor(() => {
     expect(api.getDslGenerationRuns).toHaveBeenLastCalledWith({
+      prompt_variant: "baseline_draft",
+      rejection_reason_code: "bad_contracts",
+      has_risk_flags: true,
       model_name: "gpt-4o-mini",
       project_id: 1,
       limit: 10,
@@ -222,6 +266,9 @@ test("渲染 AI 配置并允许保存修改", async () => {
   expect(await screen.findByText("治理详情 #7")).toBeInTheDocument();
   expect(await screen.findByText("契约不符合预期")).toBeInTheDocument();
   expect(screen.getByText("current_case / preserve_contracts (applied)")).toBeInTheDocument();
+  expect(screen.getByText("blank_request")).toBeInTheDocument();
+  expect(screen.getAllByText("baseline_draft").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("invalid_steps_removed").length).toBeGreaterThan(0);
   expect(screen.getByDisplayValue(/治理详情草案/)).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("switch", { name: "启用 DSL 生成" }));
@@ -263,7 +310,7 @@ test("渲染 AI 配置并允许保存修改", async () => {
       clear_vlm_api_key: false,
     });
   });
-}, 10000);
+}, 20000);
 
 test("加载失败时展示错误块", async () => {
   vi.mocked(api.getAISettings).mockRejectedValue(new Error("settings failed"));
@@ -290,6 +337,9 @@ test("加载失败时展示错误块", async () => {
       top_error_types: [],
       accepted_import_mode_breakdown: [],
       top_rejection_reasons: [],
+      prompt_variant_breakdown: [],
+      context_profile_breakdown: [],
+      rejection_reason_by_variant: [],
       model_outcome_breakdown: [],
       generation_mode_breakdown: [],
     },
@@ -302,9 +352,10 @@ test("加载失败时展示错误块", async () => {
     model_name: null,
     generation_mode: "draft",
     import_mode: "replace",
+    prompt_variant: "baseline_draft",
     project_id: null,
     case_id: null,
-    prompt_version: "2026-03-18.governance-v1",
+    prompt_version: "2026-03-18.single-pass-variant-v1",
     error_type: null,
     error_message: null,
     repaired_invalid_actions: 0,
@@ -313,6 +364,7 @@ test("加载失败时展示错误块", async () => {
     warnings_count: 0,
     normalization_notes_count: 0,
     prompt_preview: "preview",
+    risk_flags: [],
     feedback_status: "pending",
     feedback_import_mode: null,
     rejection_reason_code: null,
@@ -322,6 +374,7 @@ test("加载失败时展示错误块", async () => {
     warnings_json: [],
     normalization_notes_json: [],
     feedback_note: null,
+    context_profile: "blank_request",
     used_current_case_context: false,
     used_current_steps_context: false,
     preserve_contracts_requested: false,

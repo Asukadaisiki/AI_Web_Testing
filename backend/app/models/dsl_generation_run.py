@@ -29,6 +29,14 @@ class DslGenerationRun(Base):
             name="ck_dsl_generation_runs_base_url_source",
         ),
         CheckConstraint(
+            "prompt_variant IN ('baseline_draft', 'rewrite_from_case', 'repair_steps', 'contracts_focus')",
+            name="ck_dsl_generation_runs_prompt_variant",
+        ),
+        CheckConstraint(
+            "context_profile IN ('blank_request', 'rewrite_from_case', 'repair_steps', 'contracts_focus')",
+            name="ck_dsl_generation_runs_context_profile",
+        ),
+        CheckConstraint(
             "feedback_status IN ('pending', 'accepted', 'rejected')",
             name="ck_dsl_generation_runs_feedback_status",
         ),
@@ -74,6 +82,7 @@ class DslGenerationRun(Base):
     prompt_preview: Mapped[str] = mapped_column(String(200), nullable=False)
     prompt_sha256: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt_variant: Mapped[str] = mapped_column(String(32), nullable=False, default="baseline_draft")
     request_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     generation_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     import_mode: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -83,6 +92,7 @@ class DslGenerationRun(Base):
     error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     used_current_case_context: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
     used_current_steps_context: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
+    context_profile: Mapped[str] = mapped_column(String(32), nullable=False, default="blank_request")
     base_url_source: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
     base_url_backfilled: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
     repaired_invalid_actions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -94,6 +104,7 @@ class DslGenerationRun(Base):
     normalization_notes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     warnings_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     normalization_notes_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    risk_flags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     generated_case_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     feedback_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     feedback_import_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)

@@ -18,6 +18,9 @@ from app.schemas.dsl import (
     DSLCaseOutputContract,
     DSLStep,
     GenerateDslBaseUrlSource,
+    DslGenerationContextProfile,
+    DslGenerationPromptVariant,
+    DslGenerationRiskFlag,
     GenerateDslMeta,
     GenerateDslMode,
     GenerateDslRequest,
@@ -62,13 +65,14 @@ _STEP_MODELS = {
     "assert_text": AssertTextStep,
     "assert_url_contains": AssertUrlContainsStep,
 }
-AI_DSL_PROMPT_VERSION = "2026-03-18.governance-v1"
+AI_DSL_PROMPT_VERSION = "2026-03-18.single-pass-variant-v1"
 
 
 def build_generation_messages(
     *,
     payload: GenerateDslRequest,
     generation_mode: GenerateDslMode,
+    prompt_variant: DslGenerationPromptVariant,
     supported_actions: list[str],
 ) -> list[dict[str, Any]]:
     allowed_actions = ", ".join(supported_actions)
@@ -80,7 +84,20 @@ def build_generation_messages(
         "name, description, base_url, input_contract, output_contract, steps.",
         "Use semantic Chinese target descriptions when selectors are not explicitly provided.",
         "Do not include markdown fences or explanations.",
+        f"Prompt variant: {prompt_variant}.",
     ]
+    if prompt_variant == "contracts_focus":
+        system_lines.append("Prioritize high-quality input/output contracts and keep steps conservative.")
+        system_lines.append("Do not rewrite the business flow unless the prompt explicitly asks for it.")
+    elif prompt_variant == "repair_steps":
+        system_lines.append("Focus on returning a stable, high-quality steps array.")
+        system_lines.append("Do not change contracts unless the prompt explicitly asks for contract edits.")
+    elif prompt_variant == "rewrite_from_case":
+        system_lines.append("Rewrite from the provided current DSL while preserving the original business intent.")
+        system_lines.append("Prefer editing existing flow over inventing unrelated new flow.")
+    else:
+        system_lines.append("Return a complete first-draft DSL that is directly editable by users.")
+
     if generation_mode == "strict_steps_only":
         system_lines.append("In strict_steps_only mode, prioritize returning a high-quality steps array.")
     if payload.import_mode == "contracts_only":
@@ -151,6 +168,7 @@ def generate_case_draft(
 ) -> tuple[DSLCase, list[str], list[str], GenerateDslMeta]:
     settings = get_settings()
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode, settings=settings)
+    prompt_variant, _ = resolve_generation_profile(payload=payload, generation_mode=resolved_generation_mode)
     if not settings.enable_ai_dsl_generate:
         raise DslGenerationConfigError(
             "AI DSL 生成功能未开启。请设置 ENABLE_AI_DSL_GENERATE=true 并配置 AI_DSL_API_KEY、AI_DSL_MODEL。"
@@ -164,6 +182,7 @@ def generate_case_draft(
         messages=build_generation_messages(
             payload=payload,
             generation_mode=resolved_generation_mode,
+            prompt_variant=prompt_variant,
             supported_actions=supported_actions,
         ),
         api_key=settings.ai_dsl_api_key,
@@ -214,6 +233,8 @@ def _normalize_generated_case(
     current_input_contract, current_output_contract = _resolve_current_contracts(payload)
     used_current_case_context = current_case is not None
     used_current_steps_context = payload.current_steps is not None
+    prompt_variant, context_profile = resolve_generation_profile(payload=payload, generation_mode=generation_mode)
+    risk_flags: list[DslGenerationRiskFlag] = []
 
     normalized_name = _normalize_string(raw_case.get("name"))
     normalized_description = _normalize_optional_string(raw_case.get("description"))
@@ -225,6 +246,7 @@ def _normalize_generated_case(
     elif not normalized_name:
         normalized_name = current_case.name if current_case is not None else "AI 生成用例"
         warnings.append("AI 草案未提供有效 name，已使用当前上下文中的名称或默认名称。")
+        risk_flags.append("missing_name_fallback")
 
     base_url_value, base_url_source, base_url_backfilled = _resolve_base_url(
         raw_case=raw_case,
@@ -256,6 +278,7 @@ def _normalize_generated_case(
         preserve_contracts_applied = bool(input_contract or output_contract)
         if preserve_contracts_applied:
             normalization_notes.append("AI 草案未提供有效契约，已沿用当前 DSL 的输入/输出契约。")
+            risk_flags.append("contracts_preserved_fallback")
 
     steps, removed_invalid_steps, repaired_invalid_actions = _normalize_steps(
         raw_steps=raw_case.get("steps"),
@@ -267,10 +290,22 @@ def _normalize_generated_case(
     if not steps:
         raise DslGenerationError("AI 生成草案中没有可导入的有效 steps。")
 
+    if base_url_backfilled:
+        risk_flags.append("base_url_backfilled")
+    if repaired_invalid_actions > 0:
+        risk_flags.append("invalid_actions_repaired")
+    if removed_invalid_steps > 0:
+        risk_flags.append("invalid_steps_removed")
+    if removed_invalid_contracts > 0:
+        risk_flags.append("invalid_contracts_removed")
+
     generation_meta = GenerateDslMeta(
         model=model_name,
         generation_mode=generation_mode,
         import_mode=payload.import_mode,
+        prompt_variant=prompt_variant,
+        context_profile=context_profile,
+        risk_flags=risk_flags,
         base_url_source=base_url_source,
         base_url_backfilled=base_url_backfilled,
         repaired_invalid_actions=repaired_invalid_actions,
@@ -458,6 +493,20 @@ def resolve_generation_mode(
         return request_generation_mode
     active_settings = settings or get_settings()
     return "strict_steps_only" if active_settings.ai_dsl_strict_mode else "draft"
+
+
+def resolve_generation_profile(
+    *,
+    payload: GenerateDslRequest,
+    generation_mode: GenerateDslMode,
+) -> tuple[DslGenerationPromptVariant, DslGenerationContextProfile]:
+    if payload.import_mode == "contracts_only":
+        return "contracts_focus", "contracts_focus"
+    if generation_mode == "strict_steps_only" and payload.current_steps:
+        return "repair_steps", "repair_steps"
+    if payload.current_case is not None:
+        return "rewrite_from_case", "rewrite_from_case"
+    return "baseline_draft", "blank_request"
 
 
 def _normalize_string(value: Any) -> str | None:

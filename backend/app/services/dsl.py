@@ -16,6 +16,7 @@ from app.ai.dsl_generator import (
     DslGenerationError,
     generate_case_draft,
     resolve_generation_mode,
+    resolve_generation_profile,
 )
 from app.core.config import get_settings
 from app.models import DslGenerationRun, Project, TestCase, User
@@ -24,6 +25,8 @@ from app.schemas.dsl import (
     DSLValidationResult,
     DslGenerationFeedbackRequest,
     DslGenerationFeedbackStatus,
+    DslGenerationPromptVariant,
+    DslGenerationRejectionReasonCode,
     GenerateDslMeta,
     GenerateDslMode,
     GenerateDslImportMode,
@@ -34,10 +37,13 @@ from app.schemas.dsl import (
 )
 from app.schemas.settings import (
     AIDslGenerationErrorTypeCount,
+    AIDslGenerationContextProfileBreakdown,
     AIDslGenerationImportModeCount,
     AIDslGenerationModeBreakdown,
     AIDslGenerationModelOutcome,
     AIDslGenerationRejectionReasonCount,
+    AIDslGenerationRejectionReasonByVariant,
+    AIDslGenerationPromptVariantBreakdown,
     AIDslGenerationStats,
 )
 from app.services.cases import EntityNotFoundError
@@ -167,6 +173,9 @@ def list_dsl_generation_runs(
     feedback_status: DslGenerationFeedbackStatus | None = None,
     generation_mode: GenerateDslMode | None = None,
     import_mode: GenerateDslImportMode | None = None,
+    prompt_variant: DslGenerationPromptVariant | None = None,
+    rejection_reason_code: DslGenerationRejectionReasonCode | None = None,
+    has_risk_flags: bool | None = None,
     model_name: str | None = None,
     project_id: int | None = None,
     case_id: int | None = None,
@@ -186,6 +195,13 @@ def list_dsl_generation_runs(
         statement = statement.where(DslGenerationRun.generation_mode == generation_mode)
     if import_mode is not None:
         statement = statement.where(DslGenerationRun.import_mode == import_mode)
+    if prompt_variant is not None:
+        statement = statement.where(DslGenerationRun.prompt_variant == prompt_variant)
+    if rejection_reason_code is not None:
+        statement = statement.where(DslGenerationRun.rejection_reason_code == rejection_reason_code)
+    if has_risk_flags is not None:
+        comparator = func.json_array_length(DslGenerationRun.risk_flags_json)
+        statement = statement.where(comparator > 0 if has_risk_flags else comparator == 0)
     if model_name:
         statement = statement.where(DslGenerationRun.model_name == model_name)
     if project_id is not None:
@@ -371,6 +387,41 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         .group_by(DslGenerationRun.generation_mode)
         .order_by(func.count().desc(), DslGenerationRun.generation_mode.asc())
     ).all()
+    prompt_variant_rows = session.execute(
+        select(
+            DslGenerationRun.prompt_variant,
+            func.count().label("total_requests"),
+            func.sum(case((DslGenerationRun.success.is_(True), 1), else_=0)).label("success_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "accepted", 1), else_=0)).label("accepted_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "rejected", 1), else_=0)).label("rejected_count"),
+        )
+        .group_by(DslGenerationRun.prompt_variant)
+        .order_by(func.count().desc(), DslGenerationRun.prompt_variant.asc())
+    ).all()
+    context_profile_rows = session.execute(
+        select(
+            DslGenerationRun.context_profile,
+            func.count().label("total_requests"),
+            func.sum(case((DslGenerationRun.success.is_(True), 1), else_=0)).label("success_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "accepted", 1), else_=0)).label("accepted_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "rejected", 1), else_=0)).label("rejected_count"),
+        )
+        .group_by(DslGenerationRun.context_profile)
+        .order_by(func.count().desc(), DslGenerationRun.context_profile.asc())
+    ).all()
+    rejection_reason_by_variant_rows = session.execute(
+        select(
+            DslGenerationRun.prompt_variant,
+            DslGenerationRun.rejection_reason_code,
+            func.count().label("count"),
+        )
+        .where(
+            DslGenerationRun.feedback_status == "rejected",
+            DslGenerationRun.rejection_reason_code.is_not(None),
+        )
+        .group_by(DslGenerationRun.prompt_variant, DslGenerationRun.rejection_reason_code)
+        .order_by(func.count().desc(), DslGenerationRun.prompt_variant.asc(), DslGenerationRun.rejection_reason_code.asc())
+    ).all()
 
     return AIDslGenerationStats(
         total_requests=total_requests,
@@ -402,6 +453,35 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         top_rejection_reasons=[
             AIDslGenerationRejectionReasonCount(rejection_reason_code=rejection_reason_code, count=count)
             for rejection_reason_code, count in rejection_reason_rows
+            if rejection_reason_code is not None
+        ],
+        prompt_variant_breakdown=[
+            AIDslGenerationPromptVariantBreakdown(
+                prompt_variant=prompt_variant,
+                total_requests=total_requests,
+                success_count=success_count or 0,
+                accepted_count=accepted_count or 0,
+                rejected_count=rejected_count or 0,
+            )
+            for prompt_variant, total_requests, success_count, accepted_count, rejected_count in prompt_variant_rows
+        ],
+        context_profile_breakdown=[
+            AIDslGenerationContextProfileBreakdown(
+                context_profile=context_profile,
+                total_requests=total_requests,
+                success_count=success_count or 0,
+                accepted_count=accepted_count or 0,
+                rejected_count=rejected_count or 0,
+            )
+            for context_profile, total_requests, success_count, accepted_count, rejected_count in context_profile_rows
+        ],
+        rejection_reason_by_variant=[
+            AIDslGenerationRejectionReasonByVariant(
+                prompt_variant=prompt_variant,
+                rejection_reason_code=rejection_reason_code,
+                count=count,
+            )
+            for prompt_variant, rejection_reason_code, count in rejection_reason_by_variant_rows
             if rejection_reason_code is not None
         ],
         model_outcome_breakdown=[
@@ -486,6 +566,10 @@ def _persist_generation_run(
     generation_meta: GenerateDslMeta | None,
     error: Exception | None,
 ) -> DslGenerationRun:
+    derived_prompt_variant, derived_context_profile = resolve_generation_profile(
+        payload=payload,
+        generation_mode=generation_mode,
+    )
     generation_run = DslGenerationRun(
         actor_user_id=payload.actor_user_id,
         project_id=payload.project_id,
@@ -493,6 +577,7 @@ def _persist_generation_run(
         prompt_preview=_build_prompt_preview(payload.prompt),
         prompt_sha256=_hash_prompt(payload.prompt),
         prompt_version=AI_DSL_PROMPT_VERSION,
+        prompt_variant=generation_meta.prompt_variant if generation_meta is not None else derived_prompt_variant,
         request_base_url=payload.base_url,
         generation_mode=generation_mode,
         import_mode=payload.import_mode,
@@ -506,6 +591,7 @@ def _persist_generation_run(
         used_current_steps_context=(
             generation_meta.used_current_steps_context if generation_meta is not None else payload.current_steps is not None
         ),
+        context_profile=generation_meta.context_profile if generation_meta is not None else derived_context_profile,
         base_url_source=generation_meta.base_url_source if generation_meta is not None else "none",
         base_url_backfilled=generation_meta.base_url_backfilled if generation_meta is not None else False,
         repaired_invalid_actions=generation_meta.repaired_invalid_actions if generation_meta is not None else 0,
@@ -517,6 +603,7 @@ def _persist_generation_run(
         normalization_notes_count=len(normalization_notes),
         warnings_json=warnings,
         normalization_notes_json=normalization_notes,
+        risk_flags_json=list(generation_meta.risk_flags) if generation_meta is not None else [],
         generated_case_json=generated_case.model_dump(mode="json") if generated_case is not None else None,
         feedback_status="pending",
         feedback_import_mode=None,
@@ -556,6 +643,7 @@ def _to_stored_dsl_generation_run_summary(record: DslGenerationRun) -> StoredDsl
         model_name=record.model_name,
         generation_mode=record.generation_mode,
         import_mode=record.import_mode,
+        prompt_variant=record.prompt_variant,
         project_id=record.project_id,
         case_id=record.case_id,
         prompt_version=record.prompt_version,
@@ -567,6 +655,7 @@ def _to_stored_dsl_generation_run_summary(record: DslGenerationRun) -> StoredDsl
         warnings_count=record.warnings_count,
         normalization_notes_count=record.normalization_notes_count,
         prompt_preview=record.prompt_preview,
+        risk_flags=list(record.risk_flags_json or []),
         feedback_status=record.feedback_status,
         feedback_import_mode=record.feedback_import_mode,
         rejection_reason_code=record.rejection_reason_code,
@@ -584,6 +673,7 @@ def _to_stored_dsl_generation_run_detail(record: DslGenerationRun) -> StoredDslG
         warnings_json=list(record.warnings_json or []),
         normalization_notes_json=list(record.normalization_notes_json or []),
         feedback_note=record.feedback_note,
+        context_profile=record.context_profile,
         used_current_case_context=record.used_current_case_context,
         used_current_steps_context=record.used_current_steps_context,
         preserve_contracts_requested=record.preserve_contracts_requested,

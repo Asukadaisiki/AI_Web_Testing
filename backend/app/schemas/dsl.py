@@ -100,6 +100,16 @@ GenerateDslBaseUrlSource = Literal["ai_output", "request", "current_case", "none
 DslGenerationRunStatus = Literal["success", "failed"]
 DslGenerationFeedbackStatus = Literal["pending", "accepted", "rejected"]
 DslGenerationFeedbackDecision = Literal["accepted", "rejected"]
+DslGenerationPromptVariant = Literal["baseline_draft", "rewrite_from_case", "repair_steps", "contracts_focus"]
+DslGenerationContextProfile = Literal["blank_request", "rewrite_from_case", "repair_steps", "contracts_focus"]
+DslGenerationRiskFlag = Literal[
+    "missing_name_fallback",
+    "base_url_backfilled",
+    "invalid_actions_repaired",
+    "invalid_steps_removed",
+    "invalid_contracts_removed",
+    "contracts_preserved_fallback",
+]
 DslGenerationRejectionReasonCode = Literal[
     "wrong_actions",
     "invalid_structure",
@@ -134,6 +144,9 @@ class GenerateDslMeta(DSLModel):
     model: str | None = Field(default=None, max_length=200)
     generation_mode: GenerateDslMode
     import_mode: GenerateDslImportMode
+    prompt_variant: DslGenerationPromptVariant
+    context_profile: DslGenerationContextProfile
+    risk_flags: list[DslGenerationRiskFlag] = Field(default_factory=list)
     base_url_source: GenerateDslBaseUrlSource
     base_url_backfilled: bool = False
     repaired_invalid_actions: int = Field(default=0, ge=0)
@@ -180,6 +193,7 @@ class StoredDslGenerationRunSummary(DSLModel):
     model_name: str | None = Field(default=None, max_length=200)
     generation_mode: GenerateDslMode
     import_mode: GenerateDslImportMode
+    prompt_variant: DslGenerationPromptVariant
     project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
     prompt_version: str = Field(min_length=1, max_length=100)
@@ -191,6 +205,7 @@ class StoredDslGenerationRunSummary(DSLModel):
     warnings_count: int = Field(ge=0)
     normalization_notes_count: int = Field(ge=0)
     prompt_preview: str = Field(min_length=1, max_length=200)
+    risk_flags: list[DslGenerationRiskFlag] = Field(default_factory=list)
     feedback_status: DslGenerationFeedbackStatus
     feedback_import_mode: GenerateDslImportMode | None = None
     rejection_reason_code: DslGenerationRejectionReasonCode | None = None
@@ -203,6 +218,7 @@ class StoredDslGenerationRunDetail(StoredDslGenerationRunSummary):
     warnings_json: list[str] = Field(default_factory=list)
     normalization_notes_json: list[str] = Field(default_factory=list)
     feedback_note: str | None = Field(default=None, max_length=1000)
+    context_profile: DslGenerationContextProfile
     used_current_case_context: bool = False
     used_current_steps_context: bool = False
     preserve_contracts_requested: bool = False

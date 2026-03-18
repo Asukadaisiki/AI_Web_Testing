@@ -119,6 +119,7 @@ def test_build_generation_messages_only_list_supported_actions() -> None:
                 "current_steps": [{"action": "goto", "value": "/old"}],
             }),
         generation_mode="strict_steps_only",
+        prompt_variant="repair_steps",
         supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
     )
 
@@ -157,6 +158,7 @@ def test_build_generation_messages_uses_contract_context_without_current_case() 
             }
         ),
         generation_mode="draft",
+        prompt_variant="contracts_focus",
         supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
     )
 
@@ -222,6 +224,9 @@ def test_generate_dsl_case_success(client, monkeypatch) -> None:
             "model": "gpt-test",
             "generation_mode": "draft",
             "import_mode": "replace",
+            "prompt_variant": "baseline_draft",
+            "context_profile": "blank_request",
+            "risk_flags": ["base_url_backfilled"],
             "base_url_source": "request",
             "base_url_backfilled": True,
             "repaired_invalid_actions": 0,
@@ -322,6 +327,13 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
         "步骤 #1 的 action 已从 open 自动修正为 goto。",
         "步骤 #3 的 target 已自动转换为字符串。",
     ]
+    assert response.json()["generation_meta"]["prompt_variant"] == "baseline_draft"
+    assert response.json()["generation_meta"]["context_profile"] == "blank_request"
+    assert response.json()["generation_meta"]["risk_flags"] == [
+        "invalid_actions_repaired",
+        "invalid_steps_removed",
+        "invalid_contracts_removed",
+    ]
     assert response.json()["generation_meta"]["repaired_invalid_actions"] == 1
     assert response.json()["generation_meta"]["removed_invalid_steps"] == 1
     assert response.json()["generation_meta"]["removed_invalid_contracts"] == 2
@@ -407,6 +419,12 @@ def test_generate_dsl_case_preserves_contracts_and_current_name_in_strict_steps_
     assert response.json()["generation_meta"]["preserve_contracts_applied"] is True
     assert response.json()["generation_meta"]["used_current_case_context"] is True
     assert response.json()["generation_meta"]["used_current_steps_context"] is True
+    assert response.json()["generation_meta"]["prompt_variant"] == "repair_steps"
+    assert response.json()["generation_meta"]["context_profile"] == "repair_steps"
+    assert response.json()["generation_meta"]["risk_flags"] == [
+        "contracts_preserved_fallback",
+        "base_url_backfilled",
+    ]
 
 
 def test_generate_dsl_case_preserves_contracts_without_current_case_context(client, monkeypatch) -> None:
@@ -472,6 +490,9 @@ def test_generate_dsl_case_preserves_contracts_without_current_case_context(clie
     assert response.json()["generation_meta"]["preserve_contracts_applied"] is True
     assert response.json()["generation_meta"]["used_current_case_context"] is False
     assert response.json()["generation_meta"]["used_current_steps_context"] is False
+    assert response.json()["generation_meta"]["prompt_variant"] == "baseline_draft"
+    assert response.json()["generation_meta"]["context_profile"] == "blank_request"
+    assert response.json()["generation_meta"]["risk_flags"] == ["contracts_preserved_fallback"]
 
 
 def test_generate_dsl_case_returns_502_for_invalid_dsl_shape_when_auto_repair_disabled(client, monkeypatch) -> None:
@@ -553,16 +574,19 @@ def test_generate_dsl_case_persists_success_record(client, db_session, monkeypat
     assert generation_run.prompt_preview == "打开 example.com 首页"
     assert generation_run.prompt_sha256
     assert generation_run.prompt_version == AI_DSL_PROMPT_VERSION
+    assert generation_run.prompt_variant == "baseline_draft"
     assert generation_run.model_name == "gpt-test"
     assert generation_run.error_type is None
     assert generation_run.generated_case_json is not None
     assert generation_run.generated_case_json["name"] == "成功落库"
+    assert generation_run.context_profile == "blank_request"
     assert generation_run.preserve_contracts_requested is False
     assert generation_run.preserve_contracts_applied is False
     assert generation_run.warnings_count == 1
     assert generation_run.normalization_notes_count == 0
     assert generation_run.warnings_json == ["AI 草案未提供 base_url，已回填请求中的 Base URL。"]
     assert generation_run.normalization_notes_json == []
+    assert generation_run.risk_flags_json == ["base_url_backfilled"]
     assert generation_run.feedback_status == "pending"
     assert generation_run.feedback_import_mode is None
     assert generation_run.rejection_reason_code is None
@@ -593,8 +617,11 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert runs[0].error_message == "AI 返回了无法解析的 DSL JSON。"
     assert runs[0].generated_case_json is None
     assert runs[0].prompt_version == AI_DSL_PROMPT_VERSION
+    assert runs[0].prompt_variant == "baseline_draft"
     assert runs[0].warnings_json == []
     assert runs[0].normalization_notes_json == []
+    assert runs[0].context_profile == "blank_request"
+    assert runs[0].risk_flags_json == []
     assert runs[0].feedback_status == "pending"
 
 
@@ -627,9 +654,11 @@ def test_generate_dsl_case_uses_runtime_strict_mode_default_when_request_omits_g
 
     assert response.status_code == 200
     assert response.json()["generation_meta"]["generation_mode"] == "strict_steps_only"
+    assert response.json()["generation_meta"]["prompt_variant"] == "baseline_draft"
     generation_run = db_session.get(DslGenerationRun, response.json()["generation_id"])
     assert generation_run is not None
     assert generation_run.generation_mode == "strict_steps_only"
+    assert generation_run.context_profile == "blank_request"
 
 
 def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_session, monkeypatch) -> None:
@@ -668,7 +697,7 @@ def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_s
 
     first_id = client.post(
         "/api/v1/dsl/generate",
-        json={"prompt": "first", "actor_user_id": 1, "project_id": 1, "case_id": case.id},
+        json={"prompt": "first", "actor_user_id": 1, "project_id": 1, "case_id": case.id, "base_url": "https://example.com"},
     ).json()["generation_id"]
     client.post("/api/v1/dsl/generate", json={"prompt": "second", "actor_user_id": 1})
     third_id = client.post(
@@ -705,6 +734,8 @@ def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_s
     assert payload[0]["prompt_preview"] == "third"
     assert payload[1]["prompt_preview"] == "second"
     assert payload[0]["prompt_version"] == AI_DSL_PROMPT_VERSION
+    assert payload[0]["prompt_variant"] == "baseline_draft"
+    assert payload[0]["risk_flags"] == []
     assert payload[0]["rejection_reason_code"] == "context_mismatch"
 
     failed_response = client.get("/api/v1/dsl/generations", params={"status": "failed"})
@@ -718,6 +749,7 @@ def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_s
     assert success_response.json()[0]["feedback_import_mode"] == "replace"
     assert success_response.json()[0]["project_id"] == 1
     assert success_response.json()[0]["case_id"] == case.id
+    assert success_response.json()[0]["risk_flags"] == ["base_url_backfilled"]
 
     filtered_response = client.get(
         "/api/v1/dsl/generations",
@@ -739,6 +771,17 @@ def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_s
     )
     assert project_case_response.status_code == 200
     assert [item["prompt_preview"] for item in project_case_response.json()] == ["first"]
+
+    prompt_variant_response = client.get(
+        "/api/v1/dsl/generations",
+        params={"prompt_variant": "baseline_draft", "rejection_reason_code": "context_mismatch", "has_risk_flags": False},
+    )
+    assert prompt_variant_response.status_code == 200
+    assert [item["prompt_preview"] for item in prompt_variant_response.json()] == ["third"]
+
+    risky_response = client.get("/api/v1/dsl/generations", params={"has_risk_flags": True})
+    assert risky_response.status_code == 200
+    assert [item["prompt_preview"] for item in risky_response.json()] == ["first"]
 
 
 def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_session, monkeypatch) -> None:
@@ -807,12 +850,15 @@ def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_ses
     assert payload["project_id"] == 1
     assert payload["case_id"] == case.id
     assert payload["prompt_version"] == AI_DSL_PROMPT_VERSION
+    assert payload["prompt_variant"] == "baseline_draft"
+    assert payload["context_profile"] == "blank_request"
     assert payload["generated_case_json"]["name"] == "详情草案"
     assert payload["warnings_json"] == []
     assert payload["normalization_notes_json"] == [
         "AI 草案未提供有效契约，已沿用当前 DSL 的输入/输出契约。",
         "步骤 #1 的 action 已从 open 自动修正为 goto。",
     ]
+    assert payload["risk_flags"] == ["contracts_preserved_fallback", "invalid_actions_repaired"]
     assert payload["rejection_reason_code"] == "bad_contracts"
     assert payload["feedback_note"] == "输出契约不符合预期"
     assert payload["preserve_contracts_requested"] is True

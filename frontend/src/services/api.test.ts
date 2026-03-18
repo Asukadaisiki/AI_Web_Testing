@@ -164,6 +164,9 @@ test("getDslGenerationRuns includes governance filters in query string", async (
     feedback_status: "rejected",
     generation_mode: "strict_steps_only",
     import_mode: "steps_only",
+    prompt_variant: "repair_steps",
+    rejection_reason_code: "context_mismatch",
+    has_risk_flags: true,
     model_name: "gpt-4o-mini",
     project_id: 1,
     case_id: 9,
@@ -174,7 +177,7 @@ test("getDslGenerationRuns includes governance filters in query string", async (
   });
 
   expect(fetchMock).toHaveBeenCalledWith(
-    "/api/v1/dsl/generations?status=failed&feedback_status=rejected&generation_mode=strict_steps_only&import_mode=steps_only&model_name=gpt-4o-mini&project_id=1&case_id=9&created_from=2026-03-18T00%3A00%3A00&created_to=2026-03-18T23%3A59%3A59&limit=10&offset=0",
+    "/api/v1/dsl/generations?status=failed&feedback_status=rejected&generation_mode=strict_steps_only&import_mode=steps_only&prompt_variant=repair_steps&rejection_reason_code=context_mismatch&has_risk_flags=true&model_name=gpt-4o-mini&project_id=1&case_id=9&created_from=2026-03-18T00%3A00%3A00&created_to=2026-03-18T23%3A59%3A59&limit=10&offset=0",
     expect.any(Object),
   );
 });

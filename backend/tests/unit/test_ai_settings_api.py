@@ -196,6 +196,25 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
             ],
             "accepted_import_mode_breakdown": [],
             "top_rejection_reasons": [],
+            "prompt_variant_breakdown": [
+                {
+                    "prompt_variant": "baseline_draft",
+                    "total_requests": 1,
+                    "success_count": 0,
+                    "accepted_count": 0,
+                    "rejected_count": 0,
+                }
+            ],
+            "context_profile_breakdown": [
+                {
+                    "context_profile": "blank_request",
+                    "total_requests": 1,
+                    "success_count": 0,
+                    "accepted_count": 0,
+                    "rejected_count": 0,
+                }
+            ],
+            "rejection_reason_by_variant": [],
             "model_outcome_breakdown": [
                 {
                     "model_name": "gpt-dsl",
@@ -303,6 +322,31 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
     ]
     assert overview_response.json()["generation_stats"]["top_rejection_reasons"] == [
         {"rejection_reason_code": "bad_contracts", "count": 1}
+    ]
+    assert overview_response.json()["generation_stats"]["prompt_variant_breakdown"] == [
+        {
+            "prompt_variant": "baseline_draft",
+            "total_requests": 3,
+            "success_count": 3,
+            "accepted_count": 2,
+            "rejected_count": 1,
+        }
+    ]
+    assert overview_response.json()["generation_stats"]["context_profile_breakdown"] == [
+        {
+            "context_profile": "blank_request",
+            "total_requests": 3,
+            "success_count": 3,
+            "accepted_count": 2,
+            "rejected_count": 1,
+        }
+    ]
+    assert overview_response.json()["generation_stats"]["rejection_reason_by_variant"] == [
+        {
+            "prompt_variant": "baseline_draft",
+            "rejection_reason_code": "bad_contracts",
+            "count": 1,
+        }
     ]
     assert overview_response.json()["generation_stats"]["model_outcome_breakdown"] == [
         {

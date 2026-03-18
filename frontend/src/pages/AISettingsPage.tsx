@@ -28,6 +28,8 @@ import {
 import type {
   AISettingsUpdatePayload,
   DslGenerationFeedbackStatus,
+  DslGenerationPromptVariant,
+  DslGenerationRejectionReasonCode,
   DslGenerationRunStatus,
   GenerateDslImportMode,
   GenerateDslMode,
@@ -37,11 +39,29 @@ import type {
 } from "../types/api";
 
 type AISettingsFormValues = AISettingsUpdatePayload;
-type GovernanceFilterValues = {
+type GovernanceFilterFormValues = {
   status?: DslGenerationRunStatus;
   feedback_status?: DslGenerationFeedbackStatus;
   generation_mode?: GenerateDslMode;
   import_mode?: GenerateDslImportMode;
+  prompt_variant?: DslGenerationPromptVariant;
+  rejection_reason_code?: DslGenerationRejectionReasonCode;
+  has_risk_flags?: "true" | "false";
+  model_name?: string;
+  project_id?: number;
+  case_id?: number;
+  created_from?: string;
+  created_to?: string;
+};
+
+type GovernanceQueryFilters = {
+  status?: DslGenerationRunStatus;
+  feedback_status?: DslGenerationFeedbackStatus;
+  generation_mode?: GenerateDslMode;
+  import_mode?: GenerateDslImportMode;
+  prompt_variant?: DslGenerationPromptVariant;
+  rejection_reason_code?: DslGenerationRejectionReasonCode;
+  has_risk_flags?: boolean;
   model_name?: string;
   project_id?: number;
   case_id?: number;
@@ -84,6 +104,29 @@ const IMPORT_MODE_OPTIONS = [
   { label: "contracts_only", value: "contracts_only" },
 ];
 
+const PROMPT_VARIANT_OPTIONS = [
+  { label: "全部 variant", value: "" },
+  { label: "baseline_draft", value: "baseline_draft" },
+  { label: "rewrite_from_case", value: "rewrite_from_case" },
+  { label: "repair_steps", value: "repair_steps" },
+  { label: "contracts_focus", value: "contracts_focus" },
+];
+
+const REJECTION_REASON_OPTIONS = [
+  { label: "全部拒绝原因", value: "" },
+  { label: "wrong_actions", value: "wrong_actions" },
+  { label: "invalid_structure", value: "invalid_structure" },
+  { label: "context_mismatch", value: "context_mismatch" },
+  { label: "bad_contracts", value: "bad_contracts" },
+  { label: "other", value: "other" },
+];
+
+const RISK_FILTER_OPTIONS = [
+  { label: "全部风险", value: "" },
+  { label: "仅高风险", value: "true" },
+  { label: "仅无风险", value: "false" },
+];
+
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
@@ -121,8 +164,12 @@ function formatContextSummary(record: StoredDslGenerationRunDetail) {
   return tags.length ? tags.join(" / ") : "未使用额外上下文";
 }
 
-function normalizeFilters(values: Partial<GovernanceFilterValues>): GovernanceFilterValues {
-  const normalized: GovernanceFilterValues = {};
+function formatRiskFlags(flags: string[]) {
+  return flags.length ? flags.join("、") : "无";
+}
+
+function normalizeFilters(values: Partial<GovernanceFilterFormValues>): GovernanceQueryFilters {
+  const normalized: GovernanceQueryFilters = {};
   if (values.status) {
     normalized.status = values.status;
   }
@@ -134,6 +181,18 @@ function normalizeFilters(values: Partial<GovernanceFilterValues>): GovernanceFi
   }
   if (values.import_mode) {
     normalized.import_mode = values.import_mode;
+  }
+  if (values.prompt_variant) {
+    normalized.prompt_variant = values.prompt_variant;
+  }
+  if (values.rejection_reason_code) {
+    normalized.rejection_reason_code = values.rejection_reason_code;
+  }
+  if (values.has_risk_flags === "true") {
+    normalized.has_risk_flags = true;
+  }
+  if (values.has_risk_flags === "false") {
+    normalized.has_risk_flags = false;
   }
   if (values.model_name?.trim()) {
     normalized.model_name = values.model_name.trim();
@@ -155,10 +214,10 @@ function normalizeFilters(values: Partial<GovernanceFilterValues>): GovernanceFi
 
 export function AISettingsPage() {
   const [form] = Form.useForm<AISettingsFormValues>();
-  const [filterForm] = Form.useForm<GovernanceFilterValues>();
+  const [filterForm] = Form.useForm<GovernanceFilterFormValues>();
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
-  const [governanceFilters, setGovernanceFilters] = useState<GovernanceFilterValues>({});
+  const [governanceFilters, setGovernanceFilters] = useState<GovernanceQueryFilters>({});
   const [page, setPage] = useState(1);
   const [selectedGenerationId, setSelectedGenerationId] = useState<number | null>(null);
 
@@ -274,6 +333,16 @@ export function AISettingsPage() {
         title: "Prompt 版本",
         dataIndex: "prompt_version",
         key: "prompt_version",
+      },
+      {
+        title: "Prompt Variant",
+        dataIndex: "prompt_variant",
+        key: "prompt_variant",
+      },
+      {
+        title: "风险标签",
+        key: "risk_flags",
+        render: (_: unknown, record: StoredDslGenerationRunSummary) => formatRiskFlags(record.risk_flags),
       },
       {
         title: "操作",
@@ -392,6 +461,33 @@ export function AISettingsPage() {
                         .join("、")
                     : "暂无"}
                 </Descriptions.Item>
+                <Descriptions.Item label="Variant 结果分布">
+                  {overviewData.generation_stats.prompt_variant_breakdown.length
+                    ? overviewData.generation_stats.prompt_variant_breakdown
+                        .map(
+                          (item) =>
+                            `${item.prompt_variant}: ${item.total_requests} / ${item.accepted_count} / ${item.rejected_count}`,
+                        )
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="上下文分布">
+                  {overviewData.generation_stats.context_profile_breakdown.length
+                    ? overviewData.generation_stats.context_profile_breakdown
+                        .map(
+                          (item) =>
+                            `${item.context_profile}: ${item.total_requests} / ${item.accepted_count} / ${item.rejected_count}`,
+                        )
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="拒绝原因按 Variant">
+                  {overviewData.generation_stats.rejection_reason_by_variant.length
+                    ? overviewData.generation_stats.rejection_reason_by_variant
+                        .map((item) => `${item.prompt_variant} / ${item.rejection_reason_code} (${item.count})`)
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
                 <Descriptions.Item label="模型结果分布">
                   {overviewData.generation_stats.model_outcome_breakdown.length
                     ? overviewData.generation_stats.model_outcome_breakdown
@@ -442,19 +538,28 @@ export function AISettingsPage() {
                 <Form.Item label="导入方式" name="import_mode">
                   <Select options={IMPORT_MODE_OPTIONS} />
                 </Form.Item>
+                <Form.Item label="Prompt Variant" name="prompt_variant">
+                  <Select options={PROMPT_VARIANT_OPTIONS} />
+                </Form.Item>
               </div>
               <div className="structured-step-grid">
+                <Form.Item label="拒绝原因" name="rejection_reason_code">
+                  <Select options={REJECTION_REASON_OPTIONS} />
+                </Form.Item>
+                <Form.Item label="风险标签" name="has_risk_flags">
+                  <Select options={RISK_FILTER_OPTIONS} />
+                </Form.Item>
                 <Form.Item label="模型名" name="model_name">
                   <Input placeholder="例如：gpt-4o-mini" />
                 </Form.Item>
                 <Form.Item label="项目 ID" name="project_id">
                   <InputNumber min={1} style={{ width: "100%" }} />
                 </Form.Item>
+              </div>
+              <div className="structured-step-grid">
                 <Form.Item label="用例 ID" name="case_id">
                   <InputNumber min={1} style={{ width: "100%" }} />
                 </Form.Item>
-              </div>
-              <div className="structured-step-grid">
                 <Form.Item label="开始时间 (ISO)" name="created_from">
                   <Input placeholder="2026-03-18T00:00:00" />
                 </Form.Item>
@@ -642,6 +747,8 @@ export function AISettingsPage() {
                 {formatTimestamp(generationDetailQuery.data.created_at)}
               </Descriptions.Item>
               <Descriptions.Item label="Prompt 版本">{generationDetailQuery.data.prompt_version}</Descriptions.Item>
+              <Descriptions.Item label="Prompt Variant">{generationDetailQuery.data.prompt_variant}</Descriptions.Item>
+              <Descriptions.Item label="上下文档案">{generationDetailQuery.data.context_profile}</Descriptions.Item>
               <Descriptions.Item label="结果">{generationDetailQuery.data.success ? "成功" : "失败"}</Descriptions.Item>
               <Descriptions.Item label="反馈">{formatFeedbackStatus(generationDetailQuery.data)}</Descriptions.Item>
               <Descriptions.Item label="项目 / 用例">
@@ -652,6 +759,9 @@ export function AISettingsPage() {
               </Descriptions.Item>
               <Descriptions.Item label="上下文来源">
                 {formatContextSummary(generationDetailQuery.data)}
+              </Descriptions.Item>
+              <Descriptions.Item label="风险标签">
+                {formatRiskFlags(generationDetailQuery.data.risk_flags)}
               </Descriptions.Item>
               <Descriptions.Item label="拒绝备注">
                 {generationDetailQuery.data.feedback_note ?? "无"}

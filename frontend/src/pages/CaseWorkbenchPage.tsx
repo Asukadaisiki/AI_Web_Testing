@@ -354,6 +354,10 @@ function formatImportModeLabel(mode: GenerateDslImportMode) {
   return "仅合并契约";
 }
 
+function formatRiskFlags(flags: string[]) {
+  return flags.length ? flags.join("、") : "无";
+}
+
 export function CaseWorkbenchPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const isEditMode = Boolean(caseId);
@@ -1069,6 +1073,14 @@ export function CaseWorkbenchPage() {
                 }
               />
             ) : null}
+            {generatedDraft?.generation_meta.risk_flags.length ? (
+              <Alert
+                type="info"
+                showIcon
+                message="风险标签"
+                description={formatRiskFlags(generatedDraft.generation_meta.risk_flags)}
+              />
+            ) : null}
             {generatedDraft ? (
               <Card size="small" title="生成预览">
                 <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -1076,14 +1088,22 @@ export function CaseWorkbenchPage() {
                     <Tag color="blue">{generatedDraft.case.name}</Tag>
                     <Tag color="geekblue">{generatedDraft.generation_meta.generation_mode}</Tag>
                     <Tag color="purple">{generatedDraft.generation_meta.import_mode}</Tag>
+                    <Tag color="magenta">{generatedDraft.generation_meta.prompt_variant}</Tag>
+                    <Tag color="cyan">{generatedDraft.generation_meta.context_profile}</Tag>
                     <Tag color="gold">{generatedDraft.generation_meta.model ?? "未配置模型"}</Tag>
                     {generatedDraft.supported_actions.map((action) => (
                       <Tag key={action}>{action}</Tag>
                     ))}
+                    {generatedDraft.generation_meta.risk_flags.map((flag) => (
+                      <Tag key={flag} color="orange">
+                        {flag}
+                      </Tag>
+                    ))}
                   </Space>
                   <Typography.Text type="secondary">
                     Base URL 来源：{generatedDraft.generation_meta.base_url_source}；修正 action {generatedDraft.generation_meta.repaired_invalid_actions} 个；
-                    删除非法步骤 {generatedDraft.generation_meta.removed_invalid_steps} 个；删除非法契约 {generatedDraft.generation_meta.removed_invalid_contracts} 个。
+                    删除非法步骤 {generatedDraft.generation_meta.removed_invalid_steps} 个；删除非法契约 {generatedDraft.generation_meta.removed_invalid_contracts} 个；
+                    风险标签 {generatedDraft.generation_meta.risk_flags.length} 个。
                   </Typography.Text>
                   <Input.TextArea
                     aria-label="生成 DSL 预览"

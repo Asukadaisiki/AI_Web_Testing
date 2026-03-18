@@ -8,6 +8,8 @@ import type {
   CreateCorrectionPayload,
   DSLCasePayload,
   DslGenerationFeedbackPayload,
+  DslGenerationPromptVariant,
+  DslGenerationRejectionReasonCode,
   DslGenerationRunStatus,
   GenerateDslRequest,
   GenerateDslResponse,
@@ -148,6 +150,9 @@ export function getDslGenerationRuns(params?: {
   feedback_status?: DslGenerationFeedbackStatus;
   generation_mode?: GenerateDslMode;
   import_mode?: GenerateDslImportMode;
+  prompt_variant?: DslGenerationPromptVariant;
+  rejection_reason_code?: DslGenerationRejectionReasonCode;
+  has_risk_flags?: boolean;
   model_name?: string;
   project_id?: number;
   case_id?: number;
@@ -168,6 +173,15 @@ export function getDslGenerationRuns(params?: {
   }
   if (params?.import_mode) {
     search.set("import_mode", params.import_mode);
+  }
+  if (params?.prompt_variant) {
+    search.set("prompt_variant", params.prompt_variant);
+  }
+  if (params?.rejection_reason_code) {
+    search.set("rejection_reason_code", params.rejection_reason_code);
+  }
+  if (typeof params?.has_risk_flags === "boolean") {
+    search.set("has_risk_flags", String(params.has_risk_flags));
   }
   if (params?.model_name) {
     search.set("model_name", params.model_name);
