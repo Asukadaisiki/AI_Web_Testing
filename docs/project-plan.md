@@ -31,56 +31,6 @@
 - 已完成 `AI 设置管理入口`：后端已提供 `GET/PUT /api/v1/settings/ai`，前端已提供 `AISettingsPage`，可管理 AI DSL / VLM 运行时配置；后续无需再把“环境配置页”作为未开始事项。
 - 已进入 `AI 生成 DSL 深化` 第一批：生成请求支持 `generation_mode / import_mode / current_case / current_steps / preserve_contracts`，后端会输出 `normalization_notes` 与 `generation_meta`，前端工作台可展示自动修正、风险 warning、不可导入错误与三种导入动作；同时 `GET /api/v1/settings/ai/overview` 已提供最小生成观测指标。
 
-### 2026-03-15 补充
-
-- 已完成 `v3.4 延后加固`：`RUNTIME_STATE` 线程安全（`threading.Lock`）、LLM JSON 提取健壮化（大括号深度追踪替代简单 `find/rfind`）、`correction_value` 按 `correction_type` 格式校验（Pydantic `model_validator`）、corrections 创建/状态更新日志级别从 `WARNING` 收敛到 `INFO`、`deep_locate` 死参数清理。
-- 回归测试从 84 条扩展到 109 条（+25），新增覆盖：JSON 提取边界、`_parse_bbox_response` 边界、`reset_ai_visual_runtime_state` 专项、并发限流线程安全、`correction_value` 格式校验（6 组正反例）、批量激活同键冲突。
-- 当前主线 `v3.4` 加固项已全部收口，后续应围绕 corrections 运维细化或新里程碑推进。
-
-### 2026-03-14 补充
-
-- 已完成 `corrections 运营增强` 第一批：后端新增 `locator_correction_events` 事件表、`GET /api/v1/corrections/overview`、`GET /api/v1/corrections/{id}/events` 与 `PATCH /api/v1/corrections/bulk`，前端 `CorrectionsPage` 已支持汇总卡片、命中/未命中趋势、批量启停与单条事件时间线抽屉。
-- 浏览器级本地夹具回归已从 1 条扩展到 2 条：除 `needs_intervention -> correction -> rerun -> Tier 0 hit` 外，还覆盖了“错误修正连续失败 3 次后自动停用”的真实链路。
-- 已完成 `Suite Context v2.3` 全量闭环：运行时上下文容器、输入/输出契约、变量解析、失败重跑上下文策略，以及前端上下文证据展示都已落地。
-- 已完成混合定位闭环的最小可用版本：`locator_corrections`、`needs_intervention`、统一 `resolve_with_fallback()`、执行详情人工干预面板与修正提交重跑链路已打通。
-- 已完成混合定位 correctness / data-integrity 修复：修正记录唯一活动约束、大小写无关查找、分页、`PATCH` 语义、URL 泛化和前端类型对齐已经收口。
-- 已进入 `v3.4 混合定位稳定化与运营入口`：本轮补齐了修正记录管理页、`page_url` 过滤、runner 与 `db_session` 解耦，以及 AI 视觉定位的超时 / 限流 / 熔断保护。
-- 当前主线不再回到 `v2.3`，后续应继续围绕修正运营、混合定位稳定性和真实回归链路推进。
-
-### 2026-03-13 补充
-
-- 已完成 `Suite 执行历史与失败重跑 v2.2`，当前代码里已经具备 `suite_runs`、`suite_run_items`、批次详情与失败重跑链路，`Suite -> Run -> Execution Detail` 的主回看路径已打通。
-- 当前真实的下一里程碑应调整为 `Suite Context 与参数传递 v2.3`，不再是 `v2.2`；后续规划应围绕“共享上下文、显式变量引用、失败重跑上下文策略”展开。
-- 现有代码边界已经比较清晰：`backend/app/services/suites.py` 负责 Suite 编排，`backend/app/services/executions.py` 负责单 Case 执行，`backend/app/schemas/dsl.py` 仍只有 `name / description / base_url / steps`，尚未定义 Case 输入/输出契约。
-- 因此 `v2.3` 的最小改动路径应是“先补契约与批次上下文字段，再补运行时解析与证据展示”，而不是直接改 Runner 或引入第二套执行引擎。
-- `混合定位系统 v3.0-v3.3` 仍应排在 `v2.3` 之后推进；如果 `Suite Context` 还未稳定，不宜同时引入新的定位降级链路和人工干预闭环。
-
-### 2026-03-11 补充
-
-- 已完成 `Suite 基础闭环 v2.1`：后端已新增 `GET/POST/PUT /api/v1/suites` 与 `POST /api/v1/suites/{id}/execute`，前端已新增 `Suite 管理` 列表页与 `Suite 工作台`。
-- `Suite` 当前采用“同步串行编排 + 复用现有 Case 执行记录”的最小实现：按 `order_index` 顺序执行全部 Case，单条失败后继续执行后续 Case，不单独持久化 `suite_runs`。
-- 前端侧边导航已扩展为“仪表盘 / 用例列表 / Suite 管理 / 执行中心 / 报告中心”；Suite 页面支持选择已有 Case、上移/下移调整顺序、保存和直接执行，并展示子执行跳转链接。
-- 当前 `v2.1` 已完成最小范围，下一步应收口到 `v2.2`：补 Suite 执行历史批次、失败重跑入口和更明确的 Suite 结果回看链路。
-- `Suite Context` 已进入后续规划，但不放在 `v2.1` 当前实现中：应等 Suite 历史批次和批次标识稳定后，再在 `v2.3` 引入跨 Case 变量传递、共享上下文与参数引用，避免过早把 Case 执行和 Suite 编排耦合在一起。
-- 已完成 `单 Case 平台体验打磨 v2.0`：`GET /api/v1/executions` 已支持 `window_days=7/14/30`，执行中心把 `window_days / status / case_id / failure_category / failure_fingerprint / page` 统一提升为 URL 查询状态。
-- 仪表盘与报告中心中的“最近失败 / 高频失败 / 根因榜”已统一回流到带筛选参数的执行中心；执行详情页现在会优先保留来源执行中心的返回路径，没有来源信息时才回退默认 `/executions`。
-- `AppRouter` 已切换为路由级懒加载，`OverviewChart` 已切换到模块化 ECharts 引入；前端构建不再输出 chunk size warning，`BUG-010` 已关闭。
-
-### 2026-03-10 补充
-
-- 已完成 `单 Case 平台化 v1.9`：报告中心已补 `当前窗口 / 上一窗口` 对比、环比摘要与失败根因榜；执行中心已支持通过 `failure_fingerprint` 承接报告中心回流筛选。
-- `GET /api/v1/executions/overview` 已支持可选 `window_days=7/14/30`，并补充 `current_window_range`、`previous_window_range`、`previous_window_stats`、`window_comparison` 与 `failure_root_causes` 聚合字段。
-- 仪表盘已可展示近 7 天执行趋势、最近失败执行和失败最多用例；报告中心已可展示窗口切换、失败分类分布、失败动作分布、高频失败用例、最近失败跳转与根因回流。
-- 已完成 `执行中心与工作台增强 v1.5` 的主范围落地，仍聚焦单 Case 主链路，没有启动 Suite、AI 生成 DSL 或 Vision 定位。
-- 执行中心已支持按 `project_id`、`status`、`case_id` 查询，并在列表中展示 `duration_ms`、`total_steps`、`failed_step_index`、`latest_screenshot_url` 等摘要字段。
-- 已完成 `单 Case 观测性增强 v1.7`：执行摘要新增 `failure_category`、`failure_step_action`、`latest_url`，并新增 `GET /api/v1/executions/overview` 以输出总数、通过率、平均耗时、最近失败与失败分类聚合。
-- 前端执行中心已补总览卡片、失败分类快速筛选和最近失败区；当前执行中心可同时承担“查看明细”和“识别近期问题热点”的入口。
-- 执行详情页已支持失败步骤默认展开、成功步骤折叠，以及 console / network 事件按需展开，定位证据可查看候选分数、命中规则、淘汰原因和最终选择原因。
-- Locator 已从“首个命中”升级为“候选召回 -> 规则打分 -> 拒绝原因记录 -> 最高分命中”，候选上限固定为 5，便于报告排障。
-- 用例工作台已从纯 JSON 编辑升级为“双模式编辑”：默认结构化步骤编辑器，保留原始 JSON 作为高级模式和回退模式，并支持模板插入、增删改、排序、保存和保存并执行。
-- 已完成 `单 Case 稳定化 v1.6`：`base_url` 已下沉到用例 DSL，自此相对路径 `goto` 以后端执行请求覆盖值或用例自身 `base_url` 为准，不再以 `EXECUTION_BASE_URL` 作为正式产品默认来源。
-- 前端工作台已补“返回用例列表”、执行详情已补“返回执行中心 / 返回用例”，并引入新建页自动恢复草稿、编辑页恢复/丢弃草稿、保存后清理草稿的交互闭环。
-- 当前未完成项仍是 Suite 批量执行、AI 生成 DSL、Vision 辅助定位，以及登录页、Suite 管理页、环境配置等更高层平台能力；这些能力继续排在单 Case 稳定性、可观察性与平台入口建设之后。
 
 截至 2026-03-10，当前实现状态如下。
 
@@ -119,6 +69,7 @@
 `v3.4` 延后加固已全部完成（线程安全、JSON 提取健壮化、格式校验、日志收敛、死参数清理）。
 
 下一里程碑当前建议直接收敛为 `AI 生成 DSL 深化`，优先级高于登录体系或默认开启 AI 视觉定位。
+详细技术设计参见 [`docs/hybrid-locate-and-intervention-design.md`](./hybrid-locate-and-intervention-design.md)。
 
 下一里程碑建议从以下方向中选取：
 
@@ -127,53 +78,6 @@
 - **登录页与认证体系**：平台登录入口、用户会话与权限边界。
 - **真实 AI 视觉定位接入**：VLM 配置页、默认开启策略与模型管理。
 
-### v2.3 建议执行顺序（2026-03-13）
-
-#### v2.3a：契约与数据层收口
-
-- 先在 `backend/app/schemas/dsl.py` 为 `DSLCase` 增加可选输入/输出契约，而不是直接在自由文本中声明变量。
-- 在 `suite_runs` 或等价批次上下文模型中补“上下文快照 / 上下文来源 / 重跑上下文模式”字段，保证变量传递有可追溯的运行容器。
-- 扩展执行与批次返回 schema，为前端展示“变量读取、变量写入、解析失败原因”预留结构化字段。
-- 验收重点：仅完成 schema、模型、迁移和 API 返回结构，不要求这一阶段就打通真实变量传递。
-
-#### v2.3b：运行时变量解析与失败策略
-
-- 在 `backend/app/services/suites.py` 的批次编排层增加上下文解析，而不是把变量替换逻辑塞进 `playwright_runner.py`。
-- 执行顺序保持不变：进入 Suite 批次后，先解析当前 Case 的输入变量，生成运行时 DSL，再复用 `execute_case()`。
-- 单个 Case 完成后，把显式声明的输出写回当前批次上下文；若变量缺失、类型不匹配或解析失败，在服务层直接给出明确失败结果。
-- 失败重跑需要明确两种策略：`reuse_source_context` 与 `empty_context`；默认策略应可配置但必须落库可追溯。
-- 验收重点：至少支持“Case A 写变量，Case B 读变量”的单链路 happy path，以及缺失变量的 fail-fast。
-
-#### v2.3c：前端工作台与批次可观测性
-
-- 在 Case 工作台补输入/输出契约编辑能力，但仍与 DSL 共用同一套校验，不新增旁路配置入口。
-- 在 Suite 批次详情页和执行详情页展示变量读取/写入证据、上下文快照摘要和重跑上下文模式。
-- 把变量相关失败纳入现有执行详情与报告视图，避免用户只能看后端原始 JSON。
-- 验收重点：前端能清楚回答“这个变量从哪里来、在哪里被消费、为什么失败”。
-
-#### v3.0 启动前置条件
-
-- `v2.3` 需要先完成最小自动化测试覆盖，至少包含 schema 校验、Suite 编排、失败重跑上下文策略和前端展示契约。
-- `docs/project-plan.md`、`README.md` 与执行日志状态同步后，再切入混合定位系统 `v3.0`，避免两个大主题并行导致文档和实现再次失配。
-
-### 后续规划：Suite Context 与参数传递 v2.3
-
-- 安排位置：放在 `v2.2` 之后，而不是并入当前 `v2.1` 或抢在 `v2.2` 之前。
-- 原因：`Suite Context` 本质上依赖稳定的 Suite 批次身份与运行上下文；如果在还没有 `suite_runs` 或等价批次模型时提前加入变量传递，后续历史回看、失败重跑和上下文追踪都会变得混乱。
-- 目标：支持在同一次 Suite 运行内，把前一个 Case 的结构化输出写入共享上下文，并在后续 Case 中显式引用。
-- 最小范围：
-  - 定义 `Suite Run Context` 或等价运行时共享变量容器
-  - 为 Case 增加“可选输入参数”与“可选结构化输出”契约
-  - 为 DSL 增加受控变量引用能力，例如 `${order_id}` 一类的占位符解析
-  - 在执行报告中记录变量写入、读取来源和解析失败原因
-- 非目标：
-  - 不允许 Case 之间隐式共享浏览器内存状态来替代结构化上下文
-  - 不允许 AI 或自由文本直接修改运行时上下文而绕过 DSL 校验
-  - 不在第一版 `Suite Context` 中引入复杂条件分支、循环或脚本执行
-- 验收标准：
-  - 同一 Suite 中可由 Case A 输出变量、Case B 显式引用
-  - 变量缺失或类型不匹配时，可在执行前或执行中输出明确错误
-  - 失败重跑时能够区分“沿用原批次上下文”与“从空上下文重跑”的策略
 
 ## 执行原则
 
@@ -409,16 +313,7 @@
 端到端：
 
 - 至少保留一条登录冒烟用例作为主回归链路
-## 2026-03-11 | v2.2 实施更新
 
-- 已完成 `Suite 执行历史与失败重跑 v2.2`。
-- 后端已新增 `suite_runs`、`suite_run_items` 两张批次表，并通过 Alembic 迁移落库。
-- `POST /api/v1/suites/{id}/execute` 已改为先创建 Suite 批次、逐条执行 Case、逐项落库，再回写聚合状态。
-- 已新增 `GET /api/v1/suites/{id}/runs`、`GET /api/v1/suites/{id}/runs/{run_id}` 与 `POST /api/v1/suites/{id}/runs/{run_id}/rerun-failed`。
-- `失败重跑` 当前默认重跑“当前 Case 最新 DSL”，不会回放历史 DSL 快照；该策略是 v2.2 的最小实现。
-- 前端已新增 `SuiteRunDetailPage`，`SuitesPage` 会展示最近批次摘要，`SuiteWorkbenchPage` 会展示最近批次列表并在执行后跳转到批次详情页。
-- `ExecutionDetailPage` 已支持优先返回来源 Suite 批次；无来源时仍回到执行中心。
-- `v2.3` 继续保持为 `Suite Context 与参数传递`，不在本轮引入上下文共享、变量占位符解析或跨 Case 状态复用。
 
 ## 后续规划：混合定位系统 v3.0–v3.3
 
