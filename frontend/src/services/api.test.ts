@@ -6,6 +6,7 @@ import {
   getAISettingsOverview,
   getCorrectionEvents,
   getCorrections,
+  getDslGenerationRunDetail,
   getDslGenerationRuns,
   getExecutions,
   recordDslGenerationFeedback,
@@ -70,6 +71,8 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
     prompt: "打开 example.com 并验证 URL",
     base_url: "https://example.com",
     actor_user_id: 1,
+    project_id: 1,
+    case_id: 9,
     generation_mode: "strict_steps_only",
     import_mode: "steps_only",
     current_case: {
@@ -108,6 +111,8 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
         prompt: "打开 example.com 并验证 URL",
         base_url: "https://example.com",
         actor_user_id: 1,
+        project_id: 1,
+        case_id: 9,
         generation_mode: "strict_steps_only",
         import_mode: "steps_only",
         current_case: {
@@ -153,24 +158,40 @@ test("getAISettingsOverview requests the AI settings overview endpoint", async (
   expect(fetchMock).toHaveBeenCalledWith("/api/v1/settings/ai/overview", expect.any(Object));
 });
 
-test("getDslGenerationRuns includes status limit and offset in query string", async () => {
+test("getDslGenerationRuns includes governance filters in query string", async () => {
   await getDslGenerationRuns({
     status: "failed",
+    feedback_status: "rejected",
+    generation_mode: "strict_steps_only",
+    import_mode: "steps_only",
+    model_name: "gpt-4o-mini",
+    project_id: 1,
+    case_id: 9,
+    created_from: "2026-03-18T00:00:00",
+    created_to: "2026-03-18T23:59:59",
     limit: 10,
     offset: 0,
   });
 
   expect(fetchMock).toHaveBeenCalledWith(
-    "/api/v1/dsl/generations?status=failed&limit=10&offset=0",
+    "/api/v1/dsl/generations?status=failed&feedback_status=rejected&generation_mode=strict_steps_only&import_mode=steps_only&model_name=gpt-4o-mini&project_id=1&case_id=9&created_from=2026-03-18T00%3A00%3A00&created_to=2026-03-18T23%3A59%3A59&limit=10&offset=0",
     expect.any(Object),
   );
+});
+
+test("getDslGenerationRunDetail requests the detail endpoint", async () => {
+  await getDslGenerationRunDetail(23);
+
+  expect(fetchMock).toHaveBeenCalledWith("/api/v1/dsl/generations/23", expect.any(Object));
 });
 
 test("recordDslGenerationFeedback posts feedback payload to endpoint", async () => {
   await recordDslGenerationFeedback(23, {
     actor_user_id: 1,
-    feedback_status: "accepted",
-    feedback_import_mode: "contracts_only",
+    feedback_status: "rejected",
+    feedback_import_mode: null,
+    rejection_reason_code: "bad_contracts",
+    feedback_note: "契约不符合预期",
   });
 
   expect(fetchMock).toHaveBeenCalledWith(
@@ -179,8 +200,10 @@ test("recordDslGenerationFeedback posts feedback payload to endpoint", async () 
       method: "PATCH",
       body: JSON.stringify({
         actor_user_id: 1,
-        feedback_status: "accepted",
-        feedback_import_mode: "contracts_only",
+        feedback_status: "rejected",
+        feedback_import_mode: null,
+        rejection_reason_code: "bad_contracts",
+        feedback_note: "契约不符合预期",
       }),
     }),
   );

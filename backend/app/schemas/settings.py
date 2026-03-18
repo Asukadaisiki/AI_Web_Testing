@@ -72,6 +72,27 @@ class AIDslGenerationImportModeCount(SettingsModel):
     count: int = Field(ge=1)
 
 
+class AIDslGenerationRejectionReasonCount(SettingsModel):
+    rejection_reason_code: Literal["wrong_actions", "invalid_structure", "context_mismatch", "bad_contracts", "other"]
+    count: int = Field(ge=1)
+
+
+class AIDslGenerationModelOutcome(SettingsModel):
+    model_name: str | None = Field(default=None, max_length=200)
+    total_requests: int = Field(ge=1)
+    success_count: int = Field(ge=0)
+    accepted_count: int = Field(ge=0)
+    rejected_count: int = Field(ge=0)
+
+
+class AIDslGenerationModeBreakdown(SettingsModel):
+    generation_mode: Literal["draft", "strict_steps_only"]
+    total_requests: int = Field(ge=1)
+    success_count: int = Field(ge=0)
+    accepted_count: int = Field(ge=0)
+    rejected_count: int = Field(ge=0)
+
+
 class AIDslGenerationStats(SettingsModel):
     total_requests: int = Field(ge=0)
     success_count: int = Field(ge=0)
@@ -89,6 +110,9 @@ class AIDslGenerationStats(SettingsModel):
     last_24h_auto_repair_rate: float = Field(default=0.0, ge=0, le=1)
     top_error_types: list[AIDslGenerationErrorTypeCount] = Field(default_factory=list)
     accepted_import_mode_breakdown: list[AIDslGenerationImportModeCount] = Field(default_factory=list)
+    top_rejection_reasons: list[AIDslGenerationRejectionReasonCount] = Field(default_factory=list)
+    model_outcome_breakdown: list[AIDslGenerationModelOutcome] = Field(default_factory=list)
+    generation_mode_breakdown: list[AIDslGenerationModeBreakdown] = Field(default_factory=list)
 
 
 class AISettingsOverviewResponse(SettingsModel):

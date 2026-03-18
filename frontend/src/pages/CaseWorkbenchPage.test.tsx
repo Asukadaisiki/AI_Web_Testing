@@ -50,6 +50,9 @@ beforeEach(() => {
     model_name: "gpt-4o-mini",
     generation_mode: "draft",
     import_mode: "replace",
+    project_id: 1,
+    case_id: null,
+    prompt_version: "2026-03-18.governance-v1",
     error_type: null,
     error_message: null,
     repaired_invalid_actions: 0,
@@ -60,6 +63,7 @@ beforeEach(() => {
     prompt_preview: "seed",
     feedback_status: "accepted",
     feedback_import_mode: "replace",
+    rejection_reason_code: null,
     feedback_recorded_at: "2026-03-17T00:01:00",
   });
 });
@@ -587,6 +591,8 @@ test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", asyn
       actor_user_id: 1,
       feedback_status: "accepted",
       feedback_import_mode: "steps_only",
+      rejection_reason_code: null,
+      feedback_note: null,
     });
   });
 
@@ -641,6 +647,8 @@ test("自然语言生成会按上下文来源与策略带上请求 payload", asy
       prompt: "把当前用例改写成 dashboard 冒烟",
       base_url: "https://example.com",
       actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
       generation_mode: "draft",
       import_mode: "replace",
       current_case: null,
@@ -810,6 +818,9 @@ test("放弃草案会记录 rejected 反馈并清空预览", async () => {
     model_name: "gpt-4o-mini",
     generation_mode: "draft",
     import_mode: "replace",
+    project_id: 1,
+    case_id: null,
+    prompt_version: "2026-03-18.governance-v1",
     error_type: null,
     error_message: null,
     repaired_invalid_actions: 0,
@@ -820,7 +831,65 @@ test("放弃草案会记录 rejected 反馈并清空预览", async () => {
     prompt_preview: "待放弃草案",
     feedback_status: "rejected",
     feedback_import_mode: null,
+    rejection_reason_code: "bad_contracts",
     feedback_recorded_at: "2026-03-17T00:01:00",
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "生成一个待放弃草案");
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+  expect(await screen.findByText("生成预览")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("combobox", { name: "放弃原因" }));
+  await userEvent.click(await screen.findByText("bad_contracts", { selector: ".ant-select-item-option-content" }));
+  await userEvent.type(screen.getByLabelText("放弃备注"), "契约不符合预期");
+
+  await userEvent.click(screen.getByRole("button", { name: "放弃草案" }));
+
+  await waitFor(() => {
+    expect(api.recordDslGenerationFeedback).toHaveBeenCalledWith(15, {
+      actor_user_id: 1,
+      feedback_status: "rejected",
+      feedback_import_mode: null,
+      rejection_reason_code: "bad_contracts",
+      feedback_note: "契约不符合预期",
+    });
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("生成预览")).not.toBeInTheDocument();
+  });
+});
+
+test("放弃草案前必须先选择结构化原因", async () => {
+  vi.mocked(api.generateDslCase).mockResolvedValue({
+    generation_id: 17,
+    case: {
+      name: "待选择原因草案",
+      description: null,
+      base_url: null,
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/reject" }],
+    },
+    supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    warnings: [],
+    normalization_notes: [],
+    generation_meta: {
+      model: "gpt-4o-mini",
+      generation_mode: "draft",
+      import_mode: "replace",
+      base_url_source: "none",
+      base_url_backfilled: false,
+      repaired_invalid_actions: 0,
+      removed_invalid_steps: 0,
+      removed_invalid_contracts: 0,
+      preserve_contracts_applied: false,
+      used_current_case_context: false,
+      used_current_steps_context: false,
+    },
   });
 
   renderWithProviders(<CaseWorkbenchPage />, {
@@ -834,16 +903,8 @@ test("放弃草案会记录 rejected 反馈并清空预览", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "放弃草案" }));
 
-  await waitFor(() => {
-    expect(api.recordDslGenerationFeedback).toHaveBeenCalledWith(15, {
-      actor_user_id: 1,
-      feedback_status: "rejected",
-      feedback_import_mode: null,
-    });
-  });
-  await waitFor(() => {
-    expect(screen.queryByText("生成预览")).not.toBeInTheDocument();
-  });
+  expect((await screen.findAllByText("请先选择放弃原因。")).length).toBeGreaterThan(0);
+  expect(api.recordDslGenerationFeedback).not.toHaveBeenCalled();
 });
 
 test("采纳反馈失败时保留草案预览并提示可重试", async () => {

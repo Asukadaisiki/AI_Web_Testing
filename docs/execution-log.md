@@ -24,6 +24,26 @@
 - 后续：待继续事项；如果没有写“无”
 ```
 
+## 2026-03-18 13:58
+
+- 任务：实现 AI DSL 治理与观测闭环
+- 背景：`2026-03-17 23:50` 已经收口 feedback ownership 与 PostgreSQL 并发保护，但治理数据仍停留在“最近记录 + 简单统计”，无法支撑后续 prompt 优化与运营分析
+- 执行动作：
+  - 扩展 `dsl_generation_runs` 模型、schema 与 Alembic 迁移，新增 `project_id / case_id / prompt_version / warnings_json / normalization_notes_json / rejection_reason_code / feedback_note`，并补充 `preserve_contracts_requested / preserve_contracts_applied`
+  - 更新 `backend/app/services/dsl.py` 与 `backend/app/api/routes/dsl.py`，支持 generation 关联 project/case、列表多维筛选、单条详情查询、rejected 反馈必填结构化原因，以及 overview 聚合拒绝原因 / 模型结果 / 模式结果
+  - 常量化 prompt 版本，保留当前 prompt 文本最小审计策略，仅记录 `prompt_preview + prompt_sha256 + prompt_version`
+  - 扩展前端 `types/api.ts` 与 `services/api.ts`，新增治理列表筛选参数、详情接口与结构化 feedback payload
+  - 重构 `AISettingsPage` 为“生成概览 + 治理筛选表格 + 详情抽屉”，并改造 `CaseWorkbenchPage`，支持选择拒绝原因、填写备注并在 feedback 后刷新治理缓存
+  - 补充并更新后端单测、前端页面/API 测试，覆盖新字段、筛选、详情抽屉、拒绝原因必填与反馈刷新
+- 结果：AI DSL 生成链路现在具备最小治理闭环，能够按模型、模式、反馈状态、项目/用例与时间过滤生成记录，并查看单条草案的自动修正、warning、拒绝原因、备注与上下文来源；工作台端的放弃反馈也已结构化落库
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py tests/unit/test_models.py`
+  - 执行 `cd backend && uv run pytest`
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`
+  - 执行 `cd frontend && npm run build`
+- 关联文件：`backend/app/models/dsl_generation_run.py`、`backend/app/schemas/dsl.py`、`backend/app/schemas/settings.py`、`backend/app/services/dsl.py`、`backend/app/api/routes/dsl.py`、`backend/app/ai/dsl_generator.py`、`backend/alembic/versions/20260318_0011_dsl_generation_governance.py`、`frontend/src/types/api.ts`、`frontend/src/services/api.ts`、`frontend/src/pages/AISettingsPage.tsx`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`docs/execution-log.md`
+- 后续：下一轮可基于 `top_rejection_reasons / model_outcome_breakdown / generation_mode_breakdown` 的真实数据决定 prompt 优化顺序；若进入多人协作阶段，需要先补真实认证与跨 actor 读权限边界
+
 ## 2026-03-17 23:57
 
 - 任务：将 AI DSL feedback ownership 与 PostgreSQL 并发保护修复同步到 GitHub

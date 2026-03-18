@@ -62,6 +62,7 @@ _STEP_MODELS = {
     "assert_text": AssertTextStep,
     "assert_url_contains": AssertUrlContainsStep,
 }
+AI_DSL_PROMPT_VERSION = "2026-03-18.governance-v1"
 
 
 def build_generation_messages(

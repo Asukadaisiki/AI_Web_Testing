@@ -12,6 +12,7 @@ vi.mock("../services/api", async () => {
     ...actual,
     getAISettings: vi.fn(),
     getAISettingsOverview: vi.fn(),
+    getDslGenerationRunDetail: vi.fn(),
     getDslGenerationRuns: vi.fn(),
     updateAISettings: vi.fn(),
   };
@@ -76,6 +77,25 @@ test("渲染 AI 配置并允许保存修改", async () => {
           count: 1,
         },
       ],
+      top_rejection_reasons: [{ rejection_reason_code: "bad_contracts", count: 1 }],
+      model_outcome_breakdown: [
+        {
+          model_name: "gpt-4o-mini",
+          total_requests: 4,
+          success_count: 3,
+          accepted_count: 2,
+          rejected_count: 1,
+        },
+      ],
+      generation_mode_breakdown: [
+        {
+          generation_mode: "draft",
+          total_requests: 4,
+          success_count: 3,
+          accepted_count: 2,
+          rejected_count: 1,
+        },
+      ],
     },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([
@@ -86,6 +106,9 @@ test("渲染 AI 配置并允许保存修改", async () => {
       model_name: "gpt-4o-mini",
       generation_mode: "draft",
       import_mode: "replace",
+      project_id: 1,
+      case_id: 8,
+      prompt_version: "2026-03-18.governance-v1",
       error_type: "DslGenerationError",
       error_message: "bad json",
       repaired_invalid_actions: 1,
@@ -96,9 +119,49 @@ test("渲染 AI 配置并允许保存修改", async () => {
       prompt_preview: "打开 example.com 并验证 URL",
       feedback_status: "rejected",
       feedback_import_mode: null,
+      rejection_reason_code: "bad_contracts",
       feedback_recorded_at: "2026-03-16T10:02:00",
     },
   ]);
+  vi.mocked(api.getDslGenerationRunDetail).mockResolvedValue({
+    id: 7,
+    created_at: "2026-03-16T10:00:00",
+    success: false,
+    model_name: "gpt-4o-mini",
+    generation_mode: "draft",
+    import_mode: "replace",
+    project_id: 1,
+    case_id: 8,
+    prompt_version: "2026-03-18.governance-v1",
+    error_type: "DslGenerationError",
+    error_message: "bad json",
+    repaired_invalid_actions: 1,
+    removed_invalid_steps: 2,
+    removed_invalid_contracts: 0,
+    warnings_count: 1,
+    normalization_notes_count: 2,
+    prompt_preview: "打开 example.com 并验证 URL",
+    feedback_status: "rejected",
+    feedback_import_mode: null,
+    rejection_reason_code: "bad_contracts",
+    feedback_recorded_at: "2026-03-16T10:02:00",
+    request_base_url: "https://example.com",
+    generated_case_json: {
+      name: "治理详情草案",
+      description: null,
+      base_url: null,
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/" }],
+    },
+    warnings_json: ["bad json"],
+    normalization_notes_json: ["步骤 #1 已自动修正"],
+    feedback_note: "契约不符合预期",
+    used_current_case_context: true,
+    used_current_steps_context: false,
+    preserve_contracts_requested: true,
+    preserve_contracts_applied: true,
+  });
   vi.mocked(api.updateAISettings).mockResolvedValue({
     enable_ai_dsl_generate: true,
     ai_dsl_timeout_ms: 18000,
@@ -134,10 +197,32 @@ test("渲染 AI 配置并允许保存修改", async () => {
   expect(screen.getByText("75%")).toBeInTheDocument();
   expect(screen.getByText("DslGenerationError (1)")).toBeInTheDocument();
   expect(screen.getByText("replace (1)、steps_only (1)")).toBeInTheDocument();
-  expect(screen.getByText("最近生成记录")).toBeInTheDocument();
-  expect(screen.getByText("打开 example.com 并验证 URL")).toBeInTheDocument();
-  expect(screen.getByText("DslGenerationError: bad json")).toBeInTheDocument();
-  expect(screen.getByText("已放弃")).toBeInTheDocument();
+  expect(screen.getByText("bad_contracts (1)")).toBeInTheDocument();
+  expect(screen.getByText("gpt-4o-mini: 4 / 2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("draft: 4 / 2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("治理记录")).toBeInTheDocument();
+  expect(screen.getByText("已放弃 (bad_contracts)")).toBeInTheDocument();
+  expect(screen.getByText("详情")).toBeInTheDocument();
+
+  await userEvent.type(screen.getByLabelText("模型名"), "gpt-4o-mini");
+  await userEvent.clear(screen.getByLabelText("项目 ID"));
+  await userEvent.type(screen.getByLabelText("项目 ID"), "1");
+  await userEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+
+  await waitFor(() => {
+    expect(api.getDslGenerationRuns).toHaveBeenLastCalledWith({
+      model_name: "gpt-4o-mini",
+      project_id: 1,
+      limit: 10,
+      offset: 0,
+    });
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "详情" }));
+  expect(await screen.findByText("治理详情 #7")).toBeInTheDocument();
+  expect(await screen.findByText("契约不符合预期")).toBeInTheDocument();
+  expect(screen.getByText("current_case / preserve_contracts (applied)")).toBeInTheDocument();
+  expect(screen.getByDisplayValue(/治理详情草案/)).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("switch", { name: "启用 DSL 生成" }));
   await userEvent.click(screen.getByRole("switch", { name: "严格生成模式" }));
@@ -204,9 +289,44 @@ test("加载失败时展示错误块", async () => {
       last_24h_auto_repair_rate: 0,
       top_error_types: [],
       accepted_import_mode_breakdown: [],
+      top_rejection_reasons: [],
+      model_outcome_breakdown: [],
+      generation_mode_breakdown: [],
     },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);
+  vi.mocked(api.getDslGenerationRunDetail).mockResolvedValue({
+    id: 1,
+    created_at: "2026-03-16T10:00:00",
+    success: false,
+    model_name: null,
+    generation_mode: "draft",
+    import_mode: "replace",
+    project_id: null,
+    case_id: null,
+    prompt_version: "2026-03-18.governance-v1",
+    error_type: null,
+    error_message: null,
+    repaired_invalid_actions: 0,
+    removed_invalid_steps: 0,
+    removed_invalid_contracts: 0,
+    warnings_count: 0,
+    normalization_notes_count: 0,
+    prompt_preview: "preview",
+    feedback_status: "pending",
+    feedback_import_mode: null,
+    rejection_reason_code: null,
+    feedback_recorded_at: null,
+    request_base_url: null,
+    generated_case_json: null,
+    warnings_json: [],
+    normalization_notes_json: [],
+    feedback_note: null,
+    used_current_case_context: false,
+    used_current_steps_context: false,
+    preserve_contracts_requested: false,
+    preserve_contracts_applied: false,
+  });
 
   renderWithProviders(<AISettingsPage />, {
     route: "/settings/ai",

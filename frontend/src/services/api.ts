@@ -15,6 +15,10 @@ import type {
   ExecutionsOverview,
   LocatorCorrectionsOverview,
   OverviewWindowDays,
+  DslGenerationFeedbackStatus,
+  GenerateDslImportMode,
+  GenerateDslMode,
+  StoredDslGenerationRunDetail,
   StoredDslGenerationRunSummary,
   StoredCaseDetail,
   StoredCaseExecutionDetail,
@@ -141,12 +145,44 @@ export function generateDslCase(payload: GenerateDslRequest) {
 
 export function getDslGenerationRuns(params?: {
   status?: DslGenerationRunStatus;
+  feedback_status?: DslGenerationFeedbackStatus;
+  generation_mode?: GenerateDslMode;
+  import_mode?: GenerateDslImportMode;
+  model_name?: string;
+  project_id?: number;
+  case_id?: number;
+  created_from?: string;
+  created_to?: string;
   limit?: number;
   offset?: number;
 }) {
   const search = new URLSearchParams();
   if (params?.status) {
     search.set("status", params.status);
+  }
+  if (params?.feedback_status) {
+    search.set("feedback_status", params.feedback_status);
+  }
+  if (params?.generation_mode) {
+    search.set("generation_mode", params.generation_mode);
+  }
+  if (params?.import_mode) {
+    search.set("import_mode", params.import_mode);
+  }
+  if (params?.model_name) {
+    search.set("model_name", params.model_name);
+  }
+  if (params?.project_id != null) {
+    search.set("project_id", String(params.project_id));
+  }
+  if (params?.case_id != null) {
+    search.set("case_id", String(params.case_id));
+  }
+  if (params?.created_from) {
+    search.set("created_from", params.created_from);
+  }
+  if (params?.created_to) {
+    search.set("created_to", params.created_to);
   }
   if (params?.limit != null) {
     search.set("limit", String(params.limit));
@@ -156,6 +192,10 @@ export function getDslGenerationRuns(params?: {
   }
   const query = search.toString();
   return request<StoredDslGenerationRunSummary[]>(`/api/v1/dsl/generations${query ? `?${query}` : ""}`);
+}
+
+export function getDslGenerationRunDetail(generationId: number) {
+  return request<StoredDslGenerationRunDetail>(`/api/v1/dsl/generations/${generationId}`);
 }
 
 export function recordDslGenerationFeedback(generationId: number, payload: DslGenerationFeedbackPayload) {

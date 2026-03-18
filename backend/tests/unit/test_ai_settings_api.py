@@ -195,6 +195,25 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
                 }
             ],
             "accepted_import_mode_breakdown": [],
+            "top_rejection_reasons": [],
+            "model_outcome_breakdown": [
+                {
+                    "model_name": "gpt-dsl",
+                    "total_requests": 1,
+                    "success_count": 0,
+                    "accepted_count": 0,
+                    "rejected_count": 0,
+                }
+            ],
+            "generation_mode_breakdown": [
+                {
+                    "generation_mode": "strict_steps_only",
+                    "total_requests": 1,
+                    "success_count": 0,
+                    "accepted_count": 0,
+                    "rejected_count": 0,
+                }
+            ],
         },
     }
 
@@ -263,6 +282,7 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
         json={
             "actor_user_id": 1,
             "feedback_status": "rejected",
+            "rejection_reason_code": "bad_contracts",
         },
     )
 
@@ -280,4 +300,25 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
     assert overview_response.json()["generation_stats"]["accepted_import_mode_breakdown"] == [
         {"import_mode": "replace", "count": 1},
         {"import_mode": "steps_only", "count": 1},
+    ]
+    assert overview_response.json()["generation_stats"]["top_rejection_reasons"] == [
+        {"rejection_reason_code": "bad_contracts", "count": 1}
+    ]
+    assert overview_response.json()["generation_stats"]["model_outcome_breakdown"] == [
+        {
+            "model_name": "gpt-dsl",
+            "total_requests": 3,
+            "success_count": 3,
+            "accepted_count": 2,
+            "rejected_count": 1,
+        }
+    ]
+    assert overview_response.json()["generation_stats"]["generation_mode_breakdown"] == [
+        {
+            "generation_mode": "draft",
+            "total_requests": 3,
+            "success_count": 3,
+            "accepted_count": 2,
+            "rejected_count": 1,
+        }
     ]

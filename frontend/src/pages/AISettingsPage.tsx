@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
   Card,
   Descriptions,
+  Drawer,
   Form,
   Input,
   InputNumber,
@@ -17,10 +18,36 @@ import {
 } from "antd";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { getAISettings, getAISettingsOverview, getDslGenerationRuns, updateAISettings } from "../services/api";
-import type { AISettingsUpdatePayload, StoredDslGenerationRunSummary, VLMModelFamily } from "../types/api";
+import {
+  getAISettings,
+  getAISettingsOverview,
+  getDslGenerationRunDetail,
+  getDslGenerationRuns,
+  updateAISettings,
+} from "../services/api";
+import type {
+  AISettingsUpdatePayload,
+  DslGenerationFeedbackStatus,
+  DslGenerationRunStatus,
+  GenerateDslImportMode,
+  GenerateDslMode,
+  StoredDslGenerationRunDetail,
+  StoredDslGenerationRunSummary,
+  VLMModelFamily,
+} from "../types/api";
 
 type AISettingsFormValues = AISettingsUpdatePayload;
+type GovernanceFilterValues = {
+  status?: DslGenerationRunStatus;
+  feedback_status?: DslGenerationFeedbackStatus;
+  generation_mode?: GenerateDslMode;
+  import_mode?: GenerateDslImportMode;
+  model_name?: string;
+  project_id?: number;
+  case_id?: number;
+  created_from?: string;
+  created_to?: string;
+};
 
 const VLM_FAMILY_OPTIONS: { label: string; value: VLMModelFamily }[] = [
   { label: "gpt-4o", value: "gpt-4o" },
@@ -29,11 +56,42 @@ const VLM_FAMILY_OPTIONS: { label: string; value: VLMModelFamily }[] = [
   { label: "qwen2.5-vl", value: "qwen2.5-vl" },
 ];
 
+const PAGE_SIZE = 10;
+
+const STATUS_OPTIONS = [
+  { label: "全部结果", value: "" },
+  { label: "成功", value: "success" },
+  { label: "失败", value: "failed" },
+];
+
+const FEEDBACK_STATUS_OPTIONS = [
+  { label: "全部反馈", value: "" },
+  { label: "待处理", value: "pending" },
+  { label: "已采纳", value: "accepted" },
+  { label: "已放弃", value: "rejected" },
+];
+
+const GENERATION_MODE_OPTIONS = [
+  { label: "全部模式", value: "" },
+  { label: "draft", value: "draft" },
+  { label: "strict_steps_only", value: "strict_steps_only" },
+];
+
+const IMPORT_MODE_OPTIONS = [
+  { label: "全部导入方式", value: "" },
+  { label: "replace", value: "replace" },
+  { label: "steps_only", value: "steps_only" },
+  { label: "contracts_only", value: "contracts_only" },
+];
+
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
-function formatTimestamp(value: string) {
+function formatTimestamp(value: string | null | undefined) {
+  if (!value) {
+    return "暂无";
+  }
   return new Date(value).toLocaleString("zh-CN", {
     hour12: false,
   });
@@ -44,15 +102,65 @@ function formatFeedbackStatus(record: StoredDslGenerationRunSummary) {
     return `已采纳${record.feedback_import_mode ? ` (${record.feedback_import_mode})` : ""}`;
   }
   if (record.feedback_status === "rejected") {
-    return "已放弃";
+    return `已放弃${record.rejection_reason_code ? ` (${record.rejection_reason_code})` : ""}`;
   }
   return "待处理";
 }
 
+function formatContextSummary(record: StoredDslGenerationRunDetail) {
+  const tags: string[] = [];
+  if (record.used_current_case_context) {
+    tags.push("current_case");
+  }
+  if (record.used_current_steps_context) {
+    tags.push("current_steps");
+  }
+  if (record.preserve_contracts_requested) {
+    tags.push(`preserve_contracts${record.preserve_contracts_applied ? " (applied)" : ""}`);
+  }
+  return tags.length ? tags.join(" / ") : "未使用额外上下文";
+}
+
+function normalizeFilters(values: Partial<GovernanceFilterValues>): GovernanceFilterValues {
+  const normalized: GovernanceFilterValues = {};
+  if (values.status) {
+    normalized.status = values.status;
+  }
+  if (values.feedback_status) {
+    normalized.feedback_status = values.feedback_status;
+  }
+  if (values.generation_mode) {
+    normalized.generation_mode = values.generation_mode;
+  }
+  if (values.import_mode) {
+    normalized.import_mode = values.import_mode;
+  }
+  if (values.model_name?.trim()) {
+    normalized.model_name = values.model_name.trim();
+  }
+  if (values.project_id != null) {
+    normalized.project_id = values.project_id;
+  }
+  if (values.case_id != null) {
+    normalized.case_id = values.case_id;
+  }
+  if (values.created_from?.trim()) {
+    normalized.created_from = values.created_from.trim();
+  }
+  if (values.created_to?.trim()) {
+    normalized.created_to = values.created_to.trim();
+  }
+  return normalized;
+}
+
 export function AISettingsPage() {
   const [form] = Form.useForm<AISettingsFormValues>();
+  const [filterForm] = Form.useForm<GovernanceFilterValues>();
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
+  const [governanceFilters, setGovernanceFilters] = useState<GovernanceFilterValues>({});
+  const [page, setPage] = useState(1);
+  const [selectedGenerationId, setSelectedGenerationId] = useState<number | null>(null);
 
   const settingsQuery = useQuery({
     queryKey: ["ai-settings"],
@@ -63,8 +171,18 @@ export function AISettingsPage() {
     queryFn: getAISettingsOverview,
   });
   const generationRunsQuery = useQuery({
-    queryKey: ["dsl-generation-runs", "recent", 10],
-    queryFn: () => getDslGenerationRuns({ limit: 10 }),
+    queryKey: ["dsl-generation-runs", governanceFilters, page],
+    queryFn: () =>
+      getDslGenerationRuns({
+        ...governanceFilters,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      }),
+  });
+  const generationDetailQuery = useQuery({
+    queryKey: ["dsl-generation-run-detail", selectedGenerationId],
+    queryFn: () => getDslGenerationRunDetail(selectedGenerationId as number),
+    enabled: selectedGenerationId != null,
   });
 
   useEffect(() => {
@@ -115,6 +233,61 @@ export function AISettingsPage() {
     },
   });
 
+  const generationColumns = useMemo(
+    () => [
+      {
+        title: "时间",
+        dataIndex: "created_at",
+        key: "created_at",
+        render: (value: string) => formatTimestamp(value),
+      },
+      {
+        title: "结果",
+        dataIndex: "success",
+        key: "success",
+        render: (value: boolean) => (value ? "成功" : "失败"),
+      },
+      {
+        title: "模型",
+        dataIndex: "model_name",
+        key: "model_name",
+        render: (value: string | null | undefined) => value ?? "未配置",
+      },
+      {
+        title: "模式",
+        key: "modes",
+        render: (_: unknown, record: StoredDslGenerationRunSummary) =>
+          `${record.generation_mode} / ${record.import_mode}`,
+      },
+      {
+        title: "项目/用例",
+        key: "scope",
+        render: (_: unknown, record: StoredDslGenerationRunSummary) =>
+          `P${record.project_id ?? "-"} / C${record.case_id ?? "-"}`,
+      },
+      {
+        title: "反馈",
+        key: "feedback_status",
+        render: (_: unknown, record: StoredDslGenerationRunSummary) => formatFeedbackStatus(record),
+      },
+      {
+        title: "Prompt 版本",
+        dataIndex: "prompt_version",
+        key: "prompt_version",
+      },
+      {
+        title: "操作",
+        key: "actions",
+        render: (_: unknown, record: StoredDslGenerationRunSummary) => (
+          <Button type="link" onClick={() => setSelectedGenerationId(record.id)}>
+            详情
+          </Button>
+        ),
+      },
+    ],
+    [],
+  );
+
   if (settingsQuery.isLoading) {
     return <LoadingBlock />;
   }
@@ -124,54 +297,9 @@ export function AISettingsPage() {
   }
 
   const overviewData = overviewQuery.data;
-  const generationColumns = [
-    {
-      title: "时间",
-      dataIndex: "created_at",
-      key: "created_at",
-      render: (value: string) => formatTimestamp(value),
-    },
-    {
-      title: "结果",
-      dataIndex: "success",
-      key: "success",
-      render: (value: boolean) => (value ? "成功" : "失败"),
-    },
-    {
-      title: "模型",
-      dataIndex: "model_name",
-      key: "model_name",
-      render: (value: string | null | undefined) => value ?? "未配置",
-    },
-    {
-      title: "模式",
-      key: "modes",
-      render: (_: unknown, record: StoredDslGenerationRunSummary) =>
-        `${record.generation_mode} / ${record.import_mode}`,
-    },
-    {
-      title: "自动修正",
-      key: "repairs",
-      render: (_: unknown, record: StoredDslGenerationRunSummary) =>
-        `action ${record.repaired_invalid_actions} / steps ${record.removed_invalid_steps} / contracts ${record.removed_invalid_contracts}`,
-    },
-    {
-      title: "错误",
-      key: "error",
-      render: (_: unknown, record: StoredDslGenerationRunSummary) =>
-        record.error_type ? `${record.error_type}: ${record.error_message ?? ""}` : "无",
-    },
-    {
-      title: "Prompt 摘要",
-      dataIndex: "prompt_preview",
-      key: "prompt_preview",
-    },
-    {
-      title: "反馈",
-      key: "feedback_status",
-      render: (_: unknown, record: StoredDslGenerationRunSummary) => formatFeedbackStatus(record),
-    },
-  ];
+  const generationRuns = generationRunsQuery.data ?? [];
+  const canGoPrev = page > 1;
+  const canGoNext = generationRuns.length === PAGE_SIZE;
 
   return (
     <>
@@ -180,7 +308,7 @@ export function AISettingsPage() {
         <Space align="start" style={{ justifyContent: "space-between", width: "100%" }} wrap>
           <div>
             <h1 className="page-title">AI 配置</h1>
-            <p className="page-subtitle">管理 AI DSL 生成与 AI 视觉定位的运行时配置。</p>
+            <p className="page-subtitle">管理 AI DSL 生成与 AI 视觉定位，并查看 DSL 生成治理数据。</p>
           </div>
           <Button type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
             保存配置
@@ -207,9 +335,7 @@ export function AISettingsPage() {
                 <Descriptions.Item label="当前生成状态">
                   {overviewData.ai_dsl_enabled ? "已启用" : "未启用"}
                 </Descriptions.Item>
-                <Descriptions.Item label="默认模型">
-                  {overviewData.ai_dsl_model ?? "未配置"}
-                </Descriptions.Item>
+                <Descriptions.Item label="默认模型">{overviewData.ai_dsl_model ?? "未配置"}</Descriptions.Item>
                 <Descriptions.Item label="严格模式">
                   {overviewData.ai_dsl_strict_mode ? "开启" : "关闭"}
                 </Descriptions.Item>
@@ -239,12 +365,13 @@ export function AISettingsPage() {
                   {overviewData.generation_stats.last_24h_requests}
                 </Descriptions.Item>
                 <Descriptions.Item label="近 24h 成功 / 失败">
-                  {overviewData.generation_stats.last_24h_success_count} / {overviewData.generation_stats.last_24h_failure_count}
+                  {overviewData.generation_stats.last_24h_success_count} /{" "}
+                  {overviewData.generation_stats.last_24h_failure_count}
                 </Descriptions.Item>
                 <Descriptions.Item label="近 24h 自动修正率">
                   {formatPercent(overviewData.generation_stats.last_24h_auto_repair_rate)}
                 </Descriptions.Item>
-                <Descriptions.Item label="近 24h 高频错误类型">
+                <Descriptions.Item label="高频错误类型">
                   {overviewData.generation_stats.top_error_types.length
                     ? overviewData.generation_stats.top_error_types
                         .map((item) => `${item.error_type} (${item.count})`)
@@ -258,30 +385,126 @@ export function AISettingsPage() {
                         .join("、")
                     : "暂无"}
                 </Descriptions.Item>
+                <Descriptions.Item label="高频拒绝原因">
+                  {overviewData.generation_stats.top_rejection_reasons.length
+                    ? overviewData.generation_stats.top_rejection_reasons
+                        .map((item) => `${item.rejection_reason_code} (${item.count})`)
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="模型结果分布">
+                  {overviewData.generation_stats.model_outcome_breakdown.length
+                    ? overviewData.generation_stats.model_outcome_breakdown
+                        .map(
+                          (item) =>
+                            `${item.model_name ?? "未配置"}: ${item.total_requests} / ${item.accepted_count} / ${item.rejected_count}`,
+                        )
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="模式结果分布">
+                  {overviewData.generation_stats.generation_mode_breakdown.length
+                    ? overviewData.generation_stats.generation_mode_breakdown
+                        .map(
+                          (item) =>
+                            `${item.generation_mode}: ${item.total_requests} / ${item.accepted_count} / ${item.rejected_count}`,
+                        )
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
               </Descriptions>
             ) : (
               <Typography.Text type="secondary">暂无生成概览数据。</Typography.Text>
             )}
+          </Space>
+        </Card>
 
-            <div>
-              <Typography.Title level={5} style={{ marginTop: 0 }}>
-                最近生成记录
-              </Typography.Title>
-              {generationRunsQuery.isLoading ? (
-                <Typography.Text type="secondary">正在加载最近生成记录...</Typography.Text>
-              ) : generationRunsQuery.isError ? (
-                <Typography.Text type="danger">{generationRunsQuery.error.message}</Typography.Text>
-              ) : (
+        <Card title="治理记录">
+          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Form
+              form={filterForm}
+              layout="vertical"
+              onFinish={(values) => {
+                setPage(1);
+                setGovernanceFilters(normalizeFilters(values));
+              }}
+            >
+              <div className="structured-step-grid">
+                <Form.Item label="结果" name="status">
+                  <Select options={STATUS_OPTIONS} />
+                </Form.Item>
+                <Form.Item label="反馈状态" name="feedback_status">
+                  <Select options={FEEDBACK_STATUS_OPTIONS} />
+                </Form.Item>
+                <Form.Item label="生成模式" name="generation_mode">
+                  <Select options={GENERATION_MODE_OPTIONS} />
+                </Form.Item>
+                <Form.Item label="导入方式" name="import_mode">
+                  <Select options={IMPORT_MODE_OPTIONS} />
+                </Form.Item>
+              </div>
+              <div className="structured-step-grid">
+                <Form.Item label="模型名" name="model_name">
+                  <Input placeholder="例如：gpt-4o-mini" />
+                </Form.Item>
+                <Form.Item label="项目 ID" name="project_id">
+                  <InputNumber min={1} style={{ width: "100%" }} />
+                </Form.Item>
+                <Form.Item label="用例 ID" name="case_id">
+                  <InputNumber min={1} style={{ width: "100%" }} />
+                </Form.Item>
+              </div>
+              <div className="structured-step-grid">
+                <Form.Item label="开始时间 (ISO)" name="created_from">
+                  <Input placeholder="2026-03-18T00:00:00" />
+                </Form.Item>
+                <Form.Item label="结束时间 (ISO)" name="created_to">
+                  <Input placeholder="2026-03-18T23:59:59" />
+                </Form.Item>
+              </div>
+              <Space wrap>
+                <Button type="primary" htmlType="submit">
+                  应用筛选
+                </Button>
+                <Button
+                  onClick={() => {
+                    filterForm.resetFields();
+                    setPage(1);
+                    setGovernanceFilters({});
+                  }}
+                >
+                  重置
+                </Button>
+              </Space>
+            </Form>
+
+            {generationRunsQuery.isLoading ? (
+              <Typography.Text type="secondary">正在加载治理记录...</Typography.Text>
+            ) : generationRunsQuery.isError ? (
+              <Typography.Text type="danger">{generationRunsQuery.error.message}</Typography.Text>
+            ) : (
+              <>
                 <Table<StoredDslGenerationRunSummary>
                   rowKey="id"
                   size="small"
                   pagination={false}
                   columns={generationColumns}
-                  dataSource={generationRunsQuery.data ?? []}
+                  dataSource={generationRuns}
                   locale={{ emptyText: "暂无生成记录" }}
                 />
-              )}
-            </div>
+                <Space style={{ justifyContent: "space-between", width: "100%" }}>
+                  <Typography.Text type="secondary">当前第 {page} 页</Typography.Text>
+                  <Space>
+                    <Button disabled={!canGoPrev} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+                      上一页
+                    </Button>
+                    <Button disabled={!canGoNext} onClick={() => setPage((current) => current + 1)}>
+                      下一页
+                    </Button>
+                  </Space>
+                </Space>
+              </>
+            )}
           </Space>
         </Card>
 
@@ -401,6 +624,77 @@ export function AISettingsPage() {
           </Card>
         </Form>
       </Space>
+
+      <Drawer
+        title={selectedGenerationId != null ? `治理详情 #${selectedGenerationId}` : "治理详情"}
+        open={selectedGenerationId != null}
+        onClose={() => setSelectedGenerationId(null)}
+        width={720}
+      >
+        {generationDetailQuery.isLoading ? (
+          <Typography.Text type="secondary">正在加载详情...</Typography.Text>
+        ) : generationDetailQuery.isError ? (
+          <Typography.Text type="danger">{generationDetailQuery.error.message}</Typography.Text>
+        ) : generationDetailQuery.data ? (
+          <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="创建时间">
+                {formatTimestamp(generationDetailQuery.data.created_at)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Prompt 版本">{generationDetailQuery.data.prompt_version}</Descriptions.Item>
+              <Descriptions.Item label="结果">{generationDetailQuery.data.success ? "成功" : "失败"}</Descriptions.Item>
+              <Descriptions.Item label="反馈">{formatFeedbackStatus(generationDetailQuery.data)}</Descriptions.Item>
+              <Descriptions.Item label="项目 / 用例">
+                P{generationDetailQuery.data.project_id ?? "-"} / C{generationDetailQuery.data.case_id ?? "-"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Base URL 请求值">
+                {generationDetailQuery.data.request_base_url ?? "未提供"}
+              </Descriptions.Item>
+              <Descriptions.Item label="上下文来源">
+                {formatContextSummary(generationDetailQuery.data)}
+              </Descriptions.Item>
+              <Descriptions.Item label="拒绝备注">
+                {generationDetailQuery.data.feedback_note ?? "无"}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Card size="small" title="自动修正项">
+              {generationDetailQuery.data.normalization_notes_json.length ? (
+                <Space direction="vertical" size="small">
+                  {generationDetailQuery.data.normalization_notes_json.map((note) => (
+                    <Typography.Text key={note}>{note}</Typography.Text>
+                  ))}
+                </Space>
+              ) : (
+                <Typography.Text type="secondary">无</Typography.Text>
+              )}
+            </Card>
+
+            <Card size="small" title="Warnings">
+              {generationDetailQuery.data.warnings_json.length ? (
+                <Space direction="vertical" size="small">
+                  {generationDetailQuery.data.warnings_json.map((warning) => (
+                    <Typography.Text key={warning}>{warning}</Typography.Text>
+                  ))}
+                </Space>
+              ) : (
+                <Typography.Text type="secondary">无</Typography.Text>
+              )}
+            </Card>
+
+            <Card size="small" title="生成草案 JSON">
+              <Input.TextArea
+                readOnly
+                rows={14}
+                value={JSON.stringify(generationDetailQuery.data.generated_case_json ?? null, null, 2)}
+                style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
+              />
+            </Card>
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">暂无详情数据。</Typography.Text>
+        )}
+      </Drawer>
     </>
   );
 }

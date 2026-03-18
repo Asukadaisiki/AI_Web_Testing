@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.models import DslGenerationRun, User
-from app.ai.dsl_generator import build_generation_messages
+from app.models import DslGenerationRun, TestCase, User
+from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, build_generation_messages
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
 from app.services import dsl as dsl_service
@@ -521,12 +521,26 @@ def test_generate_dsl_case_persists_success_record(client, db_session, monkeypat
 }""",
     )
 
+    case = TestCase(
+        project_id=1,
+        created_by=1,
+        updated_by=1,
+        name="已有关联用例",
+        description="用于挂接 generation",
+        dsl={"name": "已有关联用例", "steps": [{"action": "goto", "value": "/existing"}]},
+    )
+    db_session.add(case)
+    db_session.commit()
+    db_session.refresh(case)
+
     response = client.post(
         "/api/v1/dsl/generate",
         json={
             "prompt": "打开 example.com 首页",
             "base_url": "https://example.com",
             "actor_user_id": 1,
+            "project_id": 1,
+            "case_id": case.id,
         },
     )
 
@@ -534,16 +548,25 @@ def test_generate_dsl_case_persists_success_record(client, db_session, monkeypat
     generation_run = db_session.get(DslGenerationRun, response.json()["generation_id"])
     assert generation_run is not None
     assert generation_run.success is True
+    assert generation_run.project_id == 1
+    assert generation_run.case_id == case.id
     assert generation_run.prompt_preview == "打开 example.com 首页"
     assert generation_run.prompt_sha256
+    assert generation_run.prompt_version == AI_DSL_PROMPT_VERSION
     assert generation_run.model_name == "gpt-test"
     assert generation_run.error_type is None
     assert generation_run.generated_case_json is not None
     assert generation_run.generated_case_json["name"] == "成功落库"
+    assert generation_run.preserve_contracts_requested is False
+    assert generation_run.preserve_contracts_applied is False
     assert generation_run.warnings_count == 1
     assert generation_run.normalization_notes_count == 0
+    assert generation_run.warnings_json == ["AI 草案未提供 base_url，已回填请求中的 Base URL。"]
+    assert generation_run.normalization_notes_json == []
     assert generation_run.feedback_status == "pending"
     assert generation_run.feedback_import_mode is None
+    assert generation_run.rejection_reason_code is None
+    assert generation_run.feedback_note is None
     assert generation_run.feedback_recorded_at is None
 
 
@@ -569,6 +592,9 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert runs[0].error_type == "DslGenerationError"
     assert runs[0].error_message == "AI 返回了无法解析的 DSL JSON。"
     assert runs[0].generated_case_json is None
+    assert runs[0].prompt_version == AI_DSL_PROMPT_VERSION
+    assert runs[0].warnings_json == []
+    assert runs[0].normalization_notes_json == []
     assert runs[0].feedback_status == "pending"
 
 
@@ -606,11 +632,22 @@ def test_generate_dsl_case_uses_runtime_strict_mode_default_when_request_omits_g
     assert generation_run.generation_mode == "strict_steps_only"
 
 
-def test_list_dsl_generation_runs_supports_status_limit_and_offset(client, monkeypatch) -> None:
+def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_session, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     get_settings.cache_clear()
+    case = TestCase(
+        project_id=1,
+        created_by=1,
+        updated_by=1,
+        name="过滤关联用例",
+        description=None,
+        dsl={"name": "过滤关联用例", "steps": [{"action": "goto", "value": "/filter"}]},
+    )
+    db_session.add(case)
+    db_session.commit()
+    db_session.refresh(case)
 
     responses = iter(
         [
@@ -629,9 +666,37 @@ def test_list_dsl_generation_runs_supports_status_limit_and_offset(client, monke
     )
     monkeypatch.setattr("app.ai.dsl_generator._call_llm", lambda **_: next(responses))
 
-    client.post("/api/v1/dsl/generate", json={"prompt": "first", "actor_user_id": 1})
+    first_id = client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "first", "actor_user_id": 1, "project_id": 1, "case_id": case.id},
+    ).json()["generation_id"]
     client.post("/api/v1/dsl/generate", json={"prompt": "second", "actor_user_id": 1})
-    client.post("/api/v1/dsl/generate", json={"prompt": "third", "actor_user_id": 1})
+    third_id = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "third",
+            "actor_user_id": 1,
+            "generation_mode": "strict_steps_only",
+            "import_mode": "steps_only",
+        },
+    ).json()["generation_id"]
+    client.patch(
+        f"/api/v1/dsl/generations/{first_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+            "feedback_import_mode": "replace",
+        },
+    )
+    client.patch(
+        f"/api/v1/dsl/generations/{third_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+            "rejection_reason_code": "context_mismatch",
+            "feedback_note": "当前上下文不适合该草案",
+        },
+    )
 
     response = client.get("/api/v1/dsl/generations", params={"limit": 2, "offset": 0})
     assert response.status_code == 200
@@ -639,6 +704,8 @@ def test_list_dsl_generation_runs_supports_status_limit_and_offset(client, monke
     assert len(payload) == 2
     assert payload[0]["prompt_preview"] == "third"
     assert payload[1]["prompt_preview"] == "second"
+    assert payload[0]["prompt_version"] == AI_DSL_PROMPT_VERSION
+    assert payload[0]["rejection_reason_code"] == "context_mismatch"
 
     failed_response = client.get("/api/v1/dsl/generations", params={"status": "failed"})
     assert failed_response.status_code == 200
@@ -647,8 +714,109 @@ def test_list_dsl_generation_runs_supports_status_limit_and_offset(client, monke
     success_response = client.get("/api/v1/dsl/generations", params={"status": "success", "offset": 1, "limit": 1})
     assert success_response.status_code == 200
     assert [item["prompt_preview"] for item in success_response.json()] == ["first"]
-    assert success_response.json()[0]["feedback_status"] == "pending"
-    assert success_response.json()[0]["feedback_import_mode"] is None
+    assert success_response.json()[0]["feedback_status"] == "accepted"
+    assert success_response.json()[0]["feedback_import_mode"] == "replace"
+    assert success_response.json()[0]["project_id"] == 1
+    assert success_response.json()[0]["case_id"] == case.id
+
+    filtered_response = client.get(
+        "/api/v1/dsl/generations",
+        params={
+            "feedback_status": "rejected",
+            "generation_mode": "strict_steps_only",
+            "import_mode": "steps_only",
+            "model_name": "gpt-test",
+            "created_from": "2000-01-01T00:00:00",
+            "created_to": "2100-12-31T23:59:59",
+        },
+    )
+    assert filtered_response.status_code == 200
+    assert [item["prompt_preview"] for item in filtered_response.json()] == ["third"]
+
+    project_case_response = client.get(
+        "/api/v1/dsl/generations",
+        params={"project_id": 1, "case_id": case.id},
+    )
+    assert project_case_response.status_code == 200
+    assert [item["prompt_preview"] for item in project_case_response.json()] == ["first"]
+
+
+def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    get_settings.cache_clear()
+    case = TestCase(
+        project_id=1,
+        created_by=1,
+        updated_by=1,
+        name="详情关联用例",
+        description=None,
+        dsl={"name": "详情关联用例", "steps": [{"action": "goto", "value": "/detail"}]},
+    )
+    db_session.add(case)
+    db_session.commit()
+    db_session.refresh(case)
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "详情草案",
+  "steps": [
+    {"action": "open", "value": "/detail"}
+  ]
+}""",
+    )
+
+    generate_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成详情草案",
+            "actor_user_id": 1,
+            "project_id": 1,
+            "case_id": case.id,
+            "preserve_contracts": True,
+            "current_input_contract": [
+                {
+                    "name": "token",
+                    "context_key": "token",
+                    "value_type": "string",
+                    "required": True,
+                }
+            ],
+        },
+    )
+    generation_id = generate_response.json()["generation_id"]
+    feedback_response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+            "rejection_reason_code": "bad_contracts",
+            "feedback_note": "输出契约不符合预期",
+        },
+    )
+
+    assert feedback_response.status_code == 200
+
+    detail_response = client.get(f"/api/v1/dsl/generations/{generation_id}")
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    assert payload["id"] == generation_id
+    assert payload["project_id"] == 1
+    assert payload["case_id"] == case.id
+    assert payload["prompt_version"] == AI_DSL_PROMPT_VERSION
+    assert payload["generated_case_json"]["name"] == "详情草案"
+    assert payload["warnings_json"] == []
+    assert payload["normalization_notes_json"] == [
+        "AI 草案未提供有效契约，已沿用当前 DSL 的输入/输出契约。",
+        "步骤 #1 的 action 已从 open 自动修正为 goto。",
+    ]
+    assert payload["rejection_reason_code"] == "bad_contracts"
+    assert payload["feedback_note"] == "输出契约不符合预期"
+    assert payload["preserve_contracts_requested"] is True
+    assert payload["preserve_contracts_applied"] is True
 
 
 def test_record_generation_feedback_accepts_first_decision_and_is_idempotent(client, monkeypatch) -> None:
@@ -740,6 +908,7 @@ def test_record_generation_feedback_rejects_conflicting_decision(client, monkeyp
         json={
             "actor_user_id": 1,
             "feedback_status": "rejected",
+            "rejection_reason_code": "wrong_actions",
         },
     )
 
@@ -781,6 +950,41 @@ def test_record_generation_feedback_requires_import_mode_for_accepted(client, mo
     assert response.status_code == 422
     assert "accepted 反馈必须提供 feedback_import_mode" in response.text
 
+
+def test_record_generation_feedback_requires_rejection_reason_for_rejected(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "缺少拒绝原因",
+  "steps": [{"action": "goto", "value": "/feedback"}]
+}""",
+    )
+
+    generate_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成缺少拒绝原因草案",
+            "actor_user_id": 1,
+        },
+    )
+    generation_id = generate_response.json()["generation_id"]
+
+    response = client.patch(
+        f"/api/v1/dsl/generations/{generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "rejected 反馈必须提供 rejection_reason_code" in response.text
+
 def test_record_generation_feedback_returns_403_for_non_owner_actor(client, db_session, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -811,6 +1015,7 @@ def test_record_generation_feedback_returns_403_for_non_owner_actor(client, db_s
         json={
             "actor_user_id": 2,
             "feedback_status": "rejected",
+            "rejection_reason_code": "other",
         },
     )
 
@@ -824,6 +1029,7 @@ def test_record_generation_feedback_returns_404_for_missing_generation_run(clien
         json={
             "actor_user_id": 1,
             "feedback_status": "rejected",
+            "rejection_reason_code": "other",
         },
     )
 
@@ -859,6 +1065,7 @@ def test_record_generation_feedback_returns_404_for_missing_actor(client, monkey
         json={
             "actor_user_id": 999,
             "feedback_status": "rejected",
+            "rejection_reason_code": "other",
         },
     )
 

@@ -34,6 +34,7 @@ import type {
   DSLCaseOutputContract,
   DSLStep,
   DSLValidationResult,
+  DslGenerationRejectionReasonCode,
   DSLVariableSource,
   DSLVariableType,
   GenerateDslImportMode,
@@ -139,6 +140,14 @@ const GENERATION_IMPORT_MODE_OPTIONS: { label: string; value: GenerateDslImportM
   { label: "整单替换", value: "replace" },
   { label: "仅导入步骤", value: "steps_only" },
   { label: "仅合并契约", value: "contracts_only" },
+];
+
+const REJECTION_REASON_OPTIONS: { label: string; value: DslGenerationRejectionReasonCode }[] = [
+  { label: "wrong_actions", value: "wrong_actions" },
+  { label: "invalid_structure", value: "invalid_structure" },
+  { label: "context_mismatch", value: "context_mismatch" },
+  { label: "bad_contracts", value: "bad_contracts" },
+  { label: "other", value: "other" },
 ];
 
 function createDefaultStep(action: StepAction = "goto"): DSLStep {
@@ -370,6 +379,8 @@ export function CaseWorkbenchPage() {
   const [generatedDraft, setGeneratedDraft] = useState<GenerateDslResponse | null>(null);
   const [generationFeedbackError, setGenerationFeedbackError] = useState<string | null>(null);
   const [recordedGenerationFeedback, setRecordedGenerationFeedback] = useState<RecordedGenerationFeedback | null>(null);
+  const [rejectionReasonCode, setRejectionReasonCode] = useState<DslGenerationRejectionReasonCode | null>(null);
+  const [feedbackNote, setFeedbackNote] = useState("");
   const [pendingDraft, setPendingDraft] = useState<WorkbenchDraft | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
   const [baselineSignature, setBaselineSignature] = useState<string>(buildDraftSignature(createDefaultDraft()));
@@ -651,6 +662,8 @@ export function CaseWorkbenchPage() {
         prompt: generationPrompt,
         base_url: String(values.base_url ?? "").trim() || null,
         actor_user_id: 1,
+        project_id: Number(values.project_id ?? 0) || null,
+        case_id: caseId ? Number(caseId) : null,
         generation_mode: generationMode,
         import_mode: generationImportMode,
         current_case: shouldIncludeCurrentCase ? currentCase : null,
@@ -664,12 +677,16 @@ export function CaseWorkbenchPage() {
       setGeneratedDraft(result);
       setGenerationFeedbackError(null);
       setRecordedGenerationFeedback(null);
+      setRejectionReasonCode(null);
+      setFeedbackNote("");
       void messageApi.success("AI DSL 草案已生成。");
     },
     onError: (error: Error) => {
       setGeneratedDraft(null);
       setGenerationFeedbackError(null);
       setRecordedGenerationFeedback(null);
+      setRejectionReasonCode(null);
+      setFeedbackNote("");
       void messageApi.error(error.message);
     },
   });
@@ -688,6 +705,8 @@ export function CaseWorkbenchPage() {
         actor_user_id: 1,
         feedback_status: status,
         feedback_import_mode: importMode ?? null,
+        rejection_reason_code: status === "rejected" ? rejectionReasonCode : null,
+        feedback_note: status === "rejected" ? feedbackNote.trim() || null : null,
       }),
   });
 
@@ -727,6 +746,10 @@ export function CaseWorkbenchPage() {
         status: "accepted",
         importMode: mode,
       });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["ai-settings-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["dsl-generation-runs"] }),
+      ]);
       setRecordedGenerationFeedback({ status: "accepted", importMode: mode });
       void messageApi.success(`已记录草案采纳反馈：${formatImportModeLabel(mode)}。`);
     } catch (error) {
@@ -739,6 +762,11 @@ export function CaseWorkbenchPage() {
     if (!generatedDraft) {
       return;
     }
+    if (!rejectionReasonCode) {
+      setGenerationFeedbackError("请先选择放弃原因。");
+      void messageApi.error("请先选择放弃原因。");
+      return;
+    }
     const generationId = generatedDraft.generation_id;
     setGenerationFeedbackError(null);
     try {
@@ -746,7 +774,13 @@ export function CaseWorkbenchPage() {
         generationId,
         status: "rejected",
       });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["ai-settings-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["dsl-generation-runs"] }),
+      ]);
       setRecordedGenerationFeedback({ status: "rejected" });
+      setRejectionReasonCode(null);
+      setFeedbackNote("");
       setGeneratedDraft(null);
       void messageApi.success("已记录草案放弃反馈。");
     } catch (error) {
@@ -955,6 +989,34 @@ export function CaseWorkbenchPage() {
                 </>
               ) : null}
             </Space>
+            {generatedDraft ? (
+              <div className="workbench-grid">
+                <div>
+                  <Typography.Text type="secondary">放弃原因</Typography.Text>
+                  <Select
+                    aria-label="放弃原因"
+                    style={{ marginTop: 8, width: "100%" }}
+                    placeholder="请选择放弃原因"
+                    value={rejectionReasonCode ?? undefined}
+                    options={REJECTION_REASON_OPTIONS}
+                    onChange={(value) => setRejectionReasonCode(value)}
+                    disabled={feedbackLocked}
+                  />
+                </div>
+                <div>
+                  <Typography.Text type="secondary">放弃备注</Typography.Text>
+                  <Input.TextArea
+                    aria-label="放弃备注"
+                    rows={2}
+                    placeholder="可选备注"
+                    value={feedbackNote}
+                    onChange={(event) => setFeedbackNote(event.target.value)}
+                    disabled={feedbackLocked}
+                    style={{ marginTop: 8 }}
+                  />
+                </div>
+              </div>
+            ) : null}
             {generateMutation.isError ? (
               <Alert
                 type="error"

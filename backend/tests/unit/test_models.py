@@ -263,8 +263,11 @@ def test_dsl_generation_run_columns_and_foreign_keys_exist(db_session: Session) 
     columns = {column["name"] for column in inspector.get_columns("dsl_generation_runs")}
     assert {
         "actor_user_id",
+        "project_id",
+        "case_id",
         "prompt_preview",
         "prompt_sha256",
+        "prompt_version",
         "request_base_url",
         "generation_mode",
         "import_mode",
@@ -279,14 +282,20 @@ def test_dsl_generation_run_columns_and_foreign_keys_exist(db_session: Session) 
         "repaired_invalid_actions",
         "removed_invalid_steps",
         "removed_invalid_contracts",
+        "preserve_contracts_requested",
+        "preserve_contracts_applied",
         "warnings_count",
         "normalization_notes_count",
+        "warnings_json",
+        "normalization_notes_json",
         "generated_case_json",
         "feedback_status",
         "feedback_import_mode",
+        "rejection_reason_code",
+        "feedback_note",
         "feedback_recorded_at",
         "created_at",
     }.issubset(columns)
 
     foreign_keys = inspector.get_foreign_keys("dsl_generation_runs")
-    assert {foreign_key["referred_table"] for foreign_key in foreign_keys} == {"users"}
+    assert {foreign_key["referred_table"] for foreign_key in foreign_keys} == {"users", "projects", "test_cases"}

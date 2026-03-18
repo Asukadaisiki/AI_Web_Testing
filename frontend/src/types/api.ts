@@ -9,6 +9,12 @@ export type GenerateDslImportMode = "replace" | "steps_only" | "contracts_only";
 export type GenerateDslBaseUrlSource = "ai_output" | "request" | "current_case" | "none";
 export type DslGenerationRunStatus = "success" | "failed";
 export type DslGenerationFeedbackStatus = "pending" | "accepted" | "rejected";
+export type DslGenerationRejectionReasonCode =
+  | "wrong_actions"
+  | "invalid_structure"
+  | "context_mismatch"
+  | "bad_contracts"
+  | "other";
 export type CorrectionEventType =
   | "created"
   | "activated"
@@ -80,6 +86,8 @@ export interface GenerateDslRequest {
   prompt: string;
   base_url?: string | null;
   actor_user_id: number;
+  project_id?: number | null;
+  case_id?: number | null;
   generation_mode?: GenerateDslMode;
   import_mode?: GenerateDslImportMode;
   current_case?: DSLCasePayload | null;
@@ -116,6 +124,8 @@ export interface DslGenerationFeedbackPayload {
   actor_user_id: number;
   feedback_status: "accepted" | "rejected";
   feedback_import_mode?: GenerateDslImportMode | null;
+  rejection_reason_code?: DslGenerationRejectionReasonCode | null;
+  feedback_note?: string | null;
 }
 
 export interface AISettings {
@@ -175,6 +185,9 @@ export interface AIDslGenerationStats {
   last_24h_auto_repair_rate: number;
   top_error_types: DslGenerationErrorTypeCount[];
   accepted_import_mode_breakdown: DslGenerationImportModeCount[];
+  top_rejection_reasons: DslGenerationRejectionReasonCount[];
+  model_outcome_breakdown: DslGenerationModelOutcome[];
+  generation_mode_breakdown: DslGenerationModeBreakdown[];
 }
 
 export interface AISettingsOverview {
@@ -195,6 +208,27 @@ export interface DslGenerationImportModeCount {
   count: number;
 }
 
+export interface DslGenerationRejectionReasonCount {
+  rejection_reason_code: DslGenerationRejectionReasonCode;
+  count: number;
+}
+
+export interface DslGenerationModelOutcome {
+  model_name?: string | null;
+  total_requests: number;
+  success_count: number;
+  accepted_count: number;
+  rejected_count: number;
+}
+
+export interface DslGenerationModeBreakdown {
+  generation_mode: GenerateDslMode;
+  total_requests: number;
+  success_count: number;
+  accepted_count: number;
+  rejected_count: number;
+}
+
 export interface StoredDslGenerationRunSummary {
   id: number;
   created_at: string;
@@ -202,6 +236,9 @@ export interface StoredDslGenerationRunSummary {
   model_name?: string | null;
   generation_mode: GenerateDslMode;
   import_mode: GenerateDslImportMode;
+  project_id?: number | null;
+  case_id?: number | null;
+  prompt_version: string;
   error_type?: string | null;
   error_message?: string | null;
   repaired_invalid_actions: number;
@@ -212,7 +249,20 @@ export interface StoredDslGenerationRunSummary {
   prompt_preview: string;
   feedback_status: DslGenerationFeedbackStatus;
   feedback_import_mode?: GenerateDslImportMode | null;
+  rejection_reason_code?: DslGenerationRejectionReasonCode | null;
   feedback_recorded_at?: string | null;
+}
+
+export interface StoredDslGenerationRunDetail extends StoredDslGenerationRunSummary {
+  request_base_url?: string | null;
+  generated_case_json?: DSLCasePayload | null;
+  warnings_json: string[];
+  normalization_notes_json: string[];
+  feedback_note?: string | null;
+  used_current_case_context: boolean;
+  used_current_steps_context: boolean;
+  preserve_contracts_requested: boolean;
+  preserve_contracts_applied: boolean;
 }
 
 export interface CaseMutationPayload extends DSLCasePayload {

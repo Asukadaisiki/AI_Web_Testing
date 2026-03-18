@@ -100,12 +100,21 @@ GenerateDslBaseUrlSource = Literal["ai_output", "request", "current_case", "none
 DslGenerationRunStatus = Literal["success", "failed"]
 DslGenerationFeedbackStatus = Literal["pending", "accepted", "rejected"]
 DslGenerationFeedbackDecision = Literal["accepted", "rejected"]
+DslGenerationRejectionReasonCode = Literal[
+    "wrong_actions",
+    "invalid_structure",
+    "context_mismatch",
+    "bad_contracts",
+    "other",
+]
 
 
 class GenerateDslRequest(DSLModel):
     prompt: str = Field(min_length=1, max_length=4000)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     actor_user_id: int = Field(ge=1)
+    project_id: int | None = Field(default=None, ge=1)
+    case_id: int | None = Field(default=None, ge=1)
     generation_mode: GenerateDslMode | None = None
     import_mode: GenerateDslImportMode = "replace"
     current_case: DSLCase | None = None
@@ -148,6 +157,8 @@ class DslGenerationFeedbackRequest(DSLModel):
     actor_user_id: int = Field(ge=1)
     feedback_status: DslGenerationFeedbackDecision
     feedback_import_mode: GenerateDslImportMode | None = None
+    rejection_reason_code: DslGenerationRejectionReasonCode | None = None
+    feedback_note: str | None = Field(default=None, max_length=1000)
 
     @model_validator(mode="after")
     def validate_feedback_import_mode(self) -> "DslGenerationFeedbackRequest":
@@ -155,6 +166,10 @@ class DslGenerationFeedbackRequest(DSLModel):
             raise ValueError("accepted 反馈必须提供 feedback_import_mode。")
         if self.feedback_status == "rejected" and self.feedback_import_mode is not None:
             raise ValueError("rejected 反馈不能提供 feedback_import_mode。")
+        if self.feedback_status == "rejected" and self.rejection_reason_code is None:
+            raise ValueError("rejected 反馈必须提供 rejection_reason_code。")
+        if self.feedback_status == "accepted" and self.rejection_reason_code is not None:
+            raise ValueError("accepted 反馈不能提供 rejection_reason_code。")
         return self
 
 
@@ -165,6 +180,9 @@ class StoredDslGenerationRunSummary(DSLModel):
     model_name: str | None = Field(default=None, max_length=200)
     generation_mode: GenerateDslMode
     import_mode: GenerateDslImportMode
+    project_id: int | None = Field(default=None, ge=1)
+    case_id: int | None = Field(default=None, ge=1)
+    prompt_version: str = Field(min_length=1, max_length=100)
     error_type: str | None = Field(default=None, max_length=200)
     error_message: str | None = Field(default=None, max_length=2000)
     repaired_invalid_actions: int = Field(ge=0)
@@ -175,4 +193,17 @@ class StoredDslGenerationRunSummary(DSLModel):
     prompt_preview: str = Field(min_length=1, max_length=200)
     feedback_status: DslGenerationFeedbackStatus
     feedback_import_mode: GenerateDslImportMode | None = None
+    rejection_reason_code: DslGenerationRejectionReasonCode | None = None
     feedback_recorded_at: datetime | None = None
+
+
+class StoredDslGenerationRunDetail(StoredDslGenerationRunSummary):
+    request_base_url: str | None = Field(default=None, max_length=500)
+    generated_case_json: DSLCase | None = None
+    warnings_json: list[str] = Field(default_factory=list)
+    normalization_notes_json: list[str] = Field(default_factory=list)
+    feedback_note: str | None = Field(default=None, max_length=1000)
+    used_current_case_context: bool = False
+    used_current_steps_context: bool = False
+    preserve_contracts_requested: bool = False
+    preserve_contracts_applied: bool = False

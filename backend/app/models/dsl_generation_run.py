@@ -40,6 +40,16 @@ class DslGenerationRun(Base):
             ")",
             name="ck_dsl_generation_runs_feedback_import_mode",
         ),
+        CheckConstraint(
+            "("
+            "feedback_status = 'rejected' AND rejection_reason_code IN ("
+            "'wrong_actions', 'invalid_structure', 'context_mismatch', 'bad_contracts', 'other'"
+            ")"
+            ") OR ("
+            "feedback_status IN ('pending', 'accepted') AND rejection_reason_code IS NULL"
+            ")",
+            name="ck_dsl_generation_runs_rejection_reason_code",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -49,8 +59,21 @@ class DslGenerationRun(Base):
         index=True,
         nullable=False,
     )
+    project_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    case_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("test_cases.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     prompt_preview: Mapped[str] = mapped_column(String(200), nullable=False)
     prompt_sha256: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
     request_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     generation_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     import_mode: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -65,11 +88,17 @@ class DslGenerationRun(Base):
     repaired_invalid_actions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     removed_invalid_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     removed_invalid_contracts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    preserve_contracts_requested: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
+    preserve_contracts_applied: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
     warnings_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     normalization_notes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    warnings_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    normalization_notes_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     generated_case_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     feedback_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     feedback_import_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rejection_reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    feedback_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     feedback_recorded_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(),

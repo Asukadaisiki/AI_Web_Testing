@@ -7,29 +7,37 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.ai.dsl_generator import (
+    AI_DSL_PROMPT_VERSION,
     DslGenerationConfigError,
     DslGenerationError,
     generate_case_draft,
     resolve_generation_mode,
 )
 from app.core.config import get_settings
-from app.models import DslGenerationRun, User
+from app.models import DslGenerationRun, Project, TestCase, User
 from app.schemas.dsl import (
     DSLCase,
     DSLValidationResult,
     DslGenerationFeedbackRequest,
+    DslGenerationFeedbackStatus,
     GenerateDslMeta,
+    GenerateDslMode,
+    GenerateDslImportMode,
     GenerateDslRequest,
     GenerateDslResponse,
+    StoredDslGenerationRunDetail,
     StoredDslGenerationRunSummary,
 )
 from app.schemas.settings import (
     AIDslGenerationErrorTypeCount,
     AIDslGenerationImportModeCount,
+    AIDslGenerationModeBreakdown,
+    AIDslGenerationModelOutcome,
+    AIDslGenerationRejectionReasonCount,
     AIDslGenerationStats,
 )
 from app.services.cases import EntityNotFoundError
@@ -76,6 +84,10 @@ def validate_dsl_case(test_case: DSLCase) -> DSLValidationResult:
 
 def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> GenerateDslResponse:
     _ensure_user_exists(session, payload.actor_user_id)
+    if payload.project_id is not None:
+        _ensure_project_exists(session, payload.project_id)
+    if payload.case_id is not None:
+        _ensure_case_exists(session, payload.case_id)
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode)
 
     with _RUNTIME_STATS_LOCK:
@@ -95,8 +107,8 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
             generation_mode=resolved_generation_mode,
             success=False,
             model_name=model_name,
-            warnings_count=0,
-            normalization_notes_count=0,
+            warnings=[],
+            normalization_notes=[],
             generated_case=None,
             generation_meta=None,
             error=exc,
@@ -110,8 +122,8 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
         generation_mode=generation_meta.generation_mode,
         success=True,
         model_name=generation_meta.model,
-        warnings_count=len(warnings),
-        normalization_notes_count=len(normalization_notes),
+        warnings=warnings,
+        normalization_notes=normalization_notes,
         generated_case=generated_case,
         generation_meta=generation_meta,
         error=None,
@@ -152,6 +164,14 @@ def list_dsl_generation_runs(
     session: Session,
     *,
     status: str | None = None,
+    feedback_status: DslGenerationFeedbackStatus | None = None,
+    generation_mode: GenerateDslMode | None = None,
+    import_mode: GenerateDslImportMode | None = None,
+    model_name: str | None = None,
+    project_id: int | None = None,
+    case_id: int | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[StoredDslGenerationRunSummary]:
@@ -160,9 +180,32 @@ def list_dsl_generation_runs(
         statement = statement.where(DslGenerationRun.success.is_(True))
     elif status == "failed":
         statement = statement.where(DslGenerationRun.success.is_(False))
+    if feedback_status is not None:
+        statement = statement.where(DslGenerationRun.feedback_status == feedback_status)
+    if generation_mode is not None:
+        statement = statement.where(DslGenerationRun.generation_mode == generation_mode)
+    if import_mode is not None:
+        statement = statement.where(DslGenerationRun.import_mode == import_mode)
+    if model_name:
+        statement = statement.where(DslGenerationRun.model_name == model_name)
+    if project_id is not None:
+        statement = statement.where(DslGenerationRun.project_id == project_id)
+    if case_id is not None:
+        statement = statement.where(DslGenerationRun.case_id == case_id)
+    if created_from is not None:
+        statement = statement.where(DslGenerationRun.created_at >= _normalize_filter_datetime(created_from))
+    if created_to is not None:
+        statement = statement.where(DslGenerationRun.created_at <= _normalize_filter_datetime(created_to))
     statement = statement.limit(limit).offset(offset)
     records = session.scalars(statement).all()
     return [_to_stored_dsl_generation_run_summary(record) for record in records]
+
+
+def get_dsl_generation_run_detail(session: Session, generation_id: int) -> StoredDslGenerationRunDetail:
+    record = session.get(DslGenerationRun, generation_id)
+    if record is None:
+        raise EntityNotFoundError(f"DSL generation run {generation_id} not found.")
+    return _to_stored_dsl_generation_run_detail(record)
 
 
 def record_dsl_generation_feedback(
@@ -180,6 +223,8 @@ def record_dsl_generation_feedback(
     if generation_run.feedback_status == "pending":
         generation_run.feedback_status = payload.feedback_status
         generation_run.feedback_import_mode = payload.feedback_import_mode
+        generation_run.rejection_reason_code = payload.rejection_reason_code
+        generation_run.feedback_note = payload.feedback_note
         generation_run.feedback_recorded_at = datetime.now(UTC).replace(tzinfo=None)
         try:
             session.commit()
@@ -192,6 +237,8 @@ def record_dsl_generation_feedback(
     if (
         generation_run.feedback_status == payload.feedback_status
         and generation_run.feedback_import_mode == payload.feedback_import_mode
+        and generation_run.rejection_reason_code == payload.rejection_reason_code
+        and generation_run.feedback_note == payload.feedback_note
     ):
         return _to_stored_dsl_generation_run_summary(generation_run)
 
@@ -289,6 +336,41 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         .group_by(DslGenerationRun.feedback_import_mode)
         .order_by(func.count().desc(), DslGenerationRun.feedback_import_mode.asc())
     ).all()
+    rejection_reason_rows = session.execute(
+        select(
+            DslGenerationRun.rejection_reason_code,
+            func.count().label("count"),
+        )
+        .where(
+            DslGenerationRun.feedback_status == "rejected",
+            DslGenerationRun.rejection_reason_code.is_not(None),
+        )
+        .group_by(DslGenerationRun.rejection_reason_code)
+        .order_by(func.count().desc(), DslGenerationRun.rejection_reason_code.asc())
+        .limit(5)
+    ).all()
+    model_outcome_rows = session.execute(
+        select(
+            DslGenerationRun.model_name,
+            func.count().label("total_requests"),
+            func.sum(case((DslGenerationRun.success.is_(True), 1), else_=0)).label("success_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "accepted", 1), else_=0)).label("accepted_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "rejected", 1), else_=0)).label("rejected_count"),
+        )
+        .group_by(DslGenerationRun.model_name)
+        .order_by(func.count().desc(), DslGenerationRun.model_name.asc())
+    ).all()
+    generation_mode_rows = session.execute(
+        select(
+            DslGenerationRun.generation_mode,
+            func.count().label("total_requests"),
+            func.sum(case((DslGenerationRun.success.is_(True), 1), else_=0)).label("success_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "accepted", 1), else_=0)).label("accepted_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "rejected", 1), else_=0)).label("rejected_count"),
+        )
+        .group_by(DslGenerationRun.generation_mode)
+        .order_by(func.count().desc(), DslGenerationRun.generation_mode.asc())
+    ).all()
 
     return AIDslGenerationStats(
         total_requests=total_requests,
@@ -317,6 +399,31 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
             for import_mode, count in accepted_import_mode_rows
             if import_mode is not None
         ],
+        top_rejection_reasons=[
+            AIDslGenerationRejectionReasonCount(rejection_reason_code=rejection_reason_code, count=count)
+            for rejection_reason_code, count in rejection_reason_rows
+            if rejection_reason_code is not None
+        ],
+        model_outcome_breakdown=[
+            AIDslGenerationModelOutcome(
+                model_name=model_name,
+                total_requests=total_requests,
+                success_count=success_count or 0,
+                accepted_count=accepted_count or 0,
+                rejected_count=rejected_count or 0,
+            )
+            for model_name, total_requests, success_count, accepted_count, rejected_count in model_outcome_rows
+        ],
+        generation_mode_breakdown=[
+            AIDslGenerationModeBreakdown(
+                generation_mode=generation_mode,
+                total_requests=total_requests,
+                success_count=success_count or 0,
+                accepted_count=accepted_count or 0,
+                rejected_count=rejected_count or 0,
+            )
+            for generation_mode, total_requests, success_count, accepted_count, rejected_count in generation_mode_rows
+        ],
     )
 
 
@@ -341,6 +448,16 @@ def _ensure_user_exists(session: Session, user_id: int) -> None:
         raise EntityNotFoundError(f"User {user_id} not found.")
 
 
+def _ensure_project_exists(session: Session, project_id: int) -> None:
+    if session.get(Project, project_id) is None:
+        raise EntityNotFoundError(f"Project {project_id} not found.")
+
+
+def _ensure_case_exists(session: Session, case_id: int) -> None:
+    if session.get(TestCase, case_id) is None:
+        raise EntityNotFoundError(f"Case {case_id} not found.")
+
+
 def _get_generation_run_for_feedback(session: Session, generation_id: int) -> DslGenerationRun | None:
     if _supports_for_update(session):
         statement = (
@@ -363,16 +480,19 @@ def _persist_generation_run(
     generation_mode: str,
     success: bool,
     model_name: str | None,
-    warnings_count: int,
-    normalization_notes_count: int,
+    warnings: list[str],
+    normalization_notes: list[str],
     generated_case: DSLCase | None,
     generation_meta: GenerateDslMeta | None,
     error: Exception | None,
 ) -> DslGenerationRun:
     generation_run = DslGenerationRun(
         actor_user_id=payload.actor_user_id,
+        project_id=payload.project_id,
+        case_id=payload.case_id,
         prompt_preview=_build_prompt_preview(payload.prompt),
         prompt_sha256=_hash_prompt(payload.prompt),
+        prompt_version=AI_DSL_PROMPT_VERSION,
         request_base_url=payload.base_url,
         generation_mode=generation_mode,
         import_mode=payload.import_mode,
@@ -391,11 +511,17 @@ def _persist_generation_run(
         repaired_invalid_actions=generation_meta.repaired_invalid_actions if generation_meta is not None else 0,
         removed_invalid_steps=generation_meta.removed_invalid_steps if generation_meta is not None else 0,
         removed_invalid_contracts=generation_meta.removed_invalid_contracts if generation_meta is not None else 0,
-        warnings_count=warnings_count,
-        normalization_notes_count=normalization_notes_count,
+        preserve_contracts_requested=payload.preserve_contracts,
+        preserve_contracts_applied=generation_meta.preserve_contracts_applied if generation_meta is not None else False,
+        warnings_count=len(warnings),
+        normalization_notes_count=len(normalization_notes),
+        warnings_json=warnings,
+        normalization_notes_json=normalization_notes,
         generated_case_json=generated_case.model_dump(mode="json") if generated_case is not None else None,
         feedback_status="pending",
         feedback_import_mode=None,
+        rejection_reason_code=None,
+        feedback_note=None,
         feedback_recorded_at=None,
     )
     session.add(generation_run)
@@ -416,6 +542,12 @@ def _hash_prompt(prompt: str) -> str:
     return hashlib.sha256(prompt.strip().encode("utf-8")).hexdigest()
 
 
+def _normalize_filter_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
+
+
 def _to_stored_dsl_generation_run_summary(record: DslGenerationRun) -> StoredDslGenerationRunSummary:
     return StoredDslGenerationRunSummary(
         id=record.id,
@@ -424,6 +556,9 @@ def _to_stored_dsl_generation_run_summary(record: DslGenerationRun) -> StoredDsl
         model_name=record.model_name,
         generation_mode=record.generation_mode,
         import_mode=record.import_mode,
+        project_id=record.project_id,
+        case_id=record.case_id,
+        prompt_version=record.prompt_version,
         error_type=record.error_type,
         error_message=record.error_message,
         repaired_invalid_actions=record.repaired_invalid_actions,
@@ -434,7 +569,25 @@ def _to_stored_dsl_generation_run_summary(record: DslGenerationRun) -> StoredDsl
         prompt_preview=record.prompt_preview,
         feedback_status=record.feedback_status,
         feedback_import_mode=record.feedback_import_mode,
+        rejection_reason_code=record.rejection_reason_code,
         feedback_recorded_at=record.feedback_recorded_at,
+    )
+
+
+def _to_stored_dsl_generation_run_detail(record: DslGenerationRun) -> StoredDslGenerationRunDetail:
+    return StoredDslGenerationRunDetail(
+        **_to_stored_dsl_generation_run_summary(record).model_dump(),
+        request_base_url=record.request_base_url,
+        generated_case_json=(
+            DSLCase.model_validate(record.generated_case_json) if record.generated_case_json is not None else None
+        ),
+        warnings_json=list(record.warnings_json or []),
+        normalization_notes_json=list(record.normalization_notes_json or []),
+        feedback_note=record.feedback_note,
+        used_current_case_context=record.used_current_case_context,
+        used_current_steps_context=record.used_current_steps_context,
+        preserve_contracts_requested=record.preserve_contracts_requested,
+        preserve_contracts_applied=record.preserve_contracts_applied,
     )
 
 
@@ -444,6 +597,7 @@ __all__ = [
     "DslGenerationFeedbackConflictError",
     "DslGenerationFeedbackPermissionError",
     "SUPPORTED_DSL_ACTIONS",
+    "get_dsl_generation_run_detail",
     "get_dsl_generation_durable_stats",
     "generate_dsl_case",
     "get_dsl_generation_runtime_stats",
