@@ -168,7 +168,7 @@ def generate_case_draft(
 ) -> tuple[DSLCase, list[str], list[str], GenerateDslMeta]:
     settings = get_settings()
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode, settings=settings)
-    prompt_variant, _ = resolve_generation_profile(payload=payload, generation_mode=resolved_generation_mode)
+    prompt_variant, context_profile = resolve_generation_profile(payload=payload, generation_mode=resolved_generation_mode)
     if not settings.enable_ai_dsl_generate:
         raise DslGenerationConfigError(
             "AI DSL 生成功能未开启。请设置 ENABLE_AI_DSL_GENERATE=true 并配置 AI_DSL_API_KEY、AI_DSL_MODEL。"
@@ -203,6 +203,8 @@ def generate_case_draft(
         raw_case=raw_case,
         payload=payload,
         generation_mode=resolved_generation_mode,
+        prompt_variant=prompt_variant,
+        context_profile=context_profile,
         model_name=settings.ai_dsl_model,
         allow_auto_repair=settings.ai_dsl_allow_auto_repair,
     )
@@ -220,6 +222,8 @@ def _normalize_generated_case(
     raw_case: dict[str, Any],
     payload: GenerateDslRequest,
     generation_mode: GenerateDslMode,
+    prompt_variant: DslGenerationPromptVariant,
+    context_profile: DslGenerationContextProfile,
     model_name: str,
     allow_auto_repair: bool,
 ) -> tuple[dict[str, Any], list[str], list[str], GenerateDslMeta]:
@@ -233,7 +237,6 @@ def _normalize_generated_case(
     current_input_contract, current_output_contract = _resolve_current_contracts(payload)
     used_current_case_context = current_case is not None
     used_current_steps_context = payload.current_steps is not None
-    prompt_variant, context_profile = resolve_generation_profile(payload=payload, generation_mode=generation_mode)
     risk_flags: list[DslGenerationRiskFlag] = []
 
     normalized_name = _normalize_string(raw_case.get("name"))

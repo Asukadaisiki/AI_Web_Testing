@@ -46,7 +46,7 @@ type GovernanceFilterFormValues = {
   import_mode?: GenerateDslImportMode;
   prompt_variant?: DslGenerationPromptVariant;
   rejection_reason_code?: DslGenerationRejectionReasonCode;
-  has_risk_flags?: "true" | "false";
+  has_risk_flags?: boolean;
   model_name?: string;
   project_id?: number;
   case_id?: number;
@@ -122,9 +122,8 @@ const REJECTION_REASON_OPTIONS = [
 ];
 
 const RISK_FILTER_OPTIONS = [
-  { label: "全部风险", value: "" },
-  { label: "仅高风险", value: "true" },
-  { label: "仅无风险", value: "false" },
+  { label: "仅高风险", value: true },
+  { label: "仅无风险", value: false },
 ];
 
 function formatPercent(value: number) {
@@ -188,11 +187,8 @@ function normalizeFilters(values: Partial<GovernanceFilterFormValues>): Governan
   if (values.rejection_reason_code) {
     normalized.rejection_reason_code = values.rejection_reason_code;
   }
-  if (values.has_risk_flags === "true") {
-    normalized.has_risk_flags = true;
-  }
-  if (values.has_risk_flags === "false") {
-    normalized.has_risk_flags = false;
+  if (typeof values.has_risk_flags === "boolean") {
+    normalized.has_risk_flags = values.has_risk_flags;
   }
   if (values.model_name?.trim()) {
     normalized.model_name = values.model_name.trim();
@@ -547,7 +543,7 @@ export function AISettingsPage() {
                   <Select options={REJECTION_REASON_OPTIONS} />
                 </Form.Item>
                 <Form.Item label="风险标签" name="has_risk_flags">
-                  <Select options={RISK_FILTER_OPTIONS} />
+                  <Select allowClear options={RISK_FILTER_OPTIONS} />
                 </Form.Item>
                 <Form.Item label="模型名" name="model_name">
                   <Input placeholder="例如：gpt-4o-mini" />

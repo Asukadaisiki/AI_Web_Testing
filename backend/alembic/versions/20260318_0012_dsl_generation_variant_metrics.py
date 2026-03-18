@@ -13,6 +13,8 @@ depends_on = None
 
 
 def _derive_prompt_variant(row: sa.RowMapping) -> str:
+    # This mirrors app.ai.dsl_generator.resolve_generation_profile() as of 2026-03-18.
+    # The logic is intentionally frozen inside the migration so historical backfill stays deterministic.
     if row["import_mode"] == "contracts_only":
         return "contracts_focus"
     if row["generation_mode"] == "strict_steps_only" and row["used_current_steps_context"]:
@@ -23,6 +25,8 @@ def _derive_prompt_variant(row: sa.RowMapping) -> str:
 
 
 def _derive_context_profile(row: sa.RowMapping) -> str:
+    # This mirrors app.ai.dsl_generator.resolve_generation_profile() as of 2026-03-18.
+    # Keep it local to the migration instead of importing app code, so future rule changes do not rewrite history.
     if row["import_mode"] == "contracts_only":
         return "contracts_focus"
     if row["generation_mode"] == "strict_steps_only" and row["used_current_steps_context"]:
@@ -34,6 +38,8 @@ def _derive_context_profile(row: sa.RowMapping) -> str:
 
 def _derive_risk_flags(row: sa.RowMapping) -> list[str]:
     risk_flags: list[str] = []
+    # Historical rows can only be reconstructed from columns that already existed before this migration.
+    # missing_name_fallback was not stored previously, so it is intentionally not backfilled here.
     if row["base_url_backfilled"]:
         risk_flags.append("base_url_backfilled")
     if (row["repaired_invalid_actions"] or 0) > 0:

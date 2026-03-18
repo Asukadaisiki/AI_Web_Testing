@@ -22,7 +22,7 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
-test("渲染 AI 配置并允许保存修改", async () => {
+test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   vi.mocked(api.getAISettings).mockResolvedValue({
     enable_ai_dsl_generate: false,
     ai_dsl_timeout_ms: 15000,
@@ -270,6 +270,83 @@ test("渲染 AI 配置并允许保存修改", async () => {
   expect(screen.getAllByText("baseline_draft").length).toBeGreaterThan(0);
   expect(screen.getAllByText("invalid_steps_removed").length).toBeGreaterThan(0);
   expect(screen.getByDisplayValue(/治理详情草案/)).toBeInTheDocument();
+}, 15000);
+
+test("保存 AI 配置会提交最新表单值", async () => {
+  vi.mocked(api.getAISettings).mockResolvedValue({
+    enable_ai_dsl_generate: false,
+    ai_dsl_timeout_ms: 15000,
+    ai_dsl_base_url: "https://api.openai.com/v1",
+    ai_dsl_model: "gpt-4o-mini",
+    ai_dsl_strict_mode: false,
+    ai_dsl_allow_auto_repair: true,
+    has_ai_dsl_api_key: true,
+    enable_ai_visual_locate: false,
+    ai_visual_timeout_ms: 10000,
+    ai_visual_failure_threshold: 3,
+    ai_visual_cooldown_seconds: 60,
+    ai_visual_rate_limit_per_minute: 10,
+    vlm_base_url: "https://api.openai.com/v1",
+    vlm_model: "gpt-4o",
+    vlm_model_family: "gpt-4o",
+    has_vlm_api_key: false,
+  });
+  vi.mocked(api.getAISettingsOverview).mockResolvedValue({
+    ai_dsl_enabled: false,
+    ai_dsl_model: "gpt-4o-mini",
+    ai_dsl_strict_mode: false,
+    ai_dsl_allow_auto_repair: true,
+    generation_stats: {
+      total_requests: 0,
+      success_count: 0,
+      failure_count: 0,
+      accepted_count: 0,
+      rejected_count: 0,
+      pending_count: 0,
+      decision_coverage_rate: 0,
+      last_model: null,
+      last_error_type: null,
+      last_error_message: null,
+      last_24h_requests: 0,
+      last_24h_success_count: 0,
+      last_24h_failure_count: 0,
+      last_24h_auto_repair_rate: 0,
+      top_error_types: [],
+      accepted_import_mode_breakdown: [],
+      top_rejection_reasons: [],
+      prompt_variant_breakdown: [],
+      context_profile_breakdown: [],
+      rejection_reason_by_variant: [],
+      model_outcome_breakdown: [],
+      generation_mode_breakdown: [],
+    },
+  });
+  vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);
+  vi.mocked(api.updateAISettings).mockResolvedValue({
+    enable_ai_dsl_generate: true,
+    ai_dsl_timeout_ms: 18000,
+    ai_dsl_base_url: "https://llm.example.com/v1",
+    ai_dsl_model: "gpt-dsl",
+    ai_dsl_strict_mode: true,
+    ai_dsl_allow_auto_repair: false,
+    has_ai_dsl_api_key: true,
+    enable_ai_visual_locate: true,
+    ai_visual_timeout_ms: 12000,
+    ai_visual_failure_threshold: 4,
+    ai_visual_cooldown_seconds: 90,
+    ai_visual_rate_limit_per_minute: 12,
+    vlm_base_url: "https://vlm.example.com/v1",
+    vlm_model: "gpt-4o",
+    vlm_model_family: "gpt-4o",
+    has_vlm_api_key: false,
+  });
+
+  renderWithProviders(<AISettingsPage />, {
+    route: "/settings/ai",
+    path: "/settings/ai",
+  });
+
+  expect(await screen.findByLabelText("AI DSL Base URL")).toHaveValue("https://api.openai.com/v1");
 
   await userEvent.click(screen.getByRole("switch", { name: "启用 DSL 生成" }));
   await userEvent.click(screen.getByRole("switch", { name: "严格生成模式" }));
@@ -283,9 +360,7 @@ test("渲染 AI 配置并允许保存修改", async () => {
   const passwordInputs = screen.getAllByPlaceholderText("留空则保持原值");
   await userEvent.type(passwordInputs[0], "new-dsl-secret");
   await userEvent.type(passwordInputs[1], "new-vlm-secret");
-
   await userEvent.click(screen.getByRole("switch", { name: "启用视觉定位" }));
-
   await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
 
   await waitFor(() => {
@@ -310,7 +385,7 @@ test("渲染 AI 配置并允许保存修改", async () => {
       clear_vlm_api_key: false,
     });
   });
-}, 20000);
+}, 15000);
 
 test("加载失败时展示错误块", async () => {
   vi.mocked(api.getAISettings).mockRejectedValue(new Error("settings failed"));

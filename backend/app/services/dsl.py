@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 
 from sqlalchemy import case, func, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.ai.dsl_generator import (
@@ -200,7 +201,7 @@ def list_dsl_generation_runs(
     if rejection_reason_code is not None:
         statement = statement.where(DslGenerationRun.rejection_reason_code == rejection_reason_code)
     if has_risk_flags is not None:
-        comparator = func.json_array_length(DslGenerationRun.risk_flags_json)
+        comparator = _json_array_length_expression(session, DslGenerationRun.risk_flags_json)
         statement = statement.where(comparator > 0 if has_risk_flags else comparator == 0)
     if model_name:
         statement = statement.where(DslGenerationRun.model_name == model_name)
@@ -551,6 +552,13 @@ def _get_generation_run_for_feedback(session: Session, generation_id: int) -> Ds
 
 def _supports_for_update(session: Session) -> bool:
     return session.get_bind().dialect.name == "postgresql"
+
+
+def _json_array_length_expression(session: Session, column):
+    dialect_name = session.get_bind().dialect.name
+    if dialect_name == "postgresql" and isinstance(column.property.columns[0].type, JSONB):
+        return func.jsonb_array_length(column)
+    return func.json_array_length(column)
 
 
 def _persist_generation_run(

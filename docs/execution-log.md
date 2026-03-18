@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-18 23:05
+
+- 任务：修复 AI DSL 治理增强提交的 Code Review 问题
+- 执行动作：移除 `generate_case_draft()` 到 `_normalize_generated_case()` 间重复的 `resolve_generation_profile()` 推导，改为单次计算后透传；为 `20260318_0012` 迁移补充“冻结自应用层规则”与 `missing_name_fallback` 无法回填的注释；为 `has_risk_flags` 增加后端方言感知的 JSON 数组长度 helper；将 `AISettingsPage` 的风险筛选从字符串哨兵切换为 `boolean | undefined` + `allowClear`；拆分 `AISettingsPage.test.tsx` 中过大的集成测试为“治理页渲染/筛选/详情”和“保存配置”两条测试
+- 结果：review 中的低/中优先级实现问题已收口，生成链路减少重复推导，风险筛选的后续可维护性更高，前端测试耗时下降且职责更清晰
+- 验证：执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py backend/tests/unit/test_models.py` 结果 `40 passed`；执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx` 结果 `28 passed`；执行 `cd frontend && npm run build` 成功
+- 后续：如后续将 `risk_flags_json` 列切到 PostgreSQL `JSONB`，只需扩展当前 helper，无需改调用方
+
 ## 2026-03-18 22:31
 
 - 任务：实现 AI DSL 可用率提升第一批（单次生成增强）

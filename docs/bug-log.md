@@ -30,6 +30,31 @@
 
 ## 当前状态
 
+## BUG-021 | AI DSL 治理增强首版存在重复 profile 推导、风险筛选兼容性与测试膨胀问题
+
+- 日期：2026-03-18
+- 状态：fixed
+- 来源：代码评审
+- 描述：`backend/app/ai/dsl_generator.py` 在同一条生成链路里对相同 payload 重复调用 `resolve_generation_profile()`；`backend/app/services/dsl.py` 直接使用 `json_array_length()` 过滤 `risk_flags_json`，缺少对后续 PostgreSQL `JSONB` 演进的兜底；`frontend/src/pages/AISettingsPage.tsx` 用字符串哨兵管理 `has_risk_flags` 筛选；`frontend/src/pages/AISettingsPage.test.tsx` 把治理页渲染、筛选、详情和保存配置塞进同一个大测试，导致单测不断膨胀并被迫把 timeout 提高到 20s。
+- 复现步骤：
+  1. 阅读 `backend/app/ai/dsl_generator.py` 中 `generate_case_draft()` 与 `_normalize_generated_case()`
+  2. 阅读 `backend/app/services/dsl.py` 中 `has_risk_flags` 的 query 构造
+  3. 阅读 `frontend/src/pages/AISettingsPage.tsx` 中 `GovernanceFilterFormValues`
+  4. 运行 `frontend/src/pages/AISettingsPage.test.tsx`，观察单测需要覆盖过多职责
+- 影响：会增加后续演进 `prompt/profile` 规则时的漂移风险，给 `risk_flags_json` 的存储类型调整埋下兼容隐患，也会降低治理页筛选与测试代码的可维护性。
+- 根因：首版实现优先打通功能闭环，重复逻辑、方言兼容性和测试拆分没有在同一轮收口。
+- 处理：
+  - 将 profile 推导改为在 `generate_case_draft()` 中单次计算并透传到 `_normalize_generated_case()`
+  - 为 `risk_flags_json` 长度判断提取方言感知 helper，并兼容 PostgreSQL `JSONB`
+  - 将 `has_risk_flags` 表单值收敛为 `boolean | undefined`，并用 `allowClear` 处理“无筛选”
+  - 拆分 `AISettingsPage` 大测试为两个职责明确的测试
+  - 为 `20260318_0012` 迁移补充冻结规则与无法回填 `missing_name_fallback` 的说明
+- 验证：
+  - 执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py backend/tests/unit/test_models.py`，结果 `40 passed`
+  - 执行 `cd frontend && npm test -- --run src/services/api.test.ts src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `28 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联记录：`docs/execution-log.md` 2026-03-18 23:05
+
 ## BUG-020 | docs 中的前端路由与页面落地状态未同步到最新实现
 
 - 日期：2026-03-18
