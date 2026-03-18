@@ -67,6 +67,16 @@
 
 **闭环机制：** 用户提交修正 → 存入 `locator_corrections` → 重跑时 Tier 0 命中 → 后续同页面同目标自动复用。页面改版导致 selector 失效时自动停用，触发新一轮人工干预。
 
+**精度优化路线（已规划，待实施）：**
+
+当前四层降级链路已跑通最小闭环，后续围绕定位精度和鲁棒性的五项优化按优先级排列如下：
+
+1. **elementFromPoint 遮挡穿透**（P0）：当 `elementFromPoint` 返回 toast / overlay 等遮挡物时，改用 `elementsFromPoint` 取 z-stack 逐个匹配，消除系统性误判。
+2. **DOM 交叉验证增强**（P1）：将严格 token 子集检查升级为 Jaccard 相似度阈值匹配，减少 AI 坐标正确但验证误拒的情况。
+3. **deepLocate 两阶段定位**（P2）：粗定位区域 → 裁剪放大 2× → 精确定位 → 坐标回算，提升密集页面精度（参考 Midscene 核心策略）。
+4. **Tier 1 + Tier 2 融合定位**（P3）：当 Tier 1 多候选分数接近时，在截图上标注候选发送给 VLM 排序，融合"DOM 候选检索 + VLM 排序"与"VLM bbox + elementFromPoint 反查"两种混合定位范式。
+5. **AI 定位结果会话级缓存**（P4）：`(page_url_pattern, target) → selector` 的 LRU 缓存，减少重复 VLM 调用。
+
 > 详细技术设计参见 [`docs/hybrid-locate-and-intervention-design.md`](./hybrid-locate-and-intervention-design.md)
 
 ------
@@ -160,12 +170,22 @@ Step → Case → Suite
 
 ## 阶段二：混合定位系统（第3–5周）
 
+### 已完成：最小闭环
+
 - 实现 **DOM 候选元素召回**与候选打分命中（Tier 1，已有基础）
 - 新建 **人工修正记录** 数据模型与 API，接入 Tier 0 优先查找
-- 实现 **AI 视觉定位模块**（Tier 2）：VLM API 调用、bbox 归一化、deepLocate 两阶段定位、DOM 交叉验证
+- 实现 **AI 视觉定位模块**（Tier 2）：VLM API 调用、bbox 归一化、DOM 交叉验证
 - 实现 **四层降级定位链路** `resolve_with_fallback`，统一替换现有定位调用
 - 实现 **人工干预机制**（Tier 3）：上下文采集、`needs_intervention` 状态、前端干预面板
 - 打通 **修正闭环**：提交修正 → 重跑命中 → 置信度追踪 → 失效自动停用
+
+### 待实施：精度优化（P0–P4）
+
+- **P0** elementFromPoint 遮挡穿透（`elementsFromPoint` z-stack 匹配）
+- **P1** DOM 交叉验证增强（Jaccard 相似度 + 中文分词粒度）
+- **P2** deepLocate 两阶段定位（粗定位 → 裁剪放大 → 精确定位 → 坐标回算）
+- **P3** Tier 1 + Tier 2 融合（DOM 候选标注 + VLM 排序，融合两种混合定位范式）
+- **P4** AI 定位结果会话级 LRU 缓存
 
 ------
 

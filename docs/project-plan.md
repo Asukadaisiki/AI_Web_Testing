@@ -48,7 +48,45 @@
 
 ### 未开始
 
-- AI 视觉定位 `_deep_locate` 两阶段精度优化（设计文档 2.3 节）：先粗定位区域 → 裁剪放大 → 精确定位 → 坐标回算，含 `_locate_section`、`_expand_search_area`、`_crop_and_scale`
+#### 混合定位精度优化（Locator 层增强）
+
+以下五项按依赖关系和投入产出比排序，建议按序推进：
+
+**P0 — elementFromPoint 遮挡穿透**
+- 问题：`elementFromPoint` 只返回 z-index 最顶层元素，toast / loading overlay / cookie banner 会遮挡目标
+- 方案：检测返回元素是否为常见遮挡物（`role="alert"`, `class*="overlay"`, `class*="toast"` 等），命中时改用 `elementsFromPoint` 取整个 z-stack 逐个匹配
+- 涉及文件：`backend/app/locators/fallback.py` (`_snapshot_dom_element_at_point`)
+- 投入：小 | 收益：高（消除一类系统性误判）
+
+**P1 — DOM 交叉验证增强**
+- 问题：当前 `_dom_snapshot_matches_target` 做严格 token 子集检查，过于刚性（"删除"能匹配"删除账户"，但"提交订单"无法匹配 aria-label="提交"）
+- 方案：引入 Jaccard 相似度阈值（如 ≥ 0.5）作为模糊匹配兜底；对中文 target 增加分词粒度（单字 token 回退）
+- 涉及文件：`backend/app/locators/fallback.py` (`_dom_snapshot_matches_target`, `_tokenize`)
+- 投入：小 | 收益：中（减少 AI 定位正确但验证误拒的情况）
+
+**P2 — AI 视觉定位 `deep_locate` 两阶段精度优化**
+- 设计文档 2.3 节已完整描述，当前 `ai_visual.py` 未实现
+- 阶段 1：VLM 粗定位区域（section）→ 扩展搜索区域（至少 400×400）→ 裁剪放大 2× → 阶段 2 精确定位 → 坐标回算
+- 需实现：`_locate_section`、`_expand_search_area`、`_crop_and_scale`（依赖 Pillow）
+- 涉及文件：`backend/app/locators/ai_visual.py`
+- 投入：中 | 收益：高（密集页面定位精度显著提升，参考 Midscene 核心优化策略）
+
+**P3 — Tier 1 + Tier 2 融合（DOM 候选检索 + VLM 排序）**
+- 问题：当前 Tier 1 和 Tier 2 完全串行独立，Tier 1 多候选分数接近时直接放弃进入纯视觉定位
+- 方案：当 Tier 1 找到多个候选且最高分与次高分差距 < 阈值时，在截图上标注候选位置（画框/编号），发送给 VLM 做排序选择，直接复用 DOM locator
+- 优势：候选已是合法 DOM 元素，不存在 `elementFromPoint` 反查失败的问题；比纯 bbox 定位更可靠
+- 涉及文件：`backend/app/locators/fallback.py` (新增 `_try_vlm_rank_candidates`)、`backend/app/locators/ai_visual.py` (新增排序 prompt)
+- 投入：中 | 收益：高（本质上是方式一"DOM 候选 + VLM 排序"与方式二的融合）
+
+**P4 — AI 定位结果缓存**
+- 问题：同一页面同一 target 重复出现时（循环操作场景），每次都调用 VLM
+- 方案：在 `resolve_with_fallback` 中增加 `(page_url_pattern, target) → selector` 的内存缓存（LRU），AI 定位成功后写入缓存，后续命中时直接用缓存的 selector；失效时清除
+- 与 Tier 0 修正记录的区别：缓存是会话级自动产生、无需人工介入；修正记录是跨会话持久化、人工提交
+- 涉及文件：`backend/app/locators/fallback.py` (缓存层)、`backend/app/locators/ai_visual.py`
+- 投入：小 | 收益：中（减少重复 VLM 调用，降低延迟和成本）
+
+#### 其他未开始项
+
 - 默认开启的真实 AI 视觉定位接入与 VLM 模型配置管理页
 - 登录页与平台认证体系
 - 更完整的浏览器级端到端回归矩阵
@@ -57,10 +95,13 @@
 
 当前主线为 **AI 生成 DSL 持续深化**，基于已有治理数据（`top_rejection_reasons` / `model_outcome_breakdown` / `generation_mode_breakdown`）驱动 prompt 优化。
 
+DSL 深化告一段落后，建议进入 **混合定位精度优化** 阶段，按 P0 → P4 顺序推进。其中 P0（遮挡穿透）和 P1（验证增强）改动小、收益确定，可作为过渡期穿插完成；P2（deepLocate）和 P3（Tier 1+2 融合）是核心投入项，建议各自独立验证。
+
 后续可选方向：
 
+- **混合定位精度优化 P0–P4**：遮挡穿透 → 验证增强 → deepLocate → DOM+VLM 融合 → 缓存层。
+- **真实 AI 视觉定位接入**：VLM 配置页、默认开启策略与模型管理（P2/P3 的前置条件）。
 - **登录页与认证体系**：平台登录入口、用户会话与权限边界。
-- **真实 AI 视觉定位接入**：VLM 配置页、默认开启策略与模型管理。
 - **corrections 运维继续细化**：跨修正目标分析、更明确的状态反馈。
 
 混合定位系统技术设计参见 [`docs/hybrid-locate-and-intervention-design.md`](./hybrid-locate-and-intervention-design.md)。
