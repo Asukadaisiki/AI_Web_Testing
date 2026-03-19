@@ -478,3 +478,22 @@
   - 执行 `cd backend && uv run pytest tests/unit/test_locator_fallback.py`
   - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py tests/unit/test_models.py tests/unit/test_ai_visual.py tests/unit/test_locator_fallback.py`
 - 关联记录：`docs/execution-log.md` 2026-03-19
+
+## BUG-021 | deep_locate 超时预算与 fallback 可维护性不足，导致延迟失控和排障困难
+
+- 日期：2026-03-19
+- 状态：fixed
+- 来源：代码 review follow-up
+- 描述：`_deep_locate()` 先做 section 粗定位、再做局部精定位，两次都直接复用同一 `timeout_seconds`，最坏情况下总耗时接近 2 倍配置值；同时 `fallback.py` 直接依赖 `semantic.py` 的私有 `_` 函数，且候选收集阶段异常被静默吞掉，后续一旦 semantic 内部重构或 rerank 采集失败，定位问题很难追踪。
+- 影响：AI visual 打开后，定位延迟可能超出用户预期；semantic/fallback 之间耦合过深，后续维护成本高，rerank 路径异常也缺少排障线索。
+- 根因：初版优先把 deep locate 路径跑通，没有把两阶段调用纳入统一超时预算；fallback 为复用现有打分逻辑，直接越过模块边界调用私有实现。
+- 处理：
+  - 在 `backend/app/locators/semantic.py` 新增公共 `collect_semantic_candidates()` 接口与 `SemanticCandidateEntry`
+  - 在 `backend/app/locators/fallback.py` 改为调用公共接口，补充 debug 日志、负索引保护和阈值注释
+  - 在 `backend/app/locators/ai_visual.py` 为 `deep_locate` 引入总预算制超时分配，`Pillow` 改为 lazy import，并对无效 base64 给出明确 `ValueError`
+  - 恢复 `_extract_json_object()` 关键注释，修正前端测试缩进
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_ai_visual.py tests/unit/test_locator_fallback.py tests/unit/test_locator_semantic.py tests/unit/test_dsl_validation.py`
+  - 执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py -k reranked_by_vlm`
+  - 执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx`
+- 关联记录：`docs/execution-log.md` 2026-03-19（follow-up）

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 import threading
@@ -11,8 +12,6 @@ from io import BytesIO
 from time import monotonic
 from typing import Any, Literal
 from urllib import request
-
-from PIL import Image
 
 from app.core.config import get_settings
 
@@ -27,6 +26,8 @@ RANK_CANDIDATE_SYSTEM_PROMPT = """You rank numbered UI candidates in a screensho
 Return JSON only in the shape {"candidate_index": number, "errors":["..."]?}."""
 
 logger = logging.getLogger(__name__)
+DEEP_LOCATE_SECTION_TIMEOUT_RATIO = 0.4
+MIN_STAGE_TIMEOUT_SECONDS = 0.5
 
 
 @dataclass
@@ -204,6 +205,13 @@ def _deep_locate(
     base_url: str,
     timeout_seconds: float,
 ) -> AILocateResult | None:
+    deadline = monotonic() + max(timeout_seconds, MIN_STAGE_TIMEOUT_SECONDS)
+    section_timeout = _compute_stage_timeout(
+        deadline=deadline,
+        requested_seconds=max(MIN_STAGE_TIMEOUT_SECONDS, timeout_seconds * DEEP_LOCATE_SECTION_TIMEOUT_RATIO),
+    )
+    if section_timeout is None:
+        return None
     section_result = _locate_section(
         screenshot_base64=screenshot_base64,
         target_description=target_description,
@@ -213,8 +221,12 @@ def _deep_locate(
         api_key=api_key,
         model=model,
         base_url=base_url,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=section_timeout,
     )
+    remaining_timeout = _remaining_timeout_seconds(deadline)
+    if remaining_timeout is None:
+        return None
+
     if section_result is None:
         return _single_locate(
             screenshot_base64=screenshot_base64,
@@ -225,7 +237,7 @@ def _deep_locate(
             api_key=api_key,
             model=model,
             base_url=base_url,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=remaining_timeout,
         )
 
     search_area = _expand_search_area(
@@ -247,7 +259,7 @@ def _deep_locate(
         api_key=api_key,
         model=model,
         base_url=base_url,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=remaining_timeout,
     )
     if local_result is None:
         return None
@@ -326,6 +338,8 @@ def _crop_and_scale(
     area: tuple[int, int, int, int],
     scale: int = 2,
 ) -> tuple[str, tuple[int, int]]:
+    from PIL import Image
+
     image = Image.open(BytesIO(_decode_base64_image(screenshot_base64)))
     cropped = image.crop(area)
     scaled = cropped.resize((max(1, cropped.width * scale), max(1, cropped.height * scale)))
@@ -336,7 +350,10 @@ def _crop_and_scale(
 
 def _decode_base64_image(value: str) -> bytes:
     payload = value.split(",", 1)[1] if "," in value else value
-    return base64.b64decode(payload)
+    try:
+        return base64.b64decode(payload, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("Invalid base64 image payload.") from exc
 
 
 def _call_vlm(
@@ -514,6 +531,7 @@ def _extract_json_object(response_text: str) -> str:
     if not stripped:
         return stripped
 
+    # Strip markdown code fences.
     if stripped.startswith("```"):
         first_newline = stripped.find("\n")
         if first_newline != -1:
@@ -521,6 +539,7 @@ def _extract_json_object(response_text: str) -> str:
             if end_fence > first_newline:
                 stripped = stripped[first_newline + 1 : end_fence].strip()
 
+    # Find the first brace-balanced JSON object.
     in_string = False
     escape_next = False
     depth = 0
@@ -546,7 +565,22 @@ def _extract_json_object(response_text: str) -> str:
             if depth == 0 and start != -1:
                 return stripped[start : i + 1]
 
+    # Fallback: return original text for downstream JSON parsing/logging.
     return stripped
+
+
+def _remaining_timeout_seconds(deadline: float) -> float | None:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return None
+    return remaining
+
+
+def _compute_stage_timeout(*, deadline: float, requested_seconds: float) -> float | None:
+    remaining = _remaining_timeout_seconds(deadline)
+    if remaining is None:
+        return None
+    return min(remaining, max(MIN_STAGE_TIMEOUT_SECONDS, requested_seconds))
 
 
 def _normalize_bbox(

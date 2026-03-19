@@ -54,6 +54,12 @@
 - 执行动作：为 `dsl_generation_runs` 增加 retry context 字段与 Alembic 迁移；扩展 `GenerateDslRequest` / AI settings 统计 schema；在 DSL 生成器中接入“拒绝原因 -> 固定 prompt 策略”与重试版 `prompt_version`；工作台支持“拒绝后按原因重试生成”；AI Settings 页面新增重试成效概览与详情字段；fallback locator 增加 overlay 穿透、严格匹配 + Jaccard 校验、中文单字回退；`ai_visual` 落地 `deep_locate` 两阶段定位与 DOM 多候选 VLM 排序接口
 - 验证：后端单测 `71 passed`，浏览器集成 `1 passed`，前端 `29 passed`，前端构建成功
 
+## 2026-03-19（follow-up）
+
+- 任务：修复 review 指出的 locator/测试可维护性问题
+- 执行动作：在 `semantic.py` 暴露公共候选收集接口，移除 `fallback.py` 对私有 `_` 函数的依赖；为 `deep_locate` 引入总超时预算；`_crop_and_scale` 改为 lazy import Pillow；补充无效 base64 的明确报错、负索引防御校验、debug 日志与阈值注释；恢复 JSON 提取注释；修正 `AISettingsPage.test.tsx` 缩进
+- 验证：后端相关单测 `62 passed`，浏览器集成 `1 passed`，前端测试 `3 passed`
+
 ## 2026-03-16 11:35
 
 - 任务：AI 生成 DSL 深化第一批

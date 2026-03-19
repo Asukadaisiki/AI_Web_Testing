@@ -11,9 +11,7 @@ from app.locators.corrections import CorrectionRecord, CorrectionStore
 from app.locators.semantic import (
     LocatorResolutionError,
     ResolvedLocator,
-    _build_candidate_builders,
-    _build_candidate_evidence,
-    _score_candidate,
+    collect_semantic_candidates,
     resolve_semantic_locator,
 )
 from app.schemas.executions import DOMElementSnapshot, LocatorTrace, LocatorCandidateEvidence
@@ -21,7 +19,11 @@ from app.schemas.executions import DOMElementSnapshot, LocatorTrace, LocatorCand
 
 logger = logging.getLogger(__name__)
 TOKEN_PATTERN = re.compile(r"[0-9a-z]+|[\u4e00-\u9fff]+", re.IGNORECASE)
+# Jaccard fallback is intentionally conservative so near-miss tokens can match
+# without reopening obvious short-substring false positives like "ok"/"booking".
 JACCARD_THRESHOLD = 0.5
+# Only rerank when the top semantic candidates are genuinely close, otherwise
+# keep the cheaper DOM-only decision path.
 SEMANTIC_RERANK_SCORE_GAP = 5
 SELECTOR_HELPERS_JS = """
 const buildCssSelector = (node) => {
@@ -509,7 +511,7 @@ def _try_vlm_rank_candidates(
                 for index, entry in enumerate(candidate_entries)
             ],
         )
-        if ranked_index is None or ranked_index >= len(candidate_entries):
+        if ranked_index is None or ranked_index < 0 or ranked_index >= len(candidate_entries):
             return None
 
         selected_entry = candidate_entries[ranked_index]
@@ -547,41 +549,40 @@ def _collect_rankable_semantic_candidates(
     require_enabled: bool,
 ) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
-    candidate_builders = _build_candidate_builders(page, target.strip(), prefer_input=prefer_input)
-    for strategy, build_locator in candidate_builders:
+    semantic_candidates = collect_semantic_candidates(
+        page,
+        target,
+        prefer_input=prefer_input,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+        max_per_strategy=3,
+        max_candidates=10,
+    )
+    for entry in semantic_candidates:
         try:
-            locator_collection = build_locator()
-            count = locator_collection.count()
-        except Exception:
-            continue
-
-        for index in range(min(count, 3)):
-            try:
-                candidate_locator = locator_collection.nth(index)
-                candidate = _build_candidate_evidence(candidate_locator, strategy)
-                scored_candidate = _score_candidate(
-                    candidate,
-                    strategy=strategy,
-                    require_visible=require_visible,
-                    require_enabled=require_enabled,
-                )
-                if scored_candidate.rejected_reasons:
-                    continue
-                payload = candidate_locator.evaluate(CAPTURE_DOM_CANDIDATE_SCRIPT)
-                if payload is None:
-                    continue
-                snapshot = DOMElementSnapshot.model_validate(payload)
-                if snapshot.rect is None:
-                    continue
-                entries.append(
-                    {
-                        "locator": candidate_locator,
-                        "candidate": scored_candidate,
-                        "snapshot": snapshot,
-                    }
-                )
-            except Exception:
+            if entry.candidate.rejected_reasons:
                 continue
+            payload = entry.locator.evaluate(CAPTURE_DOM_CANDIDATE_SCRIPT)
+            if payload is None:
+                continue
+            snapshot = DOMElementSnapshot.model_validate(payload)
+            if snapshot.rect is None:
+                continue
+            entries.append(
+                {
+                    "locator": entry.locator,
+                    "candidate": entry.candidate,
+                    "snapshot": snapshot,
+                }
+            )
+        except Exception as exc:
+            logger.debug(
+                "Skipping semantic rerank candidate for target=%s strategy=%s error=%s",
+                target,
+                entry.strategy,
+                exc,
+            )
+            continue
 
     entries.sort(key=lambda entry: entry["candidate"].score, reverse=True)
     return entries[:5]

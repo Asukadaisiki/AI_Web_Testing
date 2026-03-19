@@ -26,6 +26,13 @@ class ResolvedLocator:
     trace: LocatorTrace
 
 
+@dataclass(frozen=True)
+class SemanticCandidateEntry:
+    strategy: str
+    locator: object
+    candidate: LocatorCandidateEvidence
+
+
 def resolve_semantic_locator(
     page,
     target: str,
@@ -35,55 +42,26 @@ def resolve_semantic_locator(
     require_enabled: bool = False,
 ) -> ResolvedLocator:
     normalized_target = target.strip()
-    candidate_builders = _build_candidate_builders(page, normalized_target, prefer_input=prefer_input)
+    entries = collect_semantic_candidates(
+        page,
+        normalized_target,
+        prefer_input=prefer_input,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+    candidates = [entry.candidate for entry in entries[:5]]
+    selected_entry = next((entry for entry in entries if not entry.candidate.rejected_reasons), None)
 
-    candidates: list[LocatorCandidateEvidence] = []
-    ranked_candidates: list[tuple[int, int, object, LocatorCandidateEvidence, str]] = []
-    selected_locator = None
-    selected_candidate = None
-    selected_strategy = None
-
-    for strategy, build_locator in candidate_builders:
-        try:
-            locator_collection = build_locator()
-            count = locator_collection.count()
-        except Exception:
-            continue
-
-        for index in range(min(count, 3)):
-            try:
-                candidate_locator = locator_collection.nth(index)
-                candidate = _build_candidate_evidence(candidate_locator, strategy)
-            except Exception:
-                continue
-
-            scored_candidate = _score_candidate(
-                candidate,
-                strategy=strategy,
-                require_visible=require_visible,
-                require_enabled=require_enabled,
-            )
-            candidates.append(scored_candidate)
-            if not scored_candidate.rejected_reasons:
-                ranked_candidates.append((scored_candidate.score, -len(ranked_candidates), candidate_locator, scored_candidate, strategy))
-
-    if ranked_candidates:
-        _, _, selected_locator, selected_candidate, selected_strategy = max(ranked_candidates, key=lambda item: (item[0], item[1]))
-    candidates = sorted(candidates, key=lambda item: item.score, reverse=True)
-    if selected_candidate is not None and all(candidate != selected_candidate for candidate in candidates[:5]):
-        candidates = [selected_candidate, *[candidate for candidate in candidates if candidate != selected_candidate]]
-    candidates = candidates[:5]
-
-    if selected_locator is not None and selected_candidate is not None and selected_strategy is not None:
+    if selected_entry is not None:
         return ResolvedLocator(
-            strategy=selected_strategy,
-            locator=selected_locator,
+            strategy=selected_entry.strategy,
+            locator=selected_entry.locator,
             trace=LocatorTrace(
                 target=normalized_target,
-                match_strategy=selected_strategy,
+                match_strategy=selected_entry.strategy,
                 candidates=candidates,
-                selected_candidate=selected_candidate,
-                selection_reason=_build_selection_reason(selected_candidate),
+                selected_candidate=selected_entry.candidate,
+                selection_reason=_build_selection_reason(selected_entry.candidate),
             ),
         )
 
@@ -100,6 +78,52 @@ def resolve_semantic_locator(
             failure_reason=failure_reason,
         ),
     )
+
+
+def collect_semantic_candidates(
+    page,
+    target: str,
+    *,
+    prefer_input: bool = False,
+    require_visible: bool = True,
+    require_enabled: bool = False,
+    max_per_strategy: int = 3,
+    max_candidates: int = 5,
+) -> list[SemanticCandidateEntry]:
+    normalized_target = target.strip()
+    candidate_builders = _build_candidate_builders(page, normalized_target, prefer_input=prefer_input)
+    entries: list[SemanticCandidateEntry] = []
+
+    for strategy, build_locator in candidate_builders:
+        try:
+            locator_collection = build_locator()
+            count = locator_collection.count()
+        except Exception:
+            continue
+
+        for index in range(min(count, max_per_strategy)):
+            try:
+                candidate_locator = locator_collection.nth(index)
+                candidate = _build_candidate_evidence(candidate_locator, strategy)
+            except Exception:
+                continue
+
+            scored_candidate = _score_candidate(
+                candidate,
+                strategy=strategy,
+                require_visible=require_visible,
+                require_enabled=require_enabled,
+            )
+            entries.append(
+                SemanticCandidateEntry(
+                    strategy=strategy,
+                    locator=candidate_locator,
+                    candidate=scored_candidate,
+                )
+            )
+
+    entries.sort(key=lambda entry: entry.candidate.score, reverse=True)
+    return entries[:max_candidates]
 
 
 def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[tuple[str, object]]:

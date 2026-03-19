@@ -9,6 +9,8 @@ from app.core.config import get_settings
 from app.locators.ai_visual import (
     AILocateResult,
     RUNTIME_STATE,
+    _decode_base64_image,
+    _deep_locate,
     _extract_json_object,
     _normalize_bbox,
     _parse_bbox_response,
@@ -224,6 +226,56 @@ def test_dom_snapshot_target_matching_uses_whole_tokens() -> None:
 
     assert _dom_snapshot_matches_target(snapshot, "booking")
     assert not _dom_snapshot_matches_target(snapshot, "ok")
+
+
+def test_decode_base64_image_raises_clear_error_for_invalid_payload() -> None:
+    try:
+        _decode_base64_image("not-base64!!")
+    except ValueError as exc:
+        assert str(exc) == "Invalid base64 image payload."
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("Expected invalid base64 payload to raise ValueError.")
+
+
+def test_deep_locate_respects_total_timeout_budget(monkeypatch) -> None:
+    monotonic_values = iter([100.0, 100.0, 100.8, 101.2])
+    section_calls: list[float] = []
+    single_calls: list[float] = []
+
+    monkeypatch.setattr("app.locators.ai_visual.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(
+        "app.locators.ai_visual._locate_section",
+        lambda **kwargs: section_calls.append(kwargs["timeout_seconds"])
+        or AILocateResult(center=(100, 60), bbox=(50, 20, 150, 100), confidence=0.4, raw_response="section"),
+    )
+    monkeypatch.setattr(
+        "app.locators.ai_visual._crop_and_scale",
+        lambda **_kwargs: ("ZmFrZQ==", (10, 20)),
+    )
+    monkeypatch.setattr(
+        "app.locators.ai_visual._single_locate",
+        lambda **kwargs: single_calls.append(kwargs["timeout_seconds"])
+        or AILocateResult(center=(40, 20), bbox=(20, 10, 60, 30), confidence=0.7, raw_response="local"),
+    )
+
+    result = _deep_locate(
+        screenshot_base64="ZmFrZQ==",
+        target_description="登录按钮",
+        image_width=800,
+        image_height=600,
+        model_family="gpt-4o",
+        api_key="test-key",
+        model="gpt-4o-mini",
+        base_url="https://api.openai.com/v1",
+        timeout_seconds=1.0,
+    )
+
+    assert result is not None
+    assert len(section_calls) == 1
+    assert len(single_calls) == 1
+    assert section_calls[0] <= 1.0
+    assert single_calls[0] <= 0.2 + 1e-9
+    assert result.center == (30, 30)
 
 
 # --- _extract_json_object tests ---
