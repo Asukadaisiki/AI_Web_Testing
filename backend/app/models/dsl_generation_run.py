@@ -58,6 +58,20 @@ class DslGenerationRun(Base):
             ")",
             name="ck_dsl_generation_runs_rejection_reason_code",
         ),
+        CheckConstraint(
+            "retry_reason_code IS NULL OR retry_reason_code IN ("
+            "'wrong_actions', 'invalid_structure', 'context_mismatch', 'bad_contracts', 'other'"
+            ")",
+            name="ck_dsl_generation_runs_retry_reason_code",
+        ),
+        CheckConstraint(
+            "("
+            "retry_from_generation_id IS NULL AND retry_reason_code IS NULL AND retry_note IS NULL"
+            ") OR ("
+            "retry_from_generation_id IS NOT NULL AND retry_reason_code IS NOT NULL"
+            ")",
+            name="ck_dsl_generation_runs_retry_context",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -83,6 +97,14 @@ class DslGenerationRun(Base):
     prompt_sha256: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
     prompt_variant: Mapped[str] = mapped_column(String(32), nullable=False, default="baseline_draft")
+    retry_from_generation_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("dsl_generation_runs.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    retry_reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retry_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     request_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     generation_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     import_mode: Mapped[str] = mapped_column(String(32), nullable=False)

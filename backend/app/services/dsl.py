@@ -12,12 +12,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.ai.dsl_generator import (
-    AI_DSL_PROMPT_VERSION,
     DslGenerationConfigError,
     DslGenerationError,
     generate_case_draft,
     resolve_generation_mode,
     resolve_generation_profile,
+    resolve_prompt_version,
 )
 from app.core.config import get_settings
 from app.models import DslGenerationRun, Project, TestCase, User
@@ -45,6 +45,7 @@ from app.schemas.settings import (
     AIDslGenerationRejectionReasonCount,
     AIDslGenerationRejectionReasonByVariant,
     AIDslGenerationPromptVariantBreakdown,
+    AIDslGenerationRetryAcceptanceByReason,
     AIDslGenerationStats,
 )
 from app.services.cases import EntityNotFoundError
@@ -95,6 +96,8 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
         _ensure_project_exists(session, payload.project_id)
     if payload.case_id is not None:
         _ensure_case_exists(session, payload.case_id)
+    if payload.retry_from_generation_id is not None:
+        _ensure_retry_generation_exists(session, payload.retry_from_generation_id)
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode)
 
     with _RUNTIME_STATS_LOCK:
@@ -327,6 +330,36 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         )
         or 0
     )
+    retry_requests = (
+        session.scalar(
+            select(func.count())
+            .select_from(DslGenerationRun)
+            .where(DslGenerationRun.retry_from_generation_id.is_not(None))
+        )
+        or 0
+    )
+    retry_accepted_count = (
+        session.scalar(
+            select(func.count())
+            .select_from(DslGenerationRun)
+            .where(
+                DslGenerationRun.retry_from_generation_id.is_not(None),
+                DslGenerationRun.feedback_status == "accepted",
+            )
+        )
+        or 0
+    )
+    retry_rejected_count = (
+        session.scalar(
+            select(func.count())
+            .select_from(DslGenerationRun)
+            .where(
+                DslGenerationRun.retry_from_generation_id.is_not(None),
+                DslGenerationRun.feedback_status == "rejected",
+            )
+        )
+        or 0
+    )
     top_error_rows = session.execute(
         select(
             DslGenerationRun.error_type,
@@ -423,6 +456,19 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         .group_by(DslGenerationRun.prompt_variant, DslGenerationRun.rejection_reason_code)
         .order_by(func.count().desc(), DslGenerationRun.prompt_variant.asc(), DslGenerationRun.rejection_reason_code.asc())
     ).all()
+    retry_reason_rows = session.execute(
+        select(
+            DslGenerationRun.retry_reason_code,
+            func.count().label("retry_requests"),
+            func.sum(case((DslGenerationRun.feedback_status == "accepted", 1), else_=0)).label("accepted_count"),
+        )
+        .where(
+            DslGenerationRun.retry_from_generation_id.is_not(None),
+            DslGenerationRun.retry_reason_code.is_not(None),
+        )
+        .group_by(DslGenerationRun.retry_reason_code)
+        .order_by(func.count().desc(), DslGenerationRun.retry_reason_code.asc())
+    ).all()
 
     return AIDslGenerationStats(
         total_requests=total_requests,
@@ -441,6 +487,9 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         last_24h_auto_repair_rate=(
             last_24h_auto_repair_count / last_24h_requests if last_24h_requests else 0.0
         ),
+        retry_requests=retry_requests,
+        retry_accepted_count=retry_accepted_count,
+        retry_rejected_count=retry_rejected_count,
         top_error_types=[
             AIDslGenerationErrorTypeCount(error_type=error_type, count=count)
             for error_type, count in top_error_rows
@@ -505,6 +554,16 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
             )
             for generation_mode, total_requests, success_count, accepted_count, rejected_count in generation_mode_rows
         ],
+        retry_acceptance_by_reason=[
+            AIDslGenerationRetryAcceptanceByReason(
+                rejection_reason_code=rejection_reason_code,
+                retry_requests=retry_requests,
+                accepted_count=accepted_count or 0,
+                acceptance_rate=((accepted_count or 0) / retry_requests if retry_requests else 0.0),
+            )
+            for rejection_reason_code, retry_requests, accepted_count in retry_reason_rows
+            if rejection_reason_code is not None
+        ],
     )
 
 
@@ -537,6 +596,11 @@ def _ensure_project_exists(session: Session, project_id: int) -> None:
 def _ensure_case_exists(session: Session, case_id: int) -> None:
     if session.get(TestCase, case_id) is None:
         raise EntityNotFoundError(f"Case {case_id} not found.")
+
+
+def _ensure_retry_generation_exists(session: Session, generation_id: int) -> None:
+    if session.get(DslGenerationRun, generation_id) is None:
+        raise EntityNotFoundError(f"DSL generation run {generation_id} not found.")
 
 
 def _get_generation_run_for_feedback(session: Session, generation_id: int) -> DslGenerationRun | None:
@@ -578,14 +642,18 @@ def _persist_generation_run(
         payload=payload,
         generation_mode=generation_mode,
     )
+    prompt_version = resolve_prompt_version(payload)
     generation_run = DslGenerationRun(
         actor_user_id=payload.actor_user_id,
         project_id=payload.project_id,
         case_id=payload.case_id,
         prompt_preview=_build_prompt_preview(payload.prompt),
         prompt_sha256=_hash_prompt(payload.prompt),
-        prompt_version=AI_DSL_PROMPT_VERSION,
+        prompt_version=prompt_version,
         prompt_variant=generation_meta.prompt_variant if generation_meta is not None else derived_prompt_variant,
+        retry_from_generation_id=payload.retry_from_generation_id,
+        retry_reason_code=payload.retry_reason_code,
+        retry_note=payload.retry_note,
         request_base_url=payload.base_url,
         generation_mode=generation_mode,
         import_mode=payload.import_mode,
@@ -655,6 +723,9 @@ def _to_stored_dsl_generation_run_summary(record: DslGenerationRun) -> StoredDsl
         project_id=record.project_id,
         case_id=record.case_id,
         prompt_version=record.prompt_version,
+        retry_from_generation_id=record.retry_from_generation_id,
+        retry_reason_code=record.retry_reason_code,
+        retry_note=record.retry_note,
         error_type=record.error_type,
         error_message=record.error_message,
         repaired_invalid_actions=record.repaired_invalid_actions,

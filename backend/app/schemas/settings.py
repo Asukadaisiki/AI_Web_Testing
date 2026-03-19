@@ -115,6 +115,13 @@ class AIDslGenerationModeBreakdown(SettingsModel):
     rejected_count: int = Field(ge=0)
 
 
+class AIDslGenerationRetryAcceptanceByReason(SettingsModel):
+    rejection_reason_code: Literal["wrong_actions", "invalid_structure", "context_mismatch", "bad_contracts", "other"]
+    retry_requests: int = Field(ge=1)
+    accepted_count: int = Field(ge=0)
+    acceptance_rate: float = Field(ge=0, le=1)
+
+
 class AIDslGenerationStats(SettingsModel):
     total_requests: int = Field(ge=0)
     success_count: int = Field(ge=0)
@@ -130,6 +137,9 @@ class AIDslGenerationStats(SettingsModel):
     last_24h_success_count: int = Field(default=0, ge=0)
     last_24h_failure_count: int = Field(default=0, ge=0)
     last_24h_auto_repair_rate: float = Field(default=0.0, ge=0, le=1)
+    retry_requests: int = Field(default=0, ge=0)
+    retry_accepted_count: int = Field(default=0, ge=0)
+    retry_rejected_count: int = Field(default=0, ge=0)
     top_error_types: list[AIDslGenerationErrorTypeCount] = Field(default_factory=list)
     accepted_import_mode_breakdown: list[AIDslGenerationImportModeCount] = Field(default_factory=list)
     top_rejection_reasons: list[AIDslGenerationRejectionReasonCount] = Field(default_factory=list)
@@ -138,6 +148,7 @@ class AIDslGenerationStats(SettingsModel):
     rejection_reason_by_variant: list[AIDslGenerationRejectionReasonByVariant] = Field(default_factory=list)
     model_outcome_breakdown: list[AIDslGenerationModelOutcome] = Field(default_factory=list)
     generation_mode_breakdown: list[AIDslGenerationModeBreakdown] = Field(default_factory=list)
+    retry_acceptance_by_reason: list[AIDslGenerationRetryAcceptanceByReason] = Field(default_factory=list)
 
 
 class AISettingsOverviewResponse(SettingsModel):

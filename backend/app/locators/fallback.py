@@ -6,14 +6,23 @@ import base64
 import logging
 import re
 
-from app.locators.ai_visual import AILocateResult, locate_element_by_vision
+from app.locators.ai_visual import AILocateResult, AIVisionCandidateBox, locate_element_by_vision, rank_candidates_by_vision
 from app.locators.corrections import CorrectionRecord, CorrectionStore
-from app.locators.semantic import LocatorResolutionError, ResolvedLocator, resolve_semantic_locator
-from app.schemas.executions import DOMElementSnapshot, LocatorTrace
+from app.locators.semantic import (
+    LocatorResolutionError,
+    ResolvedLocator,
+    _build_candidate_builders,
+    _build_candidate_evidence,
+    _score_candidate,
+    resolve_semantic_locator,
+)
+from app.schemas.executions import DOMElementSnapshot, LocatorTrace, LocatorCandidateEvidence
 
 
 logger = logging.getLogger(__name__)
 TOKEN_PATTERN = re.compile(r"[0-9a-z]+|[\u4e00-\u9fff]+", re.IGNORECASE)
+JACCARD_THRESHOLD = 0.5
+SEMANTIC_RERANK_SCORE_GAP = 5
 SELECTOR_HELPERS_JS = """
 const buildCssSelector = (node) => {
   if (!(node instanceof Element)) {
@@ -70,10 +79,34 @@ SNAPSHOT_DOM_AT_POINT_SCRIPT = (
     """
     + SELECTOR_HELPERS_JS
     + """
-      const element = document.elementFromPoint(pointX, pointY);
-      if (!element) {
+      const isOverlayLike = (element) => {
+        if (!(element instanceof Element)) {
+          return false;
+        }
+        const role = (element.getAttribute("role") || "").toLowerCase();
+        const className = (element.className || "").toString().toLowerCase();
+        const id = (element.id || "").toLowerCase();
+        return (
+          role === "alert" ||
+          role === "dialog" ||
+          className.includes("overlay") ||
+          className.includes("toast") ||
+          className.includes("loading") ||
+          className.includes("modal") ||
+          id.includes("overlay") ||
+          id.includes("toast") ||
+          id.includes("loading")
+        );
+      };
+
+      const stack = document.elementsFromPoint(pointX, pointY);
+      if (!stack.length) {
         return null;
       }
+      const topElement = stack[0];
+      const element = isOverlayLike(topElement)
+        ? stack.find((candidate) => !isOverlayLike(candidate)) || topElement
+        : topElement;
 
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
@@ -81,6 +114,41 @@ SNAPSHOT_DOM_AT_POINT_SCRIPT = (
       const enabled = !(element.disabled) && element.getAttribute("aria-disabled") !== "true";
       const text = (element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
 
+      return {
+        tag: element.tagName.toLowerCase(),
+        text: text || null,
+        role: element.getAttribute("role"),
+        aria_label: element.getAttribute("aria-label"),
+        placeholder: element.getAttribute("placeholder"),
+        data_testid: element.getAttribute("data-testid"),
+        css_selector: buildCssSelector(element),
+        xpath: buildXPath(element),
+        rect: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        },
+        visible,
+        enabled,
+      };
+    }
+    """
+)
+CAPTURE_DOM_CANDIDATE_SCRIPT = (
+    """
+    (element) => {
+    """
+    + SELECTOR_HELPERS_JS
+    + """
+      if (!(element instanceof Element)) {
+        return null;
+      }
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      const enabled = !(element.disabled) && element.getAttribute("aria-disabled") !== "true";
+      const text = (element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160);
       return {
         tag: element.tagName.toLowerCase(),
         text: text || null,
@@ -200,6 +268,16 @@ def resolve_with_fallback(
         )
     except LocatorResolutionError as exc:
         tier1_trace = exc.trace
+        reranked = _try_vlm_rank_candidates(
+            page,
+            target=target,
+            trace=tier1_trace,
+            prefer_input=prefer_input,
+            require_visible=require_visible,
+            require_enabled=require_enabled,
+        )
+        if reranked is not None:
+            return reranked
 
     ai_candidate = _try_ai_visual_locate(page, target=target)
     if ai_candidate is not None:
@@ -331,16 +409,30 @@ def _snapshot_dom_element_at_point(page, x: int, y: int) -> DOMElementSnapshot |
 
 
 def _dom_snapshot_matches_target(snapshot: DOMElementSnapshot, target: str) -> bool:
-    target_tokens = _tokenize(target)
-    if not target_tokens:
-        return False
     semantic_fields = [
         snapshot.text,
         snapshot.aria_label,
         snapshot.placeholder,
         snapshot.data_testid,
     ]
+    normalized_target = _normalize_text(target)
+    if normalized_target and any(_normalize_text(value) == normalized_target for value in semantic_fields if value):
+        return True
+
+    target_tokens = _tokenize(target)
+    if not target_tokens:
+        return False
+
     if any(target_tokens.issubset(_tokenize(value)) for value in semantic_fields if value):
+        return True
+    if any(_jaccard_similarity(target_tokens, _tokenize(value)) >= JACCARD_THRESHOLD for value in semantic_fields if value):
+        return True
+    target_char_tokens = _cjk_char_tokens(target)
+    if target_char_tokens and any(
+        _jaccard_similarity(target_char_tokens, _cjk_char_tokens(value)) >= JACCARD_THRESHOLD
+        for value in semantic_fields
+        if value
+    ):
         return True
 
     fallback_fields = [snapshot.role, snapshot.tag]
@@ -358,6 +450,154 @@ def _tokenize(value: str | None) -> set[str]:
     if not value:
         return set()
     return {token for token in TOKEN_PATTERN.findall(value.casefold()) if token}
+
+
+def _normalize_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return " ".join(value.casefold().split())
+
+
+def _cjk_char_tokens(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {char for char in value if "\u4e00" <= char <= "\u9fff"}
+
+
+def _jaccard_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    union = left | right
+    if not union:
+        return 0.0
+    return len(left & right) / len(union)
+
+
+def _try_vlm_rank_candidates(
+    page,
+    *,
+    target: str,
+    trace: LocatorTrace | None,
+    prefer_input: bool,
+    require_visible: bool,
+    require_enabled: bool,
+) -> ResolvedLocator | None:
+    try:
+        if trace is None or not _should_rerank_trace_candidates(trace.candidates):
+            return None
+
+        candidate_entries = _collect_rankable_semantic_candidates(
+            page,
+            target=target,
+            prefer_input=prefer_input,
+            require_visible=require_visible,
+            require_enabled=require_enabled,
+        )
+        if len(candidate_entries) < 2:
+            return None
+
+        screenshot_base64 = _take_screenshot_base64(page)
+        ranked_index = rank_candidates_by_vision(
+            screenshot_base64=screenshot_base64,
+            target_description=target,
+            candidates=[
+                AIVisionCandidateBox(
+                    index=index,
+                    label=_format_candidate_label(entry["snapshot"], entry["candidate"]),
+                    bbox=_rect_to_bbox(entry["snapshot"]),
+                )
+                for index, entry in enumerate(candidate_entries)
+            ],
+        )
+        if ranked_index is None or ranked_index >= len(candidate_entries):
+            return None
+
+        selected_entry = candidate_entries[ranked_index]
+        candidates = [entry["candidate"] for entry in candidate_entries[:5]]
+        return ResolvedLocator(
+            strategy="semantic_vlm_rank",
+            locator=selected_entry["locator"],
+            trace=LocatorTrace(
+                target=target,
+                match_strategy="semantic_vlm_rank",
+                candidates=candidates,
+                selected_candidate=selected_entry["candidate"],
+                selection_reason=f"VLM ranked close semantic candidates and selected candidate #{ranked_index}.",
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Semantic VLM rerank failed for target=%s error=%s", target, exc)
+        return None
+
+
+def _should_rerank_trace_candidates(candidates: list[LocatorCandidateEvidence]) -> bool:
+    eligible = [candidate for candidate in candidates if not candidate.rejected_reasons]
+    if len(eligible) < 2:
+        return False
+    ordered = sorted(eligible, key=lambda candidate: candidate.score, reverse=True)
+    return (ordered[0].score - ordered[1].score) < SEMANTIC_RERANK_SCORE_GAP
+
+
+def _collect_rankable_semantic_candidates(
+    page,
+    *,
+    target: str,
+    prefer_input: bool,
+    require_visible: bool,
+    require_enabled: bool,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    candidate_builders = _build_candidate_builders(page, target.strip(), prefer_input=prefer_input)
+    for strategy, build_locator in candidate_builders:
+        try:
+            locator_collection = build_locator()
+            count = locator_collection.count()
+        except Exception:
+            continue
+
+        for index in range(min(count, 3)):
+            try:
+                candidate_locator = locator_collection.nth(index)
+                candidate = _build_candidate_evidence(candidate_locator, strategy)
+                scored_candidate = _score_candidate(
+                    candidate,
+                    strategy=strategy,
+                    require_visible=require_visible,
+                    require_enabled=require_enabled,
+                )
+                if scored_candidate.rejected_reasons:
+                    continue
+                payload = candidate_locator.evaluate(CAPTURE_DOM_CANDIDATE_SCRIPT)
+                if payload is None:
+                    continue
+                snapshot = DOMElementSnapshot.model_validate(payload)
+                if snapshot.rect is None:
+                    continue
+                entries.append(
+                    {
+                        "locator": candidate_locator,
+                        "candidate": scored_candidate,
+                        "snapshot": snapshot,
+                    }
+                )
+            except Exception:
+                continue
+
+    entries.sort(key=lambda entry: entry["candidate"].score, reverse=True)
+    return entries[:5]
+
+
+def _rect_to_bbox(snapshot: DOMElementSnapshot) -> tuple[int, int, int, int]:
+    rect = snapshot.rect or {"x": 0, "y": 0, "width": 0, "height": 0}
+    xmin = int(rect["x"])
+    ymin = int(rect["y"])
+    xmax = int(rect["x"] + rect["width"])
+    ymax = int(rect["y"] + rect["height"])
+    return (xmin, ymin, xmax, ymax)
+
+
+def _format_candidate_label(snapshot: DOMElementSnapshot, candidate: LocatorCandidateEvidence) -> str:
+    return snapshot.text or snapshot.aria_label or candidate.preview_text or snapshot.tag
 
 
 __all__ = [

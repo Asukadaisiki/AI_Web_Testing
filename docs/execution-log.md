@@ -48,6 +48,12 @@
 
 - 任务：将 AI DSL 反馈闭环与 feedback ownership 修复同步到 GitHub（两次推送）
 
+## 2026-03-19
+
+- 任务：实现下一阶段计划 M1/M2/M3 主干
+- 执行动作：为 `dsl_generation_runs` 增加 retry context 字段与 Alembic 迁移；扩展 `GenerateDslRequest` / AI settings 统计 schema；在 DSL 生成器中接入“拒绝原因 -> 固定 prompt 策略”与重试版 `prompt_version`；工作台支持“拒绝后按原因重试生成”；AI Settings 页面新增重试成效概览与详情字段；fallback locator 增加 overlay 穿透、严格匹配 + Jaccard 校验、中文单字回退；`ai_visual` 落地 `deep_locate` 两阶段定位与 DOM 多候选 VLM 排序接口
+- 验证：后端单测 `71 passed`，浏览器集成 `1 passed`，前端 `29 passed`，前端构建成功
+
 ## 2026-03-16 11:35
 
 - 任务：AI 生成 DSL 深化第一批

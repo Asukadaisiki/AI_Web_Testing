@@ -131,7 +131,21 @@ class GenerateDslRequest(DSLModel):
     current_steps: list[DSLStep] | None = None
     current_input_contract: list[DSLCaseInputContract] | None = None
     current_output_contract: list[DSLCaseOutputContract] | None = None
+    retry_from_generation_id: int | None = Field(default=None, ge=1)
+    retry_reason_code: DslGenerationRejectionReasonCode | None = None
+    retry_note: str | None = Field(default=None, max_length=1000)
     preserve_contracts: bool = False
+
+    @model_validator(mode="after")
+    def validate_retry_context(self) -> "GenerateDslRequest":
+        if self.retry_from_generation_id is None:
+            if self.retry_reason_code is not None or self.retry_note is not None:
+                raise ValueError("retry_reason_code / retry_note 只能与 retry_from_generation_id 一起提交。")
+            return self
+
+        if self.retry_reason_code is None:
+            raise ValueError("retry_from_generation_id 存在时必须提供 retry_reason_code。")
+        return self
 
 
 class DSLValidationResult(DSLModel):
@@ -197,6 +211,9 @@ class StoredDslGenerationRunSummary(DSLModel):
     project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
     prompt_version: str = Field(min_length=1, max_length=100)
+    retry_from_generation_id: int | None = Field(default=None, ge=1)
+    retry_reason_code: DslGenerationRejectionReasonCode | None = None
+    retry_note: str | None = Field(default=None, max_length=1000)
     error_type: str | None = Field(default=None, max_length=200)
     error_message: str | None = Field(default=None, max_length=2000)
     repaired_invalid_actions: int = Field(ge=0)

@@ -20,6 +20,7 @@ from app.schemas.dsl import (
     GenerateDslBaseUrlSource,
     DslGenerationContextProfile,
     DslGenerationPromptVariant,
+    DslGenerationRejectionReasonCode,
     DslGenerationRiskFlag,
     GenerateDslMeta,
     GenerateDslMode,
@@ -65,7 +66,26 @@ _STEP_MODELS = {
     "assert_text": AssertTextStep,
     "assert_url_contains": AssertUrlContainsStep,
 }
-AI_DSL_PROMPT_VERSION = "2026-03-18.single-pass-variant-v1"
+AI_DSL_PROMPT_VERSION = "2026-03-19.retry-strategy-v1"
+RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
+    "wrong_actions": [
+        "The previous draft used unsupported or overly aggressive actions.",
+        "Use only the allowed actions and prefer conservative, low-risk steps.",
+    ],
+    "invalid_structure": [
+        "The previous draft had invalid JSON/DSL structure.",
+        "Always return all top-level keys and keep steps/input_contract/output_contract as arrays.",
+    ],
+    "context_mismatch": [
+        "The previous draft drifted away from the provided business context.",
+        "Preserve the original business goal and reuse current_case/current_steps semantics when they exist.",
+    ],
+    "bad_contracts": [
+        "The previous draft produced low-quality contracts.",
+        "Keep contracts minimal, stable, and use clear context_key naming without inventing unnecessary fields.",
+    ],
+    "other": [],
+}
 
 
 def build_generation_messages(
@@ -104,6 +124,9 @@ def build_generation_messages(
         system_lines.append("When import_mode is contracts_only, include useful input/output contracts when possible.")
     if payload.preserve_contracts:
         system_lines.append("If current contracts are provided, keep them stable unless the prompt explicitly asks to change them.")
+    if payload.retry_reason_code is not None:
+        system_lines.append(f"Retry strategy: {payload.retry_reason_code}.")
+        system_lines.extend(RETRY_REASON_STRATEGIES[payload.retry_reason_code])
 
     user_lines = [
         "请根据下面的测试需求生成可编辑 DSL 草案。",
@@ -118,6 +141,16 @@ def build_generation_messages(
         "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
         "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
     ]
+    if payload.retry_from_generation_id is not None and payload.retry_reason_code is not None:
+        user_lines.extend(
+            [
+                "本次请求是对上一版草案的重试生成。",
+                f"上一版 generation_id：{payload.retry_from_generation_id}",
+                f"上一版被放弃原因：{payload.retry_reason_code}",
+            ]
+        )
+        if payload.retry_note:
+            user_lines.append(f"用户补充说明：{payload.retry_note.strip()}")
     if payload.current_case is not None:
         user_lines.extend(
             [
@@ -159,6 +192,12 @@ def build_generation_messages(
         {"role": "system", "content": " ".join(system_lines)},
         {"role": "user", "content": "\n".join(user_lines)},
     ]
+
+
+def resolve_prompt_version(payload: GenerateDslRequest) -> str:
+    if payload.retry_reason_code is None:
+        return AI_DSL_PROMPT_VERSION
+    return f"{AI_DSL_PROMPT_VERSION}+retry.{payload.retry_reason_code}"
 
 
 def generate_case_draft(

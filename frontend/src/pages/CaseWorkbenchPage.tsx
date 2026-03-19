@@ -385,6 +385,7 @@ export function CaseWorkbenchPage() {
   const [recordedGenerationFeedback, setRecordedGenerationFeedback] = useState<RecordedGenerationFeedback | null>(null);
   const [rejectionReasonCode, setRejectionReasonCode] = useState<DslGenerationRejectionReasonCode | null>(null);
   const [feedbackNote, setFeedbackNote] = useState("");
+  const [retryFromGenerationId, setRetryFromGenerationId] = useState<number | null>(null);
   const [pendingDraft, setPendingDraft] = useState<WorkbenchDraft | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
   const [baselineSignature, setBaselineSignature] = useState<string>(buildDraftSignature(createDefaultDraft()));
@@ -674,6 +675,9 @@ export function CaseWorkbenchPage() {
         current_steps: shouldIncludeCurrentSteps && currentCase ? currentCase.steps : null,
         current_input_contract: preserveContracts ? inputContracts : null,
         current_output_contract: preserveContracts ? outputContracts : null,
+        retry_from_generation_id: retryFromGenerationId,
+        retry_reason_code: retryFromGenerationId ? rejectionReasonCode : null,
+        retry_note: retryFromGenerationId ? feedbackNote.trim() || null : null,
         preserve_contracts: preserveContracts,
       });
     },
@@ -681,6 +685,7 @@ export function CaseWorkbenchPage() {
       setGeneratedDraft(result);
       setGenerationFeedbackError(null);
       setRecordedGenerationFeedback(null);
+      setRetryFromGenerationId(null);
       setRejectionReasonCode(null);
       setFeedbackNote("");
       void messageApi.success("AI DSL 草案已生成。");
@@ -689,8 +694,6 @@ export function CaseWorkbenchPage() {
       setGeneratedDraft(null);
       setGenerationFeedbackError(null);
       setRecordedGenerationFeedback(null);
-      setRejectionReasonCode(null);
-      setFeedbackNote("");
       void messageApi.error(error.message);
     },
   });
@@ -783,8 +786,7 @@ export function CaseWorkbenchPage() {
         queryClient.invalidateQueries({ queryKey: ["dsl-generation-runs"] }),
       ]);
       setRecordedGenerationFeedback({ status: "rejected" });
-      setRejectionReasonCode(null);
-      setFeedbackNote("");
+      setRetryFromGenerationId(generationId);
       setGeneratedDraft(null);
       void messageApi.success("已记录草案放弃反馈。");
     } catch (error) {
@@ -974,8 +976,20 @@ export function CaseWorkbenchPage() {
                 disabled={!generationPrompt.trim() || feedbackMutation.isPending}
                 onClick={() => generateMutation.mutate()}
               >
-                生成 DSL
+                {retryFromGenerationId != null ? "按拒绝原因重试生成" : "生成 DSL"}
               </Button>
+              {retryFromGenerationId != null && !generatedDraft ? (
+                <Button
+                  onClick={() => {
+                    setRetryFromGenerationId(null);
+                    setRejectionReasonCode(null);
+                    setFeedbackNote("");
+                    setGenerationFeedbackError(null);
+                  }}
+                >
+                  清空重试上下文
+                </Button>
+              ) : null}
               {generatedDraft ? (
                 <>
                   <Button disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("replace")}>
@@ -993,7 +1007,15 @@ export function CaseWorkbenchPage() {
                 </>
               ) : null}
             </Space>
-            {generatedDraft ? (
+            {retryFromGenerationId != null && !generatedDraft ? (
+              <Alert
+                type="info"
+                showIcon
+                message="已记录放弃反馈"
+                description={`将基于 generation #${retryFromGenerationId} 的放弃原因重试生成，放弃原因和备注可继续编辑。`}
+              />
+            ) : null}
+            {generatedDraft || retryFromGenerationId != null ? (
               <div className="workbench-grid">
                 <div>
                   <Typography.Text type="secondary">放弃原因</Typography.Text>
@@ -1004,7 +1026,7 @@ export function CaseWorkbenchPage() {
                     value={rejectionReasonCode ?? undefined}
                     options={REJECTION_REASON_OPTIONS}
                     onChange={(value) => setRejectionReasonCode(value)}
-                    disabled={feedbackLocked}
+                    disabled={generatedDraft ? feedbackLocked : false}
                   />
                 </div>
                 <div>
@@ -1015,7 +1037,7 @@ export function CaseWorkbenchPage() {
                     placeholder="可选备注"
                     value={feedbackNote}
                     onChange={(event) => setFeedbackNote(event.target.value)}
-                    disabled={feedbackLocked}
+                    disabled={generatedDraft ? feedbackLocked : false}
                     style={{ marginTop: 8 }}
                   />
                 </div>

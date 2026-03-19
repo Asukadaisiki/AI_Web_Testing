@@ -436,6 +436,12 @@ export function AISettingsPage() {
                 <Descriptions.Item label="近 24h 自动修正率">
                   {formatPercent(overviewData.generation_stats.last_24h_auto_repair_rate)}
                 </Descriptions.Item>
+                <Descriptions.Item label="重试请求数">
+                  {overviewData.generation_stats.retry_requests}
+                </Descriptions.Item>
+                <Descriptions.Item label="重试采纳 / 放弃">
+                  {overviewData.generation_stats.retry_accepted_count} / {overviewData.generation_stats.retry_rejected_count}
+                </Descriptions.Item>
                 <Descriptions.Item label="高频错误类型">
                   {overviewData.generation_stats.top_error_types.length
                     ? overviewData.generation_stats.top_error_types
@@ -500,6 +506,16 @@ export function AISettingsPage() {
                         .map(
                           (item) =>
                             `${item.generation_mode}: ${item.total_requests} / ${item.accepted_count} / ${item.rejected_count}`,
+                        )
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="重试成效">
+                  {overviewData.generation_stats.retry_acceptance_by_reason.length
+                    ? overviewData.generation_stats.retry_acceptance_by_reason
+                        .map(
+                          (item) =>
+                            `${item.rejection_reason_code}: ${item.retry_requests} / ${item.accepted_count} / ${formatPercent(item.acceptance_rate)}`,
                         )
                         .join("、")
                     : "暂无"}
@@ -743,6 +759,14 @@ export function AISettingsPage() {
                 {formatTimestamp(generationDetailQuery.data.created_at)}
               </Descriptions.Item>
               <Descriptions.Item label="Prompt 版本">{generationDetailQuery.data.prompt_version}</Descriptions.Item>
+              <Descriptions.Item label="重试来源">
+                {generationDetailQuery.data.retry_from_generation_id != null
+                  ? `#${generationDetailQuery.data.retry_from_generation_id}`
+                  : "首次生成"}
+              </Descriptions.Item>
+              <Descriptions.Item label="重试策略">
+                {generationDetailQuery.data.retry_reason_code ?? "无"}
+              </Descriptions.Item>
               <Descriptions.Item label="Prompt Variant">{generationDetailQuery.data.prompt_variant}</Descriptions.Item>
               <Descriptions.Item label="上下文档案">{generationDetailQuery.data.context_profile}</Descriptions.Item>
               <Descriptions.Item label="结果">{generationDetailQuery.data.success ? "成功" : "失败"}</Descriptions.Item>
@@ -761,6 +785,9 @@ export function AISettingsPage() {
               </Descriptions.Item>
               <Descriptions.Item label="拒绝备注">
                 {generationDetailQuery.data.feedback_note ?? "无"}
+              </Descriptions.Item>
+              <Descriptions.Item label="重试备注">
+                {generationDetailQuery.data.retry_note ?? "无"}
               </Descriptions.Item>
             </Descriptions>
 

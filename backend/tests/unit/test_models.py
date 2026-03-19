@@ -269,6 +269,9 @@ def test_dsl_generation_run_columns_and_foreign_keys_exist(db_session: Session) 
         "prompt_sha256",
         "prompt_version",
         "prompt_variant",
+        "retry_from_generation_id",
+        "retry_reason_code",
+        "retry_note",
         "request_base_url",
         "generation_mode",
         "import_mode",
@@ -301,4 +304,9 @@ def test_dsl_generation_run_columns_and_foreign_keys_exist(db_session: Session) 
     }.issubset(columns)
 
     foreign_keys = inspector.get_foreign_keys("dsl_generation_runs")
-    assert {foreign_key["referred_table"] for foreign_key in foreign_keys} == {"users", "projects", "test_cases"}
+    assert {foreign_key["referred_table"] for foreign_key in foreign_keys} == {
+        "users",
+        "projects",
+        "test_cases",
+        "dsl_generation_runs",
+    }

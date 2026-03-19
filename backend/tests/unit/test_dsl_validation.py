@@ -166,6 +166,29 @@ def test_build_generation_messages_uses_contract_context_without_current_case() 
     assert "当前 DSL：" not in messages[1]["content"]
 
 
+def test_build_generation_messages_includes_retry_strategy_context() -> None:
+    messages = build_generation_messages(
+        payload=GenerateDslRequest.model_validate(
+            {
+                "prompt": "重新生成登录冒烟",
+                "actor_user_id": 1,
+                "retry_from_generation_id": 12,
+                "retry_reason_code": "bad_contracts",
+                "retry_note": "上下文变量命名不稳定",
+            }
+        ),
+        generation_mode="draft",
+        prompt_variant="baseline_draft",
+        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+    )
+
+    assert "Retry strategy: bad_contracts." in messages[0]["content"]
+    assert "Keep contracts minimal, stable" in messages[0]["content"]
+    assert "上一版 generation_id：12" in messages[1]["content"]
+    assert "上一版被放弃原因：bad_contracts" in messages[1]["content"]
+    assert "用户补充说明：上下文变量命名不稳定" in messages[1]["content"]
+
+
 def test_generate_dsl_case_success(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -592,6 +615,9 @@ def test_generate_dsl_case_persists_success_record(client, db_session, monkeypat
     assert generation_run.rejection_reason_code is None
     assert generation_run.feedback_note is None
     assert generation_run.feedback_recorded_at is None
+    assert generation_run.retry_from_generation_id is None
+    assert generation_run.retry_reason_code is None
+    assert generation_run.retry_note is None
 
 
 def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypatch) -> None:
@@ -623,6 +649,9 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert runs[0].context_profile == "blank_request"
     assert runs[0].risk_flags_json == []
     assert runs[0].feedback_status == "pending"
+    assert runs[0].retry_from_generation_id is None
+    assert runs[0].retry_reason_code is None
+    assert runs[0].retry_note is None
 
 
 def test_generate_dsl_case_uses_runtime_strict_mode_default_when_request_omits_generation_mode(
@@ -863,6 +892,55 @@ def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_ses
     assert payload["feedback_note"] == "输出契约不符合预期"
     assert payload["preserve_contracts_requested"] is True
     assert payload["preserve_contracts_applied"] is True
+
+
+def test_generate_dsl_case_persists_retry_context_and_retry_prompt_version(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "重试草案",
+  "steps": [{"action": "goto", "value": "/retry"}]
+}""",
+    )
+
+    previous_generation_id = client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "上一版草案", "actor_user_id": 1},
+    ).json()["generation_id"]
+    rejected_response = client.patch(
+        f"/api/v1/dsl/generations/{previous_generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+            "rejection_reason_code": "bad_contracts",
+            "feedback_note": "契约命名不稳定",
+        },
+    )
+    assert rejected_response.status_code == 200
+
+    retry_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "按上一版反馈重新生成",
+            "actor_user_id": 1,
+            "retry_from_generation_id": previous_generation_id,
+            "retry_reason_code": "bad_contracts",
+            "retry_note": "契约命名不稳定",
+        },
+    )
+
+    assert retry_response.status_code == 200
+    generation_run = db_session.get(DslGenerationRun, retry_response.json()["generation_id"])
+    assert generation_run is not None
+    assert generation_run.retry_from_generation_id == previous_generation_id
+    assert generation_run.retry_reason_code == "bad_contracts"
+    assert generation_run.retry_note == "契约命名不稳定"
+    assert generation_run.prompt_version == f"{AI_DSL_PROMPT_VERSION}+retry.bad_contracts"
 
 
 def test_record_generation_feedback_accepts_first_decision_and_is_idempotent(client, monkeypatch) -> None:

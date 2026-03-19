@@ -188,6 +188,9 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
             "last_24h_success_count": 0,
             "last_24h_failure_count": 1,
             "last_24h_auto_repair_rate": 0.0,
+            "retry_requests": 0,
+            "retry_accepted_count": 0,
+            "retry_rejected_count": 0,
             "top_error_types": [
                 {
                     "error_type": "DslGenerationConfigError",
@@ -233,6 +236,7 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
                     "rejected_count": 0,
                 }
             ],
+            "retry_acceptance_by_reason": [],
         },
     }
 
@@ -263,6 +267,11 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
   "name": "rejected",
   "steps": [{"action": "goto", "value": "/rejected"}]
 }""",
+            """
+{
+  "name": "retry accepted",
+  "steps": [{"action": "goto", "value": "/retry"}]
+}""",
         ]
     )
     monkeypatch.setattr("app.ai.dsl_generator._call_llm", lambda **_: next(responses))
@@ -278,6 +287,16 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
     rejected = ai_settings_client.post(
         "/api/v1/dsl/generate",
         json={"prompt": "rejected", "actor_user_id": 1},
+    ).json()["generation_id"]
+    retry_generation = ai_settings_client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "retry accepted",
+            "actor_user_id": 1,
+            "retry_from_generation_id": rejected,
+            "retry_reason_code": "bad_contracts",
+            "retry_note": "契约命名不稳定",
+        },
     ).json()["generation_id"]
 
     accepted_replace_response = ai_settings_client.patch(
@@ -304,19 +323,32 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
             "rejection_reason_code": "bad_contracts",
         },
     )
+    retry_accepted_response = ai_settings_client.patch(
+        f"/api/v1/dsl/generations/{retry_generation}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "accepted",
+            "feedback_import_mode": "contracts_only",
+        },
+    )
 
     assert accepted_replace_response.status_code == 200
     assert accepted_steps_response.status_code == 200
     assert rejected_response.status_code == 200
+    assert retry_accepted_response.status_code == 200
 
     overview_response = ai_settings_client.get("/api/v1/settings/ai/overview")
 
     assert overview_response.status_code == 200
-    assert overview_response.json()["generation_stats"]["accepted_count"] == 2
+    assert overview_response.json()["generation_stats"]["accepted_count"] == 3
     assert overview_response.json()["generation_stats"]["rejected_count"] == 1
     assert overview_response.json()["generation_stats"]["pending_count"] == 0
     assert overview_response.json()["generation_stats"]["decision_coverage_rate"] == 1.0
+    assert overview_response.json()["generation_stats"]["retry_requests"] == 1
+    assert overview_response.json()["generation_stats"]["retry_accepted_count"] == 1
+    assert overview_response.json()["generation_stats"]["retry_rejected_count"] == 0
     assert overview_response.json()["generation_stats"]["accepted_import_mode_breakdown"] == [
+        {"import_mode": "contracts_only", "count": 1},
         {"import_mode": "replace", "count": 1},
         {"import_mode": "steps_only", "count": 1},
     ]
@@ -326,18 +358,18 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
     assert overview_response.json()["generation_stats"]["prompt_variant_breakdown"] == [
         {
             "prompt_variant": "baseline_draft",
-            "total_requests": 3,
-            "success_count": 3,
-            "accepted_count": 2,
+            "total_requests": 4,
+            "success_count": 4,
+            "accepted_count": 3,
             "rejected_count": 1,
         }
     ]
     assert overview_response.json()["generation_stats"]["context_profile_breakdown"] == [
         {
             "context_profile": "blank_request",
-            "total_requests": 3,
-            "success_count": 3,
-            "accepted_count": 2,
+            "total_requests": 4,
+            "success_count": 4,
+            "accepted_count": 3,
             "rejected_count": 1,
         }
     ]
@@ -351,18 +383,26 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
     assert overview_response.json()["generation_stats"]["model_outcome_breakdown"] == [
         {
             "model_name": "gpt-dsl",
-            "total_requests": 3,
-            "success_count": 3,
-            "accepted_count": 2,
+            "total_requests": 4,
+            "success_count": 4,
+            "accepted_count": 3,
             "rejected_count": 1,
         }
     ]
     assert overview_response.json()["generation_stats"]["generation_mode_breakdown"] == [
         {
             "generation_mode": "draft",
-            "total_requests": 3,
-            "success_count": 3,
-            "accepted_count": 2,
+            "total_requests": 4,
+            "success_count": 4,
+            "accepted_count": 3,
             "rejected_count": 1,
+        }
+    ]
+    assert overview_response.json()["generation_stats"]["retry_acceptance_by_reason"] == [
+        {
+            "rejection_reason_code": "bad_contracts",
+            "retry_requests": 1,
+            "accepted_count": 1,
+            "acceptance_rate": 1.0,
         }
     ]

@@ -100,6 +100,9 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
         source: "latest_url",
       },
     ],
+    retry_from_generation_id: 18,
+    retry_reason_code: "bad_contracts",
+    retry_note: "契约命名不稳定",
     preserve_contracts: true,
   });
 
@@ -140,6 +143,9 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
             source: "latest_url",
           },
         ],
+        retry_from_generation_id: 18,
+        retry_reason_code: "bad_contracts",
+        retry_note: "契约命名不稳定",
         preserve_contracts: true,
       }),
     }),

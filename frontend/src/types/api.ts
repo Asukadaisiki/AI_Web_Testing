@@ -103,6 +103,9 @@ export interface GenerateDslRequest {
   current_steps?: DSLStep[] | null;
   current_input_contract?: DSLCaseInputContract[] | null;
   current_output_contract?: DSLCaseOutputContract[] | null;
+  retry_from_generation_id?: number | null;
+  retry_reason_code?: DslGenerationRejectionReasonCode | null;
+  retry_note?: string | null;
   preserve_contracts?: boolean;
 }
 
@@ -195,6 +198,9 @@ export interface AIDslGenerationStats {
   last_24h_success_count: number;
   last_24h_failure_count: number;
   last_24h_auto_repair_rate: number;
+  retry_requests: number;
+  retry_accepted_count: number;
+  retry_rejected_count: number;
   top_error_types: DslGenerationErrorTypeCount[];
   accepted_import_mode_breakdown: DslGenerationImportModeCount[];
   top_rejection_reasons: DslGenerationRejectionReasonCount[];
@@ -203,6 +209,7 @@ export interface AIDslGenerationStats {
   rejection_reason_by_variant: DslGenerationRejectionReasonByVariant[];
   model_outcome_breakdown: DslGenerationModelOutcome[];
   generation_mode_breakdown: DslGenerationModeBreakdown[];
+  retry_acceptance_by_reason: DslGenerationRetryAcceptanceByReason[];
 }
 
 export interface AISettingsOverview {
@@ -266,6 +273,13 @@ export interface DslGenerationModeBreakdown {
   rejected_count: number;
 }
 
+export interface DslGenerationRetryAcceptanceByReason {
+  rejection_reason_code: DslGenerationRejectionReasonCode;
+  retry_requests: number;
+  accepted_count: number;
+  acceptance_rate: number;
+}
+
 export interface StoredDslGenerationRunSummary {
   id: number;
   created_at: string;
@@ -277,6 +291,9 @@ export interface StoredDslGenerationRunSummary {
   project_id?: number | null;
   case_id?: number | null;
   prompt_version: string;
+  retry_from_generation_id?: number | null;
+  retry_reason_code?: DslGenerationRejectionReasonCode | null;
+  retry_note?: string | null;
   error_type?: string | null;
   error_message?: string | null;
   repaired_invalid_actions: number;

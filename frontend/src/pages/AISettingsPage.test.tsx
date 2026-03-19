@@ -61,6 +61,9 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
       last_24h_success_count: 2,
       last_24h_failure_count: 1,
       last_24h_auto_repair_rate: 0.5,
+      retry_requests: 1,
+      retry_accepted_count: 1,
+      retry_rejected_count: 0,
       top_error_types: [
         {
           error_type: "DslGenerationError",
@@ -121,6 +124,14 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
           rejected_count: 1,
         },
       ],
+      retry_acceptance_by_reason: [
+        {
+          rejection_reason_code: "bad_contracts",
+          retry_requests: 1,
+          accepted_count: 1,
+          acceptance_rate: 1,
+        },
+      ],
     },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([
@@ -134,7 +145,10 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
       prompt_variant: "baseline_draft",
       project_id: 1,
       case_id: 8,
-      prompt_version: "2026-03-18.single-pass-variant-v1",
+      prompt_version: "2026-03-19.retry-strategy-v1+retry.bad_contracts",
+      retry_from_generation_id: 6,
+      retry_reason_code: "bad_contracts",
+      retry_note: "契约命名不稳定",
       error_type: "DslGenerationError",
       error_message: "bad json",
       repaired_invalid_actions: 1,
@@ -159,9 +173,12 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
     import_mode: "replace",
     prompt_variant: "baseline_draft",
     project_id: 1,
-    case_id: 8,
-    prompt_version: "2026-03-18.single-pass-variant-v1",
-    error_type: "DslGenerationError",
+      case_id: 8,
+      prompt_version: "2026-03-19.retry-strategy-v1+retry.bad_contracts",
+      retry_from_generation_id: 6,
+      retry_reason_code: "bad_contracts",
+      retry_note: "契约命名不稳定",
+      error_type: "DslGenerationError",
     error_message: "bad json",
     repaired_invalid_actions: 1,
     removed_invalid_steps: 2,
@@ -223,6 +240,7 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   expect(screen.getByText("3 / 1")).toBeInTheDocument();
   expect(screen.getByText("2 / 1 / 1")).toBeInTheDocument();
   expect(screen.getByText("2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("1 / 0")).toBeInTheDocument();
   expect(screen.getByText("50%")).toBeInTheDocument();
   expect(screen.getByText("75%")).toBeInTheDocument();
   expect(screen.getByText("DslGenerationError (1)")).toBeInTheDocument();
@@ -233,6 +251,7 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   expect(screen.getByText("baseline_draft / bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("gpt-4o-mini: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("draft: 4 / 2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("bad_contracts: 1 / 1 / 100%")).toBeInTheDocument();
   expect(screen.getByText("治理记录")).toBeInTheDocument();
   expect(screen.getByText("已放弃 (bad_contracts)")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft")).toBeInTheDocument();
@@ -265,6 +284,9 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   await userEvent.click(screen.getByRole("button", { name: "详情" }));
   expect(await screen.findByText("治理详情 #7")).toBeInTheDocument();
   expect(await screen.findByText("契约不符合预期")).toBeInTheDocument();
+  expect(screen.getByText("#6")).toBeInTheDocument();
+  expect(screen.getAllByText("bad_contracts").length).toBeGreaterThan(0);
+  expect(screen.getByText("契约命名不稳定")).toBeInTheDocument();
   expect(screen.getByText("current_case / preserve_contracts (applied)")).toBeInTheDocument();
   expect(screen.getByText("blank_request")).toBeInTheDocument();
   expect(screen.getAllByText("baseline_draft").length).toBeGreaterThan(0);
@@ -311,6 +333,9 @@ test("保存 AI 配置会提交最新表单值", async () => {
       last_24h_success_count: 0,
       last_24h_failure_count: 0,
       last_24h_auto_repair_rate: 0,
+      retry_requests: 0,
+      retry_accepted_count: 0,
+      retry_rejected_count: 0,
       top_error_types: [],
       accepted_import_mode_breakdown: [],
       top_rejection_reasons: [],
@@ -319,6 +344,7 @@ test("保存 AI 配置会提交最新表单值", async () => {
       rejection_reason_by_variant: [],
       model_outcome_breakdown: [],
       generation_mode_breakdown: [],
+      retry_acceptance_by_reason: [],
     },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);
@@ -409,6 +435,9 @@ test("加载失败时展示错误块", async () => {
       last_24h_success_count: 0,
       last_24h_failure_count: 0,
       last_24h_auto_repair_rate: 0,
+      retry_requests: 0,
+      retry_accepted_count: 0,
+      retry_rejected_count: 0,
       top_error_types: [],
       accepted_import_mode_breakdown: [],
       top_rejection_reasons: [],
@@ -417,6 +446,7 @@ test("加载失败时展示错误块", async () => {
       rejection_reason_by_variant: [],
       model_outcome_breakdown: [],
       generation_mode_breakdown: [],
+      retry_acceptance_by_reason: [],
     },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);
@@ -430,7 +460,10 @@ test("加载失败时展示错误块", async () => {
     prompt_variant: "baseline_draft",
     project_id: null,
     case_id: null,
-    prompt_version: "2026-03-18.single-pass-variant-v1",
+    prompt_version: "2026-03-19.retry-strategy-v1",
+    retry_from_generation_id: null,
+    retry_reason_code: null,
+    retry_note: null,
     error_type: null,
     error_message: null,
     repaired_invalid_actions: 0,

@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 import app.runners.playwright_runner as playwright_runner
+from app.locators.fallback import resolve_with_fallback
+from app.locators.semantic import LocatorResolutionError
+from app.schemas.executions import DOMElementSnapshot, LocatorCandidateEvidence, LocatorTrace
 from tests.fixtures.site_server import serve_static_fixture
 
 
@@ -182,3 +185,93 @@ def test_local_intervention_flow_auto_disables_invalid_correction_after_three_fa
         assert stored_correction["id"] == correction_id
         assert stored_correction["consecutive_failures"] == 3
         assert stored_correction["is_active"] is False
+
+
+def test_browser_dom_candidates_can_be_reranked_by_vlm(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_chromium_available()
+
+    from playwright.sync_api import sync_playwright
+
+    close_candidates = [
+        LocatorCandidateEvidence(
+            strategy="button_text",
+            preview_text="提交",
+            role="button",
+            score=92,
+            matched_rules=["text:partial"],
+            visible=True,
+            enabled=True,
+        ),
+        LocatorCandidateEvidence(
+            strategy="button_text",
+            preview_text="提交订单",
+            role="button",
+            score=89,
+            matched_rules=["text:near"],
+            visible=True,
+            enabled=True,
+        ),
+    ]
+
+    def fake_resolve_semantic_locator(*_args, **_kwargs):
+        raise LocatorResolutionError(
+            "close candidates need rerank",
+            trace=LocatorTrace(target="提交订单", candidates=close_candidates),
+        )
+
+    monkeypatch.setattr("app.locators.fallback.resolve_semantic_locator", fake_resolve_semantic_locator)
+    monkeypatch.setattr("app.locators.fallback._take_screenshot_base64", lambda _page: "ignored")
+    monkeypatch.setattr("app.locators.fallback.rank_candidates_by_vision", lambda **_kwargs: 1)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(
+            """
+            <main>
+              <button id="submit-basic" aria-label="提交">提交</button>
+              <button id="submit-order" aria-label="提交订单">提交订单</button>
+            </main>
+            """
+        )
+
+        candidate_entries = [
+            {
+                "locator": page.locator("#submit-basic"),
+                "candidate": close_candidates[0],
+                "snapshot": DOMElementSnapshot(
+                    tag="button",
+                    text="提交",
+                    role="button",
+                    aria_label="提交",
+                    css_selector="#submit-basic",
+                    xpath='//*[@id="submit-basic"]',
+                    rect={"x": 0, "y": 0, "width": 100, "height": 32},
+                    visible=True,
+                    enabled=True,
+                ),
+            },
+            {
+                "locator": page.locator("#submit-order"),
+                "candidate": close_candidates[1],
+                "snapshot": DOMElementSnapshot(
+                    tag="button",
+                    text="提交订单",
+                    role="button",
+                    aria_label="提交订单",
+                    css_selector="#submit-order",
+                    xpath='//*[@id="submit-order"]',
+                    rect={"x": 0, "y": 40, "width": 120, "height": 32},
+                    visible=True,
+                    enabled=True,
+                ),
+            },
+        ]
+        monkeypatch.setattr("app.locators.fallback._collect_rankable_semantic_candidates", lambda *_args, **_kwargs: candidate_entries)
+
+        resolved = resolve_with_fallback(page, "提交订单")
+
+        assert resolved.strategy == "semantic_vlm_rank"
+        assert resolved.trace.match_strategy == "semantic_vlm_rank"
+        assert resolved.locator.text_content() == "提交订单"
+        browser.close()

@@ -60,7 +60,7 @@ class FakePage:
         return FakeLocatorCollection()
 
     def evaluate(self, script: str, *_args):
-        if "elementFromPoint" in script:
+        if "elementsFromPoint" in script or "elementFromPoint" in script:
             return self.ai_payload
         if "querySelectorAll" in script:
             return []

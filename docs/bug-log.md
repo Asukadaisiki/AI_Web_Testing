@@ -457,3 +457,24 @@
   - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py`
   - 执行 `cd backend && uv run pytest`
 - 关联记录：`docs/execution-log.md` 2026-03-17 23:50
+
+## BUG-020 | AI visual fallback 对非分词语种缺少严格文本匹配，导致 DOM 校验误判失败
+
+- 日期：2026-03-19
+- 状态：fixed
+- 来源：实现 M2 定位精度优化时回归测试发现
+- 描述：`fallback` 在 AI visual 点位命中后，会再次读取 DOM snapshot 做语义校验。旧逻辑只依赖 token 子集和中文字符 Jaccard；当目标文本属于无法被当前 tokenizer 正确切分的语种或编码形态时，即使 DOM 文本与目标完全一致，也会被判定为不匹配，最终错误抛出 `InterventionNeededError`。
+- 复现步骤：
+  1. 构造一个 `locate_element_by_vision` 已返回中心点的页面
+  2. 让 DOM snapshot 的 `text` / `aria_label` 与目标文本严格相同，但文本无法被当前 tokenizer 产出 token
+  3. 调用 `resolve_with_fallback`
+  4. 观察旧实现会跳过 AI visual 命中结果并进入人工介入错误
+- 影响：M2 的 AI visual 回退路径会在多语种页面上出现“点到了但校验没过”的假失败，降低 overlay 穿透后的最终命中率。
+- 根因：DOM 交叉验证过度依赖 token 化结果，缺少最基础的规范化严格相等判断；同时测试桩仍停留在 `elementFromPoint`，没有覆盖 `elementsFromPoint` 的新脚本路径。
+- 处理：
+  - 在 `backend/app/locators/fallback.py` 为语义字段增加规范化严格匹配，再保留 token 子集、Jaccard 和中文单字回退
+  - 更新 `backend/tests/unit/test_locator_fallback.py` 的页面桩，使其兼容 `elementsFromPoint`
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_locator_fallback.py`
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py tests/unit/test_models.py tests/unit/test_ai_visual.py tests/unit/test_locator_fallback.py`
+- 关联记录：`docs/execution-log.md` 2026-03-19

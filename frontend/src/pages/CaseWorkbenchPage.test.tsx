@@ -70,6 +70,138 @@ beforeEach(() => {
   });
 });
 
+test("放弃草案后可按拒绝原因重试生成，并携带 retry context", async () => {
+  vi.mocked(api.generateDslCase)
+    .mockResolvedValueOnce({
+      generation_id: 18,
+      case: {
+        name: "首次草案",
+        description: null,
+        base_url: null,
+        input_contract: [],
+        output_contract: [],
+        steps: [{ action: "goto", value: "/first-pass" }],
+      },
+      supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+      warnings: [],
+      normalization_notes: [],
+      generation_meta: {
+        model: "gpt-4o-mini",
+        generation_mode: "draft",
+        import_mode: "replace",
+        prompt_variant: "baseline_draft",
+        context_profile: "blank_request",
+        risk_flags: [],
+        base_url_source: "none",
+        base_url_backfilled: false,
+        repaired_invalid_actions: 0,
+        removed_invalid_steps: 0,
+        removed_invalid_contracts: 0,
+        preserve_contracts_applied: false,
+        used_current_case_context: false,
+        used_current_steps_context: false,
+      },
+    })
+    .mockResolvedValueOnce({
+      generation_id: 19,
+      case: {
+        name: "重试草案",
+        description: null,
+        base_url: null,
+        input_contract: [],
+        output_contract: [],
+        steps: [{ action: "goto", value: "/retry-pass" }],
+      },
+      supported_actions: ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+      warnings: [],
+      normalization_notes: [],
+      generation_meta: {
+        model: "gpt-4o-mini",
+        generation_mode: "draft",
+        import_mode: "replace",
+        prompt_variant: "baseline_draft",
+        context_profile: "blank_request",
+        risk_flags: [],
+        base_url_source: "none",
+        base_url_backfilled: false,
+        repaired_invalid_actions: 0,
+        removed_invalid_steps: 0,
+        removed_invalid_contracts: 0,
+        preserve_contracts_applied: false,
+        used_current_case_context: false,
+        used_current_steps_context: false,
+      },
+    });
+  vi.mocked(api.recordDslGenerationFeedback).mockResolvedValueOnce({
+    id: 18,
+    created_at: "2026-03-17T00:00:00",
+    success: true,
+    model_name: "gpt-4o-mini",
+    generation_mode: "draft",
+    import_mode: "replace",
+    prompt_variant: "baseline_draft",
+    project_id: 1,
+    case_id: null,
+    prompt_version: "2026-03-19.retry-strategy-v1+retry.bad_contracts",
+    error_type: null,
+    error_message: null,
+    repaired_invalid_actions: 0,
+    removed_invalid_steps: 0,
+    removed_invalid_contracts: 0,
+    warnings_count: 0,
+    normalization_notes_count: 0,
+    prompt_preview: "首次草案",
+    risk_flags: [],
+    feedback_status: "rejected",
+    feedback_import_mode: null,
+    rejection_reason_code: "bad_contracts",
+    feedback_recorded_at: "2026-03-17T00:01:00",
+  });
+
+  renderWithProviders(<CaseWorkbenchPage />, {
+    route: "/cases/new",
+    path: "/cases/new",
+  });
+
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "生成一个待重试草案");
+  await userEvent.click(screen.getByRole("button", { name: "生成 DSL" }));
+  expect(await screen.findByText("生成预览")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("combobox", { name: "放弃原因" }));
+  await userEvent.click(await screen.findByText("bad_contracts", { selector: ".ant-select-item-option-content" }));
+  await userEvent.type(screen.getByLabelText("放弃备注"), "合同命名需要更稳定");
+  await userEvent.click(screen.getByRole("button", { name: "放弃草案" }));
+
+  await waitFor(() => {
+    expect(api.recordDslGenerationFeedback).toHaveBeenCalledWith(18, {
+      actor_user_id: 1,
+      feedback_status: "rejected",
+      feedback_import_mode: null,
+      rejection_reason_code: "bad_contracts",
+      feedback_note: "合同命名需要更稳定",
+    });
+  });
+
+  expect(await screen.findByRole("button", { name: "按拒绝原因重试生成" })).toBeInTheDocument();
+  expect(screen.getByLabelText("放弃备注")).toHaveValue("合同命名需要更稳定");
+
+  await userEvent.clear(screen.getByLabelText("自然语言需求"));
+  await userEvent.type(screen.getByLabelText("自然语言需求"), "按拒绝原因重新生成");
+  await userEvent.click(screen.getByRole("button", { name: "按拒绝原因重试生成" }));
+
+  await waitFor(() => {
+    expect(api.generateDslCase).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: "按拒绝原因重新生成",
+        retry_from_generation_id: 18,
+        retry_reason_code: "bad_contracts",
+        retry_note: "合同命名需要更稳定",
+      }),
+    );
+  });
+}, 15000);
+
 test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", async () => {
   const templateSteps = [
     { action: "goto", value: "/" },
@@ -671,6 +803,9 @@ test("自然语言生成会按上下文来源与策略带上请求 payload", asy
         },
       ],
       current_output_contract: [],
+      retry_from_generation_id: null,
+      retry_reason_code: null,
+      retry_note: null,
       preserve_contracts: true,
     });
   });
