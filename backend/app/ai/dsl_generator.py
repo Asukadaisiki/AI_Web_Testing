@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from urllib import request
 
@@ -66,7 +67,43 @@ _STEP_MODELS = {
     "assert_text": AssertTextStep,
     "assert_url_contains": AssertUrlContainsStep,
 }
-AI_DSL_PROMPT_VERSION = "2026-03-19.retry-strategy-v1"
+_VALUE_TYPE_ALIASES = {
+    "str": "string",
+    "string": "string",
+    "text": "string",
+    "int": "number",
+    "integer": "number",
+    "float": "number",
+    "double": "number",
+    "number": "number",
+    "bool": "boolean",
+    "boolean": "boolean",
+    "dict": "object",
+    "map": "object",
+    "json": "object",
+    "object": "object",
+    "list": "array",
+    "array": "array",
+}
+_OUTPUT_SOURCE_ALIASES = {
+    "url": "latest_url",
+    "page_url": "latest_url",
+    "current_url": "latest_url",
+    "latest_url": "latest_url",
+    "error_message": "error_message",
+    "status": "status",
+    "step_url": "last_step_url",
+    "last_step_url": "last_step_url",
+    "page_title": "last_step_page_title",
+    "last_step_page_title": "last_step_page_title",
+    "step_target": "last_step_target",
+    "last_step_target": "last_step_target",
+    "step_value": "last_step_value",
+    "last_step_value": "last_step_value",
+    "step_error_message": "last_step_error_message",
+    "last_step_error_message": "last_step_error_message",
+}
+AI_DSL_PROMPT_VERSION = "2026-03-20.governance-v2"
 RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
     "wrong_actions": [
         "The previous draft used unsupported or overly aggressive actions.",
@@ -75,6 +112,7 @@ RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
     "invalid_structure": [
         "The previous draft had invalid JSON/DSL structure.",
         "Always return all top-level keys and keep steps/input_contract/output_contract as arrays.",
+        "Never nest the DSL under wrapper keys like case, data, result, or draft.",
     ],
     "context_mismatch": [
         "The previous draft drifted away from the provided business context.",
@@ -83,6 +121,7 @@ RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
     "bad_contracts": [
         "The previous draft produced low-quality contracts.",
         "Keep contracts minimal, stable, and use clear context_key naming without inventing unnecessary fields.",
+        "Each contract must include name, context_key, value_type; output contracts must also include source.",
     ],
     "other": [],
 }
@@ -105,6 +144,12 @@ def build_generation_messages(
         "Use semantic Chinese target descriptions when selectors are not explicitly provided.",
         "Do not include markdown fences or explanations.",
         f"Prompt variant: {prompt_variant}.",
+        "Keep input_contract/output_contract/steps as arrays even when empty or single-item.",
+        "Do not wrap the DSL under other keys such as case, data, result, response, or draft.",
+        "Every contract must include name, context_key, value_type.",
+        "Every output_contract item must also include source.",
+        "context_key must use stable snake_case and match ^[A-Za-z_][A-Za-z0-9_]*$.",
+        "If contract quality is uncertain, return an empty array instead of malformed entries.",
     ]
     if prompt_variant == "contracts_focus":
         system_lines.append("Prioritize high-quality input/output contracts and keep steps conservative.")
@@ -301,15 +346,19 @@ def _normalize_generated_case(
         raw_contracts=raw_case.get("input_contract"),
         adapter=_INPUT_CONTRACT_ADAPTER,
         label="输入契约",
+        is_output_contract=False,
         allow_auto_repair=allow_auto_repair,
         warnings=warnings,
+        normalization_notes=normalization_notes,
     )
     output_contract, output_removed = _normalize_contracts(
         raw_contracts=raw_case.get("output_contract"),
         adapter=_OUTPUT_CONTRACT_ADAPTER,
         label="输出契约",
+        is_output_contract=True,
         allow_auto_repair=allow_auto_repair,
         warnings=warnings,
+        normalization_notes=normalization_notes,
     )
     removed_invalid_contracts += input_removed + output_removed
 
@@ -373,30 +422,57 @@ def _normalize_contracts(
     raw_contracts: Any,
     adapter: TypeAdapter[Any],
     label: str,
+    is_output_contract: bool,
     allow_auto_repair: bool,
     warnings: list[str],
+    normalization_notes: list[str],
 ) -> tuple[list[Any], int]:
     if raw_contracts is None:
         return [], 0
+    if isinstance(raw_contracts, dict):
+        if not allow_auto_repair:
+            raise DslGenerationError(f"AI 草案中的{label}必须是数组。")
+        raw_contracts = [raw_contracts]
+        normalization_notes.append(f"AI 草案中的{label}已从单个对象包装为数组。")
     if not isinstance(raw_contracts, list):
         warnings.append(f"AI 草案中的{label}不是数组，已忽略该字段。")
         return [], 1
 
     normalized_contracts: list[Any] = []
+    seen_context_keys: set[str] = set()
     removed_count = 0
     for index, raw_contract in enumerate(raw_contracts, start=1):
         if not isinstance(raw_contract, dict):
             removed_count += 1
             warnings.append(f"{label} #{index} 不是对象，已忽略。")
             continue
+        candidate_contract = (
+            _repair_contract_payload(
+                raw_contract=raw_contract,
+                index=index,
+                label=label,
+                is_output_contract=is_output_contract,
+                allow_auto_repair=allow_auto_repair,
+                normalization_notes=normalization_notes,
+            )
+            if allow_auto_repair
+            else raw_contract
+        )
         try:
-            normalized_contracts.append(adapter.validate_python(raw_contract))
+            contract = adapter.validate_python(candidate_contract)
         except ValidationError:
             removed_count += 1
             if allow_auto_repair:
                 warnings.append(f"{label} #{index} 结构非法，已忽略。")
             else:
                 raise DslGenerationError(f"AI 草案中的{label} #{index} 不符合当前 schema。")
+            continue
+        if contract.context_key in seen_context_keys:
+            removed_count += 1
+            warnings.append(f"{label} #{index} 的 context_key 与前文重复，已忽略。")
+            continue
+        seen_context_keys.add(contract.context_key)
+        normalized_contracts.append(contract)
     return normalized_contracts, removed_count
 
 
@@ -407,6 +483,11 @@ def _normalize_steps(
     warnings: list[str],
     normalization_notes: list[str],
 ) -> tuple[list[DSLStep], int, int]:
+    if isinstance(raw_steps, dict):
+        if not allow_auto_repair:
+            raise DslGenerationError("AI 草案中的 steps 必须是数组。")
+        raw_steps = [raw_steps]
+        normalization_notes.append("AI 草案中的 steps 已从单个对象包装为数组。")
     if not isinstance(raw_steps, list):
         raise DslGenerationError("AI 草案中的 steps 必须是数组。")
 
@@ -524,6 +605,100 @@ def _resolve_current_contracts(
     if payload.current_case is not None:
         return payload.current_case.input_contract, payload.current_case.output_contract
     return payload.current_input_contract or [], payload.current_output_contract or []
+
+
+def _repair_contract_payload(
+    *,
+    raw_contract: dict[str, Any],
+    index: int,
+    label: str,
+    is_output_contract: bool,
+    allow_auto_repair: bool,
+    normalization_notes: list[str],
+) -> dict[str, Any]:
+    if not allow_auto_repair:
+        return raw_contract
+
+    repaired = dict(raw_contract)
+    name = _normalize_string(repaired.get("name"))
+    context_key = _normalize_string(repaired.get("context_key"))
+    if name:
+        repaired["name"] = name
+    if context_key:
+        repaired["context_key"] = context_key
+
+    if not name and context_key:
+        repaired["name"] = context_key
+        normalization_notes.append(f"{label} #{index} 缺少 name，已回填为 {context_key}。")
+    if not context_key and name:
+        derived_context_key = _derive_context_key(name)
+        if derived_context_key is not None:
+            repaired["context_key"] = derived_context_key
+            normalization_notes.append(f"{label} #{index} 缺少 context_key，已从 name 派生为 {derived_context_key}。")
+
+    value_type = repaired.get("value_type")
+    if isinstance(value_type, str):
+        normalized_value_type = _VALUE_TYPE_ALIASES.get(value_type.strip().casefold())
+        if normalized_value_type is not None and normalized_value_type != value_type:
+            repaired["value_type"] = normalized_value_type
+            normalization_notes.append(
+                f"{label} #{index} 的 value_type 已从 {value_type} 自动修正为 {normalized_value_type}。"
+            )
+
+    if "required" in repaired:
+        normalized_required = _coerce_bool(repaired["required"])
+        if normalized_required is not None and normalized_required is not repaired["required"]:
+            repaired["required"] = normalized_required
+            normalization_notes.append(f"{label} #{index} 的 required 已自动修正为布尔值。")
+
+    if is_output_contract:
+        source = repaired.get("source")
+        if isinstance(source, str):
+            normalized_source = _OUTPUT_SOURCE_ALIASES.get(source.strip().casefold())
+            if normalized_source is not None and normalized_source != source:
+                repaired["source"] = normalized_source
+                normalization_notes.append(
+                    f"{label} #{index} 的 source 已从 {source} 自动修正为 {normalized_source}。"
+                )
+
+    description = repaired.get("description")
+    if description is not None and not isinstance(description, str):
+        repaired["description"] = str(description)
+        normalization_notes.append(f"{label} #{index} 的 description 已自动转换为字符串。")
+
+    return repaired
+
+
+def _derive_context_key(name: str) -> str | None:
+    candidate = name.strip()
+    if not candidate:
+        return None
+    candidate = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", candidate)
+    candidate = re.sub(r"[^A-Za-z0-9]+", "_", candidate)
+    candidate = candidate.strip("_").casefold()
+    if not candidate:
+        return None
+    if candidate[0].isdigit():
+        candidate = f"context_{candidate}"
+    return candidate if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate) else None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        return None
+    if isinstance(value, int):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None
 
 
 def resolve_generation_mode(

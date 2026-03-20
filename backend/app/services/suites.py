@@ -162,11 +162,11 @@ def rerun_failed_suite_run(
         raise EntityNotFoundError(f"Suite run {run_id} not found.")
 
     source_items = _get_suite_run_item_models(session, run_id)
-    failed_items = [item for item in source_items if item.status == "failed"]
-    if not failed_items:
+    rerunnable_items = [item for item in source_items if item.status in {"failed", "needs_intervention"}]
+    if not rerunnable_items:
         raise SuiteValidationError("Suite run does not contain failed cases to rerun.")
 
-    suite_cases = _build_suite_cases_from_run_items(session, suite.project_id, failed_items)
+    suite_cases = _build_suite_cases_from_run_items(session, suite.project_id, rerunnable_items)
     rerun_context_mode = payload.rerun_context_mode or "reuse_source_context"
     context_source = "suite_run_snapshot" if rerun_context_mode == "reuse_source_context" else "empty"
     context_source_suite_run_id = source_run.id if context_source == "suite_run_snapshot" else None

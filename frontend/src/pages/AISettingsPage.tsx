@@ -473,6 +473,16 @@ export function AISettingsPage() {
                         .join("、")
                     : "暂无"}
                 </Descriptions.Item>
+                <Descriptions.Item label="Prompt 版本效果">
+                  {overviewData.generation_stats.prompt_version_breakdown.length
+                    ? overviewData.generation_stats.prompt_version_breakdown
+                        .map(
+                          (item) =>
+                            `${item.prompt_version}: ${item.total_requests} / ${item.accepted_count} / ${item.rejected_count} / ${item.retry_accepted_count}`,
+                        )
+                        .join("、")
+                    : "暂无"}
+                </Descriptions.Item>
                 <Descriptions.Item label="上下文分布">
                   {overviewData.generation_stats.context_profile_breakdown.length
                     ? overviewData.generation_stats.context_profile_breakdown

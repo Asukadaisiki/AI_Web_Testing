@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 
+from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION
 import app.core.config as config_module
 import app.main as main_module
 from app.db import Base
@@ -208,6 +209,17 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
                     "rejected_count": 0,
                 }
             ],
+            "prompt_version_breakdown": [
+                {
+                    "prompt_version": AI_DSL_PROMPT_VERSION,
+                    "total_requests": 1,
+                    "success_count": 0,
+                    "accepted_count": 0,
+                    "rejected_count": 0,
+                    "retry_requests": 0,
+                    "retry_accepted_count": 0,
+                }
+            ],
             "context_profile_breakdown": [
                 {
                     "context_profile": "blank_request",
@@ -363,6 +375,26 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
             "accepted_count": 3,
             "rejected_count": 1,
         }
+    ]
+    assert overview_response.json()["generation_stats"]["prompt_version_breakdown"] == [
+        {
+            "prompt_version": AI_DSL_PROMPT_VERSION,
+            "total_requests": 3,
+            "success_count": 3,
+            "accepted_count": 2,
+            "rejected_count": 1,
+            "retry_requests": 0,
+            "retry_accepted_count": 0,
+        },
+        {
+            "prompt_version": f"{AI_DSL_PROMPT_VERSION}+retry.bad_contracts",
+            "total_requests": 1,
+            "success_count": 1,
+            "accepted_count": 1,
+            "rejected_count": 0,
+            "retry_requests": 1,
+            "retry_accepted_count": 1,
+        },
     ]
     assert overview_response.json()["generation_stats"]["context_profile_breakdown"] == [
         {

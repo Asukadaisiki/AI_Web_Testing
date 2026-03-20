@@ -339,14 +339,22 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
             "value_type": "string",
             "source": "latest_url",
             "description": None,
+        },
+        {
+            "name": "bad",
+            "context_key": "bad",
+            "value_type": "string",
+            "source": None,
+            "description": None,
         }
     ]
     assert response.json()["warnings"] == [
-        "AI 草案中的输入契约不是数组，已忽略该字段。",
-        "输出契约 #2 结构非法，已忽略。",
+        "输入契约 #1 结构非法，已忽略。",
         "步骤 #2 无法修正为合法 DSL，已忽略。",
     ]
     assert response.json()["normalization_notes"] == [
+        "AI 草案中的输入契约已从单个对象包装为数组。",
+        "输出契约 #2 缺少 name，已回填为 bad。",
         "步骤 #1 的 action 已从 open 自动修正为 goto。",
         "步骤 #3 的 target 已自动转换为字符串。",
     ]
@@ -359,7 +367,75 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     ]
     assert response.json()["generation_meta"]["repaired_invalid_actions"] == 1
     assert response.json()["generation_meta"]["removed_invalid_steps"] == 1
-    assert response.json()["generation_meta"]["removed_invalid_contracts"] == 2
+    assert response.json()["generation_meta"]["removed_invalid_contracts"] == 1
+
+
+def test_generate_dsl_case_repairs_single_step_and_contract_shape_for_governance_v2(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "治理 v2 修复",
+  "steps": {"action": "goto", "value": "/governance-v2"},
+  "input_contract": {
+    "name": "Session Token",
+    "value_type": "text",
+    "required": "yes"
+  },
+  "output_contract": {
+    "context_key": "landing_url",
+    "value_type": "text",
+    "source": "page_url"
+  }
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成稳定契约",
+            "actor_user_id": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["case"]["steps"] == [{"action": "goto", "value": "/governance-v2"}]
+    assert response.json()["case"]["input_contract"] == [
+        {
+            "name": "Session Token",
+            "context_key": "session_token",
+            "value_type": "string",
+            "required": True,
+            "description": None,
+        }
+    ]
+    assert response.json()["case"]["output_contract"] == [
+        {
+            "name": "landing_url",
+            "context_key": "landing_url",
+            "value_type": "string",
+            "source": "latest_url",
+            "description": None,
+        }
+    ]
+    assert response.json()["warnings"] == []
+    assert response.json()["normalization_notes"] == [
+        "AI 草案中的输入契约已从单个对象包装为数组。",
+        "输入契约 #1 缺少 context_key，已从 name 派生为 session_token。",
+        "输入契约 #1 的 value_type 已从 text 自动修正为 string。",
+        "输入契约 #1 的 required 已自动修正为布尔值。",
+        "AI 草案中的输出契约已从单个对象包装为数组。",
+        "输出契约 #1 缺少 name，已回填为 landing_url。",
+        "输出契约 #1 的 value_type 已从 text 自动修正为 string。",
+        "输出契约 #1 的 source 已从 page_url 自动修正为 latest_url。",
+        "AI 草案中的 steps 已从单个对象包装为数组。",
+    ]
+    assert response.json()["generation_meta"]["risk_flags"] == []
 
 
 def test_generate_dsl_case_preserves_contracts_and_current_name_in_strict_steps_mode(client, monkeypatch) -> None:

@@ -6,7 +6,7 @@ import app.services.executions as execution_service
 import app.services.suites as suite_service
 from app.models import SuiteRun, SuiteRunItem, TestSuite
 from app.schemas.executions import StepExecutionEvidence
-from app.runners import RunnerExecutionError
+from app.runners import RunnerExecutionError, RunnerInterventionError
 
 
 def _create_case(
@@ -455,6 +455,77 @@ def test_rerun_failed_suite_run_rejects_run_without_failures(client, monkeypatch
     rerun_response = client.post("/api/v1/suites/1/runs/1/rerun-failed", json={"actor_user_id": 1})
     assert rerun_response.status_code == 422
     assert rerun_response.json() == {"detail": "Suite run does not contain failed cases to rerun."}
+
+
+def test_rerun_failed_suite_run_also_reruns_needs_intervention_items(client, monkeypatch) -> None:
+    case_id_1 = _create_case(client, name="Needs Intervention")
+    case_id_2 = _create_case(client, name="Already Passed")
+    suite_response = client.post(
+        "/api/v1/suites",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "Intervention Rerun Suite",
+            "cases": [{"case_id": case_id_1}, {"case_id": case_id_2}],
+        },
+    )
+    assert suite_response.status_code == 201
+
+    call_sequence: list[str] = []
+    case_one_attempt = {"count": 0}
+
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None):
+        call_sequence.append(case.name)
+        if case.name == "Needs Intervention":
+            case_one_attempt["count"] += 1
+            if case_one_attempt["count"] == 1:
+                raise RunnerInterventionError(
+                    "locator intervention required",
+                    step_results=[
+                        StepExecutionEvidence(
+                            step_index=0,
+                            action="click",
+                            target="handoff trigger",
+                            status="failed",
+                            error_message="locator intervention required",
+                        )
+                    ],
+                )
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="goto",
+                value="/",
+                status="passed",
+            )
+        ]
+
+    monkeypatch.setattr(execution_service, "execute_case_with_playwright", fake_execute_case_with_playwright)
+
+    initial_response = client.post("/api/v1/suites/1/execute", json={"actor_user_id": 1})
+    assert initial_response.status_code == 200
+    assert initial_response.json()["status"] == "failed"
+    assert initial_response.json()["items"][0]["status"] == "needs_intervention"
+
+    rerun_response = client.post("/api/v1/suites/1/runs/1/rerun-failed", json={"actor_user_id": 1})
+    assert rerun_response.status_code == 200
+    rerun_payload = rerun_response.json()
+    assert call_sequence == ["Needs Intervention", "Already Passed", "Needs Intervention"]
+    assert rerun_payload["source"] == "rerun_failed"
+    assert rerun_payload["source_suite_run_id"] == 1
+    assert rerun_payload["items"] == [
+        {
+            "id": 3,
+            "case_id": case_id_1,
+            "case_name_snapshot": "Needs Intervention",
+            "order_index": 1,
+            "execution_id": 3,
+            "status": "passed",
+            "context_reads": [],
+            "context_writes": [],
+            "context_resolution_error": None,
+        }
+    ]
 
 
 def test_execute_suite_fails_fast_when_required_context_is_missing(client, monkeypatch) -> None:

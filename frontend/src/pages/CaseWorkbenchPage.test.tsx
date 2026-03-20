@@ -1015,7 +1015,7 @@ test("放弃草案会记录 rejected 反馈并清空预览", async () => {
   await waitFor(() => {
     expect(screen.queryByText("生成预览")).not.toBeInTheDocument();
   });
-});
+}, 15000);
 
 test("放弃草案前必须先选择结构化原因", async () => {
   vi.mocked(api.generateDslCase).mockResolvedValue({
@@ -1062,7 +1062,7 @@ test("放弃草案前必须先选择结构化原因", async () => {
 
   expect((await screen.findAllByText("请先选择放弃原因。")).length).toBeGreaterThan(0);
   expect(api.recordDslGenerationFeedback).not.toHaveBeenCalled();
-});
+}, 15000);
 
 test("采纳反馈失败时保留草案预览并提示可重试", async () => {
   vi.mocked(api.generateDslCase).mockResolvedValue({
@@ -1114,7 +1114,7 @@ test("采纳反馈失败时保留草案预览并提示可重试", async () => {
   expect(screen.getByText("Step 1")).toBeInTheDocument();
   expect(screen.getByDisplayValue("保留编辑态")).toBeInTheDocument();
   expect(screen.getByText("生成预览")).toBeInTheDocument();
-});
+}, 15000);
 
 test("自然语言生成失败时不污染当前编辑内容", async () => {
   vi.mocked(api.generateDslCase).mockRejectedValue(new Error("AI DSL 生成配置不完整。"));

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
@@ -42,6 +42,7 @@ from app.schemas.settings import (
     AIDslGenerationImportModeCount,
     AIDslGenerationModeBreakdown,
     AIDslGenerationModelOutcome,
+    AIDslGenerationPromptVersionBreakdown,
     AIDslGenerationRejectionReasonCount,
     AIDslGenerationRejectionReasonByVariant,
     AIDslGenerationPromptVariantBreakdown,
@@ -432,6 +433,31 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         .group_by(DslGenerationRun.prompt_variant)
         .order_by(func.count().desc(), DslGenerationRun.prompt_variant.asc())
     ).all()
+    prompt_version_rows = session.execute(
+        select(
+            DslGenerationRun.prompt_version,
+            func.count().label("total_requests"),
+            func.sum(case((DslGenerationRun.success.is_(True), 1), else_=0)).label("success_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "accepted", 1), else_=0)).label("accepted_count"),
+            func.sum(case((DslGenerationRun.feedback_status == "rejected", 1), else_=0)).label("rejected_count"),
+            func.sum(case((DslGenerationRun.retry_from_generation_id.is_not(None), 1), else_=0)).label("retry_requests"),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            DslGenerationRun.retry_from_generation_id.is_not(None),
+                            DslGenerationRun.feedback_status == "accepted",
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                ),
+            ).label("retry_accepted_count"),
+        )
+        .group_by(DslGenerationRun.prompt_version)
+        .order_by(func.count().desc(), DslGenerationRun.prompt_version.desc())
+        .limit(5)
+    ).all()
     context_profile_rows = session.execute(
         select(
             DslGenerationRun.context_profile,
@@ -514,6 +540,26 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
                 rejected_count=rejected_count or 0,
             )
             for prompt_variant, total_requests, success_count, accepted_count, rejected_count in prompt_variant_rows
+        ],
+        prompt_version_breakdown=[
+            AIDslGenerationPromptVersionBreakdown(
+                prompt_version=prompt_version,
+                total_requests=total_requests,
+                success_count=success_count or 0,
+                accepted_count=accepted_count or 0,
+                rejected_count=rejected_count or 0,
+                retry_requests=retry_requests or 0,
+                retry_accepted_count=retry_accepted_count or 0,
+            )
+            for (
+                prompt_version,
+                total_requests,
+                success_count,
+                accepted_count,
+                rejected_count,
+                retry_requests,
+                retry_accepted_count,
+            ) in prompt_version_rows
         ],
         context_profile_breakdown=[
             AIDslGenerationContextProfileBreakdown(

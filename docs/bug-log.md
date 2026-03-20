@@ -30,6 +30,47 @@
 
 ## 当前状态
 
+## BUG-023 | suite rerun-failed 未将 needs_intervention 视为可重跑失败项
+
+- 日期：2026-03-20
+- 状态：fixed
+- 来源：自测 / 浏览器回归
+- 描述：`POST /api/v1/suites/{suite_id}/runs/{run_id}/rerun-failed` 在服务层仅筛选 `status == "failed"` 的 `SuiteRunItem`，导致套件批次中落为 `needs_intervention` 的子用例即使已补充 correction，也会被接口以“没有失败项可重跑”拒绝，和执行中心将 `needs_intervention` 归为失败项的语义不一致。
+- 复现步骤：
+  1. 构造一个包含上下文传递的 Suite，使第二个 Case 因定位失败落为 `needs_intervention`
+  2. 提交 correction 后调用 `/api/v1/suites/{suite_id}/runs/{run_id}/rerun-failed`
+  3. 观察旧实现不会重跑该项，接口返回 422
+- 影响：Suite Context + intervention + rerun 的主回归链路无法闭环，也会导致套件批次详情、执行中心和重跑接口对“失败项”定义不一致。
+- 根因：`backend/app/services/suites.py` 的 `rerun_failed_suite_run()` 只复用了传统 runner `failed` 状态，没有同步 2026-03-15 后已落地的 `needs_intervention` 人工干预状态。
+- 处理：
+  - 将 `rerun_failed_suite_run()` 的可重跑项扩展为 `{"failed", "needs_intervention"}`
+  - 新增单测覆盖 `needs_intervention` 子项的 suite rerun 场景
+  - 用浏览器集成测试补齐 `Suite Context + correction + rerun` 链路
+- 验证：
+  - 执行 `uv run pytest backend/tests/unit/test_suites_api.py`，结果通过
+  - 执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py`，结果 `5 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-20
+
+## BUG-022 | project-plan 与 README 未同步 2026-03-19 的 Locator / AI DSL 最新进展
+
+- 日期：2026-03-20
+- 状态：fixed
+- 来源：需求 / 文档核对
+- 描述：`docs/project-plan.md` 仍停留在 2026-03-18，并把 Locator P0-P3 写成“未开始”；`README.md` 也未同步 AI DSL 第二轮治理能力、Locator P0-P3 已完成和浏览器回归矩阵的新范围，导致文档基线明显落后于 2026-03-19 的执行日志与当前代码实现。
+- 复现步骤：
+  1. 阅读 `docs/project-plan.md` 与 `README.md`
+  2. 对照 `docs/execution-log.md` 2026-03-19 两条记录
+  3. 对照 `backend/app/locators/`、`backend/app/ai/dsl_generator.py`、`frontend/src/pages/AISettingsPage.tsx`
+  4. 可见文档仍将 P0-P3 当成未来计划，且未体现 retry context / retry prompt version / prompt 版本效果概览
+- 影响：会误导下一步排期，把已经落地的 Locator 与 AI DSL 能力继续当作未完成主线，削弱后续迭代对 P4 缓存、治理优化和回归矩阵补强的聚焦。
+- 根因：2026-03-19 交付后执行日志已更新，但 `project-plan` 与 `README` 没有同步刷新状态快照和下一里程碑。
+- 处理：
+  - 将 `docs/project-plan.md` 更新到 2026-03-19 基线，明确 P0-P3 已完成、P4 待做、auth 基本未启动
+  - 更新 `README.md` 的当前状态、未完成重点方向与浏览器级回归描述
+  - 在本次执行日志中补记文档同步与验证结果
+- 验证：人工核对 `docs/project-plan.md`、`README.md`、`docs/execution-log.md` 与当前代码实现，三者口径一致
+- 关联记录：`docs/execution-log.md` 2026-03-20
+
 ## BUG-021 | AI DSL 治理增强首版存在重复 profile 推导、风险筛选兼容性与测试膨胀问题
 
 - 日期：2026-03-18

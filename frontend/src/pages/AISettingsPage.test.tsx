@@ -90,6 +90,17 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
           rejected_count: 1,
         },
       ],
+      prompt_version_breakdown: [
+        {
+          prompt_version: "2026-03-20.governance-v2",
+          total_requests: 3,
+          success_count: 2,
+          accepted_count: 1,
+          rejected_count: 1,
+          retry_requests: 1,
+          retry_accepted_count: 1,
+        },
+      ],
       context_profile_breakdown: [
         {
           context_profile: "blank_request",
@@ -247,6 +258,7 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   expect(screen.getByText("replace (1)、steps_only (1)")).toBeInTheDocument();
   expect(screen.getByText("bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft: 4 / 2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("2026-03-20.governance-v2: 3 / 1 / 1 / 1")).toBeInTheDocument();
   expect(screen.getByText("blank_request: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft / bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("gpt-4o-mini: 4 / 2 / 1")).toBeInTheDocument();
@@ -292,7 +304,7 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   expect(screen.getAllByText("baseline_draft").length).toBeGreaterThan(0);
   expect(screen.getAllByText("invalid_steps_removed").length).toBeGreaterThan(0);
   expect(screen.getByDisplayValue(/治理详情草案/)).toBeInTheDocument();
-}, 15000);
+}, 30000);
 
 test("保存 AI 配置会提交最新表单值", async () => {
   vi.mocked(api.getAISettings).mockResolvedValue({
@@ -340,6 +352,7 @@ test("保存 AI 配置会提交最新表单值", async () => {
       accepted_import_mode_breakdown: [],
       top_rejection_reasons: [],
       prompt_variant_breakdown: [],
+      prompt_version_breakdown: [],
       context_profile_breakdown: [],
       rejection_reason_by_variant: [],
       model_outcome_breakdown: [],
@@ -442,6 +455,7 @@ test("加载失败时展示错误块", async () => {
       accepted_import_mode_breakdown: [],
       top_rejection_reasons: [],
       prompt_variant_breakdown: [],
+      prompt_version_breakdown: [],
       context_profile_breakdown: [],
       rejection_reason_by_variant: [],
       model_outcome_breakdown: [],

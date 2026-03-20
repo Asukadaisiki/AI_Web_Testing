@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-20
+
+- 任务：同步计划文档基线，并落实 AI DSL 第二轮治理与浏览器回归矩阵补强
+- 执行动作：对照 `docs/execution-log.md`、`README.md` 与现有代码实现，更新 `docs/project-plan.md` 到 2026-03-19 真实状态，明确 Locator P0-P3 已完成、P4 待做、auth 基本未启动；扩展 AI settings overview 的 `prompt_version_breakdown` 聚合与前端展示；将 `AI_DSL_PROMPT_VERSION` 升级为 `2026-03-20.governance-v2`，针对高频拒绝原因补强 contract / step normalization 与自动修正规则；补充浏览器级回归中的单 Case smoke、Suite Context + correction + rerun 场景；修复 suite `rerun-failed` 只接受 `failed` 不接受 `needs_intervention` 的语义缺口；同步放宽慢速前端页面测试的显式超时并补记文档缺口与重跑缺口到 `docs/bug-log.md`
+- 结果：项目计划、README 与执行日志口径已统一；治理页现在可对比 prompt 版本效果；AI DSL 对单对象 contracts、缺失 `name/context_key`、别名 `value_type/source`、布尔值和单步草案的自动修正更稳；套件失败重跑已能覆盖 `needs_intervention` 场景，浏览器级固定主回归扩展为 5 条本地集成验证
+- 验证：执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py backend/tests/unit/test_suites_api.py`，结果 `47 passed`；执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `19 passed`；执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py`，结果 `5 passed`
+- 后续：下一轮可直接基于治理页的 `top_rejection_reasons`、`rejection_reason_by_variant` 与 `prompt_version_breakdown` 收敛前 2 个高频拒绝原因，并继续补 Locator P4 会话级缓存与 AI visual 灰度验收指标
+
 ## 2026-03-18 23:05
 
 - 任务：修复 AI DSL 治理增强提交的 Code Review 问题

@@ -205,6 +205,7 @@ export interface AIDslGenerationStats {
   accepted_import_mode_breakdown: DslGenerationImportModeCount[];
   top_rejection_reasons: DslGenerationRejectionReasonCount[];
   prompt_variant_breakdown: DslGenerationPromptVariantBreakdown[];
+  prompt_version_breakdown: DslGenerationPromptVersionBreakdown[];
   context_profile_breakdown: DslGenerationContextProfileBreakdown[];
   rejection_reason_by_variant: DslGenerationRejectionReasonByVariant[];
   model_outcome_breakdown: DslGenerationModelOutcome[];
@@ -241,6 +242,16 @@ export interface DslGenerationPromptVariantBreakdown {
   success_count: number;
   accepted_count: number;
   rejected_count: number;
+}
+
+export interface DslGenerationPromptVersionBreakdown {
+  prompt_version: string;
+  total_requests: number;
+  success_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  retry_requests: number;
+  retry_accepted_count: number;
 }
 
 export interface DslGenerationContextProfileBreakdown {

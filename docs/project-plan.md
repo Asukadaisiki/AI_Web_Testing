@@ -18,7 +18,7 @@
 4. Reporter 层：`backend/app/reporters`
 5. Suite Manager 层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`
 
-## 当前状态快照（截至 2026-03-18）
+## 当前状态快照（截至 2026-03-19）
 
 ### 已完成
 
@@ -41,44 +41,20 @@
 - AI 生成 DSL 深化第一批：生成模式/上下文/导入控制、自动修正与 `normalization_notes`、生成观测概览
 - AI DSL 反馈闭环：`feedback_status`（pending/accepted/rejected）、采纳/放弃上报、概览聚合
 - AI DSL 治理与观测闭环：生成记录多维筛选、详情查询、结构化拒绝原因、prompt 版本审计、前端治理表格与详情抽屉
+- AI DSL 第二轮可用率收敛首批：重试上下文、按拒绝原因重试生成、重试版 `prompt_version`、治理页重试成效概览
+- 混合定位精度优化 P0-P3：overlay 遮挡穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
+- Locator follow-up：`deep_locate` 总超时预算、`semantic` 公共候选接口、Pillow lazy import、错误与日志收口
 
 ### 进行中
 
-- AI 生成 DSL 持续深化：prompt 调优、草案修正策略、生成约束迭代（基于治理数据驱动）
+- AI 生成 DSL 数据驱动优化第二轮：基于 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 收敛 prompt / normalization
+- 浏览器级回归矩阵补强：从最小浏览器集成扩展为固定 smoke / intervention / suite-context 三条主回归
 
 ### 未开始
 
-#### 混合定位精度优化（Locator 层增强）
+#### 混合定位剩余项（Locator sidecar）
 
-以下五项按依赖关系和投入产出比排序，建议按序推进：
-
-**P0 — elementFromPoint 遮挡穿透**
-- 问题：`elementFromPoint` 只返回 z-index 最顶层元素，toast / loading overlay / cookie banner 会遮挡目标
-- 方案：检测返回元素是否为常见遮挡物（`role="alert"`, `class*="overlay"`, `class*="toast"` 等），命中时改用 `elementsFromPoint` 取整个 z-stack 逐个匹配
-- 涉及文件：`backend/app/locators/fallback.py` (`_snapshot_dom_element_at_point`)
-- 投入：小 | 收益：高（消除一类系统性误判）
-
-**P1 — DOM 交叉验证增强**
-- 问题：当前 `_dom_snapshot_matches_target` 做严格 token 子集检查，过于刚性（"删除"能匹配"删除账户"，但"提交订单"无法匹配 aria-label="提交"）
-- 方案：引入 Jaccard 相似度阈值（如 ≥ 0.5）作为模糊匹配兜底；对中文 target 增加分词粒度（单字 token 回退）
-- 涉及文件：`backend/app/locators/fallback.py` (`_dom_snapshot_matches_target`, `_tokenize`)
-- 投入：小 | 收益：中（减少 AI 定位正确但验证误拒的情况）
-
-**P2 — AI 视觉定位 `deep_locate` 两阶段精度优化**
-- 设计文档 2.3 节已完整描述，当前 `ai_visual.py` 未实现
-- 阶段 1：VLM 粗定位区域（section）→ 扩展搜索区域（至少 400×400）→ 裁剪放大 2× → 阶段 2 精确定位 → 坐标回算
-- 需实现：`_locate_section`、`_expand_search_area`、`_crop_and_scale`（依赖 Pillow）
-- 涉及文件：`backend/app/locators/ai_visual.py`
-- 投入：中 | 收益：高（密集页面定位精度显著提升，参考 Midscene 核心优化策略）
-
-**P3 — Tier 1 + Tier 2 融合（DOM 候选检索 + VLM 排序）**
-- 问题：当前 Tier 1 和 Tier 2 完全串行独立，Tier 1 多候选分数接近时直接放弃进入纯视觉定位
-- 方案：当 Tier 1 找到多个候选且最高分与次高分差距 < 阈值时，在截图上标注候选位置（画框/编号），发送给 VLM 做排序选择，直接复用 DOM locator
-- 优势：候选已是合法 DOM 元素，不存在 `elementFromPoint` 反查失败的问题；比纯 bbox 定位更可靠
-- 涉及文件：`backend/app/locators/fallback.py` (新增 `_try_vlm_rank_candidates`)、`backend/app/locators/ai_visual.py` (新增排序 prompt)
-- 投入：中 | 收益：高（本质上是方式一"DOM 候选 + VLM 排序"与方式二的融合）
-
-**P4 — AI 定位结果缓存**
+**P4 — 会话级 AI 定位结果缓存**
 - 问题：同一页面同一 target 重复出现时（循环操作场景），每次都调用 VLM
 - 方案：在 `resolve_with_fallback` 中增加 `(page_url_pattern, target) → selector` 的内存缓存（LRU），AI 定位成功后写入缓存，后续命中时直接用缓存的 selector；失效时清除
 - 与 Tier 0 修正记录的区别：缓存是会话级自动产生、无需人工介入；修正记录是跨会话持久化、人工提交
@@ -87,20 +63,28 @@
 
 #### 其他未开始项
 
-- 默认开启的真实 AI 视觉定位接入与 VLM 模型配置管理页
-- 登录页与平台认证体系
-- 更完整的浏览器级端到端回归矩阵
+- AI visual 灰度验收与默认开启策略仍未开始，当前保持“可配置、可调用、默认关闭”
+- 登录页与平台认证体系基本未启动；现有 `users` 模型仍是为后续 auth 预留的最小实体
+- 更完整的浏览器级回归矩阵仍待补齐到固定主回归集
 
 ## 下一里程碑
 
-当前主线为 **AI 生成 DSL 持续深化**，基于已有治理数据（`top_rejection_reasons` / `model_outcome_breakdown` / `generation_mode_breakdown`）驱动 prompt 优化。
+当前主线为 **AI 生成 DSL 数据驱动优化 + 回归矩阵补强**。
 
-DSL 深化告一段落后，建议进入 **混合定位精度优化** 阶段，按 P0 → P4 顺序推进。其中 P0（遮挡穿透）和 P1（验证增强）改动小、收益确定，可作为过渡期穿插完成；P2（deepLocate）和 P3（Tier 1+2 融合）是核心投入项，建议各自独立验证。
+AI DSL 方向优先基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）先收敛前 2 个高频拒绝原因，目标是降低“初次失败且按原因重试后仍失败”的占比；若治理页仍缺少按 `prompt_version` 的前后对比，则只补最小可用聚合，不改 DSL 结构和执行接口。
+
+Locator 方向不再重开一条主线，剩余事项收口为 **P4 会话级缓存** sidecar；AI visual 默认仍不全量开启，先补灰度验收基线，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。
+
+回归方向优先补齐浏览器级固定主回归，而不是先做认证体系。建议保留并持续验证以下三条：
+
+1. 单 Case smoke。
+2. `needs_intervention -> correction -> rerun -> Tier0 hit`。
+3. Suite Context 串联 + 失败重跑。
 
 后续可选方向：
 
-- **混合定位精度优化 P0–P4**：遮挡穿透 → 验证增强 → deepLocate → DOM+VLM 融合 → 缓存层。
-- **真实 AI 视觉定位接入**：VLM 配置页、默认开启策略与模型管理（P2/P3 的前置条件）。
+- **Locator sidecar**：完成 P4 会话级缓存，并补缓存命中观测。
+- **AI visual 灰度验收**：补齐默认关闭前提下的可观测性与验证基线。
 - **登录页与认证体系**：平台登录入口、用户会话与权限边界。
 - **corrections 运维继续细化**：跨修正目标分析、更明确的状态反馈。
 
@@ -118,7 +102,7 @@ DSL 深化告一段落后，建议进入 **混合定位精度优化** 阶段，�
 
 - 后端：PostgreSQL（端口 5432），单元测试覆盖 Schema/服务层/定位逻辑，集成测试覆盖任务创建/执行/报告
 - 前端：组件测试覆盖表单/列表/状态展示，页面测试覆盖用例创建/执行/报告
-- 端到端：至少保留一条登录冒烟用例作为主回归链路
+- 浏览器级回归：固定保留 `单 Case smoke`、`intervention -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 三条主回归；AI DSL 维持单元/API 级验证，不把外部模型稳定性引入主 CI
 
 ## 风险与兜底
 

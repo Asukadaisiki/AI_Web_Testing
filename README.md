@@ -21,13 +21,16 @@ AI 增强的 Web UI 自动化测试平台。
 - 修正记录管理：前端已提供 `/corrections` 页面，可按目标描述、页面 URL 和状态筛选修正记录，并支持 overview 卡片、命中趋势、批量启用/停用与事件时间线
 - AI 生成 DSL 最小闭环：后端已提供 `POST /api/v1/dsl/generate`，前端工作台可输入自然语言生成草案，并选择“替换当前 DSL”或“仅导入步骤”
 - AI 生成 DSL 深化：支持 `generation_mode / import_mode / current_case / current_steps / preserve_contracts`，后端会输出 `normalization_notes` 与 `generation_meta`，前端工作台可展示自动修正项、风险 warning 与三种导入方式
+- AI DSL 第二轮治理能力：支持重试上下文、按拒绝原因重试生成、重试版 `prompt_version`，治理页可查看重试成效与 prompt 版本效果
 - AI 设置管理：前端已提供 `/settings/ai` 页面，支持管理 AI DSL / VLM 运行时配置；`GET /api/v1/settings/ai/overview` 可查看 DSL 生成最小观测指标
+- 混合定位精度优化 P0-P3：已落地 overlay 穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
 - AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
-- AI 生成 DSL 进一步调优（prompt 质量、草案修正策略继续细化）
-- AI 视觉定位增强（默认关闭，当前仅保留可接入实现与运行保护）
-- 登录与更完整的平台认证体系
+- AI 生成 DSL 数据驱动第二轮优化（优先收敛高频拒绝原因与 `prompt_version` 对比指标）
+- Locator 剩余 sidecar 仅剩 P4 会话级缓存；AI visual 继续默认关闭，先补灰度验收基线
+- 浏览器级固定主回归矩阵仍需补强到 smoke / intervention / suite-context 三条主链路
+- 登录与更完整的平台认证体系基本未启动
 
 ## Suite Context 使用路径
 
@@ -46,13 +49,13 @@ AI 增强的 Web UI 自动化测试平台。
 4. 提交修正记录后，直接从页面重跑当前 Case
 5. 后续同页面同目标会优先命中人工修正记录
 
-## 本地人工干预回归
+## 浏览器级回归
 
-仓库现在提供一条本地可控的真实回归链路，用于验证：
+仓库现在提供本地可控的浏览器级回归链路，用于验证：
 
-- 首次执行落为 `needs_intervention`
-- 提交 correction 后可重跑通过
-- 第二次执行由 Tier 0 命中，而不是页面偶然变化导致成功
+- 单 Case smoke 可稳定执行成功
+- 首次执行落为 `needs_intervention`，提交 correction 后可重跑通过，再次执行由 Tier 0 命中
+- Suite Context 失败重跑可复用原始上下文快照
 - 错误 correction 连续失败 3 次后会自动停用
 - correction 记录的 `verified_count`、`consecutive_failures` 与 `is_active` 状态正确
 

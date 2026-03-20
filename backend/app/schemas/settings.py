@@ -85,6 +85,16 @@ class AIDslGenerationPromptVariantBreakdown(SettingsModel):
     rejected_count: int = Field(ge=0)
 
 
+class AIDslGenerationPromptVersionBreakdown(SettingsModel):
+    prompt_version: str = Field(min_length=1, max_length=100)
+    total_requests: int = Field(ge=1)
+    success_count: int = Field(ge=0)
+    accepted_count: int = Field(ge=0)
+    rejected_count: int = Field(ge=0)
+    retry_requests: int = Field(ge=0)
+    retry_accepted_count: int = Field(ge=0)
+
+
 class AIDslGenerationContextProfileBreakdown(SettingsModel):
     context_profile: Literal["blank_request", "rewrite_from_case", "repair_steps", "contracts_focus"]
     total_requests: int = Field(ge=1)
@@ -144,6 +154,7 @@ class AIDslGenerationStats(SettingsModel):
     accepted_import_mode_breakdown: list[AIDslGenerationImportModeCount] = Field(default_factory=list)
     top_rejection_reasons: list[AIDslGenerationRejectionReasonCount] = Field(default_factory=list)
     prompt_variant_breakdown: list[AIDslGenerationPromptVariantBreakdown] = Field(default_factory=list)
+    prompt_version_breakdown: list[AIDslGenerationPromptVersionBreakdown] = Field(default_factory=list)
     context_profile_breakdown: list[AIDslGenerationContextProfileBreakdown] = Field(default_factory=list)
     rejection_reason_by_variant: list[AIDslGenerationRejectionReasonByVariant] = Field(default_factory=list)
     model_outcome_breakdown: list[AIDslGenerationModelOutcome] = Field(default_factory=list)
