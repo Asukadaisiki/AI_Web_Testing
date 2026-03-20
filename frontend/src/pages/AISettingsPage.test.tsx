@@ -22,7 +22,7 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
-test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
+function mockGovernancePageApis() {
   vi.mocked(api.getAISettings).mockResolvedValue({
     enable_ai_dsl_generate: false,
     ai_dsl_timeout_ms: 15000,
@@ -238,6 +238,10 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
     vlm_model_family: "gpt-4o",
     has_vlm_api_key: false,
   });
+}
+
+test("渲染 AI 治理概览", async () => {
+  mockGovernancePageApis();
 
   renderWithProviders(<AISettingsPage />, {
     route: "/settings/ai",
@@ -258,6 +262,7 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   expect(screen.getByText("replace (1)、steps_only (1)")).toBeInTheDocument();
   expect(screen.getByText("bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft: 4 / 2 / 1")).toBeInTheDocument();
+  expect(screen.getByText("Prompt 版本效果（总请求 / 采纳 / 放弃 / 重试采纳）")).toBeInTheDocument();
   expect(screen.getByText("2026-03-20.governance-v2: 3 / 1 / 1 / 1")).toBeInTheDocument();
   expect(screen.getByText("blank_request: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft / bad_contracts (1)")).toBeInTheDocument();
@@ -269,6 +274,17 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   expect(screen.getByText("baseline_draft")).toBeInTheDocument();
   expect(screen.getByText("invalid_steps_removed")).toBeInTheDocument();
   expect(screen.getByText("详情")).toBeInTheDocument();
+}, 15000);
+
+test("AI 治理页支持筛选并查看详情", async () => {
+  mockGovernancePageApis();
+
+  renderWithProviders(<AISettingsPage />, {
+    route: "/settings/ai",
+    path: "/settings/ai",
+  });
+
+  expect(await screen.findByLabelText("AI DSL Base URL")).toHaveValue("https://api.openai.com/v1");
 
   await userEvent.click(screen.getByRole("combobox", { name: "Prompt Variant" }));
   await userEvent.click(await screen.findByText("baseline_draft", { selector: ".ant-select-item-option-content" }));
@@ -304,7 +320,7 @@ test("渲染 AI 治理概览、支持筛选并查看详情", async () => {
   expect(screen.getAllByText("baseline_draft").length).toBeGreaterThan(0);
   expect(screen.getAllByText("invalid_steps_removed").length).toBeGreaterThan(0);
   expect(screen.getByDisplayValue(/治理详情草案/)).toBeInTheDocument();
-}, 30000);
+}, 15000);
 
 test("保存 AI 配置会提交最新表单值", async () => {
   vi.mocked(api.getAISettings).mockResolvedValue({

@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-20 15:30
+
+- 任务：修复 governance v2 review follow-up 问题并收敛前端慢测试
+- 执行动作：将 `dsl_generator.py` 中 `required` 自动修正的 `is not` 比较改为值比较；为 contract normalization 提取 `ContractNormalizationContext` dataclass，收敛 `_normalize_contracts()` / `_repair_contract_payload()` 的参数；把 system/user prompt 规则提取为模板常量和构造 helper，避免继续在单个函数里累积硬编码字符串；确认 `_normalize_string()` 对 `None` / 非字符串 / 空白字符串返回 `None`，并补充单测；为 AI settings 治理页的 prompt version 指标补上“总请求 / 采纳 / 放弃 / 重试采纳”列说明；将原先 30s 的 AI settings 大测试拆成“概览渲染”和“筛选详情”两条，用更小的 15s 超时；将 CaseWorkbench 几条反馈相关测试超时从 15s 下调到 10s
+- 结果：review 中的可落地代码问题已收口，后端 contract normalize 与 prompt 组织更易维护，前端 prompt version 展示更可读，治理页测试不再依赖 30s 大超时，反馈相关页面测试也回落到更合理的 10s
+- 验证：执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py`，结果 `33 passed`；执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `20 passed`
+- 后续：commit 粒度问题属于提交流程约束，本轮已在代码结构和测试拆分上收口，但后续仍建议把 feature / bugfix / docs / test-only 变更拆成更小提交
+
 ## 2026-03-20
 
 - 任务：同步计划文档基线，并落实 AI DSL 第二轮治理与浏览器回归矩阵补强

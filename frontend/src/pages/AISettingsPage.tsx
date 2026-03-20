@@ -473,7 +473,7 @@ export function AISettingsPage() {
                         .join("、")
                     : "暂无"}
                 </Descriptions.Item>
-                <Descriptions.Item label="Prompt 版本效果">
+                <Descriptions.Item label="Prompt 版本效果（总请求 / 采纳 / 放弃 / 重试采纳）">
                   {overviewData.generation_stats.prompt_version_breakdown.length
                     ? overviewData.generation_stats.prompt_version_breakdown
                         .map(

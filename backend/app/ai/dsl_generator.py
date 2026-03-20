@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 from urllib import request
 
@@ -104,6 +105,44 @@ _OUTPUT_SOURCE_ALIASES = {
     "last_step_error_message": "last_step_error_message",
 }
 AI_DSL_PROMPT_VERSION = "2026-03-20.governance-v2"
+_BASE_SYSTEM_PROMPT_LINES = [
+    "You generate structured web testing DSL in JSON only.",
+    "Do not use any other action names.",
+    "Return exactly one JSON object with keys:",
+    "name, description, base_url, input_contract, output_contract, steps.",
+    "Use semantic Chinese target descriptions when selectors are not explicitly provided.",
+    "Do not include markdown fences or explanations.",
+    "Keep input_contract/output_contract/steps as arrays even when empty or single-item.",
+    "Do not wrap the DSL under other keys such as case, data, result, response, or draft.",
+    "Every contract must include name, context_key, value_type.",
+    "Every output_contract item must also include source.",
+    "context_key must use stable snake_case and match ^[A-Za-z_][A-Za-z0-9_]*$.",
+    "If contract quality is uncertain, return an empty array instead of malformed entries.",
+]
+_PROMPT_VARIANT_RULES: dict[DslGenerationPromptVariant, list[str]] = {
+    "contracts_focus": [
+        "Prioritize high-quality input/output contracts and keep steps conservative.",
+        "Do not rewrite the business flow unless the prompt explicitly asks for it.",
+    ],
+    "repair_steps": [
+        "Focus on returning a stable, high-quality steps array.",
+        "Do not change contracts unless the prompt explicitly asks for contract edits.",
+    ],
+    "rewrite_from_case": [
+        "Rewrite from the provided current DSL while preserving the original business intent.",
+        "Prefer editing existing flow over inventing unrelated new flow.",
+    ],
+    "baseline_draft": [
+        "Return a complete first-draft DSL that is directly editable by users.",
+    ],
+}
+_BASE_USER_RULE_LINES = [
+    "要求：",
+    "- steps 必须是数组，且每个 step 只能使用允许的 action。",
+    "- input_contract 和 output_contract 如无需要，返回空数组。",
+    "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
+    "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
+]
 RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
     "wrong_actions": [
         "The previous draft used unsupported or overly aggressive actions.",
@@ -127,6 +166,16 @@ RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
 }
 
 
+@dataclass
+class ContractNormalizationContext:
+    adapter: TypeAdapter[Any]
+    label: str
+    is_output_contract: bool
+    allow_auto_repair: bool
+    warnings: list[str]
+    normalization_notes: list[str]
+
+
 def build_generation_messages(
     *,
     payload: GenerateDslRequest,
@@ -134,45 +183,52 @@ def build_generation_messages(
     prompt_variant: DslGenerationPromptVariant,
     supported_actions: list[str],
 ) -> list[dict[str, Any]]:
-    allowed_actions = ", ".join(supported_actions)
-    system_lines = [
-        "You generate structured web testing DSL in JSON only.",
-        f"Allowed actions: {allowed_actions}.",
-        "Do not use any other action names.",
-        "Return exactly one JSON object with keys:",
-        "name, description, base_url, input_contract, output_contract, steps.",
-        "Use semantic Chinese target descriptions when selectors are not explicitly provided.",
-        "Do not include markdown fences or explanations.",
-        f"Prompt variant: {prompt_variant}.",
-        "Keep input_contract/output_contract/steps as arrays even when empty or single-item.",
-        "Do not wrap the DSL under other keys such as case, data, result, response, or draft.",
-        "Every contract must include name, context_key, value_type.",
-        "Every output_contract item must also include source.",
-        "context_key must use stable snake_case and match ^[A-Za-z_][A-Za-z0-9_]*$.",
-        "If contract quality is uncertain, return an empty array instead of malformed entries.",
+    system_lines = _build_system_prompt_lines(
+        payload=payload,
+        generation_mode=generation_mode,
+        prompt_variant=prompt_variant,
+        supported_actions=supported_actions,
+    )
+    user_lines = _build_user_prompt_lines(payload=payload, generation_mode=generation_mode)
+    return [
+        {"role": "system", "content": " ".join(system_lines)},
+        {"role": "user", "content": "\n".join(user_lines)},
     ]
-    if prompt_variant == "contracts_focus":
-        system_lines.append("Prioritize high-quality input/output contracts and keep steps conservative.")
-        system_lines.append("Do not rewrite the business flow unless the prompt explicitly asks for it.")
-    elif prompt_variant == "repair_steps":
-        system_lines.append("Focus on returning a stable, high-quality steps array.")
-        system_lines.append("Do not change contracts unless the prompt explicitly asks for contract edits.")
-    elif prompt_variant == "rewrite_from_case":
-        system_lines.append("Rewrite from the provided current DSL while preserving the original business intent.")
-        system_lines.append("Prefer editing existing flow over inventing unrelated new flow.")
-    else:
-        system_lines.append("Return a complete first-draft DSL that is directly editable by users.")
 
+
+def _build_system_prompt_lines(
+    *,
+    payload: GenerateDslRequest,
+    generation_mode: GenerateDslMode,
+    prompt_variant: DslGenerationPromptVariant,
+    supported_actions: list[str],
+) -> list[str]:
+    system_lines = [
+        _BASE_SYSTEM_PROMPT_LINES[0],
+        f"Allowed actions: {', '.join(supported_actions)}.",
+        *_BASE_SYSTEM_PROMPT_LINES[1:],
+        f"Prompt variant: {prompt_variant}.",
+        *_PROMPT_VARIANT_RULES[prompt_variant],
+    ]
     if generation_mode == "strict_steps_only":
         system_lines.append("In strict_steps_only mode, prioritize returning a high-quality steps array.")
     if payload.import_mode == "contracts_only":
         system_lines.append("When import_mode is contracts_only, include useful input/output contracts when possible.")
     if payload.preserve_contracts:
-        system_lines.append("If current contracts are provided, keep them stable unless the prompt explicitly asks to change them.")
+        system_lines.append(
+            "If current contracts are provided, keep them stable unless the prompt explicitly asks to change them."
+        )
     if payload.retry_reason_code is not None:
         system_lines.append(f"Retry strategy: {payload.retry_reason_code}.")
         system_lines.extend(RETRY_REASON_STRATEGIES[payload.retry_reason_code])
+    return system_lines
 
+
+def _build_user_prompt_lines(
+    *,
+    payload: GenerateDslRequest,
+    generation_mode: GenerateDslMode,
+) -> list[str]:
     user_lines = [
         "请根据下面的测试需求生成可编辑 DSL 草案。",
         f"测试需求：{payload.prompt.strip()}",
@@ -180,11 +236,7 @@ def build_generation_messages(
         f"预期导入方式：{payload.import_mode}",
         f"建议 Base URL：{payload.base_url.strip() if payload.base_url else '未提供'}",
         f"是否保留当前契约：{'是' if payload.preserve_contracts else '否'}",
-        "要求：",
-        "- steps 必须是数组，且每个 step 只能使用允许的 action。",
-        "- input_contract 和 output_contract 如无需要，返回空数组。",
-        "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
-        "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
+        *_BASE_USER_RULE_LINES,
     ]
     if payload.retry_from_generation_id is not None and payload.retry_reason_code is not None:
         user_lines.extend(
@@ -233,10 +285,7 @@ def build_generation_messages(
                 ),
             ]
         )
-    return [
-        {"role": "system", "content": " ".join(system_lines)},
-        {"role": "user", "content": "\n".join(user_lines)},
-    ]
+    return user_lines
 
 
 def resolve_prompt_version(payload: GenerateDslRequest) -> str:
@@ -344,21 +393,25 @@ def _normalize_generated_case(
 
     input_contract, input_removed = _normalize_contracts(
         raw_contracts=raw_case.get("input_contract"),
-        adapter=_INPUT_CONTRACT_ADAPTER,
-        label="输入契约",
-        is_output_contract=False,
-        allow_auto_repair=allow_auto_repair,
-        warnings=warnings,
-        normalization_notes=normalization_notes,
+        context=ContractNormalizationContext(
+            adapter=_INPUT_CONTRACT_ADAPTER,
+            label="输入契约",
+            is_output_contract=False,
+            allow_auto_repair=allow_auto_repair,
+            warnings=warnings,
+            normalization_notes=normalization_notes,
+        ),
     )
     output_contract, output_removed = _normalize_contracts(
         raw_contracts=raw_case.get("output_contract"),
-        adapter=_OUTPUT_CONTRACT_ADAPTER,
-        label="输出契约",
-        is_output_contract=True,
-        allow_auto_repair=allow_auto_repair,
-        warnings=warnings,
-        normalization_notes=normalization_notes,
+        context=ContractNormalizationContext(
+            adapter=_OUTPUT_CONTRACT_ADAPTER,
+            label="输出契约",
+            is_output_contract=True,
+            allow_auto_repair=allow_auto_repair,
+            warnings=warnings,
+            normalization_notes=normalization_notes,
+        ),
     )
     removed_invalid_contracts += input_removed + output_removed
 
@@ -420,22 +473,17 @@ def _normalize_generated_case(
 def _normalize_contracts(
     *,
     raw_contracts: Any,
-    adapter: TypeAdapter[Any],
-    label: str,
-    is_output_contract: bool,
-    allow_auto_repair: bool,
-    warnings: list[str],
-    normalization_notes: list[str],
+    context: ContractNormalizationContext,
 ) -> tuple[list[Any], int]:
     if raw_contracts is None:
         return [], 0
     if isinstance(raw_contracts, dict):
-        if not allow_auto_repair:
-            raise DslGenerationError(f"AI 草案中的{label}必须是数组。")
+        if not context.allow_auto_repair:
+            raise DslGenerationError(f"AI 草案中的{context.label}必须是数组。")
         raw_contracts = [raw_contracts]
-        normalization_notes.append(f"AI 草案中的{label}已从单个对象包装为数组。")
+        context.normalization_notes.append(f"AI 草案中的{context.label}已从单个对象包装为数组。")
     if not isinstance(raw_contracts, list):
-        warnings.append(f"AI 草案中的{label}不是数组，已忽略该字段。")
+        context.warnings.append(f"AI 草案中的{context.label}不是数组，已忽略该字段。")
         return [], 1
 
     normalized_contracts: list[Any] = []
@@ -450,26 +498,23 @@ def _normalize_contracts(
             _repair_contract_payload(
                 raw_contract=raw_contract,
                 index=index,
-                label=label,
-                is_output_contract=is_output_contract,
-                allow_auto_repair=allow_auto_repair,
-                normalization_notes=normalization_notes,
+                context=context,
             )
-            if allow_auto_repair
+            if context.allow_auto_repair
             else raw_contract
         )
         try:
-            contract = adapter.validate_python(candidate_contract)
+            contract = context.adapter.validate_python(candidate_contract)
         except ValidationError:
             removed_count += 1
-            if allow_auto_repair:
-                warnings.append(f"{label} #{index} 结构非法，已忽略。")
+            if context.allow_auto_repair:
+                context.warnings.append(f"{context.label} #{index} 结构非法，已忽略。")
             else:
-                raise DslGenerationError(f"AI 草案中的{label} #{index} 不符合当前 schema。")
+                raise DslGenerationError(f"AI 草案中的{context.label} #{index} 不符合当前 schema。")
             continue
         if contract.context_key in seen_context_keys:
             removed_count += 1
-            warnings.append(f"{label} #{index} 的 context_key 与前文重复，已忽略。")
+            context.warnings.append(f"{context.label} #{index} 的 context_key 与前文重复，已忽略。")
             continue
         seen_context_keys.add(contract.context_key)
         normalized_contracts.append(contract)
@@ -611,12 +656,9 @@ def _repair_contract_payload(
     *,
     raw_contract: dict[str, Any],
     index: int,
-    label: str,
-    is_output_contract: bool,
-    allow_auto_repair: bool,
-    normalization_notes: list[str],
+    context: ContractNormalizationContext,
 ) -> dict[str, Any]:
-    if not allow_auto_repair:
+    if not context.allow_auto_repair:
         return raw_contract
 
     repaired = dict(raw_contract)
@@ -629,42 +671,44 @@ def _repair_contract_payload(
 
     if not name and context_key:
         repaired["name"] = context_key
-        normalization_notes.append(f"{label} #{index} 缺少 name，已回填为 {context_key}。")
+        context.normalization_notes.append(f"{context.label} #{index} 缺少 name，已回填为 {context_key}。")
     if not context_key and name:
         derived_context_key = _derive_context_key(name)
         if derived_context_key is not None:
             repaired["context_key"] = derived_context_key
-            normalization_notes.append(f"{label} #{index} 缺少 context_key，已从 name 派生为 {derived_context_key}。")
+            context.normalization_notes.append(
+                f"{context.label} #{index} 缺少 context_key，已从 name 派生为 {derived_context_key}。"
+            )
 
     value_type = repaired.get("value_type")
     if isinstance(value_type, str):
         normalized_value_type = _VALUE_TYPE_ALIASES.get(value_type.strip().casefold())
         if normalized_value_type is not None and normalized_value_type != value_type:
             repaired["value_type"] = normalized_value_type
-            normalization_notes.append(
-                f"{label} #{index} 的 value_type 已从 {value_type} 自动修正为 {normalized_value_type}。"
+            context.normalization_notes.append(
+                f"{context.label} #{index} 的 value_type 已从 {value_type} 自动修正为 {normalized_value_type}。"
             )
 
     if "required" in repaired:
         normalized_required = _coerce_bool(repaired["required"])
-        if normalized_required is not None and normalized_required is not repaired["required"]:
+        if normalized_required is not None and normalized_required != repaired["required"]:
             repaired["required"] = normalized_required
-            normalization_notes.append(f"{label} #{index} 的 required 已自动修正为布尔值。")
+            context.normalization_notes.append(f"{context.label} #{index} 的 required 已自动修正为布尔值。")
 
-    if is_output_contract:
+    if context.is_output_contract:
         source = repaired.get("source")
         if isinstance(source, str):
             normalized_source = _OUTPUT_SOURCE_ALIASES.get(source.strip().casefold())
             if normalized_source is not None and normalized_source != source:
                 repaired["source"] = normalized_source
-                normalization_notes.append(
-                    f"{label} #{index} 的 source 已从 {source} 自动修正为 {normalized_source}。"
+                context.normalization_notes.append(
+                    f"{context.label} #{index} 的 source 已从 {source} 自动修正为 {normalized_source}。"
                 )
 
     description = repaired.get("description")
     if description is not None and not isinstance(description, str):
         repaired["description"] = str(description)
-        normalization_notes.append(f"{label} #{index} 的 description 已自动转换为字符串。")
+        context.normalization_notes.append(f"{context.label} #{index} 的 description 已自动转换为字符串。")
 
     return repaired
 

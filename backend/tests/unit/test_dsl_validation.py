@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.models import DslGenerationRun, TestCase, User
-from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, build_generation_messages
+from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, _normalize_string, build_generation_messages
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
 from app.services import dsl as dsl_service
@@ -83,6 +83,13 @@ def test_validate_dsl_case_success(client) -> None:
             "assert_url_contains",
         ],
     }
+
+
+def test_normalize_string_returns_none_for_non_strings_and_blank() -> None:
+    assert _normalize_string(None) is None
+    assert _normalize_string(123) is None
+    assert _normalize_string("   ") is None
+    assert _normalize_string(" value ") == "value"
 
 
 def test_validate_dsl_case_rejects_invalid_payload(client) -> None:

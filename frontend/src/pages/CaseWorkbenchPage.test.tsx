@@ -200,7 +200,7 @@ test("放弃草案后可按拒绝原因重试生成，并携带 retry context", 
       }),
     );
   });
-}, 15000);
+}, 10000);
 
 test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", async () => {
   const templateSteps = [
@@ -734,7 +734,7 @@ test("自然语言生成支持预览、仅导入步骤和替换当前 DSL", asyn
   });
 
   expect(screen.getByText("草案反馈已记录")).toBeInTheDocument();
-}, 15000);
+}, 10000);
 
 test("自然语言生成会按上下文来源与策略带上请求 payload", async () => {
   vi.mocked(api.generateDslCase).mockResolvedValue({
@@ -809,7 +809,7 @@ test("自然语言生成会按上下文来源与策略带上请求 payload", asy
       preserve_contracts: true,
     });
   });
-}, 15000);
+}, 10000);
 
 test("自然语言生成默认模式会跟随 AI strict setting", async () => {
   vi.mocked(api.getAISettings).mockResolvedValueOnce({

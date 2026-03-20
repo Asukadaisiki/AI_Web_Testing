@@ -30,6 +30,30 @@
 
 ## 当前状态
 
+## BUG-024 | governance v2 review follow-up 暴露可读性与测试维护性问题
+
+- 日期：2026-03-20
+- 状态：fixed
+- 来源：代码评审
+- 描述：`backend/app/ai/dsl_generator.py` 中 `required` 自动修正使用 `is not` 比较值，虽然在多数 CPython 场景下工作正常，但对阅读者不够直观；`_normalize_contracts()` 与 `_repair_contract_payload()` 参数继续增长，维护成本上升；AI settings 页面对 `prompt_version_breakdown` 只展示裸数字，用户无法直接判断每列含义；同时 `AISettingsPage.test.tsx` 一条测试被放宽到 30s，`CaseWorkbenchPage.test.tsx` 多条测试被放宽到 15s，暴露出测试粒度过粗的问题。
+- 复现步骤：
+  1. 阅读 `backend/app/ai/dsl_generator.py` 中 `required` 自动修正逻辑与 `_normalize_contracts()` 签名
+  2. 阅读 `frontend/src/pages/AISettingsPage.tsx` 的 `Prompt 版本效果` 展示
+  3. 阅读 `frontend/src/pages/AISettingsPage.test.tsx` 与 `frontend/src/pages/CaseWorkbenchPage.test.tsx` 中的超时设置
+- 影响：会降低 contract normalize 和 prompt 规则后续迭代的可维护性，也会让治理页的指标解释成本偏高；测试层面则更难区分是真性能问题还是单测职责过重。
+- 根因：上一轮优先把 governance v2 和回归矩阵功能闭环打通，遗留了少量表达方式、参数收敛和测试拆分问题没有一起收口。
+- 处理：
+  - 将布尔修正逻辑改为值比较
+  - 为 contract normalization 提取上下文 dataclass，收敛函数签名
+  - 将 prompt 规则提取为模板常量与构造 helper
+  - 为 prompt version 指标补上列说明
+  - 拆分 AI settings 大测试，并把相关超时回落到更合理的范围
+  - 补充 `_normalize_string()` 行为单测
+- 验证：
+  - 执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py`，结果 `33 passed`
+  - 执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `20 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-20 15:30
+
 ## BUG-023 | suite rerun-failed 未将 needs_intervention 视为可重跑失败项
 
 - 日期：2026-03-20
