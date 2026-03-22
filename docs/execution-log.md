@@ -8,6 +8,22 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-22 15:40
+
+- 任务：实现 AI DSL 治理收敛、固定浏览器回归口径与 Locator P4 sidecar
+- 执行动作：将 `AI_DSL_PROMPT_VERSION` 升级到 `2026-03-22.governance-v3`；在 `backend/app/services/dsl.py` 基于现有 rejected 反馈选择前 2 个治理焦点原因并默认回退到 `context_mismatch / bad_contracts`；在 `backend/app/ai/dsl_generator.py` 增加治理焦点 prompt 规则、contract alias 自动修正、单边契约 preserve fallback，并修复 `_normalize_contracts()` 中未定义变量引用；在 `backend/app/locators/fallback.py` 增加会话级 AI selector LRU 缓存、命中前可见性校验、失效清理与 `cache_hit / cache_miss / cache_invalidated` debug 日志；补充 DSL / locator 单测、更新前端测试中的 `prompt_version` 口径；同步刷新 `README.md`、`backend/tests/README.md`、`docs/project-plan.md`、`docs/bug-log.md`
+- 结果：AI DSL 生成链路现在会按治理数据默认收敛高频拒绝原因，`governance-v3` 能自动吸收 `label/type/isRequired/valueFrom` 等 contract alias；Locator 新增的会话缓存会优先于 semantic / AI visual 链路但仍低于 Tier 0 人工修正，重复目标场景可减少重复截图与 VLM 调用；浏览器级回归、README 与测试文档口径已统一为 3 条主回归 + 2 条扩展回归
+- 验证：执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_locator_fallback.py tests/unit/test_ai_settings_api.py tests/integration/test_intervention_regression.py`，结果 `51 passed`；执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `20 passed`；执行 `cd frontend && npm run build` 成功
+- 后续：下一轮继续沿 `governance-v3` 基线滚动收敛后续高频拒绝原因，并补 AI visual 灰度验收中的缓存收益、命中率和延迟观测
+
+## 2026-03-22
+
+- 任务：阅读执行日志与计划文档，规划项目下一步安排
+- 执行动作：通读 `docs/project-plan.md`、`docs/execution-log.md`、`docs/bug-log.md` 与 `README.md` 的当前状态说明；核对最近两轮迭代已完成项与后续项，确认 AI DSL 治理、浏览器级回归矩阵补强、Locator P4 会话级缓存仍是主线；同时确认 `bug-log` 当前无 `open` 缺陷，auth 与 AI visual 默认开启策略仍不应抢占当前优先级
+- 结果：整理出下一阶段建议顺序为“1) AI DSL 数据驱动优化第二轮，先收敛前 2 个高频拒绝原因；2) 固化浏览器级三条主回归并收敛 flaky 风险；3) 以 sidecar 形式补 Locator P4 会话级缓存与命中观测；4) AI visual 灰度验收指标；5) 登录/认证体系后置”；当前不建议重新铺大功能面
+- 验证：人工核对 `project-plan`、`execution-log` 与 `README` 口径一致；确认 `docs/bug-log.md` 当前记录均为 `fixed`；本次仅做分析与规划，未运行自动化测试
+- 后续：若进入实现，建议直接从“治理数据驱动的 prompt / normalization 收敛”开工，并把浏览器级固定回归作为同轮验收门槛；Locator P4 缓存应作为并行 sidecar，而不是新主线
+
 ## 2026-03-20 15:30
 
 - 任务：修复 governance v2 review follow-up 问题并收敛前端慢测试

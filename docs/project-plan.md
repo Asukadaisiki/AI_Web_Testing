@@ -18,7 +18,7 @@
 4. Reporter 层：`backend/app/reporters`
 5. Suite Manager 层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`
 
-## 当前状态快照（截至 2026-03-19）
+## 当前状态快照（截至 2026-03-22）
 
 ### 已完成
 
@@ -42,40 +42,34 @@
 - AI DSL 反馈闭环：`feedback_status`（pending/accepted/rejected）、采纳/放弃上报、概览聚合
 - AI DSL 治理与观测闭环：生成记录多维筛选、详情查询、结构化拒绝原因、prompt 版本审计、前端治理表格与详情抽屉
 - AI DSL 第二轮可用率收敛首批：重试上下文、按拒绝原因重试生成、重试版 `prompt_version`、治理页重试成效概览
+- AI DSL 数据驱动优化第二轮首批：`2026-03-22.governance-v3`、基于高频拒绝原因的固定治理规则、contract alias 自动修正与默认治理焦点回退
 - 混合定位精度优化 P0-P3：overlay 遮挡穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
 - Locator follow-up：`deep_locate` 总超时预算、`semantic` 公共候选接口、Pillow lazy import、错误与日志收口
+- Locator sidecar P4：`resolve_with_fallback` 已增加会话级 AI 定位结果缓存、缓存命中校验与失效清理日志
+- 浏览器级固定主回归：单 Case smoke、`needs_intervention -> correction -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 三条主链路已固化，本地夹具页同时保留 2 条扩展回归
 
 ### 进行中
 
-- AI 生成 DSL 数据驱动优化第二轮：基于 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 收敛 prompt / normalization
-- 浏览器级回归矩阵补强：从最小浏览器集成扩展为固定 smoke / intervention / suite-context 三条主回归
+- AI 生成 DSL 数据驱动优化第二轮：在 `governance-v3` 基线上继续按 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 滚动收敛后续高频原因
+- AI visual 灰度验收：补齐默认关闭前提下的命中率、缓存收益与延迟观测基线
 
 ### 未开始
-
-#### 混合定位剩余项（Locator sidecar）
-
-**P4 — 会话级 AI 定位结果缓存**
-- 问题：同一页面同一 target 重复出现时（循环操作场景），每次都调用 VLM
-- 方案：在 `resolve_with_fallback` 中增加 `(page_url_pattern, target) → selector` 的内存缓存（LRU），AI 定位成功后写入缓存，后续命中时直接用缓存的 selector；失效时清除
-- 与 Tier 0 修正记录的区别：缓存是会话级自动产生、无需人工介入；修正记录是跨会话持久化、人工提交
-- 涉及文件：`backend/app/locators/fallback.py` (缓存层)、`backend/app/locators/ai_visual.py`
-- 投入：小 | 收益：中（减少重复 VLM 调用，降低延迟和成本）
 
 #### 其他未开始项
 
 - AI visual 灰度验收与默认开启策略仍未开始，当前保持“可配置、可调用、默认关闭”
 - 登录页与平台认证体系基本未启动；现有 `users` 模型仍是为后续 auth 预留的最小实体
-- 更完整的浏览器级回归矩阵仍待补齐到固定主回归集
+- corrections 运维视角的跨目标分析与更细状态反馈仍未开始
 
 ## 下一里程碑
 
-当前主线为 **AI 生成 DSL 数据驱动优化 + 回归矩阵补强**。
+当前主线为 **AI 生成 DSL 数据驱动滚动治理 + AI visual 灰度验收基线**。
 
-AI DSL 方向优先基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）先收敛前 2 个高频拒绝原因，目标是降低“初次失败且按原因重试后仍失败”的占比；若治理页仍缺少按 `prompt_version` 的前后对比，则只补最小可用聚合，不改 DSL 结构和执行接口。
+AI DSL 方向下一步不再重做 `governance-v3` 已覆盖的首批高频原因，而是继续基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）滚动收敛后续高频拒绝原因，目标仍是降低“初次失败且按原因重试后仍失败”的占比。
 
-Locator 方向不再重开一条主线，剩余事项收口为 **P4 会话级缓存** sidecar；AI visual 默认仍不全量开启，先补灰度验收基线，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。
+Locator 方向不再重开新主线，P4 会话级缓存已作为 sidecar 落地；后续只围绕 AI visual 灰度验收补基线，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。
 
-回归方向优先补齐浏览器级固定主回归，而不是先做认证体系。建议保留并持续验证以下三条：
+回归方向已切换为“固定主回归长期保留”，而不是继续补入口数量。建议持续验证以下三条：
 
 1. 单 Case smoke。
 2. `needs_intervention -> correction -> rerun -> Tier0 hit`。
@@ -83,7 +77,7 @@ Locator 方向不再重开一条主线，剩余事项收口为 **P4 会话级缓
 
 后续可选方向：
 
-- **Locator sidecar**：完成 P4 会话级缓存，并补缓存命中观测。
+- **AI DSL 治理**：继续按高频拒绝原因滚动更新 prompt / normalization，并观察 `prompt_version_breakdown`。
 - **AI visual 灰度验收**：补齐默认关闭前提下的可观测性与验证基线。
 - **登录页与认证体系**：平台登录入口、用户会话与权限边界。
 - **corrections 运维继续细化**：跨修正目标分析、更明确的状态反馈。

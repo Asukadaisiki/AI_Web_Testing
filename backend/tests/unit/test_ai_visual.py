@@ -31,7 +31,16 @@ class FakePage:
 
     def locator(self, selector: str):
         self.locator_calls.append(selector)
-        return {"selector": selector}
+        return FakeLocator(selector)
+
+
+class FakeLocator:
+    def __init__(self, selector: str) -> None:
+        self.selector = selector
+
+    def wait_for(self, *, state: str, timeout: int) -> None:
+        assert state == "visible"
+        assert timeout == 3000
 
 
 def test_normalize_bbox_supports_multiple_model_families() -> None:

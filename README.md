@@ -22,14 +22,15 @@ AI 增强的 Web UI 自动化测试平台。
 - AI 生成 DSL 最小闭环：后端已提供 `POST /api/v1/dsl/generate`，前端工作台可输入自然语言生成草案，并选择“替换当前 DSL”或“仅导入步骤”
 - AI 生成 DSL 深化：支持 `generation_mode / import_mode / current_case / current_steps / preserve_contracts`，后端会输出 `normalization_notes` 与 `generation_meta`，前端工作台可展示自动修正项、风险 warning 与三种导入方式
 - AI DSL 第二轮治理能力：支持重试上下文、按拒绝原因重试生成、重试版 `prompt_version`，治理页可查看重试成效与 prompt 版本效果
+- AI DSL 数据驱动治理第二轮首批收敛：默认基于治理数据前 2 个高频拒绝原因聚焦 prompt / normalization；当前基线已升级到 `2026-03-22.governance-v3`
 - AI 设置管理：前端已提供 `/settings/ai` 页面，支持管理 AI DSL / VLM 运行时配置；`GET /api/v1/settings/ai/overview` 可查看 DSL 生成最小观测指标
 - 混合定位精度优化 P0-P3：已落地 overlay 穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
+- Locator P4 sidecar：`resolve_with_fallback` 已增加会话级 AI 定位结果缓存，命中前会重新校验 selector，失效后自动清除
 - AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
-- AI 生成 DSL 数据驱动第二轮优化（优先收敛高频拒绝原因与 `prompt_version` 对比指标）
-- Locator 剩余 sidecar 仅剩 P4 会话级缓存；AI visual 继续默认关闭，先补灰度验收基线
-- 浏览器级固定主回归矩阵仍需补强到 smoke / intervention / suite-context 三条主链路
+- AI 生成 DSL 数据驱动第二轮优化继续滚动（在 `governance-v3` 基线上继续收敛后续高频拒绝原因）
+- AI visual 继续默认关闭，先补灰度验收基线与命中/延迟观测
 - 登录与更完整的平台认证体系基本未启动
 
 ## Suite Context 使用路径
@@ -53,11 +54,13 @@ AI 增强的 Web UI 自动化测试平台。
 
 仓库现在提供本地可控的浏览器级回归链路，用于验证：
 
-- 单 Case smoke 可稳定执行成功
-- 首次执行落为 `needs_intervention`，提交 correction 后可重跑通过，再次执行由 Tier 0 命中
-- Suite Context 失败重跑可复用原始上下文快照
-- 错误 correction 连续失败 3 次后会自动停用
-- correction 记录的 `verified_count`、`consecutive_failures` 与 `is_active` 状态正确
+- 3 条固定主回归：
+  - 单 Case smoke 可稳定执行成功
+  - 首次执行落为 `needs_intervention`，提交 correction 后可重跑通过，再次执行由 Tier 0 命中
+  - Suite Context 失败重跑可复用原始上下文快照
+- 2 条扩展回归：
+  - 错误 correction 连续失败 3 次后会自动停用
+  - DOM candidates 被 VLM rerank 时可稳定选中更优目标
 
 运行方式：
 

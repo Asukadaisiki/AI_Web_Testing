@@ -104,7 +104,7 @@ _OUTPUT_SOURCE_ALIASES = {
     "step_error_message": "last_step_error_message",
     "last_step_error_message": "last_step_error_message",
 }
-AI_DSL_PROMPT_VERSION = "2026-03-20.governance-v2"
+AI_DSL_PROMPT_VERSION = "2026-03-22.governance-v3"
 _BASE_SYSTEM_PROMPT_LINES = [
     "You generate structured web testing DSL in JSON only.",
     "Do not use any other action names.",
@@ -143,7 +143,11 @@ _BASE_USER_RULE_LINES = [
     "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
 ]
-RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
+DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
+    "context_mismatch",
+    "bad_contracts",
+)
+REJECTION_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
     "wrong_actions": [
         "The previous draft used unsupported or overly aggressive actions.",
         "Use only the allowed actions and prefer conservative, low-risk steps.",
@@ -156,13 +160,23 @@ RETRY_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
     "context_mismatch": [
         "The previous draft drifted away from the provided business context.",
         "Preserve the original business goal and reuse current_case/current_steps semantics when they exist.",
+        "If existing case context is provided, keep names, URLs, and flow intent aligned unless the prompt explicitly asks to rewrite them.",
     ],
     "bad_contracts": [
         "The previous draft produced low-quality contracts.",
         "Keep contracts minimal, stable, and use clear context_key naming without inventing unnecessary fields.",
         "Each contract must include name, context_key, value_type; output contracts must also include source.",
+        "If contract quality is uncertain, prefer omitting unstable contracts instead of returning malformed entries.",
     ],
     "other": [],
+}
+_CONTRACT_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "name": ("name", "label", "title"),
+    "context_key": ("context_key", "contextKey", "key"),
+    "value_type": ("value_type", "valueType", "type"),
+    "required": ("required", "is_required", "isRequired"),
+    "source": ("source", "value_from", "valueFrom", "extract_from", "extractFrom", "from"),
+    "description": ("description", "desc", "notes"),
 }
 
 
@@ -182,12 +196,14 @@ def build_generation_messages(
     generation_mode: GenerateDslMode,
     prompt_variant: DslGenerationPromptVariant,
     supported_actions: list[str],
+    governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None = None,
 ) -> list[dict[str, Any]]:
     system_lines = _build_system_prompt_lines(
         payload=payload,
         generation_mode=generation_mode,
         prompt_variant=prompt_variant,
         supported_actions=supported_actions,
+        governance_focus_reasons=governance_focus_reasons,
     )
     user_lines = _build_user_prompt_lines(payload=payload, generation_mode=generation_mode)
     return [
@@ -202,6 +218,7 @@ def _build_system_prompt_lines(
     generation_mode: GenerateDslMode,
     prompt_variant: DslGenerationPromptVariant,
     supported_actions: list[str],
+    governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None = None,
 ) -> list[str]:
     system_lines = [
         _BASE_SYSTEM_PROMPT_LINES[0],
@@ -218,9 +235,13 @@ def _build_system_prompt_lines(
         system_lines.append(
             "If current contracts are provided, keep them stable unless the prompt explicitly asks to change them."
         )
+    active_focus_reasons = governance_focus_reasons or list(DEFAULT_GOVERNANCE_REJECTION_REASONS)
+    if active_focus_reasons:
+        system_lines.append(f"Current governance focus reasons: {', '.join(active_focus_reasons)}.")
+        _append_unique_lines(system_lines, _collect_reason_strategy_lines(active_focus_reasons))
     if payload.retry_reason_code is not None:
         system_lines.append(f"Retry strategy: {payload.retry_reason_code}.")
-        system_lines.extend(RETRY_REASON_STRATEGIES[payload.retry_reason_code])
+        _append_unique_lines(system_lines, _collect_reason_strategy_lines([payload.retry_reason_code]))
     return system_lines
 
 
@@ -298,6 +319,7 @@ def generate_case_draft(
     *,
     payload: GenerateDslRequest,
     supported_actions: list[str],
+    governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None = None,
 ) -> tuple[DSLCase, list[str], list[str], GenerateDslMeta]:
     settings = get_settings()
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode, settings=settings)
@@ -317,6 +339,7 @@ def generate_case_draft(
             generation_mode=resolved_generation_mode,
             prompt_variant=prompt_variant,
             supported_actions=supported_actions,
+            governance_focus_reasons=governance_focus_reasons,
         ),
         api_key=settings.ai_dsl_api_key,
         model=settings.ai_dsl_model,
@@ -416,12 +439,21 @@ def _normalize_generated_case(
     removed_invalid_contracts += input_removed + output_removed
 
     preserve_contracts_applied = False
-    if payload.preserve_contracts and (not input_contract and not output_contract):
-        input_contract = current_input_contract
-        output_contract = current_output_contract
-        preserve_contracts_applied = bool(input_contract or output_contract)
-        if preserve_contracts_applied:
-            normalization_notes.append("AI 草案未提供有效契约，已沿用当前 DSL 的输入/输出契约。")
+    if payload.preserve_contracts:
+        missing_input_contract = not input_contract and bool(current_input_contract)
+        missing_output_contract = not output_contract and bool(current_output_contract)
+        if missing_input_contract or missing_output_contract:
+            if missing_input_contract:
+                input_contract = current_input_contract
+            if missing_output_contract:
+                output_contract = current_output_contract
+            preserve_contracts_applied = True
+            if missing_input_contract and missing_output_contract:
+                normalization_notes.append("AI 草案未提供有效契约，已沿用当前 DSL 的输入/输出契约。")
+            elif missing_input_contract:
+                normalization_notes.append("AI 草案未提供有效输入契约，已沿用当前 DSL 的输入契约。")
+            else:
+                normalization_notes.append("AI 草案未提供有效输出契约，已沿用当前 DSL 的输出契约。")
             risk_flags.append("contracts_preserved_fallback")
 
     steps, removed_invalid_steps, repaired_invalid_actions = _normalize_steps(
@@ -492,7 +524,7 @@ def _normalize_contracts(
     for index, raw_contract in enumerate(raw_contracts, start=1):
         if not isinstance(raw_contract, dict):
             removed_count += 1
-            warnings.append(f"{label} #{index} 不是对象，已忽略。")
+            context.warnings.append(f"{context.label} #{index} 不是对象，已忽略。")
             continue
         candidate_contract = (
             _repair_contract_payload(
@@ -662,8 +694,10 @@ def _repair_contract_payload(
         return raw_contract
 
     repaired = dict(raw_contract)
-    name = _normalize_string(repaired.get("name"))
-    context_key = _normalize_string(repaired.get("context_key"))
+    name = _normalize_string(_promote_contract_alias(repaired, canonical_key="name", index=index, context=context))
+    context_key = _normalize_string(
+        _promote_contract_alias(repaired, canonical_key="context_key", index=index, context=context)
+    )
     if name:
         repaired["name"] = name
     if context_key:
@@ -680,7 +714,7 @@ def _repair_contract_payload(
                 f"{context.label} #{index} 缺少 context_key，已从 name 派生为 {derived_context_key}。"
             )
 
-    value_type = repaired.get("value_type")
+    value_type = _promote_contract_alias(repaired, canonical_key="value_type", index=index, context=context)
     if isinstance(value_type, str):
         normalized_value_type = _VALUE_TYPE_ALIASES.get(value_type.strip().casefold())
         if normalized_value_type is not None and normalized_value_type != value_type:
@@ -689,14 +723,15 @@ def _repair_contract_payload(
                 f"{context.label} #{index} 的 value_type 已从 {value_type} 自动修正为 {normalized_value_type}。"
             )
 
-    if "required" in repaired:
-        normalized_required = _coerce_bool(repaired["required"])
+    required_value = _promote_contract_alias(repaired, canonical_key="required", index=index, context=context)
+    if "required" in repaired or required_value is not None:
+        normalized_required = _coerce_bool(required_value)
         if normalized_required is not None and normalized_required != repaired["required"]:
             repaired["required"] = normalized_required
             context.normalization_notes.append(f"{context.label} #{index} 的 required 已自动修正为布尔值。")
 
     if context.is_output_contract:
-        source = repaired.get("source")
+        source = _promote_contract_alias(repaired, canonical_key="source", index=index, context=context)
         if isinstance(source, str):
             normalized_source = _OUTPUT_SOURCE_ALIASES.get(source.strip().casefold())
             if normalized_source is not None and normalized_source != source:
@@ -705,7 +740,7 @@ def _repair_contract_payload(
                     f"{context.label} #{index} 的 source 已从 {source} 自动修正为 {normalized_source}。"
                 )
 
-    description = repaired.get("description")
+    description = _promote_contract_alias(repaired, canonical_key="description", index=index, context=context)
     if description is not None and not isinstance(description, str):
         repaired["description"] = str(description)
         context.normalization_notes.append(f"{context.label} #{index} 的 description 已自动转换为字符串。")
@@ -756,6 +791,23 @@ def resolve_generation_mode(
     return "strict_steps_only" if active_settings.ai_dsl_strict_mode else "draft"
 
 
+def _append_unique_lines(system_lines: list[str], extra_lines: list[str]) -> None:
+    for line in extra_lines:
+        if line not in system_lines:
+            system_lines.append(line)
+
+
+def _collect_reason_strategy_lines(
+    reasons: list[DslGenerationRejectionReasonCode],
+) -> list[str]:
+    lines: list[str] = []
+    for reason in reasons:
+        for line in REJECTION_REASON_STRATEGIES.get(reason, []):
+            if line not in lines:
+                lines.append(line)
+    return lines
+
+
 def resolve_generation_profile(
     *,
     payload: GenerateDslRequest,
@@ -779,6 +831,32 @@ def _normalize_string(value: Any) -> str | None:
 
 def _normalize_optional_string(value: Any) -> str | None:
     return _normalize_string(value)
+
+
+def _promote_contract_alias(
+    repaired: dict[str, Any],
+    *,
+    canonical_key: str,
+    index: int,
+    context: ContractNormalizationContext,
+) -> Any:
+    alias_keys = _CONTRACT_FIELD_ALIASES[canonical_key]
+    alias_key = next((key for key in alias_keys if key in repaired), None)
+    if alias_key is None:
+        return repaired.get(canonical_key)
+    value = repaired.get(alias_key)
+    if (
+        alias_key != canonical_key
+        and value not in (None, "")
+        and repaired.get(canonical_key) in (None, "")
+    ):
+        repaired[canonical_key] = value
+        context.normalization_notes.append(
+            f"{context.label} #{index} 的 {alias_key} 已映射为 {canonical_key}。"
+        )
+    if alias_key != canonical_key:
+        repaired.pop(alias_key, None)
+    return repaired.get(canonical_key)
 
 
 def _call_llm(

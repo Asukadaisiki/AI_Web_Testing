@@ -92,7 +92,7 @@ function mockGovernancePageApis() {
       ],
       prompt_version_breakdown: [
         {
-          prompt_version: "2026-03-20.governance-v2",
+          prompt_version: "2026-03-22.governance-v3",
           total_requests: 3,
           success_count: 2,
           accepted_count: 1,
@@ -156,7 +156,7 @@ function mockGovernancePageApis() {
       prompt_variant: "baseline_draft",
       project_id: 1,
       case_id: 8,
-      prompt_version: "2026-03-19.retry-strategy-v1+retry.bad_contracts",
+      prompt_version: "2026-03-22.governance-v3+retry.bad_contracts",
       retry_from_generation_id: 6,
       retry_reason_code: "bad_contracts",
       retry_note: "契约命名不稳定",
@@ -185,7 +185,7 @@ function mockGovernancePageApis() {
     prompt_variant: "baseline_draft",
     project_id: 1,
     case_id: 8,
-    prompt_version: "2026-03-19.retry-strategy-v1+retry.bad_contracts",
+    prompt_version: "2026-03-22.governance-v3+retry.bad_contracts",
     retry_from_generation_id: 6,
     retry_reason_code: "bad_contracts",
     retry_note: "契约命名不稳定",
@@ -263,7 +263,7 @@ test("渲染 AI 治理概览", async () => {
   expect(screen.getByText("bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("Prompt 版本效果（总请求 / 采纳 / 放弃 / 重试采纳）")).toBeInTheDocument();
-  expect(screen.getByText("2026-03-20.governance-v2: 3 / 1 / 1 / 1")).toBeInTheDocument();
+  expect(screen.getByText("2026-03-22.governance-v3: 3 / 1 / 1 / 1")).toBeInTheDocument();
   expect(screen.getByText("blank_request: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft / bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("gpt-4o-mini: 4 / 2 / 1")).toBeInTheDocument();
@@ -490,7 +490,7 @@ test("加载失败时展示错误块", async () => {
     prompt_variant: "baseline_draft",
     project_id: null,
     case_id: null,
-    prompt_version: "2026-03-19.retry-strategy-v1",
+    prompt_version: "2026-03-22.governance-v3",
     retry_from_generation_id: null,
     retry_reason_code: null,
     retry_note: null,

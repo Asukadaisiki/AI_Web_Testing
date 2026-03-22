@@ -5,15 +5,18 @@ from __future__ import annotations
 import base64
 import logging
 import re
+from collections import OrderedDict
+from threading import Lock
 
 from app.locators.ai_visual import AILocateResult, AIVisionCandidateBox, locate_element_by_vision, rank_candidates_by_vision
-from app.locators.corrections import CorrectionRecord, CorrectionStore
+from app.locators.corrections import CorrectionRecord, CorrectionStore, normalize_target_description
 from app.locators.semantic import (
     LocatorResolutionError,
     ResolvedLocator,
     collect_semantic_candidates,
     resolve_semantic_locator,
 )
+from app.locators.url_pattern import generalize_url
 from app.schemas.executions import DOMElementSnapshot, LocatorTrace, LocatorCandidateEvidence
 
 
@@ -25,6 +28,9 @@ JACCARD_THRESHOLD = 0.5
 # Only rerank when the top semantic candidates are genuinely close, otherwise
 # keep the cheaper DOM-only decision path.
 SEMANTIC_RERANK_SCORE_GAP = 5
+AI_VISUAL_SESSION_CACHE_MAX_ENTRIES = 128
+_AI_VISUAL_SESSION_CACHE: OrderedDict[tuple[str, str], str] = OrderedDict()
+_AI_VISUAL_SESSION_CACHE_LOCK = Lock()
 SELECTOR_HELPERS_JS = """
 const buildCssSelector = (node) => {
   if (!(node instanceof Element)) {
@@ -243,6 +249,7 @@ def resolve_with_fallback(
     page_url = getattr(page, "url", "") or ""
     tier1_trace: LocatorTrace | None = None
     ai_candidate: AILocateResult | None = None
+    cache_key = _build_ai_visual_cache_key(page_url=page_url, target=target)
 
     correction = (
         correction_store.find_active_correction(page_url=page_url, target_description=target)
@@ -259,6 +266,10 @@ def resolve_with_fallback(
         )
         if resolved is not None:
             return resolved
+
+    cached_resolution = _try_resolve_cached_ai_locator(page, target=target, cache_key=cache_key)
+    if cached_resolution is not None:
+        return cached_resolution
 
     try:
         return resolve_semantic_locator(
@@ -283,7 +294,12 @@ def resolve_with_fallback(
 
     ai_candidate = _try_ai_visual_locate(page, target=target)
     if ai_candidate is not None:
-        resolved = _build_locator_from_ai_point(page, target=target, ai_candidate=ai_candidate)
+        resolved = _build_locator_from_ai_point(
+            page,
+            target=target,
+            ai_candidate=ai_candidate,
+            cache_key=cache_key,
+        )
         if resolved is not None:
             return resolved
 
@@ -373,6 +389,81 @@ def _try_ai_visual_locate(page, *, target: str) -> AILocateResult | None:
         return None
 
 
+def _build_ai_visual_cache_key(*, page_url: str, target: str) -> tuple[str, str] | None:
+    if not page_url:
+        return None
+    normalized_target = normalize_target_description(target)
+    if not normalized_target:
+        return None
+    return (generalize_url(page_url), normalized_target)
+
+
+def _try_resolve_cached_ai_locator(
+    page,
+    *,
+    target: str,
+    cache_key: tuple[str, str] | None,
+) -> ResolvedLocator | None:
+    if cache_key is None:
+        return None
+    selector = _get_cached_ai_selector(cache_key)
+    if selector is None:
+        logger.debug("AI visual session cache_miss page_url_pattern=%s target=%s", cache_key[0], target)
+        return None
+
+    locator = page.locator(selector)
+    try:
+        locator.wait_for(state="visible", timeout=3000)
+    except Exception as exc:
+        _invalidate_cached_ai_selector(cache_key)
+        logger.debug(
+            "AI visual session cache_invalidated page_url_pattern=%s target=%s selector=%s error=%s",
+            cache_key[0],
+            target,
+            selector,
+            exc,
+        )
+        return None
+
+    logger.debug("AI visual session cache_hit page_url_pattern=%s target=%s", cache_key[0], target)
+    return ResolvedLocator(
+        strategy="ai_visual_cache",
+        locator=locator,
+        trace=LocatorTrace(
+            target=target,
+            match_strategy="ai_visual_cache",
+            selection_reason=f"Matched cached AI visual selector for {cache_key[0]}.",
+        ),
+    )
+
+
+def _get_cached_ai_selector(cache_key: tuple[str, str]) -> str | None:
+    with _AI_VISUAL_SESSION_CACHE_LOCK:
+        selector = _AI_VISUAL_SESSION_CACHE.get(cache_key)
+        if selector is None:
+            return None
+        _AI_VISUAL_SESSION_CACHE.move_to_end(cache_key)
+        return selector
+
+
+def _store_cached_ai_selector(cache_key: tuple[str, str], selector: str) -> None:
+    with _AI_VISUAL_SESSION_CACHE_LOCK:
+        _AI_VISUAL_SESSION_CACHE[cache_key] = selector
+        _AI_VISUAL_SESSION_CACHE.move_to_end(cache_key)
+        while len(_AI_VISUAL_SESSION_CACHE) > AI_VISUAL_SESSION_CACHE_MAX_ENTRIES:
+            _AI_VISUAL_SESSION_CACHE.popitem(last=False)
+
+
+def _invalidate_cached_ai_selector(cache_key: tuple[str, str]) -> None:
+    with _AI_VISUAL_SESSION_CACHE_LOCK:
+        _AI_VISUAL_SESSION_CACHE.pop(cache_key, None)
+
+
+def _clear_ai_visual_session_cache() -> None:
+    with _AI_VISUAL_SESSION_CACHE_LOCK:
+        _AI_VISUAL_SESSION_CACHE.clear()
+
+
 def _take_screenshot_base64(page) -> str:
     screenshot_bytes = page.screenshot(full_page=False)
     return base64.b64encode(screenshot_bytes).decode("utf-8")
@@ -383,6 +474,7 @@ def _build_locator_from_ai_point(
     *,
     target: str,
     ai_candidate: AILocateResult,
+    cache_key: tuple[str, str] | None = None,
 ) -> ResolvedLocator | None:
     snapshot = _snapshot_dom_element_at_point(page, *ai_candidate.center)
     if snapshot is None or not _dom_snapshot_matches_target(snapshot, target):
@@ -391,10 +483,17 @@ def _build_locator_from_ai_point(
     selector = snapshot.css_selector or (f"xpath={snapshot.xpath}" if snapshot.xpath else None)
     if selector is None:
         return None
+    locator = page.locator(selector)
+    try:
+        locator.wait_for(state="visible", timeout=3000)
+    except Exception:
+        return None
+    if cache_key is not None:
+        _store_cached_ai_selector(cache_key, selector)
 
     return ResolvedLocator(
         strategy="ai_visual",
-        locator=page.locator(selector),
+        locator=locator,
         trace=LocatorTrace(
             target=target,
             match_strategy="ai_visual",

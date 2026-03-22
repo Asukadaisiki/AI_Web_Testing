@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import app.locators.fallback as fallback_module
 from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.locators import InterventionNeededError, resolve_with_fallback
 from app.locators.semantic import LocatorResolutionError
@@ -71,6 +72,11 @@ class FakePage:
         if self.screenshot_error is not None:
             raise self.screenshot_error
         return b"fake"
+
+
+@pytest.fixture(autouse=True)
+def clear_ai_visual_session_cache() -> None:
+    fallback_module._clear_ai_visual_session_cache()
 
 
 def _create_source_execution(db_session) -> int:
@@ -254,3 +260,137 @@ def test_resolve_with_fallback_logs_ai_capture_failures(monkeypatch, caplog) -> 
         resolve_with_fallback(page, "登录按钮")
 
     assert "AI visual fallback failed" in caplog.text
+
+
+def test_resolve_with_fallback_reuses_cached_ai_visual_selector(monkeypatch) -> None:
+    ai_payload = {
+        "tag": "button",
+        "text": "登录按钮",
+        "role": "button",
+        "aria_label": "登录按钮",
+        "placeholder": None,
+        "data_testid": "login-button",
+        "css_selector": "#login-btn",
+        "xpath": "/html/body/button[1]",
+        "rect": {"x": 150, "y": 80, "width": 100, "height": 40},
+        "visible": True,
+        "enabled": True,
+    }
+    first_page = FakePage(url="https://app.example.com/users/123", ai_payload=ai_payload)
+    second_page = FakePage(url="https://app.example.com/users/456")
+
+    semantic_spy = MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮")))
+    monkeypatch.setattr("app.locators.fallback.resolve_semantic_locator", semantic_spy)
+    monkeypatch.setattr(
+        "app.locators.fallback.locate_element_by_vision",
+        lambda **_kwargs: type(
+            "Candidate",
+            (),
+            {"center": (200, 100), "bbox": (150, 80, 250, 120), "confidence": 0.7, "raw_response": "{}"},
+        )(),
+    )
+
+    first_resolved = resolve_with_fallback(first_page, "登录按钮")
+    assert first_resolved.strategy == "ai_visual"
+
+    semantic_spy.reset_mock()
+    second_resolved = resolve_with_fallback(second_page, "登录按钮")
+
+    assert second_resolved.strategy == "ai_visual_cache"
+    assert semantic_spy.call_count == 0
+    assert second_page.screenshot_calls == []
+
+
+def test_resolve_with_fallback_invalidates_cached_ai_visual_selector_when_locator_is_stale(monkeypatch, caplog) -> None:
+    ai_payload = {
+        "tag": "button",
+        "text": "登录按钮",
+        "role": "button",
+        "aria_label": "登录按钮",
+        "placeholder": None,
+        "data_testid": "login-button",
+        "css_selector": "#login-btn",
+        "xpath": "/html/body/button[1]",
+        "rect": {"x": 150, "y": 80, "width": 100, "height": 40},
+        "visible": True,
+        "enabled": True,
+    }
+    first_page = FakePage(url="https://app.example.com/users/123", ai_payload=ai_payload)
+    stale_page = FakePage(url="https://app.example.com/users/456", correction_should_fail=True)
+
+    monkeypatch.setattr(
+        "app.locators.fallback.resolve_semantic_locator",
+        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
+    )
+    monkeypatch.setattr(
+        "app.locators.fallback.locate_element_by_vision",
+        lambda **_kwargs: type(
+            "Candidate",
+            (),
+            {"center": (200, 100), "bbox": (150, 80, 250, 120), "confidence": 0.7, "raw_response": "{}"},
+        )(),
+    )
+
+    resolve_with_fallback(first_page, "登录按钮")
+
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(InterventionNeededError):
+            resolve_with_fallback(stale_page, "登录按钮")
+
+    assert "cache_invalidated" in caplog.text
+
+
+def test_resolve_with_fallback_prioritizes_tier_zero_correction_over_ai_visual_cache(db_session, monkeypatch) -> None:
+    execution_id = _create_source_execution(db_session)
+    correction = LocatorCorrection(
+        page_url_pattern="https://app.example.com/users/*",
+        target_description="登录按钮",
+        normalized_target_description="登录按钮",
+        correction_type="css",
+        correction_value="#login-btn",
+        source_execution_id=execution_id,
+        created_by=1,
+    )
+    db_session.add(correction)
+    db_session.commit()
+
+    ai_payload = {
+        "tag": "button",
+        "text": "登录按钮",
+        "role": "button",
+        "aria_label": "登录按钮",
+        "placeholder": None,
+        "data_testid": "login-button",
+        "css_selector": "#login-btn",
+        "xpath": "/html/body/button[1]",
+        "rect": {"x": 150, "y": 80, "width": 100, "height": 40},
+        "visible": True,
+        "enabled": True,
+    }
+    cache_seed_page = FakePage(url="https://app.example.com/users/123", ai_payload=ai_payload)
+    correction_page = FakePage(url="https://app.example.com/users/456", screenshot_error=RuntimeError("should not capture"))
+
+    monkeypatch.setattr(
+        "app.locators.fallback.resolve_semantic_locator",
+        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
+    )
+    monkeypatch.setattr(
+        "app.locators.fallback.locate_element_by_vision",
+        lambda **_kwargs: type(
+            "Candidate",
+            (),
+            {"center": (200, 100), "bbox": (150, 80, 250, 120), "confidence": 0.7, "raw_response": "{}"},
+        )(),
+    )
+
+    resolve_with_fallback(cache_seed_page, "登录按钮")
+
+    resolved = resolve_with_fallback(
+        correction_page,
+        "登录按钮",
+        correction_store=SQLAlchemyCorrectionStore(db_session),
+        execution_id=execution_id,
+    )
+
+    assert resolved.strategy == "correction:css"
+    assert correction_page.screenshot_calls == []

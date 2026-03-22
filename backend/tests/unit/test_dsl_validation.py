@@ -196,6 +196,82 @@ def test_build_generation_messages_includes_retry_strategy_context() -> None:
     assert "用户补充说明：上下文变量命名不稳定" in messages[1]["content"]
 
 
+def test_build_generation_messages_includes_governance_focus_reasons() -> None:
+    messages = build_generation_messages(
+        payload=GenerateDslRequest.model_validate(
+            {
+                "prompt": "保留当前业务上下文并稳定输出契约",
+                "actor_user_id": 1,
+            }
+        ),
+        generation_mode="draft",
+        prompt_variant="baseline_draft",
+        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+        governance_focus_reasons=["context_mismatch", "bad_contracts"],
+    )
+
+    assert "Current governance focus reasons: context_mismatch, bad_contracts." in messages[0]["content"]
+    assert "Preserve the original business goal" in messages[0]["content"]
+    assert "Each contract must include name, context_key, value_type; output contracts must also include source." in messages[0]["content"]
+
+
+def test_select_governance_focus_reasons_defaults_when_no_feedback_history(db_session) -> None:
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
+
+
+def test_select_governance_focus_reasons_prefers_top_rejection_reasons(db_session) -> None:
+    records = [
+        DslGenerationRun(
+            actor_user_id=1,
+            prompt_preview=f"rejection-{index}",
+            prompt_sha256=f"{index:064d}",
+            prompt_version=AI_DSL_PROMPT_VERSION,
+            prompt_variant="baseline_draft",
+            request_base_url=None,
+            generation_mode="draft",
+            import_mode="replace",
+            model_name="gpt-test",
+            success=True,
+            used_current_case_context=False,
+            used_current_steps_context=False,
+            context_profile="blank_request",
+            base_url_source="none",
+            base_url_backfilled=False,
+            repaired_invalid_actions=0,
+            removed_invalid_steps=0,
+            removed_invalid_contracts=0,
+            preserve_contracts_requested=False,
+            preserve_contracts_applied=False,
+            warnings_count=0,
+            normalization_notes_count=0,
+            warnings_json=[],
+            normalization_notes_json=[],
+            risk_flags_json=[],
+            generated_case_json=None,
+            feedback_status="rejected",
+            feedback_import_mode=None,
+            rejection_reason_code=rejection_reason_code,
+            feedback_note="seed",
+            feedback_recorded_at=None,
+        )
+        for index, rejection_reason_code in enumerate(
+            [
+                "bad_contracts",
+                "bad_contracts",
+                "context_mismatch",
+                "context_mismatch",
+                "context_mismatch",
+                "wrong_actions",
+            ],
+            start=1,
+        )
+    ]
+    db_session.add_all(records)
+    db_session.commit()
+
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
+
+
 def test_generate_dsl_case_success(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -443,6 +519,107 @@ def test_generate_dsl_case_repairs_single_step_and_contract_shape_for_governance
         "AI 草案中的 steps 已从单个对象包装为数组。",
     ]
     assert response.json()["generation_meta"]["risk_flags"] == []
+
+
+def test_generate_dsl_case_repairs_contract_aliases_for_governance_v3(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "治理 v3 契约修复",
+  "steps": [{"action": "goto", "value": "/governance-v3"}],
+  "input_contract": {
+    "label": "Session Token",
+    "type": "text",
+    "isRequired": "yes"
+  },
+  "output_contract": {
+    "key": "landing_url",
+    "type": "text",
+    "valueFrom": "page_url"
+  }
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成更稳定的上下文契约",
+            "actor_user_id": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["case"]["input_contract"] == [
+        {
+            "name": "Session Token",
+            "context_key": "session_token",
+            "value_type": "string",
+            "required": True,
+            "description": None,
+        }
+    ]
+    assert response.json()["case"]["output_contract"] == [
+        {
+            "name": "landing_url",
+            "context_key": "landing_url",
+            "value_type": "string",
+            "source": "latest_url",
+            "description": None,
+        }
+    ]
+    assert response.json()["normalization_notes"] == [
+        "AI 草案中的输入契约已从单个对象包装为数组。",
+        "输入契约 #1 的 label 已映射为 name。",
+        "输入契约 #1 缺少 context_key，已从 name 派生为 session_token。",
+        "输入契约 #1 的 type 已映射为 value_type。",
+        "输入契约 #1 的 value_type 已从 text 自动修正为 string。",
+        "输入契约 #1 的 isRequired 已映射为 required。",
+        "输入契约 #1 的 required 已自动修正为布尔值。",
+        "AI 草案中的输出契约已从单个对象包装为数组。",
+        "输出契约 #1 的 key 已映射为 context_key。",
+        "输出契约 #1 缺少 name，已回填为 landing_url。",
+        "输出契约 #1 的 type 已映射为 value_type。",
+        "输出契约 #1 的 value_type 已从 text 自动修正为 string。",
+        "输出契约 #1 的 valueFrom 已映射为 source。",
+        "输出契约 #1 的 source 已从 page_url 自动修正为 latest_url。",
+    ]
+    generation_run = db_session.get(DslGenerationRun, response.json()["generation_id"])
+    assert generation_run is not None
+    assert generation_run.prompt_version == AI_DSL_PROMPT_VERSION
+
+
+def test_generate_dsl_case_still_rejects_invalid_steps_under_governance_v3(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "仍然失败的草案",
+  "steps": [],
+  "input_contract": [{"name": "token", "context_key": "token", "value_type": "string"}]
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成一个仍然无效的草案",
+            "actor_user_id": 1,
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "AI 生成草案中没有可导入的有效 steps。"
 
 
 def test_generate_dsl_case_preserves_contracts_and_current_name_in_strict_steps_mode(client, monkeypatch) -> None:
@@ -967,7 +1144,7 @@ def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_ses
     assert payload["generated_case_json"]["name"] == "详情草案"
     assert payload["warnings_json"] == []
     assert payload["normalization_notes_json"] == [
-        "AI 草案未提供有效契约，已沿用当前 DSL 的输入/输出契约。",
+        "AI 草案未提供有效输入契约，已沿用当前 DSL 的输入契约。",
         "步骤 #1 的 action 已从 open 自动修正为 goto。",
     ]
     assert payload["risk_flags"] == ["contracts_preserved_fallback", "invalid_actions_repaired"]

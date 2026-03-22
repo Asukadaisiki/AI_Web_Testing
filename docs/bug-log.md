@@ -30,6 +30,29 @@
 
 ## 当前状态
 
+## BUG-025 | governance v3 实现暴露 contract alias 修正与 warning 收口缺陷
+
+- 日期：2026-03-22
+- 状态：fixed
+- 来源：实现阶段自测
+- 描述：在 `backend/app/ai/dsl_generator.py` 中，`_normalize_contracts()` 处理“数组里混入非对象 contract”时仍引用了不存在的 `warnings/label` 局部变量；同时 `governance-v3` 新增的 contract alias 修正如果只把 `label/type/isRequired/valueFrom` 映射到规范字段，却不删除原别名字段，会被 Pydantic `extra=\"forbid\"` 再次判为非法，导致本应被自动修正的契约被整体忽略。
+- 复现步骤：
+  1. 让 AI 返回 `input_contract: [{\"label\": \"Session Token\", \"type\": \"text\", \"isRequired\": \"yes\"}]`
+  2. 调用 `/api/v1/dsl/generate`
+  3. 观察旧实现会因为残留别名字段而把 contract 当成非法结构忽略
+  4. 或让 `input_contract` 数组中混入非对象项，观察 `_normalize_contracts()` 引用未定义变量
+- 影响：会削弱 `governance-v3` 的 contract 自动修正收益，也会在异常 payload 下放大为服务端错误或误删契约，影响治理数据和生成可用率。
+- 根因：alias 修正逻辑只补 canonical key，没有同步移除旧别名字段；同时 `_normalize_contracts()` 在 review 后的重构里遗漏了 `context` 封装后的字段引用切换。
+- 处理：
+  - 将 contract alias 修正统一改为“映射 canonical key 后移除原别名字段”
+  - 修正 `_normalize_contracts()` 中对 warning 文案的变量引用
+  - 补充 governance v3 alias 修正、默认治理焦点和“仍应拒绝无效 steps”的单测
+- 验证：
+  - 执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py tests/unit/test_locator_fallback.py tests/unit/test_ai_settings_api.py tests/integration/test_intervention_regression.py`，结果 `51 passed`
+  - 执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `20 passed`
+  - 执行 `cd frontend && npm run build` 成功
+- 关联记录：`docs/execution-log.md` 2026-03-22
+
 ## BUG-024 | governance v2 review follow-up 暴露可读性与测试维护性问题
 
 - 日期：2026-03-20

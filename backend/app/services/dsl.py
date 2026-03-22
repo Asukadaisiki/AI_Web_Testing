@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.ai.dsl_generator import (
+    DEFAULT_GOVERNANCE_REJECTION_REASONS,
     DslGenerationConfigError,
     DslGenerationError,
     generate_case_draft,
@@ -100,6 +101,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
     if payload.retry_from_generation_id is not None:
         _ensure_retry_generation_exists(session, payload.retry_from_generation_id)
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode)
+    governance_focus_reasons = _select_governance_focus_reasons(session)
 
     with _RUNTIME_STATS_LOCK:
         _RUNTIME_STATS.total_requests += 1
@@ -108,6 +110,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
         generated_case, warnings, normalization_notes, generation_meta = generate_case_draft(
             payload=payload,
             supported_actions=SUPPORTED_DSL_ACTIONS,
+            governance_focus_reasons=governance_focus_reasons,
         )
     except (DslGenerationConfigError, DslGenerationError) as exc:
         model_name = get_settings().ai_dsl_model
@@ -741,6 +744,38 @@ def _persist_generation_run(
         raise
     session.refresh(generation_run)
     return generation_run
+
+
+def _select_governance_focus_reasons(
+    session: Session,
+    *,
+    limit: int = 2,
+) -> list[DslGenerationRejectionReasonCode]:
+    rows = session.execute(
+        select(
+            DslGenerationRun.rejection_reason_code,
+            func.count().label("count"),
+        )
+        .where(
+            DslGenerationRun.feedback_status == "rejected",
+            DslGenerationRun.rejection_reason_code.is_not(None),
+        )
+        .group_by(DslGenerationRun.rejection_reason_code)
+        .order_by(func.count().desc(), DslGenerationRun.rejection_reason_code.asc())
+        .limit(limit)
+    ).all()
+
+    selected_reasons = [
+        rejection_reason_code
+        for rejection_reason_code, _count in rows
+        if rejection_reason_code is not None
+    ]
+    for fallback_reason in DEFAULT_GOVERNANCE_REJECTION_REASONS:
+        if fallback_reason not in selected_reasons:
+            selected_reasons.append(fallback_reason)
+        if len(selected_reasons) >= limit:
+            break
+    return selected_reasons[:limit]
 
 
 def _build_prompt_preview(prompt: str) -> str:
