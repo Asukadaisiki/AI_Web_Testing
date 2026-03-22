@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-22 20:51
+
+- 任务：落实“治理 v3 后续收敛 + AI visual 灰度基线”计划
+- 执行动作：在 `backend/app/ai/dsl_generator.py` 和 `backend/app/services/dsl.py` 将当前治理焦点收敛到 `wrong_actions / invalid_structure`，新增安全 action alias 修正、DSL root/steps 包装层修复、step 字段别名归一化与结构化 normalization notes；在 `backend/app/locators/ai_visual.py`、`backend/app/locators/fallback.py`、`backend/app/services/settings.py`、`backend/app/schemas/settings.py` 增加进程内 `ai_visual_stats` 统计、overview 返回与 cache 命中/未命中/失效计数；同步更新 `frontend/src/types/api.ts`、`frontend/src/pages/AISettingsPage.tsx` 展示 AI visual 命中率、cache 复用率、locate 延迟与 skip 计数；补齐后端单测、前端页面测试，并将 `docs/bug-log.md` 中 `BUG-026` 状态同步为 `fixed`
+- 结果：AI DSL 生成链路现在可以对 `open/tap/type/fill` 等白名单别名做确定性收敛，并能修复常见的 wrapped root、wrapped steps 与 step 轻微字段漂移；AI visual 默认关闭策略保持不变，但 settings overview 已可观测 locate 请求、成功率、cache 复用率、breaker/rate limit/disabled 跳过与 locate 延迟；文档状态与当前实现重新对齐，`BUG-026` 不再作为 open blocker
+- 验证：执行 `cd backend && uv run pytest tests/unit/test_ai_visual.py tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_ai_settings_api.py -q`，结果 `74 passed`；执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `20 passed`；执行 `cd frontend && npm run build` 成功；执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py::test_local_single_case_smoke_executes_successfully tests/integration/test_intervention_regression.py::test_local_intervention_flow_rerun_hits_tier_zero tests/integration/test_intervention_regression.py::test_suite_context_rerun_failed_reuses_context_snapshot_after_manual_correction -q`，结果 `3 passed`
+- 后续：下一轮继续基于治理页的 `top_rejection_reasons / rejection_reason_by_variant / retry_acceptance_by_reason` 滚动收敛高频拒绝原因；AI visual 若进入默认开启评估，再考虑把当前进程内统计升级为持久化观测
+
 ## 2026-03-22 16:20
 
 - 任务：审查最新提交 `ba3316a feat: implement governance v3 and locator session cache`
@@ -137,6 +145,6 @@
 - 在 `AGENTS.md` 增加日志沉淀规则与 GitHub 同步追问规则
 ## 2026-03-22 16:06
 
-- �����޸� AI visual session cache �������� governance focus ���ȱ��
-- ִ�ж������� `backend/app/locators/fallback.py` Ϊ AI visual cache ���в��� DOM snapshot ���帴�ˣ���ƥ��ʱ����ʧЧ���沢����������λ��·���� `backend/app/models/dsl_generation_run.py`��`backend/app/services/dsl.py`��`backend/app/schemas/dsl.py` ���� `governance_focus_reasons_json / governance_focus_reasons` �־û���ӿ�ӳ�䣬������Ǩ�� `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`��ͬ�����º�˵��⡢ǰ�������� AI ��������չʾ/����
-- ��֤��ִ�� `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`����� `54 passed`��ִ�� `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`����� `20 passed`��ִ�� `cd frontend && npm run build` �ɹ�
+- �����޸� AI visual session cache �������� governance focus ���ȱ��
+- ִ�ж������� `backend/app/locators/fallback.py` Ϊ AI visual cache ���в��� DOM snapshot ���帴�ˣ���ƥ��ʱ����ʧЧ���沢����������λ��·���� `backend/app/models/dsl_generation_run.py`��`backend/app/services/dsl.py`��`backend/app/schemas/dsl.py` ���� `governance_focus_reasons_json / governance_focus_reasons` �־û���ӿ�ӳ�䣬������Ǩ�� `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`��ͬ�����º�˵��⡢ǰ�������� AI ��������չʾ/����
+- ��֤��ִ�� `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`����� `54 passed`��ִ�� `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`����� `20 passed`��ִ�� `cd frontend && npm run build` �ɹ�

@@ -7,10 +7,12 @@ import os
 import app.core.config as config_module
 from sqlalchemy.orm import Session
 
+from app.locators.ai_visual import get_ai_visual_runtime_stats
 from app.schemas.settings import (
     AISettingsOverviewResponse,
     AISettingsResponse,
     AISettingsUpdateRequest,
+    AIVisualStats,
 )
 from app.services.dsl import get_dsl_generation_durable_stats
 
@@ -74,12 +76,14 @@ def update_ai_settings(payload: AISettingsUpdateRequest) -> AISettingsResponse:
 
 def get_ai_settings_overview(session: Session) -> AISettingsOverviewResponse:
     settings = config_module.get_settings()
+    ai_visual_stats = get_ai_visual_runtime_stats()
     return AISettingsOverviewResponse(
         ai_dsl_enabled=settings.enable_ai_dsl_generate,
         ai_dsl_model=settings.ai_dsl_model,
         ai_dsl_strict_mode=settings.ai_dsl_strict_mode,
         ai_dsl_allow_auto_repair=settings.ai_dsl_allow_auto_repair,
         generation_stats=get_dsl_generation_durable_stats(session),
+        ai_visual_stats=AIVisualStats(**ai_visual_stats.__dict__),
     )
 
 

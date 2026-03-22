@@ -104,7 +104,7 @@ _OUTPUT_SOURCE_ALIASES = {
     "step_error_message": "last_step_error_message",
     "last_step_error_message": "last_step_error_message",
 }
-AI_DSL_PROMPT_VERSION = "2026-03-22.governance-v3"
+AI_DSL_PROMPT_VERSION = "2026-03-22.governance-v3.1"
 _BASE_SYSTEM_PROMPT_LINES = [
     "You generate structured web testing DSL in JSON only.",
     "Do not use any other action names.",
@@ -144,18 +144,20 @@ _BASE_USER_RULE_LINES = [
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
 ]
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
-    "context_mismatch",
-    "bad_contracts",
+    "wrong_actions",
+    "invalid_structure",
 )
 REJECTION_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] = {
     "wrong_actions": [
         "The previous draft used unsupported or overly aggressive actions.",
         "Use only the allowed actions and prefer conservative, low-risk steps.",
+        "Only map well-known action aliases such as open/goto, tap/click, and fill/input.",
     ],
     "invalid_structure": [
         "The previous draft had invalid JSON/DSL structure.",
         "Always return all top-level keys and keep steps/input_contract/output_contract as arrays.",
         "Never nest the DSL under wrapper keys like case, data, result, or draft.",
+        "If a single step or wrapped step list is returned, normalize it into a plain steps array.",
     ],
     "context_mismatch": [
         "The previous draft drifted away from the provided business context.",
@@ -178,6 +180,23 @@ _CONTRACT_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "source": ("source", "value_from", "valueFrom", "extract_from", "extractFrom", "from"),
     "description": ("description", "desc", "notes"),
 }
+_CASE_WRAPPER_KEYS = ("case", "data", "result", "response", "draft")
+_CASE_STEPS_ALIASES = ("step", "step_list", "stepList", "actions")
+_STEP_ACTION_KEYS = ("action", "type", "command", "step_action", "stepAction")
+_STEP_COLLECTION_KEYS = ("steps", "items", "list", "value", "data")
+_STEP_TARGET_ALIASES: dict[str, tuple[str, ...]] = {
+    "click": ("target", "element", "label", "selector", "locator", "description"),
+    "input": ("target", "element", "label", "selector", "locator", "description"),
+    "wait_for": ("target", "element", "label", "selector", "locator", "description"),
+    "assert_text": ("target", "element", "label", "selector", "locator", "description"),
+}
+_STEP_VALUE_ALIASES: dict[str, tuple[str, ...]] = {
+    "goto": ("value", "url", "path", "href"),
+    "input": ("value", "text", "input", "content"),
+    "assert_text": ("value", "expected", "expected_text", "expectedText", "text"),
+    "assert_url_contains": ("value", "expected", "url", "path", "contains"),
+}
+_STEP_TIMEOUT_ALIASES = ("timeout_ms", "timeoutMs", "timeout")
 
 
 @dataclass
@@ -383,8 +402,12 @@ def _normalize_generated_case(
     model_name: str,
     allow_auto_repair: bool,
 ) -> tuple[dict[str, Any], list[str], list[str], GenerateDslMeta]:
+    raw_case = _repair_case_payload(
+        raw_case=raw_case,
+        allow_auto_repair=allow_auto_repair,
+    )
     warnings: list[str] = []
-    normalization_notes: list[str] = []
+    normalization_notes: list[str] = list(raw_case.pop("_normalization_notes", []))
     removed_invalid_steps = 0
     removed_invalid_contracts = 0
     repaired_invalid_actions = 0
@@ -563,8 +586,13 @@ def _normalize_steps(
     if isinstance(raw_steps, dict):
         if not allow_auto_repair:
             raise DslGenerationError("AI 草案中的 steps 必须是数组。")
-        raw_steps = [raw_steps]
-        normalization_notes.append("AI 草案中的 steps 已从单个对象包装为数组。")
+        wrapped_steps = _extract_wrapped_steps(raw_steps)
+        if wrapped_steps is not None:
+            raw_steps = wrapped_steps
+            normalization_notes.append("AI 草案中的 steps 已从包装对象中提取为数组。")
+        else:
+            raw_steps = [raw_steps]
+            normalization_notes.append("AI 草案中的 steps 已从单个对象包装为数组。")
     if not isinstance(raw_steps, list):
         raise DslGenerationError("AI 草案中的 steps 必须是数组。")
 
@@ -608,7 +636,13 @@ def _normalize_single_step(
     allow_auto_repair: bool,
     normalization_notes: list[str],
 ) -> tuple[DSLStep | None, int]:
-    action_value = raw_step.get("action")
+    repaired_step = _repair_step_shape(
+        raw_step=raw_step,
+        index=index,
+        allow_auto_repair=allow_auto_repair,
+        normalization_notes=normalization_notes,
+    )
+    action_value = repaired_step.get("action")
     if not isinstance(action_value, str) or not action_value.strip():
         if allow_auto_repair:
             return None, 0
@@ -628,7 +662,6 @@ def _normalize_single_step(
         )
         normalized_action = mapped_action
 
-    repaired_step = dict(raw_step)
     repaired_step["action"] = normalized_action
     for field_name in ("target", "value"):
         if field_name in repaired_step and repaired_step[field_name] is not None and not isinstance(repaired_step[field_name], str):
@@ -682,6 +715,44 @@ def _resolve_current_contracts(
     if payload.current_case is not None:
         return payload.current_case.input_contract, payload.current_case.output_contract
     return payload.current_input_contract or [], payload.current_output_contract or []
+
+
+def _repair_case_payload(
+    *,
+    raw_case: dict[str, Any],
+    allow_auto_repair: bool,
+) -> dict[str, Any]:
+    if not allow_auto_repair:
+        return raw_case
+
+    repaired = dict(raw_case)
+    wrapper_key = next(
+        (
+            key
+            for key in _CASE_WRAPPER_KEYS
+            if isinstance(repaired.get(key), dict)
+            and _looks_like_case_payload(repaired[key])
+            and not _looks_like_case_payload(repaired)
+        ),
+        None,
+    )
+    if wrapper_key is not None:
+        repaired = dict(repaired[wrapper_key])
+        repaired["_normalization_notes"] = [f"AI 草案已从 {wrapper_key} 包装层中提取 DSL 根对象。"]
+
+    if "name" not in repaired and isinstance(repaired.get("title"), str) and repaired.get("title").strip():
+        repaired["name"] = repaired["title"]
+        repaired.setdefault("_normalization_notes", []).append("AI 草案中的 title 已映射为 name。")
+
+    if "steps" not in repaired:
+        for alias_key in _CASE_STEPS_ALIASES:
+            if alias_key not in repaired:
+                continue
+            repaired["steps"] = repaired[alias_key]
+            repaired.setdefault("_normalization_notes", []).append(f"AI 草案中的 {alias_key} 已映射为 steps。")
+            break
+
+    return repaired
 
 
 def _repair_contract_payload(
@@ -746,6 +817,103 @@ def _repair_contract_payload(
         context.normalization_notes.append(f"{context.label} #{index} 的 description 已自动转换为字符串。")
 
     return repaired
+
+
+def _repair_step_shape(
+    *,
+    raw_step: dict[str, Any],
+    index: int,
+    allow_auto_repair: bool,
+    normalization_notes: list[str],
+) -> dict[str, Any]:
+    if not allow_auto_repair:
+        return dict(raw_step)
+
+    repaired = dict(raw_step)
+    action_key = next(
+        (key for key in _STEP_ACTION_KEYS if isinstance(repaired.get(key), str) and repaired.get(key).strip()),
+        None,
+    )
+    if action_key is not None and action_key != "action" and repaired.get("action") in (None, ""):
+        repaired["action"] = repaired[action_key]
+        normalization_notes.append(f"步骤 #{index} 的 {action_key} 已映射为 action。")
+    if action_key is not None and action_key != "action":
+        repaired.pop(action_key, None)
+
+    action_value = repaired.get("action")
+    normalized_action = None
+    if isinstance(action_value, str) and action_value.strip():
+        normalized_action = _ACTION_ALIASES.get(action_value.strip(), action_value.strip())
+
+    if normalized_action in _STEP_TARGET_ALIASES:
+        _promote_step_field_alias(
+            repaired,
+            canonical_key="target",
+            alias_keys=_STEP_TARGET_ALIASES[normalized_action],
+            index=index,
+            normalization_notes=normalization_notes,
+        )
+    if normalized_action in _STEP_VALUE_ALIASES:
+        _promote_step_field_alias(
+            repaired,
+            canonical_key="value",
+            alias_keys=_STEP_VALUE_ALIASES[normalized_action],
+            index=index,
+            normalization_notes=normalization_notes,
+        )
+    if normalized_action == "wait_for":
+        _promote_step_field_alias(
+            repaired,
+            canonical_key="timeout_ms",
+            alias_keys=_STEP_TIMEOUT_ALIASES,
+            index=index,
+            normalization_notes=normalization_notes,
+        )
+
+    return repaired
+
+
+def _promote_step_field_alias(
+    repaired: dict[str, Any],
+    *,
+    canonical_key: str,
+    alias_keys: tuple[str, ...],
+    index: int,
+    normalization_notes: list[str],
+) -> Any:
+    alias_key = next(
+        (
+            key
+            for key in alias_keys
+            if key in repaired and repaired.get(key) not in (None, "") and repaired.get(canonical_key) in (None, "")
+        ),
+        None,
+    )
+    if alias_key is None:
+        return repaired.get(canonical_key)
+    repaired[canonical_key] = repaired[alias_key]
+    if alias_key != canonical_key:
+        normalization_notes.append(f"步骤 #{index} 的 {alias_key} 已映射为 {canonical_key}。")
+        repaired.pop(alias_key, None)
+    return repaired.get(canonical_key)
+
+
+def _extract_wrapped_steps(raw_steps: dict[str, Any]) -> list[Any] | None:
+    if any(key in raw_steps for key in _STEP_ACTION_KEYS):
+        return None
+    for key in _STEP_COLLECTION_KEYS:
+        candidate = raw_steps.get(key)
+        if isinstance(candidate, list):
+            return candidate
+        if isinstance(candidate, dict):
+            nested = _extract_wrapped_steps(candidate)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _looks_like_case_payload(raw_case: dict[str, Any]) -> bool:
+    return any(key in raw_case for key in ("name", "title", "steps", "step", "input_contract", "output_contract"))
 
 
 def _derive_context_key(name: str) -> str | None:

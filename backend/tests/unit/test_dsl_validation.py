@@ -207,19 +207,19 @@ def test_build_generation_messages_includes_governance_focus_reasons() -> None:
         generation_mode="draft",
         prompt_variant="baseline_draft",
         supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
-        governance_focus_reasons=["context_mismatch", "bad_contracts"],
+        governance_focus_reasons=["wrong_actions", "invalid_structure"],
     )
 
-    assert "Current governance focus reasons: context_mismatch, bad_contracts." in messages[0]["content"]
-    assert "Preserve the original business goal" in messages[0]["content"]
-    assert "Each contract must include name, context_key, value_type; output contracts must also include source." in messages[0]["content"]
+    assert "Current governance focus reasons: wrong_actions, invalid_structure." in messages[0]["content"]
+    assert "Only map well-known action aliases" in messages[0]["content"]
+    assert "Never nest the DSL under wrapper keys like case, data, result, or draft." in messages[0]["content"]
 
 
 def test_select_governance_focus_reasons_defaults_when_no_feedback_history(db_session) -> None:
-    assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["wrong_actions", "invalid_structure"]
 
 
-def test_select_governance_focus_reasons_prefers_top_rejection_reasons(db_session) -> None:
+def test_select_governance_focus_reasons_prefers_current_rollout_targets(db_session) -> None:
     records = [
         DslGenerationRun(
             actor_user_id=1,
@@ -261,6 +261,8 @@ def test_select_governance_focus_reasons_prefers_top_rejection_reasons(db_sessio
                 "context_mismatch",
                 "context_mismatch",
                 "context_mismatch",
+                "invalid_structure",
+                "invalid_structure",
                 "wrong_actions",
             ],
             start=1,
@@ -269,7 +271,7 @@ def test_select_governance_focus_reasons_prefers_top_rejection_reasons(db_sessio
     db_session.add_all(records)
     db_session.commit()
 
-    assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["wrong_actions", "invalid_structure"]
 
 
 def test_generate_dsl_case_success(client, monkeypatch) -> None:
@@ -594,6 +596,67 @@ def test_generate_dsl_case_repairs_contract_aliases_for_governance_v3(client, db
     assert generation_run.prompt_version == AI_DSL_PROMPT_VERSION
 
 
+def test_generate_dsl_case_repairs_wrapped_dsl_root_and_step_aliases(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "draft": {
+    "title": "包装结构草案",
+    "steps": {
+      "items": [
+        {"type": "open", "url": "/login"},
+        {"command": "tap", "element": "登录按钮"},
+        {"action": "input", "element": "用户名输入框", "text": "admin"},
+        {"action": "assert_text", "element": "欢迎文案", "expected": "欢迎"},
+        {"action": "assert_url_contains", "path": "/dashboard"}
+      ]
+    }
+  }
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "生成包装结构的登录流程",
+            "actor_user_id": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["case"]["name"] == "包装结构草案"
+    assert response.json()["case"]["steps"] == [
+        {"action": "goto", "value": "/login"},
+        {"action": "click", "target": "登录按钮"},
+        {"action": "input", "target": "用户名输入框", "value": "admin"},
+        {"action": "assert_text", "target": "欢迎文案", "value": "欢迎"},
+        {"action": "assert_url_contains", "value": "/dashboard"},
+    ]
+    assert response.json()["normalization_notes"] == [
+        "AI 草案已从 draft 包装层中提取 DSL 根对象。",
+        "AI 草案中的 title 已映射为 name。",
+        "AI 草案中的 steps 已从包装对象中提取为数组。",
+        "步骤 #1 的 type 已映射为 action。",
+        "步骤 #1 的 url 已映射为 value。",
+        "步骤 #1 的 action 已从 open 自动修正为 goto。",
+        "步骤 #2 的 command 已映射为 action。",
+        "步骤 #2 的 element 已映射为 target。",
+        "步骤 #2 的 action 已从 tap 自动修正为 click。",
+        "步骤 #3 的 element 已映射为 target。",
+        "步骤 #3 的 text 已映射为 value。",
+        "步骤 #4 的 element 已映射为 target。",
+        "步骤 #4 的 expected 已映射为 value。",
+        "步骤 #5 的 path 已映射为 value。",
+    ]
+    assert response.json()["generation_meta"]["risk_flags"] == ["invalid_actions_repaired"]
+
+
 def test_generate_dsl_case_still_rejects_invalid_steps_under_governance_v3(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -869,7 +932,7 @@ def test_generate_dsl_case_persists_success_record(client, db_session, monkeypat
     assert generation_run.normalization_notes_count == 0
     assert generation_run.warnings_json == ["AI 草案未提供 base_url，已回填请求中的 Base URL。"]
     assert generation_run.normalization_notes_json == []
-    assert generation_run.governance_focus_reasons_json == ["context_mismatch", "bad_contracts"]
+    assert generation_run.governance_focus_reasons_json == ["wrong_actions", "invalid_structure"]
     assert generation_run.risk_flags_json == ["base_url_backfilled"]
     assert generation_run.feedback_status == "pending"
     assert generation_run.feedback_import_mode is None
@@ -908,7 +971,7 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert runs[0].warnings_json == []
     assert runs[0].normalization_notes_json == []
     assert runs[0].context_profile == "blank_request"
-    assert runs[0].governance_focus_reasons_json == ["context_mismatch", "bad_contracts"]
+    assert runs[0].governance_focus_reasons_json == ["wrong_actions", "invalid_structure"]
     assert runs[0].risk_flags_json == []
     assert runs[0].feedback_status == "pending"
     assert runs[0].retry_from_generation_id is None
@@ -1026,7 +1089,7 @@ def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_s
     assert payload[1]["prompt_preview"] == "second"
     assert payload[0]["prompt_version"] == AI_DSL_PROMPT_VERSION
     assert payload[0]["prompt_variant"] == "baseline_draft"
-    assert payload[0]["governance_focus_reasons"] == ["context_mismatch", "bad_contracts"]
+    assert payload[0]["governance_focus_reasons"] == ["wrong_actions", "invalid_structure"]
     assert payload[0]["risk_flags"] == []
     assert payload[0]["rejection_reason_code"] == "context_mismatch"
 
@@ -1144,7 +1207,7 @@ def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_ses
     assert payload["prompt_version"] == AI_DSL_PROMPT_VERSION
     assert payload["prompt_variant"] == "baseline_draft"
     assert payload["context_profile"] == "blank_request"
-    assert payload["governance_focus_reasons"] == ["context_mismatch", "bad_contracts"]
+    assert payload["governance_focus_reasons"] == ["wrong_actions", "invalid_structure"]
     assert payload["generated_case_json"]["name"] == "详情草案"
     assert payload["warnings_json"] == []
     assert payload["normalization_notes_json"] == [
@@ -1205,7 +1268,7 @@ def test_generate_dsl_case_persists_retry_context_and_retry_prompt_version(clien
     assert generation_run.retry_reason_code == "bad_contracts"
     assert generation_run.retry_note == "契约命名不稳定"
     assert generation_run.prompt_version == f"{AI_DSL_PROMPT_VERSION}+retry.bad_contracts"
-    assert generation_run.governance_focus_reasons_json == ["bad_contracts", "context_mismatch"]
+    assert generation_run.governance_focus_reasons_json == ["wrong_actions", "invalid_structure"]
 
 
 def test_record_generation_feedback_accepts_first_decision_and_is_idempotent(client, monkeypatch) -> None:

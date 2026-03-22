@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import app.locators.fallback as fallback_module
+from app.locators.ai_visual import get_ai_visual_runtime_stats, reset_ai_visual_runtime_state
 from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.locators import InterventionNeededError, resolve_with_fallback
 from app.locators.semantic import LocatorResolutionError
@@ -94,6 +95,7 @@ class FakePage:
 @pytest.fixture(autouse=True)
 def clear_ai_visual_session_cache() -> None:
     fallback_module._clear_ai_visual_session_cache()
+    reset_ai_visual_runtime_state()
 
 
 def _create_source_execution(db_session) -> int:
@@ -319,6 +321,10 @@ def test_resolve_with_fallback_reuses_cached_ai_visual_selector(monkeypatch) -> 
     assert second_resolved.strategy == "ai_visual_cache"
     assert semantic_spy.call_count == 0
     assert second_page.screenshot_calls == []
+    stats = get_ai_visual_runtime_stats()
+    assert stats.cache_miss_count == 1
+    assert stats.cache_hit_count == 1
+    assert stats.cache_invalidated_count == 0
 
 
 def test_resolve_with_fallback_invalidates_cached_visible_selector_when_semantics_drift(monkeypatch, caplog) -> None:
@@ -369,6 +375,10 @@ def test_resolve_with_fallback_invalidates_cached_visible_selector_when_semantic
     assert semantic_spy.call_count == 1
     assert second_page.screenshot_calls == [False]
     assert "reason=semantic_mismatch" in caplog.text
+    stats = get_ai_visual_runtime_stats()
+    assert stats.cache_miss_count == 1
+    assert stats.cache_hit_count == 0
+    assert stats.cache_invalidated_count == 1
 
 
 def test_resolve_with_fallback_invalidates_cached_ai_visual_selector_when_locator_is_stale(monkeypatch, caplog) -> None:

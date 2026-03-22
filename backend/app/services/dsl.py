@@ -772,7 +772,7 @@ def _select_governance_focus_reasons(
     selected_reasons = [
         rejection_reason_code
         for rejection_reason_code, _count in rows
-        if rejection_reason_code is not None
+        if rejection_reason_code in DEFAULT_GOVERNANCE_REJECTION_REASONS
     ]
     for fallback_reason in DEFAULT_GOVERNANCE_REJECTION_REASONS:
         if fallback_reason not in selected_reasons:

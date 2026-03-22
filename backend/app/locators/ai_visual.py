@@ -38,7 +38,38 @@ class AIVisualRuntimeState:
     opened_until: float = 0.0
 
 
+@dataclass
+class AIVisualRuntimeStatsState:
+    locate_requests: int = 0
+    locate_success_count: int = 0
+    locate_failure_count: int = 0
+    cache_hit_count: int = 0
+    cache_miss_count: int = 0
+    cache_invalidated_count: int = 0
+    breaker_skip_count: int = 0
+    rate_limited_skip_count: int = 0
+    disabled_skip_count: int = 0
+    total_locate_latency_ms: float = 0.0
+    max_locate_latency_ms: float = 0.0
+
+
+@dataclass(frozen=True)
+class AIVisualRuntimeStatsSnapshot:
+    locate_requests: int
+    locate_success_count: int
+    locate_failure_count: int
+    cache_hit_count: int
+    cache_miss_count: int
+    cache_invalidated_count: int
+    breaker_skip_count: int
+    rate_limited_skip_count: int
+    disabled_skip_count: int
+    avg_locate_latency_ms: float
+    max_locate_latency_ms: float
+
+
 RUNTIME_STATE = AIVisualRuntimeState()
+RUNTIME_STATS = AIVisualRuntimeStatsState()
 _STATE_LOCK = threading.Lock()
 
 
@@ -68,14 +99,17 @@ def locate_element_by_vision(
 ) -> AILocateResult | None:
     settings = get_settings()
     if not settings.enable_ai_visual_locate:
+        _record_disabled_skip()
         return None
     if not settings.vlm_api_key or not settings.vlm_model:
         return None
-    if not _can_attempt_request():
+    if not _can_attempt_request(track_stats=True):
         return None
 
     family = model_family or settings.vlm_model_family
     _record_attempt()
+    _record_locate_request()
+    started_at = monotonic()
     try:
         if deep_locate:
             result = _deep_locate(
@@ -102,14 +136,17 @@ def locate_element_by_vision(
                 timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
             )
     except Exception as exc:
+        _record_locate_result(success=False, latency_ms=_elapsed_milliseconds(started_at))
         _record_failure()
         logger.warning("AI visual locate request failed: %s", exc)
         return None
 
     if result is None:
+        _record_locate_result(success=False, latency_ms=_elapsed_milliseconds(started_at))
         _record_failure()
         return None
 
+    _record_locate_result(success=True, latency_ms=_elapsed_milliseconds(started_at))
     _record_success()
     return result
 
@@ -612,12 +649,14 @@ def _normalize_bbox(
     )
 
 
-def _can_attempt_request() -> bool:
+def _can_attempt_request(*, track_stats: bool = False) -> bool:
     settings = get_settings()
     now = monotonic()
     with _STATE_LOCK:
         _maybe_reset_window(now)
         if RUNTIME_STATE.opened_until > now:
+            if track_stats:
+                RUNTIME_STATS.breaker_skip_count += 1
             logger.warning(
                 "AI visual locate breaker open until=%s",
                 round(RUNTIME_STATE.opened_until, 2),
@@ -628,6 +667,8 @@ def _can_attempt_request() -> bool:
             RUNTIME_STATE.window_started_at > 0
             and RUNTIME_STATE.window_request_count >= settings.ai_visual_rate_limit_per_minute
         ):
+            if track_stats:
+                RUNTIME_STATS.rate_limited_skip_count += 1
             logger.warning(
                 "AI visual locate rate limited count=%s window_started_at=%s",
                 RUNTIME_STATE.window_request_count,
@@ -643,6 +684,63 @@ def _record_attempt() -> None:
     with _STATE_LOCK:
         _maybe_reset_window(now)
         RUNTIME_STATE.window_request_count += 1
+
+
+def _record_locate_request() -> None:
+    with _STATE_LOCK:
+        RUNTIME_STATS.locate_requests += 1
+
+
+def _record_locate_result(*, success: bool, latency_ms: float) -> None:
+    with _STATE_LOCK:
+        if success:
+            RUNTIME_STATS.locate_success_count += 1
+        else:
+            RUNTIME_STATS.locate_failure_count += 1
+        RUNTIME_STATS.total_locate_latency_ms += latency_ms
+        RUNTIME_STATS.max_locate_latency_ms = max(RUNTIME_STATS.max_locate_latency_ms, latency_ms)
+
+
+def _record_disabled_skip() -> None:
+    with _STATE_LOCK:
+        RUNTIME_STATS.disabled_skip_count += 1
+
+
+def record_ai_visual_cache_hit() -> None:
+    with _STATE_LOCK:
+        RUNTIME_STATS.cache_hit_count += 1
+
+
+def record_ai_visual_cache_miss() -> None:
+    with _STATE_LOCK:
+        RUNTIME_STATS.cache_miss_count += 1
+
+
+def record_ai_visual_cache_invalidation() -> None:
+    with _STATE_LOCK:
+        RUNTIME_STATS.cache_invalidated_count += 1
+
+
+def get_ai_visual_runtime_stats() -> AIVisualRuntimeStatsSnapshot:
+    with _STATE_LOCK:
+        average_latency = (
+            RUNTIME_STATS.total_locate_latency_ms / RUNTIME_STATS.locate_requests
+            if RUNTIME_STATS.locate_requests
+            else 0.0
+        )
+        return AIVisualRuntimeStatsSnapshot(
+            locate_requests=RUNTIME_STATS.locate_requests,
+            locate_success_count=RUNTIME_STATS.locate_success_count,
+            locate_failure_count=RUNTIME_STATS.locate_failure_count,
+            cache_hit_count=RUNTIME_STATS.cache_hit_count,
+            cache_miss_count=RUNTIME_STATS.cache_miss_count,
+            cache_invalidated_count=RUNTIME_STATS.cache_invalidated_count,
+            breaker_skip_count=RUNTIME_STATS.breaker_skip_count,
+            rate_limited_skip_count=RUNTIME_STATS.rate_limited_skip_count,
+            disabled_skip_count=RUNTIME_STATS.disabled_skip_count,
+            avg_locate_latency_ms=average_latency,
+            max_locate_latency_ms=RUNTIME_STATS.max_locate_latency_ms,
+        )
 
 
 def _maybe_reset_window(now: float) -> None:
@@ -671,13 +769,33 @@ def reset_ai_visual_runtime_state() -> None:
         RUNTIME_STATE.window_request_count = 0
         RUNTIME_STATE.consecutive_failures = 0
         RUNTIME_STATE.opened_until = 0.0
+        RUNTIME_STATS.locate_requests = 0
+        RUNTIME_STATS.locate_success_count = 0
+        RUNTIME_STATS.locate_failure_count = 0
+        RUNTIME_STATS.cache_hit_count = 0
+        RUNTIME_STATS.cache_miss_count = 0
+        RUNTIME_STATS.cache_invalidated_count = 0
+        RUNTIME_STATS.breaker_skip_count = 0
+        RUNTIME_STATS.rate_limited_skip_count = 0
+        RUNTIME_STATS.disabled_skip_count = 0
+        RUNTIME_STATS.total_locate_latency_ms = 0.0
+        RUNTIME_STATS.max_locate_latency_ms = 0.0
+
+
+def _elapsed_milliseconds(started_at: float) -> float:
+    return max(0.0, (monotonic() - started_at) * 1000)
 
 
 __all__ = [
     "AILocateResult",
     "AIVisionCandidateBox",
+    "AIVisualRuntimeStatsSnapshot",
     "ModelFamily",
+    "get_ai_visual_runtime_stats",
     "locate_element_by_vision",
+    "record_ai_visual_cache_hit",
+    "record_ai_visual_cache_invalidation",
+    "record_ai_visual_cache_miss",
     "rank_candidates_by_vision",
     "reset_ai_visual_runtime_state",
 ]

@@ -15,7 +15,7 @@
 ## BUG-XXX | æ ‡é¢˜
 
 - æ—¥æœŸï¼šYYYY-MM-DD
-- çŠ¶æ€ï¼šopen
+- çŠ¶æ€ï¼šfixed
 - æ¥æºï¼šéœ€æ±‚ / è‡ªæµ‹ / è”è°ƒ / çº¿ä¸Šåé¦ˆ
 - æè¿°ï¼šé—®é¢˜ç°è±¡
 - å¤ç°æ­¥éª¤ï¼š
@@ -49,7 +49,9 @@
 - éªŒè¯ï¼š
   - å·²å®¡æŸ¥ä»£ç è·¯å¾„ `backend/app/locators/fallback.py`
   - å·²æ‰§è¡Œ `uv run pytest backend/tests/unit/test_locator_fallback.py backend/tests/unit/test_dsl_validation.py -q`ï¼Œç»“æœ `42 passed`
-- å…³è”è®°å½•ï¼š`docs/execution-log.md` 2026-03-22 16:20
+  - å·²æ‰§è¡Œ `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/integration/test_intervention_regression.py::test_local_intervention_flow_rerun_hits_tier_zero tests/integration/test_intervention_regression.py::test_suite_context_rerun_failed_reuses_context_snapshot_after_manual_correction -q`ï¼Œç»“æœ `3 passed`
+- å¤„ç†ç»“è®ºï¼šå·²åœ¨ `2026-03-22 16:06` çš„ä¿®å¤ä¸­è¡¥é½ cache å‘½ä¸­åçš„ DOM snapshot è¯­ä¹‰å¤æ ¸ï¼›æœ¬æ¬¡ä»…åŒæ­¥æ–‡æ¡£çŠ¶æ€ï¼Œç¡®è®¤å…¶ä¸å†æ˜¯ open blocker
+- å…³è”è®°å½•ï¼š`docs/execution-log.md` 2026-03-22 16:06ï¼›`docs/execution-log.md` 2026-03-22 20:51
 
 ## BUG-025 | governance v3 å®ç°æš´éœ² contract alias ä¿®æ­£ä¸ warning æ”¶å£ç¼ºé™·
 
@@ -607,20 +609,20 @@
   - æ‰§è¡Œ `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx`
 - å…³è”è®°å½•ï¼š`docs/execution-log.md` 2026-03-19ï¼ˆfollow-upï¼‰
 
-## BUG-022 | AI visual cache ÓïÒåÆ¯ÒÆÓë governance focus Éó¼ÆÈ±¿Ú
-- ÈÕÆÚ£º2026-03-22
-- ×´Ì¬£ºfixed
-- À´Ô´£ºÓÃ»§Ìá¹© findings
-- ÃèÊö£º`backend/app/locators/fallback.py` µÄ AI visual session cache ¸´ÓÃ selector Ê±Ö»¼ì²é¿É¼ûĞÔ£¬Î´¸´ÓÃ AI visual Â·¾¶ÒÑÓĞµÄ DOM snapshot ÓïÒåĞ£Ñé£¬µ¼ÖÂÍ¬Ò» URL pattern ÏÂÈô¾É selector ÈÔ¿É¼ûµ«ÒÑÖ¸Ïò´íÎóÔªËØ£¬»áÖ±½ÓÃüÖĞ´íÎóÄ¿±ê¡£Óë´ËÍ¬Ê±£¬`backend/app/services/dsl.py` »á»ùÓÚÀúÊ· rejected ¼ÇÂ¼¶¯Ì¬Ñ¡Ôñ `governance_focus_reasons` ²¢×¢Èë prompt£¬µ« `DslGenerationRun` ½ö³Ö¾Ã»¯ `prompt_version`£¬Ã»ÓĞ°Ñ¶¯Ì¬½¹µã±¾ÉíÈë¿â£¬ºóĞøÉó¼Æ/Í³¼Æ»á°Ñ²»Í¬ system prompt ÄÚÈİ»ìÔÚÍ¬Ò»°æ±¾ÏÂ¡£
-- Ó°Ïì£ºÇ°Õß»áÔì³É´íÎóÔªËØµã»÷£¬ÊôÓÚ×è¶Ï¼¶¶¨Î»»Ø¹é£»ºóÕß»áÈÃÍ¬Ò» `prompt_version` µÄÖÎÀíĞ§¹û·ÖÎö¡¢ÎÊÌâ¹éÒòºÍ»Ø¹öÅĞ¶ÏÊ§Õæ¡£
-- ¸ùÒò£º»º´æ¸´ÓÃÂ·¾¶ÓëÊ×ÂÖ AI visual ÑéÖ¤Â·¾¶·Ö²æºóÈ±ÉÙÒ»ÖÂĞÔµÄÓïÒåĞ£Ñé£»ÖÎÀí v3 ÔÚ prompt ×é×°²ãÒıÈëÁË¶¯Ì¬½¹µã£¬µ«Éó¼ÆÄ£ĞÍÃ»ÓĞÍ¬²½À©Õ¹¶ÔÓ¦×Ö¶Î¡£
-- ´¦Àí£º
-  - ÔÚ `backend/app/locators/fallback.py` Îª»º´æÃüÖĞ²¹³ä `locator.evaluate(...)` DOM snapshot ¸´ºË£¬ÓïÒå²»Æ¥ÅäÊ±¼ÇÂ¼ `reason=semantic_mismatch` ²¢Á¢¼´Ê§Ğ§»º´æ£¬ÔÙ¼ÌĞøÓïÒå¶¨Î» / AI visual ºóĞøÁ´Â·
-  - ÔÚ `backend/app/models/dsl_generation_run.py` Ôö¼Ó `governance_focus_reasons_json`£¬Í¨¹ı `backend/app/services/dsl.py` ÔÚ³É¹¦ºÍÊ§°ÜÂä¿âÂ·¾¶Í³Ò»³Ö¾Ã»¯£¬²¢ÔÚ `backend/app/schemas/dsl.py` / Ç°¶ËÀàĞÍÓëÏêÇéÒ³ÖĞ±©Â¶
-  - ĞÂÔöÇ¨ÒÆ `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`
-  - ²¹³ä `backend/tests/unit/test_locator_fallback.py` ¶Ô¡°»º´æÃüÖĞµ½´íÎó¿É¼ûÔªËØ¡±µÄ»Ø¹é²âÊÔ£¬ÒÔ¼° `backend/tests/unit/test_dsl_validation.py`¡¢`backend/tests/unit/test_models.py` ¶ÔÖÎÀí½¹µã³Ö¾Ã»¯Óë½Ó¿Ú×Ö¶ÎµÄÑéÖ¤
-- ÑéÖ¤£º
-  - Ö´ĞĞ `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`
-  - Ö´ĞĞ `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`
-  - Ö´ĞĞ `cd frontend && npm run build`
-- ¹ØÁª¼ÇÂ¼£º`docs/execution-log.md` 2026-03-22 16:06
+## BUG-022 | AI visual cache ï¿½ï¿½ï¿½ï¿½Æ¯ï¿½ï¿½ï¿½ï¿½ governance focus ï¿½ï¿½ï¿½È±ï¿½ï¿½
+- ï¿½ï¿½ï¿½Ú£ï¿½2026-03-22
+- ×´Ì¬ï¿½ï¿½fixed
+- ï¿½ï¿½Ô´ï¿½ï¿½ï¿½Ã»ï¿½ï¿½á¹© findings
+- ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½`backend/app/locators/fallback.py` ï¿½ï¿½ AI visual session cache ï¿½ï¿½ï¿½ï¿½ selector Ê±Ö»ï¿½ï¿½ï¿½É¼ï¿½ï¿½Ô£ï¿½Î´ï¿½ï¿½ï¿½ï¿½ AI visual Â·ï¿½ï¿½ï¿½ï¿½ï¿½Ğµï¿½ DOM snapshot ï¿½ï¿½ï¿½ï¿½Ğ£ï¿½é£¬ï¿½ï¿½ï¿½ï¿½Í¬Ò» URL pattern ï¿½ï¿½ï¿½ï¿½ï¿½ selector ï¿½Ô¿É¼ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ï¿½Ôªï¿½Ø£ï¿½ï¿½ï¿½Ö±ï¿½ï¿½ï¿½ï¿½ï¿½Ğ´ï¿½ï¿½ï¿½Ä¿ï¿½ê¡£ï¿½ï¿½ï¿½Í¬Ê±ï¿½ï¿½`backend/app/services/dsl.py` ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê· rejected ï¿½ï¿½Â¼ï¿½ï¿½Ì¬Ñ¡ï¿½ï¿½ `governance_focus_reasons` ï¿½ï¿½×¢ï¿½ï¿½ promptï¿½ï¿½ï¿½ï¿½ `DslGenerationRun` ï¿½ï¿½ï¿½Ö¾Ã»ï¿½ `prompt_version`ï¿½ï¿½Ã»ï¿½Ğ°Ñ¶ï¿½Ì¬ï¿½ï¿½ï¿½ã±¾ï¿½ï¿½ï¿½ï¿½â£¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½/Í³ï¿½Æ»ï¿½Ñ²ï¿½Í¬ system prompt ï¿½ï¿½ï¿½İ»ï¿½ï¿½ï¿½Í¬Ò»ï¿½æ±¾ï¿½Â¡ï¿½
+- Ó°ï¿½ì£ºÇ°ï¿½ß»ï¿½ï¿½ï¿½É´ï¿½ï¿½ï¿½Ôªï¿½Øµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¼ï¿½ï¿½ï¿½Î»ï¿½Ø¹é£»ï¿½ï¿½ï¿½ß»ï¿½ï¿½ï¿½Í¬Ò» `prompt_version` ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ğ§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í»Ø¹ï¿½ï¿½Ğ¶ï¿½Ê§ï¿½æ¡£
+- ï¿½ï¿½ï¿½ò£º»ï¿½ï¿½æ¸´ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ AI visual ï¿½ï¿½Ö¤Â·ï¿½ï¿½ï¿½Ö²ï¿½ï¿½È±ï¿½ï¿½Ò»ï¿½ï¿½ï¿½Ôµï¿½ï¿½ï¿½ï¿½ï¿½Ğ£ï¿½é£»ï¿½ï¿½ï¿½ï¿½ v3 ï¿½ï¿½ prompt ï¿½ï¿½×°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ë¶ï¿½Ì¬ï¿½ï¿½ï¿½ã£¬ï¿½ï¿½ï¿½ï¿½ï¿½Ä£ï¿½ï¿½Ã»ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½Õ¹ï¿½ï¿½Ó¦ï¿½Ö¶Î¡ï¿½
+- ï¿½ï¿½ï¿½ï¿½ï¿½
+  - ï¿½ï¿½ `backend/app/locators/fallback.py` Îªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ğ²ï¿½ï¿½ï¿½ `locator.evaluate(...)` DOM snapshot ï¿½ï¿½ï¿½Ë£ï¿½ï¿½ï¿½ï¿½å²»Æ¥ï¿½ï¿½Ê±ï¿½ï¿½Â¼ `reason=semantic_mismatch` ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§Ğ§ï¿½ï¿½ï¿½æ£¬ï¿½Ù¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½å¶¨Î» / AI visual ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·
+  - ï¿½ï¿½ `backend/app/models/dsl_generation_run.py` ï¿½ï¿½ï¿½ï¿½ `governance_focus_reasons_json`ï¿½ï¿½Í¨ï¿½ï¿½ `backend/app/services/dsl.py` ï¿½Ú³É¹ï¿½ï¿½ï¿½Ê§ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½Í³Ò»ï¿½Ö¾Ã»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ `backend/app/schemas/dsl.py` / Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò³ï¿½Ğ±ï¿½Â¶
+  - ï¿½ï¿½ï¿½ï¿½Ç¨ï¿½ï¿½ `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`
+  - ï¿½ï¿½ï¿½ï¿½ `backend/tests/unit/test_locator_fallback.py` ï¿½Ô¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ğµï¿½ï¿½ï¿½ï¿½ï¿½É¼ï¿½Ôªï¿½Ø¡ï¿½ï¿½Ä»Ø¹ï¿½ï¿½ï¿½Ô£ï¿½ï¿½Ô¼ï¿½ `backend/tests/unit/test_dsl_validation.py`ï¿½ï¿½`backend/tests/unit/test_models.py` ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¾Ã»ï¿½ï¿½ï¿½Ó¿ï¿½ï¿½Ö¶Îµï¿½ï¿½ï¿½Ö¤
+- ï¿½ï¿½Ö¤ï¿½ï¿½
+  - Ö´ï¿½ï¿½ `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`
+  - Ö´ï¿½ï¿½ `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`
+  - Ö´ï¿½ï¿½ `cd frontend && npm run build`
+- ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â¼ï¿½ï¿½`docs/execution-log.md` 2026-03-22 16:06

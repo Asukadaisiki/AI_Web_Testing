@@ -12,6 +12,7 @@ import app.core.config as config_module
 import app.main as main_module
 from app.db import Base
 from app.db.session import get_engine
+from app.locators.ai_visual import reset_ai_visual_runtime_state
 from app.models import User
 from app.services.dsl import reset_dsl_generation_runtime_stats
 
@@ -50,6 +51,7 @@ def ai_settings_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestC
     config_module.get_settings.cache_clear()
     get_engine.cache_clear()
     reset_dsl_generation_runtime_stats()
+    reset_ai_visual_runtime_state()
 
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
@@ -250,6 +252,19 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
             ],
             "retry_acceptance_by_reason": [],
         },
+        "ai_visual_stats": {
+            "locate_requests": 0,
+            "locate_success_count": 0,
+            "locate_failure_count": 0,
+            "cache_hit_count": 0,
+            "cache_miss_count": 0,
+            "cache_invalidated_count": 0,
+            "breaker_skip_count": 0,
+            "rate_limited_skip_count": 0,
+            "disabled_skip_count": 0,
+            "avg_locate_latency_ms": 0.0,
+            "max_locate_latency_ms": 0.0,
+        },
     }
 
 
@@ -438,3 +453,16 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
             "acceptance_rate": 1.0,
         }
     ]
+    assert overview_response.json()["ai_visual_stats"] == {
+        "locate_requests": 0,
+        "locate_success_count": 0,
+        "locate_failure_count": 0,
+        "cache_hit_count": 0,
+        "cache_miss_count": 0,
+        "cache_invalidated_count": 0,
+        "breaker_skip_count": 0,
+        "rate_limited_skip_count": 0,
+        "disabled_skip_count": 0,
+        "avg_locate_latency_ms": 0.0,
+        "max_locate_latency_ms": 0.0,
+    }

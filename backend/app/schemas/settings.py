@@ -162,9 +162,24 @@ class AIDslGenerationStats(SettingsModel):
     retry_acceptance_by_reason: list[AIDslGenerationRetryAcceptanceByReason] = Field(default_factory=list)
 
 
+class AIVisualStats(SettingsModel):
+    locate_requests: int = Field(default=0, ge=0)
+    locate_success_count: int = Field(default=0, ge=0)
+    locate_failure_count: int = Field(default=0, ge=0)
+    cache_hit_count: int = Field(default=0, ge=0)
+    cache_miss_count: int = Field(default=0, ge=0)
+    cache_invalidated_count: int = Field(default=0, ge=0)
+    breaker_skip_count: int = Field(default=0, ge=0)
+    rate_limited_skip_count: int = Field(default=0, ge=0)
+    disabled_skip_count: int = Field(default=0, ge=0)
+    avg_locate_latency_ms: float = Field(default=0.0, ge=0)
+    max_locate_latency_ms: float = Field(default=0.0, ge=0)
+
+
 class AISettingsOverviewResponse(SettingsModel):
     ai_dsl_enabled: bool
     ai_dsl_model: str | None = Field(default=None, max_length=200)
     ai_dsl_strict_mode: bool
     ai_dsl_allow_auto_repair: bool
     generation_stats: AIDslGenerationStats
+    ai_visual_stats: AIVisualStats

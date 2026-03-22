@@ -8,7 +8,15 @@ import re
 from collections import OrderedDict
 from threading import Lock
 
-from app.locators.ai_visual import AILocateResult, AIVisionCandidateBox, locate_element_by_vision, rank_candidates_by_vision
+from app.locators.ai_visual import (
+    AILocateResult,
+    AIVisionCandidateBox,
+    locate_element_by_vision,
+    rank_candidates_by_vision,
+    record_ai_visual_cache_hit,
+    record_ai_visual_cache_invalidation,
+    record_ai_visual_cache_miss,
+)
 from app.locators.corrections import CorrectionRecord, CorrectionStore, normalize_target_description
 from app.locators.semantic import (
     LocatorResolutionError,
@@ -408,6 +416,7 @@ def _try_resolve_cached_ai_locator(
         return None
     selector = _get_cached_ai_selector(cache_key)
     if selector is None:
+        record_ai_visual_cache_miss()
         logger.debug("AI visual session cache_miss page_url_pattern=%s target=%s", cache_key[0], target)
         return None
 
@@ -417,6 +426,7 @@ def _try_resolve_cached_ai_locator(
         snapshot = _snapshot_dom_candidate(locator)
     except Exception as exc:
         _invalidate_cached_ai_selector(cache_key)
+        record_ai_visual_cache_invalidation()
         logger.debug(
             "AI visual session cache_invalidated page_url_pattern=%s target=%s selector=%s error=%s",
             cache_key[0],
@@ -428,6 +438,7 @@ def _try_resolve_cached_ai_locator(
 
     if snapshot is None or not _dom_snapshot_matches_target(snapshot, target):
         _invalidate_cached_ai_selector(cache_key)
+        record_ai_visual_cache_invalidation()
         logger.debug(
             "AI visual session cache_invalidated page_url_pattern=%s target=%s selector=%s reason=semantic_mismatch",
             cache_key[0],
@@ -436,6 +447,7 @@ def _try_resolve_cached_ai_locator(
         )
         return None
 
+    record_ai_visual_cache_hit()
     logger.debug("AI visual session cache_hit page_url_pattern=%s target=%s", cache_key[0], target)
     return ResolvedLocator(
         strategy="ai_visual_cache",

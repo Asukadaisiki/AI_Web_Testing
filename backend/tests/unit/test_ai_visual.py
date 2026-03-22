@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import count
 import threading
 from urllib import error
 
@@ -14,6 +15,7 @@ from app.locators.ai_visual import (
     _extract_json_object,
     _normalize_bbox,
     _parse_bbox_response,
+    get_ai_visual_runtime_stats,
     locate_element_by_vision,
     reset_ai_visual_runtime_state,
 )
@@ -89,9 +91,13 @@ def test_locate_element_by_vision_skips_when_model_not_configured(monkeypatch) -
             )
             is None
         )
+        stats = get_ai_visual_runtime_stats()
     finally:
         reset_ai_visual_runtime_state()
         get_settings.cache_clear()
+
+    assert stats.locate_requests == 0
+    assert stats.disabled_skip_count == 1
 
 
 def test_locate_element_by_vision_rate_limits_after_configured_budget(monkeypatch) -> None:
@@ -121,6 +127,7 @@ def test_locate_element_by_vision_rate_limits_after_configured_budget(monkeypatc
             image_width=1000,
             image_height=500,
         )
+        stats = get_ai_visual_runtime_stats()
     finally:
         reset_ai_visual_runtime_state()
         get_settings.cache_clear()
@@ -128,6 +135,10 @@ def test_locate_element_by_vision_rate_limits_after_configured_budget(monkeypatc
     assert first is not None
     assert second is None
     assert call_count["count"] == 1
+    assert stats.locate_requests == 1
+    assert stats.locate_success_count == 1
+    assert stats.locate_failure_count == 0
+    assert stats.rate_limited_skip_count == 1
 
 
 def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monkeypatch) -> None:
@@ -144,9 +155,9 @@ def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monke
         call_count["count"] += 1
         raise error.URLError("provider boom")
 
-    monotonic_values = iter([1.0, 1.0, 2.0, 2.0, 3.0, 4.0])
+    monotonic_values = count(start=1)
     monkeypatch.setattr("app.locators.ai_visual._call_vlm", fake_call_vlm)
-    monkeypatch.setattr("app.locators.ai_visual.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("app.locators.ai_visual.monotonic", lambda: float(next(monotonic_values)))
 
     try:
         first = locate_element_by_vision(
@@ -167,6 +178,7 @@ def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monke
             image_width=1000,
             image_height=500,
         )
+        stats = get_ai_visual_runtime_stats()
     finally:
         reset_ai_visual_runtime_state()
         get_settings.cache_clear()
@@ -175,6 +187,10 @@ def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monke
     assert second is None
     assert third is None
     assert call_count["count"] == 2
+    assert stats.locate_requests == 2
+    assert stats.locate_success_count == 0
+    assert stats.locate_failure_count == 2
+    assert stats.breaker_skip_count == 1
 
 
 def test_build_locator_from_ai_point_requires_dom_cross_verification() -> None:

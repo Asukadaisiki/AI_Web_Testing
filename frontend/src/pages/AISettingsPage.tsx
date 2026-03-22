@@ -130,6 +130,10 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function formatLatency(value: number) {
+  return `${value.toFixed(1)} ms`;
+}
+
 function formatTimestamp(value: string | null | undefined) {
   if (!value) {
     return "暂无";
@@ -365,6 +369,16 @@ export function AISettingsPage() {
   const generationRuns = generationRunsQuery.data ?? [];
   const canGoPrev = page > 1;
   const canGoNext = generationRuns.length === PAGE_SIZE;
+  const aiVisualHitRate =
+    overviewData && overviewData.ai_visual_stats.locate_requests > 0
+      ? overviewData.ai_visual_stats.locate_success_count / overviewData.ai_visual_stats.locate_requests
+      : 0;
+  const aiVisualCacheReuseRate =
+    overviewData &&
+    overviewData.ai_visual_stats.cache_hit_count + overviewData.ai_visual_stats.cache_miss_count > 0
+      ? overviewData.ai_visual_stats.cache_hit_count /
+        (overviewData.ai_visual_stats.cache_hit_count + overviewData.ai_visual_stats.cache_miss_count)
+      : 0;
 
   return (
     <>
@@ -748,6 +762,34 @@ export function AISettingsPage() {
                 <Switch />
               </Form.Item>
             </div>
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="AI visual 命中率">
+                {overviewData ? formatPercent(aiVisualHitRate) : "暂无"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Cache 复用率">
+                {overviewData ? formatPercent(aiVisualCacheReuseRate) : "暂无"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Locate 请求 / 成功 / 失败">
+                {overviewData
+                  ? `${overviewData.ai_visual_stats.locate_requests} / ${overviewData.ai_visual_stats.locate_success_count} / ${overviewData.ai_visual_stats.locate_failure_count}`
+                  : "暂无"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Cache 命中 / 未命中 / 失效">
+                {overviewData
+                  ? `${overviewData.ai_visual_stats.cache_hit_count} / ${overviewData.ai_visual_stats.cache_miss_count} / ${overviewData.ai_visual_stats.cache_invalidated_count}`
+                  : "暂无"}
+              </Descriptions.Item>
+              <Descriptions.Item label="平均 / 最大 Locate 延迟">
+                {overviewData
+                  ? `${formatLatency(overviewData.ai_visual_stats.avg_locate_latency_ms)} / ${formatLatency(overviewData.ai_visual_stats.max_locate_latency_ms)}`
+                  : "暂无"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Breaker / Rate Limit / Disabled 跳过">
+                {overviewData
+                  ? `${overviewData.ai_visual_stats.breaker_skip_count} / ${overviewData.ai_visual_stats.rate_limited_skip_count} / ${overviewData.ai_visual_stats.disabled_skip_count}`
+                  : "暂无"}
+              </Descriptions.Item>
+            </Descriptions>
           </Card>
         </Form>
       </Space>

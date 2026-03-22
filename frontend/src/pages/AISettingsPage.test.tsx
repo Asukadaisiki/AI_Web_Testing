@@ -92,7 +92,7 @@ function mockGovernancePageApis() {
       ],
       prompt_version_breakdown: [
         {
-          prompt_version: "2026-03-22.governance-v3",
+          prompt_version: "2026-03-22.governance-v3.1",
           total_requests: 3,
           success_count: 2,
           accepted_count: 1,
@@ -144,6 +144,19 @@ function mockGovernancePageApis() {
         },
       ],
     },
+    ai_visual_stats: {
+      locate_requests: 4,
+      locate_success_count: 3,
+      locate_failure_count: 1,
+      cache_hit_count: 2,
+      cache_miss_count: 1,
+      cache_invalidated_count: 1,
+      breaker_skip_count: 1,
+      rate_limited_skip_count: 0,
+      disabled_skip_count: 6,
+      avg_locate_latency_ms: 120.5,
+      max_locate_latency_ms: 240.0,
+    },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([
     {
@@ -156,7 +169,7 @@ function mockGovernancePageApis() {
       prompt_variant: "baseline_draft",
       project_id: 1,
       case_id: 8,
-      prompt_version: "2026-03-22.governance-v3+retry.bad_contracts",
+      prompt_version: "2026-03-22.governance-v3.1+retry.bad_contracts",
       retry_from_generation_id: 6,
       retry_reason_code: "bad_contracts",
       retry_note: "契约命名不稳定",
@@ -167,7 +180,7 @@ function mockGovernancePageApis() {
       removed_invalid_contracts: 0,
       warnings_count: 1,
       normalization_notes_count: 2,
-      governance_focus_reasons: ["context_mismatch", "bad_contracts"],
+      governance_focus_reasons: ["wrong_actions", "invalid_structure"],
       prompt_preview: "打开 example.com 并验证 URL",
       risk_flags: ["invalid_steps_removed"],
       feedback_status: "rejected",
@@ -186,7 +199,7 @@ function mockGovernancePageApis() {
     prompt_variant: "baseline_draft",
     project_id: 1,
     case_id: 8,
-    prompt_version: "2026-03-22.governance-v3+retry.bad_contracts",
+    prompt_version: "2026-03-22.governance-v3.1+retry.bad_contracts",
     retry_from_generation_id: 6,
     retry_reason_code: "bad_contracts",
     retry_note: "契约命名不稳定",
@@ -197,7 +210,7 @@ function mockGovernancePageApis() {
     removed_invalid_contracts: 0,
     warnings_count: 1,
     normalization_notes_count: 2,
-    governance_focus_reasons: ["context_mismatch", "bad_contracts"],
+    governance_focus_reasons: ["wrong_actions", "invalid_structure"],
     prompt_preview: "打开 example.com 并验证 URL",
     risk_flags: ["invalid_steps_removed"],
     feedback_status: "rejected",
@@ -255,22 +268,28 @@ test("渲染 AI 治理概览", async () => {
   expect(screen.getByText("未配置")).toBeInTheDocument();
   expect(screen.getByText("4")).toBeInTheDocument();
   expect(screen.getByText("3 / 1")).toBeInTheDocument();
-  expect(screen.getByText("2 / 1 / 1")).toBeInTheDocument();
+  expect(screen.getAllByText("2 / 1 / 1").length).toBeGreaterThan(0);
   expect(screen.getByText("2 / 1")).toBeInTheDocument();
   expect(screen.getByText("1 / 0")).toBeInTheDocument();
   expect(screen.getByText("50%")).toBeInTheDocument();
-  expect(screen.getByText("75%")).toBeInTheDocument();
+  expect(screen.getAllByText("75%").length).toBeGreaterThan(0);
   expect(screen.getByText("DslGenerationError (1)")).toBeInTheDocument();
   expect(screen.getByText("replace (1)、steps_only (1)")).toBeInTheDocument();
   expect(screen.getByText("bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("Prompt 版本效果（总请求 / 采纳 / 放弃 / 重试采纳）")).toBeInTheDocument();
-  expect(screen.getByText("2026-03-22.governance-v3: 3 / 1 / 1 / 1")).toBeInTheDocument();
+  expect(screen.getByText("2026-03-22.governance-v3.1: 3 / 1 / 1 / 1")).toBeInTheDocument();
   expect(screen.getByText("blank_request: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft / bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("gpt-4o-mini: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("draft: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("bad_contracts: 1 / 1 / 100%")).toBeInTheDocument();
+  expect(screen.getByText("AI visual 命中率")).toBeInTheDocument();
+  expect(screen.getByText("67%")).toBeInTheDocument();
+  expect(screen.getByText("4 / 3 / 1")).toBeInTheDocument();
+  expect(screen.getAllByText("2 / 1 / 1").length).toBeGreaterThan(0);
+  expect(screen.getByText("120.5 ms / 240.0 ms")).toBeInTheDocument();
+  expect(screen.getByText("1 / 0 / 6")).toBeInTheDocument();
   expect(screen.getByText("治理记录")).toBeInTheDocument();
   expect(screen.getByText("已放弃 (bad_contracts)")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft")).toBeInTheDocument();
@@ -321,6 +340,7 @@ test("AI 治理页支持筛选并查看详情", async () => {
   expect(screen.getByText("blank_request")).toBeInTheDocument();
   expect(screen.getAllByText("baseline_draft").length).toBeGreaterThan(0);
   expect(screen.getAllByText("invalid_steps_removed").length).toBeGreaterThan(0);
+  expect(screen.getByText("wrong_actions / invalid_structure")).toBeInTheDocument();
   expect(screen.getByDisplayValue(/治理详情草案/)).toBeInTheDocument();
 }, 15000);
 
@@ -376,6 +396,19 @@ test("保存 AI 配置会提交最新表单值", async () => {
       model_outcome_breakdown: [],
       generation_mode_breakdown: [],
       retry_acceptance_by_reason: [],
+    },
+    ai_visual_stats: {
+      locate_requests: 0,
+      locate_success_count: 0,
+      locate_failure_count: 0,
+      cache_hit_count: 0,
+      cache_miss_count: 0,
+      cache_invalidated_count: 0,
+      breaker_skip_count: 0,
+      rate_limited_skip_count: 0,
+      disabled_skip_count: 0,
+      avg_locate_latency_ms: 0,
+      max_locate_latency_ms: 0,
     },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);
@@ -480,6 +513,19 @@ test("加载失败时展示错误块", async () => {
       generation_mode_breakdown: [],
       retry_acceptance_by_reason: [],
     },
+    ai_visual_stats: {
+      locate_requests: 0,
+      locate_success_count: 0,
+      locate_failure_count: 0,
+      cache_hit_count: 0,
+      cache_miss_count: 0,
+      cache_invalidated_count: 0,
+      breaker_skip_count: 0,
+      rate_limited_skip_count: 0,
+      disabled_skip_count: 0,
+      avg_locate_latency_ms: 0,
+      max_locate_latency_ms: 0,
+    },
   });
   vi.mocked(api.getDslGenerationRuns).mockResolvedValue([]);
   vi.mocked(api.getDslGenerationRunDetail).mockResolvedValue({
@@ -492,7 +538,7 @@ test("加载失败时展示错误块", async () => {
     prompt_variant: "baseline_draft",
     project_id: null,
     case_id: null,
-    prompt_version: "2026-03-22.governance-v3",
+    prompt_version: "2026-03-22.governance-v3.1",
     retry_from_generation_id: null,
     retry_reason_code: null,
     retry_note: null,
@@ -503,7 +549,7 @@ test("加载失败时展示错误块", async () => {
     removed_invalid_contracts: 0,
     warnings_count: 0,
     normalization_notes_count: 0,
-    governance_focus_reasons: ["context_mismatch", "bad_contracts"],
+    governance_focus_reasons: ["wrong_actions", "invalid_structure"],
     prompt_preview: "preview",
     risk_flags: [],
     feedback_status: "pending",

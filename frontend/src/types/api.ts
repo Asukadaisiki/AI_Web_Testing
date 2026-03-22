@@ -213,12 +213,27 @@ export interface AIDslGenerationStats {
   retry_acceptance_by_reason: DslGenerationRetryAcceptanceByReason[];
 }
 
+export interface AIVisualStats {
+  locate_requests: number;
+  locate_success_count: number;
+  locate_failure_count: number;
+  cache_hit_count: number;
+  cache_miss_count: number;
+  cache_invalidated_count: number;
+  breaker_skip_count: number;
+  rate_limited_skip_count: number;
+  disabled_skip_count: number;
+  avg_locate_latency_ms: number;
+  max_locate_latency_ms: number;
+}
+
 export interface AISettingsOverview {
   ai_dsl_enabled: boolean;
   ai_dsl_model?: string | null;
   ai_dsl_strict_mode: boolean;
   ai_dsl_allow_auto_repair: boolean;
   generation_stats: AIDslGenerationStats;
+  ai_visual_stats: AIVisualStats;
 }
 
 export interface DslGenerationErrorTypeCount {
