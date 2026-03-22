@@ -313,6 +313,7 @@ export interface StoredDslGenerationRunSummary {
   warnings_count: number;
   normalization_notes_count: number;
   prompt_preview: string;
+  governance_focus_reasons: DslGenerationRejectionReasonCode[];
   risk_flags: DslGenerationRiskFlag[];
   feedback_status: DslGenerationFeedbackStatus;
   feedback_import_mode?: GenerateDslImportMode | null;

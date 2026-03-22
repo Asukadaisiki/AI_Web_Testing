@@ -30,6 +30,27 @@
 
 ## å½“å‰çŠ¶æ€
 
+## BUG-026 | AI visual session cache å‘½ä¸­åç¼ºå°‘ç›®æ ‡è¯­ä¹‰å¤æ ¸ï¼Œå¯èƒ½ç‚¹å‡»åˆ°é”™è¯¯å…ƒç´ 
+
+- æ—¥æœŸï¼š2026-03-22
+- çŠ¶æ€ï¼šopen
+- æ¥æºï¼šä»£ç è¯„å®¡
+- æè¿°ï¼š`backend/app/locators/fallback.py` æ–°å¢çš„ AI visual session cache åœ¨å‘½ä¸­ç¼“å­˜ selector åï¼Œåªæ‰§è¡Œ `locator.wait_for(state="visible")` å°±ç›´æ¥è¿”å› `ai_visual_cache` ç»“æœï¼Œæ²¡æœ‰åƒé¦–æ¬¡ AI visual å‘½ä¸­é‚£æ ·é‡æ–°æŠ“å– DOM snapshot å¹¶è°ƒç”¨ `_dom_snapshot_matches_target()` å¤æ ¸ç›®æ ‡è¯­ä¹‰ã€‚
+- å¤ç°æ­¥éª¤ï¼š
+  1. åœ¨æŸä¸ª URL pattern ä¸‹ç¬¬ä¸€æ¬¡é€šè¿‡ AI visual å‘½ä¸­â€œç™»å½•æŒ‰é’®â€ï¼Œç¼“å­˜å…¶ CSS selector
+  2. è¿›å…¥åŒä¸€ URL pattern çš„å¦ä¸€é¡µé¢çŠ¶æ€ï¼Œä½¿è¯¥ selector ä»ç„¶å¯è§ï¼Œä½†å¯¹åº”åˆ°å¦ä¸€ä¸ªæŒ‰é’®æˆ–é”™è¯¯å…ƒç´ 
+  3. å†æ¬¡è°ƒç”¨ `resolve_with_fallback()`
+  4. è§‚å¯Ÿå½“å‰å®ç°ä¼šç›´æ¥è¿”å› `ai_visual_cache`ï¼Œä¸ä¼šå¤±æ•ˆç¼“å­˜ï¼Œä¹Ÿä¸ä¼šå›é€€åˆ° semantic / AI visual é‡æ–°åˆ¤å®š
+- å½±å“ï¼šä¼šæŠŠâ€œç¼“å­˜å‘½ä¸­â€è¯¯å½“ä½œâ€œç›®æ ‡å‘½ä¸­â€ï¼Œåœ¨åŒä¸€è·¯å¾„ä¸‹å­˜åœ¨å¤šä¸ªç›¸ä¼¼ç»“æ„æˆ–åŠ¨æ€ UI çŠ¶æ€åˆ‡æ¢æ—¶ï¼Œå¯èƒ½æŠŠç‚¹å‡»/è¾“å…¥è½åˆ°é”™è¯¯å…ƒç´ ä¸Šï¼Œå±äºæ‰§è¡Œæ­£ç¡®æ€§é£é™©ã€‚
+- æ ¹å› ï¼šç¼“å­˜å‘½ä¸­åˆ†æ”¯åªæ ¡éªŒâ€œselector ä»å¯è§â€ï¼Œæ²¡æœ‰å¤ç”¨é¦–æ¬¡ AI visual åˆ†æ”¯ä¸­çš„ DOM snapshot + ç›®æ ‡è¯­ä¹‰æ ¡éªŒé€»è¾‘ã€‚
+- å¤„ç†ï¼š
+  - åœ¨ç¼“å­˜å‘½ä¸­åè¡¥ä¸€å±‚ DOM snapshot è¯­ä¹‰å¤æ ¸ï¼Œä¸åŒ¹é…æ—¶ç«‹å³å¤±æ•ˆç¼“å­˜å¹¶ç»§ç»­åç»­å®šä½é“¾è·¯
+  - æ–°å¢â€œç¼“å­˜ selector ä»å¯è§ä½†å·²æŒ‡å‘é”™è¯¯å…ƒç´ â€çš„å•æµ‹ï¼Œé¿å…åªè¦†ç›– stale locator åœºæ™¯
+- éªŒè¯ï¼š
+  - å·²å®¡æŸ¥ä»£ç è·¯å¾„ `backend/app/locators/fallback.py`
+  - å·²æ‰§è¡Œ `uv run pytest backend/tests/unit/test_locator_fallback.py backend/tests/unit/test_dsl_validation.py -q`ï¼Œç»“æœ `42 passed`
+- å…³è”è®°å½•ï¼š`docs/execution-log.md` 2026-03-22 16:20
+
 ## BUG-025 | governance v3 å®ç°æš´éœ² contract alias ä¿®æ­£ä¸ warning æ”¶å£ç¼ºé™·
 
 - æ—¥æœŸï¼š2026-03-22
@@ -585,3 +606,21 @@
   - æ‰§è¡Œ `cd backend && uv run pytest tests/integration/test_intervention_regression.py -k reranked_by_vlm`
   - æ‰§è¡Œ `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx`
 - å…³è”è®°å½•ï¼š`docs/execution-log.md` 2026-03-19ï¼ˆfollow-upï¼‰
+
+## BUG-022 | AI visual cache ÓïÒåÆ¯ÒÆÓë governance focus Éó¼ÆÈ±¿Ú
+- ÈÕÆÚ£º2026-03-22
+- ×´Ì¬£ºfixed
+- À´Ô´£ºÓÃ»§Ìá¹© findings
+- ÃèÊö£º`backend/app/locators/fallback.py` µÄ AI visual session cache ¸´ÓÃ selector Ê±Ö»¼ì²é¿É¼ûĞÔ£¬Î´¸´ÓÃ AI visual Â·¾¶ÒÑÓĞµÄ DOM snapshot ÓïÒåĞ£Ñé£¬µ¼ÖÂÍ¬Ò» URL pattern ÏÂÈô¾É selector ÈÔ¿É¼ûµ«ÒÑÖ¸Ïò´íÎóÔªËØ£¬»áÖ±½ÓÃüÖĞ´íÎóÄ¿±ê¡£Óë´ËÍ¬Ê±£¬`backend/app/services/dsl.py` »á»ùÓÚÀúÊ· rejected ¼ÇÂ¼¶¯Ì¬Ñ¡Ôñ `governance_focus_reasons` ²¢×¢Èë prompt£¬µ« `DslGenerationRun` ½ö³Ö¾Ã»¯ `prompt_version`£¬Ã»ÓĞ°Ñ¶¯Ì¬½¹µã±¾ÉíÈë¿â£¬ºóĞøÉó¼Æ/Í³¼Æ»á°Ñ²»Í¬ system prompt ÄÚÈİ»ìÔÚÍ¬Ò»°æ±¾ÏÂ¡£
+- Ó°Ïì£ºÇ°Õß»áÔì³É´íÎóÔªËØµã»÷£¬ÊôÓÚ×è¶Ï¼¶¶¨Î»»Ø¹é£»ºóÕß»áÈÃÍ¬Ò» `prompt_version` µÄÖÎÀíĞ§¹û·ÖÎö¡¢ÎÊÌâ¹éÒòºÍ»Ø¹öÅĞ¶ÏÊ§Õæ¡£
+- ¸ùÒò£º»º´æ¸´ÓÃÂ·¾¶ÓëÊ×ÂÖ AI visual ÑéÖ¤Â·¾¶·Ö²æºóÈ±ÉÙÒ»ÖÂĞÔµÄÓïÒåĞ£Ñé£»ÖÎÀí v3 ÔÚ prompt ×é×°²ãÒıÈëÁË¶¯Ì¬½¹µã£¬µ«Éó¼ÆÄ£ĞÍÃ»ÓĞÍ¬²½À©Õ¹¶ÔÓ¦×Ö¶Î¡£
+- ´¦Àí£º
+  - ÔÚ `backend/app/locators/fallback.py` Îª»º´æÃüÖĞ²¹³ä `locator.evaluate(...)` DOM snapshot ¸´ºË£¬ÓïÒå²»Æ¥ÅäÊ±¼ÇÂ¼ `reason=semantic_mismatch` ²¢Á¢¼´Ê§Ğ§»º´æ£¬ÔÙ¼ÌĞøÓïÒå¶¨Î» / AI visual ºóĞøÁ´Â·
+  - ÔÚ `backend/app/models/dsl_generation_run.py` Ôö¼Ó `governance_focus_reasons_json`£¬Í¨¹ı `backend/app/services/dsl.py` ÔÚ³É¹¦ºÍÊ§°ÜÂä¿âÂ·¾¶Í³Ò»³Ö¾Ã»¯£¬²¢ÔÚ `backend/app/schemas/dsl.py` / Ç°¶ËÀàĞÍÓëÏêÇéÒ³ÖĞ±©Â¶
+  - ĞÂÔöÇ¨ÒÆ `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`
+  - ²¹³ä `backend/tests/unit/test_locator_fallback.py` ¶Ô¡°»º´æÃüÖĞµ½´íÎó¿É¼ûÔªËØ¡±µÄ»Ø¹é²âÊÔ£¬ÒÔ¼° `backend/tests/unit/test_dsl_validation.py`¡¢`backend/tests/unit/test_models.py` ¶ÔÖÎÀí½¹µã³Ö¾Ã»¯Óë½Ó¿Ú×Ö¶ÎµÄÑéÖ¤
+- ÑéÖ¤£º
+  - Ö´ĞĞ `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`
+  - Ö´ĞĞ `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`
+  - Ö´ĞĞ `cd frontend && npm run build`
+- ¹ØÁª¼ÇÂ¼£º`docs/execution-log.md` 2026-03-22 16:06

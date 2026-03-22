@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-22 16:20
+
+- 任务：审查最新提交 `ba3316a feat: implement governance v3 and locator session cache`
+- 执行动作：读取 `backend-call-chain-reviewer` 技能说明；审查 `backend/app/ai/dsl_generator.py`、`backend/app/services/dsl.py`、`backend/app/locators/fallback.py` 及对应单测；重点核对 governance v3 的 prompt 焦点选择、入库审计字段、locator session cache 命中/失效路径与测试覆盖；补记本次审查到 `docs/bug-log.md`
+- 结果：确认本次提交在“AI visual session cache 命中后仅校验可见性、不再校验目标语义”上存在误命中风险；同时确认 governance v3 会把动态 rejection reason 注入 system prompt，但当前持久化记录未保存该动态焦点，导致 `prompt_version` 聚合与审计粒度不足
+- 验证：执行 `uv run pytest backend/tests/unit/test_locator_fallback.py backend/tests/unit/test_dsl_validation.py -q`，结果 `42 passed`
+- 后续：优先为 AI visual cache 增加命中后二次 DOM 语义校验和“命中到错误可见元素”的回归测试；其次补充 governance focus reasons 的持久化字段或将其纳入可审计版本标识
+
 ## 2026-03-22 15:40
 
 - 任务：实现 AI DSL 治理收敛、固定浏览器回归口径与 Locator P4 sidecar
@@ -127,3 +135,8 @@
 
 - 新增 `docs/execution-log.md` 与 `docs/bug-log.md`
 - 在 `AGENTS.md` 增加日志沉淀规则与 GitHub 同步追问规则
+## 2026-03-22 16:06
+
+- �����޸� AI visual session cache �������� governance focus ���ȱ��
+- ִ�ж������� `backend/app/locators/fallback.py` Ϊ AI visual cache ���в��� DOM snapshot ���帴�ˣ���ƥ��ʱ����ʧЧ���沢����������λ��·���� `backend/app/models/dsl_generation_run.py`��`backend/app/services/dsl.py`��`backend/app/schemas/dsl.py` ���� `governance_focus_reasons_json / governance_focus_reasons` �־û���ӿ�ӳ�䣬������Ǩ�� `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`��ͬ�����º�˵��⡢ǰ�������� AI ��������չʾ/����
+- ��֤��ִ�� `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`����� `54 passed`��ִ�� `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`����� `20 passed`��ִ�� `cd frontend && npm run build` �ɹ�

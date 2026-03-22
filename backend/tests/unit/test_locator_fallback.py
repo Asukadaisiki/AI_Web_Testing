@@ -15,15 +15,27 @@ from app.schemas.executions import LocatorTrace
 
 
 class FakeLocatorCollection:
-    def __init__(self, *, should_fail: bool = False) -> None:
+    def __init__(self, *, page=None, target: str = "", should_fail: bool = False) -> None:
+        self.page = page
+        self.target = target
         self.should_fail = should_fail
 
     def wait_for(self, *, state: str, timeout: int) -> None:
-        if self.should_fail:
+        should_fail = self.should_fail
+        if self.page is not None and self.target:
+            should_fail = self.page.locator_failures.get(self.target, should_fail)
+        if should_fail:
             raise RuntimeError("correction failed")
 
     def count(self) -> int:
         return 0
+
+    def evaluate(self, script: str, *_args):
+        if self.page is None:
+            return None
+        if "getBoundingClientRect" in script:
+            return self.page.locator_payloads.get(self.target)
+        return None
 
 
 class FakePage:
@@ -33,17 +45,22 @@ class FakePage:
         url: str,
         correction_should_fail: bool = False,
         ai_payload: dict | None = None,
+        locator_payloads: dict[str, dict] | None = None,
+        locator_failures: dict[str, bool] | None = None,
         screenshot_error: Exception | None = None,
     ) -> None:
         self.url = url
         self.viewport_size = {"width": 1280, "height": 720}
         self.correction_should_fail = correction_should_fail
         self.ai_payload = ai_payload
+        self.locator_payloads = locator_payloads or {}
+        self.locator_failures = locator_failures or {}
         self.screenshot_error = screenshot_error
         self.screenshot_calls: list[bool] = []
 
-    def locator(self, _target: str):
-        return FakeLocatorCollection(should_fail=self.correction_should_fail)
+    def locator(self, target: str):
+        should_fail = self.correction_should_fail and target not in self.locator_failures
+        return FakeLocatorCollection(page=self, target=target, should_fail=should_fail)
 
     def get_by_test_id(self, _target: str):
         return FakeLocatorCollection(should_fail=self.correction_should_fail)
@@ -277,7 +294,10 @@ def test_resolve_with_fallback_reuses_cached_ai_visual_selector(monkeypatch) -> 
         "enabled": True,
     }
     first_page = FakePage(url="https://app.example.com/users/123", ai_payload=ai_payload)
-    second_page = FakePage(url="https://app.example.com/users/456")
+    second_page = FakePage(
+        url="https://app.example.com/users/456",
+        locator_payloads={"#login-btn": ai_payload},
+    )
 
     semantic_spy = MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮")))
     monkeypatch.setattr("app.locators.fallback.resolve_semantic_locator", semantic_spy)
@@ -301,6 +321,56 @@ def test_resolve_with_fallback_reuses_cached_ai_visual_selector(monkeypatch) -> 
     assert second_page.screenshot_calls == []
 
 
+def test_resolve_with_fallback_invalidates_cached_visible_selector_when_semantics_drift(monkeypatch, caplog) -> None:
+    ai_payload = {
+        "tag": "button",
+        "text": "鐧诲綍鎸夐挳",
+        "role": "button",
+        "aria_label": "鐧诲綍鎸夐挳",
+        "placeholder": None,
+        "data_testid": "login-button",
+        "css_selector": "#login-btn",
+        "xpath": "/html/body/button[1]",
+        "rect": {"x": 150, "y": 80, "width": 100, "height": 40},
+        "visible": True,
+        "enabled": True,
+    }
+    wrong_visible_payload = {
+        **ai_payload,
+        "text": "鍙栨秷",
+        "aria_label": "鍙栨秷",
+        "data_testid": "cancel-button",
+    }
+    first_page = FakePage(url="https://app.example.com/users/123", ai_payload=ai_payload)
+    second_page = FakePage(
+        url="https://app.example.com/users/456",
+        ai_payload=ai_payload,
+        locator_payloads={"#login-btn": wrong_visible_payload},
+    )
+
+    semantic_spy = MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="鐧诲綍鎸夐挳")))
+    monkeypatch.setattr("app.locators.fallback.resolve_semantic_locator", semantic_spy)
+    monkeypatch.setattr(
+        "app.locators.fallback.locate_element_by_vision",
+        lambda **_kwargs: type(
+            "Candidate",
+            (),
+            {"center": (200, 100), "bbox": (150, 80, 250, 120), "confidence": 0.7, "raw_response": "{}"},
+        )(),
+    )
+
+    resolve_with_fallback(first_page, "鐧诲綍鎸夐挳")
+
+    semantic_spy.reset_mock()
+    with caplog.at_level("DEBUG"):
+        resolved = resolve_with_fallback(second_page, "鐧诲綍鎸夐挳")
+
+    assert resolved.strategy == "ai_visual"
+    assert semantic_spy.call_count == 1
+    assert second_page.screenshot_calls == [False]
+    assert "reason=semantic_mismatch" in caplog.text
+
+
 def test_resolve_with_fallback_invalidates_cached_ai_visual_selector_when_locator_is_stale(monkeypatch, caplog) -> None:
     ai_payload = {
         "tag": "button",
@@ -316,7 +386,10 @@ def test_resolve_with_fallback_invalidates_cached_ai_visual_selector_when_locato
         "enabled": True,
     }
     first_page = FakePage(url="https://app.example.com/users/123", ai_payload=ai_payload)
-    stale_page = FakePage(url="https://app.example.com/users/456", correction_should_fail=True)
+    stale_page = FakePage(
+        url="https://app.example.com/users/456",
+        locator_failures={"#login-btn": True},
+    )
 
     monkeypatch.setattr(
         "app.locators.fallback.resolve_semantic_locator",

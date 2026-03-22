@@ -414,6 +414,7 @@ def _try_resolve_cached_ai_locator(
     locator = page.locator(selector)
     try:
         locator.wait_for(state="visible", timeout=3000)
+        snapshot = _snapshot_dom_candidate(locator)
     except Exception as exc:
         _invalidate_cached_ai_selector(cache_key)
         logger.debug(
@@ -422,6 +423,16 @@ def _try_resolve_cached_ai_locator(
             target,
             selector,
             exc,
+        )
+        return None
+
+    if snapshot is None or not _dom_snapshot_matches_target(snapshot, target):
+        _invalidate_cached_ai_selector(cache_key)
+        logger.debug(
+            "AI visual session cache_invalidated page_url_pattern=%s target=%s selector=%s reason=semantic_mismatch",
+            cache_key[0],
+            target,
+            selector,
         )
         return None
 
@@ -504,6 +515,13 @@ def _build_locator_from_ai_point(
 
 def _snapshot_dom_element_at_point(page, x: int, y: int) -> DOMElementSnapshot | None:
     payload = page.evaluate(SNAPSHOT_DOM_AT_POINT_SCRIPT, [x, y])
+    if payload is None:
+        return None
+    return DOMElementSnapshot.model_validate(payload)
+
+
+def _snapshot_dom_candidate(locator) -> DOMElementSnapshot | None:
+    payload = locator.evaluate(CAPTURE_DOM_CANDIDATE_SCRIPT)
     if payload is None:
         return None
     return DOMElementSnapshot.model_validate(payload)

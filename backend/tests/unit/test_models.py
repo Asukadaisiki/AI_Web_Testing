@@ -293,6 +293,7 @@ def test_dsl_generation_run_columns_and_foreign_keys_exist(db_session: Session) 
         "normalization_notes_count",
         "warnings_json",
         "normalization_notes_json",
+        "governance_focus_reasons_json",
         "risk_flags_json",
         "generated_case_json",
         "feedback_status",

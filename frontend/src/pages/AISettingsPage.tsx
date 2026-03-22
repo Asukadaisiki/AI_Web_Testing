@@ -778,6 +778,11 @@ export function AISettingsPage() {
                 {generationDetailQuery.data.retry_reason_code ?? "无"}
               </Descriptions.Item>
               <Descriptions.Item label="Prompt Variant">{generationDetailQuery.data.prompt_variant}</Descriptions.Item>
+              <Descriptions.Item label="治理焦点">
+                {generationDetailQuery.data.governance_focus_reasons.length
+                  ? generationDetailQuery.data.governance_focus_reasons.join(" / ")
+                  : "无"}
+              </Descriptions.Item>
               <Descriptions.Item label="上下文档案">{generationDetailQuery.data.context_profile}</Descriptions.Item>
               <Descriptions.Item label="结果">{generationDetailQuery.data.success ? "成功" : "失败"}</Descriptions.Item>
               <Descriptions.Item label="反馈">{formatFeedbackStatus(generationDetailQuery.data)}</Descriptions.Item>

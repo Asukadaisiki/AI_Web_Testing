@@ -222,6 +222,7 @@ class StoredDslGenerationRunSummary(DSLModel):
     warnings_count: int = Field(ge=0)
     normalization_notes_count: int = Field(ge=0)
     prompt_preview: str = Field(min_length=1, max_length=200)
+    governance_focus_reasons: list[DslGenerationRejectionReasonCode] = Field(default_factory=list)
     risk_flags: list[DslGenerationRiskFlag] = Field(default_factory=list)
     feedback_status: DslGenerationFeedbackStatus
     feedback_import_mode: GenerateDslImportMode | None = None

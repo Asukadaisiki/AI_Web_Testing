@@ -126,6 +126,7 @@ class DslGenerationRun(Base):
     normalization_notes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     warnings_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     normalization_notes_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    governance_focus_reasons_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     risk_flags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     generated_case_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     feedback_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
