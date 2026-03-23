@@ -18,6 +18,7 @@ from app.ai.dsl_generator import (
     DslGenerationConfigError,
     DslGenerationError,
     generate_case_draft,
+    resolve_active_governance_reasons,
     resolve_generation_mode,
     resolve_generation_profile,
     resolve_prompt_version,
@@ -701,6 +702,14 @@ def _persist_generation_run(
         generation_mode=generation_mode,
     )
     prompt_version = resolve_prompt_version(payload)
+    effective_governance_focus_reasons = (
+        list(generation_meta.active_governance_focus_reasons)
+        if generation_meta is not None
+        else resolve_active_governance_reasons(
+            governance_focus_reasons=governance_focus_reasons,
+            retry_reason_code=payload.retry_reason_code,
+        )
+    )
     generation_run = DslGenerationRun(
         actor_user_id=payload.actor_user_id,
         project_id=payload.project_id,
@@ -737,7 +746,7 @@ def _persist_generation_run(
         normalization_notes_count=len(normalization_notes),
         warnings_json=warnings,
         normalization_notes_json=normalization_notes,
-        governance_focus_reasons_json=list(governance_focus_reasons),
+        governance_focus_reasons_json=effective_governance_focus_reasons,
         risk_flags_json=list(generation_meta.risk_flags) if generation_meta is not None else [],
         generated_case_json=generated_case.model_dump(mode="json") if generated_case is not None else None,
         feedback_status="pending",
@@ -770,6 +779,7 @@ def _select_governance_focus_reasons(
             DslGenerationRun.feedback_status == "rejected",
             DslGenerationRun.rejection_reason_code.is_not(None),
             DslGenerationRun.rejection_reason_code.not_in(SETTLED_GOVERNANCE_REJECTION_REASONS),
+            DslGenerationRun.rejection_reason_code != "other",
         )
         .group_by(DslGenerationRun.rejection_reason_code)
         .order_by(func.count().desc(), DslGenerationRun.rejection_reason_code.asc())

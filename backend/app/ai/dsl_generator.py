@@ -439,14 +439,16 @@ def _normalize_generated_case(
         warnings.append("AI 草案未提供有效 name，已使用当前上下文中的名称或默认名称。")
         risk_flags.append("missing_name_fallback")
 
+    active_governance_focus_reasons = resolve_active_governance_reasons(
+        governance_focus_reasons=governance_focus_reasons,
+        retry_reason_code=payload.retry_reason_code,
+    )
+
     normalized_name, normalized_description = _apply_context_mismatch_repairs(
         normalized_name=normalized_name,
         normalized_description=normalized_description,
         current_case=current_case,
-        active_focus_reasons=_resolve_active_governance_reasons(
-            governance_focus_reasons=governance_focus_reasons,
-            retry_reason_code=payload.retry_reason_code,
-        ),
+        active_focus_reasons=active_governance_focus_reasons,
         normalization_notes=normalization_notes,
     )
 
@@ -524,6 +526,7 @@ def _normalize_generated_case(
         import_mode=payload.import_mode,
         prompt_variant=prompt_variant,
         context_profile=context_profile,
+        active_governance_focus_reasons=active_governance_focus_reasons,
         risk_flags=risk_flags,
         base_url_source=base_url_source,
         base_url_backfilled=base_url_backfilled,
@@ -1012,7 +1015,7 @@ def _looks_like_generic_case_name(name: str) -> bool:
     return normalized in _GENERIC_CASE_NAMES or normalized.startswith("ai ")
 
 
-def _resolve_active_governance_reasons(
+def resolve_active_governance_reasons(
     *,
     governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None,
     retry_reason_code: DslGenerationRejectionReasonCode | None,

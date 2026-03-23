@@ -30,6 +30,27 @@
 
 ## 当前状态
 
+## BUG-027 | governance v3.2 存在 other 挤占焦点与 retry 焦点审计失真
+
+- 日期：2026-03-23
+- 状态：fixed
+- 来源：代码评审
+- 描述：`backend/app/services/dsl.py` 的治理焦点选择仅排除了 `wrong_actions / invalid_structure`，没有排除 `other`，导致高频但不可操作的 `other` 可能挤占当前治理焦点名额；同时 `backend/app/ai/dsl_generator.py` 会在 retry 场景把 `retry_reason_code` 追加到实际生效的治理焦点中，但 `backend/app/services/dsl.py` 落库时仍只保存 selector 阶段的候选焦点，导致 `governance_focus_reasons_json` 和详情接口可能少记真实 prompt 焦点。
+- 复现步骤：
+  1. 构造 rejected 历史使 `other` 成为 Top 2 rejection reason 之一
+  2. 调用 `_select_governance_focus_reasons()`，观察旧实现会把 `other` 当作当前治理焦点返回
+  3. 构造 `retry_reason_code=wrong_actions` 的重试生成请求
+  4. 观察旧实现中 prompt 实际会使用 `context_mismatch / bad_contracts / wrong_actions`，但落库的 `governance_focus_reasons_json` 只记录 selector 阶段的 `context_mismatch / bad_contracts`
+- 影响：会让不可操作的 `other` 抢占治理资源，也会让治理详情、后续统计与排障依据失真。
+- 根因：焦点选择逻辑没有显式排除 `other`；生成链路和持久化链路分别各自维护治理焦点，导致 retry 追加焦点未回传到落库层。
+- 处理：
+  - 在焦点选择逻辑中显式排除 `other`
+  - 将最终生效的 active governance reasons 写入 `GenerateDslMeta`，并在持久化时优先使用它；失败场景则复用同一套 active reason 解析逻辑
+  - 补充“`other` 高频时仍不应挤占焦点”与“retry append 的真实焦点会落库”的回归测试
+- 验证：
+  - 执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py -q`，结果 `42 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-23 22:38
+
 ## BUG-026 | AI visual session cache 命中后缺少目标语义复核，可能点击到错误元素
 
 - 日期：2026-03-22
@@ -626,3 +647,24 @@
   - ִ�� `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`
   - ִ�� `cd frontend && npm run build`
 - ������¼��`docs/execution-log.md` 2026-03-22 16:06
+
+## BUG-023 | governance focus 选择与审计记录存在偏差
+
+- 日期：2026-03-23
+- 状态：open
+- 来源：最新提交代码 review
+- 描述：
+  - `backend/app/services/dsl.py` 的 `_select_governance_focus_reasons()` 现在只排除 `wrong_actions / invalid_structure`，但不会排除 `other`。当历史 reject 里 `other` 数量进入 Top 2 时，会直接占掉一个治理焦点名额，导致默认的 `bad_contracts` 或 `context_mismatch` 被挤出当前 prompt focus。
+  - 同文件 `_persist_generation_run()` 持久化的是 selector 返回的 `governance_focus_reasons`，而 `backend/app/ai/dsl_generator.py` 的 `_resolve_active_governance_reasons()` 会在重试场景额外把 `retry_reason_code` 追加到实际生效的 prompt focus。两者不一致时，落库审计和详情接口会少记真实生效的治理原因。
+- 影响：
+  - `other` 这种无明确修复策略的兜底原因会稀释真正需要加压的治理目标，降低 `bad_contracts / context_mismatch` 的命中概率。
+  - 重试请求的审计数据可能无法反映真实 prompt 策略，后续做统计、回归对比或排障时会得到错误结论。
+- 根因：
+  - selector 从“只在默认治理目标里挑选”改成了“排除 settled 后直接取 Top N”，但没有同步过滤掉 `other` 这类不可操作原因。
+  - 持久化层记录的是“候选治理焦点”，不是“最终实际生效的治理焦点”。
+- 建议处理：
+  - 在 `_select_governance_focus_reasons()` 中排除 `other`，或者至少保证 `DEFAULT_GOVERNANCE_REJECTION_REASONS` 不会被 `other` 挤出 Top 2。
+  - 将最终生效的治理原因从 `generate_case_draft()` / `GenerateDslMeta` 回传到 `_persist_generation_run()`，保证 `governance_focus_reasons_json` 与实际 prompt 完全一致。
+- 验证建议：
+  - 增加 `other` 为高频 reject 的 selector 单测。
+  - 增加 retry reason 不在 selector 默认结果中时，详情接口仍返回真实 active reasons 的单测。

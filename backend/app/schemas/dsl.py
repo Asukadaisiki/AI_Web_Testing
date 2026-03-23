@@ -160,6 +160,7 @@ class GenerateDslMeta(DSLModel):
     import_mode: GenerateDslImportMode
     prompt_variant: DslGenerationPromptVariant
     context_profile: DslGenerationContextProfile
+    active_governance_focus_reasons: list[DslGenerationRejectionReasonCode] = Field(default_factory=list)
     risk_flags: list[DslGenerationRiskFlag] = Field(default_factory=list)
     base_url_source: GenerateDslBaseUrlSource
     base_url_backfilled: bool = False

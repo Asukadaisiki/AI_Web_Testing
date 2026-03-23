@@ -274,6 +274,52 @@ def test_select_governance_focus_reasons_excludes_settled_targets_and_prefers_re
     assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
 
 
+def test_select_governance_focus_reasons_excludes_other_even_when_it_has_highest_count(db_session) -> None:
+    records = [
+        DslGenerationRun(
+            actor_user_id=1,
+            prompt_preview=f"rejection-other-{index}",
+            prompt_sha256=f"other{index:059d}",
+            prompt_version=AI_DSL_PROMPT_VERSION,
+            prompt_variant="baseline_draft",
+            request_base_url=None,
+            generation_mode="draft",
+            import_mode="replace",
+            model_name="gpt-test",
+            success=True,
+            used_current_case_context=False,
+            used_current_steps_context=False,
+            context_profile="blank_request",
+            base_url_source="none",
+            base_url_backfilled=False,
+            repaired_invalid_actions=0,
+            removed_invalid_steps=0,
+            removed_invalid_contracts=0,
+            preserve_contracts_requested=False,
+            preserve_contracts_applied=False,
+            warnings_count=0,
+            normalization_notes_count=0,
+            warnings_json=[],
+            normalization_notes_json=[],
+            risk_flags_json=[],
+            generated_case_json=None,
+            feedback_status="rejected",
+            feedback_import_mode=None,
+            rejection_reason_code=rejection_reason_code,
+            feedback_note="seed",
+            feedback_recorded_at=None,
+        )
+        for index, rejection_reason_code in enumerate(
+            ["other", "other", "other", "bad_contracts", "context_mismatch"],
+            start=1,
+        )
+    ]
+    db_session.add_all(records)
+    db_session.commit()
+
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["bad_contracts", "context_mismatch"]
+
+
 def test_generate_dsl_case_success(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -334,6 +380,7 @@ def test_generate_dsl_case_success(client, monkeypatch) -> None:
             "import_mode": "replace",
             "prompt_variant": "baseline_draft",
             "context_profile": "blank_request",
+            "active_governance_focus_reasons": ["context_mismatch", "bad_contracts"],
             "risk_flags": ["base_url_backfilled"],
             "base_url_source": "request",
             "base_url_backfilled": True,
@@ -439,6 +486,10 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     ]
     assert response.json()["generation_meta"]["prompt_variant"] == "baseline_draft"
     assert response.json()["generation_meta"]["context_profile"] == "blank_request"
+    assert response.json()["generation_meta"]["active_governance_focus_reasons"] == [
+        "context_mismatch",
+        "bad_contracts",
+    ]
     assert response.json()["generation_meta"]["risk_flags"] == [
         "invalid_actions_repaired",
         "invalid_steps_removed",
@@ -868,6 +919,10 @@ def test_generate_dsl_case_repairs_context_and_contracts_for_v32_focus(client, m
     assert response.json()["generation_meta"]["removed_invalid_contracts"] == 1
     assert response.json()["generation_meta"]["used_current_case_context"] is True
     assert response.json()["generation_meta"]["prompt_variant"] == "rewrite_from_case"
+    assert response.json()["generation_meta"]["active_governance_focus_reasons"] == [
+        "context_mismatch",
+        "bad_contracts",
+    ]
 
 
 def test_generate_dsl_case_preserves_contracts_without_current_case_context(client, monkeypatch) -> None:
@@ -1366,6 +1421,65 @@ def test_generate_dsl_case_persists_retry_context_and_retry_prompt_version(clien
     assert generation_run.retry_note == "契约命名不稳定"
     assert generation_run.prompt_version == f"{AI_DSL_PROMPT_VERSION}+retry.bad_contracts"
     assert generation_run.governance_focus_reasons_json == ["bad_contracts", "context_mismatch"]
+
+
+def test_generate_dsl_case_persists_effective_governance_focus_reasons_when_retry_reason_is_appended(
+    client,
+    db_session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "重试 wrong_actions",
+  "steps": [{"action": "goto", "value": "/retry"}]
+}""",
+    )
+
+    previous_generation_id = client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "上一版 wrong_actions 草案", "actor_user_id": 1},
+    ).json()["generation_id"]
+    rejected_response = client.patch(
+        f"/api/v1/dsl/generations/{previous_generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+            "rejection_reason_code": "wrong_actions",
+            "feedback_note": "动作不受支持",
+        },
+    )
+    assert rejected_response.status_code == 200
+
+    retry_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "按 wrong_actions 反馈重新生成",
+            "actor_user_id": 1,
+            "retry_from_generation_id": previous_generation_id,
+            "retry_reason_code": "wrong_actions",
+            "retry_note": "动作不受支持",
+        },
+    )
+
+    assert retry_response.status_code == 200
+    assert retry_response.json()["generation_meta"]["active_governance_focus_reasons"] == [
+        "context_mismatch",
+        "bad_contracts",
+        "wrong_actions",
+    ]
+    generation_run = db_session.get(DslGenerationRun, retry_response.json()["generation_id"])
+    assert generation_run is not None
+    assert generation_run.governance_focus_reasons_json == [
+        "context_mismatch",
+        "bad_contracts",
+        "wrong_actions",
+    ]
 
 
 def test_record_generation_feedback_accepts_first_decision_and_is_idempotent(client, monkeypatch) -> None:

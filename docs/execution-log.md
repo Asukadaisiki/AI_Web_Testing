@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-23 22:38
+
+- 任务：修复 review 提出的 governance v3.2 两个 major findings
+- 执行动作：在 `backend/app/services/dsl.py` 将治理焦点选择逻辑补上 `other` 排除条件，避免其挤占当前治理焦点名额；在 `backend/app/ai/dsl_generator.py` 与 `backend/app/schemas/dsl.py` 将最终生效的 `active_governance_focus_reasons` 纳入 `GenerateDslMeta`，并在 `backend/app/services/dsl.py` 落库时优先持久化生成链路实际生效的焦点列表，失败场景则复用同一套 active reasons 解析逻辑；同步补充 `backend/tests/unit/test_dsl_validation.py` 中对 `other` 排除、retry 追加焦点落库以及新增 `generation_meta` 字段的回归测试
+- 结果：治理焦点选择不再被 `other` 抢占；retry 场景下 prompt 实际生效的治理焦点现在会和 `governance_focus_reasons_json`、详情接口保持一致，后续治理统计和排障口径不再失真
+- 验证：执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py -q`，结果 `42 passed`
+- 后续：如果继续收到治理相关 review，可优先围绕“焦点选择口径”和“生成链路审计字段一致性”做增量补强，而不需要重开 schema 主线
+
 ## 2026-03-23 22:27
 
 - 任务：落实“治理优先，AI visual 作为验收 sidecar”的下一阶段安排
@@ -121,6 +129,12 @@
 - 任务：AI 生成 DSL 深化第一批
 - 执行动作：扩展生成请求（`generation_mode / import_mode / current_case / current_steps / preserve_contracts`）；重写 `dsl_generator.py` 补上下文注入与自动修正；`GET /api/v1/settings/ai/overview` 生成观测；前端工作台展示修正/warning/导入控制
 - 验证：后端 119 passed，前端 19 passed，构建成功
+
+## 2026-03-23 23:20
+
+- 任务：review 最新提交 `f9eba07 feat: implement governance v3.2 and ai visual baseline`
+- 执行动作：按 `backend-call-chain-reviewer` 审查后端变更，聚焦 `backend/app/ai/dsl_generator.py`、`backend/app/services/dsl.py`、`backend/app/schemas/settings.py` 以及对应单测，核对治理焦点选择、重试 prompt 生效路径与审计落库一致性
+- 验证：静态代码审查，未执行自动化测试
 
 ## 2026-03-16 10:29
 
