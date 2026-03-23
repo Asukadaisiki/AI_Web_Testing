@@ -33,7 +33,7 @@
 ## BUG-026 | AI visual session cache 命中后缺少目标语义复核，可能点击到错误元素
 
 - 日期：2026-03-22
-- 状态：open
+- 状态：fixed
 - 来源：代码评审
 - 描述：`backend/app/locators/fallback.py` 新增的 AI visual session cache 在命中缓存 selector 后，只执行 `locator.wait_for(state="visible")` 就直接返回 `ai_visual_cache` 结果，没有像首次 AI visual 命中那样重新抓取 DOM snapshot 并调用 `_dom_snapshot_matches_target()` 复核目标语义。
 - 复现步骤：

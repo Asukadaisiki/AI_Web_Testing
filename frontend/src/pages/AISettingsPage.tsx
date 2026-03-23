@@ -477,6 +477,11 @@ export function AISettingsPage() {
                         .join("、")
                     : "暂无"}
                 </Descriptions.Item>
+                <Descriptions.Item label="当前治理焦点">
+                  {overviewData.generation_stats.current_governance_focus_reasons.length
+                    ? overviewData.generation_stats.current_governance_focus_reasons.join(" / ")
+                    : "暂无"}
+                </Descriptions.Item>
                 <Descriptions.Item label="Variant 结果分布">
                   {overviewData.generation_stats.prompt_variant_breakdown.length
                     ? overviewData.generation_stats.prompt_variant_breakdown
@@ -486,6 +491,12 @@ export function AISettingsPage() {
                         )
                         .join("、")
                     : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="当前 Prompt 版本">
+                  {overviewData.generation_stats.current_prompt_version}
+                </Descriptions.Item>
+                <Descriptions.Item label="Prompt 版本观测口径">
+                  {overviewData.generation_stats.prompt_version_observation_note}
                 </Descriptions.Item>
                 <Descriptions.Item label="Prompt 版本效果（总请求 / 采纳 / 放弃 / 重试采纳）">
                   {overviewData.generation_stats.prompt_version_breakdown.length

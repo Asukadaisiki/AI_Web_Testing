@@ -47,6 +47,9 @@ function mockGovernancePageApis() {
     ai_dsl_strict_mode: false,
     ai_dsl_allow_auto_repair: true,
     generation_stats: {
+      current_prompt_version: "2026-03-23.governance-v3.2",
+      current_governance_focus_reasons: ["bad_contracts", "context_mismatch"],
+      prompt_version_observation_note: "总请求 / 采纳 / 放弃 / 重试采纳",
       total_requests: 4,
       success_count: 3,
       failure_count: 1,
@@ -92,7 +95,7 @@ function mockGovernancePageApis() {
       ],
       prompt_version_breakdown: [
         {
-          prompt_version: "2026-03-22.governance-v3.1",
+          prompt_version: "2026-03-23.governance-v3.2",
           total_requests: 3,
           success_count: 2,
           accepted_count: 1,
@@ -169,7 +172,7 @@ function mockGovernancePageApis() {
       prompt_variant: "baseline_draft",
       project_id: 1,
       case_id: 8,
-      prompt_version: "2026-03-22.governance-v3.1+retry.bad_contracts",
+      prompt_version: "2026-03-23.governance-v3.2+retry.bad_contracts",
       retry_from_generation_id: 6,
       retry_reason_code: "bad_contracts",
       retry_note: "契约命名不稳定",
@@ -180,7 +183,7 @@ function mockGovernancePageApis() {
       removed_invalid_contracts: 0,
       warnings_count: 1,
       normalization_notes_count: 2,
-      governance_focus_reasons: ["wrong_actions", "invalid_structure"],
+      governance_focus_reasons: ["context_mismatch", "bad_contracts"],
       prompt_preview: "打开 example.com 并验证 URL",
       risk_flags: ["invalid_steps_removed"],
       feedback_status: "rejected",
@@ -199,7 +202,7 @@ function mockGovernancePageApis() {
     prompt_variant: "baseline_draft",
     project_id: 1,
     case_id: 8,
-    prompt_version: "2026-03-22.governance-v3.1+retry.bad_contracts",
+    prompt_version: "2026-03-23.governance-v3.2+retry.bad_contracts",
     retry_from_generation_id: 6,
     retry_reason_code: "bad_contracts",
     retry_note: "契约命名不稳定",
@@ -210,7 +213,7 @@ function mockGovernancePageApis() {
     removed_invalid_contracts: 0,
     warnings_count: 1,
     normalization_notes_count: 2,
-    governance_focus_reasons: ["wrong_actions", "invalid_structure"],
+    governance_focus_reasons: ["context_mismatch", "bad_contracts"],
     prompt_preview: "打开 example.com 并验证 URL",
     risk_flags: ["invalid_steps_removed"],
     feedback_status: "rejected",
@@ -278,7 +281,13 @@ test("渲染 AI 治理概览", async () => {
   expect(screen.getByText("bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("Prompt 版本效果（总请求 / 采纳 / 放弃 / 重试采纳）")).toBeInTheDocument();
-  expect(screen.getByText("2026-03-22.governance-v3.1: 3 / 1 / 1 / 1")).toBeInTheDocument();
+  expect(screen.getByText("当前治理焦点")).toBeInTheDocument();
+  expect(screen.getByText("bad_contracts / context_mismatch")).toBeInTheDocument();
+  expect(screen.getByText("当前 Prompt 版本")).toBeInTheDocument();
+  expect(screen.getByText("2026-03-23.governance-v3.2")).toBeInTheDocument();
+  expect(screen.getByText("Prompt 版本观测口径")).toBeInTheDocument();
+  expect(screen.getByText("总请求 / 采纳 / 放弃 / 重试采纳")).toBeInTheDocument();
+  expect(screen.getByText("2026-03-23.governance-v3.2: 3 / 1 / 1 / 1")).toBeInTheDocument();
   expect(screen.getByText("blank_request: 4 / 2 / 1")).toBeInTheDocument();
   expect(screen.getByText("baseline_draft / bad_contracts (1)")).toBeInTheDocument();
   expect(screen.getByText("gpt-4o-mini: 4 / 2 / 1")).toBeInTheDocument();
@@ -340,7 +349,7 @@ test("AI 治理页支持筛选并查看详情", async () => {
   expect(screen.getByText("blank_request")).toBeInTheDocument();
   expect(screen.getAllByText("baseline_draft").length).toBeGreaterThan(0);
   expect(screen.getAllByText("invalid_steps_removed").length).toBeGreaterThan(0);
-  expect(screen.getByText("wrong_actions / invalid_structure")).toBeInTheDocument();
+  expect(screen.getAllByText("context_mismatch / bad_contracts").length).toBeGreaterThan(0);
   expect(screen.getByDisplayValue(/治理详情草案/)).toBeInTheDocument();
 }, 15000);
 
@@ -369,6 +378,9 @@ test("保存 AI 配置会提交最新表单值", async () => {
     ai_dsl_strict_mode: false,
     ai_dsl_allow_auto_repair: true,
     generation_stats: {
+      current_prompt_version: "2026-03-23.governance-v3.2",
+      current_governance_focus_reasons: ["context_mismatch", "bad_contracts"],
+      prompt_version_observation_note: "总请求 / 采纳 / 放弃 / 重试采纳",
       total_requests: 0,
       success_count: 0,
       failure_count: 0,
@@ -485,6 +497,9 @@ test("加载失败时展示错误块", async () => {
     ai_dsl_strict_mode: false,
     ai_dsl_allow_auto_repair: true,
     generation_stats: {
+      current_prompt_version: "2026-03-23.governance-v3.2",
+      current_governance_focus_reasons: ["context_mismatch", "bad_contracts"],
+      prompt_version_observation_note: "总请求 / 采纳 / 放弃 / 重试采纳",
       total_requests: 0,
       success_count: 0,
       failure_count: 0,
@@ -538,7 +553,7 @@ test("加载失败时展示错误块", async () => {
     prompt_variant: "baseline_draft",
     project_id: null,
     case_id: null,
-    prompt_version: "2026-03-22.governance-v3.1",
+    prompt_version: "2026-03-23.governance-v3.2",
     retry_from_generation_id: null,
     retry_reason_code: null,
     retry_note: null,
@@ -549,7 +564,7 @@ test("加载失败时展示错误块", async () => {
     removed_invalid_contracts: 0,
     warnings_count: 0,
     normalization_notes_count: 0,
-    governance_focus_reasons: ["wrong_actions", "invalid_structure"],
+    governance_focus_reasons: ["context_mismatch", "bad_contracts"],
     prompt_preview: "preview",
     risk_flags: [],
     feedback_status: "pending",

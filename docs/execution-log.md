@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-23 22:27
+
+- 任务：落实“治理优先，AI visual 作为验收 sidecar”的下一阶段安排
+- 执行动作：在 `backend/app/ai/dsl_generator.py` 将 `AI_DSL_PROMPT_VERSION` 升级到 `2026-03-23.governance-v3.2`，把默认治理焦点切换为 `context_mismatch / bad_contracts`，并补齐名称/描述上下文对齐、`context_key` snake_case 修正、输出契约 `source` 推断与无稳定 `source` 的过滤；在 `backend/app/services/dsl.py` 将治理焦点选择逻辑改为排除已收敛的 `wrong_actions / invalid_structure` 后按 rejected 统计滚动选前 2 项，不足时按 `context_mismatch / bad_contracts` 回退，并把 `current_prompt_version / current_governance_focus_reasons / prompt_version_observation_note` 纳入 overview 只读字段；同步更新 `backend/app/schemas/settings.py`、`frontend/src/types/api.ts`、`frontend/src/pages/AISettingsPage.tsx` 与对应测试；新增 `docs/ai-visual-gray-acceptance-baseline.md`，并同步刷新 `docs/project-plan.md`、`docs/AI 自动化测试增强项目规划.md`、`README.md`、`docs/bug-log.md`
+- 结果：AI DSL 治理主线已切到 v3.2，当前默认焦点不再重复治理 `wrong_actions / invalid_structure`，而是围绕 `context_mismatch / bad_contracts` 做滚动收敛；AI settings 治理概览可以直接看到当前治理焦点、当前 prompt 版本和 prompt 版本观测口径；AI visual 灰度验收基线已有独立文档，明确了采集指标、观察窗口、通过阈值和 3 条浏览器主回归门槛；`BUG-026` 文档状态已从 `open` 对齐为 `fixed`
+- 验证：执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py -q`，结果 `40 passed`；执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx`，结果 `4 passed`
+- 后续：下一轮继续基于 `top_rejection_reasons / rejection_reason_by_variant / retry_acceptance_by_reason` 收敛后续高频拒绝原因，并按灰度验收文档补采 AI visual 观测数据；本轮仍保持 `ENABLE_AI_VISUAL_LOCATE=false` 默认策略
+
 ## 2026-03-22 20:51
 
 - 任务：落实“治理 v3 后续收敛 + AI visual 灰度基线”计划

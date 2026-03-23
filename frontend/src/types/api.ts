@@ -184,6 +184,9 @@ export interface AISettingsUpdatePayload {
 }
 
 export interface AIDslGenerationStats {
+  current_prompt_version: string;
+  current_governance_focus_reasons: DslGenerationRejectionReasonCode[];
+  prompt_version_observation_note: string;
   total_requests: number;
   success_count: number;
   failure_count: number;

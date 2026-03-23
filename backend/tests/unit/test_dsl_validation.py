@@ -216,10 +216,10 @@ def test_build_generation_messages_includes_governance_focus_reasons() -> None:
 
 
 def test_select_governance_focus_reasons_defaults_when_no_feedback_history(db_session) -> None:
-    assert dsl_service._select_governance_focus_reasons(db_session) == ["wrong_actions", "invalid_structure"]
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
 
 
-def test_select_governance_focus_reasons_prefers_current_rollout_targets(db_session) -> None:
+def test_select_governance_focus_reasons_excludes_settled_targets_and_prefers_remaining_top_reasons(db_session) -> None:
     records = [
         DslGenerationRun(
             actor_user_id=1,
@@ -271,7 +271,7 @@ def test_select_governance_focus_reasons_prefers_current_rollout_targets(db_sess
     db_session.add_all(records)
     db_session.commit()
 
-    assert dsl_service._select_governance_focus_reasons(db_session) == ["wrong_actions", "invalid_structure"]
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
 
 
 def test_generate_dsl_case_success(client, monkeypatch) -> None:
@@ -424,17 +424,11 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
             "value_type": "string",
             "source": "latest_url",
             "description": None,
-        },
-        {
-            "name": "bad",
-            "context_key": "bad",
-            "value_type": "string",
-            "source": None,
-            "description": None,
         }
     ]
     assert response.json()["warnings"] == [
         "输入契约 #1 结构非法，已忽略。",
+        "输出契约 #2 缺少稳定 source，已忽略。",
         "步骤 #2 无法修正为合法 DSL，已忽略。",
     ]
     assert response.json()["normalization_notes"] == [
@@ -452,7 +446,7 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     ]
     assert response.json()["generation_meta"]["repaired_invalid_actions"] == 1
     assert response.json()["generation_meta"]["removed_invalid_steps"] == 1
-    assert response.json()["generation_meta"]["removed_invalid_contracts"] == 1
+    assert response.json()["generation_meta"]["removed_invalid_contracts"] == 2
 
 
 def test_generate_dsl_case_repairs_single_step_and_contract_shape_for_governance_v2(client, monkeypatch) -> None:
@@ -773,6 +767,109 @@ def test_generate_dsl_case_preserves_contracts_and_current_name_in_strict_steps_
     ]
 
 
+def test_generate_dsl_case_repairs_context_and_contracts_for_v32_focus(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "AI 生成用例",
+  "input_contract": [
+    {
+      "label": "Session Token",
+      "contextKey": "Session Token",
+      "type": "text",
+      "isRequired": "yes"
+    }
+  ],
+  "output_contract": [
+    {
+      "name": "Page URL",
+      "contextKey": "page-url",
+      "type": "text",
+      "valueFrom": "page_url"
+    },
+    {
+      "name": "Broken Output",
+      "contextKey": "Broken Output",
+      "type": "text"
+    }
+  ],
+  "steps": [
+    {"action": "goto", "value": "/dashboard"}
+  ]
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "在当前用例基础上重写 dashboard 冒烟",
+            "actor_user_id": 1,
+            "current_case": {
+                "name": "当前业务用例",
+                "description": "沿用已有 dashboard 校验语义",
+                "base_url": "https://example.com",
+                "input_contract": [],
+                "output_contract": [],
+                "steps": [{"action": "goto", "value": "/old"}],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["case"]["name"] == "当前业务用例"
+    assert response.json()["case"]["description"] == "沿用已有 dashboard 校验语义"
+    assert response.json()["case"]["input_contract"] == [
+        {
+            "name": "Session Token",
+            "context_key": "session_token",
+            "value_type": "string",
+            "required": True,
+            "description": None,
+        }
+    ]
+    assert response.json()["case"]["output_contract"] == [
+        {
+            "name": "Page URL",
+            "context_key": "page_url",
+            "value_type": "string",
+            "source": "latest_url",
+            "description": None,
+        }
+    ]
+    assert response.json()["normalization_notes"] == [
+        "AI 草案的名称过于泛化，已沿用当前 DSL 的名称以保持业务上下文。",
+        "AI 草案未提供 description，已沿用当前 DSL 的描述以保持业务上下文。",
+        "AI 草案未提供 base_url，已沿用当前 DSL 的 Base URL。",
+        "输入契约 #1 的 label 已映射为 name。",
+        "输入契约 #1 的 contextKey 已映射为 context_key。",
+        "输入契约 #1 的 context_key 已自动修正为 session_token。",
+        "输入契约 #1 的 type 已映射为 value_type。",
+        "输入契约 #1 的 value_type 已从 text 自动修正为 string。",
+        "输入契约 #1 的 isRequired 已映射为 required。",
+        "输入契约 #1 的 required 已自动修正为布尔值。",
+        "输出契约 #1 的 contextKey 已映射为 context_key。",
+        "输出契约 #1 的 context_key 已自动修正为 page_url。",
+        "输出契约 #1 的 type 已映射为 value_type。",
+        "输出契约 #1 的 value_type 已从 text 自动修正为 string。",
+        "输出契约 #1 的 valueFrom 已映射为 source。",
+        "输出契约 #1 的 source 已从 page_url 自动修正为 latest_url。",
+        "输出契约 #2 的 contextKey 已映射为 context_key。",
+        "输出契约 #2 的 context_key 已自动修正为 broken_output。",
+        "输出契约 #2 的 type 已映射为 value_type。",
+        "输出契约 #2 的 value_type 已从 text 自动修正为 string。",
+    ]
+    assert response.json()["warnings"] == ["输出契约 #2 缺少稳定 source，已忽略。"]
+    assert response.json()["generation_meta"]["removed_invalid_contracts"] == 1
+    assert response.json()["generation_meta"]["used_current_case_context"] is True
+    assert response.json()["generation_meta"]["prompt_variant"] == "rewrite_from_case"
+
+
 def test_generate_dsl_case_preserves_contracts_without_current_case_context(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -932,7 +1029,7 @@ def test_generate_dsl_case_persists_success_record(client, db_session, monkeypat
     assert generation_run.normalization_notes_count == 0
     assert generation_run.warnings_json == ["AI 草案未提供 base_url，已回填请求中的 Base URL。"]
     assert generation_run.normalization_notes_json == []
-    assert generation_run.governance_focus_reasons_json == ["wrong_actions", "invalid_structure"]
+    assert generation_run.governance_focus_reasons_json == ["context_mismatch", "bad_contracts"]
     assert generation_run.risk_flags_json == ["base_url_backfilled"]
     assert generation_run.feedback_status == "pending"
     assert generation_run.feedback_import_mode is None
@@ -971,7 +1068,7 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert runs[0].warnings_json == []
     assert runs[0].normalization_notes_json == []
     assert runs[0].context_profile == "blank_request"
-    assert runs[0].governance_focus_reasons_json == ["wrong_actions", "invalid_structure"]
+    assert runs[0].governance_focus_reasons_json == ["context_mismatch", "bad_contracts"]
     assert runs[0].risk_flags_json == []
     assert runs[0].feedback_status == "pending"
     assert runs[0].retry_from_generation_id is None
@@ -1089,7 +1186,7 @@ def test_list_dsl_generation_runs_supports_filters_limit_and_offset(client, db_s
     assert payload[1]["prompt_preview"] == "second"
     assert payload[0]["prompt_version"] == AI_DSL_PROMPT_VERSION
     assert payload[0]["prompt_variant"] == "baseline_draft"
-    assert payload[0]["governance_focus_reasons"] == ["wrong_actions", "invalid_structure"]
+    assert payload[0]["governance_focus_reasons"] == ["context_mismatch", "bad_contracts"]
     assert payload[0]["risk_flags"] == []
     assert payload[0]["rejection_reason_code"] == "context_mismatch"
 
@@ -1207,7 +1304,7 @@ def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_ses
     assert payload["prompt_version"] == AI_DSL_PROMPT_VERSION
     assert payload["prompt_variant"] == "baseline_draft"
     assert payload["context_profile"] == "blank_request"
-    assert payload["governance_focus_reasons"] == ["wrong_actions", "invalid_structure"]
+    assert payload["governance_focus_reasons"] == ["context_mismatch", "bad_contracts"]
     assert payload["generated_case_json"]["name"] == "详情草案"
     assert payload["warnings_json"] == []
     assert payload["normalization_notes_json"] == [
@@ -1268,7 +1365,7 @@ def test_generate_dsl_case_persists_retry_context_and_retry_prompt_version(clien
     assert generation_run.retry_reason_code == "bad_contracts"
     assert generation_run.retry_note == "契约命名不稳定"
     assert generation_run.prompt_version == f"{AI_DSL_PROMPT_VERSION}+retry.bad_contracts"
-    assert generation_run.governance_focus_reasons_json == ["wrong_actions", "invalid_structure"]
+    assert generation_run.governance_focus_reasons_json == ["bad_contracts", "context_mismatch"]
 
 
 def test_record_generation_feedback_accepts_first_decision_and_is_idempotent(client, monkeypatch) -> None:

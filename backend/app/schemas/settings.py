@@ -133,6 +133,11 @@ class AIDslGenerationRetryAcceptanceByReason(SettingsModel):
 
 
 class AIDslGenerationStats(SettingsModel):
+    current_prompt_version: str = Field(min_length=1, max_length=100)
+    current_governance_focus_reasons: list[
+        Literal["wrong_actions", "invalid_structure", "context_mismatch", "bad_contracts", "other"]
+    ] = Field(default_factory=list)
+    prompt_version_observation_note: str = Field(min_length=1, max_length=200)
     total_requests: int = Field(ge=0)
     success_count: int = Field(ge=0)
     failure_count: int = Field(ge=0)

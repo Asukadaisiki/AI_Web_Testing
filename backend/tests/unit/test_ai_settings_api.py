@@ -177,6 +177,9 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
         "ai_dsl_strict_mode": True,
         "ai_dsl_allow_auto_repair": False,
         "generation_stats": {
+            "current_prompt_version": AI_DSL_PROMPT_VERSION,
+            "current_governance_focus_reasons": ["context_mismatch", "bad_contracts"],
+            "prompt_version_observation_note": "总请求 / 采纳 / 放弃 / 重试采纳",
             "total_requests": 1,
             "success_count": 0,
             "failure_count": 1,
@@ -367,6 +370,12 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
     overview_response = ai_settings_client.get("/api/v1/settings/ai/overview")
 
     assert overview_response.status_code == 200
+    assert overview_response.json()["generation_stats"]["current_prompt_version"] == AI_DSL_PROMPT_VERSION
+    assert overview_response.json()["generation_stats"]["current_governance_focus_reasons"] == [
+        "bad_contracts",
+        "context_mismatch",
+    ]
+    assert overview_response.json()["generation_stats"]["prompt_version_observation_note"] == "总请求 / 采纳 / 放弃 / 重试采纳"
     assert overview_response.json()["generation_stats"]["accepted_count"] == 3
     assert overview_response.json()["generation_stats"]["rejected_count"] == 1
     assert overview_response.json()["generation_stats"]["pending_count"] == 0

@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.ai.dsl_generator import (
     DEFAULT_GOVERNANCE_REJECTION_REASONS,
+    SETTLED_GOVERNANCE_REJECTION_REASONS,
+    AI_DSL_PROMPT_VERSION,
     DslGenerationConfigError,
     DslGenerationError,
     generate_case_draft,
@@ -272,6 +274,7 @@ def record_dsl_generation_feedback(
 
 
 def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
+    current_governance_focus_reasons = _select_governance_focus_reasons(session)
     total_requests = session.scalar(select(func.count()).select_from(DslGenerationRun)) or 0
     success_count = (
         session.scalar(
@@ -502,6 +505,9 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
     ).all()
 
     return AIDslGenerationStats(
+        current_prompt_version=AI_DSL_PROMPT_VERSION,
+        current_governance_focus_reasons=current_governance_focus_reasons,
+        prompt_version_observation_note="总请求 / 采纳 / 放弃 / 重试采纳",
         total_requests=total_requests,
         success_count=success_count,
         failure_count=failure_count,
@@ -763,17 +769,14 @@ def _select_governance_focus_reasons(
         .where(
             DslGenerationRun.feedback_status == "rejected",
             DslGenerationRun.rejection_reason_code.is_not(None),
+            DslGenerationRun.rejection_reason_code.not_in(SETTLED_GOVERNANCE_REJECTION_REASONS),
         )
         .group_by(DslGenerationRun.rejection_reason_code)
         .order_by(func.count().desc(), DslGenerationRun.rejection_reason_code.asc())
         .limit(limit)
     ).all()
 
-    selected_reasons = [
-        rejection_reason_code
-        for rejection_reason_code, _count in rows
-        if rejection_reason_code in DEFAULT_GOVERNANCE_REJECTION_REASONS
-    ]
+    selected_reasons = [rejection_reason_code for rejection_reason_code, _count in rows]
     for fallback_reason in DEFAULT_GOVERNANCE_REJECTION_REASONS:
         if fallback_reason not in selected_reasons:
             selected_reasons.append(fallback_reason)

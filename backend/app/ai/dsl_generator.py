@@ -104,7 +104,7 @@ _OUTPUT_SOURCE_ALIASES = {
     "step_error_message": "last_step_error_message",
     "last_step_error_message": "last_step_error_message",
 }
-AI_DSL_PROMPT_VERSION = "2026-03-22.governance-v3.1"
+AI_DSL_PROMPT_VERSION = "2026-03-23.governance-v3.2"
 _BASE_SYSTEM_PROMPT_LINES = [
     "You generate structured web testing DSL in JSON only.",
     "Do not use any other action names.",
@@ -144,6 +144,10 @@ _BASE_USER_RULE_LINES = [
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
 ]
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
+    "context_mismatch",
+    "bad_contracts",
+)
+SETTLED_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
     "wrong_actions",
     "invalid_structure",
 )
@@ -163,12 +167,14 @@ REJECTION_REASON_STRATEGIES: dict[DslGenerationRejectionReasonCode, list[str]] =
         "The previous draft drifted away from the provided business context.",
         "Preserve the original business goal and reuse current_case/current_steps semantics when they exist.",
         "If existing case context is provided, keep names, URLs, and flow intent aligned unless the prompt explicitly asks to rewrite them.",
+        "When the current case already has stable name or description, prefer preserving them over replacing them with generic placeholders.",
     ],
     "bad_contracts": [
         "The previous draft produced low-quality contracts.",
         "Keep contracts minimal, stable, and use clear context_key naming without inventing unnecessary fields.",
         "Each contract must include name, context_key, value_type; output contracts must also include source.",
         "If contract quality is uncertain, prefer omitting unstable contracts instead of returning malformed entries.",
+        "Normalize context_key into stable snake_case and drop output contracts that still do not have a stable source after repair.",
     ],
     "other": [],
 }
@@ -197,6 +203,7 @@ _STEP_VALUE_ALIASES: dict[str, tuple[str, ...]] = {
     "assert_url_contains": ("value", "expected", "url", "path", "contains"),
 }
 _STEP_TIMEOUT_ALIASES = ("timeout_ms", "timeoutMs", "timeout")
+_GENERIC_CASE_NAMES = {"ai 生成用例", "ai生成用例", "generated test case", "test case", "测试用例"}
 
 
 @dataclass
@@ -382,6 +389,7 @@ def generate_case_draft(
         context_profile=context_profile,
         model_name=settings.ai_dsl_model,
         allow_auto_repair=settings.ai_dsl_allow_auto_repair,
+        governance_focus_reasons=governance_focus_reasons,
     )
 
     try:
@@ -401,6 +409,7 @@ def _normalize_generated_case(
     context_profile: DslGenerationContextProfile,
     model_name: str,
     allow_auto_repair: bool,
+    governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None,
 ) -> tuple[dict[str, Any], list[str], list[str], GenerateDslMeta]:
     raw_case = _repair_case_payload(
         raw_case=raw_case,
@@ -429,6 +438,17 @@ def _normalize_generated_case(
         normalized_name = current_case.name if current_case is not None else "AI 生成用例"
         warnings.append("AI 草案未提供有效 name，已使用当前上下文中的名称或默认名称。")
         risk_flags.append("missing_name_fallback")
+
+    normalized_name, normalized_description = _apply_context_mismatch_repairs(
+        normalized_name=normalized_name,
+        normalized_description=normalized_description,
+        current_case=current_case,
+        active_focus_reasons=_resolve_active_governance_reasons(
+            governance_focus_reasons=governance_focus_reasons,
+            retry_reason_code=payload.retry_reason_code,
+        ),
+        normalization_notes=normalization_notes,
+    )
 
     base_url_value, base_url_source, base_url_backfilled = _resolve_base_url(
         raw_case=raw_case,
@@ -570,6 +590,10 @@ def _normalize_contracts(
         if contract.context_key in seen_context_keys:
             removed_count += 1
             context.warnings.append(f"{context.label} #{index} 的 context_key 与前文重复，已忽略。")
+            continue
+        if context.is_output_contract and contract.source is None:
+            removed_count += 1
+            context.warnings.append(f"{context.label} #{index} 缺少稳定 source，已忽略。")
             continue
         seen_context_keys.add(contract.context_key)
         normalized_contracts.append(contract)
@@ -784,6 +808,13 @@ def _repair_contract_payload(
             context.normalization_notes.append(
                 f"{context.label} #{index} 缺少 context_key，已从 name 派生为 {derived_context_key}。"
             )
+    elif context_key:
+        normalized_context_key = _derive_context_key(context_key)
+        if normalized_context_key is not None and normalized_context_key != context_key:
+            repaired["context_key"] = normalized_context_key
+            context.normalization_notes.append(
+                f"{context.label} #{index} 的 context_key 已自动修正为 {normalized_context_key}。"
+            )
 
     value_type = _promote_contract_alias(repaired, canonical_key="value_type", index=index, context=context)
     if isinstance(value_type, str):
@@ -809,6 +840,13 @@ def _repair_contract_payload(
                 repaired["source"] = normalized_source
                 context.normalization_notes.append(
                     f"{context.label} #{index} 的 source 已从 {source} 自动修正为 {normalized_source}。"
+                )
+        elif source is None:
+            inferred_source = _infer_output_source_from_contract(repaired)
+            if inferred_source is not None:
+                repaired["source"] = inferred_source
+                context.normalization_notes.append(
+                    f"{context.label} #{index} 的 source 已根据契约语义自动补全为 {inferred_source}。"
                 )
 
     description = _promote_contract_alias(repaired, canonical_key="description", index=index, context=context)
@@ -928,6 +966,61 @@ def _derive_context_key(name: str) -> str | None:
     if candidate[0].isdigit():
         candidate = f"context_{candidate}"
     return candidate if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate) else None
+
+
+def _infer_output_source_from_contract(contract: dict[str, Any]) -> str | None:
+    candidates = [
+        contract.get("source"),
+        contract.get("context_key"),
+        contract.get("name"),
+    ]
+    for candidate in candidates:
+        normalized = _normalize_string(candidate)
+        if not normalized:
+            continue
+        alias_key = _derive_context_key(normalized) or normalized.strip().casefold()
+        resolved = _OUTPUT_SOURCE_ALIASES.get(alias_key)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _apply_context_mismatch_repairs(
+    *,
+    normalized_name: str,
+    normalized_description: str | None,
+    current_case: DSLCase | None,
+    active_focus_reasons: list[DslGenerationRejectionReasonCode],
+    normalization_notes: list[str],
+) -> tuple[str, str | None]:
+    if current_case is None or "context_mismatch" not in active_focus_reasons:
+        return normalized_name, normalized_description
+
+    repaired_name = normalized_name
+    repaired_description = normalized_description
+    if _looks_like_generic_case_name(repaired_name) and current_case.name != repaired_name:
+        repaired_name = current_case.name
+        normalization_notes.append("AI 草案的名称过于泛化，已沿用当前 DSL 的名称以保持业务上下文。")
+    if repaired_description is None and current_case.description:
+        repaired_description = current_case.description
+        normalization_notes.append("AI 草案未提供 description，已沿用当前 DSL 的描述以保持业务上下文。")
+    return repaired_name, repaired_description
+
+
+def _looks_like_generic_case_name(name: str) -> bool:
+    normalized = name.strip().casefold()
+    return normalized in _GENERIC_CASE_NAMES or normalized.startswith("ai ")
+
+
+def _resolve_active_governance_reasons(
+    *,
+    governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None,
+    retry_reason_code: DslGenerationRejectionReasonCode | None,
+) -> list[DslGenerationRejectionReasonCode]:
+    active_reasons = list(governance_focus_reasons or DEFAULT_GOVERNANCE_REJECTION_REASONS)
+    if retry_reason_code is not None and retry_reason_code not in active_reasons:
+        active_reasons.append(retry_reason_code)
+    return active_reasons
 
 
 def _coerce_bool(value: Any) -> bool | None:

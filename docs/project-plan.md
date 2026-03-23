@@ -18,7 +18,7 @@
 4. Reporter 层：`backend/app/reporters`
 5. Suite Manager 层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`
 
-## 当前状态快照（截至 2026-03-22）
+## 当前状态快照（截至 2026-03-23）
 
 ### 已完成
 
@@ -43,15 +43,17 @@
 - AI DSL 治理与观测闭环：生成记录多维筛选、详情查询、结构化拒绝原因、prompt 版本审计、前端治理表格与详情抽屉
 - AI DSL 第二轮可用率收敛首批：重试上下文、按拒绝原因重试生成、重试版 `prompt_version`、治理页重试成效概览
 - AI DSL 数据驱动优化第二轮首批：`2026-03-22.governance-v3`、基于高频拒绝原因的固定治理规则、contract alias 自动修正与默认治理焦点回退
+- AI DSL 数据驱动优化第二轮第二批：`2026-03-23.governance-v3.2`、排除已收敛的 `wrong_actions / invalid_structure` 后滚动聚焦 `context_mismatch / bad_contracts`，并补齐上下文名称/描述对齐、`context_key` snake_case 修正与无稳定 `source` 输出契约过滤
 - 混合定位精度优化 P0-P3：overlay 遮挡穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
 - Locator follow-up：`deep_locate` 总超时预算、`semantic` 公共候选接口、Pillow lazy import、错误与日志收口
 - Locator sidecar P4：`resolve_with_fallback` 已增加会话级 AI 定位结果缓存、缓存命中校验与失效清理日志
 - 浏览器级固定主回归：单 Case smoke、`needs_intervention -> correction -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 三条主链路已固化，本地夹具页同时保留 2 条扩展回归
+- AI visual 灰度验收口径：已新增 [`docs/ai-visual-gray-acceptance-baseline.md`](./ai-visual-gray-acceptance-baseline.md)，明确观测窗口、通过阈值与 3 条浏览器主回归门槛
 
 ### 进行中
 
-- AI 生成 DSL 数据驱动优化第二轮：在 `governance-v3` 基线上继续按 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 滚动收敛后续高频原因
-- AI visual 灰度验收：补齐默认关闭前提下的命中率、缓存收益与延迟观测基线
+- AI 生成 DSL 数据驱动优化第二轮：在 `governance-v3.2` 基线上继续按 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 滚动收敛后续高频原因
+- AI visual 灰度验收：按基线文档采集默认关闭前提下的命中率、缓存收益与延迟数据，并核对 3 条固定主回归
 
 ### 未开始
 
@@ -63,11 +65,11 @@
 
 ## 下一里程碑
 
-当前主线为 **AI 生成 DSL 数据驱动滚动治理 + AI visual 灰度验收基线**。
+当前主线为 **AI 生成 DSL 数据驱动滚动治理 v3.2 + AI visual 灰度验收基线**。
 
-AI DSL 方向下一步不再重做 `governance-v3` 已覆盖的首批高频原因，而是继续基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）滚动收敛后续高频拒绝原因，目标仍是降低“初次失败且按原因重试后仍失败”的占比。
+AI DSL 方向当前已切到 `2026-03-23.governance-v3.2`：不再重做 `wrong_actions / invalid_structure`，而是继续基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）滚动收敛剩余高频拒绝原因，目标仍是降低“初次失败且按原因重试后仍失败”的占比。
 
-Locator 方向不再重开新主线，P4 会话级缓存已作为 sidecar 落地；后续只围绕 AI visual 灰度验收补基线，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。
+Locator 方向不再重开新主线，P4 会话级缓存已作为 sidecar 落地；后续只围绕 AI visual 灰度验收补基线，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。具体验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./ai-visual-gray-acceptance-baseline.md)。
 
 回归方向已切换为“固定主回归长期保留”，而不是继续补入口数量。建议持续验证以下三条：
 
