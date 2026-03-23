@@ -8,6 +8,14 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-23 22:48
+
+- 任务：阅读 docs 并总结最近工作进度，确认项目当前所处阶段
+- 执行动作：通读 `docs/execution-log.md`、`docs/bug-log.md`、`docs/project-plan.md`、`docs/AI 自动化测试增强项目规划.md` 与 `docs/ai-visual-gray-acceptance-baseline.md`；按时间线梳理最近迭代的主线、阶段状态与下一里程碑；同时核对日志文档一致性，清理 `execution-log` 与 `bug-log` 中残留的乱码重复条目和过期 `open` 记录，并补记 `BUG-028`
+- 结果：确认项目当前主线已从“补功能入口”切换到“AI DSL 数据驱动治理 v3.2 + AI visual 灰度验收 sidecar”；核心平台、DSL 生成闭环、治理观测、混合定位 P0-P4 与三条固定浏览器主回归均已落地；当前 blocker 以文档误报形式残留的问题已清理，项目状态口径重新一致
+- 验证：人工核对 `docs/project-plan.md`、`docs/execution-log.md`、`docs/bug-log.md` 与灰度验收文档，未运行自动化测试
+- 后续：若继续推进实现，优先围绕 `top_rejection_reasons / rejection_reason_by_variant / retry_acceptance_by_reason` 继续收敛高频拒绝原因，并按灰度验收基线补采 AI visual 观测数据
+
 ## 2026-03-23 22:38
 
 - 任务：修复 review 提出的 governance v3.2 两个 major findings
@@ -165,8 +173,3 @@
 
 - 新增 `docs/execution-log.md` 与 `docs/bug-log.md`
 - 在 `AGENTS.md` 增加日志沉淀规则与 GitHub 同步追问规则
-## 2026-03-22 16:06
-
-- �����޸� AI visual session cache �������� governance focus ���ȱ��
-- ִ�ж������� `backend/app/locators/fallback.py` Ϊ AI visual cache ���в��� DOM snapshot ���帴�ˣ���ƥ��ʱ����ʧЧ���沢����������λ��·���� `backend/app/models/dsl_generation_run.py`��`backend/app/services/dsl.py`��`backend/app/schemas/dsl.py` ���� `governance_focus_reasons_json / governance_focus_reasons` �־û���ӿ�ӳ�䣬������Ǩ�� `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`��ͬ�����º�˵��⡢ǰ�������� AI ��������չʾ/����
-- ��֤��ִ�� `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`����� `54 passed`��ִ�� `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`����� `20 passed`��ִ�� `cd frontend && npm run build` �ɹ�

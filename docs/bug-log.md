@@ -30,6 +30,26 @@
 
 ## 当前状态
 
+## BUG-028 | 日志文档存在重复乱码条目，导致 blocker 状态判断失真
+
+- 日期：2026-03-23
+- 状态：fixed
+- 来源：文档核对
+- 描述：`docs/bug-log.md` 末尾残留了一段乱码旧条目，以及一条与 `BUG-027` 实际已修复内容重复、但状态仍为 `open` 的记录；`docs/execution-log.md` 末尾也残留了同批次的乱码重复记录，容易误导当前项目状态判断。
+- 复现步骤：
+  1. 阅读 `docs/execution-log.md` 中 2026-03-23 22:38 的修复记录
+  2. 再阅读 `docs/bug-log.md` 末尾，可见同类问题仍以 `open` 保留
+  3. 检查两个日志文件尾部，可见乱码重复条目
+- 影响：会误导“当前是否还有 open blocker”与“治理主线是否仍未修复”的判断，影响项目进度总结和后续排期。
+- 根因：前一轮日志同步后残留了未清理的重复记录与编码异常内容，没有和最新修复状态做统一收口。
+- 处理：
+  - 删除 `docs/bug-log.md` 中乱码重复条目与过期的重复 `open` 记录
+  - 删除 `docs/execution-log.md` 中对应的乱码重复记录
+  - 在本次执行日志中补记文档核对与状态对齐结果
+- 验证：
+  - 人工核对 `docs/execution-log.md`、`docs/bug-log.md` 与 `docs/project-plan.md`，确认当前不再存在该重复 `open` 误报
+- 关联记录：`docs/execution-log.md` 2026-03-23 22:48
+
 ## BUG-027 | governance v3.2 存在 other 挤占焦点与 retry 焦点审计失真
 
 - 日期：2026-03-23
@@ -629,42 +649,3 @@
   - 执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py -k reranked_by_vlm`
   - 执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx`
 - 关联记录：`docs/execution-log.md` 2026-03-19（follow-up）
-
-## BUG-022 | AI visual cache ����Ư���� governance focus ���ȱ��
-- ���ڣ�2026-03-22
-- ״̬��fixed
-- ��Դ���û��ṩ findings
-- ������`backend/app/locators/fallback.py` �� AI visual session cache ���� selector ʱֻ���ɼ��ԣ�δ���� AI visual ·�����е� DOM snapshot ����У�飬����ͬһ URL pattern ����� selector �Կɼ�����ָ�����Ԫ�أ���ֱ�����д���Ŀ�ꡣ���ͬʱ��`backend/app/services/dsl.py` �������ʷ rejected ��¼��̬ѡ�� `governance_focus_reasons` ��ע�� prompt���� `DslGenerationRun` ���־û� `prompt_version`��û�аѶ�̬���㱾����⣬�������/ͳ�ƻ�Ѳ�ͬ system prompt ���ݻ���ͬһ�汾�¡�
-- Ӱ�죺ǰ�߻���ɴ���Ԫ�ص����������ϼ���λ�ع飻���߻���ͬһ `prompt_version` ������Ч���������������ͻع��ж�ʧ�档
-- ���򣺻��渴��·�������� AI visual ��֤·���ֲ��ȱ��һ���Ե�����У�飻���� v3 �� prompt ��װ�������˶�̬���㣬�����ģ��û��ͬ����չ��Ӧ�ֶΡ�
-- �����
-  - �� `backend/app/locators/fallback.py` Ϊ�������в��� `locator.evaluate(...)` DOM snapshot ���ˣ����岻ƥ��ʱ��¼ `reason=semantic_mismatch` ������ʧЧ���棬�ټ������嶨λ / AI visual ������·
-  - �� `backend/app/models/dsl_generation_run.py` ���� `governance_focus_reasons_json`��ͨ�� `backend/app/services/dsl.py` �ڳɹ���ʧ�����·��ͳһ�־û������� `backend/app/schemas/dsl.py` / ǰ������������ҳ�б�¶
-  - ����Ǩ�� `backend/alembic/versions/20260322_0014_dsl_generation_governance_focus_audit.py`
-  - ���� `backend/tests/unit/test_locator_fallback.py` �ԡ��������е�����ɼ�Ԫ�ء��Ļع���ԣ��Լ� `backend/tests/unit/test_dsl_validation.py`��`backend/tests/unit/test_models.py` ���������־û���ӿ��ֶε���֤
-- ��֤��
-  - ִ�� `cd backend && uv run pytest tests/unit/test_locator_fallback.py tests/unit/test_dsl_validation.py tests/unit/test_models.py`
-  - ִ�� `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`
-  - ִ�� `cd frontend && npm run build`
-- ������¼��`docs/execution-log.md` 2026-03-22 16:06
-
-## BUG-023 | governance focus 选择与审计记录存在偏差
-
-- 日期：2026-03-23
-- 状态：open
-- 来源：最新提交代码 review
-- 描述：
-  - `backend/app/services/dsl.py` 的 `_select_governance_focus_reasons()` 现在只排除 `wrong_actions / invalid_structure`，但不会排除 `other`。当历史 reject 里 `other` 数量进入 Top 2 时，会直接占掉一个治理焦点名额，导致默认的 `bad_contracts` 或 `context_mismatch` 被挤出当前 prompt focus。
-  - 同文件 `_persist_generation_run()` 持久化的是 selector 返回的 `governance_focus_reasons`，而 `backend/app/ai/dsl_generator.py` 的 `_resolve_active_governance_reasons()` 会在重试场景额外把 `retry_reason_code` 追加到实际生效的 prompt focus。两者不一致时，落库审计和详情接口会少记真实生效的治理原因。
-- 影响：
-  - `other` 这种无明确修复策略的兜底原因会稀释真正需要加压的治理目标，降低 `bad_contracts / context_mismatch` 的命中概率。
-  - 重试请求的审计数据可能无法反映真实 prompt 策略，后续做统计、回归对比或排障时会得到错误结论。
-- 根因：
-  - selector 从“只在默认治理目标里挑选”改成了“排除 settled 后直接取 Top N”，但没有同步过滤掉 `other` 这类不可操作原因。
-  - 持久化层记录的是“候选治理焦点”，不是“最终实际生效的治理焦点”。
-- 建议处理：
-  - 在 `_select_governance_focus_reasons()` 中排除 `other`，或者至少保证 `DEFAULT_GOVERNANCE_REJECTION_REASONS` 不会被 `other` 挤出 Top 2。
-  - 将最终生效的治理原因从 `generate_case_draft()` / `GenerateDslMeta` 回传到 `_persist_generation_run()`，保证 `governance_focus_reasons_json` 与实际 prompt 完全一致。
-- 验证建议：
-  - 增加 `other` 为高频 reject 的 selector 单测。
-  - 增加 retry reason 不在 selector 默认结果中时，详情接口仍返回真实 active reasons 的单测。
