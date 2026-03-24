@@ -483,6 +483,7 @@ def _normalize_generated_case(
     base_url_value, base_url_source, base_url_backfilled = _resolve_base_url(
         raw_case=raw_case,
         payload=payload,
+        active_focus_reasons=active_governance_focus_reasons,
         warnings=warnings,
         normalization_notes=normalization_notes,
     )
@@ -766,14 +767,28 @@ def _resolve_base_url(
     *,
     raw_case: dict[str, Any],
     payload: GenerateDslRequest,
+    active_focus_reasons: list[DslGenerationRejectionReasonCode],
     warnings: list[str],
     normalization_notes: list[str],
 ) -> tuple[str | None, GenerateDslBaseUrlSource, bool]:
     raw_base_url = _normalize_optional_string(raw_case.get("base_url"))
     request_base_url = _normalize_optional_string(payload.base_url)
-    current_case_base_url = payload.current_case.base_url if payload.current_case is not None else None
+    current_case_base_url = (
+        _normalize_optional_string(payload.current_case.base_url)
+        if payload.current_case is not None
+        else None
+    )
 
     if raw_base_url:
+        if (
+            current_case_base_url
+            and "context_mismatch" in active_focus_reasons
+            and raw_base_url != current_case_base_url
+        ):
+            normalization_notes.append(
+                "AI 草案的 base_url 与当前 DSL 的稳定 Base URL 不一致，已沿用当前 DSL 的 Base URL。"
+            )
+            return current_case_base_url, "current_case", True
         return raw_base_url, "ai_output", False
     if request_base_url:
         warnings.append("AI 草案未提供 base_url，已回填请求中的 Base URL。")
@@ -1066,6 +1081,22 @@ def _stabilize_contracts_from_current(
                 updates["description"] = current_contract.description
                 normalization_notes.append(
                     f"{label} {contract.context_key} 缺少 description，已沿用当前 DSL 中同 context_key 契约的描述。"
+                )
+            if contract.value_type != current_contract.value_type:
+                updates["value_type"] = current_contract.value_type
+                normalization_notes.append(
+                    f"{label} {contract.context_key} 的 value_type 与当前 DSL 稳定语义不一致，已沿用当前 DSL 中同 context_key 契约的 value_type。"
+                )
+            if hasattr(contract, "required") and contract.required != current_contract.required:
+                updates["required"] = current_contract.required
+                normalization_notes.append(
+                    f"{label} {contract.context_key} 的 required 与当前 DSL 稳定语义不一致，已沿用当前 DSL 中同 context_key 契约的 required。"
+                )
+            current_source = getattr(current_contract, "source", None)
+            if hasattr(contract, "source") and current_source is not None and contract.source != current_source:
+                updates["source"] = current_source
+                normalization_notes.append(
+                    f"{label} {contract.context_key} 的 source 与当前 DSL 稳定语义不一致，已沿用当前 DSL 中同 context_key 契约的 source。"
                 )
         if updates:
             updated_contract = contract.model_copy(update=updates)

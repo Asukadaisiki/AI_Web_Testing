@@ -30,6 +30,23 @@
 
 ## 当前状态
 
+## BUG-029 | governance v3.3 review 发现 retry provenance 与语义保留缺口
+
+- 日期：2026-03-24
+- 状态：fixed
+- 来源：review 最新提交 `736e044`
+- 描述：`/api/v1/dsl/generate` 在带 `retry_from_generation_id` 时只校验来源记录存在，不校验 `retry_reason_code` 是否与原始拒绝原因一致、是否属于同一 actor 的已拒绝草案；同时 v3.3 声称保留稳定 `base_url` / contract semantics，但归一化只回填 contract 的 `name/description`，不会修正错误的 `base_url` 或输出契约 `source`
+- 复现步骤：
+  1. 生成一条草案并将反馈标记为 `rejected + bad_contracts`
+  2. 再次调用 `/api/v1/dsl/generate`，传入同一个 `retry_from_generation_id`，但提交 `retry_reason_code=context_mismatch`
+  3. 接口仍返回 `200`，并把伪造的 retry reason 纳入 `active_governance_focus_reasons`
+  4. 对带 `current_case` 的请求让 AI 返回错误 `base_url` 与错误 `source`，归一化结果仍保留错误值，仅补 description
+- 影响：治理焦点排序、统计看板、prompt version 分流和后续修复策略可被客户端错误输入污染；“保留当前 DSL 语义”的治理承诺不成立，可能把错误 `base_url` 或输出提取源带入新草案
+- 根因：重试链路缺少对来源反馈与 reason 一致性的服务端校验；`_stabilize_contracts_from_current()` 只处理标签文案，`_resolve_base_url()` 对非空 AI `base_url` 没有上下文一致性检查
+- 处理：为 retry 请求校验来源记录的 `actor_user_id`、`feedback_status`、`rejection_reason_code`；在 preserve/governance 修复中对 `base_url`、output `source`、input `required` 等关键语义字段增加稳定性校验与定向测试
+- 验证：执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py -q`，结果 `44 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-24 23:34
+
 ## BUG-028 | 日志文档存在重复乱码条目，导致 blocker 状态判断失真
 
 - 日期：2026-03-23

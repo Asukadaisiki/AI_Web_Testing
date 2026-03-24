@@ -686,6 +686,111 @@ def test_generate_dsl_case_stabilizes_partial_contracts_from_current_case_when_b
     assert response.json()["generation_meta"]["risk_flags"] == ["contracts_preserved_fallback"]
 
 
+def test_generate_dsl_case_stabilizes_base_url_and_contract_semantics_from_current_case(client, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "AI 生成用例",
+  "description": "AI generated test case",
+  "base_url": "https://drifted.example.com",
+  "input_contract": [
+    {
+      "name": "value",
+      "context_key": "login_token",
+      "value_type": "number",
+      "required": false
+    }
+  ],
+  "output_contract": [
+    {
+      "name": "result",
+      "context_key": "landing_url",
+      "value_type": "number",
+      "source": "status"
+    }
+  ],
+  "steps": [{"action": "goto", "value": "/dashboard"}]
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "保留当前 DSL 的稳定 base_url 和契约语义",
+            "actor_user_id": 1,
+            "preserve_contracts": True,
+            "current_case": {
+                "name": "当前业务用例",
+                "description": "保留当前登录与落地页语义",
+                "base_url": "https://example.com",
+                "input_contract": [
+                    {
+                        "name": "Login Token",
+                        "context_key": "login_token",
+                        "value_type": "string",
+                        "required": True,
+                        "description": "当前登录 token",
+                    }
+                ],
+                "output_contract": [
+                    {
+                        "name": "Landing URL",
+                        "context_key": "landing_url",
+                        "value_type": "string",
+                        "source": "latest_url",
+                        "description": "成功页面地址",
+                    }
+                ],
+                "steps": [{"action": "goto", "value": "/old"}],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["case"]["name"] == "当前业务用例"
+    assert response.json()["case"]["description"] == "保留当前登录与落地页语义"
+    assert response.json()["case"]["base_url"] == "https://example.com"
+    assert response.json()["case"]["input_contract"] == [
+        {
+            "name": "Login Token",
+            "context_key": "login_token",
+            "value_type": "string",
+            "required": True,
+            "description": "当前登录 token",
+        }
+    ]
+    assert response.json()["case"]["output_contract"] == [
+        {
+            "name": "Landing URL",
+            "context_key": "landing_url",
+            "value_type": "string",
+            "source": "latest_url",
+            "description": "成功页面地址",
+        }
+    ]
+    assert "AI 草案的 base_url 与当前 DSL 的稳定 Base URL 不一致，已沿用当前 DSL 的 Base URL。" in response.json()[
+        "normalization_notes"
+    ]
+    assert "输入契约 login_token 的 required 与当前 DSL 稳定语义不一致，已沿用当前 DSL 中同 context_key 契约的 required。" in response.json()[
+        "normalization_notes"
+    ]
+    assert "输出契约 landing_url 的 source 与当前 DSL 稳定语义不一致，已沿用当前 DSL 中同 context_key 契约的 source。" in response.json()[
+        "normalization_notes"
+    ]
+    assert response.json()["generation_meta"]["base_url_source"] == "current_case"
+    assert response.json()["generation_meta"]["base_url_backfilled"] is True
+    assert response.json()["generation_meta"]["preserve_contracts_applied"] is True
+    assert response.json()["generation_meta"]["risk_flags"] == [
+        "contracts_preserved_fallback",
+        "base_url_backfilled",
+    ]
+
+
 def test_generate_dsl_case_repairs_single_step_and_contract_shape_for_governance_v2(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -1666,6 +1771,147 @@ def test_generate_dsl_case_persists_effective_governance_focus_reasons_when_retr
         "bad_contracts",
         "wrong_actions",
     ]
+
+
+def test_generate_dsl_case_returns_403_when_retry_source_belongs_to_other_actor(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "Original Draft",
+  "steps": [{"action": "goto", "value": "/retry"}]
+}""",
+    )
+    db_session.add(User(id=2, email="other-user@example.com", display_name="Other User"))
+    db_session.commit()
+
+    previous_generation_id = client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "生成一个可重试草案", "actor_user_id": 1},
+    ).json()["generation_id"]
+    rejected_response = client.patch(
+        f"/api/v1/dsl/generations/{previous_generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+            "rejection_reason_code": "bad_contracts",
+        },
+    )
+    assert rejected_response.status_code == 200
+
+    def should_not_call_llm(**_):
+        raise AssertionError("LLM should not be called for invalid retry requests.")
+
+    monkeypatch.setattr("app.ai.dsl_generator._call_llm", should_not_call_llm)
+
+    retry_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "由其他 actor 伪造重试",
+            "actor_user_id": 2,
+            "retry_from_generation_id": previous_generation_id,
+            "retry_reason_code": "bad_contracts",
+        },
+    )
+
+    assert retry_response.status_code == 403
+    assert retry_response.json()["detail"] == "Only the actor who created the rejected draft can retry it."
+    assert db_session.query(DslGenerationRun).count() == 1
+
+
+def test_generate_dsl_case_returns_409_when_retry_source_is_not_rejected(client, db_session, monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "Pending Draft",
+  "steps": [{"action": "goto", "value": "/retry"}]
+}""",
+    )
+
+    previous_generation_id = client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "生成一个未反馈草案", "actor_user_id": 1},
+    ).json()["generation_id"]
+
+    def should_not_call_llm(**_):
+        raise AssertionError("LLM should not be called for invalid retry requests.")
+
+    monkeypatch.setattr("app.ai.dsl_generator._call_llm", should_not_call_llm)
+
+    retry_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "重试一个未 rejected 的草案",
+            "actor_user_id": 1,
+            "retry_from_generation_id": previous_generation_id,
+            "retry_reason_code": "bad_contracts",
+        },
+    )
+
+    assert retry_response.status_code == 409
+    assert "rejected" in retry_response.json()["detail"]
+    assert db_session.query(DslGenerationRun).count() == 1
+
+
+def test_generate_dsl_case_returns_409_when_retry_reason_does_not_match_source_feedback(
+    client,
+    db_session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "Rejected Draft",
+  "steps": [{"action": "goto", "value": "/retry"}]
+}""",
+    )
+
+    previous_generation_id = client.post(
+        "/api/v1/dsl/generate",
+        json={"prompt": "生成一个已拒绝草案", "actor_user_id": 1},
+    ).json()["generation_id"]
+    rejected_response = client.patch(
+        f"/api/v1/dsl/generations/{previous_generation_id}/feedback",
+        json={
+            "actor_user_id": 1,
+            "feedback_status": "rejected",
+            "rejection_reason_code": "bad_contracts",
+        },
+    )
+    assert rejected_response.status_code == 200
+
+    def should_not_call_llm(**_):
+        raise AssertionError("LLM should not be called for invalid retry requests.")
+
+    monkeypatch.setattr("app.ai.dsl_generator._call_llm", should_not_call_llm)
+
+    retry_response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "伪造 retry_reason_code",
+            "actor_user_id": 1,
+            "retry_from_generation_id": previous_generation_id,
+            "retry_reason_code": "context_mismatch",
+        },
+    )
+
+    assert retry_response.status_code == 409
+    assert "retry_reason_code" in retry_response.json()["detail"]
+    assert db_session.query(DslGenerationRun).count() == 1
 
 
 def test_record_generation_feedback_accepts_first_decision_and_is_idempotent(client, monkeypatch) -> None:

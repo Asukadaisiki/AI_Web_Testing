@@ -112,6 +112,14 @@ class DslGenerationFeedbackPermissionError(RuntimeError):
     """Raised when a user tries to record feedback for another actor's generation run."""
 
 
+class DslGenerationRetryPermissionError(RuntimeError):
+    """Raised when a user tries to retry another actor's generation run."""
+
+
+class DslGenerationRetryValidationError(RuntimeError):
+    """Raised when retry context does not match the source rejected generation run."""
+
+
 def validate_dsl_case(test_case: DSLCase) -> DSLValidationResult:
     return DSLValidationResult(
         case=test_case,
@@ -126,7 +134,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
     if payload.case_id is not None:
         _ensure_case_exists(session, payload.case_id)
     if payload.retry_from_generation_id is not None:
-        _ensure_retry_generation_exists(session, payload.retry_from_generation_id)
+        _validate_retry_generation_source(session, payload=payload)
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode)
     governance_focus_reasons = _select_governance_focus_reasons(session)
 
@@ -715,6 +723,21 @@ def _ensure_retry_generation_exists(session: Session, generation_id: int) -> Non
         raise EntityNotFoundError(f"DSL generation run {generation_id} not found.")
 
 
+def _validate_retry_generation_source(session: Session, *, payload: GenerateDslRequest) -> None:
+    if payload.retry_from_generation_id is None:
+        return
+
+    source_generation = session.get(DslGenerationRun, payload.retry_from_generation_id)
+    if source_generation is None:
+        raise EntityNotFoundError(f"DSL generation run {payload.retry_from_generation_id} not found.")
+    if source_generation.actor_user_id != payload.actor_user_id:
+        raise DslGenerationRetryPermissionError("Only the actor who created the rejected draft can retry it.")
+    if source_generation.feedback_status != "rejected":
+        raise DslGenerationRetryValidationError("retry_from_generation_id 必须指向一条已 rejected 的生成记录。")
+    if source_generation.rejection_reason_code != payload.retry_reason_code:
+        raise DslGenerationRetryValidationError("retry_reason_code 必须与来源 rejected 记录的 rejection_reason_code 一致。")
+
+
 def _get_generation_run_for_feedback(session: Session, generation_id: int) -> DslGenerationRun | None:
     if _supports_for_update(session):
         statement = (
@@ -982,6 +1005,8 @@ __all__ = [
     "DslGenerationError",
     "DslGenerationFeedbackConflictError",
     "DslGenerationFeedbackPermissionError",
+    "DslGenerationRetryPermissionError",
+    "DslGenerationRetryValidationError",
     "SUPPORTED_DSL_ACTIONS",
     "get_dsl_generation_run_detail",
     "get_dsl_generation_durable_stats",

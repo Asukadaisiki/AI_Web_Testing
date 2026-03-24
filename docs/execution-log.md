@@ -8,6 +8,20 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-24 23:34
+
+- 任务：修复 governance v3.3 review 提出的 `retry_reason_code` 可伪造与稳定语义未真正保留问题
+- 执行动作：在 `backend/app/services/dsl.py` 为 retry 请求新增来源校验，要求 `retry_from_generation_id` 必须属于同一 `actor_user_id`、来源记录 `feedback_status == rejected`，并且 `payload.retry_reason_code` 与来源记录的 `rejection_reason_code` 严格一致；在 `backend/app/api/routes/dsl.py` 为上述权限/状态冲突分别补上 `403 / 409`；在 `backend/app/ai/dsl_generator.py` 中让 `_resolve_base_url()` 在 `context_mismatch` 场景下拒绝 AI 漂移的 `base_url`，并在 `_stabilize_contracts_from_current()` 中补齐 `value_type`、输入 `required`、输出 `source` 的稳定语义回填；在 `backend/tests/unit/test_dsl_validation.py` 增加 4 条定向回归测试，覆盖 actor 越权重试、未 rejected 重试、reason 不匹配重试，以及 `base_url / contract semantics` 稳定化场景
+- 结果：客户端无法再伪造 retry provenance 污染治理焦点、重试统计和 prompt 分流；v3.3 宣称保留的稳定 `base_url`、输入 `required`、输出 `source / value_type` 现在会在治理收敛场景中真正落到归一化结果上
+- 验证：执行 `cd backend && uv run pytest tests/unit/test_dsl_validation.py -q`，结果 `44 passed`
+- 后续：若继续审查治理链路，可优先补一轮 integration 级用例，验证非法 retry 请求不会留下任何失败审计记录
+
+## 2026-03-24 22:58
+
+- 任务：Review 最新提交 `736e044 feat: implement governance v3.3 and gray acceptance summary`
+- 执行动作：按 `backend-call-chain-reviewer` 审查 `backend/app/services/dsl.py`、`backend/app/ai/dsl_generator.py`、`backend/app/schemas/settings.py` 与相关单测；补做两组最小复现实验，确认 `retry_reason_code` 可与原始拒绝原因不一致仍被接受，且 v3.3 归一化不会修正错误的 `base_url` / 契约 `source` 语义
+- 验证：执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py`，结果 `44 passed`；最小复现实验已复现上述两项缺陷
+
 ## 2026-03-24 22:12
 
 - 任务：将 `governance-v3.3 + AI visual 灰度结论` 变更同步到 GitHub

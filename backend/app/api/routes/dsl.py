@@ -27,6 +27,8 @@ from app.services.dsl import (
     DslGenerationError,
     DslGenerationFeedbackConflictError,
     DslGenerationFeedbackPermissionError,
+    DslGenerationRetryPermissionError,
+    DslGenerationRetryValidationError,
     generate_dsl_case,
     get_dsl_generation_run_detail,
     list_dsl_generation_runs,
@@ -52,6 +54,10 @@ def generate_case(
         return generate_dsl_case(session, payload)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DslGenerationRetryPermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except DslGenerationRetryValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DslGenerationConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except DslGenerationError as exc:
