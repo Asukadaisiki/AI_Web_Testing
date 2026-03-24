@@ -43,13 +43,14 @@ from app.schemas.dsl import (
 from app.schemas.settings import (
     AIDslGenerationErrorTypeCount,
     AIDslGenerationContextProfileBreakdown,
+    AIDslGenerationGovernanceFocusSummary,
     AIDslGenerationImportModeCount,
     AIDslGenerationModeBreakdown,
     AIDslGenerationModelOutcome,
+    AIDslGenerationPromptVariantBreakdown,
     AIDslGenerationPromptVersionBreakdown,
     AIDslGenerationRejectionReasonCount,
     AIDslGenerationRejectionReasonByVariant,
-    AIDslGenerationPromptVariantBreakdown,
     AIDslGenerationRetryAcceptanceByReason,
     AIDslGenerationStats,
 )
@@ -76,8 +77,31 @@ class DslGenerationRuntimeStats:
     last_error_message: str | None = None
 
 
+@dataclass(frozen=True)
+class GovernanceFocusReasonStats:
+    rejection_reason_code: DslGenerationRejectionReasonCode
+    rejected_count: int = 0
+    affected_prompt_variants: int = 0
+    retry_requests: int = 0
+    retry_accepted_count: int = 0
+
+    @property
+    def retry_acceptance_rate(self) -> float:
+        if self.retry_requests <= 0:
+            return 0.0
+        return self.retry_accepted_count / self.retry_requests
+
+    @property
+    def retry_unresolved_count(self) -> int:
+        return max(0, self.retry_requests - self.retry_accepted_count)
+
+
 _RUNTIME_STATS = DslGenerationRuntimeStats()
 _RUNTIME_STATS_LOCK = Lock()
+GOVERNANCE_FOCUS_SELECTION_NOTE = (
+    "按 rejected 数量优先，次序参考 retry 未收敛量与受影响 prompt variant 覆盖；"
+    "已排除 wrong_actions / invalid_structure / other。"
+)
 
 
 class DslGenerationFeedbackConflictError(RuntimeError):
@@ -276,6 +300,9 @@ def record_dsl_generation_feedback(
 
 def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
     current_governance_focus_reasons = _select_governance_focus_reasons(session)
+    governance_focus_stats = {
+        item.rejection_reason_code: item for item in _list_governance_focus_reason_stats(session)
+    }
     total_requests = session.scalar(select(func.count()).select_from(DslGenerationRun)) or 0
     success_count = (
         session.scalar(
@@ -509,6 +536,7 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
         current_prompt_version=AI_DSL_PROMPT_VERSION,
         current_governance_focus_reasons=current_governance_focus_reasons,
         prompt_version_observation_note="总请求 / 采纳 / 放弃 / 重试采纳",
+        governance_focus_selection_note=GOVERNANCE_FOCUS_SELECTION_NOTE,
         total_requests=total_requests,
         success_count=success_count,
         failure_count=failure_count,
@@ -621,6 +649,32 @@ def get_dsl_generation_durable_stats(session: Session) -> AIDslGenerationStats:
             )
             for rejection_reason_code, retry_requests, accepted_count in retry_reason_rows
             if rejection_reason_code is not None
+        ],
+        current_governance_focus_breakdown=[
+            AIDslGenerationGovernanceFocusSummary(
+                rejection_reason_code=rejection_reason_code,
+                rejected_count=governance_focus_stats.get(
+                    rejection_reason_code,
+                    GovernanceFocusReasonStats(rejection_reason_code=rejection_reason_code),
+                ).rejected_count,
+                affected_prompt_variants=governance_focus_stats.get(
+                    rejection_reason_code,
+                    GovernanceFocusReasonStats(rejection_reason_code=rejection_reason_code),
+                ).affected_prompt_variants,
+                retry_requests=governance_focus_stats.get(
+                    rejection_reason_code,
+                    GovernanceFocusReasonStats(rejection_reason_code=rejection_reason_code),
+                ).retry_requests,
+                retry_accepted_count=governance_focus_stats.get(
+                    rejection_reason_code,
+                    GovernanceFocusReasonStats(rejection_reason_code=rejection_reason_code),
+                ).retry_accepted_count,
+                retry_acceptance_rate=governance_focus_stats.get(
+                    rejection_reason_code,
+                    GovernanceFocusReasonStats(rejection_reason_code=rejection_reason_code),
+                ).retry_acceptance_rate,
+            )
+            for rejection_reason_code in current_governance_focus_reasons
         ],
     )
 
@@ -770,7 +824,17 @@ def _select_governance_focus_reasons(
     *,
     limit: int = 2,
 ) -> list[DslGenerationRejectionReasonCode]:
-    rows = session.execute(
+    selected_reasons = [item.rejection_reason_code for item in _list_governance_focus_reason_stats(session)[:limit]]
+    for fallback_reason in DEFAULT_GOVERNANCE_REJECTION_REASONS:
+        if fallback_reason not in selected_reasons:
+            selected_reasons.append(fallback_reason)
+        if len(selected_reasons) >= limit:
+            break
+    return selected_reasons[:limit]
+
+
+def _list_governance_focus_reason_stats(session: Session) -> list[GovernanceFocusReasonStats]:
+    rejected_rows = session.execute(
         select(
             DslGenerationRun.rejection_reason_code,
             func.count().label("count"),
@@ -782,17 +846,71 @@ def _select_governance_focus_reasons(
             DslGenerationRun.rejection_reason_code != "other",
         )
         .group_by(DslGenerationRun.rejection_reason_code)
-        .order_by(func.count().desc(), DslGenerationRun.rejection_reason_code.asc())
-        .limit(limit)
+    ).all()
+    variant_rows = session.execute(
+        select(
+            DslGenerationRun.rejection_reason_code,
+            func.count(func.distinct(DslGenerationRun.prompt_variant)).label("count"),
+        )
+        .where(
+            DslGenerationRun.feedback_status == "rejected",
+            DslGenerationRun.rejection_reason_code.is_not(None),
+            DslGenerationRun.rejection_reason_code.not_in(SETTLED_GOVERNANCE_REJECTION_REASONS),
+            DslGenerationRun.rejection_reason_code != "other",
+        )
+        .group_by(DslGenerationRun.rejection_reason_code)
+    ).all()
+    retry_rows = session.execute(
+        select(
+            DslGenerationRun.retry_reason_code,
+            func.count().label("retry_requests"),
+            func.sum(case((DslGenerationRun.feedback_status == "accepted", 1), else_=0)).label("accepted_count"),
+        )
+        .where(
+            DslGenerationRun.retry_from_generation_id.is_not(None),
+            DslGenerationRun.retry_reason_code.is_not(None),
+            DslGenerationRun.retry_reason_code.not_in(SETTLED_GOVERNANCE_REJECTION_REASONS),
+            DslGenerationRun.retry_reason_code != "other",
+        )
+        .group_by(DslGenerationRun.retry_reason_code)
     ).all()
 
-    selected_reasons = [rejection_reason_code for rejection_reason_code, _count in rows]
-    for fallback_reason in DEFAULT_GOVERNANCE_REJECTION_REASONS:
-        if fallback_reason not in selected_reasons:
-            selected_reasons.append(fallback_reason)
-        if len(selected_reasons) >= limit:
-            break
-    return selected_reasons[:limit]
+    rejected_count_by_reason = {
+        rejection_reason_code: count
+        for rejection_reason_code, count in rejected_rows
+        if rejection_reason_code is not None
+    }
+    variant_count_by_reason = {
+        rejection_reason_code: count
+        for rejection_reason_code, count in variant_rows
+        if rejection_reason_code is not None
+    }
+    retry_stats_by_reason = {
+        rejection_reason_code: (retry_requests, accepted_count or 0)
+        for rejection_reason_code, retry_requests, accepted_count in retry_rows
+        if rejection_reason_code is not None
+    }
+
+    all_reasons = set(rejected_count_by_reason) | set(variant_count_by_reason) | set(retry_stats_by_reason)
+    ranked = [
+        GovernanceFocusReasonStats(
+            rejection_reason_code=rejection_reason_code,
+            rejected_count=rejected_count_by_reason.get(rejection_reason_code, 0),
+            affected_prompt_variants=variant_count_by_reason.get(rejection_reason_code, 0),
+            retry_requests=retry_stats_by_reason.get(rejection_reason_code, (0, 0))[0],
+            retry_accepted_count=retry_stats_by_reason.get(rejection_reason_code, (0, 0))[1],
+        )
+        for rejection_reason_code in all_reasons
+    ]
+    ranked.sort(
+        key=lambda item: (
+            -item.rejected_count,
+            -item.retry_unresolved_count,
+            -item.affected_prompt_variants,
+            item.rejection_reason_code,
+        )
+    )
+    return ranked
 
 
 def _build_prompt_preview(prompt: str) -> str:

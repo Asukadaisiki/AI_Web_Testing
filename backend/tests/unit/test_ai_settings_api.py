@@ -180,6 +180,7 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
             "current_prompt_version": AI_DSL_PROMPT_VERSION,
             "current_governance_focus_reasons": ["context_mismatch", "bad_contracts"],
             "prompt_version_observation_note": "总请求 / 采纳 / 放弃 / 重试采纳",
+            "governance_focus_selection_note": "按 rejected 数量优先，次序参考 retry 未收敛量与受影响 prompt variant 覆盖；已排除 wrong_actions / invalid_structure / other。",
             "total_requests": 1,
             "success_count": 0,
             "failure_count": 1,
@@ -254,6 +255,24 @@ def test_get_ai_settings_overview_returns_runtime_generation_stats(
                 }
             ],
             "retry_acceptance_by_reason": [],
+            "current_governance_focus_breakdown": [
+                {
+                    "rejection_reason_code": "context_mismatch",
+                    "rejected_count": 0,
+                    "affected_prompt_variants": 0,
+                    "retry_requests": 0,
+                    "retry_accepted_count": 0,
+                    "retry_acceptance_rate": 0.0,
+                },
+                {
+                    "rejection_reason_code": "bad_contracts",
+                    "rejected_count": 0,
+                    "affected_prompt_variants": 0,
+                    "retry_requests": 0,
+                    "retry_accepted_count": 0,
+                    "retry_acceptance_rate": 0.0,
+                },
+            ],
         },
         "ai_visual_stats": {
             "locate_requests": 0,
@@ -376,6 +395,10 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
         "context_mismatch",
     ]
     assert overview_response.json()["generation_stats"]["prompt_version_observation_note"] == "总请求 / 采纳 / 放弃 / 重试采纳"
+    assert overview_response.json()["generation_stats"]["governance_focus_selection_note"] == (
+        "按 rejected 数量优先，次序参考 retry 未收敛量与受影响 prompt variant 覆盖；"
+        "已排除 wrong_actions / invalid_structure / other。"
+    )
     assert overview_response.json()["generation_stats"]["accepted_count"] == 3
     assert overview_response.json()["generation_stats"]["rejected_count"] == 1
     assert overview_response.json()["generation_stats"]["pending_count"] == 0
@@ -461,6 +484,24 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
             "accepted_count": 1,
             "acceptance_rate": 1.0,
         }
+    ]
+    assert overview_response.json()["generation_stats"]["current_governance_focus_breakdown"] == [
+        {
+            "rejection_reason_code": "bad_contracts",
+            "rejected_count": 1,
+            "affected_prompt_variants": 1,
+            "retry_requests": 1,
+            "retry_accepted_count": 1,
+            "retry_acceptance_rate": 1.0,
+        },
+        {
+            "rejection_reason_code": "context_mismatch",
+            "rejected_count": 0,
+            "affected_prompt_variants": 0,
+            "retry_requests": 0,
+            "retry_accepted_count": 0,
+            "retry_acceptance_rate": 0.0,
+        },
     ]
     assert overview_response.json()["ai_visual_stats"] == {
         "locate_requests": 0,

@@ -132,12 +132,22 @@ class AIDslGenerationRetryAcceptanceByReason(SettingsModel):
     acceptance_rate: float = Field(ge=0, le=1)
 
 
+class AIDslGenerationGovernanceFocusSummary(SettingsModel):
+    rejection_reason_code: Literal["wrong_actions", "invalid_structure", "context_mismatch", "bad_contracts", "other"]
+    rejected_count: int = Field(default=0, ge=0)
+    affected_prompt_variants: int = Field(default=0, ge=0)
+    retry_requests: int = Field(default=0, ge=0)
+    retry_accepted_count: int = Field(default=0, ge=0)
+    retry_acceptance_rate: float = Field(default=0.0, ge=0, le=1)
+
+
 class AIDslGenerationStats(SettingsModel):
     current_prompt_version: str = Field(min_length=1, max_length=100)
     current_governance_focus_reasons: list[
         Literal["wrong_actions", "invalid_structure", "context_mismatch", "bad_contracts", "other"]
     ] = Field(default_factory=list)
     prompt_version_observation_note: str = Field(min_length=1, max_length=200)
+    governance_focus_selection_note: str = Field(min_length=1, max_length=300)
     total_requests: int = Field(ge=0)
     success_count: int = Field(ge=0)
     failure_count: int = Field(ge=0)
@@ -165,6 +175,7 @@ class AIDslGenerationStats(SettingsModel):
     model_outcome_breakdown: list[AIDslGenerationModelOutcome] = Field(default_factory=list)
     generation_mode_breakdown: list[AIDslGenerationModeBreakdown] = Field(default_factory=list)
     retry_acceptance_by_reason: list[AIDslGenerationRetryAcceptanceByReason] = Field(default_factory=list)
+    current_governance_focus_breakdown: list[AIDslGenerationGovernanceFocusSummary] = Field(default_factory=list)
 
 
 class AIVisualStats(SettingsModel):

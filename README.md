@@ -22,19 +22,19 @@ AI 增强的 Web UI 自动化测试平台。
 - AI 生成 DSL 最小闭环：后端已提供 `POST /api/v1/dsl/generate`，前端工作台可输入自然语言生成草案，并选择“替换当前 DSL”或“仅导入步骤”
 - AI 生成 DSL 深化：支持 `generation_mode / import_mode / current_case / current_steps / preserve_contracts`，后端会输出 `normalization_notes` 与 `generation_meta`，前端工作台可展示自动修正项、风险 warning 与三种导入方式
 - AI DSL 第二轮治理能力：支持重试上下文、按拒绝原因重试生成、重试版 `prompt_version`，治理页可查看重试成效与 prompt 版本效果
-- AI DSL 数据驱动治理第二轮第二批收敛：已排除 `wrong_actions / invalid_structure`，转为围绕 `context_mismatch / bad_contracts` 做滚动治理；当前基线已升级到 `2026-03-23.governance-v3.2`
+- AI DSL 数据驱动治理第二轮第三批收敛：当前基线已升级到 `2026-03-24.governance-v3.3`；治理焦点选择已改为综合参考 `top_rejection_reasons`、`rejection_reason_by_variant` 与 `retry_acceptance_by_reason`，并围绕 `context_mismatch / bad_contracts` 继续滚动收敛
 - AI 设置管理：前端已提供 `/settings/ai` 页面，支持管理 AI DSL / VLM 运行时配置；`GET /api/v1/settings/ai/overview` 可查看 DSL 生成最小观测指标
-- AI 设置治理概览：overview 现在会额外返回“当前治理焦点”“当前 Prompt 版本”和“Prompt 版本观测口径”三个只读字段，便于对齐当前治理批次
+- AI 设置治理概览：overview 现在会额外返回“当前治理焦点”“当前 Prompt 版本”“Prompt 版本观测口径”“治理焦点选择口径”与“当前治理焦点明细”，便于对齐当前治理批次与收敛结果
 - 混合定位精度优化 P0-P3：已落地 overlay 穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
 - Locator P4 sidecar：`resolve_with_fallback` 已增加会话级 AI 定位结果缓存，命中前会重新校验 selector，失效后自动清除
 - AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
 - AI 生成 DSL 数据驱动第二轮优化继续滚动（在 `governance-v3` 基线上继续收敛后续高频拒绝原因）
-- AI visual 继续默认关闭，先补灰度验收基线与命中/延迟观测
+- AI visual 继续默认关闭；当前已完成一轮本地受控灰度验收，3 条固定浏览器主回归通过，但本地 `ai_visual_stats` 仍为零样本，暂不进入默认开启评估
 - 登录与更完整的平台认证体系基本未启动
 
-AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./docs/ai-visual-gray-acceptance-baseline.md)。
+AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./docs/ai-visual-gray-acceptance-baseline.md)，本轮结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./docs/ai-visual-gray-acceptance-2026-03-24.md)。
 
 ## Suite Context 使用路径
 
@@ -176,6 +176,7 @@ npm run build
 - `docs/project-plan.md`：当前执行计划与阶段状态
 - `docs/frontend-design.md`：前端设计说明
 - `docs/ai-visual-gray-acceptance-baseline.md`：AI visual 灰度验收口径与门槛
+- `docs/ai-visual-gray-acceptance-2026-03-24.md`：2026-03-24 本地受控灰度验收结论
 - `docs/execution-log.md`：任务执行记录
 - `docs/bug-log.md`：缺陷记录
 

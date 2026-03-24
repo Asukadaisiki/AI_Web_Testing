@@ -187,6 +187,7 @@ export interface AIDslGenerationStats {
   current_prompt_version: string;
   current_governance_focus_reasons: DslGenerationRejectionReasonCode[];
   prompt_version_observation_note: string;
+  governance_focus_selection_note: string;
   total_requests: number;
   success_count: number;
   failure_count: number;
@@ -214,6 +215,7 @@ export interface AIDslGenerationStats {
   model_outcome_breakdown: DslGenerationModelOutcome[];
   generation_mode_breakdown: DslGenerationModeBreakdown[];
   retry_acceptance_by_reason: DslGenerationRetryAcceptanceByReason[];
+  current_governance_focus_breakdown: DslGenerationGovernanceFocusSummary[];
 }
 
 export interface AIVisualStats {
@@ -307,6 +309,15 @@ export interface DslGenerationRetryAcceptanceByReason {
   retry_requests: number;
   accepted_count: number;
   acceptance_rate: number;
+}
+
+export interface DslGenerationGovernanceFocusSummary {
+  rejection_reason_code: DslGenerationRejectionReasonCode;
+  rejected_count: number;
+  affected_prompt_variants: number;
+  retry_requests: number;
+  retry_accepted_count: number;
+  retry_acceptance_rate: number;
 }
 
 export interface StoredDslGenerationRunSummary {

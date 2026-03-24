@@ -171,6 +171,26 @@ function formatRiskFlags(flags: string[]) {
   return flags.length ? flags.join("、") : "无";
 }
 
+function formatGovernanceFocusBreakdown(
+  items: {
+    rejection_reason_code: string;
+    rejected_count: number;
+    affected_prompt_variants: number;
+    retry_requests: number;
+    retry_accepted_count: number;
+    retry_acceptance_rate: number;
+  }[],
+) {
+  return items.length
+    ? items
+        .map(
+          (item) =>
+            `${item.rejection_reason_code}: ${item.rejected_count} / ${item.affected_prompt_variants} / ${item.retry_requests} / ${item.retry_accepted_count} / ${formatPercent(item.retry_acceptance_rate)}`,
+        )
+        .join("、")
+    : "暂无";
+}
+
 function normalizeFilters(values: Partial<GovernanceFilterFormValues>): GovernanceQueryFilters {
   const normalized: GovernanceQueryFilters = {};
   if (values.status) {
@@ -482,6 +502,9 @@ export function AISettingsPage() {
                     ? overviewData.generation_stats.current_governance_focus_reasons.join(" / ")
                     : "暂无"}
                 </Descriptions.Item>
+                <Descriptions.Item label="治理焦点选择口径">
+                  {overviewData.generation_stats.governance_focus_selection_note}
+                </Descriptions.Item>
                 <Descriptions.Item label="Variant 结果分布">
                   {overviewData.generation_stats.prompt_variant_breakdown.length
                     ? overviewData.generation_stats.prompt_variant_breakdown
@@ -554,6 +577,9 @@ export function AISettingsPage() {
                         )
                         .join("、")
                     : "暂无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="当前治理焦点明细（拒绝 / variant / 重试 / 重试采纳 / 重试采纳率）">
+                  {formatGovernanceFocusBreakdown(overviewData.generation_stats.current_governance_focus_breakdown)}
                 </Descriptions.Item>
               </Descriptions>
             ) : (

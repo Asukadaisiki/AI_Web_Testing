@@ -320,6 +320,97 @@ def test_select_governance_focus_reasons_excludes_other_even_when_it_has_highest
     assert dsl_service._select_governance_focus_reasons(db_session) == ["bad_contracts", "context_mismatch"]
 
 
+def test_select_governance_focus_reasons_uses_retry_unresolved_count_as_tiebreaker(db_session) -> None:
+    rejected_records = [
+        DslGenerationRun(
+            actor_user_id=1,
+            prompt_preview=f"focus-rank-{index}",
+            prompt_sha256=f"focus{index:059d}",
+            prompt_version=AI_DSL_PROMPT_VERSION,
+            prompt_variant="baseline_draft" if index % 2 else "rewrite_from_case",
+            request_base_url=None,
+            generation_mode="draft",
+            import_mode="replace",
+            model_name="gpt-test",
+            success=True,
+            used_current_case_context=False,
+            used_current_steps_context=False,
+            context_profile="blank_request",
+            base_url_source="none",
+            base_url_backfilled=False,
+            repaired_invalid_actions=0,
+            removed_invalid_steps=0,
+            removed_invalid_contracts=0,
+            preserve_contracts_requested=False,
+            preserve_contracts_applied=False,
+            warnings_count=0,
+            normalization_notes_count=0,
+            warnings_json=[],
+            normalization_notes_json=[],
+            risk_flags_json=[],
+            generated_case_json=None,
+            feedback_status="rejected",
+            feedback_import_mode=None,
+            rejection_reason_code=rejection_reason_code,
+            retry_from_generation_id=None,
+            retry_reason_code=None,
+            retry_note=None,
+            feedback_note="seed",
+            feedback_recorded_at=None,
+        )
+        for index, rejection_reason_code in enumerate(
+            ["bad_contracts", "bad_contracts", "context_mismatch", "context_mismatch"],
+            start=1,
+        )
+    ]
+    retry_records = [
+        DslGenerationRun(
+            actor_user_id=1,
+            prompt_preview=f"focus-retry-{index}",
+            prompt_sha256=f"retry{index:059d}",
+            prompt_version=f"{AI_DSL_PROMPT_VERSION}+retry.{retry_reason_code}",
+            prompt_variant="baseline_draft",
+            request_base_url=None,
+            generation_mode="draft",
+            import_mode="replace",
+            model_name="gpt-test",
+            success=True,
+            used_current_case_context=False,
+            used_current_steps_context=False,
+            context_profile="blank_request",
+            base_url_source="none",
+            base_url_backfilled=False,
+            repaired_invalid_actions=0,
+            removed_invalid_steps=0,
+            removed_invalid_contracts=0,
+            preserve_contracts_requested=False,
+            preserve_contracts_applied=False,
+            warnings_count=0,
+            normalization_notes_count=0,
+            warnings_json=[],
+            normalization_notes_json=[],
+            risk_flags_json=[],
+            generated_case_json=None,
+            feedback_status=feedback_status,
+            feedback_import_mode="replace" if feedback_status == "accepted" else None,
+            rejection_reason_code=None if feedback_status == "accepted" else retry_reason_code,
+            retry_from_generation_id=1,
+            retry_reason_code=retry_reason_code,
+            retry_note="seed",
+            feedback_note="seed",
+            feedback_recorded_at=None,
+        )
+        for index, (retry_reason_code, feedback_status) in enumerate(
+            [("bad_contracts", "accepted"), ("context_mismatch", "rejected")],
+            start=1,
+        )
+    ]
+    db_session.add_all(rejected_records + retry_records)
+    db_session.commit()
+
+    assert dsl_service._select_governance_focus_reasons(db_session) == ["context_mismatch", "bad_contracts"]
+
+
 def test_generate_dsl_case_success(client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
@@ -498,6 +589,101 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     assert response.json()["generation_meta"]["repaired_invalid_actions"] == 1
     assert response.json()["generation_meta"]["removed_invalid_steps"] == 1
     assert response.json()["generation_meta"]["removed_invalid_contracts"] == 2
+
+
+def test_generate_dsl_case_stabilizes_partial_contracts_from_current_case_when_bad_contracts_is_active(
+    client,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
+    monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.ai.dsl_generator._call_llm",
+        lambda **_: """
+{
+  "name": "部分契约草案",
+  "input_contract": [
+    {"name": "value", "context_key": "login_token", "value_type": "string"}
+  ],
+  "output_contract": [
+    {"name": "result", "context_key": "landing_url", "value_type": "string", "source": "latest_url"}
+  ],
+  "steps": [{"action": "goto", "value": "/success"}]
+}""",
+    )
+
+    response = client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "保留当前契约并生成稳定草案",
+            "actor_user_id": 1,
+            "preserve_contracts": True,
+            "current_input_contract": [
+                {
+                    "name": "Login Token",
+                    "context_key": "login_token",
+                    "value_type": "string",
+                    "required": True,
+                    "description": "当前登录 token",
+                }
+            ],
+            "current_output_contract": [
+                {
+                    "name": "Landing URL",
+                    "context_key": "landing_url",
+                    "value_type": "string",
+                    "source": "latest_url",
+                    "description": "成功页面地址",
+                },
+                {
+                    "name": "Session Token",
+                    "context_key": "session_token",
+                    "value_type": "string",
+                    "source": "status",
+                    "description": "当前会话令牌",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["case"]["input_contract"] == [
+        {
+            "name": "Login Token",
+            "context_key": "login_token",
+            "value_type": "string",
+            "required": True,
+            "description": "当前登录 token",
+        }
+    ]
+    assert response.json()["case"]["output_contract"] == [
+        {
+            "name": "Landing URL",
+            "context_key": "landing_url",
+            "value_type": "string",
+            "source": "latest_url",
+            "description": "成功页面地址",
+        },
+        {
+            "name": "Session Token",
+            "context_key": "session_token",
+            "value_type": "string",
+            "source": "status",
+            "description": "当前会话令牌",
+        },
+    ]
+    assert response.json()["normalization_notes"] == [
+        "输入契约 login_token 的 name 过于泛化，已沿用当前 DSL 中同 context_key 契约的名称。",
+        "输入契约 login_token 缺少 description，已沿用当前 DSL 中同 context_key 契约的描述。",
+        "输出契约 landing_url 的 name 过于泛化，已沿用当前 DSL 中同 context_key 契约的名称。",
+        "输出契约 landing_url 缺少 description，已沿用当前 DSL 中同 context_key 契约的描述。",
+        "AI 草案未覆盖全部稳定输出契约，已补回当前 DSL 中的 1 个契约。",
+    ]
+    assert response.json()["generation_meta"]["preserve_contracts_applied"] is True
+    assert response.json()["generation_meta"]["risk_flags"] == ["contracts_preserved_fallback"]
 
 
 def test_generate_dsl_case_repairs_single_step_and_contract_shape_for_governance_v2(client, monkeypatch) -> None:

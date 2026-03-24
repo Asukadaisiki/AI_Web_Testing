@@ -8,6 +8,30 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-24 22:12
+
+- 任务：将 `governance-v3.3 + AI visual 灰度结论` 变更同步到 GitHub
+- 执行动作：复核当前工作区仅包含本轮实现相关代码、测试与文档变更；确认当前分支为 `main`、远端为 `origin`；补记本条执行日志后，准备按单次提交将 `backend/`、`frontend/`、`docs/` 与 `README.md` 的本轮更新一起推送
+- 结果：同步前仓库状态、日志与代码变更口径保持一致，可直接执行非交互式 `git add` / `git commit` / `git push`
+- 验证：执行 `git status --short`、`git branch --show-current`、`git remote -v`，确认待同步文件集、目标分支与远端配置正常
+- 后续：推送完成后，如需继续推进实现，仍按 `governance-v3.3` 主线滚动收敛高频拒绝原因，并保持 AI visual 默认关闭直到样本量达标
+
+## 2026-03-24 22:02
+
+- 任务：review 最新提交 `72dbd19 docs: sync progress summary and log cleanup`
+- 执行动作：按 `backend-call-chain-reviewer` 的 diff review 流程审查 `docs/bug-log.md` 与 `docs/execution-log.md`，对照前一提交 `b5c3888 fix: align governance focus selection and audit`、日志规则与当前文档引用，确认本次删除的 `open` 记录是否属于已修问题的重复残留，并检查是否仍残留乱码或重复条目
+- 结果：确认该提交属于文档收口与状态对齐，没有改动后端执行链路；被删除的 `BUG-023 governance focus 选择与审计记录存在偏差` 属于已被 `BUG-027` 与 `2026-03-23 22:38` 修复记录覆盖的重复 `open` 条目，本次清理后未发现新的阻断性问题
+- 验证：执行 `git show -1 72dbd19`、`git show -1 b5c3888`、`rg -n "BUG-023|BUG-027|BUG-028|2026-03-23 22:38|governance v3.2" docs backend frontend`，并人工核对 `docs/bug-log.md`、`docs/execution-log.md`；未运行自动化测试
+- 后续：如需进一步治理日志质量，可单独整理 `docs/execution-log.md` 的时间倒序一致性与历史 `BUG-0xx` 编号重复问题，但它们不是本次提交新引入的问题
+
+## 2026-03-24 21:58
+
+- 任务：实现“AI DSL 治理 v3.3 + AI visual 灰度结论”阶段安排
+- 执行动作：在 `backend/app/services/dsl.py` 将治理焦点选择升级为综合参考 `top_rejection_reasons / rejection_reason_by_variant / retry_acceptance_by_reason` 的排序逻辑，按 rejected 数量、retry 未收敛量和受影响 prompt variant 覆盖决定当前前 2 个治理焦点；在 `backend/app/schemas/settings.py`、`frontend/src/types/api.ts`、`frontend/src/pages/AISettingsPage.tsx` 与对应测试中新增“治理焦点选择口径”和“当前治理焦点明细”只读字段；在 `backend/app/ai/dsl_generator.py` 将 `AI_DSL_PROMPT_VERSION` 升级到 `2026-03-24.governance-v3.3`，补强 `context_mismatch / bad_contracts` prompt 规则，并在 `preserve_contracts=true` 且命中 `bad_contracts` 治理时对部分契约做基于当前契约的保守回填与稳定化；同步更新 `README.md`、`docs/project-plan.md`、`docs/AI 自动化测试增强项目规划.md`，新增 `docs/ai-visual-gray-acceptance-2026-03-24.md`
+- 结果：AI DSL 治理主线已切到 `governance-v3.3`，治理页现在可以直接看到当前焦点的 rejected / variant / retry / retry accepted 明细；部分坏契约场景下，生成链路会优先复用当前 DSL 中同 `context_key` 的稳定名称、描述和缺失契约，避免局部低质量输出冲掉已知稳定契约；AI visual 本轮已形成独立结论文档，确认在默认关闭前提下 3 条固定浏览器主回归全部通过，但由于本地 `ai_visual_stats` 仍为零样本，当前结论仍是“继续默认关闭，不进入默认开启评估”
+- 验证：执行 `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_ai_settings_api.py -q`，结果 `44 passed`；执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/pages/CaseWorkbenchPage.test.tsx`，结果 `20 passed`；执行 `cd frontend && npm run build` 成功；执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py::test_local_single_case_smoke_executes_successfully tests/integration/test_intervention_regression.py::test_local_intervention_flow_rerun_hits_tier_zero tests/integration/test_intervention_regression.py::test_suite_context_rerun_failed_reuses_context_snapshot_after_manual_correction -q`，结果 `3 passed`；执行 `cd backend && uv run pytest tests/unit/test_ai_visual.py tests/unit/test_locator_fallback.py -q`，结果 `35 passed`；本地读取 `get_ai_visual_runtime_stats()` 快照为全零样本
+- 后续：继续按 `governance-v3.3` 口径滚动收敛剩余高频拒绝原因；AI visual 方向只继续补手动开启窗口样本，达到 `>= 30 locate_requests` 或连续 3 天观察记录前，不进入默认开启讨论
+
 ## 2026-03-23 22:48
 
 - 任务：阅读 docs 并总结最近工作进度，确认项目当前所处阶段
