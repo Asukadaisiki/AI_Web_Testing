@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, List, Space, Table, Tag, Typography } from "antd";
+import { Button, Card, List, Select, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { EChartsOption } from "echarts";
 import { Link, useSearchParams } from "react-router-dom";
@@ -14,10 +14,35 @@ import {
   truncateText,
 } from "../components/executionPresentation";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { getExecutionOverview } from "../services/api";
-import type { FailureRootCause, OverviewWindowDays, TopFailedCase } from "../types/api";
+import {
+  getCases,
+  getExecutionOverview,
+  getProjects,
+  getReportPreference,
+  updateReportPreference,
+} from "../services/api";
+import type {
+  FailureRootCause,
+  OverviewWindowDays,
+  ReportPreference,
+  ReportScopeType,
+  StoredCaseExecutionSummary,
+  StoredCaseSummary,
+} from "../types/api";
 
 const WINDOW_OPTIONS: OverviewWindowDays[] = [7, 14, 30];
+const SCOPE_LABELS: Record<ReportScopeType, string> = {
+  global: "全局",
+  project: "项目",
+  case: "用例",
+};
+
+interface ReportSelectionState {
+  scopeType: ReportScopeType;
+  projectId?: number;
+  caseId?: number;
+  windowDays: OverviewWindowDays;
+}
 
 function parseWindowDays(value: string | null): OverviewWindowDays {
   if (value === "14") {
@@ -29,10 +54,61 @@ function parseWindowDays(value: string | null): OverviewWindowDays {
   return 7;
 }
 
-function formatWindowRange(
-  startDate?: string | null,
-  endDate?: string | null,
-) {
+function parseId(value: string | null) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseScopeType(value: string | null): ReportScopeType | undefined {
+  if (value === "global" || value === "project" || value === "case") {
+    return value;
+  }
+  return undefined;
+}
+
+function hasExplicitScope(searchParams: URLSearchParams) {
+  return ["scope_type", "project_id", "case_id", "window_days"].some((key) => searchParams.has(key));
+}
+
+function getSelectionFromSearchParams(searchParams: URLSearchParams): ReportSelectionState {
+  const projectId = parseId(searchParams.get("project_id"));
+  const caseId = parseId(searchParams.get("case_id"));
+  const explicitScope = parseScopeType(searchParams.get("scope_type"));
+  const scopeType = explicitScope ?? (caseId && projectId ? "case" : projectId ? "project" : "project");
+  return {
+    scopeType,
+    projectId,
+    caseId,
+    windowDays: parseWindowDays(searchParams.get("window_days")),
+  };
+}
+
+function toPreferencePayload(selection: ReportSelectionState): ReportPreference {
+  if (selection.scopeType === "global") {
+    return {
+      scope_type: "global",
+      project_id: null,
+      case_id: null,
+      window_days: selection.windowDays,
+    };
+  }
+  if (selection.scopeType === "project") {
+    return {
+      scope_type: "project",
+      project_id: selection.projectId ?? null,
+      case_id: null,
+      window_days: selection.windowDays,
+    };
+  }
+  return {
+    scope_type: "case",
+    project_id: selection.projectId ?? null,
+    case_id: selection.caseId ?? null,
+    window_days: selection.windowDays,
+  };
+}
+
+function formatWindowRange(startDate?: string | null, endDate?: string | null) {
   if (!startDate || !endDate) {
     return "全部历史";
   }
@@ -51,24 +127,139 @@ function formatPassRateDelta(value: number) {
   return `${value > 0 ? "+" : ""}${(value * 100).toFixed(1)} pp`;
 }
 
-function buildFailureFingerprintLink(record: FailureRootCause, windowDays: OverviewWindowDays) {
+function buildScopeQuery(selection: ReportSelectionState) {
+  return {
+    scope_type: selection.scopeType,
+    project_id: selection.scopeType === "global" ? undefined : selection.projectId,
+    case_id: selection.scopeType === "case" ? selection.caseId : undefined,
+    window_days: selection.windowDays,
+  };
+}
+
+function buildFailureFingerprintLink(record: FailureRootCause, selection: ReportSelectionState) {
   return buildExecutionsPath({
-    window_days: windowDays,
+    ...buildScopeQuery(selection),
     status: "failed",
     failure_fingerprint: record.fingerprint,
     root_cause_title: record.title,
   });
 }
 
+function buildInterventionLink(selection: ReportSelectionState) {
+  return buildExecutionsPath({
+    ...buildScopeQuery(selection),
+    status: "needs_intervention",
+  });
+}
+
+function syncSearchParams(
+  currentParams: URLSearchParams,
+  setSearchParams: ReturnType<typeof useSearchParams>[1],
+  selection: ReportSelectionState,
+) {
+  const nextParams = new URLSearchParams(currentParams);
+  nextParams.set("scope_type", selection.scopeType);
+  nextParams.set("window_days", String(selection.windowDays));
+  if (selection.scopeType === "global") {
+    nextParams.delete("project_id");
+    nextParams.delete("case_id");
+  } else if (selection.scopeType === "project") {
+    if (selection.projectId) {
+      nextParams.set("project_id", String(selection.projectId));
+    } else {
+      nextParams.delete("project_id");
+    }
+    nextParams.delete("case_id");
+  } else {
+    if (selection.projectId) {
+      nextParams.set("project_id", String(selection.projectId));
+    }
+    if (selection.caseId) {
+      nextParams.set("case_id", String(selection.caseId));
+    }
+  }
+  setSearchParams(nextParams, { replace: true });
+}
+
+function getFirstCaseForProject(cases: StoredCaseSummary[], projectId?: number) {
+  const matchedCase = cases.find((item) => item.project_id === projectId);
+  if (matchedCase) {
+    return matchedCase;
+  }
+  return cases[0];
+}
+
 export function ReportCenterPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const windowDays = parseWindowDays(searchParams.get("window_days"));
+  const [selection, setSelection] = useState<ReportSelectionState | null>(null);
+
+  const projectsQuery = useQuery({
+    queryKey: ["projects"],
+    queryFn: getProjects,
+  });
+  const casesQuery = useQuery({
+    queryKey: ["cases"],
+    queryFn: getCases,
+  });
+  const preferenceQuery = useQuery({
+    queryKey: ["report-preference"],
+    queryFn: getReportPreference,
+    enabled: !hasExplicitScope(searchParams),
+  });
+
+  const projects = projectsQuery.data ?? [];
+  const cases = casesQuery.data ?? [];
+  const filteredCases = useMemo(
+    () => cases.filter((item) => !selection?.projectId || item.project_id === selection.projectId),
+    [cases, selection?.projectId],
+  );
+
+  useEffect(() => {
+    if (selection) {
+      return;
+    }
+    if (hasExplicitScope(searchParams)) {
+      setSelection(getSelectionFromSearchParams(searchParams));
+      return;
+    }
+    if (preferenceQuery.data) {
+      setSelection({
+        scopeType: preferenceQuery.data.scope_type,
+        projectId: preferenceQuery.data.project_id ?? undefined,
+        caseId: preferenceQuery.data.case_id ?? undefined,
+        windowDays: preferenceQuery.data.window_days,
+      });
+    }
+  }, [preferenceQuery.data, searchParams, selection]);
+
+  const applySelection = (nextSelection: ReportSelectionState, persistPreference = true) => {
+    setSelection(nextSelection);
+    syncSearchParams(searchParams, setSearchParams, nextSelection);
+    if (persistPreference) {
+      void updateReportPreference(toPreferencePayload(nextSelection));
+    }
+  };
+
   const overviewQuery = useQuery({
-    queryKey: ["executions-overview", "reports", windowDays],
+    queryKey: [
+      "executions-overview",
+      "reports",
+      selection?.scopeType,
+      selection?.projectId,
+      selection?.caseId,
+      selection?.windowDays,
+    ],
+    enabled:
+      selection !== null &&
+      (selection.scopeType === "global" ||
+        (selection.scopeType === "project" && Boolean(selection.projectId)) ||
+        (selection.scopeType === "case" && Boolean(selection.projectId) && Boolean(selection.caseId))),
     queryFn: () =>
       getExecutionOverview({
-        project_id: 1,
-        window_days: windowDays,
+        scope_type: selection?.scopeType,
+        project_id: selection?.scopeType === "global" ? undefined : selection?.projectId,
+        case_id: selection?.scopeType === "case" ? selection.caseId : undefined,
+        window_days: selection?.windowDays,
       }),
   });
 
@@ -78,14 +269,14 @@ export function ReportCenterPage() {
       legend: { data: ["通过", "失败"] },
       grid: { left: 32, right: 18, top: 32, bottom: 24, containLabel: true },
       xAxis: {
-        type: "category" as const,
+        type: "category",
         data: (overviewQuery.data?.trend_points ?? []).map((item) => item.date.slice(5)),
       },
-      yAxis: { type: "value" as const, minInterval: 1 },
+      yAxis: { type: "value", minInterval: 1 },
       series: [
         {
           name: "通过",
-          type: "line" as const,
+          type: "line",
           smooth: true,
           data: (overviewQuery.data?.trend_points ?? []).map((item) => item.passed_count),
           lineStyle: { color: "#1f9d55", width: 3 },
@@ -93,7 +284,7 @@ export function ReportCenterPage() {
         },
         {
           name: "失败",
-          type: "line" as const,
+          type: "line",
           smooth: true,
           data: (overviewQuery.data?.trend_points ?? []).map((item) => item.failed_count),
           lineStyle: { color: "#c2410c", width: 3 },
@@ -104,106 +295,40 @@ export function ReportCenterPage() {
     [overviewQuery.data?.trend_points],
   );
 
-  const failureCategoryOption = useMemo<EChartsOption>(
+  const automationOption = useMemo<EChartsOption>(
     () => ({
       tooltip: { trigger: "axis" },
-      grid: { left: 24, right: 12, top: 24, bottom: 24, containLabel: true },
+      legend: { data: ["自动完成", "人工介入"] },
+      grid: { left: 32, right: 18, top: 32, bottom: 24, containLabel: true },
       xAxis: {
-        type: "category" as const,
-        data: (overviewQuery.data?.failure_categories ?? []).map((item) => FAILURE_CATEGORY_LABELS[item.category]),
+        type: "category",
+        data: (overviewQuery.data?.trend_points ?? []).map((item) => item.date.slice(5)),
       },
-      yAxis: { type: "value" as const, minInterval: 1 },
+      yAxis: { type: "value", minInterval: 1 },
       series: [
         {
-          name: "失败分类",
-          type: "bar" as const,
-          data: (overviewQuery.data?.failure_categories ?? []).map((item) => item.count),
+          name: "自动完成",
+          type: "bar",
+          stack: "execution-mode",
+          data: (overviewQuery.data?.trend_points ?? []).map((item) => item.auto_completed_count),
           itemStyle: { color: "#2563eb" },
         },
-      ],
-    }),
-    [overviewQuery.data?.failure_categories],
-  );
-
-  const failureActionOption = useMemo<EChartsOption>(
-    () => ({
-      tooltip: { trigger: "axis" },
-      grid: { left: 24, right: 12, top: 24, bottom: 24, containLabel: true },
-      xAxis: {
-        type: "category" as const,
-        data: (overviewQuery.data?.failure_step_actions ?? []).map((item) => item.action),
-      },
-      yAxis: { type: "value" as const, minInterval: 1 },
-      series: [
         {
-          name: "失败动作",
-          type: "bar" as const,
-          data: (overviewQuery.data?.failure_step_actions ?? []).map((item) => item.count),
-          itemStyle: { color: "#c2410c" },
+          name: "人工介入",
+          type: "bar",
+          stack: "execution-mode",
+          data: (overviewQuery.data?.trend_points ?? []).map((item) => item.intervention_count),
+          itemStyle: { color: "#d97706" },
         },
       ],
     }),
-    [overviewQuery.data?.failure_step_actions],
-  );
-
-  const topFailedColumns = useMemo<ColumnsType<TopFailedCase>>(
-    () => [
-      {
-        title: "用例",
-        dataIndex: "case_name",
-        key: "case_name",
-        render: (value: string, record) => (
-          <Link
-            to={buildExecutionsPath({
-              window_days: windowDays,
-              status: "failed",
-              case_id: record.case_id,
-            })}
-          >
-            {value}
-          </Link>
-        ),
-      },
-      {
-        title: "失败次数",
-        dataIndex: "failure_count",
-        key: "failure_count",
-        width: 120,
-        render: (value: number) => <Tag color="error">{value}</Tag>,
-      },
-      {
-        title: "最近失败分类",
-        dataIndex: "latest_failure_category",
-        key: "latest_failure_category",
-        width: 150,
-        render: (value: TopFailedCase["latest_failure_category"]) =>
-          value ? <Tag>{FAILURE_CATEGORY_LABELS[value]}</Tag> : <Typography.Text type="secondary">-</Typography.Text>,
-      },
-      {
-        title: "最近失败执行",
-        dataIndex: "latest_execution_id",
-        key: "latest_execution_id",
-        width: 140,
-        render: (_value: number, record) => (
-          <Link
-            to={buildExecutionsPath({
-              window_days: windowDays,
-              status: "failed",
-              case_id: record.case_id,
-            })}
-          >
-            #{record.latest_execution_id}
-          </Link>
-        ),
-      },
-    ],
-    [windowDays],
+    [overviewQuery.data?.trend_points],
   );
 
   const rootCauseColumns = useMemo<ColumnsType<FailureRootCause>>(
     () => [
       {
-        title: "失败根因",
+        title: "高频错误点",
         dataIndex: "title",
         key: "title",
         render: (value: string, record) => (
@@ -217,10 +342,10 @@ export function ReportCenterPage() {
         ),
       },
       {
-        title: "失败次数",
+        title: "次数",
         dataIndex: "count",
         key: "count",
-        width: 120,
+        width: 100,
         render: (value: number) => <Tag color="error">{value}</Tag>,
       },
       {
@@ -230,25 +355,19 @@ export function ReportCenterPage() {
         width: 120,
       },
       {
-        title: "最近执行",
-        dataIndex: "latest_execution_id",
-        key: "latest_execution_id",
-        width: 140,
-        render: (_value: number, record) => <Link to={buildFailureFingerprintLink(record, windowDays)}>#{record.latest_execution_id}</Link>,
-      },
-      {
         title: "操作",
         key: "actions",
         width: 180,
-        render: (_, record) => (
-          <Space wrap>
-            <Link to={buildFailureFingerprintLink(record, windowDays)}>筛选执行</Link>
-            <Link to={`/executions/${record.latest_execution_id}`}>查看详情</Link>
-          </Space>
-        ),
+        render: (_, record) =>
+          selection ? (
+            <Space wrap>
+              <Link to={buildFailureFingerprintLink(record, selection)}>筛选执行</Link>
+              <Link to={`/executions/${record.latest_execution_id}`}>查看详情</Link>
+            </Space>
+          ) : null,
       },
     ],
-    [windowDays],
+    [selection],
   );
 
   const currentWindowRange = formatWindowRange(
@@ -260,20 +379,55 @@ export function ReportCenterPage() {
     overviewQuery.data?.previous_window_range?.end_date,
   );
 
+  const projectOptions = projects.map((item) => ({
+    label: item.name,
+    value: item.id,
+  }));
+  const caseOptions = filteredCases.map((item) => ({
+    label: item.name,
+    value: item.id,
+  }));
+
+  const isBootstrapping =
+    !selection ||
+    projectsQuery.isLoading ||
+    casesQuery.isLoading ||
+    (!hasExplicitScope(searchParams) && preferenceQuery.isLoading);
+  const bootstrapError =
+    projectsQuery.error instanceof Error
+      ? projectsQuery.error
+      : casesQuery.error instanceof Error
+        ? casesQuery.error
+        : preferenceQuery.error instanceof Error
+          ? preferenceQuery.error
+          : null;
+
   return (
     <>
       <div className="page-header">
         <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
           <div>
             <h1 className="page-title">报告中心</h1>
-            <p className="page-subtitle">围绕时间窗口查看趋势、环比、失败分类和根因聚合，快速回流到执行明细排障。</p>
+            <p className="page-subtitle">
+              按范围和时间窗口查看 AI 自动化率、成功率、高频错误点与人工介入情况。
+            </p>
           </div>
           <Space>
             {WINDOW_OPTIONS.map((option) => (
               <Button
                 key={option}
-                type={windowDays === option ? "primary" : "default"}
-                onClick={() => setSearchParams(new URLSearchParams({ window_days: String(option) }), { replace: true })}
+                type={selection?.windowDays === option ? "primary" : "default"}
+                onClick={() =>
+                  selection
+                    ? applySelection(
+                        {
+                          ...selection,
+                          windowDays: option,
+                        },
+                        true,
+                      )
+                    : undefined
+                }
               >
                 {option} 天
               </Button>
@@ -282,31 +436,133 @@ export function ReportCenterPage() {
         </Space>
       </div>
 
-      {overviewQuery.isLoading ? <LoadingBlock /> : null}
-      {overviewQuery.isError ? <ErrorBlock message={overviewQuery.error.message} /> : null}
+      <Card style={{ marginBottom: 20 }}>
+        <Space wrap>
+          <Typography.Text type="secondary">统计范围</Typography.Text>
+          {(["global", "project", "case"] as ReportScopeType[]).map((scopeType) => (
+            <Button
+              key={scopeType}
+              aria-label={SCOPE_LABELS[scopeType]}
+              type={selection?.scopeType === scopeType ? "primary" : "default"}
+              disabled={
+                scopeType === "case" && cases.length === 0
+                  ? true
+                  : scopeType === "project" && projects.length === 0
+                    ? true
+                    : false
+              }
+              onClick={() => {
+                if (!selection) {
+                  return;
+                }
+                if (scopeType === "global") {
+                  applySelection({
+                    scopeType: "global",
+                    windowDays: selection.windowDays,
+                  });
+                  return;
+                }
+                if (scopeType === "project") {
+                  applySelection({
+                    scopeType: "project",
+                    projectId: selection.projectId ?? projects[0]?.id,
+                    windowDays: selection.windowDays,
+                  });
+                  return;
+                }
+                const firstCase = getFirstCaseForProject(cases, selection.projectId ?? projects[0]?.id);
+                if (!firstCase) {
+                  return;
+                }
+                applySelection({
+                  scopeType: "case",
+                  projectId: firstCase.project_id,
+                  caseId: firstCase.id,
+                  windowDays: selection.windowDays,
+                });
+              }}
+            >
+              {SCOPE_LABELS[scopeType]}
+            </Button>
+          ))}
+          {selection?.scopeType !== "global" ? (
+            <Select
+              style={{ width: 220 }}
+              placeholder="选择项目"
+              value={selection?.projectId}
+              options={projectOptions}
+              onChange={(projectId) => {
+                if (!selection) {
+                  return;
+                }
+                if (selection.scopeType === "project") {
+                  applySelection({
+                    ...selection,
+                    projectId,
+                  });
+                  return;
+                }
+                const firstCase = getFirstCaseForProject(cases, projectId);
+                applySelection({
+                  ...selection,
+                  projectId,
+                  caseId: firstCase?.id,
+                });
+              }}
+            />
+          ) : null}
+          {selection?.scopeType === "case" ? (
+            <Select
+              style={{ width: 220 }}
+              placeholder="选择用例"
+              value={selection.caseId}
+              options={caseOptions}
+              onChange={(caseId) => {
+                if (!selection) {
+                  return;
+                }
+                applySelection({
+                  ...selection,
+                  caseId,
+                });
+              }}
+            />
+          ) : null}
+        </Space>
+      </Card>
 
-      {overviewQuery.data ? (
+      {isBootstrapping ? <LoadingBlock /> : null}
+      {!isBootstrapping && bootstrapError ? <ErrorBlock message={bootstrapError.message} /> : null}
+      {!isBootstrapping && !bootstrapError && overviewQuery.isLoading ? <LoadingBlock /> : null}
+      {!isBootstrapping && !bootstrapError && overviewQuery.isError ? (
+        <ErrorBlock message={overviewQuery.error.message} />
+      ) : null}
+
+      {overviewQuery.data && selection ? (
         <>
           <div className="summary-strip">
             <div className="summary-tile">
-              <div className="summary-label">窗口总执行数</div>
+              <div className="summary-label">总执行数</div>
               <div className="summary-value">{overviewQuery.data.total_count}</div>
               <div className="summary-meta">较上一窗口 {formatSignedInteger(overviewQuery.data.window_comparison.total_count_delta)}</div>
             </div>
             <div className="summary-tile">
-              <div className="summary-label">失败数</div>
-              <div className="summary-value">{overviewQuery.data.failed_count}</div>
-              <div className="summary-meta">较上一窗口 {formatSignedInteger(overviewQuery.data.window_comparison.failed_count_delta)}</div>
-            </div>
-            <div className="summary-tile">
-              <div className="summary-label">通过率</div>
+              <div className="summary-label">成功率</div>
               <div className="summary-value">{formatPassRate(overviewQuery.data.pass_rate)}</div>
-              <div className="summary-meta">较上一窗口 {formatPassRateDelta(overviewQuery.data.window_comparison.pass_rate_delta)}</div>
+              <div className="summary-meta">
+                较上一窗口 {formatPassRateDelta(overviewQuery.data.window_comparison.pass_rate_delta)}
+              </div>
             </div>
             <div className="summary-tile">
-              <div className="summary-label">平均耗时</div>
-              <div className="summary-value">{formatDuration(overviewQuery.data.avg_duration_ms)}</div>
-              <div className="summary-meta">较上一窗口 {formatSignedDuration(overviewQuery.data.window_comparison.avg_duration_ms_delta)}</div>
+              <div className="summary-label">AI 自动化率</div>
+              <div className="summary-value">{formatPassRate(overviewQuery.data.automation_rate)}</div>
+              <div className="summary-meta">自动完成 {overviewQuery.data.auto_completed_count} 次</div>
+              <div className="summary-meta">{formatPassRate(overviewQuery.data.intervention_rate)}</div>
+            </div>
+            <div className="summary-tile">
+              <div className="summary-label">人工介入率</div>
+              <div className="summary-value">{formatPassRate(overviewQuery.data.intervention_rate)}</div>
+              <div className="summary-meta">人工介入 {overviewQuery.data.intervention_count} 次</div>
             </div>
           </div>
 
@@ -314,71 +570,54 @@ export function ReportCenterPage() {
             <Space direction="vertical" size={6}>
               <Typography.Text>当前窗口：{currentWindowRange}</Typography.Text>
               <Typography.Text>上一窗口：{previousWindowRange}</Typography.Text>
+              <Typography.Text>
+                较上一窗口 {formatSignedInteger(overviewQuery.data.window_comparison.failed_count_delta)}
+              </Typography.Text>
+              <Typography.Text>
+                较上一窗口 {formatSignedDuration(overviewQuery.data.window_comparison.avg_duration_ms_delta)}
+              </Typography.Text>
               <Typography.Text type="secondary">
-                上一窗口执行 {overviewQuery.data.previous_window_stats.total_count} 次，失败 {overviewQuery.data.previous_window_stats.failed_count} 次。
+                失败数较上一窗口 {formatSignedInteger(overviewQuery.data.window_comparison.failed_count_delta)}，
+                平均耗时较上一窗口 {formatSignedDuration(overviewQuery.data.window_comparison.avg_duration_ms_delta)}
               </Typography.Text>
             </Space>
           </Card>
 
           <div className="analytics-grid">
-            <Card className="dashboard-card" title="窗口趋势">
+            <Card className="dashboard-card" title="执行趋势">
               <OverviewChart option={trendOption} testId="report-trend-chart" />
             </Card>
-            <Card className="dashboard-card" title="失败分类分布">
-              <OverviewChart option={failureCategoryOption} testId="report-category-chart" />
-            </Card>
-            <Card className="dashboard-card" title="失败动作分布">
-              <OverviewChart option={failureActionOption} testId="report-action-chart" />
+            <Card className="dashboard-card" title="自动完成 vs 人工介入">
+              <OverviewChart option={automationOption} testId="report-automation-chart" />
             </Card>
           </div>
 
-          <Card title="失败根因榜" style={{ marginBottom: 20 }}>
-            {overviewQuery.data.failure_root_causes.length ? (
-              <Table
-                rowKey="fingerprint"
-                pagination={false}
-                columns={rootCauseColumns}
-                dataSource={overviewQuery.data.failure_root_causes}
-              />
-            ) : (
-              <EmptyBlock description="当前窗口内暂无可聚合的失败根因。" />
-            )}
-          </Card>
-
           <div className="analytics-grid">
-            <Card className="dashboard-card" title="高频失败用例">
-              {overviewQuery.data.top_failed_cases.length ? (
+            <Card className="dashboard-card" title="高频错误点榜">
+              {overviewQuery.data.failure_root_causes.length ? (
                 <Table
-                  rowKey="case_id"
+                  rowKey="fingerprint"
                   pagination={false}
-                  columns={topFailedColumns}
-                  dataSource={overviewQuery.data.top_failed_cases}
+                  columns={rootCauseColumns}
+                  dataSource={overviewQuery.data.failure_root_causes}
                 />
               ) : (
-                <EmptyBlock description="当前窗口内暂无高频失败用例。" />
+                <EmptyBlock description="当前窗口内暂无可聚合的高频错误点。" />
               )}
             </Card>
 
-            <Card className="dashboard-card" title="最近失败执行">
-              {overviewQuery.data.latest_failed_runs.length ? (
+            <Card className="dashboard-card" title="最近人工介入执行">
+              {overviewQuery.data.latest_intervention_runs.length ? (
                 <List
                   size="small"
-                  dataSource={overviewQuery.data.latest_failed_runs}
-                  renderItem={(item) => (
+                  dataSource={overviewQuery.data.latest_intervention_runs}
+                  renderItem={(item: StoredCaseExecutionSummary) => (
                     <List.Item>
                       <Space direction="vertical" size={4} style={{ width: "100%" }}>
                         <Space wrap>
-                          <Link
-                            to={buildExecutionsPath({
-                              window_days: windowDays,
-                              status: "failed",
-                              case_id: item.case_id,
-                              failure_category: item.failure_category ?? undefined,
-                            })}
-                          >
-                            {item.case_name}
-                          </Link>
+                          <Link to={buildInterventionLink(selection)}>{item.case_name}</Link>
                           {item.failure_category ? <Tag>{FAILURE_CATEGORY_LABELS[item.failure_category]}</Tag> : null}
+                          <Tag color="warning">待人工介入</Tag>
                         </Space>
                         <Typography.Text type="secondary">
                           {truncateText(item.error_message)}
@@ -389,7 +628,7 @@ export function ReportCenterPage() {
                   )}
                 />
               ) : (
-                <EmptyBlock description="当前窗口内暂无失败执行。" />
+                <EmptyBlock description="当前窗口内暂无人工介入执行。" />
               )}
             </Card>
           </div>

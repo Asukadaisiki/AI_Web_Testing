@@ -31,6 +31,7 @@ from app.schemas.executions import (
     FailureStepActionCount,
     ExecutionWindowComparison,
     ExecutionWindowRange,
+    ReportScopeType,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
     StepExecutionEvidence,
@@ -238,15 +239,21 @@ def list_executions(
 def get_executions_overview(
     session: Session,
     *,
+    scope_type: ReportScopeType | None = None,
     project_id: int | None = None,
     case_id: int | None = None,
     window_days: int | None = None,
     failure_fingerprint: str | None = None,
 ) -> ExecutionsOverview:
-    rows = _list_execution_rows(
-        session,
+    resolved_scope_type, resolved_project_id, resolved_case_id = _resolve_report_scope(
+        scope_type=scope_type,
         project_id=project_id,
         case_id=case_id,
+    )
+    rows = _list_execution_rows(
+        session,
+        project_id=resolved_project_id,
+        case_id=resolved_case_id,
         status=None,
         limit=None,
         offset=0,
@@ -285,11 +292,18 @@ def get_executions_overview(
     )
 
     return ExecutionsOverview(
+        scope_type=resolved_scope_type,
+        scope_project_id=resolved_project_id,
+        scope_case_id=resolved_case_id,
         total_count=current_stats.total_count,
         passed_count=current_stats.passed_count,
         failed_count=current_stats.failed_count,
         running_count=current_stats.running_count,
+        auto_completed_count=_count_auto_completed(filtered_summaries),
+        intervention_count=_count_intervention(filtered_summaries),
         pass_rate=current_stats.pass_rate,
+        automation_rate=_compute_automation_rate(filtered_summaries),
+        intervention_rate=_compute_intervention_rate(filtered_summaries),
         avg_duration_ms=current_stats.avg_duration_ms,
         current_window_range=current_window_range,
         previous_window_range=previous_window_range,
@@ -297,6 +311,9 @@ def get_executions_overview(
         window_comparison=window_comparison,
         latest_failed_runs=[
             item for item in filtered_summaries if item.status in {"failed", "needs_intervention"}
+        ][:LATEST_FAILED_RUNS_LIMIT],
+        latest_intervention_runs=[
+            item for item in filtered_summaries if item.status == "needs_intervention"
         ][:LATEST_FAILED_RUNS_LIMIT],
         failure_categories=[
             FailureCategoryCount(category=category, count=category_counter.get(category, 0))
@@ -697,6 +714,8 @@ def _build_trend_points(
         items = daily_buckets.get(bucket, [])
         passed_count = sum(1 for item in items if item.status == "passed")
         failed_count = sum(1 for item in items if item.status in {"failed", "needs_intervention"})
+        auto_completed_count = sum(1 for item in items if item.status in {"passed", "failed"})
+        intervention_count = sum(1 for item in items if item.status == "needs_intervention")
         finished_total = passed_count + failed_count
         durations = [item.duration_ms for item in items if item.status != "running" and item.duration_ms is not None]
         trend_points.append(
@@ -705,11 +724,57 @@ def _build_trend_points(
                 total_count=len(items),
                 passed_count=passed_count,
                 failed_count=failed_count,
+                auto_completed_count=auto_completed_count,
+                intervention_count=intervention_count,
                 pass_rate=round(passed_count / finished_total, 4) if finished_total else 0,
                 avg_duration_ms=int(sum(durations) / len(durations)) if durations else 0,
             )
         )
     return trend_points
+
+
+def _count_auto_completed(summaries: list[StoredCaseExecutionSummary]) -> int:
+    return sum(1 for item in summaries if item.status in {"passed", "failed"})
+
+
+def _count_intervention(summaries: list[StoredCaseExecutionSummary]) -> int:
+    return sum(1 for item in summaries if item.status == "needs_intervention")
+
+
+def _compute_automation_rate(summaries: list[StoredCaseExecutionSummary]) -> float:
+    completed_total = sum(1 for item in summaries if item.status in {"passed", "failed", "needs_intervention"})
+    if completed_total == 0:
+        return 0.0
+    return round(_count_auto_completed(summaries) / completed_total, 4)
+
+
+def _compute_intervention_rate(summaries: list[StoredCaseExecutionSummary]) -> float:
+    completed_total = sum(1 for item in summaries if item.status in {"passed", "failed", "needs_intervention"})
+    if completed_total == 0:
+        return 0.0
+    return round(_count_intervention(summaries) / completed_total, 4)
+
+
+def _resolve_report_scope(
+    *,
+    scope_type: ReportScopeType | None,
+    project_id: int | None,
+    case_id: int | None,
+) -> tuple[ReportScopeType, int | None, int | None]:
+    resolved_scope = scope_type
+    if resolved_scope is None:
+        if case_id is not None:
+            resolved_scope = "case"
+        elif project_id is not None:
+            resolved_scope = "project"
+        else:
+            resolved_scope = "global"
+
+    if resolved_scope == "global":
+        return "global", None, None
+    if resolved_scope == "project":
+        return "project", project_id, None
+    return "case", project_id, case_id
 
 
 def _build_trend_dates(

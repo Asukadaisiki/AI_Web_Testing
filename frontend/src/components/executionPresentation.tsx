@@ -4,6 +4,7 @@ import type {
   ExecutionStatus,
   FailureCategory,
   OverviewWindowDays,
+  ReportScopeType,
   StoredCaseExecutionSummary,
 } from "../types/api";
 
@@ -27,7 +28,7 @@ export function renderExecutionStatus(status: ExecutionStatus) {
     passed: "通过",
     failed: "失败",
     running: "运行中",
-    needs_intervention: "待人工干预",
+    needs_intervention: "待人工介入",
   };
   return (
     <Tag className="status-tag" color={colorMap[status]}>
@@ -65,6 +66,8 @@ export function buildExecutionLink(record: Pick<StoredCaseExecutionSummary, "id"
 }
 
 export interface ExecutionListQueryState {
+  scope_type?: ReportScopeType;
+  project_id?: number;
   window_days?: OverviewWindowDays;
   status?: ExecutionStatus;
   case_id?: number;
@@ -76,6 +79,12 @@ export interface ExecutionListQueryState {
 
 export function buildExecutionsSearch(query: ExecutionListQueryState) {
   const search = new URLSearchParams();
+  if (query.scope_type) {
+    search.set("scope_type", query.scope_type);
+  }
+  if (query.project_id) {
+    search.set("project_id", String(query.project_id));
+  }
   if (query.window_days) {
     search.set("window_days", String(query.window_days));
   }

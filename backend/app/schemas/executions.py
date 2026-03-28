@@ -11,6 +11,7 @@ from app.schemas.dsl import DSLModel, DSLVariableSource, DSLVariableType
 
 
 ExecutionStatus = Literal["running", "passed", "failed", "needs_intervention"]
+ReportScopeType = Literal["global", "project", "case"]
 FailureCategory = Literal["configuration", "locator", "assertion", "navigation", "network", "runner"]
 
 
@@ -217,6 +218,8 @@ class ExecutionTrendPoint(DSLModel):
     total_count: int = Field(default=0, ge=0)
     passed_count: int = Field(default=0, ge=0)
     failed_count: int = Field(default=0, ge=0)
+    auto_completed_count: int = Field(default=0, ge=0)
+    intervention_count: int = Field(default=0, ge=0)
     pass_rate: float = Field(default=0, ge=0)
     avg_duration_ms: int = Field(default=0, ge=0)
 
@@ -244,17 +247,25 @@ class FailureRootCause(DSLModel):
 
 
 class ExecutionsOverview(DSLModel):
+    scope_type: ReportScopeType = "project"
+    scope_project_id: int | None = Field(default=None, ge=1)
+    scope_case_id: int | None = Field(default=None, ge=1)
     total_count: int = Field(default=0, ge=0)
     passed_count: int = Field(default=0, ge=0)
     failed_count: int = Field(default=0, ge=0)
     running_count: int = Field(default=0, ge=0)
+    auto_completed_count: int = Field(default=0, ge=0)
+    intervention_count: int = Field(default=0, ge=0)
     pass_rate: float = Field(default=0, ge=0)
+    automation_rate: float = Field(default=0, ge=0)
+    intervention_rate: float = Field(default=0, ge=0)
     avg_duration_ms: int = Field(default=0, ge=0)
     current_window_range: ExecutionWindowRange | None = None
     previous_window_range: ExecutionWindowRange | None = None
     previous_window_stats: ExecutionAggregateSnapshot = Field(default_factory=ExecutionAggregateSnapshot)
     window_comparison: ExecutionWindowComparison = Field(default_factory=ExecutionWindowComparison)
     latest_failed_runs: list[StoredCaseExecutionSummary] = Field(default_factory=list)
+    latest_intervention_runs: list[StoredCaseExecutionSummary] = Field(default_factory=list)
     failure_categories: list[FailureCategoryCount] = Field(default_factory=list)
     trend_points: list[ExecutionTrendPoint] = Field(default_factory=list)
     failure_step_actions: list[FailureStepActionCount] = Field(default_factory=list)

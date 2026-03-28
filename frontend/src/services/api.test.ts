@@ -1,19 +1,23 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
-  getCurrentUser,
   generateDslCase,
   getAISettings,
   getAISettingsOverview,
   getCorrectionEvents,
   getCorrections,
+  getCurrentUser,
   getDslGenerationRunDetail,
   getDslGenerationRuns,
+  getExecutionOverview,
   getExecutions,
+  getProjects,
+  getReportPreference,
   login,
   logout,
   recordDslGenerationFeedback,
   updateAISettings,
+  updateReportPreference,
 } from "./api";
 
 const fetchMock = vi.fn();
@@ -95,7 +99,7 @@ test("auth endpoints use cookie credentials", async () => {
   );
 });
 
-test("getCurrentUser 在 401 时派发未授权事件，在 5xx 时不派发", async () => {
+test("getCurrentUser dispatches unauthorized event only for 401", async () => {
   const unauthorizedListener = vi.fn();
   window.addEventListener("auth:unauthorized", unauthorizedListener);
 
@@ -118,6 +122,44 @@ test("getCurrentUser 在 401 时派发未授权事件，在 5xx 时不派发", a
   expect(unauthorizedListener).toHaveBeenCalledTimes(1);
 
   window.removeEventListener("auth:unauthorized", unauthorizedListener);
+});
+
+test("report center endpoints send scope and preference payloads", async () => {
+  await getProjects();
+  await getReportPreference();
+  await updateReportPreference({
+    scope_type: "case",
+    project_id: 2,
+    case_id: 9,
+    window_days: 14,
+  });
+  await getExecutionOverview({
+    scope_type: "case",
+    project_id: 2,
+    case_id: 9,
+    window_days: 14,
+  });
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/projects", expect.any(Object));
+  expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/reports/preferences", expect.any(Object));
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    "/api/v1/reports/preferences",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({
+        scope_type: "case",
+        project_id: 2,
+        case_id: 9,
+        window_days: 14,
+      }),
+    }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    4,
+    "/api/v1/executions/overview?scope_type=case&project_id=2&case_id=9&window_days=14",
+    expect.any(Object),
+  );
 });
 
 test("generateDslCase posts prompt payload to DSL generate endpoint", async () => {

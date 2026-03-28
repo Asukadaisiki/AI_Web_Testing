@@ -46,11 +46,18 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
     },
   ]);
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    scope_type: "project",
+    scope_project_id: 1,
+    scope_case_id: null,
     total_count: 2,
     passed_count: 1,
     failed_count: 1,
     running_count: 0,
+    auto_completed_count: 2,
+    intervention_count: 0,
     pass_rate: 0.5,
+    automation_rate: 1,
+    intervention_rate: 0,
     avg_duration_ms: 1500,
     current_window_range: {
       start_date: "2026-03-03",
@@ -96,6 +103,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
         latest_screenshot_url: "/artifacts/executions/4/step-02.png",
       },
     ],
+    latest_intervention_runs: [],
     failure_categories: [
       { category: "configuration", count: 0 },
       { category: "locator", count: 0 },
@@ -264,11 +272,18 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
 test("执行中心支持翻页并按 offset 继续查询", async () => {
   vi.mocked(api.getCases).mockResolvedValue([]);
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    scope_type: "project",
+    scope_project_id: 1,
+    scope_case_id: null,
     total_count: 11,
     passed_count: 11,
     failed_count: 0,
     running_count: 0,
+    auto_completed_count: 11,
+    intervention_count: 0,
     pass_rate: 1,
+    automation_rate: 1,
+    intervention_rate: 0,
     avg_duration_ms: 100,
     current_window_range: null,
     previous_window_range: null,
@@ -289,6 +304,7 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
       avg_duration_ms_delta: 0,
     },
     latest_failed_runs: [],
+    latest_intervention_runs: [],
     failure_categories: [
       { category: "configuration", count: 0 },
       { category: "locator", count: 0 },
@@ -373,11 +389,18 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
 test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选并清除", async () => {
   vi.mocked(api.getCases).mockResolvedValue([]);
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    scope_type: "project",
+    scope_project_id: 1,
+    scope_case_id: null,
     total_count: 2,
     passed_count: 0,
     failed_count: 2,
     running_count: 0,
+    auto_completed_count: 2,
+    intervention_count: 0,
     pass_rate: 0,
+    automation_rate: 1,
+    intervention_rate: 0,
     avg_duration_ms: 800,
     current_window_range: null,
     previous_window_range: null,
@@ -398,6 +421,7 @@ test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选�
       avg_duration_ms_delta: 0,
     },
     latest_failed_runs: [],
+    latest_intervention_runs: [],
     failure_categories: [
       { category: "configuration", count: 0 },
       { category: "locator", count: 0 },
@@ -480,11 +504,18 @@ test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选�
 test("执行中心在空状态下稳定展示 overview 与空列表", async () => {
   vi.mocked(api.getCases).mockResolvedValue([]);
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    scope_type: "project",
+    scope_project_id: 1,
+    scope_case_id: null,
     total_count: 0,
     passed_count: 0,
     failed_count: 0,
     running_count: 0,
+    auto_completed_count: 0,
+    intervention_count: 0,
     pass_rate: 0,
+    automation_rate: 0,
+    intervention_rate: 0,
     avg_duration_ms: 0,
     current_window_range: null,
     previous_window_range: null,
@@ -505,6 +536,7 @@ test("执行中心在空状态下稳定展示 overview 与空列表", async () =
       avg_duration_ms_delta: 0,
     },
     latest_failed_runs: [],
+    latest_intervention_runs: [],
     failure_categories: [
       { category: "configuration", count: 0 },
       { category: "locator", count: 0 },
@@ -547,11 +579,18 @@ test("执行中心从 URL 初始化筛选，并在修改后回写 query 参数",
     },
   ]);
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    scope_type: "project",
+    scope_project_id: 1,
+    scope_case_id: 2,
     total_count: 1,
     passed_count: 0,
     failed_count: 1,
     running_count: 0,
+    auto_completed_count: 1,
+    intervention_count: 0,
     pass_rate: 0,
+    automation_rate: 1,
+    intervention_rate: 0,
     avg_duration_ms: 900,
     current_window_range: {
       start_date: "2026-03-04",
@@ -578,6 +617,7 @@ test("执行中心从 URL 初始化筛选，并在修改后回写 query 参数",
       avg_duration_ms_delta: 900,
     },
     latest_failed_runs: [],
+    latest_intervention_runs: [],
     failure_categories: [
       { category: "configuration", count: 0 },
       { category: "locator", count: 1 },

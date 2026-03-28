@@ -83,6 +83,7 @@ def list_executions_route(
 
 @router.get("/executions/overview", response_model=ExecutionsOverview)
 def get_executions_overview_route(
+    scope_type: str | None = Query(default=None),
     project_id: int | None = Query(default=None, ge=1),
     case_id: int | None = Query(default=None, ge=1),
     window_days: int | None = Query(default=None),
@@ -94,8 +95,14 @@ def get_executions_overview_route(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="window_days must be one of: 7, 14, 30.",
         )
+    if scope_type not in {None, "global", "project", "case"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="scope_type must be one of: global, project, case.",
+        )
     return get_executions_overview(
         session,
+        scope_type=scope_type,
         project_id=project_id,
         case_id=case_id,
         window_days=window_days,

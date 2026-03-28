@@ -279,3 +279,14 @@
   - `cd backend && uv run pytest tests/unit/test_config.py -q`
   - `git diff --check -- backend/.env.example backend/README.md README.md backend/tests/unit/test_config.py docs/bug-log.md`
 - 后续：如需继续收口配置体验，可再把 VLM 默认关闭、灰度启用条件与典型模型示例补到更靠近快速开始的位置
+
+## 2026-03-29 00:47
+
+- 任务：实现报告中心范围分层与指标增强，新增 AI 自动化率、人工介入率、账号级报告偏好、项目列表与范围筛选联动，并补齐执行中心的范围回流链路
+- 执行动作：后端新增 `report_preferences` 模型、迁移、项目列表接口和报告偏好接口；扩展 `executions/overview` 聚合输出范围字段、自动完成/人工介入指标、人工介入列表与趋势字段；前端扩展 API/types，重写 `ReportCenterPage` 的范围初始化与偏好回写逻辑，改造 `ExecutionsPage` 与执行查询串构建，补齐相关单测和旧测试数据
+- 结果：报告中心现在支持 `全局 / 项目 / 用例` 三层范围查看，默认可按账号恢复上次选择；首屏展示总执行数、成功率、AI 自动化率、人工介入率，并新增自动完成 vs 人工介入趋势图、高频错误点榜、最近人工介入执行列表；执行中心可保留 `scope_type / project_id / case_id / window_days` 回流筛选上下文
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_case_executions_api.py tests/unit/test_projects_and_report_preferences_api.py -q`
+  - `cd frontend && npm test -- --run src/services/api.test.ts src/pages/DashboardPage.test.tsx src/pages/ReportCenterPage.test.tsx src/pages/ExecutionsPage.test.tsx`
+  - `cd frontend && npm run build`
+- 后续：如需在本地数据库启用该能力，需要执行 Alembic 升级到 `20260329_0016`

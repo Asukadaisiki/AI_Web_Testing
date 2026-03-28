@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import app.services.executions as execution_service
-from app.models import TestCaseRun
+from app.models import Project, ProjectMember, TestCaseRun
 from app.schemas.executions import (
     AILocateCandidate,
     ConsoleEvent,
@@ -448,11 +448,18 @@ def test_get_executions_overview_returns_zero_counts_when_no_runs_exist(client) 
 
     assert response.status_code == 200
     assert response.json() == {
+        "scope_type": "project",
+        "scope_project_id": 1,
+        "scope_case_id": None,
         "total_count": 0,
         "passed_count": 0,
         "failed_count": 0,
         "running_count": 0,
+        "auto_completed_count": 0,
+        "intervention_count": 0,
         "pass_rate": 0.0,
+        "automation_rate": 0.0,
+        "intervention_rate": 0.0,
         "avg_duration_ms": 0,
         "current_window_range": None,
         "previous_window_range": None,
@@ -473,6 +480,7 @@ def test_get_executions_overview_returns_zero_counts_when_no_runs_exist(client) 
             "avg_duration_ms_delta": 0,
         },
         "latest_failed_runs": [],
+        "latest_intervention_runs": [],
         "failure_categories": [
             {"category": "configuration", "count": 0},
             {"category": "locator", "count": 0},
@@ -733,6 +741,8 @@ def test_get_executions_overview_aggregates_counts_categories_and_recent_failure
             "total_count": 8,
             "passed_count": 1,
             "failed_count": 6,
+            "auto_completed_count": 7,
+            "intervention_count": 0,
             "pass_rate": 0.1429,
             "avg_duration_ms": 400,
         }
@@ -1240,3 +1250,169 @@ def test_list_executions_supports_window_days_and_matches_overview_filters(clien
     invalid_response = client.get("/api/v1/executions", params={"project_id": 1, "window_days": 5})
     assert invalid_response.status_code == 422
     assert invalid_response.json() == {"detail": "window_days must be one of: 7, 14, 30."}
+
+
+def test_get_executions_overview_supports_scope_filters_and_automation_metrics(client, db_session) -> None:
+    db_session.add(Project(id=2, name="Cross Project", description="secondary project"))
+    db_session.add(ProjectMember(project_id=2, user_id=1, role="owner"))
+    db_session.commit()
+
+    case_response_one = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "项目一通过用例",
+            "base_url": "https://example.com",
+            "steps": [{"action": "goto", "value": "/pass"}],
+        },
+    )
+    case_response_two = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "项目一失败用例",
+            "base_url": "https://example.com",
+            "steps": [{"action": "click", "target": "提交"}],
+        },
+    )
+    case_response_three = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 2,
+            "actor_user_id": 1,
+            "name": "项目二人工介入用例",
+            "base_url": "https://example.com",
+            "steps": [{"action": "click", "target": "登录按钮"}],
+        },
+    )
+
+    now = datetime.now(UTC).replace(tzinfo=None, hour=10, minute=0, second=0, microsecond=0)
+    db_session.add_all(
+        [
+            TestCaseRun(
+                id=1,
+                case_id=case_response_one.json()["id"],
+                project_id=1,
+                triggered_by=1,
+                status="passed",
+                error_message=None,
+                report={
+                    "status": "passed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "goto",
+                            "value": "/pass",
+                            "status": "passed",
+                        }
+                    ],
+                },
+                started_at=now - timedelta(hours=2),
+                finished_at=now - timedelta(hours=2) + timedelta(milliseconds=120),
+            ),
+            TestCaseRun(
+                id=2,
+                case_id=case_response_two.json()["id"],
+                project_id=1,
+                triggered_by=1,
+                status="failed",
+                error_message="runner boom",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "提交",
+                            "status": "failed",
+                            "error_message": "runner boom",
+                        }
+                    ],
+                },
+                started_at=now - timedelta(hours=1),
+                finished_at=now - timedelta(hours=1) + timedelta(milliseconds=160),
+            ),
+            TestCaseRun(
+                id=3,
+                case_id=case_response_three.json()["id"],
+                project_id=2,
+                triggered_by=1,
+                status="needs_intervention",
+                error_message="need manual help",
+                report={
+                    "status": "failed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "click",
+                            "target": "登录按钮",
+                            "status": "failed",
+                            "error_message": "need manual help",
+                            "intervention_request": {
+                                "page_url": "https://example.com/login",
+                                "target_description": "登录按钮",
+                                "dom_snapshot": [],
+                            },
+                        }
+                    ],
+                },
+                started_at=now,
+                finished_at=now + timedelta(milliseconds=200),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    global_response = client.get(
+        "/api/v1/executions/overview",
+        params={"scope_type": "global", "window_days": 7},
+    )
+    assert global_response.status_code == 200
+    global_payload = global_response.json()
+    assert global_payload["scope_type"] == "global"
+    assert global_payload["scope_project_id"] is None
+    assert global_payload["scope_case_id"] is None
+    assert global_payload["total_count"] == 3
+    assert global_payload["auto_completed_count"] == 2
+    assert global_payload["automation_rate"] == 0.6667
+    assert global_payload["intervention_count"] == 1
+    assert global_payload["intervention_rate"] == 0.3333
+    assert global_payload["pass_rate"] == 0.3333
+
+    project_response = client.get(
+        "/api/v1/executions/overview",
+        params={"scope_type": "project", "project_id": 1, "window_days": 7},
+    )
+    assert project_response.status_code == 200
+    project_payload = project_response.json()
+    assert project_payload["scope_type"] == "project"
+    assert project_payload["scope_project_id"] == 1
+    assert project_payload["scope_case_id"] is None
+    assert project_payload["total_count"] == 2
+    assert project_payload["auto_completed_count"] == 2
+    assert project_payload["automation_rate"] == 1.0
+    assert project_payload["intervention_count"] == 0
+    assert project_payload["intervention_rate"] == 0.0
+
+    case_response = client.get(
+        "/api/v1/executions/overview",
+        params={
+            "scope_type": "case",
+            "project_id": 1,
+            "case_id": case_response_two.json()["id"],
+            "window_days": 7,
+        },
+    )
+    assert case_response.status_code == 200
+    case_payload = case_response.json()
+    assert case_payload["scope_type"] == "case"
+    assert case_payload["scope_project_id"] == 1
+    assert case_payload["scope_case_id"] == case_response_two.json()["id"]
+    assert case_payload["total_count"] == 1
+    assert case_payload["failed_count"] == 1
+    assert case_payload["auto_completed_count"] == 1
+    assert case_payload["automation_rate"] == 1.0
+    assert case_payload["intervention_count"] == 0
+    assert case_payload["intervention_rate"] == 0.0

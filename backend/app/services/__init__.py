@@ -18,6 +18,8 @@ from app.services.executions import (
     list_case_executions,
     list_executions,
 )
+from app.services.projects import list_accessible_projects
+from app.services.report_preferences import get_report_preference, update_report_preference
 from app.services.suites import (
     SuiteValidationError,
     create_suite,
@@ -45,8 +47,10 @@ __all__ = [
     "get_case_execution",
     "get_corrections_overview",
     "get_executions_overview",
+    "get_report_preference",
     "get_suite",
     "get_suite_run",
+    "list_accessible_projects",
     "list_cases",
     "list_case_executions",
     "list_correction_events",
@@ -57,6 +61,7 @@ __all__ = [
     "rerun_failed_suite_run",
     "update_case",
     "update_correction_state",
+    "update_report_preference",
     "update_suite",
     "validate_dsl_case",
 ]

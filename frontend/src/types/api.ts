@@ -1,6 +1,7 @@
 export type ExecutionStatus = "running" | "passed" | "failed" | "needs_intervention";
 export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
 export type OverviewWindowDays = 7 | 14 | 30;
+export type ReportScopeType = "global" | "project" | "case";
 export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
 export type CorrectionType = "css" | "xpath" | "test_id";
 export type VLMModelFamily = "qwen-vl" | "gemini" | "gpt-4o" | "qwen2.5-vl";
@@ -96,6 +97,19 @@ export interface StoredCaseSummary {
 }
 
 export interface StoredCaseDetail extends StoredCaseSummary {}
+
+export interface ProjectSummary {
+  id: number;
+  name: string;
+  description: string | null;
+}
+
+export interface ReportPreference {
+  scope_type: ReportScopeType;
+  project_id: number | null;
+  case_id: number | null;
+  window_days: OverviewWindowDays;
+}
 
 export interface DSLCasePayload {
   name: string;
@@ -762,6 +776,8 @@ export interface ExecutionTrendPoint {
   total_count: number;
   passed_count: number;
   failed_count: number;
+  auto_completed_count: number;
+  intervention_count: number;
   pass_rate: number;
   avg_duration_ms: number;
 }
@@ -789,17 +805,25 @@ export interface FailureRootCause {
 }
 
 export interface ExecutionsOverview {
+  scope_type: ReportScopeType;
+  scope_project_id?: number | null;
+  scope_case_id?: number | null;
   total_count: number;
   passed_count: number;
   failed_count: number;
   running_count: number;
+  auto_completed_count: number;
+  intervention_count: number;
   pass_rate: number;
+  automation_rate: number;
+  intervention_rate: number;
   avg_duration_ms: number;
   current_window_range?: ExecutionWindowRange | null;
   previous_window_range?: ExecutionWindowRange | null;
   previous_window_stats: ExecutionAggregateSnapshot;
   window_comparison: ExecutionWindowComparison;
   latest_failed_runs: StoredCaseExecutionSummary[];
+  latest_intervention_runs: StoredCaseExecutionSummary[];
   failure_categories: FailureCategoryCount[];
   trend_points: ExecutionTrendPoint[];
   failure_step_actions: FailureStepActionCount[];

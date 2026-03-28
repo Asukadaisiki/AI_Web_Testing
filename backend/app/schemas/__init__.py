@@ -9,6 +9,8 @@ from app.schemas.executions import (
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
 )
+from app.schemas.projects import ProjectSummary
+from app.schemas.reports import ReportPreferencePayload
 from app.schemas.suites import (
     StoredSuiteDetail,
     StoredSuiteSummary,
@@ -25,6 +27,8 @@ __all__ = [
     "DSLStep",
     "DSLValidationResult",
     "ExecutionReport",
+    "ProjectSummary",
+    "ReportPreferencePayload",
     "StepExecutionEvidence",
     "StoredCaseExecutionDetail",
     "StoredCaseExecutionSummary",

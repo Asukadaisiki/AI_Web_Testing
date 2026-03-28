@@ -28,11 +28,13 @@ import type {
   ExecutionStatus,
   FailureCategory,
   OverviewWindowDays,
+  ReportScopeType,
   StoredCaseExecutionSummary,
   StoredCaseSummary,
 } from "../types/api";
 
 const PAGE_SIZE = 10;
+const DEFAULT_PROJECT_ID = 1;
 const FAILURE_CATEGORY_VALUES: FailureCategory[] = [
   "configuration",
   "locator",
@@ -45,7 +47,7 @@ const STATUS_OPTIONS: { label: string; value: ExecutionStatus | "all" }[] = [
   { label: "全部状态", value: "all" },
   { label: "通过", value: "passed" },
   { label: "失败", value: "failed" },
-  { label: "待人工干预", value: "needs_intervention" },
+  { label: "待人工介入", value: "needs_intervention" },
   { label: "运行中", value: "running" },
 ];
 const WINDOW_OPTIONS: { label: string; value: OverviewWindowDays | "all" }[] = [
@@ -54,6 +56,13 @@ const WINDOW_OPTIONS: { label: string; value: OverviewWindowDays | "all" }[] = [
   { label: "14 天", value: 14 },
   { label: "30 天", value: 30 },
 ];
+
+function parseScopeType(value: string | null): ReportScopeType {
+  if (value === "global" || value === "project" || value === "case") {
+    return value;
+  }
+  return "project";
+}
 
 function parseStatus(value: string | null): ExecutionStatus | "all" {
   if (value === "passed" || value === "failed" || value === "needs_intervention" || value === "running") {
@@ -70,6 +79,11 @@ function parseWindowDays(value: string | null): OverviewWindowDays | undefined {
 }
 
 function parseCaseId(value: string | null) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseProjectId(value: string | null) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
@@ -110,9 +124,7 @@ function buildColumns(currentExecutionsPath: string): ColumnsType<StoredCaseExec
             {value}
           </Link>
           {record.failed_step_index !== null && record.failed_step_index !== undefined ? (
-            <Typography.Text type="secondary">
-              失败步骤：Step {record.failed_step_index + 1}
-            </Typography.Text>
+            <Typography.Text type="secondary">失败步骤：Step {record.failed_step_index + 1}</Typography.Text>
           ) : (
             <Typography.Text type="secondary">共 {record.total_steps} 步</Typography.Text>
           )}
@@ -132,11 +144,7 @@ function buildColumns(currentExecutionsPath: string): ColumnsType<StoredCaseExec
       key: "failure_category",
       width: 120,
       render: (value: FailureCategory | null | undefined) =>
-        value ? (
-          <span>{FAILURE_CATEGORY_LABELS[value]}</span>
-        ) : (
-          <Typography.Text type="secondary">-</Typography.Text>
-        ),
+        value ? <span>{FAILURE_CATEGORY_LABELS[value]}</span> : <Typography.Text type="secondary">-</Typography.Text>,
     },
     {
       title: "耗时",
@@ -187,6 +195,9 @@ function buildColumns(currentExecutionsPath: string): ColumnsType<StoredCaseExec
 export function ExecutionsPage() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const scopeType = parseScopeType(searchParams.get("scope_type"));
+  const projectId = parseProjectId(searchParams.get("project_id"));
+  const activeProjectId = scopeType === "global" ? undefined : (projectId ?? DEFAULT_PROJECT_ID);
   const status = parseStatus(searchParams.get("status"));
   const caseId = parseCaseId(searchParams.get("case_id"));
   const failureCategory = parseFailureCategory(searchParams.get("failure_category"));
@@ -238,20 +249,20 @@ export function ExecutionsPage() {
     queryFn: getCases,
   });
   const overviewQuery = useQuery({
-    queryKey: ["executions-overview", caseId, failureFingerprint, windowDays],
+    queryKey: ["executions-overview", activeProjectId, caseId, failureFingerprint, windowDays],
     queryFn: () =>
       getExecutionOverview({
-        project_id: 1,
+        project_id: activeProjectId,
         case_id: caseId,
         window_days: windowDays,
         failure_fingerprint: failureFingerprint,
       }),
   });
   const executionsQuery = useQuery({
-    queryKey: ["executions", status, caseId, failureCategory, failureFingerprint, windowDays, page],
+    queryKey: ["executions", activeProjectId, status, caseId, failureCategory, failureFingerprint, windowDays, page],
     queryFn: () =>
       getExecutions({
-        project_id: 1,
+        project_id: activeProjectId,
         case_id: caseId,
         status: status === "all" ? undefined : status,
         window_days: windowDays,
@@ -265,12 +276,14 @@ export function ExecutionsPage() {
   const caseOptions = useMemo(
     () => [
       { label: "全部用例", value: 0 },
-      ...((casesQuery.data ?? []).map((item: StoredCaseSummary) => ({
-        label: item.name,
-        value: item.id,
-      })) as { label: string; value: number }[]),
+      ...((casesQuery.data ?? [])
+        .filter((item: StoredCaseSummary) => !activeProjectId || item.project_id === activeProjectId)
+        .map((item: StoredCaseSummary) => ({
+          label: item.name,
+          value: item.id,
+        })) as { label: string; value: number }[]),
     ],
-    [casesQuery.data],
+    [activeProjectId, casesQuery.data],
   );
   const failureCategoryCounts = overviewQuery.data?.failure_categories ?? [];
   const hasNextPage = (executionsQuery.data?.length ?? 0) === PAGE_SIZE;
@@ -359,9 +372,7 @@ export function ExecutionsPage() {
                       <Link to={buildExecutionLink(item)} state={{ fromExecutions: currentExecutionsPath }}>
                         {item.case_name}
                       </Link>
-                      {item.failure_category ? (
-                        <span>{FAILURE_CATEGORY_LABELS[item.failure_category]}</span>
-                      ) : null}
+                      {item.failure_category ? <span>{FAILURE_CATEGORY_LABELS[item.failure_category]}</span> : null}
                       {item.failed_step_index !== null && item.failed_step_index !== undefined ? (
                         <Typography.Text type="secondary">Step {item.failed_step_index + 1}</Typography.Text>
                       ) : null}

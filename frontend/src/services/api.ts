@@ -19,6 +19,9 @@ import type {
   LoginPayload,
   LogoutResponse,
   OverviewWindowDays,
+  ProjectSummary,
+  ReportPreference,
+  ReportScopeType,
   DslGenerationFeedbackStatus,
   GenerateDslImportMode,
   GenerateDslMode,
@@ -102,6 +105,21 @@ export function getCurrentUser() {
 
 export function getCases() {
   return request<StoredCaseSummary[]>("/api/v1/cases");
+}
+
+export function getProjects() {
+  return request<ProjectSummary[]>("/api/v1/projects");
+}
+
+export function getReportPreference() {
+  return request<ReportPreference>("/api/v1/reports/preferences");
+}
+
+export function updateReportPreference(payload: ReportPreference) {
+  return request<ReportPreference>("/api/v1/reports/preferences", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getCaseDetail(caseId: number) {
@@ -381,12 +399,16 @@ export function getExecutions(params: {
 }
 
 export function getExecutionOverview(params: {
+  scope_type?: ReportScopeType;
   project_id?: number;
   case_id?: number;
   window_days?: OverviewWindowDays;
   failure_fingerprint?: string;
 }) {
   const search = new URLSearchParams();
+  if (params.scope_type) {
+    search.set("scope_type", params.scope_type);
+  }
   if (params.project_id) {
     search.set("project_id", String(params.project_id));
   }
