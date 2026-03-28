@@ -20,38 +20,31 @@
 
 ## 当前状态快照（截至 2026-03-28）
 
+### 进度评估
+
+- 当前阶段：**M1 收口**（AI DSL 治理主线收尾 + 平台基础认证入口）
+- M1 完成度估算：`85% - 90%`
+- 相对核心五阶段路线图的整体完成度估算：`75% - 80%`
+
+阶段对齐判断：
+- 阶段一 基础执行能力：已完成
+- 阶段二 混合定位系统：主链路完成，AI visual 默认开启评估未收口
+- 阶段三 DSL 与自然语言生成：主链路完成，治理仍在滚动优化
+- 阶段四 报告系统：已有可用结果页、执行中心和报告中心，但未进入新一轮扩面
+- 阶段五 套件与回归执行：已完成主体闭环，继续保留固定主回归
+
 ### 已完成
 
-- 前后端单仓目录骨架、FastAPI 入口、数据库连通性校验、Alembic 初始化
-- 领域模型与迁移：`users`、`projects`、`test_cases`、`test_suites`、`suite_cases`
-- DSL Schema 与校验接口、Case 持久化接口（创建、列表、详情）
-- 单 Case 同步执行闭环、Playwright Runner v0、执行报告持久化与步骤级证据
-- Artifact 只读访问与前端可访问截图 URL
-- 前端平台入口：Dashboard、Case 列表/工作台、Suite 列表/工作台/批次详情、执行中心、执行详情、报告中心、修正记录、AI 配置
-- `executions overview` 聚合（通过率、平均耗时、失败分类、按天趋势等）
-- 执行入口深链联动（Dashboard / 报告 / 执行中心之间的 URL 筛选回流）
-- 前端体验打磨 v2.0：执行中心 URL 状态闭环、路由懒加载与构建拆包
-- Suite 基础闭环 v2.1：Suite CRUD、工作台、批量执行、批次详情与失败项重跑
-- 后端与前端最小测试链路
-- 混合定位系统 v3.0–v3.3 最小闭环：修正记录模型/API、四层降级定位 `resolve_with_fallback`、AI 视觉定位模块、前端干预面板、corrections 管理页
-- v3.4 延后加固全部完成：`RUNTIME_STATE` 线程安全、JSON 提取健壮化、`correction_value` 格式校验、日志收敛、`deep_locate` 死参数清理
-- corrections 运营增强：事件模型、overview/events/bulk API、前端命中趋势图与批量启停、并发安全修复
-- AI 生成 DSL 最小闭环：`POST /api/v1/dsl/generate`、工作台自然语言生成入口、草案预览与导入
-- AI 设置管理入口：`GET/PUT /api/v1/settings/ai`、`AISettingsPage`
-- AI 生成 DSL 深化第一批：生成模式/上下文/导入控制、自动修正与 `normalization_notes`、生成观测概览
-- AI DSL 反馈闭环：`feedback_status`（pending/accepted/rejected）、采纳/放弃上报、概览聚合
-- AI DSL 治理与观测闭环：生成记录多维筛选、详情查询、结构化拒绝原因、prompt 版本审计、前端治理表格与详情抽屉
-- AI DSL 第二轮可用率收敛首批：重试上下文、按拒绝原因重试生成、重试版 `prompt_version`、治理页重试成效概览
-- AI DSL 数据驱动优化第二轮首批：`2026-03-22.governance-v3`、基于高频拒绝原因的固定治理规则、contract alias 自动修正与默认治理焦点回退
-- AI DSL 数据驱动优化第二轮第二批：`2026-03-23.governance-v3.2`、排除已收敛的 `wrong_actions / invalid_structure` 后滚动聚焦 `context_mismatch / bad_contracts`，并补齐上下文名称/描述对齐、`context_key` snake_case 修正与无稳定 `source` 输出契约过滤
-- AI DSL 数据驱动优化第二轮第三批：`2026-03-24.governance-v3.3`、治理焦点选择改为综合参考 rejected 数量、retry 未收敛量与受影响 prompt variant 覆盖；同时对 `bad_contracts` 增加基于当前契约的保守回填与稳定化修复
-- 混合定位精度优化 P0-P3：overlay 遮挡穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
-- Locator follow-up：`deep_locate` 总超时预算、`semantic` 公共候选接口、Pillow lazy import、错误与日志收口
-- Locator sidecar P4：`resolve_with_fallback` 已增加会话级 AI 定位结果缓存、缓存命中校验与失效清理日志
-- 浏览器级固定主回归：单 Case smoke、`needs_intervention -> correction -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 三条主链路已固化，本地夹具页同时保留 2 条扩展回归
-- AI visual 灰度验收口径：已新增 [`docs/ai-visual-gray-acceptance-baseline.md`](./ai-visual-gray-acceptance-baseline.md)，明确观测窗口、通过阈值与 3 条浏览器主回归门槛
-- AI visual 灰度验收结论（2026-03-24）：已完成 1 个本地受控观察窗口，3 条固定浏览器主回归全部通过；但当前本地 `ai_visual_stats` 仍为零样本，尚未达到 `>= 30 locate_requests` 门槛，结论为“继续默认关闭，样本不足，不进入默认开启评估”，详见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./ai-visual-gray-acceptance-2026-03-24.md)
-- 平台基础认证入口：`users` 已扩展为可登录实体，后端已提供 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me`，业务 API 默认要求登录；前端已新增 `/login`、登录态恢复、受保护路由、Header 用户信息与统一 `401` 回退
+- 平台基础：前后端单仓骨架、FastAPI 入口、Alembic 迁移、`users / projects / test_cases / test_suites / suite_cases` 等核心模型已落地
+- 平台页面：Dashboard、Case 列表/工作台、Suite 列表/工作台/批次详情、执行中心、执行详情、报告中心、修正记录、AI 配置、登录页均已可用
+- 执行主链路：DSL Schema 与校验、Case 持久化、单 Case 执行、步骤级证据、Artifact 访问、执行详情、`executions overview` 聚合已打通
+- Suite 闭环：Suite CRUD、工作台排序、批量执行、失败项重跑、Suite Context v2.3、上下文快照与前端证据展示已打通
+- 混合定位闭环：修正记录模型/API、`resolve_with_fallback` 四层降级链路、AI visual、前端人工干预面板、corrections 管理页已完成
+- 定位精度与稳定性：P0-P4 优化、`deep_locate` 总超时预算、公共候选接口、缓存命中校验、运行保护与相关加固均已落地
+- AI DSL 闭环：自然语言生成、草案预览与导入、`generation_mode / import_mode / preserve_contracts`、`normalization_notes`、`generation_meta`、反馈闭环、治理与观测页已完成
+- AI DSL 治理基线：已推进到 `2026-03-24.governance-v3.3`，围绕 `context_mismatch / bad_contracts` 按 rejected、variant、retry 指标持续收敛
+- 认证基线：后端 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` 已落地，业务 API 默认要求登录；前端已完成 `/login`、登录态恢复、受保护路由、统一 `401` 回退
+- 回归体系：后端与前端自动化测试链路已建立，3 条浏览器级固定主回归与 2 条扩展回归已固化
 
 ### 进行中
 
@@ -68,13 +61,17 @@
 
 ## 下一里程碑
 
-当前主线为 **M1 收口：治理主线收尾 + 平台基础认证入口**。
+当前主线仍是 **M1 收口：治理主线收尾 + 平台基础认证入口**。
 
-AI DSL 方向当前已切到 `2026-03-24.governance-v3.3`：不再重做 `wrong_actions / invalid_structure`，而是继续基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）滚动收敛剩余高频拒绝原因，目标仍是降低“初次失败且按原因重试后仍失败”的占比；治理页现在也会直接展示当前焦点的 rejected / variant / retry / retry accepted 明细。本轮还补齐了 integration 级回归，验证非法 retry 请求不会留下错误审计记录。
+距离 M1 收口还差的主要事项：
+- AI DSL 治理：继续基于 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 收敛剩余高频拒绝原因，目标是降低“初次失败且按原因重试后仍失败”的占比
+- AI visual 灰度验收：继续在默认关闭前提下补足样本量；当前只完成了 1 个本地受控窗口与 3 条固定主回归通过，还不足以讨论默认开启
+- 固定主回归：继续把 `单 Case smoke`、`needs_intervention -> correction -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 作为长期门槛，而不是继续扩入口数量
 
-认证方向本轮已经收口到“本地账号密码 + Cookie Session”的最小可用形态：登录、登出、当前用户、受保护路由与受保护 API 已落地；本期不做角色分层、自助注册、找回密码、第三方登录或更深的安全加固。对全新从零迁移的本地数据库，不再提供公开默认密码；本地如需继续使用种子账号，需要自行初始化或重置密码。
-
-Locator 方向不再重开新主线，P4 会话级缓存已作为 sidecar 落地；后续只围绕 AI visual 灰度验收补样本，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。当前首个本地受控窗口只确认了 3 条固定主回归稳定通过，还不能支持默认开启讨论。具体验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./ai-visual-gray-acceptance-baseline.md)，当前结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./ai-visual-gray-acceptance-2026-03-24.md)。
+相对核心规划的主要差距：
+- 报告系统虽已具备结果展示和聚合，但还没有进入“更完整 AI 失败分析 / 新一轮报告扩面”
+- 认证还停留在“本地账号密码 + Cookie Session”的最小可用形态，尚未进入角色分层、账号管理、密码重置等下一阶段
+- corrections 运维视角的跨目标分析与更细粒度反馈还没有启动
 
 M1 明确不包含：
 
