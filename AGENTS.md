@@ -84,6 +84,13 @@ When responding:
 - State assumptions and limitations clearly.
 - Answer in chinese
 
+## Collaboration Preference
+
+- This repository is maintained by a single owner by default.
+- Do not default to Pull Request workflows for completed work.
+- When code is ready and the user asks to sync changes, prefer direct branch push or direct GitHub sync.
+- Only suggest, create, or rely on a Pull Request when the user explicitly asks for PR flow.
+
 ## Task Logging Rules
 
 - After completing any meaningful task, append one record to `docs/execution-log.md`.

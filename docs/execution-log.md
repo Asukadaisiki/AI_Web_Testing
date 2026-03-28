@@ -290,3 +290,12 @@
   - `cd frontend && npm test -- --run src/services/api.test.ts src/pages/DashboardPage.test.tsx src/pages/ReportCenterPage.test.tsx src/pages/ExecutionsPage.test.tsx`
   - `cd frontend && npm run build`
 - 后续：如需在本地数据库启用该能力，需要执行 Alembic 升级到 `20260329_0016`
+
+## 2026-03-29 01:02
+
+- 任务：将“单人项目默认不走 PR 流程”的协作偏好写入仓库级 `AGENTS.md`
+- 执行动作：更新 `AGENTS.md`，新增 `Collaboration Preference` 规则，明确该仓库默认由单人维护，完成开发后优先直接同步到 GitHub，仅在用户明确要求时才建议或创建 PR
+- 结果：后续 Codex 在该仓库内执行收尾流程时，将默认避免引导到 PR 工作流，减少不必要的协作步骤
+- 验证：
+  - 人工复核 `AGENTS.md` 新增规则与现有“完成后询问是否同步 GitHub”规则不冲突
+- 后续：无
