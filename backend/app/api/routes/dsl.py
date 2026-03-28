@@ -5,7 +5,9 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.api.auth import require_authenticated_user
 from app.db import get_db_session
+from app.models import User
 from app.schemas.dsl import (
     DSLCase,
     DSLValidationResult,
@@ -49,9 +51,10 @@ def validate_case(payload: DSLCase) -> DSLValidationResult:
 def generate_case(
     payload: GenerateDslRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> GenerateDslResponse:
     try:
-        return generate_dsl_case(session, payload)
+        return generate_dsl_case(session, payload.model_copy(update={"actor_user_id": current_user.id}))
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DslGenerationRetryPermissionError as exc:
@@ -124,9 +127,14 @@ def record_generation_feedback_route(
     generation_id: int,
     payload: DslGenerationFeedbackRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> StoredDslGenerationRunSummary:
     try:
-        return record_dsl_generation_feedback(session, generation_id, payload)
+        return record_dsl_generation_feedback(
+            session,
+            generation_id,
+            payload.model_copy(update={"actor_user_id": current_user.id}),
+        )
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DslGenerationFeedbackPermissionError as exc:

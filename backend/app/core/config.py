@@ -51,6 +51,11 @@ class Settings:
     app_env: str = "development"
     debug: bool = True
     api_v1_prefix: str = "/api/v1"
+    auth_session_secret: str = "dev-only-change-me"
+    auth_session_cookie_name: str = "session"
+    auth_session_max_age_seconds: int = 60 * 60 * 12
+    auth_session_same_site: str = "lax"
+    auth_session_https_only: bool = False
     database_url: str = "sqlite:///./app.db"
     database_echo: bool = False
     execution_base_url: str | None = None
@@ -78,6 +83,11 @@ def get_settings() -> Settings:
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),
         debug=_get_bool(os.getenv("APP_DEBUG"), default=True),
+        auth_session_secret=os.getenv("AUTH_SESSION_SECRET", "dev-only-change-me"),
+        auth_session_cookie_name=os.getenv("AUTH_SESSION_COOKIE_NAME", "session"),
+        auth_session_max_age_seconds=max(60, _get_int(os.getenv("AUTH_SESSION_MAX_AGE_SECONDS"), default=60 * 60 * 12)),
+        auth_session_same_site=os.getenv("AUTH_SESSION_SAME_SITE", "lax").strip().lower() or "lax",
+        auth_session_https_only=_get_bool(os.getenv("AUTH_SESSION_HTTPS_ONLY"), default=False),
         database_url=os.getenv("DATABASE_URL", "sqlite:///./app.db"),
         database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,

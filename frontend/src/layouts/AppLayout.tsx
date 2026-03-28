@@ -1,6 +1,8 @@
-import { Layout, Menu, Typography } from "antd";
+import { Button, Layout, Menu, Space, Typography } from "antd";
 import type { ItemType } from "antd/es/menu/interface";
 import { Link, Outlet, useLocation } from "react-router-dom";
+
+import { useAuth } from "../auth/AuthContext";
 
 const { Content, Header, Sider } = Layout;
 
@@ -36,6 +38,7 @@ const items: ItemType[] = [
 ];
 
 export function AppLayout() {
+  const { currentUser, logout } = useAuth();
   const location = useLocation();
   let selectedKey = "/dashboard";
   if (location.pathname.startsWith("/cases")) {
@@ -89,7 +92,18 @@ export function AppLayout() {
           }}
         >
           <Typography.Text strong>平台演示入口</Typography.Text>
-          <Typography.Text type="secondary">后端执行为准，前端负责触发与展示</Typography.Text>
+          <Space size={16}>
+            <Typography.Text type="secondary">后端执行为准，前端负责触发与展示</Typography.Text>
+            {currentUser ? (
+              <>
+                <Typography.Text>{currentUser.display_name}</Typography.Text>
+                <Typography.Text type="secondary">{currentUser.email}</Typography.Text>
+              </>
+            ) : null}
+            <Button type="link" onClick={() => void logout()}>
+              退出登录
+            </Button>
+          </Space>
         </Header>
         <Content className="page-shell">
           <Outlet />

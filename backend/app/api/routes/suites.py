@@ -5,7 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.auth import require_authenticated_user
 from app.db import get_db_session
+from app.models import User
 from app.schemas.suites import (
     StoredSuiteDetail,
     StoredSuiteRunDetail,
@@ -38,9 +40,10 @@ def create_suite_route(
     payload: SuiteCreateRequest,
     response: Response,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> StoredSuiteDetail:
     try:
-        created_suite = create_suite(session, payload)
+        created_suite = create_suite(session, payload.model_copy(update={"actor_user_id": current_user.id}))
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except SuiteValidationError as exc:
@@ -68,9 +71,10 @@ def update_suite_route(
     suite_id: int,
     payload: SuiteUpdateRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> StoredSuiteDetail:
     try:
-        return update_suite(session, suite_id, payload)
+        return update_suite(session, suite_id, payload.model_copy(update={"actor_user_id": current_user.id}))
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except SuiteValidationError as exc:
@@ -82,9 +86,10 @@ def execute_suite_route(
     suite_id: int,
     payload: SuiteExecutionRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> SuiteExecutionResult:
     try:
-        return execute_suite(session, suite_id, payload)
+        return execute_suite(session, suite_id, payload.model_copy(update={"actor_user_id": current_user.id}))
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except SuiteValidationError as exc:
@@ -123,9 +128,15 @@ def rerun_failed_suite_run_route(
     run_id: int,
     payload: SuiteExecutionRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> SuiteExecutionResult:
     try:
-        return rerun_failed_suite_run(session, suite_id, run_id, payload)
+        return rerun_failed_suite_run(
+            session,
+            suite_id,
+            run_id,
+            payload.model_copy(update={"actor_user_id": current_user.id}),
+        )
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except SuiteValidationError as exc:

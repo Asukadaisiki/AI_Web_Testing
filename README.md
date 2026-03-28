@@ -24,15 +24,16 @@ AI 增强的 Web UI 自动化测试平台。
 - AI DSL 第二轮治理能力：支持重试上下文、按拒绝原因重试生成、重试版 `prompt_version`，治理页可查看重试成效与 prompt 版本效果
 - AI DSL 数据驱动治理第二轮第三批收敛：当前基线已升级到 `2026-03-24.governance-v3.3`；治理焦点选择已改为综合参考 `top_rejection_reasons`、`rejection_reason_by_variant` 与 `retry_acceptance_by_reason`，并围绕 `context_mismatch / bad_contracts` 继续滚动收敛
 - AI 设置管理：前端已提供 `/settings/ai` 页面，支持管理 AI DSL / VLM 运行时配置；`GET /api/v1/settings/ai/overview` 可查看 DSL 生成最小观测指标
+- 平台基础认证入口：后端已提供 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me`；前端已新增 `/login`、受保护路由、登录态恢复、Header 当前用户与统一 `401` 回退
 - AI 设置治理概览：overview 现在会额外返回“当前治理焦点”“当前 Prompt 版本”“Prompt 版本观测口径”“治理焦点选择口径”与“当前治理焦点明细”，便于对齐当前治理批次与收敛结果
 - 混合定位精度优化 P0-P3：已落地 overlay 穿透、DOM 严格匹配 + Jaccard + 中文单字回退、`deep_locate` 两阶段定位、DOM 候选 + VLM 排序
 - Locator P4 sidecar：`resolve_with_fallback` 已增加会话级 AI 定位结果缓存，命中前会重新校验 selector，失效后自动清除
 - AI 视觉保护：Tier 2 仍默认关闭，但已补超时、限流和熔断保护，避免不稳定模型拖垮主执行链路
 
 当前未完成的重点方向：
-- AI 生成 DSL 数据驱动第二轮优化继续滚动（在 `governance-v3` 基线上继续收敛后续高频拒绝原因）
+- AI 生成 DSL 数据驱动第二轮优化继续滚动（以 `2026-03-24.governance-v3.3` 为 M1 治理基线，继续收敛后续高频拒绝原因）
 - AI visual 继续默认关闭；当前已完成一轮本地受控灰度验收，3 条固定浏览器主回归通过，但本地 `ai_visual_stats` 仍为零样本，暂不进入默认开启评估
-- 登录与更完整的平台认证体系基本未启动
+- M1 本轮不包含：AI visual 默认开启、角色权限细分、自助注册/找回密码、第三方登录、报告系统新扩面
 
 AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./docs/ai-visual-gray-acceptance-baseline.md)，本轮结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./docs/ai-visual-gray-acceptance-2026-03-24.md)。
 
@@ -125,6 +126,12 @@ npm run dev
 
 默认前端地址：
 - `http://127.0.0.1:5173`
+
+默认本地种子账号（从零执行迁移创建数据库时）：
+- 邮箱：`seed-owner@example.com`
+- 密码：`password123`
+
+如果你的本地数据库已经在本次认证改造前升级过 `20260324_0015`，需要重建本地库后重新执行迁移，或手动重置 `users.password_hash`。
 
 ## 测试与构建
 

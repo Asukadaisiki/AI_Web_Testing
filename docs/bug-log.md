@@ -30,6 +30,49 @@
 
 ## 当前状态
 
+## BUG-031 | 前端全量测试在默认 5s 预算下出现假失败超时
+
+- 日期：2026-03-28
+- 状态：fixed
+- 来源：自测 / 前端全量回归
+- 描述：`cd frontend && npm test -- --run` 在全量并行运行时，`LoginPage.test.tsx`、`SuiteWorkbenchPage.test.tsx`、`CorrectionsPage.test.tsx`、`ExecutionDetailPage.test.tsx` 与 `CaseWorkbenchPage.test.tsx` 中的 5 条重量级页面测试会命中默认 5s / 10s 超时；这些测试单独运行可通过，因此失败属于测试预算不足而非业务断言回归
+- 复现步骤：
+  1. 在 `frontend/` 下执行 `npm test -- --run`
+  2. 观察上述 5 条测试在全量运行时因 `Test timed out` 失败
+  3. 分别单独执行对应测试文件，观察断言本身仍可通过
+- 影响：会把 M1 认证改造后的前端全量回归误报为失败，阻断发布前收口验证
+- 根因：几条包含较重 Ant Design 渲染、路由跳转和较长交互链路的页面测试共用默认超时预算；在全量并行运行时等待、渲染和事件成本叠加，超过单条测试默认时限
+- 处理：
+  - 为 5 条已知慢测补充显式 `10000ms` / `15000ms` 超时
+  - 保持断言与业务逻辑不变，不放宽全局测试超时
+- 验证：
+  - 执行 `cd frontend && npm test -- --run`，结果 `66 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-28 17:32
+
+## BUG-030 | 认证入口在干净环境下存在依赖与迁移阻塞
+
+- 日期：2026-03-28
+- 状态：fixed
+- 来源：自测 / 最终验收
+- 描述：认证入口落地后，在干净环境执行浏览器主回归与迁移时暴露出 3 个阻塞问题：`SessionMiddleware` 缺少 `itsdangerous` 运行时依赖、`20260324_0015` 使用 `BOOLEAN DEFAULT 1` 导致 PostgreSQL 迁移失败，以及新库中的默认种子用户虽然存在但回填的 `password_hash` 不对应已知密码，导致登录页可见但默认账号不可登录
+- 复现步骤：
+  1. 在 `backend/` 下执行 `uv run pytest tests/integration/test_intervention_regression.py::test_local_single_case_smoke_executes_successfully -q`
+  2. 观察导入 `SessionMiddleware` 时抛出 `ModuleNotFoundError: No module named 'itsdangerous'`
+  3. 执行 `uv run alembic upgrade head`
+  4. 观察 PostgreSQL 在 `ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL` 处报 `DatatypeMismatch`
+  5. 对全新从零迁移创建的数据库使用默认种子用户尝试登录，观察没有可公开说明的已知密码
+- 影响：认证功能无法在干净环境中完成迁移、启动与浏览器主回归，M1 收口验证被阻断
+- 根因：后端依赖清单未显式声明 `itsdangerous`；迁移默认值沿用了 SQLite 风格字面量；为兼容旧 `users` 数据回填的默认密码哈希未与本地种子账号约定对齐
+- 处理：
+  - 在 `backend/pyproject.toml` 与 `backend/uv.lock` 中补充 `itsdangerous`
+  - 将 `is_active` 的迁移默认值改为 `sa.true()`
+  - 将迁移中的 `LEGACY_PASSWORD_HASH` 对齐到 `password123`，并新增单测锁定该约定
+- 验证：
+  - 执行 `cd backend && uv run alembic upgrade head`，结果成功
+  - 执行 `cd backend && uv run pytest tests/unit/test_auth_api.py -q`，结果 `8 passed`
+  - 执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py::test_local_single_case_smoke_executes_successfully tests/integration/test_intervention_regression.py::test_local_intervention_flow_rerun_hits_tier_zero tests/integration/test_intervention_regression.py::test_suite_context_rerun_failed_reuses_context_snapshot_after_manual_correction -q`，结果 `3 passed`
+- 关联记录：`docs/execution-log.md` 2026-03-28 17:32
+
 ## BUG-029 | governance v3.3 review 发现 retry provenance 与语义保留缺口
 
 - 日期：2026-03-24

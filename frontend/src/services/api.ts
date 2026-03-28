@@ -16,10 +16,13 @@ import type {
   DSLValidationResult,
   ExecutionsOverview,
   LocatorCorrectionsOverview,
+  LoginPayload,
+  LogoutResponse,
   OverviewWindowDays,
   DslGenerationFeedbackStatus,
   GenerateDslImportMode,
   GenerateDslMode,
+  CurrentUser,
   StoredDslGenerationRunDetail,
   StoredDslGenerationRunSummary,
   StoredCaseDetail,
@@ -39,9 +42,11 @@ import type {
 } from "../types/api";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -59,10 +64,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Ignore non-JSON errors.
     }
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent(AUTH_UNAUTHORIZED_EVENT));
+    }
     throw new Error(message);
   }
 
   return (await response.json()) as T;
+}
+
+export function login(payload: LoginPayload) {
+  return request<CurrentUser>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function logout() {
+  return request<LogoutResponse>("/api/v1/auth/logout", {
+    method: "POST",
+  });
+}
+
+export function getCurrentUser() {
+  return request<CurrentUser>("/api/v1/auth/me");
 }
 
 export function getCases() {

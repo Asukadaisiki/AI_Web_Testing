@@ -8,6 +8,19 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-28 17:32
+
+- 任务：实现 M1 收口计划中的“治理主线收尾 + 平台基础认证入口”，并完成最终验证与文档收口
+- 执行动作：在后端新增 Cookie Session 认证配置、密码哈希与会话读写能力，落地 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` 与统一登录依赖；将业务 API 切换为默认要求登录，并把 `cases / suites / executions / corrections / dsl` 等写接口中的 `actor_user_id / created_by` 改为由登录态覆盖；扩展 `users` 模型与 Alembic 迁移，新增非法 retry 不留错误审计记录的 integration 回归；前端新增 `AuthProvider`、`/login`、受保护路由、Header 当前用户与统一 `401` 回退；在验证阶段修复 `20260324_0015` 的 PostgreSQL `BOOLEAN DEFAULT 1` 兼容性、补上 `itsdangerous` 运行时依赖、将迁移回填默认密码对齐为本地种子账号 `password123`，并为 5 条全量运行易超时的前端页面测试补显式 timeout；同步更新 `README.md` 与 `docs/project-plan.md`
+- 结果：M1 基础认证入口已可运行，主业务 API 已默认受登录保护，治理主线继续以 `2026-03-24.governance-v3.3` 收尾；clean-environment 下的迁移、后端认证测试、前端全量测试、前端构建和 3 条固定浏览器主回归均通过，README 与项目计划已改为“认证入口 + 主线收尾”的当前口径
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_auth_api.py tests/integration/test_dsl_retry_governance.py -q`，结果 `8 passed`
+  - `cd backend && uv run alembic upgrade head`，结果成功
+  - `cd backend && uv run pytest tests/integration/test_intervention_regression.py::test_local_single_case_smoke_executes_successfully tests/integration/test_intervention_regression.py::test_local_intervention_flow_rerun_hits_tier_zero tests/integration/test_intervention_regression.py::test_suite_context_rerun_failed_reuses_context_snapshot_after_manual_correction -q`，结果 `3 passed`
+  - `cd frontend && npm test -- --run`，结果 `66 passed`
+  - `cd frontend && npm run build`，结果成功
+- 后续：若继续推进 M2，可在当前认证基础上拆分“角色权限边界 / 账号管理 / 密码重置”与“AI visual 是否默认开启”两条独立主线；本轮不再扩张到报告系统新扩面
+
 ## 2026-03-24 23:34
 
 - 任务：修复 governance v3.3 review 提出的 `retry_reason_code` 可伪造与稳定语义未真正保留问题

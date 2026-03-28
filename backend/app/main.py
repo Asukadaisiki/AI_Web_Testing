@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
 from app.api.router import build_api_router
@@ -23,6 +24,14 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         debug=settings.debug,
+    )
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.auth_session_secret,
+        session_cookie=settings.auth_session_cookie_name,
+        max_age=settings.auth_session_max_age_seconds,
+        same_site=settings.auth_session_same_site,
+        https_only=settings.auth_session_https_only,
     )
     app.include_router(build_api_router())
     app.mount("/artifacts", StaticFiles(directory=ARTIFACTS_DIR), name="artifacts")

@@ -18,7 +18,7 @@
 4. Reporter 层：`backend/app/reporters`
 5. Suite Manager 层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`
 
-## 当前状态快照（截至 2026-03-24）
+## 当前状态快照（截至 2026-03-28）
 
 ### 已完成
 
@@ -51,9 +51,11 @@
 - 浏览器级固定主回归：单 Case smoke、`needs_intervention -> correction -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 三条主链路已固化，本地夹具页同时保留 2 条扩展回归
 - AI visual 灰度验收口径：已新增 [`docs/ai-visual-gray-acceptance-baseline.md`](./ai-visual-gray-acceptance-baseline.md)，明确观测窗口、通过阈值与 3 条浏览器主回归门槛
 - AI visual 灰度验收结论（2026-03-24）：已完成 1 个本地受控观察窗口，3 条固定浏览器主回归全部通过；但当前本地 `ai_visual_stats` 仍为零样本，尚未达到 `>= 30 locate_requests` 门槛，结论为“继续默认关闭，样本不足，不进入默认开启评估”，详见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./ai-visual-gray-acceptance-2026-03-24.md)
+- 平台基础认证入口：`users` 已扩展为可登录实体，后端已提供 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me`，业务 API 默认要求登录；前端已新增 `/login`、登录态恢复、受保护路由、Header 用户信息与统一 `401` 回退
 
 ### 进行中
 
+- M1 收口主线：在认证入口已落地的前提下，继续收尾 `governance-v3.3` 主线与固定主回归验收，不再扩张到报告增强或新的定位主线
 - AI 生成 DSL 数据驱动优化第二轮：在 `governance-v3.3` 基线上继续按 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 滚动收敛后续高频原因
 - AI visual 灰度验收：继续在默认关闭前提下补足手动开启窗口样本，只有累计达到 `>= 30 locate_requests` 或保留连续 3 天观察记录后，才重新评估是否进入默认开启讨论
 
@@ -62,16 +64,25 @@
 #### 其他未开始项
 
 - AI visual 默认开启策略仍未开始，当前保持“可配置、可调用、默认关闭”；2026-03-24 已完成首个受控窗口，但结论仍为样本不足
-- 登录页与平台认证体系基本未启动；现有 `users` 模型仍是为后续 auth 预留的最小实体
 - corrections 运维视角的跨目标分析与更细状态反馈仍未开始
 
 ## 下一里程碑
 
-当前主线为 **AI 生成 DSL 数据驱动滚动治理 v3.3 + AI visual 灰度验收跟进**。
+当前主线为 **M1 收口：治理主线收尾 + 平台基础认证入口**。
 
-AI DSL 方向当前已切到 `2026-03-24.governance-v3.3`：不再重做 `wrong_actions / invalid_structure`，而是继续基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）滚动收敛剩余高频拒绝原因，目标仍是降低“初次失败且按原因重试后仍失败”的占比；治理页现在也会直接展示当前焦点的 rejected / variant / retry / retry accepted 明细。
+AI DSL 方向当前已切到 `2026-03-24.governance-v3.3`：不再重做 `wrong_actions / invalid_structure`，而是继续基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）滚动收敛剩余高频拒绝原因，目标仍是降低“初次失败且按原因重试后仍失败”的占比；治理页现在也会直接展示当前焦点的 rejected / variant / retry / retry accepted 明细。本轮还补齐了 integration 级回归，验证非法 retry 请求不会留下错误审计记录。
+
+认证方向本轮已经收口到“本地账号密码 + Cookie Session”的最小可用形态：登录、登出、当前用户、受保护路由与受保护 API 已落地；本期不做角色分层、自助注册、找回密码、第三方登录或更深的安全加固。对全新从零迁移的本地数据库，默认种子账号为 `seed-owner@example.com / password123`。
 
 Locator 方向不再重开新主线，P4 会话级缓存已作为 sidecar 落地；后续只围绕 AI visual 灰度验收补样本，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。当前首个本地受控窗口只确认了 3 条固定主回归稳定通过，还不能支持默认开启讨论。具体验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./ai-visual-gray-acceptance-baseline.md)，当前结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./ai-visual-gray-acceptance-2026-03-24.md)。
+
+M1 明确不包含：
+
+- AI visual 默认开启
+- 角色权限细分
+- 自助注册 / 找回密码
+- 第三方登录
+- 新一轮报告系统扩面
 
 回归方向已切换为“固定主回归长期保留”，而不是继续补入口数量。建议持续验证以下三条：
 
@@ -83,7 +94,7 @@ Locator 方向不再重开新主线，P4 会话级缓存已作为 sidecar 落地
 
 - **AI DSL 治理**：继续按高频拒绝原因滚动更新 prompt / normalization，并观察 `prompt_version_breakdown`。
 - **AI visual 灰度验收**：继续补齐手动开启窗口下的样本量，暂不改默认关闭策略。
-- **登录页与认证体系**：平台登录入口、用户会话与权限边界。
+- **认证体系下一阶段**：角色权限边界、账号管理、密码重置与更完整的安全治理。
 - **corrections 运维继续细化**：跨修正目标分析、更明确的状态反馈。
 
 混合定位系统技术设计参见 [`docs/hybrid-locate-and-intervention-design.md`](./hybrid-locate-and-intervention-design.md)。

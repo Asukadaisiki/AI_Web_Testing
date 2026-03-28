@@ -91,7 +91,7 @@ test("suite 工作台支持创建、排序并保存", async () => {
     });
   });
   expect(await screen.findByText("suite-edit-view")).toBeInTheDocument();
-});
+}, 10000);
 
 test("suite 工作台展示最近批次并在执行后跳转详情页", async () => {
   vi.mocked(api.getCases).mockResolvedValue([

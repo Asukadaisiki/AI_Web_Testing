@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
+  getCurrentUser,
   generateDslCase,
   getAISettings,
   getAISettingsOverview,
@@ -9,6 +10,8 @@ import {
   getDslGenerationRunDetail,
   getDslGenerationRuns,
   getExecutions,
+  login,
+  logout,
   recordDslGenerationFeedback,
   updateAISettings,
 } from "./api";
@@ -37,7 +40,7 @@ test("getCorrections includes offset=0 in query string", async () => {
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/corrections?target_description=%E7%99%BB%E5%BD%95%E6%8C%89%E9%92%AE&limit=10&offset=0",
-    expect.any(Object),
+    expect.objectContaining({ credentials: "include" }),
   );
 });
 
@@ -50,7 +53,7 @@ test("getExecutions includes offset=0 in query string", async () => {
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/executions?project_id=1&limit=10&offset=0",
-    expect.any(Object),
+    expect.objectContaining({ credentials: "include" }),
   );
 });
 
@@ -62,7 +65,33 @@ test("getCorrectionEvents includes offset=0 in query string", async () => {
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/v1/corrections/12/events?limit=20&offset=0",
-    expect.any(Object),
+    expect.objectContaining({ credentials: "include" }),
+  );
+});
+
+test("auth endpoints use cookie credentials", async () => {
+  await login({ email: "seed-owner@example.com", password: "password123" });
+  await getCurrentUser();
+  await logout();
+
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    "/api/v1/auth/login",
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ email: "seed-owner@example.com", password: "password123" }),
+    }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    "/api/v1/auth/me",
+    expect.objectContaining({ credentials: "include" }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    "/api/v1/auth/logout",
+    expect.objectContaining({ method: "POST", credentials: "include" }),
   );
 });
 

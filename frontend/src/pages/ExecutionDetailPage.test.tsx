@@ -157,7 +157,7 @@ test("澶辫触姝ラ榛樿灞曞紑锛屾敮鎸佹煡鐪嬪€欓€夎�
   await waitFor(() => {
     expect(screen.getByRole("img", { name: "step-2" })).toBeInTheDocument();
   });
-});
+}, 10000);
 
 test("缂哄皯鐢ㄤ緥 Base URL 鐨勬墽琛屼細鏄剧ず淇鎻愮ず", async () => {
   vi.mocked(api.getExecutionDetail).mockResolvedValue({

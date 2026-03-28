@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION
+from app.core.auth import hash_password
 import app.core.config as config_module
 import app.main as main_module
 from app.db import Base
@@ -56,10 +57,23 @@ def ai_settings_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestC
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
-        connection.execute(User.__table__.insert().values(id=1, email="seed-owner@example.com", display_name="Seed"))
+        connection.execute(
+            User.__table__.insert().values(
+                id=1,
+                email="seed-owner@example.com",
+                display_name="Seed",
+                password_hash=hash_password("password123"),
+                is_active=True,
+            )
+        )
 
     app = main_module.create_app()
     with TestClient(app) as client:
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "seed-owner@example.com", "password": "password123"},
+        )
+        assert login_response.status_code == 200
         yield client
 
 
@@ -337,16 +351,6 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
         "/api/v1/dsl/generate",
         json={"prompt": "rejected", "actor_user_id": 1},
     ).json()["generation_id"]
-    retry_generation = ai_settings_client.post(
-        "/api/v1/dsl/generate",
-        json={
-            "prompt": "retry accepted",
-            "actor_user_id": 1,
-            "retry_from_generation_id": rejected,
-            "retry_reason_code": "bad_contracts",
-            "retry_note": "契约命名不稳定",
-        },
-    ).json()["generation_id"]
 
     accepted_replace_response = ai_settings_client.patch(
         f"/api/v1/dsl/generations/{accepted_replace}/feedback",
@@ -372,6 +376,16 @@ def test_get_ai_settings_overview_includes_feedback_governance_stats(
             "rejection_reason_code": "bad_contracts",
         },
     )
+    retry_generation = ai_settings_client.post(
+        "/api/v1/dsl/generate",
+        json={
+            "prompt": "retry accepted",
+            "actor_user_id": 1,
+            "retry_from_generation_id": rejected,
+            "retry_reason_code": "bad_contracts",
+            "retry_note": "契约命名不稳定",
+        },
+    ).json()["generation_id"]
     retry_accepted_response = ai_settings_client.patch(
         f"/api/v1/dsl/generations/{retry_generation}/feedback",
         json={

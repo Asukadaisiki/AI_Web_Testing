@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from app.models import DslGenerationRun, TestCase, User
 from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, _normalize_string, build_generation_messages
+from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
 from app.services import dsl as dsl_service
@@ -1773,7 +1774,12 @@ def test_generate_dsl_case_persists_effective_governance_focus_reasons_when_retr
     ]
 
 
-def test_generate_dsl_case_returns_403_when_retry_source_belongs_to_other_actor(client, db_session, monkeypatch) -> None:
+def test_generate_dsl_case_returns_403_when_retry_source_belongs_to_other_actor(
+    client,
+    anonymous_client,
+    db_session,
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
@@ -1786,7 +1792,15 @@ def test_generate_dsl_case_returns_403_when_retry_source_belongs_to_other_actor(
   "steps": [{"action": "goto", "value": "/retry"}]
 }""",
     )
-    db_session.add(User(id=2, email="other-user@example.com", display_name="Other User"))
+    db_session.add(
+        User(
+            id=2,
+            email="other-user@example.com",
+            display_name="Other User",
+            password_hash=hash_password("password123"),
+            is_active=True,
+        )
+    )
     db_session.commit()
 
     previous_generation_id = client.post(
@@ -1808,7 +1822,13 @@ def test_generate_dsl_case_returns_403_when_retry_source_belongs_to_other_actor(
 
     monkeypatch.setattr("app.ai.dsl_generator._call_llm", should_not_call_llm)
 
-    retry_response = client.post(
+    login_as_other = anonymous_client.post(
+        "/api/v1/auth/login",
+        json={"email": "other-user@example.com", "password": "password123"},
+    )
+    assert login_as_other.status_code == 200
+
+    retry_response = anonymous_client.post(
         "/api/v1/dsl/generate",
         json={
             "prompt": "由其他 actor 伪造重试",
@@ -2080,7 +2100,12 @@ def test_record_generation_feedback_requires_rejection_reason_for_rejected(clien
     assert response.status_code == 422
     assert "rejected 反馈必须提供 rejection_reason_code" in response.text
 
-def test_record_generation_feedback_returns_403_for_non_owner_actor(client, db_session, monkeypatch) -> None:
+def test_record_generation_feedback_returns_403_for_non_owner_actor(
+    client,
+    anonymous_client,
+    db_session,
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
@@ -2093,7 +2118,15 @@ def test_record_generation_feedback_returns_403_for_non_owner_actor(client, db_s
   "steps": [{"action": "goto", "value": "/feedback"}]
 }""",
     )
-    db_session.add(User(id=2, email="other-user@example.com", display_name="Other User"))
+    db_session.add(
+        User(
+            id=2,
+            email="other-user@example.com",
+            display_name="Other User",
+            password_hash=hash_password("password123"),
+            is_active=True,
+        )
+    )
     db_session.commit()
 
     generate_response = client.post(
@@ -2105,7 +2138,13 @@ def test_record_generation_feedback_returns_403_for_non_owner_actor(client, db_s
     )
     generation_id = generate_response.json()["generation_id"]
 
-    response = client.patch(
+    login_as_other = anonymous_client.post(
+        "/api/v1/auth/login",
+        json={"email": "other-user@example.com", "password": "password123"},
+    )
+    assert login_as_other.status_code == 200
+
+    response = anonymous_client.patch(
         f"/api/v1/dsl/generations/{generation_id}/feedback",
         json={
             "actor_user_id": 2,
@@ -2132,7 +2171,7 @@ def test_record_generation_feedback_returns_404_for_missing_generation_run(clien
     assert response.json()["detail"] == "DSL generation run 999 not found."
 
 
-def test_record_generation_feedback_returns_404_for_missing_actor(client, monkeypatch) -> None:
+def test_record_generation_feedback_requires_login(client, anonymous_client, monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_AI_DSL_GENERATE", "true")
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
@@ -2155,7 +2194,7 @@ def test_record_generation_feedback_returns_404_for_missing_actor(client, monkey
     )
     generation_id = generate_response.json()["generation_id"]
 
-    response = client.patch(
+    response = anonymous_client.patch(
         f"/api/v1/dsl/generations/{generation_id}/feedback",
         json={
             "actor_user_id": 999,
@@ -2164,8 +2203,8 @@ def test_record_generation_feedback_returns_404_for_missing_actor(client, monkey
         },
     )
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "User 999 not found."
+    assert response.status_code == 401
+    assert response.json()["detail"] == "未登录或登录态已失效。"
 
 
 def test_get_generation_run_for_feedback_uses_for_update_on_postgresql(db_session, monkeypatch) -> None:

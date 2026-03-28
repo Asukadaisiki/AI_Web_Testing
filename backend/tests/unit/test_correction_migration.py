@@ -10,6 +10,7 @@ from alembic.operations import Operations
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from app.core.auth import hash_password
 from app.db import Base
 import app.models  # noqa: F401
 from app.locators.corrections import find_active_correction
@@ -26,10 +27,11 @@ def test_upgrade_0007_repairs_normalized_targets_and_deduplicates_active_records
             connection.execute(
                 text(
                     """
-                    INSERT INTO users (id, email, display_name)
-                    VALUES (1, 'seed-owner@example.com', 'Seed Owner')
+                    INSERT INTO users (id, email, display_name, password_hash, is_active)
+                    VALUES (1, 'seed-owner@example.com', 'Seed Owner', :password_hash, 1)
                     """
-                )
+                ),
+                {"password_hash": hash_password("password123")},
             )
             connection.execute(
                 text(

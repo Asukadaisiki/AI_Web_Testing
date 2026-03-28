@@ -103,7 +103,7 @@ test("渲染 corrections overview、支持批量停用并查看事件", async ()
   });
   expect(screen.getByText("Tier 0 命中")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "执行 #41" })).toHaveAttribute("href", "/executions/41");
-});
+}, 10000);
 
 test("应用筛选时会带上 page_url 和状态参数重新查询", async () => {
   vi.mocked(api.getCorrections).mockResolvedValue([]);

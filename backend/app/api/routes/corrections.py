@@ -5,7 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.auth import require_authenticated_user
 from app.db import get_db_session
+from app.models import User
 from app.schemas.corrections import (
     BatchUpdateCorrectionStateRequest,
     CreateCorrectionRequest,
@@ -34,9 +36,10 @@ def create_correction_route(
     payload: CreateCorrectionRequest,
     response: Response,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> StoredLocatorCorrection:
     try:
-        correction = create_correction(session, payload)
+        correction = create_correction(session, payload.model_copy(update={"created_by": current_user.id}))
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except CorrectionConflictError as exc:

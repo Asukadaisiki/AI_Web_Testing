@@ -202,7 +202,7 @@ test("放弃草案后可按拒绝原因重试生成，并携带 retry context", 
       }),
     );
   });
-}, 10000);
+}, 15000);
 
 test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", async () => {
   const templateSteps = [

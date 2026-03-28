@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
+import { useAuth } from "../auth/AuthContext";
 import { AppLayout } from "../layouts/AppLayout";
 import { LoadingBlock } from "../components/PageFeedback";
 
@@ -37,26 +38,44 @@ const ExecutionDetailPage = lazy(() =>
 const ReportCenterPage = lazy(() =>
   import("../pages/ReportCenterPage").then((module) => ({ default: module.ReportCenterPage })),
 );
+const LoginPage = lazy(() =>
+  import("../pages/LoginPage").then((module) => ({ default: module.LoginPage })),
+);
+
+function ProtectedRoute() {
+  const { isAuthResolved, isAuthenticated } = useAuth();
+
+  if (!isAuthResolved) {
+    return <LoadingBlock />;
+  }
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+  return <Outlet />;
+}
 
 export function AppRouter() {
   return (
     <Suspense fallback={<LoadingBlock />}>
       <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/cases" element={<CasesPage />} />
-          <Route path="/suites" element={<SuitesPage />} />
-          <Route path="/suites/new" element={<SuiteWorkbenchPage />} />
-          <Route path="/suites/:suiteId/edit" element={<SuiteWorkbenchPage />} />
-          <Route path="/suites/:suiteId/runs/:runId" element={<SuiteRunDetailPage />} />
-          <Route path="/cases/new" element={<CaseWorkbenchPage />} />
-          <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
-          <Route path="/executions" element={<ExecutionsPage />} />
-          <Route path="/corrections" element={<CorrectionsPage />} />
-          <Route path="/settings/ai" element={<AISettingsPage />} />
-          <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
-          <Route path="/reports" element={<ReportCenterPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<ProtectedRoute />}>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/cases" element={<CasesPage />} />
+            <Route path="/suites" element={<SuitesPage />} />
+            <Route path="/suites/new" element={<SuiteWorkbenchPage />} />
+            <Route path="/suites/:suiteId/edit" element={<SuiteWorkbenchPage />} />
+            <Route path="/suites/:suiteId/runs/:runId" element={<SuiteRunDetailPage />} />
+            <Route path="/cases/new" element={<CaseWorkbenchPage />} />
+            <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
+            <Route path="/executions" element={<ExecutionsPage />} />
+            <Route path="/corrections" element={<CorrectionsPage />} />
+            <Route path="/settings/ai" element={<AISettingsPage />} />
+            <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
+            <Route path="/reports" element={<ReportCenterPage />} />
+          </Route>
         </Route>
       </Routes>
     </Suspense>

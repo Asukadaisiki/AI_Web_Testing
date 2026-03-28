@@ -41,6 +41,21 @@ export type DSLVariableSource =
   | "last_step_value"
   | "last_step_error_message";
 
+export interface CurrentUser {
+  id: number;
+  email: string;
+  display_name: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface LogoutResponse {
+  success: boolean;
+}
+
 export interface DSLStep {
   action: string;
   target?: string;
