@@ -253,3 +253,29 @@
   - `cd backend && uv run pytest tests/unit/test_cases_api.py tests/unit/test_suites_api.py tests/unit/test_corrections_api.py tests/unit/test_case_executions_api.py tests/unit/test_ai_settings_api.py tests/unit/test_dsl_validation.py tests/integration/test_dsl_retry_governance.py`
   - `cd frontend && npm test -- --run src/auth/AuthContext.test.tsx src/app/AppRouter.test.tsx src/pages/LoginPage.test.tsx src/services/api.test.ts`
 - 后续：优先修复 `BUG-032` 中记录的认证与证据暴露问题，再决定是否同步当前改动到 GitHub
+
+## 2026-03-28 23:33
+
+- 任务：基于当前仓库实现核对“AI 根据需求编写测试方案 / 根据测试方法编写测试用例 / 自行执行 Web UI 自动化测试 / 输出报告结果”四项能力的实际可达范围
+- 执行动作：检索并阅读 `README.md`、`docs/project-plan.md`、`backend/app/api/routes/dsl.py`、`backend/app/schemas/dsl.py`、`backend/app/ai/dsl_generator.py`、`backend/app/runners/playwright_runner.py`、`backend/app/services/executions.py`、`backend/app/locators/ai_visual.py`、`frontend/src/pages/CaseWorkbenchPage.tsx`、`frontend/src/pages/SuiteWorkbenchPage.tsx`、`frontend/src/pages/ReportCenterPage.tsx` 与相关测试，重点核对 AI DSL 生成入口、Suite 是否支持 AI 方案生成、Playwright 执行闭环、AI visual 灰度能力、步骤证据与报告聚合展示
+- 结果：确认当前仓库已经具备“自然语言生成结构化 DSL 用例草案”“后端驱动的 Web UI 自动化执行”“步骤级证据与报告中心展示”能力；但“根据需求自动编写测试方案”目前仍停留在 Case 级 DSL 生成，不包含需求到测试方案/测试套件的独立规划能力，也未实现 AI 自主编排整套测试任务
+- 验证：本次为静态代码与文档核对，未运行自动化测试
+- 后续：若要补齐需求到测试方案/测试套件设计能力，建议优先新增需求输入模型、方案/套件生成 schema 与评审流，再决定是否把其接入现有 Case/Suite 工作台
+
+## 2026-03-28 23:42
+
+- 任务：核对仓库当前是否已经接入 VLM 模型，以及 `.env.example` 未暴露对应配置项是否属于文档缺口
+- 执行动作：检索 `backend/app/core/config.py`、`backend/app/locators/ai_visual.py`、`backend/app/services/settings.py`、`backend/app/schemas/settings.py`、`frontend/src/pages/AISettingsPage.tsx` 与 `backend/tests/unit/test_ai_settings_api.py`，确认运行时配置字段、视觉定位调用路径、前端设置页表单和测试基线中的 `.env` 内容
+- 结果：确认仓库当前已经接入 VLM 相关能力，运行时使用 `VLM_BASE_URL / VLM_MODEL / VLM_MODEL_FAMILY / VLM_API_KEY`；前端 AI 设置页也已提供这些字段；但 `backend/.env.example` 只列出了 DSL 相关环境变量，未同步 VLM 配置，属于示例配置与实现不一致
+- 验证：本次为静态代码与文档核对，未运行自动化测试
+- 后续：若继续实现，建议补齐 `backend/.env.example` 中的 VLM 示例配置，并同步 README 的 AI 配置说明
+
+## 2026-03-28 23:47
+
+- 任务：补齐 VLM 配置示例并同步 AI 配置说明口径，随后输出当前项目可实现功能清单
+- 执行动作：更新 `backend/.env.example`，新增 `VLM_BASE_URL / VLM_MODEL / VLM_MODEL_FAMILY / VLM_API_KEY`；同步更新 `README.md` 的 AI 配置段落与 `backend/README.md` 的本地开发约定，明确区分 DSL 文本模型与 Tier 2 AI visual 的 VLM 模型；在 `backend/tests/unit/test_config.py` 新增 `.env.example` 关键 AI 配置断言；将 `BUG-033` 状态改为 `fixed`
+- 结果：示例配置、运行时实现与说明文档现已对齐；后续若再遗漏关键 AI 配置，单测会直接报错
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_config.py -q`
+  - `git diff --check -- backend/.env.example backend/README.md README.md backend/tests/unit/test_config.py docs/bug-log.md`
+- 后续：如需继续收口配置体验，可再把 VLM 默认关闭、灰度启用条件与典型模型示例补到更靠近快速开始的位置

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.core.config import get_settings
@@ -47,3 +49,22 @@ def test_get_settings_falls_back_when_ai_visual_int_env_is_invalid(monkeypatch) 
     assert settings.ai_visual_failure_threshold == 3
     assert settings.ai_visual_cooldown_seconds == 60
     assert settings.ai_visual_rate_limit_per_minute == 10
+
+
+def test_env_example_includes_ai_dsl_and_vlm_settings() -> None:
+    env_example = Path(__file__).resolve().parents[2] / ".env.example"
+    env_text = env_example.read_text(encoding="utf-8")
+
+    required_lines = [
+        "ENABLE_AI_DSL_GENERATE=false",
+        "AI_DSL_BASE_URL=https://api.openai.com/v1",
+        "AI_DSL_MODEL=",
+        "ENABLE_AI_VISUAL_LOCATE=false",
+        "VLM_BASE_URL=https://api.openai.com/v1",
+        "VLM_MODEL=",
+        "VLM_MODEL_FAMILY=gpt-4o",
+        "VLM_API_KEY=",
+    ]
+
+    for line in required_lines:
+        assert line in env_text

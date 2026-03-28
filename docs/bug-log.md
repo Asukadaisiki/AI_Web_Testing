@@ -50,6 +50,28 @@
   - `cd frontend && npm test -- --run src/auth/AuthContext.test.tsx src/app/AppRouter.test.tsx src/services/api.test.ts`
 - 关联记录：`docs/execution-log.md` 2026-03-28 18:18
 
+## BUG-033 | `.env.example` 未同步 VLM 配置，导致 AI visual 能力存在实现与示例配置脱节
+
+- 日期：2026-03-28
+- 状态：fixed
+- 来源：需求 / 配置核对
+- 描述：仓库当前已经在后端与前端接入 AI visual / VLM 配置链路，包括 `VLM_BASE_URL`、`VLM_MODEL`、`VLM_MODEL_FAMILY`、`VLM_API_KEY`，但 `backend/.env.example` 仍只列出 DSL 相关配置，没有同步 VLM 示例字段；用户直接阅读 example 时会误以为项目尚未接入 VLM，或无法知道应如何手工配置视觉定位能力。
+- 复现步骤：
+  1. 阅读 `backend/app/core/config.py`，确认存在 `vlm_base_url / vlm_model / vlm_model_family / vlm_api_key`
+  2. 阅读 `backend/app/locators/ai_visual.py`，确认视觉定位实际依赖 `settings.vlm_model` 与 `settings.vlm_api_key`
+  3. 阅读 `frontend/src/pages/AISettingsPage.tsx`，确认页面已提供 VLM Base URL、VLM Model、Model Family 字段
+  4. 对比 `backend/.env.example`，确认其中缺少 `VLM_BASE_URL / VLM_MODEL / VLM_MODEL_FAMILY / VLM_API_KEY`
+- 影响：会降低本地启用 AI visual 的可发现性，增加配置试错成本，也会让文档口径与实现能力不一致。
+- 根因：AI visual 能力和设置页、测试基线已持续演进，但 `.env.example` 未同步更新。
+- 建议处理：
+  - 在 `backend/.env.example` 补齐 `VLM_BASE_URL / VLM_MODEL / VLM_MODEL_FAMILY / VLM_API_KEY`
+  - 在 `README.md` 或后端说明文档中区分 DSL 模型与 VLM 模型用途
+  - 补一条配置层或文档层回归，避免后续再次遗漏
+- 验证：
+  - 人工核对 `backend/.env.example`、`backend/app/core/config.py`、`frontend/src/pages/AISettingsPage.tsx`
+  - 可选补充 `backend/tests/unit/test_ai_settings_api.py` 中对 example 文本的断言
+- 关联记录：`docs/execution-log.md` 2026-03-28 23:42
+
 ## BUG-031 | 前端全量测试在默认 5s 预算下出现假失败超时
 
 - 日期：2026-03-28

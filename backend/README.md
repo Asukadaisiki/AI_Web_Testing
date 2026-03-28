@@ -30,6 +30,7 @@
 - 首次启动前先执行 `uv run alembic upgrade head`
 - 后端启动命令：`uv run backend-dev`
 - AI DSL 生成默认关闭；如需启用，额外设置 `ENABLE_AI_DSL_GENERATE=true`、`AI_DSL_API_KEY` 与 `AI_DSL_MODEL`
+- AI visual 默认关闭；如需启用，额外设置 `ENABLE_AI_VISUAL_LOCATE=true`、`VLM_API_KEY`、`VLM_BASE_URL`、`VLM_MODEL` 与 `VLM_MODEL_FAMILY`
 
 ## Smoke 基准用例
 

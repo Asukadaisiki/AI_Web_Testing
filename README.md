@@ -86,7 +86,7 @@ uv run pytest tests/integration -m browser_integration
 - `AI_DSL_TIMEOUT_MS=15000`
 - `AI_DSL_API_KEY=`
 - `AI_DSL_BASE_URL=https://api.openai.com/v1`
-- `AI_DSL_MODEL=`
+- `AI_DSL_MODEL=`：用于自然语言生成 DSL 草案的文本模型
 - `AI_DSL_STRICT_MODE=false`
 - `AI_DSL_ALLOW_AUTO_REPAIR=true`
 - `ENABLE_AI_VISUAL_LOCATE=false`
@@ -94,6 +94,10 @@ uv run pytest tests/integration -m browser_integration
 - `AI_VISUAL_FAILURE_THRESHOLD=3`
 - `AI_VISUAL_COOLDOWN_SECONDS=60`
 - `AI_VISUAL_RATE_LIMIT_PER_MINUTE=10`
+- `VLM_BASE_URL=https://api.openai.com/v1`
+- `VLM_MODEL=`：用于 Tier 2 AI visual 的视觉模型
+- `VLM_MODEL_FAMILY=gpt-4o`
+- `VLM_API_KEY=`
 
 当 VLM 请求连续失败、超时或超过速率预算时，系统会直接跳过 Tier 2，继续走现有降级链路或进入人工干预。
 
