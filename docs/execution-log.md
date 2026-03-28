@@ -299,3 +299,16 @@
 - 验证：
   - 人工复核 `AGENTS.md` 新增规则与现有“完成后询问是否同步 GitHub”规则不冲突
 - 后续：无
+
+## 2026-03-29 01:10
+
+- 任务：将 `feat/report-center-scope-metrics` 合并回 `main`，并清理本地与远端功能分支
+- 执行动作：先把单人协作规则同步到功能分支并补一次提交；随后将主分支上的同名未提交文档改动临时收起，执行 `git merge --ff-only feat/report-center-scope-metrics` 合并回 `main`；在主分支上重新执行后端定向单测、前端页面测试与构建；最后推送 `main`、删除远端分支、移除 worktree、删除本地分支并清理临时 stash
+- 结果：报告中心改动与协作规则均已进入 `main`，`feat/report-center-scope-metrics` 已从本地和 GitHub 删除，独立 worktree 也已清理
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_case_executions_api.py tests/unit/test_projects_and_report_preferences_api.py -q`
+  - `cd frontend && npm test -- --run src/services/api.test.ts src/pages/DashboardPage.test.tsx src/pages/ReportCenterPage.test.tsx src/pages/ExecutionsPage.test.tsx`
+  - `cd frontend && npm run build`
+  - `git push origin main`
+  - `git push origin --delete feat/report-center-scope-metrics`
+- 后续：无
