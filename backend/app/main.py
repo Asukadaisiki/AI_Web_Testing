@@ -4,10 +4,10 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
+from app.api.routes.artifacts import router as artifacts_router
 from app.api.router import build_api_router
 from app.core.config import get_settings
 from app.db import verify_database_connection
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
         version=settings.app_version,
         debug=settings.debug,
     )
+    app.state.artifacts_dir = ARTIFACTS_DIR
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.auth_session_secret,
@@ -34,7 +35,7 @@ def create_app() -> FastAPI:
         https_only=settings.auth_session_https_only,
     )
     app.include_router(build_api_router())
-    app.mount("/artifacts", StaticFiles(directory=ARTIFACTS_DIR), name="artifacts")
+    app.include_router(artifacts_router)
 
     @app.get("/", tags=["meta"], summary="Service metadata")
     def read_root() -> dict[str, str]:

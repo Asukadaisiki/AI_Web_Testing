@@ -44,6 +44,16 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
@@ -67,7 +77,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401) {
       window.dispatchEvent(new CustomEvent(AUTH_UNAUTHORIZED_EVENT));
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return (await response.json()) as T;

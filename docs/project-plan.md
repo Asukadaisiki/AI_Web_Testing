@@ -72,7 +72,7 @@
 
 AI DSL 方向当前已切到 `2026-03-24.governance-v3.3`：不再重做 `wrong_actions / invalid_structure`，而是继续基于现有治理数据（`top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason`）滚动收敛剩余高频拒绝原因，目标仍是降低“初次失败且按原因重试后仍失败”的占比；治理页现在也会直接展示当前焦点的 rejected / variant / retry / retry accepted 明细。本轮还补齐了 integration 级回归，验证非法 retry 请求不会留下错误审计记录。
 
-认证方向本轮已经收口到“本地账号密码 + Cookie Session”的最小可用形态：登录、登出、当前用户、受保护路由与受保护 API 已落地；本期不做角色分层、自助注册、找回密码、第三方登录或更深的安全加固。对全新从零迁移的本地数据库，默认种子账号为 `seed-owner@example.com / password123`。
+认证方向本轮已经收口到“本地账号密码 + Cookie Session”的最小可用形态：登录、登出、当前用户、受保护路由与受保护 API 已落地；本期不做角色分层、自助注册、找回密码、第三方登录或更深的安全加固。对全新从零迁移的本地数据库，不再提供公开默认密码；本地如需继续使用种子账号，需要自行初始化或重置密码。
 
 Locator 方向不再重开新主线，P4 会话级缓存已作为 sidecar 落地；后续只围绕 AI visual 灰度验收补样本，重点验证“重复目标场景减少调用、命中率不回退、延迟可控”。当前首个本地受控窗口只确认了 3 条固定主回归稳定通过，还不能支持默认开启讨论。具体验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./ai-visual-gray-acceptance-baseline.md)，当前结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./ai-visual-gray-acceptance-2026-03-24.md)。
 

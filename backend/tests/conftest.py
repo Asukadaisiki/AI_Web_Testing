@@ -35,6 +35,8 @@ def reset_cached_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AI_DSL_MODEL", raising=False)
     monkeypatch.delenv("AI_DSL_STRICT_MODE", raising=False)
     monkeypatch.delenv("AI_DSL_ALLOW_AUTO_REPAIR", raising=False)
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("AUTH_SESSION_HTTPS_ONLY", "false")
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()

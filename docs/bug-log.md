@@ -30,6 +30,26 @@
 
 ## 当前状态
 
+## BUG-033 | Auth 启动探测与手动登录/登出存在竞态覆盖
+
+- 日期：2026-03-28
+- 状态：fixed
+- 来源：修复 BUG-032 过程中的前端认证测试
+- 描述：`AuthProvider` 在启动时会异步请求 `/auth/me` 恢复登录态；如果用户在该请求完成前手动执行 login 或 logout，旧的 `/auth/me` 返回结果可能覆盖最新认证态，导致测试与真实页面都出现“刚登录又被恢复成未登录”或“刚登出又被旧状态顶回去”的竞态
+- 复现步骤：
+  1. 渲染 `AuthProvider`，让启动阶段的 `getCurrentUser()` 保持异步返回
+  2. 在该请求完成前触发 `auth.login()` 或 `auth.logout()`
+  3. 观察旧的启动请求完成后重新覆盖 `currentUser` 与 `isAuthenticated`
+- 影响：认证壳层在慢网络或多账号切换场景下可能短暂显示错误身份状态，放大缓存与路由守卫的判断偏差
+- 根因：启动阶段的 `/auth/me` 请求结果没有做版本失效控制，后续认证动作也没有主动使旧请求失效
+- 处理：
+  - 在 `frontend/src/auth/AuthContext.tsx` 中为启动态认证探测增加版本失效控制
+  - 在 login/logout/401 回退时递增版本号，丢弃旧的 `/auth/me` 返回结果
+  - 在 `frontend/src/auth/AuthContext.test.tsx` 中补充稳定的 QueryClient mock 并验证竞态修复后状态不再被覆盖
+- 验证：
+  - `cd frontend && npm test -- --run src/auth/AuthContext.test.tsx src/app/AppRouter.test.tsx src/services/api.test.ts`
+- 关联记录：`docs/execution-log.md` 2026-03-28 18:18
+
 ## BUG-031 | 前端全量测试在默认 5s 预算下出现假失败超时
 
 - 日期：2026-03-28
@@ -66,7 +86,7 @@
 - 处理：
   - 在 `backend/pyproject.toml` 与 `backend/uv.lock` 中补充 `itsdangerous`
   - 将 `is_active` 的迁移默认值改为 `sa.true()`
-  - 将迁移中的 `LEGACY_PASSWORD_HASH` 对齐到 `password123`，并新增单测锁定该约定
+  - 临时将迁移中的 `LEGACY_PASSWORD_HASH` 对齐到公开默认密码，并新增单测锁定该约定
 - 验证：
   - 执行 `cd backend && uv run alembic upgrade head`，结果成功
   - 执行 `cd backend && uv run pytest tests/unit/test_auth_api.py -q`，结果 `8 passed`
@@ -709,3 +729,27 @@
   - 执行 `cd backend && uv run pytest tests/integration/test_intervention_regression.py -k reranked_by_vlm`
   - 执行 `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx`
 - 关联记录：`docs/execution-log.md` 2026-03-19（follow-up）
+## BUG-032 | M1 基础认证收口仍存在默认密码、会话默认值和证据匿名暴露风险
+
+- 日期：2026-03-28
+- 状态：fixed
+- 来源：代码评审
+- 描述：审查认证收口 range 时确认 3 个生产风险点：`20260324_0015` 迁移会把所有已有 `users` 行回填为固定公开默认密码；Cookie Session 依赖的 `AUTH_SESSION_SECRET` 默认值是公开常量且 `AUTH_SESSION_HTTPS_ONLY` 默认关闭；执行证据 `/artifacts/**` 仍由 `StaticFiles` 直接匿名暴露。此外，前端登出或统一 401 回退后没有清空 React Query 缓存，多账号共用同一浏览器时可能短暂看到上一账号缓存数据
+- 复现步骤：
+  1. 阅读 `backend/alembic/versions/20260324_0015_user_auth_baseline.py`，确认 `password_hash` 列以固定 `LEGACY_PASSWORD_HASH` 回填全部存量用户
+  2. 阅读 `backend/app/core/config.py` 与 `backend/app/main.py`，确认 SessionMiddleware 使用公开默认 secret，且默认不启用 `Secure` Cookie
+  3. 阅读 `backend/app/main.py` 与 `backend/tests/unit/test_main.py`，确认 `/artifacts/**` 可匿名访问
+  4. 阅读 `frontend/src/app/App.tsx`、`frontend/src/auth/AuthContext.tsx` 与多个页面的固定 query key，确认退出登录或 401 仅清空当前用户，不清理 QueryClient 缓存
+- 影响：已存在用户可被固定默认密码接管；若部署漏配 session secret 或未启用 HTTPS only，攻击者可伪造或窃取登录态；未鉴权的执行截图与证据可被直接访问；前端缓存残留会在共享终端上造成跨账号数据泄露
+- 根因：为了快速完成 M1 入口收口，迁移和 session 配置采用了本地演示默认值，证据静态资源未纳入新认证边界，前端新增认证态但没有同时处理缓存隔离
+- 处理：
+  - 将迁移中的 `LEGACY_PASSWORD_HASH` 改为不可直接登录的重置占位值，并同步更新单测，避免存量用户共享公开默认密码
+  - 在 `backend/app/core/config.py` 中移除公开 session secret 默认值，启动时强制要求显式 `AUTH_SESSION_SECRET`，并把 `AUTH_SESSION_HTTPS_ONLY` 默认值切到 `true`
+  - 用受鉴权的 artifacts 下载路由替换 `backend/app/main.py` 中的匿名 `StaticFiles` 挂载
+  - 在 `frontend/src/services/api.ts` / `frontend/src/auth/AuthContext.tsx` 中为 401 回退清理 `QueryClient` 缓存，并把 `/auth/me` 的非 401 失败保留为错误态
+  - 同步更新 `README.md`、`docs/project-plan.md` 与 `backend/.env.example` 的本地安全配置口径
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_config.py tests/unit/test_main.py tests/unit/test_auth_api.py -q`
+  - `cd backend && uv run pytest tests/unit/test_cases_api.py tests/unit/test_suites_api.py tests/unit/test_corrections_api.py tests/unit/test_case_executions_api.py tests/unit/test_ai_settings_api.py tests/unit/test_dsl_validation.py tests/integration/test_dsl_retry_governance.py -q`
+  - `cd frontend && npm test -- --run src/auth/AuthContext.test.tsx src/app/AppRouter.test.tsx src/pages/LoginPage.test.tsx src/services/api.test.ts`
+- 关联记录：`docs/execution-log.md` 2026-03-28 18:18

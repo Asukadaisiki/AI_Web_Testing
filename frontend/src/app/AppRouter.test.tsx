@@ -86,6 +86,7 @@ function renderRouter(initialEntries: string[]) {
 test("根路由默认跳转到 dashboard，并展示 v3.4 导航入口", async () => {
   useAuthMock.mockReturnValue({
     currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
+    authErrorMessage: null,
     isAuthResolved: true,
     isAuthenticated: true,
     login: vi.fn(),
@@ -106,6 +107,7 @@ test("根路由默认跳转到 dashboard，并展示 v3.4 导航入口", async (
 test("报告中心路由激活时菜单选中正确", async () => {
   useAuthMock.mockReturnValue({
     currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
+    authErrorMessage: null,
     isAuthResolved: true,
     isAuthenticated: true,
     login: vi.fn(),
@@ -120,6 +122,7 @@ test("报告中心路由激活时菜单选中正确", async () => {
 test("suite 路由激活时菜单选中正确", async () => {
   useAuthMock.mockReturnValue({
     currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
+    authErrorMessage: null,
     isAuthResolved: true,
     isAuthenticated: true,
     login: vi.fn(),
@@ -134,6 +137,7 @@ test("suite 路由激活时菜单选中正确", async () => {
 test("suite run 详情路由可正常渲染", async () => {
   useAuthMock.mockReturnValue({
     currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
+    authErrorMessage: null,
     isAuthResolved: true,
     isAuthenticated: true,
     login: vi.fn(),
@@ -147,6 +151,7 @@ test("suite run 详情路由可正常渲染", async () => {
 test("corrections 路由激活时菜单选中正确", async () => {
   useAuthMock.mockReturnValue({
     currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
+    authErrorMessage: null,
     isAuthResolved: true,
     isAuthenticated: true,
     login: vi.fn(),
@@ -161,6 +166,7 @@ test("corrections 路由激活时菜单选中正确", async () => {
 test("AI 配置路由激活时菜单选中正确", async () => {
   useAuthMock.mockReturnValue({
     currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
+    authErrorMessage: null,
     isAuthResolved: true,
     isAuthenticated: true,
     login: vi.fn(),
@@ -175,6 +181,7 @@ test("AI 配置路由激活时菜单选中正确", async () => {
 test("未登录访问受保护路由时跳转到 login", async () => {
   useAuthMock.mockReturnValue({
     currentUser: null,
+    authErrorMessage: null,
     isAuthResolved: true,
     isAuthenticated: false,
     login: vi.fn(),
@@ -185,4 +192,21 @@ test("未登录访问受保护路由时跳转到 login", async () => {
 
   expect(await screen.findByText("Login Mock")).toBeInTheDocument();
   expect(screen.queryByText("Cases Mock")).not.toBeInTheDocument();
+});
+
+test("认证状态加载失败时展示错误块而不是跳转 login", async () => {
+  useAuthMock.mockReturnValue({
+    currentUser: null,
+    authErrorMessage: "服务暂时不可用",
+    isAuthResolved: true,
+    isAuthenticated: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+  });
+
+  renderRouter(["/cases"]);
+
+  expect(await screen.findByText("加载失败")).toBeInTheDocument();
+  expect(screen.getByText("服务暂时不可用")).toBeInTheDocument();
+  expect(screen.queryByText("Login Mock")).not.toBeInTheDocument();
 });

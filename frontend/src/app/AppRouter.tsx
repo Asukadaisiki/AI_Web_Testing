@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
+import { ErrorBlock } from "../components/PageFeedback";
 import { AppLayout } from "../layouts/AppLayout";
 import { LoadingBlock } from "../components/PageFeedback";
 
@@ -43,10 +44,13 @@ const LoginPage = lazy(() =>
 );
 
 function ProtectedRoute() {
-  const { isAuthResolved, isAuthenticated } = useAuth();
+  const { authErrorMessage, isAuthResolved, isAuthenticated } = useAuth();
 
   if (!isAuthResolved) {
     return <LoadingBlock />;
+  }
+  if (authErrorMessage) {
+    return <ErrorBlock message={authErrorMessage} />;
   }
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;

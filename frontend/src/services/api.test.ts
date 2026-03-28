@@ -95,6 +95,31 @@ test("auth endpoints use cookie credentials", async () => {
   );
 });
 
+test("getCurrentUser 在 401 时派发未授权事件，在 5xx 时不派发", async () => {
+  const unauthorizedListener = vi.fn();
+  window.addEventListener("auth:unauthorized", unauthorizedListener);
+
+  fetchMock.mockResolvedValueOnce({
+    ok: false,
+    status: 401,
+    statusText: "Unauthorized",
+    json: async () => ({ detail: "未登录或登录态已失效。" }),
+  });
+  await expect(getCurrentUser()).rejects.toMatchObject({ message: "未登录或登录态已失效。", status: 401 });
+  expect(unauthorizedListener).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockResolvedValueOnce({
+    ok: false,
+    status: 503,
+    statusText: "Service Unavailable",
+    json: async () => ({ detail: "服务暂时不可用" }),
+  });
+  await expect(getCurrentUser()).rejects.toMatchObject({ message: "服务暂时不可用", status: 503 });
+  expect(unauthorizedListener).toHaveBeenCalledTimes(1);
+
+  window.removeEventListener("auth:unauthorized", unauthorizedListener);
+});
+
 test("generateDslCase posts prompt payload to DSL generate endpoint", async () => {
   await generateDslCase({
     prompt: "打开 example.com 并验证 URL",

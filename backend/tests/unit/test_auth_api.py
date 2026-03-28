@@ -22,8 +22,8 @@ def _load_legacy_password_hash() -> str:
 LEGACY_PASSWORD_HASH = _load_legacy_password_hash()
 
 
-def test_legacy_seed_password_hash_matches_default_password() -> None:
-    assert verify_password("password123", LEGACY_PASSWORD_HASH)
+def test_legacy_seed_password_hash_requires_manual_reset() -> None:
+    assert verify_password("password123", LEGACY_PASSWORD_HASH) is False
 
 
 def test_login_returns_current_user_and_sets_session_cookie(anonymous_client) -> None:

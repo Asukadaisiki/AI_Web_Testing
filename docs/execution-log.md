@@ -7,11 +7,20 @@
 - 每次处理需求后按时间倒序追加一条记录。
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
+## 2026-03-28 18:18
+
+- 任务：修复认证收口 review 提出的默认密码、session 配置、artifacts 匿名访问、前端缓存隔离和 `/auth/me` 误报登录失效问题
+- 执行动作：按 TDD 先补齐 `AUTH_SESSION_SECRET` 必填、`AUTH_SESSION_HTTPS_ONLY` 默认开启、`/artifacts/**` 必须鉴权、`LEGACY_PASSWORD_HASH` 不可再匹配公开默认密码、前端 logout/401 清空 React Query 缓存、`/auth/me` 仅在 401 时判定为未登录的失败测试；随后在后端移除公开 session secret 默认值并增加 fail-fast，新增受保护的 artifacts 下载路由替换 `StaticFiles` 匿名挂载，将认证迁移中的存量密码回填改为不可直接登录的重置占位值；前端在 API 层补充带 `status` 的 `ApiError`，在 `AuthContext` 中区分 401 与 5xx/网络故障、清空缓存并阻断启动态竞态覆盖，在 `ProtectedRoute` 中对认证加载失败展示错误块而不是跳转登录页；同步刷新 `README.md`、`docs/project-plan.md` 与 `backend/.env.example` 的安全口径
+- 结果：review 中的 2 个 Critical、2 个 Important 与 1 个 Minor 均已收口；后端启动现在要求显式 session secret，Secure Cookie 默认开启，执行证据改为受登录保护访问，前端多账号切换不再残留上一账号缓存，`/auth/me` 的非 401 失败会保留错误态而不是误报为登录失效
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_config.py tests/unit/test_main.py tests/unit/test_auth_api.py -q`，结果 `14 passed`
+  - `cd frontend && npm test -- --run src/auth/AuthContext.test.tsx src/app/AppRouter.test.tsx src/services/api.test.ts`，结果 `24 passed`
+- 后续：继续执行一轮受影响后端 API、DSL 治理回归与前端构建验证，确认本次修复没有带入新的 blocker
 
 ## 2026-03-28 17:32
 
 - 任务：实现 M1 收口计划中的“治理主线收尾 + 平台基础认证入口”，并完成最终验证与文档收口
-- 执行动作：在后端新增 Cookie Session 认证配置、密码哈希与会话读写能力，落地 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` 与统一登录依赖；将业务 API 切换为默认要求登录，并把 `cases / suites / executions / corrections / dsl` 等写接口中的 `actor_user_id / created_by` 改为由登录态覆盖；扩展 `users` 模型与 Alembic 迁移，新增非法 retry 不留错误审计记录的 integration 回归；前端新增 `AuthProvider`、`/login`、受保护路由、Header 当前用户与统一 `401` 回退；在验证阶段修复 `20260324_0015` 的 PostgreSQL `BOOLEAN DEFAULT 1` 兼容性、补上 `itsdangerous` 运行时依赖、将迁移回填默认密码对齐为本地种子账号 `password123`，并为 5 条全量运行易超时的前端页面测试补显式 timeout；同步更新 `README.md` 与 `docs/project-plan.md`
+- 执行动作：在后端新增 Cookie Session 认证配置、密码哈希与会话读写能力，落地 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` 与统一登录依赖；将业务 API 切换为默认要求登录，并把 `cases / suites / executions / corrections / dsl` 等写接口中的 `actor_user_id / created_by` 改为由登录态覆盖；扩展 `users` 模型与 Alembic 迁移，新增非法 retry 不留错误审计记录的 integration 回归；前端新增 `AuthProvider`、`/login`、受保护路由、Header 当前用户与统一 `401` 回退；在验证阶段修复 `20260324_0015` 的 PostgreSQL `BOOLEAN DEFAULT 1` 兼容性、补上 `itsdangerous` 运行时依赖，并为 5 条全量运行易超时的前端页面测试补显式 timeout；同步更新 `README.md` 与 `docs/project-plan.md`
 - 结果：M1 基础认证入口已可运行，主业务 API 已默认受登录保护，治理主线继续以 `2026-03-24.governance-v3.3` 收尾；clean-environment 下的迁移、后端认证测试、前端全量测试、前端构建和 3 条固定浏览器主回归均通过，README 与项目计划已改为“认证入口 + 主线收尾”的当前口径
 - 验证：
   - `cd backend && uv run pytest tests/unit/test_auth_api.py tests/integration/test_dsl_retry_governance.py -q`，结果 `8 passed`
@@ -224,3 +233,13 @@
 
 - 新增 `docs/execution-log.md` 与 `docs/bug-log.md`
 - 在 `AGENTS.md` 增加日志沉淀规则与 GitHub 同步追问规则
+## 2026-03-28 18:05
+
+- 任务：审查 git range `09096c8102e2ecade17d27c2e7fc9d4ec0d9fcc2..e07cb6c38752f9608fbb4a5bc3943559019cacfe` 的生产可用性，重点核对 M1 基础认证入口、业务 API 默认登录保护、前端登录态恢复与统一 401 回退
+- 执行动作：按 diff review 路径检查后端认证路由、SessionMiddleware 配置、用户迁移、静态 artifacts 暴露面、前端 AuthContext / ProtectedRoute / React Query 缓存边界，并补跑认证相关后端单测、受影响业务 API 回归与前端认证测试
+- 结果：确认认证主链路和主要回归测试均可通过，但发现 3 个生产风险点：迁移将所有存量用户回填为固定公开默认密码、会话密钥与 Secure Cookie 默认值不安全、执行证据 artifacts 仍可匿名访问；另外前端在登出或 401 后未清理 React Query 缓存，存在同浏览器多账号切换时的数据残留风险
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_auth_api.py`
+  - `cd backend && uv run pytest tests/unit/test_cases_api.py tests/unit/test_suites_api.py tests/unit/test_corrections_api.py tests/unit/test_case_executions_api.py tests/unit/test_ai_settings_api.py tests/unit/test_dsl_validation.py tests/integration/test_dsl_retry_governance.py`
+  - `cd frontend && npm test -- --run src/auth/AuthContext.test.tsx src/app/AppRouter.test.tsx src/pages/LoginPage.test.tsx src/services/api.test.ts`
+- 后续：优先修复 `BUG-032` 中记录的认证与证据暴露问题，再决定是否同步当前改动到 GitHub

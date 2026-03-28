@@ -127,11 +127,12 @@ npm run dev
 默认前端地址：
 - `http://127.0.0.1:5173`
 
-默认本地种子账号（从零执行迁移创建数据库时）：
-- 邮箱：`seed-owner@example.com`
-- 密码：`password123`
+认证相关本地配置：
+- `AUTH_SESSION_SECRET` 现在必须显式配置，建议先复制 `backend/.env.example` 到 `backend/.env` 后填写自己的 session secret
+- 本地若仍通过 `http://127.0.0.1` 调试，需要显式设置 `AUTH_SESSION_HTTPS_ONLY=false`；在 HTTPS 环境下应保持 `true`
+- 从零迁移创建数据库时不再提供公开默认密码；如需继续使用种子账号 `seed-owner@example.com`，请在本地手动初始化或重置 `users.password_hash`
 
-如果你的本地数据库已经在本次认证改造前升级过 `20260324_0015`，需要重建本地库后重新执行迁移，或手动重置 `users.password_hash`。
+如果你的本地数据库已经在本次认证改造前升级过 `20260324_0015`，建议重建本地库后重新执行迁移，或手动重置 `users.password_hash`。
 
 ## 测试与构建
 

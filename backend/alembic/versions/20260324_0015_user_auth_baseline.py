@@ -13,8 +13,8 @@ depends_on = None
 
 
 LEGACY_PASSWORD_HASH = (
-    "pbkdf2_sha256$120000$sbXym6UpxQI2y3U6D1V2Uw==$"
-    "iLXbNUmIAszruEDustYcExHVdJyOPLaj9sqqk7GG3FY="
+    "pbkdf2_sha256$120000$legacy-password-reset-required$"
+    "legacy-password-reset-required"
 )
 
 

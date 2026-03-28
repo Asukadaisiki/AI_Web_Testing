@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -7,6 +8,18 @@ import { AuthProvider, useAuth } from "./AuthContext";
 const getCurrentUserMock = vi.fn();
 const loginMock = vi.fn();
 const logoutMock = vi.fn();
+const clearQueryCacheMock = vi.fn();
+const queryClientMock = {
+  clear: clearQueryCacheMock,
+};
+
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
+  return {
+    ...actual,
+    useQueryClient: () => queryClientMock,
+  };
+});
 
 vi.mock("../services/api", () => ({
   AUTH_UNAUTHORIZED_EVENT: "auth:unauthorized",
@@ -23,6 +36,7 @@ function AuthProbe() {
       <div>resolved:{String(auth.isAuthResolved)}</div>
       <div>authenticated:{String(auth.isAuthenticated)}</div>
       <div>user:{auth.currentUser?.display_name ?? "none"}</div>
+      <div>error:{auth.authErrorMessage ?? "none"}</div>
       <button type="button" onClick={() => auth.login({ email: "seed-owner@example.com", password: "password123" })}>
         login
       </button>
@@ -102,6 +116,7 @@ test("logout 和 401 事件都会清空登录态", async () => {
   await waitFor(() => {
     expect(screen.getByText("authenticated:false")).toBeInTheDocument();
   });
+  expect(clearQueryCacheMock).toHaveBeenCalledTimes(1);
 
   await act(async () => {
     window.dispatchEvent(new CustomEvent("auth:unauthorized"));
@@ -109,4 +124,19 @@ test("logout 和 401 事件都会清空登录态", async () => {
   await waitFor(() => {
     expect(screen.getByText("user:none")).toBeInTheDocument();
   });
+  expect(clearQueryCacheMock).toHaveBeenCalledTimes(2);
+});
+
+test("me 接口非 401 失败时保留错误态而不是误报未登录", async () => {
+  getCurrentUserMock.mockRejectedValue(Object.assign(new Error("服务暂时不可用"), { status: 503 }));
+
+  renderWithProviders(
+    <AuthProvider>
+      <AuthProbe />
+    </AuthProvider>,
+  );
+
+  expect(await screen.findByText("resolved:true")).toBeInTheDocument();
+  expect(screen.getByText("authenticated:false")).toBeInTheDocument();
+  expect(screen.getByText("error:服务暂时不可用")).toBeInTheDocument();
 });
