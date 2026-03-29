@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Project, ProjectMember, ReportPreference, TestCase, TestCaseRun, TestSuite
+from app.models import Project, ProjectMember, ReportPreference, TestCase, TestCaseRun
 from app.schemas.reports import ReportPreferencePayload
 from app.services.cases import EntityNotFoundError
 
@@ -122,18 +122,8 @@ def _get_recent_active_project_id(
         .order_by(TestCase.updated_at.desc(), TestCase.id.desc())
         .limit(1)
     ).first()
-    latest_suite = session.execute(
-        select(TestSuite.project_id, TestSuite.updated_at)
-        .where(
-            TestSuite.project_id.in_(accessible_project_ids),
-            or_(TestSuite.created_by == user_id, TestSuite.updated_by == user_id),
-        )
-        .order_by(TestSuite.updated_at.desc(), TestSuite.id.desc())
-        .limit(1)
-    ).first()
-
     candidates: list[tuple[datetime, int]] = []
-    for row in (latest_execution, latest_case, latest_suite):
+    for row in (latest_execution, latest_case):
         if row is None:
             continue
         project_id, activity_at = row

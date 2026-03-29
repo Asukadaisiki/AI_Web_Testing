@@ -16,9 +16,9 @@ AI 增强的 Web UI 自动化测试平台。
 - 按核心五阶段产品目标看：约 `75% - 80%`
 
 已完成的核心能力：
-- 平台基础：Dashboard、Case 管理、Suite 管理、执行中心、报告中心、修正记录、AI 设置、登录鉴权入口
-- 执行主链路：DSL 校验、单 Case 执行、Suite 批量执行与失败重跑、步骤级证据、执行详情与批次详情
-- Suite Context：输入/输出契约、跨 Case 上下文传递、上下文快照、失败重跑上下文复用、前端证据展示
+- 平台基础：Dashboard、Case 管理、执行中心、报告中心、修正记录、AI 设置、登录鉴权入口
+- 执行主链路：DSL 校验、单 Case 执行、步骤级证据、执行详情与报告聚合
+- Case 契约：输入/输出契约编辑已支持，可作为后续项目级编排的基础
 - 混合定位闭环：Tier 0 人工修正、Tier 1 DOM 语义定位、Tier 2 AI visual、Tier 3 人工干预，以及 P0-P4 精度/缓存优化
 - AI DSL：自然语言生成、草案预览与导入、反馈闭环、治理页观测、`2026-03-24.governance-v3.3` 数据驱动收敛
 - 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回退
@@ -37,14 +37,6 @@ AI 增强的 Web UI 自动化测试平台。
 
 AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./docs/ai-visual-gray-acceptance-baseline.md)，本轮结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./docs/ai-visual-gray-acceptance-2026-03-24.md)。
 
-## Suite Context 使用路径
-
-建议按下面的顺序验证 `Suite Context v2.3`：
-1. 在 `Case 工作台` 为 Case A 配置 `output_contract`
-2. 在 `Case 工作台` 为 Case B 配置 `input_contract`，并在步骤里使用 `${context_key}`
-3. 将两个 Case 放入同一个 Suite，执行后在 `Suite 批次详情` 查看上下文快照和变量读写证据
-4. 打开子执行详情页，确认 `Suite Context` 读写证据、解析失败原因和来源批次展示正常
-
 ## 人工干预路径
 
 当定位链路无法命中目标时：
@@ -58,10 +50,9 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
 
 仓库现在提供本地可控的浏览器级回归链路，用于验证：
 
-- 3 条固定主回归：
+- 2 条固定主回归：
   - 单 Case smoke 可稳定执行成功
   - 首次执行落为 `needs_intervention`，提交 correction 后可重跑通过，再次执行由 Tier 0 命中
-  - Suite Context 失败重跑可复用原始上下文快照
 - 2 条扩展回归：
   - 错误 correction 连续失败 3 次后会自动停用
   - DOM candidates 被 VLM rerank 时可稳定选中更优目标
@@ -178,9 +169,7 @@ npm run build
 建议按下面顺序检查：
 1. 在 Case 工作台创建并保存用例
 2. 直接执行单 Case，确认执行详情、截图和证据正常
-3. 创建包含 2 个 Case 的 Suite
-4. 执行 Suite，确认生成批次详情
-5. 制造 1 个失败 Case，验证失败重跑与历史回看
+3. 制造 1 个失败 Case，验证失败重跑与历史回看
 
 ## 文档索引
 

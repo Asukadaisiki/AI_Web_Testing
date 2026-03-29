@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import text
-
 from app.core.auth import hash_password
-from app.models import Project, ProjectMember, TestCase, TestCaseRun, TestSuite, User
+from app.models import Project, ProjectMember, TestCase as CaseModel, TestCaseRun as CaseRunModel, User
 
 
 def test_list_projects_returns_only_current_user_projects(client, db_session) -> None:
@@ -51,7 +49,7 @@ def test_get_report_preference_defaults_to_recent_active_project(client, db_sess
     )
     db_session.flush()
     db_session.add(
-        TestCase(
+        CaseModel(
             id=1,
             project_id=2,
             created_by=1,
@@ -112,7 +110,7 @@ def test_report_preference_round_trip_is_user_scoped(anonymous_client, client, d
         [
             ProjectMember(project_id=2, user_id=1, role="owner"),
             ProjectMember(project_id=2, user_id=2, role="owner"),
-            TestCase(
+            CaseModel(
                 id=1,
                 project_id=2,
                 created_by=1,
@@ -162,29 +160,21 @@ def test_report_preference_round_trip_is_user_scoped(anonymous_client, client, d
     }
 
 
-def test_recent_activity_prefers_latest_execution_over_older_case_or_suite_activity(client, db_session) -> None:
+def test_recent_activity_ignores_suite_updates_and_prefers_case_or_execution_activity(client, db_session) -> None:
     db_session.add_all(
         [
             Project(id=2, name="Project Two", description="two"),
             ProjectMember(project_id=2, user_id=1, role="owner"),
-            TestCase(
+            CaseModel(
                 id=1,
-                project_id=1,
+                project_id=2,
                 created_by=1,
                 updated_by=1,
-                name="Older Edited Case",
+                name="Recently Edited Case",
                 description=None,
-                dsl={"name": "Older Edited Case", "base_url": "https://example.com", "steps": [{"action": "goto", "value": "/"}]},
+                dsl={"name": "Recently Edited Case", "base_url": "https://example.com", "steps": [{"action": "goto", "value": "/"}]},
             ),
-            TestSuite(
-                id=1,
-                project_id=1,
-                created_by=1,
-                updated_by=1,
-                name="Older Suite",
-                description=None,
-            ),
-            TestCase(
+            CaseModel(
                 id=2,
                 project_id=2,
                 created_by=1,
@@ -198,7 +188,7 @@ def test_recent_activity_prefers_latest_execution_over_older_case_or_suite_activ
     db_session.flush()
     now = datetime.now(UTC).replace(tzinfo=None, hour=12, minute=0, second=0, microsecond=0)
     db_session.add(
-        TestCaseRun(
+        CaseRunModel(
             id=1,
             case_id=2,
             project_id=2,
@@ -210,8 +200,9 @@ def test_recent_activity_prefers_latest_execution_over_older_case_or_suite_activ
             finished_at=now + timedelta(milliseconds=100),
         )
     )
-    db_session.execute(text("UPDATE test_cases SET updated_at = :updated_at WHERE id = 1"), {"updated_at": now - timedelta(days=1)})
-    db_session.execute(text("UPDATE test_suites SET updated_at = :updated_at WHERE id = 1"), {"updated_at": now - timedelta(hours=2)})
+    case = db_session.get(CaseModel, 1)
+    assert case is not None
+    case.updated_at = now - timedelta(hours=1)
     db_session.commit()
 
     response = client.get("/api/v1/reports/preferences")

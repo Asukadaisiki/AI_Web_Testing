@@ -1221,7 +1221,7 @@ export function CaseWorkbenchPage() {
                       </div>
                       <Input.TextArea
                         rows={2}
-                        placeholder="可选：说明这个变量在 Suite 中的来源或用途"
+                        placeholder="可选：说明这个变量在项目上下文中的来源或用途"
                         value={contract.description ?? ""}
                         onChange={(event) =>
                           syncInputContracts(
@@ -1245,7 +1245,7 @@ export function CaseWorkbenchPage() {
                   </Card>
                 ))
               ) : (
-                <Alert type="info" showIcon message="当前没有输入契约，Case 将不会从 Suite Context 读取变量。" />
+                <Alert type="info" showIcon message="当前没有输入契约，Case 将不会从上下文中读取变量。" />
               )}
             </Space>
 
@@ -1349,7 +1349,7 @@ export function CaseWorkbenchPage() {
                   </Card>
                 ))
               ) : (
-                <Alert type="info" showIcon message="当前没有输出契约，Case 执行后不会向 Suite Context 回写变量。" />
+                <Alert type="info" showIcon message="当前没有输出契约，Case 执行后不会向上下文回写变量。" />
               )}
             </Space>
           </Space>

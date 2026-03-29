@@ -19,18 +19,6 @@ vi.mock("../pages/CasesPage", () => ({
   CasesPage: () => <div>Cases Mock</div>,
 }));
 
-vi.mock("../pages/SuitesPage", () => ({
-  SuitesPage: () => <div>Suites Mock</div>,
-}));
-
-vi.mock("../pages/SuiteWorkbenchPage", () => ({
-  SuiteWorkbenchPage: () => <div>Suite Workbench Mock</div>,
-}));
-
-vi.mock("../pages/SuiteRunDetailPage", () => ({
-  SuiteRunDetailPage: () => <div>Suite Run Detail Mock</div>,
-}));
-
 vi.mock("../pages/ExecutionsPage", () => ({
   ExecutionsPage: () => <div>Executions Mock</div>,
 }));
@@ -98,10 +86,10 @@ test("根路由默认跳转到 dashboard，并展示 v3.4 导航入口", async (
   expect(screen.getByText("混合定位稳定化 v3.4")).toBeInTheDocument();
   expect(screen.getByText("Seed Owner")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "仪表盘" })).toHaveAttribute("href", "/dashboard");
-  expect(screen.getByRole("link", { name: "Suite 管理" })).toHaveAttribute("href", "/suites");
   expect(screen.getByRole("link", { name: "修正记录" })).toHaveAttribute("href", "/corrections");
   expect(screen.getByRole("link", { name: "AI 配置" })).toHaveAttribute("href", "/settings/ai");
   expect(screen.getByRole("link", { name: "报告中心" })).toHaveAttribute("href", "/reports");
+  expect(screen.queryByRole("link", { name: "Suite 管理" })).not.toBeInTheDocument();
 });
 
 test("报告中心路由激活时菜单选中正确", async () => {
@@ -119,7 +107,7 @@ test("报告中心路由激活时菜单选中正确", async () => {
   expect(screen.getByRole("link", { name: "报告中心" }).closest("li")).toHaveClass("ant-menu-item-selected");
 });
 
-test("suite 路由激活时菜单选中正确", async () => {
+test("suite 路由已下线，不再命中任何页面", async () => {
   useAuthMock.mockReturnValue({
     currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
     authErrorMessage: null,
@@ -130,22 +118,7 @@ test("suite 路由激活时菜单选中正确", async () => {
   });
   renderRouter(["/suites"]);
 
-  expect(await screen.findByText("Suites Mock")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "Suite 管理" }).closest("li")).toHaveClass("ant-menu-item-selected");
-});
-
-test("suite run 详情路由可正常渲染", async () => {
-  useAuthMock.mockReturnValue({
-    currentUser: { id: 1, email: "seed-owner@example.com", display_name: "Seed Owner" },
-    authErrorMessage: null,
-    isAuthResolved: true,
-    isAuthenticated: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-  });
-  renderRouter(["/suites/2/runs/8"]);
-
-  expect(await screen.findByText("Suite Run Detail Mock")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Suite 管理" })).not.toBeInTheDocument();
 });
 
 test("corrections 路由激活时菜单选中正确", async () => {

@@ -7,7 +7,12 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import LocatorCorrection, LocatorCorrectionEvent, TestCase, TestCaseRun
+from app.models import (
+    LocatorCorrection,
+    LocatorCorrectionEvent,
+    TestCase as CaseModel,
+    TestCaseRun as CaseRunModel,
+)
 
 
 def test_stage1_tables_exist(db_session: Session) -> None:
@@ -19,12 +24,9 @@ def test_stage1_tables_exist(db_session: Session) -> None:
         "locator_corrections",
         "project_members",
         "projects",
-        "suite_cases",
-        "suite_run_items",
-        "suite_runs",
+        "report_preferences",
         "test_cases",
         "test_case_runs",
-        "test_suites",
         "users",
     }
 
@@ -39,16 +41,6 @@ def test_test_case_foreign_keys_are_declared(db_session: Session) -> None:
     }
 
 
-def test_suite_case_supports_ordering_relation(db_session: Session) -> None:
-    inspector = inspect(db_session.bind)
-    unique_constraints = inspector.get_unique_constraints("suite_cases")
-
-    assert any(
-        constraint["column_names"] == ["suite_id", "order_index"]
-        for constraint in unique_constraints
-    )
-
-
 def test_test_case_run_foreign_keys_are_declared(db_session: Session) -> None:
     inspector = inspect(db_session.bind)
     foreign_keys = inspector.get_foreign_keys("test_case_runs")
@@ -60,41 +52,14 @@ def test_test_case_run_foreign_keys_are_declared(db_session: Session) -> None:
     }
 
 
-def test_suite_run_tables_foreign_keys_are_declared(db_session: Session) -> None:
+def test_suite_tables_are_not_created(db_session: Session) -> None:
     inspector = inspect(db_session.bind)
+    table_names = set(inspector.get_table_names())
 
-    suite_run_foreign_keys = inspector.get_foreign_keys("suite_runs")
-    assert {foreign_key["referred_table"] for foreign_key in suite_run_foreign_keys} == {
-        "suite_runs",
-        "test_suites",
-        "users",
-    }
-
-    suite_run_item_foreign_keys = inspector.get_foreign_keys("suite_run_items")
-    assert {foreign_key["referred_table"] for foreign_key in suite_run_item_foreign_keys} == {
-        "suite_runs",
-        "test_case_runs",
-        "test_cases",
-    }
-
-
-def test_suite_context_columns_exist(db_session: Session) -> None:
-    inspector = inspect(db_session.bind)
-
-    suite_run_columns = {column["name"] for column in inspector.get_columns("suite_runs")}
-    assert {
-        "context_source",
-        "context_source_suite_run_id",
-        "rerun_context_mode",
-        "context_snapshot",
-    }.issubset(suite_run_columns)
-
-    suite_run_item_columns = {column["name"] for column in inspector.get_columns("suite_run_items")}
-    assert {
-        "context_reads",
-        "context_writes",
-        "context_resolution_error",
-    }.issubset(suite_run_item_columns)
+    assert "test_suites" not in table_names
+    assert "suite_cases" not in table_names
+    assert "suite_runs" not in table_names
+    assert "suite_run_items" not in table_names
 
 
 def test_locator_corrections_columns_and_foreign_keys_exist(db_session: Session) -> None:
@@ -125,7 +90,7 @@ def test_locator_corrections_columns_and_foreign_keys_exist(db_session: Session)
 
 
 def test_locator_corrections_unique_active_lookup_index_enforced(db_session: Session) -> None:
-    case = TestCase(
+    case = CaseModel(
         project_id=1,
         created_by=1,
         updated_by=1,
@@ -137,7 +102,7 @@ def test_locator_corrections_unique_active_lookup_index_enforced(db_session: Ses
     db_session.commit()
     db_session.refresh(case)
 
-    execution = TestCaseRun(
+    execution = CaseRunModel(
         case_id=case.id,
         project_id=1,
         triggered_by=1,
@@ -201,7 +166,7 @@ def test_locator_correction_events_columns_and_foreign_keys_exist(db_session: Se
 
 
 def test_locator_correction_event_persists_snapshot_fields(db_session: Session) -> None:
-    case = TestCase(
+    case = CaseModel(
         project_id=1,
         created_by=1,
         updated_by=1,
@@ -213,7 +178,7 @@ def test_locator_correction_event_persists_snapshot_fields(db_session: Session) 
     db_session.commit()
     db_session.refresh(case)
 
-    execution = TestCaseRun(
+    execution = CaseRunModel(
         case_id=case.id,
         project_id=1,
         triggered_by=1,

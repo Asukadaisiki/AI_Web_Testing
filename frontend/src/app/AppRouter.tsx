@@ -12,15 +12,6 @@ const DashboardPage = lazy(() =>
 const CasesPage = lazy(() =>
   import("../pages/CasesPage").then((module) => ({ default: module.CasesPage })),
 );
-const SuitesPage = lazy(() =>
-  import("../pages/SuitesPage").then((module) => ({ default: module.SuitesPage })),
-);
-const SuiteWorkbenchPage = lazy(() =>
-  import("../pages/SuiteWorkbenchPage").then((module) => ({ default: module.SuiteWorkbenchPage })),
-);
-const SuiteRunDetailPage = lazy(() =>
-  import("../pages/SuiteRunDetailPage").then((module) => ({ default: module.SuiteRunDetailPage })),
-);
 const CaseWorkbenchPage = lazy(() =>
   import("../pages/CaseWorkbenchPage").then((module) => ({ default: module.CaseWorkbenchPage })),
 );
@@ -68,10 +59,6 @@ export function AppRouter() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/cases" element={<CasesPage />} />
-            <Route path="/suites" element={<SuitesPage />} />
-            <Route path="/suites/new" element={<SuiteWorkbenchPage />} />
-            <Route path="/suites/:suiteId/edit" element={<SuiteWorkbenchPage />} />
-            <Route path="/suites/:suiteId/runs/:runId" element={<SuiteRunDetailPage />} />
             <Route path="/cases/new" element={<CaseWorkbenchPage />} />
             <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
             <Route path="/executions" element={<ExecutionsPage />} />

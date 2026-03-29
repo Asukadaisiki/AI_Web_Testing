@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from pydantic import Field
 
-from app.schemas.dsl import DSLModel, DSLVariableSource, DSLVariableType
+from app.schemas.dsl import DSLModel
 
 
 ExecutionStatus = Literal["running", "passed", "failed", "needs_intervention"]
@@ -72,30 +72,6 @@ class NetworkEvent(DSLModel):
     status: int | None = None
     resource_type: str | None = None
     failure_text: str | None = None
-
-
-class ContextVariableReadEvidence(DSLModel):
-    name: str
-    context_key: str
-    value_type: DSLVariableType
-    resolved: bool = False
-    source_suite_run_id: int | None = None
-    error_message: str | None = None
-
-
-class ContextVariableWriteEvidence(DSLModel):
-    name: str
-    context_key: str
-    value_type: DSLVariableType
-    source: DSLVariableSource | None = None
-    status: Literal["pending", "written", "skipped"] = "pending"
-    error_message: str | None = None
-
-
-class ExecutionSuiteContextTrace(DSLModel):
-    reads: list[ContextVariableReadEvidence] = Field(default_factory=list)
-    writes: list[ContextVariableWriteEvidence] = Field(default_factory=list)
-    resolution_error: str | None = None
 
 
 class DOMElementSnapshot(DSLModel):
@@ -173,16 +149,8 @@ class StoredCaseExecutionSummary(DSLModel):
     latest_screenshot_url: str | None = None
 
 
-class ExecutionOriginSuiteRun(DSLModel):
-    suite_id: int
-    suite_name: str
-    suite_run_id: int
-
-
 class StoredCaseExecutionDetail(StoredCaseExecutionSummary):
     report: ExecutionReport | None = None
-    origin_suite_run: ExecutionOriginSuiteRun | None = None
-    suite_context: ExecutionSuiteContextTrace | None = None
 
 
 class FailureCategoryCount(DSLModel):

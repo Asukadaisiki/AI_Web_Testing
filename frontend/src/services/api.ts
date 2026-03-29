@@ -34,13 +34,6 @@ import type {
   StoredCaseSummary,
   StoredLocatorCorrection,
   StoredLocatorCorrectionEvent,
-  StoredSuiteDetail,
-  StoredSuiteRunDetail,
-  StoredSuiteRunSummary,
-  StoredSuiteSummary,
-  SuiteExecutionRequest,
-  SuiteExecutionResult,
-  SuiteMutationPayload,
   UpdateCorrectionStatePayload,
 } from "../types/api";
 
@@ -128,50 +121,6 @@ export function getCaseDetail(caseId: number) {
 
 export function createCase(payload: CaseMutationPayload) {
   return request<StoredCaseDetail>("/api/v1/cases", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function getSuites() {
-  return request<StoredSuiteSummary[]>("/api/v1/suites");
-}
-
-export function getSuiteDetail(suiteId: number) {
-  return request<StoredSuiteDetail>(`/api/v1/suites/${suiteId}`);
-}
-
-export function createSuite(payload: SuiteMutationPayload) {
-  return request<StoredSuiteDetail>("/api/v1/suites", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function updateSuite(suiteId: number, payload: SuiteMutationPayload) {
-  return request<StoredSuiteDetail>(`/api/v1/suites/${suiteId}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function executeSuite(suiteId: number, payload: SuiteExecutionRequest) {
-  return request<SuiteExecutionResult>(`/api/v1/suites/${suiteId}/execute`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function getSuiteRuns(suiteId: number) {
-  return request<StoredSuiteRunSummary[]>(`/api/v1/suites/${suiteId}/runs`);
-}
-
-export function getSuiteRunDetail(suiteId: number, runId: number) {
-  return request<StoredSuiteRunDetail>(`/api/v1/suites/${suiteId}/runs/${runId}`);
-}
-
-export function rerunFailedSuiteRun(suiteId: number, runId: number, payload: SuiteExecutionRequest) {
-  return request<SuiteExecutionResult>(`/api/v1/suites/${suiteId}/runs/${runId}/rerun-failed`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -34,21 +34,6 @@ test("澶辫触姝ラ榛樿灞曞紑锛屾敮鎸佹煡鐪嬪€欓€夎�
     failure_step_action: "click",
     latest_url: "http://example.com/login",
     latest_screenshot_url: "/artifacts/executions/12/step-01.png",
-    origin_suite_run: null,
-    suite_context: {
-      reads: [
-        {
-          name: "sessionToken",
-          context_key: "session_token",
-          value_type: "string",
-          resolved: true,
-          source_suite_run_id: 7,
-          error_message: null,
-        },
-      ],
-      writes: [],
-      resolution_error: null,
-    },
     report: {
       status: "failed",
       steps: [
@@ -133,8 +118,7 @@ test("澶辫触姝ラ榛樿灞曞紑锛屾敮鎸佹煡鐪嬪€欓€夎�
   expect(await screen.findByRole("heading", { name: "澶辫触鐢ㄤ緥" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "返回执行中心" })).toHaveAttribute("href", "/executions");
   expect(screen.getByRole("link", { name: "返回用例" })).toHaveAttribute("href", "/cases/1/edit");
-  expect(screen.getByText("Suite Context")).toBeInTheDocument();
-  expect(screen.getByText(/session_token/)).toBeInTheDocument();
+  expect(screen.queryByText("Suite Context")).not.toBeInTheDocument();
   expect(screen.getByText("No locator candidates matched target.")).toBeInTheDocument();
   expect(screen.getByText(/score=108/)).toBeInTheDocument();
   expect(screen.getByText(/rejected=element-not-enabled/)).toBeInTheDocument();
@@ -177,8 +161,6 @@ test("缂哄皯鐢ㄤ緥 Base URL 鐨勬墽琛屼細鏄剧ず淇鎻愮ず"
     failure_step_action: "goto",
     latest_url: null,
     latest_screenshot_url: null,
-    origin_suite_run: null,
-    suite_context: null,
     report: {
       status: "failed",
       steps: [
@@ -204,7 +186,7 @@ test("缂哄皯鐢ㄤ緥 Base URL 鐨勬墽琛屼細鏄剧ず淇鎻愮ず"
   expect(screen.getByRole("link", { name: "返回用例" })).toHaveAttribute("href", "/cases/8/edit");
 });
 
-test("鎵ц璇︽儏椤典紭鍏堟樉绀鸿繑鍥?Suite 鎵规閾炬帴", async () => {
+test("执行详情页优先显示返回执行列表链接", async () => {
   vi.mocked(api.getExecutionDetail).mockResolvedValue({
     id: 21,
     case_id: 5,
@@ -222,12 +204,6 @@ test("鎵ц璇︽儏椤典紭鍏堟樉绀鸿繑鍥?Suite 鎵规閾炬帴",
     failure_step_action: "click",
     latest_url: null,
     latest_screenshot_url: null,
-    origin_suite_run: {
-      suite_id: 3,
-      suite_name: "璁㈠崟濂椾欢",
-      suite_run_id: 14,
-    },
-    suite_context: null,
     report: {
       status: "failed",
       steps: [
@@ -255,8 +231,11 @@ test("鎵ц璇︽儏椤典紭鍏堟樉绀鸿繑鍥?Suite 鎵规閾炬帴",
   });
 
   expect(await screen.findByRole("heading", { name: "鏉ユ簮鍥炴祦鐢ㄤ緥" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "返回 Suite 批次" })).toHaveAttribute("href", "/suites/3/runs/14");
-  expect(screen.getByRole("link", { name: "璁㈠崟濂椾欢 / #14" })).toHaveAttribute("href", "/suites/3/runs/14");
+  expect(screen.getByRole("link", { name: "返回执行中心" })).toHaveAttribute(
+    "href",
+    "/executions?window_days=7&status=failed&case_id=5",
+  );
+  expect(screen.queryByText("来源批次")).not.toBeInTheDocument();
 });
 
 test("needs_intervention 姝ラ灞曠ず骞查闈㈡澘锛屾彁浜や慨姝ｅ悗鏄剧ず閲嶈窇鍏ュ彛", async () => {
@@ -277,8 +256,6 @@ test("needs_intervention 姝ラ灞曠ず骞查闈㈡澘锛屾彁浜や慨�
     failure_step_action: "click",
     latest_url: "https://app.example.com/login",
     latest_screenshot_url: "/artifacts/executions/31/step-01.png",
-    origin_suite_run: null,
-    suite_context: null,
     report: {
       status: "failed",
       steps: [
@@ -388,8 +365,6 @@ test("needs_intervention step shows creation error when correction submit fails"
     failure_step_action: "click",
     latest_url: "https://app.example.com/login",
     latest_screenshot_url: "/artifacts/executions/41/step-01.png",
-    origin_suite_run: null,
-    suite_context: null,
     report: {
       status: "failed",
       steps: [
@@ -464,8 +439,6 @@ test("needs_intervention step shows rerun error when rerun fails", async () => {
     failure_step_action: "click",
     latest_url: "https://app.example.com/login",
     latest_screenshot_url: "/artifacts/executions/42/step-01.png",
-    origin_suite_run: null,
-    suite_context: null,
     report: {
       status: "failed",
       steps: [

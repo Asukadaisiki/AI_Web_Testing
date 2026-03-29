@@ -13,18 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.locators.corrections import SQLAlchemyCorrectionStore
-from app.models import SuiteRun, SuiteRunItem, TestCase, TestCaseRun, TestSuite, User
+from app.models import TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, RunnerInterventionError, execute_case_with_playwright
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
-    ContextVariableReadEvidence,
-    ContextVariableWriteEvidence,
-    ExecutionOriginSuiteRun,
     ExecutionAggregateSnapshot,
     ExecutionTrendPoint,
-    ExecutionSuiteContextTrace,
     ExecutionsOverview,
     FailureCategoryCount,
     FailureRootCause,
@@ -486,27 +482,6 @@ def _to_execution_detail(session: Session, record: TestCaseRun, *, case_name: st
     return StoredCaseExecutionDetail(
         **summary.model_dump(),
         report=report,
-        origin_suite_run=_get_origin_suite_run(session, execution_id=record.id),
-        suite_context=_get_suite_context_trace(session, execution_id=record.id),
-    )
-
-
-def _get_origin_suite_run(session: Session, *, execution_id: int) -> ExecutionOriginSuiteRun | None:
-    statement = (
-        select(SuiteRunItem, SuiteRun, TestSuite.name)
-        .join(SuiteRun, SuiteRun.id == SuiteRunItem.suite_run_id)
-        .join(TestSuite, TestSuite.id == SuiteRun.suite_id)
-        .where(SuiteRunItem.execution_id == execution_id)
-    )
-    row = session.execute(statement).first()
-    if row is None:
-        return None
-
-    _item, suite_run, suite_name = row
-    return ExecutionOriginSuiteRun(
-        suite_id=suite_run.suite_id,
-        suite_name=suite_name,
-        suite_run_id=suite_run.id,
     )
 
 
@@ -515,19 +490,6 @@ def _normalize_report(report: dict | None):
         return None
     steps = [_with_artifact_url(StepExecutionEvidence.model_validate(step)) for step in report.get("steps", [])]
     return build_execution_report(status=report["status"], steps=steps)
-
-
-def _get_suite_context_trace(session: Session, *, execution_id: int) -> ExecutionSuiteContextTrace | None:
-    statement = select(SuiteRunItem).where(SuiteRunItem.execution_id == execution_id)
-    item = session.scalar(statement)
-    if item is None:
-        return None
-
-    return ExecutionSuiteContextTrace(
-        reads=[ContextVariableReadEvidence.model_validate(entry) for entry in (item.context_reads or [])],
-        writes=[ContextVariableWriteEvidence.model_validate(entry) for entry in (item.context_writes or [])],
-        resolution_error=item.context_resolution_error,
-    )
 
 
 def _with_artifact_url(step: StepExecutionEvidence) -> StepExecutionEvidence:

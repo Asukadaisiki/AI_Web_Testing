@@ -17,7 +17,6 @@ import {
 } from "antd";
 import { Link, useLocation, useParams } from "react-router-dom";
 
-import { ContextReadEvidenceList, ContextWriteEvidenceList } from "../components/ContextEvidenceList";
 import { InterventionPanel } from "../components/InterventionPanel";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { renderExecutionStatus } from "../components/executionPresentation";
@@ -299,13 +298,8 @@ export function ExecutionDetailPage() {
 
   const detail = query.data;
   const steps = detail.report?.steps ?? [];
-  const suiteBackTarget = detail.origin_suite_run
-    ? `/suites/${detail.origin_suite_run.suite_id}/runs/${detail.origin_suite_run.suite_run_id}`
-    : null;
   const backHref =
-    suiteBackTarget ||
-    (typeof state?.fromExecutions === "string" && state.fromExecutions ? state.fromExecutions : DEFAULT_EXECUTIONS_PATH);
-  const backLabel = suiteBackTarget ? "返回 Suite 批次" : "返回执行中心";
+    typeof state?.fromExecutions === "string" && state.fromExecutions ? state.fromExecutions : DEFAULT_EXECUTIONS_PATH;
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -317,7 +311,7 @@ export function ExecutionDetailPage() {
           </div>
           <Space wrap>
             <Button>
-              <Link to={backHref}>{backLabel}</Link>
+              <Link to={backHref}>返回执行中心</Link>
             </Button>
             <Button>
               <Link to={`/cases/${detail.case_id}/edit`}>返回用例</Link>
@@ -364,34 +358,11 @@ export function ExecutionDetailPage() {
               ? "-"
               : `Step ${detail.failed_step_index + 1}`}
           </Descriptions.Item>
-          <Descriptions.Item label="来源批次" span={2}>
-            {detail.origin_suite_run ? (
-              <Link to={`/suites/${detail.origin_suite_run.suite_id}/runs/${detail.origin_suite_run.suite_run_id}`}>
-                {detail.origin_suite_run.suite_name} / #{detail.origin_suite_run.suite_run_id}
-              </Link>
-            ) : (
-              "-"
-            )}
-          </Descriptions.Item>
           <Descriptions.Item label="错误摘要" span={2}>
             {detail.error_message || "-"}
           </Descriptions.Item>
         </Descriptions>
       </Card>
-
-      {detail.suite_context ? (
-        <Card title="Suite Context">
-          <Descriptions bordered column={1}>
-            <Descriptions.Item label="读取变量">
-              <ContextReadEvidenceList reads={detail.suite_context.reads} />
-            </Descriptions.Item>
-            <Descriptions.Item label="写入变量">
-              <ContextWriteEvidenceList writes={detail.suite_context.writes} />
-            </Descriptions.Item>
-            <Descriptions.Item label="解析结果">{detail.suite_context.resolution_error || "-"}</Descriptions.Item>
-          </Descriptions>
-        </Card>
-      ) : null}
 
       <Card title="步骤时间线">
         {steps.length ? (

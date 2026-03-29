@@ -899,3 +899,24 @@
   - 未配置 `AUTH_SESSION_SECRET` 时执行 `cd backend && uv run alembic upgrade head`，稳定复现报错
   - 设置 `$env:AUTH_SESSION_SECRET='temp-dev-secret'` 后执行同一命令，迁移成功升级到 `20260329_0016`
 - 关联记录：`docs/execution-log.md` 2026-03-29 01:03
+
+## BUG-040 | 历史文档仍保留 Suite 入口说明，与当前代码已下线状态不一致
+
+- 日期：2026-03-29
+- 状态：open
+- 来源：代码清理 / 文档巡检
+- 描述：本轮已清理当前代码库里的 Suite 应用层入口，并同步刷新了 `docs/project-plan.md`、`docs/frontend-design.md`、`frontend/README.md`、`backend/README.md` 等现行说明；但 `docs/AI 自动化测试增强项目规划.md`、`docs/ai-visual-gray-acceptance-baseline.md`、`docs/ai-visual-gray-acceptance-2026-03-24.md` 等历史规划/验收文档仍保留 Suite 相关叙述，和当前代码现状不完全一致
+- 复现步骤：
+  1. 查看当前代码中的 `frontend/src/app/AppRouter.tsx`、`frontend/src/layouts/AppLayout.tsx` 与 `backend/app/api/router.py`
+  2. 确认已不存在 `/suites` 路由注册、Suite 导航入口与后端 `suites` API 挂载
+  3. 再查看 `docs/AI 自动化测试增强项目规划.md`、`docs/ai-visual-gray-acceptance-baseline.md`、`docs/ai-visual-gray-acceptance-2026-03-24.md`
+  4. 可见历史文档仍保留 Suite Manager、`Step -> Case -> Suite` 或 Suite Context 回归描述
+- 影响：会误导后续开发、联调和验收，导致大家按不存在的页面/API 进行验证，也会让“项目 -> 用例”的新资产结构设计受到旧叙述干扰
+- 根因：Suite 应用层下线后，现行文档已同步，但历史规划文档与验收记录尚未按“历史方案”标注或清理
+- 建议处理：
+  - 将历史规划/验收文档中的 Suite 相关段落标记为历史方案，或补一段“当前代码已下线”的说明
+  - 明确当前资产模型以 `Project -> Case` 为主，避免旧文档继续干扰后续需求设计
+- 验证：
+  - 执行 `rg -n "(/suites\\b|Suite Context|Suite 批次|Suite 管理)" backend frontend README.md docs`
+  - 对照应用层代码确认搜索结果仅应保留在历史记录或数据库遗留层，而不应继续出现在现行产品说明中
+- 关联记录：`docs/execution-log.md` 2026-03-29 22:26

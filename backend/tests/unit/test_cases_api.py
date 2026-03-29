@@ -237,3 +237,9 @@ def test_create_case_returns_not_found_when_project_missing(client) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Project 999 not found."}
+
+
+def test_suite_routes_are_not_registered(client) -> None:
+    response = client.get("/api/v1/suites")
+
+    assert response.status_code == 404

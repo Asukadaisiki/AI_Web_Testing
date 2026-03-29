@@ -11,9 +11,7 @@
 - DSL 校验接口
 - DSL 生成草案接口（`POST /api/v1/dsl/generate`）
 - `cases` 创建、列表、详情、更新 API
-- `suites` 创建、列表、详情、更新 API
 - 单 Case 执行与执行记录查询
-- Suite 同步串行批量执行入口，复用现有 `test_case_runs`
 - `executions overview` 聚合接口，可输出通过率、平均耗时、最近失败、失败分类分布、按天趋势、失败动作分布、高频失败用例、上一窗口对比与失败根因聚合
 - `corrections overview / events / bulk` 运营接口，可输出命中趋势、事件时间线并支持批量启停
 - Playwright Runner、基础 Locator 与结构化执行报告
@@ -22,7 +20,7 @@
 ## 当前未完成
 
 - 更完整的 AI 接入层治理（模型管理、prompt 调优、审计与回放）
-- 更完整的环境配置、Suite 历史批次、失败重跑和历史对比能力
+- 更完整的环境配置、项目级回归编排与历史对比能力
 
 ## 本地开发约定
 
@@ -79,4 +77,4 @@ uv run playwright install chromium
 2. 阶段 2：Locator 服务
 3. 阶段 3：自然语言生成 DSL
 4. 阶段 4：Reporter 与报告查询
-5. 阶段 5：Suite 与回归执行
+5. 阶段 5：项目级回归执行与资产管理

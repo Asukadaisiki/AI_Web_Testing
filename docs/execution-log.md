@@ -100,6 +100,26 @@
   - 静态核对 `backend/app/locators/ai_visual.py` 中请求地址拼接逻辑为 `f"{base_url.rstrip('/')}/chat/completions"`
 - 后续：如需进一步验证智谱 VLM 是否与当前 bbox 返回格式完全兼容，建议在本地跑一条启用 AI visual 的真实定位用例；若返回坐标格式与 `gpt-4o` 分支不一致，需要补充新的 `VLM_MODEL_FAMILY` 解析分支
 
+## 2026-03-29 21:37
+
+- 任务：确认当前项目是否提供注册能力，以及在没有注册入口时本地应如何登录
+- 执行动作：检查 `frontend/src/pages/LoginPage.tsx`、`backend/app/api/routes/auth.py`、`backend/app/services/auth.py`、`backend/app/models/user.py` 与用户种子迁移，确认前端入口和后端认证路由范围
+- 结果：已确认当前仅提供登录、获取当前用户、登出三类认证接口，没有注册页和创建账号 API；本地进入系统的可行路径是为现有 `seed-owner@example.com` 设置可用密码，或手动插入一条新用户记录
+- 验证：
+  - 复核登录页仅包含 email/password 表单与提交按钮
+  - 复核 `/api/v1/auth` 路由仅暴露 `login/me/logout`
+- 后续：如要提升首次使用体验，可补一个开发态初始化用户脚本或最小“创建首个管理员”入口
+
+## 2026-03-29 21:35
+
+- 任务：确认当前仓库可用登录账号与密码口径，区分测试夹具与本地真实数据库行为
+- 执行动作：基于已核对的认证迁移、`backend/tests/unit/test_auth_api.py` 与 `backend/tests/conftest.py` 结论，整理种子账号、测试密码与真实本地库默认密码不可用的差异说明
+- 结果：已确认仓库内固定邮箱为 `seed-owner@example.com`；测试环境登录密码为 `password123`，但真实本地数据库经 Alembic 迁移后默认写入的是不可直接登录的 legacy hash，因此没有可直接使用的默认密码
+- 验证：
+  - 复核 `backend/tests/conftest.py` 中测试用户初始化
+  - 复核 `backend/alembic/versions/20260324_0015_user_auth_baseline.py` 中 legacy password hash 行为
+- 后续：如需本地可登录，需要手动重置 `users.password_hash` 或补开发初始化脚本
+
 ## 2026-03-29 20:36
 
 - 任务：基于当前仓库实现状态，确认本地启动项目所需的最小步骤、依赖与已知限制
@@ -424,3 +444,36 @@
   - `cd backend && uv run alembic upgrade head`
   - `$env:AUTH_SESSION_SECRET='temp-dev-secret'; uv run alembic upgrade head`
 - 后续：建议补齐本地 `backend/.env` 的 `AUTH_SESSION_SECRET`，并视需要在 README 或后端说明文档里明确“迁移同样依赖该变量”
+
+## 2026-03-29 22:26
+
+- 任务：下线并清理现有代码中的 `suite` 应用层入口与前端残留
+- 执行动作：移除后端 `suites` 路由注册、删除未再使用的 `backend/app/api/routes/suites.py`、`backend/app/services/suites.py` 与 `backend/app/schemas/suites.py`；同步清理前端路由、导航、Suite 页面、相关 API 封装与类型定义；执行详情页去掉 `Suite Context` 与“来源批次”展示；报告中心默认项目选择逻辑不再参考 `suite` 活动；补充/更新回归测试并同步调整 `README.md`
+- 结果：`suite` 已从当前可见应用层入口中下线，`/api/v1/suites` 返回 404，前端不再暴露 Suite 页面或相关导航；报告偏好默认项目只按 Case 编辑和执行活动判断。数据库中的历史 suite 表、模型与 Alembic 迁移暂时保留，未做破坏性删表
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_projects_and_report_preferences_api.py tests/unit/test_case_executions_api.py tests/unit/test_cases_api.py -q`
+  - `cd frontend && npm test -- --run src/app/AppRouter.test.tsx src/pages/ExecutionDetailPage.test.tsx src/services/api.test.ts`
+  - `cd frontend && npm run build`
+- 后续：历史规划文档与 `backend/README.md`、`frontend/README.md` 仍保留部分 Suite 描述，已记入 `docs/bug-log.md` 作为后续文档清理项
+
+## 2026-03-29 22:38
+
+- 任务：继续清理 `suite` 遗留模型与现行说明文档
+- 执行动作：先通过 `test_models.py` 改写失败断言，确认当前 ORM 元数据中不该再创建 suite 相关表；随后从 `backend/app/models/__init__.py` 移除 suite 模型注册并删除 `suite_case.py`、`suite_run.py`、`suite_run_item.py`、`test_suite.py`；同步刷新 `backend/README.md`、`frontend/README.md`、`docs/project-plan.md`、`docs/frontend-design.md` 的当前能力描述，统一改为 `Project -> Case` 资产口径
+- 结果：新的测试数据库不再创建 `test_suites / suite_cases / suite_runs / suite_run_items` 表；当前代码库中的现行模型层和现行说明文档已不再把 Suite 作为在用能力，剩余 `suite` 引用仅存在于 Alembic 历史迁移、历史规划文档、验收记录和“已下线”回归断言中
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_models.py tests/unit/test_projects_and_report_preferences_api.py tests/unit/test_cases_api.py tests/unit/test_case_executions_api.py -q`
+  - `cd frontend && npm test -- --run src/app/AppRouter.test.tsx src/pages/ExecutionDetailPage.test.tsx src/services/api.test.ts`
+  - `cd frontend && npm run build`
+  - `rg -n "suite|Suite|/suites|test_suites|suite_runs|suite_run_items|suite_cases|Suite Context" backend frontend README.md docs --glob '!docs/execution-log.md' --glob '!docs/bug-log.md'`
+- 后续：如需彻底从生产数据库移除 suite 表，还需要单独补一条 Alembic drop migration；这一步本轮未做
+
+## 2026-03-29 22:46
+
+- 任务：补一条 Alembic 迁移，正式删除生产数据库中的 suite 遗留表
+- 执行动作：先新增 `backend/tests/unit/test_suite_drop_migration.py`，通过临时构造 `test_suites / suite_cases / suite_runs / suite_run_items` 旧表结构，要求 `20260329_0017_drop_suite_tables.py` 能在 upgrade 时删表、downgrade 时完整恢复；确认测试先因迁移文件缺失而失败后，再新增 `backend/alembic/versions/20260329_0017_drop_suite_tables.py`，将升级路径改为按依赖顺序删除 suite 表，降级路径按旧迁移口径恢复表结构与索引
+- 结果：仓库现在具备了正式的 suite 删除迁移，Alembic 头版本已推进到 `20260329_0017`；当前不会自动执行到你的本地数据库，只有在显式运行升级命令后才会落库
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_suite_drop_migration.py -q`
+  - `cd backend && uv run alembic heads`
+- 后续：如果你要把本地或测试库真正迁到删除后的结构，再执行 `cd backend && uv run alembic upgrade head`

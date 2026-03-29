@@ -4,7 +4,7 @@
 
 本文件从属于 [AI 自动化测试增强项目规划](./AI%20自动化测试增强项目规划.md)，用于描述前端目标形态与页面设计，不单独定义产品主线。
 
-- 前端设计必须服务于核心规划中的 Planner、Locator、Reporter、Suite Manager 展示需求。
+- 前端设计必须服务于核心规划中的 Planner、Locator、Reporter 与项目级资产展示需求。
 - 正式执行能力以后端 Runner 为准，前端不承载官方执行逻辑。
 
 ## 当前落地状态（截至 2026-03-18）
@@ -19,9 +19,6 @@
 | ExecutionsPage | `/executions` | 列表 + 筛选 + 分页 + 失败步骤跳转、根因回流筛选 |
 | ExecutionDetailPage | `/executions/:executionId` | 步骤时间线 + 三块证据面板 |
 | ReportCenterPage | `/reports` | 7/14/30 天窗口、失败分类/动作分布、高频失败、根因榜 |
-| SuitesPage | `/suites` | Suite 列表、编辑、执行入口 |
-| SuiteWorkbenchPage | `/suites/new`、`/suites/:suiteId/edit` | Case 选择、顺序调整、执行摘要 |
-| SuiteRunDetailPage | `/suites/:suiteId/runs/:runId` | Suite 批次摘要、上下文快照、子执行列表与失败项重跑 |
 | CorrectionsPage | `/corrections` | 修正记录列表、overview 汇总、命中趋势图、批量启停、事件时间线抽屉 |
 | AISettingsPage | `/settings/ai` | AI 配置管理、生成概览、治理筛选表格 + 详情抽屉 |
 
@@ -32,7 +29,7 @@
 - 登录页与平台认证体系
 - 更完整的 VLM 模型管理、默认开启策略与环境隔离配置（当前仅有 `/settings/ai`）
 - 更深的定位调试区（候选元素可视化、定位评分展示）
-- Suite 批次列表维度的历史筛选、跨批次对比与更完整回放
+- 项目级回归编排、历史筛选与更完整回放
 
 ### 技术栈
 
@@ -51,7 +48,7 @@ React + TypeScript、Vite、React Router、TanStack Query、Ant Design、ECharts
 
 左侧导航 + 顶部状态栏 + 主工作区。
 
-左侧导航：仪表盘、测试用例、测试套件、执行中心、报告中心、修正管理、AI 设置
+左侧导航：仪表盘、测试用例、执行中心、报告中心、修正管理、AI 设置
 
 ## 关键页面设计要点
 
@@ -76,7 +73,7 @@ React + TypeScript、Vite、React Router、TanStack Query、Ant Design、ECharts
 1. 步骤流转：当前执行到哪一步、失败在哪一步
 2. 元素定位：target、候选元素、最终命中
 3. 证据记录：截图、URL、日志、断言结果
-4. 测试资产：Case、Suite、执行历史、失败趋势
+4. 测试资产：Project、Case、执行历史、失败趋势
 
 ## 交互原则
 

@@ -11,7 +11,7 @@ from app.db.base import Base
 
 
 class Project(Base):
-    """Project is the top-level resource boundary for cases and suites."""
+    """Project is the top-level resource boundary for test cases."""
 
     __tablename__ = "projects"
 

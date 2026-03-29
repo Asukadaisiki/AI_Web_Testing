@@ -16,7 +16,7 @@
 2. Locator 层：`backend/app/locators`
 3. Executor 层：`backend/app/runners`
 4. Reporter 层：`backend/app/reporters`
-5. Suite Manager 层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`
+5. 资产管理层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`，当前以 `Project -> Case` 为主
 
 ## 当前状态快照（截至 2026-03-28）
 
@@ -31,20 +31,20 @@
 - 阶段二 混合定位系统：主链路完成，AI visual 默认开启评估未收口
 - 阶段三 DSL 与自然语言生成：主链路完成，治理仍在滚动优化
 - 阶段四 报告系统：已有可用结果页、执行中心和报告中心，但未进入新一轮扩面
-- 阶段五 套件与回归执行：已完成主体闭环，继续保留固定主回归
+- 阶段五 项目级回归执行：Suite 应用层已下线，当前以 `Project -> Case` 资产结构和固定主回归为主
 
 ### 已完成
 
-- 平台基础：前后端单仓骨架、FastAPI 入口、Alembic 迁移、`users / projects / test_cases / test_suites / suite_cases` 等核心模型已落地
-- 平台页面：Dashboard、Case 列表/工作台、Suite 列表/工作台/批次详情、执行中心、执行详情、报告中心、修正记录、AI 配置、登录页均已可用
+- 平台基础：前后端单仓骨架、FastAPI 入口、Alembic 迁移、`users / projects / test_cases / test_case_runs` 等当前核心模型已落地
+- 平台页面：Dashboard、Case 列表/工作台、执行中心、执行详情、报告中心、修正记录、AI 配置、登录页均已可用
 - 执行主链路：DSL Schema 与校验、Case 持久化、单 Case 执行、步骤级证据、Artifact 访问、执行详情、`executions overview` 聚合已打通
-- Suite 闭环：Suite CRUD、工作台排序、批量执行、失败项重跑、Suite Context v2.3、上下文快照与前端证据展示已打通
+- 资产结构：当前以 `Project -> Case` 为主，Suite 应用层已下线；后续回归编排需求将基于项目结构重新设计
 - 混合定位闭环：修正记录模型/API、`resolve_with_fallback` 四层降级链路、AI visual、前端人工干预面板、corrections 管理页已完成
 - 定位精度与稳定性：P0-P4 优化、`deep_locate` 总超时预算、公共候选接口、缓存命中校验、运行保护与相关加固均已落地
 - AI DSL 闭环：自然语言生成、草案预览与导入、`generation_mode / import_mode / preserve_contracts`、`normalization_notes`、`generation_meta`、反馈闭环、治理与观测页已完成
 - AI DSL 治理基线：已推进到 `2026-03-24.governance-v3.3`，围绕 `context_mismatch / bad_contracts` 按 rejected、variant、retry 指标持续收敛
 - 认证基线：后端 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` 已落地，业务 API 默认要求登录；前端已完成 `/login`、登录态恢复、受保护路由、统一 `401` 回退
-- 回归体系：后端与前端自动化测试链路已建立，3 条浏览器级固定主回归与 2 条扩展回归已固化
+- 回归体系：后端与前端自动化测试链路已建立，2 条浏览器级固定主回归已固化
 
 ### 进行中
 
@@ -65,8 +65,8 @@
 
 距离 M1 收口还差的主要事项：
 - AI DSL 治理：继续基于 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 收敛剩余高频拒绝原因，目标是降低“初次失败且按原因重试后仍失败”的占比
-- AI visual 灰度验收：继续在默认关闭前提下补足样本量；当前只完成了 1 个本地受控窗口与 3 条固定主回归通过，还不足以讨论默认开启
-- 固定主回归：继续把 `单 Case smoke`、`needs_intervention -> correction -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 作为长期门槛，而不是继续扩入口数量
+- AI visual 灰度验收：继续在默认关闭前提下补足样本量；当前只完成了 1 个本地受控窗口与 2 条固定主回归通过，还不足以讨论默认开启
+- 固定主回归：继续把 `单 Case smoke`、`needs_intervention -> correction -> rerun -> Tier0 hit` 作为长期门槛，而不是继续扩入口数量
 
 相对核心规划的主要差距：
 - 报告系统虽已具备结果展示和聚合，但还没有进入“更完整 AI 失败分析 / 新一轮报告扩面”
@@ -81,12 +81,10 @@ M1 明确不包含：
 - 第三方登录
 - 新一轮报告系统扩面
 
-回归方向已切换为“固定主回归长期保留”，而不是继续补入口数量。建议持续验证以下三条：
+回归方向已切换为“固定主回归长期保留”，而不是继续补入口数量。建议持续验证以下两条：
 
 1. 单 Case smoke。
 2. `needs_intervention -> correction -> rerun -> Tier0 hit`。
-3. Suite Context 串联 + 失败重跑。
-
 后续可选方向：
 
 - **AI DSL 治理**：继续按高频拒绝原因滚动更新 prompt / normalization，并观察 `prompt_version_breakdown`。
@@ -108,7 +106,7 @@ M1 明确不包含：
 
 - 后端：PostgreSQL（端口 5432），单元测试覆盖 Schema/服务层/定位逻辑，集成测试覆盖任务创建/执行/报告
 - 前端：组件测试覆盖表单/列表/状态展示，页面测试覆盖用例创建/执行/报告
-- 浏览器级回归：固定保留 `单 Case smoke`、`intervention -> rerun -> Tier0 hit`、`Suite Context + rerun_failed` 三条主回归；AI DSL 维持单元/API 级验证，不把外部模型稳定性引入主 CI
+- 浏览器级回归：固定保留 `单 Case smoke`、`intervention -> rerun -> Tier0 hit` 两条主回归；AI DSL 维持单元/API 级验证，不把外部模型稳定性引入主 CI
 
 ## 风险与兜底
 
