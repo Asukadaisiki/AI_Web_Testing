@@ -6,6 +6,7 @@ import base64
 import binascii
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from io import BytesIO
@@ -16,7 +17,7 @@ from urllib import request
 from app.core.config import get_settings
 
 
-ModelFamily = Literal["qwen-vl", "gemini", "gpt-4o", "qwen2.5-vl"]
+ModelFamily = Literal["qwen-vl", "gemini", "gpt-4o", "qwen2.5-vl", "glm"]
 
 SYSTEM_PROMPT = """You are an AI assistant that locates a UI element in a screenshot.
 Return JSON only in the shape {"bbox":[xmin,ymin,xmax,ymax],"errors":["..."]?}."""
@@ -220,6 +221,7 @@ def _single_locate(
         model=model,
         base_url=base_url,
         timeout_seconds=timeout_seconds,
+        model_family=model_family,
         system_prompt=system_prompt,
     )
     return _parse_bbox_response(
@@ -401,6 +403,7 @@ def _call_vlm(
     model: str,
     base_url: str,
     timeout_seconds: float,
+    model_family: ModelFamily,
     system_prompt: str = SYSTEM_PROMPT,
 ) -> str:
     return _call_chat_completion(
@@ -421,6 +424,7 @@ def _call_vlm(
         model=model,
         base_url=base_url,
         timeout_seconds=timeout_seconds,
+        model_family=model_family,
     )
 
 
@@ -463,6 +467,7 @@ def _call_candidate_ranker(
         model=model,
         base_url=base_url,
         timeout_seconds=timeout_seconds,
+        model_family="glm" if model_family == "glm" else model_family,
     )
 
 
@@ -473,12 +478,16 @@ def _call_chat_completion(
     model: str,
     base_url: str,
     timeout_seconds: float,
+    model_family: ModelFamily,
 ) -> str:
     payload = {
         "model": model,
         "messages": messages,
-        "response_format": {"type": "json_object"},
     }
+    if model_family == "glm":
+        payload["thinking"] = {"type": "enabled"}
+    else:
+        payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     http_request = request.Request(
         endpoint,
@@ -508,14 +517,9 @@ def _parse_bbox_response(
 ) -> AILocateResult | None:
     if not response_text:
         return None
-    try:
-        payload = json.loads(_extract_json_object(response_text))
-    except json.JSONDecodeError as exc:
-        logger.warning("AI visual locate returned invalid JSON: %s", exc)
-        return None
-
-    bbox = payload.get("bbox")
-    if not isinstance(bbox, list) or len(bbox) != 4:
+    payload = _extract_json_payload(response_text)
+    bbox = _extract_bbox(response_text)
+    if bbox is None:
         logger.warning("AI visual locate response missing valid bbox: %s", response_text)
         return None
     normalized_bbox = _normalize_bbox(
@@ -526,7 +530,9 @@ def _parse_bbox_response(
     )
     xmin, ymin, xmax, ymax = normalized_bbox
     center = ((xmin + xmax) // 2, (ymin + ymax) // 2)
-    errors = payload.get("errors") or []
+    errors = payload.get("errors") if isinstance(payload, dict) else []
+    if not isinstance(errors, list):
+        errors = []
     confidence = 0.35 if errors else 0.7
     return AILocateResult(
         center=center,
@@ -534,6 +540,29 @@ def _parse_bbox_response(
         confidence=confidence,
         raw_response=response_text,
     )
+
+
+def _extract_bbox(response_text: str) -> list[Any] | None:
+    payload = _extract_json_payload(response_text)
+    if isinstance(payload, dict):
+        bbox = payload.get("bbox")
+        if isinstance(bbox, list) and len(bbox) == 4:
+            return bbox
+
+    match = re.search(
+        r"\[\s*\[?\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]?\s*\]",
+        response_text,
+    )
+    if not match:
+        return None
+    return [float(match.group(index)) for index in range(1, 5)]
+
+
+def _extract_json_payload(response_text: str) -> Any | None:
+    try:
+        return json.loads(_extract_json_object(response_text))
+    except json.JSONDecodeError:
+        return None
 
 
 def _parse_candidate_index_response(
@@ -631,7 +660,7 @@ def _normalize_bbox(
     if model_family == "gemini":
         ymin, xmin, ymax, xmax = numbers
         numbers = [xmin, ymin, xmax, ymax]
-    if model_family != "qwen2.5-vl":
+    if model_family not in {"qwen2.5-vl", "glm"}:
         xmin, ymin, xmax, ymax = numbers
         numbers = [
             xmin / 1000 * image_width,

@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-VLMModelFamily = Literal["qwen-vl", "gemini", "gpt-4o", "qwen2.5-vl"]
+VLMModelFamily = Literal["qwen-vl", "gemini", "gpt-4o", "qwen2.5-vl", "glm"]
 
 
 class SettingsModel(BaseModel):

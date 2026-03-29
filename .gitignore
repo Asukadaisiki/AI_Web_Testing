@@ -24,6 +24,7 @@ coverage/
 tmp/
 temp/
 *.log
+.worktrees/
 
 # Environment files
 .env
@@ -44,3 +45,6 @@ backend/artifacts/
 
 # Package manager locks generated per app
 backend/.python-version
+
+# docs
+docs/

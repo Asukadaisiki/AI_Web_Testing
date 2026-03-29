@@ -8,6 +8,76 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-29 21:00
+
+- 任务：将当前本地可纳入 Git 的修改同步到远端 `origin/main`
+- 执行动作：核对 `git status --short`、当前分支与远端配置；识别本地仅运行期目录 `.superpowers/` 为非源码产物，不将其纳入提交；保留本轮源码、测试、类型、日志与 `.gitignore` 变更用于统一提交和推送
+- 结果：已确认待同步内容包括智谱 `glm` 适配、前后端类型与设置页更新、测试修正以及 `docs/` 日志更新；被 `.gitignore` 忽略的 `backend/.env` 不会进入远端
+- 验证：
+  - `git status --short`
+  - `git branch --show-current`
+  - `git remote -v`
+- 后续：执行 `git add`、`git commit` 与 `git push origin main` 完成本次同步
+
+## 2026-03-29 20:58
+
+- 任务：对智谱 `glm-4.6v-flash` 执行一次真实联调请求，验证当前非流式 AI visual 适配链路
+- 执行动作：先尝试在 `backend/` 中下载用户提供的测试图片并转为 base64 后调用仓库里的 `_call_vlm()` + `_parse_bbox_response()`；由于图片源 SSL 读取失败，改为直接按用户提供的公网图片 URL 和当前 `.env` 中的 `VLM_BASE_URL / VLM_MODEL / VLM_API_KEY` 发起 `POST {base_url}/chat/completions` 真实请求
+- 结果：请求已成功到达智谱接口，但网关返回 `{\"error\":{\"code\":\"1000\",\"message\":\"身份验证失败。\"}}`；当前可以确认接口地址、请求方法与网络链路可达，但真实联调被提供的 API Key 身份校验阻断，尚未进入模型推理阶段
+- 验证：
+  - `Invoke-RestMethod -Method Post -Uri "$($envMap['VLM_BASE_URL'].TrimEnd('/'))/chat/completions" ...`
+- 后续：建议用户重新核对或更换 BigModel API Key，并在更换后重新执行同一条真实请求；若后续仍失败，再进一步检查账号侧权限、模型可用范围或 endpoint 版本差异
+
+## 2026-03-29 20:55
+
+- 任务：确认智谱 `glm-4.6v-flash` 接入当前 AI visual 链路时是否需要开启流式传输
+- 执行动作：静态检查 `backend/app/locators/ai_visual.py` 与后端代码中是否存在 `stream`、SSE、分块消费或事件流解析逻辑，并结合当前 bbox 单结果定位链路评估是否值得开启流式
+- 结果：当前实现没有流式请求或流式消费逻辑；对于 AI visual 的 bbox 定位场景，当前链路只需要最终单个结果，不需要 token 级增量展示，因此默认不建议开启流式传输
+- 验证：
+  - `rg -n "stream|text/event-stream|SSE|iter_lines|chunk" backend/app/locators/ai_visual.py backend/app backend/tests`
+- 后续：如后续要做长文本推理过程展示、前端实时进度流或大响应的边到边渲染，再评估为 VLM 链路单独引入流式支持
+
+## 2026-03-29 20:53
+
+- 任务：为现有 AI visual 逻辑适配智谱 `glm-4.6v-flash`
+- 执行动作：先在 `backend/tests/unit/test_ai_visual.py` 与 `backend/tests/unit/test_ai_settings_api.py` 补充 `glm` family、请求体 `thinking`、`[[xmin,ymin,xmax,ymax]]` bbox 解析与设置接口接受 `glm` 的失败测试；随后在 `backend/app/locators/ai_visual.py` 中新增 `glm` 模型分支，按智谱样例对请求体禁用 `response_format`、启用 `thinking={"type":"enabled"}`，并扩展 bbox 提取逻辑以兼容 JSON 对象与坐标文本两种返回；同步更新 `backend/app/schemas/settings.py`、`frontend/src/types/api.ts`、`frontend/src/pages/AISettingsPage.tsx` 与本地 `backend/.env`；回归过程中额外修复 `backend/tests/unit/test_config.py` 受本地 `.env` 污染导致的隔离问题
+- 结果：当前仓库已支持将 `VLM_MODEL_FAMILY` 配置为 `glm`，AI visual 调用智谱时会命中专用请求体分支，且能解析 `{"bbox":[...]}` 和 `[[xmin,ymin,xmax,ymax]]` 两类 bbox 输出；AI 设置接口与前端设置页也已允许选择 `glm`
+- 验证：
+  - `uv run pytest backend/tests/unit/test_ai_visual.py backend/tests/unit/test_ai_settings_api.py backend/tests/unit/test_config.py -q`，结果 `37 passed`
+  - `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/services/api.test.ts`，结果 `17 passed`
+  - `cd frontend && npm run build`，结果成功
+- 后续：如需进一步确认智谱线上真实返回与当前假设完全一致，建议补一条真实接口录制样例或本地 smoke 联调，重点核对 bbox 坐标是否始终为像素坐标
+
+## 2026-03-29 20:46
+
+- 任务：核对当前仓库中的 VLM 调用格式是否符合用户提供的智谱 `chat/completions` 基础请求样例
+- 执行动作：检查 `backend/app/locators/ai_visual.py` 中 `_call_vlm()`、`_call_candidate_ranker()` 与 `_call_chat_completion()` 的请求构造，核对 `backend/app/core/config.py` 的 `VLM_*` 环境变量读取，以及 `backend/app/schemas/settings.py` 中 `VLM_MODEL_FAMILY` 的可选值；同时对照单测确认当前代码对返回结构和坐标格式的假设
+- 结果：已确认当前实现会调用 `POST {VLM_BASE_URL}/chat/completions`，并使用 OpenAI 风格 `messages[].content[{type:image_url},{type:text}]` 结构，协议层面与智谱示例基本兼容；但当前实现固定附带 `response_format={"type":"json_object"}`、不发送 `thinking` 字段、图片使用 `data:image/png;base64,...` 而不是公网 URL，同时返回解析要求 `{"bbox":[...]}` JSON 对象，且 `gpt-4o` 分支默认把 bbox 视为 0-1000 归一化坐标，这与用户给出的 `[[xmin,ymin,xmax,ymax]]` 文本格式及 GLM 实际坐标语义不完全一致
+- 验证：
+  - 静态核对 `backend/app/locators/ai_visual.py` 中请求体与响应解析逻辑
+  - 静态核对 `backend/tests/unit/test_ai_visual.py` 中多模型 bbox 归一化假设
+- 后续：如需稳定接入智谱 VLM，建议补充 `glm` 专用 `VLM_MODEL_FAMILY` 分支，并通过真实接口样例验证是否保留 `response_format`、是否需要 `thinking`、以及 bbox 是归一化坐标还是像素坐标
+
+## 2026-03-29 20:41
+
+- 任务：将用户提供的智谱 VLM 调用参数写入本地 `backend/.env`
+- 执行动作：检索 `backend/.env.example`、`backend/app/core/config.py`、`backend/app/locators/ai_visual.py` 与 `backend/app/schemas/settings.py`，确认仓库实际使用的环境变量名、`VLM_MODEL_FAMILY` 可选值，以及 `base_url` 会在运行时自动拼接 `/chat/completions`；随后更新本地 `backend/.env` 中的 AI visual 配置
+- 结果：已在 `backend/.env` 写入 `ENABLE_AI_VISUAL_LOCATE=true`、`VLM_MODEL=glm-4.6v-flash`、`VLM_API_KEY`，并将用户提供的完整接口地址换算为当前代码可用的 `VLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4`；由于当前仓库不支持 `glm` 作为 `VLM_MODEL_FAMILY`，本次按兼容的 OpenAI 风格响应解析路径写为 `gpt-4o`
+- 验证：
+  - 静态核对 `backend/.env` 已包含上述配置项
+  - 静态核对 `backend/app/locators/ai_visual.py` 中请求地址拼接逻辑为 `f"{base_url.rstrip('/')}/chat/completions"`
+- 后续：如需进一步验证智谱 VLM 是否与当前 bbox 返回格式完全兼容，建议在本地跑一条启用 AI visual 的真实定位用例；若返回坐标格式与 `gpt-4o` 分支不一致，需要补充新的 `VLM_MODEL_FAMILY` 解析分支
+
+## 2026-03-29 20:36
+
+- 任务：基于当前仓库实现状态，确认本地启动项目所需的最小步骤、依赖与已知限制
+- 执行动作：检索并阅读 `README.md`、`backend/README.md`、`frontend/README.md`、`backend/pyproject.toml`、`frontend/package.json`、`backend/.env.example`、`backend/app/core/config.py`、`backend/app/main.py`、`backend/app/db/session.py`、`frontend/vite.config.ts` 与认证相关迁移/测试，核对后端启动命令、前端代理配置、数据库前置条件与种子账户可用性
+- 结果：已确认当前本地运行路径为“后端 `uv sync -> alembic upgrade head -> uv run backend-dev` + 前端 `npm install -> npm run dev`”；前端默认通过 Vite 代理访问 `http://127.0.0.1:8000`；后端启动与迁移都要求显式配置 `AUTH_SESSION_SECRET`；数据库默认假定 PostgreSQL；迁移创建的 `seed-owner@example.com` 账户默认密码不可直接使用，需要手动重置 `users.password_hash` 才能走登录页
+- 验证：
+  - 静态核对启动脚本、环境变量与代理配置
+  - 交叉检查认证迁移与 `test_auth_api.py` / `tests/conftest.py` 对种子账户行为的差异
+- 后续：如需降低首次启动成本，可补一份“本地开发初始化脚本/SQL”来自动设置开发密码，避免迁移后无法直接登录
+
 ## 2026-03-28 19:10
 
 - 任务：阅读 `README.md` 与 `docs/`，压缩历史口径并更新最新进展、当前阶段和与计划差距说明
@@ -312,3 +382,13 @@
   - `git push origin main`
   - `git push origin --delete feat/report-center-scope-metrics`
 - 后续：无
+
+## 2026-03-29 01:03
+
+- 任务：定位 `cd backend && uv run alembic upgrade head` 因 `AUTH_SESSION_SECRET` 报错失败的原因
+- 执行动作：检查 `backend/alembic/env.py`、`backend/app/core/config.py`、`backend/.env.example` 与本地 `backend/.env`；确认 Alembic 启动时会先执行 `get_settings()`，而本地 `.env` 只配置了 `DATABASE_URL`，未配置 `AUTH_SESSION_SECRET`；随后以临时环境变量方式注入 `AUTH_SESSION_SECRET` 重新执行迁移做最小验证
+- 结果：已确认失败点发生在迁移前的应用配置校验阶段，而不是 Alembic 版本脚本本身；临时设置 `AUTH_SESSION_SECRET` 后，`uv run alembic upgrade head` 可以正常升级到 `20260329_0016`
+- 验证：
+  - `cd backend && uv run alembic upgrade head`
+  - `$env:AUTH_SESSION_SECRET='temp-dev-secret'; uv run alembic upgrade head`
+- 后续：建议补齐本地 `backend/.env` 的 `AUTH_SESSION_SECRET`，并视需要在 README 或后端说明文档里明确“迁移同样依赖该变量”

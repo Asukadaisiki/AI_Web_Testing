@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from itertools import count
+import json
 import threading
 from urllib import error
 
@@ -10,6 +11,8 @@ from app.core.config import get_settings
 from app.locators.ai_visual import (
     AILocateResult,
     RUNTIME_STATE,
+    _call_chat_completion,
+    _call_vlm,
     _decode_base64_image,
     _deep_locate,
     _extract_json_object,
@@ -68,6 +71,13 @@ def test_normalize_bbox_supports_multiple_model_families() -> None:
     ) == (10, 20, 30, 40)
 
     assert _normalize_bbox(
+        bbox=[10, 20, 30, 40],
+        image_width=1000,
+        image_height=500,
+        model_family="glm",
+    ) == (10, 20, 30, 40)
+
+    assert _normalize_bbox(
         bbox=[100, 200, 400, 600],
         image_width=1000,
         image_height=500,
@@ -76,7 +86,7 @@ def test_normalize_bbox_supports_multiple_model_families() -> None:
 
 
 def test_locate_element_by_vision_skips_when_model_not_configured(monkeypatch) -> None:
-    monkeypatch.delenv("ENABLE_AI_VISUAL_LOCATE", raising=False)
+    monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "false")
     monkeypatch.delenv("VLM_API_KEY", raising=False)
     monkeypatch.delenv("VLM_MODEL", raising=False)
     get_settings.cache_clear()
@@ -145,6 +155,7 @@ def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monke
     monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "true")
     monkeypatch.setenv("VLM_API_KEY", "test-key")
     monkeypatch.setenv("VLM_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("AI_VISUAL_RATE_LIMIT_PER_MINUTE", "10")
     monkeypatch.setenv("AI_VISUAL_FAILURE_THRESHOLD", "2")
     monkeypatch.setenv("AI_VISUAL_COOLDOWN_SECONDS", "60")
     get_settings.cache_clear()
@@ -400,6 +411,83 @@ def test_parse_bbox_response_full_confidence_without_errors() -> None:
     )
     assert result is not None
     assert result.confidence == 0.7
+
+
+def test_parse_bbox_response_supports_glm_bracket_coordinates() -> None:
+    result = _parse_bbox_response(
+        response_text="Answer: [[10,20,30,40]]",
+        image_width=1000,
+        image_height=500,
+        model_family="glm",
+    )
+
+    assert result is not None
+    assert result.bbox == (10, 20, 30, 40)
+    assert result.center == (20, 30)
+
+
+def test_call_chat_completion_uses_glm_specific_payload(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"{\\"bbox\\":[1,2,3,4]}"}}]}'
+
+    def fake_urlopen(http_request, timeout: float):
+        captured["url"] = http_request.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = dict(http_request.header_items())
+        captured["payload"] = json.loads(http_request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("app.locators.ai_visual.request.urlopen", fake_urlopen)
+
+    response_text = _call_chat_completion(
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Find button"}]}],
+        api_key="glm-key",
+        model="glm-4.6v-flash",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        timeout_seconds=5.0,
+        model_family="glm",
+    )
+
+    assert response_text == '{"bbox":[1,2,3,4]}'
+    assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    assert captured["timeout"] == 5.0
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["model"] == "glm-4.6v-flash"
+    assert payload["thinking"] == {"type": "enabled"}
+    assert "response_format" not in payload
+
+
+def test_call_vlm_forwards_model_family(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_call_chat_completion(**kwargs):
+        captured.update(kwargs)
+        return '{"bbox":[1,2,3,4]}'
+
+    monkeypatch.setattr("app.locators.ai_visual._call_chat_completion", fake_call_chat_completion)
+
+    response_text = _call_vlm(
+        screenshot_base64="ZmFrZQ==",
+        prompt_text="Find button",
+        api_key="glm-key",
+        model="glm-4.6v-flash",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        timeout_seconds=5.0,
+        model_family="glm",
+    )
+
+    assert response_text == '{"bbox":[1,2,3,4]}'
+    assert captured["model_family"] == "glm"
 
 
 # --- reset_ai_visual_runtime_state ---

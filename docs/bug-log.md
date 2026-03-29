@@ -30,6 +30,69 @@
 
 ## 当前状态
 
+## BUG-037 | 智谱真实联调被 API Key 身份校验阻断
+
+- 日期：2026-03-29
+- 状态：open
+- 来源：联调 / 真实请求验证
+- 描述：在本地根据当前 `.env` 配置对 `https://open.bigmodel.cn/api/paas/v4/chat/completions` 发起真实请求时，智谱网关返回 `{"error":{"code":"1000","message":"身份验证失败。"}}`，请求未进入模型推理阶段。
+- 复现步骤：
+  1. 在 `backend/.env` 中配置当前的 `VLM_BASE_URL / VLM_MODEL / VLM_API_KEY`
+  2. 使用 `POST {VLM_BASE_URL}/chat/completions` 携带 `Authorization: Bearer <VLM_API_KEY>` 发起真实请求
+  3. 观察接口直接返回身份验证失败
+- 影响：当前无法完成真实线上 smoke，也无法进一步确认 `glm` 返回 bbox 的线上语义是否与本地适配一致。
+- 根因：待定位；从现象看更可能是 API Key 无效、已失效、权限不足，或不适用于当前 endpoint/model 组合，而不是本地网络或路径拼接问题。
+- 建议处理：
+  - 重新核对或更换 BigModel API Key
+  - 更换后先复跑最小 `chat/completions` 请求
+  - 若仍失败，再检查账号权限、模型开通状态和 endpoint 版本
+- 验证：
+  - `Invoke-RestMethod -Method Post -Uri "{VLM_BASE_URL}/chat/completions" ...`
+- 关联记录：`docs/execution-log.md` 2026-03-29 20:58
+
+## BUG-035 | 智谱 GLM VLM 接口与现有 AI visual 请求/解析假设不完全一致
+
+- 日期：2026-03-29
+- 状态：fixed
+- 来源：联调 / 配置核对
+- 描述：当前 `backend/app/locators/ai_visual.py` 按 OpenAI 风格构造 VLM 请求并解析响应，虽然可以访问 `POST {VLM_BASE_URL}/chat/completions`，但实现层默认附带 `response_format={"type":"json_object"}`、不发送 `thinking` 字段、图片通过 `data:image/png;base64,...` 传输，且返回解析要求 `{"bbox":[...]}` JSON 对象；与此同时，仓库中 `VLM_MODEL_FAMILY` 仅支持 `qwen-vl / gemini / gpt-4o / qwen2.5-vl`，缺少 `glm` 分支，`gpt-4o` 分支还会把 bbox 解释为 0-1000 归一化坐标。若智谱 `glm-4.6v-flash` 实际返回格式或坐标语义不同，将导致解析失败或定位偏移。
+- 复现步骤：
+  1. 阅读 `backend/app/locators/ai_visual.py` 中 `_call_vlm()` 和 `_call_chat_completion()`
+  2. 对照智谱示例请求，确认当前实现未发送 `thinking`，并固定要求 `response_format=json_object`
+  3. 阅读 `backend/app/locators/ai_visual.py` 中 `_parse_bbox_response()` 与 `_normalize_bbox()`
+  4. 确认当前实现只接受 `{"bbox":[...]}`，且 `gpt-4o` 路径会按 0-1000 归一化坐标换算像素
+- 影响：在智谱接口返回 `[[xmin,ymin,xmax,ymax]]`、像素坐标、不同字段名，或不支持当前 `response_format`/base64 图片风格时，AI visual 会直接解析失败或计算出错误点击位置。
+- 根因：VLM 适配层当前围绕既有 OpenAI/Qwen/Gemini 假设实现，没有为 `glm` 单独定义请求差异和 bbox 语义。
+- 处理：
+  - 为 `VLM_MODEL_FAMILY` 增加 `glm`，并同步前后端类型与 AI 设置页选项
+  - 在 `backend/app/locators/ai_visual.py` 中为 `glm` 请求关闭 `response_format`、补充 `thinking={"type":"enabled"}`
+  - 扩展 bbox 解析，兼容 `{"bbox":[...]}` 与 `[[xmin,ymin,xmax,ymax]]` 文本坐标
+  - 将 `glm` 坐标按像素坐标处理，并补充后端单测覆盖请求体与解析逻辑
+- 验证：
+  - `uv run pytest backend/tests/unit/test_ai_visual.py backend/tests/unit/test_ai_settings_api.py backend/tests/unit/test_config.py -q`
+  - `cd frontend && npm test -- --run src/pages/AISettingsPage.test.tsx src/services/api.test.ts`
+  - `cd frontend && npm run build`
+- 关联记录：`docs/execution-log.md` 2026-03-29 20:53
+
+## BUG-036 | 配置单测依赖本地 `.env`，已配置 `AUTH_SESSION_SECRET` 时会失去隔离性
+
+- 日期：2026-03-29
+- 状态：fixed
+- 来源：自测 / 回归验证
+- 描述：`backend/tests/unit/test_config.py::test_get_settings_requires_auth_session_secret` 默认会读取仓库根下本地 `.env`；当本地开发环境已经配置 `AUTH_SESSION_SECRET` 时，即使测试里删除了进程环境变量，`get_settings()` 仍会从 `.env` 补回该值，导致“缺失 secret 应报错”的断言失真。
+- 复现步骤：
+  1. 在本地 `backend/.env` 中配置 `AUTH_SESSION_SECRET`
+  2. 执行 `uv run pytest backend/tests/unit/test_config.py -q`
+  3. 观察 `test_get_settings_requires_auth_session_secret` 不再抛出预期的 `RuntimeError`
+- 影响：会让配置单测受开发者本地环境污染，降低失败信号可信度。
+- 根因：测试未隔离 `ENV_FILE_PATH`，默认复用了仓库本地 `.env`。
+- 处理：
+  - 在 `test_get_settings_requires_auth_session_secret` 中将 `ENV_FILE_PATH` 定向到临时缺失文件
+  - 保持测试只验证显式缺失 secret 时的行为，而不依赖开发者本地配置
+- 验证：
+  - `uv run pytest backend/tests/unit/test_config.py -q`
+- 关联记录：`docs/execution-log.md` 2026-03-29 20:53
+
 ## BUG-033 | Auth 启动探测与手动登录/登出存在竞态覆盖
 
 - 日期：2026-03-28
@@ -775,3 +838,24 @@
   - `cd backend && uv run pytest tests/unit/test_cases_api.py tests/unit/test_suites_api.py tests/unit/test_corrections_api.py tests/unit/test_case_executions_api.py tests/unit/test_ai_settings_api.py tests/unit/test_dsl_validation.py tests/integration/test_dsl_retry_governance.py -q`
   - `cd frontend && npm test -- --run src/auth/AuthContext.test.tsx src/app/AppRouter.test.tsx src/pages/LoginPage.test.tsx src/services/api.test.ts`
 - 关联记录：`docs/execution-log.md` 2026-03-28 18:18
+
+## BUG-034 | 本地迁移依赖 `AUTH_SESSION_SECRET`，缺失时会在 Alembic 启动前直接失败
+
+- 日期：2026-03-29
+- 状态：open
+- 来源：联调 / 本地环境配置
+- 描述：在 `backend/` 下执行 `uv run alembic upgrade head` 时，如果本地 `backend/.env` 只配置了数据库连接、未配置 `AUTH_SESSION_SECRET`，Alembic 会在加载 `backend/alembic/env.py` 时通过 `get_settings()` 提前触发后端启动校验，并直接抛出 `RuntimeError: AUTH_SESSION_SECRET must be configured before starting the backend.`
+- 复现步骤：
+  1. 在 `backend/.env` 中仅保留 `DATABASE_URL`，不设置 `AUTH_SESSION_SECRET`
+  2. 执行 `cd backend && uv run alembic upgrade head`
+  3. 观察迁移尚未开始执行前即在 `backend/app/core/config.py` 报错退出
+- 影响：会让本地开发者误以为迁移脚本或数据库连接存在问题，实际是环境变量缺失；未补齐 secret 时，数据库升级、初始化与依赖迁移的本地联调都会被阻断
+- 根因：`backend/alembic/env.py` 复用了应用级 `get_settings()` 读取数据库连接，而 `get_settings()` 对 `AUTH_SESSION_SECRET` 采用 fail-fast 强校验；本地 `.env` 未同步该变量时，即使只想执行迁移，也会先被认证配置拦截
+- 建议处理：
+  - 在本地 `backend/.env` 中补齐 `AUTH_SESSION_SECRET`
+  - 在 README、`backend/README.md` 或迁移说明中明确 Alembic 同样依赖该变量
+  - 如后续希望降低本地初始化门槛，可评估是否为迁移链路单独提供最小配置读取路径，但这属于行为设计调整
+- 验证：
+  - 未配置 `AUTH_SESSION_SECRET` 时执行 `cd backend && uv run alembic upgrade head`，稳定复现报错
+  - 设置 `$env:AUTH_SESSION_SECRET='temp-dev-secret'` 后执行同一命令，迁移成功升级到 `20260329_0016`
+- 关联记录：`docs/execution-log.md` 2026-03-29 01:03

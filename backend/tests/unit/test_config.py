@@ -6,11 +6,13 @@ from pathlib import Path
 
 import pytest
 
+import app.core.config as config_module
 from app.core.config import get_settings
 
 
-def test_get_settings_requires_auth_session_secret(monkeypatch) -> None:
+def test_get_settings_requires_auth_session_secret(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("AUTH_SESSION_SECRET", raising=False)
+    monkeypatch.setattr(config_module, "ENV_FILE_PATH", tmp_path / ".missing.env")
     get_settings.cache_clear()
 
     try:

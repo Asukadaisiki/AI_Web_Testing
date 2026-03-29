@@ -70,6 +70,7 @@ type GovernanceQueryFilters = {
 };
 
 const VLM_FAMILY_OPTIONS: { label: string; value: VLMModelFamily }[] = [
+  { label: "glm", value: "glm" },
   { label: "gpt-4o", value: "gpt-4o" },
   { label: "gemini", value: "gemini" },
   { label: "qwen-vl", value: "qwen-vl" },

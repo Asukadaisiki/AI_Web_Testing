@@ -164,6 +164,35 @@ def test_update_ai_settings_persists_to_env_file_and_allows_clearing_keys(
     assert "VLM_API_KEY=" in env_text
 
 
+def test_update_ai_settings_accepts_glm_model_family(ai_settings_client: TestClient) -> None:
+    response = ai_settings_client.put(
+        "/api/v1/settings/ai",
+        json={
+            "enable_ai_dsl_generate": False,
+            "ai_dsl_timeout_ms": 15000,
+            "ai_dsl_base_url": "https://api.openai.com/v1",
+            "ai_dsl_model": None,
+            "ai_dsl_strict_mode": False,
+            "ai_dsl_allow_auto_repair": True,
+            "ai_dsl_api_key": None,
+            "clear_ai_dsl_api_key": False,
+            "enable_ai_visual_locate": True,
+            "ai_visual_timeout_ms": 12000,
+            "ai_visual_failure_threshold": 3,
+            "ai_visual_cooldown_seconds": 60,
+            "ai_visual_rate_limit_per_minute": 10,
+            "vlm_base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "vlm_model": "glm-4.6v-flash",
+            "vlm_model_family": "glm",
+            "vlm_api_key": "glm-secret",
+            "clear_vlm_api_key": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["vlm_model_family"] == "glm"
+
+
 def test_get_ai_settings_overview_returns_runtime_generation_stats(
     ai_settings_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
