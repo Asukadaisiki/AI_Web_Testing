@@ -1281,8 +1281,13 @@ def _call_llm(
     payload = {
         "model": model,
         "messages": messages,
-        "response_format": {"type": "json_object"},
     }
+    if _should_use_glm_chat_completion(base_url=base_url, model=model):
+        payload["thinking"] = {"type": "enabled"}
+        payload["max_tokens"] = 65536
+        payload["temperature"] = 1.0
+    else:
+        payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     http_request = request.Request(
         endpoint,
@@ -1297,6 +1302,12 @@ def _call_llm(
         raw_payload = json.loads(response.read().decode("utf-8"))
 
     return _extract_message_content(raw_payload)
+
+
+def _should_use_glm_chat_completion(*, base_url: str, model: str) -> bool:
+    normalized_base_url = base_url.strip().casefold()
+    normalized_model = model.strip().casefold()
+    return "open.bigmodel.cn" in normalized_base_url or normalized_model.startswith("glm-")
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:

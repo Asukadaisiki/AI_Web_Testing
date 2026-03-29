@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
+import app.core.config as config_module
 from app.models import DslGenerationRun, TestCase, User
-from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, _normalize_string, build_generation_messages
+from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, _call_llm, _normalize_string, build_generation_messages
 from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
@@ -214,6 +216,111 @@ def test_build_generation_messages_includes_governance_focus_reasons() -> None:
     assert "Current governance focus reasons: wrong_actions, invalid_structure." in messages[0]["content"]
     assert "Only map well-known action aliases" in messages[0]["content"]
     assert "Never nest the DSL under wrapper keys like case, data, result, or draft." in messages[0]["content"]
+
+
+def test_call_llm_uses_openai_json_payload(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"name":"OpenAI Draft","steps":[{"action":"goto","value":"/"}]}'
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(http_request, timeout):
+        captured["url"] = http_request.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = dict(http_request.header_items())
+        captured["json"] = json.loads(http_request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("app.ai.dsl_generator.request.urlopen", fake_urlopen)
+
+    response = _call_llm(
+        messages=[{"role": "user", "content": "生成 DSL"}],
+        api_key="openai-key",
+        model="gpt-test",
+        base_url="https://api.openai.com/v1",
+        timeout_seconds=5,
+    )
+
+    assert response == '{"name":"OpenAI Draft","steps":[{"action":"goto","value":"/"}]}'
+    assert captured["url"] == "https://api.openai.com/v1/chat/completions"
+    assert captured["timeout"] == 5
+    assert captured["headers"] == {
+        "Authorization": "Bearer openai-key",
+        "Content-type": "application/json",
+    }
+    assert captured["json"] == {
+        "model": "gpt-test",
+        "messages": [{"role": "user", "content": "生成 DSL"}],
+        "response_format": {"type": "json_object"},
+    }
+
+
+def test_call_llm_uses_glm_bigmodel_payload(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"name":"GLM Draft","steps":[{"action":"goto","value":"/login"}]}'
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(http_request, timeout):
+        captured["url"] = http_request.full_url
+        captured["timeout"] = timeout
+        captured["json"] = json.loads(http_request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("app.ai.dsl_generator.request.urlopen", fake_urlopen)
+
+    response = _call_llm(
+        messages=[{"role": "user", "content": "生成 DSL"}],
+        api_key="glm-key",
+        model="glm-4.7-flash",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        timeout_seconds=7,
+    )
+
+    assert response == '{"name":"GLM Draft","steps":[{"action":"goto","value":"/login"}]}'
+    assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    assert captured["timeout"] == 7
+    assert captured["json"] == {
+        "model": "glm-4.7-flash",
+        "messages": [{"role": "user", "content": "生成 DSL"}],
+        "thinking": {"type": "enabled"},
+        "max_tokens": 65536,
+        "temperature": 1.0,
+    }
 
 
 def test_select_governance_focus_reasons_defaults_when_no_feedback_history(db_session) -> None:
@@ -486,15 +593,24 @@ def test_generate_dsl_case_success(client, monkeypatch) -> None:
     }
 
 
-def test_generate_dsl_case_returns_503_when_not_configured(client) -> None:
-    response = client.post(
-        "/api/v1/dsl/generate",
-        json={
-            "prompt": "打开 example.com",
-            "base_url": "https://example.com",
-            "actor_user_id": 1,
-        },
-    )
+def test_generate_dsl_case_returns_503_when_not_configured(client, monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ENABLE_AI_DSL_GENERATE", raising=False)
+    monkeypatch.delenv("AI_DSL_API_KEY", raising=False)
+    monkeypatch.delenv("AI_DSL_MODEL", raising=False)
+    monkeypatch.setattr(config_module, "ENV_FILE_PATH", tmp_path / ".missing.env")
+    get_settings.cache_clear()
+
+    try:
+        response = client.post(
+            "/api/v1/dsl/generate",
+            json={
+                "prompt": "打开 example.com",
+                "base_url": "https://example.com",
+                "actor_user_id": 1,
+            },
+        )
+    finally:
+        get_settings.cache_clear()
 
     assert response.status_code == 503
     assert "AI DSL 生成功能未开启" in response.json()["detail"]

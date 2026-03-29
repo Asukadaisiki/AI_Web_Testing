@@ -8,6 +8,38 @@
 - 记录"目标、操作、结果、验证、后续"，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 
+## 2026-03-29 21:28
+
+- 任务：将 DSL 生成链路适配到智谱 `glm-4.7-flash`，写入本地 DSL 配置，并完成最小联调验证
+- 执行动作：先按 TDD 在 `backend/tests/unit/test_dsl_validation.py` 新增 `_call_llm()` 的 OpenAI/BigModel payload 断言，再在 `backend/app/ai/dsl_generator.py` 中新增基于 `base_url/model` 的智谱分支，令 DSL 请求在命中 BigModel 时发送 `thinking={"type":"enabled"}`、`max_tokens=65536`、`temperature=1.0` 且不再附带 `response_format`；随后更新 `backend/.env.example` 的 DSL Base URL/Model，更新本地 `backend/.env` 的 `ENABLE_AI_DSL_GENERATE`、`AI_DSL_TIMEOUT_MS`、`AI_DSL_API_KEY`、`AI_DSL_BASE_URL` 与 `AI_DSL_MODEL`；回归过程中额外修复 `test_generate_dsl_case_returns_503_when_not_configured` 会被本地 `.env` 污染并误发真实请求的问题
+- 结果：DSL 请求层已能生成符合智谱样例的非流式 `chat/completions` 请求体；本地 DSL 配置已切到 `https://open.bigmodel.cn/api/paas/v4 + glm-4.7-flash`；相关单测全部通过。真实联调方面，首次通过仓库 DSL prompt 调用在默认 15 秒下读响应超时，随后用 `curl.exe` 改为最小请求并修正 JSON 传参后，智谱网关返回 `429 Too Many Requests`，错误体为 `{"error":{"code":"1302","message":"您的账户已达到速率限制，请您控制请求频率"}}`，说明当前请求格式已到达网关，但继续 smoke 受账号限流影响
+- 验证：
+  - `uv run pytest backend/tests/unit/test_dsl_validation.py -k "call_llm_uses_glm_bigmodel_payload or call_llm_uses_openai_json_payload" -q`，结果 `2 passed`
+  - `uv run pytest backend/tests/unit/test_config.py::test_env_example_includes_ai_dsl_and_vlm_settings -q`，结果 `1 passed`
+  - `uv run pytest backend/tests/unit/test_dsl_validation.py backend/tests/unit/test_config.py backend/tests/unit/test_ai_settings_api.py -q`，结果 `55 passed`
+  - `curl.exe -sS --max-time 60 -D - -X POST {AI_DSL_BASE_URL}/chat/completions ... --data-binary @temp.json`，结果 `429 Too Many Requests`
+- 后续：如需拿到一条完整成功响应，需要等待智谱账号限流窗口恢复后再重跑 DSL smoke；若后续实测仍频繁超时，可再评估是否把 DSL 默认 `AI_DSL_TIMEOUT_MS` 与 `thinking/max_tokens` 策略做成 provider 级可配置
+
+## 2026-03-29 21:13
+
+- 任务：使用用户提供的新 BigModel API Key 再次执行真实智谱请求，并确认当前 `glm` 适配链路可解析返回
+- 执行动作：更新本地 `backend/.env` 中的 `VLM_API_KEY`，继续对 `https://open.bigmodel.cn/api/paas/v4/chat/completions` 发送最小非流式 `glm-4.6v-flash` 请求；在收到真实响应后，再使用仓库内的 `_parse_bbox_response()` 对返回文本中的 `[[xmin,ymin,xmax,ymax]]` 进行解析验证
+- 结果：本次请求返回 `200 OK`，真实响应内容为 “The second bottle of beer from the right on the table is located at [[89,598,181,990]].”；当前仓库内的 `glm` bbox 解析已成功将其解析为 `bbox=(89, 598, 181, 990)`、`center=(135, 794)`，说明鉴权与当前解析链路均已打通
+- 验证：
+  - `Invoke-WebRequest -Method Post -Uri "{VLM_BASE_URL}/chat/completions" ...`，结果 `200 OK`
+  - `uv run python -` 调用 `app.locators.ai_visual._parse_bbox_response(...)`，结果返回非空 bbox
+- 后续：如需进一步做端到端 smoke，可直接把这条真实返回格式纳入后端 fixture 或录制样例，锁定 `glm` 返回语义
+
+## 2026-03-29 21:02
+
+- 任务：在用户要求下再次对智谱 `glm-4.6v-flash` 执行真实请求，复核鉴权状态
+- 执行动作：读取当前 `backend/.env` 中的 `VLM_BASE_URL / VLM_MODEL / VLM_API_KEY`，继续使用最小 `POST {base_url}/chat/completions` 请求体进行真实调用；首次用 `Invoke-RestMethod` 仅得到空错误体，随后改用 `Invoke-WebRequest` 补抓 HTTP 状态码与异常消息
+- 结果：本次真实请求返回 `401 Unauthorized`，响应体为空；与上次“身份验证失败”现象一致，进一步确认当前阻塞点仍然是智谱网关鉴权，未进入模型推理阶段
+- 验证：
+  - `Invoke-RestMethod -Method Post -Uri "{VLM_BASE_URL}/chat/completions" ...`
+  - `Invoke-WebRequest -Method Post -Uri "{VLM_BASE_URL}/chat/completions" ...`
+- 后续：等待用户更换或重新核对 BigModel API Key；更换后可继续使用同一最小请求复测
+
 ## 2026-03-29 21:00
 
 - 任务：将当前本地可纳入 Git 的修改同步到远端 `origin/main`

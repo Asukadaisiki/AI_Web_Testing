@@ -59,8 +59,8 @@ def test_env_example_includes_ai_dsl_and_vlm_settings() -> None:
 
     required_lines = [
         "ENABLE_AI_DSL_GENERATE=false",
-        "AI_DSL_BASE_URL=https://api.openai.com/v1",
-        "AI_DSL_MODEL=",
+        "AI_DSL_BASE_URL=https://open.bigmodel.cn/api/paas/v4",
+        "AI_DSL_MODEL=glm-4.7-flash",
         "ENABLE_AI_VISUAL_LOCATE=false",
         "VLM_BASE_URL=https://api.openai.com/v1",
         "VLM_MODEL=",

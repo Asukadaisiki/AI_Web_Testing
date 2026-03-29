@@ -30,10 +30,49 @@
 
 ## 当前状态
 
-## BUG-037 | 智谱真实联调被 API Key 身份校验阻断
+## BUG-039 | DSL 未配置单测会被本地 `.env` 污染并误发真实请求
+
+- 日期：2026-03-29
+- 状态：fixed
+- 来源：自测 / DSL BigModel 适配回归
+- 描述：在本地 `backend/.env` 已启用 DSL 并写入真实 `AI_DSL_API_KEY` 后，`backend/tests/unit/test_dsl_validation.py::test_generate_dsl_case_returns_503_when_not_configured` 仅清空进程环境变量，没有隔离 `ENV_FILE_PATH`，导致 `get_settings()` 仍会从仓库本地 `.env` 读回真实 DSL 配置，测试不再返回预期 `503`，而是直接发出真实外网请求并因超时失败
+- 复现步骤：
+  1. 在 `backend/.env` 中设置 `ENABLE_AI_DSL_GENERATE=true`、`AI_DSL_API_KEY` 和 `AI_DSL_MODEL`
+  2. 执行 `uv run pytest backend/tests/unit/test_dsl_validation.py::test_generate_dsl_case_returns_503_when_not_configured -q`
+  3. 观察测试不再命中未配置分支，而是进入 `_call_llm()` 发真实请求
+- 影响：DSL 相关单测会依赖开发者本地配置，导致离线回归不稳定，也可能误触发真实 provider 请求与限流
+- 根因：测试只删除了环境变量，没有像 `test_config.py` 那样隔离 `app.core.config.ENV_FILE_PATH`
+- 处理：
+  - 在该测试中显式 `delenv("ENABLE_AI_DSL_GENERATE" / "AI_DSL_API_KEY" / "AI_DSL_MODEL")`
+  - 将 `config_module.ENV_FILE_PATH` 指向临时不存在的 `.env`，并在测试前后清空 `get_settings.cache`
+- 验证：
+  - `uv run pytest backend/tests/unit/test_dsl_validation.py::test_generate_dsl_case_returns_503_when_not_configured -q`
+- 关联记录：`docs/execution-log.md` 2026-03-29 21:28
+
+## BUG-038 | 智谱 DSL 真实 smoke 受账号速率限制阻断
 
 - 日期：2026-03-29
 - 状态：open
+- 来源：联调 / 真实请求验证
+- 描述：DSL 侧切换到 `glm-4.7-flash` 后，使用本地 `AI_DSL_API_KEY` 对 `https://open.bigmodel.cn/api/paas/v4/chat/completions` 发起真实最小请求时，智谱网关返回 `429 Too Many Requests`，错误体为 `{"error":{"code":"1302","message":"您的账户已达到速率限制，请您控制请求频率"}}`
+- 复现步骤：
+  1. 在 `backend/.env` 中设置有效的 `AI_DSL_API_KEY / AI_DSL_BASE_URL / AI_DSL_MODEL`
+  2. 使用非流式 `POST {AI_DSL_BASE_URL}/chat/completions`，请求体携带 `model`、`messages`、`thinking`、`max_tokens`、`temperature`
+  3. 观察智谱网关返回 `429` 限流错误
+- 影响：当前无法在本地连续完成 DSL 的成功 smoke，真实响应样本受账号限流窗口影响
+- 根因：待定位，更像是账号级请求频率限制而非本地请求体格式错误；同一轮联调中网关已成功返回结构化 `400` 与 `429`，说明 endpoint、鉴权和 JSON 解析路径都已工作
+- 处理：
+  - 保留当前 BigModel DSL 请求格式适配
+  - 将本地 `AI_DSL_TIMEOUT_MS` 提高到 `60000`，避免默认 15 秒在限流恢复前先被客户端超时截断
+  - 待限流窗口恢复后再次执行最小 smoke
+- 验证：
+  - `curl.exe -sS --max-time 60 -D - -X POST {AI_DSL_BASE_URL}/chat/completions ... --data-binary @temp.json`
+- 关联记录：`docs/execution-log.md` 2026-03-29 21:28
+
+## BUG-037 | 智谱真实联调被 API Key 身份校验阻断
+
+- 日期：2026-03-29
+- 状态：fixed
 - 来源：联调 / 真实请求验证
 - 描述：在本地根据当前 `.env` 配置对 `https://open.bigmodel.cn/api/paas/v4/chat/completions` 发起真实请求时，智谱网关返回 `{"error":{"code":"1000","message":"身份验证失败。"}}`，请求未进入模型推理阶段。
 - 复现步骤：
@@ -42,13 +81,14 @@
   3. 观察接口直接返回身份验证失败
 - 影响：当前无法完成真实线上 smoke，也无法进一步确认 `glm` 返回 bbox 的线上语义是否与本地适配一致。
 - 根因：待定位；从现象看更可能是 API Key 无效、已失效、权限不足，或不适用于当前 endpoint/model 组合，而不是本地网络或路径拼接问题。
-- 建议处理：
-  - 重新核对或更换 BigModel API Key
-  - 更换后先复跑最小 `chat/completions` 请求
-  - 若仍失败，再检查账号权限、模型开通状态和 endpoint 版本
+- 处理：
+  - 使用用户重新提供的 BigModel API Key 更新本地 `backend/.env`
+  - 复跑最小 `chat/completions` 请求，确认 `200 OK`
+  - 将真实返回文本喂给 `_parse_bbox_response()`，确认当前 `glm` 解析链路可直接处理 `[[xmin,ymin,xmax,ymax]]`
 - 验证：
-  - `Invoke-RestMethod -Method Post -Uri "{VLM_BASE_URL}/chat/completions" ...`
-- 关联记录：`docs/execution-log.md` 2026-03-29 20:58
+  - `Invoke-WebRequest -Method Post -Uri "{VLM_BASE_URL}/chat/completions" ...`
+  - `uv run python -` 调用 `app.locators.ai_visual._parse_bbox_response(...)`
+- 关联记录：`docs/execution-log.md` 2026-03-29 21:13
 
 ## BUG-035 | 智谱 GLM VLM 接口与现有 AI visual 请求/解析假设不完全一致
 

@@ -48,3 +48,7 @@ backend/.python-version
 
 # docs
 docs/
+
+#tests
+tests/
+
