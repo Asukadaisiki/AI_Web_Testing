@@ -71,13 +71,13 @@ class PaginatedCases(DSLModel):
 
 class BatchUpdateRequest(DSLModel):
     """Request for batch updating test cases."""
-    case_ids: list[int] = Field(..., min_items=1, max_items=100)
+    case_ids: list[int] = Field(..., min_length=1, max_length=100)
     updates: CaseUpdateRequest
 
 
 class BatchDeleteRequest(DSLModel):
     """Request for batch deleting test cases."""
-    case_ids: list[int] = Field(..., min_items=1, max_items=100)
+    case_ids: list[int] = Field(..., min_length=1, max_length=100)
 
 
 class ProjectTestCaseStats(DSLModel):
@@ -85,7 +85,7 @@ class ProjectTestCaseStats(DSLModel):
     project_id: int
     total_cases: int
     created_by_month: dict[str, int]  # Format: "YYYY-MM": count
-    created_by_user: dict[int, str]  # user_id: username (would need user service)
+    created_by_user: dict[int, str] = Field(default_factory=dict)  # user_id: username (would need user service)
     recent_cases: list[StoredCaseSummary] = Field(default_factory=list)
 
 

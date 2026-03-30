@@ -88,7 +88,7 @@ def delete_project_route(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_authenticated_user),
 ) -> None:
-    """Delete a project. User must be an owner."""
+    """Delete a project. User must be an owner and project must not have test cases."""
     try:
         delete_project(session, project_id, current_user.id)
     except ProjectAccessError as exc:

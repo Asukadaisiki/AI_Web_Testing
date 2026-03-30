@@ -18,7 +18,6 @@ from app.schemas.cases import (
     StoredCaseDetail,
 )
 from app.services import (
-    EntityNotFoundError,
     batch_delete_cases,
     batch_update_cases,
     create_case,
@@ -28,7 +27,11 @@ from app.services import (
     list_cases_paginated,
     update_case,
 )
-from app.services.cases import get_project_test_case_stats
+from app.services.cases import (
+    EntityNotFoundError,
+    get_project_test_case_stats,
+    _ensure_project_member,
+)
 
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -43,9 +46,13 @@ def create_case_route(
 ) -> StoredCaseDetail:
     """Create a new test case."""
     try:
-        created_case = create_case(session, payload.model_copy(update={"actor_user_id": current_user.id}))
+        created_case = create_case(
+            session,
+            payload.model_copy(update={"actor_user_id": current_user.id}),
+            current_user.id
+        )
     except EntityNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     response.headers["Location"] = f"/api/v1/cases/{created_case.id}"
     return created_case
@@ -59,15 +66,23 @@ def list_project_cases_route(
     page: int = 1,
     page_size: int = 20,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> PaginatedCases:
     """List test cases within a specific project with optional filtering and pagination."""
     from app.schemas.cases import CaseListFilter
     from app.services.project_management import get_project
+    from app.services.cases import _ensure_project_member
 
-    # Verify project exists
+    # Verify project exists and user has access
     project = get_project(session, project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    # Check project membership
+    try:
+        _ensure_project_member(session, project_id, current_user.id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
 
     filter_params = CaseListFilter(
         project_id=project_id,
@@ -75,7 +90,7 @@ def list_project_cases_route(
         created_by=created_by,
     )
 
-    items, total = list_cases_paginated(session, filter_params, page, page_size)
+    items, total = list_cases_paginated(session, filter_params, page, page_size, current_user.id)
 
     total_pages = (total + page_size - 1) // page_size
 
@@ -97,11 +112,19 @@ def get_project_stats_route(
     current_user: User = Depends(require_authenticated_user),
 ) -> ProjectTestCaseStats:
     """Get statistics for test cases in a project."""
-    # Verify project exists
+    # Verify project exists and user has access
     from app.services.project_management import get_project
+    from app.services.cases import _ensure_project_member
+
     project = get_project(session, project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    # Check project membership
+    try:
+        _ensure_project_member(session, project_id, current_user.id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
 
     stats_data = get_project_test_case_stats(session, project_id)
     return ProjectTestCaseStats(**stats_data)
@@ -115,9 +138,24 @@ def list_cases_route(
     page: int = 1,
     page_size: int = 20,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> PaginatedCases:
     """List test cases with optional filtering and pagination."""
     from app.schemas.cases import CaseListFilter
+
+    # If project_id is provided, check project membership
+    if project_id is not None:
+        from app.services.project_management import get_project
+        from app.services.cases import _ensure_project_member
+
+        project = get_project(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+        try:
+            _ensure_project_member(session, project_id, current_user.id)
+        except EntityNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
 
     filter_params = CaseListFilter(
         project_id=project_id,
@@ -125,7 +163,7 @@ def list_cases_route(
         created_by=created_by,
     )
 
-    items, total = list_cases_paginated(session, filter_params, page, page_size)
+    items, total = list_cases_paginated(session, filter_params, page, page_size, current_user.id)
 
     total_pages = (total + page_size - 1) // page_size
 
@@ -144,11 +182,17 @@ def list_cases_route(
 def get_case_route(
     case_id: int,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
 ) -> StoredCaseDetail:
     """Get a specific test case by ID."""
-    stored_case = get_case(session, case_id)
+    try:
+        stored_case = get_case(session, case_id, current_user.id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+
     if stored_case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found.")
+
     return stored_case
 
 
@@ -161,9 +205,9 @@ def update_case_route(
 ) -> StoredCaseDetail:
     """Update a test case."""
     try:
-        return update_case(session, case_id, payload.model_copy(update={"actor_user_id": current_user.id}))
+        return update_case(session, case_id, payload.model_copy(update={"actor_user_id": current_user.id}), current_user.id)
     except EntityNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
 
 
 @router.delete("/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -174,7 +218,7 @@ def delete_case_route(
 ) -> None:
     """Delete a single test case."""
     try:
-        delete_case(session, case_id)
+        delete_case(session, case_id, current_user.id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 

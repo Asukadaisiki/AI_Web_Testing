@@ -91,7 +91,12 @@ def test_list_cases_returns_latest_first(client) -> None:
     response = client.get("/api/v1/cases")
 
     assert response.status_code == 200
-    assert [case["name"] for case in response.json()] == ["第二个用例", "第一个用例"]
+    data = response.json()
+    assert data["total"] == 2
+    assert data["page"] == 1
+    assert data["page_size"] == 20
+    assert data["total_pages"] == 1
+    assert [case["name"] for case in data["items"]] == ["第二个用例", "第一个用例"]
 
 
 def test_get_case_detail_returns_case(client) -> None:
@@ -204,8 +209,8 @@ def test_update_case_returns_not_found_for_unknown_case(client) -> None:
         },
     )
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Case 999 not found."}
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Case 999 not found."
 
 
 def test_create_case_rejects_invalid_dsl(client) -> None:
@@ -235,8 +240,8 @@ def test_create_case_returns_not_found_when_project_missing(client) -> None:
         },
     )
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Project 999 not found."}
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Project 999 not found."
 
 
 def test_suite_routes_are_not_registered(client) -> None:
