@@ -1,4 +1,4 @@
-"""Case persistence routes."""
+"""Case management routes."""
 
 from __future__ import annotations
 
@@ -8,8 +8,27 @@ from sqlalchemy.orm import Session
 from app.api.auth import require_authenticated_user
 from app.db import get_db_session
 from app.models import User
-from app.schemas.cases import CaseCreateRequest, CaseUpdateRequest, StoredCaseDetail, StoredCaseSummary
-from app.services import EntityNotFoundError, create_case, get_case, list_cases, update_case
+from app.schemas.cases import (
+    BatchDeleteRequest,
+    BatchUpdateRequest,
+    CaseCreateRequest,
+    CaseUpdateRequest,
+    PaginatedCases,
+    ProjectTestCaseStats,
+    StoredCaseDetail,
+)
+from app.services import (
+    EntityNotFoundError,
+    batch_delete_cases,
+    batch_update_cases,
+    create_case,
+    delete_case,
+    get_case,
+    get_project,
+    list_cases_paginated,
+    update_case,
+)
+from app.services.cases import get_project_test_case_stats
 
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -22,6 +41,7 @@ def create_case_route(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_authenticated_user),
 ) -> StoredCaseDetail:
+    """Create a new test case."""
     try:
         created_case = create_case(session, payload.model_copy(update={"actor_user_id": current_user.id}))
     except EntityNotFoundError as exc:
@@ -31,9 +51,93 @@ def create_case_route(
     return created_case
 
 
-@router.get("", response_model=list[StoredCaseSummary])
-def list_cases_route(session: Session = Depends(get_db_session)) -> list[StoredCaseSummary]:
-    return list_cases(session)
+@router.get("/project/{project_id}", response_model=PaginatedCases)
+def list_project_cases_route(
+    project_id: int,
+    search: str | None = None,
+    created_by: int | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    session: Session = Depends(get_db_session),
+) -> PaginatedCases:
+    """List test cases within a specific project with optional filtering and pagination."""
+    from app.schemas.cases import CaseListFilter
+    from app.services.project_management import get_project
+
+    # Verify project exists
+    project = get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    filter_params = CaseListFilter(
+        project_id=project_id,
+        search=search,
+        created_by=created_by,
+    )
+
+    items, total = list_cases_paginated(session, filter_params, page, page_size)
+
+    total_pages = (total + page_size - 1) // page_size
+
+    return PaginatedCases(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1,
+    )
+
+
+@router.get("/stats/{project_id}", response_model=ProjectTestCaseStats)
+def get_project_stats_route(
+    project_id: int,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
+) -> ProjectTestCaseStats:
+    """Get statistics for test cases in a project."""
+    # Verify project exists
+    from app.services.project_management import get_project
+    project = get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    stats_data = get_project_test_case_stats(session, project_id)
+    return ProjectTestCaseStats(**stats_data)
+
+
+@router.get("", response_model=PaginatedCases)
+def list_cases_route(
+    project_id: int | None = None,
+    search: str | None = None,
+    created_by: int | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    session: Session = Depends(get_db_session),
+) -> PaginatedCases:
+    """List test cases with optional filtering and pagination."""
+    from app.schemas.cases import CaseListFilter
+
+    filter_params = CaseListFilter(
+        project_id=project_id,
+        search=search,
+        created_by=created_by,
+    )
+
+    items, total = list_cases_paginated(session, filter_params, page, page_size)
+
+    total_pages = (total + page_size - 1) // page_size
+
+    return PaginatedCases(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1,
+    )
 
 
 @router.get("/{case_id}", response_model=StoredCaseDetail)
@@ -41,6 +145,7 @@ def get_case_route(
     case_id: int,
     session: Session = Depends(get_db_session),
 ) -> StoredCaseDetail:
+    """Get a specific test case by ID."""
     stored_case = get_case(session, case_id)
     if stored_case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found.")
@@ -54,7 +159,46 @@ def update_case_route(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_authenticated_user),
 ) -> StoredCaseDetail:
+    """Update a test case."""
     try:
         return update_case(session, case_id, payload.model_copy(update={"actor_user_id": current_user.id}))
     except EntityNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.delete("/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_case_route(
+    case_id: int,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
+) -> None:
+    """Delete a single test case."""
+    try:
+        delete_case(session, case_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.post("/batch", response_model=list[StoredCaseDetail])
+def batch_update_cases_route(
+    payload: BatchUpdateRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
+) -> list[StoredCaseDetail]:
+    """Update multiple test cases in a single request."""
+    try:
+        return batch_update_cases(session, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.delete("/batch", status_code=status.HTTP_204_NO_CONTENT)
+def batch_delete_cases_route(
+    payload: BatchDeleteRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_authenticated_user),
+) -> None:
+    """Delete multiple test cases in a single request."""
+    deleted_count = batch_delete_cases(session, payload)
+    if deleted_count == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No cases found to delete.")
