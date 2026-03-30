@@ -1,5 +1,8 @@
 """Models package."""
 
+from app.models.ai_planning_draft import AIPlanningDraft
+from app.models.ai_planning_message import AIPlanningMessage
+from app.models.ai_planning_session import AIPlanningSession
 from app.models.dsl_generation_run import DslGenerationRun
 from app.models.locator_correction import LocatorCorrection
 from app.models.locator_correction_event import LocatorCorrectionEvent
@@ -11,6 +14,9 @@ from app.models.test_case_run import TestCaseRun
 from app.models.user import User
 
 __all__ = [
+    "AIPlanningDraft",
+    "AIPlanningMessage",
+    "AIPlanningSession",
     "DslGenerationRun",
     "Project",
     "ProjectMember",

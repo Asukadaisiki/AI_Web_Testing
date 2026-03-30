@@ -16,12 +16,14 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
+import { AITestPlanningPanel } from "../components/AITestPlanningPanel";
 import {
   createCase,
   executeCase,
   generateDslCase,
   getAISettings,
   getCaseDetail,
+  getProjects,
   recordDslGenerationFeedback,
   updateCase,
   validateDslCase,
@@ -403,6 +405,10 @@ export function CaseWorkbenchPage() {
   const aiSettingsQuery = useQuery({
     queryKey: ["ai-settings"],
     queryFn: getAISettings,
+  });
+  const projectsQuery = useQuery({
+    queryKey: ["projects"],
+    queryFn: getProjects,
   });
 
   useEffect(() => {
@@ -795,6 +801,38 @@ export function CaseWorkbenchPage() {
     }
   };
 
+  const importPlanningDraft = async (draft: {
+    dsl_case?: DSLCasePayload | null;
+    dsl_generation_id?: number | null;
+  }) => {
+    if (!draft.dsl_case) {
+      throw new Error("当前草案没有可导入的 DSL 内容。");
+    }
+
+    form.setFieldsValue({
+      name: draft.dsl_case.name,
+      description: draft.dsl_case.description ?? "",
+      project_id: form.getFieldValue("project_id") ?? 1,
+      base_url: draft.dsl_case.base_url ?? "",
+    });
+    syncInputContracts(draft.dsl_case.input_contract);
+    syncOutputContracts(draft.dsl_case.output_contract);
+    syncStructuredSteps(draft.dsl_case.steps);
+    setStepsJson(formatStepsJson(draft.dsl_case.steps));
+    setEditorMode("structured");
+    setValidationResult(null);
+
+    if (draft.dsl_generation_id) {
+      await recordDslGenerationFeedback(draft.dsl_generation_id, {
+        actor_user_id: 1,
+        feedback_status: "accepted",
+        feedback_import_mode: "replace",
+        rejection_reason_code: null,
+        feedback_note: "Imported from AI planning draft",
+      });
+    }
+  };
+
   const feedbackLocked = feedbackMutation.isPending || recordedGenerationFeedback?.status === "accepted";
 
   if (caseQuery.isLoading) {
@@ -890,7 +928,13 @@ export function CaseWorkbenchPage() {
                 name="project_id"
                 rules={[{ required: true, message: "请输入项目 ID" }]}
               >
-                <InputNumber min={1} style={{ width: "100%" }} />
+                <Select
+                  loading={projectsQuery.isLoading}
+                  options={(projectsQuery.data ?? []).map((project) => ({
+                    label: `${project.name} (#${project.id})`,
+                    value: project.id,
+                  }))}
+                />
               </Form.Item>
             </div>
             <Form.Item label="用例 Base URL" name="base_url">
@@ -901,6 +945,28 @@ export function CaseWorkbenchPage() {
             </Form.Item>
           </Form>
         </Card>
+
+        <AITestPlanningPanel
+          aiSettings={aiSettingsQuery.data}
+          projectId={watchedProjectId}
+          caseId={caseId ? Number(caseId) : undefined}
+          currentCase={
+            (() => {
+              if (!isHydrated) {
+                return null;
+              }
+              try {
+                return buildCurrentDslCase();
+              } catch {
+                return null;
+              }
+            })()
+          }
+          currentSteps={structuredSteps}
+          currentInputContract={inputContracts}
+          currentOutputContract={outputContracts}
+          onImportDraft={importPlanningDraft}
+        />
 
         <Card title="自然语言生成">
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>

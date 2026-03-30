@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
+  createPlanningSession,
   generateDslCase,
   getAISettings,
   getAISettingsOverview,
@@ -11,11 +12,15 @@ import {
   getDslGenerationRuns,
   getExecutionOverview,
   getExecutions,
+  getPlanningSession,
   getProjects,
   getReportPreference,
   login,
   logout,
   recordDslGenerationFeedback,
+  generatePlanningDrafts,
+  sendPlanningMessage,
+  updatePlanningDraftStatus,
   updateAISettings,
   updateReportPreference,
 } from "./api";
@@ -244,6 +249,54 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
         retry_note: "契约命名不稳定",
         preserve_contracts: true,
       }),
+    }),
+  );
+});
+
+test("ai planning endpoints send the expected payloads", async () => {
+  await createPlanningSession({ project_id: 1, case_id: 9 });
+  await getPlanningSession(5);
+  await sendPlanningMessage(5, { content: "请帮我规划登录测试" });
+  await generatePlanningDrafts(5, {
+    scenario_keys: ["login_success"],
+    preserve_contracts: true,
+  });
+  await updatePlanningDraftStatus(11, { status: "imported" });
+
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    "/api/v1/ai-planning/sessions",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ project_id: 1, case_id: 9 }),
+    }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/ai-planning/sessions/5", expect.any(Object));
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    "/api/v1/ai-planning/sessions/5/messages",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ content: "请帮我规划登录测试" }),
+    }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    4,
+    "/api/v1/ai-planning/sessions/5/drafts:generate",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        scenario_keys: ["login_success"],
+        preserve_contracts: true,
+      }),
+    }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    5,
+    "/api/v1/ai-planning/drafts/11",
+    expect.objectContaining({
+      method: "PATCH",
+      body: JSON.stringify({ status: "imported" }),
     }),
   );
 });

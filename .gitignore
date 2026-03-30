@@ -51,4 +51,8 @@ docs/
 
 #tests
 tests/
-
+!backend/tests/
+backend/tests/*
+!backend/tests/unit/
+backend/tests/unit/*
+!backend/tests/unit/test_ai_planning_api.py

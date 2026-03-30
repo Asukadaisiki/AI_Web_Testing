@@ -11,13 +11,19 @@ vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
   return {
     ...actual,
+    createPlanningSession: vi.fn(),
     createCase: vi.fn(),
     executeCase: vi.fn(),
     generateDslCase: vi.fn(),
     getAISettings: vi.fn(),
     getCaseDetail: vi.fn(),
+    generatePlanningDrafts: vi.fn(),
+    getPlanningSession: vi.fn(),
+    getProjects: vi.fn(),
     recordDslGenerationFeedback: vi.fn(),
+    sendPlanningMessage: vi.fn(),
     updateCase: vi.fn(),
+    updatePlanningDraftStatus: vi.fn(),
     validateDslCase: vi.fn(),
   };
 });
@@ -42,6 +48,83 @@ beforeEach(() => {
     vlm_model: "gpt-4o",
     vlm_model_family: "gpt-4o",
     has_vlm_api_key: false,
+  });
+  vi.mocked(api.getProjects).mockResolvedValue([
+    {
+      id: 1,
+      name: "Default Project",
+      description: "Seed project",
+    },
+  ]);
+  vi.mocked(api.createPlanningSession).mockResolvedValue({
+    session: {
+      id: 5,
+      actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
+      title: null,
+      status: "collecting",
+      requirements: {
+        app_under_test: null,
+        business_goal: null,
+        entry_url_or_page: null,
+        core_user_flow: null,
+        main_assertions: [],
+        test_data_or_account: null,
+        scope_limits: null,
+      },
+      plan: null,
+      missing_slots: ["app_under_test"],
+      last_error_message: null,
+      created_at: "2026-03-30T10:00:00",
+      updated_at: "2026-03-30T10:00:00",
+    },
+    messages: [],
+    drafts: [],
+  });
+  vi.mocked(api.generatePlanningDrafts).mockResolvedValue({
+    assistant_message: "已根据所选场景生成 DSL 草案。",
+    session_status: "drafts_ready",
+    requirements: {
+      app_under_test: "电商后台",
+      business_goal: "验证管理员登录",
+      entry_url_or_page: "https://shop.example.com/login",
+      core_user_flow: "输入账号密码并点击登录",
+      main_assertions: ["跳转到 dashboard"],
+      test_data_or_account: "管理员账号",
+      scope_limits: "不覆盖注册",
+    },
+    missing_slots: [],
+    suggested_questions: [],
+    plan: null,
+    drafts: [],
+    next_action: "drafts_generated",
+  });
+  vi.mocked(api.getPlanningSession).mockResolvedValue({
+    session: {
+      id: 5,
+      actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
+      title: null,
+      status: "collecting",
+      requirements: {
+        app_under_test: null,
+        business_goal: null,
+        entry_url_or_page: null,
+        core_user_flow: null,
+        main_assertions: [],
+        test_data_or_account: null,
+        scope_limits: null,
+      },
+      plan: null,
+      missing_slots: ["app_under_test"],
+      last_error_message: null,
+      created_at: "2026-03-30T10:00:00",
+      updated_at: "2026-03-30T10:00:00",
+    },
+    messages: [],
+    drafts: [],
   });
   vi.mocked(api.recordDslGenerationFeedback).mockResolvedValue({
     id: 999,
@@ -68,6 +151,45 @@ beforeEach(() => {
     feedback_import_mode: "replace",
     rejection_reason_code: null,
     feedback_recorded_at: "2026-03-17T00:01:00",
+  });
+  vi.mocked(api.sendPlanningMessage).mockResolvedValue({
+    assistant_message: "为了完善测试方案，我还需要补充几项关键信息。",
+    session_status: "collecting",
+    requirements: {
+      app_under_test: "电商后台",
+      business_goal: null,
+      entry_url_or_page: null,
+      core_user_flow: null,
+      main_assertions: [],
+      test_data_or_account: null,
+      scope_limits: null,
+    },
+    missing_slots: ["business_goal"],
+    suggested_questions: ["请明确这次测试想验证的核心业务目标。"],
+    plan: null,
+    drafts: [],
+    next_action: "ask_followup",
+  });
+  vi.mocked(api.updatePlanningDraftStatus).mockResolvedValue({
+    id: 11,
+    session_id: 5,
+    scenario_key: "login_success",
+    title: "登录成功",
+    status: "imported",
+    dsl_generation_id: 33,
+    dsl_case: {
+      name: "登录成功",
+      description: "草案",
+      base_url: "https://shop.example.com",
+      input_contract: [],
+      output_contract: [],
+      steps: [{ action: "goto", value: "/login" }],
+    },
+    warnings: [],
+    normalization_notes: [],
+    error_message: null,
+    created_at: "2026-03-30T10:00:00",
+    updated_at: "2026-03-30T10:00:00",
   });
 });
 

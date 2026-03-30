@@ -164,6 +164,125 @@ export interface GenerateDslResponse {
   generation_meta: GenerateDslMeta;
 }
 
+export type AIPlanningSessionStatus = "collecting" | "plan_ready" | "drafts_ready" | "closed" | "error";
+export type AIPlanningDraftStatus = "generated" | "imported" | "rejected" | "failed";
+export type AIPlanningNextAction = "ask_followup" | "review_plan" | "select_scenarios" | "drafts_generated";
+
+export interface AIPlanningRequirements {
+  app_under_test?: string | null;
+  business_goal?: string | null;
+  entry_url_or_page?: string | null;
+  core_user_flow?: string | null;
+  main_assertions: string[];
+  test_data_or_account?: string | null;
+  scope_limits?: string | null;
+}
+
+export interface AIPlanningTestDataRequirement {
+  key: string;
+  label: string;
+  value_type: DSLVariableType;
+  required: boolean;
+  source_hint?: string | null;
+}
+
+export interface AIPlanningScenario {
+  scenario_key: string;
+  title: string;
+  goal: string;
+  preconditions: string[];
+  priority: "high" | "medium" | "low";
+  test_data_requirements: AIPlanningTestDataRequirement[];
+  assertions: string[];
+  draft_prompt: string;
+}
+
+export interface AIPlanningPlan {
+  summary: string;
+  assumptions: string[];
+  risks: string[];
+  scenarios: AIPlanningScenario[];
+}
+
+export interface AIPlanningSession {
+  id: number;
+  actor_user_id: number;
+  project_id: number;
+  case_id?: number | null;
+  title?: string | null;
+  status: AIPlanningSessionStatus;
+  requirements: AIPlanningRequirements;
+  plan?: AIPlanningPlan | null;
+  missing_slots: string[];
+  last_error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AIPlanningMessage {
+  id: number;
+  session_id: number;
+  role: "user" | "assistant";
+  turn_type: "user" | "followup" | "plan" | "system_error";
+  content: string;
+  structured_payload?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AIPlanningDraft {
+  id: number;
+  session_id: number;
+  scenario_key: string;
+  title: string;
+  status: AIPlanningDraftStatus;
+  dsl_generation_id?: number | null;
+  dsl_case?: DSLCasePayload | null;
+  warnings: string[];
+  normalization_notes: string[];
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AIPlanningSessionDetail {
+  session: AIPlanningSession;
+  messages: AIPlanningMessage[];
+  drafts: AIPlanningDraft[];
+}
+
+export interface CreatePlanningSessionPayload {
+  project_id: number;
+  case_id?: number | null;
+}
+
+export interface SendPlanningMessagePayload {
+  content: string;
+}
+
+export interface GeneratePlanningDraftsPayload {
+  scenario_keys: string[];
+  current_case?: DSLCasePayload | null;
+  current_steps?: DSLStep[] | null;
+  current_input_contract?: DSLCaseInputContract[] | null;
+  current_output_contract?: DSLCaseOutputContract[] | null;
+  preserve_contracts?: boolean;
+}
+
+export interface UpdatePlanningDraftStatusPayload {
+  status: "imported" | "rejected";
+}
+
+export interface AIPlanningTurnResponse {
+  assistant_message: string;
+  session_status: AIPlanningSessionStatus;
+  requirements: AIPlanningRequirements;
+  missing_slots: string[];
+  suggested_questions: string[];
+  plan?: AIPlanningPlan | null;
+  drafts: AIPlanningDraft[];
+  next_action: AIPlanningNextAction;
+}
+
 export interface DslGenerationFeedbackPayload {
   actor_user_id: number;
   feedback_status: "accepted" | "rejected";

@@ -1,4 +1,4 @@
-# Bug 日志
+﻿# Bug 日志
 
 用于沉淀在开发、联调、测试和执行过程中发现的问题，跟踪影响、状态和修复结论。
 
@@ -32,6 +32,25 @@
 ## 当前状态
 
 
+## BUG-042 | AI 测试规划面板初始化首条消息可能丢失，且新后端回归测试默认不会被跟踪
+
+- 日期：2026-03-30
+- 状态：fixed
+- 来源：自测
+- 描述：实现 AI 测试规划对话助手时发现两个实际缺陷。其一，AITestPlanningPanel 在 planning session 尚未创建完成前允许点击“发送消息”，会导致首条输入被直接忽略；其二，仓库 .gitignore 中存在 tests/ 规则，会让新建的 backend/tests/unit/test_ai_planning_api.py 默认处于未跟踪状态，后续同步时容易遗漏关键回归测试。
+- 复现步骤：
+  1. 打开工作台后立即在 AI 测试助手输入内容并点击“发送消息”
+  2. 观察前端未报错，但首条消息没有进入 transcript，也没有触发后端 planning turn
+  3. 新增 backend/tests/unit/test_ai_planning_api.py 后执行 git status --short --untracked-files=all
+  4. 观察测试文件最初不会出现在待跟踪列表中
+- 影响：AI 测试规划首轮交互不稳定，且新增后端回归测试存在被遗漏进版本控制的风险
+- 根因：发送按钮缺少对 session bootstrap 完成状态的约束；仓库忽略规则对任意 tests/ 目录一刀切，未给 backend/tests 留出白名单
+- 处理：发送按钮增加 isBootstrapping、sessionId 和空输入约束，导入草案后使用服务端返回结果刷新状态；.gitignore 新增 backend/tests/unit/test_ai_planning_api.py 的定向白名单规则，确保新测试可被跟踪
+- 验证：
+  - cd frontend && npm run test -- src/components/AITestPlanningPanel.test.tsx
+  - git status --short --untracked-files=all | Select-String "test_ai_planning_api.py"
+- 关联记录：docs/execution-log.md 2026-03-30 23:15
+
 ## BUG-041 | 最新 CRUD 提交存在权限绕过、统计接口运行时失败与删除路径不闭合
 
 - 日期：2026-03-30
@@ -55,3 +74,5 @@
   - `uv run pytest backend/tests/unit/test_projects_and_report_preferences_api.py -q`
   - 静态核对 `backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/app/services/project_management.py`、`backend/app/schemas/cases.py`、`backend/app/models/test_case.py`
 - 关联记录：`docs/execution-log.md` 2026-03-30 21:31
+
+

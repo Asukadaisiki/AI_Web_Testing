@@ -1,7 +1,11 @@
 import type {
+  AIPlanningDraft,
+  AIPlanningSessionDetail,
+  AIPlanningTurnResponse,
   AISettingsOverview,
   AISettings,
   AISettingsUpdatePayload,
+  CreatePlanningSessionPayload,
   BatchUpdateCorrectionStatePayload,
   CaseMutationPayload,
   CaseExecutionRequest,
@@ -11,6 +15,7 @@ import type {
   DslGenerationPromptVariant,
   DslGenerationRejectionReasonCode,
   DslGenerationRunStatus,
+  GeneratePlanningDraftsPayload,
   GenerateDslRequest,
   GenerateDslResponse,
   DSLValidationResult,
@@ -22,6 +27,7 @@ import type {
   ProjectSummary,
   ReportPreference,
   ReportScopeType,
+  SendPlanningMessagePayload,
   DslGenerationFeedbackStatus,
   GenerateDslImportMode,
   GenerateDslMode,
@@ -34,6 +40,7 @@ import type {
   StoredCaseSummary,
   StoredLocatorCorrection,
   StoredLocatorCorrectionEvent,
+  UpdatePlanningDraftStatusPayload,
   UpdateCorrectionStatePayload,
 } from "../types/api";
 
@@ -216,6 +223,38 @@ export function getDslGenerationRunDetail(generationId: number) {
 
 export function recordDslGenerationFeedback(generationId: number, payload: DslGenerationFeedbackPayload) {
   return request<StoredDslGenerationRunSummary>(`/api/v1/dsl/generations/${generationId}/feedback`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createPlanningSession(payload: CreatePlanningSessionPayload) {
+  return request<AIPlanningSessionDetail>("/api/v1/ai-planning/sessions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getPlanningSession(sessionId: number) {
+  return request<AIPlanningSessionDetail>(`/api/v1/ai-planning/sessions/${sessionId}`);
+}
+
+export function sendPlanningMessage(sessionId: number, payload: SendPlanningMessagePayload) {
+  return request<AIPlanningTurnResponse>(`/api/v1/ai-planning/sessions/${sessionId}/messages`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function generatePlanningDrafts(sessionId: number, payload: GeneratePlanningDraftsPayload) {
+  return request<AIPlanningTurnResponse>(`/api/v1/ai-planning/sessions/${sessionId}/drafts:generate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updatePlanningDraftStatus(draftId: number, payload: UpdatePlanningDraftStatusPayload) {
+  return request<AIPlanningDraft>(`/api/v1/ai-planning/drafts/${draftId}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
