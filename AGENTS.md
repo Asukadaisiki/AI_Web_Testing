@@ -91,6 +91,47 @@ When responding:
 - When code is ready and the user asks to sync changes, prefer direct branch push or direct GitHub sync.
 - Only suggest, create, or rely on a Pull Request when the user explicitly asks for PR flow.
 
+## GitHub Sync Reference
+
+When the user asks Claude Code to sync the current changes to GitHub, prefer a clear non-interactive flow:
+
+```bash
+# 1) Review current changes
+git status --short
+git branch --show-current
+
+# 2) Stage only the intended files
+git add AGENTS.md docs/execution-log.md
+
+# 3) Create a focused commit
+git commit -m "docs: add github sync reference for claude code"
+
+# 4) Push the current branch
+git push origin HEAD
+```
+
+Additional reference commands for common cases:
+
+```bash
+# Push main directly when already on main
+git push origin main
+
+# First push for a new branch and set upstream
+git push -u origin <branch-name>
+
+# Quick verification after push
+git status --short
+git log -1 --stat --oneline
+```
+
+Notes for Claude Code:
+
+- Prefer explicit file paths in `git add` over blindly staging everything.
+- Prefer one focused commit per completed task.
+- Use concise Conventional Commit style messages such as `feat: ...`, `fix: ...`, `docs: ...`, `test: ...`, `refactor: ...`.
+- Avoid interactive git flows by default.
+- After pushing, report the branch name, latest commit hash, and whether the worktree is clean.
+
 ## Task Logging Rules
 
 - After completing any meaningful task, append one record to `docs/execution-log.md`.

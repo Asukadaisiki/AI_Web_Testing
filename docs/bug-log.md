@@ -920,3 +920,26 @@
   - 执行 `rg -n "(/suites\\b|Suite Context|Suite 批次|Suite 管理)" backend frontend README.md docs`
   - 对照应用层代码确认搜索结果仅应保留在历史记录或数据库遗留层，而不应继续出现在现行产品说明中
 - 关联记录：`docs/execution-log.md` 2026-03-29 22:26
+## BUG-041 | 最新 CRUD 提交存在权限绕过、统计接口运行时失败与删除路径不闭合
+
+- 日期：2026-03-30
+- 状态：open
+- 来源：代码评审 / 最新提交 `7eb71ae`
+- 描述：审查最新 CRUD 提交时发现 4 类问题。其一，`cases` 路由和 service 的新增读写接口仅校验“已登录”，没有校验当前用户是否属于目标项目，导致任意已登录用户都能读取、更新、删除其他项目的用例；其二，`GET /api/v1/cases/stats/{project_id}` 声明返回 `ProjectTestCaseStats`，但 service 返回值缺少必填字段 `created_by_user`，路由层会在构造响应模型时直接触发校验错误；其三，`delete_project()` 直接删除项目，但 `test_cases.project_id` 的外键是 `ondelete="RESTRICT"`，已有用例的项目无法被删除并会在提交时抛出数据库完整性错误；其四，原有 `GET /api/v1/cases` 与 `GET /api/v1/projects` 的响应合同已经变化，但对应单测没有更新，现有测试已失败
+- 复现步骤：
+  1. 以任意已登录用户访问 `/api/v1/cases`、`/api/v1/cases/project/{project_id}`、`/api/v1/cases/{case_id}`、`PUT /api/v1/cases/{case_id}` 或 `DELETE /api/v1/cases/{case_id}`，观察代码路径中没有项目成员校验
+  2. 调用 `/api/v1/cases/stats/{project_id}`，观察 `backend/app/api/routes/cases.py` 会执行 `ProjectTestCaseStats(**stats_data)`，而 `backend/app/services/cases.py` 返回值缺少 `created_by_user`
+  3. 创建带 `test_cases` 的项目后调用 `DELETE /api/v1/projects/{project_id}`，观察 `backend/app/services/project_management.py` 直接删除项目，而 `backend/app/models/test_case.py` 将外键定义为 `ForeignKey("projects.id", ondelete="RESTRICT")`
+  4. 执行 `uv run pytest backend/tests/unit/test_cases_api.py -q` 与 `uv run pytest backend/tests/unit/test_projects_and_report_preferences_api.py -q`，观察列表接口断言失败
+- 影响：当前提交标称“complete CRUD”，但实际存在越权访问风险、统计接口 500 风险、项目删除不可用风险，以及已存在 API 消费方/测试的兼容性回归
+- 根因：新增 CRUD 与分页/统计逻辑时，只补了路由和 service 主干，没有沿项目成员边界、响应 schema、一对多删除约束和历史接口合同做完整联动校验
+- 建议处理：
+  - 为 case 的创建、查询、列表、统计、更新、删除与批量接口补齐项目成员/所有权校验
+  - 修正 `ProjectTestCaseStats` 与 `get_project_test_case_stats()` 的字段契约，保证响应模型可正常构造
+  - 明确项目删除策略：禁止删除含用例项目并返回显式业务错误，或先处理关联用例，再提交事务
+  - 更新或补充 `backend/tests/unit/test_cases_api.py`、`backend/tests/unit/test_projects_and_report_preferences_api.py`，并新增针对 stats、权限与删除失败语义的测试
+- 验证：
+  - `uv run pytest backend/tests/unit/test_cases_api.py -q`
+  - `uv run pytest backend/tests/unit/test_projects_and_report_preferences_api.py -q`
+  - 静态核对 `backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/app/services/project_management.py`、`backend/app/schemas/cases.py`、`backend/app/models/test_case.py`
+- 关联记录：`docs/execution-log.md` 2026-03-30 21:31
