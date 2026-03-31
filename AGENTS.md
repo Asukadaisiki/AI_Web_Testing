@@ -6,6 +6,31 @@ This repository follows the OpenAI Codex `AGENTS.md` mechanism for repo-specific
 
 These instructions apply to the entire repository.
 
+
+## Codex and CLAUDE Working Rules
+
+Before making changes:
+
+- Search the repository for related files first.
+- Understand local patterns before editing.
+- Prefer minimal changes over broad refactors.
+
+
+When implementing:
+
+- Define or update types and schemas before adding logic.
+- Add or update tests for every meaningful feature.
+- Avoid inventing unsupported frameworks or tools.
+- Keep comments short and only where they add clarity.
+
+When responding:
+
+- Use Chinese unless the user explicitly requests another language.
+- Include `Summary`, `Changes`, `How to run`, `Tests`, and `Notes` in final responses.
+- State assumptions and limitations clearly.
+- Answer in chinese
+
+
 ## Product Goal
 
 Build an AI-enhanced Web UI automation testing platform.
@@ -61,28 +86,6 @@ Keep the following boundaries:
 - Every executed step must produce evidence.
 - Locator output should record target, candidates, final match, and failure reason when available.
 
-## Codex Working Rules
-
-Before making changes:
-
-- Search the repository for related files first.
-- Understand local patterns before editing.
-- Prefer minimal changes over broad refactors.
-
-
-When implementing:
-
-- Define or update types and schemas before adding logic.
-- Add or update tests for every meaningful feature.
-- Avoid inventing unsupported frameworks or tools.
-- Keep comments short and only where they add clarity.
-
-When responding:
-
-- Use Chinese unless the user explicitly requests another language.
-- Include `Summary`, `Changes`, `How to run`, `Tests`, and `Notes` in final responses.
-- State assumptions and limitations clearly.
-- Answer in chinese
 
 ## Collaboration Preference
 
