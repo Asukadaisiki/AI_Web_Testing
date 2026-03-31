@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -141,10 +143,27 @@ def generate_planning_drafts(
     }
     drafts: list[AIPlanningDraftSchema] = []
     base_url = _normalize_base_url(planning_session.requirements_json)
+    invalid_scenarios: list[str] = []
 
     for scenario_key in payload.scenario_keys:
         scenario = scenarios.get(scenario_key)
         if scenario is None:
+            invalid_scenarios.append(scenario_key)
+            # Create a failed draft record for the invalid scenario
+            record = AIPlanningDraft(
+                session_id=planning_session.id,
+                scenario_key=scenario_key,
+                title=f"场景 {scenario_key} 不存在",
+                status="failed",
+                dsl_generation_id=None,
+                dsl_case_json=None,
+                warnings_json=[f"场景 '{scenario_key}' 未在 AI 生成的测试计划中找到"],
+                normalization_notes_json=[],
+                error_message=f"场景 '{scenario_key}' 不存在于当前测试计划中",
+            )
+            session.add(record)
+            session.flush()
+            drafts.append(_to_draft_schema(record))
             continue
 
         existing = session.scalar(
@@ -178,15 +197,18 @@ def generate_planning_drafts(
                 scenario_key=scenario_key,
                 title=scenario["title"],
                 status="generated",
-                dsl_generation_id=(
-                    generated.generation_id if session.get(DslGenerationRun, generated.generation_id) is not None else None
-                ),
+                # Use generation_id only if the DslGenerationRun record exists in the database.
+# This handles cases where generate_dsl_case might fail to commit or return an invalid ID.
+dsl_generation_id=(
+    generated.generation_id if session.get(DslGenerationRun, generated.generation_id) is not None else None
+),
                 dsl_case_json=generated.case.model_dump(mode="json"),
                 warnings_json=generated.warnings,
                 normalization_notes_json=generated.normalization_notes,
                 error_message=None,
             )
         except Exception as exc:
+            logging.error(f"Failed to generate DSL case for scenario '{scenario_key}' in session {planning_session.id}", exc_info=True)
             record = AIPlanningDraft(
                 session_id=planning_session.id,
                 scenario_key=scenario_key,
@@ -205,8 +227,14 @@ def generate_planning_drafts(
     planning_session.status = "drafts_ready"
     session.commit()
     session.refresh(planning_session)
+
+    # Add warning to assistant_message if any scenarios were invalid
+    message = "已根据所选场景生成 DSL 草案。"
+    if invalid_scenarios:
+        message += f" 注意：以下场景不存在于当前测试计划中：{', '.join(invalid_scenarios)}"
+
     return AIPlanningTurnResponse(
-        assistant_message="已根据所选场景生成 DSL 草案。",
+        assistant_message=message,
         session_status="drafts_ready",
         requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         missing_slots=planning_session.missing_slots_json or [],

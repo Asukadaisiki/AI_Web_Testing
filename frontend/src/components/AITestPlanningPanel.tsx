@@ -121,10 +121,12 @@ export function AITestPlanningPanel({
     setIsSending(true);
     try {
       const response = await sendPlanningMessage(sessionId, { content });
+      // Use negative timestamps for optimistic updates to avoid conflicts with server IDs
+      const tempId = -Date.now();
       setTranscript((current) => [
         ...current,
         {
-          id: current.length + 1,
+          id: tempId,
           session_id: sessionId,
           role: "user",
           turn_type: "user",
@@ -133,7 +135,7 @@ export function AITestPlanningPanel({
           created_at: new Date().toISOString(),
         },
         {
-          id: current.length + 2,
+          id: tempId + 1,
           session_id: sessionId,
           role: "assistant",
           turn_type: response.plan ? "plan" : "followup",
@@ -173,10 +175,12 @@ export function AITestPlanningPanel({
       setPlan(response.plan ?? null);
       setRequirements(response.requirements);
       setMissingSlots(response.missing_slots);
+      // Use negative timestamp for optimistic update to avoid conflicts with server IDs
+      const tempId = -Date.now();
       setTranscript((current) => [
         ...current,
         {
-          id: current.length + 1,
+          id: tempId,
           session_id: sessionId,
           role: "assistant",
           turn_type: "plan",

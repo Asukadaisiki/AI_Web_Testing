@@ -49,10 +49,14 @@ backend/.python-version
 # docs
 docs/
 
-#tests
+# tests
 tests/
-!backend/tests/
-backend/tests/*
-!backend/tests/unit/
-backend/tests/unit/*
 !backend/tests/unit/test_ai_planning_api.py
+# Ensure parent directories are tracked for the whitelisted file
+!backend/tests/
+!backend/tests/unit/
+
+
+#others
+.claude
+.superpowers
