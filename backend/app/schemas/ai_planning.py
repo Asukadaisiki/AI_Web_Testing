@@ -12,7 +12,7 @@ from app.schemas.dsl import DSLCase, DSLCaseInputContract, DSLCaseOutputContract
 
 AIPlanningSessionStatus = Literal["collecting", "plan_ready", "drafts_ready", "closed", "error"]
 AIPlanningMessageRole = Literal["user", "assistant"]
-AIPlanningMessageTurnType = Literal["user", "followup", "plan", "system_error"]
+AIPlanningMessageTurnType = Literal["user", "followup", "plan", "tool_call", "system_error"]
 AIPlanningDraftStatus = Literal["generated", "imported", "rejected", "failed"]
 AIPlanningNextAction = Literal["ask_followup", "review_plan", "select_scenarios", "drafts_generated"]
 
@@ -25,6 +25,12 @@ class AIPlanningRequirements(DSLModel):
     main_assertions: list[str] = Field(default_factory=list)
     test_data_or_account: str | None = Field(default=None, max_length=1000)
     scope_limits: str | None = Field(default=None, max_length=1000)
+
+
+class AIPlanningToolCall(DSLModel):
+    tool: str = Field(min_length=1, max_length=100)
+    params: dict[str, Any] = Field(default_factory=dict)
+    result: Any = None
 
 
 class AIPlanningTestDataRequirement(DSLModel):
@@ -130,3 +136,4 @@ class AIPlanningTurnResponse(DSLModel):
     plan: AIPlanningPlan | None = None
     drafts: list[AIPlanningDraft] = Field(default_factory=list)
     next_action: AIPlanningNextAction
+    tool_calls: list[AIPlanningToolCall] = Field(default_factory=list)

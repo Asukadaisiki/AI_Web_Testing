@@ -9,6 +9,67 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-03-31 12:00
+
+- 任务：更新协作规则并补充 Suite 表移除迁移回归测试
+- 执行动作：将 AGENTS.md 中的 working rules 移至文件顶部并更新标题为 Codex/CLAUDE；新增 Alembic 迁移回归测试验证 suite 相关表已被正确移除
+- 结果：AGENTS.md 协作规则结构更清晰；迁移回归测试确保 Suite 下线后数据库状态一致
+- 验证：`cd backend && uv run pytest -q` 回归通过
+- 后续：无
+
+## 2026-03-31 10:00
+
+- 任务：修复 AI 测试规划功能的代码质量问题
+- 执行动作：前端使用负时间戳作为临时消息 ID 避免与服务器 ID 冲突；后端增加 DSL 生成失败时的异常日志与完整 traceback；后端对无效 scenario key 做校验并报告而非静默跳过；简化 .gitignore 中测试文件跟踪模式
+- 结果：AI 测试规划功能在消息 ID 冲突、错误可见性、无效输入处理等方面均已加固
+- 验证：全量单元测试通过
+- 后续：无
+
+## 2026-03-30 22:00
+
+- 任务：修复 CRUD 提交中的关键安全漏洞和运行时兼容问题
+- 执行动作：为所有 case API 端点增加项目成员校验防止权限绕过；修正 `ProjectTestCaseStats` 缺少 `created_by_user` 导致的运行时错误；处理外键约束下的项目删除语义；更新测试断言匹配新的分页响应格式；修复 Pydantic 弃用警告
+- 结果：BUG-041 全部修复，权限校验已补齐，stats 接口不再 500，项目删除语义明确
+- 验证：`uv run pytest backend/tests/unit/ -q` 全部通过
+- 后续：无，BUG-041 状态已更新为 fixed
+
+## 2026-03-30 ~ 2026-03-29 · DSL BigModel 适配与 GLM Visual Locate 适配
+
+- 任务：让 DSL 生成链路和 AI 视觉定位兼容智谱 GLM 系列模型
+- 执行动作：在 `dsl_generator.py` 请求层按 `base_url/model` 做 provider 自适配（BigModel 分支使用 `thinking` 参数，OpenAI 分支保持 `response_format`）；更新 `.env.example` 默认指向智谱 BigModel 端点；在 visual locate 链路适配 GLM 视觉模型请求格式
+- 结果：DSL 生成和 AI 视觉定位均可使用智谱 `glm-4.7-flash` 等模型，非智谱 provider 行为不回归
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_dsl_validation.py -q` 通过
+  - 本地真实 BigModel smoke 请求返回 200 并正确解析
+- 后续：如需切换回 OpenAI 系列，只需修改 `.env` 中的 `AI_DSL_BASE_URL` 和 `AI_DSL_MODEL`
+- 关联计划：`docs/superpowers/plans/2026-03-29-dsl-bigmodel-adapter.md`
+
+## 2026-03-29 · Suite 应用层下线
+
+- 任务：移除已废弃的 Suite 应用层，统一到 `Project -> Case` 资产结构
+- 执行动作：删除 Suite 相关模型、路由、服务、前端组件；清理 Suite 相关迁移；补充 Alembic 迁移回归测试
+- 结果：资产结构统一为 `Project -> Case`，Suite 相关代码和数据库对象已清除
+- 验证：全量后端测试和迁移测试通过
+- 后续：后续回归编排需求将基于项目结构重新设计
+
+## 2026-03-29 · 报告中心增强
+
+- 任务：扩展报告中心的作用域和指标
+- 执行动作：增强报告中心的数据聚合范围和展示指标
+- 结果：报告中心可展示更丰富的执行统计和趋势数据
+- 验证：前端组件测试和页面测试通过
+- 后续：暂无新增报告主线，后续视需求进入新一轮报告扩面
+
+## 2026-03-28 · M1 认证入口落地与治理收口
+
+- 任务：完成 M1 里程碑的认证入口落地和治理主线收口
+- 执行动作：后端落地 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me`；前端完成 `/login`、登录态恢复、受保护路由、统一 401 回退；加严 auth session 和 artifact 访问安全；推进 governance-v3.3 收口
+- 结果：M1 认证基线已落地，业务 API 默认要求登录，治理主线进入收口状态
+- 验证：
+  - 后端 API 测试和前端认证流程测试通过
+  - 2 条浏览器级固定主回归通过
+- 后续：认证仍为本地账号密码最小形态，尚未进入角色分层和账号管理
+
 ## 2026-03-30 23:15
 
 - 任务：实现 AI 测试规划对话助手，覆盖工作台内嵌对话 UI、后端 planning session 持久化、agent loop 与 DSL 草案生成复用链路
@@ -40,3 +101,14 @@
   - 静态核对 `AGENTS.md` 新增小节内容与现有协作规则不冲突
   - 计划执行 `git diff -- AGENTS.md docs/execution-log.md` 做最终确认
 - 后续：如需进一步收紧提交流程，可继续补充提交前测试校验模板或按分支类型区分推送示例
+
+## 2026-04-03 23:02
+
+- 任务：继续完成 AI planning ReAct 改造，从 task4 推进到 task9，串联后端 agent、schema/service、前端 settings 与规划面板，并补齐回归测试
+- 执行动作：重写 `backend/app/ai/test_planning_agent.py` 为 LLM 驱动的 ReAct loop，接入 `planning_tools.py`、force generate、工具调用审计与失败回退；重写 `backend/app/ai/test_planning_prompts.py`；更新 `backend/app/schemas/ai_planning.py` 和 `backend/app/services/ai_planning.py`，支持 `tool_call` 消息与 `tool_calls` 响应；补齐 `backend/tests/unit/test_ai_planning_api.py` 和 `backend/tests/unit/test_ai_settings_api.py`；前端补充 planning settings 类型与设置页表单，重写 `frontend/src/components/AITestPlanningPanel.tsx` 为动态进度面板并新增“直接生成方案”；同步更新相关前端测试
+- 结果：AI planning 已从旧的关键词补槽逻辑切换到可调用工具的 ReAct agent；工作台内嵌规划面板现在支持动态进度、工具调用回显、直接生成方案和按场景生成 DSL 草案；Settings 页面已支持单独配置 AI planning 模型、超时、轮数与密钥
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_ai_planning_api.py tests/unit/test_ai_settings_api.py -q`，结果 `13 passed`
+  - `cd frontend && npm run test -- src/components/AITestPlanningPanel.test.tsx src/pages/AISettingsPage.test.tsx src/services/api.test.ts`，结果 `20 passed`
+  - `cd frontend && npm run test -- src/pages/CaseWorkbenchPage.test.tsx`，结果 `16 passed`
+- 后续：如需继续收口，可补 `planning_tools.py` 的独立单测，并考虑把 AI planning 的真实 HTTP 调用抽成与 DSL/VLM 共用的 LLM client，减少重复请求层代码

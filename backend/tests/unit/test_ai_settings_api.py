@@ -42,6 +42,12 @@ def ai_settings_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestC
                 "VLM_MODEL=",
                 "VLM_MODEL_FAMILY=gpt-4o",
                 "VLM_API_KEY=",
+                "ENABLE_AI_PLANNING=false",
+                "AI_PLANNING_MODEL=",
+                "AI_PLANNING_BASE_URL=https://api.openai.com/v1",
+                "AI_PLANNING_API_KEY=",
+                "AI_PLANNING_TIMEOUT_MS=30000",
+                "AI_PLANNING_MAX_REACT_ROUNDS=5",
             ]
         )
         + "\n",
@@ -122,6 +128,13 @@ def test_update_ai_settings_persists_to_env_file_and_allows_clearing_keys(
             "vlm_model_family": "gpt-4o",
             "vlm_api_key": None,
             "clear_vlm_api_key": True,
+            "enable_ai_planning": False,
+            "ai_planning_model": None,
+            "ai_planning_base_url": "https://api.openai.com/v1",
+            "ai_planning_timeout_ms": 30000,
+            "ai_planning_max_react_rounds": 5,
+            "ai_planning_api_key": None,
+            "clear_ai_planning_api_key": False,
         },
     )
 
@@ -143,6 +156,12 @@ def test_update_ai_settings_persists_to_env_file_and_allows_clearing_keys(
         "vlm_model": "gpt-4o-mini",
         "vlm_model_family": "gpt-4o",
         "has_vlm_api_key": False,
+        "enable_ai_planning": False,
+        "ai_planning_model": None,
+        "ai_planning_base_url": "https://api.openai.com/v1",
+        "ai_planning_timeout_ms": 30000,
+        "ai_planning_max_react_rounds": 5,
+        "has_ai_planning_api_key": False,
     }
 
     env_text = config_module.ENV_FILE_PATH.read_text(encoding="utf-8")
@@ -186,6 +205,13 @@ def test_update_ai_settings_accepts_glm_model_family(ai_settings_client: TestCli
             "vlm_model_family": "glm",
             "vlm_api_key": "glm-secret",
             "clear_vlm_api_key": False,
+            "enable_ai_planning": False,
+            "ai_planning_model": None,
+            "ai_planning_base_url": "https://api.openai.com/v1",
+            "ai_planning_timeout_ms": 30000,
+            "ai_planning_max_react_rounds": 5,
+            "ai_planning_api_key": None,
+            "clear_ai_planning_api_key": False,
         },
     )
 

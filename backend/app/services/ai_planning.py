@@ -7,7 +7,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.test_planning_agent import run_planning_turn
+from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn
 from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, Project, TestCase
 from app.schemas.ai_planning import (
     AIPlanningDraft as AIPlanningDraftSchema,
@@ -15,6 +15,7 @@ from app.schemas.ai_planning import (
     AIPlanningRequirements,
     AIPlanningSession as AIPlanningSessionSchema,
     AIPlanningSessionDetail,
+    AIPlanningToolCall,
     AIPlanningTurnResponse,
     CreateAIPlanningSessionRequest,
     GenerateAIPlanningDraftsRequest,
@@ -23,6 +24,9 @@ from app.schemas.ai_planning import (
 from app.schemas.dsl import GenerateDslRequest
 from app.services.cases import EntityNotFoundError, _ensure_project_member
 from app.services.dsl import generate_dsl_case
+
+
+logger = logging.getLogger(__name__)
 
 
 class AIPlanningAccessError(ValueError):
@@ -45,15 +49,7 @@ def create_planning_session(
         case_id=payload.case_id,
         status="collecting",
         requirements_json=AIPlanningRequirements().model_dump(mode="json"),
-        missing_slots_json=[
-            "app_under_test",
-            "business_goal",
-            "entry_url_or_page",
-            "core_user_flow",
-            "main_assertions",
-            "test_data_or_account",
-            "scope_limits",
-        ],
+        missing_slots_json=list(REQUIRED_REQUIREMENT_SLOTS),
     )
     session.add(record)
     session.commit()
@@ -99,8 +95,10 @@ def send_planning_message(
         select(AIPlanningMessage).where(AIPlanningMessage.session_id == planning_session.id).order_by(AIPlanningMessage.id.asc())
     ).all()
     agent_response = run_planning_turn(
-        transcript=[{"role": item.role, "content": item.content} for item in transcript_records],
+        transcript=[{"role": item.role, "content": item.content} for item in transcript_records if item.turn_type != "tool_call"],
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
+        db_session=session,
+        project_id=planning_session.project_id,
     )
 
     planning_session.status = agent_response.session_status
@@ -108,17 +106,36 @@ def send_planning_message(
     planning_session.plan_json = agent_response.plan.model_dump(mode="json") if agent_response.plan is not None else None
     planning_session.missing_slots_json = agent_response.missing_slots
     planning_session.title = planning_session.title or agent_response.requirements.business_goal or "AI 测试规划"
+    planning_session.last_error_message = (
+        agent_response.assistant_message if agent_response.session_status == "error" else None
+    )
 
+    for tool_call in agent_response.tool_calls:
+        session.add(
+            AIPlanningMessage(
+                session_id=planning_session.id,
+                role="assistant",
+                turn_type="tool_call",
+                content=f"调用工具 {tool_call.tool}",
+                structured_payload_json={
+                    "type": "tool_call",
+                    **tool_call.model_dump(mode="json"),
+                },
+            )
+        )
+
+    turn_type = "system_error" if agent_response.session_status == "error" else ("plan" if agent_response.plan is not None else "followup")
     session.add(
         AIPlanningMessage(
             session_id=planning_session.id,
             role="assistant",
-            turn_type="plan" if agent_response.plan is not None else "followup",
+            turn_type=turn_type,
             content=agent_response.assistant_message,
             structured_payload_json={
                 "missing_slots": agent_response.missing_slots,
                 "suggested_questions": agent_response.suggested_questions,
                 "plan": agent_response.plan.model_dump(mode="json") if agent_response.plan is not None else None,
+                "tool_calls": [item.model_dump(mode="json") for item in agent_response.tool_calls],
             },
         )
     )
@@ -142,14 +159,13 @@ def generate_planning_drafts(
         if isinstance(item, dict) and isinstance(item.get("scenario_key"), str)
     }
     drafts: list[AIPlanningDraftSchema] = []
-    base_url = _normalize_base_url(planning_session.requirements_json)
+    base_url = _normalize_base_url(planning_session.requirements_json or {})
     invalid_scenarios: list[str] = []
 
     for scenario_key in payload.scenario_keys:
         scenario = scenarios.get(scenario_key)
         if scenario is None:
             invalid_scenarios.append(scenario_key)
-            # Create a failed draft record for the invalid scenario
             record = AIPlanningDraft(
                 session_id=planning_session.id,
                 scenario_key=scenario_key,
@@ -159,7 +175,7 @@ def generate_planning_drafts(
                 dsl_case_json=None,
                 warnings_json=[f"场景 '{scenario_key}' 未在 AI 生成的测试计划中找到"],
                 normalization_notes_json=[],
-                error_message=f"场景 '{scenario_key}' 不存在于当前测试计划中",
+                error_message=f"场景 '{scenario_key}' 不存在于当前测试计划中。",
             )
             session.add(record)
             session.flush()
@@ -197,18 +213,21 @@ def generate_planning_drafts(
                 scenario_key=scenario_key,
                 title=scenario["title"],
                 status="generated",
-                # Use generation_id only if the DslGenerationRun record exists in the database.
-# This handles cases where generate_dsl_case might fail to commit or return an invalid ID.
-dsl_generation_id=(
-    generated.generation_id if session.get(DslGenerationRun, generated.generation_id) is not None else None
-),
+                dsl_generation_id=(
+                    generated.generation_id if session.get(DslGenerationRun, generated.generation_id) is not None else None
+                ),
                 dsl_case_json=generated.case.model_dump(mode="json"),
                 warnings_json=generated.warnings,
                 normalization_notes_json=generated.normalization_notes,
                 error_message=None,
             )
         except Exception as exc:
-            logging.error(f"Failed to generate DSL case for scenario '{scenario_key}' in session {planning_session.id}", exc_info=True)
+            logger.error(
+                "Failed to generate DSL case for scenario '%s' in session %s",
+                scenario_key,
+                planning_session.id,
+                exc_info=True,
+            )
             record = AIPlanningDraft(
                 session_id=planning_session.id,
                 scenario_key=scenario_key,
@@ -228,7 +247,6 @@ dsl_generation_id=(
     session.commit()
     session.refresh(planning_session)
 
-    # Add warning to assistant_message if any scenarios were invalid
     message = "已根据所选场景生成 DSL 草案。"
     if invalid_scenarios:
         message += f" 注意：以下场景不存在于当前测试计划中：{', '.join(invalid_scenarios)}"
@@ -242,6 +260,7 @@ dsl_generation_id=(
         plan=_to_session_schema(planning_session).plan,
         drafts=drafts,
         next_action="drafts_generated",
+        tool_calls=[],
     )
 
 

@@ -75,6 +75,12 @@ class Settings:
     vlm_base_url: str = "https://api.openai.com/v1"
     vlm_model: str | None = None
     vlm_model_family: str = "gpt-4o"
+    enable_ai_planning: bool = False
+    ai_planning_model: str | None = None
+    ai_planning_base_url: str = "https://api.openai.com/v1"
+    ai_planning_api_key: str | None = None
+    ai_planning_timeout_ms: int = 30000
+    ai_planning_max_react_rounds: int = 5
 
 
 @lru_cache
@@ -111,4 +117,10 @@ def get_settings() -> Settings:
         vlm_base_url=os.getenv("VLM_BASE_URL", "https://api.openai.com/v1"),
         vlm_model=os.getenv("VLM_MODEL") or None,
         vlm_model_family=os.getenv("VLM_MODEL_FAMILY", "gpt-4o"),
+        enable_ai_planning=_get_bool(os.getenv("ENABLE_AI_PLANNING"), default=False),
+        ai_planning_model=os.getenv("AI_PLANNING_MODEL") or None,
+        ai_planning_base_url=os.getenv("AI_PLANNING_BASE_URL", "https://api.openai.com/v1"),
+        ai_planning_api_key=os.getenv("AI_PLANNING_API_KEY") or None,
+        ai_planning_timeout_ms=max(1000, _get_int(os.getenv("AI_PLANNING_TIMEOUT_MS"), default=30000)),
+        ai_planning_max_react_rounds=max(1, _get_int(os.getenv("AI_PLANNING_MAX_REACT_ROUNDS"), default=5)),
     )

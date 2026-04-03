@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Input, Space, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Checkbox, Input, Progress, Space, Tag, Typography, message } from "antd";
 
 import {
   createPlanningSession,
@@ -12,6 +12,7 @@ import type {
   AIPlanningMessage,
   AIPlanningPlan,
   AIPlanningRequirements,
+  AIPlanningToolCall,
   AISettings,
   DSLCaseInputContract,
   DSLCaseOutputContract,
@@ -30,6 +31,21 @@ type AITestPlanningPanelProps = {
   onImportDraft: (draft: AIPlanningDraft) => void | Promise<void>;
 };
 
+type RequirementFieldMeta = {
+  key: keyof AIPlanningRequirements;
+  label: string;
+};
+
+const REQUIREMENT_FIELDS: RequirementFieldMeta[] = [
+  { key: "app_under_test", label: "被测系统" },
+  { key: "business_goal", label: "业务目标" },
+  { key: "entry_url_or_page", label: "入口页面或 URL" },
+  { key: "core_user_flow", label: "核心流程" },
+  { key: "main_assertions", label: "关键断言" },
+  { key: "test_data_or_account", label: "测试数据或账号" },
+  { key: "scope_limits", label: "范围限制" },
+];
+
 const DEFAULT_REQUIREMENTS: AIPlanningRequirements = {
   app_under_test: null,
   business_goal: null,
@@ -39,6 +55,43 @@ const DEFAULT_REQUIREMENTS: AIPlanningRequirements = {
   test_data_or_account: null,
   scope_limits: null,
 };
+
+function formatRequirementValue(value: AIPlanningRequirements[keyof AIPlanningRequirements]) {
+  if (Array.isArray(value)) {
+    return value.length ? value.join("、") : null;
+  }
+  return value?.trim() ? value : null;
+}
+
+function createOptimisticMessage(
+  sessionId: number,
+  role: AIPlanningMessage["role"],
+  turnType: AIPlanningMessage["turn_type"],
+  content: string,
+  structuredPayload?: Record<string, unknown> | null,
+): AIPlanningMessage {
+  return {
+    id: -Date.now() - Math.floor(Math.random() * 1000),
+    session_id: sessionId,
+    role,
+    turn_type: turnType,
+    content,
+    structured_payload: structuredPayload ?? null,
+    created_at: new Date().toISOString(),
+  };
+}
+
+function buildToolMessages(sessionId: number, toolCalls: AIPlanningToolCall[]) {
+  return toolCalls.map((toolCall) =>
+    createOptimisticMessage(
+      sessionId,
+      "assistant",
+      "tool_call",
+      `调用工具：${toolCall.tool}`,
+      { type: "tool_call", ...toolCall },
+    ),
+  );
+}
 
 export function AITestPlanningPanel({
   aiSettings,
@@ -64,7 +117,8 @@ export function AITestPlanningPanel({
   const [isSending, setIsSending] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  const isDisabled = !aiSettings?.enable_ai_dsl_generate || !projectId;
+  const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
+  const isDisabled = !planningEnabled || !projectId;
 
   useEffect(() => {
     if (!projectId) {
@@ -82,6 +136,7 @@ export function AITestPlanningPanel({
         setTranscript(detail.messages);
         setRequirements(detail.session.requirements);
         setMissingSlots(detail.session.missing_slots);
+        setSuggestedQuestions([]);
         setPlan(detail.session.plan ?? null);
         setDrafts(detail.drafts);
       })
@@ -101,48 +156,43 @@ export function AITestPlanningPanel({
     };
   }, [caseId, messageApi, projectId]);
 
-  const collectedInfo = useMemo(
-    () => [
-      ["被测系统", requirements.app_under_test],
-      ["业务目标", requirements.business_goal],
-      ["入口页面", requirements.entry_url_or_page],
-      ["核心流程", requirements.core_user_flow],
-      ["测试数据", requirements.test_data_or_account],
-      ["范围限制", requirements.scope_limits],
-    ],
+  const collectedEntries = useMemo(
+    () =>
+      REQUIREMENT_FIELDS.flatMap((field) => {
+        const value = formatRequirementValue(requirements[field.key]);
+        return value ? [{ label: field.label, value }] : [];
+      }),
     [requirements],
   );
 
-  async function handleSendMessage() {
-    if (!sessionId || !inputValue.trim()) {
+  const progressCount = collectedEntries.length;
+  const progressPercent = Math.round((progressCount / REQUIREMENT_FIELDS.length) * 100);
+
+  async function handleSendMessage(forceGenerate = false) {
+    if (!sessionId) {
       return;
     }
-    const content = inputValue.trim();
+    const trimmed = inputValue.trim();
+    if (!forceGenerate && !trimmed) {
+      return;
+    }
+
+    const displayContent = trimmed || "请基于当前上下文直接生成测试方案";
+    const content = forceGenerate ? `[FORCE_GENERATE] ${displayContent}` : displayContent;
+
     setIsSending(true);
     try {
       const response = await sendPlanningMessage(sessionId, { content });
-      // Use negative timestamps for optimistic updates to avoid conflicts with server IDs
-      const tempId = -Date.now();
       setTranscript((current) => [
         ...current,
-        {
-          id: tempId,
-          session_id: sessionId,
-          role: "user",
-          turn_type: "user",
-          content,
-          structured_payload: null,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: tempId + 1,
-          session_id: sessionId,
-          role: "assistant",
-          turn_type: response.plan ? "plan" : "followup",
-          content: response.assistant_message,
-          structured_payload: null,
-          created_at: new Date().toISOString(),
-        },
+        createOptimisticMessage(sessionId, "user", "user", displayContent),
+        ...buildToolMessages(sessionId, response.tool_calls ?? []),
+        createOptimisticMessage(
+          sessionId,
+          "assistant",
+          response.plan ? "plan" : response.session_status === "error" ? "system_error" : "followup",
+          response.assistant_message,
+        ),
       ]);
       setRequirements(response.requirements);
       setMissingSlots(response.missing_slots);
@@ -175,19 +225,9 @@ export function AITestPlanningPanel({
       setPlan(response.plan ?? null);
       setRequirements(response.requirements);
       setMissingSlots(response.missing_slots);
-      // Use negative timestamp for optimistic update to avoid conflicts with server IDs
-      const tempId = -Date.now();
       setTranscript((current) => [
         ...current,
-        {
-          id: tempId,
-          session_id: sessionId,
-          role: "assistant",
-          turn_type: "plan",
-          content: response.assistant_message,
-          structured_payload: null,
-          created_at: new Date().toISOString(),
-        },
+        createOptimisticMessage(sessionId, "assistant", "plan", response.assistant_message),
       ]);
     } catch (error) {
       void messageApi.error((error as Error).message);
@@ -199,37 +239,35 @@ export function AITestPlanningPanel({
   async function handleImportDraft(draft: AIPlanningDraft) {
     await onImportDraft(draft);
     const updatedDraft = await updatePlanningDraftStatus(draft.id, { status: "imported" });
-    setDrafts((current) =>
-      current.map((item) => (item.id === draft.id ? updatedDraft : item)),
-    );
+    setDrafts((current) => current.map((item) => (item.id === draft.id ? updatedDraft : item)));
   }
 
   return (
-    <Card title="AI 测试助手">
+    <Card title="AI 测试规划助手">
       {contextHolder}
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
         {aiSettings ? (
           <Alert
-            type={aiSettings.enable_ai_dsl_generate ? "info" : "warning"}
+            type={planningEnabled ? "info" : "warning"}
             showIcon
             message="AI 规划状态"
             description={
-              aiSettings.enable_ai_dsl_generate
-                ? `已启用，模型：${aiSettings.ai_dsl_model ?? "未配置"}`
-                : "当前未启用 AI DSL 生成，规划对话不可用。"
+              planningEnabled
+                ? `已启用，模型：${aiSettings.ai_planning_model ?? "未配置"}，最多 ${aiSettings.ai_planning_max_react_rounds ?? 5} 轮`
+                : "当前未启用 AI planning，规划对话暂不可用。"
             }
           />
         ) : null}
         {!projectId ? <Alert type="warning" showIcon message="请先选择项目，再开启 AI 测试规划。" /> : null}
         <div className="workbench-grid">
-          <Card size="small" title="对话">
+          <Card size="small" title="规划对话">
             <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-              {transcript.map((item, index) => (
+              {transcript.map((item) => (
                 <Alert
-                  key={`${item.role}-${index}-${item.content}`}
+                  key={`${item.id}-${item.turn_type}`}
                   type={item.role === "assistant" ? "info" : "success"}
                   showIcon
-                  message={item.role === "assistant" ? "AI" : "用户"}
+                  message={item.turn_type === "tool_call" ? "工具调用" : item.role === "assistant" ? "AI" : "用户"}
                   description={item.content}
                 />
               ))}
@@ -246,30 +284,58 @@ export function AITestPlanningPanel({
                 value={inputValue}
                 onChange={(event) => setInputValue(event.target.value)}
                 disabled={isDisabled || isBootstrapping}
-                placeholder="描述业务目标、入口页面、流程、断言和测试数据"
+                placeholder="描述业务目标、入口页面、核心流程、断言和测试数据。"
               />
-              <Button
-                type="primary"
-                onClick={() => void handleSendMessage()}
-                loading={isSending}
-                disabled={isDisabled || isBootstrapping || !sessionId || !inputValue.trim()}
-              >
-                发送消息
-              </Button>
+              <Space wrap>
+                <Button
+                  type="primary"
+                  onClick={() => void handleSendMessage(false)}
+                  loading={isSending}
+                  disabled={isDisabled || isBootstrapping || !sessionId || !inputValue.trim()}
+                >
+                  发送消息
+                </Button>
+                <Button
+                  onClick={() => void handleSendMessage(true)}
+                  loading={isSending}
+                  disabled={isDisabled || isBootstrapping || !sessionId}
+                >
+                  直接生成方案
+                </Button>
+              </Space>
             </Space>
           </Card>
-          <Card size="small" title="规划结果">
+
+          <Card size="small" title="规划进度">
             <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-              {collectedInfo.map(([label, value]) => (
-                <div key={label}>
-                  <Typography.Text strong>{label}：</Typography.Text>
-                  <Typography.Text>{value || "待补充"}</Typography.Text>
-                </div>
-              ))}
               <div>
-                <Typography.Text strong>缺失槽位：</Typography.Text>
-                <Typography.Text>{missingSlots.length ? missingSlots.join("、") : "无"}</Typography.Text>
+                <Typography.Text strong>信息收集进度</Typography.Text>
+                <Progress percent={progressPercent} size="small" />
+                <Typography.Text type="secondary">
+                  已收集 {progressCount} / {REQUIREMENT_FIELDS.length} 项
+                </Typography.Text>
               </div>
+
+              {collectedEntries.length ? (
+                collectedEntries.map((entry) => (
+                  <div key={entry.label}>
+                    <Typography.Text strong>{entry.label}：</Typography.Text>
+                    <Typography.Text>{entry.value}</Typography.Text>
+                  </div>
+                ))
+              ) : (
+                <Typography.Text type="secondary">当前还没有收集到明确的规划信息。</Typography.Text>
+              )}
+
+              {missingSlots.length ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="待补充信息"
+                  description={missingSlots.join("、")}
+                />
+              ) : null}
+
               {plan ? (
                 <>
                   <Alert type="success" showIcon message={plan.summary} />
@@ -291,10 +357,13 @@ export function AITestPlanningPanel({
                         </Checkbox>
                         <Typography.Text>{scenario.goal}</Typography.Text>
                         <Typography.Text type="secondary">
-                          数据需求：{scenario.test_data_requirements.map((item) => item.label).join("、") || "无"}
+                          数据需求：
+                          {scenario.test_data_requirements.length
+                            ? scenario.test_data_requirements.map((item) => item.label).join("、")
+                            : "无"}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          断言：{scenario.assertions.join("、") || "无"}
+                          关键断言：{scenario.assertions.length ? scenario.assertions.join("、") : "无"}
                         </Typography.Text>
                       </Space>
                     </Card>
@@ -304,6 +373,7 @@ export function AITestPlanningPanel({
                   </Button>
                 </>
               ) : null}
+
               {drafts.length ? (
                 <Card size="small" title="DSL 草案列表">
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -315,7 +385,11 @@ export function AITestPlanningPanel({
                           {draft.dsl_case ? (
                             <>
                               <Input.TextArea readOnly rows={6} value={JSON.stringify(draft.dsl_case, null, 2)} />
-                              <Button type="primary" onClick={() => void handleImportDraft(draft)} disabled={draft.status !== "generated"}>
+                              <Button
+                                type="primary"
+                                onClick={() => void handleImportDraft(draft)}
+                                disabled={draft.status !== "generated"}
+                              >
                                 导入到当前编辑器
                               </Button>
                             </>

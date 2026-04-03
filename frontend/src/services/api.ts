@@ -24,6 +24,7 @@ import type {
   LoginPayload,
   LogoutResponse,
   OverviewWindowDays,
+  PaginatedCases,
   ProjectSummary,
   ReportPreference,
   ReportScopeType,
@@ -104,7 +105,7 @@ export function getCurrentUser() {
 }
 
 export function getCases() {
-  return request<StoredCaseSummary[]>("/api/v1/cases");
+  return request<PaginatedCases>("/api/v1/cases");
 }
 
 export function getProjects() {

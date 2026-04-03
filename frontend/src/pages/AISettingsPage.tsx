@@ -289,6 +289,13 @@ export function AISettingsPage() {
       vlm_model_family: settingsQuery.data.vlm_model_family,
       vlm_api_key: "",
       clear_vlm_api_key: false,
+      enable_ai_planning: settingsQuery.data.enable_ai_planning ?? false,
+      ai_planning_model: settingsQuery.data.ai_planning_model ?? "",
+      ai_planning_base_url: settingsQuery.data.ai_planning_base_url ?? "https://api.openai.com/v1",
+      ai_planning_timeout_ms: settingsQuery.data.ai_planning_timeout_ms ?? 30000,
+      ai_planning_max_react_rounds: settingsQuery.data.ai_planning_max_react_rounds ?? 5,
+      ai_planning_api_key: "",
+      clear_ai_planning_api_key: false,
     });
   }, [form, settingsQuery.data]);
 
@@ -301,6 +308,8 @@ export function AISettingsPage() {
         ai_dsl_api_key: values.ai_dsl_api_key?.trim() || null,
         vlm_model: values.vlm_model?.trim() || null,
         vlm_api_key: values.vlm_api_key?.trim() || null,
+        ai_planning_model: values.ai_planning_model?.trim() || null,
+        ai_planning_api_key: values.ai_planning_api_key?.trim() || null,
       });
     },
     onSuccess: (result) => {
@@ -729,6 +738,51 @@ export function AISettingsPage() {
                 <Input.Password placeholder="留空则保持原值" />
               </Form.Item>
               <Form.Item label="清空 DSL API Key" name="clear_ai_dsl_api_key" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </div>
+          </Card>
+
+          <Card title="AI 规划">
+            <div className="workbench-grid">
+              <Form.Item label="启用 AI 规划" name="enable_ai_planning" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item label="当前 Planning API Key 状态">
+                <Typography.Text>{settingsQuery.data?.has_ai_planning_api_key ? "已配置" : "未配置"}</Typography.Text>
+              </Form.Item>
+            </div>
+            <div className="structured-step-grid">
+              <Form.Item
+                label="AI Planning Base URL"
+                name="ai_planning_base_url"
+                rules={[{ required: true, message: "请输入 AI Planning Base URL" }]}
+              >
+                <Input />
+              </Form.Item>
+              <Form.Item label="AI Planning Model" name="ai_planning_model">
+                <Input placeholder="例如：gpt-4.1-mini" />
+              </Form.Item>
+              <Form.Item
+                label="AI Planning Timeout (ms)"
+                name="ai_planning_timeout_ms"
+                rules={[{ required: true, message: "请输入 AI Planning 超时" }]}
+              >
+                <InputNumber min={1000} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item
+                label="Max ReAct Rounds"
+                name="ai_planning_max_react_rounds"
+                rules={[{ required: true, message: "请输入最大 ReAct 轮数" }]}
+              >
+                <InputNumber min={1} style={{ width: "100%" }} />
+              </Form.Item>
+            </div>
+            <div className="structured-step-grid">
+              <Form.Item label="替换 Planning API Key" name="ai_planning_api_key">
+                <Input.Password placeholder="留空则保持原值" />
+              </Form.Item>
+              <Form.Item label="清空 Planning API Key" name="clear_ai_planning_api_key" valuePropName="checked">
                 <Switch />
               </Form.Item>
             </div>

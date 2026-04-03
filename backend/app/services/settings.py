@@ -36,6 +36,12 @@ def get_ai_settings() -> AISettingsResponse:
         vlm_model=settings.vlm_model,
         vlm_model_family=settings.vlm_model_family,
         has_vlm_api_key=bool(settings.vlm_api_key),
+        enable_ai_planning=settings.enable_ai_planning,
+        ai_planning_model=settings.ai_planning_model,
+        ai_planning_base_url=settings.ai_planning_base_url,
+        ai_planning_timeout_ms=settings.ai_planning_timeout_ms,
+        ai_planning_max_react_rounds=settings.ai_planning_max_react_rounds,
+        has_ai_planning_api_key=bool(settings.ai_planning_api_key),
     )
 
 
@@ -55,6 +61,11 @@ def update_ai_settings(payload: AISettingsUpdateRequest) -> AISettingsResponse:
         "VLM_BASE_URL": payload.vlm_base_url,
         "VLM_MODEL": payload.vlm_model or "",
         "VLM_MODEL_FAMILY": payload.vlm_model_family,
+        "ENABLE_AI_PLANNING": _format_bool(payload.enable_ai_planning),
+        "AI_PLANNING_MODEL": payload.ai_planning_model or "",
+        "AI_PLANNING_BASE_URL": payload.ai_planning_base_url,
+        "AI_PLANNING_TIMEOUT_MS": str(payload.ai_planning_timeout_ms),
+        "AI_PLANNING_MAX_REACT_ROUNDS": str(payload.ai_planning_max_react_rounds),
     }
 
     if payload.clear_ai_dsl_api_key:
@@ -66,6 +77,11 @@ def update_ai_settings(payload: AISettingsUpdateRequest) -> AISettingsResponse:
         env_updates["VLM_API_KEY"] = ""
     elif payload.vlm_api_key is not None:
         env_updates["VLM_API_KEY"] = payload.vlm_api_key
+
+    if payload.clear_ai_planning_api_key:
+        env_updates["AI_PLANNING_API_KEY"] = ""
+    elif payload.ai_planning_api_key is not None:
+        env_updates["AI_PLANNING_API_KEY"] = payload.ai_planning_api_key
 
     _persist_env_updates(env_updates)
     for key, value in env_updates.items():

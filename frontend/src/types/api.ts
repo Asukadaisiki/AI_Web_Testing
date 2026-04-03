@@ -98,6 +98,16 @@ export interface StoredCaseSummary {
 
 export interface StoredCaseDetail extends StoredCaseSummary {}
 
+export interface PaginatedCases {
+  items: StoredCaseSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
 export interface ProjectSummary {
   id: number;
   name: string;
@@ -204,6 +214,12 @@ export interface AIPlanningPlan {
   scenarios: AIPlanningScenario[];
 }
 
+export interface AIPlanningToolCall {
+  tool: string;
+  params: Record<string, unknown>;
+  result?: unknown;
+}
+
 export interface AIPlanningSession {
   id: number;
   actor_user_id: number;
@@ -281,6 +297,7 @@ export interface AIPlanningTurnResponse {
   plan?: AIPlanningPlan | null;
   drafts: AIPlanningDraft[];
   next_action: AIPlanningNextAction;
+  tool_calls?: AIPlanningToolCall[];
 }
 
 export interface DslGenerationFeedbackPayload {
@@ -308,6 +325,12 @@ export interface AISettings {
   vlm_model?: string | null;
   vlm_model_family: VLMModelFamily;
   has_vlm_api_key: boolean;
+  enable_ai_planning?: boolean;
+  ai_planning_model?: string | null;
+  ai_planning_base_url?: string;
+  ai_planning_timeout_ms?: number;
+  ai_planning_max_react_rounds?: number;
+  has_ai_planning_api_key?: boolean;
 }
 
 export interface AISettingsUpdatePayload {
@@ -329,6 +352,13 @@ export interface AISettingsUpdatePayload {
   vlm_model_family: VLMModelFamily;
   vlm_api_key?: string | null;
   clear_vlm_api_key: boolean;
+  enable_ai_planning?: boolean;
+  ai_planning_model?: string | null;
+  ai_planning_base_url?: string;
+  ai_planning_timeout_ms?: number;
+  ai_planning_max_react_rounds?: number;
+  ai_planning_api_key?: string | null;
+  clear_ai_planning_api_key?: boolean;
 }
 
 export interface AIDslGenerationStats {

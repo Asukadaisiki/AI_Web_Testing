@@ -288,7 +288,7 @@ test("渲染 AI 治理概览", async () => {
 
   expect(await screen.findByLabelText("AI DSL Base URL")).toHaveValue("https://api.openai.com/v1");
   expect(screen.getByText("已配置")).toBeInTheDocument();
-  expect(screen.getByText("未配置")).toBeInTheDocument();
+  expect(screen.getAllByText("未配置").length).toBeGreaterThan(0);
   expect(screen.getByText("4")).toBeInTheDocument();
   expect(screen.getByText("3 / 1")).toBeInTheDocument();
   expect(screen.getAllByText("2 / 1 / 1").length).toBeGreaterThan(0);
@@ -509,7 +509,7 @@ test("保存 AI 配置会提交最新表单值", async () => {
   await userEvent.type(screen.getByLabelText("AI DSL Model"), "gpt-dsl");
   const passwordInputs = screen.getAllByPlaceholderText("留空则保持原值");
   await userEvent.type(passwordInputs[0], "new-dsl-secret");
-  await userEvent.type(passwordInputs[1], "new-vlm-secret");
+  await userEvent.type(passwordInputs[2], "new-vlm-secret");
   await userEvent.click(screen.getByRole("switch", { name: "启用视觉定位" }));
   await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
 
@@ -533,6 +533,13 @@ test("保存 AI 配置会提交最新表单值", async () => {
       vlm_model_family: "gpt-4o",
       vlm_api_key: "new-vlm-secret",
       clear_vlm_api_key: false,
+      enable_ai_planning: false,
+      ai_planning_model: null,
+      ai_planning_base_url: "https://api.openai.com/v1",
+      ai_planning_timeout_ms: 30000,
+      ai_planning_max_react_rounds: 5,
+      ai_planning_api_key: null,
+      clear_ai_planning_api_key: false,
     });
   });
 }, 15000);
