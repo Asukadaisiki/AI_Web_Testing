@@ -4,6 +4,7 @@ import { vi } from "vitest";
 
 import { ExecutionsPage } from "./ExecutionsPage";
 import * as api from "../services/api";
+import type { StoredCaseSummary } from "../types/api";
 import { renderWithProviders } from "../test/test-utils";
 
 vi.mock("../services/api", async () => {
@@ -16,8 +17,20 @@ vi.mock("../services/api", async () => {
   };
 });
 
+function wrapCases(cases: StoredCaseSummary[]) {
+  return {
+    items: cases,
+    total: cases.length,
+    page: 1,
+    page_size: 20,
+    total_pages: 1,
+    has_next: false,
+    has_prev: false,
+  };
+}
+
 test("执行中心展示 overview、支持失败分类筛选，并为最近失败生成跳转链接", async () => {
-  vi.mocked(api.getCases).mockResolvedValue([
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([
     {
       id: 1,
       project_id: 1,
@@ -44,7 +57,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
       created_at: "2026-03-09T10:00:00",
       updated_at: "2026-03-09T10:00:00",
     },
-  ]);
+  ]));
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
     scope_type: "project",
     scope_project_id: 1,
@@ -270,7 +283,7 @@ test("执行中心展示 overview、支持失败分类筛选，并为最近失�
 }, 10000);
 
 test("执行中心支持翻页并按 offset 继续查询", async () => {
-  vi.mocked(api.getCases).mockResolvedValue([]);
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([]));
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
     scope_type: "project",
     scope_project_id: 1,
@@ -387,7 +400,7 @@ test("执行中心支持翻页并按 offset 继续查询", async () => {
 });
 
 test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选并清除", async () => {
-  vi.mocked(api.getCases).mockResolvedValue([]);
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([]));
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
     scope_type: "project",
     scope_project_id: 1,
@@ -502,7 +515,7 @@ test("执行中心支持从报告中心带入 failure_fingerprint 根因筛选�
 });
 
 test("执行中心在空状态下稳定展示 overview 与空列表", async () => {
-  vi.mocked(api.getCases).mockResolvedValue([]);
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([]));
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
     scope_type: "project",
     scope_project_id: 1,
@@ -563,7 +576,7 @@ test("执行中心在空状态下稳定展示 overview 与空列表", async () =
 });
 
 test("执行中心从 URL 初始化筛选，并在修改后回写 query 参数", async () => {
-  vi.mocked(api.getCases).mockResolvedValue([
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([
     {
       id: 2,
       project_id: 1,
@@ -577,7 +590,7 @@ test("执行中心从 URL 初始化筛选，并在修改后回写 query 参数",
       created_at: "2026-03-09T10:00:00",
       updated_at: "2026-03-09T10:00:00",
     },
-  ]);
+  ]));
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
     scope_type: "project",
     scope_project_id: 1,

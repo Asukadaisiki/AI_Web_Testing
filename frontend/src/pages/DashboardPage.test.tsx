@@ -3,6 +3,7 @@ import { vi } from "vitest";
 
 import { DashboardPage } from "./DashboardPage";
 import * as api from "../services/api";
+import type { StoredCaseSummary } from "../types/api";
 import { renderWithProviders } from "../test/test-utils";
 
 vi.mock("../components/OverviewChart", () => ({
@@ -18,8 +19,20 @@ vi.mock("../services/api", async () => {
   };
 });
 
+function wrapCases(cases: StoredCaseSummary[]) {
+  return {
+    items: cases,
+    total: cases.length,
+    page: 1,
+    page_size: 20,
+    total_pages: 1,
+    has_next: false,
+    has_prev: false,
+  };
+}
+
 test("仪表盘展示 KPI、趋势图、最近失败和失败最多用例入口", async () => {
-  vi.mocked(api.getCases).mockResolvedValue([
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([
     {
       id: 1,
       project_id: 1,
@@ -48,7 +61,7 @@ test("仪表盘展示 KPI、趋势图、最近失败和失败最多用例入口"
       created_at: "2026-03-10T10:00:00",
       updated_at: "2026-03-10T10:00:00",
     },
-  ]);
+  ]));
   vi.mocked(api.getExecutionOverview).mockResolvedValue({
     scope_type: "project",
     scope_project_id: 1,

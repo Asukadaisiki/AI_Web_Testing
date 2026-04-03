@@ -208,7 +208,7 @@ export function ReportCenterPage() {
   });
 
   const projects = projectsQuery.data ?? [];
-  const cases = casesQuery.data ?? [];
+  const cases = casesQuery.data?.items ?? [];
   const filteredCases = useMemo(
     () => cases.filter((item) => !selection?.projectId || item.project_id === selection.projectId),
     [cases, selection?.projectId],

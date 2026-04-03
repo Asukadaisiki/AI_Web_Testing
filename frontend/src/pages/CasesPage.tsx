@@ -106,7 +106,7 @@ export function CasesPage() {
               (caseId) => executionMutation.mutate(caseId),
               executionMutation.isPending ? executionMutation.variables ?? null : null,
             )}
-            dataSource={casesQuery.data}
+            dataSource={casesQuery.data?.items ?? []}
           />
         ) : null}
       </Card>

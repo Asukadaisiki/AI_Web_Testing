@@ -91,7 +91,7 @@ export function DashboardPage() {
         <div className="summary-strip">
           <div className="summary-tile">
             <div className="summary-label">总用例数</div>
-            <div className="summary-value">{casesQuery.data?.length ?? 0}</div>
+            <div className="summary-value">{casesQuery.data?.items.length ?? 0}</div>
           </div>
           <div className="summary-tile">
             <div className="summary-label">近 7 天总执行数</div>

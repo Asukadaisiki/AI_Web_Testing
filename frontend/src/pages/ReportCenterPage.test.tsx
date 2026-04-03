@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import { truncateText } from "../components/executionPresentation";
 import { ReportCenterPage } from "./ReportCenterPage";
 import * as api from "../services/api";
+import type { StoredCaseSummary } from "../types/api";
 import { renderWithProviders } from "../test/test-utils";
 
 vi.mock("../components/OverviewChart", () => ({
@@ -22,6 +23,18 @@ vi.mock("../services/api", async () => {
     updateReportPreference: vi.fn(),
   };
 });
+
+function wrapCases(cases: StoredCaseSummary[]) {
+  return {
+    items: cases,
+    total: cases.length,
+    page: 1,
+    page_size: 20,
+    total_pages: 1,
+    has_next: false,
+    has_prev: false,
+  };
+}
 
 function buildOverview(windowDays: 7 | 14 | 30 = 7) {
   return {
@@ -153,7 +166,7 @@ function buildOverview(windowDays: 7 | 14 | 30 = 7) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getProjects).mockResolvedValue([{ id: 1, name: "Default Project", description: null }]);
-  vi.mocked(api.getCases).mockResolvedValue([]);
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([]));
   vi.mocked(api.getReportPreference).mockResolvedValue({
     scope_type: "project",
     project_id: 1,
@@ -240,7 +253,7 @@ test("报告中心在无 URL 范围时读取账号偏好并展示新增指标与
     { id: 1, name: "Default Project", description: null },
     { id: 2, name: "Checkout Project", description: "checkout" },
   ]);
-  vi.mocked(api.getCases).mockResolvedValue([
+  vi.mocked(api.getCases).mockResolvedValue(wrapCases([
     {
       id: 2,
       project_id: 2,
@@ -255,7 +268,7 @@ test("报告中心在无 URL 范围时读取账号偏好并展示新增指标与
       created_at: "2026-03-10T10:00:00",
       updated_at: "2026-03-10T10:00:00",
     },
-  ]);
+  ]));
   vi.mocked(api.getReportPreference).mockResolvedValue({
     scope_type: "project",
     project_id: 2,

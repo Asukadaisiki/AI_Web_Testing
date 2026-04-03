@@ -276,14 +276,14 @@ export function ExecutionsPage() {
   const caseOptions = useMemo(
     () => [
       { label: "全部用例", value: 0 },
-      ...((casesQuery.data ?? [])
+      ...((casesQuery.data?.items ?? [])
         .filter((item: StoredCaseSummary) => !activeProjectId || item.project_id === activeProjectId)
         .map((item: StoredCaseSummary) => ({
           label: item.name,
           value: item.id,
         })) as { label: string; value: number }[]),
     ],
-    [activeProjectId, casesQuery.data],
+    [activeProjectId, casesQuery.data?.items],
   );
   const failureCategoryCounts = overviewQuery.data?.failure_categories ?? [];
   const hasNextPage = (executionsQuery.data?.length ?? 0) === PAGE_SIZE;

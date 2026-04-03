@@ -17,21 +17,29 @@ vi.mock("../services/api", async () => {
 });
 
 test("渲染用例列表并支持执行后跳转", async () => {
-  vi.mocked(api.getCases).mockResolvedValue([
-    {
-      id: 1,
-      project_id: 1,
-      name: "登录冒烟",
-      description: "检查登录链路",
-      input_contract: [],
-      output_contract: [],
-      steps: [{ action: "goto", value: "/login" }],
-      created_by: 1,
-      updated_by: 1,
-      created_at: "2026-03-09T10:00:00",
-      updated_at: "2026-03-09T10:00:00",
-    },
-  ]);
+  vi.mocked(api.getCases).mockResolvedValue({
+    items: [
+      {
+        id: 1,
+        project_id: 1,
+        name: "登录冒烟",
+        description: "检查登录链路",
+        input_contract: [],
+        output_contract: [],
+        steps: [{ action: "goto", value: "/login" }],
+        created_by: 1,
+        updated_by: 1,
+        created_at: "2026-03-09T10:00:00",
+        updated_at: "2026-03-09T10:00:00",
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 20,
+    total_pages: 1,
+    has_next: false,
+    has_prev: false,
+  });
   vi.mocked(api.executeCase).mockResolvedValue({
     id: 88,
     case_id: 1,
