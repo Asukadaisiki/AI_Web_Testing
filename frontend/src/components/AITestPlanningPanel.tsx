@@ -168,24 +168,21 @@ export function AITestPlanningPanel({
   const progressCount = collectedEntries.length;
   const progressPercent = Math.round((progressCount / REQUIREMENT_FIELDS.length) * 100);
 
-  async function handleSendMessage(forceGenerate = false) {
+  async function handleSendMessage() {
     if (!sessionId) {
       return;
     }
     const trimmed = inputValue.trim();
-    if (!forceGenerate && !trimmed) {
+    if (!trimmed) {
       return;
     }
 
-    const displayContent = trimmed || "请基于当前上下文直接生成测试方案";
-    const content = forceGenerate ? `[FORCE_GENERATE] ${displayContent}` : displayContent;
-
     setIsSending(true);
     try {
-      const response = await sendPlanningMessage(sessionId, { content });
+      const response = await sendPlanningMessage(sessionId, { content: trimmed });
       setTranscript((current) => [
         ...current,
-        createOptimisticMessage(sessionId, "user", "user", displayContent),
+        createOptimisticMessage(sessionId, "user", "user", trimmed),
         ...buildToolMessages(sessionId, response.tool_calls ?? []),
         createOptimisticMessage(
           sessionId,
@@ -289,18 +286,11 @@ export function AITestPlanningPanel({
               <Space wrap>
                 <Button
                   type="primary"
-                  onClick={() => void handleSendMessage(false)}
+                  onClick={() => void handleSendMessage()}
                   loading={isSending}
                   disabled={isDisabled || isBootstrapping || !sessionId || !inputValue.trim()}
                 >
                   发送消息
-                </Button>
-                <Button
-                  onClick={() => void handleSendMessage(true)}
-                  loading={isSending}
-                  disabled={isDisabled || isBootstrapping || !sessionId}
-                >
-                  直接生成方案
                 </Button>
               </Space>
             </Space>

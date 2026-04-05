@@ -47,7 +47,9 @@ SYSTEM_PROMPT_TEMPLATE = """\
 规则：
 - `collected_info` 只填写本轮明确获得的信息；未知字段保持 null 或空数组。
 - 每次最多追问 1-2 个关键问题，问题尽量自然。
-- 如果用户已经说“直接生成”“够了”“先给方案”，优先生成方案。
+- 当已收集到 4 项及以上信息，或者用户连续两次未补充新信息时，通过 `ask_user` 主动询问用户：”信息是否已经足够？是否需要我直接生成测试方案？”
+- 如果用户回复确认（”是”/”够了”/”生成吧”/”可以”等），再使用 `generate_plan` 生成方案。
+- 如果用户已经说”直接生成””够了””先给方案”，优先生成方案。
 - `generate_plan` 时请输出完整方案字段：`summary`、`assumptions`、`risks`、`scenarios`。
 - `scenarios` 中每个场景必须包含：`scenario_key`、`title`、`goal`、`preconditions`、`priority`、`test_data_requirements`、`assertions`、`draft_prompt`。
 - 可以先调用工具了解项目已有用例、执行记录，再决定追问或生成。
