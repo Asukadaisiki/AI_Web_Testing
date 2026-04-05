@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import require_authenticated_user
+from app.api.auth import require_demo_user
 from app.db import get_db_session
 from app.models import User
 from app.schemas.projects import ProjectCreate, ProjectDetail, ProjectSummary, ProjectUpdate
@@ -27,7 +27,7 @@ def create_project_route(
     payload: ProjectCreate,
     response: Response,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> ProjectDetail:
     """Create a new project. The current user becomes the owner."""
     created_project = create_project(session, payload, current_user.id)
@@ -38,7 +38,7 @@ def create_project_route(
 @router.get("", response_model=list[ProjectDetail])
 def list_projects_route(
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> list[ProjectDetail]:
     """List all projects accessible to the current user."""
     return list_projects(session, current_user.id)
@@ -48,7 +48,7 @@ def list_projects_route(
 def get_project_route(
     project_id: int,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> ProjectDetail:
     """Get a specific project by ID. User must have access to the project."""
     project = get_project(session, project_id)
@@ -70,7 +70,7 @@ def update_project_route(
     project_id: int,
     payload: ProjectUpdate,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> ProjectDetail:
     """Update a project. User must be a member."""
     try:
@@ -86,7 +86,7 @@ def update_project_route(
 def delete_project_route(
     project_id: int,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> None:
     """Delete a project. User must be an owner and project must not have test cases."""
     try:

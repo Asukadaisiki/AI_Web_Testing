@@ -29,6 +29,7 @@ type AITestPlanningPanelProps = {
   currentInputContract?: DSLCaseInputContract[] | null;
   currentOutputContract?: DSLCaseOutputContract[] | null;
   onImportDraft: (draft: AIPlanningDraft) => void | Promise<void>;
+  draftImportLabel?: string;
 };
 
 type RequirementFieldMeta = {
@@ -102,6 +103,7 @@ export function AITestPlanningPanel({
   currentInputContract,
   currentOutputContract,
   onImportDraft,
+  draftImportLabel,
 }: AITestPlanningPanelProps) {
   const [messageApi, contextHolder] = message.useMessage();
   const [sessionId, setSessionId] = useState<number | null>(null);
@@ -380,7 +382,7 @@ export function AITestPlanningPanel({
                                 onClick={() => void handleImportDraft(draft)}
                                 disabled={draft.status !== "generated"}
                               >
-                                导入到当前编辑器
+                                {draftImportLabel ?? "导入到当前编辑器"}
                               </Button>
                             </>
                           ) : null}

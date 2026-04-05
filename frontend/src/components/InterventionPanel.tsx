@@ -12,7 +12,7 @@ import {
   Space,
   Typography,
 } from "antd";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { createCorrection, executeCase } from "../services/api";
 import type {
@@ -74,13 +74,9 @@ export function InterventionPanel({
         actor_user_id: triggeredBy,
       }),
     onSuccess: (execution) => {
-      navigate(`/executions/${execution.id}`);
+      navigate(`/run/${execution.id}`);
     },
   });
-  const correctionsHref = `/corrections?target_description=${encodeURIComponent(
-    request.target_description,
-  )}&page_url=${encodeURIComponent(request.page_url)}`;
-
   return (
     <Card size="small" title="人工干预">
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -155,7 +151,6 @@ export function InterventionPanel({
 
         <Space direction="vertical" size="small" style={{ width: "100%" }}>
           <Typography.Text strong>提交修正</Typography.Text>
-          <Link to={correctionsHref}>查看同目标修正记录</Link>
           <Space wrap>
             <Select<CorrectionType>
               value={correctionType}
@@ -187,8 +182,8 @@ export function InterventionPanel({
             <Alert
               type="success"
               showIcon
-              message={`修正已保存 #${createdCorrection.id}`}
-              description="可以直接重跑当前用例，验证 Tier 0 是否命中新修正。"
+              message="修正记录已保存到定位库"
+              description="Demo 模式下修正已记录，可重新执行当前用例验证修正效果。"
               action={
                 <Button type="primary" loading={rerunMutation.isPending} onClick={() => rerunMutation.mutate()}>
                   重新执行当前用例

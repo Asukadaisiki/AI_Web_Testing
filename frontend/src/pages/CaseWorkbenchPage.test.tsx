@@ -385,7 +385,7 @@ test("结构化步骤编辑支持应用模板、切换 JSON 并保存执行", as
     route: "/cases/new",
     path: "/cases/new",
     extraRoutes: [
-      <Route key="detail" path="/executions/:executionId" element={<div>execution-view</div>} />,
+      <Route key="detail" path="/run/:executionId" element={<div>execution-view</div>} />,
       <Route key="cases" path="/cases" element={<div>cases-view</div>} />,
     ],
   });

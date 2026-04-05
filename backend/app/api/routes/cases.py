@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import require_authenticated_user
+from app.api.auth import require_demo_user
 from app.db import get_db_session
 from app.models import User
 from app.schemas.cases import (
@@ -42,7 +42,7 @@ def create_case_route(
     payload: CaseCreateRequest,
     response: Response,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> StoredCaseDetail:
     """Create a new test case."""
     try:
@@ -66,7 +66,7 @@ def list_project_cases_route(
     page: int = 1,
     page_size: int = 20,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> PaginatedCases:
     """List test cases within a specific project with optional filtering and pagination."""
     from app.schemas.cases import CaseListFilter
@@ -109,7 +109,7 @@ def list_project_cases_route(
 def get_project_stats_route(
     project_id: int,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> ProjectTestCaseStats:
     """Get statistics for test cases in a project."""
     # Verify project exists and user has access
@@ -138,7 +138,7 @@ def list_cases_route(
     page: int = 1,
     page_size: int = 20,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> PaginatedCases:
     """List test cases with optional filtering and pagination."""
     from app.schemas.cases import CaseListFilter
@@ -182,7 +182,7 @@ def list_cases_route(
 def get_case_route(
     case_id: int,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> StoredCaseDetail:
     """Get a specific test case by ID."""
     try:
@@ -201,7 +201,7 @@ def update_case_route(
     case_id: int,
     payload: CaseUpdateRequest,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> StoredCaseDetail:
     """Update a test case."""
     try:
@@ -214,7 +214,7 @@ def update_case_route(
 def delete_case_route(
     case_id: int,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> None:
     """Delete a single test case."""
     try:
@@ -227,7 +227,7 @@ def delete_case_route(
 def batch_update_cases_route(
     payload: BatchUpdateRequest,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> list[StoredCaseDetail]:
     """Update multiple test cases in a single request."""
     try:
@@ -240,7 +240,7 @@ def batch_update_cases_route(
 def batch_delete_cases_route(
     payload: BatchDeleteRequest,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> None:
     """Delete multiple test cases in a single request."""
     deleted_count = batch_delete_cases(session, payload)

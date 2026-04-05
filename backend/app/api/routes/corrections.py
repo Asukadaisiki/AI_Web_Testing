@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import require_authenticated_user
+from app.api.auth import require_demo_user
 from app.db import get_db_session
 from app.models import User
 from app.schemas.corrections import (
@@ -36,7 +36,7 @@ def create_correction_route(
     payload: CreateCorrectionRequest,
     response: Response,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> StoredLocatorCorrection:
     try:
         correction = create_correction(session, payload.model_copy(update={"created_by": current_user.id}))

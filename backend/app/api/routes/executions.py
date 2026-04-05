@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import require_authenticated_user
+from app.api.auth import require_demo_user
 from app.db import get_db_session
 from app.models import User
 from app.schemas.executions import (
@@ -32,7 +32,7 @@ def execute_case_route(
     case_id: int,
     payload: CaseExecutionRequest,
     session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    current_user: User = Depends(require_demo_user),
 ) -> StoredCaseExecutionDetail:
     try:
         return execute_case(session, case_id, payload.model_copy(update={"actor_user_id": current_user.id}))

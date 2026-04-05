@@ -10,6 +10,8 @@ from app.db import get_db_session
 from app.models import User
 from app.services.auth import get_user_by_id
 
+DEFAULT_DEMO_USER_ID = 1
+
 
 def require_authenticated_user(
     request: Request,
@@ -23,4 +25,16 @@ def require_authenticated_user(
     if user is None or not user.is_active:
         request.session.clear()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录或登录态已失效。")
+    return user
+
+
+def require_demo_user(
+    session: Session = Depends(get_db_session),
+) -> User:
+    user = get_user_by_id(session, DEFAULT_DEMO_USER_ID)
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Demo user 1 is missing.",
+        )
     return user

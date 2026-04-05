@@ -69,7 +69,7 @@ export function CasesPage() {
     mutationFn: (caseId: number) => executeCase(caseId, { actor_user_id: 1 }),
     onSuccess: (execution) => {
       queryClient.invalidateQueries({ queryKey: ["executions"] });
-      void navigate(`/executions/${execution.id}`);
+      void navigate(`/run/${execution.id}`);
     },
     onError: (error: Error) => {
       void messageApi.error(error.message);
@@ -82,15 +82,15 @@ export function CasesPage() {
       <div className="page-header">
         <Space align="start" style={{ justifyContent: "space-between", width: "100%" }}>
           <div>
-            <h1 className="page-title">用例列表</h1>
+            <h1 className="page-title">AI 用例中心</h1>
             <p className="page-subtitle">展示已落库的 DSL 用例，并直接触发后端同步执行。</p>
           </div>
           <Space>
             <Button>
-              <Link to="/executions">执行中心</Link>
+              <Link to="/">返回 AI 规划</Link>
             </Button>
             <Button type="primary">
-              <Link to="/cases/new">新建用例</Link>
+              <Link to="/cases/new">手动补充/编辑</Link>
             </Button>
           </Space>
         </Space>

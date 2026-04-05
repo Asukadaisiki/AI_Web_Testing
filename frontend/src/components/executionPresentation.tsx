@@ -60,9 +60,9 @@ export function truncateText(value: string | null, maxLength = 72) {
 
 export function buildExecutionLink(record: Pick<StoredCaseExecutionSummary, "id" | "failed_step_index">) {
   if (record.failed_step_index === null || record.failed_step_index === undefined) {
-    return `/executions/${record.id}`;
+    return `/run/${record.id}`;
   }
-  return `/executions/${record.id}#step-${record.failed_step_index + 1}`;
+  return `/run/${record.id}#step-${record.failed_step_index + 1}`;
 }
 
 export interface ExecutionListQueryState {

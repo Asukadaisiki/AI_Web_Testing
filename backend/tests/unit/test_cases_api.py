@@ -244,6 +244,11 @@ def test_create_case_returns_not_found_when_project_missing(client) -> None:
     assert response.json()["detail"] == "Project 999 not found."
 
 
+def test_cases_api_allows_demo_access_without_login(anonymous_client) -> None:
+    response = anonymous_client.get("/api/v1/cases")
+    assert response.status_code == 200
+
+
 def test_suite_routes_are_not_registered(client) -> None:
     response = client.get("/api/v1/suites")
 

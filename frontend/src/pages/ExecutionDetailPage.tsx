@@ -12,6 +12,7 @@ import {
   List,
   Row,
   Space,
+  Tag,
   Timeline,
   Typography,
 } from "antd";
@@ -20,15 +21,53 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { InterventionPanel } from "../components/InterventionPanel";
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { renderExecutionStatus } from "../components/executionPresentation";
-import { getExecutionDetail } from "../services/api";
+import {
+  classifyLocatorStrategy,
+  formatDuration,
+  formatPassRate,
+} from "../components/executionMetrics";
+import type { LocatorStrategyBucket } from "../components/executionMetrics";
+import { getExecutionDetail, getExecutionOverview } from "../services/api";
 import type {
   ConsoleEvent,
+  ExecutionsOverview,
   NetworkEvent,
   StepExecutionEvidence,
 } from "../types/api";
 
 const DEFAULT_EVENT_PREVIEW_COUNT = 2;
 const DEFAULT_EXECUTIONS_PATH = "/executions";
+
+const STRATEGY_LABEL: Record<LocatorStrategyBucket, string> = {
+  dom: "DOM 定位",
+  vlm: "VLM 视觉定位",
+  correction: "修正定位",
+  manual: "人工干预",
+  not_applicable: "不适用",
+};
+
+const STRATEGY_COLOR: Record<LocatorStrategyBucket, string> = {
+  dom: "blue",
+  vlm: "purple",
+  correction: "orange",
+  manual: "red",
+  not_applicable: "default",
+};
+
+function computeStrategyDistribution(steps: StepExecutionEvidence[]) {
+  const counts: Record<LocatorStrategyBucket, number> = {
+    dom: 0,
+    vlm: 0,
+    correction: 0,
+    manual: 0,
+    not_applicable: 0,
+  };
+  for (const step of steps) {
+    const bucket = classifyLocatorStrategy(step);
+    counts[bucket]++;
+  }
+  return counts;
+}
 
 type ExecutionDetailLocationState = {
   fromExecutions?: string;
@@ -263,6 +302,26 @@ export function ExecutionDetailPage() {
     enabled: Number.isFinite(executionId),
   });
 
+  const [overviewReady, setOverviewReady] = useState(false);
+  const [overviewData, setOverviewData] = useState<ExecutionsOverview | null>(null);
+  useEffect(() => {
+    if (!query.data?.case_id) return;
+    let cancelled = false;
+    getExecutionOverview({ scope_type: "case", case_id: query.data.case_id })
+      .then((data) => {
+        if (!cancelled) {
+          setOverviewData(data);
+          setOverviewReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setOverviewReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [query.data?.case_id]);
+
   const failedStepKeys = useMemo(
     () =>
       (query.data?.report?.steps ?? [])
@@ -363,6 +422,47 @@ export function ExecutionDetailPage() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      {overviewReady && detail.case_id && (
+        <>
+          <Card title="执行报告总览" size="small">
+            <div className="summary-strip">
+              <div className="summary-tile">
+                <div className="summary-label">通过率</div>
+                <div className="summary-value">
+                  {overviewData ? formatPassRate(overviewData.pass_rate) : "-"}
+                </div>
+              </div>
+              <div className="summary-tile">
+                <div className="summary-label">平均耗时</div>
+                <div className="summary-value">
+                  {overviewData ? formatDuration(overviewData.avg_duration_ms) : "-"}
+                </div>
+              </div>
+              <div className="summary-tile">
+                <div className="summary-label">干预率</div>
+                <div className="summary-value">
+                  {overviewData ? formatPassRate(overviewData.intervention_rate) : "-"}
+                </div>
+              </div>
+            </div>
+          </Card>
+          <Card title="定位策略总览" size="small">
+            <Space wrap>
+              {(() => {
+                const dist = computeStrategyDistribution(steps);
+                return (Object.keys(dist) as LocatorStrategyBucket[])
+                  .filter((key) => dist[key] > 0)
+                  .map((key) => (
+                    <Tag key={key} color={STRATEGY_COLOR[key]}>
+                      {STRATEGY_LABEL[key]}: {dist[key]}
+                    </Tag>
+                  ));
+              })()}
+            </Space>
+          </Card>
+        </>
+      )}
 
       <Card title="步骤时间线">
         {steps.length ? (

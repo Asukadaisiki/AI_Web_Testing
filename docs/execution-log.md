@@ -1,4 +1,4 @@
-﻿# 执行日志
+# 执行日志
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
@@ -8,6 +8,22 @@
 - 记录“目标、操作、结果、验证、后续”，避免只写结论。
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
+
+## 2026-04-05 23:50
+
+- 任务：将前端主链路重构为 AI 规划 -> AI 用例 -> 执行与报告，无需登录
+- 执行动作：移除 demo 流的认证依赖（后端 require_demo_user）；新增 PlanningPage；精简导航与页面为三步 Steps 导航；融合执行详情页与报告总览（executionMetrics.ts）；删除旧平台页（DashboardPage、LoginPage、ExecutionsPage、CorrectionsPage、AISettingsPage、ReportCenterPage）及 AuthContext；统一路径为 `/run/:id`
+- 结果：演示流从平台式多页面收敛为三步闭环，后端 56 测试通过、前端 59 测试通过（各 2/1 个预先存在的无关失败）
+- 验证：前端 Vitest 定向通过（AppRouter + PlanningPage + AITestPlanningPanel + CasesPage + CaseWorkbenchPage + ExecutionDetailPage + executionMetrics）；后端 pytest 定向通过
+- 后续：如需彻底清除 auth 模块和报告偏好接口，可单开一次清理任务
+
+## 2026-04-05 23:14
+
+- 任务：整理 demo 主链路重构实施计划
+- 执行动作：核对前端现有路由、布局、规划面板、用例页、执行详情页与后端 API 认证依赖，确认三步演示流所需真实改动范围；输出正式实施计划到 `docs/superpowers/plans/2026-04-05-demo-flow-simplification.md`
+- 结果：形成一份可直接执行的计划，覆盖去认证、三步导航、PlanningPage、新的 cases hub、执行报告融合、旧页面清理与验证收口
+- 验证：静态核对 `frontend/src/app/AppRouter.tsx`、`frontend/src/layouts/AppLayout.tsx`、`frontend/src/pages/CasesPage.tsx`、`frontend/src/pages/ExecutionDetailPage.tsx`、`frontend/src/components/AITestPlanningPanel.tsx`、`backend/app/api/router.py` 以及相关测试文件
+- 后续：待确认执行方式后，按计划逐任务落地实现
 
 ## 2026-03-31 12:00
 

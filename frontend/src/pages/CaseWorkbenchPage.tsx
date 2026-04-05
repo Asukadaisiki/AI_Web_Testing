@@ -637,7 +637,7 @@ export function CaseWorkbenchPage() {
       removeDraft(draftKey);
       setPendingDraft(null);
       if (mode === "execute" && executionId) {
-        void navigate(`/executions/${executionId}`);
+        void navigate(`/run/${executionId}`);
         return;
       }
       void messageApi.success("用例已保存。");

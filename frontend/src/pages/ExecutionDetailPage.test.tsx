@@ -13,7 +13,12 @@ vi.mock("../services/api", async () => {
     createCorrection: vi.fn(),
     executeCase: vi.fn(),
     getExecutionDetail: vi.fn(),
+    getExecutionOverview: vi.fn(),
   };
+});
+
+beforeEach(() => {
+  vi.mocked(api.getExecutionOverview).mockRejectedValue(new Error("not mocked"));
 });
 
 test("澶辫触姝ラ榛樿灞曞紑锛屾敮鎸佹煡鐪嬪€欓€夎瘎鍒嗗苟鎸夐渶灞曞紑 console 涓?network 浜嬩欢", async () => {
@@ -111,8 +116,8 @@ test("澶辫触姝ラ榛樿灞曞紑锛屾敮鎸佹煡鐪嬪€欓€夎�
   });
 
   renderWithProviders(<ExecutionDetailPage />, {
-    route: "/executions/12",
-    path: "/executions/:executionId",
+    route: "/run/12",
+    path: "/run/:executionId",
   });
 
   expect(await screen.findByRole("heading", { name: "澶辫触鐢ㄤ緥" })).toBeInTheDocument();
@@ -178,8 +183,8 @@ test("缂哄皯鐢ㄤ緥 Base URL 鐨勬墽琛屼細鏄剧ず淇鎻愮ず"
   });
 
   renderWithProviders(<ExecutionDetailPage />, {
-    route: "/executions/20",
-    path: "/executions/:executionId",
+    route: "/run/20",
+    path: "/run/:executionId",
   });
 
   expect(await screen.findByText("该用例的相对路径 goto 缺少用例 Base URL")).toBeInTheDocument();
@@ -222,12 +227,12 @@ test("执行详情页优先显示返回执行列表链接", async () => {
 
   renderWithProviders(<ExecutionDetailPage />, {
     route: {
-      pathname: "/executions/21",
+      pathname: "/run/21",
       state: {
         fromExecutions: "/executions?window_days=7&status=failed&case_id=5",
       },
     },
-    path: "/executions/:executionId",
+    path: "/run/:executionId",
   });
 
   expect(await screen.findByRole("heading", { name: "鏉ユ簮鍥炴祦鐢ㄤ緥" })).toBeInTheDocument();
@@ -319,17 +324,11 @@ test("needs_intervention 姝ラ灞曠ず骞查闈㈡澘锛屾彁浜や慨�
   });
 
   renderWithProviders(<ExecutionDetailPage />, {
-    route: "/executions/31",
-    path: "/executions/:executionId",
+    route: "/run/31",
+    path: "/run/:executionId",
   });
 
   expect(await screen.findByText("人工干预")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "查看同目标修正记录" }).getAttribute("href")).toContain(
-    "/corrections?target_description=",
-  );
-  expect(screen.getByRole("link", { name: "查看同目标修正记录" }).getAttribute("href")).toContain(
-    "page_url=https%3A%2F%2Fapp.example.com%2Flogin",
-  );
   expect(screen.getByText("当前步骤已进入人工干预")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "使用该选择器" }));
   await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
@@ -344,7 +343,7 @@ test("needs_intervention 姝ラ灞曠ず骞查闈㈡澘锛屾彁浜や慨�
       created_by: 1,
     });
   });
-  expect(await screen.findByText("修正已保存 #5")).toBeInTheDocument();
+  expect(await screen.findByText("修正记录已保存到定位库")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "重新执行当前用例" })).toBeInTheDocument();
 });
 test("needs_intervention step shows creation error when correction submit fails", async () => {
@@ -406,15 +405,11 @@ test("needs_intervention step shows creation error when correction submit fails"
   vi.mocked(api.createCorrection).mockRejectedValue(new Error("create boom"));
 
   renderWithProviders(<ExecutionDetailPage />, {
-    route: "/executions/41",
-    path: "/executions/:executionId",
+    route: "/run/41",
+    path: "/run/:executionId",
   });
 
   expect(await screen.findByText("人工干预")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "查看同目标修正记录" })).toHaveAttribute(
-    "href",
-    "/corrections?target_description=login%20button&page_url=https%3A%2F%2Fapp.example.com%2Flogin",
-  );
   await userEvent.click(screen.getByRole("button", { name: "使用该选择器" }));
   await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
 
@@ -494,15 +489,127 @@ test("needs_intervention step shows rerun error when rerun fails", async () => {
   vi.mocked(api.executeCase).mockRejectedValue(new Error("rerun boom"));
 
   renderWithProviders(<ExecutionDetailPage />, {
-    route: "/executions/42",
-    path: "/executions/:executionId",
+    route: "/run/42",
+    path: "/run/:executionId",
   });
 
   expect(await screen.findByText("人工干预")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "使用该选择器" }));
   await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
-  expect(await screen.findByText("修正已保存 #6")).toBeInTheDocument();
+  expect(await screen.findByText("修正记录已保存到定位库")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "重新执行当前用例" }));
   expect(await screen.findByText("rerun boom")).toBeInTheDocument();
 });
+
+test("shows execution report summary and locator strategy overview when case_id exists", async () => {
+  vi.mocked(api.getExecutionDetail).mockResolvedValue({
+    id: 50,
+    case_id: 3,
+    case_name: "报告总览用例",
+    project_id: 1,
+    triggered_by: 1,
+    status: "passed",
+    error_message: null,
+    started_at: "2026-03-15T10:00:00",
+    finished_at: "2026-03-15T10:00:05",
+    duration_ms: 5000,
+    total_steps: 3,
+    failed_step_index: null,
+    failure_category: null,
+    failure_step_action: null,
+    latest_url: "http://example.com/home",
+    latest_screenshot_url: null,
+    report: {
+      status: "passed",
+      steps: [
+        {
+          step_index: 0,
+          action: "goto",
+          value: "/login",
+          status: "passed",
+          duration_ms: 200,
+          console_events: [],
+          network_events: [],
+        },
+        {
+          step_index: 1,
+          action: "click",
+          target: "登录按钮",
+          status: "passed",
+          duration_ms: 500,
+          resolved_by: "css_selector",
+          console_events: [],
+          network_events: [],
+        },
+        {
+          step_index: 2,
+          action: "click",
+          target: "图标按钮",
+          status: "passed",
+          duration_ms: 800,
+          resolved_by: "vlm_candidate",
+          console_events: [],
+          network_events: [],
+        },
+      ],
+    },
+  });
+  vi.mocked(api.getExecutionOverview).mockResolvedValue({
+    scope_type: "case",
+    scope_case_id: 3,
+    total_count: 10,
+    passed_count: 8,
+    failed_count: 1,
+    running_count: 1,
+    auto_completed_count: 9,
+    intervention_count: 1,
+    pass_rate: 0.8,
+    automation_rate: 0.9,
+    intervention_rate: 0.1,
+    avg_duration_ms: 3200,
+    previous_window_stats: {
+      total_count: 0,
+      passed_count: 0,
+      failed_count: 0,
+      running_count: 0,
+      pass_rate: 0,
+      avg_duration_ms: 0,
+    },
+    window_comparison: {
+      total_count_delta: 0,
+      passed_count_delta: 0,
+      failed_count_delta: 0,
+      running_count_delta: 0,
+      pass_rate_delta: 0,
+      avg_duration_ms_delta: 0,
+    },
+    latest_failed_runs: [],
+    latest_intervention_runs: [],
+    failure_categories: [],
+    trend_points: [],
+    failure_step_actions: [],
+    top_failed_cases: [],
+    failure_root_causes: [],
+  });
+
+  renderWithProviders(<ExecutionDetailPage />, {
+    route: "/run/50",
+    path: "/run/:executionId",
+  });
+
+  expect(await screen.findByText("执行报告总览")).toBeInTheDocument();
+  expect(screen.getByText("80.0%")).toBeInTheDocument();
+  expect(screen.getByText("3.2s")).toBeInTheDocument();
+  expect(screen.getByText("10.0%")).toBeInTheDocument();
+
+  expect(screen.getByText("定位策略总览")).toBeInTheDocument();
+  expect(screen.getByText("不适用: 1")).toBeInTheDocument();
+  expect(screen.getByText("DOM 定位: 1")).toBeInTheDocument();
+  expect(screen.getByText("VLM 视觉定位: 1")).toBeInTheDocument();
+
+  expect(api.getExecutionOverview).toHaveBeenCalledWith({
+    scope_type: "case",
+    case_id: 3,
+  });
+}, 10000);

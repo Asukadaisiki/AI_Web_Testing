@@ -1,8 +1,7 @@
 """API router assembly."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.api.auth import require_authenticated_user
 from app.api.routes.ai_planning import router as ai_planning_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.cases import router as cases_router
@@ -21,12 +20,12 @@ def build_api_router() -> APIRouter:
     api_router = APIRouter(prefix=settings.api_v1_prefix)
     api_router.include_router(health_router)
     api_router.include_router(auth_router)
-    api_router.include_router(ai_planning_router, dependencies=[Depends(require_authenticated_user)])
-    api_router.include_router(cases_router, dependencies=[Depends(require_authenticated_user)])
-    api_router.include_router(corrections_router, dependencies=[Depends(require_authenticated_user)])
-    api_router.include_router(dsl_router, dependencies=[Depends(require_authenticated_user)])
-    api_router.include_router(settings_router, dependencies=[Depends(require_authenticated_user)])
-    api_router.include_router(executions_router, dependencies=[Depends(require_authenticated_user)])
-    api_router.include_router(projects_router, dependencies=[Depends(require_authenticated_user)])
-    api_router.include_router(reports_router, dependencies=[Depends(require_authenticated_user)])
+    api_router.include_router(ai_planning_router)
+    api_router.include_router(cases_router)
+    api_router.include_router(corrections_router)
+    api_router.include_router(dsl_router)
+    api_router.include_router(settings_router)
+    api_router.include_router(executions_router)
+    api_router.include_router(projects_router)
+    api_router.include_router(reports_router)
     return api_router

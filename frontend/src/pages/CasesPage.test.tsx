@@ -66,7 +66,7 @@ test("渲染用例列表并支持执行后跳转", async () => {
   renderWithProviders(<CasesPage />, {
     route: "/cases",
     path: "/cases",
-    extraRoutes: [<Route key="detail" path="/executions/:executionId" element={<div>detail-view</div>} />],
+    extraRoutes: [<Route key="detail" path="/run/:executionId" element={<div>detail-view</div>} />],
   });
 
   expect(await screen.findByText("登录冒烟")).toBeInTheDocument();

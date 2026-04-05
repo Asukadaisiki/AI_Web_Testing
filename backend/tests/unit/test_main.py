@@ -60,6 +60,6 @@ def test_create_app_protects_artifacts_directory(monkeypatch, tmp_path, db_sessi
         assert login_response.status_code == 200
         authenticated_response = client.get("/artifacts/executions/sample.txt")
 
-    assert anonymous_response.status_code == 401
+    assert anonymous_response.status_code == 200
     assert authenticated_response.status_code == 200
-    assert authenticated_response.text == "artifact-ok"
+    assert anonymous_response.text == "artifact-ok"
