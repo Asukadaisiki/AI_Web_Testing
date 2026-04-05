@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Input, Progress, Space, Tag, Typography, message } from "antd";
+import { Alert, Button, Checkbox, Input, Progress, Tag, Typography, message } from "antd";
+import { SendOutlined } from "@ant-design/icons";
 
 import {
   createPlanningSession,
@@ -19,6 +20,7 @@ import type {
   DSLCasePayload,
   DSLStep,
 } from "../types/api";
+import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 
 type AITestPlanningPanelProps = {
   aiSettings?: AISettings | null;
@@ -241,161 +243,284 @@ export function AITestPlanningPanel({
     setDrafts((current) => current.map((item) => (item.id === draft.id ? updatedDraft : item)));
   }
 
-  return (
-    <Card title="AI 测试规划助手">
-      {contextHolder}
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        {aiSettings ? (
+  function renderLeftPanel() {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>Requirements</div>
+        <Progress percent={progressPercent} size="small" />
+        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          已收集 {progressCount} / {REQUIREMENT_FIELDS.length} 项
+        </Typography.Text>
+        <div style={{ flex: 1, overflowY: "auto" }} className="panel-scroll">
+          {collectedEntries.length ? (
+            collectedEntries.map((entry) => (
+              <div key={entry.label} className="step-item">
+                <Typography.Text strong style={{ fontSize: 13 }}>
+                  {entry.label}
+                </Typography.Text>
+                <div style={{ fontSize: 13, color: "#555", marginTop: 2 }}>{entry.value}</div>
+              </div>
+            ))
+          ) : (
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              当前还没有收集到明确的规划信息。
+            </Typography.Text>
+          )}
+        </div>
+        {missingSlots.length ? (
           <Alert
-            type={planningEnabled ? "info" : "warning"}
+            type="info"
             showIcon
-            message="AI 规划状态"
-            description={
-              planningEnabled
-                ? `已启用，模型：${aiSettings.ai_planning_model ?? "未配置"}，最多 ${aiSettings.ai_planning_max_react_rounds ?? 5} 轮`
-                : "当前未启用 AI planning，规划对话暂不可用。"
-            }
+            message="待补充信息"
+            description={missingSlots.join("、")}
+            style={{ fontSize: 12 }}
           />
         ) : null}
-        {!projectId ? <Alert type="warning" showIcon message="请先选择项目，再开启 AI 测试规划。" /> : null}
-        <div className="workbench-grid">
-          <Card size="small" title="规划对话">
-            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-              {transcript.map((item) => (
-                <Alert
-                  key={`${item.id}-${item.turn_type}`}
-                  type={item.role === "assistant" ? "info" : "success"}
-                  showIcon
-                  message={item.turn_type === "tool_call" ? "工具调用" : item.role === "assistant" ? "AI" : "用户"}
-                  description={item.content}
-                />
-              ))}
-              {suggestedQuestions.length ? (
-                <Space wrap>
-                  {suggestedQuestions.map((question) => (
-                    <Tag key={question}>{question}</Tag>
-                  ))}
-                </Space>
-              ) : null}
-              <Input.TextArea
-                aria-label="测试规划对话输入"
-                rows={4}
-                value={inputValue}
-                onChange={(event) => setInputValue(event.target.value)}
-                disabled={isDisabled || isBootstrapping}
-                placeholder="描述业务目标、入口页面、核心流程、断言和测试数据。"
-              />
-              <Space wrap>
-                <Button
-                  type="primary"
-                  onClick={() => void handleSendMessage()}
-                  loading={isSending}
-                  disabled={isDisabled || isBootstrapping || !sessionId || !inputValue.trim()}
-                >
-                  发送消息
-                </Button>
-              </Space>
-            </Space>
-          </Card>
+      </div>
+    );
+  }
 
-          <Card size="small" title="规划进度">
-            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-              <div>
-                <Typography.Text strong>信息收集进度</Typography.Text>
-                <Progress percent={progressPercent} size="small" />
-                <Typography.Text type="secondary">
-                  已收集 {progressCount} / {REQUIREMENT_FIELDS.length} 项
-                </Typography.Text>
-              </div>
-
-              {collectedEntries.length ? (
-                collectedEntries.map((entry) => (
-                  <div key={entry.label}>
-                    <Typography.Text strong>{entry.label}：</Typography.Text>
-                    <Typography.Text>{entry.value}</Typography.Text>
-                  </div>
-                ))
-              ) : (
-                <Typography.Text type="secondary">当前还没有收集到明确的规划信息。</Typography.Text>
-              )}
-
-              {missingSlots.length ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  message="待补充信息"
-                  description={missingSlots.join("、")}
-                />
-              ) : null}
-
-              {plan ? (
-                <>
-                  <Alert type="success" showIcon message={plan.summary} />
-                  {plan.scenarios.map((scenario) => (
-                    <Card key={scenario.scenario_key} size="small" title={scenario.title}>
-                      <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                        <Checkbox
-                          aria-label={`选择场景 ${scenario.title}`}
-                          checked={selectedScenarioKeys.includes(scenario.scenario_key)}
-                          onChange={(event) =>
-                            setSelectedScenarioKeys((current) =>
-                              event.target.checked
-                                ? [...current, scenario.scenario_key]
-                                : current.filter((item) => item !== scenario.scenario_key),
-                            )
-                          }
-                        >
-                          选择场景 {scenario.title}
-                        </Checkbox>
-                        <Typography.Text>{scenario.goal}</Typography.Text>
-                        <Typography.Text type="secondary">
-                          数据需求：
-                          {scenario.test_data_requirements.length
-                            ? scenario.test_data_requirements.map((item) => item.label).join("、")
-                            : "无"}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          关键断言：{scenario.assertions.length ? scenario.assertions.join("、") : "无"}
-                        </Typography.Text>
-                      </Space>
-                    </Card>
-                  ))}
-                  <Button onClick={() => void handleGenerateDrafts()} loading={isGenerating} disabled={!selectedScenarioKeys.length}>
-                    生成选中草案
-                  </Button>
-                </>
-              ) : null}
-
-              {drafts.length ? (
-                <Card size="small" title="DSL 草案列表">
-                  <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                    {drafts.map((draft) => (
-                      <Card key={draft.id} size="small" title={draft.title}>
-                        <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                          <Tag>{draft.status}</Tag>
-                          {draft.error_message ? <Alert type="error" showIcon message={draft.error_message} /> : null}
-                          {draft.dsl_case ? (
-                            <>
-                              <Input.TextArea readOnly rows={6} value={JSON.stringify(draft.dsl_case, null, 2)} />
-                              <Button
-                                type="primary"
-                                onClick={() => void handleImportDraft(draft)}
-                                disabled={draft.status !== "generated"}
-                              >
-                                {draftImportLabel ?? "导入到当前编辑器"}
-                              </Button>
-                            </>
-                          ) : null}
-                        </Space>
-                      </Card>
-                    ))}
-                  </Space>
-                </Card>
-              ) : null}
-            </Space>
-          </Card>
+  function renderCenterPanel() {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        {contextHolder}
+        {/* Top area with title and status */}
+        <div style={{ padding: "20px 40px 0" }}>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            AI Planning
+          </Typography.Title>
+          {aiSettings && planningEnabled ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginTop: 12, fontSize: 13 }}
+              message={`模型：${aiSettings.ai_planning_model ?? "未配置"}，最多 ${aiSettings.ai_planning_max_react_rounds ?? 5} 轮`}
+            />
+          ) : null}
+          {!projectId ? (
+            <Alert type="warning" showIcon message="请先选择项目，再开启 AI 测试规划。" style={{ marginTop: 12 }} />
+          ) : null}
         </div>
-      </Space>
-    </Card>
+
+        {/* Scrollable message area */}
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "24px 40px",
+          }}
+          className="panel-scroll"
+        >
+          {transcript.map((item) => (
+            <div
+              key={`${item.id}-${item.turn_type}`}
+              style={{
+                display: "flex",
+                justifyContent: item.role === "user" ? "flex-end" : "flex-start",
+                marginBottom: 12,
+              }}
+            >
+              <div className={item.role === "user" ? "chat-bubble-user" : "chat-bubble-ai"}>
+                {item.role === "assistant" && item.turn_type === "tool_call" ? (
+                  <>
+                    <span style={{ fontWeight: 600 }}>🔧 工具调用</span>
+                    <div style={{ marginTop: 4 }}>{item.content}</div>
+                  </>
+                ) : (
+                  item.content
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Suggested questions */}
+        {suggestedQuestions.length ? (
+          <div style={{ padding: "0 40px 8px", display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {suggestedQuestions.map((question) => (
+              <Tag
+                key={question}
+                className="action-grid-item"
+                style={{ cursor: "pointer" }}
+                onClick={() => {
+                  setInputValue(question);
+                }}
+              >
+                {question}
+              </Tag>
+            ))}
+          </div>
+        ) : null}
+
+        {/* Bottom input bar */}
+        <div style={{ padding: "16px 32px 20px", borderTop: "1px solid #f5f5f5" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-end",
+              gap: 8,
+              background: "#F0F4F8",
+              borderRadius: 24,
+              padding: "8px 8px 8px 16px",
+            }}
+          >
+            <Input.TextArea
+              aria-label="测试规划对话输入"
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              bordered={false}
+              value={inputValue}
+              onChange={(event) => setInputValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleSendMessage();
+                }
+              }}
+              disabled={isDisabled || isBootstrapping}
+              placeholder="描述业务目标、入口页面、核心流程、断言和测试数据…"
+              style={{ background: "transparent", resize: "none", flex: 1 }}
+            />
+            <Button
+              type="primary"
+              shape="circle"
+              icon={<SendOutlined />}
+              onClick={() => void handleSendMessage()}
+              loading={isSending}
+              disabled={isDisabled || isBootstrapping || !sessionId || !inputValue.trim()}
+              style={{
+                background: "#1a1a2e",
+                borderColor: "#1a1a2e",
+                width: 40,
+                height: 40,
+                minWidth: 40,
+                flexShrink: 0,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderRightCards() {
+    const cards: React.ReactNode[] = [];
+
+    // Card 1: 规划进度
+    cards.push(
+      <div key="plan-progress">
+        <Typography.Text strong style={{ fontSize: 14 }}>
+          规划进度
+        </Typography.Text>
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {plan ? (
+            <>
+              <Alert type="success" showIcon message={plan.summary} style={{ fontSize: 13 }} />
+              {plan.scenarios.map((scenario) => (
+                <div key={scenario.scenario_key} style={{ padding: "8px 0" }}>
+                  <Checkbox
+                    aria-label={`选择场景 ${scenario.title}`}
+                    checked={selectedScenarioKeys.includes(scenario.scenario_key)}
+                    onChange={(event) =>
+                      setSelectedScenarioKeys((current) =>
+                        event.target.checked
+                          ? [...current, scenario.scenario_key]
+                          : current.filter((item) => item !== scenario.scenario_key),
+                      )
+                    }
+                  >
+                    {scenario.title}
+                  </Checkbox>
+                  <Typography.Text style={{ display: "block", fontSize: 12, color: "#555", marginTop: 2, paddingLeft: 24 }}>
+                    {scenario.goal}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ display: "block", fontSize: 12, paddingLeft: 24 }}>
+                    数据需求：{scenario.test_data_requirements.length ? scenario.test_data_requirements.map((item) => item.label).join("、") : "无"}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ display: "block", fontSize: 12, paddingLeft: 24 }}>
+                    关键断言：{scenario.assertions.length ? scenario.assertions.join("、") : "无"}
+                  </Typography.Text>
+                </div>
+              ))}
+              <Button
+                onClick={() => void handleGenerateDrafts()}
+                loading={isGenerating}
+                disabled={!selectedScenarioKeys.length}
+                type="primary"
+                block
+              >
+                生成选中草案
+              </Button>
+            </>
+          ) : (
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              尚未生成规划方案，请在对话中描述测试需求。
+            </Typography.Text>
+          )}
+        </div>
+      </div>,
+    );
+
+    // Card 2: DSL 草案列表
+    if (drafts.length > 0) {
+      cards.push(
+        <div key="drafts-list">
+          <Typography.Text strong style={{ fontSize: 14 }}>
+            DSL 草案列表
+          </Typography.Text>
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            {drafts.map((draft) => (
+              <div key={draft.id} style={{ padding: "8px 0", borderBottom: "1px solid #f5f5f5" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <Typography.Text strong style={{ fontSize: 13 }}>
+                    {draft.title}
+                  </Typography.Text>
+                  <Tag>{draft.status}</Tag>
+                </div>
+                {draft.error_message ? (
+                  <Alert type="error" showIcon message={draft.error_message} style={{ marginTop: 4, fontSize: 12 }} />
+                ) : null}
+                {draft.dsl_case ? (
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={() => void handleImportDraft(draft)}
+                    disabled={draft.status !== "generated"}
+                    style={{ marginTop: 6 }}
+                  >
+                    {draftImportLabel ?? "导入到当前编辑器"}
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>,
+      );
+    }
+
+    // Card 3 (optional): AI settings status
+    if (aiSettings) {
+      cards.push(
+        <div key="ai-settings-info">
+          <Typography.Text strong style={{ fontSize: 14 }}>
+            AI 设置
+          </Typography.Text>
+          <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>
+            <div>状态：{planningEnabled ? "已启用" : "未启用"}</div>
+            {aiSettings.ai_planning_model ? <div>模型：{aiSettings.ai_planning_model}</div> : null}
+            <div>最大轮数：{aiSettings.ai_planning_max_react_rounds ?? 5}</div>
+          </div>
+        </div>,
+      );
+    }
+
+    return cards;
+  }
+
+  return (
+    <NotebookLMLayout
+      leftPanel={renderLeftPanel()}
+      centerPanel={renderCenterPanel()}
+      rightCards={renderRightCards()}
+    />
   );
 }

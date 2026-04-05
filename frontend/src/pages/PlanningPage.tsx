@@ -1,4 +1,4 @@
-import { Alert, Space, Typography } from "antd";
+import { Alert } from "antd";
 
 import { AITestPlanningPanel } from "../components/AITestPlanningPanel";
 import { useQuery } from "@tanstack/react-query";
@@ -45,19 +45,11 @@ export function PlanningPage() {
   }
 
   return (
-    <div style={{ padding: 24 }}>
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        <Typography.Title level={3}>AI 测试规划</Typography.Title>
-        <Typography.Paragraph type="secondary">
-          描述您的测试需求，AI 将帮助您生成测试方案和测试用例。这是演示流程的第一步。
-        </Typography.Paragraph>
-        <AITestPlanningPanel
-          aiSettings={aiSettingsQuery.data ?? null}
-          projectId={firstProject?.id}
-          onImportDraft={handleImportDraft}
-          draftImportLabel="创建用例并进入用例中心"
-        />
-      </Space>
-    </div>
+    <AITestPlanningPanel
+      aiSettings={aiSettingsQuery.data ?? null}
+      projectId={firstProject?.id}
+      onImportDraft={handleImportDraft}
+      draftImportLabel="创建用例并进入用例中心"
+    />
   );
 }
