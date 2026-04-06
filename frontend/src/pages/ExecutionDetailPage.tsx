@@ -27,6 +27,7 @@ import {
   formatPassRate,
 } from "../components/executionMetrics";
 import type { LocatorStrategyBucket } from "../components/executionMetrics";
+import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 import { getExecutionDetail, getExecutionOverview } from "../services/api";
 import type {
   ConsoleEvent,
@@ -330,10 +331,21 @@ export function ExecutionDetailPage() {
     [query.data?.report?.steps],
   );
   const [activeKeys, setActiveKeys] = useState<string[]>([]);
+  const [activeStepIndex, setActiveStepIndex] = useState(0);
 
   useEffect(() => {
     setActiveKeys(failedStepKeys);
   }, [failedStepKeys]);
+
+  useEffect(() => {
+    const steps = query.data?.report?.steps ?? [];
+    if (!steps.length) {
+      setActiveStepIndex(0);
+      return;
+    }
+    const failedStep = steps.find((step) => step.status === "failed");
+    setActiveStepIndex(failedStep?.step_index ?? 0);
+  }, [query.data?.id, query.data?.report?.steps]);
 
   useEffect(() => {
     if (!query.data || !location.hash) {
@@ -359,52 +371,149 @@ export function ExecutionDetailPage() {
   const steps = detail.report?.steps ?? [];
   const backHref =
     typeof state?.fromExecutions === "string" && state.fromExecutions ? state.fromExecutions : DEFAULT_EXECUTIONS_PATH;
+  const activeStep = steps[activeStepIndex] ?? steps[0];
+  const strategyDistribution = computeStrategyDistribution(steps);
 
-  return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <div className="page-header">
-        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }} wrap>
-          <div>
-            <h1 className="page-title">{detail.case_name}</h1>
-            <p className="page-subtitle">查看步骤时间线、定位候选、截图证据、URL 与失败原因。</p>
-          </div>
-          <Space wrap>
-            <Button>
-              <Link to={backHref}>返回执行中心</Link>
-            </Button>
-            <Button>
-              <Link to={`/cases/${detail.case_id}/edit`}>返回用例</Link>
-            </Button>
-          </Space>
+  const leftPanel = (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%" }}>
+      <div>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          {detail.case_name}
+        </Typography.Title>
+        <div style={{ marginTop: 4 }}>
+          <Typography.Text type="secondary">查看步骤时间线、定位候选、截图证据、URL 与失败原因。</Typography.Text>
+        </div>
+      </div>
+      <Space wrap>
+        <Button>
+          <Link to={backHref}>返回执行中心</Link>
+        </Button>
+        <Button>
+          <Link to={`/cases/${detail.case_id}/edit`}>返回用例</Link>
+        </Button>
+      </Space>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+        <div className="nb-card" style={{ padding: 12 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            执行状态
+          </Typography.Text>
+          <div style={{ marginTop: 4 }}>{renderExecutionStatus(detail.status)}</div>
+        </div>
+        <div className="nb-card" style={{ padding: 12 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            执行编号
+          </Typography.Text>
+          <div style={{ marginTop: 4, fontWeight: 700 }}>{`#${detail.id}`}</div>
+        </div>
+        <div className="nb-card" style={{ padding: 12 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            步骤数
+          </Typography.Text>
+          <div style={{ marginTop: 4, fontWeight: 700 }}>{steps.length}</div>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", paddingRight: 4 }} className="panel-scroll">
+        <Space direction="vertical" size="small" style={{ width: "100%" }}>
+          {steps.map((step) => (
+            <div
+              key={step.step_index}
+              className={`step-item ${step.step_index === activeStepIndex ? "step-item-active" : ""}`}
+              onClick={() => {
+                setActiveStepIndex(step.step_index);
+                setActiveKeys([String(step.step_index)]);
+              }}
+            >
+              <span style={{ marginRight: 6 }}>{step.status === "passed" ? "PASS" : "FAIL"}</span>
+              <strong>{`步骤 ${step.step_index + 1}`}</strong>
+              <span style={{ marginLeft: 6 }}>{step.action}</span>
+            </div>
+          ))}
         </Space>
       </div>
+    </div>
+  );
 
-      {isBaseUrlError(detail.error_message) ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="该用例的相对路径 goto 缺少用例 Base URL"
-          description="请回到用例工作台补充 Base URL，或在调试执行接口时显式传入 base_url。"
+  const rightCards = [
+    <div key="overview">
+      <Typography.Text strong style={{ fontSize: 14, display: "block", marginBottom: 12 }}>
+        执行概览
+      </Typography.Text>
+      <Space direction="vertical" size="small" style={{ width: "100%" }}>
+        <Typography.Text strong>{`通过率 ${overviewData ? formatPassRate(overviewData.pass_rate) : "-"}`}</Typography.Text>
+        <Typography.Text strong>{`平均耗时 ${overviewData ? formatDuration(overviewData.avg_duration_ms) : "-"}`}</Typography.Text>
+        <Typography.Text strong>{`干预率 ${overviewData ? formatPassRate(overviewData.intervention_rate) : "-"}`}</Typography.Text>
+      </Space>
+    </div>,
+    <div key="strategy">
+      <Typography.Text strong style={{ fontSize: 14, display: "block", marginBottom: 12 }}>
+        定位策略分布
+      </Typography.Text>
+      <Space wrap>
+        {(Object.keys(strategyDistribution) as LocatorStrategyBucket[])
+          .filter((key) => strategyDistribution[key] > 0)
+          .map((key) => (
+            <Tag key={key} color={STRATEGY_COLOR[key]}>
+              {`${STRATEGY_LABEL[key]} x${strategyDistribution[key]}`}
+            </Tag>
+          ))}
+      </Space>
+    </div>,
+    <div key="candidates">
+      <Typography.Text strong style={{ fontSize: 14, display: "block", marginBottom: 12 }}>
+        候选元素
+      </Typography.Text>
+      {activeStep?.locator_trace?.candidates.length ? (
+        <List
+          size="small"
+          dataSource={activeStep.locator_trace.candidates}
+          renderItem={(candidate, index) => (
+            <List.Item>
+              <Space direction="vertical" size={0}>
+                <Typography.Text>{`#${index + 1} ${candidate.strategy} / ${candidate.preview_text || candidate.role || "-"}`}</Typography.Text>
+                <Typography.Text type="secondary">{`评分 ${candidate.score}`}</Typography.Text>
+              </Space>
+            </List.Item>
+          )}
         />
-      ) : null}
+      ) : (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有候选元素证据" />
+      )}
+    </div>,
+  ];
 
-      <div className="summary-strip">
-        <div className="summary-tile">
-          <div className="summary-label">执行状态</div>
-          <div className="summary-value">{renderExecutionStatus(detail.status)}</div>
-        </div>
-        <div className="summary-tile">
-          <div className="summary-label">执行编号</div>
-          <div className="summary-value">#{detail.id}</div>
-        </div>
-        <div className="summary-tile">
-          <div className="summary-label">步骤数量</div>
-          <div className="summary-value">{steps.length}</div>
-        </div>
-      </div>
+  return (
+    <NotebookLMLayout
+      leftPanel={leftPanel}
+      rightCards={rightCards}
+      centerPanel={
+        <div style={{ overflowY: "auto", padding: "20px 24px 24px" }} className="panel-scroll">
+          <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            {isBaseUrlError(detail.error_message) ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="该用例的相对路径 goto 缺少用例 Base URL"
+                description="请回到用例工作台补充 Base URL，或在调试执行接口时显式传入 base_url。"
+              />
+            ) : null}
 
-      <Card>
-        <Descriptions bordered column={2}>
+            <div className="summary-strip">
+              <div className="summary-tile">
+                <div className="summary-label">执行状态</div>
+                <div className="summary-value">{renderExecutionStatus(detail.status)}</div>
+              </div>
+              <div className="summary-tile">
+                <div className="summary-label">执行编号</div>
+                <div className="summary-value">#{detail.id}</div>
+              </div>
+              <div className="summary-tile">
+                <div className="summary-label">步骤数量</div>
+                <div className="summary-value">{steps.length}</div>
+              </div>
+            </div>
+
+            <Card>
+              <Descriptions bordered column={2}>
           <Descriptions.Item label="用例名称">{detail.case_name}</Descriptions.Item>
           <Descriptions.Item label="项目 ID">{detail.project_id}</Descriptions.Item>
           <Descriptions.Item label="开始时间">{new Date(detail.started_at).toLocaleString()}</Descriptions.Item>
@@ -420,8 +529,8 @@ export function ExecutionDetailPage() {
           <Descriptions.Item label="错误摘要" span={2}>
             {detail.error_message || "-"}
           </Descriptions.Item>
-        </Descriptions>
-      </Card>
+              </Descriptions>
+            </Card>
 
       {overviewReady && detail.case_id && (
         <>
@@ -464,41 +573,44 @@ export function ExecutionDetailPage() {
         </>
       )}
 
-      <Card title="步骤时间线">
-        {steps.length ? (
-          <Space direction="vertical" size="large" style={{ width: "100%" }}>
-            <Timeline
-              items={steps.map((step) => ({
-                color: step.status === "passed" ? "green" : "red",
-                children: `Step ${step.step_index + 1} / ${step.action}`,
-              }))}
-            />
-            <Collapse
-              activeKey={activeKeys}
-              onChange={(keys) => setActiveKeys(Array.isArray(keys) ? keys : [keys])}
-              items={steps.map((step) => ({
-                key: String(step.step_index),
-                label: (
-                  <Space>
-                    <Typography.Text strong>{`Step ${step.step_index + 1} / ${step.action}`}</Typography.Text>
-                    {renderExecutionStatus(step.status)}
-                  </Space>
-                ),
-                children: (
-                  <StepEvidenceBody
-                    step={step}
-                    caseId={detail.case_id}
-                    executionId={detail.id}
-                    triggeredBy={detail.triggered_by}
+            <Card title="步骤时间线">
+              {steps.length ? (
+                <Space direction="vertical" size="large" style={{ width: "100%" }}>
+                  <Timeline
+                    items={steps.map((step) => ({
+                      color: step.status === "passed" ? "green" : "red",
+                      children: `Step ${step.step_index + 1} / ${step.action}`,
+                    }))}
                   />
-                ),
-              }))}
-            />
+                  <Collapse
+                    activeKey={activeKeys}
+                    onChange={(keys) => setActiveKeys(Array.isArray(keys) ? keys : [keys])}
+                    items={steps.map((step) => ({
+                      key: String(step.step_index),
+                      label: (
+                        <Space>
+                          <Typography.Text strong>{`Step ${step.step_index + 1} / ${step.action}`}</Typography.Text>
+                          {renderExecutionStatus(step.status)}
+                        </Space>
+                      ),
+                      children: (
+                        <StepEvidenceBody
+                          step={step}
+                          caseId={detail.case_id}
+                          executionId={detail.id}
+                          triggeredBy={detail.triggered_by}
+                        />
+                      ),
+                    }))}
+                  />
+                </Space>
+              ) : (
+                <Empty description="当前执行没有步骤证据。" />
+              )}
+            </Card>
           </Space>
-        ) : (
-          <Empty description="当前执行没有步骤证据。" />
-        )}
-      </Card>
-    </Space>
+        </div>
+      }
+    />
   );
 }
