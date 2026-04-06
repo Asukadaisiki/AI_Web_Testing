@@ -13,10 +13,22 @@ import {
   Typography,
   message,
 } from "antd";
+import {
+  SendOutlined,
+  SearchOutlined,
+  PlusOutlined,
+  CheckCircleOutlined,
+  RobotOutlined,
+  EditOutlined,
+  ThunderboltOutlined,
+} from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { AITestPlanningPanel } from "../components/AITestPlanningPanel";
+import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
+import { StepList } from "../components/StepList";
+import { ChatInput } from "../components/ChatInput";
 import {
   createCase,
   executeCase,
@@ -834,6 +846,12 @@ export function CaseWorkbenchPage() {
   };
 
   const feedbackLocked = feedbackMutation.isPending || recordedGenerationFeedback?.status === "accepted";
+  const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [showContracts, setShowContracts] = useState(false);
+  const [stepSearch, setStepSearch] = useState("");
+
+  const activeStep = structuredSteps[activeStepIndex];
+  const activeAction = (activeStep?.action ?? "goto") as StepAction;
 
   if (caseQuery.isLoading) {
     return <LoadingBlock />;
@@ -844,770 +862,216 @@ export function CaseWorkbenchPage() {
   }
 
   return (
-    <>
-      {contextHolder}
-      <div className="page-header">
-        <Space align="start" style={{ justifyContent: "space-between", width: "100%" }} wrap>
-          <div>
-            <h1 className="page-title">{isEditMode ? "用例工作台" : "新建用例"}</h1>
-            <p className="page-subtitle">默认使用结构化步骤编辑；必要时可切到原始 JSON 模式。</p>
-          </div>
-          <Space wrap>
-            <Button onClick={() => navigate("/cases")}>返回用例列表</Button>
-            <Button loading={validateMutation.isPending} onClick={() => validateMutation.mutate()}>
-              校验 DSL
-            </Button>
-            <Button
-              type="primary"
-              loading={saveMutation.isPending}
-              onClick={() => saveMutation.mutate({ executeAfterSave: false })}
-            >
-              保存
-            </Button>
-            <Button
-              type="primary"
-              ghost
-              loading={saveMutation.isPending}
-              onClick={() => saveMutation.mutate({ executeAfterSave: true })}
-            >
-              保存并执行
-            </Button>
-          </Space>
-        </Space>
-      </div>
-      <Space direction="vertical" size="large" style={{ width: "100%" }}>
-        {pendingDraft ? (
-          <Alert
-            type="warning"
-            showIcon
-            message="检测到本地草稿"
-            description={
-              <Space wrap>
-                <Typography.Text>当前编辑页存在未保存的本地草稿，可恢复或丢弃。</Typography.Text>
-                <Button
-                  size="small"
-                  type="primary"
-                  onClick={() => {
-                    applyDraft(pendingDraft);
-                    setPendingDraft(null);
-                  }}
-                >
-                  恢复草稿
-                </Button>
-                <Button
-                  size="small"
-                  onClick={() => {
-                    removeDraft(draftKey);
-                    setPendingDraft(null);
-                  }}
-                >
-                  丢弃草稿
-                </Button>
-              </Space>
-            }
-          />
-        ) : null}
-
-        {shouldWarnMissingBaseUrl ? (
-          <Alert
-            type="warning"
-            showIcon
-            message="当前用例包含相对路径 goto"
-            description="请先填写用例 Base URL，否则执行时会直接失败。"
-          />
-        ) : null}
-
-        <Card>
-          <Form form={form} layout="vertical" initialValues={DEFAULT_FORM_VALUES}>
-            <div className="workbench-grid">
-              <Form.Item label="用例名称" name="name" rules={[{ required: true, message: "请输入用例名称" }]}>
-                <Input placeholder="例如：公共冒烟" />
-              </Form.Item>
-              <Form.Item
-                label="项目 ID"
-                name="project_id"
-                rules={[{ required: true, message: "请输入项目 ID" }]}
-              >
-                <Select
-                  loading={projectsQuery.isLoading}
-                  options={(projectsQuery.data ?? []).map((project) => ({
-                    label: `${project.name} (#${project.id})`,
-                    value: project.id,
-                  }))}
-                />
-              </Form.Item>
-            </div>
-            <Form.Item label="用例 Base URL" name="base_url">
-              <Input placeholder="例如：https://example.com" />
-            </Form.Item>
-            <Form.Item label="描述" name="description">
-              <Input.TextArea rows={3} placeholder="说明该用例验证的业务链路" />
-            </Form.Item>
-          </Form>
-        </Card>
-
-        <AITestPlanningPanel
-          aiSettings={aiSettingsQuery.data}
-          projectId={watchedProjectId}
-          caseId={caseId ? Number(caseId) : undefined}
-          currentCase={
-            (() => {
-              if (!isHydrated) {
-                return null;
-              }
-              try {
-                return buildCurrentDslCase();
-              } catch {
-                return null;
-              }
-            })()
-          }
-          currentSteps={structuredSteps}
-          currentInputContract={inputContracts}
-          currentOutputContract={outputContracts}
-          onImportDraft={importPlanningDraft}
+    <NotebookLMLayout
+      leftPanel={
+        <StepList
+          steps={structuredSteps}
+          activeIndex={activeStepIndex}
+          onSelect={setActiveStepIndex}
+          onAdd={() => { syncStructuredSteps([...structuredSteps, createDefaultStep()]); setEditorMode("structured"); }}
+          searchValue={stepSearch}
+          onSearchChange={setStepSearch}
         />
-
-        <Card title="自然语言生成">
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-            <Typography.Text type="secondary">
-              输入一句自然语言需求，生成可编辑 DSL 草案；生成结果不会直接保存或执行。
-            </Typography.Text>
-            {aiSettingsQuery.data ? (
-              <Alert
-                type={aiSettingsQuery.data.enable_ai_dsl_generate ? "info" : "warning"}
-                showIcon
-                message="当前生成配置"
-                description={formatDslGenerationStatus(aiSettingsQuery.data)}
-              />
-            ) : null}
-            <div className="structured-step-grid">
-              <div>
-                <Typography.Text type="secondary">生成模式</Typography.Text>
-                <Select
-                  style={{ marginTop: 8, width: "100%" }}
-                  value={generationMode}
-                  options={GENERATION_MODE_OPTIONS}
-                  onChange={(value) => {
-                    setGenerationModeDirty(true);
-                    setGenerationMode(value);
-                  }}
-                />
-              </div>
-              <div>
-                <Typography.Text type="secondary">上下文来源</Typography.Text>
-                <Select
-                  style={{ marginTop: 8, width: "100%" }}
-                  value={generationContextSource}
-                  options={GENERATION_CONTEXT_OPTIONS}
-                  onChange={(value) => setGenerationContextSource(value)}
-                />
-              </div>
-              <div>
-                <Typography.Text type="secondary">预期导入方式</Typography.Text>
-                <Select
-                  style={{ marginTop: 8, width: "100%" }}
-                  value={generationImportMode}
-                  options={GENERATION_IMPORT_MODE_OPTIONS}
-                  onChange={(value) => setGenerationImportMode(value)}
-                />
-              </div>
+      }
+      centerPanel={
+        <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          {contextHolder}
+          {/* Top bar */}
+          <div style={{ padding: "12px 24px", borderBottom: "1px solid #f0f0f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <Typography.Text strong style={{ fontSize: 16 }}>{isEditMode ? "用例工作台" : "新建用例"}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>{watchedBaseUrl || "未配置 Base URL"}</Typography.Text>
             </div>
-            <div className="workbench-grid">
-              <div>
-                <Typography.Text type="secondary">保留当前契约</Typography.Text>
-                <Select
-                  aria-label="保留当前契约"
-                  style={{ marginTop: 8, width: "100%" }}
-                  value={preserveContracts ? "yes" : "no"}
-                  options={[
-                    { label: "保留", value: "yes" },
-                    { label: "不保留", value: "no" },
-                  ]}
-                  onChange={(value) => setPreserveContracts(value === "yes")}
-                />
-              </div>
-            </div>
-            <Input.TextArea
-              aria-label="自然语言需求"
-              rows={4}
-              placeholder="例如：打开 example.com，验证 URL 包含 example.com"
-              value={generationPrompt}
-              onChange={(event) => setGenerationPrompt(event.target.value)}
-            />
-            <Space wrap>
-              <Button
-                type="primary"
-                loading={generateMutation.isPending}
-                disabled={!generationPrompt.trim() || feedbackMutation.isPending}
-                onClick={() => generateMutation.mutate()}
-              >
-                {retryFromGenerationId != null ? "按拒绝原因重试生成" : "生成 DSL"}
-              </Button>
-              {retryFromGenerationId != null && !generatedDraft ? (
-                <Button
-                  onClick={() => {
-                    setRetryFromGenerationId(null);
-                    setRejectionReasonCode(null);
-                    setFeedbackNote("");
-                    setGenerationFeedbackError(null);
-                  }}
-                >
-                  清空重试上下文
-                </Button>
-              ) : null}
-              {generatedDraft ? (
-                <>
-                  <Button disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("replace")}>
-                    替换当前 DSL
-                  </Button>
-                  <Button disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("steps_only")}>
-                    仅导入步骤
-                  </Button>
-                  <Button disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("contracts_only")}>
-                    仅合并契约
-                  </Button>
-                  <Button danger disabled={feedbackLocked} onClick={() => void rejectGeneratedDraft()}>
-                    放弃草案
-                  </Button>
-                </>
-              ) : null}
+            <Space size="small">
+              <Button size="small" onClick={() => navigate("/cases")}>返回</Button>
+              <Button size="small" loading={validateMutation.isPending} onClick={() => validateMutation.mutate()}>校验</Button>
+              <Button size="small" type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate({ executeAfterSave: false })}>保存</Button>
+              <Button size="small" type="primary" ghost loading={saveMutation.isPending} onClick={() => saveMutation.mutate({ executeAfterSave: true })}>保存并执行</Button>
             </Space>
-            {retryFromGenerationId != null && !generatedDraft ? (
-              <Alert
-                type="info"
-                showIcon
-                message="已记录放弃反馈"
-                description={`将基于 generation #${retryFromGenerationId} 的放弃原因重试生成，放弃原因和备注可继续编辑。`}
-              />
+          </div>
+          {/* Alerts */}
+          <div style={{ padding: "8px 24px 0" }}>
+            {pendingDraft ? (
+              <Alert type="warning" showIcon message="检测到本地草稿" style={{ marginBottom: 8 }} description={
+                <Space wrap>
+                  <Typography.Text>存在未保存的本地草稿。</Typography.Text>
+                  <Button size="small" type="primary" onClick={() => { applyDraft(pendingDraft); setPendingDraft(null); }}>恢复</Button>
+                  <Button size="small" onClick={() => { removeDraft(draftKey); setPendingDraft(null); }}>丢弃</Button>
+                </Space>
+              } />
             ) : null}
-            {generatedDraft || retryFromGenerationId != null ? (
-              <div className="workbench-grid">
-                <div>
-                  <Typography.Text type="secondary">放弃原因</Typography.Text>
-                  <Select
-                    aria-label="放弃原因"
-                    style={{ marginTop: 8, width: "100%" }}
-                    placeholder="请选择放弃原因"
-                    value={rejectionReasonCode ?? undefined}
-                    options={REJECTION_REASON_OPTIONS}
-                    onChange={(value) => setRejectionReasonCode(value)}
-                    disabled={generatedDraft ? feedbackLocked : false}
-                  />
+            {shouldWarnMissingBaseUrl ? (
+              <Alert type="warning" showIcon message="缺少 Base URL" description="包含相对路径 goto，请先填写。" style={{ marginBottom: 8 }} />
+            ) : null}
+          </div>
+          {/* Compact form */}
+          <div style={{ padding: "8px 24px", borderBottom: "1px solid #f0f0f0" }}>
+            <Form form={form} layout="inline" initialValues={DEFAULT_FORM_VALUES}>
+              <Form.Item name="name" rules={[{ required: true, message: "名称" }]} style={{ marginBottom: 0 }}>
+                <Input placeholder="用例名称" style={{ width: 180 }} />
+              </Form.Item>
+              <Form.Item name="project_id" rules={[{ required: true, message: "项目" }]} style={{ marginBottom: 0 }}>
+                <Select loading={projectsQuery.isLoading} style={{ width: 160 }} placeholder="项目"
+                  options={(projectsQuery.data ?? []).map((p) => ({ label: `${p.name} (#${p.id})`, value: p.id }))} />
+              </Form.Item>
+              <Form.Item name="base_url" style={{ marginBottom: 0 }}>
+                <Input placeholder="Base URL" style={{ width: 200 }} />
+              </Form.Item>
+            </Form>
+          </div>
+          {/* Scrollable step editor area */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }} className="panel-scroll">
+            {/* Template selector + mode toggle */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <Space>
+                <Select value={templateValue} options={templateOptions} style={{ width: 200 }} onChange={setTemplateValue} />
+                <Button onClick={() => {
+                  const t = STEP_TEMPLATES.find((item) => item.value === templateValue);
+                  if (t) { form.setFieldValue("base_url", t.baseUrl); syncStructuredSteps(t.steps); setEditorMode("structured"); }
+                }}>应用模板</Button>
+              </Space>
+              <Space.Compact>
+                <Button type={editorMode === "structured" ? "primary" : "default"} onClick={() => changeEditorMode("structured")}>结构化</Button>
+                <Button type={editorMode === "json" ? "primary" : "default"} onClick={() => changeEditorMode("json")}>JSON</Button>
+              </Space.Compact>
+            </div>
+
+            {/* Active step editor (structured mode) */}
+            {editorMode === "structured" && activeStep ? (
+              <div style={{ background: "#f5f5f5", borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+                  <div>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>动作</Typography.Text>
+                    <Select value={activeAction} options={ACTION_OPTIONS} style={{ width: "100%", marginTop: 4 }}
+                      onChange={(next) => updateStructuredStep(activeStepIndex, (s) => normalizeStepForAction(s, next))} />
+                  </div>
+                  {actionNeedsTarget(activeAction) ? (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>目标</Typography.Text>
+                      <Input style={{ marginTop: 4 }} value={typeof activeStep.target === "string" ? String(activeStep.target) : ""}
+                        onChange={(e) => updateStructuredStep(activeStepIndex, (s) => ({ ...s, target: e.target.value }))} />
+                    </div>
+                  ) : null}
+                  {actionNeedsValue(activeAction) ? (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>{activeAction === "goto" || activeAction === "assert_url_contains" ? "值 / URL" : "值"}</Typography.Text>
+                      <Input style={{ marginTop: 4 }} value={typeof activeStep.value === "string" ? String(activeStep.value) : ""}
+                        onChange={(e) => updateStructuredStep(activeStepIndex, (s) => ({ ...s, value: e.target.value }))} />
+                    </div>
+                  ) : null}
+                  {actionNeedsTimeout(activeAction) ? (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>超时 (ms)</Typography.Text>
+                      <InputNumber min={1} max={60000} style={{ width: "100%", marginTop: 4 }}
+                        value={typeof activeStep.timeout_ms === "number" ? activeStep.timeout_ms : 5000}
+                        onChange={(v) => updateStructuredStep(activeStepIndex, (s) => ({ ...s, timeout_ms: typeof v === "number" ? v : 5000 }))} />
+                    </div>
+                  ) : null}
                 </div>
-                <div>
-                  <Typography.Text type="secondary">放弃备注</Typography.Text>
-                  <Input.TextArea
-                    aria-label="放弃备注"
-                    rows={2}
-                    placeholder="可选备注"
-                    value={feedbackNote}
-                    onChange={(event) => setFeedbackNote(event.target.value)}
-                    disabled={generatedDraft ? feedbackLocked : false}
-                    style={{ marginTop: 8 }}
-                  />
-                </div>
+                <Space style={{ marginTop: 8 }}>
+                  <Button size="small" onClick={() => moveStep(activeStepIndex, -1)} disabled={activeStepIndex === 0}>上移</Button>
+                  <Button size="small" onClick={() => moveStep(activeStepIndex, 1)} disabled={activeStepIndex === structuredSteps.length - 1}>下移</Button>
+                  <Button size="small" danger onClick={() => {
+                    if (structuredSteps.length === 1) { syncStructuredSteps([createDefaultStep()]); return; }
+                    syncStructuredSteps(structuredSteps.filter((_, i) => i !== activeStepIndex));
+                    setActiveStepIndex(Math.max(0, activeStepIndex - 1));
+                  }}>删除</Button>
+                </Space>
               </div>
+            ) : editorMode === "json" ? (
+              <Input.TextArea value={stepsJson} rows={18}
+                onChange={(e) => { setStepsJson(e.target.value); setValidationResult(null); }}
+                spellCheck={false} style={{ fontFamily: "Consolas, 'Courier New', monospace", fontSize: 13 }} />
+            ) : null}
+
+            {validationResult ? (
+              <Alert type="success" showIcon message="DSL 校验通过" style={{ marginTop: 8 }}
+                description={<Space wrap><Typography.Text>支持动作：</Typography.Text>{validationResult.supported_actions.map((a) => <Tag key={a}>{a}</Tag>)}</Space>} />
+            ) : null}
+
+            {/* AI generation feedback alerts */}
+            {aiSettingsQuery.data ? (
+              <Alert type={aiSettingsQuery.data.enable_ai_dsl_generate ? "info" : "warning"} showIcon style={{ marginTop: 8 }}
+                message="当前生成配置" description={formatDslGenerationStatus(aiSettingsQuery.data)} />
             ) : null}
             {generateMutation.isError ? (
-              <Alert
-                type="error"
-                showIcon
-                message="不可导入错误"
-                description={generateMutation.error.message}
-              />
+              <Alert type="error" showIcon message="生成失败" style={{ marginTop: 8 }} description={generateMutation.error.message} />
             ) : null}
             {generationFeedbackError ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="反馈记录失败"
-                description={generationFeedbackError}
-              />
+              <Alert type="warning" showIcon message="反馈记录失败" style={{ marginTop: 8 }} description={generationFeedbackError} />
             ) : null}
             {recordedGenerationFeedback?.status === "accepted" ? (
-              <Alert
-                type="info"
-                showIcon
-                message="草案反馈已记录"
-                description={`已采纳当前草案，导入方式：${formatImportModeLabel(recordedGenerationFeedback.importMode)}。`}
-              />
+              <Alert type="info" showIcon message="草案反馈已记录" style={{ marginTop: 8 }}
+                description={"已采纳，导入方式：" + formatImportModeLabel(recordedGenerationFeedback.importMode)} />
             ) : null}
             {generatedDraft?.normalization_notes.length ? (
-              <Alert
-                type="success"
-                showIcon
-                message="自动修正项"
-                description={
-                  <Space direction="vertical" size="small">
-                    {generatedDraft.normalization_notes.map((note) => (
-                      <Typography.Text key={note}>{note}</Typography.Text>
-                    ))}
-                  </Space>
-                }
-              />
+              <Alert type="success" showIcon message="自动修正项" style={{ marginTop: 8 }}
+                description={generatedDraft.normalization_notes.join("；")} />
             ) : null}
             {generatedDraft?.warnings.length ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="生成提示"
-                description={
-                  <Space direction="vertical" size="small">
-                    {generatedDraft.warnings.map((warning) => (
-                      <Typography.Text key={warning}>{warning}</Typography.Text>
-                    ))}
-                  </Space>
-                }
-              />
+              <Alert type="warning" showIcon message="生成提示" style={{ marginTop: 8 }}
+                description={generatedDraft.warnings.join("；")} />
             ) : null}
-            {generatedDraft?.generation_meta.risk_flags.length ? (
-              <Alert
-                type="info"
-                showIcon
-                message="风险标签"
-                description={formatRiskFlags(generatedDraft.generation_meta.risk_flags)}
-              />
-            ) : null}
-            {generatedDraft ? (
-              <Card size="small" title="生成预览">
-                <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                  <Space wrap>
-                    <Tag color="blue">{generatedDraft.case.name}</Tag>
-                    <Tag color="geekblue">{generatedDraft.generation_meta.generation_mode}</Tag>
-                    <Tag color="purple">{generatedDraft.generation_meta.import_mode}</Tag>
-                    <Tag color="magenta">{generatedDraft.generation_meta.prompt_variant}</Tag>
-                    <Tag color="cyan">{generatedDraft.generation_meta.context_profile}</Tag>
-                    <Tag color="gold">{generatedDraft.generation_meta.model ?? "未配置模型"}</Tag>
-                    {generatedDraft.supported_actions.map((action) => (
-                      <Tag key={action}>{action}</Tag>
-                    ))}
-                    {generatedDraft.generation_meta.risk_flags.map((flag) => (
-                      <Tag key={flag} color="orange">
-                        {flag}
-                      </Tag>
-                    ))}
-                  </Space>
-                  <Typography.Text type="secondary">
-                    Base URL 来源：{generatedDraft.generation_meta.base_url_source}；修正 action {generatedDraft.generation_meta.repaired_invalid_actions} 个；
-                    删除非法步骤 {generatedDraft.generation_meta.removed_invalid_steps} 个；删除非法契约 {generatedDraft.generation_meta.removed_invalid_contracts} 个；
-                    风险标签 {generatedDraft.generation_meta.risk_flags.length} 个。
-                  </Typography.Text>
-                  <Input.TextArea
-                    aria-label="生成 DSL 预览"
-                    readOnly
-                    rows={12}
-                    value={formatGeneratedCase(generatedDraft.case)}
-                    spellCheck={false}
-                    style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
-                  />
-                </Space>
-              </Card>
-            ) : null}
-          </Space>
-        </Card>
-
-        <Card title="上下文契约">
-          <Space direction="vertical" size="large" style={{ width: "100%" }}>
-            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-              <Space align="center" style={{ justifyContent: "space-between", width: "100%" }} wrap>
-                <Typography.Title level={5} style={{ margin: 0 }}>
-                  输入契约
-                </Typography.Title>
-                <Button onClick={() => syncInputContracts([...inputContracts, createDefaultInputContract()])}>
-                  新增输入契约
-                </Button>
-              </Space>
-              {inputContracts.length ? (
-                inputContracts.map((contract, index) => (
-                  <Card key={`input-contract-${index}`} size="small" title={`输入 ${index + 1}`}>
-                    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                      <div className="structured-step-grid">
-                        <div>
-                          <Typography.Text type="secondary">名称</Typography.Text>
-                          <Input
-                            style={{ marginTop: 8 }}
-                            value={contract.name}
-                            onChange={(event) =>
-                              syncInputContracts(
-                                inputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, name: event.target.value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Typography.Text type="secondary">上下文键</Typography.Text>
-                          <Input
-                            style={{ marginTop: 8 }}
-                            value={contract.context_key}
-                            onChange={(event) =>
-                              syncInputContracts(
-                                inputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, context_key: event.target.value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Typography.Text type="secondary">类型</Typography.Text>
-                          <Select
-                            style={{ width: "100%", marginTop: 8 }}
-                            value={contract.value_type}
-                            options={VARIABLE_TYPE_OPTIONS}
-                            onChange={(value) =>
-                              syncInputContracts(
-                                inputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, value_type: value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Typography.Text type="secondary">必填</Typography.Text>
-                          <Select
-                            style={{ width: "100%", marginTop: 8 }}
-                            value={contract.required}
-                            options={[
-                              { label: "是", value: true },
-                              { label: "否", value: false },
-                            ]}
-                            onChange={(value) =>
-                              syncInputContracts(
-                                inputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, required: value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-                      <Input.TextArea
-                        rows={2}
-                        placeholder="可选：说明这个变量在项目上下文中的来源或用途"
-                        value={contract.description ?? ""}
-                        onChange={(event) =>
-                          syncInputContracts(
-                            inputContracts.map((item, itemIndex) =>
-                              itemIndex === index ? { ...item, description: event.target.value || null } : item,
-                            ),
-                          )
-                        }
-                      />
-                      <Space wrap>
-                        <Button
-                          danger
-                          onClick={() =>
-                            syncInputContracts(inputContracts.filter((_, itemIndex) => itemIndex !== index))
-                          }
-                        >
-                          删除输入契约
-                        </Button>
-                      </Space>
-                    </Space>
-                  </Card>
-                ))
-              ) : (
-                <Alert type="info" showIcon message="当前没有输入契约，Case 将不会从上下文中读取变量。" />
-              )}
-            </Space>
-
-            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-              <Space align="center" style={{ justifyContent: "space-between", width: "100%" }} wrap>
-                <Typography.Title level={5} style={{ margin: 0 }}>
-                  输出契约
-                </Typography.Title>
-                <Button onClick={() => syncOutputContracts([...outputContracts, createDefaultOutputContract()])}>
-                  新增输出契约
-                </Button>
-              </Space>
-              {outputContracts.length ? (
-                outputContracts.map((contract, index) => (
-                  <Card key={`output-contract-${index}`} size="small" title={`输出 ${index + 1}`}>
-                    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                      <div className="structured-step-grid">
-                        <div>
-                          <Typography.Text type="secondary">名称</Typography.Text>
-                          <Input
-                            style={{ marginTop: 8 }}
-                            value={contract.name}
-                            onChange={(event) =>
-                              syncOutputContracts(
-                                outputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, name: event.target.value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Typography.Text type="secondary">上下文键</Typography.Text>
-                          <Input
-                            style={{ marginTop: 8 }}
-                            value={contract.context_key}
-                            onChange={(event) =>
-                              syncOutputContracts(
-                                outputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, context_key: event.target.value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Typography.Text type="secondary">类型</Typography.Text>
-                          <Select
-                            style={{ width: "100%", marginTop: 8 }}
-                            value={contract.value_type}
-                            options={VARIABLE_TYPE_OPTIONS}
-                            onChange={(value) =>
-                              syncOutputContracts(
-                                outputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, value_type: value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Typography.Text type="secondary">提取来源</Typography.Text>
-                          <Select
-                            style={{ width: "100%", marginTop: 8 }}
-                            value={contract.source ?? undefined}
-                            placeholder="请选择"
-                            options={OUTPUT_SOURCE_OPTIONS}
-                            onChange={(value) =>
-                              syncOutputContracts(
-                                outputContracts.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, source: value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-                      <Input.TextArea
-                        rows={2}
-                        placeholder="可选：说明这个变量会回写到哪个上下文键"
-                        value={contract.description ?? ""}
-                        onChange={(event) =>
-                          syncOutputContracts(
-                            outputContracts.map((item, itemIndex) =>
-                              itemIndex === index ? { ...item, description: event.target.value || null } : item,
-                            ),
-                          )
-                        }
-                      />
-                      <Space wrap>
-                        <Button
-                          danger
-                          onClick={() =>
-                            syncOutputContracts(outputContracts.filter((_, itemIndex) => itemIndex !== index))
-                          }
-                        >
-                          删除输出契约
-                        </Button>
-                      </Space>
-                    </Space>
-                  </Card>
-                ))
-              ) : (
-                <Alert type="info" showIcon message="当前没有输出契约，Case 执行后不会向上下文回写变量。" />
-              )}
-            </Space>
-          </Space>
-        </Card>
-
-        <Card
-          title="步骤编辑器"
-          extra={
-            <Space.Compact>
-              <Button
-                type={editorMode === "structured" ? "primary" : "default"}
-                aria-pressed={editorMode === "structured"}
-                onClick={() => changeEditorMode("structured")}
-              >
-                结构化编辑
-              </Button>
-              <Button
-                type={editorMode === "json" ? "primary" : "default"}
-                aria-pressed={editorMode === "json"}
-                onClick={() => changeEditorMode("json")}
-              >
-                原始 JSON
-              </Button>
-            </Space.Compact>
-          }
-        >
-          <Space direction="vertical" size="large" style={{ width: "100%" }}>
-            <Space wrap>
-              <Select
-                value={templateValue}
-                options={templateOptions}
-                style={{ width: 220 }}
-                onChange={(value) => setTemplateValue(value)}
-              />
-              <Button
-                onClick={() => {
-                  const selectedTemplate = STEP_TEMPLATES.find((item) => item.value === templateValue);
-                  if (!selectedTemplate) {
-                    return;
-                  }
-                  form.setFieldValue("base_url", selectedTemplate.baseUrl);
-                  syncStructuredSteps(selectedTemplate.steps);
-                  setEditorMode("structured");
-                }}
-              >
-                应用模板
-              </Button>
-              <Button
-                onClick={() => {
-                  syncStructuredSteps([...structuredSteps, createDefaultStep()]);
-                  setEditorMode("structured");
-                }}
-              >
-                新增步骤
-              </Button>
-            </Space>
-
-            {editorMode === "structured" ? (
-              <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                {structuredSteps.map((step, index) => {
-                  const action = step.action as StepAction;
-                  return (
-                    <Card
-                      key={`step-${index}`}
-                      size="small"
-                      title={`Step ${index + 1}`}
-                      extra={<Tag>{action}</Tag>}
-                    >
-                      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                        <div className="structured-step-grid">
-                          <div>
-                            <Typography.Text type="secondary">动作</Typography.Text>
-                            <Select
-                              value={action}
-                              options={ACTION_OPTIONS}
-                              style={{ width: "100%", marginTop: 8 }}
-                              onChange={(nextAction) =>
-                                updateStructuredStep(index, (currentStep) =>
-                                  normalizeStepForAction(currentStep, nextAction),
-                                )
-                              }
-                            />
-                          </div>
-                          {actionNeedsTarget(action) ? (
-                            <div>
-                              <Typography.Text type="secondary">目标</Typography.Text>
-                              <Input
-                                style={{ marginTop: 8 }}
-                                value={typeof step.target === "string" ? step.target : ""}
-                                onChange={(event) =>
-                                  updateStructuredStep(index, (currentStep) => ({
-                                    ...currentStep,
-                                    target: event.target.value,
-                                  }))
-                                }
-                              />
-                            </div>
-                          ) : null}
-                          {actionNeedsValue(action) ? (
-                            <div>
-                              <Typography.Text type="secondary">
-                                {action === "goto" || action === "assert_url_contains" ? "值 / URL" : "值"}
-                              </Typography.Text>
-                              <Input
-                                style={{ marginTop: 8 }}
-                                value={typeof step.value === "string" ? step.value : ""}
-                                onChange={(event) =>
-                                  updateStructuredStep(index, (currentStep) => ({
-                                    ...currentStep,
-                                    value: event.target.value,
-                                  }))
-                                }
-                              />
-                            </div>
-                          ) : null}
-                          {actionNeedsTimeout(action) ? (
-                            <div>
-                              <Typography.Text type="secondary">超时 (ms)</Typography.Text>
-                              <InputNumber
-                                min={1}
-                                max={60000}
-                                style={{ width: "100%", marginTop: 8 }}
-                                value={typeof step.timeout_ms === "number" ? step.timeout_ms : 5000}
-                                onChange={(value) =>
-                                  updateStructuredStep(index, (currentStep) => ({
-                                    ...currentStep,
-                                    timeout_ms: typeof value === "number" ? value : 5000,
-                                  }))
-                                }
-                              />
-                            </div>
-                          ) : null}
-                        </div>
-                        <Space wrap>
-                          <Button onClick={() => moveStep(index, -1)} disabled={index === 0}>
-                            上移
-                          </Button>
-                          <Button
-                            onClick={() => moveStep(index, 1)}
-                            disabled={index === structuredSteps.length - 1}
-                          >
-                            下移
-                          </Button>
-                          <Button
-                            danger
-                            onClick={() => {
-                              if (structuredSteps.length === 1) {
-                                syncStructuredSteps([createDefaultStep()]);
-                                return;
-                              }
-                              syncStructuredSteps(structuredSteps.filter((_, stepIndex) => stepIndex !== index));
-                            }}
-                          >
-                            删除
-                          </Button>
-                        </Space>
-                      </Space>
-                    </Card>
-                  );
-                })}
-              </Space>
-            ) : (
-              <Input.TextArea
-                value={stepsJson}
-                rows={18}
-                onChange={(event) => {
-                  setStepsJson(event.target.value);
-                  setValidationResult(null);
-                }}
-                spellCheck={false}
-                style={{ fontFamily: "Consolas, 'Courier New', monospace" }}
-              />
-            )}
-          </Space>
-        </Card>
-
-        {validationResult ? (
-          <Alert
-            type="success"
-            showIcon
-            message="DSL 校验通过"
-            description={
-              <Space wrap>
-                <Typography.Text>支持动作：</Typography.Text>
-                {validationResult.supported_actions.map((action) => (
-                  <Tag key={action}>{action}</Tag>
-                ))}
-              </Space>
-            }
+          </div>
+          {/* ChatInput at bottom */}
+          <ChatInput
+            value={generationPrompt}
+            onChange={setGenerationPrompt}
+            onSend={() => generateMutation.mutate()}
+            placeholder="描述测试需求，AI 帮你生成 DSL..."
+            loading={generateMutation.isPending}
           />
-        ) : null}
-      </Space>
-    </>
+        </div>
+      }
+
+      rightCards={[
+        /* Card 1: Step info */
+        <div key="step-info">
+          <Typography.Text strong style={{ fontSize: 13, display: "block", marginBottom: 8 }}>当前步骤</Typography.Text>
+          {activeStep ? (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12 }}>
+              <div><span style={{ color: "#999" }}>动作</span> <strong>{activeStep.action}</strong></div>
+              {activeStep.target ? <div><span style={{ color: "#999" }}>目标</span> {String(activeStep.target)}</div> : null}
+              {activeStep.value ? <div><span style={{ color: "#999" }}>值</span> {String(activeStep.value)}</div> : null}
+              {typeof activeStep.timeout_ms === "number" ? <div><span style={{ color: "#999" }}>超时</span> {activeStep.timeout_ms}ms</div> : null}
+            </div>
+          ) : <Typography.Text type="secondary" style={{ fontSize: 12 }}>选择步骤查看</Typography.Text>}
+        </div>,
+        /* Card 2: Actions */
+        <div key="actions">
+          <Typography.Text strong style={{ fontSize: 13, display: "block", marginBottom: 8 }}>操作</Typography.Text>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div className="action-grid-item" onClick={() => generateMutation.mutate()}><RobotOutlined style={{ fontSize: 16 }} /><br /><span style={{ fontSize: 11 }}>AI 生成</span></div>
+            <div className="action-grid-item" onClick={() => validateMutation.mutate()}><CheckCircleOutlined style={{ fontSize: 16 }} /><br /><span style={{ fontSize: 11 }}>校验 DSL</span></div>
+            <div className="action-grid-item" onClick={() => setShowContracts(!showContracts)}><EditOutlined style={{ fontSize: 16 }} /><br /><span style={{ fontSize: 11 }}>契约编辑</span></div>
+            <div className="action-grid-item" onClick={() => navigate("/cases")}><ThunderboltOutlined style={{ fontSize: 16 }} /><br /><span style={{ fontSize: 11 }}>用例列表</span></div>
+          </div>
+        </div>,
+        /* Card 3: Generation settings */
+        <div key="gen-settings">
+          <Typography.Text strong style={{ fontSize: 13, display: "block", marginBottom: 8 }}>生成设置</Typography.Text>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Select value={generationMode} options={GENERATION_MODE_OPTIONS} size="small" onChange={(v) => { setGenerationModeDirty(true); setGenerationMode(v); }} />
+            <Select value={generationContextSource} options={GENERATION_CONTEXT_OPTIONS} size="small" onChange={(v) => setGenerationContextSource(v)} />
+            <Select value={generationImportMode} options={GENERATION_IMPORT_MODE_OPTIONS} size="small" onChange={(v) => setGenerationImportMode(v)} />
+          </div>
+        </div>,
+        /* Card 4: Draft (conditional) */
+        ...(generatedDraft ? [
+          <div key="draft-preview">
+            <Typography.Text strong style={{ fontSize: 13, display: "block", marginBottom: 8 }}>生成预览</Typography.Text>
+            <Space wrap style={{ marginBottom: 8 }}>
+              <Tag color="blue">{generatedDraft.case.name}</Tag>
+              <Tag color="purple">{generatedDraft.generation_meta.import_mode}</Tag>
+            </Space>
+            <Space wrap>
+              <Button size="small" disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("replace")}>替换</Button>
+              <Button size="small" disabled={feedbackLocked} onClick={() => void applyGeneratedDraft("steps_only")}>仅步骤</Button>
+              <Button size="small" danger disabled={feedbackLocked} onClick={() => void rejectGeneratedDraft()}>放弃</Button>
+            </Space>
+          </div>
+        ] : []),
+      ]}
+    />
   );
 }
