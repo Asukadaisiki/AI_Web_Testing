@@ -9,8 +9,8 @@ const PlanningPage = lazy(() =>
 const CasesPage = lazy(() =>
   import("../pages/CasesPage").then((m) => ({ default: m.CasesPage })),
 );
-const CaseWorkbenchPage = lazy(() =>
-  import("../pages/CaseWorkbenchPage").then((m) => ({ default: m.CaseWorkbenchPage })),
+const ReportPage = lazy(() =>
+  import("../pages/ReportPage").then((m) => ({ default: m.ReportPage })),
 );
 const ExecutionDetailPage = lazy(() =>
   import("../pages/ExecutionDetailPage").then((m) => ({ default: m.ExecutionDetailPage })),
@@ -27,8 +27,7 @@ export function AppRouter() {
       <Routes>
         <Route path="/" element={<PlanningPage />} />
         <Route path="/cases" element={<CasesPage />} />
-        <Route path="/cases/new" element={<CaseWorkbenchPage />} />
-        <Route path="/cases/:caseId/edit" element={<CaseWorkbenchPage />} />
+        <Route path="/reports" element={<ReportPage />} />
         <Route path="/run/:executionId" element={<ExecutionDetailPage />} />
         <Route path="/executions/:executionId" element={<LegacyExecutionRedirect />} />
         <Route path="/dashboard" element={<Navigate to="/" replace />} />

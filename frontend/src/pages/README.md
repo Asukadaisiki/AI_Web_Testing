@@ -14,7 +14,7 @@
 
 | 页面 | 路由 | 说明 |
 |------|------|------|
-| CaseWorkbenchPage | `/cases/new`, `/cases/:caseId/edit` | 用例编辑工作台（不进入主导航） |
+| ReportPage | `/reports` | 项目报告页，展示执行概览和用例执行详情 |
 
 ## 旧路由重定向
 

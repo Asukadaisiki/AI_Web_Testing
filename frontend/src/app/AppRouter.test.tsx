@@ -15,8 +15,8 @@ vi.mock("../pages/CasesPage", () => ({
 vi.mock("../pages/ExecutionDetailPage", () => ({
   ExecutionDetailPage: () => <div>Execution Detail Mock</div>,
 }));
-vi.mock("../pages/CaseWorkbenchPage", () => ({
-  CaseWorkbenchPage: () => <div>Workbench Mock</div>,
+vi.mock("../pages/ReportPage", () => ({
+  ReportPage: () => <div>Report Mock</div>,
 }));
 
 function renderRouter(initialEntries: string[]) {

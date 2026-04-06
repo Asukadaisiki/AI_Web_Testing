@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 const NAV_ITEMS = [
   { key: "/", label: "AI 规划", icon: "🧠" },
   { key: "/cases", label: "用例中心", icon: "📋" },
-  { key: "/cases/new", label: "工作台", icon: "🔧" },
+  { key: "/reports", label: "报告", icon: "📊" },
 ] as const;
 
 function isActive(currentPath: string, navKey: string): boolean {
