@@ -1,1 +1,1 @@
-AGENTS.md
+Read and follow all instructions in AGENTS.md in this repository.
