@@ -15,6 +15,7 @@ from app.schemas.ai_planning import (
     AIPlanningRequirements,
     AIPlanningSession as AIPlanningSessionSchema,
     AIPlanningSessionDetail,
+    AIPlanningSessionSummary,
     AIPlanningToolCall,
     AIPlanningTurnResponse,
     CreateAIPlanningSessionRequest,
@@ -31,6 +32,29 @@ logger = logging.getLogger(__name__)
 
 class AIPlanningAccessError(ValueError):
     """Raised when a planning session or draft is inaccessible."""
+
+
+def list_planning_sessions(
+    session: Session,
+    *,
+    actor_user_id: int,
+    project_id: int | None = None,
+) -> list[AIPlanningSessionSummary]:
+    q = session.query(AIPlanningSession).filter(AIPlanningSession.actor_user_id == actor_user_id)
+    if project_id is not None:
+        q = q.filter(AIPlanningSession.project_id == project_id)
+    q = q.order_by(AIPlanningSession.updated_at.desc())
+    rows = q.all()
+    return [
+        AIPlanningSessionSummary(
+            id=r.id,
+            title=r.title or (r.requirements_json or {}).get("app_under_test"),
+            status=r.status,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        )
+        for r in rows
+    ]
 
 
 def create_planning_session(

@@ -12,6 +12,7 @@ from app.schemas.ai_planning import (
     AIPlanningDraft,
     AIPlanningMessageCreateRequest,
     AIPlanningSessionDetail,
+    AIPlanningSessionSummary,
     AIPlanningTurnResponse,
     CreateAIPlanningSessionRequest,
     GenerateAIPlanningDraftsRequest,
@@ -22,6 +23,7 @@ from app.services.ai_planning import (
     create_planning_session,
     generate_planning_drafts,
     get_planning_session_detail,
+    list_planning_sessions,
     send_planning_message,
     update_planning_draft_status,
 )
@@ -44,6 +46,15 @@ def create_planning_session_route(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     response.headers["Location"] = f"/api/v1/ai-planning/sessions/{detail.session.id}"
     return detail
+
+
+@router.get("/sessions", response_model=list[AIPlanningSessionSummary])
+def list_planning_sessions_route(
+    project_id: int | None = None,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> list[AIPlanningSessionSummary]:
+    return list_planning_sessions(session, actor_user_id=current_user.id, project_id=project_id)
 
 
 @router.get("/sessions/{session_id}", response_model=AIPlanningSessionDetail)

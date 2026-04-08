@@ -74,6 +74,14 @@ class AIPlanningSession(DSLModel):
     updated_at: datetime
 
 
+class AIPlanningSessionSummary(DSLModel):
+    id: int = Field(ge=1)
+    title: str | None = Field(default=None, max_length=200)
+    status: AIPlanningSessionStatus
+    created_at: datetime
+    updated_at: datetime
+
+
 class AIPlanningMessage(DSLModel):
     id: int = Field(ge=1)
     session_id: int = Field(ge=1)
