@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Checkbox, Input, Progress, Tag, Typography, message } from "antd";
+import { Alert, Button, Checkbox, Input, Progress, Select, Tag, Typography, message } from "antd";
 import { SendOutlined } from "@ant-design/icons";
 
 import {
   createPlanningSession,
   generatePlanningDrafts,
+  getPlanningSession,
+  listPlanningSessions,
   sendPlanningMessage,
   updatePlanningDraftStatus,
 } from "../services/api";
@@ -13,6 +15,7 @@ import type {
   AIPlanningMessage,
   AIPlanningPlan,
   AIPlanningRequirements,
+  AIPlanningSessionSummary,
   AIPlanningToolCall,
   AISettings,
   DSLCaseInputContract,
@@ -120,9 +123,24 @@ export function AITestPlanningPanel({
   const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [sessionList, setSessionList] = useState<AIPlanningSessionSummary[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
   const isDisabled = !planningEnabled || !projectId;
+
+  async function loadSessionList() {
+    if (!projectId) return;
+    setIsLoadingHistory(true);
+    try {
+      const list = await listPlanningSessions(projectId);
+      setSessionList(list);
+    } catch {
+      // silently fail — session list is non-critical
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }
 
   useEffect(() => {
     if (!projectId) {
@@ -130,35 +148,64 @@ export function AITestPlanningPanel({
     }
 
     let cancelled = false;
-    setIsBootstrapping(true);
-    void createPlanningSession({ project_id: projectId, case_id: caseId ?? null })
-      .then((detail) => {
-        if (cancelled) {
-          return;
-        }
-        setSessionId(detail.session.id);
-        setTranscript(detail.messages);
-        setRequirements(detail.session.requirements);
-        setMissingSlots(detail.session.missing_slots);
-        setSuggestedQuestions([]);
-        setPlan(detail.session.plan ?? null);
-        setDrafts(detail.drafts);
-      })
-      .catch((error: Error) => {
-        if (!cancelled) {
-          void messageApi.error(error.message);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsBootstrapping(false);
-        }
-      });
 
+    async function init() {
+      if (!projectId) return;
+      setIsBootstrapping(true);
+      try {
+        // Try restore last session
+        const lastId = localStorage.getItem("ai_planning_last_session");
+        if (lastId) {
+          try {
+            const detail = await getPlanningSession(Number(lastId));
+            if (!cancelled) {
+              setSessionId(detail.session.id);
+              setRequirements(detail.session.requirements);
+              setMissingSlots(detail.session.missing_slots);
+              setSuggestedQuestions([]);
+              setPlan(detail.session.plan ?? null);
+              setTranscript(detail.messages);
+              setDrafts(detail.drafts);
+            }
+          } catch {
+            // Session not found or expired — fall through to create new
+          }
+        }
+
+        // If no session restored, create new
+        if (!cancelled && !localStorage.getItem("ai_planning_last_session")) {
+          const resp = await createPlanningSession({
+            project_id: projectId,
+            case_id: caseId ?? null,
+          });
+          if (!cancelled) {
+            setSessionId(resp.session.id);
+            setRequirements(resp.session.requirements);
+            setMissingSlots(resp.session.missing_slots);
+            setSuggestedQuestions([]);
+            setPlan(resp.session.plan ?? null);
+            setTranscript(resp.messages);
+            setDrafts(resp.drafts);
+            localStorage.setItem("ai_planning_last_session", String(resp.session.id));
+          }
+        }
+
+        // Always load session list
+        if (!cancelled) await loadSessionList();
+      } catch (err: unknown) {
+        if (!cancelled) {
+          void messageApi.error(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (!cancelled) setIsBootstrapping(false);
+      }
+    }
+
+    void init();
     return () => {
       cancelled = true;
     };
-  }, [caseId, messageApi, projectId]);
+  }, [projectId, caseId]);
 
   const collectedEntries = useMemo(
     () =>
@@ -201,6 +248,8 @@ export function AITestPlanningPanel({
       setPlan(response.plan ?? null);
       setDrafts(response.drafts);
       setInputValue("");
+      localStorage.setItem("ai_planning_last_session", String(sessionId));
+      await loadSessionList();
     } catch (error) {
       void messageApi.error((error as Error).message);
     } finally {
@@ -300,6 +349,65 @@ export function AITestPlanningPanel({
           {!projectId ? (
             <Alert type="warning" showIcon message="请先选择项目，再开启 AI 测试规划。" style={{ marginTop: 12 }} />
           ) : null}
+        </div>
+
+        {/* Session switcher */}
+        <div style={{ display: "flex", gap: 8, padding: "8px 40px 0", alignItems: "center" }}>
+          <Select
+            style={{ flex: 1 }}
+            size="small"
+            placeholder="选择会话"
+            value={sessionId ?? undefined}
+            loading={isLoadingHistory}
+            onChange={async (id: number) => {
+              setIsBootstrapping(true);
+              try {
+                const detail = await getPlanningSession(id);
+                setSessionId(detail.session.id);
+                setRequirements(detail.session.requirements);
+                setMissingSlots(detail.session.missing_slots);
+                setSuggestedQuestions([]);
+                setPlan(detail.session.plan ?? null);
+                setTranscript(detail.messages);
+                setDrafts(detail.drafts);
+                localStorage.setItem("ai_planning_last_session", String(id));
+              } catch (err: unknown) {
+                void messageApi.error("加载会话失败: " + (err instanceof Error ? err.message : String(err)));
+              } finally {
+                setIsBootstrapping(false);
+              }
+            }}
+            options={sessionList.map((s) => ({
+              value: s.id,
+              label: s.title || `会话 #${s.id} (${new Date(s.created_at).toLocaleString()})`,
+            }))}
+          />
+          <Button
+            type="primary"
+            size="small"
+            onClick={async () => {
+              if (!projectId) return;
+              setIsBootstrapping(true);
+              try {
+                const resp = await createPlanningSession({ project_id: projectId });
+                setSessionId(resp.session.id);
+                setRequirements(resp.session.requirements);
+                setMissingSlots(resp.session.missing_slots);
+                setSuggestedQuestions([]);
+                setPlan(resp.session.plan ?? null);
+                setTranscript(resp.messages);
+                setDrafts(resp.drafts);
+                localStorage.setItem("ai_planning_last_session", String(resp.session.id));
+                await loadSessionList();
+              } catch (err: unknown) {
+                void messageApi.error("创建会话失败: " + (err instanceof Error ? err.message : String(err)));
+              } finally {
+                setIsBootstrapping(false);
+              }
+            }}
+          >
+            新建会话
+          </Button>
         </div>
 
         {/* Scrollable message area */}

@@ -266,6 +266,14 @@ export interface AIPlanningSessionDetail {
   drafts: AIPlanningDraft[];
 }
 
+export interface AIPlanningSessionSummary {
+  id: number;
+  title: string | null;
+  status: AIPlanningSessionStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CreatePlanningSessionPayload {
   project_id: number;
   case_id?: number | null;

@@ -1,6 +1,7 @@
 import type {
   AIPlanningDraft,
   AIPlanningSessionDetail,
+  AIPlanningSessionSummary,
   AIPlanningTurnResponse,
   AISettingsOverview,
   AISettings,
@@ -238,6 +239,11 @@ export function createPlanningSession(payload: CreatePlanningSessionPayload) {
 
 export function getPlanningSession(sessionId: number) {
   return request<AIPlanningSessionDetail>(`/api/v1/ai-planning/sessions/${sessionId}`);
+}
+
+export function listPlanningSessions(projectId?: number) {
+  const params = projectId ? `?project_id=${projectId}` : "";
+  return request<AIPlanningSessionSummary[]>(`/api/v1/ai-planning/sessions${params}`);
 }
 
 export function sendPlanningMessage(sessionId: number, payload: SendPlanningMessagePayload) {
