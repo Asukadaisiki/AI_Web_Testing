@@ -306,6 +306,27 @@ export interface AIPlanningTurnResponse {
   drafts: AIPlanningDraft[];
   next_action: AIPlanningNextAction;
   tool_calls?: AIPlanningToolCall[];
+  saved_cases?: SavedCaseResult[];
+  execution_summaries?: ExecutionSummaryResult[];
+}
+
+export interface SavedCaseResult {
+  case_id: number;
+  case_name: string;
+  status: "saved";
+}
+
+export interface ExecutionSummaryResult {
+  execution_id: number;
+  case_id: number;
+  case_name: string;
+  status: "passed" | "failed" | "needs_intervention" | "error";
+  total_steps: number;
+  passed_steps: number;
+  failed_steps: number;
+  duration_ms: number | null;
+  screenshot_url: string | null;
+  report_url: string;
 }
 
 export interface DslGenerationFeedbackPayload {

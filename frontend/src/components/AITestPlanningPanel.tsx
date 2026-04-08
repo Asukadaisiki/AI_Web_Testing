@@ -7,6 +7,7 @@ import {
   generatePlanningDrafts,
   getPlanningSession,
   listPlanningSessions,
+  saveAndExecuteDrafts,
   sendPlanningMessage,
   updatePlanningDraftStatus,
 } from "../services/api";
@@ -22,6 +23,7 @@ import type {
   DSLCaseOutputContract,
   DSLCasePayload,
   DSLStep,
+  ExecutionSummaryResult,
 } from "../types/api";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 
@@ -434,6 +436,30 @@ export function AITestPlanningPanel({
                     <span style={{ fontWeight: 600 }}>🔧 工具调用</span>
                     <div style={{ marginTop: 4 }}>{item.content}</div>
                   </>
+                ) : item.role === "assistant" &&
+                  item.structured_payload?.type === "execution_summary" &&
+                  Array.isArray(item.structured_payload.execution_summaries) ? (
+                  <div>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{item.content}</div>
+                    {(item.structured_payload.execution_summaries as ExecutionSummaryResult[]).map((ex) => (
+                      <div
+                        key={ex.execution_id}
+                        style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}
+                      >
+                        {ex.status === "passed" ? "✅" : "❌"}
+                        <span>{ex.case_name}</span>
+                        <span style={{ color: "#888" }}>
+                          {ex.passed_steps}/{ex.total_steps}步
+                        </span>
+                        {ex.duration_ms ? (
+                          <span style={{ color: "#888" }}>{(ex.duration_ms / 1000).toFixed(1)}s</span>
+                        ) : null}
+                        <a href={ex.report_url} target="_blank" rel="noopener noreferrer">
+                          查看报告
+                        </a>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   item.content
                 )}
@@ -572,13 +598,91 @@ export function AITestPlanningPanel({
     if (drafts.length > 0) {
       cards.push(
         <div key="drafts-list">
-          <Typography.Text strong style={{ fontSize: 14 }}>
-            DSL 草案列表
-          </Typography.Text>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <Typography.Text strong style={{ fontSize: 14 }}>
+              测试用例草案
+            </Typography.Text>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button
+                size="small"
+                disabled={selectedScenarioKeys.length === 0 || isSending}
+                onClick={async () => {
+                  if (!sessionId || selectedScenarioKeys.length === 0) return;
+                  setIsSending(true);
+                  try {
+                    const resp = await saveAndExecuteDrafts(
+                      sessionId,
+                      drafts.filter((d) => selectedScenarioKeys.includes(d.scenario_key)).map((d) => d.id),
+                      false,
+                    );
+                    void messageApi.success(`已保存 ${resp.saved_cases?.length ?? 0} 个用例`);
+                    await loadSessionList();
+                  } catch (err: unknown) {
+                    void messageApi.error("保存失败: " + (err instanceof Error ? err.message : String(err)));
+                  } finally {
+                    setIsSending(false);
+                  }
+                }}
+              >
+                仅保存
+              </Button>
+              <Button
+                type="primary"
+                size="small"
+                loading={isSending}
+                disabled={selectedScenarioKeys.length === 0}
+                onClick={async () => {
+                  if (!sessionId || selectedScenarioKeys.length === 0) return;
+                  setIsSending(true);
+                  try {
+                    const resp = await saveAndExecuteDrafts(
+                      sessionId,
+                      drafts.filter((d) => selectedScenarioKeys.includes(d.scenario_key)).map((d) => d.id),
+                      true,
+                    );
+                    if (resp.execution_summaries && resp.execution_summaries.length > 0) {
+                      const summaryMsg: AIPlanningMessage = {
+                        id: -Date.now(),
+                        session_id: sessionId,
+                        role: "assistant",
+                        turn_type: "plan" as const,
+                        content: resp.assistant_message,
+                        structured_payload: {
+                          type: "execution_summary",
+                          execution_summaries: resp.execution_summaries,
+                          saved_cases: resp.saved_cases,
+                        },
+                        created_at: new Date().toISOString(),
+                      };
+                      setTranscript((prev) => [...prev, summaryMsg]);
+                    }
+                    await loadSessionList();
+                  } catch (err: unknown) {
+                    void messageApi.error("执行失败: " + (err instanceof Error ? err.message : String(err)));
+                  } finally {
+                    setIsSending(false);
+                  }
+                }}
+              >
+                保存并执行
+              </Button>
+            </div>
+          </div>
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
             {drafts.map((draft) => (
               <div key={draft.id} style={{ padding: "8px 0", borderBottom: "1px solid #f5f5f5" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Checkbox
+                    checked={selectedScenarioKeys.includes(draft.scenario_key)}
+                    onChange={(e) => {
+                      setSelectedScenarioKeys((prev) =>
+                        e.target.checked
+                          ? [...prev, draft.scenario_key]
+                          : prev.filter((k) => k !== draft.scenario_key),
+                      );
+                    }}
+                    disabled={draft.status !== "generated" || !draft.dsl_case}
+                  />
                   <Typography.Text strong style={{ fontSize: 13 }}>
                     {draft.title}
                   </Typography.Text>
@@ -588,15 +692,9 @@ export function AITestPlanningPanel({
                   <Alert type="error" showIcon message={draft.error_message} style={{ marginTop: 4, fontSize: 12 }} />
                 ) : null}
                 {draft.dsl_case ? (
-                  <Button
-                    type="primary"
-                    size="small"
-                    onClick={() => void handleImportDraft(draft)}
-                    disabled={draft.status !== "generated"}
-                    style={{ marginTop: 6 }}
-                  >
-                    {draftImportLabel ?? "导入到当前编辑器"}
-                  </Button>
+                  <div style={{ marginLeft: 30, color: "#888", fontSize: 12, marginTop: 4 }}>
+                    {draft.dsl_case.steps.map((s) => s.action).join(" → ")}
+                  </div>
                 ) : null}
               </div>
             ))}

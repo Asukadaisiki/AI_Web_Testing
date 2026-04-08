@@ -246,6 +246,13 @@ export function listPlanningSessions(projectId?: number) {
   return request<AIPlanningSessionSummary[]>(`/api/v1/ai-planning/sessions${params}`);
 }
 
+export function saveAndExecuteDrafts(sessionId: number, draftIds: number[], execute: boolean = true) {
+  return request<AIPlanningTurnResponse>(`/api/v1/ai-planning/sessions/${sessionId}/drafts:save-and-execute`, {
+    method: "POST",
+    body: JSON.stringify({ draft_ids: draftIds, execute }),
+  });
+}
+
 export function sendPlanningMessage(sessionId: number, payload: SendPlanningMessagePayload) {
   return request<AIPlanningTurnResponse>(`/api/v1/ai-planning/sessions/${sessionId}/messages`, {
     method: "POST",
