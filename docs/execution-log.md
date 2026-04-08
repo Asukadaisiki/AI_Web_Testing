@@ -9,6 +9,16 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-08
+
+- 任务：为 AI 对话页添加会话历史恢复功能，并将 AI 规划流程从"仅生成 DSL 草案"扩展为"草案 → 保存用例 → 执行测试 → 展示结果"完整闭环
+- 执行动作：后端新增 `GET /api/v1/ai-planning/sessions` 会话列表接口和 `POST /sessions/{id}/drafts:save-and-execute` 保存+执行端点；扩展 `AIPlanningSessionStatus` 状态机（新增 reviewing/saving/executing/completed）；新增 `SavedCaseResult`/`ExecutionSummaryResult` schema；service 层 `save_and_execute_selected_drafts()` 直接调用已有的 `create_case()` 和 `execute_case()` 服务函数。前端 AITestPlanningPanel 新增顶部会话切换器（Select + 新建按钮），mount 时通过 localStorage 恢复上次会话；草案列表改为勾选式审阅卡片，增加"仅保存"和"保存并执行"按钮；聊天消息新增 execution_summary 类型渲染（步骤摘要 + 查看报告链接）
+- 结果：AI 对话页切换后可通过顶部下拉框恢复历史会话；DSL 草案生成后可勾选、保存为正式用例并直接触发 Playwright 执行，执行结果摘要展示在聊天中并带报告页链接
+- 验证：`cd backend && python -c "from app.main import create_app; create_app(); print('OK')"` 通过；`cd frontend && npx tsc --noEmit` 仅剩预存在的 tool_call 类型错误和 main.tsx borderWidth 警告
+- 后续：可用 The Internet Login Page 测试数据做端到端手工验证
+- 关联计划：`docs/superpowers/plans/2026-04-08-chat-history-and-full-test-flow.md`
+- 关联设计：`docs/superpowers/specs/2026-04-08-chat-history-and-full-test-flow-design.md`
+
 ## 2026-04-06
 
 - 任务：将前端从传统顶部导航 + 卡片堆叠布局重构为 NotebookLM 风格三栏浮岛布局，并用 ReportPage 替换 CaseWorkbenchPage

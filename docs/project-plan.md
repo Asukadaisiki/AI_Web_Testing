@@ -18,14 +18,15 @@
 4. Reporter 层：`backend/app/reporters`
 5. 资产管理层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`，当前以 `Project -> Case` 为主
 
-## 当前状态快照（截至 2026-04-06）
+## 当前状态快照（截至 2026-04-08）
 
 ### 进度评估
 
-- 当前阶段：**M1 收口已完成，M2 前端体验重构已完成，进入 M2 功能增强前期**
+- 当前阶段：**M1 收口已完成，M2 前端体验重构已完成，M2 功能增强推进中**
 - M1 完成度：`100%`（认证入口、治理主线收口、Suite 下线、AI 规划助手均已落地）
 - M2 前端体验重构完成度：`100%`（NotebookLM 三栏浮岛布局、ReportPage 替换工作台、侧边栏导航）
-- 相对核心五阶段路线图的整体完成度估算：`85% - 90%`
+- M2 功能增强完成度：`30%`（AI 对话历史恢复 + 完整测试执行闭环已落地）
+- 相对核心五阶段路线图的整体完成度估算：`87% - 92%`
 
 阶段对齐判断：
 - 阶段一 基础执行能力：已完成
@@ -49,6 +50,7 @@
 - AI 视觉定位适配：已适配智谱 GLM 视觉模型，保持非智谱 provider 不回归
 - AI DSL 治理基线：已推进到 `2026-03-24.governance-v3.3`，围绕 `context_mismatch / bad_contracts` 按 rejected、variant、retry 指标持续收敛
 - AI 测试规划助手：工作台内嵌对话 UI、后端 planning session 持久化、agent loop 与 DSL 草案生成复用链路已落地
+- AI 规划完整闭环：AI 对话页支持会话历史恢复（顶部会话切换器 + localStorage 持久化）；DSL 草案可勾选审阅、保存为正式用例、直接触发 Playwright 执行，执行结果摘要展示在聊天中并带报告页链接
 - 认证基线：后端 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` 已落地，业务 API 默认要求登录；前端已完成 `/login`、登录态恢复、受保护路由、统一 `401` 回退；auth session 和 artifact 访问已加固
 - 前端 UI 重构：NotebookLM 三栏浮岛布局统一全部页面，侧边栏导航替代顶部 header；ReportPage 替换 CaseWorkbenchPage（工作台），报告页支持项目级执行结果浏览；CaseWorkbenchPage 及 DSL 生成前端入口已移除
 - 回归体系：后端与前端自动化测试链路已建立，2 条浏览器级固定主回归已固化
@@ -57,7 +59,7 @@
 
 - AI 生成 DSL 数据驱动优化：在 `governance-v3.3` 基线上继续按 `top_rejection_reasons`、`rejection_reason_by_variant`、`retry_acceptance_by_reason` 滚动收敛后续高频原因
 - AI visual 灰度验收：继续在默认关闭前提下补足手动开启窗口样本，只有累计达到 `>= 30 locate_requests` 或保留连续 3 天观察记录后，才重新评估是否进入默认开启讨论
-- AI 测试规划助手打磨：基于实际使用反馈优化对话体验和场景生成质量
+- AI 测试规划助手打磨：基于实际使用反馈优化对话体验和场景生成质量；端到端手工验证（The Internet Login Page 测试数据）
 
 ### 未开始
 
