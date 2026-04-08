@@ -19,12 +19,17 @@ from app.schemas.ai_planning import (
     AIPlanningToolCall,
     AIPlanningTurnResponse,
     CreateAIPlanningSessionRequest,
+    ExecutionSummaryResult,
     GenerateAIPlanningDraftsRequest,
+    SavedCaseResult,
     UpdateAIPlanningDraftStatusRequest,
 )
+from app.schemas.cases import CaseCreateRequest
 from app.schemas.dsl import GenerateDslRequest
-from app.services.cases import EntityNotFoundError, _ensure_project_member
+from app.schemas.executions import CaseExecutionRequest
+from app.services.cases import EntityNotFoundError, _ensure_project_member, create_case
 from app.services.dsl import generate_dsl_case
+from app.services.executions import execute_case
 
 
 logger = logging.getLogger(__name__)
@@ -304,6 +309,88 @@ def update_planning_draft_status(
     session.commit()
     session.refresh(draft)
     return _to_draft_schema(draft)
+
+
+def save_and_execute_selected_drafts(
+    session: Session,
+    planning_session_id: int,
+    draft_ids: list[int],
+    actor_user_id: int,
+    execute: bool = True,
+) -> AIPlanningTurnResponse:
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+
+    drafts = (
+        session.query(AIPlanningDraft)
+        .filter(
+            AIPlanningDraft.session_id == planning_session_id,
+            AIPlanningDraft.id.in_(draft_ids),
+        )
+        .all()
+    )
+
+    saved_cases: list[SavedCaseResult] = []
+    for draft in drafts:
+        if not draft.dsl_case_json:
+            continue
+        case_payload = CaseCreateRequest(
+            project_id=planning_session.project_id,
+            actor_user_id=actor_user_id,
+            **draft.dsl_case_json,
+        )
+        case = create_case(session, case_payload, actor_user_id=actor_user_id)
+        saved_cases.append(SavedCaseResult(case_id=case.id, case_name=case.name))
+        draft.status = "imported"
+
+    session.commit()
+
+    if not execute or not saved_cases:
+        return AIPlanningTurnResponse(
+            assistant_message=f"已保存 {len(saved_cases)} 个测试用例。" + ("\n是否立即执行？" if saved_cases else ""),
+            session_status="saving",
+            requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
+            missing_slots=[],
+            plan=None,
+            drafts=[],
+            next_action="ask_followup",
+            saved_cases=saved_cases,
+        )
+
+    execution_summaries: list[ExecutionSummaryResult] = []
+    for saved in saved_cases:
+        payload = CaseExecutionRequest(actor_user_id=actor_user_id)
+        result = execute_case(session, saved.case_id, payload)
+        passed = sum(1 for s in (result.report.steps or []) if s.status == "passed")
+        failed = sum(1 for s in (result.report.steps or []) if s.status == "failed")
+        execution_summaries.append(ExecutionSummaryResult(
+            execution_id=result.id,
+            case_id=saved.case_id,
+            case_name=result.case_name,
+            status=result.status,
+            total_steps=result.total_steps,
+            passed_steps=passed,
+            failed_steps=failed,
+            duration_ms=result.duration_ms,
+            screenshot_url=result.latest_screenshot_url,
+            report_url=f"/run/{result.id}",
+        ))
+
+    lines = ["测试执行完成：\n"]
+    for ex in execution_summaries:
+        icon = "✅" if ex.status == "passed" else "❌"
+        lines.append(f"{icon} {ex.case_name} — {ex.status} ({ex.passed_steps}/{ex.total_steps}步)")
+
+    return AIPlanningTurnResponse(
+        assistant_message="\n".join(lines),
+        session_status="completed",
+        requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
+        missing_slots=[],
+        plan=None,
+        drafts=[],
+        next_action="ask_followup",
+        saved_cases=saved_cases,
+        execution_summaries=execution_summaries,
+    )
 
 
 def _get_session(session: Session, planning_session_id: int, *, actor_user_id: int) -> AIPlanningSession:

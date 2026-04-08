@@ -10,7 +10,7 @@ from pydantic import Field
 from app.schemas.dsl import DSLCase, DSLCaseInputContract, DSLCaseOutputContract, DSLModel, DSLStep, DSLVariableType
 
 
-AIPlanningSessionStatus = Literal["collecting", "plan_ready", "drafts_ready", "closed", "error"]
+AIPlanningSessionStatus = Literal["collecting", "plan_ready", "drafts_ready", "reviewing", "saving", "executing", "completed", "closed", "error"]
 AIPlanningMessageRole = Literal["user", "assistant"]
 AIPlanningMessageTurnType = Literal["user", "followup", "plan", "tool_call", "system_error"]
 AIPlanningDraftStatus = Literal["generated", "imported", "rejected", "failed"]
@@ -135,6 +135,25 @@ class UpdateAIPlanningDraftStatusRequest(DSLModel):
     status: Literal["imported", "rejected"]
 
 
+class SavedCaseResult(DSLModel):
+    case_id: int = Field(ge=1)
+    case_name: str
+    status: Literal["saved"] = "saved"
+
+
+class ExecutionSummaryResult(DSLModel):
+    execution_id: int = Field(ge=1)
+    case_id: int = Field(ge=1)
+    case_name: str
+    status: Literal["passed", "failed", "needs_intervention", "error"]
+    total_steps: int
+    passed_steps: int
+    failed_steps: int
+    duration_ms: int | None = None
+    screenshot_url: str | None = None
+    report_url: str
+
+
 class AIPlanningTurnResponse(DSLModel):
     assistant_message: str = Field(min_length=1)
     session_status: AIPlanningSessionStatus
@@ -145,3 +164,5 @@ class AIPlanningTurnResponse(DSLModel):
     drafts: list[AIPlanningDraft] = Field(default_factory=list)
     next_action: AIPlanningNextAction
     tool_calls: list[AIPlanningToolCall] = Field(default_factory=list)
+    saved_cases: list[SavedCaseResult] = Field(default_factory=list)
+    execution_summaries: list[ExecutionSummaryResult] = Field(default_factory=list)

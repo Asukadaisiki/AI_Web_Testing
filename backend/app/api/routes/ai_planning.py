@@ -18,12 +18,14 @@ from app.schemas.ai_planning import (
     GenerateAIPlanningDraftsRequest,
     UpdateAIPlanningDraftStatusRequest,
 )
+from app.schemas.dsl import DSLModel
 from app.services.ai_planning import (
     AIPlanningAccessError,
     create_planning_session,
     generate_planning_drafts,
     get_planning_session_detail,
     list_planning_sessions,
+    save_and_execute_selected_drafts,
     send_planning_message,
     update_planning_draft_status,
 )
@@ -110,6 +112,26 @@ def update_planning_draft_status_route(
 ) -> AIPlanningDraft:
     try:
         return update_planning_draft_status(session, draft_id, payload, actor_user_id=current_user.id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AIPlanningAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+class SaveAndExecuteRequest(DSLModel):
+    draft_ids: list[int]
+    execute: bool = True
+
+
+@router.post("/sessions/{session_id}/drafts:save-and-execute", response_model=AIPlanningTurnResponse)
+def save_and_execute_route(
+    session_id: int,
+    payload: SaveAndExecuteRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> AIPlanningTurnResponse:
+    try:
+        return save_and_execute_selected_drafts(session, session_id, payload.draft_ids, current_user.id, payload.execute)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AIPlanningAccessError as exc:
