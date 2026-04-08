@@ -7,76 +7,87 @@
 - 前端设计必须服务于核心规划中的 Planner、Locator、Reporter 与项目级资产展示需求。
 - 正式执行能力以后端 Runner 为准，前端不承载官方执行逻辑。
 
-## 当前落地状态（截至 2026-03-18）
+## 当前落地状态（截至 2026-04-06）
+
+### 整体设计风格：NotebookLM 三栏浮岛
+
+前端采用类似 Google NotebookLM 的三栏浮岛布局风格：
+
+- **外层容器**：`height: 100vh`，浅灰底色 `#f8f9fa`，内间距 `16px`，栏间距 `16px`
+- **左侧栏**（280px）：白色圆角卡片（`border-radius: 16px, box-shadow: 0 2px 10px rgba(0,0,0,0.03)`），底部包含页面导航
+- **中间栏**（flex:1）：白色圆角卡片，承载主内容
+- **右侧栏**（340px）：透明背景，垂直 flex 容器（gap: 12px），存放多张分离的小卡片
+- **导航**：侧边栏底部固定区域，替代传统顶部 header
+
+### 主题 Token
+
+通过 Ant Design ConfigProvider 全局注入：
+
+| 组件 | 关键 Token |
+|------|-----------|
+| 全局 | `colorPrimary: #1a1a2e`, `borderRadius: 8`, `fontFamily: Inter, PingFang SC, Microsoft YaHei` |
+| Button | `borderRadius: 8`, `colorPrimary: #1a1a2e` |
+| Input | `borderRadius: 12`, `borderWidth: 0`, `activeShadow` |
+| Card | `borderRadius: 16`, `boxShadowTertiary: 0 2px 10px rgba(0,0,0,0.03)` |
+| Table | `borderWidth: 0`, `borderRadius: 12` |
+| Select | `borderRadius: 12`, `borderWidth: 0` |
+| Tag | `borderRadiusSM: 12` |
+
+### 全局 CSS 基础类
+
+| 类名 | 用途 |
+|------|------|
+| `.nb-card` | 白色圆角卡片基础样式（border-radius: 16px） |
+| `.chat-bubble-user` | 用户消息气泡（深色背景 #1a1a2e） |
+| `.chat-bubble-ai` | AI 消息气泡（浅灰蓝背景 #f0f4f8） |
+| `.step-item` / `.step-item-active` | 步骤列表项（hover 灰底 / 选中蓝底 + 左边框） |
+| `.action-grid-item` | 右栏操作网格方块 |
+| `.panel-scroll` | 面板内滚动条美化（4px 细滚动条） |
 
 ### 已落地页面
 
-| 页面 | 路由 | 说明 |
+| 页面 | 路由 | 布局 | 说明 |
+|------|------|------|------|
+| PlanningPage | `/` | 三栏 | AI 规划对话：左栏需求进度，中栏 AI 对话 + 底部输入框，右栏规划进度 + DSL 草案 |
+| CasesPage | `/cases` | 三栏 | 用例中心：左栏搜索筛选，中栏用例卡片网格，右栏统计面板 |
+| ReportPage | `/reports` | 两栏 | 项目报告：左栏项目列表，中栏概览统计卡片 + 可展开执行结果列表含步骤证据 |
+| ExecutionDetailPage | `/run/:executionId` | 三栏 | 执行详情：左栏步骤时间线，中栏截图 + 证据，右栏统计 + 定位策略 + 候选元素 |
+
+### 辅助组件
+
+| 组件 | 文件 | 用途 |
 |------|------|------|
-| DashboardPage | `/dashboard` | 近 7 天执行趋势、最近失败、失败最多用例 |
-| CasesPage | `/cases` | 用例列表、筛选、快捷操作 |
-| CaseWorkbenchPage | `/cases/new`、`/cases/:caseId/edit` | 结构化编辑 + JSON 兜底、AI 自然语言生成入口、草案预览/导入/反馈上报 |
-| ExecutionsPage | `/executions` | 列表 + 筛选 + 分页 + 失败步骤跳转、根因回流筛选 |
-| ExecutionDetailPage | `/executions/:executionId` | 步骤时间线 + 三块证据面板 |
-| ReportCenterPage | `/reports` | 7/14/30 天窗口、失败分类/动作分布、高频失败、根因榜 |
-| CorrectionsPage | `/corrections` | 修正记录列表、overview 汇总、命中趋势图、批量启停、事件时间线抽屉 |
-| AISettingsPage | `/settings/ai` | AI 配置管理、生成概览、治理筛选表格 + 详情抽屉 |
+| NotebookNav | `components/NotebookNav.tsx` | 侧边栏底部页面导航（AI 规划 / 用例中心 / 报告） |
+| NotebookLMLayout | `layouts/NotebookLMLayout.tsx` | 三栏浮岛布局容器，支持 `leftPanel / centerPanel / rightCards` |
+| ChatMessage | `components/ChatMessage.tsx` | AI 对话消息气泡 |
+| ChatInput | `components/ChatInput.tsx` | 圆角悬挂式 AI 输入框 |
+| StepList | `components/StepList.tsx` | 测试步骤列表（搜索 + 列表 + Add Action） |
+| StatCard | ReportPage 内联 | 报告页概览统计卡片 |
+| ExecutionRow | ReportPage 内联 | 可展开执行结果行 |
+| StepRow | ReportPage 内联 | 步骤证据行（含截图、定位信息、错误信息） |
 
-补充说明：根路由 `/` 当前会重定向到 `/dashboard`。
+### 旧页面迁移
 
-### 未落地
-
-- 登录页与平台认证体系
-- 更完整的 VLM 模型管理、默认开启策略与环境隔离配置（当前仅有 `/settings/ai`）
-- 更深的定位调试区（候选元素可视化、定位评分展示）
-- 项目级回归编排、历史筛选与更完整回放
-
-### 技术栈
-
-React + TypeScript、Vite、React Router、TanStack Query、Ant Design、ECharts
-
-## 设计风格
-
-整体风格采用中后台工作台设计，要求清晰、稳定、信息密度适中。
-
-- 主色调：浅色背景，搭配低饱和蓝灰色作为基础色。
-- 状态色：成功绿、失败红、运行中橙、待执行灰。
-- 组件风格：矩形卡片、清晰边界、弱阴影，避免过多圆角和装饰性效果。
-- 动效：仅保留必要的过渡反馈（状态变化、抽屉展开、步骤高亮）。
-
-## 信息架构
-
-左侧导航 + 顶部状态栏 + 主工作区。
-
-左侧导航：仪表盘、测试用例、执行中心、报告中心、修正管理、AI 设置
-
-## 关键页面设计要点
-
-### 用例编辑工作台
-
-核心页面，三栏布局：左栏步骤列表与 DSL 编辑器，中栏被测页面预览区，右栏元素信息与定位结果。
-
-- 结构化编辑优先，原始 JSON 兜底
-- 支持步骤新增、删除、排序、复制
-- AI 生成入口：自然语言需求 → 草案预览 → 导入（替换/仅步骤/仅契约）→ 采纳/放弃反馈上报
-
-### 报告详情页
-
-"步骤时间线 + 证据面板"布局，默认优先暴露失败步骤和失败相关证据。
-
-### 执行中心
-
-任务控制台布局：列表区展示状态/触发方式/耗时，支持根因筛选回流。
+| 旧页面 | 旧路由 | 现状 |
+|--------|--------|------|
+| DashboardPage | `/dashboard` | 重定向到 `/` |
+| LoginPage | `/login` | 重定向到 `/`，认证改为 `require_demo_user` |
+| ExecutionsPage | `/executions` | 重定向到 `/cases` |
+| CaseWorkbenchPage | `/cases/new` | 已删除，功能由 ReportPage 和 AI 规划覆盖 |
+| AISettingsPage | `/settings/ai` | 已删除 |
+| CorrectionsPage | `/corrections` | 已删除 |
+| ReportCenterPage | `/reports/center` | 已删除，报告能力合并到 ReportPage |
 
 ## 可视化重点
 
-1. 步骤流转：当前执行到哪一步、失败在哪一步
-2. 元素定位：target、候选元素、最终命中
-3. 证据记录：截图、URL、日志、断言结果
-4. 测试资产：Project、Case、执行历史、失败趋势
+1. 步骤流转：左侧步骤时间线或列表，点击联动中间和右侧面板
+2. 元素定位：target、候选元素、最终命中，通过定位策略 Tag 展示
+3. 证据记录：截图大图预览、URL、Console/Network 日志、断言结果
+4. 测试资产：项目级聚合统计（通过率、失败数、平均耗时）、执行趋势
 
 ## 交互原则
 
 - 正式测试执行由后端 Runner 完成，前端只做触发与展示。
-- 用例编辑以结构化表单和 DSL 编辑器为主，录制/拾取为辅助入口。
-- 报告页优先保证排障效率，不追求过度视觉包装。
+- AI 对话采用气泡样式，底部圆角输入框，建议标签引导。
+- 报告页优先保证排障效率——概览统计一目了然，步骤证据可展开查看。
+- 三栏布局中，左栏和右栏为辅助信息区，中栏始终为主操作/展示区。

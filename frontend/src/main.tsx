@@ -12,6 +12,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       theme={{
         token: {
           colorPrimary: "#1a1a2e",
+          colorPrimaryActive: "#555",
           borderRadius: 8,
           fontFamily: "'Inter', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif",
           colorBgContainer: "#ffffff",
@@ -22,6 +23,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             borderRadius: 8,
             colorPrimary: "#1a1a2e",
             primaryShadow: "0 2px 4px rgba(26,26,46,0.12)",
+            defaultActiveBg: "#e0e0e0",
+            defaultActiveBorderColor: "#bbb",
+            defaultActiveColor: "#666",
           },
           Input: {
             borderRadius: 12,

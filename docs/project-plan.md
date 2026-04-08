@@ -18,25 +18,29 @@
 4. Reporter 层：`backend/app/reporters`
 5. 资产管理层：`backend/app/models`、`backend/app/services`、`backend/app/api/routes`、`frontend/src/pages`，当前以 `Project -> Case` 为主
 
-## 当前状态快照（截至 2026-03-31）
+## 当前状态快照（截至 2026-04-06）
 
 ### 进度评估
 
-- 当前阶段：**M1 收口已完成，进入 M2 规划前期**
+- 当前阶段：**M1 收口已完成，M2 前端体验重构已完成，进入 M2 功能增强前期**
 - M1 完成度：`100%`（认证入口、治理主线收口、Suite 下线、AI 规划助手均已落地）
-- 相对核心五阶段路线图的整体完成度估算：`80% - 85%`
+- M2 前端体验重构完成度：`100%`（NotebookLM 三栏浮岛布局、ReportPage 替换工作台、侧边栏导航）
+- 相对核心五阶段路线图的整体完成度估算：`85% - 90%`
 
 阶段对齐判断：
 - 阶段一 基础执行能力：已完成
 - 阶段二 混合定位系统：主链路完成，已适配智谱 GLM 视觉模型，AI visual 默认开启评估未收口
 - 阶段三 DSL 与自然语言生成：主链路完成，已适配智谱 BigModel，AI 测试规划对话助手已落地
-- 阶段四 报告系统：报告中心已完成作用域和指标增强，暂未进入新一轮扩面
+- 阶段四 报告系统：ReportPage 已落地（项目级执行结果报告，含概览统计、可展开步骤证据），暂未进入 AI 失败分析等新一轮扩面
 - 阶段五 项目级回归执行：Suite 已下线，统一为 `Project -> Case` 资产结构，CRUD 完整且权限已加固
 
 ### 已完成
 
 - 平台基础：前后端单仓骨架、FastAPI 入口、Alembic 迁移、`users / projects / test_cases / test_case_runs` 等当前核心模型已落地
-- 平台页面：Dashboard、Case 列表/工作台、执行中心、执行详情、报告中心、修正记录、AI 配置、登录页均已可用
+- 平台页面：NotebookLM 三栏浮岛布局已统一，侧边栏底部导航替代顶部 header；PlanningPage、CasesPage、ReportPage、ExecutionDetailPage 均已重写为三栏布局
+- 前端体验重构：全局 ConfigProvider 主题 token（大圆角、无边框、弱阴影、Inter 字体）；NotebookLMLayout 三栏容器；NotebookNav 侧边栏导航；ChatMessage/ChatInput/StepList 辅助组件
+- ReportPage：两栏布局（项目列表 + 执行结果），替代原 CaseWorkbenchPage；支持项目选择、概览统计卡片、可展开执行结果含步骤证据与截图
+- 演示流简化：移除 demo 流认证依赖（require_demo_user）；三步导航（AI 规划 -> 用例中心 -> 执行报告）；删除旧平台页（Dashboard、Login、Executions、Corrections、AISettings、ReportCenter）及 AuthContext
 - 执行主链路：DSL Schema 与校验、Case 持久化、单 Case 执行、步骤级证据、Artifact 访问、执行详情、`executions overview` 聚合已打通
 - 资产结构：统一为 `Project -> Case`，Suite 应用层已下线并完成数据库清理；CRUD 完整且项目成员权限校验已加固
 - 混合定位闭环：修正记录模型/API、`resolve_with_fallback` 四层降级链路、AI visual、前端人工干预面板、corrections 管理页已完成
@@ -46,7 +50,7 @@
 - AI DSL 治理基线：已推进到 `2026-03-24.governance-v3.3`，围绕 `context_mismatch / bad_contracts` 按 rejected、variant、retry 指标持续收敛
 - AI 测试规划助手：工作台内嵌对话 UI、后端 planning session 持久化、agent loop 与 DSL 草案生成复用链路已落地
 - 认证基线：后端 `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me` 已落地，业务 API 默认要求登录；前端已完成 `/login`、登录态恢复、受保护路由、统一 `401` 回退；auth session 和 artifact 访问已加固
-- 报告中心增强：作用域和指标已扩展
+- 前端 UI 重构：NotebookLM 三栏浮岛布局统一全部页面，侧边栏导航替代顶部 header；ReportPage 替换 CaseWorkbenchPage（工作台），报告页支持项目级执行结果浏览；CaseWorkbenchPage 及 DSL 生成前端入口已移除
 - 回归体系：后端与前端自动化测试链路已建立，2 条浏览器级固定主回归已固化
 
 ### 进行中
@@ -65,7 +69,7 @@
 
 ## 下一里程碑
 
-M1 已完成。当前进入 **M2 规划前期**，待确认优先级后启动。
+M1 已完成。M2 前端体验重构已完成。当前进入 **M2 功能增强前期**，待确认优先级后启动。
 
 M1 已完成的交付项：
 - 认证入口（本地账号密码 + Cookie Session 最小可用形态）
@@ -76,6 +80,13 @@ M1 已完成的交付项：
 - AI 测试规划对话助手（工作台内嵌）
 - 报告中心作用域和指标增强
 - 2 条浏览器级固定主回归长期保留
+
+M2 前端体验重构已完成的交付项：
+- NotebookLM 三栏浮岛布局统一全部页面（PlanningPage、CasesPage、ExecutionDetailPage）
+- 全局主题 token（大圆角、无边框、弱阴影风格）
+- ReportPage 替换 CaseWorkbenchPage，支持项目级执行结果报告
+- 侧边栏底部导航替代顶部 header
+- 演示流简化：三步导航（AI 规划 -> 用例中心 -> 报告），移除 demo 流认证依赖
 
 相对核心规划的主要差距：
 - 报告系统虽已具备结果展示和聚合，但还没有进入“更完整 AI 失败分析 / 新一轮报告扩面”
