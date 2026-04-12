@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
   createPlanningSession,
+  deletePlanningSession,
   generateDslCase,
   getAISettings,
   getAISettingsOverview,
@@ -297,6 +298,18 @@ test("ai planning endpoints send the expected payloads", async () => {
     expect.objectContaining({
       method: "PATCH",
       body: JSON.stringify({ status: "imported" }),
+    }),
+  );
+});
+
+test("deletePlanningSession sends DELETE to ai planning session endpoint", async () => {
+  await deletePlanningSession(5);
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/ai-planning/sessions/5",
+    expect.objectContaining({
+      method: "DELETE",
+      credentials: "include",
     }),
   );
 });

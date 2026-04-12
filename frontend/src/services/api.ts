@@ -85,6 +85,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(message, response.status);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 
@@ -244,6 +248,12 @@ export function getPlanningSession(sessionId: number) {
 export function listPlanningSessions(projectId?: number) {
   const params = projectId ? `?project_id=${projectId}` : "";
   return request<AIPlanningSessionSummary[]>(`/api/v1/ai-planning/sessions${params}`);
+}
+
+export function deletePlanningSession(sessionId: number) {
+  return request<void>(`/api/v1/ai-planning/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
 }
 
 export function saveAndExecuteDrafts(sessionId: number, draftIds: number[], execute: boolean = true) {
