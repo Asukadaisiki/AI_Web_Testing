@@ -47,7 +47,9 @@ backend/artifacts/
 backend/.python-version
 
 # docs
-docs/
+docs/*
+!docs/plan/
+!docs/plan/*.md
 
 # tests
 tests/

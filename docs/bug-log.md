@@ -29,6 +29,25 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-044 | AI Planning 面板缓存失效会话时不会回退创建新会话
+
+- 日期：2026-04-12
+- 状态：fixed
+- 来源：需求实现 / 静态检查
+- 描述：当 `localStorage.ai_planning_last_session` 指向一个已删除或不存在的 session 时，`AITestPlanningPanel` 初始化会先尝试恢复该 session；恢复失败后，因为当前逻辑仍通过“localStorage 是否存在 key”判断是否需要创建新会话，导致页面停留在无活跃 session 状态。
+- 复现步骤：
+  1. 在浏览器本地存储中写入一个不存在的 `ai_planning_last_session`
+  2. 打开 Planning 页面
+  3. 观察恢复请求失败后，没有自动切换到其他会话，也没有自动创建新会话
+- 影响：删除当前会话或服务端清理历史会话后，用户再次进入 Planning 页面可能无法继续对话，且会话删除功能难以稳定收口
+- 根因：初始化分支依赖 localStorage key 是否存在，而不是“恢复是否成功”
+- 处理：在会话删除实现计划中引入 `loadSessionDetail()` / `createAndSelectSession()` helper，恢复失败时清理本地缓存并自动创建或切换到可用会话
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_ai_planning_api.py -q`
+  - `cd frontend && npm run test -- src/services/api.test.ts src/components/AITestPlanningPanel.test.tsx`
+  - `cd frontend && npx tsc --noEmit`
+- 关联记录：`docs/execution-log.md` 2026-04-12
+
 ## BUG-042 | AI 测试规划面板初始化首条消息可能丢失，且新后端回归测试默认不会被跟踪
 
 - 日期：2026-03-30

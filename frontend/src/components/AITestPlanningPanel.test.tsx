@@ -12,7 +12,11 @@ vi.mock("../services/api", async () => {
   return {
     ...actual,
     createPlanningSession: vi.fn(),
+    deletePlanningSession: vi.fn(),
     generatePlanningDrafts: vi.fn(),
+    getPlanningSession: vi.fn(),
+    listPlanningSessions: vi.fn(),
+    saveAndExecuteDrafts: vi.fn(),
     sendPlanningMessage: vi.fn(),
     updatePlanningDraftStatus: vi.fn(),
   };
@@ -45,6 +49,9 @@ const aiSettings: AISettings = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  localStorage.clear();
+  vi.stubGlobal("confirm", vi.fn(() => true));
+
   vi.mocked(api.createPlanningSession).mockResolvedValue({
     session: {
       id: 5,
@@ -71,6 +78,49 @@ beforeEach(() => {
     messages: [],
     drafts: [],
   });
+  vi.mocked(api.getPlanningSession).mockResolvedValue({
+    session: {
+      id: 5,
+      actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
+      title: "当前会话",
+      status: "collecting",
+      requirements: {
+        app_under_test: null,
+        business_goal: null,
+        entry_url_or_page: null,
+        core_user_flow: null,
+        main_assertions: [],
+        test_data_or_account: null,
+        scope_limits: null,
+      },
+      plan: null,
+      missing_slots: ["app_under_test", "business_goal"],
+      last_error_message: null,
+      created_at: "2026-04-12T10:00:00",
+      updated_at: "2026-04-12T10:00:00",
+    },
+    messages: [],
+    drafts: [],
+  });
+  vi.mocked(api.listPlanningSessions).mockResolvedValue([
+    {
+      id: 5,
+      title: "当前会话",
+      status: "collecting",
+      created_at: "2026-04-12T10:00:00",
+      updated_at: "2026-04-12T10:00:00",
+    },
+    {
+      id: 9,
+      title: "保留会话",
+      status: "plan_ready",
+      created_at: "2026-04-12T09:00:00",
+      updated_at: "2026-04-12T09:30:00",
+    },
+  ]);
+  vi.mocked(api.deletePlanningSession).mockResolvedValue(undefined);
 });
 
 test("展示动态进度、工具调用并支持直接生成方案", async () => {
@@ -122,20 +172,18 @@ test("展示动态进度、工具调用并支持直接生成方案", async () =>
     <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
   );
 
-  expect(await screen.findByText("AI 测试规划助手")).toBeInTheDocument();
+  expect(await screen.findByText("AI Planning")).toBeInTheDocument();
   expect(screen.getByText("已收集 0 / 7 项")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "直接生成方案" }));
+  await userEvent.type(screen.getByLabelText("测试规划对话输入"), "请先整理后台登录测试方案{enter}");
 
-  expect(await screen.findByText("调用工具：list_test_cases")).toBeInTheDocument();
+  expect(await screen.findByText(/list_test_cases/)).toBeInTheDocument();
   expect(screen.getByText("已收集 5 / 7 项")).toBeInTheDocument();
   expect(screen.getByText("商城后台登录测试方案")).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: "选择场景 登录成功" })).toBeInTheDocument();
 });
 
-test("可以生成草案并导入到当前编辑器", async () => {
-  const onImportDraft = vi.fn();
-
+test("可以生成草案并展示审阅操作", async () => {
   vi.mocked(api.sendPlanningMessage).mockResolvedValue({
     assistant_message: "信息已经足够，我先给出结构化测试方案。",
     session_status: "plan_ready",
@@ -253,23 +301,110 @@ test("可以生成草案并导入到当前编辑器", async () => {
   });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={onImportDraft} />,
+    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
   );
 
-  expect(await screen.findByText("AI 测试规划助手")).toBeInTheDocument();
-  await userEvent.type(screen.getByLabelText("测试规划对话输入"), "请先整理后台登录测试方案");
-  await userEvent.click(screen.getByRole("button", { name: "发送消息" }));
+  expect(await screen.findByText("AI Planning")).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText("测试规划对话输入"), "请先整理后台登录测试方案{enter}");
 
   await userEvent.click(await screen.findByRole("checkbox", { name: "选择场景 登录成功" }));
   await userEvent.click(screen.getByRole("button", { name: "生成选中草案" }));
-  await userEvent.click(await screen.findByRole("button", { name: "导入到当前编辑器" }));
 
   await waitFor(() => {
-    expect(onImportDraft).toHaveBeenCalledWith(
+    expect(api.generatePlanningDrafts).toHaveBeenCalledWith(
+      5,
       expect.objectContaining({
-        scenario_key: "login_success",
+        scenario_keys: ["login_success"],
       }),
     );
-    expect(api.updatePlanningDraftStatus).toHaveBeenCalledWith(11, { status: "imported" });
+  });
+  expect(await screen.findByText("测试用例草案")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "仅保存" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存并执行" })).toBeInTheDocument();
+});
+
+test("删除当前会话后会切换到剩余会话并更新 localStorage", async () => {
+  vi.mocked(api.listPlanningSessions)
+    .mockResolvedValueOnce([
+      {
+        id: 5,
+        title: "当前会话",
+        status: "collecting",
+        created_at: "2026-04-12T10:00:00",
+        updated_at: "2026-04-12T10:00:00",
+      },
+      {
+        id: 9,
+        title: "保留会话",
+        status: "plan_ready",
+        created_at: "2026-04-12T09:00:00",
+        updated_at: "2026-04-12T09:30:00",
+      },
+    ])
+    .mockResolvedValueOnce([
+      {
+        id: 9,
+        title: "保留会话",
+        status: "plan_ready",
+        created_at: "2026-04-12T09:00:00",
+        updated_at: "2026-04-12T09:30:00",
+      },
+    ]);
+
+  vi.mocked(api.getPlanningSession).mockImplementation(async (sessionId: number) => ({
+    session: {
+      id: sessionId,
+      actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
+      title: sessionId === 9 ? "保留会话" : "当前会话",
+      status: "collecting",
+      requirements: {
+        app_under_test: null,
+        business_goal: null,
+        entry_url_or_page: null,
+        core_user_flow: null,
+        main_assertions: [],
+        test_data_or_account: null,
+        scope_limits: null,
+      },
+      plan: null,
+      missing_slots: [],
+      last_error_message: null,
+      created_at: "2026-04-12T10:00:00",
+      updated_at: "2026-04-12T10:00:00",
+    },
+    messages: [],
+    drafts: [],
+  }));
+
+  renderWithProviders(
+    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "删除会话 当前会话" })).toBeInTheDocument();
+  });
+  await userEvent.click(screen.getByRole("button", { name: "删除会话 当前会话" }));
+
+  await waitFor(() => {
+    expect(api.deletePlanningSession).toHaveBeenCalledWith(5);
+    expect(api.getPlanningSession).toHaveBeenLastCalledWith(9);
+    expect(localStorage.getItem("ai_planning_last_session")).toBe("9");
+  });
+});
+
+test("缓存的最后会话不存在时会自动创建新会话", async () => {
+  localStorage.setItem("ai_planning_last_session", "77");
+  vi.mocked(api.getPlanningSession).mockRejectedValueOnce(new Error("AI planning session 77 not found."));
+
+  renderWithProviders(
+    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+  );
+
+  await waitFor(() => {
+    expect(api.getPlanningSession).toHaveBeenCalledWith(77);
+    expect(api.createPlanningSession).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("ai_planning_last_session")).toBe("5");
   });
 });

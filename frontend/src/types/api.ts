@@ -174,7 +174,16 @@ export interface GenerateDslResponse {
   generation_meta: GenerateDslMeta;
 }
 
-export type AIPlanningSessionStatus = "collecting" | "plan_ready" | "drafts_ready" | "closed" | "error";
+export type AIPlanningSessionStatus =
+  | "collecting"
+  | "plan_ready"
+  | "drafts_ready"
+  | "reviewing"
+  | "saving"
+  | "executing"
+  | "completed"
+  | "closed"
+  | "error";
 export type AIPlanningDraftStatus = "generated" | "imported" | "rejected" | "failed";
 export type AIPlanningNextAction = "ask_followup" | "review_plan" | "select_scenarios" | "drafts_generated";
 
@@ -239,7 +248,7 @@ export interface AIPlanningMessage {
   id: number;
   session_id: number;
   role: "user" | "assistant";
-  turn_type: "user" | "followup" | "plan" | "system_error";
+  turn_type: "user" | "followup" | "plan" | "tool_call" | "system_error";
   content: string;
   structured_payload?: Record<string, unknown> | null;
   created_at: string;

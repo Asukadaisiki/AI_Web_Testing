@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Checkbox, Input, Progress, Select, Tag, Typography, message } from "antd";
-import { SendOutlined } from "@ant-design/icons";
+import { DeleteOutlined, SendOutlined } from "@ant-design/icons";
 
 import {
   createPlanningSession,
+  deletePlanningSession,
   generatePlanningDrafts,
   getPlanningSession,
   listPlanningSessions,
@@ -144,6 +145,52 @@ export function AITestPlanningPanel({
     }
   }
 
+  function applySessionDetail(detail: Awaited<ReturnType<typeof getPlanningSession>>) {
+    setSessionId(detail.session.id);
+    setRequirements(detail.session.requirements);
+    setMissingSlots(detail.session.missing_slots);
+    setSuggestedQuestions([]);
+    setPlan(detail.session.plan ?? null);
+    setTranscript(detail.messages);
+    setDrafts(detail.drafts);
+    localStorage.setItem("ai_planning_last_session", String(detail.session.id));
+  }
+
+  async function loadSessionDetail(sessionIdToLoad: number) {
+    const detail = await getPlanningSession(sessionIdToLoad);
+    applySessionDetail(detail);
+    return detail;
+  }
+
+  async function createAndSelectSession() {
+    if (!projectId) return null;
+    const detail = await createPlanningSession({
+      project_id: projectId,
+      case_id: caseId ?? null,
+    });
+    applySessionDetail(detail);
+    return detail;
+  }
+
+  async function handleSessionDeleted(deletedSessionId: number) {
+    const nextList = await listPlanningSessions(projectId!);
+    setSessionList(nextList);
+
+    if (deletedSessionId !== sessionId) {
+      return;
+    }
+
+    localStorage.removeItem("ai_planning_last_session");
+
+    const nextSession = nextList[0];
+    if (nextSession) {
+      await loadSessionDetail(nextSession.id);
+      return;
+    }
+
+    await createAndSelectSession();
+  }
+
   useEffect(() => {
     if (!projectId) {
       return;
@@ -155,41 +202,20 @@ export function AITestPlanningPanel({
       if (!projectId) return;
       setIsBootstrapping(true);
       try {
-        // Try restore last session
         const lastId = localStorage.getItem("ai_planning_last_session");
+        let restored = false;
+
         if (lastId) {
           try {
-            const detail = await getPlanningSession(Number(lastId));
-            if (!cancelled) {
-              setSessionId(detail.session.id);
-              setRequirements(detail.session.requirements);
-              setMissingSlots(detail.session.missing_slots);
-              setSuggestedQuestions([]);
-              setPlan(detail.session.plan ?? null);
-              setTranscript(detail.messages);
-              setDrafts(detail.drafts);
-            }
+            await loadSessionDetail(Number(lastId));
+            restored = true;
           } catch {
-            // Session not found or expired — fall through to create new
+            localStorage.removeItem("ai_planning_last_session");
           }
         }
 
-        // If no session restored, create new
-        if (!cancelled && !localStorage.getItem("ai_planning_last_session")) {
-          const resp = await createPlanningSession({
-            project_id: projectId,
-            case_id: caseId ?? null,
-          });
-          if (!cancelled) {
-            setSessionId(resp.session.id);
-            setRequirements(resp.session.requirements);
-            setMissingSlots(resp.session.missing_slots);
-            setSuggestedQuestions([]);
-            setPlan(resp.session.plan ?? null);
-            setTranscript(resp.messages);
-            setDrafts(resp.drafts);
-            localStorage.setItem("ai_planning_last_session", String(resp.session.id));
-          }
+        if (!cancelled && !restored) {
+          await createAndSelectSession();
         }
 
         // Always load session list
@@ -364,15 +390,7 @@ export function AITestPlanningPanel({
             onChange={async (id: number) => {
               setIsBootstrapping(true);
               try {
-                const detail = await getPlanningSession(id);
-                setSessionId(detail.session.id);
-                setRequirements(detail.session.requirements);
-                setMissingSlots(detail.session.missing_slots);
-                setSuggestedQuestions([]);
-                setPlan(detail.session.plan ?? null);
-                setTranscript(detail.messages);
-                setDrafts(detail.drafts);
-                localStorage.setItem("ai_planning_last_session", String(id));
+                await loadSessionDetail(id);
               } catch (err: unknown) {
                 void messageApi.error("加载会话失败: " + (err instanceof Error ? err.message : String(err)));
               } finally {
@@ -384,6 +402,32 @@ export function AITestPlanningPanel({
               label: s.title || `会话 #${s.id} (${new Date(s.created_at).toLocaleString()})`,
             }))}
           />
+          {sessionId ? (
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              aria-label={`删除会话 ${sessionList.find((item) => item.id === sessionId)?.title ?? `#${sessionId}`}`}
+              onClick={async () => {
+                const currentSession = sessionList.find((item) => item.id === sessionId);
+                const label = currentSession?.title ?? `会话 #${sessionId}`;
+                if (!window.confirm(`确认删除"${label}"吗？此操作不可恢复。`)) {
+                  return;
+                }
+
+                setIsBootstrapping(true);
+                try {
+                  await deletePlanningSession(sessionId);
+                  await handleSessionDeleted(sessionId);
+                  void messageApi.success("会话已删除");
+                } catch (err: unknown) {
+                  void messageApi.error("删除会话失败: " + (err instanceof Error ? err.message : String(err)));
+                } finally {
+                  setIsBootstrapping(false);
+                }
+              }}
+            />
+          ) : null}
           <Button
             type="primary"
             size="small"
@@ -391,15 +435,7 @@ export function AITestPlanningPanel({
               if (!projectId) return;
               setIsBootstrapping(true);
               try {
-                const resp = await createPlanningSession({ project_id: projectId });
-                setSessionId(resp.session.id);
-                setRequirements(resp.session.requirements);
-                setMissingSlots(resp.session.missing_slots);
-                setSuggestedQuestions([]);
-                setPlan(resp.session.plan ?? null);
-                setTranscript(resp.messages);
-                setDrafts(resp.drafts);
-                localStorage.setItem("ai_planning_last_session", String(resp.session.id));
+                await createAndSelectSession();
                 await loadSessionList();
               } catch (err: unknown) {
                 void messageApi.error("创建会话失败: " + (err instanceof Error ? err.message : String(err)));
@@ -501,7 +537,7 @@ export function AITestPlanningPanel({
             <Input.TextArea
               aria-label="测试规划对话输入"
               autoSize={{ minRows: 1, maxRows: 4 }}
-              bordered={false}
+              variant="borderless"
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
               onKeyDown={(event) => {

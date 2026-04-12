@@ -9,6 +9,23 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-12
+
+- 任务：实现 AI Planning 会话删除功能，并修复 stale session 恢复路径
+- 执行动作：后端在 `backend/app/services/ai_planning.py` 新增 `delete_planning_session()`，并在 `backend/app/api/routes/ai_planning.py` 暴露 `DELETE /api/v1/ai-planning/sessions/{session_id}`；前端在 `frontend/src/services/api.ts` 新增 `deletePlanningSession()`，补齐 `request()` 对 `204 No Content` 的处理；`frontend/src/components/AITestPlanningPanel.tsx` 抽出 `applySessionDetail()` / `loadSessionDetail()` / `createAndSelectSession()` / `handleSessionDeleted()`，接入删除按钮、当前会话删除后的切换与本地缓存失效回退；同步更新 `frontend/src/types/api.ts` 的 planning 状态与 `tool_call` 类型；修正 `frontend/src/components/AITestPlanningPanel.test.tsx` 与 `frontend/src/services/api.test.ts` 以匹配当前真实 UI/交互；顺手清理 `frontend/src/main.tsx` 中不再被 Ant Design 类型接受的 `borderWidth` token，并将 `TextArea` 改为 `variant="borderless"`
+- 结果：AI Planning 会话现在支持删除；删除当前活跃会话后会自动切换到剩余会话或创建新会话；缓存的失效 `ai_planning_last_session` 不再导致面板卡在无活跃会话状态；前后端定向测试与前端类型检查通过
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_ai_planning_api.py -q`，结果 `10 passed`
+  - `cd frontend && npm run test -- src/services/api.test.ts src/components/AITestPlanningPanel.test.tsx`，结果 `19 passed`
+  - `cd frontend && npx tsc --noEmit`，结果通过
+- 后续：前端测试运行仍会打印 React Router future flag 提示与 `rc-textarea` 的 `NaN height` 警告，当前不影响通过；如需继续收口，可单独处理这些测试环境噪音
+
+- 任务：为 AI Planning 会话删除需求补写 implementation plan，并补充相关缺陷记录
+- 执行动作：核对 `backend/app/api/routes/ai_planning.py`、`backend/app/services/ai_planning.py`、`backend/app/schemas/ai_planning.py`、`frontend/src/services/api.ts`、`frontend/src/components/AITestPlanningPanel.tsx` 及现有前后端测试，确认仓库当前已具备会话列表与 save/execute 能力，仅缺删除链路；在 `docs/plan/2026-04-12-session-delete-implementation.md` 新增可执行计划；同时将 stale `ai_planning_last_session` 恢复失败后不回退创建新会话的问题记录到 `docs/bug-log.md`
+- 结果：形成了一份基于当前代码现状的会话删除实施计划，覆盖后端删除接口、前端删除入口、当前会话删除后的 fallback、stale localStorage 恢复修复、前后端测试与最终验证命令
+- 验证：静态核对计划文件与相关代码路径、测试文件、日志文件是否一致；未执行代码级测试
+- 后续：如继续实施，应先按计划在隔离 worktree/分支执行 TDD，再更新本日志中的验证结果
+
 ## 2026-04-08（更新 README）
 
 - 任务：更新 README.md 使其反映当前 M2 阶段的真实项目状态
