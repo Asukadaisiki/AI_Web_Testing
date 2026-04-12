@@ -393,6 +393,17 @@ def save_and_execute_selected_drafts(
     )
 
 
+def delete_planning_session(
+    session: Session,
+    planning_session_id: int,
+    *,
+    actor_user_id: int,
+) -> None:
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    session.delete(planning_session)
+    session.commit()
+
+
 def _get_session(session: Session, planning_session_id: int, *, actor_user_id: int) -> AIPlanningSession:
     planning_session = session.get(AIPlanningSession, planning_session_id)
     if planning_session is None:

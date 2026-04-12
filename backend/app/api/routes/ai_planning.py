@@ -22,6 +22,7 @@ from app.schemas.dsl import DSLModel
 from app.services.ai_planning import (
     AIPlanningAccessError,
     create_planning_session,
+    delete_planning_session,
     generate_planning_drafts,
     get_planning_session_detail,
     list_planning_sessions,
@@ -71,6 +72,19 @@ def get_planning_session_route(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AIPlanningAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_planning_session_route(
+    session_id: int,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> Response:
+    try:
+        delete_planning_session(session, session_id, actor_user_id=current_user.id)
+    except (EntityNotFoundError, AIPlanningAccessError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/sessions/{session_id}/messages", response_model=AIPlanningTurnResponse)

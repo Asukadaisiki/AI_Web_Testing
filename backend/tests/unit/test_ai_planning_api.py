@@ -450,3 +450,21 @@ def test_update_planning_draft_status_marks_imported(client, monkeypatch) -> Non
 
     assert update_response.status_code == 200
     assert update_response.json()["status"] == "imported"
+
+
+def test_delete_planning_session_removes_session_and_returns_204(client) -> None:
+    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    session_id = create_response.json()["session"]["id"]
+
+    delete_response = client.delete(f"/api/v1/ai-planning/sessions/{session_id}")
+
+    assert delete_response.status_code == 204
+
+    detail_response = client.get(f"/api/v1/ai-planning/sessions/{session_id}")
+    assert detail_response.status_code == 404
+
+
+def test_delete_planning_session_returns_404_when_missing(client) -> None:
+    response = client.delete("/api/v1/ai-planning/sessions/999")
+
+    assert response.status_code == 404
