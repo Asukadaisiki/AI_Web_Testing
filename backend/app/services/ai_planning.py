@@ -272,13 +272,25 @@ def generate_planning_drafts(
         session.flush()
         drafts.append(_to_draft_schema(record))
 
-    planning_session.status = "drafts_ready"
-    session.commit()
-    session.refresh(planning_session)
-
     message = "已根据所选场景生成 DSL 草案。"
     if invalid_scenarios:
         message += f" 注意：以下场景不存在于当前测试计划中：{', '.join(invalid_scenarios)}"
+
+    planning_session.status = "drafts_ready"
+    session.add(
+        AIPlanningMessage(
+            session_id=planning_session.id,
+            role="assistant",
+            turn_type="plan",
+            content=message,
+            structured_payload_json={
+                "type": "draft_generation_result",
+                "drafts": [item.model_dump(mode="json") for item in drafts],
+            },
+        )
+    )
+    session.commit()
+    session.refresh(planning_session)
 
     return AIPlanningTurnResponse(
         assistant_message=message,
@@ -342,11 +354,25 @@ def save_and_execute_selected_drafts(
         saved_cases.append(SavedCaseResult(case_id=case.id, case_name=case.name))
         draft.status = "imported"
 
-    session.commit()
-
     if not execute or not saved_cases:
+        assistant_message = f"已保存 {len(saved_cases)} 个测试用例。" + ("\n是否立即执行？" if saved_cases else "")
+        planning_session.status = "saving"
+        session.add(
+            AIPlanningMessage(
+                session_id=planning_session.id,
+                role="assistant",
+                turn_type="followup",
+                content=assistant_message,
+                structured_payload_json={
+                    "type": "save_result",
+                    "saved_cases": [item.model_dump(mode="json") for item in saved_cases],
+                },
+            )
+        )
+        session.commit()
+        session.refresh(planning_session)
         return AIPlanningTurnResponse(
-            assistant_message=f"已保存 {len(saved_cases)} 个测试用例。" + ("\n是否立即执行？" if saved_cases else ""),
+            assistant_message=assistant_message,
             session_status="saving",
             requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
             missing_slots=[],
@@ -380,8 +406,26 @@ def save_and_execute_selected_drafts(
         icon = "✅" if ex.status == "passed" else "❌"
         lines.append(f"{icon} {ex.case_name} — {ex.status} ({ex.passed_steps}/{ex.total_steps}步)")
 
+    assistant_message = "\n".join(lines)
+    planning_session.status = "completed"
+    session.add(
+        AIPlanningMessage(
+            session_id=planning_session.id,
+            role="assistant",
+            turn_type="plan",
+            content=assistant_message,
+            structured_payload_json={
+                "type": "execution_summary",
+                "saved_cases": [item.model_dump(mode="json") for item in saved_cases],
+                "execution_summaries": [item.model_dump(mode="json") for item in execution_summaries],
+            },
+        )
+    )
+    session.commit()
+    session.refresh(planning_session)
+
     return AIPlanningTurnResponse(
-        assistant_message="\n".join(lines),
+        assistant_message=assistant_message,
         session_status="completed",
         requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         missing_slots=[],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.schemas.ai_planning import (
@@ -12,6 +13,7 @@ from app.schemas.ai_planning import (
     AIPlanningToolCall,
     AIPlanningTurnResponse,
 )
+from app.schemas.executions import StoredCaseExecutionDetail
 from app.schemas.dsl import GenerateDslResponse
 
 
@@ -468,3 +470,139 @@ def test_delete_planning_session_returns_404_when_missing(client) -> None:
     response = client.delete("/api/v1/ai-planning/sessions/999")
 
     assert response.status_code == 404
+
+
+def test_save_and_execute_persists_execution_summary_message(client, db_session, monkeypatch) -> None:
+    from app.models import AIPlanningMessage, TestCase
+    from app.services import ai_planning as ai_planning_service
+
+    def fake_generate_dsl_case(session, payload):
+        return GenerateDslResponse.model_validate(
+            {
+                "generation_id": 401,
+                "case": {
+                    "name": "登录成功",
+                    "description": "generated from scenario",
+                    "base_url": "https://shop.example.com",
+                    "input_contract": [],
+                    "output_contract": [],
+                    "steps": [{"action": "goto", "value": "/login"}],
+                },
+                "supported_actions": ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+                "warnings": [],
+                "normalization_notes": [],
+                "generation_meta": {
+                    "model": "fake-model",
+                    "generation_mode": "draft",
+                    "import_mode": "replace",
+                    "prompt_variant": "baseline_draft",
+                    "context_profile": "blank_request",
+                    "active_governance_focus_reasons": [],
+                    "risk_flags": [],
+                    "base_url_source": "request",
+                    "base_url_backfilled": False,
+                    "repaired_invalid_actions": 0,
+                    "removed_invalid_steps": 0,
+                    "removed_invalid_contracts": 0,
+                    "preserve_contracts_applied": False,
+                    "used_current_case_context": False,
+                    "used_current_steps_context": False,
+                },
+            }
+        )
+
+    monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
+    monkeypatch.setattr(
+        ai_planning_service,
+        "run_planning_turn",
+        lambda **_: AIPlanningTurnResponse(
+            assistant_message="已生成测试规划。",
+            session_status="plan_ready",
+            requirements=AIPlanningRequirements(
+                app_under_test="商城后台",
+                business_goal="验证管理员登录",
+                entry_url_or_page="https://shop.example.com/login",
+                core_user_flow="输入账号密码并点击登录",
+                main_assertions=["跳转到 dashboard"],
+                test_data_or_account="admin@example.com",
+                scope_limits="不覆盖忘记密码",
+            ),
+            missing_slots=[],
+            suggested_questions=[],
+            plan=AIPlanningPlan.model_validate(_plan_response().model_dump(mode="json")),
+            drafts=[],
+            next_action="select_scenarios",
+            tool_calls=[],
+        ),
+    )
+    monkeypatch.setattr(
+        ai_planning_service,
+        "execute_case",
+        lambda session, case_id, payload: StoredCaseExecutionDetail.model_validate(
+            {
+                "id": 88,
+                "case_id": case_id,
+                "case_name": "登录成功",
+                "project_id": 1,
+                "triggered_by": 1,
+                "status": "passed",
+                "error_message": None,
+                "started_at": datetime.now(UTC),
+                "finished_at": datetime.now(UTC),
+                "duration_ms": 1234,
+                "total_steps": 1,
+                "failed_step_index": None,
+                "failure_category": None,
+                "failure_step_action": None,
+                "latest_url": "https://shop.example.com/secure",
+                "latest_screenshot_url": "/artifacts/executions/88/final.png",
+                "report": {
+                    "status": "passed",
+                    "steps": [
+                        {
+                            "step_index": 0,
+                            "action": "goto",
+                            "value": "/login",
+                            "status": "passed",
+                            "duration_ms": 1234,
+                        }
+                    ],
+                },
+            }
+        ),
+    )
+
+    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    session_id = create_response.json()["session"]["id"]
+    client.post(
+        f"/api/v1/ai-planning/sessions/{session_id}/messages",
+        json={"content": "请生成后台登录测试规划"},
+    )
+    drafts_response = client.post(
+        f"/api/v1/ai-planning/sessions/{session_id}/drafts:generate",
+        json={"scenario_keys": ["login_success"]},
+    )
+    draft_id = drafts_response.json()["drafts"][0]["id"]
+
+    response = client.post(
+        f"/api/v1/ai-planning/sessions/{session_id}/drafts:save-and-execute",
+        json={"draft_ids": [draft_id], "execute": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_status"] == "completed"
+    assert payload["execution_summaries"][0]["execution_id"] == 88
+
+    detail_response = client.get(f"/api/v1/ai-planning/sessions/{session_id}")
+    detail_payload = detail_response.json()
+    execution_messages = [
+        item
+        for item in detail_payload["messages"]
+        if (item.get("structured_payload") or {}).get("type") == "execution_summary"
+    ]
+    assert len(execution_messages) == 1
+    assert execution_messages[0]["structured_payload"]["execution_summaries"][0]["execution_id"] == 88
+
+    assert db_session.query(TestCase).count() == 1
+    assert db_session.query(AIPlanningMessage).filter(AIPlanningMessage.session_id == session_id).count() >= 3

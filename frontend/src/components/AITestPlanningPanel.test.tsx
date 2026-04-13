@@ -408,3 +408,190 @@ test("缓存的最后会话不存在时会自动创建新会话", async () => {
     expect(localStorage.getItem("ai_planning_last_session")).toBe("5");
   });
 });
+
+test("保存并执行后会重新加载会话详情并展示持久化的执行摘要", async () => {
+  vi.mocked(api.createPlanningSession).mockResolvedValue({
+    session: {
+      id: 5,
+      actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
+      title: "当前会话",
+      status: "drafts_ready",
+      requirements: {
+        app_under_test: "商城后台",
+        business_goal: "验证管理员登录",
+        entry_url_or_page: "https://shop.example.com/login",
+        core_user_flow: "输入账号密码并点击登录",
+        main_assertions: ["跳转到 dashboard"],
+        test_data_or_account: "admin@example.com",
+        scope_limits: "不覆盖忘记密码",
+      },
+      plan: {
+        summary: "商城后台登录测试方案",
+        assumptions: [],
+        risks: [],
+        scenarios: [
+          {
+            scenario_key: "login_success",
+            title: "登录成功",
+            goal: "验证管理员可以登录后台",
+            preconditions: [],
+            priority: "high",
+            test_data_requirements: [],
+            assertions: ["跳转到 dashboard"],
+            draft_prompt: "为登录成功场景生成 DSL",
+          },
+        ],
+      },
+      missing_slots: [],
+      last_error_message: null,
+      created_at: "2026-04-13T10:00:00",
+      updated_at: "2026-04-13T10:00:00",
+    },
+    messages: [],
+    drafts: [
+      {
+        id: 11,
+        session_id: 5,
+        scenario_key: "login_success",
+        title: "登录成功",
+        status: "generated",
+        dsl_generation_id: 33,
+        dsl_case: {
+          name: "登录成功",
+          description: "草案",
+          base_url: "https://shop.example.com",
+          input_contract: [],
+          output_contract: [],
+          steps: [{ action: "goto", value: "/login" }],
+        },
+        warnings: [],
+        normalization_notes: [],
+        error_message: null,
+        created_at: "2026-04-13T10:00:00",
+        updated_at: "2026-04-13T10:00:00",
+      },
+    ],
+  });
+  vi.mocked(api.saveAndExecuteDrafts).mockResolvedValue({
+    assistant_message: "测试执行完成",
+    session_status: "completed",
+    requirements: {
+      app_under_test: "商城后台",
+      business_goal: "验证管理员登录",
+      entry_url_or_page: "https://shop.example.com/login",
+      core_user_flow: "输入账号密码并点击登录",
+      main_assertions: ["跳转到 dashboard"],
+      test_data_or_account: "admin@example.com",
+      scope_limits: "不覆盖忘记密码",
+    },
+    missing_slots: [],
+    suggested_questions: [],
+    plan: null,
+    drafts: [],
+    next_action: "ask_followup",
+    saved_cases: [{ case_id: 101, case_name: "登录成功", status: "saved" }],
+    execution_summaries: [
+      {
+        execution_id: 88,
+        case_id: 101,
+        case_name: "登录成功",
+        status: "passed",
+        total_steps: 1,
+        passed_steps: 1,
+        failed_steps: 0,
+        duration_ms: 1234,
+        screenshot_url: "/artifacts/executions/88/final.png",
+        report_url: "/run/88",
+      },
+    ],
+  });
+  vi.mocked(api.getPlanningSession).mockResolvedValue({
+    session: {
+      id: 5,
+      actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
+      title: "当前会话",
+      status: "completed",
+      requirements: {
+        app_under_test: "商城后台",
+        business_goal: "验证管理员登录",
+        entry_url_or_page: "https://shop.example.com/login",
+        core_user_flow: "输入账号密码并点击登录",
+        main_assertions: ["跳转到 dashboard"],
+        test_data_or_account: "admin@example.com",
+        scope_limits: "不覆盖忘记密码",
+      },
+      plan: null,
+      missing_slots: [],
+      last_error_message: null,
+      created_at: "2026-04-13T10:00:00",
+      updated_at: "2026-04-13T10:05:00",
+    },
+    messages: [
+      {
+        id: 99,
+        session_id: 5,
+        role: "assistant",
+        turn_type: "plan",
+        content: "测试执行完成",
+        structured_payload: {
+          type: "execution_summary",
+          execution_summaries: [
+            {
+              execution_id: 88,
+              case_id: 101,
+              case_name: "登录成功",
+              status: "passed",
+              total_steps: 1,
+              passed_steps: 1,
+              failed_steps: 0,
+              duration_ms: 1234,
+              screenshot_url: "/artifacts/executions/88/final.png",
+              report_url: "/run/88",
+            },
+          ],
+        },
+        created_at: "2026-04-13T10:05:00",
+      },
+    ],
+    drafts: [
+      {
+        id: 11,
+        session_id: 5,
+        scenario_key: "login_success",
+        title: "登录成功",
+        status: "imported",
+        dsl_generation_id: 33,
+        dsl_case: {
+          name: "登录成功",
+          description: "草案",
+          base_url: "https://shop.example.com",
+          input_contract: [],
+          output_contract: [],
+          steps: [{ action: "goto", value: "/login" }],
+        },
+        warnings: [],
+        normalization_notes: [],
+        error_message: null,
+        created_at: "2026-04-13T10:00:00",
+        updated_at: "2026-04-13T10:05:00",
+      },
+    ],
+  });
+
+  renderWithProviders(
+    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+  );
+
+  expect(await screen.findByText("AI Planning")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择场景 登录成功" }));
+  await userEvent.click(screen.getByRole("button", { name: "保存并执行" }));
+
+  await waitFor(() => {
+    expect(api.saveAndExecuteDrafts).toHaveBeenCalledWith(5, [11], true);
+    expect(api.getPlanningSession).toHaveBeenCalledWith(5);
+  });
+});

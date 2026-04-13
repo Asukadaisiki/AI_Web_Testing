@@ -29,6 +29,37 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-045 | AI planning“保存并执行草案”链路被 DSL 生成配置阻断，且当前实现不支持持久化执行进度/摘要
+
+- 日期：2026-04-13
+- 状态：in_progress
+- 来源：白盒排查 / 对话 `session_id=27`
+- 描述：AI planning 场景中，对话规划成功后进入 DSL 草案生成阶段，但 `session 27` 的唯一草案直接落为 `failed`，错误为 `Expecting value: line 1 column 1 (char 0)`，导致后续“保存并执行”无法真正创建用例或执行。白盒复现确认 `backend/.env` 中 `AI_DSL_BASE_URL=https://api.unself.cn`，而 `backend/app/ai/dsl_generator.py` 会拼接为 `https://api.unself.cn/chat/completions`；该地址当前返回 `200 text/html` 站点首页，而不是 OpenAI 兼容 JSON，因此 `json.loads(response.read().decode("utf-8"))` 在 `_call_llm()` 内直接抛出 `JSONDecodeError`。此外，即便 DSL 生成成功，当前实现也没有 SSE/流式执行接口，`generate_planning_drafts()` 与 `save_and_execute_selected_drafts()` 只返回即时响应，不把生成结果、执行阶段或执行摘要持久化到 `ai_planning_messages`，刷新后无法从会话详情恢复这些信息。
+- 复现步骤：
+  1. 使用当前 `.env` 配置触发 AI planning 生成草案
+  2. 查看 PostgreSQL 中 `ai_planning_drafts`，观察 `session_id=27` 的草案状态为 `failed`，错误为 `Expecting value: line 1 column 1 (char 0)`
+  3. 查看 `test_cases` / `test_case_runs`，观察没有对应新增记录
+  4. 按当前配置向 `POST https://api.unself.cn/chat/completions` 发起最小请求，观察响应为 `200 text/html`，正文为站点首页 HTML
+  5. 检查 `backend/app/services/ai_planning.py`，观察 draft 生成与 save-and-execute 都没有写入 `AIPlanningMessage`，也不存在流式推送接口
+- 影响：当前产品承诺的“勾选保存并执行后自动创建用例、在对话框流式展示执行过程、输出简洁报告并附详细链接”在现状下不能成立；一旦 DSL 生成配置错误，用户只会停留在失败草案状态，且错误信息不会以完整执行报告方式呈现
+- 根因：
+  - 配置层：`AI_DSL_BASE_URL` 指向站点根路径而非 OpenAI 兼容 API 根路径
+  - 健壮性层：`_call_llm()` 未校验 `Content-Type` 和非 JSON 响应，`JSONDecodeError` 会在持久化失败记录前直接冒泡
+  - 产品实现层：planning 会话消息模型未覆盖“draft generation result / execution progress / execution summary”，前端也没有消费 SSE 的链路
+- 建议处理：
+  - 先修正 `AI_DSL_BASE_URL`，并为 `_call_llm()` 增加状态码、`Content-Type`、响应体截断日志与统一 `DslGenerationError` 包装
+  - 在 `generate_planning_drafts()` / `save_and_execute_selected_drafts()` 中持久化 assistant message，至少保存草案生成结果和 execution summary
+  - 如要满足预期体验，再补充后端执行事件流接口与前端流式订阅/展示
+- 处理进展：
+  - 已修正本地 `AI_DSL_BASE_URL` 为 `/v1` 接口根路径
+  - 已为 `_call_llm()` 增加非 JSON/HTML 响应防御，避免再次直接抛原始 `JSONDecodeError`
+  - 已将 draft 生成结果、save result、execution summary 持久化到 `ai_planning_messages`，并让前端保存/执行后回读会话详情
+  - 剩余未完成项：真正的执行中流式事件推送与逐步展示
+- 验证：
+  - PostgreSQL 实查 `ai_planning_sessions` / `ai_planning_messages` / `ai_planning_drafts` / `test_cases` / `test_case_runs`
+  - 最小 HTTP 复现 `POST https://api.unself.cn/chat/completions`
+  - 静态核对 `backend/.env`、`backend/app/ai/dsl_generator.py`、`backend/app/services/ai_planning.py`、`frontend/src/components/AITestPlanningPanel.tsx`
+
 ## BUG-044 | AI Planning 面板缓存失效会话时不会回退创建新会话
 
 - 日期：2026-04-12

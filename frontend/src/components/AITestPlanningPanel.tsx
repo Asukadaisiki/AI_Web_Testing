@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Checkbox, Input, Progress, Select, Tag, Typography, message } from "antd";
 import { DeleteOutlined, SendOutlined } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   createPlanningSession,
@@ -114,6 +115,7 @@ export function AITestPlanningPanel({
   draftImportLabel,
 }: AITestPlanningPanelProps) {
   const [messageApi, contextHolder] = message.useMessage();
+  const queryClient = useQueryClient();
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [transcript, setTranscript] = useState<AIPlanningMessage[]>([]);
   const [requirements, setRequirements] = useState<AIPlanningRequirements>(DEFAULT_REQUIREMENTS);
@@ -651,6 +653,8 @@ export function AITestPlanningPanel({
                       drafts.filter((d) => selectedScenarioKeys.includes(d.scenario_key)).map((d) => d.id),
                       false,
                     );
+                    await queryClient.invalidateQueries({ queryKey: ["cases"] });
+                    await loadSessionDetail(sessionId);
                     void messageApi.success(`已保存 ${resp.saved_cases?.length ?? 0} 个用例`);
                     await loadSessionList();
                   } catch (err: unknown) {
@@ -671,27 +675,14 @@ export function AITestPlanningPanel({
                   if (!sessionId || selectedScenarioKeys.length === 0) return;
                   setIsSending(true);
                   try {
-                    const resp = await saveAndExecuteDrafts(
+                    await saveAndExecuteDrafts(
                       sessionId,
                       drafts.filter((d) => selectedScenarioKeys.includes(d.scenario_key)).map((d) => d.id),
                       true,
                     );
-                    if (resp.execution_summaries && resp.execution_summaries.length > 0) {
-                      const summaryMsg: AIPlanningMessage = {
-                        id: -Date.now(),
-                        session_id: sessionId,
-                        role: "assistant",
-                        turn_type: "plan" as const,
-                        content: resp.assistant_message,
-                        structured_payload: {
-                          type: "execution_summary",
-                          execution_summaries: resp.execution_summaries,
-                          saved_cases: resp.saved_cases,
-                        },
-                        created_at: new Date().toISOString(),
-                      };
-                      setTranscript((prev) => [...prev, summaryMsg]);
-                    }
+                    await queryClient.invalidateQueries({ queryKey: ["cases"] });
+                    await queryClient.invalidateQueries({ queryKey: ["executions"] });
+                    await loadSessionDetail(sessionId);
                     await loadSessionList();
                   } catch (err: unknown) {
                     void messageApi.error("执行失败: " + (err instanceof Error ? err.message : String(err)));

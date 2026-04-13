@@ -9,6 +9,29 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-13 22:20
+
+- 任务：修复 AI planning“保存并执行草案”链路中的 DSL 生成失败与执行摘要不持久化问题
+- 执行动作：在 `backend/app/ai/dsl_generator.py` 为 LLM 非 JSON/HTML 响应补统一错误包装与诊断提示；修正 `backend/.env` 中本地 `AI_DSL_BASE_URL` 为 `/v1` 接口根路径；在 `backend/app/services/ai_planning.py` 为 draft 生成结果、仅保存结果、保存并执行后的 execution summary 持久化 `AIPlanningMessage`；在 `frontend/src/components/AITestPlanningPanel.tsx` 中将保存/执行完成后的 UI 刷新改为回读 `getPlanningSession(sessionId)`，并失效 `cases` / `executions` 查询；补充 `backend/tests/unit/test_dsl_generator.py`、扩展 `backend/tests/unit/test_ai_planning_api.py` 与 `frontend/src/components/AITestPlanningPanel.test.tsx`
+- 结果：AI planning 现在不会再因 HTML 响应直接抛原始 `JSONDecodeError`；本地 DSL 配置已指向正确的 OpenAI 兼容接口根路径；保存并执行后，执行摘要会落库并可通过会话详情重新加载显示，前端不再只依赖临时内存消息
+- 验证：
+  - `backend\.venv\Scripts\python.exe -m pytest backend\tests\unit\test_dsl_generator.py backend\tests\unit\test_ai_planning_api.py -q`，结果 `12 passed`
+  - `cd frontend && npm run test -- src/components/AITestPlanningPanel.test.tsx`，结果 `5 passed`
+  - `cd frontend && npx tsc --noEmit`，结果通过
+  - 按修正后的 `AI_DSL_BASE_URL` 进行最小 HTTP 验证，返回 `401 application/json`，说明已命中 API 接口而非 HTML 首页
+- 后续：当前仍未实现真正的执行进度流式输出，若要达到“对话框实时展示步骤状态”的目标，还需补后端事件流接口与前端订阅展示
+
+## 2026-04-13 22:15
+
+- 任务：对白盒排查 AI planning“保存并执行草案”链路失败，定位对话 `session_id=27` 为什么没有生成用例、没有执行结果、没有报告摘要
+- 执行动作：检索 `backend/app/services/ai_planning.py`、`backend/app/ai/dsl_generator.py`、`frontend/src/components/AITestPlanningPanel.tsx`、`frontend/src/pages/PlanningPage.tsx` 等调用链；读取 PostgreSQL 中 `ai_planning_sessions` / `ai_planning_messages` / `ai_planning_drafts` / `test_cases` / `test_case_runs` 实际数据；按当前 `.env` 的 `AI_DSL_BASE_URL` 复现一次最小 LLM 请求并检查返回体
+- 结果：已确认 `session 27` 并未进入保存或执行阶段，数据库中没有新增 `test_cases` 与 `test_case_runs`；唯一草案处于 `failed`，错误为 `Expecting value: line 1 column 1 (char 0)`；根因是 `backend/.env` 的 `AI_DSL_BASE_URL=https://api.unself.cn` 与代码在 `backend/app/ai/dsl_generator.py` 中拼接的 `/chat/completions` 组合后命中了站点 HTML 页面而非 OpenAI 兼容 JSON 接口，导致 `json.loads(response.read())` 直接抛异常；同时确认当前实现不存在 SSE/流式执行接口，且 draft 生成/保存执行结果都没有持久化为 planning message，因此用户期望的“对话框持续输出执行步骤和最终摘要”在现状下无法成立
+- 验证：
+  - 数据库核查：`session 27` 状态为 `drafts_ready`，消息仅 2 条（用户 + 规划结果），`ai_planning_drafts` 中仅 1 条失败草案，`test_cases` / `test_case_runs` 无对应新增记录
+  - 最小复现：按当前 `AI_DSL_BASE_URL` 发起 `POST https://api.unself.cn/chat/completions`，返回 `200 text/html`，正文为站点首页 HTML，不是 JSON
+  - 静态核对：`backend/.env`、`backend/app/ai/dsl_generator.py`、`backend/app/services/ai_planning.py`、`frontend/src/components/AITestPlanningPanel.tsx`
+- 后续：建议优先修正 `AI_DSL_BASE_URL` 为真实 OpenAI 兼容 API 根路径，并在代码中为非 JSON / 非 `application/json` 响应补防御；如果要满足产品预期，还需补充执行状态持久化与前端流式消费链路
+
 ## 2026-04-12
 
 - 任务：实现 AI Planning 会话删除功能，并修复 stale session 恢复路径

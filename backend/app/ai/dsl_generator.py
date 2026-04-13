@@ -1299,9 +1299,50 @@ def _call_llm(
         method="POST",
     )
     with request.urlopen(http_request, timeout=timeout_seconds) as response:
-        raw_payload = json.loads(response.read().decode("utf-8"))
+        raw_body = response.read()
+        response_text = raw_body.decode("utf-8", errors="replace")
+        content_type = ""
+        if hasattr(response, "headers") and response.headers is not None:
+            content_type = response.headers.get("Content-Type", "")
+        try:
+            raw_payload = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise DslGenerationError(
+                _build_non_json_response_error(
+                    endpoint=endpoint,
+                    base_url=base_url,
+                    content_type=content_type,
+                    response_text=response_text,
+                )
+            ) from exc
 
     return _extract_message_content(raw_payload)
+
+
+def _build_non_json_response_error(
+    *,
+    endpoint: str,
+    base_url: str,
+    content_type: str,
+    response_text: str,
+) -> str:
+    normalized_preview = re.sub(r"\s+", " ", response_text).strip()[:160]
+    hint = ""
+    if _looks_like_html_response(response_text):
+        hint = " 响应看起来像 HTML 页面，请检查 AI_DSL_BASE_URL 是否指向了真正的 OpenAI 兼容 API 根路径。"
+        if not base_url.rstrip("/").endswith("/v1"):
+            hint += " 当前 base_url 末尾不包含 /v1。"
+    return (
+        "AI DSL 生成接口返回了无法解析的非 JSON 响应。"
+        f" endpoint={endpoint}"
+        f" content_type={content_type or 'unknown'}"
+        f" preview={normalized_preview or '<empty>'}.{hint}"
+    )
+
+
+def _looks_like_html_response(response_text: str) -> bool:
+    normalized = response_text.lstrip().casefold()
+    return normalized.startswith("<!doctype html") or normalized.startswith("<html")
 
 
 def _should_use_glm_chat_completion(*, base_url: str, model: str) -> bool:
