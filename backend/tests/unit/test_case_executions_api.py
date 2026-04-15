@@ -20,6 +20,8 @@ from app.schemas.executions import (
     ViewportSnapshot,
 )
 from app.runners import RunnerExecutionError, RunnerInterventionError
+from app.runners.playwright_runner import StepStreamEvent, execute_case_with_playwright_streaming
+from app.schemas.executions import CaseExecutionRequest
 
 
 def test_execute_case_success(client, monkeypatch) -> None:
@@ -1416,3 +1418,128 @@ def test_get_executions_overview_supports_scope_filters_and_automation_metrics(c
     assert case_payload["automation_rate"] == 1.0
     assert case_payload["intervention_count"] == 0
     assert case_payload["intervention_rate"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Streaming execution tests
+# ---------------------------------------------------------------------------
+
+
+def test_execute_case_streaming_yields_step_events_and_returns_detail(client, monkeypatch, db_session) -> None:
+    """execute_case_streaming should yield StepStreamEvent per step, return detail via StopIteration."""
+    create_response = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "流式用例",
+            "base_url": "https://stream.example.com",
+            "steps": [
+                {"action": "goto", "value": "/home"},
+                {"action": "click", "target": "提交按钮"},
+            ],
+        },
+    )
+    case_id = create_response.json()["id"]
+
+    fake_evidence = [
+        StepExecutionEvidence(
+            step_index=0, action="goto", value="/home",
+            status="passed", duration_ms=30,
+        ),
+        StepExecutionEvidence(
+            step_index=1, action="click", target="提交按钮",
+            status="passed", duration_ms=55,
+        ),
+    ]
+
+    def fake_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None):
+        for index, step in enumerate(case.steps):
+            yield StepStreamEvent(
+                type="step_start",
+                step_index=index,
+                action=step.action,
+                target=getattr(step, "target", None),
+                value=getattr(step, "value", None),
+            )
+            yield StepStreamEvent(
+                type="step_complete",
+                step_index=index,
+                action=step.action,
+                status="passed",
+                duration_ms=fake_evidence[index].duration_ms,
+            )
+        return fake_evidence
+
+    monkeypatch.setattr(
+        execution_service,
+        "execute_case_with_playwright_streaming",
+        fake_streaming,
+    )
+
+    stream = execution_service.execute_case_streaming(
+        db_session, case_id, CaseExecutionRequest(actor_user_id=1),
+    )
+    events = []
+    detail = None
+    try:
+        while True:
+            events.append(next(stream))
+    except StopIteration as stop:
+        detail = stop.value
+
+    assert [event.type for event in events] == [
+        "step_start", "step_complete",
+        "step_start", "step_complete",
+    ]
+    assert events[0].action == "goto"
+    assert events[1].status == "passed"
+    assert events[2].action == "click"
+    assert detail is not None
+    assert detail.status == "passed"
+    assert detail.case_name == "流式用例"
+
+
+def test_execute_case_streaming_cancellation_raises_error(client, monkeypatch, db_session) -> None:
+    """When cancel_event is set mid-stream, a RunnerCancelledError should surface."""
+    from threading import Event
+    from app.runners.playwright_runner import RunnerCancelledError
+
+    create_response = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "取消用例",
+            "base_url": "https://cancel.example.com",
+            "steps": [{"action": "goto", "value": "/page"}],
+        },
+    )
+    case_id = create_response.json()["id"]
+
+    cancel_event = Event()
+
+    def fake_streaming_cancel(*, case, execution_id, base_url, cancel_event=None, correction_store=None):
+        yield StepStreamEvent(type="step_start", step_index=0, action="goto", value="/page")
+        cancel_event.set()
+        raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
+
+    monkeypatch.setattr(
+        execution_service,
+        "execute_case_with_playwright_streaming",
+        fake_streaming_cancel,
+    )
+
+    stream = execution_service.execute_case_streaming(
+        db_session, case_id, CaseExecutionRequest(actor_user_id=1),
+        cancel_event=cancel_event,
+    )
+    events = [next(stream)]
+    try:
+        while True:
+            events.append(next(stream))
+    except RunnerCancelledError:
+        pass
+
+    assert len(events) == 1
+    assert events[0].type == "step_start"

@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
+from hashlib import sha1
 import hashlib
 import re
-from typing import cast
+from threading import Event
+from typing import Generator, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +18,7 @@ from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.models import TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, RunnerInterventionError, execute_case_with_playwright
+from app.runners.playwright_runner import RunnerCancelledError, StepStreamEvent, execute_case_with_playwright_streaming
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
     CaseExecutionRequest,
@@ -81,6 +84,79 @@ def execute_case_with_override(
         case_override=case_override,
         precomputed_error=precomputed_error,
     )
+
+
+def execute_case_streaming(
+    session: Session,
+    case_id: int,
+    payload: CaseExecutionRequest,
+    *,
+    cancel_event: Event | None = None,
+) -> Generator[StepStreamEvent, None, StoredCaseExecutionDetail]:
+    """Stream step events for a case execution.
+
+    Yields :class:`StepStreamEvent` objects and returns the persisted
+    :class:`StoredCaseExecutionDetail` via ``StopIteration.value``.
+    """
+    record = session.get(TestCase, case_id)
+    if record is None:
+        raise EntityNotFoundError(f"Case {case_id} not found.")
+    _ensure_user_exists(session, payload.actor_user_id)
+
+    normalized_case = DSLCase.model_validate(record.dsl)
+    execution = TestCaseRun(
+        case_id=record.id,
+        project_id=record.project_id,
+        triggered_by=payload.actor_user_id,
+        status="running",
+    )
+    session.add(execution)
+    session.commit()
+    session.refresh(execution)
+
+    effective_base_url = payload.base_url or normalized_case.base_url
+    missing_base_url_error = _build_missing_base_url_error(normalized_case, effective_base_url)
+
+    try:
+        if missing_base_url_error is not None:
+            report = build_execution_report(status="failed", steps=[_with_artifact_url(missing_base_url_error)])
+            execution.status = "failed"
+            execution.report = report.model_dump(mode="json")
+            execution.error_message = missing_base_url_error.error_message
+        else:
+            step_results = yield from execute_case_with_playwright_streaming(
+                case=normalized_case,
+                execution_id=execution.id,
+                base_url=effective_base_url,
+                cancel_event=cancel_event,
+                correction_store=SQLAlchemyCorrectionStore(session),
+            )
+            step_results = [_with_artifact_url(step) for step in step_results]
+            report = build_execution_report(status="passed", steps=step_results)
+            execution.status = "passed"
+            execution.report = report.model_dump(mode="json")
+            execution.error_message = None
+    except RunnerInterventionError as exc:
+        step_results = [_with_artifact_url(step) for step in exc.step_results]
+        report = build_execution_report(status="failed", steps=step_results)
+        execution.status = "needs_intervention"
+        execution.report = report.model_dump(mode="json")
+        execution.error_message = str(exc)
+    except RunnerExecutionError as exc:
+        step_results = [_with_artifact_url(step) for step in exc.step_results]
+        report = build_execution_report(status="failed", steps=step_results)
+        execution.status = "failed"
+        execution.report = report.model_dump(mode="json")
+        execution.error_message = str(exc)
+    except RunnerCancelledError:
+        execution.status = "failed"
+        execution.error_message = "Execution cancelled by user."
+        raise
+    execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
+    session.add(execution)
+    session.commit()
+    session.refresh(execution)
+    return _to_execution_detail(session, execution, case_name=record.name)
 
 
 def mark_execution_failed(
