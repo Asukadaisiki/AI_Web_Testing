@@ -879,3 +879,72 @@ export interface ExecutionsOverview {
   top_failed_cases: TopFailedCase[];
   failure_root_causes: FailureRootCause[];
 }
+
+// ---------------------------------------------------------------------------
+// Execution stream events (WebSocket)
+// ---------------------------------------------------------------------------
+
+export interface SaveProgressEvent {
+  type: "save_progress";
+  saved_count: number;
+  total: number;
+  case_name: string;
+}
+
+export interface CaseStartEvent {
+  type: "case_start";
+  case_id: number;
+  case_name: string;
+  total_steps: number;
+}
+
+export interface StepStartEvent {
+  type: "step_start";
+  case_id: number;
+  step_index: number;
+  action: string;
+  target?: string | null;
+  value?: string | null;
+}
+
+export interface StepCompleteEvent {
+  type: "step_complete";
+  case_id: number;
+  step_index: number;
+  action: string;
+  status: "passed" | "failed";
+  duration_ms: number;
+}
+
+export interface ExecutionSummaryStreamEvent {
+  type: "execution_summary";
+  message: string;
+  structured_payload: {
+    type: "execution_summary";
+    saved_cases: SavedCaseResult[];
+    execution_summaries: ExecutionSummaryResult[];
+  };
+}
+
+export interface CancelledEvent {
+  type: "cancelled";
+}
+
+export interface DoneEvent {
+  type: "done";
+}
+
+export interface ErrorEvent {
+  type: "error";
+  message: string;
+}
+
+export type ExecutionStreamEvent =
+  | SaveProgressEvent
+  | CaseStartEvent
+  | StepStartEvent
+  | StepCompleteEvent
+  | ExecutionSummaryStreamEvent
+  | CancelledEvent
+  | DoneEvent
+  | ErrorEvent;
