@@ -38,3 +38,18 @@ def require_demo_user(
             detail="Demo user 1 is missing.",
         )
     return user
+
+
+def get_demo_user_or_raise(session: Session, *, user_id: int | None = None) -> User:
+    """Lookup a user by id or fall back to the default demo user.
+
+    Used by the WebSocket route where FastAPI dependency injection is not available.
+    """
+    resolved_user_id = user_id or DEFAULT_DEMO_USER_ID
+    user = get_user_by_id(session, resolved_user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive.",
+        )
+    return user

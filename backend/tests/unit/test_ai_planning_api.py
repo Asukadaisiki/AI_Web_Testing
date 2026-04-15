@@ -606,3 +606,119 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
 
     assert db_session.query(TestCase).count() == 1
     assert db_session.query(AIPlanningMessage).filter(AIPlanningMessage.session_id == session_id).count() >= 3
+
+
+# ---------------------------------------------------------------------------
+# WebSocket streaming tests
+# ---------------------------------------------------------------------------
+
+
+def _seed_planning_session_with_drafts(client):
+    """Helper: create a planning session, generate plan + drafts, return session_id and draft_ids."""
+    from app.services import ai_planning as ai_planning_service
+
+    # The monkeypatching for run_planning_turn and generate_dsl_case is done by the caller.
+    # We rely on the fact that the test client already has them patched.
+    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    session_id = create_response.json()["session"]["id"]
+    return session_id
+
+
+def test_ai_planning_ws_streams_events_in_order(client, monkeypatch, db_session) -> None:
+    import app.services.ai_planning_streaming as ai_planning_streaming
+    import app.api.routes.ai_planning as ai_planning_routes
+    from app.services import ai_planning as ai_planning_service
+
+    monkeypatch.setattr(
+        ai_planning_service,
+        "run_planning_turn",
+        lambda **_: AIPlanningTurnResponse(
+            assistant_message="已生成测试规划。",
+            session_status="plan_ready",
+            requirements=AIPlanningRequirements(
+                app_under_test="商城后台",
+                business_goal="验证管理员登录",
+            ),
+            missing_slots=[],
+            suggested_questions=[],
+            plan=AIPlanningPlan.model_validate(_plan_response().model_dump(mode="json")),
+            drafts=[],
+            next_action="select_scenarios",
+            tool_calls=[],
+        ),
+    )
+
+    def fake_generate_dsl_case(session, payload):
+        return GenerateDslResponse.model_validate({
+            "generation_id": 501,
+            "case": {
+                "name": "登录成功",
+                "description": "generated",
+                "base_url": "https://shop.example.com",
+                "input_contract": [],
+                "output_contract": [],
+                "steps": [{"action": "goto", "value": "/login"}],
+            },
+            "supported_actions": ["goto"],
+            "warnings": [],
+            "normalization_notes": [],
+            "generation_meta": {
+                "model": "fake", "generation_mode": "draft", "import_mode": "replace",
+                "prompt_variant": "baseline_draft", "context_profile": "blank_request",
+                "active_governance_focus_reasons": [], "risk_flags": [],
+                "base_url_source": "request", "base_url_backfilled": False,
+                "repaired_invalid_actions": 0, "removed_invalid_steps": 0,
+                "removed_invalid_contracts": 0, "preserve_contracts_applied": False,
+                "used_current_case_context": False, "used_current_steps_context": False,
+            },
+        })
+
+    monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
+
+    session_id = _seed_planning_session_with_drafts(client)
+    drafts_response = client.post(
+        f"/api/v1/ai-planning/sessions/{session_id}/drafts:generate",
+        json={"scenario_keys": ["login_success"]},
+    )
+    draft_id = drafts_response.json()["drafts"][0]["id"]
+
+    async def fake_stream(**kwargs):
+        yield {"type": "save_progress", "saved_count": 1, "total": 1, "case_name": "登录成功"}
+        yield {"type": "case_start", "case_id": 99, "case_name": "登录成功", "total_steps": 1}
+        yield {"type": "step_start", "case_id": 99, "step_index": 0, "action": "goto"}
+        yield {"type": "step_complete", "case_id": 99, "step_index": 0, "action": "goto", "status": "passed", "duration_ms": 100}
+        yield {"type": "done"}
+
+    monkeypatch.setattr(ai_planning_streaming, "stream_save_and_execute", fake_stream)
+    monkeypatch.setattr(ai_planning_routes, "stream_save_and_execute", fake_stream)
+
+    with client.websocket_connect(f"/api/v1/ai-planning/sessions/{session_id}/ws?user_id=1") as ws:
+        ws.send_json({"type": "execute", "draft_ids": [draft_id]})
+        events = []
+        for _ in range(5):
+            data = ws.receive_json()
+            events.append(data)
+            if data["type"] == "done":
+                break
+
+    assert [e["type"] for e in events] == [
+        "save_progress", "case_start", "step_start", "step_complete", "done",
+    ]
+
+
+def test_ai_planning_ws_sends_cancelled_event_on_cancel(client, monkeypatch, db_session) -> None:
+    import app.services.ai_planning_streaming as ai_planning_streaming
+    import app.api.routes.ai_planning as ai_planning_routes
+
+    session_id = _seed_planning_session_with_drafts(client)
+
+    async def fake_stream(*, cancel_event=None, **kwargs):
+        yield {"type": "save_progress", "saved_count": 0, "total": 1, "case_name": "test"}
+
+    monkeypatch.setattr(ai_planning_streaming, "stream_save_and_execute", fake_stream)
+    monkeypatch.setattr(ai_planning_routes, "stream_save_and_execute", fake_stream)
+
+    with client.websocket_connect(f"/api/v1/ai-planning/sessions/{session_id}/ws?user_id=1") as ws:
+        ws.send_json({"type": "cancel"})
+        data = ws.receive_json()
+        assert data["type"] == "cancelled"

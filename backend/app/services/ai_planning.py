@@ -29,7 +29,7 @@ from app.schemas.dsl import GenerateDslRequest
 from app.schemas.executions import CaseExecutionRequest
 from app.services.cases import EntityNotFoundError, _ensure_project_member, create_case
 from app.services.dsl import generate_dsl_case
-from app.services.executions import execute_case
+from app.services.executions import execute_case, execute_case_streaming
 
 
 logger = logging.getLogger(__name__)
@@ -435,6 +435,147 @@ def save_and_execute_selected_drafts(
         saved_cases=saved_cases,
         execution_summaries=execution_summaries,
     )
+
+
+def save_and_execute_selected_drafts_streaming(
+    session: Session,
+    planning_session_id: int,
+    draft_ids: list[int],
+    actor_user_id: int,
+    *,
+    cancel_event=None,
+):
+    """Generator version of save_and_execute_selected_drafts for WebSocket streaming.
+
+    Yields progress event dicts. After all cases complete, persists the execution
+    summary message and yields a ``done`` event.
+    """
+    from threading import Event as ThreadEvent
+    from app.runners.playwright_runner import RunnerCancelledError
+
+    if cancel_event is None:
+        cancel_event = ThreadEvent()
+
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+
+    drafts = (
+        session.query(AIPlanningDraft)
+        .filter(
+            AIPlanningDraft.session_id == planning_session_id,
+            AIPlanningDraft.id.in_(draft_ids),
+        )
+        .all()
+    )
+
+    saved_cases: list[SavedCaseResult] = []
+    for draft in drafts:
+        if cancel_event.is_set():
+            raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
+        if not draft.dsl_case_json:
+            continue
+        case_payload = CaseCreateRequest(
+            project_id=planning_session.project_id,
+            actor_user_id=actor_user_id,
+            **draft.dsl_case_json,
+        )
+        case = create_case(session, case_payload, actor_user_id=actor_user_id)
+        saved_cases.append(SavedCaseResult(case_id=case.id, case_name=case.name))
+        draft.status = "imported"
+        yield {
+            "type": "save_progress",
+            "saved_count": len(saved_cases),
+            "total": len(drafts),
+            "case_name": case.name,
+        }
+
+    if not saved_cases:
+        planning_session.status = "saving"
+        session.commit()
+        yield {"type": "done"}
+        return
+
+    execution_summaries: list[ExecutionSummaryResult] = []
+    for saved in saved_cases:
+        if cancel_event.is_set():
+            raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
+
+        payload = CaseExecutionRequest(actor_user_id=actor_user_id)
+        dsl_case = None
+        case_record = session.query(TestCase).get(saved.case_id)
+        if case_record:
+            from app.schemas.dsl import DSLCase
+            dsl_case = DSLCase.model_validate(case_record.dsl)
+
+        yield {
+            "type": "case_start",
+            "case_id": saved.case_id,
+            "case_name": saved.case_name,
+            "total_steps": len(dsl_case.steps) if dsl_case else 0,
+        }
+
+        try:
+            stream = execute_case_streaming(
+                session, saved.case_id, payload, cancel_event=cancel_event,
+            )
+            detail = None
+            try:
+                while True:
+                    step_event = next(stream)
+                    yield {
+                        "type": step_event.type,
+                        "case_id": saved.case_id,
+                        "step_index": step_event.step_index,
+                        "action": step_event.action,
+                        **({"target": step_event.target} if step_event.target is not None else {}),
+                        **({"value": step_event.value} if step_event.value is not None else {}),
+                        **({"status": step_event.status} if step_event.status is not None else {}),
+                        **({"duration_ms": step_event.duration_ms} if step_event.duration_ms is not None else {}),
+                    }
+            except StopIteration as stop:
+                detail = stop.value
+
+            if detail is not None:
+                passed = sum(1 for s in (detail.report.steps or []) if s.status == "passed")
+                failed = sum(1 for s in (detail.report.steps or []) if s.status == "failed")
+                execution_summaries.append(ExecutionSummaryResult(
+                    execution_id=detail.id,
+                    case_id=saved.case_id,
+                    case_name=detail.case_name,
+                    status=detail.status,
+                    total_steps=detail.total_steps,
+                    passed_steps=passed,
+                    failed_steps=failed,
+                    duration_ms=detail.duration_ms,
+                    screenshot_url=detail.latest_screenshot_url,
+                    report_url=f"/run/{detail.id}",
+                ))
+        except RunnerCancelledError:
+            raise
+
+    # Persist execution summary message
+    lines = ["测试执行完成：\n"]
+    for ex in execution_summaries:
+        icon = "✅" if ex.status == "passed" else "❌"
+        lines.append(f"{icon} {ex.case_name} — {ex.status} ({ex.passed_steps}/{ex.total_steps}步)")
+
+    assistant_message = "\n".join(lines)
+    planning_session.status = "completed"
+    session.add(
+        AIPlanningMessage(
+            session_id=planning_session.id,
+            role="assistant",
+            turn_type="plan",
+            content=assistant_message,
+            structured_payload_json={
+                "type": "execution_summary",
+                "saved_cases": [item.model_dump(mode="json") for item in saved_cases],
+                "execution_summaries": [item.model_dump(mode="json") for item in execution_summaries],
+            },
+        )
+    )
+    session.commit()
+
+    yield {"type": "done"}
 
 
 def delete_planning_session(

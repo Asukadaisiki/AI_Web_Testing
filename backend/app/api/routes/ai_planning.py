@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+import asyncio
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import require_demo_user
+from app.api.auth import get_demo_user_or_raise, require_demo_user
 from app.db import get_db_session
+from app.db.session import get_session_factory
 from app.models import User
 from app.schemas.ai_planning import (
     AIPlanningDraft,
@@ -30,7 +34,15 @@ from app.services.ai_planning import (
     send_planning_message,
     update_planning_draft_status,
 )
+from app.services.ai_planning_streaming import (
+    CancellationManager,
+    stream_save_and_execute,
+)
 from app.services.cases import EntityNotFoundError
+
+logger = logging.getLogger(__name__)
+
+_cancellation_manager = CancellationManager()
 
 
 router = APIRouter(prefix="/ai-planning", tags=["ai-planning"])
@@ -150,3 +162,63 @@ def save_and_execute_route(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AIPlanningAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.websocket("/sessions/{session_id}/ws")
+async def ai_planning_session_ws(
+    websocket: WebSocket,
+    session_id: int,
+    user_id: int | None = Query(default=None),
+) -> None:
+    """WebSocket endpoint for streaming save-and-execute progress.
+
+    Accepts JSON messages:
+      - ``{"type": "execute", "draft_ids": [...]}``  — start streaming execution
+      - ``{"type": "cancel"}``  — cancel the in-progress execution
+
+    Emits events: ``save_progress``, ``case_start``, ``step_start``, ``step_complete``,
+    ``done``, ``cancelled``, ``error``.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as db:
+        try:
+            current_user = get_demo_user_or_raise(db, user_id=user_id)
+        except HTTPException:
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
+
+    await websocket.accept()
+    cancel_event = _cancellation_manager.register(session_id)
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
+
+            if msg_type == "execute":
+                draft_ids = data.get("draft_ids", [])
+                try:
+                    async for event in stream_save_and_execute(
+                        session_factory=session_factory,
+                        planning_session_id=session_id,
+                        draft_ids=draft_ids,
+                        actor_user_id=current_user.id,
+                        cancel_event=cancel_event,
+                    ):
+                        await websocket.send_json(event)
+                        if event.get("type") in ("done", "cancelled", "error"):
+                            break
+                except Exception as exc:
+                    logger.exception("WebSocket streaming error for session %s", session_id)
+                    await websocket.send_json({"type": "error", "message": str(exc)})
+                break
+
+            elif msg_type == "cancel":
+                cancel_event.set()
+                await websocket.send_json({"type": "cancelled"})
+                break
+
+    except WebSocketDisconnect:
+        logger.debug("WebSocket disconnected for planning session %s", session_id)
+    finally:
+        _cancellation_manager.clear(session_id)
