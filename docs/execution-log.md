@@ -9,6 +9,31 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-16
+
+- 任务：按 `docs/superpowers/plans/2026-04-15-ai-planning-execution-streaming.md` 逐任务实现 AI Planning WebSocket 执行流式推送
+- 执行动作：
+  - **Task 1** — 在 `playwright_runner.py` 新增 `StepStreamEvent`、`RunnerCancelledError`、`execute_case_with_playwright_streaming()` 流式执行生成器；在 `executions.py` 新增 `execute_case_streaming()`，通过 `yield from` 桥接 runner 流式事件并持久化执行记录；`__init__.py` 导出新符号；补充 2 个 streaming 测试
+  - **Task 2** — 新建 `ai_planning_streaming.py`，实现 `CancellationManager`、`stream_save_and_execute()` worker-thread async 桥接；在 `ai_planning.py` 新增 `save_and_execute_selected_drafts_streaming()` 同步生成器；在 `auth.py` 新增 `get_demo_user_or_raise()`；在 `ai_planning.py` 路由新增 `WS /sessions/{session_id}/ws` 端点；补充 2 个 WebSocket 测试
+  - **Task 3** — 在 `api.ts` 新增 `ExecutionStreamEvent` 等 7 种事件类型；新建 `executionWebSocket.ts` socket lifecycle client；补充 3 个 socket 单元测试
+  - **Task 4** — 修改 `AITestPlanningPanel.tsx`，将"保存并执行"按钮由 HTTP `saveAndExecuteDrafts` 切换为 WebSocket `connectExecutionStream`，添加执行进度气泡和取消按钮；更新既有测试适配 WebSocket mock
+- 结果：4 个 commit（`feat: add streaming execution primitives`、`feat: add ai planning websocket execution stream`、`feat: add planning execution websocket client`、`feat: stream ai planning execution progress in panel`），保留同步 HTTP fallback
+- 验证：
+  - 后端 29 个测试全部通过（`test_ai_planning_api.py` 13个 + `test_case_executions_api.py` 16个）
+  - 前端 9 个测试全部通过（`executionWebSocket.test.ts` 3个 + `AITestPlanningPanel.test.tsx` 6个）
+  - `npx tsc --noEmit` 类型检查通过
+- 后续：可手动启动后端+前端进行 smoke 测试，验证保存并执行流式进度和取消功能
+
+## 2026-04-15
+
+- 任务：基于 `docs/superpowers/specs/2026-04-13-execution-streaming-design.md` 产出 AI planning 执行流式推送 implementation plan，并按用户指定目录落到 `docs/superpowers/plans`
+- 执行动作：核对 `backend/app/api/routes/ai_planning.py`、`backend/app/services/ai_planning.py`、`backend/app/services/executions.py`、`backend/app/runners/playwright_runner.py`、`frontend/src/components/AITestPlanningPanel.tsx`、`frontend/src/services/api.ts`、`frontend/src/types/api.ts` 和对应测试文件，确认当前代码已具备会话列表、保存并执行、execution summary 持久化，但仍缺少 WebSocket 流式执行、取消机制与前端实时进度；随后新增 `docs/superpowers/plans/2026-04-15-ai-planning-execution-streaming.md`，将实施拆成 runner 流式原语、AI planning WS worker/路由、前端 socket client、面板集成四个任务；补充 `.gitignore` 最小例外规则，仅允许本次新增计划文件进入版本控制，避免把其他历史 `docs/superpowers` 文档一并暴露为未跟踪项
+- 结果：形成了一份基于当前仓库真实状态的可执行 implementation plan，避免重复规划已完成的会话历史与同步 save-and-execute 能力，并明确了不改数据库 schema、保留同步 HTTP fallback、取消状态仅做 planning UI 瞬态展示这几个边界；新计划文件不再被 `docs/*` 通配规则误忽略，同时没有扩大其他 superpowers 文档的 Git 噪音
+- 验证：
+  - 静态核对设计文档与现有实现差异，确认计划中涉及的文件路径、接口名、测试入口均存在于仓库
+  - 人工检查计划文件已创建于 `docs/superpowers/plans/2026-04-15-ai-planning-execution-streaming.md`
+- 后续：如继续执行，按计划中的 Task 1 -> Task 4 顺序推进，并在真正实现后补充新的验证结果
+
 ## 2026-04-13 22:20
 
 - 任务：修复 AI planning“保存并执行草案”链路中的 DSL 生成失败与执行摘要不持久化问题
