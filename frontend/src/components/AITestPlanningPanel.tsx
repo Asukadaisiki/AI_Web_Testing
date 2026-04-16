@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Checkbox, Input, Progress, Select, Tag, Typography, message } from "antd";
 import { DeleteOutlined, SendOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ import {
   sendPlanningMessage,
   updatePlanningDraftStatus,
 } from "../services/api";
+import { connectExecutionStream, type ExecutionStreamClient } from "../services/executionWebSocket";
 import type {
   AIPlanningDraft,
   AIPlanningMessage,
@@ -25,6 +26,7 @@ import type {
   DSLCaseOutputContract,
   DSLCasePayload,
   DSLStep,
+  ExecutionStreamEvent,
   ExecutionSummaryResult,
 } from "../types/api";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
@@ -103,6 +105,45 @@ function buildToolMessages(sessionId: number, toolCalls: AIPlanningToolCall[]) {
   );
 }
 
+function applyStreamEventToContent(currentContent: string, event: ExecutionStreamEvent): string {
+  switch (event.type) {
+    case "save_progress":
+      return `已保存 ${event.saved_count}/${event.total} 个用例…`;
+    case "case_start":
+      return `正在执行：${event.case_name}（${event.total_steps}步）`;
+    case "step_start":
+      return `步骤 ${event.step_index + 1}：${event.action}…`;
+    case "step_complete":
+      return `步骤 ${event.step_index + 1}：${event.action} — ${event.status === "passed" ? "✅" : "❌"}（${event.duration_ms}ms）`;
+    default:
+      return currentContent;
+  }
+}
+
+function applyStreamEventToPayload(
+  current: Record<string, unknown> | null,
+  event: ExecutionStreamEvent,
+): Record<string, unknown> {
+  const base = current ?? { type: "execution_progress", saved_count: 0, total: 0, cases: [] };
+  switch (event.type) {
+    case "save_progress":
+      return { ...base, saved_count: event.saved_count, total: event.total };
+    case "case_start":
+      return {
+        ...base,
+        cases: [
+          ...((base.cases as unknown[]) ?? []),
+          { case_id: event.case_id, case_name: event.case_name, total_steps: event.total_steps, steps: [] },
+        ],
+      };
+    case "step_start":
+    case "step_complete":
+      return base;
+    default:
+      return base;
+  }
+}
+
 export function AITestPlanningPanel({
   aiSettings,
   projectId,
@@ -127,9 +168,10 @@ export function AITestPlanningPanel({
   const [inputValue, setInputValue] = useState("");
   const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sessionList, setSessionList] = useState<AIPlanningSessionSummary[]>([]);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const executionStreamRef = useRef<ExecutionStreamClient | null>(null);  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
   const isDisabled = !planningEnabled || !projectId;
@@ -475,6 +517,25 @@ export function AITestPlanningPanel({
                     <div style={{ marginTop: 4 }}>{item.content}</div>
                   </>
                 ) : item.role === "assistant" &&
+                  item.structured_payload?.type === "execution_progress" ? (
+                  <div>
+                    <span style={{ fontWeight: 600 }}>⚡ 执行进度</span>
+                    <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{item.content}</div>
+                    {isExecuting && (
+                      <div style={{ marginTop: 4 }}>
+                        <Button
+                          size="small"
+                          danger
+                          onClick={() => {
+                            executionStreamRef.current?.send({ type: "cancel" });
+                          }}
+                        >
+                          取消执行
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ) : item.role === "assistant" &&
                   item.structured_payload?.type === "execution_summary" &&
                   Array.isArray(item.structured_payload.execution_summaries) ? (
                   <div>
@@ -669,25 +730,72 @@ export function AITestPlanningPanel({
               <Button
                 type="primary"
                 size="small"
-                loading={isSending}
+                loading={isExecuting}
                 disabled={selectedScenarioKeys.length === 0}
                 onClick={async () => {
                   if (!sessionId || selectedScenarioKeys.length === 0) return;
-                  setIsSending(true);
+                  const draftIds = drafts
+                    .filter((d) => selectedScenarioKeys.includes(d.scenario_key))
+                    .map((d) => d.id);
+                  setIsExecuting(true);
                   try {
-                    await saveAndExecuteDrafts(
+                    const progressMessage = createOptimisticMessage(
                       sessionId,
-                      drafts.filter((d) => selectedScenarioKeys.includes(d.scenario_key)).map((d) => d.id),
-                      true,
+                      "assistant",
+                      "followup",
+                      "正在保存并执行已选草案…",
+                      { type: "execution_progress", saved_count: 0, total: 0, cases: [] },
                     );
-                    await queryClient.invalidateQueries({ queryKey: ["cases"] });
-                    await queryClient.invalidateQueries({ queryKey: ["executions"] });
-                    await loadSessionDetail(sessionId);
-                    await loadSessionList();
+                    setTranscript((current) => [...current, progressMessage]);
+
+                    const client = connectExecutionStream(
+                      sessionId,
+                      async (event: ExecutionStreamEvent) => {
+                        if (event.type === "done") {
+                          await queryClient.invalidateQueries({ queryKey: ["cases"] });
+                          await queryClient.invalidateQueries({ queryKey: ["executions"] });
+                          await loadSessionDetail(sessionId);
+                          await loadSessionList();
+                          return;
+                        }
+                        if (event.type === "cancelled") {
+                          void messageApi.info("执行已取消");
+                          await loadSessionDetail(sessionId);
+                          return;
+                        }
+                        if (event.type === "error") {
+                          void messageApi.error("执行错误: " + event.message);
+                          await loadSessionDetail(sessionId);
+                          return;
+                        }
+                        // Update the progress bubble with streaming event data
+                        setTranscript((current) =>
+                          current.map((msg) =>
+                            msg.id === progressMessage.id
+                              ? {
+                                  ...msg,
+                                  content: applyStreamEventToContent(msg.content, event),
+                                  structured_payload: applyStreamEventToPayload(
+                                    msg.structured_payload as Record<string, unknown> | null,
+                                    event,
+                                  ),
+                                }
+                              : msg,
+                          ),
+                        );
+                      },
+                      async (error) => {
+                        void messageApi.error("连接错误: " + error.message);
+                        await loadSessionDetail(sessionId);
+                      },
+                    );
+                    executionStreamRef.current = client;
+                    client.send({ type: "execute", draft_ids: draftIds });
                   } catch (err: unknown) {
                     void messageApi.error("执行失败: " + (err instanceof Error ? err.message : String(err)));
                   } finally {
-                    setIsSending(false);
+                    setIsExecuting(false);
+                    executionStreamRef.current = null;
                   }
                 }}
               >

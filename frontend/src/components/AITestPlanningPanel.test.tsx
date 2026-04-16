@@ -1,11 +1,12 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { AITestPlanningPanel } from "./AITestPlanningPanel";
 import * as api from "../services/api";
+import * as wsModule from "../services/executionWebSocket";
 import { renderWithProviders } from "../test/test-utils";
-import type { AISettings } from "../types/api";
+import type { AISettings, ExecutionStreamEvent } from "../types/api";
 
 vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
@@ -21,6 +22,10 @@ vi.mock("../services/api", async () => {
     updatePlanningDraftStatus: vi.fn(),
   };
 });
+
+vi.mock("../services/executionWebSocket", () => ({
+  connectExecutionStream: vi.fn(),
+}));
 
 const aiSettings: AISettings = {
   enable_ai_dsl_generate: true,
@@ -474,38 +479,19 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
       },
     ],
   });
-  vi.mocked(api.saveAndExecuteDrafts).mockResolvedValue({
-    assistant_message: "测试执行完成",
-    session_status: "completed",
-    requirements: {
-      app_under_test: "商城后台",
-      business_goal: "验证管理员登录",
-      entry_url_or_page: "https://shop.example.com/login",
-      core_user_flow: "输入账号密码并点击登录",
-      main_assertions: ["跳转到 dashboard"],
-      test_data_or_account: "admin@example.com",
-      scope_limits: "不覆盖忘记密码",
-    },
-    missing_slots: [],
-    suggested_questions: [],
-    plan: null,
-    drafts: [],
-    next_action: "ask_followup",
-    saved_cases: [{ case_id: 101, case_name: "登录成功", status: "saved" }],
-    execution_summaries: [
-      {
-        execution_id: 88,
-        case_id: 101,
-        case_name: "登录成功",
-        status: "passed",
-        total_steps: 1,
-        passed_steps: 1,
-        failed_steps: 0,
-        duration_ms: 1234,
-        screenshot_url: "/artifacts/executions/88/final.png",
-        report_url: "/run/88",
+  // Mock WebSocket streaming — immediately emit done after client sends execute
+  let capturedOnEvent: ((event: ExecutionStreamEvent) => void) | null = null;
+  vi.mocked(wsModule.connectExecutionStream).mockImplementation((_sid, onEvent, _onErr) => {
+    capturedOnEvent = onEvent as (event: ExecutionStreamEvent) => void;
+    return {
+      send: (_data: Record<string, unknown>) => {
+        // Simulate backend immediately sending done
+        setTimeout(() => {
+          onEvent({ type: "done" });
+        }, 0);
       },
-    ],
+      close: vi.fn(),
+    };
   });
   vi.mocked(api.getPlanningSession).mockResolvedValue({
     session: {
@@ -591,7 +577,206 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
   await userEvent.click(screen.getByRole("button", { name: "保存并执行" }));
 
   await waitFor(() => {
-    expect(api.saveAndExecuteDrafts).toHaveBeenCalledWith(5, [11], true);
+    expect(wsModule.connectExecutionStream).toHaveBeenCalledWith(5, expect.any(Function), expect.any(Function));
     expect(api.getPlanningSession).toHaveBeenCalledWith(5);
+  }, { timeout: 3000 });
+});
+
+test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", async () => {
+  // Setup: session with plan + drafts ready
+  vi.mocked(api.createPlanningSession).mockResolvedValue({
+    session: {
+      id: 5,
+      actor_user_id: 1,
+      project_id: 1,
+      case_id: null,
+      title: "流式测试会话",
+      status: "drafts_ready",
+      requirements: {
+        app_under_test: "商城后台",
+        business_goal: "验证登录",
+        entry_url_or_page: "https://shop.example.com/login",
+        core_user_flow: "输入账号密码并点击登录",
+        main_assertions: ["跳转到 dashboard"],
+        test_data_or_account: "admin",
+        scope_limits: null,
+      },
+      plan: {
+        summary: "登录测试方案",
+        assumptions: [],
+        risks: [],
+        scenarios: [
+          {
+            scenario_key: "login_success",
+            title: "登录成功",
+            goal: "验证登录",
+            preconditions: [],
+            priority: "high",
+            test_data_requirements: [],
+            assertions: ["跳转到 dashboard"],
+            draft_prompt: "为登录成功场景生成 DSL",
+          },
+        ],
+      },
+      missing_slots: [],
+      last_error_message: null,
+      created_at: "2026-04-15T10:00:00",
+      updated_at: "2026-04-15T10:00:00",
+    },
+    messages: [],
+    drafts: [
+      {
+        id: 11,
+        session_id: 5,
+        scenario_key: "login_success",
+        title: "登录成功",
+        status: "generated",
+        dsl_generation_id: 33,
+        dsl_case: {
+          name: "登录成功",
+          description: "草案",
+          base_url: "https://shop.example.com",
+          input_contract: [],
+          output_contract: [],
+          steps: [{ action: "goto", value: "/login" }],
+        },
+        warnings: [],
+        normalization_notes: [],
+        error_message: null,
+        created_at: "2026-04-15T10:00:00",
+        updated_at: "2026-04-15T10:00:00",
+      },
+    ],
   });
+
+  // Mock WebSocket client
+  const send = vi.fn();
+  const close = vi.fn();
+  let capturedOnEvent: ((event: ExecutionStreamEvent) => void) | null = null;
+
+  vi.mocked(wsModule.connectExecutionStream).mockImplementation((_sessionId, onEvent, _onError) => {
+    capturedOnEvent = onEvent as (event: ExecutionStreamEvent) => void;
+    return { send, close };
+  });
+
+  // getPlanningSession: first call (on mount) returns plan + drafts, subsequent calls return completed
+  vi.mocked(api.getPlanningSession)
+    .mockResolvedValueOnce({
+      session: {
+        id: 5,
+        actor_user_id: 1,
+        project_id: 1,
+        case_id: null,
+        title: "流式测试会话",
+        status: "drafts_ready",
+        requirements: {
+          app_under_test: "商城后台",
+          business_goal: "验证登录",
+          entry_url_or_page: "https://shop.example.com/login",
+          core_user_flow: "输入账号密码并点击登录",
+          main_assertions: ["跳转到 dashboard"],
+          test_data_or_account: "admin",
+          scope_limits: null,
+        },
+        plan: {
+          summary: "登录测试方案",
+          assumptions: [],
+          risks: [],
+          scenarios: [
+            {
+              scenario_key: "login_success",
+              title: "登录成功",
+              goal: "验证登录",
+              preconditions: [],
+              priority: "high",
+              test_data_requirements: [],
+              assertions: ["跳转到 dashboard"],
+              draft_prompt: "为登录成功场景生成 DSL",
+            },
+          ],
+        },
+        missing_slots: [],
+        last_error_message: null,
+        created_at: "2026-04-15T10:00:00",
+        updated_at: "2026-04-15T10:00:00",
+      },
+      messages: [],
+      drafts: [
+        {
+          id: 11,
+          session_id: 5,
+          scenario_key: "login_success",
+          title: "登录成功",
+          status: "generated",
+          dsl_generation_id: 33,
+          dsl_case: {
+            name: "登录成功",
+            description: "草案",
+            base_url: "https://shop.example.com",
+            input_contract: [],
+            output_contract: [],
+            steps: [{ action: "goto", value: "/login" }],
+          },
+          warnings: [],
+          normalization_notes: [],
+          error_message: null,
+          created_at: "2026-04-15T10:00:00",
+          updated_at: "2026-04-15T10:00:00",
+        },
+      ],
+    })
+    .mockResolvedValue({
+      session: {
+        id: 5,
+        actor_user_id: 1,
+        project_id: 1,
+        case_id: null,
+        title: "流式测试会话",
+        status: "completed",
+        requirements: {
+          app_under_test: "商城后台",
+          business_goal: "验证登录",
+          entry_url_or_page: "https://shop.example.com/login",
+          core_user_flow: "输入账号密码并点击登录",
+          main_assertions: ["跳转到 dashboard"],
+          test_data_or_account: "admin",
+          scope_limits: null,
+        },
+        plan: null,
+        missing_slots: [],
+        last_error_message: null,
+        created_at: "2026-04-15T10:00:00",
+        updated_at: "2026-04-15T10:01:00",
+      },
+      messages: [],
+      drafts: [],
+    });
+
+  renderWithProviders(
+    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+  );
+
+  expect(await screen.findByText("AI Planning")).toBeInTheDocument();
+
+  // Select scenario checkbox, then click execute
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择场景 登录成功" }));
+  await userEvent.click(screen.getByRole("button", { name: "保存并执行" }));
+
+  await waitFor(() => {
+    expect(wsModule.connectExecutionStream).toHaveBeenCalledWith(5, expect.any(Function), expect.any(Function));
+  });
+
+  // Verify the send was called with execute message
+  expect(send).toHaveBeenCalledWith({ type: "execute", draft_ids: [11] });
+
+  // Simulate receiving events
+  act(() => {
+    capturedOnEvent?.({ type: "save_progress", saved_count: 1, total: 1, case_name: "登录成功" });
+    capturedOnEvent?.({ type: "done" });
+  });
+
+  // After done, should reload session detail
+  await waitFor(() => {
+    expect(api.getPlanningSession).toHaveBeenCalled();
+  }, { timeout: 3000 });
 });
