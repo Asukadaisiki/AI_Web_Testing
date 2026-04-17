@@ -132,11 +132,18 @@ def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[
     if explicit is not None:
         builders.append(explicit)
 
+    # Try matching the target as an HTML element id attribute.
+    if target and not target.startswith(("css=", "xpath=", "//", "#", ".", "[", "data-testid=")):
+        id_target = target
+        builders.append(("element_id", lambda: page.locator(f"#{id_target}")))
+
     if prefer_input:
         builders.extend(
             [
                 ("label", lambda: page.get_by_label(target, exact=True)),
                 ("placeholder", lambda: page.get_by_placeholder(target, exact=True)),
+                ("label_fuzzy", lambda: page.get_by_label(target)),
+                ("placeholder_fuzzy", lambda: page.get_by_placeholder(target)),
             ]
         )
 
@@ -146,6 +153,10 @@ def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[
             ("label", lambda: page.get_by_label(target, exact=True)),
             ("placeholder", lambda: page.get_by_placeholder(target, exact=True)),
             ("text", lambda: page.get_by_text(target, exact=True)),
+            ("button_role_fuzzy", lambda: page.get_by_role("button", name=target)),
+            ("label_fuzzy", lambda: page.get_by_label(target)),
+            ("placeholder_fuzzy", lambda: page.get_by_placeholder(target)),
+            ("text_fuzzy", lambda: page.get_by_text(target)),
         ]
     )
     return builders
@@ -287,10 +298,15 @@ def _strategy_base_score(strategy: str) -> int:
         "css": 120,
         "xpath": 120,
         "data-testid": 115,
+        "element_id": 100,
         "button_role": 90,
         "label": 80,
         "placeholder": 75,
         "text": 70,
+        "label_fuzzy": 60,
+        "placeholder_fuzzy": 55,
+        "text_fuzzy": 50,
+        "button_role_fuzzy": 45,
     }.get(strategy, 50)
 
 
@@ -299,10 +315,15 @@ def _strategy_rule_name(strategy: str) -> str:
         "css": "explicit-css-selector",
         "xpath": "explicit-xpath-selector",
         "data-testid": "explicit-data-testid",
+        "element_id": "element-id-match",
         "button_role": "exact-button-role-match",
         "label": "exact-label-match",
         "placeholder": "exact-placeholder-match",
         "text": "exact-text-match",
+        "button_role_fuzzy": "fuzzy-button-role-match",
+        "label_fuzzy": "fuzzy-label-match",
+        "placeholder_fuzzy": "fuzzy-placeholder-match",
+        "text_fuzzy": "fuzzy-text-match",
     }.get(strategy, strategy)
 
 
