@@ -305,6 +305,46 @@ def test_get_execution_returns_not_found_for_unknown_id(client) -> None:
     assert response.json() == {"detail": "Execution not found."}
 
 
+def test_delete_execution_removes_record_and_returns_204(client, db_session) -> None:
+    create_response = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "待删除用例",
+            "base_url": "https://example.com",
+            "steps": [{"action": "goto", "value": "/"}],
+        },
+    )
+    db_session.add(
+        TestCaseRun(
+            id=100,
+            case_id=create_response.json()["id"],
+            project_id=1,
+            triggered_by=1,
+            status="failed",
+            error_message="to be deleted",
+            report={"status": "failed", "steps": []},
+        )
+    )
+    db_session.commit()
+
+    detail_before = client.get("/api/v1/executions/100")
+    assert detail_before.status_code == 200
+
+    delete_response = client.delete("/api/v1/executions/100")
+    assert delete_response.status_code == 204
+
+    detail_after = client.get("/api/v1/executions/100")
+    assert detail_after.status_code == 404
+
+
+def test_delete_execution_returns_404_for_unknown_id(client) -> None:
+    response = client.delete("/api/v1/executions/999")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Execution 999 not found."}
+
+
 def test_list_executions_supports_filters_limit_offset_and_case_id(client, monkeypatch) -> None:
     created_cases: list[int] = []
     for name in ["成功用例", "失败用例", "第二个成功用例"]:

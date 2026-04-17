@@ -230,3 +230,19 @@
   - `cd frontend && npm run test -- src/components/AITestPlanningPanel.test.tsx src/pages/AISettingsPage.test.tsx src/services/api.test.ts`，结果 `20 passed`
   - `cd frontend && npm run test -- src/pages/CaseWorkbenchPage.test.tsx`，结果 `16 passed`
 - 后续：如需继续收口，可补 `planning_tools.py` 的独立单测，并考虑把 AI planning 的真实 HTTP 调用抽成与 DSL/VLM 共用的 LLM client，减少重复请求层代码
+
+## 2026-04-17
+
+- 任务：给报告页面添加删除执行记录功能（DELETE 路由 + 前端删除按钮）
+- 执行动作：
+  - 后端 `services/executions.py` 新增 `delete_execution` 函数
+  - 后端 `services/__init__.py` 导出 `delete_execution`
+  - 后端 `api/routes/executions.py` 新增 `DELETE /executions/{execution_id}` 路由，返回 204
+  - 前端 `services/api.ts` 新增 `deleteExecution` 客户端函数
+  - 前端 `pages/ReportPage.tsx` 每条执行记录右侧添加删除按钮（带 Popconfirm 确认弹窗），删除后自动刷新列表和概览数据
+  - 新增 2 个后端单元测试：`test_delete_execution_removes_record_and_returns_204` 和 `test_delete_execution_returns_404_for_unknown_id`
+- 结果：报告页面可删除单条执行记录，删除后列表和统计自动更新
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_case_executions_api.py -q`，结果 `18 passed`（含新增 2 个）
+  - `cd frontend && npx tsc --noEmit`，无错误
+- 后续：可考虑批量删除功能

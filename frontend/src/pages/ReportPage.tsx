@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Spin, Empty, Typography, Tag } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Spin, Empty, Typography, Tag, Popconfirm } from "antd";
 
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
-import { getProjects, getExecutionOverview, getExecutions, getExecutionDetail } from "../services/api";
+import { getProjects, getExecutionOverview, getExecutions, getExecutionDetail, deleteExecution } from "../services/api";
 import type { ProjectSummary, StoredCaseExecutionSummary, StepExecutionEvidence, ExecutionStatus } from "../types/api";
 
 const { Text, Title } = Typography;
@@ -112,11 +112,13 @@ function ExecutionRow({
   expanded,
   onToggle,
   steps,
+  onDelete,
 }: {
   exec: StoredCaseExecutionSummary;
   expanded: boolean;
   onToggle: () => void;
   steps: StepExecutionEvidence[] | undefined;
+  onDelete: () => void;
 }) {
   return (
     <div className="nb-card" style={{ padding: 0, marginBottom: 8 }}>
@@ -143,6 +145,22 @@ function ExecutionRow({
         <Text type="secondary" style={{ fontSize: 12 }}>
           {formatTime(exec.started_at)}
         </Text>
+        <Popconfirm
+          title="确定删除此执行记录？"
+          onConfirm={(e) => { e?.stopPropagation(); onDelete(); }}
+          onCancel={(e) => e?.stopPropagation()}
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+        >
+          <span
+            onClick={(e) => e.stopPropagation()}
+            style={{ fontSize: 14, cursor: "pointer", opacity: 0.5 }}
+            title="删除"
+          >
+            🗑️
+          </span>
+        </Popconfirm>
       </div>
 
       {expanded && steps && (
@@ -170,6 +188,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 export function ReportPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: projects = [], isLoading: projectsLoading } = useQuery<ProjectSummary[]>({
     queryKey: ["projects"],
@@ -192,6 +211,13 @@ export function ReportPage() {
   });
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  const handleDelete = async (id: number) => {
+    await deleteExecution(id);
+    if (expandedId === id) setExpandedId(null);
+    queryClient.invalidateQueries({ queryKey: ["executions", activeProjectId] });
+    queryClient.invalidateQueries({ queryKey: ["execution-overview", activeProjectId] });
+  };
 
   const { data: executionDetail } = useQuery({
     queryKey: ["execution-detail", expandedId],
@@ -261,6 +287,7 @@ export function ReportPage() {
                 ? executionDetail.report.steps
                 : undefined
             }
+            onDelete={() => handleDelete(exec.id)}
           />
         ))
       )}

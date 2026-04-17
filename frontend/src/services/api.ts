@@ -446,3 +446,9 @@ export function getExecutionOverview(params: {
 export function getExecutionDetail(executionId: number) {
   return request<StoredCaseExecutionDetail>(`/api/v1/executions/${executionId}`);
 }
+
+export function deleteExecution(executionId: number) {
+  return request<void>(`/api/v1/executions/${executionId}`, {
+    method: "DELETE",
+  });
+}

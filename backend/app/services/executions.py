@@ -407,6 +407,14 @@ def get_case_execution(session: Session, execution_id: int) -> StoredCaseExecuti
     return _to_execution_detail(session, record, case_name=case_name)
 
 
+def delete_execution(session: Session, execution_id: int) -> None:
+    record = session.get(TestCaseRun, execution_id)
+    if record is None:
+        raise EntityNotFoundError(f"Execution {execution_id} not found.")
+    session.delete(record)
+    session.commit()
+
+
 def _list_execution_rows(
     session: Session,
     *,

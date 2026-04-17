@@ -22,6 +22,7 @@ from app.services.corrections import (
 )
 from app.services.dsl import SUPPORTED_DSL_ACTIONS, validate_dsl_case
 from app.services.executions import (
+    delete_execution,
     execute_case,
     get_executions_overview,
     get_case_execution,
@@ -50,6 +51,7 @@ __all__ = [
     "create_correction",
     "create_project",
     "delete_case",
+    "delete_execution",
     "delete_project",
     "execute_case",
     "get_case",

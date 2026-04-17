@@ -16,6 +16,7 @@ from app.schemas.executions import (
 )
 from app.services import (
     EntityNotFoundError,
+    delete_execution,
     execute_case,
     get_executions_overview,
     get_case_execution,
@@ -119,3 +120,14 @@ def get_case_execution_route(
     if execution is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution not found.")
     return execution
+
+
+@router.delete("/executions/{execution_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_execution_route(
+    execution_id: int,
+    session: Session = Depends(get_db_session),
+) -> None:
+    try:
+        delete_execution(session, execution_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
