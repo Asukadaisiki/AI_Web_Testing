@@ -161,51 +161,52 @@ export function CaseEditPage() {
         >
           <Form.List name="steps">
             {(fields, { remove }) =>
-              fields.map(({ key, name, ...restField }) => (
-                <div
-                  key={key}
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    alignItems: "flex-start",
-                    marginBottom: 8,
-                    padding: 8,
-                    background: "#fafafa",
-                    borderRadius: 6,
-                  }}
-                >
-                  <Typography.Text
-                    type="secondary"
-                    style={{ lineHeight: "32px", minWidth: 28, textAlign: "center" }}
+              fields.length === 0 ? (
+                <Typography.Text type="secondary">暂无步骤，点击右上角添加</Typography.Text>
+              ) : (
+                fields.map(({ key, name, ...restField }) => (
+                  <div
+                    key={key}
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "flex-start",
+                      marginBottom: 8,
+                      padding: 8,
+                      background: "#fafafa",
+                      borderRadius: 6,
+                    }}
                   >
-                    {name + 1}
-                  </Typography.Text>
-                  <Form.Item {...restField} name={[name, "action"]} style={{ margin: 0, width: 160 }}>
-                    <Select options={SUPPORTED_ACTIONS.map((a) => ({ label: a, value: a }))} />
-                  </Form.Item>
-                  <Form.Item {...restField} name={[name, "target"]} style={{ margin: 0, flex: 1 }}>
-                    <Input placeholder="target" />
-                  </Form.Item>
-                  <Form.Item {...restField} name={[name, "value"]} style={{ margin: 0, flex: 1 }}>
-                    <Input placeholder="value" />
-                  </Form.Item>
-                  <Form.Item {...restField} name={[name, "timeout_ms"]} style={{ margin: 0, width: 100 }}>
-                    <InputNumber placeholder="ms" min={0} />
-                  </Form.Item>
-                  <Button
-                    type="text"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => remove(name)}
-                    style={{ marginTop: 1 }}
-                  />
-                </div>
-              ))
+                    <Typography.Text
+                      type="secondary"
+                      style={{ lineHeight: "32px", minWidth: 28, textAlign: "center" }}
+                    >
+                      {name + 1}
+                    </Typography.Text>
+                    <Form.Item {...restField} name={[name, "action"]} style={{ margin: 0, width: 160 }}>
+                      <Select options={SUPPORTED_ACTIONS.map((a) => ({ label: a, value: a }))} />
+                    </Form.Item>
+                    <Form.Item {...restField} name={[name, "target"]} style={{ margin: 0, flex: 1 }}>
+                      <Input placeholder="target" />
+                    </Form.Item>
+                    <Form.Item {...restField} name={[name, "value"]} style={{ margin: 0, flex: 1 }}>
+                      <Input placeholder="value" />
+                    </Form.Item>
+                    <Form.Item {...restField} name={[name, "timeout_ms"]} style={{ margin: 0, width: 100 }}>
+                      <InputNumber placeholder="ms" min={0} />
+                    </Form.Item>
+                    <Button
+                      type="text"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={() => remove(name)}
+                      style={{ marginTop: 1 }}
+                    />
+                  </div>
+                ))
+              )
             }
           </Form.List>
-          {form.getFieldValue("steps")?.length === 0 && (
-            <Typography.Text type="secondary">暂无步骤，点击右上角添加</Typography.Text>
-          )}
         </Card>
 
         <div style={{ display: "flex", justifyContent: "space-between" }}>
