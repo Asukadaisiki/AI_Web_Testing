@@ -199,10 +199,10 @@ _STEP_TARGET_ALIASES: dict[str, tuple[str, ...]] = {
     "assert_text": ("target", "element", "label", "selector", "locator", "description"),
 }
 _STEP_VALUE_ALIASES: dict[str, tuple[str, ...]] = {
-    "goto": ("value", "url", "path", "href"),
+    "goto": ("value", "url", "path", "href", "target"),
     "input": ("value", "text", "input", "content"),
     "assert_text": ("value", "expected", "expected_text", "expectedText", "text"),
-    "assert_url_contains": ("value", "expected", "url", "path", "contains"),
+    "assert_url_contains": ("value", "expected", "url", "path", "contains", "target"),
 }
 _STEP_TIMEOUT_ALIASES = ("timeout_ms", "timeoutMs", "timeout")
 _GENERIC_CASE_NAMES = {"ai 生成用例", "ai生成用例", "generated test case", "test case", "测试用例"}

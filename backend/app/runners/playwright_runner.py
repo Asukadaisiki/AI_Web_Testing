@@ -478,6 +478,9 @@ def execute_case_with_playwright_streaming(
             browser.close()
 
     return step_results
+
+
+def _resolve_url(value: str, base_url: str | None) -> str:
     if value.startswith(("http://", "https://")):
         return value
     if not base_url:
