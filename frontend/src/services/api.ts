@@ -139,6 +139,12 @@ export function createCase(payload: CaseMutationPayload) {
   });
 }
 
+export function deleteCase(caseId: number) {
+  return request<void>(`/api/v1/cases/${caseId}`, {
+    method: "DELETE",
+  });
+}
+
 export function updateCase(caseId: number, payload: CaseMutationPayload) {
   return request<StoredCaseDetail>(`/api/v1/cases/${caseId}`, {
     method: "PUT",

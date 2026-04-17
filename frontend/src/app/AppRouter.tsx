@@ -15,6 +15,9 @@ const ReportPage = lazy(() =>
 const ExecutionDetailPage = lazy(() =>
   import("../pages/ExecutionDetailPage").then((m) => ({ default: m.ExecutionDetailPage })),
 );
+const CaseEditPage = lazy(() =>
+  import("../pages/CaseEditPage").then((m) => ({ default: m.CaseEditPage })),
+);
 
 function LegacyExecutionRedirect() {
   const { executionId } = useParams<{ executionId: string }>();
@@ -27,6 +30,7 @@ export function AppRouter() {
       <Routes>
         <Route path="/" element={<PlanningPage />} />
         <Route path="/cases" element={<CasesPage />} />
+        <Route path="/cases/:caseId/edit" element={<CaseEditPage />} />
         <Route path="/reports" element={<ReportPage />} />
         <Route path="/run/:executionId" element={<ExecutionDetailPage />} />
         <Route path="/executions/:executionId" element={<LegacyExecutionRedirect />} />

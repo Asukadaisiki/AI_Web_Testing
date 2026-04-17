@@ -9,6 +9,17 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-17
+
+- 任务：修复用例中心编辑按钮无法跳转的问题，并清理历史数据
+- 操作：
+  - 创建 `CaseEditPage.tsx` 用例编辑页面，支持编辑名称、描述、Base URL、步骤（增删改）
+  - 在 `AppRouter.tsx` 添加 `/cases/:caseId/edit` 路由
+  - 在 `api.ts` 添加 `deleteCase()` API 函数
+  - 编辑页面集成删除用例功能（带确认弹窗）
+- 结果：编辑按钮现在能正确跳转到编辑页面，数据库已为空（0 用例、0 执行记录）
+- 验证：TypeScript 编译通过，无类型错误
+
 ## 2026-04-16
 
 - 任务：按 `docs/superpowers/plans/2026-04-15-ai-planning-execution-streaming.md` 逐任务实现 AI Planning WebSocket 执行流式推送
