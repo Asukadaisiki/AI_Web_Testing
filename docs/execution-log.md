@@ -9,6 +9,18 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-17 (Task 2)
+
+- 任务：用例创建 + 执行链路测试（3 个测试），扩展 platform API chain 白盒测试
+- 执行动作：
+  - 在 `backend/tests/integration/test_platform_api_chain.py` 末尾追加 `LOGIN_CASE_DSL` 常量和 3 个新测试：`test_create_case_with_valid_dsl`、`test_execute_login_case_and_verify_results`、`test_full_api_chain_e2e`
+  - 修复语义定位器 `backend/app/locators/semantic.py` 中两个真实 bug：
+    1. **element_id 策略缺失**：裸目标文本（如 "flash"）不会被尝试匹配 HTML id 属性，新增 `element_id` 策略（优先级 100，低于 explicit css/xpath）
+    2. **case-sensitive label/placeholder 匹配**：`get_by_label("username", exact=True)` 无法匹配页面标签 "Username"，新增 `label_fuzzy`、`placeholder_fuzzy`、`text_fuzzy`、`button_role_fuzzy` 四个非精确匹配策略（优先级 45-60）
+- 结果：6 个测试全部通过（3 个已有 session 测试 + 3 个新增链路测试）；定位器现在支持 HTML id 属性匹配和大小写不敏感的语义回退
+- 验证：`cd backend && python -m pytest tests/integration/test_platform_api_chain.py -v`，结果 `6 passed in 9.06s`
+- 后续：playwright_runner.py 中 `_capture_request_failed` 有一个预存在的 `AttributeError: 'str' object has no attribute 'get'` bug，因 Playwright `request.failure` 返回格式变更导致，未在本任务修复范围
+
 ## 2026-04-17
 
 - 任务：修复用例中心编辑按钮无法跳转的问题，并清理历史数据
@@ -232,6 +244,12 @@
 - 后续：如需继续收口，可补 `planning_tools.py` 的独立单测，并考虑把 AI planning 的真实 HTTP 调用抽成与 DSL/VLM 共用的 LLM client，减少重复请求层代码
 
 ## 2026-04-17
+
+- 任务：添加会话层认证测试（Platform API chain whitebox tests）
+- 执行动作：创建 `backend/tests/integration/test_platform_api_chain.py`，包含 3 个测试：未登录访问返回 401、登录设置 session 并返回用户信息、已登录 session 在多次请求间保持一致
+- 结果：3 个测试全部通过
+- 验证：`cd backend && python -m pytest tests/integration/test_platform_api_chain.py -v`，结果 `3 passed in 2.07s`
+- 后续：可在后续任务中扩展更多 API chain 测试（用例创建、执行、结果验证）
 
 - 任务：给报告页面添加删除执行记录功能（DELETE 路由 + 前端删除按钮）
 - 执行动作：

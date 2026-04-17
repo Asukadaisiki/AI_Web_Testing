@@ -29,7 +29,39 @@
 - 关联记录：执行日志日期或链接
 ```
 
-## BUG-045 | AI planning“保存并执行草案”链路被 DSL 生成配置阻断，且当前实现不支持持久化执行进度/摘要
+## BUG-046 | 语义定位器缺少 element_id 和 case-insensitive 匹配策略
+
+- 日期：2026-04-17
+- 状态：fixed
+- 来源：集成测试自测
+- 描述：语义定位器（`semantic.py`）无法定位以 HTML id 属性命名的目标（如 “flash”），且 `get_by_label(“username”, exact=True)` 无法匹配大小写不同的标签文本 “Username”，导致 the-internet 登录流程全部步骤失败（status=needs_intervention）
+- 复现步骤：
+  1. 创建包含 `{“action”: “input”, “target”: “username”}` 或 `{“action”: “assert_text”, “target”: “flash”}` 的 DSL 用例
+  2. 执行该用例
+  3. 定位器抛出 `LocatorResolutionError(“No locator candidates matched target.”)` 或 `InterventionNeededError`
+- 影响：所有使用小写目标描述或 HTML id 作为 target 的 DSL 用例均无法通过语义层定位
+- 根因：`_build_candidate_builders` 未尝试将裸目标字符串匹配为 `#id` CSS 选择器；所有 label/placeholder/text 策略均使用 `exact=True`，不支持大小写不敏感回退
+- 处理：新增 `element_id` 策略（`page.locator(f”#{target}”)`，优先级 100）；新增 `label_fuzzy`、`placeholder_fuzzy`、`text_fuzzy`、`button_role_fuzzy` 四个非精确匹配策略（优先级 45-60），在精确匹配失败后作为回退
+- 验证：`python -m pytest tests/integration/test_platform_api_chain.py -v`，6 passed
+- 关联记录：execution-log 2026-04-17 (Task 2)
+
+## BUG-047 | playwright_runner _capture_request_failed 对 request.failure 返回格式处理错误
+
+- 日期：2026-04-17
+- 状态：open
+- 来源：集成测试执行日志
+- 描述：Playwright `requestfailure` 事件回调中 `_capture_request_failed` 调用 `failure.get(“errorText”)`，但新版 Playwright 的 `request.failure` 返回类型为 `str` 而非 `dict`，导致每次网络请求失败时抛出 `AttributeError: 'str' object has no attribute 'get'`
+- 复现步骤：
+  1. 执行任何包含外部网络请求的用例（如 the-internet 登录）
+  2. 页面加载时部分请求失败（如 optimizely analytics）
+  3. 控制台输出 `AttributeError: 'str' object has no attribute 'get'` 堆栈
+- 影响：不影响执行结果（错误被事件循环吞掉），但导致失败请求的 `failure_text` 丢失，network_events 不完整
+- 根因：Playwright 版本更新后 `request.failure` 从 `dict` 变为 `str`，代码未适配
+- 处理：待修复
+- 验证：每次执行均可在 stderr 看到对应 traceback
+- 关联记录：execution-log 2026-04-17 (Task 2)
+
+## BUG-045 | AI planning”保存并执行草案”链路被 DSL 生成配置阻断，且当前实现不支持持久化执行进度/摘要
 
 - 日期：2026-04-13
 - 状态：in_progress
