@@ -562,13 +562,14 @@ def _capture_console_event(message, console_buffer: list[ConsoleEvent]) -> None:
 
 
 def _capture_request_failed(request, network_buffer: list[NetworkEvent]) -> None:
-    failure = request.failure or {}
+    failure = request.failure
+    failure_text = failure if isinstance(failure, str) else (failure or {}).get("errorText")
     network_buffer.append(
         NetworkEvent(
             url=request.url,
             method=request.method,
             resource_type=request.resource_type,
-            failure_text=failure.get("errorText"),
+            failure_text=failure_text,
         )
     )
 
