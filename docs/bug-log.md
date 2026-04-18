@@ -48,17 +48,17 @@
 ## BUG-047 | playwright_runner _capture_request_failed 对 request.failure 返回格式处理错误
 
 - 日期：2026-04-17
-- 状态：open
+- 状态：fixed
 - 来源：集成测试执行日志
 - 描述：Playwright `requestfailure` 事件回调中 `_capture_request_failed` 调用 `failure.get(“errorText”)`，但新版 Playwright 的 `request.failure` 返回类型为 `str` 而非 `dict`，导致每次网络请求失败时抛出 `AttributeError: 'str' object has no attribute 'get'`
 - 复现步骤：
   1. 执行任何包含外部网络请求的用例（如 the-internet 登录）
   2. 页面加载时部分请求失败（如 optimizely analytics）
   3. 控制台输出 `AttributeError: 'str' object has no attribute 'get'` 堆栈
-- 影响：不影响执行结果（错误被事件循环吞掉），但导致失败请求的 `failure_text` 丢失，network_events 不完整
+- 影响：修复前导致失败请求的 `failure_text` 丢失，network_events 不完整；严重时可导致 browser.close 崩溃
 - 根因：Playwright 版本更新后 `request.failure` 从 `dict` 变为 `str`，代码未适配
-- 处理：待修复
-- 验证：每次执行均可在 stderr 看到对应 traceback
+- 处理：已修复于 commit d73558e，改为 `isinstance(failure, str)` 兼容两种类型
+- 验证：集成测试不再报 AttributeError
 - 关联记录：execution-log 2026-04-17 (Task 2)
 
 ## BUG-045 | AI planning”保存并执行草案”链路被 DSL 生成配置阻断，且当前实现不支持持久化执行进度/摘要
