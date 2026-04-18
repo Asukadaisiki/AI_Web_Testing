@@ -14,18 +14,20 @@ AI 增强的 Web UI 自动化测试平台。
 进度判断（估算）：
 - M1 完成度：`100%`
 - M2 前端体验重构完成度：`100%`
-- M2 功能增强完成度：`30%`
-- 相对核心五阶段产品路线图整体完成度：`87% - 92%`
+- M2 功能增强完成度：`50%`
+- 相对核心五阶段产品路线图整体完成度：`90% - 95%`
 
 已完成的核心能力：
-- 平台基础：NotebookLM 三栏浮岛布局、侧边栏导航、ReportPage、Case 管理、执行详情
+- 平台基础：NotebookLM 三栏浮岛布局、侧边栏导航、ReportPage、Case 管理（含编辑/删除）、执行详情、执行记录删除
 - 前端体验：全局大圆角/无边框/弱阴影主题 token，全部页面统一三栏布局
 - 执行主链路：DSL 校验、单 Case 执行、步骤级证据、执行详情与报告聚合
-- 混合定位闭环：Tier 0 人工修正、Tier 1 DOM 语义定位、Tier 2 AI visual、Tier 3 人工干预
+- 执行流式推送：后端 WebSocket 流式执行原语、AI Planning WS worker/路由、前端 socket client、面板实时进度气泡与取消按钮
+- 混合定位闭环：Tier 0 人工修正、Tier 1 DOM 语义定位（含 element_id 策略与大小写不敏感回退）、Tier 2 AI visual、Tier 3 人工干预
 - AI DSL：自然语言生成、草案预览与导入、反馈闭环、治理页观测，已适配智谱 BigModel
-- AI 规划助手：对话式测试规划、会话历史恢复、DSL 草案审阅 → 保存用例 → 触发执行 → 结果展示完整闭环
+- AI 规划助手：对话式测试规划、会话历史恢复、会话删除、DSL 草案审阅 → 保存用例 → 触发执行 → 实时流式进度 → 结果展示完整闭环
 - 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回退
-- 回归能力：后端/前端自动化测试链路已建立，2 条浏览器级固定主回归已固化
+- 回归能力：后端/前端自动化测试链路已建立，2 条浏览器级固定主回归 + 6 条 Platform API Chain 白盒集成测试
+- 白盒测试：session 层 + 用例创建/执行/端到端全链路 API chain 测试覆盖
 
 当前仍在推进的事项：
 - AI 测试规划助手打磨：基于实际使用反馈优化对话体验和场景生成质量
@@ -44,9 +46,9 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
 
 当前前端采用三步闭环演示流（无需登录）：
 
-1. **AI 规划**（PlanningPage）：通过对话式 AI 助手生成测试方案，支持会话历史恢复
-2. **用例中心**（CasesPage）：审阅 DSL 草案、保存为正式用例、触发 Playwright 执行
-3. **报告**（ReportPage）：查看执行结果、概览统计、步骤证据与截图
+1. **AI 规划**（PlanningPage）：通过对话式 AI 助手生成测试方案，支持会话历史恢复与会话管理
+2. **用例中心**（CasesPage）：审阅 DSL 草案、保存为正式用例、编辑/删除已有用例、触发 Playwright 执行（支持实时流式进度与取消）
+3. **报告**（ReportPage）：查看执行结果、概览统计、步骤证据与截图，支持删除执行记录
 
 全部页面采用 NotebookLM 风格三栏浮岛布局，侧边栏底部导航。
 
@@ -67,6 +69,10 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
   - 单 Case smoke 可稳定执行成功
   - 首次执行落为 `needs_intervention`，提交 correction 后可重跑通过，再次执行由 Tier 0 命中
 
+- 6 条 Platform API Chain 白盒集成测试：
+  - Session 层：登录、登出、未授权访问 3 条
+  - 用例创建 + 执行链路：有效 DSL 创建用例、登录 Case 执行验证、端到端全链路 3 条
+
 运行方式：
 
 ```powershell
@@ -82,7 +88,7 @@ uv run pytest tests/integration -m browser_integration
 
 ## AI 视觉保护配置
 
-后端当前支持以下保护性配置，默认都以“不中断主链路”为原则：
+后端当前支持以下保护性配置，默认都以”不中断主链路”为原则：
 - `ENABLE_AI_DSL_GENERATE=false`
 - `AI_DSL_TIMEOUT_MS=15000`
 - `AI_DSL_API_KEY=`
@@ -102,10 +108,21 @@ uv run pytest tests/integration -m browser_integration
 
 当 VLM 请求连续失败、超时或超过速率预算时，系统会直接跳过 Tier 2，继续走现有降级链路或进入人工干预。
 
-AI DSL 生成现在还会输出最小治理信息：
+AI DSL 生成会输出最小治理信息：
 - `warnings`：风险提示或需人工注意的问题
 - `normalization_notes`：自动修正动作
 - `generation_meta`：使用模型、Base URL 来源、删除非法 steps / contracts 数量等
+
+## 定位系统
+
+混合定位采用四层降级链路：
+
+| Tier | 策略 | 说明 |
+|------|------|------|
+| Tier 0 | 人工修正 | 优先命中已保存的 corrections 记录 |
+| Tier 1 | DOM 语义定位 | 含 element_id 策略、CSS/XPath、大小写不敏感 label/placeholder/text/button 匹配 |
+| Tier 2 | AI visual | 视觉模型定位，默认关闭，需手动开启 |
+| Tier 3 | 人工干预 | 定位失败后进入 `needs_intervention`，提交修正后可重跑 |
 
 ## 快速开始
 
@@ -155,6 +172,13 @@ cd backend
 uv run pytest tests/integration -m browser_integration
 ```
 
+### 后端 API Chain 白盒集成测试
+
+```powershell
+cd backend
+uv run pytest tests/integration/test_platform_api_chain.py -v
+```
+
 ### 前端测试
 
 ```powershell
@@ -186,10 +210,13 @@ npm run build
 - `docs/AI 自动化测试增强项目规划.md`：核心产品规划，优先级最高
 - `docs/project-plan.md`：当前执行计划与阶段状态
 - `docs/frontend-design.md`：前端设计说明
+- `docs/hybrid-locate-and-intervention-design.md`：混合定位与人工干预技术设计
 - `docs/execution-log.md`：任务执行记录
 - `docs/bug-log.md`：缺陷记录
 - `docs/ai-visual-gray-acceptance-baseline.md`：AI visual 灰度验收口径与门槛
 - `docs/ai-visual-gray-acceptance-2026-03-24.md`：2026-03-24 本地受控灰度验收结论
+- `docs/superpowers/specs/`：功能设计规格文档
+- `docs/superpowers/plans/`：实施计划文档
 
 如果文档之间有冲突，以 `docs/AI 自动化测试增强项目规划.md` 为准。
 
