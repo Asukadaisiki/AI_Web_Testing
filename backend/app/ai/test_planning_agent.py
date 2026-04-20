@@ -600,4 +600,5 @@ def _build_draft_prompt(
         f"测试数据需求：{data_labels or '待补充'}。"
         f"范围限制：{requirements.scope_limits or '未说明'}。"
         f"{negative_hint}"
+        "如果已获取到页面元素清单，请严格按照元素的实际 label、placeholder 或 id 作为 target，不要自行编造描述。"
     )
