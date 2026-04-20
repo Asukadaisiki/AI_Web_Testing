@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app.ai.planning_tools import (
+    _handle_capture_page_session,
+    _handle_explore_page,
     _handle_get_case_detail,
     _handle_get_case_stats,
     _handle_get_project_info,
@@ -23,9 +26,9 @@ class TestListAvailableTools:
     """Tests for list_available_tools function."""
 
     def test_returns_all_registered_tools(self) -> None:
-        """Should return all 5 registered tools."""
+        """Should return all 7 registered tools."""
         tools = list_available_tools()
-        assert len(tools) == 5
+        assert len(tools) == 7
         tool_names = {t.name for t in tools}
         assert tool_names == {
             "get_project_info",
@@ -33,6 +36,8 @@ class TestListAvailableTools:
             "get_case_detail",
             "list_recent_executions",
             "get_case_stats",
+            "explore_page",
+            "capture_page_session",
         }
 
 
@@ -442,3 +447,59 @@ class TestHandleGetCaseStats:
         assert call_log[0] == ("get_project_test_case_stats", 42)
         assert result["project_id"] == 42
         assert result["total_cases"] == 5
+
+
+class TestExplorePageTool:
+    """Tests for _handle_explore_page handler."""
+
+    def test_explore_page_returns_elements(self, db_session: Session) -> None:
+        fake_elements = [
+            {"tag": "input", "id": "username", "text": None, "role": None,
+             "aria_label": None, "placeholder": "Username", "visible": True, "enabled": True}
+        ]
+        with patch("app.ai.planning_tools.collect_interactable_elements", return_value=fake_elements):
+            result = _handle_explore_page(
+                params={"url": "https://example.com/login"},
+                db_session=db_session,
+                project_id=1,
+            )
+        assert "elements" in result
+        assert len(result["elements"]) == 1
+        assert result["elements"][0]["placeholder"] == "Username"
+
+    def test_explore_page_requires_url(self, db_session: Session) -> None:
+        result = _handle_explore_page(params={}, db_session=db_session, project_id=1)
+        assert "error" in result
+        assert "url" in result["error"].lower()
+
+    def test_explore_page_handles_empty_result(self, db_session: Session) -> None:
+        with patch("app.ai.planning_tools.collect_interactable_elements", return_value=[]):
+            result = _handle_explore_page(
+                params={"url": "https://example.com/blank"},
+                db_session=db_session,
+                project_id=1,
+            )
+        assert result["elements"] == []
+        assert "warning" in result
+
+
+class TestCapturePageSessionTool:
+    """Tests for _handle_capture_page_session handler."""
+
+    def test_capture_returns_success(self, db_session: Session) -> None:
+        with patch("app.ai.planning_tools.capture_browser_session") as mock_capture:
+            mock_capture.return_value = {"success": True, "message": "已保存会话状态（包含 2 个 cookie）"}
+            result = _handle_capture_page_session(
+                params={
+                    "url": "https://example.com/login",
+                    "steps": [{"action": "input", "target": "username", "value": "admin"}],
+                },
+                db_session=db_session,
+                project_id=1,
+            )
+        assert result["success"] is True
+
+    def test_capture_requires_url(self, db_session: Session) -> None:
+        result = _handle_capture_page_session(params={}, db_session=db_session, project_id=1)
+        assert "error" in result
+        assert "url" in result["error"].lower()

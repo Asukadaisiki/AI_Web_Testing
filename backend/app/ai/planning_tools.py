@@ -5,9 +5,18 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
+
+from app.ai.page_explorer import (
+    capture_browser_session,
+    collect_interactable_elements,
+    format_elements_for_prompt,
+    is_storage_state_stale,
+    load_storage_state_meta,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +184,68 @@ def _handle_get_case_stats(
     return stats if isinstance(stats, dict) else {"stats": str(stats)}
 
 
+def _resolve_storage_state_dir() -> Path:
+    """Resolve storage state directory from app config."""
+    from app.core.config import get_settings
+    return Path(get_settings().storage_state_dir)
+
+
+def _handle_explore_page(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    url = params.get("url")
+    if not url or not isinstance(url, str) or not url.strip():
+        return {"error": "必须提供 url 参数"}
+
+    storage_dir = _resolve_storage_state_dir()
+    storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
+
+    elements = collect_interactable_elements(url.strip(), storage_state_path=storage_path)
+    formatted = format_elements_for_prompt(elements)
+
+    result: dict[str, Any] = {
+        "url": url.strip(),
+        "elements": elements,
+        "formatted": formatted,
+        "element_count": len(elements),
+    }
+
+    if not elements:
+        result["warning"] = "页面未发现可交互元素"
+
+    meta = load_storage_state_meta(storage_dir, project_id=project_id)
+    if meta and is_storage_state_stale(meta):
+        result["warning"] = "会话状态超过24小时未更新，元素可能不完整"
+
+    return result
+
+
+def _handle_capture_page_session(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    url = params.get("url")
+    if not url or not isinstance(url, str) or not url.strip():
+        return {"error": "必须提供 url 参数"}
+
+    steps = params.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+
+    storage_dir = _resolve_storage_state_dir()
+    return capture_browser_session(
+        url=url.strip(),
+        steps=steps,
+        storage_dir=storage_dir,
+        project_id=project_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -244,6 +315,46 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
             "required": [],
         },
     ),
+    "explore_page": PlanningTool(
+        name="explore_page",
+        description="访问指定 URL 页面，采集页面上所有可交互元素（按钮、输入框、链接等），返回元素的 id、label、placeholder 等定位属性。如果项目已保存浏览器会话状态，会自动复用登录态。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "要采集的目标页面 URL",
+                },
+            },
+            "required": ["url"],
+        },
+    ),
+    "capture_page_session": PlanningTool(
+        name="capture_page_session",
+        description="打开指定 URL 并执行登录步骤（如填写用户名密码、点击登录按钮），然后保存浏览器的会话状态（cookie 等），供后续 explore_page 复用登录态。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "登录页面的 URL",
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "登录操作的步骤列表，每步包含 action、target 和 value",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["input", "click"]},
+                            "target": {"type": "string"},
+                            "value": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            "required": ["url"],
+        },
+    ),
 }
 
 _TOOL_HANDLERS: dict[str, Any] = {
@@ -252,4 +363,6 @@ _TOOL_HANDLERS: dict[str, Any] = {
     "get_case_detail": _handle_get_case_detail,
     "list_recent_executions": _handle_list_recent_executions,
     "get_case_stats": _handle_get_case_stats,
+    "explore_page": _handle_explore_page,
+    "capture_page_session": _handle_capture_page_session,
 }
