@@ -20,12 +20,15 @@ def create_app() -> FastAPI:
     settings = get_settings()
     verify_database_connection()
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    STORAGE_STATES_DIR = Path(settings.storage_state_dir)
+    STORAGE_STATES_DIR.mkdir(parents=True, exist_ok=True)
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         debug=settings.debug,
     )
     app.state.artifacts_dir = ARTIFACTS_DIR
+    app.state.storage_states_dir = STORAGE_STATES_DIR
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.auth_session_secret,

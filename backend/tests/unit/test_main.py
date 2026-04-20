@@ -33,6 +33,18 @@ def test_create_app_requires_auth_session_secret(monkeypatch) -> None:
         main_module.create_app()
 
 
+def test_create_app_creates_storage_states_dir(monkeypatch, reset_cached_state, tmp_path) -> None:
+    """create_app should ensure storage_states directory exists."""
+    monkeypatch.setattr(main_module, "verify_database_connection", lambda: None)
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
+    monkeypatch.setenv("STORAGE_STATE_DIR", str(tmp_path / "test_states"))
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+    app = main_module.create_app()
+    assert (tmp_path / "test_states").exists()
+    assert hasattr(app.state, "storage_states_dir")
+
+
 def test_create_app_protects_artifacts_directory(monkeypatch, tmp_path, db_session) -> None:
     monkeypatch.setattr(main_module, "verify_database_connection", lambda: None)
     monkeypatch.setattr(main_module, "ARTIFACTS_DIR", tmp_path)
