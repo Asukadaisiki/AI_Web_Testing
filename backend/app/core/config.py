@@ -66,7 +66,7 @@ class Settings:
     ai_dsl_model: str | None = None
     ai_dsl_strict_mode: bool = False
     ai_dsl_allow_auto_repair: bool = True
-    enable_ai_visual_locate: bool = False
+    enable_ai_visual_locate: bool = True
     ai_visual_timeout_ms: int = 10000
     ai_visual_failure_threshold: int = 3
     ai_visual_cooldown_seconds: int = 60
@@ -81,6 +81,7 @@ class Settings:
     ai_planning_api_key: str | None = None
     ai_planning_timeout_ms: int = 30000
     ai_planning_max_react_rounds: int = 5
+    storage_state_dir: str = "storage_states"
 
 
 @lru_cache
@@ -108,7 +109,7 @@ def get_settings() -> Settings:
         ai_dsl_model=os.getenv("AI_DSL_MODEL") or None,
         ai_dsl_strict_mode=_get_bool(os.getenv("AI_DSL_STRICT_MODE"), default=False),
         ai_dsl_allow_auto_repair=_get_bool(os.getenv("AI_DSL_ALLOW_AUTO_REPAIR"), default=True),
-        enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
+        enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=True),
         ai_visual_timeout_ms=max(1000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=10000)),
         ai_visual_failure_threshold=max(1, _get_int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD"), default=3)),
         ai_visual_cooldown_seconds=max(1, _get_int(os.getenv("AI_VISUAL_COOLDOWN_SECONDS"), default=60)),
@@ -123,4 +124,5 @@ def get_settings() -> Settings:
         ai_planning_api_key=os.getenv("AI_PLANNING_API_KEY") or None,
         ai_planning_timeout_ms=max(1000, _get_int(os.getenv("AI_PLANNING_TIMEOUT_MS"), default=30000)),
         ai_planning_max_react_rounds=max(1, _get_int(os.getenv("AI_PLANNING_MAX_REACT_ROUNDS"), default=5)),
+        storage_state_dir=os.getenv("STORAGE_STATE_DIR", "storage_states").strip(),
     )
