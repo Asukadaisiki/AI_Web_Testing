@@ -9,6 +9,22 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-20
+
+- 任务：实现 DOM-aware DSL 生成，让 AI 生成的 DSL target 匹配页面真实 DOM 元素属性；同时启用 VLM 视觉定位作为兜底机制
+- 执行动作：
+  - **Task 1** — `config.py`：新增 `storage_state_dir` 配置项，`enable_ai_visual_locate` 默认值从 `False` 改为 `True`
+  - **Task 2** — 新建 `page_explorer.py`：存储状态文件 I/O（`save_storage_state`、`load_storage_state_meta`、`is_storage_state_stale`）和元素格式化（`format_elements_for_prompt`）
+  - **Task 3+4** — `page_explorer.py` 新增 Playwright 函数：`collect_interactable_elements`（采集页面可交互元素）、`capture_browser_session`（执行登录步骤并保存浏览器状态）
+  - **Task 5** — `planning_tools.py` 注册 `explore_page` 和 `capture_page_session` 两个 ReAct agent 工具，AI 可自主调用采集页面 DOM 或保存登录态
+  - **Task 6** — `test_planning_agent.py`：`_build_draft_prompt` 追加 DOM 感知提示，引导 AI 使用实际 label/placeholder/id 作为 target
+  - **Task 7** — `main.py`：启动时自动创建 `storage_states/` 目录
+  - **Task 8** — 验证 VLM 默认开启测试通过
+  - **Task 9** — 新建集成测试文件 `test_dom_aware_generation.py`（需 Playwright + 网络，标记 `browser_integration`）
+- 结果：9 个 commit，55 个相关单元测试全部通过，1 个 pre-existing 失败无关本次改动
+- 验证：`cd backend && uv run pytest tests/unit/test_page_explorer.py tests/unit/test_planning_tools.py tests/unit/test_config.py tests/unit/test_main.py tests/unit/test_planning_agent.py -v`
+- 后续：手动运行集成测试 `cd backend && uv run pytest tests/integration/test_dom_aware_generation.py -v -m browser_integration`；更新 .env.example 中 ENABLE_AI_VISUAL_LOCATE 默认值说明
+
 ## 2026-04-17 (Task 2)
 
 - 任务：用例创建 + 执行链路测试（3 个测试），扩展 platform API chain 白盒测试
