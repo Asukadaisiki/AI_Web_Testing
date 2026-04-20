@@ -7,6 +7,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from playwright.sync_api import sync_playwright
+
+from app.locators.fallback import EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT
+
 logger = logging.getLogger(__name__)
 
 STALE_THRESHOLD_HOURS = 24
@@ -80,7 +84,121 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _sync_playwright_context():
+    """Indirection point for testing -- returns the sync_playwright context manager."""
+    return sync_playwright()
+
+
+def _extract_element_id(elem: dict[str, Any]) -> str:
+    """Extract element id from css_selector (#id) or fall back to data_testid."""
+    css = elem.get("css_selector", "")
+    if css.startswith("#") and " > " not in css:
+        return css[1:]
+    return elem.get("data_testid") or ""
+
+
+def collect_interactable_elements(
+    url: str,
+    *,
+    storage_state_path: str | None = None,
+    timeout_ms: int = 10000,
+) -> list[dict[str, Any]]:
+    """Open *url* in a temporary Playwright context and return interactable elements."""
+    try:
+        pw = _sync_playwright_context()
+        with pw as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context_kwargs: dict[str, Any] = {}
+            if storage_state_path and Path(storage_state_path).exists():
+                context_kwargs["storage_state"] = storage_state_path
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+            try:
+                page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            except Exception as exc:
+                logger.warning("Page load issue for %s: %s", url, exc)
+            payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+            context.close()
+            browser.close()
+    except Exception as exc:
+        logger.warning("collect_interactable_elements failed for url=%s: %s", url, exc)
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    return [
+        {
+            "tag": elem.get("tag", "unknown"),
+            "id": _extract_element_id(elem),
+            "text": elem.get("text"),
+            "role": elem.get("role"),
+            "aria_label": elem.get("aria_label"),
+            "placeholder": elem.get("placeholder"),
+            "visible": elem.get("visible", False),
+            "enabled": elem.get("enabled", False),
+        }
+        for elem in payload
+        if isinstance(elem, dict)
+    ]
+
+
+def capture_browser_session(
+    url: str,
+    steps: list[dict[str, Any]],
+    *,
+    storage_dir: Path,
+    project_id: int,
+    timeout_ms: int = 10000,
+) -> dict[str, Any]:
+    """Execute *steps* on *url*, then persist the browser session state."""
+    try:
+        pw = _sync_playwright_context()
+        with pw as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+
+            for step in steps:
+                action = step.get("action", "")
+                target = step.get("target", "")
+                value = step.get("value", "")
+                if action == "input" and target:
+                    locator = (
+                        page.get_by_label(target)
+                        or page.get_by_placeholder(target)
+                        or page.locator(f"#{target}")
+                    )
+                    locator.fill(value)
+                elif action == "click" and target:
+                    locator = (
+                        page.get_by_label(target)
+                        or page.get_by_role("button", name=target)
+                        or page.locator(f"#{target}")
+                    )
+                    locator.click()
+
+            state = context.storage_state()
+            cookie_count = len(state.get("cookies", []))
+            save_storage_state(storage_dir, project_id=project_id, state=state, source_url=url)
+            context.close()
+            browser.close()
+    except Exception as exc:
+        logger.warning("capture_browser_session failed for url=%s: %s", url, exc)
+        return {"success": False, "error": str(exc)}
+
+    return {
+        "success": True,
+        "message": f"已保存 {url} 的会话状态（包含 {cookie_count} 个 cookie）",
+    }
+
+
 __all__ = [
+    "capture_browser_session",
+    "collect_interactable_elements",
     "format_elements_for_prompt",
     "get_storage_state_path",
     "is_storage_state_stale",

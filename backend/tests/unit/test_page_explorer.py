@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from app.ai.page_explorer import (
+    capture_browser_session,
+    collect_interactable_elements,
     format_elements_for_prompt,
     get_storage_state_path,
     load_storage_state_meta,
@@ -189,3 +192,162 @@ class TestIsStorageStateStale:
         from app.ai.page_explorer import is_storage_state_stale
 
         assert is_storage_state_stale(meta) is False
+
+
+class TestCollectInteractableElements:
+    def test_collects_elements_from_page(self) -> None:
+        fake_elements: list[dict[str, Any]] = [
+            {
+                "tag": "input", "id": "username", "text": None, "role": None,
+                "aria_label": None, "placeholder": "Username", "data_testid": None,
+                "css_selector": "#username", "xpath": "/html/body/input[1]",
+                "rect": {"x": 10, "y": 20, "width": 200, "height": 30},
+                "visible": True, "enabled": True,
+            }
+        ]
+
+        class FakePage:
+            url = "https://example.com/login"
+
+            def goto(self, url, **kwargs): ...
+
+            def wait_for_load_state(self, state): ...
+
+            def evaluate(self, script):
+                return fake_elements
+
+        class FakeContext:
+            def new_page(self): return FakePage()  # type: ignore[return-value]
+            def close(self): ...
+
+        class FakeBrowser:
+            def new_context(self, **kwargs): return FakeContext()  # type: ignore[return-value]
+            def close(self): ...
+
+        class FakePlaywright:
+            class chromium:
+                @staticmethod
+                def launch(**kwargs): return FakeBrowser()  # type: ignore[return-value]
+
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+
+        import app.ai.page_explorer as mod
+        original = getattr(mod, "_sync_playwright_context", None)
+        mod._sync_playwright_context = lambda: FakePlaywright()  # type: ignore[assignment]
+        try:
+            result = collect_interactable_elements("https://example.com/login", storage_state_path=None)
+        finally:
+            if original is not None:
+                mod._sync_playwright_context = original
+            else:
+                delattr(mod, "_sync_playwright_context")
+
+        assert len(result) == 1
+        assert result[0]["id"] == "username"
+        assert result[0]["placeholder"] == "Username"
+
+    def test_returns_empty_list_on_error(self) -> None:
+        import app.ai.page_explorer as mod
+
+        def fake_error():
+            raise RuntimeError("Playwright not installed")
+
+        original = getattr(mod, "_sync_playwright_context", None)
+        mod._sync_playwright_context = fake_error  # type: ignore[assignment]
+        try:
+            result = collect_interactable_elements("https://example.com", storage_state_path=None)
+        finally:
+            if original is not None:
+                mod._sync_playwright_context = original
+            else:
+                delattr(mod, "_sync_playwright_context")
+
+        assert result == []
+
+
+class TestCaptureBrowserSession:
+    def test_executes_steps_and_saves_state(self, tmp_path: Path) -> None:
+        captured_state: dict[str, Any] = {
+            "cookies": [{"name": "sid", "value": "xyz"}],
+            "origins": [],
+        }
+
+        class FakeLocator:
+            def fill(self, value): pass
+            def click(self): pass
+
+        class FakePage:
+            url = "https://example.com/login"
+
+            def goto(self, url, **kwargs): pass
+
+            def wait_for_load_state(self, state, **kwargs): pass
+
+            def get_by_label(self, target, **kwargs): return FakeLocator()  # type: ignore[return-value]
+            def get_by_placeholder(self, target, **kwargs): return FakeLocator()  # type: ignore[return-value]
+            def get_by_role(self, role, **kwargs): return FakeLocator()  # type: ignore[return-value]
+            def locator(self, selector): return FakeLocator()  # type: ignore[return-value]
+
+        class FakeContext:
+            def new_page(self): return FakePage()  # type: ignore[return-value]
+            def storage_state(self): return captured_state
+            def close(self): ...
+
+        class FakeBrowser:
+            def new_context(self, **kwargs): return FakeContext()  # type: ignore[return-value]
+            def close(self): ...
+
+        class FakePlaywright:
+            class chromium:
+                @staticmethod
+                def launch(**kwargs): return FakeBrowser()  # type: ignore[return-value]
+
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+
+        import app.ai.page_explorer as mod
+        original = getattr(mod, "_sync_playwright_context", None)
+        mod._sync_playwright_context = lambda: FakePlaywright()  # type: ignore[assignment]
+        try:
+            result = capture_browser_session(
+                url="https://example.com/login",
+                steps=[
+                    {"action": "input", "target": "username", "value": "admin"},
+                    {"action": "click", "target": "Login"},
+                ],
+                storage_dir=tmp_path,
+                project_id=1,
+            )
+        finally:
+            if original is not None:
+                mod._sync_playwright_context = original
+            else:
+                delattr(mod, "_sync_playwright_context")
+
+        assert result["success"] is True
+        assert (tmp_path / "1.json").exists()
+
+    def test_returns_error_on_failure(self, tmp_path: Path) -> None:
+        import app.ai.page_explorer as mod
+
+        def fake_error():
+            raise RuntimeError("Browser crashed")
+
+        original = getattr(mod, "_sync_playwright_context", None)
+        mod._sync_playwright_context = fake_error  # type: ignore[assignment]
+        try:
+            result = capture_browser_session(
+                url="https://example.com",
+                steps=[],
+                storage_dir=tmp_path,
+                project_id=1,
+            )
+        finally:
+            if original is not None:
+                mod._sync_playwright_context = original
+            else:
+                delattr(mod, "_sync_playwright_context")
+
+        assert result["success"] is False
+        assert "error" in result
