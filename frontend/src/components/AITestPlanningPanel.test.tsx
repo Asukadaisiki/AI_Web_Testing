@@ -491,6 +491,7 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
         }, 0);
       },
       close: vi.fn(),
+      isOpen: () => true,
     };
   });
   vi.mocked(api.getPlanningSession).mockResolvedValue({
@@ -656,7 +657,7 @@ test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", 
 
   vi.mocked(wsModule.connectExecutionStream).mockImplementation((_sessionId, onEvent, _onError) => {
     capturedOnEvent = onEvent as (event: ExecutionStreamEvent) => void;
-    return { send, close };
+    return { send, close, isOpen: () => true };
   });
 
   // getPlanningSession: first call (on mount) returns plan + drafts, subsequent calls return completed

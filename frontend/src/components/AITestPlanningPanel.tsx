@@ -145,6 +145,14 @@ function applyStreamEventToPayload(
   }
 }
 
+const phaseColorMap: Record<string, string> = {
+  thinking: "processing",
+  generating: "warning",
+  tool_calling: "warning",
+  draft_generating: "warning",
+  executing: "success",
+};
+
 export function AITestPlanningPanel({
   aiSettings,
   projectId,
@@ -172,7 +180,10 @@ export function AITestPlanningPanel({
   const [isExecuting, setIsExecuting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sessionList, setSessionList] = useState<AIPlanningSessionSummary[]>([]);
-  const executionStreamRef = useRef<ExecutionStreamClient | null>(null);  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const executionStreamRef = useRef<ExecutionStreamClient | null>(null);
+  const wsClientRef = useRef<ExecutionStreamClient | null>(null);
+  const activeAssistantMessageIdRef = useRef<number | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
   const isDisabled = !planningEnabled || !projectId;
@@ -280,6 +291,138 @@ export function AITestPlanningPanel({
     };
   }, [projectId, caseId]);
 
+  // Persistent WebSocket connection for this planning session
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const client = connectExecutionStream(
+      sessionId,
+      (event: ExecutionStreamEvent) => {
+        if (
+          event.type === "status" ||
+          event.type === "text_chunk" ||
+          event.type === "tool_call_start" ||
+          event.type === "tool_call_end"
+        ) {
+          const targetId = activeAssistantMessageIdRef.current;
+          if (targetId == null) return;
+
+          setTranscript((current) =>
+            current.map((msg) => {
+              if (msg.id !== targetId) return msg;
+              const payload = (msg.structured_payload ?? {}) as Record<string, unknown>;
+              if (event.type === "status") {
+                return {
+                  ...msg,
+                  structured_payload: { ...payload, _phase: event.phase, _phaseMessage: event.message, _streaming: true },
+                };
+              }
+              if (event.type === "text_chunk") {
+                return { ...msg, content: msg.content + event.text };
+              }
+              if (event.type === "tool_call_start") {
+                return {
+                  ...msg,
+                  structured_payload: { ...payload, _phase: "tool_calling", _phaseMessage: `正在调用工具: ${event.tool}` },
+                };
+              }
+              if (event.type === "tool_call_end") {
+                return {
+                  ...msg,
+                  structured_payload: { ...payload, _phase: "thinking", _phaseMessage: "正在分析需求..." },
+                };
+              }
+              return msg;
+            }),
+          );
+          return;
+        }
+
+        if (event.type === "draft_generating") {
+          const targetId = activeAssistantMessageIdRef.current;
+          if (targetId == null) return;
+          setTranscript((current) =>
+            current.map((msg) =>
+              msg.id === targetId
+                ? {
+                    ...msg,
+                    structured_payload: {
+                      ...(msg.structured_payload ?? {}),
+                      _phase: "draft_generating",
+                      _phaseMessage: event.message,
+                      _streaming: true,
+                    },
+                  }
+                : msg,
+            ),
+          );
+          return;
+        }
+
+        // Execution events via same WS
+        if (
+          event.type === "save_progress" ||
+          event.type === "case_start" ||
+          event.type === "step_start" ||
+          event.type === "step_complete"
+        ) {
+          const targetId = activeAssistantMessageIdRef.current;
+          if (targetId == null) return;
+          setTranscript((current) =>
+            current.map((msg) =>
+              msg.id === targetId
+                ? {
+                    ...msg,
+                    content: applyStreamEventToContent(msg.content, event),
+                    structured_payload: applyStreamEventToPayload(
+                      msg.structured_payload as Record<string, unknown> | null,
+                      event,
+                    ),
+                  }
+                : msg,
+            ),
+          );
+          return;
+        }
+
+        if (event.type === "turn_complete") {
+          // Reload session to get persisted messages
+          void loadSessionDetail(sessionId);
+          void loadSessionList();
+          setIsSending(false);
+          setIsGenerating(false);
+          return;
+        }
+
+        if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
+          void loadSessionDetail(sessionId);
+          void loadSessionList();
+          void queryClient.invalidateQueries({ queryKey: ["cases"] });
+          void queryClient.invalidateQueries({ queryKey: ["executions"] });
+          setIsExecuting(false);
+          if (event.type === "cancelled") {
+            void messageApi.info("执行已取消");
+          }
+          if (event.type === "error") {
+            void messageApi.error("执行错误: " + event.message);
+          }
+        }
+      },
+      (error) => {
+        void messageApi.error(error.message);
+      },
+    );
+    if (!client) return;
+    wsClientRef.current = client;
+    executionStreamRef.current = client;
+
+    return () => {
+      client?.close();
+      wsClientRef.current = null;
+      executionStreamRef.current = null;
+    };
+  }, [sessionId]);
+
   const collectedEntries = useMemo(
     () =>
       REQUIREMENT_FIELDS.flatMap((field) => {
@@ -302,25 +445,42 @@ export function AITestPlanningPanel({
     }
 
     setIsSending(true);
+    const optimisticUser = createOptimisticMessage(sessionId, "user", "user", trimmed);
+    const optimisticAssistant = createOptimisticMessage(sessionId, "assistant", "followup", "", {
+      _phase: "thinking",
+      _phaseMessage: "正在分析需求...",
+      _streaming: true,
+    });
+    activeAssistantMessageIdRef.current = optimisticAssistant.id;
+    setTranscript((current) => [...current, optimisticUser, optimisticAssistant]);
+    setInputValue("");
+
+    if (wsClientRef.current?.isOpen()) {
+      wsClientRef.current.send({ type: "chat", content: trimmed });
+      return;
+    }
+
+    // Fallback: REST API
     try {
       const response = await sendPlanningMessage(sessionId, { content: trimmed });
-      setTranscript((current) => [
-        ...current,
-        createOptimisticMessage(sessionId, "user", "user", trimmed),
-        ...buildToolMessages(sessionId, response.tool_calls ?? []),
-        createOptimisticMessage(
-          sessionId,
-          "assistant",
-          response.plan ? "plan" : response.session_status === "error" ? "system_error" : "followup",
-          response.assistant_message,
-        ),
-      ]);
+      setTranscript((current) =>
+        current
+          .filter((msg) => msg.id !== optimisticAssistant.id)
+          .concat(
+            buildToolMessages(sessionId, response.tool_calls ?? []),
+            createOptimisticMessage(
+              sessionId,
+              "assistant",
+              response.plan ? "plan" : response.session_status === "error" ? "system_error" : "followup",
+              response.assistant_message,
+            ),
+          ),
+      );
       setRequirements(response.requirements);
       setMissingSlots(response.missing_slots);
       setSuggestedQuestions(response.suggested_questions);
       setPlan(response.plan ?? null);
       setDrafts(response.drafts);
-      setInputValue("");
       localStorage.setItem("ai_planning_last_session", String(sessionId));
       await loadSessionList();
     } catch (error) {
@@ -335,6 +495,28 @@ export function AITestPlanningPanel({
       return;
     }
     setIsGenerating(true);
+
+    if (wsClientRef.current?.isOpen()) {
+      const optimisticAssistant = createOptimisticMessage(sessionId, "assistant", "plan", "", {
+        _phase: "generating",
+        _phaseMessage: "正在生成 DSL...",
+        _streaming: true,
+      });
+      activeAssistantMessageIdRef.current = optimisticAssistant.id;
+      setTranscript((current) => [...current, optimisticAssistant]);
+      wsClientRef.current.send({
+        type: "generate_drafts",
+        scenario_keys: selectedScenarioKeys,
+        current_case: currentCase ?? null,
+        current_steps: currentSteps ?? null,
+        current_input_contract: currentInputContract ?? null,
+        current_output_contract: currentOutputContract ?? null,
+        preserve_contracts: true,
+      });
+      return;
+    }
+
+    // Fallback: REST API
     try {
       const response = await generatePlanningDrafts(sessionId, {
         scenario_keys: selectedScenarioKeys,
@@ -560,6 +742,18 @@ export function AITestPlanningPanel({
                       </div>
                     ))}
                   </div>
+                ) : item.role === "assistant" && (item.structured_payload as Record<string, unknown>)?._phase ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <Tag color={phaseColorMap[((item.structured_payload as Record<string, unknown>)._phase as string) ?? ""] ?? "processing"}>
+                      {String((item.structured_payload as Record<string, unknown>)._phaseMessage ?? "处理中...")}
+                    </Tag>
+                    <div style={{ whiteSpace: "pre-wrap" }}>
+                      {item.content}
+                      {(item.structured_payload as Record<string, unknown>)?._streaming ? (
+                        <span className="typing-cursor">▊</span>
+                      ) : null}
+                    </div>
+                  </div>
                 ) : (
                   item.content
                 )}
@@ -739,16 +933,24 @@ export function AITestPlanningPanel({
                     .filter((d) => selectedScenarioKeys.includes(d.scenario_key))
                     .map((d) => d.id);
                   setIsExecuting(true);
-                  try {
-                    const progressMessage = createOptimisticMessage(
-                      sessionId,
-                      "assistant",
-                      "followup",
-                      "正在保存并执行已选草案…",
-                      { type: "execution_progress", saved_count: 0, total: 0, cases: [] },
-                    );
-                    setTranscript((current) => [...current, progressMessage]);
 
+                  const progressMessage = createOptimisticMessage(
+                    sessionId,
+                    "assistant",
+                    "followup",
+                    "正在保存并执行已选草案…",
+                    { type: "execution_progress", saved_count: 0, total: 0, cases: [] },
+                  );
+                  activeAssistantMessageIdRef.current = progressMessage.id;
+                  setTranscript((current) => [...current, progressMessage]);
+
+                  if (wsClientRef.current?.isOpen()) {
+                    wsClientRef.current.send({ type: "execute", draft_ids: draftIds });
+                    return;
+                  }
+
+                  // Fallback: create temporary WS connection
+                  try {
                     const client = connectExecutionStream(
                       sessionId,
                       async (event: ExecutionStreamEvent) => {
@@ -769,7 +971,6 @@ export function AITestPlanningPanel({
                           await loadSessionDetail(sessionId);
                           return;
                         }
-                        // Update the progress bubble with streaming event data
                         setTranscript((current) =>
                           current.map((msg) =>
                             msg.id === progressMessage.id

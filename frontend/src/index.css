@@ -92,6 +92,16 @@ a {
   border-radius: 4px;
 }
 
+/* Streaming typing cursor */
+.typing-cursor {
+  animation: blink 1s step-end infinite;
+  color: #1a1a2e;
+  font-weight: bold;
+}
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
 /* === Preserved from original === */
 
 .status-tag {
