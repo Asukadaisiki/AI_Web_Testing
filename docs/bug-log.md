@@ -29,38 +29,35 @@
 - 关联记录：执行日志日期或链接
 ```
 
-## BUG-048 | AI DSL 生成缺少 goto 步骤，Prompt 未强制约束导航语句
+## BUG-048 | AI DSL 规划阶段完整性校验缺失
 
 - 日期：2026-04-21
-- 状态：open
+- 状态：fixed
 - 来源：白盒测试执行（The Internet Login Page 场景）
-- 描述：AI 生成 DSL 时遗漏 goto 步骤，将 base_url 设为完整登录页 URL（如 `https://the-internet.herokuapp.com/login`）但不生成 goto 步骤，导致执行器在 about:blank 上操作，所有后续步骤失败。DSL 规范已完整传给 AI（6 个 action 均列出），但 Prompt 没有明确要求"测试用例通常需要先导航到页面"或"goto 应作为第一步"。
+- 描述：AI 生成 DSL 时遗漏 goto 步骤，将 base_url 设为完整登录页 URL 但不生成 goto 步骤，导致执行器在 about:blank 上操作。根因是规划阶段缺少完整性校验，AI 不知道"入口"在哪。
 - 复现步骤：
   1. 通过 AI Planning 会话描述"测试 The Internet 登录页"
-  2. AI 生成草案，观察 base_url 设为完整登录 URL，但 steps 数组中没有 goto 步骤
-  3. 执行该 DSL 用例
-  4. 所有步骤在 about:blank 上执行并失败
-- 影响：AI 生成的 DSL 可能缺少关键导航步骤，用户需要手动补齐才能执行
-- 根因：`_BASE_USER_RULE_LINES`（dsl_generator.py 约第 139-145 行）只要求 steps 使用允许的 action，未强制导航步骤；后处理 `_normalize_steps` 只移除无效步骤，不检查逻辑完整性
-- 用户研判：这是一个规划阶段完整性校验缺失的问题，模仿人工测试思维重新定位——人工写用例会明确前置条件、入口/导航、当前状态、操作步骤、预期结果五个要素，goto 缺失本质是 AI 不知道"入口"在哪。不应强制 goto（保持灵活性），而是让 AI 在信息不完整时拒绝生成
-- 处理：待修复。核心思路：(1) 将 planning 与 execution 拆开，AI 规划阶段先评估完整性——缺少前置条件/入口/页面状态等信息时返回"不可执行/缺少条件"而非硬生成残缺 DSL；(2) 在 Prompt 或后处理中引入测试用例五要素（前置条件、入口、当前状态、步骤、预期）的结构化思维引导；(3) DSL schema 可考虑增加 preconditions / entry_point 等可选字段，或至少在 AI 生成时要求思考这些要素
-- 验证：未验证
+  2. AI 生成草案，base_url 设为完整登录 URL，steps 中无 goto 步骤
+  3. 执行 DSL 用例，所有步骤在 about:blank 上失败
+- 影响：AI 生成的 DSL 可能缺少关键导航步骤，用户需要手动补齐
+- 根因：Prompt 未引导 AI 评估测试完整性（前置条件、入口、步骤、预期），后处理不检查逻辑完整性
+- 处理：已修复。(1) Prompt 增加测试五要素完整性引导和 base_url 规范说明（`_BASE_USER_RULE_LINES`）；(2) 后处理新增 `_check_dsl_completeness` 函数，检测 base_url 含页面路径或无 goto 步骤时发出 warning/normalization_note，不阻断生成，保持灵活性
+- 验证：`cd backend && uv run pytest tests/unit/test_dsl_validation.py::TestDslCompletenessCheck -v`，5 passed
 - 关联记录：execution-log 2026-04-21
 
-## BUG-049 | 语义定位器不支持标签名开头的复合 CSS 选择器（如 button[type='submit']）
+## BUG-049 | 语义定位器不支持标签名开头的复合 CSS 选择器
 
 - 日期：2026-04-21
-- 状态：open
+- 状态：fixed
 - 来源：白盒测试执行（The Internet Login Page 场景）
-- 描述：语义定位器 `_resolve_explicit_locator`（semantic.py:165-177）只识别以 `css=`、`xpath=`、`//`、`#`、`.`、`[`、`data-testid=` 开头的目标作为显式定位器。复合 CSS 选择器如 `button[type='submit']`、`form button` 以字母开头，不被识别为 CSS，而是落入文本匹配策略，导致永远无法定位到目标元素。AI 生成 DSL 时也不知道需要加 `css=` 前缀，直接生成了裸复合选择器。
+- 描述：语义定位器 `_resolve_explicit_locator` 只识别以 `css=`、`xpath=`、`//`、`#`、`.`、`[`、`data-testid=` 开头的目标，复合 CSS 选择器如 `button[type='submit']` 以字母开头落入文本匹配，永远无法定位。
 - 复现步骤：
   1. 创建 DSL 用例，click 步骤 target 设为 `button[type='submit']` 或 `form button`
-  2. 执行用例
-  3. 定位器将该 target 当作文本内容去匹配（`get_by_text("button[type='submit']")`），无法找到元素，抛出 `LocatorResolutionError` 或 `InterventionNeededError`
-- 影响：任何以标签名开头的复合 CSS 选择器均无法通过语义定位器工作，影响 AI 生成和手动编写 DSL 的灵活性
-- 根因：设计限制。定位器采用"语义优先"架构，显式 CSS 简写仅覆盖 `#`（id）、`.`（class）、`[`（属性）三种，未考虑 `tag[attr]`、`tag.class`、`tag > child` 等常见复合模式
-- 处理：待修复。双重保底策略：(1) AI 生成侧 — 在 Prompt 中告知 AI 复合 CSS 选择器需加 `css=` 前缀；(2) 定位器侧 — 扩展 `_resolve_explicit_locator` 识别 `tag[attr]`、`tag.class`、`tag > child` 等常见复合 CSS 模式，或将疑似 CSS 选择器的 target 自动识别为 CSS 策略
-- 验证：未验证
+  2. 执行用例，定位器将 target 当作文本匹配，无法找到元素
+- 影响：标签名开头的复合 CSS 选择器无法工作，影响 AI 生成和手动编写 DSL
+- 根因：设计限制，显式 CSS 简写仅覆盖 `#`、`.`、`[` 三种
+- 处理：已修复，双重保底。(1) 定位器侧：`_resolve_explicit_locator` 新增 `_COMPOUND_CSS_RE` 启发式正则（`^[a-zA-Z][a-zA-Z0-9]*[\.\#\[\s\>:,~\+]`），识别 `tag[attr]`、`tag.class`、`tag > child`、`tag child` 等复合模式；`_build_candidate_builders` 在已有 explicit locator 时跳过 element_id 策略；(2) AI Prompt 侧：`_BASE_USER_RULE_LINES` 增加复合 CSS 选择器使用指引
+- 验证：`cd backend && uv run pytest tests/unit/test_locator_semantic.py::TestCompoundCssSelector -v`，6 passed
 - 关联记录：execution-log 2026-04-21
 
 ## BUG-046 | 语义定位器缺少 element_id 和 case-insensitive 匹配策略
