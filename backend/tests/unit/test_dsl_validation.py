@@ -2353,3 +2353,19 @@ def test_get_generation_run_for_feedback_skips_for_update_on_sqlite(db_session, 
     dsl_service._get_generation_run_for_feedback(db_session, 456)
 
     assert get_calls == [456]
+
+
+def test_base_user_rules_include_css_selector_guidance():
+    """BUG-049: Prompt 规则中应包含复合 CSS 选择器使用指引。"""
+    from app.ai.dsl_generator import _BASE_USER_RULE_LINES
+    joined = "\n".join(_BASE_USER_RULE_LINES)
+    assert "CSS" in joined or "css" in joined
+
+
+def test_base_user_rules_include_completeness_guidance():
+    """BUG-048: Prompt 规则中应包含测试五要素完整性引导。"""
+    from app.ai.dsl_generator import _BASE_USER_RULE_LINES
+    joined = "\n".join(_BASE_USER_RULE_LINES)
+    # 应包含完整性评估要求
+    has_completeness = any(kw in joined for kw in ["完整", "入口", "前置"])
+    assert has_completeness, "Prompt rules should include completeness/entry point guidance"

@@ -142,6 +142,9 @@ _BASE_USER_RULE_LINES = [
     "- input_contract 和 output_contract 如无需要，返回空数组。",
     "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
+    "- 复合 CSS 选择器（如 button[type='submit']、form button）可直接使用，无需 css= 前缀；如果不确定是否为合法选择器，加上 css= 前缀。",
+    "- base_url 应为站点根地址（如 https://example.com），页面路径放在 goto 步骤中（如 /login）。不要将完整页面 URL 填入 base_url。",
+    "- 生成前评估测试信息完整性：前置条件（系统初始状态）、入口（目标页面 URL 或导航路径）、操作步骤、预期结果。如果描述中缺少入口信息，通过 base_url + goto 步骤明确入口。",
 ]
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
     "context_mismatch",
