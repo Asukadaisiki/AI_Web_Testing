@@ -9,6 +9,35 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-21
+
+- 任务：模拟真实用户白盒测试全流程：会话 → 输入 → 保存并执行 → 生成测试用例 → 执行 → 生成报告
+- 测试目标：The Internet Login Page (https://the-internet.herokuapp.com/login)
+- 操作：
+  1. 启动后端服务，确认 API health check 正常
+  2. 创建项目 "The Internet - Login Test" (ID=3)
+  3. 创建 AI 规划会话 (Session ID=34)，发送完整测试需求
+  4. AI 规划代理自动提取需求并生成测试方案（login_success / login_error 两个场景）
+  5. 选择 login_success 场景生成 DSL 草稿（首次 60s 超时，将 AI_DSL_TIMEOUT_MS 增至 120s 后成功）
+  6. AI 生成 DSL 缺少 goto 步骤且 base_url 设置为完整路径，导致执行失败（about:blank）
+  7. 修正 DSL：添加 goto /login 步骤，调整 base_url 为站点根路径，使用语义定位器 "Login" 替代 CSS 选择器
+  8. 重新执行，8/8 步骤全部通过，总耗时 3779ms
+- 结果：Execution ID=34, Status=passed, 8步全通过
+- 验证：
+  - goto /login → 页面标题 "The Internet"
+  - wait_for #username → CSS 定位 (score: 135)
+  - input #username=tomsmith → CSS 定位
+  - input #password=SuperSecretPassword! → CSS 定位
+  - click "Login" → text 语义定位 (score: 88)
+  - wait_for #flash → CSS 定位 (score: 138)
+  - assert_url_contains /secure → 通过
+  - assert_text #flash "You logged into a secure area!" → 通过
+- 发现问题：
+  1. AI DSL 生成超时（60s 不够 glm-4.7 推理），已通过 settings API 将超时增至 120s
+  2. AI 生成的 DSL 缺少 goto 步骤且 base_url 设置不合理
+  3. CSS 选择器 `button[type='submit']` 未被语义定位器识别（需使用 `css=` 前缀或语义文本）
+- 后续：考虑在 DSL 生成 prompt 中强调必须包含 goto 步骤；考虑优化语义定位器对复合 CSS 选择器的支持
+
 ## 2026-04-20
 
 - 任务：实现 DOM-aware DSL 生成，让 AI 生成的 DSL target 匹配页面真实 DOM 元素属性；同时启用 VLM 视觉定位作为兜底机制
