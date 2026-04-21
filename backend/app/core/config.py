@@ -60,14 +60,14 @@ class Settings:
     database_echo: bool = False
     execution_base_url: str | None = None
     enable_ai_dsl_generate: bool = False
-    ai_dsl_timeout_ms: int = 15000
+    ai_dsl_timeout_ms: int = 600000
     ai_dsl_api_key: str | None = None
     ai_dsl_base_url: str = "https://api.openai.com/v1"
     ai_dsl_model: str | None = None
     ai_dsl_strict_mode: bool = False
     ai_dsl_allow_auto_repair: bool = True
     enable_ai_visual_locate: bool = True
-    ai_visual_timeout_ms: int = 10000
+    ai_visual_timeout_ms: int = 600000
     ai_visual_failure_threshold: int = 3
     ai_visual_cooldown_seconds: int = 60
     ai_visual_rate_limit_per_minute: int = 10
@@ -79,7 +79,7 @@ class Settings:
     ai_planning_model: str | None = None
     ai_planning_base_url: str = "https://api.openai.com/v1"
     ai_planning_api_key: str | None = None
-    ai_planning_timeout_ms: int = 30000
+    ai_planning_timeout_ms: int = 600000
     ai_planning_max_react_rounds: int = 5
     storage_state_dir: str = "storage_states"
 
@@ -96,21 +96,21 @@ def get_settings() -> Settings:
         debug=_get_bool(os.getenv("APP_DEBUG"), default=True),
         auth_session_secret=auth_session_secret,
         auth_session_cookie_name=os.getenv("AUTH_SESSION_COOKIE_NAME", "session"),
-        auth_session_max_age_seconds=max(60, _get_int(os.getenv("AUTH_SESSION_MAX_AGE_SECONDS"), default=60 * 60 * 12)),
+        auth_session_max_age_seconds=max(600, _get_int(os.getenv("AUTH_SESSION_MAX_AGE_SECONDS"), default=60 * 60 * 12)),
         auth_session_same_site=os.getenv("AUTH_SESSION_SAME_SITE", "lax").strip().lower() or "lax",
         auth_session_https_only=_get_bool(os.getenv("AUTH_SESSION_HTTPS_ONLY"), default=True),
         database_url=os.getenv("DATABASE_URL", "sqlite:///./app.db"),
         database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,
         enable_ai_dsl_generate=_get_bool(os.getenv("ENABLE_AI_DSL_GENERATE"), default=False),
-        ai_dsl_timeout_ms=max(1000, _get_int(os.getenv("AI_DSL_TIMEOUT_MS"), default=15000)),
+        ai_dsl_timeout_ms=max(10000, _get_int(os.getenv("AI_DSL_TIMEOUT_MS"), default=600000)),
         ai_dsl_api_key=os.getenv("AI_DSL_API_KEY") or None,
         ai_dsl_base_url=os.getenv("AI_DSL_BASE_URL", "https://api.openai.com/v1"),
         ai_dsl_model=os.getenv("AI_DSL_MODEL") or None,
         ai_dsl_strict_mode=_get_bool(os.getenv("AI_DSL_STRICT_MODE"), default=False),
         ai_dsl_allow_auto_repair=_get_bool(os.getenv("AI_DSL_ALLOW_AUTO_REPAIR"), default=True),
         enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=True),
-        ai_visual_timeout_ms=max(1000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=10000)),
+        ai_visual_timeout_ms=max(10000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=600000)),
         ai_visual_failure_threshold=max(1, _get_int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD"), default=3)),
         ai_visual_cooldown_seconds=max(1, _get_int(os.getenv("AI_VISUAL_COOLDOWN_SECONDS"), default=60)),
         ai_visual_rate_limit_per_minute=max(1, _get_int(os.getenv("AI_VISUAL_RATE_LIMIT_PER_MINUTE"), default=10)),
@@ -122,7 +122,7 @@ def get_settings() -> Settings:
         ai_planning_model=os.getenv("AI_PLANNING_MODEL") or None,
         ai_planning_base_url=os.getenv("AI_PLANNING_BASE_URL", "https://api.openai.com/v1"),
         ai_planning_api_key=os.getenv("AI_PLANNING_API_KEY") or None,
-        ai_planning_timeout_ms=max(1000, _get_int(os.getenv("AI_PLANNING_TIMEOUT_MS"), default=30000)),
+        ai_planning_timeout_ms=max(1000, _get_int(os.getenv("AI_PLANNING_TIMEOUT_MS"), default=600000)),
         ai_planning_max_react_rounds=max(1, _get_int(os.getenv("AI_PLANNING_MAX_REACT_ROUNDS"), default=5)),
         storage_state_dir=os.getenv("STORAGE_STATE_DIR", "storage_states").strip(),
     )
