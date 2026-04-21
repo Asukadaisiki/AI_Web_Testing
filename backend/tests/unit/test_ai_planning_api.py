@@ -733,3 +733,30 @@ def test_ai_planning_ws_sends_cancelled_event_on_cancel(client, monkeypatch, db_
         ws.send_json({"type": "cancel"})
         data = ws.receive_json()
         assert data["type"] == "cancelled"
+
+
+def test_ai_planning_ws_handles_chat_and_generate_drafts(client, monkeypatch) -> None:
+    import app.services.ai_planning_streaming as ai_planning_streaming
+    import app.api.routes.ai_planning as ai_planning_routes
+
+    chat_events = [
+        {"type": "status", "phase": "thinking", "message": "正在分析需求..."},
+        {"type": "text_chunk", "text": "好的，我先整理登录测试场景。"},
+        {"type": "turn_complete", "session_status": "plan_ready", "payload": {"assistant_message": "测试方案已整理"}},
+    ]
+
+    async def fake_chat_stream(**kwargs):
+        for event in chat_events:
+            yield event
+
+    monkeypatch.setattr(ai_planning_streaming, "stream_planning_chat", fake_chat_stream)
+    monkeypatch.setattr(ai_planning_routes, "stream_planning_chat", fake_chat_stream)
+
+    session_id = _seed_planning_session_with_drafts(client)
+
+    with client.websocket_connect(f"/api/v1/ai-planning/sessions/{session_id}/ws?user_id=1") as ws:
+        ws.send_json({"type": "chat", "content": "帮我规划登录测试"})
+        received = [ws.receive_json() for _ in range(len(chat_events))]
+        assert [e["type"] for e in received] == ["status", "text_chunk", "turn_complete"]
+        assert received[0]["phase"] == "thinking"
+        assert received[1]["text"] == "好的，我先整理登录测试场景。"

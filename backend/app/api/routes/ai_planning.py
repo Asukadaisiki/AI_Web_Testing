@@ -37,6 +37,8 @@ from app.services.ai_planning import (
 )
 from app.services.ai_planning_streaming import (
     CancellationManager,
+    stream_planning_chat,
+    stream_planning_drafts,
     stream_save_and_execute,
 )
 from app.services.cases import EntityNotFoundError
@@ -184,14 +186,17 @@ async def ai_planning_session_ws(
     session_id: int,
     user_id: int | None = Query(default=None),
 ) -> None:
-    """WebSocket endpoint for streaming save-and-execute progress.
+    """WebSocket endpoint for streaming AI planning operations.
 
     Accepts JSON messages:
-      - ``{"type": "execute", "draft_ids": [...]}``  — start streaming execution
-      - ``{"type": "cancel"}``  — cancel the in-progress execution
+      - ``{"type": "chat", "content": "..."}`` — streaming AI conversation
+      - ``{"type": "generate_drafts", "scenario_keys": [...]}`` — streaming draft generation
+      - ``{"type": "execute", "draft_ids": [...]}`` — start streaming execution
+      - ``{"type": "cancel"}`` — cancel the in-progress execution
 
-    Emits events: ``save_progress``, ``case_start``, ``step_start``, ``step_complete``,
-    ``done``, ``cancelled``, ``error``.
+    Emits events: ``status``, ``text_chunk``, ``tool_call_start``, ``tool_call_end``,
+    ``draft_generating``, ``turn_complete``, ``save_progress``, ``case_start``,
+    ``step_start``, ``step_complete``, ``done``, ``cancelled``, ``error``.
     """
     session_factory = get_session_factory()
     with session_factory() as db:
@@ -209,6 +214,44 @@ async def ai_planning_session_ws(
             data = await websocket.receive_json()
             msg_type = data.get("type")
 
+            if msg_type == "chat":
+                try:
+                    async for event in stream_planning_chat(
+                        session_factory=session_factory,
+                        planning_session_id=session_id,
+                        content=str(data.get("content") or ""),
+                        actor_user_id=current_user.id,
+                    ):
+                        await websocket.send_json(event)
+                except Exception as exc:
+                    logger.exception("WebSocket chat streaming error for session %s", session_id)
+                    await websocket.send_json({"type": "error", "message": str(exc)})
+                continue
+
+            if msg_type == "generate_drafts":
+                payload = GenerateAIPlanningDraftsRequest.model_validate(
+                    {
+                        "scenario_keys": data.get("scenario_keys", []),
+                        "current_case": data.get("current_case"),
+                        "current_steps": data.get("current_steps"),
+                        "current_input_contract": data.get("current_input_contract"),
+                        "current_output_contract": data.get("current_output_contract"),
+                        "preserve_contracts": data.get("preserve_contracts", True),
+                    }
+                )
+                try:
+                    async for event in stream_planning_drafts(
+                        session_factory=session_factory,
+                        planning_session_id=session_id,
+                        payload=payload,
+                        actor_user_id=current_user.id,
+                    ):
+                        await websocket.send_json(event)
+                except Exception as exc:
+                    logger.exception("WebSocket draft streaming error for session %s", session_id)
+                    await websocket.send_json({"type": "error", "message": str(exc)})
+                continue
+
             if msg_type == "execute":
                 draft_ids = data.get("draft_ids", [])
                 try:
@@ -220,17 +263,17 @@ async def ai_planning_session_ws(
                         cancel_event=cancel_event,
                     ):
                         await websocket.send_json(event)
-                        if event.get("type") in ("done", "cancelled", "error"):
-                            break
                 except Exception as exc:
                     logger.exception("WebSocket streaming error for session %s", session_id)
                     await websocket.send_json({"type": "error", "message": str(exc)})
-                break
+                continue
 
-            elif msg_type == "cancel":
+            if msg_type == "cancel":
                 cancel_event.set()
                 await websocket.send_json({"type": "cancelled"})
-                break
+                continue
+
+            await websocket.send_json({"type": "error", "message": f"Unsupported message type: {msg_type}"})
 
     except WebSocketDisconnect:
         logger.debug("WebSocket disconnected for planning session %s", session_id)

@@ -7,7 +7,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn
+from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn, stream_planning_turn
 from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, Project, TestCase
 from app.schemas.ai_planning import (
     AIPlanningDraft as AIPlanningDraftSchema,
@@ -173,6 +173,89 @@ def send_planning_message(
     return agent_response
 
 
+def stream_planning_message(
+    session: Session,
+    planning_session_id: int,
+    *,
+    actor_user_id: int,
+    content: str,
+):
+    """Generator: save user msg, stream AI turn, save AI msg, yield events."""
+    from typing import Generator
+
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    session.add(
+        AIPlanningMessage(
+            session_id=planning_session.id,
+            role="user",
+            turn_type="user",
+            content=content,
+            structured_payload_json=None,
+        )
+    )
+    session.flush()
+
+    transcript_records = session.scalars(
+        select(AIPlanningMessage).where(AIPlanningMessage.session_id == planning_session.id).order_by(AIPlanningMessage.id.asc())
+    ).all()
+
+    stream = stream_planning_turn(
+        transcript=[{"role": item.role, "content": item.content} for item in transcript_records if item.turn_type != "tool_call"],
+        existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
+        db_session=session,
+        project_id=planning_session.project_id,
+    )
+    response = None
+    while True:
+        try:
+            event = next(stream)
+            yield event
+        except StopIteration as stop:
+            response = stop.value
+            break
+
+    planning_session.status = response.session_status
+    planning_session.requirements_json = response.requirements.model_dump(mode="json")
+    planning_session.plan_json = response.plan.model_dump(mode="json") if response.plan is not None else None
+    planning_session.missing_slots_json = response.missing_slots
+    planning_session.title = planning_session.title or response.requirements.business_goal or "AI 测试规划"
+    planning_session.last_error_message = (
+        response.assistant_message if response.session_status == "error" else None
+    )
+
+    for tool_call in response.tool_calls:
+        session.add(
+            AIPlanningMessage(
+                session_id=planning_session.id,
+                role="assistant",
+                turn_type="tool_call",
+                content=f"调用工具 {tool_call.tool}",
+                structured_payload_json={
+                    "type": "tool_call",
+                    **tool_call.model_dump(mode="json"),
+                },
+            )
+        )
+
+    turn_type = "system_error" if response.session_status == "error" else ("plan" if response.plan is not None else "followup")
+    session.add(
+        AIPlanningMessage(
+            session_id=planning_session.id,
+            role="assistant",
+            turn_type=turn_type,
+            content=response.assistant_message,
+            structured_payload_json={
+                "missing_slots": response.missing_slots,
+                "suggested_questions": response.suggested_questions,
+                "plan": response.plan.model_dump(mode="json") if response.plan is not None else None,
+                "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+            },
+        )
+    )
+    session.commit()
+    return response
+
+
 def generate_planning_drafts(
     session: Session,
     planning_session_id: int,
@@ -303,6 +386,39 @@ def generate_planning_drafts(
         next_action="drafts_generated",
         tool_calls=[],
     )
+
+
+def stream_generate_planning_drafts(
+    session: Session,
+    planning_session_id: int,
+    payload: GenerateAIPlanningDraftsRequest,
+    *,
+    actor_user_id: int,
+):
+    """Generator: yield draft_generating events, then delegate to generate_planning_drafts."""
+    for scenario_key in payload.scenario_keys:
+        yield {
+            "type": "draft_generating",
+            "scenario_key": scenario_key,
+            "message": f"正在生成 {scenario_key} 的 DSL...",
+        }
+
+    result = generate_planning_drafts(
+        session,
+        planning_session_id,
+        payload,
+        actor_user_id=actor_user_id,
+    )
+    yield {
+        "type": "turn_complete",
+        "session_status": result.session_status,
+        "payload": {
+            "assistant_message": result.assistant_message,
+            "drafts": [item.model_dump(mode="json") for item in result.drafts],
+            "plan": result.plan.model_dump(mode="json") if result.plan else None,
+        },
+    }
+    return result
 
 
 def update_planning_draft_status(
