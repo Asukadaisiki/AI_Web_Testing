@@ -189,6 +189,15 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
     )
 
 
+def delete_dsl_generation_run(session: Session, generation_id: int) -> None:
+    """Delete a DSL generation run record."""
+    record = session.get(DslGenerationRun, generation_id)
+    if record is None:
+        raise EntityNotFoundError(f"DSL generation run {generation_id} not found.")
+    session.delete(record)
+    session.commit()
+
+
 def get_dsl_generation_runtime_stats() -> DslGenerationRuntimeStats:
     with _RUNTIME_STATS_LOCK:
         return DslGenerationRuntimeStats(

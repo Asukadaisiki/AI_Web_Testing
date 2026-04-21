@@ -15,12 +15,13 @@ from app.services.corrections import (
     CorrectionConflictError,
     batch_update_correction_state,
     create_correction,
+    delete_correction,
     get_corrections_overview,
     list_corrections,
     list_correction_events,
     update_correction_state,
 )
-from app.services.dsl import SUPPORTED_DSL_ACTIONS, validate_dsl_case
+from app.services.dsl import SUPPORTED_DSL_ACTIONS, delete_dsl_generation_run, validate_dsl_case
 from app.services.executions import (
     delete_execution,
     execute_case,
@@ -51,6 +52,8 @@ __all__ = [
     "create_correction",
     "create_project",
     "delete_case",
+    "delete_correction",
+    "delete_dsl_generation_run",
     "delete_execution",
     "delete_project",
     "execute_case",

@@ -263,6 +263,15 @@ def get_corrections_overview(session: Session, *, window_days: int = 7) -> Locat
     )
 
 
+def delete_correction(session: Session, correction_id: int) -> None:
+    """Delete a locator correction and its cascade events."""
+    record = session.get(LocatorCorrection, correction_id)
+    if record is None:
+        raise EntityNotFoundError(f"Correction {correction_id} not found.")
+    session.delete(record)
+    session.commit()
+
+
 def _ensure_user_exists(session: Session, user_id: int) -> None:
     if session.get(User, user_id) is None:
         raise EntityNotFoundError(f"User {user_id} not found.")

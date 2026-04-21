@@ -21,6 +21,7 @@ from app.services import (
     EntityNotFoundError,
     batch_update_correction_state,
     create_correction,
+    delete_correction,
     get_corrections_overview,
     list_corrections,
     list_correction_events,
@@ -124,3 +125,14 @@ def update_correction_state_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except CorrectionConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.delete("/{correction_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_correction_route(
+    correction_id: int,
+    session: Session = Depends(get_db_session),
+) -> None:
+    try:
+        delete_correction(session, correction_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

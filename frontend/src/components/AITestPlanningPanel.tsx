@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import {
   createPlanningSession,
+  deletePlanningDraft,
   deletePlanningSession,
   generatePlanningDrafts,
   getPlanningSession,
@@ -818,10 +819,24 @@ export function AITestPlanningPanel({
                     }}
                     disabled={draft.status !== "generated" || !draft.dsl_case}
                   />
-                  <Typography.Text strong style={{ fontSize: 13 }}>
+                  <Typography.Text strong style={{ fontSize: 13, flex: 1 }}>
                     {draft.title}
                   </Typography.Text>
                   <Tag>{draft.status}</Tag>
+                  <DeleteOutlined
+                    style={{ fontSize: 12, color: "#999", cursor: "pointer" }}
+                    title="删除草案"
+                    onClick={async () => {
+                      try {
+                        await deletePlanningDraft(draft.id);
+                        setDrafts((prev) => prev.filter((d) => d.id !== draft.id));
+                        setSelectedScenarioKeys((prev) => prev.filter((k) => k !== draft.scenario_key));
+                        void messageApi.success("草案已删除");
+                      } catch (err) {
+                        void messageApi.error("删除失败: " + (err instanceof Error ? err.message : String(err)));
+                      }
+                    }}
+                  />
                 </div>
                 {draft.error_message ? (
                   <Alert type="error" showIcon message={draft.error_message} style={{ marginTop: 4, fontSize: 12 }} />

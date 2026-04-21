@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import require_demo_user
@@ -31,6 +31,7 @@ from app.services.dsl import (
     DslGenerationFeedbackPermissionError,
     DslGenerationRetryPermissionError,
     DslGenerationRetryValidationError,
+    delete_dsl_generation_run,
     generate_dsl_case,
     get_dsl_generation_run_detail,
     list_dsl_generation_runs,
@@ -114,6 +115,17 @@ def get_generation_run_detail_route(
 ) -> StoredDslGenerationRunDetail:
     try:
         return get_dsl_generation_run_detail(session, generation_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/generations/{generation_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a DSL generation run")
+def delete_generation_run_route(
+    generation_id: int,
+    session: Session = Depends(get_db_session),
+) -> None:
+    try:
+        delete_dsl_generation_run(session, generation_id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

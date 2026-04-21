@@ -117,6 +117,24 @@ export function getProjects() {
   return request<ProjectSummary[]>("/api/v1/projects");
 }
 
+export function createProject(payload: { name: string; description?: string }) {
+  return request<ProjectSummary>("/api/v1/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateProject(projectId: number, payload: { name?: string; description?: string }) {
+  return request<ProjectSummary>(`/api/v1/projects/${projectId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteProject(projectId: number) {
+  return request<void>(`/api/v1/projects/${projectId}`, { method: "DELETE" });
+}
+
 export function getReportPreference() {
   return request<ReportPreference>("/api/v1/reports/preferences");
 }
@@ -142,6 +160,13 @@ export function createCase(payload: CaseMutationPayload) {
 export function deleteCase(caseId: number) {
   return request<void>(`/api/v1/cases/${caseId}`, {
     method: "DELETE",
+  });
+}
+
+export function batchDeleteCases(caseIds: number[]) {
+  return request<void>("/api/v1/cases/batch", {
+    method: "DELETE",
+    body: JSON.stringify({ case_ids: caseIds }),
   });
 }
 
@@ -240,6 +265,10 @@ export function recordDslGenerationFeedback(generationId: number, payload: DslGe
   });
 }
 
+export function deleteDslGenerationRun(generationId: number) {
+  return request<void>(`/api/v1/dsl/generations/${generationId}`, { method: "DELETE" });
+}
+
 export function createPlanningSession(payload: CreatePlanningSessionPayload) {
   return request<AIPlanningSessionDetail>("/api/v1/ai-planning/sessions", {
     method: "POST",
@@ -287,6 +316,12 @@ export function updatePlanningDraftStatus(draftId: number, payload: UpdatePlanni
   return request<AIPlanningDraft>(`/api/v1/ai-planning/drafts/${draftId}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export function deletePlanningDraft(draftId: number) {
+  return request<void>(`/api/v1/ai-planning/drafts/${draftId}`, {
+    method: "DELETE",
   });
 }
 
@@ -358,6 +393,10 @@ export function batchUpdateCorrectionState(payload: BatchUpdateCorrectionStatePa
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+}
+
+export function deleteCorrection(correctionId: number) {
+  return request<void>(`/api/v1/corrections/${correctionId}`, { method: "DELETE" });
 }
 
 export function getCorrectionsOverview(window_days: OverviewWindowDays) {

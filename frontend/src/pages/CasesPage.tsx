@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Empty, Input, Space, Tag, Typography, message } from "antd";
+import { Button, Checkbox, Empty, Input, Popconfirm, Space, Tag, Typography, message } from "antd";
 import { Link, useNavigate } from "react-router-dom";
-import { SearchOutlined, PlusOutlined } from "@ant-design/icons";
+import { SearchOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useState, useMemo } from "react";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
-import { executeCase, getCases } from "../services/api";
+import { executeCase, getCases, deleteCase, batchDeleteCases } from "../services/api";
 import type { StoredCaseSummary } from "../types/api";
 
 const statusTags = [
@@ -22,6 +22,7 @@ export function CasesPage() {
   const [messageApi, contextHolder] = message.useMessage();
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const casesQuery = useQuery({
     queryKey: ["cases"],
@@ -39,6 +40,29 @@ export function CasesPage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (caseId: number) => deleteCase(caseId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+      void messageApi.success("用例已删除");
+    },
+    onError: (error: Error) => {
+      void messageApi.error("删除失败: " + error.message);
+    },
+  });
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: (ids: number[]) => batchDeleteCases(ids),
+    onSuccess: () => {
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+      void messageApi.success("批量删除成功");
+    },
+    onError: (error: Error) => {
+      void messageApi.error("批量删除失败: " + error.message);
+    },
+  });
+
   const allCases = casesQuery.data?.items ?? [];
 
   const filteredCases = useMemo(() => {
@@ -51,7 +75,6 @@ export function CasesPage() {
           (c.description || "").toLowerCase().includes(q),
       );
     }
-    // status filter could be added later based on execution status data
     return cases;
   }, [allCases, searchText]);
 
@@ -59,6 +82,23 @@ export function CasesPage() {
     () => allCases.reduce((sum, c) => sum + c.steps.length, 0),
     [allCases],
   );
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredCases.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredCases.map((c) => c.id)));
+    }
+  };
 
   /* ---- Left Panel ---- */
   const leftPanel = (
@@ -135,58 +175,114 @@ export function CasesPage() {
         <Empty description="暂无用例" />
       )}
       {!casesQuery.isLoading && !casesQuery.isError && filteredCases.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 12,
-          }}
-        >
-          {filteredCases.map((c: StoredCaseSummary) => (
-            <div
-              key={c.id}
-              className="nb-card"
-              style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}
-            >
-              <Typography.Text strong style={{ fontSize: 14 }}>
-                {c.name}
-              </Typography.Text>
-              <Typography.Text
-                type="secondary"
-                style={{ fontSize: 12 }}
-                ellipsis
+        <>
+          {/* Batch action bar */}
+          {selectedIds.size > 0 && (
+            <div style={{
+              marginBottom: 12,
+              padding: "8px 12px",
+              background: "#e6f4ff",
+              borderRadius: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}>
+              <Checkbox
+                checked={selectedIds.size === filteredCases.length}
+                indeterminate={selectedIds.size > 0 && selectedIds.size < filteredCases.length}
+                onChange={toggleSelectAll}
               >
-                {c.description || "未填写描述"}
-              </Typography.Text>
-              <Typography.Text
-                type="secondary"
-                style={{ fontSize: 12 }}
-                ellipsis
+                已选 {selectedIds.size} 项
+              </Checkbox>
+              <Popconfirm
+                title={`确定删除选中的 ${selectedIds.size} 个用例？`}
+                onConfirm={() => batchDeleteMutation.mutate(Array.from(selectedIds))}
+                okText="删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
               >
-                {c.base_url || "未配置"}
-              </Typography.Text>
-              <Tag>{c.steps.length} steps</Tag>
-              <div style={{ marginTop: "auto" }}>
-                <Space>
-                  <Button
-                    type="primary"
-                    size="small"
-                    loading={
-                      executionMutation.isPending &&
-                      executionMutation.variables === c.id
-                    }
-                    onClick={() => executionMutation.mutate(c.id)}
-                  >
-                    执行
-                  </Button>
-                  <Button type="link" size="small">
-                    <Link to={`/cases/${c.id}/edit`}>编辑</Link>
-                  </Button>
-                </Space>
-              </div>
+                <Button size="small" danger icon={<DeleteOutlined />}>
+                  批量删除
+                </Button>
+              </Popconfirm>
             </div>
-          ))}
-        </div>
+          )}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 12,
+            }}
+          >
+            {filteredCases.map((c: StoredCaseSummary) => (
+              <div
+                key={c.id}
+                className="nb-card"
+                style={{
+                  padding: 16,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  border: selectedIds.has(c.id) ? "2px solid #1677ff" : undefined,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Checkbox
+                    checked={selectedIds.has(c.id)}
+                    onChange={() => toggleSelect(c.id)}
+                  />
+                  <Typography.Text strong style={{ fontSize: 14, flex: 1 }}>
+                    {c.name}
+                  </Typography.Text>
+                </div>
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontSize: 12 }}
+                  ellipsis
+                >
+                  {c.description || "未填写描述"}
+                </Typography.Text>
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontSize: 12 }}
+                  ellipsis
+                >
+                  {c.base_url || "未配置"}
+                </Typography.Text>
+                <Tag>{c.steps.length} steps</Tag>
+                <div style={{ marginTop: "auto" }}>
+                  <Space>
+                    <Button
+                      type="primary"
+                      size="small"
+                      loading={
+                        executionMutation.isPending &&
+                        executionMutation.variables === c.id
+                      }
+                      onClick={() => executionMutation.mutate(c.id)}
+                    >
+                      执行
+                    </Button>
+                    <Button type="link" size="small">
+                      <Link to={`/cases/${c.id}/edit`}>编辑</Link>
+                    </Button>
+                    <Popconfirm
+                      title="确定删除此用例？"
+                      onConfirm={() => deleteMutation.mutate(c.id)}
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                    >
+                      <Button type="link" size="small" danger>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

@@ -589,6 +589,22 @@ def delete_planning_session(
     session.commit()
 
 
+def delete_planning_draft(
+    session: Session,
+    draft_id: int,
+    *,
+    actor_user_id: int,
+) -> None:
+    """Delete a single planning draft (owner only)."""
+    draft = session.get(AIPlanningDraft, draft_id)
+    if draft is None:
+        raise EntityNotFoundError(f"AI planning draft {draft_id} not found.")
+    # Verify the user owns the parent session
+    _get_session(session, draft.session_id, actor_user_id=actor_user_id)
+    session.delete(draft)
+    session.commit()
+
+
 def _get_session(session: Session, planning_session_id: int, *, actor_user_id: int) -> AIPlanningSession:
     planning_session = session.get(AIPlanningSession, planning_session_id)
     if planning_session is None:

@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Spin, Empty, Typography, Tag, Popconfirm } from "antd";
+import { Spin, Empty, Typography, Tag, Popconfirm, Modal, Input, message } from "antd";
 
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
-import { getProjects, getExecutionOverview, getExecutions, getExecutionDetail, deleteExecution } from "../services/api";
+import {
+  getProjects, getExecutionOverview, getExecutions, getExecutionDetail,
+  deleteExecution, deleteProject, createProject, updateProject,
+} from "../services/api";
 import type { ProjectSummary, StoredCaseExecutionSummary, StepExecutionEvidence, ExecutionStatus } from "../types/api";
 
 const { Text, Title } = Typography;
@@ -188,6 +191,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 export function ReportPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
 
   const { data: projects = [], isLoading: projectsLoading } = useQuery<ProjectSummary[]>({
@@ -212,11 +216,65 @@ export function ReportPage() {
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // --- Project CRUD ---
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editProject, setEditProject] = useState<ProjectSummary | null>(null);
+  const [formName, setFormName] = useState("");
+  const [formDesc, setFormDesc] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleCreateProject = async () => {
+    if (!formName.trim()) return;
+    setSubmitting(true);
+    try {
+      await createProject({ name: formName.trim(), description: formDesc.trim() || undefined });
+      setCreateModalOpen(false);
+      setFormName("");
+      setFormDesc("");
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void messageApi.success("项目已创建");
+    } catch (err) {
+      void messageApi.error("创建失败: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleEditProject = async () => {
+    if (!editProject || !formName.trim()) return;
+    setSubmitting(true);
+    try {
+      await updateProject(editProject.id, { name: formName.trim(), description: formDesc.trim() || undefined });
+      setEditModalOpen(false);
+      setEditProject(null);
+      setFormName("");
+      setFormDesc("");
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void messageApi.success("项目已更新");
+    } catch (err) {
+      void messageApi.error("更新失败: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleDelete = async (id: number) => {
     await deleteExecution(id);
     if (expandedId === id) setExpandedId(null);
     queryClient.invalidateQueries({ queryKey: ["executions", activeProjectId] });
     queryClient.invalidateQueries({ queryKey: ["execution-overview", activeProjectId] });
+  };
+
+  const handleDeleteProject = async (projectId: number) => {
+    try {
+      await deleteProject(projectId);
+      if (selectedProjectId === projectId) setSelectedProjectId(null);
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void messageApi.success("项目已删除");
+    } catch (err) {
+      void messageApi.error("删除失败: " + (err instanceof Error ? err.message : String(err)));
+    }
   };
 
   const { data: executionDetail } = useQuery({
@@ -225,32 +283,108 @@ export function ReportPage() {
     enabled: expandedId != null,
   });
 
+  const openEditModal = (p: ProjectSummary) => {
+    setEditProject(p);
+    setFormName(p.name);
+    setFormDesc(p.description ?? "");
+    setEditModalOpen(true);
+  };
+
   const leftPanel = (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <Title level={5} style={{ margin: 0, marginBottom: 12 }}>
-        项目
-      </Title>
-      {projectsLoading ? (
-        <Spin />
-      ) : (
-        projects.map((p) => (
-          <div
-            key={p.id}
-            onClick={() => setSelectedProjectId(p.id)}
-            style={{
-              padding: "8px 12px",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: 13,
-              background: p.id === activeProjectId ? "#1a1a2e" : "transparent",
-              color: p.id === activeProjectId ? "#fff" : "#666",
-              transition: "background 0.15s",
-            }}
-          >
-            {p.name}
-          </div>
-        ))
-      )}
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, height: "100%" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <Title level={5} style={{ margin: 0 }}>
+          项目
+        </Title>
+        <a
+          onClick={() => { setFormName(""); setFormDesc(""); setCreateModalOpen(true); }}
+          style={{ fontSize: 18, cursor: "pointer" }}
+          title="新建项目"
+        >
+          +
+        </a>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {projectsLoading ? (
+          <Spin />
+        ) : (
+          projects.map((p) => (
+            <div
+              key={p.id}
+              onClick={() => setSelectedProjectId(p.id)}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                background: p.id === activeProjectId ? "#1a1a2e" : "transparent",
+                color: p.id === activeProjectId ? "#fff" : "#666",
+                transition: "background 0.15s",
+              }}
+            >
+              <span style={{ flex: 1 }}>{p.name}</span>
+              <span
+                onClick={(e) => { e.stopPropagation(); openEditModal(p); }}
+                style={{ fontSize: 12, cursor: "pointer", opacity: 0.5 }}
+                title="编辑项目"
+              >
+                ✏️
+              </span>
+              <Popconfirm
+                title="确定删除此项目？删除后不可恢复。"
+                onConfirm={(e) => { e?.stopPropagation(); handleDeleteProject(p.id); }}
+                onCancel={(e) => e?.stopPropagation()}
+                okText="删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+              >
+                <span
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ fontSize: 12, cursor: "pointer", opacity: 0.5 }}
+                  title="删除项目"
+                >
+                  🗑️
+                </span>
+              </Popconfirm>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Create Project Modal */}
+      <Modal
+        title="新建项目"
+        open={createModalOpen}
+        onOk={handleCreateProject}
+        onCancel={() => setCreateModalOpen(false)}
+        okText="创建"
+        cancelText="取消"
+        confirmLoading={submitting}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+          <Input placeholder="项目名称" value={formName} onChange={(e) => setFormName(e.target.value)} />
+          <Input.TextArea placeholder="项目描述（可选）" value={formDesc} onChange={(e) => setFormDesc(e.target.value)} rows={3} />
+        </div>
+      </Modal>
+
+      {/* Edit Project Modal */}
+      <Modal
+        title="编辑项目"
+        open={editModalOpen}
+        onOk={handleEditProject}
+        onCancel={() => { setEditModalOpen(false); setEditProject(null); }}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={submitting}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+          <Input placeholder="项目名称" value={formName} onChange={(e) => setFormName(e.target.value)} />
+          <Input.TextArea placeholder="项目描述（可选）" value={formDesc} onChange={(e) => setFormDesc(e.target.value)} rows={3} />
+        </div>
+      </Modal>
     </div>
   );
 
@@ -298,5 +432,10 @@ export function ReportPage() {
     </div>
   );
 
-  return <NotebookLMLayout leftPanel={leftPanel} centerPanel={centerPanel} navBottom />;
+  return (
+    <>
+      {contextHolder}
+      <NotebookLMLayout leftPanel={leftPanel} centerPanel={centerPanel} navBottom />
+    </>
+  );
 }

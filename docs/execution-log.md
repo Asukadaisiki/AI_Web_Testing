@@ -11,6 +11,30 @@
 
 ## 2026-04-21
 
+- 任务：审查并补全所有实体的 CRUD 操作（增删改查），包括后端 API、前端 API 函数、前端 UI
+- 目标：确保报告、项目、测试用例、会话、草案、修正记录等所有实体在前后端均有完整的增删改操作入口
+- 审查发现 7 个缺失项：
+  1. 项目缺少前端创建/编辑（后端 API 已有）
+  2. 用例列表页无删除按钮
+  3. 用例无批量删除前端 UI（后端 batch delete API 已有）
+  4. 定位修正记录缺少删除端点（前后端均无）
+  5. DSL 生成记录缺少删除端点（前后端均无）
+  6. AI 规划草案缺少单独删除端点（前后端均无）
+  7. 报告页项目列表缺少删除按钮
+- 操作：
+  1. 后端新增 3 个 DELETE 端点：`DELETE /corrections/{id}`、`DELETE /dsl/generations/{id}`、`DELETE /ai-planning/drafts/{id}`
+  2. 后端新增对应 3 个 service 函数，更新 `__init__.py` 导出
+  3. 前端 api.ts 新增 6 个 API 函数：`createProject`、`updateProject`、`batchDeleteCases`、`deleteCorrection`、`deleteDslGenerationRun`、`deletePlanningDraft`
+  4. ReportPage 左侧项目列表新增：+新建按钮、✏️编辑按钮、🗑️删除按钮，配合 Modal 表单实现创建和编辑
+  5. CasesPage 新增：每个用例卡片 Checkbox 多选 + 批量删除操作栏 + 单条删除按钮
+  6. AITestPlanningPanel 每个草案行新增 DeleteOutlined 删除图标
+- 结果：11 个文件修改，+448/-84 行
+- 验证：
+  - 前端 `npm run build`（tsc + vite）通过
+  - 后端路由导入验证通过
+  - 后端单元测试 242 通过（6 个失败为修改前已有，与本次无关）
+- 后续：无
+
 - 任务：模拟真实用户白盒测试全流程：会话 → 输入 → 保存并执行 → 生成测试用例 → 执行 → 生成报告
 - 测试目标：The Internet Login Page (https://the-internet.herokuapp.com/login)
 - 操作：
