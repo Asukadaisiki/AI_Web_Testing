@@ -126,3 +126,55 @@ def test_resolve_semantic_locator_records_disabled_rejection() -> None:
     assert exc_info.value.trace is not None
     assert exc_info.value.trace.failure_reason == "Locator candidates matched target but none are enabled."
     assert exc_info.value.trace.candidates[0].rejected_reasons == ["element-not-enabled"]
+
+
+class TestCompoundCssSelector:
+    """BUG-049: 复合 CSS 选择器（如 button[type='submit']）应被识别为 CSS 策略。"""
+
+    def test_tag_with_attribute_selector(self):
+        """button[type='submit'] 应被解析为 CSS，而非文本匹配。"""
+        page = FakePage({
+            "locator:button[type='submit']": [_candidate(preview_text="Login", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "button[type='submit']")
+        assert result.strategy == "css"
+
+    def test_tag_child_selector(self):
+        """'form button' 应被解析为 CSS。"""
+        page = FakePage({
+            "locator:form button": [_candidate(preview_text="Login", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "form button")
+        assert result.strategy == "css"
+
+    def test_tag_with_class_selector(self):
+        """'div.container' 应被解析为 CSS。"""
+        page = FakePage({
+            "locator:div.container": [_candidate(preview_text="content", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "div.container")
+        assert result.strategy == "css"
+
+    def test_tag_direct_child_selector(self):
+        """'form > button' 应被解析为 CSS。"""
+        page = FakePage({
+            "locator:form > button": [_candidate(preview_text="Login", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "form > button")
+        assert result.strategy == "css"
+
+    def test_plain_text_not_treated_as_css(self):
+        """'Login' 不应被解析为 CSS。"""
+        page = FakePage({
+            "text:Login:True": [_candidate(preview_text="Login", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "Login")
+        assert result.strategy != "css"
+
+    def test_single_tag_not_treated_as_css(self):
+        """'button'（裸标签名）不应被解析为 CSS，应走文本匹配。"""
+        page = FakePage({
+            "text:button:True": [_candidate(preview_text="button", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "button")
+        assert result.strategy != "css"

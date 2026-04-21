@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from app.schemas.executions import (
@@ -133,7 +134,7 @@ def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[
         builders.append(explicit)
 
     # Try matching the target as an HTML element id attribute.
-    if target and not target.startswith(("css=", "xpath=", "//", "#", ".", "[", "data-testid=")):
+    if explicit is None and target and not target.startswith(("css=", "xpath=", "//", "#", ".", "[", "data-testid=")):
         id_target = target
         builders.append(("element_id", lambda: page.locator(f"#{id_target}")))
 
@@ -162,6 +163,9 @@ def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[
     return builders
 
 
+_COMPOUND_CSS_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9]*[\.\#\[\s\>:,~\+]")
+
+
 def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
     if target.startswith("css="):
         return ("css", lambda: page.locator(target))
@@ -174,6 +178,8 @@ def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
     if target.startswith("data-testid="):
         value = target.split("=", 1)[1]
         return ("data-testid", lambda: page.get_by_test_id(value))
+    if _COMPOUND_CSS_RE.match(target):
+        return ("css", lambda: page.locator(target))
     return None
 
 
