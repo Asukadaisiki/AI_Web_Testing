@@ -884,6 +884,41 @@ export interface ExecutionsOverview {
 // Execution stream events (WebSocket)
 // ---------------------------------------------------------------------------
 
+export interface StatusStreamEvent {
+  type: "status";
+  phase: "thinking" | "generating" | "tool_calling" | "executing";
+  message: string;
+}
+
+export interface TextChunkStreamEvent {
+  type: "text_chunk";
+  text: string;
+}
+
+export interface ToolCallStartStreamEvent {
+  type: "tool_call_start";
+  tool: string;
+  params?: Record<string, unknown>;
+}
+
+export interface ToolCallEndStreamEvent {
+  type: "tool_call_end";
+  tool: string;
+  result?: unknown;
+}
+
+export interface DraftGeneratingStreamEvent {
+  type: "draft_generating";
+  scenario_key: string;
+  message: string;
+}
+
+export interface TurnCompleteStreamEvent {
+  type: "turn_complete";
+  session_status: string;
+  payload: Record<string, unknown>;
+}
+
 export interface SaveProgressEvent {
   type: "save_progress";
   saved_count: number;
@@ -940,6 +975,12 @@ export interface ErrorEvent {
 }
 
 export type ExecutionStreamEvent =
+  | StatusStreamEvent
+  | TextChunkStreamEvent
+  | ToolCallStartStreamEvent
+  | ToolCallEndStreamEvent
+  | DraftGeneratingStreamEvent
+  | TurnCompleteStreamEvent
   | SaveProgressEvent
   | CaseStartEvent
   | StepStartEvent

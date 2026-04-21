@@ -12,6 +12,7 @@ function buildWsUrl(sessionId: number): string {
 export interface ExecutionStreamClient {
   send: (data: Record<string, unknown>) => void;
   close: () => void;
+  isOpen: () => boolean;
 }
 
 /**
@@ -49,6 +50,9 @@ export function connectExecutionStream(
     },
     close() {
       ws.close();
+    },
+    isOpen() {
+      return ws.readyState === WebSocket.OPEN;
     },
   };
 }

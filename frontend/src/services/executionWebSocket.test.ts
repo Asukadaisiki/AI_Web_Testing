@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 // Mock WebSocket before importing the module
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static OPEN = 1 as const;
+  static CLOSED = 3 as const;
   url: string;
   onopen: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
@@ -111,5 +113,41 @@ describe("connectExecutionStream", () => {
     MockWebSocket.instances[0]._error("connection failed");
 
     expect(onError).toHaveBeenCalled();
+  });
+
+  test("forwards planning stream events and supports explicit close", async () => {
+    const { connectExecutionStream } = await import("./executionWebSocket");
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+
+    const client = connectExecutionStream(5, onEvent, onError);
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+
+    const ws = MockWebSocket.instances[0];
+    ws._receive({ type: "status", phase: "thinking", message: "正在分析需求..." });
+    ws._receive({ type: "text_chunk", text: "好的，我来分析一下。" });
+
+    expect(onEvent).toHaveBeenNthCalledWith(1, {
+      type: "status",
+      phase: "thinking",
+      message: "正在分析需求...",
+    });
+    expect(onEvent).toHaveBeenNthCalledWith(2, {
+      type: "text_chunk",
+      text: "好的，我来分析一下。",
+    });
+
+    client.close();
+    expect(ws.readyState).toBe(WebSocket.CLOSED);
+  });
+
+  test("isOpen returns true when WebSocket is open", async () => {
+    const { connectExecutionStream } = await import("./executionWebSocket");
+    const client = connectExecutionStream(3, vi.fn(), vi.fn());
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    // Wait for the async open simulation
+    await vi.waitFor(() => expect(client.isOpen()).toBe(true));
+    client.close();
+    expect(client.isOpen()).toBe(false);
   });
 });
