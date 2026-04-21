@@ -11,6 +11,36 @@
 
 ## 2026-04-21
 
+- 任务：执行 `docs/superpowers/plans/2026-04-21-streaming-status-implementation.md` 实施计划（流式状态感知 + AI 超时修复）
+- 目标：修复 AI 响应超时配置，并把 AI Planning 的同一条 WebSocket 扩展为覆盖对话、草案生成、保存执行三段流式状态，让 Planning 面板能逐块显示 AI 文本、阶段标签和执行进度
+- 操作：
+  1. **Task 1 — Agent 流式基础 + 超时修复**：`backend/.env` 三个超时值改 600000ms；`httpx` 从 dev 移到 runtime 依赖；新增 `_stream_planning_llm()` 使用 httpx SSE 流式读取；新增 `stream_planning_turn()` 生成器 yield status/text_chunk/tool_call 事件；`run_planning_turn()` 改为同步包装器消费流
+  2. **Task 2 — 服务层 + WS 路由扩展**：新增 `stream_planning_message()` 和 `stream_generate_planning_drafts()` 生成器；`ai_planning_streaming.py` 抽出通用 `_bridge_sync_generator()` 桥接；WS 路由增加 `chat`/`generate_drafts` 消息处理，连接改为持久化（不再 break）
+  3. **Task 3 — 前端事件模型**：`types/api.ts` 新增 6 种流式事件类型（status/text_chunk/tool_call_start/end/draft_generating/turn_complete）；`executionWebSocket.ts` 增加 `isOpen()` 方法
+  4. **Task 4 — Panel 流式渲染**：建立会话级持久 WS 连接；`handleSendMessage` WS 优先 + REST fallback；`handleGenerateDrafts` WS 优先；保存并执行复用 session WS；渲染流式状态标签 + 打字光标；新增 CSS 动画
+  5. **Task 5 — 验证**：后端 18 测试全通过、前端 11 测试全通过、TypeScript 编译零错误
+- 结果：4 个 commit（`a200415` `ff4d0e9` `e7bbd6b` `acdf7a0`），对话/草案/执行共用一条 WS，AI 回复逐字流式显示并带有阶段标签（蓝色思考/橙色工具/黄色生成），REST fallback 保留
+- 验证：
+  - `uv run pytest tests/unit/test_planning_agent.py tests/unit/test_ai_planning_api.py` → 18 passed
+  - `npm run test -- src/services/executionWebSocket.test.ts src/components/AITestPlanningPanel.test.tsx` → 11 passed
+  - `npx tsc --noEmit` → 零错误
+- 后续：手工 smoke 验证 Planning 页面全链路流式效果（启动后端+前端，连续执行对话→草案→执行）
+
+- 任务：基于 `docs/superpowers/specs/2026-04-21-streaming-status-design.md` 产出 streaming status + AI timeout implementation plan
+- 目标：将现有仓库真实实现与 spec 对齐，输出一份可执行、可验证、可按任务拆分推进的实施计划，落到 `docs/superpowers/plans`
+- 操作：
+  1. 读取 `using-superpowers`、`writing-plans`、`brainstorming` 技能说明，确认本次直接进入写计划阶段
+  2. 核对 spec、既有计划、后端 agent/service/ws 路径、前端 panel/socket/types、相关测试与 `backend/.env`、`backend/pyproject.toml`
+  3. 识别当前真实边界：执行阶段 WS 已存在，缺口主要在 chat/draft 流式、前端同一 WS 复用、`.env` 超时值与 `httpx` runtime 依赖
+  4. 新建 `docs/superpowers/plans/2026-04-21-streaming-status-implementation.md`，将实施拆为 5 个任务：agent 流式基础、服务层/WS 扩展、前端事件模型、Panel 对话与草案流式、同一 WS 执行整合与总验证
+  5. 补 `.gitignore` 白名单规则，允许本次新计划文件进入版本控制，保持与仓库现有 plan 文件管理方式一致
+  6. 按计划写作规范自检文档，清理占位符示意代码，使步骤、文件路径、命令与验证入口都落到真实仓库文件
+- 结果：新增一份与当前代码状态一致且可纳入版本控制的 implementation plan，避免重复设计已经存在的 save-and-execute WS 能力，并明确将 `httpx` 从 dev 依赖提升到 runtime 的必要性
+- 验证：
+  - 静态核对计划文件涉及的路径均存在：`backend/app/ai/test_planning_agent.py`、`backend/app/services/ai_planning.py`、`backend/app/services/ai_planning_streaming.py`、`backend/app/api/routes/ai_planning.py`、`frontend/src/services/executionWebSocket.ts`、`frontend/src/components/AITestPlanningPanel.tsx`、相关测试文件
+  - 对计划文件执行占位符扫描，确认没有 `TODO`、`TBD`、独立 `...` 等空洞步骤
+- 后续：如继续实施，按计划中的 Task 1 → Task 5 顺序推进，并在实际开发时补跑计划里列出的后端 pytest、前端 Vitest 与 `tsc` 验证
+
 - 任务：审查并补全所有实体的 CRUD 操作（增删改查），包括后端 API、前端 API 函数、前端 UI
 - 目标：确保报告、项目、测试用例、会话、草案、修正记录等所有实体在前后端均有完整的增删改操作入口
 - 审查发现 7 个缺失项：
