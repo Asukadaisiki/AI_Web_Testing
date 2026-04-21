@@ -560,6 +560,12 @@ def _normalize_generated_case(
         normalization_notes=normalization_notes,
     )
 
+    _check_dsl_completeness(
+        {"base_url": base_url_value, "steps": steps},
+        warnings,
+        normalization_notes,
+    )
+
     if not steps:
         raise DslGenerationError("AI 生成草案中没有可导入的有效 steps。")
 
@@ -653,6 +659,43 @@ def _normalize_contracts(
         seen_context_keys.add(contract.context_key)
         normalized_contracts.append(contract)
     return normalized_contracts, removed_count
+
+
+def _check_dsl_completeness(
+    case_data: dict[str, Any],
+    warnings: list[str],
+    normalization_notes: list[str] | None = None,
+) -> None:
+    """检查生成 DSL 的完整性，对可疑模式发出 warning。
+
+    不阻断生成，仅发出提示，保持用例灵活性。
+    """
+    if normalization_notes is None:
+        normalization_notes = []
+
+    base_url = case_data.get("base_url") or ""
+    steps = case_data.get("steps") or []
+
+    # 检测 base_url 是否包含页面路径（如 https://example.com/login）
+    if base_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        if parsed.path and parsed.path.strip("/"):
+            warnings.append(
+                f"base_url 疑似包含页面路径（{parsed.path}），建议将站点根地址放在 base_url，"
+                f"页面路径放在 goto 步骤中（如 goto {parsed.path}）。"
+            )
+
+    # 检测有 base_url 和 steps 但无 goto 步骤的情况
+    has_goto = any(
+        (isinstance(s, dict) and s.get("action") == "goto")
+        or (hasattr(s, "action") and getattr(s, "action", None) == "goto")
+        for s in steps
+    )
+    if base_url and steps and not has_goto:
+        normalization_notes.append(
+            "DSL 中没有 goto 步骤。如果测试需要先导航到目标页面，建议添加 goto 步骤。"
+        )
 
 
 def _normalize_steps(

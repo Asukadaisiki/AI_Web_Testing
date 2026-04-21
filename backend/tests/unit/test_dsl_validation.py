@@ -2369,3 +2369,56 @@ def test_base_user_rules_include_completeness_guidance():
     # 应包含完整性评估要求
     has_completeness = any(kw in joined for kw in ["完整", "入口", "前置"])
     assert has_completeness, "Prompt rules should include completeness/entry point guidance"
+
+
+class TestDslCompletenessCheck:
+    """BUG-048: 完整性检测应在 base_url 含路径或缺少 goto 时发出 warning。"""
+
+    def test_warns_when_base_url_contains_path(self):
+        from app.ai.dsl_generator import _check_dsl_completeness
+        warnings = []
+        _check_dsl_completeness(
+            {"base_url": "https://example.com/login", "steps": [{"action": "input", "target": "#user", "value": "test"}]},
+            warnings,
+        )
+        assert any("base_url" in w and "路径" in w for w in warnings)
+
+    def test_warns_when_no_goto_with_base_url(self):
+        from app.ai.dsl_generator import _check_dsl_completeness
+        warnings = []
+        notes = []
+        _check_dsl_completeness(
+            {"base_url": "https://example.com", "steps": [{"action": "input", "target": "#user", "value": "test"}]},
+            warnings,
+            notes,
+        )
+        assert any("goto" in n for n in notes)
+
+    def test_no_warning_when_goto_present(self):
+        from app.ai.dsl_generator import _check_dsl_completeness
+        warnings = []
+        notes = []
+        _check_dsl_completeness(
+            {"base_url": "https://example.com", "steps": [{"action": "goto", "value": "/login"}]},
+            warnings,
+            notes,
+        )
+        assert not any("goto" in n for n in notes)
+
+    def test_no_warning_when_no_base_url(self):
+        from app.ai.dsl_generator import _check_dsl_completeness
+        warnings = []
+        _check_dsl_completeness(
+            {"steps": [{"action": "click", "target": "Login"}]},
+            warnings,
+        )
+        assert not any("base_url" in w for w in warnings)
+
+    def test_no_warning_for_root_base_url(self):
+        from app.ai.dsl_generator import _check_dsl_completeness
+        warnings = []
+        _check_dsl_completeness(
+            {"base_url": "https://example.com", "steps": [{"action": "goto", "value": "/login"}]},
+            warnings,
+        )
+        assert not any("base_url" in w and "路径" in w for w in warnings)
