@@ -12,6 +12,7 @@ dependencies = [
     "pillow>=11.0,<12.0",
     "psycopg[binary]>=3.2,<4.0",
     "uvicorn>=0.35,<1.0",
+    "httpx>=0.28,<1.0",
 ]
 
 [project.scripts]
@@ -19,7 +20,6 @@ backend-dev = "app.main:main"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28,<1.0",
     "pytest>=8.4,<9.0",
 ]
 

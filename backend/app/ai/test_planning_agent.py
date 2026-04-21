@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Generator
 from urllib import request
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.ai.planning_tools import execute_tool
@@ -43,43 +44,121 @@ def run_planning_turn(
     db_session: Session,
     project_id: int,
 ) -> AIPlanningTurnResponse:
+    """Synchronous wrapper around :func:`stream_planning_turn`.
+
+    Consumes all events from the streaming generator and returns the final
+    ``AIPlanningTurnResponse``.  Used by REST API fallback.
+    """
+    stream = stream_planning_turn(
+        transcript=transcript,
+        existing_requirements=existing_requirements,
+        db_session=db_session,
+        project_id=project_id,
+    )
+    while True:
+        try:
+            next(stream)
+        except StopIteration as stop:
+            return stop.value
+
+
+def stream_planning_turn(
+    *,
+    transcript: list[dict[str, str]],
+    existing_requirements: AIPlanningRequirements | None,
+    db_session: Session,
+    project_id: int,
+) -> Generator[dict[str, Any], None, AIPlanningTurnResponse]:
+    """Streaming ReAct planning turn.
+
+    Yields status / text_chunk / tool_call events during processing.
+    Returns the final ``AIPlanningTurnResponse`` via the generator return value.
+    """
     requirements = existing_requirements.model_copy(deep=True) if existing_requirements else AIPlanningRequirements()
     settings = get_settings()
     tool_calls: list[AIPlanningToolCall] = []
     transcript_messages, force_generate = _prepare_transcript_for_llm(transcript)
 
     if not _planning_llm_enabled(settings):
-        return _run_fallback_turn(
+        response = _run_fallback_turn(
             transcript=transcript,
             requirements=requirements,
             assistant_message=None,
             force_generate=force_generate,
             tool_calls=tool_calls,
         )
+        yield {
+            "type": "turn_complete",
+            "session_status": response.session_status,
+            "payload": {
+                "assistant_message": response.assistant_message,
+                "missing_slots": response.missing_slots,
+                "suggested_questions": response.suggested_questions,
+                "plan": response.plan.model_dump(mode="json") if response.plan else None,
+                "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+            },
+        }
+        return response
 
     conversation: list[dict[str, str]] = [{"role": "system", "content": build_system_prompt()}, *transcript_messages]
     max_rounds = max(1, settings.ai_planning_max_react_rounds)
 
     for round_index in range(max_rounds):
-        raw_response = _call_llm_with_retry(
-            messages=conversation,
-            api_key=settings.ai_planning_api_key,
-            model=settings.ai_planning_model,
-            base_url=settings.ai_planning_base_url,
-            timeout_seconds=max(1.0, settings.ai_planning_timeout_ms / 1000),
-        )
-        if raw_response is None:
-            return _error_response(requirements=requirements, tool_calls=tool_calls)
+        yield {"type": "status", "phase": "thinking", "message": "正在分析需求..."}
+
+        raw_response = ""
+        try:
+            for event in _stream_planning_llm(
+                messages=conversation,
+                api_key=settings.ai_planning_api_key or "",
+                model=settings.ai_planning_model or "",
+                base_url=settings.ai_planning_base_url,
+                timeout_seconds=max(1.0, settings.ai_planning_timeout_ms / 1000),
+            ):
+                if event["type"] == "text_chunk":
+                    yield event
+                elif event["type"] == "raw_response":
+                    raw_response = event["text"]
+        except Exception:
+            logger.exception("Streaming LLM call failed in round %s", round_index + 1)
+            raw_response = ""
+
+        if not raw_response:
+            response = _error_response(requirements=requirements, tool_calls=tool_calls)
+            yield {
+                "type": "turn_complete",
+                "session_status": response.session_status,
+                "payload": {
+                    "assistant_message": response.assistant_message,
+                    "missing_slots": response.missing_slots,
+                    "suggested_questions": response.suggested_questions,
+                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
+                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+                },
+            }
+            return response
 
         parsed = _parse_llm_response(raw_response)
         if parsed is None:
-            return _run_fallback_turn(
+            response = _run_fallback_turn(
                 transcript=transcript,
                 requirements=requirements,
                 assistant_message="遇到了解析问题，我先按已有信息给你整理一个测试方案。",
                 force_generate=force_generate,
                 tool_calls=tool_calls,
             )
+            yield {
+                "type": "turn_complete",
+                "session_status": response.session_status,
+                "payload": {
+                    "assistant_message": response.assistant_message,
+                    "missing_slots": response.missing_slots,
+                    "suggested_questions": response.suggested_questions,
+                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
+                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+                },
+            }
+            return response
 
         _merge_requirements(requirements, parsed.get("collected_info"))
         action = str(parsed.get("action") or "").strip()
@@ -88,18 +167,31 @@ def run_planning_turn(
             action_input = {}
 
         if force_generate and action != "generate_plan":
-            return _plan_response(
+            response = _plan_response(
                 requirements=requirements,
                 plan_payload=action_input,
                 assistant_message="我先基于当前已知信息生成一版测试方案，缺失信息会体现在假设和风险里。",
                 tool_calls=tool_calls,
             )
+            yield {
+                "type": "turn_complete",
+                "session_status": response.session_status,
+                "payload": {
+                    "assistant_message": response.assistant_message,
+                    "missing_slots": response.missing_slots,
+                    "suggested_questions": response.suggested_questions,
+                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
+                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+                },
+            }
+            return response
 
         if action == "call_tool":
             tool_name = str(action_input.get("tool") or "").strip()
             params = action_input.get("params")
             if not isinstance(params, dict):
                 params = {}
+            yield {"type": "tool_call_start", "tool": tool_name, "params": params}
             tool_result_text = execute_tool(
                 tool_name=tool_name,
                 params=params,
@@ -114,6 +206,7 @@ def run_planning_turn(
                     result=parsed_result,
                 )
             )
+            yield {"type": "tool_call_end", "tool": tool_name, "result": parsed_result}
             conversation.extend(
                 [
                     {"role": "assistant", "content": _normalize_json_text(raw_response)},
@@ -126,44 +219,72 @@ def run_planning_turn(
             continue
 
         if action == "generate_plan":
-            return _plan_response(
+            response = _plan_response(
                 requirements=requirements,
                 plan_payload=action_input,
                 assistant_message="信息已经足够，我先给出结构化测试方案。",
                 tool_calls=tool_calls,
             )
+            yield {
+                "type": "turn_complete",
+                "session_status": response.session_status,
+                "payload": {
+                    "assistant_message": response.assistant_message,
+                    "missing_slots": response.missing_slots,
+                    "suggested_questions": response.suggested_questions,
+                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
+                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+                },
+            }
+            return response
 
-        if action == "ask_user":
-            message = str(action_input.get("message") or "").strip() or _default_followup_question(requirements)
-            missing_slots = _collect_missing_slots(requirements)
-            return AIPlanningTurnResponse(
-                assistant_message=message,
-                session_status="collecting",
-                requirements=requirements,
-                missing_slots=missing_slots,
-                suggested_questions=[message],
-                plan=None,
-                drafts=[],
-                next_action="ask_followup",
-                tool_calls=tool_calls,
-            )
-
-        logger.warning("Unsupported planning action %r; fallback to deterministic flow.", action)
-        return _run_fallback_turn(
-            transcript=transcript,
+        # ask_user or unsupported action — ask follow-up
+        message = str(action_input.get("message") or "").strip() or _default_followup_question(requirements)
+        missing_slots = _collect_missing_slots(requirements)
+        response = AIPlanningTurnResponse(
+            assistant_message=message,
+            session_status="collecting",
             requirements=requirements,
-            assistant_message=None,
-            force_generate=force_generate,
+            missing_slots=missing_slots,
+            suggested_questions=[message],
+            plan=None,
+            drafts=[],
+            next_action="ask_followup",
             tool_calls=tool_calls,
         )
+        yield {
+            "type": "turn_complete",
+            "session_status": response.session_status,
+            "payload": {
+                "assistant_message": response.assistant_message,
+                "missing_slots": response.missing_slots,
+                "suggested_questions": response.suggested_questions,
+                "plan": response.plan.model_dump(mode="json") if response.plan else None,
+                "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+            },
+        }
+        return response
 
-    return _run_fallback_turn(
+    # Exhausted all rounds — force-generate a plan
+    response = _run_fallback_turn(
         transcript=transcript,
         requirements=requirements,
         assistant_message="我先根据当前上下文整理一版测试方案。",
         force_generate=True,
         tool_calls=tool_calls,
     )
+    yield {
+        "type": "turn_complete",
+        "session_status": response.session_status,
+        "payload": {
+            "assistant_message": response.assistant_message,
+            "missing_slots": response.missing_slots,
+            "suggested_questions": response.suggested_questions,
+            "plan": response.plan.model_dump(mode="json") if response.plan else None,
+            "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+        },
+    }
+    return response
 
 
 def _planning_llm_enabled(settings: Any) -> bool:
@@ -236,6 +357,56 @@ def _call_planning_llm(
     with request.urlopen(http_request, timeout=timeout_seconds) as response:
         raw_payload = json.loads(response.read().decode("utf-8"))
     return _extract_message_content(raw_payload)
+
+
+def _stream_planning_llm(
+    *,
+    messages: list[dict[str, Any]],
+    api_key: str,
+    model: str,
+    base_url: str,
+    timeout_seconds: float,
+) -> Generator[dict[str, str], None, None]:
+    """Yield streaming events from an SSE-based LLM API call.
+
+    Yields:
+        ``{"type": "text_chunk", "text": "..."}`` for each incremental chunk.
+        ``{"type": "raw_response", "text": "..."}`` once at the end with the full text.
+    """
+    payload = {
+        "model": model,
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        "stream": True,
+    }
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    full_text: list[str] = []
+    with httpx.Client(timeout=timeout_seconds) as client:
+        with client.stream(
+            "POST",
+            endpoint,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        ) as response:
+            response.raise_for_status()
+            for raw_line in response.iter_lines():
+                if not raw_line or not raw_line.startswith("data: "):
+                    continue
+                data = raw_line.removeprefix("data: ").strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk_payload = json.loads(data)
+                    chunk = chunk_payload["choices"][0].get("delta", {}).get("content")
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+                if chunk:
+                    full_text.append(chunk)
+                    yield {"type": "text_chunk", "text": chunk}
+    yield {"type": "raw_response", "text": "".join(full_text)}
 
 
 def _parse_llm_response(response_text: str) -> dict[str, Any] | None:

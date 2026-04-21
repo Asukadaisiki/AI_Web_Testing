@@ -92,8 +92,13 @@ def test_run_planning_turn_calls_tool_then_asks_user(monkeypatch) -> None:
         ]
     )
 
+    def _fake_stream_llm(**_kwargs):
+        text = next(llm_responses)
+        yield {"type": "text_chunk", "text": text}
+        yield {"type": "raw_response", "text": text}
+
     monkeypatch.setattr(planning_agent, "get_settings", lambda: _planning_settings())
-    monkeypatch.setattr(planning_agent, "_call_planning_llm", lambda **_: next(llm_responses))
+    monkeypatch.setattr(planning_agent, "_stream_planning_llm", _fake_stream_llm)
     monkeypatch.setattr(
         planning_agent,
         "execute_tool",
@@ -130,11 +135,7 @@ def test_run_planning_turn_calls_tool_then_asks_user(monkeypatch) -> None:
 def test_run_planning_turn_force_generate_overrides_followup(monkeypatch) -> None:
     from app.ai import test_planning_agent as planning_agent
 
-    monkeypatch.setattr(planning_agent, "get_settings", lambda: _planning_settings())
-    monkeypatch.setattr(
-        planning_agent,
-        "_call_planning_llm",
-        lambda **_: """
+    response_text = """
         {
           "thought": "还缺一些信息，先继续追问",
           "action": "ask_user",
@@ -147,8 +148,14 @@ def test_run_planning_turn_force_generate_overrides_followup(monkeypatch) -> Non
             "main_assertions": ["跳转到 dashboard"]
           }
         }
-        """,
-    )
+        """
+
+    def _fake_stream_llm(**_kwargs):
+        yield {"type": "text_chunk", "text": response_text}
+        yield {"type": "raw_response", "text": response_text}
+
+    monkeypatch.setattr(planning_agent, "get_settings", lambda: _planning_settings())
+    monkeypatch.setattr(planning_agent, "_stream_planning_llm", _fake_stream_llm)
 
     result = planning_agent.run_planning_turn(
         transcript=[{"role": "user", "content": "[FORCE_GENERATE] 请直接生成商城后台登录测试方案"}],
@@ -167,8 +174,12 @@ def test_run_planning_turn_force_generate_overrides_followup(monkeypatch) -> Non
 def test_run_planning_turn_falls_back_when_llm_returns_invalid_json(monkeypatch) -> None:
     from app.ai import test_planning_agent as planning_agent
 
+    def _fake_stream_llm(**_kwargs):
+        yield {"type": "text_chunk", "text": "not-json"}
+        yield {"type": "raw_response", "text": "not-json"}
+
     monkeypatch.setattr(planning_agent, "get_settings", lambda: _planning_settings())
-    monkeypatch.setattr(planning_agent, "_call_planning_llm", lambda **_: "not-json")
+    monkeypatch.setattr(planning_agent, "_stream_planning_llm", _fake_stream_llm)
 
     result = planning_agent.run_planning_turn(
         transcript=[
@@ -198,12 +209,12 @@ def test_run_planning_turn_falls_back_when_llm_returns_invalid_json(monkeypatch)
 def test_run_planning_turn_returns_error_after_three_llm_failures(monkeypatch) -> None:
     from app.ai import test_planning_agent as planning_agent
 
+    def _fake_stream_llm(**_kwargs):
+        raise RuntimeError("timeout")
+        yield  # noqa: unreachable — makes this a generator
+
     monkeypatch.setattr(planning_agent, "get_settings", lambda: _planning_settings())
-    monkeypatch.setattr(
-        planning_agent,
-        "_call_planning_llm",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("timeout")),
-    )
+    monkeypatch.setattr(planning_agent, "_stream_planning_llm", _fake_stream_llm)
 
     result = planning_agent.run_planning_turn(
         transcript=[{"role": "user", "content": "帮我规划登录测试"}],
