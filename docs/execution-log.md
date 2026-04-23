@@ -31,6 +31,19 @@
   - `test_dsl_validation.py`：50/53 passed（3 个 failed 为已有 auth 权限问题，与本次变更无关）
 - 后续：可重新执行 Automation Exercise 旧用例（Case 8/9），验证 `.productinfo text='View Product'` 是否能通过链式解析成功定位
 
+### 验证补充（2026-04-23 下午）
+
+- 操作：
+  1. 修复 `test_case_runs.error_message` 列类型 VARCHAR(2000) → Text（Alembic 迁移 `2348081d0e8a`），解决执行记录存储溢出
+  2. 重启后端服务加载新代码，重新执行 Case 8（Execution 49）和 Case 9（Execution 52）
+- 结果：
+  - **Case 8**（Execution 49）：Step 5 `assert_text target=body` 裸标签识别成功（`css_tag` 策略），但断言文本 "Logged in as" 不匹配（登录失败，业务逻辑问题，非定位器问题）
+  - **Case 9**（Execution 52）：Step 8 `click target=".productinfo text='View Product'"` 链式选择器解析成功，正则正确拆解为 `base=.productinfo, value=View Product`，构建了 `page.locator(".productinfo").get_by_text("View Product")` 链式调用。但 DOM 中 `.productinfo` 内部不包含 "View Product" 文本（二者是兄弟节点，非父子），返回 0 candidates
+  - **Playwright 验证**：`.productinfo >> text=Add to cart` → 14 matches（链式选择器对正确 DOM 结构工作正常），`.product-image-wrapper >> text=View Product` → 14 matches
+- 结论：
+  - 链式选择器解析器 **功能正确**，Case 9 失败原因是 AI DSL 定位策略错误（选错 CSS 容器），不是解析器 bug（记录为 BUG-050）
+  - 新 Case 10/11 使用语义文本 `View Product` 直接匹配，已通过全步骤
+
 ## 2026-04-21
 
 - 任务：执行 `docs/superpowers/plans/2026-04-21-streaming-status-implementation.md` 实施计划（流式状态感知 + AI 超时修复）

@@ -29,6 +29,30 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-050 | AI DSL 生成定位策略不匹配 DOM 结构（选择器容器错误）
+
+- 日期：2026-04-23
+- 状态：fixed
+- 来源：白盒测试验证（Automation Exercise 场景）
+- 描述：AI 生成 DSL 时产出链式选择器 `.productinfo text='View Product'`，但实际 DOM 结构中 `.productinfo` 内部不包含 "View Product" 文本——二者是兄弟关系（`.product-image-wrapper > (.productinfo + a[text=View Product])`），导致链式定位 `page.locator(".productinfo").get_by_text("View Product")` 匹配 0 个元素。类似地，`button:has-text('Add to cart')` 和 `u:has-text('View Cart')` 等非标准复合选择器也会导致定位失败。本质是 AI 在没有 DOM 快照的情况下"猜测"选择器，CSS 容器和内部文本的对应关系容易出错。
+- 复现步骤：
+  1. 通过 AI Planning 会话描述"测试 automationexercise.com 登录到购物车流程"
+  2. AI 生成 DSL 草案，Case 9 Step 8 target 为 `.productinfo text='View Product'`
+  3. 执行用例，Step 8 定位器返回 0 candidates，触发 needs_intervention
+  4. 手动验证 `page.locator('.productinfo').get_by_text('View Product').count() == 0`，而 `page.locator('.product-image-wrapper').get_by_text('View Product').count() == 14`
+- 影响：AI 生成的旧 DSL 用例（Case 8/9）执行失败，需要人工干预或重新生成
+- 根因：AI 无 DOM 快照时凭语义猜测 CSS 容器与文本的包含关系，容易选错父级容器。同时定位器系统此前不支持链式选择器解析（BUG-049 的延伸），即使 DOM 正确也无法处理 `.class text=value` 格式
+- 处理：三重修复：
+  1. **定位器侧**（`semantic.py`）：新增 `_resolve_chained_selector` 函数，解析 `.class text=value`、`.class >> text=value` 等 Playwright 链式选择器格式为 `page.locator(css).get_by_text(value)`，策略 `chained_css_text` 评分 110
+  2. **Prompt 侧**（`dsl_generator.py`）：v2026-04-22.target-strategy-v1 prompt 禁止生成无效复合格式，引导 AI 使用语义文本（如直接写 `View Product`）或带 `target_strategy` 字段的显式定位
+  3. **Schema 侧**（`dsl.py`）：新增 `target_strategy` 字段允许显式声明定位策略
+  4. **数据库侧**：`test_case_runs.error_message` 从 VARCHAR(2000) 改为 Text，解决长错误信息存储溢出
+- 验证：
+  - 单元测试 `test_locator_semantic.py::TestChainedSelector` 7/7 passed
+  - Playwright 实际验证：`.productinfo >> text=Add to cart` → 14 matches，`.product-image-wrapper >> text=View Product` → 14 matches
+  - 旧 Case 9 执行：链式选择器解析正确（正则匹配成功，构建了正确的 Playwright 链式调用），但 DOM 结构不符导致 0 candidates——属 AI DSL 策略错误而非解析器 bug
+- 关联记录：execution-log 2026-04-23
+
 ## BUG-048 | AI DSL 规划阶段完整性校验缺失
 
 - 日期：2026-04-21
