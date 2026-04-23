@@ -137,6 +137,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=True,
@@ -149,6 +150,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             prefer_input=True,
@@ -162,6 +164,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=False,
@@ -173,6 +176,7 @@ def execute_case_with_playwright(
                         resolved = resolve_with_fallback(
                             page,
                             step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=False,
@@ -340,6 +344,7 @@ def execute_case_with_playwright_streaming(
                     elif step.action == "click":
                         resolved = resolve_with_fallback(
                             page, step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=True, require_enabled=True,
@@ -350,6 +355,7 @@ def execute_case_with_playwright_streaming(
                     elif step.action == "input":
                         resolved = resolve_with_fallback(
                             page, step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             prefer_input=True, require_visible=True, require_enabled=True,
@@ -360,6 +366,7 @@ def execute_case_with_playwright_streaming(
                     elif step.action == "wait_for":
                         resolved = resolve_with_fallback(
                             page, step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=False,
@@ -370,6 +377,7 @@ def execute_case_with_playwright_streaming(
                     elif step.action == "assert_text":
                         resolved = resolve_with_fallback(
                             page, step.target,
+                            target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=False,

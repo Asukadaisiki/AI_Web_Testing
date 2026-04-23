@@ -9,6 +9,28 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-23
+
+- 任务：定位器系统三阶段改善 — target_strategy 字段 + 裸 HTML 标签识别 + Playwright 链式选择器解析
+- 目标：根治 DSL target 字段无类型导致定位器反复猜错策略的问题（BUG-046/049/本次 `.productinfo text='View Product'`），让定位器能处理 AI 生成的复合格式选择器
+- 操作：
+  1. **Schema — target_strategy 字段**：`backend/app/schemas/dsl.py` 新增 `TargetStrategy = Literal[“css”, “xpath”, “data-testid”, “element_id”, “tag”, “semantic”]`；为 ClickStep/InputStep/WaitForStep/AssertTextStep 各添加 `target_strategy: TargetStrategy | None = Field(default=None)`；向后兼容，默认 None
+  2. **定位器 — 裸 HTML 标签名识别**：`backend/app/locators/semantic.py` 新增 `_HTML_TAG_NAMES` frozenset（约 30 个常见标签）；`_resolve_explicit_locator` 在末尾添加 `css_tag` 策略匹配；`_strategy_base_score` 添加 `”css_tag”: 105`；`_strategy_rule_name` 添加映射
+  3. **定位器 — target_strategy 直接分发**：新增 `_build_strategy_builder()` 和 `_resolve_by_strategy()` 函数；`resolve_semantic_locator` 和 `collect_semantic_candidates` 新增 `target_strategy` 参数；非 “semantic” 值时绕过启发式直接分发
+  4. **定位器 — Playwright 链式选择器解析**：新增 `_CHAINED_SELECTOR_RE` 正则和 `_resolve_chained_selector()` 函数；支持 `.class text=Value`、`.class >> text=Value`、`#id text='Value'`、`tag.class text=Value` 四种格式；在 `_resolve_explicit_locator` 最前面优先匹配；`chained_css_text` 策略评分 110（高于语义匹配，低于纯 CSS/XPath）
+  5. **Fallback 传参**：`backend/app/locators/fallback.py` 的 `resolve_with_fallback` 及下游函数添加 `target_strategy` 参数并透传
+  6. **Runner 传参**：`backend/app/runners/playwright_runner.py` 所有 8 处 `resolve_with_fallback` 调用添加 `target_strategy=step.target_strategy`
+  7. **DSL 生成 Prompt 更新**：`backend/app/ai/dsl_generator.py` 版本升级至 `2026-04-22.target-strategy-v1`；系统 prompt 添加 target 格式文档（5 种格式 + 禁止无效复合格式）；用户规则添加 `target_strategy` 使用指引；`_normalize_single_step` 添加 `target_strategy` 归一化
+- 结果：
+  - 裸标签名（`body`、`form` 等）正确识别为 `css_tag` 策略，不再走语义文本匹配
+  - 链式选择器（`.productinfo text='View Product'`）正确拆解为 `page.locator(“.productinfo”).get_by_text(“View Product”)`
+  - `target_strategy` 字段允许显式声明策略，绕过启发式猜测
+  - 新生成 DSL 的 prompt 禁止产出无效复合格式
+- 验证：
+  - `test_locator_semantic.py`：28/28 passed（含 7 个新链式选择器测试）
+  - `test_dsl_validation.py`：50/53 passed（3 个 failed 为已有 auth 权限问题，与本次变更无关）
+- 后续：可重新执行 Automation Exercise 旧用例（Case 8/9），验证 `.productinfo text='View Product'` 是否能通过链式解析成功定位
+
 ## 2026-04-21
 
 - 任务：执行 `docs/superpowers/plans/2026-04-21-streaming-status-implementation.md` 实施计划（流式状态感知 + AI 超时修复）

@@ -14,6 +14,10 @@ class FakeNodeLocator:
     def evaluate(self, _script: str):
         return self.payload
 
+    def get_by_text(self, text: str, exact: bool = True):
+        key = f"chained:{self.payload.get('_css', '')}:text:{text}:{exact}"
+        return FakeLocatorCollection(self.payload.get("_chained_map", {}).get(key, []))
+
 
 class FakeLocatorCollection:
     def __init__(self, payloads: list[dict]) -> None:
@@ -24,6 +28,15 @@ class FakeLocatorCollection:
 
     def nth(self, index: int) -> FakeNodeLocator:
         return FakeNodeLocator(self.payloads[index])
+
+    def get_by_text(self, text: str, exact: bool = True):
+        """Support chained selector: locator(css).get_by_text(text)."""
+        results = []
+        for p in self.payloads:
+            chained_map = p.get("_chained_map", {})
+            key = f"chained:{p.get('_css', '')}:text:{text}:{exact}"
+            results.extend(chained_map.get(key, []))
+        return FakeLocatorCollection(results)
 
 
 class FakePage:
@@ -172,9 +185,174 @@ class TestCompoundCssSelector:
         assert result.strategy != "css"
 
     def test_single_tag_not_treated_as_css(self):
-        """'button'（裸标签名）不应被解析为 CSS，应走文本匹配。"""
+        """'button'（裸标签名）不应被解析为 css，但应被识别为 css_tag。"""
         page = FakePage({
-            "text:button:True": [_candidate(preview_text="button", visible=True, enabled=True)],
+            "locator:button": [_candidate(preview_text="Click Me", visible=True, enabled=True)],
         })
         result = resolve_semantic_locator(page, "button")
-        assert result.strategy != "css"
+        assert result.strategy == "css_tag"
+
+
+class TestBareHtmlTagRecognition:
+    """裸 HTML 标签名应被识别为 css_tag 策略。"""
+
+    def test_body_tag_recognized(self):
+        page = FakePage({
+            "locator:body": [_candidate(preview_text="Page content", visible=True, enabled=True, role="body")],
+        })
+        result = resolve_semantic_locator(page, "body")
+        assert result.strategy == "css_tag"
+        assert result.trace.match_strategy == "css_tag"
+
+    def test_form_tag_recognized(self):
+        page = FakePage({
+            "locator:form": [_candidate(preview_text="Login Form", visible=True, enabled=True, role="form")],
+        })
+        result = resolve_semantic_locator(page, "form")
+        assert result.strategy == "css_tag"
+
+    def test_non_tag_word_not_treated_as_tag(self):
+        """非标签名单词不应走 css_tag。"""
+        page = FakePage({
+            "text:foobar:True": [_candidate(preview_text="foobar", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "foobar")
+        assert result.strategy != "css_tag"
+
+    def test_tag_not_in_set_falls_through(self):
+        """不在 _HTML_TAG_NAMES 集合中的裸词应走语义匹配。"""
+        page = FakePage({
+            "text:customtag:True": [_candidate(preview_text="customtag", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "customtag")
+        assert result.strategy != "css_tag"
+
+
+class TestTargetStrategyOverride:
+    """target_strategy 参数应绕过启发式，直接使用指定策略。"""
+
+    def test_target_strategy_css(self):
+        """target_strategy='css' 应直接将 target 当作 CSS 选择器。"""
+        page = FakePage({
+            "locator:my-custom-selector": [_candidate(preview_text="Found", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "my-custom-selector", target_strategy="css")
+        assert result.strategy == "css"
+
+    def test_target_strategy_xpath(self):
+        page = FakePage({
+            "locator://div[@id='main']": [_candidate(preview_text="Main", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "xpath=//div[@id='main']", target_strategy="xpath")
+        assert result.strategy == "xpath"
+
+    def test_target_strategy_tag(self):
+        page = FakePage({
+            "locator:body": [_candidate(preview_text="Page", visible=True, enabled=True, role="body")],
+        })
+        result = resolve_semantic_locator(page, "body", target_strategy="tag")
+        assert result.strategy == "css_tag"
+
+    def test_target_strategy_semantic_falls_through(self):
+        """target_strategy='semantic' 应走正常启发式路径。"""
+        page = FakePage({
+            "text:Login:True": [_candidate(preview_text="Login", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "Login", target_strategy="semantic")
+        assert result.strategy == "text"
+
+    def test_target_strategy_none_uses_heuristic(self):
+        """target_strategy=None 应使用默认启发式。"""
+        page = FakePage({
+            "text:Login:True": [_candidate(preview_text="Login", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "Login", target_strategy=None)
+        assert result.strategy == "text"
+
+    def test_target_strategy_unknown_raises(self):
+        """未知的 target_strategy 应抛出 LocatorResolutionError。"""
+        page = FakePage({})
+        with pytest.raises(LocatorResolutionError):
+            resolve_semantic_locator(page, "anything", target_strategy="unknown_strategy")
+
+    def test_target_strategy_element_id(self):
+        page = FakePage({
+            "locator:#my-field": [_candidate(preview_text="Field", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "my-field", target_strategy="element_id")
+        assert result.strategy == "element_id"
+
+
+class TestChainedSelector:
+    """Playwright-style chained selectors: '.class text=Value'."""
+
+    @staticmethod
+    def _chained_page():
+        """FakePage where .productinfo locator chains to get_by_text('View Product')."""
+        inner = _candidate(preview_text="View Product", visible=True, enabled=True, role="a")
+        inner["_css"] = ".productinfo"
+        inner["_chained_map"] = {
+            "chained:.productinfo:text:View Product:True": [inner],
+        }
+        return FakePage({
+            "locator:.productinfo": [inner],
+        })
+
+    def test_dot_class_text_equals_value(self):
+        """'.productinfo text=View Product' → chained_css_text strategy."""
+        page = self._chained_page()
+        result = resolve_semantic_locator(page, ".productinfo text=View Product")
+        assert result.strategy == "chained_css_text"
+
+    def test_dot_class_text_quoted_value(self):
+        """'.productinfo text='View Product'' → chained_css_text strategy."""
+        page = self._chained_page()
+        result = resolve_semantic_locator(page, ".productinfo text='View Product'")
+        assert result.strategy == "chained_css_text"
+
+    def test_dot_class_double_arrow_text(self):
+        """'.productinfo >> text=View Product' → chained_css_text strategy."""
+        page = self._chained_page()
+        result = resolve_semantic_locator(page, ".productinfo >> text=View Product")
+        assert result.strategy == "chained_css_text"
+
+    def test_hash_id_text_value(self):
+        """'#submit-btn text=Go' → chained_css_text strategy."""
+        inner = _candidate(preview_text="Go", visible=True, enabled=True)
+        inner["_css"] = "#submit-btn"
+        inner["_chained_map"] = {
+            "chained:#submit-btn:text:Go:True": [inner],
+        }
+        page = FakePage({
+            "locator:#submit-btn": [inner],
+        })
+        result = resolve_semantic_locator(page, "#submit-btn text=Go")
+        assert result.strategy == "chained_css_text"
+
+    def test_tag_class_text_value(self):
+        """'div.productinfo text=View Product' → chained_css_text."""
+        inner = _candidate(preview_text="View Product", visible=True, enabled=True, role="a")
+        inner["_css"] = "div.productinfo"
+        inner["_chained_map"] = {
+            "chained:div.productinfo:text:View Product:True": [inner],
+        }
+        page = FakePage({
+            "locator:div.productinfo": [inner],
+        })
+        result = resolve_semantic_locator(page, "div.productinfo text=View Product")
+        assert result.strategy == "chained_css_text"
+
+    def test_plain_class_without_text_not_chained(self):
+        """'.productinfo' alone should be plain CSS, not chained."""
+        page = FakePage({
+            "locator:.productinfo": [_candidate(preview_text="Item", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, ".productinfo")
+        assert result.strategy == "css"
+
+    def test_chained_score_higher_than_fuzzy(self):
+        """Chained selector score (110) should be higher than fuzzy matches."""
+        page = self._chained_page()
+        result = resolve_semantic_locator(page, ".productinfo text='View Product'")
+        assert result.trace.selected_candidate is not None
+        assert result.trace.selected_candidate.score >= 110

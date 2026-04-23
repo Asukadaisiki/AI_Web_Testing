@@ -12,6 +12,9 @@ class DSLModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+TargetStrategy = Literal["css", "xpath", "data-testid", "element_id", "tag", "semantic"]
+
+
 class GotoStep(DSLModel):
     action: Literal["goto"]
     value: str = Field(min_length=1, description="Target URL or path.")
@@ -20,24 +23,28 @@ class GotoStep(DSLModel):
 class ClickStep(DSLModel):
     action: Literal["click"]
     target: str = Field(min_length=1, description="Semantic or explicit locator.")
+    target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
 
 
 class InputStep(DSLModel):
     action: Literal["input"]
     target: str = Field(min_length=1, description="Semantic or explicit locator.")
     value: str = Field(description="Input text.")
+    target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
 
 
 class WaitForStep(DSLModel):
     action: Literal["wait_for"]
     target: str = Field(min_length=1, description="Target to wait for.")
     timeout_ms: int = Field(default=5000, ge=1, le=60000)
+    target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
 
 
 class AssertTextStep(DSLModel):
     action: Literal["assert_text"]
     target: str = Field(min_length=1, description="Target to assert against.")
     value: str = Field(min_length=1, description="Expected text.")
+    target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
 
 
 class AssertUrlContainsStep(DSLModel):

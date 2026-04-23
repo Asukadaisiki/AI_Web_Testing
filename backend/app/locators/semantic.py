@@ -38,11 +38,19 @@ def resolve_semantic_locator(
     page,
     target: str,
     *,
+    target_strategy: str | None = None,
     prefer_input: bool = False,
     require_visible: bool = True,
     require_enabled: bool = False,
 ) -> ResolvedLocator:
     normalized_target = target.strip()
+    if target_strategy is not None and target_strategy != "semantic":
+        return _resolve_by_strategy(
+            page, normalized_target, target_strategy,
+            prefer_input=prefer_input,
+            require_visible=require_visible,
+            require_enabled=require_enabled,
+        )
     entries = collect_semantic_candidates(
         page,
         normalized_target,
@@ -85,6 +93,7 @@ def collect_semantic_candidates(
     page,
     target: str,
     *,
+    target_strategy: str | None = None,
     prefer_input: bool = False,
     require_visible: bool = True,
     require_enabled: bool = False,
@@ -164,22 +173,72 @@ def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[
 
 
 _COMPOUND_CSS_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9]*[\.\#\[\s\>:,~\+]")
+_HTML_TAG_NAMES = frozenset({
+    "html", "body", "head", "div", "span", "p", "a", "form", "table",
+    "tr", "td", "th", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+    "input", "button", "select", "option", "textarea", "label", "img",
+    "section", "article", "nav", "header", "footer", "main", "aside",
+})
+
+# Matches: .class text='Value', .class >> text=Value, #id text="Value"
+_CHAINED_SELECTOR_RE = re.compile(
+    r"""(?P<base>^\s*[.#\[][^\s>]+|^\s*[a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_-]*)+)
+        \s*(?:>>\s*)?
+        (?P<method>text|Text|TEXT)\s*[=:]\s*["']?(?P<value>[^"']+)["']?
+        \s*$""",
+    re.VERBOSE,
+)
+
+
+def _resolve_chained_selector(page, target: str) -> tuple[str, object] | None:
+    """Parse Playwright-style chained selectors like ``.class text='Value'``.
+
+    Supported formats:
+    - ``.class text='Value'``
+    - ``.class >> text=Value``
+    - ``#id text="Value"``
+    - ``tag.class text='Value'``
+
+    Returns a ``chained_css_text`` strategy that chains ``page.locator(css)`` +
+    ``.get_by_text(value)``.
+    """
+    m = _CHAINED_SELECTOR_RE.match(target)
+    if m is None:
+        return None
+    base_css = m.group("base").strip()
+    text_value = m.group("value").strip()
+    if not base_css or not text_value:
+        return None
+    return (
+        "chained_css_text",
+        lambda: page.locator(base_css).get_by_text(text_value),
+    )
 
 
 def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
+    # Chained selector (e.g. ".productinfo text='View Product'")
+    chained = _resolve_chained_selector(page, target)
+    if chained is not None:
+        return chained
     if target.startswith("css="):
         return ("css", lambda: page.locator(target))
     if target.startswith("xpath="):
         return ("xpath", lambda: page.locator(target))
     if target.startswith("//"):
         return ("xpath", lambda: page.locator(f"xpath={target}"))
-    if target.startswith(("#", ".", "[")):
+    if target.startswith(("#", "[")):
+        return ("css", lambda: page.locator(target))
+    # Single dot-prefixed class without chained suffix → plain CSS
+    if target.startswith("."):
         return ("css", lambda: page.locator(target))
     if target.startswith("data-testid="):
         value = target.split("=", 1)[1]
         return ("data-testid", lambda: page.get_by_test_id(value))
     if _COMPOUND_CSS_RE.match(target):
         return ("css", lambda: page.locator(target))
+    if target.lower() in _HTML_TAG_NAMES:
+        lower_target = target.lower()
+        return ("css_tag", lambda: page.locator(lower_target))
     return None
 
 
@@ -304,6 +363,8 @@ def _strategy_base_score(strategy: str) -> int:
         "css": 120,
         "xpath": 120,
         "data-testid": 115,
+        "chained_css_text": 110,
+        "css_tag": 105,
         "element_id": 100,
         "button_role": 90,
         "label": 80,
@@ -321,6 +382,8 @@ def _strategy_rule_name(strategy: str) -> str:
         "css": "explicit-css-selector",
         "xpath": "explicit-xpath-selector",
         "data-testid": "explicit-data-testid",
+        "chained_css_text": "chained-css-text-selector",
+        "css_tag": "explicit-html-tag-selector",
         "element_id": "element-id-match",
         "button_role": "exact-button-role-match",
         "label": "exact-label-match",
@@ -331,6 +394,76 @@ def _strategy_rule_name(strategy: str) -> str:
         "placeholder_fuzzy": "fuzzy-placeholder-match",
         "text_fuzzy": "fuzzy-text-match",
     }.get(strategy, strategy)
+
+
+def _build_strategy_builder(
+    page, target: str, strategy: str, *, prefer_input: bool = False,
+) -> tuple[str, object] | None:
+    if strategy == "css":
+        css_target = target.removeprefix("css=")
+        return ("css", lambda: page.locator(css_target))
+    if strategy == "xpath":
+        xpath_target = target.removeprefix("xpath=")
+        if not xpath_target.startswith("/"):
+            xpath_target = f"xpath={xpath_target}"
+        return ("xpath", lambda: page.locator(xpath_target))
+    if strategy == "data-testid":
+        value = target.removeprefix("data-testid=")
+        return ("data-testid", lambda: page.get_by_test_id(value))
+    if strategy == "element_id":
+        return ("element_id", lambda: page.locator(f"#{target}"))
+    if strategy == "tag":
+        lower_target = target.lower()
+        return ("css_tag", lambda: page.locator(lower_target))
+    return None
+
+
+def _resolve_by_strategy(
+    page,
+    target: str,
+    strategy: str,
+    *,
+    prefer_input: bool = False,
+    require_visible: bool = True,
+    require_enabled: bool = False,
+) -> ResolvedLocator:
+    builder = _build_strategy_builder(page, target, strategy, prefer_input=prefer_input)
+    if builder is None:
+        raise LocatorResolutionError(
+            f"Unknown target_strategy: {strategy}",
+            trace=LocatorTrace(target=target, failure_reason=f"Unknown target_strategy: {strategy}"),
+        )
+    strategy_name, build_locator = builder
+    locator_collection = build_locator()
+    count = locator_collection.count()
+    if count == 0:
+        raise LocatorResolutionError(
+            f"Strategy {strategy} matched 0 elements for target: {target}",
+            trace=LocatorTrace(
+                target=target,
+                match_strategy=strategy_name,
+                failure_reason=f"Strategy {strategy} matched 0 elements.",
+            ),
+        )
+    candidate_locator = locator_collection.nth(0)
+    candidate = _build_candidate_evidence(candidate_locator, strategy_name)
+    scored = _score_candidate(
+        candidate,
+        strategy=strategy_name,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+    return ResolvedLocator(
+        strategy=strategy_name,
+        locator=candidate_locator,
+        trace=LocatorTrace(
+            target=target,
+            match_strategy=strategy_name,
+            selected_candidate=scored,
+            candidates=[scored],
+            selection_reason=f"Resolved by explicit target_strategy={strategy}.",
+        ),
+    )
 
 
 def _build_selection_reason(candidate: LocatorCandidateEvidence) -> str:

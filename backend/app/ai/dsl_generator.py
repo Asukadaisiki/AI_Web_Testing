@@ -104,13 +104,15 @@ _OUTPUT_SOURCE_ALIASES = {
     "step_error_message": "last_step_error_message",
     "last_step_error_message": "last_step_error_message",
 }
-AI_DSL_PROMPT_VERSION = "2026-03-24.governance-v3.3"
+AI_DSL_PROMPT_VERSION = "2026-04-22.target-strategy-v1"
 _BASE_SYSTEM_PROMPT_LINES = [
     "You generate structured web testing DSL in JSON only.",
     "Do not use any other action names.",
     "Return exactly one JSON object with keys:",
     "name, description, base_url, input_contract, output_contract, steps.",
-    "Use semantic Chinese target descriptions when selectors are not explicitly provided.",
+    "Use semantic target descriptions matching the actual page language (e.g., English text for English pages, Chinese for Chinese pages). When the page has visible labels, buttons, or links, use their exact visible text as the target value.",
+    "Supported target formats: (1) semantic text matching the page language (default, no prefix); (2) CSS selector with css= prefix or #id, .class, tag.class, [attr], tag > child; (3) XPath with xpath= prefix or //; (4) data-testid=value; (5) bare HTML tag names (body, form, div) recognized as tag selectors.",
+    "NEVER invent invalid compound formats like '.class text=value' or 'tag attr=value'. For combining class and text, use css=.class as target with target_strategy=css.",
     "Do not include markdown fences or explanations.",
     "Keep input_contract/output_contract/steps as arrays even when empty or single-item.",
     "Do not wrap the DSL under other keys such as case, data, result, response, or draft.",
@@ -142,7 +144,8 @@ _BASE_USER_RULE_LINES = [
     "- input_contract 和 output_contract 如无需要，返回空数组。",
     "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
-    "- 复合 CSS 选择器（如 button[type='submit']、form button）可直接使用，无需 css= 前缀；如果不确定是否为合法选择器，加上 css= 前缀。",
+    "- 复合 CSS 选择器（如 button[type='submit']、form button）可直接使用，无需 css= 前缀；如果不确定是否为合法选择器，加上 css= 前缀。禁止构造无效复合格式如 '.productinfo text=View Product'，应使用语义文本或有效的 CSS 选择器。",
+    "- 如果需要明确指定定位策略，可在 step 中添加 target_strategy 字段（可选值：css, xpath, data-testid, element_id, tag, semantic）。不填则自动推断。",
     "- base_url 应为站点根地址（如 https://example.com），页面路径放在 goto 步骤中（如 /login）。不要将完整页面 URL 填入 base_url。",
     "- 生成前评估测试信息完整性：前置条件（系统初始状态）、入口（目标页面 URL 或导航路径）、操作步骤、预期结果。如果描述中缺少入口信息，通过 base_url + goto 步骤明确入口。",
 ]
@@ -800,6 +803,21 @@ def _normalize_single_step(
                 normalization_notes.append(f"步骤 #{index} 的 timeout_ms 已自动转换为整数。")
             elif not allow_auto_repair:
                 raise DslGenerationError(f"步骤 #{index} 的 timeout_ms 字段类型非法。")
+
+    if "target_strategy" in repaired_step and repaired_step["target_strategy"] is not None:
+        valid_strategies = {"css", "xpath", "data-testid", "element_id", "tag", "semantic"}
+        strategy_value = repaired_step["target_strategy"]
+        if isinstance(strategy_value, str):
+            normalized_strategy = strategy_value.strip().lower()
+            if normalized_strategy in valid_strategies:
+                repaired_step["target_strategy"] = normalized_strategy
+            else:
+                repaired_step.pop("target_strategy", None)
+                normalization_notes.append(
+                    f"步骤 #{index} 的 target_strategy 值 '{strategy_value}' 无效，已忽略。"
+                )
+        else:
+            repaired_step.pop("target_strategy", None)
 
     try:
         return _STEP_ADAPTER.validate_python(repaired_step), repaired_invalid_actions

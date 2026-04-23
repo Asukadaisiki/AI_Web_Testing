@@ -248,6 +248,7 @@ def resolve_with_fallback(
     page,
     target: str,
     *,
+    target_strategy: str | None = None,
     correction_store: CorrectionStore | None = None,
     execution_id: int | None = None,
     prefer_input: bool = False,
@@ -283,6 +284,7 @@ def resolve_with_fallback(
         return resolve_semantic_locator(
             page,
             target,
+            target_strategy=target_strategy,
             prefer_input=prefer_input,
             require_visible=require_visible,
             require_enabled=require_enabled,
@@ -296,6 +298,7 @@ def resolve_with_fallback(
             prefer_input=prefer_input,
             require_visible=require_visible,
             require_enabled=require_enabled,
+            target_strategy=target_strategy,
         )
         if reranked is not None:
             return reranked
@@ -612,6 +615,7 @@ def _try_vlm_rank_candidates(
     prefer_input: bool,
     require_visible: bool,
     require_enabled: bool,
+    target_strategy: str | None = None,
 ) -> ResolvedLocator | None:
     try:
         if trace is None or not _should_rerank_trace_candidates(trace.candidates):
@@ -623,6 +627,7 @@ def _try_vlm_rank_candidates(
             prefer_input=prefer_input,
             require_visible=require_visible,
             require_enabled=require_enabled,
+            target_strategy=target_strategy,
         )
         if len(candidate_entries) < 2:
             return None
@@ -676,11 +681,13 @@ def _collect_rankable_semantic_candidates(
     prefer_input: bool,
     require_visible: bool,
     require_enabled: bool,
+    target_strategy: str | None = None,
 ) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     semantic_candidates = collect_semantic_candidates(
         page,
         target,
+        target_strategy=target_strategy,
         prefer_input=prefer_input,
         require_visible=require_visible,
         require_enabled=require_enabled,
