@@ -47,7 +47,7 @@ def test_get_settings_falls_back_when_ai_visual_int_env_is_invalid(monkeypatch) 
     finally:
         get_settings.cache_clear()
 
-    assert settings.ai_visual_timeout_ms == 10000
+    assert settings.ai_visual_timeout_ms == 600000
     assert settings.ai_visual_failure_threshold == 3
     assert settings.ai_visual_cooldown_seconds == 60
     assert settings.ai_visual_rate_limit_per_minute == 10

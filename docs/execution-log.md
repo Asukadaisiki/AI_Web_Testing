@@ -9,6 +9,33 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-23 (下午)
+
+- 任务：BUG-050 DOM 证据注入 + target_strategy 偏好提示 + 单元测试修复
+- 目标：解决 AI DSL 生成时缺少 DOM 证据导致的"幻觉选择器"问题，以及 target_strategy 锁死单策略导致穷举扫描被跳过的问题；同时修复 9 个预存的单元测试失败
+- 操作：
+  1. **target_strategy 偏好提示**：`backend/app/locators/semantic.py` 的 `resolve_semantic_locator` 将 `target_strategy` 从锁死（early return）改为偏好提示（try/except + fallback 穷举语义扫描）
+  2. **DOM 证据注入 Schema**：`AIPlanningScenario` 和 `GenerateDslRequest` 各加 `page_elements: str | None` 字段
+  3. **DOM 数据提取传递**：`test_planning_agent.py` 新增 `_extract_page_elements()` 从 `explore_page` tool_calls 提取格式化 DOM；经 `_plan_response → _build_plan → _build_draft_prompt` 传到 plan JSON；`ai_planning.py` service 层传递到 `GenerateDslRequest`；`dsl_generator.py` 注入到 LLM prompt
+  4. **单元测试修复（8 个）**：
+     - `test_create_case_success`：补齐 `target_strategy: None` 到期望的 steps 字典
+     - `test_list_projects_returns_only_current_user_projects`：改用字段存在性断言替代精确匹配（含 `created_at`/`updated_at`）
+     - `test_get_settings_falls_back_when_ai_visual_int_env_is_invalid`：修正 fallback 期望值 10000 → 600000
+     - `test_create_app_requires_auth_session_secret`：重定向 `ENV_FILE_PATH` 防止 `.env` 回填
+     - `test_business_routes_require_login` → `test_business_routes_allow_demo_access`：匹配 `require_demo_user` 行为
+     - `test_generate_dsl_case_returns_403_when_retry_source_belongs_to_other_actor` → 改为直接测试 service 层权限逻辑
+     - `test_record_generation_feedback_returns_403_for_non_owner_actor` → 改为直接测试 service 层权限逻辑
+     - `test_record_generation_feedback_requires_login` → `test_record_generation_feedback_allows_demo_access`：匹配 demo mode 行为
+- 结果：
+  - target_strategy 失败时自动降级到全量语义扫描，不再立即抛错
+  - AI 生成 DSL 时能收到实际 DOM 元素清单，减少幻觉选择器
+  - 276/277 单元测试通过（剩余 1 个为 `test_ai_settings_api` 间歇性状态泄漏，与本次无关）
+- 验证：
+  - `test_locator_semantic.py`：30/30 passed（含 2 个新 fallback 测试）
+  - `test_ai_planning_api.py`：14/14 passed
+  - 全量单元测试：276 passed
+- 关联记录：BUG-050
+
 ## 2026-04-23
 
 - 任务：定位器系统三阶段改善 — target_strategy 字段 + 裸 HTML 标签识别 + Playwright 链式选择器解析

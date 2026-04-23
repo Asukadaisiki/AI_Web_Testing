@@ -42,11 +42,13 @@
   4. 手动验证 `page.locator('.productinfo').get_by_text('View Product').count() == 0`，而 `page.locator('.product-image-wrapper').get_by_text('View Product').count() == 14`
 - 影响：AI 生成的旧 DSL 用例（Case 8/9）执行失败，需要人工干预或重新生成
 - 根因：AI 无 DOM 快照时凭语义猜测 CSS 容器与文本的包含关系，容易选错父级容器。同时定位器系统此前不支持链式选择器解析（BUG-049 的延伸），即使 DOM 正确也无法处理 `.class text=value` 格式
-- 处理：三重修复：
+- 处理：五重修复：
   1. **定位器侧**（`semantic.py`）：新增 `_resolve_chained_selector` 函数，解析 `.class text=value`、`.class >> text=value` 等 Playwright 链式选择器格式为 `page.locator(css).get_by_text(value)`，策略 `chained_css_text` 评分 110
   2. **Prompt 侧**（`dsl_generator.py`）：v2026-04-22.target-strategy-v1 prompt 禁止生成无效复合格式，引导 AI 使用语义文本（如直接写 `View Product`）或带 `target_strategy` 字段的显式定位
   3. **Schema 侧**（`dsl.py`）：新增 `target_strategy` 字段允许显式声明定位策略
   4. **数据库侧**：`test_case_runs.error_message` 从 VARCHAR(2000) 改为 Text，解决长错误信息存储溢出
+  5. **DOM 证据注入**：将 planning agent 的 `explore_page` DOM 数据传递到 DSL 生成 prompt（`_extract_page_elements → _build_draft_prompt → GenerateDslRequest → dsl_generator`），AI 基于 DOM 元素清单生成 target，不再猜测
+  6. **target_strategy 偏好提示**：`resolve_semantic_locator` 将 `target_strategy` 从锁死改为偏好提示，hint 失败后 fallback 到全量语义扫描
 - 验证：
   - 单元测试 `test_locator_semantic.py::TestChainedSelector` 7/7 passed
   - Playwright 实际验证：`.productinfo >> text=Add to cart` → 14 matches，`.product-image-wrapper >> text=View Product` → 14 matches

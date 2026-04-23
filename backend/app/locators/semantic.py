@@ -44,13 +44,17 @@ def resolve_semantic_locator(
     require_enabled: bool = False,
 ) -> ResolvedLocator:
     normalized_target = target.strip()
+    # Prefer hinted strategy first; on failure fall through to exhaustive scan.
     if target_strategy is not None and target_strategy != "semantic":
-        return _resolve_by_strategy(
-            page, normalized_target, target_strategy,
-            prefer_input=prefer_input,
-            require_visible=require_visible,
-            require_enabled=require_enabled,
-        )
+        try:
+            return _resolve_by_strategy(
+                page, normalized_target, target_strategy,
+                prefer_input=prefer_input,
+                require_visible=require_visible,
+                require_enabled=require_enabled,
+            )
+        except LocatorResolutionError:
+            pass  # Fall through to exhaustive semantic scan
     entries = collect_semantic_candidates(
         page,
         normalized_target,

@@ -319,6 +319,13 @@ def _build_user_prompt_lines(
         f"是否保留当前契约：{'是' if payload.preserve_contracts else '否'}",
         *_BASE_USER_RULE_LINES,
     ]
+    if payload.page_elements:
+        user_lines.extend(
+            [
+                "页面可交互元素清单（请严格使用其中的 label、placeholder 或 id 作为 target）：",
+                payload.page_elements,
+            ]
+        )
     if payload.retry_from_generation_id is not None and payload.retry_reason_code is not None:
         user_lines.extend(
             [

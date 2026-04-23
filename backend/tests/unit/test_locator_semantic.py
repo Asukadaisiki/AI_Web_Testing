@@ -269,8 +269,8 @@ class TestTargetStrategyOverride:
         result = resolve_semantic_locator(page, "Login", target_strategy=None)
         assert result.strategy == "text"
 
-    def test_target_strategy_unknown_raises(self):
-        """未知的 target_strategy 应抛出 LocatorResolutionError。"""
+    def test_target_strategy_unknown_falls_through_to_semantic(self):
+        """Unknown target_strategy falls through to semantic scan, which still fails with no candidates."""
         page = FakePage({})
         with pytest.raises(LocatorResolutionError):
             resolve_semantic_locator(page, "anything", target_strategy="unknown_strategy")
@@ -281,6 +281,24 @@ class TestTargetStrategyOverride:
         })
         result = resolve_semantic_locator(page, "my-field", target_strategy="element_id")
         assert result.strategy == "element_id"
+
+    def test_target_strategy_preference_fallback_to_semantic(self):
+        """When hinted strategy finds 0 matches, semantic scan should be tried as fallback."""
+        page = FakePage({
+            # CSS strategy will find nothing for "Login" (no locator:Login key)
+            # But semantic scan will find a text match
+            "text:Login:True": [_candidate(preview_text="Login", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "Login", target_strategy="css")
+        assert result.strategy == "text"
+
+    def test_target_strategy_css_zero_matches_falls_through(self):
+        """target_strategy='css' with 0 CSS matches should fall through to semantic scan."""
+        page = FakePage({
+            "role:button:Submit:True": [_candidate(preview_text="Submit", visible=True, enabled=True)],
+        })
+        result = resolve_semantic_locator(page, "Submit", target_strategy="css")
+        assert result.strategy == "button_role"
 
 
 class TestChainedSelector:

@@ -142,6 +142,7 @@ class GenerateDslRequest(DSLModel):
     retry_reason_code: DslGenerationRejectionReasonCode | None = None
     retry_note: str | None = Field(default=None, max_length=1000)
     preserve_contracts: bool = False
+    page_elements: str | None = Field(default=None, description="Formatted DOM elements for grounding DSL generation.")
 
     @model_validator(mode="after")
     def validate_retry_context(self) -> "GenerateDslRequest":

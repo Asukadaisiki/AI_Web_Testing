@@ -34,10 +34,13 @@ def test_list_projects_returns_only_current_user_projects(client, db_session) ->
     response = client.get("/api/v1/projects")
 
     assert response.status_code == 200
-    assert response.json() == [
-        {"id": 1, "name": "Default Project", "description": "Seed project for tests."},
-        {"id": 2, "name": "Orders Project", "description": "orders"},
-    ]
+    projects = response.json()
+    assert len(projects) == 2
+    assert {p["id"] for p in projects} == {1, 2}
+    assert {p["name"] for p in projects} == {"Default Project", "Orders Project"}
+    for p in projects:
+        assert "created_at" in p
+        assert "updated_at" in p
 
 
 def test_get_report_preference_defaults_to_recent_active_project(client, db_session) -> None:

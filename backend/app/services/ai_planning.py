@@ -318,6 +318,7 @@ def generate_planning_drafts(
                     current_input_contract=payload.current_input_contract,
                     current_output_contract=payload.current_output_contract,
                     preserve_contracts=payload.preserve_contracts,
+                    page_elements=scenario.get("page_elements"),
                 ),
             )
             record = AIPlanningDraft(

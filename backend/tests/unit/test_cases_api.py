@@ -63,8 +63,8 @@ def test_create_case_success(client) -> None:
     ]
     assert response.json()["steps"] == [
         {"action": "goto", "value": "/login"},
-        {"action": "input", "target": "用户名输入框", "value": "admin"},
-        {"action": "click", "target": "登录按钮"},
+        {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None},
+        {"action": "click", "target": "登录按钮", "target_strategy": None},
         {"action": "assert_url_contains", "value": "/dashboard"},
     ]
 

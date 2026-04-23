@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
@@ -28,9 +30,17 @@ def test_create_app_verifies_database_connection(monkeypatch) -> None:
 def test_create_app_requires_auth_session_secret(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "verify_database_connection", lambda: None)
     monkeypatch.delenv("AUTH_SESSION_SECRET", raising=False)
+    # Redirect ENV_FILE_PATH so .env file cannot re-populate the deleted var.
+    import app.core.config as config_module
 
-    with pytest.raises(RuntimeError, match="AUTH_SESSION_SECRET"):
-        main_module.create_app()
+    monkeypatch.setattr(config_module, "ENV_FILE_PATH", Path("/nonexistent/.env"))
+    config_module.get_settings.cache_clear()
+
+    try:
+        with pytest.raises(RuntimeError, match="AUTH_SESSION_SECRET"):
+            main_module.create_app()
+    finally:
+        config_module.get_settings.cache_clear()
 
 
 def test_create_app_creates_storage_states_dir(monkeypatch, reset_cached_state, tmp_path) -> None:

@@ -478,6 +478,16 @@ def _run_fallback_turn(
     )
 
 
+def _extract_page_elements(tool_calls: list[AIPlanningToolCall]) -> str | None:
+    """Extract formatted DOM elements from the last explore_page tool call."""
+    for call in reversed(tool_calls):
+        if call.tool == "explore_page" and isinstance(call.result, dict):
+            formatted = call.result.get("formatted")
+            if isinstance(formatted, str) and formatted.strip():
+                return formatted
+    return None
+
+
 def _plan_response(
     *,
     requirements: AIPlanningRequirements,
@@ -485,7 +495,12 @@ def _plan_response(
     assistant_message: str,
     tool_calls: list[AIPlanningToolCall],
 ) -> AIPlanningTurnResponse:
-    plan = _coerce_plan(plan_payload, requirements) if plan_payload else _build_plan(requirements)
+    page_elements = _extract_page_elements(tool_calls)
+    plan = (
+        _coerce_plan(plan_payload, requirements, page_elements=page_elements)
+        if plan_payload
+        else _build_plan(requirements, page_elements=page_elements)
+    )
     return AIPlanningTurnResponse(
         assistant_message=assistant_message,
         session_status="plan_ready",
@@ -499,15 +514,23 @@ def _plan_response(
     )
 
 
-def _coerce_plan(plan_payload: dict[str, Any], requirements: AIPlanningRequirements) -> AIPlanningPlan:
+def _coerce_plan(plan_payload: dict[str, Any], requirements: AIPlanningRequirements, *, page_elements: str | None = None) -> AIPlanningPlan:
     candidate = dict(plan_payload)
     if "summary" not in candidate or "scenarios" not in candidate:
-        return _build_plan(requirements)
+        return _build_plan(requirements, page_elements=page_elements)
     try:
-        return AIPlanningPlan.model_validate(candidate)
+        plan = AIPlanningPlan.model_validate(candidate)
+        if page_elements:
+            plan = plan.model_copy(update={
+                "scenarios": [
+                    s.model_copy(update={"page_elements": page_elements}) if s.page_elements is None else s
+                    for s in plan.scenarios
+                ]
+            })
+        return plan
     except Exception:
         logger.warning("Planning LLM returned invalid plan payload, fallback to deterministic plan.")
-        return _build_plan(requirements)
+        return _build_plan(requirements, page_elements=page_elements)
 
 
 def _error_response(
@@ -665,7 +688,7 @@ def _slot_is_missing(requirements: AIPlanningRequirements, slot: str) -> bool:
     return not bool(value and str(value).strip())
 
 
-def _build_plan(requirements: AIPlanningRequirements) -> AIPlanningPlan:
+def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | None = None) -> AIPlanningPlan:
     assertions = requirements.main_assertions or ["页面状态符合预期"]
     is_login = _looks_like_login(requirements)
     flow_label = "登录" if is_login else "核心流程"
@@ -681,7 +704,8 @@ def _build_plan(requirements: AIPlanningRequirements) -> AIPlanningPlan:
             priority="high",
             test_data_requirements=_build_test_data_requirements(requirements, is_login=is_login),
             assertions=assertions,
-            draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}成功", negative_case=False),
+            draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}成功", negative_case=False, page_elements=page_elements),
+            page_elements=page_elements,
         ),
         AIPlanningScenario(
             scenario_key="login_error" if is_login else "primary_flow_validation",
@@ -691,7 +715,8 @@ def _build_plan(requirements: AIPlanningRequirements) -> AIPlanningPlan:
             priority="medium",
             test_data_requirements=_build_test_data_requirements(requirements, is_login=is_login),
             assertions=["错误提示符合预期", *assertions[:1]],
-            draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}异常处理", negative_case=True),
+            draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}异常处理", negative_case=True, page_elements=page_elements),
+            page_elements=page_elements,
         ),
     ]
     assumptions = []
@@ -755,12 +780,19 @@ def _build_draft_prompt(
     *,
     scenario_title: str,
     negative_case: bool,
+    page_elements: str | None = None,
 ) -> str:
     assertions = "；".join(requirements.main_assertions or ["页面状态符合预期"])
     data_labels = "；".join(
         item.label for item in _build_test_data_requirements(requirements, is_login=_looks_like_login(requirements))
     )
     negative_hint = "需要覆盖异常输入和错误提示。" if negative_case else "请覆盖标准主流程。"
+    dom_section = ""
+    if page_elements:
+        dom_section = (
+            "\n\n已采集到的页面可交互元素清单（请严格使用其中的 label、placeholder 或 id 作为 target）：\n"
+            f"{page_elements}"
+        )
     return (
         f"请基于测试规划生成 DSL 草案。场景：{scenario_title}。"
         f"被测系统：{requirements.app_under_test or '待补充'}。"
@@ -772,4 +804,5 @@ def _build_draft_prompt(
         f"范围限制：{requirements.scope_limits or '未说明'}。"
         f"{negative_hint}"
         "如果已获取到页面元素清单，请严格按照元素的实际 label、placeholder 或 id 作为 target，不要自行编造描述。"
+        f"{dom_section}"
     )

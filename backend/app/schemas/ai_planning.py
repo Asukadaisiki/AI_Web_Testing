@@ -50,6 +50,7 @@ class AIPlanningScenario(DSLModel):
     test_data_requirements: list[AIPlanningTestDataRequirement] = Field(default_factory=list)
     assertions: list[str] = Field(default_factory=list)
     draft_prompt: str = Field(min_length=1)
+    page_elements: str | None = Field(default=None, description="Formatted DOM elements from explore_page tool.")
 
 
 class AIPlanningPlan(DSLModel):
