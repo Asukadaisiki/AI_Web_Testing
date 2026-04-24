@@ -9,6 +9,29 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-25
+
+- 任务：VLM bbox 坐标点击回退 + 交互式 explore_flow + save-and-execute input_values 透传 + 端到端链路测试验证
+- 背景：Session 52 链路测试发现两个问题：(1) login_error 场景 Step 12 点击 “Cart”（导航栏）被弹层遮挡超时，AI 应点击弹层中的 “View Cart”；(2) save-and-execute 不传 input_values 导致 `${context_key}` 变量无法替换。根因分析发现 VLM 返回的 bbox 坐标在 DOM 选择器提取失败时被丢弃，Playwright 原生支持 `page.mouse.click(x,y)` 但从未使用。
+- 操作：
+  1. `semantic.py`：`ResolvedLocator` 新增 `click_coordinates: tuple[int, int] | None` 字段
+  2. `fallback.py`：新增 `_try_coordinate_click_fallback()` Tier 2.5 回退——VLM 返回 bbox 但 DOM selector 提取失败时返回坐标；修改 `resolve_with_fallback()` 在 Tier 2 后、Tier 3 前插入
+  3. `playwright_runner.py`：click 步骤检查 `click_coordinates`→`page.mouse.click(x,y)`；input 步骤→`page.mouse.click(x,y)` + `page.keyboard.type(value)`
+  4. `page_explorer.py`：新增 `_discover_interactive_elements()` 点击关键按钮（Add to cart/View Product 等）捕获动态弹层元素，元素标记 `discovered_via_interaction: True`；更新 `format_elements_for_prompt()` 添加 `[dynamic]` 标记
+  5. `config.py`：新增 `explore_interactive_max_clicks: int = 5`
+  6. `test_planning_prompts.py`：追加动态交互规则——弹层步骤必须保留、[dynamic] 元素顺序与用户流程一致
+  7. `test_planning_agent.py`：`_build_draft_prompt()` dom_section 追加动态元素说明
+  8. `ai_planning.py`（route + service）：`SaveAndExecuteRequest` 增加 `input_values` 字段，透传到 `CaseExecutionRequest`
+- 改动文件：10 个核心文件，+203/-10 行
+- 验证：
+  - `uv run pytest tests/unit/` → 301 passed（新增 3 个测试：坐标回退、VLM None 回退、动态元素标记）
+  - Session 53 端到端测试：AI 生成 Draft 26/27（13 步），正确使用 “View Cart”（弹层）而非 “Cart”（导航栏）
+  - Exec 69（login_success）13/13 passed，Exec 70（login_error）13/13 passed
+  - 变量替换 `${login_email}`/`${login_password}`/`${search_keyword}` 正常工作
+  - 语义文本定位器全部成功，无 CSS 选择器误用
+- commit：`c8808a7` feat: VLM bbox coordinate click fallback + interactive explore_flow + dynamic element discovery
+- 关联 bug：BUG-053（VLM bbox 坐标丢失，已修复）、BUG-054（AI 忽略弹层步骤，已修复）
+
 ## 2026-04-24 (Session 2)
 
 - 任务：修复 BUG-051（input_contract 变量未替换）+ BUG-052（AI 跳过 explore_page）+ 实现 explore_flow 多页面探索 + VLM 页面布局注解

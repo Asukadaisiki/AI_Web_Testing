@@ -29,6 +29,41 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-054 | AI 忽略用户描述的弹层交互步骤，用导航栏元素替代弹层元素
+
+- 日期：2026-04-25
+- 状态：fixed
+- 来源：Session 52 端到端链路测试 — Exec 67 Step 12 失败
+- 描述：用户需求明确写了「在弹层中点击 View Cart，跳转购物车页」，但 AI 生成的 DSL 使用导航栏 "Cart" 而非弹层 "View Cart"。点击 "Add to cart" 后出现确认弹层遮挡了导航栏 "Cart"，导致 click 超时失败。Exec 67 login_error 场景 11/12 通过，仅 Step 12 失败。
+- 复现步骤：
+  1. Session 52，Draft 25 login_error 场景
+  2. Step 10 click "Add to cart" → 弹层出现
+  3. Step 11 wait_for "Cart" → passed（导航栏 Cart 可见）
+  4. Step 12 click "Cart" → 超时，弹层遮挡了导航栏 Cart
+- 影响：所有涉及动态弹层交互的测试场景（如加购确认弹层、删除确认弹层等）
+- 根因：(1) 静态 explore_flow 无法采集点击后弹出的动态元素，AI 在 DOM 中只看到导航栏 "Cart"；(2) AI 未严格遵循用户描述的弹层交互流程
+- 处理：三重修复：(1) 新增 `_discover_interactive_elements()` 点击关键按钮捕获弹层元素；(2) Prompt 追加动态交互规则强制 AI 保留用户描述的弹层步骤；(3) `format_elements_for_prompt` 添加 `[dynamic]` 标记区分动态元素
+- 验证：Session 53 Draft 26/27 正确使用 "View Cart"；Exec 69/70 各 13/13 全部通过
+- 关联记录：execution-log 2026-04-25
+
+## BUG-053 | VLM bbox 坐标在 DOM 选择器提取失败时被丢弃
+
+- 日期：2026-04-25
+- 状态：fixed
+- 来源：BUG-054 根因分析 — VLM 能看到弹层元素但无法点击
+- 描述：VLM 视觉定位返回了准确的 bbox 坐标 `(center_x, center_y)`，但 `_build_locator_from_ai_point()` 将坐标转为 DOM 选择器时失败（弹层元素无法通过 `document.elementsFromPoint` 正确解析），此时整个 `AILocateResult` 被丢弃，系统直接抛出 `InterventionNeededError`。Playwright 原生支持 `page.mouse.click(x, y)` 坐标点击但从未使用。
+- 复现步骤：
+  1. 执行含弹层交互的用例
+  2. Tier 1 语义定位失败
+  3. Tier 2 VLM 返回有效 bbox
+  4. `_build_locator_from_ai_point` DOM 快照提取失败 → 返回 None
+  5. bbox 坐标丢失 → 抛出 InterventionNeededError
+- 影响：所有 VLM 能看到但 DOM 无法正确解析的元素（弹层、shadow DOM、iframe 内容等）都无法自动定位
+- 根因：fallback 链缺少 bbox → 坐标点击的回退路径
+- 处理：(1) `ResolvedLocator` 新增 `click_coordinates` 字段；(2) 新增 `_try_coordinate_click_fallback()` Tier 2.5 回退；(3) Runner click/input 步骤支持 `page.mouse.click(x,y)` + `page.keyboard.type()`
+- 验证：单元测试覆盖坐标回退、VLM None 回退、非法坐标过滤；端到端 Exec 69/70 全部通过
+- 关联记录：execution-log 2026-04-25
+
 ## BUG-052 | AI DSL 生成在无 DOM 快照时仍猜测不存在的 CSS 选择器
 
 - 日期：2026-04-24
