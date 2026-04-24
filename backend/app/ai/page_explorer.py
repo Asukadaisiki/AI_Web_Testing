@@ -136,6 +136,7 @@ def collect_interactable_elements(
             "role": elem.get("role"),
             "aria_label": elem.get("aria_label"),
             "placeholder": elem.get("placeholder"),
+            "href": elem.get("href"),
             "visible": elem.get("visible", False),
             "enabled": elem.get("enabled", False),
         }
@@ -252,6 +253,7 @@ def collect_multi_page_elements(
                         "role": elem.get("role"),
                         "aria_label": elem.get("aria_label"),
                         "placeholder": elem.get("placeholder"),
+                        "href": elem.get("href"),
                         "visible": elem.get("visible", False),
                         "enabled": elem.get("enabled", False),
                     }

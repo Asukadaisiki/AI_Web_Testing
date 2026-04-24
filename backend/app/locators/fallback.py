@@ -207,6 +207,7 @@ EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT = (
           aria_label: element.getAttribute("aria-label"),
           placeholder: element.getAttribute("placeholder"),
           data_testid: element.getAttribute("data-testid"),
+          href: element.tagName.toLowerCase() === "a" ? (element.getAttribute("href") || null) : null,
           css_selector: buildCssSelector(element),
           xpath: buildXPath(element),
           rect: {

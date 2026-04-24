@@ -166,21 +166,40 @@ def stream_planning_turn(
         if not isinstance(action_input, dict):
             action_input = {}
 
-        # --- Force explore_page before generating plan (BUG-052) ---
-        if action == "generate_plan" and not _has_explored_pages(tool_calls):
-            explored, tool_calls = _auto_explore_entry_url(
-                requirements, tool_calls, db_session, project_id,
-            )
-            if explored:
-                yield {"type": "status", "phase": "tool_call", "message": "正在自动采集入口页面元素..."}
-                conversation.append(
-                    {"role": "system", "content": (
-                        "系统已自动采集了入口页面的可交互元素（见上方工具返回结果）。"
-                        "请基于这些元素信息重新生成测试方案，"
-                        "确保 target 使用元素的实际 label、placeholder 或 id。"
-                    )},
+        # --- Force explore_page/explore_flow before generating plan (BUG-052) ---
+        if action == "generate_plan":
+            has_explore = _has_explored_pages(tool_calls)
+            has_flow = any(call.tool == "explore_flow" for call in tool_calls)
+            if not has_explore:
+                explored, tool_calls = _auto_explore_entry_url(
+                    requirements, tool_calls, db_session, project_id,
                 )
-                continue
+                if explored:
+                    yield {"type": "status", "phase": "tool_call", "message": "正在自动采集入口页面及导航页面元素..."}
+                    conversation.append(
+                        {"role": "system", "content": (
+                            "系统已自动采集了入口页面及其导航链接页面的可交互元素（见上方工具返回结果）。"
+                            "请基于这些元素信息重新生成测试方案，"
+                            "确保 target 使用元素的实际 label、placeholder 或 id。"
+                            "对于未采集到的页面，可使用语义描述作为 target。"
+                        )},
+                    )
+                    continue
+            elif not has_flow:
+                # AI called explore_page but not explore_flow — supplement with multi-page
+                explored, tool_calls = _auto_explore_entry_url(
+                    requirements, tool_calls, db_session, project_id,
+                )
+                if explored:
+                    yield {"type": "status", "phase": "tool_call", "message": "正在补充采集导航页面元素..."}
+                    conversation.append(
+                        {"role": "system", "content": (
+                            "系统补充采集了导航链接页面的可交互元素。"
+                            "请基于所有已采集的页面元素信息重新生成测试方案，"
+                            "确保 target 使用元素的实际 label、placeholder 或 id。"
+                        )},
+                    )
+                    continue
 
         if force_generate and action != "generate_plan":
             response = _plan_response(
@@ -515,10 +534,17 @@ def _auto_explore_entry_url(
     db_session: Session,
     project_id: int,
 ) -> tuple[bool, list[AIPlanningToolCall]]:
-    """Auto-invoke explore_page with the entry URL if available.
+    """Auto-invoke explore_page (or explore_flow) with the entry URL.
 
-    Returns (explored, tool_calls) where *explored* indicates whether exploration
-    was actually triggered.
+    If the entry page contains navigable internal links, automatically
+    collects those pages too via explore_flow so that multi-page test
+    flows have DOM evidence for every page.
+
+    If an explore_page call already exists in *tool_calls*, reuses its
+    result to extract links and only triggers the explore_flow step.
+
+    Returns (explored, tool_calls) where *explored* indicates whether
+    exploration was actually triggered.
     """
     entry_url = requirements.entry_url_or_page
     if not entry_url or not isinstance(entry_url, str):
@@ -528,27 +554,115 @@ def _auto_explore_entry_url(
     if not match:
         return False, tool_calls
 
-    url = match.group(0)
-    try:
-        tool_result_text = execute_tool(
-            tool_name="explore_page",
-            params={"url": url},
-            db_session=db_session,
-            project_id=project_id,
-        )
-        parsed_result = _safe_parse_json(tool_result_text)
-    except Exception as exc:
-        logger.warning("Auto-explore failed for url=%s: %s", url, exc)
-        parsed_result = {"error": str(exc), "url": url}
+    base_url = match.group(0)
 
-    tool_calls.append(
-        AIPlanningToolCall(
-            tool="explore_page",
-            params={"url": url},
-            result=parsed_result,
+    # Check if explore_page was already called by the AI
+    existing_explore_result = None
+    for call in tool_calls:
+        if call.tool == "explore_page" and isinstance(call.result, dict):
+            existing_explore_result = call.result
+
+    if existing_explore_result is None:
+        # Step 1: Explore the entry page first
+        try:
+            tool_result_text = execute_tool(
+                tool_name="explore_page",
+                params={"url": base_url},
+                db_session=db_session,
+                project_id=project_id,
+            )
+            parsed_result = _safe_parse_json(tool_result_text)
+        except Exception as exc:
+            logger.warning("Auto-explore failed for url=%s: %s", base_url, exc)
+            parsed_result = {"error": str(exc), "url": base_url}
+
+        tool_calls.append(
+            AIPlanningToolCall(
+                tool="explore_page",
+                params={"url": base_url},
+                result=parsed_result,
+            )
         )
-    )
+    else:
+        parsed_result = existing_explore_result
+
+    # Step 2: Extract navigable internal links from the entry page result
+    internal_links = _extract_internal_links(parsed_result, base_url)
+    logger.info("Auto-explore: found %d internal links from %s", len(internal_links), base_url)
+    if internal_links:
+        all_urls = [base_url] + internal_links[:4]  # cap at 5 pages total
+        logger.info("Auto-explore: triggering explore_flow with %d URLs", len(all_urls))
+        try:
+            flow_result_text = execute_tool(
+                tool_name="explore_flow",
+                params={"urls": all_urls},
+                db_session=db_session,
+                project_id=project_id,
+            )
+            flow_result = _safe_parse_json(flow_result_text)
+            tool_calls.append(
+                AIPlanningToolCall(
+                    tool="explore_flow",
+                    params={"urls": all_urls},
+                    result=flow_result,
+                )
+            )
+        except Exception as exc:
+            logger.warning("Auto-explore_flow failed: %s", exc, exc_info=True)
+
     return True, tool_calls
+
+
+def _extract_internal_links(
+    explore_result: dict[str, Any] | None,
+    base_url: str,
+) -> list[str]:
+    """Extract navigable internal links from an explore_page result.
+
+    Returns a list of absolute URLs that are on the same domain as *base_url*.
+    Skips anchors, javascript: links, and duplicate paths.
+    """
+    if not explore_result or not isinstance(explore_result, dict):
+        return []
+
+    elements = explore_result.get("elements", [])
+    if not isinstance(elements, list):
+        return []
+
+    from urllib.parse import urljoin, urlparse
+
+    base_parsed = urlparse(base_url)
+    base_origin = f"{base_parsed.scheme}://{base_parsed.netloc}"
+    seen_paths: set[str] = {base_parsed.path or "/"}
+    links: list[str] = []
+
+    for elem in elements:
+        if not isinstance(elem, dict):
+            continue
+        tag = elem.get("tag", "")
+        if tag != "a":
+            continue
+        href = elem.get("href") or ""
+        if not href or href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:"):
+            continue
+
+        abs_url = urljoin(base_url, href)
+        parsed = urlparse(abs_url)
+
+        # Same domain only
+        if parsed.netloc != base_parsed.netloc:
+            continue
+
+        path = parsed.path or "/"
+        if path in seen_paths:
+            continue
+
+        seen_paths.add(path)
+        # Reconstruct clean URL (drop query/fragment)
+        clean_url = f"{parsed.scheme}://{parsed.netloc}{path}"
+        links.append(clean_url)
+
+    return links
 
 
 def _plan_response(
