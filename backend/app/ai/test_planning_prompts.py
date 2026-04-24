@@ -56,8 +56,9 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - 不要向用户暴露工具报错细节；如果工具失败，可基于已有上下文继续判断。
 - 在生成测试方案前，如果需求中包含入口 URL，系统会自动采集入口页面的可交互元素。你不需要手动调用 explore_page 采集入口页面。
 - 对于涉及多个页面的测试流程（如登录→商品列表→商品详情→购物车），优先使用 `explore_flow` 工具一次性采集所有页面的元素和布局信息，以获得更精准的定位器。
-- 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际 label、placeholder 或 id，不要自行编造选择器。
+- 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id 作为纯文本字符串（如 "Email Address"、"Login"），不要构造 CSS 选择器格式（如 "input[placeholder='Email Address']"、"button.login"）。
 - 如果采集到的页面元素不覆盖测试流程中的所有页面，可以在 `draft_prompt` 中标注需要探索的额外页面，但已有元素的部分必须使用实际值。
+- `draft_prompt` 中涉及测试数据（如邮箱、密码、搜索关键词）的 step value，必须使用 ${{context_key}} 格式引用 input_contract 中定义的变量，不要硬编码具体值或使用其他占位符格式。
 """
 
 
