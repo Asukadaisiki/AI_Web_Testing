@@ -127,7 +127,7 @@ DslGenerationRejectionReasonCode = Literal[
 
 
 class GenerateDslRequest(DSLModel):
-    prompt: str = Field(min_length=1, max_length=4000)
+    prompt: str = Field(min_length=1, max_length=8000)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     actor_user_id: int = Field(ge=1)
     project_id: int | None = Field(default=None, ge=1)
