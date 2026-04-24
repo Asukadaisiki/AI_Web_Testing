@@ -80,6 +80,8 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
             if value:
                 attr_display = attr.replace("_", "-")
                 parts.append(f"[{attr_display}='{value}']")
+        if element.get("discovered_via_interaction"):
+            parts.append("[dynamic]")
         lines.append(" ".join(parts))
     return "\n".join(lines)
 
@@ -95,6 +97,67 @@ def _extract_element_id(elem: dict[str, Any]) -> str:
     if css.startswith("#") and " > " not in css:
         return css[1:]
     return elem.get("data_testid") or ""
+
+
+_INTERACTIVE_KEYWORDS = [
+    "add to cart", "submit", "view product", "view cart",
+    "add to bag", "buy now", "checkout", "place order",
+]
+
+
+def _discover_interactive_elements(
+    page,
+    *,
+    max_clicks: int = 5,
+) -> list[dict[str, Any]]:
+    """Click key trigger buttons and capture dynamically appearing elements."""
+    baseline: set[str] = set()
+    baseline_payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+    for elem in (baseline_payload or []):
+        css = elem.get("css_selector", "")
+        if css:
+            baseline.add(css)
+
+    discovered: list[dict[str, Any]] = []
+    triggers = page.query_selector_all("button, a")
+    clicks = 0
+
+    for trigger in triggers:
+        if clicks >= max_clicks:
+            break
+        try:
+            if not trigger.is_visible():
+                continue
+            text = (trigger.inner_text() or "").strip().lower()
+            if not any(kw in text for kw in _INTERACTIVE_KEYWORDS):
+                continue
+            box = trigger.bounding_box()
+            if box and (box["width"] < 10 or box["height"] < 10):
+                continue
+
+            trigger.click(timeout=3000)
+            page.wait_for_timeout(500)
+
+            new_payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+            for elem in (new_payload or []):
+                css = elem.get("css_selector", "")
+                if css and css not in baseline:
+                    elem["discovered_via_interaction"] = True
+                    discovered.append(elem)
+                    baseline.add(css)
+
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            clicks += 1
+        except Exception as exc:
+            logger.debug("Interactive trigger failed: %s", exc)
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+            except Exception:
+                pass
+
+    return discovered
 
 
 def collect_interactable_elements(
@@ -262,6 +325,23 @@ def collect_multi_page_elements(
                 ] if isinstance(payload, list) else []
 
                 formatted = format_elements_for_prompt(elements)
+
+                # Interactive element discovery
+                try:
+                    from app.core.config import get_settings
+                    settings = get_settings()
+                    interactive = _discover_interactive_elements(
+                        page, max_clicks=settings.explore_interactive_max_clicks,
+                    )
+                    if interactive:
+                        elements.extend(interactive)
+                        formatted = format_elements_for_prompt(elements)
+                        logger.info(
+                            "Discovered %d interactive elements on %s",
+                            len(interactive), url,
+                        )
+                except Exception as exc:
+                    logger.warning("Interactive exploration failed for %s: %s", url, exc)
 
                 screenshot_available = False
                 vlm_annotation: str | None = None

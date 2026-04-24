@@ -314,6 +314,11 @@ def resolve_with_fallback(
         )
         if resolved is not None:
             return resolved
+        coord_resolved = _try_coordinate_click_fallback(
+            page, target=target, ai_candidate=ai_candidate,
+        )
+        if coord_resolved is not None:
+            return coord_resolved
 
     raise InterventionNeededError(
         target=target,
@@ -525,6 +530,28 @@ def _build_locator_from_ai_point(
             target=target,
             match_strategy="ai_visual",
             selection_reason=f"AI visual locate verified against DOM at {ai_candidate.center}.",
+        ),
+    )
+
+
+def _try_coordinate_click_fallback(
+    page,
+    *,
+    target: str,
+    ai_candidate: AILocateResult,
+) -> ResolvedLocator | None:
+    """Tier 2.5: use VLM bbox coordinates directly when DOM selector extraction fails."""
+    x, y = ai_candidate.center
+    if not (isinstance(x, int) and isinstance(y, int) and x >= 0 and y >= 0):
+        return None
+    return ResolvedLocator(
+        strategy="ai_coordinate_click",
+        locator=page.locator("body"),
+        click_coordinates=(x, y),
+        trace=LocatorTrace(
+            target=target,
+            match_strategy="ai_coordinate_click",
+            selection_reason=f"VLM located at ({x},{y}), DOM selector extraction failed.",
         ),
     )
 

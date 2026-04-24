@@ -83,6 +83,7 @@ class Settings:
     ai_planning_max_react_rounds: int = 5
     storage_state_dir: str = "storage_states"
     enable_vlm_page_annotation: bool = True
+    explore_interactive_max_clicks: int = 5
 
 
 @lru_cache

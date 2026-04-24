@@ -25,6 +25,7 @@ class ResolvedLocator:
     strategy: str
     locator: object
     trace: LocatorTrace
+    click_coordinates: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)

@@ -59,6 +59,8 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id 作为纯文本字符串（如 "Email Address"、"Login"），不要构造 CSS 选择器格式（如 "input[placeholder='Email Address']"、"button.login"）。
 - 如果采集到的页面元素不覆盖测试流程中的所有页面，可以在 `draft_prompt` 中标注需要探索的额外页面，但已有元素的部分必须使用实际值。
 - `draft_prompt` 中涉及测试数据（如邮箱、密码、搜索关键词）的 step value，必须使用 ${{context_key}} 格式引用 input_contract 中定义的变量，不要硬编码具体值或使用其他占位符格式。
+- 当用户需求明确描述了弹窗、模态框等动态交互步骤（如"在弹层中点击 View Cart"），`draft_prompt` 中必须严格保留用户描述的交互顺序和弹窗上下文。即使元素清单中没有该弹窗元素，也必须保留该步骤——执行时会通过 VLM 视觉定位或坐标点击找到。
+- 标注了 [dynamic] 的元素是交互触发后才出现的动态元素，步骤顺序必须与用户流程一致。
 """
 
 

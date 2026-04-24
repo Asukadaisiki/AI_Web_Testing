@@ -23,6 +23,7 @@ from app.schemas.ai_planning import (
     UpdateAIPlanningDraftStatusRequest,
 )
 from app.schemas.dsl import DSLModel
+from pydantic import Field
 from app.services.ai_planning import (
     AIPlanningAccessError,
     create_planning_session,
@@ -163,6 +164,10 @@ def delete_planning_draft_route(
 class SaveAndExecuteRequest(DSLModel):
     draft_ids: list[int]
     execute: bool = True
+    input_values: dict[str, str] = Field(
+        default_factory=dict,
+        description="Variable substitutions for ${context_key} placeholders.",
+    )
 
 
 @router.post("/sessions/{session_id}/drafts:save-and-execute", response_model=AIPlanningTurnResponse)
@@ -173,7 +178,7 @@ def save_and_execute_route(
     current_user: User = Depends(require_demo_user),
 ) -> AIPlanningTurnResponse:
     try:
-        return save_and_execute_selected_drafts(session, session_id, payload.draft_ids, current_user.id, payload.execute)
+        return save_and_execute_selected_drafts(session, session_id, payload.draft_ids, current_user.id, payload.execute, input_values=payload.input_values)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AIPlanningAccessError as exc:

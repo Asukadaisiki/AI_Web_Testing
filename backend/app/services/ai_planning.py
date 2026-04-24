@@ -446,6 +446,7 @@ def save_and_execute_selected_drafts(
     draft_ids: list[int],
     actor_user_id: int,
     execute: bool = True,
+    input_values: dict[str, str] | None = None,
 ) -> AIPlanningTurnResponse:
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
 
@@ -501,7 +502,7 @@ def save_and_execute_selected_drafts(
 
     execution_summaries: list[ExecutionSummaryResult] = []
     for saved in saved_cases:
-        payload = CaseExecutionRequest(actor_user_id=actor_user_id)
+        payload = CaseExecutionRequest(actor_user_id=actor_user_id, input_values=input_values or {})
         result = execute_case(session, saved.case_id, payload)
         passed = sum(1 for s in (result.report.steps or []) if s.status == "passed")
         failed = sum(1 for s in (result.report.steps or []) if s.status == "failed")
@@ -560,6 +561,7 @@ def save_and_execute_selected_drafts_streaming(
     draft_ids: list[int],
     actor_user_id: int,
     *,
+    input_values: dict[str, str] | None = None,
     cancel_event=None,
 ):
     """Generator version of save_and_execute_selected_drafts for WebSocket streaming.
@@ -616,7 +618,7 @@ def save_and_execute_selected_drafts_streaming(
         if cancel_event.is_set():
             raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
 
-        payload = CaseExecutionRequest(actor_user_id=actor_user_id)
+        payload = CaseExecutionRequest(actor_user_id=actor_user_id, input_values=input_values or {})
         dsl_case = None
         case_record = session.query(TestCase).get(saved.case_id)
         if case_record:

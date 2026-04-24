@@ -417,8 +417,10 @@ def test_resolve_with_fallback_invalidates_cached_ai_visual_selector_when_locato
     resolve_with_fallback(first_page, "登录按钮")
 
     with caplog.at_level("DEBUG"):
-        with pytest.raises(InterventionNeededError):
-            resolve_with_fallback(stale_page, "登录按钮")
+        result = resolve_with_fallback(stale_page, "登录按钮")
+        # Tier 2.5 coordinate click fallback returns coordinates instead of raising
+        assert result.click_coordinates == (200, 100)
+        assert result.strategy == "ai_coordinate_click"
 
     assert "cache_invalidated" in caplog.text
 
@@ -477,3 +479,59 @@ def test_resolve_with_fallback_prioritizes_tier_zero_correction_over_ai_visual_c
 
     assert resolved.strategy == "correction:css"
     assert correction_page.screenshot_calls == []
+
+
+def test_coordinate_click_fallback_returns_valid_coordinates(monkeypatch) -> None:
+    """When VLM returns bbox but DOM selector extraction fails, Tier 2.5 returns coordinates."""
+    page = FakePage(
+        url="https://app.example.com/modal",
+        ai_payload=None,  # DOM snapshot at point returns None
+    )
+
+    monkeypatch.setattr(
+        "app.locators.fallback.resolve_semantic_locator",
+        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="View Cart"))),
+    )
+    monkeypatch.setattr(
+        "app.locators.fallback.locate_element_by_vision",
+        lambda **_kwargs: type(
+            "Candidate",
+            (),
+            {"center": (300, 200), "bbox": (250, 180, 350, 220), "confidence": 0.8, "raw_response": "{}"},
+        )(),
+    )
+
+    result = resolve_with_fallback(page, "View Cart")
+    assert result.strategy == "ai_coordinate_click"
+    assert result.click_coordinates == (300, 200)
+    assert result.trace.match_strategy == "ai_coordinate_click"
+
+
+def test_coordinate_click_fallback_skipped_when_vlm_returns_none(monkeypatch) -> None:
+    """When VLM also fails, InterventionNeededError is still raised."""
+    page = FakePage(url="https://app.example.com/page")
+
+    monkeypatch.setattr(
+        "app.locators.fallback.resolve_semantic_locator",
+        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="missing"))),
+    )
+    monkeypatch.setattr(
+        "app.locators.fallback.locate_element_by_vision",
+        lambda **_kwargs: None,
+    )
+
+    with pytest.raises(InterventionNeededError):
+        resolve_with_fallback(page, "missing element")
+
+
+def test_format_elements_for_prompt_marks_dynamic_elements() -> None:
+    """format_elements_for_prompt adds [dynamic] tag for interactive-discovered elements."""
+    from app.ai.page_explorer import format_elements_for_prompt
+
+    elements = [
+        {"tag": "button", "text": "Login", "visible": True},
+        {"tag": "a", "text": "View Cart", "visible": True, "discovered_via_interaction": True},
+    ]
+    result = format_elements_for_prompt(elements)
+    assert "button [text='Login']" in result
+    assert "a [text='View Cart'] [dynamic]" in result

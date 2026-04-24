@@ -968,7 +968,8 @@ def _build_draft_prompt(
     if page_elements:
         dom_section = (
             "\n\n已采集到的页面可交互元素清单（请严格使用其中的 label、placeholder 或 id 作为 target）：\n"
-            f"{page_elements}"
+            f"{page_elements}\n"
+            "注意：标注了 [dynamic] 的元素是交互触发后才出现的动态元素，步骤顺序必须与用户流程一致。"
         )
     return (
         f"请基于测试规划生成 DSL 草案。场景：{scenario_title}。"

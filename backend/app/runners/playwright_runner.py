@@ -161,7 +161,10 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        resolved.locator.click()
+                        if resolved.click_coordinates is not None:
+                            page.mouse.click(*resolved.click_coordinates)
+                        else:
+                            resolved.locator.click()
                     elif step.action == "input":
                         resolved = resolve_with_fallback(
                             page,
@@ -175,7 +178,12 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        resolved.locator.fill(_substitute_variables(step.value, input_values))
+                        input_value = _substitute_variables(step.value, input_values)
+                        if resolved.click_coordinates is not None:
+                            page.mouse.click(*resolved.click_coordinates)
+                            page.keyboard.type(input_value)
+                        else:
+                            resolved.locator.fill(input_value)
                     elif step.action == "wait_for":
                         resolved = resolve_with_fallback(
                             page,
@@ -368,7 +376,10 @@ def execute_case_with_playwright_streaming(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        resolved.locator.click()
+                        if resolved.click_coordinates is not None:
+                            page.mouse.click(*resolved.click_coordinates)
+                        else:
+                            resolved.locator.click()
                     elif step.action == "input":
                         resolved = resolve_with_fallback(
                             page, step.target,
@@ -379,7 +390,12 @@ def execute_case_with_playwright_streaming(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        resolved.locator.fill(step.value)
+                        input_value = _substitute_variables(step.value, input_values)
+                        if resolved.click_coordinates is not None:
+                            page.mouse.click(*resolved.click_coordinates)
+                            page.keyboard.type(input_value)
+                        else:
+                            resolved.locator.fill(input_value)
                     elif step.action == "wait_for":
                         resolved = resolve_with_fallback(
                             page, step.target,
