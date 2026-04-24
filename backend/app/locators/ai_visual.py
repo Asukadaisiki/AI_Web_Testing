@@ -815,11 +815,60 @@ def _elapsed_milliseconds(started_at: float) -> float:
     return max(0.0, (monotonic() - started_at) * 1000)
 
 
+# ---------------------------------------------------------------------------
+# VLM page layout annotation (used by planning phase)
+# ---------------------------------------------------------------------------
+
+_PAGE_ANNOTATION_SYSTEM_PROMPT = (
+    "You are an AI assistant that describes the layout structure of a web page screenshot.\n"
+    "Return a concise text description (not JSON) covering:\n"
+    "1. Overall page layout (header, navigation, main content, sidebar, footer)\n"
+    "2. Form sections and their purpose\n"
+    "3. Key interactive regions (buttons, links, inputs)\n"
+    "4. Any modal or overlay elements\n"
+    "Keep the description under 200 words. Focus on spatial layout and element relationships, "
+    "not individual element details."
+)
+
+
+def describe_page_layout(
+    *,
+    screenshot_base64: str,
+    page_url: str,
+) -> str | None:
+    """Use VLM to describe page layout for planning context.
+
+    This is separate from the element-locating pipeline and does NOT affect
+    the circuit breaker or rate limiter used during execution.
+    """
+    settings = get_settings()
+    if not settings.enable_vlm_page_annotation:
+        return None
+    if not settings.vlm_api_key or not settings.vlm_model:
+        return None
+
+    try:
+        return _call_vlm(
+            screenshot_base64=screenshot_base64,
+            prompt_text=f"Describe the layout structure of this web page (URL: {page_url}).",
+            api_key=settings.vlm_api_key,
+            model=settings.vlm_model,
+            base_url=settings.vlm_base_url,
+            timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
+            model_family=settings.vlm_model_family,
+            system_prompt=_PAGE_ANNOTATION_SYSTEM_PROMPT,
+        )
+    except Exception as exc:
+        logger.warning("VLM page annotation failed for %s: %s", page_url, exc)
+        return None
+
+
 __all__ = [
     "AILocateResult",
     "AIVisionCandidateBox",
     "AIVisualRuntimeStatsSnapshot",
     "ModelFamily",
+    "describe_page_layout",
     "get_ai_visual_runtime_stats",
     "locate_element_by_vision",
     "record_ai_visual_cache_hit",

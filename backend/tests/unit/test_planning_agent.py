@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.ai.test_planning_agent import _build_draft_prompt
-from app.schemas.ai_planning import AIPlanningRequirements
+from app.ai.test_planning_agent import (
+    _auto_explore_entry_url,
+    _build_draft_prompt,
+    _extract_page_elements,
+    _has_explored_pages,
+)
+from app.schemas.ai_planning import AIPlanningRequirements, AIPlanningToolCall
 
 
 def test_draft_prompt_includes_dom_aware_hint() -> None:
@@ -138,3 +143,72 @@ def test_run_planning_turn_wraps_stream_planning_turn(monkeypatch) -> None:
     assert result.session_status == "collecting"
     assert result.assistant_message == "请补充入口页面"
     assert result.requirements.app_under_test == "商城"
+
+
+class TestHasExploredPages:
+    def test_returns_false_when_empty(self) -> None:
+        assert _has_explored_pages([]) is False
+
+    def test_returns_true_for_explore_page(self) -> None:
+        calls = [AIPlanningToolCall(tool="explore_page", params={}, result={})]
+        assert _has_explored_pages(calls) is True
+
+    def test_returns_true_for_explore_flow(self) -> None:
+        calls = [AIPlanningToolCall(tool="explore_flow", params={}, result={})]
+        assert _has_explored_pages(calls) is True
+
+    def test_returns_false_for_other_tools(self) -> None:
+        calls = [AIPlanningToolCall(tool="get_project_info", params={}, result={})]
+        assert _has_explored_pages(calls) is False
+
+
+class TestExtractPageElements:
+    def test_extracts_from_explore_page(self) -> None:
+        calls = [AIPlanningToolCall(
+            tool="explore_page",
+            params={"url": "https://example.com"},
+            result={"formatted": "input [placeholder='Email']"},
+        )]
+        assert _extract_page_elements(calls) == "input [placeholder='Email']"
+
+    def test_extracts_from_explore_flow(self) -> None:
+        calls = [AIPlanningToolCall(
+            tool="explore_flow",
+            params={"urls": ["https://example.com"]},
+            result={"formatted": "=== 页面: https://example.com ===\nbutton [text='Login']"},
+        )]
+        assert "button [text='Login']" in _extract_page_elements(calls)
+
+    def test_returns_none_when_no_explore_calls(self) -> None:
+        calls = [AIPlanningToolCall(tool="get_project_info", params={}, result={})]
+        assert _extract_page_elements(calls) is None
+
+    def test_returns_none_when_formatted_empty(self) -> None:
+        calls = [AIPlanningToolCall(tool="explore_page", params={}, result={"formatted": ""})]
+        assert _extract_page_elements(calls) is None
+
+
+class TestAutoExploreEntryUrl:
+    def test_skips_when_no_entry_url(self) -> None:
+        requirements = AIPlanningRequirements()
+        explored, calls = _auto_explore_entry_url(requirements, [], object(), 1)
+        assert explored is False
+        assert calls == []
+
+    def test_skips_when_entry_url_not_a_url(self) -> None:
+        requirements = AIPlanningRequirements(entry_url_or_page="登录页面")
+        explored, calls = _auto_explore_entry_url(requirements, [], object(), 1)
+        assert explored is False
+
+    def test_auto_explores_valid_url(self) -> None:
+        from unittest.mock import patch
+
+        requirements = AIPlanningRequirements(entry_url_or_page="https://example.com/login")
+        mock_result = '{"url":"https://example.com/login","formatted":"input [placeholder=Email]","element_count":1}'
+
+        with patch("app.ai.test_planning_agent.execute_tool", return_value=mock_result):
+            explored, calls = _auto_explore_entry_url(requirements, [], object(), 1)
+
+        assert explored is True
+        assert len(calls) == 1
+        assert calls[0].tool == "explore_page"

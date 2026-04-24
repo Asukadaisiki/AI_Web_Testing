@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.ai.page_explorer import (
     capture_browser_session,
     collect_interactable_elements,
+    collect_multi_page_elements,
     format_elements_for_prompt,
     is_storage_state_stale,
     load_storage_state_meta,
@@ -246,6 +247,51 @@ def _handle_capture_page_session(
     )
 
 
+def _handle_explore_flow(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    urls = params.get("urls")
+    if not isinstance(urls, list) or not urls:
+        return {"error": "必须提供 urls 参数（非空 URL 列表）"}
+
+    valid_urls = [u for u in urls if isinstance(u, str) and u.strip()]
+    if not valid_urls:
+        return {"error": "urls 列表中没有有效的 URL"}
+
+    storage_dir = _resolve_storage_state_dir()
+    storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
+
+    page_results = collect_multi_page_elements(
+        valid_urls,
+        storage_state_path=storage_path,
+        enable_vlm_annotation=True,
+    )
+
+    # Build a backward-compatible combined formatted string
+    sections: list[str] = []
+    for pr in page_results:
+        url = pr.get("url", "")
+        formatted = pr.get("formatted", "")
+        annotation = pr.get("vlm_annotation")
+        section = f"=== 页面: {url} ===\n{formatted}"
+        if annotation:
+            section += f"\n\n页面布局描述: {annotation}"
+        sections.append(section)
+
+    combined_formatted = "\n\n".join(sections)
+    total_elements = sum(pr.get("element_count", 0) for pr in page_results)
+
+    return {
+        "pages": page_results,
+        "formatted": combined_formatted,
+        "total_pages": len(page_results),
+        "total_elements": total_elements,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -355,6 +401,21 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
             "required": ["url"],
         },
     ),
+    "explore_flow": PlanningTool(
+        name="explore_flow",
+        description="沿用户测试流程依次访问多个页面，采集每个页面的可交互元素和视觉布局信息。适用于需要跨页面的测试场景（如登录→商品列表→详情→购物车），会复用浏览器会话保持登录态。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "urls": {
+                    "type": "array",
+                    "description": "需要依次访问和采集的页面 URL 列表，按流程顺序排列",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["urls"],
+        },
+    ),
 }
 
 _TOOL_HANDLERS: dict[str, Any] = {
@@ -365,4 +426,5 @@ _TOOL_HANDLERS: dict[str, Any] = {
     "get_case_stats": _handle_get_case_stats,
     "explore_page": _handle_explore_page,
     "capture_page_session": _handle_capture_page_session,
+    "explore_flow": _handle_explore_flow,
 }

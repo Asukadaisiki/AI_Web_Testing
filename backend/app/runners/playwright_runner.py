@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from threading import Event
 from time import perf_counter
@@ -24,6 +25,20 @@ from app.schemas.executions import (
 
 
 ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts" / "executions"
+
+_VARIABLE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _substitute_variables(value: str | None, input_values: dict[str, str] | None) -> str | None:
+    """Replace ``${context_key}`` placeholders in *value* with entries from *input_values*."""
+    if not value or not input_values:
+        return value
+
+    def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
+        key = match.group(1)
+        return input_values.get(key, match.group(0))
+
+    return _VARIABLE_PATTERN.sub(_replace, value)
 
 
 class RunnerExecutionError(RuntimeError):
@@ -99,6 +114,7 @@ def execute_case_with_playwright(
     execution_id: int,
     base_url: str | None,
     correction_store: CorrectionStore | None = None,
+    input_values: dict[str, str] | None = None,
 ) -> list[StepExecutionEvidence]:
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -132,7 +148,7 @@ def execute_case_with_playwright(
                 try:
                     resolved_by = None
                     if step.action == "goto":
-                        page.goto(_resolve_url(step.value, base_url), wait_until="domcontentloaded")
+                        page.goto(_resolve_url(_substitute_variables(step.value, input_values), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
                         resolved = resolve_with_fallback(
                             page,
@@ -159,7 +175,7 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        resolved.locator.fill(step.value)
+                        resolved.locator.fill(_substitute_variables(step.value, input_values))
                     elif step.action == "wait_for":
                         resolved = resolve_with_fallback(
                             page,
@@ -183,11 +199,11 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        expect(resolved.locator).to_contain_text(step.value)
+                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, input_values))
                     elif step.action == "assert_url_contains":
-                        if step.value not in page.url:
+                        if _substitute_variables(step.value, input_values) not in page.url:
                             raise RunnerExecutionError(
-                                f"URL assertion failed, expected fragment: {step.value}"
+                                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, input_values)}"
                             )
                     else:
                         raise RunnerExecutionError(f"Unsupported action: {step.action}")
@@ -291,6 +307,7 @@ def execute_case_with_playwright_streaming(
     base_url: str | None,
     cancel_event: Event | None = None,
     correction_store: CorrectionStore | None = None,
+    input_values: dict[str, str] | None = None,
 ) -> Generator[StepStreamEvent, None, list[StepExecutionEvidence]]:
     """Execute a case and yield :class:`StepStreamEvent` per step.
 
@@ -384,11 +401,11 @@ def execute_case_with_playwright_streaming(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        expect(resolved.locator).to_contain_text(step.value)
+                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, input_values))
                     elif step.action == "assert_url_contains":
-                        if step.value not in page.url:
+                        if _substitute_variables(step.value, input_values) not in page.url:
                             raise RunnerExecutionError(
-                                f"URL assertion failed, expected fragment: {step.value}"
+                                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, input_values)}"
                             )
                     else:
                         raise RunnerExecutionError(f"Unsupported action: {step.action}")

@@ -130,6 +130,7 @@ def execute_case_streaming(
                 base_url=effective_base_url,
                 cancel_event=cancel_event,
                 correction_store=SQLAlchemyCorrectionStore(session),
+                input_values=payload.input_values,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
             report = build_execution_report(status="passed", steps=step_results)
@@ -227,6 +228,7 @@ def _execute_case_record(
                 execution_id=execution.id,
                 base_url=effective_base_url,
                 correction_store=SQLAlchemyCorrectionStore(session),
+                input_values=payload.input_values,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
             report = build_execution_report(status="passed", steps=step_results)

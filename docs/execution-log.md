@@ -9,6 +9,68 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-24 (Session 2)
+
+- 任务：修复 BUG-051（input_contract 变量未替换）+ BUG-052（AI 跳过 explore_page）+ 实现 explore_flow 多页面探索 + VLM 页面布局注解
+- 根因分析：
+  - BUG-051：`playwright_runner` 中 `step.value` 直接传给 Playwright，没有 `${context_key}` → 实际值的替换逻辑；`CaseExecutionRequest` 也没有 `input_values` 参数
+  - BUG-052：ReAct 循环中 `explore_page` 是 AI 自主决策的工具调用，用户信息完整时 AI 直接 `generate_plan` 跳过探索；VLM 仅在执行阶段 Tier 3 兜底触发
+- 操作：
+  1. `playwright_runner.py` 新增 `_substitute_variables` 函数，正则替换 `${context_key}`，4 个 step.value 使用处全部替换（goto/input/assert_text/assert_url_contains）
+  2. `schemas/executions.py` 的 `CaseExecutionRequest` 增加 `input_values: dict[str, str]` 字段
+  3. `services/executions.py` 透传 `input_values` 到 runner
+  4. `test_planning_agent.py` 新增 `_has_explored_pages` + `_auto_explore_entry_url`，在 `generate_plan` 前强制触发 `explore_page`
+  5. `_extract_page_elements` 同时识别 `explore_page` 和 `explore_flow`
+  6. `page_explorer.py` 新增 `collect_multi_page_elements`，单浏览器会话跨多页面采集 DOM + 截图 + VLM 注解
+  7. `planning_tools.py` 新增 `_handle_explore_flow` handler + 工具注册
+  8. `ai_visual.py` 新增 `describe_page_layout` 公共函数，使用专用 prompt 描述页面布局
+  9. `config.py` 新增 `enable_vlm_page_annotation` 配置（默认开启）
+  10. `test_planning_prompts.py` 增加页面探索和选择器约束规则
+- 改动文件：18 个文件，+536/-28 行
+- 验证：`uv run pytest tests/unit/` → 303 passed
+- 关联 bug：BUG-051（fixed）、BUG-052（fixed）
+
+## 2026-04-24
+
+- 任务：BUG-050 修复后端到端验证 — AI Planning 全流程（会话创建→需求收集→草案生成→保存执行→测试报告）
+- 目标：使用 test 文件中的 Automation Exercise 登录→搜索→详情→加购流程描述，走完整 AI Planning 工作流，验证 BUG-050（DOM 证据注入、链式选择器、target_strategy 偏好提示）修复效果
+- 操作：
+  1. **启动服务**：后端 `uv run backend-dev`（:8000），前端 `npm run dev`（:5173）
+  2. **创建会话**：`POST /api/v1/ai-planning/sessions {"project_id": 4}` → session_id=41，status=collecting
+  3. **发送需求**：一次性提交 test 文件全部内容（app_under_test、business_goal、entry_url、core_user_flow、main_assertions、test_data、scope_limits）→ AI 一次识别所有字段，status=plan_ready
+  4. **生成计划**：AI 产出两个场景：login_success（高优先级）+ login_error（中优先级），各含 test_data_requirements（username、password）
+  5. **生成草案**：`POST /sessions/41/drafts:generate {"scenario_keys": ["login_success","login_error"]}`
+     - Draft 17（login_success）：15 步，使用 `#input-email`、`button[type='submit']`、`#search_product` 等 CSS/data-qa 选择器
+     - Draft 18（login_error）：15 步，使用 `input[data-qa='login-email']`、`button[data-qa='login-button']` 等 data-qa 选择器
+     - 两个草案均有 warning "步骤 #6 无法修正为合法 DSL，已忽略"
+  6. **保存并执行**：`POST /sessions/41/drafts:save-and-execute {"draft_ids": [17,18], "execute": true}`
+     - Case 12（Draft 17）→ Execution 53：2/3 步通过，Step 3 input `#input-email` 失败
+     - Case 13（Draft 18）→ Execution 54：8/9 步通过，Step 9 wait_for `.productinfo` 失败
+- 结果：
+  - **Execution 53 详细分析**：
+    - Step 0 (goto /): PASSED — 首页加载 3526ms
+    - Step 1 (click "Signup / Login"): PASSED — text 策略 score=88，精准命中
+    - Step 2 (input `#input-email`): FAILED — 登录页实际 DOM 中无 `#input-email`，实际 input 的 placeholder="Email Address"、css_selector=`section > div > div > div:nth-of-type(1) > div > form > input:nth-of-type(2)`，无 id 属性
+    - **AI 在无 DOM 证据时仍猜测了不存在的选择器**，但 DOM snapshot 已正确收集到 intervention_request 中
+  - **Execution 54 详细分析**：
+    - Step 0-7 全部 PASSED — data-qa 选择器在登录页精准工作
+    - Step 8 (wait_for `.productinfo`): FAILED — URL 显示 `?search=${search_keyword}`（变量未替换）
+    - **input_contract 变量（${login_email}、${login_password}、${search_keyword}）在执行时未被替换为实际值**，这是 playwight_runner 层面的变量替换缺失
+  - **BUG-050 修复效果**：
+    - target_strategy 偏好提示工作正常（Execution 53 的 locator_trace 未走 target_strategy，因为 DSL 未指定）
+    - 链式选择器解析功能已就绪（本次 DSL 未生成链式格式）
+    - DOM snapshot 在 intervention_request 中完整收集（20 个元素含 rect、visible 等属性）
+    - AI 视觉定位（VLM）被触发（Execution 53 Step 3 有 ai_candidate，confidence=0.7），但未成功解析
+  - **新发现问题**：
+    - **BUG-051（待记录）**：`input_contract` 变量占位符（`${login_email}` 等）在执行时未被替换，playwright_runner 直接将 `${search_keyword}` 作为字符串输入到搜索框
+    - **BUG-052（待记录）**：AI DSL 生成在无 `page_elements`（DOM 快照）时仍猜测不存在的 CSS 选择器（`#input-email`），需要加强 prompt 约束或在无 DOM 时引导 AI 使用语义描述
+- 验证：
+  - 全流程 API 调用链路畅通：创建会话→发送消息→生成草案→保存执行→查看报告
+  - 定位器系统：文本匹配策略（score=88）和 data-qa 选择器策略均正常工作
+  - DOM snapshot 收集：intervention_request 中完整收集了 20 个页面元素的详细信息
+  - AI 视觉定位：VLM 被触发并返回候选区域（confidence=0.7），但最终未成功匹配
+- 关联记录：BUG-050、BUG-051（待记录）、BUG-052（待记录）
+
 ## 2026-04-23 (下午)
 
 - 任务：BUG-050 DOM 证据注入 + target_strategy 偏好提示 + 单元测试修复

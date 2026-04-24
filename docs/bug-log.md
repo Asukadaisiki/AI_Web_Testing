@@ -29,6 +29,40 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-052 | AI DSL 生成在无 DOM 快照时仍猜测不存在的 CSS 选择器
+
+- 日期：2026-04-24
+- 状态：fixed
+- 来源：BUG-050 修复验证 — 端到端 AI Planning 全流程执行
+- 描述：AI Planning 会话 session_id=41 中，草案 Draft 17 的 Step 3 target 为 `#input-email`，但实际登录页面中 email 输入框无 id 属性（实际 placeholder="Email Address"）。AI 在没有通过 `explore_page` 获取 DOM 快照的情况下，仍然"猜测"了不存在的 `#input-email`。DOM 证据注入功能（BUG-050 修复）虽然已实现，但本次执行中 `page_elements` 为 null，说明 planning agent 未执行 `explore_page` 工具调用。
+- 复现步骤：
+  1. 创建 AI Planning 会话（session_id=41）
+  2. 发送 Automation Exercise 测试需求
+  3. AI 直接生成 plan（status=plan_ready），未调用 explore_page 工具
+  4. 生成 DSL 草案，Draft 17 使用 `#input-email`（不存在）
+  5. 执行失败，Step 3 所有定位层级无法匹配
+- 影响：AI 在未访问目标页面的情况下生成 DSL，选择器准确性依赖 AI 训练知识而非实际 DOM，与 BUG-050 修复目标（基于 DOM 证据生成选择器）矛盾
+- 根因：planning agent 的 ReAct 流程中，`explore_page` 调用是可选的而非强制的。当用户一次提供完整需求时，agent 直接跳到 plan 生成，未触发页面探索
+- 修复：在 ReAct 循环的 `generate_plan` 分支前插入强制检查——若无 explore_page/flow 调用则自动用 entry_url 触发 explore_page，结果注入 tool_calls 后 continue 让 LLM 基于真实 DOM 重新生成；同时新增 `explore_flow` 工具支持多页面探索 + VLM 页面布局注解
+- 验证：303 单元测试全部通过；待端到端链路测试验证
+- 关联记录：execution-log 2026-04-24 Session 2、BUG-050
+
+## BUG-051 | input_contract 变量占位符在执行时未被替换
+
+- 日期：2026-04-24
+- 状态：fixed
+- 来源：BUG-050 修复验证 — 端到端 AI Planning 全流程执行
+- 描述：AI Planning 生成的 DSL 草案包含 `input_contract`（如 `${login_email}`、`${login_password}`、`${search_keyword}`），但 save-and-execute 执行时，这些变量占位符未被替换为实际值。Execution 54 的 Step 8 URL 显示 `?search=${search_keyword}`，说明 `${search_keyword}` 被直接作为字符串输入到搜索框
+- 复现步骤：
+  1. AI Planning 生成包含 input_contract 的 DSL 草案
+  2. save-and-execute 执行草案
+  3. 查看执行结果，value 字段中的 `${context_key}` 占位符未被替换
+- 影响：所有使用 input_contract 变量的 DSL 用例都无法正确执行，输入的是占位符字符串而非实际测试数据
+- 根因：变量替换功能完全未实现——runner 直接使用 `step.value` 原始字符串，`CaseExecutionRequest` 无 `input_values` 参数，整条链路缺失
+- 修复：`playwright_runner.py` 新增 `_substitute_variables` 函数（正则 `\$\{([A-Za-z_][A-Za-z0-9_]*)\}` 替换），`CaseExecutionRequest` 增加 `input_values` 字段，runner 的 goto/input/assert_text/assert_url_contains 四处 step.value 使用处全部替换，`executions.py` 透传参数
+- 验证：303 单元测试全部通过；待端到端链路测试验证
+- 关联记录：execution-log 2026-04-24 Session 2
+
 ## BUG-050 | AI DSL 生成定位策略不匹配 DOM 结构（选择器容器错误）
 
 - 日期：2026-04-23

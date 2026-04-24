@@ -196,9 +196,107 @@ def capture_browser_session(
     }
 
 
+def collect_multi_page_elements(
+    urls: list[str],
+    *,
+    storage_state_path: str | None = None,
+    enable_vlm_annotation: bool = True,
+    timeout_ms: int = 10000,
+) -> list[dict[str, Any]]:
+    """Open *urls* sequentially in a single Playwright context and collect elements for each page.
+
+    Reuses the same browser session across all URLs so that cookies / auth state
+    established by earlier pages carry over to later ones.
+    """
+    if not urls:
+        return []
+
+    results: list[dict[str, Any]] = []
+    try:
+        pw = _sync_playwright_context()
+        with pw as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context_kwargs: dict[str, Any] = {}
+            if storage_state_path and Path(storage_state_path).exists():
+                context_kwargs["storage_state"] = storage_state_path
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+
+            for url in urls:
+                url = url.strip()
+                try:
+                    page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                    except Exception:
+                        pass  # non-fatal
+                    payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+                except Exception as exc:
+                    logger.warning("collect_multi_page_elements: page load failed for %s: %s", url, exc)
+                    results.append({
+                        "url": url,
+                        "elements": [],
+                        "formatted": "",
+                        "element_count": 0,
+                        "screenshot_available": False,
+                        "vlm_annotation": None,
+                        "error": str(exc),
+                    })
+                    continue
+
+                elements = [
+                    {
+                        "tag": elem.get("tag", "unknown"),
+                        "id": _extract_element_id(elem),
+                        "text": elem.get("text"),
+                        "role": elem.get("role"),
+                        "aria_label": elem.get("aria_label"),
+                        "placeholder": elem.get("placeholder"),
+                        "visible": elem.get("visible", False),
+                        "enabled": elem.get("enabled", False),
+                    }
+                    for elem in payload
+                    if isinstance(elem, dict)
+                ] if isinstance(payload, list) else []
+
+                formatted = format_elements_for_prompt(elements)
+
+                screenshot_available = False
+                vlm_annotation: str | None = None
+                try:
+                    _screenshot_bytes = page.screenshot()
+                    screenshot_available = True
+                    if enable_vlm_annotation:
+                        from app.locators.ai_visual import describe_page_layout
+                        import base64
+                        vlm_annotation = describe_page_layout(
+                            screenshot_base64=base64.b64encode(_screenshot_bytes).decode(),
+                            page_url=url,
+                        )
+                except Exception as exc:
+                    logger.warning("Screenshot/VLM failed for %s: %s", url, exc)
+
+                results.append({
+                    "url": url,
+                    "elements": elements,
+                    "formatted": formatted,
+                    "element_count": len(elements),
+                    "screenshot_available": screenshot_available,
+                    "vlm_annotation": vlm_annotation,
+                })
+
+            context.close()
+            browser.close()
+    except Exception as exc:
+        logger.warning("collect_multi_page_elements browser crash: %s", exc)
+
+    return results
+
+
 __all__ = [
     "capture_browser_session",
     "collect_interactable_elements",
+    "collect_multi_page_elements",
     "format_elements_for_prompt",
     "get_storage_state_path",
     "is_storage_state_stale",

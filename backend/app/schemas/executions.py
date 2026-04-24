@@ -18,6 +18,10 @@ FailureCategory = Literal["configuration", "locator", "assertion", "navigation",
 class CaseExecutionRequest(DSLModel):
     actor_user_id: int = Field(default=1, ge=1)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    input_values: dict[str, str] = Field(
+        default_factory=dict,
+        description="Variable substitutions for ${context_key} placeholders in step values.",
+    )
 
 
 class ViewportSnapshot(DSLModel):

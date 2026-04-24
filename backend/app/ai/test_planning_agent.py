@@ -166,6 +166,22 @@ def stream_planning_turn(
         if not isinstance(action_input, dict):
             action_input = {}
 
+        # --- Force explore_page before generating plan (BUG-052) ---
+        if action == "generate_plan" and not _has_explored_pages(tool_calls):
+            explored, tool_calls = _auto_explore_entry_url(
+                requirements, tool_calls, db_session, project_id,
+            )
+            if explored:
+                yield {"type": "status", "phase": "tool_call", "message": "正在自动采集入口页面元素..."}
+                conversation.append(
+                    {"role": "system", "content": (
+                        "系统已自动采集了入口页面的可交互元素（见上方工具返回结果）。"
+                        "请基于这些元素信息重新生成测试方案，"
+                        "确保 target 使用元素的实际 label、placeholder 或 id。"
+                    )},
+                )
+                continue
+
         if force_generate and action != "generate_plan":
             response = _plan_response(
                 requirements=requirements,
@@ -479,13 +495,60 @@ def _run_fallback_turn(
 
 
 def _extract_page_elements(tool_calls: list[AIPlanningToolCall]) -> str | None:
-    """Extract formatted DOM elements from the last explore_page tool call."""
+    """Extract formatted DOM elements from the last explore_page or explore_flow tool call."""
     for call in reversed(tool_calls):
-        if call.tool == "explore_page" and isinstance(call.result, dict):
+        if call.tool in ("explore_page", "explore_flow") and isinstance(call.result, dict):
             formatted = call.result.get("formatted")
             if isinstance(formatted, str) and formatted.strip():
                 return formatted
     return None
+
+
+def _has_explored_pages(tool_calls: list[AIPlanningToolCall]) -> bool:
+    """Return True if any explore_page or explore_flow call exists in tool_calls."""
+    return any(call.tool in ("explore_page", "explore_flow") for call in tool_calls)
+
+
+def _auto_explore_entry_url(
+    requirements: AIPlanningRequirements,
+    tool_calls: list[AIPlanningToolCall],
+    db_session: Session,
+    project_id: int,
+) -> tuple[bool, list[AIPlanningToolCall]]:
+    """Auto-invoke explore_page with the entry URL if available.
+
+    Returns (explored, tool_calls) where *explored* indicates whether exploration
+    was actually triggered.
+    """
+    entry_url = requirements.entry_url_or_page
+    if not entry_url or not isinstance(entry_url, str):
+        return False, tool_calls
+
+    match = URL_PATTERN.search(entry_url)
+    if not match:
+        return False, tool_calls
+
+    url = match.group(0)
+    try:
+        tool_result_text = execute_tool(
+            tool_name="explore_page",
+            params={"url": url},
+            db_session=db_session,
+            project_id=project_id,
+        )
+        parsed_result = _safe_parse_json(tool_result_text)
+    except Exception as exc:
+        logger.warning("Auto-explore failed for url=%s: %s", url, exc)
+        parsed_result = {"error": str(exc), "url": url}
+
+    tool_calls.append(
+        AIPlanningToolCall(
+            tool="explore_page",
+            params={"url": url},
+            result=parsed_result,
+        )
+    )
+    return True, tool_calls
 
 
 def _plan_response(

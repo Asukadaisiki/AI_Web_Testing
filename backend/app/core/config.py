@@ -82,6 +82,7 @@ class Settings:
     ai_planning_timeout_ms: int = 600000
     ai_planning_max_react_rounds: int = 5
     storage_state_dir: str = "storage_states"
+    enable_vlm_page_annotation: bool = True
 
 
 @lru_cache
@@ -125,4 +126,5 @@ def get_settings() -> Settings:
         ai_planning_timeout_ms=max(1000, _get_int(os.getenv("AI_PLANNING_TIMEOUT_MS"), default=600000)),
         ai_planning_max_react_rounds=max(1, _get_int(os.getenv("AI_PLANNING_MAX_REACT_ROUNDS"), default=5)),
         storage_state_dir=os.getenv("STORAGE_STATE_DIR", "storage_states").strip(),
+        enable_vlm_page_annotation=_get_bool(os.getenv("ENABLE_VLM_PAGE_ANNOTATION"), default=True),
     )

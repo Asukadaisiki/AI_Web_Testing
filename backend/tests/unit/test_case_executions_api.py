@@ -36,7 +36,7 @@ def test_execute_case_success(client, monkeypatch) -> None:
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
         assert case.name == "执行用例"
         assert execution_id == 1
         assert base_url == "http://example.com"
@@ -154,7 +154,7 @@ def test_execute_case_uses_case_base_url_when_request_does_not_override(client, 
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
         assert case.base_url == "https://case.example.com"
         assert execution_id == 1
         assert base_url == "https://case.example.com"
@@ -193,7 +193,7 @@ def test_execute_case_fails_early_when_relative_goto_has_no_case_base_url(client
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
         raise AssertionError("runner should not be called when case base_url is missing")
 
     monkeypatch.setattr(
@@ -237,7 +237,7 @@ def test_execute_case_marks_needs_intervention_when_all_locator_tiers_fail(clien
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
         raise RunnerInterventionError(
             "All locate tiers failed for target: 登录按钮",
             step_results=[
@@ -360,7 +360,7 @@ def test_list_executions_supports_filters_limit_offset_and_case_id(client, monke
         )
         created_cases.append(response.json()["id"])
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None):
+    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
         if case.name == "失败用例":
             raise RunnerExecutionError(
                 "boom",
@@ -1493,7 +1493,7 @@ def test_execute_case_streaming_yields_step_events_and_returns_detail(client, mo
         ),
     ]
 
-    def fake_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None):
+    def fake_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None, input_values=None):
         for index, step in enumerate(case.steps):
             yield StepStreamEvent(
                 type="step_start",
@@ -1559,7 +1559,7 @@ def test_execute_case_streaming_cancellation_raises_error(client, monkeypatch, d
 
     cancel_event = Event()
 
-    def fake_streaming_cancel(*, case, execution_id, base_url, cancel_event=None, correction_store=None):
+    def fake_streaming_cancel(*, case, execution_id, base_url, cancel_event=None, correction_store=None, input_values=None):
         yield StepStreamEvent(type="step_start", step_index=0, action="goto", value="/page")
         cancel_event.set()
         raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
