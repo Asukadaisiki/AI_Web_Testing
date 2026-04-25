@@ -261,6 +261,48 @@ def stream_planning_turn(
             yield _turn_complete_payload(response)
             return response
 
+        if action == "analyze_results":
+            analysis_payload = action_input.get("analysis") if isinstance(action_input, dict) else None
+            if not isinstance(analysis_payload, dict):
+                analysis_payload = {}
+            try:
+                from app.schemas.ai_planning import ExecutionAnalysis
+                analysis = ExecutionAnalysis.model_validate(analysis_payload)
+            except Exception:
+                analysis = ExecutionAnalysis(conclusion="partial")
+            analysis_message = str(action_input.get("summary") or "").strip() if isinstance(action_input, dict) else ""
+            if not analysis_message:
+                analysis_message = _build_analysis_message(analysis)
+            response = AIPlanningTurnResponse(
+                assistant_message=analysis_message,
+                session_status="completed",
+                requirements=requirements,
+                missing_slots=[],
+                suggested_questions=[],
+                plan=None,
+                drafts=[],
+                next_action="ask_followup",
+                tool_calls=tool_calls,
+                todo_list=todo_items,
+                execution_analysis=analysis,
+            )
+            yield _turn_complete_payload(response)
+            return response
+
+        if action == "plan_regression":
+            regression_summary = str(action_input.get("summary") or "").strip() if isinstance(action_input, dict) else ""
+            if not regression_summary:
+                regression_summary = "根据失败分析，建议进行回归测试。"
+            response = _plan_response(
+                requirements=requirements,
+                plan_payload=action_input,
+                assistant_message=regression_summary,
+                tool_calls=tool_calls,
+                todo_list=todo_items,
+            )
+            yield _turn_complete_payload(response)
+            return response
+
         # ask_user or unsupported action — ask follow-up
         message = str(action_input.get("message") or "").strip() or _default_followup_question(requirements)
         missing_slots = _collect_missing_slots(requirements)
@@ -786,6 +828,35 @@ def _default_followup_question(requirements: AIPlanningRequirements) -> str:
     }
     first_two = [labels[item] for item in missing_slots[:2]]
     return f"还需要你补充 { ' 和 '.join(first_two) }，我再继续规划。"
+
+
+def _build_analysis_message(analysis: Any) -> str:
+    lines = ["执行结果分析：\n"]
+    conclusion_labels = {
+        "all_passed": "全部通过",
+        "partial": "部分通过",
+        "all_failed": "全部失败",
+    }
+    lines.append(f"本轮结论：{conclusion_labels.get(getattr(analysis, 'conclusion', ''), '未知')}")
+    for cr in getattr(analysis, "case_results", []):
+        status_icon = "✅" if cr.status == "passed" else "❌"
+        lines.append(f"  {status_icon} {cr.case_name} — {cr.status} ({cr.passed_steps}/{cr.total_steps}步)")
+    for fd in getattr(analysis, "failure_details", []):
+        lines.append(f"  ⚠ 失败点：{fd.case_name} 步骤{fd.step_index}({fd.action}) — {fd.suspected_cause}")
+    if getattr(analysis, "suspected_root_cause", None):
+        lines.append(f"疑似根因：{analysis.suspected_root_cause}")
+    if getattr(analysis, "recommended_action", None):
+        action_labels = {
+            "targeted_retest": "针对性复测",
+            "regression": "回归测试",
+            "manual": "人工介入",
+            "done": "测试完成",
+        }
+        lines.append(f"建议下一步：{action_labels.get(analysis.recommended_action, analysis.recommended_action)}")
+        if getattr(analysis, "recommended_scope", None):
+            scope_labels = {"current": "仅当前用例", "adjacent": "相邻流程", "module": "模块级", "core": "核心链路"}
+            lines.append(f"回归范围：{scope_labels.get(analysis.recommended_scope, analysis.recommended_scope)}")
+    return "\n".join(lines)
 
 
 def _collect_missing_slots(requirements: AIPlanningRequirements) -> list[str]:
