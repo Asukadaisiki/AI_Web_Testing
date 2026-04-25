@@ -27,9 +27,9 @@ class TestListAvailableTools:
     """Tests for list_available_tools function."""
 
     def test_returns_all_registered_tools(self) -> None:
-        """Should return all 11 registered tools."""
+        """Should return all 12 registered tools."""
         tools = list_available_tools()
-        assert len(tools) == 11
+        assert len(tools) == 12
         tool_names = {t.name for t in tools}
         assert tool_names == {
             "get_project_info",
@@ -43,6 +43,7 @@ class TestListAvailableTools:
             "get_execution_detail",
             "get_project_test_status",
             "get_failure_analysis",
+            "get_recommended_retest",
         }
 
 
@@ -791,3 +792,70 @@ class TestGetFailureAnalysis:
             project_id=1,
         )
         assert result["failure_patterns"] == []
+
+
+class TestGetRecommendedRetest:
+    """Tests for _handle_get_recommended_retest handler."""
+
+    def test_no_retest_when_all_passed(self, db_session: Session) -> None:
+        """Should recommend no retest when all cases pass."""
+        from app.ai.planning_tools import _handle_get_recommended_retest
+
+        result = _handle_get_recommended_retest(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert result["recommendation"] == "no_retest_needed"
+        assert result["retest_cases"] == []
+
+    def test_single_failure_recommends_current_scope(self, db_session: Session) -> None:
+        """Should recommend targeted retest when single case fails."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        case = case_service.create_case(
+            db_session,
+            CaseCreateRequest(project_id=1, name="Fail Case", description=None, steps=[{"action": "goto", "value": "/"}]),
+            actor_user_id=1,
+        )
+        db_session.flush()
+        db_session.add(TestCaseRun(
+            case_id=case.id, project_id=1, triggered_by=1, status="failed",
+            report={"steps": [{"step_index": 0, "action": "click", "status": "failed", "error_message": "not found"}]},
+        ))
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_recommended_retest
+
+        result = _handle_get_recommended_retest(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert result["recommendation"] in ("targeted_retest", "regression")
+        assert len(result["retest_cases"]) == 1
+        assert result["retest_cases"][0]["case_id"] == case.id
+        assert result["regression_scope"] in ("current", "adjacent", "module", "core")
+
+    def test_multiple_failures_widen_scope(self, db_session: Session) -> None:
+        """Should recommend wider scope when many cases fail."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        cases = []
+        for i in range(4):
+            c = case_service.create_case(
+                db_session,
+                CaseCreateRequest(project_id=1, name=f"Case {i}", description=None, steps=[{"action": "goto", "value": "/"}]),
+                actor_user_id=1,
+            )
+            cases.append(c)
+        db_session.flush()
+        for c in cases[:3]:
+            db_session.add(TestCaseRun(case_id=c.id, project_id=1, triggered_by=1, status="failed"))
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_recommended_retest
+
+        result = _handle_get_recommended_retest(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert result["regression_scope"] in ("adjacent", "module", "core")
+        assert len(result["retest_cases"]) == 3

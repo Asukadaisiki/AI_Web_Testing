@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn, stream_planning_turn
@@ -124,8 +124,10 @@ def send_planning_message(
     transcript_records = session.scalars(
         select(AIPlanningMessage).where(AIPlanningMessage.session_id == planning_session.id).order_by(AIPlanningMessage.id.asc())
     ).all()
+    base_transcript = [{"role": item.role, "content": item.content} for item in transcript_records if item.turn_type != "tool_call"]
+    base_transcript = _inject_auto_context(base_transcript, planning_session, session, len(transcript_records))
     agent_response = run_planning_turn(
-        transcript=[{"role": item.role, "content": item.content} for item in transcript_records if item.turn_type != "tool_call"],
+        transcript=base_transcript,
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
         project_id=planning_session.project_id,
@@ -201,8 +203,10 @@ def stream_planning_message(
         select(AIPlanningMessage).where(AIPlanningMessage.session_id == planning_session.id).order_by(AIPlanningMessage.id.asc())
     ).all()
 
+    base_transcript = [{"role": item.role, "content": item.content} for item in transcript_records if item.turn_type != "tool_call"]
+    base_transcript = _inject_auto_context(base_transcript, planning_session, session, len(transcript_records))
     stream = stream_planning_turn(
-        transcript=[{"role": item.role, "content": item.content} for item in transcript_records if item.turn_type != "tool_call"],
+        transcript=base_transcript,
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
         project_id=planning_session.project_id,
@@ -488,6 +492,76 @@ def _run_analysis_turn(
     except Exception:
         logger.warning("Auto-analysis turn failed", exc_info=True)
         return None
+
+
+def _build_session_context_preamble(
+    planning_session: AIPlanningSession,
+    db_session: Session,
+    existing_msg_count: int,
+) -> str | None:
+    """Build an auto-context preamble with current project test status.
+
+    Returns None if injection is not needed (first turn or no project).
+    """
+    if not planning_session.project_id or existing_msg_count <= 1:
+        return None
+
+    from app.ai.planning_tools import _handle_get_project_test_status
+    try:
+        status = _handle_get_project_test_status(
+            params={}, db_session=db_session, project_id=planning_session.project_id,
+        )
+    except Exception:
+        logger.warning("Auto-context injection: failed to query project status", exc_info=True)
+        return None
+
+    conclusion_labels = {
+        "all_passed": "全部通过", "partial": "部分通过",
+        "all_failed": "全部失败", "no_runs": "无执行记录",
+    }
+    conclusion = status.get("conclusion", "unknown")
+    if conclusion == "no_runs":
+        return None
+
+    lines = ["[系统自动注入 - 当前项目测试状态]"]
+    lines.append(f"整体结论：{conclusion_labels.get(conclusion, conclusion)}")
+    for case in status.get("cases", []):
+        cs = case.get("latest_status", "unknown")
+        if cs == "no_runs":
+            continue
+        icon = "✅" if cs == "passed" else "❌"
+        p = case.get("passed_steps", 0)
+        t = case.get("total_steps", 0)
+        err = case.get("error_message", "")
+        line = f"{icon} {case.get('case_name', '?')} — {cs} ({p}/{t}步)"
+        if err:
+            line += f" | 错误: {err}"
+        lines.append(line)
+
+    requirements = AIPlanningRequirements.model_validate(planning_session.requirements_json or {})
+    tc = requirements.test_context
+    if tc:
+        if tc.get("suspected_root_cause"):
+            lines.append(f"上次分析根因：{tc['suspected_root_cause']}")
+        if tc.get("next_action"):
+            lines.append(f"上次建议动作：{tc['next_action']}")
+        if tc.get("regression_scope"):
+            lines.append(f"上次回归范围：{tc['regression_scope']}")
+
+    return "\n".join(lines)
+
+
+def _inject_auto_context(
+    transcript: list[dict[str, str]],
+    planning_session: AIPlanningSession,
+    db_session: Session,
+    existing_msg_count: int,
+) -> list[dict[str, str]]:
+    """Prepend auto-context preamble to transcript if applicable."""
+    preamble = _build_session_context_preamble(planning_session, db_session, existing_msg_count)
+    if preamble is None:
+        return transcript
+    return [{"role": "system", "content": preamble}, *transcript]
 
 
 def save_and_execute_selected_drafts(
@@ -800,6 +874,124 @@ def save_and_execute_selected_drafts_streaming(
             }
 
     yield {"type": "done"}
+
+
+def retest_cases(
+    session: Session,
+    planning_session_id: int,
+    *,
+    actor_user_id: int,
+    case_ids: list[int] | None = None,
+    failed_only: bool = False,
+    input_values: dict[str, str] | None = None,
+) -> AIPlanningTurnResponse:
+    """Re-execute existing test cases from a planning session and run auto-analysis."""
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+
+    if not case_ids and failed_only:
+        from app.ai.planning_tools import _handle_get_recommended_retest
+        recommendation = _handle_get_recommended_retest(
+            params={}, db_session=session, project_id=planning_session.project_id or 0,
+        )
+        case_ids = recommendation.get("retest_case_ids", [])
+        if not case_ids:
+            return AIPlanningTurnResponse(
+                assistant_message="当前没有需要复测的失败用例。",
+                session_status="completed",
+                requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
+                missing_slots=[],
+                suggested_questions=[],
+                plan=None,
+                drafts=[],
+                next_action="ask_followup",
+                saved_cases=[],
+                execution_summaries=[],
+            )
+    elif not case_ids:
+        return AIPlanningTurnResponse(
+            assistant_message="请指定要复测的用例 ID 或使用 failed_only=true。",
+            session_status="completed",
+            requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
+            missing_slots=[],
+            suggested_questions=[],
+            plan=None,
+            drafts=[],
+            next_action="ask_followup",
+            saved_cases=[],
+            execution_summaries=[],
+        )
+
+    execution_summaries: list[ExecutionSummaryResult] = []
+    for case_id in case_ids:
+        case_record = session.get(TestCase, case_id)
+        if case_record is None or case_record.project_id != planning_session.project_id:
+            continue
+        payload = CaseExecutionRequest(actor_user_id=actor_user_id, input_values=input_values or {})
+        result = execute_case(session, case_id, payload)
+        passed = sum(1 for s in (result.report.steps or []) if s.status == "passed")
+        failed = sum(1 for s in (result.report.steps or []) if s.status == "failed")
+        execution_summaries.append(ExecutionSummaryResult(
+            execution_id=result.id,
+            case_id=case_id,
+            case_name=result.case_name,
+            status=result.status,
+            total_steps=result.total_steps,
+            passed_steps=passed,
+            failed_steps=failed,
+            duration_ms=result.duration_ms,
+            screenshot_url=result.latest_screenshot_url,
+            report_url=f"/run/{result.id}",
+        ))
+
+    lines = [f"复测完成（{len(execution_summaries)} 个用例）：\n"]
+    for ex in execution_summaries:
+        icon = "✅" if ex.status == "passed" else "❌"
+        lines.append(f"{icon} {ex.case_name} — {ex.status} ({ex.passed_steps}/{ex.total_steps}步)")
+
+    assistant_message = "\n".join(lines)
+    planning_session.status = "completed"
+
+    execution_analysis = None
+    if _should_run_analysis(execution_summaries):
+        analysis_response = _run_analysis_turn(
+            execution_summaries=execution_summaries,
+            db_session=session,
+            project_id=planning_session.project_id or 1,
+        )
+        if analysis_response and analysis_response.execution_analysis:
+            execution_analysis = analysis_response.execution_analysis
+            assistant_message = f"{assistant_message}\n\n---\n\n{analysis_response.assistant_message}"
+
+    session.add(
+        AIPlanningMessage(
+            session_id=planning_session.id,
+            role="assistant",
+            turn_type="plan",
+            content=assistant_message,
+            structured_payload_json={
+                "type": "retest_summary",
+                "retest_case_ids": case_ids,
+                "execution_summaries": [item.model_dump(mode="json") for item in execution_summaries],
+                "analysis": execution_analysis.model_dump(mode="json") if execution_analysis else None,
+            },
+        )
+    )
+    session.commit()
+    session.refresh(planning_session)
+
+    return AIPlanningTurnResponse(
+        assistant_message=assistant_message,
+        session_status="completed",
+        requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
+        missing_slots=[],
+        suggested_questions=[],
+        plan=None,
+        drafts=[],
+        next_action="ask_followup",
+        saved_cases=[],
+        execution_summaries=execution_summaries,
+        execution_analysis=execution_analysis,
+    )
 
 
 def delete_planning_session(

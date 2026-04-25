@@ -363,6 +363,113 @@ def _handle_get_failure_analysis(
     return {"failure_patterns": patterns}
 
 
+def _handle_get_recommended_retest(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    """Analyze failures and recommend a concrete retest scope."""
+    from sqlalchemy import select
+    from app.models import TestCase, TestCaseRun
+
+    cases = db_session.scalars(
+        select(TestCase).where(TestCase.project_id == project_id).order_by(TestCase.id)
+    ).all()
+
+    failed_cases: list[dict[str, Any]] = []
+    passed_case_ids: list[int] = []
+
+    for case in cases:
+        latest_run = db_session.scalars(
+            select(TestCaseRun)
+            .where(TestCaseRun.case_id == case.id)
+            .order_by(TestCaseRun.started_at.desc())
+            .limit(1)
+        ).first()
+
+        if latest_run is None or latest_run.status == "passed":
+            if latest_run is not None:
+                passed_case_ids.append(case.id)
+            continue
+
+        report = latest_run.report or {}
+        steps = report.get("steps", [])
+        failed_step_info = []
+        for s in steps:
+            if isinstance(s, dict) and s.get("status") in ("failed", "needs_intervention"):
+                failed_step_info.append({
+                    "step_index": s.get("step_index"),
+                    "action": s.get("action"),
+                    "target": s.get("target"),
+                    "error_message": s.get("error_message"),
+                })
+
+        # Check for consecutive failures
+        recent_runs = db_session.scalars(
+            select(TestCaseRun)
+            .where(TestCaseRun.case_id == case.id)
+            .order_by(TestCaseRun.started_at.desc())
+            .limit(3)
+        ).all()
+        consecutive = sum(1 for r in recent_runs if r.status in ("failed", "needs_intervention"))
+
+        failed_cases.append({
+            "case_id": case.id,
+            "case_name": case.name,
+            "latest_status": latest_run.status,
+            "failed_steps": failed_step_info,
+            "consecutive_failures": consecutive,
+            "error_message": latest_run.error_message,
+        })
+
+    if not failed_cases:
+        return {
+            "recommendation": "no_retest_needed",
+            "reason": "当前项目所有用例均已通过，无需复测。",
+            "retest_cases": [],
+            "regression_scope": None,
+        }
+
+    # Determine regression scope
+    total_cases = len(cases)
+    failed_ratio = len(failed_cases) / max(total_cases, 1)
+
+    if len(failed_cases) == 1 and failed_ratio < 0.3:
+        scope = "current"
+        reason = f"仅 {failed_cases[0]['case_name']} 失败，失败局限在单一功能点。"
+    elif failed_ratio < 0.5:
+        scope = "adjacent"
+        reason = f"{len(failed_cases)}/{total_cases} 用例失败，失败可能影响相邻流程。"
+    elif failed_ratio < 0.8:
+        scope = "module"
+        reason = f"{len(failed_cases)}/{total_cases} 用例失败，建议模块级回归。"
+    else:
+        scope = "core"
+        reason = f"{len(failed_cases)}/{total_cases} 用例失败，建议核心链路回归。"
+
+    # Check for flaky indicators
+    flaky_cases = [c for c in failed_cases if c["consecutive_failures"] == 1 and len(recent_runs) > 1]
+    if flaky_cases:
+        scope = "current"
+        reason += f" 其中 {len(flaky_cases)} 个用例为首次失败，疑似偶发问题，建议先针对性复测。"
+
+    retest_case_ids = [c["case_id"] for c in failed_cases]
+
+    return {
+        "recommendation": "targeted_retest" if scope == "current" else "regression",
+        "reason": reason,
+        "retest_cases": [
+            {"case_id": c["case_id"], "case_name": c["case_name"], "failed_steps": c["failed_steps"]}
+            for c in failed_cases
+        ],
+        "retest_case_ids": retest_case_ids,
+        "regression_scope": scope,
+        "passed_case_count": len(passed_case_ids),
+        "failed_case_count": len(failed_cases),
+    }
+
+
 def _resolve_storage_state_dir() -> Path:
     """Resolve storage state directory from app config."""
     from app.core.config import get_settings
@@ -580,6 +687,15 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
             "required": [],
         },
     ),
+    "get_recommended_retest": PlanningTool(
+        name="get_recommended_retest",
+        description="分析项目当前的失败模式，输出具体的复测推荐：哪些用例需要重跑、回归范围、推荐理由。用于辅助复测和回归策略决策。",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
     "explore_page": PlanningTool(
         name="explore_page",
         description="访问指定 URL 页面，采集页面上所有可交互元素（按钮、输入框、链接等），返回元素的 id、label、placeholder 等定位属性。如果项目已保存浏览器会话状态，会自动复用登录态。",
@@ -646,6 +762,7 @@ _TOOL_HANDLERS: dict[str, Any] = {
     "get_execution_detail": _handle_get_execution_detail,
     "get_project_test_status": _handle_get_project_test_status,
     "get_failure_analysis": _handle_get_failure_analysis,
+    "get_recommended_retest": _handle_get_recommended_retest,
     "explore_page": _handle_explore_page,
     "capture_page_session": _handle_capture_page_session,
     "explore_flow": _handle_explore_flow,

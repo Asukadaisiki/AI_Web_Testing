@@ -160,6 +160,7 @@ def stream_planning_turn(
             return response
 
         _merge_requirements(requirements, parsed.get("collected_info"))
+        _merge_test_context(requirements, parsed.get("test_context"))
         action = str(parsed.get("action") or "").strip()
         action_input = parsed.get("action_input")
         if not isinstance(action_input, dict):
@@ -560,6 +561,14 @@ def _merge_requirements(requirements: AIPlanningRequirements, collected_info: An
         current = getattr(requirements, field_name)
         if not current:
             setattr(requirements, field_name, str(incoming).strip())
+
+
+def _merge_test_context(requirements: AIPlanningRequirements, test_context: Any) -> None:
+    if not isinstance(test_context, dict):
+        return
+    existing = requirements.test_context or {}
+    merged = {**existing, **{k: v for k, v in test_context.items() if v is not None}}
+    requirements.test_context = merged
 
 
 def _run_fallback_turn(

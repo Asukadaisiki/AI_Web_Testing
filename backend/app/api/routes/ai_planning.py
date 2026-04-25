@@ -32,6 +32,7 @@ from app.services.ai_planning import (
     generate_planning_drafts,
     get_planning_session_detail,
     list_planning_sessions,
+    retest_cases,
     save_and_execute_selected_drafts,
     send_planning_message,
     update_planning_draft_status,
@@ -168,6 +169,33 @@ class SaveAndExecuteRequest(DSLModel):
         default_factory=dict,
         description="Variable substitutions for ${context_key} placeholders.",
     )
+
+
+class RetestRequest(DSLModel):
+    case_ids: list[int] | None = Field(default=None, description="要复测的用例 ID 列表")
+    failed_only: bool = Field(default=False, description="仅复测最近失败的用例")
+    input_values: dict[str, str] = Field(default_factory=dict)
+
+
+@router.post("/sessions/{session_id}/retest", response_model=AIPlanningTurnResponse)
+def retest_cases_route(
+    session_id: int,
+    payload: RetestRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> AIPlanningTurnResponse:
+    try:
+        return retest_cases(
+            session, session_id,
+            actor_user_id=current_user.id,
+            case_ids=payload.case_ids,
+            failed_only=payload.failed_only,
+            input_values=payload.input_values,
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AIPlanningAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/sessions/{session_id}/drafts:save-and-execute", response_model=AIPlanningTurnResponse)
