@@ -27,9 +27,9 @@ class TestListAvailableTools:
     """Tests for list_available_tools function."""
 
     def test_returns_all_registered_tools(self) -> None:
-        """Should return all 8 registered tools."""
+        """Should return all 11 registered tools."""
         tools = list_available_tools()
-        assert len(tools) == 8
+        assert len(tools) == 11
         tool_names = {t.name for t in tools}
         assert tool_names == {
             "get_project_info",
@@ -40,6 +40,9 @@ class TestListAvailableTools:
             "explore_page",
             "capture_page_session",
             "explore_flow",
+            "get_execution_detail",
+            "get_project_test_status",
+            "get_failure_analysis",
         }
 
 
@@ -557,3 +560,234 @@ class TestExploreFlowTool:
                 project_id=1,
             )
         assert "error" in result
+
+
+class TestGetExecutionDetail:
+    """Tests for _handle_get_execution_detail handler."""
+
+    def test_returns_step_level_detail(self, db_session: Session) -> None:
+        """Should return per-step status and error info for a specific run."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        case = case_service.create_case(
+            db_session,
+            CaseCreateRequest(
+                project_id=1,
+                name="Detail Case",
+                description=None,
+                steps=[{"action": "goto", "value": "/test"}],
+            ),
+            actor_user_id=1,
+        )
+        db_session.flush()
+
+        execution = TestCaseRun(
+            case_id=case.id,
+            project_id=1,
+            triggered_by=1,
+            status="failed",
+            report={
+                "status": "failed",
+                "steps": [
+                    {"step_index": 0, "action": "goto", "target": None, "value": "/test", "status": "passed", "error_message": None, "resolved_by": None},
+                    {"step_index": 1, "action": "click", "target": "#btn", "value": None, "status": "failed", "error_message": "Element not found", "resolved_by": None},
+                ],
+            },
+        )
+        db_session.add(execution)
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_execution_detail
+
+        result = _handle_get_execution_detail(
+            params={"run_id": str(execution.id)},
+            db_session=db_session,
+            project_id=1,
+        )
+        assert result["id"] == execution.id
+        assert result["status"] == "failed"
+        assert len(result["steps"]) == 2
+        assert result["steps"][1]["status"] == "failed"
+        assert result["steps"][1]["error_message"] == "Element not found"
+
+    def test_missing_run_id_returns_error(self, db_session: Session) -> None:
+        """Should return error when run_id is missing."""
+        from app.ai.planning_tools import _handle_get_execution_detail
+
+        result = _handle_get_execution_detail(
+            params={},
+            db_session=db_session,
+            project_id=1,
+        )
+        assert "error" in result
+
+    def test_nonexistent_run_returns_error(self, db_session: Session) -> None:
+        """Should return error when run_id does not exist."""
+        from app.ai.planning_tools import _handle_get_execution_detail
+
+        result = _handle_get_execution_detail(
+            params={"run_id": "99999"},
+            db_session=db_session,
+            project_id=1,
+        )
+        assert "error" in result
+
+
+class TestGetProjectTestStatus:
+    """Tests for _handle_get_project_test_status handler."""
+
+    def test_returns_no_runs_when_empty(self, db_session: Session) -> None:
+        """Should return no_runs conclusion when no executions exist."""
+        from app.ai.planning_tools import _handle_get_project_test_status
+
+        result = _handle_get_project_test_status(
+            params={},
+            db_session=db_session,
+            project_id=1,
+        )
+        assert result["conclusion"] == "no_runs"
+        assert result["cases"] == []
+
+    def test_returns_all_passed(self, db_session: Session) -> None:
+        """Should return all_passed when all cases have passing latest runs."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        case = case_service.create_case(
+            db_session,
+            CaseCreateRequest(
+                project_id=1,
+                name="Passing Case",
+                description=None,
+                steps=[{"action": "goto", "value": "/test"}],
+            ),
+            actor_user_id=1,
+        )
+        db_session.flush()
+        execution = TestCaseRun(
+            case_id=case.id, project_id=1, triggered_by=1, status="passed",
+        )
+        db_session.add(execution)
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_project_test_status
+
+        result = _handle_get_project_test_status(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert result["conclusion"] == "all_passed"
+        assert len(result["cases"]) == 1
+        assert result["cases"][0]["latest_status"] == "passed"
+
+    def test_returns_partial_when_mixed(self, db_session: Session) -> None:
+        """Should return partial when some cases pass and some fail."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        case_a = case_service.create_case(
+            db_session,
+            CaseCreateRequest(project_id=1, name="Case A", description=None, steps=[{"action": "goto", "value": "/a"}]),
+            actor_user_id=1,
+        )
+        case_b = case_service.create_case(
+            db_session,
+            CaseCreateRequest(project_id=1, name="Case B", description=None, steps=[{"action": "goto", "value": "/b"}]),
+            actor_user_id=1,
+        )
+        db_session.flush()
+        db_session.add(TestCaseRun(case_id=case_a.id, project_id=1, triggered_by=1, status="passed"))
+        db_session.add(TestCaseRun(case_id=case_b.id, project_id=1, triggered_by=1, status="failed"))
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_project_test_status
+
+        result = _handle_get_project_test_status(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert result["conclusion"] == "partial"
+
+
+class TestGetFailureAnalysis:
+    """Tests for _handle_get_failure_analysis handler."""
+
+    def test_returns_empty_when_no_failures(self, db_session: Session) -> None:
+        """Should return empty when all runs passed."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        case = case_service.create_case(
+            db_session,
+            CaseCreateRequest(project_id=1, name="OK Case", description=None, steps=[{"action": "goto", "value": "/"}]),
+            actor_user_id=1,
+        )
+        db_session.flush()
+        db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="passed"))
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_failure_analysis
+
+        result = _handle_get_failure_analysis(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert result["failure_patterns"] == []
+
+    def test_detects_consecutive_failures(self, db_session: Session) -> None:
+        """Should detect consecutive failure count for a case."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        case = case_service.create_case(
+            db_session,
+            CaseCreateRequest(project_id=1, name="Flaky Case", description=None, steps=[{"action": "goto", "value": "/"}]),
+            actor_user_id=1,
+        )
+        db_session.flush()
+        db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="failed"))
+        db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="failed"))
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_failure_analysis
+
+        result = _handle_get_failure_analysis(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert len(result["failure_patterns"]) == 1
+        assert result["failure_patterns"][0]["case_name"] == "Flaky Case"
+        assert result["failure_patterns"][0]["consecutive_failures"] == 2
+
+    def test_detects_flaky_pattern(self, db_session: Session) -> None:
+        """Should flag alternating pass/fail as suspected flaky."""
+        from app.models import TestCaseRun
+        from app.services import cases as case_service
+
+        case = case_service.create_case(
+            db_session,
+            CaseCreateRequest(project_id=1, name="Unstable", description=None, steps=[{"action": "goto", "value": "/"}]),
+            actor_user_id=1,
+        )
+        db_session.flush()
+        db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="passed"))
+        db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="failed"))
+        db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="passed"))
+        db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="failed"))
+        db_session.commit()
+
+        from app.ai.planning_tools import _handle_get_failure_analysis
+
+        result = _handle_get_failure_analysis(
+            params={}, db_session=db_session, project_id=1,
+        )
+        assert len(result["failure_patterns"]) == 1
+        assert result["failure_patterns"][0]["suspected_flaky"] is True
+
+    def test_filters_by_case_id(self, db_session: Session) -> None:
+        """Should only analyze specific case when case_id is provided."""
+        from app.ai.planning_tools import _handle_get_failure_analysis
+
+        result = _handle_get_failure_analysis(
+            params={"case_id": "99999"},
+            db_session=db_session,
+            project_id=1,
+        )
+        assert result["failure_patterns"] == []

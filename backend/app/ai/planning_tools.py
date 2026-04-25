@@ -185,6 +185,184 @@ def _handle_get_case_stats(
     return stats if isinstance(stats, dict) else {"stats": str(stats)}
 
 
+def _handle_get_execution_detail(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    from app.services.executions import get_case_execution
+    run_id = int(params.get("run_id", 0))
+    if not run_id:
+        return {"error": "必须提供 run_id 参数"}
+    detail = get_case_execution(db_session, run_id)
+    if detail is None:
+        return {"error": f"执行记录 {run_id} 不存在"}
+    steps_summary = []
+    if detail.report and detail.report.steps:
+        for step in detail.report.steps:
+            s: dict[str, Any] = {
+                "step_index": step.step_index,
+                "action": step.action,
+                "status": step.status,
+            }
+            if step.target is not None:
+                s["target"] = step.target
+            if step.value is not None:
+                s["value"] = step.value
+            if step.error_message is not None:
+                s["error_message"] = step.error_message
+            if step.resolved_by is not None:
+                s["resolved_by"] = step.resolved_by
+            if step.url is not None:
+                s["url"] = step.url
+            if step.duration_ms is not None:
+                s["duration_ms"] = step.duration_ms
+            if step.console_events:
+                errors = [e for e in step.console_events if isinstance(e, dict) and e.get("level") == "error"]
+                if errors:
+                    s["console_errors"] = [e.get("text", "") for e in errors]
+            if step.network_events:
+                failures = [e for e in step.network_events if isinstance(e, dict) and (e.get("status") or 0) >= 400]
+                if failures:
+                    s["network_errors"] = [{"url": e.get("url", ""), "status": e.get("status")} for e in failures]
+            steps_summary.append(s)
+    return {
+        "id": detail.id,
+        "case_id": detail.case_id,
+        "case_name": detail.case_name,
+        "status": detail.status,
+        "total_steps": detail.total_steps,
+        "failed_step_index": detail.failed_step_index,
+        "error_message": detail.error_message,
+        "duration_ms": detail.duration_ms,
+        "steps": steps_summary,
+    }
+
+
+def _handle_get_project_test_status(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    from sqlalchemy import select
+    from app.models import TestCase, TestCaseRun
+
+    cases = db_session.scalars(
+        select(TestCase).where(TestCase.project_id == project_id).order_by(TestCase.id)
+    ).all()
+
+    case_statuses: list[dict[str, Any]] = []
+    for case in cases:
+        latest_run = db_session.scalars(
+            select(TestCaseRun)
+            .where(TestCaseRun.case_id == case.id)
+            .order_by(TestCaseRun.started_at.desc())
+            .limit(1)
+        ).first()
+
+        if latest_run is None:
+            case_statuses.append({
+                "case_id": case.id,
+                "case_name": case.name,
+                "latest_status": "no_runs",
+                "latest_run_id": None,
+            })
+        else:
+            report = latest_run.report or {}
+            steps = report.get("steps", [])
+            passed = sum(1 for s in steps if isinstance(s, dict) and s.get("status") == "passed")
+            total = len(steps)
+            case_statuses.append({
+                "case_id": case.id,
+                "case_name": case.name,
+                "latest_status": latest_run.status,
+                "latest_run_id": latest_run.id,
+                "passed_steps": passed,
+                "total_steps": total,
+                "error_message": latest_run.error_message,
+            })
+
+    if not case_statuses:
+        conclusion = "no_runs"
+    elif all(c["latest_status"] == "passed" for c in case_statuses):
+        conclusion = "all_passed"
+    elif all(c["latest_status"] in ("failed", "needs_intervention") for c in case_statuses):
+        conclusion = "all_failed"
+    else:
+        conclusion = "partial"
+
+    return {"conclusion": conclusion, "cases": case_statuses, "total_cases": len(case_statuses)}
+
+
+def _handle_get_failure_analysis(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    from sqlalchemy import select
+    from app.models import TestCase, TestCaseRun
+
+    limit = min(int(params.get("limit", 5)), 10)
+    case_id_filter = params.get("case_id")
+    if case_id_filter:
+        case_id_filter = int(case_id_filter)
+
+    query = select(TestCaseRun).where(TestCaseRun.project_id == project_id)
+    if case_id_filter:
+        query = query.where(TestCaseRun.case_id == case_id_filter)
+    query = query.order_by(TestCaseRun.started_at.desc()).limit(limit * 3)
+
+    runs = db_session.scalars(query).all()
+
+    case_map: dict[int, list[TestCaseRun]] = {}
+    for run in runs:
+        case_map.setdefault(run.case_id, []).append(run)
+
+    patterns: list[dict[str, Any]] = []
+    for cid, case_runs in case_map.items():
+        case_record = db_session.get(TestCase, cid)
+        case_name = case_record.name if case_record else f"Case {cid}"
+
+        statuses = [r.status for r in case_runs]
+        failed_runs = [r for r in case_runs if r.status in ("failed", "needs_intervention")]
+        passed_runs = [r for r in case_runs if r.status == "passed"]
+
+        if not failed_runs:
+            continue
+
+        consecutive_failures = 0
+        for s in statuses:
+            if s in ("failed", "needs_intervention"):
+                consecutive_failures += 1
+            else:
+                break
+
+        alternating = False
+        if len(statuses) >= 3:
+            switches = sum(1 for i in range(1, len(statuses)) if statuses[i] != statuses[i - 1])
+            alternating = switches >= len(statuses) * 0.6
+
+        last_error = None
+        if failed_runs:
+            last_error = failed_runs[0].error_message
+
+        patterns.append({
+            "case_id": cid,
+            "case_name": case_name,
+            "total_runs": len(case_runs),
+            "passed_count": len(passed_runs),
+            "failed_count": len(failed_runs),
+            "consecutive_failures": consecutive_failures,
+            "last_error_message": last_error,
+            "suspected_flaky": alternating,
+        })
+
+    return {"failure_patterns": patterns}
+
+
 def _resolve_storage_state_dir() -> Path:
     """Resolve storage state directory from app config."""
     from app.core.config import get_settings
@@ -361,6 +539,47 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
             "required": [],
         },
     ),
+    "get_execution_detail": PlanningTool(
+        name="get_execution_detail",
+        description="查看指定测试执行的完整详情，包括每一步的状态、错误信息、定位器解析结果、控制台和网络错误。用于分析失败原因。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "integer",
+                    "description": "要查看的测试执行记录 ID",
+                },
+            },
+            "required": ["run_id"],
+        },
+    ),
+    "get_project_test_status": PlanningTool(
+        name="get_project_test_status",
+        description="查看项目下所有测试用例的最新执行状态，包括通过率、失败摘要和整体结论（全部通过/部分通过/全部失败/无执行记录）。",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    "get_failure_analysis": PlanningTool(
+        name="get_failure_analysis",
+        description="分析项目或指定用例的失败模式，包括连续失败次数、疑似 flaky 标记、最近错误信息。用于根因分析和回归策略决策。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "case_id": {
+                    "type": "integer",
+                    "description": "指定分析某个用例（可选，不填则分析项目全部用例）",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "分析的最近执行记录数量，默认5，最大10",
+                },
+            },
+            "required": [],
+        },
+    ),
     "explore_page": PlanningTool(
         name="explore_page",
         description="访问指定 URL 页面，采集页面上所有可交互元素（按钮、输入框、链接等），返回元素的 id、label、placeholder 等定位属性。如果项目已保存浏览器会话状态，会自动复用登录态。",
@@ -424,6 +643,9 @@ _TOOL_HANDLERS: dict[str, Any] = {
     "get_case_detail": _handle_get_case_detail,
     "list_recent_executions": _handle_list_recent_executions,
     "get_case_stats": _handle_get_case_stats,
+    "get_execution_detail": _handle_get_execution_detail,
+    "get_project_test_status": _handle_get_project_test_status,
+    "get_failure_analysis": _handle_get_failure_analysis,
     "explore_page": _handle_explore_page,
     "capture_page_session": _handle_capture_page_session,
     "explore_flow": _handle_explore_flow,
