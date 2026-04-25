@@ -9,6 +9,18 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-25 (Session 5)
+
+- 任务：AI Planning Agent 上下文压缩 + 废弃 5 轮 ReAct 限制 + TODO 进度展示
+- 背景：AI Planning Agent 每次发消息将全量对话历史发给 LLM，长 session 可能超出 context window；ReAct 循环硬编码 5 轮上限在复杂场景不够用；AI 回复缺乏结构化进度展示。
+- 操作：
+  1. **上下文压缩 + 意图检测**：`test_planning_agent.py` 中 `_prepare_transcript_for_llm()` 新增压缩机制。当对话超过阈值（默认 10 条）且用户消息包含新需求关键词时，将早期消息替换为从 `requirements`/`plan`/`tool_calls` 结构化数据中提取的摘要，保留最近 4 条原文。零额外 LLM 调用。
+  2. **废弃 5 轮限制**：`config.py` 中 `ai_planning_max_react_rounds` 默认值 5→0（无限），新增 `ai_planning_max_react_safety_cap=30` 防死循环。ReAct 循环改为 `while` + 安全上限，`generate_plan`/`ask_user` 自然终止。
+  3. **TODO 进度展示**：system prompt 新增 `todo_list` 字段规范，要求 LLM 在 3+ 信息后输出进度清单。Agent 解析 `todo_list` 传入 `AIPlanningTurnResponse`。前端渲染进度卡片（done/in_progress/pending 三种状态图标）。
+- 改动文件：8 个文件（config、schema、prompt、agent、service、前端组件、2 个测试文件）
+- 验证：`uv run pytest tests/unit/` 305 passed，无回归
+- 后续：可启动前后端进行多轮对话测试，验证压缩触发、TODO 展示、无轮次限制效果。
+
 ## 2026-04-25 (Session 4)
 
 - 任务：CasesPage 增加项目级分类，用例按"项目 → 状态"两级过滤

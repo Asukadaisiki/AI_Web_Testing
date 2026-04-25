@@ -27,6 +27,11 @@ class AIPlanningRequirements(DSLModel):
     scope_limits: str | None = Field(default=None, max_length=1000)
 
 
+class AIPlanningTodoItem(DSLModel):
+    item: str = Field(min_length=1, max_length=500)
+    status: Literal["done", "in_progress", "pending"] = "pending"
+
+
 class AIPlanningToolCall(DSLModel):
     tool: str = Field(min_length=1, max_length=100)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -167,3 +172,4 @@ class AIPlanningTurnResponse(DSLModel):
     tool_calls: list[AIPlanningToolCall] = Field(default_factory=list)
     saved_cases: list[SavedCaseResult] = Field(default_factory=list)
     execution_summaries: list[ExecutionSummaryResult] = Field(default_factory=list)
+    todo_list: list[AIPlanningTodoItem] = Field(default_factory=list)

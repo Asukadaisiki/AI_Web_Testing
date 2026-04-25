@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Checkbox, Input, Progress, Select, Tag, Typography, message } from "antd";
-import { DeleteOutlined, SendOutlined } from "@ant-design/icons";
+import { DeleteOutlined, SendOutlined, CheckCircleFilled, LoadingOutlined, ClockCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -741,6 +741,35 @@ export function AITestPlanningPanel({
                         </a>
                       </div>
                     ))}
+                  </div>
+                ) : item.role === "assistant" &&
+                  Array.isArray(item.structured_payload?.todo_list) &&
+                  (item.structured_payload?.todo_list as Array<{ item: string; status: string }>).length > 0 ? (
+                  <div>
+                    <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{item.content}</div>
+                    <div style={{
+                      background: "rgba(0,0,0,0.03)",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                    }}>
+                      {(item.structured_payload!.todo_list as Array<{ item: string; status: string }>).map((todo, idx) => (
+                        <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                          {todo.status === "done" ? (
+                            <CheckCircleFilled style={{ color: "#52c41a", fontSize: 14 }} />
+                          ) : todo.status === "in_progress" ? (
+                            <LoadingOutlined style={{ color: "#1677ff", fontSize: 14 }} />
+                          ) : (
+                            <ClockCircleOutlined style={{ color: "#d9d9d9", fontSize: 14 }} />
+                          )}
+                          <span style={{
+                            textDecoration: todo.status === "done" ? "line-through" : "none",
+                            color: todo.status === "pending" ? "#aaa" : todo.status === "done" ? "#888" : "#333",
+                          }}>
+                            {todo.item}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : item.role === "assistant" && (item.structured_payload as Record<string, unknown>)?._phase ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

@@ -41,7 +41,10 @@ SYSTEM_PROMPT_TEMPLATE = """\
     "main_assertions": [],
     "test_data_or_account": null,
     "scope_limits": null
-  }}
+  }},
+  "todo_list": [
+    {{"item": "任务描述", "status": "done|in_progress|pending"}}
+  ]
 }}
 
 规则：
@@ -61,6 +64,9 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - `draft_prompt` 中涉及测试数据（如邮箱、密码、搜索关键词）的 step value，必须使用 ${{context_key}} 格式引用 input_contract 中定义的变量，不要硬编码具体值或使用其他占位符格式。
 - 当用户需求明确描述了弹窗、模态框等动态交互步骤（如"在弹层中点击 View Cart"），`draft_prompt` 中必须严格保留用户描述的交互顺序和弹窗上下文。即使元素清单中没有该弹窗元素，也必须保留该步骤——执行时会通过 VLM 视觉定位或坐标点击找到。
 - 标注了 [dynamic] 的元素是交互触发后才出现的动态元素，步骤顺序必须与用户流程一致。
+- 当已收集到 3 项及以上信息时，你必须在 `todo_list` 中列出当前规划进度清单，每项标注 `done`/`in_progress`/`pending`。
+- 每轮回复都必须更新 `todo_list` 的状态：已完成的标 `done`，当前正在做的标 `in_progress`，尚未开始的标 `pending`。
+- `todo_list` 仅用于向用户展示进度，不影响你的 action 决策逻辑。
 """
 
 

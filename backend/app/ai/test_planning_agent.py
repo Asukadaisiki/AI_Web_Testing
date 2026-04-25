@@ -19,6 +19,7 @@ from app.schemas.ai_planning import (
     AIPlanningRequirements,
     AIPlanningScenario,
     AIPlanningTestDataRequirement,
+    AIPlanningTodoItem,
     AIPlanningToolCall,
     AIPlanningTurnResponse,
 )
@@ -26,6 +27,13 @@ from app.schemas.ai_planning import (
 
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r"https?://[^\s，。；;]+", re.IGNORECASE)
+
+_NEW_REQUIREMENT_KEYWORDS = [
+    "新需求", "换一个", "重新", "改一下", "调整方案", "变更",
+    "新增测试", "还有一个", "另外还要", "再来一个", "补充测试",
+    "新增场景", "换种", "不同方案", "换个思路",
+]
+
 REQUIRED_REQUIREMENT_SLOTS = [
     "app_under_test",
     "business_goal",
@@ -35,6 +43,21 @@ REQUIRED_REQUIREMENT_SLOTS = [
     "test_data_or_account",
     "scope_limits",
 ]
+
+
+def _turn_complete_payload(response: AIPlanningTurnResponse) -> dict[str, Any]:
+    return {
+        "type": "turn_complete",
+        "session_status": response.session_status,
+        "payload": {
+            "assistant_message": response.assistant_message,
+            "missing_slots": response.missing_slots,
+            "suggested_questions": response.suggested_questions,
+            "plan": response.plan.model_dump(mode="json") if response.plan else None,
+            "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+            "todo_list": [t.model_dump(mode="json") for t in response.todo_list],
+        },
+    }
 
 
 def run_planning_turn(
@@ -77,7 +100,12 @@ def stream_planning_turn(
     requirements = existing_requirements.model_copy(deep=True) if existing_requirements else AIPlanningRequirements()
     settings = get_settings()
     tool_calls: list[AIPlanningToolCall] = []
-    transcript_messages, force_generate = _prepare_transcript_for_llm(transcript)
+    transcript_messages, force_generate = _prepare_transcript_for_llm(
+        transcript,
+        requirements=existing_requirements,
+        plan=None,
+        tool_calls=None,
+    )
 
     if not _planning_llm_enabled(settings):
         response = _run_fallback_turn(
@@ -87,23 +115,14 @@ def stream_planning_turn(
             force_generate=force_generate,
             tool_calls=tool_calls,
         )
-        yield {
-            "type": "turn_complete",
-            "session_status": response.session_status,
-            "payload": {
-                "assistant_message": response.assistant_message,
-                "missing_slots": response.missing_slots,
-                "suggested_questions": response.suggested_questions,
-                "plan": response.plan.model_dump(mode="json") if response.plan else None,
-                "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
-            },
-        }
+        yield _turn_complete_payload(response)
         return response
 
     conversation: list[dict[str, str]] = [{"role": "system", "content": build_system_prompt()}, *transcript_messages]
-    max_rounds = max(1, settings.ai_planning_max_react_rounds)
-
-    for round_index in range(max_rounds):
+    safety_cap = max(1, settings.ai_planning_max_react_safety_cap)
+    round_index = 0
+    while round_index < safety_cap:
+        round_index += 1
         yield {"type": "status", "phase": "thinking", "message": "正在分析需求..."}
 
         raw_response = ""
@@ -125,17 +144,7 @@ def stream_planning_turn(
 
         if not raw_response:
             response = _error_response(requirements=requirements, tool_calls=tool_calls)
-            yield {
-                "type": "turn_complete",
-                "session_status": response.session_status,
-                "payload": {
-                    "assistant_message": response.assistant_message,
-                    "missing_slots": response.missing_slots,
-                    "suggested_questions": response.suggested_questions,
-                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
-                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
-                },
-            }
+            yield _turn_complete_payload(response)
             return response
 
         parsed = _parse_llm_response(raw_response)
@@ -147,17 +156,7 @@ def stream_planning_turn(
                 force_generate=force_generate,
                 tool_calls=tool_calls,
             )
-            yield {
-                "type": "turn_complete",
-                "session_status": response.session_status,
-                "payload": {
-                    "assistant_message": response.assistant_message,
-                    "missing_slots": response.missing_slots,
-                    "suggested_questions": response.suggested_questions,
-                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
-                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
-                },
-            }
+            yield _turn_complete_payload(response)
             return response
 
         _merge_requirements(requirements, parsed.get("collected_info"))
@@ -165,6 +164,13 @@ def stream_planning_turn(
         action_input = parsed.get("action_input")
         if not isinstance(action_input, dict):
             action_input = {}
+
+        # --- Parse todo_list from LLM response ---
+        raw_todo = parsed.get("todo_list") or []
+        todo_items = [
+            AIPlanningTodoItem(item=str(t.get("item", "")), status=t.get("status", "pending"))
+            for t in raw_todo if isinstance(t, dict) and str(t.get("item", "")).strip()
+        ]
 
         # --- Force explore_page/explore_flow before generating plan (BUG-052) ---
         if action == "generate_plan":
@@ -207,18 +213,9 @@ def stream_planning_turn(
                 plan_payload=action_input,
                 assistant_message="我先基于当前已知信息生成一版测试方案，缺失信息会体现在假设和风险里。",
                 tool_calls=tool_calls,
+                todo_list=todo_items,
             )
-            yield {
-                "type": "turn_complete",
-                "session_status": response.session_status,
-                "payload": {
-                    "assistant_message": response.assistant_message,
-                    "missing_slots": response.missing_slots,
-                    "suggested_questions": response.suggested_questions,
-                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
-                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
-                },
-            }
+            yield _turn_complete_payload(response)
             return response
 
         if action == "call_tool":
@@ -259,18 +256,9 @@ def stream_planning_turn(
                 plan_payload=action_input,
                 assistant_message="信息已经足够，我先给出结构化测试方案。",
                 tool_calls=tool_calls,
+                todo_list=todo_items,
             )
-            yield {
-                "type": "turn_complete",
-                "session_status": response.session_status,
-                "payload": {
-                    "assistant_message": response.assistant_message,
-                    "missing_slots": response.missing_slots,
-                    "suggested_questions": response.suggested_questions,
-                    "plan": response.plan.model_dump(mode="json") if response.plan else None,
-                    "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
-                },
-            }
+            yield _turn_complete_payload(response)
             return response
 
         # ask_user or unsupported action — ask follow-up
@@ -286,21 +274,12 @@ def stream_planning_turn(
             drafts=[],
             next_action="ask_followup",
             tool_calls=tool_calls,
+            todo_list=todo_items,
         )
-        yield {
-            "type": "turn_complete",
-            "session_status": response.session_status,
-            "payload": {
-                "assistant_message": response.assistant_message,
-                "missing_slots": response.missing_slots,
-                "suggested_questions": response.suggested_questions,
-                "plan": response.plan.model_dump(mode="json") if response.plan else None,
-                "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
-            },
-        }
+        yield _turn_complete_payload(response)
         return response
 
-    # Exhausted all rounds — force-generate a plan
+    # Exhausted safety cap — force-generate a plan
     response = _run_fallback_turn(
         transcript=transcript,
         requirements=requirements,
@@ -308,17 +287,7 @@ def stream_planning_turn(
         force_generate=True,
         tool_calls=tool_calls,
     )
-    yield {
-        "type": "turn_complete",
-        "session_status": response.session_status,
-        "payload": {
-            "assistant_message": response.assistant_message,
-            "missing_slots": response.missing_slots,
-            "suggested_questions": response.suggested_questions,
-            "plan": response.plan.model_dump(mode="json") if response.plan else None,
-            "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
-        },
-    }
+    yield _turn_complete_payload(response)
     return response
 
 
@@ -330,7 +299,59 @@ def _planning_llm_enabled(settings: Any) -> bool:
     )
 
 
-def _prepare_transcript_for_llm(transcript: list[dict[str, str]]) -> tuple[list[dict[str, str]], bool]:
+def _is_new_requirement_intent(user_message: str) -> bool:
+    return any(kw in user_message for kw in _NEW_REQUIREMENT_KEYWORDS)
+
+
+def _build_context_summary(
+    requirements: AIPlanningRequirements,
+    plan: AIPlanningPlan | None,
+    tool_calls: list[AIPlanningToolCall],
+) -> str:
+    parts = ["[历史对话摘要]"]
+
+    filled = {}
+    labels = {
+        "app_under_test": "被测系统",
+        "business_goal": "业务目标",
+        "entry_url_or_page": "入口页面",
+        "core_user_flow": "核心流程",
+        "main_assertions": "关键断言",
+        "test_data_or_account": "测试数据",
+        "scope_limits": "范围限制",
+    }
+    for slot in REQUIRED_REQUIREMENT_SLOTS:
+        val = getattr(requirements, slot, None)
+        if slot == "main_assertions":
+            if val:
+                filled[labels[slot]] = ", ".join(val)
+        elif val and str(val).strip():
+            filled[labels[slot]] = str(val).strip()
+    if filled:
+        parts.append("- 用户需求：" + "；".join(f"{k}：{v}" for k, v in filled.items()))
+
+    if plan:
+        scenario_titles = ", ".join(s.title for s in plan.scenarios) if plan.scenarios else "无"
+        parts.append(f"- 已有方案：{plan.summary}（场景：{scenario_titles}）")
+
+    if tool_calls:
+        explore_count = sum(1 for c in tool_calls if c.tool in ("explore_page", "explore_flow"))
+        total = len(tool_calls)
+        if explore_count:
+            parts.append(f"- 已产生的结果：共调用 {total} 次工具，其中 {explore_count} 次页面采集")
+        else:
+            parts.append(f"- 已产生的结果：共调用 {total} 次工具")
+
+    return "\n".join(parts)
+
+
+def _prepare_transcript_for_llm(
+    transcript: list[dict[str, str]],
+    *,
+    requirements: AIPlanningRequirements | None = None,
+    plan: AIPlanningPlan | None = None,
+    tool_calls: list[AIPlanningToolCall] | None = None,
+) -> tuple[list[dict[str, str]], bool]:
     force_generate = False
     prepared: list[dict[str, str]] = []
     for item in transcript:
@@ -341,6 +362,26 @@ def _prepare_transcript_for_llm(transcript: list[dict[str, str]]) -> tuple[list[
             content = content.replace(FORCE_GENERATE_MARKER, "").strip()
             content = f"{FORCE_GENERATE_HINT}{content}"
         prepared.append({"role": role, "content": content})
+
+    # --- Context compression ---
+    settings = get_settings()
+    threshold = settings.ai_planning_context_compress_threshold
+    keep_recent = settings.ai_planning_context_keep_recent
+    if len(prepared) > threshold and requirements is not None:
+        last_user_msg = ""
+        for msg in reversed(prepared):
+            if msg.get("role") == "user":
+                last_user_msg = msg.get("content", "")
+                break
+        if _is_new_requirement_intent(last_user_msg):
+            summary = _build_context_summary(requirements, plan, tool_calls or [])
+            recent = prepared[-keep_recent:]
+            logger.info(
+                "Compressing context: %d messages -> summary + %d recent",
+                len(prepared), len(recent),
+            )
+            prepared = [{"role": "system", "content": summary}, *recent]
+
     return prepared, force_generate
 
 
@@ -671,6 +712,7 @@ def _plan_response(
     plan_payload: dict[str, Any] | None,
     assistant_message: str,
     tool_calls: list[AIPlanningToolCall],
+    todo_list: list[AIPlanningTodoItem] | None = None,
 ) -> AIPlanningTurnResponse:
     page_elements = _extract_page_elements(tool_calls)
     plan = (
@@ -688,6 +730,7 @@ def _plan_response(
         drafts=[],
         next_action="select_scenarios",
         tool_calls=tool_calls,
+        todo_list=todo_list or [],
     )
 
 

@@ -166,6 +166,7 @@ def send_planning_message(
                 "suggested_questions": agent_response.suggested_questions,
                 "plan": agent_response.plan.model_dump(mode="json") if agent_response.plan is not None else None,
                 "tool_calls": [item.model_dump(mode="json") for item in agent_response.tool_calls],
+                "todo_list": [item.model_dump(mode="json") for item in agent_response.todo_list],
             },
         )
     )
@@ -250,6 +251,7 @@ def stream_planning_message(
                 "suggested_questions": response.suggested_questions,
                 "plan": response.plan.model_dump(mode="json") if response.plan is not None else None,
                 "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+                "todo_list": [item.model_dump(mode="json") for item in response.todo_list],
             },
         )
     )
