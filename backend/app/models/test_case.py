@@ -19,7 +19,7 @@ class TestCase(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("projects.id", ondelete="RESTRICT"),
+        ForeignKey("projects.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
     )

@@ -9,6 +9,17 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-25 (Session 3)
+
+- 任务：允许直接删除含测试用例的项目（CASCADE 替代 RESTRICT）
+- 背景：`delete_project` 服务层对 test_case_count > 0 强制返回 403 拒绝删除。用户希望只需二次确认即可删除，不需要先手动清空测试用例。
+- 操作：
+  1. `test_case.py`（模型）：`project_id` FK 从 `ondelete="RESTRICT"` 改为 `ondelete="CASCADE"`
+  2. `project_management.py`：移除 test_case_count 前置检查，简化为仅验证 owner 权限后直接删除
+  3. 新增 Alembic 迁移 `20260425_0020_test_case_project_fk_cascade.py`
+- 级联链路：projects → test_cases (CASCADE) → test_case_runs (CASCADE)；dsl_generation_runs / report_preferences / ai_planning_sessions 的 case_id 为 SET NULL，不受影响
+- 验证：`uv run alembic upgrade head` 迁移成功
+
 ## 2026-04-25 (Session 2)
 
 - 任务：修复删除项目时 500 Internal Server Error（`RestrictViolation`）

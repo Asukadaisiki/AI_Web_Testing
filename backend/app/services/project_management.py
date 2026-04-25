@@ -74,9 +74,7 @@ def update_project(
 
 
 def delete_project(session: Session, project_id: int, actor_user_id: int) -> bool:
-    """Delete a project. User must be an owner and project must not have test cases."""
-    from app.models import TestCase
-
+    """Delete a project and all its test cases (cascade). User must be an owner."""
     project = session.get(Project, project_id)
     if project is None:
         raise ProjectAccessError(f"Project {project_id} not found.")
@@ -85,17 +83,7 @@ def delete_project(session: Session, project_id: int, actor_user_id: int) -> boo
     if not _is_project_owner(session, project_id, actor_user_id):
         raise ProjectAccessError(f"Only project owners can delete projects.")
 
-    # Check if project has test cases (RESTRICT constraint would prevent deletion)
-    case_count = session.scalar(
-        select(func.count(TestCase.id)).where(TestCase.project_id == project_id)
-    ) or 0
-
-    if case_count > 0:
-        raise ProjectAccessError(
-            f"Cannot delete project {project_id} because it contains {case_count} test case(s). "
-            f"Please delete or move the test cases first."
-        )
-
+    # test_cases cascade deleted via FK; ai_planning_sessions SET NULL via FK
     session.delete(project)
     session.commit()
     return True
