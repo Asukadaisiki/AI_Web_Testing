@@ -9,6 +9,38 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-26 (Session 6)
+
+- 任务：AI Planning Agent 三阶段进化 — Phase 1 执行分析、Phase 2 智能决策、Phase 3 跨会话持久化
+- 背景：AI 规划 Agent 原本只能生成测试方案，无法看到执行结果、分析失败、积累历史知识。需要将其进化为智能 QA Agent，形成 plan → execute → analyze → retest 闭环。
+- 操作：
+
+  **Phase 1 — 执行分析工具 + 自动分析**（4 个 commit）
+  1. `planning_tools.py`：新增 3 个分析工具：`get_execution_detail`（单次执行详情）、`get_project_test_status`（项目级测试状态汇总）、`get_failure_analysis`（失败模式分析，含 flaky 检测）。工具总数 9→12。
+  2. `test_planning_prompts.py`：角色从"测试规划助手"升级为"智能 QA Agent"，新增 `analyze_results`、`plan_regression` 动作和结构化分析输出格式。
+  3. `test_planning_agent.py`：ReAct 循环支持 `analyze_results`、`plan_regression` 动作，新增 `_merge_test_context` 上下文持久化。
+  4. `ai_planning.py`：save-and-execute 流程（sync + streaming）在执行失败后自动触发 AI 分析轮，将分析报告持久化为消息。
+  5. `schemas/ai_planning.py`：新增 `ExecutionAnalysis`、`CaseAnalysisResult`、`FailureDetail` schema，`AIPlanningRequirements` 新增 `test_context` 字段。
+
+  **Phase 2 — 智能决策**（1 个 commit）
+  1. `test_planning_agent.py`：`_merge_test_context` 函数在 ReAct 循环中持久化执行上下文。
+  2. `ai_planning.py`：新增 `_build_session_context_preamble` + `_inject_auto_context` — 后续轮次自动注入项目测试状态到对话上下文。新增 `retest_cases` 服务函数（复测 API）。
+  3. `planning_tools.py`：新增 `get_recommended_retest` 工具 — 基于失败比例自动推荐回归范围（current/adjacent/module/core）。工具总数 12→12（含 Phase 1 新增）。
+  4. `ai_planning.py` routes：新增 `POST /sessions/{id}/retest` 端点 + `RetestRequest` schema。
+
+  **Phase 3 — 跨会话持久化 + 失败模式学习 + 改进 Flaky 检测**（1 个 commit）
+  1. 新增 `TestPointInsight` 模型：项目级洞察持久化（flaky 用例列表、失败模式、回归风险等级、分析摘要）。Alembic 迁移 `20260426_0021`。
+  2. `planning_tools.py`：新增 `get_project_insights`（读取跨会话洞察）、`update_insights`（AI 可主动更新洞察）工具。工具总数 12→14。
+  3. `ai_planning.py`：`_build_session_context_preamble` 增强为注入跨会话历史洞察（flaky 标记、失败模式、回归风险）。新增 `_auto_update_insights` — 分析完成后自动计算 flaky 分数、失败模式分类、回归风险并持久化。新增 `_categorize_error` 错误分类器。
+  4. `planning_tools.py`：改进 flaky 检测算法 — 从简单交替检测升级为置信度评分（滑动窗口 + switch ratio * balance），输出 0-1 的 `flaky_score`，阈值 0.4。
+
+- 改动文件：16 个文件（3 个模型、1 个迁移、2 个 schema、2 个 service、1 个 agent、1 个 tools、1 个 routes、5 个测试文件）
+- 验证：
+  - Phase 1: 333 passed
+  - Phase 2: 333 passed
+  - Phase 3: 350 passed（+1 预存在 flaky test 排除）
+- 后续：三个 Phase 全部完成，AI Planning Agent 已具备完整的 plan → execute → analyze → retest 闭环能力，支持跨会话知识积累。
+
 ## 2026-04-25 (Session 5)
 
 - 任务：AI Planning Agent 上下文压缩 + 废弃 5 轮 ReAct 限制 + TODO 进度展示
