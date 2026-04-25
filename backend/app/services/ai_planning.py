@@ -443,6 +443,53 @@ def update_planning_draft_status(
     return _to_draft_schema(draft)
 
 
+def _should_run_analysis(
+    execution_summaries: list[ExecutionSummaryResult],
+) -> bool:
+    """Return True if any execution result is not passed."""
+    return any(s.status != "passed" for s in execution_summaries)
+
+
+def _build_analysis_context(
+    execution_summaries: list[ExecutionSummaryResult],
+    db_session: Session,
+) -> str:
+    """Build a context message for the analysis turn from execution summaries."""
+    lines = ["本轮执行已完成，请分析以下结果：\n"]
+    for ex in execution_summaries:
+        icon = "✅" if ex.status == "passed" else "❌"
+        failure_info = ""
+        if ex.status != "passed":
+            failure_info = f" [失败步骤: {ex.failed_steps}步]"
+        lines.append(
+            f"{icon} {ex.case_name} — {ex.status} "
+            f"({ex.passed_steps}/{ex.total_steps}步){failure_info}"
+        )
+    lines.append("\n请使用 analyze_results 模式输出分析报告。")
+    return "\n".join(lines)
+
+
+def _run_analysis_turn(
+    *,
+    execution_summaries: list[ExecutionSummaryResult],
+    db_session: Session,
+    project_id: int,
+) -> AIPlanningTurnResponse | None:
+    """Run an analysis turn using the AI agent with execution results as context."""
+    try:
+        context_message = _build_analysis_context(execution_summaries, db_session)
+        transcript = [{"role": "user", "content": context_message}]
+        return run_planning_turn(
+            transcript=transcript,
+            existing_requirements=None,
+            db_session=db_session,
+            project_id=project_id,
+        )
+    except Exception:
+        logger.warning("Auto-analysis turn failed", exc_info=True)
+        return None
+
+
 def save_and_execute_selected_drafts(
     session: Session,
     planning_session_id: int,
@@ -545,16 +592,43 @@ def save_and_execute_selected_drafts(
     session.commit()
     session.refresh(planning_session)
 
+    execution_analysis = None
+    if _should_run_analysis(execution_summaries):
+        analysis_response = _run_analysis_turn(
+            execution_summaries=execution_summaries,
+            db_session=db_session,
+            project_id=planning_session.project_id or 1,
+        )
+        if analysis_response and analysis_response.execution_analysis:
+            execution_analysis = analysis_response.execution_analysis
+            analysis_msg = analysis_response.assistant_message
+            session.add(
+                AIPlanningMessage(
+                    session_id=planning_session.id,
+                    role="assistant",
+                    turn_type="followup",
+                    content=analysis_msg,
+                    structured_payload_json={
+                        "type": "execution_analysis",
+                        "analysis": execution_analysis.model_dump(mode="json"),
+                    },
+                )
+            )
+            session.commit()
+            assistant_message = f"{assistant_message}\n\n---\n\n{analysis_msg}"
+
     return AIPlanningTurnResponse(
         assistant_message=assistant_message,
         session_status="completed",
         requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         missing_slots=[],
+        suggested_questions=[],
         plan=None,
         drafts=[],
         next_action="ask_followup",
         saved_cases=saved_cases,
         execution_summaries=execution_summaries,
+        execution_analysis=execution_analysis,
     )
 
 
