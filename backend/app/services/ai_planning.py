@@ -68,9 +68,10 @@ def create_planning_session(
     *,
     actor_user_id: int,
 ) -> AIPlanningSessionDetail:
-    _ensure_project_access(session, project_id=payload.project_id, actor_user_id=actor_user_id)
-    if payload.case_id is not None:
-        _ensure_case_access(session, case_id=payload.case_id, project_id=payload.project_id, actor_user_id=actor_user_id)
+    if payload.project_id is not None:
+        _ensure_project_access(session, project_id=payload.project_id, actor_user_id=actor_user_id)
+        if payload.case_id is not None:
+            _ensure_case_access(session, case_id=payload.case_id, project_id=payload.project_id, actor_user_id=actor_user_id)
 
     record = AIPlanningSession(
         actor_user_id=actor_user_id,

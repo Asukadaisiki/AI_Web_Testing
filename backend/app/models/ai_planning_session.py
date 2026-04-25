@@ -18,7 +18,7 @@ class AIPlanningSession(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     actor_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
-    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id", ondelete="RESTRICT"), index=True, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True)
     case_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("test_cases.id", ondelete="SET NULL"),

@@ -9,6 +9,22 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-25 (Session 2)
+
+- 任务：修复删除项目时 500 Internal Server Error（`RestrictViolation`）
+- 背景：报告页面删除项目返回 500，错误为 `ai_planning_sessions` 表的 `fk_ai_planning_sessions_project_id_projects` 外键约束（RESTRICT）阻止删除。`delete_project` 服务层只检查了 `test_cases`，未检查 `ai_planning_sessions`。
+- 操作：
+  1. `ai_planning_session.py`（模型）：`project_id` 从 `nullable=False` + `ondelete="RESTRICT"` 改为 `nullable=True` + `ondelete="SET NULL"`
+  2. `schemas/ai_planning.py`：`AIPlanningSession.project_id` 和 `CreateAIPlanningSessionRequest.project_id` 改为 `int | None`
+  3. `services/ai_planning.py`：`create_planning_session` 中 project_id 为 None 时跳过项目权限校验
+  4. `services/project_management.py`：撤回临时添加的 AIPlanningSession 前置检查（FK 已改为 SET NULL，数据库自动处理）
+  5. 新增 Alembic 迁移 `20260425_0019_session_project_fk_set_null.py`：先删旧 FK → 列改 nullable → 重建 FK 为 SET NULL
+- 改动文件：5 个文件（1 模型、1 schema、2 service、1 迁移）
+- 验证：
+  - `uv run alembic upgrade head` 迁移成功
+  - 数据库确认 `confdeltype='n'`（SET NULL），`is_nullable='YES'`
+- 设计说明：项目和会话改为松耦合——删除项目时关联会话的 `project_id` 自动置 NULL，会话保留不丢失
+
 ## 2026-04-25
 
 - 任务：VLM bbox 坐标点击回退 + 交互式 explore_flow + save-and-execute input_values 透传 + 端到端链路测试验证

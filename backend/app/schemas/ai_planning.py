@@ -63,7 +63,7 @@ class AIPlanningPlan(DSLModel):
 class AIPlanningSession(DSLModel):
     id: int = Field(ge=1)
     actor_user_id: int = Field(ge=1)
-    project_id: int = Field(ge=1)
+    project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=200)
     status: AIPlanningSessionStatus
@@ -115,7 +115,7 @@ class AIPlanningSessionDetail(DSLModel):
 
 
 class CreateAIPlanningSessionRequest(DSLModel):
-    project_id: int = Field(ge=1)
+    project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
 
 
