@@ -25,6 +25,7 @@ class AIPlanningRequirements(DSLModel):
     main_assertions: list[str] = Field(default_factory=list)
     test_data_or_account: str | None = Field(default=None, max_length=1000)
     scope_limits: str | None = Field(default=None, max_length=1000)
+    test_context: dict[str, Any] | None = Field(default=None, description="Persistent execution context: last_run_status, failures, root cause, regression scope.")
 
 
 class AIPlanningTodoItem(DSLModel):
@@ -160,6 +161,35 @@ class ExecutionSummaryResult(DSLModel):
     report_url: str
 
 
+class FailureDetail(DSLModel):
+    case_name: str = Field(min_length=1)
+    step_index: int = Field(ge=0)
+    action: str = Field(min_length=1)
+    target: str | None = None
+    error_message: str | None = None
+    suspected_cause: str = Field(min_length=1)
+    cause_probability: Literal["high", "medium", "low"] = "medium"
+
+
+class CaseAnalysisResult(DSLModel):
+    case_id: int = Field(ge=1)
+    case_name: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    passed_steps: int = Field(ge=0)
+    total_steps: int = Field(ge=0)
+    failure_summary: str | None = None
+
+
+class ExecutionAnalysis(DSLModel):
+    conclusion: Literal["all_passed", "partial", "all_failed"] = "all_passed"
+    case_results: list[CaseAnalysisResult] = Field(default_factory=list)
+    failure_details: list[FailureDetail] = Field(default_factory=list)
+    suspected_root_cause: str | None = None
+    impact_scope: str | None = None
+    recommended_action: Literal["targeted_retest", "regression", "manual", "done"] = "done"
+    recommended_scope: str | None = None
+
+
 class AIPlanningTurnResponse(DSLModel):
     assistant_message: str = Field(min_length=1)
     session_status: AIPlanningSessionStatus
@@ -172,4 +202,5 @@ class AIPlanningTurnResponse(DSLModel):
     tool_calls: list[AIPlanningToolCall] = Field(default_factory=list)
     saved_cases: list[SavedCaseResult] = Field(default_factory=list)
     execution_summaries: list[ExecutionSummaryResult] = Field(default_factory=list)
+    execution_analysis: ExecutionAnalysis | None = None
     todo_list: list[AIPlanningTodoItem] = Field(default_factory=list)
