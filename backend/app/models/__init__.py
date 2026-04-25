@@ -11,6 +11,7 @@ from app.models.project_member import ProjectMember
 from app.models.report_preference import ReportPreference
 from app.models.test_case import TestCase
 from app.models.test_case_run import TestCaseRun
+from app.models.test_point_insight import TestPointInsight
 from app.models.user import User
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "LocatorCorrectionEvent",
     "TestCase",
     "TestCaseRun",
+    "TestPointInsight",
     "User",
 ]

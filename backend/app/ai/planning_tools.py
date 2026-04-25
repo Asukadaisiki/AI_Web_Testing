@@ -340,10 +340,19 @@ def _handle_get_failure_analysis(
             else:
                 break
 
-        alternating = False
+        # Flaky detection with confidence scoring (sliding window)
+        flaky_score = 0.0
         if len(statuses) >= 3:
-            switches = sum(1 for i in range(1, len(statuses)) if statuses[i] != statuses[i - 1])
-            alternating = switches >= len(statuses) * 0.6
+            window = statuses[:min(len(statuses), 6)]
+            switches = sum(1 for i in range(1, len(window)) if window[i] != window[i - 1])
+            pass_count_window = sum(1 for s in window if s == "passed")
+            fail_count_window = sum(1 for s in window if s in ("failed", "needs_intervention"))
+            if pass_count_window > 0 and fail_count_window > 0:
+                # Score based on: (switch ratio) * (balance between pass/fail)
+                switch_ratio = switches / max(len(window) - 1, 1)
+                balance = 1.0 - abs(pass_count_window - fail_count_window) / len(window)
+                flaky_score = round(switch_ratio * balance, 2)
+        suspected_flaky = flaky_score >= 0.4
 
         last_error = None
         if failed_runs:
@@ -357,7 +366,8 @@ def _handle_get_failure_analysis(
             "failed_count": len(failed_runs),
             "consecutive_failures": consecutive_failures,
             "last_error_message": last_error,
-            "suspected_flaky": alternating,
+            "suspected_flaky": suspected_flaky,
+            "flaky_score": flaky_score,
         })
 
     return {"failure_patterns": patterns}
@@ -467,6 +477,74 @@ def _handle_get_recommended_retest(
         "regression_scope": scope,
         "passed_case_count": len(passed_case_ids),
         "failed_case_count": len(failed_cases),
+    }
+
+
+def _handle_get_project_insights(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    """Read cross-session insights for a project."""
+    from sqlalchemy import select
+    from app.models import TestPointInsight
+
+    insight = db_session.scalar(
+        select(TestPointInsight).where(TestPointInsight.project_id == project_id)
+    )
+    if insight is None:
+        return {"has_insights": False, "message": "该项目暂无历史洞察数据。"}
+
+    return {
+        "has_insights": True,
+        "flaky_case_ids": insight.flaky_case_ids or [],
+        "failure_patterns": insight.failure_patterns or {},
+        "regression_risk": insight.regression_risk,
+        "last_analysis_summary": insight.last_analysis_summary,
+        "updated_at": str(insight.updated_at) if insight.updated_at else None,
+    }
+
+
+def _handle_update_insights(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    """Persist cross-session insights for a project after analysis."""
+    from sqlalchemy import select as sa_select
+    from app.models import TestPointInsight
+
+    flaky_case_ids = params.get("flaky_case_ids")
+    failure_patterns = params.get("failure_patterns")
+    regression_risk = params.get("regression_risk")
+    summary = params.get("summary")
+
+    insight = db_session.scalar(
+        sa_select(TestPointInsight).where(TestPointInsight.project_id == project_id)
+    )
+    if insight is None:
+        insight = TestPointInsight(project_id=project_id)
+        db_session.add(insight)
+        db_session.flush()
+
+    if isinstance(flaky_case_ids, list):
+        insight.flaky_case_ids = flaky_case_ids
+    if isinstance(failure_patterns, dict):
+        existing = insight.failure_patterns or {}
+        insight.failure_patterns = {**existing, **failure_patterns}
+    if isinstance(regression_risk, str):
+        insight.regression_risk = regression_risk
+    if isinstance(summary, str):
+        insight.last_analysis_summary = summary[:2000]
+
+    db_session.flush()
+    return {
+        "status": "updated",
+        "project_id": project_id,
+        "flaky_count": len(insight.flaky_case_ids or []),
+        "regression_risk": insight.regression_risk,
     }
 
 
@@ -696,6 +774,42 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
             "required": [],
         },
     ),
+    "get_project_insights": PlanningTool(
+        name="get_project_insights",
+        description="获取项目跨会话的历史洞察数据，包括已知 flaky 用例、历史失败模式、回归风险等级。新会话开始时调用以获取上下文。",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    "update_insights": PlanningTool(
+        name="update_insights",
+        description="将分析结果持久化为项目级洞察，包括标记 flaky 用例、记录失败模式、更新回归风险。在执行分析完成后调用。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "flaky_case_ids": {
+                    "type": "array",
+                    "description": "被标记为 flaky 的用例 ID 列表",
+                    "items": {"type": "integer"},
+                },
+                "failure_patterns": {
+                    "type": "object",
+                    "description": "检测到的失败模式，如 {locator_stale: {count: 3, cases: [1,2]}}",
+                },
+                "regression_risk": {
+                    "type": "string",
+                    "description": "回归风险等级：low / medium / high / critical",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "本次分析的摘要，用于下次会话快速回顾",
+                },
+            },
+            "required": [],
+        },
+    ),
     "explore_page": PlanningTool(
         name="explore_page",
         description="访问指定 URL 页面，采集页面上所有可交互元素（按钮、输入框、链接等），返回元素的 id、label、placeholder 等定位属性。如果项目已保存浏览器会话状态，会自动复用登录态。",
@@ -763,6 +877,8 @@ _TOOL_HANDLERS: dict[str, Any] = {
     "get_project_test_status": _handle_get_project_test_status,
     "get_failure_analysis": _handle_get_failure_analysis,
     "get_recommended_retest": _handle_get_recommended_retest,
+    "get_project_insights": _handle_get_project_insights,
+    "update_insights": _handle_update_insights,
     "explore_page": _handle_explore_page,
     "capture_page_session": _handle_capture_page_session,
     "explore_flow": _handle_explore_flow,

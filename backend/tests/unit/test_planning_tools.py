@@ -27,9 +27,9 @@ class TestListAvailableTools:
     """Tests for list_available_tools function."""
 
     def test_returns_all_registered_tools(self) -> None:
-        """Should return all 12 registered tools."""
+        """Should return all 14 registered tools."""
         tools = list_available_tools()
-        assert len(tools) == 12
+        assert len(tools) == 14
         tool_names = {t.name for t in tools}
         assert tool_names == {
             "get_project_info",
@@ -44,6 +44,8 @@ class TestListAvailableTools:
             "get_project_test_status",
             "get_failure_analysis",
             "get_recommended_retest",
+            "get_project_insights",
+            "update_insights",
         }
 
 

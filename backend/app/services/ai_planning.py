@@ -483,15 +483,128 @@ def _run_analysis_turn(
     try:
         context_message = _build_analysis_context(execution_summaries, db_session)
         transcript = [{"role": "user", "content": context_message}]
-        return run_planning_turn(
+        response = run_planning_turn(
             transcript=transcript,
             existing_requirements=None,
             db_session=db_session,
             project_id=project_id,
         )
+        # Auto-update insights after analysis
+        _auto_update_insights(db_session, project_id, execution_summaries, response)
+        return response
     except Exception:
         logger.warning("Auto-analysis turn failed", exc_info=True)
         return None
+
+
+def _auto_update_insights(
+    db_session: Session,
+    project_id: int,
+    execution_summaries: list[ExecutionSummaryResult],
+    analysis_response: AIPlanningTurnResponse | None = None,
+) -> None:
+    """Auto-update TestPointInsight after analysis with flaky detection and risk assessment."""
+    try:
+        from sqlalchemy import select as sa_select
+        from app.models import TestPointInsight, TestCase, TestCaseRun as Run
+
+        insight = db_session.scalar(
+            sa_select(TestPointInsight).where(TestPointInsight.project_id == project_id)
+        )
+        if insight is None:
+            insight = TestPointInsight(project_id=project_id)
+            db_session.add(insight)
+            db_session.flush()
+
+        # Detect flaky cases with improved scoring
+        cases = db_session.scalars(
+            sa_select(TestCase).where(TestCase.project_id == project_id)
+        ).all()
+
+        flaky_ids: list[int] = []
+        pattern_data: dict[str, dict] = {}
+        for case in cases:
+            recent_runs = db_session.scalars(
+                sa_select(Run)
+                .where(Run.case_id == case.id)
+                .order_by(Run.started_at.desc())
+                .limit(6)
+            ).all()
+
+            if len(recent_runs) < 3:
+                continue
+
+            statuses = [r.status for r in recent_runs]
+            pass_count = sum(1 for s in statuses if s == "passed")
+            fail_count = sum(1 for s in statuses if s in ("failed", "needs_intervention"))
+
+            if pass_count > 0 and fail_count > 0:
+                switches = sum(1 for i in range(1, len(statuses)) if statuses[i] != statuses[i - 1])
+                switch_ratio = switches / max(len(statuses) - 1, 1)
+                balance = 1.0 - abs(pass_count - fail_count) / len(statuses)
+                score = round(switch_ratio * balance, 2)
+                if score >= 0.4:
+                    flaky_ids.append(case.id)
+
+            # Track failure categories
+            consecutive_failures = 0
+            for s in statuses:
+                if s in ("failed", "needs_intervention"):
+                    consecutive_failures += 1
+                else:
+                    break
+            if consecutive_failures >= 2:
+                error_msg = recent_runs[0].error_message or "unknown"
+                category = _categorize_error(error_msg)
+                if category not in pattern_data:
+                    pattern_data[category] = {"count": 0, "cases": []}
+                pattern_data[category]["count"] += consecutive_failures
+                if case.id not in pattern_data[category]["cases"]:
+                    pattern_data[category]["cases"].append(case.id)
+
+        # Determine regression risk
+        failed_count = sum(1 for s in execution_summaries if s.status != "passed")
+        total_count = len(execution_summaries)
+        if total_count > 0:
+            fail_ratio = failed_count / total_count
+            if fail_ratio >= 0.8:
+                risk = "critical"
+            elif fail_ratio >= 0.5:
+                risk = "high"
+            elif fail_ratio >= 0.3:
+                risk = "medium"
+            else:
+                risk = "low"
+        else:
+            risk = "low"
+
+        insight.flaky_case_ids = flaky_ids
+        if pattern_data:
+            insight.failure_patterns = pattern_data
+        insight.regression_risk = risk
+
+        if analysis_response and analysis_response.execution_analysis:
+            summary = analysis_response.execution_analysis.suspected_root_cause or ""
+            if summary:
+                insight.last_analysis_summary = summary[:2000]
+
+        db_session.flush()
+    except Exception:
+        logger.warning("Auto-update insights failed", exc_info=True)
+
+
+def _categorize_error(error_message: str) -> str:
+    """Categorize an error message into a failure pattern type."""
+    msg = error_message.lower()
+    if "locator" in msg or "not found" in msg or "no element" in msg:
+        return "locator_stale"
+    if "assertion" in msg or "expect" in msg or "mismatch" in msg:
+        return "assertion_mismatch"
+    if "timeout" in msg or "timed out" in msg:
+        return "timeout"
+    if "network" in msg or "connection" in msg or "econnrefused" in msg:
+        return "network_error"
+    return "unknown"
 
 
 def _build_session_context_preamble(
@@ -499,7 +612,7 @@ def _build_session_context_preamble(
     db_session: Session,
     existing_msg_count: int,
 ) -> str | None:
-    """Build an auto-context preamble with current project test status.
+    """Build an auto-context preamble with current project test status and cross-session insights.
 
     Returns None if injection is not needed (first turn or no project).
     """
@@ -538,6 +651,7 @@ def _build_session_context_preamble(
             line += f" | 错误: {err}"
         lines.append(line)
 
+    # Session-level test_context
     requirements = AIPlanningRequirements.model_validate(planning_session.requirements_json or {})
     tc = requirements.test_context
     if tc:
@@ -547,6 +661,29 @@ def _build_session_context_preamble(
             lines.append(f"上次建议动作：{tc['next_action']}")
         if tc.get("regression_scope"):
             lines.append(f"上次回归范围：{tc['regression_scope']}")
+
+    # Cross-session insights from TestPointInsight
+    try:
+        from app.ai.planning_tools import _handle_get_project_insights
+        insights = _handle_get_project_insights(
+            params={}, db_session=db_session, project_id=planning_session.project_id,
+        )
+        if insights.get("has_insights"):
+            lines.append("")
+            lines.append("[历史洞察 - 跨会话积累]")
+            if insights.get("regression_risk"):
+                lines.append(f"回归风险等级：{insights['regression_risk']}")
+            if insights.get("flaky_case_ids"):
+                lines.append(f"已知 Flaky 用例 ID：{', '.join(str(i) for i in insights['flaky_case_ids'])}")
+            if insights.get("last_analysis_summary"):
+                lines.append(f"上次分析摘要：{insights['last_analysis_summary']}")
+            fp = insights.get("failure_patterns", {})
+            if fp:
+                for pattern_name, pattern_info in fp.items():
+                    if isinstance(pattern_info, dict):
+                        lines.append(f"失败模式 {pattern_name}：出现 {pattern_info.get('count', '?')} 次")
+    except Exception:
+        logger.warning("Auto-context injection: failed to load cross-session insights", exc_info=True)
 
     return "\n".join(lines)
 

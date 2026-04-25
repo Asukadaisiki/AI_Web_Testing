@@ -30,6 +30,7 @@ def test_stage1_tables_exist(db_session: Session) -> None:
         "report_preferences",
         "test_cases",
         "test_case_runs",
+        "test_point_insights",
         "users",
     }
 
