@@ -9,6 +9,22 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-25 (Session 4)
+
+- 任务：CasesPage 增加项目级分类，用例按"项目 → 状态"两级过滤
+- 背景：用例界面没有项目维度组织，所有项目用例混在一起。后端 `GET /api/v1/cases?project_id=X` 已支持，`StoredCaseSummary` 已有 `project_id` 字段，但前端 `getCases()` 未传参、CasesPage 未展示项目选择器。
+- 操作：
+  1. `frontend/src/services/api.ts`：`getCases()` 新增可选 `params: { project_id?: number }` 参数，构建 query string
+  2. `frontend/src/pages/CasesPage.tsx`：左侧面板从纯搜索+状态过滤 改为 项目列表 → 搜索 → 状态过滤 三段布局
+     - 项目列表带 CRUD（新建/编辑/删除 Modal，复用 ReportPage 模式）
+     - `useQuery(["cases", activeProjectId])` 按项目过滤请求用例
+     - 未选项目时中间区显示 Empty 提示
+     - 标题栏显示 `{项目名} — 用例`
+  3. 新增设计文档 `docs/superpowers/specs/2026-04-25-cases-page-project-filter-design.md`
+- 改动文件：3 个文件（1 API、1 页面、1 设计文档）
+- 验证：`npm run build` 构建通过（tsc + vite）
+- 后续：后端无需改动。可启动前后端验证项目切换、用例过滤是否正常。
+
 ## 2026-04-25 (Session 3)
 
 - 任务：允许直接删除含测试用例的项目（CASCADE 替代 RESTRICT）

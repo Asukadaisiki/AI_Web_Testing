@@ -109,8 +109,13 @@ export function getCurrentUser() {
   return request<CurrentUser>("/api/v1/auth/me");
 }
 
-export function getCases() {
-  return request<PaginatedCases>("/api/v1/cases");
+export function getCases(params?: { project_id?: number }) {
+  const search = new URLSearchParams();
+  if (params?.project_id != null) {
+    search.set("project_id", String(params.project_id));
+  }
+  const query = search.toString();
+  return request<PaginatedCases>(`/api/v1/cases${query ? `?${query}` : ""}`);
 }
 
 export function getProjects() {
