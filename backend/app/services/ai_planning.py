@@ -771,6 +771,34 @@ def save_and_execute_selected_drafts_streaming(
     )
     session.commit()
 
+    if _should_run_analysis(execution_summaries):
+        yield {"type": "status", "phase": "analyzing", "message": "正在分析执行结果..."}
+        analysis_response = _run_analysis_turn(
+            execution_summaries=execution_summaries,
+            db_session=db_session,
+            project_id=planning_session.project_id or 1,
+        )
+        if analysis_response and analysis_response.execution_analysis:
+            analysis_msg = analysis_response.assistant_message
+            session.add(
+                AIPlanningMessage(
+                    session_id=planning_session.id,
+                    role="assistant",
+                    turn_type="followup",
+                    content=analysis_msg,
+                    structured_payload_json={
+                        "type": "execution_analysis",
+                        "analysis": analysis_response.execution_analysis.model_dump(mode="json"),
+                    },
+                )
+            )
+            session.commit()
+            yield {
+                "type": "analysis_complete",
+                "analysis": analysis_response.execution_analysis.model_dump(mode="json"),
+                "message": analysis_msg,
+            }
+
     yield {"type": "done"}
 
 
