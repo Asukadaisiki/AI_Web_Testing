@@ -9,6 +9,18 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-26 (Session 9 — Bug Fix: 白屏)
+
+- 任务：修复选择特定 AI 会话后页面白屏的问题
+- 背景：用户在前端选择"会话从购物车选择物品然后跳转"会话后，页面一片空白，无法恢复
+- 操作：
+  1. 排查发现 `AITestPlanningPanel.tsx` 第 803-804 行在渲染 todo_list 消息时缺少 `Array.isArray()` 空值检查
+  2. 当 assistant 消息的 `structured_payload` 中没有 `todo_list` 字段时，直接访问 `.length` 抛出运行时错误 `Cannot read properties of undefined (reading 'length')`
+  3. React 无错误边界（ErrorBoundary），组件崩溃导致整页白屏
+  4. 在 `.length` 访问前添加 `Array.isArray(item.structured_payload?.todo_list) &&` 保护
+- 验证：修复后刷新页面可正常显示
+- 后续：建议为 AITestPlanningPanel 添加 React ErrorBoundary，避免单条消息渲染错误导致整页崩溃
+
 ## 2026-04-26 (Session 8 — E2E Manual Test)
 
 - 任务：E2E 手动测试 — 使用 skill 链路测试 Automation Exercise 商品搜索购物车流程

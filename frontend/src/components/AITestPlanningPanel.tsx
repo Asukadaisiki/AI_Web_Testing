@@ -801,6 +801,7 @@ export function AITestPlanningPanel({
                     />
                   </div>
                 ) : item.role === "assistant" &&
+                  Array.isArray(item.structured_payload?.todo_list) &&
                   (item.structured_payload?.todo_list as Array<{ item: string; status: string }>).length > 0 ? (
                   <div>
                     <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{item.content}</div>
