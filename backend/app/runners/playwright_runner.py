@@ -128,6 +128,13 @@ def execute_case_with_playwright(
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     step_results: list[StepExecutionEvidence] = []
+    runtime_context: dict[str, str] = {}
+
+    def _vars() -> dict[str, str]:
+        combined = dict(input_values or {})
+        combined.update(runtime_context)
+        return combined
+
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -148,7 +155,7 @@ def execute_case_with_playwright(
                 try:
                     resolved_by = None
                     if step.action == "goto":
-                        page.goto(_resolve_url(_substitute_variables(step.value, input_values), base_url), wait_until="domcontentloaded")
+                        page.goto(_resolve_url(_substitute_variables(step.value, _vars()), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
                         resolved = resolve_with_fallback(
                             page,
@@ -178,7 +185,7 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        input_value = _substitute_variables(step.value, input_values)
+                        input_value = _substitute_variables(step.value, _vars())
                         if resolved.click_coordinates is not None:
                             page.mouse.click(*resolved.click_coordinates)
                             page.keyboard.type(input_value)
@@ -207,12 +214,25 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, input_values))
+                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, _vars()))
                     elif step.action == "assert_url_contains":
-                        if _substitute_variables(step.value, input_values) not in page.url:
+                        if _substitute_variables(step.value, _vars()) not in page.url:
                             raise RunnerExecutionError(
-                                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, input_values)}"
+                                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, _vars())}"
                             )
+                    elif step.action == "capture_text":
+                        resolved = resolve_with_fallback(
+                            page,
+                            step.target,
+                            target_strategy=step.target_strategy,
+                            correction_store=correction_store,
+                            execution_id=execution_id,
+                            require_visible=False,
+                        )
+                        resolved_by = resolved.strategy
+                        locator_trace = resolved.trace
+                        captured = resolved.locator.inner_text()
+                        runtime_context[step.context_key] = captured.strip()
                     else:
                         raise RunnerExecutionError(f"Unsupported action: {step.action}")
 
@@ -334,6 +354,13 @@ def execute_case_with_playwright_streaming(
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     step_results: list[StepExecutionEvidence] = []
+    runtime_context: dict[str, str] = {}
+
+    def _vars() -> dict[str, str]:
+        combined = dict(input_values or {})
+        combined.update(runtime_context)
+        return combined
+
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -365,7 +392,7 @@ def execute_case_with_playwright_streaming(
                 try:
                     resolved_by = None
                     if step.action == "goto":
-                        page.goto(_resolve_url(step.value, base_url), wait_until="domcontentloaded")
+                        page.goto(_resolve_url(_substitute_variables(step.value, _vars()), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
                         resolved = resolve_with_fallback(
                             page, step.target,
@@ -390,7 +417,7 @@ def execute_case_with_playwright_streaming(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        input_value = _substitute_variables(step.value, input_values)
+                        input_value = _substitute_variables(step.value, _vars())
                         if resolved.click_coordinates is not None:
                             page.mouse.click(*resolved.click_coordinates)
                             page.keyboard.type(input_value)
@@ -417,12 +444,24 @@ def execute_case_with_playwright_streaming(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, input_values))
+                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, _vars()))
                     elif step.action == "assert_url_contains":
-                        if _substitute_variables(step.value, input_values) not in page.url:
+                        if _substitute_variables(step.value, _vars()) not in page.url:
                             raise RunnerExecutionError(
-                                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, input_values)}"
+                                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, _vars())}"
                             )
+                    elif step.action == "capture_text":
+                        resolved = resolve_with_fallback(
+                            page, step.target,
+                            target_strategy=step.target_strategy,
+                            correction_store=correction_store,
+                            execution_id=execution_id,
+                            require_visible=False,
+                        )
+                        resolved_by = resolved.strategy
+                        locator_trace = resolved.trace
+                        captured = resolved.locator.inner_text()
+                        runtime_context[step.context_key] = captured.strip()
                     else:
                         raise RunnerExecutionError(f"Unsupported action: {step.action}")
 

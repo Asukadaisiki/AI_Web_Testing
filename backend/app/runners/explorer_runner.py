@@ -87,6 +87,7 @@ def run_explorer(
     all_steps: list[ExplorerStepEvidence] = []
     failures: list[ExplorerStepEvidence] = []
     page_broken = False  # True after a non-goto failure breaks the page state
+    runtime_context: dict[str, str] = {}
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -132,6 +133,7 @@ def run_explorer(
                         page, step, execution_id, base_url,
                         correction_store=correction_store,
                         input_values=input_values,
+                        runtime_context=runtime_context,
                     )
 
                     evidence = _collect_evidence(
@@ -187,12 +189,17 @@ def run_explorer(
 
 def _execute_step(page, step, execution_id: int, base_url: str | None, *,
                    correction_store: CorrectionStore | None = None,
-                   input_values: dict[str, str] | None = None) -> None:
+                   input_values: dict[str, str] | None = None,
+                   runtime_context: dict[str, str] | None = None) -> None:
     """Execute a single DSL step. Raises on failure."""
     from playwright.sync_api import expect
 
+    ctx = runtime_context or {}
+    combined = dict(input_values or {})
+    combined.update(ctx)
+
     if step.action == "goto":
-        page.goto(_resolve_url(step.value, base_url), wait_until="domcontentloaded")
+        page.goto(_resolve_url(_substitute_variables(step.value, combined), base_url), wait_until="domcontentloaded")
     elif step.action == "click":
         resolved = resolve_with_fallback(
             page, step.target,
@@ -213,7 +220,7 @@ def _execute_step(page, step, execution_id: int, base_url: str | None, *,
             execution_id=execution_id,
             prefer_input=True, require_visible=True, require_enabled=True,
         )
-        input_value = _substitute_variables(step.value, input_values)
+        input_value = _substitute_variables(step.value, combined)
         if resolved.click_coordinates is not None:
             page.mouse.click(*resolved.click_coordinates)
             page.keyboard.type(input_value)
@@ -236,12 +243,22 @@ def _execute_step(page, step, execution_id: int, base_url: str | None, *,
             execution_id=execution_id,
             require_visible=False,
         )
-        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, input_values))
+        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, combined))
     elif step.action == "assert_url_contains":
-        if _substitute_variables(step.value, input_values) not in page.url:
+        if _substitute_variables(step.value, combined) not in page.url:
             raise RunnerExecutionError(
-                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, input_values)}"
+                f"URL assertion failed, expected fragment: {_substitute_variables(step.value, combined)}"
             )
+    elif step.action == "capture_text":
+        resolved = resolve_with_fallback(
+            page, step.target,
+            target_strategy=step.target_strategy,
+            correction_store=correction_store,
+            execution_id=execution_id,
+            require_visible=False,
+        )
+        captured = resolved.locator.inner_text()
+        ctx[step.context_key] = captured.strip()
     else:
         raise RunnerExecutionError(f"Unsupported action: {step.action}")
 

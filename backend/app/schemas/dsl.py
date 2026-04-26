@@ -52,6 +52,18 @@ class AssertUrlContainsStep(DSLModel):
     value: str = Field(min_length=1, description="Expected URL fragment.")
 
 
+class CaptureTextStep(DSLModel):
+    action: Literal["capture_text"]
+    target: str = Field(min_length=1, description="Element to capture text from.")
+    context_key: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="Runtime variable name to store the captured text.",
+    )
+    target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
+
+
 DSLVariableType = Literal["string", "number", "boolean", "object", "array"]
 DSLVariableSource = Literal[
     "latest_url",
@@ -87,7 +99,8 @@ DSLStep = Annotated[
     | InputStep
     | WaitForStep
     | AssertTextStep
-    | AssertUrlContainsStep,
+    | AssertUrlContainsStep
+    | CaptureTextStep,
     Field(discriminator="action"),
 ]
 

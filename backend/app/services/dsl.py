@@ -64,6 +64,7 @@ SUPPORTED_DSL_ACTIONS = [
     "wait_for",
     "assert_text",
     "assert_url_contains",
+    "capture_text",
 ]
 
 

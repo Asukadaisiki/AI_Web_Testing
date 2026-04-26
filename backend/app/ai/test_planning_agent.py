@@ -993,6 +993,7 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
     is_login = _looks_like_login(requirements)
     flow_label = "登录" if is_login else "核心流程"
     scenarios = [
+        # 1. Happy path
         AIPlanningScenario(
             scenario_key="login_success" if is_login else "primary_flow_success",
             title=f"{flow_label}成功",
@@ -1007,6 +1008,7 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
             draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}成功", negative_case=False, page_elements=page_elements),
             page_elements=page_elements,
         ),
+        # 2. Input validation / exception
         AIPlanningScenario(
             scenario_key="login_error" if is_login else "primary_flow_validation",
             title=f"{flow_label}异常处理",
@@ -1016,6 +1018,33 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
             test_data_requirements=_build_test_data_requirements(requirements, is_login=is_login),
             assertions=["错误提示符合预期", *assertions[:1]],
             draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}异常处理", negative_case=True, page_elements=page_elements),
+            page_elements=page_elements,
+        ),
+        # 3. Data consistency / cross-page verification
+        AIPlanningScenario(
+            scenario_key="data_consistency",
+            title="数据一致性验证",
+            goal="验证跨步骤数据传递和状态保持的正确性",
+            preconditions=[
+                requirements.entry_url_or_page or "提供有效入口页面",
+                requirements.test_data_or_account or "准备可用测试数据",
+            ],
+            priority="medium",
+            test_data_requirements=_build_test_data_requirements(requirements, is_login=is_login),
+            assertions=["跨页面数据一致", "状态转换符合预期", *assertions[:2]],
+            draft_prompt=_build_draft_prompt(requirements, scenario_title="数据一致性验证", negative_case=False, page_elements=page_elements),
+            page_elements=page_elements,
+        ),
+        # 4. Boundary / edge case
+        AIPlanningScenario(
+            scenario_key="boundary_conditions",
+            title="边界条件测试",
+            goal="验证系统在边界输入下的健壮性",
+            preconditions=[requirements.entry_url_or_page or "提供有效入口页面"],
+            priority="low",
+            test_data_requirements=_build_test_data_requirements(requirements, is_login=is_login),
+            assertions=["边界输入处理正确", "无异常崩溃"],
+            draft_prompt=_build_draft_prompt(requirements, scenario_title="边界条件测试", negative_case=True, page_elements=page_elements),
             page_elements=page_elements,
         ),
     ]

@@ -86,6 +86,7 @@ def test_validate_dsl_case_success(client) -> None:
             "wait_for",
             "assert_text",
             "assert_url_contains",
+            "capture_text",
         ],
     }
 
@@ -132,11 +133,11 @@ def test_build_generation_messages_only_list_supported_actions() -> None:
             }),
         generation_mode="strict_steps_only",
         prompt_variant="repair_steps",
-        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"],
     )
 
     assert len(messages) == 2
-    assert "Allowed actions: goto, click, input, wait_for, assert_text, assert_url_contains." in messages[0]["content"]
+    assert "Allowed actions: goto, click, input, wait_for, assert_text, assert_url_contains, capture_text." in messages[0]["content"]
     assert "Do not use any other action names." in messages[0]["content"]
     assert "strict_steps_only" in messages[1]["content"]
     assert "当前 DSL：" in messages[1]["content"]
@@ -171,7 +172,7 @@ def test_build_generation_messages_uses_contract_context_without_current_case() 
         ),
         generation_mode="draft",
         prompt_variant="contracts_focus",
-        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"],
     )
 
     assert "当前契约：" in messages[1]["content"]
@@ -191,7 +192,7 @@ def test_build_generation_messages_includes_retry_strategy_context() -> None:
         ),
         generation_mode="draft",
         prompt_variant="baseline_draft",
-        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"],
     )
 
     assert "Retry strategy: bad_contracts." in messages[0]["content"]
@@ -211,7 +212,7 @@ def test_build_generation_messages_includes_governance_focus_reasons() -> None:
         ),
         generation_mode="draft",
         prompt_variant="baseline_draft",
-        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+        supported_actions=["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"],
         governance_focus_reasons=["wrong_actions", "invalid_structure"],
     )
 
@@ -572,6 +573,7 @@ def test_generate_dsl_case_success(client, monkeypatch) -> None:
             "wait_for",
             "assert_text",
             "assert_url_contains",
+            "capture_text",
         ],
         "warnings": ["AI 草案未提供 base_url，已回填请求中的 Base URL。"],
         "normalization_notes": [],

@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.schemas.dsl import (
     AssertTextStep,
     AssertUrlContainsStep,
+    CaptureTextStep,
     ClickStep,
     DSLCase,
     DSLCaseInputContract,
@@ -59,6 +60,10 @@ _ACTION_ALIASES = {
     "assert_url": "assert_url_contains",
     "assert_url_has": "assert_url_contains",
     "assert_path_contains": "assert_url_contains",
+    "extract_text": "capture_text",
+    "get_text": "capture_text",
+    "save_text": "capture_text",
+    "store_text": "capture_text",
 }
 _STEP_MODELS = {
     "goto": GotoStep,
@@ -67,6 +72,7 @@ _STEP_MODELS = {
     "wait_for": WaitForStep,
     "assert_text": AssertTextStep,
     "assert_url_contains": AssertUrlContainsStep,
+    "capture_text": CaptureTextStep,
 }
 _VALUE_TYPE_ALIASES = {
     "str": "string",
@@ -133,6 +139,12 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "Every output_contract item must also include source.",
     "context_key must use stable snake_case and match ^[A-Za-z_][A-Za-z0-9_]*$.",
     "If contract quality is uncertain, return an empty array instead of malformed entries.",
+    "",
+    "## capture_text action",
+    "Use capture_text to extract visible text from a page element and store it as a runtime variable.",
+    "It requires: target (element locator) and context_key (variable name in snake_case).",
+    "Captured variables can be referenced in subsequent steps via ${context_key}, for example to assert cross-page data consistency.",
+    "Example: capture a product price on the detail page, then assert the cart page contains the same price text.",
 ]
 _PROMPT_VARIANT_RULES: dict[DslGenerationPromptVariant, list[str]] = {
     "contracts_focus": [

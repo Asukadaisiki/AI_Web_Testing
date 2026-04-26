@@ -316,7 +316,7 @@ def test_generate_planning_drafts_creates_one_draft_per_selected_scenario(client
                     "output_contract": [],
                     "steps": [{"action": "goto", "value": "/login"}],
                 },
-                "supported_actions": ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+                "supported_actions": ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"],
                 "warnings": [],
                 "normalization_notes": [],
                 "generation_meta": {
@@ -399,7 +399,7 @@ def test_update_planning_draft_status_marks_imported(client, monkeypatch) -> Non
                     "output_contract": [],
                     "steps": [{"action": "goto", "value": "/login"}],
                 },
-                "supported_actions": ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+                "supported_actions": ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"],
                 "warnings": [],
                 "normalization_notes": [],
                 "generation_meta": {
@@ -502,7 +502,7 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
                     "output_contract": [],
                     "steps": [{"action": "goto", "value": "/login"}],
                 },
-                "supported_actions": ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains"],
+                "supported_actions": ["goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"],
                 "warnings": [],
                 "normalization_notes": [],
                 "generation_meta": {
