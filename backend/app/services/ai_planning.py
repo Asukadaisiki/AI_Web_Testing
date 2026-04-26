@@ -1349,7 +1349,7 @@ def save_and_execute_with_explorer_judge_streaming(
     from app.models import ExplorationRun
     from app.runners.explorer_runner import ExplorerStepEvent, run_explorer
     from app.runners.playwright_runner import RunnerCancelledError
-    from app.schemas.explorer_judge import ExplorerStepEvidence
+    from app.schemas.explorer_judge import ExplorerStepEvidence, ExplorationResult
     from app.ai.judge_agent import call_judge_llm
 
     if cancel_event is None:
@@ -1393,6 +1393,8 @@ def save_and_execute_with_explorer_judge_streaming(
         session_obj.commit()
         yield {"type": "done"}
         return
+
+    exploration_results_map: dict[int, ExplorationResult] = {}
 
     for saved in saved_cases:
         if cancel_event.is_set():
@@ -1447,6 +1449,7 @@ def save_and_execute_with_explorer_judge_streaming(
                 }
             except StopIteration as stop:
                 exploration_result = stop.value
+                exploration_results_map[saved.case_id] = exploration_result
                 break
 
         # Persist failure records
@@ -1594,6 +1597,47 @@ def save_and_execute_with_explorer_judge_streaming(
             "verdict": verdict.model_dump(mode="json"),
             "requires_user_action": decision.action == "report_to_user",
         }
+
+    # Persist execution summary message for Explorer-Judge flow
+    if exploration_results_map:
+        execution_summaries_ej: list[ExecutionSummaryResult] = []
+        for saved in saved_cases:
+            result = exploration_results_map.get(saved.case_id)
+            if not result:
+                continue
+            status_val = "passed" if result.failed_steps == 0 else "failed"
+            execution_summaries_ej.append(ExecutionSummaryResult(
+                execution_id=0,
+                case_id=saved.case_id,
+                case_name=saved.case_name,
+                status=status_val,
+                total_steps=result.total_steps,
+                passed_steps=result.passed_steps,
+                failed_steps=result.failed_steps,
+                duration_ms=None,
+                screenshot_url=None,
+                report_url="",
+            ))
+
+        lines_ej = ["Explorer-Judge 执行完成：\n"]
+        for ex in execution_summaries_ej:
+            icon = "✅" if ex.status == "passed" else "❌"
+            lines_ej.append(f"{icon} {ex.case_name} — {ex.status} ({ex.passed_steps}/{ex.total_steps}步)")
+        session_obj.add(
+            AIPlanningMessage(
+                session_id=planning_session.id,
+                role="assistant",
+                turn_type="plan",
+                content="\n".join(lines_ej),
+                structured_payload_json={
+                    "type": "execution_summary",
+                    "saved_cases": [item.model_dump(mode="json") for item in saved_cases],
+                    "execution_summaries": [item.model_dump(mode="json") for item in execution_summaries_ej],
+                },
+            )
+        )
+        planning_session.status = "completed"
+        session_obj.commit()
 
     yield {"type": "done"}
 

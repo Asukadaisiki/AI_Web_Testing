@@ -55,6 +55,17 @@ const STRATEGY_COLOR: Record<LocatorStrategyBucket, string> = {
   not_applicable: "default",
 };
 
+function formatStepTarget(step: StepExecutionEvidence): string {
+  const parts: string[] = [];
+  if (step.target) parts.push(step.target);
+  if (step.value) parts.push(step.value);
+  return parts.join(" → ");
+}
+
+function isVariableRef(text: string): boolean {
+  return /^\$\{.+\}$/.test(text);
+}
+
 function computeStrategyDistribution(steps: StepExecutionEvidence[]) {
   const counts: Record<LocatorStrategyBucket, number> = {
     dom: 0,
@@ -128,14 +139,47 @@ function StepEvidenceBody({
   triggeredBy: number;
 }) {
   const locatorTrace = step.locator_trace;
-  const assertionResult = step.action.startsWith("assert")
-    ? step.status === "passed"
-      ? "断言通过"
-      : "断言失败"
-    : "非断言步骤";
+  const isAssert = step.action.startsWith("assert");
 
   return (
     <div id={`step-${step.step_index + 1}`}>
+      {/* Step summary strip */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <Tag color={step.status === "passed" ? "success" : "error"} style={{ fontWeight: 600 }}>
+          {step.status === "passed" ? "PASS" : "FAIL"}
+        </Tag>
+        <Typography.Text strong>{step.action}</Typography.Text>
+        {step.target && (
+          <>
+            <Typography.Text type="secondary">→</Typography.Text>
+            <Typography.Text>{step.target}</Typography.Text>
+          </>
+        )}
+        {step.value && (
+          <>
+            <Typography.Text type="secondary">
+              {step.action === "input" ? "输入" : step.action === "goto" ? "URL" : "值"}
+            </Typography.Text>
+            {isVariableRef(step.value) ? (
+              <Tag color="blue">{step.value}</Tag>
+            ) : (
+              <Typography.Text code>{step.value}</Typography.Text>
+            )}
+          </>
+        )}
+        {isAssert && (
+          <Tag
+            color={step.status === "passed" ? "#f6ffed" : "#fff2f0"}
+            style={{ color: step.status === "passed" ? "#52c41a" : "#ff4d4f", fontWeight: 600, marginLeft: 4 }}
+          >
+            {step.status === "passed" ? "断言通过 ✓" : "断言失败 ✗"}
+          </Tag>
+        )}
+        <Typography.Text type="secondary" style={{ marginLeft: "auto" }}>
+          {step.duration_ms != null ? `${step.duration_ms} ms` : ""}
+        </Typography.Text>
+      </div>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={11}>
           <Card size="small" title="页面信息" className="evidence-card">
@@ -238,7 +282,15 @@ function StepEvidenceBody({
 
             <Card size="small" title="运行信息" className="evidence-card">
               <Descriptions column={1} size="small" bordered>
-                <Descriptions.Item label="断言结果">{assertionResult}</Descriptions.Item>
+                <Descriptions.Item label="断言结果">
+                  {isAssert ? (
+                    <Tag color={step.status === "passed" ? "success" : "error"}>
+                      {step.status === "passed" ? "通过 ✓" : "失败 ✗"}
+                    </Tag>
+                  ) : (
+                    "非断言步骤"
+                  )}
+                </Descriptions.Item>
                 <Descriptions.Item label="错误信息">{step.error_message || "-"}</Descriptions.Item>
               </Descriptions>
 
@@ -422,10 +474,18 @@ export function ExecutionDetailPage() {
                 setActiveStepIndex(step.step_index);
                 setActiveKeys([String(step.step_index)]);
               }}
+              style={{ fontSize: 11, marginBottom: 2 }}
             >
-              <span style={{ marginRight: 6 }}>{step.status === "passed" ? "PASS" : "FAIL"}</span>
-              <strong>{`步骤 ${step.step_index + 1}`}</strong>
-              <span style={{ marginLeft: 6 }}>{step.action}</span>
+              <span style={{ marginRight: 4, color: step.status === "passed" ? "#52c41a" : "#ff4d4f", fontWeight: 700 }}>
+                {step.status === "passed" ? "PASS" : "FAIL"}
+              </span>
+              <strong>{`${step.step_index + 1}`}</strong>
+              <span style={{ marginLeft: 4, color: "#666" }}>{step.action}</span>
+              {step.target && (
+                <span style={{ marginLeft: 4, color: "#999" }}>
+                  → {step.target.length > 18 ? step.target.slice(0, 18) + "…" : step.target}
+                </span>
+              )}
             </div>
           ))}
         </Space>
@@ -577,31 +637,44 @@ export function ExecutionDetailPage() {
               {steps.length ? (
                 <Space direction="vertical" size="large" style={{ width: "100%" }}>
                   <Timeline
-                    items={steps.map((step) => ({
-                      color: step.status === "passed" ? "green" : "red",
-                      children: `Step ${step.step_index + 1} / ${step.action}`,
-                    }))}
+                    items={steps.map((step) => {
+                      const desc = formatStepTarget(step);
+                      return {
+                        color: step.status === "passed" ? "green" : "red",
+                        children: `步骤 ${step.step_index + 1}: ${step.action}${desc ? " — " + desc : ""}`,
+                      };
+                    })}
                   />
                   <Collapse
                     activeKey={activeKeys}
                     onChange={(keys) => setActiveKeys(Array.isArray(keys) ? keys : [keys])}
-                    items={steps.map((step) => ({
-                      key: String(step.step_index),
-                      label: (
-                        <Space>
-                          <Typography.Text strong>{`Step ${step.step_index + 1} / ${step.action}`}</Typography.Text>
-                          {renderExecutionStatus(step.status)}
-                        </Space>
-                      ),
-                      children: (
-                        <StepEvidenceBody
-                          step={step}
-                          caseId={detail.case_id}
-                          executionId={detail.id}
-                          triggeredBy={detail.triggered_by}
-                        />
-                      ),
-                    }))}
+                    items={steps.map((step) => {
+                      const isAssert = step.action.startsWith("assert");
+                      const desc = formatStepTarget(step);
+                      return {
+                        key: String(step.step_index),
+                        label: (
+                          <Space>
+                            <Typography.Text strong>{`步骤 ${step.step_index + 1}: ${step.action}`}</Typography.Text>
+                            {desc && <Typography.Text type="secondary">{desc}</Typography.Text>}
+                            {isAssert && (
+                              <Tag color={step.status === "passed" ? "success" : "error"}>
+                                {step.status === "passed" ? "✓" : "✗"}
+                              </Tag>
+                            )}
+                            {!isAssert && renderExecutionStatus(step.status)}
+                          </Space>
+                        ),
+                        children: (
+                          <StepEvidenceBody
+                            step={step}
+                            caseId={detail.case_id}
+                            executionId={detail.id}
+                            triggeredBy={detail.triggered_by}
+                          />
+                        ),
+                      };
+                    })}
                   />
                 </Space>
               ) : (
