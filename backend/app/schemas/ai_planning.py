@@ -12,7 +12,7 @@ from app.schemas.dsl import DSLCase, DSLCaseInputContract, DSLCaseOutputContract
 
 AIPlanningSessionStatus = Literal["collecting", "plan_ready", "drafts_ready", "reviewing", "saving", "executing", "completed", "closed", "error"]
 AIPlanningMessageRole = Literal["user", "assistant"]
-AIPlanningMessageTurnType = Literal["user", "followup", "plan", "tool_call", "system_error"]
+AIPlanningMessageTurnType = Literal["user", "followup", "plan", "tool_call", "system_error", "explorer_result", "judge_verdict"]
 AIPlanningDraftStatus = Literal["generated", "imported", "rejected", "failed"]
 AIPlanningNextAction = Literal["ask_followup", "review_plan", "select_scenarios", "drafts_generated"]
 

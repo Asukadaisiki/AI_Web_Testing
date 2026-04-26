@@ -210,3 +210,71 @@ async def stream_save_and_execute(
         if isinstance(item, _TerminalSignal):
             return
         yield _serialize_event(item)
+
+
+def _run_sync_explorer_judge(
+    *,
+    session_factory: sessionmaker,
+    planning_session_id: int,
+    draft_ids: list[int],
+    actor_user_id: int,
+    cancel_event: Event,
+    queue: asyncio.Queue,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Run the Explorer-Judge cycle in a worker thread."""
+    from app.services.ai_planning import save_and_execute_with_explorer_judge_streaming
+
+    try:
+        with session_factory() as session:
+            for event in save_and_execute_with_explorer_judge_streaming(
+                session,
+                planning_session_id,
+                draft_ids,
+                actor_user_id,
+                cancel_event=cancel_event,
+            ):
+                if cancel_event.is_set():
+                    break
+                loop.call_soon_threadsafe(queue.put_nowait, _serialize_event(event))
+    except RunnerCancelledError:
+        loop.call_soon_threadsafe(queue.put_nowait, {"type": "cancelled"})
+    except Exception as exc:
+        logger.exception("Explorer-Judge worker error for planning session %s", planning_session_id)
+        loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
+    finally:
+        loop.call_soon_threadsafe(queue.put_nowait, _TerminalSignal())
+
+
+async def stream_explorer_judge(
+    *,
+    session_factory: sessionmaker,
+    planning_session_id: int,
+    draft_ids: list[int],
+    actor_user_id: int,
+    cancel_event: Event,
+) -> AsyncGenerator[dict, None]:
+    """Bridge the Explorer-Judge cycle to an async generator for WebSocket delivery."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[dict | _TerminalSignal] = asyncio.Queue()
+
+    thread = Thread(
+        target=_run_sync_explorer_judge,
+        kwargs={
+            "session_factory": session_factory,
+            "planning_session_id": planning_session_id,
+            "draft_ids": draft_ids,
+            "actor_user_id": actor_user_id,
+            "cancel_event": cancel_event,
+            "queue": queue,
+            "loop": loop,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    while True:
+        item = await queue.get()
+        if isinstance(item, _TerminalSignal):
+            return
+        yield _serialize_event(item)

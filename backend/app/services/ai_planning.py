@@ -1233,3 +1233,382 @@ def _to_draft_schema(record: AIPlanningDraft) -> AIPlanningDraftSchema:
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Explorer-Judge: Router decision logic
+# ---------------------------------------------------------------------------
+
+
+def router_decide(
+    verdict: "ExplorerJudgeVerdict",
+    auto_fix_already_attempted: bool,
+) -> "RouterDecision":
+    """Deterministic routing based on Judge conclusions."""
+    from app.schemas.explorer_judge import RouterDecision
+
+    # Mandatory stop: product defect confirmed
+    if verdict.is_suspected_product_bug:
+        return RouterDecision(action="report_to_user", reason="产品缺陷已确认，需人工介入")
+
+    # Mandatory stop: human judgment required
+    if verdict.manual_intervention_needed:
+        return RouterDecision(action="report_to_user", reason="需要人工判断业务规则")
+
+    # Auto-fix: test design error, max once
+    has_test_design_error = any(
+        c.classification == "test_design_error" for c in verdict.conclusions
+    )
+    if has_test_design_error and not auto_fix_already_attempted:
+        return RouterDecision(action="auto_fix_dsl", reason="Judge 判定为测试设计错误，尝试自动修复（最多一次）", retry_remaining=1)
+
+    # Environment issue: report and skip
+    has_env_issue = any(
+        c.classification == "environment_dependency" for c in verdict.conclusions
+    )
+    if has_env_issue:
+        return RouterDecision(action="report_to_user", reason="环境或依赖问题，标记跳过")
+
+    # Default: report
+    return RouterDecision(action="report_to_user", reason="分析完成，报告发现")
+
+
+def build_aggregate_verdict(
+    exploration_result: "ExplorationResult",
+    judge_response: dict,
+    case_id: int,
+) -> "ExplorerJudgeVerdict":
+    """Build the aggregate verdict from Judge response + Explorer result."""
+    from app.schemas.explorer_judge import ExplorerJudgeVerdict, JudgeConclusion
+
+    aggregate = judge_response.get("aggregate", {})
+    conclusions_data = judge_response.get("conclusions", [])
+
+    conclusions = []
+    for c in conclusions_data:
+        conclusions.append(JudgeConclusion(
+            step_index=c.get("step_index", 0),
+            classification=c.get("classification", "suspected_flaky"),
+            confidence=c.get("confidence", "low"),
+            root_cause_analysis=c.get("root_cause_analysis", ""),
+            reproduction_path=c.get("reproduction_path", ""),
+            suggested_action=c.get("suggested_action", "manual_intervention"),
+            is_product_bug=c.get("is_product_bug", False),
+            requires_human_judgment=c.get("requires_human_judgment", False),
+            recommended_regression=c.get("recommended_regression", False),
+        ))
+
+    # Determine test_point_status
+    if exploration_result.failed_steps == 0:
+        status = "all_passed"
+    elif any(c.classification == "product_defect" for c in conclusions):
+        status = "has_defects"
+    elif any(c.classification == "environment_dependency" for c in conclusions):
+        status = "environment_blocked"
+    elif any(c.classification == "suspected_flaky" for c in conclusions):
+        status = "has_flaky"
+    else:
+        status = "needs_fix"
+
+    return ExplorerJudgeVerdict(
+        case_id=case_id,
+        test_point_status=status,
+        total_steps=exploration_result.total_steps,
+        passed_steps=exploration_result.passed_steps,
+        failed_steps=exploration_result.failed_steps,
+        first_failed_step=aggregate.get("first_failed_step"),
+        failure_phenomenon=aggregate.get("failure_phenomenon"),
+        verification_actions=aggregate.get("verification_actions", []),
+        possible_causes_ranked=aggregate.get("possible_causes_ranked", []),
+        is_suspected_product_bug=aggregate.get("is_suspected_product_bug", False),
+        regression_recommended=aggregate.get("regression_recommended", False),
+        manual_intervention_needed=aggregate.get("manual_intervention_needed", False),
+        conclusions=conclusions,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Explorer-Judge: streaming execution generator
+# ---------------------------------------------------------------------------
+
+
+def save_and_execute_with_explorer_judge_streaming(
+    session_obj: Session,
+    planning_session_id: int,
+    draft_ids: list[int],
+    actor_user_id: int,
+    *,
+    input_values: dict[str, str] | None = None,
+    cancel_event=None,
+):
+    """Explorer-Judge streaming execution: full-path explore + batch judge.
+
+    Yields progress event dicts for WebSocket streaming.
+    """
+    from threading import Event as ThreadEvent
+    from app.models import ExplorationRun
+    from app.runners.explorer_runner import ExplorerStepEvent, run_explorer
+    from app.runners.playwright_runner import RunnerCancelledError
+    from app.schemas.explorer_judge import ExplorerStepEvidence
+    from app.ai.judge_agent import call_judge_llm
+
+    if cancel_event is None:
+        cancel_event = ThreadEvent()
+
+    planning_session = _get_session(session_obj, planning_session_id, actor_user_id=actor_user_id)
+
+    # Phase 1: Save drafts as cases (reuse existing logic)
+    drafts = (
+        session_obj.query(AIPlanningDraft)
+        .filter(
+            AIPlanningDraft.session_id == planning_session_id,
+            AIPlanningDraft.id.in_(draft_ids),
+        )
+        .all()
+    )
+
+    saved_cases: list[SavedCaseResult] = []
+    for draft in drafts:
+        if cancel_event.is_set():
+            raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
+        if not draft.dsl_case_json:
+            continue
+        case_payload = CaseCreateRequest(
+            project_id=planning_session.project_id,
+            actor_user_id=actor_user_id,
+            **draft.dsl_case_json,
+        )
+        case = create_case(session_obj, case_payload, actor_user_id=actor_user_id)
+        saved_cases.append(SavedCaseResult(case_id=case.id, case_name=case.name))
+        draft.status = "imported"
+        yield {
+            "type": "save_progress",
+            "saved_count": len(saved_cases),
+            "total": len(drafts),
+            "case_name": case.name,
+        }
+
+    if not saved_cases:
+        planning_session.status = "saving"
+        session_obj.commit()
+        yield {"type": "done"}
+        return
+
+    for saved in saved_cases:
+        if cancel_event.is_set():
+            raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
+
+        case_record = session_obj.query(TestCase).get(saved.case_id)
+        if not case_record or not case_record.dsl:
+            continue
+
+        from app.schemas.dsl import DSLCase
+        dsl_case = DSLCase.model_validate(case_record.dsl)
+        base_url = getattr(case_record, "base_url", None) or planning_session.requirements_json and planning_session.requirements_json.get("entry_url_or_page")
+
+        # Create ExplorationRun record
+        exploration_run = ExplorationRun(
+            session_id=planning_session_id,
+            case_id=saved.case_id,
+            role="explorer",
+            status="running",
+        )
+        session_obj.add(exploration_run)
+        session_obj.flush()
+
+        yield {
+            "type": "explorer_start",
+            "case_id": saved.case_id,
+            "case_name": saved.case_name,
+            "exploration_run_id": exploration_run.id,
+            "total_steps": len(dsl_case.steps),
+        }
+
+        # Phase 2: Run Explorer (non-terminating)
+        explorer_stream = run_explorer(
+            case=dsl_case,
+            execution_id=exploration_run.id,
+            base_url=base_url,
+            input_values=input_values,
+            cancel_event=cancel_event,
+        )
+        exploration_result = None
+        while True:
+            try:
+                event = next(explorer_stream)
+                yield {
+                    "type": event.type,
+                    "case_id": saved.case_id,
+                    "step_index": event.step_index,
+                    "action": event.action,
+                    **({"target": event.target} if event.target is not None else {}),
+                    **({"status": event.status} if event.status is not None else {}),
+                    **({"duration_ms": event.duration_ms} if event.duration_ms is not None else {}),
+                }
+            except StopIteration as stop:
+                exploration_result = stop.value
+                break
+
+        # Persist failure records
+        failure_json = [r.model_dump(mode="json") for r in exploration_result.failure_records]
+        exploration_run.failure_records_json = failure_json
+        exploration_run.status = "completed"
+        session_obj.flush()
+
+        yield {
+            "type": "explorer_complete",
+            "case_id": saved.case_id,
+            "exploration_run_id": exploration_run.id,
+            "total_steps": exploration_result.total_steps,
+            "passed_steps": exploration_result.passed_steps,
+            "failed_steps": exploration_result.failed_steps,
+            "cascade_blocked_steps": exploration_result.cascade_blocked_steps,
+        }
+
+        # Phase 3: Judge (only if there are failures)
+        if not exploration_result.failure_records:
+            exploration_run.judge_conclusions_json = []
+            exploration_run.router_decision_json = {"action": "finished", "reason": "全部通过"}
+            session_obj.flush()
+            yield {
+                "type": "verdict_report",
+                "case_id": saved.case_id,
+                "exploration_run_id": exploration_run.id,
+                "verdict": {
+                    "test_point_status": "all_passed",
+                    "total_steps": exploration_result.total_steps,
+                    "passed_steps": exploration_result.passed_steps,
+                    "failed_steps": 0,
+                    "conclusions": [],
+                },
+                "requires_user_action": False,
+            }
+            continue
+
+        yield {
+            "type": "judge_start",
+            "case_id": saved.case_id,
+            "failure_count": len(exploration_result.failure_records),
+        }
+
+        try:
+            dsl_summary = [
+                {"action": s.action, "target": getattr(s, "target", None), "value": getattr(s, "value", None)}
+                for s in dsl_case.steps
+            ]
+            judge_response = call_judge_llm(
+                exploration_result.failure_records,
+                case_name=saved.case_name,
+                dsl_steps_summary=dsl_summary,
+            )
+        except Exception as exc:
+            logger.exception("Judge LLM call failed for exploration_run %d", exploration_run.id)
+            exploration_run.judge_conclusions_json = []
+            exploration_run.router_decision_json = {"action": "report_to_user", "reason": f"Judge 调用失败: {exc}"}
+            session_obj.flush()
+            yield {
+                "type": "judge_complete",
+                "case_id": saved.case_id,
+                "error": str(exc),
+            }
+            yield {
+                "type": "verdict_report",
+                "case_id": saved.case_id,
+                "exploration_run_id": exploration_run.id,
+                "verdict": {
+                    "test_point_status": "needs_fix",
+                    "error": f"Judge analysis failed: {exc}",
+                    "failed_steps": len(exploration_result.failure_records),
+                },
+                "requires_user_action": True,
+            }
+            continue
+
+        exploration_run.judge_conclusions_json = judge_response
+        session_obj.flush()
+
+        yield {
+            "type": "judge_complete",
+            "case_id": saved.case_id,
+            "conclusions": judge_response.get("conclusions", []),
+            "aggregate": judge_response.get("aggregate", {}),
+        }
+
+        # Phase 4: Router decision
+        verdict = build_aggregate_verdict(exploration_result, judge_response, saved.case_id)
+        verdict.exploration_run_id = exploration_run.id
+        decision = router_decide(verdict, exploration_run.auto_fix_attempted)
+
+        exploration_run.router_decision_json = decision.model_dump(mode="json")
+        session_obj.flush()
+
+        # Phase 5: Auto-fix (max once)
+        if decision.action == "auto_fix_dsl" and not exploration_run.auto_fix_attempted:
+            yield {
+                "type": "auto_fix_attempt",
+                "case_id": saved.case_id,
+                "reason": decision.reason,
+            }
+            exploration_run.auto_fix_attempted = True
+            session_obj.flush()
+
+            # Attempt DSL regeneration
+            try:
+                test_design_errors = [
+                    c for c in verdict.conclusions if c.classification == "test_design_error"
+                ]
+                repair_prompt = _build_repair_prompt(case_record, test_design_errors)
+                from app.schemas.dsl import GenerateDslRequest
+                fix_result = generate_dsl_case(
+                    session_obj,
+                    GenerateDslRequest(
+                        prompt=repair_prompt,
+                        base_url=base_url,
+                        actor_user_id=actor_user_id,
+                        case_id=saved.case_id,
+                        generation_mode="strict_steps_only",
+                        import_mode="steps_only",
+                    ),
+                )
+                yield {
+                    "type": "auto_fix_result",
+                    "case_id": saved.case_id,
+                    "success": True,
+                    "generation_id": fix_result.generation_id,
+                }
+                # TODO: Re-run Explorer with fixed DSL (next iteration)
+            except Exception as exc:
+                logger.exception("Auto-fix DSL regeneration failed for case %d", saved.case_id)
+                yield {
+                    "type": "auto_fix_result",
+                    "case_id": saved.case_id,
+                    "success": False,
+                    "error_message": str(exc),
+                }
+
+        # Phase 6: Report verdict
+        yield {
+            "type": "verdict_report",
+            "case_id": saved.case_id,
+            "exploration_run_id": exploration_run.id,
+            "verdict": verdict.model_dump(mode="json"),
+            "requires_user_action": decision.action == "report_to_user",
+        }
+
+    yield {"type": "done"}
+
+
+def _build_repair_prompt(case_record, test_design_errors: list) -> str:
+    """Build a prompt for DSL regeneration from Judge conclusions."""
+    parts = [
+        f"请修复以下测试用例的 DSL 步骤。用例名称: {case_record.name}\n",
+        "## Judge 分析的失败原因:\n",
+    ]
+    for err in test_design_errors:
+        parts.append(f"- 步骤 {err.step_index}: {err.root_cause_analysis}")
+        parts.append(f"  建议动作: {err.suggested_action}\n")
+
+    parts.append("## 当前 DSL:\n")
+    parts.append(str(case_record.dsl))
+    parts.append("\n\n请基于以上分析，生成修复后的 DSL 步骤。保持测试目标不变，修正失败点。")
+    return "".join(parts)

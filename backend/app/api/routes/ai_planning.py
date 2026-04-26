@@ -39,6 +39,7 @@ from app.services.ai_planning import (
 )
 from app.services.ai_planning_streaming import (
     CancellationManager,
+    stream_explorer_judge,
     stream_planning_chat,
     stream_planning_drafts,
     stream_save_and_execute,
@@ -224,12 +225,15 @@ async def ai_planning_session_ws(
     Accepts JSON messages:
       - ``{"type": "chat", "content": "..."}`` — streaming AI conversation
       - ``{"type": "generate_drafts", "scenario_keys": [...]}`` — streaming draft generation
-      - ``{"type": "execute", "draft_ids": [...]}`` — start streaming execution
+      - ``{"type": "execute", "draft_ids": [...]}`` — start streaming execution (stop at first failure)
+      - ``{"type": "execute_with_judge", "draft_ids": [...]}`` — Explorer-Judge execution (full path + judge)
       - ``{"type": "cancel"}`` — cancel the in-progress execution
 
     Emits events: ``status``, ``text_chunk``, ``tool_call_start``, ``tool_call_end``,
     ``draft_generating``, ``turn_complete``, ``save_progress``, ``case_start``,
-    ``step_start``, ``step_complete``, ``done``, ``cancelled``, ``error``.
+    ``step_start``, ``step_complete``, ``done``, ``cancelled``, ``error``,
+    ``explorer_start``, ``explorer_complete``, ``judge_start``, ``judge_complete``,
+    ``auto_fix_attempt``, ``auto_fix_result``, ``verdict_report``.
     """
     session_factory = get_session_factory()
     with session_factory() as db:
@@ -298,6 +302,22 @@ async def ai_planning_session_ws(
                         await websocket.send_json(event)
                 except Exception as exc:
                     logger.exception("WebSocket streaming error for session %s", session_id)
+                    await websocket.send_json({"type": "error", "message": str(exc)})
+                continue
+
+            if msg_type == "execute_with_judge":
+                draft_ids = data.get("draft_ids", [])
+                try:
+                    async for event in stream_explorer_judge(
+                        session_factory=session_factory,
+                        planning_session_id=session_id,
+                        draft_ids=draft_ids,
+                        actor_user_id=current_user.id,
+                        cancel_event=cancel_event,
+                    ):
+                        await websocket.send_json(event)
+                except Exception as exc:
+                    logger.exception("Explorer-Judge WebSocket error for session %s", session_id)
                     await websocket.send_json({"type": "error", "message": str(exc)})
                 continue
 

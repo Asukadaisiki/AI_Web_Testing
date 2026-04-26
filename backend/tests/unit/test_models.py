@@ -23,6 +23,8 @@ def test_stage1_tables_exist(db_session: Session) -> None:
         "ai_planning_messages",
         "ai_planning_sessions",
         "dsl_generation_runs",
+        "exploration_runs",
+        "failure_records",
         "locator_correction_events",
         "locator_corrections",
         "project_members",

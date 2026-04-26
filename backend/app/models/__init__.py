@@ -4,6 +4,8 @@ from app.models.ai_planning_draft import AIPlanningDraft
 from app.models.ai_planning_message import AIPlanningMessage
 from app.models.ai_planning_session import AIPlanningSession
 from app.models.dsl_generation_run import DslGenerationRun
+from app.models.exploration_run import ExplorationRun
+from app.models.failure_record import FailureRecord
 from app.models.locator_correction import LocatorCorrection
 from app.models.locator_correction_event import LocatorCorrectionEvent
 from app.models.project import Project
@@ -19,6 +21,8 @@ __all__ = [
     "AIPlanningMessage",
     "AIPlanningSession",
     "DslGenerationRun",
+    "ExplorationRun",
+    "FailureRecord",
     "Project",
     "ProjectMember",
     "ReportPreference",

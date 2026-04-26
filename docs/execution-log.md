@@ -9,6 +9,46 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-26 (Session 7)
+
+- 任务：Explorer-Judge 架构 — 从"让测试通过"转向"发现并定性缺陷"
+- 背景：当前 AI Agent 目标是让测试通过，遇到失败立即停止执行（`RunnerExecutionError`）。用户提出范式转变：测试的价值在于发现缺陷，AI 不应死磕一个失败点。用户在 `airole` 文件中给出了新的提示词框架，包含失败分类（5 类）、重试上限、停止条件、结构化输出，以及 Explorer + Judge 双角色拆分建议。
+- 操作：
+
+  **Phase 1 — 模型 & Schema**
+  1. 新增 `ExplorationRun` 模型：记录一个完整的 Explorer-Judge 周期（session_id, case_id, status, failure_records_json, judge_conclusions_json, router_decision_json, auto_fix_attempted）。Alembic 迁移 `20260426_0022`。
+  2. 新增 `FailureRecord` 模型：单个失败点记录（exploration_run_id, step_index, action, error_message, evidence_json, classification, retry_count）。
+  3. 新增 `schemas/explorer_judge.py`：`FailureClassification`（5 类）、`JudgeConclusion`、`ExplorerJudgeVerdict`、`RouterDecision`、`ExplorationResult`、`ExplorerStepEvidence`。
+  4. `schemas/ai_planning.py`：`AIPlanningMessageTurnType` 增加 `explorer_result`, `judge_verdict`。
+
+  **Phase 2 — Explorer Runner**
+  1. 新增 `runners/explorer_runner.py`：非终止执行引擎。核心差异：失败不抛异常，记录后继续执行全部步骤。失败后恢复策略：下一步是 `goto` 则执行恢复页面状态，否则标记 `cascade_blocked`。每个步骤产出 `ExplorerStepEvent`，返回 `ExplorationResult`（含全部 passed/failed/cascade_blocked 统计）。
+
+  **Phase 3 — Judge Agent**
+  1. 新增 `ai/judge_prompts.py`：Judge 专用 system prompt，定义 5 类分类标准、结构化 JSON 输出格式、规则。`build_judge_user_prompt()` 格式化失败记录。
+  2. 新增 `ai/judge_agent.py`：`call_judge_llm()` 单次 LLM 调用（非 ReAct 循环），`parse_judge_response()` 解析 JSON 响应并校验 required keys。
+
+  **Phase 4 — Router 逻辑 & Service 集成**
+  1. `services/ai_planning.py`：新增 `router_decide()` 确定性路由逻辑（product_defect → report, test_design_error → auto_fix_dsl max 1x, environment → report），`build_aggregate_verdict()` 聚合判决构建，`save_and_execute_with_explorer_judge_streaming()` 完整 Explorer-Judge 流式执行生成器（6 阶段：save → explore → judge → decide → auto_fix → report）。
+  2. `services/ai_planning_streaming.py`：新增 `stream_explorer_judge()` 异步桥接函数。
+
+  **Phase 5 — API**
+  1. `api/routes/ai_planning.py`：WebSocket 新增 `execute_with_judge` 消息类型，触发 Explorer-Judge 流程。更新文档注释。
+
+  **Phase 6 — 前端**
+  1. `types/api.ts`：新增 Explorer-Judge 相关类型（`FailureClassification`, `JudgeConclusion`, `ExplorerJudgeVerdict`, 7 个事件接口），扩展 `ExecutionStreamEvent` 联合类型。
+  2. 新增 `VerdictPanel.tsx`：判决报告展示组件（汇总卡片 + 结论折叠面板 + 原因排序 + 用户操作按钮）。
+  3. `AITestPlanningPanel.tsx`：`applyStreamEventToContent` 增加 Explorer/Judge/AutoFix/Verdict 事件处理；WebSocket handler 增加新事件类型分发；消息渲染增加 `verdict_report` 类型渲染 VerdictPanel。
+
+- 改动文件：新建 7 个，修改 8 个（含 1 个迁移、1 个测试更新、1 个前端组件）
+- 新增测试：`tests/unit/test_explorer_judge.py` — 25 个测试（schema 验证 7、router 决策 7、verdict 构建 4、prompt 构建 2、response 解析 4，含 DSL 重试上限、product_bug 优先级等边界场景）
+- 验证：
+  - 后端：374 单元测试全部通过（含新增 25 个）
+  - 前端：`npm run build` 编译成功
+  - 数据库：Alembic 迁移 `20260426_0022` 成功
+  - 向后兼容：现有 `execute` 消息类型不受影响，`execute_with_judge` 为新增路径
+- 后续：当前 Auto-fix 后的 DSL 重试需要二次 Explorer 运行（标记为 TODO）；前端可增加"执行并分析"按钮选择新流程；Judge 结论可接入跨会话 TestPointInsight。
+
 ## 2026-04-26 (Session 6)
 
 - 任务：AI Planning Agent 三阶段进化 — Phase 1 执行分析、Phase 2 智能决策、Phase 3 跨会话持久化

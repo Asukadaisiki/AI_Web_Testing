@@ -974,6 +974,98 @@ export interface ErrorEvent {
   message: string;
 }
 
+// --- Explorer-Judge stream events ---
+
+export type FailureClassification =
+  | "test_design_error"
+  | "automation_implementation"
+  | "product_defect"
+  | "environment_dependency"
+  | "suspected_flaky";
+
+export interface JudgeConclusion {
+  step_index: number;
+  classification: FailureClassification;
+  confidence: "high" | "medium" | "low";
+  root_cause_analysis: string;
+  reproduction_path: string;
+  suggested_action: string;
+  is_product_bug: boolean;
+  requires_human_judgment: boolean;
+  recommended_regression: boolean;
+}
+
+export interface ExplorerJudgeVerdict {
+  exploration_run_id?: number;
+  case_id: number;
+  test_point_status: "all_passed" | "has_defects" | "has_flaky" | "environment_blocked" | "needs_fix";
+  total_steps: number;
+  passed_steps: number;
+  failed_steps: number;
+  first_failed_step?: number;
+  failure_phenomenon?: string;
+  possible_causes_ranked: Array<{ cause: string; probability: string }>;
+  is_suspected_product_bug: boolean;
+  regression_recommended: boolean;
+  manual_intervention_needed: boolean;
+  conclusions: JudgeConclusion[];
+  error_report?: Record<string, unknown>;
+}
+
+export interface ExplorerStartEvent {
+  type: "explorer_start";
+  case_id: number;
+  case_name: string;
+  exploration_run_id: number;
+  total_steps: number;
+}
+
+export interface ExplorerCompleteEvent {
+  type: "explorer_complete";
+  case_id: number;
+  exploration_run_id: number;
+  total_steps: number;
+  passed_steps: number;
+  failed_steps: number;
+  cascade_blocked_steps: number;
+}
+
+export interface JudgeStartEvent {
+  type: "judge_start";
+  case_id: number;
+  failure_count: number;
+}
+
+export interface JudgeCompleteEvent {
+  type: "judge_complete";
+  case_id: number;
+  conclusions: JudgeConclusion[];
+  aggregate: Record<string, unknown>;
+  error?: string;
+}
+
+export interface AutoFixAttemptEvent {
+  type: "auto_fix_attempt";
+  case_id: number;
+  reason: string;
+}
+
+export interface AutoFixResultEvent {
+  type: "auto_fix_result";
+  case_id: number;
+  success: boolean;
+  generation_id?: number;
+  error_message?: string;
+}
+
+export interface VerdictReportEvent {
+  type: "verdict_report";
+  case_id: number;
+  exploration_run_id?: number;
+  verdict: ExplorerJudgeVerdict;
+  requires_user_action: boolean;
+}
+
 export type ExecutionStreamEvent =
   | StatusStreamEvent
   | TextChunkStreamEvent
@@ -986,6 +1078,13 @@ export type ExecutionStreamEvent =
   | StepStartEvent
   | StepCompleteEvent
   | ExecutionSummaryStreamEvent
+  | ExplorerStartEvent
+  | ExplorerCompleteEvent
+  | JudgeStartEvent
+  | JudgeCompleteEvent
+  | AutoFixAttemptEvent
+  | AutoFixResultEvent
+  | VerdictReportEvent
   | CancelledEvent
   | DoneEvent
   | ErrorEvent;
