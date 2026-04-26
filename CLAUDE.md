@@ -80,3 +80,7 @@ frontend/src/
 - **Task logging**: Append to `docs/execution-log.md` after completing tasks, `docs/bug-log.md` for defects. Ask user about GitHub sync after completing requirements.
 - **DSL**: All test cases must be structured DSL. No free-form NL into executor. Validate before execution. Every step produces evidence.
 - **AI**: AI generation cannot bypass DSL validation. AI visual is opt-in (disabled by default). DSL generator outputs governance metadata (warnings, normalization_notes, generation_meta).
+
+## Project Skills
+
+- **e2e-testing-workflow** (`.claude/skills/e2e-testing-workflow.md`): E2E 手动测试完整链路 — 启动系统 → AI 会话规划 → 保存执行 DSL → 分析报告 → 用户反馈迭代。当用户说 "测试平台"、"E2E 测试"、"手动测试" 时自动触发。

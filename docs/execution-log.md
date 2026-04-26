@@ -9,6 +9,30 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-26 (Session 8 — E2E Manual Test)
+
+- 任务：E2E 手动测试 — 使用 skill 链路测试 Automation Exercise 商品搜索购物车流程
+- 背景：使用新建的 `e2e-testing-workflow` skill，验证完整链路：AI 会话 → 方案生成 → DSL 草案 → 保存执行 → 结果分析。测试目标为 `https://automationexercise.com` 的搜索→详情→购物车一致性链路。
+- 操作：
+  1. 启动后端（`uv run backend-dev`）和前端（`npm run dev`），验证 health 端点
+  2. 登录种子用户 `seed-owner@example.com`，创建项目 "Automation Exercise - Shopping Cart" (id=5)
+  3. 创建 AI 规划会话 (id=55)，发送测试需求（test 文件内容）
+  4. AI 提问是否需要登录 → 回复登录凭据 → AI 生成 2 个场景（login_success 高优、login_error 中优）
+  5. 审阅方案：核心链路覆盖完整，缺少搜索无结果等边界场景但先测主流程
+  6. 选择 `login_success` 场景生成 DSL 草案 (id=28)，包含 16 步：goto → 登录 → Products → 搜索 Top → View Product → Add to cart → View Cart → assert_url
+  7. 审阅 DSL：步骤顺序合理，定位器使用文本/placeholder 匹配，input 变量正确引用 `${login_email}/${login_password}`，缺少商品信息一致性断言（DSL 能力限制）
+  8. 保存并执行（提供 input_values），结果：**16/16 步全部通过**
+- 验证：
+  - 执行报告 (Run 72)：16 步全部 passed，总耗时约 25 秒
+  - 定位策略分布：text(7)、placeholder(4)、button_role(1)、text_fuzzy(2)、placeholder_fuzzy(1)、ai_coordinate_click(1)
+  - Step 9 `wait_for "Searched Products"` 使用了 AI 视觉定位（ai_coordinate_click），说明文本定位失败后回退到 VLM
+  - 最终 `assert_url_contains "/view_cart"` 通过，确认到达购物车页面
+- 发现的问题：
+  1. **DSL 断言能力不足**：当前 DSL 不支持跨步骤变量存储和比较（如搜索结果价格 vs 购物车价格），核心业务断言只能依赖视觉检查
+  2. **AI 规划方案缺少边界场景**：只生成了 2 个场景，没有覆盖搜索无结果、商品缺货、价格不一致等异常路径
+  3. **AI 会话交互编码问题**：Windows bash 环境下中文 JSON 直接传 curl 会报 `error parsing body`，需要先写入文件再 `-d @file`
+- 后续：可增加 `assert_text` / `assert_element` 步骤验证购物车中的商品名称和价格；可测试 Explorer-Judge 模式对异常路径的分析能力
+
 ## 2026-04-26 (Session 7)
 
 - 任务：Explorer-Judge 架构 — 从"让测试通过"转向"发现并定性缺陷"
