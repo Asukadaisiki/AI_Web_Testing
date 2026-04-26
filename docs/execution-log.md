@@ -9,6 +9,26 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-27 (Session 10 — 执行报告增强 + Explorer-Judge 总结)
+
+- 任务：增强执行详情页步骤信息展示，修复 Explorer-Judge 流程缺少执行总结的问题
+- 背景：用户发现 E2E 测试 Execution 72 登录步骤账号密码错误（`testqa2024@yopmail.com` 为 AI 编造的无效账号），同时报告页只有截图缺少步骤描述、断言结果和数据来源信息；AI 会话执行后缺少总结和报告跳转链接
+- 操作：
+  1. **ExecutionDetailPage 增强**：
+     - 左侧步骤列表：从 `PASS 步骤 1 action` 改为 `PASS 1 action → target`，含颜色区分和 target 截断
+     - Timeline：从 `Step 1 / action` 改为 `步骤 1: action — target → value`
+     - 折叠面板标签：增加 target/value 描述，断言步骤用 ✓/✗ 彩色 Tag
+     - StepEvidenceBody：新增顶部摘要条（PASS/FAIL 标签 + action + target + value + 断言结果 + 耗时），`${xxx}` 变量用蓝色 Tag 标识数据来源
+  2. **Explorer-Judge 执行总结持久化**：
+     - 循环中收集每个 case 的 `ExplorationResult` 到 `exploration_results_map`
+     - 循环结束后构建 `ExecutionSummaryResult` 列表并持久化为 `AIPlanningMessage(type="execution_summary")`
+     - 前端收到 `done` 后 reload session 自动渲染执行总结和"查看报告"链接
+- 结果：
+  - 后端 391 tests passed（1 个预先存在的 .env 配置测试失败，非本改动引起）
+  - 前端 build 成功
+- 验证：`uv run pytest tests/unit/ -q` + `npm run build`
+- 后续：登录账号问题为测试数据问题（`test` 文件中只写了"有效登录账号"未给实际凭据），非代码 bug，用户决定暂时忽略
+
 ## 2026-04-26 (Session 9 — Bug Fix: 白屏)
 
 - 任务：修复选择特定 AI 会话后页面白屏的问题
