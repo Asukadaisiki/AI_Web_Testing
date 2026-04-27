@@ -7,6 +7,7 @@ export interface SSEClientOptions {
   url: string;
   body: Record<string, unknown>;
   onEvent: (eventType: string, data: unknown) => void;
+  signal?: AbortSignal;
 }
 
 export async function callSSE(opts: SSEClientOptions): Promise<void> {
@@ -14,6 +15,7 @@ export async function callSSE(opts: SSEClientOptions): Promise<void> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(opts.body),
+    signal: opts.signal,
   });
 
   if (!response.ok) {

@@ -196,6 +196,7 @@ export function AITestPlanningPanel({
   const [isGenerating, setIsGenerating] = useState(false);
   const [sessionList, setSessionList] = useState<AIPlanningSessionSummary[]>([]);
   const activeAssistantMessageIdRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
@@ -479,14 +480,20 @@ export function AITestPlanningPanel({
     setInputValue("");
 
     try {
+      const controller = new AbortController();
+      abortRef.current = controller;
       await callSSE({
         url: `/api/v1/ai-planning/sessions/${sessionId}/chat`,
         body: { content: trimmed },
         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+        signal: controller.signal,
       });
     } catch (error) {
-      void messageApi.error((error as Error).message);
+      if ((error as Error).name !== "AbortError") {
+        void messageApi.error((error as Error).message);
+      }
     } finally {
+      abortRef.current = null;
       setIsSending(false);
     }
   }
@@ -506,6 +513,8 @@ export function AITestPlanningPanel({
     setTranscript((current) => [...current, optimisticAssistant]);
 
     try {
+      const controller = new AbortController();
+      abortRef.current = controller;
       await callSSE({
         url: `/api/v1/ai-planning/sessions/${sessionId}/drafts`,
         body: {
@@ -517,10 +526,14 @@ export function AITestPlanningPanel({
           preserve_contracts: true,
         },
         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+        signal: controller.signal,
       });
     } catch (error) {
-      void messageApi.error((error as Error).message);
+      if ((error as Error).name !== "AbortError") {
+        void messageApi.error((error as Error).message);
+      }
     } finally {
+      abortRef.current = null;
       setIsGenerating(false);
     }
   }
@@ -694,6 +707,8 @@ export function AITestPlanningPanel({
                           size="small"
                           danger
                           onClick={() => {
+                            abortRef.current?.abort();
+                            abortRef.current = null;
                             if (sessionId) void cancelExecution(sessionId);
                           }}
                         >
@@ -781,6 +796,19 @@ export function AITestPlanningPanel({
                         <span className="typing-cursor">▊</span>
                       ) : null}
                     </div>
+                    {(item.structured_payload as Record<string, unknown>)?._streaming && (isSending || isGenerating || isExecuting) ? (
+                      <Button
+                        size="small"
+                        danger
+                        onClick={() => {
+                          abortRef.current?.abort();
+                          abortRef.current = null;
+                          if (isExecuting && sessionId) void cancelExecution(sessionId);
+                        }}
+                      >
+                        中止
+                      </Button>
+                    ) : null}
                   </div>
                 ) : (
                   item.content
@@ -973,14 +1001,21 @@ export function AITestPlanningPanel({
                     setTranscript((current) => [...current, progressMessage]);
 
                     try {
+                      const controller = new AbortController();
+                      abortRef.current = controller;
                       await callSSE({
                         url: `/api/v1/ai-planning/sessions/${sessionId}/execute`,
                         body: { draft_ids: draftIds },
                         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+                        signal: controller.signal,
                       });
                     } catch (error) {
-                      void messageApi.error("执行失败: " + (error instanceof Error ? error.message : String(error)));
+                      if ((error as Error).name !== "AbortError") {
+                        void messageApi.error("执行失败: " + (error instanceof Error ? error.message : String(error)));
+                      }
                       setIsExecuting(false);
+                    } finally {
+                      abortRef.current = null;
                     }
                   }}
               >
