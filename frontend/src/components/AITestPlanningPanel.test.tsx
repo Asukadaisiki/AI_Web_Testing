@@ -4,9 +4,9 @@ import { vi } from "vitest";
 
 import { AITestPlanningPanel } from "./AITestPlanningPanel";
 import * as api from "../services/api";
-import * as wsModule from "../services/executionWebSocket";
+import * as sseModule from "../services/sseClient";
 import { renderWithProviders } from "../test/test-utils";
-import type { AISettings, ExecutionStreamEvent } from "../types/api";
+import type { AISettings } from "../types/api";
 
 vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
@@ -23,8 +23,9 @@ vi.mock("../services/api", async () => {
   };
 });
 
-vi.mock("../services/executionWebSocket", () => ({
-  connectExecutionStream: vi.fn(),
+vi.mock("../services/sseClient", () => ({
+  callSSE: vi.fn(),
+  cancelExecution: vi.fn(),
 }));
 
 const aiSettings: AISettings = {
@@ -129,49 +130,84 @@ beforeEach(() => {
 });
 
 test("展示动态进度、工具调用并支持直接生成方案", async () => {
-  vi.mocked(api.sendPlanningMessage).mockResolvedValue({
-    assistant_message: "信息已经足够，我先给出结构化测试方案。",
-    session_status: "plan_ready",
-    requirements: {
-      app_under_test: "商城后台",
-      business_goal: "验证管理员登录",
-      entry_url_or_page: "https://shop.example.com/login",
-      core_user_flow: "输入账号密码并点击登录",
-      main_assertions: ["跳转到 dashboard"],
-      test_data_or_account: null,
-      scope_limits: null,
-    },
-    missing_slots: [],
-    suggested_questions: [],
-    plan: {
-      summary: "商城后台登录测试方案",
-      assumptions: ["入口页面为 /login"],
-      risks: ["未覆盖忘记密码"],
-      scenarios: [
-        {
-          scenario_key: "login_success",
-          title: "登录成功",
-          goal: "验证管理员可以登录后台",
-          preconditions: ["准备管理员账号"],
-          priority: "high",
-          test_data_requirements: [
-            { key: "username", label: "管理员账号", value_type: "string", required: true, source_hint: "seed" },
+  // Mock SSE call to immediately emit turn_complete, triggering session reload
+  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
+    opts.onEvent("turn_complete", { type: "turn_complete" });
+  });
+
+  // getPlanningSession: called after turn_complete reloads session, return final state with plan
+  vi.mocked(api.getPlanningSession).mockResolvedValueOnce({
+      session: {
+        id: 5,
+        actor_user_id: 1,
+        project_id: 1,
+        case_id: null,
+        title: "当前会话",
+        status: "plan_ready",
+        requirements: {
+          app_under_test: "商城后台",
+          business_goal: "验证管理员登录",
+          entry_url_or_page: "https://shop.example.com/login",
+          core_user_flow: "输入账号密码并点击登录",
+          main_assertions: ["跳转到 dashboard"],
+          test_data_or_account: null,
+          scope_limits: null,
+        },
+        plan: {
+          summary: "商城后台登录测试方案",
+          assumptions: ["入口页面为 /login"],
+          risks: ["未覆盖忘记密码"],
+          scenarios: [
+            {
+              scenario_key: "login_success",
+              title: "登录成功",
+              goal: "验证管理员可以登录后台",
+              preconditions: ["准备管理员账号"],
+              priority: "high",
+              test_data_requirements: [
+                { key: "username", label: "管理员账号", value_type: "string", required: true, source_hint: "seed" },
+              ],
+              assertions: ["跳转到 dashboard"],
+              draft_prompt: "为登录成功场景生成 DSL",
+            },
           ],
-          assertions: ["跳转到 dashboard"],
-          draft_prompt: "为登录成功场景生成 DSL",
+        },
+        missing_slots: [],
+        last_error_message: null,
+        created_at: "2026-04-12T10:00:00",
+        updated_at: "2026-04-12T10:05:00",
+      },
+      messages: [
+        {
+          id: 1,
+          session_id: 5,
+          role: "user",
+          turn_type: "user",
+          content: "请先整理后台登录测试方案",
+          structured_payload: null,
+          created_at: "2026-04-12T10:01:00",
+        },
+        {
+          id: 2,
+          session_id: 5,
+          role: "assistant",
+          turn_type: "tool_call",
+          content: "调用工具：list_test_cases",
+          structured_payload: { type: "tool_call", tool: "list_test_cases", params: { search: "登录" }, result: { cases: [{ id: 1, name: "后台登录成功" }] } },
+          created_at: "2026-04-12T10:01:01",
+        },
+        {
+          id: 3,
+          session_id: 5,
+          role: "assistant",
+          turn_type: "plan",
+          content: "信息已经足够，我先给出结构化测试方案。",
+          structured_payload: null,
+          created_at: "2026-04-12T10:01:02",
         },
       ],
-    },
-    drafts: [],
-    next_action: "select_scenarios",
-    tool_calls: [
-      {
-        tool: "list_test_cases",
-        params: { search: "登录" },
-        result: { cases: [{ id: 1, name: "后台登录成功" }] },
-      },
-    ],
-  });
+      drafts: [],
+    });
 
   renderWithProviders(
     <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
@@ -182,106 +218,177 @@ test("展示动态进度、工具调用并支持直接生成方案", async () =>
 
   await userEvent.type(screen.getByLabelText("测试规划对话输入"), "请先整理后台登录测试方案{enter}");
 
-  expect(await screen.findByText(/list_test_cases/)).toBeInTheDocument();
-  expect(screen.getByText("已收集 5 / 7 项")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByText(/list_test_cases/)).toBeInTheDocument();
+  }, { timeout: 3000 });
+  await waitFor(() => {
+    expect(screen.getByText("已收集 5 / 7 项")).toBeInTheDocument();
+  }, { timeout: 3000 });
   expect(screen.getByText("商城后台登录测试方案")).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: "选择场景 登录成功" })).toBeInTheDocument();
 });
 
 test("可以生成草案并展示审阅操作", async () => {
-  vi.mocked(api.sendPlanningMessage).mockResolvedValue({
-    assistant_message: "信息已经足够，我先给出结构化测试方案。",
-    session_status: "plan_ready",
-    requirements: {
-      app_under_test: "商城后台",
-      business_goal: "验证管理员登录",
-      entry_url_or_page: "https://shop.example.com/login",
-      core_user_flow: "输入账号密码并点击登录",
-      main_assertions: ["跳转到 dashboard"],
-      test_data_or_account: "admin@example.com",
-      scope_limits: "不覆盖忘记密码",
-    },
-    missing_slots: [],
-    suggested_questions: [],
-    plan: {
-      summary: "商城后台登录测试方案",
-      assumptions: ["入口页面为 /login"],
-      risks: ["未覆盖忘记密码"],
-      scenarios: [
-        {
-          scenario_key: "login_success",
-          title: "登录成功",
-          goal: "验证管理员可以登录后台",
-          preconditions: ["准备管理员账号"],
-          priority: "high",
-          test_data_requirements: [],
-          assertions: ["跳转到 dashboard"],
-          draft_prompt: "为登录成功场景生成 DSL",
-        },
-      ],
-    },
-    drafts: [],
-    next_action: "select_scenarios",
-    tool_calls: [],
+  // Mock SSE call for chat to immediately emit turn_complete
+  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
+    opts.onEvent("turn_complete", { type: "turn_complete" });
   });
 
-  vi.mocked(api.generatePlanningDrafts).mockResolvedValue({
-    assistant_message: "已根据所选场景生成 DSL 草案。",
-    session_status: "drafts_ready",
-    requirements: {
-      app_under_test: "商城后台",
-      business_goal: "验证管理员登录",
-      entry_url_or_page: "https://shop.example.com/login",
-      core_user_flow: "输入账号密码并点击登录",
-      main_assertions: ["跳转到 dashboard"],
-      test_data_or_account: "admin@example.com",
-      scope_limits: "不覆盖忘记密码",
-    },
-    missing_slots: [],
-    suggested_questions: [],
-    plan: {
-      summary: "商城后台登录测试方案",
-      assumptions: ["入口页面为 /login"],
-      risks: ["未覆盖忘记密码"],
-      scenarios: [
+  // getPlanningSession: after chat turn_complete returns plan, after drafts turn_complete returns drafts
+  vi.mocked(api.getPlanningSession)
+    .mockResolvedValueOnce({
+      session: {
+        id: 5,
+        actor_user_id: 1,
+        project_id: 1,
+        case_id: null,
+        title: "当前会话",
+        status: "plan_ready",
+        requirements: {
+          app_under_test: "商城后台",
+          business_goal: "验证管理员登录",
+          entry_url_or_page: "https://shop.example.com/login",
+          core_user_flow: "输入账号密码并点击登录",
+          main_assertions: ["跳转到 dashboard"],
+          test_data_or_account: "admin@example.com",
+          scope_limits: "不覆盖忘记密码",
+        },
+        plan: {
+          summary: "商城后台登录测试方案",
+          assumptions: ["入口页面为 /login"],
+          risks: ["未覆盖忘记密码"],
+          scenarios: [
+            {
+              scenario_key: "login_success",
+              title: "登录成功",
+              goal: "验证管理员可以登录后台",
+              preconditions: ["准备管理员账号"],
+              priority: "high",
+              test_data_requirements: [],
+              assertions: ["跳转到 dashboard"],
+              draft_prompt: "为登录成功场景生成 DSL",
+            },
+          ],
+        },
+        missing_slots: [],
+        last_error_message: null,
+        created_at: "2026-04-12T10:00:00",
+        updated_at: "2026-04-12T10:05:00",
+      },
+      messages: [
         {
-          scenario_key: "login_success",
-          title: "登录成功",
-          goal: "验证管理员可以登录后台",
-          preconditions: ["准备管理员账号"],
-          priority: "high",
-          test_data_requirements: [],
-          assertions: ["跳转到 dashboard"],
-          draft_prompt: "为登录成功场景生成 DSL",
+          id: 1,
+          session_id: 5,
+          role: "user",
+          turn_type: "user",
+          content: "请先整理后台登录测试方案",
+          structured_payload: null,
+          created_at: "2026-04-12T10:01:00",
+        },
+        {
+          id: 2,
+          session_id: 5,
+          role: "assistant",
+          turn_type: "plan",
+          content: "信息已经足够，我先给出结构化测试方案。",
+          structured_payload: null,
+          created_at: "2026-04-12T10:01:02",
         },
       ],
-    },
-    drafts: [
-      {
-        id: 11,
-        session_id: 5,
-        scenario_key: "login_success",
-        title: "登录成功",
-        status: "generated",
-        dsl_generation_id: 33,
-        dsl_case: {
-          name: "登录成功",
-          description: "草案",
-          base_url: "https://shop.example.com",
-          input_contract: [],
-          output_contract: [],
-          steps: [{ action: "goto", value: "/login" }],
+      drafts: [],
+    })
+    .mockResolvedValueOnce({
+      session: {
+        id: 5,
+        actor_user_id: 1,
+        project_id: 1,
+        case_id: null,
+        title: "当前会话",
+        status: "drafts_ready",
+        requirements: {
+          app_under_test: "商城后台",
+          business_goal: "验证管理员登录",
+          entry_url_or_page: "https://shop.example.com/login",
+          core_user_flow: "输入账号密码并点击登录",
+          main_assertions: ["跳转到 dashboard"],
+          test_data_or_account: "admin@example.com",
+          scope_limits: "不覆盖忘记密码",
         },
-        warnings: [],
-        normalization_notes: [],
-        error_message: null,
-        created_at: "2026-03-30T10:00:00",
-        updated_at: "2026-03-30T10:00:00",
+        plan: {
+          summary: "商城后台登录测试方案",
+          assumptions: ["入口页面为 /login"],
+          risks: ["未覆盖忘记密码"],
+          scenarios: [
+            {
+              scenario_key: "login_success",
+              title: "登录成功",
+              goal: "验证管理员可以登录后台",
+              preconditions: ["准备管理员账号"],
+              priority: "high",
+              test_data_requirements: [],
+              assertions: ["跳转到 dashboard"],
+              draft_prompt: "为登录成功场景生成 DSL",
+            },
+          ],
+        },
+        missing_slots: [],
+        last_error_message: null,
+        created_at: "2026-04-12T10:00:00",
+        updated_at: "2026-04-12T10:10:00",
       },
-    ],
-    next_action: "drafts_generated",
-    tool_calls: [],
-  });
+      messages: [
+        {
+          id: 1,
+          session_id: 5,
+          role: "user",
+          turn_type: "user",
+          content: "请先整理后台登录测试方案",
+          structured_payload: null,
+          created_at: "2026-04-12T10:01:00",
+        },
+        {
+          id: 2,
+          session_id: 5,
+          role: "assistant",
+          turn_type: "plan",
+          content: "信息已经足够，我先给出结构化测试方案。",
+          structured_payload: null,
+          created_at: "2026-04-12T10:01:02",
+        },
+        {
+          id: 3,
+          session_id: 5,
+          role: "assistant",
+          turn_type: "plan",
+          content: "已根据所选场景生成 DSL 草案。",
+          structured_payload: null,
+          created_at: "2026-04-12T10:05:00",
+        },
+      ],
+      drafts: [
+        {
+          id: 11,
+          session_id: 5,
+          scenario_key: "login_success",
+          title: "登录成功",
+          status: "generated",
+          dsl_generation_id: 33,
+          dsl_case: {
+            name: "登录成功",
+            description: "草案",
+            base_url: "https://shop.example.com",
+            input_contract: [],
+            output_contract: [],
+            steps: [{ action: "goto", value: "/login" }],
+          },
+          warnings: [],
+          normalization_notes: [],
+          error_message: null,
+          created_at: "2026-03-30T10:00:00",
+          updated_at: "2026-03-30T10:00:00",
+        },
+      ],
+    });
 
   vi.mocked(api.updatePlanningDraftStatus).mockResolvedValue({
     id: 11,
@@ -316,11 +423,8 @@ test("可以生成草案并展示审阅操作", async () => {
   await userEvent.click(screen.getByRole("button", { name: "生成选中草案" }));
 
   await waitFor(() => {
-    expect(api.generatePlanningDrafts).toHaveBeenCalledWith(
-      5,
-      expect.objectContaining({
-        scenario_keys: ["login_success"],
-      }),
+    expect(sseModule.callSSE).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/api/v1/ai-planning/sessions/5/drafts" }),
     );
   });
   expect(await screen.findByText("测试用例草案")).toBeInTheDocument();
@@ -479,20 +583,10 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
       },
     ],
   });
-  // Mock WebSocket streaming — immediately emit done after client sends execute
-  let capturedOnEvent: ((event: ExecutionStreamEvent) => void) | null = null;
-  vi.mocked(wsModule.connectExecutionStream).mockImplementation((_sid, onEvent, _onErr) => {
-    capturedOnEvent = onEvent as (event: ExecutionStreamEvent) => void;
-    return {
-      send: (_data: Record<string, unknown>) => {
-        // Simulate backend immediately sending done
-        setTimeout(() => {
-          onEvent({ type: "done" });
-        }, 0);
-      },
-      close: vi.fn(),
-      isOpen: () => true,
-    };
+  // Mock SSE streaming — immediately emit done when callSSE is called
+  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
+    // Simulate backend immediately sending done
+    opts.onEvent("done", { type: "done" });
   });
   vi.mocked(api.getPlanningSession).mockResolvedValue({
     session: {
@@ -578,7 +672,9 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
   await userEvent.click(screen.getByRole("button", { name: "保存并执行" }));
 
   await waitFor(() => {
-    expect(wsModule.connectExecutionStream).toHaveBeenCalledWith(5, expect.any(Function), expect.any(Function));
+    expect(sseModule.callSSE).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/api/v1/ai-planning/sessions/5/execute" }),
+    );
     expect(api.getPlanningSession).toHaveBeenCalledWith(5);
   }, { timeout: 3000 });
 });
@@ -650,14 +746,11 @@ test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", 
     ],
   });
 
-  // Mock WebSocket client
-  const send = vi.fn();
-  const close = vi.fn();
-  let capturedOnEvent: ((event: ExecutionStreamEvent) => void) | null = null;
+  // Mock SSE client
+  let capturedOnEvent: ((eventType: string, data: unknown) => void) | null = null;
 
-  vi.mocked(wsModule.connectExecutionStream).mockImplementation((_sessionId, onEvent, _onError) => {
-    capturedOnEvent = onEvent as (event: ExecutionStreamEvent) => void;
-    return { send, close, isOpen: () => true };
+  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
+    capturedOnEvent = opts.onEvent;
   });
 
   // getPlanningSession: first call (on mount) returns plan + drafts, subsequent calls return completed
@@ -764,16 +857,23 @@ test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", 
   await userEvent.click(screen.getByRole("button", { name: "保存并执行" }));
 
   await waitFor(() => {
-    expect(wsModule.connectExecutionStream).toHaveBeenCalledWith(5, expect.any(Function), expect.any(Function));
+    expect(sseModule.callSSE).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/api/v1/ai-planning/sessions/5/execute" }),
+    );
   });
 
-  // Verify the send was called with execute message
-  expect(send).toHaveBeenCalledWith({ type: "execute", draft_ids: [11] });
+  // Verify callSSE was called with execute body
+  expect(sseModule.callSSE).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: "/api/v1/ai-planning/sessions/5/execute",
+      body: expect.objectContaining({ draft_ids: [11] }),
+    }),
+  );
 
-  // Simulate receiving events
+  // Simulate receiving events via the captured onEvent callback
   act(() => {
-    capturedOnEvent?.({ type: "save_progress", saved_count: 1, total: 1, case_name: "登录成功" });
-    capturedOnEvent?.({ type: "done" });
+    capturedOnEvent?.("message", { type: "save_progress", saved_count: 1, total: 1, case_name: "登录成功" });
+    capturedOnEvent?.("message", { type: "done" });
   });
 
   // After done, should reload session detail

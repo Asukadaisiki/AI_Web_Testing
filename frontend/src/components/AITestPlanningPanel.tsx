@@ -14,7 +14,7 @@ import {
   sendPlanningMessage,
   updatePlanningDraftStatus,
 } from "../services/api";
-import { connectExecutionStream, type ExecutionStreamClient } from "../services/executionWebSocket";
+import { callSSE, cancelExecution } from "../services/sseClient";
 import type {
   AIPlanningDraft,
   AIPlanningMessage,
@@ -195,8 +195,6 @@ export function AITestPlanningPanel({
   const [isExecuting, setIsExecuting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sessionList, setSessionList] = useState<AIPlanningSessionSummary[]>([]);
-  const executionStreamRef = useRef<ExecutionStreamClient | null>(null);
-  const wsClientRef = useRef<ExecutionStreamClient | null>(null);
   const activeAssistantMessageIdRef = useRef<number | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
@@ -306,165 +304,147 @@ export function AITestPlanningPanel({
     };
   }, [projectId, caseId]);
 
-  // Persistent WebSocket connection for this planning session
-  useEffect(() => {
-    if (!sessionId) return;
+  function handleStreamEvent(event: ExecutionStreamEvent) {
+    if (
+      event.type === "status" ||
+      event.type === "text_chunk" ||
+      event.type === "tool_call_start" ||
+      event.type === "tool_call_end"
+    ) {
+      const targetId = activeAssistantMessageIdRef.current;
+      if (targetId == null) return;
 
-    const client = connectExecutionStream(
-      sessionId,
-      (event: ExecutionStreamEvent) => {
-        if (
-          event.type === "status" ||
-          event.type === "text_chunk" ||
-          event.type === "tool_call_start" ||
-          event.type === "tool_call_end"
-        ) {
-          const targetId = activeAssistantMessageIdRef.current;
-          if (targetId == null) return;
-
-          setTranscript((current) =>
-            current.map((msg) => {
-              if (msg.id !== targetId) return msg;
-              const payload = (msg.structured_payload ?? {}) as Record<string, unknown>;
-              if (event.type === "status") {
-                return {
-                  ...msg,
-                  structured_payload: { ...payload, _phase: event.phase, _phaseMessage: event.message, _streaming: true },
-                };
-              }
-              if (event.type === "text_chunk") {
-                return { ...msg, content: msg.content + event.text };
-              }
-              if (event.type === "tool_call_start") {
-                return {
-                  ...msg,
-                  structured_payload: { ...payload, _phase: "tool_calling", _phaseMessage: `正在调用工具: ${event.tool}` },
-                };
-              }
-              if (event.type === "tool_call_end") {
-                return {
-                  ...msg,
-                  structured_payload: { ...payload, _phase: "thinking", _phaseMessage: "正在分析需求..." },
-                };
-              }
-              return msg;
-            }),
-          );
-          return;
-        }
-
-        if (event.type === "draft_generating") {
-          const targetId = activeAssistantMessageIdRef.current;
-          if (targetId == null) return;
-          setTranscript((current) =>
-            current.map((msg) =>
-              msg.id === targetId
-                ? {
-                    ...msg,
-                    structured_payload: {
-                      ...(msg.structured_payload ?? {}),
-                      _phase: "draft_generating",
-                      _phaseMessage: event.message,
-                      _streaming: true,
-                    },
-                  }
-                : msg,
-            ),
-          );
-          return;
-        }
-
-        // Execution events via same WS
-        if (
-          event.type === "save_progress" ||
-          event.type === "case_start" ||
-          event.type === "step_start" ||
-          event.type === "step_complete" ||
-          event.type === "explorer_start" ||
-          event.type === "explorer_complete" ||
-          event.type === "judge_start" ||
-          event.type === "judge_complete" ||
-          event.type === "auto_fix_attempt" ||
-          event.type === "auto_fix_result"
-        ) {
-          const targetId = activeAssistantMessageIdRef.current;
-          if (targetId == null) return;
-          setTranscript((current) =>
-            current.map((msg) =>
-              msg.id === targetId
-                ? {
-                    ...msg,
-                    content: applyStreamEventToContent(msg.content, event),
-                    structured_payload: applyStreamEventToPayload(
-                      msg.structured_payload as Record<string, unknown> | null,
-                      event,
-                    ),
-                  }
-                : msg,
-            ),
-          );
-          return;
-        }
-
-        if (event.type === "verdict_report") {
-          const targetId = activeAssistantMessageIdRef.current;
-          if (targetId == null) return;
-          setTranscript((current) =>
-            current.map((msg) =>
-              msg.id === targetId
-                ? {
-                    ...msg,
-                    content: applyStreamEventToContent(msg.content, event),
-                    structured_payload: {
-                      ...(msg.structured_payload as Record<string, unknown> | null ?? {}),
-                      type: "verdict_report",
-                      verdict: event.verdict,
-                      requires_user_action: event.requires_user_action,
-                    },
-                  }
-                : msg,
-            ),
-          );
-          return;
-        }
-
-        if (event.type === "turn_complete") {
-          // Reload session to get persisted messages
-          void loadSessionDetail(sessionId);
-          void loadSessionList();
-          setIsSending(false);
-          setIsGenerating(false);
-          return;
-        }
-
-        if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
-          void loadSessionDetail(sessionId);
-          void loadSessionList();
-          void queryClient.invalidateQueries({ queryKey: ["cases"] });
-          void queryClient.invalidateQueries({ queryKey: ["executions"] });
-          setIsExecuting(false);
-          if (event.type === "cancelled") {
-            void messageApi.info("执行已取消");
+      setTranscript((current) =>
+        current.map((msg) => {
+          if (msg.id !== targetId) return msg;
+          const payload = (msg.structured_payload ?? {}) as Record<string, unknown>;
+          if (event.type === "status") {
+            return {
+              ...msg,
+              structured_payload: { ...payload, _phase: event.phase, _phaseMessage: event.message, _streaming: true },
+            };
           }
-          if (event.type === "error") {
-            void messageApi.error("执行错误: " + event.message);
+          if (event.type === "text_chunk") {
+            return { ...msg, content: msg.content + event.text };
           }
-        }
-      },
-      (error) => {
-        void messageApi.error(error.message);
-      },
-    );
-    if (!client) return;
-    wsClientRef.current = client;
-    executionStreamRef.current = client;
+          if (event.type === "tool_call_start") {
+            return {
+              ...msg,
+              structured_payload: { ...payload, _phase: "tool_calling", _phaseMessage: `正在调用工具: ${event.tool}` },
+            };
+          }
+          if (event.type === "tool_call_end") {
+            return {
+              ...msg,
+              structured_payload: { ...payload, _phase: "thinking", _phaseMessage: "正在分析需求..." },
+            };
+          }
+          return msg;
+        }),
+      );
+      return;
+    }
 
-    return () => {
-      client?.close();
-      wsClientRef.current = null;
-      executionStreamRef.current = null;
-    };
-  }, [sessionId]);
+    if (event.type === "draft_generating") {
+      const targetId = activeAssistantMessageIdRef.current;
+      if (targetId == null) return;
+      setTranscript((current) =>
+        current.map((msg) =>
+          msg.id === targetId
+            ? {
+                ...msg,
+                structured_payload: {
+                  ...(msg.structured_payload ?? {}),
+                  _phase: "draft_generating",
+                  _phaseMessage: event.message,
+                  _streaming: true,
+                },
+              }
+            : msg,
+        ),
+      );
+      return;
+    }
+
+    if (
+      event.type === "save_progress" ||
+      event.type === "case_start" ||
+      event.type === "step_start" ||
+      event.type === "step_complete" ||
+      event.type === "explorer_start" ||
+      event.type === "explorer_complete" ||
+      event.type === "judge_start" ||
+      event.type === "judge_complete" ||
+      event.type === "auto_fix_attempt" ||
+      event.type === "auto_fix_result"
+    ) {
+      const targetId = activeAssistantMessageIdRef.current;
+      if (targetId == null) return;
+      setTranscript((current) =>
+        current.map((msg) =>
+          msg.id === targetId
+            ? {
+                ...msg,
+                content: applyStreamEventToContent(msg.content, event),
+                structured_payload: applyStreamEventToPayload(
+                  msg.structured_payload as Record<string, unknown> | null,
+                  event,
+                ),
+              }
+            : msg,
+        ),
+      );
+      return;
+    }
+
+    if (event.type === "verdict_report") {
+      const targetId = activeAssistantMessageIdRef.current;
+      if (targetId == null) return;
+      setTranscript((current) =>
+        current.map((msg) =>
+          msg.id === targetId
+            ? {
+                ...msg,
+                content: applyStreamEventToContent(msg.content, event),
+                structured_payload: {
+                  ...(msg.structured_payload as Record<string, unknown> | null ?? {}),
+                  type: "verdict_report",
+                  verdict: event.verdict,
+                  requires_user_action: event.requires_user_action,
+                },
+              }
+            : msg,
+        ),
+      );
+      return;
+    }
+
+    if (event.type === "turn_complete") {
+      if (sessionId) {
+        void loadSessionDetail(sessionId);
+        void loadSessionList();
+      }
+      setIsSending(false);
+      setIsGenerating(false);
+      return;
+    }
+
+    if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
+      if (sessionId) {
+        void loadSessionDetail(sessionId);
+        void loadSessionList();
+        void queryClient.invalidateQueries({ queryKey: ["cases"] });
+        void queryClient.invalidateQueries({ queryKey: ["executions"] });
+      }
+      setIsExecuting(false);
+      if (event.type === "cancelled") {
+        void messageApi.info("执行已取消");
+      }
+      if (event.type === "error") {
+        void messageApi.error("执行错误: " + event.message);
+      }
+    }
+  }
 
   const collectedEntries = useMemo(
     () =>
@@ -498,34 +478,12 @@ export function AITestPlanningPanel({
     setTranscript((current) => [...current, optimisticUser, optimisticAssistant]);
     setInputValue("");
 
-    if (wsClientRef.current?.isOpen()) {
-      wsClientRef.current.send({ type: "chat", content: trimmed });
-      return;
-    }
-
-    // Fallback: REST API
     try {
-      const response = await sendPlanningMessage(sessionId, { content: trimmed });
-      setTranscript((current) =>
-        current
-          .filter((msg) => msg.id !== optimisticAssistant.id)
-          .concat(
-            buildToolMessages(sessionId, response.tool_calls ?? []),
-            createOptimisticMessage(
-              sessionId,
-              "assistant",
-              response.plan ? "plan" : response.session_status === "error" ? "system_error" : "followup",
-              response.assistant_message,
-            ),
-          ),
-      );
-      setRequirements(response.requirements);
-      setMissingSlots(response.missing_slots);
-      setSuggestedQuestions(response.suggested_questions);
-      setPlan(response.plan ?? null);
-      setDrafts(response.drafts);
-      localStorage.setItem("ai_planning_last_session", String(sessionId));
-      await loadSessionList();
+      await callSSE({
+        url: `/api/v1/ai-planning/sessions/${sessionId}/chat`,
+        body: { content: trimmed },
+        onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+      });
     } catch (error) {
       void messageApi.error((error as Error).message);
     } finally {
@@ -539,44 +497,27 @@ export function AITestPlanningPanel({
     }
     setIsGenerating(true);
 
-    if (wsClientRef.current?.isOpen()) {
-      const optimisticAssistant = createOptimisticMessage(sessionId, "assistant", "plan", "", {
-        _phase: "generating",
-        _phaseMessage: "正在生成 DSL...",
-        _streaming: true,
-      });
-      activeAssistantMessageIdRef.current = optimisticAssistant.id;
-      setTranscript((current) => [...current, optimisticAssistant]);
-      wsClientRef.current.send({
-        type: "generate_drafts",
-        scenario_keys: selectedScenarioKeys,
-        current_case: currentCase ?? null,
-        current_steps: currentSteps ?? null,
-        current_input_contract: currentInputContract ?? null,
-        current_output_contract: currentOutputContract ?? null,
-        preserve_contracts: true,
-      });
-      return;
-    }
+    const optimisticAssistant = createOptimisticMessage(sessionId, "assistant", "plan", "", {
+      _phase: "generating",
+      _phaseMessage: "正在生成 DSL...",
+      _streaming: true,
+    });
+    activeAssistantMessageIdRef.current = optimisticAssistant.id;
+    setTranscript((current) => [...current, optimisticAssistant]);
 
-    // Fallback: REST API
     try {
-      const response = await generatePlanningDrafts(sessionId, {
-        scenario_keys: selectedScenarioKeys,
-        current_case: currentCase ?? null,
-        current_steps: currentSteps ?? null,
-        current_input_contract: currentInputContract ?? null,
-        current_output_contract: currentOutputContract ?? null,
-        preserve_contracts: true,
+      await callSSE({
+        url: `/api/v1/ai-planning/sessions/${sessionId}/drafts`,
+        body: {
+          scenario_keys: selectedScenarioKeys,
+          current_case: currentCase ?? null,
+          current_steps: currentSteps ?? null,
+          current_input_contract: currentInputContract ?? null,
+          current_output_contract: currentOutputContract ?? null,
+          preserve_contracts: true,
+        },
+        onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
       });
-      setDrafts(response.drafts);
-      setPlan(response.plan ?? null);
-      setRequirements(response.requirements);
-      setMissingSlots(response.missing_slots);
-      setTranscript((current) => [
-        ...current,
-        createOptimisticMessage(sessionId, "assistant", "plan", response.assistant_message),
-      ]);
     } catch (error) {
       void messageApi.error((error as Error).message);
     } finally {
@@ -753,7 +694,7 @@ export function AITestPlanningPanel({
                           size="small"
                           danger
                           onClick={() => {
-                            executionStreamRef.current?.send({ type: "cancel" });
+                            if (sessionId) void cancelExecution(sessionId);
                           }}
                         >
                           取消执行
@@ -1015,78 +956,33 @@ export function AITestPlanningPanel({
                 loading={isExecuting}
                 disabled={selectedScenarioKeys.length === 0}
                 onClick={async () => {
-                  if (!sessionId || selectedScenarioKeys.length === 0) return;
-                  const draftIds = drafts
-                    .filter((d) => selectedScenarioKeys.includes(d.scenario_key))
-                    .map((d) => d.id);
-                  setIsExecuting(true);
+                    if (!sessionId || selectedScenarioKeys.length === 0) return;
+                    const draftIds = drafts
+                      .filter((d) => selectedScenarioKeys.includes(d.scenario_key))
+                      .map((d) => d.id);
+                    setIsExecuting(true);
 
-                  const progressMessage = createOptimisticMessage(
-                    sessionId,
-                    "assistant",
-                    "followup",
-                    "正在保存并执行已选草案…",
-                    { type: "execution_progress", saved_count: 0, total: 0, cases: [] },
-                  );
-                  activeAssistantMessageIdRef.current = progressMessage.id;
-                  setTranscript((current) => [...current, progressMessage]);
-
-                  if (wsClientRef.current?.isOpen()) {
-                    wsClientRef.current.send({ type: "execute", draft_ids: draftIds });
-                    return;
-                  }
-
-                  // Fallback: create temporary WS connection
-                  try {
-                    const client = connectExecutionStream(
+                    const progressMessage = createOptimisticMessage(
                       sessionId,
-                      async (event: ExecutionStreamEvent) => {
-                        if (event.type === "done") {
-                          await queryClient.invalidateQueries({ queryKey: ["cases"] });
-                          await queryClient.invalidateQueries({ queryKey: ["executions"] });
-                          await loadSessionDetail(sessionId);
-                          await loadSessionList();
-                          return;
-                        }
-                        if (event.type === "cancelled") {
-                          void messageApi.info("执行已取消");
-                          await loadSessionDetail(sessionId);
-                          return;
-                        }
-                        if (event.type === "error") {
-                          void messageApi.error("执行错误: " + event.message);
-                          await loadSessionDetail(sessionId);
-                          return;
-                        }
-                        setTranscript((current) =>
-                          current.map((msg) =>
-                            msg.id === progressMessage.id
-                              ? {
-                                  ...msg,
-                                  content: applyStreamEventToContent(msg.content, event),
-                                  structured_payload: applyStreamEventToPayload(
-                                    msg.structured_payload as Record<string, unknown> | null,
-                                    event,
-                                  ),
-                                }
-                              : msg,
-                          ),
-                        );
-                      },
-                      async (error) => {
-                        void messageApi.error("连接错误: " + error.message);
-                        await loadSessionDetail(sessionId);
-                      },
+                      "assistant",
+                      "followup",
+                      "正在保存并执行已选草案…",
+                      { type: "execution_progress", saved_count: 0, total: 0, cases: [] },
                     );
-                    executionStreamRef.current = client;
-                    client.send({ type: "execute", draft_ids: draftIds });
-                  } catch (err: unknown) {
-                    void messageApi.error("执行失败: " + (err instanceof Error ? err.message : String(err)));
-                  } finally {
-                    setIsExecuting(false);
-                    executionStreamRef.current = null;
-                  }
-                }}
+                    activeAssistantMessageIdRef.current = progressMessage.id;
+                    setTranscript((current) => [...current, progressMessage]);
+
+                    try {
+                      await callSSE({
+                        url: `/api/v1/ai-planning/sessions/${sessionId}/execute`,
+                        body: { draft_ids: draftIds },
+                        onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+                      });
+                    } catch (error) {
+                      void messageApi.error("执行失败: " + (error instanceof Error ? error.message : String(error)));
+                      setIsExecuting(false);
+                    }
+                  }}
               >
                 保存并执行
               </Button>
