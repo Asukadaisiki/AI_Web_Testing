@@ -196,6 +196,31 @@ def get_case_route(
     return stored_case
 
 
+@router.post("/batch", response_model=list[StoredCaseDetail])
+def batch_update_cases_route(
+    payload: BatchUpdateRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> list[StoredCaseDetail]:
+    """Update multiple test cases in a single request."""
+    try:
+        return batch_update_cases(session, payload)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.delete("/batch", status_code=status.HTTP_204_NO_CONTENT)
+def batch_delete_cases_route(
+    payload: BatchDeleteRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> None:
+    """Delete multiple test cases in a single request."""
+    deleted_count = batch_delete_cases(session, payload)
+    if deleted_count == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No cases found to delete.")
+
+
 @router.put("/{case_id}", response_model=StoredCaseDetail)
 def update_case_route(
     case_id: int,
@@ -221,28 +246,3 @@ def delete_case_route(
         delete_case(session, case_id, current_user.id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-
-
-@router.post("/batch", response_model=list[StoredCaseDetail])
-def batch_update_cases_route(
-    payload: BatchUpdateRequest,
-    session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_demo_user),
-) -> list[StoredCaseDetail]:
-    """Update multiple test cases in a single request."""
-    try:
-        return batch_update_cases(session, payload)
-    except EntityNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-
-
-@router.delete("/batch", status_code=status.HTTP_204_NO_CONTENT)
-def batch_delete_cases_route(
-    payload: BatchDeleteRequest,
-    session: Session = Depends(get_db_session),
-    current_user: User = Depends(require_demo_user),
-) -> None:
-    """Delete multiple test cases in a single request."""
-    deleted_count = batch_delete_cases(session, payload)
-    if deleted_count == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No cases found to delete.")
