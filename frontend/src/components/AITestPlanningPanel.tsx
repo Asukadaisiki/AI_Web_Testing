@@ -796,19 +796,6 @@ export function AITestPlanningPanel({
                         <span className="typing-cursor">▊</span>
                       ) : null}
                     </div>
-                    {(item.structured_payload as Record<string, unknown>)?._streaming && (isSending || isGenerating || isExecuting) ? (
-                      <Button
-                        size="small"
-                        danger
-                        onClick={() => {
-                          abortRef.current?.abort();
-                          abortRef.current = null;
-                          if (isExecuting && sessionId) void cancelExecution(sessionId);
-                        }}
-                      >
-                        中止
-                      </Button>
-                    ) : null}
                   </div>
                 ) : (
                   item.content
@@ -864,22 +851,41 @@ export function AITestPlanningPanel({
               placeholder="描述业务目标、入口页面、核心流程、断言和测试数据…"
               style={{ background: "transparent", resize: "none", flex: 1 }}
             />
-            <Button
-              type="primary"
-              shape="circle"
-              icon={<SendOutlined />}
-              onClick={() => void handleSendMessage()}
-              loading={isSending}
-              disabled={isDisabled || isBootstrapping || !sessionId || !inputValue.trim()}
-              style={{
-                background: "#1a1a2e",
-                borderColor: "#1a1a2e",
-                width: 40,
-                height: 40,
-                minWidth: 40,
-                flexShrink: 0,
-              }}
-            />
+            {(isSending || isGenerating || isExecuting) ? (
+              <Button
+                danger
+                shape="circle"
+                onClick={() => {
+                  abortRef.current?.abort();
+                  abortRef.current = null;
+                  if (isExecuting && sessionId) void cancelExecution(sessionId);
+                }}
+                style={{
+                  width: 40,
+                  height: 40,
+                  minWidth: 40,
+                  flexShrink: 0,
+                }}
+              >
+                ■
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                shape="circle"
+                icon={<SendOutlined />}
+                onClick={() => void handleSendMessage()}
+                disabled={isDisabled || isBootstrapping || !sessionId || !inputValue.trim()}
+                style={{
+                  background: "#1a1a2e",
+                  borderColor: "#1a1a2e",
+                  width: 40,
+                  height: 40,
+                  minWidth: 40,
+                  flexShrink: 0,
+                }}
+              />
+            )}
           </div>
         </div>
       </div>
