@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_demo_user_or_raise, require_demo_user
@@ -39,6 +39,7 @@ from app.services.ai_planning import (
 )
 from app.services.ai_planning_streaming import (
     CancellationManager,
+    sse_event,
     stream_explorer_judge,
     stream_planning_chat,
     stream_planning_drafts,
@@ -178,6 +179,15 @@ class RetestRequest(DSLModel):
     input_values: dict[str, str] = Field(default_factory=dict)
 
 
+class ChatSSERequest(DSLModel):
+    content: str
+    scenario_keys: list[str] = Field(default_factory=list)
+
+
+class ExecuteSSERequest(DSLModel):
+    draft_ids: list[int]
+
+
 @router.post("/sessions/{session_id}/retest", response_model=AIPlanningTurnResponse)
 def retest_cases_route(
     session_id: int,
@@ -214,121 +224,141 @@ def save_and_execute_route(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-@router.websocket("/sessions/{session_id}/ws")
-async def ai_planning_session_ws(
-    websocket: WebSocket,
+@router.post("/sessions/{session_id}/chat")
+async def chat_sse(
     session_id: int,
-    user_id: int | None = Query(default=None),
-) -> None:
-    """WebSocket endpoint for streaming AI planning operations.
-
-    Accepts JSON messages:
-      - ``{"type": "chat", "content": "..."}`` — streaming AI conversation
-      - ``{"type": "generate_drafts", "scenario_keys": [...]}`` — streaming draft generation
-      - ``{"type": "execute", "draft_ids": [...]}`` — start streaming execution (stop at first failure)
-      - ``{"type": "execute_with_judge", "draft_ids": [...]}`` — Explorer-Judge execution (full path + judge)
-      - ``{"type": "cancel"}`` — cancel the in-progress execution
-
-    Emits events: ``status``, ``text_chunk``, ``tool_call_start``, ``tool_call_end``,
-    ``draft_generating``, ``turn_complete``, ``save_progress``, ``case_start``,
-    ``step_start``, ``step_complete``, ``done``, ``cancelled``, ``error``,
-    ``explorer_start``, ``explorer_complete``, ``judge_start``, ``judge_complete``,
-    ``auto_fix_attempt``, ``auto_fix_result``, ``verdict_report``.
-    """
+    req: ChatSSERequest,
+    current_user: User = Depends(require_demo_user),
+) -> StreamingResponse:
+    """SSE stream for AI planning chat."""
     session_factory = get_session_factory()
-    with session_factory() as db:
-        try:
-            current_user = get_demo_user_or_raise(db, user_id=user_id)
-        except HTTPException:
-            await websocket.close(code=4001, reason="Unauthorized")
-            return
 
-    await websocket.accept()
+    async def event_generator():
+        try:
+            async for event in stream_planning_chat(
+                session_factory=session_factory,
+                planning_session_id=session_id,
+                content=req.content,
+                actor_user_id=current_user.id,
+            ):
+                yield sse_event(event.get("type", "message"), event)
+        except Exception as exc:
+            logger.exception("SSE chat streaming error for session %s", session_id)
+            yield sse_event("error", {"message": str(exc)})
+        yield sse_event("done", {})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/sessions/{session_id}/drafts")
+async def drafts_sse(
+    session_id: int,
+    req: GenerateAIPlanningDraftsRequest,
+    current_user: User = Depends(require_demo_user),
+) -> StreamingResponse:
+    """SSE stream for draft generation."""
+    session_factory = get_session_factory()
+
+    async def event_generator():
+        try:
+            async for event in stream_planning_drafts(
+                session_factory=session_factory,
+                planning_session_id=session_id,
+                payload=req,
+                actor_user_id=current_user.id,
+            ):
+                yield sse_event(event.get("type", "message"), event)
+        except Exception as exc:
+            logger.exception("SSE draft streaming error for session %s", session_id)
+            yield sse_event("error", {"message": str(exc)})
+        yield sse_event("done", {})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/sessions/{session_id}/execute")
+async def execute_sse(
+    session_id: int,
+    req: ExecuteSSERequest,
+    current_user: User = Depends(require_demo_user),
+) -> StreamingResponse:
+    """SSE stream for save-and-execute."""
+    session_factory = get_session_factory()
     cancel_event = _cancellation_manager.register(session_id)
 
-    try:
-        while True:
-            data = await websocket.receive_json()
-            msg_type = data.get("type")
-
-            if msg_type == "chat":
-                try:
-                    async for event in stream_planning_chat(
-                        session_factory=session_factory,
-                        planning_session_id=session_id,
-                        content=str(data.get("content") or ""),
-                        actor_user_id=current_user.id,
-                    ):
-                        await websocket.send_json(event)
-                except Exception as exc:
-                    logger.exception("WebSocket chat streaming error for session %s", session_id)
-                    await websocket.send_json({"type": "error", "message": str(exc)})
-                continue
-
-            if msg_type == "generate_drafts":
-                payload = GenerateAIPlanningDraftsRequest.model_validate(
-                    {
-                        "scenario_keys": data.get("scenario_keys", []),
-                        "current_case": data.get("current_case"),
-                        "current_steps": data.get("current_steps"),
-                        "current_input_contract": data.get("current_input_contract"),
-                        "current_output_contract": data.get("current_output_contract"),
-                        "preserve_contracts": data.get("preserve_contracts", True),
-                    }
-                )
-                try:
-                    async for event in stream_planning_drafts(
-                        session_factory=session_factory,
-                        planning_session_id=session_id,
-                        payload=payload,
-                        actor_user_id=current_user.id,
-                    ):
-                        await websocket.send_json(event)
-                except Exception as exc:
-                    logger.exception("WebSocket draft streaming error for session %s", session_id)
-                    await websocket.send_json({"type": "error", "message": str(exc)})
-                continue
-
-            if msg_type == "execute":
-                draft_ids = data.get("draft_ids", [])
-                try:
-                    async for event in stream_save_and_execute(
-                        session_factory=session_factory,
-                        planning_session_id=session_id,
-                        draft_ids=draft_ids,
-                        actor_user_id=current_user.id,
-                        cancel_event=cancel_event,
-                    ):
-                        await websocket.send_json(event)
-                except Exception as exc:
-                    logger.exception("WebSocket streaming error for session %s", session_id)
-                    await websocket.send_json({"type": "error", "message": str(exc)})
-                continue
-
-            if msg_type == "execute_with_judge":
-                draft_ids = data.get("draft_ids", [])
-                try:
-                    async for event in stream_explorer_judge(
-                        session_factory=session_factory,
-                        planning_session_id=session_id,
-                        draft_ids=draft_ids,
-                        actor_user_id=current_user.id,
-                        cancel_event=cancel_event,
-                    ):
-                        await websocket.send_json(event)
-                except Exception as exc:
-                    logger.exception("Explorer-Judge WebSocket error for session %s", session_id)
-                    await websocket.send_json({"type": "error", "message": str(exc)})
-                continue
-
-            if msg_type == "cancel":
-                cancel_event.set()
-                await websocket.send_json({"type": "cancelled"})
-                continue
-
-            await websocket.send_json({"type": "error", "message": f"Unsupported message type: {msg_type}"})
-
-    except WebSocketDisconnect:
-        logger.debug("WebSocket disconnected for planning session %s", session_id)
-    finally:
+    async def event_generator():
+        try:
+            async for event in stream_save_and_execute(
+                session_factory=session_factory,
+                planning_session_id=session_id,
+                draft_ids=req.draft_ids,
+                actor_user_id=current_user.id,
+                cancel_event=cancel_event,
+            ):
+                yield sse_event(event.get("type", "message"), event)
+        except Exception as exc:
+            logger.exception("SSE execute streaming error for session %s", session_id)
+            yield sse_event("error", {"message": str(exc)})
+        yield sse_event("done", {})
         _cancellation_manager.clear(session_id)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/sessions/{session_id}/execute-with-judge")
+async def execute_with_judge_sse(
+    session_id: int,
+    req: ExecuteSSERequest,
+    current_user: User = Depends(require_demo_user),
+) -> StreamingResponse:
+    """SSE stream for Explorer-Judge execution."""
+    session_factory = get_session_factory()
+    cancel_event = _cancellation_manager.register(session_id)
+
+    async def event_generator():
+        try:
+            async for event in stream_explorer_judge(
+                session_factory=session_factory,
+                planning_session_id=session_id,
+                draft_ids=req.draft_ids,
+                actor_user_id=current_user.id,
+                cancel_event=cancel_event,
+            ):
+                yield sse_event(event.get("type", "message"), event)
+        except Exception as exc:
+            logger.exception("SSE Explorer-Judge error for session %s", session_id)
+            yield sse_event("error", {"message": str(exc)})
+        yield sse_event("done", {})
+        _cancellation_manager.clear(session_id)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_execution(
+    session_id: int,
+    current_user: User = Depends(require_demo_user),
+) -> dict:
+    """Cancel the in-progress execution for a planning session."""
+    cancel_event = _cancellation_manager.get(session_id)
+    if cancel_event is not None:
+        cancel_event.set()
+        _cancellation_manager.clear(session_id)
+        return {"status": "cancelled"}
+    return {"status": "no_active_execution"}
