@@ -182,6 +182,22 @@ def stream_planning_turn(
                     requirements, tool_calls, db_session, project_id,
                 )
                 if explored:
+                    # Check if exploration actually produced useful data
+                    page_elements = _extract_page_elements(tool_calls)
+                    exploration_error = _extract_exploration_error(tool_calls)
+                    if not page_elements and exploration_error:
+                        yield {"type": "status", "phase": "tool_call", "message": f"页面探索失败：{exploration_error}"}
+                        conversation.append(
+                            {"role": "system", "content": (
+                                f"⚠️ 页面自动探索失败，错误信息：{exploration_error}\n"
+                                "请向用户报告此错误，说明无法采集页面元素，建议用户：\n"
+                                "1. 检查入口 URL 是否正确且可访问\n"
+                                "2. 稍后重试（可能是网络波动）\n"
+                                "3. 提供更多页面信息以辅助规划\n"
+                                "不要在没有页面元素数据的情况下生成测试方案。"
+                            )},
+                        )
+                        continue
                     yield {"type": "status", "phase": "tool_call", "message": "正在自动采集入口页面及导航页面元素..."}
                     conversation.append(
                         {"role": "system", "content": (
@@ -613,6 +629,22 @@ def _extract_page_elements(tool_calls: list[AIPlanningToolCall]) -> str | None:
             if isinstance(formatted, str) and formatted.strip():
                 return formatted
     return None
+
+
+def _extract_exploration_error(tool_calls: list[AIPlanningToolCall]) -> str | None:
+    """Extract error message from failed explore_page or explore_flow calls."""
+    errors = []
+    for call in reversed(tool_calls):
+        if call.tool in ("explore_page", "explore_flow") and isinstance(call.result, dict):
+            error = call.result.get("error")
+            if error:
+                errors.append(str(error))
+            # For explore_flow, check individual page errors
+            pages = call.result.get("pages", [])
+            page_errors = [p.get("error", "") for p in pages if p.get("error")]
+            if page_errors:
+                errors.extend(page_errors)
+    return "; ".join(errors) if errors else None
 
 
 def _has_explored_pages(tool_calls: list[AIPlanningToolCall]) -> bool:
@@ -1123,6 +1155,16 @@ def _build_draft_prompt(
             f"{page_elements}\n"
             "注意：标注了 [dynamic] 的元素是交互触发后才出现的动态元素，步骤顺序必须与用户流程一致。"
         )
+    # Build test data section with full detail
+    test_data = requirements.test_data_or_account
+    data_section = ""
+    if test_data:
+        data_section = (
+            f"\n\n测试数据（必须为提到的每个字段生成对应的 input/click 步骤）：\n{test_data}\n"
+            "注意：上述测试数据中提到的每个字段（如下拉框、日期选择器、复选框）都必须在 steps 中有对应操作。"
+            "下拉框用 input action（target 为字段标签，value 为选项文本），复选框用 click action（target 为复选框标签）。"
+        )
+
     return (
         f"请基于测试规划生成 DSL 草案。场景：{scenario_title}。"
         f"被测系统：{requirements.app_under_test or '待补充'}。"
@@ -1134,5 +1176,7 @@ def _build_draft_prompt(
         f"范围限制：{requirements.scope_limits or '未说明'}。"
         f"{negative_hint}"
         "如果已获取到页面元素清单，请严格按照元素的实际可见文本、label、placeholder 或 id 作为 target（纯文本字符串，如 \"Email Address\"），不要构造 CSS 选择器格式。step 的 value 字段如涉及测试数据，必须用 ${context_key} 格式引用 input_contract 变量，不要硬编码。"
+        "必须为流程和测试数据中提到的每个表单字段生成对应步骤，不得遗漏任何字段（包括下拉框、日期选择器、复选框等）。"
+        f"{data_section}"
         f"{dom_section}"
     )

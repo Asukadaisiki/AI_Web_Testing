@@ -164,7 +164,7 @@ def collect_interactable_elements(
     url: str,
     *,
     storage_state_path: str | None = None,
-    timeout_ms: int = 10000,
+    timeout_ms: int = 30000,
 ) -> list[dict[str, Any]]:
     """Open *url* in a temporary Playwright context and return interactable elements."""
     try:
@@ -214,7 +214,7 @@ def capture_browser_session(
     *,
     storage_dir: Path,
     project_id: int,
-    timeout_ms: int = 10000,
+    timeout_ms: int = 30000,
 ) -> dict[str, Any]:
     """Execute *steps* on *url*, then persist the browser session state."""
     try:
@@ -265,7 +265,7 @@ def collect_multi_page_elements(
     *,
     storage_state_path: str | None = None,
     enable_vlm_annotation: bool = True,
-    timeout_ms: int = 10000,
+    timeout_ms: int = 30000,
 ) -> list[dict[str, Any]]:
     """Open *urls* sequentially in a single Playwright context and collect elements for each page.
 

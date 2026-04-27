@@ -94,11 +94,12 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - `generate_plan` 时请输出完整方案字段：`summary`、`assumptions`、`risks`、`scenarios`。
 - `scenarios` 中每个场景必须包含：`scenario_key`、`title`、`goal`、`preconditions`、`priority`、`test_data_requirements`、`assertions`、`draft_prompt`。
 - 可以先调用工具了解项目已有用例、执行记录，再决定追问或生成。
-- 不要向用户暴露工具报错细节；如果工具失败，可基于已有上下文继续判断。
+- 工具调用失败时必须向用户报告失败细节（如超时、网络错误、API 限频等），并说明对测试方案的影响。如果页面探索失败，应建议用户检查 URL 可达性或稍后重试，不要在没有页面数据的情况下生成测试方案。
 - 在生成测试方案前，如果需求中包含入口 URL，系统会自动采集入口页面的可交互元素。你不需要手动调用 explore_page 采集入口页面。
 - 对于涉及多个页面的测试流程，优先使用 `explore_flow` 工具一次性采集所有页面的元素和布局信息。
 - 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id。
 - `draft_prompt` 中涉及测试数据的 step value，必须使用 ${{context_key}} 格式引用 input_contract 变量。
+- `collected_info` 中的 `core_user_flow` 和 `test_data_or_account` 必须保留用户原始输入中的所有字段细节（如下拉框选项、日期格式、复选框名称），不得简化或省略。这些细节将在 DSL 生成阶段被逐字段转化为步骤。
 - 当已收集到 3 项及以上信息时，你必须在 `todo_list` 中列出当前规划进度清单。
 - 每轮回复都必须更新 `todo_list` 的状态。
 - `todo_list` 仅用于向用户展示进度，不影响你的 action 决策逻辑。

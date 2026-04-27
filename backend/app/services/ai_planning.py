@@ -311,6 +311,29 @@ def generate_planning_drafts(
             drafts.append(_to_draft_schema(existing))
             continue
 
+        # Block draft generation if page exploration failed (no DOM elements)
+        page_elements = scenario.get("page_elements")
+        if not page_elements or not str(page_elements).strip():
+            logger.warning(
+                "Skipping DSL generation for scenario '%s': no page elements collected (exploration likely failed)",
+                scenario_key,
+            )
+            record = AIPlanningDraft(
+                session_id=planning_session.id,
+                scenario_key=scenario_key,
+                title=scenario["title"],
+                status="failed",
+                dsl_generation_id=None,
+                dsl_case_json=None,
+                warnings_json=[],
+                normalization_notes_json=[],
+                error_message="页面元素采集失败（探索超时或 URL 不可达），无法生成 DSL 草案。请检查入口 URL 或稍后重试。",
+            )
+            session.add(record)
+            session.flush()
+            drafts.append(_to_draft_schema(record))
+            continue
+
         try:
             generated = generate_dsl_case(
                 session,
@@ -807,7 +830,7 @@ def save_and_execute_selected_drafts(
     if _should_run_analysis(execution_summaries):
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
-            db_session=db_session,
+            db_session=session,
             project_id=planning_session.project_id or 1,
         )
         if analysis_response and analysis_response.execution_analysis:

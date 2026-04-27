@@ -236,6 +236,7 @@ class InterventionNeededError(RuntimeError):
         dom_snapshot: list[DOMElementSnapshot],
         ai_candidate: AILocateResult | None = None,
         tier1_trace: LocatorTrace | None = None,
+        vlm_failure_reason: str | None = None,
     ) -> None:
         super().__init__(f"All locate tiers failed for target: {target}")
         self.target = target
@@ -243,6 +244,7 @@ class InterventionNeededError(RuntimeError):
         self.dom_snapshot = dom_snapshot
         self.ai_candidate = ai_candidate
         self.tier1_trace = tier1_trace
+        self.vlm_failure_reason = vlm_failure_reason
 
 
 def resolve_with_fallback(
@@ -305,6 +307,7 @@ def resolve_with_fallback(
             return reranked
 
     ai_candidate = _try_ai_visual_locate(page, target=target)
+    vlm_failure_reason = _get_vlm_failure_reason()
     if ai_candidate is not None:
         resolved = _build_locator_from_ai_point(
             page,
@@ -326,6 +329,7 @@ def resolve_with_fallback(
         dom_snapshot=_extract_interactable_elements(page),
         ai_candidate=ai_candidate,
         tier1_trace=tier1_trace,
+        vlm_failure_reason=vlm_failure_reason,
     )
 
 
@@ -403,6 +407,16 @@ def _try_ai_visual_locate(page, *, target: str) -> AILocateResult | None:
         )
     except Exception as exc:
         logger.warning("AI visual fallback failed for target=%s error=%s", target, exc)
+        return None
+
+
+def _get_vlm_failure_reason() -> str | None:
+    """Retrieve the last VLM failure reason from the runtime state."""
+    try:
+        from app.locators.ai_visual import RUNTIME_STATE, _STATE_LOCK
+        with _STATE_LOCK:
+            return RUNTIME_STATE.last_failure_reason or None
+    except Exception:
         return None
 
 

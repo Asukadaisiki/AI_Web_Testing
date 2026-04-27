@@ -37,6 +37,7 @@ class AIVisualRuntimeState:
     window_request_count: int = 0
     consecutive_failures: int = 0
     opened_until: float = 0.0
+    last_failure_reason: str = ""
 
 
 @dataclass
@@ -89,6 +90,18 @@ class AIVisionCandidateBox:
     bbox: tuple[int, int, int, int]
 
 
+VLM_FALLBACK_MODELS = ["glm-4.6v-flash", "glm-4.6v", "glm-4.6v-flashx"]
+
+
+def _is_rate_limited_error(exc: Exception) -> bool:
+    """Check if an exception indicates a rate-limit (429) or server overload."""
+    msg = str(exc).lower()
+    if "429" in msg or "too many requests" in msg or "rate" in msg:
+        return True
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 429
+
+
 def locate_element_by_vision(
     *,
     screenshot_base64: str,
@@ -101,55 +114,87 @@ def locate_element_by_vision(
     settings = get_settings()
     if not settings.enable_ai_visual_locate:
         _record_disabled_skip()
+        with _STATE_LOCK:
+            RUNTIME_STATE.last_failure_reason = "VLM 视觉定位未启用（enable_ai_visual_locate=False）"
         return None
-    if not settings.vlm_api_key or not settings.vlm_model:
+    if not settings.vlm_api_key:
+        with _STATE_LOCK:
+            RUNTIME_STATE.last_failure_reason = "VLM API 凭证未配置（缺少 vlm_api_key）"
         return None
     if not _can_attempt_request(track_stats=True):
+        with _STATE_LOCK:
+            if RUNTIME_STATE.opened_until > monotonic():
+                RUNTIME_STATE.last_failure_reason = (
+                    f"VLM 断路器已打开（连续失败 {RUNTIME_STATE.consecutive_failures} 次），"
+                    f"冷却中（剩余 {round(RUNTIME_STATE.opened_until - monotonic(), 1)} 秒）"
+                )
+            else:
+                RUNTIME_STATE.last_failure_reason = "VLM 请求频率超限"
         return None
 
     family = model_family or settings.vlm_model_family
     _record_attempt()
     _record_locate_request()
     started_at = monotonic()
-    try:
-        if deep_locate:
-            result = _deep_locate(
-                screenshot_base64=screenshot_base64,
-                target_description=target_description,
-                image_width=image_width,
-                image_height=image_height,
-                model_family=family,
-                api_key=settings.vlm_api_key,
-                model=settings.vlm_model,
-                base_url=settings.vlm_base_url,
-                timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
-            )
-        else:
-            result = _single_locate(
-                screenshot_base64=screenshot_base64,
-                target_description=target_description,
-                image_width=image_width,
-                image_height=image_height,
-                model_family=family,
-                api_key=settings.vlm_api_key,
-                model=settings.vlm_model,
-                base_url=settings.vlm_base_url,
-                timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
-            )
-    except Exception as exc:
-        _record_locate_result(success=False, latency_ms=_elapsed_milliseconds(started_at))
-        _record_failure()
-        logger.warning("AI visual locate request failed: %s", exc)
-        return None
 
-    if result is None:
-        _record_locate_result(success=False, latency_ms=_elapsed_milliseconds(started_at))
-        _record_failure()
-        return None
+    models_to_try = list(VLM_FALLBACK_MODELS)
+    failed_models: list[str] = []
 
-    _record_locate_result(success=True, latency_ms=_elapsed_milliseconds(started_at))
-    _record_success()
-    return result
+    for model_name in models_to_try:
+        try:
+            if deep_locate:
+                result = _deep_locate(
+                    screenshot_base64=screenshot_base64,
+                    target_description=target_description,
+                    image_width=image_width,
+                    image_height=image_height,
+                    model_family=family,
+                    api_key=settings.vlm_api_key,
+                    model=model_name,
+                    base_url=settings.vlm_base_url,
+                    timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
+                )
+            else:
+                result = _single_locate(
+                    screenshot_base64=screenshot_base64,
+                    target_description=target_description,
+                    image_width=image_width,
+                    image_height=image_height,
+                    model_family=family,
+                    api_key=settings.vlm_api_key,
+                    model=model_name,
+                    base_url=settings.vlm_base_url,
+                    timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
+                )
+        except Exception as exc:
+            if _is_rate_limited_error(exc):
+                failed_models.append(f"{model_name}: 429 限频")
+                logger.warning("VLM model %s rate limited, trying next fallback", model_name)
+                continue
+            _record_locate_result(success=False, latency_ms=_elapsed_milliseconds(started_at))
+            _record_failure()
+            reason = f"VLM API 调用失败（{model_name}）: {type(exc).__name__}: {exc}"
+            with _STATE_LOCK:
+                RUNTIME_STATE.last_failure_reason = reason
+            return None
+
+        if result is None:
+            failed_models.append(f"{model_name}: 未定位到目标")
+            logger.warning("VLM model %s returned None, trying next fallback", model_name)
+            continue
+
+        _record_locate_result(success=True, latency_ms=_elapsed_milliseconds(started_at))
+        _record_success()
+        return result
+
+    # All models failed
+    _record_locate_result(success=False, latency_ms=_elapsed_milliseconds(started_at))
+    _record_failure()
+    reason = f"所有 VLM 模型均失败：{'; '.join(failed_models)}"
+    with _STATE_LOCK:
+        RUNTIME_STATE.last_failure_reason = reason
+    logger.warning("All VLM fallback models failed: %s", reason)
+    return None
 
 
 def rank_candidates_by_vision(

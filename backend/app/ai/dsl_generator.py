@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,9 @@ from app.schemas.dsl import (
     InputStep,
     WaitForStep,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class DslGenerationError(RuntimeError):
@@ -145,6 +149,25 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "It requires: target (element locator) and context_key (variable name in snake_case).",
     "Captured variables can be referenced in subsequent steps via ${context_key}, for example to assert cross-page data consistency.",
     "Example: capture a product price on the detail page, then assert the cart page contains the same price text.",
+    "",
+    "## form field coverage",
+    "IMPORTANT: You MUST generate a step for EVERY form field mentioned in the prompt.",
+    "If the prompt mentions filling, selecting, or checking a field, there must be a corresponding step.",
+    "For <select> / dropdown fields: use action \"input\" with target being the field label and value being the option text.",
+    "Example: {\"action\": \"input\", \"target\": \"Country\", \"value\": \"India\"}.",
+    "For checkbox / toggle fields: use action \"click\" targeting the checkbox label.",
+    "Example: {\"action\": \"click\", \"target\": \"Subscribe newsletter\"}.",
+    "Before outputting, review your steps against the prompt. If any mentioned field lacks a step, add it.",
+    "",
+    "## step verification rules",
+    "Every step in a DSL must be defensible — the executor should be able to confirm it worked before moving on.",
+    "After an action that is expected to change the page state, add a verification step:",
+    "  - Page navigation (click a link/menu that goes to a new page) → add wait_for for an element unique to the target page, or assert_url_contains to confirm the URL changed.",
+    "  - Form submission (click Signup, Login, Submit, Create Account, etc.) → add wait_for or assert_text to confirm the expected result (success message, new page element, URL change).",
+    "  - Async action (Add to Cart, Subscribe, Delete) → add wait_for for the confirmation message or UI change.",
+    "Do NOT blindly add wait_for after every click. Only add verification where the step has a meaningful expected outcome that confirms it worked.",
+    "Example of correct pattern: click \"Signup\" → wait_for \"Enter Account Information\" → input \"Password\".",
+    "Example of wrong pattern: click \"Signup\" → immediately input \"Password\" (no verification that the signup form actually loaded).",
 ]
 _PROMPT_VARIANT_RULES: dict[DslGenerationPromptVariant, list[str]] = {
     "contracts_focus": [
@@ -170,6 +193,7 @@ _BASE_USER_RULE_LINES = [
     "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
     "- target 必须使用元素的实际可见文本、label 或 placeholder 值，作为纯文本字符串（如 \"Email Address\"），不要构造 CSS 选择器格式的 target（如 \"input[placeholder='Email Address']\"）。仅在无可见文本时才使用 CSS/XPath 选择器。",
+    "- 表单字段覆盖：必须为 prompt 中提到的每个表单字段生成对应步骤。下拉框用 input action（target 为字段标签，value 为选项文本），复选框用 click action（target 为复选框标签）。输出前检查是否有遗漏字段。",
     "- 当 input_contract 中定义了变量（如 context_key: login_email），step 的 value 字段必须用 ${context_key} 格式引用（如 \"${login_email}\"），不要硬编码值或使用其他占位符格式（如 {{}}、%%、<>）。",
     "- 如果需要明确指定定位策略，可在 step 中添加 target_strategy 字段（可选值：css, xpath, data-testid, element_id, tag, semantic）。不填则自动推断。",
     "- base_url 应为站点根地址（如 https://example.com），页面路径放在 goto 步骤中（如 /login）。不要将完整页面 URL 填入 base_url。",
@@ -459,6 +483,15 @@ def generate_case_draft(
         governance_focus_reasons=governance_focus_reasons,
     )
 
+    # Auto-fix: inject wait_for after navigation/submit clicks missing verification
+    _auto_inject_verification_steps(normalized_case, normalization_notes)
+
+    _verify_field_coverage(
+        prompt=payload.prompt,
+        steps=normalized_case.get("steps", []),
+        warnings=warnings,
+    )
+
     try:
         case = DSLCase.model_validate(normalized_case)
     except ValidationError as exc:
@@ -732,6 +765,250 @@ def _check_dsl_completeness(
         normalization_notes.append(
             "DSL 中没有 goto 步骤。如果测试需要先导航到目标页面，建议添加 goto 步骤。"
         )
+
+    # 语义校验：检测关键状态变化步骤后缺少验证
+    _check_step_verification(steps, warnings)
+
+
+def _auto_inject_verification_steps(
+    case_data: dict[str, Any],
+    normalization_notes: list[str],
+) -> None:
+    """Auto-inject wait_for steps after navigation/submit clicks that lack verification.
+
+    This is a safety net — the AI should already produce correct DSL thanks to
+    the system prompt rules, but this catches cases where it doesn't.
+    Mutates case_data['steps'] in place.
+    """
+    steps = case_data.get("steps")
+    if not steps or len(steps) < 2:
+        return
+
+    # Normalize steps to dicts (Pydantic objects need conversion)
+    dict_steps = []
+    for s in steps:
+        if isinstance(s, dict):
+            dict_steps.append(s)
+        elif hasattr(s, "model_dump"):
+            dict_steps.append(s.model_dump(exclude_none=True))
+        elif hasattr(s, "__dict__"):
+            dict_steps.append({k: v for k, v in vars(s).items() if not k.startswith("_")})
+        else:
+            dict_steps.append(s)
+
+    if dict_steps and not isinstance(dict_steps[0], dict):
+        return
+
+    nav_patterns = {
+        "signup": "Enter Account Information",
+        "login": "Logout",
+        "create account": "ACCOUNT CREATED",
+        "delete account": "ACCOUNT DELETED",
+        "logout": "Signup / Login",
+        "add to cart": "View Cart",
+        "view cart": "Shopping Cart",
+        "subscribe": "successfully subscribed",
+        "submit": "Success",
+        "contact us": "contact_us",
+    }
+    verify_actions = {"wait_for", "assert_text", "assert_url_contains"}
+
+    new_steps = []
+    injected = 0
+    for i, step in enumerate(dict_steps):
+        new_steps.append(step)
+        if isinstance(step, dict):
+            action = step.get("action", "")
+            target = (step.get("target") or "").lower().strip()
+        elif hasattr(step, "action"):
+            action = getattr(step, "action", "")
+            target = (getattr(step, "target", "") or "").lower().strip()
+        else:
+            continue
+
+        if action != "click":
+            continue
+
+        wait_target = None
+        for kw, expected in nav_patterns.items():
+            if kw in target:
+                wait_target = expected
+                break
+
+        if not wait_target:
+            continue
+
+        if i + 1 < len(dict_steps):
+            next_step = dict_steps[i + 1]
+            if isinstance(next_step, dict):
+                next_action = next_step.get("action", "")
+            elif hasattr(next_step, "action"):
+                next_action = getattr(next_step, "action", "")
+            else:
+                next_action = ""
+            if next_action in verify_actions:
+                continue
+
+        inject = {"action": "wait_for", "target": wait_target, "timeout_ms": 5000}
+        new_steps.append(inject)
+        injected += 1
+
+    if injected > 0:
+        logger.debug("auto_inject: added %d wait_for steps (total %d)", injected, len(new_steps))
+        case_data["steps"] = new_steps
+        normalization_notes.append(
+            f"自动注入了 {injected} 个 wait_for 验证步骤，确保关键页面跳转后有状态验证。"
+        )
+
+
+# --- Field coverage verification ---
+
+_FILL_VERB_PATTERNS = [
+    re.compile(r"(?:fill\s+(?:in\s+)?|enter\s+|input\s+|select\s+|choose\s+|type\s+)[\"'“‘]([^\"'”’]+)[\"'”’]", re.IGNORECASE),
+    re.compile(r"(?:填写|选择|输入|勾选)\s*[\"'“‘]([^\"'”’]+)[\"'”’]"),
+]
+
+_FORM_FIELD_KEYWORDS: list[tuple[str, str]] = [
+    ("country", "country"), ("state", "state"), ("city", "city"),
+    ("address", "address"), ("zip", "zip"), ("zipcode", "zipcode"),
+    ("date", "date"), ("birthday", "birthday"), ("birth", "birth"),
+    ("first name", "first name"), ("last name", "last name"),
+    ("password", "password"), ("email", "email"), ("phone", "phone"),
+    ("mobile", "mobile"), ("company", "company"), ("name", "name"),
+    ("username", "username"), ("title", "title"),
+]
+
+_CHECKBOX_KEYWORDS = [
+    "subscribe", "newsletter", "agree", "terms", "consent",
+    "checkbox", "opt-in", "opt in", "receive", "accept",
+    "订阅", "接受", "同意", "勾选",
+]
+
+_CN_FIELD_MAP: dict[str, str] = {
+    "国家": "country", "州": "state", "城市": "city",
+    "地址": "address", "邮编": "zip", "日期": "date",
+    "生日": "birthday", "姓名": "name", "密码": "password",
+    "邮箱": "email", "电话": "phone", "公司": "company",
+    "用户名": "username", "手机": "mobile",
+}
+
+
+def _verify_field_coverage(
+    *,
+    prompt: str,
+    steps: list[Any],
+    warnings: list[str],
+) -> None:
+    """Check that fields mentioned in the prompt are covered by DSL steps."""
+    if not prompt or not steps:
+        return
+
+    prompt_lower = prompt.lower()
+
+    # Extract expected fields from prompt
+    expected_fields: set[str] = set()
+
+    # Pattern 1: explicit fill verbs with quoted field names
+    for pat in _FILL_VERB_PATTERNS:
+        for m in pat.finditer(prompt):
+            field = m.group(1).strip().lower()
+            if field:
+                expected_fields.add(field)
+
+    # Pattern 2: known form field keywords present in prompt
+    for keyword, label in _FORM_FIELD_KEYWORDS:
+        if keyword in prompt_lower:
+            expected_fields.add(label)
+
+    # Pattern 3: Chinese field names
+    for cn, en in _CN_FIELD_MAP.items():
+        if cn in prompt:
+            expected_fields.add(en)
+
+    # Pattern 4: checkbox keywords
+    for kw in _CHECKBOX_KEYWORDS:
+        if kw in prompt_lower:
+            expected_fields.add(kw)
+
+    if not expected_fields:
+        return
+
+    # Extract covered fields from DSL steps
+    covered: set[str] = set()
+    for step in steps:
+        sd = step if isinstance(step, dict) else (step.model_dump(exclude_none=True) if hasattr(step, "model_dump") else {})
+        action = sd.get("action", "")
+        target = (sd.get("target") or "").strip().lower()
+        if action in ("input", "click") and target:
+            covered.add(target)
+
+    # Compare: check each expected field against covered targets
+    for expected in sorted(expected_fields):
+        matched = any(
+            expected in c or c in expected
+            for c in covered
+        )
+        if not matched:
+            warnings.append(
+                f"字段覆盖检查：prompt 中提到了 \"{expected}\"，"
+                f"但生成的步骤中没有对应的 input/click 操作。"
+            )
+
+
+def _check_step_verification(
+    steps: list[Any],
+    warnings: list[str],
+) -> None:
+    """Check that critical state-changing steps have follow-up verification.
+
+    Scans for clicks on navigation/form-submit actions that are NOT followed
+    by a verification step (wait_for, assert_text, assert_url_contains).
+    Emits warnings but does NOT block generation.
+    """
+    if not steps or len(steps) < 2:
+        return
+
+    nav_keywords = {
+        "signup", "login", "submit", "create", "delete", "logout",
+        "register", "continue", "next", "checkout", "place order",
+        "view cart", "view product", "add to cart", "subscribe",
+        "contact us", "send", "confirm", "proceed",
+    }
+    verify_actions = {"wait_for", "assert_text", "assert_url_contains"}
+
+    for i in range(len(steps) - 1):
+        step = steps[i]
+        if isinstance(step, dict):
+            action = step.get("action", "")
+            target = (step.get("target") or "").lower()
+        elif hasattr(step, "action"):
+            action = getattr(step, "action", "")
+            target = (getattr(step, "target", "") or "").lower()
+        else:
+            continue
+
+        if action != "click":
+            continue
+
+        is_nav_click = any(kw in target for kw in nav_keywords)
+        if not is_nav_click:
+            continue
+
+        next_step = steps[i + 1]
+        if isinstance(next_step, dict):
+            next_action = next_step.get("action", "")
+        elif hasattr(next_step, "action"):
+            next_action = getattr(next_step, "action", "")
+        else:
+            next_action = ""
+
+        if next_action not in verify_actions:
+            target_display = step.get("target", "") if isinstance(step, dict) else getattr(step, "target", "")
+            warnings.append(
+                f"步骤 {i + 1} click \"{target_display}\" 可能触发页面跳转或状态变化，"
+                f"但下一步是 {next_action} 而非验证步骤（wait_for/assert_text/assert_url_contains）。"
+                f"建议在 click 后添加验证步骤确认操作结果。"
+            )
 
 
 def _normalize_steps(

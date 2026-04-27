@@ -107,6 +107,7 @@ class InterventionRequest(DSLModel):
     dom_snapshot: list[DOMElementSnapshot] = Field(default_factory=list)
     ai_candidate: AILocateCandidate | None = None
     locator_trace: LocatorTrace | None = None
+    vlm_failure_reason: str | None = None
 
 
 class StepExecutionEvidence(DSLModel):

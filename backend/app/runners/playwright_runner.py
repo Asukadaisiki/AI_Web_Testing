@@ -190,7 +190,11 @@ def execute_case_with_playwright(
                             page.mouse.click(*resolved.click_coordinates)
                             page.keyboard.type(input_value)
                         else:
-                            resolved.locator.fill(input_value)
+                            tag_name = resolved.locator.evaluate("el => el.tagName.toLowerCase()")
+                            if tag_name == "select":
+                                resolved.locator.select_option(label=input_value)
+                            else:
+                                resolved.locator.fill(input_value)
                     elif step.action == "wait_for":
                         resolved = resolve_with_fallback(
                             page,
@@ -291,6 +295,7 @@ def execute_case_with_playwright(
                                     else None
                                 ),
                                 locator_trace=exc.tier1_trace,
+                                vlm_failure_reason=getattr(exc, "vlm_failure_reason", None),
                             ),
                         )
                     )
@@ -422,7 +427,11 @@ def execute_case_with_playwright_streaming(
                             page.mouse.click(*resolved.click_coordinates)
                             page.keyboard.type(input_value)
                         else:
-                            resolved.locator.fill(input_value)
+                            tag_name = resolved.locator.evaluate("el => el.tagName.toLowerCase()")
+                            if tag_name == "select":
+                                resolved.locator.select_option(label=input_value)
+                            else:
+                                resolved.locator.fill(input_value)
                     elif step.action == "wait_for":
                         resolved = resolve_with_fallback(
                             page, step.target,
@@ -518,6 +527,7 @@ def execute_case_with_playwright_streaming(
                                 ) if exc.ai_candidate is not None else None
                             ),
                             locator_trace=exc.tier1_trace,
+                            vlm_failure_reason=getattr(exc, "vlm_failure_reason", None),
                         ),
                     )
                     step_results.append(evidence)
