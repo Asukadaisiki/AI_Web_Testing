@@ -42,6 +42,12 @@ def _serialize_event(event: dict) -> dict:
     return json.loads(json.dumps(event, default=str))
 
 
+def sse_event(event_type: str, data: dict) -> str:
+    """Format a dict as an SSE event string."""
+    payload = json.dumps(data, default=str, ensure_ascii=False)
+    return f"event: {event_type}\ndata: {payload}\n\n"
+
+
 def _run_sync_generator(
     *,
     generator_factory: Callable[[Session], Generator[dict, None, object]],
