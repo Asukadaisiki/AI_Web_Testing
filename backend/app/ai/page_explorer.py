@@ -135,7 +135,7 @@ def _discover_interactive_elements(
             if box and (box["width"] < 10 or box["height"] < 10):
                 continue
 
-            trigger.click(timeout=3000)
+            trigger.click(timeout=300)
             page.wait_for_timeout(500)
 
             new_payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
@@ -247,7 +247,7 @@ def capture_browser_session(
 
             state = context.storage_state()
             cookie_count = len(state.get("cookies", []))
-            save_storage_state(storage_dir, project_id=project_id, state=state, source_url=url)
+            save_storage_state(storage_dir, project_id=project_id, state=dict(state), source_url=url)
             context.close()
             browser.close()
     except Exception as exc:
