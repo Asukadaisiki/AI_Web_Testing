@@ -15,6 +15,8 @@ from app.locators.corrections import CorrectionStore
 from app.locators.semantic import ResolvedLocator
 from app.runners.click_preprocessor import click_with_precheck
 from app.runners.locator_confidence import preverify_with_vlm
+from app.runners.postcondition_verifier import PostconditionVerifier
+from app.runners.runtime_scorer import compute_final_score, decide_strategy
 from app.schemas.dsl import DSLCase
 from app.schemas.executions import (
     AILocateCandidate,
@@ -147,6 +149,354 @@ class StepStreamEvent:
         return f"StepStreamEvent({self.type}, step={self.step_index}, action={self.action})"
 
 
+# ---------------------------------------------------------------------------
+# Dual-layer scoring helpers
+# ---------------------------------------------------------------------------
+
+
+def _has_candidates(step) -> bool:
+    """Check if a DSL step has pre-scored candidate locators."""
+    return hasattr(step, "candidates") and bool(step.candidates)
+
+
+def _evaluate_element_state(element) -> dict:
+    """Evaluate element state via JS for runtime scoring."""
+    try:
+        return element.evaluate("""(el) => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return {
+                visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+                enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+                bbox_area: Math.round(rect.width * rect.height),
+                receives_events: rect.width > 0 && rect.height > 0,
+                in_viewport: rect.top >= 0 && rect.left >= 0 && rect.bottom <= window.innerHeight && rect.right <= window.innerWidth,
+            };
+        }""")
+    except Exception:
+        return {"visible": False, "enabled": False, "bbox_area": 0, "receives_events": False, "in_viewport": False}
+
+
+def _build_locator_from_candidate(page, candidate_entry) -> object | None:
+    """Build a Playwright locator from a candidate's strategy and selector.
+
+    *candidate_entry* may be a ``LocatorCandidate`` model or a plain dict.
+    """
+    if hasattr(candidate_entry, "strategy"):
+        strategy = candidate_entry.strategy
+        selector = candidate_entry.selector or ""
+        semantic_value = candidate_entry.semantic_value or ""
+    else:
+        strategy = candidate_entry.get("strategy", "")
+        selector = candidate_entry.get("selector", "")
+        semantic_value = candidate_entry.get("semantic_value", "")
+
+    try:
+        if strategy == "css":
+            return page.locator(selector)
+        if strategy == "xpath":
+            return page.locator(f"xpath={selector}")
+        if strategy == "data-testid":
+            clean_id = selector.replace("[data-testid='", "").replace("']", "")
+            return page.get_by_test_id(clean_id)
+        if strategy == "role":
+            return page.get_by_role("button", name=semantic_value)
+        if strategy == "text":
+            return page.get_by_text(selector, exact=False)
+        if strategy == "label":
+            return page.get_by_label(semantic_value or selector)
+        if strategy == "placeholder":
+            return page.get_by_placeholder(semantic_value or selector)
+        if strategy == "element_id":
+            return page.locator(f"#{selector}" if not selector.startswith("#") else selector)
+        if strategy in ("tag", "semantic"):
+            return page.locator(selector) if selector else None
+        # vlm / fallback
+        return page.locator(selector) if selector else None
+    except Exception:
+        return None
+
+
+def _compute_actionability(state: dict) -> float:
+    score = 0.0
+    if state.get("visible"):
+        score += 0.4
+    if state.get("enabled"):
+        score += 0.3
+    if state.get("receives_events"):
+        score += 0.3
+    return score
+
+
+def _compute_visual_consistency(state: dict) -> float:
+    area = state.get("bbox_area", 0)
+    if area == 0:
+        return 0.0
+    score = min(1.0, area / 10000) * 0.7
+    if state.get("in_viewport"):
+        score += 0.3
+    return min(1.0, score)
+
+
+def _execute_step_with_candidates(
+    page,
+    step,
+    step_index: int,
+    *,
+    artifact_dir: Path | None = None,
+    execution_id: int | None = None,
+    correction_store=None,
+    input_values: dict[str, str] | None = None,
+    runtime_context: dict[str, str] | None = None,
+) -> StepExecutionEvidence:
+    """Execute a step using the dual-layer scoring path.
+
+    Iterates through pre-scored candidates (sorted by *pre_score* descending),
+    computes runtime features, and picks the first candidate that passes both
+    scoring and postcondition verification.  Falls back to the legacy
+    ``_resolve_with_confidence_gate`` path if every candidate fails.
+    """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    step_started_at = perf_counter()
+    vars_map = dict(input_values or {})
+    vars_map.update(runtime_context or {})
+    candidates = sorted(step.candidates, key=lambda c: c.pre_score, reverse=True)
+
+    verifier = PostconditionVerifier(page)
+    verifier.capture_pre_state()
+
+    last_error: Exception | None = None
+    used_strategy: str | None = None
+    used_trace: str | None = None
+
+    for candidate in candidates:
+        locator = _build_locator_from_candidate(page, candidate)
+        if locator is None:
+            continue
+
+        # Check locator has at least one match
+        try:
+            if locator.count() == 0:
+                continue
+        except Exception:
+            continue
+
+        # Evaluate runtime element state
+        try:
+            first_el = locator.first
+            state = _evaluate_element_state(first_el)
+        except Exception:
+            continue
+
+        # Compute runtime features
+        pre_features = candidate.pre_features or {}
+        runtime_features = {
+            "actionability": _compute_actionability(state),
+            "visual_consistency": _compute_visual_consistency(state),
+            "history_success": 0.5,  # neutral default
+            "rank_margin": 0.0,
+            "_hard_overrides": state,
+        }
+
+        final_score = compute_final_score(pre_features, runtime_features)
+        strategy_decision = decide_strategy(final_score, state)
+
+        # Skip low-confidence strategies
+        if strategy_decision in ("vlm_grounding", "vlm_or_repair"):
+            continue
+
+        # Attempt to execute the action
+        try:
+            if step.action == "click":
+                cr = click_with_precheck(page, locator)
+                if not cr.succeeded:
+                    raise cr.original_error or RunnerExecutionError("Click failed")
+            elif step.action == "input":
+                input_value = _substitute_variables(step.value, vars_map)
+                tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
+                if tag_name == "select":
+                    locator.select_option(label=input_value)
+                else:
+                    locator.fill(input_value)
+            elif step.action == "wait_for":
+                locator.wait_for(state="visible", timeout=step.timeout_ms)
+            elif step.action == "assert_text":
+                from playwright.sync_api import expect as pw_expect
+                pw_expect(locator).to_contain_text(_substitute_variables(step.value, vars_map))
+            elif step.action == "capture_text":
+                captured = locator.inner_text()
+                if runtime_context is not None:
+                    runtime_context[step.context_key] = captured.strip()
+            else:
+                # Unsupported action for candidate path — skip to legacy
+                continue
+
+            # Verify postconditions
+            post_result = verifier.verify(step.postconditions)
+            if not post_result.passed:
+                last_error = RunnerExecutionError(
+                    f"Postcondition check failed: {post_result.details}"
+                )
+                continue
+
+            # Success — build evidence
+            used_strategy = candidate.strategy
+            used_trace = f"candidate:{candidate.strategy}:{candidate.selector}(score={final_score:.2f},strategy={strategy_decision})"
+
+            return StepExecutionEvidence(
+                step_index=step_index,
+                action=step.action,
+                target=getattr(step, "target", None),
+                value=getattr(step, "value", None),
+                status="passed",
+                duration_ms=_elapsed_ms(step_started_at),
+                resolved_by=used_strategy,
+                locator_trace=used_trace,
+                url=page.url or None,
+                page_title=_safe_page_title(page),
+                viewport=_safe_viewport(page),
+                dom_summary=_safe_dom_summary(page),
+                console_events=[],
+                network_events=[],
+                screenshot_path=(
+                    _take_step_screenshot(page, artifact_dir, step_index)
+                    if artifact_dir
+                    else None
+                ),
+                locator_confidence=getattr(step, "locator_confidence", None),
+            )
+
+        except (PlaywrightTimeoutError, AssertionError, Exception) as exc:
+            last_error = exc
+            continue
+
+    # --- All candidates exhausted: fall back to legacy path ---
+    from playwright.sync_api import expect as pw_expect
+
+    try:
+        resolved_by = None
+        resolved = None
+        vlm_preverify_used = False
+        click_recovery = None
+        click_recovery_detail = None
+
+        if step.action == "click":
+            resolved, vlm_preverify_used = _resolve_with_confidence_gate(
+                page, step.target,
+                locator_confidence=getattr(step, "locator_confidence", None),
+                target_strategy=step.target_strategy,
+                correction_store=correction_store,
+                execution_id=execution_id,
+                require_visible=True, require_enabled=True,
+            )
+            resolved_by = resolved.strategy
+            cr = click_with_precheck(
+                page, resolved.locator,
+                click_coordinates=resolved.click_coordinates,
+            )
+            if not cr.succeeded:
+                raise cr.original_error or RunnerExecutionError("Click failed")
+            click_recovery = cr.recovery_strategy
+            click_recovery_detail = cr.recovery_detail
+        elif step.action == "input":
+            resolved, vlm_preverify_used = _resolve_with_confidence_gate(
+                page, step.target,
+                locator_confidence=getattr(step, "locator_confidence", None),
+                target_strategy=step.target_strategy,
+                correction_store=correction_store,
+                execution_id=execution_id,
+                prefer_input=True, require_visible=True, require_enabled=True,
+            )
+            resolved_by = resolved.strategy
+            input_value = _substitute_variables(step.value, vars_map)
+            if resolved.click_coordinates is not None:
+                cr = click_with_precheck(
+                    page, resolved.locator,
+                    click_coordinates=resolved.click_coordinates,
+                )
+                if not cr.succeeded:
+                    raise cr.original_error or RunnerExecutionError("Click failed")
+                click_recovery = cr.recovery_strategy
+                click_recovery_detail = cr.recovery_detail
+                page.keyboard.type(input_value)
+            else:
+                tag_name = resolved.locator.evaluate("el => el.tagName.toLowerCase()")
+                if tag_name == "select":
+                    resolved.locator.select_option(label=input_value)
+                else:
+                    resolved.locator.fill(input_value)
+        elif step.action == "wait_for":
+            resolved, vlm_preverify_used = _resolve_with_confidence_gate(
+                page, step.target,
+                locator_confidence=getattr(step, "locator_confidence", None),
+                target_strategy=step.target_strategy,
+                correction_store=correction_store,
+                execution_id=execution_id,
+                require_visible=False,
+            )
+            resolved_by = resolved.strategy
+            resolved.locator.wait_for(state="visible", timeout=step.timeout_ms)
+        elif step.action == "assert_text":
+            resolved, vlm_preverify_used = _resolve_with_confidence_gate(
+                page, step.target,
+                locator_confidence=getattr(step, "locator_confidence", None),
+                target_strategy=step.target_strategy,
+                correction_store=correction_store,
+                execution_id=execution_id,
+                require_visible=False,
+            )
+            resolved_by = resolved.strategy
+            pw_expect(resolved.locator).to_contain_text(
+                _substitute_variables(step.value, vars_map)
+            )
+        elif step.action == "capture_text":
+            resolved, vlm_preverify_used = _resolve_with_confidence_gate(
+                page, step.target,
+                locator_confidence=getattr(step, "locator_confidence", None),
+                target_strategy=step.target_strategy,
+                correction_store=correction_store,
+                execution_id=execution_id,
+                require_visible=False,
+            )
+            resolved_by = resolved.strategy
+            captured = resolved.locator.inner_text()
+            if runtime_context is not None:
+                runtime_context[step.context_key] = captured.strip()
+        else:
+            raise RunnerExecutionError(f"Unsupported action: {step.action}")
+
+        return StepExecutionEvidence(
+            step_index=step_index,
+            action=step.action,
+            target=getattr(step, "target", None),
+            value=getattr(step, "value", None),
+            status="passed",
+            duration_ms=_elapsed_ms(step_started_at),
+            resolved_by=resolved_by,
+            locator_trace=resolved.trace if resolved else None,
+            url=page.url or None,
+            page_title=_safe_page_title(page),
+            viewport=_safe_viewport(page),
+            dom_summary=_safe_dom_summary(page),
+            console_events=[],
+            network_events=[],
+            screenshot_path=(
+                _take_step_screenshot(page, artifact_dir, step_index)
+                if artifact_dir
+                else None
+            ),
+            click_recovery=click_recovery,
+            click_recovery_detail=click_recovery_detail,
+            locator_confidence=getattr(step, "locator_confidence", None),
+            vlm_preverify_used=vlm_preverify_used,
+        )
+    except (InterventionNeededError, PlaywrightTimeoutError, RunnerExecutionError, AssertionError) as exc:
+        raise RunnerExecutionError(
+            str(exc), step_results=[]
+        ) from exc
+
+
 def execute_case_with_playwright(
     *,
     case: DSLCase,
@@ -196,6 +546,20 @@ def execute_case_with_playwright(
                     click_recovery = None
                     click_recovery_detail = None
                     vlm_preverify_used = False
+
+                    # --- Dual-layer scoring path (new) ---
+                    if _has_candidates(step):
+                        evidence_for_step = _execute_step_with_candidates(
+                            page, step, index,
+                            artifact_dir=artifact_dir,
+                            execution_id=execution_id,
+                            correction_store=correction_store,
+                            input_values=_vars(),
+                        )
+                        step_results.append(evidence_for_step)
+                        continue
+                    # --- Legacy path below ---
+
                     if step.action == "goto":
                         page.goto(_resolve_url(_substitute_variables(step.value, _vars()), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
@@ -465,6 +829,27 @@ def execute_case_with_playwright_streaming(
                     click_recovery = None
                     click_recovery_detail = None
                     vlm_preverify_used = False
+
+                    # --- Dual-layer scoring path (new) ---
+                    if _has_candidates(step):
+                        evidence_for_step = _execute_step_with_candidates(
+                            page, step, index,
+                            artifact_dir=artifact_dir,
+                            execution_id=execution_id,
+                            correction_store=correction_store,
+                            input_values=_vars(),
+                        )
+                        step_results.append(evidence_for_step)
+                        yield StepStreamEvent(
+                            type="step_complete",
+                            step_index=index,
+                            action=step.action,
+                            status="passed",
+                            duration_ms=evidence_for_step.duration_ms,
+                        )
+                        continue
+                    # --- Legacy path below ---
+
                     if step.action == "goto":
                         page.goto(_resolve_url(_substitute_variables(step.value, _vars()), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
