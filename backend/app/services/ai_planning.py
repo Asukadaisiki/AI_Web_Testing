@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -187,6 +188,9 @@ def stream_planning_message(
     """Generator: save user msg, stream AI turn, save AI msg, yield events."""
     from typing import Generator
 
+    start_time = time.monotonic()
+    logger.info("[session:%d] Planning message stream start, content_len=%d", planning_session_id, len(content))
+
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
     session.add(
         AIPlanningMessage(
@@ -260,6 +264,11 @@ def stream_planning_message(
         )
     )
     session.commit()
+    elapsed = time.monotonic() - start_time
+    logger.info(
+        "[session:%d] Planning message stream done, status=%s, tool_calls=%d, duration=%.2fs",
+        planning_session_id, response.session_status, len(response.tool_calls), elapsed,
+    )
     return response
 
 
@@ -427,7 +436,12 @@ def stream_generate_planning_drafts(
     actor_user_id: int,
 ):
     """Generator: yield draft_generating events, then delegate to generate_planning_drafts."""
+    logger.info(
+        "[session:%d] Draft generation start, scenarios=%s",
+        planning_session_id, payload.scenario_keys,
+    )
     for scenario_key in payload.scenario_keys:
+        logger.info("[session:%d] Generating draft for scenario '%s'", planning_session_id, scenario_key)
         yield {
             "type": "draft_generating",
             "scenario_key": scenario_key,
@@ -886,6 +900,9 @@ def save_and_execute_selected_drafts_streaming(
     if cancel_event is None:
         cancel_event = ThreadEvent()
 
+    start_time = time.monotonic()
+    logger.info("[session:%d] Save-and-execute streaming start, draft_ids=%s", planning_session_id, draft_ids)
+
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
 
     drafts = (
@@ -911,6 +928,7 @@ def save_and_execute_selected_drafts_streaming(
         case = create_case(session, case_payload, actor_user_id=actor_user_id)
         saved_cases.append(SavedCaseResult(case_id=case.id, case_name=case.name))
         draft.status = "imported"
+        logger.info("[session:%d] Saved case '%s' (id=%d)", planning_session_id, case.name, case.id)
         yield {
             "type": "save_progress",
             "saved_count": len(saved_cases),
@@ -943,6 +961,9 @@ def save_and_execute_selected_drafts_streaming(
             "total_steps": len(dsl_case.steps) if dsl_case else 0,
         }
 
+        case_start_time = time.monotonic()
+        logger.info("[session:%d] Executing case '%s' (id=%d), steps=%d", planning_session_id, saved.case_name, saved.case_id, len(dsl_case.steps) if dsl_case else 0)
+
         try:
             stream = execute_case_streaming(
                 session, saved.case_id, payload, cancel_event=cancel_event,
@@ -967,6 +988,11 @@ def save_and_execute_selected_drafts_streaming(
             if detail is not None:
                 passed = sum(1 for s in (detail.report.steps or []) if s.status == "passed")
                 failed = sum(1 for s in (detail.report.steps or []) if s.status == "failed")
+                case_elapsed = time.monotonic() - case_start_time
+                logger.info(
+                    "[session:%d] Case '%s' done, status=%s, passed=%d, failed=%d, duration=%.2fs",
+                    planning_session_id, detail.case_name, detail.status, passed, failed, case_elapsed,
+                )
                 execution_summaries.append(ExecutionSummaryResult(
                     execution_id=detail.id,
                     case_id=saved.case_id,
@@ -1033,6 +1059,11 @@ def save_and_execute_selected_drafts_streaming(
                 "message": analysis_msg,
             }
 
+    elapsed_total = time.monotonic() - start_time
+    logger.info(
+        "[session:%d] Save-and-execute streaming done, cases=%d, duration=%.2fs",
+        planning_session_id, len(saved_cases), elapsed_total,
+    )
     yield {"type": "done"}
 
 
@@ -1378,6 +1409,9 @@ def save_and_execute_with_explorer_judge_streaming(
     if cancel_event is None:
         cancel_event = ThreadEvent()
 
+    ej_start_time = time.monotonic()
+    logger.info("[session:%d] Explorer-Judge streaming start, draft_ids=%s", planning_session_id, draft_ids)
+
     planning_session = _get_session(session_obj, planning_session_id, actor_user_id=actor_user_id)
 
     # Phase 1: Save drafts as cases (reuse existing logic)
@@ -1449,6 +1483,12 @@ def save_and_execute_with_explorer_judge_streaming(
             "total_steps": len(dsl_case.steps),
         }
 
+        explorer_start_time = time.monotonic()
+        logger.info(
+            "[session:%d] Explorer start for case '%s' (id=%d), steps=%d",
+            planning_session_id, saved.case_name, saved.case_id, len(dsl_case.steps),
+        )
+
         # Phase 2: Run Explorer (non-terminating)
         explorer_stream = run_explorer(
             case=dsl_case,
@@ -1491,6 +1531,13 @@ def save_and_execute_with_explorer_judge_streaming(
             "cascade_blocked_steps": exploration_result.cascade_blocked_steps,
         }
 
+        explorer_elapsed = time.monotonic() - explorer_start_time
+        logger.info(
+            "[session:%d] Explorer complete for case '%s', passed=%d, failed=%d, duration=%.2fs",
+            planning_session_id, saved.case_name,
+            exploration_result.passed_steps, exploration_result.failed_steps, explorer_elapsed,
+        )
+
         # Phase 3: Judge (only if there are failures)
         if not exploration_result.failure_records:
             exploration_run.judge_conclusions_json = []
@@ -1517,6 +1564,13 @@ def save_and_execute_with_explorer_judge_streaming(
             "failure_count": len(exploration_result.failure_records),
         }
 
+        judge_start_time = time.monotonic()
+        logger.info(
+            "[session:%d] Judge start for case '%s' (id=%d), failures=%d",
+            planning_session_id, saved.case_name, saved.case_id,
+            len(exploration_result.failure_records),
+        )
+
         try:
             dsl_summary = [
                 {"action": s.action, "target": getattr(s, "target", None), "value": getattr(s, "value", None)}
@@ -1529,6 +1583,8 @@ def save_and_execute_with_explorer_judge_streaming(
             )
         except Exception as exc:
             logger.exception("Judge LLM call failed for exploration_run %d", exploration_run.id)
+            judge_elapsed = time.monotonic() - judge_start_time
+            logger.error("[session:%d] Judge failed for case '%s', duration=%.2fs", planning_session_id, saved.case_name, judge_elapsed)
             exploration_run.judge_conclusions_json = []
             exploration_run.router_decision_json = {"action": "report_to_user", "reason": f"Judge 调用失败: {exc}"}
             session_obj.flush()
@@ -1553,6 +1609,13 @@ def save_and_execute_with_explorer_judge_streaming(
         exploration_run.judge_conclusions_json = judge_response
         session_obj.flush()
 
+        judge_elapsed = time.monotonic() - judge_start_time
+        conclusions_count = len(judge_response.get("conclusions", []))
+        logger.info(
+            "[session:%d] Judge complete for case '%s', conclusions=%d, duration=%.2fs",
+            planning_session_id, saved.case_name, conclusions_count, judge_elapsed,
+        )
+
         yield {
             "type": "judge_complete",
             "case_id": saved.case_id,
@@ -1567,6 +1630,11 @@ def save_and_execute_with_explorer_judge_streaming(
 
         exploration_run.router_decision_json = decision.model_dump(mode="json")
         session_obj.flush()
+
+        logger.info(
+            "[session:%d] Router decision for case '%s': action=%s, reason=%s",
+            planning_session_id, saved.case_name, decision.action, decision.reason,
+        )
 
         # Phase 5: Auto-fix (max once)
         if decision.action == "auto_fix_dsl" and not exploration_run.auto_fix_attempted:
@@ -1662,6 +1730,11 @@ def save_and_execute_with_explorer_judge_streaming(
         planning_session.status = "completed"
         session_obj.commit()
 
+    ej_elapsed_total = time.monotonic() - ej_start_time
+    logger.info(
+        "[session:%d] Explorer-Judge streaming done, cases=%d, duration=%.2fs",
+        planning_session_id, len(saved_cases), ej_elapsed_total,
+    )
     yield {"type": "done"}
 
 

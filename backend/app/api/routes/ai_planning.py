@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback as _traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
@@ -244,7 +245,12 @@ async def chat_sse(
                 yield sse_event(event.get("type", "message"), event)
         except Exception as exc:
             logger.exception("SSE chat streaming error for session %s", session_id)
-            yield sse_event("error", {"message": str(exc)})
+            yield sse_event("error", {
+                "message": str(exc),
+                "error_type": type(exc).__name__,
+                "phase": "chat",
+                "traceback": _traceback.format_exc()[:2000],
+            })
         yield sse_event("done", {})
 
     return StreamingResponse(
@@ -274,7 +280,12 @@ async def drafts_sse(
                 yield sse_event(event.get("type", "message"), event)
         except Exception as exc:
             logger.exception("SSE draft streaming error for session %s", session_id)
-            yield sse_event("error", {"message": str(exc)})
+            yield sse_event("error", {
+                "message": str(exc),
+                "error_type": type(exc).__name__,
+                "phase": "drafts",
+                "traceback": _traceback.format_exc()[:2000],
+            })
         yield sse_event("done", {})
 
     return StreamingResponse(
@@ -306,7 +317,12 @@ async def execute_sse(
                 yield sse_event(event.get("type", "message"), event)
         except Exception as exc:
             logger.exception("SSE execute streaming error for session %s", session_id)
-            yield sse_event("error", {"message": str(exc)})
+            yield sse_event("error", {
+                "message": str(exc),
+                "error_type": type(exc).__name__,
+                "phase": "execute",
+                "traceback": _traceback.format_exc()[:2000],
+            })
         yield sse_event("done", {})
         _cancellation_manager.clear(session_id)
 
@@ -339,7 +355,12 @@ async def execute_with_judge_sse(
                 yield sse_event(event.get("type", "message"), event)
         except Exception as exc:
             logger.exception("SSE Explorer-Judge error for session %s", session_id)
-            yield sse_event("error", {"message": str(exc)})
+            yield sse_event("error", {
+                "message": str(exc),
+                "error_type": type(exc).__name__,
+                "phase": "explorer_judge",
+                "traceback": _traceback.format_exc()[:2000],
+            })
         yield sse_event("done", {})
         _cancellation_manager.clear(session_id)
 

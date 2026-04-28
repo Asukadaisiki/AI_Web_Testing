@@ -9,6 +9,35 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-28 (Session 11 — 加强后端日志输出和 Agent 错误信息)
+
+- 任务：解决 Agent 在卡壳时不主动抛出错误、错误信息不详细、后端日志太少无法追踪运行链路的问题
+- 背景：用户反馈三个核心问题：(1) Agent 遇到错误不主动报告，静默失败；(2) 抛出错误后没有详细原因和排查步骤；(3) 后端日志太缺乏，完全看不到运行链路
+- 操作：
+  1. **创建集中式日志配置** `backend/app/core/logging_config.py`：
+     - 统一日志格式 `时间 | 级别 | 模块名 | 消息`
+     - `app.*` 命名空间通过 `LOG_LEVEL` 环境变量控制（默认 INFO）
+     - 第三方库（httpx/sqlalchemy/uvicorn.access）设 WARNING，减少噪音
+     - uvicorn 也使用相同格式
+  2. **Agent 错误信息增强** `backend/app/ai/test_planning_agent.py`：
+     - `_error_response()` 增加 `error_type`/`error_detail`/`phase`/`suggestion` 参数
+     - LLM 调用异常区分 ConnectTimeout/ReadTimeout/HTTPStatusError/ConnectError，给出不同排查建议
+     - 工具调用异常捕获后返回结构化错误，而非静默失败
+     - JSON 解析失败时记录原始响应前 300 字符
+  3. **SSE 错误事件丰富化** `backend/app/services/ai_planning_streaming.py` + `backend/app/api/routes/ai_planning.py`：
+     - 错误事件新增 `error_type`/`phase`/`traceback` 字段
+     - 每个流式阶段（chat/drafts/execute/explorer_judge）传入 phase 标识
+  4. **关键路径打点日志** `backend/app/services/ai_planning.py`：
+     - `stream_planning_message`: 开始/结束 + 计时 + 状态
+     - `stream_generate_planning_drafts`: 每个场景生成日志
+     - `save_and_execute_selected_drafts_streaming`: 保存/执行每个用例 + 计时
+     - Explorer-Judge 全链路: Explorer 开始/完成/计时 → Judge 开始/完成/计时 → Router 决策 → 总计时
+- 结果：
+  - 383 个单元测试通过，无回归
+  - 8 个预先存在的失败（3 个已删除的 WS 测试、4 个 locator 隔离问题、1 个 settings 测试）
+- 验证：`uv run pytest tests/unit/ -q --deselect test_save_and_execute_persists_execution_summary_message`
+- 后续：前端可在后续迭代中展示 SSE 错误事件的 `error_type`/`phase`/`traceback` 字段
+
 ## 2026-04-27 (Session 10 — 执行报告增强 + Explorer-Judge 总结)
 
 - 任务：增强执行详情页步骤信息展示，修复 Explorer-Judge 流程缺少执行总结的问题

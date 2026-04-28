@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback as _traceback
 from threading import Event, Thread
 from typing import AsyncGenerator, Callable, Generator
 
@@ -55,6 +56,7 @@ def _run_sync_generator(
     queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
     cancel_event: Event | None = None,
+    phase: str = "unknown",
 ) -> None:
     """Run a sync generator in a worker thread, forwarding events to the async queue."""
     try:
@@ -72,8 +74,15 @@ def _run_sync_generator(
     except RunnerCancelledError:
         loop.call_soon_threadsafe(queue.put_nowait, {"type": "cancelled"})
     except Exception as exc:
-        logger.exception("Planning stream worker error")
-        loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
+        tb = _traceback.format_exc()
+        logger.exception("Planning stream worker error in phase '%s'", phase)
+        loop.call_soon_threadsafe(queue.put_nowait, {
+            "type": "error",
+            "message": str(exc),
+            "error_type": type(exc).__name__,
+            "phase": phase,
+            "traceback": tb[:2000],
+        })
     finally:
         loop.call_soon_threadsafe(queue.put_nowait, _TerminalSignal())
 
@@ -83,6 +92,7 @@ async def _bridge_sync_generator(
     session_factory: sessionmaker,
     generator_factory: Callable[[Session], Generator[dict, None, object]],
     cancel_event: Event | None = None,
+    phase: str = "unknown",
 ) -> AsyncGenerator[dict, None]:
     """Bridge a sync generator to an async generator for WebSocket delivery."""
     loop = asyncio.get_running_loop()
@@ -96,6 +106,7 @@ async def _bridge_sync_generator(
             "queue": queue,
             "loop": loop,
             "cancel_event": cancel_event,
+            "phase": phase,
         },
         daemon=True,
     )
@@ -118,11 +129,13 @@ async def stream_planning_chat(
     """Bridge streaming planning chat to async WebSocket events."""
     from app.services.ai_planning import stream_planning_message
 
+    logger.info("Starting planning chat stream for session %d", planning_session_id)
     async for event in _bridge_sync_generator(
         session_factory=session_factory,
         generator_factory=lambda db: stream_planning_message(
             db, planning_session_id, actor_user_id=actor_user_id, content=content,
         ),
+        phase="chat",
     ):
         yield event
 
@@ -141,11 +154,13 @@ async def stream_planning_drafts(
     if not isinstance(payload, GenerateAIPlanningDraftsRequest):
         payload = GenerateAIPlanningDraftsRequest.model_validate(payload)
 
+    logger.info("Starting planning drafts stream for session %d", planning_session_id)
     async for event in _bridge_sync_generator(
         session_factory=session_factory,
         generator_factory=lambda db: stream_generate_planning_drafts(
             db, planning_session_id, payload, actor_user_id=actor_user_id,
         ),
+        phase="drafts",
     ):
         yield event
 
@@ -164,6 +179,7 @@ def _run_sync_save_and_execute(
     from app.services.ai_planning import save_and_execute_selected_drafts_streaming
 
     try:
+        logger.info("Starting save-and-execute stream for session %d, drafts=%s", planning_session_id, draft_ids)
         with session_factory() as session:
             for event in save_and_execute_selected_drafts_streaming(
                 session,
@@ -178,8 +194,15 @@ def _run_sync_save_and_execute(
     except RunnerCancelledError:
         loop.call_soon_threadsafe(queue.put_nowait, {"type": "cancelled"})
     except Exception as exc:
-        logger.exception("Streaming worker error for planning session %s", planning_session_id)
-        loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
+        tb = _traceback.format_exc()
+        logger.exception("Streaming worker error for planning session %s in execute phase", planning_session_id)
+        loop.call_soon_threadsafe(queue.put_nowait, {
+            "type": "error",
+            "message": str(exc),
+            "error_type": type(exc).__name__,
+            "phase": "execute",
+            "traceback": tb[:2000],
+        })
     finally:
         loop.call_soon_threadsafe(queue.put_nowait, _TerminalSignal())
 
@@ -232,6 +255,7 @@ def _run_sync_explorer_judge(
     from app.services.ai_planning import save_and_execute_with_explorer_judge_streaming
 
     try:
+        logger.info("Starting explorer-judge stream for session %d, drafts=%s", planning_session_id, draft_ids)
         with session_factory() as session:
             for event in save_and_execute_with_explorer_judge_streaming(
                 session,
@@ -246,8 +270,15 @@ def _run_sync_explorer_judge(
     except RunnerCancelledError:
         loop.call_soon_threadsafe(queue.put_nowait, {"type": "cancelled"})
     except Exception as exc:
+        tb = _traceback.format_exc()
         logger.exception("Explorer-Judge worker error for planning session %s", planning_session_id)
-        loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
+        loop.call_soon_threadsafe(queue.put_nowait, {
+            "type": "error",
+            "message": str(exc),
+            "error_type": type(exc).__name__,
+            "phase": "explorer_judge",
+            "traceback": tb[:2000],
+        })
     finally:
         loop.call_soon_threadsafe(queue.put_nowait, _TerminalSignal())
 

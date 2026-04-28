@@ -10,6 +10,7 @@ import uvicorn
 from app.api.routes.artifacts import router as artifacts_router
 from app.api.router import build_api_router
 from app.core.config import get_settings
+from app.core.logging_config import get_uvicorn_log_config, setup_logging
 from app.db import verify_database_connection
 
 
@@ -17,6 +18,7 @@ ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "artifacts"
 
 
 def create_app() -> FastAPI:
+    setup_logging()
     settings = get_settings()
     verify_database_connection()
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -53,7 +55,7 @@ def create_app() -> FastAPI:
 def main() -> None:
     host = os.getenv("APP_HOST", "127.0.0.1")
     port = int(os.getenv("APP_PORT", "8000"))
-    uvicorn.run("app.main:create_app", host=host, port=port, reload=True, factory=True)
+    uvicorn.run("app.main:create_app", host=host, port=port, reload=True, factory=True, log_config=get_uvicorn_log_config())
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+import traceback as _traceback
 from typing import Any, Generator
 from urllib import request
 
@@ -106,6 +108,7 @@ def stream_planning_turn(
         plan=None,
         tool_calls=None,
     )
+    logger.info("Planning turn start, transcript_len=%d, ai_enabled=%s", len(transcript), _planning_llm_enabled(settings))
 
     if not _planning_llm_enabled(settings):
         response = _run_fallback_turn(
@@ -121,11 +124,14 @@ def stream_planning_turn(
     conversation: list[dict[str, str]] = [{"role": "system", "content": build_system_prompt()}, *transcript_messages]
     safety_cap = max(1, settings.ai_planning_max_react_safety_cap)
     round_index = 0
+    turn_start_time = time.monotonic()
     while round_index < safety_cap:
         round_index += 1
         yield {"type": "status", "phase": "thinking", "message": "正在分析需求..."}
 
         raw_response = ""
+        llm_error_type = ""
+        llm_error_detail = ""
         try:
             for event in _stream_planning_llm(
                 messages=conversation,
@@ -138,17 +144,42 @@ def stream_planning_turn(
                     yield event
                 elif event["type"] == "raw_response":
                     raw_response = event["text"]
-        except Exception:
-            logger.exception("Streaming LLM call failed in round %s", round_index + 1)
-            raw_response = ""
+        except httpx.ConnectTimeout:
+            llm_error_type = "ConnectTimeout"
+            llm_error_detail = f"连接 AI 模型服务超时 (base_url={settings.ai_planning_base_url})"
+            logger.error("LLM connection timeout in round %d: %s", round_index, llm_error_detail)
+        except httpx.ReadTimeout:
+            llm_error_type = "ReadTimeout"
+            llm_error_detail = f"AI 模型响应超时 (timeout={settings.ai_planning_timeout_ms}ms)"
+            logger.error("LLM read timeout in round %d: %s", round_index, llm_error_detail)
+        except httpx.HTTPStatusError as exc:
+            llm_error_type = "HTTPStatusError"
+            llm_error_detail = f"AI 模型返回 HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+            logger.error("LLM HTTP error in round %d: %s", round_index, llm_error_detail)
+        except httpx.ConnectError:
+            llm_error_type = "ConnectError"
+            llm_error_detail = f"无法连接 AI 模型服务 (base_url={settings.ai_planning_base_url})"
+            logger.error("LLM connection error in round %d: %s", round_index, llm_error_detail)
+        except Exception as exc:
+            llm_error_type = type(exc).__name__
+            llm_error_detail = str(exc)
+            logger.exception("Streaming LLM call failed in round %d", round_index)
 
         if not raw_response:
-            response = _error_response(requirements=requirements, tool_calls=tool_calls)
+            error_phase = "timeout" if "Timeout" in llm_error_type else ("connection" if "Connect" in llm_error_type else "llm_call")
+            response = _error_response(
+                requirements=requirements,
+                tool_calls=tool_calls,
+                error_type=llm_error_type or "empty_response",
+                error_detail=llm_error_detail or "LLM 返回空响应",
+                phase=error_phase,
+            )
             yield _turn_complete_payload(response)
             return response
 
         parsed = _parse_llm_response(raw_response)
         if parsed is None:
+            logger.warning("LLM response unparseable in round %d, raw (first 300 chars): %s", round_index, raw_response[:300])
             response = _run_fallback_turn(
                 transcript=transcript,
                 requirements=requirements,
@@ -165,6 +196,8 @@ def stream_planning_turn(
         action_input = parsed.get("action_input")
         if not isinstance(action_input, dict):
             action_input = {}
+
+        logger.debug("ReAct round %d: action=%s", round_index, action)
 
         # --- Parse todo_list from LLM response ---
         raw_todo = parsed.get("todo_list") or []
@@ -240,13 +273,26 @@ def stream_planning_turn(
             params = action_input.get("params")
             if not isinstance(params, dict):
                 params = {}
+            logger.info("Tool call: %s, params_keys=%s", tool_name, list(params.keys()))
             yield {"type": "tool_call_start", "tool": tool_name, "params": params}
-            tool_result_text = execute_tool(
-                tool_name=tool_name,
-                params=params,
-                db_session=db_session,
-                project_id=project_id,
-            )
+            try:
+                tool_result_text = execute_tool(
+                    tool_name=tool_name,
+                    params=params,
+                    db_session=db_session,
+                    project_id=project_id,
+                )
+            except Exception as exc:
+                logger.error("Tool call %s failed: %s", tool_name, exc, exc_info=True)
+                response = _error_response(
+                    requirements=requirements,
+                    tool_calls=tool_calls,
+                    error_type=type(exc).__name__,
+                    error_detail=str(exc),
+                    phase="tool_call",
+                )
+                yield _turn_complete_payload(response)
+                return response
             parsed_result = _safe_parse_json(tool_result_text)
             tool_calls.append(
                 AIPlanningToolCall(
@@ -256,6 +302,7 @@ def stream_planning_turn(
                 )
             )
             yield {"type": "tool_call_end", "tool": tool_name, "result": parsed_result}
+            logger.info("Tool call %s completed, result_keys=%s", tool_name, list(parsed_result.keys()) if isinstance(parsed_result, dict) else "non-dict")
             conversation.extend(
                 [
                     {"role": "assistant", "content": _normalize_json_text(raw_response)},
@@ -268,6 +315,7 @@ def stream_planning_turn(
             continue
 
         if action == "generate_plan":
+            logger.info("Generating plan after %d ReAct rounds, tool_calls=%d", round_index, len(tool_calls))
             response = _plan_response(
                 requirements=requirements,
                 plan_payload=action_input,
@@ -339,6 +387,8 @@ def stream_planning_turn(
         return response
 
     # Exhausted safety cap — force-generate a plan
+    elapsed = time.monotonic() - turn_start_time
+    logger.warning("Safety cap exhausted after %d rounds (%.2fs), forcing fallback plan", round_index, elapsed)
     response = _run_fallback_turn(
         transcript=transcript,
         requirements=requirements,
@@ -454,15 +504,17 @@ def _call_llm_with_retry(
 ) -> str | None:
     for attempt in range(3):
         try:
-            return _call_planning_llm(
+            result = _call_planning_llm(
                 messages=messages,
                 api_key=api_key,
                 model=model,
                 base_url=base_url,
                 timeout_seconds=timeout_seconds,
             )
-        except Exception:
-            logger.exception("Planning LLM call failed on attempt %s", attempt + 1)
+            logger.debug("LLM call succeeded on attempt %d", attempt + 1)
+            return result
+        except Exception as exc:
+            logger.exception("Planning LLM call failed on attempt %d/%d: %s", attempt + 1, 3, type(exc).__name__)
     return None
 
 
@@ -537,6 +589,7 @@ def _stream_planning_llm(
                     chunk_payload = json.loads(data)
                     chunk = chunk_payload["choices"][0].get("delta", {}).get("content")
                 except (json.JSONDecodeError, KeyError, IndexError):
+                    logger.debug("SSE parse error, raw_line (first 200 chars): %s", data[:200])
                     continue
                 if chunk:
                     full_text.append(chunk)
@@ -840,9 +893,28 @@ def _error_response(
     *,
     requirements: AIPlanningRequirements,
     tool_calls: list[AIPlanningToolCall],
+    error_type: str = "unknown",
+    error_detail: str = "",
+    phase: str = "unknown",
 ) -> AIPlanningTurnResponse:
+    suggestions: dict[str, str] = {
+        "llm_call": "请检查 AI 模型配置（API Key、Base URL、Model 名称）是否正确，以及模型服务是否可用。",
+        "json_parse": "AI 模型返回了无法解析的内容，请检查模型是否支持 JSON 输出模式（response_format=json_object）。",
+        "tool_call": "工具调用执行失败，请查看后端日志获取详细堆栈信息。",
+        "timeout": "AI 模型调用超时，请检查网络连接或增大超时时间配置。",
+        "connection": "无法连接到 AI 模型服务，请检查 Base URL 是否正确、服务是否在运行。",
+    }
+    suggestion = suggestions.get(phase, "请查看后端日志获取详细错误信息。")
+    detail_parts = [f"阶段: {phase}"]
+    if error_type != "unknown":
+        detail_parts.append(f"错误类型: {error_type}")
+    if error_detail:
+        detail_parts.append(f"详细信息: {error_detail}")
+    detail_parts.append(f"建议: {suggestion}")
+    full_message = "AI 规划过程中遇到错误。\n" + "\n".join(detail_parts)
+    logger.error("Planning error: type=%s, phase=%s, detail=%s", error_type, phase, error_detail[:500])
     return AIPlanningTurnResponse(
-        assistant_message="AI 规划模型连续调用失败，请检查 AI planning 模型配置后再试。",
+        assistant_message=full_message,
         session_status="error",
         requirements=requirements,
         missing_slots=_collect_missing_slots(requirements),
