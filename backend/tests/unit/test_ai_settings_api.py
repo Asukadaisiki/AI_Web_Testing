@@ -105,6 +105,7 @@ def test_update_ai_settings_persists_to_env_file_and_allows_clearing_keys(
 ) -> None:
     monkeypatch.setenv("AI_DSL_API_KEY", "old-dsl-secret")
     monkeypatch.setenv("VLM_API_KEY", "old-vlm-secret")
+    monkeypatch.delenv("AI_PLANNING_API_KEY", raising=False)
     config_module.get_settings.cache_clear()
 
     response = ai_settings_client.put(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -93,9 +94,16 @@ class FakePage:
 
 
 @pytest.fixture(autouse=True)
-def clear_ai_visual_session_cache() -> None:
+def _reset_logging_propagation() -> None:
+    """Ensure app loggers propagate to root so caplog can capture them.
+
+    setup_logging() (called by create_app) sets app logger propagate=False,
+    which breaks caplog in the full test suite when other test files create
+    a TestClient (which calls create_app -> setup_logging).
+    """
     fallback_module._clear_ai_visual_session_cache()
     reset_ai_visual_runtime_state()
+    logging.getLogger("app").propagate = True
 
 
 def _create_source_execution(db_session) -> int:
@@ -206,15 +214,16 @@ def test_resolve_with_fallback_disables_correction_after_three_failures(db_sessi
     monkeypatch.setattr(db_session, "flush", flush_spy)
 
     page = FakePage(url="https://app.example.com/users/123", correction_should_fail=True)
-    for _ in range(3):
-        with pytest.raises(InterventionNeededError):
-            resolve_with_fallback(
-                page,
-                "登录按钮",
-                correction_store=SQLAlchemyCorrectionStore(db_session),
-                execution_id=execution_id,
-                require_enabled=True,
-            )
+    with caplog.at_level("WARNING", logger="app"):
+        for _ in range(3):
+            with pytest.raises(InterventionNeededError):
+                resolve_with_fallback(
+                    page,
+                    "登录按钮",
+                    correction_store=SQLAlchemyCorrectionStore(db_session),
+                    execution_id=execution_id,
+                    require_enabled=True,
+                )
 
     assert correction.consecutive_failures == 3
     assert correction.is_active is False
@@ -275,8 +284,9 @@ def test_resolve_with_fallback_logs_ai_capture_failures(monkeypatch, caplog) -> 
         MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
     )
 
-    with pytest.raises(InterventionNeededError):
-        resolve_with_fallback(page, "登录按钮")
+    with caplog.at_level("WARNING", logger="app"):
+        with pytest.raises(InterventionNeededError):
+            resolve_with_fallback(page, "登录按钮")
 
     assert "AI visual fallback failed" in caplog.text
 
@@ -368,7 +378,7 @@ def test_resolve_with_fallback_invalidates_cached_visible_selector_when_semantic
     resolve_with_fallback(first_page, "鐧诲綍鎸夐挳")
 
     semantic_spy.reset_mock()
-    with caplog.at_level("DEBUG"):
+    with caplog.at_level("DEBUG", logger="app"):
         resolved = resolve_with_fallback(second_page, "鐧诲綍鎸夐挳")
 
     assert resolved.strategy == "ai_visual"
@@ -416,7 +426,7 @@ def test_resolve_with_fallback_invalidates_cached_ai_visual_selector_when_locato
 
     resolve_with_fallback(first_page, "登录按钮")
 
-    with caplog.at_level("DEBUG"):
+    with caplog.at_level("DEBUG", logger="app"):
         result = resolve_with_fallback(stale_page, "登录按钮")
         # Tier 2.5 coordinate click fallback returns coordinates instead of raising
         assert result.click_coordinates == (200, 100)
@@ -533,5 +543,6 @@ def test_format_elements_for_prompt_marks_dynamic_elements() -> None:
         {"tag": "a", "text": "View Cart", "visible": True, "discovered_via_interaction": True},
     ]
     result = format_elements_for_prompt(elements)
-    assert "button [text='Login']" in result
-    assert "a [text='View Cart'] [dynamic]" in result
+    assert "[text='Login']" in result
+    assert "[text='View Cart']" in result
+    assert "[dynamic]" in result

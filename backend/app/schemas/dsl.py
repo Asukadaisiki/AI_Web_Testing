@@ -13,6 +13,7 @@ class DSLModel(BaseModel):
 
 
 TargetStrategy = Literal["css", "xpath", "data-testid", "element_id", "tag", "semantic"]
+LocatorConfidence = Literal["high", "medium", "low"]
 
 
 class GotoStep(DSLModel):
@@ -24,6 +25,9 @@ class ClickStep(DSLModel):
     action: Literal["click"]
     target: str = Field(min_length=1, description="Semantic or explicit locator.")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
+    locator_confidence: LocatorConfidence | None = Field(
+        default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
+    )
 
 
 class InputStep(DSLModel):
@@ -31,6 +35,9 @@ class InputStep(DSLModel):
     target: str = Field(min_length=1, description="Semantic or explicit locator.")
     value: str = Field(description="Input text.")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
+    locator_confidence: LocatorConfidence | None = Field(
+        default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
+    )
 
 
 class WaitForStep(DSLModel):
@@ -38,6 +45,9 @@ class WaitForStep(DSLModel):
     target: str = Field(min_length=1, description="Target to wait for.")
     timeout_ms: int = Field(default=5000, ge=1, le=60000)
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
+    locator_confidence: LocatorConfidence | None = Field(
+        default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
+    )
 
 
 class AssertTextStep(DSLModel):
@@ -45,6 +55,9 @@ class AssertTextStep(DSLModel):
     target: str = Field(min_length=1, description="Target to assert against.")
     value: str = Field(min_length=1, description="Expected text.")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
+    locator_confidence: LocatorConfidence | None = Field(
+        default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
+    )
 
 
 class AssertUrlContainsStep(DSLModel):
@@ -62,6 +75,9 @@ class CaptureTextStep(DSLModel):
         description="Runtime variable name to store the captured text.",
     )
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
+    locator_confidence: LocatorConfidence | None = Field(
+        default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
+    )
 
 
 DSLVariableType = Literal["string", "number", "boolean", "object", "array"]

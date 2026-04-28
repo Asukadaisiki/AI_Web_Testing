@@ -74,8 +74,8 @@ def test_validate_dsl_case_success(client) -> None:
             ],
             "steps": [
                 {"action": "goto", "value": "/login"},
-                {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None},
-                {"action": "click", "target": "登录按钮", "target_strategy": None},
+                {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None, "locator_confidence": None},
+                {"action": "click", "target": "登录按钮", "target_strategy": None, "locator_confidence": None},
                 {"action": "assert_url_contains", "value": "/dashboard"},
             ],
         },
@@ -674,7 +674,7 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     assert response.status_code == 200
     assert response.json()["case"]["steps"] == [
         {"action": "goto", "value": "/login"},
-        {"action": "click", "target": "123", "target_strategy": None},
+        {"action": "click", "target": "123", "target_strategy": None, "locator_confidence": None},
     ]
     assert response.json()["case"]["output_contract"] == [
         {
@@ -1090,9 +1090,9 @@ def test_generate_dsl_case_repairs_wrapped_dsl_root_and_step_aliases(client, mon
     assert response.json()["case"]["name"] == "包装结构草案"
     assert response.json()["case"]["steps"] == [
         {"action": "goto", "value": "/login"},
-        {"action": "click", "target": "登录按钮", "target_strategy": None},
-        {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None},
-        {"action": "assert_text", "target": "欢迎文案", "value": "欢迎", "target_strategy": None},
+        {"action": "click", "target": "登录按钮", "target_strategy": None, "locator_confidence": None},
+        {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None, "locator_confidence": None},
+        {"action": "assert_text", "target": "欢迎文案", "value": "欢迎", "target_strategy": None, "locator_confidence": None},
         {"action": "assert_url_contains", "value": "/dashboard"},
     ]
     assert response.json()["normalization_notes"] == [

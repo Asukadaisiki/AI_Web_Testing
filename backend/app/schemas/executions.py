@@ -129,6 +129,22 @@ class StepExecutionEvidence(DSLModel):
     screenshot_url: str | None = None
     error_message: str | None = None
     intervention_request: InterventionRequest | None = None
+    click_recovery: str | None = Field(
+        default=None,
+        description="Recovery strategy used when click was intercepted: wait|dismiss|avoid|force|remove.",
+    )
+    click_recovery_detail: str | None = Field(
+        default=None,
+        description="Detail of the recovery action taken for click interception.",
+    )
+    locator_confidence: Literal["high", "medium", "low"] | None = Field(
+        default=None,
+        description="AI-assessed locator confidence for this step's target.",
+    )
+    vlm_preverify_used: bool = Field(
+        default=False,
+        description="Whether VLM pre-verification was triggered due to low confidence.",
+    )
 
 
 class ExecutionReport(DSLModel):

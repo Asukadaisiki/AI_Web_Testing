@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -64,25 +65,167 @@ def is_storage_state_stale(meta: dict[str, Any]) -> bool:
         return True
 
 
+def _compute_element_stability(element: dict[str, Any], all_elements: list[dict[str, Any]]) -> float:
+    """Compute a stability score for an element based on its distinguishing attributes.
+
+    Scoring rules (aligned with research doc Section 5.1):
+    - data-testid unique: 0.95
+    - stable id (non-hash): 0.90
+    - aria-label + role unique: 0.80
+    - name/type combo: 0.75
+    - href with business path: 0.70
+    - css_selector short & stable: 0.55
+    - text-only match: 0.40
+    - xpath with position index: 0.20
+    """
+    tag = element.get("tag", "")
+    text = element.get("text") or ""
+    data_testid = element.get("data_testid")
+    elem_id = element.get("id") or ""
+    aria_label = element.get("aria_label")
+    role = element.get("role")
+    href = element.get("href")
+    css = element.get("css_selector") or ""
+    xpath = element.get("xpath") or ""
+
+    # Count how many elements share the same tag+text combo (duplicates)
+    same_tag_text = sum(
+        1 for e in all_elements
+        if e.get("tag") == tag and (e.get("text") or "") == text
+    )
+    has_duplicates = same_tag_text > 1
+
+    # Highest priority: unique data-testid
+    if data_testid:
+        testid_count = sum(1 for e in all_elements if e.get("data_testid") == data_testid)
+        if testid_count == 1:
+            return 0.95
+        return 0.85
+
+    # Stable element id (not hash/uuid pattern)
+    _DYNAMIC_ID = re.compile(r"[0-9a-f]{8,}|auto\d+|tmp| rnd", re.IGNORECASE)
+    if elem_id and not _DYNAMIC_ID.search(elem_id):
+        id_count = sum(1 for e in all_elements if e.get("id") == elem_id)
+        if id_count == 1:
+            return 0.90
+
+    # Unique aria-label + role
+    if aria_label and role:
+        combo = (aria_label, role)
+        combo_count = sum(
+            1 for e in all_elements
+            if e.get("aria_label") == combo[0] and e.get("role") == combo[1]
+        )
+        if combo_count == 1:
+            return 0.80
+
+    # Unique aria-label alone
+    if aria_label:
+        al_count = sum(1 for e in all_elements if e.get("aria_label") == aria_label)
+        if al_count == 1:
+            return 0.78
+
+    # href with business path (not # or javascript:)
+    if href and tag == "a" and not href.startswith(("#", "javascript:")):
+        href_count = sum(1 for e in all_elements if e.get("href") == href and e.get("tag") == "a")
+        if href_count == 1:
+            return 0.70
+        if href_count <= 3:
+            return 0.60
+
+    # Unique text (but only if not duplicated)
+    if text and not has_duplicates:
+        return 0.55
+
+    # Text with duplicates — moderate
+    if text and has_duplicates:
+        if css and len(css) < 60:
+            return 0.45
+        return 0.35
+
+    # XPath with position index — least stable
+    if re.search(r"\[\d+\]", xpath):
+        return 0.20
+
+    # Fallback
+    return 0.30
+
+
+def _format_element_rich(element: dict[str, Any], stability: float) -> str:
+    """Format a single element with full attributes and stability score."""
+    tag = element.get("tag", "unknown")
+    parts: list[str] = [tag]
+
+    # Primary distinguishing attributes (ordered by stability)
+    data_testid = element.get("data_testid")
+    if data_testid:
+        parts.append(f"[data-testid='{data_testid}']")
+
+    elem_id = element.get("id")
+    if elem_id:
+        parts[0] = f"{tag}#{elem_id}"
+
+    role = element.get("role")
+    if role:
+        parts.append(f"[role='{role}']")
+
+    aria_label = element.get("aria_label")
+    if aria_label:
+        parts.append(f"[aria-label='{aria_label}']")
+
+    placeholder = element.get("placeholder")
+    if placeholder:
+        parts.append(f"[placeholder='{placeholder}']")
+
+    text = element.get("text")
+    if text:
+        truncated = text[:80] + ("..." if len(text) > 80 else "")
+        parts.append(f"[text='{truncated}']")
+
+    href = element.get("href")
+    if href:
+        parts.append(f"[href='{href}']")
+
+    if element.get("discovered_via_interaction"):
+        parts.append("[dynamic]")
+
+    primary = "".join(parts)
+
+    # Secondary attributes (pipe-separated)
+    extras: list[str] = []
+    css = element.get("css_selector")
+    if css:
+        extras.append(f"css={css}")
+
+    xpath = element.get("xpath")
+    if xpath:
+        extras.append(f"xpath={xpath}")
+
+    rect = element.get("rect")
+    if rect and isinstance(rect, dict):
+        extras.append(f"rect={rect.get('x', 0):.0f},{rect.get('y', 0):.0f},{rect.get('width', 0):.0f},{rect.get('height', 0):.0f}")
+
+    enabled = element.get("enabled")
+    if enabled is False:
+        extras.append("disabled")
+
+    extras.append(f"stable={stability:.2f}")
+
+    secondary = " | ".join(extras)
+    return f"{primary} | {secondary}"
+
+
 def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
-    """Format collected DOM elements into a concise text block for AI prompt injection."""
+    """Format collected DOM elements into rich text for AI prompt injection.
+
+    Each element is formatted with full attributes and a stability score,
+    enabling the AI to make informed decisions about which locator strategy to use.
+    """
+    visible = [e for e in elements if e.get("visible", True)]
     lines: list[str] = []
-    for element in elements:
-        if not element.get("visible", True):
-            continue
-        tag = element.get("tag", "unknown")
-        elem_id = element.get("id") or ""
-        parts: list[str] = [f"{tag}"]
-        if elem_id:
-            parts[0] = f"{tag}#{elem_id}"
-        for attr in ("aria_label", "placeholder", "text", "role"):
-            value = element.get(attr)
-            if value:
-                attr_display = attr.replace("_", "-")
-                parts.append(f"[{attr_display}='{value}']")
-        if element.get("discovered_via_interaction"):
-            parts.append("[dynamic]")
-        lines.append(" ".join(parts))
+    for element in visible:
+        stability = _compute_element_stability(element, visible)
+        lines.append(_format_element_rich(element, stability))
     return "\n".join(lines)
 
 
@@ -200,6 +343,10 @@ def collect_interactable_elements(
             "aria_label": elem.get("aria_label"),
             "placeholder": elem.get("placeholder"),
             "href": elem.get("href"),
+            "data_testid": elem.get("data_testid"),
+            "css_selector": elem.get("css_selector"),
+            "xpath": elem.get("xpath"),
+            "rect": elem.get("rect"),
             "visible": elem.get("visible", False),
             "enabled": elem.get("enabled", False),
         }
@@ -317,6 +464,10 @@ def collect_multi_page_elements(
                         "aria_label": elem.get("aria_label"),
                         "placeholder": elem.get("placeholder"),
                         "href": elem.get("href"),
+                        "data_testid": elem.get("data_testid"),
+                        "css_selector": elem.get("css_selector"),
+                        "xpath": elem.get("xpath"),
+                        "rect": elem.get("rect"),
                         "visible": elem.get("visible", False),
                         "enabled": elem.get("enabled", False),
                     }

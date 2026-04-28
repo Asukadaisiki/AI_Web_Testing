@@ -12,6 +12,9 @@ from urllib.parse import urljoin
 
 from app.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
 from app.locators.corrections import CorrectionStore
+from app.locators.semantic import ResolvedLocator
+from app.runners.click_preprocessor import click_with_precheck
+from app.runners.locator_confidence import preverify_with_vlm
 from app.schemas.dsl import DSLCase
 from app.schemas.executions import (
     AILocateCandidate,
@@ -27,6 +30,42 @@ from app.schemas.executions import (
 ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts" / "executions"
 
 _VARIABLE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _resolve_with_confidence_gate(
+    page,
+    target: str,
+    *,
+    locator_confidence: str | None = None,
+    target_strategy: str | None = None,
+    correction_store: CorrectionStore | None = None,
+    execution_id: int | None = None,
+    prefer_input: bool = False,
+    require_visible: bool = True,
+    require_enabled: bool = False,
+) -> tuple[ResolvedLocator, bool]:
+    """Resolve a locator with optional VLM pre-verification for low-confidence targets.
+
+    Returns (resolved_locator, vlm_preverify_used).
+    """
+    vlm_preverify_used = False
+
+    if locator_confidence == "low":
+        vlm_result = preverify_with_vlm(page, target)
+        if vlm_result is not None:
+            return vlm_result, True
+        vlm_preverify_used = True  # Attempted but fell through
+
+    resolved = resolve_with_fallback(
+        page, target,
+        target_strategy=target_strategy,
+        correction_store=correction_store,
+        execution_id=execution_id,
+        prefer_input=prefer_input,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+    return resolved, vlm_preverify_used
 
 
 def _substitute_variables(value: str | None, input_values: dict[str, str] | None) -> str | None:
@@ -154,12 +193,16 @@ def execute_case_with_playwright(
 
                 try:
                     resolved_by = None
+                    click_recovery = None
+                    click_recovery_detail = None
+                    vlm_preverify_used = False
                     if step.action == "goto":
                         page.goto(_resolve_url(_substitute_variables(step.value, _vars()), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
                             step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -168,14 +211,19 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        if resolved.click_coordinates is not None:
-                            page.mouse.click(*resolved.click_coordinates)
-                        else:
-                            resolved.locator.click()
+                        cr = click_with_precheck(
+                            page, resolved.locator,
+                            click_coordinates=resolved.click_coordinates,
+                        )
+                        if not cr.succeeded:
+                            raise cr.original_error or RunnerExecutionError("Click failed")
+                        click_recovery = cr.recovery_strategy
+                        click_recovery_detail = cr.recovery_detail
                     elif step.action == "input":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
                             step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -187,7 +235,14 @@ def execute_case_with_playwright(
                         locator_trace = resolved.trace
                         input_value = _substitute_variables(step.value, _vars())
                         if resolved.click_coordinates is not None:
-                            page.mouse.click(*resolved.click_coordinates)
+                            cr = click_with_precheck(
+                                page, resolved.locator,
+                                click_coordinates=resolved.click_coordinates,
+                            )
+                            if not cr.succeeded:
+                                raise cr.original_error or RunnerExecutionError("Click failed")
+                            click_recovery = cr.recovery_strategy
+                            click_recovery_detail = cr.recovery_detail
                             page.keyboard.type(input_value)
                         else:
                             tag_name = resolved.locator.evaluate("el => el.tagName.toLowerCase()")
@@ -196,9 +251,10 @@ def execute_case_with_playwright(
                             else:
                                 resolved.locator.fill(input_value)
                     elif step.action == "wait_for":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
                             step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -208,9 +264,10 @@ def execute_case_with_playwright(
                         locator_trace = resolved.trace
                         resolved.locator.wait_for(state="visible", timeout=step.timeout_ms)
                     elif step.action == "assert_text":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
                             step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -225,9 +282,10 @@ def execute_case_with_playwright(
                                 f"URL assertion failed, expected fragment: {_substitute_variables(step.value, _vars())}"
                             )
                     elif step.action == "capture_text":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
                             step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -257,6 +315,10 @@ def execute_case_with_playwright(
                             console_events=console_buffer[console_index:],
                             network_events=network_buffer[network_index:],
                             screenshot_path=_take_step_screenshot(page, artifact_dir, index),
+                            click_recovery=click_recovery,
+                            click_recovery_detail=click_recovery_detail,
+                            locator_confidence=getattr(step, "locator_confidence", None),
+                            vlm_preverify_used=vlm_preverify_used,
                         )
                     )
                 except InterventionNeededError as exc:
@@ -265,6 +327,8 @@ def execute_case_with_playwright(
                         StepExecutionEvidence(
                             step_index=index,
                             action=step.action,
+                            locator_confidence=getattr(step, "locator_confidence", None),
+                            vlm_preverify_used=vlm_preverify_used,
                             target=getattr(step, "target", None),
                             value=getattr(step, "value", None),
                             status="failed",
@@ -324,6 +388,8 @@ def execute_case_with_playwright(
                             network_events=network_buffer[network_index:],
                             screenshot_path=_take_step_screenshot(page, artifact_dir, index),
                             error_message=str(exc),
+                            locator_confidence=getattr(step, "locator_confidence", None),
+                            vlm_preverify_used=vlm_preverify_used,
                         )
                     )
                     raise RunnerExecutionError(str(exc), step_results=step_results) from exc
@@ -396,11 +462,15 @@ def execute_case_with_playwright_streaming(
 
                 try:
                     resolved_by = None
+                    click_recovery = None
+                    click_recovery_detail = None
+                    vlm_preverify_used = False
                     if step.action == "goto":
                         page.goto(_resolve_url(_substitute_variables(step.value, _vars()), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page, step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -408,13 +478,18 @@ def execute_case_with_playwright_streaming(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        if resolved.click_coordinates is not None:
-                            page.mouse.click(*resolved.click_coordinates)
-                        else:
-                            resolved.locator.click()
+                        cr = click_with_precheck(
+                            page, resolved.locator,
+                            click_coordinates=resolved.click_coordinates,
+                        )
+                        if not cr.succeeded:
+                            raise cr.original_error or RunnerExecutionError("Click failed")
+                        click_recovery = cr.recovery_strategy
+                        click_recovery_detail = cr.recovery_detail
                     elif step.action == "input":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page, step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -424,7 +499,14 @@ def execute_case_with_playwright_streaming(
                         locator_trace = resolved.trace
                         input_value = _substitute_variables(step.value, _vars())
                         if resolved.click_coordinates is not None:
-                            page.mouse.click(*resolved.click_coordinates)
+                            cr = click_with_precheck(
+                                page, resolved.locator,
+                                click_coordinates=resolved.click_coordinates,
+                            )
+                            if not cr.succeeded:
+                                raise cr.original_error or RunnerExecutionError("Click failed")
+                            click_recovery = cr.recovery_strategy
+                            click_recovery_detail = cr.recovery_detail
                             page.keyboard.type(input_value)
                         else:
                             tag_name = resolved.locator.evaluate("el => el.tagName.toLowerCase()")
@@ -433,8 +515,9 @@ def execute_case_with_playwright_streaming(
                             else:
                                 resolved.locator.fill(input_value)
                     elif step.action == "wait_for":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page, step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -444,8 +527,9 @@ def execute_case_with_playwright_streaming(
                         locator_trace = resolved.trace
                         resolved.locator.wait_for(state="visible", timeout=step.timeout_ms)
                     elif step.action == "assert_text":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page, step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -460,8 +544,9 @@ def execute_case_with_playwright_streaming(
                                 f"URL assertion failed, expected fragment: {_substitute_variables(step.value, _vars())}"
                             )
                     elif step.action == "capture_text":
-                        resolved = resolve_with_fallback(
+                        resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page, step.target,
+                            locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
                             execution_id=execution_id,
@@ -490,6 +575,10 @@ def execute_case_with_playwright_streaming(
                         console_events=console_buffer[console_index:],
                         network_events=network_buffer[network_index:],
                         screenshot_path=_take_step_screenshot(page, artifact_dir, index),
+                        click_recovery=click_recovery,
+                        click_recovery_detail=click_recovery_detail,
+                        locator_confidence=getattr(step, "locator_confidence", None),
+                        vlm_preverify_used=vlm_preverify_used,
                     )
                     step_results.append(evidence)
 
@@ -514,6 +603,8 @@ def execute_case_with_playwright_streaming(
                         network_events=network_buffer[network_index:],
                         screenshot_path=screenshot_path,
                         error_message=str(exc),
+                        locator_confidence=getattr(step, "locator_confidence", None),
+                        vlm_preverify_used=vlm_preverify_used,
                         intervention_request=InterventionRequest(
                             screenshot_url=_artifact_url_for_path(screenshot_path),
                             page_url=exc.page_url, target_description=exc.target,
@@ -556,6 +647,8 @@ def execute_case_with_playwright_streaming(
                         network_events=network_buffer[network_index:],
                         screenshot_path=_take_step_screenshot(page, artifact_dir, index),
                         error_message=str(exc),
+                        locator_confidence=getattr(step, "locator_confidence", None),
+                        vlm_preverify_used=vlm_preverify_used,
                     )
                     step_results.append(evidence)
                     yield StepStreamEvent(

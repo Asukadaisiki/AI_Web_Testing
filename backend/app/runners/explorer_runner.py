@@ -26,6 +26,8 @@ from app.runners.playwright_runner import (
     _substitute_variables,
     _take_step_screenshot,
 )
+from app.runners.click_preprocessor import click_with_precheck
+from app.runners.locator_confidence import preverify_with_vlm
 from app.schemas.dsl import DSLCase
 from app.schemas.explorer_judge import ExplorerStepEvidence, ExplorationResult
 
@@ -187,6 +189,33 @@ def run_explorer(
     )
 
 
+def _resolve_with_gate(
+    page, target: str,
+    *,
+    locator_confidence: str | None = None,
+    target_strategy: str | None = None,
+    correction_store: CorrectionStore | None = None,
+    execution_id: int | None = None,
+    prefer_input: bool = False,
+    require_visible: bool = True,
+    require_enabled: bool = False,
+):
+    """Resolve with optional VLM pre-verification for low-confidence targets."""
+    if locator_confidence == "low":
+        vlm_result = preverify_with_vlm(page, target)
+        if vlm_result is not None:
+            return vlm_result
+    return resolve_with_fallback(
+        page, target,
+        target_strategy=target_strategy,
+        correction_store=correction_store,
+        execution_id=execution_id,
+        prefer_input=prefer_input,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+
+
 def _execute_step(page, step, execution_id: int, base_url: str | None, *,
                    correction_store: CorrectionStore | None = None,
                    input_values: dict[str, str] | None = None,
@@ -201,20 +230,24 @@ def _execute_step(page, step, execution_id: int, base_url: str | None, *,
     if step.action == "goto":
         page.goto(_resolve_url(_substitute_variables(step.value, combined), base_url), wait_until="domcontentloaded")
     elif step.action == "click":
-        resolved = resolve_with_fallback(
+        resolved = _resolve_with_gate(
             page, step.target,
+            locator_confidence=getattr(step, "locator_confidence", None),
             target_strategy=step.target_strategy,
             correction_store=correction_store,
             execution_id=execution_id,
             require_visible=True, require_enabled=True,
         )
-        if resolved.click_coordinates is not None:
-            page.mouse.click(*resolved.click_coordinates)
-        else:
-            resolved.locator.click()
+        cr = click_with_precheck(
+            page, resolved.locator,
+            click_coordinates=resolved.click_coordinates,
+        )
+        if not cr.succeeded:
+            raise cr.original_error or RunnerExecutionError("Click failed")
     elif step.action == "input":
-        resolved = resolve_with_fallback(
+        resolved = _resolve_with_gate(
             page, step.target,
+            locator_confidence=getattr(step, "locator_confidence", None),
             target_strategy=step.target_strategy,
             correction_store=correction_store,
             execution_id=execution_id,
@@ -222,13 +255,19 @@ def _execute_step(page, step, execution_id: int, base_url: str | None, *,
         )
         input_value = _substitute_variables(step.value, combined)
         if resolved.click_coordinates is not None:
-            page.mouse.click(*resolved.click_coordinates)
+            cr = click_with_precheck(
+                page, resolved.locator,
+                click_coordinates=resolved.click_coordinates,
+            )
+            if not cr.succeeded:
+                raise cr.original_error or RunnerExecutionError("Click failed")
             page.keyboard.type(input_value)
         else:
             resolved.locator.fill(input_value)
     elif step.action == "wait_for":
-        resolved = resolve_with_fallback(
+        resolved = _resolve_with_gate(
             page, step.target,
+            locator_confidence=getattr(step, "locator_confidence", None),
             target_strategy=step.target_strategy,
             correction_store=correction_store,
             execution_id=execution_id,
@@ -236,8 +275,9 @@ def _execute_step(page, step, execution_id: int, base_url: str | None, *,
         )
         resolved.locator.wait_for(state="visible", timeout=step.timeout_ms)
     elif step.action == "assert_text":
-        resolved = resolve_with_fallback(
+        resolved = _resolve_with_gate(
             page, step.target,
+            locator_confidence=getattr(step, "locator_confidence", None),
             target_strategy=step.target_strategy,
             correction_store=correction_store,
             execution_id=execution_id,
@@ -250,8 +290,9 @@ def _execute_step(page, step, execution_id: int, base_url: str | None, *,
                 f"URL assertion failed, expected fragment: {_substitute_variables(step.value, combined)}"
             )
     elif step.action == "capture_text":
-        resolved = resolve_with_fallback(
+        resolved = _resolve_with_gate(
             page, step.target,
+            locator_confidence=getattr(step, "locator_confidence", None),
             target_strategy=step.target_strategy,
             correction_store=correction_store,
             execution_id=execution_id,
