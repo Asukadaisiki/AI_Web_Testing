@@ -9,6 +9,21 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-28 (Session 12 — DOM 选择器评分 + VLM 置信度门控 + 点击前置处理器)
+
+- 任务：解决 AI 生成的定位器质量差导致执行失败的问题，并实现研究文档中的分阶段落地计划
+- 背景：brand filter cart 测试中 Step 19 "Add to cart" 因 XPath 位置索引定位到错误元素（第1个商品而非第2个）。根因：`format_elements_for_prompt()` 丢弃了 data-testid/css_selector/xpath/rect 等关键属性，AI 无法区分同类重复元素
+- 操作：
+  1. **元素稳定性评分** `page_explorer.py`：新建 `_compute_element_stability()` 按规则打分（data-testid=0.95 > id=0.90 > aria-label=0.80 > href=0.70 > css=0.55 > text=0.40 > xpath=0.20），重写 `format_elements_for_prompt()` 输出完整属性+稳定性分数，`collect_*()` 传递 data_testid/css_selector/xpath/rect
+  2. **AI 置信度门控** `schemas/dsl.py`：5 个 Step 类型新增 `locator_confidence` 字段（high/medium/low）；`dsl_generator.py` prompt 新增稳定性优先级引导+重复元素消歧+confidence 自评规则
+  3. **VLM 预验证模块** `runners/locator_confidence.py`（新建）：`preverify_with_vlm()` 对 low confidence 目标触发 VLM 视觉验证
+  4. **Runner 集成**：`playwright_runner.py` 新增 `_resolve_with_confidence_gate()`，sync+streaming 全部接入；`explorer_runner.py` 新增 `_resolve_with_gate()`
+  5. **点击前置处理器** `runners/click_preprocessor.py`（新建）：诊断 overlay 类型后按 等待→关闭→避让→强制→移除 降级链处理，已集成到两个 runner
+  6. **测试套件修复**：修复 9 个已有测试失败——caplog 被 `setup_logging()` 的 `propagate=False` 打断、3 个废弃 WebSocket 测试、scenario 缺 page_elements、AI_PLANNING_API_KEY 环境变量污染
+- 结果：416/416 单元测试全部通过，0 失败
+- 验证：`cd backend && uv run pytest tests/unit/ -q` → 416 passed
+- 后续：E2E 验证 brand filter cart 测试用例，确认 AI 能否利用新的元素信息生成更准确的定位器
+
 ## 2026-04-28 (Session 11 — 加强后端日志输出和 Agent 错误信息)
 
 - 任务：解决 Agent 在卡壳时不主动抛出错误、错误信息不详细、后端日志太少无法追踪运行链路的问题
