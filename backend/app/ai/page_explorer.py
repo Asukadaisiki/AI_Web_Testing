@@ -11,6 +11,7 @@ from typing import Any
 from playwright.sync_api import sync_playwright
 
 from app.locators.fallback import EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT
+from app.runners.pre_scorer import score_candidates_for_element, ELEMENT_TYPE_SCORES
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +212,10 @@ def _format_element_rich(element: dict[str, Any], stability: float) -> str:
 
     extras.append(f"stable={stability:.2f}")
 
+    if element.get("candidates"):
+        top_cand = element["candidates"][0]
+        extras.append(f"top_candidate={top_cand['strategy']}({top_cand['pre_score']:.2f})")
+
     secondary = " | ".join(extras)
     return f"{primary} | {secondary}"
 
@@ -334,8 +339,11 @@ def collect_interactable_elements(
     if not isinstance(payload, list):
         return []
 
-    return [
-        {
+    result: list[dict[str, Any]] = []
+    for elem in payload:
+        if not isinstance(elem, dict):
+            continue
+        element = {
             "tag": elem.get("tag", "unknown"),
             "id": _extract_element_id(elem),
             "text": elem.get("text"),
@@ -350,9 +358,11 @@ def collect_interactable_elements(
             "visible": elem.get("visible", False),
             "enabled": elem.get("enabled", False),
         }
-        for elem in payload
-        if isinstance(elem, dict)
-    ]
+        element["candidates"] = score_candidates_for_element(element)
+        tag = element.get("tag", "")
+        element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
+        result.append(element)
+    return result
 
 
 def capture_browser_session(
@@ -455,25 +465,30 @@ def collect_multi_page_elements(
                     })
                     continue
 
-                elements = [
-                    {
-                        "tag": elem.get("tag", "unknown"),
-                        "id": _extract_element_id(elem),
-                        "text": elem.get("text"),
-                        "role": elem.get("role"),
-                        "aria_label": elem.get("aria_label"),
-                        "placeholder": elem.get("placeholder"),
-                        "href": elem.get("href"),
-                        "data_testid": elem.get("data_testid"),
-                        "css_selector": elem.get("css_selector"),
-                        "xpath": elem.get("xpath"),
-                        "rect": elem.get("rect"),
-                        "visible": elem.get("visible", False),
-                        "enabled": elem.get("enabled", False),
-                    }
-                    for elem in payload
-                    if isinstance(elem, dict)
-                ] if isinstance(payload, list) else []
+                elements: list[dict[str, Any]] = []
+                if isinstance(payload, list):
+                    for elem in payload:
+                        if not isinstance(elem, dict):
+                            continue
+                        element = {
+                            "tag": elem.get("tag", "unknown"),
+                            "id": _extract_element_id(elem),
+                            "text": elem.get("text"),
+                            "role": elem.get("role"),
+                            "aria_label": elem.get("aria_label"),
+                            "placeholder": elem.get("placeholder"),
+                            "href": elem.get("href"),
+                            "data_testid": elem.get("data_testid"),
+                            "css_selector": elem.get("css_selector"),
+                            "xpath": elem.get("xpath"),
+                            "rect": elem.get("rect"),
+                            "visible": elem.get("visible", False),
+                            "enabled": elem.get("enabled", False),
+                        }
+                        element["candidates"] = score_candidates_for_element(element)
+                        tag = element.get("tag", "")
+                        element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
+                        elements.append(element)
 
                 formatted = format_elements_for_prompt(elements)
 

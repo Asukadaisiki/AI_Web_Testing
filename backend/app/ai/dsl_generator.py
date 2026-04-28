@@ -377,6 +377,16 @@ def _build_user_prompt_lines(
             [
                 "页面可交互元素清单（请严格使用其中的 label、placeholder 或 id 作为 target）：",
                 payload.page_elements,
+                "",
+                "评分与候选策略规则：",
+                "- 元素清单中包含 candidates 字段，每个候选有 strategy、selector、pre_score",
+                "- 如果元素有 candidates，在对应步骤中使用 candidates 字段（取前 3 个候选，按 pre_score 降序）",
+                "- 每个交互步骤的最后一个候选必须是 VLM 策略（strategy='vlm', pre_score=0.0）作为兜底",
+                "- 每个交互步骤应推断至少 1 个 postcondition：",
+                "  - 导航点击 → {type: 'url_changes'} 或 {type: 'url_contains', value: '...'}",
+                "  - 表单提交 → {type: 'url_contains', value: '...'} 或 {type: 'text_visible', value: '...'}",
+                "  - 输入操作 → {type: 'value_changed'}",
+                "  - 删除操作 → {type: 'text_gone', value: '...'}",
             ]
         )
     if payload.retry_from_generation_id is not None and payload.retry_reason_code is not None:
