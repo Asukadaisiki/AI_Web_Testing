@@ -16,6 +16,34 @@ TargetStrategy = Literal["css", "xpath", "data-testid", "element_id", "tag", "se
 LocatorConfidence = Literal["high", "medium", "low"]
 
 
+class LocatorCandidate(BaseModel):
+    """Pre-scored candidate locator strategy for a DSL step."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    strategy: Literal[
+        "css", "xpath", "data-testid", "element_id",
+        "role", "label", "placeholder", "text",
+        "tag", "semantic", "vlm",
+    ]
+    selector: str | None = Field(default=None, description="Explicit selector value (for css/xpath/data-testid/etc).")
+    semantic_value: str | None = Field(default=None, description="Semantic value (role name, label text, etc).")
+    pre_score: float = Field(ge=0.0, le=1.0, description="Generation-time pre-score 0.0-1.0.")
+    pre_features: dict | None = Field(default=None, description="Pre-score feature breakdown for debugging.")
+
+
+class Postcondition(BaseModel):
+    """Post-action verification condition."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: Literal[
+        "url_contains", "url_changes", "text_visible",
+        "text_gone", "element_visible", "element_gone",
+        "network_request", "dom_changed", "value_changed",
+    ]
+    value: str | None = Field(default=None, description="Expected value (URL fragment, text, selector).")
+    timeout_ms: int = Field(default=3000, ge=100, le=30000)
+
+
 class GotoStep(DSLModel):
     action: Literal["goto"]
     value: str = Field(min_length=1, description="Target URL or path.")
@@ -28,6 +56,8 @@ class ClickStep(DSLModel):
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
+    candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
+    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class InputStep(DSLModel):
@@ -38,6 +68,8 @@ class InputStep(DSLModel):
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
+    candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
+    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class WaitForStep(DSLModel):
@@ -48,6 +80,8 @@ class WaitForStep(DSLModel):
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
+    candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
+    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class AssertTextStep(DSLModel):
@@ -58,6 +92,8 @@ class AssertTextStep(DSLModel):
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
+    candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
+    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class AssertUrlContainsStep(DSLModel):
@@ -78,6 +114,8 @@ class CaptureTextStep(DSLModel):
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
+    candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
+    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 DSLVariableType = Literal["string", "number", "boolean", "object", "array"]

@@ -74,8 +74,8 @@ def test_validate_dsl_case_success(client) -> None:
             ],
             "steps": [
                 {"action": "goto", "value": "/login"},
-                {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None, "locator_confidence": None},
-                {"action": "click", "target": "登录按钮", "target_strategy": None, "locator_confidence": None},
+                {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
+                {"action": "click", "target": "登录按钮", "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
                 {"action": "assert_url_contains", "value": "/dashboard"},
             ],
         },
@@ -674,7 +674,7 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     assert response.status_code == 200
     assert response.json()["case"]["steps"] == [
         {"action": "goto", "value": "/login"},
-        {"action": "click", "target": "123", "target_strategy": None, "locator_confidence": None},
+        {"action": "click", "target": "123", "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
     ]
     assert response.json()["case"]["output_contract"] == [
         {
@@ -1090,9 +1090,9 @@ def test_generate_dsl_case_repairs_wrapped_dsl_root_and_step_aliases(client, mon
     assert response.json()["case"]["name"] == "包装结构草案"
     assert response.json()["case"]["steps"] == [
         {"action": "goto", "value": "/login"},
-        {"action": "click", "target": "登录按钮", "target_strategy": None, "locator_confidence": None},
-        {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None, "locator_confidence": None},
-        {"action": "assert_text", "target": "欢迎文案", "value": "欢迎", "target_strategy": None, "locator_confidence": None},
+        {"action": "click", "target": "登录按钮", "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
+        {"action": "input", "target": "用户名输入框", "value": "admin", "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
+        {"action": "assert_text", "target": "欢迎文案", "value": "欢迎", "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
         {"action": "assert_url_contains", "value": "/dashboard"},
     ]
     assert response.json()["normalization_notes"] == [
@@ -2406,3 +2406,49 @@ class TestDslCompletenessCheck:
             warnings,
         )
         assert not any("base_url" in w and "路径" in w for w in warnings)
+
+
+def test_locator_candidate_valid():
+    from app.schemas.dsl import LocatorCandidate
+    cand = LocatorCandidate(strategy="role", selector="getByRole('button')", pre_score=0.87)
+    assert cand.strategy == "role"
+    assert cand.pre_score == 0.87
+    assert cand.selector is not None
+
+
+def test_locator_candidate_vlm_no_selector():
+    from app.schemas.dsl import LocatorCandidate
+    cand = LocatorCandidate(strategy="vlm", semantic_value="checkout button", pre_score=0.0)
+    assert cand.selector is None
+    assert cand.semantic_value == "checkout button"
+
+
+def test_postcondition_url_contains():
+    from app.schemas.dsl import Postcondition
+    pc = Postcondition(type="url_contains", value="/success")
+    assert pc.type == "url_contains"
+    assert pc.timeout_ms == 3000
+
+
+def test_click_step_with_candidates_and_postconditions():
+    from app.schemas.dsl import ClickStep
+    step = ClickStep(
+        action="click",
+        target="Submit",
+        candidates=[
+            {"strategy": "role", "selector": "getByRole('button', {name: 'Submit'})", "pre_score": 0.9},
+            {"strategy": "vlm", "semantic_value": "Submit button", "pre_score": 0.0},
+        ],
+        postconditions=[
+            {"type": "url_contains", "value": "/success"},
+        ],
+    )
+    assert len(step.candidates) == 2
+    assert len(step.postconditions) == 1
+
+
+def test_click_step_backward_compatible():
+    from app.schemas.dsl import ClickStep
+    step = ClickStep(action="click", target="Submit")
+    assert step.candidates == []
+    assert step.postconditions == []
