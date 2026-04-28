@@ -25,6 +25,7 @@ def test_stage1_tables_exist(db_session: Session) -> None:
         "dsl_generation_runs",
         "exploration_runs",
         "failure_records",
+        "locator_attempt_logs",
         "locator_correction_events",
         "locator_corrections",
         "project_members",
