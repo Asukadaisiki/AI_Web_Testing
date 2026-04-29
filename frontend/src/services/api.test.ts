@@ -255,7 +255,7 @@ test("generateDslCase posts prompt payload to DSL generate endpoint", async () =
 });
 
 test("ai planning endpoints send the expected payloads", async () => {
-  await createPlanningSession({ project_id: 1, case_id: 9 });
+  await createPlanningSession({ case_id: 9 });
   await getPlanningSession(5);
   await sendPlanningMessage(5, { content: "请帮我规划登录测试" });
   await generatePlanningDrafts(5, {
@@ -269,7 +269,7 @@ test("ai planning endpoints send the expected payloads", async () => {
     "/api/v1/ai-planning/sessions",
     expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ project_id: 1, case_id: 9 }),
+      body: JSON.stringify({ case_id: 9 }),
     }),
   );
   expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/ai-planning/sessions/5", expect.any(Object));

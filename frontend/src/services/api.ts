@@ -21,12 +21,15 @@ import type {
   GenerateDslResponse,
   DSLValidationResult,
   ExecutionsOverview,
+  LinkProjectPayload,
+  CreateProjectInSessionPayload,
   LocatorCorrectionsOverview,
   LoginPayload,
   LogoutResponse,
   OverviewWindowDays,
   PaginatedCases,
   ProjectSummary,
+  ProjectSummaryInSession,
   ReportPreference,
   ReportScopeType,
   SendPlanningMessagePayload,
@@ -285,14 +288,37 @@ export function getPlanningSession(sessionId: number) {
   return request<AIPlanningSessionDetail>(`/api/v1/ai-planning/sessions/${sessionId}`);
 }
 
-export function listPlanningSessions(projectId?: number) {
-  const params = projectId ? `?project_id=${projectId}` : "";
-  return request<AIPlanningSessionSummary[]>(`/api/v1/ai-planning/sessions${params}`);
+export function listPlanningSessions() {
+  return request<AIPlanningSessionSummary[]>("/api/v1/ai-planning/sessions");
 }
 
 export function deletePlanningSession(sessionId: number) {
   return request<void>(`/api/v1/ai-planning/sessions/${sessionId}`, {
     method: "DELETE",
+  });
+}
+
+export function listSessionProjects(sessionId: number) {
+  return request<ProjectSummaryInSession[]>(`/api/v1/ai-planning/sessions/${sessionId}/projects`);
+}
+
+export function linkProjectToSession(sessionId: number, payload: LinkProjectPayload) {
+  return request<ProjectSummaryInSession>(`/api/v1/ai-planning/sessions/${sessionId}/projects`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function unlinkProjectFromSession(sessionId: number, projectId: number) {
+  return request<void>(`/api/v1/ai-planning/sessions/${sessionId}/projects/${projectId}`, {
+    method: "DELETE",
+  });
+}
+
+export function createProjectInSession(sessionId: number, payload: CreateProjectInSessionPayload) {
+  return request<ProjectSummaryInSession>(`/api/v1/ai-planning/sessions/${sessionId}/projects:create`, {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 
