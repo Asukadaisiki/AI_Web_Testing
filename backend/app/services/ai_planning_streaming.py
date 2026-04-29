@@ -70,6 +70,17 @@ def _run_sync_generator(
                     event = next(stream)
                 except StopIteration:
                     break
+                except Exception as exc:
+                    tb = _traceback.format_exc()
+                    logger.exception("Stream iteration error in phase '%s'", phase)
+                    loop.call_soon_threadsafe(queue.put_nowait, {
+                        "type": "error",
+                        "message": str(exc),
+                        "error_type": type(exc).__name__,
+                        "phase": phase,
+                        "traceback": tb[:2000],
+                    })
+                    break
                 loop.call_soon_threadsafe(queue.put_nowait, _serialize_event(event))
     except RunnerCancelledError:
         loop.call_soon_threadsafe(queue.put_nowait, {"type": "cancelled"})

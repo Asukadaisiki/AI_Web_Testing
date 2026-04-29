@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re as _re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,8 @@ def execute_tool(
     params: dict[str, Any],
     db_session: Session,
     project_id: int,
+    actor_user_id: int = 0,
+    planning_session_id: int = 0,
 ) -> str:
     """Execute a tool by name and return the result as a JSON string."""
     # project_id == 0 means no project linked to session
@@ -95,10 +98,17 @@ def execute_tool(
         return _NO_PROJECT_MSG
 
     try:
-        result = handler(params=params, db_session=db_session, project_id=project_id)
+        if tool_name == "create_project":
+            result = handler(
+                params=params, db_session=db_session, project_id=project_id,
+                actor_user_id=actor_user_id, planning_session_id=planning_session_id,
+            )
+        else:
+            result = handler(params=params, db_session=db_session, project_id=project_id)
         return json.dumps(result, ensure_ascii=False, default=str)
     except Exception as exc:
         logger.warning("Tool %s execution failed: %s", tool_name, exc)
+        db_session.rollback()
         return json.dumps({"error": f"工具执行失败: {exc!s}"}, ensure_ascii=False)
 
 
@@ -680,6 +690,82 @@ def _handle_explore_flow(
     }
 
 
+def _handle_create_project(
+    *,
+    params: dict[str, Any],
+    db_session: Session,
+    project_id: int,
+    actor_user_id: int,
+    planning_session_id: int,
+) -> dict[str, Any]:
+    from sqlalchemy import select as sa_select
+    from app.models import Project, SessionProject
+    from app.schemas.projects import ProjectCreate
+    from app.services.project_management import create_project
+
+    name = params.get("name")
+    if not name or not isinstance(name, str) or not name.strip():
+        return {"error": "必须提供项目名称（name 参数）"}
+
+    description = params.get("description")
+    if description and not isinstance(description, str):
+        description = None
+
+    if not actor_user_id:
+        return {"error": "无法创建项目：未识别当前用户，请先关联项目或通过 UI 创建。"}
+
+    base_name = name.strip()
+    final_name = base_name
+
+    # Idempotent: if name already exists, append (2), (3), ...
+    if db_session.scalar(sa_select(Project.id).where(Project.name == base_name)):
+        _suffix_re = _re.compile(rf"^{_re.escape(base_name)} \((\d+)\)$")
+        _like = base_name.replace("%", "\\%").replace("_", "\\_")
+        candidates = db_session.scalars(
+            sa_select(Project.name).where(Project.name.like(f"{_like} (%)", escape="\\"))
+        ).all()
+        used = {int(m.group(1)) for c in candidates if (m := _suffix_re.match(c))}
+        n = 2
+        while n in used:
+            n += 1
+        final_name = f"{base_name} ({n})"
+
+    try:
+        project = create_project(
+            db_session,
+            ProjectCreate(name=final_name, description=description.strip() if description else None),
+            owner_user_id=actor_user_id,
+        )
+    except Exception as exc:
+        db_session.rollback()
+        return {"error": f"创建项目失败：{exc}"}
+
+    if planning_session_id:
+        existing = db_session.scalar(
+            sa_select(SessionProject).where(
+                SessionProject.session_id == planning_session_id,
+                SessionProject.project_id == project.id,
+            )
+        )
+        if not existing:
+            db_session.add(SessionProject(
+                session_id=planning_session_id,
+                project_id=project.id,
+            ))
+            db_session.flush()
+
+    result: dict[str, Any] = {
+        "id": project.id,
+        "name": project.name,
+        "description": project.description,
+        "auto_linked_to_session": bool(planning_session_id),
+    }
+    if final_name != base_name:
+        result["name_deduplicated"] = True
+        result["original_name"] = base_name
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -692,6 +778,24 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
             "type": "object",
             "properties": {},
             "required": [],
+        },
+    ),
+    "create_project": PlanningTool(
+        name="create_project",
+        description="创建一个新项目并自动关联到当前会话。当用户需要测试但还没有项目时使用此工具。创建成功后，后续工具（explore_page、list_test_cases 等）即可正常使用。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "项目名称，建议使用被测系统名称",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "项目描述（可选），简要说明测试范围",
+                },
+            },
+            "required": ["name"],
         },
     ),
     "list_test_cases": PlanningTool(
@@ -893,6 +997,7 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
 }
 
 _TOOL_HANDLERS: dict[str, Any] = {
+    "create_project": _handle_create_project,
     "get_project_info": _handle_get_project_info,
     "list_test_cases": _handle_list_test_cases,
     "get_case_detail": _handle_get_case_detail,
