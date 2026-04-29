@@ -108,6 +108,7 @@ def send_planning_message(
     content: str,
 ) -> AIPlanningTurnResponse:
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
     session.add(
         AIPlanningMessage(
             session_id=planning_session.id,
@@ -128,7 +129,7 @@ def send_planning_message(
         transcript=base_transcript,
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
-        project_id=planning_session.project_id,
+        project_id=project_ids[0] if project_ids else 0,
     )
 
     planning_session.status = agent_response.session_status
@@ -189,6 +190,7 @@ def stream_planning_message(
     logger.info("[session:%d] Planning message stream start, content_len=%d", planning_session_id, len(content))
 
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
     session.add(
         AIPlanningMessage(
             session_id=planning_session.id,
@@ -210,7 +212,7 @@ def stream_planning_message(
         transcript=base_transcript,
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
-        project_id=planning_session.project_id,
+        project_id=project_ids[0] if project_ids else 0,
     )
     response = None
     while True:
@@ -277,6 +279,9 @@ def generate_planning_drafts(
     actor_user_id: int,
 ) -> AIPlanningTurnResponse:
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
+    if not project_ids:
+        raise ValueError("请先关联至少一个项目再生成 DSL 草稿。")
     plan = planning_session.plan_json or {}
     scenarios = {
         item["scenario_key"]: item
@@ -347,9 +352,8 @@ def generate_planning_drafts(
                     prompt=scenario["draft_prompt"],
                     base_url=base_url,
                     actor_user_id=actor_user_id,
-                    project_id=planning_session.project_id,
+                    project_id=project_ids[0],
                     case_id=planning_session.case_id,
-                    current_case=payload.current_case,
                     current_steps=payload.current_steps,
                     current_input_contract=payload.current_input_contract,
                     current_output_contract=payload.current_output_contract,
@@ -650,13 +654,14 @@ def _build_session_context_preamble(
 
     Returns None if injection is not needed (first turn or no project).
     """
-    if not planning_session.project_id or existing_msg_count <= 1:
+    project_ids = _get_session_project_ids(planning_session)
+    if not project_ids or existing_msg_count <= 1:
         return None
 
     from app.ai.planning_tools import _handle_get_project_test_status
     try:
         status = _handle_get_project_test_status(
-            params={}, db_session=db_session, project_id=planning_session.project_id,
+            params={}, db_session=db_session, project_id=project_ids[0],
         )
     except Exception:
         logger.warning("Auto-context injection: failed to query project status", exc_info=True)
@@ -700,7 +705,7 @@ def _build_session_context_preamble(
     try:
         from app.ai.planning_tools import _handle_get_project_insights
         insights = _handle_get_project_insights(
-            params={}, db_session=db_session, project_id=planning_session.project_id,
+            params={}, db_session=db_session, project_id=project_ids[0],
         )
         if insights.get("has_insights"):
             lines.append("")
@@ -744,6 +749,9 @@ def save_and_execute_selected_drafts(
     input_values: dict[str, str] | None = None,
 ) -> AIPlanningTurnResponse:
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
+    if not project_ids:
+        raise ValueError("请先关联至少一个项目再保存和执行用例。")
 
     drafts = (
         session.query(AIPlanningDraft)
@@ -759,7 +767,7 @@ def save_and_execute_selected_drafts(
         if not draft.dsl_case_json:
             continue
         case_payload = CaseCreateRequest(
-            project_id=planning_session.project_id,
+            project_id=project_ids[0],
             actor_user_id=actor_user_id,
             **draft.dsl_case_json,
         )
@@ -842,7 +850,7 @@ def save_and_execute_selected_drafts(
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
             db_session=session,
-            project_id=planning_session.project_id or 1,
+            project_id=project_ids[0],
         )
         if analysis_response and analysis_response.execution_analysis:
             execution_analysis = analysis_response.execution_analysis
@@ -901,6 +909,9 @@ def save_and_execute_selected_drafts_streaming(
     logger.info("[session:%d] Save-and-execute streaming start, draft_ids=%s", planning_session_id, draft_ids)
 
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
+    if not project_ids:
+        raise ValueError("请先关联至少一个项目再保存和执行用例。")
 
     drafts = (
         session.query(AIPlanningDraft)
@@ -918,7 +929,7 @@ def save_and_execute_selected_drafts_streaming(
         if not draft.dsl_case_json:
             continue
         case_payload = CaseCreateRequest(
-            project_id=planning_session.project_id,
+            project_id=project_ids[0],
             actor_user_id=actor_user_id,
             **draft.dsl_case_json,
         )
@@ -1033,7 +1044,7 @@ def save_and_execute_selected_drafts_streaming(
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
             db_session=db_session,
-            project_id=planning_session.project_id or 1,
+            project_id=project_ids[0],
         )
         if analysis_response and analysis_response.execution_analysis:
             analysis_msg = analysis_response.assistant_message
@@ -1075,11 +1086,12 @@ def retest_cases(
 ) -> AIPlanningTurnResponse:
     """Re-execute existing test cases from a planning session and run auto-analysis."""
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
 
     if not case_ids and failed_only:
         from app.ai.planning_tools import _handle_get_recommended_retest
         recommendation = _handle_get_recommended_retest(
-            params={}, db_session=session, project_id=planning_session.project_id or 0,
+            params={}, db_session=session, project_id=project_ids[0] if project_ids else 0,
         )
         case_ids = recommendation.get("retest_case_ids", [])
         if not case_ids:
@@ -1112,7 +1124,7 @@ def retest_cases(
     execution_summaries: list[ExecutionSummaryResult] = []
     for case_id in case_ids:
         case_record = session.get(TestCase, case_id)
-        if case_record is None or case_record.project_id != planning_session.project_id:
+        if case_record is None or (project_ids and case_record.project_id != project_ids[0]):
             continue
         payload = CaseExecutionRequest(actor_user_id=actor_user_id, input_values=input_values or {})
         result = execute_case(session, case_id, payload)
@@ -1144,7 +1156,7 @@ def retest_cases(
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
             db_session=session,
-            project_id=planning_session.project_id or 1,
+            project_id=project_ids[0] if project_ids else 0,
         )
         if analysis_response and analysis_response.execution_analysis:
             execution_analysis = analysis_response.execution_analysis
@@ -1216,6 +1228,11 @@ def _get_session(session: Session, planning_session_id: int, *, actor_user_id: i
     if planning_session.actor_user_id != actor_user_id:
         raise AIPlanningAccessError("AI planning session access denied.")
     return planning_session
+
+
+def _get_session_project_ids(planning_session: AIPlanningSession) -> list[int]:
+    """Return project IDs associated with this session, ordered by link creation time."""
+    return [p.id for p in (planning_session.projects or [])]
 
 
 def link_project_to_session(
@@ -1493,6 +1510,9 @@ def save_and_execute_with_explorer_judge_streaming(
     logger.info("[session:%d] Explorer-Judge streaming start, draft_ids=%s", planning_session_id, draft_ids)
 
     planning_session = _get_session(session_obj, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
+    if not project_ids:
+        raise ValueError("请先关联至少一个项目再保存和执行用例。")
 
     # Phase 1: Save drafts as cases (reuse existing logic)
     drafts = (
@@ -1511,7 +1531,7 @@ def save_and_execute_with_explorer_judge_streaming(
         if not draft.dsl_case_json:
             continue
         case_payload = CaseCreateRequest(
-            project_id=planning_session.project_id,
+            project_id=project_ids[0],
             actor_user_id=actor_user_id,
             **draft.dsl_case_json,
         )
