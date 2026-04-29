@@ -17,6 +17,22 @@ AIPlanningDraftStatus = Literal["generated", "imported", "rejected", "failed"]
 AIPlanningNextAction = Literal["ask_followup", "review_plan", "select_scenarios", "drafts_generated"]
 
 
+class ProjectSummaryInSession(DSLModel):
+    """Minimal project info returned within session schemas."""
+    id: int = Field(ge=1)
+    name: str
+    description: str | None = None
+
+
+class LinkProjectRequest(DSLModel):
+    project_id: int = Field(ge=1)
+
+
+class CreateProjectInSessionRequest(DSLModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+
+
 class AIPlanningRequirements(DSLModel):
     app_under_test: str | None = Field(default=None, max_length=500)
     business_goal: str | None = Field(default=None, max_length=1000)
@@ -69,7 +85,6 @@ class AIPlanningPlan(DSLModel):
 class AIPlanningSession(DSLModel):
     id: int = Field(ge=1)
     actor_user_id: int = Field(ge=1)
-    project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=200)
     status: AIPlanningSessionStatus
@@ -79,6 +94,7 @@ class AIPlanningSession(DSLModel):
     last_error_message: str | None = Field(default=None, max_length=4000)
     created_at: datetime
     updated_at: datetime
+    projects: list[ProjectSummaryInSession] = Field(default_factory=list)
 
 
 class AIPlanningSessionSummary(DSLModel):
@@ -87,6 +103,7 @@ class AIPlanningSessionSummary(DSLModel):
     status: AIPlanningSessionStatus
     created_at: datetime
     updated_at: datetime
+    projects: list[ProjectSummaryInSession] = Field(default_factory=list)
 
 
 class AIPlanningMessage(DSLModel):
@@ -121,7 +138,6 @@ class AIPlanningSessionDetail(DSLModel):
 
 
 class CreateAIPlanningSessionRequest(DSLModel):
-    project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
 
 
