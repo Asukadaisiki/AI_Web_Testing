@@ -61,6 +61,28 @@ def execute_tool(
     project_id: int,
 ) -> str:
     """Execute a tool by name and return the result as a JSON string."""
+    # project_id == 0 means no project linked to session
+    _NO_PROJECT_MSG = json.dumps(
+        {"info": "当前会话未关联项目，请先创建或关联项目后再使用此功能。"},
+        ensure_ascii=False,
+    )
+
+    _PROJECT_REQUIRED_TOOLS = {
+        "list_test_cases",
+        "get_case_detail",
+        "list_recent_executions",
+        "get_case_stats",
+        "get_execution_detail",
+        "get_project_test_status",
+        "get_failure_analysis",
+        "get_recommended_retest",
+        "get_project_insights",
+        "update_insights",
+        "explore_page",
+        "capture_page_session",
+        "explore_flow",
+    }
+
     tool_def = _TOOL_REGISTRY.get(tool_name)
     if tool_def is None:
         return json.dumps({"error": f"工具 '{tool_name}' 不存在"}, ensure_ascii=False)
@@ -68,6 +90,9 @@ def execute_tool(
     handler = _TOOL_HANDLERS.get(tool_name)
     if handler is None:
         return json.dumps({"error": f"工具 '{tool_name}' 未注册处理函数"}, ensure_ascii=False)
+
+    if not project_id and tool_name in _PROJECT_REQUIRED_TOOLS:
+        return _NO_PROJECT_MSG
 
     try:
         result = handler(params=params, db_session=db_session, project_id=project_id)
