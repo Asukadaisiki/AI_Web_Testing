@@ -10,6 +10,7 @@ import uvicorn
 from app.api.routes.artifacts import router as artifacts_router
 from app.api.router import build_api_router
 from app.core.config import get_settings
+from app.core.idempotency import IdempotencyMiddleware
 from app.core.logging_config import get_uvicorn_log_config, setup_logging
 from app.db import verify_database_connection
 
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
         same_site=settings.auth_session_same_site,
         https_only=settings.auth_session_https_only,
     )
+    app.add_middleware(IdempotencyMiddleware)
     app.include_router(build_api_router())
     app.include_router(artifacts_router)
 

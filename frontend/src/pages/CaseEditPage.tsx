@@ -212,7 +212,7 @@ export function CaseEditPage() {
         <div style={{ display: "flex", justifyContent: "space-between" }}>
           <Space>
             <Button onClick={() => navigate("/cases")}>取消</Button>
-            <Button type="primary" onClick={handleSave} loading={updateMutation.isPending}>
+            <Button type="primary" onClick={handleSave} loading={updateMutation.isPending} disabled={updateMutation.isPending}>
               保存
             </Button>
           </Space>
@@ -224,7 +224,7 @@ export function CaseEditPage() {
             cancelText="取消"
             okButtonProps={{ danger: true }}
           >
-            <Button danger loading={deleteMutation.isPending}>
+            <Button danger loading={deleteMutation.isPending} disabled={deleteMutation.isPending}>
               删除用例
             </Button>
           </Popconfirm>

@@ -171,7 +171,7 @@ export function InterventionPanel({
             <Button
               type="primary"
               loading={createMutation.isPending}
-              disabled={!correctionValue.trim()}
+              disabled={!correctionValue.trim() || createMutation.isPending}
               onClick={() => createMutation.mutate()}
             >
               提交修正
@@ -185,7 +185,7 @@ export function InterventionPanel({
               message="修正记录已保存到定位库"
               description="Demo 模式下修正已记录，可重新执行当前用例验证修正效果。"
               action={
-                <Button type="primary" loading={rerunMutation.isPending} onClick={() => rerunMutation.mutate()}>
+                <Button type="primary" loading={rerunMutation.isPending} disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate()}>
                   重新执行当前用例
                 </Button>
               }

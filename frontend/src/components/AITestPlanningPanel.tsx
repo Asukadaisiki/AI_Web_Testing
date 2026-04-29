@@ -934,7 +934,7 @@ export function AITestPlanningPanel({
               <Button
                 onClick={() => void handleGenerateDrafts()}
                 loading={isGenerating}
-                disabled={!selectedScenarioKeys.length}
+                disabled={!selectedScenarioKeys.length || isGenerating}
                 type="primary"
                 block
               >
@@ -988,7 +988,7 @@ export function AITestPlanningPanel({
                 type="primary"
                 size="small"
                 loading={isExecuting}
-                disabled={selectedScenarioKeys.length === 0}
+                disabled={selectedScenarioKeys.length === 0 || isExecuting}
                 onClick={async () => {
                     if (!sessionId || selectedScenarioKeys.length === 0) return;
                     const draftIds = drafts

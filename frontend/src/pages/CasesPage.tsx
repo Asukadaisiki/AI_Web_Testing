@@ -89,7 +89,7 @@ export function CasesPage() {
 
   // ── Project CRUD ──
   const handleCreateProject = async () => {
-    if (!formName.trim()) return;
+    if (!formName.trim() || submitting) return;
     setSubmitting(true);
     try {
       await createProject({ name: formName.trim(), description: formDesc.trim() || undefined });
@@ -106,7 +106,7 @@ export function CasesPage() {
   };
 
   const handleEditProject = async () => {
-    if (!editProject || !formName.trim()) return;
+    if (!editProject || !formName.trim() || submitting) return;
     setSubmitting(true);
     try {
       await updateProject(editProject.id, { name: formName.trim(), description: formDesc.trim() || undefined });
@@ -430,6 +430,10 @@ export function CasesPage() {
                       type="primary"
                       size="small"
                       loading={
+                        executionMutation.isPending &&
+                        executionMutation.variables === c.id
+                      }
+                      disabled={
                         executionMutation.isPending &&
                         executionMutation.variables === c.id
                       }
