@@ -31,6 +31,8 @@ main_assertions:
 test_data_or_account:
 1. 有效登录账号（使用已有测试账号）
 2. 筛选品牌建议使用 Polo、Madame、Babyhug（商品数量适中）
+3. 账号和密码：Xjy13302412005@outlook.com ,123456
+
 
 scope_limits:
 1. 不测试支付和结账流程

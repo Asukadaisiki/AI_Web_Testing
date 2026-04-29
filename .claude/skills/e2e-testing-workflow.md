@@ -7,7 +7,13 @@ description: Use when performing E2E manual testing of this AI Web Testing platf
 
 ## Overview
 
-This skill guides Claude through the complete E2E testing chain of this platform: **AI Conversation → Save & Execute → Test Project → Test Cases → Test Report**, with Claude acting as a **real user** providing feedback to the AI planning agent.
+This skill guides Claude through the complete E2E testing chain of this platform: **AI Conversation → Element Scoring → Save & Execute → Test Report → Data Loop Feedback**, with Claude acting as a **real user** providing feedback to the AI planning agent.
+
+The platform uses a **dual-layer locator scoring** system:
+- **Generation-time**: PreScorer scores DOM candidates during page exploration
+- **Runtime**: RuntimeScorer supplements with actionability/visual/history features
+- **Postcondition**: Verifies state changes after each action
+- **Data loop**: Every attempt logged to `LocatorAttemptLog` for model evolution
 
 ## Prerequisites
 
@@ -96,6 +102,9 @@ After AI generates a test plan (test scenarios), check:
 | Missing scenarios | Are obvious edge cases missed? |
 | Data requirements | Are test data needs identified? |
 | Key assertions | Are verification points correct? |
+| Element exploration | Did AI successfully explore the page and collect elements with scored candidates? |
+
+If the AI's exploration failed (no page elements collected), it should report this. The PreScorer automatically scores each element's locator candidates during exploration.
 
 ### 2.4 Provide User Feedback
 
@@ -122,11 +131,16 @@ Check each generated DSL draft:
 | Check Point | What to Verify |
 |---|---|
 | Step order | Do steps follow logical business flow? |
-| Locators | Are element targets reasonable? (CSS selectors, text content) |
+| **Candidates** | Do interactive steps have `candidates` with scored locator strategies? |
+| **VLM fallback** | Is a VLM candidate (`strategy="vlm"`) included as last fallback? |
+| **Postconditions** | Are postconditions inferred for interactive steps? (url_changes, text_visible, etc.) |
+| Locators | Are element targets reasonable? (role, text, CSS, data-testid) |
 | Actions | Are action types correct for each step? |
 | Assertions | Do verification steps exist and target correct elements? |
 | Base URL | Is the target URL correct? |
 | Input contract | Are variable inputs properly defined? |
+
+**Candidate scoring check**: For each interactive step, the top candidate should have `pre_score > 0.5`. If all candidates have low scores (< 0.3), the AI may have failed to find good locators — consider providing more specific element descriptions.
 
 ### 3.3 Save & Execute
 
@@ -138,12 +152,16 @@ Check each generated DSL draft:
 ### 3.4 Monitor Execution
 
 During execution, observe real-time progress:
-- Step-by-step status updates via WebSocket
+- Step-by-step status updates via SSE streaming
+- **Dual-layer scoring decisions**: which candidate was selected, what strategy was chosen (dom_action / vlm_rerank / vlm_grounding)
+- **Postcondition verification results**: which postconditions passed/failed
 - Screenshots captured at each step
-- Locator resolution traces
+- Locator resolution traces with pre_score and final_score
 - Console errors and network events
 
 If execution gets stuck or takes too long (>2 minutes), investigate.
+
+**Scoring decision check**: If a step falls back to VLM grounding when it should have used DOM, the pre_score may be too low — check the candidate quality. If a step uses DOM action but the click fails, check if postcondition verification caught it.
 
 ## Phase 4 — Analyze Test Report
 
@@ -158,15 +176,30 @@ After execution completes, review the **Execution Detail Page**:
 **Center panel — Step evidence:**
 - Page info (URL, title, viewport)
 - Locator info (candidates, resolution strategy, failure reason)
+- **Scoring trace**: pre_score → runtime_score → final_score → strategy decision
+- **Postcondition results**: which conditions passed/failed
 - Screenshot evidence
 - Console/network events
 
 **Right panel — Statistics:**
 - Execution overview card
-- Locator strategy distribution
-- Candidate element list
+- Locator strategy distribution (DOM vs VLM vs rerank)
+- Candidate element list with scores
 
-### 4.2 Review Verdict (Explorer-Judge mode)
+### 4.2 Evaluate Scoring Quality
+
+After each execution run, assess the dual-layer scoring system:
+
+| Check Point | What to Verify |
+|---|---|
+| DOM priority | Did high-score DOM candidates succeed without VLM? |
+| VLM fallback | Did VLM correctly rescue failed DOM candidates? |
+| False confidence | Did any high-score candidate actually fail? (scoring model may need calibration) |
+| Postcondition accuracy | Did postconditions correctly detect successes and failures? |
+| Overlay recovery | Did click_preprocessor successfully handle overlays? |
+| Strategy distribution | Is the DOM/VLM ratio reasonable? (>70% DOM is healthy) |
+
+### 4.3 Review Verdict (Explorer-Judge mode)
 
 If using Explorer-Judge, review the **VerdictPanel**:
 
@@ -178,7 +211,7 @@ If using Explorer-Judge, review the **VerdictPanel**:
 | Suggested actions | Are recommendations actionable? |
 | Confidence | Does the confidence level match the evidence? |
 
-### 4.3 Judge Failure Classification Accuracy
+### 4.3 Judge Failure Classification Accuracy (now renumbered to 4.4)
 
 Evaluate if the AI correctly classified failures:
 
@@ -214,10 +247,15 @@ Return to the planning conversation and share results:
 
 > "执行完了，3个用例通过，2个失败。失败原因是 [具体原因]。请帮我调整测试方案。"
 
+Include scoring-specific feedback when relevant:
+
+> "购物车页面的按钮定位成功率低，pre_score 只有 0.3，应该用 role 定位而不是 CSS class。"
+
 The AI should then:
 - Analyze failure patterns (using execution analysis tools)
 - Suggest DSL corrections
 - Recommend regression scope
+- Reference `LocatorAttemptLog` data to identify recurring locator failures
 
 ### 5.3 Verify AI Response to Feedback
 
@@ -226,6 +264,18 @@ Check that the AI agent:
 - Provides actionable corrections, not generic advice
 - Updates test plan based on execution evidence
 - Doesn't repeat the same failed approach without changes
+- Adjusts candidate strategies based on previous failures (data loop)
+
+### 5.4 Data Loop Check
+
+After multiple execution rounds, verify the data loop is functioning:
+
+| Check Point | What to Verify |
+|---|---|
+| LocatorAttemptLog records | Are attempts being logged with full scoring trace? |
+| Historical patterns | Does AI reference previous locator failures? |
+| Score calibration | Are scoring thresholds adjusting based on real data? |
+| Selector improvement | Are better selectors being chosen in subsequent runs? |
 
 ## Phase 6 — Cross-Session Validation
 
@@ -290,11 +340,15 @@ If defects found, also append to `docs/bug-log.md`.
 ## Red Flags — Stop and Report
 
 - AI generates empty or malformed DSL
+- **DSL has no candidates** on interactive steps (PreScorer may not be integrated)
 - Execution hangs for > 2 minutes without progress
 - All steps fail (likely environment issue, not test quality)
 - AI ignores execution results and repeats same plan
 - VerdictPanel shows incorrect failure classification consistently
 - Cross-session insights not loaded in new sessions
+- **All steps fall back to VLM grounding** (DOM candidates all scored too low — PreScorer weights may need calibration)
+- **Postcondition always passes** even for wrong actions (postcondition inference may be too lenient)
+- **LocatorAttemptLog table empty** after execution (data loop not recording)
 
 ## Known Issues & Workarounds
 

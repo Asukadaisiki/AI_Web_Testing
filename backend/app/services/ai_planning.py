@@ -130,6 +130,8 @@ def send_planning_message(
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
         project_id=project_ids[0] if project_ids else 0,
+        actor_user_id=actor_user_id,
+        planning_session_id=planning_session.id,
     )
 
     planning_session.status = agent_response.session_status
@@ -201,6 +203,7 @@ def stream_planning_message(
         )
     )
     session.flush()
+    session.commit()
 
     transcript_records = session.scalars(
         select(AIPlanningMessage).where(AIPlanningMessage.session_id == planning_session.id).order_by(AIPlanningMessage.id.asc())
@@ -213,6 +216,8 @@ def stream_planning_message(
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
         project_id=project_ids[0] if project_ids else 0,
+        actor_user_id=actor_user_id,
+        planning_session_id=planning_session.id,
     )
     response = None
     while True:
@@ -223,6 +228,13 @@ def stream_planning_message(
             response = stop.value
             break
 
+    # Tool calls may have left the session in PendingRollbackError (e.g. UniqueViolation).
+    # Recover so we can persist the AI response.
+    if not session.is_active:
+        logger.warning("[session:%d] Session became inactive after tool calls, rolling back to recover", planning_session_id)
+        session.rollback()
+
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
     planning_session.status = response.session_status
     planning_session.requirements_json = response.requirements.model_dump(mode="json")
     planning_session.plan_json = response.plan.model_dump(mode="json") if response.plan is not None else None
@@ -264,9 +276,11 @@ def stream_planning_message(
     )
     session.commit()
     elapsed = time.monotonic() - start_time
+    assistant_preview = (response.assistant_message or "")[:120]
     logger.info(
-        "[session:%d] Planning message stream done, status=%s, tool_calls=%d, duration=%.2fs",
-        planning_session_id, response.session_status, len(response.tool_calls), elapsed,
+        "[session:%d] Planning message stream done, status=%s, tool_calls=%d, todo=%d, duration=%.2fs, assistant=%s",
+        planning_session_id, response.session_status, len(response.tool_calls),
+        len(response.todo_list), elapsed, assistant_preview,
     )
     return response
 

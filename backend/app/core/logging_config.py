@@ -70,7 +70,7 @@ def get_uvicorn_log_config() -> dict:
             "default": {
                 "class": "logging.StreamHandler",
                 "formatter": "default",
-                "stream": sys.stdout,
+                "stream": "ext://sys.stdout",
             },
         },
         "loggers": {

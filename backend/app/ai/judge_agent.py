@@ -48,11 +48,15 @@ def call_judge_llm(
         {"role": "user", "content": user_prompt},
     ]
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model or "gpt-4o",
         "messages": messages,
-        "response_format": {"type": "json_object"},
     }
+    if _should_enable_thinking_mode(base_url=base_url, model=model or "gpt-4o"):
+        payload["thinking"] = {"type": "enabled"}
+        payload["max_tokens"] = 65536
+    else:
+        payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     http_request = request.Request(
         endpoint,
@@ -106,3 +110,14 @@ def _extract_message_content(payload: dict[str, Any]) -> str | None:
     except (KeyError, IndexError, TypeError):
         pass
     return None
+
+
+def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
+    normalized_base_url = base_url.strip().casefold()
+    normalized_model = model.strip().casefold()
+    return (
+        "open.bigmodel.cn" in normalized_base_url
+        or normalized_model.startswith("glm-")
+        or "api.deepseek.com" in normalized_base_url
+        or normalized_model.startswith("deepseek-")
+    )

@@ -201,6 +201,28 @@ export function AITestPlanningPanel({
   const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
   const isDisabled = !planningEnabled;
 
+  function clearStreamingOnMessage(targetId: number | null) {
+    if (targetId == null) return;
+    setTranscript((current) =>
+      current.map((msg) => {
+        if (msg.id !== targetId) return msg;
+        const payload = msg.structured_payload as Record<string, unknown> | null;
+        if (!payload?._streaming) return msg;
+        return { ...msg, structured_payload: { ...payload, _streaming: false } };
+      }),
+    );
+  }
+
+  function clearAllStreaming() {
+    setTranscript((current) =>
+      current.map((msg) => {
+        const payload = msg.structured_payload as Record<string, unknown> | null;
+        if (!payload?._streaming) return msg;
+        return { ...msg, structured_payload: { ...payload, _streaming: false } };
+      }),
+    );
+  }
+
   async function loadSessionList() {
     setIsLoadingHistory(true);
     try {
@@ -391,6 +413,7 @@ export function AITestPlanningPanel({
     }
 
     if (event.type === "turn_complete") {
+      clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if (sessionId) {
         void loadSessionDetail(sessionId);
         void loadSessionList();
@@ -401,6 +424,7 @@ export function AITestPlanningPanel({
     }
 
     if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
+      clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if (sessionId) {
         void loadSessionDetail(sessionId);
         void loadSessionList();
@@ -439,6 +463,7 @@ export function AITestPlanningPanel({
     }
 
     setIsSending(true);
+    clearAllStreaming();
     const optimisticUser = createOptimisticMessage(sessionId, "user", "user", trimmed);
     const optimisticAssistant = createOptimisticMessage(sessionId, "assistant", "followup", "", {
       _phase: "thinking",
@@ -459,6 +484,7 @@ export function AITestPlanningPanel({
         signal: controller.signal,
       });
     } catch (error) {
+      clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if ((error as Error).name !== "AbortError") {
         void messageApi.error((error as Error).message);
       }
@@ -473,6 +499,7 @@ export function AITestPlanningPanel({
       return;
     }
     setIsGenerating(true);
+    clearAllStreaming();
 
     const optimisticAssistant = createOptimisticMessage(sessionId, "assistant", "plan", "", {
       _phase: "generating",
@@ -499,6 +526,7 @@ export function AITestPlanningPanel({
         signal: controller.signal,
       });
     } catch (error) {
+      clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if ((error as Error).name !== "AbortError") {
         void messageApi.error((error as Error).message);
       }
@@ -605,6 +633,15 @@ export function AITestPlanningPanel({
               icon={<DeleteOutlined />}
               aria-label={`删除会话 ${sessionList.find((item) => item.id === sessionId)?.title ?? `#${sessionId}`}`}
               onClick={async () => {
+                // Abort any ongoing SSE stream before deleting
+                if (abortRef.current) {
+                  abortRef.current.abort();
+                  abortRef.current = null;
+                }
+                setIsSending(false);
+                setIsGenerating(false);
+                setIsExecuting(false);
+
                 const currentSession = sessionList.find((item) => item.id === sessionId);
                 const label = currentSession?.title ?? `会话 #${sessionId}`;
                 if (!window.confirm(`确认删除"${label}"吗？此操作不可恢复。`)) {

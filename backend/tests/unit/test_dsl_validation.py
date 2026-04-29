@@ -527,6 +527,7 @@ def test_generate_dsl_case_success(client, monkeypatch) -> None:
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -644,6 +645,7 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -720,6 +722,7 @@ def test_generate_dsl_case_stabilizes_partial_contracts_from_current_case_when_b
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -917,6 +920,7 @@ def test_generate_dsl_case_repairs_single_step_and_contract_shape_for_governance
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -985,6 +989,7 @@ def test_generate_dsl_case_repairs_contract_aliases_for_governance_v3(client, db
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -1058,6 +1063,7 @@ def test_generate_dsl_case_repairs_wrapped_dsl_root_and_step_aliases(client, mon
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -1119,6 +1125,7 @@ def test_generate_dsl_case_still_rejects_invalid_steps_under_governance_v3(clien
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -1235,6 +1242,7 @@ def test_generate_dsl_case_repairs_context_and_contracts_for_v32_focus(client, m
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -1410,6 +1418,7 @@ def test_generate_dsl_case_returns_502_for_invalid_dsl_shape_when_auto_repair_di
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "false")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(
         "app.ai.dsl_generator._call_llm",
@@ -1708,6 +1717,7 @@ def test_get_dsl_generation_run_detail_returns_governance_payload(client, db_ses
     monkeypatch.setenv("AI_DSL_API_KEY", "test-key")
     monkeypatch.setenv("AI_DSL_MODEL", "gpt-test")
     monkeypatch.setenv("AI_DSL_ALLOW_AUTO_REPAIR", "true")
+    monkeypatch.setenv("AI_DSL_STRICT_MODE", "false")
     get_settings.cache_clear()
     case = TestCase(
         project_id=1,

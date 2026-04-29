@@ -30,6 +30,44 @@ from app.schemas.ai_planning import (
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r"https?://[^\s，。；;]+", re.IGNORECASE)
 
+
+def _summarize_tool_result(tool_name: str, result: Any) -> str:
+    """Produce a concise human-readable summary of a tool result for logging."""
+    if not isinstance(result, dict):
+        return str(result)[:300]
+    if "error" in result:
+        return f"error: {result['error']}"
+    summary_parts: list[str] = []
+    if tool_name == "explore_page":
+        url = result.get("url", "?")
+        count = result.get("element_count", "?")
+        summary_parts.append(f"url={url}, element_count={count}")
+        if "warning" in result:
+            summary_parts.append(f"warning={result['warning']}")
+    elif tool_name == "explore_flow":
+        urls = result.get("urls", [])
+        summary_parts.append(f"urls_count={len(urls)}")
+        pages = result.get("page_results", [])
+        summary_parts.append(f"pages_explored={len(pages)}")
+    elif tool_name == "create_project":
+        summary_parts.append(f"id={result.get('id')}, name={result.get('name')}")
+    elif tool_name == "get_project_info":
+        summary_parts.append(f"id={result.get('id')}, name={result.get('name')}")
+    elif tool_name == "list_test_cases":
+        summary_parts.append(f"total={result.get('total')}, returned={len(result.get('cases', []))}")
+    elif tool_name == "capture_page_session":
+        summary_parts.append(f"status={result.get('status')}, cookies={result.get('cookie_count', '?')}")
+    else:
+        for key in list(result.keys())[:5]:
+            val = result[key]
+            if isinstance(val, (str, int, float, bool)):
+                summary_parts.append(f"{key}={val}")
+            elif isinstance(val, list):
+                summary_parts.append(f"{key}=[{len(val)} items]")
+            elif isinstance(val, dict):
+                summary_parts.append(f"{key}={{...{len(val)} keys}}")
+    return ", ".join(summary_parts) if summary_parts else json.dumps(result, ensure_ascii=False)[:300]
+
 _NEW_REQUIREMENT_KEYWORDS = [
     "新需求", "换一个", "重新", "改一下", "调整方案", "变更",
     "新增测试", "还有一个", "另外还要", "再来一个", "补充测试",
@@ -184,6 +222,9 @@ def stream_planning_turn(
             return response
 
         parsed = _parse_llm_response(raw_response)
+        logger.info("LLM response in round %d (len=%d): action=%s, action_input_keys=%s",
+                     round_index, len(raw_response), parsed.get("action") if parsed else "parse_failed",
+                     list((parsed.get("action_input") or {}).keys()) if parsed and isinstance(parsed.get("action_input"), dict) else [])
         if parsed is None:
             logger.warning("LLM response unparseable in round %d, raw (first 300 chars): %s", round_index, raw_response[:300])
             response = _run_fallback_turn(
@@ -203,7 +244,7 @@ def stream_planning_turn(
         if not isinstance(action_input, dict):
             action_input = {}
 
-        logger.debug("ReAct round %d: action=%s", round_index, action)
+        logger.info("ReAct round %d: action=%s, assistant_msg_len=%d", round_index, action, len(parsed.get("assistant_message", "")))
 
         # --- Parse todo_list from LLM response ---
         _valid_statuses = {"done", "in_progress", "pending", "failed", "skipped"}
@@ -283,7 +324,7 @@ def stream_planning_turn(
             params = action_input.get("params")
             if not isinstance(params, dict):
                 params = {}
-            logger.info("Tool call: %s, params_keys=%s", tool_name, list(params.keys()))
+            logger.info("Tool call: %s, params=%s", tool_name, json.dumps(params, ensure_ascii=False, default=str)[:500])
             yield {"type": "tool_call_start", "tool": tool_name, "params": params}
             try:
                 tool_result_text = execute_tool(
@@ -314,7 +355,8 @@ def stream_planning_turn(
                 )
             )
             yield {"type": "tool_call_end", "tool": tool_name, "result": parsed_result}
-            logger.info("Tool call %s completed, result_keys=%s", tool_name, list(parsed_result.keys()) if isinstance(parsed_result, dict) else "non-dict")
+            result_summary = _summarize_tool_result(tool_name, parsed_result)
+            logger.info("Tool call %s completed: %s", tool_name, result_summary)
             conversation.extend(
                 [
                     {"role": "assistant", "content": _normalize_json_text(raw_response)},

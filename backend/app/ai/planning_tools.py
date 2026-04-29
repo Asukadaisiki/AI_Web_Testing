@@ -599,11 +599,13 @@ def _handle_explore_page(
     if not url or not isinstance(url, str) or not url.strip():
         return {"error": "必须提供 url 参数"}
 
+    logger.info("explore_page: url=%s, project_id=%d", url.strip(), project_id)
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
 
     elements = collect_interactable_elements(url.strip(), storage_state_path=storage_path)
     formatted = format_elements_for_prompt(elements)
+    logger.info("explore_page: found %d elements from %s", len(elements), url.strip())
 
     result: dict[str, Any] = {
         "url": url.strip(),
@@ -636,13 +638,16 @@ def _handle_capture_page_session(
     if not isinstance(steps, list):
         steps = []
 
+    logger.info("capture_page_session: url=%s, steps=%d, project_id=%d", url.strip(), len(steps), project_id)
     storage_dir = _resolve_storage_state_dir()
-    return capture_browser_session(
+    result = capture_browser_session(
         url=url.strip(),
         steps=steps,
         storage_dir=storage_dir,
         project_id=project_id,
     )
+    logger.info("capture_page_session: status=%s, cookie_count=%s", result.get("status"), result.get("cookie_count"))
+    return result
 
 
 def _handle_explore_flow(
@@ -658,6 +663,8 @@ def _handle_explore_flow(
     valid_urls = [u for u in urls if isinstance(u, str) and u.strip()]
     if not valid_urls:
         return {"error": "urls 列表中没有有效的 URL"}
+
+    logger.info("explore_flow: %d urls=%s, project_id=%d", len(valid_urls), valid_urls[:3], project_id)
 
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
@@ -716,6 +723,7 @@ def _handle_create_project(
 
     base_name = name.strip()
     final_name = base_name
+    logger.info("create_project: name=%s, planning_session_id=%d", base_name, planning_session_id)
 
     # Idempotent: if name already exists, append (2), (3), ...
     if db_session.scalar(sa_select(Project.id).where(Project.name == base_name)):
