@@ -17,6 +17,7 @@ vi.mock("../services/api", async () => {
     generatePlanningDrafts: vi.fn(),
     getPlanningSession: vi.fn(),
     listPlanningSessions: vi.fn(),
+    listSessionProjects: vi.fn(),
     saveAndExecuteDrafts: vi.fn(),
     sendPlanningMessage: vi.fn(),
     updatePlanningDraftStatus: vi.fn(),
@@ -55,40 +56,13 @@ const aiSettings: AISettings = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  localStorage.clear();
   vi.stubGlobal("confirm", vi.fn(() => true));
 
-  vi.mocked(api.createPlanningSession).mockResolvedValue({
-    session: {
-      id: 5,
-      actor_user_id: 1,
-      project_id: 1,
-      case_id: null,
-      title: null,
-      status: "collecting",
-      requirements: {
-        app_under_test: null,
-        business_goal: null,
-        entry_url_or_page: null,
-        core_user_flow: null,
-        main_assertions: [],
-        test_data_or_account: null,
-        scope_limits: null,
-      },
-      plan: null,
-      missing_slots: ["app_under_test", "business_goal"],
-      last_error_message: null,
-      created_at: "2026-03-30T10:00:00",
-      updated_at: "2026-03-30T10:00:00",
-    },
-    messages: [],
-    drafts: [],
-  });
   vi.mocked(api.getPlanningSession).mockResolvedValue({
     session: {
       id: 5,
       actor_user_id: 1,
-      project_id: 1,
+      projects: [],
       case_id: null,
       title: "当前会话",
       status: "collecting",
@@ -115,6 +89,7 @@ beforeEach(() => {
       id: 5,
       title: "当前会话",
       status: "collecting",
+      projects: [],
       created_at: "2026-04-12T10:00:00",
       updated_at: "2026-04-12T10:00:00",
     },
@@ -122,10 +97,12 @@ beforeEach(() => {
       id: 9,
       title: "保留会话",
       status: "plan_ready",
+      projects: [],
       created_at: "2026-04-12T09:00:00",
       updated_at: "2026-04-12T09:30:00",
     },
   ]);
+  vi.mocked(api.listSessionProjects).mockResolvedValue([]);
   vi.mocked(api.deletePlanningSession).mockResolvedValue(undefined);
 });
 
@@ -140,7 +117,7 @@ test("展示动态进度、工具调用并支持直接生成方案", async () =>
       session: {
         id: 5,
         actor_user_id: 1,
-        project_id: 1,
+        projects: [],
         case_id: null,
         title: "当前会话",
         status: "plan_ready",
@@ -210,7 +187,7 @@ test("展示动态进度、工具调用并支持直接生成方案", async () =>
     });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();
@@ -240,7 +217,7 @@ test("可以生成草案并展示审阅操作", async () => {
       session: {
         id: 5,
         actor_user_id: 1,
-        project_id: 1,
+        projects: [],
         case_id: null,
         title: "当前会话",
         status: "plan_ready",
@@ -301,7 +278,7 @@ test("可以生成草案并展示审阅操作", async () => {
       session: {
         id: 5,
         actor_user_id: 1,
-        project_id: 1,
+        projects: [],
         case_id: null,
         title: "当前会话",
         status: "drafts_ready",
@@ -413,7 +390,7 @@ test("可以生成草案并展示审阅操作", async () => {
   });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();
@@ -432,13 +409,14 @@ test("可以生成草案并展示审阅操作", async () => {
   expect(screen.getByRole("button", { name: "保存并执行" })).toBeInTheDocument();
 });
 
-test("删除当前会话后会切换到剩余会话并更新 localStorage", async () => {
+test("删除当前会话后会切换到剩余会话", async () => {
   vi.mocked(api.listPlanningSessions)
     .mockResolvedValueOnce([
       {
         id: 5,
         title: "当前会话",
         status: "collecting",
+        projects: [],
         created_at: "2026-04-12T10:00:00",
         updated_at: "2026-04-12T10:00:00",
       },
@@ -446,6 +424,7 @@ test("删除当前会话后会切换到剩余会话并更新 localStorage", asyn
         id: 9,
         title: "保留会话",
         status: "plan_ready",
+        projects: [],
         created_at: "2026-04-12T09:00:00",
         updated_at: "2026-04-12T09:30:00",
       },
@@ -455,6 +434,7 @@ test("删除当前会话后会切换到剩余会话并更新 localStorage", asyn
         id: 9,
         title: "保留会话",
         status: "plan_ready",
+        projects: [],
         created_at: "2026-04-12T09:00:00",
         updated_at: "2026-04-12T09:30:00",
       },
@@ -464,7 +444,7 @@ test("删除当前会话后会切换到剩余会话并更新 localStorage", asyn
     session: {
       id: sessionId,
       actor_user_id: 1,
-      project_id: 1,
+      projects: [],
       case_id: null,
       title: sessionId === 9 ? "保留会话" : "当前会话",
       status: "collecting",
@@ -488,7 +468,7 @@ test("删除当前会话后会切换到剩余会话并更新 localStorage", asyn
   }));
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
   );
 
   await waitFor(() => {
@@ -499,31 +479,20 @@ test("删除当前会话后会切换到剩余会话并更新 localStorage", asyn
   await waitFor(() => {
     expect(api.deletePlanningSession).toHaveBeenCalledWith(5);
     expect(api.getPlanningSession).toHaveBeenLastCalledWith(9);
-    expect(localStorage.getItem("ai_planning_last_session")).toBe("9");
-  });
-});
-
-test("缓存的最后会话不存在时会自动创建新会话", async () => {
-  localStorage.setItem("ai_planning_last_session", "77");
-  vi.mocked(api.getPlanningSession).mockRejectedValueOnce(new Error("AI planning session 77 not found."));
-
-  renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
-  );
-
-  await waitFor(() => {
-    expect(api.getPlanningSession).toHaveBeenCalledWith(77);
-    expect(api.createPlanningSession).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem("ai_planning_last_session")).toBe("5");
   });
 });
 
 test("保存并执行后会重新加载会话详情并展示持久化的执行摘要", async () => {
-  vi.mocked(api.createPlanningSession).mockResolvedValue({
+  // Mock SSE streaming — immediately emit done when callSSE is called
+  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
+    // Simulate backend immediately sending done
+    opts.onEvent("done", { type: "done" });
+  });
+  vi.mocked(api.getPlanningSession).mockResolvedValue({
     session: {
       id: 5,
       actor_user_id: 1,
-      project_id: 1,
+      projects: [],
       case_id: null,
       title: "当前会话",
       status: "drafts_ready",
@@ -583,88 +552,9 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
       },
     ],
   });
-  // Mock SSE streaming — immediately emit done when callSSE is called
-  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
-    // Simulate backend immediately sending done
-    opts.onEvent("done", { type: "done" });
-  });
-  vi.mocked(api.getPlanningSession).mockResolvedValue({
-    session: {
-      id: 5,
-      actor_user_id: 1,
-      project_id: 1,
-      case_id: null,
-      title: "当前会话",
-      status: "completed",
-      requirements: {
-        app_under_test: "商城后台",
-        business_goal: "验证管理员登录",
-        entry_url_or_page: "https://shop.example.com/login",
-        core_user_flow: "输入账号密码并点击登录",
-        main_assertions: ["跳转到 dashboard"],
-        test_data_or_account: "admin@example.com",
-        scope_limits: "不覆盖忘记密码",
-      },
-      plan: null,
-      missing_slots: [],
-      last_error_message: null,
-      created_at: "2026-04-13T10:00:00",
-      updated_at: "2026-04-13T10:05:00",
-    },
-    messages: [
-      {
-        id: 99,
-        session_id: 5,
-        role: "assistant",
-        turn_type: "plan",
-        content: "测试执行完成",
-        structured_payload: {
-          type: "execution_summary",
-          execution_summaries: [
-            {
-              execution_id: 88,
-              case_id: 101,
-              case_name: "登录成功",
-              status: "passed",
-              total_steps: 1,
-              passed_steps: 1,
-              failed_steps: 0,
-              duration_ms: 1234,
-              screenshot_url: "/artifacts/executions/88/final.png",
-              report_url: "/run/88",
-            },
-          ],
-        },
-        created_at: "2026-04-13T10:05:00",
-      },
-    ],
-    drafts: [
-      {
-        id: 11,
-        session_id: 5,
-        scenario_key: "login_success",
-        title: "登录成功",
-        status: "imported",
-        dsl_generation_id: 33,
-        dsl_case: {
-          name: "登录成功",
-          description: "草案",
-          base_url: "https://shop.example.com",
-          input_contract: [],
-          output_contract: [],
-          steps: [{ action: "goto", value: "/login" }],
-        },
-        warnings: [],
-        normalization_notes: [],
-        error_message: null,
-        created_at: "2026-04-13T10:00:00",
-        updated_at: "2026-04-13T10:05:00",
-      },
-    ],
-  });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();
@@ -680,86 +570,13 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
 });
 
 test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", async () => {
-  // Setup: session with plan + drafts ready
-  vi.mocked(api.createPlanningSession).mockResolvedValue({
-    session: {
-      id: 5,
-      actor_user_id: 1,
-      project_id: 1,
-      case_id: null,
-      title: "流式测试会话",
-      status: "drafts_ready",
-      requirements: {
-        app_under_test: "商城后台",
-        business_goal: "验证登录",
-        entry_url_or_page: "https://shop.example.com/login",
-        core_user_flow: "输入账号密码并点击登录",
-        main_assertions: ["跳转到 dashboard"],
-        test_data_or_account: "admin",
-        scope_limits: null,
-      },
-      plan: {
-        summary: "登录测试方案",
-        assumptions: [],
-        risks: [],
-        scenarios: [
-          {
-            scenario_key: "login_success",
-            title: "登录成功",
-            goal: "验证登录",
-            preconditions: [],
-            priority: "high",
-            test_data_requirements: [],
-            assertions: ["跳转到 dashboard"],
-            draft_prompt: "为登录成功场景生成 DSL",
-          },
-        ],
-      },
-      missing_slots: [],
-      last_error_message: null,
-      created_at: "2026-04-15T10:00:00",
-      updated_at: "2026-04-15T10:00:00",
-    },
-    messages: [],
-    drafts: [
-      {
-        id: 11,
-        session_id: 5,
-        scenario_key: "login_success",
-        title: "登录成功",
-        status: "generated",
-        dsl_generation_id: 33,
-        dsl_case: {
-          name: "登录成功",
-          description: "草案",
-          base_url: "https://shop.example.com",
-          input_contract: [],
-          output_contract: [],
-          steps: [{ action: "goto", value: "/login" }],
-        },
-        warnings: [],
-        normalization_notes: [],
-        error_message: null,
-        created_at: "2026-04-15T10:00:00",
-        updated_at: "2026-04-15T10:00:00",
-      },
-    ],
-  });
-
-  // Mock SSE client
-  let capturedOnEvent: ((eventType: string, data: unknown) => void) | null = null;
-
-  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
-    capturedOnEvent = opts.onEvent;
-  });
-
   // getPlanningSession: first call (on mount) returns plan + drafts, subsequent calls return completed
   vi.mocked(api.getPlanningSession)
     .mockResolvedValueOnce({
       session: {
         id: 5,
         actor_user_id: 1,
-        project_id: 1,
+        projects: [],
         case_id: null,
         title: "流式测试会话",
         status: "drafts_ready",
@@ -823,7 +640,7 @@ test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", 
       session: {
         id: 5,
         actor_user_id: 1,
-        project_id: 1,
+        projects: [],
         case_id: null,
         title: "流式测试会话",
         status: "completed",
@@ -846,8 +663,15 @@ test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", 
       drafts: [],
     });
 
+  // Mock SSE client
+  let capturedOnEvent: ((eventType: string, data: unknown) => void) | null = null;
+
+  vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
+    capturedOnEvent = opts.onEvent;
+  });
+
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} projectId={1} caseId={undefined} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();

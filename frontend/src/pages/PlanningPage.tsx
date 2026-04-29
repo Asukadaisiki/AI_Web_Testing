@@ -1,55 +1,25 @@
-import { Alert } from "antd";
-
+import { useParams, useNavigate } from "react-router-dom";
 import { AITestPlanningPanel } from "../components/AITestPlanningPanel";
 import { useQuery } from "@tanstack/react-query";
-import { createCase, getAISettings, getProjects } from "../services/api";
-import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import type { AIPlanningDraft } from "../types/api";
+import { getAISettings } from "../services/api";
 
 export function PlanningPage() {
+  const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const projectsQuery = useQuery({ queryKey: ["projects"], queryFn: getProjects });
   const aiSettingsQuery = useQuery({ queryKey: ["ai-settings"], queryFn: getAISettings });
 
-  const firstProject = projectsQuery.data?.[0];
-
-  async function handleImportDraft(draft: AIPlanningDraft) {
-    if (!draft.dsl_case) {
-      throw new Error("规划草案没有可创建的 DSL 内容。");
-    }
-    if (!firstProject) {
-      throw new Error("当前没有可用项目，无法创建用例。");
-    }
-    const createdCase = await createCase({
-      project_id: firstProject.id,
-      actor_user_id: 1,
-      ...draft.dsl_case,
-    });
-    await queryClient.invalidateQueries({ queryKey: ["cases"] });
-    navigate(`/cases?created=${createdCase.id}`);
-  }
-
-  if (projectsQuery.data?.length === 0) {
-    return (
-      <div style={{ padding: 24 }}>
-        <Alert
-          type="warning"
-          showIcon
-          message="暂无可用项目"
-          description="请先在数据库中创建至少一个项目，再使用 AI 规划。"
-        />
-      </div>
-    );
+  if (!sessionId) {
+    navigate("/planning");
+    return null;
   }
 
   return (
     <AITestPlanningPanel
       aiSettings={aiSettingsQuery.data ?? null}
-      projectId={firstProject?.id}
-      onImportDraft={handleImportDraft}
-      draftImportLabel="创建用例并进入用例中心"
+      sessionId={Number(sessionId)}
+      onImportDraft={async () => {
+        /* handled within panel via session projects */
+      }}
     />
   );
 }

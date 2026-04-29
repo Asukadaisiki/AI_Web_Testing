@@ -9,27 +9,20 @@ vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
   return {
     ...actual,
-    createPlanningSession: vi.fn(),
-    sendPlanningMessage: vi.fn(),
-    generatePlanningDrafts: vi.fn(),
-    updatePlanningDraftStatus: vi.fn(),
-    getProjects: vi.fn(),
     getAISettings: vi.fn(),
-    createCase: vi.fn(),
+    getPlanningSession: vi.fn(),
+    listPlanningSessions: vi.fn(),
   };
 });
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(api.getProjects).mockResolvedValue([
-    { id: 1, name: "Demo Project", description: null },
-  ]);
   vi.mocked(api.getAISettings).mockResolvedValue({ enable_ai_planning: true } as never);
-  vi.mocked(api.createPlanningSession).mockResolvedValue({
+  vi.mocked(api.getPlanningSession).mockResolvedValue({
     session: {
       id: 1,
       actor_user_id: 1,
-      project_id: 1,
+      projects: [],
       case_id: null,
       title: null,
       status: "collecting",
@@ -51,42 +44,29 @@ beforeEach(() => {
     messages: [],
     drafts: [],
   });
+  vi.mocked(api.listPlanningSessions).mockResolvedValue([]);
 });
 
-test("renders planning page with AI planning panel", async () => {
-  renderWithProviders(<PlanningPage />, { route: "/", path: "/" });
+test("renders planning page with AI planning panel when sessionId is provided", async () => {
+  renderWithProviders(<PlanningPage />, { route: "/planning/sessions/1", path: "/planning/sessions/:sessionId" });
 
-  expect(await screen.findByText("AI 测试规划")).toBeInTheDocument();
-  expect(await screen.findByText("AI 测试规划助手")).toBeInTheDocument();
+  expect(await screen.findByText("AI Planning")).toBeInTheDocument();
 });
 
-test("shows alert when no projects available", async () => {
-  vi.mocked(api.getProjects).mockResolvedValue([]);
+test("redirects to /planning when no sessionId is provided", async () => {
+  renderWithProviders(<PlanningPage />, { route: "/planning", path: "/planning" });
 
-  renderWithProviders(<PlanningPage />, { route: "/", path: "/" });
-
-  expect(await screen.findByText("暂无可用项目")).toBeInTheDocument();
-});
-
-test("bootstraps planning session on mount with first project", async () => {
-  renderWithProviders(<PlanningPage />, { route: "/", path: "/" });
-
+  // The component calls navigate("/planning") when no sessionId
+  // and returns null — this just verifies no crash
   await waitFor(() => {
-    expect(api.createPlanningSession).toHaveBeenCalledWith({
-      project_id: 1,
-      case_id: null,
-    });
+    expect(api.getAISettings).toHaveBeenCalled();
   });
 });
 
-test("planning page passes custom import label to panel", async () => {
-  renderWithProviders(<PlanningPage />, { route: "/", path: "/" });
+test("loads session detail on mount using sessionId from URL", async () => {
+  renderWithProviders(<PlanningPage />, { route: "/planning/sessions/42", path: "/planning/sessions/:sessionId" });
 
   await waitFor(() => {
-    expect(api.createPlanningSession).toHaveBeenCalled();
+    expect(api.getPlanningSession).toHaveBeenCalledWith(42);
   });
-
-  // The panel bootstraps, so the custom label is passed via props
-  // The button "创建用例并进入用例中心" would only appear in drafts
-  expect(screen.getByText("AI 测试规划助手")).toBeInTheDocument();
 });

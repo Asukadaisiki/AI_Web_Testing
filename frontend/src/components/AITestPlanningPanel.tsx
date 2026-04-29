@@ -31,12 +31,12 @@ import type {
   ExecutionSummaryResult,
 } from "../types/api";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
+import { SessionProjectPanel } from "./SessionProjectPanel";
 import VerdictPanel from "./VerdictPanel";
 
 type AITestPlanningPanelProps = {
   aiSettings?: AISettings | null;
-  projectId?: number;
-  caseId?: number;
+  sessionId: number;
   currentCase?: DSLCasePayload | null;
   currentSteps?: DSLStep[] | null;
   currentInputContract?: DSLCaseInputContract[] | null;
@@ -170,8 +170,7 @@ const phaseColorMap: Record<string, string> = {
 
 export function AITestPlanningPanel({
   aiSettings,
-  projectId,
-  caseId,
+  sessionId: sessionIdProp,
   currentCase,
   currentSteps,
   currentInputContract,
@@ -200,13 +199,12 @@ export function AITestPlanningPanel({
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
-  const isDisabled = !planningEnabled || !projectId;
+  const isDisabled = !planningEnabled;
 
   async function loadSessionList() {
-    if (!projectId) return;
     setIsLoadingHistory(true);
     try {
-      const list = await listPlanningSessions(projectId);
+      const list = await listPlanningSessions();
       setSessionList(list);
     } catch {
       // silently fail — session list is non-critical
@@ -223,7 +221,6 @@ export function AITestPlanningPanel({
     setPlan(detail.session.plan ?? null);
     setTranscript(detail.messages);
     setDrafts(detail.drafts);
-    localStorage.setItem("ai_planning_last_session", String(detail.session.id));
   }
 
   async function loadSessionDetail(sessionIdToLoad: number) {
@@ -233,24 +230,18 @@ export function AITestPlanningPanel({
   }
 
   async function createAndSelectSession() {
-    if (!projectId) return null;
-    const detail = await createPlanningSession({
-      project_id: projectId,
-      case_id: caseId ?? null,
-    });
+    const detail = await createPlanningSession({});
     applySessionDetail(detail);
     return detail;
   }
 
   async function handleSessionDeleted(deletedSessionId: number) {
-    const nextList = await listPlanningSessions(projectId!);
+    const nextList = await listPlanningSessions();
     setSessionList(nextList);
 
     if (deletedSessionId !== sessionId) {
       return;
     }
-
-    localStorage.removeItem("ai_planning_last_session");
 
     const nextSession = nextList[0];
     if (nextSession) {
@@ -262,33 +253,12 @@ export function AITestPlanningPanel({
   }
 
   useEffect(() => {
-    if (!projectId) {
-      return;
-    }
-
     let cancelled = false;
 
     async function init() {
-      if (!projectId) return;
       setIsBootstrapping(true);
       try {
-        const lastId = localStorage.getItem("ai_planning_last_session");
-        let restored = false;
-
-        if (lastId) {
-          try {
-            await loadSessionDetail(Number(lastId));
-            restored = true;
-          } catch {
-            localStorage.removeItem("ai_planning_last_session");
-          }
-        }
-
-        if (!cancelled && !restored) {
-          await createAndSelectSession();
-        }
-
-        // Always load session list
+        await loadSessionDetail(sessionIdProp);
         if (!cancelled) await loadSessionList();
       } catch (err: unknown) {
         if (!cancelled) {
@@ -303,7 +273,7 @@ export function AITestPlanningPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectId, caseId]);
+  }, [sessionIdProp]);
 
   function handleStreamEvent(event: ExecutionStreamEvent) {
     if (
@@ -598,9 +568,11 @@ export function AITestPlanningPanel({
               message={`模型：${aiSettings.ai_planning_model ?? "未配置"}，最多 ${aiSettings.ai_planning_max_react_rounds ?? 5} 轮`}
             />
           ) : null}
-          {!projectId ? (
-            <Alert type="warning" showIcon message="请先选择项目，再开启 AI 测试规划。" style={{ marginTop: 12 }} />
-          ) : null}
+          <div style={{ marginTop: 8 }}>
+            <SessionProjectPanel sessionId={sessionIdProp} onProjectsChange={() => {
+              queryClient.invalidateQueries({ queryKey: ["planning-sessions"] });
+            }} />
+          </div>
         </div>
 
         {/* Session switcher */}
@@ -656,7 +628,6 @@ export function AITestPlanningPanel({
             type="primary"
             size="small"
             onClick={async () => {
-              if (!projectId) return;
               setIsBootstrapping(true);
               try {
                 await createAndSelectSession();
