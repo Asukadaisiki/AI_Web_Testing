@@ -20,7 +20,10 @@ from app.schemas.ai_planning import (
     AIPlanningSessionSummary,
     AIPlanningTurnResponse,
     CreateAIPlanningSessionRequest,
+    CreateProjectInSessionRequest,
     GenerateAIPlanningDraftsRequest,
+    LinkProjectRequest,
+    ProjectSummaryInSession,
     UpdateAIPlanningDraftStatusRequest,
 )
 from app.schemas.dsl import DSLModel
@@ -28,14 +31,18 @@ from pydantic import Field
 from app.services.ai_planning import (
     AIPlanningAccessError,
     create_planning_session,
+    create_project_in_session,
     delete_planning_draft,
     delete_planning_session,
     generate_planning_drafts,
     get_planning_session_detail,
+    link_project_to_session,
     list_planning_sessions,
+    list_session_projects,
     retest_cases,
     save_and_execute_selected_drafts,
     send_planning_message,
+    unlink_project_from_session,
     update_planning_draft_status,
 )
 from app.services.ai_planning_streaming import (
@@ -73,11 +80,10 @@ def create_planning_session_route(
 
 @router.get("/sessions", response_model=list[AIPlanningSessionSummary])
 def list_planning_sessions_route(
-    project_id: int | None = None,
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_demo_user),
 ) -> list[AIPlanningSessionSummary]:
-    return list_planning_sessions(session, actor_user_id=current_user.id, project_id=project_id)
+    return list_planning_sessions(session, actor_user_id=current_user.id)
 
 
 @router.get("/sessions/{session_id}", response_model=AIPlanningSessionDetail)
@@ -203,6 +209,77 @@ def retest_cases_route(
             case_ids=payload.case_ids,
             failed_only=payload.failed_only,
             input_values=payload.input_values,
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AIPlanningAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Session-Project association endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sessions/{session_id}/projects", response_model=list[ProjectSummaryInSession])
+def list_session_projects_route(
+    session_id: int,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> list[ProjectSummaryInSession]:
+    try:
+        return list_session_projects(session, session_id, actor_user_id=current_user.id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AIPlanningAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/sessions/{session_id}/projects", response_model=ProjectSummaryInSession, status_code=status.HTTP_201_CREATED)
+def link_project_route(
+    session_id: int,
+    payload: LinkProjectRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> ProjectSummaryInSession:
+    try:
+        return link_project_to_session(session, session_id, project_id=payload.project_id, actor_user_id=current_user.id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AIPlanningAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/sessions/{session_id}/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_project_route(
+    session_id: int,
+    project_id: int,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> Response:
+    try:
+        unlink_project_from_session(session, session_id, project_id=project_id, actor_user_id=current_user.id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AIPlanningAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/sessions/{session_id}/projects:create", response_model=ProjectSummaryInSession, status_code=status.HTTP_201_CREATED)
+def create_project_in_session_route(
+    session_id: int,
+    payload: CreateProjectInSessionRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> ProjectSummaryInSession:
+    try:
+        return create_project_in_session(
+            session, session_id,
+            name=payload.name, description=payload.description,
+            actor_user_id=current_user.id,
         )
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
