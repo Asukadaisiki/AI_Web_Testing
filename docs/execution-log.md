@@ -9,6 +9,16 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-04-29 (Session 13 — 防幂等保护：后端中间件 + 前端按钮防连点)
+
+- 目标：解决项目 POST 端点和前端提交按钮无防重复保护的问题
+- 操作：
+  - 后端：新建 `IdempotencyMiddleware`（内存 TTL 缓存，线程安全，惰性清理），仅当 `POST` + `Idempotency-Key` header 存在时激活；SSE 流和 5xx 不缓存。注册为最外层中间件。
+  - 前端：为 4 个组件共 6 个提交按钮添加显式 `disabled` prop（Ant Design `loading` 不阻止点击事件）；对 `handleCreateProject` / `handleEditProject` 添加 early return 防重入。
+- 结果：后端 10 个单元测试全部通过；前端 `npm run build` 编译通过。
+- 验证：`uv run pytest tests/unit/test_idempotency.py -v`（10/10 passed）；`npm run build`（成功）。
+- 后续：Phase 2 可在前端 API 层加 `Idempotency-Key` header 自动生成，对接后端中间件实现端到端防重。
+
 ## 2026-04-28 (Session 12 — DOM 选择器评分 + VLM 置信度门控 + 点击前置处理器)
 
 - 任务：解决 AI 生成的定位器质量差导致执行失败的问题，并实现研究文档中的分阶段落地计划
