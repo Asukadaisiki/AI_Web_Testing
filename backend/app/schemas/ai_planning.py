@@ -46,7 +46,7 @@ class AIPlanningRequirements(DSLModel):
 
 class AIPlanningTodoItem(DSLModel):
     item: str = Field(min_length=1, max_length=500)
-    status: Literal["done", "in_progress", "pending"] = "pending"
+    status: Literal["done", "in_progress", "pending", "failed", "skipped"] = "pending"
 
 
 class AIPlanningToolCall(DSLModel):

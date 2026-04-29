@@ -68,6 +68,8 @@ def run_planning_turn(
     existing_requirements: AIPlanningRequirements | None,
     db_session: Session,
     project_id: int,
+    actor_user_id: int = 0,
+    planning_session_id: int = 0,
 ) -> AIPlanningTurnResponse:
     """Synchronous wrapper around :func:`stream_planning_turn`.
 
@@ -79,6 +81,8 @@ def run_planning_turn(
         existing_requirements=existing_requirements,
         db_session=db_session,
         project_id=project_id,
+        actor_user_id=actor_user_id,
+        planning_session_id=planning_session_id,
     )
     while True:
         try:
@@ -93,6 +97,8 @@ def stream_planning_turn(
     existing_requirements: AIPlanningRequirements | None,
     db_session: Session,
     project_id: int,
+    actor_user_id: int = 0,
+    planning_session_id: int = 0,
 ) -> Generator[dict[str, Any], None, AIPlanningTurnResponse]:
     """Streaming ReAct planning turn.
 
@@ -200,9 +206,13 @@ def stream_planning_turn(
         logger.debug("ReAct round %d: action=%s", round_index, action)
 
         # --- Parse todo_list from LLM response ---
+        _valid_statuses = {"done", "in_progress", "pending", "failed", "skipped"}
         raw_todo = parsed.get("todo_list") or []
         todo_items = [
-            AIPlanningTodoItem(item=str(t.get("item", "")), status=t.get("status", "pending"))
+            AIPlanningTodoItem(
+                item=str(t.get("item", "")),
+                status=t.get("status", "pending") if t.get("status") in _valid_statuses else "pending",
+            )
             for t in raw_todo if isinstance(t, dict) and str(t.get("item", "")).strip()
         ]
 
@@ -281,6 +291,8 @@ def stream_planning_turn(
                     params=params,
                     db_session=db_session,
                     project_id=project_id,
+                    actor_user_id=actor_user_id,
+                    planning_session_id=planning_session_id,
                 )
             except Exception as exc:
                 logger.error("Tool call %s failed: %s", tool_name, exc, exc_info=True)
@@ -518,6 +530,17 @@ def _call_llm_with_retry(
     return None
 
 
+def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
+    normalized_base_url = base_url.strip().casefold()
+    normalized_model = model.strip().casefold()
+    return (
+        "open.bigmodel.cn" in normalized_base_url
+        or normalized_model.startswith("glm-")
+        or "api.deepseek.com" in normalized_base_url
+        or normalized_model.startswith("deepseek-")
+    )
+
+
 def _call_planning_llm(
     *,
     messages: list[dict[str, Any]],
@@ -526,11 +549,15 @@ def _call_planning_llm(
     base_url: str,
     timeout_seconds: float,
 ) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "response_format": {"type": "json_object"},
     }
+    if _should_enable_thinking_mode(base_url=base_url, model=model):
+        payload["thinking"] = {"type": "enabled"}
+        payload["max_tokens"] = 65536
+    else:
+        payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     http_request = request.Request(
         endpoint,
@@ -560,12 +587,16 @@ def _stream_planning_llm(
         ``{"type": "text_chunk", "text": "..."}`` for each incremental chunk.
         ``{"type": "raw_response", "text": "..."}`` once at the end with the full text.
     """
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "response_format": {"type": "json_object"},
         "stream": True,
     }
+    if _should_enable_thinking_mode(base_url=base_url, model=model):
+        payload["thinking"] = {"type": "enabled"}
+        payload["max_tokens"] = 65536
+    else:
+        payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     full_text: list[str] = []
     with httpx.Client(timeout=timeout_seconds) as client:
@@ -747,6 +778,8 @@ def _auto_explore_entry_url(
                 params={"url": base_url},
                 db_session=db_session,
                 project_id=project_id,
+                actor_user_id=actor_user_id,
+                planning_session_id=planning_session_id,
             )
             parsed_result = _safe_parse_json(tool_result_text)
         except Exception as exc:
@@ -775,6 +808,8 @@ def _auto_explore_entry_url(
                 params={"urls": all_urls},
                 db_session=db_session,
                 project_id=project_id,
+                actor_user_id=actor_user_id,
+                planning_session_id=planning_session_id,
             )
             flow_result = _safe_parse_json(flow_result_text)
             tool_calls.append(
