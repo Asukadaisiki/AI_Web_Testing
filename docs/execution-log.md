@@ -747,3 +747,14 @@
   - `cd backend && uv run pytest tests/unit/test_case_executions_api.py -q`，结果 `18 passed`（含新增 2 个）
   - `cd frontend && npx tsc --noEmit`，无错误
 - 后续：可考虑批量删除功能
+
+- 任务：修复流式接口两个 bug + 添加 create_project 幂等处理
+- 执行动作：
+  - **Bug 1 (Session rollback)**：`planning_tools.py` 中 `_handle_create_project` 和 `execute_tool` 的 catch 块原来用 `if not db_session.is_active` 条件判断才 rollback；UniqueViolation 后 `is_active` 可能仍为 True 导致跳过回滚，后续 DB 操作全部 PendingRollbackError。修复：移除条件，异常时无条件 `db_session.rollback()`
+  - **Bug 2 (流异常兜底)**：`ai_planning_streaming.py` 的 `_run_sync_generator` 内层 try-except 只捕获 `StopIteration`，`next(stream)` 的其他异常直接冲出导致 SSE 断开。修复：while 循环内增加 `except Exception` 分支，捕获后向队列写入 `type: "error"` 事件再 break，保证前端收到错误提示
+  - **幂等处理**：`_handle_create_project` 新增同名检测逻辑 — 创建前先查 `Project.name == base_name`，已存在则扫描 `base_name (N)` 模式取最小可用编号（如 `Automation Exercise (2)`），结果附带 `name_deduplicated: true` 告知 AI
+- 结果：工具 DB 异常不再污染会话状态；流中断时前端可见错误信息；同名项目自动编号避免 UniqueViolation
+- 验证：
+  - `cd backend && uv run pytest tests/unit/test_planning_tools.py -q`，结果 `43 passed`
+  - commit: `b6580fd fix(streaming): add session rollback after tool failures, stream error fallback, and idempotent project creation`
+- 后续：可在 E2E 手动测试中验证同名项目创建场景
