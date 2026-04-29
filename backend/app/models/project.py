@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.ai_planning_session import AIPlanningSession
 
 
 class Project(Base):
@@ -28,4 +32,8 @@ class Project(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+    sessions: Mapped[list["AIPlanningSession"]] = relationship(
+        "AIPlanningSession", secondary="session_projects", back_populates="projects", lazy="noload",
     )
