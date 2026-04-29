@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn, stream_planning_turn
-from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, Project, TestCase
+from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, Project, SessionProject, TestCase
 from app.schemas.ai_planning import (
     AIPlanningDraft as AIPlanningDraftSchema,
     AIPlanningMessage as AIPlanningMessageSchema,
@@ -22,6 +22,8 @@ from app.schemas.ai_planning import (
     CreateAIPlanningSessionRequest,
     ExecutionSummaryResult,
     GenerateAIPlanningDraftsRequest,
+    LinkProjectRequest,
+    ProjectSummaryInSession,
     SavedCaseResult,
     UpdateAIPlanningDraftStatusRequest,
 )
@@ -44,11 +46,8 @@ def list_planning_sessions(
     session: Session,
     *,
     actor_user_id: int,
-    project_id: int | None = None,
 ) -> list[AIPlanningSessionSummary]:
     q = session.query(AIPlanningSession).filter(AIPlanningSession.actor_user_id == actor_user_id)
-    if project_id is not None:
-        q = q.filter(AIPlanningSession.project_id == project_id)
     q = q.order_by(AIPlanningSession.updated_at.desc())
     rows = q.all()
     return [
@@ -58,6 +57,10 @@ def list_planning_sessions(
             status=r.status,
             created_at=r.created_at,
             updated_at=r.updated_at,
+            projects=[
+                ProjectSummaryInSession(id=p.id, name=p.name, description=p.description)
+                for p in (r.projects or [])
+            ],
         )
         for r in rows
     ]
@@ -69,14 +72,8 @@ def create_planning_session(
     *,
     actor_user_id: int,
 ) -> AIPlanningSessionDetail:
-    if payload.project_id is not None:
-        _ensure_project_access(session, project_id=payload.project_id, actor_user_id=actor_user_id)
-        if payload.case_id is not None:
-            _ensure_case_access(session, case_id=payload.case_id, project_id=payload.project_id, actor_user_id=actor_user_id)
-
     record = AIPlanningSession(
         actor_user_id=actor_user_id,
-        project_id=payload.project_id,
         case_id=payload.case_id,
         status="collecting",
         requirements_json=AIPlanningRequirements().model_dump(mode="json"),
@@ -1221,6 +1218,86 @@ def _get_session(session: Session, planning_session_id: int, *, actor_user_id: i
     return planning_session
 
 
+def link_project_to_session(
+    session: Session,
+    planning_session_id: int,
+    *,
+    project_id: int,
+    actor_user_id: int,
+) -> ProjectSummaryInSession:
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project = session.get(Project, project_id)
+    if project is None:
+        raise EntityNotFoundError(f"Project {project_id} not found.")
+
+    existing = session.scalar(
+        select(SessionProject).where(
+            SessionProject.session_id == planning_session_id,
+            SessionProject.project_id == project_id,
+        )
+    )
+    if existing is not None:
+        raise ValueError(f"Project {project_id} already linked to session {planning_session_id}.")
+
+    session.add(SessionProject(session_id=planning_session_id, project_id=project_id))
+    session.commit()
+    return ProjectSummaryInSession(id=project.id, name=project.name, description=project.description)
+
+
+def unlink_project_from_session(
+    session: Session,
+    planning_session_id: int,
+    *,
+    project_id: int,
+    actor_user_id: int,
+) -> None:
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    link = session.scalar(
+        select(SessionProject).where(
+            SessionProject.session_id == planning_session_id,
+            SessionProject.project_id == project_id,
+        )
+    )
+    if link is None:
+        raise EntityNotFoundError(f"Project {project_id} not linked to session {planning_session_id}.")
+    session.delete(link)
+    session.commit()
+
+
+def list_session_projects(
+    session: Session,
+    planning_session_id: int,
+    *,
+    actor_user_id: int,
+) -> list[ProjectSummaryInSession]:
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    return [
+        ProjectSummaryInSession(id=p.id, name=p.name, description=p.description)
+        for p in (planning_session.projects or [])
+    ]
+
+
+def create_project_in_session(
+    session: Session,
+    planning_session_id: int,
+    *,
+    name: str,
+    description: str | None,
+    actor_user_id: int,
+) -> ProjectSummaryInSession:
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+
+    project = Project(name=name, description=description)
+    session.add(project)
+    session.flush()
+
+    session.add(SessionProject(session_id=planning_session_id, project_id=project.id))
+    session.commit()
+    session.refresh(project)
+
+    return ProjectSummaryInSession(id=project.id, name=project.name, description=project.description)
+
+
 def _ensure_project_access(session: Session, *, project_id: int, actor_user_id: int) -> None:
     if session.get(Project, project_id) is None:
         raise EntityNotFoundError(f"Project {project_id} not found.")
@@ -1247,7 +1324,6 @@ def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
     return AIPlanningSessionSchema(
         id=record.id,
         actor_user_id=record.actor_user_id,
-        project_id=record.project_id,
         case_id=record.case_id,
         title=record.title,
         status=record.status,
@@ -1257,6 +1333,10 @@ def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
         last_error_message=record.last_error_message,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        projects=[
+            ProjectSummaryInSession(id=p.id, name=p.name, description=p.description)
+            for p in (record.projects or [])
+        ],
     )
 
 
