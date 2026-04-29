@@ -229,10 +229,16 @@ export interface AIPlanningToolCall {
   result?: unknown;
 }
 
+export interface ProjectSummaryInSession {
+  id: number;
+  name: string;
+  description: string | null;
+}
+
 export interface AIPlanningSession {
   id: number;
   actor_user_id: number;
-  project_id: number;
+  projects: ProjectSummaryInSession[];
   case_id?: number | null;
   title?: string | null;
   status: AIPlanningSessionStatus;
@@ -279,12 +285,12 @@ export interface AIPlanningSessionSummary {
   id: number;
   title: string | null;
   status: AIPlanningSessionStatus;
+  projects: ProjectSummaryInSession[];
   created_at: string;
   updated_at: string;
 }
 
 export interface CreatePlanningSessionPayload {
-  project_id: number;
   case_id?: number | null;
 }
 
@@ -1088,3 +1094,12 @@ export type ExecutionStreamEvent =
   | CancelledEvent
   | DoneEvent
   | ErrorEvent;
+
+export interface LinkProjectPayload {
+  project_id: number;
+}
+
+export interface CreateProjectInSessionPayload {
+  name: string;
+  description?: string | null;
+}
