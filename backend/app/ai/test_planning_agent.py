@@ -168,6 +168,7 @@ def stream_planning_turn(
     conversation: list[dict[str, str]] = [{"role": "system", "content": build_system_prompt()}, *transcript_messages]
     safety_cap = max(1, settings.ai_planning_max_react_safety_cap)
     round_index = 0
+    parse_retries = 0
     turn_start_time = time.monotonic()
     while round_index < safety_cap:
         round_index += 1
@@ -226,7 +227,26 @@ def stream_planning_turn(
                      round_index, len(raw_response), parsed.get("action") if parsed else "parse_failed",
                      list((parsed.get("action_input") or {}).keys()) if parsed and isinstance(parsed.get("action_input"), dict) else [])
         if parsed is None:
-            logger.warning("LLM response unparseable in round %d, raw (first 300 chars): %s", round_index, raw_response[:300])
+            parse_retries += 1
+            logger.warning("LLM response unparseable in round %d (parse retry %d), raw (first 300 chars): %s",
+                           round_index, parse_retries, raw_response[:300])
+            if parse_retries <= 2:
+                conversation.extend([
+                    {"role": "assistant", "content": _normalize_json_text(raw_response)},
+                    {"role": "system", "content": (
+                        "⚠️ 你的上一次回复不是有效的 JSON 格式，系统无法解析。"
+                        "请严格返回一个 JSON 对象，不要包含 markdown 代码围栏、注释或任何额外文字。"
+                        "正确的格式示例：\n"
+                        '```json\n'
+                        '{"action": "call_tool", "action_input": {"tool": "...", "params": {...}}, '
+                        '"assistant_message": "...", "collected_info": {}, "todo_list": []}\n'
+                        '```\n'
+                        "请基于当前上下文重新回复。"
+                    )},
+                ])
+                yield {"type": "status", "phase": "thinking", "message": f"解析失败，正在重试 ({parse_retries}/2)..."}
+                continue
+            # retries exhausted, fall back
             response = _run_fallback_turn(
                 transcript=transcript,
                 requirements=requirements,
@@ -236,6 +256,9 @@ def stream_planning_turn(
             )
             yield _turn_complete_payload(response)
             return response
+
+        # reset retry counter on successful parse
+        parse_retries = 0
 
         _merge_requirements(requirements, parsed.get("collected_info"))
         _merge_test_context(requirements, parsed.get("test_context"))
@@ -264,6 +287,7 @@ def stream_planning_turn(
             if not has_explore:
                 explored, tool_calls = _auto_explore_entry_url(
                     requirements, tool_calls, db_session, project_id,
+                    actor_user_id=actor_user_id, planning_session_id=planning_session_id,
                 )
                 if explored:
                     # Check if exploration actually produced useful data
@@ -296,6 +320,7 @@ def stream_planning_turn(
                 # AI called explore_page but not explore_flow — supplement with multi-page
                 explored, tool_calls = _auto_explore_entry_url(
                     requirements, tool_calls, db_session, project_id,
+                    actor_user_id=actor_user_id, planning_session_id=planning_session_id,
                 )
                 if explored:
                     yield {"type": "status", "phase": "tool_call", "message": "正在补充采集导航页面元素..."}
@@ -783,6 +808,9 @@ def _auto_explore_entry_url(
     tool_calls: list[AIPlanningToolCall],
     db_session: Session,
     project_id: int,
+    *,
+    actor_user_id: int = 0,
+    planning_session_id: int = 0,
 ) -> tuple[bool, list[AIPlanningToolCall]]:
     """Auto-invoke explore_page (or explore_flow) with the entry URL.
 
