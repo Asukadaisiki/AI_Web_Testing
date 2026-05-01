@@ -309,10 +309,13 @@ class TestEnhancedContextPreamble:
             failure_patterns={"locator_stale": {"count": 3}},
         ))
         session_record = AIPlanningSession(
-            actor_user_id=1, project_id=1, status="completed",
+            actor_user_id=1, status="completed",
             requirements_json={}, missing_slots_json=[],
         )
         db_session.add(session_record)
+        db_session.flush()
+        from app.models.session_project import SessionProject
+        db_session.add(SessionProject(session_id=session_record.id, project_id=1))
         db_session.commit()
 
         result = _build_session_context_preamble(session_record, db_session, existing_msg_count=5)
@@ -322,6 +325,7 @@ class TestEnhancedContextPreamble:
 
     def test_no_insights_section_when_none_exist(self, db_session: Session) -> None:
         from app.models import AIPlanningSession, TestCaseRun
+        from app.models.session_project import SessionProject
         from app.services import cases as case_service
         from app.services.ai_planning import _build_session_context_preamble
 
@@ -333,10 +337,12 @@ class TestEnhancedContextPreamble:
         db_session.flush()
         db_session.add(TestCaseRun(case_id=case.id, project_id=1, triggered_by=1, status="passed"))
         session_record = AIPlanningSession(
-            actor_user_id=1, project_id=1, status="completed",
+            actor_user_id=1, status="completed",
             requirements_json={}, missing_slots_json=[],
         )
         db_session.add(session_record)
+        db_session.flush()
+        db_session.add(SessionProject(session_id=session_record.id, project_id=1))
         db_session.commit()
 
         result = _build_session_context_preamble(session_record, db_session, existing_msg_count=5)

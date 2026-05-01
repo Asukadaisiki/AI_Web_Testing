@@ -236,7 +236,7 @@ def test_run_planning_turn_returns_error_after_three_llm_failures(monkeypatch) -
 def test_create_planning_session_and_restore_detail(client) -> None:
     create_response = client.post(
         "/api/v1/ai-planning/sessions",
-        json={"project_id": 1, "case_id": None},
+        json={},
     )
 
     assert create_response.status_code == 201
@@ -246,7 +246,6 @@ def test_create_planning_session_and_restore_detail(client) -> None:
 
     assert detail_response.status_code == 200
     payload = detail_response.json()
-    assert payload["session"]["project_id"] == 1
     assert payload["messages"] == []
     assert payload["drafts"] == []
 
@@ -281,7 +280,7 @@ def test_send_planning_message_records_tool_call_and_assistant_messages(client, 
 
     create_response = client.post(
         "/api/v1/ai-planning/sessions",
-        json={"project_id": 1},
+        json={},
     )
     session_id = create_response.json()["session"]["id"]
 
@@ -365,8 +364,9 @@ def test_generate_planning_drafts_creates_one_draft_per_selected_scenario(client
         ),
     )
 
-    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    create_response = client.post("/api/v1/ai-planning/sessions", json={})
     session_id = create_response.json()["session"]["id"]
+    client.post(f"/api/v1/ai-planning/sessions/{session_id}/projects", json={"project_id": 1})
     client.post(
         f"/api/v1/ai-planning/sessions/{session_id}/messages",
         json={"content": "请生成后台登录测试规划"},
@@ -448,8 +448,9 @@ def test_update_planning_draft_status_marks_imported(client, monkeypatch) -> Non
         ),
     )
 
-    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    create_response = client.post("/api/v1/ai-planning/sessions", json={})
     session_id = create_response.json()["session"]["id"]
+    client.post(f"/api/v1/ai-planning/sessions/{session_id}/projects", json={"project_id": 1})
     client.post(
         f"/api/v1/ai-planning/sessions/{session_id}/messages",
         json={"content": "请生成后台登录测试规划"},
@@ -470,7 +471,7 @@ def test_update_planning_draft_status_marks_imported(client, monkeypatch) -> Non
 
 
 def test_delete_planning_session_removes_session_and_returns_204(client) -> None:
-    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    create_response = client.post("/api/v1/ai-planning/sessions", json={})
     session_id = create_response.json()["session"]["id"]
 
     delete_response = client.delete(f"/api/v1/ai-planning/sessions/{session_id}")
@@ -587,8 +588,9 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
         ),
     )
 
-    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    create_response = client.post("/api/v1/ai-planning/sessions", json={})
     session_id = create_response.json()["session"]["id"]
+    client.post(f"/api/v1/ai-planning/sessions/{session_id}/projects", json={"project_id": 1})
     client.post(
         f"/api/v1/ai-planning/sessions/{session_id}/messages",
         json={"content": "请生成后台登录测试规划"},
@@ -634,7 +636,7 @@ def _seed_planning_session_with_drafts(client):
 
     # The monkeypatching for run_planning_turn and generate_dsl_case is done by the caller.
     # We rely on the fact that the test client already has them patched.
-    create_response = client.post("/api/v1/ai-planning/sessions", json={"project_id": 1})
+    create_response = client.post("/api/v1/ai-planning/sessions", json={})
     session_id = create_response.json()["session"]["id"]
     return session_id
 

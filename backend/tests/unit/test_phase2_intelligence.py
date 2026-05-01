@@ -60,7 +60,6 @@ class TestBuildSessionContextPreamble:
 
         session_record = AIPlanningSession(
             actor_user_id=1,
-            project_id=1,
             status="collecting",
             requirements_json={},
             missing_slots_json=[],
@@ -77,7 +76,6 @@ class TestBuildSessionContextPreamble:
 
         session_record = AIPlanningSession(
             actor_user_id=1,
-            project_id=None,
             status="collecting",
             requirements_json={},
             missing_slots_json=[],
@@ -91,6 +89,7 @@ class TestBuildSessionContextPreamble:
     def test_injects_status_when_has_history(self, db_session: Session) -> None:
         from app.services.ai_planning import _build_session_context_preamble
         from app.models import AIPlanningSession, TestCaseRun
+        from app.models.session_project import SessionProject
         from app.services import cases as case_service
         from app.schemas.cases import CaseCreateRequest
 
@@ -106,12 +105,13 @@ class TestBuildSessionContextPreamble:
 
         session_record = AIPlanningSession(
             actor_user_id=1,
-            project_id=1,
             status="completed",
             requirements_json={},
             missing_slots_json=[],
         )
         db_session.add(session_record)
+        db_session.flush()
+        db_session.add(SessionProject(session_id=session_record.id, project_id=1))
         db_session.commit()
 
         result = _build_session_context_preamble(session_record, db_session, existing_msg_count=5)
@@ -129,7 +129,6 @@ class TestInjectAutoContext:
 
         session_record = AIPlanningSession(
             actor_user_id=1,
-            project_id=1,
             status="collecting",
             requirements_json={},
             missing_slots_json=[],
@@ -144,6 +143,7 @@ class TestInjectAutoContext:
     def test_prepends_preamble_when_injection_needed(self, db_session: Session) -> None:
         from app.services.ai_planning import _inject_auto_context
         from app.models import AIPlanningSession, TestCaseRun
+        from app.models.session_project import SessionProject
         from app.services import cases as case_service
         from app.schemas.cases import CaseCreateRequest
 
@@ -158,12 +158,13 @@ class TestInjectAutoContext:
 
         session_record = AIPlanningSession(
             actor_user_id=1,
-            project_id=1,
             status="completed",
             requirements_json={},
             missing_slots_json=[],
         )
         db_session.add(session_record)
+        db_session.flush()
+        db_session.add(SessionProject(session_id=session_record.id, project_id=1))
         db_session.commit()
 
         transcript = [{"role": "user", "content": "how are results?"}]
@@ -179,15 +180,17 @@ class TestRetestCases:
     def test_returns_no_retest_message_when_no_failures(self, db_session: Session) -> None:
         from app.services.ai_planning import retest_cases
         from app.models import AIPlanningSession
+        from app.models.session_project import SessionProject
 
         session_record = AIPlanningSession(
             actor_user_id=1,
-            project_id=1,
             status="completed",
             requirements_json={},
             missing_slots_json=[],
         )
         db_session.add(session_record)
+        db_session.flush()
+        db_session.add(SessionProject(session_id=session_record.id, project_id=1))
         db_session.commit()
 
         result = retest_cases(
@@ -203,7 +206,6 @@ class TestRetestCases:
 
         session_record = AIPlanningSession(
             actor_user_id=1,
-            project_id=1,
             status="completed",
             requirements_json={},
             missing_slots_json=[],
