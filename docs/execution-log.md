@@ -9,6 +9,21 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-02 (Session 15 — 修复 explore_flow 0 元素 bug + 无 goto 导致白屏执行)
+
+- 目标：修复最新会话生成的测试用例（Case 40, 29 步）在第 6 步断言失败 + 前 6 步截图全白的问题
+- 背景：
+  - Execution #90 测试用例无 goto 步骤，浏览器启动在 about:blank → 所有截图白屏（4253 bytes）
+  - VLM 在白屏上坐标点击 steps 1-5 未报错，step 6 `assert_text "Logged in as"` 因 `<body></body>` 无文本而失败
+  - `explore_flow` 返回 0 元素：`collect_multi_page_elements` 中第 531 行 `from app.core.config import get_settings` 本地导入遮蔽了模块级导入，导致第 455 行 `get_settings()` 报 UnboundLocalError
+- 操作：
+  1. **explore_flow 修复**：`page_explorer.py` 删除 `collect_multi_page_elements` 内第 531 行的本地 `from app.core.config import get_settings`，使用模块级导入
+  2. **DSL 治理修复**：`dsl_generator.py` `_check_dsl_completeness()` 中当 base_url 存在但无 goto 步骤时，自动在 steps 首部插入 `{"action": "goto", "value": "/"}`
+  3. **Runner 安全兜底**：`playwright_runner.py` 中 sync 和 streaming 两个 runner 均在步骤循环前增加检测：若首个步骤不是 goto 且 base_url 已设置，先 `page.goto(base_url)` 再执行步骤
+- 结果：471 单元测试全部通过，0 失败
+- 验证：`uv run pytest tests/unit/ -q` → 471 passed
+- 后续：重启后端重新生成品牌筛选测试用例，确认 explore_flow 返回元素 > 0、截图正常、goto 步骤存在
+
 ## 2026-05-02 (Session 14 — 修复探索功能 + VLM 两阶段定位 + 评分数据传递)
 
 - 目标：修复 AI 生成的测试用例定位器全部失败的问题（Execution #89 品牌筛选购物车测试 Step 15 失败）
