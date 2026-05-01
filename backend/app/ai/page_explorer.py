@@ -10,6 +10,7 @@ from typing import Any
 
 from playwright.sync_api import sync_playwright
 
+from app.core.config import get_settings
 from app.locators.fallback import EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT
 from app.runners.pre_scorer import score_candidates_for_element, ELEMENT_TYPE_SCORES
 
@@ -213,11 +214,24 @@ def _format_element_rich(element: dict[str, Any], stability: float) -> str:
     extras.append(f"stable={stability:.2f}")
 
     if element.get("candidates"):
-        top_cand = element["candidates"][0]
-        extras.append(f"top_candidate={top_cand['strategy']}({top_cand['pre_score']:.2f})")
+        top3 = element["candidates"][:3]
+        cand_strs = []
+        for cand in top3:
+            sel_short = str(cand.get("selector", ""))[:40]
+            cand_strs.append(f"{cand['strategy']}={sel_short}({cand['pre_score']:.2f})")
+        extras.append(f"candidates={'|'.join(cand_strs)}")
 
     secondary = " | ".join(extras)
     return f"{primary} | {secondary}"
+
+
+MAX_PROMPT_ELEMENTS_CHARS = 80000
+
+
+def _extract_stability(line: str) -> float:
+    """Extract the stable=X.XX value from a formatted element line."""
+    m = re.search(r"stable=([\d.]+)", line)
+    return float(m.group(1)) if m else 0.0
 
 
 def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
@@ -231,7 +245,25 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
     for element in visible:
         stability = _compute_element_stability(element, visible)
         lines.append(_format_element_rich(element, stability))
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if len(result) > MAX_PROMPT_ELEMENTS_CHARS:
+        prioritized = sorted(
+            [(line, _extract_stability(line)) for line in lines],
+            key=lambda x: x[1], reverse=True,
+        )
+        kept: list[str] = []
+        char_count = 0
+        truncated_count = 0
+        for line, _ in prioritized:
+            if char_count + len(line) + 1 > MAX_PROMPT_ELEMENTS_CHARS:
+                truncated_count += 1
+                continue
+            kept.append(line)
+            char_count += len(line) + 1
+        kept.sort(key=lambda x: lines.index(x))
+        result = "\n".join(kept)
+        result += f"\n... [truncated {truncated_count} low-stability elements to fit prompt limits]"
+    return result
 
 
 def _sync_playwright_context():
@@ -250,6 +282,8 @@ def _extract_element_id(elem: dict[str, Any]) -> str:
 _INTERACTIVE_KEYWORDS = [
     "add to cart", "submit", "view product", "view cart",
     "add to bag", "buy now", "checkout", "place order",
+    "filter", "brand", "brands", "category", "categories",
+    "sort", "search", "apply",
 ]
 
 
@@ -260,7 +294,7 @@ def _discover_interactive_elements(
 ) -> list[dict[str, Any]]:
     """Click key trigger buttons and capture dynamically appearing elements."""
     baseline: set[str] = set()
-    baseline_payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+    baseline_payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
     for elem in (baseline_payload or []):
         css = elem.get("css_selector", "")
         if css:
@@ -286,7 +320,7 @@ def _discover_interactive_elements(
             trigger.click(timeout=300)
             page.wait_for_timeout(500)
 
-            new_payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+            new_payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
             for elem in (new_payload or []):
                 css = elem.get("css_selector", "")
                 if css and css not in baseline:
@@ -329,7 +363,7 @@ def collect_interactable_elements(
                 page.wait_for_load_state("networkidle", timeout=timeout_ms)
             except Exception as exc:
                 logger.warning("Page load issue for %s: %s", url, exc)
-            payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+            payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
             context.close()
             browser.close()
     except Exception as exc:
@@ -451,7 +485,7 @@ def collect_multi_page_elements(
                         page.wait_for_load_state("networkidle", timeout=timeout_ms)
                     except Exception:
                         pass  # non-fatal
-                    payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+                    payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
                 except Exception as exc:
                     logger.warning("collect_multi_page_elements: page load failed for %s: %s", url, exc)
                     results.append({

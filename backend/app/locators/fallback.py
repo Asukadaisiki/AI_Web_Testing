@@ -188,9 +188,9 @@ CAPTURE_DOM_CANDIDATE_SCRIPT = (
 )
 EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT = (
     """
-    () => {
-      const selector = "button, input, select, textarea, a, [role], [data-testid], [onclick]";
-      const nodes = Array.from(document.querySelectorAll(selector)).slice(0, 50);
+    (maxElements) => {
+      const selector = "button, input, select, textarea, a, [role], [data-testid], [onclick], p, span, h1, h2, h3, h4, h5, h6, li, label, img";
+      const nodes = Array.from(document.querySelectorAll(selector)).slice(0, maxElements || 300);
     """
     + SELECTOR_HELPERS_JS
     + """
@@ -404,6 +404,7 @@ def _try_ai_visual_locate(page, *, target: str) -> AILocateResult | None:
             target_description=target,
             image_width=width,
             image_height=height,
+            deep_locate=True,
         )
     except Exception as exc:
         logger.warning("AI visual fallback failed for target=%s error=%s", target, exc)
@@ -511,7 +512,7 @@ def _clear_ai_visual_session_cache() -> None:
 
 
 def _take_screenshot_base64(page) -> str:
-    screenshot_bytes = page.screenshot(full_page=False)
+    screenshot_bytes = page.screenshot(full_page=True)
     return base64.b64encode(screenshot_bytes).decode("utf-8")
 
 
@@ -616,7 +617,7 @@ def _dom_snapshot_matches_target(snapshot: DOMElementSnapshot, target: str) -> b
 
 
 def _extract_interactable_elements(page) -> list[DOMElementSnapshot]:
-    payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT)
+    payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, 300)
     if not isinstance(payload, list):
         return []
     return [DOMElementSnapshot.model_validate(entry) for entry in payload]

@@ -213,7 +213,7 @@ class TestCollectInteractableElements:
 
             def wait_for_load_state(self, state): ...
 
-            def evaluate(self, script):
+            def evaluate(self, script, *args):
                 return fake_elements
 
         class FakeContext:

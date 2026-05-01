@@ -271,7 +271,7 @@ def test_resolve_with_fallback_uses_viewport_screenshot_for_ai_candidate(monkeyp
     resolved = resolve_with_fallback(page, "登录按钮")
 
     assert resolved.strategy == "ai_visual"
-    assert page.screenshot_calls == [False]
+    assert page.screenshot_calls == [True]
 
 
 def test_resolve_with_fallback_logs_ai_capture_failures(monkeypatch, caplog) -> None:
@@ -383,7 +383,7 @@ def test_resolve_with_fallback_invalidates_cached_visible_selector_when_semantic
 
     assert resolved.strategy == "ai_visual"
     assert semantic_spy.call_count == 1
-    assert second_page.screenshot_calls == [False]
+    assert second_page.screenshot_calls == [True]
     assert "reason=semantic_mismatch" in caplog.text
     stats = get_ai_visual_runtime_stats()
     assert stats.cache_miss_count == 1

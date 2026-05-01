@@ -87,6 +87,7 @@ class Settings:
     storage_state_dir: str = "storage_states"
     enable_vlm_page_annotation: bool = True
     explore_interactive_max_clicks: int = 5
+    explore_max_elements: int = 300
 
 
 @lru_cache
@@ -134,4 +135,6 @@ def get_settings() -> Settings:
         ai_planning_context_keep_recent=max(2, _get_int(os.getenv("AI_PLANNING_CONTEXT_KEEP_RECENT"), default=4)),
         storage_state_dir=os.getenv("STORAGE_STATE_DIR", "storage_states").strip(),
         enable_vlm_page_annotation=_get_bool(os.getenv("ENABLE_VLM_PAGE_ANNOTATION"), default=True),
+        explore_interactive_max_clicks=max(1, _get_int(os.getenv("EXPLORE_INTERACTIVE_MAX_CLICKS"), default=5)),
+        explore_max_elements=max(50, _get_int(os.getenv("EXPLORE_MAX_ELEMENTS"), default=300)),
     )
