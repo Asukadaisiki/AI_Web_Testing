@@ -776,8 +776,10 @@ def _check_dsl_completeness(
     )
     if base_url and steps and not has_goto:
         normalization_notes.append(
-            "DSL 中没有 goto 步骤。如果测试需要先导航到目标页面，建议添加 goto 步骤。"
+            "DSL 中没有 goto 步骤。已自动添加 goto \"/\" 步骤导航到 base_url。"
         )
+        steps.insert(0, {"action": "goto", "value": "/"})
+
 
     # 语义校验：检测关键状态变化步骤后缺少验证
     _check_step_verification(steps, warnings)

@@ -533,6 +533,10 @@ def execute_case_with_playwright(
         page.on("requestfailed", lambda request: _capture_request_failed(request, network_buffer))
         page.on("response", lambda response: _capture_error_response(response, network_buffer))
 
+        # Auto-navigate to base_url when first step is not a goto
+        if case.steps and case.steps[0].action != "goto" and base_url:
+            page.goto(base_url, wait_until="domcontentloaded")
+
         try:
             for index, step in enumerate(case.steps):
                 step_started_at = perf_counter()
@@ -804,6 +808,10 @@ def execute_case_with_playwright_streaming(
         page.on("console", lambda message: _capture_console_event(message, console_buffer))
         page.on("requestfailed", lambda request: _capture_request_failed(request, network_buffer))
         page.on("response", lambda response: _capture_error_response(response, network_buffer))
+
+        # Auto-navigate to base_url when first step is not a goto
+        if case.steps and case.steps[0].action != "goto" and base_url:
+            page.goto(base_url, wait_until="domcontentloaded")
 
         try:
             for index, step in enumerate(case.steps):

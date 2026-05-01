@@ -528,7 +528,6 @@ def collect_multi_page_elements(
 
                 # Interactive element discovery
                 try:
-                    from app.core.config import get_settings
                     settings = get_settings()
                     interactive = _discover_interactive_elements(
                         page, max_clicks=settings.explore_interactive_max_clicks,
