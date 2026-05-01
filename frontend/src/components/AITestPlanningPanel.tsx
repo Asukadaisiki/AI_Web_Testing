@@ -413,10 +413,29 @@ export function AITestPlanningPanel({
     }
 
     if (event.type === "turn_complete") {
-      clearStreamingOnMessage(activeAssistantMessageIdRef.current);
+      const targetId = activeAssistantMessageIdRef.current;
+      if (targetId != null) {
+        setTranscript((current) =>
+          current.map((msg) => {
+            if (msg.id !== targetId) return msg;
+            const payload = msg.structured_payload as Record<string, unknown> | null;
+            return {
+              ...msg,
+              content: event.payload.assistant_message || msg.content,
+              structured_payload: {
+                ...payload,
+                _streaming: false,
+                todo_list: event.payload.todo_list,
+                missing_slots: event.payload.missing_slots,
+                suggested_questions: event.payload.suggested_questions,
+              },
+            };
+          }),
+        );
+      }
       if (sessionId) {
-        void loadSessionDetail(sessionId);
-        void loadSessionList();
+        loadSessionDetail(sessionId).catch(() => {});
+        loadSessionList().catch(() => {});
       }
       setIsSending(false);
       setIsGenerating(false);
@@ -426,8 +445,10 @@ export function AITestPlanningPanel({
     if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
       clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if (sessionId) {
-        void loadSessionDetail(sessionId);
-        void loadSessionList();
+        loadSessionDetail(sessionId).catch(() => {});
+        loadSessionList().catch(() => {});
+      }
+      if (event.type === "done" || event.type === "cancelled") {
         void queryClient.invalidateQueries({ queryKey: ["cases"] });
         void queryClient.invalidateQueries({ queryKey: ["executions"] });
       }

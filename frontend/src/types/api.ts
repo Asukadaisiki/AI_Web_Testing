@@ -922,7 +922,14 @@ export interface DraftGeneratingStreamEvent {
 export interface TurnCompleteStreamEvent {
   type: "turn_complete";
   session_status: string;
-  payload: Record<string, unknown>;
+  payload: {
+    assistant_message: string;
+    missing_slots: string[];
+    suggested_questions: string[];
+    plan: Record<string, unknown> | null;
+    tool_calls: Array<{ tool: string; params: Record<string, unknown> }>;
+    todo_list: Array<{ item: string; status: string }>;
+  };
 }
 
 export interface SaveProgressEvent {

@@ -94,7 +94,10 @@ def _turn_complete_payload(response: AIPlanningTurnResponse) -> dict[str, Any]:
             "missing_slots": response.missing_slots,
             "suggested_questions": response.suggested_questions,
             "plan": response.plan.model_dump(mode="json") if response.plan else None,
-            "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+            "tool_calls": [
+                {"tool": item.tool, "params": item.params}
+                for item in response.tool_calls
+            ],
             "todo_list": [t.model_dump(mode="json") for t in response.todo_list],
         },
     }
@@ -247,10 +250,17 @@ def stream_planning_turn(
                 yield {"type": "status", "phase": "thinking", "message": f"解析失败，正在重试 ({parse_retries}/2)..."}
                 continue
             # retries exhausted, fall back
+            raw_preview = raw_response[:500].replace("{", "{{").replace("}", "}}")
+            detail_msg = (
+                f"JSON 解析连续失败 {parse_retries} 次，AI 返回的内容不是合法的 JSON 格式。\n\n"
+                f"原始输出（前 500 字符）：\n```\n{raw_preview}\n```\n\n"
+                f"常见原因：JSON 未闭合、嵌套了 markdown 代码块、包含未转义的特殊字符、或模型在 JSON 外多输出了额外文字。\n\n"
+                f"我先按已有信息给你整理一个测试方案。"
+            )
             response = _run_fallback_turn(
                 transcript=transcript,
                 requirements=requirements,
-                assistant_message="遇到了解析问题，我先按已有信息给你整理一个测试方案。",
+                assistant_message=detail_msg,
                 force_generate=force_generate,
                 tool_calls=tool_calls,
             )

@@ -109,7 +109,7 @@ beforeEach(() => {
 test("展示动态进度、工具调用并支持直接生成方案", async () => {
   // Mock SSE call to immediately emit turn_complete, triggering session reload
   vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
-    opts.onEvent("turn_complete", { type: "turn_complete" });
+    opts.onEvent("turn_complete", { type: "turn_complete", session_status: "collecting", payload: { assistant_message: "", missing_slots: [], suggested_questions: [], plan: null, tool_calls: [], todo_list: [] } });
   });
 
   // getPlanningSession: called after turn_complete reloads session, return final state with plan
@@ -208,7 +208,7 @@ test("展示动态进度、工具调用并支持直接生成方案", async () =>
 test("可以生成草案并展示审阅操作", async () => {
   // Mock SSE call for chat to immediately emit turn_complete
   vi.mocked(sseModule.callSSE).mockImplementation(async (opts) => {
-    opts.onEvent("turn_complete", { type: "turn_complete" });
+    opts.onEvent("turn_complete", { type: "turn_complete", session_status: "collecting", payload: { assistant_message: "", missing_slots: [], suggested_questions: [], plan: null, tool_calls: [], todo_list: [] } });
   });
 
   // getPlanningSession: after chat turn_complete returns plan, after drafts turn_complete returns drafts
