@@ -9,7 +9,29 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
-## 2026-04-29 (Session 13 — 防幂等保护：后端中间件 + 前端按钮防连点)
+## 2026-05-02 (Session 14 — 修复探索功能 + VLM 两阶段定位 + 评分数据传递)
+
+- 目标：修复 AI 生成的测试用例定位器全部失败的问题（Execution #89 品牌筛选购物车测试 Step 15 失败）
+- 背景：探索时 50 元素硬限制 + 仅收集 header 元素 → AI 无 DOM 数据杜撰 CSS 选择器 → 所有选择器返回 0 元素 → 全依赖 VLM 兜底 → VLM 在第 15 步也失效
+- 操作：
+  1. **探索功能修复**：
+     - `fallback.py`：JS 提取脚本从无参改为接受 `maxElements` 参数（默认 300），移除 `.slice(0, 50)` 硬限制
+     - `fallback.py`：扩展 CSS selector 增加 `p, span, h1-h6, li, label, img` 覆盖内容区域元素
+     - `page_explorer.py`：4 处 `page.evaluate()` 调用点传入 `get_settings().explore_max_elements`
+     - `page_explorer.py`：`_INTERACTIVE_KEYWORDS` 增加 filter/brand/category/sort/search/apply
+     - `config.py`：新增 `explore_max_elements` 配置项（环境变量 `EXPLORE_MAX_ELEMENTS`，默认 300）
+  2. **VLM 两阶段定位**：
+     - `fallback.py`：`_try_ai_visual_locate()` 传入 `deep_locate=True`，启用已有的 `_deep_locate()` 机制（Stage 1 找区域 → crop + 2x 放大 → Stage 2 精确定位）
+     - `fallback.py`：`_take_screenshot_base64()` 从 `full_page=False` 改为 `full_page=True`
+  3. **AI 数据长度限制**：
+     - `page_explorer.py`：`format_elements_for_prompt()` 增加 80K 字符智能截断，超出时按 stable 分数降序保留
+  4. **评分候选数据传递**：
+     - `page_explorer.py`：`_format_element_rich()` 从单个 `top_candidate` 改为输出 top 3 候选含 selector+pre_score
+     - `dsl_generator.py`：修正 VLM 兜底策略描述（从"最后一个候选必须是 VLM"改为"tag 兜底 + 运行时自动激活 VLM"）
+- 结果：455 单元测试通过，零回归（16 个预先存在的失败不变）
+- 验证：`uv run pytest tests/unit/ -q` → 455 passed；test_page_explorer 和 test_locator_fallback 全部通过
+- 后续：E2E 验证 — 重启后端，重新生成品牌筛选测试用例并执行，确认产品列表元素能被收集、CSS 选择器能匹配实际 DOM
+
 
 - 目标：解决项目 POST 端点和前端提交按钮无防重复保护的问题
 - 操作：
@@ -758,3 +780,18 @@
   - `cd backend && uv run pytest tests/unit/test_planning_tools.py -q`，结果 `43 passed`
   - commit: `b6580fd fix(streaming): add session rollback after tool failures, stream error fallback, and idempotent project creation`
 - 后续：可在 E2E 手动测试中验证同名项目创建场景
+
+## 2026-04-30
+
+- 任务：修复 VS Code Claude Code 插件切换 model 时报 `Unexpected token ... "env" is not valid JSON`
+- 执行动作：
+  - 检查 VS Code 用户设置、工作区设置、Claude Code 扩展日志与 `C:\Users\30521\.claude\settings.json`
+  - 从扩展日志确认根因是 `settings.json` 文件开头带 UTF-8 BOM，插件内部 `JSON.parse()` 无法解析
+  - 备份并将 `C:\Users\30521\.claude\settings.json` 重写为无 BOM UTF-8
+  - 移除 VS Code 用户设置中无效的 `claudeCode.selectedModel` 异常值
+- 结果：Claude 配置和 VS Code 用户设置均可被 Node `JSON.parse()` 正常解析，model 切换失败的 JSON 解析根因已消除
+- 验证：
+  - `node -e "JSON.parse(fs.readFileSync('C:/Users/30521/.claude/settings.json','utf8'))"`，通过
+  - `node -e "JSON.parse(fs.readFileSync(process.env.APPDATA + '/Code/User/settings.json','utf8'))"`，通过
+  - 检查 `C:\Users\30521\.claude\settings.json` 文件头，结果 `NO_BOM`
+- 后续：在 VS Code 中执行 Reload Window 后重新打开 Claude Code，再尝试切换 model
