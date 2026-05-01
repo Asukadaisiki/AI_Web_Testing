@@ -87,7 +87,7 @@ class Settings:
     storage_state_dir: str = "storage_states"
     enable_vlm_page_annotation: bool = True
     explore_interactive_max_clicks: int = 5
-    explore_max_elements: int = 300
+    explore_max_elements: int = 3000
 
 
 @lru_cache
