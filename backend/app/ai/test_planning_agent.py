@@ -188,7 +188,7 @@ def stream_planning_turn(
                 base_url=settings.ai_planning_base_url,
                 timeout_seconds=max(1.0, settings.ai_planning_timeout_ms / 1000),
             ):
-                if event["type"] == "text_chunk":
+                if event["type"] in ("text_chunk", "status"):
                     yield event
                 elif event["type"] == "raw_response":
                     raw_response = event["text"]
@@ -382,6 +382,14 @@ def stream_planning_turn(
                 yield _turn_complete_payload(response)
                 return response
             parsed_result = _safe_parse_json(tool_result_text)
+            # After create_project succeeds, update the local project_id so that
+            # subsequent tool calls (explore_page, capture_page_session, etc.)
+            # can use the newly-created project immediately within the same turn.
+            if tool_name == "create_project" and isinstance(parsed_result, dict) and isinstance(parsed_result.get("id"), int):
+                new_id = int(parsed_result["id"])
+                if new_id > 0:
+                    logger.info("Updating project_id from %d to %d after create_project", project_id, new_id)
+                    project_id = new_id
             tool_calls.append(
                 AIPlanningToolCall(
                     tool=tool_name or "unknown_tool",
@@ -475,9 +483,21 @@ def stream_planning_turn(
         yield _turn_complete_payload(response)
         return response
 
-    # Exhausted safety cap — force-generate a plan
+    # Exhausted safety cap — check if exploration was attempted but failed
     elapsed = time.monotonic() - turn_start_time
     logger.warning("Safety cap exhausted after %d rounds (%.2fs), forcing fallback plan", round_index, elapsed)
+    page_elements = _extract_page_elements(tool_calls)
+    exploration_error = _extract_exploration_error(tool_calls)
+    if exploration_error and not page_elements:
+        response = _error_response(
+            requirements=requirements,
+            tool_calls=tool_calls,
+            error_type="exploration_failed",
+            error_detail=f"页面探索失败（{exploration_error}），无法生成有效的测试方案。请检查入口 URL 是否可访问后重试。",
+            phase="tool_call",
+        )
+        yield _turn_complete_payload(response)
+        return response
     response = _run_fallback_turn(
         transcript=transcript,
         requirements=requirements,
@@ -676,6 +696,8 @@ def _stream_planning_llm(
         payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     full_text: list[str] = []
+    reasoning_text: list[str] = []
+    yielded_reasoning_chars = 0
     with httpx.Client(timeout=timeout_seconds) as client:
         with client.stream(
             "POST",
@@ -695,10 +717,20 @@ def _stream_planning_llm(
                     break
                 try:
                     chunk_payload = json.loads(data)
-                    chunk = chunk_payload["choices"][0].get("delta", {}).get("content")
+                    delta = chunk_payload["choices"][0].get("delta", {})
+                    chunk = delta.get("content")
+                    reasoning = delta.get("reasoning_content")
                 except (json.JSONDecodeError, KeyError, IndexError):
                     logger.debug("SSE parse error, raw_line (first 200 chars): %s", data[:200])
                     continue
+                if reasoning:
+                    reasoning_text.append(reasoning)
+                    yielded_reasoning_chars += len(reasoning)
+                    # Yield status on first reasoning chunk, then throttled every ~200 chars
+                    prev_bucket = (yielded_reasoning_chars - len(reasoning)) // 200
+                    cur_bucket = yielded_reasoning_chars // 200
+                    if cur_bucket > prev_bucket:
+                        yield {"type": "status", "phase": "thinking", "message": "正在深度推理分析需求..."}
                 if chunk:
                     full_text.append(chunk)
                     yield {"type": "text_chunk", "text": chunk}
@@ -800,6 +832,10 @@ def _extract_exploration_error(tool_calls: list[AIPlanningToolCall]) -> str | No
             error = call.result.get("error")
             if error:
                 errors.append(str(error))
+            # "info" responses from no-project or similar non-data results
+            info = call.result.get("info")
+            if info and not call.result.get("elements") and not call.result.get("pages"):
+                errors.append(str(info))
             # For explore_flow, check individual page errors
             pages = call.result.get("pages", [])
             page_errors = [p.get("error", "") for p in pages if p.get("error")]
@@ -1338,9 +1374,9 @@ def _build_draft_prompt(
     dom_section = ""
     if page_elements:
         dom_section = (
-            "\n\n已采集到的页面可交互元素清单（请严格使用其中的 label、placeholder 或 id 作为 target）：\n"
-            f"{page_elements}\n"
-            "注意：标注了 [dynamic] 的元素是交互触发后才出现的动态元素，步骤顺序必须与用户流程一致。"
+            "\n\n注意：页面可交互元素清单已通过 page_elements 字段单独提供。"
+            "生成 DSL 时请严格使用其中的 label、placeholder 或 id 作为 target，"
+            "标注了 [dynamic] 的元素是交互触发后才出现的动态元素，步骤顺序必须与用户流程一致。"
         )
     # Build test data section with full detail
     test_data = requirements.test_data_or_account

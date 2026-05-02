@@ -9,6 +9,22 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-03 (Session 15 — 修复三大核心缺陷：项目关联失效 + DSL prompt 超限 + hidden 元素恢复链跳过)
+
+- 目标：修复”无项目→创建会话→AI 规划”完整链路中的三个致命缺陷，使品牌筛选购物车测试用例能正常生成并执行
+- 背景：
+  - 用户在无项目状态下创建会话，输入品牌筛选购物车测试需求
+  - AI 虽然能调用 `create_project` 创建项目，但后续 `explore_page` 等工具全部返回”未关联项目”
+  - DSL 草案生成时所有草案均失败，prompt 超过 50000 字符 Pydantic 限制
+  - 执行时点击 modal 中 “Continue Shopping” 因 hidden 状态超时，恢复链不触发
+- 操作：
+  1. **BUG-055 修复** — `test_planning_agent.py`：在 ReAct 循环 `call_tool` 分支中，`create_project` 成功后从返回结果提取新项目 ID，更新局部变量 `project_id`，使同一 turn 内后续 `explore_page`/`capture_page_session`/`explore_flow` 立即可用；同时更新 `_extract_exploration_error` 检测 `”info”` 类型 no-project 响应
+  2. **BUG-056 修复** — `test_planning_agent.py`：`_build_draft_prompt` 将嵌入式 80K+ 字符 page_elements 替换为简短提示，实际 DOM 数据仍通过 `GenerateDslRequest.page_elements` 单独字段传递到 DSL 生成器
+  3. **BUG-057 修复** — `click_preprocessor.py`：新增 `_HIDDEN_ELEMENT_PATTERN` 匹配 `”resolved to hidden”`，在 `click_with_precheck` 中检测到 hidden 元素超时时直接走 `_try_force`（`force=True` + JS `el.click()`），绕过 Playwright 可见性检查
+- 结果：471 单元测试全部通过，0 失败
+- 验证：`uv run pytest tests/unit/ -q` → 471 passed
+- 关联 bug：BUG-055（fixed）、BUG-056（fixed）、BUG-057（fixed）
+
 ## 2026-05-02 (Session 15 — 修复 explore_flow 0 元素 bug + 无 goto 导致白屏执行)
 
 - 目标：修复最新会话生成的测试用例（Case 40, 29 步）在第 6 步断言失败 + 前 6 步截图全白的问题

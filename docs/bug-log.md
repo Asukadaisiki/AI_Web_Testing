@@ -29,6 +29,59 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-057 | click_with_precheck 对 hidden 元素超时不触发恢复链，force click 被跳过
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：Session 15 E2E 测试 — Automation Exercise 品牌筛选购物车，Step 点击 "Continue Shopping"
+- 描述：点击 modal 中的 "Continue Shopping" 时，Playwright 报告 `Locator.wait_for: Timeout 5000ms exceeded. 15 × locator resolved to hidden`。元素在 DOM 中存在但 CSS display/visibility 使其处于 hidden 状态（Bootstrap modal 动画期间），`locator.click()` 等待 5s 后超时。但 `_is_interception_error` 只匹配 `"intercepts pointer events"`，不匹配 `"resolved to hidden"`，导致整个 5 策略恢复链（wait→dismiss→avoid→force→remove）完全被跳过，force click 没机会执行。
+- 复现步骤：
+  1. 执行 Automation Exercise 品牌筛选购物车测试用例
+  2. 点击 "Add to cart" 后 modal 弹出
+  3. 尝试点击 modal 中 "Continue Shopping" 按钮
+  4. 元素存在但 Playwright 判定为 hidden，等待 5s 超时
+  5. 错误类型不匹配 `INTERCEPT_PATTERN`，恢复链不触发，直接失败
+- 影响：所有因 CSS animation/transition 期间元素 visibility 判定为 hidden 的点击场景（Bootstrap modal 弹出、fade-in 动画、tab 切换等）
+- 根因：`_is_interception_error` 的设计范围只覆盖了"元素被其他元素遮挡"的场景，未覆盖"元素自身 hidden（CSS 动画过渡期）"的场景。前者是需要清除遮挡物，后者只需要 force click 绕过可见性检查
+- 处理：在 `click_with_precheck` 中新增 `_HIDDEN_ELEMENT_PATTERN` 正则匹配 `"resolved to hidden"`，检测到 hidden 元素超时时直接走 `_try_force`（`force=True` + JS `el.click()` 兜底），不进入完整的 interception 恢复链（dismiss/remove 策略对 hidden 元素有害）
+- 验证：471 单元测试通过；点击预处理相关测试通过
+- 关联记录：execution-log 2026-05-03
+
+## BUG-056 | DSL draft prompt 超 50000 字符导致 Pydantic 校验失败
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：Session 15 E2E 测试 — 生成 DSL 草案时 `1 validation error for GenerateDslRequest prompt String should have at most 50000 characters`
+- 描述：`_build_draft_prompt` 将完整的 `page_elements`（格式化 DOM 元素清单，可达 80000+ 字符）直接嵌入 `draft_prompt` 字符串中。该 `draft_prompt` 作为 `GenerateDslRequest.prompt` 传入 Pydantic 校验，触发 `max_length=50000` 限制。实际上 `page_elements` 已通过 `GenerateDslRequest.page_elements` 单独字段传递，DSL 生成器在 `_build_user_prompt_lines` 中单独注入——嵌入到 `prompt` 里是完全冗余的。
+- 复现步骤：
+  1. AI 规划会话中 `explore_page`/`explore_flow` 采集了 300+ 页面元素
+  2. `_build_draft_prompt` 将 80K+ 字符的元素清单拼入 draft_prompt
+  3. 生成 DSL 草案时 `GenerateDslRequest(prompt=draft_prompt)` 校验失败
+  4. 所有 1 个草案均生成失败
+- 影响：所有页面元素较多（>200 个可交互元素）的测试场景都无法生成 DSL 草案
+- 根因：`page_elements` 数据在两个渠道重复传递——嵌入 `prompt` 字段 + 独立 `page_elements` 字段。嵌入 `prompt` 是历史遗留（`page_elements` 字段是后来加的），未做清理
+- 处理：`_build_draft_prompt` 中将嵌入式 DOM section 替换为简短提示"页面可交互元素清单已通过 page_elements 字段单独提供"，实际数据仍通过 `GenerateDslRequest.page_elements` 传递
+- 验证：471 单元测试通过
+- 关联记录：execution-log 2026-05-03
+
+## BUG-055 | create_project 成功后 project_id 局部变量未更新，同一 turn 内后续工具调用被拦截
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：Session 15 E2E 测试 — 无项目→创建会话→AI 调用 create_project→后续 explore_page/capture_page_session 全部失败
+- 描述：当会话无关联项目时，`project_id=0` 传入 `stream_planning_turn`。AI 调用 `create_project` 成功后，DB 中项目已创建且会话已关联，但内存中 `project_id` 局部变量从未被更新，仍为 0。同一 turn 内 AI 再调用 `explore_page`/`capture_page_session`/`explore_flow` 时，`execute_tool` 检查 `not project_id` 为 True，返回 `"当前会话未关联项目"`。虽然每个新 turn 开始时 `ai_planning.py` 会从 DB 重新读取 `project_ids`，但同一 turn 内 AI 必须先建项目才能探索页面的流程完全不可用。
+- 复现步骤：
+  1. 新建项目、创建会话（无项目关联）
+  2. 发送测试需求
+  3. AI 在 ReAct 循环中调用 `create_project` → 成功，返回 `{"id": N, "auto_linked_to_session": true}`
+  4. AI 继续调用 `explore_page` → `execute_tool` 检查 `project_id==0` → 返回错误
+  5. 或 AI 调用 `generate_plan` → `_auto_explore_entry_url` 使用 `project_id=0` → 探索全部被拦截
+- 影响：无项目时创建会话的完整 AI 规划流程完全不可用——AI 必须分两个 turn 才能完成"先建项目→再探索页面"的基本操作
+- 根因：`stream_planning_turn` 中 `project_id` 是局部变量，在 `create_project` 工具调用成功后未从返回结果中提取新 ID 更新
+- 处理：在 ReAct 循环 `call_tool` 分支中，`create_project` 成功后从 `parsed_result["id"]` 提取新项目 ID 并更新局部 `project_id`；同时更新 `_extract_exploration_error` 检测 `"info"` 类型响应（no-project 消息）作为错误
+- 验证：471 单元测试通过；79 个 planning 相关测试通过
+- 关联记录：execution-log 2026-05-03
+
 ## BUG-054 | AI 忽略用户描述的弹层交互步骤，用导航栏元素替代弹层元素
 
 - 日期：2026-04-25

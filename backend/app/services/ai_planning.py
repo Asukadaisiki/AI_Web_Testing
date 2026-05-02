@@ -411,6 +411,16 @@ def generate_planning_drafts(
         drafts.append(_to_draft_schema(record))
 
     message = "已根据所选场景生成 DSL 草案。"
+    failed_count = sum(1 for d in drafts if d.status == "failed")
+    generated_count = sum(1 for d in drafts if d.status == "generated")
+    first_error = next((d.error_message for d in drafts if d.error_message), None)
+    if generated_count == 0 and failed_count > 0:
+        message = f"所有 {failed_count} 个草案均生成失败。"
+        if first_error:
+            message += f"\n失败原因：{first_error}"
+        message += "\n请检查入口 URL 是否可访问后重试。"
+    elif failed_count > 0:
+        message = f"已生成 {generated_count} 个 DSL 草案，{failed_count} 个失败。"
     if invalid_scenarios:
         message += f" 注意：以下场景不存在于当前测试计划中：{', '.join(invalid_scenarios)}"
 
@@ -961,7 +971,18 @@ def save_and_execute_selected_drafts_streaming(
     if not saved_cases:
         planning_session.status = "saving"
         session.commit()
-        yield {"type": "done"}
+        # Check if any drafts failed (e.g. due to exploration failure)
+        failed_errors: list[str] = []
+        for d in drafts:
+            if d.error_message and d.error_message not in failed_errors:
+                failed_errors.append(d.error_message)
+        detail = "; ".join(failed_errors[:2]) if failed_errors else "所有选中草案均无有效 DSL"
+        yield {
+            "type": "error",
+            "message": f"没有可保存的测试用例。{detail}",
+            "error_type": "no_saved_cases",
+            "phase": "execute",
+        }
         return
 
     execution_summaries: list[ExecutionSummaryResult] = []

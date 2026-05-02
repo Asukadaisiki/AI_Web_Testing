@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 _INTERCEPT_PATTERN = re.compile(r"intercepts pointer events", re.IGNORECASE)
+_HIDDEN_ELEMENT_PATTERN = re.compile(r"resolved to hidden", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # Diagnosis script — runs in the browser to classify the blocking element
@@ -329,9 +330,18 @@ def click_with_precheck(
             locator.click()
         return ClickPrecheckResult(succeeded=True)
     except PlaywrightTimeoutError as exc:
+        error_message = str(exc)
+        # Hidden element (e.g. modal button during CSS animation):
+        # force-click bypasses Playwright's visibility check.
+        if _HIDDEN_ELEMENT_PATTERN.search(error_message):
+            logger.info("Click target is hidden, trying force click: %s", error_message[:200])
+            result = _try_force(locator)
+            if result is not None:
+                logger.info("Recovery succeeded: %s — %s", result.recovery_strategy, result.recovery_detail)
+                return result
+            return ClickPrecheckResult(succeeded=False, original_error=exc)
         if not _is_interception_error(exc):
             return ClickPrecheckResult(succeeded=False, original_error=exc)
-        error_message = str(exc)
         # Fall through to recovery
     except Exception as exc:
         return ClickPrecheckResult(succeeded=False, original_error=exc)
