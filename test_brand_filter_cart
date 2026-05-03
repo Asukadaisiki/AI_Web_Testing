@@ -5,7 +5,7 @@ business_goal: 验证用户按品牌筛选商品后，多件商品加入购物�
 entry_url_or_page: https://automationexercise.com/
 
 core_user_flow:
-1. 打开首页并使用已有测试账号登录
+1. 打开首页点击login进入登录页面并使用已有测试账号登录
 2. 点击 Products 导航链接进入商品列表页
 3. 等待商品列表完全加载
 4. 在左侧 Brand 分类中点击 Polo（或其他品牌）

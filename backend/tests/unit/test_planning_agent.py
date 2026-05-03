@@ -7,8 +7,16 @@ import pytest
 from app.ai.test_planning_agent import (
     _auto_explore_entry_url,
     _build_draft_prompt,
+    _build_link_selection_message,
+    _extract_internal_links,
     _extract_page_elements,
     _has_explored_pages,
+    _has_internal_links_in_tool_calls,
+    _extract_links_from_tool_calls,
+    _was_link_list_presented,
+    _get_presented_links,
+    _clear_link_tracking,
+    _track_link_presentation,
 )
 from app.schemas.ai_planning import AIPlanningRequirements, AIPlanningToolCall
 
@@ -194,14 +202,16 @@ class TestExtractPageElements:
 class TestAutoExploreEntryUrl:
     def test_skips_when_no_entry_url(self) -> None:
         requirements = AIPlanningRequirements()
-        explored, calls = _auto_explore_entry_url(requirements, [], object(), 1)
+        explored, calls, links = _auto_explore_entry_url(requirements, [], object(), 1)
         assert explored is False
         assert calls == []
+        assert links == []
 
     def test_skips_when_entry_url_not_a_url(self) -> None:
         requirements = AIPlanningRequirements(entry_url_or_page="登录页面")
-        explored, calls = _auto_explore_entry_url(requirements, [], object(), 1)
+        explored, calls, links = _auto_explore_entry_url(requirements, [], object(), 1)
         assert explored is False
+        assert links == []
 
     def test_auto_explores_valid_url(self) -> None:
         from unittest.mock import patch
@@ -210,8 +220,146 @@ class TestAutoExploreEntryUrl:
         mock_result = '{"url":"https://example.com/login","formatted":"input [placeholder=Email]","element_count":1}'
 
         with patch("app.ai.test_planning_agent.execute_tool", return_value=mock_result):
-            explored, calls = _auto_explore_entry_url(requirements, [], object(), 1)
+            explored, calls, links = _auto_explore_entry_url(requirements, [], object(), 1)
 
         assert explored is True
         assert len(calls) == 1
         assert calls[0].tool == "explore_page"
+        assert isinstance(links, list)
+
+    def test_extracts_internal_links_from_result(self) -> None:
+        from unittest.mock import patch
+
+        requirements = AIPlanningRequirements(entry_url_or_page="https://example.com")
+        mock_result = (
+            '{"url":"https://example.com","formatted":"a [href=/login]","element_count":2,'
+            '"elements":[{"tag":"a","href":"/login"},{"tag":"a","href":"/products"}]}'
+        )
+
+        with patch("app.ai.test_planning_agent.execute_tool", return_value=mock_result):
+            explored, calls, links = _auto_explore_entry_url(requirements, [], object(), 1)
+
+        assert explored is True
+        assert len(links) == 2
+        assert any("/login" in u for u in links)
+
+
+class TestExtractInternalLinks:
+    def test_returns_empty_for_none(self) -> None:
+        assert _extract_internal_links(None, "https://example.com") == []
+
+    def test_returns_empty_for_no_elements(self) -> None:
+        result = {"elements": []}
+        assert _extract_internal_links(result, "https://example.com") == []
+
+    def test_extracts_same_domain_links(self) -> None:
+        result = {
+            "elements": [
+                {"tag": "a", "href": "/login"},
+                {"tag": "a", "href": "/products"},
+                {"tag": "a", "href": "https://other.com/else"},
+                {"tag": "span", "href": "/ignored"},
+                {"tag": "a", "href": "#anchor"},
+                {"tag": "a", "href": "javascript:void(0)"},
+            ]
+        }
+        links = _extract_internal_links(result, "https://example.com")
+        assert len(links) == 2
+        assert "https://example.com/login" in links
+        assert "https://example.com/products" in links
+
+    def test_respects_max_links(self) -> None:
+        result = {
+            "elements": [{"tag": "a", "href": f"/page{i}"} for i in range(30)]
+        }
+        links = _extract_internal_links(result, "https://example.com", max_links=5)
+        assert len(links) == 5
+
+
+class TestLinkSelectionMessage:
+    def test_includes_links_and_sentinel(self) -> None:
+        msg = _build_link_selection_message(
+            ["https://example.com/login", "https://example.com/cart"],
+            "登录并加入购物车",
+        )
+        assert "https://example.com/login" in msg
+        assert "登录并加入购物车" in msg
+        assert "⟨LINK_LIST⟩" in msg
+        assert "explore_flow" in msg
+
+    def test_empty_links_returns_hint(self) -> None:
+        msg = _build_link_selection_message([], None)
+        assert "未发现" in msg
+
+    def test_no_core_user_flow(self) -> None:
+        msg = _build_link_selection_message(["https://example.com/login"], None)
+        assert "https://example.com/login" in msg
+        assert "⟨LINK_LIST⟩" in msg
+
+
+class TestLinkTracking:
+    def test_was_presented_detects_sentinel(self) -> None:
+        conv: list[dict[str, str]] = []
+        assert _was_link_list_presented(conv) is False
+
+        msg = _build_link_selection_message(["https://x.com/a"], None)
+        _track_link_presentation(conv, ["https://x.com/a"])
+        conv.append({"role": "system", "content": msg})
+        assert _was_link_list_presented(conv) is True
+
+    def test_get_presented_links(self) -> None:
+        conv: list[dict[str, str]] = []
+        msg = _build_link_selection_message(
+            ["https://x.com/a", "https://x.com/b"], None,
+        )
+        conv.append({"role": "system", "content": msg})
+        links = _get_presented_links(conv)
+        assert "https://x.com/a" in links
+        assert "https://x.com/b" in links
+
+    def test_clear_link_tracking_removes_sentinel(self) -> None:
+        conv: list[dict[str, str]] = []
+        msg = _build_link_selection_message(["https://x.com/a"], None)
+        conv.append({"role": "system", "content": msg})
+        _clear_link_tracking(conv)
+        assert "⟨LINK_LIST⟩" not in conv[0]["content"]
+        assert "https://x.com/a" in conv[0]["content"]
+
+
+class TestLinkExtractionFromToolCalls:
+    def test_has_links_when_explore_page_has_elements(self) -> None:
+        calls = [
+            AIPlanningToolCall(
+                tool="explore_page",
+                params={"url": "https://example.com"},
+                result={
+                    "url": "https://example.com",
+                    "elements": [
+                        {"tag": "a", "href": "/login"},
+                        {"tag": "a", "href": "/cart"},
+                    ],
+                },
+            )
+        ]
+        assert _has_internal_links_in_tool_calls(calls) is True
+
+    def test_no_links_when_no_explore_calls(self) -> None:
+        calls = [AIPlanningToolCall(tool="get_project_info", params={}, result={})]
+        assert _has_internal_links_in_tool_calls(calls) is False
+
+    def test_extract_links_returns_urls(self) -> None:
+        calls = [
+            AIPlanningToolCall(
+                tool="explore_page",
+                params={"url": "https://example.com"},
+                result={
+                    "url": "https://example.com",
+                    "elements": [
+                        {"tag": "a", "href": "/login"},
+                        {"tag": "a", "href": "/cart"},
+                    ],
+                },
+            )
+        ]
+        links = _extract_links_from_tool_calls(calls, None)
+        assert len(links) == 2

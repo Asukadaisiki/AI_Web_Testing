@@ -290,17 +290,17 @@ def stream_planning_turn(
             for t in raw_todo if isinstance(t, dict) and str(t.get("item", "")).strip()
         ]
 
-        # --- Force explore_page/explore_flow before generating plan (BUG-052) ---
+        # --- Guard: ensure page exploration before generating plan (BUG-052 / BUG-059) ---
         if action == "generate_plan":
             has_explore = _has_explored_pages(tool_calls)
             has_flow = any(call.tool == "explore_flow" for call in tool_calls)
+
             if not has_explore:
-                explored, tool_calls = _auto_explore_entry_url(
+                explored, tool_calls, internal_links = _auto_explore_entry_url(
                     requirements, tool_calls, db_session, project_id,
                     actor_user_id=actor_user_id, planning_session_id=planning_session_id,
                 )
                 if explored:
-                    # Check if exploration actually produced useful data
                     page_elements = _extract_page_elements(tool_calls)
                     exploration_error = _extract_exploration_error(tool_calls)
                     if not page_elements and exploration_error:
@@ -316,27 +316,70 @@ def stream_planning_turn(
                             )},
                         )
                         continue
-                    yield {"type": "status", "phase": "tool_call", "message": "正在自动采集入口页面及导航页面元素..."}
+
+                    yield {"type": "status", "phase": "tool_call", "message": "正在自动采集入口页面元素..."}
+
+                    if internal_links:
+                        # BUG-059: let LLM decide which links to explore
+                        _track_link_presentation(conversation, internal_links)
+                        conversation.append(
+                            {"role": "system", "content": _build_link_selection_message(
+                                internal_links, requirements.core_user_flow,
+                            )},
+                        )
+                    else:
+                        conversation.append(
+                            {"role": "system", "content": (
+                                "系统已自动采集了入口页面的可交互元素（见上方工具返回结果）。"
+                                "请基于这些元素信息重新生成测试方案，"
+                                "确保 target 使用元素的实际 label、placeholder 或 id。"
+                            )},
+                        )
+                    continue
+
+            elif not has_flow and _has_internal_links_in_tool_calls(tool_calls):
+                # AI called explore_page but not explore_flow — present links for selection
+                internal_links = _extract_links_from_tool_calls(tool_calls, requirements)
+                if internal_links:
+                    _track_link_presentation(conversation, internal_links)
+                    yield {"type": "status", "phase": "tool_call", "message": "正在分析入口页面的导航链接..."}
                     conversation.append(
-                        {"role": "system", "content": (
-                            "系统已自动采集了入口页面及其导航链接页面的可交互元素（见上方工具返回结果）。"
-                            "请基于这些元素信息重新生成测试方案，"
-                            "确保 target 使用元素的实际 label、placeholder 或 id。"
-                            "对于未采集到的页面，可使用语义描述作为 target。"
+                        {"role": "system", "content": _build_link_selection_message(
+                            internal_links, requirements.core_user_flow,
                         )},
                     )
                     continue
-            elif not has_flow:
-                # AI called explore_page but not explore_flow — supplement with multi-page
-                explored, tool_calls = _auto_explore_entry_url(
-                    requirements, tool_calls, db_session, project_id,
-                    actor_user_id=actor_user_id, planning_session_id=planning_session_id,
-                )
-                if explored:
-                    yield {"type": "status", "phase": "tool_call", "message": "正在补充采集导航页面元素..."}
+
+            # Safety net: LLM saw links but responded with generate_plan again
+            if not has_flow and _was_link_list_presented(conversation):
+                yield {"type": "status", "phase": "tool_call", "message": "正在自动补充采集导航页面元素..."}
+                links_to_explore = _get_presented_links(conversation)
+                if links_to_explore:
+                    fallback_urls = links_to_explore[:4]
+                    logger.info("Safety-net: auto-exploring fallback URLs %s", fallback_urls)
+                    try:
+                        flow_result_text = execute_tool(
+                            tool_name="explore_flow",
+                            params={"urls": fallback_urls},
+                            db_session=db_session,
+                            project_id=project_id,
+                            actor_user_id=actor_user_id,
+                            planning_session_id=planning_session_id,
+                        )
+                        flow_result = _safe_parse_json(flow_result_text)
+                        tool_calls.append(
+                            AIPlanningToolCall(
+                                tool="explore_flow",
+                                params={"urls": fallback_urls},
+                                result=flow_result,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning("Safety-net explore_flow failed: %s", exc)
+                    _clear_link_tracking(conversation)
                     conversation.append(
                         {"role": "system", "content": (
-                            "系统补充采集了导航链接页面的可交互元素。"
+                            "系统已自动补充采集了导航链接页面的可交互元素。"
                             "请基于所有已采集的页面元素信息重新生成测试方案，"
                             "确保 target 使用元素的实际 label、placeholder 或 id。"
                         )},
@@ -857,26 +900,23 @@ def _auto_explore_entry_url(
     *,
     actor_user_id: int = 0,
     planning_session_id: int = 0,
-) -> tuple[bool, list[AIPlanningToolCall]]:
-    """Auto-invoke explore_page (or explore_flow) with the entry URL.
+) -> tuple[bool, list[AIPlanningToolCall], list[str]]:
+    """Auto-invoke explore_page on the entry URL and extract navigable links.
 
-    If the entry page contains navigable internal links, automatically
-    collects those pages too via explore_flow so that multi-page test
-    flows have DOM evidence for every page.
+    Does NOT auto-call explore_flow — that decision is deferred to the LLM
+    (the caller injects the link list into the conversation).
 
-    If an explore_page call already exists in *tool_calls*, reuses its
-    result to extract links and only triggers the explore_flow step.
-
-    Returns (explored, tool_calls) where *explored* indicates whether
-    exploration was actually triggered.
+    Returns (explored, tool_calls, internal_links) where *explored*
+    indicates whether exploration was triggered and *internal_links* is
+    the list of same-domain URLs found on the entry page.
     """
     entry_url = requirements.entry_url_or_page
     if not entry_url or not isinstance(entry_url, str):
-        return False, tool_calls
+        return False, tool_calls, []
 
     match = URL_PATTERN.search(entry_url)
     if not match:
-        return False, tool_calls
+        return False, tool_calls, []
 
     base_url = match.group(0)
 
@@ -887,7 +927,6 @@ def _auto_explore_entry_url(
             existing_explore_result = call.result
 
     if existing_explore_result is None:
-        # Step 1: Explore the entry page first
         try:
             tool_result_text = execute_tool(
                 tool_name="explore_page",
@@ -912,43 +951,22 @@ def _auto_explore_entry_url(
     else:
         parsed_result = existing_explore_result
 
-    # Step 2: Extract navigable internal links from the entry page result
     internal_links = _extract_internal_links(parsed_result, base_url)
     logger.info("Auto-explore: found %d internal links from %s", len(internal_links), base_url)
-    if internal_links:
-        all_urls = [base_url] + internal_links[:4]  # cap at 5 pages total
-        logger.info("Auto-explore: triggering explore_flow with %d URLs", len(all_urls))
-        try:
-            flow_result_text = execute_tool(
-                tool_name="explore_flow",
-                params={"urls": all_urls},
-                db_session=db_session,
-                project_id=project_id,
-                actor_user_id=actor_user_id,
-                planning_session_id=planning_session_id,
-            )
-            flow_result = _safe_parse_json(flow_result_text)
-            tool_calls.append(
-                AIPlanningToolCall(
-                    tool="explore_flow",
-                    params={"urls": all_urls},
-                    result=flow_result,
-                )
-            )
-        except Exception as exc:
-            logger.warning("Auto-explore_flow failed: %s", exc, exc_info=True)
-
-    return True, tool_calls
+    return True, tool_calls, internal_links
 
 
 def _extract_internal_links(
     explore_result: dict[str, Any] | None,
     base_url: str,
+    *,
+    max_links: int = 20,
 ) -> list[str]:
     """Extract navigable internal links from an explore_page result.
 
-    Returns a list of absolute URLs that are on the same domain as *base_url*.
-    Skips anchors, javascript: links, and duplicate paths.
+    Returns absolute URLs on the same domain as *base_url*, deduplicated
+    by path.  Skips anchors, javascript: links, and mailto: links.
+    No keyword scoring — link selection is left to the LLM.
     """
     if not explore_result or not isinstance(explore_result, dict):
         return []
@@ -977,7 +995,6 @@ def _extract_internal_links(
         abs_url = urljoin(base_url, href)
         parsed = urlparse(abs_url)
 
-        # Same domain only
         if parsed.netloc != base_parsed.netloc:
             continue
 
@@ -986,11 +1003,113 @@ def _extract_internal_links(
             continue
 
         seen_paths.add(path)
-        # Reconstruct clean URL (drop query/fragment)
         clean_url = f"{parsed.scheme}://{parsed.netloc}{path}"
         links.append(clean_url)
 
-    return links
+    return links[:max_links]
+
+
+# ---------------------------------------------------------------------------
+# Link-aware ReAct helpers (BUG-059)
+# These functions implement the link-list presentation / tracking protocol
+# that lets the LLM decide which pages to explore instead of relying on a
+# hardcoded keyword table.
+# ---------------------------------------------------------------------------
+
+# Sentinel prefix injected into system messages to mark link-list presentation.
+_LINK_PRESENTATION_SENTINEL = "⟨LINK_LIST⟩"
+
+# Prefix used to serialize presented URLs for later retrieval.
+_LINK_URL_PREFIX = "⟨URL⟩"
+
+
+def _build_link_selection_message(
+    links: list[str],
+    core_user_flow: str | None,
+) -> str:
+    """Build a system message presenting navigable links for LLM selection."""
+    if not links:
+        return "入口页面未发现其他内部导航链接。请基于已采集的入口页面元素生成测试方案，或向用户询问更多页面信息。"
+
+    flow_hint = ""
+    if core_user_flow:
+        flow_hint = f'用户的核心操作流程是："{core_user_flow}"\n'
+
+    numbered = "\n".join(f"{i+1}. {url}" for i, url in enumerate(links))
+
+    return (
+        f"{_LINK_PRESENTATION_SENTINEL}\n"
+        + "\n".join(f"{_LINK_URL_PREFIX}{url}" for url in links)
+        + f"\n\n系统已采集入口页面的可交互元素，并发现以下内部导航链接：\n\n"
+        f"{numbered}\n\n"
+        f"{flow_hint}"
+        f"请根据用户的核心操作流程，选择需要进一步采集元素和布局信息的页面。\n"
+        f'调用 explore_flow 工具，在 urls 参数中传入你选择的 URL 列表（建议 2-5 个）。\n'
+        f"如果现有信息已足够生成测试方案，也可以直接 generate_plan。"
+    )
+
+
+def _track_link_presentation(
+    conversation: list[dict[str, str]],
+    links: list[str],
+) -> None:
+    """No-op — link data is already embedded in the system message.
+
+    The sentinel prefix in the message text is used by
+    _was_link_list_presented / _get_presented_links for retrieval.
+    """
+
+
+def _was_link_list_presented(conversation: list[dict[str, str]]) -> bool:
+    """Return True if a link-list message was already injected."""
+    for msg in conversation:
+        if msg.get("role") == "system" and _LINK_PRESENTATION_SENTINEL in msg.get("content", ""):
+            return True
+    return False
+
+
+def _get_presented_links(conversation: list[dict[str, str]]) -> list[str]:
+    """Extract the URL list from the most recent link-presentation message."""
+    for msg in reversed(conversation):
+        if msg.get("role") == "system" and _LINK_PRESENTATION_SENTINEL in msg.get("content", ""):
+            import re
+            return re.findall(rf"{re.escape(_LINK_URL_PREFIX)}(\S+)", msg["content"])
+    return []
+
+
+def _clear_link_tracking(conversation: list[dict[str, str]]) -> None:
+    """Remove the link-presentation sentinel from the last such message."""
+    for msg in reversed(conversation):
+        if msg.get("role") == "system" and _LINK_PRESENTATION_SENTINEL in msg.get("content", ""):
+            msg["content"] = msg["content"].split("\n\n", 1)[-1] if "\n\n" in msg["content"] else msg["content"]
+            return
+
+
+def _has_internal_links_in_tool_calls(tool_calls: list[AIPlanningToolCall]) -> bool:
+    """Check whether any explore_page result contains internal links."""
+    return bool(_extract_links_from_tool_calls(tool_calls, None))
+
+
+def _extract_links_from_tool_calls(
+    tool_calls: list[AIPlanningToolCall],
+    requirements: AIPlanningRequirements | None,
+) -> list[str]:
+    """Extract internal links from the last explore_page tool call result."""
+    from urllib.parse import urlparse
+
+    for call in reversed(tool_calls):
+        if call.tool != "explore_page" or not isinstance(call.result, dict):
+            continue
+        url = (call.params or {}).get("url", "") or call.result.get("url", "")
+        if not url:
+            continue
+        # Parse base_url from the explore result
+        base_url = url
+        parsed = urlparse(base_url)
+        if not parsed.netloc:
+            continue
+        return _extract_internal_links(call.result, base_url)
+    return []
 
 
 def _plan_response(

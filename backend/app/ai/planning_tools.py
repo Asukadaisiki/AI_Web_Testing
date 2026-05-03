@@ -664,7 +664,11 @@ def _handle_explore_flow(
     if not valid_urls:
         return {"error": "urls 列表中没有有效的 URL"}
 
-    logger.info("explore_flow: %d urls=%s, project_id=%d", len(valid_urls), valid_urls[:3], project_id)
+    flow_description = params.get("flow_description")
+    if flow_description and isinstance(flow_description, str):
+        logger.info("explore_flow: %d urls=%s, flow=%s, project_id=%d", len(valid_urls), valid_urls[:3], flow_description, project_id)
+    else:
+        logger.info("explore_flow: %d urls=%s, project_id=%d", len(valid_urls), valid_urls[:3], project_id)
 
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
@@ -997,6 +1001,10 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
                     "type": "array",
                     "description": "需要依次访问和采集的页面 URL 列表，按流程顺序排列",
                     "items": {"type": "string"},
+                },
+                "flow_description": {
+                    "type": "string",
+                    "description": "可选。对该流程的语义描述（如\"首页→登录→商品搜索→加入购物车→结算\"），帮助探索器理解页面间的导航意图。",
                 },
             },
             "required": ["urls"],

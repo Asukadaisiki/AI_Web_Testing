@@ -618,7 +618,7 @@ export function AITestPlanningPanel({
             />
           ) : null}
           <div style={{ marginTop: 8 }}>
-            <SessionProjectPanel sessionId={sessionIdProp} onProjectsChange={() => {
+            <SessionProjectPanel sessionId={sessionId ?? 0} onProjectsChange={() => {
               queryClient.invalidateQueries({ queryKey: ["planning-sessions"] });
             }} />
           </div>
