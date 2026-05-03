@@ -29,6 +29,29 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-063 | DeepSeek thinking 模式下 SSE 流式输出断流 — reasoning_content 未转发给前端
+
+- 日期：2026-05-04
+- 状态：fixed
+- 来源：线上反馈
+- 描述：使用 `deepseek-v4-flash` 模型进行 AI planning 对话时，SSE 流式输出直接空白——没有思考标注（如"正在深度推理分析需求..."的实时更新），没有思考内容输出，前端在模型思考阶段完全看不到任何文本内容
+- 复现步骤：
+  1. 配置 `AI_PLANNING_MODEL=deepseek-v4-flash`、`AI_PLANNING_BASE_URL=https://api.deepseek.com`
+  2. 在 AI Planning 面板中发送测试需求
+  3. 观察 SSE 流式输出 — 模型思考阶段前端空白，偶尔出现一次 status tag
+- 影响：所有使用 DeepSeek（或启用了 thinking mode 的模型）的 AI planning 会话
+- 根因：
+  - `backend/app/ai/test_planning_agent.py` `_stream_planning_llm()` L769-776：`reasoning_content` 被接收后在内存累积（`reasoning_text.append(reasoning)`），仅按 ~200 字符节流发送 `status` 事件（"正在深度推理分析需求..."），**不产出 `text_chunk` 事件**。模型思考阶段前端收不到任何文本内容
+  - `reasoning_text` 在函数结束前也未归入 `raw_response`，完全丢弃
+  - 前端 `handleStreamEvent` 无思考内容的独立展示逻辑（即便收到也无法分隔呈现）
+- 处理：
+  - backend：`_stream_planning_llm()` 中每个 `reasoning` chunk 同步产出 `text_chunk` 事件（带 `thinking: true` 标记），保留节流 `status` 事件用于 phase label 更新
+  - frontend types：`TextChunkStreamEvent` 新增 `thinking?: boolean` 可选字段
+  - frontend handler：`thinking: true` 的 text_chunk 存入 `_thinkingContent` 字段（与 `content` 分开），不污染正式回复内容
+  - frontend render：`_thinkingContent` 存在时渲染可折叠 `<details>` "思考过程"区块（最大高度 200px、overflow-y 滚动）
+- 验证：TypeScript 编译无错误；29 个 planning agent 单元测试 + 11 个 AI planning API 测试全部通过
+- 关联记录：`docs/execution-log.md` 2026-05-04
+
 ## BUG-060 | AI planning 中间层三大架构断层：动作式探索、页面状态图、定位器预校验
 
 - 日期：2026-05-03

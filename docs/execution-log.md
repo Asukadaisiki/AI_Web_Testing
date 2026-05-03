@@ -9,6 +9,21 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-04（修复 DeepSeek thinking 模式 SSE 流式输出断流）
+
+- 任务：排查并修复 AI planning SSE 流式输出在 DeepSeek 模型下无思考标注、无思考内容、前端直接空白的问题
+- 背景：使用 `deepseek-v4-flash` 模型时，`_should_enable_thinking_mode()` 命中 `api.deepseek.com` 和 `deepseek-` 前缀，发送 `thinking: {type:"enabled"}`。模型返回的 `reasoning_content` 被后端接收但从未转发给前端
+- 根因：
+  - `test_planning_agent.py` `_stream_planning_llm()`（L769-776）：`reasoning_content` 只在内存累积、仅发节流 status 消息，不产出 `text_chunk` 事件 → 前端在思考阶段收不到任何文本
+  - 前端 `handleStreamEvent` 没有思考内容的展示逻辑 → 即便有数据也无法独立呈现
+- 执行动作：
+  - backend：`_stream_planning_llm()` 将 `reasoning_content` 作为 `text_chunk` 事件实时转发（带 `thinking: true` 标记），保留节流 status 用于 phase label
+  - frontend types：`TextChunkStreamEvent` 新增 `thinking?: boolean` 可选字段
+  - frontend handler：`thinking: true` 的 `text_chunk` 存入 `_thinkingContent`（与 `content` 分开），不污染正式回复
+  - frontend render：`_thinkingContent` 存在时渲染可折叠 `<details>` "思考过程"区块（最大高度 200px 可滚动）
+- 验证：TypeScript 编译无错误，29 个 planning agent 单元测试、11 个 AI planning API 测试全部通过
+- 相关 BUG：见 `docs/bug-log.md` BUG-063
+
 ## 2026-05-03（企业级中间层三大架构升级：动作式探索 + 页面状态图 + 定位器预校验）
 
 - 任务：将 AI planning 中间层从"URL 级探索 + 扁平 DOM 文本 + 无预校验"升级到企业级闭环

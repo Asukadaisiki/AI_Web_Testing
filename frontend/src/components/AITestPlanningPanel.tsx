@@ -318,6 +318,14 @@ export function AITestPlanningPanel({
             };
           }
           if (event.type === "text_chunk") {
+            if (event.thinking) {
+              const payload = (msg.structured_payload ?? {}) as Record<string, unknown>;
+              const prev = (payload._thinkingContent as string) ?? "";
+              return {
+                ...msg,
+                structured_payload: { ...payload, _thinkingContent: prev + event.text, _streaming: true },
+              };
+            }
             return { ...msg, content: msg.content + event.text };
           }
           if (event.type === "tool_call_start") {
@@ -819,6 +827,14 @@ export function AITestPlanningPanel({
                     <Tag color={phaseColorMap[((item.structured_payload as Record<string, unknown>)._phase as string) ?? ""] ?? "processing"}>
                       {String((item.structured_payload as Record<string, unknown>)._phaseMessage ?? "处理中...")}
                     </Tag>
+                    {((item.structured_payload as Record<string, unknown>)._thinkingContent as string) ? (
+                      <details style={{ fontSize: 12, color: "#666", background: "#fafafa", borderRadius: 6, padding: "4px 8px" }}>
+                        <summary style={{ cursor: "pointer", fontWeight: 500 }}>思考过程</summary>
+                        <div style={{ whiteSpace: "pre-wrap", marginTop: 4, maxHeight: 200, overflowY: "auto" }}>
+                          {(item.structured_payload as Record<string, unknown>)._thinkingContent as string}
+                        </div>
+                      </details>
+                    ) : null}
                     <div style={{ whiteSpace: "pre-wrap" }}>
                       {item.content}
                       {(item.structured_payload as Record<string, unknown>)?._streaming ? (

@@ -769,7 +769,9 @@ def _stream_planning_llm(
                 if reasoning:
                     reasoning_text.append(reasoning)
                     yielded_reasoning_chars += len(reasoning)
-                    # Yield status on first reasoning chunk, then throttled every ~200 chars
+                    # Forward reasoning content to frontend so user sees activity
+                    yield {"type": "text_chunk", "text": reasoning, "thinking": True}
+                    # Yield throttled status for phase label updates
                     prev_bucket = (yielded_reasoning_chars - len(reasoning)) // 200
                     cur_bucket = yielded_reasoning_chars // 200
                     if cur_bucket > prev_bucket:

@@ -899,6 +899,7 @@ export interface StatusStreamEvent {
 export interface TextChunkStreamEvent {
   type: "text_chunk";
   text: string;
+  thinking?: boolean;
 }
 
 export interface ToolCallStartStreamEvent {
