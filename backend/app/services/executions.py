@@ -14,6 +14,7 @@ from typing import Generator, cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.locators.ai_visual import reset_ai_visual_runtime_state
 from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.models import TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
@@ -124,6 +125,7 @@ def execute_case_streaming(
             execution.report = report.model_dump(mode="json")
             execution.error_message = missing_base_url_error.error_message
         else:
+            reset_ai_visual_runtime_state()
             step_results = yield from execute_case_with_playwright_streaming(
                 case=normalized_case,
                 execution_id=execution.id,
@@ -223,6 +225,7 @@ def _execute_case_record(
             execution.report = report.model_dump(mode="json")
             execution.error_message = missing_base_url_error.error_message
         else:
+            reset_ai_visual_runtime_state()
             step_results = execute_case_with_playwright(
                 case=normalized_case,
                 execution_id=execution.id,

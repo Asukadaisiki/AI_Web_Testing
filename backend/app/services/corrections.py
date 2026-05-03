@@ -47,42 +47,59 @@ def create_correction(session: Session, payload: CreateCorrectionRequest) -> Sto
         normalized_target_description=normalized_target,
     )
     existing_active_records = [record for record in existing_records if record.is_active]
-    correction = LocatorCorrection(
-        page_url_pattern=page_url_pattern,
-        target_description=payload.target_description,
-        normalized_target_description=normalized_target,
-        correction_type=payload.correction_type,
-        correction_value=payload.correction_value,
-        source_execution_id=payload.source_execution_id,
-        created_by=payload.created_by,
-    )
 
     try:
-        for existing in existing_active_records:
-            existing.is_active = False
-            session.add(existing)
         if existing_active_records:
+            target_record = existing_active_records[0]
+            target_record.correction_type = payload.correction_type
+            target_record.correction_value = payload.correction_value
+            target_record.source_execution_id = payload.source_execution_id
+            session.add(target_record)
             session.flush()
-            for existing in existing_active_records:
-                _add_correction_event(session, existing, event_type="deactivated")
+            _add_correction_event(
+                session, target_record,
+                event_type="created",
+                execution_id=payload.source_execution_id,
+            )
+            session.commit()
+            session.refresh(target_record)
 
+            logger.info(
+                "Updated existing locator correction id=%s page_url_pattern=%s target=%s "
+                "correction_type=%s correction_value=%s",
+                target_record.id,
+                target_record.page_url_pattern,
+                target_record.target_description,
+                target_record.correction_type,
+                target_record.correction_value,
+            )
+            return _to_stored_locator_correction(target_record)
+
+        correction = LocatorCorrection(
+            page_url_pattern=page_url_pattern,
+            target_description=payload.target_description,
+            normalized_target_description=normalized_target,
+            correction_type=payload.correction_type,
+            correction_value=payload.correction_value,
+            source_execution_id=payload.source_execution_id,
+            created_by=payload.created_by,
+        )
         session.add(correction)
         session.flush()
         _add_correction_event(session, correction, event_type="created", execution_id=payload.source_execution_id)
         session.commit()
         session.refresh(correction)
+
+        logger.info(
+            "Created locator correction id=%s page_url_pattern=%s target=%s",
+            correction.id,
+            correction.page_url_pattern,
+            correction.target_description,
+        )
+        return _to_stored_locator_correction(correction)
     except IntegrityError as exc:
         session.rollback()
         raise CorrectionConflictError(CONFLICT_DETAIL) from exc
-
-    logger.info(
-        "Created locator correction id=%s page_url_pattern=%s target=%s deactivated_existing=%s",
-        correction.id,
-        correction.page_url_pattern,
-        correction.target_description,
-        len(existing_active_records),
-    )
-    return _to_stored_locator_correction(correction)
 
 
 def list_corrections(

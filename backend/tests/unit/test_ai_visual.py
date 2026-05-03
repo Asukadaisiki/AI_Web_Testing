@@ -197,7 +197,7 @@ def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monke
     assert first is None
     assert second is None
     assert third is None
-    assert call_count["count"] == 2
+    assert call_count["count"] == 6  # 2 calls × 3 fallback models
     assert stats.locate_requests == 2
     assert stats.locate_success_count == 0
     assert stats.locate_failure_count == 2

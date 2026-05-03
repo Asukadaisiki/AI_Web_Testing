@@ -167,16 +167,12 @@ def locate_element_by_vision(
                     timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
                 )
         except Exception as exc:
+            failed_models.append(f"{model_name}: {type(exc).__name__}: {exc}")
             if _is_rate_limited_error(exc):
-                failed_models.append(f"{model_name}: 429 限频")
                 logger.warning("VLM model %s rate limited, trying next fallback", model_name)
-                continue
-            _record_locate_result(success=False, latency_ms=_elapsed_milliseconds(started_at))
-            _record_failure()
-            reason = f"VLM API 调用失败（{model_name}）: {type(exc).__name__}: {exc}"
-            with _STATE_LOCK:
-                RUNTIME_STATE.last_failure_reason = reason
-            return None
+            else:
+                logger.warning("VLM model %s failed, trying next fallback: %s", model_name, exc)
+            continue
 
         if result is None:
             failed_models.append(f"{model_name}: 未定位到目标")

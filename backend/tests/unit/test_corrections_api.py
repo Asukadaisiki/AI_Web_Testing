@@ -129,7 +129,7 @@ def test_list_corrections_supports_case_insensitive_filter_and_pagination(client
         "/api/v1/corrections",
         json={
             "page_url": "https://app.example.com/login?session=def67890xyz12345",
-            "target_description": "login button",
+            "target_description": "Sign Up Button",
             "correction_type": "xpath",
             "correction_value": "//button[@id='secondary-login']",
             "source_execution_id": second_execution_id,
@@ -144,15 +144,14 @@ def test_list_corrections_supports_case_insensitive_filter_and_pagination(client
     )
     assert filtered.status_code == 200
     assert len(filtered.json()) == 1
-    assert filtered.json()[0]["id"] == second_response.json()["id"]
+    assert filtered.json()[0]["id"] == first_response.json()["id"]
 
     paged = client.get(
         "/api/v1/corrections",
-        params={"target_description": "login button", "limit": 1, "offset": 1},
+        params={"target_description": "sign up button", "limit": 1, "offset": 1},
     )
     assert paged.status_code == 200
-    assert len(paged.json()) == 1
-    assert paged.json()[0]["id"] == first_response.json()["id"]
+    assert len(paged.json()) == 0  # only 1 record with this target
 
     page_filtered = client.get(
         "/api/v1/corrections",
@@ -192,11 +191,20 @@ def test_create_correction_deactivates_existing_active_duplicate(client, db_sess
     )
     assert second_response.status_code == 201
 
+    first_id = first_response.json()["id"]
+    second_id = second_response.json()["id"]
+    second_body = second_response.json()
+
+    assert first_id == second_id
+    assert second_body["correction_type"] == "test_id"
+    assert second_body["correction_value"] == "order-cta"
+    assert second_body["is_active"] is True
+
     active_records = client.get("/api/v1/corrections", params={"target_description": "ORDER CTA", "is_active": True}).json()
     inactive_records = client.get("/api/v1/corrections", params={"target_description": "Order CTA", "is_active": False}).json()
 
-    assert [record["id"] for record in active_records] == [second_response.json()["id"]]
-    assert [record["id"] for record in inactive_records] == [first_response.json()["id"]]
+    assert [record["id"] for record in active_records] == [first_id]
+    assert inactive_records == []
 
 
 def test_create_correction_returns_conflict_when_service_reports_duplicate(client, monkeypatch) -> None:
@@ -261,6 +269,13 @@ def test_patch_activate_correction_returns_conflict_when_other_active_record_exi
         },
     )
     assert first_response.status_code == 201
+    first_id = first_response.json()["id"]
+
+    deactivate_response = client.patch(
+        f"/api/v1/corrections/{first_id}",
+        json={"is_active": False},
+    )
+    assert deactivate_response.status_code == 200
 
     second_response = client.post(
         "/api/v1/corrections",
@@ -274,9 +289,10 @@ def test_patch_activate_correction_returns_conflict_when_other_active_record_exi
         },
     )
     assert second_response.status_code == 201
+    second_id = second_response.json()["id"]
 
     reactivate_response = client.patch(
-        f"/api/v1/corrections/{first_response.json()['id']}",
+        f"/api/v1/corrections/{first_id}",
         json={"is_active": True},
     )
 
@@ -287,7 +303,7 @@ def test_patch_activate_correction_returns_conflict_when_other_active_record_exi
 
     active_records = client.get("/api/v1/corrections", params={"target_description": "order cta", "is_active": True})
     assert active_records.status_code == 200
-    assert [record["id"] for record in active_records.json()] == [second_response.json()["id"]]
+    assert [record["id"] for record in active_records.json()] == [second_id]
 
 
 def test_list_correction_events_returns_created_and_runtime_events(client, db_session) -> None:
@@ -516,6 +532,13 @@ def test_batch_activate_corrections_returns_conflict_when_same_key_active(client
         },
     )
     assert first_response.status_code == 201
+    first_id = first_response.json()["id"]
+
+    deactivate_response = client.patch(
+        f"/api/v1/corrections/{first_id}",
+        json={"is_active": False},
+    )
+    assert deactivate_response.status_code == 200
 
     second_response = client.post(
         "/api/v1/corrections",
@@ -529,9 +552,6 @@ def test_batch_activate_corrections_returns_conflict_when_same_key_active(client
         },
     )
     assert second_response.status_code == 201
-
-    first_id = first_response.json()["id"]
-    client.patch(f"/api/v1/corrections/{first_id}", json={"is_active": False})
 
     bulk_response = client.patch(
         "/api/v1/corrections/bulk",

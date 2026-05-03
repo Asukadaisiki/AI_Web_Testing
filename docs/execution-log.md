@@ -9,6 +9,23 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-04（修复 correction 提交 409 冲突 + VLM 回退链路失效）
+
+- 任务：修复两个定位器系统 bug — ① 用户提交 locator correction 时报 409 “Another active correction already exists”；② DOM 定位全部失败后 VLM 视觉定位未被启用
+- 根因：
+  - Bug 1：`services/corrections.py` `create_correction()` 停旧建新时 SQLAlchemy INSERT-before-UPDATE flush 顺序触发部分唯一索引 `uq_locator_corrections_active_lookup` 的 IntegrityError
+  - Bug 2A：`RUNTIME_STATE` 是 `ai_visual.py` 模块级全局变量，跨执行持久化，断路器打开后阻塞所有后续 VLM 请求
+  - Bug 2B：`locate_element_by_vision()` 中非 429 错误直接 `return None`，不尝试 `VLM_FALLBACK_MODELS` 中后续模型
+- 执行动作：
+  - `services/corrections.py` `create_correction()`：改为 update-in-place — 已有 active 记录时直接更新字段而非停旧建新
+  - `services/executions.py`：`execute_case_streaming()` 和 `_execute_case_record()` 在调用 Playwright runner 前插入 `reset_ai_visual_runtime_state()`
+  - `ai_visual.py` `locate_element_by_vision()`：非限频错误改为 `continue` 让 fallback 模型链完整执行
+- 测试适配：
+  - `test_corrections_api.py`：3 个测试更新以匹配 update-in-place 行为（不再创建多条记录，改为先停用→新建以触发冲突）
+  - `test_ai_visual.py`：`call_count` 断言更新（3 fallback 模型 × 2 次调用 = 6）
+- 验证：全量 485 单元测试通过，零失败
+- 后续：可考虑将 VLM 断路器改为 per-execution 而非 global 更彻底
+
 ## 2026-05-04（修复 DeepSeek thinking 模式 SSE 流式输出断流）
 
 - 任务：排查并修复 AI planning SSE 流式输出在 DeepSeek 模型下无思考标注、无思考内容、前端直接空白的问题
