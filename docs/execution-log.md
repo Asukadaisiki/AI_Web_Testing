@@ -9,6 +9,34 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-03（AI planning 架构方向评估：企业级链路与外部资料对照）
+
+- 任务：结合当前仓库修复记录、关键实现代码与外部公开资料，评估 AI-enhanced Web UI automation 平台的整体方向是否符合企业级自动化链路，并给出架构建议
+- 执行动作：
+  - 复查 `docs/bug-log.md` 中 `BUG-058`、`BUG-059` 的修复结论，确认当前系统已补上 session/project 绑定与链接选择相关问题
+  - 复查 `backend/app/ai/test_planning_agent.py`、`backend/app/ai/planning_tools.py`、`backend/app/services/ai_planning.py`，确认修复后的实现更接近 “link-aware ReAct” 而不是真正的 flow-driven explorer
+  - 查阅 Playwright 官方文档中的定位器、自动等待、认证态复用、隔离与 trace best practices
+  - 查阅 Mind2Web、WebArena、VisualWebArena、Agent Workflow Memory、BrowserGym 等公开资料，核对现实网页任务、多页面长链路、视觉信息和 workflow memory 的主流研究方向
+- 关键结论：
+  - 当前产品方向是对的：`DSL/结构化测试用例 + 后端执行器 + 证据报告 + DOM 优先/VLM 增强`，这比直接做“自由浏览器代理”更适合企业级测试平台
+  - 但当前实现还不是完整的企业级闭环：修复后的中间层更像“LLM 根据入口页链接列表自行挑选要探索的页面”，而不是“系统根据 flow 和状态机主动探索并校验”
+  - 企业级链路应该继续朝四层推进：意图/需求层、状态化探索层、DSL 生成与预校验层、执行与证据层
+  - VLM 适合做增强和兜底，不适合成为主定位与主执行路径；真实网页自动化仍应以 DOM、a11y、显式测试契约和状态隔离为主
+- 外部资料对照：
+  - Playwright 官方建议优先使用用户可感知的 locator 与显式测试契约，并依赖 auto-wait、隔离上下文、认证态复用和 trace 来提升稳定性
+  - Mind2Web / WebArena 表明真实网站任务天然是多页面、跨状态、长链路问题，不能只靠单页 DOM 文本生成稳定动作
+  - VisualWebArena 表明视觉信息确实重要，但多模态 agent 仍有明显能力缺口，因此视觉更适合作为 DOM 不足时的补充
+  - Agent Workflow Memory 的结果说明，把通用流程抽象为可复用 workflow，会显著改善长链路任务成功率
+- 建议方向：
+  - 将 link-aware ReAct 升级为 flow-driven explorer：输入语义阶段、预期页面状态、前置条件、后置条件，而不是只把 URL 交给模型挑
+  - 为页面探索引入页面状态图/跳转图，替代当前仅把 `formatted page_elements` 串成大文本
+  - 在 DSL 输出前增加 locator preflight，先验证每个 target 的唯一性、可见性、可操作性和页面归属
+  - 建立企业级评测集与回归基线，参考 BrowserGym / WebArena 的思路，衡量成功率、flake rate、locator precision、repair rate 和平均步骤数
+- 验证：
+  - 代码核对：`backend/app/ai/test_planning_agent.py:299`、`:327`、`:954`、`:1028`；`backend/app/ai/planning_tools.py:653`、`:667`、`:1005`；`backend/app/services/ai_planning.py:340-375`
+  - 外部资料：Playwright docs、Mind2Web、WebArena、VisualWebArena、Agent Workflow Memory、BrowserGym
+- 后续：如果继续演进平台，优先级应是“状态化探索与预校验”高于“继续加 prompt 和规则”
+
 ## 2026-05-03（AI planning 中间层排查：入口页探索、会话绑定、定位闭环）
 
 - 任务：排查 AI planning 在仅提供 `entry_url_or_page`、`core_user_flow` 与必要数据时，无法稳定发现登录页、不会主动探索后续页面、生成定位器不稳定的根因，并把中间层缺陷、证据与改造想法沉淀到日志
