@@ -892,6 +892,27 @@ def _has_explored_pages(tool_calls: list[AIPlanningToolCall]) -> bool:
     return any(call.tool in ("explore_page", "explore_flow") for call in tool_calls)
 
 
+def _extract_raw_page_results(tool_calls: list[AIPlanningToolCall]) -> list[dict[str, Any]]:
+    """Extract raw page-results list from the most recent explore tool call.
+
+    Returns the ``pages`` list from ``explore_flow``, or a single-element
+    list from ``explore_page`` (wrapping its elements).
+    """
+    for call in reversed(tool_calls):
+        if not isinstance(call.result, dict):
+            continue
+        if call.tool == "explore_flow":
+            pages = call.result.get("pages")
+            if isinstance(pages, list):
+                return pages
+        elif call.tool == "explore_page":
+            elements = call.result.get("elements")
+            url = call.result.get("url", "")
+            if isinstance(elements, list):
+                return [{"url": url, "elements": elements}]
+    return []
+
+
 def _auto_explore_entry_url(
     requirements: AIPlanningRequirements,
     tool_calls: list[AIPlanningToolCall],

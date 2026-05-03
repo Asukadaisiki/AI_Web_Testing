@@ -136,7 +136,11 @@ def send_planning_message(
 
     planning_session.status = agent_response.session_status
     planning_session.requirements_json = agent_response.requirements.model_dump(mode="json")
-    planning_session.plan_json = agent_response.plan.model_dump(mode="json") if agent_response.plan is not None else None
+    plan_dict = agent_response.plan.model_dump(mode="json") if agent_response.plan is not None else None
+    if plan_dict is not None:
+        from app.ai.test_planning_agent import _extract_raw_page_results
+        plan_dict["_page_results"] = _extract_raw_page_results(agent_response.tool_calls)
+    planning_session.plan_json = plan_dict
     planning_session.missing_slots_json = agent_response.missing_slots
     planning_session.title = planning_session.title or agent_response.requirements.business_goal or "AI 测试规划"
     planning_session.last_error_message = (
@@ -237,7 +241,11 @@ def stream_planning_message(
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
     planning_session.status = response.session_status
     planning_session.requirements_json = response.requirements.model_dump(mode="json")
-    planning_session.plan_json = response.plan.model_dump(mode="json") if response.plan is not None else None
+    plan_dict = response.plan.model_dump(mode="json") if response.plan is not None else None
+    if plan_dict is not None:
+        from app.ai.test_planning_agent import _extract_raw_page_results
+        plan_dict["_page_results"] = _extract_raw_page_results(response.tool_calls)
+    planning_session.plan_json = plan_dict
     planning_session.missing_slots_json = response.missing_slots
     planning_session.title = planning_session.title or response.requirements.business_goal or "AI 测试规划"
     planning_session.last_error_message = (
@@ -375,6 +383,33 @@ def generate_planning_drafts(
                     page_elements=scenario.get("page_elements"),
                 ),
             )
+            # --- Locator preflight (Phase 3) ---
+            dsl_dict = generated.case.model_dump(mode="json")
+            preflight_warnings: list[str] = []
+            if scenario.get("page_elements"):
+                try:
+                    from app.ai.locator_preflight import apply_preflight_to_dsl
+                    # Build flat element list from stored page_results
+                    page_elements_list: list[dict] = []
+                    raw_pages = plan.get("_page_results")
+                    if isinstance(raw_pages, list):
+                        for pr in raw_pages:
+                            if isinstance(pr, dict):
+                                page_elements_list.extend(pr.get("elements", []))
+                    if page_elements_list:
+                        dsl_dict = apply_preflight_to_dsl(dsl_dict, page_elements_list)
+                        pf = dsl_dict.pop("_preflight", {})
+                        preflight_warnings = pf.get("warnings", [])
+                        preflight_confidence = pf.get("locator_confidence", "unknown")
+                        logger.info(
+                            "Preflight for scenario '%s': confidence=%s, warnings=%d, elements=%d",
+                            scenario_key, preflight_confidence, len(preflight_warnings), len(page_elements_list),
+                        )
+                except Exception as exc:
+                    logger.warning("Preflight failed for scenario '%s': %s", scenario_key, exc)
+
+            all_warnings = list(generated.warnings) + preflight_warnings
+
             record = AIPlanningDraft(
                 session_id=planning_session.id,
                 scenario_key=scenario_key,
@@ -383,8 +418,8 @@ def generate_planning_drafts(
                 dsl_generation_id=(
                     generated.generation_id if session.get(DslGenerationRun, generated.generation_id) is not None else None
                 ),
-                dsl_case_json=generated.case.model_dump(mode="json"),
-                warnings_json=generated.warnings,
+                dsl_case_json=dsl_dict,
+                warnings_json=all_warnings,
                 normalization_notes_json=generated.normalization_notes,
                 error_message=None,
             )
@@ -1373,6 +1408,10 @@ def _normalize_base_url(requirements_json: dict) -> str | None:
 
 
 def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
+    # Strip internal-only keys from plan_json before pydantic validation.
+    plan_raw = dict(record.plan_json) if record.plan_json else None
+    if plan_raw is not None:
+        plan_raw.pop("_page_results", None)
     return AIPlanningSessionSchema(
         id=record.id,
         actor_user_id=record.actor_user_id,
@@ -1380,7 +1419,7 @@ def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
         title=record.title,
         status=record.status,
         requirements=AIPlanningRequirements.model_validate(record.requirements_json or {}),
-        plan=record.plan_json,
+        plan=plan_raw,
         missing_slots=record.missing_slots_json or [],
         last_error_message=record.last_error_message,
         created_at=record.created_at,

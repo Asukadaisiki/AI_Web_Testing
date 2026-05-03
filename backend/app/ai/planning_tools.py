@@ -656,15 +656,52 @@ def _handle_explore_flow(
     db_session: Session,
     project_id: int,
 ) -> dict[str, Any]:
+    # Support both new "steps" format and legacy "urls" format
+    flow_steps = params.get("steps")
     urls = params.get("urls")
+    flow_description = params.get("flow_description")
+
+    if isinstance(flow_steps, list) and flow_steps:
+        # --- Action-driven flow exploration (Phase 1) ---
+        from app.ai.page_explorer import collect_flow_elements, build_flow_formatted_output
+
+        if flow_description and isinstance(flow_description, str):
+            logger.info("explore_flow: %d steps, flow=%s, project_id=%d",
+                        len(flow_steps), flow_description, project_id)
+        else:
+            logger.info("explore_flow: %d steps, project_id=%d", len(flow_steps), project_id)
+
+        storage_dir = _resolve_storage_state_dir()
+        storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
+
+        page_results = collect_flow_elements(
+            flow_steps,
+            storage_state_path=storage_path,
+            enable_vlm_annotation=True,
+        )
+        combined_formatted = build_flow_formatted_output(page_results)
+        total_elements = sum(pr.get("element_count", 0) for pr in page_results)
+        page_states = [
+            {"state_id": pr.get("page_state", "?"), "url": pr.get("url", ""), "description": pr.get("description", "")}
+            for pr in page_results
+        ]
+
+        return {
+            "pages": page_results,
+            "formatted": combined_formatted,
+            "total_pages": len(page_results),
+            "total_elements": total_elements,
+            "page_states": page_states,
+        }
+
+    # --- Legacy URL-based exploration ---
     if not isinstance(urls, list) or not urls:
-        return {"error": "必须提供 urls 参数（非空 URL 列表）"}
+        return {"error": "必须提供 steps 或 urls 参数（非空列表）"}
 
     valid_urls = [u for u in urls if isinstance(u, str) and u.strip()]
     if not valid_urls:
         return {"error": "urls 列表中没有有效的 URL"}
 
-    flow_description = params.get("flow_description")
     if flow_description and isinstance(flow_description, str):
         logger.info("explore_flow: %d urls=%s, flow=%s, project_id=%d", len(valid_urls), valid_urls[:3], flow_description, project_id)
     else:
@@ -679,7 +716,6 @@ def _handle_explore_flow(
         enable_vlm_annotation=True,
     )
 
-    # Build a backward-compatible combined formatted string
     sections: list[str] = []
     for pr in page_results:
         url = pr.get("url", "")
@@ -993,21 +1029,45 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
     ),
     "explore_flow": PlanningTool(
         name="explore_flow",
-        description="沿用户测试流程依次访问多个页面，采集每个页面的可交互元素和视觉布局信息。适用于需要跨页面的测试场景（如登录→商品列表→详情→购物车），会复用浏览器会话保持登录态。",
+        description="沿用户测试流程依次访问多个页面，采集每个页面的可交互元素和视觉布局信息。支持两种模式：1) 简单 URL 列表模式（urls 参数）；2) 动作式流探索模式（steps 参数，可在页面间执行点击/输入/等待动作）。适用于需要跨页面、含登录或交互的测试场景，会复用浏览器会话保持登录态。",
         parameters={
             "type": "object",
             "properties": {
                 "urls": {
                     "type": "array",
-                    "description": "需要依次访问和采集的页面 URL 列表，按流程顺序排列",
+                    "description": "[简单模式] 需要依次访问和采集的页面 URL 列表，按流程顺序排列。与 steps 二选一。",
                     "items": {"type": "string"},
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "[动作模式] 流探索步骤列表。每步可选填 url（导航目标）和 actions（要执行的动作）。与 urls 二选一。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "导航目标 URL（可选；跳过则留在当前页面）"},
+                            "description": {"type": "string", "description": "这一步的人类可读描述（如\"点击登录按钮后进入的登录页\"）"},
+                            "actions": {
+                                "type": "array",
+                                "description": "导航后要执行的动作列表，按顺序执行",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "action": {"type": "string", "enum": ["click", "input", "wait_for"], "description": "动作类型"},
+                                        "target": {"type": "string", "description": "目标元素的可见文本、label 或 placeholder"},
+                                        "value": {"type": "string", "description": "输入值（仅 input 动作需要）"},
+                                    },
+                                    "required": ["action", "target"],
+                                },
+                            },
+                        },
+                    },
                 },
                 "flow_description": {
                     "type": "string",
                     "description": "可选。对该流程的语义描述（如\"首页→登录→商品搜索→加入购物车→结算\"），帮助探索器理解页面间的导航意图。",
                 },
             },
-            "required": ["urls"],
+            "required": [],
         },
     ),
 }

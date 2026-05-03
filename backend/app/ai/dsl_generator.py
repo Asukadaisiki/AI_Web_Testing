@@ -387,6 +387,7 @@ def _build_user_prompt_lines(
                 "  - 表单提交 → {type: 'url_contains', value: '...'} 或 {type: 'text_visible', value: '...'}",
                 "  - 输入操作 → {type: 'value_changed'}",
                 "  - 删除操作 → {type: 'text_gone', value: '...'}",
+                "- 【页面状态归属】如果元素清单按\"页面状态 S{n}\"分组，每个交互步骤必须填写 page_state 字段（如 \"S0\"、\"S1\"），标明该步骤属于哪个页面状态。这确保执行器在正确的页面上下文中执行步骤。",
             ]
         )
     if payload.retry_from_generation_id is not None and payload.retry_reason_code is not None:

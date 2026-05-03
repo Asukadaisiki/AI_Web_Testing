@@ -29,10 +29,33 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-060 | AI planning 中间层三大架构断层：动作式探索、页面状态图、定位器预校验
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：架构排查 / BUG-059 延伸
+- 描述：BUG-059 的 link-aware ReAct 修复解决了"页面选择"问题，但也暴露了中间层更深的三个架构断层：
+  1. `explore_flow` 仍是 URL 级探索——只接受 URL 列表做 `page.goto()`，不会在页面间执行点击/输入/等待动作，无法覆盖登录后页面、弹窗后状态、动态导航等场景
+  2. 页面知识是扁平的 `page_elements` 文本——所有页面元素拼接成一个字符串，无页面状态标记，LLM 需自行推断哪个元素属于哪个页面
+  3. DSL 生成后无 locator preflight——定位器验证全部推迟到执行期，生成阶段不检查 target 是否唯一、可见、可操作
+- 影响：所有依赖跨页面、含登录、含动态交互的测试场景；定位器质量无法在规划阶段暴露；用户看到草案时不知道哪些 step 定位器有问题
+- 根因：
+  - `backend/app/ai/planning_tools.py` 的 `_handle_explore_flow` 只调用 `collect_multi_page_elements(urls)`，不支持 `steps` 格式的动作式探索
+  - `backend/app/ai/page_explorer.py` 无 `collect_flow_elements` 函数；`collect_multi_page_elements` 只做 `page.goto()` + DOM 抓取，不做动作交互
+  - `backend/app/services/ai_planning.py` DSL 生成后直接返回，无 preflight 步骤
+  - `backend/app/schemas/dsl.py` 各 step 无 `page_state` 字段
+- 处理（Phase 1-3 全套升级）：
+  - **Phase 1: 动作式 explore_flow** — `page_explorer.py` 新增 `collect_flow_elements(steps)` 函数，支持 `{url, description, actions: [{action, target, value}]}` 格式，在页面间执行 click/input/wait_for 动作后采集 DOM；`planning_tools.py` 的 `_handle_explore_flow` 支持 `steps` 参数（保留 `urls` 向后兼容）；工具定义更新
+  - **Phase 2: 页面状态标记** — `collect_flow_elements` 为每个不同 URL 分配 `page_state_id`（S0, S1, ...），每个元素记录 `page_state`；新增 `build_flow_formatted_output` 使用 `=== 页面状态 S{n}: {url} ===` 格式化输出；`dsl.py` 的 ClickStep/InputStep/WaitForStep/AssertTextStep/CaptureTextStep 新增 `page_state` 字段；`dsl_generator.py` prompt 新增页面状态归属指令
+  - **Phase 3: Locator preflight** — 新建 `backend/app/ai/locator_preflight.py`，`preflight_locators()` 静态校验 DSL targets 与已采集元素的匹配度（显式选择器匹配 + 语义文本匹配），计算 per-step confidence（high/medium/low）；`ai_planning.py` 的 `generate_planning_drafts` 在 DSL 生成后自动调用 `apply_preflight_to_dsl`，将 confidence 回写到各 step，warnings 并入 draft
+- 验证：485 单元测试全部通过；`_classify_target` 正确区分 7 种 target 类型；preflight 正确评估唯一/歧义/无匹配三种场景
+- 关联记录：`docs/execution-log.md` 2026-05-03（企业级中间层升级）
+
 ## BUG-059 | AI planning 中间层仍是 URL 级探索而非 flow 驱动探索，导致登录链路与跨页规划失真
 
 - 日期：2026-05-03
 - 状态：fixed
+- 来源：架构排查 / 用户问题分析
 - 复现步骤：
   1. 在 AI planning 中仅提供 `entry_url_or_page: https://automationexercise.com/`、核心流程与少量测试数据
   2. 触发自动探索与 DSL 草案生成

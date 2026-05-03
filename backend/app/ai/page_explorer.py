@@ -574,8 +574,289 @@ def collect_multi_page_elements(
     return results
 
 
+def collect_flow_elements(
+    steps: list[dict[str, Any]],
+    *,
+    storage_state_path: str | None = None,
+    enable_vlm_annotation: bool = True,
+    timeout_ms: int = 60000,
+) -> list[dict[str, Any]]:
+    """Execute a flow with actions between page visits and collect elements per state.
+
+    Each step in *steps* may have:
+      - ``url``: navigate to this URL first (optional; if omitted, stays on current page)
+      - ``description``: human label for this step (used in state markers)
+      - ``actions``: list of actions to perform after navigation, each with:
+        - ``action``: "click", "input", or "wait_for"
+        - ``target``: semantic label / placeholder / id for the element
+        - ``value``: fill text (for input actions)
+
+    A **page state** is defined by the URL after actions complete.  Each
+    distinct URL gets a ``page_state_id`` (S0, S1, …) that is recorded on
+    every element and in the formatted output.
+    """
+    if not steps:
+        return []
+
+    settings = get_settings()
+    results: list[dict[str, Any]] = []
+    state_index = 0
+    url_to_state: dict[str, str] = {}
+
+    def _resolve_state_id(url: str, description: str = "") -> str:
+        nonlocal state_index
+        # Use (url, description) as key so that revisiting the same URL
+        # with a different flow context (e.g. before/after login) gets
+        # distinct state IDs.
+        key = f"{url.rstrip('/')}|{description.strip()}" if description else url.rstrip("/")
+        if key not in url_to_state:
+            sid = f"S{state_index}"
+            url_to_state[key] = sid
+            state_index += 1
+            return sid
+        return url_to_state[key]
+
+    def _execute_action(page, action_def: dict[str, Any]) -> None:
+        act = (action_def.get("action") or "").strip().lower()
+        target = (action_def.get("target") or "").strip()
+        value = action_def.get("value", "")
+        if not act or not target:
+            return
+
+        # Build a priority chain of locator factories.
+        # IMPORTANT: Playwright locator objects are always truthy, so
+        # ``a or b`` never falls through — we must check .count() instead.
+        if act == "input":
+            candidates = [
+                ("label", lambda: page.get_by_label(target)),
+                ("placeholder", lambda: page.get_by_placeholder(target)),
+                ("role", lambda: page.get_by_role("textbox", name=target)),
+            ]
+            if re.match(r"^[a-zA-Z_][\w-]*$", target):
+                candidates.append(("id", lambda: page.locator(f"#{target}")))
+            loc = None
+            for _name, factory in candidates:
+                try:
+                    candidate = factory()
+                    if candidate.count() > 0:
+                        loc = candidate
+                        break
+                except Exception:
+                    continue
+            if loc is not None:
+                loc.fill(str(value))
+            else:
+                logger.debug("_execute_action: no input locator matched target=%r", target)
+        elif act == "click":
+            candidates = [
+                ("label", lambda: page.get_by_label(target)),
+                ("button_role", lambda: page.get_by_role("button", name=target)),
+                ("link_role", lambda: page.get_by_role("link", name=target)),
+                ("text", lambda: page.get_by_text(target)),
+            ]
+            if re.match(r"^[a-zA-Z_][\w-]*$", target):
+                candidates.append(("id", lambda: page.locator(f"#{target}")))
+            loc = None
+            for _name, factory in candidates:
+                try:
+                    candidate = factory()
+                    if candidate.count() > 0:
+                        loc = candidate
+                        break
+                except Exception:
+                    continue
+            if loc is not None:
+                loc.click()
+            else:
+                logger.debug("_execute_action: no click locator matched target=%r", target)
+        elif act == "wait_for":
+            for factory_desc in [
+                ("text", lambda: page.get_by_text(target)),
+                ("selector", lambda: page.locator(f"text={target}")),
+            ]:
+                try:
+                    candidate = factory_desc[1]()
+                    candidate.first.wait_for(state="visible", timeout=5000)
+                    break
+                except Exception:
+                    continue
+
+    def _collect_current_page(page, url: str, state_id: str) -> dict[str, Any]:
+        try:
+            payload = page.evaluate(
+                EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, settings.explore_max_elements,
+            )
+        except Exception as exc:
+            logger.warning("collect_flow_elements: evaluate failed for %s: %s", url, exc)
+            return {
+                "url": url, "page_state": state_id,
+                "elements": [], "formatted": "", "element_count": 0,
+                "screenshot_available": False, "vlm_annotation": None,
+                "error": str(exc),
+            }
+
+        elements: list[dict[str, Any]] = []
+        if isinstance(payload, list):
+            for elem in payload:
+                if not isinstance(elem, dict):
+                    continue
+                element = {
+                    "tag": elem.get("tag", "unknown"),
+                    "id": _extract_element_id(elem),
+                    "text": elem.get("text"),
+                    "role": elem.get("role"),
+                    "aria_label": elem.get("aria_label"),
+                    "placeholder": elem.get("placeholder"),
+                    "href": elem.get("href"),
+                    "data_testid": elem.get("data_testid"),
+                    "css_selector": elem.get("css_selector"),
+                    "xpath": elem.get("xpath"),
+                    "rect": elem.get("rect"),
+                    "visible": elem.get("visible", False),
+                    "enabled": elem.get("enabled", False),
+                    "page_state": state_id,
+                }
+                element["candidates"] = score_candidates_for_element(element)
+                tag = element.get("tag", "")
+                element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
+                elements.append(element)
+
+        formatted = format_elements_for_prompt(elements)
+
+        # Interactive element discovery
+        try:
+            interactive = _discover_interactive_elements(
+                page, max_clicks=settings.explore_interactive_max_clicks,
+            )
+            if interactive:
+                for el in interactive:
+                    el["page_state"] = state_id
+                elements.extend(interactive)
+                formatted = format_elements_for_prompt(elements)
+                logger.info("Discovered %d interactive elements on %s", len(interactive), url)
+        except Exception as exc:
+            logger.warning("Interactive exploration failed for %s: %s", url, exc)
+
+        screenshot_available = False
+        vlm_annotation: str | None = None
+        try:
+            _screenshot_bytes = page.screenshot()
+            screenshot_available = True
+            if enable_vlm_annotation:
+                from app.locators.ai_visual import describe_page_layout
+                import base64
+                vlm_annotation = describe_page_layout(
+                    screenshot_base64=base64.b64encode(_screenshot_bytes).decode(),
+                    page_url=url,
+                )
+        except Exception as exc:
+            logger.warning("Screenshot/VLM failed for %s: %s", url, exc)
+
+        return {
+            "url": url,
+            "page_state": state_id,
+            "elements": elements,
+            "formatted": formatted,
+            "element_count": len(elements),
+            "screenshot_available": screenshot_available,
+            "vlm_annotation": vlm_annotation,
+        }
+
+    try:
+        pw = _sync_playwright_context()
+        with pw as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context_kwargs: dict[str, Any] = {}
+            if storage_state_path and Path(storage_state_path).exists():
+                context_kwargs["storage_state"] = storage_state_path
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+
+            current_url = "about:blank"
+
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+
+                # Navigate if URL is provided
+                step_url = step.get("url")
+                if step_url and isinstance(step_url, str) and step_url.strip():
+                    try:
+                        page.goto(step_url.strip(), timeout=timeout_ms, wait_until="domcontentloaded")
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                        except Exception:
+                            pass
+                        current_url = page.url
+                    except Exception as exc:
+                        logger.warning("collect_flow_elements: goto failed for %s: %s", step_url, exc)
+                        results.append({
+                            "url": step_url.strip(),
+                            "page_state": "ERROR",
+                            "elements": [], "formatted": "", "element_count": 0,
+                            "screenshot_available": False, "vlm_annotation": None,
+                            "error": str(exc),
+                        })
+                        continue
+
+                # Execute actions if provided
+                actions = step.get("actions")
+                if isinstance(actions, list):
+                    for action_def in actions:
+                        try:
+                            _execute_action(page, action_def)
+                        except Exception as exc:
+                            logger.warning(
+                                "collect_flow_elements: action failed (%s): %s",
+                                action_def.get("action", "?"), exc,
+                            )
+                current_url = page.url
+
+                # Collect elements for this page state
+                description = step.get("description", "")
+                state_id = _resolve_state_id(current_url, description)
+                result = _collect_current_page(page, current_url, state_id)
+                if description:
+                    result["description"] = description
+                results.append(result)
+
+            context.close()
+            browser.close()
+    except Exception as exc:
+        logger.warning("collect_flow_elements browser crash: %s", exc)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Helpers for building state-aware formatted output
+# ---------------------------------------------------------------------------
+
+def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
+    """Build a state-aware combined formatted string from flow exploration results."""
+    sections: list[str] = []
+    for pr in page_results:
+        state_id = pr.get("page_state", "?")
+        url = pr.get("url", "")
+        description = pr.get("description", "")
+        formatted = pr.get("formatted", "")
+        annotation = pr.get("vlm_annotation")
+
+        if description:
+            header = f"=== 页面状态 {state_id}: {url}（{description}）==="
+        else:
+            header = f"=== 页面状态 {state_id}: {url} ==="
+        section = f"{header}\n{formatted}"
+        if annotation:
+            section += f"\n\n页面布局描述: {annotation}"
+        sections.append(section)
+    return "\n\n".join(sections)
+
+
 __all__ = [
+    "build_flow_formatted_output",
     "capture_browser_session",
+    "collect_flow_elements",
     "collect_interactable_elements",
     "collect_multi_page_elements",
     "format_elements_for_prompt",

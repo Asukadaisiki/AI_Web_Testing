@@ -52,6 +52,7 @@ class GotoStep(DSLModel):
 class ClickStep(DSLModel):
     action: Literal["click"]
     target: str = Field(min_length=1, description="Semantic or explicit locator.")
+    page_state: str | None = Field(default=None, description="Page state this step belongs to (S0, S1, …).")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
@@ -64,6 +65,7 @@ class InputStep(DSLModel):
     action: Literal["input"]
     target: str = Field(min_length=1, description="Semantic or explicit locator.")
     value: str = Field(description="Input text.")
+    page_state: str | None = Field(default=None, description="Page state this step belongs to (S0, S1, …).")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
@@ -76,6 +78,7 @@ class WaitForStep(DSLModel):
     action: Literal["wait_for"]
     target: str = Field(min_length=1, description="Target to wait for.")
     timeout_ms: int = Field(default=5000, ge=1, le=60000)
+    page_state: str | None = Field(default=None, description="Page state this step belongs to (S0, S1, …).")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
@@ -88,6 +91,7 @@ class AssertTextStep(DSLModel):
     action: Literal["assert_text"]
     target: str = Field(min_length=1, description="Target to assert against.")
     value: str = Field(min_length=1, description="Expected text.")
+    page_state: str | None = Field(default=None, description="Page state this step belongs to (S0, S1, …).")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
@@ -110,6 +114,7 @@ class CaptureTextStep(DSLModel):
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
         description="Runtime variable name to store the captured text.",
     )
+    page_state: str | None = Field(default=None, description="Page state this step belongs to (S0, S1, …).")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
     locator_confidence: LocatorConfidence | None = Field(
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",

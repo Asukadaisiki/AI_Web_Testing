@@ -277,7 +277,81 @@ After multiple execution rounds, verify the data loop is functioning:
 | Score calibration | Are scoring thresholds adjusting based on real data? |
 | Selector improvement | Are better selectors being chosen in subsequent runs? |
 
-## Phase 6 — Cross-Session Validation
+## Phase 6 — Verify New Architecture Features (v2026-05-03)
+
+After the enterprise middleware upgrade, these additional checks apply:
+
+### 6.1 Action-Driven explore_flow
+
+Verify the new `steps` parameter works correctly in `explore_flow`:
+
+| Check Point | What to Verify |
+|---|---|
+| Steps format | AI can call `explore_flow` with `steps: [{url, description, actions: [{action, target, value}]}]` |
+| Actions execute | Click/input/wait_for actions actually execute between page visits |
+| Action fallback | If a click target doesn't match, the locator chain falls through (label → role → text → id) — no silent failure |
+| Backward compat | `explore_flow({urls: [...]})` still works without `steps` |
+| Login flow | Flow like "home → click Login → input email/password → click Submit → collect dashboard" produces elements from all states |
+
+**Test command to verify action execution:**
+```bash
+cd backend && uv run python -c "
+from app.ai.page_explorer import collect_flow_elements
+results = collect_flow_elements([
+    {'url': 'https://automationexercise.com', 'description': '首页'},
+    {'url': 'https://automationexercise.com/login', 'description': '登录页',
+     'actions': [{'action': 'input', 'target': 'Email Address', 'value': 'test@x.com'}]}
+])
+for r in results:
+    print(f'State {r.get(\"page_state\")}: {r.get(\"url\")} elements={r.get(\"element_count\")}')
+"
+```
+
+### 6.2 Page State Marking
+
+| Check Point | What to Verify |
+|---|---|
+| State IDs | Each explored page has a unique `page_state` (S0, S1, S2...) |
+| Same URL different state | Same URL with different `description` gets distinct state IDs (e.g. home before/after login) |
+| Formatted output | `page_elements` uses `=== 页面状态 S{n}: {url} ===` headers |
+| DSL steps | Generated DSL interactable steps have `page_state` field filled in |
+
+### 6.3 Locator Preflight
+
+| Check Point | What to Verify |
+|---|---|
+| Preflight runs | After DSL generation, draft warnings include preflight results |
+| High confidence | Targets with unique match + distinguishing attributes (data-testid, unique id) get `high` confidence |
+| Medium confidence | Unique match but no distinguishing attributes gets `medium` |
+| Low confidence | No match or >3 ambiguous matches gets `low` — user sees warning |
+| Confidence in DSL | Each step in generated DSL has `locator_confidence` field filled by preflight |
+
+**Test command to verify preflight manually:**
+```bash
+cd backend && uv run python -c "
+from app.ai.locator_preflight import preflight_locators
+elements = [
+    {'tag':'button','text':'Login','data_testid':'login-btn','css_selector':'button','id':'','visible':True,'enabled':True},
+    {'tag':'input','text':'','placeholder':'Email','data_testid':'','css_selector':'input','id':'','visible':True,'enabled':True},
+]
+result = preflight_locators([
+    {'action':'click','target':'Login'},
+    {'action':'click','target':'NonExistent'},
+], elements)
+for sr in result['step_results']:
+    print(f'{sr[\"target\"]}: {sr[\"confidence\"]} ({sr[\"match_count\"]} matches)')
+"
+```
+
+### 6.4 Data Link Verification
+
+| Check Point | What to Verify |
+|---|---|
+| `_page_results` stored | After explore_flow, `plan_json["_page_results"]` contains raw element lists |
+| `_page_results` stripped | API responses strip `_page_results` (internal-only) — no `extra_forbidden` errors |
+| Preflight has elements | When page_elements exist AND _page_results exist, preflight runs on real data |
+
+## Phase 7 — Cross-Session Validation
 
 ### 6.1 Create New Session
 
@@ -321,6 +395,25 @@ AI should reference:
 3. Verify Judge correctly classifies as test_design_error
 4. Verify Router attempts auto-fix or reports to user
 
+### Scenario E: Action-Driven Flow Exploration (NEW)
+1. Describe a login flow: "首页 → 点击登录 → 输入账号密码 → 点击登录按钮 → 进入 Dashboard"
+2. Verify AI calls `explore_flow` with `steps` parameter (not just `urls`)
+3. Check each step has `url` and `actions` where appropriate
+4. Verify returned elements have distinct `page_state` IDs (S0, S1, S2...)
+5. Verify login page state has email/password/login elements, dashboard state has different elements
+
+### Scenario F: Locator Preflight Verification (NEW)
+1. After DSL generation, inspect draft warnings
+2. Verify steps with unique, distinguishing locators get `locator_confidence: "high"`
+3. Verify steps with ambiguous locators get `"medium"` or `"low"`
+4. Intentionally use a non-existent target and verify preflight catches it with `"low"` + warning
+5. Verify preflight warnings are visible in the draft before execution
+
+### Scenario G: Backward Compatibility (NEW)
+1. Call `explore_flow` with `urls: ["https://example.com", "https://example.com/login"]` (old format)
+2. Verify it still works — collects elements from both URLs
+3. Verify response format matches what existing code expects
+
 ## Logging Results
 
 After each E2E test session, append to `docs/execution-log.md`:
@@ -349,6 +442,10 @@ If defects found, also append to `docs/bug-log.md`.
 - **All steps fall back to VLM grounding** (DOM candidates all scored too low — PreScorer weights may need calibration)
 - **Postcondition always passes** even for wrong actions (postcondition inference may be too lenient)
 - **LocatorAttemptLog table empty** after execution (data loop not recording)
+- **explore_flow always uses urls mode** — AI never calls it with `steps` (prompt may not be clear enough about the new capability)
+- **Preflight confidence always "unknown"** — `_page_results` data link may be broken or elements not reaching preflight
+- **Same state_id for different pages** — if home and dashboard both get S0, the `_resolve_state_id` dedup logic is using wrong keys
+- **Steps have page_state=null** — AI not filling in page_state despite page elements having state markers (prompt may need strengthening)
 
 ## Known Issues & Workarounds
 

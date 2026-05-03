@@ -9,6 +9,37 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-03（企业级中间层三大架构升级：动作式探索 + 页面状态图 + 定位器预校验）
+
+- 任务：将 AI planning 中间层从"URL 级探索 + 扁平 DOM 文本 + 无预校验"升级到企业级闭环
+- 背景：BUG-059 的 link-aware ReAct 修复让 LLM 能选页面，但 `explore_flow` 仍是纯 URL 导航（不会做点击/输入动作），页面知识是扁平字符串，定位器没有 preflight
+- 执行动作：
+  - **Phase 1 — 动作式 explore_flow**：
+    - `page_explorer.py` 新增 `collect_flow_elements(steps)`：支持 `{url, description, actions: [{action, target, value}]}` 格式，在页面间执行 click/input/wait_for 动作后采集 DOM，为每个不同 URL 分配 `page_state_id`
+    - `page_explorer.py` 新增 `build_flow_formatted_output(page_results)`：使用 `=== 页面状态 S{n}: {url}（{到达方式}）===` 格式化
+    - `planning_tools.py` `_handle_explore_flow`：新增 `steps` 参数支持（保留 `urls` 向后兼容）；调用 `collect_flow_elements` + `build_flow_formatted_output`
+    - `planning_tools.py` 工具定义：`explore_flow` 新增 `steps` 参数 schema，含 `url`、`description`、`actions[{action, target, value}]`
+  - **Phase 2 — 页面状态标记**：
+    - `dsl.py` schema：ClickStep/InputStep/WaitForStep/AssertTextStep/CaptureTextStep 均新增可选 `page_state: str | None` 字段
+    - `dsl_generator.py` prompt：新增"页面状态归属"指令，引导 LLM 为每个 step 填写 `page_state`
+  - **Phase 3 — 定位器预校验**：
+    - 新建 `backend/app/ai/locator_preflight.py`：`_classify_target()` 分类 7 种 target 类型（css/xpath/data-testid/chained_css_text/css_tag/semantic）；`_text_matches_target()` 复用 fallback.py 的精确匹配→token 子集→Jaccard≥0.5 逻辑；`preflight_locators(steps, elements)` 返回 per-step confidence（high/medium/low）+ 匹配详情 + warnings；`apply_preflight_to_dsl()` 回写 confidence 到各 step
+    - `ai_planning.py` `generate_planning_drafts`：DSL 生成后自动调用 `apply_preflight_to_dsl`，warnings 并入 draft.warnings_json
+  - **测试修复**：`test_cases_api.py`、`test_dsl_validation.py` 的 expected step dicts 补上 `page_state: None` 字段
+- 关键结论：
+  - 企业级链路需要三层：动作式探索 → 状态化页面知识 → 定位器预校验，不能只靠 prompt 和规则
+  - `explore_flow` 从"URL 列表"升级为"动作序列"，是打通登录链路、动态导航、弹窗交互的关键
+  - `page_state` 让 LLM 知道每个 step 属于哪个页面状态，执行器可以在正确上下文中执行
+  - Preflight 把定位器问题从执行期前移到规划期，用户看草案时就知道哪些 target 有问题
+- 结果：
+  - `collect_flow_elements`：支持 click/input/wait_for 动作在页面间执行
+  - `locator_preflight`：7 种 target 类型分类 + 语义匹配 + 稳定性评分
+  - `page_state`：5 种 step schema + DSL prompt 全部更新
+  - 485 单元测试全部通过，零回归
+- 验证：`cd backend && uv run pytest tests/unit/ -q` → 485 passed
+- 关联缺陷：BUG-060（本条目对应缺陷记录）
+- 后续：企业级中间层已从 demo 级进入企业级雏形，下一步可考虑引入页面状态图/跳转图、建立内部 benchmark
+
 ## 2026-05-03（AI planning 架构方向评估：企业级链路与外部资料对照）
 
 - 任务：结合当前仓库修复记录、关键实现代码与外部公开资料，评估 AI-enhanced Web UI automation 平台的整体方向是否符合企业级自动化链路，并给出架构建议
