@@ -9,6 +9,38 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-03（AI planning 中间层排查：入口页探索、会话绑定、定位闭环）
+
+- 任务：排查 AI planning 在仅提供 `entry_url_or_page`、`core_user_flow` 与必要数据时，无法稳定发现登录页、不会主动探索后续页面、生成定位器不稳定的根因，并把中间层缺陷、证据与改造想法沉淀到日志
+- 执行动作：
+  - 审查 `backend/app/ai/test_planning_agent.py`、`backend/app/ai/planning_tools.py`、`backend/app/ai/dsl_generator.py`、`backend/app/services/ai_planning.py` 与前端 `AITestPlanningPanel` / `SessionProjectPanel`
+  - 运行 `collect_interactable_elements('https://automationexercise.com/')`，核实入口页 DOM 是否真的看不到登录入口
+  - 运行 `_extract_internal_links(...)`，核实自动探索到底是按业务 flow 还是按首页链接顺序继续抓取页面
+  - 复查 planning tool 网关，确认 `explore_page`、`explore_flow`、`capture_page_session` 的 project 前置条件和失败表现
+  - 复查 DSL 生成链路，确认当前是否存在“生成前后都不验证 locator”的断层
+  - 复查前端会话与项目绑定链路，确认切换 session 后项目操作是否仍指向旧 session
+- 关键证据：
+  - 入口页并非完全看不到登录入口：运行探索后返回约 300 个可交互元素，能直接抓到 `Signup / Login` 和 `/login`
+  - 自动探索并不理解用户 flow：`_extract_internal_links(...)` 返回前 5 项为 `/products`、`/view_cart`、`/login`、`/test_cases`、`/api_list`，说明当前逻辑主要按首页链接顺序抓取，不会因为 `core_user_flow` 提到“登录”就优先建立登录链路
+  - 中间层工具存在隐藏前置条件：`backend/app/ai/planning_tools.py:97-98` 会在无 project 时直接拦截 `explore_page`、`capture_page_session`、`explore_flow`
+  - 前端存在放大问题的真实缺陷：`frontend/src/components/AITestPlanningPanel.tsx:621` 仍把 `sessionIdProp` 传给 `SessionProjectPanel`，而不是当前 `sessionId`，导致项目可能绑错 session
+  - 定位闭环没有真正打通：`backend/app/services/ai_planning.py:340-375` 只是把 `page_elements` 交给 `generate_dsl_case(...)`，但没有在生成前后做浏览器侧 locator preflight
+- 结果：
+  - 结论 1：问题不主要在提示词，而在架构。当前实现仍是“URL 级探索 + 扁平 DOM 文本注入 + 一次性 DSL 生成”，无法覆盖登录态、多页面跳转和动态导航
+  - 结论 2：用户输入字段也不是主要短板。即使补更多 prompt，如果中间层仍不会按动作探索页面、维护状态、验证定位器，草案质量仍然会卡在跳转和定位上
+  - 结论 3：现有仓库里至少有两个需要优先处理的点：`BUG-058`（session/project 绑定错误）和 `BUG-059`（自动探索与业务 flow 脱节）
+- 改造想法：
+  - 把自动探索从“URL 列表探索”升级为“flow 驱动的动作式探索”，让规划阶段能先点入口、再进登录页、再记录登录后状态
+  - 用页面状态图替代单段 `page_elements` 文本，让每个步骤都知道自己依附的是哪个页面/状态
+  - 把 `capture_page_session` 和登录态采集提升为一等能力，不再要求模型自己猜登录页结构
+  - 在输出 DSL 草案前执行 locator 预校验，把模糊或失效 target 在规划阶段就暴露出来
+- 验证：
+  - `cd backend && uv run python -`，调用 `collect_interactable_elements('https://automationexercise.com/')`，确认返回约 300 个元素，包含登录入口
+  - `cd backend && uv run python -`，调用 `_extract_internal_links({'elements': els}, 'https://automationexercise.com/')`，确认返回顺序为 `/products`、`/view_cart`、`/login`、`/test_cases`、`/api_list`
+  - 静态代码核对：`backend/app/ai/test_planning_agent.py:852`、`:919`、`:944`；`backend/app/ai/planning_tools.py:97`、`:653`、`:990`；`frontend/src/components/AITestPlanningPanel.tsx:183`、`:621`；`frontend/src/components/SessionProjectPanel.tsx:28`、`:42`、`:68`
+- 关联缺陷：`BUG-058`、`BUG-059`
+- 后续：优先修复 session/project 绑定，再实现 flow 驱动探索和 locator 预校验，否则继续堆 prompt 或规则收益会很有限
+
 ## 2026-05-03 (Session 15 — 修复三大核心缺陷：项目关联失效 + DSL prompt 超限 + hidden 元素恢复链跳过)
 
 - 目标：修复”无项目→创建会话→AI 规划”完整链路中的三个致命缺陷，使品牌筛选购物车测试用例能正常生成并执行

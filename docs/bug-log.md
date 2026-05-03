@@ -29,6 +29,53 @@
 - 关联记录：执行日志日期或链接
 ```
 
+## BUG-059 | AI planning 中间层仍是 URL 级探索而非 flow 驱动探索，导致登录链路与跨页规划失真
+
+- 日期：2026-05-03
+- 状态：open
+- 来源：架构排查 / 用户问题分析
+- 描述：当前 planning 中间层会在拿到 `entry_url_or_page` 后先抓入口页 DOM，再从入口页锚点里抽取同域链接，最多补抓前 4 个页面，然后把页面元素清单文本交给 DSL 生成器。这个过程没有把 `core_user_flow` 解析成“先点哪里、再进入哪个状态、登录后继续什么动作”的探索计划，因此 AI 即使知道首页地址，也无法稳定推断登录页、登录后页面结构、以及后续跳转条件。
+- 复现步骤：
+  1. 在 AI planning 中仅提供 `entry_url_or_page: https://automationexercise.com/`、核心流程与少量测试数据
+  2. 触发自动探索与 DSL 草案生成
+  3. 观察自动探索只按入口页链接顺序抓取页面，而不是按 `core_user_flow` 优先推进登录或业务关键路径
+  4. 当后续页面依赖点击进入、登录态或动态导航时，草案会停留在模糊 target 或错误页面假设上
+- 影响：所有需要“从入口页逐步探索到目标页面”的规划任务，包括登录、加入购物车、订单流、跳转式表单、多页面断言等；定位器质量和草案完整性都会受影响
+- 根因：
+  - `backend/app/ai/test_planning_agent.py` 中 `_auto_explore_entry_url()` 只会把入口页和 `_extract_internal_links()` 抽到的前 4 个链接送入探索，逻辑与 `core_user_flow` 无绑定
+  - `backend/app/ai/planning_tools.py` 的 `explore_flow` 入参仍是 `urls`，而不是动作序列或状态转移计划
+  - `backend/app/services/ai_planning.py` 把 `page_elements` 作为 DSL 生成输入，但没有在生成前后做浏览器侧 locator preflight
+- 处理：
+  - 将自动探索升级为 `flow` 驱动：输入应包含导航意图、候选动作、登录凭据与关键检查点，而不只是 URL 列表
+  - 引入页面状态图或跳转图，让每个生成步骤绑定到特定页面状态，而不是依赖一段扁平的 DOM 文本
+  - 在草案输出前增加 locator 预校验，对每个 click/input/assert target 做一次浏览器侧解析与回写
+- 验证：
+  - 代码检查：`backend/app/ai/test_planning_agent.py:852`、`:919`、`:944`；`backend/app/ai/planning_tools.py:653`、`:990`
+  - 运行验证：`collect_interactable_elements('https://automationexercise.com/')` 能抓到首页登录入口，但 `_extract_internal_links(...)` 前 5 项仍按首页链接顺序返回 `/products`、`/view_cart`、`/login`、`/test_cases`、`/api_list`
+- 关联记录：`docs/execution-log.md` 2026-05-03（AI planning 中间层排查）
+
+## BUG-058 | AI Test Planning 面板切换会话后仍把项目操作发送到初始 session，导致探索工具看似未生效
+
+- 日期：2026-05-03
+- 状态：open
+- 来源：架构排查 / 用户问题分析
+- 描述：`AITestPlanningPanel` 内部会根据当前选择切换 `sessionId` 状态，但渲染 `SessionProjectPanel` 时仍传入初始 `sessionIdProp`。结果是用户切换到新 planning session 后，项目创建、关联、查询仍落到旧 session；当前 session 可能没有 project，后端工具网关会拒绝 `explore_page`、`explore_flow`、`capture_page_session`，表现为 AI “不会主动调用工具”或“调用了也没探索”。
+- 复现步骤：
+  1. 打开 AI Test Planning 面板并创建或切换到另一个 session
+  2. 在项目区域创建或关联项目
+  3. 继续在当前 session 里生成 draft 或触发探索
+  4. 观察项目实际被绑定到旧 session，当前 session 仍可能显示或落入“无 project”状态，探索工具不可用
+- 影响：planning 阶段的自动页面探索、会话态采集、flow 探索都会被隐藏前置条件拦截，用户容易误以为问题来自 prompt 或 DOM 工具能力，实际是 session/project 绑定链路失真
+- 根因：
+  - `frontend/src/components/AITestPlanningPanel.tsx:183` 使用实时 `sessionId` 状态管理当前会话
+  - 但 `frontend/src/components/AITestPlanningPanel.tsx:621` 传给 `SessionProjectPanel` 的仍是静态 `sessionIdProp`
+  - `frontend/src/components/SessionProjectPanel.tsx:28`、`:42`、`:68` 的查询/创建/关联请求全部依赖这个错误的 `sessionId`
+- 处理：将 `SessionProjectPanel` 的 `sessionId` 入参改为当前状态中的 `sessionId`，并在无项目时明确阻止 draft/explore 操作并给出可见提示
+- 验证：
+  - 切换 session 后再次创建/关联项目，确认请求使用当前 session id
+  - 重新触发 planning 探索，确认后端不再返回 project-required 提示
+- 关联记录：`docs/execution-log.md` 2026-05-03（AI planning 中间层排查）
+
 ## BUG-057 | click_with_precheck 对 hidden 元素超时不触发恢复链，force click 被跳过
 
 - 日期：2026-05-03
@@ -346,5 +393,3 @@
   - `cd backend && uv run pytest tests/unit/test_ai_settings_api.py -q`
   - `cd frontend && npm run test -- src/pages/AISettingsPage.test.tsx src/services/api.test.ts`
 - 关联记录：`docs/execution-log.md` 2026-04-03 23:02
-
-
