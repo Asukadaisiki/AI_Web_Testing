@@ -227,6 +227,7 @@ export interface AIPlanningToolCall {
   tool: string;
   params: Record<string, unknown>;
   result?: unknown;
+  result_summary?: unknown;  // compressed summary for heavy tools
 }
 
 export interface ProjectSummaryInSession {
@@ -912,6 +913,7 @@ export interface ToolCallEndStreamEvent {
   type: "tool_call_end";
   tool: string;
   result?: unknown;
+  result_summary?: unknown;  // compressed summary for heavy tools
 }
 
 export interface DraftGeneratingStreamEvent {
@@ -986,6 +988,9 @@ export interface DoneEvent {
 export interface ErrorEvent {
   type: "error";
   message: string;
+  error_type?: string;
+  phase?: string;
+  traceback?: string;
 }
 
 // --- Explorer-Judge stream events ---
