@@ -1322,20 +1322,16 @@ def _extract_json_object(response_text: str) -> str:
 
 
 def _repair_json_text(text: str) -> str:
-    """Repair common AI JSON output errors before parsing."""
-    import re
-    # Strip markdown code fences (belt-and-suspenders with _extract_json_object)
+    """Pre-process AI JSON output before _extract_json_object handles fences and extraction.
+
+    NOTE: The trailing-comma regex does NOT track string boundaries. If a JSON string
+    value contains the literal substring `, }` or `, ]`, the comma will be silently
+    removed and the string corrupted. This is an accepted trade-off because LLM-generated
+    JSON in this codebase uses short keyword-like values where this is exceedingly rare.
+    """
     stripped = text.strip()
-    if stripped.startswith("```"):
-        first_nl = stripped.find("\n")
-        if first_nl != -1:
-            end_fence = stripped.rfind("```", first_nl)
-            if end_fence > first_nl:
-                stripped = stripped[first_nl + 1 : end_fence].strip()
-
-    # Remove trailing commas before } or ]
+    # Remove trailing commas before } or ] (most common LLM JSON formatting error)
     stripped = re.sub(r",\s*(\}|\])", r"\1", stripped)
-
     return stripped
 
 
