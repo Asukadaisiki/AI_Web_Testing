@@ -243,8 +243,9 @@ def preflight_locators(
                     "css_selector": m.get("css_selector"),
                     "visible": m.get("visible"),
                     "enabled": m.get("enabled"),
+                    "candidates": m.get("candidates", []),
                 }
-                for m in matches[:5]  # cap at 5 for readability
+                for m in matches[:5]
             ],
             "warnings": warnings,
         })
@@ -275,7 +276,7 @@ def apply_preflight_to_dsl(
     dsl_case: dict[str, Any],
     page_elements: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Run preflight and write confidence/warnings back into the DSL case dict.
+    """Run preflight and write confidence / warnings / candidates back into the DSL case dict.
 
     Mutates *dsl_case* in place and also returns it.
     """
@@ -288,16 +289,67 @@ def apply_preflight_to_dsl(
         idx = sr["step_index"]
         if idx < len(steps):
             steps[idx]["locator_confidence"] = sr["confidence"]
+            matched = sr.get("matched_elements", [])
+
             # Only set page_state if the matched element has one and the step doesn't
-            if not steps[idx].get("page_state"):
-                matched = sr.get("matched_elements", [])
-                if matched:
-                    page_state = matched[0].get("page_state")
-                    if page_state:
-                        steps[idx]["page_state"] = page_state
+            if not steps[idx].get("page_state") and matched:
+                page_state = matched[0].get("page_state")
+                if page_state:
+                    steps[idx]["page_state"] = page_state
+
+            # Inject pre-scored candidates from matched elements
+            if matched and not steps[idx].get("candidates"):
+                candidates = _collect_candidates_from_matches(matched, sr["target"])
+                if candidates:
+                    steps[idx]["candidates"] = candidates
 
     dsl_case["_preflight"] = {
         "locator_confidence": result["locator_confidence"],
         "warnings": result["warnings"],
     }
     return dsl_case
+
+
+def _collect_candidates_from_matches(
+    matched: list[dict[str, Any]],
+    target: str,
+) -> list[dict[str, Any]]:
+    """Collect and deduplicate pre-scored candidates from matched elements.
+
+    Each element may carry a ``candidates`` list produced by
+    :func:`score_candidates_for_element` during page exploration.
+    We flatten, deduplicate by (strategy, selector), and sort by
+    pre_score descending.
+    """
+    seen: set[tuple[str, str]] = set()
+    flattened: list[dict[str, Any]] = []
+
+    for element in matched:
+        for candidate in element.get("candidates", []):
+            strategy = candidate.get("strategy", "")
+            selector = candidate.get("selector", "") or ""
+            key = (strategy, selector)
+            if key in seen:
+                continue
+            seen.add(key)
+            flattened.append({
+                "strategy": strategy,
+                "selector": selector,
+                "semantic_value": candidate.get("semantic_value"),
+                "pre_score": candidate.get("pre_score", 0.0),
+                "pre_features": candidate.get("pre_features"),
+            })
+
+    # Deduplicate selectors that differ only in prefix (e.g. "#login" vs "css=#login")
+    deduped: list[dict[str, Any]] = []
+    dedup_seen: set[str] = set()
+    for candidate in sorted(flattened, key=lambda c: c["pre_score"], reverse=True):
+        selector = candidate["selector"]
+        normalized = selector.lstrip("#") if selector else ""
+        if normalized in dedup_seen:
+            continue
+        dedup_seen.add(normalized)
+        deduped.append(candidate)
+
+    # Ensure tag fallbacks don't crowd out high-quality selectors — cap at 20
+    return deduped[:20]

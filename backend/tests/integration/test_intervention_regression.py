@@ -258,13 +258,13 @@ def test_browser_dom_candidates_can_be_reranked_by_vlm(monkeypatch: pytest.Monke
         ),
     ]
 
-    def fake_resolve_semantic_locator(*_args, **_kwargs):
+    def fake_try_semantic_candidates(*_args, **_kwargs):
         raise LocatorResolutionError(
             "close candidates need rerank",
             trace=LocatorTrace(target="提交订单", candidates=close_candidates),
         )
 
-    monkeypatch.setattr("app.locators.fallback.resolve_semantic_locator", fake_resolve_semantic_locator)
+    monkeypatch.setattr("app.locators.fallback._try_semantic_candidates_in_order", fake_try_semantic_candidates)
     monkeypatch.setattr("app.locators.fallback._take_screenshot_base64", lambda _page: "ignored")
     monkeypatch.setattr("app.locators.fallback.rank_candidates_by_vision", lambda **_kwargs: 1)
 

@@ -264,8 +264,8 @@ def test_resolve_with_fallback_uses_viewport_screenshot_for_ai_candidate(monkeyp
         )(),
     )
     monkeypatch.setattr(
-        "app.locators.fallback.resolve_semantic_locator",
-        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
+        "app.locators.fallback.collect_semantic_candidates",
+        MagicMock(return_value=[]),
     )
 
     resolved = resolve_with_fallback(page, "登录按钮")
@@ -280,8 +280,8 @@ def test_resolve_with_fallback_logs_ai_capture_failures(monkeypatch, caplog) -> 
         screenshot_error=RuntimeError("screenshot boom"),
     )
     monkeypatch.setattr(
-        "app.locators.fallback.resolve_semantic_locator",
-        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
+        "app.locators.fallback.collect_semantic_candidates",
+        MagicMock(return_value=[]),
     )
 
     with caplog.at_level("WARNING", logger="app"):
@@ -311,8 +311,8 @@ def test_resolve_with_fallback_reuses_cached_ai_visual_selector(monkeypatch) -> 
         locator_payloads={"#login-btn": ai_payload},
     )
 
-    semantic_spy = MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮")))
-    monkeypatch.setattr("app.locators.fallback.resolve_semantic_locator", semantic_spy)
+    semantic_spy = MagicMock(return_value=[])
+    monkeypatch.setattr("app.locators.fallback.collect_semantic_candidates", semantic_spy)
     monkeypatch.setattr(
         "app.locators.fallback.locate_element_by_vision",
         lambda **_kwargs: type(
@@ -364,8 +364,8 @@ def test_resolve_with_fallback_invalidates_cached_visible_selector_when_semantic
         locator_payloads={"#login-btn": wrong_visible_payload},
     )
 
-    semantic_spy = MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="鐧诲綍鎸夐挳")))
-    monkeypatch.setattr("app.locators.fallback.resolve_semantic_locator", semantic_spy)
+    semantic_spy = MagicMock(return_value=[])
+    monkeypatch.setattr("app.locators.fallback.collect_semantic_candidates", semantic_spy)
     monkeypatch.setattr(
         "app.locators.fallback.locate_element_by_vision",
         lambda **_kwargs: type(
@@ -412,8 +412,8 @@ def test_resolve_with_fallback_invalidates_cached_ai_visual_selector_when_locato
     )
 
     monkeypatch.setattr(
-        "app.locators.fallback.resolve_semantic_locator",
-        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
+        "app.locators.fallback.collect_semantic_candidates",
+        MagicMock(return_value=[]),
     )
     monkeypatch.setattr(
         "app.locators.fallback.locate_element_by_vision",
@@ -466,8 +466,8 @@ def test_resolve_with_fallback_prioritizes_tier_zero_correction_over_ai_visual_c
     correction_page = FakePage(url="https://app.example.com/users/456", screenshot_error=RuntimeError("should not capture"))
 
     monkeypatch.setattr(
-        "app.locators.fallback.resolve_semantic_locator",
-        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="登录按钮"))),
+        "app.locators.fallback.collect_semantic_candidates",
+        MagicMock(return_value=[]),
     )
     monkeypatch.setattr(
         "app.locators.fallback.locate_element_by_vision",
@@ -499,8 +499,8 @@ def test_coordinate_click_fallback_returns_valid_coordinates(monkeypatch) -> Non
     )
 
     monkeypatch.setattr(
-        "app.locators.fallback.resolve_semantic_locator",
-        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="View Cart"))),
+        "app.locators.fallback.collect_semantic_candidates",
+        MagicMock(return_value=[]),
     )
     monkeypatch.setattr(
         "app.locators.fallback.locate_element_by_vision",
@@ -522,8 +522,8 @@ def test_coordinate_click_fallback_skipped_when_vlm_returns_none(monkeypatch) ->
     page = FakePage(url="https://app.example.com/page")
 
     monkeypatch.setattr(
-        "app.locators.fallback.resolve_semantic_locator",
-        MagicMock(side_effect=LocatorResolutionError("skip", trace=LocatorTrace(target="missing"))),
+        "app.locators.fallback.collect_semantic_candidates",
+        MagicMock(return_value=[]),
     )
     monkeypatch.setattr(
         "app.locators.fallback.locate_element_by_vision",

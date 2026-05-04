@@ -23,6 +23,9 @@ from app.locators.semantic import (
     ResolvedLocator,
     collect_semantic_candidates,
     resolve_semantic_locator,
+    _resolve_by_strategy,
+    _build_selection_reason,
+    _resolve_failure_reason,
 )
 from app.locators.url_pattern import generalize_url
 from app.schemas.executions import DOMElementSnapshot, LocatorTrace, LocatorCandidateEvidence
@@ -247,6 +250,81 @@ class InterventionNeededError(RuntimeError):
         self.vlm_failure_reason = vlm_failure_reason
 
 
+def _try_semantic_candidates_in_order(
+    page,
+    target: str,
+    *,
+    target_strategy: str | None = None,
+    prefer_input: bool = False,
+    require_visible: bool = True,
+    require_enabled: bool = False,
+) -> ResolvedLocator:
+    """Try semantic candidates in priority order, returning the first that verifies.
+
+    Unlike :func:`resolve_semantic_locator` which picks the single highest-scored
+    candidate and returns immediately, this function verifies each candidate against
+    the live page (``wait_for`` + DOM text match) before accepting it, falling
+    through to the next candidate on failure.
+    """
+    normalized_target = target.strip()
+
+    if target_strategy is not None and target_strategy != "semantic":
+        try:
+            return _resolve_by_strategy(
+                page,
+                normalized_target,
+                target_strategy,
+                prefer_input=prefer_input,
+                require_visible=require_visible,
+                require_enabled=require_enabled,
+            )
+        except LocatorResolutionError:
+            pass
+
+    entries = collect_semantic_candidates(
+        page,
+        normalized_target,
+        prefer_input=prefer_input,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+    all_candidates = [entry.candidate for entry in entries[:5]]
+
+    for entry in entries:
+        if entry.candidate.rejected_reasons:
+            continue
+        try:
+            entry.locator.wait_for(state="visible", timeout=3000)
+            snapshot = _snapshot_dom_candidate(entry.locator)
+            if snapshot is not None and _dom_snapshot_matches_target(snapshot, normalized_target):
+                return ResolvedLocator(
+                    strategy=entry.strategy,
+                    locator=entry.locator,
+                    trace=LocatorTrace(
+                        target=normalized_target,
+                        match_strategy=entry.strategy,
+                        candidates=all_candidates,
+                        selected_candidate=entry.candidate,
+                        selection_reason=_build_selection_reason(entry.candidate),
+                    ),
+                )
+        except Exception:
+            continue
+
+    raise LocatorResolutionError(
+        _resolve_failure_reason(
+            all_candidates,
+            require_visible=require_visible,
+            require_enabled=require_enabled,
+        ),
+        trace=LocatorTrace(
+            target=normalized_target,
+            candidates=all_candidates,
+            failure_reason="All semantic candidates failed verification against live page.",
+        ),
+    )
+
+
 def resolve_with_fallback(
     page,
     target: str,
@@ -284,7 +362,7 @@ def resolve_with_fallback(
         return cached_resolution
 
     try:
-        return resolve_semantic_locator(
+        return _try_semantic_candidates_in_order(
             page,
             target,
             target_strategy=target_strategy,
