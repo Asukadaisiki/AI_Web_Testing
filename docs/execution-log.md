@@ -9,6 +9,30 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-04（AI Planning 上下文压缩 + Subagent 架构）
+
+- 任务：三个关联缺陷 — ① plan_json 被 followup 轮次覆盖为 None；② explore_page/explore_flow 结果（570KB-741KB）全文注入上下文导致消息表膨胀，GET session API 响应 4.4MB，AI 上下文过长输出非 JSON；③ JSON 解析连续失败 3 次后降级体验差
+- 根因：
+  - Bug 1：`stream_planning_message()` 和 `run_planning_turn()` 中 `planning_session.plan_json = plan_dict` 无条件赋值，followup 轮次 `response.plan` 为 None 时清空已有 plan
+  - Bug 2：工具结果全文存入 `AIPlanningMessage.structured_payload_json` 并注入 ReAct 对话上下文，每轮累积 → 上下文膨胀 → AI 输出质量下降
+  - Bug 3：`_parse_llm_response()` 对尾部逗号等常见 JSON 错误无预处理，仅依赖 `_extract_json_object` 的围栏剥离
+- 执行动作：
+  - `services/ai_planning.py`：plan_json 赋值加 `if response.plan is not None:` guard，流式和非流式双路径覆盖；工具调用消息持久化改为存 `result_summary`（压缩摘要）而非完整 `result`；重工具同步存入新表 `ai_planning_tool_results`
+  - `ai/test_planning_agent.py`：新增 `_repair_json_text()`（尾部逗号修复）；新增 `_HEAVY_TOOLS` / `_ELEMENT_KEEP_ATTRS` 常量 + `_filter_elements_for_compression()` 预过滤（保留关键属性、上限 100 元素）；新增 `run_compression_subagent()`（短上下文 LLM 调用，`response_format: json_object`，4K max_tokens）；工具执行后统一调用一次压缩 → SSE `tool_call_end` 事件 + 上下文注入 + `_compressed_result` 属性储存三路复用
+  - `core/config.py`：新增 `ai_planning_subagent_enabled`（默认 true）和 `ai_planning_subagent_timeout_ms`（默认 60000ms）配置项
+  - `models/ai_planning_tool_result.py`：新表 `ai_planning_tool_results`（session_id FK，message_id nullable FK，tool_name，raw_result_json，summary_json）
+  - Alembic migration `25f18ab6cf2b`：自动生成并执行成功
+  - `frontend/src/types/api.ts`：`AIPlanningToolCall` 和 `ToolCallEndStreamEvent` 新增 `result_summary?: unknown`
+  - `frontend/src/components/AITestPlanningPanel.tsx`：工具调用消息默认折叠摘要（`<details>` 可展开查看 JSON）；思考过程 `<details open={_streaming}>` — 流式时展开、历史消息折叠，>500 字截断显示字数
+- 架构决策：
+  - 分级处理：`HEAVY_TOOLS = {explore_page, explore_flow}` → Subagent 压缩；轻工具保持内联
+  - Subagent 压缩失败 → 回退算法截断（前 2000 字符），不影响主流程
+  - Subagent 与主 ReAct 共用同一 LLM API，纯同步 httpx 调用
+- 验证：
+  - Python 模型导入 ✅、配置读取 ✅、TypeScript 编译 ✅
+  - Git push: `34c60b1..87ebe37` → origin/main
+- 后续：可选的 E2E 手动验证（启动后端/前端测试完整会话流程）；非流式路径 `run_planning_turn` 工具消息存储可同步更新（当前仅流式路径已更新，非流式路径不涉及重工具故不影响功能）
+
 ## 2026-05-04（修复 correction 提交 409 冲突 + VLM 回退链路失效）
 
 - 任务：修复两个定位器系统 bug — ① 用户提交 locator correction 时报 409 “Another active correction already exists”；② DOM 定位全部失败后 VLM 视觉定位未被启用
