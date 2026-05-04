@@ -871,10 +871,26 @@ export function AITestPlanningPanel({
                       {String((item.structured_payload as Record<string, unknown>)._phaseMessage ?? "处理中...")}
                     </Tag>
                     {((item.structured_payload as Record<string, unknown>)._thinkingContent as string) ? (
-                      <details style={{ fontSize: 12, color: "#666", background: "#fafafa", borderRadius: 6, padding: "4px 8px" }}>
-                        <summary style={{ cursor: "pointer", fontWeight: 500 }}>思考过程</summary>
-                        <div style={{ whiteSpace: "pre-wrap", marginTop: 4, maxHeight: 200, overflowY: "auto" }}>
-                          {(item.structured_payload as Record<string, unknown>)._thinkingContent as string}
+                      <details
+                        style={{ fontSize: 12, color: "#666", background: "#fafafa",
+                                 borderRadius: 6, padding: "4px 8px" }}
+                        open={Boolean((item.structured_payload as Record<string, unknown>)._streaming)}
+                      >
+                        <summary style={{ cursor: "pointer", fontWeight: 500 }}>
+                          {((item.structured_payload as Record<string, unknown>)._thinkingContent as string).length > 500
+                            ? `思考过程（${((item.structured_payload as Record<string, unknown>)._thinkingContent as string).length} 字，已折叠）`
+                            : "思考过程"}
+                        </summary>
+                        <div style={{
+                          whiteSpace: "pre-wrap",
+                          marginTop: 4,
+                          maxHeight: 200,
+                          overflowY: "auto",
+                          opacity: (item.structured_payload as Record<string, unknown>)._streaming ? 1 : 0.7,
+                        }}>
+                          {((item.structured_payload as Record<string, unknown>)._thinkingContent as string).length > 500
+                            ? ((item.structured_payload as Record<string, unknown>)._thinkingContent as string).slice(0, 500) + "..."
+                            : ((item.structured_payload as Record<string, unknown>)._thinkingContent as string)}
                         </div>
                       </details>
                     ) : null}
