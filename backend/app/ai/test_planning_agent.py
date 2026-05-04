@@ -433,25 +433,57 @@ def stream_planning_turn(
                 if new_id > 0:
                     logger.info("Updating project_id from %d to %d after create_project", project_id, new_id)
                     project_id = new_id
-            tool_calls.append(
-                AIPlanningToolCall(
-                    tool=tool_name or "unknown_tool",
-                    params=params,
-                    result=parsed_result,
-                )
+            # --- Run compression for heavy tools (once) ---
+            compressed_result = None
+            if tool_name in _HEAVY_TOOLS:
+                compressed_result = run_compression_subagent(tool_name, parsed_result, settings)
+
+            # --- SSE event ---
+            if tool_name in _HEAVY_TOOLS:
+                result_summary = compressed_result if compressed_result is not None else {
+                    "url": parsed_result.get("url") if isinstance(parsed_result, dict) else None,
+                    "element_count": parsed_result.get("element_count") if isinstance(parsed_result, dict) else None,
+                    "summary_fallback": True,
+                }
+                yield {"type": "tool_call_end", "tool": tool_name, "result_summary": result_summary}
+            else:
+                yield {"type": "tool_call_end", "tool": tool_name, "result": parsed_result}
+
+            # --- Store tool call with compressed result ---
+            tc = AIPlanningToolCall(
+                tool=tool_name or "unknown_tool",
+                params=params,
+                result=parsed_result,
             )
-            yield {"type": "tool_call_end", "tool": tool_name, "result": parsed_result}
-            result_summary = _summarize_tool_result(tool_name, parsed_result)
-            logger.info("Tool call %s completed: %s", tool_name, result_summary)
-            conversation.extend(
-                [
-                    {"role": "assistant", "content": _normalize_json_text(raw_response)},
-                    {
+            if compressed_result is not None:
+                tc._compressed_result = compressed_result  # type: ignore[attr-defined]
+            tool_calls.append(tc)
+
+            # --- Context injection ---
+            summary_for_log = _summarize_tool_result(tool_name, parsed_result)
+            logger.info("Tool call %s completed: %s", tool_name, summary_for_log)
+
+            conversation.extend([
+                {"role": "assistant", "content": _normalize_json_text(raw_response)},
+            ])
+
+            if tool_name in _HEAVY_TOOLS:
+                if compressed_result is not None:
+                    conversation.append({
                         "role": "system",
-                        "content": f"工具 {tool_name or 'unknown_tool'} 返回结果：{tool_result_text}",
-                    },
-                ]
-            )
+                        "content": f"工具 {tool_name} 返回摘要：{json.dumps(compressed_result, ensure_ascii=False)}",
+                    })
+                else:
+                    truncated = tool_result_text[:2000] + ("..." if len(tool_result_text) > 2000 else "")
+                    conversation.append({
+                        "role": "system",
+                        "content": f"工具 {tool_name} 返回结果（已截断）：{truncated}",
+                    })
+            else:
+                conversation.append({
+                    "role": "system",
+                    "content": f"工具 {tool_name} 返回结果：{tool_result_text}",
+                })
             continue
 
         if action == "generate_plan":
