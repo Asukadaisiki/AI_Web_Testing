@@ -895,6 +895,26 @@ def _has_explored_pages(tool_calls: list[AIPlanningToolCall]) -> bool:
     return any(call.tool in ("explore_page", "explore_flow") for call in tool_calls)
 
 
+# Essential attributes to keep per element for compression
+_ELEMENT_KEEP_ATTRS = {"tag", "text", "id", "name", "data-qa", "placeholder",
+                       "type", "href", "role", "aria-label", "class"}
+_HEAVY_TOOLS = {"explore_page", "explore_flow"}
+
+
+def _filter_elements_for_compression(elements: list[dict]) -> list[dict]:
+    """Trim elements to essential attributes, max 100 items."""
+    cap = 100
+    filtered: list[dict] = []
+    for el in elements[:cap]:
+        if not isinstance(el, dict):
+            continue
+        filtered.append({
+            k: v for k, v in el.items()
+            if k in _ELEMENT_KEEP_ATTRS and v is not None and v != ""
+        })
+    return filtered
+
+
 def _extract_raw_page_results(tool_calls: list[AIPlanningToolCall]) -> list[dict[str, Any]]:
     """Extract raw page-results list from the most recent explore tool call.
 
