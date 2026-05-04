@@ -200,7 +200,7 @@ def _build_locator_from_candidate(page, candidate_entry) -> object | None:
             clean_id = selector.replace("[data-testid='", "").replace("']", "")
             return page.get_by_test_id(clean_id)
         if strategy == "role":
-            return page.get_by_role("button", name=semantic_value)
+            return page.get_by_role(selector or "button", name=semantic_value)
         if strategy == "text":
             return page.get_by_text(selector, exact=False)
         if strategy == "label":
@@ -211,6 +211,29 @@ def _build_locator_from_candidate(page, candidate_entry) -> object | None:
             return page.locator(f"#{selector}" if not selector.startswith("#") else selector)
         if strategy in ("tag", "semantic"):
             return page.locator(selector) if selector else None
+        # verified selectors (live-verified during page exploration)
+        if strategy == "verified_role":
+            return page.get_by_role(selector, name=semantic_value, exact=True)
+        if strategy == "verified_role_fuzzy":
+            return page.get_by_role(selector, name=semantic_value)
+        if strategy == "verified_css":
+            return page.locator(selector)
+        if strategy == "verified_xpath":
+            return page.locator(f"xpath={selector}")
+        if strategy == "verified_placeholder":
+            return page.get_by_placeholder(selector, exact=True)
+        if strategy == "verified_placeholder_fuzzy":
+            return page.get_by_placeholder(selector)
+        if strategy == "verified_label":
+            return page.get_by_label(selector, exact=True)
+        if strategy == "verified_label_fuzzy":
+            return page.get_by_label(selector)
+        if strategy == "verified_text":
+            return page.get_by_text(selector, exact=True)
+        if strategy == "verified_data-testid":
+            return page.get_by_test_id(selector)
+        if strategy == "verified_element_id":
+            return page.locator(f"#{selector}" if not selector.startswith("#") else selector)
         # vlm / fallback
         return page.locator(selector) if selector else None
     except Exception:

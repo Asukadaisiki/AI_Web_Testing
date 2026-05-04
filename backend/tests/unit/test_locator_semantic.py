@@ -55,7 +55,7 @@ class FakePage:
     def get_by_role(self, role: str, name: str, exact: bool = True):
         return FakeLocatorCollection(self.mapping.get(f"role:{role}:{name}:{exact}", []))
 
-    def get_by_text(self, target: str, exact: bool = True):
+    def get_by_text(self, target: str, exact: bool = False):
         return FakeLocatorCollection(self.mapping.get(f"text:{target}:{exact}", []))
 
     def get_by_test_id(self, target: str):
@@ -374,3 +374,49 @@ class TestChainedSelector:
         result = resolve_semantic_locator(page, ".productinfo text='View Product'")
         assert result.trace.selected_candidate is not None
         assert result.trace.selected_candidate.score >= 110
+
+
+class TestLinkRoleStrategy:
+    """Tests for link_role and menuitem_role strategies (Phase 1: ARIA role expansion)."""
+
+    def test_link_role_preferred_over_text(self):
+        """link_role (score 85) should outrank text_fuzzy (score 50) for <a> tags."""
+        page = FakePage(
+            {
+                "role:link:Login:True": [
+                    _candidate(preview_text="Signup / Login", visible=True, enabled=True, role="link")
+                ],
+                "text:Login:False": [
+                    _candidate(preview_text="Signup / Login", visible=True, enabled=True, role="link")
+                ],
+            }
+        )
+        resolved = resolve_semantic_locator(page, "Login", require_visible=True, require_enabled=True)
+        assert resolved.strategy == "link_role"
+
+    def test_menuitem_role_matches_target(self):
+        """menuitem_role exact match should be selected when available."""
+        page = FakePage(
+            {
+                "role:menuitem:Profile:True": [
+                    _candidate(preview_text="Profile", visible=True, enabled=True, role="menuitem")
+                ],
+                "text:Profile:True": [
+                    _candidate(preview_text="Profile", visible=True, enabled=True, role="menuitem")
+                ],
+            }
+        )
+        resolved = resolve_semantic_locator(page, "Profile", require_visible=True, require_enabled=True)
+        assert resolved.strategy == "menuitem_role"
+
+    def test_role_strategies_skip_when_no_match(self):
+        """When link_role/menuitem_role have 0 matches, should fall to text_fuzzy."""
+        page = FakePage(
+            {
+                "text:Logout:False": [
+                    _candidate(preview_text="Logout", visible=True, enabled=True, role="link")
+                ],
+            }
+        )
+        resolved = resolve_semantic_locator(page, "Logout", require_visible=True, require_enabled=True)
+        assert resolved.strategy == "text_fuzzy"

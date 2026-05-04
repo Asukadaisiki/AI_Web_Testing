@@ -546,3 +546,71 @@ def test_format_elements_for_prompt_marks_dynamic_elements() -> None:
     assert "[text='Login']" in result
     assert "[text='View Cart']" in result
     assert "[dynamic]" in result
+
+
+# ---------------------------------------------------------------------------
+# Accessibility tree tier (Tier 1.5)
+# ---------------------------------------------------------------------------
+
+
+class TestAccessibilityTreeFallback:
+    """Tests for the accessibility tree locator tier in resolve_with_fallback."""
+
+    def test_accessibility_tier_resolves_before_vlm(self, monkeypatch) -> None:
+        """When semantic candidates fail, accessibility tree should be tried before VLM."""
+        from app.locators.semantic import ResolvedLocator, LocatorTrace as SemanticLocatorTrace
+
+        page = FakePage(url="https://automationexercise.com/")
+        monkeypatch.setattr(
+            "app.locators.fallback.collect_semantic_candidates",
+            MagicMock(return_value=[]),
+        )
+        vlm_called = False
+
+        def _fake_vlm(*_args, **_kwargs):
+            nonlocal vlm_called
+            vlm_called = True
+            return None
+
+        monkeypatch.setattr(
+            "app.locators.fallback.locate_element_by_vision",
+            _fake_vlm,
+        )
+
+        a11y_resolved = ResolvedLocator(
+            strategy="a11y_role",
+            locator=page.locator("dummy"),
+            trace=SemanticLocatorTrace(
+                target="Login",
+                match_strategy="a11y_role",
+                selection_reason="Accessibility tree matched role=link name='Signup / Login' (exact=False).",
+            ),
+        )
+        monkeypatch.setattr(
+            "app.locators.fallback._try_accessibility_locate",
+            MagicMock(return_value=a11y_resolved),
+        )
+
+        result = resolve_with_fallback(page, "Login")
+        assert result.strategy == "a11y_role"
+        assert not vlm_called
+
+    def test_accessibility_tier_falls_through_to_vlm(self, monkeypatch) -> None:
+        """When accessibility tree returns None, VLM fallback should still work."""
+        page = FakePage(url="https://automationexercise.com/")
+        monkeypatch.setattr(
+            "app.locators.fallback.collect_semantic_candidates",
+            MagicMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            "app.locators.fallback._try_accessibility_locate",
+            MagicMock(return_value=None),
+        )
+        # VLM also returns None → InterventionNeededError
+        monkeypatch.setattr(
+            "app.locators.fallback.locate_element_by_vision",
+            MagicMock(return_value=None),
+        )
+
+        with pytest.raises(InterventionNeededError):
+            resolve_with_fallback(page, "Login")

@@ -229,8 +229,12 @@ def preflight_locators(
             warnings = [f"target \"{target}\" 在已采集的 {len(page_elements)} 个元素中未找到匹配"]
         elif match_count == 1:
             best = matches[0]
+            verified = best.get("verified_selectors") or []
             stable = _compute_element_stability_static(best)
-            if stable >= 0.70 and best.get("visible") and best.get("enabled"):
+            if len(verified) > 0 and best.get("visible") and best.get("enabled"):
+                confidence = "high"
+                warnings = []
+            elif stable >= 0.70 and best.get("visible") and best.get("enabled"):
                 confidence = "high"
                 warnings = []
             elif best.get("visible") and best.get("enabled"):
@@ -272,6 +276,7 @@ def preflight_locators(
                     "visible": m.get("visible"),
                     "enabled": m.get("enabled"),
                     "candidates": m.get("candidates", []),
+                    "verified_selectors": m.get("verified_selectors", []),
                 }
                 for m in matches[:5]
             ],
@@ -344,14 +349,30 @@ def _collect_candidates_from_matches(
 ) -> list[dict[str, Any]]:
     """Collect and deduplicate pre-scored candidates from matched elements.
 
-    Each element may carry a ``candidates`` list produced by
-    :func:`score_candidates_for_element` during page exploration.
-    We flatten, deduplicate by (strategy, selector), and sort by
-    pre_score descending.
+    Verified selectors (live-verified during page exploration) are placed
+    first with pre_score=1.0, followed by statically-scored candidates.
     """
     seen: set[tuple[str, str]] = set()
     flattened: list[dict[str, Any]] = []
 
+    # --- Phase 1: verified selectors from matched elements (highest priority) ---
+    for element in matched:
+        for vs in element.get("verified_selectors", []):
+            strategy = vs.get("strategy", "")
+            selector = vs.get("selector", "") or vs.get("role", "") or ""
+            key = (f"verified_{strategy}", selector)
+            if key in seen:
+                continue
+            seen.add(key)
+            flattened.append({
+                "strategy": f"verified_{strategy}",
+                "selector": selector,
+                "semantic_value": vs.get("name") or vs.get("selector") or "",
+                "pre_score": 1.0,
+                "pre_features": {"verified": True, "source_strategy": strategy},
+            })
+
+    # --- Phase 2: static pre-scored candidates ---
     for element in matched:
         for candidate in element.get("candidates", []):
             strategy = candidate.get("strategy", "")

@@ -211,6 +211,10 @@ def _format_element_rich(element: dict[str, Any], stability: float) -> str:
     if enabled is False:
         extras.append("disabled")
 
+    verified = element.get("verified_selectors")
+    if verified:
+        v_strategies = [v["strategy"] for v in verified[:5]]
+        extras.append(f"verified={len(verified)}({','.join(v_strategies)})")
     extras.append(f"stable={stability:.2f}")
 
     if element.get("candidates"):
@@ -364,39 +368,167 @@ def collect_interactable_elements(
             except Exception as exc:
                 logger.warning("Page load issue for %s: %s", url, exc)
             payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
+
+            # --- 构建元素列表 ---
+            if not isinstance(payload, list):
+                payload = []
+            result: list[dict[str, Any]] = []
+            for elem in payload:
+                if not isinstance(elem, dict):
+                    continue
+                element = {
+                    "tag": elem.get("tag", "unknown"),
+                    "id": _extract_element_id(elem),
+                    "text": elem.get("text"),
+                    "role": elem.get("role"),
+                    "aria_label": elem.get("aria_label"),
+                    "placeholder": elem.get("placeholder"),
+                    "href": elem.get("href"),
+                    "data_testid": elem.get("data_testid"),
+                    "css_selector": elem.get("css_selector"),
+                    "xpath": elem.get("xpath"),
+                    "rect": elem.get("rect"),
+                    "visible": elem.get("visible", False),
+                    "enabled": elem.get("enabled", False),
+                }
+                element["candidates"] = score_candidates_for_element(element)
+                tag = element.get("tag", "")
+                element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
+                result.append(element)
+
+            # --- Live-element verification: 当场验证选择器 (page 还活着) ---
+            result = _verify_locators_on_page(page, result)
+
             context.close()
             browser.close()
     except Exception as exc:
         logger.warning("collect_interactable_elements failed for url=%s: %s", url, exc)
         return []
 
-    if not isinstance(payload, list):
-        return []
-
-    result: list[dict[str, Any]] = []
-    for elem in payload:
-        if not isinstance(elem, dict):
-            continue
-        element = {
-            "tag": elem.get("tag", "unknown"),
-            "id": _extract_element_id(elem),
-            "text": elem.get("text"),
-            "role": elem.get("role"),
-            "aria_label": elem.get("aria_label"),
-            "placeholder": elem.get("placeholder"),
-            "href": elem.get("href"),
-            "data_testid": elem.get("data_testid"),
-            "css_selector": elem.get("css_selector"),
-            "xpath": elem.get("xpath"),
-            "rect": elem.get("rect"),
-            "visible": elem.get("visible", False),
-            "enabled": elem.get("enabled", False),
-        }
-        element["candidates"] = score_candidates_for_element(element)
-        tag = element.get("tag", "")
-        element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
-        result.append(element)
     return result
+
+
+def _locator_matches_element(page, locator, elem: dict[str, Any]) -> bool:
+    """验证 locator.first 指向的元素与 elem 是同一个（比较 tag + text）。"""
+    try:
+        actual = locator.first.evaluate(
+            """el => ({
+                tag: el.tagName.toLowerCase(),
+                text: (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80),
+            })"""
+        )
+        expected_tag = (elem.get("tag") or "").lower()
+        expected_text = ((elem.get("text") or "").replace("\n", " ").strip())[:80]
+        return actual["tag"] == expected_tag and actual["text"] == expected_text
+    except Exception:
+        return False
+
+
+def _verify_locators_on_page(page, elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """在同一个 page 实例上为每个可见元素验证候选定位器。
+
+    对每个元素的每种候选策略，构建真实的 Playwright locator 并验证:
+    1. locator.count() == 1（无歧义）
+    2. 解析到的元素与目标元素是同一个（指纹匹配）
+
+    通过验证的策略存入 ``verified_selectors``，供 runner 优先使用。
+    """
+    _IMPLICIT_ROLE: dict[str, str] = {
+        "a": "link", "button": "button", "input": "textbox",
+        "select": "combobox", "textarea": "textbox", "img": "img",
+    }
+
+    for elem in elements:
+        if not elem.get("visible") or not elem.get("enabled"):
+            elem["verified_selectors"] = []
+            continue
+
+        tag = elem.get("tag", "")
+        text = (elem.get("text") or "").strip()
+        placeholder = (elem.get("placeholder") or "").strip()
+        aria_label = (elem.get("aria_label") or "").strip()
+        data_testid = (elem.get("data_testid") or "").strip()
+        element_id = (elem.get("id") or "").strip()
+        css = (elem.get("css_selector") or "").strip()
+        effective_role = elem.get("role") or _IMPLICIT_ROLE.get(tag, "")
+        name_attr = (elem.get("name") or "").strip()
+
+        fingerprint = None  # no longer needed
+        if not elem.get("text") and not elem.get("placeholder") and not elem.get("aria_label"):
+            continue
+
+        verified: list[dict[str, Any]] = []
+
+        # 按论文的优先级构建候选并逐个验证
+        def _try_verify(strategy: str, loc_expr: dict[str, Any], factory) -> None:
+            try:
+                loc = factory()
+                if loc.count() == 1 and _locator_matches_element(page, loc, elem):
+                    verified.append({"strategy": strategy, **loc_expr})
+            except Exception:
+                pass
+
+        # data-testid (最高优先级)
+        if data_testid:
+            _try_verify("data-testid", {"selector": data_testid},
+                        lambda: page.get_by_test_id(data_testid))
+
+        # role 精确匹配
+        if effective_role and text:
+            _try_verify("role", {"role": effective_role, "name": text},
+                        lambda: page.get_by_role(effective_role, name=text, exact=True))
+
+        # role 模糊匹配
+        if effective_role:
+            for candidate_text in (text, placeholder, aria_label):
+                if candidate_text:
+                    _try_verify("role_fuzzy", {"role": effective_role, "name": candidate_text},
+                                lambda t=candidate_text: page.get_by_role(effective_role, name=t))
+
+        # CSS selector (来自 buildCssSelector)
+        if css:
+            _try_verify("css", {"selector": css},
+                        lambda: page.locator(css))
+
+        # placeholder
+        if placeholder:
+            _try_verify("placeholder", {"selector": placeholder},
+                        lambda: page.get_by_placeholder(placeholder, exact=True))
+            _try_verify("placeholder_fuzzy", {"selector": placeholder},
+                        lambda: page.get_by_placeholder(placeholder))
+
+        # label
+        effective_label = aria_label or text
+        if effective_label:
+            _try_verify("label", {"selector": effective_label},
+                        lambda: page.get_by_label(effective_label, exact=True))
+            _try_verify("label_fuzzy", {"selector": effective_label},
+                        lambda: page.get_by_label(effective_label))
+
+        # text 精确 (只有非链接/按钮才用，链接/按钮已由 role 覆盖)
+        if text and effective_role not in ("link", "button"):
+            _try_verify("text", {"selector": text},
+                        lambda: page.get_by_text(text, exact=True))
+
+        # element id
+        if element_id:
+            _try_verify("element_id", {"selector": element_id},
+                        lambda: page.locator(f"#{element_id}"))
+
+        # name 属性
+        if name_attr and tag:
+            _try_verify("name", {"selector": f"{tag}[name='{name_attr}']"},
+                        lambda: page.locator(f"{tag}[name='{name_attr}']"))
+
+        # XPath
+        xpath = elem.get("xpath") or ""
+        if xpath:
+            _try_verify("xpath", {"selector": xpath},
+                        lambda: page.locator(f"xpath={xpath}"))
+
+        elem["verified_selectors"] = verified
+
+    return elements
 
 
 def capture_browser_session(

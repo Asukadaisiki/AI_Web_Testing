@@ -9,6 +9,33 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-04（可访问树定位器 + 发现时验证 — arxiv 2603.20358 论文方案落地）
+
+- 任务：`automationexercise.com` 首页登录按钮找不到（`<a>` 标签 role=”link” 但系统只有 `button_role` 策略），定位超时；参考论文 “Beyond LLM-based test automation: A Zero-Cost Self-Healing Approach Using DOM Accessibility Tree Extraction” 全面改造定位器系统
+- 根因：
+  - `_build_candidate_builders()` 仅硬编码 `button_role`，`<a>` 标签（role=”link”）无法匹配；实测 `get_by_role(“link”, name=”Login”)` 返回 1 匹配但系统未使用
+  - `_build_locator_from_candidate()` 硬编码 `get_by_role(“button”, ...)` — 即使 pre_scorer 生成了 role 候选也强制用 button
+  - `pre_scorer.py` role 候选只读显式 `role` 属性（`[role='...']`），不推断隐式角色
+  - 全部定位器只在执行时验证，探索阶段仅做静态打分，不做实际解析验证
+- 执行动作：
+  - **Phase 1 — 补全 ARIA 角色策略**：`semantic.py` `_build_candidate_builders()` 新增 `link_role`(85)、`menuitem_role`(85) 及 fuzzy 变体(55)；调整分数层次使 role_fuzzy(55) > text_fuzzy(50)，遵循论文优先级的可访问角色 > 文本原则
+  - **Phase 2 — 修复 runner + pre_scorer**：`playwright_runner.py` `_build_locator_from_candidate()` 不再硬编码 `”button”`，改用 selector 字段中的实际 role；`pre_scorer.py` `_make_candidate()` 新增 `semantic_value` 参数，`score_candidates_for_element()` 对 `<a>`/`<button>`/`<input>` 自动推断隐式 ARIA 角色
+  - **Phase 3 — 可访问树 Tier 1.5**：新建 `locators/accessibility.py` — `snapshot_accessibility_tree()`（CDP，支持 15 种交互角色）、`flatten_interactive_nodes()`、`find_nodes_by_name()`、`try_accessibility_locate()`；在 `fallback.py` `resolve_with_fallback()` 中 Tier 1（语义候选）失败后、Tier 2（VLM）前插入 Tier 1.5（零成本可访问树查找）
+  - **Phase 3.5 — 发现时验证**：`page_explorer.py` 新增 `_verify_locators_on_page()` — 在 Playwright page 还活着时为每个可见元素当场验证候选定位器（`count()==1` + `_locator_matches_element()` 比对 tag+text），通过验证的存入 `verified_selectors`；`locator_preflight.py` `_collect_candidates_from_matches()` 注入 verified_* 候选（pre_score=1.0，优先于静态评分）；`playwright_runner.py` 新增 10 种 `verified_*` 策略的 locator 构建；`_format_element_rich()` 显示 verified=N 标记供 LLM 参考
+  - **Phase 4 — 测试**：新建 `test_locator_accessibility.py`（16 个测试）+ 补充 semantic/falback 测试（5 个）；全量 505/506 通过
+- 架构决策：
+  - 可访问树作为补充数据源而非替代 — `querySelectorAll` 提供 DOM 属性（text/id/class/href/css_selector/data-testid），可访问树提供 ARIA role/name 和零成本 VLM 替代
+  - 发现时验证的核心价值：探索时既有元素引用又有 Playwright 实例，可以当场回答”这个选择器对不对”而不是靠静态打分猜测
+  - 验证结果通过 `verified_*` 候选注入 runner，执行时优先使用（pre_score=1.0）
+- 验证：
+  - 真实网站 automationexercise.com/login：37 个元素中 29 个有已验证选择器（共 86 个）
+  - Password 输入框：4 verified + 2 scored → confidence=high
+  - Login 按钮：`role`/`role_fuzzy`/`css`/`xpath` 全部通过验证
+  - Homepage `target=”Login”` → `link_role_fuzzy`(score=73) 优先于 `text_fuzzy`(score=68) ✅
+  - 登录流程完整通过：Email fill → Password fill → Login click → Logged in
+  - Python 模型导入 ✅、TypeScript 编译 ✅、505 单元测试通过
+- 后续：可访问树的埋点数据（bounding box）可进一步用于坐标定位；可访问树作为页面探索主数据源的性能对比（当前 querySelectorAll 仍为采集主力）
+
 ## 2026-05-04（AI Planning 上下文压缩 + Subagent 架构）
 
 - 任务：三个关联缺陷 — ① plan_json 被 followup 轮次覆盖为 None；② explore_page/explore_flow 结果（570KB-741KB）全文注入上下文导致消息表膨胀，GET session API 响应 4.4MB，AI 上下文过长输出非 JSON；③ JSON 解析连续失败 3 次后降级体验差

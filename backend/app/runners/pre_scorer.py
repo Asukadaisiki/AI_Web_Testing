@@ -215,6 +215,8 @@ def _make_candidate(
     stability: float,
     semantic: float,
     element: dict[str, Any],
+    *,
+    semantic_value: str | None = None,
 ) -> dict[str, Any]:
     """Build a candidate dict with pre_features and computed pre_score."""
     fragility = detect_fragility(selector, element)
@@ -242,7 +244,7 @@ def _make_candidate(
         context_match=stability,  # context_match tracks stability as baseline
         fragility_flags=fragility,
     )
-    return {
+    result: dict[str, Any] = {
         "strategy": strategy,
         "selector": selector,
         "pre_score": compute_pre_score(features),
@@ -254,6 +256,9 @@ def _make_candidate(
             "fragility_flags": features.fragility_flags,
         },
     }
+    if semantic_value is not None:
+        result["semantic_value"] = semantic_value
+    return result
 
 
 def score_candidates_for_element(
@@ -289,15 +294,28 @@ def score_candidates_for_element(
             )
         )
 
-    # --- role ---
-    if role:
+    # --- role (explicit ARIA role or inferred from tag) ---
+    _IMPLICIT_ROLE_MAP: dict[str, str] = {
+        "a": "link",
+        "button": "button",
+        "input": "textbox",
+        "select": "combobox",
+        "textarea": "textbox",
+        "nav": "navigation",
+        "img": "img",
+        "table": "table",
+    }
+    effective_role = role or _IMPLICIT_ROLE_MAP.get(tag, "")
+    semantic_value = (text or name or "").strip()
+    if effective_role:
         candidates.append(
             _make_candidate(
                 "role",
-                f"[role='{role}']",
+                effective_role,
                 DOM_FEATURE_PRIORS["role"],
                 _compute_semantic_match(element, intent),
                 element,
+                semantic_value=semantic_value if semantic_value else None,
             )
         )
 
