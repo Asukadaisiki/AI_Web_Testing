@@ -915,6 +915,119 @@ def _filter_elements_for_compression(elements: list[dict]) -> list[dict]:
     return filtered
 
 
+_SUBAGENT_SYSTEM_PROMPT = """\
+You are a DOM result compressor. Given web page exploration results, extract only testing-relevant information.
+
+## Input format
+- explore_page: {"url": "...", "elements": [...], "element_count": N}
+- explore_flow: {"pages": [{"url": "...", "elements": [...], "element_count": N}, ...]}
+
+## Output format (valid JSON only)
+
+For explore_page:
+{
+  "page_title": "extracted from page content",
+  "url": "...",
+  "navigation": ["link text 1", "link text 2"],
+  "element_counts": {"buttons": N, "inputs": N, "links": N, "images": N},
+  "key_elements": [
+    {"role": "button|link|input|select", "text": "...", "selector": "..."}
+  ],
+  "forms": [
+    {"purpose": "login|search|etc", "fields": [{"label": "...", "selector": "..."}]}
+  ]
+}
+
+For explore_flow:
+{
+  "flow_title": "...",
+  "steps": [{"url": "...", "page_title": "...", "key_action": "..."}],
+  "critical_selectors": ["selector1", "selector2"]
+}
+
+Rules:
+- Max 30 key_elements per page
+- Only include elements with stable selectors (id, data-qa, name)
+- Selector format: use id > data-qa > name > unique class
+- Keep output under 3KB
+- Return ONLY valid JSON, no markdown fences
+"""
+
+
+def run_compression_subagent(
+    tool_name: str,
+    parsed_result: dict,
+    settings: Any,
+) -> dict | None:
+    """Run a short-context LLM call to compress raw tool results into summaries."""
+    if not getattr(settings, "ai_planning_subagent_enabled", True):
+        return None
+
+    # Build compact input
+    if tool_name == "explore_page":
+        raw_elements = parsed_result.get("elements", [])
+        filtered_elements = _filter_elements_for_compression(raw_elements)
+        input_payload = {
+            "url": parsed_result.get("url", ""),
+            "element_count": len(raw_elements),
+            "elements": filtered_elements,
+        }
+    elif tool_name == "explore_flow":
+        pages = parsed_result.get("pages", [])
+        compact_pages = []
+        for p in pages[:5]:  # max 5 pages in flow
+            if isinstance(p, dict):
+                raw_elements = p.get("elements", [])
+                compact_pages.append({
+                    "url": p.get("url", ""),
+                    "element_count": len(raw_elements),
+                    "elements": _filter_elements_for_compression(raw_elements),
+                })
+        input_payload = {"pages": compact_pages}
+    else:
+        return None
+
+    input_json = json.dumps(input_payload, ensure_ascii=False)
+    logger.info("Compression subagent start: tool=%s, input_len=%d", tool_name, len(input_json))
+
+    messages = [
+        {"role": "system", "content": _SUBAGENT_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Compress this {tool_name} result:\n{input_json}"},
+    ]
+
+    api_key = settings.ai_planning_api_key or ""
+    model = settings.ai_planning_model or ""
+    base_url = settings.ai_planning_base_url
+    timeout = max(5.0, getattr(settings, "ai_planning_subagent_timeout_ms", 60000) / 1000)
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "response_format": {"type": "json_object"},
+        "max_tokens": 4096,
+    }
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                endpoint,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            content = body["choices"][0]["message"]["content"]
+            return json.loads(content)
+    except Exception as exc:
+        logger.warning("Compression subagent failed: %s, falling back to algorithmic truncation", exc)
+        return None
+
+
 def _extract_raw_page_results(tool_calls: list[AIPlanningToolCall]) -> list[dict[str, Any]]:
     """Extract raw page-results list from the most recent explore tool call.
 
