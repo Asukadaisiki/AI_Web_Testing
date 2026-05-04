@@ -88,6 +88,9 @@ class DOMElementSnapshot(DSLModel):
     css_selector: str | None = None
     xpath: str | None = None
     href: str | None = None
+    id: str | None = None
+    name: str | None = None
+    class_name: str | None = None
     rect: dict[Literal["x", "y", "width", "height"], float] | None = None
     visible: bool = False
     enabled: bool = False

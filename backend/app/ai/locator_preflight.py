@@ -47,7 +47,9 @@ def _classify_target(target: str) -> tuple[str, str]:
     if t.startswith("data-testid="):
         return "data-testid", t[12:]
     tag_name = re.split(r"[\.\#\[\s\>:,~\+]", t, maxsplit=1)[0]
-    if tag_name in _KNOWN_TAGS and _COMPOUND_CSS_RE.match(t):
+    if tag_name.lower() in _KNOWN_TAGS:
+        return "css_tag", t
+    if _COMPOUND_CSS_RE.match(t):
         return "css_tag", t
     return "semantic", t
 
@@ -83,13 +85,35 @@ def _jaccard_similarity(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(left | right)
 
 
+def _css_selector_matches(target_css: str, element_css: str, element_id: str) -> bool:
+    """Match a CSS selector target against element selectors without substring false positives.
+
+    ``#login`` must match exactly ``#login``, not ``#login-button``.
+    """
+    if not target_css:
+        return False
+    t = target_css.strip()
+    # Exact match
+    if element_css == t:
+        return True
+    # ID selector: must be exact word match
+    if t.startswith("#") and element_id and t[1:] == element_id:
+        return True
+    # Class selector: check if class appears in element's CSS selector as a word
+    if t.startswith(".") and element_css:
+        class_name = t[1:]
+        return any(cls_part == class_name for cls_part in re.findall(r"\.([\w-]+)", element_css))
+    # Compound selector: exact match on css_selector
+    return element_css == t
+
+
 def _text_matches_target(element: dict[str, Any], target: str) -> bool:
     """Check whether *element* matches a semantic *target*."""
     norm_target = _normalize_text(target)
     target_tokens = _tokenize(target)
     target_cjk = _cjk_char_tokens(target)
 
-    for field in ("text", "aria_label", "placeholder", "data_testid"):
+    for field in ("text", "aria_label", "placeholder", "data_testid", "name"):
         val = element.get(field)
         if not val:
             continue
@@ -175,7 +199,11 @@ def preflight_locators(
                 css = el.get("css_selector", "") or ""
                 xp = el.get("xpath", "") or ""
                 eid = el.get("id", "") or ""
-                if parsed_value in css or parsed_value in xp or parsed_value == eid:
+                if strategy == "css_tag" and el.get("tag", "") == parsed_value:
+                    matches.append(el)
+                elif strategy == "css" and _css_selector_matches(parsed_value, css, eid):
+                    matches.append(el)
+                elif strategy == "xpath" and parsed_value in xp:
                     matches.append(el)
         elif strategy == "data-testid":
             for el in page_elements:

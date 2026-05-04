@@ -203,6 +203,9 @@ EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT = (
         const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
         const enabled = !(element.disabled) && element.getAttribute("aria-disabled") !== "true";
         const text = (element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160);
+        const nameAttr = element.getAttribute("name");
+        const classAttr = element.className || null;
+        const idAttr = element.id || null;
         return {
           tag: element.tagName.toLowerCase(),
           text: text || null,
@@ -211,6 +214,9 @@ EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT = (
           placeholder: element.getAttribute("placeholder"),
           data_testid: element.getAttribute("data-testid"),
           href: element.tagName.toLowerCase() === "a" ? (element.getAttribute("href") || null) : null,
+          name: nameAttr || null,
+          class_name: classAttr || null,
+          id: idAttr || null,
           css_selector: buildCssSelector(element),
           xpath: buildXPath(element),
           rect: {
@@ -669,6 +675,7 @@ def _dom_snapshot_matches_target(snapshot: DOMElementSnapshot, target: str) -> b
         snapshot.aria_label,
         snapshot.placeholder,
         snapshot.data_testid,
+        snapshot.name,
     ]
     normalized_target = _normalize_text(target)
     if normalized_target and any(_normalize_text(value) == normalized_target for value in semantic_fields if value):

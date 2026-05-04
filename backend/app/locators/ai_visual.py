@@ -90,7 +90,15 @@ class AIVisionCandidateBox:
     bbox: tuple[int, int, int, int]
 
 
-VLM_FALLBACK_MODELS = ["glm-4.6v-flash", "glm-4.6v", "glm-4.6v-flashx"]
+VLM_FALLBACK_MODELS_HARDCODED = ["glm-4.6v-flash", "glm-4.6v", "glm-4.6v-flashx"]
+
+
+def _get_vlm_fallback_models() -> list[str]:
+    try:
+        from app.core.config import get_settings
+        return get_settings().vlm_fallback_models or VLM_FALLBACK_MODELS_HARDCODED
+    except Exception:
+        return list(VLM_FALLBACK_MODELS_HARDCODED)
 
 
 def _is_rate_limited_error(exc: Exception) -> bool:
@@ -119,7 +127,8 @@ def locate_element_by_vision(
         return None
     if not settings.vlm_api_key:
         with _STATE_LOCK:
-            RUNTIME_STATE.last_failure_reason = "VLM API 凭证未配置（缺少 vlm_api_key）"
+            RUNTIME_STATE.last_failure_reason = "VLM API 凭证未配置（缺少 vlm_api_key 环境变量），所有 VLM 视觉定位功能不可用"
+        logger.error("VLM locate skipped: vlm_api_key is not configured. Set VLM_API_KEY in .env to enable visual locating.")
         return None
     if not _can_attempt_request(track_stats=True):
         with _STATE_LOCK:
@@ -137,7 +146,7 @@ def locate_element_by_vision(
     _record_locate_request()
     started_at = monotonic()
 
-    models_to_try = list(VLM_FALLBACK_MODELS)
+    models_to_try = list(_get_vlm_fallback_models())
     failed_models: list[str] = []
 
     for model_name in models_to_try:

@@ -8,14 +8,22 @@ export interface SSEClientOptions {
   body: Record<string, unknown>;
   onEvent: (eventType: string, data: unknown) => void;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
+const DEFAULT_SSE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
 export async function callSSE(opts: SSEClientOptions): Promise<void> {
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_SSE_TIMEOUT_MS);
+  const combinedSignal = opts.signal
+    ? AbortSignal.any([opts.signal, timeout])
+    : timeout;
+
   const response = await fetch(opts.url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(opts.body),
-    signal: opts.signal,
+    signal: combinedSignal,
   });
 
   if (!response.ok) {

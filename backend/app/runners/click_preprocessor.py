@@ -19,7 +19,10 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 _INTERCEPT_PATTERN = re.compile(r"intercepts pointer events", re.IGNORECASE)
-_HIDDEN_ELEMENT_PATTERN = re.compile(r"resolved to hidden", re.IGNORECASE)
+_HIDDEN_ELEMENT_PATTERN = re.compile(
+    r"resolved to hidden|is not visible|not visible|empty bounding box|zero bounding box",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # Diagnosis script — runs in the browser to classify the blocking element
