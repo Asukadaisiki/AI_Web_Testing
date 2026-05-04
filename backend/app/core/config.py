@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 import logging
 import os
@@ -44,6 +44,12 @@ def _get_int(value: str | None, default: int) -> int:
         return default
 
 
+def _parse_comma_list(value: str | None) -> list[str]:
+    if not value or not value.strip():
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "AI Web Testing Backend"
@@ -75,6 +81,7 @@ class Settings:
     vlm_base_url: str = "https://api.openai.com/v1"
     vlm_model: str | None = None
     vlm_model_family: str = "gpt-4o"
+    vlm_fallback_models: list[str] = field(default_factory=lambda: ["glm-4.6v-flash", "glm-4.6v", "glm-4.6v-flashx"])
     enable_ai_planning: bool = False
     ai_planning_model: str | None = None
     ai_planning_base_url: str = "https://api.openai.com/v1"
@@ -88,6 +95,8 @@ class Settings:
     enable_vlm_page_annotation: bool = True
     explore_interactive_max_clicks: int = 5
     explore_max_elements: int = 3000
+    ai_planning_subagent_enabled: bool = True
+    ai_planning_subagent_timeout_ms: int = 60000
 
 
 @lru_cache
@@ -124,6 +133,7 @@ def get_settings() -> Settings:
         vlm_base_url=os.getenv("VLM_BASE_URL", "https://api.openai.com/v1"),
         vlm_model=os.getenv("VLM_MODEL") or None,
         vlm_model_family=os.getenv("VLM_MODEL_FAMILY", "gpt-4o"),
+        vlm_fallback_models=_parse_comma_list(os.getenv("VLM_FALLBACK_MODELS")) or ["glm-4.6v-flash", "glm-4.6v", "glm-4.6v-flashx"],
         enable_ai_planning=_get_bool(os.getenv("ENABLE_AI_PLANNING"), default=False),
         ai_planning_model=os.getenv("AI_PLANNING_MODEL") or None,
         ai_planning_base_url=os.getenv("AI_PLANNING_BASE_URL", "https://api.openai.com/v1"),
@@ -137,4 +147,6 @@ def get_settings() -> Settings:
         enable_vlm_page_annotation=_get_bool(os.getenv("ENABLE_VLM_PAGE_ANNOTATION"), default=True),
         explore_interactive_max_clicks=max(1, _get_int(os.getenv("EXPLORE_INTERACTIVE_MAX_CLICKS"), default=5)),
         explore_max_elements=max(50, _get_int(os.getenv("EXPLORE_MAX_ELEMENTS"), default=300)),
+        ai_planning_subagent_enabled=_get_bool(os.getenv("AI_PLANNING_SUBAGENT_ENABLED"), default=True),
+        ai_planning_subagent_timeout_ms=max(5000, _get_int(os.getenv("AI_PLANNING_SUBAGENT_TIMEOUT_MS"), default=60000)),
     )
