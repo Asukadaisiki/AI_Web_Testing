@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn, stream_planning_turn
 from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, Project, SessionProject, TestCase
+from app.models.ai_planning_tool_result import AIPlanningToolResult
 from app.schemas.ai_planning import (
     AIPlanningDraft as AIPlanningDraftSchema,
     AIPlanningMessage as AIPlanningMessageSchema,
@@ -136,11 +137,11 @@ def send_planning_message(
 
     planning_session.status = agent_response.session_status
     planning_session.requirements_json = agent_response.requirements.model_dump(mode="json")
-    plan_dict = agent_response.plan.model_dump(mode="json") if agent_response.plan is not None else None
-    if plan_dict is not None:
+    if agent_response.plan is not None:
+        plan_dict = agent_response.plan.model_dump(mode="json")
         from app.ai.test_planning_agent import _extract_raw_page_results
         plan_dict["_page_results"] = _extract_raw_page_results(agent_response.tool_calls)
-    planning_session.plan_json = plan_dict
+        planning_session.plan_json = plan_dict
     planning_session.missing_slots_json = agent_response.missing_slots
     planning_session.title = planning_session.title or agent_response.requirements.business_goal or "AI 测试规划"
     planning_session.last_error_message = (
@@ -253,18 +254,32 @@ def stream_planning_message(
     )
 
     for tool_call in response.tool_calls:
-        session.add(
-            AIPlanningMessage(
-                session_id=planning_session.id,
-                role="assistant",
-                turn_type="tool_call",
-                content=f"调用工具 {tool_call.tool}",
-                structured_payload_json={
-                    "type": "tool_call",
-                    **tool_call.model_dump(mode="json"),
-                },
-            )
+        tool_dict = tool_call.model_dump(mode="json")
+        tool_dict.pop("result", None)  # exclude raw result from message payload
+        msg = AIPlanningMessage(
+            session_id=planning_session.id,
+            role="assistant",
+            turn_type="tool_call",
+            content=f"调用工具 {tool_call.tool}",
+            structured_payload_json={
+                "type": "tool_call",
+                **tool_dict,
+                "result_summary": getattr(tool_call, "_compressed_result", None),
+            },
         )
+        session.add(msg)
+        session.flush()  # get message.id
+
+        # Persist raw + summary for heavy tools
+        compressed = getattr(tool_call, "_compressed_result", None)
+        if compressed is not None:
+            session.add(AIPlanningToolResult(
+                session_id=planning_session.id,
+                message_id=msg.id,
+                tool_name=tool_call.tool,
+                raw_result_json=tool_call.result if isinstance(tool_call.result, dict) else None,
+                summary_json=compressed,
+            ))
 
     turn_type = "system_error" if response.session_status == "error" else ("plan" if response.plan is not None else "followup")
     session.add(
@@ -277,7 +292,14 @@ def stream_planning_message(
                 "missing_slots": response.missing_slots,
                 "suggested_questions": response.suggested_questions,
                 "plan": response.plan.model_dump(mode="json") if response.plan is not None else None,
-                "tool_calls": [item.model_dump(mode="json") for item in response.tool_calls],
+                "tool_calls": [
+                    {
+                        "tool": item.tool,
+                        "params": item.params,
+                        "result_summary": getattr(item, "_compressed_result", None),
+                    }
+                    for item in response.tool_calls
+                ],
                 "todo_list": [item.model_dump(mode="json") for item in response.todo_list],
             },
         )
