@@ -451,6 +451,35 @@ export function AITestPlanningPanel({
     }
 
     if (event.type === "done" || event.type === "cancelled" || event.type === "error") {
+      if (event.type === "error") {
+        const targetId = activeAssistantMessageIdRef.current;
+        if (targetId != null) {
+          const phaseLabel = event.phase ? `[${event.phase}] ` : "";
+          const errorTypeLabel = event.error_type ? ` (${event.error_type})` : "";
+          const tracebackSection = event.traceback
+            ? `\n\n<details><summary>错误追踪</summary>\n\n\`\`\`\n${event.traceback}\n\`\`\`\n</details>`
+            : "";
+          setTranscript((current) =>
+            current.map((msg) => {
+              if (msg.id !== targetId) return msg;
+              const payload = msg.structured_payload as Record<string, unknown> | null;
+              return {
+                ...msg,
+                content: `❌ **${phaseLabel}错误${errorTypeLabel}**\n\n${event.message}${tracebackSection}`,
+                structured_payload: {
+                  ...payload,
+                  _streaming: false,
+                  _phase: "error",
+                  _phaseMessage: event.message,
+                  error_type: event.error_type,
+                  error_phase: event.phase,
+                },
+              };
+            }),
+          );
+        }
+        void messageApi.error("执行错误: " + event.message);
+      }
       clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if (sessionId) {
         loadSessionDetail(sessionId).catch(() => {});
@@ -463,9 +492,6 @@ export function AITestPlanningPanel({
       setIsExecuting(false);
       if (event.type === "cancelled") {
         void messageApi.info("执行已取消");
-      }
-      if (event.type === "error") {
-        void messageApi.error("执行错误: " + event.message);
       }
     }
   }
@@ -732,6 +758,23 @@ export function AITestPlanningPanel({
                   <>
                     <span style={{ fontWeight: 600 }}>🔧 工具调用</span>
                     <div style={{ marginTop: 4 }}>{item.content}</div>
+                    {item.structured_payload?.result_summary ? (
+                      <details style={{ fontSize: 12, color: "#666", background: "#fafafa",
+                                        borderRadius: 6, padding: "4px 8px", marginTop: 4 }}>
+                        <summary style={{ cursor: "pointer", fontWeight: 500 }}>
+                          查看摘要
+                          {item.structured_payload.result_summary &&
+                            typeof item.structured_payload.result_summary === "object" &&
+                            "page_title" in (item.structured_payload.result_summary as Record<string, unknown>)
+                            ? ` — ${(item.structured_payload.result_summary as Record<string, unknown>).page_title}`
+                            : ""}
+                        </summary>
+                        <pre style={{ whiteSpace: "pre-wrap", marginTop: 4, maxHeight: 200,
+                                      overflowY: "auto", fontSize: 11 }}>
+                          {JSON.stringify(item.structured_payload.result_summary, null, 2)}
+                        </pre>
+                      </details>
+                    ) : null}
                   </>
                 ) : item.role === "assistant" &&
                   item.structured_payload?.type === "execution_progress" ? (
