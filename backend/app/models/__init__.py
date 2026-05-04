@@ -3,6 +3,7 @@
 from app.models.ai_planning_draft import AIPlanningDraft
 from app.models.ai_planning_message import AIPlanningMessage
 from app.models.ai_planning_session import AIPlanningSession
+from app.models.ai_planning_tool_result import AIPlanningToolResult
 from app.models.dsl_generation_run import DslGenerationRun
 from app.models.exploration_run import ExplorationRun
 from app.models.failure_record import FailureRecord
@@ -22,6 +23,7 @@ __all__ = [
     "AIPlanningDraft",
     "AIPlanningMessage",
     "AIPlanningSession",
+    "AIPlanningToolResult",
     "DslGenerationRun",
     "ExplorationRun",
     "FailureRecord",
