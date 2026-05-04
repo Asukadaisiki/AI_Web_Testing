@@ -241,11 +241,11 @@ def stream_planning_message(
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
     planning_session.status = response.session_status
     planning_session.requirements_json = response.requirements.model_dump(mode="json")
-    plan_dict = response.plan.model_dump(mode="json") if response.plan is not None else None
-    if plan_dict is not None:
+    if response.plan is not None:
+        plan_dict = response.plan.model_dump(mode="json")
         from app.ai.test_planning_agent import _extract_raw_page_results
         plan_dict["_page_results"] = _extract_raw_page_results(response.tool_calls)
-    planning_session.plan_json = plan_dict
+        planning_session.plan_json = plan_dict
     planning_session.missing_slots_json = response.missing_slots
     planning_session.title = planning_session.title or response.requirements.business_goal or "AI 测试规划"
     planning_session.last_error_message = (
