@@ -783,10 +783,11 @@ def _stream_planning_llm(
 
 
 def _parse_llm_response(response_text: str) -> dict[str, Any] | None:
+    repaired = _repair_json_text(response_text)
     try:
-        payload = json.loads(_extract_json_object(response_text))
+        payload = json.loads(_extract_json_object(repaired))
     except json.JSONDecodeError:
-        logger.warning("Planning LLM returned unparseable JSON: %r", response_text)
+        logger.warning("Planning LLM returned unparseable JSON: %r", response_text[:300])
         return None
     if not isinstance(payload, dict):
         return None
@@ -1317,6 +1318,24 @@ def _extract_json_object(response_text: str) -> str:
             depth -= 1
             if depth == 0 and start != -1:
                 return stripped[start : index + 1]
+    return stripped
+
+
+def _repair_json_text(text: str) -> str:
+    """Repair common AI JSON output errors before parsing."""
+    import re
+    # Strip markdown code fences (belt-and-suspenders with _extract_json_object)
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        first_nl = stripped.find("\n")
+        if first_nl != -1:
+            end_fence = stripped.rfind("```", first_nl)
+            if end_fence > first_nl:
+                stripped = stripped[first_nl + 1 : end_fence].strip()
+
+    # Remove trailing commas before } or ]
+    stripped = re.sub(r",\s*(\}|\])", r"\1", stripped)
+
     return stripped
 
 
