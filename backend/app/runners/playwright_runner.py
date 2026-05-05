@@ -192,12 +192,12 @@ def _build_locator_from_candidate(page, candidate_entry) -> object | None:
         semantic_value = candidate_entry.get("semantic_value", "")
 
     try:
-        if strategy == "css":
+        if strategy in ("css", "css_selector"):
             return page.locator(selector)
         if strategy == "xpath":
             return page.locator(f"xpath={selector}")
-        if strategy == "data-testid":
-            clean_id = selector.replace("[data-testid='", "").replace("']", "")
+        if strategy in ("data-testid", "data_testid"):
+            clean_id = selector.replace("[data-testid='", "").replace("']", "").replace("[data_testid='","").replace("']","")
             return page.get_by_test_id(clean_id)
         if strategy == "role":
             return page.get_by_role(selector or "button", name=semantic_value)

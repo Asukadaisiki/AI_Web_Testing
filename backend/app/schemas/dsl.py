@@ -5,26 +5,77 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DSLModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-TargetStrategy = Literal["css", "xpath", "data-testid", "element_id", "tag", "semantic"]
+# Commonly recognized locator strategies.  The DSL generator may emit
+# variant names (e.g. "css_selector" for "css", "href" as a heuristic).
+# These sets are used for runtime normalization rather than compile-time
+# rejection, so the pipeline stays robust against AI-generated names.
+_KNOWN_STRATEGIES: set[str] = {
+    "css", "css_selector",
+    "xpath",
+    "data-testid", "data_testid",
+    "element_id", "elementId",
+    "role", "role_fuzzy", "link_role", "link_role_fuzzy",
+    "label", "label_fuzzy",
+    "placeholder", "placeholder_fuzzy",
+    "text", "text_fuzzy",
+    "tag", "semantic", "vlm",
+    "verified_role", "verified_role_fuzzy",
+    "verified_css", "verified_xpath",
+    "verified_placeholder", "verified_placeholder_fuzzy",
+    "verified_label", "verified_label_fuzzy",
+    "verified_text", "verified_element_id",
+    "verified_name",
+    # AI-generated variants
+    "href", "link", "button", "aria",
+    "id",
+}
+
+TargetStrategy = Literal[
+    "css", "css_selector", "xpath", "data-testid", "data_testid",
+    "element_id", "elementId", "tag",
+    "role", "role_fuzzy", "link_role", "link_role_fuzzy",
+    "label", "label_fuzzy", "placeholder", "placeholder_fuzzy",
+    "text", "text_fuzzy", "semantic", "vlm",
+    "verified_role", "verified_role_fuzzy", "verified_css", "verified_xpath",
+    "verified_placeholder", "verified_placeholder_fuzzy",
+    "verified_label", "verified_label_fuzzy",
+    "verified_text", "verified_element_id", "verified_name",
+    "href", "link", "button", "aria", "id",
+]
 LocatorConfidence = Literal["high", "medium", "low"]
+
+
+# Strategy name normalization map: AI-generated variant -> canonical name.
+_STRATEGY_NORMALIZE: dict[str, str] = {
+    "css_selector": "css",
+    "data_testid": "data-testid",
+    "elementId": "element_id",
+    "href": "css",
+    "link": "role",
+    "button": "role",
+    "aria": "role",
+    "id": "element_id",
+    "name": "tag",
+}
 
 
 class LocatorCandidate(BaseModel):
     """Pre-scored candidate locator strategy for a DSL step."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    strategy: Literal[
-        "css", "xpath", "data-testid", "element_id",
-        "role", "label", "placeholder", "text",
-        "tag", "semantic", "vlm",
-    ]
+    strategy: str = Field(description="Locator strategy name (normalized at runtime)")
+
+    @field_validator("strategy", mode="before")
+    @classmethod
+    def _normalize_strategy(cls, v: str) -> str:
+        return _STRATEGY_NORMALIZE.get(v, v)
     selector: str | None = Field(default=None, description="Explicit selector value (for css/xpath/data-testid/etc).")
     semantic_value: str | None = Field(default=None, description="Semantic value (role name, label text, etc).")
     pre_score: float = Field(ge=0.0, le=1.0, description="Generation-time pre-score 0.0-1.0.")
