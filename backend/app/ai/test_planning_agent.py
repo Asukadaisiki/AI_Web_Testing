@@ -542,10 +542,20 @@ def stream_planning_turn(
             yield _turn_complete_payload(response)
             return response
 
-        # ask_user or unsupported action — intercept when asking about discoverable elements
+        # ask_user or unsupported action — intercept when asking about explorable elements
         raw_message = str(action_input.get("message") or "").strip()
         if raw_message and _is_asking_about_explorable_elements(raw_message):
+            # Try to find unexplored login URL from existing tool calls first
             login_url = _find_unexplored_login_url(tool_calls, requirements)
+            # If no explore_page was ever called yet, auto-explore the entry URL first
+            # so we can extract internal links (including /login) from it
+            if login_url is None and not _has_explored_pages(tool_calls):
+                login_url = _auto_explore_entry_and_find_login(
+                    requirements, tool_calls,
+                    db_session, project_id,
+                    actor_user_id=actor_user_id,
+                    planning_session_id=planning_session_id,
+                )
             if login_url:
                 logger.info("Intercepting ask_user about explorable elements, auto-exploring %s", login_url)
                 yield {"type": "status", "phase": "tool_call", "message": "正在自动采集登录页面元素..."}
@@ -568,7 +578,7 @@ def stream_planning_turn(
                     )
                     conversation.append(
                         {"role": "system", "content": (
-                            f"系统已自动采集了登录页面 {login_url} 的可交互元素。"
+                            f"系统已自动采集了入口页面和登录页面 {login_url} 的可交互元素。"
                             "请基于所有已采集的页面元素信息重新生成测试方案，"
                             "确保 target 使用元素的实际 label、placeholder 或 id。"
                         )},
@@ -1866,6 +1876,65 @@ def _find_unexplored_login_url(
             clean_url = abs_url.rstrip("/")
             if _is_login_url(abs_url) and clean_url not in explored_urls:
                 return abs_url
+    return None
+
+
+def _auto_explore_entry_and_find_login(
+    requirements: AIPlanningRequirements,
+    tool_calls: list[AIPlanningToolCall],
+    db_session: Session,
+    project_id: int,
+    *,
+    actor_user_id: int = 0,
+    planning_session_id: int = 0,
+) -> str | None:
+    """Auto-explore the entry URL and extract a login URL from its internal links.
+
+    Used by the ask_user interception path when the agent asks about explorable
+    elements but no explore_page has been called yet (so _find_unexplored_login_url
+    has no data to draw from).
+    """
+    entry_url = requirements.entry_url_or_page
+    if not entry_url or not isinstance(entry_url, str):
+        return None
+    match = URL_PATTERN.search(entry_url)
+    if not match:
+        return None
+    base_url = match.group(0)
+
+    # Auto-explore the entry page
+    logger.info("ask_user intercept: auto-exploring entry URL %s", base_url)
+    try:
+        result_text = execute_tool(
+            tool_name="explore_page",
+            params={"url": base_url},
+            db_session=db_session,
+            project_id=project_id,
+            actor_user_id=actor_user_id,
+            planning_session_id=planning_session_id,
+        )
+        parsed = _safe_parse_json(result_text)
+    except Exception as exc:
+        logger.warning("ask_user intercept: entry explore failed for %s: %s", base_url, exc)
+        return None
+
+    tool_calls.append(
+        AIPlanningToolCall(
+            tool="explore_page",
+            params={"url": base_url},
+            result=parsed,
+        )
+    )
+
+    if not isinstance(parsed, dict) or not parsed.get("elements"):
+        return None
+
+    # Extract internal links and find login URLs
+    internal_links = _extract_internal_links(parsed, base_url)
+    login_urls = [url for url in internal_links if _is_login_url(url)]
+    if login_urls:
+        logger.info("ask_user intercept: found login URL %s from entry page links", login_urls[0])
+        return login_urls[0]
     return None
 
 

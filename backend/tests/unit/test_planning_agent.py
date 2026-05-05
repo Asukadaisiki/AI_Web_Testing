@@ -23,6 +23,7 @@ from app.ai.test_planning_agent import (
     _rank_links_by_flow_relevance,
     _is_asking_about_explorable_elements,
     _find_unexplored_login_url,
+    _auto_explore_entry_and_find_login,
 )
 from app.schemas.ai_planning import AIPlanningRequirements, AIPlanningToolCall
 
@@ -554,3 +555,60 @@ class TestFindUnexploredLoginUrl:
         )
         result = _find_unexplored_login_url([], req)
         assert result is None
+
+
+class TestAutoExploreEntryAndFindLogin:
+    def test_explores_entry_url_and_returns_login_link(self) -> None:
+        from unittest.mock import patch
+
+        req = AIPlanningRequirements(
+            entry_url_or_page="https://example.com",
+            test_data_or_account="email: test@example.com, password: 123456",
+        )
+        mock_result = (
+            '{"url":"https://example.com","formatted":"a [text=Login]","element_count":2,'
+            '"elements":[{"tag":"a","href":"/login"},{"tag":"a","href":"/products"}]}'
+        )
+
+        with patch("app.ai.test_planning_agent.execute_tool", return_value=mock_result):
+            result = _auto_explore_entry_and_find_login(req, [], object(), 1)
+
+        assert result == "https://example.com/login"
+
+    def test_returns_none_when_no_entry_url(self) -> None:
+        req = AIPlanningRequirements()
+        assert _auto_explore_entry_and_find_login(req, [], object(), 1) is None
+
+    def test_returns_none_when_no_login_links(self) -> None:
+        from unittest.mock import patch
+
+        req = AIPlanningRequirements(entry_url_or_page="https://example.com")
+        mock_result = (
+            '{"url":"https://example.com","formatted":"a [text=Home]","element_count":1,'
+            '"elements":[{"tag":"a","href":"/products"}]}'
+        )
+
+        with patch("app.ai.test_planning_agent.execute_tool", return_value=mock_result):
+            result = _auto_explore_entry_and_find_login(req, [], object(), 1)
+
+        assert result is None
+
+    def test_adds_explore_page_to_tool_calls(self) -> None:
+        from unittest.mock import patch
+
+        req = AIPlanningRequirements(
+            entry_url_or_page="https://example.com",
+            test_data_or_account="email: test@example.com, password: 123456",
+        )
+        mock_result = (
+            '{"url":"https://example.com","formatted":"a [text=Login]","element_count":2,'
+            '"elements":[{"tag":"a","href":"/login"}]}'
+        )
+        calls: list = []
+
+        with patch("app.ai.test_planning_agent.execute_tool", return_value=mock_result):
+            _auto_explore_entry_and_find_login(req, calls, object(), 1)
+
+        assert len(calls) == 1
+        assert calls[0].tool == "explore_page"
+        assert calls[0].params == {"url": "https://example.com"}

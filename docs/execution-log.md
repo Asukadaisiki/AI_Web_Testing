@@ -9,6 +9,16 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-05（AI 规划代理登录页面元素缺失 — 追问拦截：入口页未探索时主动探索）
+
+- 任务：上轮修复后用户反馈 AI 仍卡在"等待系统自动探索"，因为 AI 在第一轮就 ask_user，尚未调用过 explore_page 或 generate_plan → `_find_unexplored_login_url` 无数据可查 → 拦截失效
+- 根因：AI 调用 ask_user 时 tool_calls 中无 explore_page 记录，拦截逻辑依赖已存在的探索结果来找登录 URL，但首次对话时根本没有任何探索数据
+- 执行动作：
+  - 新增 `_auto_explore_entry_and_find_login()`：当 ask_user 拦截时发现尚未探索过入口页，先调用 explore_page 探索入口 URL → 提取内部链接 → 找到登录 URL 返回
+  - ask_user 拦截路径增加分支：`login_url` 为 None 且 `not _has_explored_pages` 时，调用 `_auto_explore_entry_and_find_login` 先探索入口页
+- 验证：新增 4 个单元测试（`TestAutoExploreEntryAndFindLogin`），全量 528/528 通过（不含预存失败 test_models.py）
+- 关联记录：上条日志（同日期同议题第一轮修复）
+
 ## 2026-05-05（AI 规划代理登录页面元素缺失 — 自动探索登录页 + ask_user 拦截）
 
 - 任务：用户使用 `test_brand_filter_cart` 进行 E2E 测试，AI 代理无法找到 login 按钮，要求用户提供邮箱和密码定位器
