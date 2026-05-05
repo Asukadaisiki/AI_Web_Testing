@@ -9,6 +9,28 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-05（E2E 测试修复：capture_page_session CSS 选择器支持 + 定位器链修复）
+
+- 任务：通过实际运行 E2E 测试反复调试，修复 `test_brand_filter_cart` 扔给 AI 后能产出有效测试方案
+- 根因（经过实际运行 session 116/117/118 反复验证）：
+  1. AI 模型在 `capture_page_session` 和 `explore_flow` 的 tool call params 中生成 CSS 选择器格式的 target（如 `input[data-qa='login-email']`、`button[data-qa='login-button']`），但旧代码只处理 label/placeholder/id
+  2. 旧代码用 `page.get_by_label(target) or page.get_by_ placeholder(target)` 链式判断，但 Playwright locator 对象总是 truthy → 即使匹配不到元素也不会 fall through → `get_by_label("Login")` 匹配不到但返回 truthy locator → 阻塞了能匹配的 `get_by_role("button", name="Login")`
+  3. AI 使用 `action: "type"` 但代码只处理 `"input"` 和 `"click"` → "type" 步骤被静默忽略
+- 执行动作：
+  - **`_resolve_step_locator()`** (page_explorer.py 新增)：统一处理 CSS 选择器和语义目标的定位器解析
+    - Strategy 1: 如果 target 像 CSS 选择器（含 `[`、`:`、`#`、`.`），先尝试 `page.locator(target)` 直接匹配
+    - Strategy 2: 从 CSS 模式中提取文本（`input[placeholder='Email Address']` → `Email Address`），再按语义匹配（placeholder/label/role/text）
+    - Strategy 3: 宽泛 CSS 回退
+    - 所有策略使用 `.count() > 0` 检查而非 truthy 判断
+  - **`_extract_text_from_css_target()`** (新增)：从 `[attr='value']`、`:has-text('value')`、`:contains('value')` 等 CSS 模式中提取有意义的文本
+  - **Action 名称归一化**：`type`/`fill`/`input` → `input`；`click`/`press`/`tap` → `click`
+  - `capture_browser_session()` 和 `_execute_action()` 两个函数统一使用 `_resolve_step_locator()`
+- 验证：
+  - 实际 E2E 测试 session 118：`capture_page_session` 成功执行登录（email fill + password fill + login click），explore_flow 成功探索，产出 4 个场景的完整测试方案
+  - 全量 528/528 通过（不含预存失败 test_models.py）
+  - 18 个 page_explorer 测试 + 60 个 planning_agent 测试全部通过
+- 关键 insight：Playwright 的 `get_by_label()`、`get_by_role()` 等方法总是返回 truthy locator 对象，`a or b or c` 链式回退在 Playwright 中完全无效，必须显式检查 `.count() > 0`
+
 ## 2026-05-05（AI 规划代理登录页面元素缺失 — 追问拦截：入口页未探索时主动探索）
 
 - 任务：上轮修复后用户反馈 AI 仍卡在"等待系统自动探索"，因为 AI 在第一轮就 ask_user，尚未调用过 explore_page 或 generate_plan → `_find_unexplored_login_url` 无数据可查 → 拦截失效
