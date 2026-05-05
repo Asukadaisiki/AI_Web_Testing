@@ -9,6 +9,24 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-05（AI 规划代理登录页面元素缺失 — 自动探索登录页 + ask_user 拦截）
+
+- 任务：用户使用 `test_brand_filter_cart` 进行 E2E 测试，AI 代理无法找到 login 按钮，要求用户提供邮箱和密码定位器
+- 根因：
+  - `_auto_explore_entry_url` 只探索入口 URL（首页），不探索 `/login` 页面 → 登录表单元素（邮箱/密码/登录按钮）从未被采集
+  - 系统提示"不需要手动调用 explore_page"导致 deepseek-v4-flash 模型跳过探索，直接 ask_user 询问定位器
+  - ask_user 路径立即退出循环，安全网（仅在 generate_plan 时触发）完全无法覆盖此场景
+- 执行动作：
+  - **Fix 1 — 自动探索登录页**：`_auto_explore_entry_url()` 检测到登录需求（邮箱+密码 / flow 提及 login）时，从内部链接中自动调用 explore_page 探索 `/login` 页面；新增 `_looks_like_login_requirements()`、`_is_login_url()` 辅助函数
+  - **Fix 2 — ask_user 拦截**：在 ask_user 处理路径退出循环前，检测 AI 是否在询问可探索元素（login/email/password/locator 等关键词），如有未探索的登录 URL 则自动探索后 continue 回 LLM；新增 `_is_asking_about_explorable_elements()`、`_find_unexplored_login_url()` 辅助函数
+  - **Fix 3 — 系统提示澄清**：`test_planning_prompts.py` 消除"不需要手动调用 explore_page"的歧义 → 明确入口页面由系统处理、其他页面必须调用 explore_flow、不得在没有页面数据的情况下猜测定位器；移除"向用户询问 URL"作为首选逃逸路径
+  - **Fix 4 — 安全网 URL 排序**：安全网 fallback 从 `links[:4]` 改为 `_rank_links_by_flow_relevance(links, core_user_flow)[:4]`，优先探索流程相关的 URL
+- 验证：
+  - 新增 27 个单元测试覆盖全部新函数（`_looks_like_login_requirements`、`_is_login_url`、`_rank_links_by_flow_relevance`、`_is_asking_about_explorable_elements`、`_find_unexplored_login_url`）
+  - 全量 532/533 通过（1 预存失败：`test_stage1_tables_exist` 未包含 `ai_planning_tool_results` 表，与本次修改无关）
+  - 29 个 planning agent 测试 + 43 个 locator 测试全部通过
+- 影响范围：只在 `_auto_explore_entry_url` 和 ask_user 路径增加了后置安全网，不改变现有正常流程的行为
+
 ## 2026-05-05（BUG-063 追加修复 — thinking mode 下 SSE 空白 + 会话消失）
 
 - 任务：BUG-063 上次修复后用户反馈仍出现前端 SSE 输出空白、刷新后会话消失、需返回列表重新选择项目进入才能展示消息

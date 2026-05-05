@@ -17,6 +17,12 @@ from app.ai.test_planning_agent import (
     _get_presented_links,
     _clear_link_tracking,
     _track_link_presentation,
+    _looks_like_login,
+    _looks_like_login_requirements,
+    _is_login_url,
+    _rank_links_by_flow_relevance,
+    _is_asking_about_explorable_elements,
+    _find_unexplored_login_url,
 )
 from app.schemas.ai_planning import AIPlanningRequirements, AIPlanningToolCall
 
@@ -363,3 +369,188 @@ class TestLinkExtractionFromToolCalls:
         ]
         links = _extract_links_from_tool_calls(calls, None)
         assert len(links) == 2
+
+
+class TestLooksLikeLoginRequirements:
+    def test_flow_mentions_login(self) -> None:
+        req = AIPlanningRequirements(
+            app_under_test="Test",
+            core_user_flow="1. 点击login进入登录页面",
+        )
+        assert _looks_like_login_requirements(req) is True
+
+    def test_test_data_has_email_and_password(self) -> None:
+        req = AIPlanningRequirements(
+            app_under_test="Test",
+            test_data_or_account="账号: test@example.com, 密码: 123456",
+        )
+        assert _looks_like_login_requirements(req) is True
+
+    def test_test_data_email_only_returns_false(self) -> None:
+        req = AIPlanningRequirements(
+            app_under_test="Test",
+            test_data_or_account="邮箱: test@example.com",
+        )
+        assert _looks_like_login_requirements(req) is False
+
+    def test_no_login_indicators(self) -> None:
+        req = AIPlanningRequirements(
+            app_under_test="Test",
+            business_goal="验证购物车功能",
+            test_data_or_account="商品名称: Test Item",
+        )
+        assert _looks_like_login_requirements(req) is False
+
+    def test_business_goal_mentions_login(self) -> None:
+        req = AIPlanningRequirements(
+            app_under_test="Test",
+            business_goal="验证用户登录后购物车",
+        )
+        assert _looks_like_login_requirements(req) is True
+
+
+class TestIsLoginUrl:
+    def test_login_path(self) -> None:
+        assert _is_login_url("https://example.com/login") is True
+
+    def test_signin_path(self) -> None:
+        assert _is_login_url("https://example.com/signin") is True
+
+    def test_sign_in_path(self) -> None:
+        assert _is_login_url("https://example.com/sign-in") is True
+
+    def test_auth_path(self) -> None:
+        assert _is_login_url("https://example.com/auth") is True
+
+    def test_products_path(self) -> None:
+        assert _is_login_url("https://example.com/products") is False
+
+    def test_case_insensitive(self) -> None:
+        assert _is_login_url("https://example.com/LOGIN") is True
+
+    def test_login_in_subpath(self) -> None:
+        assert _is_login_url("https://example.com/user/login") is True
+
+
+class TestRankLinksByFlowRelevance:
+    def test_login_ranked_first_when_flow_mentions_login(self) -> None:
+        links = [
+            "https://example.com/products",
+            "https://example.com/login",
+            "https://example.com/contact",
+        ]
+        ranked = _rank_links_by_flow_relevance(links, "用户需要登录后购物")
+        assert ranked[0] == "https://example.com/login"
+
+    def test_product_ranked_first_when_flow_mentions_product(self) -> None:
+        links = [
+            "https://example.com/contact",
+            "https://example.com/products",
+            "https://example.com/login",
+        ]
+        ranked = _rank_links_by_flow_relevance(links, "browse products filter brands add to cart")
+        assert "products" in ranked[0]
+
+    def test_cart_ranked_first_when_flow_mentions_cart(self) -> None:
+        links = [
+            "https://example.com/products",
+            "https://example.com/view_cart",
+        ]
+        ranked = _rank_links_by_flow_relevance(links, "view shopping cart add items")
+        assert "cart" in ranked[0]
+
+    def test_no_flow_returns_original_order(self) -> None:
+        links = ["https://example.com/z", "https://example.com/a"]
+        ranked = _rank_links_by_flow_relevance(links, None)
+        assert ranked == links
+
+    def test_empty_links(self) -> None:
+        assert _rank_links_by_flow_relevance([], "login flow") == []
+
+
+class TestIsAskingAboutExplorableElements:
+    def test_login_question(self) -> None:
+        assert _is_asking_about_explorable_elements("请问登录页面的邮箱输入框定位是什么？") is True
+
+    def test_email_question(self) -> None:
+        assert _is_asking_about_explorable_elements("请提供email输入框的定位器") is True
+
+    def test_password_question(self) -> None:
+        assert _is_asking_about_explorable_elements("密码输入框的locator是什么？") is True
+
+    def test_normal_question(self) -> None:
+        assert _is_asking_about_explorable_elements("你希望我生成一个测试方案吗？") is False
+
+    def test_empty_message(self) -> None:
+        assert _is_asking_about_explorable_elements("") is False
+
+    def test_selector_keyword(self) -> None:
+        assert _is_asking_about_explorable_elements("请告诉我要用什么selector") is True
+
+
+class TestFindUnexploredLoginUrl:
+    def test_finds_login_link_in_explore_result(self) -> None:
+        req = AIPlanningRequirements(
+            entry_url_or_page="https://example.com",
+        )
+        calls = [
+            AIPlanningToolCall(
+                tool="explore_page",
+                params={"url": "https://example.com"},
+                result={
+                    "url": "https://example.com",
+                    "elements": [
+                        {"tag": "a", "href": "/login"},
+                        {"tag": "a", "href": "/products"},
+                    ],
+                },
+            )
+        ]
+        result = _find_unexplored_login_url(calls, req)
+        assert result == "https://example.com/login"
+
+    def test_skips_already_explored_login(self) -> None:
+        req = AIPlanningRequirements(
+            entry_url_or_page="https://example.com",
+        )
+        calls = [
+            AIPlanningToolCall(
+                tool="explore_page",
+                params={"url": "https://example.com"},
+                result={
+                    "url": "https://example.com",
+                    "elements": [{"tag": "a", "href": "/login"}],
+                },
+            ),
+            AIPlanningToolCall(
+                tool="explore_page",
+                params={"url": "https://example.com/login"},
+                result={"url": "https://example.com/login", "elements": []},
+            ),
+        ]
+        result = _find_unexplored_login_url(calls, req)
+        assert result is None
+
+    def test_no_login_link_returns_none(self) -> None:
+        req = AIPlanningRequirements(
+            entry_url_or_page="https://example.com",
+        )
+        calls = [
+            AIPlanningToolCall(
+                tool="explore_page",
+                params={"url": "https://example.com"},
+                result={
+                    "url": "https://example.com",
+                    "elements": [{"tag": "a", "href": "/products"}],
+                },
+            )
+        ]
+        result = _find_unexplored_login_url(calls, req)
+        assert result is None
+
+    def test_no_explore_calls_returns_none(self) -> None:
+        req = AIPlanningRequirements(
+            entry_url_or_page="https://example.com",
+        )
+        result = _find_unexplored_login_url([], req)
+        assert result is None

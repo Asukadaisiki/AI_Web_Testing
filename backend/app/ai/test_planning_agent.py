@@ -355,7 +355,9 @@ def stream_planning_turn(
                 yield {"type": "status", "phase": "tool_call", "message": "正在自动补充采集导航页面元素..."}
                 links_to_explore = _get_presented_links(conversation)
                 if links_to_explore:
-                    fallback_urls = links_to_explore[:4]
+                    fallback_urls = _rank_links_by_flow_relevance(
+                        links_to_explore, requirements.core_user_flow,
+                    )[:4]
                     logger.info("Safety-net: auto-exploring fallback URLs %s", fallback_urls)
                     try:
                         flow_result_text = execute_tool(
@@ -540,8 +542,42 @@ def stream_planning_turn(
             yield _turn_complete_payload(response)
             return response
 
-        # ask_user or unsupported action — ask follow-up
-        message = str(action_input.get("message") or "").strip() or _default_followup_question(requirements)
+        # ask_user or unsupported action — intercept when asking about discoverable elements
+        raw_message = str(action_input.get("message") or "").strip()
+        if raw_message and _is_asking_about_explorable_elements(raw_message):
+            login_url = _find_unexplored_login_url(tool_calls, requirements)
+            if login_url:
+                logger.info("Intercepting ask_user about explorable elements, auto-exploring %s", login_url)
+                yield {"type": "status", "phase": "tool_call", "message": "正在自动采集登录页面元素..."}
+                try:
+                    login_result_text = execute_tool(
+                        tool_name="explore_page",
+                        params={"url": login_url},
+                        db_session=db_session,
+                        project_id=project_id,
+                        actor_user_id=actor_user_id,
+                        planning_session_id=planning_session_id,
+                    )
+                    login_parsed = _safe_parse_json(login_result_text)
+                    tool_calls.append(
+                        AIPlanningToolCall(
+                            tool="explore_page",
+                            params={"url": login_url},
+                            result=login_parsed,
+                        )
+                    )
+                    conversation.append(
+                        {"role": "system", "content": (
+                            f"系统已自动采集了登录页面 {login_url} 的可交互元素。"
+                            "请基于所有已采集的页面元素信息重新生成测试方案，"
+                            "确保 target 使用元素的实际 label、placeholder 或 id。"
+                        )},
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning("Auto-explore login intercept failed for url=%s: %s", login_url, exc)
+
+        message = raw_message or _default_followup_question(requirements)
         missing_slots = _collect_missing_slots(requirements)
         response = AIPlanningTurnResponse(
             assistant_message=message,
@@ -1146,6 +1182,44 @@ def _auto_explore_entry_url(
 
     internal_links = _extract_internal_links(parsed_result, base_url)
     logger.info("Auto-explore: found %d internal links from %s", len(internal_links), base_url)
+
+    # Auto-explore login page when requirements indicate login flow
+    if _looks_like_login_requirements(requirements):
+        login_urls = [url for url in internal_links if _is_login_url(url)]
+        # Filter out already-explored URLs
+        explored_urls: set[str] = set()
+        for call in tool_calls:
+            if call.tool == "explore_page" and isinstance(call.params, dict):
+                eu = (call.params.get("url") or "").strip().rstrip("/")
+                if eu:
+                    explored_urls.add(eu)
+        login_urls = [u for u in login_urls if u.rstrip("/") not in explored_urls]
+        if login_urls:
+            login_url = login_urls[0]
+            try:
+                login_result_text = execute_tool(
+                    tool_name="explore_page",
+                    params={"url": login_url},
+                    db_session=db_session,
+                    project_id=project_id,
+                    actor_user_id=actor_user_id,
+                    planning_session_id=planning_session_id,
+                )
+                login_parsed = _safe_parse_json(login_result_text)
+                tool_calls.append(
+                    AIPlanningToolCall(
+                        tool="explore_page",
+                        params={"url": login_url},
+                        result=login_parsed,
+                    )
+                )
+                logger.info(
+                    "Auto-explored login page: %s, found %d elements",
+                    login_url, login_parsed.get("element_count", 0) if isinstance(login_parsed, dict) else 0,
+                )
+            except Exception as exc:
+                logger.warning("Auto-explore login page failed for url=%s: %s", login_url, exc)
+
     return True, tool_calls, internal_links
 
 
@@ -1654,10 +1728,145 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
     )
 
 
+_EMAIL_PATTERN = re.compile(r'\S+@\S+\.\S+')
+
+_LOGIN_URL_KEYWORDS = ("/login", "/signin", "/sign-in", "/sign_in", "/auth")
+
+
 def _looks_like_login(requirements: AIPlanningRequirements) -> bool:
     haystack = " ".join(filter(None, [requirements.business_goal, requirements.core_user_flow, requirements.entry_url_or_page]))
     lowered = haystack.casefold()
     return "登录" in haystack or "login" in lowered or "signin" in lowered
+
+
+def _looks_like_login_requirements(requirements: AIPlanningRequirements) -> bool:
+    """Check whether requirements imply a login flow — from flow text or credentials in test_data."""
+    if _looks_like_login(requirements):
+        return True
+    test_data = (requirements.test_data_or_account or "").casefold()
+    return bool(_EMAIL_PATTERN.search(test_data)) and (
+        "password" in test_data or "密码" in test_data or "123456" in test_data
+    )
+
+
+def _is_login_url(url: str) -> bool:
+    """Check whether a URL path suggests a login/sign-in page."""
+    from urllib.parse import urlparse
+    path = urlparse(url).path.casefold()
+    return any(kw in path for kw in _LOGIN_URL_KEYWORDS)
+
+
+def _rank_links_by_flow_relevance(
+    links: list[str],
+    core_user_flow: str | None,
+) -> list[str]:
+    """Rank URLs by keyword overlap with core_user_flow.
+
+    Extracts keywords from flow text, then scores URLs whose path segments
+    match those keywords.
+    """
+    if not core_user_flow or not links:
+        return list(links)
+    from urllib.parse import urlparse
+    flow_lowered = core_user_flow.casefold()
+
+    # Path-to-flow keyword mapping: which path keywords indicate relevance
+    # for specific flow-intent keywords
+    relevance_map: dict[str, list[str]] = {
+        "login": ["login", "signin", "sign-in", "登录"],
+        "signin": ["login", "signin", "sign-in", "登录"],
+        "登录": ["login", "signin", "sign-in", "登录"],
+        "product": ["product", "商品", "category"],
+        "products": ["product", "商品", "category"],
+        "商品": ["product", "商品", "category"],
+        "brand": ["brand", "品牌"],
+        "品牌": ["brand", "品牌"],
+        "cart": ["cart", "购物车"],
+        "购物车": ["cart", "购物车"],
+        "contact": ["contact", "联系我们"],
+        "联系我们": ["contact", "联系我们"],
+        "register": ["register", "signup", "注册"],
+        "注册": ["register", "signup", "注册"],
+        "search": ["search", "搜索"],
+        "搜索": ["search", "搜索"],
+        "checkout": ["checkout", "结账"],
+        "结账": ["checkout", "结账"],
+    }
+
+    # Determine which path keywords are relevant based on flow text
+    relevant_path_keywords: set[str] = set()
+    for flow_kw, path_kws in relevance_map.items():
+        if flow_kw in flow_lowered:
+            relevant_path_keywords.update(path_kws)
+
+    def _score(url: str) -> int:
+        path = urlparse(url).path.casefold()
+        score = 0
+        for kw in relevant_path_keywords:
+            if kw in path:
+                score += 1
+        return score
+
+    return sorted(links, key=_score, reverse=True)
+
+
+_ASK_EXPLORABLE_KEYWORDS = (
+    "login", "email", "password", "locator", "selector",
+    "定位", "登录", "邮箱", "密码", "选择器", "元素",
+)
+
+
+def _is_asking_about_explorable_elements(message: str) -> bool:
+    """Check whether the agent is asking about elements that can be discovered by exploration."""
+    lowered = message.casefold()
+    return any(kw in lowered for kw in _ASK_EXPLORABLE_KEYWORDS)
+
+
+def _find_unexplored_login_url(
+    tool_calls: list[AIPlanningToolCall],
+    requirements: AIPlanningRequirements,
+) -> str | None:
+    """Find a login URL from explore results that hasn't been explored yet."""
+    from urllib.parse import urljoin, urlparse
+
+    explored_urls: set[str] = set()
+    for call in tool_calls:
+        if call.tool == "explore_page" and isinstance(call.params, dict):
+            eu = (call.params.get("url") or "").strip().rstrip("/")
+            if eu:
+                explored_urls.add(eu)
+
+    # Extract the base URL from requirements
+    entry_url = requirements.entry_url_or_page or ""
+    match = URL_PATTERN.search(entry_url)
+    base_url = match.group(0) if match else ""
+
+    # Check already-explored results for internal links containing login URLs
+    for call in tool_calls:
+        if call.tool != "explore_page" or not isinstance(call.result, dict):
+            continue
+        # Get the URL that was explored
+        explored_url = (call.params or {}).get("url", "") or call.result.get("url", base_url)
+        elements = call.result.get("elements", [])
+        if not isinstance(elements, list):
+            continue
+        base_parsed = urlparse(base_url or explored_url)
+        base_origin = f"{base_parsed.scheme}://{base_parsed.netloc}"
+        for elem in elements:
+            if not isinstance(elem, dict):
+                continue
+            if elem.get("tag") != "a":
+                continue
+            href = elem.get("href") or ""
+            if not href or href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:"):
+                continue
+            abs_url = urljoin(base_url or explored_url, href)
+            if urlparse(abs_url).netloc != base_parsed.netloc:
+                continue
+            clean_url = abs_url.rstrip("/")
+            if _is_login_url(abs_url) and clean_url not in explored_urls:
+                return abs_url
+    return None
 
 
 def _build_test_data_requirements(
