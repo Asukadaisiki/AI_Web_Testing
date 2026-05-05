@@ -811,7 +811,11 @@ def _stream_planning_llm(
                 if chunk:
                     full_text.append(chunk)
                     yield {"type": "text_chunk", "text": chunk}
-    yield {"type": "raw_response", "text": "".join(full_text)}
+    content_text = "".join(full_text)
+    if not content_text.strip() and reasoning_text:
+        content_text = "".join(reasoning_text)
+        logger.warning("LLM produced only reasoning_content, no content; using reasoning as fallback (len=%d)", len(content_text))
+    yield {"type": "raw_response", "text": content_text}
 
 
 def _parse_llm_response(response_text: str) -> dict[str, Any] | None:
@@ -1436,15 +1440,24 @@ def _collect_missing_slots(requirements: AIPlanningRequirements) -> list[str]:
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:
-    content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
-    if isinstance(content, str):
+    message = payload.get("choices", [{}])[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str) and content.strip():
         return content
     if isinstance(content, list):
         text_parts: list[str] = []
         for item in content:
             if isinstance(item, dict) and isinstance(item.get("text"), str):
                 text_parts.append(item["text"])
-        return "\n".join(text_parts)
+        result = "\n".join(text_parts)
+        if result.strip():
+            return result
+    reasoning = message.get("reasoning_content", "")
+    if isinstance(reasoning, str) and reasoning.strip():
+        logger.warning("LLM produced empty content; using reasoning_content as fallback (len=%d)", len(reasoning))
+        return reasoning
+    if isinstance(content, str):
+        return content
     return ""
 
 

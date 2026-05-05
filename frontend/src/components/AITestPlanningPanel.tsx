@@ -241,7 +241,15 @@ export function AITestPlanningPanel({
     setMissingSlots(detail.session.missing_slots);
     setSuggestedQuestions([]);
     setPlan(detail.session.plan ?? null);
-    setTranscript(detail.messages);
+    setTranscript(
+      detail.messages.map((msg) => {
+        const payload = msg.structured_payload as Record<string, unknown> | null;
+        if (payload?._streaming) {
+          return { ...msg, structured_payload: { ...payload, _streaming: false } };
+        }
+        return msg;
+      }),
+    );
     setDrafts(detail.drafts);
   }
 
@@ -422,6 +430,9 @@ export function AITestPlanningPanel({
 
     if (event.type === "turn_complete") {
       const targetId = activeAssistantMessageIdRef.current;
+      const thinkingContent = targetId != null
+        ? transcript.find((m) => m.id === targetId)?.structured_payload as Record<string, unknown> | undefined
+        : undefined;
       if (targetId != null) {
         setTranscript((current) =>
           current.map((msg) => {
@@ -442,7 +453,28 @@ export function AITestPlanningPanel({
         );
       }
       if (sessionId) {
-        loadSessionDetail(sessionId).catch(() => {});
+        const savedThinking = thinkingContent?._thinkingContent as string | undefined;
+        loadSessionDetail(sessionId).then((detail) => {
+          if (savedThinking) {
+            setTranscript((msgs) =>
+              msgs.map((msg) => {
+                if (msg.id !== targetId) return msg;
+                return {
+                  ...msg,
+                  structured_payload: {
+                    ...(msg.structured_payload as Record<string, unknown> ?? {}),
+                    _thinkingContent: savedThinking,
+                  },
+                };
+              }),
+            );
+          }
+          setSessionId(detail.session.id);
+          setRequirements(detail.session.requirements);
+          setMissingSlots(detail.session.missing_slots);
+          setPlan(detail.session.plan ?? null);
+          setDrafts(detail.drafts);
+        }).catch(() => {});
         loadSessionList().catch(() => {});
       }
       setIsSending(false);

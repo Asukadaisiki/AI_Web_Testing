@@ -9,6 +9,24 @@
 - 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
 
+## 2026-05-05（BUG-063 追加修复 — thinking mode 下 SSE 空白 + 会话消失）
+
+- 任务：BUG-063 上次修复后用户反馈仍出现前端 SSE 输出空白、刷新后会话消失、需返回列表重新选择项目进入才能展示消息
+- 根因排查：
+  1. `_stream_planning_llm()` `reasoning_text` 在流式阶段累积但未归入 `raw_response`；若模型仅产出 `reasoning_content` 无 `content`，`raw_response` 为空 → 触发 `empty_response` 错误 → 前端乐观消息 content 为空 → 空白展示
+  2. `_call_planning_llm()` → `_extract_message_content()` 只提取 `message.content`，完全忽略 `message.reasoning_content`，非流式路径同样脆弱
+  3. `turn_complete` 后 `loadSessionDetail()` 用服务端数据替换 transcript，流式阶段累积的 `_thinkingContent` 全部丢失
+  4. 历史消息加载（刷新后）未清除可能的 `_streaming: true` 残留标志
+- 执行动作：
+  - `backend/app/ai/test_planning_agent.py` `_stream_planning_llm()`：`content` 为空时用 `reasoning_text` 作为 `raw_response` 兜底，记录 warning 日志
+  - `backend/app/ai/test_planning_agent.py` `_extract_message_content()`：`content` 为空时回退提取 `reasoning_content`，非流式路径同样受保护
+  - `frontend/src/components/AITestPlanningPanel.tsx` `applySessionDetail()`：加载历史消息时检查并清除 `_streaming: true` 标志，防止刷新后残留流式状态
+  - `frontend/src/components/AITestPlanningPanel.tsx` `handleStreamEvent` `turn_complete`：`loadSessionDetail()` 后保留流式阶段累积的 `_thinkingContent`，不因服务端重载丢失
+- 验证：
+  - backend：29 planning agent 单元测试 + 11 AI planning API 测试通过，全量 505/506 通过（1 预存失败：`test_models.py::test_stage1_tables_exist` 未包含新增表 `ai_planning_tool_results`，与修改无关）
+  - frontend：TypeScript 编译无错误
+- 关联记录：`docs/bug-log.md` BUG-063
+
 ## 2026-05-04（可访问树定位器 + 发现时验证 — arxiv 2603.20358 论文方案落地）
 
 - 任务：`automationexercise.com` 首页登录按钮找不到（`<a>` 标签 role=”link” 但系统只有 `button_role` 策略），定位超时；参考论文 “Beyond LLM-based test automation: A Zero-Cost Self-Healing Approach Using DOM Accessibility Tree Extraction” 全面改造定位器系统
