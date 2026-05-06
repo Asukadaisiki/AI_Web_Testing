@@ -188,14 +188,22 @@ class TestFormatElementRich:
 # ---------------------------------------------------------------------------
 
 class TestFormatElementsForPrompt:
-    def test_filters_invisible(self):
+    def test_filters_invisible_non_interactive(self):
         elements = [
-            {"tag": "button", "text": "Visible", "visible": True},
-            {"tag": "button", "text": "Hidden", "visible": False},
+            {"tag": "span", "text": "Visible", "visible": True},
+            {"tag": "div", "text": "Hidden", "visible": False},
         ]
         result = format_elements_for_prompt(elements)
         assert "Visible" in result
         assert "Hidden" not in result
+
+    def test_keeps_invisible_interactive(self):
+        elements = [
+            {"tag": "button", "text": "Add to cart", "visible": False, "css_selector": "button.add", "xpath": "//button"},
+        ]
+        result = format_elements_for_prompt(elements)
+        assert "HIDDEN" in result
+        assert "Add to cart" in result
 
     def test_multiple_elements(self, elements_with_duplicates):
         result = format_elements_for_prompt(elements_with_duplicates)

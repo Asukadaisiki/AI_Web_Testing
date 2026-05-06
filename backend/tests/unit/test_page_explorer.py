@@ -105,10 +105,10 @@ class TestFormatElementsForPrompt:
         assert "button" in result
         assert "[text='Login']" in result
 
-    def test_skips_invisible_elements(self) -> None:
+    def test_skips_invisible_non_interactive_elements(self) -> None:
         elements = [
             {
-                "tag": "input",
+                "tag": "div",
                 "id": "hidden",
                 "aria_label": None,
                 "placeholder": None,
@@ -120,6 +120,25 @@ class TestFormatElementsForPrompt:
         ]
         result = format_elements_for_prompt(elements)
         assert result.strip() == ""
+
+    def test_keeps_invisible_interactive_elements(self) -> None:
+        elements = [
+            {
+                "tag": "a",
+                "id": "add-to-cart",
+                "aria_label": None,
+                "placeholder": None,
+                "role": None,
+                "text": "Add to cart",
+                "css_selector": "a.add-to-cart",
+                "xpath": "//a[@class='add-to-cart']",
+                "visible": False,
+                "enabled": True,
+            }
+        ]
+        result = format_elements_for_prompt(elements)
+        assert "HIDDEN" in result
+        assert "Add to cart" in result
 
     def test_formats_multiple_elements(self) -> None:
         elements = [
