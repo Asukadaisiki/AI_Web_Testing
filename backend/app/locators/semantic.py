@@ -199,22 +199,22 @@ _CHAINED_SELECTOR_RE = re.compile(
 )
 
 
-_PARENT_TEXT_RE = re.compile(
-    r"""(?P<parent>"[^"]+"|'[^']+'|[A-Za-z一-鿿][^>>\s>]{2,60})(?:\s*>>\s*|\s*的\s*|\s*附近的\s*)(?P<child>.+)""",
+_PARENT_SPLIT_RE = re.compile(
+    r"""\s*(?:>>|的|附近的)\s*""",
 )
 
 
 def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
     """Parse text-based parent chaining: "Blue Top" >> "Add to cart".
 
-    Finds an element with *parent* text, walks up to its container, then
-    searches within that container for an element with *child* text.
+    Splits on >> / 的 / 附近的, then finds an element with *parent* text,
+    walks up to its container, and searches within for *child* text.
     """
-    m = _PARENT_TEXT_RE.match(target.strip())
-    if m is None:
+    parts = _PARENT_SPLIT_RE.split(target.strip(), maxsplit=1)
+    if len(parts) != 2:
         return None
-    parent_text = m.group("parent").strip().strip("\"'")
-    child_text = m.group("child").strip().strip("\"'")
+    parent_text = parts[0].strip().strip("\"'")
+    child_text = parts[1].strip().strip("\"'")
     if not parent_text or not child_text:
         return None
     return (
