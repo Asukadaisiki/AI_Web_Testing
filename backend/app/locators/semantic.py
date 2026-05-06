@@ -200,7 +200,7 @@ _CHAINED_SELECTOR_RE = re.compile(
 
 
 _PARENT_TEXT_RE = re.compile(
-    r"""(?P<parent>[^>]+?)(?:\s*>>\s*|\s*的\s*|\s*附近的\s*)(?P<child>.+)""",
+    r"""(?P<parent>"[^"]+"|'[^']+'|[A-Za-z一-鿿][^>]{1,60}?)(?:\s*>>\s*|\s*的\s*|\s*附近的\s*)(?P<child>.+)""",
 )
 
 
@@ -250,12 +250,12 @@ def _resolve_chained_selector(page, target: str) -> tuple[str, object] | None:
 
 def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
     # Chained selector (e.g. ".productinfo text='View Product'")
-    text_parent = _resolve_text_parent_chain(page, target)
-    if text_parent is not None:
-        return text_parent
     chained = _resolve_chained_selector(page, target)
     if chained is not None:
         return chained
+    text_parent = _resolve_text_parent_chain(page, target)
+    if text_parent is not None:
+        return text_parent
     if target.startswith("css="):
         return ("css", lambda: page.locator(target))
     if target.startswith("xpath="):
