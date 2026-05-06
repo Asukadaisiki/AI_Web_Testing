@@ -246,13 +246,104 @@ def _extract_stability(line: str) -> float:
     return float(m.group(1)) if m else 0.0
 
 
-def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
-    """Format collected DOM elements into rich text for AI prompt injection.
+def _get_rect(element: dict[str, Any]) -> dict[str, float]:
+    r = element.get("rect")
+    if isinstance(r, dict):
+        return {"x": float(r.get("x", 0)), "y": float(r.get("y", 0)),
+                "w": float(r.get("width", 0)), "h": float(r.get("height", 0))}
+    return {"x": 0, "y": 0, "w": 0, "h": 0}
 
-    Each element is formatted with full attributes and a stability score,
-    enabling the AI to make informed decisions about which locator strategy to use.
-    Invisible interactive elements (e.g., buttons inside hover overlays) are kept
-    but marked so the AI knows they become visible on interaction.
+
+def _rects_overlap_y(a: dict[str, float], b: dict[str, float], tolerance: float = 120) -> bool:
+    """True if two rects overlap vertically within tolerance."""
+    a_bottom = a["y"] + a["h"]; b_bottom = b["y"] + b["h"]
+    return not (a_bottom + tolerance < b["y"] or b_bottom + tolerance < a["y"])
+
+
+def _rects_close_x(a: dict[str, float], b: dict[str, float], tolerance: float = 300) -> bool:
+    """True if two rects are horizontally close (same card/column)."""
+    a_right = a["x"] + a["w"]; b_right = b["x"] + b["w"]
+    return not (a_right + tolerance < b["x"] or b_right + tolerance < a["x"])
+
+
+def _has_usable_rect(element: dict[str, Any]) -> bool:
+    r = _get_rect(element)
+    return r["w"] > 0 and r["h"] > 0
+
+
+def _group_elements_by_visual_proximity(elements: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Cluster elements into visual groups using rect coordinates.
+
+    Groups represent logical UI blocks: product cards, forms, nav bars, etc.
+    Elements in the same row (y-proximity) and column (x-proximity) are grouped together.
+    Elements without usable rect data are kept as individual entries.
+    """
+    if not elements:
+        return []
+
+    # If no elements have usable rects, return flat list
+    with_rects = [e for e in elements if _has_usable_rect(e)]
+    if len(with_rects) < len(elements) * 0.5:
+        return [[e] for e in elements]  # fall back: one group per element
+
+    sorted_els = sorted(elements, key=lambda e: (_get_rect(e)["y"], _get_rect(e)["x"]))
+    groups: list[list[dict[str, Any]]] = []
+    assigned = [False] * len(sorted_els)
+
+    for i, el in enumerate(sorted_els):
+        if assigned[i]:
+            continue
+        r_i = _get_rect(el)
+        if not (r_i["w"] > 0 and r_i["h"] > 0):
+            groups.append([el])
+            assigned[i] = True
+            continue
+
+        group = [el]
+        assigned[i] = True
+
+        for j in range(i + 1, len(sorted_els)):
+            if assigned[j]:
+                continue
+            r_j = _get_rect(sorted_els[j])
+            if not (r_j["w"] > 0 and r_j["h"] > 0):
+                continue
+            if _rects_overlap_y(r_i, r_j) and _rects_close_x(r_i, r_j):
+                group.append(sorted_els[j])
+                assigned[j] = True
+
+        groups.append(group)
+
+    for i, el in enumerate(sorted_els):
+        if not assigned[i]:
+            groups.append([el])
+
+    return groups
+
+
+def _group_label(group: list[dict[str, Any]]) -> str:
+    """Make a human-readable label for a visual group based on its content."""
+    # Prefer: product name text > heading > link text > first element text
+    for el in group:
+        t = (el.get("text") or "").strip()
+        tag = el.get("tag", "")
+        if tag in ("h1", "h2", "h3", "h4") and t:
+            return t[:60]
+    # Look for a distinctive text (not "Add to cart", "View Product", etc.)
+    _generic = {"add to cart", "view product", "home", "cart", "login", "logout", "signup"}
+    for el in group:
+        t = (el.get("text") or "").strip()
+        if t and t.casefold() not in _generic and len(t) > 3:
+            return t[:60]
+    return group[0].get("tag", "block") if group else "block"
+
+
+def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
+    """Format DOM elements grouped by visual proximity, so the AI sees page structure.
+
+    Instead of a flat list, elements are clustered by their screen coordinates
+    into logical blocks (product cards, forms, nav bars). Each block is labeled
+    by its most descriptive text (product name, heading, etc.).
     """
     _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
     visible: list[dict] = []
@@ -263,33 +354,35 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
         elif e.get("tag", "").casefold() in _INTERACTIVE_TAGS:
             hidden_interactive.append(e)
 
-    lines: list[str] = []
-    for element in visible:
-        stability = _compute_element_stability(element, visible)
-        lines.append(_format_element_rich(element, stability))
-    # Append hidden interactive elements at the end, marked clearly
-    for element in hidden_interactive:
-        stability = _compute_element_stability(element, visible + hidden_interactive)
-        line = _format_element_rich(element, stability)
-        lines.append(line + " | [HIDDEN—visible on hover/interaction]")
-    result = "\n".join(lines)
+    groups = _group_elements_by_visual_proximity(visible)
+    hidden_groups = _group_elements_by_visual_proximity(hidden_interactive)
+
+    # Build output: each group gets a labeled section
+    sections: list[str] = []
+    for group in groups:
+        label = _group_label(group)
+        # Only show group header for groups with significant content
+        interactive_count = sum(1 for e in group if e.get("tag", "").casefold() in _INTERACTIVE_TAGS)
+        if len(group) >= 2 or interactive_count > 0:
+            sections.append(f"\n### {label}")
+        for element in group:
+            stability = _compute_element_stability(element, visible)
+            line = _format_element_rich(element, stability)
+            if interactive_count > 0 and element.get("tag", "").casefold() in _INTERACTIVE_TAGS:
+                line += " [INTERACTIVE]"
+            sections.append(line)
+
+    for group in hidden_groups:
+        label = _group_label(group)
+        sections.append(f"\n### {label} [HIDDEN—appears on hover]")
+        for element in group:
+            stability = _compute_element_stability(element, visible + hidden_interactive)
+            line = _format_element_rich(element, stability)
+            sections.append(line + " | [HIDDEN—visible on hover/interaction]")
+
+    result = "\n".join(sections)
     if len(result) > MAX_PROMPT_ELEMENTS_CHARS:
-        prioritized = sorted(
-            [(line, _extract_stability(line)) for line in lines],
-            key=lambda x: x[1], reverse=True,
-        )
-        kept: list[str] = []
-        char_count = 0
-        truncated_count = 0
-        for line, _ in prioritized:
-            if char_count + len(line) + 1 > MAX_PROMPT_ELEMENTS_CHARS:
-                truncated_count += 1
-                continue
-            kept.append(line)
-            char_count += len(line) + 1
-        kept.sort(key=lambda x: lines.index(x))
-        result = "\n".join(kept)
-        result += f"\n... [truncated {truncated_count} low-stability elements to fit prompt limits]"
+        result = result[:MAX_PROMPT_ELEMENTS_CHARS] + "\n... [truncated]"
     return result
 
 

@@ -151,6 +151,7 @@ class TestFormatElementsForPrompt:
                 "text": None,
                 "visible": True,
                 "enabled": True,
+                "rect": {"x": 100, "y": 200, "width": 200, "height": 30},
             },
             {
                 "tag": "button",
@@ -161,11 +162,14 @@ class TestFormatElementsForPrompt:
                 "text": "Submit",
                 "visible": True,
                 "enabled": True,
+                "rect": {"x": 100, "y": 210, "width": 100, "height": 30},
             },
         ]
         result = format_elements_for_prompt(elements)
-        lines = [line for line in result.strip().split("\n") if line.strip()]
-        assert len(lines) == 2
+        assert "input#user" in result
+        assert "Submit" in result
+        # Elements in same visual group should appear together under one label
+        assert result.count("###") <= 2  # max 1 group header + possibly 1 more
 
     def test_includes_aria_label(self) -> None:
         elements = [
