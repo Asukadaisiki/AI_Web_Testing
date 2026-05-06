@@ -1012,17 +1012,28 @@ _HEAVY_TOOLS = {"explore_page", "explore_flow"}
 
 
 def _filter_elements_for_compression(elements: list[dict]) -> list[dict]:
-    """Trim elements to essential attributes, max 100 items."""
-    cap = 100
-    filtered: list[dict] = []
-    for el in elements[:cap]:
+    """Trim elements to essential attributes, prioritizing interactive elements.
+
+    Interactive elements (input, button, select, textarea, a) get priority
+    because they are the most critical for test generation. Non-interactive
+    elements are capped to avoid overwhelming the subagent.
+    """
+    _INTERACTIVE_TAGS = {"input", "button", "select", "textarea", "a"}
+    interactive: list[dict] = []
+    other: list[dict] = []
+    for el in elements:
         if not isinstance(el, dict):
             continue
-        filtered.append({
+        trimmed = {
             k: v for k, v in el.items()
             if k in _ELEMENT_KEEP_ATTRS and v is not None and v != ""
-        })
-    return filtered
+        }
+        if trimmed.get("tag", "").casefold() in _INTERACTIVE_TAGS:
+            interactive.append(trimmed)
+        else:
+            other.append(trimmed)
+    # All interactive elements + top 80 non-interactive
+    return interactive + other[:80]
 
 
 _SUBAGENT_SYSTEM_PROMPT = """\
@@ -1056,10 +1067,12 @@ For explore_flow:
 }
 
 Rules:
-- Max 30 key_elements per page
-- Only include elements with stable selectors (id, data-qa, name)
-- Selector format: use id > data-qa > name > unique class
-- Keep output under 3KB
+- **CRITICAL: Every <form>, <input>, <select>, <textarea>, and <button> element MUST appear in key_elements or forms.** Never drop form fields.
+- For forms with data-qa or id attributes (like login forms), always include ALL fields in the "forms" array with their selectors.
+- Max 40 key_elements per page (increased for form-heavy pages).
+- Include elements with ANY stable selector: id, data-qa, name, placeholder, or unique aria-label.
+- Selector format preference: data-qa > id > name > placeholder > stable aria-label.
+- Keep output under 4KB.
 - Return ONLY valid JSON, no markdown fences
 """
 
