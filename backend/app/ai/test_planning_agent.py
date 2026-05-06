@@ -910,6 +910,12 @@ def _merge_requirements(requirements: AIPlanningRequirements, collected_info: An
             continue
         if incoming in (None, ""):
             continue
+        # Normalize list fields: join items as numbered list instead of Python repr
+        if field_name == "core_user_flow" and isinstance(incoming, list):
+            items = [str(item).strip().rstrip(";") for item in incoming if str(item).strip()]
+            incoming = "; ".join(f"{i+1}. {item}" for i, item in enumerate(items))
+        if isinstance(incoming, list):
+            incoming = "; ".join(str(item).strip() for item in incoming if str(item).strip())
         current = getattr(requirements, field_name)
         if not current:
             setattr(requirements, field_name, str(incoming).strip())
