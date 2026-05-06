@@ -1747,15 +1747,25 @@ def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:
-    content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
-    if isinstance(content, str):
+    message = payload.get("choices", [{}])[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str) and content.strip():
         return content
     if isinstance(content, list):
         text_parts: list[str] = []
         for item in content:
             if isinstance(item, dict) and isinstance(item.get("text"), str):
                 text_parts.append(item["text"])
-        return "\n".join(text_parts)
+        result = "\n".join(text_parts)
+        if result.strip():
+            return result
+    # Fallback to reasoning_content when thinking mode produces no content
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        logger.warning("LLM returned empty content, falling back to reasoning_content (%d chars)", len(reasoning))
+        return reasoning
+    if isinstance(content, str):
+        return content
     return ""
 
 
