@@ -483,9 +483,13 @@ def generate_case_draft(
     )
 
     try:
-        raw_case = json.loads(_extract_json_object(response_text))
+        cleaned = _extract_json_object(response_text)
+        raw_case = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise DslGenerationError("AI 返回了无法解析的 DSL JSON。") from exc
+        preview = response_text[:1000].replace('\n', '\\n')
+        raise DslGenerationError(
+            f"AI 返回了无法解析的 DSL JSON。原始响应前1000字符: {preview}"
+        ) from exc
 
     if not isinstance(raw_case, dict):
         raise DslGenerationError("AI 返回的 DSL 根对象必须是 JSON object。")
@@ -1067,15 +1071,21 @@ def _normalize_steps(
                 allow_auto_repair=allow_auto_repair,
                 normalization_notes=normalization_notes,
             )
-        except DslGenerationError:
+        except DslGenerationError as exc:
             if not allow_auto_repair:
                 raise
             normalized_step = None
             action_repaired = 0
+            warnings.append(f"步骤 #{index} 无法修正：{exc}")
 
         if normalized_step is None:
-            removed_invalid_steps += 1
-            warnings.append(f"步骤 #{index} 无法修正为合法 DSL，已忽略。")
+            if not any(f"步骤 #{index}" in w for w in warnings):
+                removed_invalid_steps += 1
+                warnings.append(
+                    f"步骤 #{index} 校验失败（action={raw_step.get('action','?')} "
+                    f"target={str(raw_step.get('target',''))[:40]!r} "
+                    f"value={str(raw_step.get('value',''))[:40]!r}）"
+                )
             continue
 
         repaired_invalid_actions += action_repaired
@@ -1151,10 +1161,11 @@ def _normalize_single_step(
 
     try:
         return _STEP_ADAPTER.validate_python(repaired_step), repaired_invalid_actions
-    except ValidationError:
+    except ValidationError as ve:
         if allow_auto_repair:
             return None, repaired_invalid_actions
-        raise DslGenerationError(f"步骤 #{index} 不符合当前 DSL schema。")
+        error_detail = str(ve.errors()[0]) if ve.errors() else str(ve)
+        raise DslGenerationError(f"步骤 #{index} 不符合 DSL schema: {error_detail}")
 
 
 def _resolve_base_url(
