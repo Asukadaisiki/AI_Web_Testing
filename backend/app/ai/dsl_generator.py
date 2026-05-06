@@ -147,8 +147,10 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "## capture_text action",
     "Use capture_text to extract visible text from a page element and store it as a runtime variable.",
     "It requires: target (element locator) and context_key (variable name in snake_case).",
-    "Captured variables can be referenced in subsequent steps via ${context_key}, for example to assert cross-page data consistency.",
-    "Example: capture a product price on the detail page, then assert the cart page contains the same price text.",
+    "Captured variables can be referenced in subsequent steps via ${context_key}.",
+    "**MANDATORY: every capture_text step MUST be followed by at least one assert_text that references the captured ${context_key}.** Capture alone proves nothing — it only reads data without verifying it.",
+    "Example correct pattern: capture_text context_key='price' → later: assert_text value='${price}'.",
+    "Example wrong pattern: capture_text context_key='price' → never asserted (test is useless).",
     "",
     "## form field coverage",
     "IMPORTANT: You MUST generate a step for EVERY form field mentioned in the prompt.",
@@ -201,6 +203,8 @@ _BASE_USER_RULE_LINES = [
     "- 如果需要明确指定定位策略，可在 step 中添加 target_strategy 字段（可选值：css, xpath, data-testid, element_id, tag, semantic）。不填则自动推断。",
     "- base_url 应为站点根地址（如 https://example.com），页面路径放在 goto 步骤中（如 /login）。不要将完整页面 URL 填入 base_url。",
     "- 生成前评估测试信息完整性：前置条件（系统初始状态）、入口（目标页面 URL 或导航路径）、操作步骤、预期结果。如果描述中缺少入口信息，通过 base_url + goto 步骤明确入口。",
+    "- 【页面导航完整性】每个页面的元素只能在该页面加载后才能操作。进入新页面必须通过 click/goto 步骤。例如：登录页面的邮箱输入框必须在 click \"Signup / Login\"（或 goto /login）之后才能操作，不能从首页直接 input \"Email Address\"。确保步骤顺序与实际页面跳转逻辑一致。",
+    "- 【capture 必须 assert】使用 capture_text 提取数据后，必须在后续步骤中用 assert_text 验证该值。capture 只是读取数据，不能发现任何 bug。每条核心断言（如价格一致性、跨页面数据匹配）必须有对应的 assert_text 步骤。capture_text 捕获的 ${context_key} 必须在至少一个 assert_text 中被引用。",
 ]
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
     "context_mismatch",
