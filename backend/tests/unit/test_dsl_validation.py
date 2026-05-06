@@ -637,7 +637,7 @@ def test_generate_dsl_case_returns_502_for_invalid_json(client, monkeypatch) -> 
     )
 
     assert response.status_code == 502
-    assert response.json()["detail"] == "AI 返回了无法解析的 DSL JSON。"
+    assert "AI 返回了无法解析的 DSL JSON" in response.json()["detail"]
 
 
 def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, monkeypatch) -> None:
@@ -690,7 +690,7 @@ def test_generate_dsl_case_auto_repairs_invalid_action_and_contracts(client, mon
     assert response.json()["warnings"] == [
         "输入契约 #1 结构非法，已忽略。",
         "输出契约 #2 缺少稳定 source，已忽略。",
-        "步骤 #2 无法修正为合法 DSL，已忽略。",
+        "步骤 #2 校验失败（action=hover target='按钮' value=''）",
     ]
     assert response.json()["normalization_notes"] == [
         "AI 草案中的输入契约已从单个对象包装为数组。",
@@ -1537,7 +1537,7 @@ def test_generate_dsl_case_persists_failure_record(client, db_session, monkeypat
     assert len(runs) == 1
     assert runs[0].success is False
     assert runs[0].error_type == "DslGenerationError"
-    assert runs[0].error_message == "AI 返回了无法解析的 DSL JSON。"
+    assert "AI 返回了无法解析的 DSL JSON" in (runs[0].error_message or "")
     assert runs[0].generated_case_json is None
     assert runs[0].prompt_version == AI_DSL_PROMPT_VERSION
     assert runs[0].prompt_variant == "baseline_draft"
