@@ -199,6 +199,30 @@ _CHAINED_SELECTOR_RE = re.compile(
 )
 
 
+_PARENT_TEXT_RE = re.compile(
+    r"""(?P<parent>[^>]+?)(?:\s*>>\s*|\s*的\s*|\s*附近的\s*)(?P<child>.+)""",
+)
+
+
+def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
+    """Parse text-based parent chaining: "Blue Top" >> "Add to cart".
+
+    Finds an element with *parent* text, walks up to its container, then
+    searches within that container for an element with *child* text.
+    """
+    m = _PARENT_TEXT_RE.match(target.strip())
+    if m is None:
+        return None
+    parent_text = m.group("parent").strip().strip("\"'")
+    child_text = m.group("child").strip().strip("\"'")
+    if not parent_text or not child_text:
+        return None
+    return (
+        "text_parent_chain",
+        lambda: page.get_by_text(parent_text).locator("..").locator("..").locator("..").get_by_text(child_text),
+    )
+
+
 def _resolve_chained_selector(page, target: str) -> tuple[str, object] | None:
     """Parse Playwright-style chained selectors like ``.class text='Value'``.
 
@@ -226,6 +250,9 @@ def _resolve_chained_selector(page, target: str) -> tuple[str, object] | None:
 
 def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
     # Chained selector (e.g. ".productinfo text='View Product'")
+    text_parent = _resolve_text_parent_chain(page, target)
+    if text_parent is not None:
+        return text_parent
     chained = _resolve_chained_selector(page, target)
     if chained is not None:
         return chained
@@ -372,6 +399,7 @@ def _strategy_base_score(strategy: str) -> int:
         "css": 120,
         "xpath": 120,
         "data-testid": 115,
+        "text_parent_chain": 112,
         "chained_css_text": 110,
         "css_tag": 105,
         "element_id": 100,
