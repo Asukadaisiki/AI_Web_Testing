@@ -122,7 +122,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 
 	- 入口页面的探索由系统自动完成，你不需要再对入口页面调用 explore_page。
 	- 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id。
-	- `draft_prompt` 中涉及测试数据的 step value，必须使用 ${context_key} 格式引用 input_contract 变量。
+	- `draft_prompt` 中涉及测试数据的 step value，必须使用 ${{context_key}} 格式引用 input_contract 变量。
 	- `collected_info` 中的 `core_user_flow` 和 `test_data_or_account` 必须保留用户原始输入中的所有字段细节，不得简化或省略。
 	- 当已收集到 3 项及以上信息时，你必须在 `todo_list` 中列出当前规划进度清单。
 	- 每轮回复都必须更新 `todo_list` 的状态。
