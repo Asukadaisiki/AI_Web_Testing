@@ -408,10 +408,10 @@ def generate_planning_drafts(
             # --- Locator preflight (Phase 3) ---
             dsl_dict = generated.case.model_dump(mode="json")
             preflight_warnings: list[str] = []
+            preflight_rejected = False
             if scenario.get("page_elements"):
                 try:
                     from app.ai.locator_preflight import apply_preflight_to_dsl
-                    # Build flat element list from stored page_results
                     page_elements_list: list[dict] = []
                     raw_pages = plan.get("_page_results")
                     if isinstance(raw_pages, list):
@@ -423,11 +423,41 @@ def generate_planning_drafts(
                         pf = dsl_dict.pop("_preflight", {})
                         preflight_warnings = pf.get("warnings", [])
                         preflight_confidence = pf.get("locator_confidence", "unknown")
-                        logger.info(
-                            "Preflight for scenario '%s': confidence=%s, warnings=%d, elements=%d",
-                            scenario_key, preflight_confidence, len(preflight_warnings), len(page_elements_list),
+                        step_results = pf.get("step_results", [])
+                        # --- Preflight gate: reject if too many targets are unmatched ---
+                        total_targets = len(step_results)
+                        unmatched = sum(1 for sr in step_results if sr.get("match_count", 0) == 0)
+                        unmatched_ratio = unmatched / total_targets if total_targets > 0 else 0
+                        if unmatched_ratio > 0.5:
+                            preflight_rejected = True
+                            # Collect unresolved page states
+                            unresolved_states: set[str] = set()
+                            for sr in step_results:
+                                if sr.get("match_count", 0) == 0 and sr.get("target"):
+                                    unresolved_states.add(sr["target"][:80])
+                            rejection_msg = (
+                                f"Preflight gate rejected DSL: {unmatched}/{total_targets} steps "
+                                f"({unmatched_ratio*100:.0f}%) have locator targets not found in "
+                                f"{len(page_elements_list)} explored elements. "
+                                f"Missing targets: {', '.join(sorted(unresolved_states)[:5])}"
+                            )
+                            raise ValueError(rejection_msg)
+                        # --- Reject if no exploration data at all ---
+                    else:
+                        preflight_rejected = True
+                        raise ValueError(
+                            "No page elements available for locator preflight. "
+                            "AI must explore relevant pages before generating DSL."
                         )
+                    logger.info(
+                        "Preflight for scenario '%s': confidence=%s, warnings=%d, elements=%d, unmatched=%d/%d",
+                        scenario_key, preflight_confidence, len(preflight_warnings),
+                        len(page_elements_list), unmatched, total_targets,
+                    )
                 except Exception as exc:
+                    if preflight_rejected:
+                        logger.warning("Preflight gate rejected scenario '%s': %s", scenario_key, exc)
+                        raise
                     logger.warning("Preflight failed for scenario '%s': %s", scenario_key, exc)
 
             all_warnings = list(generated.warnings) + preflight_warnings
