@@ -114,7 +114,7 @@ _OUTPUT_SOURCE_ALIASES = {
     "step_error_message": "last_step_error_message",
     "last_step_error_message": "last_step_error_message",
 }
-AI_DSL_PROMPT_VERSION = "2026-04-24.target-format-v2"
+AI_DSL_PROMPT_VERSION = "2026-05-06.assertion-and-navigation-v3"
 _BASE_SYSTEM_PROMPT_LINES = [
     "You generate structured web testing DSL in JSON only.",
     "Do not use any other action names.",
@@ -170,6 +170,14 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "Do NOT blindly add wait_for after every click. Only add verification where the step has a meaningful expected outcome that confirms it worked.",
     "Example of correct pattern: click \"Signup\" → wait_for \"Enter Account Information\" → input \"Password\".",
     "Example of wrong pattern: click \"Signup\" → immediately input \"Password\" (no verification that the signup form actually loaded).",
+    "",
+    "## modify-then-assert rule",
+    "When the test flow says to change a value (e.g., change quantity to 2, change price), you MUST:",
+    "  1. First: input the new value into the field (action=\"input\")",
+    "  2. Then: wait_for the UI to reflect the change",
+    "  3. Finally: assert_text to verify the new value appears",
+    "Example of wrong pattern: assert_text value='2' without a preceding input step.",
+    "Example of correct pattern: input value='2' → wait_for → capture_text → assert_text.",
 ]
 _PROMPT_VARIANT_RULES: dict[DslGenerationPromptVariant, list[str]] = {
     "contracts_focus": [
@@ -205,6 +213,7 @@ _BASE_USER_RULE_LINES = [
     "- 生成前评估测试信息完整性：前置条件（系统初始状态）、入口（目标页面 URL 或导航路径）、操作步骤、预期结果。如果描述中缺少入口信息，通过 base_url + goto 步骤明确入口。",
     "- 【页面导航完整性】每个页面的元素只能在该页面加载后才能操作。进入新页面必须通过 click/goto 步骤。例如：登录页面的邮箱输入框必须在 click \"Signup / Login\"（或 goto /login）之后才能操作，不能从首页直接 input \"Email Address\"。确保步骤顺序与实际页面跳转逻辑一致。",
     "- 【capture 必须 assert】使用 capture_text 提取数据后，必须在后续步骤中用 assert_text 验证该值。capture 只是读取数据，不能发现任何 bug。每条核心断言（如价格一致性、跨页面数据匹配）必须有对应的 assert_text 步骤。capture_text 捕获的 ${context_key} 必须在至少一个 assert_text 中被引用。",
+    "- 【修改值必须先 input】如果测试流程要求修改某个字段的值（如修改数量为 2、修改价格为 100），必须先有 input 步骤执行修改，再有 assert_text 验证修改结果。不能跳过 input 直接 assert 修改后的值。错误示例：直接 assert_text value='2' 但没有 input value='2'。正确示例：input value='2' → wait_for → assert_text value='2'。",
 ]
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
     "context_mismatch",
