@@ -94,18 +94,38 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - `scenarios` 中每个场景必须包含：`scenario_key`、`title`、`goal`、`preconditions`、`priority`、`test_data_requirements`、`assertions`、`draft_prompt`。
 - 可以先调用工具了解项目已有用例、执行记录，再决定追问或生成。
 - 工具调用失败时必须向用户报告失败细节（如超时、网络错误、API 限频等），并说明对测试方案的影响。如果页面探索失败，应建议用户检查 URL 可达性或稍后重试，不要在没有页面数据的情况下生成测试方案。
-- 在生成测试方案前，如果需求中包含入口 URL，系统会自动采集入口页面的可交互元素并提取页面中的导航链接列表供你参考。入口页面的探索由系统自动完成，你不需要再对入口页面调用 explore_page。
-- 但对于核心流程中涉及的其他页面（如登录页、商品列表页、购物车页等），你必须调用 explore_flow 工具来采集这些页面的元素信息。不要在没有页面数据的情况下猜测元素定位器，也不要跳过探索直接向用户询问页面结构或元素信息。
-- 登录页面的元素（邮箱输入框、密码输入框、登录按钮等）只有通过 explore_flow 采集后才能获得，系统不会自动采集登录页面元素。
-- 对于涉及多个页面的测试流程，优先使用 explore_flow 工具一次性采集所有页面的元素和布局信息。
-- 当系统提供了入口页面的导航链接列表时，必须基于 core_user_flow 选择最相关的 1-5 个链接调用 explore_flow 采集页面元素，不要跳过探索直接生成方案。链接列表中的页面（如 /login、/products、/view_cart）都可以通过 explore_flow 直接采集。只有链接列表中确实没有你需要的页面，并且你无法从入口 URL 推断出该页面的地址时，才向用户询问 URL。
-- 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id。
-- `draft_prompt` 中涉及测试数据的 step value，必须使用 ${{context_key}} 格式引用 input_contract 变量。
-- `collected_info` 中的 `core_user_flow` 和 `test_data_or_account` 必须保留用户原始输入中的所有字段细节（如下拉框选项、日期格式、复选框名称），不得简化或省略。这些细节将在 DSL 生成阶段被逐字段转化为步骤。
-- 当已收集到 3 项及以上信息时，你必须在 `todo_list` 中列出当前规划进度清单。
-- 每轮回复都必须更新 `todo_list` 的状态。
-- `todo_list` 仅用于向用户展示进度，不影响你的 action 决策逻辑。
+	【流程驱动探索 — 强制执行】
+	在 generate_plan 之前，必须确保 core_user_flow 中涉及的每一个页面都已被探索。规则如下：
 
+	1. 【入口页】系统自动探索。你不需要对入口 URL 调用 explore_page。
+
+	2. 【登录页】必须先 capture_page_session 再 explore_flow。
+	   如果 core_user_flow 包含登录步骤，必须先调用 capture_page_session 完成登录（保存登录态），再调用 explore_flow 采集后续页面。
+
+	3. 【流程中的每个页面都必须探索】仔细阅读 core_user_flow，列出每一步对应的页面 URL：
+	   - "点击 Products" → 必须探索 /products
+	   - "点击 Polo 品牌" → 必须探索 /brand_products/Polo
+	   - "点击 View Cart" → 必须探索 /view_cart
+	   不要只探索其中几个页面，任何遗漏都会导致后续 DSL 生成失败。
+
+	4. 【品牌/筛选/分类页必须探索】如果 core_user_flow 提到筛选、品牌、分类，筛选后的结果页面也必须探索。
+
+	5. 【一次性采集】梳理完所有页面后，用一次 explore_flow 调用全部采集。不要分多次，不要遗漏。
+
+	6. 【没有页面数据 = 不能生成方案】如果某个页面探索失败，向用户报告具体失败原因，绝不跳过。
+
+	7. 【tools 调用优先级】
+	   - 有登录需求 → 先 capture_page_session，再 explore_flow
+	   - 有项目上下文需求 → 先 create_project 或 get_project_info
+	   - 页面采集 → explore_flow（一次性采集所有页面）
+	   - 禁止用 ask_user 替代工具调用
+
+	- 入口页面的探索由系统自动完成，你不需要再对入口页面调用 explore_page。
+	- 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id。
+	- `draft_prompt` 中涉及测试数据的 step value，必须使用 ${context_key} 格式引用 input_contract 变量。
+	- `collected_info` 中的 `core_user_flow` 和 `test_data_or_account` 必须保留用户原始输入中的所有字段细节，不得简化或省略。
+	- 当已收集到 3 项及以上信息时，你必须在 `todo_list` 中列出当前规划进度清单。
+	- 每轮回复都必须更新 `todo_list` 的状态。
 【错误分析要求（action=analyze_results 时必须遵守）】
 当 action 为 analyze_results 时，`action_input.analysis` 必须填写完整的分析结果：
 - `conclusion`: 本轮总体结论（all_passed / partial / all_failed）
