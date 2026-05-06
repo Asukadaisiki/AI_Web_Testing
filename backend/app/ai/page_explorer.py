@@ -813,12 +813,15 @@ def collect_multi_page_elements(
     storage_state_path: str | None = None,
     enable_vlm_annotation: bool = True,
     timeout_ms: int = 60000,
+    base_url: str = "https://automationexercise.com",
 ) -> list[dict[str, Any]]:
     """Open *urls* sequentially in a single Playwright context and collect elements for each page.
 
     Reuses the same browser session across all URLs so that cookies / auth state
     established by earlier pages carry over to later ones.
     """
+    from urllib.parse import urljoin
+
     if not urls:
         return []
 
@@ -835,6 +838,9 @@ def collect_multi_page_elements(
 
             for url in urls:
                 url = url.strip()
+                # Resolve relative URLs against base_url
+                if not url.startswith(("http://", "https://")):
+                    url = urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
                 try:
                     page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                     try:
