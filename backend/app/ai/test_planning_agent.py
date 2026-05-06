@@ -295,6 +295,21 @@ def stream_planning_turn(
             has_explore = _has_explored_pages(tool_calls)
             has_flow = any(call.tool == "explore_flow" for call in tool_calls)
 
+            # Check exploration QUALITY, not just existence
+            if has_explore:
+                exploration_elements = _count_explored_elements(tool_calls)
+                if exploration_elements < 10:
+                    yield {"type": "status", "phase": "tool_call",
+                           "message": f"页面探索仅采集到 {exploration_elements} 个元素，数据不足，需要更多探索"}
+                    conversation.append(
+                        {"role": "system", "content": (
+                            f"页面探索仅采集到 {exploration_elements} 个元素，数据严重不足。"
+                            "请使用 explore_page 采集更多页面（如登录页、商品列表页、购物车页）。"
+                            "没有足够元素数据时不要生成 DSL。"
+                        )},
+                    )
+                    continue
+
             if not has_explore:
                 explored, tool_calls, internal_links = _auto_explore_entry_url(
                     requirements, tool_calls, db_session, project_id,
@@ -970,6 +985,19 @@ def _extract_exploration_error(tool_calls: list[AIPlanningToolCall]) -> str | No
             if page_errors:
                 errors.extend(page_errors)
     return "; ".join(errors) if errors else None
+
+
+def _count_explored_elements(tool_calls: list[AIPlanningToolCall]) -> int:
+    """Return total element count across all explore_page/explore_flow calls."""
+    total = 0
+    for call in tool_calls:
+        if call.tool == "explore_page" and isinstance(call.result, dict):
+            total += int(call.result.get("element_count", 0))
+        elif call.tool == "explore_flow" and isinstance(call.result, dict):
+            for page in call.result.get("pages", []) or call.result.get("page_results", []):
+                if isinstance(page, dict):
+                    total += int(page.get("element_count", 0))
+    return total
 
 
 def _has_explored_pages(tool_calls: list[AIPlanningToolCall]) -> bool:
@@ -1972,6 +2000,40 @@ def _build_test_data_requirements(
     ]
 
 
+_VARIABLE_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _extract_undefined_variables(
+    steps: list[dict[str, Any]],
+    input_contract: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Return variables referenced in steps but not defined in input_contract or capture_text."""
+    defined: set[str] = set()
+    if input_contract:
+        for c in input_contract:
+            if isinstance(c, dict) and c.get("context_key"):
+                defined.add(c["context_key"])
+
+    # capture_text steps define runtime variables
+    for step in steps:
+        if isinstance(step, dict) and step.get("action") == "capture_text":
+            ck = step.get("context_key")
+            if ck:
+                defined.add(ck)
+
+    referenced: set[str] = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        for field in ("value", "target"):
+            val = step.get(field, "")
+            if isinstance(val, str):
+                for match in _VARIABLE_REF_RE.finditer(val):
+                    referenced.add(match.group(1))
+
+    return sorted(referenced - defined)
+
+
 def _build_draft_prompt(
     requirements: AIPlanningRequirements,
     *,
@@ -2015,4 +2077,7 @@ def _build_draft_prompt(
         "必须为流程和测试数据中提到的每个表单字段生成对应步骤，不得遗漏任何字段（包括下拉框、日期选择器、复选框等）。"
         f"{data_section}"
         f"{dom_section}"
+        "\n\n重要：所有使用 ${variable_name} 格式引用的变量，必须先在 input_contract 中定义。"
+        "如果某个变量（如 product_a_price）是从页面提取的，必须先用 capture_text 步骤捕获它（设置 context_key），再在后续 assert_text 中通过 ${context_key} 引用。"
+        "不要引用未在 input_contract 或 capture_text 中定义的变量。"
     )

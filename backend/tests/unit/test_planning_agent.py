@@ -8,8 +8,10 @@ from app.ai.test_planning_agent import (
     _auto_explore_entry_url,
     _build_draft_prompt,
     _build_link_selection_message,
+    _count_explored_elements,
     _extract_internal_links,
     _extract_page_elements,
+    _extract_undefined_variables,
     _has_explored_pages,
     _has_internal_links_in_tool_calls,
     _extract_links_from_tool_calls,
@@ -612,3 +614,53 @@ class TestAutoExploreEntryAndFindLogin:
         assert len(calls) == 1
         assert calls[0].tool == "explore_page"
         assert calls[0].params == {"url": "https://example.com"}
+
+
+class TestCountExploredElements:
+    def test_count_explored_elements_empty(self) -> None:
+        assert _count_explored_elements([]) == 0
+
+    def test_count_explored_elements_with_explore_page(self) -> None:
+        calls = [
+            AIPlanningToolCall(tool="explore_page", params={}, result={"element_count": 250}),
+            AIPlanningToolCall(
+                tool="explore_flow", params={}, result={"pages": [
+                    {"element_count": 100}, {"element_count": 50}
+                ]}
+            ),
+        ]
+        assert _count_explored_elements(calls) == 400
+
+
+class TestExtractUndefinedVariables:
+    def test_extract_undefined_variables_detects_missing(self) -> None:
+        steps = [
+            {"action": "assert_text", "target": "td > h4", "value": "${product_a_name}"},
+            {"action": "assert_text", "target": "td > p", "value": "${product_a_price}"},
+        ]
+        input_contract = [
+            {"name": "登录邮箱", "context_key": "login_email", "value_type": "string", "required": True},
+        ]
+        undefined = _extract_undefined_variables(steps, input_contract)
+        assert "product_a_name" in undefined
+        assert "product_a_price" in undefined
+        assert "login_email" not in undefined
+
+    def test_extract_undefined_variables_handles_capture_text(self) -> None:
+        steps = [
+            {"action": "capture_text", "target": "Product Name", "context_key": "product_a_name"},
+            {"action": "assert_text", "target": "cart td", "value": "${product_a_name}"},
+        ]
+        undefined = _extract_undefined_variables(steps, [])
+        assert len(undefined) == 0
+
+    def test_extract_undefined_variables_all_vars_defined(self) -> None:
+        steps = [
+            {"action": "input", "target": "Email", "value": "${login_email}"},
+            {"action": "input", "target": "Password", "value": "${login_password}"},
+        ]
+        input_contract = [
+            {"context_key": "login_email", "value_type": "string", "name": "邮箱", "required": True},
+            {"context_key": "login_password", "value_type": "string", "name": "密码", "required": True},
+        ]
+        assert _extract_undefined_variables(steps, input_contract) == []
