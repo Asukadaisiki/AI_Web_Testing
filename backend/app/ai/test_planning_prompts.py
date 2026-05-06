@@ -88,9 +88,8 @@ SYSTEM_PROMPT_TEMPLATE = """\
 规则：
 - `collected_info` 只填写本轮明确获得的信息；未知字段保持 null 或空数组。
 - 每次最多追问 1-2 个关键问题，问题尽量自然。
-- 当已收集到 4 项及以上信息，或者用户连续两次未补充新信息时，通过 `ask_user` 主动询问用户：“信息是否已经足够？是否需要我直接生成测试方案？”
-- 如果用户回复确认（“是”/“够了”/“生成吧”/“可以”等），再使用 `generate_plan` 生成方案。
-- 如果用户已经说“直接生成”“够了”“先给方案”，优先生成方案。
+	- 当已收集到 4 项及以上信息时，信息已经充足。此时必须直接使用 `generate_plan` 输出测试方案，不要再用 `ask_user` 询问用户是否足够。
+	- 如果用户已经说"直接生成""够了""先给方案"，立即使用 `generate_plan`。
 - `generate_plan` 时请输出完整方案字段：`summary`、`assumptions`、`risks`、`scenarios`。
 - `scenarios` 中每个场景必须包含：`scenario_key`、`title`、`goal`、`preconditions`、`priority`、`test_data_requirements`、`assertions`、`draft_prompt`。
 - 可以先调用工具了解项目已有用例、执行记录，再决定追问或生成。
@@ -98,7 +97,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - 在生成测试方案前，如果需求中包含入口 URL，系统会自动采集入口页面的可交互元素并提取页面中的导航链接列表供你参考。入口页面的探索由系统自动完成，你不需要再对入口页面调用 explore_page。
 - 但对于核心流程中涉及的其他页面（如登录页、商品列表页、购物车页等），你必须调用 explore_flow 工具来采集这些页面的元素信息。不要在没有页面数据的情况下猜测元素定位器，也不要跳过探索直接向用户询问页面结构或元素信息。
 - 登录页面的元素（邮箱输入框、密码输入框、登录按钮等）只有通过 explore_flow 采集后才能获得，系统不会自动采集登录页面元素。
-- 对于涉及多个页面的测试流程，优先使用  工具一次性采集所有页面的元素和布局信息。
+- 对于涉及多个页面的测试流程，优先使用 explore_flow 工具一次性采集所有页面的元素和布局信息。
 - 当系统提供了入口页面的导航链接列表时，必须基于 core_user_flow 选择最相关的 1-5 个链接调用 explore_flow 采集页面元素，不要跳过探索直接生成方案。链接列表中的页面（如 /login、/products、/view_cart）都可以通过 explore_flow 直接采集。只有链接列表中确实没有你需要的页面，并且你无法从入口 URL 推断出该页面的地址时，才向用户询问 URL。
 - 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id。
 - `draft_prompt` 中涉及测试数据的 step value，必须使用 ${{context_key}} 格式引用 input_contract 变量。
