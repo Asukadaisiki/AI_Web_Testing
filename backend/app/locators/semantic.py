@@ -200,7 +200,7 @@ _CHAINED_SELECTOR_RE = re.compile(
 
 
 _PARENT_TEXT_RE = re.compile(
-    r"""(?P<parent>"[^"]+"|'[^']+'|[A-Za-z一-鿿][^>]{1,60}?)(?:\s*>>\s*|\s*的\s*|\s*附近的\s*)(?P<child>.+)""",
+    r"""(?P<parent>"[^"]+"|'[^']+'|[A-Za-z一-鿿][^>>\s>]{2,60})(?:\s*>>\s*|\s*的\s*|\s*附近的\s*)(?P<child>.+)""",
 )
 
 
@@ -219,7 +219,9 @@ def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
         return None
     return (
         "text_parent_chain",
-        lambda: page.get_by_text(parent_text).locator("..").locator("..").locator("..").get_by_text(child_text),
+        lambda: (page.get_by_text(parent_text, exact=False)
+                 .locator("xpath=ancestor::*[contains(@class,'product') or contains(@class,'item') or contains(@class,'card') or contains(@class,'row')][1]")
+                 .get_by_text(child_text, exact=False)),
     )
 
 
