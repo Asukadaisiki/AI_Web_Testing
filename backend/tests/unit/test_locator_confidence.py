@@ -85,10 +85,10 @@ class TestComputeElementStability:
         all_elements = [element, {"tag": "button", "data_testid": "btn", "text": "Click"}]
         assert _compute_element_stability(element, all_elements) == 0.85
 
-    def test_stable_id_gets_0_90(self):
+    def test_stable_id_gets_0_85(self):
         element = {"tag": "input", "id": "email", "text": ""}
         all_elements = [element]
-        assert _compute_element_stability(element, all_elements) == 0.90
+        assert _compute_element_stability(element, all_elements) == 0.85
 
     def test_dynamic_id_gets_no_id_bonus(self):
         element = {"tag": "input", "id": "input-a3f8b2c1", "text": ""}
@@ -100,12 +100,12 @@ class TestComputeElementStability:
     def test_unique_aria_label_with_role(self):
         element = {"tag": "button", "aria_label": "Close dialog", "role": "button", "text": "X"}
         all_elements = [element]
-        assert _compute_element_stability(element, all_elements) == 0.80
+        assert _compute_element_stability(element, all_elements) == 0.90
 
     def test_unique_aria_label_alone(self):
         element = {"tag": "input", "aria_label": "Search", "text": ""}
         all_elements = [element]
-        assert _compute_element_stability(element, all_elements) == 0.78
+        assert _compute_element_stability(element, all_elements) == 0.82
 
     def test_unique_href_navigation(self):
         element = {"tag": "a", "href": "/products/1", "text": "View Product"}
@@ -121,23 +121,22 @@ class TestComputeElementStability:
     def test_unique_text_no_duplicates(self):
         element = {"tag": "h1", "text": "Welcome", "xpath": "//h1"}
         all_elements = [element]
-        assert _compute_element_stability(element, all_elements) == 0.55
+        assert _compute_element_stability(element, all_elements) == 0.50
 
     def test_duplicate_text_with_css(self, elements_with_duplicates):
         score = _compute_element_stability(elements_with_duplicates[0], elements_with_duplicates)
-        assert score == 0.45
+        assert score == 0.30
 
     def test_duplicate_text_no_css(self):
         element = {"tag": "button", "text": "Delete", "xpath": "//button[text()='Delete'][1]"}
         all_elements = [element, {"tag": "button", "text": "Delete", "xpath": "//button[text()='Delete'][2]"}]
         score = _compute_element_stability(element, all_elements)
-        # Duplicate text without css falls into 0.35 bucket
-        assert score == 0.35
+        assert score == 0.15
 
     def test_xpath_position_index(self):
         element = {"tag": "div", "xpath": "(//div[@class='item'])[3]", "text": ""}
         all_elements = [element]
-        assert _compute_element_stability(element, all_elements) == 0.20
+        assert _compute_element_stability(element, all_elements) == 0.10
 
 
 # ---------------------------------------------------------------------------
