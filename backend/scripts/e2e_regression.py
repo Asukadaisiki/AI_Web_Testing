@@ -20,11 +20,12 @@ from typing import Any
 BASE_URL = os.environ.get("E2E_BASE_URL", "http://127.0.0.1:8000")
 MAX_ROUNDS = 10
 TARGET_PASS_RATE = 0.80
+CHAT_TIMEOUT = 300  # seconds for SSE streaming chat
 
 
 def _req(method: str, path: str, body: dict | None = None) -> tuple[int, Any]:
     url = f"{BASE_URL}{path}"
-    data = json.dumps(body).encode() if body else None
+    data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Content-Type", "application/json")
     try:
@@ -53,38 +54,137 @@ def _read_test_file() -> str:
     return test_file.read_text(encoding="utf-8")
 
 
-def _wait_for_drafts(session_id: int, max_wait: int = 300) -> list[dict]:
-    """Poll session messages until drafts are ready or timeout."""
+def _stream_chat(session_id: int, content: str, timeout: int = CHAT_TIMEOUT) -> dict | None:
+    """Send chat message via SSE and wait for turn_complete event."""
+    url = f"{BASE_URL}/api/v1/ai-planning/sessions/{session_id}/chat"
+    body = json.dumps({"content": content}).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "text/event-stream")
+
+    deadline = time.time() + timeout
+    last_event: dict | None = None
+    buffer = b""
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            while time.time() < deadline:
+                chunk = resp.read(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+                # Process complete SSE events from buffer
+                while b"\n" in buffer:
+                    line_end = buffer.index(b"\n")
+                    line = buffer[:line_end].strip()
+                    buffer = buffer[line_end + 1:]
+
+                    if not line or line.startswith(b":"):
+                        continue
+
+                    if line.startswith(b"data: "):
+                        try:
+                            event_data = json.loads(line[6:])
+                            event_type = event_data.get("type", "")
+                            if event_type == "turn_complete":
+                                print(f"  SSE: turn_complete received")
+                                last_event = event_data
+                            elif event_type == "status":
+                                phase = event_data.get("phase", "")
+                                msg = event_data.get("message", "")
+                                if msg:
+                                    print(f"  SSE: [{phase}] {msg[:120]}")
+                            elif event_type == "tool_call_start":
+                                print(f"  SSE: tool_call_start {event_data.get('tool', '?')}")
+                            elif event_type == "tool_call_end":
+                                print(f"  SSE: tool_call_end {event_data.get('tool', '?')}")
+                            elif event_type == "error":
+                                print(f"  SSE: ERROR {event_data.get('message', str(event_data)[:200])}")
+                        except json.JSONDecodeError:
+                            pass
+    except urllib.error.HTTPError as exc:
+        try:
+            err = exc.read().decode()
+        except Exception:
+            err = str(exc)
+        print(f"  Chat HTTP error {exc.code}: {err[:500]}")
+        return None
+    except Exception as exc:
+        print(f"  Chat error: {exc}")
+        return None
+
+    return last_event
+
+
+def _poll_session_plan(session_id: int, max_wait: int = 120) -> str:
+    """Poll session until plan is ready. Returns final status."""
     deadline = time.time() + max_wait
+    while time.time() < deadline:
+        time.sleep(3)
+        session = _get(f"/api/v1/ai-planning/sessions/{session_id}")
+        if isinstance(session, dict):
+            inner = session.get("session", session)
+            status = inner.get("status", "")
+            if status in ("plan_ready", "drafts_ready", "completed", "error"):
+                return status
+    return "timeout"
+
+
+def _poll_for_drafts(session_id: int, max_wait: int = 600) -> list[dict]:
+    """Poll session messages until drafts are available."""
+    deadline = time.time() + max_wait
+    waited_for_generate = False
     while time.time() < deadline:
         time.sleep(5)
         session = _get(f"/api/v1/ai-planning/sessions/{session_id}")
         if not isinstance(session, dict):
             continue
+        inner = session.get("session", session)
+        status = inner.get("status", "")
         msgs = session.get("messages", [])
+
         for msg in msgs:
             sp = msg.get("structured_payload") or {}
             if isinstance(sp, dict) and "drafts" in sp:
                 drafts = sp["drafts"]
-                # Wait for at least one generated/imported draft
                 if any(d.get("status") in ("generated", "imported") for d in drafts):
+                    print(f"  Found drafts in session messages")
                     return drafts
-        inner = session.get("session", session)
-        status = inner.get("status", "")
-        print(f"  Waiting for drafts... status={status}")
+
+        # If status is plan_ready, trigger draft generation via SSE
+        if status == "plan_ready" and not waited_for_generate:
+            print(f"  Plan ready, generating drafts via SSE...")
+            # The draft generation endpoint is also SSE-based
+            # We use the regular non-SSE approach: read from session messages after request
+            _post(
+                f"/api/v1/ai-planning/sessions/{session_id}/drafts:generate",
+                {"scenario_keys": ["all"]},
+            )
+            waited_for_generate = True
+
+        print(f"  Waiting... status={status}")
+
+        if status == "error":
+            err_msg = inner.get("last_error_message", "")
+            print(f"  Session error: {err_msg[:200]}")
+            return []
+
     return []
 
 
-def _trigger_draft_generation(session_id: int) -> Any:
-    """Trigger draft generation via the API."""
-    return _post(
-        f"/api/v1/ai-planning/sessions/{session_id}/drafts:generate",
-        {"scenario_keys": [], "force": True},
-    )
+def _extract_scenario_keys(session_id: int) -> list[str]:
+    """Extract scenario keys from the session's plan."""
+    session = _get(f"/api/v1/ai-planning/sessions/{session_id}")
+    if not isinstance(session, dict):
+        return []
+    inner = session.get("session", session)
+    plan = inner.get("plan") or {}
+    scenarios = plan.get("scenarios", [])
+    keys = [s.get("key", "") for s in scenarios if s.get("key")]
+    return keys or ["all"]
 
 
-def _execute_draft(session_id: int, draft_ids: list[int], input_values: dict) -> dict | None:
-    """Save and execute drafts, return result."""
+def _execute_draft(session_id: int, draft_ids: list[int], input_values: dict) -> Any:
     body = {
         "draft_ids": draft_ids,
         "execute": True,
@@ -117,7 +217,7 @@ def main() -> int:
 
         # 1. Create session
         print("  Creating session...")
-        session = _post("/api/v1/ai-planning/sessions", {"title": f"E2E Regression Round {round_num}"})
+        session = _post("/api/v1/ai-planning/sessions", {})
         inner = session.get("session", session) if isinstance(session, dict) else {}
         session_id = inner.get("id") if isinstance(inner, dict) else None
         if not session_id:
@@ -125,29 +225,25 @@ def main() -> int:
             continue
         print(f"  Session {session_id} created")
 
-        # 2. Send test requirements
-        print("  Sending requirements...")
-        msg_resp = _post(
-            f"/api/v1/ai-planning/sessions/{session_id}/chat",
-            {"message": test_content},
-        )
-        if not isinstance(msg_resp, dict):
-            print(f"  FAIL: chat response: {str(msg_resp)[:500]}")
+        # 2. Send chat via SSE and wait for turn_complete
+        print("  Sending requirements via SSE...")
+        chat_result = _stream_chat(session_id, test_content)
+        if chat_result is None:
+            print("  Chat SSE failed — skipping round")
             continue
-        status = msg_resp.get("session_status", "?")
-        print(f"  Requirements sent, status={status}")
 
-        # 3. Wait for AI to generate plan (ReAct loop may take time)
-        print("  Waiting for plan...")
-        time.sleep(10)
+        # 3. Wait for plan to be ready
+        print("  Waiting for plan ready status...")
+        plan_status = _poll_session_plan(session_id)
+        print(f"  Session status: {plan_status}")
 
-        # 4. Trigger draft generation
-        print("  Triggering draft generation...")
-        draft_result = _trigger_draft_generation(session_id)
-        print(f"  Draft generation triggered: {json.dumps(draft_result, ensure_ascii=False)[:300] if draft_result else 'None'}")
+        if plan_status in ("error", "timeout"):
+            print(f"  Session failed: {plan_status}")
+            continue
 
-        # 5. Wait for drafts
-        drafts = _wait_for_drafts(session_id)
+        # 4. Trigger draft generation and wait
+        print("  Waiting for drafts...")
+        drafts = _poll_for_drafts(session_id)
 
         if not drafts:
             print("  No drafts found — skipping round")
@@ -157,7 +253,7 @@ def main() -> int:
         for d in drafts:
             print(f"    Draft {d.get('id')}: {d.get('scenario_title', '?')} [{d.get('status', '?')}]")
 
-        # 6. Pick the first generated/imported draft
+        # 5. Pick the first generated/imported draft
         usable = [d for d in drafts if d.get("status") in ("generated", "imported")]
         if not usable:
             print("  No usable drafts")
@@ -166,39 +262,38 @@ def main() -> int:
         draft_id = draft["id"]
         print(f"  Selected draft {draft_id}: {draft.get('scenario_title', '?')}")
 
-        # 7. Execute
+        # 6. Execute
         input_values = {
             "login_email": "Xjy13302412005@outlook.com",
             "login_password": "123456",
         }
         print("  Executing...")
         exec_result = _execute_draft(session_id, [draft_id], input_values)
+
         if not isinstance(exec_result, dict):
             print(f"  FAIL: Execution returned: {str(exec_result)[:500]}")
             continue
 
-        # Check for SSE-style streaming responses
         if exec_result.get("error"):
             print(f"  Execution error: {exec_result['error']}")
             continue
 
         summaries = exec_result.get("execution_summaries", [])
         if not summaries:
-            # Try other keys
-            print(f"  No execution_summaries key. Response keys: {list(exec_result.keys())[:10]}")
-            print(f"  Raw (first 1K): {json.dumps(exec_result, ensure_ascii=False)[:1000]}")
+            print(f"  No execution_summaries key. Keys: {list(exec_result.keys())[:10]}")
+            print(f"  Raw: {json.dumps(exec_result, ensure_ascii=False)[:500]}")
             continue
 
-        # 8. Get full execution details
+        # 7. Analyze results
         for summary in summaries:
             exec_id = summary.get("execution_id") or summary.get("id")
             if not exec_id:
                 continue
 
-            time.sleep(2)  # Give DB time to flush
+            time.sleep(2)
             execution = _get_execution_result(exec_id)
             if not isinstance(execution, dict):
-                print(f"  Could not fetch execution {exec_id}: {execution}")
+                print(f"  Could not fetch execution {exec_id}")
                 continue
 
             passed, total, step_results = _compute_pass_rate(execution)

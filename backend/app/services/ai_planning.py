@@ -39,6 +39,47 @@ from app.services.executions import execute_case, execute_case_streaming
 logger = logging.getLogger(__name__)
 
 
+def _parse_page_elements_text(text: str) -> list[dict]:
+    """Parse formatted page_elements text back into structured element dicts.
+
+    The text format is one element per line:
+      tag[attr='value'][text='text'] | css=selector | xpath=selector | rect=... | stable=0.XX | candidates=...
+    """
+    import re
+    elements: list[dict] = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line or line.startswith('===') or line.startswith('页面') or line.startswith('...'):
+            continue
+        el: dict[str, object] = {}
+        # Extract tag (first token before '[' or ' |')
+        tag_match = re.match(r'^(\w+)', line)
+        if tag_match:
+            el['tag'] = tag_match.group(1)
+        # Extract attrs: [text='...'], [href='...'], [placeholder='...'], [role='...'], etc
+        for m in re.finditer(r"\[(\w[\w-]*)=('[^']*'|\"[^\"]*\")]", line):
+            key = m.group(1)
+            val = m.group(2).strip("'\"")
+            el[key] = val
+        # Extract css=... and xpath=...
+        css_match = re.search(r'\|\s*css=(\S+)', line)
+        if css_match:
+            el['css_selector'] = css_match.group(1)
+        xp_match = re.search(r'\|\s*xpath=(\S+)', line)
+        if xp_match:
+            el['xpath'] = xp_match.group(1)
+        # Extract stable=X.XX
+        st_match = re.search(r'stable=([\d.]+)', line)
+        if st_match:
+            el['stable'] = float(st_match.group(1))
+        # Mark visible/enabled by default
+        el['visible'] = True
+        el['enabled'] = 'disabled' not in line
+        if el:
+            elements.append(el)
+    return elements
+
+
 class AIPlanningAccessError(ValueError):
     """Raised when a planning session or draft is inaccessible."""
 
@@ -411,15 +452,9 @@ def generate_planning_drafts(
             preflight_rejected = False
 
             # Gate: check exploration data exists before preflight
-            page_elements_list: list[dict] = []
-            raw_pages = plan.get("_page_results")
-            if isinstance(raw_pages, list):
-                for pr in raw_pages:
-                    if isinstance(pr, dict):
-                        page_elements_list.extend(pr.get("elements", []))
-
+            pe_text = scenario.get("page_elements", "")
+            page_elements_list: list[dict] = _parse_page_elements_text(pe_text) if pe_text else []
             if not page_elements_list:
-                # No exploration data at all — reject draft
                 preflight_rejected = True
                 raise ValueError(
                     "No page exploration data available for locator verification. "
