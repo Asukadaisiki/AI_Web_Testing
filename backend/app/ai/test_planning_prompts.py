@@ -110,7 +110,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 
 	4. 【品牌/筛选/分类页必须探索】如果 core_user_flow 提到筛选、品牌、分类，筛选后的结果页面也必须探索。
 
-	5. 【一次性采集】梳理完所有页面后，用一次 explore_flow 调用全部采集。不要分多次，不要遗漏。
+	5. 【一次性采集 — 必须用 urls 参数】梳理完所有页面后，用一次 explore_flow 调用全部采集。必须使用 urls 参数（简单字符串数组），不要使用 steps 参数。例如 urls: ["/login", "/products", "/brand_products/Polo", "/view_cart"]。不要分多次，不要遗漏。
 
 	6. 【没有页面数据 = 不能生成方案】如果某个页面探索失败，向用户报告具体失败原因，绝不跳过。
 
