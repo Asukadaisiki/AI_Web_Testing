@@ -251,12 +251,27 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
 
     Each element is formatted with full attributes and a stability score,
     enabling the AI to make informed decisions about which locator strategy to use.
+    Invisible interactive elements (e.g., buttons inside hover overlays) are kept
+    but marked so the AI knows they become visible on interaction.
     """
-    visible = [e for e in elements if e.get("visible", True)]
+    _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
+    visible: list[dict] = []
+    hidden_interactive: list[dict] = []
+    for e in elements:
+        if e.get("visible", True):
+            visible.append(e)
+        elif e.get("tag", "").casefold() in _INTERACTIVE_TAGS:
+            hidden_interactive.append(e)
+
     lines: list[str] = []
     for element in visible:
         stability = _compute_element_stability(element, visible)
         lines.append(_format_element_rich(element, stability))
+    # Append hidden interactive elements at the end, marked clearly
+    for element in hidden_interactive:
+        stability = _compute_element_stability(element, visible + hidden_interactive)
+        line = _format_element_rich(element, stability)
+        lines.append(line + " | [HIDDEN—visible on hover/interaction]")
     result = "\n".join(lines)
     if len(result) > MAX_PROMPT_ELEMENTS_CHARS:
         prioritized = sorted(
