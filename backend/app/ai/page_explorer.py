@@ -70,15 +70,17 @@ def is_storage_state_stale(meta: dict[str, Any]) -> bool:
 def _compute_element_stability(element: dict[str, Any], all_elements: list[dict[str, Any]]) -> float:
     """Compute a stability score for an element based on its distinguishing attributes.
 
-    Scoring rules (aligned with research doc Section 5.1):
+    Scoring rules:
     - data-testid unique: 0.95
-    - stable id (non-hash): 0.90
-    - aria-label + role unique: 0.80
+    - aria-label + role unique: 0.90  (accessibility tree first)
+    - stable id (non-hash): 0.85
     - name/type combo: 0.75
     - href with business path: 0.70
-    - css_selector short & stable: 0.55
-    - text-only match: 0.40
-    - xpath with position index: 0.20
+    - unique text: 0.50
+    - text with duplicates AND stable CSS: 0.30
+    - text with duplicates AND fragile CSS: 0.15
+    - CSS/XPath with nth-child/nth-of-type: 0.10
+    - bare XPath with position index: 0.10
     """
     tag = element.get("tag", "")
     text = element.get("text") or ""
@@ -90,67 +92,71 @@ def _compute_element_stability(element: dict[str, Any], all_elements: list[dict[
     css = element.get("css_selector") or ""
     xpath = element.get("xpath") or ""
 
-    # Count how many elements share the same tag+text combo (duplicates)
+    # Count duplicates by tag+text
     same_tag_text = sum(
         1 for e in all_elements
         if e.get("tag") == tag and (e.get("text") or "") == text
     )
     has_duplicates = same_tag_text > 1
 
-    # Highest priority: unique data-testid
+    # Detect fragile CSS patterns (nth-child, nth-of-type, deep nesting)
+    _FRAGILE_CSS = re.compile(r":nth-(child|of-type)\(|>\s*(body|html|div)\s*>\s*div\s*>\s*div")
+    css_is_fragile = bool(_FRAGILE_CSS.search(css)) or bool(_FRAGILE_CSS.search(xpath))
+
+    # 1. data-testid (highest priority)
     if data_testid:
         testid_count = sum(1 for e in all_elements if e.get("data_testid") == data_testid)
         if testid_count == 1:
             return 0.95
         return 0.85
 
-    # Stable element id (not hash/uuid pattern)
-    _DYNAMIC_ID = re.compile(r"[0-9a-f]{8,}|auto\d+|tmp| rnd", re.IGNORECASE)
-    if elem_id and not _DYNAMIC_ID.search(elem_id):
-        id_count = sum(1 for e in all_elements if e.get("id") == elem_id)
-        if id_count == 1:
-            return 0.90
-
-    # Unique aria-label + role
+    # 2. aria-label + role unique (accessibility tree — second highest)
     if aria_label and role:
-        combo = (aria_label, role)
         combo_count = sum(
             1 for e in all_elements
-            if e.get("aria_label") == combo[0] and e.get("role") == combo[1]
+            if e.get("aria_label") == aria_label and e.get("role") == role
         )
         if combo_count == 1:
-            return 0.80
-
-    # Unique aria-label alone
+            return 0.90
     if aria_label:
         al_count = sum(1 for e in all_elements if e.get("aria_label") == aria_label)
         if al_count == 1:
-            return 0.78
+            return 0.82
 
-    # href with business path (not # or javascript:)
+    # 3. stable element id (not hash/uuid pattern)
+    _DYNAMIC_ID = re.compile(r"[0-9a-f]{8,}|auto\d+|tmp|rnd", re.IGNORECASE)
+    if elem_id and not _DYNAMIC_ID.search(elem_id):
+        id_count = sum(1 for e in all_elements if e.get("id") == elem_id)
+        if id_count == 1:
+            return 0.85
+
+    # 4. href with business path
     if href and tag == "a" and not href.startswith(("#", "javascript:")):
         href_count = sum(1 for e in all_elements if e.get("href") == href and e.get("tag") == "a")
         if href_count == 1:
             return 0.70
         if href_count <= 3:
-            return 0.60
+            return 0.55
 
-    # Unique text (but only if not duplicated)
+    # 5. Fragile CSS/XPath — lowest score
+    if css_is_fragile:
+        return 0.10
+
+    # 6. Unique text
     if text and not has_duplicates:
-        return 0.55
+        return 0.50
 
-    # Text with duplicates — moderate
+    # 7. Text with duplicates
     if text and has_duplicates:
-        if css and len(css) < 60:
-            return 0.45
-        return 0.35
+        if css and len(css) < 60 and not css_is_fragile:
+            return 0.30
+        return 0.15
 
-    # XPath with position index — least stable
+    # 8. XPath with position index
     if re.search(r"\[\d+\]", xpath):
-        return 0.20
+        return 0.10
 
-    # Fallback
-    return 0.30
+    return 0.20
 
 
 def _format_element_rich(element: dict[str, Any], stability: float) -> str:
@@ -216,6 +222,8 @@ def _format_element_rich(element: dict[str, Any], stability: float) -> str:
         v_strategies = [v["strategy"] for v in verified[:5]]
         extras.append(f"verified={len(verified)}({','.join(v_strategies)})")
     extras.append(f"stable={stability:.2f}")
+    if stability < 0.30:
+        extras.append("[UNSTABLE—avoid as primary locator]")
 
     if element.get("candidates"):
         top3 = element["candidates"][:3]

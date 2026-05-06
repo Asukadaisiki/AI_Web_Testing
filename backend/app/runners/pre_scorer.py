@@ -128,6 +128,10 @@ def detect_fragility(selector: str, element_attrs: dict[str, Any]) -> list[str]:
     if ":nth-child(" in selector or ":nth-of-type(" in selector:
         flags.append("nth_child")
 
+    # --- deep_css ---
+    if selector.count(" > ") >= 3:
+        flags.append("deep_css")
+
     return flags
 
 
