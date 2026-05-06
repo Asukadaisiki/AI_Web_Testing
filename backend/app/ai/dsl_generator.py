@@ -1388,6 +1388,12 @@ def _repair_step_shape(
             normalization_notes=normalization_notes,
         )
 
+    # goto and assert_url_contains don't support candidates/postconditions.
+    # Strip them so Pydantic doesn't reject with extra_forbidden.
+    if normalized_action in ("goto", "assert_url_contains"):
+        for _extra_key in ("candidates", "postconditions"):
+            repaired.pop(_extra_key, None)
+
     return repaired
 
 
