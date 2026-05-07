@@ -938,33 +938,52 @@ def _verify_navigation_completeness(
     payload: GenerateDslRequest,
     warnings: list[str],
 ) -> None:
-    """Reject drafts that skip critical navigation steps."""
-    steps = normalized_case.get("steps", [])
-    if not steps:
-        return
+    """Verify DSL steps match the flow described in the draft prompt.
 
-    # Only apply gate when prompt mentions login flow
-    prompt_text = (payload.prompt or "").casefold()
-    if not any(kw in prompt_text for kw in ("login", "登录", "signup", "email address")):
+    Checks that page transitions in the prompt have corresponding navigation steps.
+    """
+    steps = normalized_case.get("steps", [])
+    if not steps or not payload.prompt:
         return
 
     def _action(s): return s.get("action","") if isinstance(s, dict) else getattr(s, "action", "")
     def _target(s):
         t = s.get("target","") if isinstance(s, dict) else getattr(s, "target", "")
         return (t or "").casefold()
-    step_targets = [(_action(s), _target(s)) for s in steps]
-    login_inputs = {"email address", "password"}
-    has_login_input = any(act == "input" and any(li in tar for li in login_inputs) for act, tar in step_targets)
-    has_login_nav = any(
-        (act in ("click", "goto")) and any(kw in tar for kw in ("signup", "login"))
-        for act, tar in step_targets
-    )
+    def _value(s):
+        v = s.get("value","") if isinstance(s, dict) else getattr(s, "value", "")
+        return (v or "").casefold()
 
-    first_step = steps[0]
-    first_action = first_step.get("action","") if isinstance(first_step, dict) else getattr(first_step, "action", "")
-    first_value = first_step.get("value","") if isinstance(first_step, dict) else getattr(first_step, "value", "")
-    if has_login_input and not has_login_nav and first_action == "goto" and first_value in ("/", ""):
-        msg = "草案缺少登录页面导航：goto / 后直接 input 登录字段，须先 click \"Signup / Login\" 或 goto \"/login\""
+    prompt_text = payload.prompt.casefold()
+    actions = [_action(s) for s in steps]
+
+    # Check: prompt mentions a page → DSL must have a navigation step to it
+    page_keywords = {
+        "login": ("/login", "signup / login", "login to your account"),
+        "products": ("products", "/products"),
+        "view cart": ("view cart", "/view_cart"),
+        "cart": ("view cart", "/view_cart", "shopping cart"),
+    }
+    for page, nav_targets in page_keywords.items():
+        if page in prompt_text and not any(
+            (a in ("click", "goto") and any(nt in _target(s) or nt in _value(s) for nt in nav_targets))
+            for a, s in zip(actions, steps) if isinstance(s, dict) or True
+        ):
+            warnings.append(f"一致性检查：prompt 提到 '{page}' 页面但 DSL 中未找到对应的导航步骤")
+
+    # Check: first step is goto and DSL has input → must have navigation before input
+    has_goto_root = len(steps) > 0 and _action(steps[0]) == "goto" and _value(steps[0]) in ("/", "")
+    has_input = any(_action(s) == "input" for s in steps)
+    has_click_or_goto_before_input = False
+    for s in steps:
+        if _action(s) in ("click", "goto") and _action(s) != "goto" or (_action(s) == "goto" and _value(s) not in ("/", "")):
+            has_click_or_goto_before_input = True
+            break
+        if _action(s) == "input":
+            break
+
+    if has_goto_root and has_input and not has_click_or_goto_before_input:
+        msg = "草案在 goto / 之后缺少页面导航步骤（click 或 goto），直接进入了 input"
         warnings.append(f"结构门控：{msg}")
         raise DslGenerationError(msg)
 

@@ -287,6 +287,7 @@ def _execute_step_with_candidates(
     step_started_at = perf_counter()
     vars_map = dict(input_values or {})
     vars_map.update(runtime_context or {})
+    resolved_target = _substitute_variables(step.target, vars_map) or step.target
     candidates = sorted(step.candidates, key=lambda c: c.pre_score, reverse=True)
 
     verifier = PostconditionVerifier(page)
