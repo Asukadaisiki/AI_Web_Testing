@@ -1191,7 +1191,14 @@ def run_compression_subagent(
             )
             resp.raise_for_status()
             body = resp.json()
-            content = body["choices"][0]["message"]["content"]
+            message = body["choices"][0]["message"]
+            content = message.get("content")
+            # Fall back to reasoning_content (DeepSeek thinking mode)
+            if not content or not str(content).strip():
+                content = message.get("reasoning_content", "")
+            if not content or not str(content).strip():
+                raise ValueError("Empty response from subagent model (both content and reasoning_content empty)")
+            content = str(content)
             # Strip markdown fences if present
             content = content.strip()
             if content.startswith("```"):
