@@ -982,8 +982,10 @@ def _verify_navigation_completeness(
         if _action(s) == "input":
             break
 
-    if has_goto_root and has_input and not has_click_or_goto_before_input:
-        msg = "草案在 goto / 之后缺少页面导航步骤（click 或 goto），直接进入了 input"
+    # Check: goto / immediately followed by wait_for/capture_text/assert_text without navigation
+    second_step_skips_nav = len(steps) > 1 and _action(steps[1]) in ("wait_for", "capture_text", "assert_text")
+    if has_goto_root and second_step_skips_nav and not has_click_or_goto_before_input:
+        msg = "草案在 goto / 后缺少页面导航（click Signup/Login 等），直接进入 wait_for/capture。请确保 DSL 包含完整页面跳转步骤。"
         warnings.append(f"结构门控：{msg}")
         raise DslGenerationError(msg)
 
