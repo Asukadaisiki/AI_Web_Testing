@@ -31,6 +31,228 @@
 
 ## BUG-063 | DeepSeek thinking 模式下 SSE 流式输出断流 — reasoning_content 未转发给前端
 
+## BUG-079 | 购物车测试数据污染 — 前序测试遗留商品导致数量断言失败
+
+- 日期：2026-05-07
+- 状态：open
+- 来源：E2E 回归测试
+- 描述：Exec 106 Step 27 `assert_text '1' value='${cart_a_quantity}'` 失败。capture 抓到的数量是 31（前序测试累积），但断言期望 1。定位器本身工作正常——`button_role` 正确找到了 `<button>1</button>`，`css` 正确抓到了 `<button>31</button>`。根因是账号购物车未清空。
+- 复现步骤：
+  1. 多次执行 brand_filter_cart 测试
+  2. 购物车中 Blue Top 数量累积到 31
+  3. 新测试假设初始数量=1，实际=31
+- 影响：购物车数量相关的 assert_text 不可靠
+- 根因：测试间缺少购物车清理步骤
+- 处理：1) 测试开始前清空购物车 2) AI 不应硬编码数量值，应 capture 后做一致性比较
+- 验证：未验证
+- 关联记录：execution-log.md 2026-05-07 第 26-27 步骤分析，Exec 106
+
+## BUG-078 | DSL 归一化器删除了合法的 click/wait_for/capture_text 步骤
+
+- 日期：2026-05-07
+- 状态：fixed (`ecbbb3a`)
+- 来源：E2E 回归测试
+- 描述：AI 生成的合法步骤（如 `click "Login"`, `click "Products"`, `click "(6) POLO"`, `click "Add to cart"`）被归一化器删除。根因是 AI 给 click/wait_for/capture_text 步骤添加了 `"value": null` 字段，但这些步骤模型没有 `value` 属性，Pydantic `extra_forbidden` 拒绝。
+- 复现步骤：
+  1. AI 生成 DSL，步骤中包含 `"action": "click", "target": "Login", "value": null`
+  2. 归一化器 `_repair_step_shape` 处理字段别名
+  3. `_STEP_ADAPTER.validate_python` 因 `value` 为 extra field 而失败
+  4. 步骤被静默删除，warnings 显示"校验失败"
+- 影响：导致关键导航步骤缺失，测试执行卡死在错误页面
+- 根因：`_repair_step_shape` 未剥离 click/wait_for/capture_text 步骤的 spurious `value` 字段
+- 处理：在 `_repair_step_shape` 末尾，对 click/wait_for/capture_text 类型步骤移除 `value` 键
+- 验证：58 个 DSL 单元测试通过，Exec 106 证实 0 步骤被删
+- 关联记录：Draft 80 8 步骤被删，Draft 81 0 步骤被删
+
+## BUG-077 | DSL 归一化器删除了合法的 goto/assert_url_contains 步骤
+
+- 日期：2026-05-07
+- 状态：fixed (`8d05871`)
+- 来源：E2E 回归测试
+- 描述：AI 给 goto 和 assert_url_contains 步骤添加了 `candidates: []` 和 `postconditions: []` 字段，但 GotoStep 和 AssertUrlContainsStep 模型没有这些字段，Pydantic `extra_forbidden` 拒绝。实际影响：仅 goto 和 assert_url_contains 步骤受影响，其他步骤（click/input/wait_for/capture_text/assert_text）有这些字段。
+- 复现步骤：
+  1. AI 生成 `{"action": "goto", "value": "/", "candidates": [], "postconditions": []}`
+  2. Pydantic 验证报 `extra_forbidden` 错误
+  3. goto 步骤被丢弃 → 归一化器自动补充一个默认 goto "/"
+- 影响：原始 goto 步骤被替换，可能导致导航 URL 不正确
+- 根因：AI 给所有步骤统一加了 candidates/postconditions 空数组
+- 处理：在 `_repair_step_shape` 中对 goto/assert_url_contains 剥离 candidates/postconditions
+- 验证：58 个 DSL 单元测试通过
+- 关联记录：Draft 76-80 均有"步骤 #1 校验失败（action=goto）"警告
+
+## BUG-076 | DSL target 文本中的中文字符被 PostgreSQL JSON 序列化损坏
+
+- 日期：2026-05-07
+- 状态：fixed (`aaa3f18`)
+- 来源：E2E 回归测试
+- 描述：DSL 步骤 target 字段中的"附近的"被序列化为 `\udc84`（lone low surrogate），导致 `text_parent_chain` 定位器的 split regex 无法匹配。所有含中文的 target 均受影响（6 个步骤）。
+- 复现步骤：
+  1. AI 生成 target="Blue Top 附近的 Rs. 500"
+  2. DSL JSON 经 PostgreSQL JSONB 列存储
+  3. 读取时"的"字符被损坏为 `\udc84` surrogate
+  4. `_PARENT_SPLIT_RE` regex 无法匹配损坏文本
+  5. `_resolve_text_parent_chain` 返回 None → 候选被跳过
+- 影响：text_parent_chain 定位器对所有含"附近的"的 target 完全失效，回退到 VLM/coordinate click
+- 根因：PostgreSQL JSON 序列化过程中 Unicode BMP 字符被错误编码为 surrogate pair
+- 处理：在 DSL 归一化入口处检测并修复 surrogate 字符（`encode('utf-8', 'surrogatepass').decode('utf-8', 'replace')`）
+- 验证：Draft 81 证实 surrogate_targets=0
+- 关联记录：Exec 103-104 的 Step 10/16/22 均为 surrogate 损坏
+
+## BUG-075 | 元素视觉分组的 group label 太粗糙
+
+- 日期：2026-05-07
+- 状态：open（待优化）
+- 来源：E2E 回归测试
+- 描述：`_group_elements_by_visual_proximity` 按 rect 坐标分组，但 group label 逻辑简单——优先取 h1-h4 文本，否则取第一个非泛型文本。导致部分分组只有 1-2 个元素被隔离为独立组，label 无意义（如 "button"）。
+- 影响：AI 看到的页面分组不够语义化，部分组没有有用的 label
+- 根因：坐标聚类算法对孤立元素过敏感
+- 处理：待后续优化分组算法（增大 tolerance、合并小 group）
+- 验证：未验证
+
+## BUG-074 | text_parent_chain 定位器未在 runner 候选列表中被优先尝试
+
+- 日期：2026-05-07
+- 状态：fixed (`6922bc8`)
+- 来源：E2E 回归测试
+- 描述：执行层原始流程 `_resolve_with_confidence_gate` 在 `locator_confidence="low"` 时先调 VLM preverify，跳过了包含 `text_parent_chain` 的语义候选链。导致 VLM 频繁抢占、429 限频、找到错误元素。
+- 复现步骤：
+  1. preflight 将几乎所有步骤标记为 low confidence
+  2. `_resolve_with_confidence_gate` 检测到 low → 直接调 `preverify_with_vlm`
+  3. VLM 找到错误坐标 → 点击错误元素 → 后续步骤失败
+- 影响：VLM 抢占导致"Continuing Shopping"弹窗从未出现，多个执行在 Step 12/14 失败
+- 根因：VLM preverify 不应跳过语义定位链
+- 处理：重构为统一流程——语义优先（含 text_parent_chain）、VLM 仅作最后兜底。同时添加 2.5 分钟步骤超时防止无限挂起。
+- 验证：Exec 102+ 证实 `text_parent_chain` 在候选列表中排在第一位
+- 关联记录：Exec 94-101 反复出现"Continue Shopping"定位失败
+
+## BUG-073 | text_parent_chain 的正则表达式无法匹配含空格的父文本
+
+- 日期：2026-05-07
+- 状态：fixed (`aabea6a`)
+- 来源：E2E 回归测试
+- 描述：`_PARENT_TEXT_RE` 使用 `[^>\\s>{2,60}?`（惰性匹配 + 排除空格），导致"Blue Top 附近的 Add to cart"无法匹配——"Blue Top"含空格，`[^>\\s]` 排除了空格字符。
+- 复现步骤：
+  1. target = "Blue Top 附近的 Add to cart"
+  2. regex `[A-Za-z][^>\\s]{1,60}?` 匹配 "Bl" 后就停止（惰性匹配 + 空格排除）
+  3. 后续"附近的"分隔符匹配失败
+- 影响：`_resolve_text_parent_chain` 返回 None，text_parent_chain 定位器从未生效
+- 根因：1) 惰性量词 `{1,60}?` 使匹配过短 2) `[^>\\s]` 错误排除了空格
+- 处理：改用 split 方式——`_PARENT_SPLIT_RE` 直接在 `>>`/`的`/`附近的` 处分隔，不再依赖复杂正则
+- 验证：33 个语义单元测试通过，Exec 102 Step 11 证实 `text_parent_chain` 成功匹配
+- 关联记录：Exec 96-100 Step 11 均为 VLM 而非 text_parent_chain
+
+## BUG-072 | text_parent_chain 使用硬编码 XPath ancestor 无法适配不同页面结构
+
+- 日期：2026-05-07
+- 状态：fixed (`892889e`)
+- 来源：E2E 回归测试
+- 描述：`_find_in_ancestor` 最初使用 `xpath=ancestor::*[contains(@class,'product')]` 硬编码 class 名。购物车页面使用 `<table>` 结构，没有 'product' class → 返回 0 元素 → 候选被跳过。
+- 复现步骤：
+  1. 执行购物车页的 assert_text "Blue Top 附近的 Rs. 500"
+  2. `_find_in_ancestor` 用 XPath ancestor 查找含 'product' class 的祖先
+  3. 购物车 `<tr>` 不含此 class → 无匹配
+- 影响：购物车页所有 text_parent_chain 定位器失效
+- 根因：XPath 硬编码了特定网站的 class 名
+- 处理：改为自适应深度遍历——从 parent_text 元素出发，逐层 `..` 向上（depth 2-8），每层尝试 `get_by_text(child_text)`，选最浅匹配。无网站/页面依赖。
+- 验证：33 个语义单元测试通过，手动验证购物车页 depth=3(<tr>) 可找到 "Rs. 500"
+- 关联记录：Exec 103-104 Step 22 失败
+
+## BUG-071 | text_parent_chain 的 child_text 使用 exact=True 导致 substring match 失败
+
+- 日期：2026-05-07
+- 状态：fixed (`dba307c`)
+- 来源：E2E 回归测试
+- 描述：`_find_in_ancestor` 使用 `get_by_text(child_text, exact=True)` 进行精确匹配，但实际 DOM 中价格文本可能有前后空格/格式差异，导致"Rs. 500"精确匹配失败。
+- 影响：品牌筛选页的价格 capture 和购物车页的价格 assertion 均失败
+- 根因：`exact=True` 要求文本完全相等，DOM 文本格式化变化（空格、嵌套元素）导致不匹配
+- 处理：改回 `exact=False`（子串匹配），并在 ancestor 遍历中添加 try/catch 防止异常吞没
+- 验证：33 个语义单元测试通过
+- 关联记录：Exec 103-104 Step 10 价格 capture 失败
+
+## BUG-070 | DSL generator thinking mode 下 reasoning_content 空响应
+
+- 日期：2026-05-06
+- 状态：fixed (`9f67995`)
+- 来源：E2E 回归测试
+- 描述：DSL generator 使用 DeepSeek thinking mode 时，模型返回 `reasoning_content` 但 `content` 为空。`_extract_message_content` 只读 `content` 字段，忽略了 `reasoning_content` → 返回空字符串 → JSON 解析失败 → 草案状态 failed。
+- 影响：所有 DSL 草案生成失败（"AI 返回了无法解析的 DSL JSON"）
+- 根因：`_extract_message_content` 缺少对 `reasoning_content` 的 fallback（与 BUG-063 同模式但在 DSL generator 中）
+- 处理：在 content 为空时 fallback 到 `reasoning_content`
+- 验证：Draft 62 生成成功（33 步）
+- 关联记录：session 132 draft 61 失败
+
+## BUG-069 | 系统提示词引导 AI 在信息充足时仍使用 ask_user 询问确认
+
+- 日期：2026-05-06
+- 状态：fixed (`13016a6`)
+- 来源：E2E 回归测试
+- 描述：系统提示词第 91 行：当收集到 4+ 项信息时，通过 ask_user 询问"信息是否足够"。这导致 AI 第一轮动作为 ask_user 而非 explore_page/explore_flow。即使用户提供了完整的 core_user_flow，AI 仍然先问"要生成方案吗"。
+- 影响：AI 不探索页面就直接进入收集状态，无页面数据就生成 DSL
+- 根因：提示词明确鼓励 AI 在信息充足时使用 ask_user 确认
+- 处理：修改规则为"信息充足时直接 generate_plan，不用 ask_user"
+- 验证：Session 139 AI 第一轮动作为 call_tool（get_project_info），不再问废话
+- 关联记录：session 138 AI 第一轮 ask_user
+
+## BUG-068 | 页面探索压缩子代理丢弃登录表单元素
+
+- 日期：2026-05-06
+- 状态：fixed (`081c49e`)
+- 来源：E2E 回归测试
+- 描述：`run_compression_subagent` 的 `_filter_elements_for_compression` 硬编码取前 100 个元素。登录表单字段（data-qa="login-email" 等）可能在第 100+ 位置被截断。子代理 prompt 对表单强调不足，压缩结果 `forms: []` 为空。
+- 影响：AI 探索登录页后收到的压缩数据只有 3 个 key_elements（全是 footer 元素），没有登录表单信息
+- 根因：1) `_filter_elements_for_compression` 截取前 100 个元素 2) 子代理 prompt 未强调必须保留表单字段
+- 处理：改为优先保留交互元素（input/button/select/textarea/a），非交互元素限制 80 个；重写 prompt 为强制 JSON 结构 + 9 条绝对规则
+- 验证：65 个单元测试通过
+- 关联记录：session 140 AI 报告"未能获取登录表单元素"
+
+## BUG-067 | explore_flow 相对 URL 未解析导致页面探索失败
+
+- 日期：2026-05-07
+- 状态：fixed (`f53807d`)
+- 来源：E2E 回归测试
+- 描述：AI 调用 explore_flow 时传入相对 URL（`/products`, `/brand_products/Polo`, `/view_cart`），但 `collect_multi_page_elements` 未解析相对 URL，Playwright 的 `page.goto("/products")` 失败 → 返回空元素。
+- 影响：品牌筛选页和购物车页的探索数据为空（81 字符 vs 157KB）
+- 根因：`collect_multi_page_elements` 缺少 base_url 拼接逻辑
+- 处理：用 `urljoin` 将相对 URL 解析为绝对 URL
+- 验证：S152 page_elements 从 81 字符增长到 157KB
+- 关联记录：session 151 页面探索数据仅 81 字符
+
+## BUG-066 | AI 的 core_user_flow 被序列化为 Python list repr
+
+- 日期：2026-05-07
+- 状态：fixed (`23e3bc9`)
+- 来源：E2E 回归测试
+- 描述：AI 在 `collected_info` 中以 list 形式返回 `core_user_flow`（如 `["打开首页...", "点击 Products..."]`）。`_merge_requirements` 对非 main_assertions 字段直接调用 `str(incoming)`，将 list 转成了 Python repr 字符串 `"['打开首页...', '点击 Products...']"`。DSL prompt 收到这个畸形的流程描述，生成的 DSL 质量极差（17 步 vs 33 步）。
+- 影响：draft 质量随机波动（取决于 AI 是否用 list 格式返回 core_user_flow）
+- 根因：`_merge_requirements` 只对 main_assertions 做了 list→string 特殊处理
+- 处理：对 core_user_flow 和所有 list 字段统一处理——join 为编号列表
+- 验证：S146 draft 72 43 步（修复后） vs S145 draft 70 17 步（修复前）
+- 关联记录：session 144 good vs 145 bad core_user_flow 格式对比
+
+## BUG-065 | DSL prompt 未要求 capture_text 后必须跟 assert_text
+
+- 日期：2026-05-06
+- 状态：fixed (`a631041`, `c5e4411`)
+- 来源：E2E 回归测试
+- 描述：AI 生成的 DSL 有 5 个 capture_text 但 0 个 assert_text。capture 只是提取数据不做验证，测试实际上没有检查任何预期结果。用户指出"测试用例肯定要断言，不断言怎么知道对不对？"
+- 影响：测试表面上全部通过（23/23）但实际上核心断言完全缺失
+- 根因：DSL prompt 只说明了 capture_text 的用法，未强制要求 capture 后必须 assert
+- 处理：在系统 prompt 和用户规则中增加"capture 必须 assert"规则；新增"modify→input→assert"规则确保修改操作有前置 input 步骤
+- 验证：Draft 69 有 10 个 assert_text（vs Draft 66 的 0 个）
+- 关联记录：Exec 95 23/23 passed 但 0 assert_text
+
+## BUG-064 | preflight 将所有 target 标记为 low confidence 导致 VLM 抢占
+
+- 日期：2026-05-06
+- 状态：fixed（通过 BUG-074 的流程重构规避）
+- 来源：E2E 回归测试
+- 描述：preflight 在已探索元素中找不到 target 文本的精确匹配 → 几乎所有步骤被标记为 `locator_confidence="low"` → 执行层 `_resolve_with_confidence_gate` 为 low 目标直接调用 VLM → VLM 抢占语义定位链。
+- 影响：语义定位器（包括 text_parent_chain）从未有执行机会
+- 根因：preflight 的 confidence 机制与执行层的 VLM 优先逻辑联动缺陷
+- 处理：通过 BUG-074 的执行流程重构绕过（语义链优先、VLM 兜底），preflight confidence 不再影响定位器优先级
+- 验证：Exec 102+ 证实语义定位链在 VLM 之前执行
+- 关联记录：Exec 94-101
+
 - 日期：2026-05-04
 - 状态：fixed（2026-05-05 追加修复）
 - 来源：线上反馈

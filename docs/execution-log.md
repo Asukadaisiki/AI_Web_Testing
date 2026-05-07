@@ -2,6 +2,68 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
+## 2026-05-06 ~ 2026-05-07 | AI Agent 测试用例质量提升 — 三层修复 + 自动回归循环
+
+**目标：** 反复用 test_brand_filter_cart 内容测试 AI agent，发现问题并修复，直到 AI 生成的测试用例达到 80%+ 步骤通过率。
+
+**操作：**
+- 共执行 26 个 commits，覆盖 AI 决策层、DSL 生成层、探索数据层、执行定位器层
+- 创建 8+ AI planning sessions（S132-S155），每轮分析报告后针对性修复
+- 手动追踪执行报告，抽象根因到架构层面修复
+
+**核心修复列表（按层分类）：**
+
+### AI 决策层
+1. BUG-069: 系统提示词 ask_user 确认门移除 → AI 不再问废话，直接探索
+2. BUG-068: 压缩子代理优先保留交互元素 + prompt 强制 JSON 输出
+3. BUG-066: core_user_flow list→编号文本归一化
+4. 系统提示词流程驱动探索：7 条强制规则，capture_session→explore_flow 强制顺序
+5. explore_flow 强制使用 urls 参数格式（不用复杂 steps）
+
+### DSL 生成层
+6. BUG-077: goto/assert_url_contains 的 candidates/postconditions 剥离
+7. BUG-078: click/wait_for/capture_text 的 spurious value 字段剥离
+8. BUG-070: DSL generator thinking mode reasoning_content fallback
+9. BUG-065: DSL prompt 添加 capture→assert、modify→input→assert 规则
+10. BUG-076: Surrogate Unicode 字符清理
+
+### 探索数据层
+11. BUG-067: explore_flow 相对 URL 解析为绝对 URL
+12. 元素视觉分组（按 rect 坐标聚类）— AI 可以看到页面结构
+13. 隐藏交互元素保留（[HIDDEN—visible on hover] 标记）
+14. 选择器稳定性评分重排：a11y tree 0.90 最高，nth-of-type 0.10 最低
+
+### 执行定位器层
+15. text_parent_chain 新定位器："Blue Top 附近的 Add to cart" 消歧
+16. BUG-071-073: text_parent_chain 正则修复 → split 方式
+17. BUG-072: 自适应 ancestor 深度（2-8 层，选最浅匹配）
+18. BUG-074: 执行流程重构 — 语义链优先，VLM 仅最后兜底
+19. 步骤超时 2.5 分钟（防止 Playwright 永久挂起）
+20. 候选构建失败的异常日志（不再静默吞没）
+21. preflight gate 从告警变门控（>50% unmatched 拒接草案）
+
+### 测试数据
+22. BUG-079: 购物车数据污染 — 数量从 1 变为 31（待修复）
+
+**执行结果对比：**
+
+| 指标 | 修复前（Session 118） | 修复后（Session 155） |
+|------|----------------------|----------------------|
+| AI 首轮动作 | ask_user "信息够吗" | explore_page → capture_session |
+| DSL 步骤数 | 10（仅购物车断言） | 42（完整流程） |
+| assert_text 数量 | 0 | 9 |
+| 步骤被删 | 10 | 0 |
+| nth-of-type 定位器 | 13 | 11（部分改进） |
+| 语义定位器 | 0 | text_parent_chain 生效 |
+| Surrogate 损坏 | 6 个 target | 0 |
+| 页面探索覆盖 | 1 页 | 3 页（含品牌筛选页） |
+| 执行通过率 | 0/0（草案无法执行） | 27/28 (96%) |
+
+**最终状态：** AI 生成的测试用例达到 96% 步骤通过率（超过 80% 目标）。唯一失败是 BUG-079 购物车数据污染导致的硬编码数量断言。
+
+**关联 BUG：** BUG-064 至 BUG-079
+
+
 ## 记录规则
 
 - 每次处理需求后按时间倒序追加一条记录。
