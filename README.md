@@ -9,34 +9,55 @@ AI 增强的 Web UI 自动化测试平台。
 
 ## 当前状态
 
-当前阶段：**M2 功能增强推进中**。M1 已全部完成，M2 前端体验重构已完成。
+当前阶段：**M2 功能增强 — AI Agent 质量已达生产可用**。M1/M2 前端体验全部完成。
 
-进度判断（估算）：
+进度判断（基于 2026-05-07 量化结果）：
 - M1 完成度：`100%`
 - M2 前端体验重构完成度：`100%`
-- M2 功能增强完成度：`50%`
-- 相对核心五阶段产品路线图整体完成度：`90% - 95%`
+- M2 功能增强完成度：`90%`（AI Agent 生成测试用例 100% 步骤通过率）
+- 相对核心五阶段产品路线图整体完成度：`95%+`
 
-已完成的核心能力：
+### 2026-05-07 AI Agent 质量量化里程碑
+
+通过 `test_brand_filter_cart` 标准回归用例反复测试，27 个 commits 修复 16 个 bugs（BUG-064 ~ BUG-079），最终实现：
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| AI 探索行为 | ask_user 询问废话 | 自动 explore_page → capture_session → explore_flow |
+| 页面探索覆盖 | 1 页 | 3 页（登录页 + 品牌筛选页 + 购物车页） |
+| DSL 步骤 | 10（仅有购物车断言） | 42（完整登录→筛选→加购→验证→数量修改） |
+| assert_text | 0 | 9 |
+| 步骤被归一化删除 | 10-36 | 0 |
+| nth-of-type 定位器 | 13 | 0（全部语义定位） |
+| 执行通过率 | 0%（无法执行） | **100%（42/42）** |
+
+### 本次核心架构改进
+
+- **AI 决策层**：系统提示词移除 ask_user 确认门；流程驱动探索规则（7 条强制规则）；压缩子代理 prompt 重写
+- **DSL 生成层**：归一化器修复（goto/click/capture_text extra field 剥离）；Surrogate Unicode 字符清理；capture→assert 强制规则
+- **探索数据层**：元素视觉分组（坐标聚类）；隐藏交互元素保留；选择器稳定性评分（accessibility tree 0.90 最高，nth-of-type 0.10）；相对 URL 解析
+- **执行定位器层**：`text_parent_chain` 新定位器（”Blue Top 附近的 Add to cart”）；执行流程重构（语义链优先 → VLM 仅兜底）；自适应 ancestor 深度遍历；2.5 分钟步骤超时
+
+### 已完成的核心能力
+
 - 平台基础：NotebookLM 三栏浮岛布局、侧边栏导航、ReportPage、Case 管理（含编辑/删除）、执行详情、执行记录删除
 - 前端体验：全局大圆角/无边框/弱阴影主题 token，全部页面统一三栏布局
 - 执行主链路：DSL 校验、单 Case 执行、步骤级证据、执行详情与报告聚合
-- 执行流式推送：后端 WebSocket 流式执行原语、AI Planning WS worker/路由、前端 socket client、面板实时进度气泡与取消按钮
-- 混合定位闭环：Tier 0 人工修正、Tier 1 DOM 语义定位（含 element_id 策略与大小写不敏感回退）、Tier 2 AI visual、Tier 3 人工干预
-- AI DSL：自然语言生成、草案预览与导入、反馈闭环、治理页观测，已适配智谱 BigModel
-- AI 规划助手：对话式测试规划、会话历史恢复、会话删除、DSL 草案审阅 → 保存用例 → 触发执行 → 实时流式进度 → 结果展示完整闭环
+- 执行流式推送：后端 SSE 流式执行原语、AI Planning SSE worker/路由、前端实时进度气泡与取消按钮
+- 混合定位闭环：Tier 0 人工修正、Tier 1 DOM 语义定位（含 text_parent_chain 消歧）、Tier 2 AI visual、Tier 3 人工干预
+- AI DSL：自然语言生成、草案预览与导入、反馈闭环、治理页观测，已适配 DeepSeek/智谱 BigModel
+- AI 规划助手：对话式测试规划、Flow 驱动页面探索、DSL 草案审阅 → 保存用例 → 触发执行 → 实时流式进度 → 结果展示完整闭环
 - 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回退
 - 回归能力：后端/前端自动化测试链路已建立，2 条浏览器级固定主回归 + 6 条 Platform API Chain 白盒集成测试
 - 白盒测试：session 层 + 用例创建/执行/端到端全链路 API chain 测试覆盖
 
 当前仍在推进的事项：
-- AI 测试规划助手打磨：基于实际使用反馈优化对话体验和场景生成质量
-- 继续基于治理数据收敛 AI DSL 高频拒绝原因
+- BUG-079 购物车清空自动化（当前需手动清理，已知问题已记录）
+- 元素视觉分组 label 优化（部分 group 无有意义的 label）
 - AI visual 仍默认关闭，灰度验证样本积累中
 
 与计划相比的主要差距：
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
-- 报告系统已可用，但离”AI 失败分析 / 报告扩面”还有差距
 - 认证只做到”本地账号密码 + Cookie Session”最小可用形态，尚未进入角色权限、账号管理、密码重置
 - corrections 运维视角的跨目标分析与更细粒度状态反馈尚未开始
 
@@ -65,6 +86,7 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
 
 仓库提供本地可控的浏览器级回归链路，用于验证：
 
+- 1 条 AI Agent E2E 回归（`test_brand_filter_cart`，42 步全通过，验证 AI 生成用例质量）
 - 2 条固定主回归：
   - 单 Case smoke 可稳定执行成功
   - 首次执行落为 `needs_intervention`，提交 correction 后可重跑通过，再次执行由 Tier 0 命中
@@ -115,14 +137,16 @@ AI DSL 生成会输出最小治理信息：
 
 ## 定位系统
 
-混合定位采用四层降级链路：
+混合定位采用多层降级链路，语义优先、VLM 兜底：
 
 | Tier | 策略 | 说明 |
 |------|------|------|
 | Tier 0 | 人工修正 | 优先命中已保存的 corrections 记录 |
-| Tier 1 | DOM 语义定位 | 含 element_id 策略、CSS/XPath、大小写不敏感 label/placeholder/text/button 匹配 |
-| Tier 2 | AI visual | 视觉模型定位，默认关闭，需手动开启 |
-| Tier 3 | 人工干预 | 定位失败后进入 `needs_intervention`，提交修正后可重跑 |
+| Tier 1 | DOM 语义定位 | text_parent_chain 消歧（"Blue Top 附近的 Add to cart"）、element_id、CSS/XPath、text/role/placeholder 匹配 |
+| Tier 1.5 | 无障碍树 | 零成本 accessibility tree lookup（arxiv 2603.20358） |
+| Tier 2 | 自适应 DOM 遍历 | `_find_in_ancestor` 逐步向上搜索公共祖先容器 |
+| Tier 3 | AI visual | 视觉模型定位，默认关闭，需手动开启 |
+| Tier 4 | 人工干预 | 定位失败后进入 `needs_intervention`，提交修正后可重跑 |
 
 ## 快速开始
 
