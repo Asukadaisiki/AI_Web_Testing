@@ -31,6 +31,27 @@
 
 
 
+
+## BUG-084 | text_parent_chain 在品牌页第二个产品上回退到 VLM
+
+- 日期：2026-05-07
+- 状态：open
+- 来源：E2E 回归测试
+- 描述：Exec 118 Step 15 "Blue Top 附近的 Add to cart" 用 text_parent_chain 成功，但 Step 21 "Fancy Green Top 附近的 Add to cart" 回退到 ai_coordinate_click。Continue Shopping 后页面 DOM 状态变化，_find_in_ancestor 对第二个产品的祖先遍历失败。
+- 根因：第二个产品的 DOM 结构与第一个略有不同（可能因滚动/弹窗关闭后的页面重排）
+- 处理：待优化祖先查找算法或添加重试
+- 验证：未验证
+
+## BUG-083 | AI 将 assert_text 的 ${var} 放在 target 而非 value 导致断言被删除
+
+- 日期：2026-05-07
+- 状态：fixed (7958d3b, 未验证)
+- 来源：E2E 回归测试
+- 描述：AI 生成 assert_text target='${product_a_name}' value=''，Pydantic min_length=1 拒绝空 value → 8 个断言步骤被归一化器删除 → Exec 118 30/30 通过但 0 个断言实际执行。归一化器已添加自动修复（检测 target 为 ${var} 且 value 为空时将 target 复制到 value），prompt 也添加了格式规则。
+- 根因：AI 模型混淆 assert_text 的 target（元素定位器）和 value（期望值）字段
+- 处理：1) prompt 添加"target 是页面文本，value 是 ${var}"规则 2) 归一化器自动补全
+- 验证：未验证（需新 session 生成 draft 确认）
+
 ## BUG-082 | capture_page_session 定位器使用简化版 resolver 导致登录态不稳定
 
 - 日期：2026-05-07
