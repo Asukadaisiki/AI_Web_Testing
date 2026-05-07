@@ -219,9 +219,13 @@ def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
         return None
     return (
         "text_parent_chain",
+        # Walk up to a common container, then search for child within.
+        # .locator("..") goes up one DOM level. 5 levels covers most card/row/block structures.
         lambda: (page.get_by_text(parent_text, exact=False)
-                 .locator("xpath=ancestor::*[contains(@class,'product') or contains(@class,'item') or contains(@class,'card') or contains(@class,'row')][1]")
-                 .get_by_text(child_text, exact=False)),
+                 .first
+                 .locator("..").locator("..").locator("..").locator("..").locator("..")
+                 .get_by_text(child_text, exact=False)
+                 .first),
     )
 
 
