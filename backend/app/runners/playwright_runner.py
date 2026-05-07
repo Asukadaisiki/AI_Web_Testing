@@ -567,7 +567,11 @@ def execute_case_with_playwright(
             page.goto(base_url, wait_until="domcontentloaded")
 
         try:
+            _execution_started_at = perf_counter()
+            _MAX_EXECUTION_SECONDS = 600
             for index, step in enumerate(case.steps):
+                if perf_counter() - _execution_started_at > _MAX_EXECUTION_SECONDS:
+                    raise RunnerExecutionError(f"Execution timeout after {_MAX_EXECUTION_SECONDS}s", step_results=step_results)
                 resolved_target = _substitute_variables(step.target, _vars()) or step.target
                 step_started_at = perf_counter()
                 console_index = len(console_buffer)
@@ -845,7 +849,11 @@ def execute_case_with_playwright_streaming(
             page.goto(base_url, wait_until="domcontentloaded")
 
         try:
+            _execution_started_at = perf_counter()
+            _MAX_EXECUTION_SECONDS = 600  # 10 minutes max total
             for index, step in enumerate(case.steps):
+                if perf_counter() - _execution_started_at > _MAX_EXECUTION_SECONDS:
+                    raise RunnerExecutionError(f"Execution timeout after {_MAX_EXECUTION_SECONDS}s", step_results=step_results)
                 if cancel_event is not None and cancel_event.is_set():
                     raise RunnerCancelledError("Execution cancelled by user.", step_results=step_results)
 

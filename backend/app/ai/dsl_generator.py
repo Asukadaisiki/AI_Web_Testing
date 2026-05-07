@@ -149,8 +149,9 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "It requires: target (element locator) and context_key (variable name in snake_case).",
     "Captured variables can be referenced in subsequent steps via ${context_key}.",
     "**MANDATORY: every capture_text step MUST be followed by at least one assert_text that references the captured ${context_key}.** Capture alone proves nothing — it only reads data without verifying it.",
-    "Example correct pattern: capture_text context_key='price' → later: assert_text value='${price}'.",
-    "Example wrong pattern: capture_text context_key='price' → never asserted (test is useless).",
+    "Example correct: capture_text context_key='price' → later: assert_text target='Rs. 500' value='${price}'.",
+    "Example wrong: capture_text context_key='price' → never asserted.",
+    "**assert_text format: target is the element locator (text to find on page), value is expected text.** target 必须是页面上的实际文本（如 \"Blue Top\"），value 是引用变量（如 \"${product_a_name}\"）或硬编码值（如 \"1\"）。不要把 ${var} 放在 target 中。"
     "",
     "## form field coverage",
     "IMPORTANT: You MUST generate a step for EVERY form field mentioned in the prompt.",
@@ -1796,9 +1797,9 @@ def _call_llm(
     )
     with request.urlopen(http_request, timeout=timeout_seconds) as response:
         raw_body = response.read()
-        response_text = raw_body.decode("utf-8", errors="replace")
-        # Strip lone surrogates from DeepSeek response
-        response_text = re.sub(r"[\udc80-\udfff]", "", response_text)
+        # Two-pass decode to eliminate lone surrogates at byte level
+        response_text = raw_body.decode("utf-8", errors="surrogateescape")
+        response_text = response_text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
         content_type = ""
         if hasattr(response, "headers") and response.headers is not None:
             content_type = response.headers.get("Content-Type", "")

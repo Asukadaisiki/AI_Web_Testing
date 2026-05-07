@@ -1501,6 +1501,12 @@ def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
     plan_raw = dict(record.plan_json) if record.plan_json else None
     if plan_raw is not None:
         plan_raw.pop("_page_results", None)
+        # Truncate massive page_elements to prevent API response overflow
+        _MAX_PE_CHARS = 50000
+        for sc in plan_raw.get("scenarios", []) or []:
+            pe = sc.get("page_elements", "")
+            if isinstance(pe, str) and len(pe) > _MAX_PE_CHARS:
+                sc["page_elements"] = pe[:_MAX_PE_CHARS] + f"\n...[truncated {len(pe)-_MAX_PE_CHARS} chars]"
     return AIPlanningSessionSchema(
         id=record.id,
         actor_user_id=record.actor_user_id,
