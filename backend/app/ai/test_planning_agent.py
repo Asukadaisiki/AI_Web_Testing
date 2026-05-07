@@ -880,6 +880,8 @@ def _stream_planning_llm(
 
 
 def _parse_llm_response(response_text: str) -> dict[str, Any] | None:
+    # Strip lone surrogates from DeepSeek streaming response
+    response_text = re.sub(r"[\udc80-\udfff]", "", response_text)
     repaired = _repair_json_text(response_text)
     try:
         payload = json.loads(_extract_json_object(repaired))

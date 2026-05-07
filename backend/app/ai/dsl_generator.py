@@ -492,6 +492,9 @@ def generate_case_draft(
         timeout_seconds=max(1.0, settings.ai_dsl_timeout_ms / 1000),
     )
 
+    # Sanitize lone surrogates from DeepSeek API response before JSON parsing.
+    # Lone surrogates (U+DC80-U+DFFF) are invalid in UTF-8 and break split regexes.
+    response_text = re.sub(r"[\udc80-\udfff]", "", response_text)
     try:
         cleaned = _extract_json_object(response_text)
         raw_case = json.loads(cleaned)
@@ -1735,6 +1738,8 @@ def _call_llm(
     with request.urlopen(http_request, timeout=timeout_seconds) as response:
         raw_body = response.read()
         response_text = raw_body.decode("utf-8", errors="replace")
+        # Strip lone surrogates from DeepSeek response
+        response_text = re.sub(r"[\udc80-\udfff]", "", response_text)
         content_type = ""
         if hasattr(response, "headers") and response.headers is not None:
             content_type = response.headers.get("Content-Type", "")
