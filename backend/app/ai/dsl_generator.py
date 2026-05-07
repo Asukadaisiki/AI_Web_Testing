@@ -1117,6 +1117,15 @@ def _normalize_single_step(
         normalization_notes=normalization_notes,
     )
     action_value = repaired_step.get("action")
+    # Fix surrogate-escaped Unicode from LLM output (e.g., \udc84 → replacement)
+    for _field in ("target", "value"):
+        _v = repaired_step.get(_field)
+        if isinstance(_v, str) and any(0xD800 <= ord(c) <= 0xDFFF for c in _v):
+            repaired_step[_field] = _v.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+            normalization_notes.append(
+                f"步骤 #{index} 的 {_field} 包含 surrogate 字符，已自动替换。"
+            )
+
     if not isinstance(action_value, str) or not action_value.strip():
         if allow_auto_repair:
             return None, 0
