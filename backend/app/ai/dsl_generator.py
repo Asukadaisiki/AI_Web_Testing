@@ -527,6 +527,9 @@ def generate_case_draft(
         warnings=warnings,
     )
 
+    # Structural gate: reject drafts missing required navigation steps
+    _verify_navigation_completeness(normalized_case, payload, warnings)
+
     try:
         case = DSLCase.model_validate(normalized_case)
     except ValidationError as exc:
@@ -929,6 +932,39 @@ _CN_FIELD_MAP: dict[str, str] = {
     "用户名": "username", "手机": "mobile",
 }
 
+
+def _verify_navigation_completeness(
+    normalized_case: dict[str, Any],
+    payload: GenerateDslRequest,
+    warnings: list[str],
+) -> None:
+    """Reject drafts that skip critical navigation steps, e.g. input on homepage
+    without first navigating to login page."""
+    steps = normalized_case.get("steps", [])
+    if not steps:
+        return
+
+    step_targets = [(s.get("action", ""), (s.get("target") or "")) for s in steps]
+    # Check: input on login fields without prior login navigation
+    login_inputs = {"Email Address", "Password", "email", "password"}
+    has_login_input = any(
+        act == "input" and (tar in login_inputs or tar.lower() in login_inputs)
+        for act, tar in step_targets
+    )
+    has_login_nav = any(
+        (act in ("click", "goto")) and any(kw in tar for kw in ("Signup", "Login", "/login"))
+        for act, tar in step_targets
+    )
+
+    # If there's an input targeting a login field and first step is goto / without a login nav
+    if has_login_input and not has_login_nav and steps[0].get("action") == "goto" and steps[0].get("value") in ("/", ""):
+        warnings.append(
+            "结构门控：草案在 goto / 后直接 input 登录字段，缺少 click \"Signup / Login\" 或 goto \"/login\" 导航步骤。"
+            "已拒绝此草案。"
+        )
+        raise DslGenerationError(
+            "草案缺少登录页面导航步骤。请在 input Email/Password 之前添加 click \"Signup / Login\" 或 goto \"/login\"。"
+        )
 
 def _verify_field_coverage(
     *,
