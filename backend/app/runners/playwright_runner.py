@@ -572,7 +572,7 @@ def execute_case_with_playwright(
             for index, step in enumerate(case.steps):
                 if perf_counter() - _execution_started_at > _MAX_EXECUTION_SECONDS:
                     raise RunnerExecutionError(f"Execution timeout after {_MAX_EXECUTION_SECONDS}s", step_results=step_results)
-                resolved_target = _substitute_variables(step.target, _vars()) or step.target
+                resolved_target = _substitute_variables(getattr(step, 'target', None), _vars()) or getattr(step, 'target', None)
                 step_started_at = perf_counter()
                 console_index = len(console_buffer)
                 network_index = len(network_buffer)
@@ -858,7 +858,7 @@ def execute_case_with_playwright_streaming(
                     raise RunnerCancelledError("Execution cancelled by user.", step_results=step_results)
 
                 # Substitute runtime variables in target (e.g., "${cart_a_total}" → "Rs. 500")
-                resolved_target = _substitute_variables(step.target, _vars()) or step.target
+                resolved_target = _substitute_variables(getattr(step, 'target', None), _vars()) or getattr(step, 'target', None)
 
                 yield StepStreamEvent(
                     type="step_start",
