@@ -46,29 +46,32 @@ def _resolve_with_confidence_gate(
     require_visible: bool = True,
     require_enabled: bool = False,
 ) -> tuple[ResolvedLocator, bool]:
-    """Resolve a locator with optional VLM pre-verification for low-confidence targets.
+    """Unified locator resolution: semantic first, VLM only as last-resort fallback.
 
-    Returns (resolved_locator, vlm_preverify_used).
+    confidence="low" does NOT skip the semantic chain.
     """
-    vlm_preverify_used = False
+    # Tier 1-2: semantic candidates → accessibility tree → VLM rerank
+    try:
+        resolved = resolve_with_fallback(
+            page, target,
+            target_strategy=target_strategy,
+            correction_store=correction_store,
+            execution_id=execution_id,
+            prefer_input=prefer_input,
+            require_visible=require_visible,
+            require_enabled=require_enabled,
+        )
+        return resolved, False
+    except (LocatorResolutionError, InterventionNeededError):
+        pass
 
+    # Tier 3: VLM pre-verify as last resort for low-confidence targets
     if locator_confidence == "low":
         vlm_result = preverify_with_vlm(page, target)
         if vlm_result is not None:
             return vlm_result, True
-        vlm_preverify_used = True  # Attempted but fell through
 
-    resolved = resolve_with_fallback(
-        page, target,
-        target_strategy=target_strategy,
-        correction_store=correction_store,
-        execution_id=execution_id,
-        prefer_input=prefer_input,
-        require_visible=require_visible,
-        require_enabled=require_enabled,
-    )
-    return resolved, vlm_preverify_used
-
+    raise
 
 def _substitute_variables(value: str | None, input_values: dict[str, str] | None) -> str | None:
     """Replace ``${context_key}`` placeholders in *value* with entries from *input_values*."""
@@ -550,6 +553,7 @@ def execute_case_with_playwright(
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
+        page.set_default_timeout(150_000)  # 2.5 min per operation
         console_buffer: list[ConsoleEvent] = []
         network_buffer: list[NetworkEvent] = []
         page.on("console", lambda message: _capture_console_event(message, console_buffer))
@@ -826,6 +830,7 @@ def execute_case_with_playwright_streaming(
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
+        page.set_default_timeout(150_000)  # 2.5 min per operation
         console_buffer: list[ConsoleEvent] = []
         network_buffer: list[NetworkEvent] = []
         page.on("console", lambda message: _capture_console_event(message, console_buffer))
