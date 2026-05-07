@@ -1471,6 +1471,19 @@ def _repair_step_shape(
     if normalized_action in ("click", "wait_for", "capture_text"):
         repaired.pop("value", None)
 
+    # Auto-fix: AI puts ${var} in target instead of value in assert_text.
+    # Try to recover the correct target from a preceding capture_text step.
+    if (normalized_action == "assert_text"
+            and isinstance(repaired.get("target"), str)
+            and repaired["target"].startswith("${")
+            and (not repaired.get("value") or str(repaired.get("value")).strip() == "")):
+        var_name = repaired["target"].strip("${}")
+        # This will be resolved at runtime after we know the captured value.
+        # For now, leave target as-is and set value to the variable reference.
+        # The runtime will substitute the variable.
+        repaired["value"] = repaired["target"]
+        # target stays as the variable reference — will be substituted at runtime
+
     return repaired
 
 
