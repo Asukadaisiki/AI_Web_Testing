@@ -204,6 +204,25 @@ _PARENT_SPLIT_RE = re.compile(
 )
 
 
+def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
+    """Find child_text within the nearest common ancestor of parent_text element.
+
+    Tries depths 2-8, returning the SHALLOWEST ancestor that contains child_text.
+    This adapts to any DOM structure: table rows (~3 levels), cards (~5), modals (~2).
+    """
+    parent_el = page.get_by_text(parent_text, exact=False).first
+    for _depth in range(2, 9):
+        ancestor = parent_el
+        for _ in range(_depth):
+            ancestor = ancestor.locator("..")
+        child = ancestor.get_by_text(child_text, exact=False)
+        if child.count() > 0:
+            return child.first
+    # Fallback: deepest level
+    return (parent_el.locator("..").locator("..").locator("..").locator("..").locator("..")
+            .get_by_text(child_text, exact=False).first)
+
+
 def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
     """Parse text-based parent chaining: "Blue Top" >> "Add to cart".
 
@@ -219,14 +238,10 @@ def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
         return None
     return (
         "text_parent_chain",
-        # Walk up to a common container, then search for child within.
-        # .locator("..") goes up one DOM level. 5 levels covers most card/row/block structures.
-        lambda: (page.get_by_text(parent_text, exact=False)
-                 .first
-                 .locator("..").locator("..").locator("..").locator("..").locator("..")
-                 .get_by_text(child_text, exact=False)
-                 .first),
+        # Walk up 2→8 levels, find the shallowest ancestor that also contains child_text.
+        lambda: _find_in_ancestor(page, parent_text, child_text),
     )
+
 
 
 def _resolve_chained_selector(page, target: str) -> tuple[str, object] | None:
