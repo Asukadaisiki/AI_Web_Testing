@@ -219,13 +219,15 @@ def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
         ancestor = parent_el
         for _ in range(_depth):
             ancestor = ancestor.locator("..")
-        # Use exact=True for child to avoid substring matches (Rs. 500 matching Rs. 5000)
-        child = ancestor.get_by_text(child_text, exact=True)
-        if child.count() > 0:
-            return child.first
-    # Fallback: deepest level with exact match
-    return (parent_el.locator("..").locator("..").locator("..").locator("..").locator("..")
-            .get_by_text(child_text, exact=True).first)
+        try:
+            child = ancestor.get_by_text(child_text, exact=False)
+            n = child.count()
+            if n > 0:
+                return child.first
+        except Exception:
+            continue
+    # Fallback: try without ancestor walk
+    return page.get_by_text(child_text, exact=False).first
 
 
 def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
