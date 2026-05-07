@@ -209,6 +209,7 @@ _BASE_USER_RULE_LINES = [
     "- 表单字段覆盖：必须为 prompt 中提到的每个表单字段生成对应步骤。下拉框用 input action（target 为字段标签，value 为选项文本），复选框用 click action（target 为复选框标签）。输出前检查是否有遗漏字段。",
     "- 当 input_contract 中定义了变量（如 context_key: login_email），step 的 value 字段必须用 ${context_key} 格式引用（如 \"${login_email}\"），不要硬编码值或使用其他占位符格式（如 {{}}、%%、<>）。",
     "- 如果需要明确指定定位策略，可在 step 中添加 target_strategy 字段（可选值：css, xpath, data-testid, element_id, tag, semantic）。不填则自动推断。",
+    "- 【测试常识 — 输入后确认】修改表单字段（如数量、价格、搜索框）的值后，页面通常需要键盘事件才能触发更新。仅 input 步骤的 fill 操作可能不会触发 JavaScript 的 change/update 事件。因此：1) 修改数量/价格后，必须在 input 步骤后添加 wait_for 等待更新结果出现；2) 如果 wait_for 的目标是总价、计算结果等动态值，使用具体的预期值作为 target（如 \"Rs. 1400\"）而非 CSS 选择器。正确示例：input value='2' → wait_for \"Rs. 1400\" → assert_text。",
     "- base_url 应为站点根地址（如 https://example.com），页面路径放在 goto 步骤中（如 /login）。不要将完整页面 URL 填入 base_url。",
     "- 生成前评估测试信息完整性：前置条件（系统初始状态）、入口（目标页面 URL 或导航路径）、操作步骤、预期结果。如果描述中缺少入口信息，通过 base_url + goto 步骤明确入口。",
     "- 【页面导航完整性】每个页面的元素只能在该页面加载后才能操作。进入新页面必须通过 click/goto 步骤。例如：登录页面的邮箱输入框必须在 click \"Signup / Login\"（或 goto /login）之后才能操作，不能从首页直接 input \"Email Address\"。确保步骤顺序与实际页面跳转逻辑一致。",

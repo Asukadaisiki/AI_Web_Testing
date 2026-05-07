@@ -345,6 +345,7 @@ def _execute_step_with_candidates(
                     locator.select_option(label=input_value)
                 else:
                     locator.fill(input_value)
+                locator.press("Enter")  # trigger JS change handlers for quantity/price updates
             elif step.action == "wait_for":
                 locator.wait_for(state="visible", timeout=step.timeout_ms)
             elif step.action == "assert_text":
