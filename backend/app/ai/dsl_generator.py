@@ -204,7 +204,7 @@ _BASE_USER_RULE_LINES = [
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
     "- target 必须使用元素的实际可见文本、label 或 placeholder 值，作为纯文本字符串（如 \"Email Address\"），不要构造 CSS 选择器格式的 target（如 \"input[placeholder='Email Address']\"）。仅在无可见文本时才使用 CSS/XPath 选择器。",
     "- 【定位器稳定性优先级】当页面元素清单中包含 stable 分数时，优先使用 stable>=0.70 的元素属性作为 target。如果目标元素有 data-testid，优先以 data-testid 值作为 target 并设置 target_strategy=\"data-testid\"。",
-    "- 【同类重复元素消歧】当页面上有多个相同文本的元素（如多个 \"Add to cart\"），必须用页面结构消歧。页面元素清单已按视觉分组（### Group Label），每组是一个 UI 区块（产品卡片、表单等）。消歧方法（按优先级）：1) 如果有唯一 href，用 `a[href='/product_details/1'] text=Add to cart` 链式格式；2) 如果有唯一 id/data-testid，直接使用；3) 用父元素的语义文本来描述目标，如 `\"Blue Top\" 附近的 Add to cart`。绝对不要使用 `section:nth-of-type(N) > div:nth-of-type(N)`。",
+    "- 【同类重复元素消歧 — 适用于所有动态值】页面元素清单已按视觉分组（### Group Label），每组是一个 UI 区块（产品卡片、表单等）。当页面上有多个相同或相似的元素时，必须用父元素上下文来精确指定目标。这不仅适用于按钮，也适用于价格、数量、名称等任何可能重复的文本。规则：如果该值属于某个产品卡片（如 Blue Top 卡片内的价格 Rs. 500、数量 1），必须使用 `\"父元素文本\" 附近的 \"子元素文本\"` 格式。错误示例：capture_text \"Rs. 400\"（会匹配多个产品的价格）；正确示例：capture_text \"Men Tshirt 附近的 Rs. 400\"。绝对不要使用 `section:nth-of-type(N) > div:nth-of-type(N)`。唯一例外：购物车页面只有已添加的商品，可以直接用价格文本。",
     "- 【置信度自评】对每个包含 target 的 step，添加 locator_confidence 字段：high（目标有唯一 data-testid/aria-label/text）、medium（有稳定属性但存在 2-3 个同类）、low（只能靠 XPath 位置或无区分属性的多个同类元素）。",
     "- 表单字段覆盖：必须为 prompt 中提到的每个表单字段生成对应步骤。下拉框用 input action（target 为字段标签，value 为选项文本），复选框用 click action（target 为复选框标签）。输出前检查是否有遗漏字段。",
     "- 当 input_contract 中定义了变量（如 context_key: login_email），step 的 value 字段必须用 ${context_key} 格式引用（如 \"${login_email}\"），不要硬编码值或使用其他占位符格式（如 {{}}、%%、<>）。",
