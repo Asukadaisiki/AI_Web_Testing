@@ -30,6 +30,36 @@
 ```
 
 
+
+## BUG-082 | capture_page_session 定位器使用简化版 resolver 导致登录态不稳定
+
+- 日期：2026-05-07
+- 状态：fixed ()
+- 来源：E2E 回归测试
+- 描述：capture_browser_session 使用简化版 _resolve_step_locator（只尝试少量候选 + count()>0 即返回），导致 Email placeholder 匹配到 3 个元素 → strict mode 失败 → 登录 session 无法保存 → explore_flow 数据减半（73K vs 157K）→ 草案质量波动。
+- 根因：_resolve_step_locator 没有使用完整的定位器链路（semantic → a11y → VLM fallback）
+- 处理：改为直接调用 resolve_with_fallback（与 runner 相同链路）；添加页载等待 + 元素 tag 验证 + 2 次重试
+- 验证：S161 capture_page_session 成功，page_elements 从 73K → 1.28MB
+
+## BUG-081 | DSL 草案间质量剧烈波动 — 相同 prompt 产出 42 步和缺登录的 30 步
+
+- 日期：2026-05-07
+- 状态：fixed (, , , )
+- 来源：E2E 回归测试
+- 描述：相同 draft_prompt（2069 chars），S155 产出 42 步完整草案，S162 产出缺少登录导航的 30 步草案（goto / 后直接 input Email Address）。根本原因是 DSL 生成模型的随机性。
+- 处理：1) 系统提示词加入【流程-页面导航映射】规则；2) 草案生成后一致性检查——prompt 提到登录页必须有导航步骤，goto / 后不能直接 input
+- 验证：Draft 89 包含完整 click "Signup / Login" 导航
+
+## BUG-080 | assert_text 的 target 字段中的运行时变量未被替换
+
+- 日期：2026-05-07
+- 状态：fixed ()
+- 来源：E2E 回归测试
+- 描述：assert_text target="${cart_a_total}" 中的 ${cart_a_total} 未被 _substitute_variables 替换 → 定位器按字面量去找文本 → 永远找不到 → 走 VLM 兜底 → 定位到错误元素。
+- 根因：_substitute_variables 只对 step.value 调用，未对 step.target 调用
+- 处理：在所有 runner 和 helper 函数中，将 step.target 在使用前统一替换为 _substitute_variables(step.target, _vars()) or step.target
+- 验证：543/544 单元测试通过
+
 ## BUG-079 | 购物车测试数据污染 — 已确认定位器无问题，数据污染导致 [verified: Exec 107 100%] — 前序测试遗留商品导致数量断言失败
 
 - 日期：2026-05-07
