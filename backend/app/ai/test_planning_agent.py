@@ -1174,8 +1174,8 @@ def run_compression_subagent(
         "model": model,
         "messages": messages,
         "stream": False,
-        "response_format": {"type": "json_object"},
         "max_tokens": 4096,
+        "temperature": 0.0,
     }
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
 
@@ -1192,10 +1192,27 @@ def run_compression_subagent(
             resp.raise_for_status()
             body = resp.json()
             content = body["choices"][0]["message"]["content"]
+            # Strip markdown fences if present
+            content = content.strip()
+            if content.startswith("```"):
+                first_nl = content.find("\n")
+                end_fence = content.rfind("```")
+                if first_nl != -1 and end_fence > first_nl:
+                    content = content[first_nl + 1:end_fence].strip()
             return json.loads(content)
     except Exception as exc:
-        logger.warning("Compression subagent failed: %s, falling back to algorithmic truncation", exc)
-        return None
+        logger.warning("Compression subagent failed: %s, falling back", exc)
+        # Build a minimal useful fallback with raw element counts
+        fallback = {"urls": [], "element_counts": {"total": 0}}
+        if tool_name == "explore_page":
+            fallback["urls"] = [parsed_result.get("url", "?")]
+            fallback["element_counts"]["total"] = len(parsed_result.get("elements", []))
+        elif tool_name == "explore_flow":
+            pages = parsed_result.get("pages", [])
+            fallback["urls"] = [p.get("url", "?") for p in pages[:10]]
+            fallback["total_elements"] = sum(len(p.get("elements", [])) for p in pages[:10])
+            fallback["total_pages"] = len(pages)
+        return fallback
 
 
 def _extract_raw_page_results(tool_calls: list[AIPlanningToolCall]) -> list[dict[str, Any]]:
