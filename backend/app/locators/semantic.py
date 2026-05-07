@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 
 from app.schemas.executions import (
@@ -113,7 +116,8 @@ def collect_semantic_candidates(
         try:
             locator_collection = build_locator()
             count = locator_collection.count()
-        except Exception:
+        except Exception as exc:
+            logger.debug("Candidate builder '%s' failed for target=%r: %s", strategy, normalized_target, exc)
             continue
 
         for index in range(min(count, max_per_strategy)):
@@ -215,12 +219,13 @@ def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
         ancestor = parent_el
         for _ in range(_depth):
             ancestor = ancestor.locator("..")
-        child = ancestor.get_by_text(child_text, exact=False)
+        # Use exact=True for child to avoid substring matches (Rs. 500 matching Rs. 5000)
+        child = ancestor.get_by_text(child_text, exact=True)
         if child.count() > 0:
             return child.first
-    # Fallback: deepest level
+    # Fallback: deepest level with exact match
     return (parent_el.locator("..").locator("..").locator("..").locator("..").locator("..")
-            .get_by_text(child_text, exact=False).first)
+            .get_by_text(child_text, exact=True).first)
 
 
 def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
@@ -236,11 +241,13 @@ def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
     child_text = parts[1].strip().strip("\"'")
     if not parent_text or not child_text:
         return None
-    return (
-        "text_parent_chain",
-        # Walk up 2→8 levels, find the shallowest ancestor that also contains child_text.
-        lambda: _find_in_ancestor(page, parent_text, child_text),
-    )
+    def _build():
+        try:
+            return _find_in_ancestor(page, parent_text, child_text)
+        except Exception as exc:
+            logger.debug("text_parent_chain failed for parent=%r child=%r: %s", parent_text, child_text, exc)
+            raise
+    return ("text_parent_chain", _build)
 
 
 
