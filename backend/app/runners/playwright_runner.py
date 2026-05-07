@@ -567,6 +567,7 @@ def execute_case_with_playwright(
 
         try:
             for index, step in enumerate(case.steps):
+                resolved_target = _substitute_variables(step.target, _vars()) or step.target
                 step_started_at = perf_counter()
                 console_index = len(console_buffer)
                 network_index = len(network_buffer)
@@ -597,7 +598,7 @@ def execute_case_with_playwright(
                     elif step.action == "click":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
-                            step.target,
+                            resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -618,7 +619,7 @@ def execute_case_with_playwright(
                     elif step.action == "input":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
-                            step.target,
+                            resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -649,7 +650,7 @@ def execute_case_with_playwright(
                     elif step.action == "wait_for":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
-                            step.target,
+                            resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -662,7 +663,7 @@ def execute_case_with_playwright(
                     elif step.action == "assert_text":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
-                            step.target,
+                            resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -680,7 +681,7 @@ def execute_case_with_playwright(
                     elif step.action == "capture_text":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                             page,
-                            step.target,
+                            resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -847,6 +848,9 @@ def execute_case_with_playwright_streaming(
                 if cancel_event is not None and cancel_event.is_set():
                     raise RunnerCancelledError("Execution cancelled by user.", step_results=step_results)
 
+                # Substitute runtime variables in target (e.g., "${cart_a_total}" → "Rs. 500")
+                resolved_target = _substitute_variables(step.target, _vars()) or step.target
+
                 yield StepStreamEvent(
                     type="step_start",
                     step_index=index,
@@ -891,7 +895,7 @@ def execute_case_with_playwright_streaming(
                         page.goto(_resolve_url(_substitute_variables(step.value, _vars()), base_url), wait_until="domcontentloaded")
                     elif step.action == "click":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
-                            page, step.target,
+                            page, resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -910,7 +914,7 @@ def execute_case_with_playwright_streaming(
                         click_recovery_detail = cr.recovery_detail
                     elif step.action == "input":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
-                            page, step.target,
+                            page, resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -938,7 +942,7 @@ def execute_case_with_playwright_streaming(
                                 resolved.locator.fill(input_value)
                     elif step.action == "wait_for":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
-                            page, step.target,
+                            page, resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -950,7 +954,7 @@ def execute_case_with_playwright_streaming(
                         resolved.locator.wait_for(state="visible", timeout=step.timeout_ms)
                     elif step.action == "assert_text":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
-                            page, step.target,
+                            page, resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
@@ -967,7 +971,7 @@ def execute_case_with_playwright_streaming(
                             )
                     elif step.action == "capture_text":
                         resolved, vlm_preverify_used = _resolve_with_confidence_gate(
-                            page, step.target,
+                            page, resolved_target,
                             locator_confidence=getattr(step, "locator_confidence", None),
                             target_strategy=step.target_strategy,
                             correction_store=correction_store,
