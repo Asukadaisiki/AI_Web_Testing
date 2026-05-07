@@ -1398,10 +1398,14 @@ def _repair_step_shape(
         )
 
     # goto and assert_url_contains don't support candidates/postconditions.
-    # Strip them so Pydantic doesn't reject with extra_forbidden.
     if normalized_action in ("goto", "assert_url_contains"):
         for _extra_key in ("candidates", "postconditions"):
             repaired.pop(_extra_key, None)
+
+    # click / wait_for / capture_text don't have a 'value' field.
+    # AI often adds value=null/\"\" to these steps → Pydantic rejects as extra_forbidden.
+    if normalized_action in ("click", "wait_for", "capture_text"):
+        repaired.pop("value", None)
 
     return repaired
 
