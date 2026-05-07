@@ -29,7 +29,6 @@
 - 关联记录：执行日志日期或链接
 ```
 
-## BUG-063 | DeepSeek thinking 模式下 SSE 流式输出断流 — reasoning_content 未转发给前端
 
 ## BUG-079 | 购物车测试数据污染 — 前序测试遗留商品导致数量断言失败
 
