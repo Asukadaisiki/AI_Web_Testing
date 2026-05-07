@@ -723,6 +723,7 @@ def capture_browser_session(
     timeout_ms: int = 60000,
 ) -> dict[str, Any]:
     """Execute *steps* on *url*, then persist the browser session state."""
+    import time as _time
     try:
         pw = _sync_playwright_context()
         with pw as playwright:
@@ -730,25 +731,51 @@ def capture_browser_session(
             context = browser.new_context()
             page = context.new_page()
             page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
-            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            try:
+                page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            except Exception:
+                pass
+            _time.sleep(1.0)  # let page JS settle
 
             for step in steps:
                 action = (step.get("action") or "").strip().lower()
                 target = step.get("target", "")
                 value = step.get("value", "")
-                # Normalize AI-generated action names
+                # Normalize action name
                 if action in ("type", "fill", "input"):
                     kind = "input"
                 elif action in ("click", "press", "tap"):
                     kind = "click"
                 else:
                     kind = action
-                locator = _resolve_step_locator(page, target, kind=kind)
-                if locator is not None:
-                    if kind == "input":
-                        locator.fill(str(value))
-                    elif kind == "click":
-                        locator.click()
+
+                # Retry loop: wait for page to stabilize, retry once on failure
+                for _retry in range(2):
+                    locator = _resolve_step_locator(page, target, kind=kind)
+                    if locator is None:
+                        _time.sleep(1.0)
+                        continue
+                    # Verify locator is the expected element type
+                    try:
+                        tag = locator.evaluate("el => el.tagName.toLowerCase()")
+                        if kind == "input" and tag not in ("input", "select", "textarea"):
+                            logger.warning("Locator resolved to <%s> instead of input for target=%r, retrying", tag, target)
+                            _time.sleep(1.0)
+                            continue
+                        if kind == "click" and tag in ("body", "html"):
+                            _time.sleep(1.0)
+                            continue
+                        # Execute
+                        if kind == "input":
+                            locator.fill(str(value))
+                        elif kind == "click":
+                            locator.click()
+                        break  # success
+                    except Exception as e:
+                        logger.warning("Step action failed for target=%r: %s, retrying", target, e)
+                        _time.sleep(1.0)
+                else:
+                    logger.warning("Step failed after retries for target=%r", target)
 
             state = context.storage_state()
             cookie_count = len(state.get("cookies", []))
