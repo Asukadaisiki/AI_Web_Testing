@@ -948,15 +948,22 @@ def _verify_navigation_completeness(
     if not any(kw in prompt_text for kw in ("login", "登录", "signup", "email address")):
         return
 
-    step_targets = [(s.get("action", ""), (s.get("target") or "").casefold()) for s in steps]
+    def _action(s): return s.get("action","") if isinstance(s, dict) else getattr(s, "action", "")
+    def _target(s):
+        t = s.get("target","") if isinstance(s, dict) else getattr(s, "target", "")
+        return (t or "").casefold()
+    step_targets = [(_action(s), _target(s)) for s in steps]
     login_inputs = {"email address", "password"}
-    has_login_input = any(act == "input" and tar in login_inputs for act, tar in step_targets)
+    has_login_input = any(act == "input" and any(li in tar for li in login_inputs) for act, tar in step_targets)
     has_login_nav = any(
         (act in ("click", "goto")) and any(kw in tar for kw in ("signup", "login"))
         for act, tar in step_targets
     )
 
-    if has_login_input and not has_login_nav and steps[0].get("action") == "goto" and steps[0].get("value") in ("/", ""):
+    first_step = steps[0]
+    first_action = first_step.get("action","") if isinstance(first_step, dict) else getattr(first_step, "action", "")
+    first_value = first_step.get("value","") if isinstance(first_step, dict) else getattr(first_step, "value", "")
+    if has_login_input and not has_login_nav and first_action == "goto" and first_value in ("/", ""):
         msg = "草案缺少登录页面导航：goto / 后直接 input 登录字段，须先 click \"Signup / Login\" 或 goto \"/login\""
         warnings.append(f"结构门控：{msg}")
         raise DslGenerationError(msg)
