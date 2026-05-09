@@ -353,10 +353,44 @@ def _rects_overlap_y(a: dict[str, float], b: dict[str, float], tolerance: float 
     return not (a_bottom + tolerance < b["y"] or b_bottom + tolerance < a["y"])
 
 
-def _rects_close_x(a: dict[str, float], b: dict[str, float], tolerance: float = 800) -> bool:
-    """True if two rects are horizontally close (same row / card)."""
+def _rects_close_x(a: dict[str, float], b: dict[str, float], tolerance: float = 300) -> bool:
+    """True if two rects are horizontally close (same card/column)."""
     a_right = a["x"] + a["w"]; b_right = b["x"] + b["w"]
     return not (a_right + tolerance < b["x"] or b_right + tolerance < a["x"])
+
+
+def _merge_small_groups(groups: list[list[dict[str, Any]]], min_size: int = 2) -> list[list[dict[str, Any]]]:
+    """Merge groups with fewer than *min_size* elements into their nearest neighbour.
+
+    Small groups (1-2 elements with no interactive content) are merged into the
+    closest overlapping group so that related elements like a product name and
+    its price end up in the same group.
+    """
+    if len(groups) <= 1:
+        return groups
+
+    _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
+    result: list[list[dict[str, Any]]] = []
+    pending: list[dict[str, Any]] = []
+
+    for group in groups:
+        has_interactive = any(
+            e.get("tag", "").casefold() in _INTERACTIVE_TAGS for e in group
+        )
+        if len(group) <= min_size and not has_interactive:
+            pending.extend(group)
+        else:
+            if pending:
+                group = pending + group
+                pending = []
+            result.append(group)
+
+    if pending and result:
+        result[-1].extend(pending)
+    elif pending:
+        result.append(pending)
+
+    return result
 
 
 def _has_usable_rect(element: dict[str, Any]) -> bool:
@@ -530,7 +564,9 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
             hidden_interactive.append(e)
 
     groups = _group_elements_by_visual_proximity(visible)
+    groups = _merge_small_groups(groups)
     hidden_groups = _group_elements_by_visual_proximity(hidden_interactive)
+    hidden_groups = _merge_small_groups(hidden_groups)
 
     # Build output: each group gets a labeled section with elements indented
     sections: list[str] = []
