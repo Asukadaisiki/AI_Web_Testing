@@ -63,6 +63,22 @@ class AIPlanningTestDataRequirement(DSLModel):
     source_hint: str | None = Field(default=None, max_length=200)
 
 
+class AIPlanningFlowStep(DSLModel):
+    """Atomic flow step linking user workflow to explored page elements."""
+    step_index: int
+    scenario_key: str = Field(default="", max_length=100)
+    session_id: int = Field(default=0, ge=0)
+    action: str = Field(min_length=1, max_length=50)
+    target: str | None = Field(default=None, max_length=500)
+    value: str | None = Field(default=None, max_length=1000)
+    trigger: str | None = Field(default=None, max_length=50)
+    expected_result: str | None = Field(default=None, max_length=1000)
+    page_url: str | None = Field(default=None, max_length=1000)
+    page_state: str | None = Field(default=None, max_length=10)
+    element_indices: list[int] | None = None
+    element_target_keywords: list[str] | None = None
+
+
 class AIPlanningScenario(DSLModel):
     scenario_key: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=200)
@@ -73,6 +89,10 @@ class AIPlanningScenario(DSLModel):
     assertions: list[str] = Field(default_factory=list)
     draft_prompt: str = Field(min_length=1)
     page_elements: str | None = Field(default=None, description="Formatted DOM elements from explore_page tool.")
+    flow_steps: list[AIPlanningFlowStep] = Field(
+        default_factory=list,
+        description="Structured flow step index for step-level element filtering.",
+    )
 
 
 class AIPlanningPlan(DSLModel):

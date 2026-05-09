@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 from urllib import request
@@ -179,6 +180,20 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "  3. Finally: assert_text to verify the new value appears",
     "Example of wrong pattern: assert_text value='2' without a preceding input step.",
     "Example of correct pattern: input value='2' → wait_for → capture_text → assert_text.",
+    "",
+    "## trigger field semantics",
+    "The optional 'trigger' field on input steps specifies a keyboard event to fire after fill:",
+    "  - trigger='Enter': presses Enter (submits form / triggers change event)",
+    "  - trigger='Tab': presses Tab (moves to next field)",
+    "  - trigger='Escape': presses Escape (closes modal / cancels)",
+    "When the user flow requires a keyboard event after input (e.g., pressing Enter to update cart quantity),",
+    "you MUST add trigger='Enter' to the input step. Do NOT generate a separate keyboard step —",
+    "the executor handles the event automatically.",
+    "",
+    "## page_state isolation (segmented generation)",
+    "When elements are grouped by page_state (S0, S1, ...), steps for each state",
+    "must only reference elements visible on that state's page.",
+    "Never use an element from page_state S1 in a step belonging to S0.",
 ]
 _PROMPT_VARIANT_RULES: dict[DslGenerationPromptVariant, list[str]] = {
     "contracts_focus": [
@@ -216,6 +231,8 @@ _BASE_USER_RULE_LINES = [
     "- 【页面导航完整性】每个页面的元素只能在该页面加载后才能操作。进入新页面必须通过 click/goto 步骤。例如：登录页面的邮箱输入框必须在 click \"Signup / Login\"（或 goto /login）之后才能操作，不能从首页直接 input \"Email Address\"。确保步骤顺序与实际页面跳转逻辑一致。",
     "- 【capture 必须 assert】使用 capture_text 提取数据后，必须在后续步骤中用 assert_text 验证该值。capture 只是读取数据，不能发现任何 bug。每条核心断言（如价格一致性、跨页面数据匹配）必须有对应的 assert_text 步骤。capture_text 捕获的 ${context_key} 必须在至少一个 assert_text 中被引用。",
     "- 【修改值必须先 input】如果测试流程要求修改某个字段的值（如修改数量为 2、修改价格为 100），必须先有 input 步骤执行修改，再有 assert_text 验证修改结果。不能跳过 input 直接 assert 修改后的值。错误示例：直接 assert_text value='2' 但没有 input value='2'。正确示例：input value='2' → wait_for → assert_text value='2'。",
+    "- 【trigger 字段】如果 input 步骤后需要键盘事件触发更新（如购物车数量修改后按 Enter），在 input 步骤中添加 trigger='Enter'（或 trigger='Tab'、trigger='Escape'）。不要单独生成键盘事件步骤，执行器会自动处理。",
+    "- 【页面状态隔离】如果页面元素按\"页面状态 S0/S1...\"分组，每个状态的步骤只能使用该状态的元素。不要在 S0 的步骤中使用 S1 的元素 target。",
 ]
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple[DslGenerationRejectionReasonCode, DslGenerationRejectionReasonCode] = (
     "context_mismatch",
@@ -1855,6 +1872,233 @@ def _build_non_json_response_error(
 def _looks_like_html_response(response_text: str) -> bool:
     normalized = response_text.lstrip().casefold()
     return normalized.startswith("<!doctype html") or normalized.startswith("<html")
+
+
+def _call_dsl_flash_llm(
+    *,
+    messages: list[dict[str, Any]],
+    settings=None,
+    timeout_seconds: float = 60.0,
+) -> str:
+    """Call a fast/flash LLM for segmented DSL generation (no thinking mode).
+
+    Uses ``ai_dsl_flash_*`` config, falling back to the main DSL model.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    api_key = (
+        getattr(settings, "ai_dsl_flash_api_key", None)
+        or settings.ai_dsl_api_key
+        or ""
+    )
+    model = (
+        getattr(settings, "ai_dsl_flash_model", None)
+        or settings.ai_dsl_model
+        or ""
+    )
+    base_url = (
+        getattr(settings, "ai_dsl_flash_base_url", None)
+        or settings.ai_dsl_base_url
+    )
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 16384,
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"},
+    }
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+
+    http_request = request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with request.urlopen(http_request, timeout=timeout_seconds) as response:
+        raw_body = response.read()
+        response_text = raw_body.decode("utf-8", errors="replace")
+        try:
+            raw_payload = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise DslGenerationError(
+                f"Flash DSL generation returned non-JSON response: {response_text[:500]}"
+            ) from exc
+
+    return _extract_message_content(raw_payload)
+
+
+def _build_segment_prompt(
+    scenario_prompt: str,
+    page_state: str,
+    seg_steps: list[dict[str, Any]],
+    elements: list[dict[str, Any]],
+    base_url: str,
+) -> str:
+    """Build a focused prompt for a single page_state segment."""
+    step_desc_lines: list[str] = []
+    for s in seg_steps:
+        act = s.get("action", "?")
+        tgt = s.get("target", "") or ""
+        val = s.get("value", "")
+        trig = s.get("trigger", "")
+        extra = []
+        if val:
+            extra.append(f"value='{val}'")
+        if trig:
+            extra.append(f"trigger='{trig}'")
+        step_desc_lines.append(f"  {s.get('step_index','?')}. {act} target='{tgt}' {' '.join(extra)}")
+
+    elem_text = format_elements_for_prompt(elements) if elements else "(no elements)"
+
+    return (
+        f"Generate DSL steps for page state **{page_state}** only.\n\n"
+        f"Scenario: {scenario_prompt}\n\n"
+        f"Actions on this page:\n" + "\n".join(step_desc_lines) + "\n\n"
+        f"Available elements:\n{elem_text}\n\n"
+        f"Rules:\n"
+        f"- Return valid JSON with 'steps' array and 'base_url'.\n"
+        f"- base_url: {base_url}\n"
+        f"- Only generate steps for THIS page state ({page_state}).\n"
+        f"- Use exact visible text from the element list as target.\n"
+        f"- If an input step has trigger=Enter/Tab, include the trigger field.\n"
+        f"- Every capture_text must be followed by assert_text.\n"
+        f"- Limit to 8-12 steps for this segment."
+    )
+
+
+SUPPORTED_DSL_ACTIONS = [
+    "goto", "click", "input", "wait_for",
+    "assert_text", "assert_url_contains", "capture_text",
+]
+
+
+def generate_segmented_case_draft(
+    *,
+    payload: "GenerateDslRequest",
+    flow_steps: list[dict[str, Any]],
+    page_elements_by_state: dict[str, list[dict[str, Any]]],
+) -> "tuple[DSLCase, list[str], list[str], GenerateDslMeta]":
+    """Generate DSL by splitting the scenario into page_state segments.
+
+    Each segment is processed by a flash LLM call (no thinking mode).
+    Segments run in parallel via ThreadPoolExecutor, then steps are merged
+    in page_state order (S0, S1, ...).
+    """
+    settings = get_settings()
+    if not settings.enable_ai_dsl_generate:
+        raise DslGenerationConfigError(
+            "AI DSL 生成功能未开启。请设置 ENABLE_AI_DSL_GENERATE=true。"
+        )
+
+    # Group flow_steps by page_state
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for fs in flow_steps:
+        ps = str(fs.get("page_state", "S0") or "S0")
+        groups.setdefault(ps, []).append(fs)
+
+    sorted_states = sorted(groups.keys())
+
+    all_warnings: list[str] = []
+    all_notes: list[str] = []
+    merged_steps: list[dict[str, Any]] = []
+    base_url = payload.base_url or ""
+
+    def _generate_segment(state: str, steps: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+        elements = page_elements_by_state.get(state, [])
+        seg_prompt = _build_segment_prompt(
+            scenario_prompt=payload.prompt.strip(),
+            page_state=state,
+            seg_steps=steps,
+            elements=elements,
+            base_url=base_url,
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You generate structured web testing DSL in JSON only. "
+                    "Return exactly: {\"steps\": [...], \"base_url\": \"...\"}"
+                ),
+            },
+            {"role": "user", "content": seg_prompt},
+        ]
+        response = _call_dsl_flash_llm(
+            messages=messages,
+            settings=settings,
+            timeout_seconds=max(30.0, getattr(settings, "ai_dsl_flash_timeout_ms", 180000) / 1000),
+        )
+        cleaned = _extract_json_object(response)
+        raw = json.loads(cleaned)
+        if not isinstance(raw, dict):
+            raise DslGenerationError(f"Segment {state}: response is not a JSON object")
+        return state, raw.get("steps", []) or raw.get("data", {}).get("steps", []) or []
+
+    # Parallel execution
+    segment_results: dict[str, list[dict[str, Any]]] = {}
+    with ThreadPoolExecutor(max_workers=min(4, len(sorted_states))) as executor:
+        futures = {
+            executor.submit(_generate_segment, state, groups[state]): state
+            for state in sorted_states
+        }
+        for future in as_completed(futures):
+            state = futures[future]
+            try:
+                s, seg_steps = future.result()
+                segment_results[s] = seg_steps
+                logger.info(
+                    "Segment %s generated: %d steps", s, len(seg_steps),
+                )
+            except Exception as exc:
+                logger.warning("Segment %s failed: %s", state, exc)
+                all_warnings.append(f"Segment {state} generation failed: {exc}")
+                segment_results[state] = []
+
+    # Merge in page_state order
+    for state in sorted_states:
+        merged_steps.extend(segment_results.get(state, []))
+
+    # Rewrite step_index
+    for i, s in enumerate(merged_steps):
+        s["step_index"] = i + 1
+
+    # Build normalized case dict
+    normalized_case = {
+        "name": payload.prompt.strip()[:200] or "AI 生成用例",
+        "description": payload.prompt.strip()[:500],
+        "base_url": base_url,
+        "input_contract": [],
+        "output_contract": [],
+        "steps": merged_steps,
+    }
+
+    all_notes.append(f"分段生成：{len(sorted_states)} 个页面状态，共 {len(merged_steps)} 步")
+
+    case = DSLCase.model_validate(normalized_case)
+    generation_meta = GenerateDslMeta(
+        model=getattr(settings, "ai_dsl_flash_model", None) or settings.ai_dsl_model or "",
+        generation_mode="draft",
+        import_mode=payload.import_mode,
+        prompt_variant="baseline_draft",
+        context_profile="blank_request",
+        active_governance_focus_reasons=["context_mismatch", "bad_contracts"],
+        risk_flags=[],
+        base_url_source="ai_output" if base_url else "request",
+        base_url_backfilled=False,
+        repaired_invalid_actions=0,
+        removed_invalid_steps=0,
+        removed_invalid_contracts=0,
+        preserve_contracts_applied=False,
+        used_current_case_context=False,
+        used_current_steps_context=False,
+    )
+
+    return case, all_warnings, all_notes, generation_meta
 
 
 def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:

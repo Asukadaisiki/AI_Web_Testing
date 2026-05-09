@@ -266,6 +266,7 @@ class GenerateDslRequest(DSLModel):
     retry_note: str | None = Field(default=None, max_length=1000)
     preserve_contracts: bool = False
     page_elements: str | None = Field(default=None, description="Formatted DOM elements for grounding DSL generation.")
+    flow_steps: list[dict[str, Any]] | None = Field(default=None, description="Structured flow steps for step-level element filtering and segmented DSL generation.")
 
     @model_validator(mode="after")
     def validate_retry_context(self) -> "GenerateDslRequest":

@@ -1123,7 +1123,60 @@ You are a DOM result compressor. Your output is the ONLY data the test planner w
 - Max 30 navigation links per page
 - Max 10 forms per page
 - Selectors are ordered: data-qa first, then id, then name, then placeholder
+- For explore_flow: each step MUST include page_state field matching the input's state_id
 """
+
+
+def _call_flash_llm(
+    *,
+    messages: list[dict[str, Any]],
+    settings: Any,
+    timeout_seconds: float = 30.0,
+) -> str:
+    """Call a fast/flash LLM for deterministic sub-tasks (no thinking mode).
+
+    Uses ``ai_planning_flash_*`` config, falling back to the main planning
+    model if flash is not configured.
+    """
+    api_key = (
+        getattr(settings, "ai_planning_flash_api_key", None)
+        or settings.ai_planning_api_key
+        or ""
+    )
+    model = (
+        getattr(settings, "ai_planning_flash_model", None)
+        or settings.ai_planning_model
+        or ""
+    )
+    base_url = (
+        getattr(settings, "ai_planning_flash_base_url", None)
+        or settings.ai_planning_base_url
+    )
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": 4096,
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+
+    with httpx.Client(timeout=timeout_seconds) as client:
+        resp = client.post(
+            endpoint,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        message = body["choices"][0]["message"]
+        content = message.get("content") or message.get("reasoning_content") or ""
+        return str(content)
 
 
 def run_compression_subagent(
@@ -1167,61 +1220,40 @@ def run_compression_subagent(
         {"role": "user", "content": f"Compress this {tool_name} result:\n{input_json}"},
     ]
 
-    api_key = settings.ai_planning_api_key or ""
-    model = settings.ai_planning_model or ""
-    base_url = settings.ai_planning_base_url
     timeout = max(5.0, getattr(settings, "ai_planning_subagent_timeout_ms", 60000) / 1000)
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "max_tokens": 4096,
-        "temperature": 0.0,
-    }
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
-
     try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(
-                endpoint,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            message = body["choices"][0]["message"]
-            content = message.get("content")
-            # Fall back to reasoning_content (DeepSeek thinking mode)
-            if not content or not str(content).strip():
-                content = message.get("reasoning_content", "")
-            if not content or not str(content).strip():
-                raise ValueError("Empty response from subagent model (both content and reasoning_content empty)")
-            content = str(content)
-            # Strip markdown fences if present
-            content = content.strip()
-            if content.startswith("```"):
-                first_nl = content.find("\n")
-                end_fence = content.rfind("```")
-                if first_nl != -1 and end_fence > first_nl:
-                    content = content[first_nl + 1:end_fence].strip()
-            return json.loads(content)
+        response_text = _call_flash_llm(
+            messages=messages,
+            settings=settings,
+            timeout_seconds=timeout,
+        )
+        if not response_text.strip():
+            raise ValueError("Empty response from flash model")
+        content = response_text.strip()
+        if content.startswith("```"):
+            first_nl = content.find("\n")
+            end_fence = content.rfind("```")
+            if first_nl != -1 and end_fence > first_nl:
+                content = content[first_nl + 1:end_fence].strip()
+        return json.loads(content)
     except Exception as exc:
         logger.warning("Compression subagent failed: %s, falling back", exc)
-        # Build a minimal useful fallback with raw element counts
-        fallback = {"urls": [], "element_counts": {"total": 0}}
-        if tool_name == "explore_page":
-            fallback["urls"] = [parsed_result.get("url", "?")]
-            fallback["element_counts"]["total"] = len(parsed_result.get("elements", []))
-        elif tool_name == "explore_flow":
-            pages = parsed_result.get("pages", [])
-            fallback["urls"] = [p.get("url", "?") for p in pages[:10]]
-            fallback["total_elements"] = sum(len(p.get("elements", [])) for p in pages[:10])
-            fallback["total_pages"] = len(pages)
-        return fallback
+        return _build_fallback_compression(tool_name, parsed_result)
+
+
+def _build_fallback_compression(tool_name: str, parsed_result: dict) -> dict:
+    """Minimal fallback with raw element counts when compression fails."""
+    fallback: dict = {"urls": [], "element_counts": {"total": 0}}
+    if tool_name == "explore_page":
+        fallback["urls"] = [parsed_result.get("url", "?")]
+        fallback["element_counts"]["total"] = len(parsed_result.get("elements", []))
+    elif tool_name == "explore_flow":
+        pages = parsed_result.get("pages", [])
+        fallback["urls"] = [p.get("url", "?") for p in pages[:10]]
+        fallback["total_elements"] = sum(len(p.get("elements", [])) for p in pages[:10])
+        fallback["total_pages"] = len(pages)
+    return fallback
 
 
 def _extract_raw_page_results(tool_calls: list[AIPlanningToolCall]) -> list[dict[str, Any]]:

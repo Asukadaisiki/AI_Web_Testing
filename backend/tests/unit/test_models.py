@@ -20,8 +20,10 @@ def test_stage1_tables_exist(db_session: Session) -> None:
 
     assert set(inspector.get_table_names()) == {
         "ai_planning_drafts",
+        "ai_planning_flow_steps",
         "ai_planning_messages",
         "ai_planning_sessions",
+        "ai_planning_tool_results",
         "dsl_generation_runs",
         "exploration_runs",
         "failure_records",

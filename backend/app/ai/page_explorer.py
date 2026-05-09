@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import time as _time_module
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,95 @@ from app.runners.pre_scorer import score_candidates_for_element, ELEMENT_TYPE_SC
 logger = logging.getLogger(__name__)
 
 STALE_THRESHOLD_HOURS = 24
+
+
+class BrowserSessionManager:
+    """Per-session browser lifecycle manager.
+
+    Maintains a single Playwright browser context per planning *session_id*
+    so that all explore_page / explore_flow / capture_page_session calls
+    within one planning session reuse the same browser.  This eliminates
+    3-4 redundant browser cold-starts and keeps cookies/auth state alive
+    across exploration steps.
+    """
+
+    _lock = threading.Lock()
+    _sessions: dict[int, dict] = {}
+    _MAX_AGE_SECONDS: float = 600.0  # auto-close after 10 min of inactivity
+
+    @classmethod
+    def get_or_create_context(
+        cls,
+        session_id: int,
+        *,
+        storage_state_path: str | None = None,
+    ):
+        """Return ``(BrowserContext, Page)`` for *session_id*.
+
+        If a browser for this session already exists and passes a health
+        check it is returned immediately.  Otherwise a new headless
+        Chromium instance is created.
+        """
+        cls._cleanup()
+        with cls._lock:
+            entry = cls._sessions.get(session_id)
+            if entry is not None:
+                try:
+                    entry["page"].evaluate("1")  # health check
+                    return entry["context"], entry["page"]
+                except Exception:
+                    cls._close_locked(session_id)
+
+            pw = sync_playwright()
+            playwright = pw.__enter__()
+            browser = playwright.chromium.launch(headless=True)
+            context_kwargs: dict = {}
+            if storage_state_path and Path(storage_state_path).exists():
+                context_kwargs["storage_state"] = storage_state_path
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+
+            cls._sessions[session_id] = {
+                "pw": pw,
+                "playwright": playwright,
+                "browser": browser,
+                "context": context,
+                "page": page,
+                "created_at": _time_module.monotonic(),
+            }
+            return context, page
+
+    @classmethod
+    def close_session(cls, session_id: int) -> None:
+        """Explicitly close and remove a session's browser."""
+        with cls._lock:
+            cls._close_locked(session_id)
+
+    @classmethod
+    def _close_locked(cls, session_id: int) -> None:
+        entry = cls._sessions.pop(session_id, None)
+        if entry is None:
+            return
+        for attr in ("context", "browser"):
+            try:
+                getattr(entry[attr], "close", lambda: None)()
+            except Exception:
+                pass
+        try:
+            entry["pw"].__exit__(None, None, None)
+        except Exception:
+            pass
+
+    @classmethod
+    def _cleanup(cls) -> None:
+        now = _time_module.monotonic()
+        stale = [
+            sid
+            for sid, e in cls._sessions.items()
+            if now - e["created_at"] > cls._MAX_AGE_SECONDS
+        ]
+        for sid in stale:
+            cls._close_locked(sid)
 
 
 def get_storage_state_path(base_dir: Path, *, project_id: int) -> tuple[Path, Path]:
@@ -386,6 +478,111 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Knowledge distillation — strip heavy attrs & filter by step relevance
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "and", "or", "not", "no", "this",
+    "that", "it", "its",
+}
+
+
+def _extract_keywords(target: str) -> list[str]:
+    """Split *target* into meaningful search keywords."""
+    if not target or not target.strip():
+        return []
+    # Split on whitespace, slashes, and common delimiters
+    tokens = re.split(r"[\s/]+", target.strip().casefold())
+    return [t.strip(".,!?;:'\"()[]{}") for t in tokens
+            if t.strip(".,!?;:'\"()[]{}") and t not in _STOP_WORDS]
+
+
+def _match_elements_by_keywords(
+    elements: list[dict[str, Any]],
+    keywords: list[str],
+    *,
+    min_score: int = 1,
+) -> list[dict[str, Any]]:
+    """Score elements by keyword match count, return sorted (descending)."""
+    if not keywords or not elements:
+        return list(elements)
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for el in elements:
+        score = 0
+        text_fields = " ".join(
+            str(el.get(k, "")) or ""
+            for k in ("text", "placeholder", "aria_label", "name", "tag")
+        ).casefold()
+        for kw in keywords:
+            if kw and kw in text_fields:
+                score += 1
+        if score >= min_score:
+            scored.append((score, el))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [el for _, el in scored]
+
+
+_HEAVY_ATTRS = {"css_selector", "xpath", "rect"}
+_ELEMENT_FILTER_TAGS: dict[str, set[str]] = {
+    "input": {"input", "select", "textarea"},
+    "click": {"button", "a", "input", "select", "span", "div", "img"},
+    "wait_for": set(),
+    "assert_text": set(),
+    "capture_text": set(),
+    "goto": set(),
+}
+
+
+def _strip_heavy_attrs(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove heavy attributes (css_selector, xpath, rect) that AI doesn't need."""
+    return [
+        {k: v for k, v in el.items() if k not in _HEAVY_ATTRS}
+        for el in elements
+    ]
+
+
+def filter_elements_for_step(
+    step: dict[str, Any],
+    page_elements_by_state: dict[str, list[dict[str, Any]]],
+    *,
+    max_elements: int = 25,
+) -> list[dict[str, Any]]:
+    """Return a focused subset of elements relevant to *step*.
+
+    Uses ``step.page_state`` to select the right page, ``step.action`` to
+    filter by element tag, and ``step.target`` keywords for relevance scoring.
+    """
+    state = step.get("page_state", "")
+    action = str(step.get("action", "")).strip().casefold()
+    target = str(step.get("target", "") or "")
+
+    # 1. Select elements for this page state
+    elements = page_elements_by_state.get(state, [])
+    if not elements:
+        # Fall back: concatenate all states
+        for v in page_elements_by_state.values():
+            elements.extend(v)
+
+    # 2. Tag-level pre-filter based on action
+    allowed_tags = _ELEMENT_FILTER_TAGS.get(action)
+    if allowed_tags:
+        elements = [e for e in elements
+                    if e.get("tag", "").casefold() in allowed_tags]
+
+    # 3. Keyword relevance scoring
+    keywords = _extract_keywords(target)
+    if keywords:
+        elements = _match_elements_by_keywords(elements, keywords)
+
+    # 4. Cap + strip heavy attrs
+    result = elements[:max_elements]
+    return _strip_heavy_attrs(result)
+
+
 def _sync_playwright_context():
     """Indirection point for testing -- returns the sync_playwright context manager."""
     return sync_playwright()
@@ -467,54 +664,75 @@ def collect_interactable_elements(
     *,
     storage_state_path: str | None = None,
     timeout_ms: int = 60000,
+    session_id: int = 0,
 ) -> list[dict[str, Any]]:
-    """Open *url* in a temporary Playwright context and return interactable elements."""
+    """Open *url* and return interactable elements.
+
+    When *session_id* > 0 the browser context is obtained from
+    :class:`BrowserSessionManager` and **not** closed on return,
+    allowing subsequent calls within the same planning session to
+    reuse the shared browser.
+    """
+    managed_page = None
     try:
-        pw = _sync_playwright_context()
-        with pw as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context_kwargs: dict[str, Any] = {}
-            if storage_state_path and Path(storage_state_path).exists():
-                context_kwargs["storage_state"] = storage_state_path
-            context = browser.new_context(**context_kwargs)
-            page = context.new_page()
+        if session_id:
+            context, page = BrowserSessionManager.get_or_create_context(
+                session_id, storage_state_path=storage_state_path,
+            )
+            managed_page = page
             try:
                 page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                 page.wait_for_load_state("networkidle", timeout=timeout_ms)
             except Exception as exc:
                 logger.warning("Page load issue for %s: %s", url, exc)
-            payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
+        else:
+            pw = _sync_playwright_context()
+            with pw as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                context_kwargs: dict[str, Any] = {}
+                if storage_state_path and Path(storage_state_path).exists():
+                    context_kwargs["storage_state"] = storage_state_path
+                context = browser.new_context(**context_kwargs)
+                page = context.new_page()
+                try:
+                    page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                    page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                except Exception as exc:
+                    logger.warning("Page load issue for %s: %s", url, exc)
 
-            # --- 构建元素列表 ---
-            if not isinstance(payload, list):
-                payload = []
-            result: list[dict[str, Any]] = []
-            for elem in payload:
-                if not isinstance(elem, dict):
-                    continue
-                element = {
-                    "tag": elem.get("tag", "unknown"),
-                    "id": _extract_element_id(elem),
-                    "text": elem.get("text"),
-                    "role": elem.get("role"),
-                    "aria_label": elem.get("aria_label"),
-                    "placeholder": elem.get("placeholder"),
-                    "href": elem.get("href"),
-                    "data_testid": elem.get("data_testid"),
-                    "css_selector": elem.get("css_selector"),
-                    "xpath": elem.get("xpath"),
-                    "rect": elem.get("rect"),
-                    "visible": elem.get("visible", False),
-                    "enabled": elem.get("enabled", False),
-                }
-                element["candidates"] = score_candidates_for_element(element)
-                tag = element.get("tag", "")
-                element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
-                result.append(element)
+        payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
 
-            # --- Live-element verification: 当场验证选择器 (page 还活着) ---
-            result = _verify_locators_on_page(page, result)
+        # --- 构建元素列表 ---
+        if not isinstance(payload, list):
+            payload = []
+        result: list[dict[str, Any]] = []
+        for elem in payload:
+            if not isinstance(elem, dict):
+                continue
+            element = {
+                "tag": elem.get("tag", "unknown"),
+                "id": _extract_element_id(elem),
+                "text": elem.get("text"),
+                "role": elem.get("role"),
+                "aria_label": elem.get("aria_label"),
+                "placeholder": elem.get("placeholder"),
+                "href": elem.get("href"),
+                "data_testid": elem.get("data_testid"),
+                "css_selector": elem.get("css_selector"),
+                "xpath": elem.get("xpath"),
+                "rect": elem.get("rect"),
+                "visible": elem.get("visible", False),
+                "enabled": elem.get("enabled", False),
+            }
+            element["candidates"] = score_candidates_for_element(element)
+            tag = element.get("tag", "")
+            element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
+            result.append(element)
 
+        # --- Live-element verification ---
+        result = _verify_locators_on_page(page, result)
+
+        if not session_id:
             context.close()
             browser.close()
     except Exception as exc:
@@ -799,11 +1017,12 @@ def collect_multi_page_elements(
     enable_vlm_annotation: bool = True,
     timeout_ms: int = 60000,
     base_url: str = "https://automationexercise.com",
+    session_id: int = 0,
 ) -> list[dict[str, Any]]:
-    """Open *urls* sequentially in a single Playwright context and collect elements for each page.
+    """Open *urls* sequentially in a single Playwright context and collect elements.
 
-    Reuses the same browser session across all URLs so that cookies / auth state
-    established by earlier pages carry over to later ones.
+    When *session_id* > 0 the browser is obtained from :class:`BrowserSessionManager`
+    and reused across calls.
     """
     from urllib.parse import urljoin
 
@@ -811,108 +1030,118 @@ def collect_multi_page_elements(
         return []
 
     results: list[dict[str, Any]] = []
+    managed_context = None
     try:
-        pw = _sync_playwright_context()
-        with pw as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context_kwargs: dict[str, Any] = {}
-            if storage_state_path and Path(storage_state_path).exists():
-                context_kwargs["storage_state"] = storage_state_path
-            context = browser.new_context(**context_kwargs)
-            page = context.new_page()
+        if session_id:
+            context, page = BrowserSessionManager.get_or_create_context(
+                session_id, storage_state_path=storage_state_path,
+            )
+            managed_context = context
+        else:
+            pw = _sync_playwright_context()
+            with pw as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                context_kwargs: dict[str, Any] = {}
+                if storage_state_path and Path(storage_state_path).exists():
+                    context_kwargs["storage_state"] = storage_state_path
+                context = browser.new_context(**context_kwargs)
+                page = context.new_page()
+                managed_context = context
 
-            for url in urls:
-                url = url.strip()
-                # Resolve relative URLs against base_url
-                if not url.startswith(("http://", "https://")):
-                    url = urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
+        for url in urls:
+            url = url.strip()
+            if not url.startswith(("http://", "https://")):
+                url = urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
+            try:
+                page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                 try:
-                    page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                    except Exception:
-                        pass  # non-fatal
-                    payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
-                except Exception as exc:
-                    logger.warning("collect_multi_page_elements: page load failed for %s: %s", url, exc)
-                    results.append({
-                        "url": url,
-                        "elements": [],
-                        "formatted": "",
-                        "element_count": 0,
-                        "screenshot_available": False,
-                        "vlm_annotation": None,
-                        "error": str(exc),
-                    })
-                    continue
-
-                elements: list[dict[str, Any]] = []
-                if isinstance(payload, list):
-                    for elem in payload:
-                        if not isinstance(elem, dict):
-                            continue
-                        element = {
-                            "tag": elem.get("tag", "unknown"),
-                            "id": _extract_element_id(elem),
-                            "text": elem.get("text"),
-                            "role": elem.get("role"),
-                            "aria_label": elem.get("aria_label"),
-                            "placeholder": elem.get("placeholder"),
-                            "href": elem.get("href"),
-                            "data_testid": elem.get("data_testid"),
-                            "css_selector": elem.get("css_selector"),
-                            "xpath": elem.get("xpath"),
-                            "rect": elem.get("rect"),
-                            "visible": elem.get("visible", False),
-                            "enabled": elem.get("enabled", False),
-                        }
-                        element["candidates"] = score_candidates_for_element(element)
-                        tag = element.get("tag", "")
-                        element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
-                        elements.append(element)
-
-                formatted = format_elements_for_prompt(elements)
-
-                # Interactive element discovery
-                try:
-                    settings = get_settings()
-                    interactive = _discover_interactive_elements(
-                        page, max_clicks=settings.explore_interactive_max_clicks,
-                    )
-                    if interactive:
-                        elements.extend(interactive)
-                        formatted = format_elements_for_prompt(elements)
-                        logger.info(
-                            "Discovered %d interactive elements on %s",
-                            len(interactive), url,
-                        )
-                except Exception as exc:
-                    logger.warning("Interactive exploration failed for %s: %s", url, exc)
-
-                screenshot_available = False
-                vlm_annotation: str | None = None
-                try:
-                    _screenshot_bytes = page.screenshot()
-                    screenshot_available = True
-                    if enable_vlm_annotation:
-                        from app.locators.ai_visual import describe_page_layout
-                        import base64
-                        vlm_annotation = describe_page_layout(
-                            screenshot_base64=base64.b64encode(_screenshot_bytes).decode(),
-                            page_url=url,
-                        )
-                except Exception as exc:
-                    logger.warning("Screenshot/VLM failed for %s: %s", url, exc)
-
+                    page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                except Exception:
+                    pass
+                payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
+            except Exception as exc:
+                logger.warning("collect_multi_page_elements: page load failed for %s: %s", url, exc)
                 results.append({
                     "url": url,
-                    "elements": elements,
-                    "formatted": formatted,
-                    "element_count": len(elements),
-                    "screenshot_available": screenshot_available,
-                    "vlm_annotation": vlm_annotation,
+                    "elements": [],
+                    "formatted": "",
+                    "element_count": 0,
+                    "screenshot_available": False,
+                    "vlm_annotation": None,
+                    "error": str(exc),
                 })
+                continue
 
+            elements: list[dict[str, Any]] = []
+            if isinstance(payload, list):
+                for elem in payload:
+                    if not isinstance(elem, dict):
+                        continue
+                    element = {
+                        "tag": elem.get("tag", "unknown"),
+                        "id": _extract_element_id(elem),
+                        "text": elem.get("text"),
+                        "role": elem.get("role"),
+                        "aria_label": elem.get("aria_label"),
+                        "placeholder": elem.get("placeholder"),
+                        "href": elem.get("href"),
+                        "data_testid": elem.get("data_testid"),
+                        "css_selector": elem.get("css_selector"),
+                        "xpath": elem.get("xpath"),
+                        "rect": elem.get("rect"),
+                        "visible": elem.get("visible", False),
+                        "enabled": elem.get("enabled", False),
+                    }
+                    element["candidates"] = score_candidates_for_element(element)
+                    tag = element.get("tag", "")
+                    element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
+                    elements.append(element)
+
+            # Live-element verification (was missing from flow functions)
+            elements = _verify_locators_on_page(page, elements)
+
+            formatted = format_elements_for_prompt(elements)
+
+            try:
+                settings = get_settings()
+                interactive = _discover_interactive_elements(
+                    page, max_clicks=settings.explore_interactive_max_clicks,
+                )
+                if interactive:
+                    elements.extend(interactive)
+                    formatted = format_elements_for_prompt(elements)
+                    logger.info(
+                        "Discovered %d interactive elements on %s",
+                        len(interactive), url,
+                    )
+            except Exception as exc:
+                logger.warning("Interactive exploration failed for %s: %s", url, exc)
+
+            screenshot_available = False
+            vlm_annotation: str | None = None
+            try:
+                _screenshot_bytes = page.screenshot()
+                screenshot_available = True
+                if enable_vlm_annotation:
+                    from app.locators.ai_visual import describe_page_layout
+                    import base64
+                    vlm_annotation = describe_page_layout(
+                        screenshot_base64=base64.b64encode(_screenshot_bytes).decode(),
+                        page_url=url,
+                    )
+            except Exception as exc:
+                logger.warning("Screenshot/VLM failed for %s: %s", url, exc)
+
+            results.append({
+                "url": url,
+                "elements": elements,
+                "formatted": formatted,
+                "element_count": len(elements),
+                "screenshot_available": screenshot_available,
+                "vlm_annotation": vlm_annotation,
+            })
+
+        if not session_id:
             context.close()
             browser.close()
     except Exception as exc:
@@ -927,6 +1156,7 @@ def collect_flow_elements(
     storage_state_path: str | None = None,
     enable_vlm_annotation: bool = True,
     timeout_ms: int = 60000,
+    session_id: int = 0,
 ) -> list[dict[str, Any]]:
     """Execute a flow with actions between page visits and collect elements per state.
 
@@ -1038,6 +1268,9 @@ def collect_flow_elements(
                 element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
                 elements.append(element)
 
+        # Live-element verification (was missing from flow functions)
+        elements = _verify_locators_on_page(page, elements)
+
         formatted = format_elements_for_prompt(elements)
 
         # Interactive element discovery
@@ -1080,63 +1313,67 @@ def collect_flow_elements(
         }
 
     try:
-        pw = _sync_playwright_context()
-        with pw as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context_kwargs: dict[str, Any] = {}
-            if storage_state_path and Path(storage_state_path).exists():
-                context_kwargs["storage_state"] = storage_state_path
-            context = browser.new_context(**context_kwargs)
-            page = context.new_page()
+        if session_id:
+            context, page = BrowserSessionManager.get_or_create_context(
+                session_id, storage_state_path=storage_state_path,
+            )
+        else:
+            pw = _sync_playwright_context()
+            with pw as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                context_kwargs: dict[str, Any] = {}
+                if storage_state_path and Path(storage_state_path).exists():
+                    context_kwargs["storage_state"] = storage_state_path
+                context = browser.new_context(**context_kwargs)
+                page = context.new_page()
+                managed = True
 
-            current_url = "about:blank"
+        current_url = "about:blank"
 
-            for step in steps:
-                if not isinstance(step, dict):
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+
+            step_url = step.get("url")
+            if step_url and isinstance(step_url, str) and step_url.strip():
+                try:
+                    page.goto(step_url.strip(), timeout=timeout_ms, wait_until="domcontentloaded")
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                    except Exception:
+                        pass
+                    current_url = page.url
+                except Exception as exc:
+                    logger.warning("collect_flow_elements: goto failed for %s: %s", step_url, exc)
+                    results.append({
+                        "url": step_url.strip(),
+                        "page_state": "ERROR",
+                        "elements": [], "formatted": "", "element_count": 0,
+                        "screenshot_available": False, "vlm_annotation": None,
+                        "error": str(exc),
+                    })
                     continue
 
-                # Navigate if URL is provided
-                step_url = step.get("url")
-                if step_url and isinstance(step_url, str) and step_url.strip():
+            actions = step.get("actions")
+            if isinstance(actions, list):
+                for action_def in actions:
                     try:
-                        page.goto(step_url.strip(), timeout=timeout_ms, wait_until="domcontentloaded")
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                        except Exception:
-                            pass
-                        current_url = page.url
+                        _execute_action(page, action_def)
                     except Exception as exc:
-                        logger.warning("collect_flow_elements: goto failed for %s: %s", step_url, exc)
-                        results.append({
-                            "url": step_url.strip(),
-                            "page_state": "ERROR",
-                            "elements": [], "formatted": "", "element_count": 0,
-                            "screenshot_available": False, "vlm_annotation": None,
-                            "error": str(exc),
-                        })
-                        continue
+                        logger.warning(
+                            "collect_flow_elements: action failed (%s): %s",
+                            action_def.get("action", "?"), exc,
+                        )
+            current_url = page.url
 
-                # Execute actions if provided
-                actions = step.get("actions")
-                if isinstance(actions, list):
-                    for action_def in actions:
-                        try:
-                            _execute_action(page, action_def)
-                        except Exception as exc:
-                            logger.warning(
-                                "collect_flow_elements: action failed (%s): %s",
-                                action_def.get("action", "?"), exc,
-                            )
-                current_url = page.url
+            description = step.get("description", "")
+            state_id = _resolve_state_id(current_url, description)
+            result = _collect_current_page(page, current_url, state_id)
+            if description:
+                result["description"] = description
+            results.append(result)
 
-                # Collect elements for this page state
-                description = step.get("description", "")
-                state_id = _resolve_state_id(current_url, description)
-                result = _collect_current_page(page, current_url, state_id)
-                if description:
-                    result["description"] = description
-                results.append(result)
-
+        if not session_id:
             context.close()
             browser.close()
     except Exception as exc:
@@ -1171,11 +1408,13 @@ def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
 
 
 __all__ = [
+    "BrowserSessionManager",
     "build_flow_formatted_output",
     "capture_browser_session",
     "collect_flow_elements",
     "collect_interactable_elements",
     "collect_multi_page_elements",
+    "filter_elements_for_step",
     "format_elements_for_prompt",
     "get_storage_state_path",
     "is_storage_state_stale",

@@ -98,6 +98,10 @@ def execute_tool(
         return _NO_PROJECT_MSG
 
     try:
+        # Inject planning_session_id for explore tools so they share one browser
+        _EXPLORE_TOOLS = {"explore_page", "explore_flow", "capture_page_session"}
+        if planning_session_id and tool_name in _EXPLORE_TOOLS:
+            params = {**params, "planning_session_id": planning_session_id}
         if tool_name == "create_project":
             result = handler(
                 params=params, db_session=db_session, project_id=project_id,
@@ -599,11 +603,16 @@ def _handle_explore_page(
     if not url or not isinstance(url, str) or not url.strip():
         return {"error": "必须提供 url 参数"}
 
-    logger.info("explore_page: url=%s, project_id=%d", url.strip(), project_id)
+    planning_session_id = int(params.get("planning_session_id", 0))
+    logger.info("explore_page: url=%s, project_id=%d, session_id=%d", url.strip(), project_id, planning_session_id)
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
 
-    elements = collect_interactable_elements(url.strip(), storage_state_path=storage_path)
+    elements = collect_interactable_elements(
+        url.strip(),
+        storage_state_path=storage_path,
+        session_id=planning_session_id,
+    )
     formatted = format_elements_for_prompt(elements)
     logger.info("explore_page: found %d elements from %s", len(elements), url.strip())
 
@@ -656,20 +665,16 @@ def _handle_explore_flow(
     db_session: Session,
     project_id: int,
 ) -> dict[str, Any]:
-    # Support both new "steps" format and legacy "urls" format
     flow_steps = params.get("steps")
     urls = params.get("urls")
     flow_description = params.get("flow_description")
+    planning_session_id = int(params.get("planning_session_id", 0))
 
     if isinstance(flow_steps, list) and flow_steps:
-        # --- Action-driven flow exploration (Phase 1) ---
         from app.ai.page_explorer import collect_flow_elements, build_flow_formatted_output
 
-        if flow_description and isinstance(flow_description, str):
-            logger.info("explore_flow: %d steps, flow=%s, project_id=%d",
-                        len(flow_steps), flow_description, project_id)
-        else:
-            logger.info("explore_flow: %d steps, project_id=%d", len(flow_steps), project_id)
+        logger.info("explore_flow: %d steps, flow=%s, project_id=%d, session_id=%d",
+                    len(flow_steps), flow_description or "-", project_id, planning_session_id)
 
         storage_dir = _resolve_storage_state_dir()
         storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
@@ -678,6 +683,7 @@ def _handle_explore_flow(
             flow_steps,
             storage_state_path=storage_path,
             enable_vlm_annotation=True,
+            session_id=planning_session_id,
         )
         combined_formatted = build_flow_formatted_output(page_results)
         total_elements = sum(pr.get("element_count", 0) for pr in page_results)
@@ -702,10 +708,8 @@ def _handle_explore_flow(
     if not valid_urls:
         return {"error": "urls 列表中没有有效的 URL"}
 
-    if flow_description and isinstance(flow_description, str):
-        logger.info("explore_flow: %d urls=%s, flow=%s, project_id=%d", len(valid_urls), valid_urls[:3], flow_description, project_id)
-    else:
-        logger.info("explore_flow: %d urls=%s, project_id=%d", len(valid_urls), valid_urls[:3], project_id)
+    logger.info("explore_flow: %d urls=%s, flow=%s, project_id=%d, session_id=%d",
+                len(valid_urls), valid_urls[:3], flow_description or "-", project_id, planning_session_id)
 
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
@@ -714,6 +718,7 @@ def _handle_explore_flow(
         valid_urls,
         storage_state_path=storage_path,
         enable_vlm_annotation=True,
+        session_id=planning_session_id,
     )
 
     sections: list[str] = []

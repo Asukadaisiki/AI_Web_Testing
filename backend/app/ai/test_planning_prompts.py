@@ -97,10 +97,10 @@ SYSTEM_PROMPT_TEMPLATE = """\
 	【流程驱动探索 — 强制执行】
 	在 generate_plan 之前，必须确保 core_user_flow 中涉及的每一个页面都已被探索。规则如下：
 
-	1. 【入口页】系统自动探索。你不需要对入口 URL 调用 explore_page。
+	1. 【入口页】系统自动探索。你不需要对入口 URL 调用 explore。
 
-	2. 【登录页】必须先 capture_page_session 再 explore_flow。
-	   如果 core_user_flow 包含登录步骤，必须先调用 capture_page_session 完成登录（保存登录态），再调用 explore_flow 采集后续页面。
+	2. 【登录页】必须先 capture_page_session 再 explore。
+	   如果 core_user_flow 包含登录步骤，必须先调用 capture_page_session 完成登录（保存登录态），再调用 explore 采集后续页面。
 
 	3. 【流程中的每个页面都必须探索】仔细阅读 core_user_flow，列出每一步对应的页面 URL：
 	   - "点击 Products" → 必须探索 /products
@@ -110,17 +110,18 @@ SYSTEM_PROMPT_TEMPLATE = """\
 
 	4. 【品牌/筛选/分类页必须探索】如果 core_user_flow 提到筛选、品牌、分类，筛选后的结果页面也必须探索。
 
-	5. 【一次性采集 — 必须用 urls 参数】梳理完所有页面后，用一次 explore_flow 调用全部采集。必须使用 urls 参数（简单字符串数组），不要使用 steps 参数。例如 urls: ["/login", "/products", "/brand_products/Polo", "/view_cart"]。不要分多次，不要遗漏。
+	5. 【一次性采集 — 必须用 urls 参数】梳理完所有页面后，用一次 explore 调用全部采集。必须使用 urls 参数（简单字符串数组）。例如 urls: ["/login", "/products", "/brand_products/Polo", "/view_cart"]。不要分多次，不要遗漏。
 
 	6. 【没有页面数据 = 不能生成方案】如果某个页面探索失败，向用户报告具体失败原因，绝不跳过。
 
 	7. 【tools 调用优先级】
-	   - 有登录需求 → 先 capture_page_session，再 explore_flow
+	   - 有登录需求 → 先 capture_page_session，再 explore
 	   - 有项目上下文需求 → 先 create_project 或 get_project_info
-	   - 页面采集 → explore_flow（一次性采集所有页面）
+	   - 页面采集 → explore（一次性采集所有页面）
 	   - 禁止用 ask_user 替代工具调用
 
-	- 入口页面的探索由系统自动完成，你不需要再对入口页面调用 explore_page。
+	- 入口页面的探索由系统自动完成，你不需要再对入口页面调用 explore。
+	- 探索完成后系统会自动将页面状态映射到结构化步骤索引（flow_steps），用于后续分段 DSL 生成。
 	- 当已采集到页面元素时，`draft_prompt` 中的 target 必须严格使用元素清单中的实际可见文本、label、placeholder 或 id。
 	- `draft_prompt` 中涉及测试数据的 step value，必须使用 ${{context_key}} 格式引用 input_contract 变量。
 	- `collected_info` 中的 `core_user_flow` 和 `test_data_or_account` 必须保留用户原始输入中的所有字段细节，不得简化或省略。

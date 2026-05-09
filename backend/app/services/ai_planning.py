@@ -6,6 +6,8 @@ import logging
 import time
 
 from sqlalchemy import func, select
+
+from app.core.config import get_settings
 from sqlalchemy.orm import Session
 
 from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn, stream_planning_turn
@@ -52,32 +54,56 @@ def _parse_page_elements_text(text: str) -> list[dict]:
         if not line or line.startswith('===') or line.startswith('页面') or line.startswith('...'):
             continue
         el: dict[str, object] = {}
-        # Extract tag (first token before '[' or ' |')
         tag_match = re.match(r'^(\w+)', line)
         if tag_match:
             el['tag'] = tag_match.group(1)
-        # Extract attrs: [text='...'], [href='...'], [placeholder='...'], [role='...'], etc
         for m in re.finditer(r"\[(\w[\w-]*)=('[^']*'|\"[^\"]*\")]", line):
             key = m.group(1)
             val = m.group(2).strip("'\"")
             el[key] = val
-        # Extract css=... and xpath=...
         css_match = re.search(r'\|\s*css=(\S+)', line)
         if css_match:
             el['css_selector'] = css_match.group(1)
         xp_match = re.search(r'\|\s*xpath=(\S+)', line)
         if xp_match:
             el['xpath'] = xp_match.group(1)
-        # Extract stable=X.XX
         st_match = re.search(r'stable=([\d.]+)', line)
         if st_match:
             el['stable'] = float(st_match.group(1))
-        # Mark visible/enabled by default
         el['visible'] = True
         el['enabled'] = 'disabled' not in line
         if el:
             elements.append(el)
     return elements
+
+
+def _parse_page_elements_by_state(full_text: str) -> dict[str, list[dict]]:
+    """Parse combined page_elements text (with state markers) into state-keyed dict.
+
+    Handles ``=== 页面状态 S0: http://... ===`` marker format from
+    :func:`build_flow_formatted_output`.
+    """
+    import re
+    result: dict[str, list[dict]] = {}
+    sections = re.split(
+        r"=== 页面状态 (S\d+):[^\n]*===\s*",
+        full_text,
+    )
+    if len(sections) < 2:
+        # No state markers found — return all elements under "S0"
+        elements = _parse_page_elements_text(full_text)
+        if elements:
+            result["S0"] = elements
+        return result
+
+    # sections[0] is preamble, then alternating [state_id, content]
+    for i in range(1, len(sections) - 1, 2):
+        state_id = sections[i].strip()
+        content = sections[i + 1]
+        elements = _parse_page_elements_text(content)
+        if elements:
+            result[state_id] = elements
+    return result
 
 
 class AIPlanningAccessError(ValueError):
@@ -431,21 +457,54 @@ def generate_planning_drafts(
             continue
 
         try:
-            generated = generate_dsl_case(
-                session,
-                GenerateDslRequest(
-                    prompt=scenario["draft_prompt"],
-                    base_url=base_url,
-                    actor_user_id=actor_user_id,
-                    project_id=project_ids[0],
-                    case_id=planning_session.case_id,
-                    current_steps=payload.current_steps,
-                    current_input_contract=payload.current_input_contract,
-                    current_output_contract=payload.current_output_contract,
-                    preserve_contracts=payload.preserve_contracts,
-                    page_elements=scenario.get("page_elements"),
-                ),
-            )
+            flow_steps = scenario.get("flow_steps", [])
+            settings_local = get_settings()
+
+            if flow_steps and page_elements and settings_local.ai_planning_flow_steps_enabled:
+                # --- Segmented DSL generation (Phase 5) ---
+                from app.ai.dsl_generator import generate_segmented_case_draft
+
+                page_elements_by_state = _parse_page_elements_by_state(str(page_elements))
+                case_obj, gen_warnings, gen_notes, gen_meta = generate_segmented_case_draft(
+                    payload=GenerateDslRequest(
+                        prompt=scenario["draft_prompt"],
+                        base_url=base_url,
+                        actor_user_id=actor_user_id,
+                        project_id=project_ids[0],
+                        case_id=planning_session.case_id,
+                        current_steps=payload.current_steps,
+                        current_input_contract=payload.current_input_contract,
+                        current_output_contract=payload.current_output_contract,
+                        preserve_contracts=payload.preserve_contracts,
+                        page_elements=str(page_elements),
+                        flow_steps=flow_steps,
+                    ),
+                    flow_steps=flow_steps,
+                    page_elements_by_state=page_elements_by_state,
+                )
+                # Wrap to match the existing interface
+                generated = type("GeneratedHolder", (), {
+                    "case": case_obj,
+                    "warnings": gen_warnings,
+                    "normalization_notes": gen_notes,
+                    "generation_id": None,
+                })()
+            else:
+                generated = generate_dsl_case(
+                    session,
+                    GenerateDslRequest(
+                        prompt=scenario["draft_prompt"],
+                        base_url=base_url,
+                        actor_user_id=actor_user_id,
+                        project_id=project_ids[0],
+                        case_id=planning_session.case_id,
+                        current_steps=payload.current_steps,
+                        current_input_contract=payload.current_input_contract,
+                        current_output_contract=payload.current_output_contract,
+                        preserve_contracts=payload.preserve_contracts,
+                        page_elements=scenario.get("page_elements"),
+                    ),
+                )
             # --- Locator preflight (Phase 3) ---
             dsl_dict = generated.case.model_dump(mode="json")
             preflight_warnings: list[str] = []
