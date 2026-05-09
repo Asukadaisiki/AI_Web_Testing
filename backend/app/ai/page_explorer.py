@@ -1561,8 +1561,26 @@ def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
         if annotation:
             section += f"\n\n页面布局描述: {annotation}"
         sections.append(section)
+    # Filter duplicate header/footer elements that appear in every state.
+    # The first state keeps its full output; subsequent states strip lines
+    # whose text/attributes already appeared in a prior state.  This frees
+    # the per-state char budget for page-unique content (product rows, forms).
+    _seen_lines: set[str] = set()
+    for i in range(len(sections)):
+        header, _, body = sections[i].partition("\n")
+        kept_lines = [header]
+        for line in body.split("\n"):
+            # Normalize: extract just the text/attrs part (skip css/xpath/candidates)
+            sig_match = re.match(
+                r"^  (\w[\w-]*(?:\[.*?\])*)(?:\s\|.*)?$", line,
+            )
+            sig = sig_match.group(1) if sig_match else line.strip()
+            if sig and sig not in _seen_lines:
+                _seen_lines.add(sig)
+                kept_lines.append(line)
+        sections[i] = "\n".join(kept_lines)
+
     # Per-state truncation: distribute MAX_COMBINED_PROMPT_CHARS evenly
-    # so every page state gets representation (no state is fully dropped)
     n_sec = len(sections)
     if n_sec > 0:
         per_limit = max(3000, MAX_COMBINED_PROMPT_CHARS // n_sec)
