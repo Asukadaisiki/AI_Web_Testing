@@ -32,6 +32,22 @@
 
 
 
+## BUG-085 | DeepSeek thinking 模式 + 高温导致 AI 不遵循提示词指令
+
+- 日期：2026-05-10
+- 状态：fixed
+- 来源：BUG 日志聚合分析
+- 描述：综合分析 BUG-081（相同 prompt 产出 42 步 vs 30 步质量剧烈波动）、BUG-069（AI 信息充足时仍用 ask_user）、BUG-065（capture 后不 assert）、BUG-054（忽略用户描述的弹层交互步骤）等高频问题，根因指向两点：(1) thinking 模式对指令遵循有负面影响——模型在思考阶段产生的推理可能偏离系统提示词约束；(2) DeepSeek API 默认 temperature=1.0 过高，导致 DSL 生成和 planning 输出随机性太大。
+- 处理：
+  1. 在 dsl_generator.py、test_planning_agent.py、judge_agent.py 中移除 `_should_enable_thinking_mode` 对 DeepSeek 的判定（仅保留 GLM），DeepSeek 模型不再启用 thinking mode
+  2. 查阅 DeepSeek 官方文档和社区最佳实践：结构化 JSON 输出推荐 temperature=0.0-0.2，确定性任务推荐 0.0，对话+工具调用推荐 0.1-0.2
+  3. 按场景设置 temperature：
+     - DSL generator (JSON 输出): 0.0（从 1.0 降下 / 从默认 1.0 降下）
+     - DSL flash LLM: 0.0（从 0.3 降下）
+     - Planning agent (对话+工具): 0.1
+     - Judge agent (JSON 裁决): 0.0
+- 验证：542/544 单元测试通过（2 个预存失败与改动无关），test_call_llm_uses_openai_json_payload 已更新适配新 temperature 字段
+
 ## BUG-084 | text_parent_chain 在品牌页第二个产品上回退到 VLM
 
 - 日期：2026-05-07

@@ -544,8 +544,8 @@ class TestExploreFlowTool:
             )
         assert result["total_pages"] == 2
         assert result["total_elements"] == 2
-        assert "=== 页面: https://example.com/login ===" in result["formatted"]
-        assert "=== 页面: https://example.com/products ===" in result["formatted"]
+        assert "=== 页面状态 S0: https://example.com/login ===" in result["formatted"]
+        assert "=== 页面状态 S1: https://example.com/products ===" in result["formatted"]
         assert len(result["pages"]) == 2
 
     def test_explore_flow_requires_urls(self, db_session: Session) -> None:

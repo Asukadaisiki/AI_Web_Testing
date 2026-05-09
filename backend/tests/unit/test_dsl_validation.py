@@ -138,7 +138,7 @@ def test_build_generation_messages_only_list_supported_actions() -> None:
 
     assert len(messages) == 2
     assert "Allowed actions: goto, click, input, wait_for, assert_text, assert_url_contains, capture_text." in messages[0]["content"]
-    assert "Do not use any other action names." in messages[0]["content"]
+    assert "Generate ONLY steps" in messages[0]["content"]
     assert "strict_steps_only" in messages[1]["content"]
     assert "当前 DSL：" in messages[1]["content"]
     assert "当前步骤：" in messages[1]["content"]
@@ -271,6 +271,7 @@ def test_call_llm_uses_openai_json_payload(monkeypatch) -> None:
     assert captured["json"] == {
         "model": "gpt-test",
         "messages": [{"role": "user", "content": "生成 DSL"}],
+        "temperature": 0.0,
         "response_format": {"type": "json_object"},
     }
 

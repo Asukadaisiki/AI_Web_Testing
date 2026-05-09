@@ -1812,6 +1812,7 @@ def _call_llm(
         payload["max_tokens"] = 65536
         payload["temperature"] = 1.0
     else:
+        payload["temperature"] = 0.0
         payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     http_request = request.Request(
@@ -1904,7 +1905,7 @@ def _call_dsl_flash_llm(
         "model": model,
         "messages": messages,
         "max_tokens": 16384,
-        "temperature": 0.3,
+        "temperature": 0.0,
         "response_format": {"type": "json_object"},
     }
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
@@ -2105,8 +2106,6 @@ def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
     return (
         "open.bigmodel.cn" in normalized_base_url
         or normalized_model.startswith("glm-")
-        or "api.deepseek.com" in normalized_base_url
-        or normalized_model.startswith("deepseek-")
     )
 
 

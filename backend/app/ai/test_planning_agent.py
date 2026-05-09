@@ -779,8 +779,6 @@ def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
     return (
         "open.bigmodel.cn" in normalized_base_url
         or normalized_model.startswith("glm-")
-        or "api.deepseek.com" in normalized_base_url
-        or normalized_model.startswith("deepseek-")
     )
 
 
@@ -800,6 +798,7 @@ def _call_planning_llm(
         payload["thinking"] = {"type": "enabled"}
         payload["max_tokens"] = 65536
     else:
+        payload["temperature"] = 0.1
         payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     http_request = request.Request(
@@ -839,6 +838,7 @@ def _stream_planning_llm(
         payload["thinking"] = {"type": "enabled"}
         payload["max_tokens"] = 65536
     else:
+        payload["temperature"] = 0.1
         payload["response_format"] = {"type": "json_object"}
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     full_text: list[str] = []

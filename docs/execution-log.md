@@ -2,6 +2,25 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
+## 2026-05-10 | AI 配置优化 — 禁用 DeepSeek thinking 模式 + 按场景设置 temperature
+
+**背景：** 综合 BUG-081/069/065/054 等多个"AI 不遵循提示词"相关问题，根因指向：(1) thinking 模式对指令遵循有负面影响；(2) temperature=1.0 过高导致输出随机性太大。
+
+**操作：**
+1. 清理 `backend/artifacts/executions/1/`，仅保留 session 107
+2. 在 dsl_generator.py、test_planning_agent.py、judge_agent.py 中移除 `_should_enable_thinking_mode` 对 DeepSeek 的条件（仅保留 GLM）
+3. 查阅 DeepSeek 官方文档：结构化 JSON 推荐 temperature=0.0，对话+工具调用推荐 0.1-0.2
+4. 按场景设置 temperature：
+   - DSL generator: 0.0（从 1.0/默认降下）
+   - DSL flash LLM: 0.0（从 0.3 降下）
+   - Planning agent: 0.1
+   - Judge agent: 0.0
+5. 修复 test_call_llm_uses_openai_json_payload 测试适配新 temperature 字段
+
+**验证：** 542/544 通过（2 个预存失败：test_build_generation_messages_only_list_supported_actions 和 test_explore_flow_returns_multi_page_results，均为之前 prompt 重构后测试未同步）
+
+**关联记录：** BUG-085
+
 ## 2026-05-06 ~ 2026-05-07 | AI Agent 测试用例质量提升 — 三层修复 + 自动回归循环
 
 **目标：** 反复用 test_brand_filter_cart 内容测试 AI agent，发现问题并修复，直到 AI 生成的测试用例达到 80%+ 步骤通过率。
