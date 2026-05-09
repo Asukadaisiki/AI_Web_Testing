@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from threading import Event
 from time import perf_counter
@@ -71,7 +72,9 @@ def _resolve_with_confidence_gate(
         if vlm_result is not None:
             return vlm_result, True
 
-    raise
+    if sys.exc_info()[0] is not None:
+        raise
+    raise LocatorResolutionError(f"No locator found for target: {target!r}")
 
 def _substitute_variables(value: str | None, input_values: dict[str, str] | None) -> str | None:
     """Replace ``${context_key}`` placeholders in *value* with entries from *input_values*."""

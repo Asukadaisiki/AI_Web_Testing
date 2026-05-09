@@ -125,11 +125,16 @@ def run_planning_turn(
         actor_user_id=actor_user_id,
         planning_session_id=planning_session_id,
     )
-    while True:
-        try:
-            next(stream)
-        except StopIteration as stop:
-            return stop.value
+    try:
+        while True:
+            try:
+                next(stream)
+            except StopIteration as stop:
+                return stop.value
+    finally:
+        if planning_session_id:
+            from app.ai.page_explorer import BrowserSessionManager
+            BrowserSessionManager.close_session(planning_session_id)
 
 
 def stream_planning_turn(

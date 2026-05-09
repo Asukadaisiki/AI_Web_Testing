@@ -1036,7 +1036,7 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
     ),
     "explore_flow": PlanningTool(
         name="explore_flow",
-        description="沿用户测试流程依次访问多个页面，采集每个页面的可交互元素和视觉布局信息。支持两种模式：1) 简单 URL 列表模式（urls 参数）；2) 动作式流探索模式（steps 参数，可在页面间执行点击/输入/等待动作）。适用于需要跨页面、含登录或交互的测试场景，会复用浏览器会话保持登录态。",
+        description="沿用户测试流程探索多个页面，在每个页面执行交互动作后采集可交互元素和视觉布局。优先使用 steps 参数（动作式探索），仅在纯静态页面浏览场景使用 urls 参数。steps 模式可执行 click/input/wait_for 动作，确保采集到的元素反映真实页面状态（如登录后、加购后）。会复用浏览器会话。",
         parameters={
             "type": "object",
             "properties": {
