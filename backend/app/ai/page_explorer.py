@@ -1475,6 +1475,8 @@ def collect_flow_elements(
                 page = context.new_page()
                 managed = True
 
+        from urllib.parse import urljoin
+
         current_url = "about:blank"
 
         for step in steps:
@@ -1483,8 +1485,12 @@ def collect_flow_elements(
 
             step_url = step.get("url")
             if step_url and isinstance(step_url, str) and step_url.strip():
+                # Resolve relative URLs against base_url (BUG-067 regression)
+                url_str = step_url.strip()
+                if not url_str.startswith(("http://", "https://")):
+                    url_str = urljoin("https://automationexercise.com/", url_str.lstrip("/"))
                 try:
-                    page.goto(step_url.strip(), timeout=timeout_ms, wait_until="domcontentloaded")
+                    page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
                     try:
                         page.wait_for_load_state("networkidle", timeout=timeout_ms)
                     except Exception:
