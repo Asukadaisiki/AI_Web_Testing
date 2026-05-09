@@ -734,6 +734,11 @@ def _handle_explore_flow(
         {"state_id": pr.get("page_state", "?"), "url": pr.get("url", ""), "description": pr.get("description", "")}
         for pr in page_results
     ]
+    logger.info(
+        "explore_flow urls: %d states, %d total_elements, formatted=%d chars, states=%s",
+        len(page_results), total_elements, len(combined_formatted),
+        [ps["state_id"] for ps in page_states],
+    )
 
     return {
         "pages": page_results,

@@ -1432,16 +1432,22 @@ def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
         if annotation:
             section += f"\n\n页面布局描述: {annotation}"
         sections.append(section)
+    # Per-state truncation: distribute MAX_COMBINED_PROMPT_CHARS evenly
+    # so every page state gets representation (no state is fully dropped)
+    n_sec = len(sections)
+    if n_sec > 0:
+        per_limit = max(3000, MAX_COMBINED_PROMPT_CHARS // n_sec)
+        for i in range(n_sec):
+            if len(sections[i]) > per_limit:
+                sec = sections[i][:per_limit]
+                last_nl = sec.rfind("\n")
+                if last_nl > per_limit // 2:
+                    sec = sec[:last_nl]
+                sections[i] = sec + f"\n... [{per_limit} chars per-state limit]"
     result = "\n\n".join(sections)
-    if len(result) > MAX_COMBINED_PROMPT_CHARS:
-        # Truncate to max chars, keeping complete lines
-        result = result[:MAX_COMBINED_PROMPT_CHARS]
-        last_nl = result.rfind("\n")
-        if last_nl > 0:
-            result = result[:last_nl]
-        result += "\n... [truncated: combined output exceeds max chars]"
-        logger.warning("build_flow_formatted_output truncated from %d to %d chars",
-                      sum(len(s) for s in sections), len(result))
+    if len(result) > MAX_COMBINED_PROMPT_CHARS * 2:
+        logger.warning("build_flow_formatted_output: %d chars across %d states",
+                      len(result), n_sec)
     return result
 
 
