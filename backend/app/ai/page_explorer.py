@@ -939,65 +939,72 @@ def capture_browser_session(
     storage_dir: Path,
     project_id: int,
     timeout_ms: int = 60000,
+    session_id: int = 0,
 ) -> dict[str, Any]:
-    """Execute *steps* on *url*, then persist the browser session state."""
+    """Execute *steps* on *url*, then persist the browser session state.
+
+    When *session_id* > 0 the browser is obtained from
+    :class:`BrowserSessionManager` and reused across calls.
+    """
     import time as _time
     try:
-        pw = _sync_playwright_context()
-        with pw as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
-            page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
-            try:
-                page.wait_for_load_state("networkidle", timeout=timeout_ms)
-            except Exception:
-                pass
-            _time.sleep(1.0)  # let page JS settle
+        if session_id:
+            context, page = BrowserSessionManager.get_or_create_context(session_id)
+        else:
+            pw = _sync_playwright_context()
+            with pw as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                context = browser.new_context()
+                page = context.new_page()
 
-            for step in steps:
-                action = (step.get("action") or "").strip().lower()
-                target = step.get("target", "")
-                value = step.get("value", "")
-                # Normalize action name
-                if action in ("type", "fill", "input"):
-                    kind = "input"
-                elif action in ("click", "press", "tap"):
-                    kind = "click"
-                else:
-                    kind = action
+        page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except Exception:
+            pass
+        _time.sleep(1.0)
 
-                # Retry loop: wait for page to stabilize, retry once on failure
-                for _retry in range(2):
-                    locator = _resolve_step_locator(page, target, kind=kind)
-                    if locator is None:
+        for step in steps:
+            action = (step.get("action") or "").strip().lower()
+            target = step.get("target", "")
+            value = step.get("value", "")
+            if action in ("type", "fill", "input"):
+                kind = "input"
+            elif action in ("click", "press", "tap"):
+                kind = "click"
+            else:
+                kind = action
+
+            for _retry in range(2):
+                locator = _resolve_step_locator(page, target, kind=kind)
+                if locator is None:
+                    _time.sleep(1.0)
+                    continue
+                try:
+                    tag = locator.evaluate("el => el.tagName.toLowerCase()")
+                    if kind == "input" and tag not in ("input", "select", "textarea"):
+                        logger.warning("Locator resolved to <%s> instead of input for target=%r, retrying", tag, target)
                         _time.sleep(1.0)
                         continue
-                    # Verify locator is the expected element type
-                    try:
-                        tag = locator.evaluate("el => el.tagName.toLowerCase()")
-                        if kind == "input" and tag not in ("input", "select", "textarea"):
-                            logger.warning("Locator resolved to <%s> instead of input for target=%r, retrying", tag, target)
-                            _time.sleep(1.0)
-                            continue
-                        if kind == "click" and tag in ("body", "html"):
-                            _time.sleep(1.0)
-                            continue
-                        # Execute
-                        if kind == "input":
-                            locator.fill(str(value))
-                        elif kind == "click":
-                            locator.click()
-                        break  # success
-                    except Exception as e:
-                        logger.warning("Step action failed for target=%r: %s, retrying", target, e)
+                    if kind == "click" and tag in ("body", "html"):
                         _time.sleep(1.0)
-                else:
-                    logger.warning("Step failed after retries for target=%r", target)
+                        continue
+                    if kind == "input":
+                        locator.fill(str(value))
+                    elif kind == "click":
+                        locator.click()
+                    break
+                except Exception as e:
+                    logger.warning("Step action failed for target=%r: %s, retrying", target, e)
+                    _time.sleep(1.0)
+            else:
+                logger.warning("Step failed after retries for target=%r", target)
 
-            state = context.storage_state()
-            cookie_count = len(state.get("cookies", []))
-            save_storage_state(storage_dir, project_id=project_id, state=dict(state), source_url=url)
+        state = context.storage_state()
+        cookie_count = len(state.get("cookies", []))
+        save_storage_state(storage_dir, project_id=project_id, state=dict(state), source_url=url)
+
+        if not session_id:
             context.close()
             browser.close()
     except Exception as exc:

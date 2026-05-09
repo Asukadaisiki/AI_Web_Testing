@@ -646,14 +646,16 @@ def _handle_capture_page_session(
     steps = params.get("steps")
     if not isinstance(steps, list):
         steps = []
+    planning_session_id = int(params.get("planning_session_id", 0))
 
-    logger.info("capture_page_session: url=%s, steps=%d, project_id=%d", url.strip(), len(steps), project_id)
+    logger.info("capture_page_session: url=%s, steps=%d, project_id=%d, session_id=%d", url.strip(), len(steps), project_id, planning_session_id)
     storage_dir = _resolve_storage_state_dir()
     result = capture_browser_session(
         url=url.strip(),
         steps=steps,
         storage_dir=storage_dir,
         project_id=project_id,
+        session_id=planning_session_id,
     )
     logger.info("capture_page_session: status=%s, cookie_count=%s", result.get("status"), result.get("cookie_count"))
     return result
