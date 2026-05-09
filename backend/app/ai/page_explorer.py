@@ -512,12 +512,32 @@ def _group_label(group: list[dict[str, Any]]) -> str:
 def _get_group_context(element: dict[str, Any], group: list[dict[str, Any]]) -> str:
     """Get sibling context for an element within its visual group.
 
-    Returns a short string describing what other elements are nearby,
-    so the AI understands the element's role (e.g. a button inside a
-    product card with a price text is likely the quantity selector).
+    Also computes arithmetic relationships: if a button's numeric text
+    multiplied by a nearby price equals another price, the button is
+    identified as a quantity modifier (e.g. button[3] × Rs.500 = Rs.1500).
     """
     _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+    _PRICE_RE = re.compile(r"(?:Rs\.|₹|\$|€|£)\s*([\d,]+\.?\d*)")
     siblings = []
+
+    # Collect prices from the group for arithmetic validation
+    prices: list[tuple[float, str]] = []
+    for other in group:
+        txt = (other.get("text") or "").strip()
+        m = _PRICE_RE.search(txt) if txt else None
+        if m:
+            try:
+                val = float(m.group(1).replace(",", ""))
+                prices.append((val, txt[:30]))
+            except ValueError:
+                pass
+
+    button_val: float | None = None
+    if element.get("tag") == "button":
+        bt = (element.get("text") or "").strip()
+        if bt.isdigit():
+            button_val = float(bt)
+
     for other in group:
         if other is element:
             continue
@@ -526,8 +546,8 @@ def _get_group_context(element: dict[str, Any], group: list[dict[str, Any]]) -> 
         ph = (other.get("placeholder") or "").strip()
         if tag in _HEADING_TAGS and txt:
             siblings.append(f"标题[{txt[:30]}]")
-        elif tag in ("p", "span") and txt:
-            if re.search(r"(?:Rs\.|₹|\$|\d)", txt):
+        elif tag in ("p", "span", "h2") and txt:
+            if _PRICE_RE.search(txt):
                 siblings.append(f"价格[{txt[:30]}]")
             elif len(txt) > 3:
                 siblings.append(f"文本[{txt[:30]}]")
@@ -539,11 +559,20 @@ def _get_group_context(element: dict[str, Any], group: list[dict[str, Any]]) -> 
             siblings.append(f"输入[{ph or txt[:20]}]")
         elif tag == "button" and txt:
             if txt.isdigit():
-                siblings.append(f"数量按钮[{txt}]")
+                siblings.append(f"按钮[{txt}]")
             else:
                 siblings.append(f"按钮[{txt[:20]}]")
+
+    # Arithmetic inference: if button_val * price_a == price_b → quantity selector
+    if button_val and len(prices) >= 2:
+        for i in range(len(prices)):
+            for j in range(i + 1, len(prices)):
+                expected = button_val * prices[i][0]
+                if abs(expected - prices[j][0]) < 0.01 * max(expected, 1):
+                    siblings.insert(0, f"数量修改器(点击修改数量, {button_val:.0f} × {prices[i][1]} = {prices[j][1]})")
+
     if siblings:
-        return "、".join(siblings[:4])
+        return "、".join(siblings[:5])
     return ""
 
 
