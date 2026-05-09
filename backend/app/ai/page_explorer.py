@@ -353,8 +353,8 @@ def _rects_overlap_y(a: dict[str, float], b: dict[str, float], tolerance: float 
     return not (a_bottom + tolerance < b["y"] or b_bottom + tolerance < a["y"])
 
 
-def _rects_close_x(a: dict[str, float], b: dict[str, float], tolerance: float = 300) -> bool:
-    """True if two rects are horizontally close (same card/column)."""
+def _rects_close_x(a: dict[str, float], b: dict[str, float], tolerance: float = 800) -> bool:
+    """True if two rects are horizontally close (same row / card)."""
     a_right = a["x"] + a["w"]; b_right = b["x"] + b["w"]
     return not (a_right + tolerance < b["x"] or b_right + tolerance < a["x"])
 
@@ -415,20 +415,102 @@ def _group_elements_by_visual_proximity(elements: list[dict[str, Any]]) -> list[
 
 
 def _group_label(group: list[dict[str, Any]]) -> str:
-    """Make a human-readable label for a visual group based on its content."""
-    # Prefer: product name text > heading > link text > first element text
+    """Make a human-readable label for a visual group, including block type."""
+    _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
+    _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+
+    # Count structure
+    inputs = sum(1 for e in group if e.get("tag") in ("input", "select", "textarea"))
+    buttons = sum(1 for e in group if e.get("tag") == "button")
+    links = sum(1 for e in group if e.get("tag") == "a")
+    headings = sum(1 for e in group if e.get("tag") in _HEADING_TAGS)
+    images = sum(1 for e in group if e.get("tag") == "img")
+    prices = sum(1 for e in group if e.get("tag") in ("p", "span", "h2") and re.search(r"(?:Rs\.|₹|\$|€|£)\s*\d", e.get("text") or ""))
+
+    # Determine block type
+    if inputs >= 3 and buttons >= 1:
+        block_type = "表单"
+    elif inputs >= 2 and buttons >= 1:
+        block_type = "表单(小型)"
+    elif prices >= 2 and links >= 1:
+        block_type = "产品卡"
+    elif prices == 1 and links >= 1:
+        block_type = "产品卡(单产品)"
+    elif buttons >= 3:
+        block_type = "操作区"
+    elif links >= 5:
+        block_type = "导航栏"
+    elif headings >= 1 and links >= 2:
+        block_type = "导航区"
+    elif images >= 2 and prices >= 1:
+        block_type = "产品列表"
+    else:
+        block_type = "区域"
+
+    # Pick best name
+    name = ""
     for el in group:
         t = (el.get("text") or "").strip()
         tag = el.get("tag", "")
-        if tag in ("h1", "h2", "h3", "h4") and t:
-            return t[:60]
-    # Look for a distinctive text (not "Add to cart", "View Product", etc.)
-    _generic = {"add to cart", "view product", "home", "cart", "login", "logout", "signup"}
-    for el in group:
-        t = (el.get("text") or "").strip()
-        if t and t.casefold() not in _generic and len(t) > 3:
-            return t[:60]
-    return group[0].get("tag", "block") if group else "block"
+        if tag in _HEADING_TAGS and t:
+            name = t[:60]
+            break
+    if not name:
+        _generic = {"add to cart", "view product", "home", "cart", "login", "logout", "signup"}
+        for el in group:
+            t = (el.get("text") or "").strip()
+            if t and t.casefold() not in _generic and len(t) > 3:
+                name = t[:60]
+                break
+    if not name:
+        name = group[0].get("tag", "block") if group else "block"
+
+    # Build structure summary for context
+    parts = [f"{name} [{block_type}]"]
+    if inputs: parts.append(f"输入域x{inputs}")
+    if buttons: parts.append(f"按钮x{buttons}")
+    if links: parts.append(f"链接x{links}")
+    if prices: parts.append(f"价格文本x{prices}")
+
+    return " | ".join(parts)
+
+
+def _get_group_context(element: dict[str, Any], group: list[dict[str, Any]]) -> str:
+    """Get sibling context for an element within its visual group.
+
+    Returns a short string describing what other elements are nearby,
+    so the AI understands the element's role (e.g. a button inside a
+    product card with a price text is likely the quantity selector).
+    """
+    _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+    siblings = []
+    for other in group:
+        if other is element:
+            continue
+        tag = other.get("tag", "")
+        txt = (other.get("text") or "").strip()
+        ph = (other.get("placeholder") or "").strip()
+        if tag in _HEADING_TAGS and txt:
+            siblings.append(f"标题[{txt[:30]}]")
+        elif tag in ("p", "span") and txt:
+            if re.search(r"(?:Rs\.|₹|\$|\d)", txt):
+                siblings.append(f"价格[{txt[:30]}]")
+            elif len(txt) > 3:
+                siblings.append(f"文本[{txt[:30]}]")
+        elif tag == "img":
+            siblings.append("图片")
+        elif tag == "a" and txt:
+            siblings.append(f"链接[{txt[:25]}]")
+        elif tag in ("input", "select", "textarea"):
+            siblings.append(f"输入[{ph or txt[:20]}]")
+        elif tag == "button" and txt:
+            if txt.isdigit():
+                siblings.append(f"数量按钮[{txt}]")
+            else:
+                siblings.append(f"按钮[{txt[:20]}]")
+    if siblings:
+        return "、".join(siblings[:4])
+    return ""
 
 
 def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
@@ -450,28 +532,33 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
     groups = _group_elements_by_visual_proximity(visible)
     hidden_groups = _group_elements_by_visual_proximity(hidden_interactive)
 
-    # Build output: each group gets a labeled section
+    # Build output: each group gets a labeled section with elements indented
     sections: list[str] = []
     for group in groups:
         label = _group_label(group)
-        # Only show group header for groups with significant content
         interactive_count = sum(1 for e in group if e.get("tag", "").casefold() in _INTERACTIVE_TAGS)
         if len(group) >= 2 or interactive_count > 0:
             sections.append(f"\n### {label}")
         for element in group:
             stability = _compute_element_stability(element, visible)
+            ctx = _get_group_context(element, group)
             line = _format_element_rich(element, stability)
             if interactive_count > 0 and element.get("tag", "").casefold() in _INTERACTIVE_TAGS:
                 line += " [INTERACTIVE]"
-            sections.append(line)
+            if ctx:
+                line += f"  ← 同组: {ctx}"
+            sections.append(f"  {line}")
 
     for group in hidden_groups:
         label = _group_label(group)
         sections.append(f"\n### {label} [HIDDEN—appears on hover]")
         for element in group:
             stability = _compute_element_stability(element, visible + hidden_interactive)
+            ctx = _get_group_context(element, group)
             line = _format_element_rich(element, stability)
-            sections.append(line + " | [HIDDEN—visible on hover/interaction]")
+            if ctx:
+                line += f"  ← 同组: {ctx}"
+            sections.append(f"  {line} | [HIDDEN—visible on hover/interaction]")
 
     result = "\n".join(sections)
     if len(result) > MAX_PROMPT_ELEMENTS_CHARS:
