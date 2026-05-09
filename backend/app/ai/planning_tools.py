@@ -723,24 +723,24 @@ def _handle_explore_flow(
         session_id=planning_session_id,
     )
 
-    sections: list[str] = []
-    for pr in page_results:
-        url = pr.get("url", "")
-        formatted = pr.get("formatted", "")
-        annotation = pr.get("vlm_annotation")
-        section = f"=== 页面: {url} ===\n{formatted}"
-        if annotation:
-            section += f"\n\n页面布局描述: {annotation}"
-        sections.append(section)
-
-    combined_formatted = "\n\n".join(sections)
+    # Assign page_state IDs so downstream can match steps to pages via markers
+    from app.ai.page_explorer import build_flow_formatted_output
+    for idx, pr in enumerate(page_results):
+        if "page_state" not in pr:
+            pr["page_state"] = f"S{idx}"
+    combined_formatted = build_flow_formatted_output(page_results)
     total_elements = sum(pr.get("element_count", 0) for pr in page_results)
+    page_states = [
+        {"state_id": pr.get("page_state", "?"), "url": pr.get("url", ""), "description": pr.get("description", "")}
+        for pr in page_results
+    ]
 
     return {
         "pages": page_results,
         "formatted": combined_formatted,
         "total_pages": len(page_results),
         "total_elements": total_elements,
+        "page_states": page_states,
     }
 
 

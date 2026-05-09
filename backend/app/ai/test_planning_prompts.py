@@ -110,15 +110,25 @@ SYSTEM_PROMPT_TEMPLATE = """\
 
 	4. 【品牌/筛选/分类页必须探索】如果 core_user_flow 提到筛选、品牌、分类，筛选后的结果页面也必须探索。
 
-	5. 【一次性采集 — 必须用 urls 参数】梳理完所有页面后，用一次 explore 调用全部采集。必须使用 urls 参数（简单字符串数组）。例如 urls: ["/login", "/products", "/brand_products/Polo", "/view_cart"]。不要分多次，不要遗漏。
+	5. 【动作式流程探索 — 优先用 steps 参数】流程中如果有「登录后」「加入购物车后」「提交表单后」这类状态依赖的页面，必须用 steps 参数让探索器执行动作后再采集页面。每个 step 包含 url（导航目标）、description（状态描述）、actions（采集前要执行的动作）。
+	   - 纯 URL 跳转的简单场景仍可用 urls 参数
+	   - 含登录/加购/提交/筛选等交互的流程 → 必须用 steps，格式：
+	     steps: [
+	       {url: "/login", description: "登录页", actions: [{action: "input", target: "Email Address", value: "..."}, {action: "input", target: "Password", value: "..."}, {action: "click", target: "Login"}]},
+	       {url: "/products", description: "商品列表页"},
+	       {url: "/brand_products/Polo", description: "筛选结果页", actions: [{action: "click", target: "Add to cart"}, {action: "click", target: "Continue Shopping"}]},
+	       {url: "/view_cart", description: "购物车（含商品）"}
+	     ]
+	   - 核心原则：不能直接 goto 一个状态依赖的页面（如 /view_cart），必须先通过 actions 执行前置操作，确保采集到的元素反映真实页面状态
 
 	6. 【没有页面数据 = 不能生成方案】如果某个页面探索失败，向用户报告具体失败原因，绝不跳过。
 
 	7. 【tools 调用优先级】
-	   - 有登录需求 → 先 capture_page_session，再 explore
+	   - 有登录/加购/交互需求 → 直接在 explore 的 steps 参数中包含登录和交互动作，一次性采集完整流程
 	   - 有项目上下文需求 → 先 create_project 或 get_project_info
-	   - 页面采集 → explore（一次性采集所有页面）
+	   - 页面采集 → explore(steps)（一次性采集，含动作）
 	   - 禁止用 ask_user 替代工具调用
+	   - capture_page_session 仅用于需要持久化登录态的场景（跨 session 复用）
 
 	- 入口页面的探索由系统自动完成，你不需要再对入口页面调用 explore。
 	- 探索完成后系统会自动将页面状态映射到结构化步骤索引（flow_steps），用于后续分段 DSL 生成。

@@ -373,11 +373,13 @@ def stream_planning_turn(
                     fallback_urls = _rank_links_by_flow_relevance(
                         links_to_explore, requirements.core_user_flow,
                     )[:4]
-                    logger.info("Safety-net: auto-exploring fallback URLs %s", fallback_urls)
+                    # Build flow steps with description so elements get page_state markers
+                    flow_steps = _build_safety_net_steps(fallback_urls, requirements.core_user_flow)
+                    logger.info("Safety-net: auto-exploring %d steps for URLs %s", len(flow_steps), fallback_urls)
                     try:
                         flow_result_text = execute_tool(
                             tool_name="explore_flow",
-                            params={"urls": fallback_urls},
+                            params={"steps": flow_steps},
                             db_session=db_session,
                             project_id=project_id,
                             actor_user_id=actor_user_id,
@@ -387,7 +389,7 @@ def stream_planning_turn(
                         tool_calls.append(
                             AIPlanningToolCall(
                                 tool="explore_flow",
-                                params={"urls": fallback_urls},
+                                params={"steps": flow_steps},
                                 result=flow_result,
                             )
                         )
@@ -397,8 +399,11 @@ def stream_planning_turn(
                     conversation.append(
                         {"role": "system", "content": (
                             "系统已自动补充采集了导航链接页面的可交互元素。"
+                            "页面元素已按页面状态（S0/S1/S2...）分组标记，"
+                            "每个 page_state 对应一个不同的 URL。"
                             "请基于所有已采集的页面元素信息重新生成测试方案，"
-                            "确保 target 使用元素的实际 label、placeholder 或 id。"
+                            "确保 target 使用元素的实际 label、placeholder 或 id，"
+                            "并且每个 draft_prompt 中的步骤必须标注 page_state 归属。"
                         )},
                     )
                     continue
@@ -1506,6 +1511,57 @@ def _clear_link_tracking(conversation: list[dict[str, str]]) -> None:
         if msg.get("role") == "system" and _LINK_PRESENTATION_SENTINEL in msg.get("content", ""):
             msg["content"] = msg["content"].split("\n\n", 1)[-1] if "\n\n" in msg["content"] else msg["content"]
             return
+
+
+def _build_safety_net_steps(
+    urls: list[str],
+    core_user_flow: str | None,
+) -> list[dict[str, Any]]:
+    """Convert a plain URL list into flow steps with descriptive labels.
+
+    Each step gets a ``description`` inferred from the URL path so that
+    downstream ``collect_flow_elements`` can assign ``page_state`` markers.
+    This ensures the formatted ``page_elements`` uses structured
+    ``=== 页面状态 S{n}: {url}（描述）===`` headers that the DSL generator
+    can parse and filter by step.
+    """
+    _URL_LABELS: dict[str, str] = {
+        "login": "登录页",
+        "signup": "注册页",
+        "products": "商品列表页",
+        "product_details": "商品详情页",
+        "brand_products": "品牌筛选结果页",
+        "view_cart": "购物车页",
+        "checkout": "结账页",
+        "payment": "支付页",
+        "contact_us": "联系我们",
+        "search": "搜索结果页",
+    }
+    steps: list[dict[str, Any]] = []
+    for url in urls:
+        url_clean = url.strip().rstrip("/")
+        label = ""
+        for keyword, desc in _URL_LABELS.items():
+            if keyword in url_clean.lower():
+                label = desc
+                break
+        if not label:
+            label = url_clean.rsplit("/", 1)[-1] or url_clean
+        step: dict[str, Any] = {"url": url, "description": label}
+        steps.append(step)
+
+    if core_user_flow and ("登录" in core_user_flow or "login" in core_user_flow.lower()):
+        for step in steps:
+            if "login" in step.get("url", "").lower():
+                step["description"] = "登录页（含登录表单）"
+                break
+    if core_user_flow and ("购物车" in core_user_flow or "cart" in core_user_flow.lower()):
+        for step in steps:
+            if "cart" in step.get("url", "").lower():
+                step["description"] = "购物车页（含商品列表和数量）"
+                break
+
+    return steps
 
 
 def _has_internal_links_in_tool_calls(tool_calls: list[AIPlanningToolCall]) -> bool:
