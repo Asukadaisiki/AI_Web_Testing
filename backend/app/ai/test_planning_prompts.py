@@ -100,7 +100,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 	1. 【入口页】系统自动探索。你不需要对入口 URL 调用 explore。
 
 	2. 【状态依赖页面必须通过 actions 到达】如果 core_user_flow 涉及登录、加购、表单提交等交互，必须直接在 explore 的 steps 参数中执行这些动作，不能在未执行前置操作的情况下直接 goto 状态依赖的页面。
-	   示例：要探索「登录后的商品列表」→ 不能先 goto /products 再捕获（那样看到的是未登录态），必须 steps 中包含 {url: "/login", actions: [input email, input password, click Login]}，这样才能采集到登录后的页面状态。
+	   示例：要探索「登录后的商品列表」→ 不能先 goto /products 再捕获（那样看到的是未登录态），必须 steps 中包含 {{url: "/login", actions: [input email, input password, click Login]}}，这样才能采集到登录后的页面状态。
 
 	3. 【流程中的每个页面都必须探索】仔细阅读 core_user_flow，列出每一步对应的页面 URL：
 	   - "点击 Products" → 必须探索 /products

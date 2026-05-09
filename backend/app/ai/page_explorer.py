@@ -330,7 +330,7 @@ def _format_element_rich(element: dict[str, Any], stability: float) -> str:
 
 
 MAX_PROMPT_ELEMENTS_CHARS = 80000
-MAX_COMBINED_PROMPT_CHARS = 60000
+MAX_COMBINED_PROMPT_CHARS = 20000
 
 
 def _extract_stability(line: str) -> float:
