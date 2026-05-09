@@ -330,6 +330,7 @@ def _format_element_rich(element: dict[str, Any], stability: float) -> str:
 
 
 MAX_PROMPT_ELEMENTS_CHARS = 80000
+MAX_COMBINED_PROMPT_CHARS = 60000
 
 
 def _extract_stability(line: str) -> float:
@@ -474,7 +475,23 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
 
     result = "\n".join(sections)
     if len(result) > MAX_PROMPT_ELEMENTS_CHARS:
-        result = result[:MAX_PROMPT_ELEMENTS_CHARS] + "\n... [truncated]"
+        # Interactive-first truncation: keep all interactive lines, drop non-interactive
+        interactive_lines = []
+        other_lines = []
+        for line in result.split("\n"):
+            if "[INTERACTIVE]" in line or line.startswith("###") or line.startswith("==="):
+                interactive_lines.append(line)
+            elif line.strip():
+                other_lines.append(line)
+        kept = interactive_lines + other_lines
+        result = "\n".join(kept)
+        # If still too large, hard truncate
+        if len(result) > MAX_PROMPT_ELEMENTS_CHARS:
+            result = result[:MAX_PROMPT_ELEMENTS_CHARS]
+            last_nl = result.rfind("\n")
+            if last_nl > 0:
+                result = result[:last_nl]
+            result += "\n... [truncated]"
     return result
 
 
@@ -1394,7 +1411,11 @@ def collect_flow_elements(
 # ---------------------------------------------------------------------------
 
 def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
-    """Build a state-aware combined formatted string from flow exploration results."""
+    """Build a state-aware combined formatted string from flow exploration results.
+
+    Truncates to ``MAX_COMBINED_PROMPT_CHARS`` to prevent overwhelming the DSL
+    generation LLM.
+    """
     sections: list[str] = []
     for pr in page_results:
         state_id = pr.get("page_state", "?")
@@ -1411,7 +1432,17 @@ def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
         if annotation:
             section += f"\n\n页面布局描述: {annotation}"
         sections.append(section)
-    return "\n\n".join(sections)
+    result = "\n\n".join(sections)
+    if len(result) > MAX_COMBINED_PROMPT_CHARS:
+        # Truncate to max chars, keeping complete lines
+        result = result[:MAX_COMBINED_PROMPT_CHARS]
+        last_nl = result.rfind("\n")
+        if last_nl > 0:
+            result = result[:last_nl]
+        result += "\n... [truncated: combined output exceeds max chars]"
+        logger.warning("build_flow_formatted_output truncated from %d to %d chars",
+                      sum(len(s) for s in sections), len(result))
+    return result
 
 
 __all__ = [
