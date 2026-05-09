@@ -547,12 +547,60 @@ def _get_group_context(element: dict[str, Any], group: list[dict[str, Any]]) -> 
     return ""
 
 
-def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
-    """Format DOM elements grouped by visual proximity, so the AI sees page structure.
+def _group_by_dom_container(elements: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Group elements by their DOM container (tr, product card, form, etc.).
 
-    Instead of a flat list, elements are clustered by their screen coordinates
-    into logical blocks (product cards, forms, nav bars). Each block is labeled
-    by its most descriptive text (product name, heading, etc.).
+    Uses the ``container_selector`` field captured by the JS extraction script.
+    Elements sharing the same container are grouped together.  Elements without
+    a container_selector fall back to rect-based grouping.
+
+    This is universal — it works on any website regardless of layout, because
+    DOM hierarchy is the natural structure of HTML.
+    """
+    container_map: dict[str, list[dict[str, Any]]] = {}
+    orphans: list[dict[str, Any]] = []
+
+    for el in elements:
+        c = (el.get("container_selector") or "").strip()
+        if c:
+            container_map.setdefault(c, []).append(el)
+        else:
+            orphans.append(el)
+
+    # Sort containers by the y-position of their first element
+    result: list[list[dict[str, Any]]] = []
+    for c in sorted(container_map, key=lambda c:
+                    min(_get_rect(e)["y"] for e in container_map[c] if _has_usable_rect(e))
+                    if any(_has_usable_rect(e) for e in container_map[c])
+                    else 99999):
+        result.append(container_map[c])
+
+    # Orphans: fall back to rect-based clustering via the existing function
+    if orphans:
+        orphan_groups = _group_elements_by_visual_proximity(orphans)
+        # Interleave orphan groups by y-position
+        for og in orphan_groups:
+            insert_y = min((_get_rect(e)["y"] for e in og if _has_usable_rect(e)), default=99999)
+            inserted = False
+            for i, grp in enumerate(result):
+                grp_y = min((_get_rect(e)["y"] for e in grp if _has_usable_rect(e)), default=99999)
+                if insert_y < grp_y:
+                    result.insert(i, og)
+                    inserted = True
+                    break
+            if not inserted:
+                result.append(og)
+
+    return result
+
+
+def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
+    """Format DOM elements grouped by DOM container, so the AI sees page structure.
+
+    Elements are clustered by their ``container_selector`` (nearest semantic DOM
+    ancestor like tr, product-card div, or form).  Each block is labeled by its
+    most descriptive text (product name, heading, etc.).  Elements without a
+    DOM container fall back to rect-based visual proximity grouping.
     """
     _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
     visible: list[dict] = []
@@ -563,9 +611,9 @@ def format_elements_for_prompt(elements: list[dict[str, Any]]) -> str:
         elif e.get("tag", "").casefold() in _INTERACTIVE_TAGS:
             hidden_interactive.append(e)
 
-    groups = _group_elements_by_visual_proximity(visible)
+    groups = _group_by_dom_container(visible)
     groups = _merge_small_groups(groups)
-    hidden_groups = _group_elements_by_visual_proximity(hidden_interactive)
+    hidden_groups = _group_by_dom_container(hidden_interactive)
     hidden_groups = _merge_small_groups(hidden_groups)
 
     # Build output: each group gets a labeled section with elements indented
@@ -860,6 +908,7 @@ def collect_interactable_elements(
                 "data_testid": elem.get("data_testid"),
                 "css_selector": elem.get("css_selector"),
                 "xpath": elem.get("xpath"),
+                "container_selector": elem.get("container_selector"),
                 "rect": elem.get("rect"),
                 "visible": elem.get("visible", False),
                 "enabled": elem.get("enabled", False),

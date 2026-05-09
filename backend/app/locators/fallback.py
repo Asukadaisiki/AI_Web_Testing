@@ -207,6 +207,26 @@ EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT = (
         const nameAttr = element.getAttribute("name");
         const classAttr = element.className || null;
         const idAttr = element.id || null;
+        // Find nearest meaningful DOM container (tr, product card, form, etc.)
+        let container = null;
+        let parent = element.parentElement;
+        while (parent && parent !== document.body && parent !== document.documentElement) {
+          const tag = parent.tagName.toLowerCase();
+          const hasId = parent.id && parent.id.length > 0;
+          const cls = (typeof parent.className === 'string' && parent.className.trim()) || '';
+          const isContainer = (
+            tag === 'tr' || tag === 'form' ||
+            /\\b(product|card|item|row|panel|section|block|module|widget|component|list-item|cart)\\b/i.test(cls)
+          );
+          if (hasId && isContainer) { container = parent; break; }
+          if (isContainer && !container) { container = parent; }
+          parent = parent.parentElement;
+        }
+        const containerSig = container
+          ? (container.id ? container.tagName.toLowerCase() + '#' + container.id
+             : container.tagName.toLowerCase() + '.' + ((typeof container.className === 'string' ? container.className.trim().split(/\\s+/)[0] : '') || ''))
+          : '';
+
         return {
           tag: element.tagName.toLowerCase(),
           text: text || null,
@@ -220,6 +240,7 @@ EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT = (
           id: idAttr || null,
           css_selector: buildCssSelector(element),
           xpath: buildXPath(element),
+          container_selector: containerSig || null,
           rect: {
             x: rect.x,
             y: rect.y,
