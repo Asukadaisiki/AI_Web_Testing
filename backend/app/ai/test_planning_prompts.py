@@ -114,10 +114,10 @@ SYSTEM_PROMPT_TEMPLATE = """\
 	   - 纯 URL 跳转的简单场景仍可用 urls 参数
 	   - 含登录/加购/提交/筛选等交互的流程 → 必须用 steps，格式：
 	     steps: [
-	       {url: "/login", description: "登录页", actions: [{action: "input", target: "Email Address", value: "..."}, {action: "input", target: "Password", value: "..."}, {action: "click", target: "Login"}]},
-	       {url: "/products", description: "商品列表页"},
-	       {url: "/brand_products/Polo", description: "筛选结果页", actions: [{action: "click", target: "Add to cart"}, {action: "click", target: "Continue Shopping"}]},
-	       {url: "/view_cart", description: "购物车（含商品）"}
+	       {{url: "/login", description: "登录页", actions: [{{action: "input", target: "Email Address", value: "..."}}, {{action: "input", target: "Password", value: "..."}}, {{action: "click", target: "Login"}}]}},
+	       {{url: "/products", description: "商品列表页"}},
+	       {{url: "/brand_products/Polo", description: "筛选结果页", actions: [{{action: "click", target: "Add to cart"}}, {{action: "click", target: "Continue Shopping"}}]}},
+	       {{url: "/view_cart", description: "购物车（含商品）"}}
 	     ]
 	   - 核心原则：不能直接 goto 一个状态依赖的页面（如 /view_cart），必须先通过 actions 执行前置操作，确保采集到的元素反映真实页面状态
 
