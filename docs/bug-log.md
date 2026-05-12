@@ -51,12 +51,12 @@
 ## BUG-084 | text_parent_chain 在品牌页第二个产品上回退到 VLM
 
 - 日期：2026-05-07
-- 状态：open
+- 状态：fixed ()
 - 来源：E2E 回归测试
-- 描述：Exec 118 Step 15 "Blue Top 附近的 Add to cart" 用 text_parent_chain 成功，但 Step 21 "Fancy Green Top 附近的 Add to cart" 回退到 ai_coordinate_click。Continue Shopping 后页面 DOM 状态变化，_find_in_ancestor 对第二个产品的祖先遍历失败。
-- 根因：第二个产品的 DOM 结构与第一个略有不同（可能因滚动/弹窗关闭后的页面重排）
-- 处理：待优化祖先查找算法或添加重试
-- 验证：未验证
+- 描述：Exec 118 Step 15 "Blue Top 附近的 Add to cart" 用 text_parent_chain 成功，但 Step 21 "Fancy Green Top 附近的 Add to cart" 回退到 ai_coordinate_click。`_find_in_ancestor` 始终使用 `.first` 获取第一个匹配的父文本元素，品牌页有两个产品时第二个匹配不到。
+- 根因：`_find_in_ancestor` 和 `_resolve_text_parent_chain` 始终用 `.first`，不尝试其他 nth 候选
+- 处理：`_find_in_ancestor` 和 `_resolve_text_parent_chain` 均改为迭代 `.nth(0..4)` 多个候选，找到第一个成功匹配的返回
+- 验证：33/33 语义单元测试通过
 
 ## BUG-083 | AI 将 assert_text 的 ${var} 放在 target 而非 value 导致断言被删除
 
@@ -167,13 +167,16 @@
 ## BUG-075 | 元素视觉分组的 group label 太粗糙
 
 - 日期：2026-05-07
-- 状态：open（待优化）
+- 状态：fixed ()
 - 来源：E2E 回归测试
-- 描述：`_group_elements_by_visual_proximity` 按 rect 坐标分组，但 group label 逻辑简单——优先取 h1-h4 文本，否则取第一个非泛型文本。导致部分分组只有 1-2 个元素被隔离为独立组，label 无意义（如 "button"）。
-- 影响：AI 看到的页面分组不够语义化，部分组没有有用的 label
-- 根因：坐标聚类算法对孤立元素过敏感
-- 处理：待后续优化分组算法（增大 tolerance、合并小 group）
-- 验证：用户手动清空购物车后重新执行，Exec 107 42/42=100% 全部通过
+- 描述：`_group_label` 的 if-elif 链太刚性，价格检测只匹配 `Rs.|₹|$|€|£` 格式遗漏纯数字价格，部分分组只有 1-2 个元素被隔离为独立组时 label 无意义。
+- 处理：
+  1. 价格检测增强：新增纯数字价格正则（`\d{1,3}(,\d{3})*(\.\d{2})`）
+  2. 新增块类型：搜索栏、登录表单、筛选面板（3+ checkbox/radio）、产品区域、输入区、交互区、链接区、按钮区
+  3. 渐进阈值回退：当前 10 级精确匹配 → 4 级宽泛匹配，避免直接落到"区域"
+  4. 命名增强：新增 aria_label 作为第三层 fallback
+  5. 结构摘要增加 checkbox 计数
+- 验证：542/544 单元测试通过
 
 ## BUG-074 | text_parent_chain 定位器未在 runner 候选列表中被优先尝试
 
@@ -743,28 +746,16 @@
 ## BUG-065 | explore_flow 相对 URL 被解析为 example.com
 
 - 日期：2026-05-12
-- 状态：open
+- 状态：fixed ()
 - 来源：E2E 测试
 - 影响：所有使用相对 URL 的 explore_flow 调用都会访问错误页面，导致页面元素采集失败
-
-**复现条件：**
-1. LLM 调用 explore_flow 时传相对路径 `{"url": "/login"}`
-2. `collect_flow_elements` 的 `base_url` 参数为空
-3. 代码 fallback 到 `https://example.com/`（page_explorer.py L1594）
-
-**定位结论：**
-- `planning_tools.py` 的 `_handle_explore_flow` 未传递 `base_url` 给 `collect_flow_elements`
-- session 的 `requirements_json` 在首次 LLM 调用时为空（LLM 还没返回 collected_info）
-- LLM 的 explore_flow params 中也没有 `base_url` 字段
-
-**已尝试修复：**
-1. 从 steps 中提取完整 URL → LLM 传的是相对路径，无效
-2. 从 session requirements_json 提取 → 首次调用时为空，无效
-3. 从用户消息中提取 URL → 已添加代码，待验证
-
-**建议最终修复：**
-- 在 explore_flow 工具描述中明确要求 LLM 使用完整 URL
-- 或在 `_handle_explore_flow` 中增加从用户消息提取 base_url 的逻辑
+- 根因：1) `page_explorer.py:1594` `base_url or "https://example.com/"` 硬编码兜底；2) `planning_tools.py` explore_flow 工具定义缺少 `base_url` 参数；3) `_handle_explore_flow` 的 base_url 提取逻辑仅在 steps 分支内
+- 处理：
+  1. `page_explorer.py` `collect_flow_elements` 和 `collect_multi_page_elements`：移除硬编码 example.com/automationexercise.com 默认值，改为 `None`；当 base_url 为空且 URL 为相对路径时，跳过并记录 SKIPPED 状态
+  2. `planning_tools.py` explore_flow 工具定义添加 `base_url` 可选参数
+  3. `planning_tools.py` `_handle_explore_flow`：将 base_url 提取逻辑（params → session requirements → user messages）重构到函数开头，steps 和 urls 两条路径共享
+  4. `test_planning_agent.py` 安全网调用：从 `requirements.entry_url_or_page` 提取 base_url 传入 explore_flow
+- 验证：542/544 单元测试通过
 
 ---
 

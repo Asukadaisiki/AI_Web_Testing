@@ -211,21 +211,29 @@ _PARENT_SPLIT_RE = re.compile(
 def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
     """Find child_text within the nearest common ancestor of parent_text element.
 
-    Tries depths 2-8, returning the SHALLOWEST ancestor that contains child_text.
+    Tries multiple parent_text matches (nth=0..4), each at depths 2-8,
+    returning the SHALLOWEST ancestor that contains child_text.
     This adapts to any DOM structure: table rows (~3 levels), cards (~5), modals (~2).
+    Also handles duplicate parent texts (e.g., multiple identical product names on a page).
     """
-    parent_el = page.get_by_text(parent_text, exact=False).first
-    for _depth in range(2, 9):
-        ancestor = parent_el
-        for _ in range(_depth):
-            ancestor = ancestor.locator("..")
+    parent_candidates = page.get_by_text(parent_text, exact=False)
+    max_try = min(parent_candidates.count(), 5)
+    for nth in range(max_try):
         try:
-            child = ancestor.get_by_text(child_text, exact=False)
-            n = child.count()
-            if n > 0:
-                return child.first
+            parent_el = parent_candidates.nth(nth)
         except Exception:
             continue
+        for _depth in range(2, 9):
+            ancestor = parent_el
+            for _ in range(_depth):
+                ancestor = ancestor.locator("..")
+            try:
+                child = ancestor.get_by_text(child_text, exact=False)
+                n = child.count()
+                if n > 0:
+                    return child.first
+            except Exception:
+                continue
     # Fallback: try without ancestor walk
     return page.get_by_text(child_text, exact=False).first
 
@@ -255,33 +263,44 @@ def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
         try:
             # For multi-level chains, iterate from outermost to innermost
             # e.g., "A" >> "B" >> "C" -> find B in A's ancestor, then find C in B's ancestor
-            current_locator = page.get_by_text(cleaned_parts[0], exact=False).first
+            # Try multiple matches of the first part to handle duplicate parent texts
+            first_candidates = page.get_by_text(cleaned_parts[0], exact=False)
+            max_first = min(first_candidates.count(), 5)
 
-            for i in range(1, len(cleaned_parts)):
-                parent_text = cleaned_parts[i - 1]
-                child_text = cleaned_parts[i]
+            for nth in range(max_first):
+                try:
+                    current_locator = first_candidates.nth(nth)
+                except Exception:
+                    continue
 
-                # Try to find child within the current context
-                found = False
-                for _depth in range(2, 9):
-                    ancestor = current_locator
-                    for _ in range(_depth):
-                        ancestor = ancestor.locator("..")
-                    try:
-                        child = ancestor.get_by_text(child_text, exact=False)
-                        n = child.count()
-                        if n > 0:
-                            current_locator = child.first
-                            found = True
-                            break
-                    except Exception:
-                        continue
+                for i in range(1, len(cleaned_parts)):
+                    parent_text = cleaned_parts[i - 1]
+                    child_text = cleaned_parts[i]
 
-                if not found:
-                    # Fallback: try direct search
-                    current_locator = page.get_by_text(child_text, exact=False).first
+                    found = False
+                    for _depth in range(2, 9):
+                        ancestor = current_locator
+                        for _ in range(_depth):
+                            ancestor = ancestor.locator("..")
+                        try:
+                            child = ancestor.get_by_text(child_text, exact=False)
+                            n = child.count()
+                            if n > 0:
+                                current_locator = child.first
+                                found = True
+                                break
+                        except Exception:
+                            continue
 
-            return current_locator
+                    if not found:
+                        # Try the next parent_text match instead of direct fallback
+                        break
+                else:
+                    # All levels matched for this nth — return the final locator
+                    return current_locator
+
+            # Fallback: try direct search for the last part
+            return page.get_by_text(cleaned_parts[-1], exact=False).first
         except Exception as exc:
             logger.debug("text_parent_chain failed for target=%r: %s", target, exc)
             raise

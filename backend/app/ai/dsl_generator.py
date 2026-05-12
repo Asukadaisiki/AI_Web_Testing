@@ -534,11 +534,14 @@ def generate_case_draft(
     # Sanitize lone surrogates from DeepSeek API response before JSON parsing.
     # Lone surrogates (U+DC80-U+DFFF) are invalid in UTF-8 and break split regexes.
     response_text = re.sub(r"[\udc80-\udfff]", "", response_text)
+    logger.info("DSL raw response length=%d, first=%s, last=%s",
+                len(response_text), response_text[:200], response_text[-200:])
     try:
         cleaned = _extract_json_object(response_text)
         raw_case = json.loads(cleaned)
     except json.JSONDecodeError as exc:
         preview = response_text[:1000].replace('\n', '\\n')
+        logger.error("DSL JSON parse error: %s, raw=%s", exc, response_text[:500])
         raise DslGenerationError(
             f"AI 返回了无法解析的 DSL JSON。原始响应前1000字符: {preview}"
         ) from exc
@@ -705,6 +708,88 @@ def _normalize_generated_case(
         warnings=warnings,
         normalization_notes=normalization_notes,
     )
+
+    # Auto-populate input_contract from ${var} references in steps
+    import re as _re
+    _var_refs: set[str] = set()
+    for _step in steps:
+        _s = _step.model_dump() if hasattr(_step, "model_dump") else _step
+        for _field in ("value", "target"):
+            _v = _s.get(_field) if isinstance(_s, dict) else getattr(_s, _field, None)
+            if isinstance(_v, str):
+                _var_refs.update(_re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}', _v))
+    _defined_keys = set()
+    for _ic in input_contract:
+        if isinstance(_ic, dict):
+            _defined_keys.add(_ic.get("context_key", ""))
+        elif hasattr(_ic, "context_key"):
+            _defined_keys.add(getattr(_ic, "context_key", ""))
+    _missing_keys = _var_refs - _defined_keys
+    for _mk in sorted(_missing_keys):
+        input_contract.append({
+            "name": _mk.replace("_", " ").title(),
+            "context_key": _mk,
+            "value_type": "string",
+            "required": True,
+            "description": f"自动从 DSL 步骤 ${{{_mk}}} 引用推断",
+        })
+        normalization_notes.append(f"input_contract 已自动补全 ${_mk}。")
+
+    # Deduplicate repeated step groups (LLM thinking mode can produce duplicate blocks)
+    _dedup_steps = _deduplicate_repeated_blocks(steps)
+    if len(_dedup_steps) < len(steps):
+        normalization_notes.append(
+            f"已移除 {len(steps) - len(_dedup_steps)} 个重复步骤（LLM 输出重复块）。"
+        )
+        steps[:] = _dedup_steps
+
+    # Auto-assign context_key for capture_text steps that are missing it
+    _capture_idx = 0
+    for _s in steps:
+        _sd = _s.model_dump() if hasattr(_s, "model_dump") else _s
+        if not isinstance(_sd, dict):
+            continue
+        if _sd.get("action") == "capture_text":
+            _ck = _sd.get("context_key", "")
+            if not _ck:
+                _tgt = _sd.get("target", "")
+                # Generate a key from target text or sequential index
+                if _tgt and not _tgt.startswith("css="):
+                    _key = _re.sub(r'[^a-z0-9_]', '_', _tgt.strip().lower())[:30].strip('_')
+                    _key = _key or f"captured_{_capture_idx}"
+                else:
+                    _key = f"captured_{_capture_idx}"
+                _s.context_key = _key
+                normalization_notes.append(f"capture_text 已自动补全 context_key: {_key}")
+                _capture_idx += 1
+
+    # Fix assert_text with ${var} as target: map back to capture_text's original target
+    _captured: dict[str, str] = {}  # context_key → original target text
+    for _s in steps:
+        _sd = _s.model_dump() if hasattr(_s, "model_dump") else _s
+        if not isinstance(_sd, dict):
+            continue
+        if _sd.get("action") == "capture_text":
+            _ck = _sd.get("context_key", "")
+            _tgt = _sd.get("target", "")
+            if _ck and _tgt:
+                _captured[_ck] = _tgt
+    for _s in steps:
+        _sd = _s.model_dump() if hasattr(_s, "model_dump") else _s
+        if not isinstance(_sd, dict):
+            continue
+        if _sd.get("action") == "assert_text":
+            _tgt = _sd.get("target", "")
+            _val = _sd.get("value", "")
+            _m = _re.match(r'^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$', _tgt.strip())
+            if _m and _m.group(1) in _captured:
+                _new_target = _captured[_m.group(1)]
+                _s.target = _new_target
+                if not _val or _val.strip() == _tgt.strip():
+                    _s.value = _new_target
+                normalization_notes.append(
+                    f"assert_text target=${{{_m.group(1)}}} 已映射回 capture_text 原始 target: {_new_target[:60]}"
+                )
 
     _check_dsl_completeness(
         {"base_url": base_url_value, "steps": steps},
@@ -1088,6 +1173,49 @@ def _verify_field_coverage(
                 f"字段覆盖检查：prompt 中提到了 \"{expected}\"，"
                 f"但生成的步骤中没有对应的 input/click 操作。"
             )
+
+
+def _deduplicate_repeated_blocks(steps: list[Any]) -> list[Any]:
+    """Remove repeated step blocks caused by LLM output duplication.
+
+    Detects when steps[0:N] or steps[M:2M] are repeated later in the sequence.
+    Uses action+target fingerprinting to identify duplicate blocks.
+    """
+    if len(steps) < 6:
+        return list(steps)
+
+    def _fingerprint(step: Any) -> tuple[str, str]:
+        if isinstance(step, dict):
+            return (step.get("action", ""), (step.get("target") or "").strip())
+        return (getattr(step, "action", ""), (getattr(step, "target", "") or "").strip())
+
+    # Find the longest prefix that repeats later
+    n = len(steps)
+    best_cut = n  # Where the non-duplicate part ends
+
+    # Scan for repeated blocks: try various block sizes
+    for block_size in range(3, n // 2 + 1):
+        prefix_fps = [_fingerprint(steps[i]) for i in range(block_size)]
+        # Look for this block repeating after block_size
+        match_count = 0
+        for start in range(block_size, n - block_size + 1, block_size):
+            seg_fps = [_fingerprint(steps[j]) for j in range(start, min(start + block_size, n))]
+            if seg_fps == prefix_fps:
+                match_count += 1
+            else:
+                break
+        if match_count >= 1:
+            # Found a repeated block — cut after the first occurrence + unique suffix
+            unique_start = block_size * (match_count + 1)
+            if unique_start < n:
+                # Keep first occurrence + trailing unique steps
+                best_cut = min(best_cut, block_size + (n - unique_start))
+            else:
+                best_cut = min(best_cut, block_size)
+
+    if best_cut < n:
+        return list(steps[:best_cut])
+    return list(steps)
 
 
 def _check_step_verification(
@@ -1833,8 +1961,9 @@ def _call_llm(
     thinking_enabled = _should_enable_thinking_mode(base_url=base_url, model=model)
     logger.info("DSL _call_llm: model=%s, thinking=%s, base_url=%s", model, thinking_enabled, base_url)
     if thinking_enabled:
-        payload["thinking"] = {"type": "enabled", "effort": "max"}
+        payload["thinking"] = {"type": "enabled", "effort": "medium"}
         payload["max_tokens"] = 65536
+        payload["temperature"] = 0.0
     else:
         payload["temperature"] = 0.0
         payload["response_format"] = {"type": "json_object"}

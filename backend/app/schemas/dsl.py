@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class DSLModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
 
 # Commonly recognized locator strategies.  The DSL generator may emit
@@ -68,7 +68,7 @@ _STRATEGY_NORMALIZE: dict[str, str] = {
 
 class LocatorCandidate(BaseModel):
     """Pre-scored candidate locator strategy for a DSL step."""
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     strategy: str = Field(description="Locator strategy name (normalized at runtime)")
 
@@ -84,7 +84,7 @@ class LocatorCandidate(BaseModel):
 
 class Postcondition(BaseModel):
     """Post-action verification condition."""
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     type: Literal[
         "url_contains", "url_changes", "text_visible",
@@ -270,13 +270,9 @@ class GenerateDslRequest(DSLModel):
 
     @model_validator(mode="after")
     def validate_retry_context(self) -> "GenerateDslRequest":
-        if self.retry_from_generation_id is None:
-            if self.retry_reason_code is not None or self.retry_note is not None:
-                raise ValueError("retry_reason_code / retry_note 只能与 retry_from_generation_id 一起提交。")
-            return self
-
-        if self.retry_reason_code is None:
+        if self.retry_from_generation_id is not None and self.retry_reason_code is None:
             raise ValueError("retry_from_generation_id 存在时必须提供 retry_reason_code。")
+        return self
         return self
 
 

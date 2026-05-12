@@ -171,7 +171,13 @@ def retrieve_relevant_anti_patterns(
             if "<input" in elements_lower and "input" in snippet_str:
                 score += 0.5
 
-        # 4. Frequency bonus (capped)
+        # 4. Source priority: execution evidence > preflight > auto
+        if anti.source == "execution":
+            score += 3.0
+        elif anti.source == "preflight":
+            score += 1.5
+
+        # 5. Frequency bonus (capped)
         score += min(anti.frequency / 10, 2.0)
 
         scored.append((score, anti))

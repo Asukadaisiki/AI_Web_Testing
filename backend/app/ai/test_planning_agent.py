@@ -415,11 +415,19 @@ def stream_planning_turn(
                     )[:4]
                     # Build flow steps with description so elements get page_state markers
                     flow_steps = _build_safety_net_steps(fallback_urls, requirements.core_user_flow)
+                    # Extract base_url from requirements for relative URL resolution (BUG-065)
+                    safety_net_params: dict[str, Any] = {"steps": flow_steps}
+                    if requirements.entry_url_or_page:
+                        from urllib.parse import urlparse
+                        entry = requirements.entry_url_or_page
+                        if entry.startswith("http"):
+                            parsed = urlparse(entry)
+                            safety_net_params["base_url"] = f"{parsed.scheme}://{parsed.netloc}"
                     logger.info("Safety-net: auto-exploring %d steps for URLs %s", len(flow_steps), fallback_urls)
                     try:
                         flow_result_text = execute_tool(
                             tool_name="explore_flow",
-                            params={"steps": flow_steps},
+                            params=safety_net_params,
                             db_session=db_session,
                             project_id=project_id,
                             actor_user_id=actor_user_id,
@@ -429,7 +437,7 @@ def stream_planning_turn(
                         tool_calls.append(
                             AIPlanningToolCall(
                                 tool="explore_flow",
-                                params={"steps": flow_steps},
+                                params=safety_net_params,
                                 result=flow_result,
                             )
                         )

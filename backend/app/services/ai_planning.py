@@ -429,9 +429,31 @@ def generate_planning_drafts(
                 AIPlanningDraft.scenario_key == scenario_key,
             )
         )
+        # Self-healing: reuse successful drafts; regenerate failed ones with anti-pattern learning
+        retry_reason_code: str | None = None
         if existing is not None:
-            drafts.append(_to_draft_schema(existing))
-            continue
+            if existing.status == "generated":
+                drafts.append(_to_draft_schema(existing))
+                continue
+            if existing.status in ("imported", "rejected"):
+                drafts.append(_to_draft_schema(existing))
+                continue
+            # status == "failed": delete and regenerate with anti-patterns as few-shot
+            prev_error = existing.error_message or ""
+            if "缺少页面导航" in prev_error or "缺少导航" in prev_error:
+                retry_reason_code = "missing_navigation"
+            elif "缺少 input" in prev_error or "输入步骤" in prev_error:
+                retry_reason_code = "missing_step"
+            elif "capture_text" in prev_error:
+                retry_reason_code = "missing_capture_text"
+            else:
+                retry_reason_code = "invalid_structure"
+            logger.info(
+                "Self-healing: deleting failed draft #%d for scenario '%s', retry=%s",
+                existing.id, scenario_key, retry_reason_code,
+            )
+            session.delete(existing)
+            session.flush()
 
         # Block draft generation if page exploration failed (no DOM elements)
         page_elements = scenario.get("page_elements")
@@ -478,6 +500,7 @@ def generate_planning_drafts(
                         preserve_contracts=payload.preserve_contracts,
                         page_elements=str(page_elements),
                         flow_steps=flow_steps,
+                        retry_reason_code=retry_reason_code,
                     ),
                     flow_steps=flow_steps,
                     page_elements_by_state=page_elements_by_state,
@@ -503,6 +526,7 @@ def generate_planning_drafts(
                         current_output_contract=payload.current_output_contract,
                         preserve_contracts=payload.preserve_contracts,
                         page_elements=scenario.get("page_elements"),
+                        retry_reason_code=retry_reason_code,
                     ),
                 )
             # --- Locator preflight (Phase 3) ---
@@ -528,10 +552,13 @@ def generate_planning_drafts(
                 preflight_warnings = pf.get("warnings", [])
                 preflight_confidence = pf.get("locator_confidence", "unknown")
                 step_results = pf.get("step_results", [])
-                # --- Preflight gate: reject if too many targets are unmatched ---
+                # --- Preflight gate: reject low-quality locators ---
                 total_targets = len(step_results)
                 unmatched = sum(1 for sr in step_results if sr.get("match_count", 0) == 0)
+                low_conf = sum(1 for sr in step_results if sr.get("confidence") == "low")
                 unmatched_ratio = unmatched / total_targets if total_targets > 0 else 0
+                low_ratio = low_conf / total_targets if total_targets > 0 else 0
+
                 if unmatched_ratio > 0.5:
                     preflight_rejected = True
                     unresolved_states: set[str] = set()
@@ -539,10 +566,31 @@ def generate_planning_drafts(
                         if sr.get("match_count", 0) == 0 and sr.get("target"):
                             unresolved_states.add(sr["target"][:80])
                     rejection_msg = (
-                        f"Preflight gate rejected DSL: {unmatched}/{total_targets} steps "
-                        f"({unmatched_ratio*100:.0f}%) have locator targets not found in "
-                        f"{len(page_elements_list)} explored elements. "
-                        f"Missing targets: {', '.join(sorted(unresolved_states)[:5])}"
+                        f"Preflight gate: {unmatched}/{total_targets} steps have targets "
+                        f"not found in {len(page_elements_list)} explored elements.\n"
+                        f"Missing: {', '.join(sorted(unresolved_states)[:5])}"
+                    )
+                    raise ValueError(rejection_msg)
+
+                if low_ratio > 0.5 and unmatched_ratio < 0.5:
+                    preflight_rejected = True
+                    _low_suggestions: list[str] = []
+                    for sr in step_results:
+                        if sr.get("confidence") != "low":
+                            continue
+                        _t = sr.get("target", "")[:60]
+                        _alts: list[str] = []
+                        for me in sr.get("matched_elements", [])[:2]:
+                            _text = (me.get("text") or "").strip()
+                            if _text and _text not in _alts and f"'{_text}'" != _t[:len(_text)+2]:
+                                _alts.append(f"'{_text}'")
+                        _hint = f"  {_t} → 建议用 {', '.join(_alts)}" if _alts else f"  {_t}"
+                        _low_suggestions.append(_hint)
+                    rejection_msg = (
+                        f"Preflight gate: {low_conf}/{total_targets} steps ({low_ratio*100:.0f}%) "
+                        f"have low-confidence locators.\n"
+                        f"请使用页面元素清单中的实际可见文本作为 target：\n"
+                        + "\n".join(_low_suggestions[:8])
                     )
                     raise ValueError(rejection_msg)
                 logger.info(
@@ -589,6 +637,36 @@ def generate_planning_drafts(
                 normalization_notes_json=[],
                 error_message=str(exc),
             )
+            # --- Self-healing: record anti-pattern for failed draft ---
+            try:
+                from app.services.anti_patterns import (
+                    record_anti_pattern,
+                    MISSING_NAVIGATION, MISSING_STEP,
+                    MISSING_CAPTURE_TEXT, MISSING_INPUT_BEFORE_ASSERT,
+                )
+                err_msg = str(exc)
+                # Classify error message to anti-pattern category
+                if "缺少页面导航" in err_msg or "缺少导航" in err_msg:
+                    category = MISSING_NAVIGATION
+                elif "缺少 input" in err_msg or "输入步骤" in err_msg:
+                    category = MISSING_INPUT_BEFORE_ASSERT
+                elif "capture_text" in err_msg and "assert" in err_msg:
+                    category = MISSING_CAPTURE_TEXT
+                else:
+                    category = MISSING_STEP
+                # Capture the wrong step snippet from the error context if available
+                snippet: dict[str, Any] = {"error": err_msg[:500]}
+                context_note = err_msg[:500] if len(err_msg) <= 500 else err_msg[:497] + "..."
+                record_anti_pattern(
+                    session,
+                    error_category=category,
+                    wrong_snippet=snippet,
+                    context_note=context_note,
+                    source="auto",
+                    project_id=project_ids[0],
+                )
+            except Exception as ap_exc:
+                logger.warning("Failed to record anti-pattern: %s", ap_exc)
         session.add(record)
         session.flush()
         drafts.append(_to_draft_schema(record))
@@ -947,6 +1025,200 @@ def _inject_auto_context(
     return [{"role": "system", "content": preamble}, *transcript]
 
 
+def _record_execution_anti_patterns(
+    session: Session,
+    case_id: int,
+    scenario_key: str,
+    project_id: int,
+) -> None:
+    """Analyze the latest execution of *case_id* and record failed steps as anti-patterns.
+
+    Only processes the most recent execution run. Each failed step becomes an
+    anti-pattern entry that the DSL generator can use as a few-shot negative example
+    on the next retry — the AI sees what went wrong and self-corrects.
+    """
+    from sqlalchemy import desc
+    from app.models import TestCaseRun
+    from app.services.anti_patterns import (
+        record_anti_pattern, TARGET_NOT_FOUND, MISSING_STEP, WRONG_PAGE_STATE,
+    )
+
+    latest_run = session.execute(
+        select(TestCaseRun)
+        .where(TestCaseRun.case_id == case_id)
+        .order_by(desc(TestCaseRun.id))
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if not latest_run or not latest_run.report:
+        return
+
+    report = latest_run.report if isinstance(latest_run.report, dict) else {}
+    steps = report.get("steps") or []
+    if not steps:
+        return
+
+    for step in steps:
+        if step.get("status") != "failed":
+            continue
+        action = step.get("action", "")
+        target = step.get("target") or ""
+        error_msg = step.get("error_message") or ""
+        resolved_by = step.get("resolved_by") or "unknown"
+        dom_text = ""
+        dom_snap = step.get("dom_summary") or {}
+        if isinstance(dom_snap, dict):
+            dom_text = dom_snap.get("text_preview", "")[:200]
+
+        # Classify the failure
+        if action == "assert_text":
+            # Extract expected vs actual from error message
+            import re
+            expected_match = re.search(r"to contain text '([^']*)'", error_msg)
+            actual_match = re.search(r"unexpected value \"([^\"]*)\"", error_msg)
+            expected_val = expected_match.group(1) if expected_match else ""
+            actual_val = actual_match.group(1) if actual_match else ""
+            context_note = (
+                f"assert_text target='{target[:80]}' value='{expected_val[:50]}' 失败"
+                f"——实际定位到的是 '{actual_val[:50]}'"
+                f"（定位策略: {resolved_by}）。↓"
+                f"可能原因: 1) target 文本在页面上匹配了错误元素"
+                f" 2) text_parent_chain 消歧不够精确"
+                f" 3) 应改用更精确的 target（如 '产品名 附近的 数量文字'）"
+            )
+        elif action == "click":
+            if "timeout" in error_msg.lower() or "not found" in error_msg.lower():
+                context_note = (
+                    f"click target='{target[:80]}' 失败——元素未找到或不可见。"
+                    f"↓ 需要检查 target 是否与实际页面文本一致"
+                    f"（DOM 片段: {dom_text[:100]}）"
+                )
+            else:
+                context_note = f"click target='{target[:80]}' 失败: {error_msg[:200]}"
+        elif action == "input":
+            context_note = (
+                f"input target='{target[:80]}' 失败: {error_msg[:200]}。"
+                f"↓ 检查 target 是否匹配正确的输入框"
+            )
+        else:
+            context_note = f"{action} target='{target[:80]}' 失败: {error_msg[:200]}"
+
+        # Build the wrong snippet
+        snippet: dict[str, Any] = {
+            "action": action,
+            "target": target,
+            "value": step.get("value"),
+            "resolved_by": resolved_by,
+        }
+
+        # Determine category
+        if "assert_text" in action and actual_val and expected_val != actual_val:
+            category = WRONG_PAGE_STATE  # assertion matched wrong element
+        elif "timeout" in error_msg.lower() or "not found" in error_msg.lower():
+            category = TARGET_NOT_FOUND
+        else:
+            category = MISSING_STEP
+
+        record_anti_pattern(
+            session,
+            error_category=category,
+            wrong_snippet=snippet,
+            context_note=context_note,
+            source="execution",
+            project_id=project_id,
+        )
+        logger.info(
+            "Execution anti-pattern recorded: case=%d step=%s target=%s category=%s",
+            case_id, action, target[:60], category,
+        )
+
+
+def _build_input_values_from_session(
+    requirements_json: dict[str, Any],
+    dsl_case_jsons: list[dict[str, Any] | None],
+) -> dict[str, str]:
+    """Auto-resolve input_values from session's test data and draft contracts.
+
+    Parses ``test_data_or_account`` for patterns like "key：value" or "key: value",
+    then matches against draft ``input_contract`` context_keys using fuzzy heuristics.
+    """
+    import re
+    result: dict[str, str] = {}
+    raw = (requirements_json.get("test_data_or_account") or "").strip()
+    if not raw:
+        return result
+
+    # Collect all context_keys from input_contracts
+    context_keys: set[str] = set()
+    for case_json in dsl_case_jsons:
+        if not case_json:
+            continue
+        for ic in case_json.get("input_contract", []) or []:
+            key = ic.get("context_key") or ""
+            if key:
+                context_keys.add(key)
+    if not context_keys:
+        return result
+
+    # Parse test_data: split on common delimiters (newline, comma, semicolon, Chinese comma)
+    entries = re.split(r"[\n,，;；]", raw)
+    # Also try to split on newlines first
+    if "\n" in raw:
+        entries = raw.split("\n")
+    pairs: dict[str, str] = {}
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        # Pattern: "label：value" or "label: value" or "label=value"
+        m = re.match(r"(.+?)[：:=]\s*(.+)", entry)
+        if m:
+            pairs[m.group(1).strip()] = m.group(2).strip()
+        else:
+            # Single value: try to match to a context_key by type
+            if re.match(r"[\w.+-]+@[\w-]+\.[\w.]+", entry):
+                pairs["email"] = entry
+            elif entry.startswith("http"):
+                pairs["url"] = entry
+            elif len(entry) >= 4:
+                pairs.setdefault("_unmatched", entry)
+
+    # Match parsed pairs to context_keys
+    for ck in context_keys:
+        ck_lower = ck.lower()
+        for label, value in pairs.items():
+            label_lower = label.lower()
+            # Direct match: context_key in label
+            if ck_lower in label_lower or label_lower in ck_lower:
+                result[ck] = value
+                break
+            # Type heuristic: email
+            if ("email" in ck_lower or "mail" in ck_lower or "username" in ck_lower) and "@" in value:
+                result[ck] = value
+                break
+            # Type heuristic: password
+            if "password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower:
+                result[ck] = value
+                break
+        # Fallback: use first available value that looks like a credential
+        if ck not in result:
+            for _, value in pairs.items():
+                if "@" in value and ("email" in ck_lower or "login" in ck_lower or "user" in ck_lower):
+                    result[ck] = value
+                    break
+                if len(value) >= 4 and ("password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower):
+                    result[ck] = value
+                    break
+        # Last resort: assign the first string value that matches length heuristic
+        if ck not in result:
+            for _, value in pairs.items():
+                if len(value) >= 3 and value not in result.values():
+                    result[ck] = value
+                    break
+
+    return result
+
+
 def save_and_execute_selected_drafts(
     session: Session,
     planning_session_id: int,
@@ -1010,6 +1282,17 @@ def save_and_execute_selected_drafts(
             saved_cases=saved_cases,
         )
 
+    # Auto-fill input_values from session test data if not provided by caller
+    if not input_values:
+        input_values = _build_input_values_from_session(
+            planning_session.requirements_json or {},
+            [d.dsl_case_json for d in drafts if d.dsl_case_json],
+        )
+        logger.info(
+            "Auto-resolved input_values from session data: %s",
+            {k: v[:3] + '***' for k, v in input_values.items()} if input_values else {},
+        )
+
     execution_summaries: list[ExecutionSummaryResult] = []
     for saved in saved_cases:
         payload = CaseExecutionRequest(actor_user_id=actor_user_id, input_values=input_values or {})
@@ -1028,6 +1311,18 @@ def save_and_execute_selected_drafts(
             screenshot_url=result.latest_screenshot_url,
             report_url=f"/run/{result.id}",
         ))
+
+    # --- Self-healing: record execution failures as anti-patterns ---
+    for saved in saved_cases:
+        draft = next((d for d in drafts if d.dsl_case_json and d.dsl_case_json.get("name") == saved.case_name), None)
+        if draft is None:
+            continue
+        try:
+            _record_execution_anti_patterns(
+                session, saved.case_id, draft.scenario_key, project_ids[0],
+            )
+        except Exception as ap_exc:
+            logger.warning("Execution anti-pattern recording failed: %s", ap_exc)
 
     lines = ["测试执行完成：\n"]
     for ex in execution_summaries:
@@ -1337,6 +1632,21 @@ def retest_cases(
             next_action="ask_followup",
             saved_cases=[],
             execution_summaries=[],
+        )
+
+    # Auto-fill input_values from session test data if not provided
+    if not input_values:
+        # Collect dsl_case_json from all cases being retested
+        cases_json: list[dict[str, Any] | None] = []
+        for cid in case_ids:
+            cr = session.get(TestCase, cid)
+            cases_json.append(cr.dsl if cr else None)
+        input_values = _build_input_values_from_session(
+            planning_session.requirements_json or {}, cases_json,
+        )
+        logger.info(
+            "Retest auto-resolved input_values: %s",
+            {k: v[:3] + '***' for k, v in input_values.items()} if input_values else {},
         )
 
     execution_summaries: list[ExecutionSummaryResult] = []

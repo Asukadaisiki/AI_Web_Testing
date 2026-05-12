@@ -787,7 +787,11 @@ def _capture_anti_patterns_from_warnings(
     """
     import re
     import json as _json
-    from app.services.anti_patterns import record_anti_pattern, TARGET_NOT_FOUND, MISSING_STEP
+    from app.services.anti_patterns import (
+        record_anti_pattern,
+        TARGET_NOT_FOUND, MISSING_STEP, MISSING_NAVIGATION,
+        MISSING_CAPTURE_TEXT, WRONG_PAGE_STATE,
+    )
 
     if not warnings:
         return
@@ -801,7 +805,6 @@ def _capture_anti_patterns_from_warnings(
         m = re.search(r'target\s+"([^"]+)"\s+在已采集.*未找到匹配', warning)
         if m:
             target = m.group(1)
-            # Find the step with this target
             for step in steps:
                 step_dict = step if isinstance(step, dict) else (step.model_dump() if hasattr(step, "model_dump") else {})
                 if step_dict.get("target") == target:
@@ -829,6 +832,43 @@ def _capture_anti_patterns_from_warnings(
                     wrong_snippet=step_dict,
                     context_note=f"步骤校验失败: action={action}",
                     source="validation",
+                    project_id=payload.project_id,
+                )
+
+        # Pattern: click "X" 可能触发页面跳转但下一步非验证步骤
+        m = re.search(r'步骤 (\d+) click "([^"]+)" 可能触发页面跳转.*下一步是 (\S+) ', warning)
+        if m:
+            step_idx = int(m.group(1)) - 1
+            target_clicked = m.group(2)
+            if 0 <= step_idx < len(steps):
+                step = steps[step_idx]
+                step_dict = step if isinstance(step, dict) else (step.model_dump() if hasattr(step, "model_dump") else {})
+                record_anti_pattern(
+                    session,
+                    error_category=MISSING_NAVIGATION,
+                    wrong_snippet=step_dict,
+                    context_note=f'click "{target_clicked}" 后缺少 wait_for/assert 验证步骤',
+                    rule_violated="R3",
+                    source="auto",
+                    project_id=payload.project_id,
+                )
+
+        # Pattern: capture_text without following assert_text
+        m = re.search(r'capture_text.*(\w+).*但未', warning)
+        if m:
+            context_key = m.group(1)
+            for step in steps:
+                step_dict = step if isinstance(step, dict) else (step.model_dump() if hasattr(step, "model_dump") else {})
+                if step_dict.get("action") == "assert_text" and str(step_dict.get("value", "")).find(context_key) >= 0:
+                    break
+            else:
+                # No assert found referencing this capture
+                record_anti_pattern(
+                    session,
+                    error_category=MISSING_CAPTURE_TEXT,
+                    wrong_snippet={"warning": warning[:300]},
+                    context_note=f"capture_text 缺少对应的 assert_text: {warning[:200]}",
+                    source="auto",
                     project_id=payload.project_id,
                 )
 

@@ -744,17 +744,44 @@ def _handle_explore_flow(
     flow_description = params.get("flow_description")
     planning_session_id = int(params.get("planning_session_id", 0))
 
+    # Resolve base_url: 1) from params, 2) from session requirements, 3) from messages
+    resolved_base_url = params.get("base_url") or ""
+    if not resolved_base_url and planning_session_id:
+        from app.models import AIPlanningSession, AIPlanningMessage
+        from sqlalchemy import select, desc
+        session_obj = db_session.get(AIPlanningSession, planning_session_id)
+        if session_obj and session_obj.requirements_json:
+            entry = session_obj.requirements_json.get("entry_url_or_page", "")
+            if entry and entry.startswith("http"):
+                from urllib.parse import urlparse
+                parsed = urlparse(entry)
+                resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
+        if not resolved_base_url:
+            import re
+            msg = db_session.execute(
+                select(AIPlanningMessage.content)
+                .where(AIPlanningMessage.session_id == planning_session_id)
+                .where(AIPlanningMessage.role == "user")
+                .order_by(desc(AIPlanningMessage.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            if msg:
+                url_match = re.search(r'https?://[^\s]+', msg)
+                if url_match:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(url_match.group(0))
+                    resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
+    logger.info("explore_flow: resolved_base_url=%s", resolved_base_url)
+
     if isinstance(flow_steps, list) and flow_steps:
         from app.ai.page_explorer import collect_flow_elements, build_flow_formatted_output
 
         logger.info("explore_flow: %d steps, flow=%s, project_id=%d, session_id=%d",
                     len(flow_steps), flow_description or "-", project_id, planning_session_id)
 
-        # Resolve base_url: 1) from params, 2) from steps, 3) from session, 4) from messages
-        resolved_base_url = params.get("base_url") or ""
+        # Extract base_url from steps with full URLs if not already resolved
         if not resolved_base_url:
             from urllib.parse import urlparse
-            # Try to extract from any step that has a full URL
             for step in flow_steps:
                 if isinstance(step, dict):
                     step_url = step.get("url", "")
@@ -762,33 +789,6 @@ def _handle_explore_flow(
                         parsed = urlparse(step_url)
                         resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
                         break
-        if not resolved_base_url and planning_session_id:
-            from app.models import AIPlanningSession, AIPlanningMessage
-            from sqlalchemy import select, desc
-            session_obj = db_session.get(AIPlanningSession, planning_session_id)
-            # Try requirements_json
-            if session_obj and session_obj.requirements_json:
-                entry = session_obj.requirements_json.get("entry_url_or_page", "")
-                if entry and entry.startswith("http"):
-                    parsed = urlparse(entry)
-                    resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
-            # Fallback: extract from user message
-            if not resolved_base_url:
-                import re
-                msg = db_session.execute(
-                    select(AIPlanningMessage.content)
-                    .where(AIPlanningMessage.session_id == planning_session_id)
-                    .where(AIPlanningMessage.role == "user")
-                    .order_by(desc(AIPlanningMessage.id))
-                    .limit(1)
-                ).scalar_one_or_none()
-                if msg:
-                    url_match = re.search(r'https?://[^\s]+', msg)
-                    if url_match:
-                        parsed = urlparse(url_match.group(0))
-                        resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
-
-        logger.info("explore_flow: resolved_base_url=%s", resolved_base_url)
 
         storage_dir = _resolve_storage_state_dir()
         storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
@@ -810,6 +810,15 @@ def _handle_explore_flow(
         # --- Disambiguation check: warn if actions used generic targets ---
         disambiguation_warnings = _check_action_disambiguation(flow_steps, page_results)
 
+        # --- Base URL check: warn if steps were skipped due to missing base_url ---
+        skipped_count = sum(1 for pr in page_results if pr.get("page_state") == "SKIPPED")
+        base_url_warning = None
+        if skipped_count > 0:
+            base_url_warning = (
+                f"{skipped_count} 个步骤使用了相对 URL 但缺少 base_url 无法解析。"
+                "请提供完整 URL（如 https://example.com/login）或通过 base_url 参数指定网站基础地址。"
+            )
+
         result: dict[str, Any] = {
             "pages": page_results,
             "formatted": combined_formatted,
@@ -823,6 +832,11 @@ def _handle_explore_flow(
                 "部分 actions 使用了泛化 target（如 'Add to cart'），可能匹配到错误元素。"
                 "下次调用时请用 '产品名 附近的 Add to cart' 格式消歧。"
             )
+        if base_url_warning:
+            if result.get("warning"):
+                result["warning"] += " " + base_url_warning
+            else:
+                result["warning"] = base_url_warning
         return result
 
     # --- Legacy URL-based exploration ---
@@ -843,6 +857,7 @@ def _handle_explore_flow(
         valid_urls,
         storage_state_path=storage_path,
         enable_vlm_annotation=True,
+        base_url=resolved_base_url or None,
         session_id=planning_session_id,
     )
 
@@ -1164,7 +1179,7 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
     ),
     "explore_flow": PlanningTool(
         name="explore_flow",
-        description="沿用户测试流程探索多个页面，在每个页面执行交互动作后采集可交互元素和视觉布局。优先使用 steps 参数（动作式探索），仅在纯静态页面浏览场景使用 urls 参数。steps 模式可执行 click/input/wait_for 动作，确保采集到的元素反映真实页面状态（如登录后、加购后）。会复用浏览器会话。重要：actions 中的 target 必须足够精确以区分页面上的同类元素。例如页面有多个 'Add to cart' 按钮时，必须用 'Blue Top 附近的 Add to cart' 这种消歧格式，不能只写 'Add to cart'。",
+        description="沿用户测试流程探索多个页面，在每个页面执行交互动作后采集可交互元素和视觉布局。优先使用 steps 参数（动作式探索），仅在纯静态页面浏览场景使用 urls 参数。steps 模式可执行 click/input/wait_for 动作，确保采集到的元素反映真实页面状态（如登录后、加购后）。会复用浏览器会话。探索阶段 target 可用泛化文本（如 'Add to cart'、'Continue Shopping'），探索器自动匹配第一个可交互元素——目的是把页面带到正确状态。当你还不知道页面上有哪些商品时，可以先用泛化 target 探索，拿到商品名后再用于 DSL 生成。",
         parameters={
             "type": "object",
             "properties": {
@@ -1200,6 +1215,10 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
                 "flow_description": {
                     "type": "string",
                     "description": "可选。对该流程的语义描述（如\"首页→登录→商品搜索→加入购物车→结算\"），帮助探索器理解页面间的导航意图。",
+                },
+                "base_url": {
+                    "type": "string",
+                    "description": "可选。网站基础 URL（如 https://example.com）。如果 steps/urls 中使用相对路径（如 /login、/products），必须提供 base_url 以便正确解析。可从用户提供的入口 URL 中提取 scheme://host 部分。",
                 },
             },
             "required": [],

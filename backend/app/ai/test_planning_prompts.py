@@ -116,11 +116,12 @@ SYSTEM_PROMPT_TEMPLATE = """\
 	     steps: [
 	       {{url: "/login", description: "登录页", actions: [{{action: "input", target: "Email Address", value: "..."}}, {{action: "input", target: "Password", value: "..."}}, {{action: "click", target: "Login"}}]}},
 	       {{url: "/products", description: "商品列表页"}},
-	       {{url: "/brand_products/Polo", description: "筛选结果页", actions: [{{action: "click", target: "Blue Top 附近的 Add to cart"}}, {{action: "click", target: "Continue Shopping"}}]}},
-	       {{url: "/view_cart", description: "购物车（含商品）"}}
+	       {{url: "/brand_products/Polo", description: "筛选结果页", actions: [{{action: "click", target: "Add to cart"}}, {{action: "click", target: "Continue Shopping"}}, {{action: "click", target: "Add to cart"}}, {{action: "click", target: "View Cart"}}]}},
+	       {{url: "/view_cart", description: "购物车（含两件商品）"}}
 	     ]
 	   - 核心原则：不能直接 goto 一个状态依赖的页面（如 /view_cart），必须先通过 actions 执行前置操作，确保采集到的元素反映真实页面状态
-	   - 【重要】actions 中的 target 必须精确区分页面上的同类元素。页面有多个 "Add to cart" 按钮时，必须用 "产品名 附近的 Add to cart" 格式消歧
+	   - 【探索 vs DSL 的区别】探索时 actions 的 target 可以用泛化文本（如 "Add to cart"、"Continue Shopping"、"View Cart"），探索器会自动定位到第一个可匹配的元素——此时目的是把页面带到正确状态，不需要精确到具体商品。但生成 DSL 时 target 必须精确（如 "Blue Top 附近的 Add to cart"），因为 DSL 需要准确测试指定商品。
+	   - 【不知道商品名时怎么办】如果你还不知道品牌页有哪些商品，先用不含 actions 的 explore_flow 快速看一眼商品列表。拿到商品名后，第二次 explore_flow 时把「加购→Continue→加购→View Cart」这套动作带上，这样购物车页采集到的才是正确数据。
 
 	6. 【没有页面数据 = 不能生成方案】如果某个页面探索失败，向用户报告具体失败原因，绝不跳过。
 

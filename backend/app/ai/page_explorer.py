@@ -452,6 +452,8 @@ def _group_label(group: list[dict[str, Any]]) -> str:
     """Make a human-readable label for a visual group, including block type."""
     _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
     _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+    _PRICE_RE_CURRENCY = re.compile(r"(?:Rs\.|₹|\$|€|£|¥|₩)\s*\d[\d,]*")
+    _PRICE_RE_PLAIN = re.compile(r"^\d{1,3}(?:,\d{3})*(?:\.\d{2})$")
 
     # Count structure
     inputs = sum(1 for e in group if e.get("tag") in ("input", "select", "textarea"))
@@ -459,13 +461,30 @@ def _group_label(group: list[dict[str, Any]]) -> str:
     links = sum(1 for e in group if e.get("tag") == "a")
     headings = sum(1 for e in group if e.get("tag") in _HEADING_TAGS)
     images = sum(1 for e in group if e.get("tag") == "img")
-    prices = sum(1 for e in group if e.get("tag") in ("p", "span", "h2") and re.search(r"(?:Rs\.|₹|\$|€|£)\s*\d", e.get("text") or ""))
+    checkboxes = sum(1 for e in group if e.get("tag") == "input" and (e.get("type") or "").lower() in ("checkbox", "radio"))
+
+    def _is_price(text: str) -> bool:
+        if not text:
+            return False
+        if _PRICE_RE_CURRENCY.search(text):
+            return True
+        # Plain number price: standalone numeric with optional currency context
+        stripped = text.strip()
+        if _PRICE_RE_PLAIN.match(stripped):
+            return True
+        return False
+
+    prices = sum(1 for e in group if _is_price(e.get("text") or ""))
 
     # Determine block type
-    if inputs >= 3 and buttons >= 1:
+    if inputs >= 1 and buttons >= 1 and inputs <= 2 and buttons <= 1:
+        block_type = "搜索栏" if inputs == 1 and buttons == 1 else "登录表单" if inputs >= 2 else "输入区"
+    elif inputs >= 3 and buttons >= 1:
         block_type = "表单"
     elif inputs >= 2 and buttons >= 1:
         block_type = "表单(小型)"
+    elif checkboxes >= 3:
+        block_type = "筛选面板"
     elif prices >= 2 and links >= 1:
         block_type = "产品卡"
     elif prices == 1 and links >= 1:
@@ -478,6 +497,18 @@ def _group_label(group: list[dict[str, Any]]) -> str:
         block_type = "导航区"
     elif images >= 2 and prices >= 1:
         block_type = "产品列表"
+    elif prices >= 1:
+        block_type = "产品区域"
+    elif inputs >= 1 and buttons >= 1:
+        block_type = "输入区"
+    elif buttons >= 1 and links >= 1:
+        block_type = "交互区"
+    elif links >= 2:
+        block_type = "链接区"
+    elif inputs >= 1:
+        block_type = "输入域"
+    elif buttons >= 1:
+        block_type = "按钮区"
     else:
         block_type = "区域"
 
@@ -490,11 +521,19 @@ def _group_label(group: list[dict[str, Any]]) -> str:
             name = t[:60]
             break
     if not name:
-        _generic = {"add to cart", "view product", "home", "cart", "login", "logout", "signup"}
+        _generic = {"add to cart", "view product", "home", "cart", "login", "logout", "signup",
+                     "submit", "search", "register", "continue shopping", "continue"}
         for el in group:
             t = (el.get("text") or "").strip()
             if t and t.casefold() not in _generic and len(t) > 3:
                 name = t[:60]
+                break
+    if not name:
+        # Try aria-label or placeholder as fallback name
+        for el in group:
+            aria = (el.get("aria_label") or "").strip()
+            if aria and len(aria) > 3:
+                name = aria[:60]
                 break
     if not name:
         name = group[0].get("tag", "block") if group else "block"
@@ -505,6 +544,7 @@ def _group_label(group: list[dict[str, Any]]) -> str:
     if buttons: parts.append(f"按钮x{buttons}")
     if links: parts.append(f"链接x{links}")
     if prices: parts.append(f"价格文本x{prices}")
+    if checkboxes: parts.append(f"复选框x{checkboxes}")
 
     return " | ".join(parts)
 
@@ -1261,7 +1301,7 @@ def collect_multi_page_elements(
     storage_state_path: str | None = None,
     enable_vlm_annotation: bool = True,
     timeout_ms: int = 60000,
-    base_url: str = "https://automationexercise.com",
+    base_url: str | None = None,
     session_id: int = 0,
 ) -> list[dict[str, Any]]:
     """Open *urls* sequentially in a single Playwright context and collect elements.
@@ -1296,6 +1336,23 @@ def collect_multi_page_elements(
         for url in urls:
             url = url.strip()
             if not url.startswith(("http://", "https://")):
+                if not base_url:
+                    logger.warning(
+                        "collect_multi_page_elements: skipping relative URL %r — no base_url",
+                        url,
+                    )
+                    results.append({
+                        "url": url,
+                        "page_state": "SKIPPED",
+                        "elements": [],
+                        "formatted": "",
+                        "element_count": 0,
+                        "screenshot_available": False,
+                        "vlm_annotation": None,
+                        "description": "",
+                        "error": "Relative URL without base_url; provide a full URL or pass base_url",
+                    })
+                    continue
                 url = urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
             try:
                 page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
@@ -1591,8 +1648,21 @@ def collect_flow_elements(
                 # Resolve relative URLs against base_url (BUG-067 regression)
                 url_str = step_url.strip()
                 if not url_str.startswith(("http://", "https://")):
-                    resolved_base = base_url or "https://example.com/"
-                    url_str = urljoin(resolved_base, url_str.lstrip("/"))
+                    if not base_url:
+                        logger.warning(
+                            "collect_flow_elements: skipping relative URL %r — no base_url provided",
+                            url_str,
+                        )
+                        results.append({
+                            "url": url_str,
+                            "page_state": "SKIPPED",
+                            "elements": [], "formatted": "", "element_count": 0,
+                            "screenshot_available": False, "vlm_annotation": None,
+                            "description": step.get("description", ""),
+                            "error": "Relative URL without base_url; provide a full URL or pass base_url",
+                        })
+                        continue
+                    url_str = urljoin(base_url, url_str.lstrip("/"))
                 try:
                     page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
                     try:
