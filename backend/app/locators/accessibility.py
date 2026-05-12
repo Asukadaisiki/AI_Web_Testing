@@ -17,6 +17,7 @@ _INTERACTIVE_ROLES = frozenset({
     "checkbox", "radio", "combobox", "textbox", "searchbox",
     "slider", "spinbutton", "switch", "treeitem", "gridcell",
     "menuitemcheckbox", "menuitemradio",
+    "dialog", "alertdialog", "alert",
 })
 
 

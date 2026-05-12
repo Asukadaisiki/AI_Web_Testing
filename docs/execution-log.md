@@ -2,6 +2,40 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
+## 2026-05-12 | 执行架构全面优化 — 11 项问题修复
+
+**背景：** 对 AI 测试规划执行架构进行全面代码审查，发现 11 个问题需要优化。覆盖 AI 对话、页面探索、定位器系统、DSL 生成、Playwright 执行五个核心区域。
+
+**操作：**
+
+### 严重问题修复
+1. **streaming 函数 NameError** — `ai_planning.py` 的 `save_and_execute_selected_drafts_streaming()` 引用了未定义的 `db_session`，改为 `session`
+2. **Explorer Runner console/network 采集** — `explorer_runner.py` 添加事件监听器（`page.on("console")`, `page.on("requestfailed")`, `page.on("response")`），在 `_collect_evidence` 中采集并清空缓冲区
+
+### 中等问题优化
+3. **generate_plan 守卫轮次保护** — `test_planning_agent.py` 添加 `guard_continue_count` 计数器，超过 `GUARD_CONTINUE_LIMIT=5` 次 continue 后强制生成方案
+4. **页面探索覆盖度检查** — 新增 `_check_page_coverage` 函数，对比 `core_user_flow` 中的关键词与已探索 URL，在 generate_plan 时输出覆盖度警告
+5. **legacy 路径 postcondition 检查** — `playwright_runner.py` 的 legacy 路径末尾添加 postcondition 验证，避免双层候选路径 fallback 时跳过检查
+6. **变量替换未匹配警告** — `_substitute_variables` 添加 `logger.warning` 输出未匹配的变量名，便于调试
+
+### 轻微问题优化
+7. **多语言动态元素发现** — `page_explorer.py` 的 `_INTERACTIVE_KEYWORDS` 添加中文/日文/韩文触发词
+8. **collect_flow_elements base_url 参数化** — 移除硬编码的 `automationexercise.com`，改为参数传入
+9. **text_parent_chain 多级链支持** — `semantic.py` 移除 `maxsplit=1` 限制，支持 "A" >> "B" >> "C" 三级定位
+10. **无障碍树 dialog/modal 角色** — `accessibility.py` 的 `_INTERACTIVE_ROLES` 添加 `dialog`, `alertdialog`, `alert`
+11. **playwright_runner 添加 logger** — 修复 `_substitute_variables` 中 `logger` 未定义的 NameError
+
+**验证：** 544/544 单元测试通过，前端构建成功
+
+**修改文件：**
+- `backend/app/services/ai_planning.py`
+- `backend/app/runners/explorer_runner.py`
+- `backend/app/runners/playwright_runner.py`
+- `backend/app/ai/test_planning_agent.py`
+- `backend/app/ai/page_explorer.py`
+- `backend/app/locators/semantic.py`
+- `backend/app/locators/accessibility.py`
+
 ## 2026-05-10 | AI 配置优化 — 禁用 DeepSeek thinking 模式 + 按场景设置 temperature
 
 **背景：** 综合 BUG-081/069/065/054 等多个"AI 不遵循提示词"相关问题，根因指向：(1) thinking 模式对指令遵循有负面影响；(2) temperature=1.0 过高导致输出随机性太大。

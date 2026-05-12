@@ -814,10 +814,19 @@ def _extract_element_id(elem: dict[str, Any]) -> str:
 
 
 _INTERACTIVE_KEYWORDS = [
+    # English
     "add to cart", "submit", "view product", "view cart",
     "add to bag", "buy now", "checkout", "place order",
     "filter", "brand", "brands", "category", "categories",
     "sort", "search", "apply",
+    # Chinese
+    "加入购物车", "提交", "查看商品", "查看购物车",
+    "立即购买", "去结算", "下单", "筛选", "品牌",
+    "分类", "排序", "搜索", "应用",
+    # Japanese
+    "カートに追加", "送信", "商品を見る", "購入する",
+    # Korean
+    "장바구니 추가", "제출", "구매하기",
 ]
 
 
@@ -1378,6 +1387,7 @@ def collect_multi_page_elements(
 def collect_flow_elements(
     steps: list[dict[str, Any]],
     *,
+    base_url: str | None = None,
     storage_state_path: str | None = None,
     enable_vlm_annotation: bool = True,
     timeout_ms: int = 60000,
@@ -1566,7 +1576,8 @@ def collect_flow_elements(
                 # Resolve relative URLs against base_url (BUG-067 regression)
                 url_str = step_url.strip()
                 if not url_str.startswith(("http://", "https://")):
-                    url_str = urljoin("https://automationexercise.com/", url_str.lstrip("/"))
+                    resolved_base = base_url or "https://example.com/"
+                    url_str = urljoin(resolved_base, url_str.lstrip("/"))
                 try:
                     page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
                     try:

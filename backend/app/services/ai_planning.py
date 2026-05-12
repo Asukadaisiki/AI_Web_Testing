@@ -1261,7 +1261,7 @@ def save_and_execute_selected_drafts_streaming(
         yield {"type": "status", "phase": "analyzing", "message": "正在分析执行结果..."}
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
-            db_session=db_session,
+            db_session=session,
             project_id=project_ids[0],
         )
         if analysis_response and analysis_response.execution_analysis:

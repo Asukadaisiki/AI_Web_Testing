@@ -19,6 +19,9 @@ from app.runners.playwright_runner import (
     ARTIFACTS_ROOT,
     RunnerCancelledError,
     RunnerExecutionError,
+    _capture_console_event,
+    _capture_error_response,
+    _capture_request_failed,
     _elapsed_ms,
     _resolve_url,
     _safe_dom_summary,
@@ -30,6 +33,7 @@ from app.runners.click_preprocessor import click_with_precheck
 from app.runners.locator_confidence import preverify_with_vlm
 from app.schemas.dsl import DSLCase
 from app.schemas.explorer_judge import ExplorerStepEvidence, ExplorationResult
+from app.schemas.executions import ConsoleEvent, NetworkEvent
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +95,18 @@ def run_explorer(
     page_broken = False  # True after a non-goto failure breaks the page state
     runtime_context: dict[str, str] = {}
 
+    # Buffers for console/network events, cleared after each step
+    console_buffer: list[ConsoleEvent] = []
+    network_buffer: list[NetworkEvent] = []
+
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
+
+        # Set up event listeners
+        page.on("console", lambda message: _capture_console_event(message, console_buffer))
+        page.on("requestfailed", lambda request: _capture_request_failed(request, network_buffer))
+        page.on("response", lambda response: _capture_error_response(response, network_buffer))
 
         try:
             for index, step in enumerate(case.steps):
@@ -142,6 +155,8 @@ def run_explorer(
                         page, index, step, "passed",
                         duration_ms=_elapsed_ms(step_started_at),
                         artifact_dir=artifact_dir,
+                        console_buffer=console_buffer,
+                        network_buffer=network_buffer,
                     )
                     all_steps.append(evidence)
                     yield ExplorerStepEvent(
@@ -160,6 +175,8 @@ def run_explorer(
                         duration_ms=_elapsed_ms(step_started_at),
                         artifact_dir=artifact_dir,
                         error_message=error_msg,
+                        console_buffer=console_buffer,
+                        network_buffer=network_buffer,
                     )
                     all_steps.append(evidence)
                     failures.append(evidence)
@@ -313,10 +330,29 @@ def _collect_evidence(
     duration_ms: int,
     artifact_dir: Path,
     error_message: str | None = None,
+    console_buffer: list[ConsoleEvent] | None = None,
+    network_buffer: list[NetworkEvent] | None = None,
 ) -> ExplorerStepEvidence:
     """Collect step evidence for Explorer output."""
+    # Collect events from buffers and clear them
     console_errors: list[str] = []
     network_errors: list[str] = []
+
+    if console_buffer:
+        for event in console_buffer:
+            console_errors.append(f"[{event.level}] {event.text}")
+        console_buffer.clear()
+
+    if network_buffer:
+        for event in network_buffer:
+            parts = [event.method, event.url]
+            if event.status:
+                parts.append(f"status={event.status}")
+            if event.failure_text:
+                parts.append(f"failure={event.failure_text}")
+            network_errors.append(" ".join(parts))
+        network_buffer.clear()
+
     dom_summary = None
     screenshot_path = None
     url = None

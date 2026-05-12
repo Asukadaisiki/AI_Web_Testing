@@ -177,6 +177,8 @@ def stream_planning_turn(
     safety_cap = max(1, settings.ai_planning_max_react_safety_cap)
     round_index = 0
     parse_retries = 0
+    guard_continue_count = 0  # Track how many times generate_plan guard continues
+    GUARD_CONTINUE_LIMIT = 5  # Force fallback after this many guard continues
     turn_start_time = time.monotonic()
     while round_index < safety_cap:
         round_index += 1
@@ -300,8 +302,20 @@ def stream_planning_turn(
             has_explore = _has_explored_pages(tool_calls)
             has_flow = any(call.tool == "explore_flow" for call in tool_calls)
 
+            # Guard round protection: force fallback after too many continues
+            guard_continue_count += 1
+            if guard_continue_count > GUARD_CONTINUE_LIMIT:
+                logger.warning(
+                    "generate_plan guard exceeded %d continues, forcing plan generation. "
+                    "has_explore=%s, has_flow=%s",
+                    GUARD_CONTINUE_LIMIT, has_explore, has_flow,
+                )
+                yield {"type": "status", "phase": "tool_call",
+                       "message": "页面探索轮次已达上限，将基于已有数据生成方案"}
+                # Allow fall-through to generate_plan logic below
+
             # Check exploration QUALITY, not just existence
-            if has_explore:
+            elif has_explore:
                 exploration_elements = _count_explored_elements(tool_calls)
                 if exploration_elements < 10:
                     yield {"type": "status", "phase": "tool_call",
@@ -514,7 +528,20 @@ def stream_planning_turn(
             continue
 
         if action == "generate_plan":
-            logger.info("Generating plan after %d ReAct rounds, tool_calls=%d", round_index, len(tool_calls))
+            # Check page coverage before generating plan
+            coverage, missing_pages = _check_page_coverage(
+                tool_calls, requirements.core_user_flow,
+            )
+            if coverage < 0.5 and missing_pages:
+                logger.warning(
+                    "Page coverage is low (%.1f%%), missing: %s",
+                    coverage * 100, missing_pages,
+                )
+                yield {"type": "status", "phase": "tool_call",
+                       "message": f"页面探索覆盖度较低（{coverage:.0%}），建议探索更多页面"}
+
+            logger.info("Generating plan after %d ReAct rounds, tool_calls=%d, coverage=%.1f%%",
+                       round_index, len(tool_calls), coverage * 100)
             response = _plan_response(
                 requirements=requirements,
                 plan_payload=action_input,
@@ -1021,6 +1048,64 @@ def _count_explored_elements(tool_calls: list[AIPlanningToolCall]) -> int:
 def _has_explored_pages(tool_calls: list[AIPlanningToolCall]) -> bool:
     """Return True if any explore_page or explore_flow call exists in tool_calls."""
     return any(call.tool in ("explore_page", "explore_flow") for call in tool_calls)
+
+
+def _check_page_coverage(
+    tool_calls: list[AIPlanningToolCall],
+    core_user_flow: str | None,
+) -> tuple[float, list[str]]:
+    """Check page exploration coverage against core_user_flow.
+
+    Returns (coverage_ratio, list_of_missing_page_hints).
+    Coverage is estimated by counting flow keywords that appear in explored URLs.
+    """
+    if not core_user_flow:
+        return 1.0, []
+
+    # Extract page-related keywords from core_user_flow
+    page_keywords = set()
+    flow_lower = core_user_flow.lower()
+    # Common page indicators
+    page_patterns = [
+        ("login", "登录"), ("register", "注册"), ("product", "商品"),
+        ("cart", "购物车"), ("checkout", "结算"), ("search", "搜索"),
+        ("home", "首页"), ("profile", "个人"), ("order", "订单"),
+        ("brand", "品牌"), ("category", "分类"),
+    ]
+    for en, cn in page_patterns:
+        if en in flow_lower or cn in flow_lower:
+            page_keywords.add(en)
+
+    if not page_keywords:
+        return 1.0, []
+
+    # Collect explored URLs
+    explored_urls: set[str] = set()
+    for call in tool_calls:
+        if call.tool == "explore_page" and isinstance(call.result, dict):
+            url = call.result.get("url", "")
+            if url:
+                explored_urls.add(url.lower())
+        elif call.tool == "explore_flow" and isinstance(call.result, dict):
+            for page in call.result.get("pages", []) or call.result.get("page_results", []):
+                if isinstance(page, dict):
+                    url = page.get("url", "")
+                    if url:
+                        explored_urls.add(url.lower())
+
+    all_urls_text = " ".join(explored_urls)
+
+    # Check which keywords are covered
+    covered = []
+    missing = []
+    for keyword in page_keywords:
+        if keyword in all_urls_text:
+            covered.append(keyword)
+        else:
+            missing.append(keyword)
+
+    coverage = len(covered) / len(page_keywords) if page_keywords else 1.0
+    return coverage, missing
 
 
 # Essential attributes to keep per element for compression

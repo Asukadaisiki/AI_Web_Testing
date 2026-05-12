@@ -233,21 +233,57 @@ def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
 def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
     """Parse text-based parent chaining: "Blue Top" >> "Add to cart".
 
+    Supports multi-level chains: "A" >> "B" >> "C" finds C within B's ancestor
+    which is within A's ancestor.
+
     Splits on >> / 的 / 附近的, then finds an element with *parent* text,
     walks up to its container, and searches within for *child* text.
     """
-    parts = _PARENT_SPLIT_RE.split(target.strip(), maxsplit=1)
-    if len(parts) != 2:
+    parts = _PARENT_SPLIT_RE.split(target.strip())
+    if len(parts) < 2:
         return None
-    parent_text = parts[0].strip().strip("\"'")
-    child_text = parts[1].strip().strip("\"'")
-    if not parent_text or not child_text:
+
+    # Strip quotes from all parts
+    cleaned_parts = [p.strip().strip("\"'") for p in parts]
+    # Filter out empty parts
+    cleaned_parts = [p for p in cleaned_parts if p]
+
+    if len(cleaned_parts) < 2:
         return None
+
     def _build():
         try:
-            return _find_in_ancestor(page, parent_text, child_text)
+            # For multi-level chains, iterate from outermost to innermost
+            # e.g., "A" >> "B" >> "C" -> find B in A's ancestor, then find C in B's ancestor
+            current_locator = page.get_by_text(cleaned_parts[0], exact=False).first
+
+            for i in range(1, len(cleaned_parts)):
+                parent_text = cleaned_parts[i - 1]
+                child_text = cleaned_parts[i]
+
+                # Try to find child within the current context
+                found = False
+                for _depth in range(2, 9):
+                    ancestor = current_locator
+                    for _ in range(_depth):
+                        ancestor = ancestor.locator("..")
+                    try:
+                        child = ancestor.get_by_text(child_text, exact=False)
+                        n = child.count()
+                        if n > 0:
+                            current_locator = child.first
+                            found = True
+                            break
+                    except Exception:
+                        continue
+
+                if not found:
+                    # Fallback: try direct search
+                    current_locator = page.get_by_text(child_text, exact=False).first
+
+            return current_locator
         except Exception as exc:
-            logger.debug("text_parent_chain failed for parent=%r child=%r: %s", parent_text, child_text, exc)
+            logger.debug("text_parent_chain failed for target=%r: %s", target, exc)
             raise
     return ("text_parent_chain", _build)
 

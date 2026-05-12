@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ from time import perf_counter
 from types import GeneratorType
 from typing import Generator, Literal
 from urllib.parse import urljoin
+
+logger = logging.getLogger(__name__)
 
 from app.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
 from app.locators.corrections import CorrectionStore
@@ -81,11 +84,23 @@ def _substitute_variables(value: str | None, input_values: dict[str, str] | None
     if not value or not input_values:
         return value
 
+    _unmatched_keys: list[str] = []
+
     def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
         key = match.group(1)
-        return input_values.get(key, match.group(0))
+        result = input_values.get(key)
+        if result is None:
+            _unmatched_keys.append(key)
+            return match.group(0)
+        return result
 
-    return _VARIABLE_PATTERN.sub(_replace, value)
+    result = _VARIABLE_PATTERN.sub(_replace, value)
+    if _unmatched_keys:
+        logger.warning(
+            "Variable substitution: unresolved keys %s in value '%s'",
+            _unmatched_keys, value[:100] if len(value) > 100 else value,
+        )
+    return result
 
 
 class RunnerExecutionError(RuntimeError):
@@ -496,6 +511,14 @@ def _execute_step_with_candidates(
                 runtime_context[step.context_key] = captured.strip()
         else:
             raise RunnerExecutionError(f"Unsupported action: {step.action}")
+
+        # Verify postconditions in legacy path (if any)
+        if hasattr(step, 'postconditions') and step.postconditions:
+            verifier = PostconditionVerifier(page)
+            verifier.capture_pre_state()
+            post_result = verifier.verify(step.postconditions)
+            if not post_result.passed:
+                raise RunnerExecutionError(f"Postcondition check failed: {post_result.details}")
 
         return StepExecutionEvidence(
             step_index=step_index,
