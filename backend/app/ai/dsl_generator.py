@@ -340,6 +340,7 @@ def build_generation_messages(
     prompt_variant: DslGenerationPromptVariant,
     supported_actions: list[str],
     governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None = None,
+    db_session: Any = None,
 ) -> list[dict[str, Any]]:
     system_lines = _build_system_prompt_lines(
         payload=payload,
@@ -348,7 +349,7 @@ def build_generation_messages(
         supported_actions=supported_actions,
         governance_focus_reasons=governance_focus_reasons,
     )
-    user_lines = _build_user_prompt_lines(payload=payload, generation_mode=generation_mode)
+    user_lines = _build_user_prompt_lines(payload=payload, generation_mode=generation_mode, db_session=db_session)
     return [
         {"role": "system", "content": " ".join(system_lines)},
         {"role": "user", "content": "\n".join(user_lines)},
@@ -392,6 +393,7 @@ def _build_user_prompt_lines(
     *,
     payload: GenerateDslRequest,
     generation_mode: GenerateDslMode,
+    db_session: Any = None,
 ) -> list[str]:
     user_lines = [
         "请根据下面的测试需求生成可编辑 DSL 草案。",
@@ -467,6 +469,25 @@ def _build_user_prompt_lines(
                 ),
             ]
         )
+    # Inject few-shot anti-pattern examples if db_session is available
+    if db_session is not None:
+        try:
+            from app.services.anti_patterns import (
+                retrieve_relevant_anti_patterns,
+                format_anti_patterns_for_prompt,
+            )
+            anti_patterns = retrieve_relevant_anti_patterns(
+                db_session,
+                project_id=payload.project_id,
+                prompt_text=payload.prompt,
+                page_elements=payload.page_elements or "",
+                retry_reason_code=payload.retry_reason_code,
+            )
+            formatted = format_anti_patterns_for_prompt(anti_patterns)
+            if formatted:
+                user_lines.append(formatted)
+        except Exception:
+            pass  # Anti-pattern injection is best-effort, never block generation
     return user_lines
 
 
@@ -481,6 +502,7 @@ def generate_case_draft(
     payload: GenerateDslRequest,
     supported_actions: list[str],
     governance_focus_reasons: list[DslGenerationRejectionReasonCode] | None = None,
+    db_session: Any = None,
 ) -> tuple[DSLCase, list[str], list[str], GenerateDslMeta]:
     settings = get_settings()
     resolved_generation_mode = resolve_generation_mode(payload.generation_mode, settings=settings)
@@ -501,6 +523,7 @@ def generate_case_draft(
             prompt_variant=prompt_variant,
             supported_actions=supported_actions,
             governance_focus_reasons=governance_focus_reasons,
+            db_session=db_session,
         ),
         api_key=settings.ai_dsl_api_key,
         model=settings.ai_dsl_model,
@@ -1807,10 +1830,11 @@ def _call_llm(
         "model": model,
         "messages": messages,
     }
-    if _should_enable_thinking_mode(base_url=base_url, model=model):
-        payload["thinking"] = {"type": "enabled"}
+    thinking_enabled = _should_enable_thinking_mode(base_url=base_url, model=model)
+    logger.info("DSL _call_llm: model=%s, thinking=%s, base_url=%s", model, thinking_enabled, base_url)
+    if thinking_enabled:
+        payload["thinking"] = {"type": "enabled", "effort": "max"}
         payload["max_tokens"] = 65536
-        payload["temperature"] = 1.0
     else:
         payload["temperature"] = 0.0
         payload["response_format"] = {"type": "json_object"}
@@ -2106,6 +2130,7 @@ def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
     return (
         "open.bigmodel.cn" in normalized_base_url
         or normalized_model.startswith("glm-")
+        or "deepseek" in normalized_model and "flash" not in normalized_model
     )
 
 

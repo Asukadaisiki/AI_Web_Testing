@@ -329,6 +329,27 @@ def stream_planning_turn(
                     )
                     continue
 
+                # Check page coverage against core_user_flow
+                coverage, missing_pages = _check_page_coverage(
+                    tool_calls, requirements.core_user_flow,
+                )
+                if coverage < 0.5 and missing_pages:
+                    logger.warning(
+                        "Guard: page coverage %.1f%% < 50%%, missing: %s",
+                        coverage * 100, missing_pages,
+                    )
+                    yield {"type": "status", "phase": "tool_call",
+                           "message": f"页面覆盖度不足（{coverage:.0%}），缺少: {', '.join(missing_pages)}"}
+                    conversation.append(
+                        {"role": "system", "content": (
+                            f"页面探索覆盖度仅为 {coverage:.0%}，以下页面尚未探索：{', '.join(missing_pages)}。\n"
+                            "请使用 explore_flow 工具补充探索这些页面。如果流程涉及登录、筛选等交互，"
+                            "必须在 steps 参数中包含对应的 actions。\n"
+                            "不要在页面覆盖度不足时生成测试方案。"
+                        )},
+                    )
+                    continue
+
             if not has_explore:
                 explored, tool_calls, internal_links = _auto_explore_entry_url(
                     requirements, tool_calls, db_session, project_id,
@@ -417,12 +438,13 @@ def stream_planning_turn(
                     _clear_link_tracking(conversation)
                     conversation.append(
                         {"role": "system", "content": (
-                            "系统已自动补充采集了导航链接页面的可交互元素。"
-                            "页面元素已按页面状态（S0/S1/S2...）分组标记，"
-                            "每个 page_state 对应一个不同的 URL。"
-                            "请基于所有已采集的页面元素信息重新生成测试方案，"
-                            "确保 target 使用元素的实际 label、placeholder 或 id，"
-                            "并且每个 draft_prompt 中的步骤必须标注 page_state 归属。"
+                            "系统已自动补充采集了入口页面的链接页面元素（仅静态 URL 跳转）。\n"
+                            "页面元素已按页面状态（S0/S1/S2...）分组标记。\n\n"
+                            "【重要】这仅是静态页面的采集结果。如果 core_user_flow 中涉及"
+                            "登录、品牌筛选、加入购物车、表单提交等需要交互才能到达的页面状态，"
+                            "你必须继续调用 explore_flow 并在 steps 参数中包含 actions 来执行这些交互，"
+                            "否则采集到的元素不完整，DSL 生成会失败。\n\n"
+                            "只有当所有 core_user_flow 涉及的页面都已被探索后，才能调用 generate_plan。"
                         )},
                     )
                     continue
@@ -500,6 +522,20 @@ def stream_planning_turn(
                 tc._compressed_result = compressed_result  # type: ignore[attr-defined]
             tool_calls.append(tc)
 
+            # --- Warn if capture_page_session used without explore_flow ---
+            if tool_name == "capture_page_session":
+                has_flow = any(c.tool == "explore_flow" for c in tool_calls)
+                if not has_flow:
+                    conversation.append({
+                        "role": "system",
+                        "content": (
+                            "capture_page_session 仅保存了登录状态（cookie），没有采集页面元素。"
+                            "你还需要调用 explore_flow 来采集登录后的页面元素（如 Products 链接、"
+                            "品牌列表等），否则 DSL 生成器无法获得登录页的定位器候选。"
+                            "请在 explore_flow 的 steps 中包含登录后的页面。"
+                        ),
+                    })
+
             # --- Context injection ---
             summary_for_log = _summarize_tool_result(tool_name, parsed_result)
             logger.info("Tool call %s completed: %s", tool_name, summary_for_log)
@@ -528,17 +564,12 @@ def stream_planning_turn(
             continue
 
         if action == "generate_plan":
-            # Check page coverage before generating plan
+            # Log page coverage (blocking check is in the guard above)
             coverage, missing_pages = _check_page_coverage(
                 tool_calls, requirements.core_user_flow,
             )
-            if coverage < 0.5 and missing_pages:
-                logger.warning(
-                    "Page coverage is low (%.1f%%), missing: %s",
-                    coverage * 100, missing_pages,
-                )
-                yield {"type": "status", "phase": "tool_call",
-                       "message": f"页面探索覆盖度较低（{coverage:.0%}），建议探索更多页面"}
+            if missing_pages:
+                logger.info("Page coverage: %.1f%%, missing: %s", coverage * 100, missing_pages)
 
             logger.info("Generating plan after %d ReAct rounds, tool_calls=%d, coverage=%.1f%%",
                        round_index, len(tool_calls), coverage * 100)
@@ -1562,8 +1593,9 @@ def _build_link_selection_message(
         f"{numbered}\n\n"
         f"{flow_hint}"
         f"请根据用户的核心操作流程，选择需要进一步采集元素和布局信息的页面。\n"
-        f'调用 explore_flow 工具，在 urls 参数中传入你选择的 URL 列表（建议 2-5 个）。\n'
-        f"如果现有信息已足够生成测试方案，也可以直接 generate_plan。"
+        f'调用 explore_flow 工具，在 steps 参数中传入你选择的步骤列表（建议 2-5 个）。\n'
+        f"如果流程涉及登录、筛选、加购等交互，必须在 steps 中包含对应的 actions。\n"
+        f"不要在没有探索完所有流程涉及页面的情况下调用 generate_plan。"
     )
 
 

@@ -891,6 +891,7 @@ def collect_interactable_elements(
     storage_state_path: str | None = None,
     timeout_ms: int = 60000,
     session_id: int = 0,
+    page: Any = None,
 ) -> list[dict[str, Any]]:
     """Open *url* and return interactable elements.
 
@@ -898,10 +899,20 @@ def collect_interactable_elements(
     :class:`BrowserSessionManager` and **not** closed on return,
     allowing subsequent calls within the same planning session to
     reuse the shared browser.
+
+    When *page* is provided, it is used directly (the caller owns the lifecycle).
     """
     managed_page = None
     try:
-        if session_id:
+        if page is not None:
+            # Caller provided a page — use it directly, don't manage lifecycle
+            managed_page = page
+            try:
+                page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            except Exception as exc:
+                logger.warning("Page load issue for %s: %s", url, exc)
+        elif session_id:
             context, page = BrowserSessionManager.get_or_create_context(
                 session_id, storage_state_path=storage_state_path,
             )
@@ -959,7 +970,7 @@ def collect_interactable_elements(
         # --- Live-element verification ---
         result = _verify_locators_on_page(page, result)
 
-        if not session_id:
+        if not session_id and managed_page is None:
             context.close()
             browser.close()
     except Exception as exc:
@@ -1392,6 +1403,7 @@ def collect_flow_elements(
     enable_vlm_annotation: bool = True,
     timeout_ms: int = 60000,
     session_id: int = 0,
+    page: Any = None,
 ) -> list[dict[str, Any]]:
     """Execute a flow with actions between page visits and collect elements per state.
 
@@ -1548,7 +1560,10 @@ def collect_flow_elements(
         }
 
     try:
-        if session_id:
+        if page is not None:
+            # Caller provided a page — use it directly
+            managed = False
+        elif session_id:
             context, page = BrowserSessionManager.get_or_create_context(
                 session_id, storage_state_path=storage_state_path,
             )
@@ -1615,7 +1630,7 @@ def collect_flow_elements(
                 result["description"] = description
             results.append(result)
 
-        if not session_id:
+        if not session_id and managed:
             context.close()
             browser.close()
     except Exception as exc:

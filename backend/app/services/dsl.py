@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from typing import Any
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 
@@ -147,6 +148,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
             payload=payload,
             supported_actions=SUPPORTED_DSL_ACTIONS,
             governance_focus_reasons=governance_focus_reasons,
+            db_session=session,
         )
     except (DslGenerationConfigError, DslGenerationError) as exc:
         model_name = get_settings().ai_dsl_model
@@ -180,6 +182,8 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
         generation_meta=generation_meta,
         error=None,
     )
+    # Auto-capture anti-patterns from warnings
+    _capture_anti_patterns_from_warnings(session, warnings, generated_case, payload)
     return GenerateDslResponse(
         generation_id=generation_run.id,
         case=generated_case,
@@ -768,6 +772,65 @@ def _json_array_length_expression(session: Session, column):
     if dialect_name == "postgresql" and isinstance(column.property.columns[0].type, JSONB):
         return func.jsonb_array_length(column)
     return func.json_array_length(column)
+
+
+def _capture_anti_patterns_from_warnings(
+    session: Session,
+    warnings: list[str],
+    generated_case: Any,
+    payload: GenerateDslRequest,
+) -> None:
+    """Auto-capture anti-patterns from draft generation warnings.
+
+    Parses warning strings to extract specific error patterns and records
+    them as DSLAntiPattern entries for future few-shot injection.
+    """
+    import re
+    import json as _json
+    from app.services.anti_patterns import record_anti_pattern, TARGET_NOT_FOUND, MISSING_STEP
+
+    if not warnings:
+        return
+
+    steps = []
+    if generated_case and hasattr(generated_case, "steps"):
+        steps = generated_case.steps or []
+
+    for warning in warnings:
+        # Pattern: target "X" 在已采集的 N 个元素中未找到匹配
+        m = re.search(r'target\s+"([^"]+)"\s+在已采集.*未找到匹配', warning)
+        if m:
+            target = m.group(1)
+            # Find the step with this target
+            for step in steps:
+                step_dict = step if isinstance(step, dict) else (step.model_dump() if hasattr(step, "model_dump") else {})
+                if step_dict.get("target") == target:
+                    record_anti_pattern(
+                        session,
+                        error_category=TARGET_NOT_FOUND,
+                        wrong_snippet=step_dict,
+                        context_note=f'target "{target}" 在页面元素中未找到匹配，可能需要不同的定位策略',
+                        source="preflight",
+                        project_id=payload.project_id,
+                    )
+                    break
+
+        # Pattern: 步骤 #N 校验失败（action=X target=Y value=Z）
+        m = re.search(r'步骤 #(\d+) 校验失败.*action=(\S+)\s+target=([^\s]+)', warning)
+        if m:
+            step_idx = int(m.group(1))
+            action = m.group(2)
+            if 0 <= step_idx < len(steps):
+                step = steps[step_idx]
+                step_dict = step if isinstance(step, dict) else (step.model_dump() if hasattr(step, "model_dump") else {})
+                record_anti_pattern(
+                    session,
+                    error_category=MISSING_STEP,
+                    wrong_snippet=step_dict,
+                    context_note=f"步骤校验失败: action={action}",
+                    source="validation",
+                    project_id=payload.project_id,
+                )
 
 
 def _persist_generation_run(

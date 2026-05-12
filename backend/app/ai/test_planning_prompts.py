@@ -88,7 +88,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 规则：
 - `collected_info` 只填写本轮明确获得的信息；未知字段保持 null 或空数组。
 - 每次最多追问 1-2 个关键问题，问题尽量自然。
-	- 当已收集到 4 项及以上信息时，信息已经充足。此时必须直接使用 `generate_plan` 输出测试方案，不要再用 `ask_user` 询问用户是否足够。
+	- 当已收集到 4 项及以上信息时，信息已经充足。此时不要再用 `ask_user` 询问用户是否足够。但必须先确保 core_user_flow 涉及的所有页面都已通过 explore_flow 探索完毕（含交互 actions），然后才能调用 generate_plan。
 	- 如果用户已经说"直接生成""够了""先给方案"，立即使用 `generate_plan`。
 - `generate_plan` 时请输出完整方案字段：`summary`、`assumptions`、`risks`、`scenarios`。
 - `scenarios` 中每个场景必须包含：`scenario_key`、`title`、`goal`、`preconditions`、`priority`、`test_data_requirements`、`assertions`、`draft_prompt`。
@@ -116,10 +116,11 @@ SYSTEM_PROMPT_TEMPLATE = """\
 	     steps: [
 	       {{url: "/login", description: "登录页", actions: [{{action: "input", target: "Email Address", value: "..."}}, {{action: "input", target: "Password", value: "..."}}, {{action: "click", target: "Login"}}]}},
 	       {{url: "/products", description: "商品列表页"}},
-	       {{url: "/brand_products/Polo", description: "筛选结果页", actions: [{{action: "click", target: "Add to cart"}}, {{action: "click", target: "Continue Shopping"}}]}},
+	       {{url: "/brand_products/Polo", description: "筛选结果页", actions: [{{action: "click", target: "Blue Top 附近的 Add to cart"}}, {{action: "click", target: "Continue Shopping"}}]}},
 	       {{url: "/view_cart", description: "购物车（含商品）"}}
 	     ]
 	   - 核心原则：不能直接 goto 一个状态依赖的页面（如 /view_cart），必须先通过 actions 执行前置操作，确保采集到的元素反映真实页面状态
+	   - 【重要】actions 中的 target 必须精确区分页面上的同类元素。页面有多个 "Add to cart" 按钮时，必须用 "产品名 附近的 Add to cart" 格式消歧
 
 	6. 【没有页面数据 = 不能生成方案】如果某个页面探索失败，向用户报告具体失败原因，绝不跳过。
 

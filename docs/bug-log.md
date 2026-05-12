@@ -739,3 +739,118 @@
   - `cd backend && uv run pytest tests/unit/test_ai_settings_api.py -q`
   - `cd frontend && npm run test -- src/pages/AISettingsPage.test.tsx src/services/api.test.ts`
 - 关联记录：`docs/execution-log.md` 2026-04-03 23:02
+
+## BUG-065 | explore_flow 相对 URL 被解析为 example.com
+
+- 日期：2026-05-12
+- 状态：open
+- 来源：E2E 测试
+- 影响：所有使用相对 URL 的 explore_flow 调用都会访问错误页面，导致页面元素采集失败
+
+**复现条件：**
+1. LLM 调用 explore_flow 时传相对路径 `{"url": "/login"}`
+2. `collect_flow_elements` 的 `base_url` 参数为空
+3. 代码 fallback 到 `https://example.com/`（page_explorer.py L1594）
+
+**定位结论：**
+- `planning_tools.py` 的 `_handle_explore_flow` 未传递 `base_url` 给 `collect_flow_elements`
+- session 的 `requirements_json` 在首次 LLM 调用时为空（LLM 还没返回 collected_info）
+- LLM 的 explore_flow params 中也没有 `base_url` 字段
+
+**已尝试修复：**
+1. 从 steps 中提取完整 URL → LLM 传的是相对路径，无效
+2. 从 session requirements_json 提取 → 首次调用时为空，无效
+3. 从用户消息中提取 URL → 已添加代码，待验证
+
+**建议最终修复：**
+- 在 explore_flow 工具描述中明确要求 LLM 使用完整 URL
+- 或在 `_handle_explore_flow` 中增加从用户消息提取 base_url 的逻辑
+
+---
+
+## BUG-066 | AI 不遵循 explore_flow 提示词，跳过页面探索直接生成方案
+
+- 日期：2026-05-12
+- 状态：fixed
+- 来源：E2E 测试
+- 影响：DSL 草案基于不完整的页面数据生成，缺少步骤、target 泛化
+
+**定位结论：**
+- `_build_link_selection_message` 中有 "如果信息足够，也可以直接 generate_plan" 逃逸口
+- 安全网消息 "已采集完成，请生成方案" 误导 LLM
+- 系统提示词 "4 项信息直接 generate_plan" 与 explore_flow 要求矛盾
+
+**修复：**
+- 删除逃逸口，改为 "不要在没有探索完所有流程涉及页面的情况下调用 generate_plan"
+- 安全网消息改为 "静态页面已采集，交互页面仍需 explore_flow"
+- 系统提示词改为 "先探索页面再 generate_plan"
+
+---
+
+## BUG-067 | DSL 生成器 thinking mode 未启用
+
+- 日期：2026-05-12
+- 状态：fixed
+- 来源：E2E 测试
+- 影响：DSL 草案质量低，缺少推理步骤
+
+**定位结论：**
+- `_should_enable_thinking_mode` 只支持 GLM 模型，不支持 DeepSeek
+- DSL 生成用的 deepseek-v4-pro 未触发 thinking mode
+
+**修复：**
+- `_should_enable_thinking_mode` 增加 DeepSeek pro 模型支持
+- 验证日志：`DSL _call_llm: model=deepseek-v4-pro, thinking=True`
+
+---
+
+## BUG-068 | explore_flow actions 泛化导致匹配错误元素
+
+- 日期：2026-05-12
+- 状态：fixed
+- 来源：E2E 测试
+- 影响：多个 "Add to cart" 按钮时，点击了错误的商品
+
+**定位结论：**
+- LLM 生成 `{"action":"click","target":"Add to cart"}` 而非消歧格式
+- 页面有多个同名按钮时，Playwright 匹配第一个
+
+**修复：**
+- `_check_action_disambiguation` 检测泛化 target 并添加警告
+- explore_flow 工具描述增加消歧说明
+- 系统提示词示例改为消歧格式
+
+---
+
+## BUG-069 | capture_page_session 不采集页面元素
+
+- 日期：2026-05-12
+- 状态：fixed
+- 来源：E2E 测试
+- 影响：LLM 用 capture_page_session 登录后，登录页元素不可用
+
+**定位结论：**
+- `capture_browser_session` 只返回 `{"success": True, "message": "..."}`
+- 不返回页面元素，preflight 无法获取登录页定位器
+
+**修复：**
+- 更新工具描述：明确说明 "不采集元素，请用 explore_flow"
+- capture_page_session 后自动提示 LLM 需要 explore_flow 补充元素
+
+---
+
+## BUG-070 | Playwright Sync API 与 asyncio 冲突（Windows）
+
+- 日期：2026-05-12
+- 状态：workaround
+- 来源：多 Agent 模式测试
+- 影响：多 Agent 模式的 Explorer 无法使用 Playwright
+
+**定位结论：**
+- `_bridge_sync_generator` 在 worker 线程中运行，但 Playwright 检测到 asyncio 事件循环
+- `BrowserSessionManager.get_or_create_context` 调用 `sync_playwright()` 失败
+
+**Workaround：**
+- 多 Agent 模式的 ExplorerAgent 不传递 `planning_session_id`，每次创建新浏览器
+- 但 "Event loop is closed" 错误仍然出现
+- 需要进一步研究 Playwright 在 Windows worker 线程中的兼容性

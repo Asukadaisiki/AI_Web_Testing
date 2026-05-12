@@ -1183,3 +1183,60 @@
   - `node -e "JSON.parse(fs.readFileSync(process.env.APPDATA + '/Code/User/settings.json','utf8'))"`，通过
   - 检查 `C:\Users\30521\.claude\settings.json` 文件头，结果 `NO_BOM`
 - 后续：在 VS Code 中执行 Reload Window 后重新打开 Claude Code，再尝试切换 model
+
+## 2026-05-12 | E2E 测试验证 + 草案质量分析 + 多轮修复
+
+**背景：** 使用 `test_brand_filter_cart` 测试规格对平台进行 E2E 测试，验证 AI 规划 → DSL 生成 → 执行的完整链路，持续发现问题并修复。
+
+**操作：**
+
+### Phase 1: 草案质量问题发现与分析
+1. **页面探索流程错误** — AI 跳过登录页直接从已登录的 products 页开始探索，品牌筛选结果页未被采集
+2. **页面状态映射错误** — S2 被映射到 view_cart 而非品牌筛选结果页
+3. **actions 泛化** — explore_flow 的 actions 使用 "Add to cart" 而非 "Blue Top 附近的 Add to cart"，导致匹配到错误元素
+4. **数量修改步骤缺失** — 草案中没有修改商品数量的步骤
+5. **candidates 为空** — 登录页元素的定位器候选列表为空
+
+### Phase 2: 提示词与消息修复
+6. **删除 "可以直接 generate_plan" 逃逸口** — `_build_link_selection_message` 中的提示让 LLM 跳过 explore_flow
+7. **安全网消息误导** — "已采集完成，请生成方案" 改为 "静态页面已采集，交互页面仍需 explore_flow"
+8. **系统提示词矛盾** — "4 项信息直接 generate_plan" 改为 "先探索页面再 generate_plan"
+9. **capture_page_session 描述误导** — 改为明确说明"不采集元素，请用 explore_flow"
+
+### Phase 3: Guard 增强
+10. **页面覆盖度检查移入 Guard** — coverage < 0.5 时阻止 generate_plan，要求 LLM 补充探索
+
+### Phase 4: Few-shot 自愈系统
+11. **DSLAntiPattern 模型** — 新建 `dsl_anti_patterns` 表，存储历史错误模式
+12. **自动采集逻辑** — `_capture_anti_patterns_from_warnings` 从草案 warnings 中提取 anti-pattern
+13. **注入逻辑** — `_build_user_prompt_lines` 中注入相关 anti-pattern 作为 few-shot 负面示例
+
+### Phase 5: DSL 生成器 thinking mode
+14. **DSL 生成器启用 thinking mode** — deepseek-v4-pro + effort=max，提升推理质量
+15. **规划代理保持 v4-flash** — v4-pro 太慢（7+ 分钟），规划代理用快速模型
+
+### Phase 6: explore_flow actions 消歧
+16. **消歧检查** — `_check_action_disambiguation` 检测泛化 target 并添加警告
+17. **消歧生效** — 草案中 "Blue Top 附近的 Add to cart" 替代了泛化的 "Add to cart"
+
+### Phase 7: 相对 URL 解析修复
+18. **example.com 问题** — explore_flow 的 relative URL `/login` 被解析为 `example.com/login`
+19. **多层 fallback** — 从 params → steps → session requirements → user message 提取 base_url
+20. **未完全解决** — session requirements 在首次 LLM 调用时为空，需从用户消息提取
+
+**验证：**
+- thinking mode 确认生效：`DSL _call_llm: model=deepseek-v4-pro, thinking=True`
+- Guard 覆盖度检查生效：`Guard: page coverage 25.0% < 50%, missing: ['login', 'product', 'brand']`
+- actions 消歧生效：草案中使用 "Blue Top 附近的 Add to cart"
+- capture_text 模式正确：capture → assert 模式完整
+
+**未解决问题：**
+- explore_flow 相对 URL 解析（需从用户消息提取 base_url 或改工具描述要求完整 URL）
+- 购物车残留数据导致测试隔离失败
+- 数量修改使用 button 而非 input（Automation Exercise 特有）
+- VLM 429 限流影响页面探索速度
+
+**后续：**
+- 在 explore_flow 工具描述中要求 LLM 使用完整 URL
+- 实现测试前购物车清理步骤
+- 调研 +/- 按钮型数量修改的通用处理方案

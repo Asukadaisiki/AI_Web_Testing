@@ -605,19 +605,34 @@ def _handle_explore_page(
 
     planning_session_id = int(params.get("planning_session_id", 0))
     logger.info("explore_page: url=%s, project_id=%d, session_id=%d", url.strip(), project_id, planning_session_id)
+
+    # Resolve relative URLs against session's entry_url_or_page
+    resolved_url = url.strip()
+    if not resolved_url.startswith(("http://", "https://")):
+        from app.models import AIPlanningSession
+        from urllib.parse import urlparse, urljoin
+        session_obj = db_session.get(AIPlanningSession, planning_session_id) if planning_session_id else None
+        if session_obj and session_obj.requirements_json:
+            entry = session_obj.requirements_json.get("entry_url_or_page", "")
+            if entry and entry.startswith("http"):
+                parsed = urlparse(entry)
+                base = f"{parsed.scheme}://{parsed.netloc}"
+                resolved_url = urljoin(base, resolved_url.lstrip("/"))
+                logger.info("explore_page: resolved relative URL to %s", resolved_url)
+
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
 
     elements = collect_interactable_elements(
-        url.strip(),
+        resolved_url,
         storage_state_path=storage_path,
         session_id=planning_session_id,
     )
     formatted = format_elements_for_prompt(elements)
-    logger.info("explore_page: found %d elements from %s", len(elements), url.strip())
+    logger.info("explore_page: found %d elements from %s", len(elements), resolved_url)
 
     result: dict[str, Any] = {
-        "url": url.strip(),
+        "url": resolved_url,
         "elements": elements,
         "formatted": formatted,
         "element_count": len(elements),
@@ -661,6 +676,63 @@ def _handle_capture_page_session(
     return result
 
 
+def _check_action_disambiguation(
+    flow_steps: list[dict[str, Any]],
+    page_results: list[dict[str, Any]],
+) -> list[str]:
+    """Check if action targets are generic (match multiple elements).
+
+    Returns a list of warning strings for actions that need disambiguation.
+    """
+    warnings: list[str] = []
+    # Collect all elements from all pages
+    all_elements: list[dict[str, Any]] = []
+    for pr in page_results:
+        all_elements.extend(pr.get("elements", []))
+
+    if not all_elements:
+        return warnings
+
+    # Build text index: text -> count of matching elements
+    from collections import Counter
+    text_counts: Counter[str] = Counter()
+    for elem in all_elements:
+        text = (elem.get("text") or "").strip()
+        if text:
+            text_counts[text] += 1
+
+    # Check each action target
+    for step in flow_steps:
+        if not isinstance(step, dict):
+            continue
+        for action in step.get("actions", []):
+            if not isinstance(action, dict):
+                continue
+            target = (action.get("target") or "").strip()
+            if not target:
+                continue
+            # Check if target matches multiple elements
+            match_count = sum(1 for t in text_counts if target.lower() in t.lower())
+            if match_count > 1:
+                # Find specific alternatives using "附近的" pattern
+                alternatives = []
+                for elem in all_elements:
+                    elem_text = (elem.get("text") or "").strip()
+                    if elem_text and target.lower() in elem_text.lower():
+                        continue  # Skip exact matches
+                    # Look for nearby elements that could disambiguate
+                    if elem.get("tag") in ("h4", "h5", "a", "p") and elem.get("text"):
+                        alternatives.append(f'{elem["text"]} 附近的 {target}')
+                        if len(alternatives) >= 3:
+                            break
+                warning = f'action target "{target}" 匹配到 {match_count} 个元素'
+                if alternatives:
+                    warning += f'，建议用: {alternatives[0]}'
+                warnings.append(warning)
+
+    return warnings
+
+
 def _handle_explore_flow(
     *,
     params: dict[str, Any],
@@ -678,11 +750,52 @@ def _handle_explore_flow(
         logger.info("explore_flow: %d steps, flow=%s, project_id=%d, session_id=%d",
                     len(flow_steps), flow_description or "-", project_id, planning_session_id)
 
+        # Resolve base_url: 1) from params, 2) from steps, 3) from session, 4) from messages
+        resolved_base_url = params.get("base_url") or ""
+        if not resolved_base_url:
+            from urllib.parse import urlparse
+            # Try to extract from any step that has a full URL
+            for step in flow_steps:
+                if isinstance(step, dict):
+                    step_url = step.get("url", "")
+                    if isinstance(step_url, str) and step_url.startswith("http"):
+                        parsed = urlparse(step_url)
+                        resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
+                        break
+        if not resolved_base_url and planning_session_id:
+            from app.models import AIPlanningSession, AIPlanningMessage
+            from sqlalchemy import select, desc
+            session_obj = db_session.get(AIPlanningSession, planning_session_id)
+            # Try requirements_json
+            if session_obj and session_obj.requirements_json:
+                entry = session_obj.requirements_json.get("entry_url_or_page", "")
+                if entry and entry.startswith("http"):
+                    parsed = urlparse(entry)
+                    resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
+            # Fallback: extract from user message
+            if not resolved_base_url:
+                import re
+                msg = db_session.execute(
+                    select(AIPlanningMessage.content)
+                    .where(AIPlanningMessage.session_id == planning_session_id)
+                    .where(AIPlanningMessage.role == "user")
+                    .order_by(desc(AIPlanningMessage.id))
+                    .limit(1)
+                ).scalar_one_or_none()
+                if msg:
+                    url_match = re.search(r'https?://[^\s]+', msg)
+                    if url_match:
+                        parsed = urlparse(url_match.group(0))
+                        resolved_base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        logger.info("explore_flow: resolved_base_url=%s", resolved_base_url)
+
         storage_dir = _resolve_storage_state_dir()
         storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
 
         page_results = collect_flow_elements(
             flow_steps,
+            base_url=resolved_base_url or None,
             storage_state_path=storage_path,
             enable_vlm_annotation=True,
             session_id=planning_session_id,
@@ -694,13 +807,23 @@ def _handle_explore_flow(
             for pr in page_results
         ]
 
-        return {
+        # --- Disambiguation check: warn if actions used generic targets ---
+        disambiguation_warnings = _check_action_disambiguation(flow_steps, page_results)
+
+        result: dict[str, Any] = {
             "pages": page_results,
             "formatted": combined_formatted,
             "total_pages": len(page_results),
             "total_elements": total_elements,
             "page_states": page_states,
         }
+        if disambiguation_warnings:
+            result["disambiguation_warnings"] = disambiguation_warnings
+            result["warning"] = (
+                "部分 actions 使用了泛化 target（如 'Add to cart'），可能匹配到错误元素。"
+                "下次调用时请用 '产品名 附近的 Add to cart' 格式消歧。"
+            )
+        return result
 
     # --- Legacy URL-based exploration ---
     if not isinstance(urls, list) or not urls:
@@ -1015,7 +1138,7 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
     ),
     "capture_page_session": PlanningTool(
         name="capture_page_session",
-        description="打开指定 URL 并执行登录步骤（如填写用户名密码、点击登录按钮），然后保存浏览器的会话状态（cookie 等），供后续 explore_page 复用登录态。",
+        description="仅保存浏览器会话状态（cookie），不采集页面元素。如果需要登录后采集页面元素，请改用 explore_flow 并在 steps 中包含登录 actions。仅在需要跨 session 复用登录态且不需要采集登录页元素时使用此工具。",
         parameters={
             "type": "object",
             "properties": {
@@ -1041,7 +1164,7 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
     ),
     "explore_flow": PlanningTool(
         name="explore_flow",
-        description="沿用户测试流程探索多个页面，在每个页面执行交互动作后采集可交互元素和视觉布局。优先使用 steps 参数（动作式探索），仅在纯静态页面浏览场景使用 urls 参数。steps 模式可执行 click/input/wait_for 动作，确保采集到的元素反映真实页面状态（如登录后、加购后）。会复用浏览器会话。",
+        description="沿用户测试流程探索多个页面，在每个页面执行交互动作后采集可交互元素和视觉布局。优先使用 steps 参数（动作式探索），仅在纯静态页面浏览场景使用 urls 参数。steps 模式可执行 click/input/wait_for 动作，确保采集到的元素反映真实页面状态（如登录后、加购后）。会复用浏览器会话。重要：actions 中的 target 必须足够精确以区分页面上的同类元素。例如页面有多个 'Add to cart' 按钮时，必须用 'Blue Top 附近的 Add to cart' 这种消歧格式，不能只写 'Add to cart'。",
         parameters={
             "type": "object",
             "properties": {

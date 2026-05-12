@@ -1,6 +1,7 @@
 """Models package."""
 
 from app.models.ai_planning_draft import AIPlanningDraft
+from app.models.dsl_anti_pattern import DSLAntiPattern
 from app.models.ai_planning_flow_step import AIPlanningFlowStep
 from app.models.ai_planning_message import AIPlanningMessage
 from app.models.ai_planning_session import AIPlanningSession
@@ -22,6 +23,7 @@ from app.models.user import User
 
 __all__ = [
     "AIPlanningDraft",
+    "DSLAntiPattern",
     "AIPlanningFlowStep",
     "AIPlanningMessage",
     "AIPlanningSession",
