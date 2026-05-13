@@ -572,123 +572,12 @@ def generate_case_draft(
     # Structural gate: reject drafts missing required navigation steps
     _verify_navigation_completeness(normalized_case, payload, warnings)
 
-    # --- Pre-execution review: validate DSL against prompt with thinking model ---
-    review_issues = _run_pre_execution_review(normalized_case, payload)
-    if review_issues:
-        for issue in review_issues:
-            warnings.append(f"[pre-exec review] {issue}")
-        # Record anti-pattern for self-healing
-        if review_issues:
-            _record_review_anti_patterns(review_issues, normalized_case, payload)
-
     try:
         case = DSLCase.model_validate(normalized_case)
     except ValidationError as exc:
         raise DslGenerationError(_format_validation_error(exc)) from exc
 
     return case, warnings, normalization_notes, generation_meta
-
-
-def _run_pre_execution_review(
-    normalized_case: dict[str, Any],
-    payload: "GenerateDslRequest",
-) -> list[str]:
-    """Check the generated DSL against the user's flow requirements.
-
-    Uses the planning model (with thinking) to reason about whether all
-    required navigation steps, captures, and assertions are present.
-    Returns a list of issue strings, or empty if the DSL passes review.
-    """
-    settings = get_settings()
-    review_model = getattr(settings, "ai_planning_model", None) or settings.ai_dsl_model
-    review_url = getattr(settings, "ai_planning_base_url", None) or settings.ai_dsl_base_url
-    review_key = getattr(settings, "ai_planning_api_key", None) or settings.ai_dsl_api_key
-    if not review_key:
-        logger.info("Pre-exec review skipped: no planning API key")
-        return []
-
-    steps = normalized_case.get("steps", [])
-    if len(steps) < 3:
-        return []
-
-    # Build compact review payload
-    steps_summary: list[str] = []
-    for i, s in enumerate(steps):
-        if isinstance(s, dict):
-            a = s.get("action", "?")
-            t = (s.get("target") or "")[:60]
-            v = (s.get("value") or "")[:40]
-        else:
-            a = getattr(s, "action", "?")
-            t = (getattr(s, "target", "") or "")[:60]
-            v = (getattr(s, "value", "") or "")[:40]
-        extra = f' value="{v}"' if v else ""
-        steps_summary.append(f"  {i+1}. {a} target=\"{t}\"{extra}")
-
-    review_prompt = (
-        f"用户的测试流程需求：\n{payload.prompt[:2000]}\n\n"
-        f"生成的 DSL 步骤：\n" + "\n".join(steps_summary) + "\n\n"
-        "请检查以下项目，只输出 JSON：\n"
-        "1. 流程的第一步是否正确导航到了正确的页面？（如首页→登录页需要 click/goto）\n"
-        "2. 所有页面跳转步骤是否齐全？（流程提到的每个页面都有对应导航步骤）\n"
-        "3. capture_text 的 target 是否在页面元素中可见？\n"
-        "4. 每个 capture 是否有对应的 assert？\n"
-        "5. 数量修改后是否验证了新总价？\n\n"
-        '返回格式：{"issues": [], "severity": "ok"} 或 {"issues": ["问题描述"], "severity": "critical"}'
-    )
-
-    try:
-        resp = _call_llm(
-            messages=[
-                {"role": "system", "content": "你是 DSL 测试用例审查员。严格但简洁。只输出 JSON。"},
-                {"role": "user", "content": review_prompt},
-            ],
-            api_key=review_key,
-            model=review_model,
-            base_url=review_url,
-            timeout_seconds=30.0,
-        )
-        cleaned = _extract_json_object(resp)
-        review = json.loads(cleaned)
-        issues = review.get("issues", [])
-        severity = review.get("severity", "ok")
-        logger.info(
-            "Pre-exec review: severity=%s issues=%d model=%s",
-            severity, len(issues), review_model,
-        )
-        return issues if isinstance(issues, list) else []
-    except Exception as exc:
-        logger.warning("Pre-exec review failed: %s", exc)
-        return []
-
-
-def _record_review_anti_patterns(
-    issues: list[str],
-    normalized_case: dict[str, Any],
-    payload: "GenerateDslRequest",
-) -> None:
-    """Record pre-execution review issues as anti-patterns for self-healing."""
-    if not payload.project_id:
-        return
-    try:
-        from app.db.session import get_session_factory
-        from app.services.anti_patterns import record_anti_pattern, MISSING_NAVIGATION, MISSING_STEP
-        factory = get_session_factory()
-        session = factory()
-        for issue in issues:
-            category = MISSING_NAVIGATION if "导航" in issue or "页面" in issue else MISSING_STEP
-            record_anti_pattern(
-                session,
-                error_category=category,
-                wrong_snippet={"steps": normalized_case.get("steps", [])[:3]},
-                context_note=issue[:500],
-                source="pre_exec_review",
-                project_id=payload.project_id,
-            )
-        session.commit()
-        session.close()
-    except Exception as exc:
-        logger.warning("Failed to record review anti-pattern: %s", exc)
 
 
 def _normalize_generated_case(

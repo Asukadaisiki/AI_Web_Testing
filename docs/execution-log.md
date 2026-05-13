@@ -2,6 +2,32 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
+## 2026-05-14 | 架构清理阶段 1 — 删除 dormant 分支与冗余 LLM 调用
+
+**背景：** 经过逐文件取证发现，自愈、缓存、定位评分、prompt 注入、4 层 fallback 等机制中存在大量"已设计但主流程不触发"的代码（multi_agent opt-in 路径、compression subagent、accessibility tier、pre-exec review、VLM 双触发）。本轮先做纯删除（阶段 1），不动数据流；阶段 2 等本轮验证完后再单独规划。
+
+**用户决策：** ①DSL target 仍用文本（preflight 后续接通 candidates）；②不保留 `generate_case_draft`；③保留 Explorer-Judge。
+
+**操作：**
+1. **1.1 删除 multi_agent 路径**：`app/ai/multi_agent.py` 整文件、`services/ai_planning_streaming.py:stream_multi_agent_planning`、`api/routes/ai_planning.py:multi_agent_chat_sse` + `chat_sse` 的 `mode=multi_agent` 分支
+2. **1.2 删除压缩 subagent**：`test_planning_agent.py` 中 `run_compression_subagent`、`_SUBAGENT_SYSTEM_PROMPT`、`_call_flash_llm`、`_filter_elements_for_compression`、`_build_fallback_compression`、`_ELEMENT_KEEP_ATTRS`（保留确定性的 `_compress_tool_result` 与 `_HEAVY_TOOLS`）
+3. **1.3 删除 accessibility 模块**：`locators/accessibility.py` 整文件、`locators/__init__.py` 的 re-exports、`locators/fallback.py` 中 Tier 1.5 调用、对应单测 `tests/unit/test_locator_accessibility.py`、`test_locator_fallback.py` 的 a11y 测试类
+4. **1.4 删除 pre-exec review**：`dsl_generator.py` 中 `_run_pre_execution_review`、`_record_review_anti_patterns` 与 `generate_case_draft` 的调用
+5. **1.5 去掉 VLM 重复触发**：`playwright_runner.py:_resolve_with_confidence_gate` 移除 `locator_confidence=='low'` → `preverify_with_vlm` 分支（VLM 由 `resolve_with_fallback` 内部统一触发）；同时移除 unused `import sys` 与 `preverify_with_vlm` import
+
+**验证：** 每个 chunk 后跑 `uv run pytest tests/unit -q`，全程 526 单测通过（清理前 544，减去删除的 18 个 a11y 测试）
+
+**修改文件：**
+- 删除：`backend/app/ai/multi_agent.py`、`backend/app/locators/accessibility.py`、`backend/tests/unit/test_locator_accessibility.py`
+- 修改：`backend/app/ai/dsl_generator.py`、`backend/app/ai/test_planning_agent.py`、`backend/app/api/routes/ai_planning.py`、`backend/app/locators/__init__.py`、`backend/app/locators/fallback.py`、`backend/app/runners/playwright_runner.py`、`backend/app/services/ai_planning_streaming.py`、`backend/tests/unit/test_locator_fallback.py`
+
+**净变化：** -1498 行 / +24 行（18 个文件）
+
+**遗留待办：**
+- `core/config.py` 中 `ai_planning_subagent_enabled`、`ai_planning_subagent_timeout_ms` 已无消费者，可下次清理时一并删
+- `runners/locator_confidence.py:preverify_with_vlm` 现仅被 `explorer_runner.py` 使用，主 runner 已不调用
+- 阶段 2（统一 segmented 路径并接通 anti-pattern 注入 / preflight 强制重生）等用户重新规划后再启动
+
 ## 2026-05-12 | 执行架构全面优化 — 11 项问题修复
 
 **背景：** 对 AI 测试规划执行架构进行全面代码审查，发现 11 个问题需要优化。覆盖 AI 对话、页面探索、定位器系统、DSL 生成、Playwright 执行五个核心区域。

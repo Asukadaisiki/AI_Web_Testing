@@ -8,7 +8,6 @@ import re
 from collections import OrderedDict
 from threading import Lock
 
-from app.locators.accessibility import try_accessibility_locate as _try_accessibility_locate
 from app.locators.ai_visual import (
     AILocateResult,
     AIVisionCandidateBox,
@@ -423,14 +422,6 @@ def resolve_with_fallback(
         )
     except LocatorResolutionError as exc:
         tier1_trace = exc.trace
-        # Tier 1.5: zero-cost accessibility tree lookup (arxiv 2603.20358)
-        a11y_resolved = _try_accessibility_locate(
-            page,
-            target=target,
-            require_visible=require_visible,
-        )
-        if a11y_resolved is not None:
-            return a11y_resolved
         reranked = _try_vlm_rank_candidates(
             page,
             target=target,

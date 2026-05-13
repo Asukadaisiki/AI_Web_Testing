@@ -306,32 +306,20 @@ def save_and_execute_route(
 async def chat_sse(
     session_id: int,
     req: ChatSSERequest,
-    mode: str = "react",
     current_user: User = Depends(require_demo_user),
 ) -> StreamingResponse:
-    """SSE stream for AI planning chat. Supports 'react' and 'multi_agent' modes via ?mode= query param."""
+    """SSE stream for AI planning chat (ReAct mode)."""
     session_factory = get_session_factory()
-    use_multi_agent = mode == "multi_agent"
 
     async def event_generator():
         try:
-            if use_multi_agent:
-                from app.services.ai_planning_streaming import stream_multi_agent_planning
-                async for event in stream_multi_agent_planning(
-                    session_factory=session_factory,
-                    planning_session_id=session_id,
-                    content=req.content,
-                    actor_user_id=current_user.id,
-                ):
-                    yield sse_event(event.get("type", "message"), event)
-            else:
-                async for event in stream_planning_chat(
-                    session_factory=session_factory,
-                    planning_session_id=session_id,
-                    content=req.content,
-                    actor_user_id=current_user.id,
-                ):
-                    yield sse_event(event.get("type", "message"), event)
+            async for event in stream_planning_chat(
+                session_factory=session_factory,
+                planning_session_id=session_id,
+                content=req.content,
+                actor_user_id=current_user.id,
+            ):
+                yield sse_event(event.get("type", "message"), event)
         except Exception as exc:
             logger.exception("SSE chat streaming error for session %s", session_id)
             yield sse_event("error", {
@@ -452,42 +440,6 @@ async def execute_with_judge_sse(
             })
         yield sse_event("done", {})
         _cancellation_manager.clear(session_id)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("/sessions/{session_id}/multi-agent-chat")
-async def multi_agent_chat_sse(
-    session_id: int,
-    req: ChatSSERequest,
-    current_user: User = Depends(require_demo_user),
-) -> StreamingResponse:
-    """SSE stream for multi-agent planning (Explorer + Planner)."""
-    session_factory = get_session_factory()
-
-    async def event_generator():
-        try:
-            from app.services.ai_planning_streaming import stream_multi_agent_planning
-            async for event in stream_multi_agent_planning(
-                session_factory=session_factory,
-                planning_session_id=session_id,
-                content=req.content,
-                actor_user_id=current_user.id,
-            ):
-                yield sse_event(event.get("type", "message"), event)
-        except Exception as exc:
-            logger.exception("SSE multi-agent streaming error for session %s", session_id)
-            yield sse_event("error", {
-                "message": str(exc),
-                "error_type": type(exc).__name__,
-                "phase": "multi_agent",
-                "traceback": _traceback.format_exc()[:2000],
-            })
-        yield sse_event("done", {})
 
     return StreamingResponse(
         event_generator(),

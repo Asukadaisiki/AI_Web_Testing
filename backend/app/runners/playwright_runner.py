@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-import sys
 from pathlib import Path
 from threading import Event
 from time import perf_counter
@@ -18,7 +17,6 @@ from app.locators import InterventionNeededError, LocatorResolutionError, resolv
 from app.locators.corrections import CorrectionStore
 from app.locators.semantic import ResolvedLocator
 from app.runners.click_preprocessor import click_with_precheck
-from app.runners.locator_confidence import preverify_with_vlm
 from app.runners.postcondition_verifier import PostconditionVerifier
 from app.runners.runtime_scorer import compute_final_score, decide_strategy
 from app.schemas.dsl import DSLCase
@@ -50,34 +48,23 @@ def _resolve_with_confidence_gate(
     require_visible: bool = True,
     require_enabled: bool = False,
 ) -> tuple[ResolvedLocator, bool]:
-    """Unified locator resolution: semantic first, VLM only as last-resort fallback.
+    """Unified locator resolution: corrections → semantic → VLM (via fallback chain).
 
-    confidence="low" does NOT skip the semantic chain.
+    ``locator_confidence`` is currently unused; kept in the signature for the
+    callers that still pass it. VLM triggering happens inside
+    ``resolve_with_fallback`` itself; this wrapper no longer adds a duplicate
+    pre-verify call.
     """
-    # Tier 1-2: semantic candidates → accessibility tree → VLM rerank
-    try:
-        resolved = resolve_with_fallback(
-            page, target,
-            target_strategy=target_strategy,
-            correction_store=correction_store,
-            execution_id=execution_id,
-            prefer_input=prefer_input,
-            require_visible=require_visible,
-            require_enabled=require_enabled,
-        )
-        return resolved, False
-    except (LocatorResolutionError, InterventionNeededError):
-        pass
-
-    # Tier 3: VLM pre-verify as last resort for low-confidence targets
-    if locator_confidence == "low":
-        vlm_result = preverify_with_vlm(page, target)
-        if vlm_result is not None:
-            return vlm_result, True
-
-    if sys.exc_info()[0] is not None:
-        raise
-    raise LocatorResolutionError(f"No locator found for target: {target!r}")
+    resolved = resolve_with_fallback(
+        page, target,
+        target_strategy=target_strategy,
+        correction_store=correction_store,
+        execution_id=execution_id,
+        prefer_input=prefer_input,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+    return resolved, False
 
 def _substitute_variables(value: str | None, input_values: dict[str, str] | None) -> str | None:
     """Replace ``${context_key}`` placeholders in *value* with entries from *input_values*."""
