@@ -504,10 +504,10 @@ def stream_planning_turn(
                 if new_id > 0:
                     logger.info("Updating project_id from %d to %d after create_project", project_id, new_id)
                     project_id = new_id
-            # --- Run compression for heavy tools (once) ---
+            # --- Deterministic compression for heavy tools ---
             compressed_result = None
             if tool_name in _HEAVY_TOOLS:
-                compressed_result = run_compression_subagent(tool_name, parsed_result, settings)
+                compressed_result = _compress_tool_result(tool_name, parsed_result)
 
             # --- SSE event ---
             if tool_name in _HEAVY_TOOLS:
@@ -1311,6 +1311,53 @@ def _call_flash_llm(
         message = body["choices"][0]["message"]
         content = message.get("content") or message.get("reasoning_content") or ""
         return str(content)
+
+
+def _compress_tool_result(tool_name: str, result: dict) -> dict:
+    """Deterministic compression of exploration results for ReAct context.
+
+    Strips CSS/XPath/rect/candidates details from individual elements while
+    preserving page structure, group labels, and interactive element summaries.
+    No LLM call — runs in microseconds.
+    """
+    _KEEP_ATTRS = {"tag", "text", "id", "name", "placeholder", "type", "href", "role", "aria_label"}
+    _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
+
+    def _strip_element(el: dict) -> dict:
+        return {k: v for k, v in el.items() if k in _KEEP_ATTRS and v not in (None, "")}
+
+    def _compress_page(page_data: dict) -> dict:
+        raw_elements: list[dict] = page_data.get("elements", [])
+        interactive: list[dict] = []
+        static_count = 0
+        for el in raw_elements:
+            tag = el.get("tag", "")
+            if tag in _INTERACTIVE_TAGS:
+                interactive.append(_strip_element(el))
+            else:
+                static_count += 1
+        vlm = (page_data.get("vlm_annotation") or "")[:200]
+        return {
+            "url": page_data.get("url", ""),
+            "page_state": page_data.get("page_state", ""),
+            "element_count": len(raw_elements),
+            "interactive_elements": interactive[:40],  # cap per page
+            "static_elements_omitted": static_count,
+            "vlm_summary": vlm if vlm else None,
+            "warning": page_data.get("warning"),
+        }
+
+    if tool_name == "explore_page":
+        return _compress_page(result)
+    elif tool_name == "explore_flow":
+        pages = result.get("pages", [])
+        return {
+            "pages": [_compress_page(p) for p in pages if isinstance(p, dict)],
+            "total_pages": result.get("total_pages", len(pages)),
+            "total_elements": result.get("total_elements", 0),
+            "warning": result.get("warning"),
+        }
+    return {}
 
 
 def run_compression_subagent(

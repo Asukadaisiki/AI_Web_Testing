@@ -17,9 +17,75 @@ from app.core.config import get_settings
 from app.locators.fallback import EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT
 from app.runners.pre_scorer import score_candidates_for_element, ELEMENT_TYPE_SCORES
 
+import hashlib
+
 logger = logging.getLogger(__name__)
 
 STALE_THRESHOLD_HOURS = 24
+
+
+class PageDataCache:
+    """Per-session cache of explored page data.
+
+    Avoids re-exploring the same (url, actions) combination within a session.
+    Shares the same 10-minute TTL as :class:`BrowserSessionManager`.
+    """
+
+    _lock = threading.Lock()
+    _cache: dict[int, dict[str, dict]] = {}
+    _timestamps: dict[int, dict[str, float]] = {}
+    _MAX_AGE_SECONDS: float = 600.0
+
+    @classmethod
+    def _prune_expired(cls, session_id: int) -> None:
+        now = _time_module.monotonic()
+        if session_id not in cls._timestamps:
+            return
+        stale = [
+            k for k, ts in cls._timestamps[session_id].items()
+            if now - ts > cls._MAX_AGE_SECONDS
+        ]
+        for k in stale:
+            cls._cache.get(session_id, {}).pop(k, None)
+            cls._timestamps[session_id].pop(k, None)
+
+    @classmethod
+    def _build_key(cls, step: dict) -> str:
+        url = (step.get("url") or "").strip().rstrip("/")
+        desc = (step.get("description") or "").strip()
+        actions = json.dumps(step.get("actions") or [], sort_keys=True, ensure_ascii=False)
+        raw = f"{url}|{desc}|{actions}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+    @classmethod
+    def get(cls, session_id: int, step: dict) -> dict | None:
+        if not session_id:
+            return None
+        with cls._lock:
+            cls._prune_expired(session_id)
+            key = cls._build_key(step)
+            result = cls._cache.get(session_id, {}).get(key)
+            if result is not None:
+                cls._timestamps.setdefault(session_id, {})[key] = _time_module.monotonic()
+                logger.info(
+                    "PageDataCache hit: session=%d url=%s",
+                    session_id, result.get("url", "?"),
+                )
+            return result
+
+    @classmethod
+    def put(cls, session_id: int, step: dict, result: dict) -> None:
+        if not session_id:
+            return
+        with cls._lock:
+            cls._prune_expired(session_id)
+            key = cls._build_key(step)
+            cls._cache.setdefault(session_id, {})[key] = result
+            cls._timestamps.setdefault(session_id, {})[key] = _time_module.monotonic()
+            logger.info(
+                "PageDataCache put: session=%d url=%s elements=%d",
+                session_id, result.get("url", "?"), result.get("element_count", 0),
+            )
 
 
 class BrowserSessionManager:
@@ -1643,6 +1709,15 @@ def collect_flow_elements(
             if not isinstance(step, dict):
                 continue
 
+            # --- Session cache: skip if already explored ---
+            if session_id:
+                cached = PageDataCache.get(session_id, step)
+                if cached is not None:
+                    results.append(cached)
+                    if cached.get("url"):
+                        current_url = cached["url"]
+                    continue
+
             step_url = step.get("url")
             if step_url and isinstance(step_url, str) and step_url.strip():
                 # Resolve relative URLs against base_url (BUG-067 regression)
@@ -1699,6 +1774,8 @@ def collect_flow_elements(
             if description:
                 result["description"] = description
             results.append(result)
+            if session_id:
+                PageDataCache.put(session_id, step, result)
 
         if not session_id and managed:
             context.close()
@@ -1774,6 +1851,7 @@ def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
 
 __all__ = [
     "BrowserSessionManager",
+    "PageDataCache",
     "build_flow_formatted_output",
     "capture_browser_session",
     "collect_flow_elements",
