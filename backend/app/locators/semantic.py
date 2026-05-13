@@ -228,14 +228,16 @@ def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
             for _ in range(_depth):
                 ancestor = ancestor.locator("..")
             try:
-                child = ancestor.get_by_text(child_text, exact=False)
+                # Pure numeric child_text → exact match to avoid matching href="/p/1"
+                _exact = child_text.strip().isdigit()
+                child = ancestor.get_by_text(child_text, exact=_exact)
                 n = child.count()
                 if n > 0:
                     return child.first
             except Exception:
                 continue
-    # Fallback: try without ancestor walk
-    return page.get_by_text(child_text, exact=False).first
+    # Fallback: try without ancestor walk; numeric → exact to avoid href matches
+    return page.get_by_text(child_text, exact=child_text.strip().isdigit()).first
 
 
 def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
@@ -283,7 +285,7 @@ def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
                         for _ in range(_depth):
                             ancestor = ancestor.locator("..")
                         try:
-                            child = ancestor.get_by_text(child_text, exact=False)
+                            child = ancestor.get_by_text(child_text, exact=child_text.strip().isdigit())
                             n = child.count()
                             if n > 0:
                                 current_locator = child.first
