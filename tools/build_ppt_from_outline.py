@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DECK = ROOT / "decks" / "ai-web-testing-review"
 PIC = ROOT / "pic"
 OUT = DECK / "build" / "ai-web-testing-v4.pptx"
+# Fallback when main output is locked
+OUT_ALT = DECK / "build" / "ai-web-testing-v4-latest.pptx"
 
 # ── Font ──
 FONT = "Microsoft YaHei"
@@ -638,8 +640,18 @@ def build():
         renderer(prs, slide_data, i + 1, total)
         print(f"  Slide {i+1}/{total}: {slide_data.get('title', '')[:60]} [{variant}]")
 
-    prs.save(str(OUT))
-    print(f"\nSaved: {OUT}")
+    # Write via temp file to avoid lock on existing output
+    import tempfile, shutil, os
+    fd, tmp_path = tempfile.mkstemp(suffix='.pptx')
+    os.close(fd)
+    tmp = Path(tmp_path)
+    try:
+        prs.save(tmp_path)
+        shutil.copy(tmp, OUT_ALT)
+        print(f"\nSaved: {OUT_ALT}")
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 if __name__ == "__main__":
