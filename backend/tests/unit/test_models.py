@@ -24,6 +24,7 @@ def test_stage1_tables_exist(db_session: Session) -> None:
         "ai_planning_messages",
         "ai_planning_sessions",
         "ai_planning_tool_results",
+        "dsl_anti_patterns",
         "dsl_generation_runs",
         "exploration_runs",
         "failure_records",

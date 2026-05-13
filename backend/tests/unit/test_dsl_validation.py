@@ -321,9 +321,9 @@ def test_call_llm_uses_glm_bigmodel_payload(monkeypatch) -> None:
     assert captured["json"] == {
         "model": "glm-4.7-flash",
         "messages": [{"role": "user", "content": "生成 DSL"}],
-        "thinking": {"type": "enabled"},
+        "thinking": {"type": "enabled", "effort": "medium"},
         "max_tokens": 65536,
-        "temperature": 1.0,
+        "temperature": 0.0,
     }
 
 
