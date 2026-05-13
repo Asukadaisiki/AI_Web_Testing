@@ -296,6 +296,29 @@ def _try_semantic_candidates_in_order(
     """
     normalized_target = target.strip()
 
+    # Resolve text_parent_chain targets before semantic matching.
+    # Only for targets that contain disambiguation markers (附近的, >>, 的).
+    # CSS/XPath targets are handled by _resolve_explicit_locator later.
+    if any(kw in normalized_target for kw in ("附近的", ">>", " 的 ")):
+        from app.locators.semantic import _resolve_text_parent_chain
+        explicit = _resolve_text_parent_chain(page, normalized_target)
+        if explicit is not None:
+            _strategy, _build_fn = explicit
+            try:
+                _locator = _build_fn()
+                _locator.wait_for(state="visible", timeout=3000)
+                return ResolvedLocator(
+                    strategy=_strategy,
+                    locator=_locator,
+                    trace=LocatorTrace(
+                        target=normalized_target,
+                        match_strategy=_strategy,
+                        selection_reason=f"Explicit locator resolved via {_strategy}.",
+                    ),
+                )
+            except Exception:
+                pass
+
     if target_strategy is not None and target_strategy != "semantic":
         try:
             return _resolve_by_strategy(
