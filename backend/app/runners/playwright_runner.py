@@ -820,7 +820,7 @@ def execute_case_with_playwright(
                             vlm_preverify_used=vlm_preverify_used,
                         )
                     )
-                    raise RunnerExecutionError(str(exc), step_results=step_results) from exc
+                    # Continue to next step instead of terminating the entire loop
         finally:
             browser.close()
 

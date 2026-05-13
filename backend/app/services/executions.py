@@ -135,8 +135,12 @@ def execute_case_streaming(
                 input_values=payload.input_values,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
-            report = build_execution_report(status="passed", steps=step_results)
-            execution.status = "passed"
+            has_failure = any(s.status in ("failed", "cascade_blocked") for s in step_results)
+            report = build_execution_report(
+                status="failed" if has_failure else "passed",
+                steps=step_results,
+            )
+            execution.status = "failed" if has_failure else "passed"
             execution.report = report.model_dump(mode="json")
             execution.error_message = None
     except RunnerInterventionError as exc:
@@ -234,8 +238,12 @@ def _execute_case_record(
                 input_values=payload.input_values,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
-            report = build_execution_report(status="passed", steps=step_results)
-            execution.status = "passed"
+            has_failure = any(s.status in ("failed", "cascade_blocked") for s in step_results)
+            report = build_execution_report(
+                status="failed" if has_failure else "passed",
+                steps=step_results,
+            )
+            execution.status = "failed" if has_failure else "passed"
             execution.report = report.model_dump(mode="json")
             execution.error_message = None
     except RunnerInterventionError as exc:
