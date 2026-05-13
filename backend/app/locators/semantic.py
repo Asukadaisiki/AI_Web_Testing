@@ -208,16 +208,62 @@ _PARENT_SPLIT_RE = re.compile(
 )
 
 
+class LocatorStrategyCache:
+    """Per-page cache of successful ancestor-locate strategies for self-healing.
+
+    When text_parent_chain succeeds, remembers the depth and exact-match setting.
+    On subsequent calls with similar patterns on the same page, tries cached
+    params first to avoid trial-and-error through the full nth/depth space.
+    """
+
+    _cache: dict[str, tuple[int, bool]] = {}  # key → (depth, exact)
+
+    @classmethod
+    def _key(cls, page_url: str, parent_text: str, child_text: str) -> str:
+        return f"{page_url}|{parent_text[:50]}|{child_text[:20]}"
+
+    @classmethod
+    def get(cls, page_url: str, parent_text: str, child_text: str) -> tuple[int, bool] | None:
+        return cls._cache.get(cls._key(page_url, parent_text, child_text))
+
+    @classmethod
+    def put(cls, page_url: str, parent_text: str, child_text: str, depth: int, exact: bool) -> None:
+        cls._cache[cls._key(page_url, parent_text, child_text)] = (depth, exact)
+        if len(cls._cache) > 200:
+            for k in list(cls._cache.keys())[:50]:
+                cls._cache.pop(k, None)
+
+
 def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
     """Find child_text within the nearest common ancestor of parent_text element.
 
     Tries multiple parent_text matches (nth=0..4), each at depths 2-8,
     returning the SHALLOWEST ancestor that contains child_text.
-    This adapts to any DOM structure: table rows (~3 levels), cards (~5), modals (~2).
-    Also handles duplicate parent texts (e.g., multiple identical product names on a page).
+    Uses :class:`LocatorStrategyCache` for self-healing on repeated patterns.
     """
+    page_url = getattr(page, "url", "") or ""
     parent_candidates = page.get_by_text(parent_text, exact=False)
     max_try = min(parent_candidates.count(), 5)
+
+    # Self-healing: try cached strategy first
+    cached = LocatorStrategyCache.get(page_url, parent_text, child_text)
+    if cached is not None:
+        _cdepth, _cexact = cached
+        for nth in range(max_try):
+            try:
+                parent_el = parent_candidates.nth(nth)
+            except Exception:
+                continue
+            ancestor = parent_el
+            for _ in range(_cdepth):
+                ancestor = ancestor.locator("..")
+            try:
+                child = ancestor.get_by_text(child_text, exact=_cexact)
+                if child.count() > 0:
+                    return child.first
+            except Exception:
+                continue
+
     for nth in range(max_try):
         try:
             parent_el = parent_candidates.nth(nth)
@@ -233,6 +279,7 @@ def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
                 child = ancestor.get_by_text(child_text, exact=_exact)
                 n = child.count()
                 if n > 0:
+                    LocatorStrategyCache.put(page_url, parent_text, child_text, _depth, _exact)
                     return child.first
             except Exception:
                 continue
