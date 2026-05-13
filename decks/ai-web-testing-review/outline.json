@@ -1,0 +1,411 @@
+{
+  "title": "AI 增强型 Web UI 自动化测试平台",
+  "subtitle": "评审自主阅读版：自然语言规划、结构化 DSL、稳定执行与证据报告闭环",
+  "deck_style": {
+    "font_pair": "clean_modern_v1",
+    "visual_density": "medium",
+    "emoji_mode": "none",
+    "header_mode": "lab-clean",
+    "title_layout": "lab-plate",
+    "footer_mode": "source-line",
+    "footer_page_numbers": false,
+    "summary_callout_mode": "lab-box",
+    "stats_mode": "feature-left",
+    "timeline_mode": "bands",
+    "matrix_mode": "open-quadrants"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "AI 增强型 Web UI 自动化测试平台",
+      "subtitle": "面向评委自主阅读的项目展示材料｜AI Planning + DSL + Playwright Runner + Evidence Report",
+      "repo_url": "https://github.com/Asukadaisiki/AI_Web_Testing",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-48-02.png"
+      },
+      "notes": "封面使用真实工作台截图，强调项目已形成可演示产品链路。GitHub 仓库地址放在底部技术栈下方。"
+    },
+    {
+      "type": "content",
+      "variant": "split",
+      "slide_intent": "message",
+      "title": "阅读导览：这份材料回答四个评审问题",
+      "subtitle": "本版不是路演提词器，而是可独立阅读的技术与商业说明。",
+      "body": "项目定位：把 AI 放入自动化测试工程链路，用结构化 DSL 和后端执行器约束 AI 的不确定性，再用步骤级证据报告支撑调试和复盘。",
+      "highlights": [
+        "为什么做：传统 UI 自动化脚本维护重、定位不稳、失败难复盘。",
+        "怎么做：AI 规划生成 DSL，后端 Playwright 执行，DOM 优先定位。",
+        "用在哪：Web 系统冒烟测试、回归测试、测试资产沉淀。",
+        "值不值：用 LLM 只做规划/疑难分析，常规执行成本可控。"
+      ],
+      "summary_callout": "建议阅读路径：先看 3-5 页理解价值与方案差异，再看 6-12 页看功能和技术证据，最后看 13-16 页判断应用与投入价值。"
+    },
+    {
+      "type": "content",
+      "variant": "comparison-2col",
+      "slide_intent": "context",
+      "title": "创意背景：AI 自动化测试需要“可控”，不只是“能点页面”",
+      "subtitle": "通用浏览器 Agent 的灵活性很强，但正式测试结果需要可审查、可复跑、可追踪。",
+      "left": {
+        "title": "传统 UI 自动化的痛点",
+        "body": [
+          "门槛高：测试人员需同时掌握 Playwright/Cypress API、CSS/XPath 选择器和断言编程，招聘和培训成本大。",
+          "定位脆弱：页面 DOM 结构微调、动态 class 名、列表顺序变化，就可能导致脚本批量失效，维护负担极重。",
+          "失败难复盘：传统报告只有 pass/fail + 单张截图，缺少 DOM 快照、候选定位路径、控制台日志和网络请求上下文。",
+          "资产难沉淀：测试脚本散落在代码仓库，缺乏统一的项目→用例→执行三级管理，时间和人力成本难以度量。"
+        ]
+      },
+      "right": {
+        "title": "纯 AI 浏览器 Agent 的风险",
+        "body": [
+          "输出不稳定：同一句自然语言指令可能产生不同操作路径，省略步骤、调换顺序或误改断言，不符合测试可复现性原则。",
+          "不可审计：AI 直接操控浏览器，决策过程不透明、操作记录无法版本化、出问题时难以回溯到底是哪一步判断出错。",
+          "成本不可控：每一步页面理解和动作决策都需调用 LLM，单次回归几十个步骤叠加下来，大模型费用远超人工或脚本。",
+          "缺乏工程治理：Agent 把 AI 推理和执行混在一起，无法对接 CI/CD、权限体系、测试资产管理和合规审计要求。"
+        ]
+      },
+      "verdict": "本项目的切入点：将 AI 限定在规划和疑难分析环节，让结构化 DSL 和后端确定性 Runner 作为正式执行的唯一入口，用步骤级证据报告替代 Agent 黑盒推理。"
+    },
+    {
+      "type": "content",
+      "variant": "table",
+      "slide_intent": "context",
+      "title": "与主流 AI 浏览器 Agent 的方案差异：治理优先，而非自主优先",
+      "subtitle": "2026 年 Web Bench 基准显示，最强 Agent 在写操作任务上的自主成功率也不足 47%。本项目选择了一条不同的路。",
+      "table": {
+        "headers": ["对比维度", "主流 AI Agent（Browser Use / Skyvern / Mariner）", "本项目（AI Testing Platform）"],
+        "rows": [
+          ["核心范式", "目标驱动：给定自然语言指令，AI 自主规划并操控浏览器完成操作", "工程驱动：AI 先生成结构化 DSL 草案，人工审查后由确定性 Runner 执行"],
+          ["执行可靠性", "同一指令可能产生不同操作路径；Web Bench 写任务最高 46.6%，读任务约 75%", "同一条 DSL 始终产生相同步骤序列；Playwright Runner 执行确定性 100%"],
+          ["成本模型", "每一步页面理解和动作决策都调用 LLM；Browser Use v0.12 优化后仍 ~2,400 tokens/步", "只在规划、DSL 生成和疑难定位时调用 LLM；常规回归执行零 LLM 成本"],
+          ["测试资产管理", "对话历史 / 执行录像，难以版本化和 CI/CD 集成", "Project → Case → Run 三级结构化存储，可版本化、可编辑、可批量编排"],
+          ["失败定位能力", "需回放 Agent 思考链或录像，决策过程不透明", "步骤级证据报告：截图、DOM 快照、候选定位路径、最终命中元素和控制台日志"],
+          ["人工介入方式", "重新描述需求，重新执行；上次经验不会自动沉淀", "定位修正记录沉淀为 Tier 0 优先匹配资产；修正次数越多定位越准"],
+          ["适用场景", "探索性操作、一次性数据采集、页面内容提取", "Web 冒烟测试、发布前核心路径回归、持续集成中的确定性验证"]
+        ],
+        "column_weights": [0.15, 0.42, 0.43],
+        "caption": "数据来源：Web Bench (Skyvern, 2026.2)、WebVoyager Benchmark、Browser Use v0.12 CDP 架构文档。"
+      },
+      "sources": ["Web Bench by Skyvern (2026)", "WebVoyager Benchmark", "Browser Use v0.12 architecture docs"],
+      "summary_callout": "一句话总结：主流 Agent 追求「AI 自主完成操作」，本项目追求「AI 辅助生成可审查的测试资产并由确定性引擎执行」。两者目标不同，架构选择也不同。"
+    },
+    {
+      "type": "content",
+      "variant": "table",
+      "slide_intent": "mechanism",
+      "title": "项目目标：形成从需求到报告的自动化测试闭环",
+      "subtitle": "目标不是生成一次性脚本，而是沉淀可复用的测试资产。",
+      "table": {
+        "headers": ["阶段", "输入", "平台处理", "输出"],
+        "rows": [
+          ["需求收集", "业务目标、入口 URL、测试数据", "AI Planning 结构化提取需求", "测试目标与关键断言"],
+          ["用例生成", "自然语言需求与页面探索结果", "LLM 生成 DSL 草案并经过校验", "可审查测试用例"],
+          ["正式执行", "结构化 DSL", "后端 Playwright Runner 执行", "步骤结果与运行状态"],
+          ["证据沉淀", "截图、DOM、日志、定位 trace", "Reporter 聚合结构化 JSON", "可读报告与后续分析数据"],
+          ["持续优化", "失败记录与人工修正", "定位修正复用、AI 生成规则优化", "更稳定的回归链路"]
+        ],
+        "column_weights": [0.17, 0.26, 0.32, 0.25],
+        "caption": "来源：项目 README、AGENTS.md 与 docs/project-plan.md 中的架构规则整理。"
+      },
+      "sources": ["项目文档：README.md、AGENTS.md、docs/project-plan.md"],
+      "summary_callout": "关键边界：前端只负责交互与展示，正式执行结果始终以后端 Runner 为准。"
+    },
+    {
+      "type": "content",
+      "variant": "image-sidebar",
+      "slide_intent": "evidence",
+      "title": "功能证据 1：AI 规划工作台",
+      "subtitle": "截图展示了需求收集、工具调用、测试点生成和 DSL 草案区域。",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-48-02.png"
+      },
+      "image_side": "left",
+      "sources": ["截图：AI Planning 工作台，来自 pic/Snipaste_2026-05-13_19-48-02.png"],
+      "sidebar_sections": [
+        {
+          "title": "可读信息",
+          "body": "评委可直接看到被测系统、业务目标、入口 URL、核心流程、关键断言和测试账号。"
+        },
+        {
+          "title": "工具调用",
+          "body": "Agent 调用 create_project、explore_flow 等工具采集页面信息，而不是凭空生成脚本。"
+        },
+        {
+          "title": "工程意义",
+          "body": "AI 规划被放在平台流程里，后续草案仍需保存为用例并由后端执行。"
+        }
+      ],
+      "summary_callout": "该页证明项目已具备“AI 对话式规划 + 工具调用 + 测试草案生成”的可视化闭环。"
+    },
+    {
+      "type": "content",
+      "variant": "image-sidebar",
+      "slide_intent": "evidence",
+      "title": "功能证据 2：复测与失败迭代闭环",
+      "subtitle": "自动化测试平台真正的价值在于持续复测、分析失败并沉淀改进。",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-48-11.png"
+      },
+      "image_side": "left",
+      "sources": ["截图：复测与失败迭代记录，来自 pic/Snipaste_2026-05-13_19-48-11.png"],
+      "sidebar_sections": [
+        {
+          "title": "失败不是终点",
+          "body": "截图中可以看到同一测试从 failed 到 passed 的迭代记录，说明平台支持真实调试过程。"
+        },
+        {
+          "title": "问题可分类",
+          "body": "失败可区分 assertion、runner 等类型，为定位 DSL、数据隔离或执行器问题提供依据。"
+        },
+        {
+          "title": "评审重点",
+          "body": "项目已经进入工程闭环阶段，而非停留在静态原型或单次演示。"
+        }
+      ]
+    },
+    {
+      "type": "content",
+      "variant": "image-sidebar",
+      "slide_intent": "evidence",
+      "title": "功能证据 3：用例中心与测试资产管理",
+      "subtitle": "AI 生成结果最终沉淀为项目级测试资产，支持后续执行和维护。",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-48-27.png"
+      },
+      "image_side": "right",
+      "sources": ["截图：用例中心，来自 pic/Snipaste_2026-05-13_19-48-27.png"],
+      "sidebar_sections": [
+        {
+          "title": "资产结构",
+          "body": "当前平台采用 Project -> Case -> Run 的结构，便于按项目管理测试用例和执行历史。"
+        },
+        {
+          "title": "业务示例",
+          "body": "截图中的 login-brand-filter-cart 用例覆盖登录、品牌筛选、购物车、价格与数量断言。"
+        },
+        {
+          "title": "平台价值",
+          "body": "用例不是临时 prompt，而是可保存、可编辑、可复跑的自动化测试资产。"
+        }
+      ]
+    },
+    {
+      "type": "content",
+      "variant": "image-sidebar",
+      "slide_intent": "evidence",
+      "title": "功能证据 4：结构化 DSL 编辑",
+      "subtitle": "通过稳定动作集合表达测试流程，保证 AI 生成结果可审查、可修改、可执行。",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-48-35.png"
+      },
+      "image_side": "left",
+      "sources": ["截图：DSL 用例编辑器，来自 pic/Snipaste_2026-05-13_19-48-35.png"],
+      "sidebar_sections": [
+        {
+          "title": "动作受控",
+          "body": "第一阶段动作集合保持小而稳定，例如 goto、click、input、wait_for、assert_text。"
+        },
+        {
+          "title": "变量复用",
+          "body": "支持 ${login_email}、${login_password} 等变量，占位数据可在执行时替换。"
+        },
+        {
+          "title": "执行可信",
+          "body": "所有正式测试执行都基于结构化 DSL，而不是直接把自然语言交给浏览器。"
+        }
+      ],
+      "summary_callout": "DSL 是本项目控制 AI 不确定性的关键工艺层。"
+    },
+    {
+      "type": "content",
+      "variant": "table",
+      "slide_intent": "mechanism",
+      "title": "技术创新点：混合定位系统降低 UI 自动化脆弱性",
+      "subtitle": "定位链路采用 DOM 优先、视觉兜底、人工修正沉淀，而不是单一 CSS/XPath 或纯视觉 Agent。",
+      "table": {
+        "headers": ["层级", "策略", "作用", "创新价值"],
+        "rows": [
+          ["Tier 0", "人工修正记录", "优先复用历史确认过的 selector", "把一次人工修复变成长期资产"],
+          ["Tier 1", "DOM 语义定位", "基于 role、label、placeholder、text、aria 等召回候选", "成本低、速度快、可解释"],
+          ["Tier 1.5/2", "上下文增强定位", "支持“商品附近按钮”等语义关系", "解决同名按钮和列表场景"],
+          ["Tier 3", "AI visual 兜底", "截图交给 VLM 返回 bbox，再反查 DOM", "处理 DOM 信息不足的疑难场景"],
+          ["Tier 4", "人工干预", "记录截图、URL、DOM、候选与失败原因", "为复盘和后续修正提供证据"]
+        ],
+        "column_weights": [0.13, 0.22, 0.34, 0.31],
+        "caption": "来源：docs/hybrid-locate-and-intervention-design.md 与后端 locators/runners 模块设计。"
+      },
+      "sources": ["docs/hybrid-locate-and-intervention-design.md"],
+      "summary_callout": "相比纯脚本定位，它更能适应页面变化；相比纯视觉定位，它更低成本、更可解释、更适合测试工程。"
+    },
+    {
+      "type": "content",
+      "variant": "image-sidebar",
+      "slide_intent": "evidence",
+      "title": "功能证据 5：步骤级证据报告",
+      "subtitle": "每一步都有截图和执行上下文，失败后可以复盘、定位和归因。",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-49-22.png"
+      },
+      "image_side": "left",
+      "sources": ["截图：步骤级证据报告，来自 pic/Snipaste_2026-05-13_19-49-22.png"],
+      "sidebar_sections": [
+        {
+          "title": "证据内容",
+          "body": "步骤编号、动作类型、目标文本、耗时、截图、断言结果和页面状态。"
+        },
+        {
+          "title": "排障价值",
+          "body": "失败时可以看到发生在哪一步、页面实际长什么样、断言目标是否匹配。"
+        },
+        {
+          "title": "AI 分析基础",
+          "body": "结构化报告未来可输入 AI 失败分析模块，自动判断数据、定位、断言或环境问题。"
+        }
+      ]
+    },
+    {
+      "type": "content",
+      "variant": "image-sidebar",
+      "slide_intent": "evidence",
+      "title": "功能证据 6：项目级报告中心",
+      "subtitle": "从单次执行上升到项目维度质量观察。",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-48-46.png"
+      },
+      "image_side": "right",
+      "sources": ["截图：项目级报告中心，来自 pic/Snipaste_2026-05-13_19-48-46.png"],
+      "sidebar_sections": [
+        {
+          "title": "当前能力",
+          "body": "项目级统计、执行列表、失败类型标签、历史执行记录和详情跳转。"
+        },
+        {
+          "title": "管理价值",
+          "body": "团队可以从执行历史中观察回归稳定性，而不只是查看单次脚本输出。"
+        },
+        {
+          "title": "扩展方向",
+          "body": "后续可加入趋势图、失败原因聚合、AI 失败分析和批量回归编排。"
+        }
+      ]
+    },
+    {
+      "type": "content",
+      "variant": "table",
+      "slide_intent": "implication",
+      "title": "应用场景与推广计划",
+      "subtitle": "先服务高频 Web 回归，再沉淀行业模板和企业化能力。",
+      "table": {
+        "headers": ["阶段", "目标用户", "主推能力", "验证指标"],
+        "rows": [
+          ["Demo 验证", "评委、同学、测试开发学习者", "AI 规划、用例执行、步骤证据报告", "能否独立看懂并复现完整链路"],
+          ["团队试用", "中小研发团队、QA 团队", "项目级用例管理、核心路径回归", "脚本编写时间和回归时间下降"],
+          ["行业模板", "电商、SaaS、后台系统团队", "登录、表单、购物车、筛选查询等模板", "新项目自动化启动时间缩短"],
+          ["企业化", "有内网系统和合规需求的企业", "私有化部署、权限、CI/CD、报告分析", "发布质量和缺陷排查效率提升"]
+        ],
+        "column_weights": [0.18, 0.25, 0.32, 0.25],
+        "caption": "来源：基于项目当前能力、目标用户与推广路径的规划性分析。"
+      },
+      "sources": ["项目商业化规划假设，待后续真实试用数据验证"],
+      "summary_callout": "最适合切入的早期场景：Web 系统冒烟测试、发布前核心路径回归、测试资产沉淀。"
+    },
+    {
+      "type": "content",
+      "variant": "table",
+      "slide_intent": "decision",
+      "title": "成本数据分析：成本可控来自“DOM 优先 + AI 按需调用”",
+      "subtitle": "以下为评审估算口径，实际部署可按并发、模型和报告留存周期替换。",
+      "table": {
+        "headers": ["成本项", "估算口径", "控制方式"],
+        "rows": [
+          ["研发成本", "1 名全栈/测试开发，3-6 个月完成 MVP 到可演示闭环", "优先打通 DSL -> Runner -> Evidence -> Report 主链路"],
+          ["服务器成本", "MVP 阶段 2C4G 云主机 + 数据库 + 对象存储，约 200-800 元/月", "低并发先单机部署，后续再横向扩展执行器"],
+          ["LLM 调用成本", "主要发生在规划、DSL 生成、疑难定位和失败分析", "常规执行不依赖 LLM，DOM 定位优先"],
+          ["浏览器执行成本", "Playwright 执行消耗 CPU/内存，取决于并发数", "通过队列和并发上限控制资源"],
+          ["存储成本", "截图、DOM 摘要、日志和 JSON 报告", "按项目和时间设置报告保留策略"]
+        ],
+        "column_weights": [0.18, 0.47, 0.35],
+        "caption": "说明：成本为 MVP/试用阶段估算口径，实际金额需按部署规模、模型选择与报告保留策略调整。"
+      },
+      "sources": ["成本估算：云资源、LLM 调用、浏览器执行与存储成本拆分"],
+      "summary_callout": "架构上避免“每一步都靠大模型”，因此比纯视觉 Agent 更适合长期自动化测试运行。"
+    },
+    {
+      "type": "content",
+      "variant": "table",
+      "slide_intent": "decision",
+      "title": "投资回报与商业化分析",
+      "subtitle": "AI 测试自动化市场 2025 年已达 $8.81B，预计 2032 年 $35.96B（CAGR 22.3%）。价值来自减少重复回归、降低脚本维护和缩短失败排查时间。",
+      "table": {
+        "headers": ["维度", "行业数据", "本项目收益判断"],
+        "rows": [
+          ["人工回归成本", "Virtuoso (2025)：中型团队月度手动回归成本约 $50K-93K；企业级年损耗 $1M+", "若平台覆盖 50%-70% 重复回归，每月可节省约 ¥3200-4480 元（小团队口径）"],
+          ["脚本维护负担", "传统自动化 60% 的 QA 工作量花在维护上；AI 自愈定位可将维护降至 ~5%", "混合定位 Tier 0 人工修正沉淀 + DOM 语义定位，减少页面变更导致的重复维护"],
+          ["失败排查效率", "Forge-Quality (2025)：每次失败平均排障 30+ 分钟；年浪费 $67K-89K 在误报排查上", "步骤级证据（截图+DOM+候选定位+日志）让问题更快归因到数据、断言、定位或环境"],
+          ["商业落地路径", "已落地案例：Wix 用 AI 视觉测试将 QA 从 70h 降至 5h；TreviPay 维护减半扩至 1000+ 用例", "适合从中小团队 SaaS 订阅、测试服务套餐和 CI/CD 集成切入"]
+        ],
+        "column_weights": [0.16, 0.48, 0.36],
+        "caption": "数据来源：MarketsandMarkets AI Test Automation Report (2025)、VirtuosoQA ROI Calculator (2025)、Forge-Quality AI Testing Report (2025)。"
+      },
+      "sources": ["MarketsandMarkets AI Test Automation Market Report 2025-2032", "VirtuosoQA Test Automation ROI Calculator (2025)", "Forge-Quality AI Testing: Hype vs Reality (2025)"],
+      "summary_callout": "当团队存在稳定 Web 产品、频繁发布和重复回归时，本项目具备清晰投入回报逻辑。"
+    },
+    {
+      "type": "content",
+      "variant": "timeline",
+      "slide_intent": "decision",
+      "title": "后续路线图：从可演示闭环走向团队级质量平台",
+      "subtitle": "下一阶段重点不再是堆功能，而是稳定性、样本规模和企业化能力。",
+      "milestones": [
+        {
+          "label": "近期",
+          "title": "稳定执行链路",
+          "body": "继续优化 AI Planning、DSL 生成质量和 Windows/Playwright worker 兼容问题。"
+        },
+        {
+          "label": "中期",
+          "title": "增强报告分析",
+          "body": "加入失败原因聚合、趋势分析、AI 失败归因和历史对比。"
+        },
+        {
+          "label": "中期",
+          "title": "批量回归编排",
+          "body": "基于 Project -> Case 增加队列、批量执行、失败重跑和结果对比。"
+        },
+        {
+          "label": "长期",
+          "title": "企业化交付",
+          "body": "权限分层、账号管理、CI/CD 集成、私有化部署和行业模板。"
+        }
+      ],
+      "summary_callout": "阶段判断：项目已经具备评审展示所需的完整链路，下一步应证明稳定性和真实团队使用价值。"
+    },
+    {
+      "type": "content",
+      "variant": "image-sidebar",
+      "slide_intent": "message",
+      "title": "总结：本项目的核心价值是“AI + 测试工程治理”",
+      "subtitle": "AI 参与规划和分析，结构化 DSL 与后端 Runner 保证执行可信。",
+      "assets": {
+        "hero_image": "assets/Snipaste_2026-05-13_19-47-45.png"
+      },
+      "image_side": "right",
+      "sources": ["截图：AI 规划会话列表，来自 pic/Snipaste_2026-05-13_19-47-45.png"],
+      "sidebar_sections": [
+        {
+          "title": "技术完整性",
+          "body": "AI Planning、DSL、Runner、Locator、Reporter 已形成端到端链路。"
+        },
+        {
+          "title": "创新合理性",
+          "body": "DOM 优先、视觉兜底、人工修正沉淀，比纯脚本和纯 Agent 更适合测试场景。"
+        },
+        {
+          "title": "商业可行性",
+          "body": "面向高频 Web 回归、自动化起步团队和测试服务交付，有明确成本节省空间。"
+        }
+      ],
+      "summary_callout": "一句话：这不是让 AI 随机操作网页，而是把 AI 放进可审查、可执行、可复盘的自动化测试闭环。"
+    }
+  ]
+}

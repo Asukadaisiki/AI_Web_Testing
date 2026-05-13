@@ -413,6 +413,12 @@ def render_title(prs, slide_data, page_num=0, total=0):
 
     add_textbox(slide, "FastAPI  ·  React/Vite  ·  Playwright  ·  AI DSL  ·  DOM Locator",
                 MX, 6.55, 6.0, 0.35, FONT_SIZES["cover_tech"], MUTED, font_name=FONT_LIGHT)
+
+    # GitHub repo URL
+    repo_url = slide_data.get("repo_url", "")
+    if repo_url:
+        add_textbox(slide, f"GitHub: {repo_url}",
+                    MX, 6.90, 6.0, 0.30, 11, BLUE, font_name=FONT_LIGHT)
     return slide
 
 
