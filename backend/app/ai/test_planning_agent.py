@@ -588,6 +588,48 @@ def stream_planning_turn(
                 tool_calls=tool_calls,
                 todo_list=todo_items,
             )
+
+            # --- Auto-generate DSL drafts in the same context ---
+            # Persist plan to session before calling generate_planning_drafts
+            if planning_session_id:
+                from app.models import AIPlanningSession
+                ps = db_session.get(AIPlanningSession, planning_session_id)
+                if ps:
+                    ps.plan_json = response.plan.model_dump(mode="json") if response.plan else None
+                    ps.status = "plan_ready"
+                    db_session.flush()
+
+            yield {"type": "status", "phase": "dsl", "message": "正在基于方案生成 DSL 草案..."}
+            dsl_auto_drafts: list[dict[str, Any]] = []
+            try:
+                from app.services.ai_planning import generate_planning_drafts
+                from app.schemas.ai_planning import GenerateAIPlanningDraftsRequest
+                plan_json = response.plan or {}
+                scenario_keys = [
+                    s.get("scenario_key", "")
+                    for s in plan_json.get("scenarios", [])
+                    if isinstance(s, dict) and s.get("scenario_key")
+                ]
+                if scenario_keys:
+                    dsl_req = GenerateAIPlanningDraftsRequest(
+                        scenario_keys=scenario_keys[:2],  # top 2 scenarios
+                    )
+                    dsl_response = generate_planning_drafts(
+                        db_session, planning_session_id, dsl_req,
+                        actor_user_id=actor_user_id,
+                    )
+                    for d in dsl_response.drafts:
+                        dsl_auto_drafts.append(d.model_dump(mode="json"))
+                    response.drafts = dsl_response.drafts
+                    response.next_action = "drafts_generated"
+                    yield {
+                        "type": "drafts",
+                        "drafts": dsl_auto_drafts,
+                        "next_action": "drafts_generated",
+                    }
+            except Exception as dsl_exc:
+                logger.warning("Auto DSL generation failed: %s", dsl_exc)
+
             yield _turn_complete_payload(response)
             return response
 
@@ -848,6 +890,21 @@ def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
     )
 
 
+def _log_cache_usage(raw_payload: dict, model: str) -> None:
+    """Log DeepSeek KV cache hit/miss metrics from the response usage."""
+    usage = raw_payload.get("usage", {})
+    hit = usage.get("prompt_cache_hit_tokens", 0)
+    miss = usage.get("prompt_cache_miss_tokens", 0)
+    total = usage.get("prompt_tokens", 0)
+    if hit or miss:
+        ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+        logger.info(
+            "DS cache: model=%s hit=%d miss=%d ratio=%.0f%% total_prompt=%d completion=%d",
+            model, hit, miss, ratio,
+            total, usage.get("completion_tokens", 0),
+        )
+
+
 def _call_planning_llm(
     *,
     messages: list[dict[str, Any]],
@@ -878,6 +935,7 @@ def _call_planning_llm(
     )
     with request.urlopen(http_request, timeout=timeout_seconds) as response:
         raw_payload = json.loads(response.read().decode("utf-8"))
+    _log_cache_usage(raw_payload, model)
     return _extract_message_content(raw_payload)
 
 

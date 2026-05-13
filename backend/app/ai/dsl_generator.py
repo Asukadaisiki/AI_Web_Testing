@@ -1946,6 +1946,19 @@ def _promote_contract_alias(
     return repaired.get(canonical_key)
 
 
+def _log_dsl_cache_usage(raw_payload: dict[str, Any]) -> None:
+    usage = raw_payload.get("usage", {})
+    hit = usage.get("prompt_cache_hit_tokens", 0)
+    miss = usage.get("prompt_cache_miss_tokens", 0)
+    if hit or miss:
+        ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+        logger.info(
+            "DSL cache: hit=%d miss=%d ratio=%.0f%% total=%d completion=%d",
+            hit, miss, ratio,
+            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+        )
+
+
 def _call_llm(
     *,
     messages: list[dict[str, Any]],
@@ -1997,6 +2010,7 @@ def _call_llm(
                 )
             ) from exc
 
+    _log_dsl_cache_usage(raw_payload)
     return _extract_message_content(raw_payload)
 
 
@@ -2082,6 +2096,7 @@ def _call_dsl_flash_llm(
                 f"Flash DSL generation returned non-JSON response: {response_text[:500]}"
             ) from exc
 
+    _log_dsl_cache_usage(raw_payload)
     return _extract_message_content(raw_payload)
 
 
