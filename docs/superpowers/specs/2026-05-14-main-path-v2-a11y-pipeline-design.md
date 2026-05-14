@@ -270,7 +270,7 @@ class A11yNode(TypedDict):
 | `ai/page_explorer.py` | `EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT` / `MAX_PROMPT_ELEMENTS_CHARS` 截断逻辑 | A11y 替代 |
 | `ai/dsl_generator.py` | `generate_case_draft` / `_normalize_generated_case` 中 governance 分支 / `_verify_field_coverage` / `_verify_navigation_completeness` / `_auto_inject_verification_steps` / `REJECTION_REASON_STRATEGIES`（保留 retry_reason_code）| 决策 2 + Preflight 替代 |
 | `runners/locator_confidence.py` | （现仅 explorer_runner 用，可独立删除一次） | 决策 5 已删主 runner 引用 |
-| `core/config.py` | `ai_planning_max_react_rounds` / `ai_planning_subagent_*` / `explore_max_elements` | 不再读取 |
+| `core/config.py` | `ai_planning_max_react_rounds` / `explore_max_elements` | 不再读取（`ai_planning_subagent_*` 已在本轮清理中删除） |
 | `locators/__init__.py` 等 | 与上述删除项相关的 import / re-export | 跟随 |
 
 预估再删除 ~800-1200 行（在阶段 2/3 落地时分批 commit）。

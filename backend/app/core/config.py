@@ -95,8 +95,6 @@ class Settings:
     enable_vlm_page_annotation: bool = True
     explore_interactive_max_clicks: int = 5
     explore_max_elements: int = 3000
-    ai_planning_subagent_enabled: bool = True
-    ai_planning_subagent_timeout_ms: int = 60000
     # v4-flash model for DOM compression and segmented DSL generation
     ai_planning_flash_model: str | None = None
     ai_planning_flash_base_url: str = "https://api.openai.com/v1"
@@ -157,8 +155,6 @@ def get_settings() -> Settings:
         enable_vlm_page_annotation=_get_bool(os.getenv("ENABLE_VLM_PAGE_ANNOTATION"), default=True),
         explore_interactive_max_clicks=max(1, _get_int(os.getenv("EXPLORE_INTERACTIVE_MAX_CLICKS"), default=5)),
         explore_max_elements=max(50, _get_int(os.getenv("EXPLORE_MAX_ELEMENTS"), default=300)),
-        ai_planning_subagent_enabled=_get_bool(os.getenv("AI_PLANNING_SUBAGENT_ENABLED"), default=True),
-        ai_planning_subagent_timeout_ms=max(5000, _get_int(os.getenv("AI_PLANNING_SUBAGENT_TIMEOUT_MS"), default=60000)),
         ai_planning_flash_model=os.getenv("AI_PLANNING_FLASH_MODEL") or None,
         ai_planning_flash_base_url=os.getenv("AI_PLANNING_FLASH_BASE_URL", "https://api.openai.com/v1"),
         ai_planning_flash_api_key=os.getenv("AI_PLANNING_FLASH_API_KEY") or None,
