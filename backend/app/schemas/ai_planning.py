@@ -80,19 +80,17 @@ class AIPlanningFlowStep(DSLModel):
 
 
 class AIPlanningScenario(DSLModel):
+    """Test scenario — lean 4-field output, rest optional for backward compat."""
     scenario_key: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=200)
-    goal: str = Field(min_length=1, max_length=1000)
-    preconditions: list[str] = Field(default_factory=list)
+    draft_prompt: str = Field(min_length=1)
     priority: Literal["high", "medium", "low"] = "medium"
+    goal: str | None = Field(default=None, max_length=1000)
+    preconditions: list[str] = Field(default_factory=list)
     test_data_requirements: list[AIPlanningTestDataRequirement] = Field(default_factory=list)
     assertions: list[str] = Field(default_factory=list)
-    draft_prompt: str = Field(min_length=1)
-    page_elements: str | None = Field(default=None, description="Formatted DOM elements from explore_page tool.")
-    flow_steps: list[AIPlanningFlowStep] = Field(
-        default_factory=list,
-        description="Structured flow step index for step-level element filtering.",
-    )
+    page_elements: str | None = Field(default=None)
+    flow_steps: list[AIPlanningFlowStep] = Field(default_factory=list)
 
 
 class AIPlanningPlan(DSLModel):
