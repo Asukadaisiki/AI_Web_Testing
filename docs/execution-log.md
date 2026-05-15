@@ -16,10 +16,12 @@
 
 **净变化（从 0db5a6e 到 8a61518）：** 新增 3 个测试文件、+500/-260 行源码。
 
-**遗留 (非阻塞)：**
-- Task 3.3 cache 进度清单注入、Task 3.4 DOM 旧代码删除 → 可在下一轮 PR 补齐
-- `explore_flow` handler 仍沿用旧 DOM 路径 → 后续对齐到 A11y
-- `generate_case_draft` 路径未删 → 后续决策
+**最终状态 (2026-05-15)：**
+- 491 tests / 0 failures
+- 15 commits, 33 files, +3.4K / −6.4K lines (净 −3K)
+- 17/17 plan tasks complete
+- 全链路: explore_page/flow → A11y CDP → dict → segmented DSL → preflight 1:N → execute
+- 遗留: E2E manual smoke test (needs full backend+frontend)
 
 ## 2026-05-14 | 架构清理阶段 1 — 删除 dormant 分支与冗余 LLM 调用
 
