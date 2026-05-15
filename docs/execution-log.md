@@ -2,26 +2,225 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
-## 2026-05-15 | 主路径 v2 实施 — 3 PR 完成 (PR-1 + PR-2 + PR-3 核心)
+## 2026-05-15 | 主路径 v2 全量实施 — 17/17 任务完成
 
-**背景：** 基于 `2026-05-14-main-path-v2-a11y-pipeline-design.md` spec，3 轮 brainstorm 锁定 8 个细节决策 + A11y 实验对比数据，分 3 PR 实施。
+**前置背景：**
+用户反馈项目架构的 4 个痛点——探索工具无缓存 / AI 草案质量低 / 定位器选择差 / 单轮思考 10 分钟。经过逐文件代码取证后发现：大量自愈、缓存、打分、prompt 注入等机制"已设计但主流程不触发"，根源是主路径走的是 `generate_segmented_case_draft`（segmented 分支），而所有质量门（governance / anti-pattern / preflight / review）全在 `generate_case_draft`（legacy 分支）。
 
-**PR-1 (5fb9c2f ~ 118bed5):** 默认项目 auto-create、A11y 角色过滤 + CDP 快照、程序化关键字展开、explore_page handler 切换、DB 缓存读取。**542 tests**。
+**先清理 dormant 分支（2026-05-14 阶段 1），删除：**
+- `app/ai/multi_agent.py` 整文件（527 行）— opt-in `?mode=multi_agent` 路径，从未默认启用
+- `test_planning_agent.py` 的 compression subagent + flash LLM 调用链（290 行）— 已被确定性 `_compress_tool_result` 替代
+- `locators/accessibility.py` 整文件（158 行）— Tier 1.5，与 `semantic.py` 的 role builder 重叠
+- `dsl_generator.py` 的 `_run_pre_execution_review` + `_record_review_anti_patterns`（100 行）— 仅 legacy 路径调用的额外 LLM 审查
+- `playwright_runner.py` 的 VLM 重复触发（43 行）— `_resolve_with_confidence_gate` 中 `locator_confidence=="low"` 时额外调 `preverify_with_vlm`，而 `resolve_with_fallback` 内部 Tier 2 也会调 VLM
+- `scripts/debug_regex.py` / `fix_exploration_prompt.py` / `fix_system_prompt.py`（122 行）— 一次性补丁脚本
+- `docs/hybrid-locate-and-intervention-design.md`（1058 行）— 已被后续 spec 取代
 
-**PR-2 (819611a):** dict 端到端数据流（_load_a11y_nodes_for_scenario）、preflight 1:N candidate 映射、_regen_segment 单段重生。**542 tests**。
+阶段 1 净结果：**544 tests / 0 failures，−1498 行。**
 
-**PR-3 (8a61518):** 系统提示词 186→30 行、safety_cap 30→5。**542 tests**。
+---
 
-**验证：** 每 PR 后跑 `uv run pytest tests/unit`，始终 542 passed / 0 failed。
+### Brainstorm + 实验（8 个细节决策）
 
-**净变化（从 0db5a6e 到 8a61518）：** 新增 3 个测试文件、+500/-260 行源码。
+基于 codebase 取证报告，用 `superpowers:brainstorming` 技能逐轮收敛：
 
-**最终状态 (2026-05-15)：**
-- 491 tests / 0 failures
-- 15 commits, 33 files, +3.4K / −6.4K lines (净 −3K)
-- 17/17 plan tasks complete
-- 全链路: explore_page/flow → A11y CDP → dict → segmented DSL → preflight 1:N → execute
-- 遗留: E2E manual smoke test (needs full backend+frontend)
+**A11y 树可行性实验**（`scripts/a11y_experiment.py`）：
+在 automationexercise.com 的 3 个页面上同时跑 DOM 全量抽取 vs CDP `Accessibility.getFullAXTree`：
+
+| URL | DOM 节点 | A11y useful 节点 | DOM JSON | A11y JSON | **字节收益** |
+|---|---:|---:|---:|---:|---:|
+| `/` | 300（撞 cap） | 294 | 598 kB | **26 kB** | **22x↓** |
+| `/products` | 300（撞 cap） | 275 | 598 kB | **25 kB** | **24x↓** |
+| `/brand_products/Polo` | 137 | 78 | 271 kB | **7 kB** | **38x↓** |
+
+时间：DOM 抽取 4.7-7.9s/页，A11y CDP 19-61ms/页（**100-250x 快**）。盲区：每页 8-9 个折叠菜单中的 `<a>` 链接。
+
+**8 个锁定的细节决策：**
+
+| # | 决策项 | 选择 |
+|---|---|---|
+| 1 | DSL target 字段类型 | 保留为文本（先靠 preflight + candidates 接通，不切 element_id） |
+| 2 | `generate_case_draft` 路径 | 删除，segmented 成为唯一 DSL 生成入口 |
+| 3 | Explorer-Judge 缺陷探索流 | 保留，独立旁路 |
+| 4 | Flow shape | 保留 ReAct，但 safety_cap 从 30 降到 5，schema 从 30+ 字段降到 4 字段 |
+| 5 | 元素来源 | A11y 树为主，不双扫 DOM（避免数据爆炸） |
+| 6 | 数据传递 | 结构化 dict 端到端（消除 NL→string→dict 反序列化） |
+| 7 | 草案质量门 | Preflight + 单段重生（不注入 anti-pattern） |
+| 8 | 折叠组件展开 | 程序化关键字驱动（从 core_user_flow 抽词 + 正则模糊 substring 匹配 `[aria-expanded=false]` 与 `<details>` 容器） |
+| 9 | 默认项目 | Auto-create `default-{session_id}` on session，UI 保存 case 时提示迁移 |
+| 10 | A11y 节点 schema | Standard 8 字段（node_id/role/name/level/parent_id/focusable/disabled/page_state），不含 value/bbox |
+| 11 | Scenarios 输出 | 4 字段（scenario_key/title/draft_prompt/priority），goal 改为 Optional |
+| 12 | Cache key | (session_id, normalized_url, viewport, storage_state_md5)，strip utm_*/_t/ref/fbclid/gclid，TTL=4h |
+| 13 | Cache 命中沟通 | Active 进度清单注入每轮 ReAct conversation |
+| 14 | Preflight 重生仍失败 | 软接受 + locator_confidence=low + warning |
+| 15 | Candidates 映射 | 1:N — 每个 a11y_node 产 3 候选（role exact / role fuzzy / text） |
+
+设计文档落地为 `docs/superpowers/specs/2026-05-14-main-path-v2-a11y-pipeline-design.md`（之后更新为 8 个细节决策）。
+
+---
+
+### PR-1：地基 — A11y 探索器 + 默认项目 + DB 缓存（7 tasks）
+
+**Task 1.1 — 默认项目 auto-create：**
+- `services/ai_planning.py:create_planning_session`：无 `project_id` 时自动创建 `default-{session_id}` 并绑定
+- `models/project.py`：加 `is_default` 布尔字段
+- `schemas/ai_planning.py:CreateAIPlanningSessionRequest`：加可选 `project_id` 字段
+- 新测试文件：`tests/unit/test_default_project.py`（2 tests）
+- 修复 6 个旧测试 (test_session_project_service.py) 断言，适配"session 创建必有 default project" 行为
+
+**Task 1.2 — A11y 角色过滤器 + 视口过滤器：**
+- `page_explorer.py`：加 `USEFUL_A11Y_ROLES`（24 种 role：button/link/textbox/heading/navigation/dialog/list/listitem 等）
+- 加 `_a11y_node_in_viewport`（部分交集判定）
+- 加 `_filter_a11y_nodes`（跳过 ignored + non-useful + off-viewport）
+- 新测试文件：`tests/unit/test_a11y_explorer.py`（11 tests，覆盖 filter/viewport/role set）
+
+**Task 1.3 — CDP 快照：**
+- `page_explorer.py`：加 `_cdp_to_a11y_nodes`（CDP `Accessibility.getFullAXTree` 响应 → Standard a11y_node schema）
+- 加 `collect_a11y_nodes`（主入口：打开 CDP session → enable → getFullAXTree → filter → normalize）
+- 加 `_expand_collapsed_components`（扫 `[aria-expanded="false"]` + `<details:not([open])>`，每页最多 click 10 个）
+
+**Task 1.4 — 程序化关键字提取 + 折叠展开：**
+- `page_explorer.py`：加 `_STOP_WORDS`（中英各 ~50 个） + `_extract_flow_keywords`（`re.findall(r'[\w一-鿿]{2,}', text)`，去停用词）
+- `collect_a11y_nodes` 接受 `core_user_flow_text` 参数 → 调关键词提取 → 调折叠展开
+
+**Task 1.5 — explore_page handler 切到 A11y：**
+- `planning_tools.py:_handle_explore_page`：用 `BrowserSessionManager` 共享浏览器，调 `collect_a11y_nodes`，返回 `a11y_nodes` 而非 `elements`
+- `planning_tools.py:_handle_explore_flow`（steps 路径）：用新建的 `_collect_flow_a11y`（A11y 版 flow executor）
+- `planning_tools.py:_handle_explore_flow`（urls 路径）：循环 URL，每页调 `collect_a11y_nodes`
+- 删除 `_check_action_disambiguation`（死代码）
+- 修复 2 个 explore_page 测试 + 2 个 explore_flow 测试，patch 目标从 `collect_interactable_elements` 改为 `collect_a11y_nodes`
+
+**Task 1.6 — DB 缓存读路径：**
+- `services/ai_planning.py`：加 `_normalize_cache_url`（strip utm_*/_t/ref/fbclid/gclid + drop fragment）
+- 加 `_lookup_tool_cache`（查 `AIPlanningToolResult`，TTL=4h，key 匹配 url + session_id + tool_name）
+- `planning_tools.py:_handle_explore_page`：入口先 lookup，命中直接返回 raw_result_json
+- 新测试文件：`tests/unit/test_tool_result_cache.py`（3 tests：normalize + cross-session miss + TTL expiry）
+
+**验证：** 542 tests / 0 failures
+**Commits：** `2ff62e1`, `118bed5`, `5fb9c2f`
+
+---
+
+### PR-2：数据流 + Preflight 重生 + 删死代码（6 tasks）
+
+**Task 2.1 — dict 端到端（a11y_nodes → DSL gen）：**
+- `services/ai_planning.py`：加 `_load_a11y_nodes_for_scenario`（从 `AIPlanningToolResult.raw_result_json` 读 a11y_nodes list[dict]，不再 `_parse_page_elements_text(string)`）
+- `generate_planning_drafts`：a11y_nodes_raw 按 `page_state` 分桶，直接传 dict 进 `generate_segmented_case_draft`
+- 保留 `_parse_page_elements_text` 作为 fallback（旧测试兼容）
+
+**Task 2.2 — preflight 1:N candidates：**
+- `locator_preflight.py:apply_preflight_to_dsl`：重写，改接受 `list[a11y_node]`（不再 `list[parsed_element_dict]`）
+- 每个匹配到的 a11y_node 产 3 个候选：
+  - `strategy="role"` + `pre_score=0.90`（exact）
+  - `strategy="role_fuzzy"` + `pre_score=0.75`
+  - `strategy="text"` + `pre_score=0.55`
+- 歧义匹配（多个 node 同 name）→ 全部进 candidates → `runtime_scorer.compute_final_score` 排序
+
+**Task 2.3 — 单段重生：**
+- `dsl_generator.py`：加 `_regen_segment(scenario_key, page_state, missing_targets, a11y_nodes, base_url)`
+- prompt 附 "target [X, Y] 在节点列表中找不到，请从以下节点重新选择"
+- 调 `_call_dsl_flash_llm`，最多 1 次重试
+- 重生仍失败 → `locator_confidence="low"` + warning
+
+**Task 2.4 — Scenarios schema 瘦身：**
+- `schemas/ai_planning.py:AIPlanningScenario`：`goal` 从 `str = Field(min_length=1)` 改为 `str | None = Field(default=None)`
+- 4 个必填字段：scenario_key / title / draft_prompt / priority
+- 旧 plan JSON 反序列化兼容（原来 8 字段全填）
+
+**Task 2.5 — 删除 governance 系统：**
+- `dsl_generator.py`：删 `build_generation_messages`、`generate_case_draft`（520 行主函数）、`_normalize_generated_case`、`_auto_inject_verification_steps`、`_verify_navigation_completeness`、`_verify_field_coverage`、`resolve_active_governance_reasons`、`REJECTION_REASON_STRATEGIES`、`DEFAULT_GOVERNANCE_REJECTION_REASONS`、`SETTLED_GOVERNANCE_REJECTION_REASONS`
+- 保留 stub 函数兼容 `services/dsl.py` 导入链
+- `app/services/dsl.py` 未动（耦合太深，需单独 PR）
+- 测试：删除 47 个 governance 相关测试函数（−2664 LOC）
+
+**Task 2.6 — 删除 `_parse_page_elements_text`：**
+- `services/ai_planning.py`：`_parse_page_elements_text`（68 行） + `_parse_page_elements_by_state`（27 行）
+- `_load_a11y_nodes_for_scenario` 的文本 fallback 分支
+- `planning_tools.py`：删除 unused `collect_interactable_elements` import
+
+**验证：** 542 → 491 tests（−51 个 governance 测试），0 failures
+**Commits：** `819611a`, `ea4df5b`, `ff0d81c`, `8d92654`, `8130fc0`
+
+---
+
+### PR-3：ReAct 瘦身 + 配置清理 + 死代码扫尾（4 tasks）
+
+**Task 3.1 — ReAct 系统提示词重写：**
+- `test_planning_prompts.py:SYSTEM_PROMPT_TEMPLATE`：186 行 → 30 行
+- 删除 `collected_info` / `test_context` / `todo_list` / `analysis` 等 30+ 字段的强制输出
+- 输出 schema 精简为 `{thought, action, action_input}` + 按 action 类型分化的 `action_input`
+- scenarios 仅为 4 字段 (key/title/draft_prompt/priority)
+
+**Task 3.2 — safety_cap 30→5：**
+- `core/config.py`：`ai_planning_max_react_safety_cap` 默认从 30 改 5
+- `get_settings()` 对应行同步
+
+**Task 3.3 — cache 进度清单注入：**
+- `test_planning_agent.py`：加 `_build_cache_progress_message(tool_calls)` — 扫 explore 调用结果，每轮 ReAct 前注入 "Already explored: [...]" system message
+- 每轮结束后 strip 上轮 cache 消息防 accumulation
+
+**Task 3.4 — 删除旧 DOM 收集代码：**
+- `page_explorer.py`：`collect_multi_page_elements` (157 行) + `collect_flow_elements` (266 行) + `build_flow_formatted_output` (75 行) — 三个函数在 explore_page/explore_flow 都切 A11y 后成为死代码
+- `planning_tools.py`：`_check_action_disambiguation` (57 行) — 死代码
+- `page_explorer.py`：加 `_collect_flow_a11y`（A11y 版 flow executor，含 keyword expand + CDP snapshot）
+- 加 `_execute_flow_actions`（共享 click/input/wait_for 执行器）
+- `planning_tools.py`：`_handle_explore_flow` 切到 `_collect_flow_a11y`
+
+**验证：** 491 tests / 0 failures
+**Commits：** `8a61518`, `67f1219`, `24f8e28`, `b066bfd`
+
+---
+
+### 改动文件清单（按类别）
+
+**新增文件：**
+- `backend/tests/unit/test_default_project.py` — 默认项目 auto-create（2 tests）
+- `backend/tests/unit/test_a11y_explorer.py` — A11y filter/CDP/keywords（11 tests）
+- `backend/tests/unit/test_tool_result_cache.py` — cache lookup（3 tests）
+- `backend/scripts/a11y_experiment.py` — A11y vs DOM 对比实验脚本
+- `docs/superpowers/specs/2026-05-14-main-path-v2-a11y-pipeline-design.md` — 设计文档（376 行）
+- `docs/superpowers/plans/2026-05-15-main-path-v2-a11y-pipeline.md` — 实施计划（1815 行）
+
+**删除文件：**
+- `backend/app/ai/multi_agent.py`（527 行）
+- `backend/app/locators/accessibility.py`（158 行）
+- `backend/tests/unit/test_locator_accessibility.py`（256 行）
+- `backend/scripts/debug_regex.py` / `fix_exploration_prompt.py` / `fix_system_prompt.py`
+- `docs/hybrid-locate-and-intervention-design.md`（1058 行）
+- `docs/dom_vlm_locator_weight_tables.xlsx`
+
+**大改文件：**
+- `backend/app/ai/page_explorer.py` — 删 DOM 抽取 + 加 A11y 抽取（+133/−520）
+- `backend/app/ai/dsl_generator.py` — 删 governance 系统 520 行 + 加 regen
+- `backend/app/ai/test_planning_prompts.py` — 重写为 30 行（−163）
+- `backend/app/services/ai_planning.py` — 加 cache + dict flow + 删 parse（+110/−95）
+- `backend/app/ai/planning_tools.py` — explore handler 全切 A11y + 删死代码（+80/−140）
+- `backend/tests/unit/test_dsl_validation.py` — 删 47 个 governance 测试（−2298）
+- `backend/tests/unit/test_ai_settings_api.py` — 删 2 个 governance stats 测试（−366）
+
+**小改文件：**
+- `backend/app/core/config.py` — 删 subagent 配置 + safety_cap 改 5
+- `backend/app/models/project.py` — 加 `is_default` 字段
+- `backend/app/schemas/ai_planning.py` — 加 `project_id` + scenarios 瘦身
+- `backend/app/ai/locator_preflight.py` — 重写 preflight 接受 a11y_nodes
+- `backend/app/ai/test_planning_agent.py` — 加 cache 进度注入 + 改 heavy tools 压缩
+- `backend/app/runners/playwright_runner.py` — 删 VLM 重复触发
+- `backend/app/api/routes/ai_planning.py` — 删 multi_agent 路由
+- `backend/app/services/ai_planning_streaming.py` — 删 stream_multi_agent_planning
+- `backend/app/ai/page_explorer.py` — 加 A11y 常量/函数（+200）、删旧函数（−520）、+flow a11y
+- `backend/tests/unit/test_planning_tools.py` — 更新 explore 测试 mock
+- `backend/tests/unit/test_session_project_service.py` — 适配 default project
+- `backend/tests/unit/test_ai_planning_api.py` — 加 A11y mock
+- `backend/tests/unit/test_locator_fallback.py` — 删 a11y tier 测试
+
+---
+
+### 最终状态
+- **491 tests / 0 failures**
+- **16 commits, 37 files, +3.5K / −6.6K lines（净 −3.1K）**
+- **17/17 plan tasks complete**
+- 全链路：`explore_page/explore_flow → A11y CDP → dict list[a11y_node] → cache DB → segmented DSL gen → preflight 1:N candidates → execute`
+- 遗留：E2E 手动 smoke test（需 backend+frontend 完整启动）
 
 ## 2026-05-14 | 架构清理阶段 1 — 删除 dormant 分支与冗余 LLM 调用
 
