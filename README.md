@@ -9,13 +9,32 @@ AI 增强的 Web UI 自动化测试平台。
 
 ## 当前状态
 
-当前阶段：**M2 功能增强 — AI Agent 质量已达生产可用**。M1/M2 前端体验全部完成。
+当前阶段：**M2 功能增强 — A11y 管线 v2 已落地，主路径全面切换**。M1/M2 前端体验全部完成。
 
-进度判断（基于 2026-05-07 量化结果）：
+进度判断（基于 2026-05-15 量化结果）：
 - M1 完成度：`100%`
 - M2 前端体验重构完成度：`100%`
-- M2 功能增强完成度：`90%`（AI Agent 生成测试用例 100% 步骤通过率）
+- M2 功能增强完成度：`95%`（A11y 管线 + 缓存 + Preflight 闭环已通）
 - 相对核心五阶段产品路线图整体完成度：`95%+`
+- 单元测试：**505 passed / 0 failed**，集成测试：**8 passed / 0 failed**
+
+### 2026-05-15 主路径 v2 — A11y 树驱动管线
+
+将主路径感知层从 DOM 全量抽取替换为 CDP Accessibility Tree，接通缓存与 Preflight 闭环：
+
+| 指标 | v1 (DOM) | v2 (A11y) |
+|------|----------|-----------|
+| 单页探索耗时 | 4.7-7.9s | 19-61ms（**100-250x 快**） |
+| 元素数据量 | 271-598 kB | 7-26 kB（**22-38x 小**） |
+| 元素上限 | 300（撞 cap） | 无上限（A11y 天然 50-300） |
+| ReAct safety_cap | 30 | 5 |
+| 系统提示词 | 186 行 | 30 行 |
+| DSL 生成入口 | `generate_case_draft` + segmented | `generate_segmented_case_draft` 唯一入口 |
+| 草案质量门 | 无 | Preflight 1:N candidates + 单段重生 |
+| 探索缓存 | 无 | `AIPlanningToolResult` DB 缓存，TTL=4h |
+| 默认项目 | 手动创建 | session 创建自动绑定 `default-{session_id}` |
+
+核心改动：16 commits，37 files，+3.5K / −6.6K lines（净 −3.1K）。
 
 ### 2026-05-07 AI Agent 质量量化里程碑
 
@@ -31,13 +50,6 @@ AI 增强的 Web UI 自动化测试平台。
 | nth-of-type 定位器 | 13 | 0（全部语义定位） |
 | 执行通过率 | 0%（无法执行） | **100%（42/42）** |
 
-### 本次核心架构改进
-
-- **AI 决策层**：系统提示词移除 ask_user 确认门；流程驱动探索规则（7 条强制规则）；压缩子代理 prompt 重写
-- **DSL 生成层**：归一化器修复（goto/click/capture_text extra field 剥离）；Surrogate Unicode 字符清理；capture→assert 强制规则
-- **探索数据层**：元素视觉分组（坐标聚类）；隐藏交互元素保留；选择器稳定性评分（accessibility tree 0.90 最高，nth-of-type 0.10）；相对 URL 解析
-- **执行定位器层**：`text_parent_chain` 新定位器（”Blue Top 附近的 Add to cart”）；执行流程重构（语义链优先 → VLM 仅兜底）；自适应 ancestor 深度遍历；2.5 分钟步骤超时
-
 ### 已完成的核心能力
 
 - 平台基础：NotebookLM 三栏浮岛布局、侧边栏导航、ReportPage、Case 管理（含编辑/删除）、执行详情、执行记录删除
@@ -45,21 +57,18 @@ AI 增强的 Web UI 自动化测试平台。
 - 执行主链路：DSL 校验、单 Case 执行、步骤级证据、执行详情与报告聚合
 - 执行流式推送：后端 SSE 流式执行原语、AI Planning SSE worker/路由、前端实时进度气泡与取消按钮
 - 混合定位闭环：Tier 0 人工修正、Tier 1 DOM 语义定位（含 text_parent_chain 消歧）、Tier 2 AI visual、Tier 3 人工干预
-- AI DSL：自然语言生成、草案预览与导入、反馈闭环、治理页观测，已适配 DeepSeek/智谱 BigModel
-- AI 规划助手：对话式测试规划、Flow 驱动页面探索、DSL 草案审阅 → 保存用例 → 触发执行 → 实时流式进度 → 结果展示完整闭环
-- 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回退
-- 回归能力：后端/前端自动化测试链路已建立，2 条浏览器级固定主回归 + 6 条 Platform API Chain 白盒集成测试
+- AI DSL：`generate_segmented_case_draft` 唯一入口、分段并行生成、Preflight 1:N candidates + 单段重生、草案预览与导入
+- AI 规划助手：对话式测试规划、A11y 树探索（CDP `Accessibility.getFullAXTree`）、关键字驱动折叠展开、DB 缓存（TTL=4h）、ReAct lite（safety_cap=5, 4 字段 schema）
+- 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回归能力：505 单元测试 + 8 集成测试（含 3 条浏览器级 A11y 管线回归）
 - 白盒测试：session 层 + 用例创建/执行/端到端全链路 API chain 测试覆盖
 
 当前仍在推进的事项：
-- BUG-079 购物车清空自动化（当前需手动清理，已知问题已记录）
-- 元素视觉分组 label 优化（部分 group 无有意义的 label）
+- `generate_case_draft` 已删除，但 `services/dsl.py` 的 `/api/v1/dsl/generate` 路由已切换到 `generate_segmented_case_draft`
 - AI visual 仍默认关闭，灰度验证样本积累中
 
 与计划相比的主要差距：
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
 - 认证只做到”本地账号密码 + Cookie Session”最小可用形态，尚未进入角色权限、账号管理、密码重置
-- corrections 运维视角的跨目标分析与更细粒度状态反馈尚未开始
 
 AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./docs/ai-visual-gray-acceptance-baseline.md)，本轮结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./docs/ai-visual-gray-acceptance-2026-03-24.md)。
 
@@ -86,11 +95,12 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
 
 仓库提供本地可控的浏览器级回归链路，用于验证：
 
-- 1 条 AI Agent E2E 回归（`test_brand_filter_cart`，42 步全通过，验证 AI 生成用例质量）
-- 2 条固定主回归：
-  - 单 Case smoke 可稳定执行成功
-  - 首次执行落为 `needs_intervention`，提交 correction 后可重跑通过，再次执行由 Tier 0 命中
-
+- 3 条 A11y 管线回归（`test_main_path_v2_e2e.py`，`@pytest.mark.browser_integration`）：
+  - A11y 节点结构验证（node_id/role/name/focusable/disabled/page_state）
+  - 所有 role ∈ `USEFUL_A11Y_ROLES`（24 种）
+  - Preflight 与真实 a11y_nodes 的 candidates 命中
+- 5 条 API 级集成测试（`test_main_path_v2_e2e.py`）：
+  - 默认项目 auto-create、Preflight candidates、DB 缓存命中/过期
 - 6 条 Platform API Chain 白盒集成测试：
   - Session 层：登录、登出、未授权访问 3 条
   - 用例创建 + 执行链路：有效 DSL 创建用例、登录 Case 执行验证、端到端全链路 3 条
@@ -99,14 +109,21 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
 
 ```powershell
 cd backend
+# 全量单测（505 tests）
+uv run pytest tests/unit -q
+
+# 浏览器级回归（需 Playwright）
 uv run pytest tests/integration -m browser_integration
+
+# API Chain 白盒测试
+uv run pytest tests/integration/test_platform_api_chain.py -v
 ```
 
 前置条件：
 
 - 已执行 `uv sync`
 - 已执行 `uv run playwright install chromium`
-- 测试会自动启动 `backend/tests/fixtures/` 下的本地静态页，不依赖外部站点
+- 浏览器级测试使用 `the-internet.herokuapp.com` 作为目标站点
 
 ## AI 视觉保护配置
 
@@ -137,14 +154,13 @@ AI DSL 生成会输出最小治理信息：
 
 ## 定位系统
 
-混合定位采用多层降级链路，语义优先、VLM 兜底：
+混合定位采用多层降级链路，A11y 优先、VLM 兜底：
 
 | Tier | 策略 | 说明 |
 |------|------|------|
 | Tier 0 | 人工修正 | 优先命中已保存的 corrections 记录 |
-| Tier 1 | DOM 语义定位 | text_parent_chain 消歧（"Blue Top 附近的 Add to cart"）、element_id、CSS/XPath、text/role/placeholder 匹配 |
-| Tier 1.5 | 无障碍树 | 零成本 accessibility tree lookup（arxiv 2603.20358） |
-| Tier 2 | 自适应 DOM 遍历 | `_find_in_ancestor` 逐步向上搜索公共祖先容器 |
+| Tier 1 | A11y candidates | Preflight 1:N 映射：`role`(0.90) / `role_fuzzy`(0.75) / `text`(0.55)，runtime_scorer 排序 |
+| Tier 2 | DOM 语义定位 | text_parent_chain 消歧、element_id、CSS/XPath、text/role/placeholder 匹配 |
 | Tier 3 | AI visual | 视觉模型定位，默认关闭，需手动开启 |
 | Tier 4 | 人工干预 | 定位失败后进入 `needs_intervention`，提交修正后可重跑 |
 
@@ -182,25 +198,22 @@ npm run dev
 
 ## 测试与构建
 
-### 后端测试
+### 后端测试（505 单元测试）
 
 ```powershell
 cd backend
-uv run pytest
+uv run pytest tests/unit -q
 ```
 
-### 后端浏览器级回归
+### 后端集成测试（8 tests: 5 API + 3 browser）
 
 ```powershell
 cd backend
-uv run pytest tests/integration -m browser_integration
-```
+# API 级集成测试（无浏览器）
+uv run pytest tests/integration/test_main_path_v2_e2e.py -v -k "not browser_integration"
 
-### 后端 API Chain 白盒集成测试
-
-```powershell
-cd backend
-uv run pytest tests/integration/test_platform_api_chain.py -v
+# 浏览器级回归（需 Playwright）
+uv run pytest tests/integration/test_main_path_v2_e2e.py -v -m browser_integration
 ```
 
 ### 前端测试
@@ -234,11 +247,11 @@ npm run build
 - `docs/AI 自动化测试增强项目规划.md`：核心产品规划，优先级最高
 - `docs/project-plan.md`：当前执行计划与阶段状态
 - `docs/frontend-design.md`：前端设计说明
-- `docs/hybrid-locate-and-intervention-design.md`：混合定位与人工干预技术设计
 - `docs/execution-log.md`：任务执行记录
 - `docs/bug-log.md`：缺陷记录
 - `docs/ai-visual-gray-acceptance-baseline.md`：AI visual 灰度验收口径与门槛
-- `docs/ai-visual-gray-acceptance-2026-03-24.md`：2026-03-24 本地受控灰度验收结论
+- `docs/superpowers/specs/2026-05-14-main-path-v2-a11y-pipeline-design.md`：A11y 管线 v2 设计文档
+- `docs/superpowers/plans/2026-05-15-main-path-v2-a11y-pipeline.md`：A11y 管线 v2 实施计划
 - `docs/superpowers/specs/`：功能设计规格文档
 - `docs/superpowers/plans/`：实施计划文档
 
