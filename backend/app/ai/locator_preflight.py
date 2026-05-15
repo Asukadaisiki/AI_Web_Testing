@@ -307,38 +307,69 @@ def preflight_locators(
 
 def apply_preflight_to_dsl(
     dsl_case: dict[str, Any],
-    page_elements: list[dict[str, Any]],
+    a11y_nodes: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Run preflight and write confidence / warnings / candidates back into the DSL case dict.
+    """Run preflight against a11y_nodes, write 1:N candidates + confidence.
 
-    Mutates *dsl_case* in place and also returns it.
+    Matches step.target against a11y_node.name (exact + substring).
+    Each match produces 3 candidates (role exact / role fuzzy / text).
+    Mutates *dsl_case* in place and returns it.
     """
     steps = dsl_case.get("steps", [])
-    if not steps or not page_elements:
+    if not steps or not a11y_nodes:
         return dsl_case
 
-    result = preflight_locators(steps, page_elements)
-    for sr in result.get("step_results", []):
-        idx = sr["step_index"]
-        if idx < len(steps):
-            steps[idx]["locator_confidence"] = sr["confidence"]
-            matched = sr.get("matched_elements", [])
+    confidences: list[str] = []
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        target = (step.get("target") or "").strip()
+        if not target:
+            continue
 
-            # Only set page_state if the matched element has one and the step doesn't
-            if not steps[idx].get("page_state") and matched:
-                page_state = matched[0].get("page_state")
-                if page_state:
-                    steps[idx]["page_state"] = page_state
+        target_lower = target.lower()
+        matches: list[dict] = []
+        for n in a11y_nodes:
+            name = (n.get("name") or "").lower()
+            if not name:
+                continue
+            if name == target_lower or target_lower in name:
+                matches.append(n)
 
-            # Inject pre-scored candidates from matched elements
-            if matched and not steps[idx].get("candidates"):
-                candidates = _collect_candidates_from_matches(matched, sr["target"])
-                if candidates:
-                    steps[idx]["candidates"] = candidates
+        match_count = len(matches)
+        candidates: list[dict] = []
+
+        if match_count > 0:
+            for n in matches:
+                role = n["role"]
+                name = n["name"]
+                candidates.extend([
+                    {"strategy": "role", "selector": role, "semantic_value": name,
+                     "pre_score": 0.90, "pre_features": {"verified": True, "source": "a11y_role_exact"}},
+                    {"strategy": "role_fuzzy", "selector": role, "semantic_value": name,
+                     "pre_score": 0.75, "pre_features": {"source": "a11y_role_fuzzy"}},
+                    {"strategy": "text", "selector": name, "semantic_value": name,
+                     "pre_score": 0.55, "pre_features": {"source": "a11y_text_exact"}},
+                ])
+            step["locator_confidence"] = "high" if match_count == 1 else "medium"
+        else:
+            step["locator_confidence"] = "low"
+
+        step["candidates"] = candidates
+        step["match_count"] = match_count
+        confidences.append(step["locator_confidence"])
+
+    overall = "high"
+    if "low" in confidences:
+        overall = "low"
+    elif "medium" in confidences:
+        overall = "medium"
 
     dsl_case["_preflight"] = {
-        "locator_confidence": result["locator_confidence"],
-        "warnings": result["warnings"],
+        "locator_confidence": overall,
+        "warnings": [f"Step {i}: match_count={s.get('match_count',0)}"
+                     for i, s in enumerate(steps)
+                     if isinstance(s, dict) and s.get("match_count", 0) == 0],
     }
     return dsl_case
 

@@ -2346,3 +2346,41 @@ def _format_validation_error(exc: ValidationError) -> str:
     location = ".".join(str(item) for item in first_error.get("loc", ()))
     message = first_error.get("msg", "unknown validation error")
     return f"AI 返回的 DSL 不符合当前 schema：{location} {message}".strip()
+
+
+def _regen_segment(
+    *,
+    scenario_key: str,
+    page_state: str,
+    missing_targets: list[str],
+    a11y_nodes: list[dict[str, Any]],
+    base_url: str,
+) -> list[dict[str, Any]]:
+    """Regenerate steps for one page_state segment after preflight finds missing targets."""
+    node_lines: list[str] = []
+    for n in a11y_nodes:
+        node_lines.append(f"  - role={n['role']} name=\"{n['name']}\" id={n['node_id']}")
+
+    regen_prompt = (
+        f"The previous DSL generation used targets that do not exist on the page:\n"
+        f"  {', '.join('\"' + t + '\"' for t in missing_targets)}\n\n"
+        f"These targets are NOT in the available element list below. "
+        f"Please regenerate the steps for page state {page_state}, choosing targets "
+        f"ONLY from the following element names:\n\n"
+        + "\n".join(node_lines) + "\n\n"
+        f"Return valid JSON: {{\"steps\": [...], \"base_url\": \"{base_url}\"}}"
+    )
+    messages = [
+        {"role": "system", "content": "Regenerate DSL steps. Return JSON only. Choose targets from the provided list."},
+        {"role": "user", "content": regen_prompt},
+    ]
+    response = _call_dsl_flash_llm(
+        messages=messages,
+        settings=get_settings(),
+        timeout_seconds=60.0,
+    )
+    cleaned = _extract_json_object(response)
+    raw = json.loads(cleaned)
+    if not isinstance(raw, dict):
+        raise DslGenerationError(f"Regen segment {page_state}: response is not a JSON object")
+    return raw.get("steps", raw.get("data", {}).get("steps", [])) or []

@@ -408,6 +408,39 @@ def stream_planning_message(
     return response
 
 
+def _load_a11y_nodes_for_scenario(
+    session: Session,
+    planning_session_id: int,
+    *,
+    scenario: dict | None = None,
+) -> list[dict] | None:
+    """Load a11y_nodes from the most recent explore result for this session.
+    Falls back to parsing page_elements text for backward compat.
+    """
+    result_record = session.scalars(
+        select(AIPlanningToolResult)
+        .where(AIPlanningToolResult.session_id == planning_session_id)
+        .where(AIPlanningToolResult.tool_name.in_(["explore_flow", "explore_page"]))
+        .order_by(AIPlanningToolResult.id.desc())
+    ).first()
+    if result_record and isinstance(result_record.raw_result_json, dict):
+        raw = result_record.raw_result_json
+        if "pages" in raw:
+            all_nodes = []
+            for page in raw.get("pages", []):
+                state = page.get("page_state", "S0")
+                for n in page.get("a11y_nodes", []):
+                    n = dict(n)
+                    n["page_state"] = n.get("page_state", state)
+                    all_nodes.append(n)
+            return all_nodes
+        return raw.get("a11y_nodes")
+    # Fallback: parse page_elements text (old tests/compat)
+    if scenario and scenario.get("page_elements"):
+        return _parse_page_elements_text(str(scenario["page_elements"]))
+    return None
+
+
 def generate_planning_drafts(
     session: Session,
     planning_session_id: int,
@@ -481,11 +514,11 @@ def generate_planning_drafts(
             session.delete(existing)
             session.flush()
 
-        # Block draft generation if page exploration failed (no DOM elements)
-        page_elements = scenario.get("page_elements")
-        if not page_elements or not str(page_elements).strip():
+        # Load a11y_nodes from the most recent explore result
+        a11y_nodes_raw = _load_a11y_nodes_for_scenario(session, planning_session_id, scenario=scenario)
+        if not a11y_nodes_raw:
             logger.warning(
-                "Skipping DSL generation for scenario '%s': no page elements collected (exploration likely failed)",
+                "Skipping DSL generation for scenario '%s': no A11y elements collected",
                 scenario_key,
             )
             record = AIPlanningDraft(
@@ -508,11 +541,14 @@ def generate_planning_drafts(
             flow_steps = scenario.get("flow_steps", [])
             settings_local = get_settings()
 
-            if flow_steps and page_elements and settings_local.ai_planning_flow_steps_enabled:
-                # --- Segmented DSL generation (Phase 5) ---
+            if flow_steps and settings_local.ai_planning_flow_steps_enabled:
                 from app.ai.dsl_generator import generate_segmented_case_draft
 
-                page_elements_by_state = _parse_page_elements_by_state(str(page_elements))
+                page_elements_by_state: dict[str, list[dict]] = {}
+                for n in a11y_nodes_raw:
+                    ps = n.get("page_state", "S0") or "S0"
+                    page_elements_by_state.setdefault(ps, []).append(n)
+
                 case_obj, gen_warnings, gen_notes, gen_meta = generate_segmented_case_draft(
                     payload=GenerateDslRequest(
                         prompt=scenario["draft_prompt"],
@@ -555,15 +591,12 @@ def generate_planning_drafts(
                         retry_reason_code=retry_reason_code,
                     ),
                 )
-            # --- Locator preflight (Phase 3) ---
+            # --- Locator preflight ---
             dsl_dict = generated.case.model_dump(mode="json")
             preflight_warnings: list[str] = []
             preflight_rejected = False
 
-            # Gate: check exploration data exists before preflight
-            pe_text = scenario.get("page_elements", "")
-            page_elements_list: list[dict] = _parse_page_elements_text(pe_text) if pe_text else []
-            if not page_elements_list:
+            if not a11y_nodes_raw:
                 preflight_rejected = True
                 raise ValueError(
                     "No page exploration data available for locator verification. "
@@ -573,7 +606,7 @@ def generate_planning_drafts(
 
             try:
                 from app.ai.locator_preflight import apply_preflight_to_dsl
-                dsl_dict = apply_preflight_to_dsl(dsl_dict, page_elements_list)
+                dsl_dict = apply_preflight_to_dsl(dsl_dict, a11y_nodes_raw)
                 pf = dsl_dict.pop("_preflight", {})
                 preflight_warnings = pf.get("warnings", [])
                 preflight_confidence = pf.get("locator_confidence", "unknown")
@@ -593,7 +626,7 @@ def generate_planning_drafts(
                             unresolved_states.add(sr["target"][:80])
                     rejection_msg = (
                         f"Preflight gate: {unmatched}/{total_targets} steps have targets "
-                        f"not found in {len(page_elements_list)} explored elements.\n"
+                        f"not found in {len(a11y_nodes_raw)} explored elements.\n"
                         f"Missing: {', '.join(sorted(unresolved_states)[:5])}"
                     )
                     raise ValueError(rejection_msg)
@@ -622,7 +655,7 @@ def generate_planning_drafts(
                 logger.info(
                     "Preflight for scenario '%s': confidence=%s, warnings=%d, elements=%d, unmatched=%d/%d",
                     scenario_key, preflight_confidence, len(preflight_warnings),
-                    len(page_elements_list), unmatched, total_targets,
+                    len(a11y_nodes_raw), unmatched, total_targets,
                 )
             except Exception as exc:
                 if preflight_rejected:
