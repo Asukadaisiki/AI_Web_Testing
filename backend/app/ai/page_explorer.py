@@ -21,6 +21,52 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
+# ── A11y roles we keep for the LLM ──────────────────────────────────────────
+USEFUL_A11Y_ROLES: set[str] = {
+    # interactive
+    "button", "link", "textbox", "checkbox", "radio", "menuitem",
+    "menuitemcheckbox", "menuitemradio", "combobox", "listbox", "option",
+    "tab", "treeitem", "switch", "searchbox", "spinbutton", "slider",
+    # landmark / descriptive
+    "heading", "image", "navigation", "main", "banner", "contentinfo",
+    "form", "search", "region", "dialog", "alertdialog", "alert",
+    "menu", "menubar", "tablist", "list", "listitem", "article",
+    "complementary",
+}
+
+
+def _a11y_node_in_viewport(node: dict, viewport: dict) -> bool:
+    bb = node.get("boundingBox")
+    if not bb or not isinstance(bb, dict):
+        return True
+    vp_w = viewport.get("width", 1280)
+    vp_h = viewport.get("height", 720)
+    x, y, w, h = bb.get("x", 0), bb.get("y", 0), bb.get("width", 0), bb.get("height", 0)
+    if w <= 0 or h <= 0:
+        return True
+    return x < vp_w and y < vp_h and (x + w) > 0 and (y + h) > 0
+
+
+def _filter_a11y_nodes(
+    raw_nodes: list[dict],
+    *,
+    viewport: dict | None = None,
+) -> list[dict]:
+    if viewport is None:
+        viewport = {"width": 1280, "height": 720}
+    result: list[dict] = []
+    for n in raw_nodes:
+        if n.get("ignored", False):
+            continue
+        role = n.get("role", "unknown")
+        if role not in USEFUL_A11Y_ROLES:
+            continue
+        if not _a11y_node_in_viewport(n, viewport):
+            continue
+        result.append(n)
+    return result
+
+
 STALE_THRESHOLD_HOURS = 24
 
 
