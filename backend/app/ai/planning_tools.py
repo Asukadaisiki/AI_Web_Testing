@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from app.ai.page_explorer import (
     capture_browser_session,
     collect_a11y_nodes,
-    collect_interactable_elements,
     collect_multi_page_elements,
     is_storage_state_stale,
     load_storage_state_meta,

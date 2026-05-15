@@ -530,6 +530,18 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
     monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
     monkeypatch.setattr(
         ai_planning_service,
+        "_load_a11y_nodes_for_scenario",
+        lambda session, planning_session_id, scenario=None: [
+            {"node_id": "e1", "role": "textbox", "name": "用户名",
+             "focusable": True, "disabled": False, "page_state": "S0"},
+            {"node_id": "e2", "role": "textbox", "name": "密码",
+             "focusable": True, "disabled": False, "page_state": "S0"},
+            {"node_id": "e3", "role": "button", "name": "登录",
+             "focusable": True, "disabled": False, "page_state": "S0"},
+        ],
+    )
+    monkeypatch.setattr(
+        ai_planning_service,
         "run_planning_turn",
         lambda **_: AIPlanningTurnResponse(
             assistant_message="已生成测试规划。",

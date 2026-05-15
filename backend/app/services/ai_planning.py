@@ -44,71 +44,6 @@ from app.services.executions import execute_case, execute_case_streaming
 logger = logging.getLogger(__name__)
 
 
-def _parse_page_elements_text(text: str) -> list[dict]:
-    """Parse formatted page_elements text back into structured element dicts.
-
-    The text format is one element per line:
-      tag[attr='value'][text='text'] | css=selector | xpath=selector | rect=... | stable=0.XX | candidates=...
-    """
-    import re
-    elements: list[dict] = []
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('===') or line.startswith('页面') or line.startswith('...'):
-            continue
-        el: dict[str, object] = {}
-        tag_match = re.match(r'^(\w+)', line)
-        if tag_match:
-            el['tag'] = tag_match.group(1)
-        for m in re.finditer(r"\[(\w[\w-]*)=('[^']*'|\"[^\"]*\")]", line):
-            key = m.group(1)
-            val = m.group(2).strip("'\"")
-            el[key] = val
-        css_match = re.search(r'\|\s*css=(\S+)', line)
-        if css_match:
-            el['css_selector'] = css_match.group(1)
-        xp_match = re.search(r'\|\s*xpath=(\S+)', line)
-        if xp_match:
-            el['xpath'] = xp_match.group(1)
-        st_match = re.search(r'stable=([\d.]+)', line)
-        if st_match:
-            el['stable'] = float(st_match.group(1))
-        el['visible'] = True
-        el['enabled'] = 'disabled' not in line
-        if el:
-            elements.append(el)
-    return elements
-
-
-def _parse_page_elements_by_state(full_text: str) -> dict[str, list[dict]]:
-    """Parse combined page_elements text (with state markers) into state-keyed dict.
-
-    Handles ``=== 页面状态 S0: http://... ===`` marker format from
-    :func:`build_flow_formatted_output`.
-    """
-    import re
-    result: dict[str, list[dict]] = {}
-    sections = re.split(
-        r"=== 页面状态 (S\d+):[^\n]*===\s*",
-        full_text,
-    )
-    if len(sections) < 2:
-        # No state markers found — return all elements under "S0"
-        elements = _parse_page_elements_text(full_text)
-        if elements:
-            result["S0"] = elements
-        return result
-
-    # sections[0] is preamble, then alternating [state_id, content]
-    for i in range(1, len(sections) - 1, 2):
-        state_id = sections[i].strip()
-        content = sections[i + 1]
-        elements = _parse_page_elements_text(content)
-        if elements:
-            result[state_id] = elements
-    return result
-
-
 class AIPlanningAccessError(ValueError):
     """Raised when a planning session or draft is inaccessible."""
 
@@ -435,9 +370,6 @@ def _load_a11y_nodes_for_scenario(
                     all_nodes.append(n)
             return all_nodes
         return raw.get("a11y_nodes")
-    # Fallback: parse page_elements text (old tests/compat)
-    if scenario and scenario.get("page_elements"):
-        return _parse_page_elements_text(str(scenario["page_elements"]))
     return None
 
 
