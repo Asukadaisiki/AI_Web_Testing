@@ -1,7 +1,9 @@
 from app.ai.page_explorer import (
     USEFUL_A11Y_ROLES,
-    _filter_a11y_nodes,
     _a11y_node_in_viewport,
+    _cdp_to_a11y_nodes,
+    _extract_flow_keywords,
+    _filter_a11y_nodes,
 )
 
 
@@ -53,3 +55,69 @@ def test_useful_roles_set_contains_expected():
     assert "InlineTextBox" not in USEFUL_A11Y_ROLES
     assert "StaticText" not in USEFUL_A11Y_ROLES
     assert "generic" not in USEFUL_A11Y_ROLES
+
+
+# ── CDP node normalization ───────────────────────────────────────────────
+
+def test_cdp_to_a11y_nodes_basic():
+    cdp = {"nodes": [
+        {"role": {"value": "button"}, "name": {"value": "Login"},
+         "nodeId": "42", "ignored": False,
+         "parentId": "7", "boundingBox": {"x": 100, "y": 200, "width": 60, "height": 30},
+         "properties": [
+             {"name": "focusable", "value": {"value": True}},
+             {"name": "disabled", "value": {"value": False}},
+         ]},
+        {"role": {"value": "InlineTextBox"}, "name": {"value": "nope"},
+         "nodeId": "43", "ignored": False,
+         "boundingBox": {"x": 10, "y": 10, "width": 50, "height": 20}},
+    ]}
+    nodes = _cdp_to_a11y_nodes(cdp, page_state="S0")
+    assert len(nodes) == 1
+    n = nodes[0]
+    assert n["node_id"] == "e42"
+    assert n["role"] == "button"
+    assert n["name"] == "Login"
+    assert n["focusable"] is True
+    assert n["disabled"] is False
+    assert n["page_state"] == "S0"
+
+
+def test_cdp_defaults_on_missing_props():
+    cdp = {"nodes": [
+        {"role": {"value": "link"}, "name": {"value": "Products"},
+         "nodeId": "5", "ignored": False, "properties": []},
+    ]}
+    nodes = _cdp_to_a11y_nodes(cdp, page_state="S1")
+    assert len(nodes) == 1
+    assert nodes[0]["focusable"] is False
+    assert nodes[0]["disabled"] is False
+    assert nodes[0]["level"] is None
+    assert nodes[0]["parent_id"] is None
+
+
+# ── Keyword extraction ───────────────────────────────────────────────────
+
+def test_extract_keywords_mixed():
+    kw = _extract_flow_keywords("点击 Signup / Login，然后 Products")
+    assert "signup" in kw or "login" in kw or "products" in kw
+
+
+def test_extract_keywords_english():
+    kw = _extract_flow_keywords("Click Polo brand then Add to cart")
+    assert "polo" in kw or "add" in kw or "cart" in kw
+
+
+def test_extract_keywords_stop_words():
+    kw = _extract_flow_keywords("测试 the a an is login products")
+    assert "the" not in kw
+    assert "a" not in kw
+    assert "an" not in kw
+    # "login" and "products" are valid keywords (3+ chars), should remain
+    assert "login" in kw
+    assert "products" in kw
+
+
+def test_extract_keywords_empty():
+    assert _extract_flow_keywords("") == set()
+    assert _extract_flow_keywords(None) == set()

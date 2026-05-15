@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlunparse, urlparse, parse_qs, urlencode
 
 from sqlalchemy import func, select
 
@@ -2413,3 +2416,47 @@ def _build_repair_prompt(case_record, test_design_errors: list) -> str:
     parts.append(str(case_record.dsl))
     parts.append("\n\n请基于以上分析，生成修复后的 DSL 步骤。保持测试目标不变，修正失败点。")
     return "".join(parts)
+
+
+# ── Cache helpers ─────────────────────────────────────────────────────────
+
+_TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_content",
+                     "utm_term", "_t", "ref", "fbclid", "gclid"}
+
+
+def _normalize_cache_url(raw_url: str) -> str:
+    """Strip tracking params + drop fragment for cache key normalization."""
+    p = urlparse(raw_url)
+    qs = parse_qs(p.query)
+    cleaned_qs = {k: v for k, v in qs.items() if k.lower() not in _TRACKING_PARAMS}
+    query = urlencode(cleaned_qs, doseq=True)
+    path = p.path.rstrip("/") or "/"
+    return urlunparse((p.scheme, p.netloc.lower(), path, "", query, ""))
+
+
+def _lookup_tool_cache(
+    db_session: Session,
+    key: tuple,
+    *,
+    ttl_hours: int = 4,
+) -> dict | None:
+    """Look up a cached explore result by composite key."""
+    tool_name, session_id, normalized_url, *_ = key
+    cutoff = datetime.now(UTC) - timedelta(hours=ttl_hours)
+
+    records = db_session.scalars(
+        select(AIPlanningToolResult).where(
+            AIPlanningToolResult.session_id == session_id,
+            AIPlanningToolResult.tool_name == tool_name,
+            AIPlanningToolResult.created_at >= cutoff,
+        ).order_by(AIPlanningToolResult.id.desc())
+    ).all()
+
+    for r in records:
+        raw = r.raw_result_json
+        if not isinstance(raw, dict):
+            continue
+        cached_url = _normalize_cache_url(raw.get("url", ""))
+        if cached_url == normalized_url:
+            return raw
+    return None

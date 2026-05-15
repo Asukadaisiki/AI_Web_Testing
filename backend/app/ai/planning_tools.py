@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.page_explorer import (
     capture_browser_session,
+    collect_a11y_nodes,
     collect_interactable_elements,
     collect_multi_page_elements,
     format_elements_for_prompt,
@@ -623,27 +624,47 @@ def _handle_explore_page(
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
 
-    elements = collect_interactable_elements(
-        resolved_url,
-        storage_state_path=storage_path,
-        session_id=planning_session_id,
+    # Cache lookup
+    import hashlib
+    from app.services.ai_planning import _lookup_tool_cache, _normalize_cache_url
+    state_hash = hashlib.md5(
+        open(storage_path, "rb").read() if storage_path else b""
+    ).hexdigest()[:12]
+    normalized = _normalize_cache_url(resolved_url)
+    cached = _lookup_tool_cache(
+        db_session,
+        ("explore_page", planning_session_id, normalized, 1280, 720, state_hash),
+        ttl_hours=4,
     )
-    formatted = format_elements_for_prompt(elements)
-    logger.info("explore_page: found %d elements from %s", len(elements), resolved_url)
+    if cached is not None:
+        logger.info("Cache hit: explore_page %s", resolved_url)
+        return cached
+
+    # Use BrowserSessionManager for shared browser
+    from app.ai.page_explorer import BrowserSessionManager
+    ctx, page = BrowserSessionManager.get_or_create_context(
+        planning_session_id, storage_state_path=storage_path,
+    )
+    page.goto(resolved_url, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle", timeout=30000)
+
+    flow_text = params.get("core_user_flow_text")
+
+    nodes = collect_a11y_nodes(page, page_state="S0", core_user_flow_text=flow_text)
+    logger.info("explore_page: found %d a11y nodes from %s", len(nodes), resolved_url)
 
     result: dict[str, Any] = {
         "url": resolved_url,
-        "elements": elements,
-        "formatted": formatted,
-        "element_count": len(elements),
+        "a11y_nodes": nodes,
+        "element_count": len(nodes),
     }
 
-    if not elements:
-        result["warning"] = "页面未发现可交互元素"
+    if not nodes:
+        result["warning"] = "页面未发现可用 A11y 交互元素"
 
     meta = load_storage_state_meta(storage_dir, project_id=project_id)
     if meta and is_storage_state_stale(meta):
-        result["warning"] = "会话状态超过24小时未更新，元素可能不完整"
+        result["warning"] = "会话状态超过24小时未更新"
 
     return result
 

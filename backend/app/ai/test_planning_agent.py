@@ -1212,34 +1212,22 @@ _HEAVY_TOOLS = {"explore_page", "explore_flow"}
 def _compress_tool_result(tool_name: str, result: dict) -> dict:
     """Deterministic compression of exploration results for ReAct context.
 
-    Strips CSS/XPath/rect/candidates details from individual elements while
-    preserving page structure, group labels, and interactive element summaries.
-    No LLM call — runs in microseconds.
+    Now operates on a11y_nodes instead of raw DOM elements. No LLM call.
     """
-    _KEEP_ATTRS = {"tag", "text", "id", "name", "placeholder", "type", "href", "role", "aria_label"}
-    _INTERACTIVE_TAGS = {"button", "input", "select", "textarea", "a"}
-
-    def _strip_element(el: dict) -> dict:
-        return {k: v for k, v in el.items() if k in _KEEP_ATTRS and v not in (None, "")}
+    _KEEP_KEYS = {"node_id", "role", "name", "level", "parent_id", "focusable", "disabled"}
 
     def _compress_page(page_data: dict) -> dict:
-        raw_elements: list[dict] = page_data.get("elements", [])
-        interactive: list[dict] = []
-        static_count = 0
-        for el in raw_elements:
-            tag = el.get("tag", "")
-            if tag in _INTERACTIVE_TAGS:
-                interactive.append(_strip_element(el))
-            else:
-                static_count += 1
-        vlm = (page_data.get("vlm_annotation") or "")[:200]
+        raw = page_data.get("a11y_nodes", page_data.get("elements", []))
+        nodes = []
+        for n in raw:
+            if not isinstance(n, dict):
+                continue
+            nodes.append({k: v for k, v in n.items() if k in _KEEP_KEYS and v not in (None, "")})
         return {
             "url": page_data.get("url", ""),
             "page_state": page_data.get("page_state", ""),
-            "element_count": len(raw_elements),
-            "interactive_elements": interactive[:40],  # cap per page
-            "static_elements_omitted": static_count,
-            "vlm_summary": vlm if vlm else None,
+            "element_count": len(raw),
+            "nodes": nodes[:60],
             "warning": page_data.get("warning"),
         }
 
@@ -1270,10 +1258,10 @@ def _extract_raw_page_results(tool_calls: list[AIPlanningToolCall]) -> list[dict
             if isinstance(pages, list):
                 return pages
         elif call.tool == "explore_page":
-            elements = call.result.get("elements")
+            nodes = call.result.get("a11y_nodes", call.result.get("elements"))
             url = call.result.get("url", "")
-            if isinstance(elements, list):
-                return [{"url": url, "elements": elements}]
+            if isinstance(nodes, list):
+                return [{"url": url, "a11y_nodes": nodes}]
     return []
 
 

@@ -29,7 +29,8 @@ class TestCreateSessionWithoutProject:
             CreateAIPlanningSessionRequest(),
             actor_user_id=_user_id(db_session),
         )
-        assert detail.session.projects == []
+        # Auto-creates a default project
+        assert len(detail.session.projects) == 1
         assert detail.session.status == "collecting"
 
 
@@ -78,7 +79,8 @@ class TestUnlinkProject:
         unlink_project_from_session(db_session, detail.session.id, project_id=project.id, actor_user_id=uid)
 
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
-        assert len(projects) == 0
+        # default project still linked
+        assert len(projects) == 1
 
     def test_unlink_nonexistent_raises(self, db_session: SA_Session) -> None:
         uid = _user_id(db_session)
@@ -92,7 +94,8 @@ class TestListSessionProjects:
         uid = _user_id(db_session)
         detail = create_planning_session(db_session, CreateAIPlanningSessionRequest(), actor_user_id=uid)
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
-        assert projects == []
+        # auto-created default project
+        assert len(projects) == 1
 
     def test_returns_linked_projects(self, db_session: SA_Session) -> None:
         uid = _user_id(db_session)
@@ -106,9 +109,10 @@ class TestListSessionProjects:
         link_project_to_session(db_session, detail.session.id, project_id=p2.id, actor_user_id=uid)
 
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
-        assert len(projects) == 2
+        # default + P1 + P2
+        assert len(projects) == 3
         names = {p.name for p in projects}
-        assert names == {"P1", "P2"}
+        assert names == {"P1", "P2", f"default-{detail.session.id}"}
 
 
 class TestCreateProjectInSession:
@@ -124,8 +128,10 @@ class TestCreateProjectInSession:
         assert result.description == "desc"
 
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
-        assert len(projects) == 1
-        assert projects[0].name == "NewProject"
+        # default + NewProject
+        assert len(projects) == 2
+        pnames = {p.name for p in projects}
+        assert "NewProject" in pnames
 
 
 class TestListSessionsWithProjects:
@@ -141,5 +147,5 @@ class TestListSessionsWithProjects:
         sessions = list_planning_sessions(db_session, actor_user_id=uid)
         assert len(sessions) >= 1
         found = next(s for s in sessions if s.id == detail.session.id)
-        assert len(found.projects) == 1
-        assert found.projects[0].name == "SharedProject"
+        # default project + SharedProject
+        assert len(found.projects) == 2

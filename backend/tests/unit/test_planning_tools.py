@@ -462,19 +462,27 @@ class TestExplorePageTool:
     """Tests for _handle_explore_page handler."""
 
     def test_explore_page_returns_elements(self, db_session: Session) -> None:
-        fake_elements = [
-            {"tag": "input", "id": "username", "text": None, "role": None,
-             "aria_label": None, "placeholder": "Username", "visible": True, "enabled": True}
+        fake_nodes = [
+            {"node_id": "e1", "role": "textbox", "name": "Username",
+             "focusable": True, "disabled": False, "page_state": "S0"}
         ]
-        with patch("app.ai.planning_tools.collect_interactable_elements", return_value=fake_elements):
+        mock_page = type("FakePage", (), {
+            "goto": lambda *a, **kw: None,
+            "wait_for_load_state": lambda *a, **kw: None,
+        })()
+        with (
+            patch("app.ai.page_explorer.BrowserSessionManager.get_or_create_context",
+                  return_value=(None, mock_page)),
+            patch("app.ai.planning_tools.collect_a11y_nodes", return_value=fake_nodes),
+        ):
             result = _handle_explore_page(
                 params={"url": "https://example.com/login"},
                 db_session=db_session,
                 project_id=1,
             )
-        assert "elements" in result
-        assert len(result["elements"]) == 1
-        assert result["elements"][0]["placeholder"] == "Username"
+        assert "a11y_nodes" in result
+        assert len(result["a11y_nodes"]) == 1
+        assert result["a11y_nodes"][0]["name"] == "Username"
 
     def test_explore_page_requires_url(self, db_session: Session) -> None:
         result = _handle_explore_page(params={}, db_session=db_session, project_id=1)
@@ -482,13 +490,21 @@ class TestExplorePageTool:
         assert "url" in result["error"].lower()
 
     def test_explore_page_handles_empty_result(self, db_session: Session) -> None:
-        with patch("app.ai.planning_tools.collect_interactable_elements", return_value=[]):
+        mock_page = type("FakePage", (), {
+            "goto": lambda *a, **kw: None,
+            "wait_for_load_state": lambda *a, **kw: None,
+        })()
+        with (
+            patch("app.ai.page_explorer.BrowserSessionManager.get_or_create_context",
+                  return_value=(None, mock_page)),
+            patch("app.ai.planning_tools.collect_a11y_nodes", return_value=[]),
+        ):
             result = _handle_explore_page(
                 params={"url": "https://example.com/blank"},
                 db_session=db_session,
                 project_id=1,
             )
-        assert result["elements"] == []
+        assert result["a11y_nodes"] == []
         assert "warning" in result
 
 

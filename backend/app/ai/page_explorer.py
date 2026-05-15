@@ -67,6 +67,124 @@ def _filter_a11y_nodes(
     return result
 
 
+# ── Stop words for keyword extraction ──────────────────────────────────────
+_STOP_WORDS: set[str] = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "and", "or", "not", "no", "this",
+    "that", "it", "its", "if", "so", "but", "as", "than", "then",
+    "的", "是", "在", "和", "了", "有", "不", "人", "这", "中",
+    "大", "为", "上", "个", "国", "我", "以", "要", "他", "时",
+    "来", "用", "们", "生", "到", "作", "地", "于", "出", "会",
+    "可", "也", "你", "对", "就", "能", "而", "那", "着", "得",
+    "将", "下", "去", "说", "过", "看", "吧", "吗", "嗯",
+    "需要", "然后", "用户", "点击", "操作", "进入", "验证", "检查",
+    "确认", "确保", "之前", "之后", "使用", "已有", "测试", "页面",
+}
+
+
+def _extract_flow_keywords(core_user_flow_text: str | None) -> set[str]:
+    if not core_user_flow_text or not core_user_flow_text.strip():
+        return set()
+    tokens = re.findall(r"[\w一-鿿]{2,}", core_user_flow_text, re.IGNORECASE)
+    keywords: set[str] = set()
+    for t in tokens:
+        low = t.strip().lower()
+        if low and low not in _STOP_WORDS:
+            keywords.add(low)
+    return keywords
+
+
+def _cdp_to_a11y_nodes(
+    cdp_result: dict,
+    *,
+    page_state: str = "S0",
+) -> list[dict]:
+    standardized: list[dict] = []
+    for n in cdp_result.get("nodes", []):
+        if n.get("ignored", False):
+            continue
+        role = (n.get("role") or {}).get("value", "unknown")
+        if role not in USEFUL_A11Y_ROLES:
+            continue
+        name = (n.get("name") or {}).get("value", "") or ""
+        props: dict[str, Any] = {}
+        for p in n.get("properties", []):
+            if "name" not in p or "value" not in p:
+                continue
+            props[p["name"]] = p["value"].get("value")
+        standardized.append({
+            "node_id": f"e{n.get('nodeId', '?')}",
+            "role": role,
+            "name": (name or "")[:120],
+            "level": props.get("level") or None,
+            "parent_id": f"e{n['parentId']}" if n.get("parentId") else None,
+            "focusable": bool(props.get("focusable", False)),
+            "disabled": bool(props.get("disabled", False)),
+            "page_state": page_state,
+        })
+    return standardized
+
+
+def collect_a11y_nodes(
+    page,
+    *,
+    page_state: str = "S0",
+    viewport: dict | None = None,
+    core_user_flow_text: str | None = None,
+) -> list[dict]:
+    if viewport is None:
+        vs = getattr(page, "viewport_size", None) or {}
+        viewport = {"width": int(vs.get("width", 1280)), "height": int(vs.get("height", 720))}
+    if core_user_flow_text:
+        keywords = _extract_flow_keywords(core_user_flow_text)
+        _expand_collapsed_components(page, keywords)
+    client = page.context.new_cdp_session(page)
+    try:
+        client.send("Accessibility.enable")
+        result = client.send("Accessibility.getFullAXTree", {})
+    finally:
+        try:
+            client.send("Accessibility.disable")
+        except Exception:
+            pass
+        try:
+            client.detach()
+        except Exception:
+            pass
+    raw_nodes = result.get("nodes", [])
+    filter_pass = _filter_a11y_nodes(raw_nodes, viewport=viewport)
+    return _cdp_to_a11y_nodes({"nodes": filter_pass}, page_state=page_state)
+
+
+def _expand_collapsed_components(page, keywords: set[str], max_clicks: int = 10) -> list[str]:
+    if not keywords:
+        return []
+    expanded: list[str] = []
+    collapsed = page.locator('[aria-expanded="false"], details:not([open])')
+    cnt = collapsed.count()
+    for i in range(min(cnt, max_clicks * 2)):
+        try:
+            el = collapsed.nth(i)
+            text = (el.evaluate(
+                "el => (el.outerText || el.textContent || '').slice(0, 200)") or "").lower()
+            matched = False
+            for kw in keywords:
+                if len(kw) >= 2 and kw in text:
+                    matched = True
+                    break
+            if matched:
+                el.click()
+                page.wait_for_timeout(200)
+                expanded.append(text[:40])
+                if len(expanded) >= max_clicks:
+                    break
+        except Exception:
+            continue
+    return expanded
+
+
 STALE_THRESHOLD_HOURS = 24
 
 
