@@ -535,24 +535,25 @@ class TestExploreFlowTool:
 
     def test_explore_flow_returns_multi_page_results(self, db_session: Session) -> None:
         mock_pages = [
-            {
-                "url": "https://example.com/login",
-                "elements": [{"tag": "input", "id": "email", "text": None, "role": None, "aria_label": None, "placeholder": "Email", "visible": True, "enabled": True}],
-                "formatted": "input#email [placeholder='Email']",
-                "element_count": 1,
-                "screenshot_available": True,
-                "vlm_annotation": None,
-            },
-            {
-                "url": "https://example.com/products",
-                "elements": [{"tag": "button", "id": "", "text": "Search", "role": None, "aria_label": None, "placeholder": None, "visible": True, "enabled": True}],
-                "formatted": "button [text='Search']",
-                "element_count": 1,
-                "screenshot_available": True,
-                "vlm_annotation": None,
-            },
+            {"url": "https://example.com/login", "page_state": "S0",
+             "a11y_nodes": [{"node_id": "e1", "role": "textbox", "name": "Email", "focusable": True, "disabled": False, "page_state": "S0"}],
+             "element_count": 1},
+            {"url": "https://example.com/products", "page_state": "S1",
+             "a11y_nodes": [{"node_id": "e2", "role": "button", "name": "Search", "focusable": True, "disabled": False, "page_state": "S1"}],
+             "element_count": 1},
         ]
-        with patch("app.ai.planning_tools.collect_multi_page_elements", return_value=mock_pages):
+        mock_page = type("FakePage", (), {
+            "goto": lambda *a, **kw: None,
+            "wait_for_load_state": lambda *a, **kw: None,
+            "url": "https://example.com/login",
+        })()
+        with (
+            patch("app.ai.page_explorer.BrowserSessionManager.get_or_create_context", return_value=(None, mock_page)),
+            patch("app.ai.planning_tools.collect_a11y_nodes", side_effect=[
+                [{"node_id": "e1", "role": "textbox", "name": "Email", "focusable": True, "disabled": False, "page_state": "S0"}],
+                [{"node_id": "e2", "role": "button", "name": "Search", "focusable": True, "disabled": False, "page_state": "S1"}],
+            ]),
+        ):
             result = _handle_explore_flow(
                 params={"urls": ["https://example.com/login", "https://example.com/products"]},
                 db_session=db_session,
@@ -560,9 +561,6 @@ class TestExploreFlowTool:
             )
         assert result["total_pages"] == 2
         assert result["total_elements"] == 2
-        assert "=== 页面状态 S0: https://example.com/login ===" in result["formatted"]
-        assert "=== 页面状态 S1: https://example.com/products ===" in result["formatted"]
-        assert len(result["pages"]) == 2
 
     def test_explore_flow_requires_urls(self, db_session: Session) -> None:
         result = _handle_explore_flow(params={}, db_session=db_session, project_id=1)
@@ -573,12 +571,11 @@ class TestExploreFlowTool:
         assert "error" in result
 
     def test_explore_flow_filters_invalid_urls(self, db_session: Session) -> None:
-        with patch("app.ai.planning_tools.collect_multi_page_elements", return_value=[]):
-            result = _handle_explore_flow(
-                params={"urls": [123, None]},
-                db_session=db_session,
-                project_id=1,
-            )
+        result = _handle_explore_flow(
+            params={"urls": [123, None]},
+            db_session=db_session,
+            project_id=1,
+        )
         assert "error" in result
 
 

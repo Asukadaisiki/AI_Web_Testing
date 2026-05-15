@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from app.ai.page_explorer import (
     capture_browser_session,
     collect_a11y_nodes,
-    collect_multi_page_elements,
     is_storage_state_stale,
     load_storage_state_meta,
 )
@@ -793,12 +792,11 @@ def _handle_explore_flow(
     logger.info("explore_flow: resolved_base_url=%s", resolved_base_url)
 
     if isinstance(flow_steps, list) and flow_steps:
-        from app.ai.page_explorer import collect_flow_elements, build_flow_formatted_output
+        from app.ai.page_explorer import _collect_flow_a11y
 
         logger.info("explore_flow: %d steps, flow=%s, project_id=%d, session_id=%d",
                     len(flow_steps), flow_description or "-", project_id, planning_session_id)
 
-        # Extract base_url from steps with full URLs if not already resolved
         if not resolved_base_url:
             from urllib.parse import urlparse
             for step in flow_steps:
@@ -812,24 +810,23 @@ def _handle_explore_flow(
         storage_dir = _resolve_storage_state_dir()
         storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
 
-        page_results = collect_flow_elements(
+        # Extract core_user_flow text from session for keyword-driven expand
+        flow_text = None
+        if planning_session_id:
+            session_obj = db_session.get(AIPlanningSession, planning_session_id)
+            if session_obj and session_obj.requirements_json:
+                flow_text = session_obj.requirements_json.get("core_user_flow")
+
+        page_results = _collect_flow_a11y(
             flow_steps,
             base_url=resolved_base_url or None,
             storage_state_path=storage_path,
-            enable_vlm_annotation=True,
             session_id=planning_session_id,
+            core_user_flow_text=flow_text,
         )
-        combined_formatted = build_flow_formatted_output(page_results)
         total_elements = sum(pr.get("element_count", 0) for pr in page_results)
-        page_states = [
-            {"state_id": pr.get("page_state", "?"), "url": pr.get("url", ""), "description": pr.get("description", "")}
-            for pr in page_results
-        ]
+        total_pages = len(page_results)
 
-        # --- Disambiguation check: warn if actions used generic targets ---
-        disambiguation_warnings = _check_action_disambiguation(flow_steps, page_results)
-
-        # --- Base URL check: warn if steps were skipped due to missing base_url ---
         skipped_count = sum(1 for pr in page_results if pr.get("page_state") == "SKIPPED")
         base_url_warning = None
         if skipped_count > 0:
@@ -840,22 +837,11 @@ def _handle_explore_flow(
 
         result: dict[str, Any] = {
             "pages": page_results,
-            "formatted": combined_formatted,
-            "total_pages": len(page_results),
+            "total_pages": total_pages,
             "total_elements": total_elements,
-            "page_states": page_states,
         }
-        if disambiguation_warnings:
-            result["disambiguation_warnings"] = disambiguation_warnings
-            result["warning"] = (
-                "部分 actions 使用了泛化 target（如 'Add to cart'），可能匹配到错误元素。"
-                "下次调用时请用 '产品名 附近的 Add to cart' 格式消歧。"
-            )
         if base_url_warning:
-            if result.get("warning"):
-                result["warning"] += " " + base_url_warning
-            else:
-                result["warning"] = base_url_warning
+            result["warning"] = base_url_warning
         return result
 
     # --- Legacy URL-based exploration ---
@@ -872,37 +858,28 @@ def _handle_explore_flow(
     storage_dir = _resolve_storage_state_dir()
     storage_path = str(storage_dir / f"{project_id}.json") if (storage_dir / f"{project_id}.json").exists() else None
 
-    page_results = collect_multi_page_elements(
-        valid_urls,
-        storage_state_path=storage_path,
-        enable_vlm_annotation=True,
-        base_url=resolved_base_url or None,
-        session_id=planning_session_id,
+    from app.ai.page_explorer import BrowserSessionManager
+    ctx, page = BrowserSessionManager.get_or_create_context(
+        planning_session_id, storage_state_path=storage_path,
     )
 
-    # Assign page_state IDs so downstream can match steps to pages via markers
-    from app.ai.page_explorer import build_flow_formatted_output
-    for idx, pr in enumerate(page_results):
-        if "page_state" not in pr:
-            pr["page_state"] = f"S{idx}"
-    combined_formatted = build_flow_formatted_output(page_results)
+    page_results = []
+    for idx, url in enumerate(valid_urls):
+        resolved = resolved_base_url.rstrip("/") + "/" + url.lstrip("/") if not url.startswith("http") and resolved_base_url else url
+        try:
+            page.goto(resolved, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_load_state("networkidle", timeout=30000)
+        except Exception as exc:
+            page_results.append({"url": url, "page_state": f"S{idx}", "a11y_nodes": [], "element_count": 0, "error": str(exc)})
+            continue
+        nodes = collect_a11y_nodes(page, page_state=f"S{idx}")
+        page_results.append({"url": page.url, "page_state": f"S{idx}", "a11y_nodes": nodes, "element_count": len(nodes)})
+
     total_elements = sum(pr.get("element_count", 0) for pr in page_results)
-    page_states = [
-        {"state_id": pr.get("page_state", "?"), "url": pr.get("url", ""), "description": pr.get("description", "")}
-        for pr in page_results
-    ]
-    logger.info(
-        "explore_flow urls: %d states, %d total_elements, formatted=%d chars, states=%s",
-        len(page_results), total_elements, len(combined_formatted),
-        [ps["state_id"] for ps in page_states],
-    )
-
     return {
         "pages": page_results,
-        "formatted": combined_formatted,
         "total_pages": len(page_results),
         "total_elements": total_elements,
-        "page_states": page_states,
     }
 
 

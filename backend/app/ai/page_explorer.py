@@ -1950,6 +1950,139 @@ def collect_flow_elements(
     return results
 
 
+def _collect_flow_a11y(
+    flow_steps: list[dict[str, Any]],
+    *,
+    base_url: str | None = None,
+    storage_state_path: str | None = None,
+    session_id: int = 0,
+    timeout_ms: int = 60000,
+    core_user_flow_text: str | None = None,
+) -> list[dict[str, Any]]:
+    """Execute flow steps using A11y extraction instead of DOM."""
+    if not flow_steps:
+        return []
+
+    from urllib.parse import urljoin
+
+    if session_id:
+        ctx, page = BrowserSessionManager.get_or_create_context(
+            session_id, storage_state_path=storage_state_path,
+        )
+    else:
+        pw = _sync_playwright_context()
+        playwright = pw.__enter__()
+        browser = playwright.chromium.launch(headless=True)
+        context_kwargs: dict[str, Any] = {}
+        if storage_state_path and Path(storage_state_path).exists():
+            context_kwargs["storage_state"] = storage_state_path
+        context = browser.new_context(**context_kwargs)
+        page = context.new_page()
+
+    results: list[dict[str, Any]] = []
+    state_index = 0
+    url_to_state: dict[str, str] = {}
+
+    try:
+        for step in flow_steps:
+            if not isinstance(step, dict):
+                continue
+
+            # Session cache
+            if session_id:
+                cached = PageDataCache.get(session_id, step)
+                if cached is not None:
+                    results.append(cached)
+                    continue
+
+            step_url = step.get("url")
+            if step_url and isinstance(step_url, str) and step_url.strip():
+                url_str = step_url.strip()
+                if not url_str.startswith(("http://", "https://")):
+                    if not base_url:
+                        results.append({
+                            "url": url_str, "page_state": "SKIPPED",
+                            "a11y_nodes": [], "element_count": 0,
+                            "description": step.get("description", ""),
+                            "error": "Relative URL without base_url",
+                        })
+                        continue
+                    url_str = urljoin(base_url, url_str.lstrip("/"))
+                try:
+                    page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    results.append({
+                        "url": url_str, "page_state": "ERROR",
+                        "a11y_nodes": [], "element_count": 0,
+                        "error": str(exc),
+                    })
+                    continue
+
+            # Execute actions (same as DOM path)
+            actions = step.get("actions")
+            if isinstance(actions, list):
+                _execute_flow_actions(page, actions)
+
+            current_url = page.url
+            description = step.get("description", "")
+            key = f"{current_url.rstrip('/')}|{description.strip()}" if description else current_url.rstrip("/")
+            if key not in url_to_state:
+                url_to_state[key] = f"S{state_index}"
+                state_index += 1
+            state_id = url_to_state[key]
+
+            nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
+            result = {
+                "url": current_url,
+                "page_state": state_id,
+                "a11y_nodes": nodes,
+                "element_count": len(nodes),
+                "description": description,
+            }
+            results.append(result)
+            if session_id:
+                PageDataCache.put(session_id, step, result)
+    finally:
+        if not session_id:
+            context.close()
+            browser.close()
+    return results
+
+
+def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
+    """Execute a list of flow actions (click/input/wait_for)."""
+    for action_def in actions:
+        if not isinstance(action_def, dict):
+            continue
+        act = (action_def.get("action") or "").strip().lower()
+        target = (action_def.get("target") or "").strip()
+        value = action_def.get("value", "")
+        if not act or not target:
+            continue
+        if act in ("type", "fill", "input"):
+            loc = _resolve_step_locator(page, target, kind="input")
+            if loc is not None:
+                loc.fill(str(value))
+            continue
+        if act in ("click", "press", "tap"):
+            loc = _resolve_step_locator(page, target, kind="click")
+            if loc is not None:
+                loc.click()
+            continue
+        if act == "wait_for":
+            try:
+                page.get_by_text(target).first.wait_for(state="visible", timeout=5000)
+            except Exception:
+                try:
+                    page.locator(f"text={target}").first.wait_for(state="visible", timeout=5000)
+                except Exception:
+                    pass
+
+
 # ---------------------------------------------------------------------------
 # Helpers for building state-aware formatted output
 # ---------------------------------------------------------------------------
