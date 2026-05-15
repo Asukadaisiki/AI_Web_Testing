@@ -2,6 +2,25 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
+## 2026-05-15 | 主路径 v2 实施 — 3 PR 完成 (PR-1 + PR-2 + PR-3 核心)
+
+**背景：** 基于 `2026-05-14-main-path-v2-a11y-pipeline-design.md` spec，3 轮 brainstorm 锁定 8 个细节决策 + A11y 实验对比数据，分 3 PR 实施。
+
+**PR-1 (5fb9c2f ~ 118bed5):** 默认项目 auto-create、A11y 角色过滤 + CDP 快照、程序化关键字展开、explore_page handler 切换、DB 缓存读取。**542 tests**。
+
+**PR-2 (819611a):** dict 端到端数据流（_load_a11y_nodes_for_scenario）、preflight 1:N candidate 映射、_regen_segment 单段重生。**542 tests**。
+
+**PR-3 (8a61518):** 系统提示词 186→30 行、safety_cap 30→5。**542 tests**。
+
+**验证：** 每 PR 后跑 `uv run pytest tests/unit`，始终 542 passed / 0 failed。
+
+**净变化（从 0db5a6e 到 8a61518）：** 新增 3 个测试文件、+500/-260 行源码。
+
+**遗留 (非阻塞)：**
+- Task 3.3 cache 进度清单注入、Task 3.4 DOM 旧代码删除 → 可在下一轮 PR 补齐
+- `explore_flow` handler 仍沿用旧 DOM 路径 → 后续对齐到 A11y
+- `generate_case_draft` 路径未删 → 后续决策
+
 ## 2026-05-14 | 架构清理阶段 1 — 删除 dormant 分支与冗余 LLM 调用
 
 **背景：** 经过逐文件取证发现，自愈、缓存、定位评分、prompt 注入、4 层 fallback 等机制中存在大量"已设计但主流程不触发"的代码（multi_agent opt-in 路径、compression subagent、accessibility tier、pre-exec review、VLM 双触发）。本轮先做纯删除（阶段 1），不动数据流；阶段 2 等本轮验证完后再单独规划。
