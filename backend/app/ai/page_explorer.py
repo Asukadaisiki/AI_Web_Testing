@@ -1525,429 +1525,7 @@ def capture_browser_session(
     }
 
 
-def collect_multi_page_elements(
-    urls: list[str],
-    *,
-    storage_state_path: str | None = None,
-    enable_vlm_annotation: bool = True,
-    timeout_ms: int = 60000,
-    base_url: str | None = None,
-    session_id: int = 0,
-) -> list[dict[str, Any]]:
-    """Open *urls* sequentially in a single Playwright context and collect elements.
-
-    When *session_id* > 0 the browser is obtained from :class:`BrowserSessionManager`
-    and reused across calls.
-    """
-    from urllib.parse import urljoin
-
-    if not urls:
-        return []
-
-    results: list[dict[str, Any]] = []
-    managed_context = None
-    try:
-        if session_id:
-            context, page = BrowserSessionManager.get_or_create_context(
-                session_id, storage_state_path=storage_state_path,
-            )
-            managed_context = context
-        else:
-            pw = _sync_playwright_context()
-            with pw as playwright:
-                browser = playwright.chromium.launch(headless=True)
-                context_kwargs: dict[str, Any] = {}
-                if storage_state_path and Path(storage_state_path).exists():
-                    context_kwargs["storage_state"] = storage_state_path
-                context = browser.new_context(**context_kwargs)
-                page = context.new_page()
-                managed_context = context
-
-        for url in urls:
-            url = url.strip()
-            if not url.startswith(("http://", "https://")):
-                if not base_url:
-                    logger.warning(
-                        "collect_multi_page_elements: skipping relative URL %r — no base_url",
-                        url,
-                    )
-                    results.append({
-                        "url": url,
-                        "page_state": "SKIPPED",
-                        "elements": [],
-                        "formatted": "",
-                        "element_count": 0,
-                        "screenshot_available": False,
-                        "vlm_annotation": None,
-                        "description": "",
-                        "error": "Relative URL without base_url; provide a full URL or pass base_url",
-                    })
-                    continue
-                url = urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
-            try:
-                page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
-                try:
-                    page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                except Exception:
-                    pass
-                payload = page.evaluate(EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, get_settings().explore_max_elements)
-            except Exception as exc:
-                logger.warning("collect_multi_page_elements: page load failed for %s: %s", url, exc)
-                results.append({
-                    "url": url,
-                    "elements": [],
-                    "formatted": "",
-                    "element_count": 0,
-                    "screenshot_available": False,
-                    "vlm_annotation": None,
-                    "error": str(exc),
-                })
-                continue
-
-            elements: list[dict[str, Any]] = []
-            if isinstance(payload, list):
-                for elem in payload:
-                    if not isinstance(elem, dict):
-                        continue
-                    element = {
-                        "tag": elem.get("tag", "unknown"),
-                        "id": _extract_element_id(elem),
-                        "text": elem.get("text"),
-                        "role": elem.get("role"),
-                        "aria_label": elem.get("aria_label"),
-                        "placeholder": elem.get("placeholder"),
-                        "href": elem.get("href"),
-                        "data_testid": elem.get("data_testid"),
-                        "css_selector": elem.get("css_selector"),
-                        "xpath": elem.get("xpath"),
-                        "rect": elem.get("rect"),
-                        "visible": elem.get("visible", False),
-                        "enabled": elem.get("enabled", False),
-                    }
-                    element["candidates"] = score_candidates_for_element(element)
-                    tag = element.get("tag", "")
-                    element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
-                    elements.append(element)
-
-            # Live-element verification (was missing from flow functions)
-            elements = _verify_locators_on_page(page, elements)
-
-            formatted = format_elements_for_prompt(elements)
-
-            try:
-                settings = get_settings()
-                interactive = _discover_interactive_elements(
-                    page, max_clicks=settings.explore_interactive_max_clicks,
-                )
-                if interactive:
-                    elements.extend(interactive)
-                    formatted = format_elements_for_prompt(elements)
-                    logger.info(
-                        "Discovered %d interactive elements on %s",
-                        len(interactive), url,
-                    )
-            except Exception as exc:
-                logger.warning("Interactive exploration failed for %s: %s", url, exc)
-
-            screenshot_available = False
-            vlm_annotation: str | None = None
-            try:
-                _screenshot_bytes = page.screenshot()
-                screenshot_available = True
-                if enable_vlm_annotation:
-                    from app.locators.ai_visual import describe_page_layout
-                    import base64
-                    vlm_annotation = describe_page_layout(
-                        screenshot_base64=base64.b64encode(_screenshot_bytes).decode(),
-                        page_url=url,
-                    )
-            except Exception as exc:
-                logger.warning("Screenshot/VLM failed for %s: %s", url, exc)
-
-            results.append({
-                "url": url,
-                "elements": elements,
-                "formatted": formatted,
-                "element_count": len(elements),
-                "screenshot_available": screenshot_available,
-                "vlm_annotation": vlm_annotation,
-            })
-
-        if not session_id:
-            context.close()
-            browser.close()
-    except Exception as exc:
-        logger.warning("collect_multi_page_elements browser crash: %s", exc)
-
-    return results
-
-
-def collect_flow_elements(
-    steps: list[dict[str, Any]],
-    *,
-    base_url: str | None = None,
-    storage_state_path: str | None = None,
-    enable_vlm_annotation: bool = True,
-    timeout_ms: int = 60000,
-    session_id: int = 0,
-    page: Any = None,
-) -> list[dict[str, Any]]:
-    """Execute a flow with actions between page visits and collect elements per state.
-
-    Each step in *steps* may have:
-      - ``url``: navigate to this URL first (optional; if omitted, stays on current page)
-      - ``description``: human label for this step (used in state markers)
-      - ``actions``: list of actions to perform after navigation, each with:
-        - ``action``: "click", "input", or "wait_for"
-        - ``target``: semantic label / placeholder / id for the element
-        - ``value``: fill text (for input actions)
-
-    A **page state** is defined by the URL after actions complete.  Each
-    distinct URL gets a ``page_state_id`` (S0, S1, …) that is recorded on
-    every element and in the formatted output.
-    """
-    if not steps:
-        return []
-
-    settings = get_settings()
-    results: list[dict[str, Any]] = []
-    state_index = 0
-    url_to_state: dict[str, str] = {}
-
-    def _resolve_state_id(url: str, description: str = "") -> str:
-        nonlocal state_index
-        # Use (url, description) as key so that revisiting the same URL
-        # with a different flow context (e.g. before/after login) gets
-        # distinct state IDs.
-        key = f"{url.rstrip('/')}|{description.strip()}" if description else url.rstrip("/")
-        if key not in url_to_state:
-            sid = f"S{state_index}"
-            url_to_state[key] = sid
-            state_index += 1
-            return sid
-        return url_to_state[key]
-
-    def _execute_action(page, action_def: dict[str, Any]) -> None:
-        act = (action_def.get("action") or "").strip().lower()
-        target = (action_def.get("target") or "").strip()
-        value = action_def.get("value", "")
-        if not act or not target:
-            return
-
-        # Normalize AI-generated action names
-        if act in ("type", "fill", "input"):
-            kind = "input"
-        elif act in ("click", "press", "tap"):
-            kind = "click"
-        else:
-            kind = act
-        loc = _resolve_step_locator(page, target, kind=kind)
-        if loc is not None:
-            if kind == "input":
-                loc.fill(str(value))
-            elif kind == "click":
-                loc.click()
-            return
-
-        logger.debug("_execute_action: no locator matched target=%r for action=%s", target, act)
-        if act == "wait_for":
-            for factory_desc in [
-                ("text", lambda: page.get_by_text(target)),
-                ("selector", lambda: page.locator(f"text={target}")),
-            ]:
-                try:
-                    candidate = factory_desc[1]()
-                    candidate.first.wait_for(state="visible", timeout=5000)
-                    break
-                except Exception:
-                    continue
-
-    def _collect_current_page(page, url: str, state_id: str) -> dict[str, Any]:
-        try:
-            payload = page.evaluate(
-                EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT, settings.explore_max_elements,
-            )
-        except Exception as exc:
-            logger.warning("collect_flow_elements: evaluate failed for %s: %s", url, exc)
-            return {
-                "url": url, "page_state": state_id,
-                "elements": [], "formatted": "", "element_count": 0,
-                "screenshot_available": False, "vlm_annotation": None,
-                "error": str(exc),
-            }
-
-        elements: list[dict[str, Any]] = []
-        if isinstance(payload, list):
-            for elem in payload:
-                if not isinstance(elem, dict):
-                    continue
-                element = {
-                    "tag": elem.get("tag", "unknown"),
-                    "id": _extract_element_id(elem),
-                    "text": elem.get("text"),
-                    "role": elem.get("role"),
-                    "aria_label": elem.get("aria_label"),
-                    "placeholder": elem.get("placeholder"),
-                    "href": elem.get("href"),
-                    "data_testid": elem.get("data_testid"),
-                    "css_selector": elem.get("css_selector"),
-                    "xpath": elem.get("xpath"),
-                    "rect": elem.get("rect"),
-                    "visible": elem.get("visible", False),
-                    "enabled": elem.get("enabled", False),
-                    "page_state": state_id,
-                }
-                element["candidates"] = score_candidates_for_element(element)
-                tag = element.get("tag", "")
-                element["element_type_score"] = ELEMENT_TYPE_SCORES.get(tag, {"dom": 0.60, "vlm": 0.40})
-                elements.append(element)
-
-        # Live-element verification (was missing from flow functions)
-        elements = _verify_locators_on_page(page, elements)
-
-        formatted = format_elements_for_prompt(elements)
-
-        # Interactive element discovery
-        try:
-            interactive = _discover_interactive_elements(
-                page, max_clicks=settings.explore_interactive_max_clicks,
-            )
-            if interactive:
-                for el in interactive:
-                    el["page_state"] = state_id
-                elements.extend(interactive)
-                formatted = format_elements_for_prompt(elements)
-                logger.info("Discovered %d interactive elements on %s", len(interactive), url)
-        except Exception as exc:
-            logger.warning("Interactive exploration failed for %s: %s", url, exc)
-
-        screenshot_available = False
-        vlm_annotation: str | None = None
-        try:
-            _screenshot_bytes = page.screenshot()
-            screenshot_available = True
-            if enable_vlm_annotation:
-                from app.locators.ai_visual import describe_page_layout
-                import base64
-                vlm_annotation = describe_page_layout(
-                    screenshot_base64=base64.b64encode(_screenshot_bytes).decode(),
-                    page_url=url,
-                )
-        except Exception as exc:
-            logger.warning("Screenshot/VLM failed for %s: %s", url, exc)
-
-        return {
-            "url": url,
-            "page_state": state_id,
-            "elements": elements,
-            "formatted": formatted,
-            "element_count": len(elements),
-            "screenshot_available": screenshot_available,
-            "vlm_annotation": vlm_annotation,
-        }
-
-    try:
-        if page is not None:
-            # Caller provided a page — use it directly
-            managed = False
-        elif session_id:
-            context, page = BrowserSessionManager.get_or_create_context(
-                session_id, storage_state_path=storage_state_path,
-            )
-        else:
-            pw = _sync_playwright_context()
-            with pw as playwright:
-                browser = playwright.chromium.launch(headless=True)
-                context_kwargs: dict[str, Any] = {}
-                if storage_state_path and Path(storage_state_path).exists():
-                    context_kwargs["storage_state"] = storage_state_path
-                context = browser.new_context(**context_kwargs)
-                page = context.new_page()
-                managed = True
-
-        from urllib.parse import urljoin
-
-        current_url = "about:blank"
-
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-
-            # --- Session cache: skip if already explored ---
-            if session_id:
-                cached = PageDataCache.get(session_id, step)
-                if cached is not None:
-                    results.append(cached)
-                    if cached.get("url"):
-                        current_url = cached["url"]
-                    continue
-
-            step_url = step.get("url")
-            if step_url and isinstance(step_url, str) and step_url.strip():
-                # Resolve relative URLs against base_url (BUG-067 regression)
-                url_str = step_url.strip()
-                if not url_str.startswith(("http://", "https://")):
-                    if not base_url:
-                        logger.warning(
-                            "collect_flow_elements: skipping relative URL %r — no base_url provided",
-                            url_str,
-                        )
-                        results.append({
-                            "url": url_str,
-                            "page_state": "SKIPPED",
-                            "elements": [], "formatted": "", "element_count": 0,
-                            "screenshot_available": False, "vlm_annotation": None,
-                            "description": step.get("description", ""),
-                            "error": "Relative URL without base_url; provide a full URL or pass base_url",
-                        })
-                        continue
-                    url_str = urljoin(base_url, url_str.lstrip("/"))
-                try:
-                    page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                    except Exception:
-                        pass
-                    current_url = page.url
-                except Exception as exc:
-                    logger.warning("collect_flow_elements: goto failed for %s: %s", step_url, exc)
-                    results.append({
-                        "url": step_url.strip(),
-                        "page_state": "ERROR",
-                        "elements": [], "formatted": "", "element_count": 0,
-                        "screenshot_available": False, "vlm_annotation": None,
-                        "error": str(exc),
-                    })
-                    continue
-
-            actions = step.get("actions")
-            if isinstance(actions, list):
-                for action_def in actions:
-                    try:
-                        _execute_action(page, action_def)
-                    except Exception as exc:
-                        logger.warning(
-                            "collect_flow_elements: action failed (%s): %s",
-                            action_def.get("action", "?"), exc,
-                        )
-            current_url = page.url
-
-            description = step.get("description", "")
-            state_id = _resolve_state_id(current_url, description)
-            result = _collect_current_page(page, current_url, state_id)
-            if description:
-                result["description"] = description
-            results.append(result)
-            if session_id:
-                PageDataCache.put(session_id, step, result)
-
-        if not session_id and managed:
-            context.close()
-            browser.close()
-    except Exception as exc:
-        logger.warning("collect_flow_elements browser crash: %s", exc)
-
-    return results
+# ── A11y-based flow collection (replaces collect_multi_page_elements + collect_flow_elements)
 
 
 def _collect_flow_a11y(
@@ -1982,13 +1560,12 @@ def _collect_flow_a11y(
     results: list[dict[str, Any]] = []
     state_index = 0
     url_to_state: dict[str, str] = {}
+    managed = not bool(session_id)
 
     try:
         for step in flow_steps:
             if not isinstance(step, dict):
                 continue
-
-            # Session cache
             if session_id:
                 cached = PageDataCache.get(session_id, step)
                 if cached is not None:
@@ -2004,7 +1581,6 @@ def _collect_flow_a11y(
                             "url": url_str, "page_state": "SKIPPED",
                             "a11y_nodes": [], "element_count": 0,
                             "description": step.get("description", ""),
-                            "error": "Relative URL without base_url",
                         })
                         continue
                     url_str = urljoin(base_url, url_str.lstrip("/"))
@@ -2022,14 +1598,13 @@ def _collect_flow_a11y(
                     })
                     continue
 
-            # Execute actions (same as DOM path)
             actions = step.get("actions")
             if isinstance(actions, list):
                 _execute_flow_actions(page, actions)
 
             current_url = page.url
             description = step.get("description", "")
-            key = f"{current_url.rstrip('/')}|{description.strip()}" if description else current_url.rstrip("/")
+            key = f"{current_url.rstrip('/')}|{description}" if description else current_url.rstrip("/")
             if key not in url_to_state:
                 url_to_state[key] = f"S{state_index}"
                 state_index += 1
@@ -2037,19 +1612,23 @@ def _collect_flow_a11y(
 
             nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
             result = {
-                "url": current_url,
-                "page_state": state_id,
-                "a11y_nodes": nodes,
-                "element_count": len(nodes),
+                "url": current_url, "page_state": state_id,
+                "a11y_nodes": nodes, "element_count": len(nodes),
                 "description": description,
             }
             results.append(result)
             if session_id:
                 PageDataCache.put(session_id, step, result)
     finally:
-        if not session_id:
-            context.close()
-            browser.close()
+        if managed:
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
     return results
 
 
@@ -2081,83 +1660,3 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
                     page.locator(f"text={target}").first.wait_for(state="visible", timeout=5000)
                 except Exception:
                     pass
-
-
-# ---------------------------------------------------------------------------
-# Helpers for building state-aware formatted output
-# ---------------------------------------------------------------------------
-
-def build_flow_formatted_output(page_results: list[dict[str, Any]]) -> str:
-    """Build a state-aware combined formatted string from flow exploration results.
-
-    Truncates to ``MAX_COMBINED_PROMPT_CHARS`` to prevent overwhelming the DSL
-    generation LLM.
-    """
-    sections: list[str] = []
-    for pr in page_results:
-        state_id = pr.get("page_state", "?")
-        url = pr.get("url", "")
-        description = pr.get("description", "")
-        formatted = pr.get("formatted", "")
-        annotation = pr.get("vlm_annotation")
-
-        if description:
-            header = f"=== 页面状态 {state_id}: {url}（{description}）==="
-        else:
-            header = f"=== 页面状态 {state_id}: {url} ==="
-        section = f"{header}\n{formatted}"
-        if annotation:
-            section += f"\n\n页面布局描述: {annotation}"
-        sections.append(section)
-    # Filter duplicate header/footer elements that appear in every state.
-    # The first state keeps its full output; subsequent states strip lines
-    # whose text/attributes already appeared in a prior state.  This frees
-    # the per-state char budget for page-unique content (product rows, forms).
-    _seen_lines: set[str] = set()
-    for i in range(len(sections)):
-        header, _, body = sections[i].partition("\n")
-        kept_lines = [header]
-        for line in body.split("\n"):
-            # Normalize: extract just the text/attrs part (skip css/xpath/candidates)
-            sig_match = re.match(
-                r"^  (\w[\w-]*(?:\[.*?\])*)(?:\s\|.*)?$", line,
-            )
-            sig = sig_match.group(1) if sig_match else line.strip()
-            if sig and sig not in _seen_lines:
-                _seen_lines.add(sig)
-                kept_lines.append(line)
-        sections[i] = "\n".join(kept_lines)
-
-    # Per-state truncation: distribute MAX_COMBINED_PROMPT_CHARS evenly
-    n_sec = len(sections)
-    if n_sec > 0:
-        per_limit = max(3000, MAX_COMBINED_PROMPT_CHARS // n_sec)
-        for i in range(n_sec):
-            if len(sections[i]) > per_limit:
-                sec = sections[i][:per_limit]
-                last_nl = sec.rfind("\n")
-                if last_nl > per_limit // 2:
-                    sec = sec[:last_nl]
-                sections[i] = sec + f"\n... [{per_limit} chars per-state limit]"
-    result = "\n\n".join(sections)
-    if len(result) > MAX_COMBINED_PROMPT_CHARS * 2:
-        logger.warning("build_flow_formatted_output: %d chars across %d states",
-                      len(result), n_sec)
-    return result
-
-
-__all__ = [
-    "BrowserSessionManager",
-    "PageDataCache",
-    "build_flow_formatted_output",
-    "capture_browser_session",
-    "collect_flow_elements",
-    "collect_interactable_elements",
-    "collect_multi_page_elements",
-    "filter_elements_for_step",
-    "format_elements_for_prompt",
-    "get_storage_state_path",
-    "is_storage_state_stale",
-    "load_storage_state_meta",
-    "save_storage_state",
-]

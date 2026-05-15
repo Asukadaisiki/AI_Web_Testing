@@ -694,63 +694,6 @@ def _handle_capture_page_session(
     return result
 
 
-def _check_action_disambiguation(
-    flow_steps: list[dict[str, Any]],
-    page_results: list[dict[str, Any]],
-) -> list[str]:
-    """Check if action targets are generic (match multiple elements).
-
-    Returns a list of warning strings for actions that need disambiguation.
-    """
-    warnings: list[str] = []
-    # Collect all elements from all pages
-    all_elements: list[dict[str, Any]] = []
-    for pr in page_results:
-        all_elements.extend(pr.get("elements", []))
-
-    if not all_elements:
-        return warnings
-
-    # Build text index: text -> count of matching elements
-    from collections import Counter
-    text_counts: Counter[str] = Counter()
-    for elem in all_elements:
-        text = (elem.get("text") or "").strip()
-        if text:
-            text_counts[text] += 1
-
-    # Check each action target
-    for step in flow_steps:
-        if not isinstance(step, dict):
-            continue
-        for action in step.get("actions", []):
-            if not isinstance(action, dict):
-                continue
-            target = (action.get("target") or "").strip()
-            if not target:
-                continue
-            # Check if target matches multiple elements
-            match_count = sum(1 for t in text_counts if target.lower() in t.lower())
-            if match_count > 1:
-                # Find specific alternatives using "附近的" pattern
-                alternatives = []
-                for elem in all_elements:
-                    elem_text = (elem.get("text") or "").strip()
-                    if elem_text and target.lower() in elem_text.lower():
-                        continue  # Skip exact matches
-                    # Look for nearby elements that could disambiguate
-                    if elem.get("tag") in ("h4", "h5", "a", "p") and elem.get("text"):
-                        alternatives.append(f'{elem["text"]} 附近的 {target}')
-                        if len(alternatives) >= 3:
-                            break
-                warning = f'action target "{target}" 匹配到 {match_count} 个元素'
-                if alternatives:
-                    warning += f'，建议用: {alternatives[0]}'
-                warnings.append(warning)
-
-    return warnings
-
-
 def _handle_explore_flow(
     *,
     params: dict[str, Any],
