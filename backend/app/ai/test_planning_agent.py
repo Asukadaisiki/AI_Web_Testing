@@ -184,6 +184,11 @@ def stream_planning_turn(
         round_index += 1
         yield {"type": "status", "phase": "thinking", "message": "正在分析需求..."}
 
+        # Inject cache progress before each ReAct round
+        cache_msg = _build_cache_progress_message(tool_calls)
+        if cache_msg:
+            conversation.append({"role": "system", "content": cache_msg})
+
         raw_response = ""
         llm_error_type = ""
         llm_error_detail = ""
@@ -569,6 +574,11 @@ def stream_planning_turn(
                     "role": "system",
                     "content": f"工具 {tool_name} 返回结果：{tool_result_text}",
                 })
+            # Drop previous cache messages to prevent accumulation
+            conversation = [m for m in conversation if not (
+                isinstance(m, dict) and m.get("role") == "system"
+                and str(m.get("content", "")).startswith("[Cache progress")
+            )]
             continue
 
         if action == "generate_plan":
@@ -903,6 +913,31 @@ def _log_cache_usage(raw_payload: dict, model: str) -> None:
             model, hit, miss, ratio,
             total, usage.get("completion_tokens", 0),
         )
+
+
+def _build_cache_progress_message(
+    tool_calls: list[AIPlanningToolCall],
+) -> str | None:
+    """Build 'already explored URLs' system message from past explore calls."""
+    explored: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        if tc.tool not in ("explore_page", "explore_flow"):
+            continue
+        result = tc.result
+        if not isinstance(result, dict):
+            continue
+        url = result.get("url", "")
+        nodes = result.get("a11y_nodes", result.get("elements", []))
+        count = len(nodes) if isinstance(nodes, list) else result.get("element_count", 0)
+        if url:
+            explored.append({"url": url, "count": count})
+    if not explored:
+        return None
+    lines = ["[Cache progress — already explored this session]"]
+    for e in explored:
+        lines.append(f"  - {e['url']} ({e['count']} nodes)")
+    lines.append("Do NOT call explore_page/explore_flow on these URLs unless state changed.")
+    return "\n".join(lines)
 
 
 def _call_planning_llm(
