@@ -9,7 +9,7 @@ import pytest
 
 import app.core.config as config_module
 from app.models import DslGenerationRun, TestCase, User
-from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, _call_llm, _normalize_string, build_generation_messages
+from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, _call_llm, _normalize_string
 from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
