@@ -159,6 +159,7 @@ class AIPlanningSessionDetail(DSLModel):
 
 class CreateAIPlanningSessionRequest(DSLModel):
     case_id: int | None = Field(default=None, ge=1)
+    project_id: int | None = Field(default=None, ge=1)
 
 
 class AIPlanningMessageCreateRequest(DSLModel):

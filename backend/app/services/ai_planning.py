@@ -148,6 +148,29 @@ def create_planning_session(
         missing_slots_json=list(REQUIRED_REQUIREMENT_SLOTS),
     )
     session.add(record)
+    session.flush()
+
+    # Stage 1: auto-create default project when none provided
+    if payload.project_id is None:
+        default_project = Project(
+            name=f"default-{record.id}",
+            description="auto-created temporary project",
+            is_default=True,
+        )
+        session.add(default_project)
+        session.flush()
+        sp = SessionProject(
+            session_id=record.id,
+            project_id=default_project.id,
+        )
+        session.add(sp)
+    else:
+        sp = SessionProject(
+            session_id=record.id,
+            project_id=payload.project_id,
+        )
+        session.add(sp)
+
     session.commit()
     session.refresh(record)
     return get_planning_session_detail(session, record.id, actor_user_id=actor_user_id)
