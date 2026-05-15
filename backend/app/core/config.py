@@ -87,7 +87,6 @@ class Settings:
     ai_planning_base_url: str = "https://api.openai.com/v1"
     ai_planning_api_key: str | None = None
     ai_planning_timeout_ms: int = 600000
-    ai_planning_max_react_rounds: int = 0
     ai_planning_max_react_safety_cap: int = 5
     ai_planning_context_compress_threshold: int = 10
     ai_planning_context_keep_recent: int = 4
@@ -147,7 +146,6 @@ def get_settings() -> Settings:
         ai_planning_base_url=os.getenv("AI_PLANNING_BASE_URL", "https://api.openai.com/v1"),
         ai_planning_api_key=os.getenv("AI_PLANNING_API_KEY") or None,
         ai_planning_timeout_ms=max(1000, _get_int(os.getenv("AI_PLANNING_TIMEOUT_MS"), default=600000)),
-        ai_planning_max_react_rounds=_get_int(os.getenv("AI_PLANNING_MAX_REACT_ROUNDS"), default=0),
         ai_planning_max_react_safety_cap=max(1, _get_int(os.getenv("AI_PLANNING_MAX_REACT_SAFETY_CAP"), default=5)),
         ai_planning_context_compress_threshold=max(4, _get_int(os.getenv("AI_PLANNING_CONTEXT_COMPRESS_THRESHOLD"), default=10)),
         ai_planning_context_keep_recent=max(2, _get_int(os.getenv("AI_PLANNING_CONTEXT_KEEP_RECENT"), default=4)),

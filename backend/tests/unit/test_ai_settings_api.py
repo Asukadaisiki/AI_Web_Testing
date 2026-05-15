@@ -47,7 +47,6 @@ def ai_settings_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestC
                 "AI_PLANNING_BASE_URL=https://api.openai.com/v1",
                 "AI_PLANNING_API_KEY=",
                 "AI_PLANNING_TIMEOUT_MS=30000",
-                "AI_PLANNING_MAX_REACT_ROUNDS=5",
             ]
         )
         + "\n",
@@ -133,7 +132,6 @@ def test_update_ai_settings_persists_to_env_file_and_allows_clearing_keys(
             "ai_planning_model": None,
             "ai_planning_base_url": "https://api.openai.com/v1",
             "ai_planning_timeout_ms": 30000,
-            "ai_planning_max_react_rounds": 5,
             "ai_planning_api_key": None,
             "clear_ai_planning_api_key": False,
         },
@@ -161,7 +159,6 @@ def test_update_ai_settings_persists_to_env_file_and_allows_clearing_keys(
         "ai_planning_model": None,
         "ai_planning_base_url": "https://api.openai.com/v1",
         "ai_planning_timeout_ms": 30000,
-        "ai_planning_max_react_rounds": 5,
         "has_ai_planning_api_key": False,
     }
 
@@ -210,7 +207,6 @@ def test_update_ai_settings_accepts_glm_model_family(ai_settings_client: TestCli
             "ai_planning_model": None,
             "ai_planning_base_url": "https://api.openai.com/v1",
             "ai_planning_timeout_ms": 30000,
-            "ai_planning_max_react_rounds": 5,
             "ai_planning_api_key": None,
             "clear_ai_planning_api_key": False,
         },

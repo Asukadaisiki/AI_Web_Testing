@@ -775,52 +775,6 @@ def _normalize_string(value: Any) -> str | None:
     normalized = value.strip()
 
 
-# ── Governance stubs (governance system deleted — retained for import compat) ─
+# ── Governance constants (retained for DB schema compatibility) ─
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple = ("context_mismatch", "bad_contracts")
 SETTLED_GOVERNANCE_REJECTION_REASONS: tuple = ("wrong_actions", "invalid_structure")
-
-
-def resolve_active_governance_reasons(
-    *, governance_focus_reasons=None,
-) -> list:
-    return list(governance_focus_reasons or DEFAULT_GOVERNANCE_REJECTION_REASONS)
-
-
-def generate_case_draft(
-    *,
-    payload,
-    supported_actions=None,
-    governance_focus_reasons=None,
-    db_session=None,
-):
-    """Legacy entry point — delegates to flash single-segment path."""
-    settings_local = get_settings()
-    seg_prompt = f"Generate DSL for: {payload.prompt[:2000]}\nbase_url: {payload.base_url or ''}"
-    messages = [
-        {"role": "system", "content": "Generate structured web testing DSL in JSON only. Return: {\"steps\": [...], \"base_url\": \"...\", \"name\": \"...\", \"description\": \"...\", \"input_contract\": [], \"output_contract\": []}"},
-        {"role": "user", "content": seg_prompt},
-    ]
-    response_text = _call_dsl_flash_llm(messages=messages, settings=settings_local, timeout_seconds=60.0)
-    cleaned = _extract_json_object(response_text)
-    raw = json.loads(cleaned)
-    if not isinstance(raw, dict):
-        raise DslGenerationError("DSL response is not a JSON object")
-    generated_case = DSLCase.model_validate(raw)
-    generation_meta = GenerateDslMeta(
-        model=getattr(settings_local, "ai_dsl_flash_model", None) or settings_local.ai_dsl_model or "",
-        generation_mode="draft",
-        import_mode=payload.import_mode,
-        prompt_variant="baseline_draft",
-        context_profile="blank_request",
-        active_governance_focus_reasons=list(governance_focus_reasons or []),
-        risk_flags=[],
-        base_url_source="request",
-        base_url_backfilled=False,
-        repaired_invalid_actions=0,
-        removed_invalid_steps=0,
-        removed_invalid_contracts=0,
-        preserve_contracts_applied=False,
-        used_current_case_context=False,
-        used_current_steps_context=False,
-    )
-    return generated_case, [], ["generated via flash path (governance removed)"], generation_meta

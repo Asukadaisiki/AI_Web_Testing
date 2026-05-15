@@ -18,8 +18,7 @@ from app.ai.dsl_generator import (
     AI_DSL_PROMPT_VERSION,
     DslGenerationConfigError,
     DslGenerationError,
-    generate_case_draft,
-    resolve_active_governance_reasons,
+    generate_segmented_case_draft,
     resolve_generation_mode,
     resolve_generation_profile,
     resolve_prompt_version,
@@ -143,12 +142,18 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
     with _RUNTIME_STATS_LOCK:
         _RUNTIME_STATS.total_requests += 1
 
+    # Build flow_steps + page_elements_by_state for segmented generation
+    flow_steps = payload.flow_steps or []
+    page_elements_by_state: dict[str, list] = {}
+    if not flow_steps:
+        # Single-segment fallback: wrap prompt as one segment
+        flow_steps = [{"page_state": "S0", "steps": []}]
+
     try:
-        generated_case, warnings, normalization_notes, generation_meta = generate_case_draft(
+        generated_case, warnings, normalization_notes, generation_meta = generate_segmented_case_draft(
             payload=payload,
-            supported_actions=SUPPORTED_DSL_ACTIONS,
-            governance_focus_reasons=governance_focus_reasons,
-            db_session=session,
+            flow_steps=flow_steps,
+            page_elements_by_state=page_elements_by_state,
         )
     except (DslGenerationConfigError, DslGenerationError) as exc:
         model_name = get_settings().ai_dsl_model
@@ -895,10 +900,7 @@ def _persist_generation_run(
     effective_governance_focus_reasons = (
         list(generation_meta.active_governance_focus_reasons)
         if generation_meta is not None
-        else resolve_active_governance_reasons(
-            governance_focus_reasons=governance_focus_reasons,
-            retry_reason_code=payload.retry_reason_code,
-        )
+        else list(governance_focus_reasons or DEFAULT_GOVERNANCE_REJECTION_REASONS)
     )
     generation_run = DslGenerationRun(
         actor_user_id=payload.actor_user_id,
@@ -960,13 +962,8 @@ def _select_governance_focus_reasons(
     *,
     limit: int = 2,
 ) -> list[DslGenerationRejectionReasonCode]:
-    selected_reasons = [item.rejection_reason_code for item in _list_governance_focus_reason_stats(session)[:limit]]
-    for fallback_reason in DEFAULT_GOVERNANCE_REJECTION_REASONS:
-        if fallback_reason not in selected_reasons:
-            selected_reasons.append(fallback_reason)
-        if len(selected_reasons) >= limit:
-            break
-    return selected_reasons[:limit]
+    """Governance is no longer active; return default reasons for DB compatibility."""
+    return list(DEFAULT_GOVERNANCE_REJECTION_REASONS[:limit])
 
 
 def _list_governance_focus_reason_stats(session: Session) -> list[GovernanceFocusReasonStats]:

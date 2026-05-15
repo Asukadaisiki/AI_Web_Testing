@@ -2,6 +2,55 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
+## 2026-05-15 | 代码清理 + 测试补充 + E2E 重设计
+
+**前置背景：**
+主路径 v2 A11y 管线 17 个任务已基本完成（491 tests / 0 failures），核对设计文档与实施计划后发现 4 类遗留：死代码未清理、`generate_case_draft` 未删除、`test_preflight_regen.py` 缺失、`test_main_path_v2_e2e.py` 缺失。
+
+**操作：**
+
+### Part 1: 重构 `services/dsl.py` — 删除 `generate_case_draft`
+- `services/dsl.py`：import 从 `generate_case_draft` 改为 `generate_segmented_case_draft`
+- `generate_dsl_case` 函数中：构造 `flow_steps` + `page_elements_by_state`，调 `generate_segmented_case_draft`；无 `flow_steps` 时构造单段 fallback
+- 删除 `_select_governance_focus_reasons` 的 DB 查询，改为返回静态默认值
+- `dsl_generator.py`：删除 `generate_case_draft`（38 行）+ `resolve_active_governance_reasons`
+- 保留 `DEFAULT_GOVERNANCE_REJECTION_REASONS` / `SETTLED_GOVERNANCE_REJECTION_REASONS` 常量（DB schema 兼容）
+
+### Part 2: 删除 `ai_planning_max_react_rounds`
+- 该配置项在 4 个文件做 plumbing（config → schema → settings service），但 **没有任何 planning agent/service 代码读取它**
+- 删除：`config.py`（字段 + env 加载）、`schemas/settings.py`（request/response）、`services/settings.py`（plumbing）
+- 更新 4 个测试文件中相关断言
+
+### Part 3: 删除 `collect_interactable_elements` 死代码
+- `page_explorer.py`：删除 `collect_interactable_elements`（~93 行）、`_discover_interactive_elements`（~52 行）、`_verify_locators_on_page`（~105 行）、`_locator_matches_element`（~15 行）、`MAX_PROMPT_ELEMENTS_CHARS` 常量及截断逻辑（~18 行）— 共约 283 行
+- 删除 `tests/integration/test_dom_aware_generation.py` 整文件（全部引用旧函数）
+- 删除 `tests/unit/test_page_explorer.py` 中 `TestCollectInteractableElements` 测试类
+- 更新 `scripts/a11y_experiment.py` 标记废弃
+- 修复 `_filter_a11y_nodes` 中 CDP `role` 字段为 dict 格式的处理（`isinstance(role, dict)` 分支）
+
+### Part 4: 新建 `test_preflight_regen.py`（16 tests）
+- `TestPreflightA11yNodes`（10 tests）：精确匹配、子串匹配、大小写不敏感、无匹配、歧义匹配、空 steps/nodes、candidates 结构、overall confidence、warnings
+- `TestRegenSegment`（6 tests）：有效响应、空 steps、无效 JSON、非 dict 响应、prompt 含 missing_targets、prompt 含 node names
+
+### Part 5: 新建 `test_main_path_v2_e2e.py`（8 tests）
+- Layer 1 API 级（5 tests）：默认项目 auto-create、preflight candidates、cache hit/miss
+- Layer 2 浏览器级（3 tests, `@pytest.mark.browser_integration`）：A11y 节点结构验证、role ∈ USEFUL_A11Y_ROLES、preflight 与真实节点匹配
+
+**验证：**
+- 全量单测：**505 passed / 0 failed**（原 491 → 新增 16 preflight/regen 测试 + 5 E2E 集成测试 - 删除旧测试后净增 14）
+- 浏览器集成测试：**3 passed / 0 failed**（the-internet.herokuapp.com）
+- 死代码 grep：`app/` 下无 `generate_case_draft` / `ai_planning_max_react_rounds` / `collect_interactable_elements` 引用
+
+**改动文件清单：**
+- 修改：`services/dsl.py`、`ai/dsl_generator.py`、`ai/page_explorer.py`、`core/config.py`、`schemas/settings.py`、`services/settings.py`、`scripts/a11y_experiment.py`
+- 新增：`tests/unit/test_preflight_regen.py`、`tests/integration/test_main_path_v2_e2e.py`
+- 删除：`tests/integration/test_dom_aware_generation.py`
+- 更新：`tests/unit/test_ai_settings_api.py`、`tests/unit/test_ai_planning_api.py`、`tests/unit/test_planning_agent.py`、`tests/unit/test_page_explorer.py`
+
+**净变化：** +283 行新增测试 / −283 行删除旧代码 / −38 行删除 `generate_case_draft`
+
+---
+
 ## 2026-05-15 | 主路径 v2 全量实施 — 17/17 任务完成
 
 **前置背景：**

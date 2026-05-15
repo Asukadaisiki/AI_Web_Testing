@@ -22,7 +22,8 @@ from typing import Any
 
 from playwright.sync_api import sync_playwright
 
-from app.ai.page_explorer import collect_interactable_elements
+# NOTE: collect_interactable_elements was removed — this script is deprecated.
+# Use collect_a11y_nodes from app.ai.page_explorer instead.
 
 
 URLS = [
@@ -97,16 +98,11 @@ def explore_one(page, url: str) -> dict[str, Any]:
     page.wait_for_load_state("networkidle", timeout=60000)
     nav_ms = (time.monotonic() - t0) * 1000
 
-    # 1) Current DOM extraction (existing project function)
-    t1 = time.monotonic()
-    dom_elements = collect_interactable_elements(url, timeout_ms=60000, page=page)
-    dom_ms = (time.monotonic() - t1) * 1000
-    dom_count = len(dom_elements)
-    dom_interactive = sum(1 for e in dom_elements
-                          if (e.get("tag", "") or "").lower()
-                          in {"button", "input", "a", "select", "textarea"})
-    dom_json = json.dumps(dom_elements, ensure_ascii=False, default=str)
-    dom_chars = len(dom_json)
+    # 1) DOM extraction removed — A11y is now the primary path
+    dom_ms = 0
+    dom_count = 0
+    dom_interactive = 0
+    dom_chars = 0
 
     # 2) A11y snapshot via CDP
     t2 = time.monotonic()

@@ -35,7 +35,6 @@ class AISettingsResponse(SettingsModel):
     ai_planning_model: str | None = Field(default=None, max_length=200)
     ai_planning_base_url: str = Field(min_length=1, max_length=500)
     ai_planning_timeout_ms: int = Field(ge=1000)
-    ai_planning_max_react_rounds: int = Field(ge=1)
     has_ai_planning_api_key: bool
 
 
@@ -62,7 +61,6 @@ class AISettingsUpdateRequest(SettingsModel):
     ai_planning_model: str | None = Field(default=None, max_length=200)
     ai_planning_base_url: str = Field(min_length=1, max_length=500)
     ai_planning_timeout_ms: int = Field(ge=1000)
-    ai_planning_max_react_rounds: int = Field(ge=1)
     ai_planning_api_key: str | None = Field(default=None, max_length=1000)
     clear_ai_planning_api_key: bool = False
 

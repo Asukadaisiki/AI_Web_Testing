@@ -24,7 +24,6 @@ def _planning_settings(**overrides):
         "ai_planning_base_url": "https://api.openai.com/v1",
         "ai_planning_api_key": "planning-key",
         "ai_planning_timeout_ms": 30000,
-        "ai_planning_max_react_rounds": 0,
         "ai_planning_max_react_safety_cap": 30,
         "ai_planning_context_compress_threshold": 10,
         "ai_planning_context_keep_recent": 4,
