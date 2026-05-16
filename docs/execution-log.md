@@ -1551,3 +1551,24 @@
 - 结果：形成面向项目展示/答辩/路演的 PPT 页级规划建议，覆盖灵感来源、技术工艺、创新点、应用前景、推广计划、成本与投资回报分析。
 - 验证：仅进行文档与代码结构阅读，未运行测试；未发现需要新增 Bug 日志的问题。
 - 后续：如用户确认，可继续基于该规划生成完整 PPT 文案、演讲稿或可编辑幻灯片文件。
+
+## 2026-05-16 | E2E 手动测试 — 品牌筛选购物车
+
+**任务**：对 `test_brand_filter_cart` 测试用例执行完整 E2E 链路测试（AI 规划 → DSL 生成 → Playwright 执行 → 报告分析），发现并修复流程中的 bug。
+
+**操作**：
+1. 启动前后端服务，验证环境配置
+2. 创建 AI 规划会话 (#224)，AI 成功生成 4 个测试场景（plan_ready）
+3. DSL 生成失败（page_elements 为空）→ 改用直接创建测试用例方式
+4. 创建 Case #97 并执行，步骤 6 失败（登录账号不存在）
+5. 注册新账号 Xjy13302412005@outlook.com/123456
+6. 重新执行 Case #97 → 24 步全部通过
+7. 继续优化 DSL（#98, #99, #100），最终 Case #100 20 步全部通过
+8. 修复 3 个代码 bug
+
+**发现并修复的 Bug**：
+- Bug #1: `planning_tools.py` — `AIPlanningSession` import 在条件块内导致 UnboundLocalError
+- Bug #2: `planning_tools.py` — `explore_page` 中 networkidle 等待无 try-except，超时抛出异常
+- Bug #3: `playwright_runner.py` — `capture_text` 步骤的 evidence value 始终为 null
+
+**验证**：完整购物车流程 20 步 pass，capture_text 正确捕获并验证商品名称和价格。

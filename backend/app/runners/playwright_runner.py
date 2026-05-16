@@ -340,6 +340,7 @@ def _execute_step_with_candidates(
 
         # Attempt to execute the action
         try:
+            step_value = getattr(step, "value", None)
             if step.action == "click":
                 cr = click_with_precheck(page, locator)
                 if not cr.succeeded:
@@ -359,6 +360,7 @@ def _execute_step_with_candidates(
                 pw_expect(locator).to_contain_text(_substitute_variables(step.value, vars_map))
             elif step.action == "capture_text":
                 captured = locator.inner_text()
+                step_value = captured.strip()
                 if runtime_context is not None:
                     runtime_context[step.context_key] = captured.strip()
             else:
@@ -381,7 +383,7 @@ def _execute_step_with_candidates(
                 step_index=step_index,
                 action=step.action,
                 target=getattr(step, "target", None),
-                value=getattr(step, "value", None),
+                value=step_value,
                 status="passed",
                 duration_ms=_elapsed_ms(step_started_at),
                 resolved_by=used_strategy,
@@ -413,6 +415,7 @@ def _execute_step_with_candidates(
         vlm_preverify_used = False
         click_recovery = None
         click_recovery_detail = None
+        step_value = getattr(step, "value", None)
 
         if step.action == "click":
             resolved, vlm_preverify_used = _resolve_with_confidence_gate(
@@ -494,6 +497,7 @@ def _execute_step_with_candidates(
             )
             resolved_by = resolved.strategy
             captured = resolved.locator.inner_text()
+            step_value = captured.strip()
             if runtime_context is not None:
                 runtime_context[step.context_key] = captured.strip()
         else:
@@ -511,7 +515,7 @@ def _execute_step_with_candidates(
             step_index=step_index,
             action=step.action,
             target=getattr(step, "target", None),
-            value=getattr(step, "value", None),
+            value=step_value,
             status="passed",
             duration_ms=_elapsed_ms(step_started_at),
             resolved_by=resolved_by,
@@ -597,6 +601,7 @@ def execute_case_with_playwright(
                     click_recovery = None
                     click_recovery_detail = None
                     vlm_preverify_used = False
+                    step_value = getattr(step, "value", None)
 
                     # --- Dual-layer scoring path (new) ---
                     if _has_candidates(step):
@@ -709,6 +714,7 @@ def execute_case_with_playwright(
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
                         captured = resolved.locator.inner_text()
+                        step_value = captured.strip()
                         runtime_context[step.context_key] = captured.strip()
                     else:
                         raise RunnerExecutionError(f"Unsupported action: {step.action}")
@@ -718,7 +724,7 @@ def execute_case_with_playwright(
                             step_index=index,
                             action=step.action,
                             target=getattr(step, "target", None),
-                            value=getattr(step, "value", None),
+                            value=step_value,
                             status="passed",
                             duration_ms=_elapsed_ms(step_started_at),
                             resolved_by=resolved_by,
@@ -892,6 +898,7 @@ def execute_case_with_playwright_streaming(
                     click_recovery = None
                     click_recovery_detail = None
                     vlm_preverify_used = False
+                    step_value = getattr(step, "value", None)
 
                     # --- Dual-layer scoring path (new) ---
                     if _has_candidates(step):
@@ -1011,7 +1018,7 @@ def execute_case_with_playwright_streaming(
                         step_index=index,
                         action=step.action,
                         target=getattr(step, "target", None),
-                        value=getattr(step, "value", None),
+                        value=step_value,
                         status="passed",
                         duration_ms=_elapsed_ms(step_started_at),
                         resolved_by=resolved_by,

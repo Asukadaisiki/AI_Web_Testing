@@ -845,3 +845,29 @@
 - 多 Agent 模式的 ExplorerAgent 不传递 `planning_session_id`，每次创建新浏览器
 - 但 "Event loop is closed" 错误仍然出现
 - 需要进一步研究 Playwright 在 Windows worker 线程中的兼容性
+
+## 2026-05-16 — E2E 测试中发现的 Bug
+
+### Bug #1: AIPlanningSession UnboundLocalError in explore_flow
+- **状态**: fixed
+- **文件**: `backend/app/ai/planning_tools.py:711`
+- **现象**: `explore_flow` 工具调用时报 `cannot access local variable 'AIPlanningSession' where it is not associated with a value`
+- **原因**: `from app.models import AIPlanningSession, AIPlanningMessage` 被放在 `if not resolved_base_url and planning_session_id:` 条件块内。当 `base_url` 已通过 params 提供时，该条件块被跳过，但后续代码（line 759）仍引用 `AIPlanningSession`
+- **修复**: 将 import 移到条件块之前（line 707）
+- **关联**: execution-log.md 2026-05-16
+
+### Bug #2: explore_page networkidle 超时导致异常
+- **状态**: fixed
+- **文件**: `backend/app/ai/planning_tools.py:646`
+- **现象**: `explore_page` 在 automationexercise.com 上反复超时，错误 `Timeout 30000ms exceeded`
+- **原因**: `page.wait_for_load_state("networkidle", timeout=30000)` 无 try-except 包装。部分网站（如 automationexercise.com）持续发送跟踪请求，networkidle 永远达不到
+- **修复**: 用 try-except 包装 `wait_for_load_state("networkidle")`
+- **关联**: execution-log.md 2026-05-16
+
+### Bug #3: capture_text 步骤的 value 在报告中始终为 null
+- **状态**: fixed
+- **文件**: `backend/app/runners/playwright_runner.py`
+- **现象**: `capture_text` 步骤成功执行但执行报告中 `value` 字段始终为 `null`
+- **原因**: 捕获的文本存储到了 `runtime_context` 但 `StepExecutionEvidence` 的 `value` 字段读取的是 `getattr(step, "value", None)`，二者未关联
+- **修复**: 引入 `step_value` 局部变量，初始值为 `getattr(step, "value", None)`，`capture_text` 分支更新为实际捕获值，evidence 构造使用 `value=step_value`。修复覆盖 4 个代码路径（candidate path、legacy path、2 个 streaming path）
+- **关联**: execution-log.md 2026-05-16

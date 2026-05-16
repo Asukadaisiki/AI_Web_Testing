@@ -1147,7 +1147,6 @@ def _resolve_step_locator(page, target: str, *, kind: str):
         pass
 
     return None
-    return None
 
 
 def capture_browser_session(
@@ -1273,7 +1272,7 @@ def _collect_flow_a11y(
     managed = not bool(session_id)
 
     try:
-        for step in flow_steps:
+        for step_i, step in enumerate(flow_steps):
             if not isinstance(step, dict):
                 continue
             if session_id:

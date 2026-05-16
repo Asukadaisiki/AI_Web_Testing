@@ -643,7 +643,10 @@ def _handle_explore_page(
         planning_session_id, storage_state_path=storage_path,
     )
     page.goto(resolved_url, timeout=30000, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle", timeout=30000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception:
+        pass
 
     flow_text = params.get("core_user_flow_text")
 
@@ -704,11 +707,11 @@ def _handle_explore_flow(
     urls = params.get("urls")
     flow_description = params.get("flow_description")
     planning_session_id = int(params.get("planning_session_id", 0))
+    from app.models import AIPlanningSession, AIPlanningMessage
 
     # Resolve base_url: 1) from params, 2) from session requirements, 3) from messages
     resolved_base_url = params.get("base_url") or ""
     if not resolved_base_url and planning_session_id:
-        from app.models import AIPlanningSession, AIPlanningMessage
         from sqlalchemy import select, desc
         session_obj = db_session.get(AIPlanningSession, planning_session_id)
         if session_obj and session_obj.requirements_json:
