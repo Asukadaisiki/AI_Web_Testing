@@ -81,7 +81,7 @@ class Settings:
     vlm_base_url: str = "https://api.openai.com/v1"
     vlm_model: str | None = None
     vlm_model_family: str = "gpt-4o"
-    vlm_fallback_models: list[str] = field(default_factory=lambda: ["glm-4.6v-flash", "glm-4.6v", "glm-4.6v-flashx"])
+    vlm_fallback_models: list[str] = field(default_factory=lambda: ["glm-4.6v-flash", "glm-4.6v", "glm-4v-flash"])
     enable_ai_planning: bool = False
     ai_planning_model: str | None = None
     ai_planning_base_url: str = "https://api.openai.com/v1"

@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 
-Read and follow all instructions in AGENTS.md in this repository.
+Read and follow all instructions in AGENTS.md in this repository. Key rules inlined here:
+
+- **Language**: Respond in Chinese unless user requests otherwise. Final responses include Summary, Changes, How to run, Tests, Notes sections.
+- **Git**: Single-owner repo, direct push preferred over PRs. Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`). One focused commit per task.
+- **Task logging**: Append to `docs/execution-log.md` after completing tasks. Append to `docs/bug-log.md` for defects found. Ask user about GitHub sync after completing requirements.
+- **Boundaries**: Frontend must not contain test execution logic. Backend runner is the only source of truth for results. AI generation cannot bypass DSL validation.
 
 ## Commands
 
@@ -77,6 +82,12 @@ frontend/src/
   types/api.ts               # TypeScript type definitions for API contracts
 ```
 
+## Environment Setup
+
+- `AUTH_SESSION_SECRET` is **required** — backend crashes without it. Set in `backend/.env` (copy from `.env.example`).
+- `get_settings()` uses `@lru_cache` — in tests, call `get_settings.cache_clear()` after modifying env vars.
+- Test fixtures in `backend/tests/conftest.py` auto-set `AUTH_SESSION_SECRET` and provide `db_session`, `client`, `anonymous_client` fixtures using in-memory SQLite.
+
 ## Key Data Flows
 
 **Execution flow**: Case DSL → `playwright_runner` → per-step locator fallback chain → evidence (screenshot, console, network) → `TestCaseRun` with step-level results.
@@ -94,15 +105,13 @@ frontend/src/
 
 ## Conventions
 
-- **Language**: Respond in Chinese unless user requests otherwise. Include Summary, Changes, How to run, Tests, Notes sections.
 - **Backend**: FastAPI + SQLAlchemy 2.x + Alembic. Route handlers thin, logic in services. SQLite for local dev, PostgreSQL for production design.
 - **Frontend**: React + TypeScript + Vite + Ant Design + TanStack Query. Vite dev server proxies `/api` and `/artifacts` to backend. No execution logic in frontend.
 - **Streaming**: Use SSE (fetch-based `sseClient.ts`), not WebSocket. All streaming endpoints are POST with JSON body.
 - **Testing**: `tests/unit/` for unit tests, `tests/integration/` for integration tests. `browser_integration` pytest marker for browser-level tests. All meaningful features need tests.
-- **Git**: Single-owner repo. Direct push preferred over PRs. Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`). One focused commit per task.
-- **Task logging**: Append to `docs/execution-log.md` after completing tasks, `docs/bug-log.md` for defects. Ask user about GitHub sync after completing requirements.
 - **DSL**: All test cases must be structured DSL. No free-form NL into executor. Validate before execution. Every step produces evidence.
 - **AI**: AI generation cannot bypass DSL validation. AI visual is opt-in (disabled by default). DSL generator outputs governance metadata (warnings, normalization_notes, generation_meta).
+- **Design docs**: Specs and plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/` (date-prefixed filenames). Read the relevant spec before implementing a feature.
 
 ## Project Skills
 

@@ -90,7 +90,10 @@ class AIVisionCandidateBox:
     bbox: tuple[int, int, int, int]
 
 
-VLM_FALLBACK_MODELS_HARDCODED = ["glm-4.6v-flash", "glm-4.6v", "glm-4.6v-flashx"]
+VLM_FALLBACK_MODELS_HARDCODED = ["glm-4.6v-flash", "glm-4.6v"]
+
+# Models that do NOT support base64 image input (require URL only)
+VLM_MODELS_NO_BASE64 = set()
 
 
 def _get_vlm_fallback_models() -> list[str]:
@@ -101,11 +104,21 @@ def _get_vlm_fallback_models() -> list[str]:
         return list(VLM_FALLBACK_MODELS_HARDCODED)
 
 
+def _model_supports_base64(model_name: str) -> bool:
+    """Check if a model supports base64 image input."""
+    return model_name not in VLM_MODELS_NO_BASE64
+
+
 def _is_rate_limited_error(exc: Exception) -> bool:
     """Check if an exception indicates a rate-limit (429) or server overload."""
     msg = str(exc).lower()
     if "429" in msg or "too many requests" in msg or "rate" in msg:
         return True
+    # Check urllib.error.HTTPError (has .code attribute)
+    status = getattr(exc, "code", None)
+    if status == 429:
+        return True
+    # Check requests-style response (has .response.status_code)
     status = getattr(getattr(exc, "response", None), "status_code", None)
     return status == 429
 
@@ -149,9 +162,20 @@ def locate_element_by_vision(
     models_to_try = list(_get_vlm_fallback_models())
     failed_models: list[str] = []
 
+    logger.info("[VLM-FALLBACK] Starting fallback loop with models: %s", models_to_try)
+
     for model_name in models_to_try:
+        logger.info("[VLM-FALLBACK] === Trying model: %s ===", model_name)
+
+        # Skip models that don't support base64 when using base64 input
+        if not _model_supports_base64(model_name):
+            failed_models.append(f"{model_name}: 不支持 Base64 图片格式")
+            logger.info("[VLM-FALLBACK] Model %s skipped: does not support base64 image input", model_name)
+            continue
+
         try:
             if deep_locate:
+                logger.info("[VLM-FALLBACK] Calling _deep_locate with model=%s", model_name)
                 result = _deep_locate(
                     screenshot_base64=screenshot_base64,
                     target_description=target_description,
@@ -164,6 +188,7 @@ def locate_element_by_vision(
                     timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
                 )
             else:
+                logger.info("[VLM-FALLBACK] Calling _single_locate with model=%s", model_name)
                 result = _single_locate(
                     screenshot_base64=screenshot_base64,
                     target_description=target_description,
@@ -177,17 +202,24 @@ def locate_element_by_vision(
                 )
         except Exception as exc:
             failed_models.append(f"{model_name}: {type(exc).__name__}: {exc}")
-            if _is_rate_limited_error(exc):
-                logger.warning("VLM model %s rate limited, trying next fallback", model_name)
+            is_rate_limited = _is_rate_limited_error(exc)
+            logger.error(
+                "[VLM-FALLBACK] Model %s EXCEPTION: type=%s, msg=%s, is_rate_limited=%s",
+                model_name, type(exc).__name__, exc, is_rate_limited
+            )
+            if is_rate_limited:
+                logger.warning("[VLM-FALLBACK] Model %s rate limited (429), will try next fallback model", model_name)
             else:
-                logger.warning("VLM model %s failed, trying next fallback: %s", model_name, exc)
+                logger.warning("[VLM-FALLBACK] Model %s failed, will try next fallback model", model_name)
+            logger.info("[VLM-FALLBACK] Continuing to next model in list...")
             continue
 
         if result is None:
             failed_models.append(f"{model_name}: 未定位到目标")
-            logger.warning("VLM model %s returned None, trying next fallback", model_name)
+            logger.warning("[VLM-FALLBACK] Model %s returned None, will try next fallback model", model_name)
             continue
 
+        logger.info("[VLM-FALLBACK] Model %s succeeded!", model_name)
         _record_locate_result(success=True, latency_ms=_elapsed_milliseconds(started_at))
         _record_success()
         return result
