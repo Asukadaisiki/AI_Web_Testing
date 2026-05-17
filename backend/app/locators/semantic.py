@@ -166,22 +166,29 @@ def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[
             ]
         )
 
-    builders.extend(
-        [
-            ("button_role", lambda: page.get_by_role("button", name=target, exact=True)),
-            ("link_role", lambda: page.get_by_role("link", name=target, exact=True)),
-            ("menuitem_role", lambda: page.get_by_role("menuitem", name=target, exact=True)),
-            ("label", lambda: page.get_by_label(target, exact=True)),
-            ("placeholder", lambda: page.get_by_placeholder(target, exact=True)),
-            ("text", lambda: page.get_by_text(target, exact=True)),
-            ("button_role_fuzzy", lambda: page.get_by_role("button", name=target)),
-            ("link_role_fuzzy", lambda: page.get_by_role("link", name=target)),
-            ("menuitem_role_fuzzy", lambda: page.get_by_role("menuitem", name=target)),
-            ("label_fuzzy", lambda: page.get_by_label(target)),
-            ("placeholder_fuzzy", lambda: page.get_by_placeholder(target)),
-            ("text_fuzzy", lambda: page.get_by_text(target)),
-        ]
-    )
+    # Shared strategies for non-input contexts (button, link, menuitem, text, etc.)
+    shared_builders: list[tuple[str, object]] = [
+        ("button_role", lambda: page.get_by_role("button", name=target, exact=True)),
+        ("link_role", lambda: page.get_by_role("link", name=target, exact=True)),
+        ("menuitem_role", lambda: page.get_by_role("menuitem", name=target, exact=True)),
+        ("label", lambda: page.get_by_label(target, exact=True)),
+        ("placeholder", lambda: page.get_by_placeholder(target, exact=True)),
+        ("button_role_fuzzy", lambda: page.get_by_role("button", name=target)),
+        ("link_role_fuzzy", lambda: page.get_by_role("link", name=target)),
+        ("menuitem_role_fuzzy", lambda: page.get_by_role("menuitem", name=target)),
+        ("label_fuzzy", lambda: page.get_by_label(target)),
+        ("placeholder_fuzzy", lambda: page.get_by_placeholder(target)),
+    ]
+    # text/text_fuzzy strategies match elements by innerText — useless for <input> elements
+    # which have no innerText, and actively harmful when they match <body> instead.
+    if not prefer_input:
+        shared_builders.extend(
+            [
+                ("text", lambda: page.get_by_text(target, exact=True)),
+                ("text_fuzzy", lambda: page.get_by_text(target)),
+            ]
+        )
+    builders.extend(shared_builders)
     return builders
 
 

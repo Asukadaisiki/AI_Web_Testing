@@ -511,7 +511,7 @@ def generate_segmented_case_draft(
     all_warnings: list[str] = []
     all_notes: list[str] = []
     merged_steps: list[dict[str, Any]] = []
-    base_url = payload.base_url or ""
+    base_url = payload.base_url or None
 
     def _generate_segment(state: str, steps: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
         elements = page_elements_by_state.get(state, [])
@@ -582,6 +582,17 @@ def generate_segmented_case_draft(
     }
 
     all_notes.append(f"分段生成：{len(sorted_states)} 个页面状态，共 {len(merged_steps)} 步")
+
+    if not base_url:
+        raise DslGenerationError(
+            "DSL 生成失败：缺少入口 URL（base_url 为空）。"
+            "请确认 AI 已从测试需求中提取到 entry_url_or_page 字段。"
+        )
+    if not merged_steps:
+        raise DslGenerationError(
+            f"DSL 生成失败：所有 {len(sorted_states)} 个页面状态分段均未生成步骤。"
+            "请检查页面元素采集是否正常，或入口 URL 是否可达。"
+        )
 
     case = DSLCase.model_validate(normalized_case)
     generation_meta = GenerateDslMeta(

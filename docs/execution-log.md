@@ -2,6 +2,41 @@
 
 用于沉淀每次任务实际做了什么，方便后续追溯、复盘和回答一致化。
 
+## 2026-05-17 | 修复 AI 规划→DSL 生成链路 4 个 bug（session #228 演练发现）
+
+**前置背景：**
+使用 `test_brand_filter_cart` 测试规格生成草案时，AI 规划工具调用 `explore_flow` 失败（Playwright 对 `<body>` 执行 `fill`），草案生成报 Pydantic `ValidationError`。分别在需求提取、页面探索、方案生成、DSL 生成四个环节排查出 bug。
+
+**操作：**
+
+### Bug 1: 系统提示词缺少 `collected_info` → `entry_url_or_page` 提取不稳定
+- `test_planning_prompts.py`：JSON 模板新增 `collected_info` 对象（7 个需求字段）+ `assistant_message` + `todo_list`
+- 规则新增：每次回复必须包含 `collected_info`；任何 http/https URL 必须原样记录到 `entry_url_or_page`
+
+### Bug 2: 语义定位器 `text` 策略匹配 `<body>` → `explore_flow` 填表失败
+- 根因：`<input>` 无 `innerText`，`page.get_by_text()` 永远匹配不到输入框，反而匹配到包含该文本的 `<body>`
+- `semantic.py`：`prefer_input=True` 时排除 `text`/`text_fuzzy` 策略
+- `page_explorer.py`：`_execute_flow_actions` 新增标签验证；`fill` 前检查元素 tag 是否为 `input/select/textarea`，不是则调 `_resolve_input_fallback` 尝试 placeholder/role="textbox"/input[type='email'] 等策略；`click` 前检查 tag 不为 `body/html`，否则调 `_resolve_click_fallback`
+
+### Bug 3: 系统提示词缺少 `summary` → `_coerce_plan` 永远回退到 `_build_plan`
+- 根因：`_coerce_plan` 要求 `action_input` 同时含 `summary` + `scenarios`，但提示词模板只有 `scenarios`
+- `test_planning_prompts.py`：JSON 模板新增 `summary` 字段；scenario 模板扩展 `flow_steps` 示例
+- 规则新增：`generate_plan` 时每个 scenario 必须包含 `flow_steps`，target 必须使用探索返回的元素清单中的实际文本
+
+### Bug 4: `base_url` 转空字符串 + 空 steps 报 Pydantic 错误
+- 根因：`payload.base_url or ""` 把合法 `None` 转为非法 `""`；`DSLCase.model_validate()` 直接抛技术性 ValidationError
+- `dsl_generator.py`：`base_url = payload.base_url or None`；`model_validate` 前加前置校验：`base_url` 为空 / `merged_steps` 为空 → 抛 `DslGenerationError`（中文错误信息）
+
+**验证：**
+- 全量单测（语义/定位器/DSL/探索器相关）：**138 passed / 0 failed**
+- 全量单测（DSL 相关）：**23 passed / 0 failed**
+
+**改动文件清单：**
+- `test_planning_prompts.py`：JSON 模板 + 规则（+29 行）
+- `dsl_generator.py`：base_url 修复 + 前置校验（+13 行）
+- `page_explorer.py`：标签验证 + fallback 函数（+66 行）
+- `semantic.py`：prefer_input 排除 text 策略（+39/-21 行）
+
 ## 2026-05-15 | 代码清理 + 测试补充 + E2E 重设计
 
 **前置背景：**

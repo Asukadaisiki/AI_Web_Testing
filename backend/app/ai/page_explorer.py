@@ -1354,12 +1354,34 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
         if act in ("type", "fill", "input"):
             loc = _resolve_step_locator(page, target, kind="input")
             if loc is not None:
-                loc.fill(str(value))
+                try:
+                    tag = loc.evaluate("el => el.tagName.toLowerCase()")
+                except Exception:
+                    tag = ""
+                if tag not in ("input", "select", "textarea"):
+                    logger.warning(
+                        "Locator resolved to <%s> instead of input for target=%r, trying fallback",
+                        tag, target,
+                    )
+                    loc = _resolve_input_fallback(page, target)
+                if loc is not None:
+                    loc.fill(str(value))
             continue
         if act in ("click", "press", "tap"):
             loc = _resolve_step_locator(page, target, kind="click")
             if loc is not None:
-                loc.click()
+                try:
+                    tag = loc.evaluate("el => el.tagName.toLowerCase()")
+                except Exception:
+                    tag = ""
+                if tag in ("body", "html"):
+                    logger.warning(
+                        "Locator resolved to <%s> for click target=%r, trying fallback",
+                        tag, target,
+                    )
+                    loc = _resolve_click_fallback(page, target)
+                if loc is not None:
+                    loc.click()
             continue
         if act == "wait_for":
             try:
@@ -1369,3 +1391,43 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
                     page.locator(f"text={target}").first.wait_for(state="visible", timeout=5000)
                 except Exception:
                     pass
+
+
+def _resolve_input_fallback(page, target: str):
+    """Try alternative strategies when semantic locator resolves to non-input element."""
+    fallback_strategies = [
+        lambda: page.get_by_placeholder(target),
+        lambda: page.get_by_role("textbox", name=target),
+        lambda: page.locator("input, select, textarea").filter(has=page.get_by_text(target)),
+        lambda: page.locator(f"input[type='email']").first,
+        lambda: page.locator("input:visible").first,
+    ]
+    for strategy in fallback_strategies:
+        try:
+            loc = strategy()
+            if loc.count() > 0:
+                tag = loc.first.evaluate("el => el.tagName.toLowerCase()")
+                if tag in ("input", "select", "textarea"):
+                    return loc.first
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_click_fallback(page, target: str):
+    """Try alternative strategies when semantic locator resolves to body/html for click."""
+    fallback_strategies = [
+        lambda: page.get_by_role("button", name=target),
+        lambda: page.get_by_role("link", name=target),
+        lambda: page.locator("a, button").filter(has_text=target),
+    ]
+    for strategy in fallback_strategies:
+        try:
+            loc = strategy()
+            if loc.count() > 0:
+                tag = loc.first.evaluate("el => el.tagName.toLowerCase()")
+                if tag not in ("body", "html"):
+                    return loc.first
+        except Exception:
+            continue
+    return None
