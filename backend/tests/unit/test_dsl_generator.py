@@ -152,9 +152,6 @@ def test_dsl_flash_llm_wraps_network_error_with_chinese_message(monkeypatch: pyt
     assert "WinError 10060" in str(exc_info.value) or "10060" in str(exc_info.value)
 
 
-# --- Bug A test ---------------------------------------------------------------
-
-
 def test_generate_dsl_case_propagates_a11y_nodes_by_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bug A: generate_dsl_case must pass payload.a11y_nodes_by_state to segmented gen.
 
@@ -215,5 +212,66 @@ def test_generate_dsl_case_propagates_a11y_nodes_by_state(monkeypatch: pytest.Mo
         "S0": [{"node_id": "n1", "role": "button", "name": "Login"}],
         "S1": [{"node_id": "n2", "role": "textbox", "name": "Email"}],
     }
+
+
+# --- Bug F: LLM step field misplacement (target↔value) ------------------------
+
+
+class TestNormalizeLlmStep:
+    def test_goto_with_target_moved_to_value(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "goto", "target": "https://example.com/login", "step_index": 1}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "https://example.com/login"
+        assert "target" not in normalized
+
+    def test_assert_url_contains_target_moved_to_value(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "assert_url_contains", "target": "/dashboard"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "/dashboard"
+        assert "target" not in normalized
+
+    def test_goto_with_value_already_set_unchanged(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "goto", "value": "/login"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "/login"
+
+    def test_click_target_unchanged(self) -> None:
+        """For click, target is correct — must NOT be moved to value."""
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "click", "target": "Login"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["target"] == "Login"
+        assert "value" not in normalized
+
+    def test_action_alias_navigate_becomes_goto(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "navigate", "target": "/home"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["action"] == "goto"
+        assert normalized["value"] == "/home"
+
+    def test_action_alias_open_becomes_goto(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "open", "target": "https://example.com"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["action"] == "goto"
+        assert normalized["value"] == "https://example.com"
+
+    def test_invalid_step_returns_none(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        assert _normalize_llm_step(None) is None
+        assert _normalize_llm_step("not a dict") is None
+        assert _normalize_llm_step({}) is None  # no action
+        assert _normalize_llm_step({"action": ""}) is None
+
 
 

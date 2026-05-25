@@ -927,3 +927,17 @@
 - **原因**: commit `8d92654`（refactor: delete governance system from dsl_generator -520 LOC）把 `_log_dsl_cache_usage` 函数定义一起删掉了，但 `_call_llm:402` 和 `_call_dsl_flash_llm:510` 仍保留对它的调用 —— 这个 bug 一直是 dormant 的，因为前面 segment 通常在网络/元素缺失时就失败了，根本走不到这一行。Bug A 修复让 LLM 调用真正成功后，这个潜伏代码 rot 才暴露
 - **修复**: 恢复 `_log_dsl_cache_usage(raw_payload)` 函数定义（参照 commit `6372a8f` 的原始实现），加 `isinstance` 防御，仅在 usage 字典存在 cache 计数时打日志
 - **关联**: execution-log.md 2026-05-25（Bug A 修复后才暴露）
+
+### Bug #F: LLM 生成 goto/assert_url_contains 步骤时 target↔value 字段错位
+- **状态**: fixed
+- **文件**: `backend/app/ai/dsl_generator.py`
+- **现象**: Bug E 修完后 LLM 调用成功（`DSL cache: hit=9216 miss=69 ratio=99%`、`Segment S0 generated 2 steps`）但 `DSLCase.model_validate` 抛 `steps.0.goto.value Field required`，input_value 显示 `{'action': 'goto', 'target': 'https://...com/'}` —— LLM 把 URL 错填到了 `target` 字段
+- **原因**: 
+  - DSL schema 约定：`goto` 和 `assert_url_contains` 用 `value` 存 URL/路径；`target` 仅供 click/input/wait_for/assert_text/capture_text 用于可见文本定位
+  - 之前的 segment prompt 没有显式区分这两类字段，导致 LLM 直觉上把 URL 当作"目标位置"塞进 `target`
+  - 没有自动归一化逻辑（`_ACTION_ALIASES` 字典定义了但全文未使用，是 governance 清理时遗留的废代码）
+- **修复**:
+  - 新增 `_normalize_llm_step(step)`：把 `_ACTION_ALIASES` 真正用起来（open/navigate/visit → goto 等），并对 `_URL_VALUE_ACTIONS = {"goto", "assert_url_contains"}` 自动把 `target` 搬到 `value`；无效 step 返回 None 并被丢弃
+  - 在 `_generate_segment` 解析完 LLM JSON 后调用归一化
+  - `_build_segment_prompt` 增加显式规则：`goto/assert_url_contains 使用 'value' 存放 URL`，并给出 `{"action": "goto", "value": "/login"}` 示例
+- **关联**: execution-log.md 2026-05-25（Bug A→E 链路修完后暴露的 LLM 输出格式问题）

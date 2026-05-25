@@ -131,6 +131,36 @@ _STEP_MODELS = {
     "assert_url_contains": AssertUrlContainsStep,
     "capture_text": CaptureTextStep,
 }
+# Actions where `value` is the URL/path (not a click target).
+_URL_VALUE_ACTIONS = frozenset({"goto", "assert_url_contains"})
+
+
+def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
+    """Repair common LLM mistakes in a single generated step.
+
+    LLMs frequently confuse `target` (locator for click/input) with `value`
+    (URL/expected text). Without this normalizer, Pydantic validation rejects
+    drafts like `{"action": "goto", "target": "https://..."}` and the entire
+    DSL generation fails.
+
+    Returns None if the step is structurally invalid; otherwise returns the
+    (mutated) dict ready for Pydantic validation.
+    """
+    if not isinstance(step, dict):
+        return None
+    act_raw = (step.get("action") or "").strip().lower()
+    if not act_raw:
+        return None
+    # Alias e.g. open/navigate/visit -> goto
+    canonical = _ACTION_ALIASES.get(act_raw, act_raw)
+    if canonical != act_raw:
+        step["action"] = canonical
+    # Field repair: URL actions store the URL in `value`, not `target`.
+    if canonical in _URL_VALUE_ACTIONS:
+        if not step.get("value") and step.get("target"):
+            step["value"] = step.pop("target")
+    return step
+
 _VALUE_TYPE_ALIASES = {
     "str": "string",
     "string": "string",
@@ -583,6 +613,9 @@ def _build_segment_prompt(
         f"- base_url: {base_url}\n"
         f"- Only generate steps for THIS page state ({page_state}).\n"
         f"- Use exact visible text from the element list as target.\n"
+        f"- 【字段约定】goto 和 assert_url_contains 使用 'value' 存放 URL/路径，例如 "
+        f"{{\"action\": \"goto\", \"value\": \"/login\"}}。不要把 URL 写到 target 字段；"
+        f"target 只用于 click/input/wait_for/assert_text/capture_text 的可见文本定位。\n"
         f"- If an input step has trigger=Enter/Tab, include the trigger field.\n"
         f"- Every capture_text must be followed by assert_text.\n"
         f"- Limit to 8-12 steps for this segment."
@@ -685,6 +718,20 @@ def generate_segmented_case_draft(
         if not isinstance(raw, dict):
             raise DslGenerationError(f"Segment {state}: response is not a JSON object")
         steps_result = raw.get("steps", []) or raw.get("data", {}).get("steps", []) or []
+        # Auto-repair common LLM mistakes (target↔value for goto, action aliases).
+        # Drop steps that can't be normalized to avoid crashing Pydantic validation
+        # on the whole DSLCase.
+        repaired_steps: list[dict[str, Any]] = []
+        for s in steps_result:
+            normalized = _normalize_llm_step(s)
+            if normalized is not None:
+                repaired_steps.append(normalized)
+        if len(repaired_steps) != len(steps_result):
+            logger.info(
+                "Segment %s normalization dropped %d malformed steps",
+                state, len(steps_result) - len(repaired_steps),
+            )
+        steps_result = repaired_steps
         logger.info("Segment %s generated %d steps", state, len(steps_result))
         return state, steps_result
 
