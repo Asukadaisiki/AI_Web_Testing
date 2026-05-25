@@ -7,6 +7,7 @@ export interface SSEClientOptions {
   url: string;
   body: Record<string, unknown>;
   onEvent: (eventType: string, data: unknown) => void;
+  onDone?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -59,6 +60,9 @@ export async function callSSE(opts: SSEClientOptions): Promise<void> {
       }
     }
   }
+
+  // Stream ended normally — notify caller so it can clean up streaming state
+  opts.onDone?.();
 }
 
 export async function cancelExecution(sessionId: number): Promise<{ status: string }> {

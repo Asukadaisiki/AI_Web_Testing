@@ -573,6 +573,15 @@ export function AITestPlanningPanel({
         url: `/api/v1/ai-planning/sessions/${sessionId}/chat`,
         body: { content: trimmed },
         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+        onDone: () => {
+          // If stream ended without a terminal event, clean up streaming state
+          clearStreamingOnMessage(activeAssistantMessageIdRef.current);
+          if (sessionId) {
+            loadSessionDetail(sessionId).catch(() => {});
+            loadSessionList().catch(() => {});
+          }
+          setIsSending(false);
+        },
         signal: controller.signal,
       });
     } catch (error) {
@@ -615,6 +624,14 @@ export function AITestPlanningPanel({
           preserve_contracts: true,
         },
         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+        onDone: () => {
+          clearStreamingOnMessage(activeAssistantMessageIdRef.current);
+          if (sessionId) {
+            loadSessionDetail(sessionId).catch(() => {});
+            loadSessionList().catch(() => {});
+          }
+          setIsGenerating(false);
+        },
         signal: controller.signal,
       });
     } catch (error) {
@@ -1156,9 +1173,18 @@ export function AITestPlanningPanel({
                         url: `/api/v1/ai-planning/sessions/${sessionId}/execute`,
                         body: { draft_ids: draftIds },
                         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
+                        onDone: () => {
+                          clearStreamingOnMessage(activeAssistantMessageIdRef.current);
+                          if (sessionId) {
+                            loadSessionDetail(sessionId).catch(() => {});
+                            loadSessionList().catch(() => {});
+                          }
+                          setIsExecuting(false);
+                        },
                         signal: controller.signal,
                       });
                     } catch (error) {
+                      clearStreamingOnMessage(activeAssistantMessageIdRef.current);
                       if ((error as Error).name !== "AbortError") {
                         void messageApi.error("执行失败: " + (error instanceof Error ? error.message : String(error)));
                       }

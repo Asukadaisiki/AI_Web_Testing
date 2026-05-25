@@ -11,6 +11,7 @@ from typing import Any, Generator
 from urllib import request
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.planning_tools import execute_tool
@@ -697,6 +698,62 @@ def stream_planning_turn(
                     ps.plan_json = response.plan.model_dump(mode="json") if response.plan else None
                     ps.status = "plan_ready"
                     db_session.flush()
+
+                # Persist tool results to AIPlanningToolResult before generating drafts
+                # (otherwise _load_a11y_nodes_for_scenario will find no records)
+                from app.models.ai_planning_tool_result import AIPlanningToolResult
+                from app.models.ai_planning_message import AIPlanningMessage
+                _HEAVY_TOOLS_SET = {"explore_page", "explore_flow"}
+                for tc in tool_calls:
+                    if tc.tool not in _HEAVY_TOOLS_SET:
+                        continue
+                    compressed = getattr(tc, "_compressed_result", None)
+                    if compressed is None:
+                        continue
+                    # Check if already persisted (avoid duplicates)
+                    existing = db_session.scalar(
+                        select(AIPlanningToolResult)
+                        .where(AIPlanningToolResult.session_id == planning_session_id)
+                        .where(AIPlanningToolResult.tool_name == tc.tool)
+                        .order_by(AIPlanningToolResult.id.desc())
+                        .limit(1)
+                    )
+                    if existing is not None:
+                        continue
+                    # Find or create a message_id for this tool call
+                    msg = db_session.scalar(
+                        select(AIPlanningMessage)
+                        .where(AIPlanningMessage.session_id == planning_session_id)
+                        .where(AIPlanningMessage.role == "assistant")
+                        .where(AIPlanningMessage.turn_type == "tool_call")
+                        .order_by(AIPlanningMessage.id.desc())
+                        .limit(1)
+                    )
+                    raw_json = tc.result if isinstance(tc.result, dict) else None
+                    db_session.add(AIPlanningToolResult(
+                        session_id=planning_session_id,
+                        message_id=msg.id if msg else None,
+                        tool_name=tc.tool,
+                        raw_result_json=raw_json,
+                        summary_json=compressed,
+                    ))
+                    logger.info(
+                        "[persist_tool_result_pre_drafts] Saved %s result to AIPlanningToolResult: session=%d, raw_keys=%s",
+                        tc.tool, planning_session_id, list(raw_json.keys()) if raw_json else None,
+                    )
+                db_session.flush()
+
+            # Update requirements_json BEFORE generating drafts, so base_url can be resolved
+            if planning_session_id and response.requirements:
+                from app.models import AIPlanningSession
+                ps = db_session.get(AIPlanningSession, planning_session_id)
+                if ps:
+                    ps.requirements_json = response.requirements.model_dump(mode="json")
+                    db_session.flush()
+                    logger.info(
+                        "[persist_requirements_pre_drafts] Updated requirements_json: entry_url_or_page=%s",
+                        response.requirements.entry_url_or_page,
+                    )
 
             yield {"type": "status", "phase": "dsl", "message": "正在基于方案生成 DSL 草案..."}
             dsl_auto_drafts: list[dict[str, Any]] = []
@@ -1735,13 +1792,23 @@ def _coerce_plan(plan_payload: dict[str, Any], requirements: AIPlanningRequireme
         return _build_plan(requirements, page_elements=page_elements)
     try:
         plan = AIPlanningPlan.model_validate(candidate)
-        if page_elements:
-            plan = plan.model_copy(update={
-                "scenarios": [
-                    s.model_copy(update={"page_elements": page_elements}) if s.page_elements is None else s
-                    for s in plan.scenarios
-                ]
-            })
+        # Fill in missing test_data_requirements and assertions from requirements
+        assertions = requirements.main_assertions or ["页面状态符合预期"]
+        is_login = _looks_like_login(requirements)
+        test_data_reqs = _build_test_data_requirements(requirements, is_login=is_login)
+        updated_scenarios = []
+        for s in plan.scenarios:
+            updates = {}
+            if page_elements and s.page_elements is None:
+                updates["page_elements"] = page_elements
+            if not s.assertions:
+                updates["assertions"] = assertions
+            if not s.test_data_requirements:
+                updates["test_data_requirements"] = test_data_reqs
+            if updates:
+                s = s.model_copy(update=updates)
+            updated_scenarios.append(s)
+        plan = plan.model_copy(update={"scenarios": updated_scenarios})
         return plan
     except Exception:
         logger.warning("Planning LLM returned invalid plan payload, fallback to deterministic plan.")

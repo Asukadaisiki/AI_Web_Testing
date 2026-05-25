@@ -344,12 +344,25 @@ def stream_planning_message(
 
         # Persist raw + summary for heavy tools
         compressed = getattr(tool_call, "_compressed_result", None)
+        logger.info(
+            "[persist_tool_result] tool=%s, has_compressed=%s, result_type=%s, result_is_dict=%s",
+            tool_call.tool,
+            compressed is not None,
+            type(tool_call.result).__name__,
+            isinstance(tool_call.result, dict),
+        )
         if compressed is not None:
+            raw_json = tool_call.result if isinstance(tool_call.result, dict) else None
+            logger.info(
+                "[persist_tool_result] Saving to AIPlanningToolResult: tool=%s, raw_json_keys=%s",
+                tool_call.tool,
+                list(raw_json.keys()) if raw_json else None,
+            )
             session.add(AIPlanningToolResult(
                 session_id=planning_session.id,
                 message_id=msg.id,
                 tool_name=tool_call.tool,
-                raw_result_json=tool_call.result if isinstance(tool_call.result, dict) else None,
+                raw_result_json=raw_json,
                 summary_json=compressed,
             ))
 
@@ -398,18 +411,52 @@ def _load_a11y_nodes_for_scenario(
         .where(AIPlanningToolResult.tool_name.in_(["explore_flow", "explore_page"]))
         .order_by(AIPlanningToolResult.id.desc())
     ).first()
+
+    # Diagnostic logging
+    logger.info(
+        "[_load_a11y_nodes] session=%d, found_record=%s, tool_name=%s, raw_result_json_type=%s, raw_result_json_is_dict=%s",
+        planning_session_id,
+        result_record is not None,
+        result_record.tool_name if result_record else None,
+        type(result_record.raw_result_json).__name__ if result_record else None,
+        isinstance(result_record.raw_result_json, dict) if result_record else None,
+    )
     if result_record and isinstance(result_record.raw_result_json, dict):
         raw = result_record.raw_result_json
+        logger.info(
+            "[_load_a11y_nodes] raw keys=%s, has_pages=%s, has_a11y_nodes=%s",
+            list(raw.keys()),
+            "pages" in raw,
+            "a11y_nodes" in raw,
+        )
         if "pages" in raw:
             all_nodes = []
             for page in raw.get("pages", []):
                 state = page.get("page_state", "S0")
-                for n in page.get("a11y_nodes", []):
+                a11y_nodes = page.get("a11y_nodes", [])
+                logger.info("[_load_a11y_nodes] page state=%s, a11y_nodes_count=%d", state, len(a11y_nodes))
+                for n in a11y_nodes:
                     n = dict(n)
                     n["page_state"] = n.get("page_state", state)
                     all_nodes.append(n)
+            logger.info("[_load_a11y_nodes] total nodes from pages: %d", len(all_nodes))
             return all_nodes
-        return raw.get("a11y_nodes")
+        a11y_nodes = raw.get("a11y_nodes")
+        logger.info("[_load_a11y_nodes] direct a11y_nodes: %s", len(a11y_nodes) if a11y_nodes else 0)
+        return a11y_nodes
+
+    # Fallback: check if we have any tool results at all
+    all_results = session.scalars(
+        select(AIPlanningToolResult)
+        .where(AIPlanningToolResult.session_id == planning_session_id)
+        .order_by(AIPlanningToolResult.id.desc())
+    ).all()
+    logger.warning(
+        "[_load_a11y_nodes] No valid explore result found. Total tool results for session %d: %d, tools=%s",
+        planning_session_id,
+        len(all_results),
+        [(r.tool_name, type(r.raw_result_json).__name__) for r in all_results[:5]],
+    )
     return None
 
 
@@ -432,6 +479,13 @@ def generate_planning_drafts(
     }
     drafts: list[AIPlanningDraftSchema] = []
     base_url = _normalize_base_url(planning_session.requirements_json or {})
+    logger.info(
+        "[generate_drafts] session=%d, requirements_json_keys=%s, entry_url_or_page=%s, base_url=%s",
+        planning_session_id,
+        list((planning_session.requirements_json or {}).keys()),
+        (planning_session.requirements_json or {}).get("entry_url_or_page"),
+        base_url,
+    )
     invalid_scenarios: list[str] = []
 
     for scenario_key in payload.scenario_keys:
@@ -488,6 +542,13 @@ def generate_planning_drafts(
 
         # Load a11y_nodes from the most recent explore result
         a11y_nodes_raw = _load_a11y_nodes_for_scenario(session, planning_session_id, scenario=scenario)
+        logger.info(
+            "[generate_drafts] scenario='%s', a11y_nodes_raw=%s, type=%s, len=%s",
+            scenario_key,
+            "None" if a11y_nodes_raw is None else "list",
+            type(a11y_nodes_raw).__name__,
+            len(a11y_nodes_raw) if a11y_nodes_raw else 0,
+        )
         if not a11y_nodes_raw:
             logger.warning(
                 "Skipping DSL generation for scenario '%s': no A11y elements collected",
@@ -1885,11 +1946,21 @@ def create_project_in_session(
     description: str | None,
     actor_user_id: int,
 ) -> ProjectSummaryInSession:
+    from app.models import ProjectMember
+
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
 
     project = Project(name=name, description=description)
     session.add(project)
     session.flush()
+
+    # Add user as project owner so they can manage cases later
+    member = ProjectMember(
+        project_id=project.id,
+        user_id=actor_user_id,
+        role="owner",
+    )
+    session.add(member)
 
     session.add(SessionProject(session_id=planning_session_id, project_id=project.id))
     session.commit()

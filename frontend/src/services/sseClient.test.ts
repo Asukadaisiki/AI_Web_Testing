@@ -53,6 +53,7 @@ describe("callSSE", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: "test" }),
+      signal: expect.any(AbortSignal),
     });
     expect(events).toEqual([
       { type: "status", data: { phase: "thinking" } },
