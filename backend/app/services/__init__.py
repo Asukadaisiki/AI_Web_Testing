@@ -7,7 +7,6 @@ from app.services.cases import (
     create_case,
     delete_case,
     get_case,
-    list_cases,
     list_cases_paginated,
     update_case,
 )
@@ -30,7 +29,6 @@ from app.services.executions import (
     list_case_executions,
     list_executions,
 )
-from app.services.projects import list_accessible_projects
 from app.services.project_management import (
     create_project,
     delete_project,
@@ -63,9 +61,7 @@ __all__ = [
     "get_executions_overview",
     "get_project",
     "get_report_preference",
-    "list_accessible_projects",
     "list_case_executions",
-    "list_cases",
     "list_cases_paginated",
     "list_correction_events",
     "list_corrections",

@@ -739,11 +739,6 @@ def _ensure_case_exists(session: Session, case_id: int) -> None:
         raise EntityNotFoundError(f"Case {case_id} not found.")
 
 
-def _ensure_retry_generation_exists(session: Session, generation_id: int) -> None:
-    if session.get(DslGenerationRun, generation_id) is None:
-        raise EntityNotFoundError(f"DSL generation run {generation_id} not found.")
-
-
 def _validate_retry_generation_source(session: Session, *, payload: GenerateDslRequest) -> None:
     if payload.retry_from_generation_id is None:
         return

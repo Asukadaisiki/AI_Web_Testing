@@ -79,12 +79,6 @@ def update_case(session: Session, case_id: int, payload: CaseUpdateRequest, acto
     return _to_stored_case_detail(case)
 
 
-def list_cases(session: Session) -> list[StoredCaseSummary]:
-    statement = select(TestCase).order_by(TestCase.created_at.desc(), TestCase.id.desc())
-    records = session.scalars(statement).all()
-    return [_to_stored_case_summary(record) for record in records]
-
-
 def _ensure_project_member(session: Session, project_id: int, user_id: int) -> None:
     """Check if a user is a member of a project."""
     statement = select(ProjectMember).where(
@@ -120,10 +114,6 @@ def get_case(session: Session, case_id: int, actor_user_id: int | None = None) -
     if actor_user_id is not None:
         _ensure_project_member(session, record.project_id, actor_user_id)
 
-    return _to_stored_case_detail(record)
-    record = session.get(TestCase, case_id)
-    if record is None:
-        return None
     return _to_stored_case_detail(record)
 
 

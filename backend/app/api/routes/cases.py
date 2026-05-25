@@ -23,7 +23,6 @@ from app.services import (
     create_case,
     delete_case,
     get_case,
-    get_project,
     list_cases_paginated,
     update_case,
 )

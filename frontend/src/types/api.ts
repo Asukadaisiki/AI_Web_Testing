@@ -329,7 +329,6 @@ export interface AIPlanningTurnResponse {
 export interface SavedCaseResult {
   case_id: number;
   case_name: string;
-  status: "saved";
 }
 
 export interface ExecutionSummaryResult {

@@ -21,6 +21,57 @@
 | E2E 调优 v2 | 05-10~05-12 | DeepSeek 温度/thinking 优化、提示词修复、11 项架构优化 | 544 tests, 0 failures |
 | 架构重构 | 05-14~05-17 | 主路径 v2 A11y 管线、dead code 清理、DSL 生成链路修复 | 491 tests, −3.1K 行, A11y CDP 100x 快 |
 | 链路修复 | 05-25 | DSL 生成链路 7 层 bug 修复（Bug A→G） | 543 tests, 16 新增测试 |
+| 孤儿数据清理 | 05-25 | 全面清理代码库中的孤儿数据 | 删除 14 项孤儿数据 |
+
+---
+
+## 2026-05-25 | 孤儿数据全面清理
+
+**任务**：清理代码库中所有类型的孤儿数据，包括导入但未实现、实现但未导入、引用但未实现、实现但未引用、定义但未实现、实现且定义但未引用的代码，以及无效字段、无效表、无效函数、无效文件、无效变量。
+
+**分析范围**：
+- 后端 (backend/app/) 所有 Python 文件
+- 前端 (frontend/src/) 所有 TypeScript/React 文件
+- 数据库模型定义
+- API 路由定义
+- 服务层实现
+- 根目录测试工件
+
+**删除项目**（共 14 项）：
+
+### 高优先级（明确的孤儿数据）
+1. `backend/app/services/projects.py` — 整个文件是死代码，被 `project_management.py` 完全取代
+2. `backend/app/services/cases.py` 第124-127行 — return语句后的不可达死代码
+3. `backend/app/services/dsl.py` `_ensure_retry_generation_exists` 函数 — 定义了但从未调用
+4. `backend/app/services/cases.py` `list_cases` 函数 — 从未被路由调用，被 `list_cases_paginated` 取代
+5. `frontend/src/components/StepList.tsx` — 从未被导入
+6. `frontend/src/layouts/NotebookLMLayout.tsx` — 从未在路由中使用
+7. `frontend/src/components/NotebookNav.tsx` — 只被孤立布局使用
+
+### 中优先级（清理）
+8. `backend/app/services/__init__.py` 中 `list_cases` 和 `list_accessible_projects` 的死重导出
+9. `backend/app/api/routes/cases.py` 第24行冗余的 `get_project` 导入
+10. `backend/app/schemas/__init__.py` 未使用的重导出块
+11. 根目录测试工件：`test_brand_filter_cart`、`test_results.json`、`test_results_formatted.txt`
+
+### 待确认项（用户确认删除）
+12. `frontend/src/types/api.ts` 中 `SavedCaseResult.status` 字段 — 始终是字面量 "saved"，无信息量
+13. `backend/scripts/` 目录 — 不属于主流流程
+14. `tools/` 目录 — 与测试应用无关
+
+**保留项目**：
+- `hash_password` — 保留用于未来用户注册功能
+- `LocatorAttemptLog` 模型 — 可能被 runner 运行时写入
+- `get_dsl_generation_runtime_stats` — 调试工具
+- `reset_dsl_generation_runtime_stats` — 测试工具
+- `schemas/__init__.py` 便利重导出层 — 简化为仅保留模块声明
+
+**验证**：所有删除操作已成功执行，文件系统验证通过
+
+**影响**：
+- 减少了代码库的维护负担
+- 消除了潜在的混淆和误用
+- 提高了代码库的整洁度和可维护性
 
 ---
 
