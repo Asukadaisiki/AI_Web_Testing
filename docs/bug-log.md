@@ -941,3 +941,20 @@
   - 在 `_generate_segment` 解析完 LLM JSON 后调用归一化
   - `_build_segment_prompt` 增加显式规则：`goto/assert_url_contains 使用 'value' 存放 URL`，并给出 `{"action": "goto", "value": "/login"}` 示例
 - **关联**: execution-log.md 2026-05-25（Bug A→E 链路修完后暴露的 LLM 输出格式问题）
+
+### Bug #G: LLM 生成 assert_text 缺 value；字段别名表定义但未接入 normalizer
+- **状态**: fixed
+- **文件**: `backend/app/ai/dsl_generator.py`
+- **现象**: Bug F 修完重启后端后，5 个 segment 全部成功生成共 16 个步骤（log `DSL segmented generation complete: states=5, total_steps=16, warnings=0`），但 `DSLCase.model_validate` 抛 `steps.15.assert_text.value Field required`，input_value 为 `{'action': 'assert_text',...em_1', 'step_index': 16}` —— LLM 把期望文本放进了 `target` 字段，没填 `value`
+- **原因**:
+  - `assert_text` schema 要求同时有 `target`（定位元素）和 `value`（期望文本），LLM 把内容塞进 target 漏了 value
+  - `_normalize_llm_step` 此前仅处理 `goto/assert_url_contains` 的 target→value 移动，未覆盖 `assert_text`
+  - `_STEP_TARGET_ALIASES` / `_STEP_VALUE_ALIASES` / `_STEP_TIMEOUT_ALIASES` 三张字段别名表早在 commit a2c407b 前就已定义但全文无任何调用（孤儿数据），导致 LLM 用 `text`/`expected_text`/`url`/`selector` 等别名时也会被 Pydantic 直接拒掉
+  - 本 bug 是 Bug A→F 链路的下一层：之前各 segment 早早失败根本走不到 assert_text 的字段校验
+- **修复**:
+  - 在 `_normalize_llm_step` 接入三张孤儿别名表：用 `_promote_first_alias()` 把任一别名键改名到规范键（`target` / `value` / `timeout_ms`）
+  - 对 `assert_text` 加特殊修复：value 缺 + target 在 → 把 target 移到 value，target 兜底为 `"body"`（语义=「页面任意位置存在该文本」）
+  - 对 `input`/`click`/`wait_for`/`capture_text` 加 drop 规则：必填字段（target/value/context_key）缺失时返回 None 让 normalizer 丢弃该 step，避免单步错误拖垮整个 DSLCase 校验
+  - `_build_segment_prompt` 的「字段约定」一条改为分别枚举每类 action 的字段要求：goto/assert_url_contains（仅 value）、input/assert_text（target+value）、click/wait_for（仅 target）、capture_text（target+context_key），并给正反例
+- **关联**: execution-log.md 2026-05-25（Bug A→F 链路收尾）
+

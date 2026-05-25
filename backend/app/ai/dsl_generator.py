@@ -133,18 +133,39 @@ _STEP_MODELS = {
 }
 # Actions where `value` is the URL/path (not a click target).
 _URL_VALUE_ACTIONS = frozenset({"goto", "assert_url_contains"})
+# Actions that need BOTH target AND value; when value is missing but target is
+# present, treat target as the expected text and fall back to body for target.
+_ASSERT_TEXT_FALLBACK_TARGET = "body"
+
+
+def _promote_first_alias(step: dict[str, Any], canonical_key: str, aliases: tuple[str, ...]) -> None:
+    """If `canonical_key` is empty but an alias key has a value, rename alias -> canonical."""
+    if step.get(canonical_key):
+        return
+    for alias in aliases:
+        if alias == canonical_key:
+            continue
+        if alias in step and step[alias] not in (None, ""):
+            step[canonical_key] = step.pop(alias)
+            return
 
 
 def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
     """Repair common LLM mistakes in a single generated step.
 
-    LLMs frequently confuse `target` (locator for click/input) with `value`
-    (URL/expected text). Without this normalizer, Pydantic validation rejects
-    drafts like `{"action": "goto", "target": "https://..."}` and the entire
-    DSL generation fails.
+    LLMs frequently:
+      1. Use action aliases (open/navigate -> goto).
+      2. Use field aliases (`url`, `expected`, `text` instead of `value`;
+         `element`, `selector`, `label` instead of `target`).
+      3. Confuse `target` (locator) with `value` (URL / expected text).
 
-    Returns None if the step is structurally invalid; otherwise returns the
-    (mutated) dict ready for Pydantic validation.
+    Without this normalizer, Pydantic validation rejects drafts like
+    `{"action": "goto", "target": "https://..."}` or
+    `{"action": "assert_text", "target": "item_1"}` (missing value) and the
+    entire DSL generation fails.
+
+    Returns None if the step is structurally unrepairable; otherwise returns
+    the (mutated) dict ready for Pydantic validation.
     """
     if not isinstance(step, dict):
         return None
@@ -155,10 +176,44 @@ def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
     canonical = _ACTION_ALIASES.get(act_raw, act_raw)
     if canonical != act_raw:
         step["action"] = canonical
+
+    # Promote alias field names to canonical (`target`, `value`, `timeout_ms`).
+    target_aliases = _STEP_TARGET_ALIASES.get(canonical)
+    if target_aliases:
+        _promote_first_alias(step, "target", target_aliases)
+    value_aliases = _STEP_VALUE_ALIASES.get(canonical)
+    if value_aliases:
+        _promote_first_alias(step, "value", value_aliases)
+    _promote_first_alias(step, "timeout_ms", _STEP_TIMEOUT_ALIASES)
+
     # Field repair: URL actions store the URL in `value`, not `target`.
     if canonical in _URL_VALUE_ACTIONS:
         if not step.get("value") and step.get("target"):
             step["value"] = step.pop("target")
+
+    # Field repair: assert_text needs BOTH target+value. If LLM gave us just
+    # a target (the expected text in the wrong field) and no value, move
+    # target -> value and use a body sentinel so the assertion runs against
+    # the whole page ("page contains text X").
+    if canonical == "assert_text":
+        if not step.get("value") and step.get("target"):
+            step["value"] = step["target"]
+            step["target"] = _ASSERT_TEXT_FALLBACK_TARGET
+
+    # input needs BOTH target+value. If value is missing we cannot guess
+    # what the user wanted to type, so drop the step rather than emit an
+    # invalid one.
+    if canonical == "input":
+        if not step.get("value") or not step.get("target"):
+            return None
+
+    # Other actions with strictly required `target` that we cannot synthesize:
+    # drop them rather than crash the whole DSLCase on Pydantic validation.
+    if canonical in ("click", "wait_for") and not step.get("target"):
+        return None
+    if canonical == "capture_text" and (not step.get("target") or not step.get("context_key")):
+        return None
+
     return step
 
 _VALUE_TYPE_ALIASES = {
@@ -613,9 +668,14 @@ def _build_segment_prompt(
         f"- base_url: {base_url}\n"
         f"- Only generate steps for THIS page state ({page_state}).\n"
         f"- Use exact visible text from the element list as target.\n"
-        f"- 【字段约定】goto 和 assert_url_contains 使用 'value' 存放 URL/路径，例如 "
-        f"{{\"action\": \"goto\", \"value\": \"/login\"}}。不要把 URL 写到 target 字段；"
-        f"target 只用于 click/input/wait_for/assert_text/capture_text 的可见文本定位。\n"
+        f"- 【字段约定】各 action 的字段要求严格按下面规则：\n"
+        f"    * goto / assert_url_contains: URL 或路径写在 'value' 字段，无需 target。\n"
+        f"      正确：{{\"action\": \"goto\", \"value\": \"/login\"}}；错误：把 URL 写在 target。\n"
+        f"    * input / assert_text: 必须同时提供 'target'（定位元素）和 'value'（输入内容/期望文本）。\n"
+        f"      正确：{{\"action\": \"assert_text\", \"target\": \"Cart Total\", \"value\": \"Rs. 1400\"}}。\n"
+        f"      错误：assert_text 只有 target 没有 value，或把期望文本放进 target。\n"
+        f"    * click / wait_for: 只需 'target'，不需 value。\n"
+        f"    * capture_text: 必须有 'target' 和 'context_key'（snake_case 变量名）。\n"
         f"- If an input step has trigger=Enter/Tab, include the trigger field.\n"
         f"- Every capture_text must be followed by assert_text.\n"
         f"- Limit to 8-12 steps for this segment."

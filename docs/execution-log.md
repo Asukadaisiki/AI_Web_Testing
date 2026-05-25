@@ -1657,3 +1657,29 @@
 **关联文件**：
 - 修改：`backend/app/ai/dsl_generator.py`、`backend/app/services/ai_planning.py`、`backend/app/services/dsl.py`、`backend/app/schemas/dsl.py`、`backend/app/ai/test_planning_agent.py`
 - 新增测试：`backend/tests/unit/test_dsl_generator.py`、`backend/tests/unit/test_planning_agent.py`
+
+## 2026-05-25 | Bug G — assert_text 缺 value & 字段别名表未接入 normalizer
+
+**任务**：Bug F 修复 + 重启后端后，5 个 segment 全部成功生成 16 个步骤，但整体 `DSLCase.model_validate` 拒绝最后一个 step：`steps.15.assert_text.value Field required`，input_value 包含 `'em_1'` 字样表明期望文本被错填进了 `target`。
+
+**根因分析**：
+- LLM 把 `assert_text` 的期望文本写到了 `target` 字段，`value` 缺失。`_normalize_llm_step` 之前只针对 `goto/assert_url_contains` 做 target→value 移动，没覆盖 `assert_text`（target+value 都必填，处理思路不一样）。
+- `_STEP_TARGET_ALIASES` / `_STEP_VALUE_ALIASES` / `_STEP_TIMEOUT_ALIASES` 三张字段别名表早在 a2c407b 前就已定义但全文无调用方 —— 孤儿数据。LLM 用 `text`/`expected_text`/`url`/`selector` 等别名时一样会被 Pydantic 拒绝。
+
+**修复**（`backend/app/ai/dsl_generator.py`）：
+- 接入三张孤儿别名表：新增 `_promote_first_alias(step, canonical_key, aliases)`，按表顺序把别名键改名到 `target`/`value`/`timeout_ms`
+- `assert_text` 特殊兜底：value 缺 + target 在 → 把 target 移到 value，target 兜底为 `"body"`（语义="页面任意位置存在该文本"）
+- 必填字段缺失则丢弃整步：`input`（缺 target/value）、`click`/`wait_for`（缺 target）、`capture_text`（缺 target/context_key）都返回 `None` 让 normalizer 丢弃，避免单步无效拖垮整个 DSLCase
+- `_build_segment_prompt` 「字段约定」一条改为按 action 类型枚举字段要求并给正反例
+
+**新增测试**（16 个，全部 pass，全量 543 passed）：
+- `TestNormalizeLlmStepAssertTextRepair` 4 个：assert_text target→value swap + body fallback、双字段完整保留、`text` 别名促升、`expected_text` 别名促升
+- `TestNormalizeLlmStepFieldAliases` 4 个：click selector→target、input text→value、goto url→value、wait_for timeout→timeout_ms
+- `TestNormalizeLlmStepDropsUnrepairable` 7 个：input/click/wait_for/capture_text 必填字段缺失场景 + 完整 capture_text 保留
+
+**链路总结**（Bug A→G 共 7 层）：每修一个就暴露下一个，因为前面的 bug 让执行根本走不到下一段。所有 bug 不是新增缺陷，是已存在但被前置失败掩盖的休眠问题。
+
+**关联文件**：
+- 修改：`backend/app/ai/dsl_generator.py`
+- 新增测试：`backend/tests/unit/test_dsl_generator.py`
+

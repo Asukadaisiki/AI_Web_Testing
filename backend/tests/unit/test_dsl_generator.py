@@ -274,4 +274,115 @@ class TestNormalizeLlmStep:
         assert _normalize_llm_step({"action": ""}) is None
 
 
+# --- Bug G: assert_text missing value, field aliases not promoted -----------
+
+
+class TestNormalizeLlmStepAssertTextRepair:
+    """assert_text needs target+value. If LLM gave only target, swap it into value."""
+
+    def test_assert_text_with_only_target_swapped_to_value_with_body_fallback(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "assert_text", "target": "item_1", "step_index": 16}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "item_1"
+        assert normalized["target"] == "body"
+
+    def test_assert_text_with_both_fields_left_unchanged(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "assert_text", "target": "Cart Total", "value": "Rs. 1400"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["target"] == "Cart Total"
+        assert normalized["value"] == "Rs. 1400"
+
+    def test_assert_text_with_value_alias_text_promoted(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "assert_text", "target": "Cart Total", "text": "Rs. 1400"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "Rs. 1400"
+        assert "text" not in normalized
+
+    def test_assert_text_with_value_alias_expected_text_promoted(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "assert_text", "target": "Cart Total", "expected_text": "Rs. 1400"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "Rs. 1400"
+        assert "expected_text" not in normalized
+
+
+class TestNormalizeLlmStepFieldAliases:
+    """Field-name normalization: alias -> canonical via _STEP_*_ALIASES."""
+
+    def test_click_selector_alias_promoted_to_target(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "click", "selector": "Login button"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["target"] == "Login button"
+        assert "selector" not in normalized
+
+    def test_input_text_alias_promoted_to_value(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "input", "target": "Email", "text": "test@example.com"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "test@example.com"
+        assert "text" not in normalized
+
+    def test_goto_url_alias_promoted_to_value(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "goto", "url": "/login"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["value"] == "/login"
+        assert "url" not in normalized
+
+    def test_wait_for_timeout_alias_promoted(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "wait_for", "target": "Welcome", "timeout": 8000}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["timeout_ms"] == 8000
+        assert "timeout" not in normalized
+
+
+class TestNormalizeLlmStepDropsUnrepairable:
+    """Steps with unrecoverable missing required fields must be dropped (None)."""
+
+    def test_input_missing_value_dropped(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        assert _normalize_llm_step({"action": "input", "target": "Email"}) is None
+
+    def test_input_missing_target_dropped(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        assert _normalize_llm_step({"action": "input", "value": "test"}) is None
+
+    def test_click_missing_target_dropped(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        assert _normalize_llm_step({"action": "click"}) is None
+
+    def test_wait_for_missing_target_dropped(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        assert _normalize_llm_step({"action": "wait_for"}) is None
+
+    def test_capture_text_missing_context_key_dropped(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        assert _normalize_llm_step({"action": "capture_text", "target": "Price"}) is None
+
+    def test_capture_text_missing_target_dropped(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        assert _normalize_llm_step({"action": "capture_text", "context_key": "p1"}) is None
+
+    def test_capture_text_with_both_fields_kept(self) -> None:
+        from app.ai.dsl_generator import _normalize_llm_step
+        step = {"action": "capture_text", "target": "Price", "context_key": "p1"}
+        normalized = _normalize_llm_step(step)
+        assert normalized is not None
+        assert normalized["target"] == "Price"
+        assert normalized["context_key"] == "p1"
+
+
 
