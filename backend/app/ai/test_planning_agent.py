@@ -703,10 +703,12 @@ def stream_planning_turn(
             try:
                 from app.services.ai_planning import generate_planning_drafts
                 from app.schemas.ai_planning import GenerateAIPlanningDraftsRequest
-                plan_json = response.plan or {}
+                # response.plan is an AIPlanningPlan Pydantic model; convert to dict
+                # so .get() works (previously crashed with "object has no attribute 'get'").
+                plan_data = response.plan.model_dump(mode="json") if response.plan else {}
                 scenario_keys = [
                     s.get("scenario_key", "")
-                    for s in plan_json.get("scenarios", [])
+                    for s in plan_data.get("scenarios", [])
                     if isinstance(s, dict) and s.get("scenario_key")
                 ]
                 if scenario_keys:

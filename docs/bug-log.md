@@ -911,3 +911,11 @@
     - `round_index -= 1` 不扣 round
   - 其他工具签名返回 `None` 不参与去重
 - **关联**: execution-log.md 2026-05-25
+
+### Bug #D: stream_planning_turn 把 Pydantic plan 当 dict 用导致 AttributeError
+- **状态**: fixed
+- **文件**: `backend/app/ai/test_planning_agent.py:706`
+- **现象**: 日志反复出现 `Auto DSL generation failed: 'AIPlanningPlan' object has no attribute 'get'`，导致计划生成后跳过自动 DSL 草案
+- **原因**: `response.plan` 是 `AIPlanningPlan` Pydantic 模型，代码却写成 `plan_json = response.plan or {}` 然后调 `plan_json.get("scenarios", [])`，Pydantic 模型没有 `.get()`
+- **修复**: 改为 `plan_data = response.plan.model_dump(mode="json") if response.plan else {}`，对 dict 再调 `.get()`
+- **关联**: execution-log.md 2026-05-25（在 ABC 主线修复中顺手找到并修掉）
