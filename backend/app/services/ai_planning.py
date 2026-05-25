@@ -1348,6 +1348,9 @@ def save_and_execute_selected_drafts(
     if not project_ids:
         raise ValueError("请先关联至少一个项目再保存和执行用例。")
 
+    # Ensure user is a member of all linked projects (fix for projects created before ProjectMember fix)
+    ensure_project_member_for_session_projects(session, planning_session_id, actor_user_id)
+
     drafts = (
         session.query(AIPlanningDraft)
         .filter(
@@ -1530,6 +1533,9 @@ def save_and_execute_selected_drafts_streaming(
     project_ids = _get_session_project_ids(planning_session)
     if not project_ids:
         raise ValueError("请先关联至少一个项目再保存和执行用例。")
+
+    # Ensure user is a member of all linked projects (fix for projects created before ProjectMember fix)
+    ensure_project_member_for_session_projects(session, planning_session_id, actor_user_id)
 
     drafts = (
         session.query(AIPlanningDraft)
@@ -1967,6 +1973,41 @@ def create_project_in_session(
     session.refresh(project)
 
     return ProjectSummaryInSession(id=project.id, name=project.name, description=project.description)
+
+
+def ensure_project_member_for_session_projects(
+    session: Session,
+    planning_session_id: int,
+    actor_user_id: int,
+) -> None:
+    """Ensure the user is a member of all projects linked to this session.
+
+    This fixes projects created before the ProjectMember fix was applied.
+    """
+    from app.models import ProjectMember
+
+    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
+    project_ids = _get_session_project_ids(planning_session)
+
+    for project_id in project_ids:
+        existing = session.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == actor_user_id,
+            )
+        )
+        if existing is None:
+            logger.info(
+                "[ensure_project_member] Adding user %d as owner of project %d",
+                actor_user_id, project_id,
+            )
+            session.add(ProjectMember(
+                project_id=project_id,
+                user_id=actor_user_id,
+                role="owner",
+            ))
+
+    session.commit()
 
 
 def _ensure_project_access(session: Session, *, project_id: int, actor_user_id: int) -> None:
