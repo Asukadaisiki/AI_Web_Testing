@@ -1273,6 +1273,7 @@ def _collect_flow_a11y(
 
     try:
         for step_i, step in enumerate(flow_steps):
+            logger.info("_collect_flow_a11y: step %d, step=%s", step_i, step)
             if not isinstance(step, dict):
                 continue
             if session_id:
@@ -1309,6 +1310,7 @@ def _collect_flow_a11y(
 
             actions = step.get("actions")
             if isinstance(actions, list):
+                logger.info("_collect_flow_a11y: executing %d actions", len(actions))
                 _execute_flow_actions(page, actions)
 
             current_url = page.url
@@ -1326,8 +1328,11 @@ def _collect_flow_a11y(
                 "description": description,
             }
             results.append(result)
+            logger.info("_collect_flow_a11y: step %d completed, state=%s, nodes=%d", step_i, state_id, len(nodes))
             if session_id:
                 PageDataCache.put(session_id, step, result)
+    except Exception as exc:
+        logger.error("_collect_flow_a11y failed: %s", exc, exc_info=True)
     finally:
         if managed:
             try:
@@ -1338,6 +1343,7 @@ def _collect_flow_a11y(
                 browser.close()
             except Exception:
                 pass
+    logger.info("_collect_flow_a11y completed: %d results", len(results))
     return results
 
 

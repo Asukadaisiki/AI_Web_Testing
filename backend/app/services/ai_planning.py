@@ -211,6 +211,27 @@ def send_planning_message(
     return agent_response
 
 
+def _flush_streaming_msg_to_db(
+    session: Session,
+    message_id: int,
+    content: str,
+) -> None:
+    """Incrementally persist accumulated streaming text to the stub message."""
+    try:
+        if not session.is_active:
+            session.rollback()
+        msg = session.merge(session.get(AIPlanningMessage, message_id))
+        msg.content = content
+        session.commit()
+    except Exception:
+        logger.warning("Failed to flush streaming message %d, skipping", message_id, exc_info=True)
+        if session.is_active:
+            session.rollback()
+
+
+_STREAMING_FLUSH_INTERVAL = 5  # flush to DB every N text_chunks
+
+
 def stream_planning_message(
     session: Session,
     planning_session_id: int,
@@ -252,10 +273,33 @@ def stream_planning_message(
         actor_user_id=actor_user_id,
         planning_session_id=planning_session.id,
     )
+
+    # Create a stub assistant message so that a page refresh mid-stream shows partial content.
+    streaming_msg = AIPlanningMessage(
+        session_id=planning_session.id,
+        role="assistant",
+        turn_type="streaming",
+        content="",
+        structured_payload_json={"_streaming": True},
+    )
+    session.add(streaming_msg)
+    session.flush()
+    session.commit()
+    streaming_msg_id = streaming_msg.id
+
+    text_buffer = ""
+    chunks_since_flush = 0
+
     response = None
     while True:
         try:
             event = next(stream)
+            if event.get("type") == "text_chunk" and not event.get("thinking"):
+                text_buffer += event.get("text", "")
+                chunks_since_flush += 1
+                if chunks_since_flush >= _STREAMING_FLUSH_INTERVAL:
+                    _flush_streaming_msg_to_db(session, streaming_msg_id, text_buffer)
+                    chunks_since_flush = 0
             yield event
         except StopIteration as stop:
             response = stop.value
@@ -309,29 +353,25 @@ def stream_planning_message(
                 summary_json=compressed,
             ))
 
+    # Update the streaming stub in-place to become the final assistant message.
     turn_type = "system_error" if response.session_status == "error" else ("plan" if response.plan is not None else "followup")
-    session.add(
-        AIPlanningMessage(
-            session_id=planning_session.id,
-            role="assistant",
-            turn_type=turn_type,
-            content=response.assistant_message,
-            structured_payload_json={
-                "missing_slots": response.missing_slots,
-                "suggested_questions": response.suggested_questions,
-                "plan": response.plan.model_dump(mode="json") if response.plan is not None else None,
-                "tool_calls": [
-                    {
-                        "tool": item.tool,
-                        "params": item.params,
-                        "result_summary": getattr(item, "_compressed_result", None),
-                    }
-                    for item in response.tool_calls
-                ],
-                "todo_list": [item.model_dump(mode="json") for item in response.todo_list],
-            },
-        )
-    )
+    streaming_msg = session.merge(session.get(AIPlanningMessage, streaming_msg_id))
+    streaming_msg.turn_type = turn_type
+    streaming_msg.content = response.assistant_message
+    streaming_msg.structured_payload_json = {
+        "missing_slots": response.missing_slots,
+        "suggested_questions": response.suggested_questions,
+        "plan": response.plan.model_dump(mode="json") if response.plan is not None else None,
+        "tool_calls": [
+            {
+                "tool": item.tool,
+                "params": item.params,
+                "result_summary": getattr(item, "_compressed_result", None),
+            }
+            for item in response.tool_calls
+        ],
+        "todo_list": [item.model_dump(mode="json") for item in response.todo_list],
+    }
     session.commit()
     elapsed = time.monotonic() - start_time
     assistant_preview = (response.assistant_message or "")[:120]
@@ -473,6 +513,12 @@ def generate_planning_drafts(
             flow_steps = scenario.get("flow_steps", [])
             settings_local = get_settings()
 
+            logger.info(
+                "[session:%d] DSL generation for scenario '%s': flow_steps=%d, a11y_nodes=%d, has_page_elements=%s, flow_steps_enabled=%s",
+                planning_session_id, scenario_key, len(flow_steps), len(a11y_nodes_raw),
+                bool(scenario.get("page_elements")), settings_local.ai_planning_flow_steps_enabled,
+            )
+
             if flow_steps and settings_local.ai_planning_flow_steps_enabled:
                 from app.ai.dsl_generator import generate_segmented_case_draft
 
@@ -480,6 +526,11 @@ def generate_planning_drafts(
                 for n in a11y_nodes_raw:
                     ps = n.get("page_state", "S0") or "S0"
                     page_elements_by_state.setdefault(ps, []).append(n)
+
+                logger.info(
+                    "[session:%d] Using segmented DSL generation: page_states=%s",
+                    planning_session_id, list(page_elements_by_state.keys()),
+                )
 
                 case_obj, gen_warnings, gen_notes, gen_meta = generate_segmented_case_draft(
                     payload=GenerateDslRequest(
@@ -492,7 +543,7 @@ def generate_planning_drafts(
                         current_input_contract=payload.current_input_contract,
                         current_output_contract=payload.current_output_contract,
                         preserve_contracts=payload.preserve_contracts,
-                        page_elements=str(page_elements),
+                        page_elements=scenario.get("page_elements"),
                         flow_steps=flow_steps,
                         retry_reason_code=retry_reason_code,
                     ),
@@ -507,6 +558,18 @@ def generate_planning_drafts(
                     "generation_id": None,
                 })()
             else:
+                # No structured flow_steps from scenario. Pass a11y_nodes (grouped
+                # by page_state) via payload so generate_dsl_case → segmented
+                # generator still has element context (Bug A fix).
+                page_elements_by_state: dict[str, list[dict]] = {}
+                for n in a11y_nodes_raw:
+                    ps = n.get("page_state", "S0") or "S0"
+                    page_elements_by_state.setdefault(ps, []).append(n)
+
+                logger.info(
+                    "[session:%d] Using single-segment DSL generation: a11y_nodes=%d, page_states=%s",
+                    planning_session_id, len(a11y_nodes_raw), list(page_elements_by_state.keys()),
+                )
                 generated = generate_dsl_case(
                     session,
                     GenerateDslRequest(
@@ -520,6 +583,7 @@ def generate_planning_drafts(
                         current_output_contract=payload.current_output_contract,
                         preserve_contracts=payload.preserve_contracts,
                         page_elements=scenario.get("page_elements"),
+                        a11y_nodes_by_state=page_elements_by_state or None,
                         retry_reason_code=retry_reason_code,
                     ),
                 )

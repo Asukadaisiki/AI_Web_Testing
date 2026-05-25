@@ -26,6 +26,7 @@ from app.ai.test_planning_agent import (
     _is_asking_about_explorable_elements,
     _find_unexplored_login_url,
     _auto_explore_entry_and_find_login,
+    _tool_call_signature,
 )
 from app.schemas.ai_planning import AIPlanningRequirements, AIPlanningToolCall
 
@@ -663,3 +664,58 @@ class TestExtractUndefinedVariables:
             {"context_key": "login_password", "value_type": "string", "name": "密码", "required": True},
         ]
         assert _extract_undefined_variables(steps, input_contract) == []
+
+
+class TestToolCallSignature:
+    """Bug C: tool call dedup signature behavior."""
+
+    def test_create_project_dedup_by_name_case_insensitive(self) -> None:
+        a = _tool_call_signature("create_project", {"name": "Automation Exercise", "description": "x"})
+        b = _tool_call_signature("create_project", {"name": "automation exercise", "description": "different"})
+        assert a == b
+        assert a is not None
+
+    def test_create_project_no_name_returns_none(self) -> None:
+        assert _tool_call_signature("create_project", {}) is None
+        assert _tool_call_signature("create_project", {"name": "  "}) is None
+
+    def test_explore_flow_dedup_by_base_url_and_steps(self) -> None:
+        params1 = {
+            "base_url": "https://example.com",
+            "flow_description": "Login flow",
+            "steps": [{"url": "/login", "actions": [{"action": "click", "target": "Login"}]}],
+        }
+        params2 = {
+            "base_url": "https://example.com/",  # trailing slash should be canonicalized
+            "flow_description": "login flow",  # case-insensitive
+            "steps": [{"url": "/login", "actions": [{"action": "click", "target": "Login"}]}],
+        }
+        assert _tool_call_signature("explore_flow", params1) == _tool_call_signature("explore_flow", params2)
+
+    def test_explore_flow_different_steps_have_different_signatures(self) -> None:
+        params1 = {"base_url": "https://x.com", "steps": [{"url": "/a"}]}
+        params2 = {"base_url": "https://x.com", "steps": [{"url": "/b"}]}
+        assert _tool_call_signature("explore_flow", params1) != _tool_call_signature("explore_flow", params2)
+
+    def test_explore_flow_input_value_ignored_in_signature(self) -> None:
+        """input values (e.g., passwords) shouldn't affect dedup signature."""
+        params1 = {
+            "base_url": "https://x.com",
+            "steps": [{"url": "/", "actions": [{"action": "input", "target": "Email", "value": "a@x.com"}]}],
+        }
+        params2 = {
+            "base_url": "https://x.com",
+            "steps": [{"url": "/", "actions": [{"action": "input", "target": "Email", "value": "b@x.com"}]}],
+        }
+        assert _tool_call_signature("explore_flow", params1) == _tool_call_signature("explore_flow", params2)
+
+    def test_explore_page_dedup_by_url(self) -> None:
+        a = _tool_call_signature("explore_page", {"url": "https://x.com/login"})
+        b = _tool_call_signature("explore_page", {"url": "https://x.com/login/"})  # trailing slash
+        assert a == b
+
+    def test_unsupported_tool_returns_none(self) -> None:
+        """Tools not eligible for dedup return None so they always execute."""
+        assert _tool_call_signature("get_project_info", {}) is None
+        assert _tool_call_signature("list_test_cases", {"search": "login"}) is None
+

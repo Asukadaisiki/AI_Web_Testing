@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -35,10 +36,17 @@ def setup_logging(level: str | None = None) -> None:
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(formatter)
 
+    # File handler - output to backend root directory
+    backend_root = Path(__file__).resolve().parents[2]
+    log_file = backend_root / "backend.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
     # Root logger
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(console)
+    root.addHandler(file_handler)
     root.setLevel(logging.WARNING)
 
     # Application loggers
@@ -46,6 +54,7 @@ def setup_logging(level: str | None = None) -> None:
     app_logger.setLevel(getattr(logging, effective_level, logging.INFO))
     app_logger.handlers.clear()
     app_logger.addHandler(console)
+    app_logger.addHandler(file_handler)
     app_logger.propagate = False
 
     # Quiet third-party loggers

@@ -47,7 +47,7 @@ def _summarize_tool_result(tool_name: str, result: Any) -> str:
     elif tool_name == "explore_flow":
         urls = result.get("urls", [])
         summary_parts.append(f"urls_count={len(urls)}")
-        pages = result.get("page_results", [])
+        pages = result.get("pages", []) or result.get("page_results", [])
         summary_parts.append(f"pages_explored={len(pages)}")
     elif tool_name == "create_project":
         summary_parts.append(f"id={result.get('id')}, name={result.get('name')}")
@@ -83,6 +83,57 @@ REQUIRED_REQUIREMENT_SLOTS = [
     "test_data_or_account",
     "scope_limits",
 ]
+
+
+def _tool_call_signature(tool_name: str, params: dict[str, Any]) -> str | None:
+    """Return a canonical signature for tool calls eligible for dedup.
+
+    Returns None for tools where dedup doesn't apply. Same signature within
+    the same turn means a redundant call (Bug C).
+    """
+    if not isinstance(params, dict):
+        return None
+    if tool_name == "create_project":
+        name = (params.get("name") or "").strip().lower()
+        if not name:
+            return None
+        return f"create_project::{name}"
+    if tool_name == "explore_flow":
+        base_url = (params.get("base_url") or "").strip().rstrip("/").lower()
+        flow_desc = (params.get("flow_description") or "").strip().lower()
+        steps = params.get("steps")
+        urls = params.get("urls")
+        if isinstance(steps, list):
+            # Canonicalize: only url + action+target per step (ignore values like passwords)
+            canon = []
+            for s in steps:
+                if not isinstance(s, dict):
+                    continue
+                url = str(s.get("url") or "").strip().rstrip("/").lower()
+                actions = s.get("actions") or []
+                acts: list[str] = []
+                if isinstance(actions, list):
+                    for a in actions:
+                        if isinstance(a, dict):
+                            acts.append(
+                                f"{str(a.get('action') or '').lower()}:"
+                                f"{str(a.get('target') or '').strip().lower()}"
+                            )
+                canon.append(url + "|" + ",".join(acts))
+            step_sig = ";".join(canon)
+        elif isinstance(urls, list):
+            step_sig = ";".join(str(u).strip().rstrip("/").lower() for u in urls)
+        else:
+            step_sig = ""
+        if not (base_url or step_sig):
+            return None
+        return f"explore_flow::{base_url}::{flow_desc}::{step_sig}"
+    if tool_name == "explore_page":
+        url = (params.get("url") or "").strip().rstrip("/").lower()
+        if not url:
+            return None
+        return f"explore_page::{url}"
+    return None
 
 
 def _turn_complete_payload(response: AIPlanningTurnResponse) -> dict[str, Any]:
@@ -479,6 +530,44 @@ def stream_planning_turn(
             if not isinstance(params, dict):
                 params = {}
             logger.info("Tool call: %s, params=%s", tool_name, json.dumps(params, ensure_ascii=False, default=str)[:500])
+
+            # --- Bug C: Dedup duplicate tool calls within this turn ---
+            dup_signature = _tool_call_signature(tool_name, params)
+            prior_call = None
+            if dup_signature:
+                prior_call = next(
+                    (
+                        c for c in tool_calls
+                        if _tool_call_signature(c.tool, c.params or {}) == dup_signature
+                    ),
+                    None,
+                )
+            if prior_call is not None:
+                logger.info(
+                    "Duplicate tool call detected: %s, signature=%s — reusing prior result without charging a round",
+                    tool_name, dup_signature,
+                )
+                yield {"type": "tool_call_start", "tool": tool_name, "params": params}
+                yield {
+                    "type": "tool_call_end", "tool": tool_name,
+                    "result_summary": {"duplicate_of_prior_call": True},
+                }
+                prior_summary = _summarize_tool_result(prior_call.tool, prior_call.result or {})
+                conversation.extend([
+                    {"role": "assistant", "content": _normalize_json_text(raw_response)},
+                    {
+                        "role": "system",
+                        "content": (
+                            f"⚠️ 检测到重复调用：你刚刚已经调用过 {tool_name}（等价参数）。"
+                            f"上次结果摘要：{prior_summary}。"
+                            f"请不要重复调用 {tool_name}，立即转入下一步——"
+                            f"选择不同的工具采集更多信息，或调用 generate_plan 输出方案。"
+                        ),
+                    },
+                ])
+                round_index -= 1  # don't charge a round for a redundant duplicate
+                continue
+
             yield {"type": "tool_call_start", "tool": tool_name, "params": params}
             try:
                 tool_result_text = execute_tool(

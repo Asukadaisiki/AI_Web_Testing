@@ -144,7 +144,9 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
 
     # Build flow_steps + page_elements_by_state for segmented generation
     flow_steps = payload.flow_steps or []
-    page_elements_by_state: dict[str, list] = {}
+    # If caller provided grouped a11y nodes (e.g., from explore_flow cache),
+    # use them as the element context for each page_state (Bug A fix).
+    page_elements_by_state: dict[str, list] = dict(payload.a11y_nodes_by_state or {})
     if not flow_steps:
         # Single-segment fallback: wrap prompt as one segment
         flow_steps = [{"page_state": "S0", "steps": []}]

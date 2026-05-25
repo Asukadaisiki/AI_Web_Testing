@@ -255,7 +255,7 @@ export interface AIPlanningMessage {
   id: number;
   session_id: number;
   role: "user" | "assistant";
-  turn_type: "user" | "followup" | "plan" | "tool_call" | "system_error";
+  turn_type: "user" | "followup" | "plan" | "tool_call" | "system_error" | "streaming";
   content: string;
   structured_payload?: Record<string, unknown> | null;
   created_at: string;

@@ -267,6 +267,10 @@ class GenerateDslRequest(DSLModel):
     preserve_contracts: bool = False
     page_elements: str | None = Field(default=None, description="Formatted DOM elements for grounding DSL generation.")
     flow_steps: list[dict[str, Any]] | None = Field(default=None, description="Structured flow steps for step-level element filtering and segmented DSL generation.")
+    a11y_nodes_by_state: dict[str, list[dict[str, Any]]] | None = Field(
+        default=None,
+        description="A11y nodes grouped by page_state, used as element context when flow_steps is empty (Bug A fallback).",
+    )
 
     @model_validator(mode="after")
     def validate_retry_context(self) -> "GenerateDslRequest":

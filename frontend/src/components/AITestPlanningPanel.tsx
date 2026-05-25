@@ -244,6 +244,11 @@ export function AITestPlanningPanel({
     setTranscript(
       detail.messages.map((msg) => {
         const payload = msg.structured_payload as Record<string, unknown> | null;
+        // Messages with turn_type "streaming" were persisted mid-stream but never
+        // finalized — keep them flagged so the UI can show a recovery indicator.
+        if (msg.turn_type === "streaming") {
+          return { ...msg, structured_payload: { ...(payload ?? {}), _streaming: true, _interrupted: true } };
+        }
         if (payload?._streaming) {
           return { ...msg, structured_payload: { ...payload, _streaming: false } };
         }
@@ -928,7 +933,9 @@ export function AITestPlanningPanel({
                     ) : null}
                     <div style={{ whiteSpace: "pre-wrap" }}>
                       {item.content}
-                      {(item.structured_payload as Record<string, unknown>)?._streaming ? (
+                      {(item.structured_payload as Record<string, unknown>)?._interrupted ? (
+                        <span style={{ color: "#faad14", fontSize: 12, marginLeft: 8 }}>⏸ 回复中断</span>
+                      ) : (item.structured_payload as Record<string, unknown>)?._streaming ? (
                         <span className="typing-cursor">▊</span>
                       ) : null}
                     </div>

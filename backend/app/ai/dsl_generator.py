@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
+import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 from urllib import request
+from urllib.error import HTTPError, URLError
 
 from pydantic import TypeAdapter, ValidationError
 
+from app.ai.page_explorer import format_elements_for_prompt
 from app.core.config import get_settings
 from app.schemas.dsl import (
     AssertTextStep,
@@ -45,6 +49,54 @@ class DslGenerationError(RuntimeError):
 
 class DslGenerationConfigError(DslGenerationError):
     """Raised when AI DSL generation is disabled or missing required configuration."""
+
+
+class DslGenerationNetworkError(DslGenerationError):
+    """Raised when the LLM HTTP endpoint is unreachable (DNS/TCP/connection timeout)."""
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """Return True if exc represents a retriable transient failure."""
+    if isinstance(exc, socket.timeout):
+        return True
+    if isinstance(exc, HTTPError):
+        return exc.code == 429 or 500 <= exc.code < 600
+    if isinstance(exc, URLError):
+        reason = exc.reason
+        if isinstance(reason, (socket.timeout, ConnectionError, TimeoutError, OSError)):
+            return True
+        return True  # generic URLError (DNS, etc.) — also retry once
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    return False
+
+
+def _urlopen_with_retry(
+    http_request: "request.Request",
+    *,
+    timeout_seconds: float,
+    max_retries: int = 2,
+    initial_backoff: float = 1.0,
+):
+    """urlopen with exponential backoff on transient network errors.
+
+    Returns the raw response on success. Raises the last exception otherwise.
+    On non-retriable errors (4xx, JSON errors), raises immediately without retry.
+    """
+    attempt = 0
+    while True:
+        try:
+            return request.urlopen(http_request, timeout=timeout_seconds)
+        except Exception as exc:
+            if not _is_transient_network_error(exc) or attempt >= max_retries:
+                raise
+            wait = initial_backoff * (2 ** attempt)
+            logger.warning(
+                "LLM call attempt %d failed (%s: %s); retrying in %.1fs",
+                attempt + 1, type(exc).__name__, exc, wait,
+            )
+            _time.sleep(wait)
+            attempt += 1
 
 
 _STEP_ADAPTER = TypeAdapter(DSLStep)
@@ -327,7 +379,7 @@ def _call_llm(
         },
         method="POST",
     )
-    with request.urlopen(http_request, timeout=timeout_seconds) as response:
+    with _urlopen_with_retry(http_request, timeout_seconds=timeout_seconds) as response:
         raw_body = response.read()
         # Two-pass decode to eliminate lone surrogates at byte level
         response_text = raw_body.decode("utf-8", errors="surrogateescape")
@@ -390,20 +442,28 @@ def _call_dsl_flash_llm(
     if settings is None:
         settings = get_settings()
 
-    api_key = (
-        getattr(settings, "ai_dsl_flash_api_key", None)
-        or settings.ai_dsl_api_key
-        or ""
-    )
+    api_key = settings.ai_dsl_api_key or ""
     model = (
         getattr(settings, "ai_dsl_flash_model", None)
         or settings.ai_dsl_model
         or ""
     )
-    base_url = (
-        getattr(settings, "ai_dsl_flash_base_url", None)
-        or settings.ai_dsl_base_url
+    base_url = settings.ai_dsl_base_url
+
+    # Log LLM configuration
+    logger.info(
+        "DSL _call_dsl_flash_llm: model=%s, base_url=%s, has_api_key=%s, timeout=%.1fs",
+        model or "(empty)", base_url, bool(api_key), timeout_seconds,
     )
+
+    if not api_key:
+        raise DslGenerationConfigError(
+            "AI DSL 生成失败：未配置 API Key。请设置 AI_DSL_API_KEY 环境变量。"
+        )
+    if not model:
+        raise DslGenerationConfigError(
+            "AI DSL 生成失败：未配置模型。请设置 AI_DSL_FLASH_MODEL 或 AI_DSL_MODEL 环境变量。"
+        )
 
     payload: dict[str, Any] = {
         "model": model,
@@ -414,6 +474,8 @@ def _call_dsl_flash_llm(
     }
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
 
+    logger.debug("DSL LLM endpoint: %s", endpoint)
+
     http_request = request.Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
@@ -423,15 +485,27 @@ def _call_dsl_flash_llm(
         },
         method="POST",
     )
-    with request.urlopen(http_request, timeout=timeout_seconds) as response:
-        raw_body = response.read()
-        response_text = raw_body.decode("utf-8", errors="replace")
-        try:
-            raw_payload = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            raise DslGenerationError(
-                f"Flash DSL generation returned non-JSON response: {response_text[:500]}"
-            ) from exc
+    try:
+        with _urlopen_with_retry(http_request, timeout_seconds=timeout_seconds) as response:
+            raw_body = response.read()
+            response_text = raw_body.decode("utf-8", errors="replace")
+            try:
+                raw_payload = json.loads(response_text)
+            except json.JSONDecodeError as exc:
+                raise DslGenerationError(
+                    f"Flash DSL generation returned non-JSON response: {response_text[:500]}"
+                ) from exc
+    except (URLError, socket.timeout, ConnectionError, TimeoutError) as exc:
+        endpoint_host = base_url.rstrip("/").split("/")[-1] if base_url else "(unknown)"
+        logger.error("DSL LLM call failed (network): %s", exc)
+        raise DslGenerationNetworkError(
+            f"AI DSL 生成失败：无法连接到 LLM API（{endpoint_host}）。"
+            f"错误：{type(exc).__name__}: {exc}。"
+            f"请检查网络连通性、DNS 解析或代理设置。"
+        ) from exc
+    except Exception as exc:
+        logger.error("DSL LLM call failed: %s", exc)
+        raise
 
     _log_dsl_cache_usage(raw_payload)
     return _extract_message_content(raw_payload)
@@ -443,6 +517,7 @@ def _build_segment_prompt(
     seg_steps: list[dict[str, Any]],
     elements: list[dict[str, Any]],
     base_url: str,
+    page_elements: str | None = None,
 ) -> str:
     """Build a focused prompt for a single page_state segment."""
     step_desc_lines: list[str] = []
@@ -458,13 +533,28 @@ def _build_segment_prompt(
             extra.append(f"trigger='{trig}'")
         step_desc_lines.append(f"  {s.get('step_index','?')}. {act} target='{tgt}' {' '.join(extra)}")
 
+    if step_desc_lines:
+        actions_section = "Actions on this page:\n" + "\n".join(step_desc_lines)
+    else:
+        actions_section = (
+            "Actions on this page: (none provided — derive complete DSL steps from the scenario "
+            "and available elements below; cover navigation, interactions, and assertions described "
+            "in the scenario)"
+        )
+
     elem_text = format_elements_for_prompt(elements) if elements else "(no elements)"
+
+    # Add page_elements (formatted DOM text) if available
+    page_elements_section = ""
+    if page_elements:
+        page_elements_section = f"\n\nFormatted DOM elements:\n{page_elements}\n"
 
     return (
         f"Generate DSL steps for page state **{page_state}** only.\n\n"
         f"Scenario: {scenario_prompt}\n\n"
-        f"Actions on this page:\n" + "\n".join(step_desc_lines) + "\n\n"
-        f"Available elements:\n{elem_text}\n\n"
+        f"{actions_section}\n\n"
+        f"Available elements:\n{elem_text}\n"
+        f"{page_elements_section}\n"
         f"Rules:\n"
         f"- Return valid JSON with 'steps' array and 'base_url'.\n"
         f"- base_url: {base_url}\n"
@@ -500,13 +590,36 @@ def generate_segmented_case_draft(
             "AI DSL 生成功能未开启。请设置 ENABLE_AI_DSL_GENERATE=true。"
         )
 
+    # Log generation start
+    logger.info(
+        "DSL segmented generation start: prompt_len=%d, base_url=%s, flow_steps=%d, page_states=%d, has_page_elements=%s",
+        len(payload.prompt),
+        payload.base_url,
+        len(flow_steps),
+        len(page_elements_by_state),
+        bool(payload.page_elements),
+    )
+
     # Group flow_steps by page_state
     groups: dict[str, list[dict[str, Any]]] = {}
     for fs in flow_steps:
         ps = str(fs.get("page_state", "S0") or "S0")
         groups.setdefault(ps, []).append(fs)
 
+    # Fallback: if flow_steps is empty but we have page_elements_by_state,
+    # use those page_states with empty seg_steps. This lets the LLM derive
+    # steps from the scenario prompt + element list when the planning agent
+    # failed to produce structured flow_steps (e.g., safety-cap fallback plan).
+    if not groups and page_elements_by_state:
+        for ps in page_elements_by_state.keys():
+            groups.setdefault(ps or "S0", [])
+        logger.info(
+            "flow_steps empty; deriving page_states from page_elements_by_state: %s",
+            list(groups.keys()),
+        )
+
     sorted_states = sorted(groups.keys())
+    logger.info("Page states: %s, groups: %s", sorted_states, {k: len(v) for k, v in groups.items()})
 
     all_warnings: list[str] = []
     all_notes: list[str] = []
@@ -515,13 +628,19 @@ def generate_segmented_case_draft(
 
     def _generate_segment(state: str, steps: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
         elements = page_elements_by_state.get(state, [])
+        logger.info(
+            "Generating segment %s: steps=%d, elements=%d, has_page_elements=%s",
+            state, len(steps), len(elements), bool(payload.page_elements),
+        )
         seg_prompt = _build_segment_prompt(
             scenario_prompt=payload.prompt.strip(),
             page_state=state,
             seg_steps=steps,
             elements=elements,
             base_url=base_url,
+            page_elements=payload.page_elements,
         )
+        logger.debug("Segment %s prompt length: %d", state, len(seg_prompt))
         messages = [
             {
                 "role": "system",
@@ -538,10 +657,13 @@ def generate_segmented_case_draft(
             timeout_seconds=max(30.0, getattr(settings, "ai_dsl_flash_timeout_ms", 180000) / 1000),
         )
         cleaned = _extract_json_object(response)
+        logger.debug("Segment %s response length: %d", state, len(cleaned))
         raw = json.loads(cleaned)
         if not isinstance(raw, dict):
             raise DslGenerationError(f"Segment {state}: response is not a JSON object")
-        return state, raw.get("steps", []) or raw.get("data", {}).get("steps", []) or []
+        steps_result = raw.get("steps", []) or raw.get("data", {}).get("steps", []) or []
+        logger.info("Segment %s generated %d steps", state, len(steps_result))
+        return state, steps_result
 
     # Parallel execution
     segment_results: dict[str, list[dict[str, Any]]] = {}
@@ -571,6 +693,14 @@ def generate_segmented_case_draft(
     for i, s in enumerate(merged_steps):
         s["step_index"] = i + 1
 
+    # Log merge result
+    logger.info(
+        "DSL segmented generation complete: states=%d, total_steps=%d, warnings=%d",
+        len(sorted_states), len(merged_steps), len(all_warnings),
+    )
+    if all_warnings:
+        logger.warning("Generation warnings: %s", all_warnings)
+
     # Build normalized case dict
     normalized_case = {
         "name": payload.prompt.strip()[:200] or "AI 生成用例",
@@ -584,11 +714,37 @@ def generate_segmented_case_draft(
     all_notes.append(f"分段生成：{len(sorted_states)} 个页面状态，共 {len(merged_steps)} 步")
 
     if not base_url:
+        logger.error("DSL generation failed: base_url is empty")
         raise DslGenerationError(
             "DSL 生成失败：缺少入口 URL（base_url 为空）。"
             "请确认 AI 已从测试需求中提取到 entry_url_or_page 字段。"
         )
     if not merged_steps:
+        logger.error("DSL generation failed: no steps generated from %d segments", len(sorted_states))
+        # Distinguish network failures from element-collection failures so the
+        # user gets an accurate, actionable error message (Bug B).
+        network_keywords = (
+            "无法连接到 LLM API",
+            "DslGenerationNetworkError",
+            "WinError 10060",
+            "urlopen error",
+            "Connection",
+            "timeout",
+            "TimedOut",
+            "TimeoutError",
+            "Name or service not known",
+            "Temporary failure in name resolution",
+        )
+        network_failures = sum(
+            1 for w in all_warnings if any(kw in w for kw in network_keywords)
+        )
+        if all_warnings and network_failures == len(all_warnings):
+            raise DslGenerationNetworkError(
+                f"DSL 生成失败：所有 {len(sorted_states)} 个分段均因网络问题未能调用到 LLM API。"
+                f"已采集页面元素正常，问题在 LLM 接口连通性。"
+                f"首个错误：{all_warnings[0]}。"
+                f"请检查 AI_DSL_BASE_URL、网络代理或 DNS。"
+            )
         raise DslGenerationError(
             f"DSL 生成失败：所有 {len(sorted_states)} 个页面状态分段均未生成步骤。"
             "请检查页面元素采集是否正常，或入口 URL 是否可达。"

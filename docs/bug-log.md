@@ -871,3 +871,43 @@
 - **原因**: 捕获的文本存储到了 `runtime_context` 但 `StepExecutionEvidence` 的 `value` 字段读取的是 `getattr(step, "value", None)`，二者未关联
 - **修复**: 引入 `step_value` 局部变量，初始值为 `getattr(step, "value", None)`，`capture_text` 分支更新为实际捕获值，evidence 构造使用 `value=step_value`。修复覆盖 4 个代码路径（candidate path、legacy path、2 个 streaming path）
 - **关联**: execution-log.md 2026-05-16
+
+## 2026-05-25 — DSL 生成"所有页面状态分段均未生成步骤"链路 3 bug
+
+### Bug #A: single-segment 路径下 a11y_nodes 数据丢失
+- **状态**: fixed
+- **文件**: `backend/app/services/ai_planning.py:560` + `backend/app/services/dsl.py:147` + `backend/app/schemas/dsl.py:268-274` + `backend/app/ai/dsl_generator.py`
+- **现象**: AI 规划 fallback plan 时 `scenario["flow_steps"]=[]`，走 single-segment 分支。后端日志显示 `a11y_nodes=1136` 但 `has_page_elements=False`，LLM 拿到的 prompt 中 `Available elements: (no elements)`，segment 生成无任何上下文
+- **原因**: `ai_planning.py:561` 调 `generate_dsl_case` 时未把 `a11y_nodes_raw` 传过去；`dsl.py:147` 中 `page_elements_by_state` 硬编码为 `{}`；元素数据在 `_load_a11y_nodes_for_scenario` 已正确加载但被丢弃
+- **修复**:
+  - `GenerateDslRequest` 新增 `a11y_nodes_by_state: dict[str, list[dict]] | None` 字段
+  - `dsl.py` 从 `payload.a11y_nodes_by_state` 读取，不再硬编码 `{}`
+  - `ai_planning.py` 单段分支按 `page_state` 分组 `a11y_nodes_raw` 后通过 payload 传入
+  - `dsl_generator.py:generate_segmented_case_draft` 在 `flow_steps=[]` 但 `page_elements_by_state` 有数据时按 page_states keys 迭代；`_build_segment_prompt` 在 `seg_steps=[]` 时给 LLM 明确"从 scenario+elements 推导完整 DSL"指令；补充 `format_elements_for_prompt` 导入
+- **关联**: execution-log.md 2026-05-25
+
+### Bug #B: LLM 调用无重试 + 网络错误消息误导
+- **状态**: fixed
+- **文件**: `backend/app/ai/dsl_generator.py`
+- **现象**: `urlopen WinError 10060`（TCP 21 秒级超时连接 `api.deepseek.com`）单次失败即终止整段 DSL 生成，且最终错误为 `DSL 生成失败：所有 1 个页面状态分段均未生成步骤。请检查页面元素采集是否正常，或入口 URL 是否可达。` —— 明显误导用户
+- **原因**: `_call_dsl_flash_llm` 直接调用 `request.urlopen` 无重试、无退避；`generate_segmented_case_draft` 末尾的错误消息未区分网络失败 vs 真正的"无元素"问题
+- **修复**:
+  - 新增 `_urlopen_with_retry`（指数退避 1s→2s，2 次重试）+ `_is_transient_network_error`（识别 socket.timeout / URLError / HTTPError 429&5xx / ConnectionError）
+  - `_call_llm` 和 `_call_dsl_flash_llm` 全部改用重试包装
+  - 新增 `DslGenerationNetworkError` 异常，`_call_dsl_flash_llm` 捕获网络错误后包装为：`AI DSL 生成失败：无法连接到 LLM API（host）。错误：xxx。请检查网络连通性、DNS 解析或代理设置。`
+  - `generate_segmented_case_draft` 末尾判断 warnings 是否全为网络错误关键字（`urlopen error`/`WinError 10060`/`TimeoutError`/`Connection`/`Name or service not known`），命中则抛 `DslGenerationNetworkError` 给出准确诊断
+- **关联**: execution-log.md 2026-05-25。基础设施层面 `api.deepseek.com` 不可达仍需用户排查（VLM `open.bigmodel.cn` 可达，属 deepseek 专属网络问题）
+
+### Bug #C: agent 重复调用工具浪费安全帽轮次
+- **状态**: fixed
+- **文件**: `backend/app/ai/test_planning_agent.py`
+- **现象**: log 显示 agent 在 5 轮内调用 `create_project` ×2（轮 2&3）、`explore_flow` ×2（轮 4&5），耗尽 5 轮安全帽 → fallback plan → flow_steps 为空 → 触发 Bug A 死路
+- **原因**: ReAct loop 对工具调用无去重判断，LLM 可能因对话噪声或思维抖动连续发起等价工具调用
+- **修复**:
+  - 新增 `_tool_call_signature(tool_name, params)`：`create_project` 按 `name.lower()`、`explore_flow` 按 `base_url+flow_description+canonical_steps`（input value 忽略避免泄露密码）、`explore_page` 按 url
+  - 工具执行前比对 `tool_calls` 中已有签名，命中重复时：
+    - yield `tool_call_start` + `tool_call_end` (含 `duplicate_of_prior_call=True`)
+    - 注入"⚠️ 检测到重复调用：你刚刚已经调用过 X..."系统消息
+    - `round_index -= 1` 不扣 round
+  - 其他工具签名返回 `None` 不参与去重
+- **关联**: execution-log.md 2026-05-25

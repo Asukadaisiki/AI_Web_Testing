@@ -1607,3 +1607,53 @@
 - Bug #3: `playwright_runner.py` — `capture_text` 步骤的 evidence value 始终为 null
 
 **验证**：完整购物车流程 20 步 pass，capture_text 正确捕获并验证商品名称和价格。
+
+## 2026-05-25 | 修复 DSL 生成"所有页面状态分段均未生成步骤"链路（3 个 bug）
+
+**任务**：用户复现 `DSL 生成失败：所有 1 个页面状态分段均未生成步骤` 错误。从 `backend/backend.log` 追踪定位错误归属并修复。
+
+**根因分析**（按因果链排序）：
+1. 用户报错出处：`backend/app/ai/dsl_generator.py:644` 抛出 `DslGenerationError`，提示"页面元素采集失败"但元素已采到 1136 个 —— 错误消息误导。
+2. 直接触发：log 第 165 行 `Segment S0 failed: <urlopen error [WinError 10060]>` —— TCP 21 秒级超时连接 `api.deepseek.com`（对比 `open.bigmodel.cn` 仅返回 429，属 deepseek 专属网络不可达）。
+3. 即使网络通了也会失败：`scenario["flow_steps"]=[]` 走 single-segment 分支，1136 个已采到的 a11y 节点在 `ai_planning.py:561`→`dsl.py:147` 链路上被丢弃（`page_elements_by_state` 硬编码 `{}`），LLM 拿到的 prompt 退化为 `Available elements: (no elements)`。
+4. 上游：log 第 139 行 agent 5 轮安全帽耗尽 → fallback plan，原因是重复调用 `create_project` ×2、`explore_flow` ×2 浪费了 4 轮（log 第 22、26、32、38、76 行）。
+
+**修复**：
+
+- **Bug A — single-segment 路径下 a11y 数据丢失**
+  - `app/schemas/dsl.py`：`GenerateDslRequest` 新增 `a11y_nodes_by_state: dict[str, list[dict]] | None` 字段
+  - `app/services/dsl.py:147`：`page_elements_by_state` 从 `payload.a11y_nodes_by_state` 读取，不再硬编码 `{}`
+  - `app/services/ai_planning.py:560-588`：单段分支把 `a11y_nodes_raw` 按 page_state 分组后通过 payload 传入；保留 `generate_dsl_case` 调用链不破坏既有 mock 测试
+  - `app/ai/dsl_generator.py`：`generate_segmented_case_draft` 在 `flow_steps` 为空但 `page_elements_by_state` 有数据时，自动按 page_states keys 迭代生成；`_build_segment_prompt` 在 `seg_steps` 为空时给 LLM 明确指令；新增 `from app.ai.page_explorer import format_elements_for_prompt`（此前未导入，靠惰性路径绕过）
+
+- **Bug B — LLM 调用无重试 + 错误消息误导**
+  - `app/ai/dsl_generator.py`：新增 `_urlopen_with_retry`（指数退避 1s→2s，最多 2 次重试）和 `_is_transient_network_error`（识别 `socket.timeout`/`URLError`/`HTTPError 429&5xx`/`ConnectionError`）
+  - `_call_llm` 和 `_call_dsl_flash_llm` 改用重试包装器
+  - 新增 `DslGenerationNetworkError` 异常，`_call_dsl_flash_llm` 捕获网络错误后包装为 `AI DSL 生成失败：无法连接到 LLM API（host）。错误：xxx。请检查网络连通性、DNS 解析或代理设置。`
+  - `generate_segmented_case_draft` 在所有 segments 失败时判断 warnings 是否全为网络错误关键字（`urlopen error`/`WinError 10060`/`TimeoutError` 等），命中则抛 `DslGenerationNetworkError` 而非误导的"页面元素采集失败"
+
+- **Bug C — agent 重复调用工具浪费安全帽轮次**
+  - `app/ai/test_planning_agent.py`：新增 `_tool_call_signature(tool_name, params)` 规范化 `create_project`（按 name lowercase）/`explore_flow`（按 base_url+flow_description+canonical steps，input value 忽略避免泄露密码）/`explore_page`（按 url）
+  - tool 执行前比对签名；命中重复时：注入"⚠️ 检测到重复调用：你刚刚已经调用过 X..."系统消息、复用 prior result、`round_index -= 1` 不扣 round
+  - 其他工具签名返回 `None`（不去重，always execute）
+
+**新增测试**（16 个，全部 pass）：
+- `tests/unit/test_dsl_generator.py`：
+  - `TestIsTransientNetworkError` 4 个（socket.timeout / WinError 10060 / ConnectionError / ValueError）
+  - `TestUrlopenWithRetry` 3 个（retries-then-succeeds / exhausts-retries / non-transient-no-retry）
+  - `test_dsl_flash_llm_wraps_network_error_with_chinese_message`
+  - `test_generate_dsl_case_propagates_a11y_nodes_by_state`（Bug A 数据流回归）
+- `tests/unit/test_planning_agent.py::TestToolCallSignature`：7 个（dedup 各种 case + 不支持的工具返回 None）
+
+**验证**：
+- 完整 backend 单元测试套件 521 passed（基线 505 → +16 新增）
+- 语法检查：`python -c "import ast; ast.parse(...)"` 通过
+- 既有 mock 测试 `test_save_and_execute_persists_execution_summary_message` 现在能正确触发新代码路径并 pass
+
+**遗留**：
+- WinError 10060 本身是基础设施问题，需排查机器到 `api.deepseek.com` 的连通性（防火墙/代理/DNS）。代码层面已让失败更明确（清晰的中文错误 + 重试 2 次）
+- Bug C 修复后，5 轮安全帽对慢工具调用场景应更充裕；如仍不够可考虑提高 `AI_PLANNING_MAX_REACT_SAFETY_CAP` 或继续优化 agent 行为
+
+**关联文件**：
+- 修改：`backend/app/ai/dsl_generator.py`、`backend/app/services/ai_planning.py`、`backend/app/services/dsl.py`、`backend/app/schemas/dsl.py`、`backend/app/ai/test_planning_agent.py`
+- 新增测试：`backend/tests/unit/test_dsl_generator.py`、`backend/tests/unit/test_planning_agent.py`
