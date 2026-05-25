@@ -1,4 +1,4 @@
-﻿# Bug 日志
+# Bug 日志
 
 用于沉淀在开发、联调、测试和执行过程中发现的问题，跟踪影响、状态和修复结论。
 
@@ -8,7 +8,630 @@
 - 状态建议使用：`open`、`in_progress`、`fixed`、`wont_fix`。
 - 每条记录尽量包含复现条件、影响范围、定位结论和验证方式。
 - 如果问题来自某次任务执行，请回链到 `docs/execution-log.md` 中的对应记录。
-- 最新的记录优先放到最上面，方便阅读
+- 最新的记录优先放到最上面，方便阅读。
+
+## 分类索引
+
+| 类别 | 概述 | 典型编号 |
+|------|------|----------|
+| **A. DSL 生成与归一化** | LLM 输出→结构化 DSL 链路的格式、字段、校验问题 | Bug #A–#G, BUG-077/078/083/070/085/056/048/045 |
+| **B. 定位器系统** | 语义/CSS/VLM/坐标定位器匹配、策略、回退问题 | BUG-084/082/080/076/075/074/073/072/071/064/057/053/050/049/046, Bug #1 |
+| **C. 页面探索与数据采集** | explore_page/flow、DOM/A11y 采集、缓存问题 | BUG-060/059/067(05-07)/068(05-06), Bug #2, Bug #A |
+| **D. AI 决策与提示词** | ReAct 循环、提示词遵循、工具调用去重 | BUG-085/081/069(05-06)/066(05-12)/065(05-06)/054, Bug #C |
+| **E. SSE 流式与前端** | 流式输出、会话管理、前端渲染 | BUG-063(05-04)/064(05-04)/058/044/042, Bug #D |
+| **F. 执行引擎** | Playwright runner、变量替换、证据采集 | BUG-079/057/053/051/047, Bug #3 |
+| **G. 配置与基础设施** | API 合同、权限、网络重试、DB 配置 | BUG-045/043/041, Bug #B |
+
+> 注：同一 BUG 编号在不同日期出现不同内容时，以日期区分（如 BUG-065 (2026-05-06) vs BUG-065 (2026-05-12)）。
+
+---
+
+## A. DSL 生成与归一化
+
+LLM 输出 → Pydantic 校验 → 结构化 DSL 步骤链路中的格式错误、字段缺失、校验失败问题。
+
+### Bug #G | LLM 生成 assert_text 缺 value；字段别名表定义但未接入 normalizer
+
+- 日期：2026-05-25
+- 状态：fixed (`2d3161a`)
+- 来源：E2E 回归测试
+- 描述：5 个 segment 全部成功生成共 16 步骤，但 `DSLCase.model_validate` 抛 `steps.15.assert_text.value Field required`。LLM 把期望文本放进 `target` 字段，漏填 `value`。
+- 根因：
+  - `_normalize_llm_step` 此前仅处理 `goto/assert_url_contains` 的 target→value 移动，未覆盖 `assert_text`
+  - `_STEP_TARGET_ALIASES` / `_STEP_VALUE_ALIASES` / `_STEP_TIMEOUT_ALIASES` 三张别名表已定义但全文无调用（孤儿数据）
+- 处理：
+  - `_normalize_llm_step` 接入三张别名表，用 `_promote_first_alias()` 转换
+  - `assert_text` 特殊修复：value 缺 + target 在 → target 移到 value，target 兜底为 `"body"`
+  - `input`/`click`/`wait_for`/`capture_text` 必填字段缺失时返回 None 让 normalizer 丢弃
+  - `_build_segment_prompt` 分别枚举每类 action 的字段要求，给正反例
+- 验证：542/544 单元测试通过
+- 关联记录：execution-log.md 2026-05-25（Bug A→F 链路收尾）
+
+### Bug #F | LLM 生成 goto/assert_url_contains 步骤时 target↔value 字段错位
+
+- 日期：2026-05-25
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：LLM 调用成功返回，但 `DSLCase.model_validate` 抛 `steps.0.goto.value Field required`，LLM 把 URL 错填到 `target` 字段。
+- 根因：`goto` 和 `assert_url_contains` 用 `value` 存 URL，但 segment prompt 没显式区分字段；`_ACTION_ALIASES` 字典已定义但全文未使用（governance 清理遗留废代码）。
+- 处理：
+  - 新增 `_normalize_llm_step(step)`：激活 `_ACTION_ALIASES`（open/navigate/visit → goto 等），对 `_URL_VALUE_ACTIONS = {"goto", "assert_url_contains"}` 自动把 target 搬到 value
+  - `_build_segment_prompt` 增加显式规则：`goto/assert_url_contains 使用 'value' 存放 URL`
+- 验证：5 个 segment 全部成功
+- 关联记录：execution-log.md 2026-05-25
+
+### Bug #E | _log_dsl_cache_usage 函数被 governance 清理误删但调用方残留
+
+- 日期：2026-05-25
+- 状态：fixed (`f22ccb8`)
+- 来源：E2E 回归测试
+- 描述：LLM 调用成功返回，但 segment 报 `name '_log_dsl_cache_usage' is not defined`，最终又抛出"所有分段均未生成步骤"。
+- 根因：commit `8d92654`（refactor: delete governance system）把函数定义一起删掉，但 `_call_llm:402` 和 `_call_dsl_flash_llm:510` 仍保留调用。Bug A 修复让 LLM 调用真正成功后，这个潜伏代码 rot 才暴露。
+- 处理：恢复 `_log_dsl_cache_usage` 函数定义（参照 commit `6372a8f`），加 `isinstance` 防御
+- 验证：segment 正常生成步骤
+- 关联记录：execution-log.md 2026-05-25
+
+### Bug #B | LLM 调用无重试 + 网络错误消息误导
+
+- 日期：2026-05-25
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：`urlopen WinError 10060`（TCP 超时连接 `api.deepseek.com`）单次失败即终止整段 DSL 生成，且最终错误为"所有分段均未生成步骤"——误导用户以为是元素问题。
+- 根因：`_call_dsl_flash_llm` 直接调 `request.urlopen` 无重试、无退避；错误消息未区分网络失败 vs 真正的"无元素"问题。
+- 处理：
+  - 新增 `_urlopen_with_retry`（指数退避 1s→2s，2 次重试）+ `_is_transient_network_error`
+  - 新增 `DslGenerationNetworkError` 异常，给出准确诊断（含 host、错误类型、排查建议）
+  - `generate_segmented_case_draft` 末尾判断 warnings 是否全为网络错误关键字，命中则抛 `DslGenerationNetworkError`
+- 验证：网络错误时给出准确诊断而非误导信息
+- 关联记录：execution-log.md 2026-05-25
+
+### Bug #D | stream_planning_turn 把 Pydantic plan 当 dict 用导致 AttributeError
+
+- 日期：2026-05-25
+- 状态：fixed (`67f021a`)
+- 来源：E2E 回归测试
+- 描述：日志反复出现 `Auto DSL generation failed: 'AIPlanningPlan' object has no attribute 'get'`，导致计划生成后跳过自动 DSL 草案。
+- 根因：`response.plan` 是 `AIPlanningPlan` Pydantic 模型，代码写成 `plan_json.get("scenarios", [])`。
+- 处理：改为 `plan_data = response.plan.model_dump(mode="json") if response.plan else {}`
+- 验证：自动 DSL 草案正常生成
+- 关联记录：execution-log.md 2026-05-25
+
+### Bug #A | single-segment 路径下 a11y_nodes 数据丢失
+
+- 日期：2026-05-25
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：AI 规划 fallback plan 时 `scenario["flow_steps"]=[]`，走 single-segment 分支。后端日志显示 `a11y_nodes=1136` 但 `has_page_elements=False`，LLM 拿到的 prompt 中 `Available elements: (no elements)`。
+- 根因：`ai_planning.py:561` 调 `generate_dsl_case` 时未把 `a11y_nodes_raw` 传过去；`dsl.py:147` 中 `page_elements_by_state` 硬编码为 `{}`。
+- 处理：
+  - `GenerateDslRequest` 新增 `a11y_nodes_by_state: dict[str, list[dict]] | None` 字段
+  - `dsl.py` 从 `payload.a11y_nodes_by_state` 读取
+  - `ai_planning.py` 单段分支按 `page_state` 分组 `a11y_nodes_raw` 后通过 payload 传入
+  - `dsl_generator.py` 在 `flow_steps=[]` 但 `page_elements_by_state` 有数据时按 page_states keys 迭代
+- 验证：single-segment 路径正常生成步骤
+- 关联记录：execution-log.md 2026-05-25
+
+### BUG-085 | DeepSeek thinking 模式 + 高温导致 AI 不遵循提示词指令
+
+- 日期：2026-05-10
+- 状态：fixed
+- 来源：BUG 日志聚合分析
+- 描述：综合 BUG-081/069/065/054 等高频问题，根因指向两点：(1) thinking 模式对指令遵循有负面影响；(2) DeepSeek API 默认 temperature=1.0 过高。
+- 处理：
+  1. 在 dsl_generator.py、test_planning_agent.py、judge_agent.py 中移除 DeepSeek 的 thinking mode（仅保留 GLM）
+  2. 按场景设置 temperature：DSL generator 0.0、DSL flash 0.0、Planning agent 0.1、Judge 0.0
+- 验证：542/544 单元测试通过
+
+### BUG-083 | AI 将 assert_text 的 ${var} 放在 target 而非 value 导致断言被删除
+
+- 日期：2026-05-07
+- 状态：fixed (7958d3b, 未验证)
+- 来源：E2E 回归测试
+- 描述：AI 生成 `assert_text target='${product_a_name}' value=''`，Pydantic `min_length=1` 拒绝空 value → 8 个断言步骤被归一化器删除。
+- 根因：AI 模型混淆 assert_text 的 target（元素定位器）和 value（期望值）字段。
+- 处理：prompt 添加"target 是页面文本，value 是 ${var}"规则 + 归一化器自动补全
+- 验证：未验证（需新 session 生成 draft 确认）
+
+### BUG-078 | DSL 归一化器删除了合法的 click/wait_for/capture_text 步骤
+
+- 日期：2026-05-07
+- 状态：fixed (`ecbbb3a`)
+- 来源：E2E 回归测试
+- 描述：AI 给 click/wait_for/capture_text 步骤添加了 `"value": null` 字段，Pydantic `extra_forbidden` 拒绝，步骤被静默删除。
+- 根因：`_repair_step_shape` 未剥离 click/wait_for/capture_text 的 spurious `value` 字段。
+- 处理：在 `_repair_step_shape` 末尾对这些步骤类型移除 `value` 键。
+- 验证：58 个 DSL 单元测试通过，Exec 106 证实 0 步骤被删
+- 关联记录：Draft 80 8 步骤被删，Draft 81 0 步骤被删
+
+### BUG-077 | DSL 归一化器删除了合法的 goto/assert_url_contains 步骤
+
+- 日期：2026-05-07
+- 状态：fixed (`8d05871`)
+- 来源：E2E 回归测试
+- 描述：AI 给 goto 和 assert_url_contains 添加了 `candidates: []` 和 `postconditions: []` 字段，Pydantic `extra_forbidden` 拒绝，goto 步骤被丢弃。
+- 根因：AI 给所有步骤统一加了 candidates/postconditions 空数组，但 GotoStep 和 AssertUrlContainsStep 模型没有这些字段。
+- 处理：在 `_repair_step_shape` 中对 goto/assert_url_contains 剥离 candidates/postconditions。
+- 验证：58 个 DSL 单元测试通过
+
+### BUG-070 | DSL generator thinking mode 下 reasoning_content 空响应
+
+- 日期：2026-05-06
+- 状态：fixed (`9f67995`)
+- 来源：E2E 回归测试
+- 描述：DSL generator 使用 DeepSeek thinking mode 时，模型返回 `reasoning_content` 但 `content` 为空 → JSON 解析失败 → 草案状态 failed。
+- 根因：`_extract_message_content` 只读 `content` 字段，忽略了 `reasoning_content`。
+- 处理：在 content 为空时 fallback 到 `reasoning_content`
+- 验证：Draft 62 生成成功（33 步）
+
+### BUG-065 | DSL prompt 未要求 capture_text 后必须跟 assert_text
+
+- 日期：2026-05-06
+- 状态：fixed (`a631041`, `c5e4411`)
+- 来源：E2E 回归测试
+- 描述：AI 生成 5 个 capture_text 但 0 个 assert_text，测试表面全部通过但核心断言完全缺失。
+- 根因：DSL prompt 只说明了 capture_text 用法，未强制要求 capture 后必须 assert。
+- 处理：在系统 prompt 和用户规则中增加"capture 必须 assert"规则；新增"modify→input→assert"规则。
+- 验证：Draft 69 有 10 个 assert_text（vs Draft 66 的 0 个）
+
+### BUG-056 | DSL draft prompt 超 50000 字符导致 Pydantic 校验失败
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：Session 15 E2E 测试
+- 描述：`_build_draft_prompt` 将 80K+ 字符的 page_elements 直接嵌入 `draft_prompt`，触发 `max_length=50000` 限制。
+- 根因：`page_elements` 数据在两个渠道重复传递——嵌入 prompt + 独立字段。
+- 处理：嵌入式 DOM section 替换为简短提示，实际数据通过 `GenerateDslRequest.page_elements` 单独传递。
+- 验证：471 单元测试通过
+
+### BUG-048 | AI DSL 规划阶段完整性校验缺失
+
+- 日期：2026-04-21
+- 状态：fixed
+- 来源：白盒测试（The Internet Login Page）
+- 描述：AI 生成 DSL 时遗漏 goto 步骤，base_url 设为完整登录页 URL 但不生成 goto 步骤，执行器在 about:blank 上操作。
+- 处理：(1) Prompt 增加测试五要素完整性引导；(2) 后处理新增 `_check_dsl_completeness` 函数。
+- 验证：5 passed
+
+### BUG-045 | AI planning "保存并执行草案"链路被 DSL 生成配置阻断
+
+- 日期：2026-04-13
+- 状态：in_progress
+- 来源：白盒排查 / session_id=27
+- 描述：`AI_DSL_BASE_URL=https://api.unself.cn` 返回 `200 text/html` 站点首页而非 OpenAI 兼容 JSON → `JSONDecodeError`；且 draft 生成/执行结果未持久化到 `ai_planning_messages`。
+- 处理进展：已修正 `AI_DSL_BASE_URL`；已为 `_call_llm()` 增加非 JSON 响应防御；已将结果持久化到 messages。剩余：执行中流式事件推送。
+- 验证：数据库实查 + 最小 HTTP 复现
+
+---
+
+## B. 定位器系统
+
+语义定位器、CSS/XPath、VLM 视觉定位、坐标点击回退等定位策略的匹配、优先级、回退链路问题。
+
+### BUG-084 | text_parent_chain 在品牌页第二个产品上回退到 VLM
+
+- 日期：2026-05-07
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：Step 15 "Blue Top 附近的 Add to cart" 用 text_parent_chain 成功，但 Step 21 "Fancy Green Top 附近的" 回退到 ai_coordinate_click。`_find_in_ancestor` 始终用 `.first` 获取第一个匹配。
+- 根因：`_find_in_ancestor` 和 `_resolve_text_parent_chain` 始终用 `.first`，不尝试其他 nth 候选。
+- 处理：改为迭代 `.nth(0..4)` 多个候选，找到第一个成功匹配的返回。
+- 验证：33/33 语义单元测试通过
+
+### BUG-082 | capture_page_session 使用简化版 resolver 导致登录态不稳定
+
+- 日期：2026-05-07
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：`capture_browser_session` 使用简化版 `_resolve_step_locator`（只尝试少量候选 + count()>0 即返回），Email placeholder 匹配到 3 个元素 → strict mode 失败。
+- 根因：没有使用完整的定位器链路（semantic → a11y → VLM fallback）。
+- 处理：改为直接调用 `resolve_with_fallback`；添加页载等待 + 元素 tag 验证 + 2 次重试。
+- 验证：S161 capture_page_session 成功，page_elements 从 73K → 1.28MB
+
+### BUG-080 | assert_text 的 target 字段中的运行时变量未被替换
+
+- 日期：2026-05-07
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：`assert_text target="${cart_a_total}"` 中的 `${cart_a_total}` 未被 `_substitute_variables` 替换 → 定位器按字面量查找 → 永远找不到 → 走 VLM 兜底。
+- 根因：`_substitute_variables` 只对 `step.value` 调用，未对 `step.target` 调用。
+- 处理：所有 runner 和 helper 中，`step.target` 使用前统一替换。
+- 验证：543/544 单元测试通过
+
+### BUG-076 | DSL target 文本中的中文字符被 PostgreSQL JSON 序列化损坏
+
+- 日期：2026-05-07
+- 状态：fixed (`aaa3f18`)
+- 来源：E2E 回归测试
+- 描述：target 字段中"附近的"被序列化为 `\udc84`（lone low surrogate），`text_parent_chain` 的 regex 无法匹配。所有含中文的 target 均受影响（6 个步骤）。
+- 根因：PostgreSQL JSONB 序列化过程中 Unicode BMP 字符被错误编码为 surrogate pair。
+- 处理：DSL 归一化入口处检测并修复 surrogate 字符。
+- 验证：Draft 81 证实 surrogate_targets=0
+
+### BUG-075 | 元素视觉分组的 group label 太粗糙
+
+- 日期：2026-05-07
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：`_group_label` 的 if-elif 链太刚性，价格检测遗漏纯数字价格，1-2 个元素的分组 label 无意义。
+- 处理：价格检测增强 + 新增 8 种块类型 + 渐进阈值回退 + aria_label 命名。
+- 验证：542/544 单元测试通过
+
+### BUG-074 | text_parent_chain 定位器未在 runner 候选列表中被优先尝试
+
+- 日期：2026-05-07
+- 状态：fixed (`6922bc8`)
+- 来源：E2E 回归测试
+- 描述：`_resolve_with_confidence_gate` 在 `locator_confidence="low"` 时先调 VLM preverify，跳过了 text_parent_chain。
+- 根因：VLM preverify 不应跳过语义定位链。
+- 处理：重构为统一流程——语义优先、VLM 仅作最后兜底。添加 2.5 分钟步骤超时。
+- 验证：Exec 102+ 证实 text_parent_chain 在候选列表中排在第一位
+
+### BUG-073 | text_parent_chain 的正则表达式无法匹配含空格的父文本
+
+- 日期：2026-05-07
+- 状态：fixed (`aabea6a`)
+- 来源：E2E 回归测试
+- 描述：`_PARENT_TEXT_RE` 使用 `[^>\\s>{2,60}?`（惰性匹配 + 排除空格），"Blue Top 附近的 Add to cart" 无法匹配。
+- 根因：惰性量词使匹配过短 + `[^>\\s]` 错误排除了空格。
+- 处理：改用 split 方式——`_PARENT_SPLIT_RE` 直接在 `>>`/`的`/`附近的` 处分隔。
+- 验证：33 个语义单元测试通过，Exec 102 Step 11 证实成功匹配
+
+### BUG-072 | text_parent_chain 使用硬编码 XPath ancestor 无法适配不同页面结构
+
+- 日期：2026-05-07
+- 状态：fixed (`892889e`)
+- 来源：E2E 回归测试
+- 描述：`_find_in_ancestor` 使用 `xpath=ancestor::*[contains(@class,'product')]` 硬编码 class 名。购物车页 `<tr>` 不含此 class → 返回 0 元素。
+- 处理：改为自适应深度遍历——从 parent_text 元素出发，逐层 `..` 向上（depth 2-8），每层尝试 `get_by_text(child_text)`。
+- 验证：33 个语义单元测试通过，手动验证购物车页 depth=3 可找到 "Rs. 500"
+
+### BUG-071 | text_parent_chain 的 child_text 使用 exact=True 导致 substring match 失败
+
+- 日期：2026-05-07
+- 状态：fixed (`dba307c`)
+- 来源：E2E 回归测试
+- 描述：`_find_in_ancestor` 使用 `get_by_text(child_text, exact=True)`，DOM 中价格文本有前后空格/格式差异导致不匹配。
+- 处理：改回 `exact=False`（子串匹配），添加 try/catch 防止异常吞没。
+- 验证：33 个语义单元测试通过
+
+### BUG-064 | preflight 将所有 target 标记为 low confidence 导致 VLM 抢占
+
+- 日期：2026-05-06
+- 状态：fixed（通过 BUG-074 的流程重构规避）
+- 来源：E2E 回归测试
+- 描述：preflight 在已探索元素中找不到精确匹配 → 几乎所有步骤标记为 `locator_confidence="low"` → VLM 抢占语义定位链。
+- 处理：通过 BUG-074 的执行流程重构绕过（语义链优先、VLM 兜底）。
+- 验证：Exec 102+ 证实语义定位链在 VLM 之前执行
+
+### BUG-057 | click_with_precheck 对 hidden 元素超时不触发恢复链
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：Session 15 E2E 测试
+- 描述：点击 modal 中 "Continue Shopping" 时，Playwright 报 `resolved to hidden`，但 `_is_interception_error` 只匹配 `"intercepts pointer events"`，5 策略恢复链完全被跳过。
+- 处理：新增 `_HIDDEN_ELEMENT_PATTERN` 匹配 `"resolved to hidden"`，直接走 `_try_force`。
+- 验证：471 单元测试通过
+
+### BUG-053 | VLM bbox 坐标在 DOM 选择器提取失败时被丢弃
+
+- 日期：2026-04-25
+- 状态：fixed
+- 来源：BUG-054 根因分析
+- 描述：VLM 返回准确 bbox 坐标，但 `_build_locator_from_ai_point()` DOM 选择器提取失败时，整个 `AILocateResult` 被丢弃。Playwright 原生支持 `page.mouse.click(x,y)` 但从未使用。
+- 处理：`ResolvedLocator` 新增 `click_coordinates` 字段；新增 `_try_coordinate_click_fallback()` Tier 2.5 回退。
+- 验证：Exec 69/70 全部通过
+
+### BUG-050 | AI DSL 生成定位策略不匹配 DOM 结构
+
+- 日期：2026-04-23
+- 状态：fixed
+- 来源：白盒测试（Automation Exercise）
+- 描述：AI 生成 `.productinfo text='View Product'` 链式选择器，但 `.productinfo` 和 "View Product" 是兄弟关系非父子，匹配 0 元素。
+- 处理：五重修复——链式选择器解析 + prompt 禁止无效复合格式 + target_strategy 字段 + error_message 改 Text + DOM 证据注入。
+- 验证：7/7 链式选择器测试通过
+
+### BUG-049 | 语义定位器不支持标签名开头的复合 CSS 选择器
+
+- 日期：2026-04-21
+- 状态：fixed
+- 来源：白盒测试（The Internet Login Page）
+- 描述：`_resolve_explicit_locator` 只识别以 `css=`、`#`、`.` 等开头的目标，`button[type='submit']` 以字母开头落入文本匹配。
+- 处理：新增 `_COMPOUND_CSS_RE` 启发式正则识别 `tag[attr]`、`tag.class`、`tag > child` 等复合模式。
+- 验证：6 passed
+
+### BUG-046 | 语义定位器缺少 element_id 和 case-insensitive 匹配策略
+
+- 日期：2026-04-17
+- 状态：fixed
+- 来源：集成测试自测
+- 描述：无法定位以 HTML id 属性命名的目标（如 "flash"），`get_by_label("username", exact=True)` 无法匹配 "Username"。
+- 处理：新增 `element_id` 策略（优先级 100）+ `label_fuzzy`/`placeholder_fuzzy`/`text_fuzzy`/`button_role_fuzzy` 四个非精确匹配策略。
+- 验证：6 passed
+
+### Bug #1 | AIPlanningSession UnboundLocalError in explore_flow
+
+- 日期：2026-05-16
+- 状态：fixed
+- 来源：E2E 测试
+- 描述：`explore_flow` 工具调用时报 `cannot access local variable 'AIPlanningSession'`。import 被放在条件块内，当 `base_url` 已通过 params 提供时被跳过。
+- 处理：将 import 移到条件块之前。
+- 关联记录：execution-log.md 2026-05-16
+
+---
+
+## C. 页面探索与数据采集
+
+explore_page / explore_flow、DOM/A11y 元素采集、缓存、数据压缩等页面数据获取链路问题。
+
+### BUG-060 | AI planning 中间层三大架构断层
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：架构排查 / BUG-059 延伸
+- 描述：三个架构断层：
+  1. `explore_flow` 仍是 URL 级探索——不会在页面间执行点击/输入/等待动作
+  2. 页面知识是扁平 `page_elements` 文本——无页面状态标记
+  3. DSL 生成后无 locator preflight——定位器验证全部推迟到执行期
+- 处理（Phase 1-3 全套升级）：
+  - Phase 1：`collect_flow_elements(steps)` 支持动作式探索
+  - Phase 2：`page_state_id` 页面状态标记 + DSL step `page_state` 字段
+  - Phase 3：`locator_preflight.py` 静态校验 DSL targets 与已采集元素的匹配度
+- 验证：485 单元测试全部通过
+
+### BUG-059 | AI planning 中间层仍是 URL 级探索而非 flow 驱动探索
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：架构排查
+- 描述：`_auto_explore_entry_url()` 只按入口页链接顺序抓取前 4 个链接，逻辑与 `core_user_flow` 无绑定。
+- 处理：`_extract_internal_links()` 升级为 flow 驱动——按 URL 路径与关键词匹配度评分排序，优先探索流程相关页面。
+- 验证：471 全部通过；含 login 流程时 /login 从位置 3 提升至位置 1
+
+### BUG-067 | explore_flow 相对 URL 未解析导致页面探索失败
+
+- 日期：2026-05-07
+- 状态：fixed (`f53807d`)
+- 来源：E2E 回归测试
+- 描述：AI 传入相对 URL（`/products`, `/brand_products/Polo`），`collect_multi_page_elements` 未解析，Playwright `page.goto("/products")` 失败 → 返回空元素。
+- 处理：用 `urljoin` 将相对 URL 解析为绝对 URL。
+- 验证：S152 page_elements 从 81 字符增长到 157KB
+
+### BUG-068 | 页面探索压缩子代理丢弃登录表单元素
+
+- 日期：2026-05-06
+- 状态：fixed (`081c49e`)
+- 来源：E2E 回归测试
+- 描述：`_filter_elements_for_compression` 硬编码取前 100 个元素，登录表单字段可能在第 100+ 位置被截断。子代理 prompt 对表单强调不足，压缩结果 `forms: []` 为空。
+- 处理：改为优先保留交互元素（input/button/select/textarea/a），非交互元素限制 80 个；重写 prompt 强制 JSON 结构。
+- 验证：65 个单元测试通过
+
+### Bug #2 | explore_page networkidle 超时导致异常
+
+- 日期：2026-05-16
+- 状态：fixed
+- 来源：E2E 测试
+- 描述：`explore_page` 在 automationexercise.com 上反复超时 `Timeout 30000ms exceeded`。部分网站持续发送跟踪请求，networkidle 永远达不到。
+- 处理：用 try-except 包装 `wait_for_load_state("networkidle")`。
+- 关联记录：execution-log.md 2026-05-16
+
+### Bug #A（2026-05-25）| single-segment 路径下 a11y_nodes 数据丢失
+
+> 详见 [A. DSL 生成与归一化](#bug-a--single-segment-路径下-a11y_nodes-数据丢失)，该 bug 同时影响页面探索数据传递链路。
+
+---
+
+## D. AI 决策与提示词
+
+ReAct 循环决策、提示词遵循、工具调用去重、AI 输出质量问题。
+
+### Bug #C | agent 重复调用工具浪费安全帽轮次
+
+- 日期：2026-05-25
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：agent 在 5 轮内调用 `create_project` ×2（轮 2&3）、`explore_flow` ×2（轮 4&5），耗尽 5 轮安全帽 → fallback plan → flow_steps 为空。
+- 根因：ReAct loop 对工具调用无去重判断。
+- 处理：
+  - 新增 `_tool_call_signature(tool_name, params)` 生成调用签名
+  - 工具执行前比对已有签名，命中重复时：yield 重复事件 + 注入警告系统消息 + `round_index -= 1` 不扣 round
+- 关联记录：execution-log.md 2026-05-25
+
+### BUG-085（2026-05-10）| DeepSeek thinking 模式 + 高温导致 AI 不遵循提示词
+
+> 详见 [A. DSL 生成与归一化](#bug-085--deepseek-thinking-模式--高温导致-ai-不遵循提示词指令)，该 bug 同时影响 AI 决策层。
+
+### BUG-081 | DSL 草案间质量剧烈波动 — 相同 prompt 产出 42 步和缺登录的 30 步
+
+- 日期：2026-05-07
+- 状态：fixed
+- 来源：E2E 回归测试
+- 描述：相同 draft_prompt（2069 chars），S155 产出 42 步完整草案，S162 产出缺少登录导航的 30 步草案。根因是 DSL 生成模型的随机性。
+- 处理：(1) 系统提示词加入【流程-页面导航映射】规则；(2) 草案生成后一致性检查。
+- 验证：Draft 89 包含完整 click "Signup / Login" 导航
+
+### BUG-069 | 系统提示词引导 AI 在信息充足时仍使用 ask_user 询问确认
+
+- 日期：2026-05-06
+- 状态：fixed (`13016a6`)
+- 来源：E2E 回归测试
+- 描述：系统提示词第 91 行：当收集到 4+ 项信息时，通过 ask_user 询问"信息是否足够"。AI 第一轮动作为 ask_user 而非 explore_page。
+- 处理：修改规则为"信息充足时直接 generate_plan，不用 ask_user"。
+- 验证：Session 139 AI 第一轮动作为 call_tool（get_project_info），不再问废话
+
+### BUG-066 | AI 不遵循 explore_flow 提示词，跳过页面探索直接生成方案
+
+- 日期：2026-05-12
+- 状态：fixed
+- 来源：E2E 测试
+- 描述：DSL 草案基于不完整的页面数据生成，缺少步骤、target 泛化。
+- 根因：`_build_link_selection_message` 中有"如果信息足够，也可以直接 generate_plan"逃逸口；安全网消息误导 LLM。
+- 处理：删除逃逸口；安全网消息改为"静态页面已采集，交互页面仍需 explore_flow"。
+- 验证：AI 不再跳过探索
+
+### BUG-066（2026-05-07）| AI 的 core_user_flow 被序列化为 Python list repr
+
+- 日期：2026-05-07
+- 状态：fixed (`23e3bc9`)
+- 来源：E2E 回归测试
+- 描述：AI 以 list 形式返回 `core_user_flow`，`_merge_requirements` 调用 `str(incoming)` 转成 Python repr 字符串 `"['打开首页...', '点击 Products...']"`。DSL prompt 收到畸形流程描述，质量极差。
+- 处理：对 core_user_flow 和所有 list 字段统一 join 为编号列表。
+- 验证：S146 draft 72 43 步（修复后） vs S145 draft 70 17 步（修复前）
+
+### BUG-065（2026-05-12）| explore_flow 相对 URL 被解析为 example.com
+
+- 日期：2026-05-12
+- 状态：fixed
+- 来源：E2E 测试
+- 描述：`page_explorer.py:1594` 硬编码 `base_url or "https://example.com/"` 兜底；`planning_tools.py` explore_flow 工具定义缺少 `base_url` 参数。
+- 处理：移除硬编码默认值；explore_flow 工具定义添加 `base_url` 参数；base_url 提取逻辑重构到函数开头共享。
+- 验证：542/544 单元测试通过
+
+### BUG-054 | AI 忽略用户描述的弹层交互步骤，用导航栏元素替代弹层元素
+
+- 日期：2026-04-25
+- 状态：fixed
+- 来源：Session 52 E2E 测试
+- 描述：用户明确写了"在弹层中点击 View Cart"，但 AI 使用导航栏 "Cart"。点击 "Add to cart" 后弹层遮挡了导航栏 "Cart"，导致 click 超时。
+- 根因：(1) 静态 explore_flow 无法采集动态弹层元素；(2) AI 未严格遵循用户描述。
+- 处理：三重修复——`_discover_interactive_elements()` 捕获弹层元素 + Prompt 追加动态交互规则 + `[dynamic]` 标记。
+- 验证：Session 53 Draft 26/27 正确使用 "View Cart"；Exec 69/70 各 13/13 全部通过
+
+---
+
+## E. SSE 流式与前端
+
+SSE 流式输出、会话管理、前端渲染、WebSocket 通信等前后端交互问题。
+
+### BUG-063 | DeepSeek thinking 模式下 SSE 流式输出空白 + 会话消失
+
+- 日期：2026-05-04（含 2026-05-05 追加修复）
+- 状态：fixed
+- 来源：线上反馈
+- 描述：使用 `deepseek-v4-flash` 模型时，SSE 流式输出直接空白——思考阶段前端完全看不到任何文本内容。刷新后会话消失。
+- 根因（多层）：
+  1. `reasoning_content` 只在内存累积、仅发节流 status 消息，不产出 `text_chunk` 事件
+  2. `reasoning_text` 未归入 `raw_response`，content 为空时触发 `empty_response` 错误
+  3. `_call_planning_llm()` 非流式路径只提取 `message.content`，忽略 `reasoning_content`
+  4. `turn_complete` 后 `loadSessionDetail()` 用服务端数据替换 transcript，`_thinkingContent` 丢失
+  5. 历史消息加载后未清除 `_streaming: true` 标志
+- 处理：
+  - backend：每个 `reasoning` chunk 同步产出 `text_chunk` 事件（带 `thinking: true`）；content 为空时用 `reasoning_text` 兜底；非流式路径 fallback 到 `reasoning_content`
+  - frontend：`_thinkingContent` 存入独立字段 + 渲染可折叠 `<details>` "思考过程"区块；加载历史消息时清除 `_streaming` 标志；`turn_complete` 后保留 `_thinkingContent`
+- 验证：29 planning agent 单测 + 11 API 测试通过；TypeScript 编译无错误
+- 关联记录：execution-log.md 2026-05-04、2026-05-05
+
+### BUG-058 | AI Test Planning 面板切换会话后仍把项目操作发送到初始 session
+
+- 日期：2026-05-03
+- 状态：fixed
+- 来源：架构排查
+- 描述：`AITestPlanningPanel` 内部根据选择切换 `sessionId` 状态，但渲染 `SessionProjectPanel` 时仍传入初始 `sessionIdProp`。切换 session 后项目操作仍落到旧 session。
+- 处理：`AITestPlanningPanel.tsx:621` 将 `sessionId={sessionIdProp}` 改为 `sessionId={sessionId ?? 0}`。
+- 验证：TypeScript 类型检查通过；切换 session 后请求使用当前 session id
+
+### BUG-044 | AI Planning 面板缓存失效会话时不会回退创建新会话
+
+- 日期：2026-04-12
+- 状态：fixed
+- 来源：需求实现 / 静态检查
+- 描述：`localStorage.ai_planning_last_session` 指向已删除 session 时，恢复失败后不会自动创建新会话，页面卡在无活跃 session 状态。
+- 处理：引入 `loadSessionDetail()` / `createAndSelectSession()` helper，恢复失败时清理缓存并自动创建。
+- 验证：前后端测试通过
+
+### BUG-042 | AI 测试规划面板初始化首条消息可能丢失
+
+- 日期：2026-03-30
+- 状态：fixed
+- 来源：自测
+- 描述：session 尚未创建完成前允许点击"发送消息"，首条输入被忽略；`.gitignore` 中 `tests/` 规则导致新测试文件默认未跟踪。
+- 处理：发送按钮增加 `isBootstrapping`/`sessionId`/空输入约束；`.gitignore` 新增白名单。
+- 验证：前后端测试通过
+
+---
+
+## F. 执行引擎
+
+Playwright runner、变量替换、步骤证据采集、点击预处理等执行层问题。
+
+### Bug #3 | capture_text 步骤的 value 在报告中始终为 null
+
+- 日期：2026-05-16
+- 状态：fixed
+- 来源：E2E 测试
+- 描述：`capture_text` 成功执行但报告中 `value` 字段始终为 `null`。捕获的文本存到了 `runtime_context` 但 `StepExecutionEvidence.value` 读取的是 `getattr(step, "value", None)`。
+- 处理：引入 `step_value` 局部变量，capture_text 分支更新为实际捕获值。修复覆盖 4 个代码路径。
+- 关联记录：execution-log.md 2026-05-16
+
+### BUG-079 | 购物车测试数据污染 — 前序测试遗留商品导致数量断言失败
+
+- 日期：2026-05-07
+- 状态：verified (Exec 107 42/42=100%)
+- 来源：E2E 回归测试
+- 描述：Exec 106 Step 27 `assert_text '1' value='${cart_a_quantity}'` 失败。capture 抓到数量 31（前序测试累积），断言期望 1。定位器本身工作正常。
+- 根因：测试间缺少购物车清理步骤。
+- 处理：(1) 测试开始前清空购物车；(2) AI 不应硬编码数量值，应 capture 后做一致性比较。
+- 验证：用户手动清空购物车后 Exec 107 42/42=100%
+
+### BUG-057（2026-05-03）| click_with_precheck 对 hidden 元素超时不触发恢复链
+
+> 详见 [B. 定位器系统](#bug-057--click_with_precheck-对-hidden-元素超时不触发恢复链)，该 bug 同时影响执行引擎的点击预处理。
+
+### BUG-053（2026-04-25）| VLM bbox 坐标在 DOM 选择器提取失败时被丢弃
+
+> 详见 [B. 定位器系统](#bug-053--vlm-bbox-坐标在-dom-选择器提取失败时被丢弃)，该 bug 同时影响执行引擎的坐标点击回退。
+
+### BUG-051 | input_contract 变量占位符在执行时未被替换
+
+- 日期：2026-04-24
+- 状态：fixed
+- 来源：BUG-050 修复验证
+- 描述：AI 生成的 DSL 包含 `${login_email}`、`${search_keyword}` 等变量占位符，save-and-execute 时未替换为实际值。`${search_keyword}` 被直接作为字符串输入到搜索框。
+- 根因：变量替换功能完全未实现——runner 直接使用 `step.value` 原始字符串。
+- 处理：`playwright_runner.py` 新增 `_substitute_variables` 函数；`CaseExecutionRequest` 增加 `input_values` 字段；4 处 step.value 使用处全部替换。
+- 验证：303 单元测试全部通过
+
+### BUG-047 | playwright_runner _capture_request_failed 对 request.failure 返回格式处理错误
+
+- 日期：2026-04-17
+- 状态：fixed (d73558e)
+- 来源：集成测试执行日志
+- 描述：新版 Playwright 的 `request.failure` 返回类型为 `str` 而非 `dict`，`failure.get("errorText")` 抛出 `AttributeError`。
+- 处理：改为 `isinstance(failure, str)` 兼容两种类型。
+- 验证：集成测试不再报 AttributeError
+
+---
+
+## G. 配置与基础设施
+
+API 合同同步、权限校验、网络重试、数据库配置等基础设施层面的问题。
+
+### Bug #B（2026-05-25）| LLM 调用无重试 + 网络错误消息误导
+
+> 详见 [A. DSL 生成与归一化](#bug-b--llm-调用无重试--网络错误消息误导)，该 bug 同时影响基础设施层面的网络健壮性。
+
+### BUG-045（2026-04-13）| AI planning "保存并执行草案"链路被 DSL 生成配置阻断
+
+> 详见 [A. DSL 生成与归一化](#bug-045--ai-planning-保存并执行草案链路被-dsl-生成配置阻断)，该 bug 同时涉及配置问题（`AI_DSL_BASE_URL` 指向错误端点）。
+
+### BUG-043 | 新增 AI planning 配置字段后，settings API 更新合同未同步
+
+- 日期：2026-04-03
+- 状态：fixed
+- 来源：任务实现 / 回归测试
+- 描述：新增 `enable_ai_planning` 等 planning 字段后，`AISettingsUpdateRequest` 已要求必填，但旧测试和前端仍用旧 payload，触发 422。
+- 处理：补齐后端测试中的 planning 字段；前端 `AISettings`/`AISettingsPage` 一并纳入。
+- 验证：前后端测试通过
+
+### BUG-041 | 最新 CRUD 提交存在权限绕过、统计接口运行时失败与删除路径不闭合
+
+- 日期：2026-03-30
+- 状态：fixed (082ae22)
+- 来源：代码评审 / commit 7eb71ae
+- 描述：4 类问题——(1) 任意已登录用户能读取/更新/删除其他项目用例（权限绕过）；(2) `GET /stats/{project_id}` 缺少必填字段导致 500；(3) 有 test_cases 的项目删除时触发 RESTRICT 约束；(4) 历史接口响应合同变化但测试未更新。
+- 处理：补齐项目成员权限校验、修正 stats 返回结构、处理外键约束下的项目删除语义、更新测试断言。
+- 验证：全量测试通过
+
+---
 
 ## 模板
 
@@ -23,938 +646,8 @@
   1. 步骤一
   2. 步骤二
 - 影响：功能、页面、模块或用户范围
-- 根因：如果尚未定位，写“待定位”
+- 根因：如果尚未定位，写"待定位"
 - 处理：修复动作或计划
-- 验证：已执行的验证；如果没有写“未验证”
+- 验证：已执行的验证；如果没有写"未验证"
 - 关联记录：执行日志日期或链接
 ```
-
-
-
-
-## BUG-085 | DeepSeek thinking 模式 + 高温导致 AI 不遵循提示词指令
-
-- 日期：2026-05-10
-- 状态：fixed
-- 来源：BUG 日志聚合分析
-- 描述：综合分析 BUG-081（相同 prompt 产出 42 步 vs 30 步质量剧烈波动）、BUG-069（AI 信息充足时仍用 ask_user）、BUG-065（capture 后不 assert）、BUG-054（忽略用户描述的弹层交互步骤）等高频问题，根因指向两点：(1) thinking 模式对指令遵循有负面影响——模型在思考阶段产生的推理可能偏离系统提示词约束；(2) DeepSeek API 默认 temperature=1.0 过高，导致 DSL 生成和 planning 输出随机性太大。
-- 处理：
-  1. 在 dsl_generator.py、test_planning_agent.py、judge_agent.py 中移除 `_should_enable_thinking_mode` 对 DeepSeek 的判定（仅保留 GLM），DeepSeek 模型不再启用 thinking mode
-  2. 查阅 DeepSeek 官方文档和社区最佳实践：结构化 JSON 输出推荐 temperature=0.0-0.2，确定性任务推荐 0.0，对话+工具调用推荐 0.1-0.2
-  3. 按场景设置 temperature：
-     - DSL generator (JSON 输出): 0.0（从 1.0 降下 / 从默认 1.0 降下）
-     - DSL flash LLM: 0.0（从 0.3 降下）
-     - Planning agent (对话+工具): 0.1
-     - Judge agent (JSON 裁决): 0.0
-- 验证：542/544 单元测试通过（2 个预存失败与改动无关），test_call_llm_uses_openai_json_payload 已更新适配新 temperature 字段
-
-## BUG-084 | text_parent_chain 在品牌页第二个产品上回退到 VLM
-
-- 日期：2026-05-07
-- 状态：fixed ()
-- 来源：E2E 回归测试
-- 描述：Exec 118 Step 15 "Blue Top 附近的 Add to cart" 用 text_parent_chain 成功，但 Step 21 "Fancy Green Top 附近的 Add to cart" 回退到 ai_coordinate_click。`_find_in_ancestor` 始终使用 `.first` 获取第一个匹配的父文本元素，品牌页有两个产品时第二个匹配不到。
-- 根因：`_find_in_ancestor` 和 `_resolve_text_parent_chain` 始终用 `.first`，不尝试其他 nth 候选
-- 处理：`_find_in_ancestor` 和 `_resolve_text_parent_chain` 均改为迭代 `.nth(0..4)` 多个候选，找到第一个成功匹配的返回
-- 验证：33/33 语义单元测试通过
-
-## BUG-083 | AI 将 assert_text 的 ${var} 放在 target 而非 value 导致断言被删除
-
-- 日期：2026-05-07
-- 状态：fixed (7958d3b, 未验证)
-- 来源：E2E 回归测试
-- 描述：AI 生成 assert_text target='${product_a_name}' value=''，Pydantic min_length=1 拒绝空 value → 8 个断言步骤被归一化器删除 → Exec 118 30/30 通过但 0 个断言实际执行。归一化器已添加自动修复（检测 target 为 ${var} 且 value 为空时将 target 复制到 value），prompt 也添加了格式规则。
-- 根因：AI 模型混淆 assert_text 的 target（元素定位器）和 value（期望值）字段
-- 处理：1) prompt 添加"target 是页面文本，value 是 ${var}"规则 2) 归一化器自动补全
-- 验证：未验证（需新 session 生成 draft 确认）
-
-## BUG-082 | capture_page_session 定位器使用简化版 resolver 导致登录态不稳定
-
-- 日期：2026-05-07
-- 状态：fixed ()
-- 来源：E2E 回归测试
-- 描述：capture_browser_session 使用简化版 _resolve_step_locator（只尝试少量候选 + count()>0 即返回），导致 Email placeholder 匹配到 3 个元素 → strict mode 失败 → 登录 session 无法保存 → explore_flow 数据减半（73K vs 157K）→ 草案质量波动。
-- 根因：_resolve_step_locator 没有使用完整的定位器链路（semantic → a11y → VLM fallback）
-- 处理：改为直接调用 resolve_with_fallback（与 runner 相同链路）；添加页载等待 + 元素 tag 验证 + 2 次重试
-- 验证：S161 capture_page_session 成功，page_elements 从 73K → 1.28MB
-
-## BUG-081 | DSL 草案间质量剧烈波动 — 相同 prompt 产出 42 步和缺登录的 30 步
-
-- 日期：2026-05-07
-- 状态：fixed (, , , )
-- 来源：E2E 回归测试
-- 描述：相同 draft_prompt（2069 chars），S155 产出 42 步完整草案，S162 产出缺少登录导航的 30 步草案（goto / 后直接 input Email Address）。根本原因是 DSL 生成模型的随机性。
-- 处理：1) 系统提示词加入【流程-页面导航映射】规则；2) 草案生成后一致性检查——prompt 提到登录页必须有导航步骤，goto / 后不能直接 input
-- 验证：Draft 89 包含完整 click "Signup / Login" 导航
-
-## BUG-080 | assert_text 的 target 字段中的运行时变量未被替换
-
-- 日期：2026-05-07
-- 状态：fixed ()
-- 来源：E2E 回归测试
-- 描述：assert_text target="${cart_a_total}" 中的 ${cart_a_total} 未被 _substitute_variables 替换 → 定位器按字面量去找文本 → 永远找不到 → 走 VLM 兜底 → 定位到错误元素。
-- 根因：_substitute_variables 只对 step.value 调用，未对 step.target 调用
-- 处理：在所有 runner 和 helper 函数中，将 step.target 在使用前统一替换为 _substitute_variables(step.target, _vars()) or step.target
-- 验证：543/544 单元测试通过
-
-## BUG-079 | 购物车测试数据污染 — 已确认定位器无问题，数据污染导致 [verified: Exec 107 100%] — 前序测试遗留商品导致数量断言失败
-
-- 日期：2026-05-07
-- 状态：verified (Exec 107 42/42=100%)
-- 来源：E2E 回归测试
-- 描述：Exec 106 Step 27 `assert_text '1' value='${cart_a_quantity}'` 失败。capture 抓到的数量是 31（前序测试累积），但断言期望 1。定位器本身工作正常——`button_role` 正确找到了 `<button>1</button>`，`css` 正确抓到了 `<button>31</button>`。根因是账号购物车未清空。
-- 复现步骤：
-  1. 多次执行 brand_filter_cart 测试
-  2. 购物车中 Blue Top 数量累积到 31
-  3. 新测试假设初始数量=1，实际=31
-- 影响：购物车数量相关的 assert_text 不可靠
-- 根因：测试间缺少购物车清理步骤
-- 处理：1) 测试开始前清空购物车 2) AI 不应硬编码数量值，应 capture 后做一致性比较
-- 验证：用户手动清空购物车后重新执行，Exec 107 42/42=100% 全部通过
-- 关联记录：execution-log.md 2026-05-07 第 26-27 步骤分析，Exec 106
-
-## BUG-078 | DSL 归一化器删除了合法的 click/wait_for/capture_text 步骤
-
-- 日期：2026-05-07
-- 状态：fixed (`ecbbb3a`)
-- 来源：E2E 回归测试
-- 描述：AI 生成的合法步骤（如 `click "Login"`, `click "Products"`, `click "(6) POLO"`, `click "Add to cart"`）被归一化器删除。根因是 AI 给 click/wait_for/capture_text 步骤添加了 `"value": null` 字段，但这些步骤模型没有 `value` 属性，Pydantic `extra_forbidden` 拒绝。
-- 复现步骤：
-  1. AI 生成 DSL，步骤中包含 `"action": "click", "target": "Login", "value": null`
-  2. 归一化器 `_repair_step_shape` 处理字段别名
-  3. `_STEP_ADAPTER.validate_python` 因 `value` 为 extra field 而失败
-  4. 步骤被静默删除，warnings 显示"校验失败"
-- 影响：导致关键导航步骤缺失，测试执行卡死在错误页面
-- 根因：`_repair_step_shape` 未剥离 click/wait_for/capture_text 步骤的 spurious `value` 字段
-- 处理：在 `_repair_step_shape` 末尾，对 click/wait_for/capture_text 类型步骤移除 `value` 键
-- 验证：58 个 DSL 单元测试通过，Exec 106 证实 0 步骤被删
-- 关联记录：Draft 80 8 步骤被删，Draft 81 0 步骤被删
-
-## BUG-077 | DSL 归一化器删除了合法的 goto/assert_url_contains 步骤
-
-- 日期：2026-05-07
-- 状态：fixed (`8d05871`)
-- 来源：E2E 回归测试
-- 描述：AI 给 goto 和 assert_url_contains 步骤添加了 `candidates: []` 和 `postconditions: []` 字段，但 GotoStep 和 AssertUrlContainsStep 模型没有这些字段，Pydantic `extra_forbidden` 拒绝。实际影响：仅 goto 和 assert_url_contains 步骤受影响，其他步骤（click/input/wait_for/capture_text/assert_text）有这些字段。
-- 复现步骤：
-  1. AI 生成 `{"action": "goto", "value": "/", "candidates": [], "postconditions": []}`
-  2. Pydantic 验证报 `extra_forbidden` 错误
-  3. goto 步骤被丢弃 → 归一化器自动补充一个默认 goto "/"
-- 影响：原始 goto 步骤被替换，可能导致导航 URL 不正确
-- 根因：AI 给所有步骤统一加了 candidates/postconditions 空数组
-- 处理：在 `_repair_step_shape` 中对 goto/assert_url_contains 剥离 candidates/postconditions
-- 验证：58 个 DSL 单元测试通过
-- 关联记录：Draft 76-80 均有"步骤 #1 校验失败（action=goto）"警告
-
-## BUG-076 | DSL target 文本中的中文字符被 PostgreSQL JSON 序列化损坏
-
-- 日期：2026-05-07
-- 状态：fixed (`aaa3f18`)
-- 来源：E2E 回归测试
-- 描述：DSL 步骤 target 字段中的"附近的"被序列化为 `\udc84`（lone low surrogate），导致 `text_parent_chain` 定位器的 split regex 无法匹配。所有含中文的 target 均受影响（6 个步骤）。
-- 复现步骤：
-  1. AI 生成 target="Blue Top 附近的 Rs. 500"
-  2. DSL JSON 经 PostgreSQL JSONB 列存储
-  3. 读取时"的"字符被损坏为 `\udc84` surrogate
-  4. `_PARENT_SPLIT_RE` regex 无法匹配损坏文本
-  5. `_resolve_text_parent_chain` 返回 None → 候选被跳过
-- 影响：text_parent_chain 定位器对所有含"附近的"的 target 完全失效，回退到 VLM/coordinate click
-- 根因：PostgreSQL JSON 序列化过程中 Unicode BMP 字符被错误编码为 surrogate pair
-- 处理：在 DSL 归一化入口处检测并修复 surrogate 字符（`encode('utf-8', 'surrogatepass').decode('utf-8', 'replace')`）
-- 验证：Draft 81 证实 surrogate_targets=0
-- 关联记录：Exec 103-104 的 Step 10/16/22 均为 surrogate 损坏
-
-## BUG-075 | 元素视觉分组的 group label 太粗糙
-
-- 日期：2026-05-07
-- 状态：fixed ()
-- 来源：E2E 回归测试
-- 描述：`_group_label` 的 if-elif 链太刚性，价格检测只匹配 `Rs.|₹|$|€|£` 格式遗漏纯数字价格，部分分组只有 1-2 个元素被隔离为独立组时 label 无意义。
-- 处理：
-  1. 价格检测增强：新增纯数字价格正则（`\d{1,3}(,\d{3})*(\.\d{2})`）
-  2. 新增块类型：搜索栏、登录表单、筛选面板（3+ checkbox/radio）、产品区域、输入区、交互区、链接区、按钮区
-  3. 渐进阈值回退：当前 10 级精确匹配 → 4 级宽泛匹配，避免直接落到"区域"
-  4. 命名增强：新增 aria_label 作为第三层 fallback
-  5. 结构摘要增加 checkbox 计数
-- 验证：542/544 单元测试通过
-
-## BUG-074 | text_parent_chain 定位器未在 runner 候选列表中被优先尝试
-
-- 日期：2026-05-07
-- 状态：fixed (`6922bc8`)
-- 来源：E2E 回归测试
-- 描述：执行层原始流程 `_resolve_with_confidence_gate` 在 `locator_confidence="low"` 时先调 VLM preverify，跳过了包含 `text_parent_chain` 的语义候选链。导致 VLM 频繁抢占、429 限频、找到错误元素。
-- 复现步骤：
-  1. preflight 将几乎所有步骤标记为 low confidence
-  2. `_resolve_with_confidence_gate` 检测到 low → 直接调 `preverify_with_vlm`
-  3. VLM 找到错误坐标 → 点击错误元素 → 后续步骤失败
-- 影响：VLM 抢占导致"Continuing Shopping"弹窗从未出现，多个执行在 Step 12/14 失败
-- 根因：VLM preverify 不应跳过语义定位链
-- 处理：重构为统一流程——语义优先（含 text_parent_chain）、VLM 仅作最后兜底。同时添加 2.5 分钟步骤超时防止无限挂起。
-- 验证：Exec 102+ 证实 `text_parent_chain` 在候选列表中排在第一位
-- 关联记录：Exec 94-101 反复出现"Continue Shopping"定位失败
-
-## BUG-073 | text_parent_chain 的正则表达式无法匹配含空格的父文本
-
-- 日期：2026-05-07
-- 状态：fixed (`aabea6a`)
-- 来源：E2E 回归测试
-- 描述：`_PARENT_TEXT_RE` 使用 `[^>\\s>{2,60}?`（惰性匹配 + 排除空格），导致"Blue Top 附近的 Add to cart"无法匹配——"Blue Top"含空格，`[^>\\s]` 排除了空格字符。
-- 复现步骤：
-  1. target = "Blue Top 附近的 Add to cart"
-  2. regex `[A-Za-z][^>\\s]{1,60}?` 匹配 "Bl" 后就停止（惰性匹配 + 空格排除）
-  3. 后续"附近的"分隔符匹配失败
-- 影响：`_resolve_text_parent_chain` 返回 None，text_parent_chain 定位器从未生效
-- 根因：1) 惰性量词 `{1,60}?` 使匹配过短 2) `[^>\\s]` 错误排除了空格
-- 处理：改用 split 方式——`_PARENT_SPLIT_RE` 直接在 `>>`/`的`/`附近的` 处分隔，不再依赖复杂正则
-- 验证：33 个语义单元测试通过，Exec 102 Step 11 证实 `text_parent_chain` 成功匹配
-- 关联记录：Exec 96-100 Step 11 均为 VLM 而非 text_parent_chain
-
-## BUG-072 | text_parent_chain 使用硬编码 XPath ancestor 无法适配不同页面结构
-
-- 日期：2026-05-07
-- 状态：fixed (`892889e`)
-- 来源：E2E 回归测试
-- 描述：`_find_in_ancestor` 最初使用 `xpath=ancestor::*[contains(@class,'product')]` 硬编码 class 名。购物车页面使用 `<table>` 结构，没有 'product' class → 返回 0 元素 → 候选被跳过。
-- 复现步骤：
-  1. 执行购物车页的 assert_text "Blue Top 附近的 Rs. 500"
-  2. `_find_in_ancestor` 用 XPath ancestor 查找含 'product' class 的祖先
-  3. 购物车 `<tr>` 不含此 class → 无匹配
-- 影响：购物车页所有 text_parent_chain 定位器失效
-- 根因：XPath 硬编码了特定网站的 class 名
-- 处理：改为自适应深度遍历——从 parent_text 元素出发，逐层 `..` 向上（depth 2-8），每层尝试 `get_by_text(child_text)`，选最浅匹配。无网站/页面依赖。
-- 验证：33 个语义单元测试通过，手动验证购物车页 depth=3(<tr>) 可找到 "Rs. 500"
-- 关联记录：Exec 103-104 Step 22 失败
-
-## BUG-071 | text_parent_chain 的 child_text 使用 exact=True 导致 substring match 失败
-
-- 日期：2026-05-07
-- 状态：fixed (`dba307c`)
-- 来源：E2E 回归测试
-- 描述：`_find_in_ancestor` 使用 `get_by_text(child_text, exact=True)` 进行精确匹配，但实际 DOM 中价格文本可能有前后空格/格式差异，导致"Rs. 500"精确匹配失败。
-- 影响：品牌筛选页的价格 capture 和购物车页的价格 assertion 均失败
-- 根因：`exact=True` 要求文本完全相等，DOM 文本格式化变化（空格、嵌套元素）导致不匹配
-- 处理：改回 `exact=False`（子串匹配），并在 ancestor 遍历中添加 try/catch 防止异常吞没
-- 验证：33 个语义单元测试通过
-- 关联记录：Exec 103-104 Step 10 价格 capture 失败
-
-## BUG-070 | DSL generator thinking mode 下 reasoning_content 空响应
-
-- 日期：2026-05-06
-- 状态：fixed (`9f67995`)
-- 来源：E2E 回归测试
-- 描述：DSL generator 使用 DeepSeek thinking mode 时，模型返回 `reasoning_content` 但 `content` 为空。`_extract_message_content` 只读 `content` 字段，忽略了 `reasoning_content` → 返回空字符串 → JSON 解析失败 → 草案状态 failed。
-- 影响：所有 DSL 草案生成失败（"AI 返回了无法解析的 DSL JSON"）
-- 根因：`_extract_message_content` 缺少对 `reasoning_content` 的 fallback（与 BUG-063 同模式但在 DSL generator 中）
-- 处理：在 content 为空时 fallback 到 `reasoning_content`
-- 验证：Draft 62 生成成功（33 步）
-- 关联记录：session 132 draft 61 失败
-
-## BUG-069 | 系统提示词引导 AI 在信息充足时仍使用 ask_user 询问确认
-
-- 日期：2026-05-06
-- 状态：fixed (`13016a6`)
-- 来源：E2E 回归测试
-- 描述：系统提示词第 91 行：当收集到 4+ 项信息时，通过 ask_user 询问"信息是否足够"。这导致 AI 第一轮动作为 ask_user 而非 explore_page/explore_flow。即使用户提供了完整的 core_user_flow，AI 仍然先问"要生成方案吗"。
-- 影响：AI 不探索页面就直接进入收集状态，无页面数据就生成 DSL
-- 根因：提示词明确鼓励 AI 在信息充足时使用 ask_user 确认
-- 处理：修改规则为"信息充足时直接 generate_plan，不用 ask_user"
-- 验证：Session 139 AI 第一轮动作为 call_tool（get_project_info），不再问废话
-- 关联记录：session 138 AI 第一轮 ask_user
-
-## BUG-068 | 页面探索压缩子代理丢弃登录表单元素
-
-- 日期：2026-05-06
-- 状态：fixed (`081c49e`)
-- 来源：E2E 回归测试
-- 描述：`run_compression_subagent` 的 `_filter_elements_for_compression` 硬编码取前 100 个元素。登录表单字段（data-qa="login-email" 等）可能在第 100+ 位置被截断。子代理 prompt 对表单强调不足，压缩结果 `forms: []` 为空。
-- 影响：AI 探索登录页后收到的压缩数据只有 3 个 key_elements（全是 footer 元素），没有登录表单信息
-- 根因：1) `_filter_elements_for_compression` 截取前 100 个元素 2) 子代理 prompt 未强调必须保留表单字段
-- 处理：改为优先保留交互元素（input/button/select/textarea/a），非交互元素限制 80 个；重写 prompt 为强制 JSON 结构 + 9 条绝对规则
-- 验证：65 个单元测试通过
-- 关联记录：session 140 AI 报告"未能获取登录表单元素"
-
-## BUG-067 | explore_flow 相对 URL 未解析导致页面探索失败
-
-- 日期：2026-05-07
-- 状态：fixed (`f53807d`)
-- 来源：E2E 回归测试
-- 描述：AI 调用 explore_flow 时传入相对 URL（`/products`, `/brand_products/Polo`, `/view_cart`），但 `collect_multi_page_elements` 未解析相对 URL，Playwright 的 `page.goto("/products")` 失败 → 返回空元素。
-- 影响：品牌筛选页和购物车页的探索数据为空（81 字符 vs 157KB）
-- 根因：`collect_multi_page_elements` 缺少 base_url 拼接逻辑
-- 处理：用 `urljoin` 将相对 URL 解析为绝对 URL
-- 验证：S152 page_elements 从 81 字符增长到 157KB
-- 关联记录：session 151 页面探索数据仅 81 字符
-
-## BUG-066 | AI 的 core_user_flow 被序列化为 Python list repr
-
-- 日期：2026-05-07
-- 状态：fixed (`23e3bc9`)
-- 来源：E2E 回归测试
-- 描述：AI 在 `collected_info` 中以 list 形式返回 `core_user_flow`（如 `["打开首页...", "点击 Products..."]`）。`_merge_requirements` 对非 main_assertions 字段直接调用 `str(incoming)`，将 list 转成了 Python repr 字符串 `"['打开首页...', '点击 Products...']"`。DSL prompt 收到这个畸形的流程描述，生成的 DSL 质量极差（17 步 vs 33 步）。
-- 影响：draft 质量随机波动（取决于 AI 是否用 list 格式返回 core_user_flow）
-- 根因：`_merge_requirements` 只对 main_assertions 做了 list→string 特殊处理
-- 处理：对 core_user_flow 和所有 list 字段统一处理——join 为编号列表
-- 验证：S146 draft 72 43 步（修复后） vs S145 draft 70 17 步（修复前）
-- 关联记录：session 144 good vs 145 bad core_user_flow 格式对比
-
-## BUG-065 | DSL prompt 未要求 capture_text 后必须跟 assert_text
-
-- 日期：2026-05-06
-- 状态：fixed (`a631041`, `c5e4411`)
-- 来源：E2E 回归测试
-- 描述：AI 生成的 DSL 有 5 个 capture_text 但 0 个 assert_text。capture 只是提取数据不做验证，测试实际上没有检查任何预期结果。用户指出"测试用例肯定要断言，不断言怎么知道对不对？"
-- 影响：测试表面上全部通过（23/23）但实际上核心断言完全缺失
-- 根因：DSL prompt 只说明了 capture_text 的用法，未强制要求 capture 后必须 assert
-- 处理：在系统 prompt 和用户规则中增加"capture 必须 assert"规则；新增"modify→input→assert"规则确保修改操作有前置 input 步骤
-- 验证：Draft 69 有 10 个 assert_text（vs Draft 66 的 0 个）
-- 关联记录：Exec 95 23/23 passed 但 0 assert_text
-
-## BUG-064 | preflight 将所有 target 标记为 low confidence 导致 VLM 抢占
-
-- 日期：2026-05-06
-- 状态：fixed（通过 BUG-074 的流程重构规避）
-- 来源：E2E 回归测试
-- 描述：preflight 在已探索元素中找不到 target 文本的精确匹配 → 几乎所有步骤被标记为 `locator_confidence="low"` → 执行层 `_resolve_with_confidence_gate` 为 low 目标直接调用 VLM → VLM 抢占语义定位链。
-- 影响：语义定位器（包括 text_parent_chain）从未有执行机会
-- 根因：preflight 的 confidence 机制与执行层的 VLM 优先逻辑联动缺陷
-- 处理：通过 BUG-074 的执行流程重构绕过（语义链优先、VLM 兜底），preflight confidence 不再影响定位器优先级
-- 验证：Exec 102+ 证实语义定位链在 VLM 之前执行
-- 关联记录：Exec 94-101
-
-- 日期：2026-05-04
-- 状态：fixed（2026-05-05 追加修复）
-- 来源：线上反馈
-- 描述：使用 `deepseek-v4-flash` 模型进行 AI planning 对话时，SSE 流式输出直接空白——没有思考标注（如"正在深度推理分析需求..."的实时更新），没有思考内容输出，前端在模型思考阶段完全看不到任何文本内容
-- 复现步骤：
-  1. 配置 `AI_PLANNING_MODEL=deepseek-v4-flash`、`AI_PLANNING_BASE_URL=https://api.deepseek.com`
-  2. 在 AI Planning 面板中发送测试需求
-  3. 观察 SSE 流式输出 — 模型思考阶段前端空白，偶尔出现一次 status tag
-  4. 刷新页面 — 会话消失，需要返回 AI 测试规划列表重新选择项目再进入才能展示消息
-- 影响：所有使用 DeepSeek（或启用了 thinking mode 的模型）的 AI planning 会话
-- 根因：
-  - `backend/app/ai/test_planning_agent.py` `_stream_planning_llm()` L769-776：`reasoning_content` 被接收后在内存累积（`reasoning_text.append(reasoning)`），仅按 ~200 字符节流发送 `status` 事件（"正在深度推理分析需求..."），**不产出 `text_chunk` 事件**。模型思考阶段前端收不到任何文本内容
-  - `reasoning_text` 在函数结束前也未归入 `raw_response`，完全丢弃
-  - 前端 `handleStreamEvent` 无思考内容的独立展示逻辑（即便收到也无法分隔呈现）
-  - （追加）`reasoning_text` 未作为 `raw_response` 兜底：若模型仅产出 `reasoning_content` 而无 `content`，`raw_response` 为空 → 触发 `empty_response` 错误 → 前端 OPTIMISTIC 消息 content 为空 → 空白展示
-  - （追加）`_call_planning_llm()` 非流式路径只提取 `message.content`，完全忽略 `message.reasoning_content`
-  - （追加）`turn_complete` 后 `loadSessionDetail()` 用服务端数据替换 transcript，导致流式阶段累积的 `_thinkingContent` 丢失
-  - （追加）历史消息加载后未清除 `_streaming: true` 标志
-- 处理：
-  - backend：`_stream_planning_llm()` 中每个 `reasoning` chunk 同步产出 `text_chunk` 事件（带 `thinking: true` 标记），保留节流 `status` 事件用于 phase label 更新
-  - frontend types：`TextChunkStreamEvent` 新增 `thinking?: boolean` 可选字段
-  - frontend handler：`thinking: true` 的 text_chunk 存入 `_thinkingContent` 字段（与 `content` 分开），不污染正式回复内容
-  - frontend render：`_thinkingContent` 存在时渲染可折叠 `<details>` "思考过程"区块（最大高度 200px、overflow-y 滚动）
-  - （2026-05-05 追加）
-    - backend `_stream_planning_llm()`：`content` 为空时使用 `reasoning_text` 作为 `raw_response` 兜底，避免空响应触发 `empty_response` 错误
-    - backend `_extract_message_content()`：`content` 为空时回退提取 `reasoning_content`，非流式路径获得同样保护
-    - frontend `applySessionDetail()`：加载历史消息时检查并清除 `_streaming: true` 标志，防止刷新后残留的流式状态
-    - frontend `handleStreamEvent` `turn_complete`：`loadSessionDetail()` 后保留流式阶段累积的 `_thinkingContent`，不因服务端重载丢失思考内容
-- 验证：
-  - backend：29 planning agent 单元测试 + 11 AI planning API 测试通过，505/506 全单元测试通过（1 预存失败与修改无关）
-  - frontend：TypeScript 编译无错误
-- 关联记录：`docs/execution-log.md` 2026-05-04、2026-05-05
-
-## BUG-060 | AI planning 中间层三大架构断层：动作式探索、页面状态图、定位器预校验
-
-- 日期：2026-05-03
-- 状态：fixed
-- 来源：架构排查 / BUG-059 延伸
-- 描述：BUG-059 的 link-aware ReAct 修复解决了"页面选择"问题，但也暴露了中间层更深的三个架构断层：
-  1. `explore_flow` 仍是 URL 级探索——只接受 URL 列表做 `page.goto()`，不会在页面间执行点击/输入/等待动作，无法覆盖登录后页面、弹窗后状态、动态导航等场景
-  2. 页面知识是扁平的 `page_elements` 文本——所有页面元素拼接成一个字符串，无页面状态标记，LLM 需自行推断哪个元素属于哪个页面
-  3. DSL 生成后无 locator preflight——定位器验证全部推迟到执行期，生成阶段不检查 target 是否唯一、可见、可操作
-- 影响：所有依赖跨页面、含登录、含动态交互的测试场景；定位器质量无法在规划阶段暴露；用户看到草案时不知道哪些 step 定位器有问题
-- 根因：
-  - `backend/app/ai/planning_tools.py` 的 `_handle_explore_flow` 只调用 `collect_multi_page_elements(urls)`，不支持 `steps` 格式的动作式探索
-  - `backend/app/ai/page_explorer.py` 无 `collect_flow_elements` 函数；`collect_multi_page_elements` 只做 `page.goto()` + DOM 抓取，不做动作交互
-  - `backend/app/services/ai_planning.py` DSL 生成后直接返回，无 preflight 步骤
-  - `backend/app/schemas/dsl.py` 各 step 无 `page_state` 字段
-- 处理（Phase 1-3 全套升级）：
-  - **Phase 1: 动作式 explore_flow** — `page_explorer.py` 新增 `collect_flow_elements(steps)` 函数，支持 `{url, description, actions: [{action, target, value}]}` 格式，在页面间执行 click/input/wait_for 动作后采集 DOM；`planning_tools.py` 的 `_handle_explore_flow` 支持 `steps` 参数（保留 `urls` 向后兼容）；工具定义更新
-  - **Phase 2: 页面状态标记** — `collect_flow_elements` 为每个不同 URL 分配 `page_state_id`（S0, S1, ...），每个元素记录 `page_state`；新增 `build_flow_formatted_output` 使用 `=== 页面状态 S{n}: {url} ===` 格式化输出；`dsl.py` 的 ClickStep/InputStep/WaitForStep/AssertTextStep/CaptureTextStep 新增 `page_state` 字段；`dsl_generator.py` prompt 新增页面状态归属指令
-  - **Phase 3: Locator preflight** — 新建 `backend/app/ai/locator_preflight.py`，`preflight_locators()` 静态校验 DSL targets 与已采集元素的匹配度（显式选择器匹配 + 语义文本匹配），计算 per-step confidence（high/medium/low）；`ai_planning.py` 的 `generate_planning_drafts` 在 DSL 生成后自动调用 `apply_preflight_to_dsl`，将 confidence 回写到各 step，warnings 并入 draft
-- 验证：485 单元测试全部通过；`_classify_target` 正确区分 7 种 target 类型；preflight 正确评估唯一/歧义/无匹配三种场景
-- 关联记录：`docs/execution-log.md` 2026-05-03（企业级中间层升级）
-
-## BUG-059 | AI planning 中间层仍是 URL 级探索而非 flow 驱动探索，导致登录链路与跨页规划失真
-
-- 日期：2026-05-03
-- 状态：fixed
-- 来源：架构排查 / 用户问题分析
-- 复现步骤：
-  1. 在 AI planning 中仅提供 `entry_url_or_page: https://automationexercise.com/`、核心流程与少量测试数据
-  2. 触发自动探索与 DSL 草案生成
-  3. 观察自动探索只按入口页链接顺序抓取页面，而不是按 `core_user_flow` 优先推进登录或业务关键路径
-  4. 当后续页面依赖点击进入、登录态或动态导航时，草案会停留在模糊 target 或错误页面假设上
-- 影响：所有需要“从入口页逐步探索到目标页面”的规划任务，包括登录、加入购物车、订单流、跳转式表单、多页面断言等；定位器质量和草案完整性都会受影响
-- 根因：
-  - `backend/app/ai/test_planning_agent.py` 中 `_auto_explore_entry_url()` 只会把入口页和 `_extract_internal_links()` 抽到的前 4 个链接送入探索，逻辑与 `core_user_flow` 无绑定
-  - `backend/app/ai/planning_tools.py` 的 `explore_flow` 入参仍是 `urls`，而不是动作序列或状态转移计划
-  - `backend/app/services/ai_planning.py` 把 `page_elements` 作为 DSL 生成输入，但没有在生成前后做浏览器侧 locator preflight
-	- 处理：
-	  - _extract_internal_links() 升级为 flow 驱动：接收 core_user_flow 参数，提取中/英文流程关键词（登录/login、购物车/cart、搜索/search 等），按 URL 路径与关键词匹配度评分排序，优先探索流程相关页面而非盲取 DOM 顺序前 4 个链接
-	  - explore_flow 工具新增 flow_description 可选参数，让 AI 可以描述页面间的导航意图（如"首页→登录→商品搜索→购物车"），帮助探索器理解页面上下文
-	  - _auto_explore_entry_url() 将 core_user_flow 传递给链接提取，使自动探索优先覆盖用户描述的关键路径页面
-	- 验证：
-	  - 代码检查：backend/app/ai/test_planning_agent.py:944、:1017；backend/app/ai/planning_tools.py:653、:993
-	  - 单元测试：471 全部通过
-	  - 功能验证：无 core_user_flow 时链接按 DOM 顺序返回；含 login 流程时 /login 从位置 3 提升至位置 1
-- 关联记录：`docs/execution-log.md` 2026-05-03（AI planning 中间层排查）
-
-## BUG-058 | AI Test Planning 面板切换会话后仍把项目操作发送到初始 session，导致探索工具看似未生效
-
-- 日期：2026-05-03
-- 状态：fixed
-- 来源：架构排查 / 用户问题分析
-- 描述：`AITestPlanningPanel` 内部会根据当前选择切换 `sessionId` 状态，但渲染 `SessionProjectPanel` 时仍传入初始 `sessionIdProp`。结果是用户切换到新 planning session 后，项目创建、关联、查询仍落到旧 session；当前 session 可能没有 project，后端工具网关会拒绝 `explore_page`、`explore_flow`、`capture_page_session`，表现为 AI “不会主动调用工具”或“调用了也没探索”。
-- 复现步骤：
-  1. 打开 AI Test Planning 面板并创建或切换到另一个 session
-  2. 在项目区域创建或关联项目
-  3. 继续在当前 session 里生成 draft 或触发探索
-  4. 观察项目实际被绑定到旧 session，当前 session 仍可能显示或落入“无 project”状态，探索工具不可用
-- 影响：planning 阶段的自动页面探索、会话态采集、flow 探索都会被隐藏前置条件拦截，用户容易误以为问题来自 prompt 或 DOM 工具能力，实际是 session/project 绑定链路失真
-- 根因：
-  - `frontend/src/components/AITestPlanningPanel.tsx:183` 使用实时 `sessionId` 状态管理当前会话
-  - 但 `frontend/src/components/AITestPlanningPanel.tsx:621` 传给 `SessionProjectPanel` 的仍是静态 `sessionIdProp`
-  - `frontend/src/components/SessionProjectPanel.tsx:28`、`:42`、`:68` 的查询/创建/关联请求全部依赖这个错误的 `sessionId`
-- 处理：`AITestPlanningPanel.tsx:621` 将 `sessionId={sessionIdProp}` 改为 `sessionId={sessionId ?? 0}`，使 `SessionProjectPanel` 始终使用当前状态中的会话 ID 而非初始 prop
-- 验证：
-  - 代码检查：`frontend/src/components/AITestPlanningPanel.tsx:621`
-  - TypeScript 类型检查通过
-  - 切换 session 后创建/关联项目的请求会使用当前 session id
-- 关联记录：`docs/execution-log.md` 2026-05-03（AI planning 中间层排查）
-
-## BUG-057 | click_with_precheck 对 hidden 元素超时不触发恢复链，force click 被跳过
-
-- 日期：2026-05-03
-- 状态：fixed
-- 来源：Session 15 E2E 测试 — Automation Exercise 品牌筛选购物车，Step 点击 "Continue Shopping"
-- 描述：点击 modal 中的 "Continue Shopping" 时，Playwright 报告 `Locator.wait_for: Timeout 5000ms exceeded. 15 × locator resolved to hidden`。元素在 DOM 中存在但 CSS display/visibility 使其处于 hidden 状态（Bootstrap modal 动画期间），`locator.click()` 等待 5s 后超时。但 `_is_interception_error` 只匹配 `"intercepts pointer events"`，不匹配 `"resolved to hidden"`，导致整个 5 策略恢复链（wait→dismiss→avoid→force→remove）完全被跳过，force click 没机会执行。
-- 复现步骤：
-  1. 执行 Automation Exercise 品牌筛选购物车测试用例
-  2. 点击 "Add to cart" 后 modal 弹出
-  3. 尝试点击 modal 中 "Continue Shopping" 按钮
-  4. 元素存在但 Playwright 判定为 hidden，等待 5s 超时
-  5. 错误类型不匹配 `INTERCEPT_PATTERN`，恢复链不触发，直接失败
-- 影响：所有因 CSS animation/transition 期间元素 visibility 判定为 hidden 的点击场景（Bootstrap modal 弹出、fade-in 动画、tab 切换等）
-- 根因：`_is_interception_error` 的设计范围只覆盖了"元素被其他元素遮挡"的场景，未覆盖"元素自身 hidden（CSS 动画过渡期）"的场景。前者是需要清除遮挡物，后者只需要 force click 绕过可见性检查
-- 处理：在 `click_with_precheck` 中新增 `_HIDDEN_ELEMENT_PATTERN` 正则匹配 `"resolved to hidden"`，检测到 hidden 元素超时时直接走 `_try_force`（`force=True` + JS `el.click()` 兜底），不进入完整的 interception 恢复链（dismiss/remove 策略对 hidden 元素有害）
-- 验证：471 单元测试通过；点击预处理相关测试通过
-- 关联记录：execution-log 2026-05-03
-
-## BUG-056 | DSL draft prompt 超 50000 字符导致 Pydantic 校验失败
-
-- 日期：2026-05-03
-- 状态：fixed
-- 来源：Session 15 E2E 测试 — 生成 DSL 草案时 `1 validation error for GenerateDslRequest prompt String should have at most 50000 characters`
-- 描述：`_build_draft_prompt` 将完整的 `page_elements`（格式化 DOM 元素清单，可达 80000+ 字符）直接嵌入 `draft_prompt` 字符串中。该 `draft_prompt` 作为 `GenerateDslRequest.prompt` 传入 Pydantic 校验，触发 `max_length=50000` 限制。实际上 `page_elements` 已通过 `GenerateDslRequest.page_elements` 单独字段传递，DSL 生成器在 `_build_user_prompt_lines` 中单独注入——嵌入到 `prompt` 里是完全冗余的。
-- 复现步骤：
-  1. AI 规划会话中 `explore_page`/`explore_flow` 采集了 300+ 页面元素
-  2. `_build_draft_prompt` 将 80K+ 字符的元素清单拼入 draft_prompt
-  3. 生成 DSL 草案时 `GenerateDslRequest(prompt=draft_prompt)` 校验失败
-  4. 所有 1 个草案均生成失败
-- 影响：所有页面元素较多（>200 个可交互元素）的测试场景都无法生成 DSL 草案
-- 根因：`page_elements` 数据在两个渠道重复传递——嵌入 `prompt` 字段 + 独立 `page_elements` 字段。嵌入 `prompt` 是历史遗留（`page_elements` 字段是后来加的），未做清理
-- 处理：`_build_draft_prompt` 中将嵌入式 DOM section 替换为简短提示"页面可交互元素清单已通过 page_elements 字段单独提供"，实际数据仍通过 `GenerateDslRequest.page_elements` 传递
-- 验证：471 单元测试通过
-- 关联记录：execution-log 2026-05-03
-
-## BUG-055 | create_project 成功后 project_id 局部变量未更新，同一 turn 内后续工具调用被拦截
-
-- 日期：2026-05-03
-- 状态：fixed
-- 来源：Session 15 E2E 测试 — 无项目→创建会话→AI 调用 create_project→后续 explore_page/capture_page_session 全部失败
-- 描述：当会话无关联项目时，`project_id=0` 传入 `stream_planning_turn`。AI 调用 `create_project` 成功后，DB 中项目已创建且会话已关联，但内存中 `project_id` 局部变量从未被更新，仍为 0。同一 turn 内 AI 再调用 `explore_page`/`capture_page_session`/`explore_flow` 时，`execute_tool` 检查 `not project_id` 为 True，返回 `"当前会话未关联项目"`。虽然每个新 turn 开始时 `ai_planning.py` 会从 DB 重新读取 `project_ids`，但同一 turn 内 AI 必须先建项目才能探索页面的流程完全不可用。
-- 复现步骤：
-  1. 新建项目、创建会话（无项目关联）
-  2. 发送测试需求
-  3. AI 在 ReAct 循环中调用 `create_project` → 成功，返回 `{"id": N, "auto_linked_to_session": true}`
-  4. AI 继续调用 `explore_page` → `execute_tool` 检查 `project_id==0` → 返回错误
-  5. 或 AI 调用 `generate_plan` → `_auto_explore_entry_url` 使用 `project_id=0` → 探索全部被拦截
-- 影响：无项目时创建会话的完整 AI 规划流程完全不可用——AI 必须分两个 turn 才能完成"先建项目→再探索页面"的基本操作
-- 根因：`stream_planning_turn` 中 `project_id` 是局部变量，在 `create_project` 工具调用成功后未从返回结果中提取新 ID 更新
-- 处理：在 ReAct 循环 `call_tool` 分支中，`create_project` 成功后从 `parsed_result["id"]` 提取新项目 ID 并更新局部 `project_id`；同时更新 `_extract_exploration_error` 检测 `"info"` 类型响应（no-project 消息）作为错误
-- 验证：471 单元测试通过；79 个 planning 相关测试通过
-- 关联记录：execution-log 2026-05-03
-
-## BUG-054 | AI 忽略用户描述的弹层交互步骤，用导航栏元素替代弹层元素
-
-- 日期：2026-04-25
-- 状态：fixed
-- 来源：Session 52 端到端链路测试 — Exec 67 Step 12 失败
-- 描述：用户需求明确写了「在弹层中点击 View Cart，跳转购物车页」，但 AI 生成的 DSL 使用导航栏 "Cart" 而非弹层 "View Cart"。点击 "Add to cart" 后出现确认弹层遮挡了导航栏 "Cart"，导致 click 超时失败。Exec 67 login_error 场景 11/12 通过，仅 Step 12 失败。
-- 复现步骤：
-  1. Session 52，Draft 25 login_error 场景
-  2. Step 10 click "Add to cart" → 弹层出现
-  3. Step 11 wait_for "Cart" → passed（导航栏 Cart 可见）
-  4. Step 12 click "Cart" → 超时，弹层遮挡了导航栏 Cart
-- 影响：所有涉及动态弹层交互的测试场景（如加购确认弹层、删除确认弹层等）
-- 根因：(1) 静态 explore_flow 无法采集点击后弹出的动态元素，AI 在 DOM 中只看到导航栏 "Cart"；(2) AI 未严格遵循用户描述的弹层交互流程
-- 处理：三重修复：(1) 新增 `_discover_interactive_elements()` 点击关键按钮捕获弹层元素；(2) Prompt 追加动态交互规则强制 AI 保留用户描述的弹层步骤；(3) `format_elements_for_prompt` 添加 `[dynamic]` 标记区分动态元素
-- 验证：Session 53 Draft 26/27 正确使用 "View Cart"；Exec 69/70 各 13/13 全部通过
-- 关联记录：execution-log 2026-04-25
-
-## BUG-053 | VLM bbox 坐标在 DOM 选择器提取失败时被丢弃
-
-- 日期：2026-04-25
-- 状态：fixed
-- 来源：BUG-054 根因分析 — VLM 能看到弹层元素但无法点击
-- 描述：VLM 视觉定位返回了准确的 bbox 坐标 `(center_x, center_y)`，但 `_build_locator_from_ai_point()` 将坐标转为 DOM 选择器时失败（弹层元素无法通过 `document.elementsFromPoint` 正确解析），此时整个 `AILocateResult` 被丢弃，系统直接抛出 `InterventionNeededError`。Playwright 原生支持 `page.mouse.click(x, y)` 坐标点击但从未使用。
-- 复现步骤：
-  1. 执行含弹层交互的用例
-  2. Tier 1 语义定位失败
-  3. Tier 2 VLM 返回有效 bbox
-  4. `_build_locator_from_ai_point` DOM 快照提取失败 → 返回 None
-  5. bbox 坐标丢失 → 抛出 InterventionNeededError
-- 影响：所有 VLM 能看到但 DOM 无法正确解析的元素（弹层、shadow DOM、iframe 内容等）都无法自动定位
-- 根因：fallback 链缺少 bbox → 坐标点击的回退路径
-- 处理：(1) `ResolvedLocator` 新增 `click_coordinates` 字段；(2) 新增 `_try_coordinate_click_fallback()` Tier 2.5 回退；(3) Runner click/input 步骤支持 `page.mouse.click(x,y)` + `page.keyboard.type()`
-- 验证：单元测试覆盖坐标回退、VLM None 回退、非法坐标过滤；端到端 Exec 69/70 全部通过
-- 关联记录：execution-log 2026-04-25
-
-## BUG-052 | AI DSL 生成在无 DOM 快照时仍猜测不存在的 CSS 选择器
-
-- 日期：2026-04-24
-- 状态：fixed
-- 来源：BUG-050 修复验证 — 端到端 AI Planning 全流程执行
-- 描述：AI Planning 会话 session_id=41 中，草案 Draft 17 的 Step 3 target 为 `#input-email`，但实际登录页面中 email 输入框无 id 属性（实际 placeholder="Email Address"）。AI 在没有通过 `explore_page` 获取 DOM 快照的情况下，仍然"猜测"了不存在的 `#input-email`。DOM 证据注入功能（BUG-050 修复）虽然已实现，但本次执行中 `page_elements` 为 null，说明 planning agent 未执行 `explore_page` 工具调用。
-- 复现步骤：
-  1. 创建 AI Planning 会话（session_id=41）
-  2. 发送 Automation Exercise 测试需求
-  3. AI 直接生成 plan（status=plan_ready），未调用 explore_page 工具
-  4. 生成 DSL 草案，Draft 17 使用 `#input-email`（不存在）
-  5. 执行失败，Step 3 所有定位层级无法匹配
-- 影响：AI 在未访问目标页面的情况下生成 DSL，选择器准确性依赖 AI 训练知识而非实际 DOM，与 BUG-050 修复目标（基于 DOM 证据生成选择器）矛盾
-- 根因：planning agent 的 ReAct 流程中，`explore_page` 调用是可选的而非强制的。当用户一次提供完整需求时，agent 直接跳到 plan 生成，未触发页面探索
-- 修复：在 ReAct 循环的 `generate_plan` 分支前插入强制检查——若无 explore_page/flow 调用则自动用 entry_url 触发 explore_page，结果注入 tool_calls 后 continue 让 LLM 基于真实 DOM 重新生成；同时新增 `explore_flow` 工具支持多页面探索 + VLM 页面布局注解
-- 验证：303 单元测试全部通过；待端到端链路测试验证
-- 关联记录：execution-log 2026-04-24 Session 2、BUG-050
-
-## BUG-051 | input_contract 变量占位符在执行时未被替换
-
-- 日期：2026-04-24
-- 状态：fixed
-- 来源：BUG-050 修复验证 — 端到端 AI Planning 全流程执行
-- 描述：AI Planning 生成的 DSL 草案包含 `input_contract`（如 `${login_email}`、`${login_password}`、`${search_keyword}`），但 save-and-execute 执行时，这些变量占位符未被替换为实际值。Execution 54 的 Step 8 URL 显示 `?search=${search_keyword}`，说明 `${search_keyword}` 被直接作为字符串输入到搜索框
-- 复现步骤：
-  1. AI Planning 生成包含 input_contract 的 DSL 草案
-  2. save-and-execute 执行草案
-  3. 查看执行结果，value 字段中的 `${context_key}` 占位符未被替换
-- 影响：所有使用 input_contract 变量的 DSL 用例都无法正确执行，输入的是占位符字符串而非实际测试数据
-- 根因：变量替换功能完全未实现——runner 直接使用 `step.value` 原始字符串，`CaseExecutionRequest` 无 `input_values` 参数，整条链路缺失
-- 修复：`playwright_runner.py` 新增 `_substitute_variables` 函数（正则 `\$\{([A-Za-z_][A-Za-z0-9_]*)\}` 替换），`CaseExecutionRequest` 增加 `input_values` 字段，runner 的 goto/input/assert_text/assert_url_contains 四处 step.value 使用处全部替换，`executions.py` 透传参数
-- 验证：303 单元测试全部通过；待端到端链路测试验证
-- 关联记录：execution-log 2026-04-24 Session 2
-
-## BUG-050 | AI DSL 生成定位策略不匹配 DOM 结构（选择器容器错误）
-
-- 日期：2026-04-23
-- 状态：fixed
-- 来源：白盒测试验证（Automation Exercise 场景）
-- 描述：AI 生成 DSL 时产出链式选择器 `.productinfo text='View Product'`，但实际 DOM 结构中 `.productinfo` 内部不包含 "View Product" 文本——二者是兄弟关系（`.product-image-wrapper > (.productinfo + a[text=View Product])`），导致链式定位 `page.locator(".productinfo").get_by_text("View Product")` 匹配 0 个元素。类似地，`button:has-text('Add to cart')` 和 `u:has-text('View Cart')` 等非标准复合选择器也会导致定位失败。本质是 AI 在没有 DOM 快照的情况下"猜测"选择器，CSS 容器和内部文本的对应关系容易出错。
-- 复现步骤：
-  1. 通过 AI Planning 会话描述"测试 automationexercise.com 登录到购物车流程"
-  2. AI 生成 DSL 草案，Case 9 Step 8 target 为 `.productinfo text='View Product'`
-  3. 执行用例，Step 8 定位器返回 0 candidates，触发 needs_intervention
-  4. 手动验证 `page.locator('.productinfo').get_by_text('View Product').count() == 0`，而 `page.locator('.product-image-wrapper').get_by_text('View Product').count() == 14`
-- 影响：AI 生成的旧 DSL 用例（Case 8/9）执行失败，需要人工干预或重新生成
-- 根因：AI 无 DOM 快照时凭语义猜测 CSS 容器与文本的包含关系，容易选错父级容器。同时定位器系统此前不支持链式选择器解析（BUG-049 的延伸），即使 DOM 正确也无法处理 `.class text=value` 格式
-- 处理：五重修复：
-  1. **定位器侧**（`semantic.py`）：新增 `_resolve_chained_selector` 函数，解析 `.class text=value`、`.class >> text=value` 等 Playwright 链式选择器格式为 `page.locator(css).get_by_text(value)`，策略 `chained_css_text` 评分 110
-  2. **Prompt 侧**（`dsl_generator.py`）：v2026-04-22.target-strategy-v1 prompt 禁止生成无效复合格式，引导 AI 使用语义文本（如直接写 `View Product`）或带 `target_strategy` 字段的显式定位
-  3. **Schema 侧**（`dsl.py`）：新增 `target_strategy` 字段允许显式声明定位策略
-  4. **数据库侧**：`test_case_runs.error_message` 从 VARCHAR(2000) 改为 Text，解决长错误信息存储溢出
-  5. **DOM 证据注入**：将 planning agent 的 `explore_page` DOM 数据传递到 DSL 生成 prompt（`_extract_page_elements → _build_draft_prompt → GenerateDslRequest → dsl_generator`），AI 基于 DOM 元素清单生成 target，不再猜测
-  6. **target_strategy 偏好提示**：`resolve_semantic_locator` 将 `target_strategy` 从锁死改为偏好提示，hint 失败后 fallback 到全量语义扫描
-- 验证：
-  - 单元测试 `test_locator_semantic.py::TestChainedSelector` 7/7 passed
-  - Playwright 实际验证：`.productinfo >> text=Add to cart` → 14 matches，`.product-image-wrapper >> text=View Product` → 14 matches
-  - 旧 Case 9 执行：链式选择器解析正确（正则匹配成功，构建了正确的 Playwright 链式调用），但 DOM 结构不符导致 0 candidates——属 AI DSL 策略错误而非解析器 bug
-- 关联记录：execution-log 2026-04-23
-
-## BUG-048 | AI DSL 规划阶段完整性校验缺失
-
-- 日期：2026-04-21
-- 状态：fixed
-- 来源：白盒测试执行（The Internet Login Page 场景）
-- 描述：AI 生成 DSL 时遗漏 goto 步骤，将 base_url 设为完整登录页 URL 但不生成 goto 步骤，导致执行器在 about:blank 上操作。根因是规划阶段缺少完整性校验，AI 不知道"入口"在哪。
-- 复现步骤：
-  1. 通过 AI Planning 会话描述"测试 The Internet 登录页"
-  2. AI 生成草案，base_url 设为完整登录 URL，steps 中无 goto 步骤
-  3. 执行 DSL 用例，所有步骤在 about:blank 上失败
-- 影响：AI 生成的 DSL 可能缺少关键导航步骤，用户需要手动补齐
-- 根因：Prompt 未引导 AI 评估测试完整性（前置条件、入口、步骤、预期），后处理不检查逻辑完整性
-- 处理：已修复。(1) Prompt 增加测试五要素完整性引导和 base_url 规范说明（`_BASE_USER_RULE_LINES`）；(2) 后处理新增 `_check_dsl_completeness` 函数，检测 base_url 含页面路径或无 goto 步骤时发出 warning/normalization_note，不阻断生成，保持灵活性
-- 验证：`cd backend && uv run pytest tests/unit/test_dsl_validation.py::TestDslCompletenessCheck -v`，5 passed
-- 关联记录：execution-log 2026-04-21
-
-## BUG-049 | 语义定位器不支持标签名开头的复合 CSS 选择器
-
-- 日期：2026-04-21
-- 状态：fixed
-- 来源：白盒测试执行（The Internet Login Page 场景）
-- 描述：语义定位器 `_resolve_explicit_locator` 只识别以 `css=`、`xpath=`、`//`、`#`、`.`、`[`、`data-testid=` 开头的目标，复合 CSS 选择器如 `button[type='submit']` 以字母开头落入文本匹配，永远无法定位。
-- 复现步骤：
-  1. 创建 DSL 用例，click 步骤 target 设为 `button[type='submit']` 或 `form button`
-  2. 执行用例，定位器将 target 当作文本匹配，无法找到元素
-- 影响：标签名开头的复合 CSS 选择器无法工作，影响 AI 生成和手动编写 DSL
-- 根因：设计限制，显式 CSS 简写仅覆盖 `#`、`.`、`[` 三种
-- 处理：已修复，双重保底。(1) 定位器侧：`_resolve_explicit_locator` 新增 `_COMPOUND_CSS_RE` 启发式正则（`^[a-zA-Z][a-zA-Z0-9]*[\.\#\[\s\>:,~\+]`），识别 `tag[attr]`、`tag.class`、`tag > child`、`tag child` 等复合模式；`_build_candidate_builders` 在已有 explicit locator 时跳过 element_id 策略；(2) AI Prompt 侧：`_BASE_USER_RULE_LINES` 增加复合 CSS 选择器使用指引
-- 验证：`cd backend && uv run pytest tests/unit/test_locator_semantic.py::TestCompoundCssSelector -v`，6 passed
-- 关联记录：execution-log 2026-04-21
-
-## BUG-046 | 语义定位器缺少 element_id 和 case-insensitive 匹配策略
-
-- 日期：2026-04-17
-- 状态：fixed
-- 来源：集成测试自测
-- 描述：语义定位器（`semantic.py`）无法定位以 HTML id 属性命名的目标（如 “flash”），且 `get_by_label(“username”, exact=True)` 无法匹配大小写不同的标签文本 “Username”，导致 the-internet 登录流程全部步骤失败（status=needs_intervention）
-- 复现步骤：
-  1. 创建包含 `{“action”: “input”, “target”: “username”}` 或 `{“action”: “assert_text”, “target”: “flash”}` 的 DSL 用例
-  2. 执行该用例
-  3. 定位器抛出 `LocatorResolutionError(“No locator candidates matched target.”)` 或 `InterventionNeededError`
-- 影响：所有使用小写目标描述或 HTML id 作为 target 的 DSL 用例均无法通过语义层定位
-- 根因：`_build_candidate_builders` 未尝试将裸目标字符串匹配为 `#id` CSS 选择器；所有 label/placeholder/text 策略均使用 `exact=True`，不支持大小写不敏感回退
-- 处理：新增 `element_id` 策略（`page.locator(f”#{target}”)`，优先级 100）；新增 `label_fuzzy`、`placeholder_fuzzy`、`text_fuzzy`、`button_role_fuzzy` 四个非精确匹配策略（优先级 45-60），在精确匹配失败后作为回退
-- 验证：`python -m pytest tests/integration/test_platform_api_chain.py -v`，6 passed
-- 关联记录：execution-log 2026-04-17 (Task 2)
-
-## BUG-047 | playwright_runner _capture_request_failed 对 request.failure 返回格式处理错误
-
-- 日期：2026-04-17
-- 状态：fixed
-- 来源：集成测试执行日志
-- 描述：Playwright `requestfailure` 事件回调中 `_capture_request_failed` 调用 `failure.get(“errorText”)`，但新版 Playwright 的 `request.failure` 返回类型为 `str` 而非 `dict`，导致每次网络请求失败时抛出 `AttributeError: 'str' object has no attribute 'get'`
-- 复现步骤：
-  1. 执行任何包含外部网络请求的用例（如 the-internet 登录）
-  2. 页面加载时部分请求失败（如 optimizely analytics）
-  3. 控制台输出 `AttributeError: 'str' object has no attribute 'get'` 堆栈
-- 影响：修复前导致失败请求的 `failure_text` 丢失，network_events 不完整；严重时可导致 browser.close 崩溃
-- 根因：Playwright 版本更新后 `request.failure` 从 `dict` 变为 `str`，代码未适配
-- 处理：已修复于 commit d73558e，改为 `isinstance(failure, str)` 兼容两种类型
-- 验证：集成测试不再报 AttributeError
-- 关联记录：execution-log 2026-04-17 (Task 2)
-
-## BUG-045 | AI planning”保存并执行草案”链路被 DSL 生成配置阻断，且当前实现不支持持久化执行进度/摘要
-
-- 日期：2026-04-13
-- 状态：in_progress
-- 来源：白盒排查 / 对话 `session_id=27`
-- 描述：AI planning 场景中，对话规划成功后进入 DSL 草案生成阶段，但 `session 27` 的唯一草案直接落为 `failed`，错误为 `Expecting value: line 1 column 1 (char 0)`，导致后续“保存并执行”无法真正创建用例或执行。白盒复现确认 `backend/.env` 中 `AI_DSL_BASE_URL=https://api.unself.cn`，而 `backend/app/ai/dsl_generator.py` 会拼接为 `https://api.unself.cn/chat/completions`；该地址当前返回 `200 text/html` 站点首页，而不是 OpenAI 兼容 JSON，因此 `json.loads(response.read().decode("utf-8"))` 在 `_call_llm()` 内直接抛出 `JSONDecodeError`。此外，即便 DSL 生成成功，当前实现也没有 SSE/流式执行接口，`generate_planning_drafts()` 与 `save_and_execute_selected_drafts()` 只返回即时响应，不把生成结果、执行阶段或执行摘要持久化到 `ai_planning_messages`，刷新后无法从会话详情恢复这些信息。
-- 复现步骤：
-  1. 使用当前 `.env` 配置触发 AI planning 生成草案
-  2. 查看 PostgreSQL 中 `ai_planning_drafts`，观察 `session_id=27` 的草案状态为 `failed`，错误为 `Expecting value: line 1 column 1 (char 0)`
-  3. 查看 `test_cases` / `test_case_runs`，观察没有对应新增记录
-  4. 按当前配置向 `POST https://api.unself.cn/chat/completions` 发起最小请求，观察响应为 `200 text/html`，正文为站点首页 HTML
-  5. 检查 `backend/app/services/ai_planning.py`，观察 draft 生成与 save-and-execute 都没有写入 `AIPlanningMessage`，也不存在流式推送接口
-- 影响：当前产品承诺的“勾选保存并执行后自动创建用例、在对话框流式展示执行过程、输出简洁报告并附详细链接”在现状下不能成立；一旦 DSL 生成配置错误，用户只会停留在失败草案状态，且错误信息不会以完整执行报告方式呈现
-- 根因：
-  - 配置层：`AI_DSL_BASE_URL` 指向站点根路径而非 OpenAI 兼容 API 根路径
-  - 健壮性层：`_call_llm()` 未校验 `Content-Type` 和非 JSON 响应，`JSONDecodeError` 会在持久化失败记录前直接冒泡
-  - 产品实现层：planning 会话消息模型未覆盖“draft generation result / execution progress / execution summary”，前端也没有消费 SSE 的链路
-- 建议处理：
-  - 先修正 `AI_DSL_BASE_URL`，并为 `_call_llm()` 增加状态码、`Content-Type`、响应体截断日志与统一 `DslGenerationError` 包装
-  - 在 `generate_planning_drafts()` / `save_and_execute_selected_drafts()` 中持久化 assistant message，至少保存草案生成结果和 execution summary
-  - 如要满足预期体验，再补充后端执行事件流接口与前端流式订阅/展示
-- 处理进展：
-  - 已修正本地 `AI_DSL_BASE_URL` 为 `/v1` 接口根路径
-  - 已为 `_call_llm()` 增加非 JSON/HTML 响应防御，避免再次直接抛原始 `JSONDecodeError`
-  - 已将 draft 生成结果、save result、execution summary 持久化到 `ai_planning_messages`，并让前端保存/执行后回读会话详情
-  - 剩余未完成项：真正的执行中流式事件推送与逐步展示
-- 验证：
-  - PostgreSQL 实查 `ai_planning_sessions` / `ai_planning_messages` / `ai_planning_drafts` / `test_cases` / `test_case_runs`
-  - 最小 HTTP 复现 `POST https://api.unself.cn/chat/completions`
-  - 静态核对 `backend/.env`、`backend/app/ai/dsl_generator.py`、`backend/app/services/ai_planning.py`、`frontend/src/components/AITestPlanningPanel.tsx`
-
-## BUG-044 | AI Planning 面板缓存失效会话时不会回退创建新会话
-
-- 日期：2026-04-12
-- 状态：fixed
-- 来源：需求实现 / 静态检查
-- 描述：当 `localStorage.ai_planning_last_session` 指向一个已删除或不存在的 session 时，`AITestPlanningPanel` 初始化会先尝试恢复该 session；恢复失败后，因为当前逻辑仍通过“localStorage 是否存在 key”判断是否需要创建新会话，导致页面停留在无活跃 session 状态。
-- 复现步骤：
-  1. 在浏览器本地存储中写入一个不存在的 `ai_planning_last_session`
-  2. 打开 Planning 页面
-  3. 观察恢复请求失败后，没有自动切换到其他会话，也没有自动创建新会话
-- 影响：删除当前会话或服务端清理历史会话后，用户再次进入 Planning 页面可能无法继续对话，且会话删除功能难以稳定收口
-- 根因：初始化分支依赖 localStorage key 是否存在，而不是“恢复是否成功”
-- 处理：在会话删除实现计划中引入 `loadSessionDetail()` / `createAndSelectSession()` helper，恢复失败时清理本地缓存并自动创建或切换到可用会话
-- 验证：
-  - `cd backend && uv run pytest tests/unit/test_ai_planning_api.py -q`
-  - `cd frontend && npm run test -- src/services/api.test.ts src/components/AITestPlanningPanel.test.tsx`
-  - `cd frontend && npx tsc --noEmit`
-- 关联记录：`docs/execution-log.md` 2026-04-12
-
-## BUG-042 | AI 测试规划面板初始化首条消息可能丢失，且新后端回归测试默认不会被跟踪
-
-- 日期：2026-03-30
-- 状态：fixed
-- 来源：自测
-- 描述：实现 AI 测试规划对话助手时发现两个实际缺陷。其一，AITestPlanningPanel 在 planning session 尚未创建完成前允许点击“发送消息”，会导致首条输入被直接忽略；其二，仓库 .gitignore 中存在 tests/ 规则，会让新建的 backend/tests/unit/test_ai_planning_api.py 默认处于未跟踪状态，后续同步时容易遗漏关键回归测试。
-- 复现步骤：
-  1. 打开工作台后立即在 AI 测试助手输入内容并点击“发送消息”
-  2. 观察前端未报错，但首条消息没有进入 transcript，也没有触发后端 planning turn
-  3. 新增 backend/tests/unit/test_ai_planning_api.py 后执行 git status --short --untracked-files=all
-  4. 观察测试文件最初不会出现在待跟踪列表中
-- 影响：AI 测试规划首轮交互不稳定，且新增后端回归测试存在被遗漏进版本控制的风险
-- 根因：发送按钮缺少对 session bootstrap 完成状态的约束；仓库忽略规则对任意 tests/ 目录一刀切，未给 backend/tests 留出白名单
-- 处理：发送按钮增加 isBootstrapping、sessionId 和空输入约束，导入草案后使用服务端返回结果刷新状态；.gitignore 新增 backend/tests/unit/test_ai_planning_api.py 的定向白名单规则，确保新测试可被跟踪
-- 验证：
-  - cd frontend && npm run test -- src/components/AITestPlanningPanel.test.tsx
-  - git status --short --untracked-files=all | Select-String "test_ai_planning_api.py"
-- 关联记录：docs/execution-log.md 2026-03-30 23:15
-
-## BUG-041 | 最新 CRUD 提交存在权限绕过、统计接口运行时失败与删除路径不闭合
-
-- 日期：2026-03-30
-- 状态：fixed
-- 来源：代码评审 / 最新提交 `7eb71ae`
-- 描述：审查最新 CRUD 提交时发现 4 类问题。其一，`cases` 路由和 service 的新增读写接口仅校验”已登录”，没有校验当前用户是否属于目标项目，导致任意已登录用户都能读取、更新、删除其他项目的用例；其二，`GET /api/v1/cases/stats/{project_id}` 声明返回 `ProjectTestCaseStats`，但 service 返回值缺少必填字段 `created_by_user`，路由层会在构造响应模型时直接触发校验错误；其三，`delete_project()` 直接删除项目，但 `test_cases.project_id` 的外键是 `ondelete=”RESTRICT”`，已有用例的项目无法被删除并会在提交时抛出数据库完整性错误；其四，原有 `GET /api/v1/cases` 与 `GET /api/v1/projects` 的响应合同已经变化，但对应单测没有更新，现有测试已失败
-- 复现步骤：
-  1. 以任意已登录用户访问 `/api/v1/cases`、`/api/v1/cases/project/{project_id}`、`/api/v1/cases/{case_id}`、`PUT /api/v1/cases/{case_id}` 或 `DELETE /api/v1/cases/{case_id}`，观察代码路径中没有项目成员校验
-  2. 调用 `/api/v1/cases/stats/{project_id}`，观察 `backend/app/api/routes/cases.py` 会执行 `ProjectTestCaseStats(**stats_data)`，而 `backend/app/services/cases.py` 返回值缺少 `created_by_user`
-  3. 创建带 `test_cases` 的项目后调用 `DELETE /api/v1/projects/{project_id}`，观察 `backend/app/services/project_management.py` 直接删除项目，而 `backend/app/models/test_case.py` 将外键定义为 `ForeignKey(“projects.id”, ondelete=”RESTRICT”)`
-  4. 执行 `uv run pytest backend/tests/unit/test_cases_api.py -q` 与 `uv run pytest backend/tests/unit/test_projects_and_report_preferences_api.py -q`，观察列表接口断言失败
-- 影响：当前提交标称”complete CRUD”，但实际存在越权访问风险、统计接口 500 风险、项目删除不可用风险，以及已存在 API 消费方/测试的兼容性回归
-- 根因：新增 CRUD 与分页/统计逻辑时，只补了路由和 service 主干，没有沿项目成员边界、响应 schema、一对多删除约束和历史接口合同做完整联动校验
-- 处理：已在 `082ae22` 中全部修复——补齐项目成员权限校验、修正 stats 返回结构、处理外键约束下的项目删除语义、更新测试断言匹配新的分页响应
-- 验证：
-  - `uv run pytest backend/tests/unit/test_cases_api.py -q`，全部通过
-  - `uv run pytest backend/tests/unit/test_projects_and_report_preferences_api.py -q`，全部通过
-  - 静态核对 `backend/app/api/routes/cases.py`、`backend/app/services/cases.py`、`backend/app/services/project_management.py`、`backend/app/schemas/cases.py`、`backend/app/models/test_case.py`
-- 关联记录：`docs/execution-log.md` 2026-03-30 21:31、2026-03-30 22:00
-
-## BUG-043 | 新增 AI planning 配置字段后，settings API 更新合同未同步，导致现有 PUT /settings/ai 测试与调用方 422
-
-- 日期：2026-04-03
-- 状态：fixed
-- 来源：任务实现 / 回归测试
-- 描述：在为 AI planning 新增 `enable_ai_planning`、`ai_planning_model`、`ai_planning_base_url`、`ai_planning_timeout_ms`、`ai_planning_max_react_rounds` 与密钥字段后，`AISettingsUpdateRequest` 已要求这些字段必填，但原有 `backend/tests/unit/test_ai_settings_api.py` 和若干前端保存配置路径仍沿用旧 payload，未补 planning 字段，触发 `422 Unprocessable Entity`。
-- 复现步骤：
-  1. 保持新增 planning 字段后的后端 schema 不变
-  2. 使用旧版 payload 调用 `PUT /api/v1/settings/ai`
-  3. 观察接口返回 422，`test_update_ai_settings_persists_to_env_file_and_allows_clearing_keys` 与 `test_update_ai_settings_accepts_glm_model_family` 失败
-- 影响：AI settings 保存链路在 contract 层不一致，新增 planning 配置后会阻断原有 settings 更新回归测试，也容易让前端保存逻辑出现兼容性回退
-- 根因：配置 schema 已扩展，但测试样例和部分前端表单/类型没有同步补齐新增字段，形成请求合同漂移
-- 处理：补齐后端测试中的 planning 字段；前端 `AISettings` / `AISettingsUpdatePayload`、`AISettingsPage` 表单初始化与保存请求一并纳入 planning 字段，消除 settings 合同漂移
-- 验证：
-  - `cd backend && uv run pytest tests/unit/test_ai_settings_api.py -q`
-  - `cd frontend && npm run test -- src/pages/AISettingsPage.test.tsx src/services/api.test.ts`
-- 关联记录：`docs/execution-log.md` 2026-04-03 23:02
-
-## BUG-065 | explore_flow 相对 URL 被解析为 example.com
-
-- 日期：2026-05-12
-- 状态：fixed ()
-- 来源：E2E 测试
-- 影响：所有使用相对 URL 的 explore_flow 调用都会访问错误页面，导致页面元素采集失败
-- 根因：1) `page_explorer.py:1594` `base_url or "https://example.com/"` 硬编码兜底；2) `planning_tools.py` explore_flow 工具定义缺少 `base_url` 参数；3) `_handle_explore_flow` 的 base_url 提取逻辑仅在 steps 分支内
-- 处理：
-  1. `page_explorer.py` `collect_flow_elements` 和 `collect_multi_page_elements`：移除硬编码 example.com/automationexercise.com 默认值，改为 `None`；当 base_url 为空且 URL 为相对路径时，跳过并记录 SKIPPED 状态
-  2. `planning_tools.py` explore_flow 工具定义添加 `base_url` 可选参数
-  3. `planning_tools.py` `_handle_explore_flow`：将 base_url 提取逻辑（params → session requirements → user messages）重构到函数开头，steps 和 urls 两条路径共享
-  4. `test_planning_agent.py` 安全网调用：从 `requirements.entry_url_or_page` 提取 base_url 传入 explore_flow
-- 验证：542/544 单元测试通过
-
----
-
-## BUG-066 | AI 不遵循 explore_flow 提示词，跳过页面探索直接生成方案
-
-- 日期：2026-05-12
-- 状态：fixed
-- 来源：E2E 测试
-- 影响：DSL 草案基于不完整的页面数据生成，缺少步骤、target 泛化
-
-**定位结论：**
-- `_build_link_selection_message` 中有 "如果信息足够，也可以直接 generate_plan" 逃逸口
-- 安全网消息 "已采集完成，请生成方案" 误导 LLM
-- 系统提示词 "4 项信息直接 generate_plan" 与 explore_flow 要求矛盾
-
-**修复：**
-- 删除逃逸口，改为 "不要在没有探索完所有流程涉及页面的情况下调用 generate_plan"
-- 安全网消息改为 "静态页面已采集，交互页面仍需 explore_flow"
-- 系统提示词改为 "先探索页面再 generate_plan"
-
----
-
-## BUG-067 | DSL 生成器 thinking mode 未启用
-
-- 日期：2026-05-12
-- 状态：fixed
-- 来源：E2E 测试
-- 影响：DSL 草案质量低，缺少推理步骤
-
-**定位结论：**
-- `_should_enable_thinking_mode` 只支持 GLM 模型，不支持 DeepSeek
-- DSL 生成用的 deepseek-v4-pro 未触发 thinking mode
-
-**修复：**
-- `_should_enable_thinking_mode` 增加 DeepSeek pro 模型支持
-- 验证日志：`DSL _call_llm: model=deepseek-v4-pro, thinking=True`
-
----
-
-## BUG-068 | explore_flow actions 泛化导致匹配错误元素
-
-- 日期：2026-05-12
-- 状态：fixed
-- 来源：E2E 测试
-- 影响：多个 "Add to cart" 按钮时，点击了错误的商品
-
-**定位结论：**
-- LLM 生成 `{"action":"click","target":"Add to cart"}` 而非消歧格式
-- 页面有多个同名按钮时，Playwright 匹配第一个
-
-**修复：**
-- `_check_action_disambiguation` 检测泛化 target 并添加警告
-- explore_flow 工具描述增加消歧说明
-- 系统提示词示例改为消歧格式
-
----
-
-## BUG-069 | capture_page_session 不采集页面元素
-
-- 日期：2026-05-12
-- 状态：fixed
-- 来源：E2E 测试
-- 影响：LLM 用 capture_page_session 登录后，登录页元素不可用
-
-**定位结论：**
-- `capture_browser_session` 只返回 `{"success": True, "message": "..."}`
-- 不返回页面元素，preflight 无法获取登录页定位器
-
-**修复：**
-- 更新工具描述：明确说明 "不采集元素，请用 explore_flow"
-- capture_page_session 后自动提示 LLM 需要 explore_flow 补充元素
-
----
-
-## BUG-070 | Playwright Sync API 与 asyncio 冲突（Windows）
-
-- 日期：2026-05-12
-- 状态：workaround
-- 来源：多 Agent 模式测试
-- 影响：多 Agent 模式的 Explorer 无法使用 Playwright
-
-**定位结论：**
-- `_bridge_sync_generator` 在 worker 线程中运行，但 Playwright 检测到 asyncio 事件循环
-- `BrowserSessionManager.get_or_create_context` 调用 `sync_playwright()` 失败
-
-**Workaround：**
-- 多 Agent 模式的 ExplorerAgent 不传递 `planning_session_id`，每次创建新浏览器
-- 但 "Event loop is closed" 错误仍然出现
-- 需要进一步研究 Playwright 在 Windows worker 线程中的兼容性
-
-## 2026-05-16 — E2E 测试中发现的 Bug
-
-### Bug #1: AIPlanningSession UnboundLocalError in explore_flow
-- **状态**: fixed
-- **文件**: `backend/app/ai/planning_tools.py:711`
-- **现象**: `explore_flow` 工具调用时报 `cannot access local variable 'AIPlanningSession' where it is not associated with a value`
-- **原因**: `from app.models import AIPlanningSession, AIPlanningMessage` 被放在 `if not resolved_base_url and planning_session_id:` 条件块内。当 `base_url` 已通过 params 提供时，该条件块被跳过，但后续代码（line 759）仍引用 `AIPlanningSession`
-- **修复**: 将 import 移到条件块之前（line 707）
-- **关联**: execution-log.md 2026-05-16
-
-### Bug #2: explore_page networkidle 超时导致异常
-- **状态**: fixed
-- **文件**: `backend/app/ai/planning_tools.py:646`
-- **现象**: `explore_page` 在 automationexercise.com 上反复超时，错误 `Timeout 30000ms exceeded`
-- **原因**: `page.wait_for_load_state("networkidle", timeout=30000)` 无 try-except 包装。部分网站（如 automationexercise.com）持续发送跟踪请求，networkidle 永远达不到
-- **修复**: 用 try-except 包装 `wait_for_load_state("networkidle")`
-- **关联**: execution-log.md 2026-05-16
-
-### Bug #3: capture_text 步骤的 value 在报告中始终为 null
-- **状态**: fixed
-- **文件**: `backend/app/runners/playwright_runner.py`
-- **现象**: `capture_text` 步骤成功执行但执行报告中 `value` 字段始终为 `null`
-- **原因**: 捕获的文本存储到了 `runtime_context` 但 `StepExecutionEvidence` 的 `value` 字段读取的是 `getattr(step, "value", None)`，二者未关联
-- **修复**: 引入 `step_value` 局部变量，初始值为 `getattr(step, "value", None)`，`capture_text` 分支更新为实际捕获值，evidence 构造使用 `value=step_value`。修复覆盖 4 个代码路径（candidate path、legacy path、2 个 streaming path）
-- **关联**: execution-log.md 2026-05-16
-
-## 2026-05-25 — DSL 生成"所有页面状态分段均未生成步骤"链路 3 bug
-
-### Bug #A: single-segment 路径下 a11y_nodes 数据丢失
-- **状态**: fixed
-- **文件**: `backend/app/services/ai_planning.py:560` + `backend/app/services/dsl.py:147` + `backend/app/schemas/dsl.py:268-274` + `backend/app/ai/dsl_generator.py`
-- **现象**: AI 规划 fallback plan 时 `scenario["flow_steps"]=[]`，走 single-segment 分支。后端日志显示 `a11y_nodes=1136` 但 `has_page_elements=False`，LLM 拿到的 prompt 中 `Available elements: (no elements)`，segment 生成无任何上下文
-- **原因**: `ai_planning.py:561` 调 `generate_dsl_case` 时未把 `a11y_nodes_raw` 传过去；`dsl.py:147` 中 `page_elements_by_state` 硬编码为 `{}`；元素数据在 `_load_a11y_nodes_for_scenario` 已正确加载但被丢弃
-- **修复**:
-  - `GenerateDslRequest` 新增 `a11y_nodes_by_state: dict[str, list[dict]] | None` 字段
-  - `dsl.py` 从 `payload.a11y_nodes_by_state` 读取，不再硬编码 `{}`
-  - `ai_planning.py` 单段分支按 `page_state` 分组 `a11y_nodes_raw` 后通过 payload 传入
-  - `dsl_generator.py:generate_segmented_case_draft` 在 `flow_steps=[]` 但 `page_elements_by_state` 有数据时按 page_states keys 迭代；`_build_segment_prompt` 在 `seg_steps=[]` 时给 LLM 明确"从 scenario+elements 推导完整 DSL"指令；补充 `format_elements_for_prompt` 导入
-- **关联**: execution-log.md 2026-05-25
-
-### Bug #B: LLM 调用无重试 + 网络错误消息误导
-- **状态**: fixed
-- **文件**: `backend/app/ai/dsl_generator.py`
-- **现象**: `urlopen WinError 10060`（TCP 21 秒级超时连接 `api.deepseek.com`）单次失败即终止整段 DSL 生成，且最终错误为 `DSL 生成失败：所有 1 个页面状态分段均未生成步骤。请检查页面元素采集是否正常，或入口 URL 是否可达。` —— 明显误导用户
-- **原因**: `_call_dsl_flash_llm` 直接调用 `request.urlopen` 无重试、无退避；`generate_segmented_case_draft` 末尾的错误消息未区分网络失败 vs 真正的"无元素"问题
-- **修复**:
-  - 新增 `_urlopen_with_retry`（指数退避 1s→2s，2 次重试）+ `_is_transient_network_error`（识别 socket.timeout / URLError / HTTPError 429&5xx / ConnectionError）
-  - `_call_llm` 和 `_call_dsl_flash_llm` 全部改用重试包装
-  - 新增 `DslGenerationNetworkError` 异常，`_call_dsl_flash_llm` 捕获网络错误后包装为：`AI DSL 生成失败：无法连接到 LLM API（host）。错误：xxx。请检查网络连通性、DNS 解析或代理设置。`
-  - `generate_segmented_case_draft` 末尾判断 warnings 是否全为网络错误关键字（`urlopen error`/`WinError 10060`/`TimeoutError`/`Connection`/`Name or service not known`），命中则抛 `DslGenerationNetworkError` 给出准确诊断
-- **关联**: execution-log.md 2026-05-25。基础设施层面 `api.deepseek.com` 不可达仍需用户排查（VLM `open.bigmodel.cn` 可达，属 deepseek 专属网络问题）
-
-### Bug #C: agent 重复调用工具浪费安全帽轮次
-- **状态**: fixed
-- **文件**: `backend/app/ai/test_planning_agent.py`
-- **现象**: log 显示 agent 在 5 轮内调用 `create_project` ×2（轮 2&3）、`explore_flow` ×2（轮 4&5），耗尽 5 轮安全帽 → fallback plan → flow_steps 为空 → 触发 Bug A 死路
-- **原因**: ReAct loop 对工具调用无去重判断，LLM 可能因对话噪声或思维抖动连续发起等价工具调用
-- **修复**:
-  - 新增 `_tool_call_signature(tool_name, params)`：`create_project` 按 `name.lower()`、`explore_flow` 按 `base_url+flow_description+canonical_steps`（input value 忽略避免泄露密码）、`explore_page` 按 url
-  - 工具执行前比对 `tool_calls` 中已有签名，命中重复时：
-    - yield `tool_call_start` + `tool_call_end` (含 `duplicate_of_prior_call=True`)
-    - 注入"⚠️ 检测到重复调用：你刚刚已经调用过 X..."系统消息
-    - `round_index -= 1` 不扣 round
-  - 其他工具签名返回 `None` 不参与去重
-- **关联**: execution-log.md 2026-05-25
-
-### Bug #D: stream_planning_turn 把 Pydantic plan 当 dict 用导致 AttributeError
-- **状态**: fixed
-- **文件**: `backend/app/ai/test_planning_agent.py:706`
-- **现象**: 日志反复出现 `Auto DSL generation failed: 'AIPlanningPlan' object has no attribute 'get'`，导致计划生成后跳过自动 DSL 草案
-- **原因**: `response.plan` 是 `AIPlanningPlan` Pydantic 模型，代码却写成 `plan_json = response.plan or {}` 然后调 `plan_json.get("scenarios", [])`，Pydantic 模型没有 `.get()`
-- **修复**: 改为 `plan_data = response.plan.model_dump(mode="json") if response.plan else {}`，对 dict 再调 `.get()`
-- **关联**: execution-log.md 2026-05-25（在 ABC 主线修复中顺手找到并修掉）
-
-### Bug #E: _log_dsl_cache_usage 函数被 governance 清理误删但调用方残留
-- **状态**: fixed
-- **文件**: `backend/app/ai/dsl_generator.py`（曾在 commit `8d92654` 被删除函数定义）
-- **现象**: 后端重启后跑通 Bug A/B 修复，LLM 调用成功返回，但 segment 仍报 `name '_log_dsl_cache_usage' is not defined`，最终又抛出"所有 1 个页面状态分段均未生成步骤"
-- **原因**: commit `8d92654`（refactor: delete governance system from dsl_generator -520 LOC）把 `_log_dsl_cache_usage` 函数定义一起删掉了，但 `_call_llm:402` 和 `_call_dsl_flash_llm:510` 仍保留对它的调用 —— 这个 bug 一直是 dormant 的，因为前面 segment 通常在网络/元素缺失时就失败了，根本走不到这一行。Bug A 修复让 LLM 调用真正成功后，这个潜伏代码 rot 才暴露
-- **修复**: 恢复 `_log_dsl_cache_usage(raw_payload)` 函数定义（参照 commit `6372a8f` 的原始实现），加 `isinstance` 防御，仅在 usage 字典存在 cache 计数时打日志
-- **关联**: execution-log.md 2026-05-25（Bug A 修复后才暴露）
-
-### Bug #F: LLM 生成 goto/assert_url_contains 步骤时 target↔value 字段错位
-- **状态**: fixed
-- **文件**: `backend/app/ai/dsl_generator.py`
-- **现象**: Bug E 修完后 LLM 调用成功（`DSL cache: hit=9216 miss=69 ratio=99%`、`Segment S0 generated 2 steps`）但 `DSLCase.model_validate` 抛 `steps.0.goto.value Field required`，input_value 显示 `{'action': 'goto', 'target': 'https://...com/'}` —— LLM 把 URL 错填到了 `target` 字段
-- **原因**: 
-  - DSL schema 约定：`goto` 和 `assert_url_contains` 用 `value` 存 URL/路径；`target` 仅供 click/input/wait_for/assert_text/capture_text 用于可见文本定位
-  - 之前的 segment prompt 没有显式区分这两类字段，导致 LLM 直觉上把 URL 当作"目标位置"塞进 `target`
-  - 没有自动归一化逻辑（`_ACTION_ALIASES` 字典定义了但全文未使用，是 governance 清理时遗留的废代码）
-- **修复**:
-  - 新增 `_normalize_llm_step(step)`：把 `_ACTION_ALIASES` 真正用起来（open/navigate/visit → goto 等），并对 `_URL_VALUE_ACTIONS = {"goto", "assert_url_contains"}` 自动把 `target` 搬到 `value`；无效 step 返回 None 并被丢弃
-  - 在 `_generate_segment` 解析完 LLM JSON 后调用归一化
-  - `_build_segment_prompt` 增加显式规则：`goto/assert_url_contains 使用 'value' 存放 URL`，并给出 `{"action": "goto", "value": "/login"}` 示例
-- **关联**: execution-log.md 2026-05-25（Bug A→E 链路修完后暴露的 LLM 输出格式问题）
-
-### Bug #G: LLM 生成 assert_text 缺 value；字段别名表定义但未接入 normalizer
-- **状态**: fixed
-- **文件**: `backend/app/ai/dsl_generator.py`
-- **现象**: Bug F 修完重启后端后，5 个 segment 全部成功生成共 16 个步骤（log `DSL segmented generation complete: states=5, total_steps=16, warnings=0`），但 `DSLCase.model_validate` 抛 `steps.15.assert_text.value Field required`，input_value 为 `{'action': 'assert_text',...em_1', 'step_index': 16}` —— LLM 把期望文本放进了 `target` 字段，没填 `value`
-- **原因**:
-  - `assert_text` schema 要求同时有 `target`（定位元素）和 `value`（期望文本），LLM 把内容塞进 target 漏了 value
-  - `_normalize_llm_step` 此前仅处理 `goto/assert_url_contains` 的 target→value 移动，未覆盖 `assert_text`
-  - `_STEP_TARGET_ALIASES` / `_STEP_VALUE_ALIASES` / `_STEP_TIMEOUT_ALIASES` 三张字段别名表早在 commit a2c407b 前就已定义但全文无任何调用（孤儿数据），导致 LLM 用 `text`/`expected_text`/`url`/`selector` 等别名时也会被 Pydantic 直接拒掉
-  - 本 bug 是 Bug A→F 链路的下一层：之前各 segment 早早失败根本走不到 assert_text 的字段校验
-- **修复**:
-  - 在 `_normalize_llm_step` 接入三张孤儿别名表：用 `_promote_first_alias()` 把任一别名键改名到规范键（`target` / `value` / `timeout_ms`）
-  - 对 `assert_text` 加特殊修复：value 缺 + target 在 → 把 target 移到 value，target 兜底为 `"body"`（语义=「页面任意位置存在该文本」）
-  - 对 `input`/`click`/`wait_for`/`capture_text` 加 drop 规则：必填字段（target/value/context_key）缺失时返回 None 让 normalizer 丢弃该 step，避免单步错误拖垮整个 DSLCase 校验
-  - `_build_segment_prompt` 的「字段约定」一条改为分别枚举每类 action 的字段要求：goto/assert_url_contains（仅 value）、input/assert_text（target+value）、click/wait_for（仅 target）、capture_text（target+context_key），并给正反例
-- **关联**: execution-log.md 2026-05-25（Bug A→F 链路收尾）
-
