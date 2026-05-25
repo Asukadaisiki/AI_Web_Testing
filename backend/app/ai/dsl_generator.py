@@ -403,6 +403,29 @@ def _call_llm(
     return _extract_message_content(raw_payload)
 
 
+def _log_dsl_cache_usage(raw_payload: dict[str, Any]) -> None:
+    """Log prompt-cache hit/miss for DeepSeek-style LLM responses.
+
+    Restored after being orphaned by commit 8d92654 (governance cleanup deleted
+    the function but kept two callers). No-op for providers that don't report
+    cache usage in the response.
+    """
+    if not isinstance(raw_payload, dict):
+        return
+    usage = raw_payload.get("usage", {}) or {}
+    if not isinstance(usage, dict):
+        return
+    hit = usage.get("prompt_cache_hit_tokens", 0) or 0
+    miss = usage.get("prompt_cache_miss_tokens", 0) or 0
+    if hit or miss:
+        ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+        logger.info(
+            "DSL cache: hit=%d miss=%d ratio=%.0f%% total=%d completion=%d",
+            hit, miss, ratio,
+            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+        )
+
+
 def _build_non_json_response_error(
     *,
     endpoint: str,

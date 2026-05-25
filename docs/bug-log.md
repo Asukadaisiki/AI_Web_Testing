@@ -919,3 +919,11 @@
 - **原因**: `response.plan` 是 `AIPlanningPlan` Pydantic 模型，代码却写成 `plan_json = response.plan or {}` 然后调 `plan_json.get("scenarios", [])`，Pydantic 模型没有 `.get()`
 - **修复**: 改为 `plan_data = response.plan.model_dump(mode="json") if response.plan else {}`，对 dict 再调 `.get()`
 - **关联**: execution-log.md 2026-05-25（在 ABC 主线修复中顺手找到并修掉）
+
+### Bug #E: _log_dsl_cache_usage 函数被 governance 清理误删但调用方残留
+- **状态**: fixed
+- **文件**: `backend/app/ai/dsl_generator.py`（曾在 commit `8d92654` 被删除函数定义）
+- **现象**: 后端重启后跑通 Bug A/B 修复，LLM 调用成功返回，但 segment 仍报 `name '_log_dsl_cache_usage' is not defined`，最终又抛出"所有 1 个页面状态分段均未生成步骤"
+- **原因**: commit `8d92654`（refactor: delete governance system from dsl_generator -520 LOC）把 `_log_dsl_cache_usage` 函数定义一起删掉了，但 `_call_llm:402` 和 `_call_dsl_flash_llm:510` 仍保留对它的调用 —— 这个 bug 一直是 dormant 的，因为前面 segment 通常在网络/元素缺失时就失败了，根本走不到这一行。Bug A 修复让 LLM 调用真正成功后，这个潜伏代码 rot 才暴露
+- **修复**: 恢复 `_log_dsl_cache_usage(raw_payload)` 函数定义（参照 commit `6372a8f` 的原始实现），加 `isinstance` 防御，仅在 usage 字典存在 cache 计数时打日志
+- **关联**: execution-log.md 2026-05-25（Bug A 修复后才暴露）
