@@ -22,6 +22,49 @@
 | 架构重构 | 05-14~05-17 | 主路径 v2 A11y 管线、dead code 清理、DSL 生成链路修复 | 491 tests, −3.1K 行, A11y CDP 100x 快 |
 | 链路修复 | 05-25 | DSL 生成链路 7 层 bug 修复（Bug A→G） | 543 tests, 16 新增测试 |
 | 孤儿数据清理 | 05-25 | 全面清理代码库中的孤儿数据 | 删除 14 项孤儿数据 |
+| 数据校验修复 | 05-25 | 数据传递与校验全面扫描修复 | 修复 19 项问题 |
+
+---
+
+## 2026-05-25 | 数据传递与校验全面扫描修复
+
+**任务**：全面扫描项目的数据传递和校验情况，发现并修复所有问题。
+
+**扫描范围**：
+- 后端 (backend/app/) 所有 Python 文件
+- 前端 (frontend/src/) 所有 TypeScript/React 文件
+
+**发现并修复的问题**（共 19 项）：
+
+### 高风险（3 项）
+1. `batch_update_cases` 绕过项目成员权限检查 — 添加 `actor_user_id` 参数并在路由中传入 `current_user.id`
+2. settings 路由缺少认证保护 — 为所有 settings 路由添加 `require_demo_user` 依赖
+3. `require_demo_user` 缺少警告注释 — 添加 docstring 标记为开发/演示专用
+
+### 中风险（8 项）
+4. email 格式校验缺失 — 添加 `@` 格式校验
+5. 项目重名异常处理缺失 — 添加 `ProjectConflictError` 并捕获 `IntegrityError`
+6. DSL 反序列化未捕获 ValidationError — 添加 try/except 返回降级结果
+7. `func.to_char` SQLite 不兼容 — 使用数据库方言检测适配不同数据库
+8. 前端 CaseExecutionRequest 缺少 input_values — 添加 `input_values?: Record<string, string>` 字段
+9. 前端 AIPlanningScenario 缺少字段 — 添加 `page_elements` 和 `flow_steps` 字段
+10. 缺少 CORS 中间件 — 配置 `CORSMiddleware` 并添加 `cors_allow_origins` 配置项
+11. 缺少全局请求速率限制 — 创建 `RateLimitMiddleware` 并添加配置项
+
+### 低风险（8 项）
+12. status_filter 缺少 Literal 约束 — 改为 `ExecutionStatus | None` 类型
+13. page/page_size 缺少 Query 约束 — 添加 `ge=1` 和 `le=100` 约束
+14. GenerateDslRequest 冗余 return 语句 — 删除不可达代码
+15. 前端 GenerateDslMeta 字段不完整 — 添加 `active_governance_focus_reasons` 字段
+16. 前端 AIPlanningTurnResponse 字段不完整 — 添加 `todo_list` 和 `execution_analysis` 类型和字段
+17. LIKE 通配符未转义 — 转义 `%` 和 `_` 特殊字符
+18. DSL case steps 无 max_length — 添加 `max_length=500` 约束
+19. SSE 流泄露 traceback — 仅在 debug 模式下发送 traceback
+
+**新增文件**：
+- `backend/app/core/rate_limit.py` — 简单的内存速率限制中间件
+
+**验证**：所有 19 项问题已修复
 
 ---
 

@@ -10,6 +10,7 @@ from app.db import get_db_session
 from app.models import User
 from app.schemas.executions import (
     CaseExecutionRequest,
+    ExecutionStatus,
     ExecutionsOverview,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
@@ -56,7 +57,7 @@ def list_case_executions_route(
 def list_executions_route(
     project_id: int | None = Query(default=None, ge=1),
     case_id: int | None = Query(default=None, ge=1),
-    status_filter: str | None = Query(default=None, alias="status"),
+    status_filter: ExecutionStatus | None = Query(default=None, alias="status"),
     window_days: int | None = Query(default=None),
     failure_category: str | None = Query(default=None),
     failure_fingerprint: str | None = Query(default=None, min_length=1),

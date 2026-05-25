@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_demo_user_or_raise, require_demo_user
+from app.core.config import get_settings
 from app.db import get_db_session
 from app.db.session import get_session_factory
 from app.models import User
@@ -326,7 +327,7 @@ async def chat_sse(
                 "message": str(exc),
                 "error_type": type(exc).__name__,
                 "phase": "chat",
-                "traceback": _traceback.format_exc()[:2000],
+                "traceback": _traceback.format_exc()[:2000] if get_settings().debug else None,
             })
         yield sse_event("done", {})
 
@@ -361,7 +362,7 @@ async def drafts_sse(
                 "message": str(exc),
                 "error_type": type(exc).__name__,
                 "phase": "drafts",
-                "traceback": _traceback.format_exc()[:2000],
+                "traceback": _traceback.format_exc()[:2000] if get_settings().debug else None,
             })
         yield sse_event("done", {})
 
@@ -398,7 +399,7 @@ async def execute_sse(
                 "message": str(exc),
                 "error_type": type(exc).__name__,
                 "phase": "execute",
-                "traceback": _traceback.format_exc()[:2000],
+                "traceback": _traceback.format_exc()[:2000] if get_settings().debug else None,
             })
         yield sse_event("done", {})
         _cancellation_manager.clear(session_id)
@@ -436,7 +437,7 @@ async def execute_with_judge_sse(
                 "message": str(exc),
                 "error_type": type(exc).__name__,
                 "phase": "explorer_judge",
-                "traceback": _traceback.format_exc()[:2000],
+                "traceback": _traceback.format_exc()[:2000] if get_settings().debug else None,
             })
         yield sse_event("done", {})
         _cancellation_manager.clear(session_id)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import require_demo_user
@@ -62,8 +62,8 @@ def list_project_cases_route(
     project_id: int,
     search: str | None = None,
     created_by: int | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_demo_user),
 ) -> PaginatedCases:
@@ -134,8 +134,8 @@ def list_cases_route(
     project_id: int | None = None,
     search: str | None = None,
     created_by: int | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_demo_user),
 ) -> PaginatedCases:
@@ -203,7 +203,7 @@ def batch_update_cases_route(
 ) -> list[StoredCaseDetail]:
     """Update multiple test cases in a single request."""
     try:
-        return batch_update_cases(session, payload)
+        return batch_update_cases(session, payload, current_user.id)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 

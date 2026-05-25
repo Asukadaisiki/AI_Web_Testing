@@ -221,7 +221,7 @@ class DSLCase(DSLModel):
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     input_contract: list[DSLCaseInputContract] = Field(default_factory=list)
     output_contract: list[DSLCaseOutputContract] = Field(default_factory=list)
-    steps: list[DSLStep] = Field(min_length=1)
+    steps: list[DSLStep] = Field(min_length=1, max_length=500)
 
 
 GenerateDslMode = Literal["draft", "strict_steps_only"]
@@ -276,7 +276,6 @@ class GenerateDslRequest(DSLModel):
     def validate_retry_context(self) -> "GenerateDslRequest":
         if self.retry_from_generation_id is not None and self.retry_reason_code is None:
             raise ValueError("retry_from_generation_id 存在时必须提供 retry_reason_code。")
-        return self
         return self
 
 

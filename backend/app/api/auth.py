@@ -31,6 +31,11 @@ def require_authenticated_user(
 def require_demo_user(
     session: Session = Depends(get_db_session),
 ) -> User:
+    """Return a fixed demo user (ID=1) without real authentication.
+
+    WARNING: Development/demo only. In production, replace with
+    ``require_authenticated_user`` for proper session-based auth.
+    """
     user = get_user_by_id(session, DEFAULT_DEMO_USER_ID)
     if user is None or not user.is_active:
         raise HTTPException(

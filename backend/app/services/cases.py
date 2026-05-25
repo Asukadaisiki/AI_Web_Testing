@@ -19,6 +19,7 @@ from app.schemas.cases import (
     StoredCaseSummary,
 )
 from app.schemas.dsl import DSLCase
+from pydantic import ValidationError
 
 
 class EntityNotFoundError(ValueError):
@@ -128,7 +129,24 @@ def _ensure_user_exists(session: Session, user_id: int) -> None:
 
 
 def _to_stored_case_summary(record: TestCase) -> StoredCaseSummary:
-    normalized_case = DSLCase.model_validate(record.dsl)
+    try:
+        normalized_case = DSLCase.model_validate(record.dsl)
+    except ValidationError:
+        # Return a degraded summary when stored DSL is malformed
+        return StoredCaseSummary(
+            id=record.id,
+            project_id=record.project_id,
+            name=record.name,
+            description=record.description,
+            base_url=None,
+            input_contract=[],
+            output_contract=[],
+            steps=[],
+            created_by=record.created_by,
+            updated_by=record.updated_by,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
     return StoredCaseSummary(
         id=record.id,
         project_id=record.project_id,
@@ -153,7 +171,8 @@ def list_cases_filtered(session: Session, filter_params: CaseListFilter) -> Sele
         statement = statement.where(TestCase.project_id == filter_params.project_id)
 
     if filter_params.search:
-        search_term = f"%{filter_params.search}%"
+        escaped = filter_params.search.replace('%', '\\%').replace('_', '\\_')
+        search_term = f"%{escaped}%"
         statement = statement.where(
             TestCase.name.ilike(search_term) |
             TestCase.description.ilike(search_term)
@@ -184,7 +203,8 @@ def list_cases_paginated(
             _ensure_project_member(session, filter_params.project_id, actor_user_id)
 
     if filter_params.search:
-        search_term = f"%{filter_params.search}%"
+        escaped = filter_params.search.replace('%', '\\%').replace('_', '\\_')
+        search_term = f"%{escaped}%"
         count_statement = count_statement.where(
             TestCase.name.ilike(search_term) |
             TestCase.description.ilike(search_term)
@@ -206,12 +226,12 @@ def list_cases_paginated(
     return cases, total
 
 
-def batch_update_cases(session: Session, payload: BatchUpdateRequest) -> list[StoredCaseDetail]:
+def batch_update_cases(session: Session, payload: BatchUpdateRequest, actor_user_id: int | None = None) -> list[StoredCaseDetail]:
     """Update multiple test cases at once."""
     updated_cases = []
     for case_id in payload.case_ids:
         try:
-            case = update_case(session, case_id, payload.updates)
+            case = update_case(session, case_id, payload.updates, actor_user_id)
             updated_cases.append(case)
         except EntityNotFoundError:
             # Skip non-existent cases
@@ -243,14 +263,19 @@ def get_project_test_case_stats(session: Session, project_id: int) -> dict[str, 
         select(func.count(TestCase.id)).where(TestCase.project_id == project_id)
     ) or 0
 
-    # Cases by month
+    # Cases by month — use strftime (SQLite) or to_char (PostgreSQL)
+    dialect_name = session.get_bind().dialect.name
+    if dialect_name == "sqlite":
+        month_expr = func.strftime('%Y-%m', TestCase.created_at)
+    else:
+        month_expr = func.to_char(TestCase.created_at, 'YYYY-MM')
     month_counts = session.execute(
         select(
-            func.to_char(TestCase.created_at, 'YYYY-MM').label('month'),
+            month_expr.label('month'),
             func.count(TestCase.id).label('count')
         )
         .where(TestCase.project_id == project_id)
-        .group_by(func.to_char(TestCase.created_at, 'YYYY-MM'))
+        .group_by(month_expr)
         .order_by('month')
     ).fetchall()
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Project, ProjectMember, User
@@ -11,6 +12,10 @@ from app.schemas.projects import ProjectCreate, ProjectDetail, ProjectUpdate
 
 class ProjectAccessError(ValueError):
     """Raised when user doesn't have access to a project."""
+
+
+class ProjectConflictError(ValueError):
+    """Raised when a project with the same name already exists."""
 
 
 def create_project(
@@ -24,7 +29,12 @@ def create_project(
         description=payload.description,
     )
     session.add(project)
-    session.flush()  # Get ID without committing
+
+    try:
+        session.flush()  # Get ID without committing
+    except IntegrityError:
+        session.rollback()
+        raise ProjectConflictError(f"Project with name '{payload.name}' already exists.")
 
     # Add as owner
     member = ProjectMember(

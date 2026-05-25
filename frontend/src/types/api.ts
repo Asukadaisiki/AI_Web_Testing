@@ -154,6 +154,7 @@ export interface GenerateDslMeta {
   import_mode: GenerateDslImportMode;
   prompt_variant: DslGenerationPromptVariant;
   context_profile: DslGenerationContextProfile;
+  active_governance_focus_reasons: DslGenerationRejectionReasonCode[];
   risk_flags: DslGenerationRiskFlag[];
   base_url_source: GenerateDslBaseUrlSource;
   base_url_backfilled: boolean;
@@ -214,6 +215,8 @@ export interface AIPlanningScenario {
   test_data_requirements: AIPlanningTestDataRequirement[];
   assertions: string[];
   draft_prompt: string;
+  page_elements?: string | null;
+  flow_steps?: Record<string, unknown>[] | null;
 }
 
 export interface AIPlanningPlan {
@@ -312,6 +315,16 @@ export interface UpdatePlanningDraftStatusPayload {
   status: "imported" | "rejected";
 }
 
+export interface AIPlanningTodoItem {
+  item: string;
+  status: string;
+}
+
+export interface ExecutionAnalysis {
+  summary: string;
+  recommendations: string[];
+}
+
 export interface AIPlanningTurnResponse {
   assistant_message: string;
   session_status: AIPlanningSessionStatus;
@@ -324,6 +337,8 @@ export interface AIPlanningTurnResponse {
   tool_calls?: AIPlanningToolCall[];
   saved_cases?: SavedCaseResult[];
   execution_summaries?: ExecutionSummaryResult[];
+  todo_list?: AIPlanningTodoItem[];
+  execution_analysis?: ExecutionAnalysis | null;
 }
 
 export interface SavedCaseResult {
@@ -599,6 +614,7 @@ export interface DSLValidationResult {
 export interface CaseExecutionRequest {
   actor_user_id: number;
   base_url?: string;
+  input_values?: Record<string, string>;
 }
 
 export interface ViewportSnapshot {
