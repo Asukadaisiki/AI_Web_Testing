@@ -881,18 +881,34 @@ def _handle_create_project(
         return {"error": f"创建项目失败：{exc}"}
 
     if planning_session_id:
-        existing = db_session.scalar(
-            sa_select(SessionProject).where(
+        # Check if session already has a default project (auto-created with session)
+        # If so, replace it with the new project instead of adding a second one
+        default_link = db_session.scalar(
+            sa_select(SessionProject).join(Project, Project.id == SessionProject.project_id).where(
                 SessionProject.session_id == planning_session_id,
-                SessionProject.project_id == project.id,
+                Project.is_default == True,  # noqa: E712
             )
         )
-        if not existing:
-            db_session.add(SessionProject(
-                session_id=planning_session_id,
-                project_id=project.id,
-            ))
+        if default_link:
+            logger.info(
+                "create_project: replacing default project %d with new project %d for session %d",
+                default_link.project_id, project.id, planning_session_id,
+            )
+            default_link.project_id = project.id
             db_session.flush()
+        else:
+            existing = db_session.scalar(
+                sa_select(SessionProject).where(
+                    SessionProject.session_id == planning_session_id,
+                    SessionProject.project_id == project.id,
+                )
+            )
+            if not existing:
+                db_session.add(SessionProject(
+                    session_id=planning_session_id,
+                    project_id=project.id,
+                ))
+                db_session.flush()
 
     result: dict[str, Any] = {
         "id": project.id,
