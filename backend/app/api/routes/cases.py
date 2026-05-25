@@ -63,7 +63,7 @@ def list_project_cases_route(
     search: str | None = None,
     created_by: int | None = None,
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=20, ge=1),
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_demo_user),
 ) -> PaginatedCases:
@@ -135,7 +135,7 @@ def list_cases_route(
     search: str | None = None,
     created_by: int | None = None,
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=20, ge=1),
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_demo_user),
 ) -> PaginatedCases:

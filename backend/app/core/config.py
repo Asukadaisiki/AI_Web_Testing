@@ -103,7 +103,7 @@ class Settings:
     ai_dsl_flash_timeout_ms: int = 180000
     ai_planning_flow_steps_enabled: bool = True
     cors_allow_origins: list[str] = field(default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"])
-    rate_limit_max_requests: int = 100
+    rate_limit_max_requests: int = 10000
     rate_limit_window_seconds: int = 60
 
 
@@ -162,6 +162,6 @@ def get_settings() -> Settings:
         ai_dsl_flash_timeout_ms=max(5000, _get_int(os.getenv("AI_DSL_FLASH_TIMEOUT_MS"), default=180000)),
         ai_planning_flow_steps_enabled=_get_bool(os.getenv("AI_PLANNING_FLOW_STEPS_ENABLED"), default=True),
         cors_allow_origins=_parse_comma_list(os.getenv("CORS_ALLOW_ORIGINS")) or ["http://localhost:5173", "http://127.0.0.1:5173"],
-        rate_limit_max_requests=max(10, _get_int(os.getenv("RATE_LIMIT_MAX_REQUESTS"), default=100)),
+        rate_limit_max_requests=max(10, _get_int(os.getenv("RATE_LIMIT_MAX_REQUESTS"), default=10000)),
         rate_limit_window_seconds=max(10, _get_int(os.getenv("RATE_LIMIT_WINDOW_SECONDS"), default=60)),
     )

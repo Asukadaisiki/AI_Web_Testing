@@ -221,7 +221,7 @@ class DSLCase(DSLModel):
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     input_contract: list[DSLCaseInputContract] = Field(default_factory=list)
     output_contract: list[DSLCaseOutputContract] = Field(default_factory=list)
-    steps: list[DSLStep] = Field(min_length=1, max_length=500)
+    steps: list[DSLStep] = Field(min_length=1)
 
 
 GenerateDslMode = Literal["draft", "strict_steps_only"]
