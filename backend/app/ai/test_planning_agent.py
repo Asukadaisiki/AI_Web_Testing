@@ -230,7 +230,7 @@ def stream_planning_turn(
     round_index = 0
     parse_retries = 0
     guard_continue_count = 0  # Track how many times generate_plan guard continues
-    GUARD_CONTINUE_LIMIT = 5  # Force fallback after this many guard continues
+    GUARD_CONTINUE_LIMIT = 10  # Force fallback after this many guard continues
     turn_start_time = time.monotonic()
     while round_index < safety_cap:
         round_index += 1
