@@ -2045,6 +2045,13 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
     assertions = requirements.main_assertions or ["页面状态符合预期"]
     is_login = _looks_like_login(requirements)
     flow_label = "登录" if is_login else "核心流程"
+
+    # Extract flow_steps from core_user_flow for DSL generation
+    flow_steps = _extract_flow_steps_from_core_flow(
+        requirements.core_user_flow,
+        requirements.entry_url_or_page,
+    )
+
     scenarios = [
         # 1. Happy path
         AIPlanningScenario(
@@ -2060,6 +2067,7 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
             assertions=assertions,
             draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}成功", negative_case=False, page_elements=page_elements),
             page_elements=page_elements,
+            flow_steps=flow_steps,
         ),
         # 2. Input validation / exception
         AIPlanningScenario(
@@ -2072,6 +2080,7 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
             assertions=["错误提示符合预期", *assertions[:1]],
             draft_prompt=_build_draft_prompt(requirements, scenario_title=f"{flow_label}异常处理", negative_case=True, page_elements=page_elements),
             page_elements=page_elements,
+            flow_steps=flow_steps,
         ),
         # 3. Data consistency / cross-page verification
         AIPlanningScenario(
@@ -2087,6 +2096,7 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
             assertions=["跨页面数据一致", "状态转换符合预期", *assertions[:2]],
             draft_prompt=_build_draft_prompt(requirements, scenario_title="数据一致性验证", negative_case=False, page_elements=page_elements),
             page_elements=page_elements,
+            flow_steps=flow_steps,
         ),
         # 4. Boundary / edge case
         AIPlanningScenario(
@@ -2099,6 +2109,7 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
             assertions=["边界输入处理正确", "无异常崩溃"],
             draft_prompt=_build_draft_prompt(requirements, scenario_title="边界条件测试", negative_case=True, page_elements=page_elements),
             page_elements=page_elements,
+            flow_steps=flow_steps,
         ),
     ]
     assumptions = []
@@ -2115,6 +2126,68 @@ def _build_plan(requirements: AIPlanningRequirements, *, page_elements: str | No
         risks=risks,
         scenarios=scenarios,
     )
+
+
+def _extract_flow_steps_from_core_flow(core_user_flow: str | None, entry_url: str | None = None) -> list[dict[str, Any]]:
+    """Extract flow_steps from core_user_flow text for fallback plan generation.
+
+    Parses numbered steps like "1. 打开首页点击 Signup / Login" into flow_steps format.
+    """
+    if not core_user_flow:
+        return []
+
+    import re
+    steps: list[dict[str, Any]] = []
+    # Match numbered steps: "1. text" or "1、text"
+    step_pattern = re.compile(r"(\d+)[.、]\s*(.+?)(?=\d+[.、]|$)", re.DOTALL)
+    matches = step_pattern.findall(core_user_flow)
+
+    current_page_state = "S0"
+    for i, (_, text) in enumerate(matches[:20]):  # Limit to 20 steps
+        text = text.strip()
+        if not text:
+            continue
+
+        # Determine action from text
+        action = "click"  # Default action
+        target = None
+        value = None
+
+        text_lower = text.lower()
+        if any(kw in text_lower for kw in ["打开", "进入", "访问", "导航", "goto", "navigate"]):
+            action = "goto"
+            # Extract URL if present
+            url_match = re.search(r'https?://[^\s，。；;]+', text)
+            if url_match:
+                target = url_match.group(0)
+            else:
+                target = text
+        elif any(kw in text_lower for kw in ["输入", "填写", "输入框", "input", "fill", "type"]):
+            action = "input"
+            target = text
+        elif any(kw in text_lower for kw in ["验证", "检查", "确认", "assert", "verify", "check"]):
+            action = "assert_text"
+            target = text
+        elif any(kw in text_lower for kw in ["等待", "wait"]):
+            action = "wait_for"
+            target = text
+        else:
+            action = "click"
+            target = text
+
+        steps.append({
+            "step_index": i + 1,
+            "action": action,
+            "target": target,
+            "value": value,
+            "page_state": current_page_state,
+        })
+
+        # Update page state after navigation actions
+        if action == "goto":
+            current_page_state = f"S{len([s for s in steps if s.get('action') == 'goto'])}"
+
+    return steps
 
 
 _EMAIL_PATTERN = re.compile(r'\S+@\S+\.\S+')
