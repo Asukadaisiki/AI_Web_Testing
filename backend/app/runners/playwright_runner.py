@@ -47,6 +47,7 @@ def _resolve_with_confidence_gate(
     prefer_input: bool = False,
     require_visible: bool = True,
     require_enabled: bool = False,
+    expected_text: str | None = None,
 ) -> tuple[ResolvedLocator, bool]:
     """Unified locator resolution: corrections → semantic → VLM (via fallback chain).
 
@@ -54,6 +55,10 @@ def _resolve_with_confidence_gate(
     callers that still pass it. VLM triggering happens inside
     ``resolve_with_fallback`` itself; this wrapper no longer adds a duplicate
     pre-verify call.
+
+    ``expected_text`` is used for assert_text steps to disambiguate when
+    multiple candidates match the target (e.g., target="h2" but we want
+    the h2 that contains "BRAND - POLO PRODUCTS").
     """
     resolved = resolve_with_fallback(
         page, target,
@@ -63,6 +68,7 @@ def _resolve_with_confidence_gate(
         prefer_input=prefer_input,
         require_visible=require_visible,
         require_enabled=require_enabled,
+        expected_text=expected_text,
     )
     return resolved, False
 
@@ -481,6 +487,7 @@ def _execute_step_with_candidates(
                 correction_store=correction_store,
                 execution_id=execution_id,
                 require_visible=False,
+                expected_text=_substitute_variables(step.value, vars_map),
             )
             resolved_by = resolved.strategy
             pw_expect(resolved.locator).to_contain_text(
@@ -692,6 +699,7 @@ def execute_case_with_playwright(
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=False,
+                            expected_text=_substitute_variables(step.value, _vars()),
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
@@ -989,6 +997,7 @@ def execute_case_with_playwright_streaming(
                             correction_store=correction_store,
                             execution_id=execution_id,
                             require_visible=False,
+                            expected_text=_substitute_variables(step.value, _vars()),
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace

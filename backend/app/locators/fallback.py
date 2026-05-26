@@ -285,6 +285,7 @@ def _try_semantic_candidates_in_order(
     prefer_input: bool = False,
     require_visible: bool = True,
     require_enabled: bool = False,
+    expected_text: str | None = None,
 ) -> ResolvedLocator:
     """Try semantic candidates in priority order, returning the first that verifies.
 
@@ -292,6 +293,10 @@ def _try_semantic_candidates_in_order(
     candidate and returns immediately, this function verifies each candidate against
     the live page (``wait_for`` + DOM text match) before accepting it, falling
     through to the next candidate on failure.
+
+    ``expected_text`` is used for assert_text steps to disambiguate when
+    multiple candidates match the target. When provided, candidates whose
+    text content matches expected_text are preferred.
     """
     normalized_target = target.strip()
 
@@ -340,6 +345,35 @@ def _try_semantic_candidates_in_order(
     )
     all_candidates = [entry.candidate for entry in entries[:5]]
 
+    # If expected_text is provided, try to find a candidate that matches it first
+    if expected_text:
+        expected_lower = expected_text.strip().lower()
+        for entry in entries:
+            if entry.candidate.rejected_reasons:
+                continue
+            try:
+                entry.locator.wait_for(state="visible", timeout=3000)
+                snapshot = _snapshot_dom_candidate(entry.locator)
+                if snapshot is None:
+                    continue
+                # Check if this candidate's text matches the expected text
+                candidate_text = (snapshot.text or "").strip().lower()
+                if candidate_text and expected_lower in candidate_text:
+                    return ResolvedLocator(
+                        strategy=entry.strategy,
+                        locator=entry.locator,
+                        trace=LocatorTrace(
+                            target=normalized_target,
+                            match_strategy=entry.strategy,
+                            candidates=all_candidates,
+                            selected_candidate=entry.candidate,
+                            selection_reason=_build_selection_reason(entry.candidate) + f" [text matches expected: '{expected_text}']",
+                        ),
+                    )
+            except Exception:
+                continue
+
+    # Fall back to standard matching (first candidate that verifies)
     for entry in entries:
         if entry.candidate.rejected_reasons:
             continue
@@ -385,6 +419,7 @@ def resolve_with_fallback(
     prefer_input: bool = False,
     require_visible: bool = True,
     require_enabled: bool = False,
+    expected_text: str | None = None,
 ) -> ResolvedLocator:
     page_url = getattr(page, "url", "") or ""
     tier1_trace: LocatorTrace | None = None
@@ -419,6 +454,7 @@ def resolve_with_fallback(
             prefer_input=prefer_input,
             require_visible=require_visible,
             require_enabled=require_enabled,
+            expected_text=expected_text,
         )
     except LocatorResolutionError as exc:
         tier1_trace = exc.trace
