@@ -62,7 +62,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - 探索失败 → 报告用户,不跳过。
 - target 使用元素清单中的实际 name,不要编造 CSS 选择器。
 - draft_prompt 中 step value 用 ${{context_key}} 格式引用变量。
-- 生成一个完整的场景方案，包含所有测试步骤（如登录、筛选、加入购物车、查看购物车等）。
+- 最少 3 个场景,建议 4-5 个。
 - 默认中文输出。
 """
 
