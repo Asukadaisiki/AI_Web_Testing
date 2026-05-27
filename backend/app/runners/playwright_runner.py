@@ -11,7 +11,10 @@ from types import GeneratorType
 from typing import Generator, Literal
 from urllib.parse import urljoin
 
+from app.core.structured_logging import LogContext, get_structured_logger
+
 logger = logging.getLogger(__name__)
+slog = get_structured_logger(__name__)
 
 from app.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
 from app.locators.corrections import CorrectionStore
@@ -501,6 +504,12 @@ def execute_case_with_playwright(
     artifact_dir = ARTIFACTS_ROOT / str(execution_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    slog.dsl_execution("execution_start", data={
+        "execution_id": execution_id,
+        "total_steps": len(case.steps),
+        "base_url": base_url,
+    }, execution_id=execution_id)
+
     step_results: list[StepExecutionEvidence] = []
     runtime_context: dict[str, str] = {}
 
@@ -531,6 +540,14 @@ def execute_case_with_playwright(
                     raise RunnerExecutionError(f"Execution timeout after {_MAX_EXECUTION_SECONDS}s", step_results=step_results)
                 resolved_target = _substitute_variables(getattr(step, 'target', None), _vars()) or getattr(step, 'target', None)
                 step_started_at = perf_counter()
+
+                slog.dsl_execution("step_start", data={
+                    "execution_id": execution_id,
+                    "step_index": index,
+                    "action": step.action,
+                    "target": getattr(step, "target", None),
+                    "has_candidates": _has_candidates(step),
+                }, execution_id=execution_id)
                 console_index = len(console_buffer)
                 network_index = len(network_buffer)
                 resolved = None
@@ -683,6 +700,15 @@ def execute_case_with_playwright(
                             vlm_preverify_used=vlm_preverify_used,
                         )
                     )
+                    slog.dsl_execution("step_complete", data={
+                        "execution_id": execution_id,
+                        "step_index": index,
+                        "action": step.action,
+                        "target": getattr(step, "target", None),
+                        "status": "passed",
+                        "duration_ms": _elapsed_ms(step_started_at),
+                        "resolved_by": resolved_by,
+                    }, execution_id=execution_id)
                 except InterventionNeededError as exc:
                     screenshot_path = _take_step_screenshot(page, artifact_dir, index)
                     step_results.append(
@@ -754,6 +780,17 @@ def execute_case_with_playwright(
                             vlm_preverify_used=vlm_preverify_used,
                         )
                     )
+                    slog.dsl_execution("step_failed", data={
+                        "execution_id": execution_id,
+                        "step_index": index,
+                        "action": step.action,
+                        "target": getattr(step, "target", None),
+                        "status": "failed",
+                        "duration_ms": _elapsed_ms(step_started_at),
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc)[:500],
+                        "resolved_by": resolved.strategy if resolved is not None else None,
+                    }, execution_id=execution_id, level=logging.WARNING)
                     # Continue to next step instead of terminating the entire loop
         finally:
             browser.close()

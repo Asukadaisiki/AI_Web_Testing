@@ -29,9 +29,11 @@ from app.locators.semantic import (
 )
 from app.locators.url_pattern import generalize_url
 from app.schemas.executions import DOMElementSnapshot, LocatorTrace, LocatorCandidateEvidence
+from app.core.structured_logging import get_structured_logger
 
 
 logger = logging.getLogger(__name__)
+slog = get_structured_logger(__name__)
 TOKEN_PATTERN = re.compile(r"[0-9a-z]+|[\u4e00-\u9fff]+", re.IGNORECASE)
 # Jaccard fallback is intentionally conservative so near-miss tokens can match
 # without reopening obvious short-substring false positives like "ok"/"booking".
@@ -440,14 +442,24 @@ def resolve_with_fallback(
             execution_id=execution_id,
         )
         if resolved is not None:
+            slog.locator_fallback("correction_reuse", data={
+                "target": target,
+                "correction_id": correction.id,
+                "correction_type": correction.correction_type,
+                "success": True,
+            }, execution_id=execution_id)
             return resolved
 
     cached_resolution = _try_resolve_cached_ai_locator(page, target=target, cache_key=cache_key)
     if cached_resolution is not None:
+        slog.locator_fallback("ai_cache_lookup", data={
+            "target": target,
+            "cache_hit": True,
+        }, execution_id=execution_id)
         return cached_resolution
 
     try:
-        return _try_semantic_candidates_in_order(
+        resolved = _try_semantic_candidates_in_order(
             page,
             target,
             target_strategy=target_strategy,
@@ -456,8 +468,19 @@ def resolve_with_fallback(
             require_enabled=require_enabled,
             expected_text=expected_text,
         )
+        slog.locator_fallback("semantic_resolve", data={
+            "target": target,
+            "selected_strategy": resolved.strategy,
+        }, execution_id=execution_id)
+        return resolved
     except LocatorResolutionError as exc:
         tier1_trace = exc.trace
+        slog.locator_fallback("fallback_tier_advance", data={
+            "target": target,
+            "from_tier": "semantic",
+            "to_tier": "vlm_rank",
+            "reason": "All semantic candidates failed verification",
+        }, execution_id=execution_id, level=logging.WARNING)
         reranked = _try_vlm_rank_candidates(
             page,
             target=target,
@@ -468,6 +491,11 @@ def resolve_with_fallback(
             target_strategy=target_strategy,
         )
         if reranked is not None:
+            slog.locator_fallback("vlm_locate", data={
+                "target": target,
+                "selected_strategy": reranked.strategy,
+                "success": True,
+            }, execution_id=execution_id)
             return reranked
 
     ai_candidate = _try_ai_visual_locate(page, target=target)
@@ -480,13 +508,28 @@ def resolve_with_fallback(
             cache_key=cache_key,
         )
         if resolved is not None:
+            slog.locator_fallback("vlm_locate", data={
+                "target": target,
+                "selected_strategy": "ai_visual",
+                "success": True,
+            }, execution_id=execution_id)
             return resolved
         coord_resolved = _try_coordinate_click_fallback(
             page, target=target, ai_candidate=ai_candidate,
         )
         if coord_resolved is not None:
+            slog.locator_fallback("vlm_locate", data={
+                "target": target,
+                "selected_strategy": "coordinate_click",
+                "success": True,
+            }, execution_id=execution_id)
             return coord_resolved
 
+    slog.locator_fallback("intervention_needed", data={
+        "target": target,
+        "tiers_attempted": ["correction", "semantic", "vlm_rank", "vlm_visual", "coordinate_click"],
+        "vlm_failure_reason": vlm_failure_reason,
+    }, execution_id=execution_id, level=logging.ERROR)
     raise InterventionNeededError(
         target=target,
         page_url=page_url,

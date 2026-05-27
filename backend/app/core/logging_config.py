@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
+
+from app.core.structured_logging import StructuredJsonFormatter
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -29,6 +32,7 @@ def setup_logging(level: str | None = None) -> None:
                then defaults to ``INFO``.
     """
     effective_level = level or os.getenv("LOG_LEVEL", "INFO").upper()
+    structured_enabled = os.getenv("STRUCTURED_LOG_ENABLED", "true").lower() in ("true", "1", "yes")
 
     formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
 
@@ -42,19 +46,33 @@ def setup_logging(level: str | None = None) -> None:
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
 
+    handlers: list[logging.Handler] = [console, file_handler]
+
+    # Structured JSON file handler
+    if structured_enabled:
+        structured_log_file = backend_root / "backend_structured.log"
+        structured_handler = logging.handlers.RotatingFileHandler(
+            structured_log_file,
+            maxBytes=50 * 1024 * 1024,  # 50MB
+            backupCount=5,
+            encoding="utf-8",
+        )
+        structured_handler.setFormatter(StructuredJsonFormatter())
+        handlers.append(structured_handler)
+
     # Root logger
     root = logging.getLogger()
     root.handlers.clear()
-    root.addHandler(console)
-    root.addHandler(file_handler)
+    for h in handlers:
+        root.addHandler(h)
     root.setLevel(logging.WARNING)
 
     # Application loggers
     app_logger = logging.getLogger("app")
     app_logger.setLevel(getattr(logging, effective_level, logging.INFO))
     app_logger.handlers.clear()
-    app_logger.addHandler(console)
-    app_logger.addHandler(file_handler)
+    for h in handlers:
+        app_logger.addHandler(h)
     app_logger.propagate = False
 
     # Quiet third-party loggers

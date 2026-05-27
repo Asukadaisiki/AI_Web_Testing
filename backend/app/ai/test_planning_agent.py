@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.ai.planning_tools import execute_tool
 from app.ai.test_planning_prompts import FORCE_GENERATE_HINT, FORCE_GENERATE_MARKER, build_system_prompt
 from app.core.config import get_settings
+from app.core.structured_logging import LogContext, get_structured_logger, Timer
 from app.schemas.ai_planning import (
     AIPlanningPlan,
     AIPlanningRequirements,
@@ -29,6 +30,7 @@ from app.schemas.ai_planning import (
 
 
 logger = logging.getLogger(__name__)
+slog = get_structured_logger(__name__)
 URL_PATTERN = re.compile(r"https?://[^\s，。；;]+", re.IGNORECASE)
 
 
@@ -213,6 +215,10 @@ def stream_planning_turn(
         tool_calls=None,
     )
     logger.info("Planning turn start, transcript_len=%d, ai_enabled=%s", len(transcript), _planning_llm_enabled(settings))
+    slog.ai_thinking("react_round_start", message="Planning turn start", data={
+        "transcript_length": len(transcript),
+        "ai_enabled": _planning_llm_enabled(settings),
+    }, session_id=planning_session_id)
 
     if not _planning_llm_enabled(settings):
         response = _run_fallback_turn(
@@ -293,6 +299,12 @@ def stream_planning_turn(
         logger.info("LLM response in round %d (len=%d): action=%s, action_input_keys=%s",
                      round_index, len(raw_response), parsed.get("action") if parsed else "parse_failed",
                      list((parsed.get("action_input") or {}).keys()) if parsed and isinstance(parsed.get("action_input"), dict) else [])
+        slog.ai_thinking("llm_response", data={
+            "round_index": round_index,
+            "response_length": len(raw_response),
+            "parse_success": parsed is not None,
+            "action": parsed.get("action") if parsed else None,
+        }, session_id=planning_session_id)
         if parsed is None:
             parse_retries += 1
             logger.warning("LLM response unparseable in round %d (parse retry %d), raw (first 300 chars): %s",
@@ -342,6 +354,12 @@ def stream_planning_turn(
             action_input = {}
 
         logger.info("ReAct round %d: action=%s, assistant_msg_len=%d", round_index, action, len(parsed.get("assistant_message", "")))
+        slog.ai_thinking("react_round_complete", data={
+            "round_index": round_index,
+            "action": action,
+            "action_input_keys": list(action_input.keys()),
+            "assistant_message_length": len(parsed.get("assistant_message", "")),
+        }, session_id=planning_session_id)
 
         # --- Parse todo_list from LLM response ---
         _valid_statuses = {"done", "in_progress", "pending", "failed", "skipped"}
@@ -548,6 +566,11 @@ def stream_planning_turn(
                     "Duplicate tool call detected: %s, signature=%s — reusing prior result without charging a round",
                     tool_name, dup_signature,
                 )
+                slog.tool_call("tool_dedup", data={
+                    "tool_name": tool_name,
+                    "signature": dup_signature,
+                    "round_index": round_index,
+                }, session_id=planning_session_id)
                 yield {"type": "tool_call_start", "tool": tool_name, "params": params}
                 yield {
                     "type": "tool_call_end", "tool": tool_name,
@@ -898,6 +921,11 @@ def stream_planning_turn(
     # Exhausted safety cap — check if exploration was attempted but failed
     elapsed = time.monotonic() - turn_start_time
     logger.warning("Safety cap exhausted after %d rounds (%.2fs), forcing fallback plan", round_index, elapsed)
+    slog.ai_thinking("safety_cap_exhausted", data={
+        "round_index": round_index,
+        "elapsed_seconds": round(elapsed, 2),
+        "tool_call_count": len(tool_calls),
+    }, session_id=planning_session_id, level=logging.WARNING)
     page_elements = _extract_page_elements(tool_calls)
     exploration_error = _extract_exploration_error(tool_calls)
     if exploration_error and not page_elements:

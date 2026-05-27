@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re as _re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,8 +18,10 @@ from app.ai.page_explorer import (
     is_storage_state_stale,
     load_storage_state_meta,
 )
+from app.core.structured_logging import get_structured_logger
 
 logger = logging.getLogger(__name__)
+slog = get_structured_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,14 @@ def execute_tool(
         _EXPLORE_TOOLS = {"explore_page", "explore_flow", "capture_page_session"}
         if planning_session_id and tool_name in _EXPLORE_TOOLS:
             params = {**params, "planning_session_id": planning_session_id}
+
+        slog.tool_call("tool_start", data={
+            "tool_name": tool_name,
+            "params": {k: str(v)[:200] for k, v in params.items()},
+            "session_id": planning_session_id,
+        }, session_id=planning_session_id)
+        tool_timer = time.perf_counter()
+
         if tool_name == "create_project":
             result = handler(
                 params=params, db_session=db_session, project_id=project_id,
@@ -107,9 +118,27 @@ def execute_tool(
             )
         else:
             result = handler(params=params, db_session=db_session, project_id=project_id)
-        return json.dumps(result, ensure_ascii=False, default=str)
+
+        duration_ms = int((time.perf_counter() - tool_timer) * 1000)
+        result_str = json.dumps(result, ensure_ascii=False, default=str)
+        slog.tool_call("tool_complete", data={
+            "tool_name": tool_name,
+            "duration_ms": duration_ms,
+            "result_size_bytes": len(result_str),
+            "result_summary": result_str[:300],
+            "session_id": planning_session_id,
+        }, session_id=planning_session_id)
+        return result_str
     except Exception as exc:
+        duration_ms = int((time.perf_counter() - tool_timer) * 1000)
         logger.warning("Tool %s execution failed: %s", tool_name, exc)
+        slog.tool_call("tool_error", data={
+            "tool_name": tool_name,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc)[:500],
+            "duration_ms": duration_ms,
+            "session_id": planning_session_id,
+        }, session_id=planning_session_id, level=logging.WARNING)
         db_session.rollback()
         return json.dumps({"error": f"工具执行失败: {exc!s}"}, ensure_ascii=False)
 
