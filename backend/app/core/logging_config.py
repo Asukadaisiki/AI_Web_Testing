@@ -32,33 +32,26 @@ def setup_logging(level: str | None = None) -> None:
                then defaults to ``INFO``.
     """
     effective_level = level or os.getenv("LOG_LEVEL", "INFO").upper()
-    structured_enabled = os.getenv("STRUCTURED_LOG_ENABLED", "true").lower() in ("true", "1", "yes")
 
     formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
 
-    # Console handler
+    # Console handler (for development)
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(formatter)
 
-    # File handler - output to backend root directory
-    backend_root = Path(__file__).resolve().parents[2]
-    log_file = backend_root / "backend.log"
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-
-    handlers: list[logging.Handler] = [console, file_handler]
+    handlers: list[logging.Handler] = [console]
 
     # Structured JSON file handler
-    if structured_enabled:
-        structured_log_file = backend_root / "backend_structured.log"
-        structured_handler = logging.handlers.RotatingFileHandler(
-            structured_log_file,
-            maxBytes=50 * 1024 * 1024,  # 50MB
-            backupCount=5,
-            encoding="utf-8",
-        )
-        structured_handler.setFormatter(StructuredJsonFormatter())
-        handlers.append(structured_handler)
+    backend_root = Path(__file__).resolve().parents[2]
+    structured_log_file = backend_root / "backend_structured.log"
+    structured_handler = logging.handlers.RotatingFileHandler(
+        structured_log_file,
+        maxBytes=50 * 1024 * 1024,  # 50MB
+        backupCount=5,
+        encoding="utf-8",
+    )
+    structured_handler.setFormatter(StructuredJsonFormatter())
+    handlers.append(structured_handler)
 
     # Root logger
     root = logging.getLogger()
