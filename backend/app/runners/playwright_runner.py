@@ -18,7 +18,6 @@ from app.locators.corrections import CorrectionStore
 from app.locators.semantic import ResolvedLocator
 from app.runners.click_preprocessor import click_with_precheck
 from app.runners.postcondition_verifier import PostconditionVerifier
-from app.runners.runtime_scorer import compute_final_score, decide_strategy
 from app.schemas.dsl import DSLCase
 from app.schemas.executions import (
     AILocateCandidate,
@@ -173,24 +172,6 @@ def _has_candidates(step) -> bool:
     return hasattr(step, "candidates") and bool(step.candidates)
 
 
-def _evaluate_element_state(element) -> dict:
-    """Evaluate element state via JS for runtime scoring."""
-    try:
-        return element.evaluate("""(el) => {
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return {
-                visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
-                enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
-                bbox_area: Math.round(rect.width * rect.height),
-                receives_events: rect.width > 0 && rect.height > 0,
-                in_viewport: rect.top >= 0 && rect.left >= 0 && rect.bottom <= window.innerHeight && rect.right <= window.innerWidth,
-            };
-        }""")
-    except Exception:
-        return {"visible": False, "enabled": False, "bbox_area": 0, "receives_events": False, "in_viewport": False}
-
-
 def _build_locator_from_candidate(page, candidate_entry) -> object | None:
     """Build a Playwright locator from a candidate's strategy and selector.
 
@@ -254,27 +235,6 @@ def _build_locator_from_candidate(page, candidate_entry) -> object | None:
         return None
 
 
-def _compute_actionability(state: dict) -> float:
-    score = 0.0
-    if state.get("visible"):
-        score += 0.4
-    if state.get("enabled"):
-        score += 0.3
-    if state.get("receives_events"):
-        score += 0.3
-    return score
-
-
-def _compute_visual_consistency(state: dict) -> float:
-    area = state.get("bbox_area", 0)
-    if area == 0:
-        return 0.0
-    score = min(1.0, area / 10000) * 0.7
-    if state.get("in_viewport"):
-        score += 0.3
-    return min(1.0, score)
-
-
 def _execute_step_with_candidates(
     page,
     step,
@@ -286,12 +246,11 @@ def _execute_step_with_candidates(
     input_values: dict[str, str] | None = None,
     runtime_context: dict[str, str] | None = None,
 ) -> StepExecutionEvidence:
-    """Execute a step using the dual-layer scoring path.
+    """Execute a step using A11y pre-scored candidates.
 
-    Iterates through pre-scored candidates (sorted by *pre_score* descending),
-    computes runtime features, and picks the first candidate that passes both
-    scoring and postcondition verification.  Falls back to the legacy
-    ``_resolve_with_confidence_gate`` path if every candidate fails.
+    Iterates through candidates (sorted by *pre_score* descending),
+    picks the first candidate that passes postcondition verification.
+    Falls back to the legacy ``_resolve_with_confidence_gate`` path if every candidate fails.
     """
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
@@ -306,7 +265,6 @@ def _execute_step_with_candidates(
 
     last_error: Exception | None = None
     used_strategy: str | None = None
-    used_trace: str | None = None
 
     for candidate in candidates:
         locator = _build_locator_from_candidate(page, candidate)
@@ -318,30 +276,6 @@ def _execute_step_with_candidates(
             if locator.count() == 0:
                 continue
         except Exception:
-            continue
-
-        # Evaluate runtime element state
-        try:
-            first_el = locator.first
-            state = _evaluate_element_state(first_el)
-        except Exception:
-            continue
-
-        # Compute runtime features
-        pre_features = candidate.pre_features or {}
-        runtime_features = {
-            "actionability": _compute_actionability(state),
-            "visual_consistency": _compute_visual_consistency(state),
-            "history_success": 0.5,  # neutral default
-            "rank_margin": 0.0,
-            "_hard_overrides": state,
-        }
-
-        final_score = compute_final_score(pre_features, runtime_features)
-        strategy_decision = decide_strategy(final_score, state)
-
-        # Skip low-confidence strategies
-        if strategy_decision in ("vlm_grounding", "vlm_or_repair"):
             continue
 
         # Attempt to execute the action
@@ -383,7 +317,6 @@ def _execute_step_with_candidates(
 
             # Success — build evidence
             used_strategy = candidate.strategy
-            used_trace = f"candidate:{candidate.strategy}:{candidate.selector}(score={final_score:.2f},strategy={strategy_decision})"
 
             return StepExecutionEvidence(
                 step_index=step_index,

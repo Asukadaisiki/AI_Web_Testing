@@ -15,7 +15,6 @@ from playwright.sync_api import sync_playwright
 
 from app.core.config import get_settings
 from app.locators.fallback import EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT
-from app.runners.pre_scorer import score_candidates_for_element, ELEMENT_TYPE_SCORES
 
 import hashlib
 
