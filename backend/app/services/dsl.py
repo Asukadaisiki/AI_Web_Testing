@@ -210,18 +210,6 @@ def delete_dsl_generation_run(session: Session, generation_id: int) -> None:
     session.commit()
 
 
-def get_dsl_generation_runtime_stats() -> DslGenerationRuntimeStats:
-    with _RUNTIME_STATS_LOCK:
-        return DslGenerationRuntimeStats(
-            total_requests=_RUNTIME_STATS.total_requests,
-            success_count=_RUNTIME_STATS.success_count,
-            failure_count=_RUNTIME_STATS.failure_count,
-            last_model=_RUNTIME_STATS.last_model,
-            last_error_type=_RUNTIME_STATS.last_error_type,
-            last_error_message=_RUNTIME_STATS.last_error_message,
-        )
-
-
 def reset_dsl_generation_runtime_stats() -> None:
     with _RUNTIME_STATS_LOCK:
         _RUNTIME_STATS.total_requests = 0

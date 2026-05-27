@@ -1015,30 +1015,6 @@ def _prepare_transcript_for_llm(
     return prepared, force_generate
 
 
-def _call_llm_with_retry(
-    *,
-    messages: list[dict[str, Any]],
-    api_key: str,
-    model: str,
-    base_url: str,
-    timeout_seconds: float,
-) -> str | None:
-    for attempt in range(3):
-        try:
-            result = _call_planning_llm(
-                messages=messages,
-                api_key=api_key,
-                model=model,
-                base_url=base_url,
-                timeout_seconds=timeout_seconds,
-            )
-            logger.debug("LLM call succeeded on attempt %d", attempt + 1)
-            return result
-        except Exception as exc:
-            logger.exception("Planning LLM call failed on attempt %d/%d: %s", attempt + 1, 3, type(exc).__name__)
-    return None
-
-
 def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
     normalized_base_url = base_url.strip().casefold()
     normalized_model = model.strip().casefold()
