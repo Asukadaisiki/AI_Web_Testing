@@ -199,19 +199,7 @@ After each execution run, assess the dual-layer scoring system:
 | Overlay recovery | Did click_preprocessor successfully handle overlays? |
 | Strategy distribution | Is the DOM/VLM ratio reasonable? (>70% DOM is healthy) |
 
-### 4.3 Review Verdict (Explorer-Judge mode)
-
-If using Explorer-Judge, review the **VerdictPanel**:
-
-| Verdict Field | What to Check |
-|---|---|
-| Failure classification | Is the 5-category classification correct? (test_design_error / automation_issue / product_defect / environment / suspected_flaky) |
-| Root cause | Is the root cause analysis reasonable? |
-| Reproduction path | Can the described steps reproduce the issue? |
-| Suggested actions | Are recommendations actionable? |
-| Confidence | Does the confidence level match the evidence? |
-
-### 4.3 Judge Failure Classification Accuracy (now renumbered to 4.4)
+### 4.3 Judge Failure Classification Accuracy
 
 Evaluate if the AI correctly classified failures:
 
@@ -437,7 +425,6 @@ If defects found, also append to `docs/bug-log.md`.
 - Execution hangs for > 2 minutes without progress
 - All steps fail (likely environment issue, not test quality)
 - AI ignores execution results and repeats same plan
-- VerdictPanel shows incorrect failure classification consistently
 - Cross-session insights not loaded in new sessions
 - **All steps fall back to VLM grounding** (DOM candidates all scored too low — PreScorer weights may need calibration)
 - **Postcondition always passes** even for wrong actions (postcondition inference may be too lenient)

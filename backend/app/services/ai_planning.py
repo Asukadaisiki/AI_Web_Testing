@@ -1257,11 +1257,17 @@ def _build_input_values_from_session(
 
     Parses ``test_data_or_account`` for patterns like "key：value" or "key: value",
     then matches against draft ``input_contract`` context_keys using fuzzy heuristics.
+
+    Supports:
+    - English keys: "email: test@example.com", "password: 123456"
+    - Chinese keys: "账号：test@example.com", "密码：123456"
+    - Mixed formats: "账号: test@example.com"
     """
     import re
     result: dict[str, str] = {}
     raw = (requirements_json.get("test_data_or_account") or "").strip()
     if not raw:
+        logger.debug("[_build_input_values] test_data_or_account is empty")
         return result
 
     # Collect all context_keys from input_contracts
@@ -1273,14 +1279,19 @@ def _build_input_values_from_session(
             key = ic.get("context_key") or ""
             if key:
                 context_keys.add(key)
-    if not context_keys:
-        return result
+
+    logger.info(
+        "[_build_input_values] raw='%s', context_keys=%s",
+        raw[:100] if len(raw) > 100 else raw,
+        context_keys,
+    )
 
     # Parse test_data: split on common delimiters (newline, comma, semicolon, Chinese comma)
     entries = re.split(r"[\n,，;；]", raw)
     # Also try to split on newlines first
     if "\n" in raw:
         entries = raw.split("\n")
+
     pairs: dict[str, str] = {}
     for entry in entries:
         entry = entry.strip()
@@ -1289,49 +1300,119 @@ def _build_input_values_from_session(
         # Pattern: "label：value" or "label: value" or "label=value"
         m = re.match(r"(.+?)[：:=]\s*(.+)", entry)
         if m:
-            pairs[m.group(1).strip()] = m.group(2).strip()
+            key = m.group(1).strip()
+            value = m.group(2).strip()
+            pairs[key] = value
+            logger.debug("[_build_input_values] parsed pair: '%s' -> '%s'", key, value[:20] if len(value) > 20 else value)
         else:
             # Single value: try to match to a context_key by type
             if re.match(r"[\w.+-]+@[\w-]+\.[\w.]+", entry):
                 pairs["email"] = entry
+                logger.debug("[_build_input_values] detected email: '%s'", entry)
             elif entry.startswith("http"):
                 pairs["url"] = entry
+                logger.debug("[_build_input_values] detected url: '%s'", entry)
             elif len(entry) >= 4:
                 pairs.setdefault("_unmatched", entry)
 
+    logger.info("[_build_input_values] parsed pairs: %s", {k: v[:10] for k, v in pairs.items()})
+
+    # Chinese-to-English key mapping for common patterns
+    chinese_key_mapping = {
+        "账号": ["email", "username", "login", "user", "account"],
+        "邮箱": ["email", "mail", "username"],
+        "用户名": ["username", "user", "login", "email"],
+        "密码": ["password", "pass", "pwd"],
+        "口令": ["password", "pass", "pwd"],
+        "url": ["url", "link", "href"],
+        "网址": ["url", "link"],
+        "链接": ["url", "link"],
+    }
+
     # Match parsed pairs to context_keys
-    for ck in context_keys:
-        ck_lower = ck.lower()
+    if not context_keys:
+        # If no context_keys from contracts, try to infer from Chinese keys
+        logger.info("[_build_input_values] No context_keys from contracts, inferring from Chinese keys")
         for label, value in pairs.items():
             label_lower = label.lower()
+            for cn_key, en_keys in chinese_key_mapping.items():
+                if cn_key in label_lower:
+                    for en_key in en_keys:
+                        if en_key not in result:
+                            result[en_key] = value
+                            logger.info("[_build_input_values] Inferred '%s' from Chinese key '%s'", en_key, label)
+                            break
+                    break
+        return result
+
+    for ck in context_keys:
+        ck_lower = ck.lower()
+        matched = False
+
+        for label, value in pairs.items():
+            label_lower = label.lower()
+
             # Direct match: context_key in label
             if ck_lower in label_lower or label_lower in ck_lower:
                 result[ck] = value
+                matched = True
+                logger.info("[_build_input_values] Direct match: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
                 break
-            # Type heuristic: email
-            if ("email" in ck_lower or "mail" in ck_lower or "username" in ck_lower) and "@" in value:
-                result[ck] = value
+
+            # Chinese key match: map Chinese label to English context_key
+            for cn_key, en_keys in chinese_key_mapping.items():
+                if cn_key in label_lower and ck_lower in en_keys:
+                    result[ck] = value
+                    matched = True
+                    logger.info("[_build_input_values] Chinese key match: '%s' -> '%s' (via '%s')", ck, value[:20] if len(value) > 20 else value, cn_key)
+                    break
+            if matched:
                 break
-            # Type heuristic: password
-            if "password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower:
-                result[ck] = value
-                break
+
+        if matched:
+            continue
+
+        # Type heuristic: email
+        if ("email" in ck_lower or "mail" in ck_lower or "username" in ck_lower):
+            for label, value in pairs.items():
+                if "@" in value:
+                    result[ck] = value
+                    matched = True
+                    logger.info("[_build_input_values] Email heuristic: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
+                    break
+        # Type heuristic: password
+        if not matched and ("password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower):
+            for label, value in pairs.items():
+                label_lower = label.lower()
+                # Look for password-related labels or non-email values
+                if ("密码" in label_lower or "password" in label_lower or "pass" in label_lower or
+                    ("@" not in value and len(value) >= 4)):
+                    result[ck] = value
+                    matched = True
+                    logger.info("[_build_input_values] Password heuristic: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
+                    break
+
         # Fallback: use first available value that looks like a credential
-        if ck not in result:
+        if not matched:
             for _, value in pairs.items():
                 if "@" in value and ("email" in ck_lower or "login" in ck_lower or "user" in ck_lower):
                     result[ck] = value
+                    logger.info("[_build_input_values] Fallback email: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
                     break
                 if len(value) >= 4 and ("password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower):
                     result[ck] = value
+                    logger.info("[_build_input_values] Fallback password: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
                     break
+
         # Last resort: assign the first string value that matches length heuristic
         if ck not in result:
             for _, value in pairs.items():
                 if len(value) >= 3 and value not in result.values():
                     result[ck] = value
+                    logger.info("[_build_input_values] Last resort: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
                     break
 
+    logger.info("[_build_input_values] final result: %s", {k: v[:10] for k, v in result.items()})
     return result
 
 
@@ -2089,474 +2170,6 @@ def _to_draft_schema(record: AIPlanningDraft) -> AIPlanningDraftSchema:
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
-
-
-# ---------------------------------------------------------------------------
-# Explorer-Judge: Router decision logic
-# ---------------------------------------------------------------------------
-
-
-def router_decide(
-    verdict: "ExplorerJudgeVerdict",
-    auto_fix_already_attempted: bool,
-) -> "RouterDecision":
-    """Deterministic routing based on Judge conclusions."""
-    from app.schemas.explorer_judge import RouterDecision
-
-    # Mandatory stop: product defect confirmed
-    if verdict.is_suspected_product_bug:
-        return RouterDecision(action="report_to_user", reason="产品缺陷已确认，需人工介入")
-
-    # Mandatory stop: human judgment required
-    if verdict.manual_intervention_needed:
-        return RouterDecision(action="report_to_user", reason="需要人工判断业务规则")
-
-    # Auto-fix: test design error, max once
-    has_test_design_error = any(
-        c.classification == "test_design_error" for c in verdict.conclusions
-    )
-    if has_test_design_error and not auto_fix_already_attempted:
-        return RouterDecision(action="auto_fix_dsl", reason="Judge 判定为测试设计错误，尝试自动修复（最多一次）", retry_remaining=1)
-
-    # Environment issue: report and skip
-    has_env_issue = any(
-        c.classification == "environment_dependency" for c in verdict.conclusions
-    )
-    if has_env_issue:
-        return RouterDecision(action="report_to_user", reason="环境或依赖问题，标记跳过")
-
-    # Default: report
-    return RouterDecision(action="report_to_user", reason="分析完成，报告发现")
-
-
-def build_aggregate_verdict(
-    exploration_result: "ExplorationResult",
-    judge_response: dict,
-    case_id: int,
-) -> "ExplorerJudgeVerdict":
-    """Build the aggregate verdict from Judge response + Explorer result."""
-    from app.schemas.explorer_judge import ExplorerJudgeVerdict, JudgeConclusion
-
-    aggregate = judge_response.get("aggregate", {})
-    conclusions_data = judge_response.get("conclusions", [])
-
-    conclusions = []
-    for c in conclusions_data:
-        conclusions.append(JudgeConclusion(
-            step_index=c.get("step_index", 0),
-            classification=c.get("classification", "suspected_flaky"),
-            confidence=c.get("confidence", "low"),
-            root_cause_analysis=c.get("root_cause_analysis", ""),
-            reproduction_path=c.get("reproduction_path", ""),
-            suggested_action=c.get("suggested_action", "manual_intervention"),
-            is_product_bug=c.get("is_product_bug", False),
-            requires_human_judgment=c.get("requires_human_judgment", False),
-            recommended_regression=c.get("recommended_regression", False),
-        ))
-
-    # Determine test_point_status
-    if exploration_result.failed_steps == 0:
-        status = "all_passed"
-    elif any(c.classification == "product_defect" for c in conclusions):
-        status = "has_defects"
-    elif any(c.classification == "environment_dependency" for c in conclusions):
-        status = "environment_blocked"
-    elif any(c.classification == "suspected_flaky" for c in conclusions):
-        status = "has_flaky"
-    else:
-        status = "needs_fix"
-
-    return ExplorerJudgeVerdict(
-        case_id=case_id,
-        test_point_status=status,
-        total_steps=exploration_result.total_steps,
-        passed_steps=exploration_result.passed_steps,
-        failed_steps=exploration_result.failed_steps,
-        first_failed_step=aggregate.get("first_failed_step"),
-        failure_phenomenon=aggregate.get("failure_phenomenon"),
-        verification_actions=aggregate.get("verification_actions", []),
-        possible_causes_ranked=aggregate.get("possible_causes_ranked", []),
-        is_suspected_product_bug=aggregate.get("is_suspected_product_bug", False),
-        regression_recommended=aggregate.get("regression_recommended", False),
-        manual_intervention_needed=aggregate.get("manual_intervention_needed", False),
-        conclusions=conclusions,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Explorer-Judge: streaming execution generator
-# ---------------------------------------------------------------------------
-
-
-def save_and_execute_with_explorer_judge_streaming(
-    session_obj: Session,
-    planning_session_id: int,
-    draft_ids: list[int],
-    actor_user_id: int,
-    *,
-    input_values: dict[str, str] | None = None,
-    cancel_event=None,
-):
-    """Explorer-Judge streaming execution: full-path explore + batch judge.
-
-    Yields progress event dicts for WebSocket streaming.
-    """
-    from threading import Event as ThreadEvent
-    from app.models import ExplorationRun
-    from app.runners.explorer_runner import ExplorerStepEvent, run_explorer
-    from app.runners.playwright_runner import RunnerCancelledError
-    from app.schemas.explorer_judge import ExplorerStepEvidence, ExplorationResult
-    from app.ai.judge_agent import call_judge_llm
-
-    if cancel_event is None:
-        cancel_event = ThreadEvent()
-
-    ej_start_time = time.monotonic()
-    logger.info("[session:%d] Explorer-Judge streaming start, draft_ids=%s", planning_session_id, draft_ids)
-
-    planning_session = _get_session(session_obj, planning_session_id, actor_user_id=actor_user_id)
-    project_ids = _get_session_project_ids(planning_session)
-    if not project_ids:
-        raise ValueError("请先关联至少一个项目再保存和执行用例。")
-
-    # Phase 1: Save drafts as cases (reuse existing logic)
-    drafts = (
-        session_obj.query(AIPlanningDraft)
-        .filter(
-            AIPlanningDraft.session_id == planning_session_id,
-            AIPlanningDraft.id.in_(draft_ids),
-        )
-        .all()
-    )
-
-    saved_cases: list[SavedCaseResult] = []
-    for draft in drafts:
-        if cancel_event.is_set():
-            raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
-        if not draft.dsl_case_json:
-            continue
-        case_payload = CaseCreateRequest(
-            project_id=project_ids[0],
-            actor_user_id=actor_user_id,
-            **draft.dsl_case_json,
-        )
-        case = create_case(session_obj, case_payload, actor_user_id=actor_user_id)
-        saved_cases.append(SavedCaseResult(case_id=case.id, case_name=case.name))
-        draft.status = "imported"
-        yield {
-            "type": "save_progress",
-            "saved_count": len(saved_cases),
-            "total": len(drafts),
-            "case_name": case.name,
-        }
-
-    if not saved_cases:
-        planning_session.status = "saving"
-        session_obj.commit()
-        yield {"type": "done"}
-        return
-
-    exploration_results_map: dict[int, ExplorationResult] = {}
-
-    for saved in saved_cases:
-        if cancel_event.is_set():
-            raise RunnerCancelledError("Execution cancelled by user.", step_results=[])
-
-        case_record = session_obj.query(TestCase).get(saved.case_id)
-        if not case_record or not case_record.dsl:
-            continue
-
-        from app.schemas.dsl import DSLCase
-        dsl_case = DSLCase.model_validate(case_record.dsl)
-        base_url = getattr(case_record, "base_url", None) or planning_session.requirements_json and planning_session.requirements_json.get("entry_url_or_page")
-
-        # Create ExplorationRun record
-        exploration_run = ExplorationRun(
-            session_id=planning_session_id,
-            case_id=saved.case_id,
-            role="explorer",
-            status="running",
-        )
-        session_obj.add(exploration_run)
-        session_obj.flush()
-
-        yield {
-            "type": "explorer_start",
-            "case_id": saved.case_id,
-            "case_name": saved.case_name,
-            "exploration_run_id": exploration_run.id,
-            "total_steps": len(dsl_case.steps),
-        }
-
-        explorer_start_time = time.monotonic()
-        logger.info(
-            "[session:%d] Explorer start for case '%s' (id=%d), steps=%d",
-            planning_session_id, saved.case_name, saved.case_id, len(dsl_case.steps),
-        )
-
-        # Phase 2: Run Explorer (non-terminating)
-        explorer_stream = run_explorer(
-            case=dsl_case,
-            execution_id=exploration_run.id,
-            base_url=base_url,
-            input_values=input_values,
-            cancel_event=cancel_event,
-        )
-        exploration_result = None
-        while True:
-            try:
-                event = next(explorer_stream)
-                yield {
-                    "type": event.type,
-                    "case_id": saved.case_id,
-                    "step_index": event.step_index,
-                    "action": event.action,
-                    **({"target": event.target} if event.target is not None else {}),
-                    **({"status": event.status} if event.status is not None else {}),
-                    **({"duration_ms": event.duration_ms} if event.duration_ms is not None else {}),
-                }
-            except StopIteration as stop:
-                exploration_result = stop.value
-                exploration_results_map[saved.case_id] = exploration_result
-                break
-
-        # Persist failure records
-        failure_json = [r.model_dump(mode="json") for r in exploration_result.failure_records]
-        exploration_run.failure_records_json = failure_json
-        exploration_run.status = "completed"
-        session_obj.flush()
-
-        yield {
-            "type": "explorer_complete",
-            "case_id": saved.case_id,
-            "exploration_run_id": exploration_run.id,
-            "total_steps": exploration_result.total_steps,
-            "passed_steps": exploration_result.passed_steps,
-            "failed_steps": exploration_result.failed_steps,
-            "cascade_blocked_steps": exploration_result.cascade_blocked_steps,
-        }
-
-        explorer_elapsed = time.monotonic() - explorer_start_time
-        logger.info(
-            "[session:%d] Explorer complete for case '%s', passed=%d, failed=%d, duration=%.2fs",
-            planning_session_id, saved.case_name,
-            exploration_result.passed_steps, exploration_result.failed_steps, explorer_elapsed,
-        )
-
-        # Phase 3: Judge (only if there are failures)
-        if not exploration_result.failure_records:
-            exploration_run.judge_conclusions_json = []
-            exploration_run.router_decision_json = {"action": "finished", "reason": "全部通过"}
-            session_obj.flush()
-            yield {
-                "type": "verdict_report",
-                "case_id": saved.case_id,
-                "exploration_run_id": exploration_run.id,
-                "verdict": {
-                    "test_point_status": "all_passed",
-                    "total_steps": exploration_result.total_steps,
-                    "passed_steps": exploration_result.passed_steps,
-                    "failed_steps": 0,
-                    "conclusions": [],
-                },
-                "requires_user_action": False,
-            }
-            continue
-
-        yield {
-            "type": "judge_start",
-            "case_id": saved.case_id,
-            "failure_count": len(exploration_result.failure_records),
-        }
-
-        judge_start_time = time.monotonic()
-        logger.info(
-            "[session:%d] Judge start for case '%s' (id=%d), failures=%d",
-            planning_session_id, saved.case_name, saved.case_id,
-            len(exploration_result.failure_records),
-        )
-
-        try:
-            dsl_summary = [
-                {"action": s.action, "target": getattr(s, "target", None), "value": getattr(s, "value", None)}
-                for s in dsl_case.steps
-            ]
-            judge_response = call_judge_llm(
-                exploration_result.failure_records,
-                case_name=saved.case_name,
-                dsl_steps_summary=dsl_summary,
-            )
-        except Exception as exc:
-            logger.exception("Judge LLM call failed for exploration_run %d", exploration_run.id)
-            judge_elapsed = time.monotonic() - judge_start_time
-            logger.error("[session:%d] Judge failed for case '%s', duration=%.2fs", planning_session_id, saved.case_name, judge_elapsed)
-            exploration_run.judge_conclusions_json = []
-            exploration_run.router_decision_json = {"action": "report_to_user", "reason": f"Judge 调用失败: {exc}"}
-            session_obj.flush()
-            yield {
-                "type": "judge_complete",
-                "case_id": saved.case_id,
-                "error": str(exc),
-            }
-            yield {
-                "type": "verdict_report",
-                "case_id": saved.case_id,
-                "exploration_run_id": exploration_run.id,
-                "verdict": {
-                    "test_point_status": "needs_fix",
-                    "error": f"Judge analysis failed: {exc}",
-                    "failed_steps": len(exploration_result.failure_records),
-                },
-                "requires_user_action": True,
-            }
-            continue
-
-        exploration_run.judge_conclusions_json = judge_response
-        session_obj.flush()
-
-        judge_elapsed = time.monotonic() - judge_start_time
-        conclusions_count = len(judge_response.get("conclusions", []))
-        logger.info(
-            "[session:%d] Judge complete for case '%s', conclusions=%d, duration=%.2fs",
-            planning_session_id, saved.case_name, conclusions_count, judge_elapsed,
-        )
-
-        yield {
-            "type": "judge_complete",
-            "case_id": saved.case_id,
-            "conclusions": judge_response.get("conclusions", []),
-            "aggregate": judge_response.get("aggregate", {}),
-        }
-
-        # Phase 4: Router decision
-        verdict = build_aggregate_verdict(exploration_result, judge_response, saved.case_id)
-        verdict.exploration_run_id = exploration_run.id
-        decision = router_decide(verdict, exploration_run.auto_fix_attempted)
-
-        exploration_run.router_decision_json = decision.model_dump(mode="json")
-        session_obj.flush()
-
-        logger.info(
-            "[session:%d] Router decision for case '%s': action=%s, reason=%s",
-            planning_session_id, saved.case_name, decision.action, decision.reason,
-        )
-
-        # Phase 5: Auto-fix (max once)
-        if decision.action == "auto_fix_dsl" and not exploration_run.auto_fix_attempted:
-            yield {
-                "type": "auto_fix_attempt",
-                "case_id": saved.case_id,
-                "reason": decision.reason,
-            }
-            exploration_run.auto_fix_attempted = True
-            session_obj.flush()
-
-            # Attempt DSL regeneration
-            try:
-                test_design_errors = [
-                    c for c in verdict.conclusions if c.classification == "test_design_error"
-                ]
-                repair_prompt = _build_repair_prompt(case_record, test_design_errors)
-                from app.schemas.dsl import GenerateDslRequest
-                fix_result = generate_dsl_case(
-                    session_obj,
-                    GenerateDslRequest(
-                        prompt=repair_prompt,
-                        base_url=base_url,
-                        actor_user_id=actor_user_id,
-                        case_id=saved.case_id,
-                        generation_mode="strict_steps_only",
-                        import_mode="steps_only",
-                    ),
-                )
-                yield {
-                    "type": "auto_fix_result",
-                    "case_id": saved.case_id,
-                    "success": True,
-                    "generation_id": fix_result.generation_id,
-                }
-                # TODO: Re-run Explorer with fixed DSL (next iteration)
-            except Exception as exc:
-                logger.exception("Auto-fix DSL regeneration failed for case %d", saved.case_id)
-                yield {
-                    "type": "auto_fix_result",
-                    "case_id": saved.case_id,
-                    "success": False,
-                    "error_message": str(exc),
-                }
-
-        # Phase 6: Report verdict
-        yield {
-            "type": "verdict_report",
-            "case_id": saved.case_id,
-            "exploration_run_id": exploration_run.id,
-            "verdict": verdict.model_dump(mode="json"),
-            "requires_user_action": decision.action == "report_to_user",
-        }
-
-    # Persist execution summary message for Explorer-Judge flow
-    if exploration_results_map:
-        execution_summaries_ej: list[ExecutionSummaryResult] = []
-        for saved in saved_cases:
-            result = exploration_results_map.get(saved.case_id)
-            if not result:
-                continue
-            status_val = "passed" if result.failed_steps == 0 else "failed"
-            execution_summaries_ej.append(ExecutionSummaryResult(
-                execution_id=0,
-                case_id=saved.case_id,
-                case_name=saved.case_name,
-                status=status_val,
-                total_steps=result.total_steps,
-                passed_steps=result.passed_steps,
-                failed_steps=result.failed_steps,
-                duration_ms=None,
-                screenshot_url=None,
-                report_url="",
-            ))
-
-        lines_ej = ["Explorer-Judge 执行完成：\n"]
-        for ex in execution_summaries_ej:
-            icon = "✅" if ex.status == "passed" else "❌"
-            lines_ej.append(f"{icon} {ex.case_name} — {ex.status} ({ex.passed_steps}/{ex.total_steps}步)")
-        session_obj.add(
-            AIPlanningMessage(
-                session_id=planning_session.id,
-                role="assistant",
-                turn_type="plan",
-                content="\n".join(lines_ej),
-                structured_payload_json={
-                    "type": "execution_summary",
-                    "saved_cases": [item.model_dump(mode="json") for item in saved_cases],
-                    "execution_summaries": [item.model_dump(mode="json") for item in execution_summaries_ej],
-                },
-            )
-        )
-        planning_session.status = "completed"
-        session_obj.commit()
-
-    ej_elapsed_total = time.monotonic() - ej_start_time
-    logger.info(
-        "[session:%d] Explorer-Judge streaming done, cases=%d, duration=%.2fs",
-        planning_session_id, len(saved_cases), ej_elapsed_total,
-    )
-    yield {"type": "done"}
-
-
-def _build_repair_prompt(case_record, test_design_errors: list) -> str:
-    """Build a prompt for DSL regeneration from Judge conclusions."""
-    parts = [
-        f"请修复以下测试用例的 DSL 步骤。用例名称: {case_record.name}\n",
-        "## Judge 分析的失败原因:\n",
-    ]
-    for err in test_design_errors:
-        parts.append(f"- 步骤 {err.step_index}: {err.root_cause_analysis}")
-        parts.append(f"  建议动作: {err.suggested_action}\n")
-
-    parts.append("## 当前 DSL:\n")
-    parts.append(str(case_record.dsl))
-    parts.append("\n\n请基于以上分析，生成修复后的 DSL 步骤。保持测试目标不变，修正失败点。")
-    return "".join(parts)
 
 
 # ── Cache helpers ─────────────────────────────────────────────────────────

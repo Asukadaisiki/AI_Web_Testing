@@ -32,7 +32,6 @@ import type {
 } from "../types/api";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 import { SessionProjectPanel } from "./SessionProjectPanel";
-import VerdictPanel from "./VerdictPanel";
 
 type AITestPlanningPanelProps = {
   aiSettings?: AISettings | null;
@@ -117,20 +116,6 @@ function applyStreamEventToContent(currentContent: string, event: ExecutionStrea
       return `步骤 ${event.step_index + 1}：${event.action}…`;
     case "step_complete":
       return `步骤 ${event.step_index + 1}：${event.action} — ${event.status === "passed" ? "✅" : "❌"}（${event.duration_ms}ms）`;
-    case "explorer_start":
-      return `🔍 探索：${event.case_name}（${event.total_steps}步）`;
-    case "explorer_complete":
-      return `🔍 探索完成：${event.passed_steps}/${event.total_steps} 通过，${event.failed_steps} 失败`;
-    case "judge_start":
-      return `⚖️ 正在判断 ${event.failure_count} 个失败点…`;
-    case "judge_complete":
-      return "⚖️ 判断完成";
-    case "auto_fix_attempt":
-      return `🔧 尝试自动修复：${event.reason}`;
-    case "auto_fix_result":
-      return event.success ? "🔧 自动修复成功" : `🔧 自动修复失败：${event.error_message}`;
-    case "verdict_report":
-      return "📋 判决报告已生成";
     default:
       return currentContent;
   }
@@ -384,13 +369,7 @@ export function AITestPlanningPanel({
       event.type === "save_progress" ||
       event.type === "case_start" ||
       event.type === "step_start" ||
-      event.type === "step_complete" ||
-      event.type === "explorer_start" ||
-      event.type === "explorer_complete" ||
-      event.type === "judge_start" ||
-      event.type === "judge_complete" ||
-      event.type === "auto_fix_attempt" ||
-      event.type === "auto_fix_result"
+      event.type === "step_complete"
     ) {
       const targetId = activeAssistantMessageIdRef.current;
       if (targetId == null) return;
@@ -404,28 +383,6 @@ export function AITestPlanningPanel({
                   msg.structured_payload as Record<string, unknown> | null,
                   event,
                 ),
-              }
-            : msg,
-        ),
-      );
-      return;
-    }
-
-    if (event.type === "verdict_report") {
-      const targetId = activeAssistantMessageIdRef.current;
-      if (targetId == null) return;
-      setTranscript((current) =>
-        current.map((msg) =>
-          msg.id === targetId
-            ? {
-                ...msg,
-                content: applyStreamEventToContent(msg.content, event),
-                structured_payload: {
-                  ...(msg.structured_payload as Record<string, unknown> | null ?? {}),
-                  type: "verdict_report",
-                  verdict: event.verdict,
-                  requires_user_action: event.requires_user_action,
-                },
               }
             : msg,
         ),
@@ -874,21 +831,6 @@ export function AITestPlanningPanel({
                         </a>
                       </div>
                     ))}
-                  </div>
-                ) : item.role === "assistant" &&
-                  item.structured_payload?.type === "verdict_report" &&
-                  item.structured_payload?.verdict ? (
-                  <div>
-                    <span style={{ fontWeight: 600 }}>📋 Explorer-Judge 报告</span>
-                    <VerdictPanel
-                      verdict={item.structured_payload.verdict as import("../types/api").ExplorerJudgeVerdict}
-                      onUserAction={(action) => {
-                        if (action === "acknowledge" && sessionId != null) {
-                          void loadSessionDetail(sessionId);
-                          void loadSessionList();
-                        }
-                      }}
-                    />
                   </div>
                 ) : item.role === "assistant" &&
                   Array.isArray(item.structured_payload?.todo_list) &&

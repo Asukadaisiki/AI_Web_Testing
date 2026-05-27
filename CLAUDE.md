@@ -52,10 +52,9 @@ backend/app/
   models/              # SQLAlchemy 2.x ORM
     test_case.py, test_case_run.py, locator_correction.py
     ai_planning_session.py, ai_planning_draft.py, ai_planning_message.py
-    project.py, dsl_generation_run.py, exploration_run.py, failure_record.py
+    project.py, dsl_generation_run.py
   runners/
     playwright_runner.py    # Execution engine: sync + streaming modes, artifact collection
-    explorer_runner.py      # Explorer-Judge defect discovery runner
   locators/            # 4-tier hybrid locator system
     corrections.py     # Tier 0: historical manual corrections (priority match)
     semantic.py        # Tier 1: DOM semantic (element_id, CSS, XPath, case-insensitive text match)
@@ -64,7 +63,6 @@ backend/app/
   ai/
     test_planning_agent.py   # ReAct-style conversational test planning agent
     dsl_generator.py         # NL→DSL with governance, auto-repair, rejection tracking
-    judge_agent.py           # Test verdict evaluation
     page_explorer.py         # Page structure exploration
     planning_tools.py        # Agent tool implementations
   schemas/dsl.py       # Pydantic DSL models (GotoStep, ClickStep, InputStep, etc.)
@@ -74,7 +72,7 @@ backend/app/
 frontend/src/
   app/AppRouter.tsx          # React Router v6, lazy-loaded pages
   pages/                     # PlanningPage, CasesPage, ReportPage, ExecutionDetailPage, CaseEditPage
-  components/                # AITestPlanningPanel, ChatInput, StepList, InterventionPanel, VerdictPanel
+  components/                # AITestPlanningPanel, ChatInput, StepList, InterventionPanel
   services/
     api.ts                   # REST API client (fetch wrappers)
     sseClient.ts             # Generic SSE client (POST + ReadableStream, with AbortSignal)
@@ -94,12 +92,10 @@ frontend/src/
 
 **SSE streaming flow**: All AI planning operations use SSE over POST (not WebSocket):
 - Frontend `callSSE()` sends POST with JSON body → backend `StreamingResponse` with `text/event-stream`
-- Endpoints: `/chat`, `/drafts`, `/execute`, `/execute-with-judge` under `/api/v1/ai-planning/sessions/{id}/`
+- Endpoints: `/chat`, `/drafts`, `/execute` under `/api/v1/ai-planning/sessions/{id}/`
 - Cancellation: frontend `AbortController` → `POST .../cancel` → backend `CancellationManager`
 
 **AI Planning flow**: User conversation → `test_planning_agent` (ReAct + tool calls) → DSL draft → user review → save as TestCase → trigger execution → stream progress.
-
-**Explorer-Judge flow**: Page URL → `explorer_runner` orchestrates page exploration + judge evaluation → failure records with defect classification.
 
 **Correction flow**: Failed step → `needs_intervention` → user submits correction → stored as `LocatorCorrection` → Tier 0 priority match on future runs.
 

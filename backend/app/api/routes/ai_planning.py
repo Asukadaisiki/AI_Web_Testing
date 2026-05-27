@@ -49,7 +49,6 @@ from app.services.ai_planning import (
 from app.services.ai_planning_streaming import (
     CancellationManager,
     sse_event,
-    stream_explorer_judge,
     stream_planning_chat,
     stream_planning_drafts,
     stream_save_and_execute,
@@ -399,44 +398,6 @@ async def execute_sse(
                 "message": str(exc),
                 "error_type": type(exc).__name__,
                 "phase": "execute",
-                "traceback": _traceback.format_exc()[:2000] if get_settings().debug else None,
-            })
-        yield sse_event("done", {})
-        _cancellation_manager.clear(session_id)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("/sessions/{session_id}/execute-with-judge")
-async def execute_with_judge_sse(
-    session_id: int,
-    req: ExecuteSSERequest,
-    current_user: User = Depends(require_demo_user),
-) -> StreamingResponse:
-    """SSE stream for Explorer-Judge execution."""
-    session_factory = get_session_factory()
-    cancel_event = _cancellation_manager.register(session_id)
-
-    async def event_generator():
-        try:
-            async for event in stream_explorer_judge(
-                session_factory=session_factory,
-                planning_session_id=session_id,
-                draft_ids=req.draft_ids,
-                actor_user_id=current_user.id,
-                cancel_event=cancel_event,
-            ):
-                yield sse_event(event.get("type", "message"), event)
-        except Exception as exc:
-            logger.exception("SSE Explorer-Judge error for session %s", session_id)
-            yield sse_event("error", {
-                "message": str(exc),
-                "error_type": type(exc).__name__,
-                "phase": "explorer_judge",
                 "traceback": _traceback.format_exc()[:2000] if get_settings().debug else None,
             })
         yield sse_event("done", {})
