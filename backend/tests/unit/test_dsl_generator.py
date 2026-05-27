@@ -385,4 +385,58 @@ class TestNormalizeLlmStepDropsUnrepairable:
         assert normalized["context_key"] == "p1"
 
 
+class TestExtractInputContractFromSteps:
+    """Tests for auto-generating input_contract from ${...} placeholders in steps."""
+
+    def test_extracts_email_and_password(self) -> None:
+        from app.ai.dsl_generator import _extract_input_contract_from_steps
+        steps = [
+            {"action": "input", "target": "Email Address", "value": "${email}"},
+            {"action": "input", "target": "Password", "value": "${password}"},
+        ]
+        contract = _extract_input_contract_from_steps(steps)
+        assert len(contract) == 2
+        keys = {c["context_key"] for c in contract}
+        assert keys == {"email", "password"}
+        # Verify types are inferred
+        email_entry = next(c for c in contract if c["context_key"] == "email")
+        assert email_entry["value_type"] == "string"
+        assert email_entry["required"] is True
+
+    def test_deduplicates_same_variable(self) -> None:
+        from app.ai.dsl_generator import _extract_input_contract_from_steps
+        steps = [
+            {"action": "input", "target": "Email", "value": "${email}"},
+            {"action": "assert_text", "target": "Welcome", "value": "${email}"},
+        ]
+        contract = _extract_input_contract_from_steps(steps)
+        assert len(contract) == 1
+        assert contract[0]["context_key"] == "email"
+
+    def test_ignores_steps_without_placeholders(self) -> None:
+        from app.ai.dsl_generator import _extract_input_contract_from_steps
+        steps = [
+            {"action": "goto", "value": "/login"},
+            {"action": "click", "target": "Login"},
+            {"action": "input", "target": "Qty", "value": "2"},
+        ]
+        contract = _extract_input_contract_from_steps(steps)
+        assert contract == []
+
+    def test_handles_empty_steps(self) -> None:
+        from app.ai.dsl_generator import _extract_input_contract_from_steps
+        assert _extract_input_contract_from_steps([]) == []
+
+    def test_infers_custom_variable_type(self) -> None:
+        from app.ai.dsl_generator import _extract_input_contract_from_steps
+        steps = [
+            {"action": "input", "target": "Phone", "value": "${phone_number}"},
+        ]
+        contract = _extract_input_contract_from_steps(steps)
+        assert len(contract) == 1
+        assert contract[0]["context_key"] == "phone_number"
+        assert contract[0]["value_type"] == "string"
+        assert contract[0]["description"] == "手机号"
+
+
 

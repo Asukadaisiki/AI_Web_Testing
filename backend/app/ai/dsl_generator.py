@@ -291,8 +291,8 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "## R5: CAPTURE MUST ASSERT",
     "Every capture_text step MUST be followed by at least one assert_text referencing the captured variable.",
     "capture_text reads data but does NOT verify it. assert_text confirms the captured value is correct.",
-    "assert_text target must be page text (e.g., \"Blue Top\"), value must be the variable (e.g., \"${product_a_name}\").",
-    "Do NOT put ${var} in target — target is for locating the element, value is the expected content.",
+    "assert_text: target is the locator (the element to check), value is the expected text. Do NOT put ${var} in target.",
+    "target must be a concrete locator that identifies a specific element on the page — NOT a semantic label like 'Product Name' or 'Price'.",
     "",
     "## R6: FORM FIELD COVERAGE",
     "Generate a step for EVERY form field mentioned in the prompt.",
@@ -671,15 +671,73 @@ def _build_segment_prompt(
         f"- 【字段约定】各 action 的字段要求严格按下面规则：\n"
         f"    * goto / assert_url_contains: URL 或路径写在 'value' 字段，无需 target。\n"
         f"      正确：{{\"action\": \"goto\", \"value\": \"/login\"}}；错误：把 URL 写在 target。\n"
-        f"    * input / assert_text: 必须同时提供 'target'（定位元素）和 'value'（输入内容/期望文本）。\n"
-        f"      正确：{{\"action\": \"assert_text\", \"target\": \"Cart Total\", \"value\": \"Rs. 1400\"}}。\n"
-        f"      错误：assert_text 只有 target 没有 value，或把期望文本放进 target。\n"
+        f"    * input / assert_text: 必须同时提供 'target'（定位元素的具体文本）和 'value'（输入内容/期望文本）。target 必须是页面上可定位的元素，不能是语义标签。\n"
         f"    * click / wait_for: 只需 'target'，不需 value。\n"
         f"    * capture_text: 必须有 'target' 和 'context_key'（snake_case 变量名）。\n"
         f"- If an input step has trigger=Enter/Tab, include the trigger field.\n"
         f"- Every capture_text must be followed by assert_text.\n"
         f"- Limit to 8-12 steps for this segment."
     )
+
+
+# Common variable name to type/description mapping for auto-generated input_contract
+_VARIABLE_TYPE_HINTS: dict[str, tuple[str, str]] = {
+    "email": ("string", "登录邮箱"),
+    "mail": ("string", "邮箱地址"),
+    "username": ("string", "用户名"),
+    "user": ("string", "用户名"),
+    "login": ("string", "登录账号"),
+    "account": ("string", "账号"),
+    "password": ("string", "密码"),
+    "pass": ("string", "密码"),
+    "pwd": ("string", "密码"),
+    "url": ("string", "URL 地址"),
+    "link": ("string", "链接"),
+    "phone": ("string", "手机号"),
+    "mobile": ("string", "手机号"),
+    "name": ("string", "名称"),
+    "amount": ("number", "金额"),
+    "quantity": ("number", "数量"),
+    "count": ("number", "数量"),
+}
+
+
+def _extract_input_contract_from_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract input_contract from ${context_key} placeholders in steps.
+
+    Scans all step values and targets for ``${var}`` patterns, deduplicates them,
+    and returns a list of input_contract entries with inferred types.
+    """
+    import re
+    variable_pattern = re.compile(r"\$\{(\w+)\}")
+    seen: dict[str, dict[str, Any]] = {}
+
+    for step in steps:
+        for field in ("value", "target"):
+            text = step.get(field) or ""
+            if not isinstance(text, str):
+                continue
+            for match in variable_pattern.finditer(text):
+                key = match.group(1)
+                if key in seen:
+                    continue
+                # Infer type and description from variable name
+                key_lower = key.lower()
+                value_type = "string"
+                description = key
+                for hint_key, (vtype, vdesc) in _VARIABLE_TYPE_HINTS.items():
+                    if hint_key in key_lower:
+                        value_type = vtype
+                        description = vdesc
+                        break
+                seen[key] = {
+                    "context_key": key,
+                    "value_type": value_type,
+                    "required": True,
+                    "description": description,
+                }
+
+    return list(seen.values())
 
 
 SUPPORTED_DSL_ACTIONS = [
@@ -831,12 +889,18 @@ def generate_segmented_case_draft(
     if all_warnings:
         logger.warning("Generation warnings: %s", all_warnings)
 
+    # Auto-generate input_contract from ${...} placeholders in steps
+    input_contract = _extract_input_contract_from_steps(merged_steps)
+    if input_contract:
+        logger.info("Auto-generated input_contract with %d variables: %s",
+                     len(input_contract), [ic.get("context_key") for ic in input_contract])
+
     # Build normalized case dict
     normalized_case = {
         "name": payload.prompt.strip()[:200] or "AI 生成用例",
         "description": payload.prompt.strip()[:500],
         "base_url": base_url,
-        "input_contract": [],
+        "input_contract": input_contract,
         "output_contract": [],
         "steps": merged_steps,
     }
