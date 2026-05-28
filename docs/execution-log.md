@@ -27,6 +27,7 @@
 | A11y Tree 全面切换 | 05-28 | 封杀 DOM 路径，只使用 a11y tree | 500 tests, 4 项核心修复 |
 | explore_flow DSL 格式支持 | 05-28 | 支持 DSL 格式步骤传入 explore_flow | 500 tests, 修复页面探索不完整 |
 | 跨段变量命名权威 | 05-28 | Planning agent 输出 scenario.variables，segment prompt 注入命名字典 | 504 tests, 4 新增聚焦测试 |
+| explore_flow 遮挡恢复 | 05-28 | _execute_flow_actions / capture_browser_session 接入 click_with_precheck | 504 tests, cartModal 不再杀掉探索 |
 
 ---
 

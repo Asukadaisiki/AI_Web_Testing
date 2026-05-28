@@ -1265,7 +1265,13 @@ def capture_browser_session(
                     if kind == "input":
                         locator.fill(str(value))
                     elif kind == "click":
-                        locator.click()
+                        from app.runners.click_preprocessor import click_with_precheck
+                        cr = click_with_precheck(page, locator)
+                        if not cr.succeeded:
+                            logger.warning(
+                                "capture_browser_session click failed: target=%r, strategy=%s",
+                                target, cr.recovery_strategy,
+                            )
                     break
                 except Exception as e:
                     logger.warning("Step action failed for target=%r: %s, retrying", target, e)
@@ -1443,7 +1449,13 @@ def _collect_flow_a11y(
 
 
 def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
-    """Execute a list of flow actions (click/input/wait_for)."""
+    """Execute a list of flow actions (click/input/wait_for).
+
+    Uses click_with_precheck for click actions so that overlay interception
+    (modals, toasts, cookie banners) is automatically diagnosed and recovered.
+    """
+    from app.runners.click_preprocessor import click_with_precheck
+
     for action_def in actions:
         if not isinstance(action_def, dict):
             continue
@@ -1482,7 +1494,13 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
                     )
                     loc = _resolve_click_fallback(page, target)
                 if loc is not None:
-                    loc.click()
+                    result = click_with_precheck(page, loc)
+                    if not result.succeeded:
+                        logger.warning(
+                            "Flow click failed for target=%r: strategy=%s, error=%s",
+                            target, result.recovery_strategy,
+                            str(result.original_error)[:200] if result.original_error else "none",
+                        )
             continue
         if act == "wait_for":
             try:
