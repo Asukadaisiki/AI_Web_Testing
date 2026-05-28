@@ -24,6 +24,33 @@
 | 孤儿数据清理 | 05-25 | 全面清理代码库中的孤儿数据 | 删除 14 项孤儿数据 |
 | 数据校验修复 | 05-25 | 数据传递与校验全面扫描修复 | 修复 19 项问题 |
 | 变量占位符修复 | 05-28 | 分段生成 input_contract 自动提取 | 修复 ${email} 未替换问题 |
+| A11y Tree 全面切换 | 05-28 | 封杀 DOM 路径，只使用 a11y tree | 500 tests, 4 项核心修复 |
+
+---
+
+## 2026-05-28 | A11y Tree 全面切换
+
+**目标**：封杀所有 DOM 元素路径，让 AI 只使用 a11y tree 进行元素定位，解决 VLM 调用过多和断言失败问题。
+
+**操作**：
+1. 新增 `format_a11y_nodes_for_prompt()` 函数，格式化 a11y tree 为 `role="name"` 格式
+2. 修改 `_build_segment_prompt()` 移除 `elements` 和 `page_elements` 参数，只保留 `a11y_nodes`
+3. 修改 `generate_segmented_case_draft()` 移除 `page_elements_by_state` 参数，只保留 `a11y_nodes_by_state`
+4. 更新 prompt 规则：target 必须使用 `button="Login"` 格式，禁止 XPath/CSS 选择器
+5. 新增 `_clean_variable_format()` 函数，清理 `${email}=value` 错误格式为 `${email}`
+6. 所有 `to_contain_text()` 调用添加 `normalize_whitespace=True` 参数
+
+**结果**：
+- 500 单元测试全部通过
+- 封杀 DOM 路径，只保留 a11y tree
+- 修复变量格式问题
+- 修复断言空白字符匹配问题
+
+**验证**：
+- `test_dsl_generator.py` 37 tests passed
+- 全量单元测试 500 passed, 6 warnings
+
+**后续**：用户可重新测试 E2E 场景，验证 VLM 调用次数是否减少，断言是否正常工作。
 
 ---
 

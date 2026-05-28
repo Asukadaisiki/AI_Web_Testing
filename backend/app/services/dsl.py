@@ -142,11 +142,11 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
     with _RUNTIME_STATS_LOCK:
         _RUNTIME_STATS.total_requests += 1
 
-    # Build flow_steps + page_elements_by_state for segmented generation
+    # Build flow_steps + a11y_nodes_by_state for segmented generation
     flow_steps = payload.flow_steps or []
     # If caller provided grouped a11y nodes (e.g., from explore_flow cache),
-    # use them as the element context for each page_state (Bug A fix).
-    page_elements_by_state: dict[str, list] = dict(payload.a11y_nodes_by_state or {})
+    # use them as the element context for each page_state.
+    a11y_nodes_by_state: dict[str, list] = dict(payload.a11y_nodes_by_state or {})
     if not flow_steps:
         # Single-segment fallback: wrap prompt as one segment
         flow_steps = [{"page_state": "S0", "steps": []}]
@@ -155,7 +155,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
         generated_case, warnings, normalization_notes, generation_meta = generate_segmented_case_draft(
             payload=payload,
             flow_steps=flow_steps,
-            page_elements_by_state=page_elements_by_state,
+            a11y_nodes_by_state=a11y_nodes_by_state,
         )
     except (DslGenerationConfigError, DslGenerationError) as exc:
         model_name = get_settings().ai_dsl_model

@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.ai.page_explorer import format_elements_for_prompt
+from app.ai.page_explorer import format_a11y_nodes_for_prompt
 from app.core.config import get_settings
 from app.schemas.dsl import (
     AssertTextStep,
@@ -150,6 +150,17 @@ def _promote_first_alias(step: dict[str, Any], canonical_key: str, aliases: tupl
             return
 
 
+def _clean_variable_format(value: str | None) -> str | None:
+    """Clean variable format: ${email}=test@example.com -> ${email}."""
+    if not value:
+        return value
+    # Pattern: ${context_key}=actual_value -> ${context_key}
+    # This handles LLM mistakes like "${email}=test@example.com"
+    import re
+    cleaned = re.sub(r'\$\{(\w+)\}=[^\s,;]+', r'${\1}', value)
+    return cleaned
+
+
 def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
     """Repair common LLM mistakes in a single generated step.
 
@@ -158,6 +169,7 @@ def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
       2. Use field aliases (`url`, `expected`, `text` instead of `value`;
          `element`, `selector`, `label` instead of `target`).
       3. Confuse `target` (locator) with `value` (URL / expected text).
+      4. Use wrong variable format like ${email}=test@example.com.
 
     Without this normalizer, Pydantic validation rejects drafts like
     `{"action": "goto", "target": "https://..."}` or
@@ -176,6 +188,11 @@ def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
     canonical = _ACTION_ALIASES.get(act_raw, act_raw)
     if canonical != act_raw:
         step["action"] = canonical
+
+    # Clean variable format in value and target fields
+    for field in ("value", "target"):
+        if field in step and isinstance(step[field], str):
+            step[field] = _clean_variable_format(step[field])
 
     # Promote alias field names to canonical (`target`, `value`, `timeout_ms`).
     target_aliases = _STEP_TARGET_ALIASES.get(canonical)
@@ -314,16 +331,22 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "",
     "━━━ FORMAT RULES ━━━",
     "",
-    "## target format",
-    "Use EXACT visible text/label/placeholder as target (plain string), NOT CSS selectors.",
-    "CORRECT: \"Login\", \"Email Address\", \"Signup / Login\", \"Submit\", \"Cart\".",
-    "WRONG: \"input[placeholder='Email Address']\", \"button.login\", \"a[href='/login']\".",
-    "Only use CSS/XPath (css=/xpath=/ #id .class) when no visible text exists.",
-    "Never invent compound formats like 'tag[placeholder=val]'.",
+    "## target format (A11y Tree)",
+    "target MUST use a11y tree identifiers: role=\"name\" format.",
+    "CORRECT: button=\"Login\", textbox=\"Email\", link=\"Products\", combobox=\"Country\".",
+    "WRONG: \"//div[@class='productinfo']/p[1]\", \"input[placeholder='Email']\", \".login-btn\".",
+    "The a11y tree provides role and name for each element. Use these directly as target.",
+    "If multiple elements have the same role and name, use the node_id: button=\"Login\" id=e123.",
     "",
     "## variable format",
-    "Reference input_contract variables with ${context_key} syntax: ${login_email}.",
-    "Do not hardcode test data values when a variable exists.",
+    "Test data MUST be defined in input_contract with context_key, then referenced in steps.",
+    "CORRECT:",
+    "  input_contract: [{\"context_key\": \"email\", \"value\": \"test@example.com\"}]",
+    "  step: {\"action\": \"input\", \"target\": \"textbox=\\\"Email\\\"\", \"value\": \"${email}\"}",
+    "WRONG:",
+    "  step: {\"action\": \"input\", \"target\": \"Email\", \"value\": \"${email}=test@example.com\"}",
+    "  step: {\"action\": \"input\", \"target\": \"Email\", \"value\": \"test@example.com\"}",
+    "Never put variable definitions in step value. Always use ${context_key} syntax.",
     "",
     "## JSON structure",
     "Do not include markdown fences. Keep contracts/steps as arrays even when empty.",
@@ -353,14 +376,11 @@ _BASE_USER_RULE_LINES = [
     "- input_contract 和 output_contract 如无需要，返回空数组。",
     "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
     "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
-    "- target 必须使用元素的实际可见文本、label 或 placeholder 值，作为纯文本字符串（如 \"Email Address\"），不要构造 CSS 选择器格式的 target（如 \"input[placeholder='Email Address']\"）。仅在无可见文本时才使用 CSS/XPath 选择器。",
-    "- 【定位器稳定性优先级】当页面元素清单中包含 stable 分数时，优先使用 stable>=0.70 的元素属性作为 target。如果目标元素有 data-testid，优先以 data-testid 值作为 target 并设置 target_strategy=\"data-testid\"。",
-    "- 【同类重复元素消歧 — 适用于所有动态值】页面元素清单已按视觉分组（### Group Label），每组是一个 UI 区块（产品卡片、表单等）。当页面上有多个相同或相似的元素时，必须用父元素上下文来精确指定目标。这不仅适用于按钮，也适用于价格、数量、名称等任何可能重复的文本。规则：如果该值属于某个产品卡片（如 Blue Top 卡片内的价格 Rs. 500、数量 1），必须使用 `\"父元素文本\" 附近的 \"子元素文本\"` 格式。错误示例：capture_text \"Rs. 400\"（会匹配多个产品的价格）；正确示例：capture_text \"Men Tshirt 附近的 Rs. 400\"。绝对不要使用 `section:nth-of-type(N) > div:nth-of-type(N)`。唯一例外：购物车页面只有已添加的商品，可以直接用价格文本。",
-    "- 【置信度自评】对每个包含 target 的 step，添加 locator_confidence 字段：high（目标有唯一 data-testid/aria-label/text）、medium（有稳定属性但存在 2-3 个同类）、low（只能靠 XPath 位置或无区分属性的多个同类元素）。",
+    "- 【target 必须使用 a11y tree 标识】target 必须使用 a11y tree 中的元素标识，格式为 role=\"name\"（如 button=\"Login\", textbox=\"Email\"）。不要使用 XPath、CSS 选择器或 DOM 元素路径。如果 a11y tree 中有 node_id，可以添加 id=node_id 来消歧义。",
+    "- 【变量格式】测试数据必须通过 input_contract 定义，在步骤中用 ${context_key} 引用。正确：input_contract=[{\"context_key\": \"email\", \"value\": \"test@example.com\"}], step.value=\"${email}\"。错误：step.value=\"${email}=test@example.com\" 或 step.value=\"test@example.com\"。不要在 step.value 中硬编码测试数据。",
+    "- 【置信度自评】对每个包含 target 的 step，添加 locator_confidence 字段：high（目标有唯一 a11y 标识）、medium（有 2-3 个同类元素）、low（需要上下文消歧）。",
     "- 表单字段覆盖：必须为 prompt 中提到的每个表单字段生成对应步骤。下拉框用 input action（target 为字段标签，value 为选项文本），复选框用 click action（target 为复选框标签）。输出前检查是否有遗漏字段。",
-    "- 当 input_contract 中定义了变量（如 context_key: login_email），step 的 value 字段必须用 ${context_key} 格式引用（如 \"${login_email}\"），不要硬编码值或使用其他占位符格式（如 {{}}、%%、<>）。",
-    "- 如果需要明确指定定位策略，可在 step 中添加 target_strategy 字段（可选值：css, xpath, data-testid, element_id, tag, semantic）。不填则自动推断。",
-    "- 【测试常识 — 输入后确认】修改表单字段（如数量、价格、搜索框）的值后，页面通常需要键盘事件才能触发更新。仅 input 步骤的 fill 操作可能不会触发 JavaScript 的 change/update 事件。因此：1) 修改数量/价格后，必须在 input 步骤后添加 wait_for 等待更新结果出现；2) 如果 wait_for 的目标是总价、计算结果等动态值，使用具体的预期值作为 target（如 \"Rs. 1400\"）而非 CSS 选择器。正确示例：input value='2' → wait_for \"Rs. 1400\" → assert_text。",
+    "- 【测试常识 — 输入后确认】修改表单字段（如数量、价格、搜索框）的值后，页面通常需要键盘事件才能触发更新。仅 input 步骤的 fill 操作可能不会触发 JavaScript 的 change/update 事件。因此：1) 修改数量/价格后，必须在 input 步骤后添加 wait_for 等待更新结果出现；2) 如果 wait_for 的目标是总价、计算结果等动态值，使用具体的预期值作为 target（如 button=\"Rs. 1400\"）而非 CSS 选择器。正确示例：input value='2' → wait_for \"Rs. 1400\" → assert_text。",
     "- base_url 应为站点根地址（如 https://example.com），页面路径放在 goto 步骤中（如 /login）。不要将完整页面 URL 填入 base_url。",
     "- 生成前评估测试信息完整性：前置条件（系统初始状态）、入口（目标页面 URL 或导航路径）、操作步骤、预期结果。如果描述中缺少入口信息，通过 base_url + goto 步骤明确入口。",
     "- 【页面导航完整性】每个页面的元素只能在该页面加载后才能操作。进入新页面必须通过 click/goto 步骤。例如：登录页面的邮箱输入框必须在 click \"Signup / Login\"（或 goto /login）之后才能操作，不能从首页直接 input \"Email Address\"。确保步骤顺序与实际页面跳转逻辑一致。",
@@ -623,11 +643,13 @@ def _build_segment_prompt(
     scenario_prompt: str,
     page_state: str,
     seg_steps: list[dict[str, Any]],
-    elements: list[dict[str, Any]],
     base_url: str,
-    page_elements: str | None = None,
+    a11y_nodes: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Build a focused prompt for a single page_state segment."""
+    """Build a focused prompt for a single page_state segment.
+
+    Only uses a11y tree for element identification. DOM elements are not supported.
+    """
     step_desc_lines: list[str] = []
     for s in seg_steps:
         act = s.get("action", "?")
@@ -650,28 +672,32 @@ def _build_segment_prompt(
             "in the scenario)"
         )
 
-    elem_text = format_elements_for_prompt(elements) if elements else "(no elements)"
-
-    # Add page_elements (formatted DOM text) if available
-    page_elements_section = ""
-    if page_elements:
-        page_elements_section = f"\n\nFormatted DOM elements:\n{page_elements}\n"
+    # Only use a11y tree - no DOM fallback
+    if a11y_nodes:
+        elem_text = format_a11y_nodes_for_prompt(a11y_nodes)
+    else:
+        elem_text = "(no a11y nodes available)"
 
     return (
         f"Generate DSL steps for page state **{page_state}** only.\n\n"
         f"Scenario: {scenario_prompt}\n\n"
         f"{actions_section}\n\n"
-        f"Available elements:\n{elem_text}\n"
-        f"{page_elements_section}\n"
+        f"Available A11y tree elements:\n{elem_text}\n"
+        f"\n"
         f"Rules:\n"
         f"- Return valid JSON with 'steps' array and 'base_url'.\n"
         f"- base_url: {base_url}\n"
         f"- Only generate steps for THIS page state ({page_state}).\n"
-        f"- Use exact visible text from the element list as target.\n"
+        f"- 【target 格式】target 必须使用 a11y tree 中的元素标识，格式为 role=\"name\"。\n"
+        f"  例如：button=\"Login\", textbox=\"Email\", link=\"Products\"。\n"
+        f"  绝对不要使用 XPath、CSS 选择器、DOM 元素路径或任何其他格式。\n"
+        f"- 【变量格式】测试数据必须通过 input_contract 定义，在步骤中用 ${{context_key}} 引用。\n"
+        f"  正确：input_contract=[{{\"context_key\": \"email\", \"value\": \"test@example.com\"}}], step.value=\"${{email}}\"\n"
+        f"  错误：step.value=\"${{email}}=test@example.com\" 或 step.value=\"test@example.com\"\n"
         f"- 【字段约定】各 action 的字段要求严格按下面规则：\n"
         f"    * goto / assert_url_contains: URL 或路径写在 'value' 字段，无需 target。\n"
         f"      正确：{{\"action\": \"goto\", \"value\": \"/login\"}}；错误：把 URL 写在 target。\n"
-        f"    * input / assert_text: 必须同时提供 'target'（定位元素的具体文本）和 'value'（输入内容/期望文本）。target 必须是页面上可定位的元素，不能是语义标签。\n"
+        f"    * input / assert_text: 必须同时提供 'target'（a11y 元素标识）和 'value'（输入内容/期望文本）。\n"
         f"    * click / wait_for: 只需 'target'，不需 value。\n"
         f"    * capture_text: 必须有 'target' 和 'context_key'（snake_case 变量名）。\n"
         f"- If an input step has trigger=Enter/Tab, include the trigger field.\n"
@@ -731,6 +757,7 @@ def _extract_input_contract_from_steps(steps: list[dict[str, Any]]) -> list[dict
                         description = vdesc
                         break
                 seen[key] = {
+                    "name": description,  # Use description as the name
                     "context_key": key,
                     "value_type": value_type,
                     "required": True,
@@ -750,13 +777,15 @@ def generate_segmented_case_draft(
     *,
     payload: "GenerateDslRequest",
     flow_steps: list[dict[str, Any]],
-    page_elements_by_state: dict[str, list[dict[str, Any]]],
+    a11y_nodes_by_state: dict[str, list[dict[str, Any]]] | None = None,
 ) -> "tuple[DSLCase, list[str], list[str], GenerateDslMeta]":
     """Generate DSL by splitting the scenario into page_state segments.
 
     Each segment is processed by a flash LLM call (no thinking mode).
     Segments run in parallel via ThreadPoolExecutor, then steps are merged
     in page_state order (S0, S1, ...).
+
+    Only uses a11y tree for element identification. DOM elements are not supported.
     """
     settings = get_settings()
     if not settings.enable_ai_dsl_generate:
@@ -766,12 +795,11 @@ def generate_segmented_case_draft(
 
     # Log generation start
     logger.info(
-        "DSL segmented generation start: prompt_len=%d, base_url=%s, flow_steps=%d, page_states=%d, has_page_elements=%s",
+        "DSL segmented generation start: prompt_len=%d, base_url=%s, flow_steps=%d, a11y_nodes_states=%d",
         len(payload.prompt),
         payload.base_url,
         len(flow_steps),
-        len(page_elements_by_state),
-        bool(payload.page_elements),
+        len(a11y_nodes_by_state) if a11y_nodes_by_state else 0,
     )
 
     # Group flow_steps by page_state
@@ -780,15 +808,15 @@ def generate_segmented_case_draft(
         ps = str(fs.get("page_state", "S0") or "S0")
         groups.setdefault(ps, []).append(fs)
 
-    # Fallback: if flow_steps is empty but we have page_elements_by_state,
+    # Fallback: if flow_steps is empty but we have a11y_nodes_by_state,
     # use those page_states with empty seg_steps. This lets the LLM derive
-    # steps from the scenario prompt + element list when the planning agent
+    # steps from the scenario prompt + a11y tree when the planning agent
     # failed to produce structured flow_steps (e.g., safety-cap fallback plan).
-    if not groups and page_elements_by_state:
-        for ps in page_elements_by_state.keys():
+    if not groups and a11y_nodes_by_state:
+        for ps in a11y_nodes_by_state.keys():
             groups.setdefault(ps or "S0", [])
         logger.info(
-            "flow_steps empty; deriving page_states from page_elements_by_state: %s",
+            "flow_steps empty; deriving page_states from a11y_nodes_by_state: %s",
             list(groups.keys()),
         )
 
@@ -801,18 +829,17 @@ def generate_segmented_case_draft(
     base_url = payload.base_url or None
 
     def _generate_segment(state: str, steps: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-        elements = page_elements_by_state.get(state, [])
+        a11y_nodes = a11y_nodes_by_state.get(state, []) if a11y_nodes_by_state else []
         logger.info(
-            "Generating segment %s: steps=%d, elements=%d, has_page_elements=%s",
-            state, len(steps), len(elements), bool(payload.page_elements),
+            "Generating segment %s: steps=%d, a11y_nodes=%d",
+            state, len(steps), len(a11y_nodes),
         )
         seg_prompt = _build_segment_prompt(
             scenario_prompt=payload.prompt.strip(),
             page_state=state,
             seg_steps=steps,
-            elements=elements,
             base_url=base_url,
-            page_elements=payload.page_elements,
+            a11y_nodes=a11y_nodes,
         )
         logger.debug("Segment %s prompt length: %d", state, len(seg_prompt))
         messages = [

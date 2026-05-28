@@ -583,14 +583,15 @@ def generate_planning_drafts(
             if flow_steps and settings_local.ai_planning_flow_steps_enabled:
                 from app.ai.dsl_generator import generate_segmented_case_draft
 
-                page_elements_by_state: dict[str, list[dict]] = {}
+                a11y_nodes_by_state: dict[str, list[dict]] = {}
                 for n in a11y_nodes_raw:
                     ps = n.get("page_state", "S0") or "S0"
-                    page_elements_by_state.setdefault(ps, []).append(n)
+                    a11y_nodes_by_state.setdefault(ps, []).append(n)
 
                 logger.info(
-                    "[session:%d] Using segmented DSL generation: page_states=%s",
-                    planning_session_id, list(page_elements_by_state.keys()),
+                    "[session:%d] Using segmented DSL generation: a11y_nodes_by_state=%s",
+                    planning_session_id,
+                    {k: len(v) for k, v in a11y_nodes_by_state.items()},
                 )
 
                 case_obj, gen_warnings, gen_notes, gen_meta = generate_segmented_case_draft(
@@ -604,12 +605,11 @@ def generate_planning_drafts(
                         current_input_contract=payload.current_input_contract,
                         current_output_contract=payload.current_output_contract,
                         preserve_contracts=payload.preserve_contracts,
-                        page_elements=scenario.get("page_elements"),
                         flow_steps=flow_steps,
                         retry_reason_code=retry_reason_code,
                     ),
                     flow_steps=flow_steps,
-                    page_elements_by_state=page_elements_by_state,
+                    a11y_nodes_by_state=a11y_nodes_by_state,
                 )
                 # Wrap to match the existing interface
                 generated = type("GeneratedHolder", (), {
@@ -621,15 +621,15 @@ def generate_planning_drafts(
             else:
                 # No structured flow_steps from scenario. Pass a11y_nodes (grouped
                 # by page_state) via payload so generate_dsl_case → segmented
-                # generator still has element context (Bug A fix).
-                page_elements_by_state: dict[str, list[dict]] = {}
+                # generator still has element context.
+                a11y_nodes_by_state: dict[str, list[dict]] = {}
                 for n in a11y_nodes_raw:
                     ps = n.get("page_state", "S0") or "S0"
-                    page_elements_by_state.setdefault(ps, []).append(n)
+                    a11y_nodes_by_state.setdefault(ps, []).append(n)
 
                 logger.info(
-                    "[session:%d] Using single-segment DSL generation: a11y_nodes=%d, page_states=%s",
-                    planning_session_id, len(a11y_nodes_raw), list(page_elements_by_state.keys()),
+                    "[session:%d] Using single-segment DSL generation: a11y_nodes=%d, a11y_nodes_by_state=%s",
+                    planning_session_id, len(a11y_nodes_raw), {k: len(v) for k, v in a11y_nodes_by_state.items()},
                 )
                 generated = generate_dsl_case(
                     session,
@@ -643,8 +643,7 @@ def generate_planning_drafts(
                         current_input_contract=payload.current_input_contract,
                         current_output_contract=payload.current_output_contract,
                         preserve_contracts=payload.preserve_contracts,
-                        page_elements=scenario.get("page_elements"),
-                        a11y_nodes_by_state=page_elements_by_state or None,
+                        a11y_nodes_by_state=a11y_nodes_by_state or None,
                         retry_reason_code=retry_reason_code,
                     ),
                 )

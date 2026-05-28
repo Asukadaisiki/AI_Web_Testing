@@ -300,7 +300,10 @@ def _execute_step_with_candidates(
                 locator.wait_for(state="visible", timeout=step.timeout_ms)
             elif step.action == "assert_text":
                 from playwright.sync_api import expect as pw_expect
-                pw_expect(locator).to_contain_text(_substitute_variables(step.value, vars_map))
+                pw_expect(locator).to_contain_text(
+                    _substitute_variables(step.value, vars_map),
+                    normalize_whitespace=True
+                )
             elif step.action == "capture_text":
                 captured = locator.inner_text()
                 step_value = captured.strip()
@@ -427,7 +430,8 @@ def _execute_step_with_candidates(
             )
             resolved_by = resolved.strategy
             pw_expect(resolved.locator).to_contain_text(
-                _substitute_variables(step.value, vars_map)
+                _substitute_variables(step.value, vars_map),
+                normalize_whitespace=True
             )
         elif step.action == "capture_text":
             resolved, vlm_preverify_used = _resolve_with_confidence_gate(
@@ -653,7 +657,10 @@ def execute_case_with_playwright(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, _vars()))
+                        expect(resolved.locator).to_contain_text(
+                            _substitute_variables(step.value, _vars()),
+                            normalize_whitespace=True
+                        )
                     elif step.action == "assert_url_contains":
                         if _substitute_variables(step.value, _vars()) not in page.url:
                             raise RunnerExecutionError(
@@ -971,7 +978,10 @@ def execute_case_with_playwright_streaming(
                         )
                         resolved_by = resolved.strategy
                         locator_trace = resolved.trace
-                        expect(resolved.locator).to_contain_text(_substitute_variables(step.value, _vars()))
+                        expect(resolved.locator).to_contain_text(
+                            _substitute_variables(step.value, _vars()),
+                            normalize_whitespace=True
+                        )
                     elif step.action == "assert_url_contains":
                         if _substitute_variables(step.value, _vars()) not in page.url:
                             raise RunnerExecutionError(

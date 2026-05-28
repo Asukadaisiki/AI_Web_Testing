@@ -159,6 +159,63 @@ def collect_a11y_nodes(
     return _cdp_to_a11y_nodes({"nodes": filter_pass}, page_state=page_state)
 
 
+def format_a11y_nodes_for_prompt(a11y_nodes: list[dict[str, Any]]) -> str:
+    """Format a11y tree nodes for AI prompt.
+
+    Groups nodes by parent hierarchy and formats them as:
+    - role="name" id=node_id
+
+    This helps AI understand the page structure and use a11y identifiers for targeting.
+    """
+    if not a11y_nodes:
+        return "(no a11y nodes)"
+
+    # Build parent-child relationships
+    node_map: dict[str, dict] = {}
+    children_map: dict[str, list[str]] = {}
+    root_nodes: list[str] = []
+
+    for node in a11y_nodes:
+        node_id = node.get("node_id", "")
+        parent_id = node.get("parent_id")
+        node_map[node_id] = node
+        if parent_id:
+            children_map.setdefault(parent_id, []).append(node_id)
+        else:
+            root_nodes.append(node_id)
+
+    def format_node(node_id: str, indent: int = 0) -> list[str]:
+        """Recursively format a node and its children."""
+        node = node_map.get(node_id)
+        if not node:
+            return []
+
+        role = node.get("role", "unknown")
+        name = node.get("name", "")
+        disabled = node.get("disabled", False)
+
+        # Format the node line
+        prefix = "  " * indent
+        name_part = f'="{name}"' if name else ""
+        disabled_part = " [DISABLED]" if disabled else ""
+        line = f"{prefix}- {role}{name_part} id={node_id}{disabled_part}"
+
+        result = [line]
+
+        # Format children
+        for child_id in children_map.get(node_id, []):
+            result.extend(format_node(child_id, indent + 1))
+
+        return result
+
+    # Format all root nodes and their children
+    output_lines: list[str] = []
+    for root_id in root_nodes:
+        output_lines.extend(format_node(root_id))
+
+    return "\n".join(output_lines)
+
+
 def _expand_collapsed_components(page, keywords: set[str], max_clicks: int = 10) -> list[str]:
     if not keywords:
         return []

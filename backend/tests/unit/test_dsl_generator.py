@@ -163,8 +163,8 @@ def test_generate_dsl_case_propagates_a11y_nodes_by_state(monkeypatch: pytest.Mo
 
     captured: dict[str, object] = {}
 
-    def fake_generate_segmented_case_draft(*, payload, flow_steps, page_elements_by_state):
-        captured["page_elements_by_state"] = page_elements_by_state
+    def fake_generate_segmented_case_draft(*, payload, flow_steps, a11y_nodes_by_state=None):
+        captured["a11y_nodes_by_state"] = a11y_nodes_by_state
         captured["flow_steps"] = flow_steps
         return (
             DSLCase.model_validate({
@@ -208,7 +208,7 @@ def test_generate_dsl_case_propagates_a11y_nodes_by_state(monkeypatch: pytest.Mo
 
     dsl_service.generate_dsl_case(session=None, payload=payload)
 
-    assert captured["page_elements_by_state"] == {
+    assert captured["a11y_nodes_by_state"] == {
         "S0": [{"node_id": "n1", "role": "button", "name": "Login"}],
         "S1": [{"node_id": "n2", "role": "textbox", "name": "Email"}],
     }
