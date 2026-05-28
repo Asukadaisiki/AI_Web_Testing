@@ -79,6 +79,31 @@ class AIPlanningFlowStep(DSLModel):
     element_target_keywords: list[str] | None = None
 
 
+class AIPlanningScenarioVariable(DSLModel):
+    """Cross-segment variable declared by the planning agent as naming authority.
+
+    The planning agent emits one entry per ``${context_key}`` that will appear
+    in DSL steps across page states.  Each downstream segment prompt receives
+    this list verbatim so all segments use the same context_key spelling.
+    """
+    context_key: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        description="snake_case identifier, referenced as ${context_key} in DSL steps.",
+    )
+    description: str = Field(min_length=1, max_length=200, description="Human-readable purpose, e.g. '商品A名称'.")
+    source: Literal["input", "captured"] = Field(
+        default="captured",
+        description="'input' = provided via input_contract at execution; 'captured' = populated at runtime by capture_text.",
+    )
+    capture_in_state: str | None = Field(
+        default=None,
+        max_length=10,
+        description="For source='captured': page_state (S0/S1/...) where capture_text must run. Ignored for source='input'.",
+    )
+
+
 class AIPlanningScenario(DSLModel):
     """Test scenario — lean 4-field output, rest optional for backward compat."""
     scenario_key: str = Field(min_length=1, max_length=100)
@@ -91,6 +116,10 @@ class AIPlanningScenario(DSLModel):
     assertions: list[str] = Field(default_factory=list)
     page_elements: str | None = Field(default=None)
     flow_steps: list[AIPlanningFlowStep] = Field(default_factory=list)
+    variables: list[AIPlanningScenarioVariable] = Field(
+        default_factory=list,
+        description="Cross-segment variable dictionary. Segments use these context_keys as the naming authority.",
+    )
 
 
 class AIPlanningPlan(DSLModel):

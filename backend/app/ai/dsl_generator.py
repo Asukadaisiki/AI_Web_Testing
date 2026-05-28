@@ -694,12 +694,73 @@ def _call_dsl_flash_llm(
     return _extract_message_content(raw_payload)
 
 
+def _format_scenario_variables_for_prompt(
+    scenario_variables: list[dict[str, Any]] | None,
+    *,
+    current_state: str,
+) -> str:
+    """Render the planning-agent variable dictionary as authoritative segment context.
+
+    The returned text is injected into every segment prompt so all segments share
+    the same context_key spelling — no more S1 spelling 'product_a_name' while
+    S2 invents 'item_a_name'.
+
+    *current_state* lets the segment know which captures it owns vs. which it
+    should only reference via ${context_key}.
+    """
+    if not scenario_variables:
+        return ""
+
+    input_lines: list[str] = []
+    capture_own: list[str] = []
+    capture_other: list[str] = []
+    for v in scenario_variables:
+        if not isinstance(v, dict):
+            continue
+        ck = (v.get("context_key") or "").strip()
+        desc = (v.get("description") or "").strip()
+        src = (v.get("source") or "captured").strip().lower()
+        cap_state = (v.get("capture_in_state") or "").strip()
+        if not ck:
+            continue
+        if src == "input":
+            input_lines.append(f"  - ${{{ck}}} — {desc} (由 input_contract 在执行时注入)")
+        else:
+            label = f"  - ${{{ck}}} — {desc}"
+            if cap_state and cap_state == current_state:
+                capture_own.append(label + " (本段必须用 capture_text 写入)")
+            elif cap_state:
+                capture_other.append(label + f" (在 {cap_state} 段 capture，此段只能 ${{{ck}}} 引用，不要再 capture)")
+            else:
+                capture_other.append(label + " (跨段捕获变量，此段按需引用)")
+
+    if not (input_lines or capture_own or capture_other):
+        return ""
+
+    parts = ["## Scenario variables — naming authority (use these exact context_keys)"]
+    if input_lines:
+        parts.append("Input variables (referenced via ${{key}} in steps):")
+        parts.extend(input_lines)
+    if capture_own:
+        parts.append(f"Variables to capture in THIS state ({current_state}):")
+        parts.extend(capture_own)
+    if capture_other:
+        parts.append("Variables captured elsewhere — reference only, do NOT re-capture:")
+        parts.extend(capture_other)
+    parts.append(
+        "Rule: every ${{...}} you emit MUST appear above. Do not invent new context_keys "
+        "or rename existing ones — segments share these names across page states."
+    )
+    return "\n".join(parts)
+
+
 def _build_segment_prompt(
     scenario_prompt: str,
     page_state: str,
     seg_steps: list[dict[str, Any]],
     base_url: str,
     a11y_nodes: list[dict[str, Any]] | None = None,
+    scenario_variables: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build a focused prompt for a single page_state segment.
 
@@ -733,11 +794,17 @@ def _build_segment_prompt(
     else:
         elem_text = "(no a11y nodes available)"
 
+    variables_block = _format_scenario_variables_for_prompt(
+        scenario_variables, current_state=page_state,
+    )
+    variables_section = f"\n{variables_block}\n" if variables_block else ""
+
     return (
         f"Generate DSL steps for page state **{page_state}** only.\n\n"
         f"Scenario: {scenario_prompt}\n\n"
         f"{actions_section}\n\n"
         f"Available A11y tree elements:\n{elem_text}\n"
+        f"{variables_section}"
         f"\n"
         f"Rules:\n"
         f"- Return valid JSON with 'steps' array and 'base_url'.\n"
@@ -837,6 +904,7 @@ def generate_segmented_case_draft(
     payload: "GenerateDslRequest",
     flow_steps: list[dict[str, Any]],
     a11y_nodes_by_state: dict[str, list[dict[str, Any]]] | None = None,
+    scenario_variables: list[dict[str, Any]] | None = None,
 ) -> "tuple[DSLCase, list[str], list[str], GenerateDslMeta]":
     """Generate DSL by splitting the scenario into page_state segments.
 
@@ -889,9 +957,13 @@ def generate_segmented_case_draft(
 
     def _generate_segment(state: str, steps: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
         a11y_nodes = a11y_nodes_by_state.get(state, []) if a11y_nodes_by_state else []
+        # Prefer the explicit param; fall back to the field on payload so callers
+        # that only set payload.scenario_variables (e.g., single-segment path)
+        # still benefit from the naming authority.
+        effective_variables = scenario_variables or getattr(payload, "scenario_variables", None) or []
         logger.info(
-            "Generating segment %s: steps=%d, a11y_nodes=%d",
-            state, len(steps), len(a11y_nodes),
+            "Generating segment %s: steps=%d, a11y_nodes=%d, scenario_variables=%d",
+            state, len(steps), len(a11y_nodes), len(effective_variables),
         )
         seg_prompt = _build_segment_prompt(
             scenario_prompt=payload.prompt.strip(),
@@ -899,6 +971,7 @@ def generate_segmented_case_draft(
             seg_steps=steps,
             base_url=base_url,
             a11y_nodes=a11y_nodes,
+            scenario_variables=effective_variables,
         )
         logger.debug("Segment %s prompt length: %d", state, len(seg_prompt))
         messages = [

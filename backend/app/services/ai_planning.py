@@ -601,12 +601,14 @@ def generate_planning_drafts(
 
         try:
             flow_steps = scenario.get("flow_steps", [])
+            scenario_variables = scenario.get("variables", []) or []
             settings_local = get_settings()
 
             logger.info(
-                "[session:%d] DSL generation for scenario '%s': flow_steps=%d, a11y_nodes=%d, has_page_elements=%s, flow_steps_enabled=%s",
+                "[session:%d] DSL generation for scenario '%s': flow_steps=%d, a11y_nodes=%d, has_page_elements=%s, flow_steps_enabled=%s, scenario_variables=%d",
                 planning_session_id, scenario_key, len(flow_steps), len(a11y_nodes_raw),
                 bool(scenario.get("page_elements")), settings_local.ai_planning_flow_steps_enabled,
+                len(scenario_variables),
             )
 
             if flow_steps and settings_local.ai_planning_flow_steps_enabled:
@@ -635,10 +637,12 @@ def generate_planning_drafts(
                         current_output_contract=payload.current_output_contract,
                         preserve_contracts=payload.preserve_contracts,
                         flow_steps=flow_steps,
+                        scenario_variables=scenario_variables or None,
                         retry_reason_code=retry_reason_code,
                     ),
                     flow_steps=flow_steps,
                     a11y_nodes_by_state=a11y_nodes_by_state,
+                    scenario_variables=scenario_variables or None,
                 )
                 # Wrap to match the existing interface
                 generated = type("GeneratedHolder", (), {
@@ -673,6 +677,7 @@ def generate_planning_drafts(
                         current_output_contract=payload.current_output_contract,
                         preserve_contracts=payload.preserve_contracts,
                         a11y_nodes_by_state=a11y_nodes_by_state or None,
+                        scenario_variables=scenario_variables or None,
                         retry_reason_code=retry_reason_code,
                     ),
                 )

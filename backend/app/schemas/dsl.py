@@ -271,6 +271,15 @@ class GenerateDslRequest(DSLModel):
         default=None,
         description="A11y nodes grouped by page_state, used as element context when flow_steps is empty (Bug A fallback).",
     )
+    scenario_variables: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Naming authority for cross-segment variables. Each entry has shape "
+            "{context_key, description, source ('input'|'captured'), capture_in_state}. "
+            "All segments receive the same list so generated capture_text/assert_text "
+            "agree on ${context_key} spelling. Bypassing this risks unresolved ${} at runtime."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_retry_context(self) -> "GenerateDslRequest":

@@ -439,4 +439,104 @@ class TestExtractInputContractFromSteps:
         assert contract[0]["description"] == "手机号"
 
 
+class TestScenarioVariablesInSegmentPrompt:
+    """Variables emitted by the planning agent must appear in segment prompts.
+
+    Without this, parallel segments invent inconsistent names (S1 captures
+    'product_a_name', S2 asserts 'item_a_name') and ${} placeholders leak
+    through to runtime.
+    """
+
+    def test_input_variables_appear_in_prompt(self) -> None:
+        from app.ai.dsl_generator import _build_segment_prompt
+        prompt = _build_segment_prompt(
+            scenario_prompt="登录后筛选品牌并加购",
+            page_state="S0",
+            seg_steps=[],
+            base_url="https://x.com",
+            a11y_nodes=[],
+            scenario_variables=[
+                {"context_key": "email", "description": "登录邮箱", "source": "input"},
+                {"context_key": "password", "description": "登录密码", "source": "input"},
+            ],
+        )
+        assert "naming authority" in prompt.lower()
+        assert "${email}" in prompt
+        assert "${password}" in prompt
+        assert "登录邮箱" in prompt
+
+    def test_capture_state_distinguishes_owner_segment(self) -> None:
+        """In S1 the product capture is 'own'; in S2 it's reference-only."""
+        from app.ai.dsl_generator import _build_segment_prompt
+        variables = [
+            {"context_key": "product_a_name", "description": "商品A名称",
+             "source": "captured", "capture_in_state": "S1"},
+        ]
+        s1_prompt = _build_segment_prompt(
+            scenario_prompt="x", page_state="S1", seg_steps=[],
+            base_url="https://x.com", a11y_nodes=[], scenario_variables=variables,
+        )
+        s2_prompt = _build_segment_prompt(
+            scenario_prompt="x", page_state="S2", seg_steps=[],
+            base_url="https://x.com", a11y_nodes=[], scenario_variables=variables,
+        )
+        assert "本段必须用 capture_text 写入" in s1_prompt
+        assert "do NOT re-capture" in s2_prompt
+        assert "${product_a_name}" in s1_prompt
+        assert "${product_a_name}" in s2_prompt
+
+    def test_empty_variables_skips_block(self) -> None:
+        from app.ai.dsl_generator import _build_segment_prompt
+        prompt = _build_segment_prompt(
+            scenario_prompt="x", page_state="S0", seg_steps=[],
+            base_url="https://x.com", a11y_nodes=[], scenario_variables=[],
+        )
+        assert "naming authority" not in prompt.lower()
+
+    def test_variables_flow_through_segmented_generator(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """generate_segmented_case_draft must forward variables to each segment."""
+        from app.ai import dsl_generator
+        from app.schemas.dsl import GenerateDslRequest
+
+        captured_prompts: list[str] = []
+
+        def fake_flash_llm(*, messages, settings, timeout_seconds):
+            captured_prompts.append(messages[-1]["content"])
+            return '{"steps": [], "base_url": "https://x.com"}'
+
+        monkeypatch.setattr(dsl_generator, "_call_dsl_flash_llm", fake_flash_llm)
+
+        payload = GenerateDslRequest(
+            prompt="brand filter cart flow",
+            base_url="https://x.com",
+            actor_user_id=1,
+        )
+        # Forces "no steps generated" error after running every segment,
+        # but the prompt-capture side-effect is what we care about.
+        with pytest.raises(dsl_generator.DslGenerationError):
+            dsl_generator.generate_segmented_case_draft(
+                payload=payload,
+                flow_steps=[
+                    {"step_index": 1, "action": "goto", "page_state": "S0"},
+                    {"step_index": 2, "action": "click", "page_state": "S1"},
+                ],
+                a11y_nodes_by_state={"S0": [], "S1": []},
+                scenario_variables=[
+                    {"context_key": "email", "description": "邮箱", "source": "input"},
+                    {"context_key": "product_a_name", "description": "商品A名称",
+                     "source": "captured", "capture_in_state": "S1"},
+                ],
+            )
+
+        assert len(captured_prompts) == 2
+        for p in captured_prompts:
+            assert "${email}" in p
+            assert "${product_a_name}" in p
+        # S1 owns the capture, S0 only sees it as referenced-elsewhere
+        s0_prompt = next(p for p in captured_prompts if "page state **S0**" in p)
+        s1_prompt = next(p for p in captured_prompts if "page state **S1**" in p)
+        assert "本段必须用 capture_text 写入" in s1_prompt
+        assert "本段必须用 capture_text 写入" not in s0_prompt
+
+
 

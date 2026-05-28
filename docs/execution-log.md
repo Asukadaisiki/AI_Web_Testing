@@ -26,6 +26,34 @@
 | 变量占位符修复 | 05-28 | 分段生成 input_contract 自动提取 | 修复 ${email} 未替换问题 |
 | A11y Tree 全面切换 | 05-28 | 封杀 DOM 路径，只使用 a11y tree | 500 tests, 4 项核心修复 |
 | explore_flow DSL 格式支持 | 05-28 | 支持 DSL 格式步骤传入 explore_flow | 500 tests, 修复页面探索不完整 |
+| 跨段变量命名权威 | 05-28 | Planning agent 输出 scenario.variables，segment prompt 注入命名字典 | 504 tests, 4 新增聚焦测试 |
+
+---
+
+## 2026-05-28 | 跨段变量命名权威（scenario.variables）
+
+**目标**：堵住 `generate_segmented_case_draft` 并行调用各 segment LLM 时段间变量名失配的洞——例如 S1 生成 `capture_text context_key=product_a_name`，S2 独立生成 `assert_text value="${item_a_name}"`，运行时 `_substitute_variables` 找不到 key，字面量 `${item_a_name}` 残留到断言/输入。
+
+**操作**：
+1. `schemas/ai_planning.py`：新增 `AIPlanningScenarioVariable`（context_key/description/source/capture_in_state），挂到 `AIPlanningScenario.variables`
+2. `ai/test_planning_prompts.py`：在 JSON 模板 + 规则段加 variables 字段说明，要求 AI 列出所有跨段共享变量及其 capture 段
+3. `schemas/dsl.py`：`GenerateDslRequest` 新增 `scenario_variables: list[dict] | None` 透传字段
+4. `ai/dsl_generator.py`：新增 `_format_scenario_variables_for_prompt(scenario_variables, current_state=...)` 把变量按 input/own_capture/other_capture 分组渲染；`_build_segment_prompt` 注入；`generate_segmented_case_draft` 接收新参数并下传给每个 segment
+5. `services/ai_planning.py`：`generate_planning_drafts` 从 `scenario["variables"]` 取出，分别注入 segmented 和 single-segment 路径的 payload
+6. `tests/unit/test_dsl_generator.py`：新增 `TestScenarioVariablesInSegmentPrompt` 4 个聚焦测试
+
+**结果**：
+- 每个 segment 看到的 prompt 包含 `## Scenario variables — naming authority` 小节，列出全部 `${context_key}` 及其责任段
+- 本段持有的 capture 变量标"本段必须用 capture_text 写入"，外段的标"do NOT re-capture"
+- 504 单元测试通过（原 500 + 4 新增）
+
+**验证**：
+- `_build_segment_prompt` 直接调用：input 变量、capture 变量、空 variables 三个分支
+- `generate_segmented_case_draft` mock LLM 调用：确认 2 个并行 segment 都拿到同一份变量字典，且只有 S1 段被标为 capture 责任段
+
+**后续**：
+- 还可以加生成后校验：扫描 merged_steps 中所有 `${var}`，若不在 scenario_variables 也不在 `input_contract` 中则降级告警/重生段；这层兜底等用回归 prompt 跑过一次再决定是否补
+- 现有 `_extract_input_contract_from_steps` 会把 captured 变量也纳入 input_contract，理论上不影响执行（runtime_context 会覆盖 input_values），但语义不准确；可在后续做拆分
 
 ---
 

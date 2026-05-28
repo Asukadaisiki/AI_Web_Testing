@@ -36,6 +36,12 @@ SYSTEM_PROMPT_TEMPLATE = """\
           {{"step_index": 1, "action": "goto", "target": "https://...", "page_state": "S0"}},
           {{"step_index": 2, "action": "click", "target": "Signup / Login", "page_state": "S0"}},
           {{"step_index": 3, "action": "input", "target": "Email", "value": "${{email}}", "page_state": "S0"}}
+        ],
+        "variables": [
+          {{"context_key": "email", "description": "登录邮箱", "source": "input"}},
+          {{"context_key": "password", "description": "登录密码", "source": "input"}},
+          {{"context_key": "product_a_name", "description": "商品A名称", "source": "captured", "capture_in_state": "S1"}},
+          {{"context_key": "product_a_price", "description": "商品A价格", "source": "captured", "capture_in_state": "S1"}}
         ]
       }}
     ]
@@ -62,6 +68,11 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - 探索失败 → 报告用户,不跳过。
 - draft_prompt 中 step value 用 ${{context_key}} 格式引用变量。
 - 生成一个完整的场景方案，包含所有测试步骤（如登录、筛选、加入购物车、查看购物车等）。
+- 【variables 字段是跨段命名权威】必须列出该场景所有跨页面状态共享的变量：
+  * 来自测试账号/数据的变量：source="input"（如 email、password、address）。
+  * 来自页面捕获的变量：source="captured" + capture_in_state="S{{n}}"（如 product_a_name 在 S1 商品列表页 capture，在 S2 购物车页 assert）。
+  * context_key 必须是稳定的 snake_case，所有 page_state 段的 DSL 都用同一个名字引用。
+  * 凡是 flow_steps 中用到 ${{xxx}} 的变量，都必须在 variables 中声明；遗漏会导致段间命名不一致、断言失败。
 - 默认中文输出。
 """
 
