@@ -1293,6 +1293,37 @@ def capture_browser_session(
 # ── A11y-based flow collection (replaces collect_multi_page_elements + collect_flow_elements)
 
 
+def _normalize_flow_step(step: dict[str, Any]) -> dict[str, Any]:
+    """Normalize DSL format steps to explore_flow format.
+
+    DSL format: {"action": "goto", "target": "https://..."} or {"action": "click", "target": "..."}
+    Explore format: {"url": "https://...", "actions": [{"action": "click", "target": "..."}]}
+    """
+    if not isinstance(step, dict):
+        return step
+
+    # Already in explore format (has url or actions)
+    if "url" in step or "actions" in step:
+        return step
+
+    # DSL format: has action + target
+    action = (step.get("action") or "").strip().lower()
+    target = step.get("target", "")
+
+    if not action:
+        return step
+
+    # goto -> url
+    if action == "goto" and target:
+        return {"url": target, "description": step.get("description", "")}
+
+    # click/input/wait_for -> actions
+    if action in ("click", "input", "wait_for") and target:
+        return {"actions": [step], "description": step.get("description", "")}
+
+    return step
+
+
 def _collect_flow_a11y(
     flow_steps: list[dict[str, Any]],
     *,
@@ -1302,9 +1333,17 @@ def _collect_flow_a11y(
     timeout_ms: int = 60000,
     core_user_flow_text: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute flow steps using A11y extraction instead of DOM."""
+    """Execute flow steps using A11y extraction instead of DOM.
+
+    Supports both formats:
+    - Explore format: {"url": "...", "actions": [...]}
+    - DSL format: {"action": "goto/click/input/...", "target": "..."}
+    """
     if not flow_steps:
         return []
+
+    # Normalize all steps to explore format
+    flow_steps = [_normalize_flow_step(s) for s in flow_steps]
 
     from urllib.parse import urljoin
 

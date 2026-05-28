@@ -25,6 +25,29 @@
 | 数据校验修复 | 05-25 | 数据传递与校验全面扫描修复 | 修复 19 项问题 |
 | 变量占位符修复 | 05-28 | 分段生成 input_contract 自动提取 | 修复 ${email} 未替换问题 |
 | A11y Tree 全面切换 | 05-28 | 封杀 DOM 路径，只使用 a11y tree | 500 tests, 4 项核心修复 |
+| explore_flow DSL 格式支持 | 05-28 | 支持 DSL 格式步骤传入 explore_flow | 500 tests, 修复页面探索不完整 |
+
+---
+
+## 2026-05-28 | explore_flow DSL 格式支持
+
+**目标**：修复 `explore_flow` 不支持 DSL 格式步骤的问题，导致页面探索不完整，AI 生成的 DSL 缺少 input 步骤。
+
+**操作**：
+1. 定位问题：AI 调用 `explore_flow` 时传入 DSL 格式步骤 `{"action": "goto", "target": "https://..."}`，但 `_collect_flow_a11y` 只支持 `{"url": "...", "actions": [...]}` 格式
+2. 根因分析：DSL 格式步骤没有 `url` 和 `actions` 字段，导致步骤被跳过
+3. 修复方案：新增 `_normalize_flow_step()` 函数，将 DSL 格式步骤转换为 explore 格式
+4. goto -> url, click/input/wait_for -> actions
+
+**结果**：
+- 500 单元测试全部通过
+- explore_flow 现在支持两种格式的步骤
+
+**验证**：
+- DSL 格式 `{"action": "goto", "target": "https://..."}` -> `{"url": "https://..."}`
+- DSL 格式 `{"action": "click", "target": "Polo"}` -> `{"actions": [{"action": "click", "target": "Polo"}]}`
+
+**后续**：用户可重新测试 E2E 场景，验证 explore_flow 是否正确探索所有页面。
 
 ---
 
