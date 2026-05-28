@@ -277,6 +277,12 @@ _BASE_SYSTEM_PROMPT_LINES = [
     "",
     "━━━ CRITICAL RULES — VIOLATING ANY OF THESE = FAILED DRAFT ━━━",
     "",
+    "## R0: INDEPENDENT EXECUTABLE — DSL MUST BE SELF-CONTAINED",
+    "The DSL is an independent, repeatable test case. It must include ALL necessary steps,",
+    "including login steps (input email/password + click Login), even if the exploration phase",
+    "already executed login or other operations. Do NOT assume the user is already logged in",
+    "or cookies are saved. Every test run starts from scratch.",
+    "",
     "## R1: PAGE NAVIGATION — DO NOT SKIP NAVIGATION STEPS",
     "MUST generate click or goto to reach a page BEFORE any wait_for/input/capture_text on that page.",
     "Each page in the flow requires a navigation step (click or goto) to get there.",
@@ -688,6 +694,10 @@ def _build_segment_prompt(
         f"- Return valid JSON with 'steps' array and 'base_url'.\n"
         f"- base_url: {base_url}\n"
         f"- Only generate steps for THIS page state ({page_state}).\n"
+        f"- 【独立可执行】DSL 必须是一个独立的、可重复执行的测试用例。\n"
+        f"  即使探索阶段已经执行了登录或其他操作，DSL 中也必须包含所有必要的步骤。\n"
+        f"  包括：登录步骤（input email/password + click Login）、导航步骤等。\n"
+        f"  不要假设用户已经登录或 cookies 已保存。\n"
         f"- 【target 格式】target 必须使用 a11y tree 中的元素标识，格式为 role=\"name\"。\n"
         f"  例如：button=\"Login\", textbox=\"Email\", link=\"Products\"。\n"
         f"  绝对不要使用 XPath、CSS 选择器、DOM 元素路径或任何其他格式。\n"
