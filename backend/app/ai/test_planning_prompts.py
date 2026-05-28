@@ -60,7 +60,6 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - generate_plan 前确保 core_user_flow 涉及的每个页面都已探索。
 - generate_plan 时每个 scenario 必须包含 flow_steps，列出该场景的所有操作步骤。flow_steps 的 target 必须使用页面探索返回的元素清单中的实际文本。
 - 探索失败 → 报告用户,不跳过。
-- target 使用元素清单中的实际 name,不要编造 CSS 选择器。
 - draft_prompt 中 step value 用 ${{context_key}} 格式引用变量。
 - 生成一个完整的场景方案，包含所有测试步骤（如登录、筛选、加入购物车、查看购物车等）。
 - 默认中文输出。

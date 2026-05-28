@@ -233,6 +233,55 @@ def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
 
     return step
 
+
+def _repair_target_format(step: dict[str, Any], a11y_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Repair target format: convert plain text to a11y tree format.
+
+    If target is already in a11y tree format (role="name"), return as-is.
+    Otherwise, try to find matching a11y node and construct proper format.
+    """
+    target = step.get("target")
+    if not target or not isinstance(target, str):
+        return step
+
+    # Already in a11y tree format
+    if '="' in target and target.endswith('"'):
+        return step
+
+    # Try to find matching a11y node
+    target_lower = target.strip().lower()
+    for node in a11y_nodes:
+        name = (node.get("name") or "").strip()
+        role = (node.get("role") or "").strip()
+        if not name or not role:
+            continue
+        if name.lower() == target_lower:
+            # Found exact match, construct a11y tree format
+            step["target"] = f'{role}="{name}"'
+            logger.info(
+                "[repair_target] Converted '%s' to '%s'",
+                target, step["target"],
+            )
+            return step
+
+    # Try partial match
+    for node in a11y_nodes:
+        name = (node.get("name") or "").strip()
+        role = (node.get("role") or "").strip()
+        if not name or not role:
+            continue
+        if target_lower in name.lower() or name.lower() in target_lower:
+            # Found partial match, construct a11y tree format
+            step["target"] = f'{role}="{name}"'
+            logger.info(
+                "[repair_target] Converted '%s' to '%s' (partial match)",
+                target, step["target"],
+            )
+            return step
+
+    return step
+
+
 _VALUE_TYPE_ALIASES = {
     "str": "string",
     "string": "string",
@@ -887,6 +936,11 @@ def generate_segmented_case_draft(
                 state, len(steps_result) - len(repaired_steps),
             )
         steps_result = repaired_steps
+
+        # Repair target format: convert plain text to a11y tree format
+        for s in steps_result:
+            _repair_target_format(s, a11y_nodes)
+
         logger.info("Segment %s generated %d steps", state, len(steps_result))
         return state, steps_result
 

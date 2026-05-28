@@ -405,6 +405,7 @@ def _load_a11y_nodes_for_scenario(
     """Load a11y_nodes from the most recent explore result for this session.
     Falls back to parsing page_elements text for backward compat.
     """
+    # Step 1: Query AIPlanningToolResult table
     result_record = session.scalars(
         select(AIPlanningToolResult)
         .where(AIPlanningToolResult.session_id == planning_session_id)
@@ -412,52 +413,80 @@ def _load_a11y_nodes_for_scenario(
         .order_by(AIPlanningToolResult.id.desc())
     ).first()
 
-    # Diagnostic logging
-    logger.info(
-        "[_load_a11y_nodes] session=%d, found_record=%s, tool_name=%s, raw_result_json_type=%s, raw_result_json_is_dict=%s",
-        planning_session_id,
-        result_record is not None,
-        result_record.tool_name if result_record else None,
-        type(result_record.raw_result_json).__name__ if result_record else None,
-        isinstance(result_record.raw_result_json, dict) if result_record else None,
-    )
-    if result_record and isinstance(result_record.raw_result_json, dict):
-        raw = result_record.raw_result_json
-        logger.info(
-            "[_load_a11y_nodes] raw keys=%s, has_pages=%s, has_a11y_nodes=%s",
-            list(raw.keys()),
-            "pages" in raw,
-            "a11y_nodes" in raw,
+    # Step 2: Check if record exists
+    if result_record is None:
+        logger.warning(
+            "[_load_a11y_nodes] NO RECORD FOUND in AIPlanningToolResult for session %d. "
+            "This means tool results were NOT persisted. Check stream_planning_turn logic.",
+            planning_session_id,
         )
-        if "pages" in raw:
-            all_nodes = []
-            for page in raw.get("pages", []):
-                state = page.get("page_state", "S0")
-                a11y_nodes = page.get("a11y_nodes", [])
-                logger.info("[_load_a11y_nodes] page state=%s, a11y_nodes_count=%d", state, len(a11y_nodes))
-                for n in a11y_nodes:
-                    n = dict(n)
-                    n["page_state"] = n.get("page_state", state)
-                    all_nodes.append(n)
-            logger.info("[_load_a11y_nodes] total nodes from pages: %d", len(all_nodes))
-            return all_nodes
-        a11y_nodes = raw.get("a11y_nodes")
-        logger.info("[_load_a11y_nodes] direct a11y_nodes: %s", len(a11y_nodes) if a11y_nodes else 0)
-        return a11y_nodes
+        # Check if there are ANY tool results for this session
+        all_results = session.scalars(
+            select(AIPlanningToolResult)
+            .where(AIPlanningToolResult.session_id == planning_session_id)
+        ).all()
+        logger.warning(
+            "[_load_a11y_nodes] Total tool results for session %d: %d",
+            planning_session_id,
+            len(all_results),
+        )
+        if all_results:
+            for r in all_results[:5]:
+                logger.warning(
+                    "[_load_a11y_nodes]   - id=%d, tool=%s, raw_type=%s",
+                    r.id, r.tool_name, type(r.raw_result_json).__name__,
+                )
+        return None
 
-    # Fallback: check if we have any tool results at all
-    all_results = session.scalars(
-        select(AIPlanningToolResult)
-        .where(AIPlanningToolResult.session_id == planning_session_id)
-        .order_by(AIPlanningToolResult.id.desc())
-    ).all()
-    logger.warning(
-        "[_load_a11y_nodes] No valid explore result found. Total tool results for session %d: %d, tools=%s",
-        planning_session_id,
-        len(all_results),
-        [(r.tool_name, type(r.raw_result_json).__name__) for r in all_results[:5]],
+    # Step 3: Validate raw_result_json
+    logger.info(
+        "[_load_a11y_nodes] Found record: id=%d, tool=%s, raw_type=%s, is_dict=%s",
+        result_record.id,
+        result_record.tool_name,
+        type(result_record.raw_result_json).__name__,
+        isinstance(result_record.raw_result_json, dict),
     )
-    return None
+
+    if not isinstance(result_record.raw_result_json, dict):
+        logger.warning(
+            "[_load_a11y_nodes] raw_result_json is NOT a dict (type=%s). Cannot extract a11y_nodes.",
+            type(result_record.raw_result_json).__name__,
+        )
+        return None
+
+    raw = result_record.raw_result_json
+    logger.info(
+        "[_load_a11y_nodes] raw keys=%s, has_pages=%s, has_a11y_nodes=%s",
+        list(raw.keys()),
+        "pages" in raw,
+        "a11y_nodes" in raw,
+    )
+
+    # Step 4: Extract a11y_nodes from pages (for explore_flow)
+    if "pages" in raw:
+        all_nodes = []
+        for page in raw.get("pages", []):
+            state = page.get("page_state", "S0")
+            a11y_nodes = page.get("a11y_nodes", [])
+            logger.info(
+                "[_load_a11y_nodes] page state=%s, url=%s, a11y_nodes_count=%d",
+                state, page.get("url", "?"), len(a11y_nodes),
+            )
+            for n in a11y_nodes:
+                n = dict(n)
+                n["page_state"] = n.get("page_state", state)
+                all_nodes.append(n)
+        logger.info("[_load_a11y_nodes] total nodes from pages: %d", len(all_nodes))
+        if not all_nodes:
+            logger.warning("[_load_a11y_nodes] pages exist but a11y_nodes is EMPTY!")
+        return all_nodes if all_nodes else None
+
+    # Step 5: Extract a11y_nodes directly (for explore_page)
+    a11y_nodes = raw.get("a11y_nodes")
+    logger.info("[_load_a11y_nodes] direct a11y_nodes: %s", len(a11y_nodes) if a11y_nodes else 0)
+    if not a11y_nodes:
+        logger.warning("[_load_a11y_nodes] a11y_nodes is EMPTY or None!")
+    return a11y_nodes
 
 
 def generate_planning_drafts(

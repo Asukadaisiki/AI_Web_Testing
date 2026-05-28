@@ -540,6 +540,51 @@ def stream_planning_turn(
                 tool_calls=tool_calls,
                 todo_list=todo_items,
             )
+
+            # Persist tool results before returning (for force_generate turns)
+            if planning_session_id:
+                from app.models import AIPlanningToolResult
+                from app.models.ai_planning_message import AIPlanningMessage
+                _HEAVY_TOOLS_SET = {"explore_page", "explore_flow"}
+                for tc in tool_calls:
+                    if tc.tool not in _HEAVY_TOOLS_SET:
+                        continue
+                    compressed = getattr(tc, "_compressed_result", None)
+                    if compressed is None:
+                        continue
+                    # Check if already persisted (avoid duplicates)
+                    existing = db_session.scalar(
+                        select(AIPlanningToolResult)
+                        .where(AIPlanningToolResult.session_id == planning_session_id)
+                        .where(AIPlanningToolResult.tool_name == tc.tool)
+                        .order_by(AIPlanningToolResult.id.desc())
+                        .limit(1)
+                    )
+                    if existing is not None:
+                        continue
+                    # Find or create a message_id for this tool call
+                    msg = db_session.scalar(
+                        select(AIPlanningMessage)
+                        .where(AIPlanningMessage.session_id == planning_session_id)
+                        .where(AIPlanningMessage.role == "assistant")
+                        .where(AIPlanningMessage.turn_type == "tool_call")
+                        .order_by(AIPlanningMessage.id.desc())
+                        .limit(1)
+                    )
+                    raw_json = tc.result if isinstance(tc.result, dict) else None
+                    db_session.add(AIPlanningToolResult(
+                        session_id=planning_session_id,
+                        message_id=msg.id if msg else None,
+                        tool_name=tc.tool,
+                        raw_result_json=raw_json,
+                        summary_json=compressed,
+                    ))
+                    logger.info(
+                        "[persist_tool_result_force_generate] Saved %s result to AIPlanningToolResult: session=%d, raw_keys=%s",
+                        tc.tool, planning_session_id, list(raw_json.keys()) if raw_json else None,
+                    )
+                db_session.flush()
+
             yield _turn_complete_payload(response)
             return response
 
@@ -549,6 +594,7 @@ def stream_planning_turn(
             if not isinstance(params, dict):
                 params = {}
             logger.info("Tool call: %s, params=%s", tool_name, json.dumps(params, ensure_ascii=False, default=str)[:500])
+            logger.info("[debug] tool_name=%s, in_HEAVY_TOOLS=%s, _HEAVY_TOOLS=%s", tool_name, tool_name in _HEAVY_TOOLS, _HEAVY_TOOLS)
 
             # --- Bug C: Dedup duplicate tool calls within this turn ---
             dup_signature = _tool_call_signature(tool_name, params)
@@ -625,7 +671,23 @@ def stream_planning_turn(
             # --- Deterministic compression for heavy tools ---
             compressed_result = None
             if tool_name in _HEAVY_TOOLS:
-                compressed_result = _compress_tool_result(tool_name, parsed_result)
+                logger.info(
+                    "[compress_tool] tool=%s, parsed_result_type=%s, is_dict=%s",
+                    tool_name,
+                    type(parsed_result).__name__,
+                    isinstance(parsed_result, dict),
+                )
+                if isinstance(parsed_result, dict):
+                    compressed_result = _compress_tool_result(tool_name, parsed_result)
+                    logger.info(
+                        "[compress_tool] compressed_result keys=%s",
+                        list(compressed_result.keys()) if compressed_result else None,
+                    )
+                else:
+                    logger.warning(
+                        "[compress_tool] parsed_result is NOT a dict (type=%s), skipping compression",
+                        type(parsed_result).__name__,
+                    )
 
             # --- SSE event ---
             if tool_name in _HEAVY_TOOLS:
@@ -945,6 +1007,51 @@ def stream_planning_turn(
         force_generate=True,
         tool_calls=tool_calls,
     )
+
+    # Persist tool results before returning (for fallback turns)
+    if planning_session_id:
+        from app.models import AIPlanningToolResult
+        from app.models.ai_planning_message import AIPlanningMessage
+        _HEAVY_TOOLS_SET = {"explore_page", "explore_flow"}
+        for tc in tool_calls:
+            if tc.tool not in _HEAVY_TOOLS_SET:
+                continue
+            compressed = getattr(tc, "_compressed_result", None)
+            if compressed is None:
+                continue
+            # Check if already persisted (avoid duplicates)
+            existing = db_session.scalar(
+                select(AIPlanningToolResult)
+                .where(AIPlanningToolResult.session_id == planning_session_id)
+                .where(AIPlanningToolResult.tool_name == tc.tool)
+                .order_by(AIPlanningToolResult.id.desc())
+                .limit(1)
+            )
+            if existing is not None:
+                continue
+            # Find or create a message_id for this tool call
+            msg = db_session.scalar(
+                select(AIPlanningMessage)
+                .where(AIPlanningMessage.session_id == planning_session_id)
+                .where(AIPlanningMessage.role == "assistant")
+                .where(AIPlanningMessage.turn_type == "tool_call")
+                .order_by(AIPlanningMessage.id.desc())
+                .limit(1)
+            )
+            raw_json = tc.result if isinstance(tc.result, dict) else None
+            db_session.add(AIPlanningToolResult(
+                session_id=planning_session_id,
+                message_id=msg.id if msg else None,
+                tool_name=tc.tool,
+                raw_result_json=raw_json,
+                summary_json=compressed,
+            ))
+            logger.info(
+                "[persist_tool_result_fallback] Saved %s result to AIPlanningToolResult: session=%d, raw_keys=%s",
+                tc.tool, planning_session_id, list(raw_json.keys()) if raw_json else None,
+            )
+        db_session.flush()
+
     yield _turn_complete_payload(response)
     return response
 
@@ -1287,7 +1394,7 @@ def _run_fallback_turn(
 
 
 def _extract_page_elements(tool_calls: list[AIPlanningToolCall]) -> str | None:
-    """Extract formatted DOM elements from the last explore_page or explore_flow tool call."""
+    """Extract formatted page elements from the last explore_page or explore_flow tool call."""
     for call in reversed(tool_calls):
         if call.tool in ("explore_page", "explore_flow") and isinstance(call.result, dict):
             formatted = call.result.get("formatted")
@@ -1399,7 +1506,7 @@ _HEAVY_TOOLS = {"explore_page", "explore_flow"}
 def _compress_tool_result(tool_name: str, result: dict) -> dict:
     """Deterministic compression of exploration results for ReAct context.
 
-    Now operates on a11y_nodes instead of raw DOM elements. No LLM call.
+    Now operates on a11y_nodes instead of raw page elements. No LLM call.
     """
     _KEEP_KEYS = {"node_id", "role", "name", "level", "parent_id", "focusable", "disabled"}
 
@@ -2474,11 +2581,11 @@ def _build_draft_prompt(
         item.label for item in _build_test_data_requirements(requirements, is_login=_looks_like_login(requirements))
     )
     negative_hint = "需要覆盖异常输入和错误提示。" if negative_case else "请覆盖标准主流程。"
-    dom_section = ""
+    page_elements_section = ""
     if page_elements:
-        dom_section = (
+        page_elements_section = (
             "\n\n注意：页面可交互元素清单已通过 page_elements 字段单独提供。"
-            "生成 DSL 时请严格使用其中的 label、placeholder 或 id 作为 target，"
+            "生成 DSL 时请严格使用其中的 a11y tree 标识（role=\"name\" 格式）作为 target，"
             "标注了 [dynamic] 的元素是交互触发后才出现的动态元素，步骤顺序必须与用户流程一致。"
         )
     # Build test data section with full detail
@@ -2510,7 +2617,7 @@ def _build_draft_prompt(
         "如果已获取到页面元素清单，请严格按照元素的实际可见文本、label、placeholder 或 id 作为 target（纯文本字符串，如 \"Email Address\"），不要构造 CSS 选择器格式。step 的 value 字段如涉及测试数据，必须用 ${context_key} 格式引用 input_contract 变量，不要硬编码。"
         "必须为流程和测试数据中提到的每个表单字段生成对应步骤，不得遗漏任何字段（包括下拉框、日期选择器、复选框等）。"
         f"{data_section}"
-        f"{dom_section}"
+        f"{page_elements_section}"
         "\n\n重要：所有使用 ${variable_name} 格式引用的变量，必须先在 input_contract 中定义。"
         "如果某个变量（如 product_a_price）是从页面提取的，必须先用 capture_text 步骤捕获它（设置 context_key），再在后续 assert_text 中通过 ${context_key} 引用。"
         "不要引用未在 input_contract 或 capture_text 中定义的变量。"
