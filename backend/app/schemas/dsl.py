@@ -280,6 +280,15 @@ class GenerateDslRequest(DSLModel):
             "agree on ${context_key} spelling. Bypassing this risks unresolved ${} at runtime."
         ),
     )
+    user_context: str | None = Field(
+        default=None,
+        max_length=5000,
+        description=(
+            "Original user requirements summary injected into every segment prompt "
+            "so the DSL generator sees the full business intent, not just the "
+            "planning agent's draft_prompt derivative."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_retry_context(self) -> "GenerateDslRequest":

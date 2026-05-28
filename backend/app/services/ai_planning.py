@@ -402,25 +402,28 @@ def _load_a11y_nodes_for_scenario(
     *,
     scenario: dict | None = None,
 ) -> list[dict] | None:
-    """Load a11y_nodes from the most recent explore result for this session.
-    Falls back to parsing page_elements text for backward compat.
+    """Load a11y_nodes from ALL explore results for this session.
+
+    Aggregates pages across multiple explore_flow / explore_page calls,
+    deduplicating by URL so that re-exploring the same page with different
+    actions doesn't produce duplicate nodes.  Earlier calls that explored
+    more pages are no longer silently discarded.
     """
-    # Step 1: Query AIPlanningToolResult table
-    result_record = session.scalars(
+    # Step 1: Query ALL explore results for this session
+    result_records = list(session.scalars(
         select(AIPlanningToolResult)
         .where(AIPlanningToolResult.session_id == planning_session_id)
         .where(AIPlanningToolResult.tool_name.in_(["explore_flow", "explore_page"]))
-        .order_by(AIPlanningToolResult.id.desc())
-    ).first()
+        .order_by(AIPlanningToolResult.id.asc())
+    ).all())
 
-    # Step 2: Check if record exists
-    if result_record is None:
+    # Step 2: Check if any records exist
+    if not result_records:
         logger.warning(
             "[_load_a11y_nodes] NO RECORD FOUND in AIPlanningToolResult for session %d. "
             "This means tool results were NOT persisted. Check stream_planning_turn logic.",
             planning_session_id,
         )
-        # Check if there are ANY tool results for this session
         all_results = session.scalars(
             select(AIPlanningToolResult)
             .where(AIPlanningToolResult.session_id == planning_session_id)
@@ -438,55 +441,84 @@ def _load_a11y_nodes_for_scenario(
                 )
         return None
 
-    # Step 3: Validate raw_result_json
     logger.info(
-        "[_load_a11y_nodes] Found record: id=%d, tool=%s, raw_type=%s, is_dict=%s",
-        result_record.id,
-        result_record.tool_name,
-        type(result_record.raw_result_json).__name__,
-        isinstance(result_record.raw_result_json, dict),
+        "[_load_a11y_nodes] Found %d explore records for session %d",
+        len(result_records), planning_session_id,
     )
 
-    if not isinstance(result_record.raw_result_json, dict):
-        logger.warning(
-            "[_load_a11y_nodes] raw_result_json is NOT a dict (type=%s). Cannot extract a11y_nodes.",
-            type(result_record.raw_result_json).__name__,
-        )
+    # Step 3: Aggregate pages from ALL records, deduplicating by URL
+    # Key: normalized URL → best (most nodes) page data
+    pages_by_url: dict[str, dict] = {}
+    state_counter = 0
+
+    for record in result_records:
+        raw = record.raw_result_json
+        if not isinstance(raw, dict):
+            logger.warning(
+                "[_load_a11y_nodes]   - id=%d tool=%s: raw_result_json is NOT a dict (type=%s), skipping",
+                record.id, record.tool_name, type(raw).__name__,
+            )
+            continue
+
+        # Extract pages from explore_flow result
+        if "pages" in raw:
+            for page in raw.get("pages", []):
+                url = (page.get("url") or "").strip().rstrip("/").lower()
+                nodes = page.get("a11y_nodes", [])
+                if not url or not nodes:
+                    continue
+                existing = pages_by_url.get(url)
+                if existing is None or len(nodes) > len(existing.get("a11y_nodes", [])):
+                    # Keep the version with more nodes (re-exploration with actions
+                    # usually yields richer data than a static page load)
+                    pages_by_url[url] = page
+                    logger.info(
+                        "[_load_a11y_nodes]   - id=%d: page url=%s, nodes=%d (new/better)",
+                        record.id, url, len(nodes),
+                    )
+                else:
+                    logger.info(
+                        "[_load_a11y_nodes]   - id=%d: page url=%s, nodes=%d (kept existing %d)",
+                        record.id, url, len(nodes), len(existing.get("a11y_nodes", [])),
+                    )
+
+        # Extract a11y_nodes directly from explore_page result
+        elif "a11y_nodes" in raw:
+            nodes = raw.get("a11y_nodes") or []
+            url = (raw.get("url") or "").strip().rstrip("/").lower()
+            if url and nodes:
+                existing = pages_by_url.get(url)
+                if existing is None or len(nodes) > len(existing.get("a11y_nodes", [])):
+                    pages_by_url[url] = {"url": raw.get("url"), "page_state": f"S{state_counter}", "a11y_nodes": nodes}
+                    state_counter += 1
+
+    if not pages_by_url:
+        logger.warning("[_load_a11y_nodes] All explore records had empty pages/nodes!")
         return None
 
-    raw = result_record.raw_result_json
+    # Step 4: Assign sequential page_states and flatten nodes
+    all_nodes: list[dict] = []
+    state_counter = 0
+    for url in pages_by_url:
+        page = pages_by_url[url]
+        state = f"S{state_counter}"
+        page["page_state"] = state
+        state_counter += 1
+        a11y_nodes = page.get("a11y_nodes", [])
+        logger.info(
+            "[_load_a11y_nodes] aggregated page: state=%s, url=%s, nodes=%d",
+            state, page.get("url", "?"), len(a11y_nodes),
+        )
+        for n in a11y_nodes:
+            n = dict(n)
+            n["page_state"] = state
+            all_nodes.append(n)
+
     logger.info(
-        "[_load_a11y_nodes] raw keys=%s, has_pages=%s, has_a11y_nodes=%s",
-        list(raw.keys()),
-        "pages" in raw,
-        "a11y_nodes" in raw,
+        "[_load_a11y_nodes] total: %d pages, %d nodes from %d explore records",
+        len(pages_by_url), len(all_nodes), len(result_records),
     )
-
-    # Step 4: Extract a11y_nodes from pages (for explore_flow)
-    if "pages" in raw:
-        all_nodes = []
-        for page in raw.get("pages", []):
-            state = page.get("page_state", "S0")
-            a11y_nodes = page.get("a11y_nodes", [])
-            logger.info(
-                "[_load_a11y_nodes] page state=%s, url=%s, a11y_nodes_count=%d",
-                state, page.get("url", "?"), len(a11y_nodes),
-            )
-            for n in a11y_nodes:
-                n = dict(n)
-                n["page_state"] = n.get("page_state", state)
-                all_nodes.append(n)
-        logger.info("[_load_a11y_nodes] total nodes from pages: %d", len(all_nodes))
-        if not all_nodes:
-            logger.warning("[_load_a11y_nodes] pages exist but a11y_nodes is EMPTY!")
-        return all_nodes if all_nodes else None
-
-    # Step 5: Extract a11y_nodes directly (for explore_page)
-    a11y_nodes = raw.get("a11y_nodes")
-    logger.info("[_load_a11y_nodes] direct a11y_nodes: %s", len(a11y_nodes) if a11y_nodes else 0)
-    if not a11y_nodes:
-        logger.warning("[_load_a11y_nodes] a11y_nodes is EMPTY or None!")
-    return a11y_nodes
+    return all_nodes if all_nodes else None
 
 
 def generate_planning_drafts(
@@ -516,6 +548,25 @@ def generate_planning_drafts(
         base_url,
     )
     invalid_scenarios: list[str] = []
+
+    # Build user_context: original requirements summary for DSL generator
+    _req = planning_session.requirements_json or {}
+    _user_ctx_parts: list[str] = []
+    if _req.get("app_under_test"):
+        _user_ctx_parts.append(f"被测系统：{_req['app_under_test']}")
+    if _req.get("business_goal"):
+        _user_ctx_parts.append(f"业务目标：{_req['business_goal']}")
+    if _req.get("core_user_flow"):
+        _user_ctx_parts.append(f"核心流程：{_req['core_user_flow']}")
+    if _req.get("main_assertions"):
+        _user_ctx_parts.append(f"关键断言：{'; '.join(_req['main_assertions'])}")
+    if _req.get("test_data_or_account"):
+        _user_ctx_parts.append(f"测试数据：{_req['test_data_or_account']}")
+    if _req.get("scope_limits"):
+        _user_ctx_parts.append(f"范围限制：{_req['scope_limits']}")
+    user_context = "\n".join(_user_ctx_parts) if _user_ctx_parts else None
+    if user_context:
+        logger.info("[generate_drafts] user_context built, len=%d", len(user_context))
 
     for scenario_key in payload.scenario_keys:
         scenario = scenarios.get(scenario_key)
@@ -638,6 +689,7 @@ def generate_planning_drafts(
                         preserve_contracts=payload.preserve_contracts,
                         flow_steps=flow_steps,
                         scenario_variables=scenario_variables or None,
+                        user_context=user_context,
                         retry_reason_code=retry_reason_code,
                     ),
                     flow_steps=flow_steps,
@@ -678,6 +730,7 @@ def generate_planning_drafts(
                         preserve_contracts=payload.preserve_contracts,
                         a11y_nodes_by_state=a11y_nodes_by_state or None,
                         scenario_variables=scenario_variables or None,
+                        user_context=user_context,
                         retry_reason_code=retry_reason_code,
                     ),
                 )

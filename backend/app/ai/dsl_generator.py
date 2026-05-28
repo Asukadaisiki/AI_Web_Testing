@@ -761,6 +761,7 @@ def _build_segment_prompt(
     base_url: str,
     a11y_nodes: list[dict[str, Any]] | None = None,
     scenario_variables: list[dict[str, Any]] | None = None,
+    user_context: str | None = None,
 ) -> str:
     """Build a focused prompt for a single page_state segment.
 
@@ -799,8 +800,13 @@ def _build_segment_prompt(
     )
     variables_section = f"\n{variables_block}\n" if variables_block else ""
 
+    user_context_section = ""
+    if user_context:
+        user_context_section = f"## Original user requirements\n{user_context}\n\n"
+
     return (
         f"Generate DSL steps for page state **{page_state}** only.\n\n"
+        f"{user_context_section}"
         f"Scenario: {scenario_prompt}\n\n"
         f"{actions_section}\n\n"
         f"Available A11y tree elements:\n{elem_text}\n"
@@ -961,9 +967,10 @@ def generate_segmented_case_draft(
         # that only set payload.scenario_variables (e.g., single-segment path)
         # still benefit from the naming authority.
         effective_variables = scenario_variables or getattr(payload, "scenario_variables", None) or []
+        effective_user_context = getattr(payload, "user_context", None) or None
         logger.info(
-            "Generating segment %s: steps=%d, a11y_nodes=%d, scenario_variables=%d",
-            state, len(steps), len(a11y_nodes), len(effective_variables),
+            "Generating segment %s: steps=%d, a11y_nodes=%d, scenario_variables=%d, has_user_context=%s",
+            state, len(steps), len(a11y_nodes), len(effective_variables), bool(effective_user_context),
         )
         seg_prompt = _build_segment_prompt(
             scenario_prompt=payload.prompt.strip(),
@@ -972,6 +979,7 @@ def generate_segmented_case_draft(
             base_url=base_url,
             a11y_nodes=a11y_nodes,
             scenario_variables=effective_variables,
+            user_context=effective_user_context,
         )
         logger.debug("Segment %s prompt length: %d", state, len(seg_prompt))
         messages = [
