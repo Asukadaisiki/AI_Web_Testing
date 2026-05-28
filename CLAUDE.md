@@ -108,6 +108,7 @@ frontend/src/
 - **DSL**: All test cases must be structured DSL. No free-form NL into executor. Validate before execution. Every step produces evidence.
 - **AI**: AI generation cannot bypass DSL validation. AI visual is opt-in (disabled by default). DSL generator outputs governance metadata (warnings, normalization_notes, generation_meta).
 - **Design docs**: Specs and plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/` (date-prefixed filenames). Read the relevant spec before implementing a feature.
+- **Structured logging**: JSONL format in `backend_structured.log`. 4 categories: `ai_thinking`, `tool_call`, `dsl_execution`, `locator_fallback`. Query with `jq 'select(.category == "ai_thinking")' backend_structured.log`.
 
 ## Project Skills
 
