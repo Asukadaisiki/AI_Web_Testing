@@ -739,7 +739,6 @@ def execute_case_with_playwright(
                                 screenshot_url=_artifact_url_for_path(screenshot_path),
                                 page_url=exc.page_url,
                                 target_description=exc.target,
-                                dom_snapshot=exc.dom_snapshot,
                                 ai_candidate=(
                                     AILocateCandidate(
                                         center=list(exc.ai_candidate.center),
@@ -1048,7 +1047,6 @@ def execute_case_with_playwright_streaming(
                         intervention_request=InterventionRequest(
                             screenshot_url=_artifact_url_for_path(screenshot_path),
                             page_url=exc.page_url, target_description=exc.target,
-                            dom_snapshot=exc.dom_snapshot,
                             ai_candidate=(
                                 AILocateCandidate(
                                     center=list(exc.ai_candidate.center),

@@ -107,7 +107,7 @@ class InterventionRequest(DSLModel):
     screenshot_url: str | None = None
     page_url: str
     target_description: str
-    dom_snapshot: list[DOMElementSnapshot] = Field(default_factory=list)
+    dom_snapshot: list[DOMElementSnapshot] = Field(default_factory=list, deprecated=True)
     ai_candidate: AILocateCandidate | None = None
     locator_trace: LocatorTrace | None = None
     vlm_failure_reason: str | None = None
