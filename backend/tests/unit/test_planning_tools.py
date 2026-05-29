@@ -469,6 +469,7 @@ class TestExplorePageTool:
         mock_page = type("FakePage", (), {
             "goto": lambda *a, **kw: None,
             "wait_for_load_state": lambda *a, **kw: None,
+            "url": "https://example.com/login",
         })()
         with (
             patch("app.ai.page_explorer.BrowserSessionManager.get_or_create_context",
@@ -493,6 +494,7 @@ class TestExplorePageTool:
         mock_page = type("FakePage", (), {
             "goto": lambda *a, **kw: None,
             "wait_for_load_state": lambda *a, **kw: None,
+            "url": "https://example.com/blank",
         })()
         with (
             patch("app.ai.page_explorer.BrowserSessionManager.get_or_create_context",

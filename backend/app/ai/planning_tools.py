@@ -671,11 +671,22 @@ def _handle_explore_page(
     ctx, page = BrowserSessionManager.get_or_create_context(
         planning_session_id, storage_state_path=storage_path,
     )
+    logger.info("explore_page: navigating to %s", resolved_url)
     page.goto(resolved_url, timeout=30000, wait_until="domcontentloaded")
     try:
         page.wait_for_load_state("networkidle", timeout=30000)
     except Exception:
         pass
+
+    # Check if page actually loaded
+    if page.url == "about:blank":
+        logger.warning("explore_page: page stuck on about:blank after goto %s", resolved_url)
+        return {
+            "url": resolved_url,
+            "a11y_nodes": [],
+            "element_count": 0,
+            "error": "页面未能加载（停留在 about:blank），可能是网站无法访问或被反爬虫机制阻止",
+        }
 
     flow_text = params.get("core_user_flow_text")
 
