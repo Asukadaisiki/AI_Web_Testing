@@ -1,14 +1,8 @@
-"""Tests for locator preflight (a11y_nodes input) and segment regeneration."""
+"""Tests for locator preflight (a11y_nodes input)."""
 
 from __future__ import annotations
 
-import json
-from unittest.mock import patch
-
-import pytest
-
 from app.ai.locator_preflight import apply_preflight_to_dsl
-from app.ai.dsl_generator import DslGenerationError, _regen_segment
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -143,110 +137,3 @@ class TestPreflightA11yNodes:
         assert "match_count=0" in pf["warnings"][0]
 
 
-# ── _regen_segment ───────────────────────────────────────────────────────────
-
-class TestRegenSegment:
-    def test_valid_response(self):
-        fake_response = json.dumps({
-            "steps": [
-                {"action": "click", "target": "Login", "step_index": 1},
-                {"action": "wait_for", "target": "Welcome", "step_index": 2},
-            ]
-        })
-
-        with patch("app.ai.dsl_generator._call_dsl_flash_llm", return_value=fake_response):
-            steps = _regen_segment(
-                scenario_key="sc1",
-                page_state="S0",
-                missing_targets=["Signup / Login", "Password"],
-                a11y_nodes=[
-                    _make_a11y_node("Login", role="button"),
-                    _make_a11y_node("Welcome", role="heading"),
-                ],
-                base_url="https://example.com",
-            )
-
-        assert isinstance(steps, list)
-        assert len(steps) == 2
-        assert all("action" in s for s in steps)
-
-    def test_empty_steps(self):
-        fake_response = json.dumps({"steps": []})
-
-        with patch("app.ai.dsl_generator._call_dsl_flash_llm", return_value=fake_response):
-            steps = _regen_segment(
-                scenario_key="sc1",
-                page_state="S0",
-                missing_targets=["X"],
-                a11y_nodes=[_make_a11y_node("Login")],
-                base_url="https://example.com",
-            )
-
-        assert steps == []
-
-    def test_invalid_json(self):
-        with patch("app.ai.dsl_generator._call_dsl_flash_llm", return_value="not json"):
-            with pytest.raises((DslGenerationError, json.JSONDecodeError)):
-                _regen_segment(
-                    scenario_key="sc1",
-                    page_state="S0",
-                    missing_targets=["X"],
-                    a11y_nodes=[],
-                    base_url="https://example.com",
-                )
-
-    def test_non_dict_response(self):
-        with patch("app.ai.dsl_generator._call_dsl_flash_llm", return_value='[1, 2, 3]'):
-            with pytest.raises(DslGenerationError):
-                _regen_segment(
-                    scenario_key="sc1",
-                    page_state="S0",
-                    missing_targets=["X"],
-                    a11y_nodes=[],
-                    base_url="https://example.com",
-                )
-
-    def test_prompt_contains_missing_targets(self):
-        captured_messages = []
-
-        def mock_llm(messages, **kwargs):
-            captured_messages.extend(messages)
-            return json.dumps({"steps": []})
-
-        with patch("app.ai.dsl_generator._call_dsl_flash_llm", side_effect=mock_llm):
-            _regen_segment(
-                scenario_key="sc1",
-                page_state="S0",
-                missing_targets=["Signup / Login", "Password"],
-                a11y_nodes=[_make_a11y_node("Login")],
-                base_url="https://example.com",
-            )
-
-        user_msg = captured_messages[1]["content"]
-        assert "Signup / Login" in user_msg
-        assert "Password" in user_msg
-
-    def test_prompt_contains_node_names(self):
-        captured_messages = []
-
-        def mock_llm(messages, **kwargs):
-            captured_messages.extend(messages)
-            return json.dumps({"steps": []})
-
-        with patch("app.ai.dsl_generator._call_dsl_flash_llm", side_effect=mock_llm):
-            _regen_segment(
-                scenario_key="sc1",
-                page_state="S0",
-                missing_targets=["X"],
-                a11y_nodes=[
-                    _make_a11y_node("Login", role="button"),
-                    _make_a11y_node("Products", role="link"),
-                ],
-                base_url="https://example.com",
-            )
-
-        user_msg = captured_messages[1]["content"]
-        assert "Login" in user_msg
-        assert "button" in user_msg
-        assert "Products" in user_msg
-        assert "link" in user_msg

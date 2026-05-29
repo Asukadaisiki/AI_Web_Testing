@@ -26,7 +26,7 @@ main_assertions:
 
 test_data_or_account:
 1. 账号：Xjy13302412005@outlook.com，密码：123456
-2. 筛选品牌：Polo（商品数量适中，6件）
+
 3. 商品A和商品B是筛选结果中按顺序的前两件，不需要人工指定具体名称
 
 scope_limits:

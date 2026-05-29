@@ -126,14 +126,13 @@ class TestUrlopenWithRetry:
         assert attempts["n"] == 1
 
 
-def test_dsl_flash_llm_wraps_network_error_with_chinese_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_call_dsl_flash_llm should raise DslGenerationNetworkError with actionable message on TCP timeout."""
+def test_call_llm_wraps_network_error_with_chinese_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_call_llm should raise DslGenerationNetworkError with actionable message on TCP timeout."""
     from app.ai import dsl_generator
 
     class _FakeSettings:
         ai_dsl_api_key = "test-key"
         ai_dsl_model = "deepseek-v4-pro"
-        ai_dsl_flash_model = None
         ai_dsl_base_url = "https://api.deepseek.com"
 
     def fake_urlopen(req, timeout):
@@ -143,9 +142,11 @@ def test_dsl_flash_llm_wraps_network_error_with_chinese_message(monkeypatch: pyt
     monkeypatch.setattr(dsl_generator._time, "sleep", lambda _s: None)
 
     with pytest.raises(DslGenerationNetworkError) as exc_info:
-        dsl_generator._call_dsl_flash_llm(
+        dsl_generator._call_llm(
             messages=[{"role": "user", "content": "test"}],
-            settings=_FakeSettings(),
+            api_key="test-key",
+            model="deepseek-v4-pro",
+            base_url="https://api.deepseek.com",
             timeout_seconds=1,
         )
     assert "无法连接到 LLM API" in str(exc_info.value)
@@ -219,59 +220,59 @@ def test_generate_dsl_case_propagates_a11y_nodes_by_state(monkeypatch: pytest.Mo
 
 class TestNormalizeLlmStep:
     def test_goto_with_target_moved_to_value(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "goto", "target": "https://example.com/login", "step_index": 1}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "https://example.com/login"
         assert "target" not in normalized
 
     def test_assert_url_contains_target_moved_to_value(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "assert_url_contains", "target": "/dashboard"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "/dashboard"
         assert "target" not in normalized
 
     def test_goto_with_value_already_set_unchanged(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "goto", "value": "/login"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "/login"
 
     def test_click_target_unchanged(self) -> None:
         """For click, target is correct — must NOT be moved to value."""
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "click", "target": "Login"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["target"] == "Login"
         assert "value" not in normalized
 
     def test_action_alias_navigate_becomes_goto(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "navigate", "target": "/home"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["action"] == "goto"
         assert normalized["value"] == "/home"
 
     def test_action_alias_open_becomes_goto(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "open", "target": "https://example.com"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["action"] == "goto"
         assert normalized["value"] == "https://example.com"
 
     def test_invalid_step_returns_none(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
-        assert _normalize_llm_step(None) is None
-        assert _normalize_llm_step("not a dict") is None
-        assert _normalize_llm_step({}) is None  # no action
-        assert _normalize_llm_step({"action": ""}) is None
+        from app.ai.dsl_generator import _normalize_step
+        assert _normalize_step(None) is None
+        assert _normalize_step("not a dict") is None
+        assert _normalize_step({}) is None  # no action
+        assert _normalize_step({"action": ""}) is None
 
 
 # --- Bug G: assert_text missing value, field aliases not promoted -----------
@@ -281,33 +282,33 @@ class TestNormalizeLlmStepAssertTextRepair:
     """assert_text needs target+value. If LLM gave only target, swap it into value."""
 
     def test_assert_text_with_only_target_swapped_to_value_with_body_fallback(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "assert_text", "target": "item_1", "step_index": 16}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "item_1"
         assert normalized["target"] == "body"
 
     def test_assert_text_with_both_fields_left_unchanged(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "assert_text", "target": "Cart Total", "value": "Rs. 1400"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["target"] == "Cart Total"
         assert normalized["value"] == "Rs. 1400"
 
     def test_assert_text_with_value_alias_text_promoted(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "assert_text", "target": "Cart Total", "text": "Rs. 1400"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "Rs. 1400"
         assert "text" not in normalized
 
     def test_assert_text_with_value_alias_expected_text_promoted(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "assert_text", "target": "Cart Total", "expected_text": "Rs. 1400"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "Rs. 1400"
         assert "expected_text" not in normalized
@@ -317,33 +318,33 @@ class TestNormalizeLlmStepFieldAliases:
     """Field-name normalization: alias -> canonical via _STEP_*_ALIASES."""
 
     def test_click_selector_alias_promoted_to_target(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "click", "selector": "Login button"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["target"] == "Login button"
         assert "selector" not in normalized
 
     def test_input_text_alias_promoted_to_value(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "input", "target": "Email", "text": "test@example.com"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "test@example.com"
         assert "text" not in normalized
 
     def test_goto_url_alias_promoted_to_value(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "goto", "url": "/login"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["value"] == "/login"
         assert "url" not in normalized
 
     def test_wait_for_timeout_alias_promoted(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "wait_for", "target": "Welcome", "timeout": 8000}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["timeout_ms"] == 8000
         assert "timeout" not in normalized
@@ -353,190 +354,36 @@ class TestNormalizeLlmStepDropsUnrepairable:
     """Steps with unrecoverable missing required fields must be dropped (None)."""
 
     def test_input_missing_value_dropped(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
-        assert _normalize_llm_step({"action": "input", "target": "Email"}) is None
+        from app.ai.dsl_generator import _normalize_step
+        assert _normalize_step({"action": "input", "target": "Email"}) is None
 
     def test_input_missing_target_dropped(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
-        assert _normalize_llm_step({"action": "input", "value": "test"}) is None
+        from app.ai.dsl_generator import _normalize_step
+        assert _normalize_step({"action": "input", "value": "test"}) is None
 
     def test_click_missing_target_dropped(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
-        assert _normalize_llm_step({"action": "click"}) is None
+        from app.ai.dsl_generator import _normalize_step
+        assert _normalize_step({"action": "click"}) is None
 
     def test_wait_for_missing_target_dropped(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
-        assert _normalize_llm_step({"action": "wait_for"}) is None
+        from app.ai.dsl_generator import _normalize_step
+        assert _normalize_step({"action": "wait_for"}) is None
 
     def test_capture_text_missing_context_key_dropped(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
-        assert _normalize_llm_step({"action": "capture_text", "target": "Price"}) is None
+        from app.ai.dsl_generator import _normalize_step
+        assert _normalize_step({"action": "capture_text", "target": "Price"}) is None
 
     def test_capture_text_missing_target_dropped(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
-        assert _normalize_llm_step({"action": "capture_text", "context_key": "p1"}) is None
+        from app.ai.dsl_generator import _normalize_step
+        assert _normalize_step({"action": "capture_text", "context_key": "p1"}) is None
 
     def test_capture_text_with_both_fields_kept(self) -> None:
-        from app.ai.dsl_generator import _normalize_llm_step
+        from app.ai.dsl_generator import _normalize_step
         step = {"action": "capture_text", "target": "Price", "context_key": "p1"}
-        normalized = _normalize_llm_step(step)
+        normalized = _normalize_step(step)
         assert normalized is not None
         assert normalized["target"] == "Price"
         assert normalized["context_key"] == "p1"
-
-
-class TestExtractInputContractFromSteps:
-    """Tests for auto-generating input_contract from ${...} placeholders in steps."""
-
-    def test_extracts_email_and_password(self) -> None:
-        from app.ai.dsl_generator import _extract_input_contract_from_steps
-        steps = [
-            {"action": "input", "target": "Email Address", "value": "${email}"},
-            {"action": "input", "target": "Password", "value": "${password}"},
-        ]
-        contract = _extract_input_contract_from_steps(steps)
-        assert len(contract) == 2
-        keys = {c["context_key"] for c in contract}
-        assert keys == {"email", "password"}
-        # Verify types are inferred
-        email_entry = next(c for c in contract if c["context_key"] == "email")
-        assert email_entry["value_type"] == "string"
-        assert email_entry["required"] is True
-
-    def test_deduplicates_same_variable(self) -> None:
-        from app.ai.dsl_generator import _extract_input_contract_from_steps
-        steps = [
-            {"action": "input", "target": "Email", "value": "${email}"},
-            {"action": "assert_text", "target": "Welcome", "value": "${email}"},
-        ]
-        contract = _extract_input_contract_from_steps(steps)
-        assert len(contract) == 1
-        assert contract[0]["context_key"] == "email"
-
-    def test_ignores_steps_without_placeholders(self) -> None:
-        from app.ai.dsl_generator import _extract_input_contract_from_steps
-        steps = [
-            {"action": "goto", "value": "/login"},
-            {"action": "click", "target": "Login"},
-            {"action": "input", "target": "Qty", "value": "2"},
-        ]
-        contract = _extract_input_contract_from_steps(steps)
-        assert contract == []
-
-    def test_handles_empty_steps(self) -> None:
-        from app.ai.dsl_generator import _extract_input_contract_from_steps
-        assert _extract_input_contract_from_steps([]) == []
-
-    def test_infers_custom_variable_type(self) -> None:
-        from app.ai.dsl_generator import _extract_input_contract_from_steps
-        steps = [
-            {"action": "input", "target": "Phone", "value": "${phone_number}"},
-        ]
-        contract = _extract_input_contract_from_steps(steps)
-        assert len(contract) == 1
-        assert contract[0]["context_key"] == "phone_number"
-        assert contract[0]["value_type"] == "string"
-        assert contract[0]["description"] == "手机号"
-
-
-class TestScenarioVariablesInSegmentPrompt:
-    """Variables emitted by the planning agent must appear in segment prompts.
-
-    Without this, parallel segments invent inconsistent names (S1 captures
-    'product_a_name', S2 asserts 'item_a_name') and ${} placeholders leak
-    through to runtime.
-    """
-
-    def test_input_variables_appear_in_prompt(self) -> None:
-        from app.ai.dsl_generator import _build_segment_prompt
-        prompt = _build_segment_prompt(
-            scenario_prompt="登录后筛选品牌并加购",
-            page_state="S0",
-            seg_steps=[],
-            base_url="https://x.com",
-            a11y_nodes=[],
-            scenario_variables=[
-                {"context_key": "email", "description": "登录邮箱", "source": "input"},
-                {"context_key": "password", "description": "登录密码", "source": "input"},
-            ],
-        )
-        assert "naming authority" in prompt.lower()
-        assert "${email}" in prompt
-        assert "${password}" in prompt
-        assert "登录邮箱" in prompt
-
-    def test_capture_state_distinguishes_owner_segment(self) -> None:
-        """In S1 the product capture is 'own'; in S2 it's reference-only."""
-        from app.ai.dsl_generator import _build_segment_prompt
-        variables = [
-            {"context_key": "product_a_name", "description": "商品A名称",
-             "source": "captured", "capture_in_state": "S1"},
-        ]
-        s1_prompt = _build_segment_prompt(
-            scenario_prompt="x", page_state="S1", seg_steps=[],
-            base_url="https://x.com", a11y_nodes=[], scenario_variables=variables,
-        )
-        s2_prompt = _build_segment_prompt(
-            scenario_prompt="x", page_state="S2", seg_steps=[],
-            base_url="https://x.com", a11y_nodes=[], scenario_variables=variables,
-        )
-        assert "本段必须用 capture_text 写入" in s1_prompt
-        assert "do NOT re-capture" in s2_prompt
-        assert "${product_a_name}" in s1_prompt
-        assert "${product_a_name}" in s2_prompt
-
-    def test_empty_variables_skips_block(self) -> None:
-        from app.ai.dsl_generator import _build_segment_prompt
-        prompt = _build_segment_prompt(
-            scenario_prompt="x", page_state="S0", seg_steps=[],
-            base_url="https://x.com", a11y_nodes=[], scenario_variables=[],
-        )
-        assert "naming authority" not in prompt.lower()
-
-    def test_variables_flow_through_segmented_generator(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """generate_segmented_case_draft must forward variables to each segment."""
-        from app.ai import dsl_generator
-        from app.schemas.dsl import GenerateDslRequest
-
-        captured_prompts: list[str] = []
-
-        def fake_flash_llm(*, messages, settings, timeout_seconds):
-            captured_prompts.append(messages[-1]["content"])
-            return '{"steps": [], "base_url": "https://x.com"}'
-
-        monkeypatch.setattr(dsl_generator, "_call_dsl_flash_llm", fake_flash_llm)
-
-        payload = GenerateDslRequest(
-            prompt="brand filter cart flow",
-            base_url="https://x.com",
-            actor_user_id=1,
-        )
-        # Forces "no steps generated" error after running every segment,
-        # but the prompt-capture side-effect is what we care about.
-        with pytest.raises(dsl_generator.DslGenerationError):
-            dsl_generator.generate_segmented_case_draft(
-                payload=payload,
-                flow_steps=[
-                    {"step_index": 1, "action": "goto", "page_state": "S0"},
-                    {"step_index": 2, "action": "click", "page_state": "S1"},
-                ],
-                a11y_nodes_by_state={"S0": [], "S1": []},
-                scenario_variables=[
-                    {"context_key": "email", "description": "邮箱", "source": "input"},
-                    {"context_key": "product_a_name", "description": "商品A名称",
-                     "source": "captured", "capture_in_state": "S1"},
-                ],
-            )
-
-        assert len(captured_prompts) == 2
-        for p in captured_prompts:
-            assert "${email}" in p
-            assert "${product_a_name}" in p
-        # S1 owns the capture, S0 only sees it as referenced-elsewhere
-        s0_prompt = next(p for p in captured_prompts if "page state **S0**" in p)
-        s1_prompt = next(p for p in captured_prompts if "page state **S1**" in p)
-        assert "本段必须用 capture_text 写入" in s1_prompt
-        assert "本段必须用 capture_text 写入" not in s0_prompt
 
 
 
