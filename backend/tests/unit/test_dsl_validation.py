@@ -61,6 +61,7 @@ def test_validate_dsl_case_success(client) -> None:
                     "value_type": "string",
                     "required": True,
                     "description": None,
+                    "value": None,
                 }
             ],
             "output_contract": [

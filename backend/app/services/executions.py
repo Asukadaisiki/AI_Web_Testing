@@ -97,6 +97,14 @@ def execute_case_streaming(
     effective_base_url = payload.base_url or normalized_case.base_url
     missing_base_url_error = _build_missing_base_url_error(normalized_case, effective_base_url)
 
+    # Merge input_contract defaults with user-provided input_values
+    merged_input_values: dict[str, str] = {}
+    for contract in normalized_case.input_contract:
+        if contract.value is not None:
+            merged_input_values[contract.context_key] = contract.value
+    if payload.input_values:
+        merged_input_values.update(payload.input_values)
+
     try:
         if missing_base_url_error is not None:
             report = build_execution_report(status="failed", steps=[_with_artifact_url(missing_base_url_error)])
@@ -111,7 +119,7 @@ def execute_case_streaming(
                 base_url=effective_base_url,
                 cancel_event=cancel_event,
                 correction_store=SQLAlchemyCorrectionStore(session),
-                input_values=payload.input_values,
+                input_values=merged_input_values,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
             has_failure = any(s.status in ("failed", "cascade_blocked") for s in step_results)
@@ -168,6 +176,14 @@ def _execute_case_record(
     effective_base_url = payload.base_url or normalized_case.base_url
     missing_base_url_error = _build_missing_base_url_error(normalized_case, effective_base_url)
 
+    # Merge input_contract defaults with user-provided input_values
+    merged_input_values: dict[str, str] = {}
+    for contract in normalized_case.input_contract:
+        if contract.value is not None:
+            merged_input_values[contract.context_key] = contract.value
+    if payload.input_values:
+        merged_input_values.update(payload.input_values)
+
     try:
         if precomputed_error is not None:
             report = build_execution_report(status="failed", steps=[_with_artifact_url(precomputed_error)])
@@ -186,7 +202,7 @@ def _execute_case_record(
                 execution_id=execution.id,
                 base_url=effective_base_url,
                 correction_store=SQLAlchemyCorrectionStore(session),
-                input_values=payload.input_values,
+                input_values=merged_input_values,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
             has_failure = any(s.status in ("failed", "cascade_blocked") for s in step_results)

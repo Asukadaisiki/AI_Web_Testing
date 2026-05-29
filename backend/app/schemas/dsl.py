@@ -193,6 +193,7 @@ class DSLCaseInputContract(DSLModel):
     value_type: DSLVariableType
     required: bool = True
     description: str | None = Field(default=None, max_length=500)
+    value: str | None = Field(default=None, description="Default value for this variable.")
 
 
 class DSLCaseOutputContract(DSLModel):

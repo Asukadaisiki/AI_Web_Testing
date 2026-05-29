@@ -600,6 +600,7 @@ export interface DSLValidationResult {
 export interface CaseExecutionRequest {
   actor_user_id: number;
   base_url?: string;
+  input_values?: Record<string, string>;
 }
 
 export interface ViewportSnapshot {

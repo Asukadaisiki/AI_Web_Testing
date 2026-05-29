@@ -50,6 +50,7 @@ def test_create_case_success(client) -> None:
             "value_type": "string",
             "required": True,
             "description": None,
+            "value": None,
         }
     ]
     assert response.json()["output_contract"] == [
@@ -181,6 +182,7 @@ def test_update_case_success(client) -> None:
             "value_type": "string",
             "required": False,
             "description": None,
+            "value": None,
         }
     ]
     assert response.json()["output_contract"] == [
