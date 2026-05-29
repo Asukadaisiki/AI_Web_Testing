@@ -818,6 +818,21 @@ def _build_segment_prompt(
     if user_context:
         user_context_section = f"## Original user requirements\n{user_context}\n\n"
 
+    # Determine if this is the first segment (needs login steps)
+    is_first_segment = page_state == "S0"
+    login_requirement = ""
+    if is_first_segment:
+        login_requirement = (
+            f"- 【独立可执行】这是第一个页面状态（{page_state}），DSL 必须包含所有前置步骤。\n"
+            f"  包括：登录步骤（input email/password + click Login）、导航步骤等。\n"
+            f"  不要假设用户已经登录或 cookies 已保存。\n"
+        )
+    else:
+        login_requirement = (
+            f"- 【续接上文】这是后续页面状态（{page_state}），不要重复登录步骤。\n"
+            f"  假设用户已经登录，直接生成本页面的操作步骤。\n"
+        )
+
     return (
         f"Generate DSL steps for page state **{page_state}** only.\n\n"
         f"{user_context_section}"
@@ -830,10 +845,9 @@ def _build_segment_prompt(
         f"- Return valid JSON with 'steps' array and 'base_url'.\n"
         f"- base_url: {base_url}\n"
         f"- Only generate steps for THIS page state ({page_state}).\n"
-        f"- 【独立可执行】DSL 必须是一个独立的、可重复执行的测试用例。\n"
-        f"  即使探索阶段已经执行了登录或其他操作，DSL 中也必须包含所有必要的步骤。\n"
-        f"  包括：登录步骤（input email/password + click Login）、导航步骤等。\n"
-        f"  不要假设用户已经登录或 cookies 已保存。\n"
+        f"- 【分段合并】所有页面状态的步骤会被合并成一个完整的 DSL。\n"
+        f"  只生成本页面状态需要的步骤，不要重复其他状态的步骤。\n"
+        f"{login_requirement}"
         f"- 【target 格式】target 必须使用 a11y tree 中的元素标识，格式为 role=\"name\"。\n"
         f"  例如：button=\"Login\", textbox=\"Email\", link=\"Products\"。\n"
         f"  绝对不要使用 XPath、CSS 选择器、DOM 元素路径或任何其他格式。\n"
