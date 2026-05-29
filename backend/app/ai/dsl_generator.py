@@ -776,6 +776,7 @@ def _build_segment_prompt(
     a11y_nodes: list[dict[str, Any]] | None = None,
     scenario_variables: list[dict[str, Any]] | None = None,
     user_context: str | None = None,
+    is_first_segment: bool = False,
 ) -> str:
     """Build a focused prompt for a single page_state segment.
 
@@ -818,8 +819,7 @@ def _build_segment_prompt(
     if user_context:
         user_context_section = f"## Original user requirements\n{user_context}\n\n"
 
-    # Determine if this is the first segment (needs login steps)
-    is_first_segment = page_state == "S0"
+    # Determine login requirement based on is_first_segment flag
     login_requirement = ""
     if is_first_segment:
         login_requirement = (
@@ -988,6 +988,7 @@ def generate_segmented_case_draft(
     all_notes: list[str] = []
     merged_steps: list[dict[str, Any]] = []
     base_url = payload.base_url or None
+    first_state = sorted_states[0] if sorted_states else "S0"
 
     def _generate_segment(state: str, steps: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
         a11y_nodes = a11y_nodes_by_state.get(state, []) if a11y_nodes_by_state else []
@@ -1008,6 +1009,7 @@ def generate_segmented_case_draft(
             a11y_nodes=a11y_nodes,
             scenario_variables=effective_variables,
             user_context=effective_user_context,
+            is_first_segment=(state == first_state),
         )
         logger.debug("Segment %s prompt length: %d", state, len(seg_prompt))
         messages = [
