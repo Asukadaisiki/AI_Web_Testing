@@ -14,7 +14,6 @@ from typing import Any
 from playwright.sync_api import sync_playwright
 
 from app.core.config import get_settings
-from app.locators.fallback import EXTRACT_INTERACTABLE_ELEMENTS_SCRIPT
 
 import hashlib
 
@@ -1412,7 +1411,17 @@ def _collect_flow_a11y(
             actions = step.get("actions")
             if isinstance(actions, list):
                 logger.info("_collect_flow_a11y: executing %d actions", len(actions))
+                url_before_actions = page.url
                 _execute_flow_actions(page, actions)
+                # If click actions triggered a page navigation, wait for the
+                # new page to fully load before collecting a11y nodes.  Without
+                # this, Accessibility.getFullAXTree can return an empty tree on
+                # a page that is still in a transitional / loading state.
+                if page.url != url_before_actions:
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                    except Exception:
+                        pass
 
             current_url = page.url
             description = step.get("description", "")
@@ -1459,10 +1468,10 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
     for action_def in actions:
         if not isinstance(action_def, dict):
             continue
-        act = (action_def.get("action") or "").strip().lower()
-        target = (action_def.get("target") or "").strip()
+        act = str(action_def.get("action") or "").strip().lower()
+        target = str(action_def.get("target") or "").strip()
         value = action_def.get("value", "")
-        if not act or not target:
+        if not act:
             continue
         if act in ("type", "fill", "input"):
             loc = _resolve_step_locator(page, target, kind="input")
@@ -1501,6 +1510,14 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
                             target, result.recovery_strategy,
                             str(result.original_error)[:200] if result.original_error else "none",
                         )
+            continue
+        if act == "wait":
+            # Wait for a specified number of milliseconds (target is the duration)
+            try:
+                ms = int(target)
+                page.wait_for_timeout(ms)
+            except (ValueError, TypeError):
+                pass
             continue
         if act == "wait_for":
             try:

@@ -1,4 +1,8 @@
-"""Minimal locator helpers for first-phase execution."""
+"""Accessibility-tree-based locator resolution.
+
+Resolves DSL targets in ``role="name"`` format (e.g. ``link="Signup / Login"``)
+against the browser's accessibility tree using Playwright's ``get_by_role`` API.
+"""
 
 from __future__ import annotations
 
@@ -38,63 +42,185 @@ class SemanticCandidateEntry:
     candidate: LocatorCandidateEvidence
 
 
-def resolve_semantic_locator(
-    page,
-    target: str,
-    *,
-    target_strategy: str | None = None,
-    prefer_input: bool = False,
-    require_visible: bool = True,
-    require_enabled: bool = False,
-) -> ResolvedLocator:
-    normalized_target = target.strip()
-    # Prefer hinted strategy first; on failure fall through to exhaustive scan.
-    if target_strategy is not None and target_strategy != "semantic":
-        try:
-            return _resolve_by_strategy(
-                page, normalized_target, target_strategy,
-                prefer_input=prefer_input,
-                require_visible=require_visible,
-                require_enabled=require_enabled,
-            )
-        except LocatorResolutionError:
-            pass  # Fall through to exhaustive semantic scan
-    entries = collect_semantic_candidates(
-        page,
-        normalized_target,
-        prefer_input=prefer_input,
-        require_visible=require_visible,
-        require_enabled=require_enabled,
-    )
-    candidates = [entry.candidate for entry in entries[:5]]
-    selected_entry = next((entry for entry in entries if not entry.candidate.rejected_reasons), None)
+# ── A11y target parsing ──────────────────────────────────────────────────────
 
-    if selected_entry is not None:
-        return ResolvedLocator(
-            strategy=selected_entry.strategy,
-            locator=selected_entry.locator,
-            trace=LocatorTrace(
-                target=normalized_target,
-                match_strategy=selected_entry.strategy,
-                candidates=candidates,
-                selected_candidate=selected_entry.candidate,
-                selection_reason=_build_selection_reason(selected_entry.candidate),
-            ),
-        )
+# Matches: role="name", role='name', role="name" id=e123
+_A11Y_ROLE_TARGET_RE = re.compile(
+    r'^(button|link|textbox|checkbox|radio|menuitem|combobox|listbox|option'
+    r'|tab|switch|searchbox|heading|dialog|alert|navigation|main|form|region'
+    r'|banner|contentinfo|complementary|article|list|listitem|img|progressbar'
+    r'|slider|spinbutton|treeitem|menu|menubar|tablist|toolbar|status|timer'
+    r'|tooltip|separator|group|presentation|none)'
+    r"""\s*=\s*["'](.+?)["']""",
+    re.IGNORECASE,
+)
 
-    failure_reason = _resolve_failure_reason(
-        candidates,
-        require_visible=require_visible,
-        require_enabled=require_enabled,
-    )
-    raise LocatorResolutionError(
-        failure_reason,
-        trace=LocatorTrace(
-            target=normalized_target,
-            candidates=candidates,
-            failure_reason=failure_reason,
-        ),
-    )
+_A11Y_ID_SUFFIX_RE = re.compile(r"""\s+id=(\S+)$""")
+
+# Maps a11y roles to Playwright role names (most are identical)
+_A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
+    "button": "button",
+    "link": "link",
+    "textbox": "textbox",
+    "checkbox": "checkbox",
+    "radio": "radio",
+    "menuitem": "menuitem",
+    "combobox": "combobox",
+    "listbox": "listbox",
+    "option": "option",
+    "tab": "tab",
+    "switch": "switch",
+    "searchbox": "searchbox",
+    "heading": "heading",
+    "dialog": "dialog",
+    "alert": "alert",
+    "navigation": "navigation",
+    "main": "main",
+    "form": "form",
+    "region": "region",
+    "banner": "banner",
+    "contentinfo": "contentinfo",
+    "complementary": "complementary",
+    "article": "article",
+    "list": "list",
+    "listitem": "listitem",
+    "img": "img",
+    "group": "group",
+    "toolbar": "toolbar",
+    "tablist": "tablist",
+    "menu": "menu",
+    "menubar": "menubar",
+    "progressbar": "progressbar",
+    "slider": "slider",
+    "spinbutton": "spinbutton",
+    "status": "status",
+    "timer": "timer",
+    "tooltip": "tooltip",
+}
+
+
+def _parse_a11y_target(target: str) -> tuple[str, str, str | None]:
+    """Parse ``role="name"`` format, returning ``(role, name, node_id)``.
+
+    Falls back to ``("", target, None)`` for plain-text targets.
+    """
+    stripped = target.strip()
+
+    # Check for id suffix: role="name" id=e123
+    node_id = None
+    id_match = _A11Y_ID_SUFFIX_RE.search(stripped)
+    if id_match:
+        node_id = id_match.group(1)
+        stripped = stripped[:id_match.start()].strip()
+
+    m = _A11Y_ROLE_TARGET_RE.match(stripped)
+    if m:
+        return m.group(1).lower(), m.group(2), node_id
+
+    # Not in role="name" format — treat as plain text
+    return "", target.strip(), node_id
+
+
+# ── Candidate builders ───────────────────────────────────────────────────────
+
+
+def _build_a11y_candidates(
+    page, role: str, name: str, *, prefer_input: bool,
+) -> list[tuple[str, object]]:
+    """Build locator candidates from parsed a11y role+name."""
+    builders: list[tuple[str, object]] = []
+
+    pw_role = _A11Y_TO_PLAYWRIGHT_ROLE.get(role)
+    if pw_role and name:
+        # Exact match (highest priority for a11y)
+        builders.append((
+            "a11y_role_exact",
+            lambda r=pw_role, n=name: page.get_by_role(r, name=n, exact=True),
+        ))
+        # Fuzzy match (fallback)
+        builders.append((
+            "a11y_role_fuzzy",
+            lambda r=pw_role, n=name: page.get_by_role(r, name=n, exact=False),
+        ))
+
+    # For input roles, also try placeholder/label
+    if prefer_input and name:
+        builders.append(("a11y_placeholder", lambda n=name: page.get_by_placeholder(n)))
+        builders.append(("a11y_label", lambda n=name: page.get_by_label(n)))
+
+    # Plain text fallback
+    if name:
+        builders.append(("a11y_text_exact", lambda n=name: page.get_by_text(n, exact=True)))
+        builders.append(("a11y_text_fuzzy", lambda n=name: page.get_by_text(n, exact=False)))
+
+    return builders
+
+
+def _build_candidate_builders(
+    page, target: str, *, prefer_input: bool,
+) -> list[tuple[str, object]]:
+    """Build ordered list of ``(strategy, locator_builder)`` for *target*.
+
+    Primary path: parse ``role="name"`` a11y format and use Playwright's
+    ``get_by_role``.  Fallback: explicit CSS/XPath selectors (for manual
+    corrections).
+    """
+    # 1. Explicit CSS/XPath selectors (for correction store / manual overrides)
+    explicit = _resolve_explicit_locator(page, target)
+    if explicit is not None:
+        return [explicit]
+
+    # 2. Parse a11y role="name" format
+    role, name, node_id = _parse_a11y_target(target)
+
+    # If we have a node_id, try CSS attribute selector first (fastest)
+    if node_id:
+        return [("a11y_node_id", lambda: page.locator(f"[data-a11y-node-id='{node_id}']"))]
+
+    # 3. Build a11y-based candidates
+    if role:
+        return _build_a11y_candidates(page, role, name, prefer_input=prefer_input)
+
+    # 4. Plain text target (no role prefix) — try as-is
+    if name:
+        builders: list[tuple[str, object]] = []
+        if prefer_input:
+            builders.extend([
+                ("a11y_placeholder", lambda n=name: page.get_by_placeholder(n)),
+                ("a11y_label", lambda n=name: page.get_by_label(n)),
+            ])
+        builders.extend([
+            ("a11y_text_exact", lambda n=name: page.get_by_text(n, exact=True)),
+            ("a11y_text_fuzzy", lambda n=name: page.get_by_text(n)),
+        ])
+        return builders
+
+    return []
+
+
+# ── Explicit locator resolution (CSS/XPath only) ─────────────────────────────
+
+
+def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
+    """Resolve explicit CSS/XPath/data-testid selectors.
+
+    These are used for manual corrections and legacy targets.
+    """
+    if target.startswith("css="):
+        return ("css", lambda: page.locator(target))
+    if target.startswith("xpath="):
+        return ("xpath", lambda: page.locator(target))
+    if target.startswith("//"):
+        return ("xpath", lambda: page.locator(f"xpath={target}"))
+    if target.startswith(("#", ".")):
+        return ("css", lambda: page.locator(target))
+    if target.startswith("data-testid="):
+        value = target.split("=", 1)[1]
+        return ("data-testid", lambda: page.get_by_test_id(value))
+    return None
+
+
+# ── Candidate collection and scoring ─────────────────────────────────────────
 
 
 def collect_semantic_candidates(
@@ -145,306 +271,71 @@ def collect_semantic_candidates(
     return entries[:max_candidates]
 
 
-def _build_candidate_builders(page, target: str, *, prefer_input: bool) -> list[tuple[str, object]]:
-    builders: list[tuple[str, object]] = []
-    explicit = _resolve_explicit_locator(page, target)
-    if explicit is not None:
-        builders.append(explicit)
-
-    # Try matching the target as an HTML element id attribute.
-    if explicit is None and target and not target.startswith(("css=", "xpath=", "//", "#", ".", "[", "data-testid=")):
-        id_target = target
-        builders.append(("element_id", lambda: page.locator(f"#{id_target}")))
-
-    if prefer_input:
-        builders.extend(
-            [
-                ("label", lambda: page.get_by_label(target, exact=True)),
-                ("placeholder", lambda: page.get_by_placeholder(target, exact=True)),
-                ("label_fuzzy", lambda: page.get_by_label(target)),
-                ("placeholder_fuzzy", lambda: page.get_by_placeholder(target)),
-            ]
-        )
-
-    # Shared strategies for non-input contexts (button, link, menuitem, text, etc.)
-    shared_builders: list[tuple[str, object]] = [
-        ("button_role", lambda: page.get_by_role("button", name=target, exact=True)),
-        ("link_role", lambda: page.get_by_role("link", name=target, exact=True)),
-        ("menuitem_role", lambda: page.get_by_role("menuitem", name=target, exact=True)),
-        ("label", lambda: page.get_by_label(target, exact=True)),
-        ("placeholder", lambda: page.get_by_placeholder(target, exact=True)),
-        ("button_role_fuzzy", lambda: page.get_by_role("button", name=target)),
-        ("link_role_fuzzy", lambda: page.get_by_role("link", name=target)),
-        ("menuitem_role_fuzzy", lambda: page.get_by_role("menuitem", name=target)),
-        ("label_fuzzy", lambda: page.get_by_label(target)),
-        ("placeholder_fuzzy", lambda: page.get_by_placeholder(target)),
-    ]
-    # text/text_fuzzy strategies match elements by innerText — useless for <input> elements
-    # which have no innerText, and actively harmful when they match <body> instead.
-    if not prefer_input:
-        shared_builders.extend(
-            [
-                ("text", lambda: page.get_by_text(target, exact=True)),
-                ("text_fuzzy", lambda: page.get_by_text(target)),
-            ]
-        )
-    builders.extend(shared_builders)
-    return builders
+# ── Entry point ──────────────────────────────────────────────────────────────
 
 
-_COMPOUND_CSS_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9]*[\.\#\[\s\>:,~\+]")
-_HTML_TAG_NAMES = frozenset({
-    "html", "body", "head", "div", "span", "p", "a", "form", "table",
-    "tr", "td", "th", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
-    "input", "button", "select", "option", "textarea", "label", "img",
-    "section", "article", "nav", "header", "footer", "main", "aside",
-})
-
-# Matches: .class text='Value', .class >> text=Value, #id text="Value"
-_CHAINED_SELECTOR_RE = re.compile(
-    r"""(?P<base>^\s*[.#\[][^\s>]+|^\s*[a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_-]*)+)
-        \s*(?:>>\s*)?
-        (?P<method>text|Text|TEXT)\s*[=:]\s*["']?(?P<value>[^"']+)["']?
-        \s*$""",
-    re.VERBOSE,
-)
-
-
-_PARENT_SPLIT_RE = re.compile(
-    r"""\s*(?:>>|的|附近的)\s*""",
-)
-
-
-class LocatorStrategyCache:
-    """Per-page cache of successful ancestor-locate strategies for self-healing.
-
-    When text_parent_chain succeeds, remembers the depth and exact-match setting.
-    On subsequent calls with similar patterns on the same page, tries cached
-    params first to avoid trial-and-error through the full nth/depth space.
-    """
-
-    _cache: dict[str, tuple[int, bool]] = {}  # key → (depth, exact)
-
-    @classmethod
-    def _key(cls, page_url: str, parent_text: str, child_text: str) -> str:
-        return f"{page_url}|{parent_text[:50]}|{child_text[:20]}"
-
-    @classmethod
-    def get(cls, page_url: str, parent_text: str, child_text: str) -> tuple[int, bool] | None:
-        return cls._cache.get(cls._key(page_url, parent_text, child_text))
-
-    @classmethod
-    def put(cls, page_url: str, parent_text: str, child_text: str, depth: int, exact: bool) -> None:
-        cls._cache[cls._key(page_url, parent_text, child_text)] = (depth, exact)
-        if len(cls._cache) > 200:
-            for k in list(cls._cache.keys())[:50]:
-                cls._cache.pop(k, None)
-
-
-def _find_in_ancestor(page, parent_text: str, child_text: str) -> object:
-    """Find child_text within the nearest common ancestor of parent_text element.
-
-    Tries multiple parent_text matches (nth=0..4), each at depths 2-8,
-    returning the SHALLOWEST ancestor that contains child_text.
-    Uses :class:`LocatorStrategyCache` for self-healing on repeated patterns.
-    """
-    page_url = getattr(page, "url", "") or ""
-    parent_candidates = page.get_by_text(parent_text, exact=False)
-    max_try = min(parent_candidates.count(), 5)
-
-    # Self-healing: try cached strategy first
-    cached = LocatorStrategyCache.get(page_url, parent_text, child_text)
-    if cached is not None:
-        _cdepth, _cexact = cached
-        for nth in range(max_try):
-            try:
-                parent_el = parent_candidates.nth(nth)
-            except Exception:
-                continue
-            ancestor = parent_el
-            for _ in range(_cdepth):
-                ancestor = ancestor.locator("..")
-            try:
-                child = ancestor.get_by_text(child_text, exact=_cexact)
-                if child.count() > 0:
-                    return child.first
-            except Exception:
-                continue
-
-    for nth in range(max_try):
-        try:
-            parent_el = parent_candidates.nth(nth)
-        except Exception:
-            continue
-        for _depth in range(2, 9):
-            ancestor = parent_el
-            for _ in range(_depth):
-                ancestor = ancestor.locator("..")
-            try:
-                # Pure numeric child_text → exact match to avoid matching href="/p/1"
-                _exact = child_text.strip().isdigit()
-                child = ancestor.get_by_text(child_text, exact=_exact)
-                n = child.count()
-                if n > 0:
-                    LocatorStrategyCache.put(page_url, parent_text, child_text, _depth, _exact)
-                    return child.first
-            except Exception:
-                continue
-    # Fallback: try without ancestor walk; numeric → exact to avoid href matches
-    return page.get_by_text(child_text, exact=child_text.strip().isdigit()).first
-
-
-def _resolve_text_parent_chain(page, target: str) -> tuple[str, object] | None:
-    """Parse text-based parent chaining: "Blue Top" >> "Add to cart".
-
-    Supports multi-level chains: "A" >> "B" >> "C" finds C within B's ancestor
-    which is within A's ancestor.
-
-    Splits on >> / 的 / 附近的, then finds an element with *parent* text,
-    walks up to its container, and searches within for *child* text.
-    """
-    parts = _PARENT_SPLIT_RE.split(target.strip())
-    if len(parts) < 2:
-        return None
-
-    # Strip quotes from all parts
-    cleaned_parts = [p.strip().strip("\"'") for p in parts]
-    # Filter out empty parts
-    cleaned_parts = [p for p in cleaned_parts if p]
-
-    if len(cleaned_parts) < 2:
-        return None
-
-    def _build():
-        try:
-            # For multi-level chains, iterate from outermost to innermost
-            # e.g., "A" >> "B" >> "C" -> find B in A's ancestor, then find C in B's ancestor
-            # Try multiple matches of the first part to handle duplicate parent texts
-            first_candidates = page.get_by_text(cleaned_parts[0], exact=False)
-            max_first = min(first_candidates.count(), 5)
-
-            for nth in range(max_first):
-                try:
-                    current_locator = first_candidates.nth(nth)
-                except Exception:
-                    continue
-
-                for i in range(1, len(cleaned_parts)):
-                    parent_text = cleaned_parts[i - 1]
-                    child_text = cleaned_parts[i]
-
-                    found = False
-                    for _depth in range(2, 9):
-                        ancestor = current_locator
-                        for _ in range(_depth):
-                            ancestor = ancestor.locator("..")
-                        try:
-                            child = ancestor.get_by_text(child_text, exact=child_text.strip().isdigit())
-                            n = child.count()
-                            if n > 0:
-                                current_locator = child.first
-                                found = True
-                                break
-                        except Exception:
-                            continue
-
-                    if not found:
-                        # Try the next parent_text match instead of direct fallback
-                        break
-                else:
-                    # All levels matched for this nth — return the final locator
-                    return current_locator
-
-            # Fallback: try direct search for the last part
-            return page.get_by_text(cleaned_parts[-1], exact=False).first
-        except Exception as exc:
-            logger.debug("text_parent_chain failed for target=%r: %s", target, exc)
-            raise
-    return ("text_parent_chain", _build)
-
-
-
-def _resolve_chained_selector(page, target: str) -> tuple[str, object] | None:
-    """Parse Playwright-style chained selectors like ``.class text='Value'``.
-
-    Supported formats:
-    - ``.class text='Value'``
-    - ``.class >> text=Value``
-    - ``#id text="Value"``
-    - ``tag.class text='Value'``
-
-    Returns a ``chained_css_text`` strategy that chains ``page.locator(css)`` +
-    ``.get_by_text(value)``.
-    """
-    m = _CHAINED_SELECTOR_RE.match(target)
-    if m is None:
-        return None
-    base_css = m.group("base").strip()
-    text_value = m.group("value").strip()
-    if not base_css or not text_value:
-        return None
-    return (
-        "chained_css_text",
-        lambda: page.locator(base_css).get_by_text(text_value),
-    )
-
-
-def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
-    # Chained selector (e.g. ".productinfo text='View Product'")
-    chained = _resolve_chained_selector(page, target)
-    if chained is not None:
-        return chained
-    text_parent = _resolve_text_parent_chain(page, target)
-    if text_parent is not None:
-        return text_parent
-    if target.startswith("css="):
-        return ("css", lambda: page.locator(target))
-    if target.startswith("xpath="):
-        return ("xpath", lambda: page.locator(target))
-    if target.startswith("//"):
-        return ("xpath", lambda: page.locator(f"xpath={target}"))
-    if target.startswith(("#", "[")):
-        return ("css", lambda: page.locator(target))
-    # Single dot-prefixed class without chained suffix → plain CSS
-    if target.startswith("."):
-        return ("css", lambda: page.locator(target))
-    if target.startswith("data-testid="):
-        value = target.split("=", 1)[1]
-        return ("data-testid", lambda: page.get_by_test_id(value))
-    if _COMPOUND_CSS_RE.match(target):
-        return ("css", lambda: page.locator(target))
-    if target.lower() in _HTML_TAG_NAMES:
-        lower_target = target.lower()
-        return ("css_tag", lambda: page.locator(lower_target))
-    return None
-
-
-def _candidate_matches_requirements(
-    candidate: LocatorCandidateEvidence,
+def resolve_semantic_locator(
+    page,
+    target: str,
     *,
-    require_visible: bool,
-    require_enabled: bool,
-) -> bool:
-    return not _build_rejected_reasons(
-        candidate,
+    target_strategy: str | None = None,
+    prefer_input: bool = False,
+    require_visible: bool = True,
+    require_enabled: bool = False,
+) -> ResolvedLocator:
+    normalized_target = target.strip()
+
+    # Prefer hinted strategy first; on failure fall through to exhaustive scan.
+    if target_strategy is not None and target_strategy != "semantic":
+        try:
+            return _resolve_by_strategy(
+                page, normalized_target, target_strategy,
+                prefer_input=prefer_input,
+                require_visible=require_visible,
+                require_enabled=require_enabled,
+            )
+        except LocatorResolutionError:
+            pass  # Fall through to exhaustive semantic scan
+
+    entries = collect_semantic_candidates(
+        page,
+        normalized_target,
+        prefer_input=prefer_input,
         require_visible=require_visible,
         require_enabled=require_enabled,
     )
+    candidates = [entry.candidate for entry in entries[:5]]
+    selected_entry = next((entry for entry in entries if not entry.candidate.rejected_reasons), None)
+
+    if selected_entry is not None:
+        return ResolvedLocator(
+            strategy=selected_entry.strategy,
+            locator=selected_entry.locator,
+            trace=LocatorTrace(
+                target=normalized_target,
+                match_strategy=selected_entry.strategy,
+                candidates=candidates,
+                selected_candidate=selected_entry.candidate,
+                selection_reason=_build_selection_reason(selected_entry.candidate),
+            ),
+        )
+
+    failure_reason = _resolve_failure_reason(
+        candidates,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
+    raise LocatorResolutionError(
+        failure_reason,
+        trace=LocatorTrace(
+            target=normalized_target,
+            candidates=candidates,
+            failure_reason=failure_reason,
+        ),
+    )
 
 
-def _resolve_failure_reason(
-    candidates: list[LocatorCandidateEvidence],
-    *,
-    require_visible: bool,
-    require_enabled: bool,
-) -> str:
-    if not candidates:
-        return "No locator candidates matched target."
-    if require_visible and not any(candidate.visible for candidate in candidates):
-        return "Locator candidates matched target but none are visible."
-    if require_enabled and not any(candidate.enabled for candidate in candidates):
-        return "Locator candidates matched target but none are enabled."
-    return "Locator candidates matched target but did not satisfy the selection rules."
+# ── Candidate evidence and scoring ───────────────────────────────────────────
 
 
 def _build_candidate_evidence(locator, strategy: str) -> LocatorCandidateEvidence:
@@ -510,6 +401,42 @@ def _score_candidate(
     )
 
 
+# ── Scoring tables ───────────────────────────────────────────────────────────
+
+
+_STRATEGY_SCORES: dict[str, int] = {
+    "a11y_node_id": 130,       # Direct node ID match
+    "a11y_role_exact": 120,    # Exact role+name from a11y tree
+    "css": 110,                # Explicit CSS selector
+    "xpath": 110,              # Explicit XPath selector
+    "data-testid": 105,        # data-testid attribute
+    "a11y_role_fuzzy": 90,     # Fuzzy role+name match
+    "a11y_label": 85,          # aria-label / label element
+    "a11y_text_exact": 80,     # Exact text match
+    "a11y_placeholder": 75,    # Placeholder attribute
+    "a11y_text_fuzzy": 60,     # Fuzzy text match
+}
+
+
+def _strategy_base_score(strategy: str) -> int:
+    return _STRATEGY_SCORES.get(strategy, 50)
+
+
+def _strategy_rule_name(strategy: str) -> str:
+    return {
+        "a11y_node_id": "a11y-node-id-match",
+        "a11y_role_exact": "a11y-role-exact-match",
+        "a11y_role_fuzzy": "a11y-role-fuzzy-match",
+        "a11y_text_exact": "a11y-text-exact-match",
+        "a11y_text_fuzzy": "a11y-text-fuzzy-match",
+        "a11y_placeholder": "a11y-placeholder-match",
+        "a11y_label": "a11y-label-match",
+        "css": "explicit-css-selector",
+        "xpath": "explicit-xpath-selector",
+        "data-testid": "explicit-data-testid",
+    }.get(strategy, strategy)
+
+
 def _build_matched_rules(candidate: LocatorCandidateEvidence, strategy: str) -> list[str]:
     matched_rules = [_strategy_rule_name(strategy)]
     if candidate.visible:
@@ -535,51 +462,35 @@ def _build_rejected_reasons(
     return rejected_reasons
 
 
-def _strategy_base_score(strategy: str) -> int:
-    return {
-        "css": 120,
-        "xpath": 120,
-        "data-testid": 115,
-        "text_parent_chain": 112,
-        "chained_css_text": 110,
-        "css_tag": 105,
-        "element_id": 100,
-        "button_role": 90,
-        "link_role": 85,
-        "menuitem_role": 85,
-        "label": 80,
-        "placeholder": 75,
-        "text": 70,
-        "label_fuzzy": 60,
-        "button_role_fuzzy": 55,
-        "link_role_fuzzy": 55,
-        "menuitem_role_fuzzy": 55,
-        "placeholder_fuzzy": 55,
-        "text_fuzzy": 50,
-    }.get(strategy, 50)
+def _candidate_matches_requirements(
+    candidate: LocatorCandidateEvidence,
+    *,
+    require_visible: bool,
+    require_enabled: bool,
+) -> bool:
+    return not _build_rejected_reasons(
+        candidate,
+        require_visible=require_visible,
+        require_enabled=require_enabled,
+    )
 
 
-def _strategy_rule_name(strategy: str) -> str:
-    return {
-        "css": "explicit-css-selector",
-        "xpath": "explicit-xpath-selector",
-        "data-testid": "explicit-data-testid",
-        "chained_css_text": "chained-css-text-selector",
-        "css_tag": "explicit-html-tag-selector",
-        "element_id": "element-id-match",
-        "button_role": "exact-button-role-match",
-        "link_role": "exact-link-role-match",
-        "menuitem_role": "exact-menuitem-role-match",
-        "label": "exact-label-match",
-        "placeholder": "exact-placeholder-match",
-        "text": "exact-text-match",
-        "button_role_fuzzy": "fuzzy-button-role-match",
-        "link_role_fuzzy": "fuzzy-link-role-match",
-        "menuitem_role_fuzzy": "fuzzy-menuitem-role-match",
-        "label_fuzzy": "fuzzy-label-match",
-        "placeholder_fuzzy": "fuzzy-placeholder-match",
-        "text_fuzzy": "fuzzy-text-match",
-    }.get(strategy, strategy)
+def _resolve_failure_reason(
+    candidates: list[LocatorCandidateEvidence],
+    *,
+    require_visible: bool,
+    require_enabled: bool,
+) -> str:
+    if not candidates:
+        return "No locator candidates matched target."
+    if require_visible and not any(candidate.visible for candidate in candidates):
+        return "Locator candidates matched target but none are visible."
+    if require_enabled and not any(candidate.enabled for candidate in candidates):
+        return "Locator candidates matched target but none are enabled."
+    return "Locator candidates matched target but did not satisfy the selection rules."
+
+
+# ── Strategy-based resolution (for explicit strategies) ──────────────────────
 
 
 def _build_strategy_builder(

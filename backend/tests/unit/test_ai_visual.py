@@ -22,7 +22,6 @@ from app.locators.ai_visual import (
     locate_element_by_vision,
     reset_ai_visual_runtime_state,
 )
-from app.locators.fallback import _build_locator_from_ai_point, _dom_snapshot_matches_target
 from app.schemas.executions import DOMElementSnapshot
 
 
@@ -202,66 +201,6 @@ def test_locate_element_by_vision_opens_breaker_after_consecutive_failures(monke
     assert stats.locate_success_count == 0
     assert stats.locate_failure_count == 2
     assert stats.breaker_skip_count == 1
-
-
-def test_build_locator_from_ai_point_requires_dom_cross_verification() -> None:
-    ai_candidate = AILocateResult(center=(200, 100), bbox=(150, 80, 250, 120), confidence=0.7, raw_response="{}")
-    matching_page = FakePage(
-        {
-            "tag": "button",
-            "text": "登录按钮",
-            "role": "button",
-            "aria_label": "登录按钮",
-            "placeholder": None,
-            "data_testid": None,
-            "css_selector": "#login-btn",
-            "xpath": "/html/body/button[1]",
-            "rect": {"x": 150, "y": 80, "width": 100, "height": 40},
-            "visible": True,
-            "enabled": True,
-        }
-    )
-    mismatching_page = FakePage(
-        {
-            "tag": "button",
-            "text": "提交",
-            "role": "button",
-            "aria_label": "提交",
-            "placeholder": None,
-            "data_testid": None,
-            "css_selector": "#submit-btn",
-            "xpath": "/html/body/button[2]",
-            "rect": {"x": 150, "y": 80, "width": 100, "height": 40},
-            "visible": True,
-            "enabled": True,
-        }
-    )
-
-    resolved = _build_locator_from_ai_point(matching_page, target="登录按钮", ai_candidate=ai_candidate)
-    assert resolved is not None
-    assert resolved.strategy == "ai_visual"
-    assert matching_page.locator_calls == ["#login-btn"]
-
-    assert _build_locator_from_ai_point(mismatching_page, target="登录按钮", ai_candidate=ai_candidate) is None
-
-
-def test_dom_snapshot_target_matching_uses_whole_tokens() -> None:
-    snapshot = DOMElementSnapshot(
-        tag="button",
-        text="Booking",
-        role="button",
-        aria_label=None,
-        placeholder=None,
-        data_testid="booking-submit",
-        css_selector="#booking-submit",
-        xpath="/html/body/button[1]",
-        rect={"x": 0, "y": 0, "width": 10, "height": 10},
-        visible=True,
-        enabled=True,
-    )
-
-    assert _dom_snapshot_matches_target(snapshot, "booking")
-    assert not _dom_snapshot_matches_target(snapshot, "ok")
 
 
 def test_decode_base64_image_raises_clear_error_for_invalid_payload() -> None:
