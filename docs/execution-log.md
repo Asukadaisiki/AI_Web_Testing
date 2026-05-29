@@ -981,3 +981,20 @@
 ## 2026-03-28 | M1 认证入口落地与治理收口
 
 后端落地登录/登出/用户信息接口；前端完成登录态恢复、受保护路由、统一 401 回退。
+
+## 2026-05-30 (E2E 自动化测试 Skill)
+
+- 任务：创建 E2E 自动化测试 skill，使用 test_brand_filter_cart 需求文件验证 AI 规划流程和 DSL 质量
+- 操作：
+  - 创建 `backend/tests/e2e/test_e2e_brand_filter_cart.py` — httpx 调用 REST API 模拟前端操作
+  - 创建 `.claude/skills/e2e-brand-filter-cart.md` — Skill 定义文件
+  - 修复 `page_explorer.py`：探索阶段跳过 VLM fallback（`skip_vlm` 参数），避免模态弹窗按钮触发慢速 VLM
+  - 修复 `dsl_generator.py`：prompt 规则明确 `${var}` 只能用在 value 字段；新增 `_fix_variable_misuse` 后处理函数
+  - 更新 `pyproject.toml`：添加 `e2e_api` marker 和 `tests/e2e` testpath
+- 验证：E2E 测试通过（~7-11 分钟），DSL 覆盖登录→品牌筛选→加购→购物车验证完整流程
+- 发现的问题：
+  - VLM 模型全部失败（429 限流、元素未找到、类型错误）导致 explore_flow 极慢
+  - DSL 生成器会将 `${var}` 误用在 target 字段（已在 prompt 和后处理中修复）
+- 后续：
+  - 测试只验证了 `login_success` 场景，完整购物车验证场景需要更长时间
+  - 模态弹窗按钮（Continue Shopping, View Cart）confidence=low，需要更好的处理策略

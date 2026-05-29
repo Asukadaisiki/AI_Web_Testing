@@ -1,4 +1,4 @@
-"""AI-assisted DSL generation helpers."""
+"""AI-assisted DSL generation — single-call thinking-model path."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import logging
 import re
 import socket
 import time as _time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 from urllib import request
@@ -15,7 +14,6 @@ from urllib.error import HTTPError, URLError
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.ai.page_explorer import format_a11y_nodes_for_prompt
 from app.core.config import get_settings
 from app.schemas.dsl import (
     AssertTextStep,
@@ -43,6 +41,8 @@ from app.schemas.dsl import (
 logger = logging.getLogger(__name__)
 
 
+# ── Exceptions ─────────────────────────────────────────────────────────────────
+
 class DslGenerationError(RuntimeError):
     """Raised when the model response cannot be converted into a valid DSL case."""
 
@@ -55,8 +55,9 @@ class DslGenerationNetworkError(DslGenerationError):
     """Raised when the LLM HTTP endpoint is unreachable (DNS/TCP/connection timeout)."""
 
 
+# ── Network / HTTP helpers ─────────────────────────────────────────────────────
+
 def _is_transient_network_error(exc: BaseException) -> bool:
-    """Return True if exc represents a retriable transient failure."""
     if isinstance(exc, socket.timeout):
         return True
     if isinstance(exc, HTTPError):
@@ -65,7 +66,7 @@ def _is_transient_network_error(exc: BaseException) -> bool:
         reason = exc.reason
         if isinstance(reason, (socket.timeout, ConnectionError, TimeoutError, OSError)):
             return True
-        return True  # generic URLError (DNS, etc.) — also retry once
+        return True
     if isinstance(exc, (ConnectionError, TimeoutError)):
         return True
     return False
@@ -78,11 +79,6 @@ def _urlopen_with_retry(
     max_retries: int = 2,
     initial_backoff: float = 1.0,
 ):
-    """urlopen with exponential backoff on transient network errors.
-
-    Returns the raw response on success. Raises the last exception otherwise.
-    On non-retriable errors (4xx, JSON errors), raises immediately without retry.
-    """
     attempt = 0
     while True:
         try:
@@ -99,47 +95,105 @@ def _urlopen_with_retry(
             attempt += 1
 
 
+# ── Action / field alias maps ──────────────────────────────────────────────────
+
 _STEP_ADAPTER = TypeAdapter(DSLStep)
 _INPUT_CONTRACT_ADAPTER = TypeAdapter(DSLCaseInputContract)
 _OUTPUT_CONTRACT_ADAPTER = TypeAdapter(DSLCaseOutputContract)
-_ACTION_ALIASES = {
-    "open": "goto",
-    "navigate": "goto",
-    "visit": "goto",
-    "tap": "click",
-    "press": "click",
-    "fill": "input",
-    "enter": "input",
-    "wait": "wait_for",
-    "wait_for_element": "wait_for",
-    "assert_contains_text": "assert_text",
-    "assert_text_contains": "assert_text",
-    "assert_url": "assert_url_contains",
-    "assert_url_has": "assert_url_contains",
+
+_ACTION_ALIASES: dict[str, str] = {
+    "open": "goto", "navigate": "goto", "visit": "goto",
+    "tap": "click", "press": "click",
+    "fill": "input", "enter": "input",
+    "wait": "wait_for", "wait_for_element": "wait_for",
+    "assert_contains_text": "assert_text", "assert_text_contains": "assert_text",
+    "assert_url": "assert_url_contains", "assert_url_has": "assert_url_contains",
     "assert_path_contains": "assert_url_contains",
-    "extract_text": "capture_text",
-    "get_text": "capture_text",
-    "save_text": "capture_text",
-    "store_text": "capture_text",
+    "extract_text": "capture_text", "get_text": "capture_text",
+    "save_text": "capture_text", "store_text": "capture_text",
 }
-_STEP_MODELS = {
-    "goto": GotoStep,
-    "click": ClickStep,
-    "input": InputStep,
-    "wait_for": WaitForStep,
-    "assert_text": AssertTextStep,
-    "assert_url_contains": AssertUrlContainsStep,
-    "capture_text": CaptureTextStep,
+
+_STEP_MODELS: dict[str, Any] = {
+    "goto": GotoStep, "click": ClickStep, "input": InputStep,
+    "wait_for": WaitForStep, "assert_text": AssertTextStep,
+    "assert_url_contains": AssertUrlContainsStep, "capture_text": CaptureTextStep,
 }
-# Actions where `value` is the URL/path (not a click target).
+
 _URL_VALUE_ACTIONS = frozenset({"goto", "assert_url_contains"})
-# Actions that need BOTH target AND value; when value is missing but target is
-# present, treat target as the expected text and fall back to body for target.
 _ASSERT_TEXT_FALLBACK_TARGET = "body"
 
+_STEP_TARGET_ALIASES: dict[str, tuple[str, ...]] = {
+    "click": ("target", "element", "label", "selector", "locator", "description"),
+    "input": ("target", "element", "label", "selector", "locator", "description"),
+    "wait_for": ("target", "element", "label", "selector", "locator", "description"),
+    "assert_text": ("target", "element", "label", "selector", "locator", "description"),
+}
+
+_STEP_VALUE_ALIASES: dict[str, tuple[str, ...]] = {
+    "goto": ("value", "url", "path", "href", "target"),
+    "input": ("value", "text", "input", "content"),
+    "assert_text": ("value", "expected", "expected_text", "expectedText", "text"),
+    "assert_url_contains": ("value", "expected", "url", "path", "contains", "target"),
+}
+
+_STEP_TIMEOUT_ALIASES = ("timeout_ms", "timeoutMs", "timeout")
+
+_VALUE_TYPE_ALIASES: dict[str, str] = {
+    "str": "string", "string": "string", "text": "string",
+    "int": "number", "integer": "number", "float": "number",
+    "double": "number", "number": "number",
+    "bool": "boolean", "boolean": "boolean",
+    "dict": "object", "map": "object", "json": "object", "object": "object",
+    "list": "array", "array": "array",
+}
+
+_OUTPUT_SOURCE_ALIASES: dict[str, str] = {
+    "url": "latest_url", "page_url": "latest_url", "current_url": "latest_url",
+    "latest_url": "latest_url", "error_message": "error_message", "status": "status",
+    "step_url": "last_step_url", "last_step_url": "last_step_url",
+    "page_title": "last_step_page_title", "last_step_page_title": "last_step_page_title",
+    "step_target": "last_step_target", "last_step_target": "last_step_target",
+    "step_value": "last_step_value", "last_step_value": "last_step_value",
+    "step_error_message": "last_step_error_message",
+    "last_step_error_message": "last_step_error_message",
+}
+
+_CONTRACT_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "name": ("name", "label", "title"),
+    "context_key": ("context_key", "contextKey", "key"),
+    "value_type": ("value_type", "valueType", "type"),
+    "required": ("required", "is_required", "isRequired"),
+    "source": ("source", "value_from", "valueFrom", "extract_from", "extractFrom", "from"),
+    "description": ("description", "desc", "notes"),
+}
+
+_CASE_WRAPPER_KEYS = ("case", "data", "result", "response", "draft")
+_CASE_STEPS_ALIASES = ("step", "step_list", "stepList", "actions")
+_STEP_ACTION_KEYS = ("action", "type", "command", "step_action", "stepAction")
+_STEP_COLLECTION_KEYS = ("steps", "items", "list", "value", "data")
+
+_GENERIC_CASE_NAMES = {"ai 生成用例", "ai生成用例", "generated test case", "test case", "测试用例"}
+_GENERIC_CASE_DESCRIPTIONS = {
+    "ai 自动生成测试用例", "自动生成测试用例", "自动生成",
+    "generated by ai", "ai generated test case",
+}
+_GENERIC_CONTRACT_NAMES = {
+    "input", "output", "value", "values", "data", "result",
+    "field", "item", "param", "params",
+    "输入", "输出", "值", "数据", "结果", "字段", "参数",
+}
+
+SUPPORTED_DSL_ACTIONS = [
+    "goto", "click", "input", "wait_for",
+    "assert_text", "assert_url_contains", "capture_text",
+]
+
+AI_DSL_PROMPT_VERSION = "2026-05-29.simplified-single-call-v1"
+
+
+# ── Utility functions ──────────────────────────────────────────────────────────
 
 def _promote_first_alias(step: dict[str, Any], canonical_key: str, aliases: tuple[str, ...]) -> None:
-    """If `canonical_key` is empty but an alias key has a value, rename alias -> canonical."""
     if step.get(canonical_key):
         return
     for alias in aliases:
@@ -150,51 +204,29 @@ def _promote_first_alias(step: dict[str, Any], canonical_key: str, aliases: tupl
             return
 
 
-def _clean_variable_format(value: str | None) -> str | None:
-    """Clean variable format: ${email}=test@example.com -> ${email}."""
-    if not value:
-        return value
-    # Pattern: ${context_key}=actual_value -> ${context_key}
-    # This handles LLM mistakes like "${email}=test@example.com"
-    import re
-    cleaned = re.sub(r'\$\{(\w+)\}=[^\s,;]+', r'${\1}', value)
-    return cleaned
+def _clean_icon_chars(text: str) -> str:
+    """Remove Font Awesome / icon font Unicode PUA characters from text."""
+    return re.sub(r'[-\U000f0000-\U000ffffd]', '', text).strip()
 
 
-def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
-    """Repair common LLM mistakes in a single generated step.
+def _normalize_step(step: dict[str, Any]) -> dict[str, Any] | None:
+    """Minimal step normalization: action aliases + URL target→value swap.
 
-    LLMs frequently:
-      1. Use action aliases (open/navigate -> goto).
-      2. Use field aliases (`url`, `expected`, `text` instead of `value`;
-         `element`, `selector`, `label` instead of `target`).
-      3. Confuse `target` (locator) with `value` (URL / expected text).
-      4. Use wrong variable format like ${email}=test@example.com.
-
-    Without this normalizer, Pydantic validation rejects drafts like
-    `{"action": "goto", "target": "https://..."}` or
-    `{"action": "assert_text", "target": "item_1"}` (missing value) and the
-    entire DSL generation fails.
-
-    Returns None if the step is structurally unrepairable; otherwise returns
-    the (mutated) dict ready for Pydantic validation.
+    The thinking model rarely makes mistakes, but a lightweight safety net
+    catches the most common slip-ups without the complexity of the old
+    _normalize_llm_step / _repair_target_format patch chain.
     """
     if not isinstance(step, dict):
         return None
     act_raw = (step.get("action") or "").strip().lower()
     if not act_raw:
         return None
-    # Alias e.g. open/navigate/visit -> goto
+
     canonical = _ACTION_ALIASES.get(act_raw, act_raw)
     if canonical != act_raw:
         step["action"] = canonical
 
-    # Clean variable format in value and target fields
-    for field in ("value", "target"):
-        if field in step and isinstance(step[field], str):
-            step[field] = _clean_variable_format(step[field])
-
-    # Promote alias field names to canonical (`target`, `value`, `timeout_ms`).
+    # Promote alias field names to canonical
     target_aliases = _STEP_TARGET_ALIASES.get(canonical)
     if target_aliases:
         _promote_first_alias(step, "target", target_aliases)
@@ -203,29 +235,20 @@ def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
         _promote_first_alias(step, "value", value_aliases)
     _promote_first_alias(step, "timeout_ms", _STEP_TIMEOUT_ALIASES)
 
-    # Field repair: URL actions store the URL in `value`, not `target`.
+    # goto / assert_url_contains: URL goes in value, not target
     if canonical in _URL_VALUE_ACTIONS:
         if not step.get("value") and step.get("target"):
             step["value"] = step.pop("target")
 
-    # Field repair: assert_text needs BOTH target+value. If LLM gave us just
-    # a target (the expected text in the wrong field) and no value, move
-    # target -> value and use a body sentinel so the assertion runs against
-    # the whole page ("page contains text X").
+    # assert_text: if only target is given, move it to value and use body fallback
     if canonical == "assert_text":
         if not step.get("value") and step.get("target"):
             step["value"] = step["target"]
             step["target"] = _ASSERT_TEXT_FALLBACK_TARGET
 
-    # input needs BOTH target+value. If value is missing we cannot guess
-    # what the user wanted to type, so drop the step rather than emit an
-    # invalid one.
-    if canonical == "input":
-        if not step.get("value") or not step.get("target"):
-            return None
-
-    # Other actions with strictly required `target` that we cannot synthesize:
-    # drop them rather than crash the whole DSLCase on Pydantic validation.
+    # Drop steps that can't be validated
+    if canonical == "input" and (not step.get("value") or not step.get("target")):
+        return None
     if canonical in ("click", "wait_for") and not step.get("target"):
         return None
     if canonical == "capture_text" and (not step.get("target") or not step.get("context_key")):
@@ -234,978 +257,55 @@ def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
     return step
 
 
-def _clean_icon_chars(text: str) -> str:
-    """Remove Font Awesome / icon font characters from text.
+_VAR_PATTERN = re.compile(r"\$\{[\w]+\}")
 
-    Icon fonts often inject Unicode Private Use Area (PUA) characters like
-    \\uf023 (lock icon) before the actual text.  These break exact/partial
-    matching between DSL targets and a11y node names.
+
+def _fix_variable_misuse(step: dict[str, Any], warnings: list[str]) -> dict[str, Any] | None:
+    """Detect and fix ${var} misuse in target fields.
+
+    Variables can only appear in value fields.  If a target contains ${var},
+    the step is either repaired (assert_text) or dropped with a warning.
     """
-    # Remove PUA characters: U+E000-U+F8FF (BMP PUA) and U+F0000-U+FFFFD (SMP PUA)
-    import re
-    return re.sub(r'[-\U000f0000-\U000ffffd]', '', text).strip()
-
-
-def _repair_target_format(step: dict[str, Any], a11y_nodes: list[dict[str, Any]]) -> dict[str, Any]:
-    """Repair target format: convert plain text to a11y tree format.
-
-    If target is already in a11y tree format (role="name"), return as-is.
-    Otherwise, try to find matching a11y node and construct proper format.
-    """
-    target = step.get("target")
-    if not target or not isinstance(target, str):
+    target = step.get("target", "")
+    if not target or not _VAR_PATTERN.search(target):
         return step
 
-    # Already in a11y tree format
-    if '="' in target and target.endswith('"'):
+    logger.info("_fix_variable_misuse: detected ${{var}} in target=%r action=%s", target, step.get("action"))
+
+    action = step.get("action", "")
+
+    # assert_text: target has ${var} but should be a real locator.
+    # Always set target to body fallback. If value is empty, use the variable there.
+    if action == "assert_text":
+        if not step.get("value"):
+            step["value"] = target
+        step["target"] = _ASSERT_TEXT_FALLBACK_TARGET
+        warnings.append(
+            f"assert_text target contained ${{var}} '{target}', "
+            f"target set to '{_ASSERT_TEXT_FALLBACK_TARGET}'"
+        )
         return step
 
-    # Try to find matching a11y node
-    target_lower = target.strip().lower()
-    for node in a11y_nodes:
-        raw_name = (node.get("name") or "").strip()
-        name = _clean_icon_chars(raw_name)
-        role = (node.get("role") or "").strip()
-        if not name or not role:
-            continue
-        if name.lower() == target_lower:
-            # Found exact match, construct a11y tree format
-            step["target"] = f'{role}="{name}"'
-            logger.info(
-                "[repair_target] Converted '%s' to '%s'",
-                target, step["target"],
-            )
-            return step
+    # wait_for: target has ${var} — drop the step, can't wait for a variable
+    if action == "wait_for":
+        warnings.append(
+            f"wait_for target contained ${{var}} '{target}', step dropped"
+        )
+        return None
 
-    # Try partial match
-    for node in a11y_nodes:
-        raw_name = (node.get("name") or "").strip()
-        name = _clean_icon_chars(raw_name)
-        role = (node.get("role") or "").strip()
-        if not name or not role:
-            continue
-        if target_lower in name.lower() or name.lower() in target_lower:
-            # Found partial match, construct a11y tree format
-            step["target"] = f'{role}="{name}"'
-            logger.info(
-                "[repair_target] Converted '%s' to '%s' (partial match)",
-                target, step["target"],
-            )
-            return step
-
-    return step
-
-
-_VALUE_TYPE_ALIASES = {
-    "str": "string",
-    "string": "string",
-    "text": "string",
-    "int": "number",
-    "integer": "number",
-    "float": "number",
-    "double": "number",
-    "number": "number",
-    "bool": "boolean",
-    "boolean": "boolean",
-    "dict": "object",
-    "map": "object",
-    "json": "object",
-    "object": "object",
-    "list": "array",
-    "array": "array",
-}
-_OUTPUT_SOURCE_ALIASES = {
-    "url": "latest_url",
-    "page_url": "latest_url",
-    "current_url": "latest_url",
-    "latest_url": "latest_url",
-    "error_message": "error_message",
-    "status": "status",
-    "step_url": "last_step_url",
-    "last_step_url": "last_step_url",
-    "page_title": "last_step_page_title",
-    "last_step_page_title": "last_step_page_title",
-    "step_target": "last_step_target",
-    "last_step_target": "last_step_target",
-    "step_value": "last_step_value",
-    "last_step_value": "last_step_value",
-    "step_error_message": "last_step_error_message",
-    "last_step_error_message": "last_step_error_message",
-}
-AI_DSL_PROMPT_VERSION = "2026-05-06.assertion-and-navigation-v3"
-_BASE_SYSTEM_PROMPT_LINES = [
-    "You generate structured web testing DSL in JSON only. Return one JSON object with keys:",
-    "name, description, base_url, input_contract, output_contract, steps.",
-    "Generate ONLY steps — no markdown, no explanation, no extra text.",
-    "",
-    "━━━ CRITICAL RULES — VIOLATING ANY OF THESE = FAILED DRAFT ━━━",
-    "",
-    "## R0: INDEPENDENT EXECUTABLE — DSL MUST BE SELF-CONTAINED",
-    "The DSL is an independent, repeatable test case. It must include ALL necessary steps,",
-    "including login steps (input email/password + click Login), even if the exploration phase",
-    "already executed login or other operations. Do NOT assume the user is already logged in",
-    "or cookies are saved. Every test run starts from scratch.",
-    "",
-    "## R1: PAGE NAVIGATION — DO NOT SKIP NAVIGATION STEPS",
-    "MUST generate click or goto to reach a page BEFORE any wait_for/input/capture_text on that page.",
-    "Each page in the flow requires a navigation step (click or goto) to get there.",
-    "Example WRONG: goto / → wait_for Email Address → input Email Address.  (Email is on /login, not on /!)",
-    "Example CORRECT: goto / → click \"Signup / Login\" → wait_for \"Login to your account\" → input Email Address.",
-    "The first step after goto / MUST be a click to navigate to the starting page (login, products, etc.),",
-    "UNLESS the very first step of the flow happens on the homepage itself.",
-    "",
-    "## R2: NO wait_for WITHOUT PRECEDING NAVIGATION",
-    "Every wait_for MUST be preceded by a click or goto in the immediately prior step(s).",
-    "wait_for \"ALL PRODUCTS\" without a prior click \"Products\" is INVALID.",
-    "wait_for \"Shopping Cart\" without a prior click \"View Cart\" or goto /view_cart is INVALID.",
-    "For every wait_for, there must be a click/goto within the last 2 steps that navigates to that page.",
-    "",
-    "## R3: MODIFY-THEN-ASSERT — MUST INPUT BEFORE ASSERTING CHANGED VALUES",
-    "When the flow says to change a value (quantity, price, etc.):",
-    "  1. input the new value (action=\"input\", target=<element>, value=<new value>, trigger=\"Enter\")",
-    "  2. wait_for the UI to reflect the change",
-    "  3. assert_text to verify the new value",
-    "WRONG: directly assert_text value='2' with no input step. The field still has value '1'.",
-    "CORRECT: input target=\"数量按钮\" value=\"2\" trigger=\"Enter\" → wait_for \"Rs. 1400\" → assert_text value=\"Rs. 1400\".",
-    "",
-    "## R4: USE trigger FIELD FOR KEYBOARD EVENTS",
-    "When an input step needs Enter/Tab/Escape to activate the change, set the trigger field.",
-    "trigger=\"Enter\" fires Enter after fill (submits form, triggers JS change event).",
-    "trigger=\"Tab\" moves to next field.",
-    "Do NOT generate separate keyboard steps. The executor handles trigger automatically.",
-    "",
-    "## R5: CAPTURE MUST ASSERT",
-    "Every capture_text step MUST be followed by at least one assert_text referencing the captured variable.",
-    "capture_text reads data but does NOT verify it. assert_text confirms the captured value is correct.",
-    "assert_text: target is the locator (the element to check), value is the expected text. Do NOT put ${var} in target.",
-    "target must be a concrete locator that identifies a specific element on the page — NOT a semantic label like 'Product Name' or 'Price'.",
-    "",
-    "## R6: FORM FIELD COVERAGE",
-    "Generate a step for EVERY form field mentioned in the prompt.",
-    "Dropdown (<select>): action=\"input\" target=<field label> value=<option text>.",
-    "Checkbox: action=\"click\" target=<checkbox label>.",
-    "Review steps against the prompt before outputting. Missing fields = invalid DSL.",
-    "",
-    "## R7: STEP VERIFICATION",
-    "After state-changing actions, add verification:",
-    "  Navigation click → wait_for an element unique to the target page.",
-    "  Form submit → wait_for success message or new page element.",
-    "  Add to Cart → wait_for \"Added!\" or modal confirmation.",
-    "CORRECT: click \"Signup\" → wait_for \"Enter Account Information\" → input \"Password\".",
-    "WRONG: click \"Signup\" → immediately input \"Password\" (no verification form loaded).",
-    "",
-    "## R8: PAGE_STATE ISOLATION",
-    "When elements are grouped by page_state (S0, S1, ...), each step references elements from its state only.",
-    "Never use S1 elements in an S0 step.",
-    "",
-    "━━━ FORMAT RULES ━━━",
-    "",
-    "## target format (A11y Tree)",
-    "target MUST use a11y tree identifiers: role=\"name\" format.",
-    "CORRECT: button=\"Login\", textbox=\"Email\", link=\"Products\", combobox=\"Country\".",
-    "WRONG: \"//div[@class='productinfo']/p[1]\", \"input[placeholder='Email']\", \".login-btn\".",
-    "The a11y tree provides role and name for each element. Use these directly as target.",
-    "If multiple elements have the same role and name, use the node_id: button=\"Login\" id=e123.",
-    "",
-    "## variable format",
-    "Test data MUST be defined in input_contract with context_key, then referenced in steps.",
-    "CORRECT:",
-    "  input_contract: [{\"context_key\": \"email\", \"value\": \"test@example.com\"}]",
-    "  step: {\"action\": \"input\", \"target\": \"textbox=\\\"Email\\\"\", \"value\": \"${email}\"}",
-    "WRONG:",
-    "  step: {\"action\": \"input\", \"target\": \"Email\", \"value\": \"${email}=test@example.com\"}",
-    "  step: {\"action\": \"input\", \"target\": \"Email\", \"value\": \"test@example.com\"}",
-    "Never put variable definitions in step value. Always use ${context_key} syntax.",
-    "",
-    "## JSON structure",
-    "Do not include markdown fences. Keep contracts/steps as arrays even when empty.",
-    "Do not wrap DSL under other keys (case, data, result, draft).",
-    "context_key must be stable snake_case matching ^[A-Za-z_][A-Za-z0-9_]*$.",
-]
-_PROMPT_VARIANT_RULES: dict[DslGenerationPromptVariant, list[str]] = {
-    "contracts_focus": [
-        "Prioritize high-quality input/output contracts and keep steps conservative.",
-        "Do not rewrite the business flow unless the prompt explicitly asks for it.",
-    ],
-    "repair_steps": [
-        "Focus on returning a stable, high-quality steps array.",
-        "Do not change contracts unless the prompt explicitly asks for contract edits.",
-    ],
-    "rewrite_from_case": [
-        "Rewrite from the provided current DSL while preserving the original business intent.",
-        "Prefer editing existing flow over inventing unrelated new flow.",
-    ],
-    "baseline_draft": [
-        "Return a complete first-draft DSL that is directly editable by users.",
-    ],
-}
-_BASE_USER_RULE_LINES = [
-    "要求：",
-    "- steps 必须是数组，且每个 step 只能使用允许的 action。",
-    "- input_contract 和 output_contract 如无需要，返回空数组。",
-    "- 如果是相对路径跳转，优先保留为相对路径，并在 base_url 中提供站点地址。",
-    "- 如果提供了当前 DSL 或当前 steps，请把它们视为改写上下文，而不是忽略。",
-    "- 【target 必须使用 a11y tree 标识】target 必须使用 a11y tree 中的元素标识，格式为 role=\"name\"（如 button=\"Login\", textbox=\"Email\"）。不要使用 XPath、CSS 选择器或 DOM 元素路径。如果 a11y tree 中有 node_id，可以添加 id=node_id 来消歧义。",
-    "- 【变量格式】测试数据必须通过 input_contract 定义，在步骤中用 ${context_key} 引用。正确：input_contract=[{\"context_key\": \"email\", \"value\": \"test@example.com\"}], step.value=\"${email}\"。错误：step.value=\"${email}=test@example.com\" 或 step.value=\"test@example.com\"。不要在 step.value 中硬编码测试数据。",
-    "- 【置信度自评】对每个包含 target 的 step，添加 locator_confidence 字段：high（目标有唯一 a11y 标识）、medium（有 2-3 个同类元素）、low（需要上下文消歧）。",
-    "- 表单字段覆盖：必须为 prompt 中提到的每个表单字段生成对应步骤。下拉框用 input action（target 为字段标签，value 为选项文本），复选框用 click action（target 为复选框标签）。输出前检查是否有遗漏字段。",
-    "- 【测试常识 — 输入后确认】修改表单字段（如数量、价格、搜索框）的值后，页面通常需要键盘事件才能触发更新。仅 input 步骤的 fill 操作可能不会触发 JavaScript 的 change/update 事件。因此：1) 修改数量/价格后，必须在 input 步骤后添加 wait_for 等待更新结果出现；2) 如果 wait_for 的目标是总价、计算结果等动态值，使用具体的预期值作为 target（如 button=\"Rs. 1400\"）而非 CSS 选择器。正确示例：input value='2' → wait_for \"Rs. 1400\" → assert_text。",
-    "- base_url 应为站点根地址（如 https://example.com），页面路径放在 goto 步骤中（如 /login）。不要将完整页面 URL 填入 base_url。",
-    "- 生成前评估测试信息完整性：前置条件（系统初始状态）、入口（目标页面 URL 或导航路径）、操作步骤、预期结果。如果描述中缺少入口信息，通过 base_url + goto 步骤明确入口。",
-    "- 【页面导航完整性】每个页面的元素只能在该页面加载后才能操作。进入新页面必须通过 click/goto 步骤。例如：登录页面的邮箱输入框必须在 click \"Signup / Login\"（或 goto /login）之后才能操作，不能从首页直接 input \"Email Address\"。确保步骤顺序与实际页面跳转逻辑一致。",
-    "- 【capture 必须 assert】使用 capture_text 提取数据后，必须在后续步骤中用 assert_text 验证该值。capture 只是读取数据，不能发现任何 bug。每条核心断言（如价格一致性、跨页面数据匹配）必须有对应的 assert_text 步骤。capture_text 捕获的 ${context_key} 必须在至少一个 assert_text 中被引用。",
-    "- 【修改值必须先 input】如果测试流程要求修改某个字段的值（如修改数量为 2、修改价格为 100），必须先有 input 步骤执行修改，再有 assert_text 验证修改结果。不能跳过 input 直接 assert 修改后的值。错误示例：直接 assert_text value='2' 但没有 input value='2'。正确示例：input value='2' → wait_for → assert_text value='2'。",
-    "- 【trigger 字段】如果 input 步骤后需要键盘事件触发更新（如购物车数量修改后按 Enter），在 input 步骤中添加 trigger='Enter'（或 trigger='Tab'、trigger='Escape'）。不要单独生成键盘事件步骤，执行器会自动处理。",
-    "- 【页面状态隔离】如果页面元素按\"页面状态 S0/S1...\"分组，每个状态的步骤只能使用该状态的元素。不要在 S0 的步骤中使用 S1 的元素 target。",
-]
-_CONTRACT_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-    "name": ("name", "label", "title"),
-    "context_key": ("context_key", "contextKey", "key"),
-    "value_type": ("value_type", "valueType", "type"),
-    "required": ("required", "is_required", "isRequired"),
-    "source": ("source", "value_from", "valueFrom", "extract_from", "extractFrom", "from"),
-    "description": ("description", "desc", "notes"),
-}
-_CASE_WRAPPER_KEYS = ("case", "data", "result", "response", "draft")
-_CASE_STEPS_ALIASES = ("step", "step_list", "stepList", "actions")
-_STEP_ACTION_KEYS = ("action", "type", "command", "step_action", "stepAction")
-_STEP_COLLECTION_KEYS = ("steps", "items", "list", "value", "data")
-_STEP_TARGET_ALIASES: dict[str, tuple[str, ...]] = {
-    "click": ("target", "element", "label", "selector", "locator", "description"),
-    "input": ("target", "element", "label", "selector", "locator", "description"),
-    "wait_for": ("target", "element", "label", "selector", "locator", "description"),
-    "assert_text": ("target", "element", "label", "selector", "locator", "description"),
-}
-_STEP_VALUE_ALIASES: dict[str, tuple[str, ...]] = {
-    "goto": ("value", "url", "path", "href", "target"),
-    "input": ("value", "text", "input", "content"),
-    "assert_text": ("value", "expected", "expected_text", "expectedText", "text"),
-    "assert_url_contains": ("value", "expected", "url", "path", "contains", "target"),
-}
-_STEP_TIMEOUT_ALIASES = ("timeout_ms", "timeoutMs", "timeout")
-_GENERIC_CASE_NAMES = {"ai 生成用例", "ai生成用例", "generated test case", "test case", "测试用例"}
-_GENERIC_CASE_DESCRIPTIONS = {
-    "ai 自动生成测试用例",
-    "自动生成测试用例",
-    "自动生成",
-    "generated by ai",
-    "ai generated test case",
-}
-_GENERIC_CONTRACT_NAMES = {
-    "input",
-    "output",
-    "value",
-    "values",
-    "data",
-    "result",
-    "field",
-    "item",
-    "param",
-    "params",
-    "输入",
-    "输出",
-    "值",
-    "数据",
-    "结果",
-    "字段",
-    "参数",
-}
-
-
-@dataclass
-class ContractNormalizationContext:
-    adapter: TypeAdapter[Any]
-    label: str
-    is_output_contract: bool
-    allow_auto_repair: bool
-    warnings: list[str]
-    normalization_notes: list[str]
-
-
-def _call_llm(
-    *,
-    messages: list[dict[str, Any]],
-    api_key: str,
-    model: str,
-    base_url: str,
-    timeout_seconds: float,
-) -> str:
-    payload = {
-        "model": model,
-        "messages": messages,
-    }
-    thinking_enabled = _should_enable_thinking_mode(base_url=base_url, model=model)
-    logger.info("DSL _call_llm: model=%s, thinking=%s, base_url=%s", model, thinking_enabled, base_url)
-    if thinking_enabled:
-        payload["thinking"] = {"type": "enabled", "effort": "medium"}
-        payload["max_tokens"] = 65536
-        payload["temperature"] = 0.0
-    else:
-        payload["temperature"] = 0.0
-        payload["response_format"] = {"type": "json_object"}
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
-    http_request = request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    # click/input: target has ${var} — drop the step
+    warnings.append(
+        f"{action} target contained ${{var}} '{target}', step dropped"
     )
-    with _urlopen_with_retry(http_request, timeout_seconds=timeout_seconds) as response:
-        raw_body = response.read()
-        # Two-pass decode to eliminate lone surrogates at byte level
-        response_text = raw_body.decode("utf-8", errors="surrogateescape")
-        response_text = response_text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
-        content_type = ""
-        if hasattr(response, "headers") and response.headers is not None:
-            content_type = response.headers.get("Content-Type", "")
-        try:
-            raw_payload = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            raise DslGenerationError(
-                _build_non_json_response_error(
-                    endpoint=endpoint,
-                    base_url=base_url,
-                    content_type=content_type,
-                    response_text=response_text,
-                )
-            ) from exc
+    return None
 
-    _log_dsl_cache_usage(raw_payload)
-    return _extract_message_content(raw_payload)
 
-
-def _log_dsl_cache_usage(raw_payload: dict[str, Any]) -> None:
-    """Log prompt-cache hit/miss for DeepSeek-style LLM responses.
-
-    Restored after being orphaned by commit 8d92654 (governance cleanup deleted
-    the function but kept two callers). No-op for providers that don't report
-    cache usage in the response.
-    """
-    if not isinstance(raw_payload, dict):
-        return
-    usage = raw_payload.get("usage", {}) or {}
-    if not isinstance(usage, dict):
-        return
-    hit = usage.get("prompt_cache_hit_tokens", 0) or 0
-    miss = usage.get("prompt_cache_miss_tokens", 0) or 0
-    if hit or miss:
-        ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
-        logger.info(
-            "DSL cache: hit=%d miss=%d ratio=%.0f%% total=%d completion=%d",
-            hit, miss, ratio,
-            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
-        )
-
-
-def _build_non_json_response_error(
-    *,
-    endpoint: str,
-    base_url: str,
-    content_type: str,
-    response_text: str,
-) -> str:
-    normalized_preview = re.sub(r"\s+", " ", response_text).strip()[:160]
-    hint = ""
-    if _looks_like_html_response(response_text):
-        hint = " 响应看起来像 HTML 页面，请检查 AI_DSL_BASE_URL 是否指向了真正的 OpenAI 兼容 API 根路径。"
-        if not base_url.rstrip("/").endswith("/v1"):
-            hint += " 当前 base_url 末尾不包含 /v1。"
-    return (
-        "AI DSL 生成接口返回了无法解析的非 JSON 响应。"
-        f" endpoint={endpoint}"
-        f" content_type={content_type or 'unknown'}"
-        f" preview={normalized_preview or '<empty>'}.{hint}"
-    )
-
-
-def _looks_like_html_response(response_text: str) -> bool:
-    normalized = response_text.lstrip().casefold()
-    return normalized.startswith("<!doctype html") or normalized.startswith("<html")
-
-
-def _call_dsl_flash_llm(
-    *,
-    messages: list[dict[str, Any]],
-    settings=None,
-    timeout_seconds: float = 60.0,
-) -> str:
-    """Call a fast/flash LLM for segmented DSL generation (no thinking mode).
-
-    Uses ``ai_dsl_flash_*`` config, falling back to the main DSL model.
-    """
-    if settings is None:
-        settings = get_settings()
-
-    api_key = settings.ai_dsl_api_key or ""
-    model = (
-        getattr(settings, "ai_dsl_flash_model", None)
-        or settings.ai_dsl_model
-        or ""
-    )
-    base_url = settings.ai_dsl_base_url
-
-    # Log LLM configuration
-    logger.info(
-        "DSL _call_dsl_flash_llm: model=%s, base_url=%s, has_api_key=%s, timeout=%.1fs",
-        model or "(empty)", base_url, bool(api_key), timeout_seconds,
-    )
-
-    if not api_key:
-        raise DslGenerationConfigError(
-            "AI DSL 生成失败：未配置 API Key。请设置 AI_DSL_API_KEY 环境变量。"
-        )
-    if not model:
-        raise DslGenerationConfigError(
-            "AI DSL 生成失败：未配置模型。请设置 AI_DSL_FLASH_MODEL 或 AI_DSL_MODEL 环境变量。"
-        )
-
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 16384,
-        "temperature": 0.0,
-        "response_format": {"type": "json_object"},
-    }
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
-
-    logger.debug("DSL LLM endpoint: %s", endpoint)
-
-    http_request = request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with _urlopen_with_retry(http_request, timeout_seconds=timeout_seconds) as response:
-            raw_body = response.read()
-            response_text = raw_body.decode("utf-8", errors="replace")
-            try:
-                raw_payload = json.loads(response_text)
-            except json.JSONDecodeError as exc:
-                raise DslGenerationError(
-                    f"Flash DSL generation returned non-JSON response: {response_text[:500]}"
-                ) from exc
-    except (URLError, socket.timeout, ConnectionError, TimeoutError) as exc:
-        endpoint_host = base_url.rstrip("/").split("/")[-1] if base_url else "(unknown)"
-        logger.error("DSL LLM call failed (network): %s", exc)
-        raise DslGenerationNetworkError(
-            f"AI DSL 生成失败：无法连接到 LLM API（{endpoint_host}）。"
-            f"错误：{type(exc).__name__}: {exc}。"
-            f"请检查网络连通性、DNS 解析或代理设置。"
-        ) from exc
-    except Exception as exc:
-        logger.error("DSL LLM call failed: %s", exc)
-        raise
-
-    _log_dsl_cache_usage(raw_payload)
-    return _extract_message_content(raw_payload)
-
-
-def _format_scenario_variables_for_prompt(
-    scenario_variables: list[dict[str, Any]] | None,
-    *,
-    current_state: str,
-) -> str:
-    """Render the planning-agent variable dictionary as authoritative segment context.
-
-    The returned text is injected into every segment prompt so all segments share
-    the same context_key spelling — no more S1 spelling 'product_a_name' while
-    S2 invents 'item_a_name'.
-
-    *current_state* lets the segment know which captures it owns vs. which it
-    should only reference via ${context_key}.
-    """
-    if not scenario_variables:
-        return ""
-
-    input_lines: list[str] = []
-    capture_own: list[str] = []
-    capture_other: list[str] = []
-    for v in scenario_variables:
-        if not isinstance(v, dict):
-            continue
-        ck = (v.get("context_key") or "").strip()
-        desc = (v.get("description") or "").strip()
-        src = (v.get("source") or "captured").strip().lower()
-        cap_state = (v.get("capture_in_state") or "").strip()
-        if not ck:
-            continue
-        if src == "input":
-            input_lines.append(f"  - ${{{ck}}} — {desc} (由 input_contract 在执行时注入)")
-        else:
-            label = f"  - ${{{ck}}} — {desc}"
-            if cap_state and cap_state == current_state:
-                capture_own.append(label + " (本段必须用 capture_text 写入)")
-            elif cap_state:
-                capture_other.append(label + f" (在 {cap_state} 段 capture，此段只能 ${{{ck}}} 引用，不要再 capture)")
-            else:
-                capture_other.append(label + " (跨段捕获变量，此段按需引用)")
-
-    if not (input_lines or capture_own or capture_other):
-        return ""
-
-    parts = ["## Scenario variables — naming authority (use these exact context_keys)"]
-    if input_lines:
-        parts.append("Input variables (referenced via ${{key}} in steps):")
-        parts.extend(input_lines)
-    if capture_own:
-        parts.append(f"Variables to capture in THIS state ({current_state}):")
-        parts.extend(capture_own)
-    if capture_other:
-        parts.append("Variables captured elsewhere — reference only, do NOT re-capture:")
-        parts.extend(capture_other)
-    parts.append(
-        "Rule: every ${{...}} you emit MUST appear above. Do not invent new context_keys "
-        "or rename existing ones — segments share these names across page states."
-    )
-    return "\n".join(parts)
-
-
-def _build_segment_prompt(
-    scenario_prompt: str,
-    page_state: str,
-    seg_steps: list[dict[str, Any]],
-    base_url: str,
-    a11y_nodes: list[dict[str, Any]] | None = None,
-    scenario_variables: list[dict[str, Any]] | None = None,
-    user_context: str | None = None,
-    is_first_segment: bool = False,
-) -> str:
-    """Build a focused prompt for a single page_state segment.
-
-    Only uses a11y tree for element identification. DOM elements are not supported.
-    """
-    step_desc_lines: list[str] = []
-    for s in seg_steps:
-        act = s.get("action", "?")
-        tgt = s.get("target", "") or ""
-        val = s.get("value", "")
-        trig = s.get("trigger", "")
-        extra = []
-        if val:
-            extra.append(f"value='{val}'")
-        if trig:
-            extra.append(f"trigger='{trig}'")
-        step_desc_lines.append(f"  {s.get('step_index','?')}. {act} target='{tgt}' {' '.join(extra)}")
-
-    if step_desc_lines:
-        actions_section = "Actions on this page:\n" + "\n".join(step_desc_lines)
-    else:
-        actions_section = (
-            "Actions on this page: (none provided — derive complete DSL steps from the scenario "
-            "and available elements below; cover navigation, interactions, and assertions described "
-            "in the scenario)"
-        )
-
-    # Only use a11y tree - no DOM fallback
-    if a11y_nodes:
-        elem_text = format_a11y_nodes_for_prompt(a11y_nodes)
-    else:
-        elem_text = "(no a11y nodes available)"
-
-    variables_block = _format_scenario_variables_for_prompt(
-        scenario_variables, current_state=page_state,
-    )
-    variables_section = f"\n{variables_block}\n" if variables_block else ""
-
-    user_context_section = ""
-    if user_context:
-        user_context_section = f"## Original user requirements\n{user_context}\n\n"
-
-    # Determine login requirement based on is_first_segment flag
-    login_requirement = ""
-    if is_first_segment:
-        login_requirement = (
-            f"- 【独立可执行】这是第一个页面状态（{page_state}），DSL 必须包含所有前置步骤。\n"
-            f"  包括：登录步骤（input email/password + click Login）、导航步骤等。\n"
-            f"  不要假设用户已经登录或 cookies 已保存。\n"
-        )
-    else:
-        login_requirement = (
-            f"- 【续接上文】这是后续页面状态（{page_state}），不要重复登录步骤。\n"
-            f"  假设用户已经登录，直接生成本页面的操作步骤。\n"
-        )
-
-    return (
-        f"Generate DSL steps for page state **{page_state}** only.\n\n"
-        f"{user_context_section}"
-        f"Scenario: {scenario_prompt}\n\n"
-        f"{actions_section}\n\n"
-        f"Available A11y tree elements:\n{elem_text}\n"
-        f"{variables_section}"
-        f"\n"
-        f"Rules:\n"
-        f"- Return valid JSON with 'steps' array and 'base_url'.\n"
-        f"- base_url: {base_url}\n"
-        f"- Only generate steps for THIS page state ({page_state}).\n"
-        f"- 【分段合并】所有页面状态的步骤会被合并成一个完整的 DSL。\n"
-        f"  只生成本页面状态需要的步骤，不要重复其他状态的步骤。\n"
-        f"{login_requirement}"
-        f"- 【target 格式】target 必须使用 a11y tree 中的元素标识，格式为 role=\"name\"。\n"
-        f"  例如：button=\"Login\", textbox=\"Email\", link=\"Products\"。\n"
-        f"  绝对不要使用 XPath、CSS 选择器、DOM 元素路径或任何其他格式。\n"
-        f"- 【变量格式】测试数据必须通过 input_contract 定义，在步骤中用 ${{context_key}} 引用。\n"
-        f"  正确：input_contract=[{{\"context_key\": \"email\", \"value\": \"test@example.com\"}}], step.value=\"${{email}}\"\n"
-        f"  错误：step.value=\"${{email}}=test@example.com\" 或 step.value=\"test@example.com\"\n"
-        f"- 【字段约定】各 action 的字段要求严格按下面规则：\n"
-        f"    * goto / assert_url_contains: URL 或路径写在 'value' 字段，无需 target。\n"
-        f"      正确：{{\"action\": \"goto\", \"value\": \"/login\"}}；错误：把 URL 写在 target。\n"
-        f"    * input / assert_text: 必须同时提供 'target'（a11y 元素标识）和 'value'（输入内容/期望文本）。\n"
-        f"    * click / wait_for: 只需 'target'，不需 value。\n"
-        f"    * capture_text: 必须有 'target' 和 'context_key'（snake_case 变量名）。\n"
-        f"- If an input step has trigger=Enter/Tab, include the trigger field.\n"
-        f"- Every capture_text must be followed by assert_text.\n"
-        f"- Limit to 8-12 steps for this segment."
-    )
-
-
-# Common variable name to type/description mapping for auto-generated input_contract
-_VARIABLE_TYPE_HINTS: dict[str, tuple[str, str]] = {
-    "email": ("string", "登录邮箱"),
-    "mail": ("string", "邮箱地址"),
-    "username": ("string", "用户名"),
-    "user": ("string", "用户名"),
-    "login": ("string", "登录账号"),
-    "account": ("string", "账号"),
-    "password": ("string", "密码"),
-    "pass": ("string", "密码"),
-    "pwd": ("string", "密码"),
-    "url": ("string", "URL 地址"),
-    "link": ("string", "链接"),
-    "phone": ("string", "手机号"),
-    "mobile": ("string", "手机号"),
-    "name": ("string", "名称"),
-    "amount": ("number", "金额"),
-    "quantity": ("number", "数量"),
-    "count": ("number", "数量"),
-}
-
-
-def _extract_input_contract_from_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract input_contract from ${context_key} placeholders in steps.
-
-    Scans all step values and targets for ``${var}`` patterns, deduplicates them,
-    and returns a list of input_contract entries with inferred types.
-    """
-    import re
-    variable_pattern = re.compile(r"\$\{(\w+)\}")
-    seen: dict[str, dict[str, Any]] = {}
-
-    for step in steps:
-        for field in ("value", "target"):
-            text = step.get(field) or ""
-            if not isinstance(text, str):
-                continue
-            for match in variable_pattern.finditer(text):
-                key = match.group(1)
-                if key in seen:
-                    continue
-                # Infer type and description from variable name
-                key_lower = key.lower()
-                value_type = "string"
-                description = key
-                for hint_key, (vtype, vdesc) in _VARIABLE_TYPE_HINTS.items():
-                    if hint_key in key_lower:
-                        value_type = vtype
-                        description = vdesc
-                        break
-                seen[key] = {
-                    "name": description,  # Use description as the name
-                    "context_key": key,
-                    "value_type": value_type,
-                    "required": True,
-                    "description": description,
-                }
-
-    return list(seen.values())
-
-
-SUPPORTED_DSL_ACTIONS = [
-    "goto", "click", "input", "wait_for",
-    "assert_text", "assert_url_contains", "capture_text",
-]
-
-
-def generate_segmented_case_draft(
-    *,
-    payload: "GenerateDslRequest",
-    flow_steps: list[dict[str, Any]],
-    a11y_nodes_by_state: dict[str, list[dict[str, Any]]] | None = None,
-    scenario_variables: list[dict[str, Any]] | None = None,
-) -> "tuple[DSLCase, list[str], list[str], GenerateDslMeta]":
-    """Generate DSL by splitting the scenario into page_state segments.
-
-    Each segment is processed by a flash LLM call (no thinking mode).
-    Segments run in parallel via ThreadPoolExecutor, then steps are merged
-    in page_state order (S0, S1, ...).
-
-    Only uses a11y tree for element identification. DOM elements are not supported.
-    """
-    settings = get_settings()
-    if not settings.enable_ai_dsl_generate:
-        raise DslGenerationConfigError(
-            "AI DSL 生成功能未开启。请设置 ENABLE_AI_DSL_GENERATE=true。"
-        )
-
-    # Log generation start
-    logger.info(
-        "DSL segmented generation start: prompt_len=%d, base_url=%s, flow_steps=%d, a11y_nodes_states=%d",
-        len(payload.prompt),
-        payload.base_url,
-        len(flow_steps),
-        len(a11y_nodes_by_state) if a11y_nodes_by_state else 0,
-    )
-
-    # Group flow_steps by page_state
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for fs in flow_steps:
-        ps = str(fs.get("page_state", "S0") or "S0")
-        groups.setdefault(ps, []).append(fs)
-
-    # Fallback: if flow_steps is empty but we have a11y_nodes_by_state,
-    # use those page_states with empty seg_steps. This lets the LLM derive
-    # steps from the scenario prompt + a11y tree when the planning agent
-    # failed to produce structured flow_steps (e.g., safety-cap fallback plan).
-    if not groups and a11y_nodes_by_state:
-        for ps in a11y_nodes_by_state.keys():
-            groups.setdefault(ps or "S0", [])
-        logger.info(
-            "flow_steps empty; deriving page_states from a11y_nodes_by_state: %s",
-            list(groups.keys()),
-        )
-
-    sorted_states = sorted(groups.keys())
-    logger.info("Page states: %s, groups: %s", sorted_states, {k: len(v) for k, v in groups.items()})
-
-    all_warnings: list[str] = []
-    all_notes: list[str] = []
-    merged_steps: list[dict[str, Any]] = []
-    base_url = payload.base_url or None
-    first_state = sorted_states[0] if sorted_states else "S0"
-
-    def _generate_segment(state: str, steps: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-        a11y_nodes = a11y_nodes_by_state.get(state, []) if a11y_nodes_by_state else []
-        # Prefer the explicit param; fall back to the field on payload so callers
-        # that only set payload.scenario_variables (e.g., single-segment path)
-        # still benefit from the naming authority.
-        effective_variables = scenario_variables or getattr(payload, "scenario_variables", None) or []
-        effective_user_context = getattr(payload, "user_context", None) or None
-        logger.info(
-            "Generating segment %s: steps=%d, a11y_nodes=%d, scenario_variables=%d, has_user_context=%s",
-            state, len(steps), len(a11y_nodes), len(effective_variables), bool(effective_user_context),
-        )
-        seg_prompt = _build_segment_prompt(
-            scenario_prompt=payload.prompt.strip(),
-            page_state=state,
-            seg_steps=steps,
-            base_url=base_url,
-            a11y_nodes=a11y_nodes,
-            scenario_variables=effective_variables,
-            user_context=effective_user_context,
-            is_first_segment=(state == first_state),
-        )
-        logger.debug("Segment %s prompt length: %d", state, len(seg_prompt))
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You generate structured web testing DSL in JSON only. "
-                    "Return exactly: {\"steps\": [...], \"base_url\": \"...\"}"
-                ),
-            },
-            {"role": "user", "content": seg_prompt},
-        ]
-        response = _call_dsl_flash_llm(
-            messages=messages,
-            settings=settings,
-            timeout_seconds=max(30.0, getattr(settings, "ai_dsl_flash_timeout_ms", 180000) / 1000),
-        )
-        cleaned = _extract_json_object(response)
-        logger.debug("Segment %s response length: %d", state, len(cleaned))
-        raw = json.loads(cleaned)
-        if not isinstance(raw, dict):
-            raise DslGenerationError(f"Segment {state}: response is not a JSON object")
-        steps_result = raw.get("steps", []) or raw.get("data", {}).get("steps", []) or []
-        # Auto-repair common LLM mistakes (target↔value for goto, action aliases).
-        # Drop steps that can't be normalized to avoid crashing Pydantic validation
-        # on the whole DSLCase.
-        repaired_steps: list[dict[str, Any]] = []
-        for s in steps_result:
-            normalized = _normalize_llm_step(s)
-            if normalized is not None:
-                repaired_steps.append(normalized)
-        if len(repaired_steps) != len(steps_result):
-            logger.info(
-                "Segment %s normalization dropped %d malformed steps",
-                state, len(steps_result) - len(repaired_steps),
-            )
-        steps_result = repaired_steps
-
-        # Repair target format: convert plain text to a11y tree format
-        for s in steps_result:
-            _repair_target_format(s, a11y_nodes)
-
-        logger.info("Segment %s generated %d steps", state, len(steps_result))
-        return state, steps_result
-
-    # Parallel execution
-    segment_results: dict[str, list[dict[str, Any]]] = {}
-    with ThreadPoolExecutor(max_workers=min(4, len(sorted_states))) as executor:
-        futures = {
-            executor.submit(_generate_segment, state, groups[state]): state
-            for state in sorted_states
-        }
-        for future in as_completed(futures):
-            state = futures[future]
-            try:
-                s, seg_steps = future.result()
-                segment_results[s] = seg_steps
-                logger.info(
-                    "Segment %s generated: %d steps", s, len(seg_steps),
-                )
-            except Exception as exc:
-                logger.warning("Segment %s failed: %s", state, exc)
-                all_warnings.append(f"Segment {state} generation failed: {exc}")
-                segment_results[state] = []
-
-    # Merge in page_state order
-    for state in sorted_states:
-        merged_steps.extend(segment_results.get(state, []))
-
-    # Rewrite step_index
-    for i, s in enumerate(merged_steps):
-        s["step_index"] = i + 1
-
-    # Log merge result
-    logger.info(
-        "DSL segmented generation complete: states=%d, total_steps=%d, warnings=%d",
-        len(sorted_states), len(merged_steps), len(all_warnings),
-    )
-    if all_warnings:
-        logger.warning("Generation warnings: %s", all_warnings)
-
-    # Auto-generate input_contract from ${...} placeholders in steps
-    input_contract = _extract_input_contract_from_steps(merged_steps)
-    if input_contract:
-        logger.info("Auto-generated input_contract with %d variables: %s",
-                     len(input_contract), [ic.get("context_key") for ic in input_contract])
-
-    # Build normalized case dict
-    normalized_case = {
-        "name": payload.prompt.strip()[:200] or "AI 生成用例",
-        "description": payload.prompt.strip()[:500],
-        "base_url": base_url,
-        "input_contract": input_contract,
-        "output_contract": [],
-        "steps": merged_steps,
-    }
-
-    all_notes.append(f"分段生成：{len(sorted_states)} 个页面状态，共 {len(merged_steps)} 步")
-
-    if not base_url:
-        logger.error("DSL generation failed: base_url is empty")
-        raise DslGenerationError(
-            "DSL 生成失败：缺少入口 URL（base_url 为空）。"
-            "请确认 AI 已从测试需求中提取到 entry_url_or_page 字段。"
-        )
-    if not merged_steps:
-        logger.error("DSL generation failed: no steps generated from %d segments", len(sorted_states))
-        # Distinguish network failures from element-collection failures so the
-        # user gets an accurate, actionable error message (Bug B).
-        network_keywords = (
-            "无法连接到 LLM API",
-            "DslGenerationNetworkError",
-            "WinError 10060",
-            "urlopen error",
-            "Connection",
-            "timeout",
-            "TimedOut",
-            "TimeoutError",
-            "Name or service not known",
-            "Temporary failure in name resolution",
-        )
-        network_failures = sum(
-            1 for w in all_warnings if any(kw in w for kw in network_keywords)
-        )
-        if all_warnings and network_failures == len(all_warnings):
-            raise DslGenerationNetworkError(
-                f"DSL 生成失败：所有 {len(sorted_states)} 个分段均因网络问题未能调用到 LLM API。"
-                f"已采集页面元素正常，问题在 LLM 接口连通性。"
-                f"首个错误：{all_warnings[0]}。"
-                f"请检查 AI_DSL_BASE_URL、网络代理或 DNS。"
-            )
-        raise DslGenerationError(
-            f"DSL 生成失败：所有 {len(sorted_states)} 个页面状态分段均未生成步骤。"
-            "请检查页面元素采集是否正常，或入口 URL 是否可达。"
-        )
-
-    case = DSLCase.model_validate(normalized_case)
-    generation_meta = GenerateDslMeta(
-        model=getattr(settings, "ai_dsl_flash_model", None) or settings.ai_dsl_model or "",
-        generation_mode="draft",
-        import_mode=payload.import_mode,
-        prompt_variant="baseline_draft",
-        context_profile="blank_request",
-        active_governance_focus_reasons=["context_mismatch", "bad_contracts"],
-        risk_flags=[],
-        base_url_source="ai_output" if base_url else "request",
-        base_url_backfilled=False,
-        repaired_invalid_actions=0,
-        removed_invalid_steps=0,
-        removed_invalid_contracts=0,
-        preserve_contracts_applied=False,
-        used_current_case_context=False,
-        used_current_steps_context=False,
-    )
-
-    return case, all_warnings, all_notes, generation_meta
-
-
-def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
-    normalized_base_url = base_url.strip().casefold()
-    normalized_model = model.strip().casefold()
-    return (
-        "open.bigmodel.cn" in normalized_base_url
-        or normalized_model.startswith("glm-")
-        or "deepseek" in normalized_model and "flash" not in normalized_model
-    )
-
-
-def _extract_message_content(payload: dict[str, Any]) -> str:
-    message = payload.get("choices", [{}])[0].get("message", {})
-    content = message.get("content", "")
-    if isinstance(content, str) and content.strip():
-        return content
-    if isinstance(content, list):
-        text_parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
-                text_parts.append(item["text"])
-        result = "\n".join(text_parts)
-        if result.strip():
-            return result
-    # Fallback to reasoning_content when thinking mode produces no content
-    reasoning = message.get("reasoning_content")
-    if isinstance(reasoning, str) and reasoning.strip():
-        logger.warning("LLM returned empty content, falling back to reasoning_content (%d chars)", len(reasoning))
-        return reasoning
-    if isinstance(content, str):
-        return content
-    return ""
-
+# ── JSON extraction ────────────────────────────────────────────────────────────
 
 def _extract_json_object(response_text: str) -> str:
     stripped = response_text.strip()
     if not stripped:
         return stripped
-
     if stripped.startswith("```"):
         first_newline = stripped.find("\n")
         if first_newline != -1:
@@ -1237,7 +337,6 @@ def _extract_json_object(response_text: str) -> str:
             depth -= 1
             if depth == 0 and start != -1:
                 return stripped[start : index + 1]
-
     return stripped
 
 
@@ -1248,42 +347,625 @@ def _format_validation_error(exc: ValidationError) -> str:
     return f"AI 返回的 DSL 不符合当前 schema：{location} {message}".strip()
 
 
-def _regen_segment(
-    *,
-    scenario_key: str,
-    page_state: str,
-    missing_targets: list[str],
-    a11y_nodes: list[dict[str, Any]],
-    base_url: str,
-) -> list[dict[str, Any]]:
-    """Regenerate steps for one page_state segment after preflight finds missing targets."""
-    node_lines: list[str] = []
-    for n in a11y_nodes:
-        node_lines.append(f"  - role={n['role']} name=\"{n['name']}\" id={n['node_id']}")
+def _looks_like_html_response(response_text: str) -> bool:
+    normalized = response_text.lstrip().casefold()
+    return normalized.startswith("<!doctype html") or normalized.startswith("<html")
 
-    regen_prompt = (
-        f"The previous DSL generation used targets that do not exist on the page:\n"
-        f"  {', '.join('\"' + t + '\"' for t in missing_targets)}\n\n"
-        f"These targets are NOT in the available element list below. "
-        f"Please regenerate the steps for page state {page_state}, choosing targets "
-        f"ONLY from the following element names:\n\n"
-        + "\n".join(node_lines) + "\n\n"
-        f"Return valid JSON: {{\"steps\": [...], \"base_url\": \"{base_url}\"}}"
+
+def _build_non_json_response_error(
+    *, endpoint: str, base_url: str, content_type: str, response_text: str,
+) -> str:
+    normalized_preview = re.sub(r"\s+", " ", response_text).strip()[:160]
+    hint = ""
+    if _looks_like_html_response(response_text):
+        hint = " 响应看起来像 HTML 页面，请检查 AI_DSL_BASE_URL 是否指向了真正的 OpenAI 兼容 API 根路径。"
+        if not base_url.rstrip("/").endswith("/v1"):
+            hint += " 当前 base_url 末尾不包含 /v1。"
+    return (
+        "AI DSL 生成接口返回了无法解析的非 JSON 响应。"
+        f" endpoint={endpoint}"
+        f" content_type={content_type or 'unknown'}"
+        f" preview={normalized_preview or '<empty>'}.{hint}"
     )
-    messages = [
-        {"role": "system", "content": "Regenerate DSL steps. Return JSON only. Choose targets from the provided list."},
-        {"role": "user", "content": regen_prompt},
+
+
+# ── LLM call ───────────────────────────────────────────────────────────────────
+
+def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
+    normalized_base_url = base_url.strip().casefold()
+    normalized_model = model.strip().casefold()
+    return (
+        "open.bigmodel.cn" in normalized_base_url
+        or normalized_model.startswith("glm-")
+        or "deepseek" in normalized_model
+    )
+
+
+def _extract_message_content(payload: dict[str, Any]) -> str:
+    message = payload.get("choices", [{}])[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                text_parts.append(item["text"])
+        result = "\n".join(text_parts)
+        if result.strip():
+            return result
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        logger.warning("LLM returned empty content, falling back to reasoning_content (%d chars)", len(reasoning))
+        return reasoning
+    if isinstance(content, str):
+        return content
+    return ""
+
+
+def _log_dsl_cache_usage(raw_payload: dict[str, Any]) -> None:
+    if not isinstance(raw_payload, dict):
+        return
+    usage = raw_payload.get("usage", {}) or {}
+    if not isinstance(usage, dict):
+        return
+    hit = usage.get("prompt_cache_hit_tokens", 0) or 0
+    miss = usage.get("prompt_cache_miss_tokens", 0) or 0
+    if hit or miss:
+        ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+        logger.info(
+            "DSL cache: hit=%d miss=%d ratio=%.0f%% total=%d completion=%d",
+            hit, miss, ratio,
+            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+        )
+
+
+def _call_llm(
+    *,
+    messages: list[dict[str, Any]],
+    api_key: str,
+    model: str,
+    base_url: str,
+    timeout_seconds: float,
+) -> str:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+    }
+    thinking_enabled = _should_enable_thinking_mode(base_url=base_url, model=model)
+    logger.info("DSL _call_llm: model=%s, thinking=%s, base_url=%s", model, thinking_enabled, base_url)
+    if thinking_enabled:
+        payload["thinking"] = {"type": "enabled"}
+        payload["max_tokens"] = 65536
+        payload["temperature"] = 0.0
+    else:
+        payload["temperature"] = 0.0
+        payload["response_format"] = {"type": "json_object"}
+
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    http_request = request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        response = _urlopen_with_retry(http_request, timeout_seconds=timeout_seconds)
+    except (URLError, socket.timeout, ConnectionError, TimeoutError) as exc:
+        logger.error("DSL LLM call failed (network): %s", exc)
+        raise DslGenerationNetworkError(
+            f"AI DSL 生成失败：无法连接到 LLM API。"
+            f"错误：{type(exc).__name__}: {exc}。"
+            f"请检查网络连通性、DNS 解析或代理设置。"
+        ) from exc
+    with response:
+        raw_body = response.read()
+        response_text = raw_body.decode("utf-8", errors="surrogateescape")
+        response_text = response_text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+        content_type = ""
+        if hasattr(response, "headers") and response.headers is not None:
+            content_type = response.headers.get("Content-Type", "")
+        try:
+            raw_payload = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise DslGenerationError(
+                _build_non_json_response_error(
+                    endpoint=endpoint, base_url=base_url,
+                    content_type=content_type, response_text=response_text,
+                )
+            ) from exc
+
+    _log_dsl_cache_usage(raw_payload)
+    return _extract_message_content(raw_payload)
+
+
+# ── Prompt building ────────────────────────────────────────────────────────────
+
+def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) -> str:
+    """Format a11y nodes as a flat list grouped by page state.
+
+    Produces a scannable list rather than a deeply indented tree.
+    """
+    if not a11y_nodes_by_state:
+        return "(no elements available)"
+
+    lines: list[str] = []
+    for state in sorted(a11y_nodes_by_state.keys()):
+        nodes = a11y_nodes_by_state[state]
+        if not nodes:
+            continue
+        lines.append(f"\n## Page state: {state}")
+        for n in nodes:
+            role = n.get("role", "unknown")
+            name = _clean_icon_chars(n.get("name", "") or "")
+            nid = n.get("node_id", "")
+            disabled = " [DISABLED]" if n.get("disabled") else ""
+            if name:
+                lines.append(f"- {role}=\"{name}\" id={nid}{disabled}")
+            else:
+                lines.append(f"- {role} id={nid}{disabled}")
+    return "\n".join(lines) if lines else "(no elements available)"
+
+
+def _parse_test_data_from_prompt(prompt_text: str) -> dict[str, str]:
+    """Extract key:value pairs from the test_data_or_account section of a prompt.
+
+    Handles formats like:
+      - 账号：Xjy13302412005@outlook.com，密码：123456
+      - email: test@example.com, password: 123456
+      - 1. 账号：xxx，密码：yyy
+    """
+    result: dict[str, str] = {}
+    # Find the test_data section.  Negative lookahead after 测试数据 excludes
+    # "测试数据需求" and "测试数据变量赋值" which appear in planning-agent draft
+    # prompts — those are NOT the actual test data values.
+    td_match = re.search(
+        r'(?:test_data_or_account|test data|测试数据(?!\s*(?:需求|变量)))[：:\s]*\n?'
+        r'(.+?)(?=\n\s*(?:scope_limits|范围限制|main_assertions|$)|\Z)',
+        prompt_text, re.DOTALL | re.IGNORECASE,
+    )
+    if not td_match:
+        return result
+
+    raw = td_match.group(1).strip()
+    # Split into entries: newlines, Chinese/English commas/semicolons, numbered items
+    entries = re.split(r"[\n,，;；]+", raw)
+    for entry in entries:
+        entry = re.sub(r'^\d+\.\s*', '', entry.strip())
+        if not entry:
+            continue
+        m = re.match(r"(.+?)[：:=]\s*(.+)", entry)
+        if m:
+            key = m.group(1).strip()
+            value = m.group(2).strip()
+            result[key] = value
+
+    return result
+
+
+def _match_test_data_to_contracts(
+    test_data: dict[str, str],
+    context_keys: list[str],
+) -> dict[str, str]:
+    """Match parsed test data labels to input_contract context_keys.
+
+    Uses Chinese→English key mapping and heuristic matching so that
+    "账号" → "email", "密码" → "password", etc.
+    """
+    _CHINESE_KEY_MAP: dict[str, list[str]] = {
+        "账号": ["email", "username", "login", "user", "account"],
+        "邮箱": ["email", "mail", "username"],
+        "邮件": ["email", "mail"],
+        "用户名": ["username", "user", "login", "email"],
+        "密码": ["password", "pass", "pwd"],
+        "口令": ["password", "pass", "pwd"],
+        "url": ["url", "link", "href"],
+        "网址": ["url", "link"],
+        "链接": ["url", "link"],
+        "品牌": ["brand"],
+        "筛选": ["filter"],
+    }
+
+    result: dict[str, str] = {}
+    if not test_data or not context_keys:
+        return result
+
+    for ck in context_keys:
+        ck_lower = ck.lower()
+
+        for label, value in test_data.items():
+            label_lower = label.lower()
+
+            # Direct match: context_key appears in or contains label
+            if ck_lower in label_lower or label_lower in ck_lower:
+                result[ck] = value
+                break
+
+            # Chinese key mapping
+            for cn_key, en_keys in _CHINESE_KEY_MAP.items():
+                if cn_key in label_lower and ck_lower in en_keys:
+                    result[ck] = value
+                    break
+            else:
+                continue
+            break
+        else:
+            # Heuristic fallbacks
+            if ("email" in ck_lower or "mail" in ck_lower):
+                for v in test_data.values():
+                    if "@" in v:
+                        result[ck] = v
+                        break
+            elif ("password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower):
+                for v in test_data.values():
+                    if "@" not in v and len(v) >= 4:
+                        result[ck] = v
+                        break
+
+    return result
+
+
+# ── Main entry point ───────────────────────────────────────────────────────────
+
+def generate_case_draft(
+    *,
+    payload: "GenerateDslRequest",
+    flow_steps: list[dict[str, Any]] | None = None,  # kept for backwards compat, unused
+    a11y_nodes_by_state: dict[str, list[dict[str, Any]]] | None = None,
+    scenario_variables: list[dict[str, Any]] | None = None,
+) -> "tuple[DSLCase, list[str], list[str], GenerateDslMeta]":
+    """Generate a DSL case with a single thinking-model call.
+
+    Replaces the old segmented flash-model pipeline.  One call with
+    thinking enabled produces higher quality DSLs, and the semantic
+    locator handles target resolution — no post-hoc repair needed.
+    """
+    settings = get_settings()
+    if not settings.enable_ai_dsl_generate:
+        raise DslGenerationConfigError(
+            "AI DSL 生成功能未开启。请设置 ENABLE_AI_DSL_GENERATE=true。"
+        )
+
+    api_key = settings.ai_dsl_api_key or ""
+    model = settings.ai_dsl_model or ""
+    base_url = settings.ai_dsl_base_url
+    if not api_key:
+        raise DslGenerationConfigError(
+            "AI DSL 生成失败：未配置 API Key。请设置 AI_DSL_API_KEY 环境变量。"
+        )
+    if not model:
+        raise DslGenerationConfigError(
+            "AI DSL 生成失败：未配置模型。请设置 AI_DSL_MODEL 环境变量。"
+        )
+
+    logger.info(
+        "DSL generation start: prompt_len=%d, base_url=%s, a11y_states=%d",
+        len(payload.prompt), payload.base_url,
+        len(a11y_nodes_by_state) if a11y_nodes_by_state else 0,
+    )
+
+    case_base_url = payload.base_url or None
+    all_warnings: list[str] = []
+    all_notes: list[str] = []
+
+    # ── Build element list ──
+    elements_text = _format_elements_flat(a11y_nodes_by_state or {})
+
+    # ── Build test data section ──
+    test_data_raw = _parse_test_data_from_prompt(payload.prompt)
+    test_data_lines = ""
+    if test_data_raw:
+        test_data_lines = "\n".join(f"  {k}: {v}" for k, v in test_data_raw.items())
+    test_data_section = f"\n## Test data\n{test_data_lines}\n" if test_data_lines else ""
+
+    # ── Build scenario variables section ──
+    variables_section = ""
+    if scenario_variables:
+        var_lines: list[str] = []
+        for v in scenario_variables:
+            if not isinstance(v, dict):
+                continue
+            ck = v.get("context_key", "")
+            desc = v.get("description", "")
+            if ck:
+                var_lines.append(f"  - ${{{ck}}}: {desc}")
+        if var_lines:
+            variables_section = "\n## Scenario variables\n" + "\n".join(var_lines) + "\n"
+
+    # ── Build concise system prompt ──
+    system_prompt = """You generate web testing DSL in JSON. Return {"name","description","base_url","input_contract","output_contract","steps"}.
+No markdown, no explanation — JSON only.
+
+## Rules (in priority order)
+
+1. **Targets**: Use EXACT visible text from the Available elements section. Copy it verbatim — do not invent names.
+   button "Signup / Login" → target="Signup / Login"
+   textbox "Email Address" → target="Email Address"
+   Never use XPath, CSS selectors, or DOM paths.
+
+2. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
+   goto / → click "Signup / Login" → wait_for "Login to your account" → input "Email Address"
+   The first step after goto / is a navigation click, not a form input.
+
+3. **Login**: The DSL must be self-contained. Include all login steps (input email + password + click Login).
+   Do NOT assume the user is already logged in. Use ${var} for credentials.
+
+4. **Wait after actions**: After navigation clicks or form submits, add wait_for for a confirmation element.
+   click "Add to cart" → wait_for "Added!" → next step
+   click "Products" → wait_for "ALL PRODUCTS" → next step
+
+5. **Input trigger**: When changing a value that requires keyboard activation (quantity, search),
+   add trigger="Enter" on the input step. The executor handles the keypress.
+   input target="quantity" value="2" trigger="Enter"
+
+6. **Modify-then-assert**: When changing a value, input → wait_for update → assert.
+   Do NOT assert a new value without first inputting it.
+
+7. **Capture-then-assert**: capture_text stores element text into a variable. The FOLLOWING
+   assert_text must verify the SAME element text appears elsewhere (e.g. cart page).
+   Pattern: capture_text target="Product Name A" context_key="product_a_name"
+            → later → assert_text target="cart row element" value="${product_a_name}"
+   CRITICAL: ${var} can ONLY appear in the VALUE field, NEVER in the target field.
+   The target must always be a real element locator (text, CSS, role).
+
+8. **Form coverage**: Generate a step for EVERY form field mentioned in the flow.
+   Dropdown: input action. Checkbox/radio: click action.
+
+9. **Field rules**:
+   - goto / assert_url_contains: value=URL, NO target
+   - click / wait_for: target only, NO value
+   - input / assert_text: BOTH target AND value required
+   - capture_text: target + context_key (snake_case variable name)
+   - **CRITICAL**: ${var} placeholders can ONLY be used in the VALUE field of input/assert_text.
+     NEVER use ${var} as a target — target must be a real element locator.
+
+10. **input_contract**: Define every ${var} used in steps. Include context_key AND value.
+    Example: {"context_key":"email","value":"test@example.com","value_type":"string","name":"Email","required":true}
+    CRITICAL: Get the VALUE from the "## Test data" section or the scenario's
+    test_data_or_account text. Do NOT use scope_limits, assertion, or flow text as values.
+
+Return ONLY the JSON object."""
+
+    # ── Build user prompt ──
+    user_prompt_parts = [
+        f"Generate a complete, executable web test DSL for this scenario:\n\n{payload.prompt.strip()}\n",
+        f"## Available elements\n{elements_text}",
     ]
-    response = _call_dsl_flash_llm(
-        messages=messages,
-        settings=get_settings(),
-        timeout_seconds=60.0,
+    if test_data_section:
+        user_prompt_parts.append(test_data_section)
+    if variables_section:
+        user_prompt_parts.append(variables_section)
+    user_prompt_parts.append(
+        f"\nBase URL: {case_base_url or '(use full URLs in goto steps)'}\n"
+        "\nGenerate the complete DSL now. Include ALL steps — navigation, login, interactions, assertions."
     )
-    cleaned = _extract_json_object(response)
-    raw = json.loads(cleaned)
+
+    user_prompt = "\n".join(user_prompt_parts)
+
+    # ── Call LLM ──
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    logger.info("DSL prompt lengths: system=%d, user=%d", len(system_prompt), len(user_prompt))
+
+    try:
+        response_text = _call_llm(
+            messages=messages,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout_seconds=max(60.0, getattr(settings, "ai_dsl_timeout_ms", 180000) / 1000),
+        )
+    except DslGenerationError:
+        raise
+    except Exception as exc:
+        logger.error("DSL LLM call failed: %s", exc)
+        raise DslGenerationNetworkError(
+            f"AI DSL 生成失败：无法连接到 LLM API。错误：{type(exc).__name__}: {exc}。"
+        ) from exc
+
+    cleaned = _extract_json_object(response_text)
+    logger.debug("DSL response length: %d", len(cleaned))
+
+    try:
+        raw = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise DslGenerationError(
+            f"AI 返回了非法的 JSON。preview: {cleaned[:300]}"
+        ) from exc
+
     if not isinstance(raw, dict):
-        raise DslGenerationError(f"Regen segment {page_state}: response is not a JSON object")
-    return raw.get("steps", raw.get("data", {}).get("steps", [])) or []
+        raise DslGenerationError("AI 返回的不是 JSON 对象")
+
+    # Unwrap common wrapper keys (case/data/result/draft)
+    for wrapper_key in _CASE_WRAPPER_KEYS:
+        if wrapper_key in raw and isinstance(raw[wrapper_key], dict):
+            raw = raw[wrapper_key]
+            break
+
+    # Extract steps from various possible locations
+    steps_result: list[dict[str, Any]] = []
+    for key in ("steps", "items", "list"):
+        if key in raw and isinstance(raw[key], list):
+            steps_result = raw[key]
+            break
+    if not steps_result and isinstance(raw.get("value"), list):
+        steps_result = raw["value"]
+    if not steps_result:
+        # Try to find any array value at top level
+        for val in raw.values():
+            if isinstance(val, list) and val and isinstance(val[0], dict) and "action" in val[0]:
+                steps_result = val
+                break
+
+    # ── Minimal normalization ──
+    logger.info("Starting normalization: %d raw steps", len(steps_result))
+    normalized_steps: list[dict[str, Any]] = []
+    for s in steps_result:
+        normalized = _normalize_step(s)
+        if normalized is not None:
+            fixed = _fix_variable_misuse(normalized, all_warnings)
+            if fixed is not None:
+                normalized_steps.append(fixed)
+    logger.info("Normalization complete: %d steps, %d warnings", len(normalized_steps), len(all_warnings))
+
+    if len(normalized_steps) != len(steps_result):
+        logger.info("Normalization dropped %d malformed steps", len(steps_result) - len(normalized_steps))
+
+    # ── Rewrite step_index ──
+    for i, s in enumerate(normalized_steps):
+        s["step_index"] = i + 1
+
+    # ── Process input_contract ──
+    input_contract_raw = raw.get("input_contract", []) or []
+    if not isinstance(input_contract_raw, list):
+        input_contract_raw = []
+
+    # Extract context_keys from the contract to match test data
+    context_keys_from_contract = [
+        c.get("context_key", "") for c in input_contract_raw
+        if isinstance(c, dict) and c.get("context_key")
+    ]
+
+    # Match test data to contract context_keys
+    matched_values = _match_test_data_to_contracts(test_data_raw, context_keys_from_contract)
+
+    # Build input_contract with values filled in
+    input_contract: list[dict[str, Any]] = []
+    for c in input_contract_raw:
+        if not isinstance(c, dict):
+            continue
+        ck = c.get("context_key") or c.get("contextKey") or ""
+        if not ck:
+            continue
+        entry: dict[str, Any] = {
+            "name": c.get("name") or c.get("label") or c.get("title") or ck,
+            "context_key": ck,
+            "value_type": _VALUE_TYPE_ALIASES.get(
+                (c.get("value_type") or c.get("type") or "string").lower(), "string",
+            ),
+            "required": c.get("required", c.get("is_required", c.get("isRequired", True))),
+            "description": c.get("description") or c.get("desc") or None,
+        }
+        # Fill value from matched test data, or keep the LLM-provided value
+        if ck in matched_values:
+            entry["value"] = matched_values[ck]
+        elif c.get("value"):
+            entry["value"] = str(c["value"])
+        input_contract.append(entry)
+
+    # If LLM didn't generate contracts but steps reference ${vars}, auto-create them
+    if not input_contract:
+        import re as _re
+        var_pattern = _re.compile(r"\$\{(\w+)\}")
+        seen_vars: set[str] = set()
+        for s in normalized_steps:
+            for field in ("value", "target"):
+                text = s.get(field) or ""
+                if isinstance(text, str):
+                    for match in var_pattern.finditer(text):
+                        seen_vars.add(match.group(1))
+        for var in sorted(seen_vars):
+            val = matched_values.get(var, "")
+            input_contract.append({
+                "name": var,
+                "context_key": var,
+                "value_type": "string",
+                "required": True,
+                "value": val,
+            })
+            if not val:
+                logger.warning("Variable '%s' has no resolved value; ${%s} will not be substituted at runtime", var, var)
+
+    # ── Process output_contract ──
+    output_contract_raw = raw.get("output_contract", []) or []
+    if not isinstance(output_contract_raw, list):
+        output_contract_raw = []
+
+    output_contract: list[dict[str, Any]] = []
+    for c in output_contract_raw:
+        if not isinstance(c, dict):
+            continue
+        ck = c.get("context_key") or c.get("contextKey") or c.get("key") or ""
+        if not ck:
+            continue
+        entry: dict[str, Any] = {
+            "name": c.get("name") or c.get("label") or c.get("title") or ck,
+            "context_key": ck,
+            "value_type": _VALUE_TYPE_ALIASES.get(
+                (c.get("value_type") or c.get("valueType") or c.get("type") or "string").lower(), "string",
+            ),
+            "source": _OUTPUT_SOURCE_ALIASES.get(
+                (c.get("source") or c.get("value_from") or c.get("valueFrom") or "").lower(), None,
+            ),
+            "description": c.get("description") or c.get("desc") or None,
+        }
+        output_contract.append(entry)
+
+    # If LLM didn't generate output contracts but steps use capture_text, auto-create them
+    if not output_contract:
+        for s in normalized_steps:
+            if s.get("action") == "capture_text" and s.get("context_key"):
+                output_contract.append({
+                    "name": s["context_key"],
+                    "context_key": s["context_key"],
+                    "value_type": "string",
+                    "description": None,
+                })
+
+    # ── Build case ──
+    normalized_case: dict[str, Any] = {
+        "name": raw.get("name") or payload.prompt.strip()[:200] or "AI 生成用例",
+        "description": raw.get("description") or payload.prompt.strip()[:500],
+        "base_url": raw.get("base_url") or case_base_url,
+        "input_contract": input_contract,
+        "output_contract": output_contract,
+        "steps": normalized_steps,
+    }
+
+    if not normalized_case.get("base_url"):
+        raise DslGenerationError(
+            "DSL 生成失败：缺少入口 URL（base_url 为空）。"
+            "请确认 AI 已从测试需求中提取到 entry_url_or_page 字段。"
+        )
+    if not normalized_case["steps"]:
+        raise DslGenerationError(
+            "DSL 生成失败：未生成任何步骤。请检查页面元素采集是否正常，或入口 URL 是否可达。"
+        )
+
+    case = DSLCase.model_validate(normalized_case)
+
+    generation_meta = GenerateDslMeta(
+        model=model,
+        generation_mode="draft",
+        import_mode=payload.import_mode,
+        prompt_variant="baseline_draft",
+        context_profile="blank_request",
+        active_governance_focus_reasons=["context_mismatch", "bad_contracts"],
+        risk_flags=[],
+        base_url_source="ai_output" if case.base_url else "request",
+        base_url_backfilled=False,
+        repaired_invalid_actions=0,
+        removed_invalid_steps=0,
+        removed_invalid_contracts=0,
+        preserve_contracts_applied=False,
+        used_current_case_context=False,
+        used_current_steps_context=False,
+    )
+
+    all_notes.append(f"单次生成：{len(normalized_steps)} 步，{len(input_contract)} 个输入变量")
+
+    logger.info("DSL generation complete: %d steps, %d input_contracts", len(normalized_steps), len(input_contract))
+    return case, all_warnings, all_notes, generation_meta
+
+
+# ── Public API (compatibility wrappers) ────────────────────────────────────────
+
 def resolve_prompt_version(payload: GenerateDslRequest) -> str:
     if payload.retry_reason_code is None:
         return AI_DSL_PROMPT_VERSION
@@ -1301,23 +983,6 @@ def resolve_generation_mode(
     return "strict_steps_only" if active_settings.ai_dsl_strict_mode else "draft"
 
 
-def _append_unique_lines(system_lines: list[str], extra_lines: list[str]) -> None:
-    for line in extra_lines:
-        if line not in system_lines:
-            system_lines.append(line)
-
-
-def _collect_reason_strategy_lines(
-    reasons: list[DslGenerationRejectionReasonCode],
-) -> list[str]:
-    lines: list[str] = []
-    for reason in reasons:
-        for line in REJECTION_REASON_STRATEGIES.get(reason, []):
-            if line not in lines:
-                lines.append(line)
-    return lines
-
-
 def resolve_generation_profile(
     *,
     payload: GenerateDslRequest,
@@ -1332,12 +997,13 @@ def resolve_generation_profile(
     return "baseline_draft", "blank_request"
 
 
-def _normalize_string(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
+# ── Governance constants ───────────────────────────────────────────────────────
 
-
-# ── Governance constants (retained for DB schema compatibility) ─
 DEFAULT_GOVERNANCE_REJECTION_REASONS: tuple = ("context_mismatch", "bad_contracts")
 SETTLED_GOVERNANCE_REJECTION_REASONS: tuple = ("wrong_actions", "invalid_structure")
+
+
+# ── Backwards compatibility alias ──────────────────────────────────────────────
+# Old callers import generate_segmented_case_draft; redirect to new function.
+
+generate_segmented_case_draft = generate_case_draft

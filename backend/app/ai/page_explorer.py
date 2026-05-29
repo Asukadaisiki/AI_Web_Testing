@@ -341,9 +341,17 @@ class BrowserSessionManager:
             entry = cls._sessions.get(session_id)
             if entry is not None:
                 try:
-                    entry["page"].evaluate("1")  # health check
-                    return entry["context"], entry["page"]
-                except Exception:
+                    page = entry["page"]
+                    page.evaluate("1")  # health check
+                    # If page is stuck on about:blank after being used, reset it
+                    if page.url == "about:blank" and entry.get("used", False):
+                        logger.info("BrowserSessionManager: session %d stuck on about:blank, recreating", session_id)
+                        cls._close_locked(session_id)
+                    else:
+                        entry["used"] = True
+                        return entry["context"], page
+                except Exception as e:
+                    logger.warning("BrowserSessionManager: session %d health check failed: %s", session_id, e)
                     cls._close_locked(session_id)
 
             pw = sync_playwright()
@@ -362,7 +370,9 @@ class BrowserSessionManager:
                 "context": context,
                 "page": page,
                 "created_at": _time_module.monotonic(),
+                "used": False,
             }
+            logger.info("BrowserSessionManager: created new session %d", session_id)
             return context, page
 
     @classmethod
@@ -1179,14 +1189,30 @@ def _extract_text_from_css_target(target: str) -> str | None:
     return None
 
 
-def _resolve_step_locator(page, target: str, *, kind: str):
-    """Resolve a step target to a Playwright locator using the full semantic chain.
+def _resolve_step_locator(page, target: str, *, kind: str, skip_vlm: bool = False):
+    """Resolve a step target to a Playwright locator using the semantic chain.
 
-    Uses the same locator resolution as the test runner:
-    semantic candidates → accessibility tree → VLM fallback.
+    When *skip_vlm* is True, only semantic resolution is attempted (no VLM
+    fallback).  This is used during flow exploration to avoid slow VLM calls.
     Returns a strict (unique) locator or None if not found.
     """
     from app.locators import resolve_with_fallback, LocatorResolutionError
+    from app.locators.semantic import resolve_semantic_locator
+
+    if skip_vlm:
+        try:
+            resolved = resolve_semantic_locator(
+                page, target,
+                prefer_input=(kind == "input"),
+                require_visible=True,
+                require_enabled=(kind == "input"),
+            )
+            return resolved.locator
+        except LocatorResolutionError:
+            pass
+        except Exception:
+            pass
+        return None
 
     try:
         resolved = resolve_with_fallback(
@@ -1395,12 +1421,23 @@ def _collect_flow_a11y(
                         continue
                     url_str = urljoin(base_url, url_str.lstrip("/"))
                 try:
+                    logger.info("_collect_flow_a11y: navigating to %s", url_str)
                     page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
                     try:
                         page.wait_for_load_state("networkidle", timeout=timeout_ms)
                     except Exception:
                         pass
+                    # Check if page actually loaded (not stuck on about:blank)
+                    if page.url == "about:blank":
+                        logger.warning("_collect_flow_a11y: page stuck on about:blank after goto %s", url_str)
+                        results.append({
+                            "url": url_str, "page_state": "ERROR",
+                            "a11y_nodes": [], "element_count": 0,
+                            "error": "页面未能加载（停留在 about:blank），可能是网站无法访问或被反爬虫机制阻止",
+                        })
+                        continue
                 except Exception as exc:
+                    logger.warning("_collect_flow_a11y: goto failed for %s: %s", url_str, exc)
                     results.append({
                         "url": url_str, "page_state": "ERROR",
                         "a11y_nodes": [], "element_count": 0,
@@ -1474,7 +1511,7 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
         if not act:
             continue
         if act in ("type", "fill", "input"):
-            loc = _resolve_step_locator(page, target, kind="input")
+            loc = _resolve_step_locator(page, target, kind="input", skip_vlm=True)
             if loc is not None:
                 try:
                     tag = loc.evaluate("el => el.tagName.toLowerCase()")
@@ -1490,7 +1527,12 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
                     loc.fill(str(value))
             continue
         if act in ("click", "press", "tap"):
-            loc = _resolve_step_locator(page, target, kind="click")
+            loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
+            if loc is None:
+                # Locator not found — may be in a modal/overlay that appeared
+                # after a previous action. Wait briefly and retry once.
+                page.wait_for_timeout(1500)
+                loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
             if loc is not None:
                 try:
                     tag = loc.evaluate("el => el.tagName.toLowerCase()")
@@ -1501,6 +1543,7 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
                         "Locator resolved to <%s> for click target=%r, trying fallback",
                         tag, target,
                     )
+                    page.wait_for_timeout(1000)
                     loc = _resolve_click_fallback(page, target)
                 if loc is not None:
                     result = click_with_precheck(page, loc)
@@ -1510,6 +1553,11 @@ def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
                             target, result.recovery_strategy,
                             str(result.original_error)[:200] if result.original_error else "none",
                         )
+            else:
+                logger.warning(
+                    "Flow click target=%r not found after retry, skipping",
+                    target,
+                )
             continue
         if act == "wait":
             # Wait for a specified number of milliseconds (target is the duration)
