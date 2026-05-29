@@ -2591,12 +2591,38 @@ def _build_draft_prompt(
     # Build test data section with full detail
     test_data = requirements.test_data_or_account
     data_section = ""
+    variable_assignments = ""
     if test_data:
+        # Parse key:value pairs from the raw test_data text for explicit variable assignment
+        import re as _re
+        _CN_TO_EN: dict[str, str] = {
+            "账号": "email", "邮箱": "email", "邮件": "email", "用户名": "username",
+            "密码": "password", "口令": "password",
+            "品牌": "brand", "筛选品牌": "brand", "筛选": "filter",
+        }
+        _parsed_assignments: list[str] = []
+        for _entry in _re.split(r"[\n,，;；]+", test_data):
+            _entry = _re.sub(r'^\d+\.\s*', '', _entry.strip())
+            _m = _re.match(r"(.+?)[：:=]\s*(.+)", _entry) if _entry else None
+            if not _m:
+                continue
+            _label = _m.group(1).strip()
+            _value = _m.group(2).strip()
+            _en_key = _CN_TO_EN.get(_label, _label)
+            _parsed_assignments.append(f"  {_label} → context_key=\"{_en_key}\", value=\"{_value}\"")
+
         data_section = (
-            f"\n\n测试数据（必须为提到的每个字段生成对应的 input/click 步骤）：\n{test_data}\n"
+            f"\n\ntest_data_or_account:\n{test_data}\n"
             "注意：上述测试数据中提到的每个字段（如下拉框、日期选择器、复选框）都必须在 steps 中有对应操作。"
             "下拉框用 input action（target 为字段标签，value 为选项文本），复选框用 click action（target 为复选框标签）。"
         )
+        if _parsed_assignments:
+            variable_assignments = (
+                "\n\n【测试数据变量赋值 — input_contract 每个 entry 的 context_key 和 value 必须严格使用以下值】\n"
+                "以下是你必须在 input_contract 中使用的确切值。禁止使用 test@automationexercise.com、password123 或任何其他编造的值。\n"
+                + "\n".join(_parsed_assignments)
+                + "\n"
+            )
 
     return (
         f"请基于测试规划生成 DSL 草案。场景：{scenario_title}。"
@@ -2616,6 +2642,7 @@ def _build_draft_prompt(
         "- 每条 wait_for 前必须有对应的 click/goto 把页面带到正确状态"
         "如果已获取到页面元素清单，请严格按照元素的实际可见文本、label、placeholder 或 id 作为 target（纯文本字符串，如 \"Email Address\"），不要构造 CSS 选择器格式。step 的 value 字段如涉及测试数据，必须用 ${context_key} 格式引用 input_contract 变量，不要硬编码。"
         "必须为流程和测试数据中提到的每个表单字段生成对应步骤，不得遗漏任何字段（包括下拉框、日期选择器、复选框等）。"
+        f"{variable_assignments}"
         f"{data_section}"
         f"{page_elements_section}"
         "\n\n重要：所有使用 ${variable_name} 格式引用的变量，必须先在 input_contract 中定义。"

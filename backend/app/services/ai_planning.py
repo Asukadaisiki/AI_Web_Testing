@@ -1339,166 +1339,89 @@ def _build_input_values_from_session(
     requirements_json: dict[str, Any],
     dsl_case_jsons: list[dict[str, Any] | None],
 ) -> dict[str, str]:
-    """Auto-resolve input_values from session's test data and draft contracts.
+    """Read input_values from contract defaults, with heuristic fallback for legacy cases.
 
-    Parses ``test_data_or_account`` for patterns like "key：value" or "key: value",
-    then matches against draft ``input_contract`` context_keys using fuzzy heuristics.
-
-    Supports:
-    - English keys: "email: test@example.com", "password: 123456"
-    - Chinese keys: "账号：test@example.com", "密码：123456"
-    - Mixed formats: "账号: test@example.com"
+    New DSL generator populates input_contract[].value directly from the user's
+    test data, so this function primarily just reads those values.  The heuristic
+    parsing of test_data_or_account text is kept as a fallback for old drafts.
     """
-    import re
     result: dict[str, str] = {}
-    raw = (requirements_json.get("test_data_or_account") or "").strip()
-    if not raw:
-        logger.debug("[_build_input_values] test_data_or_account is empty")
+
+    # Primary: read values directly from contract defaults (new generator path)
+    for case_json in dsl_case_jsons:
+        if not case_json:
+            continue
+        for ic in case_json.get("input_contract", []) or []:
+            key = (ic.get("context_key") or "").strip()
+            val = ic.get("value")
+            if key and val is not None and str(val).strip():
+                result[key] = str(val).strip()
+
+    if result:
+        logger.info("[_build_input_values] Read %d values from contract defaults: %s",
+                     len(result), {k: v[:10] for k, v in result.items()})
         return result
 
-    # Collect all context_keys from input_contracts
+    # Legacy fallback: parse test_data_or_account text for old drafts
+    import re
+    raw = (requirements_json.get("test_data_or_account") or "").strip()
+    if not raw:
+        return result
+
+    # Collect context_keys from contracts (for matching)
     context_keys: set[str] = set()
     for case_json in dsl_case_jsons:
         if not case_json:
             continue
         for ic in case_json.get("input_contract", []) or []:
-            key = ic.get("context_key") or ""
+            key = (ic.get("context_key") or "").strip()
             if key:
                 context_keys.add(key)
 
-    logger.info(
-        "[_build_input_values] raw='%s', context_keys=%s",
-        raw[:100] if len(raw) > 100 else raw,
-        context_keys,
-    )
-
-    # Parse test_data: split on common delimiters (newline, comma, semicolon, Chinese comma)
-    entries = re.split(r"[\n,，;；]", raw)
-    # Also try to split on newlines first
-    if "\n" in raw:
-        entries = raw.split("\n")
-
-    pairs: dict[str, str] = {}
-    for entry in entries:
-        entry = entry.strip()
-        if not entry:
-            continue
-        # Pattern: "label：value" or "label: value" or "label=value"
-        m = re.match(r"(.+?)[：:=]\s*(.+)", entry)
-        if m:
-            key = m.group(1).strip()
-            value = m.group(2).strip()
-            pairs[key] = value
-            logger.debug("[_build_input_values] parsed pair: '%s' -> '%s'", key, value[:20] if len(value) > 20 else value)
-        else:
-            # Single value: try to match to a context_key by type
-            if re.match(r"[\w.+-]+@[\w-]+\.[\w.]+", entry):
-                pairs["email"] = entry
-                logger.debug("[_build_input_values] detected email: '%s'", entry)
-            elif entry.startswith("http"):
-                pairs["url"] = entry
-                logger.debug("[_build_input_values] detected url: '%s'", entry)
-            elif len(entry) >= 4:
-                pairs.setdefault("_unmatched", entry)
-
-    logger.info("[_build_input_values] parsed pairs: %s", {k: v[:10] for k, v in pairs.items()})
-
-    # Chinese-to-English key mapping for common patterns
-    chinese_key_mapping = {
-        "账号": ["email", "username", "login", "user", "account"],
-        "邮箱": ["email", "mail", "username"],
-        "用户名": ["username", "user", "login", "email"],
-        "密码": ["password", "pass", "pwd"],
+    # Simple key:value pair extraction
+    _CN_KEY_MAP: dict[str, list[str]] = {
+        "账号": ["email", "username", "login"], "邮箱": ["email", "mail"],
+        "用户名": ["username", "user", "login"], "密码": ["password", "pass", "pwd"],
         "口令": ["password", "pass", "pwd"],
-        "url": ["url", "link", "href"],
-        "网址": ["url", "link"],
-        "链接": ["url", "link"],
     }
-
-    # Match parsed pairs to context_keys
-    if not context_keys:
-        # If no context_keys from contracts, try to infer from Chinese keys
-        logger.info("[_build_input_values] No context_keys from contracts, inferring from Chinese keys")
-        for label, value in pairs.items():
-            label_lower = label.lower()
-            for cn_key, en_keys in chinese_key_mapping.items():
-                if cn_key in label_lower:
-                    for en_key in en_keys:
-                        if en_key not in result:
-                            result[en_key] = value
-                            logger.info("[_build_input_values] Inferred '%s' from Chinese key '%s'", en_key, label)
-                            break
-                    break
-        return result
+    pairs: dict[str, str] = {}
+    for entry in re.split(r"[\n,，;；]+", raw):
+        entry = re.sub(r'^\d+\.\s*', '', entry.strip())
+        m = re.match(r"(.+?)[：:=]\s*(.+)", entry) if entry else None
+        if m:
+            pairs[m.group(1).strip()] = m.group(2).strip()
+        elif entry and "@" in entry:
+            pairs.setdefault("email", entry)
 
     for ck in context_keys:
         ck_lower = ck.lower()
-        matched = False
-
         for label, value in pairs.items():
             label_lower = label.lower()
-
-            # Direct match: context_key in label
             if ck_lower in label_lower or label_lower in ck_lower:
                 result[ck] = value
-                matched = True
-                logger.info("[_build_input_values] Direct match: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
                 break
-
-            # Chinese key match: map Chinese label to English context_key
-            for cn_key, en_keys in chinese_key_mapping.items():
+            for cn_key, en_keys in _CN_KEY_MAP.items():
                 if cn_key in label_lower and ck_lower in en_keys:
                     result[ck] = value
-                    matched = True
-                    logger.info("[_build_input_values] Chinese key match: '%s' -> '%s' (via '%s')", ck, value[:20] if len(value) > 20 else value, cn_key)
                     break
-            if matched:
-                break
+            else:
+                continue
+            break
+        else:
+            if "email" in ck_lower or "mail" in ck_lower:
+                for v in pairs.values():
+                    if "@" in v:
+                        result[ck] = v
+                        break
+            elif "password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower:
+                for v in pairs.values():
+                    if "@" not in v and len(v) >= 4:
+                        result[ck] = v
+                        break
 
-        if matched:
-            continue
-
-        # Type heuristic: email
-        if ("email" in ck_lower or "mail" in ck_lower or "username" in ck_lower):
-            for label, value in pairs.items():
-                if "@" in value:
-                    result[ck] = value
-                    matched = True
-                    logger.info("[_build_input_values] Email heuristic: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
-                    break
-        # Type heuristic: password
-        if not matched and ("password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower):
-            for label, value in pairs.items():
-                label_lower = label.lower()
-                # Look for password-related labels or non-email values
-                if ("密码" in label_lower or "password" in label_lower or "pass" in label_lower or
-                    ("@" not in value and len(value) >= 4)):
-                    result[ck] = value
-                    matched = True
-                    logger.info("[_build_input_values] Password heuristic: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
-                    break
-
-        # Fallback: use first available value that looks like a credential
-        if not matched:
-            for _, value in pairs.items():
-                if "@" in value and ("email" in ck_lower or "login" in ck_lower or "user" in ck_lower):
-                    result[ck] = value
-                    logger.info("[_build_input_values] Fallback email: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
-                    break
-                if len(value) >= 4 and ("password" in ck_lower or "pass" in ck_lower or "pwd" in ck_lower):
-                    result[ck] = value
-                    logger.info("[_build_input_values] Fallback password: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
-                    break
-
-        # Last resort: assign the first string value that matches length heuristic
-        if ck not in result:
-            for _, value in pairs.items():
-                if len(value) >= 3 and value not in result.values():
-                    result[ck] = value
-                    logger.info("[_build_input_values] Last resort: '%s' -> '%s'", ck, value[:20] if len(value) > 20 else value)
-                    break
-
-    logger.info("[_build_input_values] final result: %s", {k: v[:10] for k, v in result.items()})
+    if result:
+        logger.info("[_build_input_values] Legacy fallback resolved: %s",
+                     {k: v[:10] for k, v in result.items()})
     return result
 
 
