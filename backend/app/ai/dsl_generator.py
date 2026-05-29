@@ -234,6 +234,18 @@ def _normalize_llm_step(step: Any) -> dict[str, Any] | None:
     return step
 
 
+def _clean_icon_chars(text: str) -> str:
+    """Remove Font Awesome / icon font characters from text.
+
+    Icon fonts often inject Unicode Private Use Area (PUA) characters like
+    \\uf023 (lock icon) before the actual text.  These break exact/partial
+    matching between DSL targets and a11y node names.
+    """
+    # Remove PUA characters: U+E000-U+F8FF (BMP PUA) and U+F0000-U+FFFFD (SMP PUA)
+    import re
+    return re.sub(r'[-\U000f0000-\U000ffffd]', '', text).strip()
+
+
 def _repair_target_format(step: dict[str, Any], a11y_nodes: list[dict[str, Any]]) -> dict[str, Any]:
     """Repair target format: convert plain text to a11y tree format.
 
@@ -251,7 +263,8 @@ def _repair_target_format(step: dict[str, Any], a11y_nodes: list[dict[str, Any]]
     # Try to find matching a11y node
     target_lower = target.strip().lower()
     for node in a11y_nodes:
-        name = (node.get("name") or "").strip()
+        raw_name = (node.get("name") or "").strip()
+        name = _clean_icon_chars(raw_name)
         role = (node.get("role") or "").strip()
         if not name or not role:
             continue
@@ -266,7 +279,8 @@ def _repair_target_format(step: dict[str, Any], a11y_nodes: list[dict[str, Any]]
 
     # Try partial match
     for node in a11y_nodes:
-        name = (node.get("name") or "").strip()
+        raw_name = (node.get("name") or "").strip()
+        name = _clean_icon_chars(raw_name)
         role = (node.get("role") or "").strip()
         if not name or not role:
             continue
