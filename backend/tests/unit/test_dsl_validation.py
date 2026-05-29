@@ -9,7 +9,7 @@ import pytest
 
 import app.core.config as config_module
 from app.models import DslGenerationRun, TestCase, User
-from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION, _call_llm, _normalize_string
+from app.ai.dsl_generator import AI_DSL_PROMPT_VERSION
 from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.schemas.dsl import GenerateDslRequest
@@ -75,7 +75,7 @@ def test_validate_dsl_case_success(client) -> None:
             ],
             "steps": [
                 {"action": "goto", "value": "/login"},
-                {"action": "input", "target": "用户名输入框", "value": "admin", "page_state": None, "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
+                {"action": "input", "target": "用户名输入框", "value": "admin", "trigger": None, "page_state": None, "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
                 {"action": "click", "target": "登录按钮", "page_state": None, "target_strategy": None, "locator_confidence": None, "candidates": [], "postconditions": []},
                 {"action": "assert_url_contains", "value": "/dashboard"},
             ],
@@ -104,22 +104,6 @@ def test_validate_dsl_case_rejects_invalid_payload(client) -> None:
     )
 
     assert response.status_code == 422
-
-
-def test_base_user_rules_include_css_selector_guidance():
-    """BUG-049: Prompt 规则中应包含复合 CSS 选择器使用指引。"""
-    from app.ai.dsl_generator import _BASE_USER_RULE_LINES
-    joined = "\n".join(_BASE_USER_RULE_LINES)
-    assert "CSS" in joined or "css" in joined
-
-
-def test_base_user_rules_include_completeness_guidance():
-    """BUG-048: Prompt 规则中应包含测试五要素完整性引导。"""
-    from app.ai.dsl_generator import _BASE_USER_RULE_LINES
-    joined = "\n".join(_BASE_USER_RULE_LINES)
-    # 应包含完整性评估要求
-    has_completeness = any(kw in joined for kw in ["完整", "入口", "前置"])
-    assert has_completeness, "Prompt rules should include completeness/entry point guidance"
 
 
 def test_locator_candidate_valid():

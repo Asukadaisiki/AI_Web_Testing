@@ -116,6 +116,7 @@ class InputStep(DSLModel):
     action: Literal["input"]
     target: str = Field(min_length=1, description="Semantic or explicit locator.")
     value: str = Field(description="Input text.")
+    trigger: str | None = Field(default=None, description="Key to press after input (e.g. Enter for quantity/search fields).")
     page_state: str | None = Field(default=None, description="Page state this step belongs to (S0, S1, …).")
     target_strategy: TargetStrategy | None = Field(default=None, description="Locator strategy hint.")
     locator_confidence: LocatorConfidence | None = Field(

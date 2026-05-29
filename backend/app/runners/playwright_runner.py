@@ -295,7 +295,9 @@ def _execute_step_with_candidates(
                     locator.select_option(label=input_value)
                 else:
                     locator.fill(input_value)
-                locator.press("Enter")  # trigger JS change handlers for quantity/price updates
+                step_trigger = getattr(step, "trigger", None)
+                if step_trigger:
+                    locator.press(step_trigger)
             elif step.action == "wait_for":
                 locator.wait_for(state="visible", timeout=step.timeout_ms)
             elif step.action == "assert_text":
@@ -524,6 +526,14 @@ def execute_case_with_playwright(
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_default_timeout(150_000)  # 2.5 min per operation
+
+        # Clear all storage to avoid residual login sessions from previous runs
+        page.context.clear_cookies()
+        try:
+            page.evaluate("localStorage.clear(); sessionStorage.clear();")
+        except Exception:
+            pass
+
         console_buffer: list[ConsoleEvent] = []
         network_buffer: list[NetworkEvent] = []
         page.on("console", lambda message: _capture_console_event(message, console_buffer))
@@ -838,6 +848,14 @@ def execute_case_with_playwright_streaming(
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_default_timeout(150_000)  # 2.5 min per operation
+
+        # Clear all storage to avoid residual login sessions from previous runs
+        page.context.clear_cookies()
+        try:
+            page.evaluate("localStorage.clear(); sessionStorage.clear();")
+        except Exception:
+            pass
+
         console_buffer: list[ConsoleEvent] = []
         network_buffer: list[NetworkEvent] = []
         page.on("console", lambda message: _capture_console_event(message, console_buffer))
