@@ -57,9 +57,10 @@ _A11Y_ROLE_TARGET_RE = re.compile(
 
 _A11Y_ID_SUFFIX_RE = re.compile(r"""\s+id=(\S+)$""")
 
-# Matches: inside product "name", inside product 'name'
+# Matches: inside "name", inside 'name' (generic scope, no hardcoded container type)
+# Also supports legacy format: inside product "name"
 _A11Y_SCOPE_RE = re.compile(
-    r"""\s+inside\s+product\s*["'](.+?)["']""",
+    r"""\s+inside\s+(?:product\s+)?["'](.+?)["']""",
     re.IGNORECASE,
 )
 
@@ -109,13 +110,13 @@ def _parse_a11y_target(target: str) -> tuple[str, str, str | None, str | None]:
     """Parse ``role="name"`` format with optional scope.
 
     Returns ``(role, name, node_id, scope_name)`` where *scope_name* is the
-    product name from ``inside product "..."`` syntax.
+    container name from ``inside "..."`` syntax.
 
     Falls back to ``("", target, None, None)`` for plain-text targets.
     """
     stripped = target.strip()
 
-    # Check for scope suffix: ... inside product "name"
+    # Check for scope suffix: ... inside "name" (or legacy: inside product "name")
     scope_name = None
     scope_match = _A11Y_SCOPE_RE.search(stripped)
     if scope_match:
@@ -146,20 +147,30 @@ def _build_a11y_candidates(
 ) -> list[tuple[str, object]]:
     """Build locator candidates from parsed a11y role+name.
 
-    When *scope_name* is provided (e.g. ``inside product "Blue Top"``),
-    candidates are scoped to the matching product container via locator chaining.
+    When *scope_name* is provided (e.g. ``inside "Blue Top"``),
+    candidates are scoped to the matching container via locator chaining.
+    The container is found by locating any element that contains the scope text,
+    then searching within it for the target element.
     """
     builders: list[tuple[str, object]] = []
 
     pw_role = _A11Y_TO_PLAYWRIGHT_ROLE.get(role)
 
     if scope_name:
-        # Scoped path: find product container that contains the product name,
+        # Scoped path: find a container that contains the scope text,
         # then chain to find the target element within it.
-        # The product container itself has no accessible name — the name is in
-        # a child paragraph/heading.  We use .filter() to locate the right container.
+        # Strategy 1: Try product role (for product cards)
+        # Strategy 2: Try any element containing the scope text (generic fallback)
         product_containers = page.get_by_role("product")
         scope = product_containers.filter(has=page.get_by_text(scope_name, exact=True))
+
+        # Generic fallback: if no product role, find any container with the scope text
+        if scope.count() == 0:
+            # Find elements containing the scope text
+            scope_text_elements = page.get_by_text(scope_name, exact=True)
+            if scope_text_elements.count() > 0:
+                # Use the parent element as scope
+                scope = scope_text_elements.first.locator("xpath=..")
 
         if pw_role and name:
             builders.append((
@@ -224,7 +235,7 @@ def _build_candidate_builders(
     # 2. Parse a11y role="name" format (with optional scope)
     role, name, node_id, scope_name = _parse_a11y_target(target)
 
-    # 3. Build a11y-based candidates (role="name" or role="name" inside product "...")
+    # 3. Build a11y-based candidates (role="name" or role="name" inside "...")
     if role:
         return _build_a11y_candidates(
             page, role, name, prefer_input=prefer_input, scope_name=scope_name,

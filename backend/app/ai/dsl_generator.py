@@ -444,11 +444,11 @@ def _format_product_card_summary(
             product_name = card['name']
             lines.append(f"- product=\"{product_name}\" price=\"{card['price']}\"")
             lines.append(
-                f"  add_to_cart: target=link \"{card['add_target']}\" inside product \"{product_name}\""
+                f"  add_to_cart: target=link \"{card['add_target']}\" inside \"{product_name}\""
             )
             if card.get("detail_target"):
                 lines.append(
-                    f"  view_product: target=link \"{card['detail_target']}\" inside product \"{product_name}\""
+                    f"  view_product: target=link \"{card['detail_target']}\" inside \"{product_name}\""
                 )
     return "\n".join(lines)
 
@@ -682,8 +682,9 @@ def _call_llm(
 def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) -> str:
     """Format a11y nodes as a flat list grouped by page state.
 
-    Product containers are shown with their children indented beneath,
-    so the AI can see which elements belong to which product.
+    Containers are shown with their children indented beneath,
+    so the AI can see which elements belong to which container.
+    The container type is not hardcoded — AI determines the scope name from context.
     """
     if not a11y_nodes_by_state:
         return "(no elements available)"
@@ -699,7 +700,7 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
             continue
         lines.append(f"\n## Page state: {state}")
 
-        # Build parent→children index for product containers
+        # Build parent→children index for all nodes
         node_by_id: dict[str, dict[str, Any]] = {}
         children_of: dict[str, list[dict[str, Any]]] = {}
         for n in nodes:
@@ -737,32 +738,46 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
                 return f"{indent}- {role}=\"{name}\"{disabled}{duplicate_part}{verified_part}"
             return f"{indent}- {role}{disabled}"
 
-        # Partition: product containers vs top-level nodes
-        product_nodes = [n for n in nodes if n.get("role") == "product"]
-        product_ids = {n.get("node_id") for n in product_nodes}
-        top_level = [n for n in nodes if n.get("role") != "product"
-                     and n.get("parent_id") not in product_ids]
+        # Find all container nodes (nodes with children)
+        container_ids = set(children_of.keys())
+        containers = [node_by_id[nid] for nid in container_ids if nid in node_by_id]
+        container_node_ids = {n.get("node_id") for n in containers}
 
-        # Render product containers with children
-        for pnode in product_nodes:
-            pid = pnode.get("node_id", "")
-            # Derive product name from child paragraph/heading
-            product_name = ""
-            for child in children_of.get(pid, []):
+        # Top-level nodes: not a container and not a child of any container
+        top_level = [n for n in nodes
+                     if n.get("node_id") not in container_node_ids
+                     and n.get("parent_id") not in container_ids]
+
+        # Render containers with children
+        for container in containers:
+            cid = container.get("node_id", "")
+            container_role = container.get("role", "unknown")
+
+            # Derive container name from child paragraph/heading
+            container_name = ""
+            for child in children_of.get(cid, []):
                 child_role = (child.get("role") or "").lower()
                 child_name = _clean_element_name(child.get("name", "") or "")
                 if child_role in ("paragraph", "heading") and child_name:
-                    product_name = child_name
+                    container_name = child_name
                     break
-            header = f"- product=\"{product_name}\"" if product_name else "- product"
-            vs_count = len(pnode.get("verified_selectors") or [])
+
+            # Format header: use container name if available, otherwise use role
+            if container_name:
+                header = f"- {container_role}=\"{container_name}\""
+            else:
+                header = f"- {container_role}"
+
+            vs_count = len(container.get("verified_selectors") or [])
             if vs_count > 0:
                 header += f" [verified={vs_count}]"
             lines.append(header)
-            for child in children_of.get(pid, []):
+
+            # Render children
+            for child in children_of.get(cid, []):
                 lines.append(_fmt_node(child, indent="  "))
 
-        # Render remaining top-level nodes (non-product)
+        # Render remaining top-level nodes (not containers, not children)
         for n in top_level:
             lines.append(_fmt_node(n))
 
@@ -947,49 +962,57 @@ No markdown, no explanation — JSON only.
    FORBIDDEN: CSS selectors (#id, .class, [attr]), XPath (//, /html), tag names (div, span),
    data-testid, or ANY DOM-derived selector. The system resolves locators from a11y role+name only.
 
-   **Product disambiguation**: When multiple products have the same action text (e.g. multiple
+   **Element disambiguation**: When multiple elements have the same role and name (e.g. multiple
    "Add to cart" buttons), you MUST use the scoped format:
-   target=link "Add to cart" inside product "Blue Top"
-   The product name comes from the Product cards summary or the product="..." container in elements.
+   target=link "Add to cart" inside "Blue Top"
+   The scope name comes from the parent container's identifying text (product name, row label, etc.).
+   Look at the page structure: elements are grouped in containers (product cards, table rows, forms, etc.).
+   Use the container's unique identifying text as the scope.
    Never target a bare price like "Rs. 500".
 
-2. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
+2. **Page structure understanding**: Analyze the Available elements to understand the page structure:
+   - Elements with the same role+name but in different containers need scoped targets
+   - Containers are identified by their unique text content (product name, heading, label)
+   - Use `inside "container_identifier"` to disambiguate, where container_identifier is the
+     unique text of the parent container (e.g. product name, section heading, row label)
+
+3. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
    goto / → click button "Signup / Login" → wait_for heading "Login to your account" → input textbox "Email Address"
    The first step after goto / is a navigation click, not a form input.
 
-3. **Login**: The DSL must be self-contained. Include all login steps (input email + password + click Login).
+4. **Login**: The DSL must be self-contained. Include all login steps (input email + password + click Login).
    Do NOT assume the user is already logged in. Use ${var} for credentials.
 
-4. **Wait after actions**: After navigation clicks or form submits, add wait_for for a confirmation element.
-   click link "Add to cart" inside product "Blue Top" → wait_for heading "Added!" → next step
+5. **Wait after actions**: After navigation clicks or form submits, add wait_for for a confirmation element.
+   click link "Add to cart" inside "Blue Top" → wait_for heading "Added!" → next step
    click link "Products" → wait_for heading "ALL PRODUCTS" → next step
 
-5. **Input trigger**: When changing a value that requires keyboard activation (quantity, search),
+6. **Input trigger**: When changing a value that requires keyboard activation (quantity, search),
    add trigger="Enter" on the input step. The executor handles the keypress.
    input target=textbox "quantity" value="2" trigger="Enter"
 
-6. **Modify-then-assert**: When changing a value, input → wait_for update → assert.
+7. **Modify-then-assert**: When changing a value, input → wait_for update → assert.
    Do NOT assert a new value without first inputting it.
 
-7. **Capture-then-assert**: capture_text stores element text into a variable. The FOLLOWING
+8. **Capture-then-assert**: capture_text stores element text into a variable. The FOLLOWING
    assert_text must verify the SAME element text appears elsewhere (e.g. cart page).
    Pattern: capture_text target=heading "Product Name A" context_key="product_a_name"
             → later → assert_text target=heading "cart row element" value="${product_a_name}"
    CRITICAL: ${var} can ONLY appear in the VALUE field, NEVER in the target field.
    The target must always be a real element locator in role="name" format.
 
-8. **Form coverage**: Generate a step for EVERY form field mentioned in the flow.
+9. **Form coverage**: Generate a step for EVERY form field mentioned in the flow.
    Dropdown: input action. Checkbox/radio: click action.
 
-9. **Field rules**:
-   - goto / assert_url_contains: value=URL, NO target
-   - click / wait_for: target only, NO value
-   - input / assert_text: BOTH target AND value required
-   - capture_text: target + context_key (snake_case variable name)
-   - **CRITICAL**: ${var} placeholders can ONLY be used in the VALUE field of input/assert_text.
-     NEVER use ${var} as a target — target must be a real element locator.
+10. **Field rules**:
+    - goto / assert_url_contains: value=URL, NO target
+    - click / wait_for: target only, NO value
+    - input / assert_text: BOTH target AND value required
+    - capture_text: target + context_key (snake_case variable name)
+    - **CRITICAL**: ${var} placeholders can ONLY be used in the VALUE field of input/assert_text.
+      NEVER use ${var} as a target — target must be a real element locator.
 
-10. **input_contract**: Define every ${var} used in steps. Include context_key AND value.
+11. **input_contract**: Define every ${var} used in steps. Include context_key AND value.
     Example: {"context_key":"email","value":"test@example.com","value_type":"string","name":"Email","required":true}
     CRITICAL: The "value" field MUST be copied VERBATIM from the "## Test data" section.
     NEVER invent, guess, or modify test data values. If the test data says
