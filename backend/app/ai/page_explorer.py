@@ -116,6 +116,7 @@ def _cdp_to_a11y_nodes(
             props[p["name"]] = p["value"].get("value")
         standardized.append({
             "node_id": f"e{n.get('nodeId', '?')}",
+            "backend_dom_node_id": n.get("backendDOMNodeId"),
             "role": role,
             "name": (name or "")[:120],
             "level": props.get("level") or None,
@@ -125,6 +126,92 @@ def _cdp_to_a11y_nodes(
             "page_state": page_state,
         })
     return standardized
+
+
+def _css_attr_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _stable_dom_selectors(dom: dict[str, Any]) -> list[tuple[str, str]]:
+    tag = (dom.get("tag") or "").lower()
+    attrs = dom.get("attrs") or {}
+    selectors: list[tuple[str, str]] = []
+
+    data_testid = attrs.get("data-testid")
+    if data_testid:
+        selectors.append(("data-testid", str(data_testid)))
+
+    data_product_id = attrs.get("data-product-id")
+    if data_product_id:
+        prefix = f"{tag}" if tag else ""
+        selectors.append(("css", f'{prefix}[data-product-id="{_css_attr_value(str(data_product_id))}"]:visible'))
+
+    href = attrs.get("href")
+    if href and tag == "a" and not str(href).startswith(("javascript:", "#")):
+        selectors.append(("css", f'a[href="{_css_attr_value(str(href))}"]'))
+
+    elem_id = attrs.get("id")
+    if elem_id and re.match(r"^[A-Za-z_][\w-]*$", str(elem_id)):
+        selectors.append(("css", f"#{elem_id}"))
+
+    return selectors
+
+
+def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> None:
+    """Attach verified Playwright candidates to a11y nodes via backendDOMNodeId."""
+    for node in nodes:
+        backend_id = node.get("backend_dom_node_id")
+        if not backend_id:
+            continue
+        object_id = None
+        try:
+            resolved = client.send("DOM.resolveNode", {"backendNodeId": int(backend_id)})
+            object_id = resolved.get("object", {}).get("objectId")
+            if not object_id:
+                continue
+            payload = client.send("Runtime.callFunctionOn", {
+                "objectId": object_id,
+                "returnByValue": True,
+                "functionDeclaration": """
+                function() {
+                  const attrs = {};
+                  for (const attr of this.attributes || []) {
+                    attrs[attr.name] = attr.value;
+                  }
+                  const rect = this.getBoundingClientRect();
+                  const style = window.getComputedStyle(this);
+                  return {
+                    tag: this.tagName ? this.tagName.toLowerCase() : "",
+                    attrs,
+                    visible: rect.width > 0 && rect.height > 0 &&
+                      style.visibility !== "hidden" && style.display !== "none",
+                    enabled: !this.disabled && this.getAttribute("aria-disabled") !== "true"
+                  };
+                }
+                """,
+            }).get("result", {}).get("value") or {}
+            node["dom"] = payload
+            node["verified_selectors"] = []
+            for strategy, selector in _stable_dom_selectors(payload):
+                try:
+                    locator = page.get_by_test_id(selector) if strategy == "data-testid" else page.locator(selector)
+                    if locator.count() == 1:
+                        node["verified_selectors"].append({
+                            "strategy": strategy,
+                            "selector": selector,
+                            "name": node.get("name") or "",
+                            "source": "a11y_backend_dom_node",
+                        })
+                except Exception:
+                    continue
+        except Exception:
+            continue
+        finally:
+            if object_id:
+                try:
+                    client.send("Runtime.releaseObject", {"objectId": object_id})
+                except Exception:
+                    pass
 
 
 def collect_a11y_nodes(
@@ -144,6 +231,11 @@ def collect_a11y_nodes(
     try:
         client.send("Accessibility.enable")
         result = client.send("Accessibility.getFullAXTree", {})
+        raw_nodes = result.get("nodes", [])
+        filter_pass = _filter_a11y_nodes(raw_nodes, viewport=viewport)
+        nodes = _cdp_to_a11y_nodes({"nodes": filter_pass}, page_state=page_state)
+        _augment_a11y_nodes_with_dom(page, client, nodes)
+        return nodes
     finally:
         try:
             client.send("Accessibility.disable")
@@ -153,9 +245,6 @@ def collect_a11y_nodes(
             client.detach()
         except Exception:
             pass
-    raw_nodes = result.get("nodes", [])
-    filter_pass = _filter_a11y_nodes(raw_nodes, viewport=viewport)
-    return _cdp_to_a11y_nodes({"nodes": filter_pass}, page_state=page_state)
 
 
 def format_a11y_nodes_for_prompt(a11y_nodes: list[dict[str, Any]]) -> str:

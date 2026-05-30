@@ -998,3 +998,58 @@
 - 后续：
   - 测试只验证了 `login_success` 场景，完整购物车验证场景需要更长时间
   - 模态弹窗按钮（Continue Shopping, View Cart）confidence=low，需要更好的处理策略
+
+---
+
+## 2026-05-30 | Automation Exercise Polo 页面无障碍树采集
+
+- 任务：采集 `https://automationexercise.com/brand_products/Polo` 页面的无障碍树元素。
+- 操作：使用浏览器打开目标页面，确认标题为 `Automation Exercise - Polo Products`，采集页面可访问快照，整理导航、分类、品牌、商品列表和订阅区元素。
+- 验证：页面成功加载，URL 保持为 `/brand_products/Polo`，无障碍快照可读取。
+- 备注：本次为页面采集与分析任务，未修改业务代码，未发现需要写入 bug-log 的明确缺陷。
+
+---
+
+## 2026-05-30 | Polo 商品页 DSL 消歧优化分析
+
+- 任务：分析 `explore_flow` 采集 Polo 商品页后，DSL 生成阶段重复使用 `Rs. 500` / 商品名导致商品选择不明确的问题。
+- 操作：复查 `page_explorer.py`、`dsl_generator.py`、`locator_preflight.py`、`semantic.py` 中元素格式化、候选预检和语义定位逻辑；结合实际无障碍树确认页面存在同一商品卡片默认层与 hover 层重复暴露。
+- 结论：优先把商品卡片抽象为结构化业务单元，生成 DSL 时使用商品名 + 价格 + 卡片内动作的组合定位，避免裸文本 `Rs. 500` 或裸 `Add to cart`。
+- 备注：本次为分析建议，未修改业务代码，未追加 bug-log。
+
+---
+
+## 2026-05-30 | Polo 商品页 DSL 消歧修复
+
+- 任务：修复 Polo 商品页 `explore_flow` 后 DSL 生成阶段容易用裸 `Rs. 500` / 裸 `Add to cart` 导致商品选择歧义的问题。
+- 操作：
+  - `dsl_generator.py`：为 A11y 元素清单增加去重后的商品卡片摘要；重复元素追加 duplicate 标记；系统提示要求商品加购使用 `商品名 附近的 Add to cart`；价格点击自动重写为商品上下文目标。
+  - `semantic.py`：支持解析并执行 `Blue Top 附近的 Add to cart` 这类上下文定位。
+  - `locator_preflight.py`：裸 `Add to cart` / `View Product` 多匹配时降为 low confidence，并提示补商品上下文。
+  - 补充 `test_dsl_generator.py`、`test_locator_confidence.py`、`test_locator_semantic.py` 单测。
+- 验证：`uv run pytest tests/unit/test_dsl_generator.py tests/unit/test_locator_confidence.py tests/unit/test_locator_semantic.py -q`，82 passed。
+- 备注：未发现新的明确缺陷，未追加 bug-log。
+
+---
+
+## 2026-05-30 | DSL 扩展适配 Playwright 执行器分析
+
+- 任务：分析如果要扩展 DSL 功能，如何更好适配现有 Playwright runner。
+- 操作：复查 `schemas/dsl.py`、`runners/playwright_runner.py`、`postcondition_verifier.py`、`services/dsl.py` 中当前动作、定位、postcondition、变量和执行证据能力。
+- 结论：建议优先扩展强语义动作、断言、等待、作用域/集合与 evidence schema；避免直接开放任意 Playwright API 或 `evaluate_js`，防止绕过结构化 DSL 校验。
+- 备注：本次为设计分析，未修改业务代码，未追加 bug-log。
+
+---
+
+## 2026-05-30 | A11y-first 商品定位消歧修正
+
+- 任务：将 Polo 商品页 DSL 消歧方案从 DOM `text_parent_chain` 修正为无障碍树定位 + 结构化候选校验路径。
+- 操作：
+  - 移除 `semantic.py` 中 `附近的` / `text_parent_chain` 主定位路径，避免把 DOM 作用域定位混入 a11y 语义定位。
+  - `page_explorer.py`：通过 CDP `backendDOMNodeId` 为 a11y 节点回填 DOM 属性，并生成已验证的 Playwright candidate selector。
+  - `dsl_generator.py`：商品卡片摘要改为 `target="Add to cart"` + verified candidate；当 AI 误用价格作为 click target 时，重写为带 candidates 的结构化步骤。
+  - `locator_preflight.py`：将 a11y 节点上的 `verified_selectors` 写入 DSL candidates；裸重复商品动作仍标记为 low confidence。
+  - `playwright_runner.py`：修复候选执行路径的 locator trace 构建，并要求候选 locator 唯一匹配后再执行。
+  - 更新相关单测和旧提示文案，删除 `text_parent_chain/附近的` 生成引导。
+- 验证：`uv run pytest tests/unit/test_dsl_generator.py tests/unit/test_locator_confidence.py tests/unit/test_locator_semantic.py tests/unit/test_page_explorer.py tests/unit/test_dsl_validation.py tests/unit/test_preflight_regen.py -q`，115 passed，1 个既有 PytestCollectionWarning。
+- 备注：本次是对上一版 DOM fallback 方案的架构修正，未追加 bug-log。

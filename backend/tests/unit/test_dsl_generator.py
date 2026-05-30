@@ -386,4 +386,75 @@ class TestNormalizeLlmStepDropsUnrepairable:
         assert normalized["context_key"] == "p1"
 
 
+class TestProductCardDisambiguation:
+    def test_format_elements_flat_adds_deduplicated_product_card_summary(self) -> None:
+        from app.ai.dsl_generator import _format_elements_flat
+
+        nodes = {
+            "S0": [
+                {"role": "heading", "name": "Rs. 500", "node_id": "e1"},
+                {"role": "paragraph", "name": "Blue Top", "node_id": "e2"},
+                {
+                    "role": "link",
+                    "name": "Add to cart",
+                    "node_id": "e3",
+                    "verified_selectors": [
+                        {
+                            "strategy": "css",
+                            "selector": "a[data-product-id=\"1\"]:visible",
+                            "source": "a11y_backend_dom_node",
+                        }
+                    ],
+                },
+                {"role": "heading", "name": "Rs. 500", "node_id": "e4"},
+                {"role": "paragraph", "name": "Blue Top", "node_id": "e5"},
+                {"role": "link", "name": "Add to cart", "node_id": "e6"},
+            ]
+        }
+
+        result = _format_elements_flat(nodes)
+
+        assert "Product cards (deduplicated business view)" in result
+        assert 'product="Blue Top" price="Rs. 500"' in result
+        assert 'add_to_cart_target="Add to cart"' in result
+        assert 'add_candidate=verified_css:"a[data-product-id="1"]:visible"' in result
+        assert result.count('product="Blue Top"') == 1
+        assert 'heading="Rs. 500" id=e1 [duplicate 1/2]' in result
+        assert 'link="Add to cart" id=e6 [duplicate 2/2]' in result
+
+    def test_price_click_rewrites_to_product_context_target(self) -> None:
+        from app.ai.dsl_generator import (
+            _build_price_to_product_target,
+            _fix_product_target_ambiguity,
+        )
+
+        nodes = {
+            "S0": [
+                {"role": "heading", "name": "Rs. 500", "node_id": "e1"},
+                {"role": "paragraph", "name": "Blue Top", "node_id": "e2"},
+                {
+                    "role": "link",
+                    "name": "Add to cart",
+                    "node_id": "e3",
+                    "verified_selectors": [
+                        {
+                            "strategy": "css",
+                            "selector": "a[data-product-id=\"1\"]:visible",
+                            "source": "a11y_backend_dom_node",
+                        }
+                    ],
+                },
+            ]
+        }
+        warnings: list[str] = []
+        price_map = _build_price_to_product_target(nodes)
+        step = {"action": "click", "target": "Rs. 500"}
+
+        fixed = _fix_product_target_ambiguity(step, price_map, warnings)
+
+        assert fixed["target"] == "Add to cart"
+        assert fixed["locator_confidence"] == "high"
+        assert fixed["candidates"][0]["strategy"] == "verified_css"
+        assert fixed["candidates"][0]["selector"] == "a[data-product-id=\"1\"]:visible"
+        assert warnings
 

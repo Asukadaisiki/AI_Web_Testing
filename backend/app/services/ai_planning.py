@@ -1285,8 +1285,8 @@ def _record_execution_anti_patterns(
                 f"——实际定位到的是 '{actual_val[:50]}'"
                 f"（定位策略: {resolved_by}）。↓"
                 f"可能原因: 1) target 文本在页面上匹配了错误元素"
-                f" 2) text_parent_chain 消歧不够精确"
-                f" 3) 应改用更精确的 target（如 '产品名 附近的 数量文字'）"
+                f" 2) 缺少来自无障碍树预检的 verified candidate"
+                f" 3) 商品/列表场景应使用可预检的结构化候选，而不是裸文本 target"
             )
         elif action == "click":
             if "timeout" in error_msg.lower() or "not found" in error_msg.lower():

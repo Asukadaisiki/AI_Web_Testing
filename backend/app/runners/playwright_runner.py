@@ -27,6 +27,9 @@ from app.schemas.executions import (
     ConsoleEvent,
     DOMSummary,
     InterventionRequest,
+    LocatorCandidateAttributes,
+    LocatorCandidateEvidence,
+    LocatorTrace,
     NetworkEvent,
     StepExecutionEvidence,
     ViewportSnapshot,
@@ -238,6 +241,29 @@ def _build_locator_from_candidate(page, candidate_entry) -> object | None:
         return None
 
 
+def _candidate_to_trace_evidence(candidate_entry) -> LocatorCandidateEvidence:
+    if hasattr(candidate_entry, "strategy"):
+        strategy = candidate_entry.strategy
+        selector = candidate_entry.selector or ""
+        semantic_value = candidate_entry.semantic_value or ""
+        pre_score = candidate_entry.pre_score
+    else:
+        strategy = candidate_entry.get("strategy", "")
+        selector = candidate_entry.get("selector", "")
+        semantic_value = candidate_entry.get("semantic_value", "")
+        pre_score = candidate_entry.get("pre_score", 0.0)
+    return LocatorCandidateEvidence(
+        strategy=strategy,
+        preview_text=semantic_value or selector or None,
+        role=strategy,
+        attributes=LocatorCandidateAttributes(),
+        score=int(float(pre_score or 0.0) * 100),
+        matched_rules=["preflight-verified-candidate"],
+        visible=True,
+        enabled=True,
+    )
+
+
 def _execute_step_with_candidates(
     page,
     step,
@@ -276,7 +302,7 @@ def _execute_step_with_candidates(
 
         # Check locator has at least one match
         try:
-            if locator.count() == 0:
+            if locator.count() != 1:
                 continue
         except Exception:
             continue
@@ -324,6 +350,14 @@ def _execute_step_with_candidates(
 
             # Success — build evidence
             used_strategy = candidate.strategy
+            selected_candidate = _candidate_to_trace_evidence(candidate)
+            used_trace = LocatorTrace(
+                target=resolved_target,
+                match_strategy=used_strategy,
+                candidates=[selected_candidate],
+                selected_candidate=selected_candidate,
+                selection_reason="Selected verified candidate from a11y preflight.",
+            )
 
             return StepExecutionEvidence(
                 step_index=step_index,

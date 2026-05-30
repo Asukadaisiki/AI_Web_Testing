@@ -82,9 +82,10 @@ class TestPreflightA11yNodes:
         result = apply_preflight_to_dsl(case, nodes)
 
         step = result["steps"][0]
-        assert step["locator_confidence"] == "medium"
+        assert step["locator_confidence"] == "low"
         assert step["match_count"] == 2
         assert len(step["candidates"]) == 6  # 3 per node × 2 nodes
+        assert "repeated product action" in result["_preflight"]["warnings"][0]
 
     def test_empty_steps(self):
         case = {"steps": [], "base_url": "https://example.com"}
@@ -135,5 +136,4 @@ class TestPreflightA11yNodes:
         assert len(pf["warnings"]) == 1
         assert "Nonexistent" not in pf["warnings"][0]  # warning says step index, not name
         assert "match_count=0" in pf["warnings"][0]
-
 

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-from dataclasses import dataclass
 
 from app.schemas.executions import (
     LocatorCandidateAttributes,

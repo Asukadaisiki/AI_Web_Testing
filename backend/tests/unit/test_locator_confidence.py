@@ -255,6 +255,47 @@ class TestDslLocatorConfidence:
             ClickStep(action="click", target="Submit", locator_confidence="invalid")
 
 
+class TestA11yPreflightProductActions:
+    def test_repeated_bare_add_to_cart_is_low_confidence(self):
+        from app.ai.locator_preflight import apply_preflight_to_dsl
+
+        dsl = {"steps": [{"action": "click", "target": "Add to cart"}]}
+        a11y_nodes = [
+            {"role": "link", "name": "Add to cart"},
+            {"role": "link", "name": "Add to cart"},
+        ]
+
+        result = apply_preflight_to_dsl(dsl, a11y_nodes)
+
+        assert result["steps"][0]["locator_confidence"] == "low"
+        assert "repeated product action" in result["_preflight"]["warnings"][0]
+
+    def test_verified_a11y_candidate_is_added_to_step_candidates(self):
+        from app.ai.locator_preflight import apply_preflight_to_dsl
+
+        dsl = {"steps": [{"action": "click", "target": "Add to cart"}]}
+        a11y_nodes = [
+            {
+                "role": "link",
+                "name": "Add to cart",
+                "verified_selectors": [
+                    {
+                        "strategy": "css",
+                        "selector": "a[data-product-id=\"1\"]:visible",
+                        "source": "a11y_backend_dom_node",
+                    }
+                ],
+            },
+        ]
+
+        result = apply_preflight_to_dsl(dsl, a11y_nodes)
+
+        assert result["steps"][0]["locator_confidence"] == "high"
+        assert result["steps"][0]["match_count"] == 1
+        assert result["steps"][0]["candidates"][0]["strategy"] == "verified_css"
+        assert result["steps"][0]["candidates"][0]["selector"] == "a[data-product-id=\"1\"]:visible"
+
+
 # ---------------------------------------------------------------------------
 # Integration: stability score produces reasonable formatting for real-world case
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ _CHAINED_SELECTOR_RE = re.compile(
     r"^(\.\w[\w-]*|#[\w-]+|\w[\w-]*\.\w[\w-]*)\s*>>?\s*text\s*=\s*(.+)$"
 )
 _COMPOUND_CSS_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9]*[\.\#\[\s\>:,~\+]")
+_GENERIC_REPEATED_TARGETS = {"add to cart", "view product"}
 _KNOWN_TAGS = {
     "button", "input", "select", "textarea", "a", "form",
     "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -52,6 +53,10 @@ def _classify_target(target: str) -> tuple[str, str]:
     if _COMPOUND_CSS_RE.match(t):
         return "css_tag", t
     return "semantic", t
+
+
+def _target_is_generic_repeated_action(target: str) -> bool:
+    return _normalize_text(target) in _GENERIC_REPEATED_TARGETS
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +348,20 @@ def apply_preflight_to_dsl(
             for n in matches:
                 role = n["role"]
                 name = n["name"]
+                for vs in n.get("verified_selectors", []):
+                    vs_strategy = vs.get("strategy", "")
+                    vs_selector = vs.get("selector", "")
+                    if vs_strategy and vs_selector:
+                        candidates.append({
+                            "strategy": f"verified_{vs_strategy}",
+                            "selector": vs_selector,
+                            "semantic_value": name,
+                            "pre_score": 1.0,
+                            "pre_features": {
+                                "verified": True,
+                                "source": vs.get("source") or "a11y_backend_dom_node",
+                            },
+                        })
                 candidates.extend([
                     {"strategy": "role", "selector": role, "semantic_value": name,
                      "pre_score": 0.90, "pre_features": {"verified": True, "source": "a11y_role_exact"}},
@@ -351,7 +370,10 @@ def apply_preflight_to_dsl(
                     {"strategy": "text", "selector": name, "semantic_value": name,
                      "pre_score": 0.55, "pre_features": {"source": "a11y_text_exact"}},
                 ])
-            step["locator_confidence"] = "high" if match_count == 1 else "medium"
+            if _target_is_generic_repeated_action(target) and match_count > 1:
+                step["locator_confidence"] = "low"
+            else:
+                step["locator_confidence"] = "high" if match_count == 1 else "medium"
         else:
             step["locator_confidence"] = "low"
 
@@ -367,9 +389,17 @@ def apply_preflight_to_dsl(
 
     dsl_case["_preflight"] = {
         "locator_confidence": overall,
-        "warnings": [f"Step {i}: match_count={s.get('match_count',0)}"
-                     for i, s in enumerate(steps)
-                     if isinstance(s, dict) and s.get("match_count", 0) == 0],
+        "warnings": [
+            f"Step {i}: match_count={s.get('match_count',0)}"
+            for i, s in enumerate(steps)
+            if isinstance(s, dict) and s.get("match_count", 0) == 0
+        ] + [
+            f"Step {i}: target '{s.get('target')}' is a repeated product action; add product context"
+            for i, s in enumerate(steps)
+            if isinstance(s, dict)
+            and _target_is_generic_repeated_action(str(s.get("target") or ""))
+            and s.get("match_count", 0) > 1
+        ],
     }
     return dsl_case
 
