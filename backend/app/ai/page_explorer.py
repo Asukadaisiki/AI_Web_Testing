@@ -19,20 +19,18 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
-# ── A11y roles we keep for the LLM ──────────────────────────────────────────
-USEFUL_A11Y_ROLES: set[str] = {
-    # interactive
-    "button", "link", "textbox", "checkbox", "radio", "menuitem",
-    "menuitemcheckbox", "menuitemradio", "combobox", "listbox", "option",
-    "tab", "treeitem", "switch", "searchbox", "spinbutton", "slider",
-    # landmark / descriptive
-    "heading", "image", "navigation", "main", "banner", "contentinfo",
-    "form", "search", "region", "dialog", "alertdialog", "alert",
-    "menu", "menubar", "tablist", "list", "listitem", "article",
-    "complementary",
-    # container (grouping)
-    "product", "group",
+# ── A11y roles we EXCLUDE for the LLM (blacklist approach) ──────────────────
+# Using blacklist instead of whitelist to avoid missing useful elements
+IGNORED_A11Y_ROLES: set[str] = {
+    # Internal / non-semantic roles that clutter the tree
+    "none", "InlineTextBox", "layout table", "layout table cell",
+    "layout table row", "LineBreak", "generic", "separator",
+    # Abstraction roles (rarely useful for targeting)
+    "roletype", "structure", "widget", "window",
 }
+
+# Keep legacy name for backward compatibility, now contains ALL roles except ignored
+USEFUL_A11Y_ROLES: set[str] | None = None  # None means use blacklist mode
 
 
 def _a11y_node_in_viewport(node: dict, viewport: dict) -> bool:
@@ -52,6 +50,7 @@ def _filter_a11y_nodes(
     *,
     viewport: dict | None = None,
 ) -> list[dict]:
+    """Filter a11y nodes using blacklist approach to avoid missing useful elements."""
     if viewport is None:
         viewport = {"width": 1280, "height": 720}
     result: list[dict] = []
@@ -61,7 +60,8 @@ def _filter_a11y_nodes(
         role = n.get("role", "unknown")
         if isinstance(role, dict):
             role = role.get("value", "unknown")
-        if role not in USEFUL_A11Y_ROLES:
+        # Blacklist: skip only known useless roles
+        if role in IGNORED_A11Y_ROLES:
             continue
         if not _a11y_node_in_viewport(n, viewport):
             continue
@@ -103,12 +103,14 @@ def _cdp_to_a11y_nodes(
     *,
     page_state: str = "S0",
 ) -> list[dict]:
+    """Convert CDP a11y tree to standardized nodes using blacklist approach."""
     standardized: list[dict] = []
     for n in cdp_result.get("nodes", []):
         if n.get("ignored", False):
             continue
         role = (n.get("role") or {}).get("value", "unknown")
-        if role not in USEFUL_A11Y_ROLES:
+        # Blacklist: skip only known useless roles
+        if role in IGNORED_A11Y_ROLES:
             continue
         name = (n.get("name") or {}).get("value", "") or ""
         props: dict[str, Any] = {}

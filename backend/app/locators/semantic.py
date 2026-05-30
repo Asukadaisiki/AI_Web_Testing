@@ -241,6 +241,14 @@ def _build_candidate_builders(
         builders.extend([
             ("a11y_text_exact", lambda n=name: page.get_by_text(n, exact=True)),
             ("a11y_text_fuzzy", lambda n=name: page.get_by_text(n)),
+            # Try with leading/trailing spaces stripped
+            ("a11y_text_stripped", lambda n=name: page.get_by_text(n.strip())),
+            # Try case-insensitive match using regex
+            ("a11y_text_regex", lambda n=name: page.locator(f"text=/{re.escape(n)}/i")),
+            # Try as link role (common case for navigation items)
+            ("a11y_role_link_fuzzy", lambda n=name: page.get_by_role("link", name=n)),
+            # Try as button role
+            ("a11y_role_button_fuzzy", lambda n=name: page.get_by_role("button", name=n)),
         ])
         return builders
 
