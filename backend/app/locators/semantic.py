@@ -44,18 +44,24 @@ class SemanticCandidateEntry:
 
 # ── A11y target parsing ──────────────────────────────────────────────────────
 
-# Matches: role="name", role='name', role="name" id=e123
+# Matches: role="name", role='name', role "name", role="name" id=e123
 _A11Y_ROLE_TARGET_RE = re.compile(
     r'^(button|link|textbox|checkbox|radio|menuitem|combobox|listbox|option'
     r'|tab|switch|searchbox|heading|dialog|alert|navigation|main|form|region'
     r'|banner|contentinfo|complementary|article|list|listitem|img|progressbar'
     r'|slider|spinbutton|treeitem|menu|menubar|tablist|toolbar|status|timer'
     r'|tooltip|separator|group|presentation|none)'
-    r"""\s*=\s*["'](.+?)["']""",
+    r"""\s*[=\s]\s*["'](.+?)["']""",
     re.IGNORECASE,
 )
 
 _A11Y_ID_SUFFIX_RE = re.compile(r"""\s+id=(\S+)$""")
+
+# Matches: inside product "name", inside product 'name'
+_A11Y_SCOPE_RE = re.compile(
+    r"""\s+inside\s+product\s*["'](.+?)["']""",
+    re.IGNORECASE,
+)
 
 # Maps a11y roles to Playwright role names (most are identical)
 _A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
@@ -99,12 +105,22 @@ _A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
 }
 
 
-def _parse_a11y_target(target: str) -> tuple[str, str, str | None]:
-    """Parse ``role="name"`` format, returning ``(role, name, node_id)``.
+def _parse_a11y_target(target: str) -> tuple[str, str, str | None, str | None]:
+    """Parse ``role="name"`` format with optional scope.
 
-    Falls back to ``("", target, None)`` for plain-text targets.
+    Returns ``(role, name, node_id, scope_name)`` where *scope_name* is the
+    product name from ``inside product "..."`` syntax.
+
+    Falls back to ``("", target, None, None)`` for plain-text targets.
     """
     stripped = target.strip()
+
+    # Check for scope suffix: ... inside product "name"
+    scope_name = None
+    scope_match = _A11Y_SCOPE_RE.search(stripped)
+    if scope_match:
+        scope_name = scope_match.group(1).strip()
+        stripped = stripped[:scope_match.start()].strip()
 
     # Check for id suffix: role="name" id=e123
     node_id = None
@@ -115,10 +131,10 @@ def _parse_a11y_target(target: str) -> tuple[str, str, str | None]:
 
     m = _A11Y_ROLE_TARGET_RE.match(stripped)
     if m:
-        return m.group(1).lower(), m.group(2), node_id
+        return m.group(1).lower(), m.group(2), node_id, scope_name
 
     # Not in role="name" format — treat as plain text
-    return "", target.strip(), node_id
+    return "", target.strip(), node_id, scope_name
 
 
 # ── Candidate builders ───────────────────────────────────────────────────────
@@ -126,11 +142,46 @@ def _parse_a11y_target(target: str) -> tuple[str, str, str | None]:
 
 def _build_a11y_candidates(
     page, role: str, name: str, *, prefer_input: bool,
+    scope_name: str | None = None,
 ) -> list[tuple[str, object]]:
-    """Build locator candidates from parsed a11y role+name."""
+    """Build locator candidates from parsed a11y role+name.
+
+    When *scope_name* is provided (e.g. ``inside product "Blue Top"``),
+    candidates are scoped to the matching product container via locator chaining.
+    """
     builders: list[tuple[str, object]] = []
 
     pw_role = _A11Y_TO_PLAYWRIGHT_ROLE.get(role)
+
+    if scope_name:
+        # Scoped path: find product container that contains the product name,
+        # then chain to find the target element within it.
+        # The product container itself has no accessible name — the name is in
+        # a child paragraph/heading.  We use .filter() to locate the right container.
+        product_containers = page.get_by_role("product")
+        scope = product_containers.filter(has=page.get_by_text(scope_name, exact=True))
+
+        if pw_role and name:
+            builders.append((
+                "a11y_scoped_role_exact",
+                lambda r=pw_role, n=name, s=scope: s.get_by_role(r, name=n, exact=True),
+            ))
+            builders.append((
+                "a11y_scoped_role_fuzzy",
+                lambda r=pw_role, n=name, s=scope: s.get_by_role(r, name=n),
+            ))
+        if name:
+            builders.append((
+                "a11y_scoped_text_exact",
+                lambda n=name, s=scope: s.get_by_text(n, exact=True),
+            ))
+            builders.append((
+                "a11y_scoped_text_fuzzy",
+                lambda n=name, s=scope: s.get_by_text(n),
+            ))
+        return builders
+
+    # Unscoped path: direct element lookup
     if pw_role and name:
         # Exact match (highest priority for a11y)
         builders.append((
@@ -170,16 +221,14 @@ def _build_candidate_builders(
     if explicit is not None:
         return [explicit]
 
-    # 2. Parse a11y role="name" format
-    role, name, node_id = _parse_a11y_target(target)
+    # 2. Parse a11y role="name" format (with optional scope)
+    role, name, node_id, scope_name = _parse_a11y_target(target)
 
-    # If we have a node_id, try CSS attribute selector first (fastest)
-    if node_id:
-        return [("a11y_node_id", lambda: page.locator(f"[data-a11y-node-id='{node_id}']"))]
-
-    # 3. Build a11y-based candidates
+    # 3. Build a11y-based candidates (role="name" or role="name" inside product "...")
     if role:
-        return _build_a11y_candidates(page, role, name, prefer_input=prefer_input)
+        return _build_a11y_candidates(
+            page, role, name, prefer_input=prefer_input, scope_name=scope_name,
+        )
 
     # 4. Plain text target (no role prefix) — try as-is
     if name:

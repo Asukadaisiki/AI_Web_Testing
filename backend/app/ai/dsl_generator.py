@@ -437,23 +437,19 @@ def _format_product_card_summary(
     if not cards_by_state:
         return ""
 
-    lines = ["\n## Product cards (deduplicated business view)"]
+    lines = ["\n## Product cards (use scoped targets to disambiguate)"]
     for state in sorted(cards_by_state):
         lines.append(f"\n### Page state: {state}")
         for card in cards_by_state[state]:
-            candidate_hint = ""
-            if card.get("add_candidates"):
-                first_candidate = card["add_candidates"][0]
-                candidate_hint = (
-                    f" add_candidate={first_candidate['strategy']}:"
-                    f"\"{first_candidate['selector']}\""
-                )
+            product_name = card['name']
+            lines.append(f"- product=\"{product_name}\" price=\"{card['price']}\"")
             lines.append(
-                f"- product=\"{card['name']}\" price=\"{card['price']}\" "
-                f"add_to_cart_target=\"{card['add_target']}\"{candidate_hint}"
+                f"  add_to_cart: target=link \"{card['add_target']}\" inside product \"{product_name}\""
             )
             if card.get("detail_target"):
-                lines.append(f"  view_product_target=\"{card['detail_target']}\"")
+                lines.append(
+                    f"  view_product: target=link \"{card['detail_target']}\" inside product \"{product_name}\""
+                )
     return "\n".join(lines)
 
 
@@ -686,7 +682,8 @@ def _call_llm(
 def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) -> str:
     """Format a11y nodes as a flat list grouped by page state.
 
-    Produces a scannable list rather than a deeply indented tree.
+    Product containers are shown with their children indented beneath,
+    so the AI can see which elements belong to which product.
     """
     if not a11y_nodes_by_state:
         return "(no elements available)"
@@ -701,6 +698,19 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
         if not nodes:
             continue
         lines.append(f"\n## Page state: {state}")
+
+        # Build parent→children index for product containers
+        node_by_id: dict[str, dict[str, Any]] = {}
+        children_of: dict[str, list[dict[str, Any]]] = {}
+        for n in nodes:
+            nid = n.get("node_id", "")
+            if nid:
+                node_by_id[nid] = n
+            pid = n.get("parent_id")
+            if pid:
+                children_of.setdefault(pid, []).append(n)
+
+        # Count duplicates across ALL nodes (for dedup labels)
         name_counts: dict[tuple[str, str], int] = {}
         for n in nodes:
             role = n.get("role", "unknown")
@@ -710,10 +720,10 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
                 name_counts[key] = name_counts.get(key, 0) + 1
 
         seen_counts: dict[tuple[str, str], int] = {}
-        for n in nodes:
+
+        def _fmt_node(n: dict[str, Any], indent: str = "") -> str:
             role = n.get("role", "unknown")
             name = _clean_element_name(n.get("name", "") or "")
-            nid = n.get("node_id", "")
             disabled = " [DISABLED]" if n.get("disabled") else ""
             if name:
                 key = (str(role), name.casefold())
@@ -722,9 +732,40 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
                 if duplicate_count > 1:
                     seen_counts[key] = seen_counts.get(key, 0) + 1
                     duplicate_part = f" [duplicate {seen_counts[key]}/{duplicate_count}]"
-                lines.append(f"- {role}=\"{name}\" id={nid}{disabled}{duplicate_part}")
-            else:
-                lines.append(f"- {role} id={nid}{disabled}")
+                vs_count = len(n.get("verified_selectors") or [])
+                verified_part = f" [verified={vs_count}]" if vs_count > 0 else ""
+                return f"{indent}- {role}=\"{name}\"{disabled}{duplicate_part}{verified_part}"
+            return f"{indent}- {role}{disabled}"
+
+        # Partition: product containers vs top-level nodes
+        product_nodes = [n for n in nodes if n.get("role") == "product"]
+        product_ids = {n.get("node_id") for n in product_nodes}
+        top_level = [n for n in nodes if n.get("role") != "product"
+                     and n.get("parent_id") not in product_ids]
+
+        # Render product containers with children
+        for pnode in product_nodes:
+            pid = pnode.get("node_id", "")
+            # Derive product name from child paragraph/heading
+            product_name = ""
+            for child in children_of.get(pid, []):
+                child_role = (child.get("role") or "").lower()
+                child_name = _clean_element_name(child.get("name", "") or "")
+                if child_role in ("paragraph", "heading") and child_name:
+                    product_name = child_name
+                    break
+            header = f"- product=\"{product_name}\"" if product_name else "- product"
+            vs_count = len(pnode.get("verified_selectors") or [])
+            if vs_count > 0:
+                header += f" [verified={vs_count}]"
+            lines.append(header)
+            for child in children_of.get(pid, []):
+                lines.append(_fmt_node(child, indent="  "))
+
+        # Render remaining top-level nodes (non-product)
+        for n in top_level:
+            lines.append(_fmt_node(n))
+
     return "\n".join(lines) if lines else "(no elements available)"
 
 
@@ -899,38 +940,43 @@ No markdown, no explanation — JSON only.
 
 ## Rules (in priority order)
 
-1. **Targets**: Use EXACT visible text from the Available elements section. Copy it verbatim — do not invent names.
-   button "Signup / Login" → target="Signup / Login"
-   textbox "Email Address" → target="Email Address"
-   Never use XPath, CSS selectors, or DOM paths.
-   For ecommerce product actions, use the Product cards summary. Never target
-   a bare price like "Rs. 500". If a product card provides add_candidate, keep
-   target="Add to cart" and include/use the verified candidate for that product.
+1. **Targets**: Copy the EXACT role="name" format from the Available elements section.
+   button="Signup / Login" → target=button "Signup / Login"
+   textbox="Email Address" → target=textbox "Email Address"
+   Include the role prefix — this enables precise locator resolution.
+   FORBIDDEN: CSS selectors (#id, .class, [attr]), XPath (//, /html), tag names (div, span),
+   data-testid, or ANY DOM-derived selector. The system resolves locators from a11y role+name only.
+
+   **Product disambiguation**: When multiple products have the same action text (e.g. multiple
+   "Add to cart" buttons), you MUST use the scoped format:
+   target=link "Add to cart" inside product "Blue Top"
+   The product name comes from the Product cards summary or the product="..." container in elements.
+   Never target a bare price like "Rs. 500".
 
 2. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
-   goto / → click "Signup / Login" → wait_for "Login to your account" → input "Email Address"
+   goto / → click button "Signup / Login" → wait_for heading "Login to your account" → input textbox "Email Address"
    The first step after goto / is a navigation click, not a form input.
 
 3. **Login**: The DSL must be self-contained. Include all login steps (input email + password + click Login).
    Do NOT assume the user is already logged in. Use ${var} for credentials.
 
 4. **Wait after actions**: After navigation clicks or form submits, add wait_for for a confirmation element.
-   click "Add to cart" → wait_for "Added!" → next step
-   click "Products" → wait_for "ALL PRODUCTS" → next step
+   click link "Add to cart" inside product "Blue Top" → wait_for heading "Added!" → next step
+   click link "Products" → wait_for heading "ALL PRODUCTS" → next step
 
 5. **Input trigger**: When changing a value that requires keyboard activation (quantity, search),
    add trigger="Enter" on the input step. The executor handles the keypress.
-   input target="quantity" value="2" trigger="Enter"
+   input target=textbox "quantity" value="2" trigger="Enter"
 
 6. **Modify-then-assert**: When changing a value, input → wait_for update → assert.
    Do NOT assert a new value without first inputting it.
 
 7. **Capture-then-assert**: capture_text stores element text into a variable. The FOLLOWING
    assert_text must verify the SAME element text appears elsewhere (e.g. cart page).
-   Pattern: capture_text target="Product Name A" context_key="product_a_name"
-            → later → assert_text target="cart row element" value="${product_a_name}"
+   Pattern: capture_text target=heading "Product Name A" context_key="product_a_name"
+            → later → assert_text target=heading "cart row element" value="${product_a_name}"
    CRITICAL: ${var} can ONLY appear in the VALUE field, NEVER in the target field.
-   The target must always be a real element locator (text, CSS, role).
+   The target must always be a real element locator in role="name" format.
 
 8. **Form coverage**: Generate a step for EVERY form field mentioned in the flow.
    Dropdown: input action. Checkbox/radio: click action.
@@ -945,8 +991,11 @@ No markdown, no explanation — JSON only.
 
 10. **input_contract**: Define every ${var} used in steps. Include context_key AND value.
     Example: {"context_key":"email","value":"test@example.com","value_type":"string","name":"Email","required":true}
-    CRITICAL: Get the VALUE from the "## Test data" section or the scenario's
-    test_data_or_account text. Do NOT use scope_limits, assertion, or flow text as values.
+    CRITICAL: The "value" field MUST be copied VERBATIM from the "## Test data" section.
+    NEVER invent, guess, or modify test data values. If the test data says
+    账号：Xjy13302412005@outlook.com，密码：123456, then:
+    - value for email MUST be "Xjy13302412005@outlook.com" (exact)
+    - value for password MUST be "123456" (exact)
 
 Return ONLY the JSON object."""
 

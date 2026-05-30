@@ -30,6 +30,8 @@ USEFUL_A11Y_ROLES: set[str] = {
     "form", "search", "region", "dialog", "alertdialog", "alert",
     "menu", "menubar", "tablist", "list", "listitem", "article",
     "complementary",
+    # container (grouping)
+    "product", "group",
 }
 
 

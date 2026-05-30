@@ -13,6 +13,23 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# A11y role → Playwright role normalization
+# ---------------------------------------------------------------------------
+
+_A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
+    "searchbox": "search",
+    "menuitemcheckbox": "checkbox",
+    "menuitemradio": "radio",
+}
+"""Roles that differ between the a11y tree and Playwright's get_by_role()."""
+
+
+def _normalize_role_for_playwright(role: str) -> str:
+    """Map a11y roles to Playwright-compatible role names."""
+    return _A11Y_TO_PLAYWRIGHT_ROLE.get(role, role)
+
+
+# ---------------------------------------------------------------------------
 # Target-type detection (mirrors semantic.py's _resolve_explicit_locator)
 # ---------------------------------------------------------------------------
 
@@ -21,6 +38,23 @@ _CHAINED_SELECTOR_RE = re.compile(
 )
 _COMPOUND_CSS_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9]*[\.\#\[\s\>:,~\+]")
 _GENERIC_REPEATED_TARGETS = {"add to cart", "view product"}
+
+# Matches: ... inside product "name"
+_SCOPE_RE = re.compile(
+    r"""\s+inside\s+product\s*["'](.+?)["']""",
+    re.IGNORECASE,
+)
+
+# Matches: role="name" or role "name" at the start of a target
+_ROLE_NAME_RE = re.compile(
+    r'^(button|link|textbox|checkbox|radio|menuitem|combobox|listbox|option'
+    r'|tab|switch|searchbox|heading|dialog|alert|navigation|main|form|region'
+    r'|banner|contentinfo|complementary|article|list|listitem|img|progressbar'
+    r'|slider|spinbutton|treeitem|menu|menubar|tablist|toolbar|status|timer'
+    r'|tooltip|separator|group|presentation|none)'
+    r"""\s*[=\s]\s*["'](.+?)["']""",
+    re.IGNORECASE,
+)
 _KNOWN_TAGS = {
     "button", "input", "select", "textarea", "a", "form",
     "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -324,6 +358,17 @@ def apply_preflight_to_dsl(
     if not steps or not a11y_nodes:
         return dsl_case
 
+    # Build parent→children index for scoped matching
+    node_by_id: dict[str, dict[str, Any]] = {}
+    children_of: dict[str, list[dict[str, Any]]] = {}
+    for n in a11y_nodes:
+        nid = n.get("node_id", "")
+        if nid:
+            node_by_id[nid] = n
+        pid = n.get("parent_id")
+        if pid:
+            children_of.setdefault(pid, []).append(n)
+
     confidences: list[str] = []
     for idx, step in enumerate(steps):
         if not isinstance(step, dict):
@@ -332,22 +377,59 @@ def apply_preflight_to_dsl(
         if not target:
             continue
 
-        target_lower = target.lower()
+        # Parse scope: "link "Add to cart" inside product "Blue Top""
+        scope_name = None
+        scope_match = _SCOPE_RE.search(target)
+        if scope_match:
+            scope_name = scope_match.group(1).strip().lower()
+            # Strip scope suffix for element matching
+            target_core = target[:scope_match.start()].strip()
+        else:
+            target_core = target
+
+        target_lower = target_core.lower()
         matches: list[dict] = []
-        for n in a11y_nodes:
-            name = (n.get("name") or "").lower()
-            if not name:
-                continue
-            if name == target_lower or target_lower in name:
-                matches.append(n)
+
+        if scope_name:
+            # Scoped matching: find the product container whose children
+            # include the product name, then match target against its children.
+            for n in a11y_nodes:
+                if (n.get("role") or "").lower() != "product":
+                    continue
+                pid = n.get("node_id", "")
+                children = children_of.get(pid, [])
+                # Check if any child contains the product name
+                container_matches_scope = False
+                for child in children:
+                    child_name = (child.get("name") or "").lower()
+                    if child_name and (child_name == scope_name or scope_name in child_name):
+                        container_matches_scope = True
+                        break
+                if not container_matches_scope:
+                    continue
+                # Found the right product container — match target against children
+                for child in children:
+                    cname = (child.get("name") or "").lower()
+                    if cname and (cname == target_lower or target_lower in cname):
+                        matches.append(child)
+        else:
+            # Unscoped matching: match against all nodes
+            for n in a11y_nodes:
+                name = (n.get("name") or "").lower()
+                if not name:
+                    continue
+                if name == target_lower or target_lower in name:
+                    matches.append(n)
 
         match_count = len(matches)
         candidates: list[dict] = []
 
         if match_count > 0:
             for n in matches:
-                role = n["role"]
+                role = _normalize_role_for_playwright(n["role"])
                 name = n["name"]
+                scope_ctx = {"scope_name": scope_name} if scope_name else {}
+
                 for vs in n.get("verified_selectors", []):
                     vs_strategy = vs.get("strategy", "")
                     vs_selector = vs.get("selector", "")
@@ -360,16 +442,35 @@ def apply_preflight_to_dsl(
                             "pre_features": {
                                 "verified": True,
                                 "source": vs.get("source") or "a11y_backend_dom_node",
+                                **scope_ctx,
                             },
                         })
-                candidates.extend([
-                    {"strategy": "role", "selector": role, "semantic_value": name,
-                     "pre_score": 0.90, "pre_features": {"verified": True, "source": "a11y_role_exact"}},
-                    {"strategy": "role_fuzzy", "selector": role, "semantic_value": name,
-                     "pre_score": 0.75, "pre_features": {"source": "a11y_role_fuzzy"}},
-                    {"strategy": "text", "selector": name, "semantic_value": name,
-                     "pre_score": 0.55, "pre_features": {"source": "a11y_text_exact"}},
-                ])
+
+                if scope_name:
+                    # Scoped candidates: higher scores to prioritize them
+                    candidates.extend([
+                        {"strategy": "a11y_scoped_role_exact", "selector": role,
+                         "semantic_value": name, "pre_score": 0.95,
+                         "pre_features": {"source": "a11y_scoped_role_exact", **scope_ctx}},
+                        {"strategy": "a11y_scoped_role_fuzzy", "selector": role,
+                         "semantic_value": name, "pre_score": 0.85,
+                         "pre_features": {"source": "a11y_scoped_role_fuzzy", **scope_ctx}},
+                        {"strategy": "a11y_scoped_text_exact", "selector": name,
+                         "semantic_value": name, "pre_score": 0.70,
+                         "pre_features": {"source": "a11y_scoped_text_exact", **scope_ctx}},
+                        {"strategy": "a11y_scoped_text_fuzzy", "selector": name,
+                         "semantic_value": name, "pre_score": 0.60,
+                         "pre_features": {"source": "a11y_scoped_text_fuzzy", **scope_ctx}},
+                    ])
+                else:
+                    candidates.extend([
+                        {"strategy": "role", "selector": role, "semantic_value": name,
+                         "pre_score": 0.90, "pre_features": {"verified": True, "source": "a11y_role_exact"}},
+                        {"strategy": "role_fuzzy", "selector": role, "semantic_value": name,
+                         "pre_score": 0.75, "pre_features": {"source": "a11y_role_fuzzy"}},
+                        {"strategy": "text", "selector": name, "semantic_value": name,
+                         "pre_score": 0.55, "pre_features": {"source": "a11y_text_exact"}},
+                    ])
             if _target_is_generic_repeated_action(target) and match_count > 1:
                 step["locator_confidence"] = "low"
             else:

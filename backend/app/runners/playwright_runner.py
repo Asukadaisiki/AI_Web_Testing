@@ -187,12 +187,29 @@ def _build_locator_from_candidate(page, candidate_entry) -> object | None:
         strategy = candidate_entry.strategy
         selector = candidate_entry.selector or ""
         semantic_value = candidate_entry.semantic_value or ""
+        pre_features = getattr(candidate_entry, "pre_features", None) or {}
     else:
         strategy = candidate_entry.get("strategy", "")
         selector = candidate_entry.get("selector", "")
         semantic_value = candidate_entry.get("semantic_value", "")
+        pre_features = candidate_entry.get("pre_features") or {}
+
+    scope_name = pre_features.get("scope_name")
 
     try:
+        # Scoped strategies: find product container by content, then chain to target
+        if strategy.startswith("a11y_scoped_") and scope_name:
+            product_containers = page.get_by_role("product")
+            scope = product_containers.filter(has=page.get_by_text(scope_name, exact=True))
+            if strategy == "a11y_scoped_role_exact":
+                return scope.get_by_role(selector or "button", name=semantic_value, exact=True)
+            if strategy == "a11y_scoped_role_fuzzy":
+                return scope.get_by_role(selector or "button", name=semantic_value)
+            if strategy == "a11y_scoped_text_exact":
+                return scope.get_by_text(selector, exact=True)
+            if strategy == "a11y_scoped_text_fuzzy":
+                return scope.get_by_text(selector, exact=False)
+
         if strategy in ("css", "css_selector"):
             return page.locator(selector)
         if strategy == "xpath":

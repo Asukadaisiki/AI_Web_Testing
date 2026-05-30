@@ -414,13 +414,14 @@ class TestProductCardDisambiguation:
 
         result = _format_elements_flat(nodes)
 
-        assert "Product cards (deduplicated business view)" in result
+        assert "Product cards (use scoped targets to disambiguate)" in result
         assert 'product="Blue Top" price="Rs. 500"' in result
-        assert 'add_to_cart_target="Add to cart"' in result
-        assert 'add_candidate=verified_css:"a[data-product-id="1"]:visible"' in result
-        assert result.count('product="Blue Top"') == 1
-        assert 'heading="Rs. 500" id=e1 [duplicate 1/2]' in result
-        assert 'link="Add to cart" id=e6 [duplicate 2/2]' in result
+        assert 'target=link "Add to cart" inside product "Blue Top"' in result
+        assert 'add_candidate' not in result  # DOM selectors must not leak to AI
+        assert result.count('product="Blue Top"') >= 1
+        assert 'heading="Rs. 500" [duplicate 1/2]' in result
+        assert 'link="Add to cart" [duplicate 1/2] [verified=1]' in result
+        assert 'link="Add to cart" [duplicate 2/2]' in result
 
     def test_price_click_rewrites_to_product_context_target(self) -> None:
         from app.ai.dsl_generator import (
