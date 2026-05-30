@@ -30,6 +30,51 @@
 | explore_flow 遮挡恢复 | 05-28 | _execute_flow_actions / capture_browser_session 接入 click_with_precheck | 504 tests, cartModal 不再杀掉探索 |
 | 完整探索数据 + 用户上下文注入 | 05-29 | _load_a11y_nodes 合并所有 explore 记录 + user_context 注入 segment prompt | 504 tests, DSL 生成器看到完整元素和原始需求 |
 | Agent 流程 vs 直接脚本测试 | 05-30 | explore-flow 探索、DSL 生成、执行测试对比分析 | 发现 6 项问题，a11y 过滤和选择器策略修复 |
+| A11y 无名输入框定位修复 | 05-31 | label 兄弟 input 策略 + cell role 支持 | 29 steps 全通过，Quantity 输入框定位 |
+
+---
+
+## 2026-05-31 | A11y 无名输入框定位修复
+
+**任务**：验证购物车品牌筛选 DSL 测试用例，修复 Quantity 输入框定位失败问题。
+
+**测试需求**：
+- 登录 → 品牌筛选（Polo）→ 添加 Blue Top (Rs.500) → 添加 Fancy Green Top (Rs.700, qty=2) → 验证购物车总价
+
+**问题现象**：
+1. `textbox="Quantity"` 定位失败 — 输入框在 a11y 树中是 `ignored` 状态
+2. 购物车页面价格是 `cell` role，不是 `heading`，`inside` 语法失效
+
+**根因分析**：
+1. Quantity 输入框（`<input type="number" id="quantity">`）没有 `aria-label`，也没有关联的 `<label>` 元素，Chrome 无障碍引擎将其标记为 `ignored`
+2. 购物车页面价格在 `<td>` 单元格内，a11y role 是 `cell`，不是 `heading`
+
+**操作**：
+1. **语义定位器增强** (`backend/app/locators/semantic.py`)：
+   - 添加 `_find_input_near_text()` 函数：查找 label 文本 → 定位兄弟 input 元素
+   - 新增 `a11y_label_sibling_input` 策略（基础分 82）
+   - 扩展 `_A11Y_ROLE_TARGET_RE` 和 `_A11Y_TO_PLAYWRIGHT_ROLE`：添加 `cell`、`row`、`column`
+
+2. **DSL 修改** (`backend/test_dsl.json`)：
+   - `textbox="Quantity"` → `Quantity`（纯文本匹配，触发 label-sibling-input 策略）
+   - `heading="Rs. 500" inside "Blue Top"` → `cell="Rs. 500"`
+   - `heading="Rs. 1400" inside "Fancy Green Top"` → `cell="Rs. 1400"`
+
+3. **执行脚本清理**：删除 `execute_dsl.py`、`run_dsl_with_runner.py`、`test_cart_flow.py`、`explore_results.json`、`product_structure.txt`
+
+**结果**：29 个步骤全部通过（含 Login、品牌筛选、添加商品、购物车验证）
+
+**验证**：
+```
+Step 12: input Quantity → OK: Filled Quantity
+Step 20: input Quantity → OK: Filled Quantity
+Step 28: assert_text cell="Rs. 500" → OK
+Step 29: assert_text cell="Rs. 1400" → OK
+```
+
+**后续**：
+- 此修复适用于所有没有 `aria-label` 的输入框（通过 label 文本自动关联）
+- `cell` role 支持可用于表格数据断言
 
 ---
 

@@ -50,7 +50,7 @@ _A11Y_ROLE_TARGET_RE = re.compile(
     r'|tab|switch|searchbox|heading|dialog|alert|navigation|main|form|region'
     r'|banner|contentinfo|complementary|article|list|listitem|img|progressbar'
     r'|slider|spinbutton|treeitem|menu|menubar|tablist|toolbar|status|timer'
-    r'|tooltip|separator|group|presentation|none)'
+    r'|tooltip|separator|group|presentation|none|cell|row|column)'
     r"""\s*[=\s]\s*["'](.+?)["']""",
     re.IGNORECASE,
 )
@@ -103,6 +103,9 @@ _A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
     "status": "status",
     "timer": "timer",
     "tooltip": "tooltip",
+    "cell": "cell",
+    "row": "row",
+    "column": "column",
 }
 
 
@@ -248,6 +251,8 @@ def _build_candidate_builders(
             builders.extend([
                 ("a11y_placeholder", lambda n=name: page.get_by_placeholder(n)),
                 ("a11y_label", lambda n=name: page.get_by_label(n)),
+                # Find input near label text (for inputs without aria-label)
+                ("a11y_label_sibling_input", lambda n=name: _find_input_near_text(page, n)),
             ])
         builders.extend([
             ("a11y_text_exact", lambda n=name: page.get_by_text(n, exact=True)),
@@ -264,6 +269,42 @@ def _build_candidate_builders(
         return builders
 
     return []
+
+
+def _find_input_near_text(page, text: str):
+    """Find input element associated with label text.
+
+    Strategies:
+    1. Find <label> containing text, then find input via 'for' attribute or sibling
+    2. Find any element containing text, then find nearby input/sibling
+    """
+    # Strategy 1: Find label with text, then find associated input
+    labels = page.locator(f'label:has-text("{text}")')
+    for i in range(labels.count()):
+        label = labels.nth(i)
+        # Check 'for' attribute
+        for_attr = label.get_attribute('for')
+        if for_attr:
+            input_by_id = page.locator(f'#{for_attr}')
+            if input_by_id.count() > 0:
+                return input_by_id.first
+        # Check sibling input
+        parent = label.locator('xpath=..')
+        inputs = parent.locator('input, select, textarea, [role=spinbutton], [role=textbox]')
+        if inputs.count() > 0:
+            return inputs.first
+
+    # Strategy 2: Find element with text, then find sibling input
+    text_elements = page.locator(f'text="{text}"')
+    for i in range(text_elements.count()):
+        elem = text_elements.nth(i)
+        parent = elem.locator('xpath=..')
+        inputs = parent.locator('input, select, textarea, [role=spinbutton], [role=textbox]')
+        if inputs.count() > 0:
+            return inputs.first
+
+    # Return empty locator that will fail gracefully
+    return page.locator('__nonexistent__')
 
 
 # ── Explicit locator resolution (CSS/XPath only) ─────────────────────────────
@@ -480,6 +521,7 @@ _STRATEGY_SCORES: dict[str, int] = {
     "data-testid": 105,        # data-testid attribute
     "a11y_role_fuzzy": 90,     # Fuzzy role+name match
     "a11y_label": 85,          # aria-label / label element
+    "a11y_label_sibling_input": 82,  # Input found via label text sibling
     "a11y_text_exact": 80,     # Exact text match
     "a11y_placeholder": 75,    # Placeholder attribute
     "a11y_text_fuzzy": 60,     # Fuzzy text match

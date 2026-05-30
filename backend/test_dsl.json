@@ -1,0 +1,135 @@
+{
+  "name": "Shopping Cart Brand Filter Test",
+  "description": "Verify shopping cart functionality with brand filtering and quantity update",
+  "base_url": "https://automationexercise.com",
+  "steps": [
+    {
+      "action": "goto",
+      "value": "https://automationexercise.com/login"
+    },
+    {
+      "action": "input",
+      "target": "textbox=\"Email Address\"",
+      "value": "Xjy13302412005@outlook.com"
+    },
+    {
+      "action": "input",
+      "target": "textbox=\"Password\"",
+      "value": "123456"
+    },
+    {
+      "action": "click",
+      "target": "button=\"Login\""
+    },
+    {
+      "action": "wait_for",
+      "target": "Logout"
+    },
+    {
+      "action": "goto",
+      "value": "https://automationexercise.com/view_cart"
+    },
+    {
+      "action": "click",
+      "target": "link=\"Products\""
+    },
+    {
+      "action": "click",
+      "target": "link=\"(6)Polo\""
+    },
+    {
+      "action": "wait_for",
+      "target": "BRAND - POLO PRODUCTS"
+    },
+    {
+      "action": "capture_text",
+      "target": "heading=\"Rs. 500\" inside \"Blue Top\"",
+      "context_key": "product_a_price"
+    },
+    {
+      "action": "click",
+      "target": "link=\"View Product\" inside \"Blue Top\""
+    },
+    {
+      "action": "input",
+      "target": "Quantity",
+      "value": "1"
+    },
+    {
+      "action": "click",
+      "target": "button=\"Add to cart\""
+    },
+    {
+      "action": "click",
+      "target": "button=\"Continue Shopping\""
+    },
+    {
+      "action": "click",
+      "target": "link=\"Products\""
+    },
+    {
+      "action": "click",
+      "target": "link=\"(6)Polo\""
+    },
+    {
+      "action": "wait_for",
+      "target": "BRAND - POLO PRODUCTS"
+    },
+    {
+      "action": "capture_text",
+      "target": "heading=\"Rs. 700\" inside \"Fancy Green Top\"",
+      "context_key": "product_b_price"
+    },
+    {
+      "action": "click",
+      "target": "link=\"View Product\" inside \"Fancy Green Top\""
+    },
+    {
+      "action": "input",
+      "target": "Quantity",
+      "value": "2"
+    },
+    {
+      "action": "click",
+      "target": "button=\"Add to cart\""
+    },
+    {
+      "action": "click",
+      "target": "link=\"View Cart\""
+    },
+    {
+      "action": "wait_for",
+      "target": "Shopping Cart"
+    },
+    {
+      "action": "assert_text",
+      "target": "link=\"Blue Top\"",
+      "value": "Blue Top"
+    },
+    {
+      "action": "assert_text",
+      "target": "heading=\"Rs. 500\"",
+      "value": "Rs. 500"
+    },
+    {
+      "action": "assert_text",
+      "target": "link=\"Fancy Green Top\"",
+      "value": "Fancy Green Top"
+    },
+    {
+      "action": "assert_text",
+      "target": "heading=\"Rs. 700\"",
+      "value": "Rs. 700"
+    },
+    {
+      "action": "assert_text",
+      "target": "cell=\"Rs. 500\"",
+      "value": "Rs. 500"
+    },
+    {
+      "action": "assert_text",
+      "target": "cell=\"Rs. 1400\"",
+      "value": "Rs. 1400"
+    }
+  ]
+}
