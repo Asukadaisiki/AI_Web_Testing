@@ -816,11 +816,12 @@ No markdown, no explanation — JSON only.
    Use the container's unique identifying text as the scope.
    Never target a bare price like "Rs. 500".
 
-2. **Page structure understanding**: Analyze the Available elements to understand the page structure:
-   - Elements with the same role+name but in different containers need scoped targets
-   - Containers are identified by their unique text content (product name, heading, label)
-   - Use `inside "container_identifier"` to disambiguate, where container_identifier is the
-     unique text of the parent container (e.g. product name, section heading, row label)
+2. **Page structure understanding**: The Available elements use indentation to show parent-child relationships:
+   - Indented elements are children of the element above them
+   - Example: `- paragraph\n  - StaticText="Blue Top"\n  - heading="Rs. 500"\n  - link="Add to cart"`
+     means StaticText, heading, and link are children of the paragraph container
+   - Use the parent container's identifying text as the scope name for `inside`
+   - Example: To click "Add to cart" inside "Blue Top" product card, use: target=link "Add to cart" inside "Blue Top"
 
 3. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
    The first step after goto / is a navigation click, not a form input.
