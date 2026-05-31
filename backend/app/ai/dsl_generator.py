@@ -819,6 +819,14 @@ The Available elements are grouped by page -> action:
    FORBIDDEN: CSS selectors (#id, .class, [attr]), XPath (//, /html), tag names (div, span),
    data-testid, or ANY DOM-derived selector. The system resolves locators from a11y role+name only.
 
+   **IMPORTANT**: Use the role from the element that HAS the name, NOT from its parent.
+   Example: If you see:
+   ```
+   - paragraph
+     - StaticText="Premium Polo T-Shirts"
+   ```
+   Use: `StaticText="Premium Polo T-Shirts"` (NOT `paragraph="Premium Polo T-Shirts"`)
+
    **Element disambiguation**: When multiple elements have the same role and name (e.g. multiple
    "Add to cart" buttons), you MUST use the scoped format:
    target=<role> "<name>" inside "<container_identifier>"
