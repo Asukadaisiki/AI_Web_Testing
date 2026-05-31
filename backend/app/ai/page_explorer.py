@@ -1665,7 +1665,115 @@ def _collect_flow_a11y(
             except Exception:
                 pass
     logger.info("_collect_flow_a11y completed: %d results", len(results))
-    return results
+
+    # Deduplicate results: keep unique pages with their actions
+    deduplicated = _deduplicate_explore_results(results)
+    logger.info("_collect_flow_a11y after dedup: %d pages", len(deduplicated))
+    return deduplicated
+
+
+def _deduplicate_explore_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate explore results while preserving structure.
+
+    Strategy:
+    1. Group by URL (normalized)
+    2. For each URL, keep the page with the most actions
+    3. Within each page, deduplicate actions by action_description
+    4. Within each action, deduplicate nodes by (role, name) to reduce size
+    """
+    # Group by URL
+    pages_by_url: dict[str, dict] = {}
+    for page in results:
+        url = (page.get("url") or "").strip().rstrip("/").lower()
+        if not url:
+            continue
+        # Remove hash fragments (ads, etc.)
+        url = url.split("#")[0]
+        existing = pages_by_url.get(url)
+        if existing is None:
+            pages_by_url[url] = page
+        else:
+            # Keep page with more actions
+            existing_actions = existing.get("actions", [])
+            new_actions = page.get("actions", [])
+            if len(new_actions) > len(existing_actions):
+                pages_by_url[url] = page
+
+    # Deduplicate actions within each page
+    deduplicated = []
+    for url, page in pages_by_url.items():
+        actions = page.get("actions", [])
+        if not actions:
+            deduplicated.append(page)
+            continue
+
+        # Deduplicate actions by action_description
+        seen_actions: dict[str, dict] = {}
+        for action in actions:
+            desc = action.get("action_description", "")
+            if desc not in seen_actions:
+                seen_actions[desc] = action
+            else:
+                # Keep action with more nodes
+                existing_nodes = seen_actions[desc].get("element_count", 0)
+                new_nodes = action.get("element_count", 0)
+                if new_nodes > existing_nodes:
+                    seen_actions[desc] = action
+
+        # Deduplicate nodes within each action
+        for desc, action in seen_actions.items():
+            nodes = action.get("a11y_nodes", [])
+            if nodes:
+                action["a11y_nodes"] = _deduplicate_nodes(nodes)
+                action["element_count"] = len(action["a11y_nodes"])
+
+        page["actions"] = list(seen_actions.values())
+        deduplicated.append(page)
+
+    return deduplicated
+
+
+def _deduplicate_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate a11y nodes by (role, name) while preserving parent-child structure.
+
+    Keeps:
+    - First occurrence of each (role, name) combination
+    - All nodes that are parents (have children)
+    - All nodes with verified_selectors
+    """
+    seen: dict[tuple[str, str], bool] = {}
+    result: list[dict[str, Any]] = []
+
+    # Build parent-child relationships
+    child_ids: set[str] = set()
+    for node in nodes:
+        parent_id = node.get("parent_id")
+        if parent_id:
+            child_ids.add(parent_id)
+
+    for node in nodes:
+        role = node.get("role", "unknown")
+        name = node.get("name", "")
+        key = (role, name)
+
+        # Always keep nodes that are parents (have children)
+        node_id = node.get("node_id", "")
+        if node_id in child_ids:
+            result.append(node)
+            continue
+
+        # Always keep nodes with verified_selectors
+        verified = node.get("verified_selectors", [])
+        if verified:
+            result.append(node)
+            continue
+
+        # Deduplicate by (role, name)
+        if key not in seen:
+            seen[key] = True
+            result.append(node)
+
+    return result
 
 
 def _execute_flow_actions(page, actions: list[dict[str, Any]]) -> None:
