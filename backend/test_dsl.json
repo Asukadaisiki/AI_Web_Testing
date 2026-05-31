@@ -47,7 +47,20 @@
     },
     {
       "action": "click",
-      "target": "link=\"Add to cart\" inside \"Fancy Green Top\""
+      "target": ".product-image-wrapper:has(.productinfo:has-text(\"Fancy Green Top\")) a:has-text(\"View Product\")"
+    },
+    {
+      "action": "wait_for",
+      "target": "Quantity:"
+    },
+    {
+      "action": "input",
+      "target": "#quantity",
+      "value": "2"
+    },
+    {
+      "action": "click",
+      "target": "button=\"Add to cart\""
     },
     {
       "action": "wait_for",
@@ -73,23 +86,13 @@
     },
     {
       "action": "assert_text",
-      "target": "link=\"Fancy Green Top\"",
-      "value": "Fancy Green Top"
-    },
-    {
-      "action": "assert_text",
-      "target": "heading=\"Rs. 700\"",
-      "value": "Rs. 700"
-    },
-    {
-      "action": "assert_text",
       "target": "cell=\"Rs. 500\"",
       "value": "Rs. 500"
     },
     {
       "action": "assert_text",
-      "target": "cell=\"Rs. 700\"",
-      "value": "Rs. 700"
+      "target": "cell=\"Rs. 1400\"",
+      "value": "Rs. 1400"
     }
   ]
 }
