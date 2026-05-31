@@ -9,14 +9,62 @@ AI 增强的 Web UI 自动化测试平台。
 
 ## 当前状态
 
-当前阶段：**M2 功能增强 — A11y 管线 v2 已落地，主路径全面切换**。M1/M2 前端体验全部完成。
+当前阶段：**M2 功能增强 — A11y 树全面切换 + DSL 生成链路修复 + E2E 测试验证**。M1/M2 前端体验全部完成。
 
-进度判断（基于 2026-05-15 量化结果）：
+进度判断（基于 2026-05-31 量化结果）：
 - M1 完成度：`100%`
 - M2 前端体验重构完成度：`100%`
-- M2 功能增强完成度：`95%`（A11y 管线 + 缓存 + Preflight 闭环已通）
-- 相对核心五阶段产品路线图整体完成度：`95%+`
-- 单元测试：**505 passed / 0 failed**，集成测试：**8 passed / 0 failed**
+- M2 功能增强完成度：`98%`（A11y 树全面切换 + DSL 生成链路修复 + E2E 验证通过）
+- 相对核心五阶段产品路线图整体完成度：`98%+`
+- 单元测试：**504 passed / 0 failed**，集成测试：**8 passed / 0 failed**
+
+### 2026-05-31 textContent + DSL 完善（4 次修复）
+
+验证购物车品牌筛选 DSL 测试用例，修复 4 个问题，最终 21/21 步骤全通过：
+
+| 问题 | 根因 | 修复 |
+|------|------|------|
+| heading 定位失败 | CSS `text-transform: uppercase` 导致 `innerText` 返回全大写 | 使用 `textContent` 替代 `innerText` |
+| View Product 定位失败 | 链接不在产品容器中（a11y 树中是独立元素） | 使用 CSS 选择器 `.product-image-wrapper:has(...)` |
+| 数量修改无效 | 购物车页面数量是只读的 | 在产品详情页设置数量后再添加到购物车 |
+| 断言值找不到 | 数量未正确设置导致总价不匹配 | 在产品详情页设置数量为 2，总价更新为 Rs. 1400 |
+
+### 2026-05-31 A11y 无名输入框定位修复
+
+修复 Quantity 输入框定位失败问题，新增 `a11y_label_sibling_input` 策略：
+
+- **问题**：输入框在 a11y 树中是 `ignored` 状态（无 `aria-label`，无关联 `<label>`）
+- **修复**：添加 `_find_input_near_text()` 函数，查找 label 文本 → 定位兄弟 input 元素
+- **扩展**：支持 `cell`、`row`、`column` 等表格角色
+- **结果**：29 个步骤全部通过（含 Login、品牌筛选、添加商品、购物车验证）
+
+### 2026-05-25~05-28 DSL 生成链路 7 层 bug 修复 + 全面清理
+
+从 `backend.log` 追踪定位错误归属，修复 7 层因果链 bug：
+
+| Bug | 问题 | 修复 |
+|-----|------|------|
+| Bug A | single-segment 路径下 a11y 数据丢失 | 新增 `a11y_nodes_by_state` 字段传递 |
+| Bug B | LLM 调用无重试 + 错误消息误导 | 新增 `_urlopen_with_retry`（指数退避）+ 准确诊断 |
+| Bug C | agent 重复调用工具浪费安全帽轮次 | 新增 `_tool_call_signature` 去重 |
+| Bug D | Pydantic plan 当 dict 用 | `model_dump(mode="json")` 替代直接 `.get()` |
+| Bug E | `_log_dsl_cache_usage` 被误删 | 恢复函数定义 + `isinstance` 防御 |
+| Bug F | goto/assert_url_contains target↔value 错位 | 新增 `_normalize_llm_step` 自动修正 |
+| Bug G | assert_text 缺 value + 别名表未接入 | 接入三张孤儿别名表 + 特殊兜底 |
+
+**全面清理**：
+- 删除 14 项孤儿数据（导入未实现、实现未导入、引用未实现等）
+- 修复 19 项数据传递与校验问题（高风险 3 项、中风险 8 项、低风险 8 项）
+
+### 2026-05-28 A11y Tree 全面切换
+
+封杀所有 DOM 元素路径，让 AI 只使用 a11y tree 进行元素定位：
+
+- 新增 `format_a11y_nodes_for_prompt()` 函数，格式化为 `role="name"` 格式
+- 移除 `elements` 和 `page_elements` 参数，只保留 `a11y_nodes`
+- target 必须使用 `button="Login"` 格式，禁止 XPath/CSS 选择器
+- 新增 `_clean_variable_format()` 清理 `${email}=value` 错误格式
+- 所有 `to_contain_text()` 调用添加 `normalize_whitespace=True`
 
 ### 2026-05-15 主路径 v2 — A11y 树驱动管线
 
@@ -50,25 +98,47 @@ AI 增强的 Web UI 自动化测试平台。
 | nth-of-type 定位器 | 13 | 0（全部语义定位） |
 | 执行通过率 | 0%（无法执行） | **100%（42/42）** |
 
+### 2026-05-25~05-31 DSL 生成链路全面修复 + A11y 树切换
+
+从 `backend.log` 追踪定位错误归属，修复 7 层因果链 bug，全面切换到 A11y 树：
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| DSL 生成失败 | "所有分段均未生成步骤" | 543 tests, 16 新增测试 |
+| 网络错误 | 单次失败即终止 | 指数退避重试 + 准确诊断 |
+| 工具调用 | 重复调用浪费轮次 | 签名去重 + 不扣 round |
+| 元素定位 | DOM 路径 + VLM 调用多 | A11y 树 + 语义定位器 |
+| 无名输入框 | 定位失败 | `a11y_label_sibling_input` 策略 |
+| 变量占位符 | 执行时未替换 | `input_contract` 自动提取 |
+| E2E 测试 | 无法执行完整流程 | **21/21 步骤全通过** |
+
 ### 已完成的核心能力
 
 - 平台基础：NotebookLM 三栏浮岛布局、侧边栏导航、ReportPage、Case 管理（含编辑/删除）、执行详情、执行记录删除
 - 前端体验：全局大圆角/无边框/弱阴影主题 token，全部页面统一三栏布局
 - 执行主链路：DSL 校验、单 Case 执行、步骤级证据、执行详情与报告聚合
 - 执行流式推送：后端 SSE 流式执行原语、AI Planning SSE worker/路由、前端实时进度气泡与取消按钮
-- 混合定位闭环：Tier 0 人工修正、Tier 1 DOM 语义定位（含 text_parent_chain 消歧）、Tier 2 AI visual、Tier 3 人工干预
+- 混合定位闭环：Tier 0 人工修正、Tier 1 A11y 语义定位（含 text_parent_chain 消歧）、Tier 2 AI visual、Tier 3 人工干预
 - AI DSL：`generate_segmented_case_draft` 唯一入口、分段并行生成、Preflight 1:N candidates + 单段重生、草案预览与导入
 - AI 规划助手：对话式测试规划、A11y 树探索（CDP `Accessibility.getFullAXTree`）、关键字驱动折叠展开、DB 缓存（TTL=4h）、ReAct lite（safety_cap=5, 4 字段 schema）
-- 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回归能力：505 单元测试 + 8 集成测试（含 3 条浏览器级 A11y 管线回归）
+- **A11y 树全面切换**：封杀 DOM 路径，只使用 a11y tree 进行元素定位，格式化为 `role="name"` 格式
+- **DSL 生成链路修复**：7 层因果链 bug 修复（Bug A→G），网络重试、工具去重、字段归一化
+- **变量占位符系统**：分段生成 `input_contract` 自动提取、跨段变量命名权威、`_clean_variable_format` 格式清理
+- **语义定位器增强**：`a11y_label_sibling_input` 策略（无名输入框）、`cell`/`row`/`column` 表格角色支持
+- **E2E 测试验证**：`test_brand_filter_cart` 标准回归用例，21/21 步骤全通过（登录→品牌筛选→加购→购物车验证）
+- 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回归能力：504 单元测试 + 8 集成测试（含 3 条浏览器级 A11y 管线回归）
 - 白盒测试：session 层 + 用例创建/执行/端到端全链路 API chain 测试覆盖
+- **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
-- `generate_case_draft` 已删除，但 `services/dsl.py` 的 `/api/v1/dsl/generate` 路由已切换到 `generate_segmented_case_draft`
+- `generate_case_draft` 已删除，`services/dsl.py` 的 `/api/v1/dsl/generate` 路由已切换到 `generate_segmented_case_draft`
 - AI visual 仍默认关闭，灰度验证样本积累中
+- explore_flow DSL 格式支持、跨段变量命名权威、explore_flow 遮挡恢复等特性已验证
 
 与计划相比的主要差距：
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
-- 认证只做到”本地账号密码 + Cookie Session”最小可用形态，尚未进入角色权限、账号管理、密码重置
+- 认证只做到"本地账号密码 + Cookie Session"最小可用形态，尚未进入角色权限、账号管理、密码重置
+- E2E 测试覆盖场景仍需扩展（当前主要验证 login_success 和品牌筛选购物车场景）
 
 AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./docs/ai-visual-gray-acceptance-baseline.md)，本轮结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./docs/ai-visual-gray-acceptance-2026-03-24.md)。
 
@@ -81,6 +151,18 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
 3. **报告**（ReportPage）：查看执行结果、概览统计、步骤证据与截图，支持删除执行记录
 
 全部页面采用 NotebookLM 风格三栏浮岛布局，侧边栏底部导航。
+
+### E2E 测试验证
+
+使用 `test_brand_filter_cart` 标准回归用例验证完整流程：
+
+1. **登录**：使用注册账号登录系统
+2. **品牌筛选**：点击 Polo 品牌，验证页面标题为 "Brand - Polo Products"
+3. **添加商品 A**：添加 Blue Top (Rs.500) 到购物车
+4. **添加商品 B**：添加 Fancy Green Top (Rs.700, qty=2) 到购物车
+5. **购物车验证**：验证商品名称、价格、数量、总价 (Rs.1400)
+
+测试结果：**21/21 步骤全通过**（2026-05-31 验证）
 
 ## 人工干预路径
 
@@ -109,7 +191,7 @@ AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](.
 
 ```powershell
 cd backend
-# 全量单测（505 tests）
+# 全量单测（504 tests）
 uv run pytest tests/unit -q
 
 # 浏览器级回归（需 Playwright）
@@ -160,7 +242,7 @@ AI DSL 生成会输出最小治理信息：
 |------|------|------|
 | Tier 0 | 人工修正 | 优先命中已保存的 corrections 记录 |
 | Tier 1 | A11y candidates | Preflight 1:N 映射：`role`(0.90) / `role_fuzzy`(0.75) / `text`(0.55)，runtime_scorer 排序 |
-| Tier 2 | DOM 语义定位 | text_parent_chain 消歧、element_id、CSS/XPath、text/role/placeholder 匹配 |
+| Tier 2 | A11y 语义定位 | `a11y_label_sibling_input`（无名输入框）、`cell`/`row`/`column` 表格角色、text_parent_chain 消歧 |
 | Tier 3 | AI visual | 视觉模型定位，默认关闭，需手动开启 |
 | Tier 4 | 人工干预 | 定位失败后进入 `needs_intervention`，提交修正后可重跑 |
 
@@ -198,7 +280,7 @@ npm run dev
 
 ## 测试与构建
 
-### 后端测试（505 单元测试）
+### 后端测试（504 单元测试）
 
 ```powershell
 cd backend
@@ -230,6 +312,16 @@ cd frontend
 npm run build
 ```
 
+### E2E 自动化测试
+
+```powershell
+cd backend
+# 品牌筛选购物车 E2E 测试（~7-11 分钟）
+uv run pytest tests/e2e/test_e2e_brand_filter_cart.py -v
+```
+
+E2E 测试验证完整流程：登录 → 品牌筛选（Polo）→ 添加商品 → 购物车验证
+
 ## 推荐联调路径
 
 建议先通过 AI 规划页生成一个 smoke case 验证完整闭环：
@@ -255,6 +347,13 @@ npm run build
 - `docs/superpowers/specs/`：功能设计规格文档
 - `docs/superpowers/plans/`：实施计划文档
 
+### 最新设计文档（2026-05）
+
+- `docs/superpowers/specs/2026-05-06-ai-agent-quality-improvement-design.md`：AI Agent 质量提升设计
+- `docs/superpowers/plans/2026-05-06-ai-agent-quality-improvement.md`：AI Agent 质量提升实施计划
+- `docs/superpowers/specs/2026-05-13-ppt-layout-fix-design.md`：PPT 布局修复设计
+- `docs/superpowers/plans/2026-05-13-ppt-layout-fix.md`：PPT 布局修复实施计划
+
 如果文档之间有冲突，以 `docs/AI 自动化测试增强项目规划.md` 为准。
 
 ## 开发约束
@@ -263,3 +362,6 @@ npm run build
 - 前端只负责平台交互、工作台编辑和结果展示
 - AI 能力不能绕过 DSL 校验直接驱动执行
 - 新增功能默认需要补测试，并更新 `docs/execution-log.md`
+- DSL target 必须使用 `role="name"` 格式（A11y 树），禁止 XPath/CSS 选择器
+- 变量占位符使用 `${var}` 格式，只能用在 value 字段，不能用在 target 字段
+- E2E 测试使用 `test_brand_filter_cart` 标准回归用例验证完整流程
