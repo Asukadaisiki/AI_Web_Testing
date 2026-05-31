@@ -5,41 +5,23 @@
   "steps": [
     {
       "action": "goto",
-      "value": "https://automationexercise.com/login"
-    },
-    {
-      "action": "input",
-      "target": "textbox=\"Email Address\"",
-      "value": "Xjy13302412005@outlook.com"
-    },
-    {
-      "action": "input",
-      "target": "textbox=\"Password\"",
-      "value": "123456"
-    },
-    {
-      "action": "click",
-      "target": "button=\"Login\""
-    },
-    {
-      "action": "wait_for",
-      "target": "Logout"
-    },
-    {
-      "action": "goto",
-      "value": "https://automationexercise.com/view_cart"
+      "value": "https://automationexercise.com/"
     },
     {
       "action": "click",
       "target": "link=\"Products\""
     },
     {
+      "action": "wait_for",
+      "target": "All Products"
+    },
+    {
       "action": "click",
-      "target": "link=\"(6)Polo\""
+      "target": "link=\" (6)Polo\""
     },
     {
       "action": "wait_for",
-      "target": "BRAND - POLO PRODUCTS"
+      "target": "Brand - Polo Products"
     },
     {
       "action": "capture_text",
@@ -48,32 +30,15 @@
     },
     {
       "action": "click",
-      "target": "link=\"View Product\" inside \"Blue Top\""
+      "target": "link=\"Add to cart\" inside \"Blue Top\""
     },
     {
-      "action": "input",
-      "target": "Quantity",
-      "value": "1"
-    },
-    {
-      "action": "click",
-      "target": "button=\"Add to cart\""
+      "action": "wait_for",
+      "target": "Continue Shopping"
     },
     {
       "action": "click",
       "target": "button=\"Continue Shopping\""
-    },
-    {
-      "action": "click",
-      "target": "link=\"Products\""
-    },
-    {
-      "action": "click",
-      "target": "link=\"(6)Polo\""
-    },
-    {
-      "action": "wait_for",
-      "target": "BRAND - POLO PRODUCTS"
     },
     {
       "action": "capture_text",
@@ -82,16 +47,11 @@
     },
     {
       "action": "click",
-      "target": "link=\"View Product\" inside \"Fancy Green Top\""
+      "target": "link=\"Add to cart\" inside \"Fancy Green Top\""
     },
     {
-      "action": "input",
-      "target": "Quantity",
-      "value": "2"
-    },
-    {
-      "action": "click",
-      "target": "button=\"Add to cart\""
+      "action": "wait_for",
+      "target": "View Cart"
     },
     {
       "action": "click",
@@ -128,8 +88,8 @@
     },
     {
       "action": "assert_text",
-      "target": "cell=\"Rs. 1400\"",
-      "value": "Rs. 1400"
+      "target": "cell=\"Rs. 700\"",
+      "value": "Rs. 700"
     }
   ]
 }

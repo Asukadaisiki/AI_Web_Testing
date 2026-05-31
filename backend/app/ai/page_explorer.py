@@ -189,12 +189,18 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                     attrs,
                     visible: rect.width > 0 && rect.height > 0 &&
                       style.visibility !== "hidden" && style.display !== "none",
-                    enabled: !this.disabled && this.getAttribute("aria-disabled") !== "true"
+                    enabled: !this.disabled && this.getAttribute("aria-disabled") !== "true",
+                    textContent: this.textContent || ""
                   };
                 }
                 """,
             }).get("result", {}).get("value") or {}
             node["dom"] = payload
+            # Use textContent instead of innerText to avoid CSS text-transform issues
+            text_content = payload.get("textContent", "")
+            if text_content and text_content != node.get("name"):
+                node["original_name"] = node.get("name")
+                node["name"] = text_content
             node["verified_selectors"] = []
             for strategy, selector in _stable_dom_selectors(payload):
                 try:
