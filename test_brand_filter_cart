@@ -5,17 +5,30 @@ business_goal: 验证用户按品牌筛选商品后，多件商品加入购物�
 entry_url_or_page: https://automationexercise.com/
 
 core_user_flow:
-1. 打开首页点击 Signup / Login 进入登录页并使用已有测试账号登录
-2. 点击 Products 导航链接进入商品列表页，等待页面完全加载
-3. 在左侧 Brand 分类中点击 Polo
-4. 等待筛选结果刷新完成，页面应只显示 Polo 品牌的商品
-5. 从筛选结果中取前两件商品：第一件记为商品A，第二件记为商品B
-6. 记录商品A的名称和显示价格，将商品A加入购物车，在弹层中点击 Continue Shopping
-7. 记录商品B的名称和显示价格，将商品B加入购物车，在弹层中点击 View Cart 进入购物车页
-8. 在购物车页验证：商品A的名称、单价、数量为1、总价等于单价
-9. 在购物车页验证：商品B的名称、单价、数量为1、总价等于单价
-10. 修改商品B的数量为 2，等待页面更新
-11. 验证商品B的总价更新为 单价 × 2，同时商品A的总价不变
+1. 打开首页点击 Products 导航链接进入商品列表页，等待页面完全加载
+2. 在左侧 Brand 分类中点击 Polo
+3. 等待筛选结果刷新完成，页面应只显示 Polo 品牌的商品
+4. 从筛选结果中取前两件商品：第一件记为商品A，第二件记为商品B
+5. 记录商品A的名称和显示价格，将商品A加入购物车，在弹层中点击 Continue Shopping
+6. 记录商品B的名称和显示价格，将商品B加入购物车，在弹层中点击 View Cart 进入购物车页
+7. 在购物车页验证：商品A的名称、单价、数量为1、总价等于单价
+8. 在购物车页验证：商品B的名称、单价、数量为1、总价等于单价
+9. 修改商品B的数量为 2，等待页面更新
+10. 验证商品B的总价更新为 单价 × 2，同时商品A的总价不变
+
+exploration_requirements:
+需要探索的页面（必须全部探索才能生成正确的 DSL）：
+1. 首页（https://automationexercise.com/）
+2. 商品列表页（点击 Products 后）
+3. 品牌筛选页（点击 Polo 后）
+4. 模态框（点击 Add to cart 后出现的弹层，包含 Continue Shopping 和 View Cart 按钮）
+5. 购物车页（点击 View Cart 后）
+
+探索流程建议：
+- 首页 → 商品列表页（点击 Products）
+- 商品列表页 → 品牌筛选页（点击 Polo）
+- 品牌筛选页 → 点击 Add to cart → 采集模态框元素 → 点击 Continue Shopping
+- 品牌筛选页 → 点击 Add to cart → 采集模态框元素 → 点击 View Cart → 采集购物车页元素
 
 main_assertions:
 1. 品牌筛选后商品列表仅显示对应品牌的商品
@@ -25,7 +38,7 @@ main_assertions:
 5. 修改商品数量后该商品的总价应实时更新，其他商品不受影响
 
 test_data_or_account:
-1. 账号：Xjy13302412005@outlook.com，密码：123456
+无
 
 3. 商品A和商品B是筛选结果中按顺序的前两件，不需要人工指定具体名称
 
