@@ -1541,36 +1541,102 @@ def _collect_flow_a11y(
             actions = step.get("actions")
             if isinstance(actions, list):
                 logger.info("_collect_flow_a11y: executing %d actions", len(actions))
-                url_before_actions = page.url
-                _execute_flow_actions(page, actions)
-                # If click actions triggered a page navigation, wait for the
-                # new page to fully load before collecting a11y nodes.  Without
-                # this, Accessibility.getFullAXTree can return an empty tree on
-                # a page that is still in a transitional / loading state.
-                if page.url != url_before_actions:
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                    except Exception:
-                        pass
+                for action_idx, action_def in enumerate(actions):
+                    if not isinstance(action_def, dict):
+                        continue
+                    act = str(action_def.get("action") or "").strip().lower()
+                    target = str(action_def.get("target") or "").strip()
+                    value = action_def.get("value", "")
+                    if not act:
+                        continue
 
-            current_url = page.url
-            description = step.get("description", "")
-            key = f"{current_url.rstrip('/')}|{description}" if description else current_url.rstrip("/")
-            if key not in url_to_state:
-                url_to_state[key] = f"S{state_index}"
-                state_index += 1
-            state_id = url_to_state[key]
+                    # Execute the action
+                    url_before_action = page.url
+                    if act in ("type", "fill", "input"):
+                        loc = _resolve_step_locator(page, target, kind="input", skip_vlm=True)
+                        if loc is not None:
+                            try:
+                                tag = loc.evaluate("el => el.tagName.toLowerCase()")
+                            except Exception:
+                                tag = ""
+                            if tag not in ("input", "select", "textarea"):
+                                loc = _resolve_input_fallback(page, target)
+                            if loc is not None:
+                                loc.fill(str(value))
+                    elif act in ("click", "press", "tap"):
+                        loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
+                        if loc is None:
+                            page.wait_for_timeout(1500)
+                            loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
+                        if loc is not None:
+                            from app.runners.click_preprocessor import click_with_precheck
+                            click_with_precheck(page, loc)
+                    elif act == "wait":
+                        try:
+                            ms = int(target)
+                            page.wait_for_timeout(ms)
+                        except (ValueError, TypeError):
+                            pass
+                    elif act == "wait_for":
+                        try:
+                            page.get_by_text(target).first.wait_for(state="visible", timeout=5000)
+                        except Exception:
+                            try:
+                                page.locator(f"text={target}").first.wait_for(state="visible", timeout=5000)
+                            except Exception:
+                                pass
 
-            nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
-            result = {
-                "url": current_url, "page_state": state_id,
-                "a11y_nodes": nodes, "element_count": len(nodes),
-                "description": description,
-            }
-            results.append(result)
-            logger.info("_collect_flow_a11y: step %d completed, state=%s, nodes=%d", step_i, state_id, len(nodes))
-            if session_id:
-                PageDataCache.put(session_id, step, result)
+                    # Wait for page to settle after action
+                    if page.url != url_before_action:
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                        except Exception:
+                            pass
+                    page.wait_for_timeout(500)
+
+                    # Collect a11y nodes after this action
+                    current_url = page.url
+                    description = step.get("description", "")
+                    action_desc = f"{act} {target}" if target else act
+                    key = f"{current_url.rstrip('/')}|{description}|{action_idx}|{action_desc}"
+                    if key not in url_to_state:
+                        url_to_state[key] = f"S{state_index}"
+                        state_index += 1
+                    state_id = url_to_state[key]
+
+                    nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
+                    result = {
+                        "url": current_url, "page_state": state_id,
+                        "a11y_nodes": nodes, "element_count": len(nodes),
+                        "description": description,
+                        "action_index": action_idx,
+                        "action_description": action_desc,
+                    }
+                    results.append(result)
+                    logger.info("_collect_flow_a11y: step %d action %d (%s) completed, state=%s, nodes=%d",
+                               step_i, action_idx, action_desc, state_id, len(nodes))
+                    if session_id:
+                        PageDataCache.put(session_id, step, result)
+            else:
+                # No actions, just collect nodes for this step
+                current_url = page.url
+                description = step.get("description", "")
+                key = f"{current_url.rstrip('/')}|{description}" if description else current_url.rstrip("/")
+                if key not in url_to_state:
+                    url_to_state[key] = f"S{state_index}"
+                    state_index += 1
+                state_id = url_to_state[key]
+
+                nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
+                result = {
+                    "url": current_url, "page_state": state_id,
+                    "a11y_nodes": nodes, "element_count": len(nodes),
+                    "description": description,
+                }
+                results.append(result)
+                logger.info("_collect_flow_a11y: step %d completed, state=%s, nodes=%d", step_i, state_id, len(nodes))
+                if session_id:
+                    PageDataCache.put(session_id, step, result)
     except Exception as exc:
         logger.error("_collect_flow_a11y failed: %s", exc, exc_info=True)
     finally:
