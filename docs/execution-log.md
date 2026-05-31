@@ -31,6 +31,79 @@
 | 完整探索数据 + 用户上下文注入 | 05-29 | _load_a11y_nodes 合并所有 explore 记录 + user_context 注入 segment prompt | 504 tests, DSL 生成器看到完整元素和原始需求 |
 | Agent 流程 vs 直接脚本测试 | 05-30 | explore-flow 探索、DSL 生成、执行测试对比分析 | 发现 6 项问题，a11y 过滤和选择器策略修复 |
 | A11y 无名输入框定位修复 | 05-31 | label 兄弟 input 策略 + cell role 支持 | 29 steps 全通过，Quantity 输入框定位 |
+| textContent + DSL 完善 | 05-31 | 4 次修复：textContent、View Product、数量修改、断言值 | 21/21 steps 全通过 |
+
+---
+
+## 2026-05-31 | textContent + DSL 完善（4 次修复）
+
+**任务**：验证购物车品牌筛选 DSL 测试用例，修复 4 个问题，最终 21/21 步骤全通过。
+
+**测试需求**：
+- 首页 → 品牌筛选（Polo）→ 添加 Blue Top (Rs.500) → 添加 Fancy Green Top (Rs.700, qty=2) → 验证购物车总价
+
+**问题现象与修复**：
+
+### 修复 1：textContent 问题
+- **现象**：`heading="BRAND - POLO PRODUCTS"` 定位失败，实际文本是 `Brand - Polo Products`
+- **根因**：CSS `text-transform: uppercase` 导致 `innerText` 返回全大写，但 Playwright 使用 `textContent`
+- **修复**：修改 `_augment_a11y_nodes_with_dom` 函数，使用 `textContent` 替代 `innerText`
+- **文件**：`backend/app/ai/page_explorer.py`
+
+### 修复 2：View Product 定位问题
+- **现象**：`link="View Product" inside "Blue Top"` 定位失败
+- **根因**："View Product" 链接不在产品容器中（a11y 树中是独立的 `list` 元素）
+- **修复**：使用 CSS 选择器 `.product-image-wrapper:has(.productinfo:has-text("Fancy Green Top")) a:has-text("View Product")`
+- **文件**：`backend/test_dsl.json`
+
+### 修复 3：数量修改问题
+- **现象**：购物车页面 `input #quantity 2` 无效，总价未更新
+- **根因**：购物车页面数量是只读的（`<button class="disabled">1</button>`）
+- **修复**：在产品详情页设置数量为 2，然后再添加到购物车
+- **文件**：`backend/test_dsl.json`
+
+### 修复 4：断言值问题
+- **现象**：`assert_text cell="Rs. 1400"` 找不到
+- **根因**：Fancy Green Top 数量是 1，总价是 Rs. 700
+- **修复**：在产品详情页设置数量为 2，总价更新为 Rs. 1400
+- **文件**：`backend/test_dsl.json`
+
+**执行动作**：
+1. 运行 `python -c "..."` 测试 DSL 执行
+2. 检查 a11y 树结构，发现 "View Product" 不在产品容器中
+3. 检查购物车 HTML 结构，发现数量是只读的
+4. 测试产品详情页设置数量后添加到购物车
+
+**结果**：21/21 步骤全通过
+
+**验证**：
+```
+Step 1: OK - goto
+Step 2: OK - click (Products)
+Step 3: OK - wait_for (All Products)
+Step 4: OK - click ((6)Polo)
+Step 5: OK - wait_for (Brand - Polo Products)
+Step 6: OK - capture_text (Rs. 500)
+Step 7: OK - click (Add to cart - Blue Top)
+Step 8: OK - wait_for (Continue Shopping)
+Step 9: OK - click (Continue Shopping)
+Step 10: OK - capture_text (Rs. 700)
+Step 11: OK - click (View Product - Fancy Green Top)
+Step 12: OK - wait_for (Quantity:)
+Step 13: OK - input (#quantity = 2)
+Step 14: OK - click (Add to cart)
+Step 15: OK - wait_for (View Cart)
+Step 16: OK - click (View Cart)
+Step 17: OK - wait_for (Shopping Cart)
+Step 18: OK - assert_text (Blue Top)
+Step 19: OK - assert_text (Rs. 500)
+Step 20: OK - assert_text (Rs. 500)
+Step 21: OK - assert_text (Rs. 1400)
+```
+
+**后续**：
+- "View Product" 链接不在产品容器中，无法使用 `inside` 语法，需要使用 CSS 选择器
+- 购物车页面数量是只读的，需要在产品详情页设置数量
 
 ---
 
