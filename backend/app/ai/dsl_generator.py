@@ -346,167 +346,6 @@ def _selector_candidates_for_step(
     return candidates
 
 
-def _extract_product_info_from_a11y(
-    a11y_nodes_by_state: dict[str, list[dict[str, Any]]],
-) -> dict[str, list[dict[str, Any]]]:
-    """Infer product cards from repeated price/name/action a11y sequences.
-
-    Some ecommerce cards expose both the default layer and hover overlay, so
-    raw nodes contain duplicate price/name/action text.  The summary gives the
-    model one stable business unit per product instead of a flat repeated list.
-    """
-    cards_by_state: dict[str, list[dict[str, str]]] = {}
-    descriptive_roles = {"paragraph", "text", "statictext", "generic", "heading", "listitem"}
-
-    for state, nodes in a11y_nodes_by_state.items():
-        cards: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        cleaned_nodes = [
-            {
-                "role": str(n.get("role", "") or ""),
-                "name": _clean_element_name(n.get("name", "")),
-                "verified_selectors": n.get("verified_selectors") or [],
-            }
-            for n in nodes
-        ]
-
-        for idx, node in enumerate(cleaned_nodes):
-            price = node["name"]
-            if not _is_price_text(price):
-                continue
-
-            product_name = ""
-            product_role = ""
-            action = ""
-            action_role = ""
-            detail_action = ""
-            detail_action_role = ""
-            add_candidates: list[dict[str, Any]] = []
-            detail_candidates: list[dict[str, Any]] = []
-            for nearby in cleaned_nodes[idx + 1 : idx + 9]:
-                name = nearby["name"]
-                if not name:
-                    continue
-                lower = name.casefold()
-                role = nearby["role"].casefold()
-                if not product_name and not _is_price_text(name) and not _is_generic_product_action(name):
-                    if role in descriptive_roles or role not in {"link", "button"}:
-                        product_name = name
-                        product_role = nearby["role"]
-                        continue
-                if lower == "add to cart":
-                    action = name
-                    action_role = nearby["role"]
-                    add_candidates.extend(
-                        _selector_candidates_for_step(
-                            nearby.get("verified_selectors") or [],
-                            semantic_value=name,
-                        )
-                    )
-                elif lower == "view product":
-                    detail_action = name
-                    detail_action_role = nearby["role"]
-                    detail_candidates.extend(
-                        _selector_candidates_for_step(
-                            nearby.get("verified_selectors") or [],
-                            semantic_value=name,
-                        )
-                    )
-                if product_name and action:
-                    break
-
-            if not product_name or not action:
-                continue
-            key = (product_name.casefold(), price.casefold())
-            if key in seen:
-                continue
-            seen.add(key)
-            cards.append({
-                "name": product_name,
-                "product_role": product_role,
-                "price": price,
-                "add_target": action,
-                "add_target_role": action_role,
-                "detail_target": detail_action,
-                "detail_target_role": detail_action_role,
-                "add_candidates": add_candidates,
-                "detail_candidates": detail_candidates,
-            })
-
-        if cards:
-            cards_by_state[state] = cards
-
-    return cards_by_state
-
-
-def _format_product_section_for_prompt(
-    a11y_nodes_by_state: dict[str, list[dict[str, Any]]],
-) -> str:
-    cards_by_state = _extract_product_info_from_a11y(a11y_nodes_by_state)
-    if not cards_by_state:
-        return ""
-
-    lines = ["\n## Product cards (use scoped targets to disambiguate)"]
-    for state in sorted(cards_by_state):
-        lines.append(f"\n### Page state: {state}")
-        for card in cards_by_state[state]:
-            product_name = card['name']
-            product_role = card.get('product_role', 'StaticText')
-            lines.append(f"- product={product_role} \"{product_name}\" price=\"{card['price']}\"")
-            add_role = card.get('add_target_role', 'link')
-            lines.append(
-                f"  add_to_cart: target={add_role} \"{card['add_target']}\" inside \"{product_name}\""
-            )
-            if card.get("detail_target"):
-                detail_role = card.get('detail_target_role', 'link')
-                lines.append(
-                    f"  view_product: target={detail_role} \"{card['detail_target']}\" inside \"{product_name}\""
-                )
-    return "\n".join(lines)
-
-
-def _build_price_to_product_target(
-    a11y_nodes_by_state: dict[str, list[dict[str, Any]]],
-) -> dict[str, dict[str, Any]]:
-    price_map: dict[str, dict[str, Any]] = {}
-    ambiguous_prices: set[str] = set()
-    for cards in _extract_product_info_from_a11y(a11y_nodes_by_state).values():
-        for card in cards:
-            price_key = card["price"].casefold()
-            existing = price_map.get(price_key)
-            if existing is not None and existing.get("name") != card.get("name"):
-                ambiguous_prices.add(price_key)
-            else:
-                price_map[price_key] = card
-    for price in ambiguous_prices:
-        price_map.pop(price, None)
-    return price_map
-
-
-def _fix_product_target_ambiguity(
-    step: dict[str, Any],
-    price_to_product_target: dict[str, dict[str, Any]],
-    warnings: list[str],
-) -> dict[str, Any]:
-    """Repair obvious product-action target mistakes without guessing."""
-    action = step.get("action")
-    target = _clean_element_name(step.get("target", ""))
-    if action != "click" or not target:
-        return step
-
-    card = price_to_product_target.get(target.casefold())
-    if card and card.get("add_candidates"):
-        step["target"] = card["add_target"]
-        existing_candidates = step.get("candidates") if isinstance(step.get("candidates"), list) else []
-        step["candidates"] = card["add_candidates"] + existing_candidates
-        step["locator_confidence"] = "high"
-        warnings.append(
-            f"click target '{target}' was a product price; rewritten to "
-            f"target '{card['add_target']}' with verified product candidate"
-        )
-    return step
-
-
 # ── JSON extraction ────────────────────────────────────────────────────────────
 
 def _extract_json_object(response_text: str) -> str:
@@ -702,9 +541,6 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
         return "(no elements available)"
 
     lines: list[str] = []
-    product_summary = _format_product_section_for_prompt(a11y_nodes_by_state)
-    if product_summary:
-        lines.append(product_summary)
 
     for state in sorted(a11y_nodes_by_state.keys()):
         nodes = a11y_nodes_by_state[state]
@@ -1099,13 +935,11 @@ Return ONLY the JSON object."""
     # ── Minimal normalization ──
     logger.info("Starting normalization: %d raw steps", len(steps_result))
     normalized_steps: list[dict[str, Any]] = []
-    price_to_product_target = _build_price_to_product_target(a11y_nodes_by_state or {})
     for s in steps_result:
         normalized = _normalize_step(s)
         if normalized is not None:
             fixed = _fix_variable_misuse(normalized, all_warnings)
             if fixed is not None:
-                fixed = _fix_product_target_ambiguity(fixed, price_to_product_target, all_warnings)
                 normalized_steps.append(fixed)
     logger.info("Normalization complete: %d steps, %d warnings", len(normalized_steps), len(all_warnings))
 
