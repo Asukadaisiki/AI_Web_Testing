@@ -1556,6 +1556,7 @@ def _collect_flow_a11y(
                     "page_state": page_state_id,
                     "description": description,
                     "actions": [],
+                    "element_count": 0,  # Will be updated after actions
                 }
 
                 for action_idx, action_def in enumerate(actions):
@@ -1623,6 +1624,7 @@ def _collect_flow_a11y(
                         "element_count": len(nodes),
                     }
                     page_entry["actions"].append(action_entry)
+                    page_entry["element_count"] = max(page_entry["element_count"], len(nodes))
 
                     logger.info("_collect_flow_a11y: step %d action %d (%s) completed, nodes=%d",
                                step_i, action_idx, action_desc, len(nodes))
