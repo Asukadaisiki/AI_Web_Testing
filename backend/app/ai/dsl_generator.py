@@ -346,7 +346,7 @@ def _selector_candidates_for_step(
     return candidates
 
 
-def _extract_product_cards_from_a11y(
+def _extract_product_info_from_a11y(
     a11y_nodes_by_state: dict[str, list[dict[str, Any]]],
 ) -> dict[str, list[dict[str, Any]]]:
     """Infer product cards from repeated price/name/action a11y sequences.
@@ -376,8 +376,11 @@ def _extract_product_cards_from_a11y(
                 continue
 
             product_name = ""
+            product_role = ""
             action = ""
+            action_role = ""
             detail_action = ""
+            detail_action_role = ""
             add_candidates: list[dict[str, Any]] = []
             detail_candidates: list[dict[str, Any]] = []
             for nearby in cleaned_nodes[idx + 1 : idx + 9]:
@@ -389,9 +392,11 @@ def _extract_product_cards_from_a11y(
                 if not product_name and not _is_price_text(name) and not _is_generic_product_action(name):
                     if role in descriptive_roles or role not in {"link", "button"}:
                         product_name = name
+                        product_role = nearby["role"]
                         continue
                 if lower == "add to cart":
                     action = name
+                    action_role = nearby["role"]
                     add_candidates.extend(
                         _selector_candidates_for_step(
                             nearby.get("verified_selectors") or [],
@@ -400,6 +405,7 @@ def _extract_product_cards_from_a11y(
                     )
                 elif lower == "view product":
                     detail_action = name
+                    detail_action_role = nearby["role"]
                     detail_candidates.extend(
                         _selector_candidates_for_step(
                             nearby.get("verified_selectors") or [],
@@ -417,9 +423,12 @@ def _extract_product_cards_from_a11y(
             seen.add(key)
             cards.append({
                 "name": product_name,
+                "product_role": product_role,
                 "price": price,
                 "add_target": action,
+                "add_target_role": action_role,
                 "detail_target": detail_action,
+                "detail_target_role": detail_action_role,
                 "add_candidates": add_candidates,
                 "detail_candidates": detail_candidates,
             })
@@ -430,10 +439,10 @@ def _extract_product_cards_from_a11y(
     return cards_by_state
 
 
-def _format_product_card_summary(
+def _format_product_section_for_prompt(
     a11y_nodes_by_state: dict[str, list[dict[str, Any]]],
 ) -> str:
-    cards_by_state = _extract_product_cards_from_a11y(a11y_nodes_by_state)
+    cards_by_state = _extract_product_info_from_a11y(a11y_nodes_by_state)
     if not cards_by_state:
         return ""
 
@@ -442,13 +451,16 @@ def _format_product_card_summary(
         lines.append(f"\n### Page state: {state}")
         for card in cards_by_state[state]:
             product_name = card['name']
-            lines.append(f"- product=\"{product_name}\" price=\"{card['price']}\"")
+            product_role = card.get('product_role', 'StaticText')
+            lines.append(f"- product={product_role} \"{product_name}\" price=\"{card['price']}\"")
+            add_role = card.get('add_target_role', 'link')
             lines.append(
-                f"  add_to_cart: target=link \"{card['add_target']}\" inside \"{product_name}\""
+                f"  add_to_cart: target={add_role} \"{card['add_target']}\" inside \"{product_name}\""
             )
             if card.get("detail_target"):
+                detail_role = card.get('detail_target_role', 'link')
                 lines.append(
-                    f"  view_product: target=link \"{card['detail_target']}\" inside \"{product_name}\""
+                    f"  view_product: target={detail_role} \"{card['detail_target']}\" inside \"{product_name}\""
                 )
     return "\n".join(lines)
 
@@ -458,7 +470,7 @@ def _build_price_to_product_target(
 ) -> dict[str, dict[str, Any]]:
     price_map: dict[str, dict[str, Any]] = {}
     ambiguous_prices: set[str] = set()
-    for cards in _extract_product_cards_from_a11y(a11y_nodes_by_state).values():
+    for cards in _extract_product_info_from_a11y(a11y_nodes_by_state).values():
         for card in cards:
             price_key = card["price"].casefold()
             existing = price_map.get(price_key)
@@ -690,7 +702,7 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
         return "(no elements available)"
 
     lines: list[str] = []
-    product_summary = _format_product_card_summary(a11y_nodes_by_state)
+    product_summary = _format_product_section_for_prompt(a11y_nodes_by_state)
     if product_summary:
         lines.append(product_summary)
 
@@ -956,15 +968,13 @@ No markdown, no explanation — JSON only.
 ## Rules (in priority order)
 
 1. **Targets**: Copy the EXACT role="name" format from the Available elements section.
-   button="Signup / Login" → target=button "Signup / Login"
-   textbox="Email Address" → target=textbox "Email Address"
    Include the role prefix — this enables precise locator resolution.
    FORBIDDEN: CSS selectors (#id, .class, [attr]), XPath (//, /html), tag names (div, span),
    data-testid, or ANY DOM-derived selector. The system resolves locators from a11y role+name only.
 
    **Element disambiguation**: When multiple elements have the same role and name (e.g. multiple
    "Add to cart" buttons), you MUST use the scoped format:
-   target=link "Add to cart" inside "Blue Top"
+   target=<role> "<name>" inside "<container_identifier>"
    The scope name comes from the parent container's identifying text (product name, row label, etc.).
    Look at the page structure: elements are grouped in containers (product cards, table rows, forms, etc.).
    Use the container's unique identifying text as the scope.
@@ -977,29 +987,23 @@ No markdown, no explanation — JSON only.
      unique text of the parent container (e.g. product name, section heading, row label)
 
 3. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
-   goto / → click button "Signup / Login" → wait_for heading "Login to your account" → input textbox "Email Address"
    The first step after goto / is a navigation click, not a form input.
 
 4. **Login**: The DSL must be self-contained. Include all login steps (input email + password + click Login).
    Do NOT assume the user is already logged in. Use ${var} for credentials.
 
 5. **Wait after actions**: After navigation clicks or form submits, add wait_for for a confirmation element.
-   click link "Add to cart" inside "Blue Top" → wait_for heading "Added!" → next step
-   click link "Products" → wait_for heading "ALL PRODUCTS" → next step
 
 6. **Input trigger**: When changing a value that requires keyboard activation (quantity, search),
    add trigger="Enter" on the input step. The executor handles the keypress.
-   input target=textbox "quantity" value="2" trigger="Enter"
 
 7. **Modify-then-assert**: When changing a value, input → wait_for update → assert.
    Do NOT assert a new value without first inputting it.
 
 8. **Capture-then-assert**: capture_text stores element text into a variable. The FOLLOWING
    assert_text must verify the SAME element text appears elsewhere (e.g. cart page).
-   Pattern: capture_text target=heading "Product Name A" context_key="product_a_name"
-            → later → assert_text target=heading "cart row element" value="${product_a_name}"
    CRITICAL: ${var} can ONLY appear in the VALUE field, NEVER in the target field.
-   The target must always be a real element locator in role="name" format.
+   The target must always be a real element locator in role="name" format copied from Available elements.
 
 9. **Form coverage**: Generate a step for EVERY form field mentioned in the flow.
    Dropdown: input action. Checkbox/radio: click action.
@@ -1013,12 +1017,8 @@ No markdown, no explanation — JSON only.
       NEVER use ${var} as a target — target must be a real element locator.
 
 11. **input_contract**: Define every ${var} used in steps. Include context_key AND value.
-    Example: {"context_key":"email","value":"test@example.com","value_type":"string","name":"Email","required":true}
     CRITICAL: The "value" field MUST be copied VERBATIM from the "## Test data" section.
-    NEVER invent, guess, or modify test data values. If the test data says
-    账号：Xjy13302412005@outlook.com，密码：123456, then:
-    - value for email MUST be "Xjy13302412005@outlook.com" (exact)
-    - value for password MUST be "123456" (exact)
+    NEVER invent, guess, or modify test data values.
 
 Return ONLY the JSON object."""
 
