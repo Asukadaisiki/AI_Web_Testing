@@ -842,6 +842,13 @@ The Available elements are grouped by page -> action:
    - Use the parent container's identifying text as the scope name for `inside`
    - Example: To click "Add to cart" inside "Blue Top" product card, use: target=link "Add to cart" inside "Blue Top"
 
+   **Correct DSL examples**:
+   - click link "Products" → target=link "Products"
+   - click link "Add to cart" inside "Blue Top" → target=link "Add to cart" inside "Blue Top"
+   - capture_text heading "Rs. 500" inside "Blue Top" → target=heading "Rs. 500" inside "Blue Top"
+   - assert_text link "Blue Top" → target=link "Blue Top", value="Blue Top"
+   - assert_text cell "Rs. 500" → target=cell "Rs. 500", value="Rs. 500"
+
 3. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
    The first step after goto / is a navigation click, not a form input.
 
