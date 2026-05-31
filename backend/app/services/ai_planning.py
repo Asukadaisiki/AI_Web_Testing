@@ -464,23 +464,53 @@ def _load_a11y_nodes_for_scenario(
         if "pages" in raw:
             for page in raw.get("pages", []):
                 url = (page.get("url") or "").strip().rstrip("/").lower()
-                nodes = page.get("a11y_nodes", [])
-                if not url or not nodes:
+                if not url:
                     continue
-                existing = pages_by_url.get(url)
-                if existing is None or len(nodes) > len(existing.get("a11y_nodes", [])):
-                    # Keep the version with more nodes (re-exploration with actions
-                    # usually yields richer data than a static page load)
-                    pages_by_url[url] = page
-                    logger.info(
-                        "[_load_a11y_nodes]   - id=%d: page url=%s, nodes=%d (new/better)",
-                        record.id, url, len(nodes),
-                    )
+
+                # Check if page has actions (new format)
+                actions = page.get("actions", [])
+                if actions:
+                    # New format: page -> actions -> a11y_nodes
+                    # Keep all actions with their nodes
+                    existing = pages_by_url.get(url)
+                    if existing is None:
+                        pages_by_url[url] = {
+                            "url": page.get("url"),
+                            "page_state": f"S{state_counter}",
+                            "description": page.get("description", ""),
+                            "actions": actions,
+                        }
+                        state_counter += 1
+                        logger.info(
+                            "[_load_a11y_nodes]   - id=%d: page url=%s, actions=%d (new)",
+                            record.id, url, len(actions),
+                        )
+                    else:
+                        # Merge actions from different records
+                        existing_actions = existing.get("actions", [])
+                        existing_actions.extend(actions)
+                        logger.info(
+                            "[_load_a11y_nodes]   - id=%d: page url=%s, actions=%d (merged, total=%d)",
+                            record.id, url, len(actions), len(existing_actions),
+                        )
                 else:
-                    logger.info(
-                        "[_load_a11y_nodes]   - id=%d: page url=%s, nodes=%d (kept existing %d)",
-                        record.id, url, len(nodes), len(existing.get("a11y_nodes", [])),
-                    )
+                    # Old format: page -> a11y_nodes
+                    nodes = page.get("a11y_nodes", [])
+                    if not nodes:
+                        continue
+                    existing = pages_by_url.get(url)
+                    if existing is None or len(nodes) > len(existing.get("a11y_nodes", [])):
+                        # Keep the version with more nodes
+                        pages_by_url[url] = page
+                        logger.info(
+                            "[_load_a11y_nodes]   - id=%d: page url=%s, nodes=%d (new/better)",
+                            record.id, url, len(nodes),
+                        )
+                    else:
+                        logger.info(
+                            "[_load_a11y_nodes]   - id=%d: page url=%s, nodes=%d (kept existing %d)",
+                            record.id, url, len(nodes), len(existing.get("a11y_nodes", [])),
+                        )
 
         # Extract a11y_nodes directly from explore_page result
         elif "a11y_nodes" in raw:
@@ -504,15 +534,33 @@ def _load_a11y_nodes_for_scenario(
         state = f"S{state_counter}"
         page["page_state"] = state
         state_counter += 1
-        a11y_nodes = page.get("a11y_nodes", [])
-        logger.info(
-            "[_load_a11y_nodes] aggregated page: state=%s, url=%s, nodes=%d",
-            state, page.get("url", "?"), len(a11y_nodes),
-        )
-        for n in a11y_nodes:
-            n = dict(n)
-            n["page_state"] = state
-            all_nodes.append(n)
+
+        # Handle new format (page -> actions -> a11y_nodes)
+        actions = page.get("actions", [])
+        if actions:
+            for action in actions:
+                action_nodes = action.get("a11y_nodes", [])
+                action_desc = action.get("action_description", "")
+                logger.info(
+                    "[_load_a11y_nodes] aggregated page: state=%s, url=%s, action=%s, nodes=%d",
+                    state, page.get("url", "?"), action_desc, len(action_nodes),
+                )
+                for n in action_nodes:
+                    n = dict(n)
+                    n["page_state"] = state
+                    n["action_description"] = action_desc
+                    all_nodes.append(n)
+        else:
+            # Handle old format (page -> a11y_nodes)
+            a11y_nodes = page.get("a11y_nodes", [])
+            logger.info(
+                "[_load_a11y_nodes] aggregated page: state=%s, url=%s, nodes=%d",
+                state, page.get("url", "?"), len(a11y_nodes),
+            )
+            for n in a11y_nodes:
+                n = dict(n)
+                n["page_state"] = state
+                all_nodes.append(n)
 
     logger.info(
         "[_load_a11y_nodes] total: %d pages, %d nodes from %d explore records",

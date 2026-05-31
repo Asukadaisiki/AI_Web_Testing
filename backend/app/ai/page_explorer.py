@@ -1541,6 +1541,23 @@ def _collect_flow_a11y(
             actions = step.get("actions")
             if isinstance(actions, list):
                 logger.info("_collect_flow_a11y: executing %d actions", len(actions))
+                # Collect page state before actions
+                current_url = page.url
+                description = step.get("description", "")
+                page_key = f"{current_url.rstrip('/')}|{description}"
+                if page_key not in url_to_state:
+                    url_to_state[page_key] = f"S{state_index}"
+                    state_index += 1
+                page_state_id = url_to_state[page_key]
+
+                # Initialize page entry with actions list
+                page_entry = {
+                    "url": current_url,
+                    "page_state": page_state_id,
+                    "description": description,
+                    "actions": [],
+                }
+
                 for action_idx, action_def in enumerate(actions):
                     if not isinstance(action_def, dict):
                         continue
@@ -1595,28 +1612,25 @@ def _collect_flow_a11y(
                     page.wait_for_timeout(500)
 
                     # Collect a11y nodes after this action
-                    current_url = page.url
-                    description = step.get("description", "")
                     action_desc = f"{act} {target}" if target else act
-                    key = f"{current_url.rstrip('/')}|{description}|{action_idx}|{action_desc}"
-                    if key not in url_to_state:
-                        url_to_state[key] = f"S{state_index}"
-                        state_index += 1
-                    state_id = url_to_state[key]
+                    nodes = collect_a11y_nodes(page, page_state=page_state_id, core_user_flow_text=core_user_flow_text)
 
-                    nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
-                    result = {
-                        "url": current_url, "page_state": state_id,
-                        "a11y_nodes": nodes, "element_count": len(nodes),
-                        "description": description,
+                    # Add action entry with nodes
+                    action_entry = {
                         "action_index": action_idx,
                         "action_description": action_desc,
+                        "a11y_nodes": nodes,
+                        "element_count": len(nodes),
                     }
-                    results.append(result)
-                    logger.info("_collect_flow_a11y: step %d action %d (%s) completed, state=%s, nodes=%d",
-                               step_i, action_idx, action_desc, state_id, len(nodes))
-                    if session_id:
-                        PageDataCache.put(session_id, step, result)
+                    page_entry["actions"].append(action_entry)
+
+                    logger.info("_collect_flow_a11y: step %d action %d (%s) completed, nodes=%d",
+                               step_i, action_idx, action_desc, len(nodes))
+
+                # Add page entry to results
+                results.append(page_entry)
+                if session_id:
+                    PageDataCache.put(session_id, step, page_entry)
             else:
                 # No actions, just collect nodes for this step
                 current_url = page.url
@@ -1632,6 +1646,7 @@ def _collect_flow_a11y(
                     "url": current_url, "page_state": state_id,
                     "a11y_nodes": nodes, "element_count": len(nodes),
                     "description": description,
+                    "actions": [],
                 }
                 results.append(result)
                 logger.info("_collect_flow_a11y: step %d completed, state=%s, nodes=%d", step_i, state_id, len(nodes))

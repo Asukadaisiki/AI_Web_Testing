@@ -536,6 +536,9 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
     Containers are shown with their children indented beneath,
     so the AI can see which elements belong to which container.
     The container type is not hardcoded — AI determines the scope name from context.
+
+    Note: Data is grouped by page -> action. The same page may appear multiple times
+    with different actions, showing how elements change after each action.
     """
     if not a11y_nodes_by_state:
         return "(no elements available)"
@@ -800,6 +803,14 @@ def generate_case_draft(
     # ── Build concise system prompt ──
     system_prompt = """You generate web testing DSL in JSON. Return {"name","description","base_url","input_contract","output_contract","steps"}.
 No markdown, no explanation — JSON only.
+
+## Data format
+
+The Available elements are grouped by page -> action:
+- Each page section shows the URL and page state
+- Under each page, actions are listed with the elements that appeared AFTER that action
+- The same page may appear multiple times with different actions, showing how elements change
+- This is normal and expected — use the most recent state of each element
 
 ## Rules (in priority order)
 
