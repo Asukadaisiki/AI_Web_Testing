@@ -32,6 +32,53 @@
 | Agent 流程 vs 直接脚本测试 | 05-30 | explore-flow 探索、DSL 生成、执行测试对比分析 | 发现 6 项问题，a11y 过滤和选择器策略修复 |
 | A11y 无名输入框定位修复 | 05-31 | label 兄弟 input 策略 + cell role 支持 | 29 steps 全通过，Quantity 输入框定位 |
 | textContent + DSL 完善 | 05-31 | 4 次修复：textContent、View Product、数量修改、断言值 | 21/21 steps 全通过 |
+| Anti-pattern 注入与上下文重构 | 06-04 | 重构上下文注入架构，修复执行错误注入 | 497 tests, 4 项核心修复 |
+
+---
+
+## 2026-06-04 | Anti-pattern 注入与上下文重构
+
+**任务**：重构上下文注入架构，修复执行错误注入，解决 VLM fallback 问题。
+
+**测试需求**：
+- 验证品牌筛选购物车流程
+- 测试执行错误注入是否生效
+- 测试 DSL 生成器是否使用 user_context
+
+**问题现象与修复**：
+
+### 修复 1：执行错误注入失效
+- **现象**：当 `case_id` 为 null 时，`_build_execution_error_context` 直接返回 None
+- **根因**：函数只从 `case_id` 查询执行记录，没有从项目维度查询
+- **修复**：当 `case_id` 为 null 时，从项目的最近执行记录中查找
+- **验证**：测试 `test_should_inject_error_when_recent_execution_exists` 通过
+
+### 修复 2：dsl_execution 函数签名错误
+- **现象**：`slog.dsl_execution()` 使用了 `session_id` 参数，但函数只接受 `execution_id`
+- **根因**：函数签名不匹配
+- **修复**：改为使用 `execution_id=latest_run.id`
+- **验证**：测试 `test_injects_error_when_case_id_exists` 通过
+
+### 修复 3：上下文注入架构重构
+- **现象**：`_inject_auto_context` 函数只在 AI 的 ReAct 循环中被调用，DSL 生成器无法使用
+- **根因**：架构耦合，上下文注入函数无法复用
+- **修复**：提取 `_build_auto_context_preamble` 函数，可以在 DSL 生成器调用时被调用
+- **验证**：测试 `test_build_auto_context_preamble` 系列通过
+
+### 修复 4：DSL 生成器使用 user_context
+- **现象**：DSL 生成器有 `user_context` 字段，但没有被使用
+- **根因**：DSL 生成器没有在 prompt 中注入 `user_context`
+- **修复**：在 `dsl_generator.py` 中添加 `user_context` 的注入
+- **验证**：测试 `test_dsl_generator_uses_user_context` 通过
+
+**待解决问题**：
+- VLM fallback 问题依然存在（AI 生成 `paragraph` 格式，但不是有效的 Playwright role）
+- AI 获取错误信息后没有生成新的 draft，而是重新执行了同一个 draft
+
+**测试结果**：
+- 497 个单元测试通过
+- 1 个测试跳过
+- 6 个警告
 
 ---
 

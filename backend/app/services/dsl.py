@@ -156,6 +156,7 @@ def generate_dsl_case(session: Session, payload: GenerateDslRequest) -> Generate
             payload=payload,
             flow_steps=flow_steps,
             a11y_nodes_by_state=a11y_nodes_by_state,
+            db_session=session,
         )
     except (DslGenerationConfigError, DslGenerationError) as exc:
         model_name = get_settings().ai_dsl_model

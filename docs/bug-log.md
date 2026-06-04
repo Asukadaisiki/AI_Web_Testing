@@ -51,6 +51,44 @@
 
 LLM 输出 → Pydantic 校验 → 结构化 DSL 步骤链路中的格式错误、字段缺失、校验失败问题。
 
+### Bug #I | AI 生成 paragraph 格式导致 VLM fallback
+
+- 日期：2026-06-04
+- 状态：open
+- 来源：E2E 测试
+- 描述：AI 生成了 `paragraph "Premium Polo T-Shirts"` 格式，但 `paragraph` 不是有效的 Playwright role，导致语义定位失败，回退到 VLM。
+- 复现步骤：
+  1. 用户输入测试需求
+  2. AI 生成 DSL 草案
+  3. 执行 DSL 时，`paragraph` 格式导致语义定位失败
+  4. 回退到 VLM，但 VLM 也失败（429 限流、返回 None、TypeError）
+- 影响：所有使用 `paragraph` 格式的步骤都会失败
+- 根因：`_format_elements_flat` 函数显示容器时使用了 `paragraph="Blue Top"` 格式，AI 混淆了容器格式和子元素格式
+- 处理：
+  1. 修改 `_format_elements_flat` 函数，使用 `[container]` 前缀区分容器和子元素
+  2. 更新 DSL 生成器的 prompt，添加更明确的指导
+  3. 添加 WRONG examples 告诉 AI 不要使用 `paragraph` 格式
+- 验证：测试 `test_format_elements_flat_uses_container_prefix` 通过，但 E2E 测试仍失败
+- 关联记录：Session 302, Execution 197/198
+
+### Bug #J | AI 获取错误信息后没有生成新的 draft
+
+- 日期：2026-06-04
+- 状态：open
+- 来源：E2E 测试
+- 描述：AI 调用 `get_execution_detail` 获取错误信息后，没有生成新的 draft，而是重新执行了同一个 draft。
+- 复现步骤：
+  1. 用户输入测试需求
+  2. AI 生成 DSL 草案（draft_id=218）
+  3. 执行 DSL 失败
+  4. AI 调用 `get_execution_detail` 获取错误信息
+  5. AI 重新执行同一个 draft_id=218，而不是生成新的 draft
+- 影响：错误信息注入没有生效，AI 无法从错误中学习
+- 根因：AI 没有理解 `user_context` 中的错误信息，或者没有生成新的 draft 的逻辑
+- 处理：需要修改 AI 的 ReAct 循环，让它在获取错误信息后生成新的 draft
+- 验证：从日志验证，AI 确实获取了错误信息，但没有生成新的 draft
+- 关联记录：Session 302, Execution 197/198
+
 ### Bug #H | 分段生成模式 input_contract 为空导致变量占位符未替换
 
 - 日期：2026-05-28

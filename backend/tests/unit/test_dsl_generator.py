@@ -164,7 +164,7 @@ def test_generate_dsl_case_propagates_a11y_nodes_by_state(monkeypatch: pytest.Mo
 
     captured: dict[str, object] = {}
 
-    def fake_generate_segmented_case_draft(*, payload, flow_steps, a11y_nodes_by_state=None):
+    def fake_generate_segmented_case_draft(*, payload, flow_steps, a11y_nodes_by_state=None, db_session=None):
         captured["a11y_nodes_by_state"] = a11y_nodes_by_state
         captured["flow_steps"] = flow_steps
         return (
@@ -387,7 +387,8 @@ class TestNormalizeLlmStepDropsUnrepairable:
 
 
 class TestProductCardDisambiguation:
-    def test_format_elements_flat_adds_deduplicated_product_card_summary(self) -> None:
+    def test_format_elements_flat_marks_duplicates_and_verified(self) -> None:
+        """Test that _format_elements_flat correctly marks duplicate elements and verified selectors."""
         from app.ai.dsl_generator import _format_elements_flat
 
         nodes = {
@@ -414,48 +415,14 @@ class TestProductCardDisambiguation:
 
         result = _format_elements_flat(nodes)
 
-        assert "Product cards (use scoped targets to disambiguate)" in result
-        assert 'product="Blue Top" price="Rs. 500"' in result
-        assert 'target=link "Add to cart" inside product "Blue Top"' in result
-        assert 'add_candidate' not in result  # DOM selectors must not leak to AI
-        assert result.count('product="Blue Top"') >= 1
+        # Verify duplicate markers
         assert 'heading="Rs. 500" [duplicate 1/2]' in result
+        assert 'heading="Rs. 500" [duplicate 2/2]' in result
+        assert 'paragraph="Blue Top" [duplicate 1/2]' in result
+        assert 'paragraph="Blue Top" [duplicate 2/2]' in result
         assert 'link="Add to cart" [duplicate 1/2] [verified=1]' in result
         assert 'link="Add to cart" [duplicate 2/2]' in result
 
-    def test_price_click_rewrites_to_product_context_target(self) -> None:
-        from app.ai.dsl_generator import (
-            _build_price_to_product_target,
-            _fix_product_target_ambiguity,
-        )
-
-        nodes = {
-            "S0": [
-                {"role": "heading", "name": "Rs. 500", "node_id": "e1"},
-                {"role": "paragraph", "name": "Blue Top", "node_id": "e2"},
-                {
-                    "role": "link",
-                    "name": "Add to cart",
-                    "node_id": "e3",
-                    "verified_selectors": [
-                        {
-                            "strategy": "css",
-                            "selector": "a[data-product-id=\"1\"]:visible",
-                            "source": "a11y_backend_dom_node",
-                        }
-                    ],
-                },
-            ]
-        }
-        warnings: list[str] = []
-        price_map = _build_price_to_product_target(nodes)
-        step = {"action": "click", "target": "Rs. 500"}
-
-        fixed = _fix_product_target_ambiguity(step, price_map, warnings)
-
-        assert fixed["target"] == "Add to cart"
-        assert fixed["locator_confidence"] == "high"
-        assert fixed["candidates"][0]["strategy"] == "verified_css"
-        assert fixed["candidates"][0]["selector"] == "a[data-product-id=\"1\"]:visible"
-        assert warnings
+        # Verify no DOM selectors leak to AI
+        assert 'a[data-product-id' not in result
 

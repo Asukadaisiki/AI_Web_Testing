@@ -15,6 +15,7 @@ from urllib.error import HTTPError, URLError
 from pydantic import TypeAdapter, ValidationError
 
 from app.core.config import get_settings
+from app.core.structured_logging import get_structured_logger
 from app.schemas.dsl import (
     AssertTextStep,
     AssertUrlContainsStep,
@@ -39,6 +40,7 @@ from app.schemas.dsl import (
 
 
 logger = logging.getLogger(__name__)
+slog = get_structured_logger(__name__)
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────────
@@ -613,11 +615,11 @@ def _format_elements_flat(a11y_nodes_by_state: dict[str, list[dict[str, Any]]]) 
                     container_name = child_name
                     break
 
-            # Format header: use container name if available, otherwise use role
+            # Format header: use container name with [container] prefix to distinguish from child elements
             if container_name:
-                header = f"- {container_role}=\"{container_name}\""
+                header = f"- [container] {container_name}"
             else:
-                header = f"- {container_role}"
+                header = f"- [container] {container_role}"
 
             vs_count = len(container.get("verified_selectors") or [])
             if vs_count > 0:
@@ -741,6 +743,7 @@ def generate_case_draft(
     flow_steps: list[dict[str, Any]] | None = None,  # kept for backwards compat, unused
     a11y_nodes_by_state: dict[str, list[dict[str, Any]]] | None = None,
     scenario_variables: list[dict[str, Any]] | None = None,
+    db_session: Any | None = None,  # 用于查询 anti-patterns
 ) -> "tuple[DSLCase, list[str], list[str], GenerateDslMeta]":
     """Generate a DSL case with a single thinking-model call.
 
@@ -822,10 +825,13 @@ The Available elements are grouped by page -> action:
    **IMPORTANT**: Use the role from the element that HAS the name, NOT from its parent.
    Example: If you see:
    ```
-   - paragraph
-     - StaticText="Premium Polo T-Shirts"
+   - [container] Blue Top
+     - StaticText="Blue Top"
+     - heading="Rs. 500"
+     - link="Add to cart"
    ```
-   Use: `StaticText="Premium Polo T-Shirts"` (NOT `paragraph="Premium Polo T-Shirts"`)
+   Use: `StaticText="Blue Top"` (NOT `paragraph="Blue Top"`)
+   The `[container]` prefix indicates a container element — NEVER use it as a target.
 
    **Element disambiguation**: When multiple elements have the same role and name (e.g. multiple
    "Add to cart" buttons), you MUST use the scoped format:
@@ -835,10 +841,15 @@ The Available elements are grouped by page -> action:
    Use the container's unique identifying text as the scope.
    Never target a bare price like "Rs. 500".
 
+   **CRITICAL**: When using `inside`, use the CHILD element's role, NOT the container's role.
+   Example:
+   - To capture price: `capture_text heading "Rs. 500" inside "Blue Top"` ✓
+   - WRONG: `capture_text paragraph "Blue Top" inside "Blue Top"` ✗
+
 2. **Page structure understanding**: The Available elements use indentation to show parent-child relationships:
    - Indented elements are children of the element above them
-   - Example: `- paragraph\n  - StaticText="Blue Top"\n  - heading="Rs. 500"\n  - link="Add to cart"`
-     means StaticText, heading, and link are children of the paragraph container
+   - Example: `- [container] Blue Top\n  - StaticText="Blue Top"\n  - heading="Rs. 500"\n  - link="Add to cart"`
+     means StaticText, heading, and link are children of the Blue Top container
    - Use the parent container's identifying text as the scope name for `inside`
    - Example: To click "Add to cart" inside "Blue Top" product card, use: target=link "Add to cart" inside "Blue Top"
 
@@ -848,6 +859,10 @@ The Available elements are grouped by page -> action:
    - capture_text heading "Rs. 500" inside "Blue Top" → target=heading "Rs. 500" inside "Blue Top"
    - assert_text link "Blue Top" → target=link "Blue Top", value="Blue Top"
    - assert_text cell "Rs. 500" → target=cell "Rs. 500", value="Rs. 500"
+
+   **WRONG examples** (NEVER do this):
+   - capture_text paragraph "Blue Top" inside "Blue Top" → WRONG! paragraph is a container, not a child element
+   - click paragraph "Blue Top" → WRONG! Use StaticText or link instead
 
 3. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
    The first step after goto / is a navigation click, not a form input.
@@ -890,6 +905,40 @@ Return ONLY the JSON object."""
         f"Generate a complete, executable web test DSL for this scenario:\n\n{payload.prompt.strip()}\n",
         f"## Available elements\n{elements_text}",
     ]
+
+    # 注入 user_context（用户上下文信息）
+    if payload.user_context:
+        user_prompt_parts.append(f"\n## User Context\n{payload.user_context}\n")
+
+    # 注入 anti-patterns（负例 few-shot）
+    if db_session is not None and payload.project_id is not None:
+        try:
+            from app.services.anti_patterns import retrieve_relevant_anti_patterns, format_anti_patterns_for_prompt
+            anti_patterns = retrieve_relevant_anti_patterns(
+                db_session,
+                project_id=payload.project_id,
+                prompt_text=payload.prompt,
+                retry_reason_code=payload.retry_reason_code,
+                limit=3,
+            )
+            if anti_patterns:
+                user_prompt_parts.append(format_anti_patterns_for_prompt(anti_patterns))
+                # 记录结构化日志
+                pattern_categories = [p.error_category for p in anti_patterns]
+                slog.ai_thinking(
+                    "dsl_anti_pattern_injection",
+                    message=f"Injected {len(anti_patterns)} anti-patterns into DSL prompt",
+                    data={
+                        "project_id": payload.project_id,
+                        "pattern_count": len(anti_patterns),
+                        "pattern_categories": pattern_categories,
+                        "retry_reason_code": payload.retry_reason_code,
+                    },
+                )
+                logger.info("Injected %d anti-patterns into DSL prompt", len(anti_patterns))
+        except Exception:
+            logger.warning("Failed to inject anti-patterns into DSL prompt", exc_info=True)
+
     if test_data_section:
         user_prompt_parts.append(test_data_section)
     if variables_section:

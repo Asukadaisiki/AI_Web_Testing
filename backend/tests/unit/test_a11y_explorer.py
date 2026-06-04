@@ -16,13 +16,16 @@ def test_filter_removes_ignored_nodes():
 
 
 def test_filter_removes_non_useful_roles():
+    """Test blacklist mode: only roles in IGNORED_A11Y_ROLES are excluded."""
     nodes = [{"role": "InlineTextBox", "name": "hello", "ignored": False},
              {"role": "StaticText", "name": "world", "ignored": False},
              {"role": "generic", "name": "div wrapper", "ignored": False},
              {"role": "button", "name": "Submit", "ignored": False}]
     result = _filter_a11y_nodes(nodes, viewport={"width": 1280, "height": 720})
-    assert len(result) == 1
-    assert result[0]["role"] == "button"
+    # Blacklist mode: InlineTextBox and generic are excluded, StaticText and button are kept
+    assert len(result) == 2
+    assert result[0]["role"] == "StaticText"
+    assert result[1]["role"] == "button"
 
 
 def test_filter_removes_off_viewport():
@@ -44,17 +47,23 @@ def test_viewport_filter_keeps_partially_visible():
 
 
 def test_useful_roles_set_contains_expected():
-    assert "button" in USEFUL_A11Y_ROLES
-    assert "link" in USEFUL_A11Y_ROLES
-    assert "textbox" in USEFUL_A11Y_ROLES
-    assert "heading" in USEFUL_A11Y_ROLES
-    assert "navigation" in USEFUL_A11Y_ROLES
-    assert "list" in USEFUL_A11Y_ROLES
-    assert "listitem" in USEFUL_A11Y_ROLES
-    assert "dialog" in USEFUL_A11Y_ROLES
-    assert "InlineTextBox" not in USEFUL_A11Y_ROLES
-    assert "StaticText" not in USEFUL_A11Y_ROLES
-    assert "generic" not in USEFUL_A11Y_ROLES
+    """Test that USEFUL_A11Y_ROLES is None (blacklist mode) and IGNORED_A11Y_ROLES contains expected roles."""
+    from app.ai.page_explorer import IGNORED_A11Y_ROLES
+
+    # USEFUL_A11Y_ROLES is None in blacklist mode
+    assert USEFUL_A11Y_ROLES is None
+
+    # IGNORED_A11Y_ROLES should contain known useless roles
+    assert "InlineTextBox" in IGNORED_A11Y_ROLES
+    assert "generic" in IGNORED_A11Y_ROLES
+    assert "none" in IGNORED_A11Y_ROLES
+
+    # Useful roles should NOT be in the blacklist
+    assert "button" not in IGNORED_A11Y_ROLES
+    assert "link" not in IGNORED_A11Y_ROLES
+    assert "textbox" not in IGNORED_A11Y_ROLES
+    assert "heading" not in IGNORED_A11Y_ROLES
+    assert "StaticText" not in IGNORED_A11Y_ROLES
 
 
 # ── CDP node normalization ───────────────────────────────────────────────
