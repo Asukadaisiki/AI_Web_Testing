@@ -71,6 +71,45 @@ LLM 输出 → Pydantic 校验 → 结构化 DSL 步骤链路中的格式错误�
 - 验证：测试 `test_format_elements_flat_uses_container_prefix` 通过，但 E2E 测试仍失败
 - 关联记录：Session 302, Execution 197/198
 
+**可能产生的原因**：
+
+1. **AI 模型理解能力不足**
+   - AI 没有理解 `[container]` 前缀的含义
+   - AI 混淆了容器格式和子元素格式
+   - AI 没有遵循 prompt 中的指导
+
+2. **Prompt 设计问题**
+   - Prompt 中的示例不够清晰
+   - AI 没有看到正确的示例
+   - Prompt 中的规则太多，AI 无法全部遵循
+
+3. **DSL 生成器与 Playwright 不适配**
+   - DSL 生成器生成的是 a11y role 格式（如 `paragraph "Blue Top"`）
+   - 但 Playwright 的语义定位器不支持 `paragraph` 格式
+   - 这是一个架构问题：DSL 生成器和 Playwright 之间存在格式不匹配
+
+4. **与其他项目的区别**
+   - testbrand(mimov2.5pro) 使用 Selenium + CSS 选择器/XPath
+   - AI_Web_Testing 使用 Playwright + a11y role 格式
+   - Selenium 支持多种定位方式，容错性强
+   - Playwright 依赖 a11y role 格式，容错性弱
+
+**为什么与 DSL 不适配**：
+
+1. **格式不匹配**
+   - DSL 生成器生成的是 a11y role 格式（如 `paragraph "Blue Top"`）
+   - 但 Playwright 的语义定位器不支持 `paragraph` 格式
+   - 这导致语义定位失败，回退到 VLM
+
+2. **容错性不足**
+   - Playwright 的语义定位器只支持 a11y role 格式
+   - 没有其他定位方式作为备选
+   - 当 a11y role 格式失败时，只能回退到 VLM
+
+3. **VLM 模型不稳定**
+   - VLM 模型遇到问题（429 限流、返回 None、TypeError）
+   - 当 VLM 失败时，整个步骤就会失败
+
 ### Bug #J | AI 获取错误信息后没有生成新的 draft
 
 - 日期：2026-06-04
@@ -88,6 +127,45 @@ LLM 输出 → Pydantic 校验 → 结构化 DSL 步骤链路中的格式错误�
 - 处理：需要修改 AI 的 ReAct 循环，让它在获取错误信息后生成新的 draft
 - 验证：从日志验证，AI 确实获取了错误信息，但没有生成新的 draft
 - 关联记录：Session 302, Execution 197/198
+
+**可能产生的原因**：
+
+1. **AI 没有理解错误信息**
+   - AI 获取了错误信息，但没有理解如何使用它
+   - AI 没有将错误信息与 DSL 步骤关联起来
+   - AI 没有生成新的 draft 的逻辑
+
+2. **ReAct 循环设计问题**
+   - ReAct 循环中没有"生成新的 draft"的工具
+   - AI 只能调用现有的工具（如 `get_execution_detail`）
+   - 没有工具让 AI 生成新的 draft
+
+3. **错误信息注入位置问题**
+   - 错误信息被注入到 `user_context` 中
+   - 但 `user_context` 只在 DSL 生成器的 prompt 中使用
+   - AI 的 ReAct 循环没有使用 `user_context`
+
+4. **AI 模型能力不足**
+   - AI 没有理解"重新生成"的含义
+   - AI 没有从错误中学习的能力
+   - AI 只是重新执行了同一个 draft
+
+**为什么与 DSL 不适配**：
+
+1. **错误信息没有传递给 DSL 生成器**
+   - 错误信息被注入到 `user_context` 中
+   - 但 AI 的 ReAct 循环没有使用 `user_context`
+   - DSL 生成器没有看到错误信息
+
+2. **没有重新生成机制**
+   - AI 的 ReAct 循环中没有"生成新的 draft"的工具
+   - AI 只能调用现有的工具
+   - 没有机制让 AI 重新生成 draft
+
+3. **架构问题**
+   - 错误信息注入和 DSL 生成是分离的
+   - 没有将错误信息传递给 DSL 生成器的机制
+   - 需要重构架构，让错误信息能够传递给 DSL 生成器
 
 ### Bug #H | 分段生成模式 input_contract 为空导致变量占位符未替换
 
