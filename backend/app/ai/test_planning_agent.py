@@ -2623,7 +2623,7 @@ def _build_draft_prompt(
         if _parsed_assignments:
             variable_assignments = (
                 "\n\n【测试数据变量赋值 — input_contract 每个 entry 的 context_key 和 value 必须严格使用以下值】\n"
-                "以下是你必须在 input_contract 中使用的确切值。禁止使用 test@automationexercise.com、password123 或任何其他编造的值。\n"
+                "以下是你必须在 input_contract 中使用的确切值。禁止编造或修改测试数据。\n"
                 + "\n".join(_parsed_assignments)
                 + "\n"
             )
@@ -2640,16 +2640,12 @@ def _build_draft_prompt(
         f"{negative_hint}"
         "【流程-页面导航映射】严格按用户流程一步步生成 DSL："
         "- 每个流程步骤对应一个或多个 DSL 步骤"
-        "- 用户说\"打开首页点击login进入登录页面\" → 必须生成 click \"Signup / Login\" 或 goto \"/login\"，不能从首页直接 input 登录字段"
-        "- 用户说\"点击 Products\" → 必须生成 click \"Products\"，不能直接 wait_for \"ALL PRODUCTS\""
-        "- 用户说\"点击 Polo\" → 必须生成 click \"(6) POLO\"，不能直接 wait_for 筛选结果"
+        "- 用户说\"打开首页点击登录\" → 必须生成 click/goto 导航到登录页面，不能从首页直接 input 登录字段"
+        "- 用户说\"点击某链接\" → 必须生成对应的 click 步骤，不能跳过导航直接 wait_for 目标页面元素"
         "- 每条 wait_for 前必须有对应的 click/goto 把页面带到正确状态"
-        "如果已获取到页面元素清单，请严格按照元素的实际可见文本、label、placeholder 或 id 作为 target（纯文本字符串，如 \"Email Address\"），不要构造 CSS 选择器格式。step 的 value 字段如涉及测试数据，必须用 ${context_key} 格式引用 input_contract 变量，不要硬编码。"
+        "如果已获取到页面元素清单，请严格按照探索数据中元素的实际 role=\"name\" 格式作为 target，不要构造 CSS 选择器格式。step 的 value 字段如涉及测试数据，必须用 ${context_key} 格式引用 input_contract 变量，不要硬编码。"
         "必须为流程和测试数据中提到的每个表单字段生成对应步骤，不得遗漏任何字段（包括下拉框、日期选择器、复选框等）。"
         f"{variable_assignments}"
         f"{data_section}"
         f"{page_elements_section}"
-        "\n\n重要：所有使用 ${variable_name} 格式引用的变量，必须先在 input_contract 中定义。"
-        "如果某个变量（如 product_a_price）是从页面提取的，必须先用 capture_text 步骤捕获它（设置 context_key），再在后续 assert_text 中通过 ${context_key} 引用。"
-        "不要引用未在 input_contract 或 capture_text 中定义的变量。"
     )

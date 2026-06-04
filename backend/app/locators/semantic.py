@@ -50,7 +50,8 @@ _A11Y_ROLE_TARGET_RE = re.compile(
     r'|tab|switch|searchbox|heading|dialog|alert|navigation|main|form|region'
     r'|banner|contentinfo|complementary|article|list|listitem|img|progressbar'
     r'|slider|spinbutton|treeitem|menu|menubar|tablist|toolbar|status|timer'
-    r'|tooltip|separator|group|presentation|none|cell|row|column)'
+    r'|tooltip|separator|group|presentation|none|cell|row|column'
+    r'|paragraph|statictext)'
     r"""\s*[=\s]\s*["'](.+?)["']""",
     re.IGNORECASE,
 )
@@ -106,7 +107,12 @@ _A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
     "cell": "cell",
     "row": "row",
     "column": "column",
+    "paragraph": "paragraph",
 }
+
+# Roles whose elements don't have accessible names — get_by_role(name=...)
+# won't work for them, so we must use get_by_text() instead.
+_TEXT_ONLY_ROLES: frozenset[str] = frozenset({"paragraph", "statictext"})
 
 
 def _parse_a11y_target(target: str) -> tuple[str, str, str | None, str | None]:
@@ -158,6 +164,7 @@ def _build_a11y_candidates(
     builders: list[tuple[str, object]] = []
 
     pw_role = _A11Y_TO_PLAYWRIGHT_ROLE.get(role)
+    is_text_only = role.lower() in _TEXT_ONLY_ROLES
 
     if scope_name:
         # Scoped path: find a container that contains the scope text,
@@ -172,19 +179,23 @@ def _build_a11y_candidates(
             # Find elements containing the scope text
             scope_text_elements = page.get_by_text(scope_name, exact=True)
             if scope_text_elements.count() > 0:
-                # Use the parent element as scope
-                scope = scope_text_elements.first.locator("xpath=..")
+                # Use the nearest ancestor that contains meaningful children
+                # Try climbing up to find a suitable container (up to 3 levels)
+                raw_scope = scope_text_elements.first
+                for _ in range(3):
+                    raw_scope = raw_scope.locator("xpath=..")
+                scope = raw_scope
+            else:
+                # Also try fuzzy match for scope
+                scope_text_elements = page.get_by_text(scope_name)
+                if scope_text_elements.count() > 0:
+                    raw_scope = scope_text_elements.first
+                    for _ in range(2):
+                        raw_scope = raw_scope.locator("xpath=..")
+                    scope = raw_scope
 
-        if pw_role and name:
-            builders.append((
-                "a11y_scoped_role_exact",
-                lambda r=pw_role, n=name, s=scope: s.get_by_role(r, name=n, exact=True),
-            ))
-            builders.append((
-                "a11y_scoped_role_fuzzy",
-                lambda r=pw_role, n=name, s=scope: s.get_by_role(r, name=n),
-            ))
-        if name:
+        # For text-only roles, prioritize text-based locators
+        if is_text_only and name:
             builders.append((
                 "a11y_scoped_text_exact",
                 lambda n=name, s=scope: s.get_by_text(n, exact=True),
@@ -193,10 +204,45 @@ def _build_a11y_candidates(
                 "a11y_scoped_text_fuzzy",
                 lambda n=name, s=scope: s.get_by_text(n),
             ))
+        elif pw_role and name:
+            builders.append((
+                "a11y_scoped_role_exact",
+                lambda r=pw_role, n=name, s=scope: s.get_by_role(r, name=n, exact=True),
+            ))
+            builders.append((
+                "a11y_scoped_role_fuzzy",
+                lambda r=pw_role, n=name, s=scope: s.get_by_role(r, name=n),
+            ))
+        if name and not is_text_only:
+            builders.append((
+                "a11y_scoped_text_exact",
+                lambda n=name, s=scope: s.get_by_text(n, exact=True),
+            ))
+            builders.append((
+                "a11y_scoped_text_fuzzy",
+                lambda n=name, s=scope: s.get_by_text(n),
+            ))
+        if name and is_text_only:
+            # Already added text candidates above, but also try role as fallback
+            if pw_role:
+                builders.append((
+                    "a11y_scoped_role_exact",
+                    lambda r=pw_role, n=name, s=scope: s.get_by_role(r, name=n, exact=True),
+                ))
         return builders
 
     # Unscoped path: direct element lookup
-    if pw_role and name:
+    # For text-only roles, use get_by_text() first (get_by_role name matching doesn't work)
+    if is_text_only and name:
+        builders.append(("a11y_text_exact", lambda n=name: page.get_by_text(n, exact=True)))
+        builders.append(("a11y_text_fuzzy", lambda n=name: page.get_by_text(n, exact=False)))
+        # Also try bare role filter (without name) as fallback
+        if pw_role:
+            builders.append((
+                "a11y_role_text_filter",
+                lambda r=pw_role, n=name: page.get_by_role(r).filter(has_text=n),
+            ))
+    elif pw_role and name:
         # Exact match (highest priority for a11y)
         builders.append((
             "a11y_role_exact",
@@ -213,8 +259,8 @@ def _build_a11y_candidates(
         builders.append(("a11y_placeholder", lambda n=name: page.get_by_placeholder(n)))
         builders.append(("a11y_label", lambda n=name: page.get_by_label(n)))
 
-    # Plain text fallback
-    if name:
+    # Plain text fallback (skip if already added for text-only roles)
+    if name and not is_text_only:
         builders.append(("a11y_text_exact", lambda n=name: page.get_by_text(n, exact=True)))
         builders.append(("a11y_text_fuzzy", lambda n=name: page.get_by_text(n, exact=False)))
 

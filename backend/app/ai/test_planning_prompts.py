@@ -34,8 +34,8 @@ SYSTEM_PROMPT_TEMPLATE = """\
         "priority": "high|medium|low",
         "flow_steps": [
           {{"step_index": 1, "action": "goto", "target": "https://...", "page_state": "S0"}},
-          {{"step_index": 2, "action": "click", "target": "Signup / Login", "page_state": "S0"}},
-          {{"step_index": 3, "action": "input", "target": "Email", "value": "${{email}}", "page_state": "S0"}}
+          {{"step_index": 2, "action": "click", "target": "登录链接文本", "page_state": "S0"}},
+          {{"step_index": 3, "action": "input", "target": "邮箱输入框标签", "value": "${{email}}", "page_state": "S0"}}
         ],
         "variables": [
           {{"context_key": "email", "description": "登录邮箱", "source": "input"}},
@@ -65,7 +65,6 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - entry_url_or_page 是必填关键字段：用户消息中任何 http:// 或 https:// 开头的 URL 都必须原样记录到 collected_info.entry_url_or_page。
 - generate_plan 前确保 core_user_flow 涉及的每个页面都已探索。
 - generate_plan 时每个 scenario 必须包含 flow_steps，列出该场景的所有操作步骤。flow_steps 的 target 必须使用页面探索返回的元素清单中的实际文本。
-- 探索失败 → 报告用户,不跳过。
 - draft_prompt 中 step value 用 ${{context_key}} 格式引用变量。
 - 生成一个完整的场景方案，包含所有测试步骤（如登录、筛选、加入购物车、查看购物车等）。
 - 【variables 字段是跨段命名权威】必须列出该场景所有跨页面状态共享的变量：

@@ -4,6 +4,63 @@
 
 ---
 
+## BUG-K | paragraph/StaticText role 在 semantic locator 正则和映射中缺失
+
+- 日期：2026-06-05
+- 状态：fixed
+- 来源：E2E 测试执行失败（Run 195-198）
+- 描述：AI 生成的 DSL 中大量使用 `paragraph "X"` 格式 target，但 semantic locator 的 `_A11Y_ROLE_TARGET_RE` 正则不包含 `paragraph`，`_A11Y_TO_PLAYWRIGHT_ROLE` 映射也没有 `paragraph`。同时 prompt 推荐 AI 使用的 `StaticText` 角色也不在正则和映射中。
+- 复现步骤：
+  1. AI 通过 explore_flow 采集页面，产品名称在 a11y tree 中角色为 `paragraph`
+  2. AI 生成 DSL target=`paragraph "Blue Top"`
+  3. semantic locator 解析时正则不匹配，退化到纯文本搜索 `get_by_text('paragraph "Blue Top"')`，找不到元素
+  4. 所有 tier 失败 → needs_intervention
+- 影响：所有使用 `paragraph` 角色作为 target 的 DSL 步骤全部失败；prompt 推荐 `StaticText` 但 parser 不支持，AI 被误导
+- 根因：① 正则和映射只包含交互式 ARIA 角色，遗漏了 `paragraph`；② `paragraph` 是有效 ARIA role，`get_by_role("paragraph")` 能找到元素，但 `get_by_role("paragraph", name=...)` 因 `<p>` 元素无 accessible name 而失败
+- 处理：
+  1. `_A11Y_ROLE_TARGET_RE` 加入 `paragraph|statictext`
+  2. `_A11Y_TO_PLAYWRIGHT_ROLE` 加入 `"paragraph": "paragraph"`
+  3. 新增 `_TEXT_ONLY_ROLES` 集合，text-only 角色优先用 `get_by_text()` 而非 `get_by_role(name=)`
+  4. inside scoping 容器查找改为爬 3 级父元素
+- 验证：手动 18/18 步全部通过；`paragraph "Blue Top"` 正确解析为 `get_by_text("Blue Top", exact=True)`
+- 关联记录：`docs/execution-log.md#2026-06-05`
+
+## BUG-L | explore_flow 的 click 动作用 a11y text 匹配不可靠，导致探索数据错误
+
+- 日期：2026-06-05
+- 状态：fixed
+- 来源：AI Session 302 探索数据追踪
+- 描述：AI 通过 `explore_flow` 执行 `click "Polo"` 时，`_resolve_step_locator` 使用 a11y text 匹配（`get_by_text`），可能匹配到错误元素（如 breadcrumb、文本节点），且点击失败时静默继续，不报错。导致探索采集到的数据来自错误页面（全部产品页而非 Polo 筛选页）。
+- 复现步骤：
+  1. AI Session 302 调用 explore_flow，step 为 `{"action": "click", "target": "Polo"}`
+  2. a11y locator 找到元素并点击 → 但没有验证是否成功导航
+  3. 探索采集的全部产品（34 个），而非 Polo 专属产品（6 个）
+  4. AI 基于错误数据生成 DSL，使用了全产品页中不存在的价格和产品名
+- 影响：所有依赖 explore_flow click 导航的探索都可能采集到错误页面的数据，导致后续 DSL 生成失败
+- 根因：探索阶段 click 只用 a11y text 匹配（`get_by_text`），没有利用已采集节点的精确选择器（`verified_selectors` 如 `a[href="/brand_products/Polo"]`），也没有验证导航是否成功
+- 处理：新增 `_resolve_from_collected_nodes` 函数，优先用上一页采集的 `verified_selectors` 或 DOM 属性（`data-product-id`、`href`）构造 CSS 选择器精确定位，失败才回退 a11y locator
+- 验证：修复后探索精确采集 6 个 Polo 专属产品（vs 修复前 35 个全部产品）
+- 关联记录：`docs/execution-log.md#2026-06-05`
+
+## BUG-M | explore_flow 页面 URL 在动作执行前捕获，导航后节点归因错误
+
+- 日期：2026-06-05
+- 状态：fixed
+- 来源：修复 BUG-L 后的测试验证
+- 描述：`_collect_flow_a11y` 在动作执行前捕获 `current_url`，如果动作导致页面导航（如 click 链接），采集的节点属于新页面但被归因到旧页面的 URL 和 state。导致 `_deduplicate_explore_results` 按 URL 合并时删除正确数据。
+- 复现步骤：
+  1. 在 products 页面执行 `click "Polo"` → 导航到 `brand_products/Polo`
+  2. `current_url` 在 click 前捕获为 products URL
+  3. click 后采集的 173 个 Polo 页面节点被归因到 products URL state
+  4. dedup 按 URL 合并，Polo 页面数据被 products 页面覆盖
+- 影响：通过 click 导航后采集的节点 URL 与实际页面不匹配，数据聚合时丢失
+- 根因：`current_url = page.url` 在动作循环之前执行，导航后的 URL 变化未被反映
+- 处理：在 `results.append(page_entry)` 前检查 `page.url != current_url`，若导航发生则更新 URL、分配新 state、回写节点 state
+- 验证：修复后 Polo 页面获得独立 S2 state，节点归因正确
+- 关联记录：`docs/execution-log.md#2026-06-05`
+
+---
+
 ## 模板
 
 ```md
@@ -38,6 +95,7 @@
 | **A. DSL 生成与归一化** | LLM 输出→结构化 DSL 链路的格式、字段、校验问题 | Bug #A–#G, BUG-077/078/083/070/085/056/048/045 |
 | **B. 定位器系统** | 语义/CSS/VLM/坐标定位器匹配、策略、回退问题 | BUG-084/082/080/076/075/074/073/072/071/064/057/053/050/049/046, Bug #1 |
 | **C. 页面探索与数据采集** | explore_page/flow、DOM/A11y 采集、缓存问题 | BUG-060/059/067(05-07)/068(05-06), Bug #2, Bug #A |
+| **D. Prompt / AI 行为** | 硬编码 prompt、指令矛盾、角色推荐不一致 | Bug #K, Bug #L, Bug #M |
 | **D. AI 决策与提示词** | ReAct 循环、提示词遵循、工具调用去重 | BUG-085/081/069(05-06)/066(05-12)/065(05-06)/054, Bug #C |
 | **E. SSE 流式与前端** | 流式输出、会话管理、前端渲染 | BUG-063(05-04)/064(05-04)/058/044/042, Bug #D |
 | **F. 执行引擎** | Playwright runner、变量替换、证据采集 | BUG-079/057/053/051/047, Bug #3 |

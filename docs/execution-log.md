@@ -33,6 +33,97 @@
 | A11y 无名输入框定位修复 | 05-31 | label 兄弟 input 策略 + cell role 支持 | 29 steps 全通过，Quantity 输入框定位 |
 | textContent + DSL 完善 | 05-31 | 4 次修复：textContent、View Product、数量修改、断言值 | 21/21 steps 全通过 |
 | Anti-pattern 注入与上下文重构 | 06-04 | 重构上下文注入架构，修复执行错误注入 | 497 tests, 4 项核心修复 |
+| Locator + Explore 双轨修复 | 06-05 | paragraph 角色、探索导航精确化、Prompt 清理 | 探索采集 ✅, 18/18 手动 ✅, 全链路 ⚠️ |
+
+---
+
+## 2026-06-05 | Locator + Explore 双轨修复：paragraph 角色支持、探索导航精确化、Prompt 清理
+
+**任务**：修复品牌筛选购物车 E2E 测试中"数据采集错误 → DSL 失败"的完整链路问题。
+
+**问题发现过程**：
+用户报告两个 bug：① `paragraph "Premium Polo T-Shirts"` 定位失败；② `capture_text` 后的 DSL 步骤意图不清晰。通过追踪 AI Session 302 的完整数据流（DB → explore_flow 参数 → 采集数据 → DSL 生成 → 执行结果），发现根因不只在 locator 层，而是三层叠加。
+
+### Bug K：paragraph/StaticText role 在 semantic locator 中缺失
+
+- **现象**：Run 195 报错 `All locate tiers failed for target: paragraph "Premium Polo T-Shirts"`
+- **发现过程**：
+  1. 查询 AI Session 302 生成的 DSL draft (ID=218)，发现大量 `paragraph "X"` 和 `heading "X" inside "Y"` 格式的 target
+  2. 分析 [semantic.py:48-56](backend/app/locators/semantic.py#L48-L56) 的 `_A11Y_ROLE_TARGET_RE` 正则，发现 `paragraph` 不在角色列表中
+  3. 用 Playwright 直接测试 `get_by_role("paragraph")` 能发现 14 个 `<p>` 元素，但 `get_by_role("paragraph", name="Blue Top")` 返回 0——因为 `<p>` 是非交互元素，没有 accessible name
+  4. 对比 [dsl_generator.py:829-833](backend/app/ai/dsl_generator.py#L829)，prompt 教 AI 用 `StaticText`，但 `StaticText` 也不在正则和角色映射中
+- **代码证据**：
+  ```python
+  # semantic.py:48-54 — 修复前，paragraph/statictext 都不在正则中
+  _A11Y_ROLE_TARGET_RE = re.compile(
+      r'^(button|link|...|heading|...|cell|row|column)'  # ← 缺 paragraph/statictext
+  )
+  # semantic.py:68-109 — 修复前，A11Y_TO_PLAYWRIGHT_ROLE 也没有 paragraph
+  ```
+- **修复**：
+  1. 在 `_A11Y_ROLE_TARGET_RE` 加入 `paragraph|statictext`
+  2. 新增 `_TEXT_ONLY_ROLES` 集合标记 `{"paragraph", "statictext"}`
+  3. 在 `_build_a11y_candidates` 中，text-only 角色优先用 `get_by_text()` 而非 `get_by_role(name=)`
+  4. inside scoping 的容器查找从爬 1 级 (`xpath=..`) 改为爬 3 级
+- **实际成果**：`paragraph "Blue Top"` 正确解析为 `get_by_text("Blue Top", exact=True)`，text 匹配准确。手动 18/18 步全通过。
+
+### Bug L：explore_flow 的 a11y click 导航不可靠
+
+- **现象**：AI Session 302 的 Call 1（点击式探索）采集到的 Polo 页面数据是全部 35 个产品，不是 6 个 Polo 专属产品
+- **发现过程**：
+  1. 查询 `ai_planning_tool_results` (explore id=357/358)，对比两次探索的 raw_result
+  2. Call 1（steps-based, `click "Polo"`）产出 34 个产品段落，Call 2（URL-based, 编造 `products?brand=Polo`）也是同样全部产品
+  3. 用 Playwright 实测 `resolve_with_fallback(page, 'Polo')` 能正确找到 `a[href="/brand_products/Polo"]`，但 explore_flow 中采集的产品仍是全部
+  4. 追踪到 [page_explorer.py:1590](backend/app/ai/page_explorer.py#L1590)：探索阶段 click 只用 `_resolve_step_locator`（a11y text 匹配），可能匹配到错误元素（如 breadcrumb/文本节点）且静默失败
+- **代码证据**：
+  ```python
+  # page_explorer.py:1590-1597 — 修复前，只有 a11y 定位，没有精确选择器
+  elif act in ("click", "press", "tap"):
+      loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
+      if loc is None:
+          loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
+      if loc is not None:
+          click_with_precheck(page, loc)
+  ```
+- **修复**：新增 `_resolve_from_collected_nodes` 函数（~60行），在探索阶段 click 时优先用上一页采集的 `verified_selectors`（如 `a[href="/brand_products/Polo"]`）或 DOM 属性构造 CSS 选择器，失败才回退 a11y locator
+- **实际成果**：探索采集从 35 个全部产品精确到 6 个 Polo 专属产品（Blue Top, Fancy Green Top, Green Side Placket Detail T-Shirt, Premium Polo T-Shirts, Soft Stretch Jeans, Grunt Blue Slim Fit Jeans）
+
+### Bug M：explore_flow 页面 URL 归因在动作前
+
+- **现象**：修复 Bug L 后，`_collect_flow_a11y` 将 Polo 页面的 173 个节点归因到 products 页面 URL（`S1` 状态），而非 Polo 页面
+- **发现过程**：测试脚本打印每个 state 的产品集合，发现 S1（products）有 34 个产品，S2（Polo）不存在
+- **代码证据**：
+  ```python
+  # page_explorer.py:1637 — 修复前，URL 在动作执行前捕获
+  current_url = page.url  # ← 此时还在 products 页面
+  # ... 执行 click Polo → 导航到 brand_products/Polo ...
+  # 但 page_entry["url"] 仍是 products 的 URL
+  ```
+- **修复**：在 `results.append(page_entry)` 前检查 `page.url != current_url`，如果导航发生则更新 `page_entry["url"]` 和新 state，并回写 action nodes 的 `page_state`
+- **实际成果**：Polo 页面正确获得独立 state（S2），节点归因准确
+
+### Prompt 清理
+
+对 3 个文件 9 处硬编码 prompt 修复：
+- **dsl_generator.py**：`StaticText` → `paragraph` 示例统一、删除 `cell` 示例、合并重复 `${var}` 规则
+- **test_planning_agent.py**：删除 `test@automationexercise.com`/`password123`/`click "(6) POLO"` 硬编码 demo 值
+- **test_planning_prompts.py**：删除 `"Signup / Login"`/`"Email"` 硬编码、删除"探索失败→报告用户不跳过"（与代码 GUARD_CONTINUE_LIMIT 矛盾）
+
+### 全链路验证
+
+探索修复 + prompt 清理后，运行完整 pipeline：
+1. ✅ 探索采集：Polo 专属 6 个产品，精确无误
+2. ✅ DSL 生成：结构正确，AI 正确选择了 Blue Top (Rs.500) + Fancy Green Top (Rs.700)
+3. ⚠️ 执行：AI 仍在 Fancy Green Top 的价格上出错（用了 Rs.1000 而非 Rs.700），属于 LLM 推理层面问题，待后续 prompt 优化
+
+**待解决问题**：
+- AI 从探索数据中提取 product→price 关联仍有 LLM 幻觉（把 Green Side Placket Detail T-Shirt 的 Rs.1000 安到 Fancy Green Top）
+- 全链路执行因价格错误未通过，需要改进 DSL generator 的数据呈现格式
+
+**测试结果**：
+- paragraph/StaticText 修复后手动 18/18 步通过
+- 探索修复后精确采集 Polo 6 产品
+- 全链路：探索 ✅ → DSL 生成 ⚠️ → 执行 ❌
 
 ---
 

@@ -1288,6 +1288,102 @@ def _extract_text_from_css_target(target: str) -> str | None:
     return None
 
 
+def _resolve_from_collected_nodes(page, target: str, prev_nodes: list[dict] | None):
+    """Try to resolve *target* using verified_selectors or DOM attrs from *prev_nodes*.
+
+    When the previous page state's a11y nodes contain a matching element with
+    precise CSS selectors, use them directly — bypassing the a11y text-matching
+    locator that can match the wrong element (e.g. ``click "Polo"`` matching
+    a product paragraph instead of the brand link).
+
+    Returns a Playwright locator or None.
+    """
+    if not prev_nodes:
+        return None
+
+    import re as _re
+    cleaned_target = target.strip().strip('"').strip("'")
+
+    # Find nodes whose name contains the target text
+    candidates = []
+    for n in prev_nodes:
+        name = str(n.get("name", "")).strip()
+        if not name:
+            continue
+        # Match: exact, contains, or target is substring of name
+        if cleaned_target.lower() == name.lower() or cleaned_target.lower() in name.lower():
+            candidates.append(n)
+
+    if not candidates:
+        # Try fuzzy: target words appear in name
+        target_words = cleaned_target.lower().split()
+        for n in prev_nodes:
+            name = str(n.get("name", "")).strip().lower()
+            if not name:
+                continue
+            if all(w in name for w in target_words):
+                candidates.append(n)
+
+    if not candidates:
+        logger.info(
+            "_resolve_from_collected_nodes: target=%r, no candidates in %d prev_nodes",
+            target, len(prev_nodes),
+        )
+        return None
+
+    logger.info(
+        "_resolve_from_collected_nodes: target=%r, found %d candidates: %s",
+        target, len(candidates),
+        [(c.get("role"), str(c.get("name", ""))[:50]) for c in candidates[:8]],
+    )
+
+    # Prefer candidates with verified_selectors or DOM attrs
+    for n in candidates:
+        # Try verified_selectors first (already tested as unique)
+        verified = n.get("verified_selectors") or []
+        if isinstance(verified, list):
+            for vs in verified:
+                if isinstance(vs, dict) and vs.get("selector"):
+                    sel = vs["selector"]
+                    try:
+                        loc = page.locator(sel)
+                        if loc.count() == 1:
+                            logger.info(
+                                "_resolve_from_collected_nodes: target=%r → verified selector %s (source=%s)",
+                                target, sel, vs.get("source", "?"),
+                            )
+                            return loc.first
+                    except Exception:
+                        continue
+
+        # Try DOM attrs (tag + key attributes)
+        dom = n.get("dom") or {}
+        attrs = dom.get("attrs") or {} if isinstance(dom, dict) else {}
+        tag = dom.get("tag") if isinstance(dom, dict) else None
+
+        if tag and attrs:
+            # Build candidate selectors from attributes
+            selectors_to_try = []
+            for attr in ("data-product-id", "href", "id", "name"):
+                val = attrs.get(attr)
+                if val and isinstance(val, str):
+                    selectors_to_try.append(f'{tag}[{attr}="{val}"]')
+
+            for css in selectors_to_try:
+                try:
+                    loc = page.locator(css)
+                    if loc.count() == 1:
+                        logger.info(
+                            "_resolve_from_collected_nodes: target=%r → DOM selector %s",
+                            target, css,
+                        )
+                        return loc.first
+                except Exception:
+                    continue
+
+    return None
+
+
 def _resolve_step_locator(page, target: str, *, kind: str, skip_vlm: bool = False):
     """Resolve a step target to a Playwright locator using the semantic chain.
 
@@ -1496,6 +1592,9 @@ def _collect_flow_a11y(
     url_to_state: dict[str, str] = {}
     managed = not bool(session_id)
 
+    # Tracks the most recently collected a11y nodes for DOM-level click resolution
+    prev_action_nodes: list[dict[str, Any]] | None = None
+
     try:
         for step_i, step in enumerate(flow_steps):
             logger.info("_collect_flow_a11y: step %d, step=%s", step_i, step)
@@ -1588,7 +1687,18 @@ def _collect_flow_a11y(
                             if loc is not None:
                                 loc.fill(str(value))
                     elif act in ("click", "press", "tap"):
-                        loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
+                        # 1. Try DOM-level precise selectors from previously collected nodes
+                        logger.info(
+                            "_collect_flow_a11y: click target=%r, prev_nodes=%d",
+                            target, len(prev_action_nodes) if prev_action_nodes else 0,
+                        )
+                        loc = _resolve_from_collected_nodes(page, target, prev_action_nodes)
+                        if loc is not None:
+                            logger.info("_collect_flow_a11y: USED collected selector for %r", target)
+                        # 2. Fall back to a11y semantic locator
+                        if loc is None:
+                            logger.info("_collect_flow_a11y: FALLBACK to a11y for %r", target)
+                            loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
                         if loc is None:
                             page.wait_for_timeout(1500)
                             loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
@@ -1622,6 +1732,9 @@ def _collect_flow_a11y(
                     action_desc = f"{act} {target}" if target else act
                     nodes = collect_a11y_nodes(page, page_state=page_state_id, core_user_flow_text=core_user_flow_text)
 
+                    # Keep latest nodes for DOM-level click resolution in next actions
+                    prev_action_nodes = nodes
+
                     # Add action entry with nodes
                     action_entry = {
                         "action_index": action_idx,
@@ -1634,6 +1747,26 @@ def _collect_flow_a11y(
 
                     logger.info("_collect_flow_a11y: step %d action %d (%s) completed, nodes=%d",
                                step_i, action_idx, action_desc, len(nodes))
+
+                # If navigation happened during actions, attribute nodes to the final URL
+                final_url = page.url
+                if final_url and final_url != current_url:
+                    final_key = f"{final_url.rstrip('/')}|{description}"
+                    if final_key not in url_to_state:
+                        url_to_state[final_key] = f"S{state_index}"
+                        state_index += 1
+                    new_state = url_to_state[final_key]
+                    page_entry["url"] = final_url
+                    page_entry["page_state"] = new_state
+                    # Update action nodes' page_state too
+                    for a_entry in page_entry.get("actions", []):
+                        for n in a_entry.get("a11y_nodes", []):
+                            if isinstance(n, dict):
+                                n["page_state"] = new_state
+                    logger.info(
+                        "_collect_flow_a11y: step %d navigated %s → %s, re-assigned state=%s",
+                        step_i, current_url, final_url, new_state,
+                    )
 
                 # Add page entry to results
                 results.append(page_entry)
@@ -1650,6 +1783,7 @@ def _collect_flow_a11y(
                 state_id = url_to_state[key]
 
                 nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
+                prev_action_nodes = nodes
                 result = {
                     "url": current_url, "page_state": state_id,
                     "a11y_nodes": nodes, "element_count": len(nodes),

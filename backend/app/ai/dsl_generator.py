@@ -826,11 +826,11 @@ The Available elements are grouped by page -> action:
    Example: If you see:
    ```
    - [container] Blue Top
-     - StaticText="Blue Top"
+     - paragraph="Blue Top"
      - heading="Rs. 500"
      - link="Add to cart"
    ```
-   Use: `StaticText="Blue Top"` (NOT `paragraph="Blue Top"`)
+   Use: `paragraph "Blue Top"` or role from the indented child element.
    The `[container]` prefix indicates a container element — NEVER use it as a target.
 
    **Element disambiguation**: When multiple elements have the same role and name (e.g. multiple
@@ -848,8 +848,8 @@ The Available elements are grouped by page -> action:
 
 2. **Page structure understanding**: The Available elements use indentation to show parent-child relationships:
    - Indented elements are children of the element above them
-   - Example: `- [container] Blue Top\n  - StaticText="Blue Top"\n  - heading="Rs. 500"\n  - link="Add to cart"`
-     means StaticText, heading, and link are children of the Blue Top container
+   - Example: `- [container] Blue Top\n  - paragraph="Blue Top"\n  - heading="Rs. 500"\n  - link="Add to cart"`
+     means paragraph, heading, and link are children of the Blue Top container
    - Use the parent container's identifying text as the scope name for `inside`
    - Example: To click "Add to cart" inside "Blue Top" product card, use: target=link "Add to cart" inside "Blue Top"
 
@@ -857,12 +857,12 @@ The Available elements are grouped by page -> action:
    - click link "Products" → target=link "Products"
    - click link "Add to cart" inside "Blue Top" → target=link "Add to cart" inside "Blue Top"
    - capture_text heading "Rs. 500" inside "Blue Top" → target=heading "Rs. 500" inside "Blue Top"
+   - capture_text paragraph "Blue Top" → target=paragraph "Blue Top"
    - assert_text link "Blue Top" → target=link "Blue Top", value="Blue Top"
-   - assert_text cell "Rs. 500" → target=cell "Rs. 500", value="Rs. 500"
 
    **WRONG examples** (NEVER do this):
-   - capture_text paragraph "Blue Top" inside "Blue Top" → WRONG! paragraph is a container, not a child element
-   - click paragraph "Blue Top" → WRONG! Use StaticText or link instead
+   - capture_text paragraph "Blue Top" inside "Blue Top" → WRONG! use container text as scope, not as child target
+   - click paragraph "Blue Top" → OK only for capture_text; for clicking prefer link/button roles
 
 3. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
    The first step after goto / is a navigation click, not a form input.
@@ -878,10 +878,10 @@ The Available elements are grouped by page -> action:
 7. **Modify-then-assert**: When changing a value, input → wait_for update → assert.
    Do NOT assert a new value without first inputting it.
 
-8. **Capture-then-assert**: capture_text stores element text into a variable. The FOLLOWING
-   assert_text must verify the SAME element text appears elsewhere (e.g. cart page).
-   CRITICAL: ${var} can ONLY appear in the VALUE field, NEVER in the target field.
-   The target must always be a real element locator in role="name" format copied from Available elements.
+8. **Capture-then-assert**: capture_text stores element text into a variable
+   (use context_key as the variable name). Later assert_text steps can reference
+   this variable via ${context_key} in the VALUE field to verify the captured
+   text appears on a different page (e.g. cart page).
 
 9. **Form coverage**: Generate a step for EVERY form field mentioned in the flow.
    Dropdown: input action. Checkbox/radio: click action.
@@ -891,8 +891,7 @@ The Available elements are grouped by page -> action:
     - click / wait_for: target only, NO value
     - input / assert_text: BOTH target AND value required
     - capture_text: target + context_key (snake_case variable name)
-    - **CRITICAL**: ${var} placeholders can ONLY be used in the VALUE field of input/assert_text.
-      NEVER use ${var} as a target — target must be a real element locator.
+    - ${var} placeholders can ONLY be used in the VALUE field of input/assert_text, NEVER as a target.
 
 11. **input_contract**: Define every ${var} used in steps. Include context_key AND value.
     CRITICAL: The "value" field MUST be copied VERBATIM from the "## Test data" section.
