@@ -64,6 +64,9 @@ tests/
 # Ensure parent directories are tracked for the whitelisted file
 !backend/tests/
 !backend/tests/unit/
+testtool(mimov2.5pro)
+testbrand(mimov2.5pro)
+testbrand(dsv4pro)
 
 
 #others
@@ -75,3 +78,4 @@ backend/alembic/versions/45061d8892d7_add_is_default_to_projects.py
 test_results.json
 .claude/settings.local.json
 test_results_formatted.txt
+

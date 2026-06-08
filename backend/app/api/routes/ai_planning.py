@@ -424,6 +424,48 @@ async def cancel_execution(
     return {"status": "no_active_execution"}
 
 
+@router.get("/sessions/{session_id}/events")
+async def get_session_events(
+    session_id: int,
+    after_seq: int = 0,
+    current_user: User = Depends(require_demo_user),
+) -> list[dict]:
+    """Retrieve SSE event logs for a planning session.
+
+    Used by the frontend to replay missed events after a page refresh.
+    Returns events with ``seq > after_seq``, ordered by sequence number.
+    """
+    from sqlalchemy import select
+    from app.models.ai_planning_event_log import AIPlanningEventLog
+
+    session_factory = get_session_factory()
+    with session_factory() as db:
+        # Verify session exists and user has access.
+        from app.services.ai_planning import _get_session
+        _get_session(db, session_id, actor_user_id=current_user.id)
+
+        events = db.scalars(
+            select(AIPlanningEventLog)
+            .where(
+                AIPlanningEventLog.session_id == session_id,
+                AIPlanningEventLog.seq > after_seq,
+            )
+            .order_by(AIPlanningEventLog.seq.asc())
+            .limit(500),  # Safety limit
+        ).all()
+
+        return [
+            {
+                "seq": e.seq,
+                "event_type": e.event_type,
+                "event_data": e.event_data,
+                "message_id": e.message_id,
+                "created_at": e.created_at.isoformat(),
+            }
+            for e in events
+        ]
+
+
 @router.post("/test/locator")
 async def test_locator(
     url: str = "https://automationexercise.com/",

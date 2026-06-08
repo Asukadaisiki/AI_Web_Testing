@@ -21,8 +21,8 @@ uv sync                                       # Install dependencies
 uv run alembic upgrade head                   # Run database migrations
 uv run alembic revision --autogenerate -m "description"  # Create new migration
 uv run backend-dev                            # Start dev server (http://127.0.0.1:8000)
-uv run pytest                                 # Run unit tests (tests/unit/)
-uv run pytest tests/integration -m browser_integration    # Browser regression tests
+uv run pytest tests/unit -q                   # Run unit tests (505 tests)
+uv run pytest tests/integration -m browser_integration    # Browser regression tests (needs Playwright + chromium)
 uv run pytest tests/integration/test_platform_api_chain.py -v  # API chain integration tests
 uv run pytest tests/unit/test_dsl_validation.py -k "test_name"  # Run single test
 ```
@@ -55,11 +55,11 @@ backend/app/
     project.py, dsl_generation_run.py
   runners/
     playwright_runner.py    # Execution engine: sync + streaming modes, artifact collection
-  locators/            # 4-tier hybrid locator system
+  locators/            # 5-tier hybrid locator system
     corrections.py     # Tier 0: historical manual corrections (priority match)
-    semantic.py        # Tier 1: DOM semantic (element_id, CSS, XPath, case-insensitive text match)
-    ai_visual.py       # Tier 2: VLM-based visual locate (disabled by default)
-    fallback.py        # Tier 3: raise InterventionNeededError, collect DOM snapshot
+    semantic.py        # Tier 1-2: A11y candidates + DOM semantic (text_parent_chain, element_id, CSS/XPath)
+    ai_visual.py       # Tier 3: VLM-based visual locate (disabled by default)
+    fallback.py        # Tier 4: raise InterventionNeededError, collect DOM snapshot
   ai/
     test_planning_agent.py   # ReAct-style conversational test planning agent
     dsl_generator.py         # NL→DSL with governance, auto-repair, rejection tracking
@@ -82,8 +82,9 @@ frontend/src/
 
 ## Environment Setup
 
+- Backend requires Python 3.12+. Uses `uv` for dependency management.
 - `AUTH_SESSION_SECRET` is **required** — backend crashes without it. Set in `backend/.env` (copy from `.env.example`).
-- `get_settings()` uses `@lru_cache` — in tests, call `get_settings.cache_clear()` after modifying env vars.
+- `get_settings()` uses `@lru_cache` — in tests, the `reset_cached_state` autouse fixture clears caches on `get_settings`, `get_engine`, `get_session_factory`.
 - Test fixtures in `backend/tests/conftest.py` auto-set `AUTH_SESSION_SECRET` and provide `db_session`, `client`, `anonymous_client` fixtures using in-memory SQLite.
 
 ## Key Data Flows
@@ -113,3 +114,4 @@ frontend/src/
 ## Project Skills
 
 - **e2e-testing-workflow** (`.claude/skills/e2e-testing-workflow.md`): E2E 手动测试完整链路 — 启动系统 → AI 会话规划 → 保存执行 DSL → 分析报告 → 用户反馈迭代。当用户说 "测试平台"、"E2E 测试"、"手动测试" 时自动触发。
+- **e2e-brand-filter-cart** (`.claude/skills/e2e-brand-filter-cart.md`): 品牌筛选购物车 E2E 测试场景。

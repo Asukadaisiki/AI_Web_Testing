@@ -34,6 +34,114 @@
 | textContent + DSL 完善 | 05-31 | 4 次修复：textContent、View Product、数量修改、断言值 | 21/21 steps 全通过 |
 | Anti-pattern 注入与上下文重构 | 06-04 | 重构上下文注入架构，修复执行错误注入 | 497 tests, 4 项核心修复 |
 | Locator + Explore 双轨修复 | 06-05 | paragraph 角色、探索导航精确化、Prompt 清理 | 探索采集 ✅, 18/18 手动 ✅, 全链路 ⚠️ |
+| SSE 事件日志架构 | 06-08 | SSE 事件持久化 + 刷新恢复 + replay API | 解决刷新丢消息问题 |
+
+---
+
+## 2026-06-08 | SSE 事件日志架构：解决刷新丢消息问题
+
+**任务**：修复 AI 规划会话中 SSE 流式消息刷新后丢失的问题。
+
+**问题根因**：
+SSE 事件是"发射即忘"的——事件通过 HTTP 流推送给前端但从未持久化到数据库。一旦页面刷新，前端只能从数据库加载，而数据库中的 stub 消息（`turn_type="streaming"`）内容远落后于实际流式进度。用户必须等到整个流完成、数据库最终提交后才能看到完整内容并继续操作。
+
+**具体问题**：
+1. `text_chunk` 事件每 5 个才 flush 一次到 DB
+2. `status`、`tool_call_start`、`tool_call_end` 等事件从未持久化
+3. 没有事件日志/事件存储——SSE 事件是 fire-and-forget
+4. 前端无重连/恢复机制——POST-based SSE 无法用浏览器原生 `EventSource` 重连
+
+### 解决方案：SSE 事件日志 + 智能恢复
+
+**架构设计**：
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────────┐
+│  AI Agent   │────▶│ SSE Stream   │────▶│ Frontend (实时)   │
+│ (生成器)     │     │ (HTTP 流)     │     │ (乐观更新)        │
+└──────┬──────┘     └──────────────┘     └──────────────────┘
+       │
+       ▼
+┌──────────────┐     ┌──────────────────┐
+│  DB Event    │────▶│ Replay API       │
+│  Log Table   │     │ (GET /events)    │
+└──────────────┘     └──────────────────┘
+                              │
+                              ▼
+                     ┌──────────────────┐
+                     │ Frontend (刷新后) │
+                     │ (事件恢复)        │
+                     └──────────────────┘
+```
+
+### 后端改动
+
+**1. 新增模型 `AIPlanningEventLog`**
+- 文件：`backend/app/models/ai_planning_event_log.py`
+- 字段：session_id, message_id, event_type, event_data, seq, created_at
+- 索引：`(session_id, seq)` 联合索引支持高效 range query
+
+**2. 新增 Alembic 迁移**
+- 文件：`backend/alembic/versions/20260608_0025_sse_event_log.py`
+
+**3. 新增 `SSEEventLogger` 服务**
+- 文件：`backend/app/services/sse_event_log.py`
+- 功能：在 SSE 流式过程中批量持久化每个事件
+- 特性：自动 flush、序列号管理、错误容忍
+
+**4. 集成到 `stream_planning_message`**
+- 文件：`backend/app/services/ai_planning.py`
+- 改动：
+  - 每个事件 yield 前写入事件日志
+  - `status` 事件也触发 flush（原来只有 text_chunk）
+  - `_flush_streaming_msg_to_db` 增强：同时更新 `structured_payload_json` 中的阶段信息
+  - `_STREAMING_FLUSH_INTERVAL` 从 5 降到 3
+
+**5. 集成到 `stream_generate_planning_drafts`**
+- 文件：`backend/app/services/ai_planning.py`
+- 改动：draft_generating 和 turn_complete 事件写入日志
+
+**6. 集成到 `save_and_execute_selected_drafts_streaming`**
+- 文件：`backend/app/services/ai_planning.py`
+- 改动：save_progress, case_start, step_start/complete, analysis_complete, done 事件写入日志
+
+**7. 新增事件 replay API**
+- 文件：`backend/app/api/routes/ai_planning.py`
+- 端点：`GET /api/v1/ai-planning/sessions/{session_id}/events?after_seq=N`
+- 功能：返回指定序号之后的所有事件，支持增量获取
+
+### 前端改动
+
+**1. 新增 `getSessionEvents` API 函数**
+- 文件：`frontend/src/services/api.ts`
+- 功能：调用 replay API 获取事件日志
+
+**2. 增强 `applySessionDetail` 支持事件恢复**
+- 文件：`frontend/src/components/AITestPlanningPanel.tsx`
+- 新增 `applySessionDetailWithRecovery` 函数
+- 逻辑：
+  1. 先应用 DB 状态（显示最后 flush 的内容）
+  2. 检测 `turn_type="streaming"` 的中断消息
+  3. 调用 replay API 获取该消息的所有事件
+  4. 回放 text_chunk/status/tool_call 事件恢复最新内容
+  5. 如果发现 `turn_complete` 事件，直接标记为完成
+  6. 更新 transcript 显示恢复的内容
+
+**3. UI 增强**
+- 新增"✓ 已恢复"指示器，显示内容已从事件日志恢复
+- 保持原有的"⏸ 回复中断"指示器作为 fallback
+
+### 验证结果
+
+- 后端单元测试：505 tests passed（修复了 1 个因新增表导致的测试）
+- 前端构建：TypeScript 编译 + Vite 构建成功
+- 新增表：`ai_planning_event_logs` 已通过 Alembic 迁移创建
+
+### 后续优化（不在本次范围）
+
+1. 心跳保活：SSE 流中定期发送 `:keepalive` 注释
+2. 事件日志清理：定期清理超过 7 天的事件日志
+3. 断线重连：前端检测连接断开后自动重连
+4. 并发控制：限制同时活跃的 SSE 连接数
 
 ---
 

@@ -288,6 +288,28 @@ export function getPlanningSession(sessionId: number) {
   return request<AIPlanningSessionDetail>(`/api/v1/ai-planning/sessions/${sessionId}`);
 }
 
+/** SSE event log entry returned by the replay API. */
+export interface SessionEventLogEntry {
+  seq: number;
+  event_type: string;
+  event_data: Record<string, unknown>;
+  message_id: number | null;
+  created_at: string;
+}
+
+/**
+ * Fetch SSE event logs for a planning session.
+ * Used to replay missed events after a page refresh.
+ * @param sessionId - The planning session ID
+ * @param afterSeq - Only return events with seq > afterSeq (default 0 = all)
+ */
+export function getSessionEvents(sessionId: number, afterSeq: number = 0) {
+  const params = new URLSearchParams({ after_seq: String(afterSeq) });
+  return request<SessionEventLogEntry[]>(
+    `/api/v1/ai-planning/sessions/${sessionId}/events?${params}`,
+  );
+}
+
 export function listPlanningSessions() {
   return request<AIPlanningSessionSummary[]>("/api/v1/ai-planning/sessions");
 }

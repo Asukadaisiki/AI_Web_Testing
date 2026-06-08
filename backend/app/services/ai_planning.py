@@ -217,13 +217,24 @@ def _flush_streaming_msg_to_db(
     session: Session,
     message_id: int,
     content: str,
+    *,
+    phase: str | None = None,
+    phase_message: str | None = None,
 ) -> None:
-    """Incrementally persist accumulated streaming text to the stub message."""
+    """Incrementally persist accumulated streaming text + status to the stub message."""
     try:
         if not session.is_active:
             session.rollback()
         msg = session.merge(session.get(AIPlanningMessage, message_id))
         msg.content = content
+        # Also persist the current phase so a refresh shows meaningful status.
+        payload = msg.structured_payload_json or {}
+        payload["_streaming"] = True
+        if phase is not None:
+            payload["_phase"] = phase
+        if phase_message is not None:
+            payload["_phaseMessage"] = phase_message
+        msg.structured_payload_json = payload
         session.commit()
     except Exception:
         logger.warning("Failed to flush streaming message %d, skipping", message_id, exc_info=True)
@@ -231,7 +242,7 @@ def _flush_streaming_msg_to_db(
             session.rollback()
 
 
-_STREAMING_FLUSH_INTERVAL = 5  # flush to DB every N text_chunks
+_STREAMING_FLUSH_INTERVAL = 3  # flush to DB every N text_chunks (reduced from 5)
 
 
 def stream_planning_message(
@@ -289,23 +300,43 @@ def stream_planning_message(
     session.commit()
     streaming_msg_id = streaming_msg.id
 
+    # Initialize event logger — persists every SSE event for replay on refresh.
+    from app.services.sse_event_log import SSEEventLogger
+    event_logger = SSEEventLogger(session, planning_session_id, streaming_msg_id,
+                                  flush_interval=_STREAMING_FLUSH_INTERVAL)
+
     text_buffer = ""
     chunks_since_flush = 0
+    current_phase = None
+    current_phase_message = None
 
     response = None
     while True:
         try:
             event = next(stream)
+            # Persist the event for replay on refresh.
+            event_logger.log(event.get("type", "unknown"), event)
+
             if event.get("type") == "text_chunk" and not event.get("thinking"):
                 text_buffer += event.get("text", "")
                 chunks_since_flush += 1
                 if chunks_since_flush >= _STREAMING_FLUSH_INTERVAL:
-                    _flush_streaming_msg_to_db(session, streaming_msg_id, text_buffer)
+                    _flush_streaming_msg_to_db(session, streaming_msg_id, text_buffer,
+                                               phase=current_phase, phase_message=current_phase_message)
                     chunks_since_flush = 0
+            elif event.get("type") == "status":
+                current_phase = event.get("phase")
+                current_phase_message = event.get("message")
+                # Status events also trigger a flush so the stub shows the latest phase.
+                _flush_streaming_msg_to_db(session, streaming_msg_id, text_buffer,
+                                           phase=current_phase, phase_message=current_phase_message)
             yield event
         except StopIteration as stop:
             response = stop.value
             break
+
+    # Flush any remaining buffered events.
+    event_logger.flush()
 
     # Tool calls may have left the session in PendingRollbackError (e.g. UniqueViolation).
     # Recover so we can persist the AI response.
@@ -981,17 +1012,22 @@ def stream_generate_planning_drafts(
     actor_user_id: int,
 ):
     """Generator: yield draft_generating events, then delegate to generate_planning_drafts."""
+    from app.services.sse_event_log import SSEEventLogger
+    event_logger = SSEEventLogger(session, planning_session_id, flush_interval=3)
+
     logger.info(
         "[session:%d] Draft generation start, scenarios=%s",
         planning_session_id, payload.scenario_keys,
     )
     for scenario_key in payload.scenario_keys:
         logger.info("[session:%d] Generating draft for scenario '%s'", planning_session_id, scenario_key)
-        yield {
+        event = {
             "type": "draft_generating",
             "scenario_key": scenario_key,
             "message": f"正在生成 {scenario_key} 的 DSL...",
         }
+        event_logger.log("draft_generating", event)
+        yield event
 
     result = generate_planning_drafts(
         session,
@@ -999,7 +1035,7 @@ def stream_generate_planning_drafts(
         payload,
         actor_user_id=actor_user_id,
     )
-    yield {
+    complete_event = {
         "type": "turn_complete",
         "session_status": result.session_status,
         "payload": {
@@ -1008,6 +1044,9 @@ def stream_generate_planning_drafts(
             "plan": result.plan.model_dump(mode="json") if result.plan else None,
         },
     }
+    event_logger.log("turn_complete", complete_event)
+    event_logger.flush()
+    yield complete_event
     return result
 
 
@@ -1894,12 +1933,16 @@ def save_and_execute_selected_drafts_streaming(
     """
     from threading import Event as ThreadEvent
     from app.runners.playwright_runner import RunnerCancelledError
+    from app.services.sse_event_log import SSEEventLogger
 
     if cancel_event is None:
         cancel_event = ThreadEvent()
 
     start_time = time.monotonic()
     logger.info("[session:%d] Save-and-execute streaming start, draft_ids=%s", planning_session_id, draft_ids)
+
+    # Initialize event logger for this execute stream.
+    event_logger = SSEEventLogger(session, planning_session_id, flush_interval=5)
 
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
     project_ids = _get_session_project_ids(planning_session)
@@ -1933,12 +1976,14 @@ def save_and_execute_selected_drafts_streaming(
         saved_cases.append(SavedCaseResult(case_id=case.id, case_name=case.name))
         draft.status = "imported"
         logger.info("[session:%d] Saved case '%s' (id=%d)", planning_session_id, case.name, case.id)
-        yield {
+        save_event = {
             "type": "save_progress",
             "saved_count": len(saved_cases),
             "total": len(drafts),
             "case_name": case.name,
         }
+        event_logger.log("save_progress", save_event)
+        yield save_event
 
     if not saved_cases:
         planning_session.status = "saving"
@@ -1949,12 +1994,15 @@ def save_and_execute_selected_drafts_streaming(
             if d.error_message and d.error_message not in failed_errors:
                 failed_errors.append(d.error_message)
         detail = "; ".join(failed_errors[:2]) if failed_errors else "所有选中草案均无有效 DSL"
-        yield {
+        error_event = {
             "type": "error",
             "message": f"没有可保存的测试用例。{detail}",
             "error_type": "no_saved_cases",
             "phase": "execute",
         }
+        event_logger.log("error", error_event)
+        event_logger.flush()
+        yield error_event
         return
 
     execution_summaries: list[ExecutionSummaryResult] = []
@@ -1969,12 +2017,14 @@ def save_and_execute_selected_drafts_streaming(
             from app.schemas.dsl import DSLCase
             dsl_case = DSLCase.model_validate(case_record.dsl)
 
-        yield {
+        case_start_event = {
             "type": "case_start",
             "case_id": saved.case_id,
             "case_name": saved.case_name,
             "total_steps": len(dsl_case.steps) if dsl_case else 0,
         }
+        event_logger.log("case_start", case_start_event)
+        yield case_start_event
 
         case_start_time = time.monotonic()
         logger.info("[session:%d] Executing case '%s' (id=%d), steps=%d", planning_session_id, saved.case_name, saved.case_id, len(dsl_case.steps) if dsl_case else 0)
@@ -1987,7 +2037,7 @@ def save_and_execute_selected_drafts_streaming(
             try:
                 while True:
                     step_event = next(stream)
-                    yield {
+                    step_dict = {
                         "type": step_event.type,
                         "case_id": saved.case_id,
                         "step_index": step_event.step_index,
@@ -1997,6 +2047,8 @@ def save_and_execute_selected_drafts_streaming(
                         **({"status": step_event.status} if step_event.status is not None else {}),
                         **({"duration_ms": step_event.duration_ms} if step_event.duration_ms is not None else {}),
                     }
+                    event_logger.log(step_event.type, step_dict)
+                    yield step_dict
             except StopIteration as stop:
                 detail = stop.value
 
@@ -2047,7 +2099,9 @@ def save_and_execute_selected_drafts_streaming(
     session.commit()
 
     if _should_run_analysis(execution_summaries):
-        yield {"type": "status", "phase": "analyzing", "message": "正在分析执行结果..."}
+        status_event = {"type": "status", "phase": "analyzing", "message": "正在分析执行结果..."}
+        event_logger.log("status", status_event)
+        yield status_event
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
             db_session=session,
@@ -2068,18 +2122,23 @@ def save_and_execute_selected_drafts_streaming(
                 )
             )
             session.commit()
-            yield {
+            analysis_event = {
                 "type": "analysis_complete",
                 "analysis": analysis_response.execution_analysis.model_dump(mode="json"),
                 "message": analysis_msg,
             }
+            event_logger.log("analysis_complete", analysis_event)
+            yield analysis_event
 
     elapsed_total = time.monotonic() - start_time
     logger.info(
         "[session:%d] Save-and-execute streaming done, cases=%d, duration=%.2fs",
         planning_session_id, len(saved_cases), elapsed_total,
     )
-    yield {"type": "done"}
+    done_event = {"type": "done"}
+    event_logger.log("done", done_event)
+    event_logger.flush()
+    yield done_event
 
 
 def retest_cases(

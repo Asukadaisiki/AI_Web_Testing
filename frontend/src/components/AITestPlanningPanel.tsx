@@ -9,6 +9,7 @@ import {
   deletePlanningSession,
   generatePlanningDrafts,
   getPlanningSession,
+  getSessionEvents,
   listPlanningSessions,
   saveAndExecuteDrafts,
   sendPlanningMessage,
@@ -243,9 +244,110 @@ export function AITestPlanningPanel({
     setDrafts(detail.drafts);
   }
 
+  /**
+   * Enhanced version of applySessionDetail that also replays missed SSE events
+   * from the event log when an interrupted streaming message is detected.
+   */
+  async function applySessionDetailWithRecovery(
+    detail: Awaited<ReturnType<typeof getPlanningSession>>,
+  ) {
+    // 1. Apply the DB state first (shows whatever was last flushed).
+    applySessionDetail(detail);
+
+    // 2. Find any interrupted streaming message.
+    const interruptedMsg = detail.messages.find((m) => m.turn_type === "streaming");
+    if (!interruptedMsg) return;
+
+    // 3. Replay events from the event log to recover latest state.
+    try {
+      const events = await getSessionEvents(detail.session.id, 0);
+
+      let recoveredContent = interruptedMsg.content;
+      let recoveredPhase: string | null = null;
+      let recoveredPhaseMessage: string | null = null;
+      let hasCompleted = false;
+      let thinkingContent = "";
+
+      for (const evt of events) {
+        // Only process events for this specific message.
+        if (evt.message_id !== interruptedMsg.id && evt.message_id !== null) continue;
+
+        const data = evt.event_data as Record<string, unknown>;
+        switch (evt.event_type) {
+          case "text_chunk":
+            if (!data.thinking) {
+              recoveredContent += (data.text as string) || "";
+            } else {
+              thinkingContent += (data.text as string) || "";
+            }
+            break;
+          case "status":
+            recoveredPhase = (data.phase as string) || recoveredPhase;
+            recoveredPhaseMessage = (data.message as string) || recoveredPhaseMessage;
+            break;
+          case "tool_call_start":
+            recoveredPhase = "tool_calling";
+            recoveredPhaseMessage = `正在调用工具: ${data.tool || ""}`;
+            break;
+          case "tool_call_end":
+            recoveredPhase = "thinking";
+            recoveredPhaseMessage = "正在分析需求...";
+            break;
+          case "turn_complete":
+            hasCompleted = true;
+            // Use the final assistant message from the event if available.
+            const payload = data.payload as Record<string, unknown> | undefined;
+            if (payload?.assistant_message) {
+              recoveredContent = payload.assistant_message as string;
+            }
+            break;
+        }
+      }
+
+      // 4. Update the transcript with recovered content.
+      setTranscript((current) =>
+        current.map((msg) => {
+          if (msg.id !== interruptedMsg.id) return msg;
+          if (hasCompleted) {
+            // Stream actually completed — mark as done.
+            return {
+              ...msg,
+              turn_type: "followup" as const,
+              content: recoveredContent,
+              structured_payload: {
+                ...(msg.structured_payload ?? {}),
+                _streaming: false,
+                _interrupted: false,
+                _recovered: true,
+                ...(thinkingContent ? { _thinkingContent: thinkingContent } : {}),
+              },
+            };
+          }
+          // Stream is still in progress on the server — show recovered content
+          // with a "recovering" indicator so the user knows it's being restored.
+          return {
+            ...msg,
+            content: recoveredContent || msg.content,
+            structured_payload: {
+              ...(msg.structured_payload ?? {}),
+              _streaming: true,
+              _interrupted: false,
+              _recovered: true,
+              _phase: recoveredPhase || "thinking",
+              _phaseMessage: recoveredPhaseMessage || "正在恢复...",
+              ...(thinkingContent ? { _thinkingContent: thinkingContent } : {}),
+            },
+          };
+        }),
+      );
+    } catch {
+      // Event replay failed — keep the _interrupted flag from applySessionDetail.
+    }
+  }
+
   async function loadSessionDetail(sessionIdToLoad: number) {
     const detail = await getPlanningSession(sessionIdToLoad);
-    applySessionDetail(detail);
+    await applySessionDetailWithRecovery(detail);
     return detail;
   }
 
@@ -894,6 +996,8 @@ export function AITestPlanningPanel({
                       {item.content}
                       {(item.structured_payload as Record<string, unknown>)?._interrupted ? (
                         <span style={{ color: "#faad14", fontSize: 12, marginLeft: 8 }}>⏸ 回复中断</span>
+                      ) : (item.structured_payload as Record<string, unknown>)?._recovered ? (
+                        <span style={{ color: "#52c41a", fontSize: 12, marginLeft: 8 }}>✓ 已恢复</span>
                       ) : (item.structured_payload as Record<string, unknown>)?._streaming ? (
                         <span className="typing-cursor">▊</span>
                       ) : null}
