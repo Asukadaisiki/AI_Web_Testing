@@ -79,3 +79,10 @@ test_results.json
 .claude/settings.local.json
 test_results_formatted.txt
 
+# Temporary test scripts
+backend/run_fixed_dsl.py
+backend/test_full_pipeline.py
+backend/test_locator_fix.py
+backend/update_draft_dsl.py
+backend/verify_explore_fix.py
+
