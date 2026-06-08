@@ -311,6 +311,14 @@ async def chat_sse(
     """SSE stream for AI planning chat (ReAct mode)."""
     session_factory = get_session_factory()
 
+    # Validate session exists before starting stream
+    with session_factory() as db:
+        from app.services.ai_planning import _get_session
+        try:
+            _get_session(db, session_id, actor_user_id=current_user.id)
+        except EntityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     async def event_generator():
         try:
             async for event in stream_planning_chat(
@@ -346,6 +354,14 @@ async def drafts_sse(
     """SSE stream for draft generation."""
     session_factory = get_session_factory()
 
+    # Validate session exists before starting stream
+    with session_factory() as db:
+        from app.services.ai_planning import _get_session
+        try:
+            _get_session(db, session_id, actor_user_id=current_user.id)
+        except EntityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     async def event_generator():
         try:
             async for event in stream_planning_drafts(
@@ -380,6 +396,15 @@ async def execute_sse(
 ) -> StreamingResponse:
     """SSE stream for save-and-execute."""
     session_factory = get_session_factory()
+
+    # Validate session exists before starting stream
+    with session_factory() as db:
+        from app.services.ai_planning import _get_session
+        try:
+            _get_session(db, session_id, actor_user_id=current_user.id)
+        except EntityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     cancel_event = _cancellation_manager.register(session_id)
 
     async def event_generator():
@@ -433,7 +458,7 @@ async def get_session_events(
     """Retrieve SSE event logs for a planning session.
 
     Used by the frontend to replay missed events after a page refresh.
-    Returns events with ``seq > after_seq``, ordered by sequence number.
+    Returns events with ``seq > after_seq``, ordered by creation time.
     """
     from sqlalchemy import select
     from app.models.ai_planning_event_log import AIPlanningEventLog
@@ -444,15 +469,18 @@ async def get_session_events(
         from app.services.ai_planning import _get_session
         _get_session(db, session_id, actor_user_id=current_user.id)
 
-        events = db.scalars(
+        # Use created_at for ordering (seq is per-stream, not global).
+        query = (
             select(AIPlanningEventLog)
-            .where(
-                AIPlanningEventLog.session_id == session_id,
-                AIPlanningEventLog.seq > after_seq,
-            )
-            .order_by(AIPlanningEventLog.seq.asc())
-            .limit(500),  # Safety limit
-        ).all()
+            .where(AIPlanningEventLog.session_id == session_id)
+            .order_by(AIPlanningEventLog.created_at.asc(), AIPlanningEventLog.seq.asc())
+            .limit(500)
+        )
+        if after_seq > 0:
+            # For backward compatibility, still support after_seq filtering.
+            query = query.where(AIPlanningEventLog.seq > after_seq)
+
+        events = db.scalars(query).all()
 
         return [
             {

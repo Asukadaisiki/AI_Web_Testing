@@ -35,6 +35,400 @@
 | Anti-pattern 注入与上下文重构 | 06-04 | 重构上下文注入架构，修复执行错误注入 | 497 tests, 4 项核心修复 |
 | Locator + Explore 双轨修复 | 06-05 | paragraph 角色、探索导航精确化、Prompt 清理 | 探索采集 ✅, 18/18 手动 ✅, 全链路 ⚠️ |
 | SSE 事件日志架构 | 06-08 | SSE 事件持久化 + 刷新恢复 + replay API | 解决刷新丢消息问题 |
+| SSE 架构修复 v2 | 06-08 | Session 隔离 + 弹性降级 | 修复表不存在时流式崩溃 |
+| 孤儿会话根因修复 | 06-08 | SSE 端点添加会话验证，测试驱动调试 | 501 tests, 根因修复 |
+| 孤儿数据清理 | 06-08 | 清理 70 个孤立项目，添加清理脚本 | 数据库清理完成 |
+
+---
+
+## 2026-06-08 | 孤儿数据清理：清理 70 个孤立项目，添加清理脚本
+
+**任务**：清理数据库中的孤儿数据。
+
+**问题现象**：
+- 数据库中有 70 个孤立项目（不关联任何会话）
+- 这些项目是会话删除后遗留的
+
+**清理过程**：
+
+**第一步：检查孤儿数据**
+```bash
+uv run python scripts/cleanup_orphan_data.py --dry-run
+```
+
+输出：
+```
+=== Orphaned Data Summary ===
+Orphaned projects: 70
+Orphaned messages: 0
+Orphaned drafts: 0
+Orphaned event logs: 0
+Orphaned session-project links: 0
+```
+
+**第二步：执行清理**
+```bash
+uv run python scripts/cleanup_orphan_data.py
+```
+
+输出：
+```
+=== Cleaning up orphaned data ===
+Deleted 0 orphaned session-project links
+Deleted 0 orphaned event logs
+Deleted 0 orphaned drafts
+Deleted 0 orphaned messages
+Deleted 70 orphaned projects
+```
+
+**第三步：验证清理**
+```bash
+uv run python scripts/cleanup_orphan_data.py --dry-run
+```
+
+输出：
+```
+=== Orphaned Data Summary ===
+Orphaned projects: 0
+Orphaned messages: 0
+Orphaned drafts: 0
+Orphaned event logs: 0
+Orphaned session-project links: 0
+```
+
+### 新增文件
+
+**1. 清理脚本**
+- `backend/scripts/cleanup_orphan_data.py`
+- 功能：查找并删除所有孤儿数据
+- 支持 `--dry-run` 模式预览
+- 支持：孤立项目、消息、草案、事件日志、会话-项目链接
+
+**2. 测试文件**
+- `backend/tests/unit/test_orphan_session.py`
+- 功能：测试孤儿会话场景
+- 6 个测试用例覆盖各种边界情况
+
+### 验证结果
+
+- 后端单元测试：501 tests passed（2 个预存失败）
+- 孤儿数据清理：70 个孤立项目已删除
+- 数据库状态：所有孤儿数据已清理
+
+### 设计原则
+
+1. **定期清理**：定期运行清理脚本，防止孤儿数据积累
+2. **测试覆盖**：测试覆盖所有边界情况
+3. **防御性编程**：在入口处验证数据，防止孤儿数据产生
+4. **监控告警**：监控孤儿数据数量，及时发现问题
+
+---
+
+## 2026-06-08 | 孤儿会话根因修复：SSE 端点添加会话验证，测试驱动调试
+
+**任务**：通过测试驱动调试找到孤儿会话的根因并修复。
+
+**问题现象**：
+- 前端显示会话 305
+- 数据库中没有会话 305
+- 用户尝试发送消息时报错：`AI planning session 305 not found`
+
+**调试过程**：
+
+**第一步：写测试复现问题**
+创建 `test_orphan_session.py`，测试以下场景：
+1. 会话列表只包含存在的会话
+2. 发送消息到已删除的会话返回 404
+3. 获取已删除会话的详情返回 404
+4. 为已删除的会话生成草案返回 404
+5. 并发会话操作
+6. 会话删除后列表刷新
+
+**第二步：发现 bug**
+测试 `test_generate_drafts_for_deleted_session_returns_404` 失败：
+```
+assert 200 == 404  # drafts 端点返回 200，而不是 404
+```
+
+**根因分析**：
+SSE 端点（`/chat`、`/drafts`、`/execute`）在启动流之前**没有验证会话是否存在**。错误发生在流式生成器内部，前端收到 200 状态码，但流会失败。
+
+**这是孤儿会话的根本原因**：
+1. 前端调用 `/drafts` 端点
+2. 后端返回 200（流式响应）
+3. 前端认为操作成功
+4. 流式生成器内部报错：`AI planning session X not found`
+5. 前端显示错误，但会话列表没有刷新
+6. 用户看到孤儿会话
+
+**第三步：修复**
+在所有 SSE 端点添加会话验证：
+- `/chat`：启动流之前验证会话存在
+- `/drafts`：启动流之前验证会话存在
+- `/execute`：启动流之前验证会话存在
+
+如果会话不存在，直接返回 404，而不是启动流再报错。
+
+### 后端改动
+
+**1. 新增测试文件**
+- `tests/unit/test_orphan_session.py`：6 个测试用例覆盖孤儿会话场景
+
+**2. 修改 SSE 端点**
+- `backend/app/api/routes/ai_planning.py`：
+  - `chat_sse`：添加会话验证
+  - `drafts_sse`：添加会话验证
+  - `execute_sse`：添加会话验证
+
+**3. 前端错误处理**（之前的改动）
+- `handleSendMessage`：发送前验证会话存在
+- `handleGenerateDrafts`：生成前验证会话存在
+- `loadSessionDetail`：加载失败时刷新会话列表
+
+### 验证结果
+
+- 后端单元测试：501 tests passed（2 个预存失败）
+- 孤儿会话测试：6 tests passed
+- 前端构建：TypeScript 编译 + Vite 构建成功
+
+### 设计原则
+
+1. **测试驱动调试**：先写测试复现问题，再修复
+2. **根因分析**：找到问题的根本原因，而不是加防线
+3. **防御性编程**：在入口处验证数据，而不是在内部报错
+4. **错误处理**：返回明确的错误码，而不是流式失败
+
+---
+
+## 2026-06-08 | 孤儿会话修复：前端会话验证 + 错误处理 + 状态同步
+
+**任务**：修复前端显示孤儿会话数据（数据库中不存在）的问题。
+
+**问题现象**：
+- 前端显示会话 305
+- 数据库中没有会话 305
+- 用户尝试发送消息时报错：`AI planning session 305 not found`
+
+**根本原因**：
+1. 会话创建失败但前端乐观更新
+2. 会话被删除但前端未同步
+3. 网络错误导致状态不一致
+4. 竞态条件
+
+**设计缺陷**：
+- 没有考虑异常流程
+- 没有考虑数据一致性
+- 没有考虑边界情况
+- 没有设计测试用例
+
+**修复方案**：
+
+**1. 前端添加会话验证**
+- `handleSendMessage`：发送消息前验证会话存在
+- `handleGenerateDrafts`：生成草案前验证会话存在
+- `loadSessionDetail`：加载会话失败时刷新会话列表
+
+**2. 前端添加错误处理**
+- `createAndSelectSession`：创建会话失败时显示错误
+- `handleSendMessage`：发送失败时刷新会话列表
+- `handleGenerateDrafts`：生成失败时刷新会话列表
+
+**3. 前端添加状态同步**
+- 错误发生时自动刷新会话列表
+- 会话不存在时显示友好错误消息
+- 会话列表保持与数据库同步
+
+**设计原则**：
+1. **永远不要假设数据存在**：访问前必须验证
+2. **永远不要忽略错误**：所有操作必须有错误处理
+3. **永远不要信任缓存**：关键操作前刷新数据
+4. **永远不要忽略边界情况**：考虑所有可能的失败场景
+
+### 后端改动
+
+**1. 修复迁移链**
+- `0cf285e27ae1` 的 `down_revision` 从 `20260426_0022` 改为 `20260426_0021`
+- 执行 `uv run alembic upgrade head` 创建 `ai_planning_event_logs` 表
+
+### 前端改动
+
+**1. `handleSendMessage`**
+- 发送消息前调用 `getPlanningSession` 验证会话存在
+- 发送失败时自动刷新会话列表
+
+**2. `handleGenerateDrafts`**
+- 生成草案前调用 `getPlanningSession` 验证会话存在
+- 生成失败时自动刷新会话列表
+
+**3. `loadSessionDetail`**
+- 加载失败时显示友好错误消息
+- 加载失败时自动刷新会话列表
+
+**4. `createAndSelectSession`**
+- 创建失败时显示友好错误消息
+- 创建失败时抛出错误供调用者处理
+
+### 验证结果
+
+- 后端单元测试：495 tests passed（2 个预存失败）
+- 前端构建：TypeScript 编译 + Vite 构建成功
+- 会话验证：发送消息前验证会话存在
+- 错误处理：所有操作都有错误处理
+- 状态同步：错误发生时自动刷新会话列表
+
+---
+
+## 2026-06-08 | SSE 架构修复 v2：Session 隔离 + 弹性降级
+
+**任务**：修复 SSE 事件日志架构设计缺陷——表不存在时流式崩溃。
+
+**问题根因**：
+原设计中 `EventLogWriter` 和主流共享同一个数据库 session。当事件日志写入失败时，session 被 rollback，导致主流的 `_flush_streaming_msg_to_db` 也失败。
+
+**日志证据**：
+```
+Failed to flush SSE events (session 304), disabling: This Session's transaction has been rolled back
+due to a previous exception during flush. Original exception was: (psycopg.errors.UndefinedTable)
+关系 "ai_planning_event_logs" 不存在
+```
+
+**解决方案：Session 隔离 + 弹性降级**
+
+**核心改动**：
+1. **Session 隔离**：`EventLogWriter` 使用独立的数据库 session，不影响主流
+2. **无前置初始化**：`__init__` 不查询数据库，只存储参数
+3. **内联写入**：每个事件写入是独立的 try-catch，失败后静默禁用
+4. **弹性降级**：如果表不存在，第一次写入失败 → 后续写入全部跳过 → 主流不受影响
+
+**关键代码**：
+```python
+class EventLogWriter:
+    def __init__(self, session_factory, session_id, ...):
+        self._session_factory = session_factory  # 接收 session_factory，不是 session
+        self._session = None  # Lazy init，不立即创建
+
+    def write(self, event_type, event_data):
+        if not self._enabled:
+            return
+        session = self._get_session()  # 独立 session
+        try:
+            session.add(AIPlanningEventLog(...))
+        except Exception:
+            self._enabled = False  # 只禁用事件日志，不影响主流
+            session.rollback()  # 只 rollback 独立 session
+```
+
+**架构对比**：
+```
+旧设计（错误）：
+┌─────────────┐
+│ Main Session │◀─── EventLogWriter（共享 session）
+└─────────────┘
+       │
+       ▼ 写入失败 → session rollback → 主流崩溃
+
+新设计（正确）：
+┌─────────────┐
+│ Main Session │◀─── 主流（独立）
+└─────────────┘
+┌─────────────┐
+│ Log Session  │◀─── EventLogWriter（独立 session）
+└─────────────┘
+       │
+       ▼ 写入失败 → log session rollback → 主流不受影响
+```
+
+### 后端改动
+
+**1. 重写 `sse_event_log.py`**
+- 移除 `SSEEventLogger` 类
+- 新增 `EventLogWriter` 类
+- 接收 `session_factory` 而不是 `session`
+- 使用独立 session，Lazy 初始化
+
+**2. 更新 `ai_planning.py`**
+- `stream_planning_message`：新增 `session_factory` 参数
+- `stream_generate_planning_drafts`：新增 `session_factory` 参数
+- `save_and_execute_selected_drafts_streaming`：新增 `session_factory` 参数
+- 所有 `EventLogWriter` 初始化使用 `session_factory`
+
+**3. 更新 `ai_planning_streaming.py`**
+- `stream_planning_chat`：传递 `session_factory` 给 `stream_planning_message`
+- `stream_planning_drafts`：传递 `session_factory` 给 `stream_generate_planning_drafts`
+- `_run_sync_save_and_execute`：传递 `session_factory` 给 `save_and_execute_selected_drafts_streaming`
+
+### 验证结果
+
+- 后端单元测试：495 tests passed（2 个预存失败）
+- 前端构建：TypeScript 编译 + Vite 构建成功
+- Session 隔离：事件日志失败不影响主流
+- 弹性降级：如果表不存在，流式正常工作，事件日志静默禁用
+
+---
+
+## 2026-06-08 | SSE 架构修复：弹性降级设计，移除前置 DB 依赖
+
+**任务**：修复 SSE 事件日志架构设计缺陷——表不存在时流式崩溃。
+
+**问题根因**：
+原设计在 `SSEEventLogger.__init__` 中查询 `ai_planning_event_logs` 表获取 max(seq)，如果表不存在（迁移未执行），整个流式会崩溃。
+
+**设计缺陷**：
+- 事件日志是"增强功能"，不应该成为主流程的硬依赖
+- 不应该在流式开始前就初始化并查询数据库
+- 应该是 LLM 拿到消息之后才开始写入数据库
+
+**解决方案：弹性降级 + 内联写入**
+
+**新架构设计**：
+```python
+class EventLogWriter:
+    def __init__(self, session, session_id, ...):
+        # NO DB query here — just store parameters
+        self._enabled = True
+
+    def write(self, event_type, event_data):
+        if not self._enabled:
+            return
+        try:
+            # Inline write — if table missing, first write fails → disable
+            session.add(AIPlanningEventLog(...))
+        except Exception:
+            self._enabled = False  # Graceful degradation
+```
+
+**关键改动**：
+1. **移除 `SSEEventLogger` 类**，替换为 `EventLogWriter`
+2. **无前置初始化**：`__init__` 不查询数据库，只存储参数
+3. **内联写入**：每个事件写入是独立的 try-catch，失败后静默禁用
+4. **弹性降级**：如果表不存在，第一次写入失败 → 后续写入全部跳过 → 主流不受影响
+
+**核心原则**：
+- 事件日志是"有则更好"的功能，不是"必须存在"的依赖
+- 每个写入操作都是独立的，失败不影响主流程
+- 不应该在流式开始前就查询数据库
+
+### 后端改动
+
+**1. 重写 `sse_event_log.py`**
+- 移除 `SSEEventLogger` 类
+- 新增 `EventLogWriter` 类
+- 特性：无前置初始化、内联写入、弹性降级
+
+**2. 更新 `ai_planning.py`**
+- 替换所有 `SSEEventLogger` 为 `EventLogWriter`
+- 移除前置初始化代码
+- 保持内联写入模式
+
+**3. 更新 replay API**
+- 使用 `created_at` 排序（seq 是 per-stream，不是全局）
+- 保持向后兼容性
+
+### 验证结果
+
+- 后端单元测试：495 tests passed（2 个预存失败）
+- 前端构建：TypeScript 编译 + Vite 构建成功
+- 弹性降级：如果表不存在，流式正常工作，事件日志静默禁用
 
 ---
 

@@ -145,6 +145,7 @@ async def stream_planning_chat(
         session_factory=session_factory,
         generator_factory=lambda db: stream_planning_message(
             db, planning_session_id, actor_user_id=actor_user_id, content=content,
+            session_factory=session_factory,
         ),
         phase="chat",
     ):
@@ -170,6 +171,7 @@ async def stream_planning_drafts(
         session_factory=session_factory,
         generator_factory=lambda db: stream_generate_planning_drafts(
             db, planning_session_id, payload, actor_user_id=actor_user_id,
+            session_factory=session_factory,
         ),
         phase="drafts",
     ):
@@ -198,6 +200,7 @@ def _run_sync_save_and_execute(
                 draft_ids,
                 actor_user_id,
                 cancel_event=cancel_event,
+                session_factory=session_factory,
             ):
                 if cancel_event.is_set():
                     break

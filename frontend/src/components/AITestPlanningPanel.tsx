@@ -346,15 +346,27 @@ export function AITestPlanningPanel({
   }
 
   async function loadSessionDetail(sessionIdToLoad: number) {
-    const detail = await getPlanningSession(sessionIdToLoad);
-    await applySessionDetailWithRecovery(detail);
-    return detail;
+    try {
+      const detail = await getPlanningSession(sessionIdToLoad);
+      await applySessionDetailWithRecovery(detail);
+      return detail;
+    } catch (err: unknown) {
+      // If session not found, refresh the session list and show error
+      void messageApi.error("加载会话失败: " + (err instanceof Error ? err.message : String(err)));
+      await loadSessionList();
+      throw err;
+    }
   }
 
   async function createAndSelectSession() {
-    const detail = await createPlanningSession({});
-    applySessionDetail(detail);
-    return detail;
+    try {
+      const detail = await createPlanningSession({});
+      applySessionDetail(detail);
+      return detail;
+    } catch (err: unknown) {
+      void messageApi.error("创建会话失败: " + (err instanceof Error ? err.message : String(err)));
+      throw err;
+    }
   }
 
   async function handleSessionDeleted(deletedSessionId: number) {
@@ -613,6 +625,15 @@ export function AITestPlanningPanel({
       return;
     }
 
+    // Validate session exists before sending
+    try {
+      await getPlanningSession(sessionId);
+    } catch (err: unknown) {
+      void messageApi.error("会话不存在，请刷新页面");
+      await loadSessionList();
+      return;
+    }
+
     setIsSending(true);
     clearAllStreaming();
     const optimisticUser = createOptimisticMessage(sessionId, "user", "user", trimmed);
@@ -647,6 +668,8 @@ export function AITestPlanningPanel({
       clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if ((error as Error).name !== "AbortError") {
         void messageApi.error((error as Error).message);
+        // Refresh session list on error
+        await loadSessionList();
       }
     } finally {
       abortRef.current = null;
@@ -658,6 +681,16 @@ export function AITestPlanningPanel({
     if (!sessionId || !selectedScenarioKeys.length) {
       return;
     }
+
+    // Validate session exists before generating
+    try {
+      await getPlanningSession(sessionId);
+    } catch (err: unknown) {
+      void messageApi.error("会话不存在，请刷新页面");
+      await loadSessionList();
+      return;
+    }
+
     setIsGenerating(true);
     clearAllStreaming();
 
@@ -697,6 +730,8 @@ export function AITestPlanningPanel({
       clearStreamingOnMessage(activeAssistantMessageIdRef.current);
       if ((error as Error).name !== "AbortError") {
         void messageApi.error((error as Error).message);
+        // Refresh session list on error
+        await loadSessionList();
       }
     } finally {
       abortRef.current = null;

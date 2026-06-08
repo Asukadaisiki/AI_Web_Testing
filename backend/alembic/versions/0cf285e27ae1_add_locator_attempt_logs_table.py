@@ -1,7 +1,7 @@
 """add locator_attempt_logs table"""
 
 revision = '0cf285e27ae1'
-down_revision = '20260426_0022'
+down_revision = '20260426_0021'
 branch_labels = None
 depends_on = None
 
