@@ -1,4 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
+import { Route } from "react-router-dom";
 import { vi } from "vitest";
 
 import * as api from "../services/api";
@@ -54,13 +55,13 @@ test("renders planning page with AI planning panel when sessionId is provided", 
 });
 
 test("redirects to /planning when no sessionId is provided", async () => {
-  renderWithProviders(<PlanningPage />, { route: "/planning", path: "/planning" });
-
-  // The component calls navigate("/planning") when no sessionId
-  // and returns null — this just verifies no crash
-  await waitFor(() => {
-    expect(api.getAISettings).toHaveBeenCalled();
+  renderWithProviders(<PlanningPage />, {
+    route: "/missing-session",
+    path: "/missing-session",
+    extraRoutes: [<Route key="sessions" path="/planning" element={<div>session-list</div>} />],
   });
+
+  expect(await screen.findByText("session-list")).toBeInTheDocument();
 });
 
 test("loads session detail on mount using sessionId from URL", async () => {

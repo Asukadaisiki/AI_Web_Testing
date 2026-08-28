@@ -6,7 +6,7 @@ import { AITestPlanningPanel } from "./AITestPlanningPanel";
 import * as api from "../services/api";
 import * as sseModule from "../services/sseClient";
 import { renderWithProviders } from "../test/test-utils";
-import type { AISettings } from "../types/api";
+import type { AIPlanningSessionDetail, AISettings } from "../types/api";
 
 vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
@@ -54,11 +54,8 @@ const aiSettings: AISettings = {
   has_ai_planning_api_key: true,
 };
 
-beforeEach(() => {
-  vi.resetAllMocks();
-  vi.stubGlobal("confirm", vi.fn(() => true));
-
-  vi.mocked(api.getPlanningSession).mockResolvedValue({
+function emptySessionDetail(): AIPlanningSessionDetail {
+  return {
     session: {
       id: 5,
       actor_user_id: 1,
@@ -83,7 +80,14 @@ beforeEach(() => {
     },
     messages: [],
     drafts: [],
-  });
+  };
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.stubGlobal("confirm", vi.fn(() => true));
+
+  vi.mocked(api.getPlanningSession).mockResolvedValue(emptySessionDetail());
   vi.mocked(api.listPlanningSessions).mockResolvedValue([
     {
       id: 5,
@@ -113,7 +117,10 @@ test("展示动态进度、工具调用并支持直接生成方案", async () =>
   });
 
   // getPlanningSession: called after turn_complete reloads session, return final state with plan
-  vi.mocked(api.getPlanningSession).mockResolvedValueOnce({
+  vi.mocked(api.getPlanningSession)
+    .mockResolvedValueOnce(emptySessionDetail())
+    .mockResolvedValueOnce(emptySessionDetail())
+    .mockResolvedValueOnce({
       session: {
         id: 5,
         actor_user_id: 1,
@@ -213,6 +220,8 @@ test("可以生成草案并展示审阅操作", async () => {
 
   // getPlanningSession: after chat turn_complete returns plan, after drafts turn_complete returns drafts
   vi.mocked(api.getPlanningSession)
+    .mockResolvedValueOnce(emptySessionDetail())
+    .mockResolvedValueOnce(emptySessionDetail())
     .mockResolvedValueOnce({
       session: {
         id: 5,
@@ -274,6 +283,7 @@ test("可以生成草案并展示审阅操作", async () => {
       ],
       drafts: [],
     })
+    .mockResolvedValueOnce(emptySessionDetail())
     .mockResolvedValueOnce({
       session: {
         id: 5,

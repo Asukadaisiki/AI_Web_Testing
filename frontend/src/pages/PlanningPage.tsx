@@ -1,16 +1,14 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { Navigate, useParams } from "react-router-dom";
 import { AITestPlanningPanel } from "../components/AITestPlanningPanel";
 import { useQuery } from "@tanstack/react-query";
 import { getAISettings } from "../services/api";
 
 export function PlanningPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const navigate = useNavigate();
   const aiSettingsQuery = useQuery({ queryKey: ["ai-settings"], queryFn: getAISettings });
 
   if (!sessionId) {
-    navigate("/planning");
-    return null;
+    return <Navigate to="/planning" replace />;
   }
 
   return (

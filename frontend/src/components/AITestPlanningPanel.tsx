@@ -1078,7 +1078,7 @@ export function AITestPlanningPanel({
           >
             <Input.TextArea
               aria-label="测试规划对话输入"
-              autoSize={{ minRows: 1, maxRows: 4 }}
+              rows={2}
               variant="borderless"
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}

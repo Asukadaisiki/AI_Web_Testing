@@ -284,7 +284,10 @@ export function CasesPage() {
       </div>
 
       <div style={{ marginTop: "auto" }}>
-        <Link to="/cases/new" style={{ textDecoration: "none" }}>
+        <Link
+          to={activeProjectId ? `/cases/new?project_id=${activeProjectId}` : "/cases/new"}
+          style={{ textDecoration: "none" }}
+        >
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -493,7 +496,12 @@ export function CasesPage() {
       </Typography.Text>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <Link to="/" style={{ fontSize: 13 }}>返回 AI 规划</Link>
-        <Link to="/cases/new" style={{ fontSize: 13 }}>手动补充/编辑</Link>
+        <Link
+          to={activeProjectId ? `/cases/new?project_id=${activeProjectId}` : "/cases/new"}
+          style={{ fontSize: 13 }}
+        >
+          手动补充/编辑
+        </Link>
       </div>
     </div>,
   ];

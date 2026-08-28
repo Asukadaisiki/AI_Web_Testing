@@ -35,6 +35,7 @@ export function AppRouter() {
         <Route path="/planning/sessions/:sessionId" element={<PlanningPage />} />
         <Route path="/" element={<Navigate to="/planning" replace />} />
         <Route path="/cases" element={<CasesPage />} />
+        <Route path="/cases/new" element={<CaseEditPage />} />
         <Route path="/cases/:caseId/edit" element={<CaseEditPage />} />
         <Route path="/reports" element={<ReportPage />} />
         <Route path="/run/:executionId" element={<ExecutionDetailPage />} />

@@ -6,11 +6,17 @@ import { vi } from "vitest";
 
 import { AppRouter } from "./AppRouter";
 
+vi.mock("../pages/SessionListPage", () => ({
+  SessionListPage: () => <div>Session List Mock</div>,
+}));
 vi.mock("../pages/PlanningPage", () => ({
   PlanningPage: () => <div>Planning Mock</div>,
 }));
 vi.mock("../pages/CasesPage", () => ({
   CasesPage: () => <div>Cases Mock</div>,
+}));
+vi.mock("../pages/CaseEditPage", () => ({
+  CaseEditPage: () => <div>Case Editor Mock</div>,
 }));
 vi.mock("../pages/ExecutionDetailPage", () => ({
   ExecutionDetailPage: () => <div>Execution Detail Mock</div>,
@@ -32,7 +38,10 @@ function renderRouter(initialEntries: string[]) {
     <ConfigProvider>
       <AntdApp>
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={initialEntries}>
+          <MemoryRouter
+            initialEntries={initialEntries}
+            future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+          >
             <AppRouter />
           </MemoryRouter>
         </QueryClientProvider>
@@ -41,15 +50,24 @@ function renderRouter(initialEntries: string[]) {
   );
 }
 
-test("root route renders planning page without auth guard", async () => {
+test("root route renders session list without auth guard", async () => {
   renderRouter(["/"]);
-  expect(await screen.findByText("Planning Mock")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "步骤 1" })).toHaveAttribute("href", "/");
+  expect(await screen.findByText("Session List Mock")).toBeInTheDocument();
 });
 
 test("/cases renders cases page", async () => {
   renderRouter(["/cases"]);
   expect(await screen.findByText("Cases Mock")).toBeInTheDocument();
+});
+
+test("/cases/new renders case create page", async () => {
+  renderRouter(["/cases/new?project_id=1"]);
+  expect(await screen.findByText("Case Editor Mock")).toBeInTheDocument();
+});
+
+test("/cases/:id/edit renders case edit page", async () => {
+  renderRouter(["/cases/12/edit"]);
+  expect(await screen.findByText("Case Editor Mock")).toBeInTheDocument();
 });
 
 test("/run/:id renders execution detail page", async () => {
@@ -64,22 +82,15 @@ test("legacy execution detail path redirects to /run/:id", async () => {
 
 test("/dashboard redirects to root", async () => {
   renderRouter(["/dashboard"]);
-  expect(await screen.findByText("Planning Mock")).toBeInTheDocument();
+  expect(await screen.findByText("Session List Mock")).toBeInTheDocument();
 });
 
 test("/login redirects to root", async () => {
   renderRouter(["/login"]);
-  expect(await screen.findByText("Planning Mock")).toBeInTheDocument();
+  expect(await screen.findByText("Session List Mock")).toBeInTheDocument();
 });
 
 test("/executions redirects to /cases", async () => {
   renderRouter(["/executions"]);
   expect(await screen.findByText("Cases Mock")).toBeInTheDocument();
-});
-
-test("step navigation shows three demo steps", async () => {
-  renderRouter(["/"]);
-  expect(screen.getByRole("link", { name: "步骤 1" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "步骤 2" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "步骤 3" })).toBeInTheDocument();
 });

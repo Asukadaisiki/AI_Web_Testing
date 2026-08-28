@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   Button,
   Form,
@@ -15,7 +15,7 @@ import {
 import { PlusOutlined, DeleteOutlined, ArrowLeftOutlined } from "@ant-design/icons";
 
 import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { getCaseDetail, updateCase, deleteCase } from "../services/api";
+import { createCase, deleteCase, getCaseDetail, updateCase } from "../services/api";
 import type { DSLStep, CaseMutationPayload } from "../types/api";
 
 const SUPPORTED_ACTIONS = [
@@ -37,19 +37,25 @@ const SUPPORTED_ACTIONS = [
 export function CaseEditPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm();
+  const isCreateMode = caseId === undefined;
+  const parsedCaseId = Number(caseId);
+  const createProjectId = Number(searchParams.get("project_id"));
+  const hasValidCaseId = Number.isInteger(parsedCaseId) && parsedCaseId > 0;
+  const hasValidProjectId = Number.isInteger(createProjectId) && createProjectId > 0;
 
   const caseQuery = useQuery({
     queryKey: ["case", caseId],
-    queryFn: () => getCaseDetail(Number(caseId)),
-    enabled: !!caseId,
+    queryFn: () => getCaseDetail(parsedCaseId),
+    enabled: !isCreateMode && hasValidCaseId,
   });
 
   const updateMutation = useMutation({
     mutationFn: (payload: CaseMutationPayload) =>
-      updateCase(Number(caseId), payload),
+      updateCase(parsedCaseId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cases"] });
       queryClient.invalidateQueries({ queryKey: ["case", caseId] });
@@ -60,8 +66,20 @@ export function CaseEditPage() {
     },
   });
 
+  const createMutation = useMutation({
+    mutationFn: (payload: CaseMutationPayload) => createCase(payload),
+    onSuccess: (createdCase) => {
+      queryClient.invalidateQueries({ queryKey: ["cases"] });
+      void messageApi.success("用例已创建");
+      navigate(`/cases/${createdCase.id}/edit`, { replace: true });
+    },
+    onError: (error: Error) => {
+      void messageApi.error(error.message);
+    },
+  });
+
   const deleteMutation = useMutation({
-    mutationFn: () => deleteCase(Number(caseId)),
+    mutationFn: () => deleteCase(parsedCaseId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cases"] });
       void messageApi.success("用例已删除");
@@ -72,18 +90,20 @@ export function CaseEditPage() {
     },
   });
 
-  if (caseQuery.isLoading) return <LoadingBlock />;
-  if (caseQuery.isError) return <ErrorBlock message={caseQuery.error.message} />;
+  if (!isCreateMode && !hasValidCaseId) return <ErrorBlock message="用例 ID 无效" />;
+  if (isCreateMode && !hasValidProjectId) return <ErrorBlock message="缺少有效的项目 ID" />;
+  if (!isCreateMode && caseQuery.isLoading) return <LoadingBlock />;
+  if (!isCreateMode && caseQuery.isError) return <ErrorBlock message={caseQuery.error.message} />;
 
   const caseData = caseQuery.data;
-  if (!caseData) return <ErrorBlock message="用例不存在" />;
+  if (!isCreateMode && !caseData) return <ErrorBlock message="用例不存在" />;
 
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
       const payload: CaseMutationPayload = {
-        project_id: caseData.project_id,
-        actor_user_id: caseData.updated_by,
+        project_id: isCreateMode ? createProjectId : caseData!.project_id,
+        actor_user_id: caseData?.updated_by ?? 1,
         name: values.name,
         description: values.description || null,
         base_url: values.base_url || null,
@@ -93,10 +113,14 @@ export function CaseEditPage() {
           value: s.value || undefined,
           timeout_ms: s.timeout_ms || undefined,
         })),
-        input_contract: caseData.input_contract,
-        output_contract: caseData.output_contract,
+        input_contract: caseData?.input_contract ?? [],
+        output_contract: caseData?.output_contract ?? [],
       };
-      updateMutation.mutate(payload);
+      if (isCreateMode) {
+        createMutation.mutate(payload);
+      } else {
+        updateMutation.mutate(payload);
+      }
     } catch {
       // validation errors shown inline
     }
@@ -112,7 +136,7 @@ export function CaseEditPage() {
           onClick={() => navigate("/cases")}
         />
         <Typography.Title level={4} style={{ margin: 0 }}>
-          编辑用例
+          {isCreateMode ? "新建用例" : "编辑用例"}
         </Typography.Title>
       </div>
 
@@ -120,10 +144,10 @@ export function CaseEditPage() {
         form={form}
         layout="vertical"
         initialValues={{
-          name: caseData.name,
-          description: caseData.description || "",
-          base_url: caseData.base_url || "",
-          steps: caseData.steps,
+          name: caseData?.name ?? "",
+          description: caseData?.description || "",
+          base_url: caseData?.base_url || "",
+          steps: caseData?.steps ?? [],
         }}
       >
         <Card title="基本信息" style={{ marginBottom: 16 }}>
@@ -212,22 +236,29 @@ export function CaseEditPage() {
         <div style={{ display: "flex", justifyContent: "space-between" }}>
           <Space>
             <Button onClick={() => navigate("/cases")}>取消</Button>
-            <Button type="primary" onClick={handleSave} loading={updateMutation.isPending} disabled={updateMutation.isPending}>
+            <Button
+              type="primary"
+              onClick={handleSave}
+              loading={createMutation.isPending || updateMutation.isPending}
+              disabled={createMutation.isPending || updateMutation.isPending}
+            >
               保存
             </Button>
           </Space>
-          <Popconfirm
-            title="确认删除该用例？"
-            description="删除后不可恢复"
-            onConfirm={() => deleteMutation.mutate()}
-            okText="删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-          >
-            <Button danger loading={deleteMutation.isPending} disabled={deleteMutation.isPending}>
-              删除用例
-            </Button>
-          </Popconfirm>
+          {!isCreateMode && (
+            <Popconfirm
+              title="确认删除该用例？"
+              description="删除后不可恢复"
+              onConfirm={() => deleteMutation.mutate()}
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+            >
+              <Button danger loading={deleteMutation.isPending} disabled={deleteMutation.isPending}>
+                删除用例
+              </Button>
+            </Popconfirm>
+          )}
         </div>
       </Form>
     </div>

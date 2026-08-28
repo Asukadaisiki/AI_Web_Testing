@@ -11,12 +11,20 @@ vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
   return {
     ...actual,
+    getProjects: vi.fn(),
     getCases: vi.fn(),
     executeCase: vi.fn(),
   };
 });
 
 test("渲染用例列表并支持执行后跳转", async () => {
+  vi.mocked(api.getProjects).mockResolvedValue([
+    {
+      id: 1,
+      name: "默认项目",
+      description: null,
+    },
+  ]);
   vi.mocked(api.getCases).mockResolvedValue({
     items: [
       {
@@ -71,9 +79,9 @@ test("渲染用例列表并支持执行后跳转", async () => {
 
   expect(await screen.findByText("登录冒烟")).toBeInTheDocument();
 
-  const caseRow = screen.getByText("登录冒烟").closest("tr");
-  expect(caseRow).not.toBeNull();
-  await userEvent.click(within(caseRow as HTMLElement).getByRole("button", { name: /执\s*行/ }));
+  const caseCard = screen.getByText("登录冒烟").closest(".nb-card");
+  expect(caseCard).not.toBeNull();
+  await userEvent.click(within(caseCard as HTMLElement).getByRole("button", { name: /执\s*行/ }));
 
   await waitFor(() => {
     expect(api.executeCase).toHaveBeenCalledWith(1, { actor_user_id: 1 });
