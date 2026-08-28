@@ -172,23 +172,13 @@ class TestRecordExecutionAntiPatterns:
         # 期望行为 (修复后): 应该识别 VLM 失败为 TARGET_NOT_FOUND
         # assert category == TARGET_NOT_FOUND
 
-    def test_classifies_paragraph_target_as_invalid_format(self):
-        """paragraph 不是有效的 Playwright role，应该被识别为无效 target 格式"""
-        target = 'paragraph "Blue Top" inside "Blue Top"'
-
-        # 当前实现: 没有识别无效 role
-        # 期望: 应该识别 paragraph 为无效 role
-
-        # 检查是否是有效的 a11y role
+    def test_paragraph_target_is_a_supported_text_role(self):
+        """paragraph targets use text matching and remain valid DSL targets."""
         from app.locators.semantic import _A11Y_TO_PLAYWRIGHT_ROLE
-        role = "paragraph"
-        is_valid_role = role in _A11Y_TO_PLAYWRIGHT_ROLE
+        from app.locators.semantic import _TEXT_ONLY_ROLES
 
-        # 当前行为: paragraph 不在有效 role 列表中
-        assert is_valid_role is False
-
-        # 期望: 在记录 anti-pattern 时应该识别这种格式错误
-        # 并记录为 TARGET_NOT_FOUND 而不是 MISSING_STEP
+        assert _A11Y_TO_PLAYWRIGHT_ROLE["paragraph"] == "paragraph"
+        assert "paragraph" in _TEXT_ONLY_ROLES
 
     def test_classifies_valid_target_format_correctly(self):
         """有效的 target 格式应该被正确分类"""

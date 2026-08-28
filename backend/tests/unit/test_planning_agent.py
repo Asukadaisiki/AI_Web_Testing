@@ -31,16 +31,16 @@ from app.ai.test_planning_agent import (
 from app.schemas.ai_planning import AIPlanningRequirements, AIPlanningToolCall
 
 
-def test_draft_prompt_includes_dom_aware_hint() -> None:
-    """_build_draft_prompt should include DOM-aware targeting hint."""
+def test_draft_prompt_includes_a11y_targeting_hint() -> None:
+    """_build_draft_prompt should require explored a11y role/name targets."""
     requirements = AIPlanningRequirements(
         app_under_test="Login Page",
         business_goal="Test login",
         entry_url_or_page="https://example.com/login",
     )
     prompt = _build_draft_prompt(requirements, scenario_title="登录成功", negative_case=False)
-    assert "label" in prompt
-    assert "placeholder" in prompt or "实际" in prompt
+    assert 'role="name"' in prompt
+    assert "不要构造 CSS 选择器" in prompt
 
 
 def _planning_settings(**overrides):
@@ -718,4 +718,3 @@ class TestToolCallSignature:
         """Tools not eligible for dedup return None so they always execute."""
         assert _tool_call_signature("get_project_info", {}) is None
         assert _tool_call_signature("list_test_cases", {"search": "login"}) is None
-
