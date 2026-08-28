@@ -7,7 +7,8 @@ Orphaned data includes:
 - Event logs without a session
 
 Usage:
-    uv run python scripts/cleanup_orphan_data.py [--dry-run]
+    uv run python scripts/cleanup_orphan_data.py
+    uv run python scripts/cleanup_orphan_data.py --execute --confirm DELETE_ORPHANED_DATA
 """
 
 import sys
@@ -24,19 +25,22 @@ from app.models import (
     AIPlanningDraft,
     AIPlanningEventLog,
     Project,
+    ProjectMember,
     SessionProject,
+    TestCase,
 )
 
 
 def find_orphaned_projects(session):
-    """Find projects not linked to any session."""
-    linked_project_ids = session.scalars(
-        select(SessionProject.project_id).distinct()
+    """Find empty, non-default projects that are not linked to any session."""
+    return session.scalars(
+        select(Project).where(
+            Project.is_default.is_(False),
+            ~select(SessionProject.id).where(SessionProject.project_id == Project.id).exists(),
+            ~select(ProjectMember.id).where(ProjectMember.project_id == Project.id).exists(),
+            ~select(TestCase.id).where(TestCase.project_id == Project.id).exists(),
+        )
     ).all()
-
-    all_projects = session.query(Project).all()
-    orphaned = [p for p in all_projects if p.id not in linked_project_ids]
-    return orphaned
 
 
 def find_orphaned_messages(session):
@@ -74,8 +78,11 @@ def find_orphaned_session_project_links(session):
     ]
 
 
-def cleanup_orphaned_data(dry_run=False):
+def cleanup_orphaned_data(*, dry_run=True, confirmation=None):
     """Clean up all orphaned data."""
+    if not dry_run and confirmation != "DELETE_ORPHANED_DATA":
+        raise ValueError("Deletion requires confirmation='DELETE_ORPHANED_DATA'.")
+
     session_factory = get_session_factory()
 
     with session_factory() as session:
@@ -140,13 +147,17 @@ def cleanup_orphaned_data(dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description="Clean up orphaned data")
     parser.add_argument(
-        "--dry-run",
+        "--execute",
         action="store_true",
-        help="Show what would be deleted without making changes",
+        help="Delete confirmed orphaned records; the default is dry-run",
+    )
+    parser.add_argument(
+        "--confirm",
+        help="Required with --execute; must equal DELETE_ORPHANED_DATA",
     )
     args = parser.parse_args()
 
-    cleanup_orphaned_data(dry_run=args.dry_run)
+    cleanup_orphaned_data(dry_run=not args.execute, confirmation=args.confirm)
 
 
 if __name__ == "__main__":
