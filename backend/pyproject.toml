@@ -31,7 +31,8 @@ build-backend = "hatchling.build"
 packages = ["app"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/unit", "tests/e2e"]
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
+addopts = '-m "not browser_integration and not e2e_api"'
 markers = [
     "browser_integration: real-browser integration tests for local regression fixtures",
     "e2e_api: E2E API tests requiring a running backend server",

@@ -22,7 +22,11 @@ def test_invalid_retry_request_does_not_persist_extra_audit_row(client, db_sessi
 
     first_response = client.post(
         "/api/v1/dsl/generate",
-        json={"prompt": "生成一个可重试草案", "actor_user_id": 1},
+        json={
+            "prompt": "生成一个可重试草案",
+            "actor_user_id": 1,
+            "base_url": "https://example.com",
+        },
     )
     assert first_response.status_code == 200
     previous_generation_id = first_response.json()["generation_id"]

@@ -7,6 +7,7 @@ execution, and result verification.
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 
 
 LOGIN_URL = "/api/v1/auth/login"
@@ -82,6 +83,7 @@ def test_create_case_with_valid_dsl(client: TestClient) -> None:
     assert str(body["id"]) in resp.headers["Location"]
 
 
+@pytest.mark.browser_integration
 def test_execute_login_case_and_verify_results(client: TestClient) -> None:
     """执行登录测试用例，验证结果状态为 passed。"""
     # 创建用例
@@ -111,6 +113,7 @@ def test_execute_login_case_and_verify_results(client: TestClient) -> None:
         assert step["status"] == "passed"
 
 
+@pytest.mark.browser_integration
 def test_full_api_chain_e2e(anonymous_client: TestClient) -> None:
     """完整链路端到端：登录 → 创建用例 → 执行 → 查看结果。"""
     # Step 1: 未登录应返回 401

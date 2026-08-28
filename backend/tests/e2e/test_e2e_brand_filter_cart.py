@@ -20,6 +20,7 @@ TIMEOUT = 900  # AI 规划+页面探索可能需要较长时间
 TEST_FILE = Path(__file__).resolve().parents[3] / "test_brand_filter_cart"
 
 SUPPORTED_ACTIONS = {"goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"}
+pytestmark = pytest.mark.e2e_api
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
