@@ -40,6 +40,35 @@
 | 孤儿数据清理 | 06-08 | 清理 70 个孤立项目，添加清理脚本 | 数据库清理完成 |
 
 ---
+---
+
+## 2026-08-28 | 全代码库孤儿代码与架构审计
+
+- 任务：全量扫描代码库，识别无引用且不属于关键链路的代码，并评估当前架构与优化方向。
+- 操作：
+  - 以 275 个 tracked 文件为全集，建立前后端入口、API、DSL、AI planning、runner、locator、report 和 migration 链路。
+  - 使用 Knip、Vulture、Pyflakes、`rg` 及独立子代理交叉检查，并排除 FastAPI、SQLAlchemy、Alembic、pytest、React lazy import 等隐式引用误报。
+  - 生成 `docs/codebase-orphan-architecture-audit-2026-08-28.md`，记录确定孤儿、休眠能力、保留项、结构评分和分阶段优化方案。
+- 验证：
+  - `npm run build` 通过。
+  - `npm test -- --run`：53 passed，7 failed。
+  - 后端动态测试未运行：当前环境只有 Python 3.9，项目要求 Python 3.12，且未安装 `uv`。
+- 发现：明文凭据、Alembic 迁移链断裂、无鉴权调试接口、VLM 分支未定义变量、错误新建用例路由、默认测试遗漏 integration 等问题已记录到 `docs/bug-log.md`。
+
+---
+
+## 2026-08-28 | 代码库优化执行计划
+
+- 任务：根据 `docs/codebase-orphan-architecture-audit-2026-08-28.md` 制定可排期、可验收的优化计划。
+- 操作：
+  - 新增 `docs/plan/codebase-optimization-plan-2026-08-28.md`。
+  - 将 D-01 至 D-11、O-01 至 O-19 和主要架构问题拆为 P0-P5 六个阶段。
+  - 补充任务依赖、工期估算、测试门禁、删除门禁、架构决策、回滚策略和全计划完成定义。
+  - 将安全止血、迁移恢复和测试基线设为架构重构前置条件。
+- 验证：
+  - 审计中的 D-01 至 D-11 和 O-01 至 O-19 均已纳入阶段映射。
+  - 计划文件位于 `.gitignore` 白名单 `docs/plan/*.md`，可被 Git 跟踪。
+- 备注：本次仅制定计划，未执行缺陷修复、孤儿代码删除或测试命令；未发现审计报告以外的新缺陷。
 
 ## 2026-06-08 | 孤儿数据清理：清理 70 个孤立项目，添加清理脚本
 
@@ -1892,30 +1921,19 @@ Agent 流程失败的根本原因是**选择器策略差异**：
 
 ---
 
-## 2026-08-28 | 全代码库孤儿代码与架构审计
+## 2026-08-28 | 优化计划同步与 P0 仓库治理
 
-- 任务：全量扫描代码库，识别无引用且不属于关键链路的代码，并评估当前架构与优化方向。
+- 任务：同步代码库优化计划，并执行 P0 安全止血、迁移链恢复和跟踪策略修复。
 - 操作：
-  - 以 275 个 tracked 文件为全集，建立前后端入口、API、DSL、AI planning、runner、locator、report 和 migration 链路。
-  - 使用 Knip、Vulture、Pyflakes、`rg` 及独立子代理交叉检查，并排除 FastAPI、SQLAlchemy、Alembic、pytest、React lazy import 等隐式引用误报。
-  - 生成 `docs/codebase-orphan-architecture-audit-2026-08-28.md`，记录确定孤儿、休眠能力、保留项、结构评分和分阶段优化方案。
+  - 将审计报告、优化计划和日志提交并同步到 GitHub `main`，提交为 `7f055b3`。
+  - 收窄 `.gitignore`，恢复文档、测试和 migration 默认跟踪，并忽略本地 `.tools/`。
+  - 停止跟踪 `.claude/settings.local.json`，保留开发者本地文件；外部凭据轮换和历史处置仍待人工完成。
+  - 恢复缺失 migration `45061d8892d7_add_is_default_to_projects.py` 及升降级回归测试。
+  - 从生产 router 删除无鉴权 `/api/v1/ai-planning/test/locator` 调试接口并增加路由注册测试。
 - 验证：
-  - `npm run build` 通过。
-  - `npm test -- --run`：53 passed，7 failed。
-  - 后端动态测试未运行：当前环境只有 Python 3.9，项目要求 Python 3.12，且未安装 `uv`。
-- 发现：明文凭据、Alembic 迁移链断裂、无鉴权调试接口、VLM 分支未定义变量、错误新建用例路由、默认测试遗漏 integration 等问题已记录到 `docs/bug-log.md`。
-
----
-
-## 2026-08-28 | 代码库优化执行计划
-
-- 任务：根据 `docs/codebase-orphan-architecture-audit-2026-08-28.md` 制定可排期、可验收的优化计划。
-- 操作：
-  - 新增 `docs/plan/codebase-optimization-plan-2026-08-28.md`。
-  - 将 D-01 至 D-11、O-01 至 O-19 和主要架构问题拆为 P0-P5 六个阶段。
-  - 补充任务依赖、工期估算、测试门禁、删除门禁、架构决策、回滚策略和全计划完成定义。
-  - 将安全止血、迁移恢复和测试基线设为架构重构前置条件。
-- 验证：
-  - 审计中的 D-01 至 D-11 和 O-01 至 O-19 均已纳入阶段映射。
-  - 计划文件位于 `.gitignore` 白名单 `docs/plan/*.md`，可被 Git 跟踪。
-- 备注：本次仅制定计划，未执行缺陷修复、孤儿代码删除或测试命令；未发现审计报告以外的新缺陷。
+  - `uv run pytest tests/unit/test_project_default_migration.py -q`：1 passed。
+  - `uv run pytest tests/unit/test_ai_planning_api.py::test_locator_debug_route_is_not_registered -q`：1 passed。
+  - `uv run pytest tests/unit -q`：503 passed、2 failed、1 skipped；失败均为既有测试合同漂移，与本次 P0 修改无关，转入 P1 处理。
+  - `uv run alembic heads`：唯一 head 为 `20260608_0025`。
+  - 安全复核：本次差异未发现新增可利用问题。
+- 发现：SQLite 空库全链升级在历史 migration `20260313_0004` 处失败，已记录为 `AUDIT-20260828-12`；生产 PostgreSQL 空库升级尚未在当前环境验证。

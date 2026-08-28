@@ -841,29 +841,43 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 
 ## H. 2026-08-28 全代码库审计待修复项
 
-### AUDIT-20260828-01 | tracked 本地配置包含明文 API 凭据
+### AUDIT-20260828-12 | SQLite 空库无法执行完整 Alembic 升级
 
 - 状态：open
+- 严重度：medium
+- 位置：`backend/alembic/versions/20260313_0004_suite_context_contracts.py:23`
+- 描述：SQLite 执行 `alembic upgrade head` 时，在 0004 直接新增外键约束处抛出 `NotImplementedError`，无法到达后续 migration；生产 PostgreSQL 不受该方言限制，但本地 SQLite 升级路径不可用。
+- 建议：将该 migration 的约束变更改为 Alembic batch mode，并增加 SQLite 空库全链升级测试；PostgreSQL CI 继续作为生产迁移门禁。
+
+### AUDIT-20260828-01 | tracked 本地配置包含明文 API 凭据
+
+- 状态：in_progress
 - 严重度：critical
 - 位置：`.claude/settings.local.json:28`
 - 描述：本地设置文件已被 Git 跟踪，其中命令白名单包含明文 API 凭据；后续加入 `.gitignore` 不能移除历史泄露。
 - 建议：立即轮换凭据、停止跟踪该文件，并按仓库传播范围决定是否清理历史。
+- 处理：已停止跟踪 `.claude/settings.local.json`，本地文件保持可用；待人工完成凭据轮换并决定是否重写 Git 历史。
+- 验证：当前版本不再跟踪该文件，`.gitignore` 会阻止再次提交。
 
 ### AUDIT-20260828-02 | Alembic 迁移链引用缺失 revision
 
-- 状态：open
+- 状态：fixed
 - 严重度：critical
 - 位置：`backend/alembic/versions/20260608_0025_sse_event_log.py:3-4`
 - 描述：`down_revision = "45061d8892d7"`，但仓库不存在该 revision，且 `.gitignore` 明确忽略预期文件。
 - 建议：找回原迁移或创建等价迁移并正确衔接，增加空库 `alembic upgrade head` CI。
+- 处理：恢复 `45061d8892d7_add_is_default_to_projects.py`，父 revision 指向 `1c65d6ff37db`，并增加独立升降级测试。
+- 验证：`alembic heads` 返回唯一 head `20260608_0025`；迁移回归测试通过。SQLite 全链升级受 AUDIT-20260828-12 阻断。
 
 ### AUDIT-20260828-03 | 生产 router 暴露无鉴权浏览器调试接口
 
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 位置：`backend/app/api/routes/ai_planning.py:497-561`
 - 描述：`POST /ai-planning/test/locator` 可访问调用者提供的 URL 并启动 Playwright，没有鉴权和 URL 限制。
 - 建议：移出生产 router；如需保留，增加鉴权、allowlist、并发和超时限制。
+- 处理：从生产 AI Planning router 删除该调试接口及其浏览器调用链。
+- 验证：新增路由注册回归测试，确认 `/api/v1/ai-planning/test/locator` 不存在。
 
 ### AUDIT-20260828-04 | VLM candidate ranker 使用未定义变量
 
@@ -922,8 +936,10 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 
 ### AUDIT-20260828-11 | `.gitignore` 会静默遗漏新文档、测试和关键迁移
 
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 位置：`.gitignore:50-79`
 - 描述：规则默认忽略 `docs/*`、根 `tests/` 及指定 migration；本次新审计文档也被直接忽略。
 - 建议：改为只忽略生成物，对源码、测试、迁移和审计文档采用默认跟踪策略。
+- 处理：移除文档、测试和指定 migration 的忽略规则，仅保留生成物、本地配置与外部测试项目规则。
+- 验证：`git check-ignore` 确认新增文档、测试和 migration 默认可跟踪，本地设置与报告生成物仍被忽略。
