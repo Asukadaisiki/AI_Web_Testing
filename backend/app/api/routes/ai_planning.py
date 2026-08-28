@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_demo_user_or_raise, require_demo_user
+from app.api.auth import require_demo_user
 from app.core.config import get_settings
 from app.db import get_db_session
 from app.db.session import get_session_factory
@@ -492,70 +492,3 @@ async def get_session_events(
             }
             for e in events
         ]
-
-
-@router.post("/test/locator")
-async def test_locator(
-    url: str = "https://automationexercise.com/",
-    target: str = 'link="Signup / Login"',
-) -> dict:
-    """Test locator resolution with a11y tree."""
-    from playwright.sync_api import sync_playwright
-    from app.ai.page_explorer import collect_a11y_nodes, format_a11y_nodes_for_prompt
-    from app.locators import resolve_with_fallback
-
-    result = {
-        "url": url,
-        "target": target,
-        "a11y_nodes_count": 0,
-        "sample_nodes": [],
-        "locator_result": None,
-        "error": None,
-    }
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
-
-            # Navigate
-            page.goto(url, timeout=30000)
-            page.wait_for_load_state("domcontentloaded", timeout=30000)
-
-            # Collect a11y nodes
-            nodes = collect_a11y_nodes(page, page_state="S0")
-            result["a11y_nodes_count"] = len(nodes)
-
-            # Sample nodes
-            interactive_nodes = [n for n in nodes if n.get("focusable")]
-            result["sample_nodes"] = [
-                {"role": n["role"], "name": n["name"], "id": n["node_id"]}
-                for n in interactive_nodes[:10]
-            ]
-
-            # Test locator
-            try:
-                resolved = resolve_with_fallback(
-                    page,
-                    target,
-                    require_visible=True,
-                )
-                result["locator_result"] = {
-                    "success": True,
-                    "strategy": resolved.strategy,
-                    "locator_found": True,
-                }
-            except Exception as e:
-                result["locator_result"] = {
-                    "success": False,
-                    "error_type": type(e).__name__,
-                    "error_message": str(e)[:200],
-                }
-
-            browser.close()
-
-    except Exception as e:
-        result["error"] = f"{type(e).__name__}: {str(e)[:200]}"
-
-    return result

@@ -17,6 +17,13 @@ from app.schemas.executions import StoredCaseExecutionDetail
 from app.schemas.dsl import GenerateDslResponse
 
 
+def test_locator_debug_route_is_not_registered(app_instance) -> None:
+    assert not any(
+        route.path == "/api/v1/ai-planning/test/locator"
+        for route in app_instance.routes
+    )
+
+
 def _planning_settings(**overrides):
     values = {
         "enable_ai_planning": True,
@@ -650,6 +657,5 @@ def _seed_planning_session_with_drafts(client):
     create_response = client.post("/api/v1/ai-planning/sessions", json={})
     session_id = create_response.json()["session"]["id"]
     return session_id
-
 
 
