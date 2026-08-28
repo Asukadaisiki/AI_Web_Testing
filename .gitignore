@@ -23,6 +23,7 @@ coverage/
 # Build and temp
 tmp/
 temp/
+.tools/
 *.log
 .worktrees/
 
@@ -47,23 +48,7 @@ backend/storage_states/
 # Package manager locks generated per app
 backend/.python-version
 
-# docs
-docs/*
-!docs/plan/
-!docs/plan/*.md
-!docs/superpowers/
-docs/superpowers/*
-!docs/superpowers/plans/
-docs/superpowers/plans/*
-!docs/superpowers/plans/2026-04-15-ai-planning-execution-streaming.md
-!docs/superpowers/plans/2026-04-21-streaming-status-implementation.md
-
-# tests
-tests/
-!backend/tests/unit/test_ai_planning_api.py
-# Ensure parent directories are tracked for the whitelisted file
-!backend/tests/
-!backend/tests/unit/
+# External local test projects
 testtool(mimov2.5pro)
 testbrand(mimov2.5pro)
 testbrand(dsv4pro)
@@ -74,9 +59,7 @@ testbrand(dsv4pro)
 .claude/settings.local.json
 !.claude/skills/
 .superpowers
-backend/alembic/versions/45061d8892d7_add_is_default_to_projects.py
 test_results.json
-.claude/settings.local.json
 test_results_formatted.txt
 
 # Temporary test scripts
@@ -85,4 +68,3 @@ backend/test_full_pipeline.py
 backend/test_locator_fix.py
 backend/update_draft_dsl.py
 backend/verify_explore_fix.py
-
