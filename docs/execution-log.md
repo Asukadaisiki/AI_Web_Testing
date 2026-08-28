@@ -1937,3 +1937,24 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - `uv run alembic heads`：唯一 head 为 `20260608_0025`。
   - 安全复核：本次差异未发现新增可利用问题。
 - 发现：SQLite 空库全链升级在历史 migration `20260313_0004` 处失败，已记录为 `AUDIT-20260828-12`；生产 PostgreSQL 空库升级尚未在当前环境验证。
+
+---
+
+## 2026-08-28 | P1 运行时缺陷与测试门禁修复
+
+- 任务：修复审计 D-04 至 D-10，并恢复前后端默认测试基线。
+- 操作：
+  - 修复 VLM candidate ranker 的 `model_family` 参数传递。
+  - 删除已失效的 AI selector cache 及未消费指标。
+  - 修正 DSL service `__all__` 并增加公开符号一致性测试。
+  - 加固孤儿数据清理脚本：默认 dry-run、显式确认、默认项目/成员/用例/session 保护。
+  - 默认 pytest 纳入非浏览器 integration，并为浏览器和外部服务 E2E 补 marker。
+  - 增加 `/cases/new` create mode、项目参数传递和非法 case ID 拦截。
+  - 修复前端路由、Cases 数据 mock、Planning SSE 时序断言、render-time navigate 和 TextArea NaN height。
+- 验证：
+  - 后端默认测试：519 passed、1 skipped、10 deselected。
+  - 前端测试：63 passed。
+  - 前端 `npm run build`：通过。
+  - Knip：仍报告 P2 范围的孤儿文件、未用依赖/导出，以及 `@ant-design/icons` 未声明直接依赖。
+  - Ruff：工具可运行，但全仓存在 575 个既有问题，不能直接作为零告警门禁；需先建立基线或分阶段清理。
+- 备注：D-04 至 D-10 已关闭。静态检查遗留转入 P2；未修改用户已暂存的 `test_brand_filter_cart`。

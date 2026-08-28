@@ -881,58 +881,72 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 
 ### AUDIT-20260828-04 | VLM candidate ranker 使用未定义变量
 
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 位置：`backend/app/locators/ai_visual.py:513-553`
 - 描述：`_call_candidate_ranker` 没有 `model_family` 参数，却在调用 `_call_chat_completion` 时读取该名称。
 - 建议：补齐参数传递并增加候选排序分支测试。
+- 处理：从 `rank_candidates_by_vision` 向 `_call_candidate_ranker` 显式传递最终解析的 model family。
+- 验证：AI visual 单测覆盖 GLM candidate ranking 分支并通过。
 
 ### AUDIT-20260828-05 | 新建用例链接落入编辑路由
 
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 位置：`frontend/src/pages/CasesPage.tsx:286-300,490-497`
 - 描述：UI 跳转 `/cases/new`，路由只有 `/cases/:caseId/edit`，最终会尝试请求数值为 `NaN` 的 case。
 - 建议：增加明确的新建路由/模式，并覆盖路由测试。
+- 处理：增加 `/cases/new` 路由和 create mode，通过 query 参数传递当前项目；非法编辑 ID 在请求前拒绝。
+- 验证：新增路由、新建提交和非法 ID 测试，前端全量测试通过。
 
 ### AUDIT-20260828-06 | AI selector cache 只有读取和失效，没有写入
 
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 位置：`backend/app/locators/fallback.py:247-303`
 - 描述：唯一写函数 `_store_cached_ai_selector` 零调用，缓存无法产生新条目。
 - 建议：在成功定位后写入，或删除整套无效缓存及指标。
+- 处理：确认 DOM selector 提取已在历史重构中删除后，移除永远 miss 的缓存读取、存储、失效逻辑及未消费指标。
+- 验证：locator fallback、AI visual、settings API 单测通过，前端类型检查和构建通过。
 
 ### AUDIT-20260828-07 | 孤儿数据清理脚本可能误删合法项目
 
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 位置：`backend/scripts/cleanup_orphan_data.py:31-39,130-136`
 - 描述：脚本把“未关联 planning session”的项目都判为孤儿，删除项目可能级联删除仍有效的用例和成员关系。
 - 建议：增加 member、case、默认项目保护条件及二次确认，并补数据库边界测试。
+- 处理：默认改为 dry-run；执行删除必须同时提供 `--execute --confirm DELETE_ORPHANED_DATA`；候选排除默认项目、有成员、有用例和有关联 session 的项目。
+- 验证：新增保护边界及确认词测试并通过。
 
 ### AUDIT-20260828-08 | 默认测试发现遗漏 integration
 
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 位置：`backend/pyproject.toml:33-38`
 - 描述：默认 `pytest` 的 `testpaths` 只有 `tests/unit`、`tests/e2e`，四个 integration 文件不会默认运行。
 - 建议：默认 CI 纳入非浏览器 integration，浏览器测试用 marker 单独控制。
+- 处理：默认发现范围包含 unit、integration、e2e，并默认排除 `browser_integration`、`e2e_api`；补齐漏标的真实浏览器测试。
+- 验证：默认收集 522 个测试，其中 10 个外部依赖测试明确 deselected；默认执行 519 passed、1 skipped。
 
 ### AUDIT-20260828-09 | 前端测试与当前实现漂移
 
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 描述：2026-08-28 执行 Vitest，结果为 53 passed、7 failed；失败集中于 Cases 和 AI planning panel，并出现 render-time navigate、NaN height 警告。
 - 建议：先判断测试合同还是实现行为为准，再修复数据 mock、交互断言和渲染副作用。
+- 处理：更新路由、项目查询和 SSE 时序 mock；PlanningPage 改用声明式重定向；规划输入框改用固定 rows，消除 jsdom NaN height。
+- 验证：Vitest 63 passed，前述 render-time navigate 与 NaN height warning 均不再出现。
 
 ### AUDIT-20260828-10 | DSL service 公开符号表与实现不一致
 
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 位置：`backend/app/services/dsl.py:1099-1115`
 - 描述：`__all__` 导出不存在的 `get_dsl_generation_runtime_stats`，同时遗漏已实现的 `delete_dsl_generation_run`。
 - 建议：修正公开符号表，并增加 import surface 静态检查。
+- 处理：删除不存在的导出并加入 `delete_dsl_generation_run`。
+- 验证：新增公开符号一致性测试并通过。
 
 ### AUDIT-20260828-11 | `.gitignore` 会静默遗漏新文档、测试和关键迁移
 
