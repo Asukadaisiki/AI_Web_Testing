@@ -837,4 +837,93 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 - 处理：补齐项目成员权限校验、修正 stats 返回结构、处理外键约束下的项目删除语义、更新测试断言。
 - 验证：全量测试通过
 
+---
 
+## H. 2026-08-28 全代码库审计待修复项
+
+### AUDIT-20260828-01 | tracked 本地配置包含明文 API 凭据
+
+- 状态：open
+- 严重度：critical
+- 位置：`.claude/settings.local.json:28`
+- 描述：本地设置文件已被 Git 跟踪，其中命令白名单包含明文 API 凭据；后续加入 `.gitignore` 不能移除历史泄露。
+- 建议：立即轮换凭据、停止跟踪该文件，并按仓库传播范围决定是否清理历史。
+
+### AUDIT-20260828-02 | Alembic 迁移链引用缺失 revision
+
+- 状态：open
+- 严重度：critical
+- 位置：`backend/alembic/versions/20260608_0025_sse_event_log.py:3-4`
+- 描述：`down_revision = "45061d8892d7"`，但仓库不存在该 revision，且 `.gitignore` 明确忽略预期文件。
+- 建议：找回原迁移或创建等价迁移并正确衔接，增加空库 `alembic upgrade head` CI。
+
+### AUDIT-20260828-03 | 生产 router 暴露无鉴权浏览器调试接口
+
+- 状态：open
+- 严重度：high
+- 位置：`backend/app/api/routes/ai_planning.py:497-561`
+- 描述：`POST /ai-planning/test/locator` 可访问调用者提供的 URL 并启动 Playwright，没有鉴权和 URL 限制。
+- 建议：移出生产 router；如需保留，增加鉴权、allowlist、并发和超时限制。
+
+### AUDIT-20260828-04 | VLM candidate ranker 使用未定义变量
+
+- 状态：open
+- 严重度：high
+- 位置：`backend/app/locators/ai_visual.py:513-553`
+- 描述：`_call_candidate_ranker` 没有 `model_family` 参数，却在调用 `_call_chat_completion` 时读取该名称。
+- 建议：补齐参数传递并增加候选排序分支测试。
+
+### AUDIT-20260828-05 | 新建用例链接落入编辑路由
+
+- 状态：open
+- 严重度：high
+- 位置：`frontend/src/pages/CasesPage.tsx:286-300,490-497`
+- 描述：UI 跳转 `/cases/new`，路由只有 `/cases/:caseId/edit`，最终会尝试请求数值为 `NaN` 的 case。
+- 建议：增加明确的新建路由/模式，并覆盖路由测试。
+
+### AUDIT-20260828-06 | AI selector cache 只有读取和失效，没有写入
+
+- 状态：open
+- 严重度：high
+- 位置：`backend/app/locators/fallback.py:247-303`
+- 描述：唯一写函数 `_store_cached_ai_selector` 零调用，缓存无法产生新条目。
+- 建议：在成功定位后写入，或删除整套无效缓存及指标。
+
+### AUDIT-20260828-07 | 孤儿数据清理脚本可能误删合法项目
+
+- 状态：open
+- 严重度：high
+- 位置：`backend/scripts/cleanup_orphan_data.py:31-39,130-136`
+- 描述：脚本把“未关联 planning session”的项目都判为孤儿，删除项目可能级联删除仍有效的用例和成员关系。
+- 建议：增加 member、case、默认项目保护条件及二次确认，并补数据库边界测试。
+
+### AUDIT-20260828-08 | 默认测试发现遗漏 integration
+
+- 状态：open
+- 严重度：medium
+- 位置：`backend/pyproject.toml:33-38`
+- 描述：默认 `pytest` 的 `testpaths` 只有 `tests/unit`、`tests/e2e`，四个 integration 文件不会默认运行。
+- 建议：默认 CI 纳入非浏览器 integration，浏览器测试用 marker 单独控制。
+
+### AUDIT-20260828-09 | 前端测试与当前实现漂移
+
+- 状态：open
+- 严重度：medium
+- 描述：2026-08-28 执行 Vitest，结果为 53 passed、7 failed；失败集中于 Cases 和 AI planning panel，并出现 render-time navigate、NaN height 警告。
+- 建议：先判断测试合同还是实现行为为准，再修复数据 mock、交互断言和渲染副作用。
+
+### AUDIT-20260828-10 | DSL service 公开符号表与实现不一致
+
+- 状态：open
+- 严重度：medium
+- 位置：`backend/app/services/dsl.py:1099-1115`
+- 描述：`__all__` 导出不存在的 `get_dsl_generation_runtime_stats`，同时遗漏已实现的 `delete_dsl_generation_run`。
+- 建议：修正公开符号表，并增加 import surface 静态检查。
+
+### AUDIT-20260828-11 | `.gitignore` 会静默遗漏新文档、测试和关键迁移
+
+- 状态：open
+- 严重度：medium
+- 位置：`.gitignore:50-79`
+- 描述：规则默认忽略 `docs/*`、根 `tests/` 及指定 migration；本次新审计文档也被直接忽略。
+- 建议：改为只忽略生成物，对源码、测试、迁移和审计文档采用默认跟踪策略。
