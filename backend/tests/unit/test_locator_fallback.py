@@ -7,13 +7,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import app.locators.fallback as fallback_module
-from app.locators.ai_visual import get_ai_visual_runtime_stats, reset_ai_visual_runtime_state
+from app.locators.ai_visual import reset_ai_visual_runtime_state
 from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.locators import InterventionNeededError, resolve_with_fallback
 from app.locators.semantic import LocatorResolutionError
 from app.models import LocatorCorrection, LocatorCorrectionEvent, TestCase, TestCaseRun
-from app.schemas.executions import LocatorTrace
 
 
 class FakeLocatorCollection:
@@ -96,7 +94,6 @@ class FakePage:
 @pytest.fixture(autouse=True)
 def _reset_logging_propagation() -> None:
     """Ensure app loggers propagate to root so caplog can capture them."""
-    fallback_module._clear_ai_visual_session_cache()
     reset_ai_visual_runtime_state()
     logging.getLogger("app").propagate = True
 
@@ -347,7 +344,7 @@ def test_resolve_with_fallback_coordinate_click_independent_of_dom_state(monkeyp
     assert result.strategy == "ai_coordinate_click"
 
 
-def test_resolve_with_fallback_prioritizes_tier_zero_correction_over_ai_visual_cache(db_session, monkeypatch) -> None:
+def test_resolve_with_fallback_prioritizes_tier_zero_correction_over_vlm(db_session, monkeypatch) -> None:
     execution_id = _create_source_execution(db_session)
     correction = LocatorCorrection(
         page_url_pattern="https://app.example.com/users/*",
@@ -361,7 +358,6 @@ def test_resolve_with_fallback_prioritizes_tier_zero_correction_over_ai_visual_c
     db_session.add(correction)
     db_session.commit()
 
-    cache_seed_page = FakePage(url="https://app.example.com/users/123")
     correction_page = FakePage(url="https://app.example.com/users/456", screenshot_error=RuntimeError("should not capture"))
 
     monkeypatch.setattr(
@@ -376,8 +372,6 @@ def test_resolve_with_fallback_prioritizes_tier_zero_correction_over_ai_visual_c
             {"center": (200, 100), "bbox": (150, 80, 250, 120), "confidence": 0.7, "raw_response": "{}"},
         )(),
     )
-
-    resolve_with_fallback(cache_seed_page, 'button="Login"')
 
     resolved = resolve_with_fallback(
         correction_page,

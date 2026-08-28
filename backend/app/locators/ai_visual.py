@@ -45,9 +45,6 @@ class AIVisualRuntimeStatsState:
     locate_requests: int = 0
     locate_success_count: int = 0
     locate_failure_count: int = 0
-    cache_hit_count: int = 0
-    cache_miss_count: int = 0
-    cache_invalidated_count: int = 0
     breaker_skip_count: int = 0
     rate_limited_skip_count: int = 0
     disabled_skip_count: int = 0
@@ -60,9 +57,6 @@ class AIVisualRuntimeStatsSnapshot:
     locate_requests: int
     locate_success_count: int
     locate_failure_count: int
-    cache_hit_count: int
-    cache_miss_count: int
-    cache_invalidated_count: int
     breaker_skip_count: int
     rate_limited_skip_count: int
     disabled_skip_count: int
@@ -263,6 +257,7 @@ def rank_candidates_by_vision(
             model=settings.vlm_model,
             base_url=settings.vlm_base_url,
             timeout_seconds=max(1.0, settings.ai_visual_timeout_ms / 1000),
+        model_family=family,
         )
         ranked_index = _parse_candidate_index_response(
             response_text=response_text,
@@ -519,6 +514,7 @@ def _call_candidate_ranker(
     model: str,
     base_url: str,
     timeout_seconds: float,
+    model_family: ModelFamily,
 ) -> str:
     candidate_lines = [
         f"{candidate.index}: {candidate.label} @ {list(candidate.bbox)}"
@@ -549,7 +545,7 @@ def _call_candidate_ranker(
         model=model,
         base_url=base_url,
         timeout_seconds=timeout_seconds,
-        model_family="glm" if model_family == "glm" else model_family,
+        model_family=model_family,
     )
 
 
@@ -817,21 +813,6 @@ def _record_disabled_skip() -> None:
         RUNTIME_STATS.disabled_skip_count += 1
 
 
-def record_ai_visual_cache_hit() -> None:
-    with _STATE_LOCK:
-        RUNTIME_STATS.cache_hit_count += 1
-
-
-def record_ai_visual_cache_miss() -> None:
-    with _STATE_LOCK:
-        RUNTIME_STATS.cache_miss_count += 1
-
-
-def record_ai_visual_cache_invalidation() -> None:
-    with _STATE_LOCK:
-        RUNTIME_STATS.cache_invalidated_count += 1
-
-
 def get_ai_visual_runtime_stats() -> AIVisualRuntimeStatsSnapshot:
     with _STATE_LOCK:
         average_latency = (
@@ -843,9 +824,6 @@ def get_ai_visual_runtime_stats() -> AIVisualRuntimeStatsSnapshot:
             locate_requests=RUNTIME_STATS.locate_requests,
             locate_success_count=RUNTIME_STATS.locate_success_count,
             locate_failure_count=RUNTIME_STATS.locate_failure_count,
-            cache_hit_count=RUNTIME_STATS.cache_hit_count,
-            cache_miss_count=RUNTIME_STATS.cache_miss_count,
-            cache_invalidated_count=RUNTIME_STATS.cache_invalidated_count,
             breaker_skip_count=RUNTIME_STATS.breaker_skip_count,
             rate_limited_skip_count=RUNTIME_STATS.rate_limited_skip_count,
             disabled_skip_count=RUNTIME_STATS.disabled_skip_count,
@@ -883,9 +861,6 @@ def reset_ai_visual_runtime_state() -> None:
         RUNTIME_STATS.locate_requests = 0
         RUNTIME_STATS.locate_success_count = 0
         RUNTIME_STATS.locate_failure_count = 0
-        RUNTIME_STATS.cache_hit_count = 0
-        RUNTIME_STATS.cache_miss_count = 0
-        RUNTIME_STATS.cache_invalidated_count = 0
         RUNTIME_STATS.breaker_skip_count = 0
         RUNTIME_STATS.rate_limited_skip_count = 0
         RUNTIME_STATS.disabled_skip_count = 0
@@ -953,9 +928,6 @@ __all__ = [
     "describe_page_layout",
     "get_ai_visual_runtime_stats",
     "locate_element_by_vision",
-    "record_ai_visual_cache_hit",
-    "record_ai_visual_cache_invalidation",
-    "record_ai_visual_cache_miss",
     "rank_candidates_by_vision",
     "reset_ai_visual_runtime_state",
 ]

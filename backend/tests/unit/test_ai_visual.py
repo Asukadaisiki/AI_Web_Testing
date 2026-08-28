@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.locators.ai_visual import (
     AILocateResult,
     RUNTIME_STATE,
+    AIVisionCandidateBox,
     _call_chat_completion,
     _call_vlm,
     _decode_base64_image,
@@ -20,6 +21,7 @@ from app.locators.ai_visual import (
     _parse_bbox_response,
     get_ai_visual_runtime_stats,
     locate_element_by_vision,
+    rank_candidates_by_vision,
     reset_ai_visual_runtime_state,
 )
 from app.schemas.executions import DOMElementSnapshot
@@ -426,6 +428,36 @@ def test_call_vlm_forwards_model_family(monkeypatch) -> None:
     )
 
     assert response_text == '{"bbox":[1,2,3,4]}'
+    assert captured["model_family"] == "glm"
+
+
+def test_rank_candidates_forwards_model_family(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "true")
+    monkeypatch.setenv("VLM_API_KEY", "test-key")
+    monkeypatch.setenv("VLM_MODEL", "glm-4.6v")
+    get_settings.cache_clear()
+    reset_ai_visual_runtime_state()
+
+    def fake_call_candidate_ranker(**kwargs):
+        captured.update(kwargs)
+        return '{"candidate_index": 3}'
+
+    monkeypatch.setattr("app.locators.ai_visual._call_candidate_ranker", fake_call_candidate_ranker)
+
+    try:
+        result = rank_candidates_by_vision(
+            screenshot_base64="ZmFrZQ==",
+            target_description="登录按钮",
+            candidates=[AIVisionCandidateBox(index=3, label="Login", bbox=(1, 2, 3, 4))],
+            model_family="glm",
+        )
+    finally:
+        reset_ai_visual_runtime_state()
+        get_settings.cache_clear()
+
+    assert result == 3
     assert captured["model_family"] == "glm"
 
 

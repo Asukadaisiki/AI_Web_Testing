@@ -12,34 +12,23 @@ from __future__ import annotations
 
 import base64
 import logging
-from collections import OrderedDict
-from threading import Lock
 
 from app.locators.ai_visual import (
     AILocateResult,
     locate_element_by_vision,
-    record_ai_visual_cache_hit,
-    record_ai_visual_cache_invalidation,
-    record_ai_visual_cache_miss,
 )
-from app.locators.corrections import CorrectionRecord, CorrectionStore, normalize_target_description
+from app.locators.corrections import CorrectionRecord, CorrectionStore
 from app.locators.semantic import (
     LocatorResolutionError,
     ResolvedLocator,
     resolve_semantic_locator,
 )
-from app.locators.url_pattern import generalize_url
 from app.schemas.executions import LocatorTrace
 from app.core.structured_logging import get_structured_logger
 
 
 logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)
-
-AI_VISUAL_SESSION_CACHE_MAX_ENTRIES = 128
-_AI_VISUAL_SESSION_CACHE: OrderedDict[tuple[str, str], str] = OrderedDict()
-_AI_VISUAL_SESSION_CACHE_LOCK = Lock()
-
 
 # ── Intervention error ───────────────────────────────────────────────────────
 
@@ -83,7 +72,6 @@ def resolve_with_fallback(
     page_url = getattr(page, "url", "") or ""
     tier1_trace: LocatorTrace | None = None
     ai_candidate: AILocateResult | None = None
-    cache_key = _build_ai_visual_cache_key(page_url=page_url, target=target)
 
     # ── Tier 0: Manual correction ────────────────────────────────────────
     correction = (
@@ -107,15 +95,6 @@ def resolve_with_fallback(
                 "success": True,
             }, execution_id=execution_id)
             return resolved
-
-    # ── Tier 0.5: AI visual session cache ────────────────────────────────
-    cached_resolution = _try_resolve_cached_ai_locator(page, target=target, cache_key=cache_key)
-    if cached_resolution is not None:
-        slog.locator_fallback("ai_cache_lookup", data={
-            "target": target,
-            "cache_hit": True,
-        }, execution_id=execution_id)
-        return cached_resolution
 
     # ── Tier 1: A11y semantic locator ────────────────────────────────────
     try:
@@ -230,87 +209,6 @@ def _build_locator_from_correction(page, correction: CorrectionRecord):
         selector = value if value.startswith("xpath=") else f"xpath={value}"
         return page.locator(selector)
     return page.locator(correction.correction_value)
-
-
-# ── AI visual session cache ──────────────────────────────────────────────────
-
-
-def _build_ai_visual_cache_key(*, page_url: str, target: str) -> tuple[str, str] | None:
-    if not page_url:
-        return None
-    normalized_target = normalize_target_description(target)
-    if not normalized_target:
-        return None
-    return (generalize_url(page_url), normalized_target)
-
-
-def _try_resolve_cached_ai_locator(
-    page,
-    *,
-    target: str,
-    cache_key: tuple[str, str] | None,
-) -> ResolvedLocator | None:
-    if cache_key is None:
-        return None
-    selector = _get_cached_ai_selector(cache_key)
-    if selector is None:
-        record_ai_visual_cache_miss()
-        logger.debug("AI visual session cache_miss page_url_pattern=%s target=%s", cache_key[0], target)
-        return None
-
-    locator = page.locator(selector)
-    try:
-        locator.wait_for(state="visible", timeout=3000)
-    except Exception as exc:
-        _invalidate_cached_ai_selector(cache_key)
-        record_ai_visual_cache_invalidation()
-        logger.debug(
-            "AI visual session cache_invalidated page_url_pattern=%s target=%s selector=%s error=%s",
-            cache_key[0],
-            target,
-            selector,
-            exc,
-        )
-        return None
-
-    record_ai_visual_cache_hit()
-    logger.debug("AI visual session cache_hit page_url_pattern=%s target=%s", cache_key[0], target)
-    return ResolvedLocator(
-        strategy="ai_visual_cache",
-        locator=locator,
-        trace=LocatorTrace(
-            target=target,
-            match_strategy="ai_visual_cache",
-            selection_reason=f"Matched cached AI visual selector for {cache_key[0]}.",
-        ),
-    )
-
-
-def _get_cached_ai_selector(cache_key: tuple[str, str]) -> str | None:
-    with _AI_VISUAL_SESSION_CACHE_LOCK:
-        selector = _AI_VISUAL_SESSION_CACHE.get(cache_key)
-        if selector is None:
-            return None
-        _AI_VISUAL_SESSION_CACHE.move_to_end(cache_key)
-        return selector
-
-
-def _store_cached_ai_selector(cache_key: tuple[str, str], selector: str) -> None:
-    with _AI_VISUAL_SESSION_CACHE_LOCK:
-        _AI_VISUAL_SESSION_CACHE[cache_key] = selector
-        _AI_VISUAL_SESSION_CACHE.move_to_end(cache_key)
-        while len(_AI_VISUAL_SESSION_CACHE) > AI_VISUAL_SESSION_CACHE_MAX_ENTRIES:
-            _AI_VISUAL_SESSION_CACHE.popitem(last=False)
-
-
-def _invalidate_cached_ai_selector(cache_key: tuple[str, str]) -> None:
-    with _AI_VISUAL_SESSION_CACHE_LOCK:
-        _AI_VISUAL_SESSION_CACHE.pop(cache_key, None)
-
-
-def _clear_ai_visual_session_cache() -> None:
-    with _AI_VISUAL_SESSION_CACHE_LOCK:
-        _AI_VISUAL_SESSION_CACHE.clear()
 
 
 # ── VLM visual locate ────────────────────────────────────────────────────────

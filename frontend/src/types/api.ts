@@ -445,9 +445,6 @@ export interface AIVisualStats {
   locate_requests: number;
   locate_success_count: number;
   locate_failure_count: number;
-  cache_hit_count: number;
-  cache_miss_count: number;
-  cache_invalidated_count: number;
   breaker_skip_count: number;
   rate_limited_skip_count: number;
   disabled_skip_count: number;
