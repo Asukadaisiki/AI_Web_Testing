@@ -2181,3 +2181,19 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 后端 `uvicorn --factory` 启动，`/api/v1/health` 返回 200。
   - 通过 Vite 代理 `127.0.0.1:5173` 创建会话 311 并发送消息，AI 正常返回收集需求的 `assistant_message`，`session_status=collecting`。
 - 备注：AUDIT-20260830-17 已关闭；新增 AUDIT-20260830-19 记录 base URL 配置问题。
+
+---
+
+## 2026-08-30 | 清理 Git 历史中的 backend/.env 明文凭据
+
+- 任务：从 `main` 全部历史提交中移除 `backend/.env` / `.env`，消除远端可见的明文密钥记录。
+- 操作：
+  - 备份当前 `main` 到本地分支 `backup-pre-env-purge`，并创建 `git bundle`（`D:/AutoTestingLearingProject/backup-pre-env-purge-20260830-031248.bundle`）。
+  - `git filter-branch --index-filter 'git rm --cached --ignore-unmatch .env backend/.env' --prune-empty -- main` 重写全部 486 个提交。
+  - 删除 `refs/original`，清理 reflog 后 `git push origin main --force-with-lease`。
+- 验证：
+  - `git rev-list main --objects | grep -E '\.env$'`：无 `.env`/`backend/.env` 对象；`backend/.env.example` 保留。
+  - `git log origin/main --oneline -- .env backend/.env`：空。
+  - 本地 `main` 与 `origin/main` 一致（`60e51e6`），树无差异。
+  - 后端/前端服务仍在运行，`/api/v1/health` 与 Vite 均返回 200。
+- 备注：历史中的 `.claude/settings.local.json` 已于更早前清理；本次仅处理 `backend/.env`。工作树中的 `backend/.env` 仍保留用于本地开发（已被 gitignore），但历史已无记录。
