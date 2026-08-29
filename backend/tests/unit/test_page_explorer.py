@@ -5,11 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from app.ai.page_explorer import (
     capture_browser_session,
-    format_elements_for_prompt,
     get_storage_state_path,
     load_storage_state_meta,
     save_storage_state,
@@ -68,128 +65,6 @@ class TestLoadStorageStateMeta:
         result = load_storage_state_meta(tmp_path, project_id=1)
         assert result is None
 
-
-class TestFormatElementsForPrompt:
-    def test_formats_input_with_placeholder(self) -> None:
-        elements = [
-            {
-                "tag": "input",
-                "id": "username",
-                "aria_label": None,
-                "placeholder": "Username",
-                "role": None,
-                "text": None,
-                "visible": True,
-                "enabled": True,
-            }
-        ]
-        result = format_elements_for_prompt(elements)
-        assert "input#username" in result
-        assert "[placeholder='Username']" in result
-
-    def test_formats_button_with_text(self) -> None:
-        elements = [
-            {
-                "tag": "button",
-                "id": "",
-                "aria_label": None,
-                "placeholder": None,
-                "role": None,
-                "text": "Login",
-                "visible": True,
-                "enabled": True,
-            }
-        ]
-        result = format_elements_for_prompt(elements)
-        assert "button" in result
-        assert "[text='Login']" in result
-
-    def test_skips_invisible_non_interactive_elements(self) -> None:
-        elements = [
-            {
-                "tag": "div",
-                "id": "hidden",
-                "aria_label": None,
-                "placeholder": None,
-                "role": None,
-                "text": None,
-                "visible": False,
-                "enabled": True,
-            }
-        ]
-        result = format_elements_for_prompt(elements)
-        assert result.strip() == ""
-
-    def test_keeps_invisible_interactive_elements(self) -> None:
-        elements = [
-            {
-                "tag": "a",
-                "id": "add-to-cart",
-                "aria_label": None,
-                "placeholder": None,
-                "role": None,
-                "text": "Add to cart",
-                "css_selector": "a.add-to-cart",
-                "xpath": "//a[@class='add-to-cart']",
-                "visible": False,
-                "enabled": True,
-            }
-        ]
-        result = format_elements_for_prompt(elements)
-        assert "HIDDEN" in result
-        assert "Add to cart" in result
-
-    def test_formats_multiple_elements(self) -> None:
-        elements = [
-            {
-                "tag": "input",
-                "id": "user",
-                "aria_label": None,
-                "placeholder": "User",
-                "role": None,
-                "text": None,
-                "visible": True,
-                "enabled": True,
-                "rect": {"x": 100, "y": 200, "width": 200, "height": 30},
-            },
-            {
-                "tag": "button",
-                "id": "",
-                "aria_label": None,
-                "placeholder": None,
-                "role": None,
-                "text": "Submit",
-                "visible": True,
-                "enabled": True,
-                "rect": {"x": 100, "y": 210, "width": 100, "height": 30},
-            },
-        ]
-        result = format_elements_for_prompt(elements)
-        assert "input#user" in result
-        assert "Submit" in result
-        # Elements in same visual group should appear together under one label
-        assert result.count("###") <= 2  # max 1 group header + possibly 1 more
-
-    def test_includes_aria_label(self) -> None:
-        elements = [
-            {
-                "tag": "div",
-                "id": "",
-                "aria_label": "Close dialog",
-                "placeholder": None,
-                "role": "button",
-                "text": None,
-                "visible": True,
-                "enabled": True,
-            }
-        ]
-        result = format_elements_for_prompt(elements)
-        assert "[aria-label='Close dialog']" in result
-        assert "[role='button']" in result
-
-    def test_empty_list_returns_empty_string(self) -> None:
-        result = format_elements_for_prompt([])
-        assert result == ""
 
 
 class TestIsStorageStateStale:

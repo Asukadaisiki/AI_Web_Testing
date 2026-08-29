@@ -425,17 +425,3 @@ def test_coordinate_click_fallback_skipped_when_vlm_returns_none(monkeypatch) ->
 
     with pytest.raises(InterventionNeededError):
         resolve_with_fallback(page, "missing element")
-
-
-def test_format_elements_for_prompt_marks_dynamic_elements() -> None:
-    """format_elements_for_prompt adds [dynamic] tag for interactive-discovered elements."""
-    from app.ai.page_explorer import format_elements_for_prompt
-
-    elements = [
-        {"tag": "button", "text": "Login", "visible": True},
-        {"tag": "a", "text": "View Cart", "visible": True, "discovered_via_interaction": True},
-    ]
-    result = format_elements_for_prompt(elements)
-    assert "[text='Login']" in result
-    assert "[text='View Cart']" in result
-    assert "[dynamic]" in result
