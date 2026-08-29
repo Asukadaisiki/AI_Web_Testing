@@ -2065,3 +2065,19 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - Planning/Context/Analysis 定向测试：73 passed、1 skipped。
   - 变更范围 Ruff `F401/F821` 与 `git diff --check` 通过。
 - 备注：下一批拆 save-and-execute 与 analysis/retest，并继续收敛 application ports。
+
+---
+
+## 2026-08-29 | P3 Save/Execute 与 Analysis/Retest 拆分
+
+- 任务：完成 Planning application service 用例拆分并移除总编排器实现。
+- 操作：
+  - 新增 `execution_inputs.py`、`save_execute_service.py` 和 `analysis_retest_service.py`。
+  - API 与 streaming bridge 直接依赖 application services；`services.ai_planning` 收敛为 71 行兼容 facade。
+  - 将跨 application service 的分析、上下文和输入解析 helper 改为公开合同。
+  - Planning Tools 为项目状态、洞察和推荐复测查询提供公共入口。
+  - 修复流式 save-and-execute 调用不存在的 `EventLogWriter.log()`，改为注入 event-log factory 并调用 `write()`。
+- 验证：
+  - P3 定向测试：61 passed。
+  - 变更范围 Ruff `F401/F821` 和 `git diff --check` 通过。
+- 备注：P3 用例服务拆分完成；兼容 facade 保留一个迁移周期，下一阶段进入 P4 单执行事件源。

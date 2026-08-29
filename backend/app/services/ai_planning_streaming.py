@@ -197,7 +197,9 @@ def _run_sync_save_and_execute(
     loop: asyncio.AbstractEventLoop,
 ) -> None:
     """Run the synchronous save-and-execute in a worker thread, forwarding events to the async queue."""
-    from app.services.ai_planning import save_and_execute_selected_drafts_streaming
+    from app.application.planning.save_execute_service import (
+        save_and_execute_selected_drafts_streaming,
+    )
 
     try:
         logger.info("Starting save-and-execute stream for session %d, drafts=%s", planning_session_id, draft_ids)
@@ -208,6 +210,7 @@ def _run_sync_save_and_execute(
                 draft_ids,
                 actor_user_id,
                 cancel_event=cancel_event,
+                event_log_factory=EventLogWriter,
                 session_factory=session_factory,
             ):
                 if cancel_event.is_set():

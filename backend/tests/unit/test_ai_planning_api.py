@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app.application.planning import conversation_service, draft_service
+from app.application.planning import (
+    conversation_service,
+    draft_service,
+    save_execute_service,
+)
 from app.schemas.ai_planning import (
     AIPlanningPlan,
     AIPlanningRequirements,
@@ -501,7 +505,6 @@ def test_delete_planning_session_returns_404_when_missing(client) -> None:
 
 def test_save_and_execute_persists_execution_summary_message(client, db_session, monkeypatch) -> None:
     from app.models import AIPlanningMessage, TestCase
-    from app.services import ai_planning as ai_planning_service
 
     def fake_generate_dsl_case(session, payload):
         return GenerateDslResponse.model_validate(
@@ -575,7 +578,7 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
         ),
     )
     monkeypatch.setattr(
-        ai_planning_service,
+        save_execute_service,
         "execute_case",
         lambda session, case_id, payload: StoredCaseExecutionDetail.model_validate(
             {

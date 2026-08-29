@@ -1228,6 +1228,11 @@ _TOOL_REGISTRY: dict[str, PlanningTool] = {
     ),
 }
 
+get_project_test_status = _handle_get_project_test_status
+get_recommended_retest = _handle_get_recommended_retest
+get_project_insights = _handle_get_project_insights
+
+
 _TOOL_HANDLERS: dict[str, Any] = {
     "create_project": _handle_create_project,
     "get_project_info": _handle_get_project_info,

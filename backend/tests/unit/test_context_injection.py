@@ -79,9 +79,9 @@ class TestBuildAutoContextPreamble:
         )
 
         # Mock 所有子函数返回 None
-        with patch("app.application.planning.context_service._build_session_context_preamble", return_value=None), \
-             patch("app.application.planning.context_service._build_tool_call_summary", return_value=None), \
-             patch("app.application.planning.context_service._build_anti_pattern_context", return_value=None), \
+        with patch("app.application.planning.context_service.build_session_context_preamble", return_value=None), \
+             patch("app.application.planning.context_service.build_tool_call_summary", return_value=None), \
+             patch("app.application.planning.context_service.build_anti_pattern_context", return_value=None), \
              patch("app.application.planning.context_service.build_execution_error_context", return_value=None):
 
             result = _build_auto_context_preamble(session, planning_session, 0)
@@ -95,9 +95,9 @@ class TestBuildAutoContextPreamble:
         planning_session = _mock_planning_session()
 
         # Mock 所有子函数返回内容
-        with patch("app.application.planning.context_service._build_session_context_preamble", return_value="session_context"), \
-             patch("app.application.planning.context_service._build_tool_call_summary", return_value="tool_summary"), \
-             patch("app.application.planning.context_service._build_anti_pattern_context", return_value="anti_patterns"), \
+        with patch("app.application.planning.context_service.build_session_context_preamble", return_value="session_context"), \
+             patch("app.application.planning.context_service.build_tool_call_summary", return_value="tool_summary"), \
+             patch("app.application.planning.context_service.build_anti_pattern_context", return_value="anti_patterns"), \
              patch("app.application.planning.context_service.build_execution_error_context", return_value="execution_errors"):
 
             result = _build_auto_context_preamble(session, planning_session, 0)
@@ -115,9 +115,9 @@ class TestBuildAutoContextPreamble:
         planning_session = _mock_planning_session()
 
         # Mock 只有部分子函数返回内容
-        with patch("app.application.planning.context_service._build_session_context_preamble", return_value="session_context"), \
-             patch("app.application.planning.context_service._build_tool_call_summary", return_value=None), \
-             patch("app.application.planning.context_service._build_anti_pattern_context", return_value="anti_patterns"), \
+        with patch("app.application.planning.context_service.build_session_context_preamble", return_value="session_context"), \
+             patch("app.application.planning.context_service.build_tool_call_summary", return_value=None), \
+             patch("app.application.planning.context_service.build_anti_pattern_context", return_value="anti_patterns"), \
              patch("app.application.planning.context_service.build_execution_error_context", return_value=None):
 
             result = _build_auto_context_preamble(session, planning_session, 0)
@@ -145,7 +145,7 @@ class TestInjectAutoContext:
         )
         transcript = [{"role": "user", "content": "test"}]
 
-        with patch("app.application.planning.context_service._build_auto_context_preamble", return_value=None):
+        with patch("app.application.planning.context_service.build_auto_context_preamble", return_value=None):
             result = inject_auto_context(transcript, planning_session, session, 0)
             assert result == transcript
 
@@ -157,7 +157,7 @@ class TestInjectAutoContext:
         planning_session = _mock_planning_session()
         transcript = [{"role": "user", "content": "test"}]
 
-        with patch("app.application.planning.context_service._build_auto_context_preamble", return_value="preamble_content"):
+        with patch("app.application.planning.context_service.build_auto_context_preamble", return_value="preamble_content"):
             result = inject_auto_context(transcript, planning_session, session, 0)
             assert len(result) == 2
             assert result[0]["role"] == "system"

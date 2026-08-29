@@ -17,6 +17,10 @@ from app.application.planning.project_context import (
     list_session_projects,
     unlink_project_from_session,
 )
+from app.application.planning.analysis_retest_service import retest_cases
+from app.application.planning.save_execute_service import (
+    save_and_execute_selected_drafts,
+)
 from app.application.planning.conversation_service import send_planning_message
 from app.application.planning.context_service import inject_auto_context
 from app.application.planning.draft_service import (
@@ -51,10 +55,6 @@ from app.schemas.ai_planning import (
 )
 from app.schemas.dsl import DSLModel
 from pydantic import Field
-from app.services.ai_planning import (
-    retest_cases,
-    save_and_execute_selected_drafts,
-)
 from app.services.ai_planning_streaming import (
     CancellationManager,
     sse_event,

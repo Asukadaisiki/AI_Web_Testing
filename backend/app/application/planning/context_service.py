@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)
 
 
-def _categorize_error(error_message: str) -> str:
+def categorize_error(error_message: str) -> str:
     """Categorize an error message into a failure pattern type."""
     msg = error_message.lower()
     if "locator" in msg or "not found" in msg or "no element" in msg:
@@ -37,7 +37,7 @@ def _categorize_error(error_message: str) -> str:
     return "unknown"
 
 
-def _build_session_context_preamble(
+def build_session_context_preamble(
     planning_session: AIPlanningSession,
     db_session: Session,
     existing_msg_count: int,
@@ -50,9 +50,9 @@ def _build_session_context_preamble(
     if not project_ids or existing_msg_count <= 1:
         return None
 
-    from app.ai.planning_tools import _handle_get_project_test_status
+    from app.ai.planning_tools import get_project_test_status
     try:
-        status = _handle_get_project_test_status(
+        status = get_project_test_status(
             params={}, db_session=db_session, project_id=_get_active_project_id(planning_session),
         )
     except Exception:
@@ -95,8 +95,8 @@ def _build_session_context_preamble(
 
     # Cross-session insights from TestPointInsight
     try:
-        from app.ai.planning_tools import _handle_get_project_insights
-        insights = _handle_get_project_insights(
+        from app.ai.planning_tools import get_project_insights
+        insights = get_project_insights(
             params={}, db_session=db_session, project_id=_get_active_project_id(planning_session),
         )
         if insights.get("has_insights"):
@@ -119,7 +119,7 @@ def _build_session_context_preamble(
     return "\n".join(lines)
 
 
-def _build_tool_call_summary(
+def build_tool_call_summary(
     db_session: Session,
     session_id: int,
     limit: int = 20,
@@ -171,7 +171,7 @@ def _build_tool_call_summary(
     return "[系统自动注入 - 之前的工具调用历史]\n\n" + "\n".join(summaries)
 
 
-def _build_anti_pattern_context(
+def build_anti_pattern_context(
     db_session: Session,
     planning_session: AIPlanningSession,
 ) -> str | None:
@@ -287,7 +287,7 @@ def build_execution_error_context(
     return "[系统自动注入 - 最近一次执行的错误]\n\n" + "\n".join(errors)
 
 
-def _build_auto_context_preamble(
+def build_auto_context_preamble(
     planning_session: AIPlanningSession,
     db_session: Session,
     existing_msg_count: int,
@@ -301,19 +301,19 @@ def _build_auto_context_preamble(
     injected_sections = []
 
     # 1. 项目测试状态和跨会话洞察（现有逻辑）
-    session_context = _build_session_context_preamble(planning_session, db_session, existing_msg_count)
+    session_context = build_session_context_preamble(planning_session, db_session, existing_msg_count)
     if session_context:
         preamble_parts.append(session_context)
         injected_sections.append("session_context")
 
     # 2. 之前 turn 的工具调用摘要
-    tool_summary = _build_tool_call_summary(db_session, planning_session.id)
+    tool_summary = build_tool_call_summary(db_session, planning_session.id)
     if tool_summary:
         preamble_parts.append(tool_summary)
         injected_sections.append("tool_call_history")
 
     # 3. Anti-patterns 上下文
-    anti_pattern_context = _build_anti_pattern_context(db_session, planning_session)
+    anti_pattern_context = build_anti_pattern_context(db_session, planning_session)
     if anti_pattern_context:
         preamble_parts.append(anti_pattern_context)
         injected_sections.append("anti_patterns")
@@ -350,10 +350,9 @@ def inject_auto_context(
     existing_msg_count: int,
 ) -> list[dict[str, str]]:
     """Prepend auto-context preamble to transcript if applicable."""
-    preamble = _build_auto_context_preamble(planning_session, db_session, existing_msg_count)
+    preamble = build_auto_context_preamble(planning_session, db_session, existing_msg_count)
     if not preamble:
         return transcript
 
     return [{"role": "system", "content": preamble}, *transcript]
-
 

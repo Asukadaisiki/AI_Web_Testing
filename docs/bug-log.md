@@ -957,3 +957,13 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 - 建议：改为只忽略生成物，对源码、测试、迁移和审计文档采用默认跟踪策略。
 - 处理：移除文档、测试和指定 migration 的忽略规则，仅保留生成物、本地配置与外部测试项目规则。
 - 验证：`git check-ignore` 确认新增文档、测试和 migration 默认可跟踪，本地设置与报告生成物仍被忽略。
+
+### AUDIT-20260829-13 | Planning 流式执行调用不存在的事件日志方法
+
+- 状态：fixed
+- 严重度：high
+- 位置：`backend/app/application/planning/save_execute_service.py`
+- 描述：save-and-execute 流式路径调用 `EventLogWriter.log()`，但 writer 仅提供 `write()`；运行到首个事件时会抛出 `AttributeError` 并中断流。
+- 建议：统一使用公开 `write()` 合同，并通过注入的 event-log port 增加流式错误路径测试。
+- 处理：将事件日志改为 `PlanningEventLogFactory` 注入，所有事件统一调用 `write()`。
+- 验证：新增无有效草案的流式事件日志合同测试，确认 error 事件写入并 flush。
