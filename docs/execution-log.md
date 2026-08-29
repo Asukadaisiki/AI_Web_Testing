@@ -2133,3 +2133,16 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 远端全量克隆中目标路径历史提交数和当前跟踪数均为 0。
   - 本地全部 refs 的目标路径提交数为 0，BigModel Bearer 模式扫描为 0。
 - 备注：仓库侧处置完成；外部凭据吊销仍需账号持有人登录智谱 API Keys 控制台完成身份验证。
+
+---
+
+## 2026-08-30 | 本地 main 对齐远端（放弃本地未推送提交）
+
+- 任务：本地与远端仓库同步，清理中断的 rebase 现场。
+- 背景：此前一次 `git pull --rebase` 在 `backend/app/services/ai_planning.py` 冲突后中断；本地 `main` 与 `origin/main` 因远端凭据清理 force-push 已分叉。
+- 决策：用户确认以远端为准，放弃本地未推送提交（Bug #J、EventLogWriter 方法名修复、三重修复等 4 个提交）。
+- 操作：
+  - `git rebase --abort` 回到 `main`。
+  - `git fetch origin --prune`。
+  - `git reset --hard origin/main`。
+- 验证：本地 `main` 与 `origin/main` 一致（`4719f1e`），无未提交跟踪文件差异；30 个未跟踪 `docs/` 文件保持不变。
