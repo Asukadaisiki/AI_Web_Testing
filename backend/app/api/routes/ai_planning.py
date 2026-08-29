@@ -17,6 +17,7 @@ from app.application.planning.project_context import (
     list_session_projects,
     unlink_project_from_session,
 )
+from app.application.planning.conversation_service import send_planning_message
 from app.application.planning.session_service import (
     create_planning_session,
     delete_planning_session,
@@ -45,10 +46,11 @@ from app.schemas.dsl import DSLModel
 from pydantic import Field
 from app.services.ai_planning import (
     delete_planning_draft,
+    generate_auto_drafts_for_scenarios,
     generate_planning_drafts,
+    inject_auto_context,
     retest_cases,
     save_and_execute_selected_drafts,
-    send_planning_message,
     update_planning_draft_status,
 )
 from app.services.ai_planning_streaming import (
@@ -126,7 +128,14 @@ def send_planning_message_route(
     current_user: User = Depends(require_demo_user),
 ) -> AIPlanningTurnResponse:
     try:
-        return send_planning_message(session, session_id, actor_user_id=current_user.id, content=payload.content)
+        return send_planning_message(
+            session,
+            session_id,
+            actor_user_id=current_user.id,
+            content=payload.content,
+            context_injector=inject_auto_context,
+            auto_draft_generator=generate_auto_drafts_for_scenarios,
+        )
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AIPlanningAccessError as exc:

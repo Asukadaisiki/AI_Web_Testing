@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+from app.application.planning import conversation_service
 from app.schemas.ai_planning import (
     AIPlanningPlan,
     AIPlanningRequirements,
@@ -257,12 +258,11 @@ def test_create_planning_session_and_restore_detail(client) -> None:
 
 
 def test_send_planning_message_records_tool_call_and_assistant_messages(client, monkeypatch) -> None:
-    from app.services import ai_planning as ai_planning_service
+    captured = {}
 
-    monkeypatch.setattr(
-        ai_planning_service,
-        "run_planning_turn",
-        lambda **_: AIPlanningTurnResponse(
+    def fake_run_planning_turn(**kwargs):
+        captured.update(kwargs)
+        return AIPlanningTurnResponse(
             assistant_message="请补充登录入口页面。",
             session_status="collecting",
             requirements=AIPlanningRequirements(
@@ -281,7 +281,12 @@ def test_send_planning_message_records_tool_call_and_assistant_messages(client, 
                     result={"cases": [{"id": 11, "name": "后台登录成功"}], "total": 1},
                 )
             ],
-        ),
+        )
+
+    monkeypatch.setattr(
+        conversation_service,
+        "run_planning_turn",
+        fake_run_planning_turn,
     )
 
     create_response = client.post(
@@ -299,6 +304,10 @@ def test_send_planning_message_records_tool_call_and_assistant_messages(client, 
     payload = response.json()
     assert payload["next_action"] == "ask_followup"
     assert payload["tool_calls"][0]["tool"] == "list_test_cases"
+    assert callable(captured["auto_draft_generator"])
+    assert captured["transcript"] == [
+        {"role": "user", "content": "帮我规划登录测试"}
+    ]
 
     detail_response = client.get(f"/api/v1/ai-planning/sessions/{session_id}")
     detail_payload = detail_response.json()
@@ -347,7 +356,7 @@ def test_generate_planning_drafts_creates_one_draft_per_selected_scenario(client
 
     monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
     monkeypatch.setattr(
-        ai_planning_service,
+        conversation_service,
         "run_planning_turn",
         lambda **_: AIPlanningTurnResponse(
             assistant_message="已生成测试规划。",
@@ -431,7 +440,7 @@ def test_update_planning_draft_status_marks_imported(client, monkeypatch) -> Non
 
     monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
     monkeypatch.setattr(
-        ai_planning_service,
+        conversation_service,
         "run_planning_turn",
         lambda **_: AIPlanningTurnResponse(
             assistant_message="已生成测试规划。",
@@ -547,7 +556,7 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
         ],
     )
     monkeypatch.setattr(
-        ai_planning_service,
+        conversation_service,
         "run_planning_turn",
         lambda **_: AIPlanningTurnResponse(
             assistant_message="已生成测试规划。",
@@ -650,12 +659,8 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
 
 def _seed_planning_session_with_drafts(client):
     """Helper: create a planning session, generate plan + drafts, return session_id and draft_ids."""
-    from app.services import ai_planning as ai_planning_service
-
     # The monkeypatching for run_planning_turn and generate_dsl_case is done by the caller.
     # We rely on the fact that the test client already has them patched.
     create_response = client.post("/api/v1/ai-planning/sessions", json={})
     session_id = create_response.json()["session"]["id"]
     return session_id
-
-

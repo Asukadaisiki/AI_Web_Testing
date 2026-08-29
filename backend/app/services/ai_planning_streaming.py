@@ -12,6 +12,7 @@ from typing import AsyncGenerator, Callable, Generator
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.runners.playwright_runner import RunnerCancelledError
+from app.services.sse_event_log import EventLogWriter
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +139,22 @@ async def stream_planning_chat(
     actor_user_id: int,
 ) -> AsyncGenerator[dict, None]:
     """Bridge streaming planning chat to async WebSocket events."""
-    from app.services.ai_planning import stream_planning_message
+    from app.application.planning.conversation_service import (
+        stream_planning_message,
+    )
+    from app.services.ai_planning import (
+        generate_auto_drafts_for_scenarios,
+        inject_auto_context,
+    )
 
     logger.info("Starting planning chat stream for session %d", planning_session_id)
     async for event in _bridge_sync_generator(
         session_factory=session_factory,
         generator_factory=lambda db: stream_planning_message(
             db, planning_session_id, actor_user_id=actor_user_id, content=content,
+            context_injector=inject_auto_context,
+            auto_draft_generator=generate_auto_drafts_for_scenarios,
+            event_log_factory=EventLogWriter,
             session_factory=session_factory,
         ),
         phase="chat",
@@ -253,4 +263,3 @@ async def stream_save_and_execute(
         if isinstance(item, _TerminalSignal):
             return
         yield _serialize_event(item)
-

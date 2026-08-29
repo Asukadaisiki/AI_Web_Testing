@@ -128,7 +128,7 @@ class TestBuildAutoContextPreamble:
             assert "execution_errors" not in result
 
 
-# ── Tests for _inject_auto_context ────────────────────────────────────────────
+# ── Tests for inject_auto_context ─────────────────────────────────────────────
 
 
 class TestInjectAutoContext:
@@ -136,7 +136,7 @@ class TestInjectAutoContext:
 
     def test_returns_original_transcript_when_no_context(self):
         """当没有上下文信息时，返回原始 transcript"""
-        from app.services.ai_planning import _inject_auto_context
+        from app.services.ai_planning import inject_auto_context
 
         session = MagicMock()
         planning_session = _mock_planning_session(
@@ -146,19 +146,19 @@ class TestInjectAutoContext:
         transcript = [{"role": "user", "content": "test"}]
 
         with patch("app.services.ai_planning._build_auto_context_preamble", return_value=None):
-            result = _inject_auto_context(transcript, planning_session, session, 0)
+            result = inject_auto_context(transcript, planning_session, session, 0)
             assert result == transcript
 
     def test_prepends_preamble_to_transcript(self):
         """当有上下文信息时，在 transcript 前面添加 preamble"""
-        from app.services.ai_planning import _inject_auto_context
+        from app.services.ai_planning import inject_auto_context
 
         session = MagicMock()
         planning_session = _mock_planning_session()
         transcript = [{"role": "user", "content": "test"}]
 
         with patch("app.services.ai_planning._build_auto_context_preamble", return_value="preamble_content"):
-            result = _inject_auto_context(transcript, planning_session, session, 0)
+            result = inject_auto_context(transcript, planning_session, session, 0)
             assert len(result) == 2
             assert result[0]["role"] == "system"
             assert result[0]["content"] == "preamble_content"
@@ -311,8 +311,6 @@ class TestDslGeneratorPrompt:
 
         修复后: prompt 包含正确的示例，告诉 AI 如何使用 [container] 前缀
         """
-        from app.ai.dsl_generator import generate_case_draft
-
         # 读取 system prompt
         # 这需要实际调用 DSL 生成器来验证
         # 暂时跳过这个测试

@@ -2032,3 +2032,20 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 后端默认测试：491 passed、1 skipped、10 deselected。
   - application/route/service 变更范围 Ruff `F401/F821` 检查通过。
 - 备注：下一批拆 conversation service 与 draft service，继续缩减总编排器。
+
+---
+
+## 2026-08-29 | P3 Conversation Service 拆分
+
+- 任务：将 Planning 同步/流式对话编排迁入 application service，并显式化外部依赖。
+- 操作：
+  - 新增 `application/planning/conversation_service.py`，承接消息、会话状态、工具结果和流式占位消息持久化。
+  - 通过 `ConversationContextInjector`、`AutoDraftGenerator` 和 `ConversationEventLogFactory` ports 注入上下文、草案生成和事件日志能力。
+  - API 与 streaming bridge 改为调用 conversation service；旧总服务删除重复的同步/流式实现。
+  - 将上下文注入和自动草案 adapter 改为公开符号，消除路由与 application service 对私有实现的依赖。
+  - 更新 API 测试 patch 边界，并验证 Agent 收到 transcript 与 auto-draft port。
+- 验证：
+  - Planning 定向测试：108 passed、1 skipped。
+  - 后端默认测试：491 passed、1 skipped、10 deselected。
+  - 变更范围 Ruff `F401/F821`、Python compileall 和 `git diff --check` 通过。
+- 备注：P3 下一批拆 draft service，再拆 save-and-execute 与 analysis/retest。

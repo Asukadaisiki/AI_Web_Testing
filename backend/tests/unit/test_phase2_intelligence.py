@@ -1,7 +1,6 @@
 """Unit tests for Phase 2 intelligence features."""
 from __future__ import annotations
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app.schemas.ai_planning import AIPlanningRequirements
@@ -124,7 +123,7 @@ class TestInjectAutoContext:
     """Tests for _inject_auto_context."""
 
     def test_returns_transcript_unchanged_when_no_injection(self, db_session: Session) -> None:
-        from app.services.ai_planning import _inject_auto_context
+        from app.services.ai_planning import inject_auto_context
         from app.models import AIPlanningSession
 
         session_record = AIPlanningSession(
@@ -137,11 +136,11 @@ class TestInjectAutoContext:
         db_session.commit()
 
         transcript = [{"role": "user", "content": "hello"}]
-        result = _inject_auto_context(transcript, session_record, db_session, existing_msg_count=1)
+        result = inject_auto_context(transcript, session_record, db_session, existing_msg_count=1)
         assert len(result) == 1
 
     def test_prepends_preamble_when_injection_needed(self, db_session: Session) -> None:
-        from app.services.ai_planning import _inject_auto_context
+        from app.services.ai_planning import inject_auto_context
         from app.models import AIPlanningSession, TestCaseRun
         from app.models.session_project import SessionProject
         from app.services import cases as case_service
@@ -168,7 +167,7 @@ class TestInjectAutoContext:
         db_session.commit()
 
         transcript = [{"role": "user", "content": "how are results?"}]
-        result = _inject_auto_context(transcript, session_record, db_session, existing_msg_count=5)
+        result = inject_auto_context(transcript, session_record, db_session, existing_msg_count=5)
         assert len(result) == 2
         assert result[0]["role"] == "system"
         assert "系统自动注入" in result[0]["content"]
