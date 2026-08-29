@@ -1958,3 +1958,23 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - Knip：仍报告 P2 范围的孤儿文件、未用依赖/导出，以及 `@ant-design/icons` 未声明直接依赖。
   - Ruff：工具可运行，但全仓存在 575 个既有问题，不能直接作为零告警门禁；需先建立基线或分阶段清理。
 - 备注：D-04 至 D-10 已关闭。静态检查遗留转入 P2；未修改用户已暂存的 `test_brand_filter_cart`。
+
+---
+
+## 2026-08-28 | P2 确定孤儿代码清理
+
+- 任务：按 C1-C4 批次删除审计 O-01 至 O-19 的确定孤儿，并治理休眠能力。
+- 操作：
+  - 删除孤儿 backend runner、frontend layout、临时 DSL 结果和冗余 `.gitkeep`。
+  - 移除未使用 `echarts` 及 Vite 分包规则，补齐 `@ant-design/icons` 直接依赖。
+  - 删除未使用 CSS、DSL adapter/helper、旧 locator preflight 和 candidate collector。
+  - 删除 Page Explorer 旧 DOM prompt formatter、grouping/filter 子系统及旧 flow action 链，保留 `_collect_flow_a11y` 当前主链。
+  - 删除旧同步 Planning LLM、未启用日志上下文/Timer、零调用 locator/access/SSE helper 和前端旧导出。
+  - 删除只固定旧实现的测试，保留并回归当前 DSL、A11y、runner 和 API 合同测试。
+  - 新增 `docs/plan/capability-status-2026-08-28.md`，记录休眠能力 owner、状态和复核期限。
+- 验证：
+  - 后端默认测试：490 passed、1 skipped、10 deselected。
+  - 前端测试：63 passed；`npm run build` 通过。
+  - Knip 不再报告孤儿文件、未使用依赖和缺失直接依赖；剩余项为明确保留的 dormant API clients 与 transport types。
+  - 变更文件 Ruff `F401/F821` 检查通过。
+- 备注：`CaseListParams` 整体无消费者，已删除；Pydantic 框架隐式入口和 Alembic 历史均保留。
