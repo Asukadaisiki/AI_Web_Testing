@@ -1996,3 +1996,22 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 后端默认测试：490 passed、1 skipped、10 deselected。
   - 新增模块及配置变更 Ruff `F401/F821` 检查通过。
 - 备注：P3 尚未完成；后续继续建立 active project 边界并按 session/conversation/draft/save-execute/analysis-retest 拆 application services。
+
+---
+
+## 2026-08-29 | P3 Active Project 与项目上下文边界
+
+- 任务：落实 Planning Session 单 active project 语义，并将项目上下文职责移出总编排器。
+- 操作：
+  - `ai_planning_sessions` 新增 `active_project_id`，migration 为历史 session 回填最早关联项目。
+  - 新建、关联和工具创建项目时自动切换 active project；重复关联作为幂等切换；删除 active 项目时回退到最早剩余关联。
+  - 所有 Planning 执行路径改用集中 `_get_active_project_id`，移除散落的 `project_ids[0]`。
+  - API schema 和前端类型增加 `active_project_id` / `is_active`，项目面板支持查看和点击切换当前项目。
+  - 新增 `app/application/planning/project_context.py`，承接 session ownership、项目关联、active project 和成员修复职责。
+  - AI Planning API 直接依赖 application project context，不再动态导入 service 私有 `_get_session`。
+- 验证：
+  - 后端默认测试：491 passed、1 skipped、10 deselected。
+  - 前端测试：64 passed；`npm run build` 通过。
+  - active project migration 独立升降级测试通过；Alembic 唯一 head 为 `20260829_0026`。
+  - 变更范围 Ruff `F401/F821` 检查通过。
+- 备注：保留多项目历史关联，仅执行上下文收敛为单 active project；P3 下一批拆 conversation 和 draft application service。
