@@ -2015,3 +2015,20 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - active project migration 独立升降级测试通过；Alembic 唯一 head 为 `20260829_0026`。
   - 变更范围 Ruff `F401/F821` 检查通过。
 - 备注：保留多项目历史关联，仅执行上下文收敛为单 active project；P3 下一批拆 conversation 和 draft application service。
+
+---
+
+## 2026-08-29 | P3 Session Lifecycle 拆分
+
+- 任务：将 Planning Session 生命周期与 schema 映射移出 `services/ai_planning.py`。
+- 操作：
+  - 新增 `application/planning/session_service.py`，承接 session list/create/detail/delete。
+  - 新增 `application/planning/presenters.py`，统一 session/message/draft schema 转换。
+  - 将 required requirement slots 移到 schema 层，Agent 与 session service 共享同一合同。
+  - AI Planning API 直接依赖 session service；总编排器删除重复实现和 presenter。
+  - 新建 session 对显式 `project_id` 增加存在性校验，修正旧测试依赖 SQLite 关闭外键的错误假设。
+- 验证：
+  - session/API 定向测试：30 passed。
+  - 后端默认测试：491 passed、1 skipped、10 deselected。
+  - application/route/service 变更范围 Ruff `F401/F821` 检查通过。
+- 备注：下一批拆 conversation service 与 draft service，继续缩减总编排器。
