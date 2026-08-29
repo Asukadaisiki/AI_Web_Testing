@@ -2117,3 +2117,19 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - `npm audit --audit-level=low`：0 vulnerabilities。
   - API/SSE 兼容 barrel 保留，现有调用方和测试可渐进迁移。
 - 备注：P5 结构目标已落实；手写 `types/api.ts` 作为 UI view model 兼容层保留，transport schema 以生成文件为准。
+
+---
+
+## 2026-08-30 | 凭据本地清理与 Git 历史处置
+
+- 任务：清除误提交的本地配置和智谱 BigModel API 凭据历史。
+- 操作：
+  - 从本地 `.claude/settings.local.json` 删除包含明文 Bearer 凭据的权限项。
+  - 使用 index filter 从 `main` 的全部 484 个历史提交中移除 `.claude/settings.local.json`。
+  - 以重写前远端哈希执行 `--force-with-lease`，避免覆盖并发远端更新。
+  - 删除 `refs/original`、reflog、临时 bundle 和验证 clone，并执行立即 GC。
+- 验证：
+  - 本地与远端 `main` 哈希一致。
+  - 远端全量克隆中目标路径历史提交数和当前跟踪数均为 0。
+  - 本地全部 refs 的目标路径提交数为 0，BigModel Bearer 模式扫描为 0。
+- 备注：仓库侧处置完成；外部凭据吊销仍需账号持有人登录智谱 API Keys 控制台完成身份验证。
