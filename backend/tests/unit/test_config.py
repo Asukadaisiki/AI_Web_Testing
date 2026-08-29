@@ -80,20 +80,20 @@ def test_storage_state_dir_defaults_to_storage_states(monkeypatch, reset_cached_
     assert settings.storage_state_dir == "storage_states"
 
 
-def test_ai_visual_locate_default_is_enabled(monkeypatch, reset_cached_state) -> None:
-    """VLM should be enabled by default without explicit env var."""
+def test_ai_visual_locate_default_is_disabled(monkeypatch, reset_cached_state) -> None:
+    """VLM should be disabled unless an environment explicitly enables it."""
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
     monkeypatch.delenv("ENABLE_AI_VISUAL_LOCATE", raising=False)
     from app.core.config import get_settings
     get_settings.cache_clear()
     settings = get_settings()
-    assert settings.enable_ai_visual_locate is True
+    assert settings.enable_ai_visual_locate is False
 
 
-def test_enable_ai_visual_locate_can_be_disabled(monkeypatch, reset_cached_state) -> None:
-    """Should respect ENABLE_AI_VISUAL_LOCATE=false."""
+def test_enable_ai_visual_locate_can_be_enabled(monkeypatch, reset_cached_state) -> None:
+    """Should respect ENABLE_AI_VISUAL_LOCATE=true."""
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
-    monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "false")
+    monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "true")
     from app.core.config import get_settings
     settings = get_settings()
-    assert settings.enable_ai_visual_locate is False
+    assert settings.enable_ai_visual_locate is True

@@ -72,7 +72,7 @@ class Settings:
     ai_dsl_model: str | None = None
     ai_dsl_strict_mode: bool = False
     ai_dsl_allow_auto_repair: bool = True
-    enable_ai_visual_locate: bool = True
+    enable_ai_visual_locate: bool = False
     ai_visual_timeout_ms: int = 600000
     ai_visual_failure_threshold: int = 3
     ai_visual_cooldown_seconds: int = 60
@@ -132,7 +132,7 @@ def get_settings() -> Settings:
         ai_dsl_model=os.getenv("AI_DSL_MODEL") or None,
         ai_dsl_strict_mode=_get_bool(os.getenv("AI_DSL_STRICT_MODE"), default=False),
         ai_dsl_allow_auto_repair=_get_bool(os.getenv("AI_DSL_ALLOW_AUTO_REPAIR"), default=True),
-        enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=True),
+        enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
         ai_visual_timeout_ms=max(10000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=600000)),
         ai_visual_failure_threshold=max(1, _get_int(os.getenv("AI_VISUAL_FAILURE_THRESHOLD"), default=3)),
         ai_visual_cooldown_seconds=max(1, _get_int(os.getenv("AI_VISUAL_COOLDOWN_SECONDS"), default=60)),
