@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Generator
+from typing import Any, Generator, Protocol
 
 import httpx
 from sqlalchemy import select
@@ -30,6 +30,17 @@ from app.schemas.ai_planning import (
 logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)
 URL_PATTERN = re.compile(r"https?://[^\s，。；;]+", re.IGNORECASE)
+
+
+class AutoDraftGenerator(Protocol):
+    def __call__(
+        self,
+        *,
+        db_session: Session,
+        planning_session_id: int,
+        scenario_keys: list[str],
+        actor_user_id: int,
+    ) -> list[Any]: ...
 
 
 def _summarize_tool_result(tool_name: str, result: Any) -> str:
@@ -163,6 +174,7 @@ def run_planning_turn(
     project_id: int,
     actor_user_id: int = 0,
     planning_session_id: int = 0,
+    auto_draft_generator: AutoDraftGenerator | None = None,
 ) -> AIPlanningTurnResponse:
     """Synchronous wrapper around :func:`stream_planning_turn`.
 
@@ -176,6 +188,7 @@ def run_planning_turn(
         project_id=project_id,
         actor_user_id=actor_user_id,
         planning_session_id=planning_session_id,
+        auto_draft_generator=auto_draft_generator,
     )
     try:
         while True:
@@ -197,6 +210,7 @@ def stream_planning_turn(
     project_id: int,
     actor_user_id: int = 0,
     planning_session_id: int = 0,
+    auto_draft_generator: AutoDraftGenerator | None = None,
 ) -> Generator[dict[str, Any], None, AIPlanningTurnResponse]:
     """Streaming ReAct planning turn.
 
@@ -845,8 +859,6 @@ def stream_planning_turn(
             yield {"type": "status", "phase": "dsl", "message": "正在基于方案生成 DSL 草案..."}
             dsl_auto_drafts: list[dict[str, Any]] = []
             try:
-                from app.services.ai_planning import generate_planning_drafts
-                from app.schemas.ai_planning import GenerateAIPlanningDraftsRequest
                 # response.plan is an AIPlanningPlan Pydantic model; convert to dict
                 # so .get() works (previously crashed with "object has no attribute 'get'").
                 plan_data = response.plan.model_dump(mode="json") if response.plan else {}
@@ -855,17 +867,16 @@ def stream_planning_turn(
                     for s in plan_data.get("scenarios", [])
                     if isinstance(s, dict) and s.get("scenario_key")
                 ]
-                if scenario_keys:
-                    dsl_req = GenerateAIPlanningDraftsRequest(
-                        scenario_keys=scenario_keys[:2],  # top 2 scenarios
-                    )
-                    dsl_response = generate_planning_drafts(
-                        db_session, planning_session_id, dsl_req,
+                if scenario_keys and auto_draft_generator is not None:
+                    generated_drafts = auto_draft_generator(
+                        db_session=db_session,
+                        planning_session_id=planning_session_id,
+                        scenario_keys=scenario_keys[:2],
                         actor_user_id=actor_user_id,
                     )
-                    for d in dsl_response.drafts:
+                    for d in generated_drafts:
                         dsl_auto_drafts.append(d.model_dump(mode="json"))
-                    response.drafts = dsl_response.drafts
+                    response.drafts = generated_drafts
                     response.next_action = "drafts_generated"
                     yield {
                         "type": "drafts",
@@ -1489,27 +1500,6 @@ def _compress_tool_result(tool_name: str, result: dict) -> dict:
             "warning": result.get("warning"),
         }
     return {}
-
-
-def _extract_raw_page_results(tool_calls: list[AIPlanningToolCall]) -> list[dict[str, Any]]:
-    """Extract raw page-results list from the most recent explore tool call.
-
-    Returns the ``pages`` list from ``explore_flow``, or a single-element
-    list from ``explore_page`` (wrapping its elements).
-    """
-    for call in reversed(tool_calls):
-        if not isinstance(call.result, dict):
-            continue
-        if call.tool == "explore_flow":
-            pages = call.result.get("pages")
-            if isinstance(pages, list):
-                return pages
-        elif call.tool == "explore_page":
-            nodes = call.result.get("a11y_nodes", call.result.get("elements"))
-            url = call.result.get("url", "")
-            if isinstance(nodes, list):
-                return [{"url": url, "a11y_nodes": nodes}]
-    return []
 
 
 def _auto_explore_entry_url(

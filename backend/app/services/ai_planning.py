@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlunparse, urlparse, parse_qs, urlencode
 
 from sqlalchemy import select
 
@@ -15,6 +13,7 @@ from app.core.structured_logging import get_structured_logger
 from sqlalchemy.orm import Session
 
 from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn, stream_planning_turn
+from app.ai.tool_result_cache import extract_raw_page_results
 from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, Project, SessionProject, TestCase
 from app.models.ai_planning_tool_result import AIPlanningToolResult
 from app.schemas.ai_planning import (
@@ -46,6 +45,22 @@ slog = get_structured_logger(__name__)
 
 class AIPlanningAccessError(ValueError):
     """Raised when a planning session or draft is inaccessible."""
+
+
+def _generate_auto_drafts(
+    *,
+    db_session: Session,
+    planning_session_id: int,
+    scenario_keys: list[str],
+    actor_user_id: int,
+) -> list[AIPlanningDraftSchema]:
+    response = generate_planning_drafts(
+        db_session,
+        planning_session_id,
+        GenerateAIPlanningDraftsRequest(scenario_keys=scenario_keys),
+        actor_user_id=actor_user_id,
+    )
+    return response.drafts
 
 
 def list_planning_sessions(
@@ -161,14 +176,14 @@ def send_planning_message(
         project_id=project_ids[0] if project_ids else 0,
         actor_user_id=actor_user_id,
         planning_session_id=planning_session.id,
+        auto_draft_generator=_generate_auto_drafts,
     )
 
     planning_session.status = agent_response.session_status
     planning_session.requirements_json = agent_response.requirements.model_dump(mode="json")
     if agent_response.plan is not None:
         plan_dict = agent_response.plan.model_dump(mode="json")
-        from app.ai.test_planning_agent import _extract_raw_page_results
-        plan_dict["_page_results"] = _extract_raw_page_results(agent_response.tool_calls)
+        plan_dict["_page_results"] = extract_raw_page_results(agent_response.tool_calls)
         planning_session.plan_json = plan_dict
     planning_session.missing_slots_json = agent_response.missing_slots
     planning_session.title = planning_session.title or agent_response.requirements.business_goal or "AI 测试规划"
@@ -282,6 +297,7 @@ def stream_planning_message(
         project_id=project_ids[0] if project_ids else 0,
         actor_user_id=actor_user_id,
         planning_session_id=planning_session.id,
+        auto_draft_generator=_generate_auto_drafts,
     )
 
     # Create a stub assistant message so that a page refresh mid-stream shows partial content.
@@ -350,8 +366,7 @@ def stream_planning_message(
     planning_session.requirements_json = response.requirements.model_dump(mode="json")
     if response.plan is not None:
         plan_dict = response.plan.model_dump(mode="json")
-        from app.ai.test_planning_agent import _extract_raw_page_results
-        plan_dict["_page_results"] = _extract_raw_page_results(response.tool_calls)
+        plan_dict["_page_results"] = extract_raw_page_results(response.tool_calls)
         planning_session.plan_json = plan_dict
     planning_session.missing_slots_json = response.missing_slots
     planning_session.title = planning_session.title or response.requirements.business_goal or "AI 测试规划"
@@ -2516,47 +2531,3 @@ def _to_draft_schema(record: AIPlanningDraft) -> AIPlanningDraftSchema:
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
-
-
-# ── Cache helpers ─────────────────────────────────────────────────────────
-
-_TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_content",
-                     "utm_term", "_t", "ref", "fbclid", "gclid"}
-
-
-def _normalize_cache_url(raw_url: str) -> str:
-    """Strip tracking params + drop fragment for cache key normalization."""
-    p = urlparse(raw_url)
-    qs = parse_qs(p.query)
-    cleaned_qs = {k: v for k, v in qs.items() if k.lower() not in _TRACKING_PARAMS}
-    query = urlencode(cleaned_qs, doseq=True)
-    path = p.path.rstrip("/") or "/"
-    return urlunparse((p.scheme, p.netloc.lower(), path, "", query, ""))
-
-
-def _lookup_tool_cache(
-    db_session: Session,
-    key: tuple,
-    *,
-    ttl_hours: int = 4,
-) -> dict | None:
-    """Look up a cached explore result by composite key."""
-    tool_name, session_id, normalized_url, *_ = key
-    cutoff = datetime.now(UTC) - timedelta(hours=ttl_hours)
-
-    records = db_session.scalars(
-        select(AIPlanningToolResult).where(
-            AIPlanningToolResult.session_id == session_id,
-            AIPlanningToolResult.tool_name == tool_name,
-            AIPlanningToolResult.created_at >= cutoff,
-        ).order_by(AIPlanningToolResult.id.desc())
-    ).all()
-
-    for r in records:
-        raw = r.raw_result_json
-        if not isinstance(raw, dict):
-            continue
-        cached_url = _normalize_cache_url(raw.get("url", ""))
-        if cached_url == normalized_url:
-            return raw
-    return None

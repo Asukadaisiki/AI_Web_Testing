@@ -652,12 +652,12 @@ def _handle_explore_page(
 
     # Cache lookup
     import hashlib
-    from app.services.ai_planning import _lookup_tool_cache, _normalize_cache_url
+    from app.ai.tool_result_cache import lookup_tool_cache, normalize_cache_url
     state_hash = hashlib.md5(
         open(storage_path, "rb").read() if storage_path else b""
     ).hexdigest()[:12]
-    normalized = _normalize_cache_url(resolved_url)
-    cached = _lookup_tool_cache(
+    normalized = normalize_cache_url(resolved_url)
+    cached = lookup_tool_cache(
         db_session,
         ("explore_page", planning_session_id, normalized, 1280, 720, state_hash),
         ttl_hours=4,

@@ -15,12 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.ai.locator_preflight import apply_preflight_to_dsl
 from app.ai.page_explorer import USEFUL_A11Y_ROLES, collect_a11y_nodes
+from app.ai.tool_result_cache import lookup_tool_cache, normalize_cache_url
 from app.models import AIPlanningToolResult, Project, SessionProject
-from app.services.ai_planning import (
-    _lookup_tool_cache,
-    _normalize_cache_url,
-    create_planning_session,
-)
+from app.services.ai_planning import create_planning_session
 from app.schemas.ai_planning import CreateAIPlanningSessionRequest
 
 
@@ -144,9 +141,9 @@ class TestCacheHitReturnsCachedResult:
         db_session.add(record)
         db_session.flush()
 
-        normalized = _normalize_cache_url("https://example.com/")
+        normalized = normalize_cache_url("https://example.com/")
         key = ("explore_page", session_obj.id, normalized, 1280, 720, "abc123")
-        result = _lookup_tool_cache(db_session, key, ttl_hours=4)
+        result = lookup_tool_cache(db_session, key, ttl_hours=4)
 
         assert result is not None
         assert result["url"] == "https://example.com/"
@@ -173,9 +170,9 @@ class TestCacheHitReturnsCachedResult:
         db_session.add(record)
         db_session.flush()
 
-        normalized = _normalize_cache_url("https://example.com/")
+        normalized = normalize_cache_url("https://example.com/")
         key = ("explore_page", session_obj.id, normalized, 1280, 720, "abc123")
-        result = _lookup_tool_cache(db_session, key, ttl_hours=4)
+        result = lookup_tool_cache(db_session, key, ttl_hours=4)
 
         assert result is None
 
