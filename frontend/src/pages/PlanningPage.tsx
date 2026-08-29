@@ -1,7 +1,7 @@
 import { Navigate, useParams } from "react-router-dom";
 import { AITestPlanningPanel } from "../components/AITestPlanningPanel";
 import { useQuery } from "@tanstack/react-query";
-import { getAISettings } from "../services/api";
+import { getAISettings } from "../features/planning/api";
 
 export function PlanningPage() {
   const { sessionId } = useParams<{ sessionId: string }>();

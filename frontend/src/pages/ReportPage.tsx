@@ -2,11 +2,19 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Spin, Empty, Typography, Tag, Popconfirm, Modal, Input, message } from "antd";
 
-import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 import {
-  getProjects, getExecutionOverview, getExecutions, getExecutionDetail,
-  deleteExecution, deleteProject, createProject, updateProject,
-} from "../services/api";
+  deleteExecution,
+  getExecutionDetail,
+  getExecutionOverview,
+  getExecutions,
+} from "../features/executions/api";
+import {
+  createProject,
+  deleteProject,
+  getProjects,
+  updateProject,
+} from "../features/projects/api";
+import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 import type { ProjectSummary, StoredCaseExecutionSummary, StepExecutionEvidence, ExecutionStatus } from "../types/api";
 
 const { Text, Title } = Typography;

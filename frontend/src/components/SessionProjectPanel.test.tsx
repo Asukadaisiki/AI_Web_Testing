@@ -2,25 +2,26 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import * as api from "../services/api";
+import * as api from "../features/planning/api";
+import * as projectApi from "../features/projects/api";
 import { renderWithProviders } from "../test/test-utils";
 import { SessionProjectPanel } from "./SessionProjectPanel";
 
-vi.mock("../services/api", async () => {
-  const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
+vi.mock("../features/planning/api", async () => {
+  const actual = await vi.importActual<typeof import("../features/planning/api")>("../features/planning/api");
   return {
     ...actual,
     createProjectInSession: vi.fn(),
-    getProjects: vi.fn(),
     linkProjectToSession: vi.fn(),
     listSessionProjects: vi.fn(),
     unlinkProjectFromSession: vi.fn(),
   };
 });
+vi.mock("../features/projects/api", () => ({ getProjects: vi.fn() }));
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(api.getProjects).mockResolvedValue([
+  vi.mocked(projectApi.getProjects).mockResolvedValue([
     { id: 1, name: "Project A", description: null },
     { id: 2, name: "Project B", description: null },
   ]);

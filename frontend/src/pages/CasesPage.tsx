@@ -4,12 +4,20 @@ import { Link, useNavigate } from "react-router-dom";
 import { SearchOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useState, useMemo } from "react";
 
-import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
+import { ErrorBlock, LoadingBlock } from "../shared/ui/PageFeedback";
 import {
-  executeCase, getCases, deleteCase, batchDeleteCases,
-  getProjects, createProject, updateProject, deleteProject,
-} from "../services/api";
+  batchDeleteCases,
+  deleteCase,
+  getCases,
+} from "../features/cases/api";
+import { executeCase } from "../features/executions/api";
+import {
+  createProject,
+  deleteProject,
+  getProjects,
+  updateProject,
+} from "../features/projects/api";
+import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 import type { StoredCaseSummary, ProjectSummary } from "../types/api";
 
 const statusTags = [

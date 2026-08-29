@@ -14,7 +14,7 @@ import {
 } from "antd";
 import { useNavigate } from "react-router-dom";
 
-import { createCorrection, executeCase } from "../services/api";
+import { createCorrection, executeCase } from "../features/executions/api";
 import type {
   CorrectionType,
   DOMElementSnapshot,

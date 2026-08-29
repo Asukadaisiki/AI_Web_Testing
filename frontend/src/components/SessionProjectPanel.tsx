@@ -3,12 +3,12 @@ import { Button, Select, Tag, Input, Modal, Space, message } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  getProjects,
   linkProjectToSession,
   unlinkProjectFromSession,
   createProjectInSession,
   listSessionProjects,
-} from "../services/api";
+} from "../features/planning/api";
+import { getProjects } from "../features/projects/api";
 
 interface SessionProjectPanelProps {
   sessionId: number;

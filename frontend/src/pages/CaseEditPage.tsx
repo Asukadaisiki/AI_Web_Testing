@@ -14,8 +14,8 @@ import {
 } from "antd";
 import { PlusOutlined, DeleteOutlined, ArrowLeftOutlined } from "@ant-design/icons";
 
-import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
-import { createCase, deleteCase, getCaseDetail, updateCase } from "../services/api";
+import { ErrorBlock, LoadingBlock } from "../shared/ui/PageFeedback";
+import { createCase, deleteCase, getCaseDetail, updateCase } from "../features/cases/api";
 import type { DSLStep, CaseMutationPayload } from "../types/api";
 
 const SUPPORTED_ACTIONS = [

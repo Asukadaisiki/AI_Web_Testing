@@ -19,7 +19,7 @@ import {
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { InterventionPanel } from "../components/InterventionPanel";
-import { ErrorBlock, LoadingBlock } from "../components/PageFeedback";
+import { ErrorBlock, LoadingBlock } from "../shared/ui/PageFeedback";
 import { renderExecutionStatus } from "../components/executionPresentation";
 import {
   classifyLocatorStrategy,
@@ -28,7 +28,7 @@ import {
 } from "../components/executionMetrics";
 import type { LocatorStrategyBucket } from "../components/executionMetrics";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
-import { getExecutionDetail, getExecutionOverview } from "../services/api";
+import { getExecutionDetail, getExecutionOverview } from "../features/executions/api";
 import type {
   ConsoleEvent,
   ExecutionsOverview,

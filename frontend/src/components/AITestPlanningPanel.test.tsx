@@ -3,15 +3,17 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { AITestPlanningPanel } from "./AITestPlanningPanel";
-import * as api from "../services/api";
-import * as sseModule from "../services/sseClient";
+import * as api from "../features/planning/api";
+import * as projectApi from "../features/projects/api";
+import * as sseModule from "../shared/api/sseClient";
 import { renderWithProviders } from "../test/test-utils";
 import type { AIPlanningSessionDetail, AISettings } from "../types/api";
 
-vi.mock("../services/api", async () => {
-  const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
+vi.mock("../features/planning/api", async () => {
+  const actual = await vi.importActual<typeof import("../features/planning/api")>("../features/planning/api");
   return {
     ...actual,
+    cancelExecution: vi.fn(),
     createPlanningSession: vi.fn(),
     deletePlanningSession: vi.fn(),
     generatePlanningDrafts: vi.fn(),
@@ -23,10 +25,10 @@ vi.mock("../services/api", async () => {
     updatePlanningDraftStatus: vi.fn(),
   };
 });
+vi.mock("../features/projects/api", () => ({ getProjects: vi.fn() }));
 
-vi.mock("../services/sseClient", () => ({
+vi.mock("../shared/api/sseClient", () => ({
   callSSE: vi.fn(),
-  cancelExecution: vi.fn(),
 }));
 
 const aiSettings: AISettings = {
@@ -87,6 +89,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.stubGlobal("confirm", vi.fn(() => true));
 
+  vi.mocked(projectApi.getProjects).mockResolvedValue([]);
   vi.mocked(api.getPlanningSession).mockResolvedValue(emptySessionDetail());
   vi.mocked(api.listPlanningSessions).mockResolvedValue([
     {

@@ -3,12 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { Route } from "react-router-dom";
 import { vi } from "vitest";
 
-import * as api from "../services/api";
+import * as api from "../features/cases/api";
 import { renderWithProviders } from "../test/test-utils";
 import { CaseEditPage } from "./CaseEditPage";
 
-vi.mock("../services/api", async () => {
-  const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
+vi.mock("../features/cases/api", async () => {
+  const actual = await vi.importActual<typeof import("../features/cases/api")>("../features/cases/api");
   return {
     ...actual,
     createCase: vi.fn(),

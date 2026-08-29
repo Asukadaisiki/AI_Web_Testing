@@ -2098,3 +2098,22 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 前端测试：64 passed。
   - 变更范围 Ruff `F401/F821` 通过。
 - 备注：Runner 的流式解释器现为唯一执行源；报告继续只读取 `TestCaseRun.report` 持久化 JSON。
+
+---
+
+## 2026-08-30 | P5 前端业务域收口
+
+- 任务：按 planning/projects/cases/executions/reports 拆分前端边界，并恢复真实认证入口。
+- 操作：
+  - 将 API client 拆到 `shared/api/client.ts`，业务请求拆入各 `features/*/api.ts`；旧 `services/api.ts` 缩为兼容 barrel。
+  - 通用 SSE client 和 PageFeedback 下沉到 shared，Planning 取消请求归回 planning domain。
+  - 从 `AITestPlanningPanel` 抽出 session 初始化/恢复 hook、SSE 生命周期 hook 和 Requirements 视图。
+  - 新增 `AuthGuard` 与 `LoginPage`，统一保护业务路由并支持登录后恢复目标地址。
+  - 增加 FastAPI OpenAPI 导出脚本、schema 快照和 `openapi-typescript` 生成命令；auth transport types 已切换到生成类型。
+  - 执行依赖安全升级；React Router 升至 v7 并删除失效的 v6 future flags。
+- 验证：
+  - 前端测试：67 passed。
+  - `npm run build` 与 `npm run generate:api-types` 通过，连续生成结果一致。
+  - `npm audit --audit-level=low`：0 vulnerabilities。
+  - API/SSE 兼容 barrel 保留，现有调用方和测试可渐进迁移。
+- 备注：P5 结构目标已落实；手写 `types/api.ts` 作为 UI view model 兼容层保留，transport schema 以生成文件为准。

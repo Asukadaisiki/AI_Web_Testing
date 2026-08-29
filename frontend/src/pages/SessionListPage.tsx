@@ -6,7 +6,7 @@ import { PlusOutlined } from "@ant-design/icons";
 import {
   createPlanningSession,
   listPlanningSessions,
-} from "../services/api";
+} from "../features/planning/api";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   collecting: { label: "收集中", color: "processing" },

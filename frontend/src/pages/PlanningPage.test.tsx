@@ -2,12 +2,13 @@ import { screen, waitFor } from "@testing-library/react";
 import { Route } from "react-router-dom";
 import { vi } from "vitest";
 
-import * as api from "../services/api";
+import * as api from "../features/planning/api";
+import * as projectApi from "../features/projects/api";
 import { renderWithProviders } from "../test/test-utils";
 import { PlanningPage } from "./PlanningPage";
 
-vi.mock("../services/api", async () => {
-  const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
+vi.mock("../features/planning/api", async () => {
+  const actual = await vi.importActual<typeof import("../features/planning/api")>("../features/planning/api");
   return {
     ...actual,
     getAISettings: vi.fn(),
@@ -15,10 +16,12 @@ vi.mock("../services/api", async () => {
     listPlanningSessions: vi.fn(),
   };
 });
+vi.mock("../features/projects/api", () => ({ getProjects: vi.fn() }));
 
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(api.getAISettings).mockResolvedValue({ enable_ai_planning: true } as never);
+  vi.mocked(projectApi.getProjects).mockResolvedValue([]);
   vi.mocked(api.getPlanningSession).mockResolvedValue({
     session: {
       id: 1,

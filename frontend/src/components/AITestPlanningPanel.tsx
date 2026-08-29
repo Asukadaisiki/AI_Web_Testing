@@ -1,24 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Checkbox, Input, Progress, Select, Tag, Typography, message } from "antd";
+import { useRef, useState } from "react";
+import { Alert, Button, Checkbox, Input, Select, Tag, Typography, message } from "antd";
 import { DeleteOutlined, SendOutlined, CheckCircleFilled, LoadingOutlined, ClockCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
-  createPlanningSession,
+  cancelExecution,
   deletePlanningDraft,
-  deletePlanningSession,
   getPlanningSession,
-  getSessionEvents,
-  listPlanningSessions,
   saveAndExecuteDrafts,
-} from "../services/api";
-import { callSSE, cancelExecution } from "../services/sseClient";
+} from "../features/planning/api";
+import { usePlanningSessionState } from "../features/planning/usePlanningSessionState";
+import { usePlanningSse } from "../features/planning/usePlanningSse";
+import { PlanningRequirementsPanel } from "../features/planning/PlanningRequirementsPanel";
 import type {
-  AIPlanningDraft,
   AIPlanningMessage,
-  AIPlanningPlan,
-  AIPlanningRequirements,
-  AIPlanningSessionSummary,
   AISettings,
   DSLCaseInputContract,
   DSLCaseOutputContract,
@@ -38,38 +33,6 @@ type AITestPlanningPanelProps = {
   currentInputContract?: DSLCaseInputContract[] | null;
   currentOutputContract?: DSLCaseOutputContract[] | null;
 };
-
-type RequirementFieldMeta = {
-  key: keyof AIPlanningRequirements;
-  label: string;
-};
-
-const REQUIREMENT_FIELDS: RequirementFieldMeta[] = [
-  { key: "app_under_test", label: "被测系统" },
-  { key: "business_goal", label: "业务目标" },
-  { key: "entry_url_or_page", label: "入口页面或 URL" },
-  { key: "core_user_flow", label: "核心流程" },
-  { key: "main_assertions", label: "关键断言" },
-  { key: "test_data_or_account", label: "测试数据或账号" },
-  { key: "scope_limits", label: "范围限制" },
-];
-
-const DEFAULT_REQUIREMENTS: AIPlanningRequirements = {
-  app_under_test: null,
-  business_goal: null,
-  entry_url_or_page: null,
-  core_user_flow: null,
-  main_assertions: [],
-  test_data_or_account: null,
-  scope_limits: null,
-};
-
-function formatRequirementValue(value: AIPlanningRequirements[keyof AIPlanningRequirements]) {
-  if (Array.isArray(value)) {
-    return value.length ? value.join("、") : null;
-  }
-  return value?.trim() ? value : null;
-}
 
 function createOptimisticMessage(
   sessionId: number,
@@ -146,23 +109,41 @@ export function AITestPlanningPanel({
 }: AITestPlanningPanelProps) {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
-  const [sessionId, setSessionId] = useState<number | null>(null);
-  const [transcript, setTranscript] = useState<AIPlanningMessage[]>([]);
-  const [requirements, setRequirements] = useState<AIPlanningRequirements>(DEFAULT_REQUIREMENTS);
-  const [missingSlots, setMissingSlots] = useState<string[]>([]);
-  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
-  const [plan, setPlan] = useState<AIPlanningPlan | null>(null);
-  const [drafts, setDrafts] = useState<AIPlanningDraft[]>([]);
+  const {
+    createAndSelectSession,
+    deleteAndSelectSession,
+    drafts,
+    isBootstrapping,
+    isLoadingHistory,
+    loadSessionDetail,
+    loadSessionList,
+    missingSlots,
+    plan,
+    requirements,
+    sessionId,
+    sessionList,
+    setDrafts,
+    setIsBootstrapping,
+    setMissingSlots,
+    setPlan,
+    setRequirements,
+    setSessionId,
+    setTranscript,
+    suggestedQuestions,
+    transcript,
+  } = usePlanningSessionState({
+    initialSessionId: sessionIdProp,
+    onError: (errorMessage) => {
+      void messageApi.error(errorMessage);
+    },
+  });
   const [selectedScenarioKeys, setSelectedScenarioKeys] = useState<string[]>([]);
   const [inputValue, setInputValue] = useState("");
-  const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [sessionList, setSessionList] = useState<AIPlanningSessionSummary[]>([]);
   const activeAssistantMessageIdRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const { abort: abortStream, run: runStream } = usePlanningSse();
 
   const planningEnabled = Boolean(aiSettings?.enable_ai_planning);
   const isDisabled = !planningEnabled;
@@ -188,206 +169,6 @@ export function AITestPlanningPanel({
       }),
     );
   }
-
-  async function loadSessionList() {
-    setIsLoadingHistory(true);
-    try {
-      const list = await listPlanningSessions();
-      setSessionList(list);
-    } catch {
-      // silently fail — session list is non-critical
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  }
-
-  function applySessionDetail(detail: Awaited<ReturnType<typeof getPlanningSession>>) {
-    setSessionId(detail.session.id);
-    setRequirements(detail.session.requirements);
-    setMissingSlots(detail.session.missing_slots);
-    setSuggestedQuestions([]);
-    setPlan(detail.session.plan ?? null);
-    setTranscript(
-      detail.messages.map((msg) => {
-        const payload = msg.structured_payload as Record<string, unknown> | null;
-        // Messages with turn_type "streaming" were persisted mid-stream but never
-        // finalized — keep them flagged so the UI can show a recovery indicator.
-        if (msg.turn_type === "streaming") {
-          return { ...msg, structured_payload: { ...(payload ?? {}), _streaming: true, _interrupted: true } };
-        }
-        if (payload?._streaming) {
-          return { ...msg, structured_payload: { ...payload, _streaming: false } };
-        }
-        return msg;
-      }),
-    );
-    setDrafts(detail.drafts);
-  }
-
-  /**
-   * Enhanced version of applySessionDetail that also replays missed SSE events
-   * from the event log when an interrupted streaming message is detected.
-   */
-  async function applySessionDetailWithRecovery(
-    detail: Awaited<ReturnType<typeof getPlanningSession>>,
-  ) {
-    // 1. Apply the DB state first (shows whatever was last flushed).
-    applySessionDetail(detail);
-
-    // 2. Find any interrupted streaming message.
-    const interruptedMsg = detail.messages.find((m) => m.turn_type === "streaming");
-    if (!interruptedMsg) return;
-
-    // 3. Replay events from the event log to recover latest state.
-    try {
-      const events = await getSessionEvents(detail.session.id, 0);
-
-      let recoveredContent = interruptedMsg.content;
-      let recoveredPhase: string | null = null;
-      let recoveredPhaseMessage: string | null = null;
-      let hasCompleted = false;
-      let thinkingContent = "";
-
-      for (const evt of events) {
-        // Only process events for this specific message.
-        if (evt.message_id !== interruptedMsg.id && evt.message_id !== null) continue;
-
-        const data = evt.event_data as Record<string, unknown>;
-        switch (evt.event_type) {
-          case "text_chunk":
-            if (!data.thinking) {
-              recoveredContent += (data.text as string) || "";
-            } else {
-              thinkingContent += (data.text as string) || "";
-            }
-            break;
-          case "status":
-            recoveredPhase = (data.phase as string) || recoveredPhase;
-            recoveredPhaseMessage = (data.message as string) || recoveredPhaseMessage;
-            break;
-          case "tool_call_start":
-            recoveredPhase = "tool_calling";
-            recoveredPhaseMessage = `正在调用工具: ${data.tool || ""}`;
-            break;
-          case "tool_call_end":
-            recoveredPhase = "thinking";
-            recoveredPhaseMessage = "正在分析需求...";
-            break;
-          case "turn_complete":
-            hasCompleted = true;
-            // Use the final assistant message from the event if available.
-            const payload = data.payload as Record<string, unknown> | undefined;
-            if (payload?.assistant_message) {
-              recoveredContent = payload.assistant_message as string;
-            }
-            break;
-        }
-      }
-
-      // 4. Update the transcript with recovered content.
-      setTranscript((current) =>
-        current.map((msg) => {
-          if (msg.id !== interruptedMsg.id) return msg;
-          if (hasCompleted) {
-            // Stream actually completed — mark as done.
-            return {
-              ...msg,
-              turn_type: "followup" as const,
-              content: recoveredContent,
-              structured_payload: {
-                ...(msg.structured_payload ?? {}),
-                _streaming: false,
-                _interrupted: false,
-                _recovered: true,
-                ...(thinkingContent ? { _thinkingContent: thinkingContent } : {}),
-              },
-            };
-          }
-          // Stream is still in progress on the server — show recovered content
-          // with a "recovering" indicator so the user knows it's being restored.
-          return {
-            ...msg,
-            content: recoveredContent || msg.content,
-            structured_payload: {
-              ...(msg.structured_payload ?? {}),
-              _streaming: true,
-              _interrupted: false,
-              _recovered: true,
-              _phase: recoveredPhase || "thinking",
-              _phaseMessage: recoveredPhaseMessage || "正在恢复...",
-              ...(thinkingContent ? { _thinkingContent: thinkingContent } : {}),
-            },
-          };
-        }),
-      );
-    } catch {
-      // Event replay failed — keep the _interrupted flag from applySessionDetail.
-    }
-  }
-
-  async function loadSessionDetail(sessionIdToLoad: number) {
-    try {
-      const detail = await getPlanningSession(sessionIdToLoad);
-      await applySessionDetailWithRecovery(detail);
-      return detail;
-    } catch (err: unknown) {
-      // If session not found, refresh the session list and show error
-      void messageApi.error("加载会话失败: " + (err instanceof Error ? err.message : String(err)));
-      await loadSessionList();
-      throw err;
-    }
-  }
-
-  async function createAndSelectSession() {
-    try {
-      const detail = await createPlanningSession({});
-      applySessionDetail(detail);
-      return detail;
-    } catch (err: unknown) {
-      void messageApi.error("创建会话失败: " + (err instanceof Error ? err.message : String(err)));
-      throw err;
-    }
-  }
-
-  async function handleSessionDeleted(deletedSessionId: number) {
-    const nextList = await listPlanningSessions();
-    setSessionList(nextList);
-
-    if (deletedSessionId !== sessionId) {
-      return;
-    }
-
-    const nextSession = nextList[0];
-    if (nextSession) {
-      await loadSessionDetail(nextSession.id);
-      return;
-    }
-
-    await createAndSelectSession();
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function init() {
-      setIsBootstrapping(true);
-      try {
-        await loadSessionDetail(sessionIdProp);
-        if (!cancelled) await loadSessionList();
-      } catch (err: unknown) {
-        if (!cancelled) {
-          void messageApi.error(err instanceof Error ? err.message : String(err));
-        }
-      } finally {
-        if (!cancelled) setIsBootstrapping(false);
-      }
-    }
-
-    void init();
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionIdProp]);
 
   function handleStreamEvent(event: ExecutionStreamEvent) {
     if (
@@ -584,18 +365,6 @@ export function AITestPlanningPanel({
     }
   }
 
-  const collectedEntries = useMemo(
-    () =>
-      REQUIREMENT_FIELDS.flatMap((field) => {
-        const value = formatRequirementValue(requirements[field.key]);
-        return value ? [{ label: field.label, value }] : [];
-      }),
-    [requirements],
-  );
-
-  const progressCount = collectedEntries.length;
-  const progressPercent = Math.round((progressCount / REQUIREMENT_FIELDS.length) * 100);
-
   async function handleSendMessage() {
     if (!sessionId) {
       return;
@@ -627,9 +396,7 @@ export function AITestPlanningPanel({
     setInputValue("");
 
     try {
-      const controller = new AbortController();
-      abortRef.current = controller;
-      await callSSE({
+      await runStream({
         url: `/api/v1/ai-planning/sessions/${sessionId}/chat`,
         body: { content: trimmed },
         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
@@ -642,7 +409,6 @@ export function AITestPlanningPanel({
           }
           setIsSending(false);
         },
-        signal: controller.signal,
       });
     } catch (error) {
       clearStreamingOnMessage(activeAssistantMessageIdRef.current);
@@ -652,7 +418,6 @@ export function AITestPlanningPanel({
         await loadSessionList();
       }
     } finally {
-      abortRef.current = null;
       setIsSending(false);
     }
   }
@@ -683,9 +448,7 @@ export function AITestPlanningPanel({
     setTranscript((current) => [...current, optimisticAssistant]);
 
     try {
-      const controller = new AbortController();
-      abortRef.current = controller;
-      await callSSE({
+      await runStream({
         url: `/api/v1/ai-planning/sessions/${sessionId}/drafts`,
         body: {
           scenario_keys: selectedScenarioKeys,
@@ -704,7 +467,6 @@ export function AITestPlanningPanel({
           }
           setIsGenerating(false);
         },
-        signal: controller.signal,
       });
     } catch (error) {
       clearStreamingOnMessage(activeAssistantMessageIdRef.current);
@@ -714,45 +476,16 @@ export function AITestPlanningPanel({
         await loadSessionList();
       }
     } finally {
-      abortRef.current = null;
       setIsGenerating(false);
     }
   }
 
   function renderLeftPanel() {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>Requirements</div>
-        <Progress percent={progressPercent} size="small" />
-        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          已收集 {progressCount} / {REQUIREMENT_FIELDS.length} 项
-        </Typography.Text>
-        <div style={{ flex: 1, overflowY: "auto" }} className="panel-scroll">
-          {collectedEntries.length ? (
-            collectedEntries.map((entry) => (
-              <div key={entry.label} className="step-item">
-                <Typography.Text strong style={{ fontSize: 13 }}>
-                  {entry.label}
-                </Typography.Text>
-                <div style={{ fontSize: 13, color: "#555", marginTop: 2 }}>{entry.value}</div>
-              </div>
-            ))
-          ) : (
-            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-              当前还没有收集到明确的规划信息。
-            </Typography.Text>
-          )}
-        </div>
-        {missingSlots.length ? (
-          <Alert
-            type="info"
-            showIcon
-            message="待补充信息"
-            description={missingSlots.join("、")}
-            style={{ fontSize: 12 }}
-          />
-        ) : null}
-      </div>
+      <PlanningRequirementsPanel
+        requirements={requirements}
+        missingSlots={missingSlots}
+      />
     );
   }
 
@@ -811,10 +544,7 @@ export function AITestPlanningPanel({
               aria-label={`删除会话 ${sessionList.find((item) => item.id === sessionId)?.title ?? `#${sessionId}`}`}
               onClick={async () => {
                 // Abort any ongoing SSE stream before deleting
-                if (abortRef.current) {
-                  abortRef.current.abort();
-                  abortRef.current = null;
-                }
+                abortStream();
                 setIsSending(false);
                 setIsGenerating(false);
                 setIsExecuting(false);
@@ -827,8 +557,7 @@ export function AITestPlanningPanel({
 
                 setIsBootstrapping(true);
                 try {
-                  await deletePlanningSession(sessionId);
-                  await handleSessionDeleted(sessionId);
+                  await deleteAndSelectSession(sessionId);
                   void messageApi.success("会话已删除");
                 } catch (err: unknown) {
                   void messageApi.error("删除会话失败: " + (err instanceof Error ? err.message : String(err)));
@@ -909,8 +638,7 @@ export function AITestPlanningPanel({
                           size="small"
                           danger
                           onClick={() => {
-                            abortRef.current?.abort();
-                            abortRef.current = null;
+                            abortStream();
                             if (sessionId) void cancelExecution(sessionId);
                           }}
                         >
@@ -1071,8 +799,7 @@ export function AITestPlanningPanel({
                 danger
                 shape="circle"
                 onClick={() => {
-                  abortRef.current?.abort();
-                  abortRef.current = null;
+                  abortStream();
                   if (isExecuting && sessionId) void cancelExecution(sessionId);
                 }}
                 style={{
@@ -1222,9 +949,7 @@ export function AITestPlanningPanel({
                     setTranscript((current) => [...current, progressMessage]);
 
                     try {
-                      const controller = new AbortController();
-                      abortRef.current = controller;
-                      await callSSE({
+                      await runStream({
                         url: `/api/v1/ai-planning/sessions/${sessionId}/execute`,
                         body: { draft_ids: draftIds },
                         onEvent: (_type, data) => handleStreamEvent(data as ExecutionStreamEvent),
@@ -1236,7 +961,6 @@ export function AITestPlanningPanel({
                           }
                           setIsExecuting(false);
                         },
-                        signal: controller.signal,
                       });
                     } catch (error) {
                       clearStreamingOnMessage(activeAssistantMessageIdRef.current);
@@ -1244,8 +968,6 @@ export function AITestPlanningPanel({
                         void messageApi.error("执行失败: " + (error instanceof Error ? error.message : String(error)));
                       }
                       setIsExecuting(false);
-                    } finally {
-                      abortRef.current = null;
                     }
                   }}
               >

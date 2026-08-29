@@ -4,28 +4,24 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { CasesPage } from "./CasesPage";
-import * as api from "../services/api";
+import * as caseApi from "../features/cases/api";
+import * as executionApi from "../features/executions/api";
+import * as projectApi from "../features/projects/api";
 import { renderWithProviders } from "../test/test-utils";
 
-vi.mock("../services/api", async () => {
-  const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
-  return {
-    ...actual,
-    getProjects: vi.fn(),
-    getCases: vi.fn(),
-    executeCase: vi.fn(),
-  };
-});
+vi.mock("../features/cases/api", () => ({ getCases: vi.fn() }));
+vi.mock("../features/executions/api", () => ({ executeCase: vi.fn() }));
+vi.mock("../features/projects/api", () => ({ getProjects: vi.fn() }));
 
 test("渲染用例列表并支持执行后跳转", async () => {
-  vi.mocked(api.getProjects).mockResolvedValue([
+  vi.mocked(projectApi.getProjects).mockResolvedValue([
     {
       id: 1,
       name: "默认项目",
       description: null,
     },
   ]);
-  vi.mocked(api.getCases).mockResolvedValue({
+  vi.mocked(caseApi.getCases).mockResolvedValue({
     items: [
       {
         id: 1,
@@ -48,7 +44,7 @@ test("渲染用例列表并支持执行后跳转", async () => {
     has_next: false,
     has_prev: false,
   });
-  vi.mocked(api.executeCase).mockResolvedValue({
+  vi.mocked(executionApi.executeCase).mockResolvedValue({
     id: 88,
     case_id: 1,
     case_name: "登录冒烟",
@@ -84,7 +80,7 @@ test("渲染用例列表并支持执行后跳转", async () => {
   await userEvent.click(within(caseCard as HTMLElement).getByRole("button", { name: /执\s*行/ }));
 
   await waitFor(() => {
-    expect(api.executeCase).toHaveBeenCalledWith(1, { actor_user_id: 1 });
+    expect(executionApi.executeCase).toHaveBeenCalledWith(1, { actor_user_id: 1 });
   });
   expect(await screen.findByText("detail-view")).toBeInTheDocument();
 });

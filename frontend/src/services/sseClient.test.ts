@@ -1,5 +1,6 @@
 import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
-import { callSSE, cancelExecution } from "./sseClient";
+import { cancelExecution } from "../features/planning/api";
+import { callSSE } from "../shared/api/sseClient";
 
 function createMockStream(chunks: string[]) {
   const encoder = new TextEncoder();
@@ -124,9 +125,13 @@ describe("cancelExecution", () => {
     } as Response);
 
     const result = await cancelExecution(5);
-    expect(fetch).toHaveBeenCalledWith("/api/v1/ai-planning/sessions/5/cancel", {
-      method: "POST",
-    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/ai-planning/sessions/5/cancel",
+      expect.objectContaining({
+        credentials: "include",
+        method: "POST",
+      }),
+    );
     expect(result).toEqual({ status: "cancelled" });
   });
 
@@ -137,6 +142,6 @@ describe("cancelExecution", () => {
       statusText: "Not Found",
     } as Response);
 
-    await expect(cancelExecution(999)).rejects.toThrow("HTTP 404");
+    await expect(cancelExecution(999)).rejects.toThrow("404 Not Found");
   });
 });
