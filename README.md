@@ -60,7 +60,7 @@ AI 增强的 Web UI 自动化测试平台。
 
 封杀所有 DOM 元素路径，让 AI 只使用 a11y tree 进行元素定位：
 
-- 新增 `format_a11y_nodes_for_prompt()` 函数，格式化为 `role="name"` 格式
+- 通过 `collect_a11y_nodes()` 采集结构化 role/name 节点并直接传入生成链
 - 移除 `elements` 和 `page_elements` 参数，只保留 `a11y_nodes`
 - target 必须使用 `button="Login"` 格式，禁止 XPath/CSS 选择器
 - 新增 `_clean_variable_format()` 清理 `${email}=value` 错误格式

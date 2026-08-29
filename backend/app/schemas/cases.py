@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
 from app.schemas.dsl import DSLCase, DSLCaseInputContract, DSLCaseOutputContract, DSLModel, DSLStep
 
@@ -40,22 +39,6 @@ class CaseListFilter(DSLModel):
     project_id: int | None = Field(default=None, ge=1)
     search: str | None = Field(default=None, max_length=200)
     created_by: int | None = Field(default=None, ge=1)
-
-
-class CaseListParams(DSLModel):
-    """Query parameters for listing test cases."""
-    project_id: int | None = Field(default=None, ge=1)
-    search: str | None = Field(default=None, max_length=200)
-    created_by: int | None = Field(default=None, ge=1)
-    page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100, description="Maximum 100 items per page")
-
-    @field_validator("page_size")
-    @classmethod
-    def validate_page_size(cls, v: int) -> int:
-        if v > 100:
-            raise ValueError("Page size cannot exceed 100")
-        return v
 
 
 class PaginatedCases(DSLModel):
