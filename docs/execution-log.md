@@ -2049,3 +2049,19 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 后端默认测试：491 passed、1 skipped、10 deselected。
   - 变更范围 Ruff `F401/F821`、Python compileall 和 `git diff --check` 通过。
 - 备注：P3 下一批拆 draft service，再拆 save-and-execute 与 analysis/retest。
+
+---
+
+## 2026-08-29 | P3 Draft 与 Context Service 拆分
+
+- 任务：将 Planning 草案生命周期和共享上下文构建移出总编排器。
+- 操作：
+  - 新增 `application/planning/draft_service.py`，承接草案生成、流式生成、状态更新、删除及自动草案 adapter。
+  - 新增 `application/planning/context_service.py`，承接会话状态、工具历史、anti-pattern 和执行错误上下文构建。
+  - AI Planning API 与 streaming bridge 直接依赖新 application services。
+  - `services.ai_planning` 删除对应实现，仅保留兼容导出。
+  - 测试替身改为 patch 实际实现模块，避免 facade 迁移后出现无效 mock。
+- 验证：
+  - Planning/Context/Analysis 定向测试：73 passed、1 skipped。
+  - 变更范围 Ruff `F401/F821` 与 `git diff --check` 通过。
+- 备注：下一批拆 save-and-execute 与 analysis/retest，并继续收敛 application ports。

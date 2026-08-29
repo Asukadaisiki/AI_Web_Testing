@@ -123,7 +123,7 @@ class TestInjectAutoContext:
     """Tests for _inject_auto_context."""
 
     def test_returns_transcript_unchanged_when_no_injection(self, db_session: Session) -> None:
-        from app.services.ai_planning import inject_auto_context
+        from app.application.planning.context_service import inject_auto_context
         from app.models import AIPlanningSession
 
         session_record = AIPlanningSession(
@@ -140,7 +140,7 @@ class TestInjectAutoContext:
         assert len(result) == 1
 
     def test_prepends_preamble_when_injection_needed(self, db_session: Session) -> None:
-        from app.services.ai_planning import inject_auto_context
+        from app.application.planning.context_service import inject_auto_context
         from app.models import AIPlanningSession, TestCaseRun
         from app.models.session_project import SessionProject
         from app.services import cases as case_service

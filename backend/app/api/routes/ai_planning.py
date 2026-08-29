@@ -18,6 +18,13 @@ from app.application.planning.project_context import (
     unlink_project_from_session,
 )
 from app.application.planning.conversation_service import send_planning_message
+from app.application.planning.context_service import inject_auto_context
+from app.application.planning.draft_service import (
+    delete_planning_draft,
+    generate_auto_drafts_for_scenarios,
+    generate_planning_drafts,
+    update_planning_draft_status,
+)
 from app.application.planning.session_service import (
     create_planning_session,
     delete_planning_session,
@@ -45,13 +52,8 @@ from app.schemas.ai_planning import (
 from app.schemas.dsl import DSLModel
 from pydantic import Field
 from app.services.ai_planning import (
-    delete_planning_draft,
-    generate_auto_drafts_for_scenarios,
-    generate_planning_drafts,
-    inject_auto_context,
     retest_cases,
     save_and_execute_selected_drafts,
-    update_planning_draft_status,
 )
 from app.services.ai_planning_streaming import (
     CancellationManager,

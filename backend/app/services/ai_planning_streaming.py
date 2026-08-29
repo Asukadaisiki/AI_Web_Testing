@@ -142,10 +142,8 @@ async def stream_planning_chat(
     from app.application.planning.conversation_service import (
         stream_planning_message,
     )
-    from app.services.ai_planning import (
-        generate_auto_drafts_for_scenarios,
-        inject_auto_context,
-    )
+    from app.application.planning.context_service import inject_auto_context
+    from app.application.planning.draft_service import generate_auto_drafts_for_scenarios
 
     logger.info("Starting planning chat stream for session %d", planning_session_id)
     async for event in _bridge_sync_generator(
@@ -170,7 +168,7 @@ async def stream_planning_drafts(
     actor_user_id: int,
 ) -> AsyncGenerator[dict, None]:
     """Bridge streaming draft generation to async WebSocket events."""
-    from app.services.ai_planning import stream_generate_planning_drafts
+    from app.application.planning.draft_service import stream_generate_planning_drafts
     from app.schemas.ai_planning import GenerateAIPlanningDraftsRequest
 
     if not isinstance(payload, GenerateAIPlanningDraftsRequest):

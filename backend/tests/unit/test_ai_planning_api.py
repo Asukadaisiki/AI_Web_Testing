@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app.application.planning import conversation_service
+from app.application.planning import conversation_service, draft_service
 from app.schemas.ai_planning import (
     AIPlanningPlan,
     AIPlanningRequirements,
@@ -317,8 +317,6 @@ def test_send_planning_message_records_tool_call_and_assistant_messages(client, 
 
 
 def test_generate_planning_drafts_creates_one_draft_per_selected_scenario(client, monkeypatch) -> None:
-    from app.services import ai_planning as ai_planning_service
-
     def fake_generate_dsl_case(session, payload):
         return GenerateDslResponse.model_validate(
             {
@@ -354,7 +352,7 @@ def test_generate_planning_drafts_creates_one_draft_per_selected_scenario(client
             }
         )
 
-    monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
+    monkeypatch.setattr(draft_service, "generate_dsl_case", fake_generate_dsl_case)
     monkeypatch.setattr(
         conversation_service,
         "run_planning_turn",
@@ -401,8 +399,6 @@ def test_generate_planning_drafts_creates_one_draft_per_selected_scenario(client
 
 
 def test_update_planning_draft_status_marks_imported(client, monkeypatch) -> None:
-    from app.services import ai_planning as ai_planning_service
-
     def fake_generate_dsl_case(session, payload):
         return GenerateDslResponse.model_validate(
             {
@@ -438,7 +434,7 @@ def test_update_planning_draft_status_marks_imported(client, monkeypatch) -> Non
             }
         )
 
-    monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
+    monkeypatch.setattr(draft_service, "generate_dsl_case", fake_generate_dsl_case)
     monkeypatch.setattr(
         conversation_service,
         "run_planning_turn",
@@ -542,9 +538,9 @@ def test_save_and_execute_persists_execution_summary_message(client, db_session,
             }
         )
 
-    monkeypatch.setattr(ai_planning_service, "generate_dsl_case", fake_generate_dsl_case)
+    monkeypatch.setattr(draft_service, "generate_dsl_case", fake_generate_dsl_case)
     monkeypatch.setattr(
-        ai_planning_service,
+        draft_service,
         "_load_a11y_nodes_for_scenario",
         lambda session, planning_session_id, scenario=None: [
             {"node_id": "e1", "role": "textbox", "name": "用户名",
