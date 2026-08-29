@@ -20,7 +20,7 @@ from app.schemas.executions import (
     ViewportSnapshot,
 )
 from app.runners import RunnerExecutionError, RunnerInterventionError
-from app.runners.playwright_runner import StepStreamEvent, execute_case_with_playwright_streaming
+from app.runners.playwright_runner import StepStreamEvent
 from app.schemas.executions import CaseExecutionRequest
 
 
@@ -36,7 +36,8 @@ def test_execute_case_success(client, monkeypatch) -> None:
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
+    def fake_execute_case_with_playwright_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None, input_values=None):
+        yield from ()
         assert case.name == "执行用例"
         assert execution_id == 1
         assert base_url == "http://example.com"
@@ -103,8 +104,8 @@ def test_execute_case_success(client, monkeypatch) -> None:
 
     monkeypatch.setattr(
         execution_service,
-        "execute_case_with_playwright",
-        fake_execute_case_with_playwright,
+        "execute_case_with_playwright_streaming",
+        fake_execute_case_with_playwright_streaming,
     )
 
     response = client.post(
@@ -154,7 +155,8 @@ def test_execute_case_uses_case_base_url_when_request_does_not_override(client, 
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
+    def fake_execute_case_with_playwright_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None, input_values=None):
+        yield from ()
         assert case.base_url == "https://case.example.com"
         assert execution_id == 1
         assert base_url == "https://case.example.com"
@@ -169,8 +171,8 @@ def test_execute_case_uses_case_base_url_when_request_does_not_override(client, 
 
     monkeypatch.setattr(
         execution_service,
-        "execute_case_with_playwright",
-        fake_execute_case_with_playwright,
+        "execute_case_with_playwright_streaming",
+        fake_execute_case_with_playwright_streaming,
     )
 
     response = client.post(
@@ -193,13 +195,14 @@ def test_execute_case_fails_early_when_relative_goto_has_no_case_base_url(client
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
+    def fake_execute_case_with_playwright_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None, input_values=None):
+        yield from ()
         raise AssertionError("runner should not be called when case base_url is missing")
 
     monkeypatch.setattr(
         execution_service,
-        "execute_case_with_playwright",
-        fake_execute_case_with_playwright,
+        "execute_case_with_playwright_streaming",
+        fake_execute_case_with_playwright_streaming,
     )
 
     response = client.post(
@@ -237,7 +240,8 @@ def test_execute_case_marks_needs_intervention_when_all_locator_tiers_fail(clien
         },
     )
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
+    def fake_execute_case_with_playwright_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None, input_values=None):
+        yield from ()
         raise RunnerInterventionError(
             "All locate tiers failed for target: 登录按钮",
             step_results=[
@@ -281,8 +285,8 @@ def test_execute_case_marks_needs_intervention_when_all_locator_tiers_fail(clien
 
     monkeypatch.setattr(
         execution_service,
-        "execute_case_with_playwright",
-        fake_execute_case_with_playwright,
+        "execute_case_with_playwright_streaming",
+        fake_execute_case_with_playwright_streaming,
     )
 
     response = client.post(
@@ -360,7 +364,8 @@ def test_list_executions_supports_filters_limit_offset_and_case_id(client, monke
         )
         created_cases.append(response.json()["id"])
 
-    def fake_execute_case_with_playwright(*, case, execution_id: int, base_url: str | None, correction_store=None, input_values=None):
+    def fake_execute_case_with_playwright_streaming(*, case, execution_id: int, base_url: str | None, cancel_event=None, correction_store=None, input_values=None):
+        yield from ()
         if case.name == "失败用例":
             raise RunnerExecutionError(
                 "boom",
@@ -386,8 +391,8 @@ def test_list_executions_supports_filters_limit_offset_and_case_id(client, monke
 
     monkeypatch.setattr(
         execution_service,
-        "execute_case_with_playwright",
-        fake_execute_case_with_playwright,
+        "execute_case_with_playwright_streaming",
+        fake_execute_case_with_playwright_streaming,
     )
 
     for case_id in created_cases:
@@ -1465,6 +1470,84 @@ def test_get_executions_overview_supports_scope_filters_and_automation_metrics(c
 # ---------------------------------------------------------------------------
 
 
+def test_sync_and_streaming_execution_share_final_result(
+    client,
+    monkeypatch,
+    db_session,
+) -> None:
+    create_response = client.post(
+        "/api/v1/cases",
+        json={
+            "project_id": 1,
+            "actor_user_id": 1,
+            "name": "统一事件源用例",
+            "base_url": "https://stream.example.com",
+            "steps": [{"action": "goto", "value": "/home"}],
+        },
+    )
+    case_id = create_response.json()["id"]
+
+    def fake_streaming(**_kwargs):
+        yield StepStreamEvent(
+            type="step_start",
+            step_index=0,
+            action="goto",
+            value="/home",
+        )
+        yield StepStreamEvent(
+            type="step_complete",
+            step_index=0,
+            action="goto",
+            status="passed",
+            duration_ms=30,
+        )
+        return [
+            StepExecutionEvidence(
+                step_index=0,
+                action="goto",
+                value="/home",
+                status="passed",
+                duration_ms=30,
+            )
+        ]
+
+    monkeypatch.setattr(
+        execution_service,
+        "execute_case_with_playwright_streaming",
+        fake_streaming,
+    )
+
+    sync_detail = execution_service.execute_case(
+        db_session,
+        case_id,
+        CaseExecutionRequest(actor_user_id=1),
+    )
+    stream = execution_service.execute_case_streaming(
+        db_session,
+        case_id,
+        CaseExecutionRequest(actor_user_id=1),
+    )
+    stream_events = []
+    try:
+        while True:
+            stream_events.append(next(stream))
+    except StopIteration as stop:
+        stream_detail = stop.value
+
+    assert [event.type for event in stream_events] == [
+        "step_start",
+        "step_complete",
+    ]
+    assert sync_detail.status == stream_detail.status == "passed"
+    assert [
+        step.model_dump(mode="json")
+        for step in sync_detail.report.steps
+    ] == [
+        step.model_dump(mode="json")
+        for step in stream_detail.report.steps
+    ]
+
+
 def test_execute_case_streaming_yields_step_events_and_returns_detail(client, monkeypatch, db_session) -> None:
     """execute_case_streaming should yield StepStreamEvent per step, return detail via StopIteration."""
     create_response = client.post(
@@ -1583,3 +1666,11 @@ def test_execute_case_streaming_cancellation_raises_error(client, monkeypatch, d
 
     assert len(events) == 1
     assert events[0].type == "step_start"
+    execution = (
+        db_session.query(TestCaseRun)
+        .filter(TestCaseRun.case_id == case_id)
+        .one()
+    )
+    assert execution.status == "cancelled"
+    assert execution.finished_at is not None
+    assert execution.report["steps"] == []

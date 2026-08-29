@@ -16,6 +16,7 @@ const STATUS_ICON: Record<ExecutionStatus, string> = {
   failed: "❌",
   running: "⏳",
   needs_intervention: "⚠️",
+  cancelled: "⏹",
 };
 
 function formatTime(iso: string | null) {

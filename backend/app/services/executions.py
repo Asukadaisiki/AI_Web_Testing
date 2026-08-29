@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
-from hashlib import sha1
 import hashlib
 import re
 from threading import Event
@@ -18,7 +17,7 @@ from app.locators.ai_visual import reset_ai_visual_runtime_state
 from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.models import TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
-from app.runners import RunnerExecutionError, RunnerInterventionError, execute_case_with_playwright
+from app.runners import RunnerExecutionError, RunnerInterventionError
 from app.runners.playwright_runner import RunnerCancelledError, StepStreamEvent, execute_case_with_playwright_streaming
 from app.schemas.dsl import DSLCase, GotoStep
 from app.schemas.executions import (
@@ -59,11 +58,12 @@ class ExecutionFailureDescriptor:
 
 
 def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) -> StoredCaseExecutionDetail:
-    record = session.get(TestCase, case_id)
-    if record is None:
-        raise EntityNotFoundError(f"Case {case_id} not found.")
-    _ensure_user_exists(session, payload.actor_user_id)
-    return _execute_case_record(session, record, payload)
+    stream = execute_case_streaming(session, case_id, payload)
+    while True:
+        try:
+            next(stream)
+        except StopIteration as stop:
+            return stop.value
 
 
 def execute_case_streaming(
@@ -142,9 +142,15 @@ def execute_case_streaming(
         execution.status = "failed"
         execution.report = report.model_dump(mode="json")
         execution.error_message = str(exc)
-    except RunnerCancelledError:
-        execution.status = "failed"
+    except RunnerCancelledError as exc:
+        step_results = [_with_artifact_url(step) for step in exc.step_results]
+        report = build_execution_report(status="failed", steps=step_results)
+        execution.status = "cancelled"
+        execution.report = report.model_dump(mode="json")
         execution.error_message = "Execution cancelled by user."
+        execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
+        session.add(execution)
+        session.commit()
         raise
     execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
     session.add(execution)
@@ -152,84 +158,6 @@ def execute_case_streaming(
     session.refresh(execution)
     return _to_execution_detail(session, execution, case_name=record.name)
 
-
-def _execute_case_record(
-    session: Session,
-    record: TestCase,
-    payload: CaseExecutionRequest,
-    *,
-    case_override: DSLCase | None = None,
-    precomputed_error: StepExecutionEvidence | None = None,
-) -> StoredCaseExecutionDetail:
-    normalized_case = case_override or DSLCase.model_validate(record.dsl)
-
-    execution = TestCaseRun(
-        case_id=record.id,
-        project_id=record.project_id,
-        triggered_by=payload.actor_user_id,
-        status="running",
-    )
-    session.add(execution)
-    session.commit()
-    session.refresh(execution)
-
-    effective_base_url = payload.base_url or normalized_case.base_url
-    missing_base_url_error = _build_missing_base_url_error(normalized_case, effective_base_url)
-
-    # Merge input_contract defaults with user-provided input_values
-    merged_input_values: dict[str, str] = {}
-    for contract in normalized_case.input_contract:
-        if contract.value is not None:
-            merged_input_values[contract.context_key] = contract.value
-    if payload.input_values:
-        merged_input_values.update(payload.input_values)
-
-    try:
-        if precomputed_error is not None:
-            report = build_execution_report(status="failed", steps=[_with_artifact_url(precomputed_error)])
-            execution.status = "failed"
-            execution.report = report.model_dump(mode="json")
-            execution.error_message = precomputed_error.error_message
-        elif missing_base_url_error is not None:
-            report = build_execution_report(status="failed", steps=[missing_base_url_error])
-            execution.status = "failed"
-            execution.report = report.model_dump(mode="json")
-            execution.error_message = missing_base_url_error.error_message
-        else:
-            reset_ai_visual_runtime_state()
-            step_results = execute_case_with_playwright(
-                case=normalized_case,
-                execution_id=execution.id,
-                base_url=effective_base_url,
-                correction_store=SQLAlchemyCorrectionStore(session),
-                input_values=merged_input_values,
-            )
-            step_results = [_with_artifact_url(step) for step in step_results]
-            has_failure = any(s.status in ("failed", "cascade_blocked") for s in step_results)
-            report = build_execution_report(
-                status="failed" if has_failure else "passed",
-                steps=step_results,
-            )
-            execution.status = "failed" if has_failure else "passed"
-            execution.report = report.model_dump(mode="json")
-            execution.error_message = None
-    except RunnerInterventionError as exc:
-        step_results = [_with_artifact_url(step) for step in exc.step_results]
-        report = build_execution_report(status="failed", steps=step_results)
-        execution.status = "needs_intervention"
-        execution.report = report.model_dump(mode="json")
-        execution.error_message = str(exc)
-    except RunnerExecutionError as exc:
-        step_results = [_with_artifact_url(step) for step in exc.step_results]
-        report = build_execution_report(status="failed", steps=step_results)
-        execution.status = "failed"
-        execution.report = report.model_dump(mode="json")
-        execution.error_message = str(exc)
-    execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
-    session.add(execution)
-    session.commit()
-    session.refresh(execution)
-    return _to_execution_detail(session, execution, case_name=record.name)
 
 
 def list_case_executions(session: Session, case_id: int) -> list[StoredCaseExecutionSummary]:

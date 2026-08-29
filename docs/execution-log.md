@@ -2081,3 +2081,20 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - P3 定向测试：61 passed。
   - 变更范围 Ruff `F401/F821` 和 `git diff --check` 通过。
 - 备注：P3 用例服务拆分完成；兼容 facade 保留一个迁移周期，下一阶段进入 P4 单执行事件源。
+
+---
+
+## 2026-08-29 | P4 单执行事件源与取消终态
+
+- 任务：统一同步与流式 Case 执行核心，消除重复事务和报告构建路径。
+- 操作：
+  - `execute_case()` 改为消费 `execute_case_streaming()` 至终态，同步与流式入口共享 runner、状态迁移和 evidence 持久化。
+  - 删除重复 `_execute_case_record()` 及同步 Playwright runner 依赖。
+  - 增加同步/流式等价测试，比较最终状态、步骤顺序和完整 evidence。
+  - 将 `cancelled` 纳入前后端执行状态合同，并在取消异常重新抛出前持久化报告与结束时间。
+  - 补齐执行详情和报告中心的取消状态展示。
+- 验证：
+  - Execution 定向测试：19 passed。
+  - 前端测试：64 passed。
+  - 变更范围 Ruff `F401/F821` 通过。
+- 备注：Runner 的流式解释器现为唯一执行源；报告继续只读取 `TestCaseRun.report` 持久化 JSON。

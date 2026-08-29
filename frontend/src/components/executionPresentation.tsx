@@ -8,12 +8,14 @@ export function renderExecutionStatus(status: ExecutionStatus) {
     failed: "error",
     running: "processing",
     needs_intervention: "warning",
+    cancelled: "default",
   };
   const labelMap: Record<ExecutionStatus, string> = {
     passed: "通过",
     failed: "失败",
     running: "运行中",
     needs_intervention: "待人工介入",
+    cancelled: "已取消",
   };
   return (
     <Tag className="status-tag" color={colorMap[status]}>

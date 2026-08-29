@@ -10,7 +10,13 @@ from pydantic import Field
 from app.schemas.dsl import DSLModel
 
 
-ExecutionStatus = Literal["running", "passed", "failed", "needs_intervention"]
+ExecutionStatus = Literal[
+    "running",
+    "passed",
+    "failed",
+    "needs_intervention",
+    "cancelled",
+]
 ReportScopeType = Literal["global", "project", "case"]
 FailureCategory = Literal["configuration", "locator", "assertion", "navigation", "network", "runner"]
 

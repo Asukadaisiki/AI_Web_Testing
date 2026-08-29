@@ -967,3 +967,13 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 - 建议：统一使用公开 `write()` 合同，并通过注入的 event-log port 增加流式错误路径测试。
 - 处理：将事件日志改为 `PlanningEventLogFactory` 注入，所有事件统一调用 `write()`。
 - 验证：新增无有效草案的流式事件日志合同测试，确认 error 事件写入并 flush。
+
+### AUDIT-20260829-14 | 取消执行状态未持久化
+
+- 状态：fixed
+- 严重度：high
+- 位置：`backend/app/services/executions.py`
+- 描述：流式执行捕获 `RunnerCancelledError` 后仅修改内存对象并立即重新抛出，未提交结束状态、时间和已有 evidence，刷新后记录仍可能显示 `running`。
+- 建议：在重新抛出取消异常前持久化 `cancelled` 终态和已有步骤报告。
+- 处理：扩展执行状态合同，取消时保存 report、error、finished_at 并提交事务。
+- 验证：取消执行测试断言数据库状态为 `cancelled`、结束时间存在且报告可读取。

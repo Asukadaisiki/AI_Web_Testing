@@ -1,4 +1,9 @@
-export type ExecutionStatus = "running" | "passed" | "failed" | "needs_intervention";
+export type ExecutionStatus =
+  | "running"
+  | "passed"
+  | "failed"
+  | "needs_intervention"
+  | "cancelled";
 export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
 export type OverviewWindowDays = 7 | 14 | 30;
 export type ReportScopeType = "global" | "project" | "case";
