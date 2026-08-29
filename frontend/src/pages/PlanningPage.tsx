@@ -15,9 +15,6 @@ export function PlanningPage() {
     <AITestPlanningPanel
       aiSettings={aiSettingsQuery.data ?? null}
       sessionId={Number(sessionId)}
-      onImportDraft={async () => {
-        /* handled within panel via session projects */
-      }}
     />
   );
 }

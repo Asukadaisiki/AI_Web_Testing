@@ -194,7 +194,7 @@ test("展示动态进度、工具调用并支持直接生成方案", async () =>
     });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();
@@ -400,7 +400,7 @@ test("可以生成草案并展示审阅操作", async () => {
   });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();
@@ -478,7 +478,7 @@ test("删除当前会话后会切换到剩余会话", async () => {
   }));
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} />,
   );
 
   await waitFor(() => {
@@ -564,7 +564,7 @@ test("保存并执行后会重新加载会话详情并展示持久化的执行�
   });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();
@@ -681,7 +681,7 @@ test("保存并执行改为流式 WebSocket 并在 done 后回读会话详情", 
   });
 
   renderWithProviders(
-    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} onImportDraft={vi.fn()} />,
+    <AITestPlanningPanel aiSettings={aiSettings} sessionId={5} />,
   );
 
   expect(await screen.findByText("AI Planning")).toBeInTheDocument();

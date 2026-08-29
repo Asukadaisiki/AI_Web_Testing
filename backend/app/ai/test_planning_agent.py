@@ -6,9 +6,7 @@ import json
 import logging
 import re
 import time
-import traceback as _traceback
 from typing import Any, Generator
-from urllib import request
 
 import httpx
 from sqlalchemy import select
@@ -17,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.ai.planning_tools import execute_tool
 from app.ai.test_planning_prompts import FORCE_GENERATE_HINT, FORCE_GENERATE_MARKER, build_system_prompt
 from app.core.config import get_settings
-from app.core.structured_logging import LogContext, get_structured_logger, Timer
+from app.core.structured_logging import get_structured_logger
 from app.schemas.ai_planning import (
     AIPlanningPlan,
     AIPlanningRequirements,
@@ -1163,21 +1161,6 @@ def _should_enable_thinking_mode(*, base_url: str, model: str) -> bool:
     )
 
 
-def _log_cache_usage(raw_payload: dict, model: str) -> None:
-    """Log DeepSeek KV cache hit/miss metrics from the response usage."""
-    usage = raw_payload.get("usage", {})
-    hit = usage.get("prompt_cache_hit_tokens", 0)
-    miss = usage.get("prompt_cache_miss_tokens", 0)
-    total = usage.get("prompt_tokens", 0)
-    if hit or miss:
-        ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
-        logger.info(
-            "DS cache: model=%s hit=%d miss=%d ratio=%.0f%% total_prompt=%d completion=%d",
-            model, hit, miss, ratio,
-            total, usage.get("completion_tokens", 0),
-        )
-
-
 def _build_cache_progress_message(
     tool_calls: list[AIPlanningToolCall],
 ) -> str | None:
@@ -1201,40 +1184,6 @@ def _build_cache_progress_message(
         lines.append(f"  - {e['url']} ({e['count']} nodes)")
     lines.append("Do NOT call explore_page/explore_flow on these URLs unless state changed.")
     return "\n".join(lines)
-
-
-def _call_planning_llm(
-    *,
-    messages: list[dict[str, Any]],
-    api_key: str,
-    model: str,
-    base_url: str,
-    timeout_seconds: float,
-) -> str:
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-    }
-    if _should_enable_thinking_mode(base_url=base_url, model=model):
-        payload["thinking"] = {"type": "enabled"}
-        payload["max_tokens"] = 65536
-    else:
-        payload["temperature"] = 0.1
-        payload["response_format"] = {"type": "json_object"}
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
-    http_request = request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with request.urlopen(http_request, timeout=timeout_seconds) as response:
-        raw_payload = json.loads(response.read().decode("utf-8"))
-    _log_cache_usage(raw_payload, model)
-    return _extract_message_content(raw_payload)
 
 
 def _stream_planning_llm(
@@ -2015,28 +1964,6 @@ def _build_analysis_message(analysis: Any) -> str:
 
 def _collect_missing_slots(requirements: AIPlanningRequirements) -> list[str]:
     return [slot for slot in REQUIRED_REQUIREMENT_SLOTS if _slot_is_missing(requirements, slot)]
-
-
-def _extract_message_content(payload: dict[str, Any]) -> str:
-    message = payload.get("choices", [{}])[0].get("message", {})
-    content = message.get("content", "")
-    if isinstance(content, str) and content.strip():
-        return content
-    if isinstance(content, list):
-        text_parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
-                text_parts.append(item["text"])
-        result = "\n".join(text_parts)
-        if result.strip():
-            return result
-    reasoning = message.get("reasoning_content", "")
-    if isinstance(reasoning, str) and reasoning.strip():
-        logger.warning("LLM produced empty content; using reasoning_content as fallback (len=%d)", len(reasoning))
-        return reasoning
-    if isinstance(content, str):
-        return content
-    return ""
 
 
 def _extract_json_object(response_text: str) -> str:

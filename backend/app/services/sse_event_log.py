@@ -64,11 +64,6 @@ class EventLogWriter:
                 return None
         return self._session
 
-    def with_message_id(self, message_id: int) -> "EventLogWriter":
-        """Return self with updated message_id (for chaining)."""
-        self._message_id = message_id
-        return self
-
     def write(self, event_type: str, event_data: dict[str, Any]) -> None:
         """Persist one event.  No-op if logging is disabled.
 

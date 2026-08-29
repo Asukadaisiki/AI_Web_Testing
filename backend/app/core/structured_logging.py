@@ -4,16 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-import time
-from contextvars import ContextVar
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
-
-# ── Context vars for automatic trace injection ──────────────────────────────
-
-_current_session_id: ContextVar[int | None] = ContextVar("session_id", default=None)
-_current_execution_id: ContextVar[int | None] = ContextVar("execution_id", default=None)
 
 # ── Category constants ──────────────────────────────────────────────────────
 
@@ -21,27 +13,6 @@ CATEGORY_AI_THINKING = "ai_thinking"
 CATEGORY_TOOL_CALL = "tool_call"
 CATEGORY_DSL_EXECUTION = "dsl_execution"
 CATEGORY_LOCATOR_FALLBACK = "locator_fallback"
-
-
-# ── LogContext ──────────────────────────────────────────────────────────────
-
-@contextmanager
-def LogContext(
-    *,
-    session_id: int | None = None,
-    execution_id: int | None = None,
-):
-    """Set session_id / execution_id for all structured logs in this scope."""
-    tokens = []
-    if session_id is not None:
-        tokens.append(_current_session_id.set(session_id))
-    if execution_id is not None:
-        tokens.append(_current_execution_id.set(execution_id))
-    try:
-        yield
-    finally:
-        for t in tokens:
-            t.var.set(t.old_value)
 
 
 # ── Structured JSON Formatter ──────────────────────────────────────────────
@@ -58,8 +29,8 @@ class StructuredJsonFormatter(logging.Formatter):
 
         # Build trace
         trace: dict[str, Any] = {}
-        sid = getattr(record, "session_id", None) or _current_session_id.get(None)
-        eid = getattr(record, "execution_id", None) or _current_execution_id.get(None)
+        sid = getattr(record, "session_id", None)
+        eid = getattr(record, "execution_id", None)
         if sid is not None:
             trace["session_id"] = sid
         if eid is not None:
@@ -178,18 +149,3 @@ class CategoryLogger:
 def get_structured_logger(name: str) -> CategoryLogger:
     """Get a CategoryLogger for the given module name."""
     return CategoryLogger(logging.getLogger(name))
-
-
-# ── Timing helper ──────────────────────────────────────────────────────────
-
-class Timer:
-    """Simple timer for measuring duration in ms."""
-
-    def __init__(self) -> None:
-        self._start: float = 0.0
-
-    def start(self) -> None:
-        self._start = time.perf_counter()
-
-    def elapsed_ms(self) -> int:
-        return int((time.perf_counter() - self._start) * 1000)

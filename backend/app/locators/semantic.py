@@ -618,19 +618,6 @@ def _build_rejected_reasons(
     return rejected_reasons
 
 
-def _candidate_matches_requirements(
-    candidate: LocatorCandidateEvidence,
-    *,
-    require_visible: bool,
-    require_enabled: bool,
-) -> bool:
-    return not _build_rejected_reasons(
-        candidate,
-        require_visible=require_visible,
-        require_enabled=require_enabled,
-    )
-
-
 def _resolve_failure_reason(
     candidates: list[LocatorCandidateEvidence],
     *,

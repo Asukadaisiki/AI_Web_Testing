@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import urlunparse, urlparse, parse_qs, urlencode
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.structured_logging import get_structured_logger
@@ -24,12 +24,10 @@ from app.schemas.ai_planning import (
     AIPlanningSession as AIPlanningSessionSchema,
     AIPlanningSessionDetail,
     AIPlanningSessionSummary,
-    AIPlanningToolCall,
     AIPlanningTurnResponse,
     CreateAIPlanningSessionRequest,
     ExecutionSummaryResult,
     GenerateAIPlanningDraftsRequest,
-    LinkProjectRequest,
     ProjectSummaryInSession,
     SavedCaseResult,
     UpdateAIPlanningDraftStatusRequest,
@@ -37,7 +35,7 @@ from app.schemas.ai_planning import (
 from app.schemas.cases import CaseCreateRequest
 from app.schemas.dsl import GenerateDslRequest
 from app.schemas.executions import CaseExecutionRequest
-from app.services.cases import EntityNotFoundError, _ensure_project_member, create_case
+from app.services.cases import EntityNotFoundError, create_case
 from app.services.dsl import generate_dsl_case
 from app.services.executions import execute_case, execute_case_streaming
 
@@ -254,8 +252,6 @@ def stream_planning_message(
     session_factory=None,
 ):
     """Generator: save user msg, stream AI turn, save AI msg, yield events."""
-    from typing import Generator
-
     start_time = time.monotonic()
     logger.info("[session:%d] Planning message stream start, content_len=%d", planning_session_id, len(content))
 
@@ -2454,21 +2450,6 @@ def ensure_project_member_for_session_projects(
             ))
 
     session.commit()
-
-
-def _ensure_project_access(session: Session, *, project_id: int, actor_user_id: int) -> None:
-    if session.get(Project, project_id) is None:
-        raise EntityNotFoundError(f"Project {project_id} not found.")
-    _ensure_project_member(session, project_id, actor_user_id)
-
-
-def _ensure_case_access(session: Session, *, case_id: int, project_id: int, actor_user_id: int) -> None:
-    case_record = session.get(TestCase, case_id)
-    if case_record is None:
-        raise EntityNotFoundError(f"Case {case_id} not found.")
-    if case_record.project_id != project_id:
-        raise EntityNotFoundError(f"Case {case_id} does not belong to project {project_id}.")
-    _ensure_project_member(session, project_id, actor_user_id)
 
 
 def _normalize_base_url(requirements_json: dict) -> str | None:

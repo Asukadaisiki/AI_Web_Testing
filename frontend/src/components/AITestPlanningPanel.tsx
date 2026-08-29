@@ -7,13 +7,10 @@ import {
   createPlanningSession,
   deletePlanningDraft,
   deletePlanningSession,
-  generatePlanningDrafts,
   getPlanningSession,
   getSessionEvents,
   listPlanningSessions,
   saveAndExecuteDrafts,
-  sendPlanningMessage,
-  updatePlanningDraftStatus,
 } from "../services/api";
 import { callSSE, cancelExecution } from "../services/sseClient";
 import type {
@@ -22,7 +19,6 @@ import type {
   AIPlanningPlan,
   AIPlanningRequirements,
   AIPlanningSessionSummary,
-  AIPlanningToolCall,
   AISettings,
   DSLCaseInputContract,
   DSLCaseOutputContract,
@@ -41,8 +37,6 @@ type AITestPlanningPanelProps = {
   currentSteps?: DSLStep[] | null;
   currentInputContract?: DSLCaseInputContract[] | null;
   currentOutputContract?: DSLCaseOutputContract[] | null;
-  onImportDraft: (draft: AIPlanningDraft) => void | Promise<void>;
-  draftImportLabel?: string;
 };
 
 type RequirementFieldMeta = {
@@ -93,18 +87,6 @@ function createOptimisticMessage(
     structured_payload: structuredPayload ?? null,
     created_at: new Date().toISOString(),
   };
-}
-
-function buildToolMessages(sessionId: number, toolCalls: AIPlanningToolCall[]) {
-  return toolCalls.map((toolCall) =>
-    createOptimisticMessage(
-      sessionId,
-      "assistant",
-      "tool_call",
-      `调用工具：${toolCall.tool}`,
-      { type: "tool_call", ...toolCall },
-    ),
-  );
 }
 
 function applyStreamEventToContent(currentContent: string, event: ExecutionStreamEvent): string {
@@ -161,8 +143,6 @@ export function AITestPlanningPanel({
   currentSteps,
   currentInputContract,
   currentOutputContract,
-  onImportDraft,
-  draftImportLabel,
 }: AITestPlanningPanelProps) {
   const [messageApi, contextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -737,12 +717,6 @@ export function AITestPlanningPanel({
       abortRef.current = null;
       setIsGenerating(false);
     }
-  }
-
-  async function handleImportDraft(draft: AIPlanningDraft) {
-    await onImportDraft(draft);
-    const updatedDraft = await updatePlanningDraftStatus(draft.id, { status: "imported" });
-    setDrafts((current) => current.map((item) => (item.id === draft.id ? updatedDraft : item)));
   }
 
   function renderLeftPanel() {

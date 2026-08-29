@@ -7,11 +7,10 @@ import re
 from pathlib import Path
 from threading import Event
 from time import perf_counter
-from types import GeneratorType
 from typing import Generator, Literal
 from urllib.parse import urljoin
 
-from app.core.structured_logging import LogContext, get_structured_logger
+from app.core.structured_logging import get_structured_logger
 
 logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)

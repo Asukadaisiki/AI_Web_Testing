@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -74,23 +74,6 @@ _FIND_DISMISS_BUTTON_SCRIPT = """
   return null;
 }
 """
-
-# Script to check if a point on the page is obscured
-_IS_POINT_OBSCURED_SCRIPT = """
-([x, y, excludeTag, excludeText]) => {
-  const hits = document.elementsFromPoint(x, y);
-  for (const el of hits) {
-    const tag = el.tagName.toLowerCase();
-    const text = (el.innerText || '').slice(0, 50);
-    if (tag === excludeTag && text.startsWith(excludeText)) continue;
-    if (tag === 'html' || tag === 'body') continue;
-    // target element or its children — skip
-    return false;
-  }
-  return true;
-}
-"""
-
 
 # ---------------------------------------------------------------------------
 # Data structures
