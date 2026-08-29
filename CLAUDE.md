@@ -114,4 +114,4 @@ frontend/src/
 ## Project Skills
 
 - **e2e-testing-workflow** (`.claude/skills/e2e-testing-workflow.md`): E2E 手动测试完整链路 — 启动系统 → AI 会话规划 → 保存执行 DSL → 分析报告 → 用户反馈迭代。当用户说 "测试平台"、"E2E 测试"、"手动测试" 时自动触发。
-- **e2e-brand-filter-cart** (`.claude/skills/e2e-brand-filter-cart.md`): 品牌筛选购物车 E2E 测试场景。
+
