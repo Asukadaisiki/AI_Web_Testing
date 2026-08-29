@@ -23,9 +23,6 @@ export default defineConfig({
           if (!id.includes("node_modules")) {
             return undefined;
           }
-          if (id.includes("node_modules/echarts")) {
-            return "charts-vendor";
-          }
           if (
             id.includes("node_modules/react") ||
             id.includes("node_modules/react-dom") ||

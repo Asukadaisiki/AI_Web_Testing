@@ -109,22 +109,12 @@ a {
   text-align: center;
 }
 
-.step-card {
-  height: 100%;
-}
-
 .evidence-card {
   border-radius: 12px;
 }
 
 .evidence-card .ant-card-body {
   min-width: 0;
-}
-
-.step-card img {
-  width: 100%;
-  border-radius: 10px;
-  border: 1px solid #d9e2f0;
 }
 
 .step-screenshot-frame {
@@ -157,17 +147,6 @@ a {
   border-radius: 10px;
   color: #6f7f97;
   background: #f9fbfe;
-}
-
-.overview-chart {
-  width: 100%;
-  min-height: 240px;
-}
-
-.execution-thumbnail {
-  object-fit: cover;
-  border-radius: 8px;
-  border: 1px solid #d9e2f0;
 }
 
 @media (max-width: 900px) {

@@ -76,7 +76,7 @@ frontend/src/
   services/
     api.ts                   # REST API client (fetch wrappers)
     sseClient.ts             # Generic SSE client (POST + ReadableStream, with AbortSignal)
-  layouts/                   # AppLayout, NotebookLMLayout (three-column layout)
+  layouts/                   # NotebookLMLayout (three-column layout)
   types/api.ts               # TypeScript type definitions for API contracts
 ```
 
