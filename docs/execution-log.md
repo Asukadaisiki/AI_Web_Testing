@@ -2146,3 +2146,20 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - `git fetch origin --prune`。
   - `git reset --hard origin/main`。
 - 验证：本地 `main` 与 `origin/main` 一致（`4719f1e`），无未提交跟踪文件差异；30 个未跟踪 `docs/` 文件保持不变。
+
+---
+
+## 2026-08-30 | P0-P5 重构成果复核与代码质量评估
+
+- 任务：基于真实代码与动态测试检查 P0-P5 重构完成度，评估当前代码质量（不只看 md 结论）。
+- 操作：
+  - 检查 `git log`/工作树：P0-P5 各阶段提交存在，`main` 与 `origin/main` 对齐（`5ec68ec`），工作树干净。
+  - 运行后端默认测试、前端测试与构建；核对 Alembic 迁移链、Planning 兼容 facade、执行单事件源、清理脚本保护、locator 调试路由注册测试。
+  - 交叉检查删除门禁：`locator_confidence.py`、`AppLayout.tsx`、`echarts`、`test_dsl.json`、旧 preflight、旧同步 Planning LLM、AI selector cache 等均已删除；休眠能力清单已建立。
+- 验证：
+  - `uv run pytest -q`：1 failed、492 passed、1 skipped、10 deselected；失败为本地 `backend/.env` 中 `ENABLE_AI_VISUAL_LOCATE=true` 污染 `test_ai_visual_locate_default_is_disabled`。
+  - `uv run alembic heads`：唯一 head `20260829_0026`；`alembic history` 链条连续无断链。
+  - `npm test -- --run`：8 个测试文件通过、1 个文件加载失败（`services/api.test.ts`），根因是 `services/api.ts:7` 引用不存在的 `features/reports/api`。
+  - `npm run build`：失败，错误为 `TS2307`（缺少 `features/reports/api`）与 `TS2305`（barrel 未导出 `getReportPreference/updateReportPreference`）。
+- 结论：P0-P4 完成度较高，Planning facade 已缩到 72 行、执行同步入口复用流式生成器、清理脚本默认 dry-run 且带保护；P5 前端按域拆分遗漏 `features/reports` 域，导致前端测试与构建全红。
+- 发现：本次复核新发现 2 个缺陷，已记录到 `docs/bug-log.md`（AUDIT-20260830-17、AUDIT-20260830-18）。

@@ -997,3 +997,23 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 - 建议：只接受单斜杠开头且不含反斜杠的站内路径，其余回退到固定工作台。
 - 处理：新增 `getSafeDestination()` 并在登录前统一归一化恢复目标。
 - 验证：测试覆盖协议相对路径、反斜杠路径和合法站内路径。
+
+### AUDIT-20260830-17 | P5 拆分后 `services/api.ts` 引用不存在的 `features/reports/api`
+
+- 状态：open
+- 严重度：high
+- 位置：`frontend/src/services/api.ts:7`、`frontend/src/services/api.test.ts`
+- 描述：P5 提交 `7cd1fd9` 将业务 API 拆到 `features/*` 后，`services/api.ts` 保留兼容 barrel 并 `export * from "../features/reports/api"`，但 `features/reports/` 从未创建；同时 `api.test.ts` 仍从 barrel 导入 `getReportPreference/updateReportPreference`（旧 `services/api.ts` 中的函数），拆分时遗漏迁移。
+- 复现：`cd frontend && npm test -- --run`（`api.test.ts` 加载失败）；`cd frontend && npm run build`（`TS2307` / `TS2305`）。
+- 影响：前端测试与构建均失败，无法通过 P1 门禁；report preference API 在前端无域归属。
+- 建议：创建 `features/reports/api.ts` 并迁移 `getReportPreference/updateReportPreference`，或从 barrel 移除 reports 导出并把测试改为从正确模块导入；同时补 reports domain 测试。
+
+### AUDIT-20260830-18 | 本地 `backend/.env` 含明文 API 凭据并破坏默认测试门禁
+
+- 状态：open
+- 严重度：medium
+- 位置：`backend/.env`
+- 描述：本地 `.env` 仍含 `VLM_API_KEY`、`AI_DSL_API_KEY`、`AI_PLANNING_API_KEY` 明文凭据，且 `ENABLE_AI_VISUAL_LOCATE=true`。`test_ai_visual_locate_default_is_disabled` 通过 `_load_env_file` 读取 `.env` 时被污染，默认测试 1 失败。
+- 复现：`cd backend && uv run pytest -q` 观察 `test_config.py::test_ai_visual_locate_default_is_disabled` 失败；`cat backend/.env` 可见明文密钥。
+- 影响：本地测试门禁不稳定；明文凭据留在工作树（虽被 gitignore，但存在本地泄露风险）。
+- 建议：轮换这些凭据；本地测试应隔离 `.env`（如 conftest 覆盖/删除 AI 开关与密钥，或测试设置 `APP_ENV=test` 跳过加载）；`.env` 仅保留不含密钥的本地模板。
