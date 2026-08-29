@@ -22,6 +22,7 @@ class ProjectSummaryInSession(DSLModel):
     id: int = Field(ge=1)
     name: str
     description: str | None = None
+    is_active: bool = False
 
 
 class LinkProjectRequest(DSLModel):
@@ -132,6 +133,7 @@ class AIPlanningPlan(DSLModel):
 class AIPlanningSession(DSLModel):
     id: int = Field(ge=1)
     actor_user_id: int = Field(ge=1)
+    active_project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=200)
     status: AIPlanningSessionStatus
@@ -146,6 +148,7 @@ class AIPlanningSession(DSLModel):
 
 class AIPlanningSessionSummary(DSLModel):
     id: int = Field(ge=1)
+    active_project_id: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=200)
     status: AIPlanningSessionStatus
     created_at: datetime

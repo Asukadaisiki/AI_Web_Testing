@@ -37,12 +37,13 @@ export function SessionProjectPanel({ sessionId, onProjectsChange }: SessionProj
   const unlinkedProjects = (allProjectsQuery.data ?? []).filter((p) => !linkedIds.has(p.id));
 
   async function handleLink(projectId: number) {
+    const alreadyLinked = linkedIds.has(projectId);
     setLinking(true);
     try {
       await linkProjectToSession(sessionId, { project_id: projectId });
       queryClient.invalidateQueries({ queryKey: ["session-projects", sessionId] });
       onProjectsChange?.();
-      void message.success("项目已关联");
+      void message.success(alreadyLinked ? "已切换当前项目" : "项目已关联并设为当前");
     } catch (err) {
       void message.error(err instanceof Error ? err.message : "关联失败");
     } finally {
@@ -88,10 +89,18 @@ export function SessionProjectPanel({ sessionId, onProjectsChange }: SessionProj
         <Tag
           key={p.id}
           closable
-          onClose={(e) => { e.preventDefault(); handleUnlink(p.id); }}
-          color="blue"
+          onClick={() => {
+            if (!p.is_active) void handleLink(p.id);
+          }}
+          onClose={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void handleUnlink(p.id);
+          }}
+          color={p.is_active ? "green" : "blue"}
+          style={{ cursor: p.is_active ? "default" : "pointer" }}
         >
-          {p.name}
+          {p.name}{p.is_active ? "（当前）" : ""}
         </Tag>
       ))}
       {projects.length === 0 && <Tag color="default">未关联项目</Tag>}

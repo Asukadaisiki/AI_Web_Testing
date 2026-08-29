@@ -878,7 +878,7 @@ def _handle_create_project(
     planning_session_id: int,
 ) -> dict[str, Any]:
     from sqlalchemy import select as sa_select
-    from app.models import Project, SessionProject
+    from app.models import AIPlanningSession, Project, SessionProject
     from app.schemas.projects import ProjectCreate
     from app.services.project_management import create_project
 
@@ -921,6 +921,7 @@ def _handle_create_project(
         return {"error": f"创建项目失败：{exc}"}
 
     if planning_session_id:
+        planning_session = db_session.get(AIPlanningSession, planning_session_id)
         # Check if session already has a default project (auto-created with session)
         # If so, replace it with the new project instead of adding a second one
         default_link = db_session.scalar(
@@ -949,6 +950,9 @@ def _handle_create_project(
                     project_id=project.id,
                 ))
                 db_session.flush()
+        if planning_session is not None:
+            planning_session.active_project_id = project.id
+            db_session.flush()
 
     result: dict[str, Any] = {
         "id": project.id,

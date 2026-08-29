@@ -8,6 +8,12 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.application.planning.project_context import (
+    ensure_project_member_for_session_projects,
+    get_active_project_id as _get_active_project_id,
+    get_owned_session as _get_session,
+    get_session_project_ids as _get_session_project_ids,
+)
 from app.core.config import get_settings
 from app.core.structured_logging import get_structured_logger
 from sqlalchemy.orm import Session
@@ -43,10 +49,6 @@ logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)
 
 
-class AIPlanningAccessError(ValueError):
-    """Raised when a planning session or draft is inaccessible."""
-
-
 def _generate_auto_drafts(
     *,
     db_session: Session,
@@ -78,8 +80,14 @@ def list_planning_sessions(
             status=r.status,
             created_at=r.created_at,
             updated_at=r.updated_at,
+            active_project_id=_get_active_project_id(r),
             projects=[
-                ProjectSummaryInSession(id=p.id, name=p.name, description=p.description)
+                ProjectSummaryInSession(
+                    id=p.id,
+                    name=p.name,
+                    description=p.description,
+                    is_active=p.id == _get_active_project_id(r),
+                )
                 for p in (r.projects or [])
             ],
         )
@@ -117,12 +125,14 @@ def create_planning_session(
             project_id=default_project.id,
         )
         session.add(sp)
+        record.active_project_id = default_project.id
     else:
         sp = SessionProject(
             session_id=record.id,
             project_id=payload.project_id,
         )
         session.add(sp)
+        record.active_project_id = payload.project_id
 
     session.commit()
     session.refresh(record)
@@ -152,7 +162,6 @@ def send_planning_message(
     content: str,
 ) -> AIPlanningTurnResponse:
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    project_ids = _get_session_project_ids(planning_session)
     session.add(
         AIPlanningMessage(
             session_id=planning_session.id,
@@ -173,7 +182,7 @@ def send_planning_message(
         transcript=base_transcript,
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
-        project_id=project_ids[0] if project_ids else 0,
+        project_id=_get_active_project_id(planning_session) or 0,
         actor_user_id=actor_user_id,
         planning_session_id=planning_session.id,
         auto_draft_generator=_generate_auto_drafts,
@@ -271,7 +280,6 @@ def stream_planning_message(
     logger.info("[session:%d] Planning message stream start, content_len=%d", planning_session_id, len(content))
 
     planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    project_ids = _get_session_project_ids(planning_session)
     session.add(
         AIPlanningMessage(
             session_id=planning_session.id,
@@ -294,7 +302,7 @@ def stream_planning_message(
         transcript=base_transcript,
         existing_requirements=AIPlanningRequirements.model_validate(planning_session.requirements_json or {}),
         db_session=session,
-        project_id=project_ids[0] if project_ids else 0,
+        project_id=_get_active_project_id(planning_session) or 0,
         actor_user_id=actor_user_id,
         planning_session_id=planning_session.id,
         auto_draft_generator=_generate_auto_drafts,
@@ -784,7 +792,7 @@ def generate_planning_drafts(
                         prompt=scenario["draft_prompt"],
                         base_url=base_url,
                         actor_user_id=actor_user_id,
-                        project_id=project_ids[0],
+                        project_id=_get_active_project_id(planning_session),
                         case_id=planning_session.case_id,
                         current_steps=payload.current_steps,
                         current_input_contract=payload.current_input_contract,
@@ -826,7 +834,7 @@ def generate_planning_drafts(
                         prompt=scenario["draft_prompt"],
                         base_url=base_url,
                         actor_user_id=actor_user_id,
-                        project_id=project_ids[0],
+                        project_id=_get_active_project_id(planning_session),
                         case_id=planning_session.case_id,
                         current_steps=payload.current_steps,
                         current_input_contract=payload.current_input_contract,
@@ -969,7 +977,7 @@ def generate_planning_drafts(
                     wrong_snippet=snippet,
                     context_note=context_note,
                     source="auto",
-                    project_id=project_ids[0],
+                    project_id=_get_active_project_id(planning_session),
                 )
             except Exception as ap_exc:
                 logger.warning("Failed to record anti-pattern: %s", ap_exc)
@@ -1265,7 +1273,7 @@ def _build_session_context_preamble(
     from app.ai.planning_tools import _handle_get_project_test_status
     try:
         status = _handle_get_project_test_status(
-            params={}, db_session=db_session, project_id=project_ids[0],
+            params={}, db_session=db_session, project_id=_get_active_project_id(planning_session),
         )
     except Exception:
         logger.warning("Auto-context injection: failed to query project status", exc_info=True)
@@ -1309,7 +1317,7 @@ def _build_session_context_preamble(
     try:
         from app.ai.planning_tools import _handle_get_project_insights
         insights = _handle_get_project_insights(
-            params={}, db_session=db_session, project_id=project_ids[0],
+            params={}, db_session=db_session, project_id=_get_active_project_id(planning_session),
         )
         if insights.get("has_insights"):
             lines.append("")
@@ -1397,7 +1405,7 @@ def _build_anti_pattern_context(
     try:
         patterns = retrieve_relevant_anti_patterns(
             db_session,
-            project_id=project_ids[0],
+            project_id=_get_active_project_id(planning_session),
             limit=3,
         )
     except Exception:
@@ -1414,7 +1422,7 @@ def _build_anti_pattern_context(
         message=f"Injecting {len(patterns)} anti-patterns",
         data={
             "session_id": planning_session.id,
-            "project_id": project_ids[0],
+            "project_id": _get_active_project_id(planning_session),
             "pattern_count": len(patterns),
             "pattern_categories": pattern_categories,
         },
@@ -1797,7 +1805,7 @@ def save_and_execute_selected_drafts(
         if not draft.dsl_case_json:
             continue
         case_payload = CaseCreateRequest(
-            project_id=project_ids[0],
+            project_id=_get_active_project_id(planning_session),
             actor_user_id=actor_user_id,
             **draft.dsl_case_json,
         )
@@ -1870,7 +1878,7 @@ def save_and_execute_selected_drafts(
             continue
         try:
             _record_execution_anti_patterns(
-                session, saved.case_id, draft.scenario_key, project_ids[0],
+                session, saved.case_id, draft.scenario_key, _get_active_project_id(planning_session),
             )
         except Exception as ap_exc:
             logger.warning("Execution anti-pattern recording failed: %s", ap_exc)
@@ -1903,7 +1911,7 @@ def save_and_execute_selected_drafts(
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
             db_session=session,
-            project_id=project_ids[0],
+            project_id=_get_active_project_id(planning_session),
         )
         if analysis_response and analysis_response.execution_analysis:
             execution_analysis = analysis_response.execution_analysis
@@ -1994,7 +2002,7 @@ def save_and_execute_selected_drafts_streaming(
         if not draft.dsl_case_json:
             continue
         case_payload = CaseCreateRequest(
-            project_id=project_ids[0],
+            project_id=_get_active_project_id(planning_session),
             actor_user_id=actor_user_id,
             **draft.dsl_case_json,
         )
@@ -2131,7 +2139,7 @@ def save_and_execute_selected_drafts_streaming(
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
             db_session=session,
-            project_id=project_ids[0],
+            project_id=_get_active_project_id(planning_session),
         )
         if analysis_response and analysis_response.execution_analysis:
             analysis_msg = analysis_response.assistant_message
@@ -2183,7 +2191,7 @@ def retest_cases(
     if not case_ids and failed_only:
         from app.ai.planning_tools import _handle_get_recommended_retest
         recommendation = _handle_get_recommended_retest(
-            params={}, db_session=session, project_id=project_ids[0] if project_ids else 0,
+            params={}, db_session=session, project_id=_get_active_project_id(planning_session) or 0,
         )
         case_ids = recommendation.get("retest_case_ids", [])
         if not case_ids:
@@ -2231,7 +2239,7 @@ def retest_cases(
     execution_summaries: list[ExecutionSummaryResult] = []
     for case_id in case_ids:
         case_record = session.get(TestCase, case_id)
-        if case_record is None or (project_ids and case_record.project_id != project_ids[0]):
+        if case_record is None or (project_ids and case_record.project_id != _get_active_project_id(planning_session)):
             continue
         payload = CaseExecutionRequest(actor_user_id=actor_user_id, input_values=input_values or {})
         result = execute_case(session, case_id, payload)
@@ -2263,7 +2271,7 @@ def retest_cases(
         analysis_response = _run_analysis_turn(
             execution_summaries=execution_summaries,
             db_session=session,
-            project_id=project_ids[0] if project_ids else 0,
+            project_id=_get_active_project_id(planning_session) or 0,
         )
         if analysis_response and analysis_response.execution_analysis:
             execution_analysis = analysis_response.execution_analysis
@@ -2328,144 +2336,6 @@ def delete_planning_draft(
     session.commit()
 
 
-def _get_session(session: Session, planning_session_id: int, *, actor_user_id: int) -> AIPlanningSession:
-    planning_session = session.get(AIPlanningSession, planning_session_id)
-    if planning_session is None:
-        raise EntityNotFoundError(f"AI planning session {planning_session_id} not found.")
-    if planning_session.actor_user_id != actor_user_id:
-        raise AIPlanningAccessError("AI planning session access denied.")
-    return planning_session
-
-
-def _get_session_project_ids(planning_session: AIPlanningSession) -> list[int]:
-    """Return project IDs associated with this session, ordered by link creation time."""
-    return [p.id for p in (planning_session.projects or [])]
-
-
-def link_project_to_session(
-    session: Session,
-    planning_session_id: int,
-    *,
-    project_id: int,
-    actor_user_id: int,
-) -> ProjectSummaryInSession:
-    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    project = session.get(Project, project_id)
-    if project is None:
-        raise EntityNotFoundError(f"Project {project_id} not found.")
-
-    existing = session.scalar(
-        select(SessionProject).where(
-            SessionProject.session_id == planning_session_id,
-            SessionProject.project_id == project_id,
-        )
-    )
-    if existing is not None:
-        raise ValueError(f"Project {project_id} already linked to session {planning_session_id}.")
-
-    session.add(SessionProject(session_id=planning_session_id, project_id=project_id))
-    session.commit()
-    return ProjectSummaryInSession(id=project.id, name=project.name, description=project.description)
-
-
-def unlink_project_from_session(
-    session: Session,
-    planning_session_id: int,
-    *,
-    project_id: int,
-    actor_user_id: int,
-) -> None:
-    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    link = session.scalar(
-        select(SessionProject).where(
-            SessionProject.session_id == planning_session_id,
-            SessionProject.project_id == project_id,
-        )
-    )
-    if link is None:
-        raise EntityNotFoundError(f"Project {project_id} not linked to session {planning_session_id}.")
-    session.delete(link)
-    session.commit()
-
-
-def list_session_projects(
-    session: Session,
-    planning_session_id: int,
-    *,
-    actor_user_id: int,
-) -> list[ProjectSummaryInSession]:
-    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    return [
-        ProjectSummaryInSession(id=p.id, name=p.name, description=p.description)
-        for p in (planning_session.projects or [])
-    ]
-
-
-def create_project_in_session(
-    session: Session,
-    planning_session_id: int,
-    *,
-    name: str,
-    description: str | None,
-    actor_user_id: int,
-) -> ProjectSummaryInSession:
-    from app.models import ProjectMember
-
-    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-
-    project = Project(name=name, description=description)
-    session.add(project)
-    session.flush()
-
-    # Add user as project owner so they can manage cases later
-    member = ProjectMember(
-        project_id=project.id,
-        user_id=actor_user_id,
-        role="owner",
-    )
-    session.add(member)
-
-    session.add(SessionProject(session_id=planning_session_id, project_id=project.id))
-    session.commit()
-    session.refresh(project)
-
-    return ProjectSummaryInSession(id=project.id, name=project.name, description=project.description)
-
-
-def ensure_project_member_for_session_projects(
-    session: Session,
-    planning_session_id: int,
-    actor_user_id: int,
-) -> None:
-    """Ensure the user is a member of all projects linked to this session.
-
-    This fixes projects created before the ProjectMember fix was applied.
-    """
-    from app.models import ProjectMember
-
-    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    project_ids = _get_session_project_ids(planning_session)
-
-    for project_id in project_ids:
-        existing = session.scalar(
-            select(ProjectMember).where(
-                ProjectMember.project_id == project_id,
-                ProjectMember.user_id == actor_user_id,
-            )
-        )
-        if existing is None:
-            logger.info(
-                "[ensure_project_member] Adding user %d as owner of project %d",
-                actor_user_id, project_id,
-            )
-            session.add(ProjectMember(
-                project_id=project_id,
-                user_id=actor_user_id,
-                role="owner",
-            ))
-
-    session.commit()
-
 
 def _normalize_base_url(requirements_json: dict) -> str | None:
     value = requirements_json.get("entry_url_or_page")
@@ -2488,6 +2358,7 @@ def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
     return AIPlanningSessionSchema(
         id=record.id,
         actor_user_id=record.actor_user_id,
+        active_project_id=_get_active_project_id(record),
         case_id=record.case_id,
         title=record.title,
         status=record.status,
@@ -2498,7 +2369,12 @@ def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
         created_at=record.created_at,
         updated_at=record.updated_at,
         projects=[
-            ProjectSummaryInSession(id=p.id, name=p.name, description=p.description)
+            ProjectSummaryInSession(
+                id=p.id,
+                name=p.name,
+                description=p.description,
+                is_active=p.id == _get_active_project_id(record),
+            )
             for p in (record.projects or [])
         ],
     )

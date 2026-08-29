@@ -9,6 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.application.planning.project_context import (
+    AIPlanningAccessError,
+    create_project_in_session,
+    get_owned_session,
+    link_project_to_session,
+    list_session_projects,
+    unlink_project_from_session,
+)
 from app.api.auth import require_demo_user
 from app.core.config import get_settings
 from app.db import get_db_session
@@ -30,20 +38,15 @@ from app.schemas.ai_planning import (
 from app.schemas.dsl import DSLModel
 from pydantic import Field
 from app.services.ai_planning import (
-    AIPlanningAccessError,
     create_planning_session,
-    create_project_in_session,
     delete_planning_draft,
     delete_planning_session,
     generate_planning_drafts,
     get_planning_session_detail,
-    link_project_to_session,
     list_planning_sessions,
-    list_session_projects,
     retest_cases,
     save_and_execute_selected_drafts,
     send_planning_message,
-    unlink_project_from_session,
     update_planning_draft_status,
 )
 from app.services.ai_planning_streaming import (
@@ -313,9 +316,8 @@ async def chat_sse(
 
     # Validate session exists before starting stream
     with session_factory() as db:
-        from app.services.ai_planning import _get_session
         try:
-            _get_session(db, session_id, actor_user_id=current_user.id)
+            get_owned_session(db, session_id, actor_user_id=current_user.id)
         except EntityNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -356,9 +358,8 @@ async def drafts_sse(
 
     # Validate session exists before starting stream
     with session_factory() as db:
-        from app.services.ai_planning import _get_session
         try:
-            _get_session(db, session_id, actor_user_id=current_user.id)
+            get_owned_session(db, session_id, actor_user_id=current_user.id)
         except EntityNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -399,9 +400,8 @@ async def execute_sse(
 
     # Validate session exists before starting stream
     with session_factory() as db:
-        from app.services.ai_planning import _get_session
         try:
-            _get_session(db, session_id, actor_user_id=current_user.id)
+            get_owned_session(db, session_id, actor_user_id=current_user.id)
         except EntityNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -466,8 +466,7 @@ async def get_session_events(
     session_factory = get_session_factory()
     with session_factory() as db:
         # Verify session exists and user has access.
-        from app.services.ai_planning import _get_session
-        _get_session(db, session_id, actor_user_id=current_user.id)
+        get_owned_session(db, session_id, actor_user_id=current_user.id)
 
         # Use created_at for ordering (seq is per-stream, not global).
         query = (

@@ -234,11 +234,13 @@ export interface ProjectSummaryInSession {
   id: number;
   name: string;
   description: string | null;
+  is_active: boolean;
 }
 
 export interface AIPlanningSession {
   id: number;
   actor_user_id: number;
+  active_project_id?: number | null;
   projects: ProjectSummaryInSession[];
   case_id?: number | null;
   title?: string | null;
@@ -284,6 +286,7 @@ export interface AIPlanningSessionDetail {
 
 export interface AIPlanningSessionSummary {
   id: number;
+  active_project_id?: number | null;
   title: string | null;
   status: AIPlanningSessionStatus;
   projects: ProjectSummaryInSession[];

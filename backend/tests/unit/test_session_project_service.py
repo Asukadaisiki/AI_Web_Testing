@@ -5,16 +5,18 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session as SA_Session
 
-from app.models import AIPlanningSession, Project, SessionProject, User
+from app.application.planning.project_context import (
+    create_project_in_session,
+    link_project_to_session,
+    list_session_projects,
+    unlink_project_from_session,
+)
+from app.models import AIPlanningSession, Project, User
+from app.schemas.ai_planning import CreateAIPlanningSessionRequest
 from app.services.ai_planning import (
     create_planning_session,
-    link_project_to_session,
-    unlink_project_from_session,
-    list_session_projects,
-    create_project_in_session,
     list_planning_sessions,
 )
-from app.schemas.ai_planning import CreateAIPlanningSessionRequest
 
 
 def _user_id(db_session: SA_Session) -> int:
@@ -31,6 +33,8 @@ class TestCreateSessionWithoutProject:
         )
         # Auto-creates a default project
         assert len(detail.session.projects) == 1
+        assert detail.session.active_project_id == detail.session.projects[0].id
+        assert detail.session.projects[0].is_active is True
         assert detail.session.status == "collecting"
 
 
@@ -46,6 +50,7 @@ class TestLinkProject:
 
         assert result.id == project.id
         assert result.name == "TestProject"
+        assert result.is_active is True
 
     def test_link_nonexistent_project_raises(self, db_session: SA_Session) -> None:
         uid = _user_id(db_session)
@@ -53,8 +58,7 @@ class TestLinkProject:
         with pytest.raises(Exception):
             link_project_to_session(db_session, detail.session.id, project_id=999, actor_user_id=uid)
 
-    def test_link_duplicate_raises(self, db_session: SA_Session) -> None:
-        """Linking the same project twice should raise ValueError."""
+    def test_link_existing_project_switches_active_project(self, db_session: SA_Session) -> None:
         uid = _user_id(db_session)
         project = Project(name="DupProject")
         db_session.add(project)
@@ -62,8 +66,18 @@ class TestLinkProject:
 
         detail = create_planning_session(db_session, CreateAIPlanningSessionRequest(), actor_user_id=uid)
         link_project_to_session(db_session, detail.session.id, project_id=project.id, actor_user_id=uid)
-        with pytest.raises(ValueError, match="already linked"):
-            link_project_to_session(db_session, detail.session.id, project_id=project.id, actor_user_id=uid)
+        default_project_id = detail.session.active_project_id
+        assert default_project_id is not None
+
+        result = link_project_to_session(
+            db_session,
+            detail.session.id,
+            project_id=default_project_id,
+            actor_user_id=uid,
+        )
+
+        assert result.is_active is True
+        assert db_session.get(AIPlanningSession, detail.session.id).active_project_id == default_project_id
 
 
 class TestUnlinkProject:
@@ -81,6 +95,7 @@ class TestUnlinkProject:
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
         # default project still linked
         assert len(projects) == 1
+        assert projects[0].is_active is True
 
     def test_unlink_nonexistent_raises(self, db_session: SA_Session) -> None:
         uid = _user_id(db_session)
@@ -113,6 +128,7 @@ class TestListSessionProjects:
         assert len(projects) == 3
         names = {p.name for p in projects}
         assert names == {"P1", "P2", f"default-{detail.session.id}"}
+        assert [p.name for p in projects if p.is_active] == ["P2"]
 
 
 class TestCreateProjectInSession:
@@ -126,12 +142,14 @@ class TestCreateProjectInSession:
         )
         assert result.name == "NewProject"
         assert result.description == "desc"
+        assert result.is_active is True
 
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
         # default + NewProject
         assert len(projects) == 2
         pnames = {p.name for p in projects}
         assert "NewProject" in pnames
+        assert [p.name for p in projects if p.is_active] == ["NewProject"]
 
 
 class TestListSessionsWithProjects:
@@ -149,3 +167,4 @@ class TestListSessionsWithProjects:
         found = next(s for s in sessions if s.id == detail.session.id)
         # default project + SharedProject
         assert len(found.projects) == 2
+        assert found.active_project_id == project.id
