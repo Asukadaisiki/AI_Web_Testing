@@ -1000,7 +1000,7 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 
 ### AUDIT-20260830-17 | P5 拆分后 `services/api.ts` 引用不存在的 `features/reports/api`
 
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 位置：`frontend/src/services/api.ts:7`、`frontend/src/services/api.test.ts`
 - 描述：P5 提交 `7cd1fd9` 将业务 API 拆到 `features/*` 后，`services/api.ts` 保留兼容 barrel 并 `export * from "../features/reports/api"`，但 `features/reports/` 从未创建；同时 `api.test.ts` 仍从 barrel 导入 `getReportPreference/updateReportPreference`（旧 `services/api.ts` 中的函数），拆分时遗漏迁移。
@@ -1016,4 +1016,14 @@ API 合同同步、权限校验、网络重试、数据库配置等基础设施�
 - 描述：本地 `.env` 仍含 `VLM_API_KEY`、`AI_DSL_API_KEY`、`AI_PLANNING_API_KEY` 明文凭据，且 `ENABLE_AI_VISUAL_LOCATE=true`。`test_ai_visual_locate_default_is_disabled` 通过 `_load_env_file` 读取 `.env` 时被污染，默认测试 1 失败。
 - 复现：`cd backend && uv run pytest -q` 观察 `test_config.py::test_ai_visual_locate_default_is_disabled` 失败；`cat backend/.env` 可见明文密钥。
 - 影响：本地测试门禁不稳定；明文凭据留在工作树（虽被 gitignore，但存在本地泄露风险）。
-- 建议：轮换这些凭据；本地测试应隔离 `.env`（如 conftest 覆盖/删除 AI 开关与密钥，或测试设置 `APP_ENV=test` 跳过加载）；`.env` 仅保留不含密钥的本地模板。
+- 处理：测试隔离已修复——`test_config.py` 两个 VLM 默认值用例重定向 `ENV_FILE_PATH`，默认测试恢复 493 passed；凭据轮换与 `.env` 去密钥仍待人工处理。
+- 验证：`uv run pytest -q` 通过，`test_ai_visual_locate_default_is_disabled` 不再受 `.env` 污染。
+
+### AUDIT-20260830-19 | 本地中转 LLM 网关 base URL 缺少 `/v1`
+
+- 状态：fixed
+- 严重度：medium
+- 位置：`backend/.env`
+- 描述：`AI_DSL_BASE_URL`/`AI_PLANNING_BASE_URL` 配置为 `https://api.unself.cn`，流式调用会请求 `https://api.unself.cn/chat/completions`，该网关在此路径返回 HTML 首页，导致解析为空响应、会话报 `empty_response`。
+- 处理：将两个 base URL 修正为 `https://api.unself.cn/v1`。
+- 验证：经 Vite 代理发送消息，AI 正常返回 `assistant_message` 与 `session_status=collecting`。

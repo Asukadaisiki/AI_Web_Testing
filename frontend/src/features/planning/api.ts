@@ -127,7 +127,6 @@ export function cancelExecution(sessionId: number) {
 
 export function getAISettings() {
   return request<AISettings>("/api/v1/settings/ai");
-  return request<AISettings>("/api/v1/settings/ai");
 }
 
 export function getAISettingsOverview() {

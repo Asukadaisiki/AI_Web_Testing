@@ -2163,3 +2163,21 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - `npm run build`：失败，错误为 `TS2307`（缺少 `features/reports/api`）与 `TS2305`（barrel 未导出 `getReportPreference/updateReportPreference`）。
 - 结论：P0-P4 完成度较高，Planning facade 已缩到 72 行、执行同步入口复用流式生成器、清理脚本默认 dry-run 且带保护；P5 前端按域拆分遗漏 `features/reports` 域，导致前端测试与构建全红。
 - 发现：本次复核新发现 2 个缺陷，已记录到 `docs/bug-log.md`（AUDIT-20260830-17、AUDIT-20260830-18）。
+
+---
+
+## 2026-08-30 | P5 reports 域修复 + 前端/后端门禁恢复
+
+- 任务：修复复核发现的前端门禁问题，并验证前端构建与后端服务实际跑通。
+- 操作：
+  - 新增 `frontend/src/features/reports/api.ts` 与 `types.ts`，恢复 `getReportPreference/updateReportPreference` 客户端，barrel `services/api.ts` 重新可用。
+  - 修复 `features/planning/api.ts` 中 `getAISettings` 的重复 `return`。
+  - 修复 `test_config.py` 两个 VLM 默认值用例：重定向 `ENV_FILE_PATH`，避免本地 `.env` 污染默认断言。
+  - 启动 PostgreSQL（`D:/PostgreSQL/data`），执行 `uv run alembic upgrade head` 将本地库从 `20260608_0025` 升到 `20260829_0026`。
+  - 发现本地 `api.unself.cn` 网关需带 `/v1` 路径，修正 `.env` 中 `AI_DSL_BASE_URL` 与 `AI_PLANNING_BASE_URL`。
+- 验证：
+  - 后端默认测试：493 passed、1 skipped、10 deselected。
+  - 前端测试：67 passed；`npm run build` 通过。
+  - 后端 `uvicorn --factory` 启动，`/api/v1/health` 返回 200。
+  - 通过 Vite 代理 `127.0.0.1:5173` 创建会话 311 并发送消息，AI 正常返回收集需求的 `assistant_message`，`session_status=collecting`。
+- 备注：AUDIT-20260830-17 已关闭；新增 AUDIT-20260830-19 记录 base URL 配置问题。

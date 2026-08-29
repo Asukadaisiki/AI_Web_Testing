@@ -84,6 +84,7 @@ def test_ai_visual_locate_default_is_disabled(monkeypatch, reset_cached_state) -
     """VLM should be disabled unless an environment explicitly enables it."""
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
     monkeypatch.delenv("ENABLE_AI_VISUAL_LOCATE", raising=False)
+    monkeypatch.setattr(config_module, "ENV_FILE_PATH", Path("/nonexistent/.env"))
     from app.core.config import get_settings
     get_settings.cache_clear()
     settings = get_settings()
@@ -94,6 +95,7 @@ def test_enable_ai_visual_locate_can_be_enabled(monkeypatch, reset_cached_state)
     """Should respect ENABLE_AI_VISUAL_LOCATE=true."""
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
     monkeypatch.setenv("ENABLE_AI_VISUAL_LOCATE", "true")
+    monkeypatch.setattr(config_module, "ENV_FILE_PATH", Path("/nonexistent/.env"))
     from app.core.config import get_settings
     settings = get_settings()
     assert settings.enable_ai_visual_locate is True
