@@ -17,6 +17,12 @@ from app.application.planning.project_context import (
     list_session_projects,
     unlink_project_from_session,
 )
+from app.application.planning.session_service import (
+    create_planning_session,
+    delete_planning_session,
+    get_planning_session_detail,
+    list_planning_sessions,
+)
 from app.api.auth import require_demo_user
 from app.core.config import get_settings
 from app.db import get_db_session
@@ -38,12 +44,8 @@ from app.schemas.ai_planning import (
 from app.schemas.dsl import DSLModel
 from pydantic import Field
 from app.services.ai_planning import (
-    create_planning_session,
     delete_planning_draft,
-    delete_planning_session,
     generate_planning_drafts,
-    get_planning_session_detail,
-    list_planning_sessions,
     retest_cases,
     save_and_execute_selected_drafts,
     send_planning_message,

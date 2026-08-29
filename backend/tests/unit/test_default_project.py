@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import create_engine
 
 from app.db.base import Base
-from app.models import AIPlanningSession, Project, SessionProject
+from app.models import Project, SessionProject
 from app.schemas.ai_planning import CreateAIPlanningSessionRequest
-from app.services.ai_planning import create_planning_session
+from app.application.planning.session_service import create_planning_session
 
 
 @pytest.fixture
@@ -35,6 +35,9 @@ def test_create_session_without_project_id_auto_creates_default(db_session):
 
 
 def test_create_session_with_existing_project_does_not_create_duplicate(db_session):
+    db_session.add(Project(id=1, name="Existing Project"))
+    db_session.commit()
+
     req = CreateAIPlanningSessionRequest(project_id=1, case_id=None)
     detail = create_planning_session(db_session, req, actor_user_id=1)
 

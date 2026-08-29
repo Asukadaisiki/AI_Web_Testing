@@ -15,6 +15,15 @@ AIPlanningMessageRole = Literal["user", "assistant"]
 AIPlanningMessageTurnType = Literal["user", "followup", "plan", "tool_call", "system_error", "explorer_result", "judge_verdict"]
 AIPlanningDraftStatus = Literal["generated", "imported", "rejected", "failed"]
 AIPlanningNextAction = Literal["ask_followup", "review_plan", "select_scenarios", "drafts_generated"]
+REQUIRED_REQUIREMENT_SLOTS = [
+    "app_under_test",
+    "business_goal",
+    "entry_url_or_page",
+    "core_user_flow",
+    "main_assertions",
+    "test_data_or_account",
+    "scope_limits",
+]
 
 
 class ProjectSummaryInSession(DSLModel):

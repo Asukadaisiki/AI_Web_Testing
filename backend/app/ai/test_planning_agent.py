@@ -24,6 +24,7 @@ from app.schemas.ai_planning import (
     AIPlanningTodoItem,
     AIPlanningToolCall,
     AIPlanningTurnResponse,
+    REQUIRED_REQUIREMENT_SLOTS,
 )
 
 
@@ -85,17 +86,6 @@ _NEW_REQUIREMENT_KEYWORDS = [
     "新增测试", "还有一个", "另外还要", "再来一个", "补充测试",
     "新增场景", "换种", "不同方案", "换个思路",
 ]
-
-REQUIRED_REQUIREMENT_SLOTS = [
-    "app_under_test",
-    "business_goal",
-    "entry_url_or_page",
-    "core_user_flow",
-    "main_assertions",
-    "test_data_or_account",
-    "scope_limits",
-]
-
 
 def _tool_call_signature(tool_name: str, params: dict[str, Any]) -> str | None:
     """Return a canonical signature for tool calls eligible for dedup.

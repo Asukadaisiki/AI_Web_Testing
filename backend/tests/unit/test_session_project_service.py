@@ -11,12 +11,12 @@ from app.application.planning.project_context import (
     list_session_projects,
     unlink_project_from_session,
 )
-from app.models import AIPlanningSession, Project, User
-from app.schemas.ai_planning import CreateAIPlanningSessionRequest
-from app.services.ai_planning import (
+from app.application.planning.session_service import (
     create_planning_session,
     list_planning_sessions,
 )
+from app.models import AIPlanningSession, Project, User
+from app.schemas.ai_planning import CreateAIPlanningSessionRequest
 
 
 def _user_id(db_session: SA_Session) -> int:

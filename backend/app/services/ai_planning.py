@@ -14,26 +14,24 @@ from app.application.planning.project_context import (
     get_owned_session as _get_session,
     get_session_project_ids as _get_session_project_ids,
 )
+from app.application.planning.presenters import (
+    to_draft_schema as _to_draft_schema,
+    to_session_schema as _to_session_schema,
+)
 from app.core.config import get_settings
 from app.core.structured_logging import get_structured_logger
 from sqlalchemy.orm import Session
 
-from app.ai.test_planning_agent import REQUIRED_REQUIREMENT_SLOTS, run_planning_turn, stream_planning_turn
+from app.ai.test_planning_agent import run_planning_turn, stream_planning_turn
 from app.ai.tool_result_cache import extract_raw_page_results
-from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, Project, SessionProject, TestCase
+from app.models import AIPlanningDraft, AIPlanningMessage, AIPlanningSession, DslGenerationRun, TestCase
 from app.models.ai_planning_tool_result import AIPlanningToolResult
 from app.schemas.ai_planning import (
     AIPlanningDraft as AIPlanningDraftSchema,
-    AIPlanningMessage as AIPlanningMessageSchema,
     AIPlanningRequirements,
-    AIPlanningSession as AIPlanningSessionSchema,
-    AIPlanningSessionDetail,
-    AIPlanningSessionSummary,
     AIPlanningTurnResponse,
-    CreateAIPlanningSessionRequest,
     ExecutionSummaryResult,
     GenerateAIPlanningDraftsRequest,
-    ProjectSummaryInSession,
     SavedCaseResult,
     UpdateAIPlanningDraftStatusRequest,
 )
@@ -64,94 +62,6 @@ def _generate_auto_drafts(
     )
     return response.drafts
 
-
-def list_planning_sessions(
-    session: Session,
-    *,
-    actor_user_id: int,
-) -> list[AIPlanningSessionSummary]:
-    q = session.query(AIPlanningSession).filter(AIPlanningSession.actor_user_id == actor_user_id)
-    q = q.order_by(AIPlanningSession.updated_at.desc())
-    rows = q.all()
-    return [
-        AIPlanningSessionSummary(
-            id=r.id,
-            title=r.title or (r.requirements_json or {}).get("app_under_test"),
-            status=r.status,
-            created_at=r.created_at,
-            updated_at=r.updated_at,
-            active_project_id=_get_active_project_id(r),
-            projects=[
-                ProjectSummaryInSession(
-                    id=p.id,
-                    name=p.name,
-                    description=p.description,
-                    is_active=p.id == _get_active_project_id(r),
-                )
-                for p in (r.projects or [])
-            ],
-        )
-        for r in rows
-    ]
-
-
-def create_planning_session(
-    session: Session,
-    payload: CreateAIPlanningSessionRequest,
-    *,
-    actor_user_id: int,
-) -> AIPlanningSessionDetail:
-    record = AIPlanningSession(
-        actor_user_id=actor_user_id,
-        case_id=payload.case_id,
-        status="collecting",
-        requirements_json=AIPlanningRequirements().model_dump(mode="json"),
-        missing_slots_json=list(REQUIRED_REQUIREMENT_SLOTS),
-    )
-    session.add(record)
-    session.flush()
-
-    # Stage 1: auto-create default project when none provided
-    if payload.project_id is None:
-        default_project = Project(
-            name=f"default-{record.id}",
-            description="auto-created temporary project",
-            is_default=True,
-        )
-        session.add(default_project)
-        session.flush()
-        sp = SessionProject(
-            session_id=record.id,
-            project_id=default_project.id,
-        )
-        session.add(sp)
-        record.active_project_id = default_project.id
-    else:
-        sp = SessionProject(
-            session_id=record.id,
-            project_id=payload.project_id,
-        )
-        session.add(sp)
-        record.active_project_id = payload.project_id
-
-    session.commit()
-    session.refresh(record)
-    return get_planning_session_detail(session, record.id, actor_user_id=actor_user_id)
-
-
-def get_planning_session_detail(session: Session, planning_session_id: int, *, actor_user_id: int) -> AIPlanningSessionDetail:
-    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    messages = session.scalars(
-        select(AIPlanningMessage).where(AIPlanningMessage.session_id == planning_session_id).order_by(AIPlanningMessage.id.asc())
-    ).all()
-    drafts = session.scalars(
-        select(AIPlanningDraft).where(AIPlanningDraft.session_id == planning_session_id).order_by(AIPlanningDraft.id.asc())
-    ).all()
-    return AIPlanningSessionDetail(
-        session=_to_session_schema(planning_session),
-        messages=[_to_message_schema(item) for item in messages],
-        drafts=[_to_draft_schema(item) for item in drafts],
-    )
 
 
 def send_planning_message(
@@ -2309,16 +2219,6 @@ def retest_cases(
     )
 
 
-def delete_planning_session(
-    session: Session,
-    planning_session_id: int,
-    *,
-    actor_user_id: int,
-) -> None:
-    planning_session = _get_session(session, planning_session_id, actor_user_id=actor_user_id)
-    session.delete(planning_session)
-    session.commit()
-
 
 def delete_planning_draft(
     session: Session,
@@ -2342,68 +2242,3 @@ def _normalize_base_url(requirements_json: dict) -> str | None:
     if isinstance(value, str) and value.startswith(("http://", "https://")):
         return value
     return None
-
-
-def _to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
-    # Strip internal-only keys from plan_json before pydantic validation.
-    plan_raw = dict(record.plan_json) if record.plan_json else None
-    if plan_raw is not None:
-        plan_raw.pop("_page_results", None)
-        # Truncate massive page_elements to prevent API response overflow
-        _MAX_PE_CHARS = 50000
-        for sc in plan_raw.get("scenarios", []) or []:
-            pe = sc.get("page_elements", "")
-            if isinstance(pe, str) and len(pe) > _MAX_PE_CHARS:
-                sc["page_elements"] = pe[:_MAX_PE_CHARS] + f"\n...[truncated {len(pe)-_MAX_PE_CHARS} chars]"
-    return AIPlanningSessionSchema(
-        id=record.id,
-        actor_user_id=record.actor_user_id,
-        active_project_id=_get_active_project_id(record),
-        case_id=record.case_id,
-        title=record.title,
-        status=record.status,
-        requirements=AIPlanningRequirements.model_validate(record.requirements_json or {}),
-        plan=plan_raw,
-        missing_slots=record.missing_slots_json or [],
-        last_error_message=record.last_error_message,
-        created_at=record.created_at,
-        updated_at=record.updated_at,
-        projects=[
-            ProjectSummaryInSession(
-                id=p.id,
-                name=p.name,
-                description=p.description,
-                is_active=p.id == _get_active_project_id(record),
-            )
-            for p in (record.projects or [])
-        ],
-    )
-
-
-def _to_message_schema(record: AIPlanningMessage) -> AIPlanningMessageSchema:
-    return AIPlanningMessageSchema(
-        id=record.id,
-        session_id=record.session_id,
-        role=record.role,
-        turn_type=record.turn_type,
-        content=record.content,
-        structured_payload=record.structured_payload_json,
-        created_at=record.created_at,
-    )
-
-
-def _to_draft_schema(record: AIPlanningDraft) -> AIPlanningDraftSchema:
-    return AIPlanningDraftSchema(
-        id=record.id,
-        session_id=record.session_id,
-        scenario_key=record.scenario_key,
-        title=record.title,
-        status=record.status,
-        dsl_generation_id=record.dsl_generation_id,
-        dsl_case=record.dsl_case_json,
-        warnings=record.warnings_json or [],
-        normalization_notes=record.normalization_notes_json or [],
-        error_message=record.error_message,
-        created_at=record.created_at,
-        updated_at=record.updated_at,
-    )

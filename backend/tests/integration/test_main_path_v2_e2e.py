@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 from app.ai.locator_preflight import apply_preflight_to_dsl
 from app.ai.page_explorer import USEFUL_A11Y_ROLES, collect_a11y_nodes
 from app.ai.tool_result_cache import lookup_tool_cache, normalize_cache_url
+from app.application.planning.session_service import create_planning_session
 from app.models import AIPlanningToolResult, Project, SessionProject
-from app.services.ai_planning import create_planning_session
 from app.schemas.ai_planning import CreateAIPlanningSessionRequest
 
 
