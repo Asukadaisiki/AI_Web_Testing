@@ -1978,3 +1978,21 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - Knip 不再报告孤儿文件、未使用依赖和缺失直接依赖；剩余项为明确保留的 dormant API clients 与 transport types。
   - 变更文件 Ruff `F401/F821` 检查通过。
 - 备注：`CaseListParams` 整体无消费者，已删除；Pydantic 框架隐式入口和 Alembic 历史均保留。
+
+---
+
+## 2026-08-28 | P3 Planning 解耦第一切片
+
+- 任务：冻结 Planning/执行语义，并消除 Agent 对 Planning Service 的反向依赖。
+- 操作：
+  - 新增 `docs/plan/adr-001-planning-execution-semantics.md`，确定单 active project、VLM 默认关闭和同步/流式单事件源方向。
+  - 将 `ENABLE_AI_VISUAL_LOCATE` 默认值改为 false，保留显式启用能力。
+  - 将工具结果 URL 归一化、缓存查询和原始页面结果提取迁到 `app.ai.tool_result_cache`。
+  - Planning Tools 不再导入 `services.ai_planning` 私有缓存函数。
+  - Agent 通过 `AutoDraftGenerator` protocol 接收草案生成 callback，不再延迟导入 Planning Service。
+  - Planning Service 不再调用 Agent 私有 `_extract_raw_page_results`。
+- 验证：
+  - P3 定向测试：94 passed。
+  - 后端默认测试：490 passed、1 skipped、10 deselected。
+  - 新增模块及配置变更 Ruff `F401/F821` 检查通过。
+- 备注：P3 尚未完成；后续继续建立 active project 边界并按 session/conversation/draft/save-execute/analysis-retest 拆 application services。
