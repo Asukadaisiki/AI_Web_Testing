@@ -2268,3 +2268,53 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 后端默认 pytest：493 passed、1 skipped、10 deselected。
   - 前端 `npm run build` 通过；`npm test` 67 passed。
 - 备注：本次工作树还包含上一任务遗留的 BUG-086 修复（`.env.example`、`page_explorer.py`、`docs/bug-log.md`），未在本任务中改动，同步时需一并注意。
+
+---
+
+## 2026-08-30 | 诊断切页后流式消息丢失问题
+
+- 任务：定位「切换页面后再次回到会话页，消息丢失，只能等 AI 全部发完才能看到」的根因。
+- 结论：
+  - 后端流式期间实际上已经持续落库（user 消息、streaming 消息、content_block 事件、event log），不存在「后端没持久化」。
+  - 真正问题是前端「进行中的流式状态」没有可恢复的会话级全局来源：`usePlanningSessionState` 挂在 `AITestPlanningPanel` 内，切页时组件卸载，SSE 继续在后台跑，`handleStreamEvent` 更新的是已卸载组件的本地 state；回到页面时 `initialize()` 重新拉 `getPlanningSession` 并用 `applySessionDetail` 整体覆盖 transcript，把后台流期间本应累积的流式内容冲掉。
+  - 恢复逻辑 `applySessionDetailWithRecovery` 只对 `turn_type === "streaming"` 的「中断」消息做一次性 event replay，且 replay 只认识旧事件（text_chunk/status/tool_call/turn_complete），不识别本次新增的 `content_block_*` 事件，因此思考块和有序块无法正确重建。
+  - `loadSessionDetail` 没有「SSE 进行中则不覆盖 transcript」的保护，且 `applySessionDetail` 会把 detail.messages 重新映射，丢掉了当前 UI 里正在增长的 content blocks。
+  - `AITestPlanningPanel` 内部使用 `sessionId` state 而不跟随路由 `sessionIdProp`，切页回来 `sessionIdProp` 变化被忽略，也放大了状态错位问题。
+- 建议修复方向（本次仅诊断，未改代码）：
+  1. 把会话状态与活跃 SSE 流提升为全局 store（或 Query/Context），切页只卸载视图、不卸载状态，re-mount 时订阅正在进行的流事件。
+  2. 若沿用「后台流 + 回页重放」，加载详情时保留 `_streaming` 消息的实时 content_blocks，或仅在无活跃流时覆盖 transcript。
+  3. 扩展 `applySessionDetailWithRecovery` 支持 `content_block_*` 事件重放；否则新协议的消息刷新后思考块仍丢。
+  4. `sessionId` 改为跟随路由 prop，避免内部/外部双源不一致。
+- 备注：仅追加本诊断记录，未改动业务代码。
+
+---
+
+## 2026-08-30 | 切页消息丢失根治疗方案设计
+
+- 任务：为「切页后流式消息丢失」设计根治疗法（先设计，待实施）。
+- 方案核心：把「会话状态」和「活跃 SSE 流」从 `AITestPlanningPanel` 组件提升为路由无关的全局 workspace store；切页只卸载视图，不卸载状态与流；回页时由 store 判定「有活跃流则复用内存 transcript，无活跃流则拉详情并按统一 reducer 重放事件」。
+- 关键落点：
+  - 新增模块级 `planningWorkspaceStore`（`useSyncExternalStore`，不引入新依赖）。
+  - 新增 `planningStreamEvents` 纯函数 reducer，前端实时事件与回页重放共用同一套逻辑，统一支持 `text_chunk`、`content_block_*`、`tool_call_*`、`execution_*`、`turn_complete`。
+  - `usePlanningSse` 去掉组件卸载即 abort 的行为，abort 由 store 显式管理。
+  - `AITestPlanningPanel` 改为消费 store；`sessionId` 跟随路由 prop。
+  - `App.tsx` / `test-utils.tsx` 增加 Provider。
+  - 后端可选加固：`GET /sessions/{id}/events` 支持游标/按 message_id 过滤。
+- 备注：本轮为方案设计，未改业务代码；实施时按 store → reducer → panel → tests 顺序推进。
+
+---
+
+## 2026-08-30 | 切页消息丢失根治疗方案落地
+
+- 任务：实施「会话状态 + 活跃 SSE 流提升为路由无关全局 workspace store」的根治方案。
+- 操作：
+  - 新增 `frontend/src/features/planning/planningStreamEvents.ts`：纯函数 reducer（`reduceTranscriptEvent`）+ `readContentBlocks` / `applyContentBlockEvent` / `createOptimisticMessage`，实时事件与重放共用。
+  - 新增 `frontend/src/features/planning/planningWorkspaceStore.tsx`：`useSyncExternalStore` 外部 store，管理 `currentSessionId`、各 session 的 `transcript/requirements/plan/drafts/activeStream`；`loadSessionDetail` 有活跃流时只更新元数据、不覆盖 transcript；无活跃流时按事件日志重放并支持 `content_block_*`。
+  - 重构 `usePlanningSse.ts`：去掉组件卸载即 abort，改为 store 管理 abort，新增 `runStream(sessionId, kind, messageId, options)`。
+  - 重构 `usePlanningSessionState.ts`：改为消费 store，提供兼容旧面板的 API。
+  - 重构 `AITestPlanningPanel.tsx`：删除组件内手写 `handleStreamEvent`，事件交给 store reducer；流式状态由 `activeStreamKind` 派生；乐观消息 ID 传给 `runStream` 作为活跃消息 ID。
+  - `App.tsx` / `test-utils.tsx` 注入 `PlanningWorkspaceProvider`。
+- 验证：
+  - 新增 `planningStreamEvents.test.ts` 7 用例、`planningWorkspaceStore.test.ts` 3 用例。
+  - `npm run build` 通过；`npm test` 77 passed（11 files）。
+- 备注：后端未改动；本次为纯前端架构修复。

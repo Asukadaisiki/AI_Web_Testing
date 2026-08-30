@@ -4,6 +4,8 @@ import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
+import { PlanningWorkspaceProvider } from "../features/planning/planningWorkspaceStore";
+
 export function renderWithProviders(
   ui: ReactElement,
   {
@@ -28,14 +30,16 @@ export function renderWithProviders(
     <ConfigProvider>
       <AntdApp>
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter
-            initialEntries={[route]}
-          >
-            <Routes>
-              <Route path={path} element={ui} />
-              {extraRoutes}
-            </Routes>
-          </MemoryRouter>
+          <PlanningWorkspaceProvider>
+            <MemoryRouter
+              initialEntries={[route]}
+            >
+              <Routes>
+                <Route path={path} element={ui} />
+                {extraRoutes}
+              </Routes>
+            </MemoryRouter>
+          </PlanningWorkspaceProvider>
         </QueryClientProvider>
       </AntdApp>
     </ConfigProvider>,

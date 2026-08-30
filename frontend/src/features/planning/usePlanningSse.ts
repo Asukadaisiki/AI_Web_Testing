@@ -1,37 +1,24 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback } from "react";
 
-import {
-  callSSE,
-  type SSEClientOptions,
-} from "../../shared/api/sseClient";
-
-type PlanningSseRequest = Omit<SSEClientOptions, "signal">;
+import { usePlanningWorkspace } from "./planningWorkspaceStore";
+import type { PlanningStreamKind } from "./planningWorkspaceStore";
+import type { ExecutionStreamEvent } from "../../types/api";
 
 export function usePlanningSse() {
-  const abortRef = useRef<AbortController | null>(null);
+  const workspace = usePlanningWorkspace();
 
   const abort = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, []);
+    workspace.abortStream();
+  }, [workspace]);
 
-  const run = useCallback(async (options: PlanningSseRequest) => {
-    abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      await callSSE({
-        ...options,
-        signal: controller.signal,
-      });
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-      }
-    }
-  }, [abort]);
-
-  useEffect(() => abort, [abort]);
+  const run = useCallback(
+    (sessionId: number, kind: PlanningStreamKind, messageId: number, options: {
+      url: string;
+      body: Record<string, unknown>;
+      onEvent?: (event: ExecutionStreamEvent) => void;
+    }) => workspace.runStream(sessionId, kind, messageId, options),
+    [workspace],
+  );
 
   return { abort, run };
 }
