@@ -217,6 +217,84 @@ def _flush_streaming_message(
             session.rollback()
 
 
+def _flush_streaming_content_block(
+    session: Session,
+    message_id: int,
+    event: dict,
+    *,
+    phase: str | None = None,
+    phase_message: str | None = None,
+) -> None:
+    """Persist ordered pi-style content blocks onto the streaming message.
+
+    The final assistant text is still mirrored to ``message.content`` for
+    backward compatibility with the existing transcript model, but the
+    authoritative rendering structure is now
+    ``structured_payload_json["content_blocks"]``.
+    """
+    try:
+        if not session.is_active:
+            session.rollback()
+        message = session.merge(session.get(AIPlanningMessage, message_id))
+        payload = message.structured_payload_json or {}
+        payload["_streaming"] = True
+        if phase is not None:
+            payload["_phase"] = phase
+        if phase_message is not None:
+            payload["_phaseMessage"] = phase_message
+
+        blocks = list(payload.get("content_blocks") or [])
+        content_index = int(event.get("content_index", 0))
+        kind = event.get("kind", "text")
+
+        event_type = event.get("type")
+        if event_type == "content_block_start":
+            if content_index >= len(blocks):
+                blocks.extend(
+                    {"type": kind, "content": ""}
+                    for _ in range(content_index - len(blocks) + 1)
+                )
+            blocks[content_index] = {"type": kind, "content": ""}
+        elif event_type == "content_block_delta":
+            if content_index >= len(blocks):
+                blocks.extend(
+                    {"type": kind, "content": ""}
+                    for _ in range(content_index - len(blocks) + 1)
+                )
+            if blocks[content_index].get("type") != kind:
+                blocks[content_index] = {"type": kind, "content": ""}
+            blocks[content_index]["content"] += str(event.get("delta", ""))
+        elif event_type == "content_block_end":
+            if content_index >= len(blocks):
+                blocks.extend(
+                    {"type": kind, "content": ""}
+                    for _ in range(content_index - len(blocks) + 1)
+                )
+            blocks[content_index] = {
+                "type": kind,
+                "content": str(event.get("content", blocks[content_index].get("content", ""))),
+            }
+
+        payload["content_blocks"] = blocks
+        # Keep ``content`` as a plain-text mirror of all text blocks for the
+        # existing ``item.content`` render path.
+        message.content = "".join(
+            block.get("content", "")
+            for block in blocks
+            if block.get("type") == "text"
+        )
+        message.structured_payload_json = payload
+        session.commit()
+    except Exception:
+        logger.warning(
+            "Failed to flush streaming content block for message %d, skipping",
+            message_id,
+            exc_info=True,
+        )
+        if session.is_active:
+            session.rollback()
+
+
 def stream_planning_message(
     session: Session,
     planning_session_id: int,
@@ -312,6 +390,16 @@ def stream_planning_message(
                     phase_message=current_phase_message,
                 )
                 chunks_since_flush = 0
+        elif event.get("type") in ("content_block_start", "content_block_delta", "content_block_end"):
+            # pi-style ordered content blocks: persist them on the streaming message
+            # so history replays thinking/text interleaving faithfully.
+            _flush_streaming_content_block(
+                session,
+                streaming_message_id,
+                event,
+                phase=current_phase,
+                phase_message=current_phase_message,
+            )
         elif event.get("type") == "status":
             current_phase = event.get("phase")
             current_phase_message = event.get("message")
@@ -381,7 +469,8 @@ def stream_planning_message(
     )
     streaming_message.turn_type = _turn_type(response)
     streaming_message.content = response.assistant_message
-    streaming_message.structured_payload_json = {
+    final_payload = streaming_message.structured_payload_json or {}
+    final_payload.update({
         "missing_slots": response.missing_slots,
         "suggested_questions": response.suggested_questions,
         "plan": (
@@ -404,7 +493,9 @@ def stream_planning_message(
         "todo_list": [
             item.model_dump(mode="json") for item in response.todo_list
         ],
-    }
+        "_streaming": False,
+    })
+    streaming_message.structured_payload_json = final_payload
     session.commit()
 
     elapsed = time.monotonic() - start_time

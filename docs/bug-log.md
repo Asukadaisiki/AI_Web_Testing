@@ -4,6 +4,31 @@
 
 ---
 
+## BUG-086 | AI 规划探索失败：Playwright 浏览器未安装且 Sync API 实例泄漏
+
+- 日期：2026-08-30
+- 状态：fixed
+- 来源：AI 规划工具调用 `explore_flow` / `explore_page` 失败（session 2）
+- 描述：AI 规划进入 `tool_call` 阶段时，`explore_flow` 报 `BrowserType.launch: Executable doesn't exist at C:\Users\30521\AppData\Local\ms-playwright\...`；随后 `explore_page` 报 `It looks like you are using Playwright Sync API inside the asyncio loop.`。两种错误叠加导致探索失败，最终规划报 `exploration_failed`。
+- 复现步骤：
+  1. 本机未在默认路径安装 Playwright 浏览器，且未配置 `PLAYWRIGHT_BROWSERS_PATH`。
+  2. AI 调用 `explore_flow` → `BrowserSessionManager.get_or_create_context` 启动 Chromium 失败。
+  3. 启动失败后 `pw.__exit__` 未被调用，Playwright 事件循环残留。
+  4. 后续 `explore_page` 再次进入 `sync_playwright().__enter__` 时检测到运行中的 asyncio loop，抛 Sync API 错误。
+- 影响：AI 规划无法采集页面元素，无法生成有效 DSL；同时暴露项目/成员自增序列不同步的隐患。
+- 根因：① Playwright 浏览器未安装到默认路径且无环境变量指向自定义路径；② `BrowserSessionManager.get_or_create_context` 与 `_collect_flow_a11y` 在 `pw.__enter__` / `chromium.launch` 失败时未清理 `pw`，导致 loop 泄漏；③ 手工重建种子数据时显式写入 `id=1` 但未同步自增序列，`project_members_id_seq` 仍从 1 开始，触发 `pk_project_members` 主键冲突。
+- 处理：
+  1. 将 Chromium 及依赖下载到 `D:\PlaywrightBrowsers`。
+  2. 在 `backend/.env` 与 `backend/.env.example` 增加 `PLAYWRIGHT_BROWSERS_PATH=D:\PlaywrightBrowsers`。
+  3. 修复 `BrowserSessionManager.get_or_create_context` 和 `_collect_flow_a11y` 中启动失败时释放 Playwright 实例。
+  4. 用 `setval` 同步 `users_id_seq` / `projects_id_seq` / `project_members_id_seq` 到当前最大 id。
+- 验证：
+  - `sync_playwright` 加载 https://example.com 成功。
+  - `_collect_flow_a11y` 探索 https://example.com 成功（1 页、8 个元素）。
+  - `create_project` 成功创建项目并写入成员记录，无主键冲突。
+  - 后端默认测试 493 passed、1 skipped、10 deselected。
+- 关联记录：`docs/execution-log.md#2026-08-30`
+
 ## BUG-K | paragraph/StaticText role 在 semantic locator 正则和映射中缺失
 
 - 日期：2026-06-05

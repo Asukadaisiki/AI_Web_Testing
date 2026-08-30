@@ -260,7 +260,13 @@ def stream_planning_turn(
                 base_url=settings.ai_planning_base_url,
                 timeout_seconds=max(1.0, settings.ai_planning_timeout_ms / 1000),
             ):
-                if event["type"] in ("text_chunk", "status"):
+                if event["type"] in (
+                    "text_chunk",
+                    "status",
+                    "content_block_start",
+                    "content_block_delta",
+                    "content_block_end",
+                ):
                     yield event
                 elif event["type"] == "raw_response":
                     raw_response = event["text"]
@@ -1197,9 +1203,16 @@ def _stream_planning_llm(
 ) -> Generator[dict[str, str], None, None]:
     """Yield streaming events from an SSE-based LLM API call.
 
+    Emits pi-style ``content_block_start`` / ``content_block_delta`` /
+    ``content_block_end`` events for each ``thinking`` and ``text`` block,
+    carrying an ordered ``content_index``. This preserves the model's actual
+    thinking/answer interleaving instead of flattening it into a single
+    string.
+
     Yields:
-        ``{"type": "text_chunk", "text": "..."}`` for each incremental chunk.
-        ``{"type": "raw_response", "text": "..."}`` once at the end with the full text.
+        ``{"type": "content_block_*", "content_index": int, "kind": ...}``
+        ``{"type": "status", ...}`` for throttled thinking phase updates.
+        ``{"type": "raw_response", "text": "..."}`` once at the end.
     """
     payload: dict[str, Any] = {
         "model": model,
@@ -1216,6 +1229,31 @@ def _stream_planning_llm(
     full_text: list[str] = []
     reasoning_text: list[str] = []
     yielded_reasoning_chars = 0
+    content_index = -1
+    current_kind: str | None = None
+    current_buffer: list[str] = []
+
+    def _close_block() -> dict[str, Any] | None:
+        nonlocal current_kind, current_buffer
+        if current_kind is None:
+            return None
+        event = {
+            "type": "content_block_end",
+            "content_index": content_index,
+            "kind": current_kind,
+            "content": "".join(current_buffer),
+        }
+        current_kind = None
+        current_buffer = []
+        return event
+
+    def _open_block(kind: str) -> dict[str, Any]:
+        nonlocal content_index, current_kind, current_buffer
+        content_index += 1
+        current_kind = kind
+        current_buffer = []
+        return {"type": "content_block_start", "content_index": content_index, "kind": kind}
+
     with httpx.Client(timeout=timeout_seconds) as client:
         with client.stream(
             "POST",
@@ -1244,8 +1282,15 @@ def _stream_planning_llm(
                 if reasoning:
                     reasoning_text.append(reasoning)
                     yielded_reasoning_chars += len(reasoning)
-                    # Forward reasoning content to frontend so user sees activity
-                    yield {"type": "text_chunk", "text": reasoning, "thinking": True}
+                    if current_kind != "thinking":
+                        yield _open_block("thinking")
+                    current_buffer.append(reasoning)
+                    yield {
+                        "type": "content_block_delta",
+                        "content_index": content_index,
+                        "kind": "thinking",
+                        "delta": reasoning,
+                    }
                     # Yield throttled status for phase label updates
                     prev_bucket = (yielded_reasoning_chars - len(reasoning)) // 200
                     cur_bucket = yielded_reasoning_chars // 200
@@ -1253,7 +1298,21 @@ def _stream_planning_llm(
                         yield {"type": "status", "phase": "thinking", "message": "正在深度推理分析需求..."}
                 if chunk:
                     full_text.append(chunk)
-                    yield {"type": "text_chunk", "text": chunk}
+                    if current_kind != "text":
+                        close_event = _close_block()
+                        if close_event is not None:
+                            yield close_event
+                        yield _open_block("text")
+                    current_buffer.append(chunk)
+                    yield {
+                        "type": "content_block_delta",
+                        "content_index": content_index,
+                        "kind": "text",
+                        "delta": chunk,
+                    }
+        close_event = _close_block()
+        if close_event is not None:
+            yield close_event
     content_text = "".join(full_text)
     if not content_text.strip() and reasoning_text:
         content_text = "".join(reasoning_text)

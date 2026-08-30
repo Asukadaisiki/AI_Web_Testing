@@ -15,6 +15,7 @@ import { PlanningRequirementsPanel } from "../features/planning/PlanningRequirem
 import type {
   AIPlanningMessage,
   AISettings,
+  AssistantContentBlock,
   DSLCaseInputContract,
   DSLCaseOutputContract,
   DSLCasePayload,
@@ -89,6 +90,114 @@ function applyStreamEventToPayload(
     default:
       return base;
   }
+}
+
+function readContentBlocks(payload: Record<string, unknown> | null | undefined): AssistantContentBlock[] {
+  const raw = payload?.content_blocks;
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === "object")
+      .map((block) => ({
+        type: block.type === "thinking" ? "thinking" : "text",
+        content: String(block.content ?? ""),
+      }));
+  }
+  // Legacy fallback: thinking block (if any) followed by the plain text mirror.
+  const blocks: AssistantContentBlock[] = [];
+  const thinking = payload?._thinkingContent;
+  if (typeof thinking === "string" && thinking.length > 0) {
+    blocks.push({ type: "thinking", content: thinking });
+  }
+  return blocks;
+}
+
+function applyContentBlockEvent(
+  blocks: AssistantContentBlock[],
+  event: ExecutionStreamEvent,
+): AssistantContentBlock[] {
+  if (
+    event.type !== "content_block_start" &&
+    event.type !== "content_block_delta" &&
+    event.type !== "content_block_end"
+  ) {
+    return blocks;
+  }
+
+  const next = [...blocks];
+  while (next.length <= event.content_index) {
+    next.push({ type: "text", content: "" });
+  }
+
+  const block = next[event.content_index];
+  const kind: AssistantContentBlock["type"] = event.kind === "thinking" ? "thinking" : "text";
+
+  if (event.type === "content_block_start") {
+    next[event.content_index] = { type: kind, content: "" };
+    return next;
+  }
+
+  if (event.type === "content_block_delta") {
+    if (block.type !== kind) {
+      next[event.content_index] = { type: kind, content: "" };
+    }
+    next[event.content_index] = { type: kind, content: block.content + event.delta };
+    return next;
+  }
+
+  // content_block_end
+  next[event.content_index] = { type: kind, content: event.content };
+  return next;
+}
+
+function AssistantMessageBody({
+  message,
+  streaming,
+}: {
+  message: AIPlanningMessage;
+  streaming: boolean;
+}) {
+  const blocks = readContentBlocks(message.structured_payload);
+  if (blocks.length === 0) {
+    return <>{message.content}</>;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {blocks.map((block, idx) => {
+        if (block.type === "thinking") {
+          const collapsed = block.content.length > 500;
+          return (
+            <details
+              key={idx}
+              style={{ fontSize: 12, color: "#666", background: "#fafafa",
+                       borderRadius: 6, padding: "4px 8px" }}
+              open={streaming}
+            >
+              <summary style={{ cursor: "pointer", fontWeight: 500 }}>
+                {collapsed ? `思考过程（${block.content.length} 字，已折叠）` : "思考过程"}
+              </summary>
+              <div style={{
+                whiteSpace: "pre-wrap",
+                marginTop: 4,
+                maxHeight: 200,
+                overflowY: "auto",
+                opacity: streaming ? 1 : 0.7,
+              }}>
+                {collapsed ? block.content.slice(0, 500) + "..." : block.content}
+              </div>
+            </details>
+          );
+        }
+        return (
+          <div key={idx} style={{ whiteSpace: "pre-wrap" }}>
+            {block.content}
+            {streaming && idx === blocks.length - 1 ? (
+              <span className="typing-cursor">▊</span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 const phaseColorMap: Record<string, string> = {
@@ -174,6 +283,9 @@ export function AITestPlanningPanel({
     if (
       event.type === "status" ||
       event.type === "text_chunk" ||
+      event.type === "content_block_start" ||
+      event.type === "content_block_delta" ||
+      event.type === "content_block_end" ||
       event.type === "tool_call_start" ||
       event.type === "tool_call_end"
     ) {
@@ -192,7 +304,6 @@ export function AITestPlanningPanel({
           }
           if (event.type === "text_chunk") {
             if (event.thinking) {
-              const payload = (msg.structured_payload ?? {}) as Record<string, unknown>;
               const prev = (payload._thinkingContent as string) ?? "";
               return {
                 ...msg,
@@ -200,6 +311,29 @@ export function AITestPlanningPanel({
               };
             }
             return { ...msg, content: msg.content + event.text };
+          }
+          if (
+            event.type === "content_block_start" ||
+            event.type === "content_block_delta" ||
+            event.type === "content_block_end"
+          ) {
+            const nextBlocks = applyContentBlockEvent(
+              readContentBlocks(payload),
+              event,
+            );
+            const textContent = nextBlocks
+              .filter((block) => block.type === "text")
+              .map((block) => block.content)
+              .join("");
+            return {
+              ...msg,
+              content: textContent,
+              structured_payload: {
+                ...payload,
+                content_blocks: nextBlocks,
+                _streaming: true,
+              },
+            };
           }
           if (event.type === "tool_call_start") {
             return {
@@ -267,17 +401,20 @@ export function AITestPlanningPanel({
 
     if (event.type === "turn_complete") {
       const targetId = activeAssistantMessageIdRef.current;
-      const thinkingContent = targetId != null
-        ? transcript.find((m) => m.id === targetId)?.structured_payload as Record<string, unknown> | undefined
-        : undefined;
       if (targetId != null) {
         setTranscript((current) =>
           current.map((msg) => {
             if (msg.id !== targetId) return msg;
             const payload = msg.structured_payload as Record<string, unknown> | null;
+            const contentBlocks = readContentBlocks(payload);
             return {
               ...msg,
-              content: event.payload.assistant_message || msg.content,
+              // Keep streamed text unless the server delivered the final
+              // message with no structured content blocks yet.
+              content:
+                contentBlocks.length > 0
+                  ? msg.content
+                  : event.payload.assistant_message || msg.content,
               structured_payload: {
                 ...payload,
                 _streaming: false,
@@ -290,22 +427,7 @@ export function AITestPlanningPanel({
         );
       }
       if (sessionId) {
-        const savedThinking = thinkingContent?._thinkingContent as string | undefined;
         loadSessionDetail(sessionId).then((detail) => {
-          if (savedThinking) {
-            setTranscript((msgs) =>
-              msgs.map((msg) => {
-                if (msg.id !== targetId) return msg;
-                return {
-                  ...msg,
-                  structured_payload: {
-                    ...(msg.structured_payload as Record<string, unknown> ?? {}),
-                    _thinkingContent: savedThinking,
-                  },
-                };
-              }),
-            );
-          }
           setSessionId(detail.session.id);
           setRequirements(detail.session.requirements);
           setMissingSlots(detail.session.missing_slots);
@@ -705,40 +827,15 @@ export function AITestPlanningPanel({
                     <Tag color={phaseColorMap[((item.structured_payload as Record<string, unknown>)._phase as string) ?? ""] ?? "processing"}>
                       {String((item.structured_payload as Record<string, unknown>)._phaseMessage ?? "处理中...")}
                     </Tag>
-                    {((item.structured_payload as Record<string, unknown>)._thinkingContent as string) ? (
-                      <details
-                        style={{ fontSize: 12, color: "#666", background: "#fafafa",
-                                 borderRadius: 6, padding: "4px 8px" }}
-                        open={Boolean((item.structured_payload as Record<string, unknown>)._streaming)}
-                      >
-                        <summary style={{ cursor: "pointer", fontWeight: 500 }}>
-                          {((item.structured_payload as Record<string, unknown>)._thinkingContent as string).length > 500
-                            ? `思考过程（${((item.structured_payload as Record<string, unknown>)._thinkingContent as string).length} 字，已折叠）`
-                            : "思考过程"}
-                        </summary>
-                        <div style={{
-                          whiteSpace: "pre-wrap",
-                          marginTop: 4,
-                          maxHeight: 200,
-                          overflowY: "auto",
-                          opacity: (item.structured_payload as Record<string, unknown>)._streaming ? 1 : 0.7,
-                        }}>
-                          {((item.structured_payload as Record<string, unknown>)._thinkingContent as string).length > 500
-                            ? ((item.structured_payload as Record<string, unknown>)._thinkingContent as string).slice(0, 500) + "..."
-                            : ((item.structured_payload as Record<string, unknown>)._thinkingContent as string)}
-                        </div>
-                      </details>
+                    <AssistantMessageBody
+                      message={item}
+                      streaming={Boolean((item.structured_payload as Record<string, unknown>)?._streaming)}
+                    />
+                    {(item.structured_payload as Record<string, unknown>)?._interrupted ? (
+                      <span style={{ color: "#faad14", fontSize: 12 }}>⏸ 回复中断</span>
+                    ) : (item.structured_payload as Record<string, unknown>)?._recovered ? (
+                      <span style={{ color: "#52c41a", fontSize: 12 }}>✓ 已恢复</span>
                     ) : null}
-                    <div style={{ whiteSpace: "pre-wrap" }}>
-                      {item.content}
-                      {(item.structured_payload as Record<string, unknown>)?._interrupted ? (
-                        <span style={{ color: "#faad14", fontSize: 12, marginLeft: 8 }}>⏸ 回复中断</span>
-                      ) : (item.structured_payload as Record<string, unknown>)?._recovered ? (
-                        <span style={{ color: "#52c41a", fontSize: 12, marginLeft: 8 }}>✓ 已恢复</span>
-                      ) : (item.structured_payload as Record<string, unknown>)?._streaming ? (
-                        <span className="typing-cursor">▊</span>
-                      ) : null}
-                    </div>
                   </div>
                 ) : (
                   item.content

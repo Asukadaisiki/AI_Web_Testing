@@ -42,6 +42,21 @@
 ---
 ---
 
+## 2026-08-30 | 修复 AI 规划 Playwright 浏览器缺失与 Sync API 实例泄漏
+
+- 任务：修复 AI 规划 `explore_flow` / `explore_page` 失败，并将 Playwright 浏览器安装到 D 盘。
+- 操作：
+  - 将 Chromium 及依赖（chromium、chromium-headless-shell、ffmpeg、winldd）安装到 `D:\PlaywrightBrowsers`。
+  - 在 `backend/.env` 与 `backend/.env.example` 增加 `PLAYWRIGHT_BROWSERS_PATH=D:\PlaywrightBrowsers`。
+  - 修复 `BrowserSessionManager.get_or_create_context` 与 `_collect_flow_a11y`：浏览器启动失败时释放 `sync_playwright` 实例，避免后续误报 Sync API inside asyncio loop。
+  - 同步 `users_id_seq` / `projects_id_seq` / `project_members_id_seq` 到当前最大 id，消除 `project_members` 主键冲突。
+- 验证：
+  - `sync_playwright` 成功加载 https://example.com。
+  - `_collect_flow_a11y` 成功探索 https://example.com（1 页、8 个元素）。
+  - `create_project` 成功创建项目，无主键冲突。
+  - 后端默认测试：493 passed、1 skipped、10 deselected。
+- 备注：新增 BUG-086 记录到 `docs/bug-log.md`。重启后端前请确保 `.env` 的 `PLAYWRIGHT_BROWSERS_PATH` 已生效。
+
 ## 2026-08-30 | 写入本地 admin 账号并清空测试数据库
 
 - 任务：测试依赖后端登录但没有注册账号；写入 admin 账号、清空旧数据并验证登录可用。
@@ -2224,3 +2239,32 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 密钥扫描：仅测试夹具中的 `test-key` / `new-dsl-secret` 假值，未发现真实泄露。
 - 结论：整体为「结构清晰、可运行、测试覆盖扎实的中上水平」代码库；主要短板是 lint/类型检查未纳入 CI 门禁、4 个超大模块需拆分、`__pycache__`/`dist`/`node_modules` 等生成物污染工作树感知、AI 配置字段随功能堆叠趋杂。
 - 备注：仅追加本日志，未改动任何业务代码。
+
+---
+
+## 2026-08-30 | AI 消息流式传输设计分析（对照 pi 事件协议）
+
+- 任务：分析前端消息框设计与 AI 返回消息消费链路，指出思考内容与正文渲染/顺序问题，参考 pi 的 `AssistantMessageEventStream` 事件协议，给出 Web 端与框架优化方案。
+- 操作：
+  - 阅读 `frontend/src/shared/api/sseClient.ts`、`features/planning/usePlanningSse.ts`、`components/AITestPlanningPanel.tsx` 的 SSE 解析与 `handleStreamEvent` 分发逻辑。
+  - 阅读 `backend/app/ai/test_planning_agent.py` 的 `stream_planning_turn` / `_stream_planning_llm`，确认 `text_chunk(thinking=true)` 与正文共用 `content` 字段、前端拆成 `_thinkingContent` + `content` 两路渲染。
+  - 对照 `pi/packages/ai/src/types.ts` 的 `AssistantMessageEvent`（text/thinking/toolcall 的 start/delta/end + contentIndex）与 `utils/event-stream.ts` 的 `EventStream`。
+- 结论：当前是「动作型扁平事件 + 前端手工拼字符串」，思考与正文不是有序 content block，导致思考折叠但正文在框外、顺序丢失、`turn_complete` 覆盖流式文本等问题；应改为「消息生命周期事件 + contentIndex + reducer」，思考作为一等 content block。
+- 备注：仅追加本日志，未改动任何业务代码。
+
+---
+
+## 2026-08-30 | 对齐 pi 的 AI 消息流式传输协议（实现）
+
+- 任务：将前端消息框与后端流式事件协议对齐 pi 的 `AssistantMessageEvent` 设计（有序 content block + contentIndex），解决思考内容与正文乱序、正文覆盖等问题。
+- 操作：
+  - 后端 `app/ai/test_planning_agent.py::_stream_planning_llm` 由扁平 `text_chunk(thinking=true)` 改为产出 `content_block_start / content_block_delta / content_block_end`（带 `content_index` 与 `kind`）。
+  - `app/ai/test_planning_agent.py::stream_planning_turn` 透传三类 `content_block_*` 事件。
+  - `app/application/planning/conversation_service.py` 新增 `_flush_streaming_content_block`，把有序块持久化到 `structured_payload_json["content_blocks"]`，并以文本块镜像到 `message.content` 兼容旧渲染；最终 `turn_complete` 不再覆盖流式文本。
+  - 前端 `types/api.ts` 新增 `AssistantContentBlock` 与 `ContentBlockStart/Delta/EndStreamEvent`。
+  - 前端 `AITestPlanningPanel.tsx` 新增 `readContentBlocks` / `applyContentBlockEvent` / `AssistantMessageBody`，按 content block 顺序渲染思考与正文；`turn_complete` 仅在无流式块时才回填最终消息。
+- 验证：
+  - 更新 `tests/unit/test_planning_agent.py` 流式断言。
+  - 后端默认 pytest：493 passed、1 skipped、10 deselected。
+  - 前端 `npm run build` 通过；`npm test` 67 passed。
+- 备注：本次工作树还包含上一任务遗留的 BUG-086 修复（`.env.example`、`page_explorer.py`、`docs/bug-log.md`），未在本任务中改动，同步时需一并注意。

@@ -394,13 +394,23 @@ class BrowserSessionManager:
                     cls._close_locked(session_id)
 
             pw = sync_playwright()
-            playwright = pw.__enter__()
-            browser = playwright.chromium.launch(headless=True)
-            context_kwargs: dict = {}
-            if storage_state_path and Path(storage_state_path).exists():
-                context_kwargs["storage_state"] = storage_state_path
-            context = browser.new_context(**context_kwargs)
-            page = context.new_page()
+            try:
+                playwright = pw.__enter__()
+                browser = playwright.chromium.launch(headless=True)
+                context_kwargs: dict = {}
+                if storage_state_path and Path(storage_state_path).exists():
+                    context_kwargs["storage_state"] = storage_state_path
+                context = browser.new_context(**context_kwargs)
+                page = context.new_page()
+            except Exception:
+                try:
+                    pw.__exit__(None, None, None)
+                except Exception:
+                    logger.warning(
+                        "BrowserSessionManager: failed to clean up Playwright after launch failure",
+                        exc_info=True,
+                    )
+                raise
 
             cls._sessions[session_id] = {
                 "pw": pw,
@@ -792,13 +802,23 @@ def _collect_flow_a11y(
         )
     else:
         pw = _sync_playwright_context()
-        playwright = pw.__enter__()
-        browser = playwright.chromium.launch(headless=True)
-        context_kwargs: dict[str, Any] = {}
-        if storage_state_path and Path(storage_state_path).exists():
-            context_kwargs["storage_state"] = storage_state_path
-        context = browser.new_context(**context_kwargs)
-        page = context.new_page()
+        try:
+            playwright = pw.__enter__()
+            browser = playwright.chromium.launch(headless=True)
+            context_kwargs: dict[str, Any] = {}
+            if storage_state_path and Path(storage_state_path).exists():
+                context_kwargs["storage_state"] = storage_state_path
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+        except Exception:
+            try:
+                pw.__exit__(None, None, None)
+            except Exception:
+                logger.warning(
+                    "_collect_flow_a11y: failed to clean up Playwright after launch failure",
+                    exc_info=True,
+                )
+            raise
 
     results: list[dict[str, Any]] = []
     state_index = 0

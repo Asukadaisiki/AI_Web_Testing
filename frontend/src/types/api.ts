@@ -897,6 +897,10 @@ export interface ExecutionsOverview {
 // Execution stream events (WebSocket)
 // ---------------------------------------------------------------------------
 
+export type AssistantContentBlock =
+  | { type: "thinking"; content: string }
+  | { type: "text"; content: string };
+
 export interface StatusStreamEvent {
   type: "status";
   phase: "thinking" | "generating" | "tool_calling" | "executing";
@@ -907,6 +911,28 @@ export interface TextChunkStreamEvent {
   type: "text_chunk";
   text: string;
   thinking?: boolean;
+}
+
+// pi-aligned ordered content blocks. ``content_index`` is the 0-based index
+// of the block within the current assistant message.
+export interface ContentBlockStartStreamEvent {
+  type: "content_block_start";
+  content_index: number;
+  kind: "thinking" | "text";
+}
+
+export interface ContentBlockDeltaStreamEvent {
+  type: "content_block_delta";
+  content_index: number;
+  kind: "thinking" | "text";
+  delta: string;
+}
+
+export interface ContentBlockEndStreamEvent {
+  type: "content_block_end";
+  content_index: number;
+  kind: "thinking" | "text";
+  content: string;
 }
 
 export interface ToolCallStartStreamEvent {
@@ -1002,6 +1028,9 @@ export interface ErrorEvent {
 export type ExecutionStreamEvent =
   | StatusStreamEvent
   | TextChunkStreamEvent
+  | ContentBlockStartStreamEvent
+  | ContentBlockDeltaStreamEvent
+  | ContentBlockEndStreamEvent
   | ToolCallStartStreamEvent
   | ToolCallEndStreamEvent
   | DraftGeneratingStreamEvent

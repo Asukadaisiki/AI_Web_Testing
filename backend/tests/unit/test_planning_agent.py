@@ -101,8 +101,10 @@ def test_stream_planning_llm_yields_text_chunks_and_full_response(monkeypatch) -
     )
 
     assert events == [
-        {"type": "text_chunk", "text": "你好"},
-        {"type": "text_chunk", "text": "，世界"},
+        {"type": "content_block_start", "content_index": 0, "kind": "text"},
+        {"type": "content_block_delta", "content_index": 0, "kind": "text", "delta": "你好"},
+        {"type": "content_block_delta", "content_index": 0, "kind": "text", "delta": "，世界"},
+        {"type": "content_block_end", "content_index": 0, "kind": "text", "content": "你好，世界"},
         {"type": "raw_response", "text": "你好，世界"},
     ]
 
