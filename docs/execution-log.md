@@ -42,6 +42,18 @@
 ---
 ---
 
+## 2026-08-30 | 写入本地 admin 账号并清空测试数据库
+
+- 任务：测试依赖后端登录但没有注册账号；写入 admin 账号、清空旧数据并验证登录可用。
+- 操作：
+  - 启动本机 PostgreSQL 18（`D:/PostgreSQL/data`；服务为 NetworkService，普通用户 `net start` 被拒绝，改用 `pg_ctl.exe start -w`）。
+  - 清空 `public` schema 全部业务表数据（`TRUNCATE ... RESTART IDENTITY CASCADE`，保留 `alembic_version` 迁移版本）。
+  - 通过 ORM 写入账号：`id=1`、`email=admin@example.com`、`display_name=admin`、密码 `admin123`（PBKDF2-SHA256 哈希），并重建默认项目 `Default Project`（`id=1`、`is_default=true`）及 owner 成员关系。
+- 验证：
+  - `POST /api/v1/auth/login` 使用 `admin@example.com / admin123` 返回 200；`GET /api/v1/auth/me` 返回同一用户；错误密码返回 401。
+  - 清理后仅剩 `users=1`、`projects=1`、`project_members=1`，其余业务表均为 0。
+- 备注：登录表单要求邮箱格式，因此登录账号为 `admin@example.com`，平台显示名为 `admin`。
+
 ## 2026-08-28 | 全代码库孤儿代码与架构审计
 
 - 任务：全量扫描代码库，识别无引用且不属于关键链路的代码，并评估当前架构与优化方向。
@@ -2197,3 +2209,18 @@ Agent 流程失败的根本原因是**选择器策略差异**：
   - 本地 `main` 与 `origin/main` 一致（`60e51e6`），树无差异。
   - 后端/前端服务仍在运行，`/api/v1/health` 与 Vite 均返回 200。
 - 备注：历史中的 `.claude/settings.local.json` 已于更早前清理；本次仅处理 `backend/.env`。工作树中的 `backend/.env` 仍保留用于本地开发（已被 gitignore），但历史已无记录。
+
+---
+
+## 2026-08-30 | 仓库代码质量评估（真实代码 + 动态门禁）
+
+- 任务：应要求对当前仓库做一次代码质量评估，基于真实源码、目录结构与动态测试，不只看文档结论。
+- 操作：
+  - 统计后端 `backend/app`（22,194 行 Python）与前端 `frontend/src`（13,637 行 TS/TSX）结构，检查分层、路由、模型、迁移、测试覆盖。
+  - 运行后端默认 pytest、前端 `npm run build`；检查 TODO/FIXME、`print()`、`console.log`、密钥扫描、Alembic 版本链、重复模块与 lint 配置。
+- 验证：
+  - 后端：493 passed、1 skipped、10 deselected（95.77s）；存在 `TestCase`/`TestCaseRun` 类名被 pytest 收集的 PytestCollectionWarning。
+  - 前端：`tsc --noEmit && vite build` 通过，主包约 763KB（gzip 240KB）偏大，无代码分割治理。
+  - 密钥扫描：仅测试夹具中的 `test-key` / `new-dsl-secret` 假值，未发现真实泄露。
+- 结论：整体为「结构清晰、可运行、测试覆盖扎实的中上水平」代码库；主要短板是 lint/类型检查未纳入 CI 门禁、4 个超大模块需拆分、`__pycache__`/`dist`/`node_modules` 等生成物污染工作树感知、AI 配置字段随功能堆叠趋杂。
+- 备注：仅追加本日志，未改动任何业务代码。
