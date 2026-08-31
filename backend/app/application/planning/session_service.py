@@ -19,6 +19,7 @@ from app.models import (
     AIPlanningMessage,
     AIPlanningSession,
     Project,
+    ProjectMember,
     SessionProject,
 )
 from app.schemas.ai_planning import (
@@ -82,13 +83,22 @@ def create_planning_session(
     session.flush()
 
     if payload.project_id is None:
-        project = Project(
-            name=f"default-{record.id}",
-            description="auto-created temporary project",
-            is_default=True,
-        )
-        session.add(project)
-        session.flush()
+        project = _get_default_project_for_user(session, actor_user_id)
+        if project is None:
+            project = Project(
+                name=f"default-{record.id}",
+                description="auto-created temporary project",
+                is_default=True,
+            )
+            session.add(project)
+            session.flush()
+            session.add(
+                ProjectMember(
+                    project_id=project.id,
+                    user_id=actor_user_id,
+                    role="owner",
+                )
+            )
     else:
         project = session.get(Project, payload.project_id)
         if project is None:
@@ -109,6 +119,19 @@ def create_planning_session(
         session,
         record.id,
         actor_user_id=actor_user_id,
+    )
+
+
+def _get_default_project_for_user(
+    session: Session,
+    actor_user_id: int,
+) -> Project | None:
+    return session.scalar(
+        select(Project)
+        .join(ProjectMember, ProjectMember.project_id == Project.id)
+        .where(ProjectMember.user_id == actor_user_id)
+        .order_by(Project.is_default.desc(), Project.id.asc())
+        .limit(1)
     )
 
 

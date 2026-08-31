@@ -41,7 +41,7 @@ def _make_a11y_node(name: str, role: str = "button", **overrides) -> dict:
 # ── Layer 1: API-level integration tests ─────────────────────────────────────
 
 class TestDefaultProjectAutoCreate:
-    def test_session_without_project_creates_default(self, db_session: Session):
+    def test_session_without_project_reuses_accessible_default(self, db_session: Session):
         req = CreateAIPlanningSessionRequest(project_id=None, case_id=None)
         detail = create_planning_session(db_session, req, actor_user_id=1)
 
@@ -53,10 +53,12 @@ class TestDefaultProjectAutoCreate:
         ).first()
         assert sp is not None
 
-        # Verify the project has the default naming
+        # Verify the session reuses the seeded project instead of creating one.
         project = db_session.get(Project, sp.project_id)
         assert project is not None
-        assert project.name == f"default-{detail.session.id}"
+        assert project.id == 1
+        assert project.name == "Default Project"
+        assert detail.session.active_project_id == 1
 
     def test_session_with_project_does_not_create_new(self, db_session: Session):
         req = CreateAIPlanningSessionRequest(project_id=1, case_id=None)

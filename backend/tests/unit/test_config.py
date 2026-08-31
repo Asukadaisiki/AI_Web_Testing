@@ -22,9 +22,10 @@ def test_get_settings_requires_auth_session_secret(monkeypatch, tmp_path: Path) 
         get_settings.cache_clear()
 
 
-def test_get_settings_uses_secure_cookie_by_default(monkeypatch) -> None:
+def test_get_settings_uses_secure_cookie_by_default(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-session-secret")
     monkeypatch.delenv("AUTH_SESSION_HTTPS_ONLY", raising=False)
+    monkeypatch.setattr(config_module, "ENV_FILE_PATH", tmp_path / ".missing.env")
     get_settings.cache_clear()
 
     try:

@@ -42,6 +42,93 @@
 ---
 ---
 
+## 2026-08-31 | 修复日志记录倒序问题
+
+- 任务：修复本轮新增执行日志被追加到文件尾部的问题，恢复“最新记录优先放到最上面”的约定。
+- 操作：
+  - 将 2026-08-31 的「修复默认项目与规划会话初始化/绑定策略」「排查规划会话与项目读取/创建链路」「复刻首次新建规划会话 500」「诊断首次新建规划会话 500 后第二次成功」移动到日志记录区顶部。
+  - 保持历史 2026-08-30 及更早记录顺序不变。
+- 验证：`docs/execution-log.md` 顶部记录区已按最新任务在前排列。
+- 备注：本次仅修正文档顺序，不改业务代码。
+
+---
+
+## 2026-08-31 | 修复默认项目与规划会话初始化/绑定策略
+
+- 任务：落实「初始化项目时同时初始化会话并绑定；会话与项目保持多对多绑定；测试用例仍以项目为执行归属」。
+- 变更：
+  - 新增 Alembic 迁移 `20260831_0027_seed_default_planning_session.py`：
+    - 将 `Default Project(id=1)` 标记为 `is_default=true`。
+    - 若种子用户与默认项目存在且尚未绑定规划会话，则创建 `默认规划会话` 并写入 `session_projects`。
+    - 设置默认会话 `active_project_id=1`。
+    - PostgreSQL 下同步 `users/projects/project_members/ai_planning_sessions/session_projects` 序列，避免 seed 固定 ID 后再次分配重复主键。
+  - 调整 `create_planning_session`：
+    - 未传 `project_id` 时优先复用当前用户已有项目，按 `is_default desc, id asc` 选择默认项目。
+    - 仅在用户没有可访问项目时兜底创建 `default-{session_id}`。
+    - 兜底创建项目时同步写入 `ProjectMember`，避免自动项目在全局项目列表不可见。
+  - 更新测试：
+    - 会话创建测试改为断言复用 `Default Project`。
+    - 新增多会话共享同一项目覆盖。
+    - 新增默认规划会话迁移测试。
+    - 修复配置测试对本地 `.env` 的隔离缺口。
+- 验证：
+  - `cd backend && uv run alembic upgrade head` 成功，当前 head 为 `20260831_0027`。
+  - 修复后接口级验证：`POST /api/v1/ai-planning/sessions` 返回 `201`，新会话绑定 `Default Project(id=1)`。
+  - `cd backend && uv run pytest -q` 通过：495 passed、1 skipped、10 deselected。
+  - 本地 PostgreSQL 已清理到目标状态：仅保留 `Default Project(id=1, is_default=true)`、`默认规划会话`、以及二者的 `session_projects` 绑定。
+
+---
+
+## 2026-08-31 | 排查规划会话与项目读取/创建链路
+
+- 任务：解释初始化项目存在但规划首页不显示、点击新建会话触发 500 的完整前后端链路。
+- 前端链路：
+  - `/planning` 的 `SessionListPage` 只调用 `listPlanningSessions()`，即 `GET /api/v1/ai-planning/sessions`；页面展示的是每个规划会话返回的 `projects` 字段，不读取全局项目列表。
+  - 点击 `/planning` 顶部「新建会话」调用 `createPlanningSession({})`，即 `POST /api/v1/ai-planning/sessions`，没有传 `project_id`，也没有先读取或复用 `Default Project`。
+  - 进入会话后的 `SessionProjectPanel` 才同时读取 `listSessionProjects(sessionId)` 与 `getProjects()`；其中 `getProjects()` 是 `GET /api/v1/projects`，用于下拉选择「关联已有项目」。
+- 后端链路：
+  - `POST /api/v1/ai-planning/sessions` 进入 `create_planning_session_route`，调用 `create_planning_session`。
+  - `create_planning_session` 先创建 `AIPlanningSession`，随后在 `payload.project_id is None` 时自动创建 `Project(name=f"default-{record.id}", is_default=True)`，再写入 `SessionProject` 并设置 `active_project_id`。
+  - `GET /api/v1/ai-planning/sessions` 只列出当前用户的会话，并从 `record.projects` 返回会话已关联项目；未关联任何会话的初始化项目不会出现在规划首页。
+  - `GET /api/v1/projects` 通过 `ProjectMember` 列出当前用户可访问项目，能返回初始化的 `Default Project(id=1)`。
+- 实测：
+  - `GET /api/v1/projects` 返回 `Default Project(id=1)`。
+  - `GET /api/v1/ai-planning/sessions` 返回会话 `id=2` 及其关联项目 `default-2(id=2)`，不返回未关联到会话的 `Default Project`。
+- 结论：这是数据模型/初始化/默认关联策略不一致叠加序列未对齐的问题。初始化项目存在于全局项目域，但规划首页是会话域；新建会话未复用初始化项目，而是自动创建会话私有默认项目，进而撞上未对齐的 `projects_id_seq`。
+- 备注：本次仅做链路排查和记录，未修改业务代码或数据库数据。
+
+---
+
+## 2026-08-31 | 复刻首次新建规划会话 500
+
+- 任务：按页面行为复刻「首次新建会话 500，第二次成功且显示会话 2」。
+- 数据库重置：
+  - 删除现有 `ai_planning_sessions` 记录，级联清理会话关联数据。
+  - 删除自动生成的 `projects.name like 'default-%' and is_default = true` 项目，保留种子项目 `Default Project(id=1)`。
+  - 将 `ai_planning_sessions_id_seq`、`projects_id_seq`、`session_projects_id_seq` 重置为 `1, is_called=false`，恢复可复刻的序列错位状态。
+- 复刻方式：
+  - 使用 FastAPI `TestClient(raise_server_exceptions=False)` 连续请求两次 `POST /api/v1/ai-planning/sessions`。
+- 结果：
+  - 第一次请求返回 `500`，响应堆栈包含 `psycopg.errors.UniqueViolation`。
+  - 第二次请求返回 `201`，响应体包含 `session.id=2`、`active_project_id=2`、项目 `default-2`。
+  - 复刻后数据库仅有 `ai_planning_sessions.id=2`，无会话 1；`session_projects` 仅关联 `(session_id=2, project_id=2)`。
+- 备注：复刻会保留当前数据库处于「第二次点击成功后」的状态；本次未修改业务代码。
+
+---
+
+## 2026-08-31 | 诊断首次新建规划会话 500 后第二次成功
+
+- 任务：定位「首次点击新建会话返回 500 Internal Server Error，第二次点击成功且显示会话 2」的原因。
+- 调查：
+  - 检查前端 `SessionListPage.handleCreate`，确认每次点击直接调用 `createPlanningSession({})`，没有「先检测是否已有会话」的复用逻辑。
+  - 检查后端 `create_planning_session`，确认新建会话后若未传 `project_id` 会创建默认项目 `default-{record.id}`，并在同一事务内提交。
+  - 查询本地 PostgreSQL：当前仅存在 `ai_planning_sessions.id=2`，不存在会话 1；`projects` 存在 `id=1 Default Project` 与 `id=2 default-2`；相关序列均已推进。
+  - 对照初始 migration，发现种子数据显式插入 `users.id=1`、`projects.id=1`、`project_members.id=1`。
+- 结论：本地 PostgreSQL 种子数据显式写入 `projects.id=1` 后未同步 `projects_id_seq`，首次创建默认项目时序列仍尝试分配 `id=1`，触发主键冲突并回滚；PostgreSQL 序列不随事务回滚，因此第二次分配 `id=2` 成功。
+- 备注：本次仅诊断和记录，未修改业务代码或数据库数据。
+
+---
+
 ## 2026-08-30 | 修复 AI 规划 Playwright 浏览器缺失与 Sync API 实例泄漏
 
 - 任务：修复 AI 规划 `explore_flow` / `explore_page` 失败，并将 Playwright 浏览器安装到 D 盘。

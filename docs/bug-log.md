@@ -4,6 +4,19 @@
 
 ---
 
+### AUDIT-20260831-01 | 本地 PostgreSQL 种子项目序列未对齐导致首次新建会话 500
+
+- 状态：fixed
+- 严重度：medium
+- 位置：`backend/alembic/versions/20260309_0001_stage1_domain_models.py:175-204`、`backend/app/application/planning/session_service.py:84-92`
+- 描述：初始 migration 显式插入 `projects.id=1`，但 PostgreSQL 序列未同步到 `max(id)`。首次新建规划会话且未传 `project_id` 时，服务会创建默认项目；若 `projects_id_seq` 仍从 1 开始，`Project` 插入触发主键冲突，接口返回 500。该事务回滚会话记录，但 PostgreSQL sequence 不回滚，因此第二次请求使用 `id=2` 后成功，界面显示会话 2。
+- 链路补充：规划首页读取的是 `GET /api/v1/ai-planning/sessions`，只展示已关联到会话的项目；初始化的 `Default Project(id=1)` 虽可通过 `GET /api/v1/projects` 读取，但没有与任何规划会话关联，因此不会出现在规划首页。新建会话接口在未传 `project_id` 时也不会复用该初始化项目，而是自动创建 `default-{session_id}`。
+- 影响：本地空库/重建库首次使用新建规划会话时体验异常，并产生编号跳号，容易误判为隐藏会话或前端状态错乱。
+- 处理：新增迁移 `20260831_0027`，将 `Default Project(id=1)` 标记为默认项目，创建并绑定默认规划会话，且在 PostgreSQL 下校准 `users/projects/project_members/ai_planning_sessions/session_projects` 序列；同时调整新建会话逻辑，未传 `project_id` 时优先复用当前用户已有项目，只有无可访问项目时才创建兜底默认项目并补 `ProjectMember`。
+- 验证：已重置本地 PostgreSQL 会话数据并复刻。修复前第一次 `POST /api/v1/ai-planning/sessions` 返回 `500`，响应堆栈包含 `psycopg.errors.UniqueViolation`；修复后同接口返回 `201`，新会话绑定 `Default Project(id=1)`。后端完整测试 `uv run pytest -q` 通过，结果为 495 passed、1 skipped、10 deselected。
+
+---
+
 ## BUG-086 | AI 规划探索失败：Playwright 浏览器未安装且 Sync API 实例泄漏
 
 - 日期：2026-08-30

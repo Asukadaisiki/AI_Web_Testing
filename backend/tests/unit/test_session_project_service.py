@@ -25,17 +25,37 @@ def _user_id(db_session: SA_Session) -> int:
 
 
 class TestCreateSessionWithoutProject:
-    def test_creates_session_without_project(self, db_session: SA_Session) -> None:
+    def test_reuses_existing_accessible_project(self, db_session: SA_Session) -> None:
         detail = create_planning_session(
             db_session,
             CreateAIPlanningSessionRequest(),
             actor_user_id=_user_id(db_session),
         )
-        # Auto-creates a default project
         assert len(detail.session.projects) == 1
-        assert detail.session.active_project_id == detail.session.projects[0].id
+        assert detail.session.projects[0].name == "Default Project"
+        assert detail.session.active_project_id == 1
         assert detail.session.projects[0].is_active is True
         assert detail.session.status == "collecting"
+
+    def test_multiple_sessions_can_share_project(self, db_session: SA_Session) -> None:
+        uid = _user_id(db_session)
+
+        first = create_planning_session(
+            db_session,
+            CreateAIPlanningSessionRequest(),
+            actor_user_id=uid,
+        )
+        second = create_planning_session(
+            db_session,
+            CreateAIPlanningSessionRequest(),
+            actor_user_id=uid,
+        )
+
+        assert first.session.id != second.session.id
+        assert first.session.active_project_id == 1
+        assert second.session.active_project_id == 1
+        assert [project.name for project in first.session.projects] == ["Default Project"]
+        assert [project.name for project in second.session.projects] == ["Default Project"]
 
 
 class TestLinkProject:
@@ -93,7 +113,7 @@ class TestUnlinkProject:
         unlink_project_from_session(db_session, detail.session.id, project_id=project.id, actor_user_id=uid)
 
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
-        # default project still linked
+        # seeded project still linked
         assert len(projects) == 1
         assert projects[0].is_active is True
 
@@ -109,8 +129,8 @@ class TestListSessionProjects:
         uid = _user_id(db_session)
         detail = create_planning_session(db_session, CreateAIPlanningSessionRequest(), actor_user_id=uid)
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
-        # auto-created default project
         assert len(projects) == 1
+        assert projects[0].name == "Default Project"
 
     def test_returns_linked_projects(self, db_session: SA_Session) -> None:
         uid = _user_id(db_session)
@@ -124,10 +144,10 @@ class TestListSessionProjects:
         link_project_to_session(db_session, detail.session.id, project_id=p2.id, actor_user_id=uid)
 
         projects = list_session_projects(db_session, detail.session.id, actor_user_id=uid)
-        # default + P1 + P2
+        # seeded default project + P1 + P2
         assert len(projects) == 3
         names = {p.name for p in projects}
-        assert names == {"P1", "P2", f"default-{detail.session.id}"}
+        assert names == {"Default Project", "P1", "P2"}
         assert [p.name for p in projects if p.is_active] == ["P2"]
 
 
@@ -165,6 +185,6 @@ class TestListSessionsWithProjects:
         sessions = list_planning_sessions(db_session, actor_user_id=uid)
         assert len(sessions) >= 1
         found = next(s for s in sessions if s.id == detail.session.id)
-        # default project + SharedProject
+        # seeded default project + SharedProject
         assert len(found.projects) == 2
         assert found.active_project_id == project.id
