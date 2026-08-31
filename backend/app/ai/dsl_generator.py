@@ -11,6 +11,7 @@ from typing import Any
 from urllib import request
 from urllib.error import HTTPError, URLError
 
+from app.ai.prompts import PromptStage, render_prompt
 from app.core.config import get_settings
 from app.core.structured_logging import get_structured_logger
 from app.schemas.dsl import (
@@ -702,101 +703,8 @@ def generate_case_draft(
         if var_lines:
             variables_section = "\n## Scenario variables\n" + "\n".join(var_lines) + "\n"
 
-    # ── Build concise system prompt ──
-    system_prompt = """You generate web testing DSL in JSON. Return {"name","description","base_url","input_contract","output_contract","steps"}.
-No markdown, no explanation — JSON only.
-
-## Data format
-
-The Available elements are grouped by page -> action:
-- Each page section shows the URL and page state
-- Under each page, actions are listed with the elements that appeared AFTER that action
-- The same page may appear multiple times with different actions, showing how elements change
-- This is normal and expected — use the most recent state of each element
-
-## Rules (in priority order)
-
-1. **Targets**: Copy the EXACT role="name" format from the Available elements section.
-   Include the role prefix — this enables precise locator resolution.
-   FORBIDDEN: CSS selectors (#id, .class, [attr]), XPath (//, /html), tag names (div, span),
-   data-testid, or ANY DOM-derived selector. The system resolves locators from a11y role+name only.
-
-   **IMPORTANT**: Use the role from the element that HAS the name, NOT from its parent.
-   Example: If you see:
-   ```
-   - [container] Blue Top
-     - paragraph="Blue Top"
-     - heading="Rs. 500"
-     - link="Add to cart"
-   ```
-   Use: `paragraph "Blue Top"` or role from the indented child element.
-   The `[container]` prefix indicates a container element — NEVER use it as a target.
-
-   **Element disambiguation**: When multiple elements have the same role and name (e.g. multiple
-   "Add to cart" buttons), you MUST use the scoped format:
-   target=<role> "<name>" inside "<container_identifier>"
-   The scope name comes from the parent container's identifying text (product name, row label, etc.).
-   Look at the page structure: elements are grouped in containers (product cards, table rows, forms, etc.).
-   Use the container's unique identifying text as the scope.
-   Never target a bare price like "Rs. 500".
-
-   **CRITICAL**: When using `inside`, use the CHILD element's role, NOT the container's role.
-   Example:
-   - To capture price: `capture_text heading "Rs. 500" inside "Blue Top"` ✓
-   - WRONG: `capture_text paragraph "Blue Top" inside "Blue Top"` ✗
-
-2. **Page structure understanding**: The Available elements use indentation to show parent-child relationships:
-   - Indented elements are children of the element above them
-   - Example: `- [container] Blue Top\n  - paragraph="Blue Top"\n  - heading="Rs. 500"\n  - link="Add to cart"`
-     means paragraph, heading, and link are children of the Blue Top container
-   - Use the parent container's identifying text as the scope name for `inside`
-   - Example: To click "Add to cart" inside "Blue Top" product card, use: target=link "Add to cart" inside "Blue Top"
-
-   **Correct DSL examples**:
-   - click link "Products" → target=link "Products"
-   - click link "Add to cart" inside "Blue Top" → target=link "Add to cart" inside "Blue Top"
-   - capture_text heading "Rs. 500" inside "Blue Top" → target=heading "Rs. 500" inside "Blue Top"
-   - capture_text paragraph "Blue Top" → target=paragraph "Blue Top"
-   - assert_text link "Blue Top" → target=link "Blue Top", value="Blue Top"
-
-   **WRONG examples** (NEVER do this):
-   - capture_text paragraph "Blue Top" inside "Blue Top" → WRONG! use container text as scope, not as child target
-   - click paragraph "Blue Top" → OK only for capture_text; for clicking prefer link/button roles
-
-3. **Navigation**: You MUST click/goto to reach a page BEFORE interacting with elements on it.
-   The first step after goto / is a navigation click, not a form input.
-
-4. **Login**: The DSL must be self-contained. Include all login steps (input email + password + click Login).
-   Do NOT assume the user is already logged in. Use ${var} for credentials.
-
-5. **Wait after actions**: After navigation clicks or form submits, add wait_for for a confirmation element.
-
-6. **Input trigger**: When changing a value that requires keyboard activation (quantity, search),
-   add trigger="Enter" on the input step. The executor handles the keypress.
-
-7. **Modify-then-assert**: When changing a value, input → wait_for update → assert.
-   Do NOT assert a new value without first inputting it.
-
-8. **Capture-then-assert**: capture_text stores element text into a variable
-   (use context_key as the variable name). Later assert_text steps can reference
-   this variable via ${context_key} in the VALUE field to verify the captured
-   text appears on a different page (e.g. cart page).
-
-9. **Form coverage**: Generate a step for EVERY form field mentioned in the flow.
-   Dropdown: input action. Checkbox/radio: click action.
-
-10. **Field rules**:
-    - goto / assert_url_contains: value=URL, NO target
-    - click / wait_for: target only, NO value
-    - input / assert_text: BOTH target AND value required
-    - capture_text: target + context_key (snake_case variable name)
-    - ${var} placeholders can ONLY be used in the VALUE field of input/assert_text, NEVER as a target.
-
-11. **input_contract**: Define every ${var} used in steps. Include context_key AND value.
-    CRITICAL: The "value" field MUST be copied VERBATIM from the "## Test data" section.
-    NEVER invent, guess, or modify test data values.
-
-Return ONLY the JSON object."""
+    # ── Build system prompt ──
+    system_prompt = render_prompt(PromptStage.DSL_GENERATE_SYSTEM).content
 
     # ── Build user prompt ──
     user_prompt_parts = [

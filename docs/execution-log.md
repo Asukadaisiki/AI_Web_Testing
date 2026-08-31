@@ -55,6 +55,36 @@
 
 ## 任务记录
 
+## 2026-08-31 | Prompt 统一管理入口落地
+
+- 任务：先做当前 prompt 管理，不实现 RL 相关逻辑，只为后续策略接入预留扩展点。
+- 操作：新增统一 Prompt Registry 入口；迁移 Planning 初始化、DSL 生成 system prompt、VLM system prompt；保留旧导入路径兼容。
+- 结果：静态 prompt 不再散落在调用模块中，业务代码通过 stage 渲染 prompt；Planning 初始化 prompt 已同步薄化。
+- 验证：聚焦单元测试与语法检查通过。
+- 后续：继续把运行时 guard/context/anti-pattern 文本迁入统一入口，并下线在线 anti-pattern few-shot 注入。
+
+---
+
+## 2026-08-31 | 梳理现有 Prompt 清单并修正日志位置
+
+- 任务：按要求将日志记录放到任务记录最前面，并梳理当前项目所有现存 prompt。
+- 操作：扫描后端、前端与文档中的 prompt 定义、构造函数和注入点；修正上轮 AgenticRL 分析记录的放置位置。
+- 结果：确认当前线上代码中的主要 prompt 集中在 AI planning、DSL generation、anti-pattern 注入和 VLM locator 四类。
+- 验证：通过 `rg` 检索 `SYSTEM_PROMPT`、`user_prompt`、`build_*prompt`、`format_*prompt`、`few-shot` 等关键字。
+- 后续：如需继续治理 prompt，可先将 anti-pattern 注入从在线 prompt 移到离线学习样本。
+
+---
+
+## 2026-08-31 | AgenticRL 演进机制设计分析
+
+- 任务：分析 trace 记录与 anti 错误注入如何融合 AgenticRL，自主优化 SOP 和提示词。
+- 操作：检查 ReAct prompt、DSL 生成 prompt、anti-pattern 注入、generation run 反馈模型与历史设计文档。
+- 结果：确认现有系统已有 generation run、用户反馈、执行报告、locator trace 等学习样本基础；建议将 anti-pattern 从 prompt few-shot 注入迁移为离线评分样本和策略候选来源。
+- 验证：静态取证，未运行测试。
+- 后续：优先建设统一事件样本、奖励函数、prompt/策略版本治理、离线评估集与灰度发布闭环。
+
+---
+
 ## 2026-08-31 | 同步日志结构整理到 GitHub
 
 - 任务：将当前日志结构整理变更同步到 GitHub。

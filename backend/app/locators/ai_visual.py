@@ -14,17 +14,15 @@ from time import monotonic
 from typing import Any, Literal
 from urllib import request
 
+from app.ai.prompts import PromptStage, render_prompt
 from app.core.config import get_settings
 
 
 ModelFamily = Literal["qwen-vl", "gemini", "gpt-4o", "qwen2.5-vl", "glm"]
 
-SYSTEM_PROMPT = """You are an AI assistant that locates a UI element in a screenshot.
-Return JSON only in the shape {"bbox":[xmin,ymin,xmax,ymax],"errors":["..."]?}."""
-SECTION_SYSTEM_PROMPT = """You are an AI assistant that finds the broad page area that contains a UI element.
-Return JSON only in the shape {"bbox":[xmin,ymin,xmax,ymax],"errors":["..."]?}."""
-RANK_CANDIDATE_SYSTEM_PROMPT = """You rank numbered UI candidates in a screenshot.
-Return JSON only in the shape {"candidate_index": number, "errors":["..."]?}."""
+SYSTEM_PROMPT = render_prompt(PromptStage.VLM_LOCATE_SYSTEM).content
+SECTION_SYSTEM_PROMPT = render_prompt(PromptStage.VLM_SECTION_SYSTEM).content
+RANK_CANDIDATE_SYSTEM_PROMPT = render_prompt(PromptStage.VLM_RANK_CANDIDATE_SYSTEM).content
 
 logger = logging.getLogger(__name__)
 DEEP_LOCATE_SECTION_TIMEOUT_RATIO = 0.4
@@ -876,16 +874,7 @@ def _elapsed_milliseconds(started_at: float) -> float:
 # VLM page layout annotation (used by planning phase)
 # ---------------------------------------------------------------------------
 
-_PAGE_ANNOTATION_SYSTEM_PROMPT = (
-    "You are an AI assistant that describes the layout structure of a web page screenshot.\n"
-    "Return a concise text description (not JSON) covering:\n"
-    "1. Overall page layout (header, navigation, main content, sidebar, footer)\n"
-    "2. Form sections and their purpose\n"
-    "3. Key interactive regions (buttons, links, inputs)\n"
-    "4. Any modal or overlay elements\n"
-    "Keep the description under 200 words. Focus on spatial layout and element relationships, "
-    "not individual element details."
-)
+_PAGE_ANNOTATION_SYSTEM_PROMPT = render_prompt(PromptStage.VLM_PAGE_ANNOTATION_SYSTEM).content
 
 
 def describe_page_layout(
