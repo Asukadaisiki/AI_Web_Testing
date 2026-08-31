@@ -4,10 +4,22 @@
 
 ## 记录规则
 
-- 每次处理需求后按时间倒序追加一条记录。
-- 记录"目标、操作、结果、验证、后续"，避免只写结论。
-- 如果执行过程中发现缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
+- 每次处理需求后，在「任务记录」顶部按时间倒序新增一条记录。
+- 记录结构统一为：任务、操作、结果、验证、后续；无后续事项时写“无”。
+- 如果执行过程中发现明确缺陷，同时在 `docs/bug-log.md` 追加对应条目并互相引用。
 - 最新的记录优先放到最上面，方便阅读。
+
+## 记录模板
+
+```md
+## YYYY-MM-DD | 标题
+
+- 任务：本次要解决或分析的事项。
+- 操作：实际执行的关键动作。
+- 结果：产出、结论或修复效果。
+- 验证：已执行的验证；如果没有写“未验证”。
+- 后续：下一步事项；如果没有写“无”。
+```
 
 ## 阶段总览
 
@@ -19,7 +31,7 @@
 | M2 前端重构 | 04-25~04-26 | NotebookLM 布局、E2E 手动测试、Explorer-Judge 架构 | 三栏布局 + 缺陷发现范式 |
 | E2E 调优 v1 | 05-02~05-07 | 页面探索、定位器回退链、text_parent_chain、AI 质量循环 | 26 commits, 96% 步骤通过率 |
 | E2E 调优 v2 | 05-10~05-12 | DeepSeek 温度/thinking 优化、提示词修复、11 项架构优化 | 544 tests, 0 failures |
-| 架构重构 | 05-14~05-17 | 主路径 v2 A11y 管线、dead code 清理、DSL 生成链路修复 | 491 tests, −3.1K 行, A11y CDP 100x 快 |
+| 架构重构 | 05-14~05-17 | 主路径 v2 A11y 管线、dead code 清理、DSL 生成链路修复 | 491 tests, -3.1K 行, A11y CDP 100x 快 |
 | 链路修复 | 05-25 | DSL 生成链路 7 层 bug 修复（Bug A→G） | 543 tests, 16 新增测试 |
 | 孤儿数据清理 | 05-25 | 全面清理代码库中的孤儿数据 | 删除 14 项孤儿数据 |
 | 数据校验修复 | 05-25 | 数据传递与校验全面扫描修复 | 修复 19 项问题 |
@@ -33,13 +45,34 @@
 | A11y 无名输入框定位修复 | 05-31 | label 兄弟 input 策略 + cell role 支持 | 29 steps 全通过，Quantity 输入框定位 |
 | textContent + DSL 完善 | 05-31 | 4 次修复：textContent、View Product、数量修改、断言值 | 21/21 steps 全通过 |
 | Anti-pattern 注入与上下文重构 | 06-04 | 重构上下文注入架构，修复执行错误注入 | 497 tests, 4 项核心修复 |
-| Locator + Explore 双轨修复 | 06-05 | paragraph 角色、探索导航精确化、Prompt 清理 | 探索采集 ✅, 18/18 手动 ✅, 全链路 ⚠️ |
+| Locator + Explore 双轨修复 | 06-05 | paragraph 角色、探索导航精确化、Prompt 清理 | 探索采集 OK, 18/18 手动 OK, 全链路待继续验证 |
 | SSE 事件日志架构 | 06-08 | SSE 事件持久化 + 刷新恢复 + replay API | 解决刷新丢消息问题 |
 | SSE 架构修复 v2 | 06-08 | Session 隔离 + 弹性降级 | 修复表不存在时流式崩溃 |
 | 孤儿会话根因修复 | 06-08 | SSE 端点添加会话验证，测试驱动调试 | 501 tests, 根因修复 |
 | 孤儿数据清理 | 06-08 | 清理 70 个孤立项目，添加清理脚本 | 数据库清理完成 |
 
 ---
+
+## 任务记录
+
+## 2026-08-31 | 同步日志结构整理到 GitHub
+
+- 任务：将当前日志结构整理变更同步到 GitHub。
+- 操作：检查工作区和当前分支，只暂存 `docs/execution-log.md` 与 `docs/bug-log.md`，创建 focused commit 并推送当前 `main` 分支。
+- 结果：本记录随同日志结构整理变更一起提交并推送到远端。
+- 验证：推送后通过 `git status --short` 与 `git log -1 --stat --oneline` 核对。
+- 后续：无。
+
+---
+
+## 2026-08-31 | 统一日志结构与时间倒序展示
+
+- 任务：修复 `docs/execution-log.md` 和 `docs/bug-log.md` 的展示顺序与结构不一致问题。
+- 操作：统一两个日志文件的顶部骨架；将记录区改为按日期倒序展示；把 `execution-log` 中尾部错位的 2026-08-28 至 2026-08-30 记录归位；把 `bug-log` 从分类混排整理为统一时间线。
+- 结果：两个日志均以说明、记录规则、记录模板、索引/总览、记录区的结构展示，新增记录时可直接插入记录区顶部。
+- 验证：通过标题扫描确认 `execution-log` 与 `bug-log` 的记录区最新日期在前，历史记录不再散落在旧日期之后。
+- 后续：后续新增记录继续保持最新记录优先，并使用对应模板字段。
+
 ---
 
 ## 2026-08-31 | 修复日志记录倒序问题
@@ -144,6 +177,8 @@
   - 后端默认测试：493 passed、1 skipped、10 deselected。
 - 备注：新增 BUG-086 记录到 `docs/bug-log.md`。重启后端前请确保 `.env` 的 `PLAYWRIGHT_BROWSERS_PATH` 已生效。
 
+---
+
 ## 2026-08-30 | 写入本地 admin 账号并清空测试数据库
 
 - 任务：测试依赖后端登录但没有注册账号；写入 admin 账号、清空旧数据并验证登录可用。
@@ -155,6 +190,303 @@
   - `POST /api/v1/auth/login` 使用 `admin@example.com / admin123` 返回 200；`GET /api/v1/auth/me` 返回同一用户；错误密码返回 401。
   - 清理后仅剩 `users=1`、`projects=1`、`project_members=1`，其余业务表均为 0。
 - 备注：登录表单要求邮箱格式，因此登录账号为 `admin@example.com`，平台显示名为 `admin`。
+
+---
+
+## 2026-08-30 | P5 前端业务域收口
+
+- 任务：按 planning/projects/cases/executions/reports 拆分前端边界，并恢复真实认证入口。
+- 操作：
+  - 将 API client 拆到 `shared/api/client.ts`，业务请求拆入各 `features/*/api.ts`；旧 `services/api.ts` 缩为兼容 barrel。
+  - 通用 SSE client 和 PageFeedback 下沉到 shared，Planning 取消请求归回 planning domain。
+  - 从 `AITestPlanningPanel` 抽出 session 初始化/恢复 hook、SSE 生命周期 hook 和 Requirements 视图。
+  - 新增 `AuthGuard` 与 `LoginPage`，统一保护业务路由并支持登录后恢复目标地址。
+  - 增加 FastAPI OpenAPI 导出脚本、schema 快照和 `openapi-typescript` 生成命令；auth transport types 已切换到生成类型。
+  - 执行依赖安全升级；React Router 升至 v7 并删除失效的 v6 future flags。
+- 验证：
+  - 前端测试：67 passed。
+  - `npm run build` 与 `npm run generate:api-types` 通过，连续生成结果一致。
+  - `npm audit --audit-level=low`：0 vulnerabilities。
+  - API/SSE 兼容 barrel 保留，现有调用方和测试可渐进迁移。
+- 备注：P5 结构目标已落实；手写 `types/api.ts` 作为 UI view model 兼容层保留，transport schema 以生成文件为准。
+
+---
+
+## 2026-08-30 | 凭据本地清理与 Git 历史处置
+
+- 任务：清除误提交的本地配置和智谱 BigModel API 凭据历史。
+- 操作：
+  - 从本地 `.claude/settings.local.json` 删除包含明文 Bearer 凭据的权限项。
+  - 使用 index filter 从 `main` 的全部 484 个历史提交中移除 `.claude/settings.local.json`。
+  - 以重写前远端哈希执行 `--force-with-lease`，避免覆盖并发远端更新。
+  - 删除 `refs/original`、reflog、临时 bundle 和验证 clone，并执行立即 GC。
+- 验证：
+  - 本地与远端 `main` 哈希一致。
+  - 远端全量克隆中目标路径历史提交数和当前跟踪数均为 0。
+  - 本地全部 refs 的目标路径提交数为 0，BigModel Bearer 模式扫描为 0。
+- 备注：仓库侧处置完成；外部凭据吊销仍需账号持有人登录智谱 API Keys 控制台完成身份验证。
+
+---
+
+## 2026-08-30 | 本地 main 对齐远端（放弃本地未推送提交）
+
+- 任务：本地与远端仓库同步，清理中断的 rebase 现场。
+- 背景：此前一次 `git pull --rebase` 在 `backend/app/services/ai_planning.py` 冲突后中断；本地 `main` 与 `origin/main` 因远端凭据清理 force-push 已分叉。
+- 决策：用户确认以远端为准，放弃本地未推送提交（Bug #J、EventLogWriter 方法名修复、三重修复等 4 个提交）。
+- 操作：
+  - `git rebase --abort` 回到 `main`。
+  - `git fetch origin --prune`。
+  - `git reset --hard origin/main`。
+- 验证：本地 `main` 与 `origin/main` 一致（`4719f1e`），无未提交跟踪文件差异；30 个未跟踪 `docs/` 文件保持不变。
+
+---
+
+## 2026-08-30 | P0-P5 重构成果复核与代码质量评估
+
+- 任务：基于真实代码与动态测试检查 P0-P5 重构完成度，评估当前代码质量（不只看 md 结论）。
+- 操作：
+  - 检查 `git log`/工作树：P0-P5 各阶段提交存在，`main` 与 `origin/main` 对齐（`5ec68ec`），工作树干净。
+  - 运行后端默认测试、前端测试与构建；核对 Alembic 迁移链、Planning 兼容 facade、执行单事件源、清理脚本保护、locator 调试路由注册测试。
+  - 交叉检查删除门禁：`locator_confidence.py`、`AppLayout.tsx`、`echarts`、`test_dsl.json`、旧 preflight、旧同步 Planning LLM、AI selector cache 等均已删除；休眠能力清单已建立。
+- 验证：
+  - `uv run pytest -q`：1 failed、492 passed、1 skipped、10 deselected；失败为本地 `backend/.env` 中 `ENABLE_AI_VISUAL_LOCATE=true` 污染 `test_ai_visual_locate_default_is_disabled`。
+  - `uv run alembic heads`：唯一 head `20260829_0026`；`alembic history` 链条连续无断链。
+  - `npm test -- --run`：8 个测试文件通过、1 个文件加载失败（`services/api.test.ts`），根因是 `services/api.ts:7` 引用不存在的 `features/reports/api`。
+  - `npm run build`：失败，错误为 `TS2307`（缺少 `features/reports/api`）与 `TS2305`（barrel 未导出 `getReportPreference/updateReportPreference`）。
+- 结论：P0-P4 完成度较高，Planning facade 已缩到 72 行、执行同步入口复用流式生成器、清理脚本默认 dry-run 且带保护；P5 前端按域拆分遗漏 `features/reports` 域，导致前端测试与构建全红。
+- 发现：本次复核新发现 2 个缺陷，已记录到 `docs/bug-log.md`（AUDIT-20260830-17、AUDIT-20260830-18）。
+
+---
+
+## 2026-08-30 | P5 reports 域修复 + 前端/后端门禁恢复
+
+- 任务：修复复核发现的前端门禁问题，并验证前端构建与后端服务实际跑通。
+- 操作：
+  - 新增 `frontend/src/features/reports/api.ts` 与 `types.ts`，恢复 `getReportPreference/updateReportPreference` 客户端，barrel `services/api.ts` 重新可用。
+  - 修复 `features/planning/api.ts` 中 `getAISettings` 的重复 `return`。
+  - 修复 `test_config.py` 两个 VLM 默认值用例：重定向 `ENV_FILE_PATH`，避免本地 `.env` 污染默认断言。
+  - 启动 PostgreSQL（`D:/PostgreSQL/data`），执行 `uv run alembic upgrade head` 将本地库从 `20260608_0025` 升到 `20260829_0026`。
+  - 发现本地 `api.unself.cn` 网关需带 `/v1` 路径，修正 `.env` 中 `AI_DSL_BASE_URL` 与 `AI_PLANNING_BASE_URL`。
+- 验证：
+  - 后端默认测试：493 passed、1 skipped、10 deselected。
+  - 前端测试：67 passed；`npm run build` 通过。
+  - 后端 `uvicorn --factory` 启动，`/api/v1/health` 返回 200。
+  - 通过 Vite 代理 `127.0.0.1:5173` 创建会话 311 并发送消息，AI 正常返回收集需求的 `assistant_message`，`session_status=collecting`。
+- 备注：AUDIT-20260830-17 已关闭；新增 AUDIT-20260830-19 记录 base URL 配置问题。
+
+---
+
+## 2026-08-30 | 清理 Git 历史中的 backend/.env 明文凭据
+
+- 任务：从 `main` 全部历史提交中移除 `backend/.env` / `.env`，消除远端可见的明文密钥记录。
+- 操作：
+  - 备份当前 `main` 到本地分支 `backup-pre-env-purge`，并创建 `git bundle`（`D:/AutoTestingLearingProject/backup-pre-env-purge-20260830-031248.bundle`）。
+  - `git filter-branch --index-filter 'git rm --cached --ignore-unmatch .env backend/.env' --prune-empty -- main` 重写全部 486 个提交。
+  - 删除 `refs/original`，清理 reflog 后 `git push origin main --force-with-lease`。
+- 验证：
+  - `git rev-list main --objects | grep -E '\.env$'`：无 `.env`/`backend/.env` 对象；`backend/.env.example` 保留。
+  - `git log origin/main --oneline -- .env backend/.env`：空。
+  - 本地 `main` 与 `origin/main` 一致（`60e51e6`），树无差异。
+  - 后端/前端服务仍在运行，`/api/v1/health` 与 Vite 均返回 200。
+- 备注：历史中的 `.claude/settings.local.json` 已于更早前清理；本次仅处理 `backend/.env`。工作树中的 `backend/.env` 仍保留用于本地开发（已被 gitignore），但历史已无记录。
+
+---
+
+## 2026-08-30 | 仓库代码质量评估（真实代码 + 动态门禁）
+
+- 任务：应要求对当前仓库做一次代码质量评估，基于真实源码、目录结构与动态测试，不只看文档结论。
+- 操作：
+  - 统计后端 `backend/app`（22,194 行 Python）与前端 `frontend/src`（13,637 行 TS/TSX）结构，检查分层、路由、模型、迁移、测试覆盖。
+  - 运行后端默认 pytest、前端 `npm run build`；检查 TODO/FIXME、`print()`、`console.log`、密钥扫描、Alembic 版本链、重复模块与 lint 配置。
+- 验证：
+  - 后端：493 passed、1 skipped、10 deselected（95.77s）；存在 `TestCase`/`TestCaseRun` 类名被 pytest 收集的 PytestCollectionWarning。
+  - 前端：`tsc --noEmit && vite build` 通过，主包约 763KB（gzip 240KB）偏大，无代码分割治理。
+  - 密钥扫描：仅测试夹具中的 `test-key` / `new-dsl-secret` 假值，未发现真实泄露。
+- 结论：整体为「结构清晰、可运行、测试覆盖扎实的中上水平」代码库；主要短板是 lint/类型检查未纳入 CI 门禁、4 个超大模块需拆分、`__pycache__`/`dist`/`node_modules` 等生成物污染工作树感知、AI 配置字段随功能堆叠趋杂。
+- 备注：仅追加本日志，未改动任何业务代码。
+
+---
+
+## 2026-08-30 | AI 消息流式传输设计分析（对照 pi 事件协议）
+
+- 任务：分析前端消息框设计与 AI 返回消息消费链路，指出思考内容与正文渲染/顺序问题，参考 pi 的 `AssistantMessageEventStream` 事件协议，给出 Web 端与框架优化方案。
+- 操作：
+  - 阅读 `frontend/src/shared/api/sseClient.ts`、`features/planning/usePlanningSse.ts`、`components/AITestPlanningPanel.tsx` 的 SSE 解析与 `handleStreamEvent` 分发逻辑。
+  - 阅读 `backend/app/ai/test_planning_agent.py` 的 `stream_planning_turn` / `_stream_planning_llm`，确认 `text_chunk(thinking=true)` 与正文共用 `content` 字段、前端拆成 `_thinkingContent` + `content` 两路渲染。
+  - 对照 `pi/packages/ai/src/types.ts` 的 `AssistantMessageEvent`（text/thinking/toolcall 的 start/delta/end + contentIndex）与 `utils/event-stream.ts` 的 `EventStream`。
+- 结论：当前是「动作型扁平事件 + 前端手工拼字符串」，思考与正文不是有序 content block，导致思考折叠但正文在框外、顺序丢失、`turn_complete` 覆盖流式文本等问题；应改为「消息生命周期事件 + contentIndex + reducer」，思考作为一等 content block。
+- 备注：仅追加本日志，未改动任何业务代码。
+
+---
+
+## 2026-08-30 | 对齐 pi 的 AI 消息流式传输协议（实现）
+
+- 任务：将前端消息框与后端流式事件协议对齐 pi 的 `AssistantMessageEvent` 设计（有序 content block + contentIndex），解决思考内容与正文乱序、正文覆盖等问题。
+- 操作：
+  - 后端 `app/ai/test_planning_agent.py::_stream_planning_llm` 由扁平 `text_chunk(thinking=true)` 改为产出 `content_block_start / content_block_delta / content_block_end`（带 `content_index` 与 `kind`）。
+  - `app/ai/test_planning_agent.py::stream_planning_turn` 透传三类 `content_block_*` 事件。
+  - `app/application/planning/conversation_service.py` 新增 `_flush_streaming_content_block`，把有序块持久化到 `structured_payload_json["content_blocks"]`，并以文本块镜像到 `message.content` 兼容旧渲染；最终 `turn_complete` 不再覆盖流式文本。
+  - 前端 `types/api.ts` 新增 `AssistantContentBlock` 与 `ContentBlockStart/Delta/EndStreamEvent`。
+  - 前端 `AITestPlanningPanel.tsx` 新增 `readContentBlocks` / `applyContentBlockEvent` / `AssistantMessageBody`，按 content block 顺序渲染思考与正文；`turn_complete` 仅在无流式块时才回填最终消息。
+- 验证：
+  - 更新 `tests/unit/test_planning_agent.py` 流式断言。
+  - 后端默认 pytest：493 passed、1 skipped、10 deselected。
+  - 前端 `npm run build` 通过；`npm test` 67 passed。
+- 备注：本次工作树还包含上一任务遗留的 BUG-086 修复（`.env.example`、`page_explorer.py`、`docs/bug-log.md`），未在本任务中改动，同步时需一并注意。
+
+---
+
+## 2026-08-30 | 诊断切页后流式消息丢失问题
+
+- 任务：定位「切换页面后再次回到会话页，消息丢失，只能等 AI 全部发完才能看到」的根因。
+- 结论：
+  - 后端流式期间实际上已经持续落库（user 消息、streaming 消息、content_block 事件、event log），不存在「后端没持久化」。
+  - 真正问题是前端「进行中的流式状态」没有可恢复的会话级全局来源：`usePlanningSessionState` 挂在 `AITestPlanningPanel` 内，切页时组件卸载，SSE 继续在后台跑，`handleStreamEvent` 更新的是已卸载组件的本地 state；回到页面时 `initialize()` 重新拉 `getPlanningSession` 并用 `applySessionDetail` 整体覆盖 transcript，把后台流期间本应累积的流式内容冲掉。
+  - 恢复逻辑 `applySessionDetailWithRecovery` 只对 `turn_type === "streaming"` 的「中断」消息做一次性 event replay，且 replay 只认识旧事件（text_chunk/status/tool_call/turn_complete），不识别本次新增的 `content_block_*` 事件，因此思考块和有序块无法正确重建。
+  - `loadSessionDetail` 没有「SSE 进行中则不覆盖 transcript」的保护，且 `applySessionDetail` 会把 detail.messages 重新映射，丢掉了当前 UI 里正在增长的 content blocks。
+  - `AITestPlanningPanel` 内部使用 `sessionId` state 而不跟随路由 `sessionIdProp`，切页回来 `sessionIdProp` 变化被忽略，也放大了状态错位问题。
+- 建议修复方向（本次仅诊断，未改代码）：
+  1. 把会话状态与活跃 SSE 流提升为全局 store（或 Query/Context），切页只卸载视图、不卸载状态，re-mount 时订阅正在进行的流事件。
+  2. 若沿用「后台流 + 回页重放」，加载详情时保留 `_streaming` 消息的实时 content_blocks，或仅在无活跃流时覆盖 transcript。
+  3. 扩展 `applySessionDetailWithRecovery` 支持 `content_block_*` 事件重放；否则新协议的消息刷新后思考块仍丢。
+  4. `sessionId` 改为跟随路由 prop，避免内部/外部双源不一致。
+- 备注：仅追加本诊断记录，未改动业务代码。
+
+---
+
+## 2026-08-30 | 切页消息丢失根治疗方案设计
+
+- 任务：为「切页后流式消息丢失」设计根治疗法（先设计，待实施）。
+- 方案核心：把「会话状态」和「活跃 SSE 流」从 `AITestPlanningPanel` 组件提升为路由无关的全局 workspace store；切页只卸载视图，不卸载状态与流；回页时由 store 判定「有活跃流则复用内存 transcript，无活跃流则拉详情并按统一 reducer 重放事件」。
+- 关键落点：
+  - 新增模块级 `planningWorkspaceStore`（`useSyncExternalStore`，不引入新依赖）。
+  - 新增 `planningStreamEvents` 纯函数 reducer，前端实时事件与回页重放共用同一套逻辑，统一支持 `text_chunk`、`content_block_*`、`tool_call_*`、`execution_*`、`turn_complete`。
+  - `usePlanningSse` 去掉组件卸载即 abort 的行为，abort 由 store 显式管理。
+  - `AITestPlanningPanel` 改为消费 store；`sessionId` 跟随路由 prop。
+  - `App.tsx` / `test-utils.tsx` 增加 Provider。
+  - 后端可选加固：`GET /sessions/{id}/events` 支持游标/按 message_id 过滤。
+- 备注：本轮为方案设计，未改业务代码；实施时按 store → reducer → panel → tests 顺序推进。
+
+---
+
+## 2026-08-30 | 切页消息丢失根治疗方案落地
+
+- 任务：实施「会话状态 + 活跃 SSE 流提升为路由无关全局 workspace store」的根治方案。
+- 操作：
+  - 新增 `frontend/src/features/planning/planningStreamEvents.ts`：纯函数 reducer（`reduceTranscriptEvent`）+ `readContentBlocks` / `applyContentBlockEvent` / `createOptimisticMessage`，实时事件与重放共用。
+  - 新增 `frontend/src/features/planning/planningWorkspaceStore.tsx`：`useSyncExternalStore` 外部 store，管理 `currentSessionId`、各 session 的 `transcript/requirements/plan/drafts/activeStream`；`loadSessionDetail` 有活跃流时只更新元数据、不覆盖 transcript；无活跃流时按事件日志重放并支持 `content_block_*`。
+  - 重构 `usePlanningSse.ts`：去掉组件卸载即 abort，改为 store 管理 abort，新增 `runStream(sessionId, kind, messageId, options)`。
+  - 重构 `usePlanningSessionState.ts`：改为消费 store，提供兼容旧面板的 API。
+  - 重构 `AITestPlanningPanel.tsx`：删除组件内手写 `handleStreamEvent`，事件交给 store reducer；流式状态由 `activeStreamKind` 派生；乐观消息 ID 传给 `runStream` 作为活跃消息 ID。
+  - `App.tsx` / `test-utils.tsx` 注入 `PlanningWorkspaceProvider`。
+- 验证：
+  - 新增 `planningStreamEvents.test.ts` 7 用例、`planningWorkspaceStore.test.ts` 3 用例。
+  - `npm run build` 通过；`npm test` 77 passed（11 files）。
+- 备注：后端未改动；本次为纯前端架构修复。
+
+---
+
+## 2026-08-29 | P3 Active Project 与项目上下文边界
+
+- 任务：落实 Planning Session 单 active project 语义，并将项目上下文职责移出总编排器。
+- 操作：
+  - `ai_planning_sessions` 新增 `active_project_id`，migration 为历史 session 回填最早关联项目。
+  - 新建、关联和工具创建项目时自动切换 active project；重复关联作为幂等切换；删除 active 项目时回退到最早剩余关联。
+  - 所有 Planning 执行路径改用集中 `_get_active_project_id`，移除散落的 `project_ids[0]`。
+  - API schema 和前端类型增加 `active_project_id` / `is_active`，项目面板支持查看和点击切换当前项目。
+  - 新增 `app/application/planning/project_context.py`，承接 session ownership、项目关联、active project 和成员修复职责。
+  - AI Planning API 直接依赖 application project context，不再动态导入 service 私有 `_get_session`。
+- 验证：
+  - 后端默认测试：491 passed、1 skipped、10 deselected。
+  - 前端测试：64 passed；`npm run build` 通过。
+  - active project migration 独立升降级测试通过；Alembic 唯一 head 为 `20260829_0026`。
+  - 变更范围 Ruff `F401/F821` 检查通过。
+- 备注：保留多项目历史关联，仅执行上下文收敛为单 active project；P3 下一批拆 conversation 和 draft application service。
+
+---
+
+## 2026-08-29 | P3 Session Lifecycle 拆分
+
+- 任务：将 Planning Session 生命周期与 schema 映射移出 `services/ai_planning.py`。
+- 操作：
+  - 新增 `application/planning/session_service.py`，承接 session list/create/detail/delete。
+  - 新增 `application/planning/presenters.py`，统一 session/message/draft schema 转换。
+  - 将 required requirement slots 移到 schema 层，Agent 与 session service 共享同一合同。
+  - AI Planning API 直接依赖 session service；总编排器删除重复实现和 presenter。
+  - 新建 session 对显式 `project_id` 增加存在性校验，修正旧测试依赖 SQLite 关闭外键的错误假设。
+- 验证：
+  - session/API 定向测试：30 passed。
+  - 后端默认测试：491 passed、1 skipped、10 deselected。
+  - application/route/service 变更范围 Ruff `F401/F821` 检查通过。
+- 备注：下一批拆 conversation service 与 draft service，继续缩减总编排器。
+
+---
+
+## 2026-08-29 | P3 Conversation Service 拆分
+
+- 任务：将 Planning 同步/流式对话编排迁入 application service，并显式化外部依赖。
+- 操作：
+  - 新增 `application/planning/conversation_service.py`，承接消息、会话状态、工具结果和流式占位消息持久化。
+  - 通过 `ConversationContextInjector`、`AutoDraftGenerator` 和 `ConversationEventLogFactory` ports 注入上下文、草案生成和事件日志能力。
+  - API 与 streaming bridge 改为调用 conversation service；旧总服务删除重复的同步/流式实现。
+  - 将上下文注入和自动草案 adapter 改为公开符号，消除路由与 application service 对私有实现的依赖。
+  - 更新 API 测试 patch 边界，并验证 Agent 收到 transcript 与 auto-draft port。
+- 验证：
+  - Planning 定向测试：108 passed、1 skipped。
+  - 后端默认测试：491 passed、1 skipped、10 deselected。
+  - 变更范围 Ruff `F401/F821`、Python compileall 和 `git diff --check` 通过。
+- 备注：P3 下一批拆 draft service，再拆 save-and-execute 与 analysis/retest。
+
+---
+
+## 2026-08-29 | P3 Draft 与 Context Service 拆分
+
+- 任务：将 Planning 草案生命周期和共享上下文构建移出总编排器。
+- 操作：
+  - 新增 `application/planning/draft_service.py`，承接草案生成、流式生成、状态更新、删除及自动草案 adapter。
+  - 新增 `application/planning/context_service.py`，承接会话状态、工具历史、anti-pattern 和执行错误上下文构建。
+  - AI Planning API 与 streaming bridge 直接依赖新 application services。
+  - `services.ai_planning` 删除对应实现，仅保留兼容导出。
+  - 测试替身改为 patch 实际实现模块，避免 facade 迁移后出现无效 mock。
+- 验证：
+  - Planning/Context/Analysis 定向测试：73 passed、1 skipped。
+  - 变更范围 Ruff `F401/F821` 与 `git diff --check` 通过。
+- 备注：下一批拆 save-and-execute 与 analysis/retest，并继续收敛 application ports。
+
+---
+
+## 2026-08-29 | P3 Save/Execute 与 Analysis/Retest 拆分
+
+- 任务：完成 Planning application service 用例拆分并移除总编排器实现。
+- 操作：
+  - 新增 `execution_inputs.py`、`save_execute_service.py` 和 `analysis_retest_service.py`。
+  - API 与 streaming bridge 直接依赖 application services；`services.ai_planning` 收敛为 71 行兼容 facade。
+  - 将跨 application service 的分析、上下文和输入解析 helper 改为公开合同。
+  - Planning Tools 为项目状态、洞察和推荐复测查询提供公共入口。
+  - 修复流式 save-and-execute 调用不存在的 `EventLogWriter.log()`，改为注入 event-log factory 并调用 `write()`。
+- 验证：
+  - P3 定向测试：61 passed。
+  - 变更范围 Ruff `F401/F821` 和 `git diff --check` 通过。
+- 备注：P3 用例服务拆分完成；兼容 facade 保留一个迁移周期，下一阶段进入 P4 单执行事件源。
+
+---
+
+## 2026-08-29 | P4 单执行事件源与取消终态
+
+- 任务：统一同步与流式 Case 执行核心，消除重复事务和报告构建路径。
+- 操作：
+  - `execute_case()` 改为消费 `execute_case_streaming()` 至终态，同步与流式入口共享 runner、状态迁移和 evidence 持久化。
+  - 删除重复 `_execute_case_record()` 及同步 Playwright runner 依赖。
+  - 增加同步/流式等价测试，比较最终状态、步骤顺序和完整 evidence。
+  - 将 `cancelled` 纳入前后端执行状态合同，并在取消异常重新抛出前持久化报告与结束时间。
+  - 补齐执行详情和报告中心的取消状态展示。
+- 验证：
+  - Execution 定向测试：19 passed。
+  - 前端测试：64 passed。
+  - 变更范围 Ruff `F401/F821` 通过。
+- 备注：Runner 的流式解释器现为唯一执行源；报告继续只读取 `TestCaseRun.report` 持久化 JSON。
+
+---
 
 ## 2026-08-28 | 全代码库孤儿代码与架构审计
 
@@ -183,6 +515,86 @@
   - 审计中的 D-01 至 D-11 和 O-01 至 O-19 均已纳入阶段映射。
   - 计划文件位于 `.gitignore` 白名单 `docs/plan/*.md`，可被 Git 跟踪。
 - 备注：本次仅制定计划，未执行缺陷修复、孤儿代码删除或测试命令；未发现审计报告以外的新缺陷。
+
+---
+
+## 2026-08-28 | 优化计划同步与 P0 仓库治理
+
+- 任务：同步代码库优化计划，并执行 P0 安全止血、迁移链恢复和跟踪策略修复。
+- 操作：
+  - 将审计报告、优化计划和日志提交并同步到 GitHub `main`，提交为 `7f055b3`。
+  - 收窄 `.gitignore`，恢复文档、测试和 migration 默认跟踪，并忽略本地 `.tools/`。
+  - 停止跟踪 `.claude/settings.local.json`，保留开发者本地文件；外部凭据轮换和历史处置仍待人工完成。
+  - 恢复缺失 migration `45061d8892d7_add_is_default_to_projects.py` 及升降级回归测试。
+  - 从生产 router 删除无鉴权 `/api/v1/ai-planning/test/locator` 调试接口并增加路由注册测试。
+- 验证：
+  - `uv run pytest tests/unit/test_project_default_migration.py -q`：1 passed。
+  - `uv run pytest tests/unit/test_ai_planning_api.py::test_locator_debug_route_is_not_registered -q`：1 passed。
+  - `uv run pytest tests/unit -q`：503 passed、2 failed、1 skipped；失败均为既有测试合同漂移，与本次 P0 修改无关，转入 P1 处理。
+  - `uv run alembic heads`：唯一 head 为 `20260608_0025`。
+  - 安全复核：本次差异未发现新增可利用问题。
+- 发现：SQLite 空库全链升级在历史 migration `20260313_0004` 处失败，已记录为 `AUDIT-20260828-12`；生产 PostgreSQL 空库升级尚未在当前环境验证。
+
+---
+
+## 2026-08-28 | P1 运行时缺陷与测试门禁修复
+
+- 任务：修复审计 D-04 至 D-10，并恢复前后端默认测试基线。
+- 操作：
+  - 修复 VLM candidate ranker 的 `model_family` 参数传递。
+  - 删除已失效的 AI selector cache 及未消费指标。
+  - 修正 DSL service `__all__` 并增加公开符号一致性测试。
+  - 加固孤儿数据清理脚本：默认 dry-run、显式确认、默认项目/成员/用例/session 保护。
+  - 默认 pytest 纳入非浏览器 integration，并为浏览器和外部服务 E2E 补 marker。
+  - 增加 `/cases/new` create mode、项目参数传递和非法 case ID 拦截。
+  - 修复前端路由、Cases 数据 mock、Planning SSE 时序断言、render-time navigate 和 TextArea NaN height。
+- 验证：
+  - 后端默认测试：519 passed、1 skipped、10 deselected。
+  - 前端测试：63 passed。
+  - 前端 `npm run build`：通过。
+  - Knip：仍报告 P2 范围的孤儿文件、未用依赖/导出，以及 `@ant-design/icons` 未声明直接依赖。
+  - Ruff：工具可运行，但全仓存在 575 个既有问题，不能直接作为零告警门禁；需先建立基线或分阶段清理。
+- 备注：D-04 至 D-10 已关闭。静态检查遗留转入 P2；未修改用户已暂存的 `test_brand_filter_cart`。
+
+---
+
+## 2026-08-28 | P2 确定孤儿代码清理
+
+- 任务：按 C1-C4 批次删除审计 O-01 至 O-19 的确定孤儿，并治理休眠能力。
+- 操作：
+  - 删除孤儿 backend runner、frontend layout、临时 DSL 结果和冗余 `.gitkeep`。
+  - 移除未使用 `echarts` 及 Vite 分包规则，补齐 `@ant-design/icons` 直接依赖。
+  - 删除未使用 CSS、DSL adapter/helper、旧 locator preflight 和 candidate collector。
+  - 删除 Page Explorer 旧 DOM prompt formatter、grouping/filter 子系统及旧 flow action 链，保留 `_collect_flow_a11y` 当前主链。
+  - 删除旧同步 Planning LLM、未启用日志上下文/Timer、零调用 locator/access/SSE helper 和前端旧导出。
+  - 删除只固定旧实现的测试，保留并回归当前 DSL、A11y、runner 和 API 合同测试。
+  - 新增 `docs/plan/capability-status-2026-08-28.md`，记录休眠能力 owner、状态和复核期限。
+- 验证：
+  - 后端默认测试：490 passed、1 skipped、10 deselected。
+  - 前端测试：63 passed；`npm run build` 通过。
+  - Knip 不再报告孤儿文件、未使用依赖和缺失直接依赖；剩余项为明确保留的 dormant API clients 与 transport types。
+  - 变更文件 Ruff `F401/F821` 检查通过。
+- 备注：`CaseListParams` 整体无消费者，已删除；Pydantic 框架隐式入口和 Alembic 历史均保留。
+
+---
+
+## 2026-08-28 | P3 Planning 解耦第一切片
+
+- 任务：冻结 Planning/执行语义，并消除 Agent 对 Planning Service 的反向依赖。
+- 操作：
+  - 新增 `docs/plan/adr-001-planning-execution-semantics.md`，确定单 active project、VLM 默认关闭和同步/流式单事件源方向。
+  - 将 `ENABLE_AI_VISUAL_LOCATE` 默认值改为 false，保留显式启用能力。
+  - 将工具结果 URL 归一化、缓存查询和原始页面结果提取迁到 `app.ai.tool_result_cache`。
+  - Planning Tools 不再导入 `services.ai_planning` 私有缓存函数。
+  - Agent 通过 `AutoDraftGenerator` protocol 接收草案生成 callback，不再延迟导入 Planning Service。
+  - Planning Service 不再调用 Agent 私有 `_extract_raw_page_results`。
+- 验证：
+  - P3 定向测试：94 passed。
+  - 后端默认测试：490 passed、1 skipped、10 deselected。
+  - 新增模块及配置变更 Ruff `F401/F821` 检查通过。
+- 备注：P3 尚未完成；后续继续建立 active project 边界并按 session/conversation/draft/save-execute/analysis-retest 拆 application services。
+
+---
 
 ## 2026-06-08 | 孤儿数据清理：清理 70 个孤立项目，添加清理脚本
 
@@ -1035,6 +1447,80 @@ Agent 流程失败的根本原因是**选择器策略差异**：
 **后续**：
 - 还可以加生成后校验：扫描 merged_steps 中所有 `${var}`，若不在 scenario_variables 也不在 `input_contract` 中则降级告警/重生段；这层兜底等用回归 prompt 跑过一次再决定是否补
 - 现有 `_extract_input_contract_from_steps` 会把 captured 变量也纳入 input_contract，理论上不影响执行（runtime_context 会覆盖 input_values），但语义不准确；可在后续做拆分
+
+---
+
+## 2026-05-30 | E2E 自动化测试 Skill（API 回归补充）
+
+- 任务：创建 E2E 自动化测试 skill，使用 test_brand_filter_cart 需求文件验证 AI 规划流程和 DSL 质量
+- 操作：
+  - 创建 `backend/tests/e2e/test_e2e_brand_filter_cart.py` — httpx 调用 REST API 模拟前端操作
+  - 创建 `.claude/skills/e2e-brand-filter-cart.md` — Skill 定义文件
+  - 修复 `page_explorer.py`：探索阶段跳过 VLM fallback（`skip_vlm` 参数），避免模态弹窗按钮触发慢速 VLM
+  - 修复 `dsl_generator.py`：prompt 规则明确 `${var}` 只能用在 value 字段；新增 `_fix_variable_misuse` 后处理函数
+  - 更新 `pyproject.toml`：添加 `e2e_api` marker 和 `tests/e2e` testpath
+- 验证：E2E 测试通过（~7-11 分钟），DSL 覆盖登录→品牌筛选→加购→购物车验证完整流程
+- 发现的问题：
+  - VLM 模型全部失败（429 限流、元素未找到、类型错误）导致 explore_flow 极慢
+  - DSL 生成器会将 `${var}` 误用在 target 字段（已在 prompt 和后处理中修复）
+- 后续：
+  - 测试只验证了 `login_success` 场景，完整购物车验证场景需要更长时间
+  - 模态弹窗按钮（Continue Shopping, View Cart）confidence=low，需要更好的处理策略
+
+---
+
+## 2026-05-30 | Automation Exercise Polo 页面无障碍树采集
+
+- 任务：采集 `https://automationexercise.com/brand_products/Polo` 页面的无障碍树元素。
+- 操作：使用浏览器打开目标页面，确认标题为 `Automation Exercise - Polo Products`，采集页面可访问快照，整理导航、分类、品牌、商品列表和订阅区元素。
+- 验证：页面成功加载，URL 保持为 `/brand_products/Polo`，无障碍快照可读取。
+- 备注：本次为页面采集与分析任务，未修改业务代码，未发现需要写入 bug-log 的明确缺陷。
+
+---
+
+## 2026-05-30 | Polo 商品页 DSL 消歧优化分析
+
+- 任务：分析 `explore_flow` 采集 Polo 商品页后，DSL 生成阶段重复使用 `Rs. 500` / 商品名导致商品选择不明确的问题。
+- 操作：复查 `page_explorer.py`、`dsl_generator.py`、`locator_preflight.py`、`semantic.py` 中元素格式化、候选预检和语义定位逻辑；结合实际无障碍树确认页面存在同一商品卡片默认层与 hover 层重复暴露。
+- 结论：优先把商品卡片抽象为结构化业务单元，生成 DSL 时使用商品名 + 价格 + 卡片内动作的组合定位，避免裸文本 `Rs. 500` 或裸 `Add to cart`。
+- 备注：本次为分析建议，未修改业务代码，未追加 bug-log。
+
+---
+
+## 2026-05-30 | Polo 商品页 DSL 消歧修复
+
+- 任务：修复 Polo 商品页 `explore_flow` 后 DSL 生成阶段容易用裸 `Rs. 500` / 裸 `Add to cart` 导致商品选择歧义的问题。
+- 操作：
+  - `dsl_generator.py`：为 A11y 元素清单增加去重后的商品卡片摘要；重复元素追加 duplicate 标记；系统提示要求商品加购使用 `商品名 附近的 Add to cart`；价格点击自动重写为商品上下文目标。
+  - `semantic.py`：支持解析并执行 `Blue Top 附近的 Add to cart` 这类上下文定位。
+  - `locator_preflight.py`：裸 `Add to cart` / `View Product` 多匹配时降为 low confidence，并提示补商品上下文。
+  - 补充 `test_dsl_generator.py`、`test_locator_confidence.py`、`test_locator_semantic.py` 单测。
+- 验证：`uv run pytest tests/unit/test_dsl_generator.py tests/unit/test_locator_confidence.py tests/unit/test_locator_semantic.py -q`，82 passed。
+- 备注：未发现新的明确缺陷，未追加 bug-log。
+
+---
+
+## 2026-05-30 | DSL 扩展适配 Playwright 执行器分析
+
+- 任务：分析如果要扩展 DSL 功能，如何更好适配现有 Playwright runner。
+- 操作：复查 `schemas/dsl.py`、`runners/playwright_runner.py`、`postcondition_verifier.py`、`services/dsl.py` 中当前动作、定位、postcondition、变量和执行证据能力。
+- 结论：建议优先扩展强语义动作、断言、等待、作用域/集合与 evidence schema；避免直接开放任意 Playwright API 或 `evaluate_js`，防止绕过结构化 DSL 校验。
+- 备注：本次为设计分析，未修改业务代码，未追加 bug-log。
+
+---
+
+## 2026-05-30 | A11y-first 商品定位消歧修正
+
+- 任务：将 Polo 商品页 DSL 消歧方案从 DOM `text_parent_chain` 修正为无障碍树定位 + 结构化候选校验路径。
+- 操作：
+  - 移除 `semantic.py` 中 `附近的` / `text_parent_chain` 主定位路径，避免把 DOM 作用域定位混入 a11y 语义定位。
+  - `page_explorer.py`：通过 CDP `backendDOMNodeId` 为 a11y 节点回填 DOM 属性，并生成已验证的 Playwright candidate selector。
+  - `dsl_generator.py`：商品卡片摘要改为 `target="Add to cart"` + verified candidate；当 AI 误用价格作为 click target 时，重写为带 candidates 的结构化步骤。
+  - `locator_preflight.py`：将 a11y 节点上的 `verified_selectors` 写入 DSL candidates；裸重复商品动作仍标记为 low confidence。
+  - `playwright_runner.py`：修复候选执行路径的 locator trace 构建，并要求候选 locator 唯一匹配后再执行。
+  - 更新相关单测和旧提示文案，删除 `text_parent_chain/附近的` 生成引导。
+- 验证：`uv run pytest tests/unit/test_dsl_generator.py tests/unit/test_locator_confidence.py tests/unit/test_locator_semantic.py tests/unit/test_page_explorer.py tests/unit/test_dsl_validation.py tests/unit/test_preflight_regen.py -q`，115 passed，1 个既有 PytestCollectionWarning。
+- 备注：本次是对上一版 DOM fallback 方案的架构修正，未追加 bug-log。
 
 ---
 
@@ -1960,448 +2446,3 @@ Agent 流程失败的根本原因是**选择器策略差异**：
 ## 2026-03-28 | M1 认证入口落地与治理收口
 
 后端落地登录/登出/用户信息接口；前端完成登录态恢复、受保护路由、统一 401 回退。
-
-## 2026-05-30 (E2E 自动化测试 Skill)
-
-- 任务：创建 E2E 自动化测试 skill，使用 test_brand_filter_cart 需求文件验证 AI 规划流程和 DSL 质量
-- 操作：
-  - 创建 `backend/tests/e2e/test_e2e_brand_filter_cart.py` — httpx 调用 REST API 模拟前端操作
-  - 创建 `.claude/skills/e2e-brand-filter-cart.md` — Skill 定义文件
-  - 修复 `page_explorer.py`：探索阶段跳过 VLM fallback（`skip_vlm` 参数），避免模态弹窗按钮触发慢速 VLM
-  - 修复 `dsl_generator.py`：prompt 规则明确 `${var}` 只能用在 value 字段；新增 `_fix_variable_misuse` 后处理函数
-  - 更新 `pyproject.toml`：添加 `e2e_api` marker 和 `tests/e2e` testpath
-- 验证：E2E 测试通过（~7-11 分钟），DSL 覆盖登录→品牌筛选→加购→购物车验证完整流程
-- 发现的问题：
-  - VLM 模型全部失败（429 限流、元素未找到、类型错误）导致 explore_flow 极慢
-  - DSL 生成器会将 `${var}` 误用在 target 字段（已在 prompt 和后处理中修复）
-- 后续：
-  - 测试只验证了 `login_success` 场景，完整购物车验证场景需要更长时间
-  - 模态弹窗按钮（Continue Shopping, View Cart）confidence=low，需要更好的处理策略
-
----
-
-## 2026-05-30 | Automation Exercise Polo 页面无障碍树采集
-
-- 任务：采集 `https://automationexercise.com/brand_products/Polo` 页面的无障碍树元素。
-- 操作：使用浏览器打开目标页面，确认标题为 `Automation Exercise - Polo Products`，采集页面可访问快照，整理导航、分类、品牌、商品列表和订阅区元素。
-- 验证：页面成功加载，URL 保持为 `/brand_products/Polo`，无障碍快照可读取。
-- 备注：本次为页面采集与分析任务，未修改业务代码，未发现需要写入 bug-log 的明确缺陷。
-
----
-
-## 2026-05-30 | Polo 商品页 DSL 消歧优化分析
-
-- 任务：分析 `explore_flow` 采集 Polo 商品页后，DSL 生成阶段重复使用 `Rs. 500` / 商品名导致商品选择不明确的问题。
-- 操作：复查 `page_explorer.py`、`dsl_generator.py`、`locator_preflight.py`、`semantic.py` 中元素格式化、候选预检和语义定位逻辑；结合实际无障碍树确认页面存在同一商品卡片默认层与 hover 层重复暴露。
-- 结论：优先把商品卡片抽象为结构化业务单元，生成 DSL 时使用商品名 + 价格 + 卡片内动作的组合定位，避免裸文本 `Rs. 500` 或裸 `Add to cart`。
-- 备注：本次为分析建议，未修改业务代码，未追加 bug-log。
-
----
-
-## 2026-05-30 | Polo 商品页 DSL 消歧修复
-
-- 任务：修复 Polo 商品页 `explore_flow` 后 DSL 生成阶段容易用裸 `Rs. 500` / 裸 `Add to cart` 导致商品选择歧义的问题。
-- 操作：
-  - `dsl_generator.py`：为 A11y 元素清单增加去重后的商品卡片摘要；重复元素追加 duplicate 标记；系统提示要求商品加购使用 `商品名 附近的 Add to cart`；价格点击自动重写为商品上下文目标。
-  - `semantic.py`：支持解析并执行 `Blue Top 附近的 Add to cart` 这类上下文定位。
-  - `locator_preflight.py`：裸 `Add to cart` / `View Product` 多匹配时降为 low confidence，并提示补商品上下文。
-  - 补充 `test_dsl_generator.py`、`test_locator_confidence.py`、`test_locator_semantic.py` 单测。
-- 验证：`uv run pytest tests/unit/test_dsl_generator.py tests/unit/test_locator_confidence.py tests/unit/test_locator_semantic.py -q`，82 passed。
-- 备注：未发现新的明确缺陷，未追加 bug-log。
-
----
-
-## 2026-05-30 | DSL 扩展适配 Playwright 执行器分析
-
-- 任务：分析如果要扩展 DSL 功能，如何更好适配现有 Playwright runner。
-- 操作：复查 `schemas/dsl.py`、`runners/playwright_runner.py`、`postcondition_verifier.py`、`services/dsl.py` 中当前动作、定位、postcondition、变量和执行证据能力。
-- 结论：建议优先扩展强语义动作、断言、等待、作用域/集合与 evidence schema；避免直接开放任意 Playwright API 或 `evaluate_js`，防止绕过结构化 DSL 校验。
-- 备注：本次为设计分析，未修改业务代码，未追加 bug-log。
-
----
-
-## 2026-05-30 | A11y-first 商品定位消歧修正
-
-- 任务：将 Polo 商品页 DSL 消歧方案从 DOM `text_parent_chain` 修正为无障碍树定位 + 结构化候选校验路径。
-- 操作：
-  - 移除 `semantic.py` 中 `附近的` / `text_parent_chain` 主定位路径，避免把 DOM 作用域定位混入 a11y 语义定位。
-  - `page_explorer.py`：通过 CDP `backendDOMNodeId` 为 a11y 节点回填 DOM 属性，并生成已验证的 Playwright candidate selector。
-  - `dsl_generator.py`：商品卡片摘要改为 `target="Add to cart"` + verified candidate；当 AI 误用价格作为 click target 时，重写为带 candidates 的结构化步骤。
-  - `locator_preflight.py`：将 a11y 节点上的 `verified_selectors` 写入 DSL candidates；裸重复商品动作仍标记为 low confidence。
-  - `playwright_runner.py`：修复候选执行路径的 locator trace 构建，并要求候选 locator 唯一匹配后再执行。
-  - 更新相关单测和旧提示文案，删除 `text_parent_chain/附近的` 生成引导。
-- 验证：`uv run pytest tests/unit/test_dsl_generator.py tests/unit/test_locator_confidence.py tests/unit/test_locator_semantic.py tests/unit/test_page_explorer.py tests/unit/test_dsl_validation.py tests/unit/test_preflight_regen.py -q`，115 passed，1 个既有 PytestCollectionWarning。
-- 备注：本次是对上一版 DOM fallback 方案的架构修正，未追加 bug-log。
-
----
-
-## 2026-08-28 | 优化计划同步与 P0 仓库治理
-
-- 任务：同步代码库优化计划，并执行 P0 安全止血、迁移链恢复和跟踪策略修复。
-- 操作：
-  - 将审计报告、优化计划和日志提交并同步到 GitHub `main`，提交为 `7f055b3`。
-  - 收窄 `.gitignore`，恢复文档、测试和 migration 默认跟踪，并忽略本地 `.tools/`。
-  - 停止跟踪 `.claude/settings.local.json`，保留开发者本地文件；外部凭据轮换和历史处置仍待人工完成。
-  - 恢复缺失 migration `45061d8892d7_add_is_default_to_projects.py` 及升降级回归测试。
-  - 从生产 router 删除无鉴权 `/api/v1/ai-planning/test/locator` 调试接口并增加路由注册测试。
-- 验证：
-  - `uv run pytest tests/unit/test_project_default_migration.py -q`：1 passed。
-  - `uv run pytest tests/unit/test_ai_planning_api.py::test_locator_debug_route_is_not_registered -q`：1 passed。
-  - `uv run pytest tests/unit -q`：503 passed、2 failed、1 skipped；失败均为既有测试合同漂移，与本次 P0 修改无关，转入 P1 处理。
-  - `uv run alembic heads`：唯一 head 为 `20260608_0025`。
-  - 安全复核：本次差异未发现新增可利用问题。
-- 发现：SQLite 空库全链升级在历史 migration `20260313_0004` 处失败，已记录为 `AUDIT-20260828-12`；生产 PostgreSQL 空库升级尚未在当前环境验证。
-
----
-
-## 2026-08-28 | P1 运行时缺陷与测试门禁修复
-
-- 任务：修复审计 D-04 至 D-10，并恢复前后端默认测试基线。
-- 操作：
-  - 修复 VLM candidate ranker 的 `model_family` 参数传递。
-  - 删除已失效的 AI selector cache 及未消费指标。
-  - 修正 DSL service `__all__` 并增加公开符号一致性测试。
-  - 加固孤儿数据清理脚本：默认 dry-run、显式确认、默认项目/成员/用例/session 保护。
-  - 默认 pytest 纳入非浏览器 integration，并为浏览器和外部服务 E2E 补 marker。
-  - 增加 `/cases/new` create mode、项目参数传递和非法 case ID 拦截。
-  - 修复前端路由、Cases 数据 mock、Planning SSE 时序断言、render-time navigate 和 TextArea NaN height。
-- 验证：
-  - 后端默认测试：519 passed、1 skipped、10 deselected。
-  - 前端测试：63 passed。
-  - 前端 `npm run build`：通过。
-  - Knip：仍报告 P2 范围的孤儿文件、未用依赖/导出，以及 `@ant-design/icons` 未声明直接依赖。
-  - Ruff：工具可运行，但全仓存在 575 个既有问题，不能直接作为零告警门禁；需先建立基线或分阶段清理。
-- 备注：D-04 至 D-10 已关闭。静态检查遗留转入 P2；未修改用户已暂存的 `test_brand_filter_cart`。
-
----
-
-## 2026-08-28 | P2 确定孤儿代码清理
-
-- 任务：按 C1-C4 批次删除审计 O-01 至 O-19 的确定孤儿，并治理休眠能力。
-- 操作：
-  - 删除孤儿 backend runner、frontend layout、临时 DSL 结果和冗余 `.gitkeep`。
-  - 移除未使用 `echarts` 及 Vite 分包规则，补齐 `@ant-design/icons` 直接依赖。
-  - 删除未使用 CSS、DSL adapter/helper、旧 locator preflight 和 candidate collector。
-  - 删除 Page Explorer 旧 DOM prompt formatter、grouping/filter 子系统及旧 flow action 链，保留 `_collect_flow_a11y` 当前主链。
-  - 删除旧同步 Planning LLM、未启用日志上下文/Timer、零调用 locator/access/SSE helper 和前端旧导出。
-  - 删除只固定旧实现的测试，保留并回归当前 DSL、A11y、runner 和 API 合同测试。
-  - 新增 `docs/plan/capability-status-2026-08-28.md`，记录休眠能力 owner、状态和复核期限。
-- 验证：
-  - 后端默认测试：490 passed、1 skipped、10 deselected。
-  - 前端测试：63 passed；`npm run build` 通过。
-  - Knip 不再报告孤儿文件、未使用依赖和缺失直接依赖；剩余项为明确保留的 dormant API clients 与 transport types。
-  - 变更文件 Ruff `F401/F821` 检查通过。
-- 备注：`CaseListParams` 整体无消费者，已删除；Pydantic 框架隐式入口和 Alembic 历史均保留。
-
----
-
-## 2026-08-28 | P3 Planning 解耦第一切片
-
-- 任务：冻结 Planning/执行语义，并消除 Agent 对 Planning Service 的反向依赖。
-- 操作：
-  - 新增 `docs/plan/adr-001-planning-execution-semantics.md`，确定单 active project、VLM 默认关闭和同步/流式单事件源方向。
-  - 将 `ENABLE_AI_VISUAL_LOCATE` 默认值改为 false，保留显式启用能力。
-  - 将工具结果 URL 归一化、缓存查询和原始页面结果提取迁到 `app.ai.tool_result_cache`。
-  - Planning Tools 不再导入 `services.ai_planning` 私有缓存函数。
-  - Agent 通过 `AutoDraftGenerator` protocol 接收草案生成 callback，不再延迟导入 Planning Service。
-  - Planning Service 不再调用 Agent 私有 `_extract_raw_page_results`。
-- 验证：
-  - P3 定向测试：94 passed。
-  - 后端默认测试：490 passed、1 skipped、10 deselected。
-  - 新增模块及配置变更 Ruff `F401/F821` 检查通过。
-- 备注：P3 尚未完成；后续继续建立 active project 边界并按 session/conversation/draft/save-execute/analysis-retest 拆 application services。
-
----
-
-## 2026-08-29 | P3 Active Project 与项目上下文边界
-
-- 任务：落实 Planning Session 单 active project 语义，并将项目上下文职责移出总编排器。
-- 操作：
-  - `ai_planning_sessions` 新增 `active_project_id`，migration 为历史 session 回填最早关联项目。
-  - 新建、关联和工具创建项目时自动切换 active project；重复关联作为幂等切换；删除 active 项目时回退到最早剩余关联。
-  - 所有 Planning 执行路径改用集中 `_get_active_project_id`，移除散落的 `project_ids[0]`。
-  - API schema 和前端类型增加 `active_project_id` / `is_active`，项目面板支持查看和点击切换当前项目。
-  - 新增 `app/application/planning/project_context.py`，承接 session ownership、项目关联、active project 和成员修复职责。
-  - AI Planning API 直接依赖 application project context，不再动态导入 service 私有 `_get_session`。
-- 验证：
-  - 后端默认测试：491 passed、1 skipped、10 deselected。
-  - 前端测试：64 passed；`npm run build` 通过。
-  - active project migration 独立升降级测试通过；Alembic 唯一 head 为 `20260829_0026`。
-  - 变更范围 Ruff `F401/F821` 检查通过。
-- 备注：保留多项目历史关联，仅执行上下文收敛为单 active project；P3 下一批拆 conversation 和 draft application service。
-
----
-
-## 2026-08-29 | P3 Session Lifecycle 拆分
-
-- 任务：将 Planning Session 生命周期与 schema 映射移出 `services/ai_planning.py`。
-- 操作：
-  - 新增 `application/planning/session_service.py`，承接 session list/create/detail/delete。
-  - 新增 `application/planning/presenters.py`，统一 session/message/draft schema 转换。
-  - 将 required requirement slots 移到 schema 层，Agent 与 session service 共享同一合同。
-  - AI Planning API 直接依赖 session service；总编排器删除重复实现和 presenter。
-  - 新建 session 对显式 `project_id` 增加存在性校验，修正旧测试依赖 SQLite 关闭外键的错误假设。
-- 验证：
-  - session/API 定向测试：30 passed。
-  - 后端默认测试：491 passed、1 skipped、10 deselected。
-  - application/route/service 变更范围 Ruff `F401/F821` 检查通过。
-- 备注：下一批拆 conversation service 与 draft service，继续缩减总编排器。
-
----
-
-## 2026-08-29 | P3 Conversation Service 拆分
-
-- 任务：将 Planning 同步/流式对话编排迁入 application service，并显式化外部依赖。
-- 操作：
-  - 新增 `application/planning/conversation_service.py`，承接消息、会话状态、工具结果和流式占位消息持久化。
-  - 通过 `ConversationContextInjector`、`AutoDraftGenerator` 和 `ConversationEventLogFactory` ports 注入上下文、草案生成和事件日志能力。
-  - API 与 streaming bridge 改为调用 conversation service；旧总服务删除重复的同步/流式实现。
-  - 将上下文注入和自动草案 adapter 改为公开符号，消除路由与 application service 对私有实现的依赖。
-  - 更新 API 测试 patch 边界，并验证 Agent 收到 transcript 与 auto-draft port。
-- 验证：
-  - Planning 定向测试：108 passed、1 skipped。
-  - 后端默认测试：491 passed、1 skipped、10 deselected。
-  - 变更范围 Ruff `F401/F821`、Python compileall 和 `git diff --check` 通过。
-- 备注：P3 下一批拆 draft service，再拆 save-and-execute 与 analysis/retest。
-
----
-
-## 2026-08-29 | P3 Draft 与 Context Service 拆分
-
-- 任务：将 Planning 草案生命周期和共享上下文构建移出总编排器。
-- 操作：
-  - 新增 `application/planning/draft_service.py`，承接草案生成、流式生成、状态更新、删除及自动草案 adapter。
-  - 新增 `application/planning/context_service.py`，承接会话状态、工具历史、anti-pattern 和执行错误上下文构建。
-  - AI Planning API 与 streaming bridge 直接依赖新 application services。
-  - `services.ai_planning` 删除对应实现，仅保留兼容导出。
-  - 测试替身改为 patch 实际实现模块，避免 facade 迁移后出现无效 mock。
-- 验证：
-  - Planning/Context/Analysis 定向测试：73 passed、1 skipped。
-  - 变更范围 Ruff `F401/F821` 与 `git diff --check` 通过。
-- 备注：下一批拆 save-and-execute 与 analysis/retest，并继续收敛 application ports。
-
----
-
-## 2026-08-29 | P3 Save/Execute 与 Analysis/Retest 拆分
-
-- 任务：完成 Planning application service 用例拆分并移除总编排器实现。
-- 操作：
-  - 新增 `execution_inputs.py`、`save_execute_service.py` 和 `analysis_retest_service.py`。
-  - API 与 streaming bridge 直接依赖 application services；`services.ai_planning` 收敛为 71 行兼容 facade。
-  - 将跨 application service 的分析、上下文和输入解析 helper 改为公开合同。
-  - Planning Tools 为项目状态、洞察和推荐复测查询提供公共入口。
-  - 修复流式 save-and-execute 调用不存在的 `EventLogWriter.log()`，改为注入 event-log factory 并调用 `write()`。
-- 验证：
-  - P3 定向测试：61 passed。
-  - 变更范围 Ruff `F401/F821` 和 `git diff --check` 通过。
-- 备注：P3 用例服务拆分完成；兼容 facade 保留一个迁移周期，下一阶段进入 P4 单执行事件源。
-
----
-
-## 2026-08-29 | P4 单执行事件源与取消终态
-
-- 任务：统一同步与流式 Case 执行核心，消除重复事务和报告构建路径。
-- 操作：
-  - `execute_case()` 改为消费 `execute_case_streaming()` 至终态，同步与流式入口共享 runner、状态迁移和 evidence 持久化。
-  - 删除重复 `_execute_case_record()` 及同步 Playwright runner 依赖。
-  - 增加同步/流式等价测试，比较最终状态、步骤顺序和完整 evidence。
-  - 将 `cancelled` 纳入前后端执行状态合同，并在取消异常重新抛出前持久化报告与结束时间。
-  - 补齐执行详情和报告中心的取消状态展示。
-- 验证：
-  - Execution 定向测试：19 passed。
-  - 前端测试：64 passed。
-  - 变更范围 Ruff `F401/F821` 通过。
-- 备注：Runner 的流式解释器现为唯一执行源；报告继续只读取 `TestCaseRun.report` 持久化 JSON。
-
----
-
-## 2026-08-30 | P5 前端业务域收口
-
-- 任务：按 planning/projects/cases/executions/reports 拆分前端边界，并恢复真实认证入口。
-- 操作：
-  - 将 API client 拆到 `shared/api/client.ts`，业务请求拆入各 `features/*/api.ts`；旧 `services/api.ts` 缩为兼容 barrel。
-  - 通用 SSE client 和 PageFeedback 下沉到 shared，Planning 取消请求归回 planning domain。
-  - 从 `AITestPlanningPanel` 抽出 session 初始化/恢复 hook、SSE 生命周期 hook 和 Requirements 视图。
-  - 新增 `AuthGuard` 与 `LoginPage`，统一保护业务路由并支持登录后恢复目标地址。
-  - 增加 FastAPI OpenAPI 导出脚本、schema 快照和 `openapi-typescript` 生成命令；auth transport types 已切换到生成类型。
-  - 执行依赖安全升级；React Router 升至 v7 并删除失效的 v6 future flags。
-- 验证：
-  - 前端测试：67 passed。
-  - `npm run build` 与 `npm run generate:api-types` 通过，连续生成结果一致。
-  - `npm audit --audit-level=low`：0 vulnerabilities。
-  - API/SSE 兼容 barrel 保留，现有调用方和测试可渐进迁移。
-- 备注：P5 结构目标已落实；手写 `types/api.ts` 作为 UI view model 兼容层保留，transport schema 以生成文件为准。
-
----
-
-## 2026-08-30 | 凭据本地清理与 Git 历史处置
-
-- 任务：清除误提交的本地配置和智谱 BigModel API 凭据历史。
-- 操作：
-  - 从本地 `.claude/settings.local.json` 删除包含明文 Bearer 凭据的权限项。
-  - 使用 index filter 从 `main` 的全部 484 个历史提交中移除 `.claude/settings.local.json`。
-  - 以重写前远端哈希执行 `--force-with-lease`，避免覆盖并发远端更新。
-  - 删除 `refs/original`、reflog、临时 bundle 和验证 clone，并执行立即 GC。
-- 验证：
-  - 本地与远端 `main` 哈希一致。
-  - 远端全量克隆中目标路径历史提交数和当前跟踪数均为 0。
-  - 本地全部 refs 的目标路径提交数为 0，BigModel Bearer 模式扫描为 0。
-- 备注：仓库侧处置完成；外部凭据吊销仍需账号持有人登录智谱 API Keys 控制台完成身份验证。
-
----
-
-## 2026-08-30 | 本地 main 对齐远端（放弃本地未推送提交）
-
-- 任务：本地与远端仓库同步，清理中断的 rebase 现场。
-- 背景：此前一次 `git pull --rebase` 在 `backend/app/services/ai_planning.py` 冲突后中断；本地 `main` 与 `origin/main` 因远端凭据清理 force-push 已分叉。
-- 决策：用户确认以远端为准，放弃本地未推送提交（Bug #J、EventLogWriter 方法名修复、三重修复等 4 个提交）。
-- 操作：
-  - `git rebase --abort` 回到 `main`。
-  - `git fetch origin --prune`。
-  - `git reset --hard origin/main`。
-- 验证：本地 `main` 与 `origin/main` 一致（`4719f1e`），无未提交跟踪文件差异；30 个未跟踪 `docs/` 文件保持不变。
-
----
-
-## 2026-08-30 | P0-P5 重构成果复核与代码质量评估
-
-- 任务：基于真实代码与动态测试检查 P0-P5 重构完成度，评估当前代码质量（不只看 md 结论）。
-- 操作：
-  - 检查 `git log`/工作树：P0-P5 各阶段提交存在，`main` 与 `origin/main` 对齐（`5ec68ec`），工作树干净。
-  - 运行后端默认测试、前端测试与构建；核对 Alembic 迁移链、Planning 兼容 facade、执行单事件源、清理脚本保护、locator 调试路由注册测试。
-  - 交叉检查删除门禁：`locator_confidence.py`、`AppLayout.tsx`、`echarts`、`test_dsl.json`、旧 preflight、旧同步 Planning LLM、AI selector cache 等均已删除；休眠能力清单已建立。
-- 验证：
-  - `uv run pytest -q`：1 failed、492 passed、1 skipped、10 deselected；失败为本地 `backend/.env` 中 `ENABLE_AI_VISUAL_LOCATE=true` 污染 `test_ai_visual_locate_default_is_disabled`。
-  - `uv run alembic heads`：唯一 head `20260829_0026`；`alembic history` 链条连续无断链。
-  - `npm test -- --run`：8 个测试文件通过、1 个文件加载失败（`services/api.test.ts`），根因是 `services/api.ts:7` 引用不存在的 `features/reports/api`。
-  - `npm run build`：失败，错误为 `TS2307`（缺少 `features/reports/api`）与 `TS2305`（barrel 未导出 `getReportPreference/updateReportPreference`）。
-- 结论：P0-P4 完成度较高，Planning facade 已缩到 72 行、执行同步入口复用流式生成器、清理脚本默认 dry-run 且带保护；P5 前端按域拆分遗漏 `features/reports` 域，导致前端测试与构建全红。
-- 发现：本次复核新发现 2 个缺陷，已记录到 `docs/bug-log.md`（AUDIT-20260830-17、AUDIT-20260830-18）。
-
----
-
-## 2026-08-30 | P5 reports 域修复 + 前端/后端门禁恢复
-
-- 任务：修复复核发现的前端门禁问题，并验证前端构建与后端服务实际跑通。
-- 操作：
-  - 新增 `frontend/src/features/reports/api.ts` 与 `types.ts`，恢复 `getReportPreference/updateReportPreference` 客户端，barrel `services/api.ts` 重新可用。
-  - 修复 `features/planning/api.ts` 中 `getAISettings` 的重复 `return`。
-  - 修复 `test_config.py` 两个 VLM 默认值用例：重定向 `ENV_FILE_PATH`，避免本地 `.env` 污染默认断言。
-  - 启动 PostgreSQL（`D:/PostgreSQL/data`），执行 `uv run alembic upgrade head` 将本地库从 `20260608_0025` 升到 `20260829_0026`。
-  - 发现本地 `api.unself.cn` 网关需带 `/v1` 路径，修正 `.env` 中 `AI_DSL_BASE_URL` 与 `AI_PLANNING_BASE_URL`。
-- 验证：
-  - 后端默认测试：493 passed、1 skipped、10 deselected。
-  - 前端测试：67 passed；`npm run build` 通过。
-  - 后端 `uvicorn --factory` 启动，`/api/v1/health` 返回 200。
-  - 通过 Vite 代理 `127.0.0.1:5173` 创建会话 311 并发送消息，AI 正常返回收集需求的 `assistant_message`，`session_status=collecting`。
-- 备注：AUDIT-20260830-17 已关闭；新增 AUDIT-20260830-19 记录 base URL 配置问题。
-
----
-
-## 2026-08-30 | 清理 Git 历史中的 backend/.env 明文凭据
-
-- 任务：从 `main` 全部历史提交中移除 `backend/.env` / `.env`，消除远端可见的明文密钥记录。
-- 操作：
-  - 备份当前 `main` 到本地分支 `backup-pre-env-purge`，并创建 `git bundle`（`D:/AutoTestingLearingProject/backup-pre-env-purge-20260830-031248.bundle`）。
-  - `git filter-branch --index-filter 'git rm --cached --ignore-unmatch .env backend/.env' --prune-empty -- main` 重写全部 486 个提交。
-  - 删除 `refs/original`，清理 reflog 后 `git push origin main --force-with-lease`。
-- 验证：
-  - `git rev-list main --objects | grep -E '\.env$'`：无 `.env`/`backend/.env` 对象；`backend/.env.example` 保留。
-  - `git log origin/main --oneline -- .env backend/.env`：空。
-  - 本地 `main` 与 `origin/main` 一致（`60e51e6`），树无差异。
-  - 后端/前端服务仍在运行，`/api/v1/health` 与 Vite 均返回 200。
-- 备注：历史中的 `.claude/settings.local.json` 已于更早前清理；本次仅处理 `backend/.env`。工作树中的 `backend/.env` 仍保留用于本地开发（已被 gitignore），但历史已无记录。
-
----
-
-## 2026-08-30 | 仓库代码质量评估（真实代码 + 动态门禁）
-
-- 任务：应要求对当前仓库做一次代码质量评估，基于真实源码、目录结构与动态测试，不只看文档结论。
-- 操作：
-  - 统计后端 `backend/app`（22,194 行 Python）与前端 `frontend/src`（13,637 行 TS/TSX）结构，检查分层、路由、模型、迁移、测试覆盖。
-  - 运行后端默认 pytest、前端 `npm run build`；检查 TODO/FIXME、`print()`、`console.log`、密钥扫描、Alembic 版本链、重复模块与 lint 配置。
-- 验证：
-  - 后端：493 passed、1 skipped、10 deselected（95.77s）；存在 `TestCase`/`TestCaseRun` 类名被 pytest 收集的 PytestCollectionWarning。
-  - 前端：`tsc --noEmit && vite build` 通过，主包约 763KB（gzip 240KB）偏大，无代码分割治理。
-  - 密钥扫描：仅测试夹具中的 `test-key` / `new-dsl-secret` 假值，未发现真实泄露。
-- 结论：整体为「结构清晰、可运行、测试覆盖扎实的中上水平」代码库；主要短板是 lint/类型检查未纳入 CI 门禁、4 个超大模块需拆分、`__pycache__`/`dist`/`node_modules` 等生成物污染工作树感知、AI 配置字段随功能堆叠趋杂。
-- 备注：仅追加本日志，未改动任何业务代码。
-
----
-
-## 2026-08-30 | AI 消息流式传输设计分析（对照 pi 事件协议）
-
-- 任务：分析前端消息框设计与 AI 返回消息消费链路，指出思考内容与正文渲染/顺序问题，参考 pi 的 `AssistantMessageEventStream` 事件协议，给出 Web 端与框架优化方案。
-- 操作：
-  - 阅读 `frontend/src/shared/api/sseClient.ts`、`features/planning/usePlanningSse.ts`、`components/AITestPlanningPanel.tsx` 的 SSE 解析与 `handleStreamEvent` 分发逻辑。
-  - 阅读 `backend/app/ai/test_planning_agent.py` 的 `stream_planning_turn` / `_stream_planning_llm`，确认 `text_chunk(thinking=true)` 与正文共用 `content` 字段、前端拆成 `_thinkingContent` + `content` 两路渲染。
-  - 对照 `pi/packages/ai/src/types.ts` 的 `AssistantMessageEvent`（text/thinking/toolcall 的 start/delta/end + contentIndex）与 `utils/event-stream.ts` 的 `EventStream`。
-- 结论：当前是「动作型扁平事件 + 前端手工拼字符串」，思考与正文不是有序 content block，导致思考折叠但正文在框外、顺序丢失、`turn_complete` 覆盖流式文本等问题；应改为「消息生命周期事件 + contentIndex + reducer」，思考作为一等 content block。
-- 备注：仅追加本日志，未改动任何业务代码。
-
----
-
-## 2026-08-30 | 对齐 pi 的 AI 消息流式传输协议（实现）
-
-- 任务：将前端消息框与后端流式事件协议对齐 pi 的 `AssistantMessageEvent` 设计（有序 content block + contentIndex），解决思考内容与正文乱序、正文覆盖等问题。
-- 操作：
-  - 后端 `app/ai/test_planning_agent.py::_stream_planning_llm` 由扁平 `text_chunk(thinking=true)` 改为产出 `content_block_start / content_block_delta / content_block_end`（带 `content_index` 与 `kind`）。
-  - `app/ai/test_planning_agent.py::stream_planning_turn` 透传三类 `content_block_*` 事件。
-  - `app/application/planning/conversation_service.py` 新增 `_flush_streaming_content_block`，把有序块持久化到 `structured_payload_json["content_blocks"]`，并以文本块镜像到 `message.content` 兼容旧渲染；最终 `turn_complete` 不再覆盖流式文本。
-  - 前端 `types/api.ts` 新增 `AssistantContentBlock` 与 `ContentBlockStart/Delta/EndStreamEvent`。
-  - 前端 `AITestPlanningPanel.tsx` 新增 `readContentBlocks` / `applyContentBlockEvent` / `AssistantMessageBody`，按 content block 顺序渲染思考与正文；`turn_complete` 仅在无流式块时才回填最终消息。
-- 验证：
-  - 更新 `tests/unit/test_planning_agent.py` 流式断言。
-  - 后端默认 pytest：493 passed、1 skipped、10 deselected。
-  - 前端 `npm run build` 通过；`npm test` 67 passed。
-- 备注：本次工作树还包含上一任务遗留的 BUG-086 修复（`.env.example`、`page_explorer.py`、`docs/bug-log.md`），未在本任务中改动，同步时需一并注意。
-
----
-
-## 2026-08-30 | 诊断切页后流式消息丢失问题
-
-- 任务：定位「切换页面后再次回到会话页，消息丢失，只能等 AI 全部发完才能看到」的根因。
-- 结论：
-  - 后端流式期间实际上已经持续落库（user 消息、streaming 消息、content_block 事件、event log），不存在「后端没持久化」。
-  - 真正问题是前端「进行中的流式状态」没有可恢复的会话级全局来源：`usePlanningSessionState` 挂在 `AITestPlanningPanel` 内，切页时组件卸载，SSE 继续在后台跑，`handleStreamEvent` 更新的是已卸载组件的本地 state；回到页面时 `initialize()` 重新拉 `getPlanningSession` 并用 `applySessionDetail` 整体覆盖 transcript，把后台流期间本应累积的流式内容冲掉。
-  - 恢复逻辑 `applySessionDetailWithRecovery` 只对 `turn_type === "streaming"` 的「中断」消息做一次性 event replay，且 replay 只认识旧事件（text_chunk/status/tool_call/turn_complete），不识别本次新增的 `content_block_*` 事件，因此思考块和有序块无法正确重建。
-  - `loadSessionDetail` 没有「SSE 进行中则不覆盖 transcript」的保护，且 `applySessionDetail` 会把 detail.messages 重新映射，丢掉了当前 UI 里正在增长的 content blocks。
-  - `AITestPlanningPanel` 内部使用 `sessionId` state 而不跟随路由 `sessionIdProp`，切页回来 `sessionIdProp` 变化被忽略，也放大了状态错位问题。
-- 建议修复方向（本次仅诊断，未改代码）：
-  1. 把会话状态与活跃 SSE 流提升为全局 store（或 Query/Context），切页只卸载视图、不卸载状态，re-mount 时订阅正在进行的流事件。
-  2. 若沿用「后台流 + 回页重放」，加载详情时保留 `_streaming` 消息的实时 content_blocks，或仅在无活跃流时覆盖 transcript。
-  3. 扩展 `applySessionDetailWithRecovery` 支持 `content_block_*` 事件重放；否则新协议的消息刷新后思考块仍丢。
-  4. `sessionId` 改为跟随路由 prop，避免内部/外部双源不一致。
-- 备注：仅追加本诊断记录，未改动业务代码。
-
----
-
-## 2026-08-30 | 切页消息丢失根治疗方案设计
-
-- 任务：为「切页后流式消息丢失」设计根治疗法（先设计，待实施）。
-- 方案核心：把「会话状态」和「活跃 SSE 流」从 `AITestPlanningPanel` 组件提升为路由无关的全局 workspace store；切页只卸载视图，不卸载状态与流；回页时由 store 判定「有活跃流则复用内存 transcript，无活跃流则拉详情并按统一 reducer 重放事件」。
-- 关键落点：
-  - 新增模块级 `planningWorkspaceStore`（`useSyncExternalStore`，不引入新依赖）。
-  - 新增 `planningStreamEvents` 纯函数 reducer，前端实时事件与回页重放共用同一套逻辑，统一支持 `text_chunk`、`content_block_*`、`tool_call_*`、`execution_*`、`turn_complete`。
-  - `usePlanningSse` 去掉组件卸载即 abort 的行为，abort 由 store 显式管理。
-  - `AITestPlanningPanel` 改为消费 store；`sessionId` 跟随路由 prop。
-  - `App.tsx` / `test-utils.tsx` 增加 Provider。
-  - 后端可选加固：`GET /sessions/{id}/events` 支持游标/按 message_id 过滤。
-- 备注：本轮为方案设计，未改业务代码；实施时按 store → reducer → panel → tests 顺序推进。
-
----
-
-## 2026-08-30 | 切页消息丢失根治疗方案落地
-
-- 任务：实施「会话状态 + 活跃 SSE 流提升为路由无关全局 workspace store」的根治方案。
-- 操作：
-  - 新增 `frontend/src/features/planning/planningStreamEvents.ts`：纯函数 reducer（`reduceTranscriptEvent`）+ `readContentBlocks` / `applyContentBlockEvent` / `createOptimisticMessage`，实时事件与重放共用。
-  - 新增 `frontend/src/features/planning/planningWorkspaceStore.tsx`：`useSyncExternalStore` 外部 store，管理 `currentSessionId`、各 session 的 `transcript/requirements/plan/drafts/activeStream`；`loadSessionDetail` 有活跃流时只更新元数据、不覆盖 transcript；无活跃流时按事件日志重放并支持 `content_block_*`。
-  - 重构 `usePlanningSse.ts`：去掉组件卸载即 abort，改为 store 管理 abort，新增 `runStream(sessionId, kind, messageId, options)`。
-  - 重构 `usePlanningSessionState.ts`：改为消费 store，提供兼容旧面板的 API。
-  - 重构 `AITestPlanningPanel.tsx`：删除组件内手写 `handleStreamEvent`，事件交给 store reducer；流式状态由 `activeStreamKind` 派生；乐观消息 ID 传给 `runStream` 作为活跃消息 ID。
-  - `App.tsx` / `test-utils.tsx` 注入 `PlanningWorkspaceProvider`。
-- 验证：
-  - 新增 `planningStreamEvents.test.ts` 7 用例、`planningWorkspaceStore.test.ts` 3 用例。
-  - `npm run build` 通过；`npm test` 77 passed（11 files）。
-- 备注：后端未改动；本次为纯前端架构修复。
