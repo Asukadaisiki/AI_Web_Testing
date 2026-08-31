@@ -55,6 +55,16 @@
 
 ## 任务记录
 
+## 2026-08-31 | 当前代码架构可理解性评估
+
+- 任务：评估当前仓库架构，解释文件分类、命名、模块职责和依赖关系，并定位代码难以理解的主要原因。
+- 操作：盘点前后端目录与模块规模；追踪 API、Planning、DSL、Runner、Locator、Report 主链；分析 Python 跨层依赖与模块强连通分量；新增 `docs/architecture-guide.md`，整理目录词典、Planning 文件职责、前后端依赖规则、需求定位表和推荐阅读顺序；更新根 README 与后端入口说明。
+- 结果：当前架构较 2026-08-28 审计已有明显改善，Planning 用例服务和同步/流式执行源已完成拆分；主要认知负担来自超大核心函数、`application`/`services` 双向分层、过渡 facade/类型 barrel、前端大组件，以及入口文档严重滞后。综合可维护性评估为 6.8/10；现已提供对应当前代码的统一导航入口。
+- 验证：后端默认测试 499 passed、1 skipped、10 deselected；前端 77 tests passed；`npm run build` 通过；静态依赖图仅发现 ORM 双向 relationship 形成模块强连通分量；本地 Markdown 链接检查通过。
+- 后续：按指南中的过渡依赖逐步拆分 Planning Agent/草案生成/执行报告聚合的大函数，并移除兼容 facade 和前端手写总类型 barrel。
+
+---
+
 ## 2026-08-31 | Prompt 统一管理入口落地
 
 - 任务：先做当前 prompt 管理，不实现 RL 相关逻辑，只为后续策略接入预留扩展点。

@@ -140,7 +140,8 @@ AI 增强的 Web UI 自动化测试平台。
 - 认证只做到"本地账号密码 + Cookie Session"最小可用形态，尚未进入角色权限、账号管理、密码重置
 - E2E 测试覆盖场景仍需扩展（当前主要验证 login_success 和品牌筛选购物车场景）
 
-AI visual 灰度验收口径见 [`docs/ai-visual-gray-acceptance-baseline.md`](./docs/ai-visual-gray-acceptance-baseline.md)，本轮结论见 [`docs/ai-visual-gray-acceptance-2026-03-24.md`](./docs/ai-visual-gray-acceptance-2026-03-24.md)。
+AI visual 当前默认关闭；能力状态与后续治理决策见
+[`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)。
 
 ## 演示流
 
@@ -336,12 +337,12 @@ E2E 测试验证完整流程：登录 → 品牌筛选（Polo）→ 添加商品
 
 ## 文档索引
 
-- `docs/AI 自动化测试增强项目规划.md`：核心产品规划，优先级最高
-- `docs/project-plan.md`：当前执行计划与阶段状态
+- [`docs/architecture-guide.md`](./docs/architecture-guide.md)：当前代码目录、文件命名、模块职责、依赖关系和阅读顺序
+- [`docs/plan/codebase-optimization-plan-2026-08-28.md`](./docs/plan/codebase-optimization-plan-2026-08-28.md)：当前架构优化计划与验收标准
+- [`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)：能力状态与保留/下线决策
 - `docs/frontend-design.md`：前端设计说明
 - `docs/execution-log.md`：任务执行记录
 - `docs/bug-log.md`：缺陷记录
-- `docs/ai-visual-gray-acceptance-baseline.md`：AI visual 灰度验收口径与门槛
 - `docs/superpowers/specs/2026-05-14-main-path-v2-a11y-pipeline-design.md`：A11y 管线 v2 设计文档
 - `docs/superpowers/plans/2026-05-15-main-path-v2-a11y-pipeline.md`：A11y 管线 v2 实施计划
 - `docs/superpowers/specs/`：功能设计规格文档
@@ -354,7 +355,7 @@ E2E 测试验证完整流程：登录 → 品牌筛选（Polo）→ 添加商品
 - `docs/superpowers/specs/2026-05-13-ppt-layout-fix-design.md`：PPT 布局修复设计
 - `docs/superpowers/plans/2026-05-13-ppt-layout-fix.md`：PPT 布局修复实施计划
 
-如果文档之间有冲突，以 `docs/AI 自动化测试增强项目规划.md` 为准。
+如果历史设计文档与当前实现冲突，以 `docs/architecture-guide.md`、当前 Schema 和自动化测试为准。
 
 ## 开发约束
 
