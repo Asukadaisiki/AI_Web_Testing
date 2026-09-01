@@ -48,6 +48,45 @@
 
 ## 问题记录
 
+## BUG-091 | 浏览器集成测试与当前认证及定位实现漂移
+
+- 日期：2026-09-01
+- 状态：open
+- 严重度：medium
+- 来源：主链路浏览器回归
+- 描述：浏览器集成中存在三类旧断言：匿名访问仍期望 401，但本地模式已自动登录；A11y role 测试引用已变为 `None` 的兼容常量；VLM 重排测试 monkeypatch 已删除的内部函数。登录样例还使用裸 `flash` target，实际执行到最后一步后进入人工干预。
+- 影响：浏览器回归无法作为当前主链健康门禁，容易把测试资产漂移误判为生产链整体故障。
+- 根因：认证策略、A11y 过滤与 locator 内部实现演进后，集成 fixture 和 monkeypatch 未同步更新。
+- 处理：待按当前公开合同重写相关断言和 fixture，避免依赖内部函数。
+- 验证：`test_main_path_v2_e2e.py` 为 2 passed、1 failed；登录执行为 5 步通过、第 6 步定位失败；`test_intervention_regression.py` 为 3 passed、1 failed。
+- 关联记录：`docs/execution-log.md#2026-09-01--ai-规划到失败复测链路核验`
+
+## BUG-090 | 失败后自动重探索和 DSL 重写尚未编排
+
+- 日期：2026-09-01
+- 状态：open
+- 严重度：high
+- 来源：主链路静态核验
+- 描述：后端分别具备失败分析、anti-pattern 记录、执行错误上下文注入和 `/retest`，但复测只重跑原 DSL；没有自动重新探索、重生成 DSL、更新正式用例的编排，前端也没有复测 API 客户端或操作入口。
+- 影响：用户描述的“分析错因 → 注入当前会话 → 重新组织上下文 → 再次执行”不能自动闭环，需要用户再次对话、生成草案并手动执行。
+- 根因：现有实现采用半自动治理，能力模块已存在但缺少受控自愈状态机和 UI 确认点。
+- 处理：未在本次核验中改变产品策略；建议单独设计带审批门的 `analyze → re-explore → regenerate → diff → approve → rerun` 流程。
+- 验证：已核对 `analysis_retest_service.py`、`context_service.py`、`draft_service.py`、Planning API 与前端 Planning API/面板调用。
+- 关联记录：`docs/execution-log.md#2026-09-01--ai-规划到失败复测链路核验`
+
+## BUG-089 | 流式保存执行遗漏测试数据注入和失败沉淀
+
+- 日期：2026-09-01
+- 状态：fixed
+- 严重度：high
+- 来源：主链路静态核验
+- 描述：前端“保存并执行”使用 `/execute` 流式路径；该路径未执行同步路径已有的 `build_input_values_from_session` 和 `_record_execution_anti_patterns`。
+- 影响：含 `${context_key}` 的用例可能因输入为空执行失败，且失败不会沉淀为下一轮 DSL 生成可用的 anti-pattern。
+- 根因：同步保存执行逻辑增强后，流式实现未同步更新。
+- 处理：在流式路径执行前自动解析会话测试数据，执行后按保存用例记录失败 anti-pattern；同时将旧式 `Query.get()` 改为 SQLAlchemy 2.x `Session.get()`。
+- 验证：新增流式路径回归，确认 `input_values={"username": "contract-user"}` 传入 Runner 且失败记录函数被调用；相关测试 27 passed、1 skipped。
+- 关联记录：`docs/execution-log.md#2026-09-01--ai-规划到失败复测链路核验`
+
 ## BUG-088 | 架构入口文档与当前实现严重漂移
 
 - 日期：2026-08-31

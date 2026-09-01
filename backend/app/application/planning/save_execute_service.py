@@ -422,6 +422,16 @@ def save_and_execute_selected_drafts_streaming(
         yield error_event
         return
 
+    if not input_values:
+        input_values = build_input_values_from_session(
+            planning_session.requirements_json or {},
+            [draft.dsl_case_json for draft in drafts if draft.dsl_case_json],
+        )
+        logger.info(
+            "Streaming execution auto-resolved input_values from session data: %s",
+            {key: value[:3] + "***" for key, value in input_values.items()} if input_values else {},
+        )
+
     execution_summaries: list[ExecutionSummaryResult] = []
     for saved in saved_cases:
         if cancel_event.is_set():
@@ -429,7 +439,7 @@ def save_and_execute_selected_drafts_streaming(
 
         payload = CaseExecutionRequest(actor_user_id=actor_user_id, input_values=input_values or {})
         dsl_case = None
-        case_record = session.query(TestCase).get(saved.case_id)
+        case_record = session.get(TestCase, saved.case_id)
         if case_record:
             from app.schemas.dsl import DSLCase
             dsl_case = DSLCase.model_validate(case_record.dsl)
@@ -491,6 +501,27 @@ def save_and_execute_selected_drafts_streaming(
                 ))
         except RunnerCancelledError:
             raise
+
+    for saved in saved_cases:
+        draft = next(
+            (
+                item
+                for item in drafts
+                if item.dsl_case_json and item.dsl_case_json.get("name") == saved.case_name
+            ),
+            None,
+        )
+        if draft is None:
+            continue
+        try:
+            _record_execution_anti_patterns(
+                session,
+                saved.case_id,
+                draft.scenario_key,
+                _get_active_project_id(planning_session),
+            )
+        except Exception as exc:
+            logger.warning("Streaming execution anti-pattern recording failed: %s", exc)
 
     # Persist execution summary message
     lines = ["测试执行完成：\n"]
