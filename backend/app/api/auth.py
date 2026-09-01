@@ -1,45 +1,31 @@
-"""Authentication dependencies and helpers."""
+"""Current-user dependencies for the single-user local environment."""
 
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.auth import SESSION_USER_ID_KEY
+from app.core.config import get_settings
 from app.db import get_db_session
 from app.models import User
-from app.services.auth import get_user_by_id
-
-DEFAULT_DEMO_USER_ID = 1
+from app.services.auth import get_user_by_email
 
 
 def require_authenticated_user(
-    request: Request,
     session: Session = Depends(get_db_session),
 ) -> User:
-    user_id = request.session.get(SESSION_USER_ID_KEY)
-    if not isinstance(user_id, int):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录或登录态已失效。")
-
-    user = get_user_by_id(session, user_id)
+    """Return the database-backed admin user without requiring a login session."""
+    user = get_user_by_email(session, get_settings().auth_auto_login_email)
     if user is None or not user.is_active:
-        request.session.clear()
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录或登录态已失效。")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="默认管理员账号不存在或已停用。",
+        )
     return user
 
 
 def require_demo_user(
     session: Session = Depends(get_db_session),
 ) -> User:
-    """Return a fixed demo user (ID=1) without real authentication.
-
-    WARNING: Development/demo only. In production, replace with
-    ``require_authenticated_user`` for proper session-based auth.
-    """
-    user = get_user_by_id(session, DEFAULT_DEMO_USER_ID)
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Demo user 1 is missing.",
-        )
-    return user
+    """Backward-compatible dependency used by existing business routes."""
+    return require_authenticated_user(session)

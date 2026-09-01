@@ -27,6 +27,7 @@
 - 开发数据库默认使用 PostgreSQL
 - 首次启动前先执行 `uv run alembic upgrade head`
 - 后端启动命令：`uv run backend-dev`
+- 当前本地单用户模式关闭登录鉴权，所有请求自动使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的数据库账号（默认 `admin@test.com`）；该账号缺失或停用时接口会返回 500
 - AI DSL 生成默认关闭；如需启用，额外设置 `ENABLE_AI_DSL_GENERATE=true`、`AI_DSL_API_KEY` 与 `AI_DSL_MODEL`
 - AI visual 默认关闭；如需启用，额外设置 `ENABLE_AI_VISUAL_LOCATE=true`、`VLM_API_KEY`、`VLM_BASE_URL`、`VLM_MODEL` 与 `VLM_MODEL_FAMILY`
 

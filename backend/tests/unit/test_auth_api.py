@@ -93,11 +93,25 @@ def test_me_returns_current_user_after_login(anonymous_client) -> None:
     }
 
 
-def test_me_returns_401_when_not_logged_in(anonymous_client) -> None:
+def test_me_returns_default_admin_without_login(anonymous_client) -> None:
     response = anonymous_client.get("/api/v1/auth/me")
 
-    assert response.status_code == 401
-    assert response.json() == {"detail": "未登录或登录态已失效。"}
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 1,
+        "email": "seed-owner@example.com",
+        "display_name": "Seed Owner",
+    }
+
+
+def test_me_fails_when_default_admin_is_inactive(anonymous_client, db_session) -> None:
+    db_session.execute(text("UPDATE users SET is_active = 0 WHERE id = 1"))
+    db_session.commit()
+
+    response = anonymous_client.get("/api/v1/auth/me")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "默认管理员账号不存在或已停用。"}
 
 
 def test_logout_clears_session_cookie(anonymous_client) -> None:
@@ -118,17 +132,18 @@ def test_logout_clears_session_cookie(anonymous_client) -> None:
     assert "expires=thu, 01 jan 1970 00:00:00 gmt" in response.headers["set-cookie"].lower()
 
     me_response = anonymous_client.get("/api/v1/auth/me")
-    assert me_response.status_code == 401
+    assert me_response.status_code == 200
+    assert me_response.json()["id"] == 1
 
 
 def test_business_routes_allow_demo_access(anonymous_client) -> None:
-    """In demo mode, routes use require_demo_user which always resolves to user 1
-    without checking session cookies. Auth enforcement will be added when routes
-    switch to require_authenticated_user."""
+    """All application routes resolve the default admin without cookies."""
     cases_response = anonymous_client.get("/api/v1/cases")
     executions_response = anonymous_client.get("/api/v1/executions")
+    reports_response = anonymous_client.get("/api/v1/reports/preferences")
     settings_response = anonymous_client.get("/api/v1/settings/ai")
 
     assert cases_response.status_code == 200
     assert executions_response.status_code == 200
+    assert reports_response.status_code == 200
     assert settings_response.status_code == 200

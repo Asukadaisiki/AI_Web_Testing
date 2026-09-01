@@ -36,6 +36,20 @@ def test_get_settings_uses_secure_cookie_by_default(monkeypatch, tmp_path: Path)
     assert settings.auth_session_https_only is True
 
 
+def test_get_settings_reads_auto_login_email(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("AUTH_AUTO_LOGIN_EMAIL", "Admin@Test.com ")
+    monkeypatch.setattr(config_module, "ENV_FILE_PATH", tmp_path / ".missing.env")
+    get_settings.cache_clear()
+
+    try:
+        settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.auth_auto_login_email == "admin@test.com"
+
+
 def test_get_settings_falls_back_when_ai_visual_int_env_is_invalid(monkeypatch) -> None:
     monkeypatch.setenv("AI_VISUAL_TIMEOUT_MS", "abc")
     monkeypatch.setenv("AI_VISUAL_FAILURE_THRESHOLD", "oops")

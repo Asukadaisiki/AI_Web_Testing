@@ -95,7 +95,7 @@ def test_get_report_preference_falls_back_to_first_accessible_project_when_no_ac
     }
 
 
-def test_report_preference_round_trip_is_user_scoped(anonymous_client, client, db_session) -> None:
+def test_report_preference_always_uses_auto_login_user(anonymous_client, client, db_session) -> None:
     db_session.add_all(
         [
             Project(id=2, name="Project Two", description="two"),
@@ -156,10 +156,10 @@ def test_report_preference_round_trip_is_user_scoped(anonymous_client, client, d
     other_user_response = anonymous_client.get("/api/v1/reports/preferences")
     assert other_user_response.status_code == 200
     assert other_user_response.json() == {
-        "scope_type": "project",
+        "scope_type": "case",
         "project_id": 2,
-        "case_id": None,
-        "window_days": 7,
+        "case_id": 1,
+        "window_days": 14,
     }
 
 

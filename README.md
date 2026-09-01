@@ -126,7 +126,7 @@ AI 增强的 Web UI 自动化测试平台。
 - **变量占位符系统**：分段生成 `input_contract` 自动提取、跨段变量命名权威、`_clean_variable_format` 格式清理
 - **语义定位器增强**：`a11y_label_sibling_input` 策略（无名输入框）、`cell`/`row`/`column` 表格角色支持
 - **E2E 测试验证**：`test_brand_filter_cart` 标准回归用例，21/21 步骤全通过（登录→品牌筛选→加购→购物车验证）
-- 认证基线：`/auth/login`、`/auth/logout`、`/auth/me`、前端 `/login`、受保护路由、统一 `401` 回归能力：504 单元测试 + 8 集成测试（含 3 条浏览器级 A11y 管线回归）
+- 本地单用户模式：前端跳过登录页，后端自动使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的 admin 账号；原登录接口暂作兼容保留
 - 白盒测试：session 层 + 用例创建/执行/端到端全链路 API chain 测试覆盖
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
@@ -137,7 +137,7 @@ AI 增强的 Web UI 自动化测试平台。
 
 与计划相比的主要差距：
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
-- 认证只做到"本地账号密码 + Cookie Session"最小可用形态，尚未进入角色权限、账号管理、密码重置
+- 当前关闭登录鉴权，仅适用于本地单用户测试；恢复多用户使用前需重新启用认证与授权
 - E2E 测试覆盖场景仍需扩展（当前主要验证 login_success 和品牌筛选购物车场景）
 
 AI visual 当前默认关闭；能力状态与后续治理决策见
@@ -272,12 +272,7 @@ npm run dev
 默认前端地址：
 - `http://127.0.0.1:5173`
 
-认证相关本地配置：
-- `AUTH_SESSION_SECRET` 现在必须显式配置，建议先复制 `backend/.env.example` 到 `backend/.env` 后填写自己的 session secret
-- 本地若仍通过 `http://127.0.0.1` 调试，需要显式设置 `AUTH_SESSION_HTTPS_ONLY=false`；在 HTTPS 环境下应保持 `true`
-- 从零迁移创建数据库时不再提供公开默认密码；如需继续使用种子账号 `seed-owner@example.com`，请在本地手动初始化或重置 `users.password_hash`
-
-如果你的本地数据库已经在本次认证改造前升级过 `20260324_0015`，建议重建本地库后重新执行迁移，或手动重置 `users.password_hash`。
+本地启动后无需登录，前端会直接进入工作台，后端统一使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的数据库账号（默认 `admin@test.com`）。原 Cookie Session 登录接口仅为兼容保留，因此仍需配置 `AUTH_SESSION_SECRET`；该管理员账号缺失或停用时，依赖用户身份的接口会返回 500。
 
 ## 测试与构建
 
