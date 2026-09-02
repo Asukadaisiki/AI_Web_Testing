@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-02 | Planning SSE 迁移执行队列并接入取消与 Heartbeat
+
+- 任务：完成 BUG-094 剩余工作，将旧 Planning SSE 执行迁移到 Batch 队列，并接入运行中 Job 的持久化取消和 heartbeat。
+- 操作：Planning 保存执行改为保存草案后创建 ExecutionBatch，再轮询 Report Core 输出兼容 SSE 事件；同一 Planning session 限制单个活动 Batch；ExecutionJob 增加 heartbeat 字段；Worker 使用独立 Session 每 2 秒续租并检查取消，将取消事件传入 Runner。
+- 结果：Planning SSE 不再直接执行 Playwright；多会话通过持久化队列受控并行，取消状态不依赖原 HTTP 连接，Worker lease 可持续续期。取消在下一安全步骤边界生效。
+- 验证：迁移升级至 `20260902_0029`；真实 Planning SSE 完成 `save -> queue -> execute -> report -> done`；跨 Session heartbeat/取消验证后 Job 与 Batch 均为 `cancelled`。
+- 后续：后续如要求强制中断单个长 Playwright 调用，应将 Job 进一步隔离到可终止子进程。
+
 ## 2026-09-02 | ExecutionBatch、ExecutionJob 与 Report Core 第一阶段落地
 
 - 任务：开始实现支持多会话、多项目并行的执行控制平面和报告聚合基础。

@@ -70,8 +70,15 @@ def execute_case(
     payload: CaseExecutionRequest,
     *,
     run_context: ExecutionRunContext | None = None,
+    cancel_event: Event | None = None,
 ) -> StoredCaseExecutionDetail:
-    stream = execute_case_streaming(session, case_id, payload, run_context=run_context)
+    stream = execute_case_streaming(
+        session,
+        case_id,
+        payload,
+        run_context=run_context,
+        cancel_event=cancel_event,
+    )
     while True:
         try:
             next(stream)

@@ -209,6 +209,9 @@ class ChatSSERequest(DSLModel):
 
 class ExecuteSSERequest(DSLModel):
     draft_ids: list[int]
+    input_values: dict[str, str] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=100)
+    concurrency_limit: int = Field(default=1, ge=1, le=16)
 
 
 @router.post("/sessions/{session_id}/retest", response_model=AIPlanningTurnResponse)
@@ -428,6 +431,9 @@ async def execute_sse(
                 draft_ids=req.draft_ids,
                 actor_user_id=current_user.id,
                 cancel_event=cancel_event,
+                input_values=req.input_values,
+                idempotency_key=req.idempotency_key,
+                concurrency_limit=req.concurrency_limit,
             ):
                 yield sse_event(event.get("type", "message"), event)
         except Exception as exc:
@@ -454,11 +460,18 @@ async def cancel_execution(
     current_user: User = Depends(require_demo_user),
 ) -> dict:
     """Cancel the in-progress execution for a planning session."""
+    from app.services.execution_batches import cancel_active_session_batches
+
+    session_factory = get_session_factory()
+    with session_factory() as db:
+        cancelled_batches = cancel_active_session_batches(db, session_id)
     cancel_event = _cancellation_manager.get(session_id)
     if cancel_event is not None:
         cancel_event.set()
         _cancellation_manager.clear(session_id)
-        return {"status": "cancelled"}
+        return {"status": "cancelled", "cancelled_batches": cancelled_batches}
+    if cancelled_batches:
+        return {"status": "cancel_requested", "cancelled_batches": cancelled_batches}
     return {"status": "no_active_execution"}
 
 

@@ -68,7 +68,7 @@
 ## BUG-094 | 多会话并行执行缺少任务隔离与并发治理
 
 - 日期：2026-09-02
-- 状态：in_progress
+- 状态：fixed
 - 严重度：high
 - 来源：多项目并行执行架构分析
 - 描述：每个 Planning SSE 执行请求直接创建守护线程和 Chromium，无全局/项目级并发上限或持久化任务队列；取消句柄只按 `session_id` 保存，同一会话重复启动会覆盖旧句柄；VLM 限流、断路器和统计为进程级共享状态，但每个用例启动时都会全局重置；同一会话的多个 EventLogWriter 还会各自从 `seq=1` 写入。
@@ -78,8 +78,9 @@
   3. 检查取消管理器、VLM runtime state 和 SSE event seq。
 - 影响：低并发下报告通常可独立保存，但高并发可能耗尽浏览器、数据库连接和外部模型额度；跨项目 VLM 状态会互相清空，同一会话取消和事件回放不可靠，进程退出后任务不可恢复。
 - 根因：SSE 传输线程同时承担任务执行职责，缺少独立 execution job/batch、持久化状态机、幂等控制和资源调度层。
-- 处理：已新增持久化 ExecutionBatch/ExecutionJob、数据库幂等键、PostgreSQL 行锁领取、Batch 并发限制、独立 Worker 和 batch/job/run 报告关联；已停止在每次 Run 前重置全局 VLM 状态。旧 Planning SSE 尚未迁移到新队列，运行中 Job 的取消仍需持久化轮询接入。
-- 验证：PostgreSQL 迁移与真实 Playwright 队列闭环通过；同 Batch 两个 Job 可分别领取并正确聚合终态；同一幂等键重复创建返回相同 Batch。
+- 处理：新增持久化 ExecutionBatch/ExecutionJob、数据库幂等键、PostgreSQL 行锁领取、Batch 并发限制、独立 Worker 和 batch/job/run 报告关联；Planning SSE 已改为创建 Batch 并订阅 Report Core；Worker 每 2 秒 heartbeat/续租并读取持久化取消标记；同一 Planning session 禁止重复活动 Batch；停止每次 Run 前重置全局 VLM 状态。
+- 验证：PostgreSQL 迁移与真实 Playwright 队列闭环通过；同 Batch 两个 Job 可分别领取并正确聚合终态；同一幂等键重复创建返回相同 Batch；Planning SSE 队列事件闭环通过；跨 Session 取消测试确认 Job/Batch 均收口为 `cancelled`。
+- 备注：取消在约 2 秒内传播，并在 Runner 下一安全步骤边界生效；不强杀正在执行中的单个同步 Playwright 调用。
 - 关联记录：`docs/execution-log.md#2026-09-02--多会话与多项目并行执行分析`
 
 ## BUG-093 | 未捕获执行异常会遗留永久 running 记录

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from threading import Event, Thread
 
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import AIPlanningSession, ExecutionBatch, ExecutionJob, SessionProject, TestCase
 from app.schemas.execution_batches import ExecutionBatchCreateRequest
@@ -42,6 +43,17 @@ def create_execution_batch(
         project_id=payload.project_id,
         actor_user_id=actor_user_id,
     )
+    if payload.planning_session_id is not None:
+        active_batch = session.scalar(
+            select(ExecutionBatch).where(
+                ExecutionBatch.planning_session_id == payload.planning_session_id,
+                ExecutionBatch.status.in_(("pending", "running")),
+            )
+        )
+        if active_batch is not None:
+            raise ValueError(
+                f"Planning session {payload.planning_session_id} already has active batch {active_batch.id}."
+            )
 
     statement = select(TestCase).where(TestCase.project_id == payload.project_id)
     requested_case_ids = list(dict.fromkeys(payload.case_ids or []))
@@ -192,6 +204,7 @@ def claim_next_execution_job(
         job.attempt_count += 1
         job.lease_owner = worker_id
         job.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        job.heartbeat_at = now
         job.started_at = job.started_at or now
         job.finished_at = None
         batch.status = "running"
@@ -235,6 +248,7 @@ def finish_execution_job(
     job.finished_at = datetime.now(UTC).replace(tzinfo=None)
     job.lease_owner = None
     job.lease_expires_at = None
+    job.heartbeat_at = None
     session.flush()
     batch = session.scalar(
         select(ExecutionBatch)
@@ -252,6 +266,7 @@ def execute_claimed_job(
     job_id: int,
     *,
     worker_id: str,
+    session_factory: sessionmaker[Session] | None = None,
 ) -> StoredCaseExecutionDetail | None:
     """Execute a job already leased by this worker and persist its terminal state."""
     from app.runners.playwright_runner import RunnerCancelledError
@@ -268,6 +283,23 @@ def execute_claimed_job(
         finish_execution_job(session, job, status="cancelled")
         return None
 
+    cancel_event = Event()
+    monitor_stop = Event()
+    monitor = None
+    if session_factory is not None:
+        monitor = Thread(
+            target=_monitor_job,
+            kwargs={
+                "session_factory": session_factory,
+                "job_id": job.id,
+                "worker_id": worker_id,
+                "cancel_event": cancel_event,
+                "stop_event": monitor_stop,
+            },
+            daemon=True,
+        )
+        monitor.start()
+
     try:
         result = execute_case(
             session,
@@ -281,6 +313,7 @@ def execute_claimed_job(
                 job_id=job.id,
                 attempt_number=job.attempt_count,
             ),
+            cancel_event=cancel_event,
         )
     except RunnerCancelledError as exc:
         session.rollback()
@@ -304,6 +337,10 @@ def execute_claimed_job(
                 error_message=f"{type(exc).__name__}: {exc}",
             )
         return None
+    finally:
+        monitor_stop.set()
+        if monitor is not None:
+            monitor.join(timeout=3)
 
     persisted_job = session.get(ExecutionJob, job_id)
     if persisted_job is None:
@@ -320,6 +357,48 @@ def execute_claimed_job(
         error_message=result.error_message,
     )
     return result
+
+
+def cancel_active_session_batches(
+    session: Session,
+    planning_session_id: int,
+) -> int:
+    batches = list(
+        session.scalars(
+            select(ExecutionBatch).where(
+                ExecutionBatch.planning_session_id == planning_session_id,
+                ExecutionBatch.status.in_(("pending", "running")),
+            )
+        ).all()
+    )
+    for batch in batches:
+        cancel_execution_batch(session, batch.id)
+    return len(batches)
+
+
+def _monitor_job(
+    *,
+    session_factory: sessionmaker[Session],
+    job_id: int,
+    worker_id: str,
+    cancel_event: Event,
+    stop_event: Event,
+    heartbeat_seconds: float = 2.0,
+    lease_seconds: int = 1800,
+) -> None:
+    while not stop_event.wait(heartbeat_seconds):
+        with session_factory() as monitor_session:
+            job = monitor_session.get(ExecutionJob, job_id)
+            if job is None or job.status != "running" or job.lease_owner != worker_id:
+                cancel_event.set()
+                return
+            if job.cancel_requested:
+                cancel_event.set()
+                return
+            now = datetime.now(UTC).replace(tzinfo=None)
+            job.heartbeat_at = now
+            job.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            monitor_session.commit()
 
 
 def _refresh_batch_status(session: Session, batch: ExecutionBatch) -> None:

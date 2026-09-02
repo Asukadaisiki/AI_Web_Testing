@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import traceback as _traceback
 from threading import Event, Thread
 from typing import AsyncGenerator, Callable, Generator
@@ -192,26 +193,27 @@ def _run_sync_save_and_execute(
     planning_session_id: int,
     draft_ids: list[int],
     actor_user_id: int,
+    input_values: dict[str, str],
+    idempotency_key: str | None,
+    concurrency_limit: int,
     cancel_event: Event,
     queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
 ) -> None:
-    """Run the synchronous save-and-execute in a worker thread, forwarding events to the async queue."""
-    from app.application.planning.save_execute_service import (
-        save_and_execute_selected_drafts_streaming,
-    )
+    """Queue a batch and forward persisted execution progress to the async stream."""
 
     try:
         logger.info("Starting save-and-execute stream for session %d, drafts=%s", planning_session_id, draft_ids)
         with session_factory() as session:
-            for event in save_and_execute_selected_drafts_streaming(
+            for event in _queue_and_stream_planning_execution(
                 session,
                 planning_session_id,
                 draft_ids,
                 actor_user_id,
+                input_values=input_values,
+                idempotency_key=idempotency_key,
+                concurrency_limit=concurrency_limit,
                 cancel_event=cancel_event,
-                event_log_factory=EventLogWriter,
-                session_factory=session_factory,
             ):
                 if cancel_event.is_set():
                     break
@@ -239,6 +241,9 @@ async def stream_save_and_execute(
     draft_ids: list[int],
     actor_user_id: int,
     cancel_event: Event,
+    input_values: dict[str, str] | None = None,
+    idempotency_key: str | None = None,
+    concurrency_limit: int = 1,
 ) -> AsyncGenerator[dict, None]:
     """Bridge the synchronous streaming execution to an async generator for WebSocket delivery."""
     loop = asyncio.get_running_loop()
@@ -251,6 +256,9 @@ async def stream_save_and_execute(
             "planning_session_id": planning_session_id,
             "draft_ids": draft_ids,
             "actor_user_id": actor_user_id,
+            "input_values": input_values or {},
+            "idempotency_key": idempotency_key,
+            "concurrency_limit": concurrency_limit,
             "cancel_event": cancel_event,
             "queue": queue,
             "loop": loop,
@@ -264,3 +272,174 @@ async def stream_save_and_execute(
         if isinstance(item, _TerminalSignal):
             return
         yield _serialize_event(item)
+
+
+def _queue_and_stream_planning_execution(
+    session: Session,
+    planning_session_id: int,
+    draft_ids: list[int],
+    actor_user_id: int,
+    *,
+    input_values: dict[str, str],
+    idempotency_key: str | None,
+    concurrency_limit: int,
+    cancel_event: Event,
+) -> Generator[dict, None, None]:
+    from app.application.planning.analysis_retest_service import run_analysis_turn, should_run_analysis
+    from app.application.planning.project_context import get_owned_session
+    from app.application.planning.save_execute_service import save_and_execute_selected_drafts
+    from app.application.reporting import build_batch_detail
+    from app.models import AIPlanningMessage, TestCase
+    from app.schemas.ai_planning import ExecutionSummaryResult
+    from app.schemas.execution_batches import ExecutionBatchCreateRequest
+    from app.services.execution_batches import cancel_execution_batch, create_execution_batch
+
+    save_result = save_and_execute_selected_drafts(
+        session,
+        planning_session_id,
+        draft_ids,
+        actor_user_id,
+        execute=False,
+        input_values=input_values,
+    )
+    saved_cases = save_result.saved_cases
+    for index, saved in enumerate(saved_cases, 1):
+        yield {
+            "type": "save_progress",
+            "saved_count": index,
+            "total": len(saved_cases),
+            "case_name": saved.case_name,
+        }
+    if not saved_cases:
+        yield {"type": "error", "message": "没有可执行的测试用例。", "phase": "execute"}
+        return
+
+    first_case = session.get(TestCase, saved_cases[0].case_id)
+    if first_case is None:
+        yield {"type": "error", "message": "已保存用例不存在。", "phase": "execute"}
+        return
+    batch = create_execution_batch(
+        session,
+        ExecutionBatchCreateRequest(
+            project_id=first_case.project_id,
+            case_ids=[item.case_id for item in saved_cases],
+            planning_session_id=planning_session_id,
+            idempotency_key=idempotency_key,
+            concurrency_limit=concurrency_limit,
+            input_values=input_values,
+        ),
+        actor_user_id=actor_user_id,
+    )
+    planning_session = get_owned_session(session, planning_session_id, actor_user_id=actor_user_id)
+    planning_session.status = "executing"
+    session.commit()
+    yield {
+        "type": "status",
+        "phase": "queued",
+        "message": f"执行批次 #{batch.id} 已入队。",
+        "batch_id": batch.id,
+    }
+
+    observed_statuses: dict[int, str] = {}
+    while True:
+        if cancel_event.is_set():
+            cancel_execution_batch(session, batch.id)
+        session.expire_all()
+        detail = build_batch_detail(session, batch.id)
+        for job in detail.jobs:
+            previous = observed_statuses.get(job.id)
+            if job.status == "running" and previous != "running":
+                case_record = session.get(TestCase, job.case_id)
+                total_steps = len((case_record.dsl or {}).get("steps", [])) if case_record else 0
+                yield {
+                    "type": "case_start",
+                    "case_id": job.case_id,
+                    "case_name": job.case_name,
+                    "total_steps": total_steps,
+                }
+            if job.status in {"passed", "failed", "needs_intervention", "cancelled"} and previous not in {
+                "passed", "failed", "needs_intervention", "cancelled",
+            }:
+                latest = job.latest_execution
+                if latest and latest.report:
+                    for step in latest.report.steps:
+                        yield {
+                            "type": "step_complete",
+                            "case_id": job.case_id,
+                            "step_index": step.step_index,
+                            "action": step.action,
+                            "status": step.status,
+                            "duration_ms": step.duration_ms or 0,
+                        }
+            observed_statuses[job.id] = job.status
+        if detail.status in {"passed", "failed", "needs_intervention", "cancelled"}:
+            break
+        time.sleep(0.5)
+
+    execution_summaries: list[ExecutionSummaryResult] = []
+    for job in detail.jobs:
+        latest = job.latest_execution
+        if latest is None:
+            continue
+        passed_steps = sum(1 for step in (latest.report.steps if latest.report else []) if step.status == "passed")
+        failed_steps = sum(1 for step in (latest.report.steps if latest.report else []) if step.status == "failed")
+        execution_summaries.append(
+            ExecutionSummaryResult(
+                execution_id=latest.id,
+                case_id=latest.case_id,
+                case_name=latest.case_name,
+                status=latest.status,
+                total_steps=latest.total_steps,
+                passed_steps=passed_steps,
+                failed_steps=failed_steps,
+                duration_ms=latest.duration_ms,
+                screenshot_url=latest.latest_screenshot_url,
+                report_url=f"/run/{latest.id}",
+            )
+        )
+
+    lines = [f"测试执行完成（批次 #{batch.id}）："]
+    for summary in execution_summaries:
+        icon = "✅" if summary.status == "passed" else "❌"
+        lines.append(
+            f"{icon} {summary.case_name} — {summary.status} "
+            f"({summary.passed_steps}/{summary.total_steps}步)"
+        )
+    assistant_message = "\n".join(lines)
+    planning_session.status = "completed"
+    structured_payload = {
+        "type": "execution_summary",
+        "batch_id": batch.id,
+        "saved_cases": [item.model_dump(mode="json") for item in saved_cases],
+        "execution_summaries": [item.model_dump(mode="json") for item in execution_summaries],
+    }
+    session.add(
+        AIPlanningMessage(
+            session_id=planning_session.id,
+            role="assistant",
+            turn_type="plan",
+            content=assistant_message,
+            structured_payload_json=structured_payload,
+        )
+    )
+    session.commit()
+    yield {
+        "type": "execution_summary",
+        "message": assistant_message,
+        "structured_payload": structured_payload,
+    }
+
+    if should_run_analysis(execution_summaries):
+        yield {"type": "status", "phase": "analyzing", "message": "正在分析执行结果..."}
+        analysis = run_analysis_turn(
+            execution_summaries=execution_summaries,
+            db_session=session,
+            project_id=batch.project_id,
+        )
+        if analysis and analysis.execution_analysis:
+            yield {
+                "type": "analysis_complete",
+                "analysis": analysis.execution_analysis.model_dump(mode="json"),
+                "message": analysis.assistant_message,
+            }
+    yield {"type": "done"}

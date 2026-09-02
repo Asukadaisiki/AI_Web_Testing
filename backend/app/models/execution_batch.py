@@ -102,6 +102,7 @@ class ExecutionJob(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     lease_owner: Mapped[str | None] = mapped_column(String(200), index=True, nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)

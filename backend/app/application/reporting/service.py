@@ -100,6 +100,7 @@ def _build_job_summaries(session: Session, batch_id: int) -> list[ExecutionJobSu
                 last_error_message=job.last_error_message,
                 created_at=job.created_at,
                 started_at=job.started_at,
+                heartbeat_at=job.heartbeat_at,
                 finished_at=job.finished_at,
                 latest_execution=latest_execution,
             )

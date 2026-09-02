@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import Field
 
 from app.schemas.dsl import DSLModel
-from app.schemas.executions import StoredCaseExecutionSummary
+from app.schemas.executions import StoredCaseExecutionDetail
 
 
 ExecutionBatchStatus = Literal[
@@ -45,8 +45,9 @@ class ExecutionJobSummary(DSLModel):
     last_error_message: str | None = None
     created_at: datetime
     started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
     finished_at: datetime | None = None
-    latest_execution: StoredCaseExecutionSummary | None = None
+    latest_execution: StoredCaseExecutionDetail | None = None
 
 
 class ExecutionBatchSummary(DSLModel):

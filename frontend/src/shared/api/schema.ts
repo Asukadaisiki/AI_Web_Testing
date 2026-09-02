@@ -2222,6 +2222,17 @@ export interface components {
         ExecuteSSERequest: {
             /** Draft Ids */
             draft_ids: number[];
+            /** Input Values */
+            input_values?: {
+                [key: string]: string;
+            };
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Concurrency Limit
+             * @default 1
+             */
+            concurrency_limit: number;
         };
         /** ExecutionAggregateSnapshot */
         ExecutionAggregateSnapshot: {
@@ -2472,9 +2483,11 @@ export interface components {
             created_at: string;
             /** Started At */
             started_at?: string | null;
+            /** Heartbeat At */
+            heartbeat_at?: string | null;
             /** Finished At */
             finished_at?: string | null;
-            latest_execution?: components["schemas"]["StoredCaseExecutionSummary"] | null;
+            latest_execution?: components["schemas"]["StoredCaseExecutionDetail"] | null;
         };
         /** ExecutionReport */
         ExecutionReport: {

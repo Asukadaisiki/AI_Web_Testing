@@ -53,7 +53,12 @@ def _worker_loop(*, worker_id: str, poll_seconds: float, stop_event: Event) -> N
                 job = claim_next_execution_job(session, worker_id=worker_id)
                 if job is not None:
                     job_id = job.id
-                    execute_claimed_job(session, job.id, worker_id=worker_id)
+                    execute_claimed_job(
+                        session,
+                        job.id,
+                        worker_id=worker_id,
+                        session_factory=session_factory,
+                    )
         except Exception:
             logger.exception("Execution worker %s failed while processing job %s", worker_id, job_id)
         if job_id is None:

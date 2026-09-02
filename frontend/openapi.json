@@ -7252,6 +7252,33 @@
             },
             "type": "array",
             "title": "Draft Ids"
+          },
+          "input_values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Input Values"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "concurrency_limit": {
+            "type": "integer",
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Concurrency Limit",
+            "default": 1
           }
         },
         "type": "object",
@@ -7960,6 +7987,18 @@
             ],
             "title": "Started At"
           },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -7975,7 +8014,7 @@
           "latest_execution": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/StoredCaseExecutionSummary"
+                "$ref": "#/components/schemas/StoredCaseExecutionDetail"
               },
               {
                 "type": "null"
