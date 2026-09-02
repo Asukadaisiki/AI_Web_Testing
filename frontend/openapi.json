@@ -2452,6 +2452,230 @@
         }
       }
     },
+    "/api/v1/execution-batches": {
+      "post": {
+        "tags": [
+          "execution-batches"
+        ],
+        "summary": "Create Execution Batch Route",
+        "operationId": "create_execution_batch_route_api_v1_execution_batches_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionBatchCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionBatchDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "execution-batches"
+        ],
+        "summary": "List Execution Batches Route",
+        "operationId": "list_execution_batches_route_api_v1_execution_batches_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExecutionBatchSummary"
+                  },
+                  "title": "Response List Execution Batches Route Api V1 Execution Batches Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execution-batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "execution-batches"
+        ],
+        "summary": "Get Execution Batch Route",
+        "operationId": "get_execution_batch_route_api_v1_execution_batches__batch_id__get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionBatchDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execution-batches/{batch_id}/report": {
+      "get": {
+        "tags": [
+          "execution-batches"
+        ],
+        "summary": "Get Execution Batch Report Route",
+        "operationId": "get_execution_batch_report_route_api_v1_execution_batches__batch_id__report_get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionBatchReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execution-batches/{batch_id}/cancel": {
+      "post": {
+        "tags": [
+          "execution-batches"
+        ],
+        "summary": "Cancel Execution Batch Route",
+        "operationId": "cancel_execution_batch_route_api_v1_execution_batches__batch_id__cancel_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionBatchDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/cases/{case_id}/execute": {
       "post": {
         "tags": [
@@ -7152,6 +7376,629 @@
         "type": "object",
         "title": "ExecutionAnalysis"
       },
+      "ExecutionBatchCreateRequest": {
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Project Id"
+          },
+          "case_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 500,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Ids"
+          },
+          "planning_session_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planning Session Id"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "concurrency_limit": {
+            "type": "integer",
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Concurrency Limit",
+            "default": 1
+          },
+          "input_values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Input Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id"
+        ],
+        "title": "ExecutionBatchCreateRequest"
+      },
+      "ExecutionBatchDetail": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "integer",
+            "title": "Project Id"
+          },
+          "planning_session_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planning Session Id"
+          },
+          "triggered_by": {
+            "type": "integer",
+            "title": "Triggered By"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "passed",
+              "failed",
+              "needs_intervention",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "concurrency_limit": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Concurrency Limit"
+          },
+          "total_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Jobs"
+          },
+          "pending_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending Jobs"
+          },
+          "running_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Running Jobs"
+          },
+          "passed_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Passed Jobs"
+          },
+          "failed_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Failed Jobs"
+          },
+          "intervention_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Intervention Jobs"
+          },
+          "cancelled_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cancelled Jobs"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionJobSummary"
+            },
+            "type": "array",
+            "title": "Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "triggered_by",
+          "status",
+          "concurrency_limit",
+          "total_jobs",
+          "pending_jobs",
+          "running_jobs",
+          "passed_jobs",
+          "failed_jobs",
+          "intervention_jobs",
+          "cancelled_jobs",
+          "created_at"
+        ],
+        "title": "ExecutionBatchDetail"
+      },
+      "ExecutionBatchReport": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "integer",
+            "title": "Project Id"
+          },
+          "planning_session_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planning Session Id"
+          },
+          "triggered_by": {
+            "type": "integer",
+            "title": "Triggered By"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "passed",
+              "failed",
+              "needs_intervention",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "concurrency_limit": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Concurrency Limit"
+          },
+          "total_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Jobs"
+          },
+          "pending_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending Jobs"
+          },
+          "running_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Running Jobs"
+          },
+          "passed_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Passed Jobs"
+          },
+          "failed_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Failed Jobs"
+          },
+          "intervention_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Intervention Jobs"
+          },
+          "cancelled_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cancelled Jobs"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionJobSummary"
+            },
+            "type": "array",
+            "title": "Jobs"
+          },
+          "pass_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Pass Rate"
+          },
+          "completed_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Completed Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "triggered_by",
+          "status",
+          "concurrency_limit",
+          "total_jobs",
+          "pending_jobs",
+          "running_jobs",
+          "passed_jobs",
+          "failed_jobs",
+          "intervention_jobs",
+          "cancelled_jobs",
+          "created_at",
+          "pass_rate",
+          "completed_jobs"
+        ],
+        "title": "ExecutionBatchReport"
+      },
+      "ExecutionBatchSummary": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "integer",
+            "title": "Project Id"
+          },
+          "planning_session_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planning Session Id"
+          },
+          "triggered_by": {
+            "type": "integer",
+            "title": "Triggered By"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "passed",
+              "failed",
+              "needs_intervention",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "concurrency_limit": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Concurrency Limit"
+          },
+          "total_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Jobs"
+          },
+          "pending_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending Jobs"
+          },
+          "running_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Running Jobs"
+          },
+          "passed_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Passed Jobs"
+          },
+          "failed_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Failed Jobs"
+          },
+          "intervention_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Intervention Jobs"
+          },
+          "cancelled_jobs": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cancelled Jobs"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "triggered_by",
+          "status",
+          "concurrency_limit",
+          "total_jobs",
+          "pending_jobs",
+          "running_jobs",
+          "passed_jobs",
+          "failed_jobs",
+          "intervention_jobs",
+          "cancelled_jobs",
+          "created_at"
+        ],
+        "title": "ExecutionBatchSummary"
+      },
+      "ExecutionJobSummary": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "batch_id": {
+            "type": "integer",
+            "title": "Batch Id"
+          },
+          "project_id": {
+            "type": "integer",
+            "title": "Project Id"
+          },
+          "case_id": {
+            "type": "integer",
+            "title": "Case Id"
+          },
+          "case_name": {
+            "type": "string",
+            "title": "Case Name"
+          },
+          "order_index": {
+            "type": "integer",
+            "title": "Order Index"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "passed",
+              "failed",
+              "needs_intervention",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "attempt_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Attempt Count"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Attempts"
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested"
+          },
+          "last_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Message"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "latest_execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoredCaseExecutionSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "batch_id",
+          "project_id",
+          "case_id",
+          "case_name",
+          "order_index",
+          "status",
+          "attempt_count",
+          "max_attempts",
+          "cancel_requested",
+          "created_at"
+        ],
+        "title": "ExecutionJobSummary"
+      },
       "ExecutionReport": {
         "properties": {
           "status": {
@@ -9744,6 +10591,50 @@
             "type": "integer",
             "title": "Project Id"
           },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "attempt_number": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Attempt Number",
+            "default": 1
+          },
+          "dsl_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dsl Sha256"
+          },
+          "report_schema_version": {
+            "type": "string",
+            "title": "Report Schema Version",
+            "default": "execution.report.v1"
+          },
           "triggered_by": {
             "type": "integer",
             "title": "Triggered By"
@@ -9909,6 +10800,50 @@
           "project_id": {
             "type": "integer",
             "title": "Project Id"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "attempt_number": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Attempt Number",
+            "default": 1
+          },
+          "dsl_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dsl Sha256"
+          },
+          "report_schema_version": {
+            "type": "string",
+            "title": "Report Schema Version",
+            "default": "execution.report.v1"
           },
           "triggered_by": {
             "type": "integer",

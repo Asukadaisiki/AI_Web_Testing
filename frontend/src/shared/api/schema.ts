@@ -673,6 +673,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/execution-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Execution Batches Route */
+        get: operations["list_execution_batches_route_api_v1_execution_batches_get"];
+        put?: never;
+        /** Create Execution Batch Route */
+        post: operations["create_execution_batch_route_api_v1_execution_batches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/execution-batches/{batch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Execution Batch Route */
+        get: operations["get_execution_batch_route_api_v1_execution_batches__batch_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/execution-batches/{batch_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Execution Batch Report Route */
+        get: operations["get_execution_batch_report_route_api_v1_execution_batches__batch_id__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/execution-batches/{batch_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Execution Batch Route */
+        post: operations["cancel_execution_batch_route_api_v1_execution_batches__batch_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cases/{case_id}/execute": {
         parameters: {
             query?: never;
@@ -2212,6 +2281,201 @@ export interface components {
             /** Recommended Scope */
             recommended_scope?: string | null;
         };
+        /** ExecutionBatchCreateRequest */
+        ExecutionBatchCreateRequest: {
+            /** Project Id */
+            project_id: number;
+            /** Case Ids */
+            case_ids?: number[] | null;
+            /** Planning Session Id */
+            planning_session_id?: number | null;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Concurrency Limit
+             * @default 1
+             */
+            concurrency_limit: number;
+            /** Input Values */
+            input_values?: {
+                [key: string]: string;
+            };
+        };
+        /** ExecutionBatchDetail */
+        ExecutionBatchDetail: {
+            /** Id */
+            id: number;
+            /** Project Id */
+            project_id: number;
+            /** Planning Session Id */
+            planning_session_id?: number | null;
+            /** Triggered By */
+            triggered_by: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "passed" | "failed" | "needs_intervention" | "cancelled";
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /** Concurrency Limit */
+            concurrency_limit: number;
+            /** Total Jobs */
+            total_jobs: number;
+            /** Pending Jobs */
+            pending_jobs: number;
+            /** Running Jobs */
+            running_jobs: number;
+            /** Passed Jobs */
+            passed_jobs: number;
+            /** Failed Jobs */
+            failed_jobs: number;
+            /** Intervention Jobs */
+            intervention_jobs: number;
+            /** Cancelled Jobs */
+            cancelled_jobs: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Jobs */
+            jobs?: components["schemas"]["ExecutionJobSummary"][];
+        };
+        /** ExecutionBatchReport */
+        ExecutionBatchReport: {
+            /** Id */
+            id: number;
+            /** Project Id */
+            project_id: number;
+            /** Planning Session Id */
+            planning_session_id?: number | null;
+            /** Triggered By */
+            triggered_by: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "passed" | "failed" | "needs_intervention" | "cancelled";
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /** Concurrency Limit */
+            concurrency_limit: number;
+            /** Total Jobs */
+            total_jobs: number;
+            /** Pending Jobs */
+            pending_jobs: number;
+            /** Running Jobs */
+            running_jobs: number;
+            /** Passed Jobs */
+            passed_jobs: number;
+            /** Failed Jobs */
+            failed_jobs: number;
+            /** Intervention Jobs */
+            intervention_jobs: number;
+            /** Cancelled Jobs */
+            cancelled_jobs: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Jobs */
+            jobs?: components["schemas"]["ExecutionJobSummary"][];
+            /** Pass Rate */
+            pass_rate: number;
+            /** Completed Jobs */
+            completed_jobs: number;
+        };
+        /** ExecutionBatchSummary */
+        ExecutionBatchSummary: {
+            /** Id */
+            id: number;
+            /** Project Id */
+            project_id: number;
+            /** Planning Session Id */
+            planning_session_id?: number | null;
+            /** Triggered By */
+            triggered_by: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "passed" | "failed" | "needs_intervention" | "cancelled";
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /** Concurrency Limit */
+            concurrency_limit: number;
+            /** Total Jobs */
+            total_jobs: number;
+            /** Pending Jobs */
+            pending_jobs: number;
+            /** Running Jobs */
+            running_jobs: number;
+            /** Passed Jobs */
+            passed_jobs: number;
+            /** Failed Jobs */
+            failed_jobs: number;
+            /** Intervention Jobs */
+            intervention_jobs: number;
+            /** Cancelled Jobs */
+            cancelled_jobs: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+        };
+        /** ExecutionJobSummary */
+        ExecutionJobSummary: {
+            /** Id */
+            id: number;
+            /** Batch Id */
+            batch_id: number;
+            /** Project Id */
+            project_id: number;
+            /** Case Id */
+            case_id: number;
+            /** Case Name */
+            case_name: string;
+            /** Order Index */
+            order_index: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "passed" | "failed" | "needs_intervention" | "cancelled";
+            /** Attempt Count */
+            attempt_count: number;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Cancel Requested */
+            cancel_requested: boolean;
+            /** Last Error Message */
+            last_error_message?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            latest_execution?: components["schemas"]["StoredCaseExecutionSummary"] | null;
+        };
         /** ExecutionReport */
         ExecutionReport: {
             /**
@@ -3187,6 +3451,22 @@ export interface components {
             case_name: string;
             /** Project Id */
             project_id: number;
+            /** Batch Id */
+            batch_id?: number | null;
+            /** Job Id */
+            job_id?: number | null;
+            /**
+             * Attempt Number
+             * @default 1
+             */
+            attempt_number: number;
+            /** Dsl Sha256 */
+            dsl_sha256?: string | null;
+            /**
+             * Report Schema Version
+             * @default execution.report.v1
+             */
+            report_schema_version: string;
             /** Triggered By */
             triggered_by: number;
             /**
@@ -3232,6 +3512,22 @@ export interface components {
             case_name: string;
             /** Project Id */
             project_id: number;
+            /** Batch Id */
+            batch_id?: number | null;
+            /** Job Id */
+            job_id?: number | null;
+            /**
+             * Attempt Number
+             * @default 1
+             */
+            attempt_number: number;
+            /** Dsl Sha256 */
+            dsl_sha256?: string | null;
+            /**
+             * Report Schema Version
+             * @default execution.report.v1
+             */
+            report_schema_version: string;
             /** Triggered By */
             triggered_by: number;
             /**
@@ -5163,6 +5459,164 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AISettingsOverviewResponse"];
+                };
+            };
+        };
+    };
+    list_execution_batches_route_api_v1_execution_batches_get: {
+        parameters: {
+            query: {
+                project_id: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionBatchSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_execution_batch_route_api_v1_execution_batches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionBatchCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionBatchDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_execution_batch_route_api_v1_execution_batches__batch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionBatchDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_execution_batch_report_route_api_v1_execution_batches__batch_id__report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionBatchReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_execution_batch_route_api_v1_execution_batches__batch_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionBatchDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -7,6 +7,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.cases import router as cases_router
 from app.api.routes.corrections import router as corrections_router
 from app.api.routes.dsl import router as dsl_router
+from app.api.routes.execution_batches import router as execution_batches_router
 from app.api.routes.executions import router as executions_router
 from app.api.routes.health import router as health_router
 from app.api.routes.projects import router as projects_router
@@ -25,6 +26,7 @@ def build_api_router() -> APIRouter:
     api_router.include_router(corrections_router)
     api_router.include_router(dsl_router)
     api_router.include_router(settings_router)
+    api_router.include_router(execution_batches_router)
     api_router.include_router(executions_router)
     api_router.include_router(projects_router)
     api_router.include_router(reports_router)

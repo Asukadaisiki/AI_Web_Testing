@@ -166,6 +166,11 @@ class StoredCaseExecutionSummary(DSLModel):
     case_id: int
     case_name: str
     project_id: int
+    batch_id: int | None = None
+    job_id: int | None = None
+    attempt_number: int = Field(default=1, ge=1)
+    dsl_sha256: str | None = None
+    report_schema_version: str = "execution.report.v1"
     triggered_by: int
     status: ExecutionStatus
     error_message: str | None = None

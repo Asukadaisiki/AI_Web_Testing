@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
 import hashlib
+import json
 import re
 from threading import Event
 from typing import Generator, cast
@@ -13,7 +14,6 @@ from typing import Generator, cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.locators.ai_visual import reset_ai_visual_runtime_state
 from app.locators.corrections import SQLAlchemyCorrectionStore
 from app.models import TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
@@ -57,8 +57,21 @@ class ExecutionFailureDescriptor:
     title: str | None = None
 
 
-def execute_case(session: Session, case_id: int, payload: CaseExecutionRequest) -> StoredCaseExecutionDetail:
-    stream = execute_case_streaming(session, case_id, payload)
+@dataclass(frozen=True)
+class ExecutionRunContext:
+    batch_id: int | None = None
+    job_id: int | None = None
+    attempt_number: int = 1
+
+
+def execute_case(
+    session: Session,
+    case_id: int,
+    payload: CaseExecutionRequest,
+    *,
+    run_context: ExecutionRunContext | None = None,
+) -> StoredCaseExecutionDetail:
+    stream = execute_case_streaming(session, case_id, payload, run_context=run_context)
     while True:
         try:
             next(stream)
@@ -72,6 +85,7 @@ def execute_case_streaming(
     payload: CaseExecutionRequest,
     *,
     cancel_event: Event | None = None,
+    run_context: ExecutionRunContext | None = None,
 ) -> Generator[StepStreamEvent, None, StoredCaseExecutionDetail]:
     """Stream step events for a case execution.
 
@@ -84,11 +98,22 @@ def execute_case_streaming(
     _ensure_user_exists(session, payload.actor_user_id)
 
     normalized_case = DSLCase.model_validate(record.dsl)
+    context = run_context or ExecutionRunContext()
+    dsl_snapshot = normalized_case.model_dump(mode="json")
+    dsl_sha256 = hashlib.sha256(
+        json.dumps(dsl_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     execution = TestCaseRun(
         case_id=record.id,
         project_id=record.project_id,
+        batch_id=context.batch_id,
+        job_id=context.job_id,
         triggered_by=payload.actor_user_id,
         status="running",
+        attempt_number=context.attempt_number,
+        dsl_snapshot=dsl_snapshot,
+        dsl_sha256=dsl_sha256,
+        report_schema_version="execution.report.v1",
     )
     session.add(execution)
     session.commit()
@@ -105,6 +130,7 @@ def execute_case_streaming(
     if payload.input_values:
         merged_input_values.update(payload.input_values)
 
+    step_results: list[StepExecutionEvidence] = []
     try:
         if missing_base_url_error is not None:
             report = build_execution_report(status="failed", steps=[_with_artifact_url(missing_base_url_error)])
@@ -112,7 +138,6 @@ def execute_case_streaming(
             execution.report = report.model_dump(mode="json")
             execution.error_message = missing_base_url_error.error_message
         else:
-            reset_ai_visual_runtime_state()
             step_results = yield from execute_case_with_playwright_streaming(
                 case=normalized_case,
                 execution_id=execution.id,
@@ -151,6 +176,20 @@ def execute_case_streaming(
         execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
         session.add(execution)
         session.commit()
+        raise
+    except Exception as exc:
+        session.rollback()
+        persisted_execution = session.get(TestCaseRun, execution.id)
+        if persisted_execution is not None:
+            raw_step_results = getattr(exc, "step_results", step_results)
+            normalized_steps = [_with_artifact_url(step) for step in raw_step_results]
+            report = build_execution_report(status="failed", steps=normalized_steps)
+            persisted_execution.status = "failed"
+            persisted_execution.report = report.model_dump(mode="json")
+            persisted_execution.error_message = f"{type(exc).__name__}: {exc}"
+            persisted_execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
+            session.add(persisted_execution)
+            session.commit()
         raise
     execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
     session.add(execution)
@@ -453,6 +492,11 @@ def _to_execution_summary(
         case_id=record.case_id,
         case_name=case_name,
         project_id=record.project_id,
+        batch_id=record.batch_id,
+        job_id=record.job_id,
+        attempt_number=record.attempt_number,
+        dsl_sha256=record.dsl_sha256,
+        report_schema_version=record.report_schema_version,
         triggered_by=record.triggered_by,
         status=record.status,
         error_message=record.error_message,

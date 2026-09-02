@@ -48,6 +48,74 @@
 
 ## 问题记录
 
+## BUG-095 | PostgreSQL 队列候选批次 DISTINCT 排序不合法
+
+- 日期：2026-09-02
+- 状态：fixed
+- 严重度：high
+- 来源：ExecutionBatch 真实 PostgreSQL 冒烟测试
+- 描述：首版 Job 领取查询使用 `SELECT DISTINCT batch.id` 并按未出现在选择列表中的 `batch.created_at` 排序，PostgreSQL 抛出 `InvalidColumnReference`。
+- 复现步骤：
+  1. 创建包含待执行 Job 的 Batch。
+  2. 调用 `claim_next_execution_job()`。
+  3. PostgreSQL 在候选批次查询阶段拒绝 SQL。
+- 影响：Worker 无法领取任何任务。
+- 根因：通过 JOIN 去重候选批次时错误组合了 DISTINCT 与额外排序字段。
+- 处理：改为相关 `EXISTS` 子查询筛选含可领取 Job 的 Batch，不再需要 DISTINCT。
+- 验证：真实 PostgreSQL 完成 `Batch -> Job -> Playwright Run -> Batch Report`，状态 `passed`、2/2 步骤通过。
+- 关联记录：`docs/execution-log.md#2026-09-02--executionbatchexecutionjob-与-report-core-第一阶段落地`
+
+## BUG-094 | 多会话并行执行缺少任务隔离与并发治理
+
+- 日期：2026-09-02
+- 状态：in_progress
+- 严重度：high
+- 来源：多项目并行执行架构分析
+- 描述：每个 Planning SSE 执行请求直接创建守护线程和 Chromium，无全局/项目级并发上限或持久化任务队列；取消句柄只按 `session_id` 保存，同一会话重复启动会覆盖旧句柄；VLM 限流、断路器和统计为进程级共享状态，但每个用例启动时都会全局重置；同一会话的多个 EventLogWriter 还会各自从 `seq=1` 写入。
+- 复现步骤：
+  1. 同时从多个 Planning 会话发起保存并执行，或对同一会话连续发起两次执行。
+  2. 观察每个请求创建独立守护线程和浏览器进程。
+  3. 检查取消管理器、VLM runtime state 和 SSE event seq。
+- 影响：低并发下报告通常可独立保存，但高并发可能耗尽浏览器、数据库连接和外部模型额度；跨项目 VLM 状态会互相清空，同一会话取消和事件回放不可靠，进程退出后任务不可恢复。
+- 根因：SSE 传输线程同时承担任务执行职责，缺少独立 execution job/batch、持久化状态机、幂等控制和资源调度层。
+- 处理：已新增持久化 ExecutionBatch/ExecutionJob、数据库幂等键、PostgreSQL 行锁领取、Batch 并发限制、独立 Worker 和 batch/job/run 报告关联；已停止在每次 Run 前重置全局 VLM 状态。旧 Planning SSE 尚未迁移到新队列，运行中 Job 的取消仍需持久化轮询接入。
+- 验证：PostgreSQL 迁移与真实 Playwright 队列闭环通过；同 Batch 两个 Job 可分别领取并正确聚合终态；同一幂等键重复创建返回相同 Batch。
+- 关联记录：`docs/execution-log.md#2026-09-02--多会话与多项目并行执行分析`
+
+## BUG-093 | 未捕获执行异常会遗留永久 running 记录
+
+- 日期：2026-09-02
+- 状态：fixed
+- 严重度：high
+- 来源：报告与执行持久化静态分析
+- 描述：`execute_case_streaming()` 创建并提交 `running` 记录后，只处理人工干预、RunnerExecutionError 和主动取消；浏览器启动、证据序列化或其他未归一化异常可直接逸出，无法写入终态、结束时间和报告。
+- 复现步骤：
+  1. 调用单用例执行接口，令 Playwright 浏览器启动或 Runner 外围逻辑抛出未包装异常。
+  2. 查询对应 `test_case_runs` 记录。
+  3. 记录仍为 `running`，`finished_at` 和 `report` 为空。
+- 影响：报告中心出现永久运行记录，统计失真，错误总结模块也拿不到失败证据。
+- 根因：执行记录先独立提交，但终态持久化没有统一 `finalize`/兜底异常路径。
+- 处理：执行入口增加兜底异常收口；未知异常发生后回滚当前事务，重新读取已创建 Run，写入失败报告、错误信息与 `finished_at` 后再抛出。新 Job lease 支持过期任务重新领取。
+- 验证：注入未知 RuntimeError 后，TestCaseRun 正确落为 `failed`，报告、结束时间和 DSL hash 均已持久化。
+- 关联记录：`docs/execution-log.md#2026-09-02--报告执行持久化与调度链路分析`
+
+## BUG-092 | 报告、Planning 与 anti-pattern 使用三套错误分类
+
+- 日期：2026-09-02
+- 状态：open
+- 严重度：high
+- 来源：AgenticRL 前置错误分类分析
+- 描述：报告中心使用 `configuration/locator/assertion/navigation/network/runner`，Planning 上下文使用 `locator_stale/assertion_mismatch/timeout/network_error/unknown`，anti-pattern 使用 `missing_navigation/missing_wait_for/...`。报告分类还在读取时从首个失败步骤临时推导，没有随执行结果固化。
+- 复现步骤：
+  1. 检查 `schemas/executions.py` 的 `FailureCategory`。
+  2. 检查 `application/planning/context_service.py::categorize_error()`。
+  3. 检查 `services/anti_patterns.py` 的错误类别常量。
+- 影响：同一失败在报告、上下文注入和学习样本中得到不同标签；历史记录会随分类代码变化而改变，不适合作为 AgenticRL 训练和评估数据。
+- 根因：报告展示、会话分析和 DSL 负例分别独立演进，没有统一失败事实模型。
+- 处理：待建立统一的确定性 `FailureSignal` 分类，在执行终结时持久化；根因推断和 DSL 修复建议作为独立派生层。
+- 验证：静态核对三条分类路径。
+- 关联记录：`docs/execution-log.md#2026-09-02--报告执行持久化与调度链路分析`
+
 ## BUG-091 | 浏览器集成测试与当前认证及定位实现漂移
 
 - 日期：2026-09-01

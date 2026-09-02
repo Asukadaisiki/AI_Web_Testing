@@ -55,6 +55,54 @@
 
 ## 任务记录
 
+## 2026-09-02 | ExecutionBatch、ExecutionJob 与 Report Core 第一阶段落地
+
+- 任务：开始实现支持多会话、多项目并行的执行控制平面和报告聚合基础。
+- 操作：新增 ExecutionBatch/ExecutionJob 模型、schema 和 Alembic 迁移；TestCaseRun 增加 batch/job、attempt、DSL 快照/hash、报告版本；实现持久化幂等键、PostgreSQL `FOR UPDATE SKIP LOCKED` Job 领取、Batch 并发限制、lease/取消/终态聚合、固定并发 Worker；新增 run/batch/project Report Core 与批次 API；执行未知异常统一收口为失败记录；移除每次 Run 对全局 VLM runtime state 的重置；同步 OpenAPI 和前端生成类型。
+- 结果：新链路支持 `Batch 1:N Job 1:N Run`，可按 batch 查询任务和最新运行报告；API 负责入队，独立 Worker 负责执行，报告层不再依赖 SSE 请求线程。旧单用例与 Planning SSE 路径保持兼容。
+- 验证：数据库升级至 `20260902_0028`，`alembic check` 无差异；内存队列双 Job 领取、幂等创建与终态聚合通过；未知 Runner 异常收口通过；真实 PostgreSQL + Playwright 完成 `Batch -> Job -> Run -> Report`，2/2 步骤通过；批次列表 API 的 403/200 权限路径通过；前端 OpenAPI 类型生成和生产构建通过；临时数据已清理。
+- 后续：将 Planning“保存并执行”迁移到 Batch API；增加运行中 Job 的持久化取消/heartbeat；统一 FailureSignal 分类并在报告写入时固化。
+
+## 2026-09-02 | ExecutionBatch、ExecutionJob、Report Core 与队列选型说明
+
+- 任务：解释执行批次、执行任务、报告核心服务的职责关系，并比较 PostgreSQL DB Queue、Celery 和 Kafka。
+- 操作：结合当前 Project、PlanningSession、TestCaseRun 和 SSE 执行模型定义渐进式执行控制平面。
+- 结果：ExecutionBatch 表示一次明确的项目测试活动，ExecutionJob 表示其中一个可调度用例任务，TestCaseRun 表示 Job 的一次实际尝试，Report Core 是按 run/batch/project 生成报告的无状态应用模块。当前规模优先采用 PostgreSQL DB Queue；需要成熟 Python 任务调度时再引入 Celery；Kafka 更适合高吞吐可回放事件流，不适合作为当前首选任务执行框架。
+- 验证：架构概念分析，未修改业务代码，未运行测试。
+- 后续：设计数据模型时明确 `Batch 1:N Job 1:N Run`，并保留未来 outcome/reward 关联。
+
+## 2026-09-02 | 多项目并行下的 Report Core 与执行控制平面设计
+
+- 任务：评估 Report Core 按 ID 处理项目报告的可行性，并澄清多线程、数据写冲突和消息排队机制。
+- 操作：基于现有 TestCaseRun、Planning SSE 工作线程、内存 asyncio.Queue、事件日志和报告聚合路径划分执行控制面、事实存储与报告读模型。
+- 结果：Report Core 可设计为无状态聚合服务，但项目历史应按 `project_id` 查询，一次测试活动必须按新增 `batch_id` 聚合。当前线程只承担请求内执行/流式桥接，内存 Queue 不是任务队列；独立 run 写入通常不冲突，同一 planning session、事件序号、locator correction 和全局 VLM 状态存在竞争。现有表可保留，通过新增 batch/job/event 并给 TestCaseRun 增加关联与快照字段渐进演进，无需整体推倒重写。
+- 验证：架构静态分析，未修改业务代码，未运行测试。
+- 后续：先确定 Report Core 三层查询合同和 execution batch/job schema，再决定采用 PostgreSQL DB queue 还是外部任务队列。
+
+## 2026-09-02 | 多会话与多项目并行执行分析
+
+- 任务：确认一次开启多个 Planning 会话执行时的行为，并评估未来多项目并行测试能力。
+- 操作：检查 SSE 工作线程、SQLAlchemy Session、取消管理器、Playwright 浏览器生命周期、artifact 隔离、VLM runtime state、事件日志序号和数据库配置。
+- 结果：不同会话会创建独立线程、数据库 Session、浏览器和 execution artifact 目录，低并发下可同时运行；但没有任务队列、并发上限或进程恢复。同一会话重复执行会覆盖取消句柄并产生事件序号冲突；每次用例执行还会重置进程级 VLM 限流、断路器和统计，造成跨项目干扰。SQLite 并发写风险也高于 PostgreSQL。
+- 验证：静态分析，未修改业务代码，未执行并发压力测试。
+- 后续：多项目并行前引入 execution batch/job、持久化状态机、幂等键、按 job 取消、全局/项目并发限制，并拆分 VLM 全局治理状态与单次执行统计。
+
+## 2026-09-02 | 报告、执行持久化与调度链路分析
+
+- 任务：从报告入手，确认用例执行结果如何保存、项目内用例如何执行，以及当前同步/异步模型。
+- 操作：追踪 ExecutionReport/StepExecutionEvidence schema、Playwright Runner、TestCaseRun 持久化、执行 API、Planning 保存执行 SSE、报告聚合与前端触发入口。
+- 结果：单次用例报告以 JSON 存于 `test_case_runs.report`，步骤截图存文件并在报告中保存路径；直接执行 API 同步阻塞。Planning SSE 在守护工作线程中运行同步执行并流式返回，多个选中用例仍串行执行。当前不存在项目批次执行实体/API，项目报告只是聚合项目下相互独立的运行记录。确认错误分类存在三套口径，且未捕获异常可能留下永久 `running` 记录。
+- 验证：静态分析，未修改业务代码，未运行测试。
+- 后续：先设计并固化统一 `FailureSignal` 与报告版本/DSL 溯源字段，再实现错误总结和注入模块。
+
+## 2026-09-02 | 调整 AgenticRL 自愈闭环实施顺序
+
+- 任务：明确先完善错误总结与错误注入，再新增独立模块桥接执行、校准和重生成链路。
+- 操作：基于现有 execution report、locator trace、anti-pattern、Planning context 与 DSL prompt 注入路径重新划分阶段边界。
+- 结果：第一阶段聚焦标准化错误事件、证据引用、错误记忆、检索选择和可追踪注入；仅预留后续策略模块所需契约。第二阶段再实现自愈编排与 AgenticRL 策略学习，避免基础数据处理与闭环决策高耦合。
+- 验证：架构静态分析，未修改业务代码，未运行测试。
+- 后续：先定义错误总结和注入的数据 schema，再逐步替换当前分散的字符串拼接与直接注入逻辑。
+
 ## 2026-09-02 | 清理测试构建残留
 
 - 任务：继续清理后端和前端中残留的测试构建代码与产物。
