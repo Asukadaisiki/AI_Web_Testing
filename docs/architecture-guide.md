@@ -171,7 +171,7 @@ Frontend pages
 | `prompts/registry.py` | Prompt 模板和 stage 注册中心 |
 | `test_planning_prompts.py` | Planning Prompt 的组装与兼容入口 |
 
-这里的 `test_` 指“测试规划”，不是 pytest 测试文件。真正的测试都在 `backend/tests/`。
+这里的 `test_` 指“测试规划”，不是自动化测试文件。当前仓库未保留自动化测试套件。
 
 ### `runners/`、`locators/`、`reporters/`
 

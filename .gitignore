@@ -7,18 +7,14 @@ Thumbs.db
 # Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.coverage
-htmlcov/
 .venv/
 venv/
 
 # Node.js
 node_modules/
 dist/
-coverage/
 
 # Build and temp
 tmp/
@@ -41,31 +37,15 @@ temp/
 /reports/
 screenshots/
 midscene_run/
-playwright-report/
-test-results/
 backend/artifacts/
 backend/storage_states/
 
 # Package manager locks generated per app
 backend/.python-version
 
-# External local test projects
-testtool(mimov2.5pro)
-testbrand(mimov2.5pro)
-testbrand(dsv4pro)
-
-
 #others
 .claude/settings.json
 .claude/settings.local.json
 !.claude/skills/
 .superpowers
-test_results.json
-test_results_formatted.txt
-
-# Temporary test scripts
-backend/run_fixed_dsl.py
-backend/test_full_pipeline.py
-backend/test_locator_fix.py
-backend/update_draft_dsl.py
-backend/verify_explore_fix.py
+frontend

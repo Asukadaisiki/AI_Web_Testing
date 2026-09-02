@@ -47,29 +47,6 @@
 - 仪表盘与报告中心读取 `overview` 聚合字段时，趋势、失败动作、高频失败用例、上一窗口对比和失败根因是否与明细一致
 - `GET /api/v1/executions?failure_fingerprint=...` 是否能承接报告中心根因榜回流筛选
 
-## 本地人工干预回归
-
-除 `example.com` smoke 外，后端现在还支持一条本地夹具页真实回归链路，用于验证：
-
-- 首次执行进入 `needs_intervention`
-- 通过 `POST /api/v1/corrections` 提交修正
-- 重跑后由 Tier 0 命中并执行通过
-- 错误修正连续失败 3 次后会自动停用
-
-运行命令：
-
-```powershell
-cd backend
-uv run pytest tests/integration -m browser_integration
-```
-
-若本机未安装 Chromium，先执行：
-
-```powershell
-cd backend
-uv run playwright install chromium
-```
-
 ## 后端落地顺序
 
 后端执行顺序必须服从核心规划：

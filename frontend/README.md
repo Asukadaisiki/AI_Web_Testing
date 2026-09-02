@@ -6,7 +6,7 @@
 
 当前 `frontend/` 已落地最小可演示平台壳，仍未进入完整产品态。
 
-- 已有：Vite + React + TypeScript 工程、React Router、TanStack Query、Ant Design、Case 列表页、执行列表页、报告详情页、Case 工作台、基础前端测试
+- 已有：Vite + React + TypeScript 工程、React Router、TanStack Query、Ant Design、Case 列表页、执行列表页、报告详情页、Case 工作台
 - 已补强：执行中心总览卡片、失败分类快速筛选、最近失败区，以及与后端 `executions overview` 契约对齐的聚合展示
 - 已补强：用例级 `base_url` 编辑、工作台返回入口、执行详情返回入口、本地草稿缓存与恢复/丢弃交互
 - 已补强：Dashboard、报告中心、根路由默认跳转仪表盘、近 7/14/30 天趋势与失败聚合图表

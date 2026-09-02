@@ -505,13 +505,6 @@ def is_storage_state_stale(meta: dict[str, Any]) -> bool:
         return True
 
 
-
-def _sync_playwright_context():
-    """Indirection point for testing -- returns the sync_playwright context manager."""
-    return sync_playwright()
-
-
-
 def _resolve_from_collected_nodes(page, target: str, prev_nodes: list[dict] | None):
     """Try to resolve *target* using verified_selectors or DOM attrs from *prev_nodes*.
 
@@ -667,7 +660,7 @@ def capture_browser_session(
         if session_id:
             context, page = BrowserSessionManager.get_or_create_context(session_id)
         else:
-            pw = _sync_playwright_context()
+            pw = sync_playwright()
             with pw as playwright:
                 browser = playwright.chromium.launch(headless=True)
                 context = browser.new_context()
@@ -801,7 +794,7 @@ def _collect_flow_a11y(
             session_id, storage_state_path=storage_state_path,
         )
     else:
-        pw = _sync_playwright_context()
+        pw = sync_playwright()
         try:
             playwright = pw.__enter__()
             browser = playwright.chromium.launch(headless=True)

@@ -55,6 +55,30 @@
 
 ## 任务记录
 
+## 2026-09-02 | 清理测试构建残留
+
+- 任务：继续清理后端和前端中残留的测试构建代码与产物。
+- 操作：删除后端 pytest 缓存和已删除测试文件的字节码目录、前端 Vitest 缓存与空测试依赖目录；同步后端虚拟环境；移除 `page_explorer.py` 中仅为测试 monkeypatch 保留的 Playwright 包装函数；清理 `.gitignore` 中失效的测试产物和临时测试脚本规则。
+- 结果：后端和前端均无项目级测试目录、测试构建缓存、测试框架依赖或测试专用源码入口；生产 Playwright 执行能力保持不变。
+- 验证：`uv run python -m compileall -q app`、关键模块导入和 `npm run build` 通过；`uv pip show pytest` 确认 pytest 未安装；残留目录和关键字扫描为空。
+- 后续：无。
+
+## 2026-09-02 | 清理全部自动化测试代码
+
+- 任务：删除因项目结构变化而失效、难以维护的全部自动化测试代码。
+- 操作：删除后端单元/集成/E2E 测试与夹具、前端 Vitest 测试与测试工具、测试指南及 E2E 输入样例；移除 pytest、Vitest、Testing Library、jsdom 的依赖和配置；同步当前 README 与架构说明。
+- 结果：仓库不再包含可执行自动化测试套件或测试框架配置；保留业务 `test_case`/`test_planning` 模块、Alembic 历史迁移、Playwright 正式执行引擎及历史设计记录。
+- 验证：`uv lock --check`、`uv run python -m compileall -q app`、应用工厂导入和 `npm run build` 均通过。
+- 后续：后续如恢复自动化测试，应基于当前架构重新设计测试分层与契约，不复用本次删除的旧套件。
+
+## 2026-09-02 | AgenticRL 与自愈闭环模块设计构思
+
+- 任务：构思 AgenticRL 模块如何接入“执行方案 → 总结错误 → 校准 trace → 重新生成方案 → 验证 prompt 作用”的自愈闭环。
+- 操作：检索现有 Planning、DSL、Prompt Registry、anti-pattern、execution trace、analysis/retest 相关代码与历史设计记录，确认当前能力边界与缺口。
+- 结果：建议将 AgenticRL 作为独立学习与策略服务，位于执行报告/错误总结之后、重新规划/DSL 生成之前；不替代 DSL 校验和 Runner，只输出结构化修复建议、策略选择、prompt policy 与闭环决策。
+- 验证：静态分析，未运行测试。
+- 后续：如进入实现，优先新增 AgenticRL 数据模型与 service，再接入保存执行后的失败分析与 DSL retry 入口。
+
 ## 2026-09-01 | AI 规划到失败复测链路核验
 
 - 任务：核验“用户输入 → Agent 规划 → 页面探索 → DSL 生成 → Playwright 执行 → 报告 → 错因分析 → 错误沉淀 → 会话上下文注入 → 再次执行”链路是否可运行。

@@ -8,8 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "generate:openapi": "cd ../backend && UV_CACHE_DIR=../.tools/cache UV_PYTHON_INSTALL_DIR=../.tools/python XDG_CONFIG_HOME=../.tools/config ../.tools/bin/uv run python scripts/export_openapi.py ../frontend/openapi.json",
-    "generate:api-types": "npm run generate:openapi && openapi-typescript openapi.json -o src/shared/api/schema.ts",
-    "test": "vitest run"
+    "generate:api-types": "npm run generate:openapi && openapi-typescript openapi.json -o src/shared/api/schema.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
@@ -20,17 +19,12 @@
     "react-router-dom": "^7.18.3"
   },
   "devDependencies": {
-    "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.2.0",
-    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.13.10",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.4.1",
-    "jsdom": "^26.0.0",
     "openapi-typescript": "^7.13.0",
     "typescript": "^5.8.2",
-    "vite": "^6.2.0",
-    "vitest": "^3.0.7"
+    "vite": "^6.2.0"
   }
 }

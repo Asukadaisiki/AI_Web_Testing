@@ -143,6 +143,7 @@ Notes for Claude Code:
 - If the task only involves analysis, debugging, validation, or documentation updates, it should still be recorded in `docs/execution-log.md`.
 - The user may explicitly opt out for a specific task; otherwise logging is the default behavior.
 - After completing a requirement or bug-related task, explicitly ask the user whether to sync the current changes to GitHub.
+- Always write the latest record in the front of the log file instead of the end.
 
 ## Non-Goals for the First Milestone
 
