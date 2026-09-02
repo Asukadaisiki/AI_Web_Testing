@@ -171,7 +171,8 @@ Frontend pages
 | `prompts/registry.py` | Prompt 模板和 stage 注册中心 |
 | `test_planning_prompts.py` | Planning Prompt 的组装与兼容入口 |
 
-这里的 `test_` 指“测试规划”，不是自动化测试文件。当前仓库未保留自动化测试套件。
+这里的 `test_` 指“测试规划”，不是自动化测试文件。当前仅恢复了 `backend/tests/`
+中的执行分析聚焦合同测试，完整测试分层仍待重建。
 
 ### `runners/`、`locators/`、`reporters/`
 
@@ -215,7 +216,7 @@ schemas.dsl.DSLCase              Runner 消费的结构化 DSL
 
 - `PlanningPage.tsx` 对应 `/planning/sessions/:sessionId`。
 - `CasesPage.tsx` 对应 `/cases`。
-- `ExecutionDetailPage.tsx` 对应 `/run/:executionId`。
+- `ExecutionDetailPage.tsx` 对应 `/reports/:executionId`；旧 `/run/:executionId` 仅保留兼容重定向。
 
 ### `features/`
 

@@ -78,6 +78,11 @@ def _record_execution_anti_patterns(
         return
 
     report = latest_run.report if isinstance(latest_run.report, dict) else {}
+    failure_signal = (
+        latest_run.failure_signal_json
+        if isinstance(latest_run.failure_signal_json, dict)
+        else {}
+    )
     steps = report.get("steps") or []
     if not steps:
         return
@@ -146,6 +151,7 @@ def _record_execution_anti_patterns(
         record_anti_pattern(
             session,
             error_category=category,
+            failure_category=failure_signal.get("category"),
             wrong_snippet=snippet,
             context_note=context_note,
             source="execution",
@@ -251,7 +257,7 @@ def save_and_execute_selected_drafts(
             failed_steps=failed,
             duration_ms=result.duration_ms,
             screenshot_url=result.latest_screenshot_url,
-            report_url=f"/run/{result.id}",
+            report_url=f"/reports/{result.id}",
         ))
 
     # --- Self-healing: record execution failures as anti-patterns ---
@@ -497,7 +503,7 @@ def save_and_execute_selected_drafts_streaming(
                     failed_steps=failed,
                     duration_ms=detail.duration_ms,
                     screenshot_url=detail.latest_screenshot_url,
-                    report_url=f"/run/{detail.id}",
+                    report_url=f"/reports/{detail.id}",
                 ))
         except RunnerCancelledError:
             raise

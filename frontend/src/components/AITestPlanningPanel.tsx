@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, Button, Checkbox, Input, Select, Tag, Typography, message } from "antd";
 import { DeleteOutlined, SendOutlined, CheckCircleFilled, LoadingOutlined, ClockCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
 import {
   cancelExecution,
@@ -24,9 +25,11 @@ import type {
   DSLCasePayload,
   DSLStep,
   ExecutionStreamEvent,
+  ExecutionAnalysis,
   ExecutionSummaryResult,
 } from "../types/api";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
+import { ExecutionAnalysisPanel } from "./ExecutionAnalysisPanel";
 import { SessionProjectPanel } from "./SessionProjectPanel";
 
 type AITestPlanningPanelProps = {
@@ -462,11 +465,22 @@ export function AITestPlanningPanel({
                         {ex.duration_ms ? (
                           <span style={{ color: "#888" }}>{(ex.duration_ms / 1000).toFixed(1)}s</span>
                         ) : null}
-                        <a href={ex.report_url} target="_blank" rel="noopener noreferrer">
-                          查看报告
-                        </a>
+                        <Link
+                          to={ex.report_url}
+                          state={{ fromExecutions: `/planning/sessions/${item.session_id}` }}
+                        >
+                          查看完整报告
+                        </Link>
                       </div>
                     ))}
+                    {item.structured_payload.analysis ? (
+                      <div style={{ marginTop: 12 }}>
+                        <ExecutionAnalysisPanel
+                          analysis={item.structured_payload.analysis as ExecutionAnalysis}
+                          compact
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 ) : item.role === "assistant" &&
                   Array.isArray(item.structured_payload?.todo_list) &&

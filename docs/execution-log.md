@@ -55,6 +55,30 @@
 
 ## 任务记录
 
+## 2026-09-02 | 同步执行分析与报告统一链路到 GitHub
+
+- 任务：将 FailureSignal、ExecutionAnalysis、Planning/Report 统一展示及正式报告路由变更同步到远端。
+- 操作：复核实现、迁移、生成类型、聚焦测试和文档差异；创建聚焦提交并推送当前 `main`。
+- 结果：执行分析统一事实链、报告导航统一和 BUG-092/097 修复已同步到 `origin/main`。
+- 验证：推送后核对本地与远端提交计数、最新提交和工作树状态。
+- 后续：继续实现 BUG-090 的受控自动重探索与 DSL 重生成编排。
+
+## 2026-09-02 | 打通执行、分析与正式报告事实链
+
+- 任务：解决 Planning AI 分析旁路、刷新丢失、anti-pattern 漏记、直接执行无总结、失败分类分裂及报告导航不一致。
+- 操作：新增持久化 FailureSignal/ExecutionAnalysis 和 `0030/0031` 迁移；Run/Batch 终结统一生成规则总结并在模型可用时增强为 AI 根因分析；统一 Planning/报告/anti-pattern 分类；Planning SSE 改读 Batch 持久化分析并写入历史消息；前端处理 `analysis_complete`，Planning 与 ReportPage 共用分析组件和 `/reports/:executionId` 正式详情路由。
+- 结果：直接 Case、Batch Worker 和 Planning 执行均进入 `Run/Batch -> FailureSignal -> Analysis -> Report Core`；失败 anti-pattern 自动沉淀；实时与刷新后的 Planning 消息可显示同一分析；旧 `/run/:id` 自动重定向；BUG-092、BUG-097 已关闭。自动重探索和 DSL 重写仍属于 BUG-090。
+- 验证：2 个 `unittest` 合同测试通过；后端 compile/import 通过；Alembic `0030/0031` 降级升级往返及 `alembic check` 通过；OpenAPI 类型重新生成；前端生产构建通过；浏览器验证 Planning 历史分析、正式报告详情、报告聚合入口及旧路由重定向，临时数据已清理。
+- 后续：实现 BUG-090 的 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 受控自愈编排。
+
+## 2026-09-02 | 用例执行到报告总结链路核验
+
+- 任务：确认当前“用例执行 -> 执行记录 -> 报告 -> 结果/错误总结”链路是否已经打通。
+- 操作：静态追踪直接 Case 执行、ExecutionBatch Worker、TestCaseRun 持久化、Report Core、Planning SSE 分析、anti-pattern 写入和前端报告/流事件消费。
+- 结果：Runner 到 TestCaseRun、步骤 evidence、Batch/Job/Run 报告及确定性统计聚合已打通；Planning 失败后会尝试 AI 分析。但 AI 分析尚未写入统一报告事实，前端不处理 `analysis_complete`，队列路径也绕过失败 anti-pattern 记录，因此端到端“报告总结闭环”仅部分完成，记录为 BUG-097。
+- 验证：核对 `services/executions.py`、`services/execution_batches.py`、`application/reporting/service.py`、`services/ai_planning_streaming.py`、`analysis_retest_service.py`、Planning 流事件 reducer 和 ReportPage 数据源；未运行产品测试。
+- 后续：先统一并持久化 `FailureSignal`/AnalysisResult，再让 Report Core、Planning 消息和前端共享同一总结合同。
+
 ## 2026-09-02 | 同步执行队列与 README 进展到 GitHub
 
 - 任务：将本地执行队列功能提交和 README 最新进展同步到远端。

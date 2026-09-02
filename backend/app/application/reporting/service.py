@@ -14,6 +14,7 @@ from app.schemas.execution_batches import (
     ExecutionBatchSummary,
     ExecutionJobSummary,
 )
+from app.schemas.executions import ExecutionAnalysis
 from app.services.cases import EntityNotFoundError
 from app.services.executions import get_case_execution
 
@@ -128,6 +129,8 @@ def _build_batch_summary(
         failed_jobs=counts["failed"],
         intervention_jobs=counts["needs_intervention"],
         cancelled_jobs=counts["cancelled"],
+        analysis_status=batch.analysis_status,
+        analysis=ExecutionAnalysis.model_validate(batch.analysis_json) if batch.analysis_json else None,
         created_at=batch.created_at,
         started_at=batch.started_at,
         finished_at=batch.finished_at,

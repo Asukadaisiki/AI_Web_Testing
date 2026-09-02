@@ -19,6 +19,7 @@ import {
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { InterventionPanel } from "../components/InterventionPanel";
+import { ExecutionAnalysisPanel } from "../components/ExecutionAnalysisPanel";
 import { ErrorBlock, LoadingBlock } from "../shared/ui/PageFeedback";
 import { renderExecutionStatus } from "../components/executionPresentation";
 import {
@@ -37,7 +38,7 @@ import type {
 } from "../types/api";
 
 const DEFAULT_EVENT_PREVIEW_COUNT = 2;
-const DEFAULT_EXECUTIONS_PATH = "/executions";
+const DEFAULT_EXECUTIONS_PATH = "/reports";
 
 const STRATEGY_LABEL: Record<LocatorStrategyBucket, string> = {
   dom: "DOM 定位",
@@ -571,6 +572,14 @@ export function ExecutionDetailPage() {
                 <div className="summary-value">{steps.length}</div>
               </div>
             </div>
+
+            {detail.analysis ? (
+              <Card title="分析总结" size="small">
+                <ExecutionAnalysisPanel analysis={detail.analysis} />
+              </Card>
+            ) : detail.analysis_status === "running" || detail.analysis_status === "pending" ? (
+              <Alert type="info" showIcon message="报告分析生成中" />
+            ) : null}
 
             <Card>
               <Descriptions bordered column={2}>

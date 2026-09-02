@@ -5,6 +5,8 @@ export type ExecutionStatus =
   | "needs_intervention"
   | "cancelled";
 export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
+export type ExecutionAnalysisStatus = "pending" | "running" | "completed" | "skipped" | "failed";
+export type ExecutionAnalysisSource = "deterministic" | "ai";
 export type OverviewWindowDays = 7 | 14 | 30;
 export type ReportScopeType = "global" | "project" | "case";
 export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
@@ -332,6 +334,7 @@ export interface AIPlanningTurnResponse {
   tool_calls?: AIPlanningToolCall[];
   saved_cases?: SavedCaseResult[];
   execution_summaries?: ExecutionSummaryResult[];
+  execution_analysis?: ExecutionAnalysis | null;
 }
 
 export interface SavedCaseResult {
@@ -344,13 +347,57 @@ export interface ExecutionSummaryResult {
   execution_id: number;
   case_id: number;
   case_name: string;
-  status: "passed" | "failed" | "needs_intervention" | "error";
+  status: "passed" | "failed" | "needs_intervention" | "cancelled" | "error";
   total_steps: number;
   passed_steps: number;
   failed_steps: number;
   duration_ms: number | null;
   screenshot_url: string | null;
   report_url: string;
+}
+
+export interface FailureSignal {
+  category: FailureCategory;
+  fingerprint: string;
+  title: string;
+  step_index?: number | null;
+  action?: string | null;
+  target?: string | null;
+  error_message?: string | null;
+  locator_failure_reason?: string | null;
+  screenshot_url?: string | null;
+}
+
+export interface FailureDetail {
+  case_name: string;
+  step_index: number;
+  action: string;
+  target?: string | null;
+  error_message?: string | null;
+  suspected_cause: string;
+  cause_probability: "high" | "medium" | "low";
+}
+
+export interface CaseAnalysisResult {
+  case_id: number;
+  case_name: string;
+  status: string;
+  passed_steps: number;
+  total_steps: number;
+  failure_summary?: string | null;
+}
+
+export interface ExecutionAnalysis {
+  source: ExecutionAnalysisSource;
+  summary: string;
+  conclusion: "all_passed" | "partial" | "all_failed" | "cancelled";
+  case_results: CaseAnalysisResult[];
+  failure_details: FailureDetail[];
+  failure_signals: FailureSignal[];
+  suspected_root_cause?: string | null;
+  impact_scope?: string | null;
+  recommended_action: "targeted_retest" | "regression" | "manual" | "done";
+  recommended_scope?: string | null;
 }
 
 export interface DslGenerationFeedbackPayload {
@@ -723,6 +770,11 @@ export interface StoredCaseExecutionSummary {
   case_id: number;
   case_name: string;
   project_id: number;
+  batch_id?: number | null;
+  job_id?: number | null;
+  attempt_number: number;
+  dsl_sha256?: string | null;
+  report_schema_version: string;
   triggered_by: number;
   status: ExecutionStatus;
   error_message: string | null;
@@ -732,6 +784,7 @@ export interface StoredCaseExecutionSummary {
   total_steps: number;
   failed_step_index?: number | null;
   failure_category?: FailureCategory | null;
+  failure_signal?: FailureSignal | null;
   failure_step_action?: string | null;
   latest_url?: string | null;
   latest_screenshot_url?: string | null;
@@ -739,6 +792,8 @@ export interface StoredCaseExecutionSummary {
 
 export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {
   report: ExecutionReport | null;
+  analysis_status: ExecutionAnalysisStatus;
+  analysis?: ExecutionAnalysis | null;
 }
 
 export interface CreateCorrectionPayload {
@@ -903,7 +958,7 @@ export type AssistantContentBlock =
 
 export interface StatusStreamEvent {
   type: "status";
-  phase: "thinking" | "generating" | "tool_calling" | "executing";
+  phase: "thinking" | "generating" | "tool_calling" | "draft_generating" | "queued" | "executing" | "analyzing";
   message: string;
 }
 
@@ -1004,9 +1059,19 @@ export interface ExecutionSummaryStreamEvent {
   message: string;
   structured_payload: {
     type: "execution_summary";
+    batch_id?: number;
     saved_cases: SavedCaseResult[];
     execution_summaries: ExecutionSummaryResult[];
+    analysis_status?: ExecutionAnalysisStatus;
+    analysis?: ExecutionAnalysis | null;
   };
+}
+
+export interface AnalysisCompleteStreamEvent {
+  type: "analysis_complete";
+  batch_id: number;
+  analysis: ExecutionAnalysis;
+  message: string;
 }
 
 export interface CancelledEvent {
@@ -1040,6 +1105,7 @@ export type ExecutionStreamEvent =
   | StepStartEvent
   | StepCompleteEvent
   | ExecutionSummaryStreamEvent
+  | AnalysisCompleteStreamEvent
   | CancelledEvent
   | DoneEvent
   | ErrorEvent;

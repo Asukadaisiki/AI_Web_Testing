@@ -74,7 +74,7 @@ export function InterventionPanel({
         actor_user_id: triggeredBy,
       }),
     onSuccess: (execution) => {
-      navigate(`/run/${execution.id}`);
+      navigate(`/reports/${execution.id}`);
     },
   });
   return (

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Spin, Empty, Typography, Tag, Popconfirm, Modal, Input, message } from "antd";
+import { Link } from "react-router-dom";
 
 import {
   deleteExecution,
@@ -157,6 +158,13 @@ function ExecutionRow({
         <Text type="secondary" style={{ fontSize: 12 }}>
           {formatTime(exec.started_at)}
         </Text>
+        <Link
+          to={`/reports/${exec.id}`}
+          state={{ fromExecutions: "/reports" }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          完整报告
+        </Link>
         <Popconfirm
           title="确定删除此执行记录？"
           onConfirm={(e) => { e?.stopPropagation(); onDelete(); }}

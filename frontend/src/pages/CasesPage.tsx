@@ -65,7 +65,7 @@ export function CasesPage() {
     mutationFn: (caseId: number) => executeCase(caseId, { actor_user_id: 1 }),
     onSuccess: (execution) => {
       queryClient.invalidateQueries({ queryKey: ["executions"] });
-      void navigate(`/run/${execution.id}`);
+      void navigate(`/reports/${execution.id}`);
     },
     onError: (error: Error) => {
       void messageApi.error(error.message);

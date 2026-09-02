@@ -23,7 +23,7 @@ const CaseEditPage = lazy(() =>
 );
 function LegacyExecutionRedirect() {
   const { executionId } = useParams<{ executionId: string }>();
-  return <Navigate to={`/run/${executionId}`} replace />;
+  return <Navigate to={`/reports/${executionId}`} replace />;
 }
 
 export function AppRouter() {
@@ -38,7 +38,8 @@ export function AppRouter() {
         <Route path="/cases/new" element={<CaseEditPage />} />
         <Route path="/cases/:caseId/edit" element={<CaseEditPage />} />
         <Route path="/reports" element={<ReportPage />} />
-        <Route path="/run/:executionId" element={<ExecutionDetailPage />} />
+        <Route path="/reports/:executionId" element={<ExecutionDetailPage />} />
+        <Route path="/run/:executionId" element={<LegacyExecutionRedirect />} />
         <Route path="/executions/:executionId" element={<LegacyExecutionRedirect />} />
         <Route path="/dashboard" element={<Navigate to="/planning" replace />} />
         <Route path="/executions" element={<Navigate to="/cases" replace />} />

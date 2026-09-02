@@ -48,6 +48,24 @@
 
 ## 问题记录
 
+## BUG-097 | 队列执行后的 AI 分析未进入统一报告事实链
+
+- 日期：2026-09-02
+- 状态：fixed
+- 严重度：high
+- 来源：用例执行到报告总结链路核验
+- 描述：Planning 队列执行完成后会构造 `execution_summary`，失败时也会调用 `run_analysis_turn()` 并发出 `analysis_complete`；但分析结果没有写入 TestCaseRun、ExecutionBatch Report Core 或 AIPlanningMessage，前端 `ExecutionStreamEvent` 和 reducer 也未声明/处理 `analysis_complete`。此外，新队列路径通过 `save_and_execute_selected_drafts(execute=False)` 保存用例，绕过了旧执行分支中的 `_record_execution_anti_patterns()`。
+- 复现步骤：
+  1. 从 Planning 会话保存并执行一个会失败的草案。
+  2. Worker 完成 Job，确认 TestCaseRun 和 Batch 报告已生成。
+  3. 后端执行 `run_analysis_turn()` 并发出 `analysis_complete`。
+  4. 刷新 Planning 页面或查询 Run/Batch 报告，无法从统一报告事实中读取本次 AI 分析；前端实时 reducer 也忽略该事件，失败 anti-pattern 未由新队列路径沉淀。
+- 影响：执行记录和结构化报告可用，但“失败总结 -> 报告展示 -> 历史回放 -> 后续生成复用”的链路不闭合；直接 Case/Batch API 执行也不会触发统一 AI 总结。
+- 根因：Report Core 当前仅投影 Batch/Job/Run 状态和步骤证据；Planning AI 分析仍是旁路事件，迁移到队列时未同步设计持久化合同、前端事件合同和 anti-pattern 写入。
+- 处理：新增持久化 `FailureSignal` 和 `ExecutionAnalysis`，由直接 Run 或 Batch 终结统一触发；Report Core、Planning 消息和执行详情读取同一分析；补齐 `analysis_complete` 前端合同、历史消息恢复和执行 anti-pattern 记录；正式报告详情统一到 `/reports/:executionId`，旧 `/run/:executionId` 保留重定向。
+- 验证：2 个执行分析合同测试通过；Alembic `0030/0031` 降级升级往返及 `alembic check` 通过；前端生产构建通过；浏览器验证 Planning 历史分析、正式报告详情、报告聚合入口和旧路由重定向通过。
+- 关联记录：`docs/execution-log.md#2026-09-02--用例执行到报告总结链路核验`
+
 ## BUG-096 | 根 README 的项目阶段与完成度口径再次漂移
 
 - 日期：2026-09-02
@@ -120,7 +138,7 @@
 ## BUG-092 | 报告、Planning 与 anti-pattern 使用三套错误分类
 
 - 日期：2026-09-02
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：AgenticRL 前置错误分类分析
 - 描述：报告中心使用 `configuration/locator/assertion/navigation/network/runner`，Planning 上下文使用 `locator_stale/assertion_mismatch/timeout/network_error/unknown`，anti-pattern 使用 `missing_navigation/missing_wait_for/...`。报告分类还在读取时从首个失败步骤临时推导，没有随执行结果固化。
@@ -130,8 +148,8 @@
   3. 检查 `services/anti_patterns.py` 的错误类别常量。
 - 影响：同一失败在报告、上下文注入和学习样本中得到不同标签；历史记录会随分类代码变化而改变，不适合作为 AgenticRL 训练和评估数据。
 - 根因：报告展示、会话分析和 DSL 负例分别独立演进，没有统一失败事实模型。
-- 处理：待建立统一的确定性 `FailureSignal` 分类，在执行终结时持久化；根因推断和 DSL 修复建议作为独立派生层。
-- 验证：静态核对三条分类路径。
+- 处理：新增统一 `FailureSignal`，在 Run 终结时按 `configuration/locator/assertion/navigation/network/runner` 固化；Planning 分类改用同一分类器；anti-pattern 保留 DSL 修复模式 `error_category`，同时新增统一 `failure_category` 并迁移回填历史记录。
+- 验证：执行分析合同测试覆盖 locator 分类持久化和 anti-pattern 映射；Alembic `0030/0031` 升降级及 schema 差异检查通过。
 - 关联记录：`docs/execution-log.md#2026-09-02--报告执行持久化与调度链路分析`
 
 ## BUG-091 | 浏览器集成测试与当前认证及定位实现漂移

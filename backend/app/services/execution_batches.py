@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import logging
 from threading import Event, Thread
 
 from sqlalchemy import exists, func, or_, select
@@ -16,6 +17,7 @@ from app.services.cases import EntityNotFoundError, _ensure_project_member
 
 
 TERMINAL_JOB_STATUSES = {"passed", "failed", "needs_intervention", "cancelled"}
+logger = logging.getLogger(__name__)
 
 
 def create_execution_batch(
@@ -231,6 +233,8 @@ def cancel_execution_batch(session: Session, batch_id: int) -> ExecutionBatch:
     _refresh_batch_status(session, batch)
     session.commit()
     session.refresh(batch)
+    _analyze_batch_if_terminal(session, batch.id)
+    session.refresh(batch)
     return batch
 
 
@@ -281,6 +285,7 @@ def execute_claimed_job(
 
     if job.cancel_requested:
         finish_execution_job(session, job, status="cancelled")
+        _analyze_batch_if_terminal(session, batch.id)
         return None
 
     cancel_event = Event()
@@ -325,6 +330,7 @@ def execute_claimed_job(
                 status="cancelled",
                 error_message=str(exc),
             )
+            _analyze_batch_if_terminal(session, persisted_job.batch_id)
         return None
     except Exception as exc:
         session.rollback()
@@ -336,6 +342,7 @@ def execute_claimed_job(
                 status="failed",
                 error_message=f"{type(exc).__name__}: {exc}",
             )
+            _analyze_batch_if_terminal(session, persisted_job.batch_id)
         return None
     finally:
         monitor_stop.set()
@@ -356,6 +363,7 @@ def execute_claimed_job(
         status=terminal_status,
         error_message=result.error_message,
     )
+    _analyze_batch_if_terminal(session, persisted_job.batch_id)
     return result
 
 
@@ -399,6 +407,20 @@ def _monitor_job(
             job.heartbeat_at = now
             job.lease_expires_at = now + timedelta(seconds=lease_seconds)
             monitor_session.commit()
+
+
+def _analyze_batch_if_terminal(session: Session, batch_id: int) -> None:
+    from app.application.reporting.analysis_service import analyze_batch
+
+    try:
+        analyze_batch(session, batch_id)
+    except Exception:
+        session.rollback()
+        logger.exception("Failed to persist analysis for execution batch %s", batch_id)
+        batch = session.get(ExecutionBatch, batch_id)
+        if batch is not None:
+            batch.analysis_status = "failed"
+            session.commit()
 
 
 def _refresh_batch_status(session: Session, batch: ExecutionBatch) -> None:

@@ -55,6 +55,16 @@ def build_analysis_context(
             f"{icon} {ex.case_name} — {ex.status} "
             f"({ex.passed_steps}/{ex.total_steps}步){failure_info}"
         )
+        if ex.status != "passed":
+            from app.services.executions import get_case_execution
+
+            detail = get_case_execution(db_session, ex.execution_id)
+            signal = detail.failure_signal if detail else None
+            if signal:
+                lines.append(
+                    f"  FailureSignal: category={signal.category}, action={signal.action or '-'}, "
+                    f"target={signal.target or '-'}, error={signal.error_message or signal.title}"
+                )
     lines.append("\n请使用 analyze_results 模式输出分析报告。")
     return "\n".join(lines)
 
@@ -260,7 +270,7 @@ def retest_cases(
             failed_steps=failed,
             duration_ms=result.duration_ms,
             screenshot_url=result.latest_screenshot_url,
-            report_url=f"/run/{result.id}",
+            report_url=f"/reports/{result.id}",
         ))
 
     lines = [f"复测完成（{len(execution_summaries)} 个用例）：\n"]

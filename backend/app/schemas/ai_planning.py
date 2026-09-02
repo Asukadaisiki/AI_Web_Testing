@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from app.schemas.dsl import DSLCase, DSLCaseInputContract, DSLCaseOutputContract, DSLModel, DSLStep, DSLVariableType
+from app.schemas.executions import ExecutionAnalysis
 
 
 AIPlanningSessionStatus = Literal["collecting", "plan_ready", "drafts_ready", "reviewing", "saving", "executing", "completed", "closed", "error"]
@@ -228,42 +229,13 @@ class ExecutionSummaryResult(DSLModel):
     execution_id: int = Field(ge=1)
     case_id: int = Field(ge=1)
     case_name: str
-    status: Literal["passed", "failed", "needs_intervention", "error"]
+    status: Literal["passed", "failed", "needs_intervention", "cancelled", "error"]
     total_steps: int
     passed_steps: int
     failed_steps: int
     duration_ms: int | None = None
     screenshot_url: str | None = None
     report_url: str
-
-
-class FailureDetail(DSLModel):
-    case_name: str = Field(min_length=1)
-    step_index: int = Field(ge=0)
-    action: str = Field(min_length=1)
-    target: str | None = None
-    error_message: str | None = None
-    suspected_cause: str = Field(min_length=1)
-    cause_probability: Literal["high", "medium", "low"] = "medium"
-
-
-class CaseAnalysisResult(DSLModel):
-    case_id: int = Field(ge=1)
-    case_name: str = Field(min_length=1)
-    status: str = Field(min_length=1)
-    passed_steps: int = Field(ge=0)
-    total_steps: int = Field(ge=0)
-    failure_summary: str | None = None
-
-
-class ExecutionAnalysis(DSLModel):
-    conclusion: Literal["all_passed", "partial", "all_failed"] = "all_passed"
-    case_results: list[CaseAnalysisResult] = Field(default_factory=list)
-    failure_details: list[FailureDetail] = Field(default_factory=list)
-    suspected_root_cause: str | None = None
-    impact_scope: str | None = None
-    recommended_action: Literal["targeted_retest", "regression", "manual", "done"] = "done"
-    recommended_scope: str | None = None
 
 
 class AIPlanningTurnResponse(DSLModel):

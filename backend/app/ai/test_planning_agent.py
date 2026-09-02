@@ -890,13 +890,16 @@ def stream_planning_turn(
             if not isinstance(analysis_payload, dict):
                 analysis_payload = {}
             try:
-                from app.schemas.ai_planning import ExecutionAnalysis
+                from app.schemas.executions import ExecutionAnalysis
                 analysis = ExecutionAnalysis.model_validate(analysis_payload)
             except Exception:
                 analysis = ExecutionAnalysis(conclusion="partial")
             analysis_message = str(action_input.get("summary") or "").strip() if isinstance(action_input, dict) else ""
             if not analysis_message:
                 analysis_message = _build_analysis_message(analysis)
+            analysis = analysis.model_copy(
+                update={"source": "ai", "summary": analysis_message}
+            )
             response = AIPlanningTurnResponse(
                 assistant_message=analysis_message,
                 session_status="completed",

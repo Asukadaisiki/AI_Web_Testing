@@ -252,6 +252,17 @@ function reduceMessage(
           _streaming: false,
         },
       };
+    case "analysis_complete":
+      return {
+        ...message,
+        structured_payload: {
+          ...payload,
+          batch_id: event.batch_id,
+          analysis: event.analysis,
+          analysis_status: "completed",
+          _streaming: false,
+        },
+      };
     case "turn_complete": {
       const contentBlocks = readContentBlocks(payload);
       return {

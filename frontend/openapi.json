@@ -7331,12 +7331,27 @@
       },
       "ExecutionAnalysis": {
         "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "deterministic",
+              "ai"
+            ],
+            "title": "Source",
+            "default": "deterministic"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
           "conclusion": {
             "type": "string",
             "enum": [
               "all_passed",
               "partial",
-              "all_failed"
+              "all_failed",
+              "cancelled"
             ],
             "title": "Conclusion",
             "default": "all_passed"
@@ -7354,6 +7369,13 @@
             },
             "type": "array",
             "title": "Failure Details"
+          },
+          "failure_signals": {
+            "items": {
+              "$ref": "#/components/schemas/FailureSignal"
+            },
+            "type": "array",
+            "title": "Failure Signals"
           },
           "suspected_root_cause": {
             "anyOf": [
@@ -7560,6 +7582,28 @@
             "minimum": 0.0,
             "title": "Cancelled Jobs"
           },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "skipped",
+              "failed"
+            ],
+            "title": "Analysis Status",
+            "default": "pending"
+          },
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionAnalysis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -7702,6 +7746,28 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Cancelled Jobs"
+          },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "skipped",
+              "failed"
+            ],
+            "title": "Analysis Status",
+            "default": "pending"
+          },
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionAnalysis"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "type": "string",
@@ -7858,6 +7924,28 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Cancelled Jobs"
+          },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "skipped",
+              "failed"
+            ],
+            "title": "Analysis Status",
+            "default": "pending"
+          },
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionAnalysis"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "type": "string",
@@ -8087,6 +8175,7 @@
               "passed",
               "failed",
               "needs_intervention",
+              "cancelled",
               "error"
             ],
             "title": "Status"
@@ -8585,6 +8674,108 @@
           "latest_execution_id"
         ],
         "title": "FailureRootCause"
+      },
+      "FailureSignal": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "configuration",
+              "locator",
+              "assertion",
+              "navigation",
+              "network",
+              "runner"
+            ],
+            "title": "Category"
+          },
+          "fingerprint": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Fingerprint"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "step_index": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Index"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "locator_failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locator Failure Reason"
+          },
+          "screenshot_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screenshot Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "fingerprint",
+          "title"
+        ],
+        "title": "FailureSignal"
       },
       "FailureStepActionCount": {
         "properties": {
@@ -10766,6 +10957,16 @@
             ],
             "title": "Failure Category"
           },
+          "failure_signal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FailureSignal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "failure_step_action": {
             "anyOf": [
               {
@@ -10803,6 +11004,28 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/ExecutionReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "skipped",
+              "failed"
+            ],
+            "title": "Analysis Status",
+            "default": "pending"
+          },
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionAnalysis"
               },
               {
                 "type": "null"
@@ -10975,6 +11198,16 @@
               }
             ],
             "title": "Failure Category"
+          },
+          "failure_signal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FailureSignal"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "failure_step_action": {
             "anyOf": [

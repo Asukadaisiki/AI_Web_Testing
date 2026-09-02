@@ -19,9 +19,9 @@ AI 增强的 Web UI 自动化测试平台。
 | 结构化执行 | DSL 校验、Playwright Runner、步骤级 evidence 和报告持久化已具备 |
 | 定位系统 | A11y 语义定位为主路径，人工修正优先，VLM 受控降级且默认关闭 |
 | 执行调度 | PostgreSQL 持久化 Batch/Job 队列、并发限制、幂等、lease、heartbeat 和取消已落地 |
-| 报告聚合 | Report Core 可按 run、batch、project 聚合结构化执行结果 |
-| AI 自愈 | 失败分析、错误上下文和复测能力分散存在，自动重探索与 DSL 重生成尚未编排 |
-| 质量门禁 | 旧自动化测试套件已移除；当前依赖编译、构建、迁移和真实链路 smoke 验证，需重建测试分层 |
+| 报告聚合 | Report Core 可按 run、batch、project 聚合结果，并返回持久化 FailureSignal 与分析总结 |
+| AI 自愈 | 失败分析、anti-pattern 和历史恢复已接入统一事实链；自动重探索与 DSL 重生成尚未编排 |
+| 质量门禁 | 已恢复执行分析聚焦合同测试；完整后端、前端和浏览器回归分层仍需重建 |
 
 不再使用单一完成度百分比描述项目状态；各能力的完成标准和风险不同，应以上述能力矩阵、执行日志和缺陷日志为准。
 
@@ -37,10 +37,9 @@ AI 增强的 Web UI 自动化测试平台。
 
 下一阶段优先级：
 
-1. 统一报告、Planning 和 anti-pattern 使用的 `FailureSignal` 分类，并在执行终结时固化。
-2. 实现带审批门的 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 自愈编排。
-3. 配置 Planning/DSL 模型后完成真实 AI 全链路验收。
-4. 基于当前架构重建后端、前端和浏览器集成测试门禁。
+1. 实现带审批门的 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 自愈编排。
+2. 配置 Planning/DSL 模型后完成真实 AI 全链路验收。
+3. 继续扩展后端、前端和浏览器集成测试门禁。
 
 ### 2026-05-31 textContent + DSL 完善（4 次修复）
 
@@ -155,7 +154,6 @@ AI 增强的 Web UI 自动化测试平台。
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
-- 统一 `FailureSignal`，消除报告、Planning 和 anti-pattern 的错误分类分歧
 - 编排失败后的重探索、DSL 重生成、差异审阅和受控重运行
 - 配置 AI 模型后补齐真实 Planning -> 探索 -> DSL -> 队列执行 -> 报告全链验收
 - 基于当前公开合同恢复自动化测试，不复用已经漂移的旧测试套件
@@ -266,12 +264,13 @@ npm run dev
 ```powershell
 cd backend
 uv run python -m compileall -q app
+uv run python -m unittest discover -s tests -p "test_*.py" -v
 
 cd ../frontend
 npm run build
 ```
 
-当前仓库没有可执行的自动化测试套件。上述命令仅验证后端语法/导入和前端类型/生产构建，不能替代回归测试。
+当前只恢复了执行分析链路的聚焦合同测试，尚不能替代完整回归测试。
 
 ## 推荐联调路径
 

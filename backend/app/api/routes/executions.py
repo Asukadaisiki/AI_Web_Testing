@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import require_demo_user
+from app.application.reporting import analyze_run
 from app.db import get_db_session
 from app.models import User
 from app.schemas.executions import (
@@ -37,7 +38,14 @@ def execute_case_route(
     current_user: User = Depends(require_demo_user),
 ) -> StoredCaseExecutionDetail:
     try:
-        return execute_case(session, case_id, payload.model_copy(update={"actor_user_id": current_user.id}))
+        execution = execute_case(
+            session,
+            case_id,
+            payload.model_copy(update={"actor_user_id": current_user.id}),
+        )
+        analyze_run(session, execution.id)
+        refreshed = get_case_execution(session, execution.id)
+        return refreshed or execution
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

@@ -12,10 +12,12 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models import TestCaseRun
 from app.models.dsl_anti_pattern import DSLAntiPattern
+from app.schemas.executions import FailureCategory, FailureSignal
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,16 @@ MISSING_CAPTURE_TEXT = "missing_capture_text"
 TARGET_NOT_FOUND = "target_not_found"
 MISSING_STEP = "missing_step"
 WRONG_PAGE_STATE = "wrong_page_state"
+
+_PATTERN_FAILURE_CATEGORY: dict[str, FailureCategory] = {
+    MISSING_NAVIGATION: "navigation",
+    MISSING_WAIT_FOR: "runner",
+    MISSING_INPUT_BEFORE_ASSERT: "assertion",
+    MISSING_CAPTURE_TEXT: "assertion",
+    TARGET_NOT_FOUND: "locator",
+    MISSING_STEP: "runner",
+    WRONG_PAGE_STATE: "assertion",
+}
 
 
 def _fingerprint(snippet: dict[str, Any]) -> str:
@@ -48,6 +60,7 @@ def record_anti_pattern(
     rule_violated: str | None = None,
     source: str = "auto",
     project_id: int | None = None,
+    failure_category: FailureCategory | None = None,
 ) -> DSLAntiPattern:
     """Record an anti-pattern, incrementing frequency if a duplicate exists.
 
@@ -66,6 +79,8 @@ def record_anti_pattern(
     for anti in existing:
         if _fingerprint(anti.wrong_snippet) == fingerprint:
             anti.frequency += 1
+            if anti.failure_category is None:
+                anti.failure_category = failure_category or _PATTERN_FAILURE_CATEGORY.get(error_category)
             db_session.flush()
             logger.info(
                 "Anti-pattern frequency incremented: category=%s, id=%d, freq=%d",
@@ -77,6 +92,7 @@ def record_anti_pattern(
     anti = DSLAntiPattern(
         project_id=project_id,
         error_category=error_category,
+        failure_category=failure_category or _PATTERN_FAILURE_CATEGORY.get(error_category),
         wrong_snippet=wrong_snippet,
         context_note=context_note,
         rule_violated=rule_violated,
@@ -90,6 +106,50 @@ def record_anti_pattern(
         error_category, source, project_id,
     )
     return anti
+
+
+def record_execution_anti_patterns(
+    db_session: Session,
+    execution_id: int,
+) -> list[DSLAntiPattern]:
+    """Persist failed execution steps as DSL anti-patterns using the shared taxonomy."""
+    run = db_session.get(TestCaseRun, execution_id)
+    if run is None or not isinstance(run.report, dict):
+        return []
+
+    signal = FailureSignal.model_validate(run.failure_signal_json) if run.failure_signal_json else None
+    recorded: list[DSLAntiPattern] = []
+    for step in run.report.get("steps") or []:
+        if step.get("status") != "failed":
+            continue
+        action = str(step.get("action") or "")
+        target = str(step.get("target") or "")
+        error_message = str(step.get("error_message") or run.error_message or "")
+        if signal and signal.category == "locator":
+            pattern_category = TARGET_NOT_FOUND
+        elif signal and signal.category == "assertion":
+            pattern_category = WRONG_PAGE_STATE
+        else:
+            pattern_category = MISSING_STEP
+        recorded.append(
+            record_anti_pattern(
+                db_session,
+                error_category=pattern_category,
+                failure_category=signal.category if signal else None,
+                wrong_snippet={
+                    "action": action,
+                    "target": target,
+                    "value": step.get("value"),
+                    "resolved_by": step.get("resolved_by") or "unknown",
+                },
+                context_note=(
+                    f"{action} target='{target[:80]}' 执行失败: {error_message[:300]}"
+                ),
+                source="execution",
+                project_id=run.project_id,
+            )
+        )
+    return recorded
 
 
 def retrieve_relevant_anti_patterns(

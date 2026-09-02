@@ -51,7 +51,7 @@
 | PlanningPage | `/` | 三栏 | AI 规划对话：左栏需求进度，中栏 AI 对话 + 底部输入框，右栏规划进度 + DSL 草案 |
 | CasesPage | `/cases` | 三栏 | 用例中心：左栏搜索筛选，中栏用例卡片网格，右栏统计面板 |
 | ReportPage | `/reports` | 两栏 | 项目报告：左栏项目列表，中栏概览统计卡片 + 可展开执行结果列表含步骤证据 |
-| ExecutionDetailPage | `/run/:executionId` | 三栏 | 执行详情：左栏步骤时间线，中栏截图 + 证据，右栏统计 + 定位策略 + 候选元素 |
+| ExecutionDetailPage | `/reports/:executionId` | 三栏 | 执行详情：左栏步骤时间线，中栏截图 + 证据，右栏统计 + 定位策略 + 候选元素 |
 
 ### 辅助组件
 

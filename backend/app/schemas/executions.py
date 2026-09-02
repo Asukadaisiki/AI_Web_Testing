@@ -19,6 +19,8 @@ ExecutionStatus = Literal[
 ]
 ReportScopeType = Literal["global", "project", "case"]
 FailureCategory = Literal["configuration", "locator", "assertion", "navigation", "network", "runner"]
+ExecutionAnalysisStatus = Literal["pending", "running", "completed", "skipped", "failed"]
+ExecutionAnalysisSource = Literal["deterministic", "ai"]
 
 
 class CaseExecutionRequest(DSLModel):
@@ -161,6 +163,50 @@ class ExecutionReport(DSLModel):
     steps: list[StepExecutionEvidence] = Field(default_factory=list)
 
 
+class FailureSignal(DSLModel):
+    category: FailureCategory
+    fingerprint: str = Field(min_length=1, max_length=40)
+    title: str = Field(min_length=1, max_length=1000)
+    step_index: int | None = Field(default=None, ge=0)
+    action: str | None = None
+    target: str | None = None
+    error_message: str | None = None
+    locator_failure_reason: str | None = None
+    screenshot_url: str | None = None
+
+
+class FailureDetail(DSLModel):
+    case_name: str = Field(min_length=1)
+    step_index: int = Field(ge=0)
+    action: str = Field(min_length=1)
+    target: str | None = None
+    error_message: str | None = None
+    suspected_cause: str = Field(min_length=1)
+    cause_probability: Literal["high", "medium", "low"] = "medium"
+
+
+class CaseAnalysisResult(DSLModel):
+    case_id: int = Field(ge=1)
+    case_name: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    passed_steps: int = Field(ge=0)
+    total_steps: int = Field(ge=0)
+    failure_summary: str | None = None
+
+
+class ExecutionAnalysis(DSLModel):
+    source: ExecutionAnalysisSource = "deterministic"
+    summary: str = ""
+    conclusion: Literal["all_passed", "partial", "all_failed", "cancelled"] = "all_passed"
+    case_results: list[CaseAnalysisResult] = Field(default_factory=list)
+    failure_details: list[FailureDetail] = Field(default_factory=list)
+    failure_signals: list[FailureSignal] = Field(default_factory=list)
+    suspected_root_cause: str | None = None
+    impact_scope: str | None = None
+    recommended_action: Literal["targeted_retest", "regression", "manual", "done"] = "done"
+    recommended_scope: str | None = None
+
+
 class StoredCaseExecutionSummary(DSLModel):
     id: int
     case_id: int
@@ -180,6 +226,7 @@ class StoredCaseExecutionSummary(DSLModel):
     total_steps: int = Field(default=0, ge=0)
     failed_step_index: int | None = Field(default=None, ge=0)
     failure_category: FailureCategory | None = None
+    failure_signal: FailureSignal | None = None
     failure_step_action: str | None = None
     latest_url: str | None = None
     latest_screenshot_url: str | None = None
@@ -187,6 +234,8 @@ class StoredCaseExecutionSummary(DSLModel):
 
 class StoredCaseExecutionDetail(StoredCaseExecutionSummary):
     report: ExecutionReport | None = None
+    analysis_status: ExecutionAnalysisStatus = "pending"
+    analysis: ExecutionAnalysis | None = None
 
 
 class FailureCategoryCount(DSLModel):

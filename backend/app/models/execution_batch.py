@@ -57,6 +57,8 @@ class ExecutionBatch(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     concurrency_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     input_values_json: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    analysis_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    analysis_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -35,6 +35,12 @@ class DSLAntiPattern(Base):
             "missing_input_before_assert, missing_capture_text, target_not_found, "
             "missing_step, wrong_page_state"
         ),
+    )
+    failure_category: Mapped[str | None] = mapped_column(
+        String(32),
+        index=True,
+        nullable=True,
+        doc="Unified execution failure category used by reports and Planning.",
     )
     wrong_snippet: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False,

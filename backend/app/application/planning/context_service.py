@@ -24,17 +24,10 @@ slog = get_structured_logger(__name__)
 
 
 def categorize_error(error_message: str) -> str:
-    """Categorize an error message into a failure pattern type."""
-    msg = error_message.lower()
-    if "locator" in msg or "not found" in msg or "no element" in msg:
-        return "locator_stale"
-    if "assertion" in msg or "expect" in msg or "mismatch" in msg:
-        return "assertion_mismatch"
-    if "timeout" in msg or "timed out" in msg:
-        return "timeout"
-    if "network" in msg or "connection" in msg or "econnrefused" in msg:
-        return "network_error"
-    return "unknown"
+    """Use the same failure taxonomy as execution reports."""
+    from app.services.failure_signals import categorize_failure
+
+    return categorize_failure(error_message=error_message)
 
 
 def build_session_context_preamble(
@@ -355,4 +348,3 @@ def inject_auto_context(
         return transcript
 
     return [{"role": "system", "content": preamble}, *transcript]
-

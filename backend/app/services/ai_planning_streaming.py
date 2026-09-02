@@ -285,7 +285,6 @@ def _queue_and_stream_planning_execution(
     concurrency_limit: int,
     cancel_event: Event,
 ) -> Generator[dict, None, None]:
-    from app.application.planning.analysis_retest_service import run_analysis_turn, should_run_analysis
     from app.application.planning.project_context import get_owned_session
     from app.application.planning.save_execute_service import save_and_execute_selected_drafts
     from app.application.reporting import build_batch_detail
@@ -372,7 +371,10 @@ def _queue_and_stream_planning_execution(
                             "duration_ms": step.duration_ms or 0,
                         }
             observed_statuses[job.id] = job.status
-        if detail.status in {"passed", "failed", "needs_intervention", "cancelled"}:
+        if (
+            detail.status in {"passed", "failed", "needs_intervention", "cancelled"}
+            and detail.analysis_status in {"completed", "skipped", "failed"}
+        ):
             break
         time.sleep(0.5)
 
@@ -394,7 +396,7 @@ def _queue_and_stream_planning_execution(
                 failed_steps=failed_steps,
                 duration_ms=latest.duration_ms,
                 screenshot_url=latest.latest_screenshot_url,
-                report_url=f"/run/{latest.id}",
+                report_url=f"/reports/{latest.id}",
             )
         )
 
@@ -405,6 +407,8 @@ def _queue_and_stream_planning_execution(
             f"{icon} {summary.case_name} — {summary.status} "
             f"({summary.passed_steps}/{summary.total_steps}步)"
         )
+    if detail.analysis:
+        lines.extend(["", f"分析总结：{detail.analysis.summary}"])
     assistant_message = "\n".join(lines)
     planning_session.status = "completed"
     structured_payload = {
@@ -412,6 +416,8 @@ def _queue_and_stream_planning_execution(
         "batch_id": batch.id,
         "saved_cases": [item.model_dump(mode="json") for item in saved_cases],
         "execution_summaries": [item.model_dump(mode="json") for item in execution_summaries],
+        "analysis_status": detail.analysis_status,
+        "analysis": detail.analysis.model_dump(mode="json") if detail.analysis else None,
     }
     session.add(
         AIPlanningMessage(
@@ -429,17 +435,11 @@ def _queue_and_stream_planning_execution(
         "structured_payload": structured_payload,
     }
 
-    if should_run_analysis(execution_summaries):
-        yield {"type": "status", "phase": "analyzing", "message": "正在分析执行结果..."}
-        analysis = run_analysis_turn(
-            execution_summaries=execution_summaries,
-            db_session=session,
-            project_id=batch.project_id,
-        )
-        if analysis and analysis.execution_analysis:
-            yield {
-                "type": "analysis_complete",
-                "analysis": analysis.execution_analysis.model_dump(mode="json"),
-                "message": analysis.assistant_message,
-            }
+    if detail.analysis:
+        yield {
+            "type": "analysis_complete",
+            "batch_id": batch.id,
+            "analysis": detail.analysis.model_dump(mode="json"),
+            "message": detail.analysis.summary,
+        }
     yield {"type": "done"}

@@ -2270,15 +2270,28 @@ export interface components {
         /** ExecutionAnalysis */
         ExecutionAnalysis: {
             /**
+             * Source
+             * @default deterministic
+             * @enum {string}
+             */
+            source: "deterministic" | "ai";
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
              * Conclusion
              * @default all_passed
              * @enum {string}
              */
-            conclusion: "all_passed" | "partial" | "all_failed";
+            conclusion: "all_passed" | "partial" | "all_failed" | "cancelled";
             /** Case Results */
             case_results?: components["schemas"]["CaseAnalysisResult"][];
             /** Failure Details */
             failure_details?: components["schemas"]["FailureDetail"][];
+            /** Failure Signals */
+            failure_signals?: components["schemas"]["FailureSignal"][];
             /** Suspected Root Cause */
             suspected_root_cause?: string | null;
             /** Impact Scope */
@@ -2346,6 +2359,13 @@ export interface components {
             /** Cancelled Jobs */
             cancelled_jobs: number;
             /**
+             * Analysis Status
+             * @default pending
+             * @enum {string}
+             */
+            analysis_status: "pending" | "running" | "completed" | "skipped" | "failed";
+            analysis?: components["schemas"]["ExecutionAnalysis"] | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -2390,6 +2410,13 @@ export interface components {
             intervention_jobs: number;
             /** Cancelled Jobs */
             cancelled_jobs: number;
+            /**
+             * Analysis Status
+             * @default pending
+             * @enum {string}
+             */
+            analysis_status: "pending" | "running" | "completed" | "skipped" | "failed";
+            analysis?: components["schemas"]["ExecutionAnalysis"] | null;
             /**
              * Created At
              * Format: date-time
@@ -2439,6 +2466,13 @@ export interface components {
             intervention_jobs: number;
             /** Cancelled Jobs */
             cancelled_jobs: number;
+            /**
+             * Analysis Status
+             * @default pending
+             * @enum {string}
+             */
+            analysis_status: "pending" | "running" | "completed" | "skipped" | "failed";
+            analysis?: components["schemas"]["ExecutionAnalysis"] | null;
             /**
              * Created At
              * Format: date-time
@@ -2511,7 +2545,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "passed" | "failed" | "needs_intervention" | "error";
+            status: "passed" | "failed" | "needs_intervention" | "cancelled" | "error";
             /** Total Steps */
             total_steps: number;
             /** Passed Steps */
@@ -2743,6 +2777,30 @@ export interface components {
             latest_execution_id: number;
             /** Latest Failure Category */
             latest_failure_category?: ("configuration" | "locator" | "assertion" | "navigation" | "network" | "runner") | null;
+        };
+        /** FailureSignal */
+        FailureSignal: {
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
+            /** Fingerprint */
+            fingerprint: string;
+            /** Title */
+            title: string;
+            /** Step Index */
+            step_index?: number | null;
+            /** Action */
+            action?: string | null;
+            /** Target */
+            target?: string | null;
+            /** Error Message */
+            error_message?: string | null;
+            /** Locator Failure Reason */
+            locator_failure_reason?: string | null;
+            /** Screenshot Url */
+            screenshot_url?: string | null;
         };
         /** FailureStepActionCount */
         FailureStepActionCount: {
@@ -3507,6 +3565,7 @@ export interface components {
             failed_step_index?: number | null;
             /** Failure Category */
             failure_category?: ("configuration" | "locator" | "assertion" | "navigation" | "network" | "runner") | null;
+            failure_signal?: components["schemas"]["FailureSignal"] | null;
             /** Failure Step Action */
             failure_step_action?: string | null;
             /** Latest Url */
@@ -3514,6 +3573,13 @@ export interface components {
             /** Latest Screenshot Url */
             latest_screenshot_url?: string | null;
             report?: components["schemas"]["ExecutionReport"] | null;
+            /**
+             * Analysis Status
+             * @default pending
+             * @enum {string}
+             */
+            analysis_status: "pending" | "running" | "completed" | "skipped" | "failed";
+            analysis?: components["schemas"]["ExecutionAnalysis"] | null;
         };
         /** StoredCaseExecutionSummary */
         StoredCaseExecutionSummary: {
@@ -3568,6 +3634,7 @@ export interface components {
             failed_step_index?: number | null;
             /** Failure Category */
             failure_category?: ("configuration" | "locator" | "assertion" | "navigation" | "network" | "runner") | null;
+            failure_signal?: components["schemas"]["FailureSignal"] | null;
             /** Failure Step Action */
             failure_step_action?: string | null;
             /** Latest Url */

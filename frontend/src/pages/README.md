@@ -8,7 +8,7 @@
 |------|------|------|
 | PlanningPage | `/` | AI 测试规划入口，生成测试方案与用例 |
 | CasesPage | `/cases` | AI 用例中心，管理和执行测试用例 |
-| ExecutionDetailPage | `/run/:executionId` | 执行与报告一体页，包含步骤证据、定位策略和报告总览 |
+| ExecutionDetailPage | `/reports/:executionId` | 执行与报告一体页，包含步骤证据、定位策略和报告总览 |
 
 ## 辅助页面
 
@@ -23,4 +23,4 @@
 | `/dashboard` | `/` |
 | `/executions` | `/cases` |
 | `/login` | `/` |
-| `/executions/:id` | `/run/:id` |
+| `/run/:id`、`/executions/:id` | `/reports/:id` |

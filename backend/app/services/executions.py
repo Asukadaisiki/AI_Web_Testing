@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.locators.corrections import SQLAlchemyCorrectionStore
-from app.models import TestCase, TestCaseRun, User
+from app.models import ExecutionBatch, TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, RunnerInterventionError
 from app.runners.playwright_runner import RunnerCancelledError, StepStreamEvent, execute_case_with_playwright_streaming
@@ -30,6 +30,8 @@ from app.schemas.executions import (
     FailureStepActionCount,
     ExecutionWindowComparison,
     ExecutionWindowRange,
+    ExecutionAnalysis,
+    FailureSignal,
     ReportScopeType,
     StoredCaseExecutionDetail,
     StoredCaseExecutionSummary,
@@ -37,6 +39,7 @@ from app.schemas.executions import (
     TopFailedCase,
 )
 from app.services.cases import EntityNotFoundError
+from app.services.failure_signals import build_failure_signal
 
 FAILURE_CATEGORY_ORDER = [
     "configuration",
@@ -180,6 +183,7 @@ def execute_case_streaming(
         execution.status = "cancelled"
         execution.report = report.model_dump(mode="json")
         execution.error_message = "Execution cancelled by user."
+        _set_failure_signal(execution)
         execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
         session.add(execution)
         session.commit()
@@ -194,10 +198,12 @@ def execute_case_streaming(
             persisted_execution.status = "failed"
             persisted_execution.report = report.model_dump(mode="json")
             persisted_execution.error_message = f"{type(exc).__name__}: {exc}"
+            _set_failure_signal(persisted_execution)
             persisted_execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
             session.add(persisted_execution)
             session.commit()
         raise
+    _set_failure_signal(execution)
     execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
     session.add(execution)
     session.commit()
@@ -494,6 +500,12 @@ def _to_execution_summary(
 ) -> StoredCaseExecutionSummary:
     report = _normalize_report(record.report) if report is None else report
     failed_step = _derive_failed_step(report)
+    failure_signal = None
+    if record.status != "cancelled":
+        failure_signal = _load_failure_signal(record.failure_signal_json) or build_failure_signal(
+            report,
+            record.error_message,
+        )
     return StoredCaseExecutionSummary(
         id=record.id,
         case_id=record.case_id,
@@ -512,7 +524,8 @@ def _to_execution_summary(
         duration_ms=_derive_duration_ms(record.started_at, record.finished_at),
         total_steps=len(report.steps) if report is not None else 0,
         failed_step_index=failed_step.step_index if failed_step is not None else None,
-        failure_category=_derive_failure_category(report, record.error_message),
+        failure_category=failure_signal.category if failure_signal else None,
+        failure_signal=failure_signal,
         failure_step_action=failed_step.action if failed_step is not None else None,
         latest_url=_derive_latest_url(report),
         latest_screenshot_url=_derive_latest_screenshot_url(report),
@@ -522,9 +535,18 @@ def _to_execution_summary(
 def _to_execution_detail(session: Session, record: TestCaseRun, *, case_name: str) -> StoredCaseExecutionDetail:
     report = _normalize_report(record.report)
     summary = _to_execution_summary(record, case_name=case_name, report=report)
+    analysis_status = record.analysis_status
+    analysis_json = record.analysis_json
+    if analysis_json is None and record.batch_id is not None:
+        batch = session.get(ExecutionBatch, record.batch_id)
+        if batch is not None:
+            analysis_status = batch.analysis_status
+            analysis_json = batch.analysis_json
     return StoredCaseExecutionDetail(
         **summary.model_dump(),
         report=report,
+        analysis_status=analysis_status,
+        analysis=ExecutionAnalysis.model_validate(analysis_json) if analysis_json else None,
     )
 
 
@@ -533,6 +555,18 @@ def _normalize_report(report: dict | None):
         return None
     steps = [_with_artifact_url(StepExecutionEvidence.model_validate(step)) for step in report.get("steps", [])]
     return build_execution_report(status=report["status"], steps=steps)
+
+
+def _set_failure_signal(record: TestCaseRun) -> None:
+    if record.status == "cancelled":
+        record.failure_signal_json = None
+        return
+    signal = build_failure_signal(_normalize_report(record.report), record.error_message)
+    record.failure_signal_json = signal.model_dump(mode="json") if signal else None
+
+
+def _load_failure_signal(payload: dict | None) -> FailureSignal | None:
+    return FailureSignal.model_validate(payload) if payload else None
 
 
 def _with_artifact_url(step: StepExecutionEvidence) -> StepExecutionEvidence:
@@ -559,29 +593,6 @@ def _derive_failed_step(report) -> StepExecutionEvidence | None:
     return None
 
 
-def _derive_failure_category(report, error_message: str | None) -> str | None:
-    failed_step = _derive_failed_step(report)
-    if failed_step is None:
-        if error_message and _is_configuration_error(error_message):
-            return "configuration"
-        if error_message:
-            return "runner"
-        return None
-
-    step_error_message = failed_step.error_message or error_message
-    if step_error_message and _is_configuration_error(step_error_message):
-        return "configuration"
-    if failed_step.locator_trace and failed_step.locator_trace.failure_reason:
-        return "locator"
-    if failed_step.action.startswith("assert_"):
-        return "assertion"
-    if failed_step.action == "goto":
-        return "navigation"
-    if any(event.failure_text or (event.status is not None and event.status >= 400) for event in failed_step.network_events):
-        return "network"
-    return "runner"
-
-
 def _describe_failure(
     *,
     summary: StoredCaseExecutionSummary,
@@ -590,6 +601,11 @@ def _describe_failure(
 ) -> ExecutionFailureDescriptor:
     if summary.status not in {"failed", "needs_intervention"}:
         return ExecutionFailureDescriptor()
+    if summary.failure_signal is not None:
+        return ExecutionFailureDescriptor(
+            fingerprint=summary.failure_signal.fingerprint,
+            title=summary.failure_signal.title,
+        )
 
     title = _derive_failure_title(
         report,
@@ -603,10 +619,6 @@ def _describe_failure(
         title=title,
     )
     return ExecutionFailureDescriptor(fingerprint=fingerprint, title=title)
-
-
-def _is_configuration_error(error_message: str) -> bool:
-    return "Relative goto step requires" in error_message or "case.base_url" in error_message
 
 
 def _derive_failure_title(
