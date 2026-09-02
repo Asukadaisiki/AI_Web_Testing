@@ -9,13 +9,38 @@ AI 增强的 Web UI 自动化测试平台。
 
 ## 当前状态
 
-当前阶段：**M2 功能增强 — A11y 树全面切换 + DSL 生成链路修复**。M1/M2 前端体验全部完成。
+当前阶段：**执行控制面与 Report Core 第一阶段完成，进入失败事实统一和受控自愈闭环建设**。
 
-进度判断（基于 2026-05-31 量化结果）：
-- M1 完成度：`100%`
-- M2 前端体验重构完成度：`100%`
-- M2 功能增强完成度：`98%`（A11y 树全面切换 + DSL 生成链路修复）
-- 相对核心五阶段产品路线图整体完成度：`98%+`
+截至 2026-09-02：
+
+| 能力域 | 当前状态 |
+|------|------|
+| 平台与工作台 | Dashboard、用例管理、执行中心、报告中心和 Planning 工作台已具备 |
+| 结构化执行 | DSL 校验、Playwright Runner、步骤级 evidence 和报告持久化已具备 |
+| 定位系统 | A11y 语义定位为主路径，人工修正优先，VLM 受控降级且默认关闭 |
+| 执行调度 | PostgreSQL 持久化 Batch/Job 队列、并发限制、幂等、lease、heartbeat 和取消已落地 |
+| 报告聚合 | Report Core 可按 run、batch、project 聚合结构化执行结果 |
+| AI 自愈 | 失败分析、错误上下文和复测能力分散存在，自动重探索与 DSL 重生成尚未编排 |
+| 质量门禁 | 旧自动化测试套件已移除；当前依赖编译、构建、迁移和真实链路 smoke 验证，需重建测试分层 |
+
+不再使用单一完成度百分比描述项目状态；各能力的完成标准和风险不同，应以上述能力矩阵、执行日志和缺陷日志为准。
+
+### 2026-09-02 执行控制面与 Report Core
+
+- 新增 `ExecutionBatch -> ExecutionJob -> TestCaseRun` 持久化执行模型。
+- API 负责创建 Batch/Job，独立 Worker 使用 PostgreSQL `FOR UPDATE SKIP LOCKED` 领取任务。
+- 支持幂等创建、Batch 并发上限、Job lease、heartbeat、过期任务恢复和持久化取消。
+- Planning“保存并执行”已迁移到队列，不再由 SSE 请求线程直接运行 Playwright。
+- Report Core 可读取 run、batch、project 三层报告；`TestCaseRun` 保存 DSL 快照、hash、attempt 和报告版本。
+- 未捕获执行异常会收口为失败报告，避免永久 `running` 记录。
+- 已通过真实 PostgreSQL + Playwright 的 `Batch -> Job -> Run -> Report` smoke 验证，以及 Planning SSE 队列、heartbeat 和取消验证。
+
+下一阶段优先级：
+
+1. 统一报告、Planning 和 anti-pattern 使用的 `FailureSignal` 分类，并在执行终结时固化。
+2. 实现带审批门的 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 自愈编排。
+3. 配置 Planning/DSL 模型后完成真实 AI 全链路验收。
+4. 基于当前架构重建后端、前端和浏览器集成测试门禁。
 
 ### 2026-05-31 textContent + DSL 完善（4 次修复）
 
@@ -116,7 +141,9 @@ AI 增强的 Web UI 自动化测试平台。
 - 平台基础：NotebookLM 三栏浮岛布局、侧边栏导航、ReportPage、Case 管理（含编辑/删除）、执行详情、执行记录删除
 - 前端体验：全局大圆角/无边框/弱阴影主题 token，全部页面统一三栏布局
 - 执行主链路：DSL 校验、单 Case 执行、步骤级证据、执行详情与报告聚合
-- 执行流式推送：后端 SSE 流式执行原语、AI Planning SSE worker/路由、前端实时进度气泡与取消按钮
+- 执行控制面：PostgreSQL 持久化 Batch/Job 队列、独立 Worker、并发限制、幂等、lease、heartbeat 和持久化取消
+- 执行流式推送：Planning SSE 创建 Batch 并订阅 Report Core，前端保留实时进度气泡与取消按钮
+- 报告核心：按 run、batch、project 聚合结构化结果，运行记录保存 DSL 快照、hash、attempt 和报告版本
 - 混合定位闭环：Tier 0 人工修正、Tier 1 A11y 语义定位（含 text_parent_chain 消歧）、Tier 2 AI visual、Tier 3 人工干预
 - AI DSL：`generate_segmented_case_draft` 唯一入口、分段并行生成、Preflight 1:N candidates + 单段重生、草案预览与导入
 - AI 规划助手：对话式测试规划、A11y 树探索（CDP `Accessibility.getFullAXTree`）、关键字驱动折叠展开、DB 缓存（TTL=4h）、ReAct lite（safety_cap=5, 4 字段 schema）
@@ -128,11 +155,14 @@ AI 增强的 Web UI 自动化测试平台。
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
-- `generate_case_draft` 已删除，`services/dsl.py` 的 `/api/v1/dsl/generate` 路由已切换到 `generate_segmented_case_draft`
-- AI visual 仍默认关闭，灰度验证样本积累中
-- explore_flow DSL 格式支持、跨段变量命名权威、explore_flow 遮挡恢复等特性已验证
+- 统一 `FailureSignal`，消除报告、Planning 和 anti-pattern 的错误分类分歧
+- 编排失败后的重探索、DSL 重生成、差异审阅和受控重运行
+- 配置 AI 模型后补齐真实 Planning -> 探索 -> DSL -> 队列执行 -> 报告全链验收
+- 基于当前公开合同恢复自动化测试，不复用已经漂移的旧测试套件
 
 与计划相比的主要差距：
+- 自动自愈仍是半自动能力集合，尚无统一状态机和前端审批入口
+- 当前缺少可持续运行的自动化回归门禁
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
 - 当前关闭登录鉴权，仅适用于本地单用户测试；恢复多用户使用前需重新启用认证与授权
 
@@ -211,6 +241,13 @@ uv run backend-dev
 默认后端地址：
 - `http://127.0.0.1:8000`
 
+另开终端启动执行队列 Worker：
+
+```powershell
+cd backend
+uv run python -m app.workers.execution_worker --concurrency 2
+```
+
 ### 2. 前端
 
 ```powershell
@@ -227,9 +264,14 @@ npm run dev
 ## 构建验证
 
 ```powershell
-cd frontend
+cd backend
+uv run python -m compileall -q app
+
+cd ../frontend
 npm run build
 ```
+
+当前仓库没有可执行的自动化测试套件。上述命令仅验证后端语法/导入和前端类型/生产构建，不能替代回归测试。
 
 ## 推荐联调路径
 
@@ -240,8 +282,9 @@ npm run build
 
 建议按下面顺序检查：
 1. 在 AI 规划页生成测试方案并审阅 DSL 草案
-2. 保存为正式用例并触发执行
-3. 在报告页查看执行结果、步骤证据与截图
+2. 确认执行 Worker 已启动
+3. 保存为正式用例并触发执行
+4. 在报告页查看 Batch、Job、Run 状态以及步骤证据与截图
 
 ## 文档索引
 
@@ -256,7 +299,7 @@ npm run build
 - `docs/superpowers/specs/`：功能设计规格文档
 - `docs/superpowers/plans/`：实施计划文档
 
-### 最新设计文档（2026-05）
+### 历史设计文档（2026-05）
 
 - `docs/superpowers/specs/2026-05-06-ai-agent-quality-improvement-design.md`：AI Agent 质量提升设计
 - `docs/superpowers/plans/2026-05-06-ai-agent-quality-improvement.md`：AI Agent 质量提升实施计划

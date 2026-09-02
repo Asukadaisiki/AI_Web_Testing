@@ -76,5 +76,6 @@ uv run python -m app.workers.execution_worker --concurrency 2
 - `GET /api/v1/execution-batches/{id}/report`：查询批次报告
 - `POST /api/v1/execution-batches/{id}/cancel`：取消待执行任务并标记运行中任务
 
-当前 Worker 使用 PostgreSQL 行锁领取任务。SSE 仍保留为旧 Planning 执行路径，
-后续再迁移为按 batch/job 订阅持久化事件。
+当前 Worker 使用 PostgreSQL 行锁领取任务。Planning SSE 已迁移为创建 Batch，
+并轮询 Report Core 输出兼容进度事件，不再在请求线程中直接执行 Playwright。
+运行中 Job 通过 heartbeat 续租并读取持久化取消标记，取消会在 Runner 的下一安全步骤边界生效。

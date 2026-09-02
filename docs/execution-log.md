@@ -55,6 +55,30 @@
 
 ## 任务记录
 
+## 2026-09-02 | 同步执行队列与 README 进展到 GitHub
+
+- 任务：将本地执行队列功能提交和 README 最新进展同步到远端。
+- 操作：复核 `main` 与 `origin/main` 差异；仅暂存 README、后端 README、执行日志和缺陷日志，创建聚焦文档提交并推送当前分支。
+- 结果：执行队列、Planning 队列迁移及 README 状态更新已同步到 `origin/main`。
+- 验证：推送后核对本地与远端提交计数、最新提交和工作树状态。
+- 后续：无。
+
+## 2026-09-02 | 更新 README 最新项目进展
+
+- 任务：将 README 的项目状态更新到当前执行队列与 Report Core 阶段。
+- 操作：重写根 README 当前状态为能力矩阵，新增 2026-09-02 执行控制面里程碑和下一阶段优先级；补充 Worker 启动、现行构建验证边界和 Batch/Job/Run 联调路径；同步修正后端 README 的 Planning SSE 描述。
+- 结果：移除基于 2026-05-31 的 `98%+` 旧完成度口径，README 现已反映持久化队列、Report Core、heartbeat/取消、受控自愈缺口和自动化测试门禁现状；BUG-096 已关闭。
+- 验证：`git diff --check` 通过；README 本地 Markdown 链接检查通过。
+- 后续：实现统一 `FailureSignal` 和受控自愈编排后继续同步能力矩阵。
+
+## 2026-09-02 | 当前项目进展盘点
+
+- 任务：基于当前仓库、提交记录、执行日志和缺陷日志汇总项目最新进展。
+- 操作：核对 `main` 与远端差异、最近提交范围、阶段计划、当前能力说明、开放缺陷和可用验证入口。
+- 结果：本地 `main` 领先 `origin/main` 2 个提交；持久化 ExecutionBatch/ExecutionJob 队列、Report Core、Planning SSE 队列迁移、heartbeat 与持久化取消已落地。当前主要未完成项为统一 FailureSignal、受控自动自愈编排、真实 AI 全链验收，以及恢复与当前架构匹配的自动化测试门禁。发现根 README 仍使用 2026-05-31 的阶段与完成度口径，已记录为 BUG-096。
+- 验证：检查 Git 状态和提交统计；核对 `docs/execution-log.md`、`docs/bug-log.md`、README、能力状态清单及优化计划；本次未运行产品测试。
+- 后续：优先实现统一失败事实模型，再接入 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 自愈编排；同步更新 README，并决定是否将本地 2 个提交推送到 GitHub。
+
 ## 2026-09-02 | Planning SSE 迁移执行队列并接入取消与 Heartbeat
 
 - 任务：完成 BUG-094 剩余工作，将旧 Planning SSE 执行迁移到 Batch 队列，并接入运行中 Job 的持久化取消和 heartbeat。
