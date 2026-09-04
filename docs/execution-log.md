@@ -55,6 +55,54 @@
 
 ## 任务记录
 
+## 2026-09-04 | 以可读性为目标的后端重构建议
+
+- 任务：在允许大规模重构的前提下，确定兼顾代码可读性与后续迭代效率的技术方案。
+- 操作：结合当前约 2.4 万行 Python、千行级 Agent/工具/Runner 模块、现有 PostgreSQL 队列和 Playwright 能力，对全量 Go 重写、Go/Python 混合边界及 Kitex 使用时机进行取舍。
+- 结果：建议以旁路替换方式建设 Go 模块化单体控制面，使用 Hertz 提供 HTTP/SSE、Go interface 组织 AgentCore 和领域模块，保留 Python Playwright/A11y/locator Worker；Kitex 仅在未来出现真实独立部署边界时使用。迁移前先冻结 DSL、Agent Event、Tool、Report、数据库和黄金行为合同，不直接复刻 BUG-099/100 等已知错误。
+- 验证：架构评估，未修改业务代码，未运行产品测试。
+- 后续：确认方向后先建立 v2 目录和合同测试，以“对话 -> ask_user -> explore -> validate -> generate -> execute -> report”首个纵向切片验证新架构。
+
+## 2026-09-04 | Go AgentCore 与 Kitex 服务边界评估
+
+- 任务：评估当前项目是否适合将后端改为 Go，并按 handler/service 模块化后使用 Kitex。
+- 操作：统计 Python 后端模块体量和依赖关系，结合 AgentCore 工具设计、HTTP/SSE 前端协议、PostgreSQL 队列与 Playwright 能力划分迁移边界；新增 ADR-002。
+- 结果：可以使用 Go 重建 Agent 控制面，但不建议逐文件全量翻译。推荐 Hertz 对前端提供 HTTP/SSE，普通 Go interface 组织单进程模块，仅在真实进程间边界使用 Kitex；现有 Python Playwright/A11y/locator Worker 暂时保留，通过 PostgreSQL Job 与 Go 控制面解耦。当前不实现登录与权限校验，但保留项目和 actor 归属字段。
+- 验证：后端共约 2.4 万行 Python；确认 Agent、工具、Runner、DSL 和 execution service 中存在多个千行级模块及跨层延迟导入；架构评估未运行产品测试。
+- 后续：如确认迁移方向，先冻结 DSL、事件、工具、报告和数据库合同并修复 BUG-099/100，再以旁路方式落地 Go AgentCore。
+
+## 2026-09-04 | DeepSeek LLM 能力实测
+
+- 任务：展示当前接入的 `deepseek-v4-flash` 在项目 Planning Agent 中的实际能力。
+- 操作：通过项目 `_stream_planning_llm` 和完整 `run_planning_turn` 执行三类真实模型探针，覆盖需求抽取、探索工具决策和 locator 失败归因；不启动浏览器、不写业务数据。
+- 结果：3/3 单轮响应均可解析为项目 JSON 动作；模型能从简略需求抽取被测对象，能从完整需求提取 URL、流程、断言和变量，并主动选择 `get_project_info` 工具；完整 ReAct 能正确用自然语言识别 `Login` 变为 `Sign in` 的定位器过期问题。但结构化分析错误落为 `all_passed/done` 且缺少失败明细，记录为 BUG-100，当前不能直接把 LLM 结构化结论用于无人审批的修复决策。
+- 验证：网关真实请求均成功；完整 ReAct 返回 `session_status=completed`，自然语言归因正确；结构化字段矛盾已复现。首次探针脚本因误用不存在的 `SessionLocal` 导入失败，改用项目 `get_session_factory()` 后成功。
+- 后续：先修复 BUG-100 的分析 Schema 与确定性约束，再测试真实页面探索、DSL 生成和失败修复建议。
+
+## 2026-09-04 | 自愈任务编排层职责说明
+
+- 任务：解释受控自愈方案中的任务编排层含义和边界。
+- 操作：将现有失败分析、页面探索、DSL 生成、审批和 Batch 执行能力映射为后端状态机职责。
+- 结果：任务编排层不是新的 AI 或必需的外部任务框架，而是位于 LLM 能力与正式 Runner 之间、负责流程顺序、条件分支、状态持久化、幂等重试、审批门和审计追踪的后端协调服务；LLM 负责理解需求、提出是否重探索及探索范围等结构化建议、分析失败和生成候选 DSL，编排层依据失败分类、权限、预算和重试上限裁决并调用后端工具，正式测试只由 Runner 执行。用户负责设定目标，并在正式 DSL 变更或扩大执行范围前审批。编排层不是数据转发层，而是流程控制权和安全边界的持有者。
+- 验证：架构说明，未修改业务代码，未运行产品测试。
+- 后续：第一阶段可采用 `RepairAttempt` 表、`repair_orchestrator.py` 服务和审批 API，继续复用现有 PostgreSQL Batch/Job 队列。
+
+## 2026-09-04 | 自愈循环复用 Planning 会话方案澄清
+
+- 任务：评估自动重探索是否可以复用现有 Planning 会话与探索能力。
+- 操作：结合现有 Planning Session、失败分析、上下文注入、探索工具、DSL 草案生成和 Batch 执行边界梳理最小编排方案。
+- 结果：可以复用现有能力，但应在同一 Planning Session 中创建新的 repair turn，而不是新建独立会话；该 turn 显式绑定来源 Run/Batch，并注入 FailureSignal、ExecutionAnalysis、失败步骤 evidence、原 DSL 快照和历史探索数据。编排层仅在定位、导航或页面状态过期时触发重探索，随后生成候选 DSL、校验并展示差异，用户批准后才更新正式用例并进入 Batch/Job 队列重跑。
+- 验证：架构分析，未修改业务代码，未运行产品测试。
+- 后续：实现带来源追踪和审批门的 RepairAttempt 状态机，复用现有 explore、draft、validation 和 execution 服务。
+
+## 2026-09-04 | 执行归因与复测循环现状核验
+
+- 任务：确认当前是否已实现“执行 -> 记录错误 -> 归因 -> 重新执行”循环。
+- 操作：追踪直接 Case 执行、Batch Worker、FailureSignal/ExecutionAnalysis、anti-pattern、Planning 分析消息、`/retest` API、人工修正重跑入口和 DSL 草案再生成逻辑。
+- 结果：执行、步骤证据与错误持久化、统一 FailureSignal、规则兜底与 LLM 归因已自动连通；直接执行和 Batch 终态均可生成持久化分析。后端 `/retest` 可筛选失败用例并重跑原 DSL，人工修正后前端也可重跑当前用例，但 Planning 前端未接入 `/retest`。归因结果尚不会自动触发重新探索、DSL 重生成、差异审批或正式用例更新，因此当前是人工触发复测的半闭环，完整自愈闭环仍由 BUG-090 跟踪；同时 `/retest` 绕过统一分析持久化的问题记录为 BUG-099。
+- 验证：静态核对 `services/executions.py`、`services/execution_batches.py`、`application/reporting/analysis_service.py`、`application/planning/analysis_retest_service.py`、`draft_service.py`、Planning API 与前端执行入口；未执行真实浏览器全链测试。
+- 后续：实现 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 状态机，并为 Planning 前端增加审批与复测入口。
+
 ## 2026-09-04 | 同步项目状态与 AI 配置记录到 GitHub
 
 - 任务：将当前项目状态盘点和本地 AI 配置变更记录同步到远端。
