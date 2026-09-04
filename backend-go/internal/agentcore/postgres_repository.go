@@ -25,8 +25,9 @@ func (r *PostgresRepository) CreateRun(ctx context.Context, run AgentRun) error 
 		ctx,
 		`INSERT INTO agent_runs (
 			id, conversation_id, project_id, status, input, pending_tool_call_id,
-			pending_step_id, transcript_json, last_event_seq, created_at, updated_at
-		) VALUES ($1, $2, NULLIF($3, 0), $4, $5, $6, $7, $8, 0, $9, $10)`,
+			pending_step_id, latest_generation_id, approved_generation_id,
+			transcript_json, last_event_seq, created_at, updated_at
+		) VALUES ($1, $2, NULLIF($3, 0), $4, $5, $6, $7, $8, $9, $10, 0, $11, $12)`,
 		run.ID,
 		run.ConversationID,
 		run.ProjectID,
@@ -34,6 +35,8 @@ func (r *PostgresRepository) CreateRun(ctx context.Context, run AgentRun) error 
 		run.Input,
 		run.PendingToolCallID,
 		run.PendingStepID,
+		run.LatestGenerationID,
+		run.ApprovedGenerationID,
 		transcript,
 		run.CreatedAt,
 		run.UpdatedAt,
@@ -50,7 +53,8 @@ func (r *PostgresRepository) GetRun(ctx context.Context, runID string) (AgentRun
 	err := r.db.QueryRowContext(
 		ctx,
 		`SELECT id, conversation_id, COALESCE(project_id, 0), status, input, pending_tool_call_id,
-		        pending_step_id, transcript_json, created_at, updated_at
+		        pending_step_id, latest_generation_id, approved_generation_id,
+		        transcript_json, created_at, updated_at
 		   FROM agent_runs
 		  WHERE id = $1`,
 		runID,
@@ -62,6 +66,8 @@ func (r *PostgresRepository) GetRun(ctx context.Context, runID string) (AgentRun
 		&run.Input,
 		&run.PendingToolCallID,
 		&run.PendingStepID,
+		&run.LatestGenerationID,
+		&run.ApprovedGenerationID,
 		&transcript,
 		&run.CreatedAt,
 		&run.UpdatedAt,
@@ -89,13 +95,17 @@ func (r *PostgresRepository) SaveRun(ctx context.Context, run AgentRun) error {
 		    SET status = $2,
 		        pending_tool_call_id = $3,
 		        pending_step_id = $4,
-		        transcript_json = $5,
-		        updated_at = $6
+		        latest_generation_id = $5,
+		        approved_generation_id = $6,
+		        transcript_json = $7,
+		        updated_at = $8
 		  WHERE id = $1`,
 		run.ID,
 		run.Status,
 		run.PendingToolCallID,
 		run.PendingStepID,
+		run.LatestGenerationID,
+		run.ApprovedGenerationID,
 		transcript,
 		run.UpdatedAt,
 	)

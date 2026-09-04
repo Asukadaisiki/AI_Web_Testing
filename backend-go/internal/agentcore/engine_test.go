@@ -174,3 +174,49 @@ func TestEngineRecordsToolFailureBeforeRunFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineBindsApprovalToLatestGeneration(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{{Content: "已批准。"}}}
+	repository := NewMemoryRepository()
+	runService := NewService(repository)
+	registry, err := tools.NewRegistry(AskUserTool{})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	engine := NewEngine(runService, model, registry, 2)
+	run, err := runService.StartRun(context.Background(), "conversation-1", "generate")
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	generationID := int64(9)
+	run.LatestGenerationID = &generationID
+	if saveErr := runService.SaveRun(context.Background(), run); saveErr != nil {
+		t.Fatalf("SaveRun() error = %v", saveErr)
+	}
+	run, pending, err := runService.RequestUserInput(
+		context.Background(),
+		run.ID,
+		AskUserRequest{Questions: []Question{{
+			ID:       "approve_dsl",
+			Prompt:   "批准 DSL？",
+			Type:     QuestionConfirm,
+			Required: true,
+		}}},
+	)
+	if err != nil {
+		t.Fatalf("RequestUserInput() error = %v", err)
+	}
+
+	run, err = engine.Resume(
+		context.Background(),
+		run.ID,
+		pending.ToolCallID,
+		ResumeToolCallRequest{Answers: map[string]any{"approve_dsl": true}},
+	)
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if run.ApprovedGenerationID == nil || *run.ApprovedGenerationID != generationID {
+		t.Fatalf("approved generation = %#v", run.ApprovedGenerationID)
+	}
+}

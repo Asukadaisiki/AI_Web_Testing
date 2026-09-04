@@ -8,6 +8,16 @@
 - HTTP/SSE API
 - DSL、执行队列和报告的应用层编排
 
+当前 Agent 工具：
+
+- `ask_user_question`
+- `explore_page`
+- `explore_flow`
+- `validate_page_elements`
+- `generate_dsl`
+- `execute_dsl`
+- `get_report`
+
 Python `backend/` 在迁移期间继续提供现有 API，并长期保留 Playwright、A11y、Locator 和 Evidence 浏览器执行能力。
 
 ## 目录
@@ -49,3 +59,5 @@ go run ./cmd/api
 内存 Repository 仅用于快速单元测试。
 
 创建 Run 返回 `202 Accepted` 后，Agent 在后台运行。客户端通过 SSE 订阅进度；断线或刷新后带 `after_seq` 或 `Last-Event-ID` 恢复，服务会先重放 PostgreSQL 事件，再推送实时事件。
+
+`execute_dsl` 只接受当前 Run 已由用户批准的 generation ID。执行通过现有 PostgreSQL Batch/Job 队列交给 Python Worker；`get_report` 在 Go 后端等待 Batch 终态，避免 LLM 高频轮询。

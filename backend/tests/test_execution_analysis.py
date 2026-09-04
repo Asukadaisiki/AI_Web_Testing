@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.application.reporting.analysis_service import analyze_batch, analyze_run
+from app.application.reporting.analysis_service import analyze_batch, analyze_run, analyze_runs
 from app.db.base import Base
 from app.models import (
     DSLAntiPattern,
@@ -18,7 +19,7 @@ from app.models import (
     User,
 )
 from app.reporters import build_execution_report
-from app.schemas.executions import LocatorTrace, StepExecutionEvidence
+from app.schemas.executions import ExecutionAnalysis, LocatorTrace, StepExecutionEvidence
 from app.services.failure_signals import build_failure_signal
 
 
@@ -137,6 +138,49 @@ class ExecutionAnalysisContractTest(unittest.TestCase):
         self.assertEqual("all_failed", analysis.conclusion)
         self.assertEqual("completed", refreshed_batch.analysis_status)
         self.assertEqual(refreshed_batch.analysis_json, refreshed_run.analysis_json)
+
+    def test_ai_analysis_cannot_override_deterministic_failure_outcome(self) -> None:
+        run = self._create_failed_run()
+        invalid_ai_result = SimpleNamespace(
+            assistant_message="按钮文案已变化，建议更新定位器。",
+            execution_analysis=ExecutionAnalysis(
+                source="ai",
+                conclusion="all_passed",
+                recommended_action="done",
+            ),
+        )
+
+        with patch(
+            "app.application.reporting.analysis_service.run_analysis_turn",
+            return_value=invalid_ai_result,
+        ):
+            analysis = analyze_run(self.session, run.id)
+
+        self.assertEqual("ai", analysis.source)
+        self.assertEqual("all_failed", analysis.conclusion)
+        self.assertEqual("targeted_retest", analysis.recommended_action)
+        self.assertEqual("locator", analysis.failure_signals[0].category)
+        self.assertEqual(1, len(analysis.failure_details))
+
+    def test_group_analysis_persists_the_same_fact_for_retest_runs(self) -> None:
+        first = self._create_failed_run()
+        second = self._create_failed_run()
+
+        with patch(
+            "app.application.reporting.analysis_service.run_analysis_turn",
+            return_value=None,
+        ):
+            analysis = analyze_runs(
+                self.session,
+                [first.id, second.id],
+                project_id=self.project_id,
+            )
+
+        refreshed_first = self.session.get(TestCaseRun, first.id)
+        refreshed_second = self.session.get(TestCaseRun, second.id)
+        self.assertEqual("all_failed", analysis.conclusion)
+        self.assertEqual("completed", refreshed_first.analysis_status)
+        self.assertEqual(refreshed_first.analysis_json, refreshed_second.analysis_json)
 
 
 if __name__ == "__main__":

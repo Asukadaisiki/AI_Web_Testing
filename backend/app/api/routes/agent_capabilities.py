@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.auth import require_demo_user
-from app.application.agent_capabilities import generate_dsl
+from app.application.agent_capabilities import execute_dsl, generate_dsl, get_report
 from app.db import get_db_session
 from app.models import User
 from app.schemas.agent_capabilities import AgentCapabilityRequest, AgentCapabilityResponse
@@ -39,4 +39,46 @@ def generate_dsl_capability(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except DslGenerationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return AgentCapabilityResponse(result=result)
+
+
+@router.post("/execute-dsl", response_model=AgentCapabilityResponse)
+def execute_dsl_capability(
+    payload: AgentCapabilityRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
+) -> AgentCapabilityResponse:
+    if not payload.run_id:
+        raise HTTPException(status_code=422, detail="run_id is required")
+    try:
+        result = execute_dsl(
+            session,
+            project_id=payload.project_id,
+            actor_user_id=current_user.id,
+            conversation_id=payload.conversation_id,
+            agent_run_id=payload.run_id,
+            arguments=payload.arguments,
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AgentCapabilityResponse(result=result)
+
+
+@router.post("/get-report", response_model=AgentCapabilityResponse)
+def get_report_capability(
+    payload: AgentCapabilityRequest,
+    session: Session = Depends(get_db_session),
+) -> AgentCapabilityResponse:
+    try:
+        result = get_report(
+            session,
+            project_id=payload.project_id,
+            arguments=payload.arguments,
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return AgentCapabilityResponse(result=result)

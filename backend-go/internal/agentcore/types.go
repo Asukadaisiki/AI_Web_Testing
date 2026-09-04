@@ -34,16 +34,18 @@ const (
 )
 
 type AgentRun struct {
-	ID                string    `json:"id"`
-	ConversationID    string    `json:"conversation_id"`
-	ProjectID         int64     `json:"project_id"`
-	Status            RunStatus `json:"status"`
-	Input             string    `json:"input"`
-	PendingToolCallID *string   `json:"pending_tool_call_id,omitempty"`
-	PendingStepID     *string   `json:"pending_step_id,omitempty"`
-	Transcript        []Message `json:"-"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                   string    `json:"id"`
+	ConversationID       string    `json:"conversation_id"`
+	ProjectID            int64     `json:"project_id"`
+	Status               RunStatus `json:"status"`
+	Input                string    `json:"input"`
+	PendingToolCallID    *string   `json:"pending_tool_call_id,omitempty"`
+	PendingStepID        *string   `json:"pending_step_id,omitempty"`
+	LatestGenerationID   *int64    `json:"latest_generation_id,omitempty"`
+	ApprovedGenerationID *int64    `json:"approved_generation_id,omitempty"`
+	Transcript           []Message `json:"-"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type Event struct {

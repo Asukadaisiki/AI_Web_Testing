@@ -10,6 +10,7 @@ from app.schemas.dsl import DSLModel
 
 
 class AgentCapabilityRequest(DSLModel):
+    run_id: str | None = Field(default=None, min_length=1, max_length=64)
     project_id: int = Field(ge=1)
     conversation_id: str = Field(min_length=1, max_length=100)
     arguments: dict[str, Any] = Field(default_factory=dict)

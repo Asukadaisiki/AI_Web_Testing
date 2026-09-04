@@ -54,6 +54,36 @@ def analyze_run(session: Session, execution_id: int) -> ExecutionAnalysis:
     return analysis
 
 
+def analyze_runs(
+    session: Session,
+    execution_ids: list[int],
+    *,
+    project_id: int,
+) -> ExecutionAnalysis:
+    unique_ids = list(dict.fromkeys(execution_ids))
+    details = []
+    for execution_id in unique_ids:
+        detail = get_case_execution(session, execution_id)
+        if detail is None:
+            raise EntityNotFoundError(f"Execution {execution_id} not found.")
+        if detail.project_id != project_id:
+            raise EntityNotFoundError(
+                f"Execution {execution_id} does not belong to project {project_id}."
+            )
+        details.append(detail)
+
+    analysis = _analyze_details(session, details, project_id=project_id)
+    for execution_id in unique_ids:
+        run = session.get(TestCaseRun, execution_id)
+        if run is None:
+            continue
+        run.analysis_json = analysis.model_dump(mode="json")
+        run.analysis_status = "completed"
+    session.commit()
+    _record_anti_patterns_safely(session, unique_ids)
+    return analysis
+
+
 def analyze_batch(session: Session, batch_id: int) -> ExecutionAnalysis | None:
     batch = session.scalar(
         select(ExecutionBatch)
@@ -155,7 +185,30 @@ def _analyze_details(
         update={
             "source": "ai",
             "summary": response.assistant_message,
+            "conclusion": deterministic.conclusion,
+            "case_results": deterministic.case_results,
+            "failure_details": (
+                response.execution_analysis.failure_details
+                or deterministic.failure_details
+            ),
             "failure_signals": deterministic.failure_signals,
+            "suspected_root_cause": (
+                response.execution_analysis.suspected_root_cause
+                or deterministic.suspected_root_cause
+            ),
+            "impact_scope": (
+                response.execution_analysis.impact_scope
+                or deterministic.impact_scope
+            ),
+            "recommended_action": (
+                response.execution_analysis.recommended_action
+                if response.execution_analysis.recommended_action != "done"
+                else deterministic.recommended_action
+            ),
+            "recommended_scope": (
+                response.execution_analysis.recommended_scope
+                or deterministic.recommended_scope
+            ),
         }
     )
     return ai_analysis

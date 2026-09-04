@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
@@ -17,6 +18,10 @@ For a new test, use explore_page for the first known URL, then explore_flow when
 Before generate_dsl, call validate_page_elements with required_elements derived from the user's flow and the collected a11y_nodes.
 If validation reports missing requirements, explore again instead of inventing elements.
 Only call generate_dsl after validation allows it.
+After generate_dsl, use ask_user_question with a required confirm question whose id is approve_dsl.
+Never call execute_dsl until that approval tool result is true for the latest generation.
+When execute_dsl returns a batch_id, use get_report to read its current result.
+If the report is still pending or running, explain that execution is queued and return the report link instead of polling repeatedly.
 Never claim that a tool ran unless its result is present.
 Never invent page elements, execution results, or report data.
 When the task is complete, answer concisely in the user's language.`
@@ -113,12 +118,14 @@ func (e *Engine) Continue(ctx context.Context, runID string) (AgentRun, error) {
 				return AgentRun{}, err
 			}
 			result, executeErr := e.tools.Execute(ctx, tools.Call{
-				RunID:          run.ID,
-				ConversationID: run.ConversationID,
-				ProjectID:      run.ProjectID,
-				ToolCallID:     call.ID,
-				Name:           call.Name,
-				Arguments:      json.RawMessage(call.Arguments),
+				RunID:                run.ID,
+				ConversationID:       run.ConversationID,
+				ProjectID:            run.ProjectID,
+				LatestGenerationID:   run.LatestGenerationID,
+				ApprovedGenerationID: run.ApprovedGenerationID,
+				ToolCallID:           call.ID,
+				Name:                 call.Name,
+				Arguments:            json.RawMessage(call.Arguments),
 			})
 			if executeErr != nil {
 				_ = e.recordToolFailure(ctx, run, stepID, call, executeErr)
@@ -142,6 +149,16 @@ func (e *Engine) Continue(ctx context.Context, runID string) (AgentRun, error) {
 					request,
 				)
 				return waitingRun, err
+			}
+			if result.Artifact != nil && result.Artifact.Type == "dsl_generation" {
+				generationID, parseErr := strconv.ParseInt(result.Artifact.ID, 10, 64)
+				if parseErr != nil {
+					_ = e.recordToolFailure(ctx, run, stepID, call, parseErr)
+					failedRun, _ := e.runs.FailRun(ctx, run, parseErr)
+					return failedRun, parseErr
+				}
+				run.LatestGenerationID = &generationID
+				run.ApprovedGenerationID = nil
 			}
 			if err := e.recordToolResult(ctx, run, stepID, call, result); err != nil {
 				return AgentRun{}, err
@@ -181,6 +198,9 @@ func (e *Engine) Resume(
 		Content:    string(result),
 		ToolCallID: toolCallID,
 	})
+	if approved, ok := request.Answers["approve_dsl"].(bool); ok && approved {
+		run.ApprovedGenerationID = run.LatestGenerationID
+	}
 	if err := e.runs.SaveRun(ctx, run); err != nil {
 		return AgentRun{}, err
 	}
@@ -250,6 +270,17 @@ func (e *Engine) recordToolResult(
 			ToolCallID: call.ID,
 			Payload:    map[string]any{"tool": call.Name},
 		},
+	}
+	if result.Artifact != nil {
+		events = append(events, Event{
+			Type:       EventArtifact,
+			StepID:     stepID,
+			ToolCallID: call.ID,
+			Payload: map[string]any{
+				"type": result.Artifact.Type,
+				"id":   result.Artifact.ID,
+			},
+		})
 	}
 	for _, event := range events {
 		if _, err := e.runs.RecordEvent(ctx, run, event); err != nil {

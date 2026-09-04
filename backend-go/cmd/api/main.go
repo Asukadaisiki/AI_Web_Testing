@@ -46,6 +46,11 @@ func main() {
 	toolHandlers := []tools.Handler{agentcore.AskUserTool{}}
 	toolHandlers = append(toolHandlers, tools.NewBrowserTools(browserClient)...)
 	toolHandlers = append(toolHandlers, tools.NewGenerateDSLTool(browserClient))
+	toolHandlers = append(
+		toolHandlers,
+		tools.NewExecuteDSLTool(browserClient),
+		tools.NewGetReportTool(browserClient),
+	)
 	registry, err := tools.NewRegistry(toolHandlers...)
 	if err != nil {
 		log.Fatalf("configure tools: %v", err)

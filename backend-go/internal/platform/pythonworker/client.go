@@ -19,6 +19,7 @@ type Client struct {
 }
 
 type capabilityRequest struct {
+	RunID          string          `json:"run_id,omitempty"`
 	ProjectID      int64           `json:"project_id"`
 	ConversationID string          `json:"conversation_id"`
 	Arguments      json.RawMessage `json:"arguments"`
@@ -53,6 +54,7 @@ func (c *Client) ExecuteBrowserCapability(
 		ctx,
 		"/internal/browser-capabilities/"+capability,
 		capability,
+		"",
 		projectID,
 		conversationID,
 		arguments,
@@ -69,6 +71,42 @@ func (c *Client) GenerateDSL(
 		ctx,
 		"/internal/agent-capabilities/generate-dsl",
 		"generate_dsl",
+		"",
+		projectID,
+		conversationID,
+		arguments,
+	)
+}
+
+func (c *Client) ExecuteDSL(
+	ctx context.Context,
+	runID string,
+	projectID int64,
+	conversationID string,
+	arguments json.RawMessage,
+) (json.RawMessage, error) {
+	return c.executeCapability(
+		ctx,
+		"/internal/agent-capabilities/execute-dsl",
+		"execute_dsl",
+		runID,
+		projectID,
+		conversationID,
+		arguments,
+	)
+}
+
+func (c *Client) GetReport(
+	ctx context.Context,
+	projectID int64,
+	conversationID string,
+	arguments json.RawMessage,
+) (json.RawMessage, error) {
+	return c.executeCapability(
+		ctx,
+		"/internal/agent-capabilities/get-report",
+		"get_report",
+		"",
 		projectID,
 		conversationID,
 		arguments,
@@ -79,6 +117,7 @@ func (c *Client) executeCapability(
 	ctx context.Context,
 	path string,
 	capability string,
+	runID string,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,
@@ -90,6 +129,7 @@ func (c *Client) executeCapability(
 		return nil, errors.New("Python capability arguments must be valid JSON")
 	}
 	body, err := json.Marshal(capabilityRequest{
+		RunID:          runID,
 		ProjectID:      projectID,
 		ConversationID: conversationID,
 		Arguments:      arguments,

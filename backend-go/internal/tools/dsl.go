@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 )
 
 type DSLCapabilityClient interface {
@@ -55,5 +56,18 @@ func (t GenerateDSLTool) Execute(ctx context.Context, call Call) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Content: content}, nil
+	var generated struct {
+		GenerationID int64 `json:"generation_id"`
+	}
+	if err := json.Unmarshal(content, &generated); err != nil {
+		return Result{}, err
+	}
+	result := Result{Content: content}
+	if generated.GenerationID > 0 {
+		result.Artifact = &Artifact{
+			Type: "dsl_generation",
+			ID:   strconv.FormatInt(generated.GenerationID, 10),
+		}
+	}
+	return result, nil
 }

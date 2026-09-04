@@ -283,14 +283,14 @@ def retest_cases(
 
     execution_analysis = None
     if should_run_analysis(execution_summaries):
-        analysis_response = run_analysis_turn(
-            execution_summaries=execution_summaries,
-            db_session=session,
+        from app.application.reporting.analysis_service import analyze_runs
+
+        execution_analysis = analyze_runs(
+            session,
+            [item.execution_id for item in execution_summaries],
             project_id=_get_active_project_id(planning_session) or 0,
         )
-        if analysis_response and analysis_response.execution_analysis:
-            execution_analysis = analysis_response.execution_analysis
-            assistant_message = f"{assistant_message}\n\n---\n\n{analysis_response.assistant_message}"
+        assistant_message = f"{assistant_message}\n\n---\n\n{execution_analysis.summary}"
 
     session.add(
         AIPlanningMessage(

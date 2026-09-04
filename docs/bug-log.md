@@ -68,7 +68,7 @@
 ## BUG-100 | LLM 失败归因可产生与失败事实矛盾的结构化结论
 
 - 日期：2026-09-04
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：DeepSeek LLM 能力实测
 - 描述：向完整 Planning ReAct Agent 输入明确的 locator 失败信号后，模型自然语言正确识别 `Login` 文案变为 `Sign in`，但最终 `ExecutionAnalysis` 为 `conclusion=all_passed`、`recommended_action=done`，且 `failure_details` 为空。
@@ -78,14 +78,14 @@
   3. 检查返回的 `assistant_message` 与 `execution_analysis`。
 - 影响：自然语言总结看似正确，但自动编排若消费结构化字段会把失败误判为全部通过并停止修复；报告标签也可能与 FailureSignal 冲突。
 - 根因：`analyze_results` 解析允许缺失或不完整的 `analysis` 对象通过 `ExecutionAnalysis` 默认值补全，且没有根据已知 FailureSignal 对 `conclusion`、`recommended_action` 和失败明细做一致性校验。
-- 处理：待收紧分析输出 Schema，并在持久化前使用确定性结果约束 LLM 增强字段；存在失败信号时禁止 `all_passed/done`，模型缺失字段时保留确定性结论。
-- 验证：真实模型完整 ReAct 请求成功返回；自然语言根因正确，但结构化结果稳定复现上述矛盾。
+- 处理：持久化前由确定性分析覆盖 conclusion、case results 和 FailureSignal；LLM 仅增强摘要、根因、影响范围和修复建议。存在失败信号且 LLM 返回 `done` 时保留确定性的 `targeted_retest`。
+- 验证：新增回归测试注入 `all_passed/done` 的错误 AI 结果，最终持久化仍为 `all_failed/targeted_retest`，并保留 locator FailureSignal 和失败明细。
 - 关联记录：`docs/execution-log.md#2026-09-04--deepseek-llm-能力实测`
 
 ## BUG-099 | Planning 复测绕过统一执行分析持久化
 
 - 日期：2026-09-04
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：执行归因与复测循环现状核验
 - 描述：`POST /ai-planning/sessions/{session_id}/retest` 通过 `execute_case()` 重跑原用例，之后直接调用 `run_analysis_turn()` 并把结果写入 Planning 消息，但没有调用统一的 `analyze_run()`，也没有把分析写入复测产生的 `TestCaseRun.analysis_json`。
@@ -95,8 +95,8 @@
   3. 查询本次新建的 Run 报告，分析仍可能保持 `pending` 且缺少同一份持久化 `ExecutionAnalysis`。
 - 影响：复测会产生执行结果和会话内分析，但 Report Core、执行详情与 Planning 消息不再共享同一分析事实；anti-pattern 统一沉淀也可能被绕过。
 - 根因：复测服务保留了统一分析服务落地前的“执行后直接调用 Planning Agent”旧路径。
-- 处理：待将复测改为 Batch/Job 执行，或在每个 Run 终态统一调用 `analyze_run()`，并只从持久化分析构造 Planning 消息。
-- 验证：静态核对 `analysis_retest_service.py::retest_cases()`、`executions.py::execute_case_route()` 和 `analysis_service.py::analyze_run()` 的调用关系；未执行真实复测。
+- 处理：新增 `analyze_runs()` 聚合入口；Planning 复测完成后对本轮全部 execution ID 生成一次统一分析，将同一事实持久化到每个 Run，并从该持久化结果构造 Planning 消息和 anti-pattern。
+- 验证：新增双 Run 回归测试，确认聚合分析为 `all_failed`、两个 Run 均为 `analysis_status=completed` 且 `analysis_json` 一致。
 - 关联记录：`docs/execution-log.md#2026-09-04--执行归因与复测循环现状核验`
 
 ## BUG-098 | 缺陷日志重复编号导致开放状态统计失真

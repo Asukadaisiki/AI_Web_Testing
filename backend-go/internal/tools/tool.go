@@ -18,12 +18,14 @@ type Definition struct {
 }
 
 type Call struct {
-	RunID          string          `json:"run_id"`
-	ConversationID string          `json:"conversation_id"`
-	ProjectID      int64           `json:"project_id"`
-	ToolCallID     string          `json:"tool_call_id"`
-	Name           string          `json:"name"`
-	Arguments      json.RawMessage `json:"arguments"`
+	RunID                string          `json:"run_id"`
+	ConversationID       string          `json:"conversation_id"`
+	ProjectID            int64           `json:"project_id"`
+	LatestGenerationID   *int64          `json:"latest_generation_id,omitempty"`
+	ApprovedGenerationID *int64          `json:"approved_generation_id,omitempty"`
+	ToolCallID           string          `json:"tool_call_id"`
+	Name                 string          `json:"name"`
+	Arguments            json.RawMessage `json:"arguments"`
 }
 
 type Result struct {

@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | AgentCore DSL 审批、执行与报告闭环
+
+- 任务：将候选 DSL 审批、正式执行和报告读取接入 Go AgentCore，并修复复测与归因事实链。
+- 操作：AgentRun 新增 latest/approved generation 绑定及 Alembic 0033；`generate_dsl` 发布 artifact；用户通过 `approve_dsl` 工具结果批准当前版本，`execute_dsl` 强制校验批准 ID 后创建正式 Case 和幂等 Batch；新增 `get_report` 工具并由后端等待终态；修复 BUG-099 的复测统一持久化和 BUG-100 的确定性结论覆盖。
+- 结果：真实链路完成 `explore -> validate -> generate -> approve -> execute -> report`：generation 3 创建 Case 6 和 Batch 3，Worker 执行 3/3 步通过，Report Core 返回 `passed`、`pass_rate=1.0` 和 `analysis_status=completed`。LLM 不能伪造审批，也不能用错误结构化结论覆盖失败事实。
+- 验证：Go 全量测试、vet 和编译通过；Python 7 个合同测试、compileall 和 `alembic check` 通过；Alembic 升级至 0033；真实 Playwright/队列/报告链路通过。测试实体将在最终联调完成后统一清理。
+- 后续：实现透明 `fix_and_retry` RepairAttempt 流程，再将前端切换到 Go Agent 事件协议。
+
 ## 2026-09-04 | Go AgentCore 探索、验证与 DSL 生成链路
 
 - 任务：让 Go AgentCore 自主调用现有 Python 浏览器能力并生成经过页面元素验证的 DSL。

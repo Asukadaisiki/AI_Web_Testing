@@ -90,6 +90,14 @@ func cloneRun(run AgentRun) AgentRun {
 		pendingStepID := *run.PendingStepID
 		run.PendingStepID = &pendingStepID
 	}
+	if run.LatestGenerationID != nil {
+		latestGenerationID := *run.LatestGenerationID
+		run.LatestGenerationID = &latestGenerationID
+	}
+	if run.ApprovedGenerationID != nil {
+		approvedGenerationID := *run.ApprovedGenerationID
+		run.ApprovedGenerationID = &approvedGenerationID
+	}
 	run.Transcript = append([]Message(nil), run.Transcript...)
 	for index := range run.Transcript {
 		run.Transcript[index].ToolCalls = append([]ModelTool(nil), run.Transcript[index].ToolCalls...)

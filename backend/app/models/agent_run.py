@@ -44,6 +44,16 @@ class AgentRun(Base):
     input: Mapped[str] = mapped_column(Text, nullable=False)
     pending_tool_call_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     pending_step_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    latest_generation_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("dsl_generation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_generation_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("dsl_generation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     transcript_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     last_event_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
