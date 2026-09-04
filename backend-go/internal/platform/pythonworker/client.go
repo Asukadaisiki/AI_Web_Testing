@@ -113,6 +113,23 @@ func (c *Client) GetReport(
 	)
 }
 
+func (c *Client) PrepareFixAndRetry(
+	ctx context.Context,
+	projectID int64,
+	conversationID string,
+	arguments json.RawMessage,
+) (json.RawMessage, error) {
+	return c.executeCapability(
+		ctx,
+		"/internal/agent-capabilities/fix-and-retry",
+		"fix_and_retry",
+		"",
+		projectID,
+		conversationID,
+		arguments,
+	)
+}
+
 func (c *Client) executeCapability(
 	ctx context.Context,
 	path string,

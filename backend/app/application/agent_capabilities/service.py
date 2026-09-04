@@ -110,6 +110,76 @@ def get_report(
     return build_batch_report(session, batch_id).model_dump(mode="json")
 
 
+def prepare_fix_and_retry(
+    session: Session,
+    *,
+    project_id: int,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    report = get_report(session, project_id=project_id, arguments=arguments)
+    if report["status"] == "passed":
+        return {
+            "status": "not_required",
+            "source_batch_id": report["id"],
+            "strategy": "none",
+            "reason": "The execution already passed.",
+            "report": report,
+        }
+    if report["status"] in {"pending", "running"}:
+        return {
+            "status": "wait_execution",
+            "source_batch_id": report["id"],
+            "strategy": "wait",
+            "reason": "The source execution has not reached a terminal state.",
+            "report": report,
+        }
+
+    failure_signals = [
+        signal
+        for signal in (report.get("analysis") or {}).get("failure_signals", [])
+        if isinstance(signal, dict)
+    ]
+    if not failure_signals:
+        failure_signals = [
+            latest["failure_signal"]
+            for job in report.get("jobs", [])
+            if isinstance(job, dict)
+            and isinstance((latest := job.get("latest_execution")), dict)
+            and isinstance(latest.get("failure_signal"), dict)
+        ]
+    categories = {signal.get("category") for signal in failure_signals}
+    if categories & {"locator", "navigation"}:
+        strategy = "re_explore"
+        reason = "Page structure or navigation evidence is stale or incomplete."
+    elif "assertion" in categories:
+        strategy = "regenerate_dsl"
+        reason = "The expected result or assertion logic must be revised."
+    else:
+        strategy = "manual"
+        reason = "Configuration, network, runner, or unknown failures require manual review."
+
+    source_dsl = None
+    source_execution_id = None
+    for job in report.get("jobs", []):
+        latest = job.get("latest_execution") if isinstance(job, dict) else None
+        if not isinstance(latest, dict) or latest.get("status") == "passed":
+            continue
+        source_execution_id = latest.get("id")
+        source_dsl = latest.get("dsl_snapshot")
+        break
+
+    return {
+        "status": "repair_ready" if strategy != "manual" else "manual_required",
+        "source_batch_id": report["id"],
+        "source_execution_id": source_execution_id,
+        "strategy": strategy,
+        "reason": reason,
+        "failure_signals": failure_signals,
+        "source_dsl": source_dsl,
+        "report": report,
+    }
+
+
 def _execution_result(session: Session, batch_id: int) -> dict[str, Any]:
     detail = build_batch_detail(session, batch_id)
     case_id = detail.jobs[0].case_id if detail.jobs else None

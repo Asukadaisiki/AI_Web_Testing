@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | AgentCore 透明修复与重执行闭环
+
+- 任务：接入非黑盒 `fix_and_retry`，验证失败事实、修复策略、DSL 重生成、人工审批和重执行的完整链路。
+- 操作：Python Capability Worker 新增修复计划接口，基于 Batch/Run 的 FailureSignal 选择 `re_explore`、`regenerate_dsl` 或人工处理并返回源 DSL；Go 注册 `fix_and_retry` 工具和 repair plan artifact；Run 详情投影补充 DSL snapshot；`get_report` 默认等待 Batch 终态；增加 `analysis_status` 数据库默认值以兼容滚动期间的旧 Worker；将报告摘要纳入确定性事实层。
+- 结果：真实 assertion 失败 Batch 经 Agent 调用 `fix_and_retry -> explore_page -> validate_page_elements -> generate_dsl -> ask_user_question -> execute_dsl -> get_report` 完成修复，审批前未执行，审批后新 Batch 3/3 步通过且通过率 100%；修复策略和事件流完整可审计。
+- 验证：Go `go test ./...`、`go vet ./...`、编译通过；Python 12 个聚焦合同测试与 compileall 通过；Alembic 当前为 0034 且 `alembic check` 无差异；真实 DeepSeek、Playwright、PostgreSQL 队列和报告链路通过。临时 Run、generation、Case、Batch、anti-pattern、截图及本次服务进程已清理。
+- 后续：将前端 Planning 工作台切换到 Go AgentRun/ToolCall/SSE 协议，并完成浏览器 E2E 验收。
+
 ## 2026-09-04 | AgentCore DSL 审批、执行与报告闭环
 
 - 任务：将候选 DSL 审批、正式执行和报告读取接入 Go AgentCore，并修复复测与归因事实链。

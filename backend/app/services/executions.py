@@ -544,6 +544,7 @@ def _to_execution_detail(session: Session, record: TestCaseRun, *, case_name: st
             analysis_json = batch.analysis_json
     return StoredCaseExecutionDetail(
         **summary.model_dump(),
+        dsl_snapshot=record.dsl_snapshot,
         report=report,
         analysis_status=analysis_status,
         analysis=ExecutionAnalysis.model_validate(analysis_json) if analysis_json else None,

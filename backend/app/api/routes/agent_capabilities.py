@@ -7,7 +7,12 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.auth import require_demo_user
-from app.application.agent_capabilities import execute_dsl, generate_dsl, get_report
+from app.application.agent_capabilities import (
+    execute_dsl,
+    generate_dsl,
+    get_report,
+    prepare_fix_and_retry,
+)
 from app.db import get_db_session
 from app.models import User
 from app.schemas.agent_capabilities import AgentCapabilityRequest, AgentCapabilityResponse
@@ -73,6 +78,24 @@ def get_report_capability(
 ) -> AgentCapabilityResponse:
     try:
         result = get_report(
+            session,
+            project_id=payload.project_id,
+            arguments=payload.arguments,
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AgentCapabilityResponse(result=result)
+
+
+@router.post("/fix-and-retry", response_model=AgentCapabilityResponse)
+def fix_and_retry_capability(
+    payload: AgentCapabilityRequest,
+    session: Session = Depends(get_db_session),
+) -> AgentCapabilityResponse:
+    try:
+        result = prepare_fix_and_retry(
             session,
             project_id=payload.project_id,
             arguments=payload.arguments,

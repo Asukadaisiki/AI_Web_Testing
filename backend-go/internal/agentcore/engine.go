@@ -21,7 +21,8 @@ Only call generate_dsl after validation allows it.
 After generate_dsl, use ask_user_question with a required confirm question whose id is approve_dsl.
 Never call execute_dsl until that approval tool result is true for the latest generation.
 When execute_dsl returns a batch_id, use get_report to read its current result.
-If the report is still pending or running, explain that execution is queued and return the report link instead of polling repeatedly.
+The get_report tool waits for a terminal result by default; call it once instead of polling repeatedly.
+For a failed batch, call fix_and_retry first and follow its strategy. Never skip DSL validation or approval during repair.
 Never claim that a tool ran unless its result is present.
 Never invent page elements, execution results, or report data.
 When the task is complete, answer concisely in the user's language.`

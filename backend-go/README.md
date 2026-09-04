@@ -17,6 +17,7 @@
 - `generate_dsl`
 - `execute_dsl`
 - `get_report`
+- `fix_and_retry`
 
 Python `backend/` 在迁移期间继续提供现有 API，并长期保留 Playwright、A11y、Locator 和 Evidence 浏览器执行能力。
 
@@ -60,4 +61,4 @@ go run ./cmd/api
 
 创建 Run 返回 `202 Accepted` 后，Agent 在后台运行。客户端通过 SSE 订阅进度；断线或刷新后带 `after_seq` 或 `Last-Event-ID` 恢复，服务会先重放 PostgreSQL 事件，再推送实时事件。
 
-`execute_dsl` 只接受当前 Run 已由用户批准的 generation ID。执行通过现有 PostgreSQL Batch/Job 队列交给 Python Worker；`get_report` 在 Go 后端等待 Batch 终态，避免 LLM 高频轮询。
+`execute_dsl` 只接受当前 Run 已由用户批准的 generation ID。执行通过现有 PostgreSQL Batch/Job 队列交给 Python Worker；`get_report` 在 Go 后端等待 Batch 终态，避免 LLM 高频轮询。失败后 `fix_and_retry` 返回失败事实、源 DSL 和修复策略，Agent 仍需显式完成探索、验证、重新生成、用户审批和重执行。

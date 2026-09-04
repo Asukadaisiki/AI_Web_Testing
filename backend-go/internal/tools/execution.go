@@ -23,6 +23,12 @@ type ExecutionCapabilityClient interface {
 		conversationID string,
 		arguments json.RawMessage,
 	) (json.RawMessage, error)
+	PrepareFixAndRetry(
+		ctx context.Context,
+		projectID int64,
+		conversationID string,
+		arguments json.RawMessage,
+	) (json.RawMessage, error)
 }
 
 type ExecuteDSLTool struct {
@@ -189,4 +195,56 @@ func isTerminalExecutionStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+type FixAndRetryTool struct {
+	client ExecutionCapabilityClient
+}
+
+func NewFixAndRetryTool(client ExecutionCapabilityClient) FixAndRetryTool {
+	return FixAndRetryTool{client: client}
+}
+
+func (t FixAndRetryTool) Definition() Definition {
+	return Definition{
+		Name: "fix_and_retry",
+		Description: "Start a transparent repair workflow for a failed execution batch. " +
+			"Returns the failure facts, source DSL, and required strategy. " +
+			"Follow the returned strategy with exploration when required, validate elements, generate a new DSL, request approval, and execute it.",
+		InputSchema: json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"batch_id":{"type":"integer","minimum":1}
+			},
+			"required":["batch_id"]
+		}`),
+	}
+}
+
+func (t FixAndRetryTool) Execute(ctx context.Context, call Call) (Result, error) {
+	content, err := t.client.PrepareFixAndRetry(
+		ctx,
+		call.ProjectID,
+		call.ConversationID,
+		call.Arguments,
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	var response struct {
+		SourceBatchID int64  `json:"source_batch_id"`
+		Status        string `json:"status"`
+	}
+	if err := json.Unmarshal(content, &response); err != nil {
+		return Result{}, err
+	}
+	result := Result{Content: content}
+	if response.SourceBatchID > 0 &&
+		(response.Status == "repair_ready" || response.Status == "manual_required") {
+		result.Artifact = &Artifact{
+			Type: "repair_plan",
+			ID:   strconv.FormatInt(response.SourceBatchID, 10),
+		}
+	}
+	return result, nil
 }

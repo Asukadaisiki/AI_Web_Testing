@@ -184,7 +184,7 @@ def _analyze_details(
     ai_analysis = response.execution_analysis.model_copy(
         update={
             "source": "ai",
-            "summary": response.assistant_message,
+            "summary": deterministic.summary,
             "conclusion": deterministic.conclusion,
             "case_results": deterministic.case_results,
             "failure_details": (

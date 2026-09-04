@@ -14,6 +14,7 @@ type fakeCapabilityClient struct {
 	arguments       json.RawMessage
 	reportResponses []json.RawMessage
 	reportCalls     int
+	repairResponse  json.RawMessage
 }
 
 func (c *fakeCapabilityClient) ExecuteBrowserCapability(
@@ -76,6 +77,22 @@ func (c *fakeCapabilityClient) GetReport(
 	return json.RawMessage(`{"id":3,"status":"passed"}`), nil
 }
 
+func (c *fakeCapabilityClient) PrepareFixAndRetry(
+	_ context.Context,
+	projectID int64,
+	conversationID string,
+	arguments json.RawMessage,
+) (json.RawMessage, error) {
+	c.capability = "fix_and_retry"
+	c.projectID = projectID
+	c.conversationID = conversationID
+	c.arguments = arguments
+	if len(c.repairResponse) > 0 {
+		return c.repairResponse, nil
+	}
+	return json.RawMessage(`{"source_batch_id":3,"status":"repair_ready","strategy":"re_explore"}`), nil
+}
+
 func TestGetReportToolWaitsForTerminalStatus(t *testing.T) {
 	client := &fakeCapabilityClient{
 		reportResponses: []json.RawMessage{
@@ -100,6 +117,44 @@ func TestGetReportToolWaitsForTerminalStatus(t *testing.T) {
 	}
 	if string(result.Content) != `{"id":3,"status":"passed"}` {
 		t.Fatalf("result = %s", result.Content)
+	}
+}
+
+func TestFixAndRetryPublishesRepairPlan(t *testing.T) {
+	client := &fakeCapabilityClient{}
+	handler := NewFixAndRetryTool(client)
+	result, err := handler.Execute(context.Background(), Call{
+		ProjectID:      7,
+		ConversationID: "11",
+		Name:           "fix_and_retry",
+		Arguments:      json.RawMessage(`{"batch_id":3}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Artifact == nil || result.Artifact.Type != "repair_plan" || result.Artifact.ID != "3" {
+		t.Fatalf("artifact = %#v", result.Artifact)
+	}
+}
+
+func TestFixAndRetryDoesNotPublishPlanWhenRepairIsNotRequired(t *testing.T) {
+	client := &fakeCapabilityClient{
+		repairResponse: json.RawMessage(
+			`{"source_batch_id":3,"status":"not_required","strategy":"none"}`,
+		),
+	}
+	handler := NewFixAndRetryTool(client)
+	result, err := handler.Execute(context.Background(), Call{
+		ProjectID:      7,
+		ConversationID: "11",
+		Name:           "fix_and_retry",
+		Arguments:      json.RawMessage(`{"batch_id":3}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Artifact != nil {
+		t.Fatalf("artifact = %#v, want nil", result.Artifact)
 	}
 }
 

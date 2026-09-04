@@ -55,7 +55,12 @@ class TestCaseRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     report: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     failure_signal_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    analysis_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    analysis_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
     analysis_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(),

@@ -48,6 +48,40 @@
 
 ## 问题记录
 
+## BUG-103 | AI 报告摘要可与确定性失败结论矛盾
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：AgentCore 真实失败修复联调
+- 描述：失败 Batch 的 `conclusion`、`case_results`、`FailureSignal` 和 `recommended_action` 已由确定性分析覆盖，但 `summary` 仍直接采用模型回复，出现结构化结论为 `all_failed`、摘要却写“全部通过”的矛盾。
+- 复现步骤：
+  1. 执行一个定位成功但断言值错误的用例。
+  2. 让模型分析失败结果并返回错误的通过摘要。
+  3. 查看 Batch 报告，可见 `conclusion=all_failed`，但 `summary` 表示全部通过。
+- 影响：Agent 修复策略仍正确，但用户界面和下游文本消费者会收到与事实冲突的结论。
+- 根因：BUG-100 修复仅锁定结构化结果字段，遗漏了同样承载执行结论的摘要字段。
+- 处理：`summary` 改为确定性分析输出；AI 仅增强失败明细、根因、影响范围和建议范围。
+- 验证：新增冲突摘要回归断言；Python 执行分析合同测试通过。
+- 关联记录：`docs/execution-log.md#2026-09-04--agentcore-透明修复与重执行闭环`
+
+## BUG-102 | 新分析字段导致滚动期间旧 Worker 无法写入执行记录
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：AgentCore 真实失败用例联调
+- 描述：数据库新增非空 `analysis_status` 后，仍在运行的旧 Worker ORM 不会在 INSERT 中携带该字段，创建 `test_case_runs` 时触发 NOT NULL 约束错误。
+- 复现步骤：
+  1. 在数据库升级分析字段迁移后保留旧版本 Worker 进程。
+  2. 创建并执行一个新 Batch。
+  3. 旧 Worker 插入 Run 时因缺少 `analysis_status` 失败。
+- 影响：滚动升级窗口内新执行无法落库，Batch 会失败且缺少正常步骤证据。
+- 根因：新列仅配置 Python 侧 default，没有数据库 server default，旧进程无法感知新字段。
+- 处理：为 `test_case_runs.analysis_status` 和 `execution_batches.analysis_status` 增加数据库默认值 `pending`，并新增 Alembic 0034。
+- 验证：旧 Worker 成功创建失败 Run 并持久化 assertion FailureSignal；Alembic 0034 已应用且 `alembic check` 无差异。
+- 关联记录：`docs/execution-log.md#2026-09-04--agentcore-透明修复与重执行闭环`
+
 ## BUG-101 | Agent 工具失败前缺少审计事件且 DSL 工具允许无效上下文
 
 - 日期：2026-09-04

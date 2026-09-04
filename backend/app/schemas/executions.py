@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from datetime import date, datetime
 
 from pydantic import Field
@@ -233,6 +233,7 @@ class StoredCaseExecutionSummary(DSLModel):
 
 
 class StoredCaseExecutionDetail(StoredCaseExecutionSummary):
+    dsl_snapshot: dict[str, Any] | None = None
     report: ExecutionReport | None = None
     analysis_status: ExecutionAnalysisStatus = "pending"
     analysis: ExecutionAnalysis | None = None

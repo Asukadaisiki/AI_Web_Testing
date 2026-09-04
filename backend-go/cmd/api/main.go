@@ -50,6 +50,7 @@ func main() {
 		toolHandlers,
 		tools.NewExecuteDSLTool(browserClient),
 		tools.NewGetReportTool(browserClient),
+		tools.NewFixAndRetryTool(browserClient),
 	)
 	registry, err := tools.NewRegistry(toolHandlers...)
 	if err != nil {
