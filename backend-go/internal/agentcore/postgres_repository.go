@@ -24,11 +24,12 @@ func (r *PostgresRepository) CreateRun(ctx context.Context, run AgentRun) error 
 	_, err = r.db.ExecContext(
 		ctx,
 		`INSERT INTO agent_runs (
-			id, conversation_id, status, input, pending_tool_call_id,
+			id, conversation_id, project_id, status, input, pending_tool_call_id,
 			pending_step_id, transcript_json, last_event_seq, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)`,
+		) VALUES ($1, $2, NULLIF($3, 0), $4, $5, $6, $7, $8, 0, $9, $10)`,
 		run.ID,
 		run.ConversationID,
+		run.ProjectID,
 		run.Status,
 		run.Input,
 		run.PendingToolCallID,
@@ -48,7 +49,7 @@ func (r *PostgresRepository) GetRun(ctx context.Context, runID string) (AgentRun
 	var transcript []byte
 	err := r.db.QueryRowContext(
 		ctx,
-		`SELECT id, conversation_id, status, input, pending_tool_call_id,
+		`SELECT id, conversation_id, COALESCE(project_id, 0), status, input, pending_tool_call_id,
 		        pending_step_id, transcript_json, created_at, updated_at
 		   FROM agent_runs
 		  WHERE id = $1`,
@@ -56,6 +57,7 @@ func (r *PostgresRepository) GetRun(ctx context.Context, runID string) (AgentRun
 	).Scan(
 		&run.ID,
 		&run.ConversationID,
+		&run.ProjectID,
 		&run.Status,
 		&run.Input,
 		&run.PendingToolCallID,

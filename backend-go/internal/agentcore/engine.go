@@ -39,7 +39,7 @@ func NewEngine(runs *Service, model Model, registry *tools.Registry, maxSteps in
 }
 
 func (e *Engine) Start(ctx context.Context, conversationID string, input string) (AgentRun, error) {
-	run, err := e.runs.StartRun(ctx, conversationID, input)
+	run, err := e.runs.StartProjectRun(ctx, conversationID, 0, input)
 	if err != nil {
 		return AgentRun{}, err
 	}
@@ -47,7 +47,15 @@ func (e *Engine) Start(ctx context.Context, conversationID string, input string)
 }
 
 func (e *Engine) StartAsync(conversationID string, input string) (AgentRun, error) {
-	run, err := e.runs.StartRun(context.Background(), conversationID, input)
+	return e.StartProjectAsync(conversationID, 0, input)
+}
+
+func (e *Engine) StartProjectAsync(
+	conversationID string,
+	projectID int64,
+	input string,
+) (AgentRun, error) {
+	run, err := e.runs.StartProjectRun(context.Background(), conversationID, projectID, input)
 	if err != nil {
 		return AgentRun{}, err
 	}
@@ -98,6 +106,7 @@ func (e *Engine) Continue(ctx context.Context, runID string) (AgentRun, error) {
 		for _, call := range response.ToolCalls {
 			result, executeErr := e.tools.Execute(ctx, tools.Call{
 				RunID:      run.ID,
+				ProjectID:  run.ProjectID,
 				ToolCallID: call.ID,
 				Name:       call.Name,
 				Arguments:  json.RawMessage(call.Arguments),

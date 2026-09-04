@@ -19,6 +19,7 @@ type Definition struct {
 
 type Call struct {
 	RunID      string          `json:"run_id"`
+	ProjectID  int64           `json:"project_id"`
 	ToolCallID string          `json:"tool_call_id"`
 	Name       string          `json:"name"`
 	Arguments  json.RawMessage `json:"arguments"`

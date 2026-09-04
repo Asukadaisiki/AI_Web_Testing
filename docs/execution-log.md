@@ -58,7 +58,7 @@
 ## 2026-09-04 | AgentCore 异步运行与 SSE 实时重放
 
 - 任务：让 Go Agent Run 非阻塞启动，并统一实时事件推送与 PostgreSQL 历史重放。
-- 操作：新增进程内 EventBroker；事件持久化成功后再发布给订阅者；Run 创建接口改为 `202 Accepted` 并后台驱动 Agent；新增 `/events/stream` SSE 接口，支持 `after_seq` 和 `Last-Event-ID`，先重放历史再推送实时事件和 keep-alive。
+- 操作：新增进程内 EventBroker；事件持久化成功后再发布给订阅者；Run 增加显式项目上下文，创建接口改为 `202 Accepted` 并后台驱动 Agent；新增 `/events/stream` SSE 接口，支持 `after_seq` 和 `Last-Event-ID`，先重放历史再推送实时事件和 keep-alive。
 - 结果：模型调用不再阻塞创建请求；客户端可在 Run 运行期间看到 `run.started -> tool.started -> tool.args.delta -> tool.pending`，断线后按序号补齐事件。慢订阅者不会阻塞 Agent，可从 PostgreSQL 恢复跳过的事件。
 - 验证：`go test ./...`、`go vet ./...` 和 Go API 编译通过；真实服务中创建 Run 立即返回 running，SSE 随后收到 4 条有序事件并停留在用户等待状态；测试数据和本地进程已清理。
 - 后续：接入 `explore_page`、`explore_flow` 和 `validate_page_elements` 工具，并将 Python Browser Worker 收敛为稳定接口。

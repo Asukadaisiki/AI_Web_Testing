@@ -20,7 +20,7 @@ type Handler struct {
 }
 
 type AgentAPI interface {
-	StartAsync(conversationID string, input string) (agentcore.AgentRun, error)
+	StartProjectAsync(conversationID string, projectID int64, input string) (agentcore.AgentRun, error)
 	GetRun(ctx context.Context, runID string) (agentcore.AgentRun, error)
 	ListEvents(ctx context.Context, runID string, afterSeq int64) ([]agentcore.Event, error)
 	Subscribe(runID string) agentcore.Subscription
@@ -52,6 +52,7 @@ func (h *Handler) health(_ context.Context, c *app.RequestContext) {
 
 type startRunRequest struct {
 	ConversationID string `json:"conversation_id" vd:"len($)>0"`
+	ProjectID      int64  `json:"project_id" vd:"$>0"`
 	Message        string `json:"message" vd:"len($)>0"`
 }
 
@@ -61,7 +62,7 @@ func (h *Handler) startRun(_ context.Context, c *app.RequestContext) {
 		writeError(c, consts.StatusBadRequest, err)
 		return
 	}
-	run, err := h.agent.StartAsync(request.ConversationID, request.Message)
+	run, err := h.agent.StartProjectAsync(request.ConversationID, request.ProjectID, request.Message)
 	if err != nil {
 		writeError(c, consts.StatusBadRequest, err)
 		return

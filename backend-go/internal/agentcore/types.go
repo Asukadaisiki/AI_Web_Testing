@@ -35,6 +35,7 @@ const (
 type AgentRun struct {
 	ID                string    `json:"id"`
 	ConversationID    string    `json:"conversation_id"`
+	ProjectID         int64     `json:"project_id"`
 	Status            RunStatus `json:"status"`
 	Input             string    `json:"input"`
 	PendingToolCallID *string   `json:"pending_tool_call_id,omitempty"`

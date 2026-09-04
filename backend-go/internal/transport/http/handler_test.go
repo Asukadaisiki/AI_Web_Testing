@@ -47,7 +47,7 @@ func TestHealth(t *testing.T) {
 
 func TestStartRunAndReplayEvents(t *testing.T) {
 	server := NewServer("127.0.0.1:0", newTestServer(t))
-	body := []byte(`{"conversation_id":"conversation-1","message":"测试登录"}`)
+	body := []byte(`{"conversation_id":"conversation-1","project_id":1,"message":"测试登录"}`)
 	response := ut.PerformRequest(
 		server.Engine,
 		"POST",
@@ -63,7 +63,7 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 	if err := json.Unmarshal(response.Body(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	if run.ID == "" || run.Status != agentcore.RunStatusRunning {
+	if run.ID == "" || run.ProjectID != 1 || run.Status != agentcore.RunStatusRunning {
 		t.Fatalf("run = %#v", run)
 	}
 
@@ -113,7 +113,7 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 
 func TestStartRunRejectsEmptyInput(t *testing.T) {
 	server := NewServer("127.0.0.1:0", newTestServer(t))
-	body := []byte(`{"conversation_id":"conversation-1","message":""}`)
+	body := []byte(`{"conversation_id":"conversation-1","project_id":1,"message":""}`)
 	response := ut.PerformRequest(
 		server.Engine,
 		"POST",

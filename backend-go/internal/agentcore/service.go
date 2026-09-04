@@ -39,6 +39,15 @@ func NewServiceWithDependencies(
 }
 
 func (s *Service) StartRun(ctx context.Context, conversationID string, input string) (AgentRun, error) {
+	return s.StartProjectRun(ctx, conversationID, 0, input)
+}
+
+func (s *Service) StartProjectRun(
+	ctx context.Context,
+	conversationID string,
+	projectID int64,
+	input string,
+) (AgentRun, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	input = strings.TrimSpace(input)
 	if conversationID == "" {
@@ -52,6 +61,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID string, input str
 	run := AgentRun{
 		ID:             s.newID("run"),
 		ConversationID: conversationID,
+		ProjectID:      projectID,
 		Status:         RunStatusRunning,
 		Input:          input,
 		Transcript:     []Message{{Role: "user", Content: input}},
