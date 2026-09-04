@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentcore"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
@@ -54,7 +55,7 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 		&ut.Body{Body: bytes.NewReader(body), Len: len(body)},
 		ut.Header{Key: "Content-Type", Value: "application/json"},
 	).Result()
-	if response.StatusCode() != consts.StatusCreated {
+	if response.StatusCode() != consts.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", response.StatusCode(), response.Body())
 	}
 
@@ -62,8 +63,27 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 	if err := json.Unmarshal(response.Body(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	if run.ID == "" || run.Status != agentcore.RunStatusCompleted {
+	if run.ID == "" || run.Status != agentcore.RunStatusRunning {
 		t.Fatalf("run = %#v", run)
+	}
+
+	for range 100 {
+		runResponse := ut.PerformRequest(
+			server.Engine,
+			"GET",
+			"/api/v2/agent/runs/"+run.ID,
+			nil,
+		).Result()
+		if err := json.Unmarshal(runResponse.Body(), &run); err != nil {
+			t.Fatalf("decode current run: %v", err)
+		}
+		if run.Status == agentcore.RunStatusCompleted {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if run.Status != agentcore.RunStatusCompleted {
+		t.Fatalf("run did not complete: %#v", run)
 	}
 
 	eventsResponse := ut.PerformRequest(
@@ -88,6 +108,7 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 	if payload.Events[4].Type != agentcore.EventRunFinished {
 		t.Fatalf("last event = %#v", payload.Events[4])
 	}
+
 }
 
 func TestStartRunRejectsEmptyInput(t *testing.T) {
@@ -103,5 +124,30 @@ func TestStartRunRejectsEmptyInput(t *testing.T) {
 
 	if response.StatusCode() != consts.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", response.StatusCode(), consts.StatusBadRequest, response.Body())
+	}
+}
+
+func TestEncodeSSEEvent(t *testing.T) {
+	event := agentcore.Event{
+		Seq:   7,
+		Type:  agentcore.EventToolPending,
+		RunID: "run-1",
+		Payload: map[string]any{
+			"tool": "ask_user_question",
+		},
+	}
+	id, eventType, data, err := encodeSSEEvent(event)
+	if err != nil {
+		t.Fatalf("encodeSSEEvent() error = %v", err)
+	}
+	if id != "7" || eventType != "tool.pending" {
+		t.Fatalf("id = %q, eventType = %q", id, eventType)
+	}
+	var decoded agentcore.Event
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("decode event: %v", err)
+	}
+	if decoded.RunID != "run-1" {
+		t.Fatalf("decoded event = %#v", decoded)
 	}
 }

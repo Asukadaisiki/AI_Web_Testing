@@ -35,6 +35,7 @@ go run ./cmd/api
 - `POST /api/v2/agent/runs`
 - `GET /api/v2/agent/runs/{run_id}`
 - `GET /api/v2/agent/runs/{run_id}/events?after_seq={seq}`
+- `GET /api/v2/agent/runs/{run_id}/events/stream?after_seq={seq}`
 - `POST /api/v2/agent/runs/{run_id}/tool-calls/{tool_call_id}/resume`
 
 模型配置复用 `backend/.env` 中的：
@@ -46,3 +47,5 @@ go run ./cmd/api
 正式服务使用 PostgreSQL 保存 AgentRun、完整 transcript、pending tool/step 和事件流。事件序号通过 `agent_runs.last_event_seq` 在数据库中原子分配，保证同一 Run 内单调递增。
 
 内存 Repository 仅用于快速单元测试。
+
+创建 Run 返回 `202 Accepted` 后，Agent 在后台运行。客户端通过 SSE 订阅进度；断线或刷新后带 `after_seq` 或 `Last-Event-ID` 恢复，服务会先重放 PostgreSQL 事件，再推送实时事件。

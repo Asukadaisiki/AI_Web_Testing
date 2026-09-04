@@ -46,6 +46,17 @@ func (e *Engine) Start(ctx context.Context, conversationID string, input string)
 	return e.Continue(ctx, run.ID)
 }
 
+func (e *Engine) StartAsync(conversationID string, input string) (AgentRun, error) {
+	run, err := e.runs.StartRun(context.Background(), conversationID, input)
+	if err != nil {
+		return AgentRun{}, err
+	}
+	go func() {
+		_, _ = e.Continue(context.Background(), run.ID)
+	}()
+	return run, nil
+}
+
 func (e *Engine) Continue(ctx context.Context, runID string) (AgentRun, error) {
 	run, err := e.runs.GetRun(ctx, runID)
 	if err != nil {
@@ -163,6 +174,10 @@ func (e *Engine) GetRun(ctx context.Context, runID string) (AgentRun, error) {
 
 func (e *Engine) ListEvents(ctx context.Context, runID string, afterSeq int64) ([]Event, error) {
 	return e.runs.ListEvents(ctx, runID, afterSeq)
+}
+
+func (e *Engine) Subscribe(runID string) Subscription {
+	return e.runs.Subscribe(runID)
 }
 
 func (e *Engine) toolDefinitions() []ToolDefinition {

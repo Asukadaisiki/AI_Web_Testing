@@ -15,17 +15,24 @@ type IDGenerator func(prefix string) string
 
 type Service struct {
 	repository Repository
+	broker     *EventBroker
 	now        Clock
 	newID      IDGenerator
 }
 
 func NewService(repository Repository) *Service {
-	return NewServiceWithDependencies(repository, time.Now, randomID)
+	return NewServiceWithDependencies(repository, NewEventBroker(), time.Now, randomID)
 }
 
-func NewServiceWithDependencies(repository Repository, now Clock, newID IDGenerator) *Service {
+func NewServiceWithDependencies(
+	repository Repository,
+	broker *EventBroker,
+	now Clock,
+	newID IDGenerator,
+) *Service {
 	return &Service{
 		repository: repository,
+		broker:     broker,
 		now:        now,
 		newID:      newID,
 	}
@@ -73,6 +80,10 @@ func (s *Service) ListEvents(ctx context.Context, runID string, afterSeq int64) 
 		return nil, errors.New("after_seq must not be negative")
 	}
 	return s.repository.ListEvents(ctx, runID, afterSeq)
+}
+
+func (s *Service) Subscribe(runID string) Subscription {
+	return s.broker.Subscribe(runID)
 }
 
 func (s *Service) RequestUserInput(
@@ -248,6 +259,7 @@ func (s *Service) appendEvent(ctx context.Context, run AgentRun, event Event) (E
 	if err != nil {
 		return Event{}, fmt.Errorf("append agent event: %w", err)
 	}
+	s.broker.Publish(persisted)
 	return persisted, nil
 }
 

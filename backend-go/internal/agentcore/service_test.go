@@ -14,6 +14,7 @@ func TestAskUserQuestionPauseAndResume(t *testing.T) {
 	nextID := 0
 	service := NewServiceWithDependencies(
 		repository,
+		NewEventBroker(),
 		func() time.Time { return now },
 		func(prefix string) string {
 			nextID++
