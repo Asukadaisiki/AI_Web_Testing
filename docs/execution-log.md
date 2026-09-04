@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | 同步项目状态与 AI 配置记录到 GitHub
+
+- 任务：将当前项目状态盘点和本地 AI 配置变更记录同步到远端。
+- 操作：仅暂存 `docs/execution-log.md` 与 `docs/bug-log.md`，创建聚焦文档提交并推送当前 `main`；确认 `backend/.env` 被 Git 忽略且未进入提交。
+- 结果：状态盘点、BUG-098 和 DeepSeek/VLM 配置记录已同步到 `origin/main`，本地密钥未进入版本控制。
+- 验证：首次提交 `b4640cf` 后比较本地与远端完整哈希一致，提交计数为 `0/0`。
+- 后续：无。
+
 ## 2026-09-04 | 配置 DeepSeek 文本模型并关闭 VLM
 
 - 任务：本地暂不采用 VLM 定位，统一使用 `deepseek-v4-flash` 处理 Planning 与 DSL 生成。
