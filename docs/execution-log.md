@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | AgentRun 与事件流 PostgreSQL 持久化
+
+- 任务：让 Go AgentCore 的运行状态、对话 transcript、pending checkpoint 和事件在进程重启后可恢复。
+- 操作：新增 `agent_runs`/`agent_events` SQLAlchemy 模型和 Alembic 0032 迁移；实现 Go `PostgresRepository`；使用 `agent_runs.last_event_seq` 在事务中原子分配事件序号；Go 服务启动改为校验数据库连接并使用 PostgreSQL Repository；补充数据库 URL 兼容转换。
+- 结果：AgentCore 不再依赖进程内状态，Run、用户等待点、模型 transcript 和事件可跨进程恢复；内存 Repository 仅保留给单元测试。
+- 验证：`go test ./...`、`go vet ./...` 通过；Alembic 升级至 `20260904_0032` 且 `alembic check` 无差异；真实创建 waiting_user Run 后重启 Go 服务，Run 和 4 条有序事件读取一致；临时数据已清理。
+- 后续：新增实时 SSE 订阅，与 PostgreSQL 事件重放共用同一事件源。
+
 ## 2026-09-04 | Go AgentCore 原生工具调用与人工暂停恢复
 
 - 任务：让 Go AgentCore 使用真实 LLM 原生 tool calling，并跑通 `ask_user_question` 暂停/恢复循环。

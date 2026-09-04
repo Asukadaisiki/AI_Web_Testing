@@ -14,6 +14,7 @@ type Config struct {
 	LLMAPIKey     string
 	LLMModel      string
 	AgentMaxSteps int
+	DatabaseURL   string
 }
 
 func Load() Config {
@@ -33,5 +34,13 @@ func Load() Config {
 		LLMAPIKey:     os.Getenv("AI_PLANNING_API_KEY"),
 		LLMModel:      os.Getenv("AI_PLANNING_MODEL"),
 		AgentMaxSteps: maxSteps,
+		DatabaseURL:   normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
 	}
+}
+
+func normalizeDatabaseURL(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Replace(value, "postgresql+psycopg://", "postgres://", 1)
+	value = strings.Replace(value, "postgresql://", "postgres://", 1)
+	return value
 }

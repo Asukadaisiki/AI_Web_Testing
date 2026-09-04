@@ -43,4 +43,6 @@ go run ./cmd/api
 - `AI_PLANNING_API_KEY`
 - `AI_PLANNING_MODEL`
 
-当前 Repository 为进程内实现，只用于合同和 API 骨架验证。进程重启会清空 Run；进入正式联调前会替换为 PostgreSQL 实现。
+正式服务使用 PostgreSQL 保存 AgentRun、完整 transcript、pending tool/step 和事件流。事件序号通过 `agent_runs.last_event_seq` 在数据库中原子分配，保证同一 Run 内单调递增。
+
+内存 Repository 仅用于快速单元测试。
