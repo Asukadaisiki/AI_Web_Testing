@@ -28,7 +28,7 @@ a {
 /* NotebookLM base card style */
 .nb-card {
   background: #fff;
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
 }
 
@@ -100,6 +100,107 @@ a {
 }
 @keyframes blink {
   50% { opacity: 0; }
+}
+
+.agent-message {
+  width: fit-content;
+  max-width: min(82%, 760px);
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-message-user {
+  margin-left: auto;
+  color: #fff;
+  background: #20242c;
+}
+
+.agent-message-assistant {
+  margin-right: auto;
+  border: 1px solid #d9e0e8;
+  background: #f7f9fb;
+}
+
+.agent-checkpoint {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #d6a84b;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.agent-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid #cfd7e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.agent-tool-row {
+  padding: 9px 0;
+  border-bottom: 1px solid #edf0f3;
+}
+
+.agent-tool-row summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  list-style: none;
+}
+
+.agent-tool-row pre {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: #f4f6f8;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .notebook-layout {
+    display: flex !important;
+    height: auto !important;
+    min-height: 100vh;
+    flex-direction: column;
+    padding: 8px !important;
+    gap: 8px !important;
+  }
+
+  .notebook-left-panel,
+  .notebook-right-panel {
+    width: 100% !important;
+    overflow: visible !important;
+  }
+
+  .notebook-left-panel {
+    min-height: 220px;
+  }
+
+  .notebook-center-panel {
+    width: 100%;
+    min-height: 76vh;
+  }
+
+  .notebook-right-panel {
+    max-height: none;
+  }
+
+  .agent-message {
+    max-width: 94%;
+  }
 }
 
 /* === Preserved from original === */

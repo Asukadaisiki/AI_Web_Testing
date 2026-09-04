@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-104 | DSL 生成器可选择不可定位的文档结构节点
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：AgentCore 前端真实浏览器 E2E
+- 描述：页面探索同时向 DSL 生成器暴露 `RootWebArea`、`StaticText` 和已验证的 `heading`。模型首次生成时选择 `RootWebArea "Example Domain"` 作为 `wait_for/assert_text` 目标，运行时没有 locator candidate，进入 `needs_intervention`。
+- 复现步骤：
+  1. 探索 `https://example.com` 并要求断言首页标题。
+  2. 生成器选择与 h1 同名的 `RootWebArea`。
+  3. 执行 `wait_for RootWebArea "Example Domain"`，所有定位层失败。
+- 影响：元素验证已经找到唯一可用 heading，但首轮执行仍可能因不可定位节点失败，产生无意义的修复和再次审批。
+- 根因：A11y 黑名单未排除仅表示文档根和文本叶子的角色，生成提示中仍将其展示为可用 target。
+- 处理：在页面探索边界过滤 `RootWebArea` 和 `StaticText`，只将可稳定定位的语义节点送入验证与 DSL 生成。
+- 验证：新增 A11y 过滤回归测试；真实重跑生成 `heading "Example Domain"`，首次执行 3/3 步通过且未调用 `fix_and_retry`。
+- 关联记录：`docs/execution-log.md#2026-09-04--前端切换-go-agentcore-并完成浏览器验收`
+
 ## BUG-103 | AI 报告摘要可与确定性失败结论矛盾
 
 - 日期：2026-09-04

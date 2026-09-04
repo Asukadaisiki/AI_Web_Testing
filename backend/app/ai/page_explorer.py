@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 IGNORED_A11Y_ROLES: set[str] = {
     # Internal / non-semantic roles that clutter the tree
     "none", "InlineTextBox", "layout table", "layout table cell",
-    "layout table row", "LineBreak", "generic", "separator",
+    "layout table row", "LineBreak", "generic", "separator", "RootWebArea",
+    "StaticText",
     # Abstraction roles (rarely useful for targeting)
     "roletype", "structure", "widget", "window",
 }

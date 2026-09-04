@@ -1,5 +1,5 @@
 import { Navigate, useParams } from "react-router-dom";
-import { AITestPlanningPanel } from "../components/AITestPlanningPanel";
+import { AgentWorkbench } from "../components/AgentWorkbench";
 import { useQuery } from "@tanstack/react-query";
 import { getAISettings } from "../features/planning/api";
 
@@ -12,7 +12,7 @@ export function PlanningPage() {
   }
 
   return (
-    <AITestPlanningPanel
+    <AgentWorkbench
       aiSettings={aiSettingsQuery.data ?? null}
       sessionId={Number(sessionId)}
     />

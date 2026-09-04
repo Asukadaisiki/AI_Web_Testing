@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | 前端切换 Go AgentCore 并完成浏览器验收
+
+- 任务：将 Planning 工作台从 Python Planning SSE 切换到 Go AgentRun、ToolCall、Checkpoint 和 SSE 重放协议，并完成真实浏览器 E2E。
+- 操作：新增 `features/agent` 类型、API、事件归并和 Run hook；新建 Agent 工作台展示对话、工具轨迹、artifact 和动态问题控件；最近 Run ID 按会话保存在浏览器本地，刷新后从 PostgreSQL 重放事件；Vite 分流 Go/Python 开发代理；三栏布局增加移动端纵向响应式；过滤 `RootWebArea/StaticText` 非定位节点并补回归测试。
+- 结果：前端可创建 Run、实时观察探索/验证/生成/执行/报告工具、在两个审批点暂停恢复，并在刷新后恢复完整运行。干净 E2E 使用 `heading "Example Domain"` 首次执行 3/3 步通过，没有触发修复；另一次 E2E 验证了首次 locator 失败后自动重探索、重新审批并通过的完整自愈路径。
+- 验证：前端 `npm run build` 通过；Python 13 个聚焦测试通过；Playwright 桌面 1440x900 和移动 390x844 截图无横向溢出、控制台错误为 0；最终 Run 为 completed，工具调用 6 次，Batch pass_rate=1.0。全部临时 Run、generation、Case、Batch、execution 和截图已清理。
+- 后续：补充生产环境反向代理配置，并评估将 Planning Session 元数据迁入 Go 控制面。
+
 ## 2026-09-04 | AgentCore 透明修复与重执行闭环
 
 - 任务：接入非黑盒 `fix_and_retry`，验证失败事实、修复策略、DSL 重生成、人工审批和重执行的完整链路。

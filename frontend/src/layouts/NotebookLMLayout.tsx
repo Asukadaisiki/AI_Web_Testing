@@ -23,6 +23,7 @@ export function NotebookLMLayout({
 
   return (
     <div
+      className="notebook-layout"
       style={{
         display: "flex",
         height: "100vh",
@@ -34,7 +35,7 @@ export function NotebookLMLayout({
     >
       {/* Left Panel */}
       <div
-        className="nb-card panel-scroll"
+        className="nb-card panel-scroll notebook-left-panel"
         style={{
           width: 280,
           display: "flex",
@@ -51,7 +52,7 @@ export function NotebookLMLayout({
 
       {/* Center Panel */}
       <div
-        className="nb-card"
+        className="nb-card notebook-center-panel"
         style={{
           flex: 1,
           display: "flex",
@@ -64,6 +65,7 @@ export function NotebookLMLayout({
 
       {/* Right Panel — transparent background, cards float in it */}
       <div
+        className="notebook-right-panel panel-scroll"
         style={{
           width: 340,
           display: "flex",
@@ -71,7 +73,6 @@ export function NotebookLMLayout({
           gap: 12,
           overflowY: "auto",
         }}
-        className="panel-scroll"
       >
         {cards.map((card, index) => (
           <div key={index} className="nb-card" style={{ padding: 16 }}>
