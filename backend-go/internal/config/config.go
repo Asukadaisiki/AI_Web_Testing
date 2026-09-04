@@ -15,6 +15,7 @@ type Config struct {
 	LLMModel      string
 	AgentMaxSteps int
 	DatabaseURL   string
+	PythonAPIURL  string
 }
 
 func Load() Config {
@@ -28,6 +29,10 @@ func Load() Config {
 	if parsed, err := strconv.Atoi(os.Getenv("AGENTCORE_MAX_STEPS")); err == nil && parsed > 0 {
 		maxSteps = parsed
 	}
+	pythonAPIURL := strings.TrimRight(strings.TrimSpace(os.Getenv("PYTHON_API_URL")), "/")
+	if pythonAPIURL == "" {
+		pythonAPIURL = "http://127.0.0.1:8000/api/v1"
+	}
 	return Config{
 		Address:       address,
 		LLMBaseURL:    strings.TrimRight(os.Getenv("AI_PLANNING_BASE_URL"), "/"),
@@ -35,6 +40,7 @@ func Load() Config {
 		LLMModel:      os.Getenv("AI_PLANNING_MODEL"),
 		AgentMaxSteps: maxSteps,
 		DatabaseURL:   normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
+		PythonAPIURL:  pythonAPIURL,
 	}
 }
 

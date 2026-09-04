@@ -29,6 +29,7 @@ const (
 	EventToolPending     EventType = "tool.pending"
 	EventToolResult      EventType = "tool.result"
 	EventToolFinished    EventType = "tool.finished"
+	EventToolFailed      EventType = "tool.failed"
 	EventArtifact        EventType = "artifact.published"
 )
 

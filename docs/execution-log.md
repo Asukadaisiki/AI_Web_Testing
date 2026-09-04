@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | Go AgentCore 探索、验证与 DSL 生成链路
+
+- 任务：让 Go AgentCore 自主调用现有 Python 浏览器能力并生成经过页面元素验证的 DSL。
+- 操作：新增受限的 Python Browser/Agent Capability 路由；复用现有 `explore_page`、`explore_flow`、A11y preflight 和 DSL generator；Go 新增 Python Worker client 及 `explore_page`、`explore_flow`、`validate_page_elements`、`generate_dsl` 工具；元素验证同时支持生成前需求覆盖检查和生成后 locator preflight；Run 显式携带 project context。
+- 结果：真实 Agent 能从用户需求自主完成单页探索、识别 8 个 A11y 节点、验证标题唯一命中、调用 `deepseek-v4-flash` 生成 3 步 DSL，并明确停止在未执行草案阶段。联调发现并修复 BUG-101。
+- 验证：Go `go test ./...`、`go vet ./...`、编译通过；Python 5 个合同测试与 compileall 通过；真实跨进程链路产生 23 条连续事件并以 `run.finished` 收口；临时 Run 和 DSL generation 数据已清理。
+- 后续：增加 DSL artifact 与用户审批状态，接入 `execute_dsl`、`get_report` 和透明 `fix_and_retry`。
+
 ## 2026-09-04 | AgentCore 异步运行与 SSE 实时重放
 
 - 任务：让 Go Agent Run 非阻塞启动，并统一实时事件推送与 PostgreSQL 历史重放。

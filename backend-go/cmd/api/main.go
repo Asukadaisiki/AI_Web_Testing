@@ -9,6 +9,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentcore"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/llm"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/pythonworker"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 	httptransport "github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/transport/http"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -23,8 +24,8 @@ func main() {
 	defer database.Close()
 	pingContext, cancelPing := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelPing()
-	if err := database.PingContext(pingContext); err != nil {
-		log.Fatalf("connect database: %v", err)
+	if pingErr := database.PingContext(pingContext); pingErr != nil {
+		log.Fatalf("connect database: %v", pingErr)
 	}
 
 	repository := agentcore.NewPostgresRepository(database)
@@ -38,7 +39,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure LLM: %v", err)
 	}
-	registry, err := tools.NewRegistry(agentcore.AskUserTool{})
+	browserClient, err := pythonworker.NewClient(cfg.PythonAPIURL, 10*time.Minute)
+	if err != nil {
+		log.Fatalf("configure Python browser worker: %v", err)
+	}
+	toolHandlers := []tools.Handler{agentcore.AskUserTool{}}
+	toolHandlers = append(toolHandlers, tools.NewBrowserTools(browserClient)...)
+	toolHandlers = append(toolHandlers, tools.NewGenerateDSLTool(browserClient))
+	registry, err := tools.NewRegistry(toolHandlers...)
 	if err != nil {
 		log.Fatalf("configure tools: %v", err)
 	}

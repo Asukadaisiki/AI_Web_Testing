@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
@@ -11,6 +12,20 @@ import (
 type scriptedModel struct {
 	responses []ModelResponse
 	requests  [][]Message
+}
+
+type failingTool struct{}
+
+func (failingTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "failing_tool",
+		Description: "Always fails.",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
+}
+
+func (failingTool) Execute(context.Context, tools.Call) (tools.Result, error) {
+	return tools.Result{}, errors.New("expected tool failure")
 }
 
 func (m *scriptedModel) Complete(
@@ -108,6 +123,50 @@ func TestEnginePausesAndResumesWithToolResult(t *testing.T) {
 	}
 	if len(events) != len(wantTypes) {
 		t.Fatalf("len(events) = %d, want %d", len(events), len(wantTypes))
+	}
+	for index, event := range events {
+		if event.Type != wantTypes[index] {
+			t.Fatalf("events[%d].Type = %q, want %q", index, event.Type, wantTypes[index])
+		}
+	}
+}
+
+func TestEngineRecordsToolFailureBeforeRunFailure(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{{
+		ToolCalls: []ModelTool{{
+			ID:        "call-1",
+			Name:      "failing_tool",
+			Arguments: `{}`,
+		}},
+	}}}
+	repository := NewMemoryRepository()
+	runService := NewService(repository)
+	registry, err := tools.NewRegistry(failingTool{})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	engine := NewEngine(runService, model, registry, 2)
+
+	run, err := engine.Start(context.Background(), "conversation-1", "trigger failure")
+	if err == nil {
+		t.Fatal("Start() error = nil, want tool failure")
+	}
+	events, listErr := engine.ListEvents(context.Background(), run.ID, 0)
+	if errors.Is(listErr, ErrRunNotFound) {
+		t.Fatal("failed run was not persisted")
+	}
+	if listErr != nil {
+		t.Fatalf("ListEvents() error = %v", listErr)
+	}
+	wantTypes := []EventType{
+		EventRunStarted,
+		EventToolStarted,
+		EventToolArgsDelta,
+		EventToolFailed,
+		EventRunFailed,
+	}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("events = %#v", events)
 	}
 	for index, event := range events {
 		if event.Type != wantTypes[index] {

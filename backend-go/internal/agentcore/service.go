@@ -101,11 +101,33 @@ func (s *Service) RequestUserInput(
 	runID string,
 	request AskUserRequest,
 ) (AgentRun, Event, error) {
+	run, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return AgentRun{}, Event{}, err
+	}
+	toolCallID := s.newID("tool")
+	stepID := s.newID("step")
+	if _, err := s.RecordEvent(ctx, run, Event{
+		Type:       EventToolStarted,
+		StepID:     stepID,
+		ToolCallID: toolCallID,
+		Payload:    map[string]any{"tool": "ask_user_question"},
+	}); err != nil {
+		return AgentRun{}, Event{}, err
+	}
+	if _, err := s.RecordEvent(ctx, run, Event{
+		Type:       EventToolArgsDelta,
+		StepID:     stepID,
+		ToolCallID: toolCallID,
+		Payload:    map[string]any{"arguments": request},
+	}); err != nil {
+		return AgentRun{}, Event{}, err
+	}
 	return s.RequestUserInputForCall(
 		ctx,
 		runID,
-		s.newID("tool"),
-		s.newID("step"),
+		toolCallID,
+		stepID,
 		request,
 	)
 }
@@ -128,22 +150,6 @@ func (s *Service) RequestUserInputForCall(
 		return AgentRun{}, Event{}, fmt.Errorf("cannot request user input from run status %q", run.Status)
 	}
 
-	if _, eventErr := s.appendEvent(ctx, run, Event{
-		Type:       EventToolStarted,
-		StepID:     stepID,
-		ToolCallID: toolCallID,
-		Payload:    map[string]any{"tool": "ask_user_question"},
-	}); eventErr != nil {
-		return AgentRun{}, Event{}, eventErr
-	}
-	if _, eventErr := s.appendEvent(ctx, run, Event{
-		Type:       EventToolArgsDelta,
-		StepID:     stepID,
-		ToolCallID: toolCallID,
-		Payload:    map[string]any{"arguments": request},
-	}); eventErr != nil {
-		return AgentRun{}, Event{}, eventErr
-	}
 	pendingEvent, err := s.appendEvent(ctx, run, Event{
 		Type:         EventToolPending,
 		StepID:       stepID,

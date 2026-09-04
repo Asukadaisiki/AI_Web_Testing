@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-101 | Agent 工具失败前缺少审计事件且 DSL 工具允许无效上下文
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：Go AgentCore 真实探索到 DSL 生成联调
+- 描述：首轮 `explore_page -> validate_page_elements -> generate_dsl` 中，模型因工具 Schema 过宽而传入缺少 `steps` 的 `current_case`，Python DSL 请求返回 422；同时 Engine 只在工具成功后记录 started/args/result，失败调用仅留下 `run.failed`，无法还原实际参数和失败工具。
+- 复现步骤：
+  1. 让 Agent 为 `https://example.com` 探索并生成首页标题断言 DSL。
+  2. 前两个工具成功后，模型调用 `generate_dsl` 并传入不完整 `current_case`。
+  3. Python 返回 `current_case.steps Field required`；事件流缺少该工具的 started/args。
+- 影响：合法生成链路被可选但无效的上下文字段阻断，且失败审计无法定位模型实际调用参数。
+- 根因：`generate_dsl` 工具暴露了没有完整 JSON Schema 的 `current_case`；Engine 将工具生命周期事件延迟到执行成功后写入。
+- 处理：从首阶段工具 Schema 移除 `current_case/preserve_contracts`；所有工具统一在执行前持久化 `tool.started` 和 `tool.args.delta`，失败时增加 `tool.failed`，成功时记录 result/finished。
+- 验证：同一需求重跑后依次完成 explore、validate、generate，生成 3 步 DSL 并以 23 条事件正常收口。
+- 关联记录：`docs/execution-log.md#2026-09-04--go-agentcore-探索验证与-dsl-生成链路`
+
 ## BUG-100 | LLM 失败归因可产生与失败事实矛盾的结构化结论
 
 - 日期：2026-09-04

@@ -2,8 +2,10 @@
 
 from fastapi import APIRouter
 
+from app.api.routes.agent_capabilities import router as agent_capabilities_router
 from app.api.routes.ai_planning import router as ai_planning_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.browser_capabilities import router as browser_capabilities_router
 from app.api.routes.cases import router as cases_router
 from app.api.routes.corrections import router as corrections_router
 from app.api.routes.dsl import router as dsl_router
@@ -21,6 +23,8 @@ def build_api_router() -> APIRouter:
     api_router = APIRouter(prefix=settings.api_v1_prefix)
     api_router.include_router(health_router)
     api_router.include_router(auth_router)
+    api_router.include_router(agent_capabilities_router)
+    api_router.include_router(browser_capabilities_router)
     api_router.include_router(ai_planning_router)
     api_router.include_router(cases_router)
     api_router.include_router(corrections_router)
