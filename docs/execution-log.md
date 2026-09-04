@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | Go AgentCore 合同与 Hertz 骨架
+
+- 任务：冻结新控制面的第一批跨模块合同，并建立可独立运行的 Go/Hertz 服务骨架。
+- 操作：新增 `backend-go` Go module；定义 AgentRun、统一事件 envelope、问题和暂停恢复数据结构；定义 Repository 与 Tool Registry 接口及内存实现；新增 Hertz 健康检查、Run 创建/查询、事件增量查询和 ToolCall 恢复接口；补充服务、注册表和 HTTP 合同测试。
+- 结果：Go 控制面已能独立启动，创建运行记录、按 Run 维护单调递增事件序号，并完成 `ask_user_question` 的 `running -> waiting_user -> running` 状态转换；当前存储为内存实现，尚未接入 LLM 和 PostgreSQL。
+- 验证：`go test ./...`、`go vet ./...`、`go build -o /tmp/ai-web-testing-agentcore ./cmd/api` 通过；本地启动后 `GET /health` 返回 `{"status":"ok"}`，创建 Run 与查询 `run.started` 事件通过。
+- 后续：增加 PostgreSQL AgentRun/Event/ToolCall 持久化，实现 AgentCore LLM 循环和 SSE 实时/重放统一事件源。
+
 ## 2026-09-04 | 正式采用 Go AgentCore 渐进迁移方案
 
 - 任务：确认并启动以代码可读性和后续迭代效率为优先的后端重构。
