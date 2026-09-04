@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | Go AgentCore 原生工具调用与人工暂停恢复
+
+- 任务：让 Go AgentCore 使用真实 LLM 原生 tool calling，并跑通 `ask_user_question` 暂停/恢复循环。
+- 操作：新增 OpenAI 兼容 LLM client、Agent Engine、对话 transcript、Tool Registry 执行入口和 `AskUserTool`；扩展 Run 保存 pending tool/step，统一记录 message/tool/run 事件；HTTP 创建 Run 改为驱动 Agent 循环，resume 接口将用户答案作为 tool result 送回同一 Run；配置读取复用本地 `backend/.env`。
+- 结果：`deepseek-v4-flash` 可通过原生 `tools/tool_calls` 自主提出问题；Run 能跨两次用户回答保持上下文，从 `running` 进入 `waiting_user`、恢复后再次等待，最终输出两条登录场景计划并进入 `completed`。当前仅注册 `ask_user_question`，其他领域工具将在后续阶段接入。
+- 验证：`go test ./...`、`go vet ./...`、Go API 编译通过；真实启动于 8082 后完成两轮 `ask_user_question`，18 个事件序号连续，包含 start/args/pending/result/message/finished；旧测试进程占用 8081 的问题已清理。
+- 后续：将 Run/Event/ToolCall 接入 PostgreSQL，增加 SSE 实时订阅，再接入页面探索和元素验证工具。
+
 ## 2026-09-04 | Go AgentCore 合同与 Hertz 骨架
 
 - 任务：冻结新控制面的第一批跨模块合同，并建立可独立运行的 Go/Hertz 服务骨架。

@@ -13,10 +13,22 @@ import (
 )
 
 type Handler struct {
-	agent *agentcore.Service
+	agent AgentAPI
 }
 
-func NewServer(address string, agent *agentcore.Service) *server.Hertz {
+type AgentAPI interface {
+	Start(ctx context.Context, conversationID string, input string) (agentcore.AgentRun, error)
+	GetRun(ctx context.Context, runID string) (agentcore.AgentRun, error)
+	ListEvents(ctx context.Context, runID string, afterSeq int64) ([]agentcore.Event, error)
+	Resume(
+		ctx context.Context,
+		runID string,
+		toolCallID string,
+		request agentcore.ResumeToolCallRequest,
+	) (agentcore.AgentRun, error)
+}
+
+func NewServer(address string, agent AgentAPI) *server.Hertz {
 	h := server.New(server.WithHostPorts(address))
 	handler := &Handler{agent: agent}
 
@@ -44,7 +56,7 @@ func (h *Handler) startRun(ctx context.Context, c *app.RequestContext) {
 		writeError(c, consts.StatusBadRequest, err)
 		return
 	}
-	run, err := h.agent.StartRun(ctx, request.ConversationID, request.Message)
+	run, err := h.agent.Start(ctx, request.ConversationID, request.Message)
 	if err != nil {
 		writeError(c, consts.StatusBadRequest, err)
 		return
@@ -85,7 +97,7 @@ func (h *Handler) resumeToolCall(ctx context.Context, c *app.RequestContext) {
 		writeError(c, consts.StatusBadRequest, err)
 		return
 	}
-	run, err := h.agent.ResumeToolCall(
+	run, err := h.agent.Resume(
 		ctx,
 		c.Param("run_id"),
 		c.Param("tool_call_id"),

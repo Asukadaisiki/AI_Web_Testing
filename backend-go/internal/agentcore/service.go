@@ -47,6 +47,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID string, input str
 		ConversationID: conversationID,
 		Status:         RunStatusRunning,
 		Input:          input,
+		Transcript:     []Message{{Role: "user", Content: input}},
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -79,6 +80,22 @@ func (s *Service) RequestUserInput(
 	runID string,
 	request AskUserRequest,
 ) (AgentRun, Event, error) {
+	return s.RequestUserInputForCall(
+		ctx,
+		runID,
+		s.newID("tool"),
+		s.newID("step"),
+		request,
+	)
+}
+
+func (s *Service) RequestUserInputForCall(
+	ctx context.Context,
+	runID string,
+	toolCallID string,
+	stepID string,
+	request AskUserRequest,
+) (AgentRun, Event, error) {
 	if err := validateQuestions(request.Questions); err != nil {
 		return AgentRun{}, Event{}, err
 	}
@@ -90,13 +107,19 @@ func (s *Service) RequestUserInput(
 		return AgentRun{}, Event{}, fmt.Errorf("cannot request user input from run status %q", run.Status)
 	}
 
-	toolCallID := s.newID("tool")
-	stepID := s.newID("step")
 	if _, eventErr := s.appendEvent(ctx, run, Event{
 		Type:       EventToolStarted,
 		StepID:     stepID,
 		ToolCallID: toolCallID,
 		Payload:    map[string]any{"tool": "ask_user_question"},
+	}); eventErr != nil {
+		return AgentRun{}, Event{}, eventErr
+	}
+	if _, eventErr := s.appendEvent(ctx, run, Event{
+		Type:       EventToolArgsDelta,
+		StepID:     stepID,
+		ToolCallID: toolCallID,
+		Payload:    map[string]any{"arguments": request},
 	}); eventErr != nil {
 		return AgentRun{}, Event{}, eventErr
 	}
@@ -113,11 +136,53 @@ func (s *Service) RequestUserInput(
 
 	run.Status = RunStatusWaitingUser
 	run.PendingToolCallID = &toolCallID
+	run.PendingStepID = &stepID
 	run.UpdatedAt = s.now().UTC()
 	if err := s.repository.SaveRun(ctx, run); err != nil {
 		return AgentRun{}, Event{}, fmt.Errorf("save waiting agent run: %w", err)
 	}
 	return run, pendingEvent, nil
+}
+
+func (s *Service) SaveRun(ctx context.Context, run AgentRun) error {
+	run.UpdatedAt = s.now().UTC()
+	return s.repository.SaveRun(ctx, run)
+}
+
+func (s *Service) RecordEvent(ctx context.Context, run AgentRun, event Event) (Event, error) {
+	return s.appendEvent(ctx, run, event)
+}
+
+func (s *Service) CompleteRun(ctx context.Context, run AgentRun) (AgentRun, error) {
+	run.Status = RunStatusCompleted
+	run.PendingToolCallID = nil
+	run.PendingStepID = nil
+	run.UpdatedAt = s.now().UTC()
+	if err := s.repository.SaveRun(ctx, run); err != nil {
+		return AgentRun{}, err
+	}
+	if _, err := s.appendEvent(ctx, run, Event{Type: EventRunFinished}); err != nil {
+		return AgentRun{}, err
+	}
+	return run, nil
+}
+
+func (s *Service) FailRun(ctx context.Context, run AgentRun, cause error) (AgentRun, error) {
+	run.Status = RunStatusFailed
+	run.PendingToolCallID = nil
+	run.PendingStepID = nil
+	run.UpdatedAt = s.now().UTC()
+	if err := s.repository.SaveRun(ctx, run); err != nil {
+		return AgentRun{}, err
+	}
+	payload := map[string]any{}
+	if cause != nil {
+		payload["message"] = cause.Error()
+	}
+	if _, err := s.appendEvent(ctx, run, Event{Type: EventRunFailed, Payload: payload}); err != nil {
+		return AgentRun{}, err
+	}
+	return run, nil
 }
 
 func (s *Service) ResumeToolCall(
@@ -137,8 +202,13 @@ func (s *Service) ResumeToolCall(
 		return AgentRun{}, ErrToolCallMismatch
 	}
 
+	stepID := ""
+	if run.PendingStepID != nil {
+		stepID = *run.PendingStepID
+	}
 	if _, err := s.appendEvent(ctx, run, Event{
 		Type:       EventToolResult,
+		StepID:     stepID,
 		ToolCallID: toolCallID,
 		Payload: map[string]any{
 			"tool":      "ask_user_question",
@@ -150,6 +220,7 @@ func (s *Service) ResumeToolCall(
 	}
 	if _, err := s.appendEvent(ctx, run, Event{
 		Type:       EventToolFinished,
+		StepID:     stepID,
 		ToolCallID: toolCallID,
 		Payload:    map[string]any{"tool": "ask_user_question"},
 	}); err != nil {
@@ -158,6 +229,7 @@ func (s *Service) ResumeToolCall(
 
 	run.Status = RunStatusRunning
 	run.PendingToolCallID = nil
+	run.PendingStepID = nil
 	run.UpdatedAt = s.now().UTC()
 	if err := s.repository.SaveRun(ctx, run); err != nil {
 		return AgentRun{}, fmt.Errorf("save resumed agent run: %w", err)

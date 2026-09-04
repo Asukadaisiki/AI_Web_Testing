@@ -2,16 +2,38 @@ package httptransport
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentcore"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 	"github.com/cloudwego/hertz/pkg/common/ut"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
+type staticModel struct{}
+
+func (staticModel) Complete(
+	_ context.Context,
+	_ []agentcore.Message,
+	_ []agentcore.ToolDefinition,
+) (agentcore.ModelResponse, error) {
+	return agentcore.ModelResponse{Content: "已收到测试需求。"}, nil
+}
+
+func newTestServer(t *testing.T) AgentAPI {
+	t.Helper()
+	runService := agentcore.NewService(agentcore.NewMemoryRepository())
+	registry, err := tools.NewRegistry(agentcore.AskUserTool{})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	return agentcore.NewEngine(runService, staticModel{}, registry, 4)
+}
+
 func TestHealth(t *testing.T) {
-	server := NewServer("127.0.0.1:0", agentcore.NewService(agentcore.NewMemoryRepository()))
+	server := NewServer("127.0.0.1:0", newTestServer(t))
 	response := ut.PerformRequest(server.Engine, "GET", "/health", nil).Result()
 
 	if response.StatusCode() != consts.StatusOK {
@@ -23,7 +45,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestStartRunAndReplayEvents(t *testing.T) {
-	server := NewServer("127.0.0.1:0", agentcore.NewService(agentcore.NewMemoryRepository()))
+	server := NewServer("127.0.0.1:0", newTestServer(t))
 	body := []byte(`{"conversation_id":"conversation-1","message":"测试登录"}`)
 	response := ut.PerformRequest(
 		server.Engine,
@@ -40,7 +62,7 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 	if err := json.Unmarshal(response.Body(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	if run.ID == "" || run.Status != agentcore.RunStatusRunning {
+	if run.ID == "" || run.Status != agentcore.RunStatusCompleted {
 		t.Fatalf("run = %#v", run)
 	}
 
@@ -60,13 +82,16 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 	if err := json.Unmarshal(eventsResponse.Body(), &payload); err != nil {
 		t.Fatalf("decode events: %v", err)
 	}
-	if len(payload.Events) != 1 || payload.Events[0].Type != agentcore.EventRunStarted {
+	if len(payload.Events) != 5 || payload.Events[0].Type != agentcore.EventRunStarted {
 		t.Fatalf("events = %#v", payload.Events)
+	}
+	if payload.Events[4].Type != agentcore.EventRunFinished {
+		t.Fatalf("last event = %#v", payload.Events[4])
 	}
 }
 
 func TestStartRunRejectsEmptyInput(t *testing.T) {
-	server := NewServer("127.0.0.1:0", agentcore.NewService(agentcore.NewMemoryRepository()))
+	server := NewServer("127.0.0.1:0", newTestServer(t))
 	body := []byte(`{"conversation_id":"conversation-1","message":""}`)
 	response := ut.PerformRequest(
 		server.Engine,

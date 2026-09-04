@@ -78,6 +78,7 @@ func TestAskUserQuestionPauseAndResume(t *testing.T) {
 	wantTypes := []EventType{
 		EventRunStarted,
 		EventToolStarted,
+		EventToolArgsDelta,
 		EventToolPending,
 		EventToolResult,
 		EventToolFinished,

@@ -27,11 +27,17 @@ type Call struct {
 type Result struct {
 	Content  json.RawMessage `json:"content,omitempty"`
 	Artifact *Artifact       `json:"artifact,omitempty"`
+	Pending  *Pending        `json:"pending,omitempty"`
 }
 
 type Artifact struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
+}
+
+type Pending struct {
+	Kind    string          `json:"kind"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 type Handler interface {
@@ -83,6 +89,17 @@ func (r *Registry) Get(name string) (Handler, error) {
 		return nil, fmt.Errorf("%w: %s", ErrToolNotFound, name)
 	}
 	return handler, nil
+}
+
+func (r *Registry) Execute(ctx context.Context, call Call) (Result, error) {
+	handler, err := r.Get(call.Name)
+	if err != nil {
+		return Result{}, err
+	}
+	if !json.Valid(call.Arguments) {
+		return Result{}, fmt.Errorf("tool %q arguments are not valid JSON", call.Name)
+	}
+	return handler.Execute(ctx, call)
 }
 
 func (r *Registry) Definitions() []Definition {

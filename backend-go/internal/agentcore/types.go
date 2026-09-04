@@ -1,6 +1,9 @@
 package agentcore
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type RunStatus string
 
@@ -35,6 +38,8 @@ type AgentRun struct {
 	Status            RunStatus `json:"status"`
 	Input             string    `json:"input"`
 	PendingToolCallID *string   `json:"pending_tool_call_id,omitempty"`
+	PendingStepID     *string   `json:"pending_step_id,omitempty"`
+	Transcript        []Message `json:"-"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
@@ -82,4 +87,32 @@ type AskUserRequest struct {
 type ResumeToolCallRequest struct {
 	Answers  map[string]any `json:"answers"`
 	NextStep string         `json:"next_step,omitempty"`
+}
+
+type Message struct {
+	Role       string      `json:"role"`
+	Content    string      `json:"content,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCalls  []ModelTool `json:"tool_calls,omitempty"`
+}
+
+type ModelTool struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type ModelResponse struct {
+	Content   string
+	ToolCalls []ModelTool
+}
+
+type Model interface {
+	Complete(ctx context.Context, messages []Message, tools []ToolDefinition) (ModelResponse, error)
+}
+
+type ToolDefinition struct {
+	Name        string
+	Description string
+	InputSchema []byte
 }

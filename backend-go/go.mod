@@ -4,6 +4,8 @@ go 1.23
 
 require github.com/cloudwego/hertz v0.10.6
 
+require github.com/joho/godotenv v1.5.1
+
 require (
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect

@@ -3,7 +3,8 @@
 `backend-go/` 是 AI Web Testing 的新控制面。它负责：
 
 - AgentRun、Step、ToolCall 和事件协议
-- AgentCore 对话与工具循环
+- OpenAI 兼容的原生 tool calling AgentCore 循环
+- `ask_user_question` 暂停和恢复
 - HTTP/SSE API
 - DSL、执行队列和报告的应用层编排
 
@@ -36,4 +37,10 @@ go run ./cmd/api
 - `GET /api/v2/agent/runs/{run_id}/events?after_seq={seq}`
 - `POST /api/v2/agent/runs/{run_id}/tool-calls/{tool_call_id}/resume`
 
-当前 Repository 为进程内实现，只用于合同和 API 骨架验证。进入正式联调前会替换为 PostgreSQL 实现。
+模型配置复用 `backend/.env` 中的：
+
+- `AI_PLANNING_BASE_URL`
+- `AI_PLANNING_API_KEY`
+- `AI_PLANNING_MODEL`
+
+当前 Repository 为进程内实现，只用于合同和 API 骨架验证。进程重启会清空 Run；进入正式联调前会替换为 PostgreSQL 实现。
