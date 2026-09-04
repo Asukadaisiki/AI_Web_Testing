@@ -3,30 +3,44 @@
 AI 增强的 Web UI 自动化测试平台。
 
 当前仓库采用前后端分离结构：
-- `backend-go/`：建设中的 Go + Hertz AgentCore 与控制面
+- `backend-go/`：Go + Hertz AgentCore 与执行控制面
 - `backend/`：迁移期间的 FastAPI 后端，长期保留 Python Playwright/A11y/Locator Worker
 - `frontend/`：React + TypeScript + Vite 平台 UI
 - `docs/`：产品规划、执行计划、设计文档、执行日志与缺陷日志
 
 ## 当前状态
 
-当前阶段：**执行控制面与 Report Core 第一阶段完成，进入失败事实统一和受控自愈闭环建设**。
+当前阶段：**Go AgentCore 纵向闭环和受控自愈已可用，进入控制面收敛与生产化阶段**。
 
 后端演进方向已经确定：新 AgentCore 与控制面使用 Go，浏览器侧执行能力保留在 Python Worker；Hertz 提供 HTTP/SSE，Kitex 仅用于未来真实拆分的进程间 RPC。迁移期间现有 FastAPI API 继续可用。
 
-截至 2026-09-02：
+截至 2026-09-04：
 
 | 能力域 | 当前状态 |
 |------|------|
-| 平台与工作台 | Dashboard、用例管理、执行中心、报告中心和 Planning 工作台已具备 |
+| 平台与工作台 | Planning 已切换到 Go AgentRun/ToolCall/SSE；用例管理和报告中心继续复用现有平台 API |
 | 结构化执行 | DSL 校验、Playwright Runner、步骤级 evidence 和报告持久化已具备 |
-| 定位系统 | A11y 语义定位为主路径，人工修正优先，VLM 受控降级且默认关闭 |
+| 定位系统 | A11y 语义定位为主路径，过滤不可定位文档节点；VLM 当前关闭 |
 | 执行调度 | PostgreSQL 持久化 Batch/Job 队列、并发限制、幂等、lease、heartbeat 和取消已落地 |
 | 报告聚合 | Report Core 可按 run、batch、project 聚合结果，并返回持久化 FailureSignal 与分析总结 |
-| AI 自愈 | 失败分析、anti-pattern 和历史恢复已接入统一事实链；自动重探索与 DSL 重生成尚未编排 |
-| 质量门禁 | 已恢复执行分析聚焦合同测试；完整后端、前端和浏览器回归分层仍需重建 |
+| AI 自愈 | `fix_and_retry` 可按失败事实执行重探索或 DSL 重生成，并强制经过用户审批后重运行 |
+| 质量门禁 | Go 全量测试/vet/build、Python 合同测试、前端生产构建和真实浏览器 E2E 已通过 |
 
 不再使用单一完成度百分比描述项目状态；各能力的完成标准和风险不同，应以上述能力矩阵、执行日志和缺陷日志为准。
+
+### 2026-09-04 Go AgentCore 与受控自愈
+
+- Go AgentCore 使用原生 tool calling，持久化 AgentRun、事件序号、transcript、checkpoint 和 DSL 审批状态。
+- 前端通过 SSE 实时展示消息、ToolCall 与 artifact，刷新后按事件序号从 PostgreSQL 重放。
+- 工具链已覆盖 `ask_user_question`、页面探索、元素验证、DSL 生成、执行、报告和 `fix_and_retry`。
+- `execute_dsl` 只接受当前 Run 已由用户批准的 generation，模型不能自行绕过审批。
+- 真实浏览器链路已完成探索、验证、生成、审批、执行、报告，以及失败后的修复、再审批和重运行。
+
+下一阶段优先级：
+
+1. 增加生产环境反向代理与 Go/Python 进程管理配置。
+2. 将 Planning Session 元数据逐步收敛到 Go 控制面，减少迁移期双协议。
+3. 扩大跨浏览器回归矩阵，并修复 BUG-098 的历史缺陷编号重复。
 
 ### 2026-09-02 执行控制面与 Report Core
 
@@ -37,12 +51,6 @@ AI 增强的 Web UI 自动化测试平台。
 - Report Core 可读取 run、batch、project 三层报告；`TestCaseRun` 保存 DSL 快照、hash、attempt 和报告版本。
 - 未捕获执行异常会收口为失败报告，避免永久 `running` 记录。
 - 已通过真实 PostgreSQL + Playwright 的 `Batch -> Job -> Run -> Report` smoke 验证，以及 Planning SSE 队列、heartbeat 和取消验证。
-
-下一阶段优先级：
-
-1. 实现带审批门的 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 自愈编排。
-2. 配置 Planning/DSL 模型后完成真实 AI 全链路验收。
-3. 继续扩展后端、前端和浏览器集成测试门禁。
 
 ### 2026-05-31 textContent + DSL 完善（4 次修复）
 
@@ -157,7 +165,7 @@ AI 增强的 Web UI 自动化测试平台。
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
-- 编排失败后的重探索、DSL 重生成、差异审阅和受控重运行
+- 生产反向代理、进程管理和 Planning Session 元数据向 Go 控制面收敛
 - 配置 AI 模型后补齐真实 Planning -> 探索 -> DSL -> 队列执行 -> 报告全链验收
 - 基于当前公开合同恢复自动化测试，不复用已经漂移的旧测试套件
 
