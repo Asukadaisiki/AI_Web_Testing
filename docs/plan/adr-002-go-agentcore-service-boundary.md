@@ -1,7 +1,7 @@
 # ADR-002：Go AgentCore 与 Python Runner 边界
 
 日期：2026-09-04  
-状态：proposed
+状态：accepted
 
 ## 背景
 

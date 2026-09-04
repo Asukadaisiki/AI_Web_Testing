@@ -3,13 +3,16 @@
 AI 增强的 Web UI 自动化测试平台。
 
 当前仓库采用前后端分离结构：
-- `backend/`：FastAPI + SQLAlchemy + Alembic + Playwright Runner
+- `backend-go/`：建设中的 Go + Hertz AgentCore 与控制面
+- `backend/`：迁移期间的 FastAPI 后端，长期保留 Python Playwright/A11y/Locator Worker
 - `frontend/`：React + TypeScript + Vite 平台 UI
 - `docs/`：产品规划、执行计划、设计文档、执行日志与缺陷日志
 
 ## 当前状态
 
 当前阶段：**执行控制面与 Report Core 第一阶段完成，进入失败事实统一和受控自愈闭环建设**。
+
+后端演进方向已经确定：新 AgentCore 与控制面使用 Go，浏览器侧执行能力保留在 Python Worker；Hertz 提供 HTTP/SSE，Kitex 仅用于未来真实拆分的进程间 RPC。迁移期间现有 FastAPI API 继续可用。
 
 截至 2026-09-02：
 
