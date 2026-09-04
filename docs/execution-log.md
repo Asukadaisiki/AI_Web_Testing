@@ -55,6 +55,22 @@
 
 ## 任务记录
 
+## 2026-09-04 | 配置 DeepSeek 文本模型并关闭 VLM
+
+- 任务：本地暂不采用 VLM 定位，统一使用 `deepseek-v4-flash` 处理 Planning 与 DSL 生成。
+- 操作：在被 Git 忽略的 `backend/.env` 中启用 AI Planning 和 AI DSL，统一配置 OpenAI 兼容网关 `https://api.unself.cn/v1` 与 `deepseek-v4-flash`；关闭 AI visual locator 和 VLM 页面注释，清空 VLM 凭据。
+- 结果：Planning 与 DSL 文本模型均已启用；执行定位继续走 A11y/DOM 语义链及人工干预，不调用 VLM。
+- 验证：通过应用 `Settings` 读取确认两个文本模型开关、模型和网关生效，VLM 两个开关关闭且无密钥；向 `/chat/completions` 发送最小请求返回 HTTP 200、模型 `deepseek-v4-flash` 和内容 `OK`。
+- 后续：真实 Planning 全链验收时继续观察 reasoning 流式展示与 DSL 结构化输出质量；API 密钥仅保存在本地忽略文件中，不写入日志或版本控制。
+
+## 2026-09-04 | 当前项目状态盘点
+
+- 任务：基于当前分支、提交、能力说明、缺陷日志和可运行门禁汇总项目状态。
+- 操作：核对 `main` 与 `origin/main`、最近提交和工作树；复核 README 能力矩阵与开放缺陷；统计现行测试资产；执行后端编译、执行分析合同测试、前端生产构建和差异检查。
+- 结果：核心平台、结构化执行、PostgreSQL Batch/Job 队列、Report Core、统一 FailureSignal/ExecutionAnalysis 已落地；当前主缺口是 BUG-090 受控自愈编排、真实 AI 全链验收和自动化回归门禁重建。发现缺陷日志存在重复编号和冲突状态，记录为 BUG-098。
+- 验证：`uv run python -m compileall -q app` 通过；`uv run python -m unittest discover -s tests -p 'test_*.py' -v` 为 2/2 通过；`npm run build` 通过；`git diff --check` 通过；盘点前本地与远端提交计数为 `0/0`。
+- 后续：优先实现 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun`；配置模型后执行真实 AI 链路验收；恢复分层自动化测试；清理 BUG-098 日志状态歧义。
+
 ## 2026-09-02 | 同步执行分析与报告统一链路到 GitHub
 
 - 任务：将 FailureSignal、ExecutionAnalysis、Planning/Report 统一展示及正式报告路由变更同步到远端。
