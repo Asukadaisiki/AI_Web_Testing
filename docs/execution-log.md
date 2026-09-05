@@ -56,6 +56,30 @@
 
 ## 任务记录
 
+## 2026-09-06 | 验证自然语言到正式执行完整链路
+
+- 任务：继续验证自然语言需求经 Go Agent/LLM 生成 DSL、用户审批、正式队列执行和报告聚合的完整链路。
+- 操作：启动 Go AgentService、Browser Worker 和 Execution Worker；以 Automation Exercise Blue Top 购物车目标创建真实 AgentRun；跟踪持久化工具事件并处理探索预算与 DSL 审批 Checkpoint；修复 generate_dsl action/字段 Schema、Harness 工具错误回注、非法 tool arguments 下沉校验、复合 CSS 探索、preflight verified selector 匹配、空 input_values 归一化和报告负耗时保护。
+- 结果：Run `run_70b96dff4dfc833516f4d0a7` 完成；generation 33 经显式审批后创建 Batch 33，Execution 26 在真实 Chromium 中 18/18 步通过，最终 URL 为 `/view_cart`，确定性分析为 `all_passed`，全程未使用 VLM。
+- 验证：Go 全量 test/vet/build、19 项 Browser Worker unittest 通过；检查 AgentRun 事件含 explore/validate/generate/checkpoint/execute/report；检查 Batch 33、Execution 26、DSL snapshot、步骤 evidence 和最终截图；重启 Worker 后复跑 Case 36，Execution 28 再次 18/18 通过且 `duration_ms=11990`。
+- 后续：实施 trajectory、模型 token/latency 和 Observation Compression。
+
+## 2026-09-06 | 实施 Agentic Research 可行性试验
+
+- 任务：制定 Agentic Research SOP 的详细实施工程，设计可验收 Goal，并以 Automation Exercise 实践验证当前工程。
+- 操作：使用研究架构、运行准备度和浏览器子任务并行审计；新增分阶段实施方案、`automationexercise-blue-top-cart` Goal、隔离的 Browser Worker research smoke runner 和指标输出；真实执行 Products 搜索、商品详情、加购和购物车验证；修复可见性后置条件的多匹配与异步等待语义。
+- 结果：当前架构可支撑 SOP 可行性试验；真实 Chromium baseline 连续两次 13/13 步通过，最终购物车包含 Blue Top、单价 Rs. 500、数量 1、总价 Rs. 500，`task_success/execution_success/verification_success=true`，0 VLM、0 recovery，耗时约 11.3 和 11.6 秒。正式研究仍需按计划补 trajectory、指标投影、实验变体和数据集导出。
+- 验证：Goal JSON 校验、Bug 编号检查、Go test/vet/build、Browser Worker compile 与 15 项 unittest、Frontend 4 项 Vitest 与生产构建均通过；两次真实站点结构化结果及最终截图复核通过。Coze CLI 已完成认证检查，但其日志写入用户目录被当前沙箱拦截；真实 smoke 命令完成后也出现宿主根路径清理拦截，不影响已生成的成功结果。
+- 后续：优先实施 Phase R1 Trajectory Foundation，并在消融实验前修复 BUG-116/117/118。
+
+## 2026-09-06 | 评估 Agentic Research SOP 执行条件
+
+- 任务：判断当前项目结构能否直接执行 Agentic Web Testing Research SOP。
+- 操作：逐项核对 AgentRun/Event、Harness Policy、DSL Schema 与 Go 校验、Locator Candidate、Postcondition、Step Evidence、FailureSignal 和 fix-and-retry，并与 SOP 的 trajectory、ablation、metrics、controller、dataset、bandit/RL 要求映射。
+- 结果：现有架构可作为 SOP 的工程底座，已具备候选定位、结构化 DSL、后置验证、步骤证据、失败分类和受控恢复；但尚不能端到端执行研究计划，缺少统一 trajectory/transition 模型、研究事件、实验变体编排、Token/成本等指标、数据集导出、观察路由、策略 Controller、Reward 和 Bandit/RL。
+- 验证：静态检查当前 Go、Python 与前端代码合同，并核对 SOP Week 1–12 的阶段验收目标；未修改业务代码，未运行测试。
+- 后续：优先完成 Week 1–2 的 trajectory schema、持久化、回放/导出和 baseline metrics，再进入 DSL IR 补全及消融实验。
+
 ## 2026-09-06 | 合并 AgentCore 分支并切换 Main 开发
 
 - 任务：拉取并审阅远端新增研究文档，将 `xujinyuan/go-agentcore-v2` 的最终清理提交合并到 `main`，后续直接在 `main` 开发。

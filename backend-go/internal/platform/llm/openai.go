@@ -171,7 +171,7 @@ func (c *OpenAIClient) Complete(
 		ToolCalls: make([]agent.ModelTool, 0, len(message.ToolCalls)),
 	}
 	for _, call := range message.ToolCalls {
-		if call.ID == "" || call.Function.Name == "" || !json.Valid([]byte(call.Function.Arguments)) {
+		if call.ID == "" || call.Function.Name == "" {
 			return agent.ModelResponse{}, errors.New("LLM returned an invalid tool call")
 		}
 		result.ToolCalls = append(result.ToolCalls, agent.ModelTool{

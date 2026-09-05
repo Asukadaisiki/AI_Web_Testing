@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
+from time import monotonic, sleep
 
 from playwright.sync_api import Page
 
@@ -118,7 +119,11 @@ class PostconditionVerifier:
             if value is None:
                 return False
             try:
-                return self._page.locator(f"text={value}").is_visible()
+                return self._wait_for_visibility(
+                    self._page.locator(f"text={value}"),
+                    visible=True,
+                    timeout_ms=pc.timeout_ms,
+                )
             except Exception:
                 return False
 
@@ -126,7 +131,11 @@ class PostconditionVerifier:
             if value is None:
                 return True
             try:
-                return not self._page.locator(f"text={value}").is_visible()
+                return self._wait_for_visibility(
+                    self._page.locator(f"text={value}"),
+                    visible=False,
+                    timeout_ms=pc.timeout_ms,
+                )
             except Exception:
                 return True
 
@@ -134,7 +143,11 @@ class PostconditionVerifier:
             if value is None:
                 return False
             try:
-                return self._page.locator(value).is_visible()
+                return self._wait_for_visibility(
+                    self._page.locator(value),
+                    visible=True,
+                    timeout_ms=pc.timeout_ms,
+                )
             except Exception:
                 return False
 
@@ -142,7 +155,11 @@ class PostconditionVerifier:
             if value is None:
                 return True
             try:
-                return not self._page.locator(value).is_visible()
+                return self._wait_for_visibility(
+                    self._page.locator(value),
+                    visible=False,
+                    timeout_ms=pc.timeout_ms,
+                )
             except Exception:
                 return True
 
@@ -159,6 +176,20 @@ class PostconditionVerifier:
 
         logger.warning("Unknown postcondition type: %s", pc_type)
         return False
+
+    @staticmethod
+    def _any_visible(locator) -> bool:
+        return any(locator.nth(index).is_visible() for index in range(locator.count()))
+
+    @classmethod
+    def _wait_for_visibility(cls, locator, *, visible: bool, timeout_ms: int) -> bool:
+        deadline = monotonic() + timeout_ms / 1000
+        while True:
+            if cls._any_visible(locator) is visible:
+                return True
+            if monotonic() >= deadline:
+                return False
+            sleep(0.05)
 
     # ------------------------------------------------------------------
     # Internal helpers

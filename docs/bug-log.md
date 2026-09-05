@@ -48,6 +48,141 @@
 
 ## 问题记录
 
+## BUG-124 | 执行报告可能返回负数 duration_ms
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：medium
+- 来源：自然语言到正式执行全链路验证
+- 描述：通过的 Execution 26 返回负数 `duration_ms`，开始时间和结束时间相差约 8 小时。
+- 复现步骤：执行正式 Batch 33，并读取 `/api/v2/execution-batches/33/report`。
+- 影响：耗时指标失真，无法用于性能基线和研究统计。
+- 根因：`started_at` 使用数据库 session 时区的 server default，`finished_at` 使用 Python UTC naive 时间，Go 再直接相减。
+- 处理：Python 创建 TestCaseRun 时显式写入 UTC naive `started_at`；Go 报告对历史反向时间戳钳制为 0。
+- 验证：新增 Go duration 单测；重启 Execution Worker 后执行 Case 36，Execution 28 的 `duration_ms=11990`，开始与结束时间均为 UTC 且顺序正确。
+- 关联记录：`docs/execution-log.md#2026-09-06--验证自然语言到正式执行完整链路`
+
+## BUG-123 | 空 input_values 被持久化为 null 导致 Worker 校验失败
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：自然语言到正式执行全链路验证
+- 描述：`execute_dsl` 未传 `input_values` 时，Go 将 nil map 序列化为 JSON `null`，Python `CaseExecutionRequest` 要求字典并拒绝执行。
+- 复现步骤：批准无输入合同的 DSL generation 32，仅传 `generation_id` 调用 `execute_dsl`。
+- 影响：无需输入变量的正式用例无法执行，Batch 32 在进入 Playwright 前失败。
+- 根因：Execution Store 未在持久化前归一化 nil map。
+- 处理：`CreateBatch` 将 nil `InputValues` 归一为非 nil 空 map并持久化 `{}`。
+- 验证：Go PostgreSQL 集成测试增加 `input_values_json = '{}'` 断言；generation 33 对应 Batch 33 执行 18/18 通过。
+- 关联记录：`docs/execution-log.md#2026-09-06--验证自然语言到正式执行完整链路`
+
+## BUG-122 | Preflight 无法识别 verified CSS selector
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：自然语言到 DSL 生成验证
+- 描述：DSL preflight 只按可访问名称匹配 target，不会将 CSS target 与节点 `verified_selectors` 对齐，并把无 target 的 goto/URL 断言误报为零匹配。
+- 影响：`#search_product`、`button.cart` 和购物车行 CSS 等已验证定位器仍被判定为低置信度，阻断 DSL 生成。
+- 根因：`apply_preflight_to_dsl` 缺少 selector 匹配分支，warnings 也未过滤无 target 步骤。
+- 处理：优先按 verified selector 精确匹配节点；仅对有 target 的步骤生成零匹配 warning。
+- 验证：新增 Browser capability 合同测试；完整 generation 32 通过 preflight 并进入审批。
+- 关联记录：`docs/execution-log.md#2026-09-06--验证自然语言到正式执行完整链路`
+
+## BUG-121 | 探索器无法识别复合 CSS 定位器
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Automation Exercise Agent 探索
+- 描述：`button.cart`、`a[href="/view_cart"]` 等复合 CSS 被探索器当作普通文本，导致 Add to cart 未执行、购物车始终为空。
+- 影响：Agent 反复探索并错误判断站点会话无法保留，无法获取 DSL 准入所需证据。
+- 根因：显式 selector 识别仅支持 `#`、`.`、`css=` 和 XPath 开头。
+- 处理：增加保守的 tag+class/tag+attribute CSS 识别。
+- 验证：新增 3 项显式定位器单测；修复后探索得到 S6 购物车行及完整字段。
+- 关联记录：`docs/execution-log.md#2026-09-06--验证自然语言到正式执行完整链路`
+
+## BUG-120 | Tool 参数错误直接终止 AgentRun
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：自然语言到 DSL 生成验证
+- 描述：模型生成不支持 action、缺失字段或非法 JSON tool arguments 时，Harness 记录 `tool.failed` 后立即将整个 Run 标记失败，模型无法根据校验错误自我修正。
+- 影响：结构化校验虽然生效，但 Agent 缺少基本的纠错闭环，复杂 DSL 生成成功率低。
+- 根因：Harness 将工具业务错误等同于基础设施致命错误；OpenAI adapter 也提前拒绝非法 JSON arguments。
+- 处理：将工具错误作为结构化 tool message 回注 transcript并继续受 max-turn 限制的循环；非法 JSON arguments 下沉到 Registry 校验；完善 generate_dsl action/字段 Schema和提示。
+- 验证：Harness 恢复测试、OpenAI adapter 测试和 Tool Schema 测试通过；真实 Run 在 tool failure 后继续修正并最终完成。
+- 关联记录：`docs/execution-log.md#2026-09-06--验证自然语言到正式执行完整链路`
+
+## BUG-119 | 多匹配和异步内容导致可见性后置条件误判
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Automation Exercise 真实 research smoke
+- 描述：`text_visible`、`text_gone`、`element_visible` 和 `element_gone` 直接对可能匹配多个元素的 Locator 调用单元素 `is_visible()`，且不使用 DSL 的 `timeout_ms` 等待异步内容。
+- 复现步骤：
+  1. 搜索 `Blue Top` 并用 `text_visible` 验证搜索结果。
+  2. 或点击 Add to cart 后验证异步弹层文本。
+  3. 动作和最终页面状态均成功，但后置条件被记录为失败。
+- 影响：真实 smoke 首次仅 11/13、修复多匹配后为 12/13；错误失败还会触发 BUG-118 的重复动作风险。
+- 根因：验证器假设 Locator 唯一且内容同步出现，没有按“任一匹配可见”语义和超时窗口检查。
+- 处理：对所有可见性条件遍历匹配项，并按 `timeout_ms` 有界等待目标达到 visible/gone 状态。
+- 验证：新增 2 项 PostconditionVerifier 单测；同一 Automation Exercise Goal 连续两次 13/13 通过，验证成功，0 VLM、0 recovery。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-agentic-research-可行性试验`
+
+## BUG-118 | 候选后置验证失败可能重复执行非幂等动作
+
+- 日期：2026-09-06
+- 状态：open
+- 严重度：high
+- 来源：Agentic Research SOP 可行性审计
+- 描述：候选执行路径在动作已执行但后置条件失败后继续尝试下一个候选，候选耗尽后还会回退到 legacy 路径，可能重复点击、提交或加购。
+- 复现步骤：
+  1. 为 `click` 步骤配置多个候选和一个失败的后置条件。
+  2. 第一个候选成功执行点击，但验证失败。
+  3. Runner 继续尝试后续候选或 legacy fallback。
+- 影响：页面状态可能被重复修改，执行结果与候选策略评估均被污染，不能用于可靠消融实验。
+- 根因：候选循环没有区分“动作未执行”与“动作已执行但验证失败”。
+- 处理：待引入显式 action outcome 和安全重试策略；非幂等动作执行后验证失败时禁止自动换候选重放。
+- 验证：静态确认 `playwright_runner.py::_execute_step_with_candidates` 在 postcondition 失败后执行 `continue`，候选耗尽后进入 legacy fallback。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-agentic-research-可行性试验`
+
+## BUG-117 | network_request 后置条件无条件成功
+
+- 日期：2026-09-06
+- 状态：open
+- 严重度：high
+- 来源：Agentic Research SOP 可行性审计
+- 描述：`network_request` 后置条件当前是占位实现，对任何输入都返回成功。
+- 复现步骤：
+  1. 为任意步骤声明不存在的 `network_request` 后置条件。
+  2. 执行该步骤。
+  3. 验证器仍返回成功。
+- 影响：Verification Success 指标会产生假阳性，无法用于研究实验。
+- 根因：PostconditionVerifier 尚未接入页面请求监听记录。
+- 处理：待将步骤级 network evidence 注入 verifier，并按 URL、方法和状态匹配。
+- 验证：静态确认 `postcondition_verifier.py` 的 `network_request` 分支固定返回 `True`。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-agentic-research-可行性试验`
+
+## BUG-116 | Legacy DSL 路径在动作后采集前置状态
+
+- 日期：2026-09-06
+- 状态：open
+- 严重度：high
+- 来源：Agentic Research SOP 可行性审计
+- 描述：Legacy 执行路径在动作完成后才创建 PostconditionVerifier 并调用 `capture_pre_state`，导致 `url_changes`、`dom_changed` 和 `value_changed` 的前后状态比较失真。
+- 复现步骤：
+  1. 使用不带 candidates 的交互步骤并声明 `url_changes`。
+  2. 执行动作产生页面跳转。
+  3. 验证器在跳转后采集所谓 pre-state。
+- 影响：部分后置验证产生假阴性，影响正式执行可靠性和研究指标有效性。
+- 根因：候选路径与 legacy 路径的 verifier 生命周期不一致。
+- 处理：待统一在动作执行前创建 verifier 并采集状态。
+- 验证：静态确认 `playwright_runner.py` legacy 分支的 pre-state capture 位于动作 dispatch 之后。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-agentic-research-可行性试验`
+
 ## BUG-115 | 当前里程碑错误引入全环境登录鉴权
 
 - 日期：2026-09-05

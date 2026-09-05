@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/cases"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
@@ -84,7 +85,13 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		return nil, fmt.Errorf("decode DSL preflight result: %w", err)
 	}
 	if !validated.Valid || len(validated.Case) == 0 {
-		return nil, errors.New("DSL locator preflight failed")
+		if len(validated.Warnings) > 0 {
+			return nil, fmt.Errorf(
+				"DSL locator preflight failed: %s",
+				strings.Join(validated.Warnings, "; "),
+			)
+		}
+		return nil, errors.New("DSL locator preflight failed without details")
 	}
 	generation, err := c.dsl.CreateGeneration(
 		ctx, actorUserID, projectID, validated.Case, validated.Warnings,

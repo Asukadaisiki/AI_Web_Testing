@@ -199,6 +199,61 @@ func TestGenerateDSLToolForwardsRunContext(t *testing.T) {
 	}
 }
 
+func TestGenerateDSLToolSchemaRestrictsSupportedActions(t *testing.T) {
+	definition := NewGenerateDSLTool(&fakeCapabilityClient{}).Definition()
+	var schema struct {
+		Properties struct {
+			Case struct {
+				Properties struct {
+					Steps struct {
+						Items struct {
+							OneOf []struct {
+								Properties struct {
+									Action struct {
+										Const string `json:"const"`
+									} `json:"action"`
+								} `json:"properties"`
+								Required []string `json:"required"`
+							} `json:"oneOf"`
+						} `json:"items"`
+					} `json:"steps"`
+				} `json:"properties"`
+			} `json:"case"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	variants := schema.Properties.Case.Properties.Steps.Items.OneOf
+	if len(variants) != 7 {
+		t.Fatalf("variants = %#v, want 7 supported actions", variants)
+	}
+	requiredByAction := map[string][]string{
+		"goto":                {"action", "value"},
+		"click":               {"action", "target"},
+		"input":               {"action", "target", "value"},
+		"wait_for":            {"action", "target"},
+		"assert_text":         {"action", "target", "value"},
+		"assert_url_contains": {"action", "value"},
+		"capture_text":        {"action", "target", "context_key"},
+	}
+	for _, variant := range variants {
+		action := variant.Properties.Action.Const
+		required, ok := requiredByAction[action]
+		if !ok {
+			t.Fatalf("variant has no action schema: %#v", variant)
+		}
+		if len(variant.Required) != len(required) {
+			t.Fatalf("%s required = %#v, want %#v", action, variant.Required, required)
+		}
+		for index := range required {
+			if variant.Required[index] != required[index] {
+				t.Fatalf("%s required = %#v, want %#v", action, variant.Required, required)
+			}
+		}
+	}
+}
+
 func TestExecuteDSLToolRequiresMatchingApproval(t *testing.T) {
 	client := &fakeCapabilityClient{}
 	handler := NewExecuteDSLTool(client)

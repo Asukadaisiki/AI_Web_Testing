@@ -20,6 +20,9 @@ For a new test, use explore_page for the first known URL, then explore_flow when
 Before generate_dsl, call validate_page_elements with required_elements derived from the user's flow and the collected a11y_nodes.
 If validation reports missing requirements, explore again instead of inventing elements.
 Only call generate_dsl after validation allows it. Author the complete structured DSL in generate_dsl.case and include the explored a11y_nodes_by_state for preflight.
+	DSL steps may only use goto, click, input, wait_for, assert_text, assert_url_contains, and capture_text. Use wait_for or postconditions for visibility checks; assert_visible is not supported.
+	goto and assert_url_contains store their URL in value. assert_text requires both target and expected value. input requires target and value. capture_text requires target and context_key.
+	Do not include candidates, match_count, or locator_confidence in generate_dsl.case; locator preflight derives those fields from a11y_nodes_by_state.
 After generate_dsl, use ask_user_question with a required confirm question whose id is approve_dsl.
 Never call execute_dsl until that approval tool result is true for the latest generation.
 When execute_dsl returns a batch_id, use get_report to read its current result.
@@ -118,8 +121,10 @@ func (e *Harness) Continue(ctx context.Context, runID string) (agentservice.Agen
 				return false, err
 			}
 			if err := e.policy.BeforeToolCall(run, call); err != nil {
-				_ = e.recordToolFailure(ctx, run, stepID, call, err)
-				return false, err
+				if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, err); recordErr != nil {
+					return false, recordErr
+				}
+				continue
 			}
 			result, executeErr := e.tools.Execute(ctx, tools.Call{
 				RunID:                run.ID,
@@ -133,8 +138,10 @@ func (e *Harness) Continue(ctx context.Context, runID string) (agentservice.Agen
 				Arguments:            json.RawMessage(call.Arguments),
 			})
 			if executeErr != nil {
-				_ = e.recordToolFailure(ctx, run, stepID, call, executeErr)
-				return false, executeErr
+				if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, executeErr); recordErr != nil {
+					return false, recordErr
+				}
+				continue
 			}
 			if result.Pending != nil {
 				var request agentservice.AskUserRequest
@@ -372,4 +379,33 @@ func (e *Harness) recordToolFailure(
 		},
 	})
 	return err
+}
+
+func (e *Harness) recordRecoverableToolFailure(
+	ctx context.Context,
+	run *agentservice.AgentRun,
+	stepID string,
+	call agent.ModelTool,
+	cause error,
+) error {
+	if err := e.recordToolFailure(ctx, *run, stepID, call, cause); err != nil {
+		return err
+	}
+	content, err := json.Marshal(map[string]any{
+		"status":  "error",
+		"tool":    call.Name,
+		"message": cause.Error(),
+	})
+	if err != nil {
+		return fmt.Errorf("encode tool failure result: %w", err)
+	}
+	run.Transcript = append(run.Transcript, agent.Message{
+		Role:       "tool",
+		Content:    string(content),
+		ToolCallID: call.ID,
+	})
+	if err := e.runs.SaveRun(ctx, *run); err != nil {
+		return fmt.Errorf("save recoverable tool failure: %w", err)
+	}
+	return nil
 }

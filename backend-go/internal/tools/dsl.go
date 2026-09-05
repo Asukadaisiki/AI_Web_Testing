@@ -28,7 +28,10 @@ func (t GenerateDSLTool) Definition() Definition {
 	return Definition{
 		Name: "generate_dsl",
 		Description: "Validate and persist a structured DSL candidate authored from the user's goal and verified page elements. " +
-			"The candidate must use only supported actions and grounded semantic targets.",
+			"Every step action must be one of: goto, click, input, wait_for, assert_text, " +
+			"assert_url_contains, capture_text. Express visibility checks as wait_for or postconditions, " +
+			"never as assert_visible. Targets must be grounded in verified page elements. " +
+			"Do not author candidates, match_count, or locator_confidence; locator preflight adds them.",
 		InputSchema: json.RawMessage(`{
 			"type":"object",
 			"properties":{
@@ -40,7 +43,79 @@ func (t GenerateDSLTool) Definition() Definition {
 							"base_url":{"type":"string"},
 							"input_contract":{"type":"array","items":{"type":"object"}},
 							"output_contract":{"type":"array","items":{"type":"object"}},
-							"steps":{"type":"array","items":{"type":"object"}}
+							"steps":{
+								"type":"array",
+								"minItems":1,
+								"items":{
+									"oneOf":[
+										{
+											"type":"object",
+											"properties":{
+												"action":{"type":"string","const":"goto"},
+												"value":{"type":"string","description":"Absolute URL or path to navigate to."}
+											},
+											"required":["action","value"]
+										},
+										{
+											"type":"object",
+											"properties":{
+												"action":{"type":"string","const":"click"},
+												"target":{"type":"string"},
+												"target_strategy":{"type":"string"},
+												"postconditions":{"type":"array","items":{"type":"object"}}
+											},
+											"required":["action","target"]
+										},
+										{
+											"type":"object",
+											"properties":{
+												"action":{"type":"string","const":"input"},
+												"target":{"type":"string"},
+												"value":{"type":"string"},
+												"trigger":{"type":"string"},
+												"target_strategy":{"type":"string"},
+												"postconditions":{"type":"array","items":{"type":"object"}}
+											},
+											"required":["action","target","value"]
+										},
+										{
+											"type":"object",
+											"properties":{
+												"action":{"type":"string","const":"wait_for"},
+												"target":{"type":"string"},
+												"timeout_ms":{"type":"integer"}
+											},
+											"required":["action","target"]
+										},
+										{
+											"type":"object",
+											"properties":{
+												"action":{"type":"string","const":"assert_text"},
+												"target":{"type":"string"},
+												"value":{"type":"string","description":"Expected text."}
+											},
+											"required":["action","target","value"]
+										},
+										{
+											"type":"object",
+											"properties":{
+												"action":{"type":"string","const":"assert_url_contains"},
+												"value":{"type":"string","description":"Expected URL fragment."}
+											},
+											"required":["action","value"]
+										},
+										{
+											"type":"object",
+											"properties":{
+												"action":{"type":"string","const":"capture_text"},
+												"target":{"type":"string"},
+												"context_key":{"type":"string"}
+											},
+											"required":["action","target","context_key"]
+										}
+									]
+								}
+							}
 						},
 						"required":["name","steps"]
 					},

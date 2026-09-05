@@ -93,6 +93,7 @@ def execute_case_streaming(
         dsl_snapshot=dsl_snapshot,
         dsl_sha256=dsl_sha256,
         report_schema_version="execution.report.v1",
+        started_at=datetime.now(UTC).replace(tzinfo=None),
     )
     session.add(execution)
     session.commit()

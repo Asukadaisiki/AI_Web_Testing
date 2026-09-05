@@ -150,12 +150,19 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 		CaseIDs:        []int64{testCase.ID, testCase.ID},
 		IdempotencyKey: &idempotencyKey,
 		Concurrency:    2,
-		InputValues:    map[string]string{"account": "demo"},
 	})
 	if err != nil {
 		t.Fatalf("create batch: %v", err)
 	}
 	batchID := batch["id"].(int64)
+	var storedInputValues string
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT input_values_json FROM execution_batches WHERE id = $1`,
+		batchID,
+	).Scan(&storedInputValues); err != nil || storedInputValues != "{}" {
+		t.Fatalf("stored input values = %q, %v", storedInputValues, err)
+	}
 	jobs := batch["jobs"].([]map[string]any)
 	if len(jobs) != 1 {
 		t.Fatalf("batch job count = %d, want 1", len(jobs))

@@ -65,6 +65,10 @@ _A11Y_SCOPE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_COMPOUND_CSS_RE = re.compile(
+    r"^[A-Za-z][A-Za-z0-9_-]*(?:[.#][A-Za-z_][A-Za-z0-9_-]*|\[[^\]\n]+\])"
+)
+
 # Maps a11y roles to Playwright role names (most are identical)
 _A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
     "button": "button",
@@ -368,6 +372,8 @@ def _resolve_explicit_locator(page, target: str) -> tuple[str, object] | None:
     if target.startswith("//"):
         return ("xpath", lambda: page.locator(f"xpath={target}"))
     if target.startswith(("#", ".")):
+        return ("css", lambda: page.locator(target))
+    if _COMPOUND_CSS_RE.match(target):
         return ("css", lambda: page.locator(target))
     if target.startswith("data-testid="):
         value = target.split("=", 1)[1]

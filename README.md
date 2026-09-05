@@ -322,6 +322,7 @@ npm run build
 - [`docs/architecture-guide.md`](./docs/architecture-guide.md)：当前代码目录、文件命名、模块职责、依赖关系和阅读顺序
 - [`docs/plan/codebase-optimization-plan-2026-08-28.md`](./docs/plan/codebase-optimization-plan-2026-08-28.md)：当前架构优化计划与验收标准
 - [`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)：能力状态与保留/下线决策
+- [`docs/plan/agentic-research-pilot-2026-09-06.md`](./docs/plan/agentic-research-pilot-2026-09-06.md)：Agentic Research 分阶段实施与 Automation Exercise 基线
 - `docs/frontend-design.md`：前端设计说明
 - `docs/execution-log.md`：任务执行记录
 - `docs/bug-log.md`：缺陷记录

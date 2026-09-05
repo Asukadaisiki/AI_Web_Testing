@@ -63,6 +63,9 @@ func (s *Store) CreateBatch(
 	if request.Concurrency < 1 || request.Concurrency > 16 {
 		request.Concurrency = 1
 	}
+	if request.InputValues == nil {
+		request.InputValues = map[string]string{}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -616,7 +619,7 @@ func executionDetail(
 		"analysis_status": analysisStatus, "analysis": analysis,
 	}
 	if finished, ok := finishedAt.(time.Time); ok {
-		result["duration_ms"] = finished.Sub(startedAt).Milliseconds()
+		result["duration_ms"] = elapsedMilliseconds(startedAt, finished)
 	} else {
 		result["duration_ms"] = nil
 	}
@@ -641,6 +644,13 @@ func executionDetail(
 		result["failure_category"] = signal["category"]
 	}
 	return result
+}
+
+func elapsedMilliseconds(startedAt, finishedAt time.Time) int64 {
+	if finishedAt.Before(startedAt) {
+		return 0
+	}
+	return finishedAt.Sub(startedAt).Milliseconds()
 }
 
 func scanExecution(row rowScanner) (map[string]any, error) {

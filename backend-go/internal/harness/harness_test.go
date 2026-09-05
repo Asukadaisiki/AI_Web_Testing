@@ -133,14 +133,17 @@ func TestEnginePausesAndResumesWithToolResult(t *testing.T) {
 	}
 }
 
-func TestEngineRecordsToolFailureBeforeRunFailure(t *testing.T) {
-	model := &scriptedModel{responses: []agent.ModelResponse{{
-		ToolCalls: []agent.ModelTool{{
-			ID:        "call-1",
-			Name:      "failing_tool",
-			Arguments: `{}`,
-		}},
-	}}}
+func TestEngineReturnsToolFailureToModelForRecovery(t *testing.T) {
+	model := &scriptedModel{responses: []agent.ModelResponse{
+		{
+			ToolCalls: []agent.ModelTool{{
+				ID:        "call-1",
+				Name:      "failing_tool",
+				Arguments: `{}`,
+			}},
+		},
+		{Content: "I corrected the invalid tool call."},
+	}}
 	repository := agentservice.NewMemoryRepository()
 	runService := agentservice.NewService(repository)
 	registry, err := tools.NewRegistry(failingTool{})
@@ -150,8 +153,25 @@ func TestEngineRecordsToolFailureBeforeRunFailure(t *testing.T) {
 	engine := New(runService, model, registry, 2)
 
 	run, err := engine.Start(context.Background(), "conversation-1", "trigger failure")
-	if err == nil {
-		t.Fatal("Start() error = nil, want tool failure")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if run.Status != agentservice.RunStatusCompleted {
+		t.Fatalf("run status = %q, want completed", run.Status)
+	}
+	if len(model.requests) != 2 {
+		t.Fatalf("model request count = %d, want 2", len(model.requests))
+	}
+	lastMessage := model.requests[1][len(model.requests[1])-1]
+	if lastMessage.Role != "tool" || lastMessage.ToolCallID != "call-1" {
+		t.Fatalf("tool failure message = %#v", lastMessage)
+	}
+	var failureResult map[string]any
+	if decodeErr := json.Unmarshal([]byte(lastMessage.Content), &failureResult); decodeErr != nil {
+		t.Fatalf("decode tool failure message: %v", decodeErr)
+	}
+	if failureResult["status"] != "error" || failureResult["message"] != "expected tool failure" {
+		t.Fatalf("tool failure result = %#v", failureResult)
 	}
 	events, listErr := engine.ListEvents(context.Background(), run.ID, 0)
 	if errors.Is(listErr, agentservice.ErrRunNotFound) {
@@ -165,7 +185,10 @@ func TestEngineRecordsToolFailureBeforeRunFailure(t *testing.T) {
 		agentservice.EventToolStarted,
 		agentservice.EventToolArgsDelta,
 		agentservice.EventToolFailed,
-		agentservice.EventRunFailed,
+		agentservice.EventMessageStarted,
+		agentservice.EventMessageDelta,
+		agentservice.EventMessageFinished,
+		agentservice.EventRunFinished,
 	}
 	if len(events) != len(wantTypes) {
 		t.Fatalf("events = %#v", events)

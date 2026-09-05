@@ -66,7 +66,7 @@ func TestCompleteParsesNativeToolCall(t *testing.T) {
 	}
 }
 
-func TestCompleteRejectsInvalidToolArguments(t *testing.T) {
+func TestCompleteReturnsInvalidToolArgumentsForHarnessRecovery(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{
@@ -88,8 +88,15 @@ func TestCompleteRejectsInvalidToolArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOpenAIClient() error = %v", err)
 	}
-	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "test"}}, nil)
-	if err == nil {
-		t.Fatal("Complete() error = nil, want invalid tool call error")
+	response, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{Role: "user", Content: "test"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if len(response.ToolCalls) != 1 || response.ToolCalls[0].Arguments != "{" {
+		t.Fatalf("tool calls = %#v", response.ToolCalls)
 	}
 }

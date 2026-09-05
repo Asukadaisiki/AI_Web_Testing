@@ -89,6 +89,43 @@ class BrowserCapabilityContractTest(unittest.TestCase):
         self.assertEqual(result["missing_requirement_ids"], ["email"])
         self.assertEqual(result["recommended_action"], "re_explore")
 
+    def test_validate_page_elements_matches_verified_css_selectors(self) -> None:
+        result = execute_browser_capability(
+            None,  # type: ignore[arg-type]
+            capability="validate_page_elements",
+            project_id=1,
+            conversation_id="1",
+            arguments={
+                "dsl_case": {
+                    "name": "Cart",
+                    "steps": [
+                        {"action": "goto", "value": "https://example.com"},
+                        {"action": "click", "target": "button.cart"},
+                        {
+                            "action": "assert_url_contains",
+                            "value": "/view_cart",
+                        },
+                    ],
+                },
+                "a11y_nodes": [
+                    {
+                        "node_id": "button-1",
+                        "role": "button",
+                        "name": "Add to cart",
+                        "verified_selectors": [
+                            {"strategy": "css", "selector": "button.cart"}
+                        ],
+                    }
+                ],
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["warnings"], [])
+        click_step = result["dsl_case"]["steps"][1]
+        self.assertEqual(click_step["match_count"], 1)
+        self.assertEqual(click_step["candidates"][0]["strategy"], "verified_css")
+
 
 if __name__ == "__main__":
     unittest.main()

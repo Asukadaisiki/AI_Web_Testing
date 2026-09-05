@@ -1,0 +1,171 @@
+{
+  "schema_version": "research.goal.v1",
+  "id": "automationexercise-blue-top-cart",
+  "title": "Search and add Blue Top to cart",
+  "hypothesis": "candidate_dsl_verification",
+  "objective": "Verify that a frozen-LLM-compatible structured DSL can search for Blue Top, open its detail page, add it to the cart, and validate the resulting cart state.",
+  "target": {
+    "site": "Automation Exercise",
+    "base_url": "https://automationexercise.com",
+    "entry_url": "https://automationexercise.com/products"
+  },
+  "constraints": [
+    "Do not create an account or log in.",
+    "Do not enter personal or payment data.",
+    "Do not proceed to checkout.",
+    "Run with VLM disabled so the baseline measures DOM and A11y behavior."
+  ],
+  "success_criteria": [
+    "The search result contains Blue Top.",
+    "The product detail URL is /product_details/1.",
+    "The add-to-cart confirmation is visible.",
+    "The cart URL is /view_cart.",
+    "The cart contains Blue Top with price Rs. 500 and quantity 1."
+  ],
+  "metrics": [
+    "task_success",
+    "execution_success",
+    "verification_success",
+    "passed_steps",
+    "total_steps",
+    "average_step_duration_ms",
+    "recovery_count",
+    "vision_calls"
+  ],
+  "dsl_case": {
+    "name": "Automation Exercise Blue Top cart baseline",
+    "description": "Deterministic candidate + DSL + verification baseline for the Agentic Research SOP.",
+    "base_url": "https://automationexercise.com",
+    "input_contract": [],
+    "output_contract": [],
+    "steps": [
+      {
+        "action": "goto",
+        "value": "https://automationexercise.com/products"
+      },
+      {
+        "action": "input",
+        "target": "textbox \"Search Product\"",
+        "value": "Blue Top",
+        "candidates": [
+          {
+            "strategy": "placeholder",
+            "semantic_value": "Search Product",
+            "pre_score": 1.0,
+            "pre_features": {
+              "source": "manually_verified_baseline"
+            }
+          }
+        ]
+      },
+      {
+        "action": "click",
+        "target": "button \"Search\"",
+        "candidates": [
+          {
+            "strategy": "css",
+            "selector": "#submit_search",
+            "pre_score": 1.0,
+            "pre_features": {
+              "source": "manually_verified_baseline"
+            }
+          }
+        ],
+        "postconditions": [
+          {
+            "type": "url_contains",
+            "value": "search=Blue%20Top"
+          },
+          {
+            "type": "text_visible",
+            "value": "Blue Top"
+          }
+        ]
+      },
+      {
+        "action": "assert_text",
+        "target": "paragraph \"Blue Top\"",
+        "value": "Blue Top"
+      },
+      {
+        "action": "click",
+        "target": "link \"View Product\" inside \"Blue Top\"",
+        "candidates": [
+          {
+            "strategy": "css",
+            "selector": "a[href='/product_details/1']",
+            "pre_score": 1.0,
+            "pre_features": {
+              "source": "manually_verified_baseline"
+            }
+          }
+        ],
+        "postconditions": [
+          {
+            "type": "url_contains",
+            "value": "/product_details/1"
+          }
+        ]
+      },
+      {
+        "action": "assert_text",
+        "target": "heading \"Blue Top\"",
+        "value": "Blue Top"
+      },
+      {
+        "action": "click",
+        "target": "button \"Add to cart\"",
+        "candidates": [
+          {
+            "strategy": "role",
+            "selector": "button",
+            "semantic_value": "Add to cart",
+            "pre_score": 1.0,
+            "pre_features": {
+              "source": "manually_verified_baseline"
+            }
+          }
+        ],
+        "postconditions": [
+          {
+            "type": "text_visible",
+            "value": "Your product has been added to cart."
+          }
+        ]
+      },
+      {
+        "action": "wait_for",
+        "target": "link \"View Cart\""
+      },
+      {
+        "action": "click",
+        "target": "link \"View Cart\"",
+        "postconditions": [
+          {
+            "type": "url_contains",
+            "value": "/view_cart"
+          }
+        ]
+      },
+      {
+        "action": "assert_url_contains",
+        "value": "/view_cart"
+      },
+      {
+        "action": "assert_text",
+        "target": "link \"Blue Top\"",
+        "value": "Blue Top"
+      },
+      {
+        "action": "assert_text",
+        "target": "cell \"Rs. 500\" inside \"Blue Top\"",
+        "value": "Rs. 500"
+      },
+      {
+        "action": "assert_text",
+        "target": "button \"1\"",
+        "value": "1"
+      }
+    ]
+  }
+}

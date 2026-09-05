@@ -35,6 +35,7 @@ temp/
 
 # Reports and artifacts
 /reports/
+research/results/
 screenshots/
 midscene_run/
 browser-worker/artifacts/

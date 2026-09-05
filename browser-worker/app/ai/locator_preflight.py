@@ -73,7 +73,7 @@ def apply_preflight_to_dsl(
             children_of.setdefault(pid, []).append(n)
 
     confidences: list[str] = []
-    for idx, step in enumerate(steps):
+    for step in steps:
         if not isinstance(step, dict):
             continue
         target = (step.get("target") or "").strip()
@@ -91,9 +91,17 @@ def apply_preflight_to_dsl(
             target_core = target
 
         target_lower = target_core.lower()
-        matches: list[dict] = []
+        matches = [
+            node
+            for node in a11y_nodes
+            if any(
+                _normalize_text(selector.get("selector")) == _normalize_text(target_core)
+                for selector in node.get("verified_selectors", [])
+                if isinstance(selector, dict)
+            )
+        ]
 
-        if scope_name:
+        if not matches and scope_name:
             # Scoped matching: find the product container whose children
             # include the product name, then match target against its children.
             for n in a11y_nodes:
@@ -115,7 +123,7 @@ def apply_preflight_to_dsl(
                     cname = (child.get("name") or "").lower()
                     if cname and (cname == target_lower or target_lower in cname):
                         matches.append(child)
-        else:
+        elif not matches:
             # Unscoped matching: match against all nodes
             for n in a11y_nodes:
                 name = (n.get("name") or "").lower()
@@ -196,7 +204,9 @@ def apply_preflight_to_dsl(
         "warnings": [
             f"Step {i}: match_count={s.get('match_count',0)}"
             for i, s in enumerate(steps)
-            if isinstance(s, dict) and s.get("match_count", 0) == 0
+            if isinstance(s, dict)
+            and str(s.get("target") or "").strip()
+            and s.get("match_count", 0) == 0
         ] + [
             f"Step {i}: target '{s.get('target')}' is a repeated product action; add product context"
             for i, s in enumerate(steps)
