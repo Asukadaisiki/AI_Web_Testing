@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-05 | 复核当前项目结构
+
+- 任务：说明完成控制面迁移后的仓库结构、服务职责和主调用链。
+- 操作：核对 Go、Browser Worker、Frontend 实际目录与迁移计划；修正架构导航中仍指向已删除 Python 控制面模块的内容。
+- 结果：确认项目已形成“Go 唯一控制面 + Python Browser Worker + React 平台 UI + PostgreSQL 事实存储”的结构，Python 不再包含 Agent 或用户业务 API。
+- 验证：对照当前文件树、FastAPI 路由注册和 Go package 列表完成静态核验。
+- 后续：无。
+
 ## 2026-09-05 | 完成内部控制面迁移与 Browser Worker 重命名
 
 - 任务：消除 Python `/internal/agent-capabilities` 中残留的 DSL、Case、Batch 和 Report 控制面，并完成 Python Worker 目录收口。

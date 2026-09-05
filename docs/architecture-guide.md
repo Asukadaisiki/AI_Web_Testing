@@ -14,8 +14,16 @@ backend-go/
   internal/agent/      纯 Agent loop 与消息合同
   internal/harness/    Prompt、工具和运行编排
   internal/agentservice/ Run、Checkpoint、事件和持久化
-  internal/tools/      Agent 工具
-  internal/platform/   LLM 与 Python Worker 适配器
+  internal/tools/      Agent 工具与控制面工具编排
+  internal/authn/      Cookie 认证
+  internal/planning/   Planning Session 元数据
+  internal/projects/   Project 控制面
+  internal/cases/      Case 控制面
+  internal/dsl/        DSL 校验与生成记录
+  internal/execution/  Batch、Job、Run 与报告聚合
+  internal/corrections/ Locator 修正控制面
+  internal/platform/   LLM 与 Browser Worker 适配器
+  internal/transport/  Hertz HTTP/SSE 路由
 
 frontend/src/
   app/                 应用启动、路由和全局 Provider
@@ -23,15 +31,14 @@ frontend/src/
   features/            按业务域组织的 API、类型、状态和局部 UI
   components/          尚未完全归入业务域的复用组件
   shared/              无业务归属的 API 基础设施和通用 UI
-  services/, types/    迁移中的旧兼容入口
 
 browser-worker/app/
   main.py              Python Worker/FastAPI 入口
-  api/                 迁移期平台 API 与内部 capability
+  api/                 health、artifact 与内部 Browser capability
   application/browser  Go AgentService 使用的浏览器能力
-  application/reporting 确定性报告投影和失败分析
-  services/            执行、DSL、Case 等迁移期领域能力
-  ai/                  DSL 生成、页面探索和 locator preflight
+  application/reporting 确定性失败分析
+  services/            Job 执行、失败信号与 anti-pattern
+  ai/                  页面探索、locator preflight 与 VLM Prompt
   runners/             解释 DSL 并驱动 Playwright
   locators/            元素定位、修正和 fallback
   reporters/           将执行证据组装为结构化报告
@@ -70,8 +77,7 @@ Go execute_dsl tool
 Frontend pages
   -> features/*/api.ts
   -> Go transport/http/*
-  -> services/*
-  -> schemas/*
+  -> Go domain stores
 ```
 
 ## 文件命名词典
@@ -96,27 +102,24 @@ Frontend pages
 
 带下划线的 Python 名称，例如 `_get_session`，表示模块私有实现。其他模块不应长期依赖这类名称。
 
-## 后端分类
+## Browser Worker 分类
 
-### `api/`：HTTP 适配层
+### `api/`：内部 HTTP 适配层
 
 负责：
 
-- 定义 URL、HTTP method、参数和 response model。
-- 注入数据库 Session 和当前用户。
-- 将业务异常转换成 HTTP 状态码。
-- SSE 路由负责建立连接，但不应承载核心业务规则。
+- 提供 health、artifact 和 `/api/v1/internal/browser-capabilities/*`。
+- 校验 Go 转发的 Cookie、Planning Session 和 Project 归属。
+- 不提供用户侧 Project、Case、DSL、Execution 或 Report API。
 
 不应负责：
 
 - 直接拼复杂 SQL。
-- 实现 DSL 生成、执行或 AI 决策。
-- 复制 application/service 中的业务流程。
+- 实现 DSL 生成、业务控制面或 Agent 决策。
 
 命名：
 
 - `api/router.py`：汇总所有子路由。
-- `api/routes/cases.py`：Case HTTP 接口。
 - `api/routes/browser_capabilities.py`：Go 调用的页面探索接口。
 - `api/auth.py`：Worker 内部接口使用的认证依赖。
 
@@ -125,32 +128,25 @@ Frontend pages
 | 文件 | 职责 |
 |---|---|
 | `browser/service.py` | 页面探索和元素验证 capability |
-| `agent_capabilities/service.py` | DSL、执行和报告内部 capability |
-| `reporting/service.py` | Run/Batch/Project 报告投影 |
 | `reporting/analysis_service.py` | 确定性 FailureSignal 分析 |
 
-### `services/`：可复用业务能力
-
-`services` 以业务实体或稳定能力命名，供普通 API 和 Planning 编排共同调用。
+### `services/`：Worker 执行能力
 
 | 文件 | 职责 |
 |---|---|
-| `cases.py` | Case CRUD、项目成员校验和 Case 统计 |
-| `executions.py` | 执行生命周期、持久化、执行查询和报告聚合 |
-| `dsl.py` | DSL 校验、生成入口、生成记录和反馈治理 |
-| `project_management.py` | Project CRUD 和成员关系 |
-| `corrections.py` | Locator 人工修正记录 |
+| `execution_batches.py` | Job 领取、lease、heartbeat 和终态更新 |
+| `executions.py` | 调用 Runner 并持久化步骤 evidence |
+| `failure_signals.py` | 生成确定性失败信号 |
 | `anti_patterns.py` | DSL 失败反例的记录和检索 |
-| `settings.py` | AI 配置读取、更新和运行状态 |
+| `errors.py` | Worker 服务共享异常 |
 
 ### `ai/`：Worker 内 AI 辅助能力
 
 | 文件 | 职责 |
 |---|---|
 | `page_explorer.py` | 使用 Playwright/CDP 采集页面 A11y 信息 |
-| `dsl_generator.py` | 调用 LLM 生成结构化 DSL |
 | `locator_preflight.py` | 草案执行前检查 locator candidates |
-| `prompts/registry.py` | Prompt 模板和 stage 注册中心 |
+| `prompts/registry.py` | VLM Prompt 模板和 stage 注册中心 |
 
 ### `runners/`、`locators/`、`reporters/`
 

@@ -48,6 +48,19 @@
 
 ## 问题记录
 
+## BUG-114 | 架构导航仍描述已删除的 Python 控制面
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：low
+- 来源：当前项目结构复核
+- 描述：`docs/architecture-guide.md` 在迁移完成后仍列出 Python `agent_capabilities`、Case CRUD、DSL 生成和报告投影模块。
+- 影响：读者会误判 Python 仍是第二业务控制面。
+- 根因：最终删除和目录重命名后未同步更新文件导航章节。
+- 处理：按当前文件树重写 Go 域目录、Browser Worker API/application/services/ai 职责和主链路说明。
+- 验证：对照当前目录和 FastAPI 路由注册完成静态核验。
+- 关联记录：`docs/execution-log.md#2026-09-05--复核当前项目结构`
+
 ## BUG-113 | Python Browser Worker 仍承载非浏览器控制面
 
 - 日期：2026-09-05
