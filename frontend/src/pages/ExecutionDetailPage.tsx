@@ -132,12 +132,10 @@ function StepEvidenceBody({
   step,
   caseId,
   executionId,
-  triggeredBy,
 }: {
   step: StepExecutionEvidence;
   caseId: number;
   executionId: number;
-  triggeredBy: number;
 }) {
   const locatorTrace = step.locator_trace;
   const isAssert = step.action.startsWith("assert");
@@ -336,7 +334,6 @@ function StepEvidenceBody({
           <InterventionPanel
             caseId={caseId}
             executionId={executionId}
-            triggeredBy={triggeredBy}
             request={step.intervention_request}
           />
         </div>
@@ -679,7 +676,6 @@ export function ExecutionDetailPage() {
                             step={step}
                             caseId={detail.case_id}
                             executionId={detail.id}
-                            triggeredBy={detail.triggered_by}
                           />
                         ),
                       };

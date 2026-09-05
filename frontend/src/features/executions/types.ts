@@ -1,14 +1,14 @@
 export type {
-  BatchUpdateCorrectionStatePayload,
   CaseExecutionRequest,
   CreateCorrectionPayload,
+  ExecutionBatchCreatePayload,
+  ExecutionBatchDetail,
+  ExecutionBatchReport,
+  ExecutionBatchSummary,
   ExecutionsOverview,
-  LocatorCorrectionsOverview,
   OverviewWindowDays,
   ReportScopeType,
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
   StoredLocatorCorrection,
-  StoredLocatorCorrectionEvent,
-  UpdateCorrectionStatePayload,
 } from "../../types/api";

@@ -48,10 +48,270 @@
 
 ## 问题记录
 
+## BUG-114 | 架构导航仍描述已删除的 Python 控制面
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：low
+- 来源：当前项目结构复核
+- 描述：`docs/architecture-guide.md` 在迁移完成后仍列出 Python `agent_capabilities`、Case CRUD、DSL 生成和报告投影模块。
+- 影响：读者会误判 Python 仍是第二业务控制面。
+- 根因：最终删除和目录重命名后未同步更新文件导航章节。
+- 处理：按当前文件树重写 Go 域目录、Browser Worker API/application/services/ai 职责和主链路说明。
+- 验证：对照当前目录和 FastAPI 路由注册完成静态核验。
+- 关联记录：`docs/execution-log.md#2026-09-05--复核当前项目结构`
+
+## BUG-113 | Python Browser Worker 仍承载非浏览器控制面
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：Go AgentService 全面迁移完成性审计
+- 描述：公开 API 虽已迁移到 Go，但 `generate_dsl`、`execute_dsl`、`get_report` 和 `fix_and_retry` 仍经 Python `/internal/agent-capabilities` 完成持久化与业务编排。
+- 影响：Python 仍是隐含的第二控制面，Go 无法独立保证 DSL 所有权、审批后的执行创建和报告读取合同。
+- 根因：前一阶段只迁移了外部 HTTP 路由，没有继续迁移 Agent 工具背后的内部 capability。
+- 处理：新增 Go DSL Store 和结构化校验；新增 Go ControlPlane 工具适配器；将 actor 身份传入 Tool Call；删除 Python agent capability 路由、服务、schema、测试及其下游死代码；Browser Worker Client 只保留浏览器 capability。
+- 验证：真实 PostgreSQL 集成测试覆盖 Go GenerateDSL → ExecuteDSL → Report → FixAndRetry；全仓检索无 Python `agent_capabilities` 引用；Go/Python/前端回归通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--完成内部控制面迁移与-browser-worker-重命名`
+
+## BUG-112 | Go 控制面 SQL 与实际 PostgreSQL schema 不一致
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：Go 控制面真实 PostgreSQL 集成测试
+- 描述：Go 创建 Execution Job 和 Locator Correction 时遗漏无 server default 的非空字段；Project 删除也会被 Execution 外键 `RESTRICT` 阻断。
+- 复现步骤：
+  1. 在 Alembic `20260905_0038` schema 上调用 Go `CreateBatch`。
+  2. 创建执行记录后调用 Go `Correction.Create`。
+  3. 删除含执行历史的 Project。
+- 影响：Batch 创建、人工定位修正和项目删除三个核心操作在编译及 mock 测试通过后仍会在真实 PostgreSQL 上失败。
+- 根因：迁移期 Go SQL 依据 ORM 默认值编写，但部分默认值仅由 SQLAlchemy 客户端注入，数据库列本身没有默认值；项目删除也未处理 `RESTRICT` 历史表。
+- 处理：Job 插入显式写入 attempt/max-attempt/cancel 默认值；Correction 插入显式写入时间戳；Project 删除在同一事务中按外键顺序清理 correction、run 和 batch；同时补齐 Batch 幂等与 Planning Session 所有权校验。
+- 验证：真实 PostgreSQL 16.15 纵向集成测试通过，Go 全量 test/vet/build 通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--补齐-go-报告聚合并验证-postgresql-控制面`
+
+## BUG-111 | Python Planning Agent 与 Go AgentService 重复决策
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：AgentService 全面迁移
+- 描述：Go AgentCore 已成为 Planning 主入口，但 Python 仍保留完整 ReAct Agent、Planning SSE/API，并被 Report Core 作为失败分析器调用，形成两套 Agent 决策源。
+- 影响：工具协议、Prompt、状态机和失败处理可能产生分叉，Python 无法收缩为稳定 Browser Worker。
+- 根因：Go 迁移仅替换前端主入口，没有同步切断 Report Core 和旧 API 对 Python Agent 的依赖。
+- 处理：报告改为确定性分析；浏览器 capability 从旧 Planning 工具注册表中提取；删除 Python Planning API、ReAct、Prompt、SSE、草案编排和持久化模型；Go 拆分为 `agent`、`harness`、`agentservice`，并增加工具调用前 policy gate。
+- 验证：全仓已无 Python Planning Agent 引用；Go/Python/前端测试及构建通过；Alembic `0037` 已应用且 schema check 无差异。
+- 关联记录：`docs/execution-log.md#2026-09-05--启动-go-agentservice-全面迁移`
+
+## BUG-110 | Go 工具实现与前端旧 Planning 链路残留
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：medium
+- 来源：架构与无引用代码复核
+- 描述：`ask_user_question` 工具实现位于 `agentcore` 包，破坏 Core 与 Tool Registry 的职责边界；前端切换到 Go AgentWorkbench 后仍保留旧 Planning 面板、SSE store、兼容 barrel 和无消费者 API client；Python 还注册了两个从未读写的预留 ORM 模型。
+- 复现步骤：
+  1. 检查 `backend-go/internal/agentcore/ask_user_tool.go` 的包归属。
+  2. 使用 Knip 扫描前端不可达文件和未使用导出。
+  3. 全仓检索 `AIPlanningFlowStep` 与 `LocatorAttemptLog` 的生产读写调用。
+- 影响：目录职责模糊，重复状态机和客户端增加维护成本；空 ORM 表制造已经具备数据闭环的错误认知。
+- 根因：Go AgentCore 切换完成后，旧 Python Planning 前端和早期数据闭环预留项未同步清理。
+- 处理：将 `AskUserTool` 移入 `internal/tools`；删除旧前端 Planning/SSE 链路、无消费者客户端和未接入的 OpenAPI 生成产物；删除两个未使用 ORM 模型并通过 Alembic `0036` 下线对应表；清理无引用兼容函数和常量。
+- 验证：Go test/vet/build、Python 22 项 unittest、前端 8 项 Vitest 和生产构建通过；Knip 无未使用项；Vulture 高置信度扫描无结果；Alembic 升级及 schema check 通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--清理非主链代码并修正-go-工具边界`
+
+## BUG-109 | 请求日志记录登录明文密码
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：critical
+- 来源：恢复鉴权后的真实浏览器验收
+- 描述：`RequestLoggingMiddleware` 会原样序列化 JSON 请求体，登录请求中的 `password` 被写入服务日志。
+- 复现步骤：
+  1. 调用 `POST /api/v1/auth/login`。
+  2. 查看 Python API 日志。
+  3. 可见邮箱和明文密码。
+- 影响：任何可读取应用日志的人员或系统都可能获得用户凭据。
+- 根因：请求/响应日志仅做长度截断，没有按字段递归脱敏。
+- 处理：对 password、secret、token、API key、Cookie 和 Session 等敏感字段递归替换为 `***`，请求和响应 JSON 共用同一处理。
+- 验证：新增两项脱敏测试；完整 Python 测试通过，明文测试密码不再出现在格式化日志内容中。
+- 关联记录：`docs/execution-log.md#2026-09-05--生产化控制面鉴权与工作台完善`
+
+## BUG-108 | 根级忽略规则吞掉新增前端源码和测试
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：前端回归编排与定位调试实施
+- 描述：根 `.gitignore` 存在 `frontend` 整目录规则，历史已跟踪文件可继续修改，但新页面、组件和测试不会出现在正常 Git 暂存范围。
+- 复现步骤：
+  1. 在 `frontend/src` 新增文件。
+  2. 执行 `git check-ignore -v <file>`。
+  3. 文件命中根 `.gitignore` 的 `frontend` 规则。
+- 影响：本地实现和测试可能通过，但新增文件不会被同步到远端，提交后构建缺失模块。
+- 根因：历史忽略规则把整个前端目录当作生成物。
+- 处理：移除整目录忽略，保留 `node_modules/dist` 等通用规则，并显式忽略 Playwright 浏览器缓存、报告和测试结果。
+- 验证：所有新增页面、组件、Vitest 和 Playwright 文件均出现在 `git status`；前端测试和构建通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--生产化控制面鉴权与工作台完善`
+
+## BUG-107 | 恢复登录后部分业务接口仍可匿名访问
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：鉴权边界复核
+- 描述：仅部分路由显式依赖 `require_authenticated_user`，旧的 execution、correction、DSL 查询/删除接口和 artifact 下载没有统一认证门禁。
+- 复现步骤：
+  1. 清除登录 Cookie。
+  2. 调用未声明用户依赖的业务接口或 artifact 路由。
+  3. 请求不会在路由入口统一返回 401。
+- 影响：匿名调用者可能读取执行证据、定位修正和 DSL generation，或触发删除操作。
+- 根因：认证依赖随功能逐个添加，API 组装层没有默认保护策略。
+- 处理：在 API router 中将除 health/auth 外的业务路由统一挂到认证分组；artifact 路由单独增加认证依赖；Go API 同时通过 Python `/auth/me` 内省 Cookie。
+- 验证：新增路由门禁测试，覆盖全部 Python 业务路由和 artifact；Go 测试覆盖匿名拒绝与跨用户 Run 拒绝。
+- 关联记录：`docs/execution-log.md#2026-09-05--生产化控制面鉴权与工作台完善`
+
+## BUG-106 | 项目状态文档仍保留自愈半闭环旧口径
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：low
+- 来源：当前项目进度盘点
+- 描述：根 README 下半部分仍写“自动自愈尚无统一状态机和前端审批入口”“真实全链待验收”，BUG-090 也保持 `open`，与 2026-09-04 已完成的 Go AgentCore 受控自愈和真实浏览器 E2E 结论冲突。
+- 复现步骤：
+  1. 阅读 README 的“当前状态”和“与计划相比的主要差距”。
+  2. 对照 2026-09-04 AgentCore、自愈及前端 E2E 执行记录。
+  3. 检查 BUG-090 状态。
+- 影响：项目进度会被误判为尚未完成受控自愈和端到端验收。
+- 根因：新闭环完成后只更新了 README 顶部状态和执行日志，旧阶段说明及原缺陷状态未同步收口。
+- 处理：更新 README 的进行中事项和实际差距；将 BUG-090 标记为已修复并补充实现与验证结果。
+- 验证：交叉核对当前分支提交、README、AgentCore 文档和 2026-09-04 执行记录；`git diff --check` 通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--当前项目进度复核`
+
+## BUG-105 | Python 导入解析配置缺失且存在无效导入
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：low
+- 来源：自测
+- 描述：从仓库根目录打开工程时，IDE 无法解析 `backend` 下的第三方依赖和 `app.*` 包；静态扫描同时发现 9 个未使用导入和 2 个模块的非顶层导入。
+- 复现步骤：
+  1. 从仓库根目录打开任一 `backend/app` Python 文件。
+  2. 查看 `fastapi`、`sqlalchemy`、`pydantic` 或 `app.*` 导入诊断。
+  3. 使用 Ruff 扫描 `F401/F403/F405/E402`。
+- 影响：IDE 产生误报警告，真实无效导入混在噪声中，降低静态检查可信度。
+- 根因：仓库未声明 Pyright 的虚拟环境和 Python 源码根路径；部分文件还残留未使用导入或在 logger 初始化后继续导入。
+- 处理：新增导入解析专用 `pyrightconfig.json`，指向 `backend/.venv` 和 `backend`；移除无效导入并调整导入位置。
+- 验证：Pyright 0 errors/0 warnings；Ruff 目标规则全部通过；122 个应用模块均可导入；13 个单测通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--修复-python-导入诊断`
+
+## BUG-104 | DSL 生成器可选择不可定位的文档结构节点
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：AgentCore 前端真实浏览器 E2E
+- 描述：页面探索同时向 DSL 生成器暴露 `RootWebArea`、`StaticText` 和已验证的 `heading`。模型首次生成时选择 `RootWebArea "Example Domain"` 作为 `wait_for/assert_text` 目标，运行时没有 locator candidate，进入 `needs_intervention`。
+- 复现步骤：
+  1. 探索 `https://example.com` 并要求断言首页标题。
+  2. 生成器选择与 h1 同名的 `RootWebArea`。
+  3. 执行 `wait_for RootWebArea "Example Domain"`，所有定位层失败。
+- 影响：元素验证已经找到唯一可用 heading，但首轮执行仍可能因不可定位节点失败，产生无意义的修复和再次审批。
+- 根因：A11y 黑名单未排除仅表示文档根和文本叶子的角色，生成提示中仍将其展示为可用 target。
+- 处理：在页面探索边界过滤 `RootWebArea` 和 `StaticText`，只将可稳定定位的语义节点送入验证与 DSL 生成。
+- 验证：新增 A11y 过滤回归测试；真实重跑生成 `heading "Example Domain"`，首次执行 3/3 步通过且未调用 `fix_and_retry`。
+- 关联记录：`docs/execution-log.md#2026-09-04--前端切换-go-agentcore-并完成浏览器验收`
+
+## BUG-103 | AI 报告摘要可与确定性失败结论矛盾
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：AgentCore 真实失败修复联调
+- 描述：失败 Batch 的 `conclusion`、`case_results`、`FailureSignal` 和 `recommended_action` 已由确定性分析覆盖，但 `summary` 仍直接采用模型回复，出现结构化结论为 `all_failed`、摘要却写“全部通过”的矛盾。
+- 复现步骤：
+  1. 执行一个定位成功但断言值错误的用例。
+  2. 让模型分析失败结果并返回错误的通过摘要。
+  3. 查看 Batch 报告，可见 `conclusion=all_failed`，但 `summary` 表示全部通过。
+- 影响：Agent 修复策略仍正确，但用户界面和下游文本消费者会收到与事实冲突的结论。
+- 根因：BUG-100 修复仅锁定结构化结果字段，遗漏了同样承载执行结论的摘要字段。
+- 处理：`summary` 改为确定性分析输出；AI 仅增强失败明细、根因、影响范围和建议范围。
+- 验证：新增冲突摘要回归断言；Python 执行分析合同测试通过。
+- 关联记录：`docs/execution-log.md#2026-09-04--agentcore-透明修复与重执行闭环`
+
+## BUG-102 | 新分析字段导致滚动期间旧 Worker 无法写入执行记录
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：AgentCore 真实失败用例联调
+- 描述：数据库新增非空 `analysis_status` 后，仍在运行的旧 Worker ORM 不会在 INSERT 中携带该字段，创建 `test_case_runs` 时触发 NOT NULL 约束错误。
+- 复现步骤：
+  1. 在数据库升级分析字段迁移后保留旧版本 Worker 进程。
+  2. 创建并执行一个新 Batch。
+  3. 旧 Worker 插入 Run 时因缺少 `analysis_status` 失败。
+- 影响：滚动升级窗口内新执行无法落库，Batch 会失败且缺少正常步骤证据。
+- 根因：新列仅配置 Python 侧 default，没有数据库 server default，旧进程无法感知新字段。
+- 处理：为 `test_case_runs.analysis_status` 和 `execution_batches.analysis_status` 增加数据库默认值 `pending`，并新增 Alembic 0034。
+- 验证：旧 Worker 成功创建失败 Run 并持久化 assertion FailureSignal；Alembic 0034 已应用且 `alembic check` 无差异。
+- 关联记录：`docs/execution-log.md#2026-09-04--agentcore-透明修复与重执行闭环`
+
+## BUG-101 | Agent 工具失败前缺少审计事件且 DSL 工具允许无效上下文
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：Go AgentCore 真实探索到 DSL 生成联调
+- 描述：首轮 `explore_page -> validate_page_elements -> generate_dsl` 中，模型因工具 Schema 过宽而传入缺少 `steps` 的 `current_case`，Python DSL 请求返回 422；同时 Engine 只在工具成功后记录 started/args/result，失败调用仅留下 `run.failed`，无法还原实际参数和失败工具。
+- 复现步骤：
+  1. 让 Agent 为 `https://example.com` 探索并生成首页标题断言 DSL。
+  2. 前两个工具成功后，模型调用 `generate_dsl` 并传入不完整 `current_case`。
+  3. Python 返回 `current_case.steps Field required`；事件流缺少该工具的 started/args。
+- 影响：合法生成链路被可选但无效的上下文字段阻断，且失败审计无法定位模型实际调用参数。
+- 根因：`generate_dsl` 工具暴露了没有完整 JSON Schema 的 `current_case`；Engine 将工具生命周期事件延迟到执行成功后写入。
+- 处理：从首阶段工具 Schema 移除 `current_case/preserve_contracts`；所有工具统一在执行前持久化 `tool.started` 和 `tool.args.delta`，失败时增加 `tool.failed`，成功时记录 result/finished。
+- 验证：同一需求重跑后依次完成 explore、validate、generate，生成 3 步 DSL 并以 23 条事件正常收口。
+- 关联记录：`docs/execution-log.md#2026-09-04--go-agentcore-探索验证与-dsl-生成链路`
+
+## BUG-100 | LLM 失败归因可产生与失败事实矛盾的结构化结论
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：DeepSeek LLM 能力实测
+- 描述：向完整 Planning ReAct Agent 输入明确的 locator 失败信号后，模型自然语言正确识别 `Login` 文案变为 `Sign in`，但最终 `ExecutionAnalysis` 为 `conclusion=all_passed`、`recommended_action=done`，且 `failure_details` 为空。
+- 复现步骤：
+  1. 使用当前 `deepseek-v4-flash` 配置调用 `run_planning_turn()`。
+  2. 输入 `category=locator`、`no candidates matched` 及按钮文案变化证据，并要求使用 `analyze_results`。
+  3. 检查返回的 `assistant_message` 与 `execution_analysis`。
+- 影响：自然语言总结看似正确，但自动编排若消费结构化字段会把失败误判为全部通过并停止修复；报告标签也可能与 FailureSignal 冲突。
+- 根因：`analyze_results` 解析允许缺失或不完整的 `analysis` 对象通过 `ExecutionAnalysis` 默认值补全，且没有根据已知 FailureSignal 对 `conclusion`、`recommended_action` 和失败明细做一致性校验。
+- 处理：持久化前由确定性分析覆盖 conclusion、case results 和 FailureSignal；LLM 仅增强摘要、根因、影响范围和修复建议。存在失败信号且 LLM 返回 `done` 时保留确定性的 `targeted_retest`。
+- 验证：新增回归测试注入 `all_passed/done` 的错误 AI 结果，最终持久化仍为 `all_failed/targeted_retest`，并保留 locator FailureSignal 和失败明细。
+- 关联记录：`docs/execution-log.md#2026-09-04--deepseek-llm-能力实测`
+
+## BUG-099 | Planning 复测绕过统一执行分析持久化
+
+- 日期：2026-09-04
+- 状态：fixed
+- 严重度：high
+- 来源：执行归因与复测循环现状核验
+- 描述：`POST /ai-planning/sessions/{session_id}/retest` 通过 `execute_case()` 重跑原用例，之后直接调用 `run_analysis_turn()` 并把结果写入 Planning 消息，但没有调用统一的 `analyze_run()`，也没有把分析写入复测产生的 `TestCaseRun.analysis_json`。
+- 复现步骤：
+  1. 对包含失败用例的 Planning session 调用 `/retest`。
+  2. 复测完成后读取返回的 Planning 消息，可见本轮分析。
+  3. 查询本次新建的 Run 报告，分析仍可能保持 `pending` 且缺少同一份持久化 `ExecutionAnalysis`。
+- 影响：复测会产生执行结果和会话内分析，但 Report Core、执行详情与 Planning 消息不再共享同一分析事实；anti-pattern 统一沉淀也可能被绕过。
+- 根因：复测服务保留了统一分析服务落地前的“执行后直接调用 Planning Agent”旧路径。
+- 处理：新增 `analyze_runs()` 聚合入口；Planning 复测完成后对本轮全部 execution ID 生成一次统一分析，将同一事实持久化到每个 Run，并从该持久化结果构造 Planning 消息和 anti-pattern。
+- 验证：新增双 Run 回归测试，确认聚合分析为 `all_failed`、两个 Run 均为 `analysis_status=completed` 且 `analysis_json` 一致。
+- 关联记录：`docs/execution-log.md#2026-09-04--执行归因与复测循环现状核验`
+
 ## BUG-098 | 缺陷日志重复编号导致开放状态统计失真
 
 - 日期：2026-09-04
-- 状态：open
+- 状态：fixed
 - 严重度：low
 - 来源：当前项目状态盘点
 - 描述：`docs/bug-log.md` 中存在同一编号的多条历史记录且状态互相冲突，例如 BUG-M 同时存在 `fixed` 与 `open` 记录，BUG-086 也有重复记录。按编号或状态自动汇总时会把已修复问题再次计为开放问题。
@@ -61,8 +321,8 @@
   3. 可见同一编号同时出现在已修复与未关闭结果中。
 - 影响：项目状态报告和开放缺陷数量不可靠，需要人工结合记录日期与上下文去重。
 - 根因：历史日志合并时保留了重复编号记录，后续状态更新没有归并到单一权威条目。
-- 处理：待将重复编号归并或改为唯一编号，并建立按编号唯一的日志校验。
-- 验证：本次通过文本解析复现，未修改历史记录。
+- 处理：将纯交叉引用降为三级索引标题，为两个不同缺陷使用的 065/066 冲突编号增加唯一后缀；新增 `scripts/check_bug_log.py` 并接入 CI。
+- 验证：校验脚本确认 101 条历史缺陷记录 ID 唯一。
 - 关联记录：`docs/execution-log.md#2026-09-04--当前项目状态盘点`
 
 ## BUG-097 | 队列执行后的 AI 分析未进入统一报告事实链
@@ -185,14 +445,14 @@
 ## BUG-090 | 失败后自动重探索和 DSL 重写尚未编排
 
 - 日期：2026-09-01
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：主链路静态核验
 - 描述：后端分别具备失败分析、anti-pattern 记录、执行错误上下文注入和 `/retest`，但复测只重跑原 DSL；没有自动重新探索、重生成 DSL、更新正式用例的编排，前端也没有复测 API 客户端或操作入口。
 - 影响：用户描述的“分析错因 → 注入当前会话 → 重新组织上下文 → 再次执行”不能自动闭环，需要用户再次对话、生成草案并手动执行。
 - 根因：现有实现采用半自动治理，能力模块已存在但缺少受控自愈状态机和 UI 确认点。
-- 处理：未在本次核验中改变产品策略；建议单独设计带审批门的 `analyze → re-explore → regenerate → diff → approve → rerun` 流程。
-- 验证：已核对 `analysis_retest_service.py`、`context_service.py`、`draft_service.py`、Planning API 与前端 Planning API/面板调用。
+- 处理：已实现透明 `fix_and_retry` 工具和 repair plan artifact；Agent 按失败事实执行重探索、元素验证、DSL 重生成，并在前端审批后通过 Batch/Job 队列重执行。
+- 验证：真实失败用例完成 `fix_and_retry -> explore_page -> validate_page_elements -> generate_dsl -> approve -> execute_dsl -> get_report`，重执行 3/3 步通过；Go、Python 聚焦测试、前端构建及桌面/移动浏览器 E2E 通过。
 - 关联记录：`docs/execution-log.md#2026-09-01--ai-规划到失败复测链路核验`
 
 ## BUG-089 | 流式保存执行遗漏测试数据注入和失败沉淀
@@ -818,7 +1078,7 @@
 
 ---
 
-## Bug #A（2026-05-25）| single-segment 路径下 a11y_nodes 数据丢失
+### 交叉索引：Bug #A（2026-05-25）single-segment 路径下 a11y_nodes 数据丢失
 
 - 日期：2026-05-25
 > 详见 [A. DSL 生成与归一化](#bug-a--single-segment-路径下-a11y_nodes-数据丢失)，该 bug 同时影响页面探索数据传递链路。
@@ -839,7 +1099,7 @@
 
 ---
 
-## Bug #B（2026-05-25）| LLM 调用无重试 + 网络错误消息误导
+### 交叉索引：Bug #B（2026-05-25）LLM 调用无重试 + 网络错误消息误导
 
 - 日期：2026-05-25
 > 详见 [A. DSL 生成与归一化](#bug-b--llm-调用无重试--网络错误消息误导)，该 bug 同时影响基础设施层面的网络健壮性。
@@ -891,7 +1151,7 @@
 
 ---
 
-## BUG-065（2026-05-12）| explore_flow 相对 URL 被解析为 example.com
+## BUG-065B | explore_flow 相对 URL 被解析为 example.com
 
 - 日期：2026-05-12
 - 状态：fixed
@@ -915,7 +1175,7 @@
 
 ---
 
-## BUG-085（2026-05-10）| DeepSeek thinking 模式 + 高温导致 AI 不遵循提示词
+### 交叉索引：BUG-085（2026-05-10）DeepSeek thinking 模式 + 高温导致 AI 不遵循提示词
 
 - 日期：2026-05-10
 > 详见 [A. DSL 生成与归一化](#bug-085--deepseek-thinking-模式--高温导致-ai-不遵循提示词指令)，该 bug 同时影响 AI 决策层。
@@ -1086,7 +1346,7 @@
 
 ---
 
-## BUG-066（2026-05-07）| AI 的 core_user_flow 被序列化为 Python list repr
+## BUG-066B | AI 的 core_user_flow 被序列化为 Python list repr
 
 - 日期：2026-05-07
 - 状态：fixed (`23e3bc9`)
@@ -1248,7 +1508,7 @@
 
 ---
 
-## BUG-057（2026-05-03）| click_with_precheck 对 hidden 元素超时不触发恢复链
+### 交叉索引：BUG-057（2026-05-03）click_with_precheck 对 hidden 元素超时不触发恢复链
 
 - 日期：2026-05-03
 > 详见 [B. 定位器系统](#bug-057--click_with_precheck-对-hidden-元素超时不触发恢复链)，该 bug 同时影响执行引擎的点击预处理。
@@ -1278,7 +1538,7 @@
 
 ---
 
-## BUG-053（2026-04-25）| VLM bbox 坐标在 DOM 选择器提取失败时被丢弃
+### 交叉索引：BUG-053（2026-04-25）VLM bbox 坐标在 DOM 选择器提取失败时被丢弃
 
 - 日期：2026-04-25
 > 详见 [B. 定位器系统](#bug-053--vlm-bbox-坐标在-dom-选择器提取失败时被丢弃)，该 bug 同时影响执行引擎的坐标点击回退。
@@ -1363,7 +1623,7 @@
 
 ---
 
-## BUG-045（2026-04-13）| AI planning "保存并执行草案"链路被 DSL 生成配置阻断
+### 交叉索引：BUG-045（2026-04-13）AI planning "保存并执行草案"链路被 DSL 生成配置阻断
 
 - 日期：2026-04-13
 > 详见 [A. DSL 生成与归一化](#bug-045--ai-planning-保存并执行草案链路被-dsl-生成配置阻断)，该 bug 同时涉及配置问题（`AI_DSL_BASE_URL` 指向错误端点）。

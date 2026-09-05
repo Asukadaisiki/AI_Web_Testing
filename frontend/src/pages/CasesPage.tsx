@@ -62,7 +62,7 @@ export function CasesPage() {
 
   // ── Mutations ──
   const executionMutation = useMutation({
-    mutationFn: (caseId: number) => executeCase(caseId, { actor_user_id: 1 }),
+    mutationFn: (caseId: number) => executeCase(caseId, {}),
     onSuccess: (execution) => {
       queryClient.invalidateQueries({ queryKey: ["executions"] });
       void navigate(`/reports/${execution.id}`);

@@ -1,18 +1,5 @@
 export type {
   CaseMutationPayload,
-  DSLCasePayload,
-  DSLValidationResult,
-  DslGenerationFeedbackPayload,
-  DslGenerationFeedbackStatus,
-  DslGenerationPromptVariant,
-  DslGenerationRejectionReasonCode,
-  DslGenerationRunStatus,
-  GenerateDslImportMode,
-  GenerateDslMode,
-  GenerateDslRequest,
-  GenerateDslResponse,
   PaginatedCases,
   StoredCaseDetail,
-  StoredDslGenerationRunDetail,
-  StoredDslGenerationRunSummary,
 } from "../../types/api";

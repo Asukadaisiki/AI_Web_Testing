@@ -3,27 +3,46 @@
 AI 增强的 Web UI 自动化测试平台。
 
 当前仓库采用前后端分离结构：
-- `backend/`：FastAPI + SQLAlchemy + Alembic + Playwright Runner
+- `backend-go/`：Go + Hertz AgentCore 与执行控制面
+- `browser-worker/`：Python Playwright/A11y/Locator 执行 Worker
 - `frontend/`：React + TypeScript + Vite 平台 UI
 - `docs/`：产品规划、执行计划、设计文档、执行日志与缺陷日志
 
 ## 当前状态
 
-当前阶段：**执行控制面与 Report Core 第一阶段完成，进入失败事实统一和受控自愈闭环建设**。
+当前阶段：**Go AgentCore 纵向闭环和受控自愈已可用，进入控制面收敛与生产化阶段**。
 
-截至 2026-09-02：
+后端演进方向已经确定：新 AgentCore 与控制面使用 Go，浏览器侧执行能力保留在 Python Worker；Hertz 提供 HTTP/SSE，Kitex 仅用于未来真实拆分的进程间 RPC。迁移期间现有 FastAPI API 继续可用。
+
+截至 2026-09-05：
 
 | 能力域 | 当前状态 |
 |------|------|
-| 平台与工作台 | Dashboard、用例管理、执行中心、报告中心和 Planning 工作台已具备 |
+| 平台与工作台 | Planning 已切换到 Go AgentRun/ToolCall/SSE；用例管理和报告中心继续复用现有平台 API |
 | 结构化执行 | DSL 校验、Playwright Runner、步骤级 evidence 和报告持久化已具备 |
-| 定位系统 | A11y 语义定位为主路径，人工修正优先，VLM 受控降级且默认关闭 |
+| 定位系统 | A11y 语义定位为主路径，过滤不可定位文档节点；VLM 当前关闭 |
 | 执行调度 | PostgreSQL 持久化 Batch/Job 队列、并发限制、幂等、lease、heartbeat 和取消已落地 |
 | 报告聚合 | Report Core 可按 run、batch、project 聚合结果，并返回持久化 FailureSignal 与分析总结 |
-| AI 自愈 | 失败分析、anti-pattern 和历史恢复已接入统一事实链；自动重探索与 DSL 重生成尚未编排 |
-| 质量门禁 | 已恢复执行分析聚焦合同测试；完整后端、前端和浏览器回归分层仍需重建 |
+| AI 自愈 | `fix_and_retry` 可按失败事实执行重探索或 DSL 重生成，并强制经过用户审批后重运行 |
+| 身份与权限 | Cookie Session 登录已恢复；Python 业务 API、artifact、Go Run/Event/Resume 均要求身份并校验资源归属 |
+| 生产运行 | Docker Compose 管理 PostgreSQL、迁移、Python API/Worker、Go AgentCore 和 Nginx；SSE 反向代理已配置 |
+| 质量门禁 | Go 测试/vet/build、Python 合同测试、Vitest、桌面/移动 Playwright smoke 和生产构建进入 CI |
 
 不再使用单一完成度百分比描述项目状态；各能力的完成标准和风险不同，应以上述能力矩阵、执行日志和缺陷日志为准。
+
+### 2026-09-04 Go AgentCore 与受控自愈
+
+- Go AgentCore 使用原生 tool calling，持久化 AgentRun、事件序号、transcript、checkpoint 和 DSL 审批状态。
+- 前端通过 SSE 实时展示消息、ToolCall 与 artifact，刷新后按事件序号从 PostgreSQL 重放。
+- 工具链已覆盖 `ask_user_question`、页面探索、元素验证、DSL 生成、执行、报告和 `fix_and_retry`。
+- `execute_dsl` 只接受当前 Run 已由用户批准的 generation，模型不能自行绕过审批。
+- 真实浏览器链路已完成探索、验证、生成、审批、执行、报告，以及失败后的修复、再审批和重运行。
+
+下一阶段优先级：
+
+1. 将 Planning 消息、草稿和事件从 Python legacy API 继续迁入 Go 控制面。
+2. 为生产容器补充真实镜像构建、TLS 入口和对象存储验收。
+3. 扩大 Firefox/WebKit 与真实 Runner 的跨浏览器回归矩阵。
 
 ### 2026-09-02 执行控制面与 Report Core
 
@@ -34,12 +53,6 @@ AI 增强的 Web UI 自动化测试平台。
 - Report Core 可读取 run、batch、project 三层报告；`TestCaseRun` 保存 DSL 快照、hash、attempt 和报告版本。
 - 未捕获执行异常会收口为失败报告，避免永久 `running` 记录。
 - 已通过真实 PostgreSQL + Playwright 的 `Batch -> Job -> Run -> Report` smoke 验证，以及 Planning SSE 队列、heartbeat 和取消验证。
-
-下一阶段优先级：
-
-1. 实现带审批门的 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 自愈编排。
-2. 配置 Planning/DSL 模型后完成真实 AI 全链路验收。
-3. 继续扩展后端、前端和浏览器集成测试门禁。
 
 ### 2026-05-31 textContent + DSL 完善（4 次修复）
 
@@ -150,30 +163,33 @@ AI 增强的 Web UI 自动化测试平台。
 - **DSL 生成链路修复**：7 层因果链 bug 修复（Bug A→G），网络重试、工具去重、字段归一化
 - **变量占位符系统**：分段生成 `input_contract` 自动提取、跨段变量命名权威、`_clean_variable_format` 格式清理
 - **语义定位器增强**：`a11y_label_sibling_input` 策略（无名输入框）、`cell`/`row`/`column` 表格角色支持
-- 本地单用户模式：前端跳过登录页，后端自动使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的 admin 账号；原登录接口暂作兼容保留
+- 登录与权限：真实登录页、Cookie Session、统一 API 认证门禁、Go AgentRun 所有权和 capability 项目权限校验
+- 项目级工作台：回归批次编排、状态轮询/取消、运行报告跳转和基于 evidence 的定位调试/人工修正
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
-- 编排失败后的重探索、DSL 重生成、差异审阅和受控重运行
-- 配置 AI 模型后补齐真实 Planning -> 探索 -> DSL -> 队列执行 -> 报告全链验收
-- 基于当前公开合同恢复自动化测试，不复用已经漂移的旧测试套件
+- Planning 消息、草稿和事件仍由 Python legacy API 提供，需继续收敛迁移期双协议
+- 扩大真实 Runner 的跨浏览器矩阵，并验证生产镜像、TLS 和持久化卷恢复
+- 清理迁移期休眠客户端和历史兼容代码
 
 与计划相比的主要差距：
-- 自动自愈仍是半自动能力集合，尚无统一状态机和前端审批入口
-- 当前缺少可持续运行的自动化回归门禁
+- Go 控制面仍依赖 Python 提供 Planning 对话内容和浏览器能力，迁移边界尚未完全收敛
+- CI 浏览器门禁当前覆盖 Chromium 桌面/移动平台 UI，正式 Runner 仍只运行 Chromium
+- artifact 和 storage state 仍使用本地持久卷，多节点前需迁移到对象存储
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
-- 当前关闭登录鉴权，仅适用于本地单用户测试；恢复多用户使用前需重新启用认证与授权
 
 AI visual 当前默认关闭；能力状态与后续治理决策见
 [`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)。
 
 ## 演示流
 
-当前前端采用三步闭环演示流（无需登录）：
+当前前端采用登录后的五步闭环：
 
-1. **AI 规划**（PlanningPage）：通过对话式 AI 助手生成测试方案，支持会话历史恢复与会话管理
-2. **用例中心**（CasesPage）：审阅 DSL 草案、保存为正式用例、编辑/删除已有用例、触发 Playwright 执行（支持实时流式进度与取消）
-3. **报告**（ReportPage）：查看执行结果、概览统计、步骤证据与截图，支持删除执行记录
+1. **AI 规划**：通过 AgentCore 生成、审批和执行结构化用例
+2. **用例中心**：管理正式 DSL 用例
+3. **回归编排**：按项目选择用例和并发度，创建、取消及跟踪 Batch
+4. **定位调试**：查看 target、候选、最终命中和失败原因，并提交修正
+5. **报告**：查看执行统计、分析、步骤 evidence 和截图
 
 全部页面采用 NotebookLM 风格三栏浮岛布局，侧边栏底部导航。
 
@@ -189,13 +205,6 @@ AI visual 当前默认关闭；能力状态与后续治理决策见
 ## AI 视觉保护配置
 
 后端当前支持以下保护性配置，默认都以”不中断主链路”为原则：
-- `ENABLE_AI_DSL_GENERATE=false`
-- `AI_DSL_TIMEOUT_MS=15000`
-- `AI_DSL_API_KEY=`
-- `AI_DSL_BASE_URL=https://api.openai.com/v1`
-- `AI_DSL_MODEL=`：用于自然语言生成 DSL 草案的文本模型
-- `AI_DSL_STRICT_MODE=false`
-- `AI_DSL_ALLOW_AUTO_REPAIR=true`
 - `ENABLE_AI_VISUAL_LOCATE=false`
 - `AI_VISUAL_TIMEOUT_MS=10000`
 - `AI_VISUAL_FAILURE_THRESHOLD=3`
@@ -230,7 +239,7 @@ AI DSL 生成会输出最小治理信息：
 ### 1. 后端
 
 ```powershell
-cd backend
+cd browser-worker
 uv sync
 uv run alembic upgrade head
 uv run backend-dev
@@ -242,11 +251,30 @@ uv run backend-dev
 另开终端启动执行队列 Worker：
 
 ```powershell
-cd backend
+cd browser-worker
 uv run python -m app.workers.execution_worker --concurrency 2
 ```
 
-### 2. 前端
+### 2. Go AgentService
+
+```powershell
+cd backend-go
+go run ./cmd/agentservice
+```
+
+默认地址：`http://127.0.0.1:8081`
+
+### 3. 初始化登录账号
+
+```powershell
+cd browser-worker
+$env:AUTH_BOOTSTRAP_PASSWORD="replace-with-at-least-12-characters"
+uv run python scripts/bootstrap_user.py --email admin@example.com
+```
+
+macOS/Linux 使用 `AUTH_BOOTSTRAP_PASSWORD=... uv run python ...`。
+
+### 4. 前端
 
 ```powershell
 cd frontend
@@ -257,20 +285,35 @@ npm run dev
 默认前端地址：
 - `http://127.0.0.1:5173`
 
-本地启动后无需登录，前端会直接进入工作台，后端统一使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的数据库账号（默认 `admin@test.com`）。原 Cookie Session 登录接口仅为兼容保留，因此仍需配置 `AUTH_SESSION_SECRET`；该管理员账号缺失或停用时，依赖用户身份的接口会返回 500。
+前端通过 Go `/api/v2/auth/login` 建立 HttpOnly Cookie Session。`AUTH_SESSION_SECRET` 必须使用随机值，并与 Python Worker 使用同一值；生产环境应在 TLS 反向代理后访问。
+
+## 生产运行
+
+```bash
+cp deploy/prod.env.example .env.prod
+docker compose --env-file .env.prod -f compose.prod.yml up -d --build --wait
+docker compose --env-file .env.prod -f compose.prod.yml --profile tools run --rm bootstrap-user
+```
+
+Nginx 统一提供前端、Go `/api/v2` 和受保护 artifact；Python Browser Worker
+仅在内部网络提供 `/api/v1/internal/browser-capabilities/*`。
 
 ## 构建验证
 
 ```powershell
-cd backend
+cd backend-go
+go test ./...
+go vet ./...
+
+cd browser-worker
 uv run python -m compileall -q app
 uv run python -m unittest discover -s tests -p "test_*.py" -v
 
 cd ../frontend
+npm test
+npm run test:smoke
 npm run build
 ```
-
-当前只恢复了执行分析链路的聚焦合同测试，尚不能替代完整回归测试。
 
 ## 推荐联调路径
 
@@ -309,7 +352,7 @@ npm run build
 
 ## 开发约束
 
-- 正式执行结果以 `backend` Runner 为准
+- 正式执行结果以 `browser-worker` Runner 为准
 - 前端只负责平台交互、工作台编辑和结果展示
 - AI 能力不能绕过 DSL 校验直接驱动执行
 - 新增功能完成后更新 `docs/execution-log.md`

@@ -50,10 +50,235 @@
 | SSE 架构修复 v2 | 06-08 | Session 隔离 + 弹性降级 | 修复表不存在时流式崩溃 |
 | 孤儿会话根因修复 | 06-08 | SSE 端点添加会话验证，测试驱动调试 | 501 tests, 根因修复 |
 | 孤儿数据清理 | 06-08 | 清理 70 个孤立项目，添加清理脚本 | 数据库清理完成 |
+| 控制面生产化 | 09-05 | 生产运行、Session 元数据、鉴权、项目回归、定位调试和 CI | Go/Python/Frontend 生产边界与持续门禁落地 |
 
 ---
 
 ## 任务记录
+
+## 2026-09-05 | 复核当前项目结构
+
+- 任务：说明完成控制面迁移后的仓库结构、服务职责和主调用链。
+- 操作：核对 Go、Browser Worker、Frontend 实际目录与迁移计划；修正架构导航中仍指向已删除 Python 控制面模块的内容。
+- 结果：确认项目已形成“Go 唯一控制面 + Python Browser Worker + React 平台 UI + PostgreSQL 事实存储”的结构，Python 不再包含 Agent 或用户业务 API。
+- 验证：对照当前文件树、FastAPI 路由注册和 Go package 列表完成静态核验。
+- 后续：无。
+
+## 2026-09-05 | 完成内部控制面迁移与 Browser Worker 重命名
+
+- 任务：消除 Python `/internal/agent-capabilities` 中残留的 DSL、Case、Batch 和 Report 控制面，并完成 Python Worker 目录收口。
+- 操作：新增 Go DSL Store、完整结构化 DSL 校验和本地 ControlPlane 工具适配器；将认证主体写入 Tool Call；迁移 `generate_dsl`、`execute_dsl`、`get_report`、`fix_and_retry`；删除 Python agent capability 路由、服务、schema、测试及失去调用方的 Case/Batch/Report 服务；删除 Python 文本 DSL 模型配置和 Prompt；将 `backend/` 重命名为 `browser-worker/` 并更新 CI、Compose、Pyright、README 和运行路径。
+- 结果：Go AgentService 成为唯一 Agent 与业务控制面；Python 仅保留 Browser capability、Playwright 执行 Worker、A11y/Locator、evidence 和确定性失败分析。
+- 验证：Go 全量 test/vet/build 通过；真实 PostgreSQL 纵向测试覆盖 Go GenerateDSL → ExecuteDSL → Report → FixAndRetry；Browser Worker unittest 14/14、Alembic check 和 Vulture 通过；前端 Vitest/build/Knip 通过；Playwright 桌面与移动 smoke 4/4 通过。
+- 后续：提交并同步 `xujinyuan/go-agentcore-v2`；生产 Compose 启动验证受本机无 Docker CLI 限制，交由 CI 的 deployment-config/browser-smoke 门禁验证。
+
+## 2026-09-05 | 补齐 Go 报告聚合并验证 PostgreSQL 控制面
+
+- 任务：继续 M5 控制面迁移，补齐 Go Execution Overview 语义并验证新 Go Store 在真实 PostgreSQL schema 上可运行。
+- 操作：将完整双窗口 Overview 聚合迁入 Go，补齐趋势、失败分类、动作、高频失败用例和根因统计；新增纯聚合单测与 Project → Case → Batch → Execution → Correction 纵向 PostgreSQL 集成测试；修复 Batch Job 必填默认值、幂等冲突、Planning Session 所有权、Correction 时间戳和带执行历史的 Project 删除；删除 Python 已失去调用方的 Case/Execution/Batch 查询与 Overview schema。
+- 结果：Go 公开控制面不再依赖 Python 报告查询；Python 继续收缩为执行 Worker，但内部 `agent-capabilities` 的 DSL 持久化与执行编排尚待迁入 Go。
+- 验证：Go 全量 test/vet/build 通过；显式设置 `TEST_DATABASE_URL` 的 PostgreSQL 纵向测试通过；Python unittest 22/22；前端 Vitest 8/8、生产构建和 Knip 通过；Vulture 无高置信度无用项；Alembic 位于 `20260905_0038` 且 schema check 无差异。
+- 后续：迁移并删除 Python `/internal/agent-capabilities`，将 `backend/` 物理重命名为 `browser-worker/`，再执行浏览器与生产部署回归。
+
+## 2026-09-05 | 启动 Go AgentService 全面迁移
+
+- 任务：参考 `project/pi-agent` 重构 Agent 分层，以 Go AgentService 作为唯一 Agent，并将 Python 收缩为纯 Browser Worker。
+- 操作：新增完整迁移计划；对照 pi-agent 拆出 Go `agent`、`harness`、`agentservice`；增加纯 Agent loop 和 Harness `beforeToolCall` policy；将 Report Core 改为确定性分析；将浏览器探索 capability 提取到 `application/browser`；删除 Python Planning API、ReAct Agent、Prompt、SSE、草案编排、schema 和 ORM 子图；Go Session API 停止读取旧 message/draft 表；新增 Alembic `0037` 下线遗留表；将登录、身份读取和退出迁入 Go；DSL 候选改由 Go Agent 编写，Python只做 Schema/preflight 和版本落库。
+- 结果：面向用户的 Planning 和 Auth 请求只进入 Go `/api/v2`；Python 已不包含 Agent 循环或 DSL 生成模型调用，现有职责收缩为 Browser/Execution capability 和尚待迁移的平台 API。
+- 验证：Python完整 unittest 22/22、Go 全量 test/vet/build、前端 Vitest 8/8、生产构建和桌面/移动 Playwright smoke 通过；Alembic已升级至 `20260905_0037` 且 schema check 无差异；Knip/Vulture 无高置信度无用项。Docker CLI 不可用，未执行容器启动验证。
+- 后续：继续迁移 Case、Batch、Report 等浏览器侧以外的公开 API到 Go，并将 Python公网入口收缩为 artifact 和内部 Worker capability。
+
+## 2026-09-05 | 澄清 Go 与 Python 双 Agent 实现
+
+- 任务：说明报告 AI 分析复用旧 Planning Agent 的含义，并确认当前是否存在 Go/Python 两套 Agent。
+- 操作：核对 Go `Engine.Continue`、Python `run_planning_turn`、Report Core `_analyze_details` 和 `/api/v1/ai-planning` 路由注册关系。
+- 结果：确认当前存在两套 Agent 循环：Go AgentCore 是前端 Planning 主链；Python legacy ReAct Agent 仍由旧 Planning API 使用，并被 Report Core 借作失败分析器。DSL Generator 和 VLM 是单次模型能力，不属于第三套 Agent。
+- 验证：完成调用链静态核对；未修改业务代码，未运行测试。
+- 后续：将报告 AI 分析抽为独立、窄接口的 reporting analyzer 后，移除 Python legacy Planning Agent 与 `/api/v1/ai-planning`。
+
+## 2026-09-05 | 清理非主链代码并修正 Go 工具边界
+
+- 任务：澄清 Agent SSE 与轮询机制、Go 包职责，并删除已退出当前主链且无消费者的代码。
+- 操作：将 `ask_user_question` 从 `internal/agentcore` 移至 `internal/tools` 并补工具测试；删除旧 `AITestPlanningPanel`、Planning SSE/store/reducer、兼容 API barrel、无消费者前端客户端、类型和 OpenAPI 生成产物；删除 Python 无引用 facade、兼容常量、辅助函数和两个从未读写的 ORM 模型；新增 Alembic `0036` 删除对应数据库表；更新架构和能力状态文档。
+- 结果：当前 Agent 事件仍由 EventSource SSE 推送并按 PostgreSQL `seq` 重放；仅 Batch 报告等待和 Worker 领取任务使用 polling。前端静态不可达项清零，Go Core 与 Tool Registry 边界恢复，代码净减少超过 2.1 万行。
+- 验证：`go test ./...`、`go vet ./...`、`go build ./...` 通过；Python 22 项 unittest 通过；Vitest 8/8 与前端生产构建通过；Knip 无未使用项；Vulture 80% 置信度扫描无结果；Alembic 已升级至 `20260905_0036` 且 `alembic check` 无差异；`git diff --check` 通过。
+- 后续：Python `/api/v1/ai-planning` 仍是已注册公开兼容 API，报告 AI 分析也复用其 Agent 实现；如要继续删除该子系统，需先把报告分析迁出 Planning，并明确废弃该公开 API。
+
+## 2026-09-05 | 当前架构、Harness 与 AgenticRL 落地状态复核
+
+- 任务：说明当前系统架构、核心链路服务模块的技术实现，并核查 Harness、AgenticRL 和剩余缺口。
+- 操作：静态追踪 React 工作台、Go AgentCore/Hertz/SSE、Python capability API、PostgreSQL Batch/Job 队列、Playwright Runner、A11y/Locator、Report Core、FailureSignal、anti-pattern、Prompt Registry、生产 Compose 与 CI；检索 Harness、reward、trajectory、policy、evaluation 和训练相关实现。
+- 结果：当前已形成“Go 认知与控制面 + Python 浏览器执行面 + PostgreSQL 事实/队列 + React 工作台”的纵向闭环；现有 AgentRun、工具注册、事件重放、DSL 审批、执行证据和自动修复链可视为 Harness 雏形，但仓库没有独立 Harness/Eval 子系统；AgenticRL 仅具备生成反馈、失败信号、anti-pattern 和 prompt 版本等数据基础，尚无统一 trajectory/reward、离线评测、策略训练和发布闭环。
+- 验证：完成代码、迁移、部署和 CI 配置的静态交叉核对；未修改业务代码，未运行测试。
+- 后续：优先建设 Agent Run 持久化调度/恢复、跨实例事件分发和正式 Harness 评测合同；随后补齐 AgenticRL 样本、奖励、离线评测、策略注册与灰度发布。
+
+## 2026-09-05 | Frontend src IDE 报错诊断
+
+- 任务：确认 IDE 中 `frontend/src` 报错的原因。
+- 操作：核对工作区状态、`.gitignore`、`tsconfig.json`、Vitest 类型初始化、前端依赖树和 TypeScript 版本；执行 TypeScript 完整诊断、生产构建及 Vitest。
+- 结果：`frontend/src` 当前无 TypeScript 编译错误；`.gitignore` 仅忽略 `frontend/.playwright-browsers/` 等生成物，不影响源码。IDE 红色诊断最可能来自语言服务仍缓存依赖安装前的项目状态，或未使用 `frontend/node_modules/typescript` 的工作区 TypeScript 5.9.3。
+- 验证：`npx tsc --noEmit --extendedDiagnostics` 0 error；`npm run build` 通过；Vitest 8/8 通过；依赖树完整。
+- 后续：在 IDE 中切换到工作区 TypeScript 并重启 TypeScript language server；若仍存在，按具体错误文本继续定位。
+
+## 2026-09-05 | 同步生产化控制面与工作台实现到 GitHub
+
+- 任务：将生产反向代理与进程管理、Go Planning Session、鉴权、回归编排、定位调试、持续浏览器门禁和 BUG 日志治理的全部实现同步到 GitHub。
+- 操作：复核工作树、凭据扫描、缺陷 ID 唯一性和暂存清单；显式暂存 77 个实现/测试/文档文件；创建提交 `0cf008b` 并推送当前分支。
+- 结果：全部实现已同步到 `origin/xujinyuan/go-agentcore-v2`。
+- 验证：远端推送显示 `79c1d17..0cf008b`；提交前 `git diff --cached --check` 通过且未发现测试账号或明文凭据。
+- 后续：在具备 Docker CLI/Engine 的环境执行生产镜像构建与 Compose 启动验收。
+
+## 2026-09-05 | 生产化控制面、鉴权与工作台完善
+
+- 任务：处理生产反向代理与进程管理、Planning Session 元数据向 Go 迁移、持续浏览器回归门禁、项目级编排与定位调试 UI、恢复鉴权及 BUG-098 日志治理。
+- 操作：新增 Docker Compose、Python/Go/Frontend Dockerfile 和 Nginx SSE 代理；Go 新增 Planning Session/项目关联存储和 `/api/v2/planning`，AgentRun 增加 actor 所有权；Python 恢复 Cookie Session，统一保护业务/artifact/internal capability 路由并增加账号初始化命令；前端接入 Login/AuthGuard、回归编排和定位调试；新增 Vitest、桌面/移动 Playwright smoke 与 GitHub Actions；清理重复缺陷 ID 并增加 CI 校验；修复 BUG-107/108/109。
+- 结果：Planning Session 元数据新记录由 Go 持久化并标记 `runtime_owner=go`，消息/草稿暂由 Python legacy API 继续提供；用户可登录后创建 Session、按项目启动/取消回归批次、查看运行报告和定位候选证据；生产入口统一由 Nginx 分流，内部 capability 不暴露公网。
+- 验证：Go `go test ./...`、`go vet ./...` 通过；Python 22 项测试、compileall、PostgreSQL Alembic 升级至 0035 和 `alembic check` 通过；前端 Vitest 8/8、Chromium 桌面/移动 smoke、生产构建通过；真实隔离端口完成匿名 401、登录、Go Session 创建/list、回归页和定位调试页验收，临时账号/Session/项目已清理。
+- 后续：本机没有 Docker CLI/Engine，尚未在本机实际构建生产镜像；需要在有 Docker 的环境执行 `docker compose ... up --build --wait`，并继续迁移 Planning 消息/草稿/事件。
+
+## 2026-09-05 | 当前项目进度复核
+
+- 任务：基于当前分支、提交、能力文档、测试资产和缺陷状态汇总项目实际进度。
+- 操作：核对 `xujinyuan/go-agentcore-v2` 与远端同步状态、近期 AgentCore 提交、README 能力矩阵、Go/Python/前端测试资产及开放缺陷；修正 README 的自愈半闭环旧口径并关闭已完成的 BUG-090；记录 BUG-106。
+- 结果：项目已完成 Go AgentCore 第一条完整纵向链路和受控自愈闭环，进入控制面收敛与生产化阶段；主要剩余工作是生产部署配置、Planning Session 元数据迁移、持续回归门禁、项目级编排/定位调试 UI、鉴权恢复及历史日志治理。
+- 验证：当前分支与远端提交计数为 `0/0`，盘点前工作区干净；复核 9 个 Go 测试文件、4 个 Python 聚焦测试文件和前端当前无自动化测试文件；Go 全量测试、Python 聚焦测试、前端生产构建及文档差异检查通过。
+- 后续：优先完成生产反向代理与进程管理，并将真实浏览器 E2E 固化为可持续回归门禁。
+
+## 2026-09-05 | 修复 Python 导入诊断
+
+- 任务：检查并修复仓库中多处 Python 导入问题。
+- 操作：递归验证 122 个 `app.*` 模块；使用 Ruff 定位未使用和非顶层导入；清理 9 个无效导入并调整 2 个模块的 logger 初始化位置；新增根目录 `pyrightconfig.json`，声明 `backend/.venv`、`backend` 源码路径和 Python 3.12。
+- 结果：第三方依赖与 `app.*` 包可被 IDE/Pyright 正确解析，Ruff 的 `F401/F403/F405/E402` 问题由 17 个降为 0；关联 BUG-105。
+- 验证：Pyright 导入检查 0 errors/0 warnings；Python 122 个模块全部导入成功；13 个单测通过；`compileall`、Go `go test ./...`、前端 `npm run build` 通过。
+- 后续：仓库仍有历史导入排序提示和未纳入本次范围的类型标注债务，可单独治理。
+
+## 2026-09-04 | 同步 Go AgentCore 重构分支到 GitHub
+
+- 任务：将已完成并验收的 Go AgentCore、受控自愈和前端迁移改动同步到 GitHub。
+- 操作：核对工作区、当前分支和最近提交；为 `xujinyuan/go-agentcore-v2` 设置远端 upstream 并推送。
+- 结果：重构分支及完整提交历史已同步到 `origin`。
+- 验证：推送后核对本地 HEAD、远端分支和工作区状态。
+- 后续：无。
+
+## 2026-09-04 | 前端切换 Go AgentCore 并完成浏览器验收
+
+- 任务：将 Planning 工作台从 Python Planning SSE 切换到 Go AgentRun、ToolCall、Checkpoint 和 SSE 重放协议，并完成真实浏览器 E2E。
+- 操作：新增 `features/agent` 类型、API、事件归并和 Run hook；新建 Agent 工作台展示对话、工具轨迹、artifact 和动态问题控件；最近 Run ID 按会话保存在浏览器本地，刷新后从 PostgreSQL 重放事件；Vite 分流 Go/Python 开发代理；三栏布局增加移动端纵向响应式；过滤 `RootWebArea/StaticText` 非定位节点并补回归测试；同步 README 当前阶段与后续优先级。
+- 结果：前端可创建 Run、实时观察探索/验证/生成/执行/报告工具、在两个审批点暂停恢复，并在刷新后恢复完整运行。干净 E2E 使用 `heading "Example Domain"` 首次执行 3/3 步通过，没有触发修复；另一次 E2E 验证了首次 locator 失败后自动重探索、重新审批并通过的完整自愈路径。
+- 验证：前端 `npm run build` 通过；Python 13 个聚焦测试通过；Playwright 桌面 1440x900 和移动 390x844 截图无横向溢出、控制台错误为 0；最终 Run 为 completed，工具调用 6 次，Batch pass_rate=1.0。全部临时 Run、generation、Case、Batch、execution 和截图已清理。
+- 后续：补充生产环境反向代理配置，并评估将 Planning Session 元数据迁入 Go 控制面。
+
+## 2026-09-04 | AgentCore 透明修复与重执行闭环
+
+- 任务：接入非黑盒 `fix_and_retry`，验证失败事实、修复策略、DSL 重生成、人工审批和重执行的完整链路。
+- 操作：Python Capability Worker 新增修复计划接口，基于 Batch/Run 的 FailureSignal 选择 `re_explore`、`regenerate_dsl` 或人工处理并返回源 DSL；Go 注册 `fix_and_retry` 工具和 repair plan artifact；Run 详情投影补充 DSL snapshot；`get_report` 默认等待 Batch 终态；增加 `analysis_status` 数据库默认值以兼容滚动期间的旧 Worker；将报告摘要纳入确定性事实层。
+- 结果：真实 assertion 失败 Batch 经 Agent 调用 `fix_and_retry -> explore_page -> validate_page_elements -> generate_dsl -> ask_user_question -> execute_dsl -> get_report` 完成修复，审批前未执行，审批后新 Batch 3/3 步通过且通过率 100%；修复策略和事件流完整可审计。
+- 验证：Go `go test ./...`、`go vet ./...`、编译通过；Python 12 个聚焦合同测试与 compileall 通过；Alembic 当前为 0034 且 `alembic check` 无差异；真实 DeepSeek、Playwright、PostgreSQL 队列和报告链路通过。临时 Run、generation、Case、Batch、anti-pattern、截图及本次服务进程已清理。
+- 后续：将前端 Planning 工作台切换到 Go AgentRun/ToolCall/SSE 协议，并完成浏览器 E2E 验收。
+
+## 2026-09-04 | AgentCore DSL 审批、执行与报告闭环
+
+- 任务：将候选 DSL 审批、正式执行和报告读取接入 Go AgentCore，并修复复测与归因事实链。
+- 操作：AgentRun 新增 latest/approved generation 绑定及 Alembic 0033；`generate_dsl` 发布 artifact；用户通过 `approve_dsl` 工具结果批准当前版本，`execute_dsl` 强制校验批准 ID 后创建正式 Case 和幂等 Batch；新增 `get_report` 工具并由后端等待终态；修复 BUG-099 的复测统一持久化和 BUG-100 的确定性结论覆盖。
+- 结果：真实链路完成 `explore -> validate -> generate -> approve -> execute -> report`：generation 3 创建 Case 6 和 Batch 3，Worker 执行 3/3 步通过，Report Core 返回 `passed`、`pass_rate=1.0` 和 `analysis_status=completed`。LLM 不能伪造审批，也不能用错误结构化结论覆盖失败事实。
+- 验证：Go 全量测试、vet 和编译通过；Python 7 个合同测试、compileall 和 `alembic check` 通过；Alembic 升级至 0033；真实 Playwright/队列/报告链路通过。测试实体将在最终联调完成后统一清理。
+- 后续：实现透明 `fix_and_retry` RepairAttempt 流程，再将前端切换到 Go Agent 事件协议。
+
+## 2026-09-04 | Go AgentCore 探索、验证与 DSL 生成链路
+
+- 任务：让 Go AgentCore 自主调用现有 Python 浏览器能力并生成经过页面元素验证的 DSL。
+- 操作：新增受限的 Python Browser/Agent Capability 路由；复用现有 `explore_page`、`explore_flow`、A11y preflight 和 DSL generator；Go 新增 Python Worker client 及 `explore_page`、`explore_flow`、`validate_page_elements`、`generate_dsl` 工具；元素验证同时支持生成前需求覆盖检查和生成后 locator preflight；Run 显式携带 project context。
+- 结果：真实 Agent 能从用户需求自主完成单页探索、识别 8 个 A11y 节点、验证标题唯一命中、调用 `deepseek-v4-flash` 生成 3 步 DSL，并明确停止在未执行草案阶段。联调发现并修复 BUG-101。
+- 验证：Go `go test ./...`、`go vet ./...`、编译通过；Python 5 个合同测试与 compileall 通过；真实跨进程链路产生 23 条连续事件并以 `run.finished` 收口；临时 Run 和 DSL generation 数据已清理。
+- 后续：增加 DSL artifact 与用户审批状态，接入 `execute_dsl`、`get_report` 和透明 `fix_and_retry`。
+
+## 2026-09-04 | AgentCore 异步运行与 SSE 实时重放
+
+- 任务：让 Go Agent Run 非阻塞启动，并统一实时事件推送与 PostgreSQL 历史重放。
+- 操作：新增进程内 EventBroker；事件持久化成功后再发布给订阅者；Run 增加显式项目上下文，创建接口改为 `202 Accepted` 并后台驱动 Agent；新增 `/events/stream` SSE 接口，支持 `after_seq` 和 `Last-Event-ID`，先重放历史再推送实时事件和 keep-alive。
+- 结果：模型调用不再阻塞创建请求；客户端可在 Run 运行期间看到 `run.started -> tool.started -> tool.args.delta -> tool.pending`，断线后按序号补齐事件。慢订阅者不会阻塞 Agent，可从 PostgreSQL 恢复跳过的事件。
+- 验证：`go test ./...`、`go vet ./...` 和 Go API 编译通过；真实服务中创建 Run 立即返回 running，SSE 随后收到 4 条有序事件并停留在用户等待状态；测试数据和本地进程已清理。
+- 后续：接入 `explore_page`、`explore_flow` 和 `validate_page_elements` 工具，并将 Python Browser Worker 收敛为稳定接口。
+
+## 2026-09-04 | AgentRun 与事件流 PostgreSQL 持久化
+
+- 任务：让 Go AgentCore 的运行状态、对话 transcript、pending checkpoint 和事件在进程重启后可恢复。
+- 操作：新增 `agent_runs`/`agent_events` SQLAlchemy 模型和 Alembic 0032 迁移；实现 Go `PostgresRepository`；使用 `agent_runs.last_event_seq` 在事务中原子分配事件序号；Go 服务启动改为校验数据库连接并使用 PostgreSQL Repository；补充数据库 URL 兼容转换。
+- 结果：AgentCore 不再依赖进程内状态，Run、用户等待点、模型 transcript 和事件可跨进程恢复；内存 Repository 仅保留给单元测试。
+- 验证：`go test ./...`、`go vet ./...` 通过；Alembic 升级至 `20260904_0032` 且 `alembic check` 无差异；真实创建 waiting_user Run 后重启 Go 服务，Run 和 4 条有序事件读取一致；临时数据已清理。
+- 后续：新增实时 SSE 订阅，与 PostgreSQL 事件重放共用同一事件源。
+
+## 2026-09-04 | Go AgentCore 原生工具调用与人工暂停恢复
+
+- 任务：让 Go AgentCore 使用真实 LLM 原生 tool calling，并跑通 `ask_user_question` 暂停/恢复循环。
+- 操作：新增 OpenAI 兼容 LLM client、Agent Engine、对话 transcript、Tool Registry 执行入口和 `AskUserTool`；扩展 Run 保存 pending tool/step，统一记录 message/tool/run 事件；HTTP 创建 Run 改为驱动 Agent 循环，resume 接口将用户答案作为 tool result 送回同一 Run；配置读取复用本地 `backend/.env`。
+- 结果：`deepseek-v4-flash` 可通过原生 `tools/tool_calls` 自主提出问题；Run 能跨两次用户回答保持上下文，从 `running` 进入 `waiting_user`、恢复后再次等待，最终输出两条登录场景计划并进入 `completed`。当前仅注册 `ask_user_question`，其他领域工具将在后续阶段接入。
+- 验证：`go test ./...`、`go vet ./...`、Go API 编译通过；真实启动于 8082 后完成两轮 `ask_user_question`，18 个事件序号连续，包含 start/args/pending/result/message/finished；旧测试进程占用 8081 的问题已清理。
+- 后续：将 Run/Event/ToolCall 接入 PostgreSQL，增加 SSE 实时订阅，再接入页面探索和元素验证工具。
+
+## 2026-09-04 | Go AgentCore 合同与 Hertz 骨架
+
+- 任务：冻结新控制面的第一批跨模块合同，并建立可独立运行的 Go/Hertz 服务骨架。
+- 操作：新增 `backend-go` Go module；定义 AgentRun、统一事件 envelope、问题和暂停恢复数据结构；定义 Repository 与 Tool Registry 接口及内存实现；新增 Hertz 健康检查、Run 创建/查询、事件增量查询和 ToolCall 恢复接口；补充服务、注册表和 HTTP 合同测试。
+- 结果：Go 控制面已能独立启动，创建运行记录、按 Run 维护单调递增事件序号，并完成 `ask_user_question` 的 `running -> waiting_user -> running` 状态转换；当前存储为内存实现，尚未接入 LLM 和 PostgreSQL。
+- 验证：`go test ./...`、`go vet ./...`、`go build -o /tmp/ai-web-testing-agentcore ./cmd/api` 通过；本地启动后 `GET /health` 返回 `{"status":"ok"}`，创建 Run 与查询 `run.started` 事件通过。
+- 后续：增加 PostgreSQL AgentRun/Event/ToolCall 持久化，实现 AgentCore LLM 循环和 SSE 实时/重放统一事件源。
+
+## 2026-09-04 | 正式采用 Go AgentCore 渐进迁移方案
+
+- 任务：确认并启动以代码可读性和后续迭代效率为优先的后端重构。
+- 操作：将 ADR-002 状态改为 accepted；更新仓库级架构规则和 README，明确 Go/Hertz 控制面、Python Browser Worker、PostgreSQL 队列及 Kitex 的适用边界；建立专用分支 `xujinyuan/go-agentcore-v2`。
+- 结果：新业务控制面默认使用 Go，现有 FastAPI 在迁移期间保持兼容，Playwright/A11y/Locator 暂不重写；当前阶段不实现登录、Token 和角色鉴权，但保留项目与 actor 归属字段。
+- 验证：文档差异检查通过；未修改运行时代码。
+- 后续：冻结跨语言合同并建立可测试的 Go/Hertz 模块化骨架。
+
+## 2026-09-04 | 以可读性为目标的后端重构建议
+
+- 任务：在允许大规模重构的前提下，确定兼顾代码可读性与后续迭代效率的技术方案。
+- 操作：结合当前约 2.4 万行 Python、千行级 Agent/工具/Runner 模块、现有 PostgreSQL 队列和 Playwright 能力，对全量 Go 重写、Go/Python 混合边界及 Kitex 使用时机进行取舍。
+- 结果：建议以旁路替换方式建设 Go 模块化单体控制面，使用 Hertz 提供 HTTP/SSE、Go interface 组织 AgentCore 和领域模块，保留 Python Playwright/A11y/locator Worker；Kitex 仅在未来出现真实独立部署边界时使用。迁移前先冻结 DSL、Agent Event、Tool、Report、数据库和黄金行为合同，不直接复刻 BUG-099/100 等已知错误。
+- 验证：架构评估，未修改业务代码，未运行产品测试。
+- 后续：确认方向后先建立 v2 目录和合同测试，以“对话 -> ask_user -> explore -> validate -> generate -> execute -> report”首个纵向切片验证新架构。
+
+## 2026-09-04 | Go AgentCore 与 Kitex 服务边界评估
+
+- 任务：评估当前项目是否适合将后端改为 Go，并按 handler/service 模块化后使用 Kitex。
+- 操作：统计 Python 后端模块体量和依赖关系，结合 AgentCore 工具设计、HTTP/SSE 前端协议、PostgreSQL 队列与 Playwright 能力划分迁移边界；新增 ADR-002。
+- 结果：可以使用 Go 重建 Agent 控制面，但不建议逐文件全量翻译。推荐 Hertz 对前端提供 HTTP/SSE，普通 Go interface 组织单进程模块，仅在真实进程间边界使用 Kitex；现有 Python Playwright/A11y/locator Worker 暂时保留，通过 PostgreSQL Job 与 Go 控制面解耦。当前不实现登录与权限校验，但保留项目和 actor 归属字段。
+- 验证：后端共约 2.4 万行 Python；确认 Agent、工具、Runner、DSL 和 execution service 中存在多个千行级模块及跨层延迟导入；架构评估未运行产品测试。
+- 后续：如确认迁移方向，先冻结 DSL、事件、工具、报告和数据库合同并修复 BUG-099/100，再以旁路方式落地 Go AgentCore。
+
+## 2026-09-04 | DeepSeek LLM 能力实测
+
+- 任务：展示当前接入的 `deepseek-v4-flash` 在项目 Planning Agent 中的实际能力。
+- 操作：通过项目 `_stream_planning_llm` 和完整 `run_planning_turn` 执行三类真实模型探针，覆盖需求抽取、探索工具决策和 locator 失败归因；不启动浏览器、不写业务数据。
+- 结果：3/3 单轮响应均可解析为项目 JSON 动作；模型能从简略需求抽取被测对象，能从完整需求提取 URL、流程、断言和变量，并主动选择 `get_project_info` 工具；完整 ReAct 能正确用自然语言识别 `Login` 变为 `Sign in` 的定位器过期问题。但结构化分析错误落为 `all_passed/done` 且缺少失败明细，记录为 BUG-100，当前不能直接把 LLM 结构化结论用于无人审批的修复决策。
+- 验证：网关真实请求均成功；完整 ReAct 返回 `session_status=completed`，自然语言归因正确；结构化字段矛盾已复现。首次探针脚本因误用不存在的 `SessionLocal` 导入失败，改用项目 `get_session_factory()` 后成功。
+- 后续：先修复 BUG-100 的分析 Schema 与确定性约束，再测试真实页面探索、DSL 生成和失败修复建议。
+
+## 2026-09-04 | 自愈任务编排层职责说明
+
+- 任务：解释受控自愈方案中的任务编排层含义和边界。
+- 操作：将现有失败分析、页面探索、DSL 生成、审批和 Batch 执行能力映射为后端状态机职责。
+- 结果：任务编排层不是新的 AI 或必需的外部任务框架，而是位于 LLM 能力与正式 Runner 之间、负责流程顺序、条件分支、状态持久化、幂等重试、审批门和审计追踪的后端协调服务；LLM 负责理解需求、提出是否重探索及探索范围等结构化建议、分析失败和生成候选 DSL，编排层依据失败分类、权限、预算和重试上限裁决并调用后端工具，正式测试只由 Runner 执行。用户负责设定目标，并在正式 DSL 变更或扩大执行范围前审批。编排层不是数据转发层，而是流程控制权和安全边界的持有者。
+- 验证：架构说明，未修改业务代码，未运行产品测试。
+- 后续：第一阶段可采用 `RepairAttempt` 表、`repair_orchestrator.py` 服务和审批 API，继续复用现有 PostgreSQL Batch/Job 队列。
+
+## 2026-09-04 | 自愈循环复用 Planning 会话方案澄清
+
+- 任务：评估自动重探索是否可以复用现有 Planning 会话与探索能力。
+- 操作：结合现有 Planning Session、失败分析、上下文注入、探索工具、DSL 草案生成和 Batch 执行边界梳理最小编排方案。
+- 结果：可以复用现有能力，但应在同一 Planning Session 中创建新的 repair turn，而不是新建独立会话；该 turn 显式绑定来源 Run/Batch，并注入 FailureSignal、ExecutionAnalysis、失败步骤 evidence、原 DSL 快照和历史探索数据。编排层仅在定位、导航或页面状态过期时触发重探索，随后生成候选 DSL、校验并展示差异，用户批准后才更新正式用例并进入 Batch/Job 队列重跑。
+- 验证：架构分析，未修改业务代码，未运行产品测试。
+- 后续：实现带来源追踪和审批门的 RepairAttempt 状态机，复用现有 explore、draft、validation 和 execution 服务。
+
+## 2026-09-04 | 执行归因与复测循环现状核验
+
+- 任务：确认当前是否已实现“执行 -> 记录错误 -> 归因 -> 重新执行”循环。
+- 操作：追踪直接 Case 执行、Batch Worker、FailureSignal/ExecutionAnalysis、anti-pattern、Planning 分析消息、`/retest` API、人工修正重跑入口和 DSL 草案再生成逻辑。
+- 结果：执行、步骤证据与错误持久化、统一 FailureSignal、规则兜底与 LLM 归因已自动连通；直接执行和 Batch 终态均可生成持久化分析。后端 `/retest` 可筛选失败用例并重跑原 DSL，人工修正后前端也可重跑当前用例，但 Planning 前端未接入 `/retest`。归因结果尚不会自动触发重新探索、DSL 重生成、差异审批或正式用例更新，因此当前是人工触发复测的半闭环，完整自愈闭环仍由 BUG-090 跟踪；同时 `/retest` 绕过统一分析持久化的问题记录为 BUG-099。
+- 验证：静态核对 `services/executions.py`、`services/execution_batches.py`、`application/reporting/analysis_service.py`、`application/planning/analysis_retest_service.py`、`draft_service.py`、Planning API 与前端执行入口；未执行真实浏览器全链测试。
+- 后续：实现 `analyze -> re-explore -> regenerate -> diff -> approve -> rerun` 状态机，并为 Planning 前端增加审批与复测入口。
 
 ## 2026-09-04 | 同步项目状态与 AI 配置记录到 GitHub
 

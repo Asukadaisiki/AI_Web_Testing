@@ -44,9 +44,10 @@ Primary goals for the first milestone:
 
 ## Architecture Rules
 
-The repository is organized as a Python backend and a TypeScript frontend.
+The repository is organized as a Go control plane, a Python browser worker, and a TypeScript frontend.
 
-- `backend/` contains FastAPI app, SQLAlchemy models, service layer, task execution, and tests.
+- `backend-go/` contains the Hertz HTTP/SSE API, AgentCore, tool registry, application services, and control-plane persistence.
+- `browser-worker/` contains the Python Playwright/A11y/locator execution worker and internal browser capability API.
 - `frontend/` contains the React + TypeScript platform UI.
 - `docs/` contains project planning, DSL specification, UI planning, and architecture notes.
 
@@ -59,14 +60,18 @@ Keep the following boundaries:
 
 ## Backend Rules
 
-- Use `uv` for dependency and environment management.
-- Use FastAPI for HTTP APIs.
-- Use SQLAlchemy 2.x style models and sessions.
+- Use Go for new AgentCore and control-plane development.
+- Use Hertz for browser-facing HTTP and SSE APIs.
+- Use ordinary Go interfaces for in-process boundaries; use Kitex only when a capability is deployed as a separate service.
+- Organize Go code by domain with thin transport handlers, application services, repository interfaces, and infrastructure adapters.
+- Keep the existing Python Playwright/A11y/locator implementation as an isolated browser worker until replacement has equivalent contract and browser coverage.
+- Use `uv` for the Python worker dependency and environment management.
+- Use SQLAlchemy 2.x style models and sessions in retained Python modules.
 - Use PostgreSQL for production design assumptions.
-- Use SQLite only for local development and lightweight testing.
-- Add Alembic migrations for schema changes.
-- Keep route handlers thin; business logic belongs in services.
+- Use SQLite only for lightweight tests that do not validate production migrations or queue locking.
+- Add compatible migrations for schema changes.
 - Keep execution logic, locator logic, and reporting logic in separate modules.
+- The current local milestone does not implement login, token, or role authorization. Preserve project and actor ownership fields for a later identity adapter.
 
 
 ## Frontend Rules

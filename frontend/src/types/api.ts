@@ -4,42 +4,15 @@ export type ExecutionStatus =
   | "failed"
   | "needs_intervention"
   | "cancelled";
-export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
-export type ExecutionAnalysisStatus = "pending" | "running" | "completed" | "skipped" | "failed";
-export type ExecutionAnalysisSource = "deterministic" | "ai";
+export type ExecutionBatchStatus = "pending" | ExecutionStatus;
+type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
+type ExecutionAnalysisStatus = "pending" | "running" | "completed" | "skipped" | "failed";
+type ExecutionAnalysisSource = "deterministic" | "ai";
 export type OverviewWindowDays = 7 | 14 | 30;
 export type ReportScopeType = "global" | "project" | "case";
-export type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
+type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
 export type CorrectionType = "css" | "xpath" | "test_id";
-export type VLMModelFamily = "qwen-vl" | "gemini" | "gpt-4o" | "qwen2.5-vl" | "glm";
-export type GenerateDslMode = "draft" | "strict_steps_only";
-export type GenerateDslImportMode = "replace" | "steps_only" | "contracts_only";
-export type GenerateDslBaseUrlSource = "ai_output" | "request" | "current_case" | "none";
-export type DslGenerationRunStatus = "success" | "failed";
-export type DslGenerationFeedbackStatus = "pending" | "accepted" | "rejected";
-export type DslGenerationPromptVariant = "baseline_draft" | "rewrite_from_case" | "repair_steps" | "contracts_focus";
-export type DslGenerationContextProfile = "blank_request" | "rewrite_from_case" | "repair_steps" | "contracts_focus";
-export type DslGenerationRiskFlag =
-  | "missing_name_fallback"
-  | "base_url_backfilled"
-  | "invalid_actions_repaired"
-  | "invalid_steps_removed"
-  | "invalid_contracts_removed"
-  | "contracts_preserved_fallback";
-export type DslGenerationRejectionReasonCode =
-  | "wrong_actions"
-  | "invalid_structure"
-  | "context_mismatch"
-  | "bad_contracts"
-  | "other";
-export type CorrectionEventType =
-  | "created"
-  | "activated"
-  | "deactivated"
-  | "tier0_hit"
-  | "tier0_miss"
-  | "auto_deactivated";
-export type DSLVariableSource =
+type DSLVariableSource =
   | "latest_url"
   | "error_message"
   | "status"
@@ -49,21 +22,6 @@ export type DSLVariableSource =
   | "last_step_value"
   | "last_step_error_message";
 
-export interface CurrentUser {
-  id: number;
-  email: string;
-  display_name: string;
-}
-
-export interface LoginPayload {
-  email: string;
-  password: string;
-}
-
-export interface LogoutResponse {
-  success: boolean;
-}
-
 export interface DSLStep {
   action: string;
   target?: string;
@@ -72,7 +30,7 @@ export interface DSLStep {
   [key: string]: unknown;
 }
 
-export interface DSLCaseInputContract {
+interface DSLCaseInputContract {
   name: string;
   context_key: string;
   value_type: DSLVariableType;
@@ -80,7 +38,7 @@ export interface DSLCaseInputContract {
   description?: string | null;
 }
 
-export interface DSLCaseOutputContract {
+interface DSLCaseOutputContract {
   name: string;
   context_key: string;
   value_type: DSLVariableType;
@@ -121,14 +79,7 @@ export interface ProjectSummary {
   description: string | null;
 }
 
-export interface ReportPreference {
-  scope_type: ReportScopeType;
-  project_id: number | null;
-  case_id: number | null;
-  window_days: OverviewWindowDays;
-}
-
-export interface DSLCasePayload {
+interface DSLCasePayload {
   name: string;
   description?: string | null;
   base_url?: string | null;
@@ -137,51 +88,7 @@ export interface DSLCasePayload {
   steps: DSLStep[];
 }
 
-export interface GenerateDslRequest {
-  prompt: string;
-  base_url?: string | null;
-  actor_user_id: number;
-  project_id?: number | null;
-  case_id?: number | null;
-  generation_mode?: GenerateDslMode;
-  import_mode?: GenerateDslImportMode;
-  current_case?: DSLCasePayload | null;
-  current_steps?: DSLStep[] | null;
-  current_input_contract?: DSLCaseInputContract[] | null;
-  current_output_contract?: DSLCaseOutputContract[] | null;
-  retry_from_generation_id?: number | null;
-  retry_reason_code?: DslGenerationRejectionReasonCode | null;
-  retry_note?: string | null;
-  preserve_contracts?: boolean;
-}
-
-export interface GenerateDslMeta {
-  model?: string | null;
-  generation_mode: GenerateDslMode;
-  import_mode: GenerateDslImportMode;
-  prompt_variant: DslGenerationPromptVariant;
-  context_profile: DslGenerationContextProfile;
-  risk_flags: DslGenerationRiskFlag[];
-  base_url_source: GenerateDslBaseUrlSource;
-  base_url_backfilled: boolean;
-  repaired_invalid_actions: number;
-  removed_invalid_steps: number;
-  removed_invalid_contracts: number;
-  preserve_contracts_applied: boolean;
-  used_current_case_context: boolean;
-  used_current_steps_context: boolean;
-}
-
-export interface GenerateDslResponse {
-  generation_id: number;
-  case: DSLCasePayload;
-  supported_actions: string[];
-  warnings: string[];
-  normalization_notes: string[];
-  generation_meta: GenerateDslMeta;
-}
-
-export type AIPlanningSessionStatus =
+type AIPlanningSessionStatus =
   | "collecting"
   | "plan_ready"
   | "drafts_ready"
@@ -191,10 +98,7 @@ export type AIPlanningSessionStatus =
   | "completed"
   | "closed"
   | "error";
-export type AIPlanningDraftStatus = "generated" | "imported" | "rejected" | "failed";
-export type AIPlanningNextAction = "ask_followup" | "review_plan" | "select_scenarios" | "drafts_generated";
-
-export interface AIPlanningRequirements {
+interface AIPlanningRequirements {
   app_under_test?: string | null;
   business_goal?: string | null;
   entry_url_or_page?: string | null;
@@ -204,7 +108,7 @@ export interface AIPlanningRequirements {
   scope_limits?: string | null;
 }
 
-export interface AIPlanningTestDataRequirement {
+interface AIPlanningTestDataRequirement {
   key: string;
   label: string;
   value_type: DSLVariableType;
@@ -212,7 +116,7 @@ export interface AIPlanningTestDataRequirement {
   source_hint?: string | null;
 }
 
-export interface AIPlanningScenario {
+interface AIPlanningScenario {
   scenario_key: string;
   title: string;
   goal: string;
@@ -223,18 +127,11 @@ export interface AIPlanningScenario {
   draft_prompt: string;
 }
 
-export interface AIPlanningPlan {
+interface AIPlanningPlan {
   summary: string;
   assumptions: string[];
   risks: string[];
   scenarios: AIPlanningScenario[];
-}
-
-export interface AIPlanningToolCall {
-  tool: string;
-  params: Record<string, unknown>;
-  result?: unknown;
-  result_summary?: unknown;  // compressed summary for heavy tools
 }
 
 export interface ProjectSummaryInSession {
@@ -244,7 +141,7 @@ export interface ProjectSummaryInSession {
   is_active: boolean;
 }
 
-export interface AIPlanningSession {
+interface AIPlanningSession {
   id: number;
   actor_user_id: number;
   active_project_id?: number | null;
@@ -260,35 +157,8 @@ export interface AIPlanningSession {
   updated_at: string;
 }
 
-export interface AIPlanningMessage {
-  id: number;
-  session_id: number;
-  role: "user" | "assistant";
-  turn_type: "user" | "followup" | "plan" | "tool_call" | "system_error" | "streaming";
-  content: string;
-  structured_payload?: Record<string, unknown> | null;
-  created_at: string;
-}
-
-export interface AIPlanningDraft {
-  id: number;
-  session_id: number;
-  scenario_key: string;
-  title: string;
-  status: AIPlanningDraftStatus;
-  dsl_generation_id?: number | null;
-  dsl_case?: DSLCasePayload | null;
-  warnings: string[];
-  normalization_notes: string[];
-  error_message?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface AIPlanningSessionDetail {
   session: AIPlanningSession;
-  messages: AIPlanningMessage[];
-  drafts: AIPlanningDraft[];
 }
 
 export interface AIPlanningSessionSummary {
@@ -305,58 +175,7 @@ export interface CreatePlanningSessionPayload {
   case_id?: number | null;
 }
 
-export interface SendPlanningMessagePayload {
-  content: string;
-}
-
-export interface GeneratePlanningDraftsPayload {
-  scenario_keys: string[];
-  current_case?: DSLCasePayload | null;
-  current_steps?: DSLStep[] | null;
-  current_input_contract?: DSLCaseInputContract[] | null;
-  current_output_contract?: DSLCaseOutputContract[] | null;
-  preserve_contracts?: boolean;
-}
-
-export interface UpdatePlanningDraftStatusPayload {
-  status: "imported" | "rejected";
-}
-
-export interface AIPlanningTurnResponse {
-  assistant_message: string;
-  session_status: AIPlanningSessionStatus;
-  requirements: AIPlanningRequirements;
-  missing_slots: string[];
-  suggested_questions: string[];
-  plan?: AIPlanningPlan | null;
-  drafts: AIPlanningDraft[];
-  next_action: AIPlanningNextAction;
-  tool_calls?: AIPlanningToolCall[];
-  saved_cases?: SavedCaseResult[];
-  execution_summaries?: ExecutionSummaryResult[];
-  execution_analysis?: ExecutionAnalysis | null;
-}
-
-export interface SavedCaseResult {
-  case_id: number;
-  case_name: string;
-  status: "saved";
-}
-
-export interface ExecutionSummaryResult {
-  execution_id: number;
-  case_id: number;
-  case_name: string;
-  status: "passed" | "failed" | "needs_intervention" | "cancelled" | "error";
-  total_steps: number;
-  passed_steps: number;
-  failed_steps: number;
-  duration_ms: number | null;
-  screenshot_url: string | null;
-  report_url: string;
-}
-
-export interface FailureSignal {
+interface FailureSignal {
   category: FailureCategory;
   fingerprint: string;
   title: string;
@@ -368,7 +187,7 @@ export interface FailureSignal {
   screenshot_url?: string | null;
 }
 
-export interface FailureDetail {
+interface FailureDetail {
   case_name: string;
   step_index: number;
   action: string;
@@ -378,7 +197,7 @@ export interface FailureDetail {
   cause_probability: "high" | "medium" | "low";
 }
 
-export interface CaseAnalysisResult {
+interface CaseAnalysisResult {
   case_id: number;
   case_name: string;
   status: string;
@@ -400,267 +219,21 @@ export interface ExecutionAnalysis {
   recommended_scope?: string | null;
 }
 
-export interface DslGenerationFeedbackPayload {
-  actor_user_id: number;
-  feedback_status: "accepted" | "rejected";
-  feedback_import_mode?: GenerateDslImportMode | null;
-  rejection_reason_code?: DslGenerationRejectionReasonCode | null;
-  feedback_note?: string | null;
-}
-
-export interface AISettings {
-  enable_ai_dsl_generate: boolean;
-  ai_dsl_timeout_ms: number;
-  ai_dsl_base_url: string;
-  ai_dsl_model?: string | null;
-  ai_dsl_strict_mode: boolean;
-  ai_dsl_allow_auto_repair: boolean;
-  has_ai_dsl_api_key: boolean;
-  enable_ai_visual_locate: boolean;
-  ai_visual_timeout_ms: number;
-  ai_visual_failure_threshold: number;
-  ai_visual_cooldown_seconds: number;
-  ai_visual_rate_limit_per_minute: number;
-  vlm_base_url: string;
-  vlm_model?: string | null;
-  vlm_model_family: VLMModelFamily;
-  has_vlm_api_key: boolean;
-  enable_ai_planning?: boolean;
-  ai_planning_model?: string | null;
-  ai_planning_base_url?: string;
-  ai_planning_timeout_ms?: number;
-  ai_planning_max_react_rounds?: number;
-  has_ai_planning_api_key?: boolean;
-}
-
-export interface AISettingsUpdatePayload {
-  enable_ai_dsl_generate: boolean;
-  ai_dsl_timeout_ms: number;
-  ai_dsl_base_url: string;
-  ai_dsl_model?: string | null;
-  ai_dsl_strict_mode: boolean;
-  ai_dsl_allow_auto_repair: boolean;
-  ai_dsl_api_key?: string | null;
-  clear_ai_dsl_api_key: boolean;
-  enable_ai_visual_locate: boolean;
-  ai_visual_timeout_ms: number;
-  ai_visual_failure_threshold: number;
-  ai_visual_cooldown_seconds: number;
-  ai_visual_rate_limit_per_minute: number;
-  vlm_base_url: string;
-  vlm_model?: string | null;
-  vlm_model_family: VLMModelFamily;
-  vlm_api_key?: string | null;
-  clear_vlm_api_key: boolean;
-  enable_ai_planning?: boolean;
-  ai_planning_model?: string | null;
-  ai_planning_base_url?: string;
-  ai_planning_timeout_ms?: number;
-  ai_planning_max_react_rounds?: number;
-  ai_planning_api_key?: string | null;
-  clear_ai_planning_api_key?: boolean;
-}
-
-export interface AIDslGenerationStats {
-  current_prompt_version: string;
-  current_governance_focus_reasons: DslGenerationRejectionReasonCode[];
-  prompt_version_observation_note: string;
-  governance_focus_selection_note: string;
-  total_requests: number;
-  success_count: number;
-  failure_count: number;
-  accepted_count: number;
-  rejected_count: number;
-  pending_count: number;
-  decision_coverage_rate: number;
-  last_model?: string | null;
-  last_error_type?: string | null;
-  last_error_message?: string | null;
-  last_24h_requests: number;
-  last_24h_success_count: number;
-  last_24h_failure_count: number;
-  last_24h_auto_repair_rate: number;
-  retry_requests: number;
-  retry_accepted_count: number;
-  retry_rejected_count: number;
-  top_error_types: DslGenerationErrorTypeCount[];
-  accepted_import_mode_breakdown: DslGenerationImportModeCount[];
-  top_rejection_reasons: DslGenerationRejectionReasonCount[];
-  prompt_variant_breakdown: DslGenerationPromptVariantBreakdown[];
-  prompt_version_breakdown: DslGenerationPromptVersionBreakdown[];
-  context_profile_breakdown: DslGenerationContextProfileBreakdown[];
-  rejection_reason_by_variant: DslGenerationRejectionReasonByVariant[];
-  model_outcome_breakdown: DslGenerationModelOutcome[];
-  generation_mode_breakdown: DslGenerationModeBreakdown[];
-  retry_acceptance_by_reason: DslGenerationRetryAcceptanceByReason[];
-  current_governance_focus_breakdown: DslGenerationGovernanceFocusSummary[];
-}
-
-export interface AIVisualStats {
-  locate_requests: number;
-  locate_success_count: number;
-  locate_failure_count: number;
-  breaker_skip_count: number;
-  rate_limited_skip_count: number;
-  disabled_skip_count: number;
-  avg_locate_latency_ms: number;
-  max_locate_latency_ms: number;
-}
-
-export interface AISettingsOverview {
-  ai_dsl_enabled: boolean;
-  ai_dsl_model?: string | null;
-  ai_dsl_strict_mode: boolean;
-  ai_dsl_allow_auto_repair: boolean;
-  generation_stats: AIDslGenerationStats;
-  ai_visual_stats: AIVisualStats;
-}
-
-export interface DslGenerationErrorTypeCount {
-  error_type: string;
-  count: number;
-}
-
-export interface DslGenerationImportModeCount {
-  import_mode: GenerateDslImportMode;
-  count: number;
-}
-
-export interface DslGenerationRejectionReasonCount {
-  rejection_reason_code: DslGenerationRejectionReasonCode;
-  count: number;
-}
-
-export interface DslGenerationPromptVariantBreakdown {
-  prompt_variant: DslGenerationPromptVariant;
-  total_requests: number;
-  success_count: number;
-  accepted_count: number;
-  rejected_count: number;
-}
-
-export interface DslGenerationPromptVersionBreakdown {
-  prompt_version: string;
-  total_requests: number;
-  success_count: number;
-  accepted_count: number;
-  rejected_count: number;
-  retry_requests: number;
-  retry_accepted_count: number;
-}
-
-export interface DslGenerationContextProfileBreakdown {
-  context_profile: DslGenerationContextProfile;
-  total_requests: number;
-  success_count: number;
-  accepted_count: number;
-  rejected_count: number;
-}
-
-export interface DslGenerationRejectionReasonByVariant {
-  prompt_variant: DslGenerationPromptVariant;
-  rejection_reason_code: DslGenerationRejectionReasonCode;
-  count: number;
-}
-
-export interface DslGenerationModelOutcome {
-  model_name?: string | null;
-  total_requests: number;
-  success_count: number;
-  accepted_count: number;
-  rejected_count: number;
-}
-
-export interface DslGenerationModeBreakdown {
-  generation_mode: GenerateDslMode;
-  total_requests: number;
-  success_count: number;
-  accepted_count: number;
-  rejected_count: number;
-}
-
-export interface DslGenerationRetryAcceptanceByReason {
-  rejection_reason_code: DslGenerationRejectionReasonCode;
-  retry_requests: number;
-  accepted_count: number;
-  acceptance_rate: number;
-}
-
-export interface DslGenerationGovernanceFocusSummary {
-  rejection_reason_code: DslGenerationRejectionReasonCode;
-  rejected_count: number;
-  affected_prompt_variants: number;
-  retry_requests: number;
-  retry_accepted_count: number;
-  retry_acceptance_rate: number;
-}
-
-export interface StoredDslGenerationRunSummary {
-  id: number;
-  created_at: string;
-  success: boolean;
-  model_name?: string | null;
-  generation_mode: GenerateDslMode;
-  import_mode: GenerateDslImportMode;
-  prompt_variant: DslGenerationPromptVariant;
-  project_id?: number | null;
-  case_id?: number | null;
-  prompt_version: string;
-  retry_from_generation_id?: number | null;
-  retry_reason_code?: DslGenerationRejectionReasonCode | null;
-  retry_note?: string | null;
-  error_type?: string | null;
-  error_message?: string | null;
-  repaired_invalid_actions: number;
-  removed_invalid_steps: number;
-  removed_invalid_contracts: number;
-  warnings_count: number;
-  normalization_notes_count: number;
-  prompt_preview: string;
-  governance_focus_reasons: DslGenerationRejectionReasonCode[];
-  risk_flags: DslGenerationRiskFlag[];
-  feedback_status: DslGenerationFeedbackStatus;
-  feedback_import_mode?: GenerateDslImportMode | null;
-  rejection_reason_code?: DslGenerationRejectionReasonCode | null;
-  feedback_recorded_at?: string | null;
-}
-
-export interface StoredDslGenerationRunDetail extends StoredDslGenerationRunSummary {
-  request_base_url?: string | null;
-  generated_case_json?: DSLCasePayload | null;
-  warnings_json: string[];
-  normalization_notes_json: string[];
-  feedback_note?: string | null;
-  context_profile: DslGenerationContextProfile;
-  used_current_case_context: boolean;
-  used_current_steps_context: boolean;
-  preserve_contracts_requested: boolean;
-  preserve_contracts_applied: boolean;
-}
-
 export interface CaseMutationPayload extends DSLCasePayload {
   project_id: number;
-  actor_user_id: number;
-}
-
-export interface DSLValidationResult {
-  valid: boolean;
-  case: DSLCasePayload;
-  supported_actions: string[];
 }
 
 export interface CaseExecutionRequest {
-  actor_user_id: number;
   base_url?: string;
   input_values?: Record<string, string>;
 }
 
-export interface ViewportSnapshot {
+interface ViewportSnapshot {
   width: number;
   height: number;
 }
 
-export interface LocatorCandidateAttributes {
+interface LocatorCandidateAttributes {
   aria_label?: string | null;
   placeholder?: string | null;
   data_testid?: string | null;
@@ -678,7 +251,7 @@ export interface LocatorCandidateEvidence {
   enabled: boolean;
 }
 
-export interface LocatorTrace {
+interface LocatorTrace {
   target: string;
   match_strategy?: string | null;
   selection_reason?: string | null;
@@ -687,7 +260,7 @@ export interface LocatorTrace {
   failure_reason?: string | null;
 }
 
-export interface DOMSummary {
+interface DOMSummary {
   text_preview?: string | null;
   button_count: number;
   input_count: number;
@@ -723,7 +296,7 @@ export interface DOMElementSnapshot {
   enabled: boolean;
 }
 
-export interface AILocateCandidate {
+interface AILocateCandidate {
   center: [number, number];
   bbox: [number, number, number, number];
   confidence: number;
@@ -760,7 +333,7 @@ export interface StepExecutionEvidence {
   intervention_request?: InterventionRequest | null;
 }
 
-export interface ExecutionReport {
+interface ExecutionReport {
   status: ExecutionStatus;
   steps: StepExecutionEvidence[];
 }
@@ -796,22 +369,70 @@ export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {
   analysis?: ExecutionAnalysis | null;
 }
 
+export interface ExecutionBatchCreatePayload {
+  project_id: number;
+  case_ids: number[];
+  concurrency_limit: number;
+  input_values?: Record<string, string>;
+  idempotency_key?: string;
+}
+
+interface ExecutionJobSummary {
+  id: number;
+  batch_id: number;
+  project_id: number;
+  case_id: number;
+  case_name: string;
+  order_index: number;
+  status: ExecutionBatchStatus;
+  attempt_count: number;
+  max_attempts: number;
+  cancel_requested: boolean;
+  last_error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  heartbeat_at?: string | null;
+  finished_at?: string | null;
+  latest_execution?: StoredCaseExecutionDetail | null;
+}
+
+export interface ExecutionBatchSummary {
+  id: number;
+  project_id: number;
+  planning_session_id?: number | null;
+  triggered_by: number;
+  status: ExecutionBatchStatus;
+  idempotency_key?: string | null;
+  concurrency_limit: number;
+  total_jobs: number;
+  pending_jobs: number;
+  running_jobs: number;
+  passed_jobs: number;
+  failed_jobs: number;
+  intervention_jobs: number;
+  cancelled_jobs: number;
+  analysis_status: ExecutionAnalysisStatus;
+  analysis?: ExecutionAnalysis | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ExecutionBatchDetail extends ExecutionBatchSummary {
+  jobs: ExecutionJobSummary[];
+}
+
+export interface ExecutionBatchReport extends ExecutionBatchDetail {
+  pass_rate: number;
+  completed_jobs: number;
+}
+
 export interface CreateCorrectionPayload {
   page_url: string;
   target_description: string;
   correction_type: CorrectionType;
   correction_value: string;
   source_execution_id: number;
-  created_by: number;
-}
-
-export interface UpdateCorrectionStatePayload {
-  is_active: boolean;
-}
-
-export interface BatchUpdateCorrectionStatePayload {
-  correction_ids: number[];
-  is_active: boolean;
 }
 
 export interface StoredLocatorCorrection {
@@ -829,43 +450,12 @@ export interface StoredLocatorCorrection {
   updated_at: string;
 }
 
-export interface LocatorCorrectionEventPoint {
-  date: string;
-  hit_count: number;
-  miss_count: number;
-}
-
-export interface StoredLocatorCorrectionEvent {
-  id: number;
-  correction_id: number;
-  event_type: CorrectionEventType;
-  page_url_pattern: string;
-  target_description: string;
-  execution_id: number | null;
-  verified_count_after: number;
-  consecutive_failures_after: number;
-  is_active_after: boolean;
-  created_at: string;
-}
-
-export interface LocatorCorrectionsOverview {
-  total_count: number;
-  active_count: number;
-  inactive_count: number;
-  hit_count: number;
-  miss_count: number;
-  auto_deactivated_count: number;
-  current_window_start?: string | null;
-  current_window_end?: string | null;
-  trend_points: LocatorCorrectionEventPoint[];
-}
-
-export interface FailureCategoryCount {
+interface FailureCategoryCount {
   category: FailureCategory;
   count: number;
 }
 
-export interface ExecutionAggregateSnapshot {
+interface ExecutionAggregateSnapshot {
   total_count: number;
   passed_count: number;
   failed_count: number;
@@ -874,12 +464,12 @@ export interface ExecutionAggregateSnapshot {
   avg_duration_ms: number;
 }
 
-export interface ExecutionWindowRange {
+interface ExecutionWindowRange {
   start_date?: string | null;
   end_date?: string | null;
 }
 
-export interface ExecutionWindowComparison {
+interface ExecutionWindowComparison {
   total_count_delta: number;
   passed_count_delta: number;
   failed_count_delta: number;
@@ -888,7 +478,7 @@ export interface ExecutionWindowComparison {
   avg_duration_ms_delta: number;
 }
 
-export interface ExecutionTrendPoint {
+interface ExecutionTrendPoint {
   date: string;
   total_count: number;
   passed_count: number;
@@ -899,12 +489,12 @@ export interface ExecutionTrendPoint {
   avg_duration_ms: number;
 }
 
-export interface FailureStepActionCount {
+interface FailureStepActionCount {
   action: string;
   count: number;
 }
 
-export interface TopFailedCase {
+interface TopFailedCase {
   case_id: number;
   case_name: string;
   failure_count: number;
@@ -912,7 +502,7 @@ export interface TopFailedCase {
   latest_failure_category?: FailureCategory | null;
 }
 
-export interface FailureRootCause {
+interface FailureRootCause {
   fingerprint: string;
   title: string;
   count: number;
@@ -947,168 +537,6 @@ export interface ExecutionsOverview {
   top_failed_cases: TopFailedCase[];
   failure_root_causes: FailureRootCause[];
 }
-
-// ---------------------------------------------------------------------------
-// Execution stream events (WebSocket)
-// ---------------------------------------------------------------------------
-
-export type AssistantContentBlock =
-  | { type: "thinking"; content: string }
-  | { type: "text"; content: string };
-
-export interface StatusStreamEvent {
-  type: "status";
-  phase: "thinking" | "generating" | "tool_calling" | "draft_generating" | "queued" | "executing" | "analyzing";
-  message: string;
-}
-
-export interface TextChunkStreamEvent {
-  type: "text_chunk";
-  text: string;
-  thinking?: boolean;
-}
-
-// pi-aligned ordered content blocks. ``content_index`` is the 0-based index
-// of the block within the current assistant message.
-export interface ContentBlockStartStreamEvent {
-  type: "content_block_start";
-  content_index: number;
-  kind: "thinking" | "text";
-}
-
-export interface ContentBlockDeltaStreamEvent {
-  type: "content_block_delta";
-  content_index: number;
-  kind: "thinking" | "text";
-  delta: string;
-}
-
-export interface ContentBlockEndStreamEvent {
-  type: "content_block_end";
-  content_index: number;
-  kind: "thinking" | "text";
-  content: string;
-}
-
-export interface ToolCallStartStreamEvent {
-  type: "tool_call_start";
-  tool: string;
-  params?: Record<string, unknown>;
-}
-
-export interface ToolCallEndStreamEvent {
-  type: "tool_call_end";
-  tool: string;
-  result?: unknown;
-  result_summary?: unknown;  // compressed summary for heavy tools
-}
-
-export interface DraftGeneratingStreamEvent {
-  type: "draft_generating";
-  scenario_key: string;
-  message: string;
-}
-
-export interface TurnCompleteStreamEvent {
-  type: "turn_complete";
-  session_status: string;
-  payload: {
-    assistant_message: string;
-    missing_slots: string[];
-    suggested_questions: string[];
-    plan: Record<string, unknown> | null;
-    tool_calls: Array<{ tool: string; params: Record<string, unknown> }>;
-    todo_list: Array<{ item: string; status: string }>;
-  };
-}
-
-export interface SaveProgressEvent {
-  type: "save_progress";
-  saved_count: number;
-  total: number;
-  case_name: string;
-}
-
-export interface CaseStartEvent {
-  type: "case_start";
-  case_id: number;
-  case_name: string;
-  total_steps: number;
-}
-
-export interface StepStartEvent {
-  type: "step_start";
-  case_id: number;
-  step_index: number;
-  action: string;
-  target?: string | null;
-  value?: string | null;
-}
-
-export interface StepCompleteEvent {
-  type: "step_complete";
-  case_id: number;
-  step_index: number;
-  action: string;
-  status: "passed" | "failed";
-  duration_ms: number;
-}
-
-export interface ExecutionSummaryStreamEvent {
-  type: "execution_summary";
-  message: string;
-  structured_payload: {
-    type: "execution_summary";
-    batch_id?: number;
-    saved_cases: SavedCaseResult[];
-    execution_summaries: ExecutionSummaryResult[];
-    analysis_status?: ExecutionAnalysisStatus;
-    analysis?: ExecutionAnalysis | null;
-  };
-}
-
-export interface AnalysisCompleteStreamEvent {
-  type: "analysis_complete";
-  batch_id: number;
-  analysis: ExecutionAnalysis;
-  message: string;
-}
-
-export interface CancelledEvent {
-  type: "cancelled";
-}
-
-export interface DoneEvent {
-  type: "done";
-}
-
-export interface ErrorEvent {
-  type: "error";
-  message: string;
-  error_type?: string;
-  phase?: string;
-  traceback?: string;
-}
-
-export type ExecutionStreamEvent =
-  | StatusStreamEvent
-  | TextChunkStreamEvent
-  | ContentBlockStartStreamEvent
-  | ContentBlockDeltaStreamEvent
-  | ContentBlockEndStreamEvent
-  | ToolCallStartStreamEvent
-  | ToolCallEndStreamEvent
-  | DraftGeneratingStreamEvent
-  | TurnCompleteStreamEvent
-  | SaveProgressEvent
-  | CaseStartEvent
-  | StepStartEvent
-  | StepCompleteEvent
-  | ExecutionSummaryStreamEvent
-  | AnalysisCompleteStreamEvent
-  | CancelledEvent
-  | DoneEvent
-  | ErrorEvent;
 
 export interface LinkProjectPayload {
   project_id: number;

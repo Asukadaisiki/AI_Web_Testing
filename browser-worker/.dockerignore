@@ -1,0 +1,13 @@
+.env
+.env.*
+.venv/
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite*
+.mypy_cache/
+.ruff_cache/
+artifacts/
+storage_states/
+tests/
+README.md

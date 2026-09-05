@@ -1,0 +1,203 @@
+name: ai-web-testing
+
+x-browser-worker-environment: &browser-worker-environment
+  APP_ENV: production
+  APP_DEBUG: "false"
+  AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET is required}
+  AUTH_SESSION_COOKIE_NAME: ${AUTH_SESSION_COOKIE_NAME:-session}
+  AUTH_SESSION_MAX_AGE_SECONDS: ${AUTH_SESSION_MAX_AGE_SECONDS:-43200}
+  AUTH_SESSION_SAME_SITE: ${AUTH_SESSION_SAME_SITE:-lax}
+  AUTH_SESSION_HTTPS_ONLY: ${AUTH_SESSION_HTTPS_ONLY:-true}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  DATABASE_ECHO: "false"
+  EXECUTION_BASE_URL: ${EXECUTION_BASE_URL:-http://frontend:8080}
+  ENABLE_AI_VISUAL_LOCATE: ${ENABLE_AI_VISUAL_LOCATE:-false}
+  STORAGE_STATE_DIR: /app/storage_states
+  CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
+  RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-10000}
+  RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+
+x-browser-worker-service: &browser-worker-service
+  build:
+    context: ./browser-worker
+    dockerfile: Dockerfile
+  image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
+  environment: *browser-worker-environment
+  init: true
+  restart: unless-stopped
+  volumes:
+    - artifacts:/app/artifacts
+    - storage_states:/app/storage_states
+  networks:
+    - app
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_web_testing}
+      POSTGRES_USER: ${POSTGRES_USER:-ai_web_testing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app
+
+  migrate:
+    build:
+      context: ./browser-worker
+      dockerfile: Dockerfile
+    image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
+    command: ["alembic", "upgrade", "head"]
+    environment: *browser-worker-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - app
+
+  bootstrap-user:
+    build:
+      context: ./browser-worker
+      dockerfile: Dockerfile
+    image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
+    command:
+      - python
+      - scripts/bootstrap_user.py
+      - --email
+      - ${AUTH_BOOTSTRAP_EMAIL:-admin@example.com}
+      - --display-name
+      - ${AUTH_BOOTSTRAP_DISPLAY_NAME:-Administrator}
+    environment:
+      <<: *browser-worker-environment
+      AUTH_BOOTSTRAP_PASSWORD: ${AUTH_BOOTSTRAP_PASSWORD:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["tools"]
+    restart: "no"
+    networks:
+      - app
+
+  browser-worker-api:
+    <<: *browser-worker-service
+    command:
+      - uvicorn
+      - app.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-access-log
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    shm_size: 1gb
+
+  python-worker:
+    <<: *browser-worker-service
+    command:
+      - python
+      - -m
+      - app.workers.execution_worker
+      - --concurrency
+      - ${WORKER_CONCURRENCY:-2}
+      - --poll-seconds
+      - ${WORKER_POLL_SECONDS:-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from app.db import verify_database_connection; verify_database_connection()"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    shm_size: 1gb
+
+  agentservice:
+    build:
+      context: ./backend-go
+      dockerfile: Dockerfile
+    image: ai-web-testing-agentservice:${IMAGE_TAG:-latest}
+    environment:
+      AGENTSERVICE_HTTP_ADDR: 0.0.0.0:8081
+      AGENTSERVICE_MAX_TURNS: ${AGENTSERVICE_MAX_TURNS:-12}
+      AI_PLANNING_API_KEY: ${AI_PLANNING_API_KEY:?AI_PLANNING_API_KEY is required}
+      AI_PLANNING_BASE_URL: ${AI_PLANNING_BASE_URL:?AI_PLANNING_BASE_URL is required}
+      AI_PLANNING_MODEL: ${AI_PLANNING_MODEL:?AI_PLANNING_MODEL is required}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET is required}
+      AUTH_SESSION_COOKIE_NAME: ${AUTH_SESSION_COOKIE_NAME:-session}
+      AUTH_SESSION_MAX_AGE_SECONDS: ${AUTH_SESSION_MAX_AGE_SECONDS:-43200}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      BROWSER_WORKER_URL: http://browser-worker-api:8000/api/v1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      browser-worker-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    init: true
+    restart: unless-stopped
+    networks:
+      - app
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: ai-web-testing-frontend:${IMAGE_TAG:-latest}
+    depends_on:
+      agentservice:
+        condition: service_healthy
+      browser-worker-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    networks:
+      - app
+
+volumes:
+  artifacts:
+  postgres_data:
+  storage_states:
+
+networks:
+  app:
+    driver: bridge

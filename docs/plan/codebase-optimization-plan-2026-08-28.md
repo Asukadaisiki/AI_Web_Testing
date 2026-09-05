@@ -118,7 +118,7 @@
 - 验收命令：
 
 ```bash
-cd backend
+cd browser-worker
 uv run ruff check .
 uv run pytest
 uv run alembic upgrade head

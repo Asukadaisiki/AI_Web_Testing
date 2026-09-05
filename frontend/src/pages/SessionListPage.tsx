@@ -7,6 +7,7 @@ import {
   createPlanningSession,
   listPlanningSessions,
 } from "../features/planning/api";
+import { WorkspacePageLayout } from "../layouts/WorkspacePageLayout";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   collecting: { label: "收集中", color: "processing" },
@@ -46,14 +47,15 @@ export function SessionListPage() {
   const sessions = sessionsQuery.data ?? [];
 
   return (
-    <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <Typography.Title level={3} style={{ margin: 0 }}>AI 测试规划</Typography.Title>
+    <WorkspacePageLayout
+      title="AI 测试规划"
+      description="管理规划会话，并进入 AgentCore 工作台生成和执行结构化用例。"
+      actions={
         <Button type="primary" icon={<PlusOutlined />} loading={creating} onClick={handleCreate}>
           新建会话
         </Button>
-      </div>
-
+      }
+    >
       {sessionsQuery.isLoading ? (
         <Spin />
       ) : sessions.length === 0 ? (
@@ -96,6 +98,6 @@ export function SessionListPage() {
           })}
         </div>
       )}
-    </div>
+    </WorkspacePageLayout>
   );
 }

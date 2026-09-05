@@ -1,0 +1,21 @@
+{
+  "venvPath": "browser-worker",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "off",
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "warning",
+  "include": [
+    "browser-worker/app",
+    "browser-worker/tests",
+    "browser-worker/scripts"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "browser-worker",
+      "extraPaths": [
+        "browser-worker"
+      ]
+    }
+  ]
+}

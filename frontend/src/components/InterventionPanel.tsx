@@ -25,7 +25,6 @@ import type {
 type InterventionPanelProps = {
   caseId: number;
   executionId: number;
-  triggeredBy: number;
   request: InterventionRequest;
 };
 
@@ -45,7 +44,6 @@ function inferSuggestion(element: DOMElementSnapshot): { correctionType: Correct
 export function InterventionPanel({
   caseId,
   executionId,
-  triggeredBy,
   request,
 }: InterventionPanelProps) {
   const navigate = useNavigate();
@@ -61,7 +59,6 @@ export function InterventionPanel({
         correction_type: correctionType,
         correction_value: correctionValue.trim(),
         source_execution_id: executionId,
-        created_by: triggeredBy,
       }),
     onSuccess: (correction) => {
       setCreatedCorrection(correction);
@@ -70,9 +67,7 @@ export function InterventionPanel({
 
   const rerunMutation = useMutation({
     mutationFn: () =>
-      executeCase(caseId, {
-        actor_user_id: triggeredBy,
-      }),
+      executeCase(caseId, {}),
     onSuccess: (execution) => {
       navigate(`/reports/${execution.id}`);
     },
