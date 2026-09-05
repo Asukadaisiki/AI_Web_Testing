@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-106 | 项目状态文档仍保留自愈半闭环旧口径
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：low
+- 来源：当前项目进度盘点
+- 描述：根 README 下半部分仍写“自动自愈尚无统一状态机和前端审批入口”“真实全链待验收”，BUG-090 也保持 `open`，与 2026-09-04 已完成的 Go AgentCore 受控自愈和真实浏览器 E2E 结论冲突。
+- 复现步骤：
+  1. 阅读 README 的“当前状态”和“与计划相比的主要差距”。
+  2. 对照 2026-09-04 AgentCore、自愈及前端 E2E 执行记录。
+  3. 检查 BUG-090 状态。
+- 影响：项目进度会被误判为尚未完成受控自愈和端到端验收。
+- 根因：新闭环完成后只更新了 README 顶部状态和执行日志，旧阶段说明及原缺陷状态未同步收口。
+- 处理：更新 README 的进行中事项和实际差距；将 BUG-090 标记为已修复并补充实现与验证结果。
+- 验证：交叉核对当前分支提交、README、AgentCore 文档和 2026-09-04 执行记录；`git diff --check` 通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--当前项目进度复核`
+
 ## BUG-105 | Python 导入解析配置缺失且存在无效导入
 
 - 日期：2026-09-05
@@ -304,14 +321,14 @@
 ## BUG-090 | 失败后自动重探索和 DSL 重写尚未编排
 
 - 日期：2026-09-01
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：主链路静态核验
 - 描述：后端分别具备失败分析、anti-pattern 记录、执行错误上下文注入和 `/retest`，但复测只重跑原 DSL；没有自动重新探索、重生成 DSL、更新正式用例的编排，前端也没有复测 API 客户端或操作入口。
 - 影响：用户描述的“分析错因 → 注入当前会话 → 重新组织上下文 → 再次执行”不能自动闭环，需要用户再次对话、生成草案并手动执行。
 - 根因：现有实现采用半自动治理，能力模块已存在但缺少受控自愈状态机和 UI 确认点。
-- 处理：未在本次核验中改变产品策略；建议单独设计带审批门的 `analyze → re-explore → regenerate → diff → approve → rerun` 流程。
-- 验证：已核对 `analysis_retest_service.py`、`context_service.py`、`draft_service.py`、Planning API 与前端 Planning API/面板调用。
+- 处理：已实现透明 `fix_and_retry` 工具和 repair plan artifact；Agent 按失败事实执行重探索、元素验证、DSL 重生成，并在前端审批后通过 Batch/Job 队列重执行。
+- 验证：真实失败用例完成 `fix_and_retry -> explore_page -> validate_page_elements -> generate_dsl -> approve -> execute_dsl -> get_report`，重执行 3/3 步通过；Go、Python 聚焦测试、前端构建及桌面/移动浏览器 E2E 通过。
 - 关联记录：`docs/execution-log.md#2026-09-01--ai-规划到失败复测链路核验`
 
 ## BUG-089 | 流式保存执行遗漏测试数据注入和失败沉淀
