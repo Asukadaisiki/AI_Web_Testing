@@ -29,7 +29,7 @@ func (h *Handler) executeCase(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) createExecutionBatch(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -49,7 +49,7 @@ func (h *Handler) createExecutionBatch(ctx context.Context, c *app.RequestContex
 }
 
 func (h *Handler) listExecutionBatches(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -112,7 +112,7 @@ func (h *Handler) cancelExecutionBatch(ctx context.Context, c *app.RequestContex
 }
 
 func (h *Handler) listExecutions(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -170,7 +170,7 @@ func (h *Handler) deleteExecution(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) executionOverview(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return

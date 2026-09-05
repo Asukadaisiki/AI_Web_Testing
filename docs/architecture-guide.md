@@ -15,7 +15,7 @@ backend-go/
   internal/harness/    Prompt、工具和运行编排
   internal/agentservice/ Run、Checkpoint、事件和持久化
   internal/tools/      Agent 工具与控制面工具编排
-  internal/authn/      Cookie 认证
+  internal/transport/  固定 actor 注入与 Hertz HTTP/SSE 路由
   internal/planning/   Planning Session 元数据
   internal/projects/   Project 控制面
   internal/cases/      Case 控制面
@@ -23,7 +23,6 @@ backend-go/
   internal/execution/  Batch、Job、Run 与报告聚合
   internal/corrections/ Locator 修正控制面
   internal/platform/   LLM 与 Browser Worker 适配器
-  internal/transport/  Hertz HTTP/SSE 路由
 
 frontend/src/
   app/                 应用启动、路由和全局 Provider
@@ -109,7 +108,7 @@ Frontend pages
 负责：
 
 - 提供 health、artifact 和 `/api/v1/internal/browser-capabilities/*`。
-- 校验 Go 转发的 Cookie、Planning Session 和 Project 归属。
+- 校验 Go 转发的 actor、Planning Session 和 Project 上下文一致性。
 - 不提供用户侧 Project、Case、DSL、Execution 或 Report API。
 
 不应负责：
@@ -121,7 +120,6 @@ Frontend pages
 
 - `api/router.py`：汇总所有子路由。
 - `api/routes/browser_capabilities.py`：Go 调用的页面探索接口。
-- `api/auth.py`：Worker 内部接口使用的认证依赖。
 
 ### `application/`：Worker 能力边界
 
@@ -198,7 +196,6 @@ schemas.dsl.DSLCase              Runner 消费的结构化 DSL
 
 ```text
 features/
-  auth/
   agent/
   planning/
   projects/

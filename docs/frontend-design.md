@@ -71,7 +71,7 @@
 | 旧页面 | 旧路由 | 现状 |
 |--------|--------|------|
 | DashboardPage | `/dashboard` | 重定向到 `/` |
-| LoginPage | `/login` | 重定向到 `/`，认证改为 `require_demo_user` |
+| LoginPage | `/login` | 已删除，路由直接重定向到 `/planning` |
 | ExecutionsPage | `/executions` | 重定向到 `/cases` |
 | CaseWorkbenchPage | `/cases/new` | 已删除，功能由 ReportPage 和 AI 规划覆盖 |
 | AISettingsPage | `/settings/ai` | 已删除 |

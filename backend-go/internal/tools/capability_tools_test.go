@@ -20,6 +20,7 @@ type fakeCapabilityClient struct {
 func (c *fakeCapabilityClient) ExecuteBrowserCapability(
 	_ context.Context,
 	capability string,
+	_ int64,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,

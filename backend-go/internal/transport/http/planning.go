@@ -11,7 +11,7 @@ import (
 )
 
 func (h *Handler) createPlanningSession(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -31,7 +31,7 @@ func (h *Handler) createPlanningSession(ctx context.Context, c *app.RequestConte
 }
 
 func (h *Handler) listPlanningSessions(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -175,16 +175,16 @@ func (h *Handler) createPlanningProject(ctx context.Context, c *app.RequestConte
 	c.JSON(consts.StatusCreated, project)
 }
 
-func planningRequestContext(c *app.RequestContext) (identityValue, int64, error) {
-	identity, err := currentIdentity(c)
+func planningRequestContext(c *app.RequestContext) (actorContext, int64, error) {
+	identity, err := currentActor(c)
 	if err != nil {
-		return identityValue{}, 0, err
+		return actorContext{}, 0, err
 	}
 	sessionID, err := positivePathID(c.Param("session_id"))
-	return identityValue{UserID: identity.UserID}, sessionID, err
+	return actorContext{UserID: identity.UserID}, sessionID, err
 }
 
-type identityValue struct {
+type actorContext struct {
 	UserID int64
 }
 

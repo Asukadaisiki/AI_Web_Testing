@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/cases"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/corrections"
@@ -35,6 +34,14 @@ func main() {
 	if pingErr := database.PingContext(pingContext); pingErr != nil {
 		log.Fatalf("connect database: %v", pingErr)
 	}
+	var actorExists bool
+	if queryErr := database.QueryRowContext(
+		pingContext,
+		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`,
+		cfg.DefaultActorID,
+	).Scan(&actorExists); queryErr != nil || !actorExists {
+		log.Fatalf("default actor %d is unavailable: %v", cfg.DefaultActorID, queryErr)
+	}
 
 	repository := agentservice.NewPostgresRepository(database)
 	runService := agentservice.NewService(repository)
@@ -50,15 +57,6 @@ func main() {
 	browserClient, err := browserworker.NewClient(cfg.BrowserWorkerURL, 10*time.Minute)
 	if err != nil {
 		log.Fatalf("configure Browser Worker: %v", err)
-	}
-	authenticator, err := authn.NewService(
-		database,
-		cfg.SessionSecret,
-		cfg.SessionCookie,
-		time.Duration(cfg.SessionMaxAge)*time.Second,
-	)
-	if err != nil {
-		log.Fatalf("configure authentication: %v", err)
 	}
 	planningStore := planning.NewPostgresStore(database)
 	projectStore := projects.NewPostgresStore(database)
@@ -89,7 +87,7 @@ func main() {
 	server := httptransport.NewServer(
 		cfg.Address,
 		engine,
-		authenticator,
+		cfg.DefaultActorID,
 		planningStore,
 		projectStore,
 		caseStore,

@@ -3,11 +3,6 @@ name: ai-web-testing
 x-browser-worker-environment: &browser-worker-environment
   APP_ENV: production
   APP_DEBUG: "false"
-  AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET is required}
-  AUTH_SESSION_COOKIE_NAME: ${AUTH_SESSION_COOKIE_NAME:-session}
-  AUTH_SESSION_MAX_AGE_SECONDS: ${AUTH_SESSION_MAX_AGE_SECONDS:-43200}
-  AUTH_SESSION_SAME_SITE: ${AUTH_SESSION_SAME_SITE:-lax}
-  AUTH_SESSION_HTTPS_ONLY: ${AUTH_SESSION_HTTPS_ONLY:-true}
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
   DATABASE_ECHO: "false"
   EXECUTION_BASE_URL: ${EXECUTION_BASE_URL:-http://frontend:8080}
@@ -60,29 +55,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no"
-    networks:
-      - app
-
-  bootstrap-user:
-    build:
-      context: ./browser-worker
-      dockerfile: Dockerfile
-    image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
-    command:
-      - python
-      - scripts/bootstrap_user.py
-      - --email
-      - ${AUTH_BOOTSTRAP_EMAIL:-admin@example.com}
-      - --display-name
-      - ${AUTH_BOOTSTRAP_DISPLAY_NAME:-Administrator}
-    environment:
-      <<: *browser-worker-environment
-      AUTH_BOOTSTRAP_PASSWORD: ${AUTH_BOOTSTRAP_PASSWORD:-}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    profiles: ["tools"]
     restart: "no"
     networks:
       - app
@@ -149,9 +121,7 @@ services:
       AI_PLANNING_API_KEY: ${AI_PLANNING_API_KEY:?AI_PLANNING_API_KEY is required}
       AI_PLANNING_BASE_URL: ${AI_PLANNING_BASE_URL:?AI_PLANNING_BASE_URL is required}
       AI_PLANNING_MODEL: ${AI_PLANNING_MODEL:?AI_PLANNING_MODEL is required}
-      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET is required}
-      AUTH_SESSION_COOKIE_NAME: ${AUTH_SESSION_COOKIE_NAME:-session}
-      AUTH_SESSION_MAX_AGE_SECONDS: ${AUTH_SESSION_MAX_AGE_SECONDS:-43200}
+      DEFAULT_ACTOR_USER_ID: ${DEFAULT_ACTOR_USER_ID:-1}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       BROWSER_WORKER_URL: http://browser-worker-api:8000/api/v1
     depends_on:

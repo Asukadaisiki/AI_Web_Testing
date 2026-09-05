@@ -10,7 +10,7 @@ import (
 )
 
 func (h *Handler) createCorrection(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return

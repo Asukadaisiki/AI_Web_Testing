@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/cases"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/corrections"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/execution"
@@ -17,26 +16,17 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/projects"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
-	"github.com/cloudwego/hertz/pkg/protocol"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/protocol/sse"
 )
 
 type Handler struct {
 	agent       AgentAPI
-	auth        AuthAPI
 	planning    planning.Store
 	projects    projects.Store
 	cases       cases.Store
 	executions  *execution.Store
 	corrections *corrections.Store
-}
-
-type AuthAPI interface {
-	authn.Authenticator
-	Login(context.Context, string, string) (authn.Identity, string, error)
-	CookieName() string
-	MaxAgeSeconds() int
 }
 
 type AgentAPI interface {
@@ -67,7 +57,7 @@ type AgentAPI interface {
 func NewServer(
 	address string,
 	agent AgentAPI,
-	authenticator AuthAPI,
+	actorUserID int64,
 	planningStore planning.Store,
 	projectStore projects.Store,
 	caseStore cases.Store,
@@ -76,17 +66,14 @@ func NewServer(
 ) *server.Hertz {
 	h := server.New(server.WithHostPorts(address))
 	handler := &Handler{
-		agent: agent, auth: authenticator, planning: planningStore,
+		agent: agent, planning: planningStore,
 		projects: projectStore, cases: caseStore, executions: executionStore,
 		corrections: correctionStore,
 	}
 
 	h.GET("/health", handler.health)
-	h.POST("/api/v2/auth/login", handler.login)
 	v2 := h.Group("/api/v2")
-	v2.Use(authenticationMiddleware(authenticator))
-	v2.GET("/auth/me", handler.me)
-	v2.POST("/auth/logout", handler.logout)
+	v2.Use(actorMiddleware(actorUserID))
 	v2.POST("/agent/runs", handler.startRun)
 	v2.GET("/agent/runs/:run_id", handler.getRun)
 	v2.GET("/agent/runs/:run_id/events", handler.listEvents)
@@ -132,58 +119,6 @@ func NewServer(
 	return h
 }
 
-type loginRequest struct {
-	Email    string `json:"email" vd:"len($)>0"`
-	Password string `json:"password" vd:"len($)>0"`
-}
-
-func (h *Handler) login(ctx context.Context, c *app.RequestContext) {
-	var request loginRequest
-	if err := c.BindAndValidate(&request); err != nil {
-		writeError(c, consts.StatusBadRequest, err)
-		return
-	}
-	identity, value, err := h.auth.Login(ctx, request.Email, request.Password)
-	if err != nil {
-		writeServiceError(c, err)
-		return
-	}
-	c.SetCookie(
-		h.auth.CookieName(),
-		value,
-		h.auth.MaxAgeSeconds(),
-		"/",
-		"",
-		protocol.CookieSameSiteLaxMode,
-		string(c.GetHeader("X-Forwarded-Proto")) == "https",
-		true,
-	)
-	c.JSON(consts.StatusOK, identity)
-}
-
-func (h *Handler) me(_ context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
-	if err != nil {
-		writeServiceError(c, err)
-		return
-	}
-	c.JSON(consts.StatusOK, identity)
-}
-
-func (h *Handler) logout(_ context.Context, c *app.RequestContext) {
-	c.SetCookie(
-		h.auth.CookieName(),
-		"",
-		-1,
-		"/",
-		"",
-		protocol.CookieSameSiteLaxMode,
-		string(c.GetHeader("X-Forwarded-Proto")) == "https",
-		true,
-	)
-	c.JSON(consts.StatusOK, map[string]bool{"success": true})
-}
-
 func (h *Handler) health(_ context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, map[string]string{"status": "ok"})
 }
@@ -201,7 +136,7 @@ func (h *Handler) startRun(ctx context.Context, c *app.RequestContext) {
 		writeError(c, consts.StatusBadRequest, err)
 		return
 	}
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -224,7 +159,7 @@ func (h *Handler) startRun(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	run, err := h.agent.StartOwnedProjectAsync(
-		authn.WithIdentity(ctx, identity),
+		ctx,
 		identity.UserID,
 		conversationID,
 		projectID,
@@ -238,7 +173,7 @@ func (h *Handler) startRun(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) getRun(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -252,7 +187,7 @@ func (h *Handler) getRun(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) listEvents(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -280,7 +215,7 @@ func (h *Handler) listEvents(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) resumeToolCall(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -305,7 +240,7 @@ func (h *Handler) resumeToolCall(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) streamEvents(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -405,8 +340,6 @@ func isTerminal(status agentservice.RunStatus) bool {
 
 func writeServiceError(c *app.RequestContext, err error) {
 	switch {
-	case errors.Is(err, authn.ErrUnauthenticated):
-		writeError(c, consts.StatusUnauthorized, err)
 	case errors.Is(err, agentservice.ErrRunNotFound):
 		writeError(c, consts.StatusNotFound, err)
 	case errors.Is(err, agentservice.ErrRunAccessDenied),

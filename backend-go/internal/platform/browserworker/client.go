@@ -11,8 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 )
 
 type Client struct {
@@ -21,6 +19,7 @@ type Client struct {
 }
 
 type capabilityRequest struct {
+	ActorUserID    int64           `json:"actor_user_id"`
 	ProjectID      int64           `json:"project_id"`
 	ConversationID string          `json:"conversation_id"`
 	Arguments      json.RawMessage `json:"arguments"`
@@ -47,6 +46,7 @@ func NewClient(baseURL string, timeout time.Duration) (*Client, error) {
 func (c *Client) ExecuteBrowserCapability(
 	ctx context.Context,
 	capability string,
+	actorUserID int64,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,
@@ -55,6 +55,7 @@ func (c *Client) ExecuteBrowserCapability(
 		ctx,
 		"/internal/browser-capabilities/"+capability,
 		capability,
+		actorUserID,
 		projectID,
 		conversationID,
 		arguments,
@@ -65,17 +66,19 @@ func (c *Client) executeCapability(
 	ctx context.Context,
 	path string,
 	capability string,
+	actorUserID int64,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,
 ) (json.RawMessage, error) {
-	if projectID < 1 {
-		return nil, errors.New("project_id is required for Python capabilities")
+	if actorUserID < 1 || projectID < 1 {
+		return nil, errors.New("actor_user_id and project_id are required for Browser Worker capabilities")
 	}
 	if !json.Valid(arguments) {
 		return nil, errors.New("Browser Worker capability arguments must be valid JSON")
 	}
 	body, err := json.Marshal(capabilityRequest{
+		ActorUserID:    actorUserID,
 		ProjectID:      projectID,
 		ConversationID: conversationID,
 		Arguments:      arguments,
@@ -93,9 +96,6 @@ func (c *Client) executeCapability(
 		return nil, fmt.Errorf("create Browser Worker capability request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	if identity, ok := authn.FromContext(ctx); ok && identity.Cookie != "" {
-		request.Header.Set("Cookie", identity.Cookie)
-	}
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {

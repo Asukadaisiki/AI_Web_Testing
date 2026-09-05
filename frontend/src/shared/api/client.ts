@@ -1,7 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
-export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
-
 class ApiError extends Error {
   status: number;
 
@@ -17,7 +15,6 @@ export async function request<T>(
   init?: RequestInit,
 ): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -34,9 +31,6 @@ export async function request<T>(
       }
     } catch {
       // Preserve the HTTP status text for non-JSON responses.
-    }
-    if (response.status === 401) {
-      window.dispatchEvent(new CustomEvent(AUTH_UNAUTHORIZED_EVENT));
     }
     throw new ApiError(errorMessage, response.status);
   }

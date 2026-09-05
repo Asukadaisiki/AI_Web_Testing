@@ -12,19 +12,20 @@ AI 增强的 Web UI 自动化测试平台。
 
 当前阶段：**Go AgentCore 纵向闭环和受控自愈已可用，进入控制面收敛与生产化阶段**。
 
-后端演进方向已经确定：新 AgentCore 与控制面使用 Go，浏览器侧执行能力保留在 Python Worker；Hertz 提供 HTTP/SSE，Kitex 仅用于未来真实拆分的进程间 RPC。迁移期间现有 FastAPI API 继续可用。
+后端架构已经收敛：AgentCore 与业务控制面使用 Go，浏览器执行能力保留在
+Python Worker；Hertz 提供 HTTP/SSE，Python FastAPI 仅提供内部浏览器 capability。
 
 截至 2026-09-05：
 
 | 能力域 | 当前状态 |
 |------|------|
-| 平台与工作台 | Planning 已切换到 Go AgentRun/ToolCall/SSE；用例管理和报告中心继续复用现有平台 API |
+| 平台与工作台 | Planning、用例管理、执行与报告 API 均由 Go 提供 |
 | 结构化执行 | DSL 校验、Playwright Runner、步骤级 evidence 和报告持久化已具备 |
 | 定位系统 | A11y 语义定位为主路径，过滤不可定位文档节点；VLM 当前关闭 |
 | 执行调度 | PostgreSQL 持久化 Batch/Job 队列、并发限制、幂等、lease、heartbeat 和取消已落地 |
 | 报告聚合 | Report Core 可按 run、batch、project 聚合结果，并返回持久化 FailureSignal 与分析总结 |
 | AI 自愈 | `fix_and_retry` 可按失败事实执行重探索或 DSL 重生成，并强制经过用户审批后重运行 |
-| 身份与权限 | Cookie Session 登录已恢复；Python 业务 API、artifact、Go Run/Event/Resume 均要求身份并校验资源归属 |
+| 身份与权限 | 当前开发与生产均不启用登录鉴权；服务端固定 actor 并保留资源归属字段 |
 | 生产运行 | Docker Compose 管理 PostgreSQL、迁移、Python API/Worker、Go AgentCore 和 Nginx；SSE 反向代理已配置 |
 | 质量门禁 | Go 测试/vet/build、Python 合同测试、Vitest、桌面/移动 Playwright smoke 和生产构建进入 CI |
 
@@ -163,17 +164,16 @@ AI 增强的 Web UI 自动化测试平台。
 - **DSL 生成链路修复**：7 层因果链 bug 修复（Bug A→G），网络重试、工具去重、字段归一化
 - **变量占位符系统**：分段生成 `input_contract` 自动提取、跨段变量命名权威、`_clean_variable_format` 格式清理
 - **语义定位器增强**：`a11y_label_sibling_input` 策略（无名输入框）、`cell`/`row`/`column` 表格角色支持
-- 登录与权限：真实登录页、Cookie Session、统一 API 认证门禁、Go AgentRun 所有权和 capability 项目权限校验
+- 身份边界：服务端固定 actor，不接受客户端提交 actor 字段，保留项目归属数据供未来身份适配
 - 项目级工作台：回归批次编排、状态轮询/取消、运行报告跳转和基于 evidence 的定位调试/人工修正
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
-- Planning 消息、草稿和事件仍由 Python legacy API 提供，需继续收敛迁移期双协议
 - 扩大真实 Runner 的跨浏览器矩阵，并验证生产镜像、TLS 和持久化卷恢复
-- 清理迁移期休眠客户端和历史兼容代码
+- 完善 Agent trajectory、离线评测和策略发布能力
 
 与计划相比的主要差距：
-- Go 控制面仍依赖 Python 提供 Planning 对话内容和浏览器能力，迁移边界尚未完全收敛
+- Go 控制面仍依赖 Python 提供浏览器探索、定位与执行能力
 - CI 浏览器门禁当前覆盖 Chromium 桌面/移动平台 UI，正式 Runner 仍只运行 Chromium
 - artifact 和 storage state 仍使用本地持久卷，多节点前需迁移到对象存储
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
@@ -183,7 +183,7 @@ AI visual 当前默认关闭；能力状态与后续治理决策见
 
 ## 演示流
 
-当前前端采用登录后的五步闭环：
+当前前端无需登录，直接进入五步闭环：
 
 1. **AI 规划**：通过 AgentCore 生成、审批和执行结构化用例
 2. **用例中心**：管理正式 DSL 用例
@@ -242,7 +242,7 @@ AI DSL 生成会输出最小治理信息：
 cd browser-worker
 uv sync
 uv run alembic upgrade head
-uv run backend-dev
+uv run browser-worker-dev
 ```
 
 默认后端地址：
@@ -264,17 +264,7 @@ go run ./cmd/agentservice
 
 默认地址：`http://127.0.0.1:8081`
 
-### 3. 初始化登录账号
-
-```powershell
-cd browser-worker
-$env:AUTH_BOOTSTRAP_PASSWORD="replace-with-at-least-12-characters"
-uv run python scripts/bootstrap_user.py --email admin@example.com
-```
-
-macOS/Linux 使用 `AUTH_BOOTSTRAP_PASSWORD=... uv run python ...`。
-
-### 4. 前端
+### 3. 前端
 
 ```powershell
 cd frontend
@@ -285,17 +275,16 @@ npm run dev
 默认前端地址：
 - `http://127.0.0.1:5173`
 
-前端通过 Go `/api/v2/auth/login` 建立 HttpOnly Cookie Session。`AUTH_SESSION_SECRET` 必须使用随机值，并与 Python Worker 使用同一值；生产环境应在 TLS 反向代理后访问。
+前端直接调用 Go `/api/v2`，不需要登录或 Cookie。
 
 ## 生产运行
 
 ```bash
 cp deploy/prod.env.example .env.prod
 docker compose --env-file .env.prod -f compose.prod.yml up -d --build --wait
-docker compose --env-file .env.prod -f compose.prod.yml --profile tools run --rm bootstrap-user
 ```
 
-Nginx 统一提供前端、Go `/api/v2` 和受保护 artifact；Python Browser Worker
+Nginx 统一提供前端、Go `/api/v2` 和 artifact；Python Browser Worker
 仅在内部网络提供 `/api/v1/internal/browser-capabilities/*`。
 
 ## 构建验证

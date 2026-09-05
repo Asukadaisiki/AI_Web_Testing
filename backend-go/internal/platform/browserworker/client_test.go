@@ -7,8 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 )
 
 func TestExecuteBrowserCapability(t *testing.T) {
@@ -20,11 +18,8 @@ func TestExecuteBrowserCapability(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if payload.ProjectID != 7 || payload.ConversationID != "11" {
+		if payload.ActorUserID != 5 || payload.ProjectID != 7 || payload.ConversationID != "11" {
 			t.Fatalf("payload = %#v", payload)
-		}
-		if request.Header.Get("Cookie") != "session=signed-cookie" {
-			t.Fatalf("cookie = %q", request.Header.Get("Cookie"))
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"result":{"url":"https://example.com","element_count":1}}`))
@@ -35,13 +30,10 @@ func TestExecuteBrowserCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	ctx := authn.WithIdentity(context.Background(), authn.Identity{
-		UserID: 7,
-		Cookie: "session=signed-cookie",
-	})
 	result, err := client.ExecuteBrowserCapability(
-		ctx,
+		context.Background(),
 		"explore_page",
+		5,
 		7,
 		"11",
 		json.RawMessage(`{"url":"https://example.com"}`),
@@ -62,6 +54,7 @@ func TestExecuteBrowserCapabilityRequiresProject(t *testing.T) {
 	_, err = client.ExecuteBrowserCapability(
 		context.Background(),
 		"explore_page",
+		1,
 		0,
 		"11",
 		json.RawMessage(`{"url":"https://example.com"}`),

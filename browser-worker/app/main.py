@@ -5,7 +5,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
 from app.api.routes.artifacts import router as artifacts_router
@@ -40,14 +39,6 @@ def create_app() -> FastAPI:
         RateLimitMiddleware,
         max_requests=settings.rate_limit_max_requests,
         window_seconds=settings.rate_limit_window_seconds,
-    )
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=settings.auth_session_secret,
-        session_cookie=settings.auth_session_cookie_name,
-        max_age=settings.auth_session_max_age_seconds,
-        same_site=settings.auth_session_same_site,
-        https_only=settings.auth_session_https_only,
     )
     app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(

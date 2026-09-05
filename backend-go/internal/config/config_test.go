@@ -14,3 +14,10 @@ func TestNormalizeDatabaseURL(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadUsesConfiguredDefaultActor(t *testing.T) {
+	t.Setenv("DEFAULT_ACTOR_USER_ID", "9")
+	if got := Load().DefaultActorID; got != 9 {
+		t.Fatalf("DefaultActorID = %d, want 9", got)
+	}
+}
