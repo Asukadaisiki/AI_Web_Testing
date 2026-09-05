@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 )
 
 type Client struct {
@@ -164,6 +166,9 @@ func (c *Client) executeCapability(
 		return nil, fmt.Errorf("create Python capability request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if identity, ok := authn.FromContext(ctx); ok && identity.Cookie != "" {
+		request.Header.Set("Cookie", identity.Cookie)
+	}
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {

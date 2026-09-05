@@ -19,12 +19,14 @@
 - `corrections overview / events / bulk` 运营接口，可输出命中趋势、事件时间线并支持批量启停
 - Playwright Runner、基础 Locator 与结构化执行报告
 - 用例级 `base_url`，用于承载相对路径 `goto` 的正式执行地址
+- Cookie Session 登录、统一业务 API 认证门禁和 capability 项目权限校验
+- 项目级回归 Batch API，已由前端回归编排页消费
 
 ## 当前未完成
 
 - 更完整的 AI 接入层治理（模型管理、prompt 调优、审计与回放）
-- 更完整的环境配置、项目级回归编排与历史对比能力
-- 带审批门的自动重探索、DSL 重生成和差异确认闭环
+- 多节点 artifact/storage state 对象存储
+- Planning 对话、草稿和事件向 Go 控制面的后续迁移
 
 ## 本地开发约定
 
@@ -32,7 +34,8 @@
 - 首次启动前先执行 `uv run alembic upgrade head`
 - 后端启动命令：`uv run backend-dev`
 - 执行队列 Worker：`uv run python -m app.workers.execution_worker --concurrency 2`
-- 当前本地单用户模式关闭登录鉴权，所有请求自动使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的数据库账号（默认 `admin@test.com`）；该账号缺失或停用时接口会返回 500
+- 初始化或重置账号：`AUTH_BOOTSTRAP_PASSWORD=... uv run python scripts/bootstrap_user.py --email admin@example.com`
+- 除健康检查和登录接口外，业务 API 与 artifact 下载均要求有效 Cookie Session
 - AI DSL 生成默认关闭；如需启用，额外设置 `ENABLE_AI_DSL_GENERATE=true`、`AI_DSL_API_KEY` 与 `AI_DSL_MODEL`
 - AI visual 默认关闭；如需启用，额外设置 `ENABLE_AI_VISUAL_LOCATE=true`、`VLM_API_KEY`、`VLM_BASE_URL`、`VLM_MODEL` 与 `VLM_MODEL_FAMILY`
 

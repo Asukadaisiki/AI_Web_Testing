@@ -62,7 +62,6 @@ class Settings:
     auth_session_max_age_seconds: int = 60 * 60 * 12
     auth_session_same_site: str = "lax"
     auth_session_https_only: bool = True
-    auth_auto_login_email: str = "admin@test.com"
     database_url: str = "sqlite:///./app.db"
     database_echo: bool = False
     execution_base_url: str | None = None
@@ -123,7 +122,6 @@ def get_settings() -> Settings:
         auth_session_max_age_seconds=max(600, _get_int(os.getenv("AUTH_SESSION_MAX_AGE_SECONDS"), default=60 * 60 * 12)),
         auth_session_same_site=os.getenv("AUTH_SESSION_SAME_SITE", "lax").strip().lower() or "lax",
         auth_session_https_only=_get_bool(os.getenv("AUTH_SESSION_HTTPS_ONLY"), default=True),
-        auth_auto_login_email=(os.getenv("AUTH_AUTO_LOGIN_EMAIL") or "admin@test.com").strip().lower(),
         database_url=os.getenv("DATABASE_URL", "sqlite:///./app.db"),
         database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,

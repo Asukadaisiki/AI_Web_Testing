@@ -50,10 +50,19 @@
 | SSE 架构修复 v2 | 06-08 | Session 隔离 + 弹性降级 | 修复表不存在时流式崩溃 |
 | 孤儿会话根因修复 | 06-08 | SSE 端点添加会话验证，测试驱动调试 | 501 tests, 根因修复 |
 | 孤儿数据清理 | 06-08 | 清理 70 个孤立项目，添加清理脚本 | 数据库清理完成 |
+| 控制面生产化 | 09-05 | 生产运行、Session 元数据、鉴权、项目回归、定位调试和 CI | Go/Python/Frontend 生产边界与持续门禁落地 |
 
 ---
 
 ## 任务记录
+
+## 2026-09-05 | 生产化控制面、鉴权与工作台完善
+
+- 任务：处理生产反向代理与进程管理、Planning Session 元数据向 Go 迁移、持续浏览器回归门禁、项目级编排与定位调试 UI、恢复鉴权及 BUG-098 日志治理。
+- 操作：新增 Docker Compose、Python/Go/Frontend Dockerfile 和 Nginx SSE 代理；Go 新增 Planning Session/项目关联存储和 `/api/v2/planning`，AgentRun 增加 actor 所有权；Python 恢复 Cookie Session，统一保护业务/artifact/internal capability 路由并增加账号初始化命令；前端接入 Login/AuthGuard、回归编排和定位调试；新增 Vitest、桌面/移动 Playwright smoke 与 GitHub Actions；清理重复缺陷 ID 并增加 CI 校验；修复 BUG-107/108/109。
+- 结果：Planning Session 元数据新记录由 Go 持久化并标记 `runtime_owner=go`，消息/草稿暂由 Python legacy API 继续提供；用户可登录后创建 Session、按项目启动/取消回归批次、查看运行报告和定位候选证据；生产入口统一由 Nginx 分流，内部 capability 不暴露公网。
+- 验证：Go `go test ./...`、`go vet ./...` 通过；Python 22 项测试、compileall、PostgreSQL Alembic 升级至 0035 和 `alembic check` 通过；前端 Vitest 8/8、Chromium 桌面/移动 smoke、生产构建通过；真实隔离端口完成匿名 401、登录、Go Session 创建/list、回归页和定位调试页验收，临时账号/Session/项目已清理。
+- 后续：本机没有 Docker CLI/Engine，尚未在本机实际构建生产镜像；需要在有 Docker 的环境执行 `docker compose ... up --build --wait`，并继续迁移 Planning 消息/草稿/事件。
 
 ## 2026-09-05 | 当前项目进度复核
 

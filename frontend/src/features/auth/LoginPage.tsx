@@ -1,10 +1,10 @@
 import { LockOutlined, MailOutlined } from "@ant-design/icons";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Form, Input, Typography } from "antd";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { currentUserQueryKey } from "./AuthGuard";
-import { login } from "./api";
+import { getCurrentUser, login } from "./api";
 import type { LoginPayload } from "./types";
 
 type LoginLocationState = {
@@ -28,7 +28,17 @@ export function LoginPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const currentUser = queryClient.getQueryData(currentUserQueryKey);
+  const currentUserQuery = useQuery({
+    queryKey: currentUserQueryKey,
+    queryFn: async () => {
+      try {
+        return await getCurrentUser();
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+  });
   const destination = getSafeDestination(
     location.state as LoginLocationState | null,
   );
@@ -41,7 +51,7 @@ export function LoginPage() {
     },
   });
 
-  if (currentUser) {
+  if (currentUserQuery.data) {
     return <Navigate to={destination} replace />;
   }
 

@@ -7,6 +7,7 @@ import (
 
 var (
 	ErrRunNotFound          = errors.New("agent run not found")
+	ErrRunAccessDenied      = errors.New("agent run access denied")
 	ErrRunNotWaitingForUser = errors.New("agent run is not waiting for user input")
 	ErrToolCallMismatch     = errors.New("tool call does not match the pending call")
 )

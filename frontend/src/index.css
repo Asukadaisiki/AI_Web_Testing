@@ -25,6 +25,225 @@ a {
   min-height: 100vh;
 }
 
+.workspace-page {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.workspace-sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+  border-right: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.workspace-brand {
+  margin: 0 10px 20px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.workspace-sidebar .notebook-nav {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+  border-top: 0 !important;
+}
+
+.workspace-main {
+  min-width: 0;
+  padding: 28px;
+}
+
+.workspace-header,
+.section-heading,
+.metric-strip,
+.run-row,
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workspace-header {
+  margin-bottom: 24px;
+}
+
+.workspace-header h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.workspace-header p {
+  margin: 6px 0 0;
+  color: #6b7280;
+}
+
+.workspace-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr);
+  gap: 18px;
+}
+
+.workspace-section {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.workspace-section h4,
+.workspace-section h5 {
+  margin: 0;
+}
+
+.section-heading {
+  margin-bottom: 16px;
+}
+
+.section-heading.compact {
+  margin-bottom: 10px;
+}
+
+.case-picker {
+  display: flex;
+  max-height: 310px;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+.batch-list,
+.run-list,
+.candidate-list,
+.step-selector {
+  display: flex;
+  flex-direction: column;
+}
+
+.batch-row,
+.step-debug-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid #edf0f3;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.batch-row:hover,
+.batch-row.active,
+.step-debug-row:hover,
+.step-debug-row.active {
+  background: #f0f4f8;
+}
+
+.batch-row span:first-child,
+.step-debug-row span:first-child,
+.run-row > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.batch-row small,
+.step-debug-row small {
+  color: #6b7280;
+}
+
+.metric-strip {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin: 14px 0;
+  color: #4b5563;
+}
+
+.run-row {
+  padding: 12px 0;
+  border-top: 1px solid #edf0f3;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.6fr) minmax(500px, 1.4fr);
+  gap: 18px;
+}
+
+.filter-bar {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.filter-bar .ant-select {
+  min-width: 180px;
+}
+
+.filter-bar .ant-select:nth-child(3) {
+  min-width: 280px;
+}
+
+.locator-evidence,
+.correction-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.evidence-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+}
+
+.candidate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid #edf0f3;
+}
+
+.candidate-row.selected {
+  border-left: 3px solid #1a1a2e;
+  padding-left: 10px;
+  background: #f8fafc;
+}
+
+.candidate-meta {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.correction-editor {
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.workspace-loading {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+}
+
 /* NotebookLM base card style */
 .nb-card {
   background: #fff;
@@ -170,6 +389,60 @@ a {
 }
 
 @media (max-width: 900px) {
+  .workspace-page {
+    display: block;
+  }
+
+  .workspace-sidebar {
+    position: sticky;
+    z-index: 10;
+    top: 0;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .workspace-brand {
+    display: none;
+  }
+
+  .workspace-sidebar .notebook-nav {
+    flex-direction: row !important;
+    overflow-x: auto;
+  }
+
+  .workspace-sidebar .notebook-nav button {
+    width: auto !important;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .workspace-main {
+    padding: 16px;
+  }
+
+  .workspace-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-grid,
+  .debug-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .run-row,
+  .candidate-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .filter-bar .ant-select,
+  .filter-bar .ant-select:nth-child(3) {
+    width: 100%;
+    min-width: 0;
+  }
+
   .notebook-layout {
     display: flex !important;
     height: auto !important;

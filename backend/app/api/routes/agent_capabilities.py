@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.auth import require_demo_user
+from app.api.capability_auth import require_capability_access
 from app.application.agent_capabilities import (
     execute_dsl,
     generate_dsl,
@@ -29,6 +30,12 @@ def generate_dsl_capability(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_demo_user),
 ) -> AgentCapabilityResponse:
+    require_capability_access(
+        session,
+        current_user,
+        project_id=payload.project_id,
+        conversation_id=payload.conversation_id,
+    )
     try:
         result = generate_dsl(
             session,
@@ -53,6 +60,12 @@ def execute_dsl_capability(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(require_demo_user),
 ) -> AgentCapabilityResponse:
+    require_capability_access(
+        session,
+        current_user,
+        project_id=payload.project_id,
+        conversation_id=payload.conversation_id,
+    )
     if not payload.run_id:
         raise HTTPException(status_code=422, detail="run_id is required")
     try:
@@ -75,7 +88,14 @@ def execute_dsl_capability(
 def get_report_capability(
     payload: AgentCapabilityRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
 ) -> AgentCapabilityResponse:
+    require_capability_access(
+        session,
+        current_user,
+        project_id=payload.project_id,
+        conversation_id=payload.conversation_id,
+    )
     try:
         result = get_report(
             session,
@@ -93,7 +113,14 @@ def get_report_capability(
 def fix_and_retry_capability(
     payload: AgentCapabilityRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
 ) -> AgentCapabilityResponse:
+    require_capability_access(
+        session,
+        current_user,
+        project_id=payload.project_id,
+        conversation_id=payload.conversation_id,
+    )
     try:
         result = prepare_fix_and_retry(
             session,

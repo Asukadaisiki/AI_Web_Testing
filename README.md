@@ -24,7 +24,9 @@ AI 增强的 Web UI 自动化测试平台。
 | 执行调度 | PostgreSQL 持久化 Batch/Job 队列、并发限制、幂等、lease、heartbeat 和取消已落地 |
 | 报告聚合 | Report Core 可按 run、batch、project 聚合结果，并返回持久化 FailureSignal 与分析总结 |
 | AI 自愈 | `fix_and_retry` 可按失败事实执行重探索或 DSL 重生成，并强制经过用户审批后重运行 |
-| 质量门禁 | Go 全量测试/vet/build、Python 合同测试、前端生产构建和真实浏览器 E2E 已通过 |
+| 身份与权限 | Cookie Session 登录已恢复；Python 业务 API、artifact、Go Run/Event/Resume 均要求身份并校验资源归属 |
+| 生产运行 | Docker Compose 管理 PostgreSQL、迁移、Python API/Worker、Go AgentCore 和 Nginx；SSE 反向代理已配置 |
+| 质量门禁 | Go 测试/vet/build、Python 合同测试、Vitest、桌面/移动 Playwright smoke 和生产构建进入 CI |
 
 不再使用单一完成度百分比描述项目状态；各能力的完成标准和风险不同，应以上述能力矩阵、执行日志和缺陷日志为准。
 
@@ -38,9 +40,9 @@ AI 增强的 Web UI 自动化测试平台。
 
 下一阶段优先级：
 
-1. 增加生产环境反向代理与 Go/Python 进程管理配置。
-2. 将 Planning Session 元数据逐步收敛到 Go 控制面，减少迁移期双协议。
-3. 扩大跨浏览器回归矩阵，并修复 BUG-098 的历史缺陷编号重复。
+1. 将 Planning 消息、草稿和事件从 Python legacy API 继续迁入 Go 控制面。
+2. 为生产容器补充真实镜像构建、TLS 入口和对象存储验收。
+3. 扩大 Firefox/WebKit 与真实 Runner 的跨浏览器回归矩阵。
 
 ### 2026-09-02 执行控制面与 Report Core
 
@@ -161,31 +163,33 @@ AI 增强的 Web UI 自动化测试平台。
 - **DSL 生成链路修复**：7 层因果链 bug 修复（Bug A→G），网络重试、工具去重、字段归一化
 - **变量占位符系统**：分段生成 `input_contract` 自动提取、跨段变量命名权威、`_clean_variable_format` 格式清理
 - **语义定位器增强**：`a11y_label_sibling_input` 策略（无名输入框）、`cell`/`row`/`column` 表格角色支持
-- 本地单用户模式：前端跳过登录页，后端自动使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的 admin 账号；原登录接口暂作兼容保留
+- 登录与权限：真实登录页、Cookie Session、统一 API 认证门禁、Go AgentRun 所有权和 capability 项目权限校验
+- 项目级工作台：回归批次编排、状态轮询/取消、运行报告跳转和基于 evidence 的定位调试/人工修正
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
-- 生产反向代理、进程管理和 Planning Session 元数据向 Go 控制面收敛
-- 扩大真实浏览器和跨浏览器回归矩阵，将当前聚焦验证沉淀为持续质量门禁
-- 清理迁移期旧 Planning 协议、休眠客户端和 BUG-098 跟踪的历史缺陷编号重复
+- Planning 消息、草稿和事件仍由 Python legacy API 提供，需继续收敛迁移期双协议
+- 扩大真实 Runner 的跨浏览器矩阵，并验证生产镜像、TLS 和持久化卷恢复
+- 清理迁移期休眠客户端和历史兼容代码
 
 与计划相比的主要差距：
-- Go 控制面仍依赖 Python 提供 Planning Session、项目和浏览器能力，迁移边界尚未完全收敛
-- 前端尚无自动化测试文件，浏览器回归也未形成稳定的跨浏览器持续门禁
-- 项目级回归编排页和完整定位调试面板尚未落地
+- Go 控制面仍依赖 Python 提供 Planning 对话内容和浏览器能力，迁移边界尚未完全收敛
+- CI 浏览器门禁当前覆盖 Chromium 桌面/移动平台 UI，正式 Runner 仍只运行 Chromium
+- artifact 和 storage state 仍使用本地持久卷，多节点前需迁移到对象存储
 - AI visual 还没有达到默认开启条件，仍处于受控灰度验证阶段
-- 当前关闭登录鉴权，仅适用于本地单用户测试；恢复多用户使用前需重新启用认证与授权
 
 AI visual 当前默认关闭；能力状态与后续治理决策见
 [`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)。
 
 ## 演示流
 
-当前前端采用三步闭环演示流（无需登录）：
+当前前端采用登录后的五步闭环：
 
-1. **AI 规划**（PlanningPage）：通过对话式 AI 助手生成测试方案，支持会话历史恢复与会话管理
-2. **用例中心**（CasesPage）：审阅 DSL 草案、保存为正式用例、编辑/删除已有用例、触发 Playwright 执行（支持实时流式进度与取消）
-3. **报告**（ReportPage）：查看执行结果、概览统计、步骤证据与截图，支持删除执行记录
+1. **AI 规划**：通过 AgentCore 生成、审批和执行结构化用例
+2. **用例中心**：管理正式 DSL 用例
+3. **回归编排**：按项目选择用例和并发度，创建、取消及跟踪 Batch
+4. **定位调试**：查看 target、候选、最终命中和失败原因，并提交修正
+5. **报告**：查看执行统计、分析、步骤 evidence 和截图
 
 全部页面采用 NotebookLM 风格三栏浮岛布局，侧边栏底部导航。
 
@@ -258,7 +262,26 @@ cd backend
 uv run python -m app.workers.execution_worker --concurrency 2
 ```
 
-### 2. 前端
+### 2. Go AgentCore
+
+```powershell
+cd backend-go
+go run ./cmd/api
+```
+
+默认地址：`http://127.0.0.1:8081`
+
+### 3. 初始化登录账号
+
+```powershell
+cd backend
+$env:AUTH_BOOTSTRAP_PASSWORD="replace-with-at-least-12-characters"
+uv run python scripts/bootstrap_user.py --email admin@example.com
+```
+
+macOS/Linux 使用 `AUTH_BOOTSTRAP_PASSWORD=... uv run python ...`。
+
+### 4. 前端
 
 ```powershell
 cd frontend
@@ -269,20 +292,34 @@ npm run dev
 默认前端地址：
 - `http://127.0.0.1:5173`
 
-本地启动后无需登录，前端会直接进入工作台，后端统一使用 `AUTH_AUTO_LOGIN_EMAIL` 指定的数据库账号（默认 `admin@test.com`）。原 Cookie Session 登录接口仅为兼容保留，因此仍需配置 `AUTH_SESSION_SECRET`；该管理员账号缺失或停用时，依赖用户身份的接口会返回 500。
+前端通过 `/api/v1/auth/login` 建立 HttpOnly Cookie Session。`AUTH_SESSION_SECRET` 必须使用随机值；生产环境应启用 `AUTH_SESSION_HTTPS_ONLY=true` 并在 TLS 反向代理后访问。
+
+## 生产运行
+
+```bash
+cp deploy/prod.env.example .env.prod
+docker compose --env-file .env.prod -f compose.prod.yml up -d --build --wait
+docker compose --env-file .env.prod -f compose.prod.yml --profile tools run --rm bootstrap-user
+```
+
+Nginx 统一提供前端、Python API 和 Go `/api/v2`，并禁止公网访问 `/api/v1/internal/*`。
 
 ## 构建验证
 
 ```powershell
+cd backend-go
+go test ./...
+go vet ./...
+
 cd backend
 uv run python -m compileall -q app
 uv run python -m unittest discover -s tests -p "test_*.py" -v
 
 cd ../frontend
+npm test
+npm run test:smoke
 npm run build
 ```
-
-当前只恢复了执行分析链路的聚焦合同测试，尚不能替代完整回归测试。
 
 ## 推荐联调路径
 

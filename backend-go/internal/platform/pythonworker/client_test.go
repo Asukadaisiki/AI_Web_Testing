@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 )
 
 func TestExecuteBrowserCapability(t *testing.T) {
@@ -21,6 +23,9 @@ func TestExecuteBrowserCapability(t *testing.T) {
 		if payload.ProjectID != 7 || payload.ConversationID != "11" {
 			t.Fatalf("payload = %#v", payload)
 		}
+		if request.Header.Get("Cookie") != "session=signed-cookie" {
+			t.Fatalf("cookie = %q", request.Header.Get("Cookie"))
+		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"result":{"url":"https://example.com","element_count":1}}`))
 	}))
@@ -30,8 +35,12 @@ func TestExecuteBrowserCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
+	ctx := authn.WithIdentity(context.Background(), authn.Identity{
+		UserID: 7,
+		Cookie: "session=signed-cookie",
+	})
 	result, err := client.ExecuteBrowserCapability(
-		context.Background(),
+		ctx,
 		"explore_page",
 		7,
 		"11",

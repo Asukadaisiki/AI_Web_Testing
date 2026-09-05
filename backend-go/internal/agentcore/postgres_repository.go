@@ -24,11 +24,12 @@ func (r *PostgresRepository) CreateRun(ctx context.Context, run AgentRun) error 
 	_, err = r.db.ExecContext(
 		ctx,
 		`INSERT INTO agent_runs (
-			id, conversation_id, project_id, status, input, pending_tool_call_id,
+			id, actor_user_id, conversation_id, project_id, status, input, pending_tool_call_id,
 			pending_step_id, latest_generation_id, approved_generation_id,
 			transcript_json, last_event_seq, created_at, updated_at
-		) VALUES ($1, $2, NULLIF($3, 0), $4, $5, $6, $7, $8, $9, $10, 0, $11, $12)`,
+		) VALUES ($1, NULLIF($2, 0), $3, NULLIF($4, 0), $5, $6, $7, $8, $9, $10, $11, 0, $12, $13)`,
 		run.ID,
+		run.ActorUserID,
 		run.ConversationID,
 		run.ProjectID,
 		run.Status,
@@ -37,7 +38,7 @@ func (r *PostgresRepository) CreateRun(ctx context.Context, run AgentRun) error 
 		run.PendingStepID,
 		run.LatestGenerationID,
 		run.ApprovedGenerationID,
-		transcript,
+		string(transcript),
 		run.CreatedAt,
 		run.UpdatedAt,
 	)
@@ -52,7 +53,7 @@ func (r *PostgresRepository) GetRun(ctx context.Context, runID string) (AgentRun
 	var transcript []byte
 	err := r.db.QueryRowContext(
 		ctx,
-		`SELECT id, conversation_id, COALESCE(project_id, 0), status, input, pending_tool_call_id,
+		`SELECT id, COALESCE(actor_user_id, 0), conversation_id, COALESCE(project_id, 0), status, input, pending_tool_call_id,
 		        pending_step_id, latest_generation_id, approved_generation_id,
 		        transcript_json, created_at, updated_at
 		   FROM agent_runs
@@ -60,6 +61,7 @@ func (r *PostgresRepository) GetRun(ctx context.Context, runID string) (AgentRun
 		runID,
 	).Scan(
 		&run.ID,
+		&run.ActorUserID,
 		&run.ConversationID,
 		&run.ProjectID,
 		&run.Status,
@@ -106,7 +108,7 @@ func (r *PostgresRepository) SaveRun(ctx context.Context, run AgentRun) error {
 		run.PendingStepID,
 		run.LatestGenerationID,
 		run.ApprovedGenerationID,
-		transcript,
+		string(transcript),
 		run.UpdatedAt,
 	)
 	if err != nil {
@@ -163,7 +165,7 @@ func (r *PostgresRepository) AppendEvent(ctx context.Context, event Event) (Even
 		event.ToolCallID,
 		event.ParentID,
 		event.CheckpointID,
-		payload,
+		string(payload),
 		event.Timestamp,
 	)
 	if err != nil {

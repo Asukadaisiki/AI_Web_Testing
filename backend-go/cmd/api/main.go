@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentcore"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/config"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/planning"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/llm"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/pythonworker"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
@@ -57,7 +59,17 @@ func main() {
 		log.Fatalf("configure tools: %v", err)
 	}
 	engine := agentcore.NewEngine(runService, model, registry, cfg.AgentMaxSteps)
-	server := httptransport.NewServer(cfg.Address, engine)
+	authenticator, err := authn.NewPythonAuthenticator(cfg.PythonAPIURL, 10*time.Second)
+	if err != nil {
+		log.Fatalf("configure auth introspection: %v", err)
+	}
+	planningStore := planning.NewPostgresStore(database)
+	server := httptransport.NewServer(
+		cfg.Address,
+		engine,
+		authenticator,
+		planningStore,
+	)
 
 	log.Printf("agentcore API listening on %s", cfg.Address)
 	server.Spin()

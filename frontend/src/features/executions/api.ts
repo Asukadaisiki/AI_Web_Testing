@@ -2,6 +2,10 @@ import type {
   BatchUpdateCorrectionStatePayload,
   CaseExecutionRequest,
   CreateCorrectionPayload,
+  ExecutionBatchCreatePayload,
+  ExecutionBatchDetail,
+  ExecutionBatchReport,
+  ExecutionBatchSummary,
   ExecutionsOverview,
   LocatorCorrectionsOverview,
   OverviewWindowDays,
@@ -20,6 +24,36 @@ export function executeCase(caseId: number, payload: CaseExecutionRequest) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function createExecutionBatch(payload: ExecutionBatchCreatePayload) {
+  return request<ExecutionBatchDetail>("/api/v1/execution-batches", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getExecutionBatches(projectId: number, limit = 50) {
+  return request<ExecutionBatchSummary[]>(
+    `/api/v1/execution-batches?project_id=${projectId}&limit=${limit}`,
+  );
+}
+
+export function getExecutionBatch(batchId: number) {
+  return request<ExecutionBatchDetail>(`/api/v1/execution-batches/${batchId}`);
+}
+
+export function getExecutionBatchReport(batchId: number) {
+  return request<ExecutionBatchReport>(
+    `/api/v1/execution-batches/${batchId}/report`,
+  );
+}
+
+export function cancelExecutionBatch(batchId: number) {
+  return request<ExecutionBatchDetail>(
+    `/api/v1/execution-batches/${batchId}/cancel`,
+    { method: "POST" },
+  );
 }
 
 export function createCorrection(payload: CreateCorrectionPayload) {

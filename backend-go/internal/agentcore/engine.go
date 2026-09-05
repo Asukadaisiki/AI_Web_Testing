@@ -65,12 +65,29 @@ func (e *Engine) StartProjectAsync(
 	projectID int64,
 	input string,
 ) (AgentRun, error) {
-	run, err := e.runs.StartProjectRun(context.Background(), conversationID, projectID, input)
+	return e.StartOwnedProjectAsync(context.Background(), 0, conversationID, projectID, input)
+}
+
+func (e *Engine) StartOwnedProjectAsync(
+	ctx context.Context,
+	actorUserID int64,
+	conversationID string,
+	projectID int64,
+	input string,
+) (AgentRun, error) {
+	runContext := context.WithoutCancel(ctx)
+	run, err := e.runs.StartOwnedProjectRun(
+		runContext,
+		actorUserID,
+		conversationID,
+		projectID,
+		input,
+	)
 	if err != nil {
 		return AgentRun{}, err
 	}
 	go func() {
-		_, _ = e.Continue(context.Background(), run.ID)
+		_, _ = e.Continue(runContext, run.ID)
 	}()
 	return run, nil
 }
@@ -208,11 +225,44 @@ func (e *Engine) Resume(
 	return e.Continue(ctx, run.ID)
 }
 
+func (e *Engine) ResumeOwned(
+	ctx context.Context,
+	actorUserID int64,
+	runID string,
+	toolCallID string,
+	request ResumeToolCallRequest,
+) (AgentRun, error) {
+	if _, err := e.runs.GetOwnedRun(ctx, runID, actorUserID); err != nil {
+		return AgentRun{}, err
+	}
+	return e.Resume(ctx, runID, toolCallID, request)
+}
+
 func (e *Engine) GetRun(ctx context.Context, runID string) (AgentRun, error) {
 	return e.runs.GetRun(ctx, runID)
 }
 
+func (e *Engine) GetOwnedRun(
+	ctx context.Context,
+	runID string,
+	actorUserID int64,
+) (AgentRun, error) {
+	return e.runs.GetOwnedRun(ctx, runID, actorUserID)
+}
+
 func (e *Engine) ListEvents(ctx context.Context, runID string, afterSeq int64) ([]Event, error) {
+	return e.runs.ListEvents(ctx, runID, afterSeq)
+}
+
+func (e *Engine) ListOwnedEvents(
+	ctx context.Context,
+	runID string,
+	actorUserID int64,
+	afterSeq int64,
+) ([]Event, error) {
+	if _, err := e.runs.GetOwnedRun(ctx, runID, actorUserID); err != nil {
+		return nil, err
+	}
 	return e.runs.ListEvents(ctx, runID, afterSeq)
 }
 

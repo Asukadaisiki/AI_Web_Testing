@@ -33,6 +33,12 @@ class AgentRun(Base):
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=True,
+    )
     conversation_id: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     project_id: Mapped[int | None] = mapped_column(
         Integer,

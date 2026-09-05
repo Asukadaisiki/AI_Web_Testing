@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
+
+from app.api.auth import require_authenticated_user
 
 
 router = APIRouter(tags=["artifacts"])
 
 
-@router.get("/artifacts/{artifact_path:path}", summary="Download an artifact file")
+@router.get(
+    "/artifacts/{artifact_path:path}",
+    dependencies=[Depends(require_authenticated_user)],
+    summary="Download an artifact file",
+)
 def download_artifact(
     artifact_path: str,
     request: Request,

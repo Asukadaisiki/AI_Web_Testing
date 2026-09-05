@@ -39,6 +39,11 @@ screenshots/
 midscene_run/
 backend/artifacts/
 backend/storage_states/
+frontend/.playwright-browsers/
+frontend/.npm-cache/
+frontend/.test-home/
+frontend/playwright-report/
+frontend/test-results/
 
 # Package manager locks generated per app
 backend/.python-version
@@ -48,4 +53,3 @@ backend/.python-version
 .claude/settings.local.json
 !.claude/skills/
 .superpowers
-frontend

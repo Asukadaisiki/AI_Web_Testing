@@ -46,6 +46,7 @@ def list_planning_sessions(
     return [
         AIPlanningSessionSummary(
             id=record.id,
+            runtime_owner=record.runtime_owner,
             active_project_id=get_active_project_id(record),
             title=record.title
             or (record.requirements_json or {}).get("app_under_test"),

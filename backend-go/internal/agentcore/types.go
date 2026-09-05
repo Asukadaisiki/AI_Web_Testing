@@ -35,6 +35,7 @@ const (
 
 type AgentRun struct {
 	ID                   string    `json:"id"`
+	ActorUserID          int64     `json:"-"`
 	ConversationID       string    `json:"conversation_id"`
 	ProjectID            int64     `json:"project_id"`
 	Status               RunStatus `json:"status"`

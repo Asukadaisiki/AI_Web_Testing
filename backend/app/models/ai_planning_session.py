@@ -21,6 +21,13 @@ class AIPlanningSession(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     actor_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), index=True, nullable=False)
+    runtime_owner: Mapped[str] = mapped_column(
+        String(16),
+        index=True,
+        nullable=False,
+        default="python",
+        server_default="python",
+    )
     active_project_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("projects.id", ondelete="SET NULL"),

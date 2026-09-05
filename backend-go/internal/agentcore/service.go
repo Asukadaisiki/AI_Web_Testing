@@ -48,6 +48,16 @@ func (s *Service) StartProjectRun(
 	projectID int64,
 	input string,
 ) (AgentRun, error) {
+	return s.StartOwnedProjectRun(ctx, 0, conversationID, projectID, input)
+}
+
+func (s *Service) StartOwnedProjectRun(
+	ctx context.Context,
+	actorUserID int64,
+	conversationID string,
+	projectID int64,
+	input string,
+) (AgentRun, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	input = strings.TrimSpace(input)
 	if conversationID == "" {
@@ -60,6 +70,7 @@ func (s *Service) StartProjectRun(
 	now := s.now().UTC()
 	run := AgentRun{
 		ID:             s.newID("run"),
+		ActorUserID:    actorUserID,
 		ConversationID: conversationID,
 		ProjectID:      projectID,
 		Status:         RunStatusRunning,
@@ -83,6 +94,21 @@ func (s *Service) StartProjectRun(
 
 func (s *Service) GetRun(ctx context.Context, runID string) (AgentRun, error) {
 	return s.repository.GetRun(ctx, runID)
+}
+
+func (s *Service) GetOwnedRun(
+	ctx context.Context,
+	runID string,
+	actorUserID int64,
+) (AgentRun, error) {
+	run, err := s.repository.GetRun(ctx, runID)
+	if err != nil {
+		return AgentRun{}, err
+	}
+	if actorUserID < 1 || run.ActorUserID != actorUserID {
+		return AgentRun{}, ErrRunAccessDenied
+	}
+	return run, nil
 }
 
 func (s *Service) ListEvents(ctx context.Context, runID string, afterSeq int64) ([]Event, error) {

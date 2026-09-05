@@ -4,6 +4,7 @@ export type ExecutionStatus =
   | "failed"
   | "needs_intervention"
   | "cancelled";
+export type ExecutionBatchStatus = "pending" | ExecutionStatus;
 export type FailureCategory = "configuration" | "locator" | "assertion" | "navigation" | "network" | "runner";
 export type ExecutionAnalysisStatus = "pending" | "running" | "completed" | "skipped" | "failed";
 export type ExecutionAnalysisSource = "deterministic" | "ai";
@@ -794,6 +795,64 @@ export interface StoredCaseExecutionDetail extends StoredCaseExecutionSummary {
   report: ExecutionReport | null;
   analysis_status: ExecutionAnalysisStatus;
   analysis?: ExecutionAnalysis | null;
+}
+
+export interface ExecutionBatchCreatePayload {
+  project_id: number;
+  case_ids: number[];
+  concurrency_limit: number;
+  input_values?: Record<string, string>;
+  idempotency_key?: string;
+}
+
+export interface ExecutionJobSummary {
+  id: number;
+  batch_id: number;
+  project_id: number;
+  case_id: number;
+  case_name: string;
+  order_index: number;
+  status: ExecutionBatchStatus;
+  attempt_count: number;
+  max_attempts: number;
+  cancel_requested: boolean;
+  last_error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  heartbeat_at?: string | null;
+  finished_at?: string | null;
+  latest_execution?: StoredCaseExecutionDetail | null;
+}
+
+export interface ExecutionBatchSummary {
+  id: number;
+  project_id: number;
+  planning_session_id?: number | null;
+  triggered_by: number;
+  status: ExecutionBatchStatus;
+  idempotency_key?: string | null;
+  concurrency_limit: number;
+  total_jobs: number;
+  pending_jobs: number;
+  running_jobs: number;
+  passed_jobs: number;
+  failed_jobs: number;
+  intervention_jobs: number;
+  cancelled_jobs: number;
+  analysis_status: ExecutionAnalysisStatus;
+  analysis?: ExecutionAnalysis | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ExecutionBatchDetail extends ExecutionBatchSummary {
+  jobs: ExecutionJobSummary[];
+}
+
+export interface ExecutionBatchReport extends ExecutionBatchDetail {
+  pass_rate: number;
+  completed_jobs: number;
 }
 
 export interface CreateCorrectionPayload {

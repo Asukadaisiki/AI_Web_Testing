@@ -16,12 +16,47 @@ _NOISY_PATHS = {"/docs", "/openapi.json", "/redoc", "/"}
 
 # Max body bytes to log (avoid dumping huge payloads like screenshots)
 _MAX_BODY_LOG = 2048
+_REDACTED = "***"
+_SENSITIVE_KEYS = {
+    "authorization",
+    "cookie",
+    "password",
+    "password_hash",
+    "session",
+}
 
 
 def _truncate(text: str, limit: int = _MAX_BODY_LOG) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"... (truncated, total {len(text)} chars)"
+
+
+def _is_sensitive_key(key: object) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return (
+        normalized in _SENSITIVE_KEYS
+        or normalized.endswith("_api_key")
+        or normalized.endswith("_password")
+        or normalized.endswith("_secret")
+        or normalized.endswith("_token")
+    )
+
+
+def _redact_sensitive(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _REDACTED if _is_sensitive_key(key) else _redact_sensitive(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
+
+
+def _format_json_body(body: bytes) -> str:
+    parsed = json.loads(body)
+    return json.dumps(_redact_sensitive(parsed), ensure_ascii=False)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -40,7 +75,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         content_type = request.headers.get("content-type", "")
         if body_bytes and "application/json" in content_type:
             try:
-                body_str = json.dumps(json.loads(body_bytes), ensure_ascii=False)
+                body_str = _format_json_body(body_bytes)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 body_str = body_bytes[:_MAX_BODY_LOG].decode("utf-8", errors="replace")
         elif body_bytes and "multipart/form-data" in content_type:
@@ -74,7 +109,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
             if resp_body and "application/json" in resp_content_type:
                 try:
-                    resp_body_str = json.dumps(json.loads(resp_body), ensure_ascii=False)
+                    resp_body_str = _format_json_body(resp_body)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     resp_body_str = resp_body[:_MAX_BODY_LOG].decode("utf-8", errors="replace")
             elif resp_body:

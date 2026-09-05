@@ -5,8 +5,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.api.auth import require_demo_user
+from app.api.capability_auth import require_capability_access
 from app.application.browser import execute_browser_capability
 from app.db import get_db_session
+from app.models import User
 from app.schemas.browser_capabilities import (
     BrowserCapabilityName,
     BrowserCapabilityRequest,
@@ -22,7 +25,14 @@ def invoke_browser_capability(
     capability: BrowserCapabilityName,
     payload: BrowserCapabilityRequest,
     session: Session = Depends(get_db_session),
+    current_user: User = Depends(require_demo_user),
 ) -> BrowserCapabilityResponse:
+    require_capability_access(
+        session,
+        current_user,
+        project_id=payload.project_id,
+        conversation_id=payload.conversation_id,
+    )
     try:
         result = execute_browser_capability(
             session,

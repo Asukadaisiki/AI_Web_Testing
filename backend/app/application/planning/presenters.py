@@ -31,6 +31,7 @@ def to_session_schema(record: AIPlanningSession) -> AIPlanningSessionSchema:
     return AIPlanningSessionSchema(
         id=record.id,
         actor_user_id=record.actor_user_id,
+        runtime_owner=record.runtime_owner,
         active_project_id=active_project_id,
         case_id=record.case_id,
         title=record.title,

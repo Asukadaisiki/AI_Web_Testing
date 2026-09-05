@@ -7,6 +7,8 @@
 - `ask_user_question` 暂停和恢复
 - HTTP/SSE API
 - DSL、执行队列和报告的应用层编排
+- Planning Session 元数据与项目关联
+- 基于 Python `/auth/me` 内省的共享 Cookie 身份认证
 
 当前 Agent 工具：
 
@@ -26,7 +28,9 @@ Python `backend/` 在迁移期间继续提供现有 API，并长期保留 Playwr
 ```text
 cmd/api/                    Hertz 服务入口
 internal/agentcore/         AgentRun 状态与事件
+internal/authn/             Cookie 身份内省
 internal/config/            进程配置
+internal/planning/          Planning Session 元数据控制面
 internal/tools/             工具合同与注册表
 internal/transport/http/    HTTP 协议适配
 ```
@@ -48,6 +52,13 @@ go run ./cmd/api
 - `GET /api/v2/agent/runs/{run_id}/events?after_seq={seq}`
 - `GET /api/v2/agent/runs/{run_id}/events/stream?after_seq={seq}`
 - `POST /api/v2/agent/runs/{run_id}/tool-calls/{tool_call_id}/resume`
+- `POST/GET /api/v2/planning/sessions`
+- `GET/PATCH/DELETE /api/v2/planning/sessions/{session_id}`
+- `GET/POST/DELETE /api/v2/planning/sessions/{session_id}/projects...`
+
+除 `/health` 外，所有接口都要求 Python 登录接口签发的 Cookie。AgentRun 会持久化
+`actor_user_id`，详情、事件、SSE 和恢复操作都执行所有权检查。创建 Run 时项目和会话
+上下文由服务端从已认证 Planning Session 推导，不接受客户端伪造。
 
 模型配置复用 `backend/.env` 中的：
 

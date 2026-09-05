@@ -143,6 +143,7 @@ class AIPlanningPlan(DSLModel):
 class AIPlanningSession(DSLModel):
     id: int = Field(ge=1)
     actor_user_id: int = Field(ge=1)
+    runtime_owner: Literal["python", "go"] = "python"
     active_project_id: int | None = Field(default=None, ge=1)
     case_id: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=200)
@@ -158,6 +159,7 @@ class AIPlanningSession(DSLModel):
 
 class AIPlanningSessionSummary(DSLModel):
     id: int = Field(ge=1)
+    runtime_owner: Literal["python", "go"] = "python"
     active_project_id: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=200)
     status: AIPlanningSessionStatus
