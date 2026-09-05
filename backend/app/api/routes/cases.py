@@ -29,7 +29,6 @@ from app.services import (
 from app.services.cases import (
     EntityNotFoundError,
     get_project_test_case_stats,
-    _ensure_project_member,
 )
 
 

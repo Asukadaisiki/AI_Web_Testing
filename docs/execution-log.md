@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-05 | 修复 Python 导入诊断
+
+- 任务：检查并修复仓库中多处 Python 导入问题。
+- 操作：递归验证 122 个 `app.*` 模块；使用 Ruff 定位未使用和非顶层导入；清理 9 个无效导入并调整 2 个模块的 logger 初始化位置；新增根目录 `pyrightconfig.json`，声明 `backend/.venv`、`backend` 源码路径和 Python 3.12。
+- 结果：第三方依赖与 `app.*` 包可被 IDE/Pyright 正确解析，Ruff 的 `F401/F403/F405/E402` 问题由 17 个降为 0；关联 BUG-105。
+- 验证：Pyright 导入检查 0 errors/0 warnings；Python 122 个模块全部导入成功；13 个单测通过；`compileall`、Go `go test ./...`、前端 `npm run build` 通过。
+- 后续：仓库仍有历史导入排序提示和未纳入本次范围的类型标注债务，可单独治理。
+
 ## 2026-09-04 | 同步 Go AgentCore 重构分支到 GitHub
 
 - 任务：将已完成并验收的 Go AgentCore、受控自愈和前端迁移改动同步到 GitHub。

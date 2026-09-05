@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import require_demo_user
 from app.db import get_db_session
 from app.models import User
-from app.schemas.projects import ProjectCreate, ProjectDetail, ProjectSummary, ProjectUpdate
+from app.schemas.projects import ProjectCreate, ProjectDetail, ProjectUpdate
 from app.services import (
     create_project,
     delete_project,

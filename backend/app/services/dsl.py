@@ -777,11 +777,13 @@ def _capture_anti_patterns_from_warnings(
     them as DSLAntiPattern entries for future few-shot injection.
     """
     import re
-    import json as _json
+
     from app.services.anti_patterns import (
+        MISSING_CAPTURE_TEXT,
+        MISSING_NAVIGATION,
+        MISSING_STEP,
+        TARGET_NOT_FOUND,
         record_anti_pattern,
-        TARGET_NOT_FOUND, MISSING_STEP, MISSING_NAVIGATION,
-        MISSING_CAPTURE_TEXT, WRONG_PAGE_STATE,
     )
 
     if not warnings:

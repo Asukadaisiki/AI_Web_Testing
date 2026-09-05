@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-105 | Python 导入解析配置缺失且存在无效导入
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：low
+- 来源：自测
+- 描述：从仓库根目录打开工程时，IDE 无法解析 `backend` 下的第三方依赖和 `app.*` 包；静态扫描同时发现 9 个未使用导入和 2 个模块的非顶层导入。
+- 复现步骤：
+  1. 从仓库根目录打开任一 `backend/app` Python 文件。
+  2. 查看 `fastapi`、`sqlalchemy`、`pydantic` 或 `app.*` 导入诊断。
+  3. 使用 Ruff 扫描 `F401/F403/F405/E402`。
+- 影响：IDE 产生误报警告，真实无效导入混在噪声中，降低静态检查可信度。
+- 根因：仓库未声明 Pyright 的虚拟环境和 Python 源码根路径；部分文件还残留未使用导入或在 logger 初始化后继续导入。
+- 处理：新增导入解析专用 `pyrightconfig.json`，指向 `backend/.venv` 和 `backend`；移除无效导入并调整导入位置。
+- 验证：Pyright 0 errors/0 warnings；Ruff 目标规则全部通过；122 个应用模块均可导入；13 个单测通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--修复-python-导入诊断`
+
 ## BUG-104 | DSL 生成器可选择不可定位的文档结构节点
 
 - 日期：2026-09-04

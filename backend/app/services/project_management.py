@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Project, ProjectMember, User
+from app.models import Project, ProjectMember
 from app.schemas.projects import ProjectCreate, ProjectDetail, ProjectUpdate
 
 

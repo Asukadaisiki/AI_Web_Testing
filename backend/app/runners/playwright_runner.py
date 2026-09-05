@@ -11,10 +11,6 @@ from typing import Generator, Literal
 from urllib.parse import urljoin
 
 from app.core.structured_logging import get_structured_logger
-
-logger = logging.getLogger(__name__)
-slog = get_structured_logger(__name__)
-
 from app.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
 from app.locators.corrections import CorrectionStore
 from app.locators.semantic import ResolvedLocator
@@ -33,6 +29,9 @@ from app.schemas.executions import (
     StepExecutionEvidence,
     ViewportSnapshot,
 )
+
+logger = logging.getLogger(__name__)
+slog = get_structured_logger(__name__)
 
 
 ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts" / "executions"

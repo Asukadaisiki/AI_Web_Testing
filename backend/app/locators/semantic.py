@@ -10,13 +10,13 @@ import logging
 import re
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
-
 from app.schemas.executions import (
     LocatorCandidateAttributes,
     LocatorCandidateEvidence,
     LocatorTrace,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LocatorResolutionError(ValueError):
