@@ -55,6 +55,14 @@
 
 ## 任务记录
 
+## 2026-09-04 | 同步 Go AgentCore 重构分支到 GitHub
+
+- 任务：将已完成并验收的 Go AgentCore、受控自愈和前端迁移改动同步到 GitHub。
+- 操作：核对工作区、当前分支和最近提交；为 `xujinyuan/go-agentcore-v2` 设置远端 upstream 并推送。
+- 结果：重构分支及完整提交历史已同步到 `origin`。
+- 验证：推送后核对本地 HEAD、远端分支和工作区状态。
+- 后续：无。
+
 ## 2026-09-04 | 前端切换 Go AgentCore 并完成浏览器验收
 
 - 任务：将 Planning 工作台从 Python Planning SSE 切换到 Go AgentRun、ToolCall、Checkpoint 和 SSE 重放协议，并完成真实浏览器 E2E。
