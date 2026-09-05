@@ -33,11 +33,6 @@ class PlanningTool:
     parameters: dict[str, Any]  # JSON-Schema style
 
 
-def list_available_tools() -> list[PlanningTool]:
-    """Return all registered tools."""
-    return list(_TOOL_REGISTRY.values())
-
-
 def get_tool_descriptions_for_prompt() -> str:
     """Build a text block describing all tools for the LLM system prompt."""
     lines: list[str] = []

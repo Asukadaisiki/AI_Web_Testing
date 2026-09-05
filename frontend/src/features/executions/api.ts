@@ -1,5 +1,4 @@
 import type {
-  BatchUpdateCorrectionStatePayload,
   CaseExecutionRequest,
   CreateCorrectionPayload,
   ExecutionBatchCreatePayload,
@@ -7,14 +6,11 @@ import type {
   ExecutionBatchReport,
   ExecutionBatchSummary,
   ExecutionsOverview,
-  LocatorCorrectionsOverview,
   OverviewWindowDays,
   ReportScopeType,
   StoredCaseExecutionDetail,
   StoredCaseExecutionSummary,
   StoredLocatorCorrection,
-  StoredLocatorCorrectionEvent,
-  UpdateCorrectionStatePayload,
 } from "./types";
 
 import { request } from "../../shared/api/client";
@@ -39,10 +35,6 @@ export function getExecutionBatches(projectId: number, limit = 50) {
   );
 }
 
-export function getExecutionBatch(batchId: number) {
-  return request<ExecutionBatchDetail>(`/api/v1/execution-batches/${batchId}`);
-}
-
 export function getExecutionBatchReport(batchId: number) {
   return request<ExecutionBatchReport>(
     `/api/v1/execution-batches/${batchId}/report`,
@@ -61,69 +53,6 @@ export function createCorrection(payload: CreateCorrectionPayload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
-}
-
-export function getCorrections(params: {
-  target_description?: string;
-  page_url?: string;
-  is_active?: boolean;
-  limit?: number;
-  offset?: number;
-}) {
-  const search = new URLSearchParams();
-  if (params.target_description) {
-    search.set("target_description", params.target_description);
-  }
-  if (params.page_url) {
-    search.set("page_url", params.page_url);
-  }
-  if (typeof params.is_active === "boolean") {
-    search.set("is_active", String(params.is_active));
-  }
-  if (params.limit) {
-    search.set("limit", String(params.limit));
-  }
-  if (params.offset != null) {
-    search.set("offset", String(params.offset));
-  }
-  const query = search.toString();
-  return request<StoredLocatorCorrection[]>(`/api/v1/corrections${query ? `?${query}` : ""}`);
-}
-
-export function updateCorrectionState(correctionId: number, payload: UpdateCorrectionStatePayload) {
-  return request<StoredLocatorCorrection>(`/api/v1/corrections/${correctionId}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function batchUpdateCorrectionState(payload: BatchUpdateCorrectionStatePayload) {
-  return request<StoredLocatorCorrection[]>("/api/v1/corrections/bulk", {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function deleteCorrection(correctionId: number) {
-  return request<void>(`/api/v1/corrections/${correctionId}`, { method: "DELETE" });
-}
-
-export function getCorrectionsOverview(window_days: OverviewWindowDays) {
-  return request<LocatorCorrectionsOverview>(`/api/v1/corrections/overview?window_days=${window_days}`);
-}
-
-export function getCorrectionEvents(correctionId: number, params?: { limit?: number; offset?: number }) {
-  const search = new URLSearchParams();
-  if (params?.limit != null) {
-    search.set("limit", String(params.limit));
-  }
-  if (params?.offset != null) {
-    search.set("offset", String(params.offset));
-  }
-  const query = search.toString();
-  return request<StoredLocatorCorrectionEvent[]>(
-    `/api/v1/corrections/${correctionId}/events${query ? `?${query}` : ""}`,
-  );
 }
 
 export function getExecutions(params: {

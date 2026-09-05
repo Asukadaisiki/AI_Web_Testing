@@ -225,11 +225,11 @@ schemas.dsl.DSLCase              Runner 消费的结构化 DSL
 ```text
 features/
   auth/
+  agent/
   planning/
   projects/
   cases/
   executions/
-  reports/
 ```
 
 常见文件后缀：
@@ -240,30 +240,25 @@ features/
 - `xxxStore.tsx`：跨页面生命周期的外部状态仓库。
 - `XxxPanel.tsx`：业务域内部的视图组件。
 
-Planning 中几个容易混淆的文件：
+Agent 与 Planning 的边界：
 
 | 文件 | 职责 |
 |---|---|
-| `planningWorkspaceStore.tsx` | 按 session 保存消息、需求、草案和活跃流 |
-| `planningStreamEvents.ts` | 将 SSE event 纯函数归并到消息状态 |
-| `usePlanningSse.ts` | 建立和终止一次 SSE 请求 |
-| `usePlanningSessionState.ts` | 向组件暴露当前 session 的便捷状态与操作 |
-| `PlanningRequirementsPanel.tsx` | 只展示需求收集状态 |
+| `features/agent/useAgentRun.ts` | 管理 Go AgentRun、SSE 订阅和 checkpoint 恢复 |
+| `features/agent/events.ts` | 将 Agent 事件归并为消息、工具轨迹和 artifact |
+| `features/planning/api.ts` | Go Planning Session 元数据与项目关联客户端 |
+| `components/AgentWorkbench.tsx` | 当前 Planning 工作台 |
 
 ### `shared/`
 
 只放没有业务归属、可被多个 feature 使用的代码：
 
 - `shared/api/client.ts`：统一 HTTP client。
-- `shared/api/sseClient.ts`：通用 SSE parser/client。
-- `shared/api/schema.ts`：根据 FastAPI OpenAPI 自动生成的 transport types。
 - `shared/ui/`：通用状态组件。
 
 ### 当前过渡目录
 
 - `components/` 中仍有较大的业务组件，后续应逐步归入对应 feature。
-- `services/api.ts` 是旧 API barrel，只做兼容导出。
-- `services/sseClient.ts` 是旧入口的兼容文件。
 - `types/api.ts` 是手写总类型文件，feature types 目前大多仍从这里重新导出。
 
 新增代码不应继续扩大这些兼容入口。
@@ -294,7 +289,6 @@ app -> pages -> features -> shared
 当前已知过渡依赖：
 
 - Planning `application` 仍直接调用多个 `services`，尚未抽成稳定 port。
-- `services/ai_planning.py` 反向导出 `application/planning` 的函数。
 - `ai/planning_tools.py` 同时调用 ORM 和 service。
 - `locators/ai_visual.py` 依赖统一 Prompt Registry。
 
@@ -314,8 +308,8 @@ app -> pages -> features -> shared
 | 报告统计错误 | `services/executions.py` | `reporters/json_report.py` |
 | 数据表或关系问题 | `models/` | `alembic/versions/` |
 | 前端路由问题 | `frontend/src/app/AppRouter.tsx` | 对应 `pages/` |
-| 前端 Planning 状态问题 | `features/planning/planningWorkspaceStore.tsx` | `planningStreamEvents.ts` |
-| 前端 API 类型问题 | `features/<domain>/api.ts` | `types.ts`、`shared/api/schema.ts` |
+| 前端 Agent 状态问题 | `features/agent/useAgentRun.ts` | `features/agent/events.ts` |
+| 前端 API 类型问题 | `features/<domain>/api.ts` | `types.ts`、`types/api.ts` |
 
 ## 推荐阅读顺序
 

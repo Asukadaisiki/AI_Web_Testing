@@ -10,9 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:smoke": "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-.playwright-browsers} playwright test",
-    "test:smoke:install": "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-.playwright-browsers} playwright install chromium",
-    "generate:openapi": "cd ../backend && UV_CACHE_DIR=../.tools/cache UV_PYTHON_INSTALL_DIR=../.tools/python XDG_CONFIG_HOME=../.tools/config ../.tools/bin/uv run python scripts/export_openapi.py ../frontend/openapi.json",
-    "generate:api-types": "npm run generate:openapi && openapi-typescript openapi.json -o src/shared/api/schema.ts"
+    "test:smoke:install": "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-.playwright-browsers} playwright install chromium"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
@@ -33,7 +31,6 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.4.1",
     "jsdom": "^30.0.1",
-    "openapi-typescript": "^7.13.0",
     "typescript": "^5.8.2",
     "vite": "^6.2.0",
     "vitest": "^3.2.7"

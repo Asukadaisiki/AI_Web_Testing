@@ -59,7 +59,7 @@ func TestEnginePausesAndResumesWithToolResult(t *testing.T) {
 	}}
 	repository := NewMemoryRepository()
 	runService := NewService(repository)
-	registry, err := tools.NewRegistry(AskUserTool{})
+	registry, err := tools.NewRegistry(tools.AskUserTool{})
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
@@ -179,7 +179,7 @@ func TestEngineBindsApprovalToLatestGeneration(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{{Content: "已批准。"}}}
 	repository := NewMemoryRepository()
 	runService := NewService(repository)
-	registry, err := tools.NewRegistry(AskUserTool{})
+	registry, err := tools.NewRegistry(tools.AskUserTool{})
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}

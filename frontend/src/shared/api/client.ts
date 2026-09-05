@@ -2,7 +2,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
 
-export class ApiError extends Error {
+class ApiError extends Error {
   status: number;
 
   constructor(message: string, status: number) {

@@ -55,3 +55,22 @@ func TestRegistryReturnsTypedNotFoundError(t *testing.T) {
 		t.Fatalf("Get() error = %v, want ErrToolNotFound", err)
 	}
 }
+
+func TestAskUserToolReturnsPendingPayload(t *testing.T) {
+	result, err := (AskUserTool{}).Execute(context.Background(), Call{
+		Arguments: json.RawMessage(`{
+			"questions":[{
+				"id":"approve_dsl",
+				"question":"批准 DSL？",
+				"type":"confirm",
+				"required":true
+			}]
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Pending == nil || result.Pending.Kind != "user_input" {
+		t.Fatalf("pending = %#v", result.Pending)
+	}
+}

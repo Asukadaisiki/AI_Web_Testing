@@ -389,7 +389,7 @@ def generate_planning_drafts(
                     {k: len(v) for k, v in a11y_nodes_by_state.items()},
                 )
 
-                case_obj, gen_warnings, gen_notes, gen_meta = generate_segmented_case_draft(
+                case_obj, gen_warnings, gen_notes, _ = generate_segmented_case_draft(
                     payload=GenerateDslRequest(
                         prompt=scenario["draft_prompt"],
                         base_url=base_url,

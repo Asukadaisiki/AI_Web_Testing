@@ -56,6 +56,30 @@
 
 ## 任务记录
 
+## 2026-09-05 | 清理非主链代码并修正 Go 工具边界
+
+- 任务：澄清 Agent SSE 与轮询机制、Go 包职责，并删除已退出当前主链且无消费者的代码。
+- 操作：将 `ask_user_question` 从 `internal/agentcore` 移至 `internal/tools` 并补工具测试；删除旧 `AITestPlanningPanel`、Planning SSE/store/reducer、兼容 API barrel、无消费者前端客户端、类型和 OpenAPI 生成产物；删除 Python 无引用 facade、兼容常量、辅助函数和两个从未读写的 ORM 模型；新增 Alembic `0036` 删除对应数据库表；更新架构和能力状态文档。
+- 结果：当前 Agent 事件仍由 EventSource SSE 推送并按 PostgreSQL `seq` 重放；仅 Batch 报告等待和 Worker 领取任务使用 polling。前端静态不可达项清零，Go Core 与 Tool Registry 边界恢复，代码净减少超过 2.1 万行。
+- 验证：`go test ./...`、`go vet ./...`、`go build ./...` 通过；Python 22 项 unittest 通过；Vitest 8/8 与前端生产构建通过；Knip 无未使用项；Vulture 80% 置信度扫描无结果；Alembic 已升级至 `20260905_0036` 且 `alembic check` 无差异；`git diff --check` 通过。
+- 后续：Python `/api/v1/ai-planning` 仍是已注册公开兼容 API，报告 AI 分析也复用其 Agent 实现；如要继续删除该子系统，需先把报告分析迁出 Planning，并明确废弃该公开 API。
+
+## 2026-09-05 | 当前架构、Harness 与 AgenticRL 落地状态复核
+
+- 任务：说明当前系统架构、核心链路服务模块的技术实现，并核查 Harness、AgenticRL 和剩余缺口。
+- 操作：静态追踪 React 工作台、Go AgentCore/Hertz/SSE、Python capability API、PostgreSQL Batch/Job 队列、Playwright Runner、A11y/Locator、Report Core、FailureSignal、anti-pattern、Prompt Registry、生产 Compose 与 CI；检索 Harness、reward、trajectory、policy、evaluation 和训练相关实现。
+- 结果：当前已形成“Go 认知与控制面 + Python 浏览器执行面 + PostgreSQL 事实/队列 + React 工作台”的纵向闭环；现有 AgentRun、工具注册、事件重放、DSL 审批、执行证据和自动修复链可视为 Harness 雏形，但仓库没有独立 Harness/Eval 子系统；AgenticRL 仅具备生成反馈、失败信号、anti-pattern 和 prompt 版本等数据基础，尚无统一 trajectory/reward、离线评测、策略训练和发布闭环。
+- 验证：完成代码、迁移、部署和 CI 配置的静态交叉核对；未修改业务代码，未运行测试。
+- 后续：优先建设 Agent Run 持久化调度/恢复、跨实例事件分发和正式 Harness 评测合同；随后补齐 AgenticRL 样本、奖励、离线评测、策略注册与灰度发布。
+
+## 2026-09-05 | Frontend src IDE 报错诊断
+
+- 任务：确认 IDE 中 `frontend/src` 报错的原因。
+- 操作：核对工作区状态、`.gitignore`、`tsconfig.json`、Vitest 类型初始化、前端依赖树和 TypeScript 版本；执行 TypeScript 完整诊断、生产构建及 Vitest。
+- 结果：`frontend/src` 当前无 TypeScript 编译错误；`.gitignore` 仅忽略 `frontend/.playwright-browsers/` 等生成物，不影响源码。IDE 红色诊断最可能来自语言服务仍缓存依赖安装前的项目状态，或未使用 `frontend/node_modules/typescript` 的工作区 TypeScript 5.9.3。
+- 验证：`npx tsc --noEmit --extendedDiagnostics` 0 error；`npm run build` 通过；Vitest 8/8 通过；依赖树完整。
+- 后续：在 IDE 中切换到工作区 TypeScript 并重启 TypeScript language server；若仍存在，按具体错误文本继续定位。
+
 ## 2026-09-05 | 同步生产化控制面与工作台实现到 GitHub
 
 - 任务：将生产反向代理与进程管理、Go Planning Session、鉴权、回归编排、定位调试、持续浏览器门禁和 BUG 日志治理的全部实现同步到 GitHub。

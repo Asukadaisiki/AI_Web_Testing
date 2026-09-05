@@ -45,7 +45,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure Python browser worker: %v", err)
 	}
-	toolHandlers := []tools.Handler{agentcore.AskUserTool{}}
+	toolHandlers := []tools.Handler{tools.AskUserTool{}}
 	toolHandlers = append(toolHandlers, tools.NewBrowserTools(browserClient)...)
 	toolHandlers = append(toolHandlers, tools.NewGenerateDSLTool(browserClient))
 	toolHandlers = append(

@@ -29,7 +29,7 @@ func (staticModel) Complete(
 func newTestServer(t *testing.T) AgentAPI {
 	t.Helper()
 	runService := agentcore.NewService(agentcore.NewMemoryRepository())
-	registry, err := tools.NewRegistry(agentcore.AskUserTool{})
+	registry, err := tools.NewRegistry(tools.AskUserTool{})
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}

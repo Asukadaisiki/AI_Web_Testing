@@ -1678,7 +1678,6 @@ def _extract_internal_links(
     from urllib.parse import urljoin, urlparse
 
     base_parsed = urlparse(base_url)
-    base_origin = f"{base_parsed.scheme}://{base_parsed.netloc}"
     seen_paths: set[str] = {base_parsed.path or "/"}
     links: list[str] = []
 
@@ -2397,7 +2396,6 @@ def _find_unexplored_login_url(
         if not isinstance(elements, list):
             continue
         base_parsed = urlparse(base_url or explored_url)
-        base_origin = f"{base_parsed.scheme}://{base_parsed.netloc}"
         for elem in elements:
             if not isinstance(elem, dict):
                 continue
@@ -2506,40 +2504,6 @@ def _build_test_data_requirements(
             source_hint=source,
         )
     ]
-
-
-_VARIABLE_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-def _extract_undefined_variables(
-    steps: list[dict[str, Any]],
-    input_contract: list[dict[str, Any]] | None = None,
-) -> list[str]:
-    """Return variables referenced in steps but not defined in input_contract or capture_text."""
-    defined: set[str] = set()
-    if input_contract:
-        for c in input_contract:
-            if isinstance(c, dict) and c.get("context_key"):
-                defined.add(c["context_key"])
-
-    # capture_text steps define runtime variables
-    for step in steps:
-        if isinstance(step, dict) and step.get("action") == "capture_text":
-            ck = step.get("context_key")
-            if ck:
-                defined.add(ck)
-
-    referenced: set[str] = set()
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        for field in ("value", "target"):
-            val = step.get(field, "")
-            if isinstance(val, str):
-                for match in _VARIABLE_REF_RE.finditer(val):
-                    referenced.add(match.group(1))
-
-    return sorted(referenced - defined)
 
 
 def _build_draft_prompt(

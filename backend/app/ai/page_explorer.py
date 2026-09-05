@@ -26,10 +26,6 @@ IGNORED_A11Y_ROLES: set[str] = {
     "roletype", "structure", "widget", "window",
 }
 
-# Keep legacy name for backward compatibility, now contains ALL roles except ignored
-USEFUL_A11Y_ROLES: set[str] | None = None  # None means use blacklist mode
-
-
 def _a11y_node_in_viewport(node: dict, viewport: dict) -> bool:
     bb = node.get("boundingBox")
     if not bb or not isinstance(bb, dict):

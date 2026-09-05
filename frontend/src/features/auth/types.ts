@@ -1,5 +1,14 @@
-import type { components } from "../../shared/api/schema";
+export interface CurrentUser {
+  id: number;
+  email: string;
+  display_name: string;
+}
 
-export type CurrentUser = components["schemas"]["CurrentUserResponse"];
-export type LoginPayload = components["schemas"]["LoginRequest"];
-export type LogoutResponse = components["schemas"]["LogoutResponse"];
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface LogoutResponse {
+  success: boolean;
+}

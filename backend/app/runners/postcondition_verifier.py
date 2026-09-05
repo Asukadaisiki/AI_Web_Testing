@@ -209,21 +209,3 @@ class PostconditionVerifier:
             return values
         except Exception:
             return {}
-
-
-# ------------------------------------------------------------------
-# Standalone helper
-# ------------------------------------------------------------------
-
-
-def verify_default_postcondition(pre: dict, post: dict) -> bool:
-    """Check if the page changed between pre and post snapshots.
-
-    Returns True if the url or dom_hash differs, indicating the action
-    had an observable effect.
-    """
-    if pre.get("url") != post.get("url"):
-        return True
-    if pre.get("dom_hash") != post.get("dom_hash"):
-        return True
-    return False

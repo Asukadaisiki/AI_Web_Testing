@@ -4,13 +4,11 @@ from app.models.ai_planning_draft import AIPlanningDraft
 from app.models.ai_planning_event_log import AIPlanningEventLog
 from app.models.agent_run import AgentEvent, AgentRun
 from app.models.dsl_anti_pattern import DSLAntiPattern
-from app.models.ai_planning_flow_step import AIPlanningFlowStep
 from app.models.ai_planning_message import AIPlanningMessage
 from app.models.ai_planning_session import AIPlanningSession
 from app.models.ai_planning_tool_result import AIPlanningToolResult
 from app.models.dsl_generation_run import DslGenerationRun
 from app.models.execution_batch import ExecutionBatch, ExecutionJob
-from app.models.locator_attempt_log import LocatorAttemptLog
 from app.models.locator_correction import LocatorCorrection
 from app.models.locator_correction_event import LocatorCorrectionEvent
 from app.models.project import Project
@@ -28,7 +26,6 @@ __all__ = [
     "AgentEvent",
     "AgentRun",
     "DSLAntiPattern",
-    "AIPlanningFlowStep",
     "AIPlanningMessage",
     "AIPlanningSession",
     "AIPlanningToolResult",
@@ -39,7 +36,6 @@ __all__ = [
     "ProjectMember",
     "ReportPreference",
     "SessionProject",
-    "LocatorAttemptLog",
     "LocatorCorrection",
     "LocatorCorrectionEvent",
     "TestCase",

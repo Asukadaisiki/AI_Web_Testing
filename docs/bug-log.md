@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-110 | Go 工具实现与前端旧 Planning 链路残留
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：medium
+- 来源：架构与无引用代码复核
+- 描述：`ask_user_question` 工具实现位于 `agentcore` 包，破坏 Core 与 Tool Registry 的职责边界；前端切换到 Go AgentWorkbench 后仍保留旧 Planning 面板、SSE store、兼容 barrel 和无消费者 API client；Python 还注册了两个从未读写的预留 ORM 模型。
+- 复现步骤：
+  1. 检查 `backend-go/internal/agentcore/ask_user_tool.go` 的包归属。
+  2. 使用 Knip 扫描前端不可达文件和未使用导出。
+  3. 全仓检索 `AIPlanningFlowStep` 与 `LocatorAttemptLog` 的生产读写调用。
+- 影响：目录职责模糊，重复状态机和客户端增加维护成本；空 ORM 表制造已经具备数据闭环的错误认知。
+- 根因：Go AgentCore 切换完成后，旧 Python Planning 前端和早期数据闭环预留项未同步清理。
+- 处理：将 `AskUserTool` 移入 `internal/tools`；删除旧前端 Planning/SSE 链路、无消费者客户端和未接入的 OpenAPI 生成产物；删除两个未使用 ORM 模型并通过 Alembic `0036` 下线对应表；清理无引用兼容函数和常量。
+- 验证：Go test/vet/build、Python 22 项 unittest、前端 8 项 Vitest 和生产构建通过；Knip 无未使用项；Vulture 高置信度扫描无结果；Alembic 升级及 schema check 通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--清理非主链代码并修正-go-工具边界`
+
 ## BUG-109 | 请求日志记录登录明文密码
 
 - 日期：2026-09-05

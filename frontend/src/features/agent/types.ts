@@ -5,7 +5,7 @@ export type AgentRunStatus =
   | "failed"
   | "cancelled";
 
-export type AgentEventType =
+type AgentEventType =
   | "run.started"
   | "message.started"
   | "message.delta"
@@ -34,7 +34,7 @@ export interface AgentRun {
   updated_at: string;
 }
 
-export interface AgentQuestionOption {
+interface AgentQuestionOption {
   value: string;
   label: string;
   description?: string;
