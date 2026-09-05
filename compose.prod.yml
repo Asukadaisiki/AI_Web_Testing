@@ -1,6 +1,6 @@
 name: ai-web-testing
 
-x-python-environment: &python-environment
+x-browser-worker-environment: &browser-worker-environment
   APP_ENV: production
   APP_DEBUG: "false"
   AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET is required}
@@ -11,26 +11,18 @@ x-python-environment: &python-environment
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
   DATABASE_ECHO: "false"
   EXECUTION_BASE_URL: ${EXECUTION_BASE_URL:-http://frontend:8080}
-  ENABLE_AI_DSL_GENERATE: ${ENABLE_AI_DSL_GENERATE:-false}
-  AI_DSL_API_KEY: ${AI_DSL_API_KEY:-}
-  AI_DSL_BASE_URL: ${AI_DSL_BASE_URL:-https://api.openai.com/v1}
-  AI_DSL_MODEL: ${AI_DSL_MODEL:-}
   ENABLE_AI_VISUAL_LOCATE: ${ENABLE_AI_VISUAL_LOCATE:-false}
-  ENABLE_AI_PLANNING: ${ENABLE_AI_PLANNING:-true}
-  AI_PLANNING_API_KEY: ${AI_PLANNING_API_KEY:?AI_PLANNING_API_KEY is required}
-  AI_PLANNING_BASE_URL: ${AI_PLANNING_BASE_URL:?AI_PLANNING_BASE_URL is required}
-  AI_PLANNING_MODEL: ${AI_PLANNING_MODEL:?AI_PLANNING_MODEL is required}
   STORAGE_STATE_DIR: /app/storage_states
   CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
   RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-10000}
   RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
 
-x-python-service: &python-service
+x-browser-worker-service: &browser-worker-service
   build:
-    context: ./backend
+    context: ./browser-worker
     dockerfile: Dockerfile
-  image: ai-web-testing-python:${IMAGE_TAG:-latest}
-  environment: *python-environment
+  image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
+  environment: *browser-worker-environment
   init: true
   restart: unless-stopped
   volumes:
@@ -60,11 +52,11 @@ services:
 
   migrate:
     build:
-      context: ./backend
+      context: ./browser-worker
       dockerfile: Dockerfile
-    image: ai-web-testing-python:${IMAGE_TAG:-latest}
+    image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
     command: ["alembic", "upgrade", "head"]
-    environment: *python-environment
+    environment: *browser-worker-environment
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,9 +66,9 @@ services:
 
   bootstrap-user:
     build:
-      context: ./backend
+      context: ./browser-worker
       dockerfile: Dockerfile
-    image: ai-web-testing-python:${IMAGE_TAG:-latest}
+    image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
     command:
       - python
       - scripts/bootstrap_user.py
@@ -85,7 +77,7 @@ services:
       - --display-name
       - ${AUTH_BOOTSTRAP_DISPLAY_NAME:-Administrator}
     environment:
-      <<: *python-environment
+      <<: *browser-worker-environment
       AUTH_BOOTSTRAP_PASSWORD: ${AUTH_BOOTSTRAP_PASSWORD:-}
     depends_on:
       migrate:
@@ -95,8 +87,8 @@ services:
     networks:
       - app
 
-  python-api:
-    <<: *python-service
+  browser-worker-api:
+    <<: *browser-worker-service
     command:
       - uvicorn
       - app.main:create_app
@@ -122,7 +114,7 @@ services:
     shm_size: 1gb
 
   python-worker:
-    <<: *python-service
+    <<: *browser-worker-service
     command:
       - python
       - -m
@@ -146,23 +138,26 @@ services:
       start_period: 20s
     shm_size: 1gb
 
-  agentcore:
+  agentservice:
     build:
       context: ./backend-go
       dockerfile: Dockerfile
-    image: ai-web-testing-agentcore:${IMAGE_TAG:-latest}
+    image: ai-web-testing-agentservice:${IMAGE_TAG:-latest}
     environment:
-      AGENTCORE_HTTP_ADDR: 0.0.0.0:8081
-      AGENTCORE_MAX_STEPS: ${AGENTCORE_MAX_STEPS:-12}
+      AGENTSERVICE_HTTP_ADDR: 0.0.0.0:8081
+      AGENTSERVICE_MAX_TURNS: ${AGENTSERVICE_MAX_TURNS:-12}
       AI_PLANNING_API_KEY: ${AI_PLANNING_API_KEY:?AI_PLANNING_API_KEY is required}
       AI_PLANNING_BASE_URL: ${AI_PLANNING_BASE_URL:?AI_PLANNING_BASE_URL is required}
       AI_PLANNING_MODEL: ${AI_PLANNING_MODEL:?AI_PLANNING_MODEL is required}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET is required}
+      AUTH_SESSION_COOKIE_NAME: ${AUTH_SESSION_COOKIE_NAME:-session}
+      AUTH_SESSION_MAX_AGE_SECONDS: ${AUTH_SESSION_MAX_AGE_SECONDS:-43200}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-      PYTHON_API_URL: http://python-api:8000/api/v1
+      BROWSER_WORKER_URL: http://browser-worker-api:8000/api/v1
     depends_on:
       migrate:
         condition: service_completed_successfully
-      python-api:
+      browser-worker-api:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
@@ -181,9 +176,9 @@ services:
       dockerfile: frontend/Dockerfile
     image: ai-web-testing-frontend:${IMAGE_TAG:-latest}
     depends_on:
-      agentcore:
+      agentservice:
         condition: service_healthy
-      python-api:
+      browser-worker-api:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]

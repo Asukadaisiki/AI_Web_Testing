@@ -222,15 +222,7 @@ func (s *PostgresStore) GetSession(
 	if err != nil {
 		return SessionDetail{}, err
 	}
-	messages, err := s.listMessages(ctx, sessionID)
-	if err != nil {
-		return SessionDetail{}, err
-	}
-	drafts, err := s.listDrafts(ctx, sessionID)
-	if err != nil {
-		return SessionDetail{}, err
-	}
-	return SessionDetail{Session: record, Messages: messages, Drafts: drafts}, nil
+	return SessionDetail{Session: record}, nil
 }
 
 func (s *PostgresStore) getSession(
@@ -591,87 +583,6 @@ func (s *PostgresStore) ResolveRunContext(
 		return "", 0, fmt.Errorf("resolve planning run context: %w", err)
 	}
 	return strconv.FormatInt(sessionID, 10), projectID, nil
-}
-
-func (s *PostgresStore) listMessages(ctx context.Context, sessionID int64) ([]Message, error) {
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, session_id, role, turn_type, content, structured_payload_json, created_at
-		   FROM ai_planning_messages
-		  WHERE session_id = $1
-		  ORDER BY id`,
-		sessionID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list planning messages: %w", err)
-	}
-	defer rows.Close()
-	result := make([]Message, 0)
-	for rows.Next() {
-		var item Message
-		var payload []byte
-		if err := rows.Scan(
-			&item.ID,
-			&item.SessionID,
-			&item.Role,
-			&item.TurnType,
-			&item.Content,
-			&payload,
-			&item.CreatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan planning message: %w", err)
-		}
-		item.StructuredPayload = normalizedJSON(payload, `null`)
-		result = append(result, item)
-	}
-	return result, rows.Err()
-}
-
-func (s *PostgresStore) listDrafts(ctx context.Context, sessionID int64) ([]Draft, error) {
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, session_id, scenario_key, title, status, dsl_generation_id,
-		        dsl_case_json, warnings_json, normalization_notes_json,
-		        error_message, created_at, updated_at
-		   FROM ai_planning_drafts
-		  WHERE session_id = $1
-		  ORDER BY id`,
-		sessionID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list planning drafts: %w", err)
-	}
-	defer rows.Close()
-	result := make([]Draft, 0)
-	for rows.Next() {
-		var item Draft
-		var generationID sql.NullInt64
-		var dslCase, warnings, normalizationNotes []byte
-		var errorMessage sql.NullString
-		if err := rows.Scan(
-			&item.ID,
-			&item.SessionID,
-			&item.ScenarioKey,
-			&item.Title,
-			&item.Status,
-			&generationID,
-			&dslCase,
-			&warnings,
-			&normalizationNotes,
-			&errorMessage,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan planning draft: %w", err)
-		}
-		item.DSLGenerationID = nullableInt64(generationID)
-		item.DSLCase = normalizedJSON(dslCase, `null`)
-		item.Warnings = normalizedJSON(warnings, `[]`)
-		item.NormalizationNotes = normalizedJSON(normalizationNotes, `[]`)
-		item.ErrorMessage = nullableString(errorMessage)
-		result = append(result, item)
-	}
-	return result, rows.Err()
 }
 
 func requireOwnedSessionTx(

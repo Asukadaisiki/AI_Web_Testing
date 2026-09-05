@@ -33,6 +33,7 @@ func (c *fakeCapabilityClient) ExecuteBrowserCapability(
 
 func (c *fakeCapabilityClient) GenerateDSL(
 	_ context.Context,
+	_ int64,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,
@@ -46,6 +47,7 @@ func (c *fakeCapabilityClient) GenerateDSL(
 
 func (c *fakeCapabilityClient) ExecuteDSL(
 	_ context.Context,
+	_ int64,
 	runID string,
 	projectID int64,
 	conversationID string,
@@ -60,6 +62,7 @@ func (c *fakeCapabilityClient) ExecuteDSL(
 
 func (c *fakeCapabilityClient) GetReport(
 	_ context.Context,
+	_ int64,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,
@@ -79,6 +82,7 @@ func (c *fakeCapabilityClient) GetReport(
 
 func (c *fakeCapabilityClient) PrepareFixAndRetry(
 	_ context.Context,
+	_ int64,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,

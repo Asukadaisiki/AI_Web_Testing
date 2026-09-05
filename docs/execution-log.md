@@ -56,6 +56,38 @@
 
 ## 任务记录
 
+## 2026-09-05 | 完成内部控制面迁移与 Browser Worker 重命名
+
+- 任务：消除 Python `/internal/agent-capabilities` 中残留的 DSL、Case、Batch 和 Report 控制面，并完成 Python Worker 目录收口。
+- 操作：新增 Go DSL Store、完整结构化 DSL 校验和本地 ControlPlane 工具适配器；将认证主体写入 Tool Call；迁移 `generate_dsl`、`execute_dsl`、`get_report`、`fix_and_retry`；删除 Python agent capability 路由、服务、schema、测试及失去调用方的 Case/Batch/Report 服务；删除 Python 文本 DSL 模型配置和 Prompt；将 `backend/` 重命名为 `browser-worker/` 并更新 CI、Compose、Pyright、README 和运行路径。
+- 结果：Go AgentService 成为唯一 Agent 与业务控制面；Python 仅保留 Browser capability、Playwright 执行 Worker、A11y/Locator、evidence 和确定性失败分析。
+- 验证：Go 全量 test/vet/build 通过；真实 PostgreSQL 纵向测试覆盖 Go GenerateDSL → ExecuteDSL → Report → FixAndRetry；Browser Worker unittest 14/14、Alembic check 和 Vulture 通过；前端 Vitest/build/Knip 通过；Playwright 桌面与移动 smoke 4/4 通过。
+- 后续：提交并同步 `xujinyuan/go-agentcore-v2`；生产 Compose 启动验证受本机无 Docker CLI 限制，交由 CI 的 deployment-config/browser-smoke 门禁验证。
+
+## 2026-09-05 | 补齐 Go 报告聚合并验证 PostgreSQL 控制面
+
+- 任务：继续 M5 控制面迁移，补齐 Go Execution Overview 语义并验证新 Go Store 在真实 PostgreSQL schema 上可运行。
+- 操作：将完整双窗口 Overview 聚合迁入 Go，补齐趋势、失败分类、动作、高频失败用例和根因统计；新增纯聚合单测与 Project → Case → Batch → Execution → Correction 纵向 PostgreSQL 集成测试；修复 Batch Job 必填默认值、幂等冲突、Planning Session 所有权、Correction 时间戳和带执行历史的 Project 删除；删除 Python 已失去调用方的 Case/Execution/Batch 查询与 Overview schema。
+- 结果：Go 公开控制面不再依赖 Python 报告查询；Python 继续收缩为执行 Worker，但内部 `agent-capabilities` 的 DSL 持久化与执行编排尚待迁入 Go。
+- 验证：Go 全量 test/vet/build 通过；显式设置 `TEST_DATABASE_URL` 的 PostgreSQL 纵向测试通过；Python unittest 22/22；前端 Vitest 8/8、生产构建和 Knip 通过；Vulture 无高置信度无用项；Alembic 位于 `20260905_0038` 且 schema check 无差异。
+- 后续：迁移并删除 Python `/internal/agent-capabilities`，将 `backend/` 物理重命名为 `browser-worker/`，再执行浏览器与生产部署回归。
+
+## 2026-09-05 | 启动 Go AgentService 全面迁移
+
+- 任务：参考 `project/pi-agent` 重构 Agent 分层，以 Go AgentService 作为唯一 Agent，并将 Python 收缩为纯 Browser Worker。
+- 操作：新增完整迁移计划；对照 pi-agent 拆出 Go `agent`、`harness`、`agentservice`；增加纯 Agent loop 和 Harness `beforeToolCall` policy；将 Report Core 改为确定性分析；将浏览器探索 capability 提取到 `application/browser`；删除 Python Planning API、ReAct Agent、Prompt、SSE、草案编排、schema 和 ORM 子图；Go Session API 停止读取旧 message/draft 表；新增 Alembic `0037` 下线遗留表；将登录、身份读取和退出迁入 Go；DSL 候选改由 Go Agent 编写，Python只做 Schema/preflight 和版本落库。
+- 结果：面向用户的 Planning 和 Auth 请求只进入 Go `/api/v2`；Python 已不包含 Agent 循环或 DSL 生成模型调用，现有职责收缩为 Browser/Execution capability 和尚待迁移的平台 API。
+- 验证：Python完整 unittest 22/22、Go 全量 test/vet/build、前端 Vitest 8/8、生产构建和桌面/移动 Playwright smoke 通过；Alembic已升级至 `20260905_0037` 且 schema check 无差异；Knip/Vulture 无高置信度无用项。Docker CLI 不可用，未执行容器启动验证。
+- 后续：继续迁移 Case、Batch、Report 等浏览器侧以外的公开 API到 Go，并将 Python公网入口收缩为 artifact 和内部 Worker capability。
+
+## 2026-09-05 | 澄清 Go 与 Python 双 Agent 实现
+
+- 任务：说明报告 AI 分析复用旧 Planning Agent 的含义，并确认当前是否存在 Go/Python 两套 Agent。
+- 操作：核对 Go `Engine.Continue`、Python `run_planning_turn`、Report Core `_analyze_details` 和 `/api/v1/ai-planning` 路由注册关系。
+- 结果：确认当前存在两套 Agent 循环：Go AgentCore 是前端 Planning 主链；Python legacy ReAct Agent 仍由旧 Planning API 使用，并被 Report Core 借作失败分析器。DSL Generator 和 VLM 是单次模型能力，不属于第三套 Agent。
+- 验证：完成调用链静态核对；未修改业务代码，未运行测试。
+- 后续：将报告 AI 分析抽为独立、窄接口的 reporting analyzer 后，移除 Python legacy Planning Agent 与 `/api/v1/ai-planning`。
+
 ## 2026-09-05 | 清理非主链代码并修正 Go 工具边界
 
 - 任务：澄清 Agent SSE 与轮询机制、Go 包职责，并删除已退出当前主链且无消费者的代码。

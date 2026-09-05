@@ -13,7 +13,7 @@ Read and follow all instructions in AGENTS.md in this repository. Key rules inli
 
 ## Commands
 
-### Backend (from `backend/`)
+### Browser Worker (from `browser-worker/`)
 
 ```bash
 cp .env.example .env                          # First-time: create env config
@@ -41,7 +41,7 @@ npm test -- --run    # Run Vitest tests
 Monorepo with Python backend, TypeScript frontend, and docs:
 
 ```
-backend/app/
+browser-worker/app/
   main.py              # FastAPI app factory, Uvicorn entry
   api/router.py        # Route assembly (auth, cases, executions, corrections, dsl, ai-planning, etc.)
   api/routes/          # Thin route handlers
@@ -83,9 +83,9 @@ frontend/src/
 ## Environment Setup
 
 - Backend requires Python 3.12+. Uses `uv` for dependency management.
-- `AUTH_SESSION_SECRET` is **required** — backend crashes without it. Set in `backend/.env` (copy from `.env.example`).
+- `AUTH_SESSION_SECRET` is **required**. Set it in `browser-worker/.env` (copy from `.env.example`).
 - `get_settings()` uses `@lru_cache` — in tests, the `reset_cached_state` autouse fixture clears caches on `get_settings`, `get_engine`, `get_session_factory`.
-- Test fixtures in `backend/tests/conftest.py` auto-set `AUTH_SESSION_SECRET` and provide `db_session`, `client`, `anonymous_client` fixtures using in-memory SQLite.
+- Browser Worker tests live under `browser-worker/tests/`.
 
 ## Key Data Flows
 
@@ -114,4 +114,3 @@ frontend/src/
 ## Project Skills
 
 - **e2e-testing-workflow** (`.claude/skills/e2e-testing-workflow.md`): E2E 手动测试完整链路 — 启动系统 → AI 会话规划 → 保存执行 DSL → 分析报告 → 用户反馈迭代。当用户说 "测试平台"、"E2E 测试"、"手动测试" 时自动触发。
-

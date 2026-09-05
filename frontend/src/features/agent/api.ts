@@ -1,6 +1,6 @@
 import type { AgentEvent, AgentRun } from "./types";
 
-const AGENT_BASE = import.meta.env.VITE_AGENTCORE_BASE_URL ?? "";
+const AGENT_BASE = import.meta.env.VITE_AGENT_SERVICE_BASE_URL ?? "";
 
 async function agentRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${AGENT_BASE}${path}`, {

@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentcore"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/harness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/planning"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -20,23 +22,39 @@ type staticModel struct{}
 
 func (staticModel) Complete(
 	_ context.Context,
-	_ []agentcore.Message,
-	_ []agentcore.ToolDefinition,
-) (agentcore.ModelResponse, error) {
-	return agentcore.ModelResponse{Content: "已收到测试需求。"}, nil
+	_ []agent.Message,
+	_ []agent.ToolDefinition,
+) (agent.ModelResponse, error) {
+	return agent.ModelResponse{Content: "已收到测试需求。"}, nil
 }
 
 func newTestServer(t *testing.T) AgentAPI {
 	t.Helper()
-	runService := agentcore.NewService(agentcore.NewMemoryRepository())
+	runService := agentservice.NewService(agentservice.NewMemoryRepository())
 	registry, err := tools.NewRegistry(tools.AskUserTool{})
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
-	return agentcore.NewEngine(runService, staticModel{}, registry, 4)
+	return harness.New(runService, staticModel{}, registry, 4)
 }
 
 type staticAuthenticator struct{}
+
+func (staticAuthenticator) Login(
+	_ context.Context,
+	email string,
+	_ string,
+) (authn.Identity, string, error) {
+	return authn.Identity{UserID: 1, Email: email, DisplayName: "Test"}, "signed", nil
+}
+
+func (staticAuthenticator) CookieName() string {
+	return "session"
+}
+
+func (staticAuthenticator) MaxAgeSeconds() int {
+	return 43200
+}
 
 func (staticAuthenticator) Authenticate(
 	_ context.Context,
@@ -113,6 +131,10 @@ func newHTTPTestServer(t *testing.T) *server.Hertz {
 		newTestServer(t),
 		staticAuthenticator{},
 		staticPlanningStore{},
+		nil,
+		nil,
+		nil,
+		nil,
 	)
 }
 
@@ -125,6 +147,35 @@ func TestHealth(t *testing.T) {
 	}
 	if string(response.Body()) != `{"status":"ok"}` {
 		t.Fatalf("body = %s", response.Body())
+	}
+}
+
+func TestAuthRoutes(t *testing.T) {
+	server := newHTTPTestServer(t)
+	payload := `{"email":"owner@example.com","password":"secret"}`
+	login := ut.PerformRequest(
+		server.Engine,
+		"POST",
+		"/api/v2/auth/login",
+		&ut.Body{Body: bytes.NewBufferString(payload), Len: len(payload)},
+		ut.Header{Key: "Content-Type", Value: "application/json"},
+	).Result()
+	if login.StatusCode() != consts.StatusOK {
+		t.Fatalf("login status = %d, body = %s", login.StatusCode(), login.Body())
+	}
+	if len(login.Header.Peek("Set-Cookie")) == 0 {
+		t.Fatal("login response has no Set-Cookie header")
+	}
+
+	me := ut.PerformRequest(
+		server.Engine,
+		"GET",
+		"/api/v2/auth/me",
+		nil,
+		ut.Header{Key: "Cookie", Value: "session=user-1"},
+	).Result()
+	if me.StatusCode() != consts.StatusOK {
+		t.Fatalf("me status = %d, body = %s", me.StatusCode(), me.Body())
 	}
 }
 
@@ -143,11 +194,11 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.StatusCode(), response.Body())
 	}
 
-	var run agentcore.AgentRun
+	var run agentservice.AgentRun
 	if err := json.Unmarshal(response.Body(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	if run.ID == "" || run.ProjectID != 42 || run.Status != agentcore.RunStatusRunning {
+	if run.ID == "" || run.ProjectID != 42 || run.Status != agentservice.RunStatusRunning {
 		t.Fatalf("run = %#v", run)
 	}
 
@@ -162,12 +213,12 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 		if err := json.Unmarshal(runResponse.Body(), &run); err != nil {
 			t.Fatalf("decode current run: %v", err)
 		}
-		if run.Status == agentcore.RunStatusCompleted {
+		if run.Status == agentservice.RunStatusCompleted {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if run.Status != agentcore.RunStatusCompleted {
+	if run.Status != agentservice.RunStatusCompleted {
 		t.Fatalf("run did not complete: %#v", run)
 	}
 
@@ -183,15 +234,15 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 	}
 
 	var payload struct {
-		Events []agentcore.Event `json:"events"`
+		Events []agentservice.Event `json:"events"`
 	}
 	if err := json.Unmarshal(eventsResponse.Body(), &payload); err != nil {
 		t.Fatalf("decode events: %v", err)
 	}
-	if len(payload.Events) != 5 || payload.Events[0].Type != agentcore.EventRunStarted {
+	if len(payload.Events) != 5 || payload.Events[0].Type != agentservice.EventRunStarted {
 		t.Fatalf("events = %#v", payload.Events)
 	}
-	if payload.Events[4].Type != agentcore.EventRunFinished {
+	if payload.Events[4].Type != agentservice.EventRunFinished {
 		t.Fatalf("last event = %#v", payload.Events[4])
 	}
 
@@ -272,9 +323,9 @@ func TestPlanningRoutesUseV2Contract(t *testing.T) {
 }
 
 func TestEncodeSSEEvent(t *testing.T) {
-	event := agentcore.Event{
+	event := agentservice.Event{
 		Seq:   7,
-		Type:  agentcore.EventToolPending,
+		Type:  agentservice.EventToolPending,
 		RunID: "run-1",
 		Payload: map[string]any{
 			"tool": "ask_user_question",
@@ -287,7 +338,7 @@ func TestEncodeSSEEvent(t *testing.T) {
 	if id != "7" || eventType != "tool.pending" {
 		t.Fatalf("id = %q, eventType = %q", id, eventType)
 	}
-	var decoded agentcore.Event
+	var decoded agentservice.Event
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("decode event: %v", err)
 	}

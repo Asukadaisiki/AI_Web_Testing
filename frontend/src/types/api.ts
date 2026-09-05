@@ -12,7 +12,6 @@ export type OverviewWindowDays = 7 | 14 | 30;
 export type ReportScopeType = "global" | "project" | "case";
 type DSLVariableType = "string" | "number" | "boolean" | "object" | "array";
 export type CorrectionType = "css" | "xpath" | "test_id";
-type VLMModelFamily = "qwen-vl" | "gemini" | "gpt-4o" | "qwen2.5-vl" | "glm";
 type DSLVariableSource =
   | "latest_url"
   | "error_message"
@@ -99,8 +98,6 @@ type AIPlanningSessionStatus =
   | "completed"
   | "closed"
   | "error";
-type AIPlanningDraftStatus = "generated" | "imported" | "rejected" | "failed";
-
 interface AIPlanningRequirements {
   app_under_test?: string | null;
   business_goal?: string | null;
@@ -160,35 +157,8 @@ interface AIPlanningSession {
   updated_at: string;
 }
 
-interface AIPlanningMessage {
-  id: number;
-  session_id: number;
-  role: "user" | "assistant";
-  turn_type: "user" | "followup" | "plan" | "tool_call" | "system_error" | "streaming";
-  content: string;
-  structured_payload?: Record<string, unknown> | null;
-  created_at: string;
-}
-
-interface AIPlanningDraft {
-  id: number;
-  session_id: number;
-  scenario_key: string;
-  title: string;
-  status: AIPlanningDraftStatus;
-  dsl_generation_id?: number | null;
-  dsl_case?: DSLCasePayload | null;
-  warnings: string[];
-  normalization_notes: string[];
-  error_message?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface AIPlanningSessionDetail {
   session: AIPlanningSession;
-  messages: AIPlanningMessage[];
-  drafts: AIPlanningDraft[];
 }
 
 export interface AIPlanningSessionSummary {
@@ -249,38 +219,11 @@ export interface ExecutionAnalysis {
   recommended_scope?: string | null;
 }
 
-export interface AISettings {
-  enable_ai_dsl_generate: boolean;
-  ai_dsl_timeout_ms: number;
-  ai_dsl_base_url: string;
-  ai_dsl_model?: string | null;
-  ai_dsl_strict_mode: boolean;
-  ai_dsl_allow_auto_repair: boolean;
-  has_ai_dsl_api_key: boolean;
-  enable_ai_visual_locate: boolean;
-  ai_visual_timeout_ms: number;
-  ai_visual_failure_threshold: number;
-  ai_visual_cooldown_seconds: number;
-  ai_visual_rate_limit_per_minute: number;
-  vlm_base_url: string;
-  vlm_model?: string | null;
-  vlm_model_family: VLMModelFamily;
-  has_vlm_api_key: boolean;
-  enable_ai_planning?: boolean;
-  ai_planning_model?: string | null;
-  ai_planning_base_url?: string;
-  ai_planning_timeout_ms?: number;
-  ai_planning_max_react_rounds?: number;
-  has_ai_planning_api_key?: boolean;
-}
-
 export interface CaseMutationPayload extends DSLCasePayload {
   project_id: number;
-  actor_user_id: number;
 }
 
 export interface CaseExecutionRequest {
-  actor_user_id: number;
   base_url?: string;
   input_values?: Record<string, string>;
 }
@@ -490,7 +433,6 @@ export interface CreateCorrectionPayload {
   correction_type: CorrectionType;
   correction_value: string;
   source_execution_id: number;
-  created_by: number;
 }
 
 export interface StoredLocatorCorrection {

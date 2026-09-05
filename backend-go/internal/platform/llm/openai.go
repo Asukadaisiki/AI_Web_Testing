@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentcore"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 )
 
 type OpenAIClient struct {
@@ -85,9 +85,9 @@ type chatResponse struct {
 
 func (c *OpenAIClient) Complete(
 	ctx context.Context,
-	messages []agentcore.Message,
-	definitions []agentcore.ToolDefinition,
-) (agentcore.ModelResponse, error) {
+	messages []agent.Message,
+	definitions []agent.ToolDefinition,
+) (agent.ModelResponse, error) {
 	requestPayload := chatRequest{
 		Model:      c.model,
 		Messages:   make([]chatMessage, 0, len(messages)),
@@ -126,7 +126,7 @@ func (c *OpenAIClient) Complete(
 
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
-		return agentcore.ModelResponse{}, fmt.Errorf("encode LLM request: %w", err)
+		return agent.ModelResponse{}, fmt.Errorf("encode LLM request: %w", err)
 	}
 	request, err := http.NewRequestWithContext(
 		ctx,
@@ -135,53 +135,53 @@ func (c *OpenAIClient) Complete(
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return agentcore.ModelResponse{}, fmt.Errorf("create LLM request: %w", err)
+		return agent.ModelResponse{}, fmt.Errorf("create LLM request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	request.Header.Set("Content-Type", "application/json")
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return agentcore.ModelResponse{}, fmt.Errorf("call LLM: %w", err)
+		return agent.ModelResponse{}, fmt.Errorf("call LLM: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
-		return agentcore.ModelResponse{}, fmt.Errorf("read LLM response: %w", err)
+		return agent.ModelResponse{}, fmt.Errorf("read LLM response: %w", err)
 	}
 
 	var decoded chatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return agentcore.ModelResponse{}, fmt.Errorf("decode LLM response: %w", err)
+		return agent.ModelResponse{}, fmt.Errorf("decode LLM response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		message := http.StatusText(response.StatusCode)
 		if decoded.Error != nil && decoded.Error.Message != "" {
 			message = decoded.Error.Message
 		}
-		return agentcore.ModelResponse{}, fmt.Errorf("LLM returned HTTP %d: %s", response.StatusCode, message)
+		return agent.ModelResponse{}, fmt.Errorf("LLM returned HTTP %d: %s", response.StatusCode, message)
 	}
 	if len(decoded.Choices) == 0 {
-		return agentcore.ModelResponse{}, errors.New("LLM response has no choices")
+		return agent.ModelResponse{}, errors.New("LLM response has no choices")
 	}
 
 	message := decoded.Choices[0].Message
-	result := agentcore.ModelResponse{
+	result := agent.ModelResponse{
 		Content:   message.Content,
-		ToolCalls: make([]agentcore.ModelTool, 0, len(message.ToolCalls)),
+		ToolCalls: make([]agent.ModelTool, 0, len(message.ToolCalls)),
 	}
 	for _, call := range message.ToolCalls {
 		if call.ID == "" || call.Function.Name == "" || !json.Valid([]byte(call.Function.Arguments)) {
-			return agentcore.ModelResponse{}, errors.New("LLM returned an invalid tool call")
+			return agent.ModelResponse{}, errors.New("LLM returned an invalid tool call")
 		}
-		result.ToolCalls = append(result.ToolCalls, agentcore.ModelTool{
+		result.ToolCalls = append(result.ToolCalls, agent.ModelTool{
 			ID:        call.ID,
 			Name:      call.Function.Name,
 			Arguments: call.Function.Arguments,
 		})
 	}
 	if strings.TrimSpace(result.Content) == "" && len(result.ToolCalls) == 0 {
-		return agentcore.ModelResponse{}, errors.New("LLM response has no content or tool calls")
+		return agent.ModelResponse{}, errors.New("LLM response has no content or tool calls")
 	}
 	return result, nil
 }

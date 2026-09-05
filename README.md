@@ -4,7 +4,7 @@ AI 增强的 Web UI 自动化测试平台。
 
 当前仓库采用前后端分离结构：
 - `backend-go/`：Go + Hertz AgentCore 与执行控制面
-- `backend/`：迁移期间的 FastAPI 后端，长期保留 Python Playwright/A11y/Locator Worker
+- `browser-worker/`：Python Playwright/A11y/Locator 执行 Worker
 - `frontend/`：React + TypeScript + Vite 平台 UI
 - `docs/`：产品规划、执行计划、设计文档、执行日志与缺陷日志
 
@@ -205,13 +205,6 @@ AI visual 当前默认关闭；能力状态与后续治理决策见
 ## AI 视觉保护配置
 
 后端当前支持以下保护性配置，默认都以”不中断主链路”为原则：
-- `ENABLE_AI_DSL_GENERATE=false`
-- `AI_DSL_TIMEOUT_MS=15000`
-- `AI_DSL_API_KEY=`
-- `AI_DSL_BASE_URL=https://api.openai.com/v1`
-- `AI_DSL_MODEL=`：用于自然语言生成 DSL 草案的文本模型
-- `AI_DSL_STRICT_MODE=false`
-- `AI_DSL_ALLOW_AUTO_REPAIR=true`
 - `ENABLE_AI_VISUAL_LOCATE=false`
 - `AI_VISUAL_TIMEOUT_MS=10000`
 - `AI_VISUAL_FAILURE_THRESHOLD=3`
@@ -246,7 +239,7 @@ AI DSL 生成会输出最小治理信息：
 ### 1. 后端
 
 ```powershell
-cd backend
+cd browser-worker
 uv sync
 uv run alembic upgrade head
 uv run backend-dev
@@ -258,15 +251,15 @@ uv run backend-dev
 另开终端启动执行队列 Worker：
 
 ```powershell
-cd backend
+cd browser-worker
 uv run python -m app.workers.execution_worker --concurrency 2
 ```
 
-### 2. Go AgentCore
+### 2. Go AgentService
 
 ```powershell
 cd backend-go
-go run ./cmd/api
+go run ./cmd/agentservice
 ```
 
 默认地址：`http://127.0.0.1:8081`
@@ -274,7 +267,7 @@ go run ./cmd/api
 ### 3. 初始化登录账号
 
 ```powershell
-cd backend
+cd browser-worker
 $env:AUTH_BOOTSTRAP_PASSWORD="replace-with-at-least-12-characters"
 uv run python scripts/bootstrap_user.py --email admin@example.com
 ```
@@ -292,7 +285,7 @@ npm run dev
 默认前端地址：
 - `http://127.0.0.1:5173`
 
-前端通过 `/api/v1/auth/login` 建立 HttpOnly Cookie Session。`AUTH_SESSION_SECRET` 必须使用随机值；生产环境应启用 `AUTH_SESSION_HTTPS_ONLY=true` 并在 TLS 反向代理后访问。
+前端通过 Go `/api/v2/auth/login` 建立 HttpOnly Cookie Session。`AUTH_SESSION_SECRET` 必须使用随机值，并与 Python Worker 使用同一值；生产环境应在 TLS 反向代理后访问。
 
 ## 生产运行
 
@@ -302,7 +295,8 @@ docker compose --env-file .env.prod -f compose.prod.yml up -d --build --wait
 docker compose --env-file .env.prod -f compose.prod.yml --profile tools run --rm bootstrap-user
 ```
 
-Nginx 统一提供前端、Python API 和 Go `/api/v2`，并禁止公网访问 `/api/v1/internal/*`。
+Nginx 统一提供前端、Go `/api/v2` 和受保护 artifact；Python Browser Worker
+仅在内部网络提供 `/api/v1/internal/browser-capabilities/*`。
 
 ## 构建验证
 
@@ -311,7 +305,7 @@ cd backend-go
 go test ./...
 go vet ./...
 
-cd backend
+cd browser-worker
 uv run python -m compileall -q app
 uv run python -m unittest discover -s tests -p "test_*.py" -v
 
@@ -358,7 +352,7 @@ npm run build
 
 ## 开发约束
 
-- 正式执行结果以 `backend` Runner 为准
+- 正式执行结果以 `browser-worker` Runner 为准
 - 前端只负责平台交互、工作台编辑和结果展示
 - AI 能力不能绕过 DSL 校验直接驱动执行
 - 新增功能完成后更新 `docs/execution-log.md`

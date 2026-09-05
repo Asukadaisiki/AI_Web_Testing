@@ -68,35 +68,8 @@ type SessionSummary struct {
 	Projects        []ProjectSummary `json:"projects"`
 }
 
-type Message struct {
-	ID                int64           `json:"id"`
-	SessionID         int64           `json:"session_id"`
-	Role              string          `json:"role"`
-	TurnType          string          `json:"turn_type"`
-	Content           string          `json:"content"`
-	StructuredPayload json.RawMessage `json:"structured_payload"`
-	CreatedAt         time.Time       `json:"created_at"`
-}
-
-type Draft struct {
-	ID                 int64           `json:"id"`
-	SessionID          int64           `json:"session_id"`
-	ScenarioKey        string          `json:"scenario_key"`
-	Title              string          `json:"title"`
-	Status             string          `json:"status"`
-	DSLGenerationID    *int64          `json:"dsl_generation_id"`
-	DSLCase            json.RawMessage `json:"dsl_case"`
-	Warnings           json.RawMessage `json:"warnings"`
-	NormalizationNotes json.RawMessage `json:"normalization_notes"`
-	ErrorMessage       *string         `json:"error_message"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
-}
-
 type SessionDetail struct {
-	Session  Session   `json:"session"`
-	Messages []Message `json:"messages"`
-	Drafts   []Draft   `json:"drafts"`
+	Session Session `json:"session"`
 }
 
 type Store interface {

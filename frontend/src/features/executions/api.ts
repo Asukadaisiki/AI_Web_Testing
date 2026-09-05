@@ -16,14 +16,14 @@ import type {
 import { request } from "../../shared/api/client";
 
 export function executeCase(caseId: number, payload: CaseExecutionRequest) {
-  return request<StoredCaseExecutionDetail>(`/api/v1/cases/${caseId}/execute`, {
+  return request<StoredCaseExecutionDetail>(`/api/v2/cases/${caseId}/execute`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 export function createExecutionBatch(payload: ExecutionBatchCreatePayload) {
-  return request<ExecutionBatchDetail>("/api/v1/execution-batches", {
+  return request<ExecutionBatchDetail>("/api/v2/execution-batches", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -31,25 +31,25 @@ export function createExecutionBatch(payload: ExecutionBatchCreatePayload) {
 
 export function getExecutionBatches(projectId: number, limit = 50) {
   return request<ExecutionBatchSummary[]>(
-    `/api/v1/execution-batches?project_id=${projectId}&limit=${limit}`,
+    `/api/v2/execution-batches?project_id=${projectId}&limit=${limit}`,
   );
 }
 
 export function getExecutionBatchReport(batchId: number) {
   return request<ExecutionBatchReport>(
-    `/api/v1/execution-batches/${batchId}/report`,
+    `/api/v2/execution-batches/${batchId}/report`,
   );
 }
 
 export function cancelExecutionBatch(batchId: number) {
   return request<ExecutionBatchDetail>(
-    `/api/v1/execution-batches/${batchId}/cancel`,
+    `/api/v2/execution-batches/${batchId}/cancel`,
     { method: "POST" },
   );
 }
 
 export function createCorrection(payload: CreateCorrectionPayload) {
-  return request<StoredLocatorCorrection>("/api/v1/corrections", {
+  return request<StoredLocatorCorrection>("/api/v2/corrections", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -90,7 +90,7 @@ export function getExecutions(params: {
   if (params.offset != null) {
     search.set("offset", String(params.offset));
   }
-  return request<StoredCaseExecutionSummary[]>(`/api/v1/executions?${search.toString()}`);
+  return request<StoredCaseExecutionSummary[]>(`/api/v2/executions?${search.toString()}`);
 }
 
 export function getExecutionOverview(params: {
@@ -117,15 +117,15 @@ export function getExecutionOverview(params: {
     search.set("failure_fingerprint", params.failure_fingerprint);
   }
   const query = search.toString();
-  return request<ExecutionsOverview>(`/api/v1/executions/overview${query ? `?${query}` : ""}`);
+  return request<ExecutionsOverview>(`/api/v2/executions/overview${query ? `?${query}` : ""}`);
 }
 
 export function getExecutionDetail(executionId: number) {
-  return request<StoredCaseExecutionDetail>(`/api/v1/executions/${executionId}`);
+  return request<StoredCaseExecutionDetail>(`/api/v2/executions/${executionId}`);
 }
 
 export function deleteExecution(executionId: number) {
-  return request<void>(`/api/v1/executions/${executionId}`, {
+  return request<void>(`/api/v2/executions/${executionId}`, {
     method: "DELETE",
   });
 }

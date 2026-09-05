@@ -1,7 +1,6 @@
 export type {
   AIPlanningSessionDetail,
   AIPlanningSessionSummary,
-  AISettings,
   CreatePlanningSessionPayload,
   CreateProjectInSessionPayload,
   LinkProjectPayload,

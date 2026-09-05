@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("未登录用户会被路由保护送到登录页", async ({ page }) => {
-  await page.route("**/api/v1/auth/me", (route) =>
+  await page.route("**/api/v2/auth/me", (route) =>
     route.fulfill({
       status: 401,
       contentType: "application/json",
@@ -16,7 +16,7 @@ test("未登录用户会被路由保护送到登录页", async ({ page }) => {
 });
 
 test("已登录用户可进入回归编排并导航到定位调试", async ({ page }) => {
-  await page.route("**/api/v1/auth/me", (route) =>
+  await page.route("**/api/v2/auth/me", (route) =>
     route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({

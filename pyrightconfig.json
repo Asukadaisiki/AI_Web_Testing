@@ -1,20 +1,20 @@
 {
-  "venvPath": "backend",
+  "venvPath": "browser-worker",
   "venv": ".venv",
   "pythonVersion": "3.12",
   "typeCheckingMode": "off",
   "reportMissingImports": "error",
   "reportMissingModuleSource": "warning",
   "include": [
-    "backend/app",
-    "backend/tests",
-    "backend/scripts"
+    "browser-worker/app",
+    "browser-worker/tests",
+    "browser-worker/scripts"
   ],
   "executionEnvironments": [
     {
-      "root": "backend",
+      "root": "browser-worker",
       "extraPaths": [
-        "backend"
+        "browser-worker"
       ]
     }
   ]

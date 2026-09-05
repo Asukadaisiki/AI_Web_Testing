@@ -1,7 +1,6 @@
 import type {
   AIPlanningSessionDetail,
   AIPlanningSessionSummary,
-  AISettings,
   CreatePlanningSessionPayload,
   CreateProjectInSessionPayload,
   LinkProjectPayload,
@@ -49,8 +48,4 @@ export function createProjectInSession(sessionId: number, payload: CreateProject
     method: "POST",
     body: JSON.stringify(payload),
   });
-}
-
-export function getAISettings() {
-  return request<AISettings>("/api/v1/settings/ai");
 }

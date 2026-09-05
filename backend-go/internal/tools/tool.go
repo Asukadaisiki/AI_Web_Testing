@@ -19,6 +19,7 @@ type Definition struct {
 
 type Call struct {
 	RunID                string          `json:"run_id"`
+	ActorUserID          int64           `json:"actor_user_id"`
 	ConversationID       string          `json:"conversation_id"`
 	ProjectID            int64           `json:"project_id"`
 	LatestGenerationID   *int64          `json:"latest_generation_id,omitempty"`

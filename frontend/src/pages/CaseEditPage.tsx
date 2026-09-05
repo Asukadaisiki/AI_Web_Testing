@@ -103,7 +103,6 @@ export function CaseEditPage() {
       const values = await form.validateFields();
       const payload: CaseMutationPayload = {
         project_id: isCreateMode ? createProjectId : caseData!.project_id,
-        actor_user_id: caseData?.updated_by ?? 1,
         name: values.name,
         description: values.description || null,
         base_url: values.base_url || null,

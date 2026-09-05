@@ -1,4 +1,4 @@
-# Go AgentCore
+# Go AgentService
 
 `backend-go/` 是 AI Web Testing 的新控制面。它负责：
 
@@ -8,7 +8,7 @@
 - HTTP/SSE API
 - DSL、执行队列和报告的应用层编排
 - Planning Session 元数据与项目关联
-- 基于 Python `/auth/me` 内省的共享 Cookie 身份认证
+- 直接读取 PostgreSQL 用户并验证兼容 Starlette 的签名 Cookie
 
 当前 Agent 工具：
 
@@ -21,16 +21,19 @@
 - `get_report`
 - `fix_and_retry`
 
-Python `backend/` 在迁移期间继续提供现有 API，并长期保留 Playwright、A11y、Locator 和 Evidence 浏览器执行能力。
+Python Browser Worker 仅保留 Playwright、A11y、Locator、Evidence 和 locator preflight 能力；DSL、Case、Batch 与 Report 编排均在 Go 内完成。
 
 ## 目录
 
 ```text
-cmd/api/                    Hertz 服务入口
-internal/agentcore/         AgentRun 状态与事件
+cmd/agentservice/           Hertz 服务入口
+internal/agent/             纯 Agent loop 与消息合同
+internal/harness/           Prompt、工具和运行编排
+internal/agentservice/      AgentRun、Checkpoint、事件与持久化
 internal/authn/             Cookie 身份内省
 internal/config/            进程配置
 internal/planning/          Planning Session 元数据控制面
+internal/platform/          LLM 与 Python Worker 适配器
 internal/tools/             工具合同与注册表
 internal/transport/http/    HTTP 协议适配
 ```
@@ -39,10 +42,10 @@ internal/transport/http/    HTTP 协议适配
 
 ```bash
 go test ./...
-go run ./cmd/api
+go run ./cmd/agentservice
 ```
 
-默认监听 `127.0.0.1:8081`，可通过 `AGENTCORE_HTTP_ADDR` 修改。
+默认监听 `127.0.0.1:8081`，可通过 `AGENTSERVICE_HTTP_ADDR` 修改。
 
 当前可用接口：
 
@@ -56,11 +59,11 @@ go run ./cmd/api
 - `GET/PATCH/DELETE /api/v2/planning/sessions/{session_id}`
 - `GET/POST/DELETE /api/v2/planning/sessions/{session_id}/projects...`
 
-除 `/health` 外，所有接口都要求 Python 登录接口签发的 Cookie。AgentRun 会持久化
+除 `/health` 和 `/api/v2/auth/login` 外，所有接口都要求签名 Cookie。AgentRun 会持久化
 `actor_user_id`，详情、事件、SSE 和恢复操作都执行所有权检查。创建 Run 时项目和会话
 上下文由服务端从已认证 Planning Session 推导，不接受客户端伪造。
 
-模型配置复用 `backend/.env` 中的：
+模型配置复用 `browser-worker/.env` 中的：
 
 - `AI_PLANNING_BASE_URL`
 - `AI_PLANNING_API_KEY`

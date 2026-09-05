@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentcore"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 )
 
 func TestCompleteParsesNativeToolCall(t *testing.T) {
@@ -48,8 +48,8 @@ func TestCompleteParsesNativeToolCall(t *testing.T) {
 	}
 	response, err := client.Complete(
 		context.Background(),
-		[]agentcore.Message{{Role: "user", Content: "test login"}},
-		[]agentcore.ToolDefinition{{
+		[]agent.Message{{Role: "user", Content: "test login"}},
+		[]agent.ToolDefinition{{
 			Name:        "ask_user_question",
 			Description: "ask",
 			InputSchema: []byte(`{"type":"object"}`),
@@ -88,7 +88,7 @@ func TestCompleteRejectsInvalidToolArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOpenAIClient() error = %v", err)
 	}
-	_, err = client.Complete(context.Background(), []agentcore.Message{{Role: "user", Content: "test"}}, nil)
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "test"}}, nil)
 	if err == nil {
 		t.Fatal("Complete() error = nil, want invalid tool call error")
 	}

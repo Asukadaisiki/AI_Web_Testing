@@ -7,15 +7,10 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     proxy: {
-      "/api/v2/planning": {
-        target: process.env.VITE_AGENTCORE_PROXY_TARGET ?? "http://127.0.0.1:8081",
+      "/api/v2": {
+        target: process.env.VITE_AGENT_SERVICE_PROXY_TARGET ?? "http://127.0.0.1:8081",
         changeOrigin: true,
       },
-      "/api/v2/agent": {
-        target: process.env.VITE_AGENTCORE_PROXY_TARGET ?? "http://127.0.0.1:8081",
-        changeOrigin: true,
-      },
-      "/api": process.env.VITE_PYTHON_PROXY_TARGET ?? "http://127.0.0.1:8000",
       "/artifacts": process.env.VITE_PYTHON_PROXY_TARGET ?? "http://127.0.0.1:8000",
     },
   },

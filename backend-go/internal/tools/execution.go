@@ -12,6 +12,7 @@ import (
 type ExecutionCapabilityClient interface {
 	ExecuteDSL(
 		ctx context.Context,
+		actorUserID int64,
 		runID string,
 		projectID int64,
 		conversationID string,
@@ -19,12 +20,14 @@ type ExecutionCapabilityClient interface {
 	) (json.RawMessage, error)
 	GetReport(
 		ctx context.Context,
+		actorUserID int64,
 		projectID int64,
 		conversationID string,
 		arguments json.RawMessage,
 	) (json.RawMessage, error)
 	PrepareFixAndRetry(
 		ctx context.Context,
+		actorUserID int64,
 		projectID int64,
 		conversationID string,
 		arguments json.RawMessage,
@@ -70,6 +73,7 @@ func (t ExecuteDSLTool) Execute(ctx context.Context, call Call) (Result, error) 
 	}
 	content, err := t.client.ExecuteDSL(
 		ctx,
+		call.ActorUserID,
 		call.RunID,
 		call.ProjectID,
 		call.ConversationID,
@@ -142,6 +146,7 @@ func (t GetReportTool) Execute(ctx context.Context, call Call) (Result, error) {
 		var err error
 		content, err = t.client.GetReport(
 			ctx,
+			call.ActorUserID,
 			call.ProjectID,
 			call.ConversationID,
 			call.Arguments,
@@ -224,6 +229,7 @@ func (t FixAndRetryTool) Definition() Definition {
 func (t FixAndRetryTool) Execute(ctx context.Context, call Call) (Result, error) {
 	content, err := t.client.PrepareFixAndRetry(
 		ctx,
+		call.ActorUserID,
 		call.ProjectID,
 		call.ConversationID,
 		call.Arguments,

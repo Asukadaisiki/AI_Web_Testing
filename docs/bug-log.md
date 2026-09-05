@@ -48,6 +48,49 @@
 
 ## 问题记录
 
+## BUG-113 | Python Browser Worker 仍承载非浏览器控制面
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：Go AgentService 全面迁移完成性审计
+- 描述：公开 API 虽已迁移到 Go，但 `generate_dsl`、`execute_dsl`、`get_report` 和 `fix_and_retry` 仍经 Python `/internal/agent-capabilities` 完成持久化与业务编排。
+- 影响：Python 仍是隐含的第二控制面，Go 无法独立保证 DSL 所有权、审批后的执行创建和报告读取合同。
+- 根因：前一阶段只迁移了外部 HTTP 路由，没有继续迁移 Agent 工具背后的内部 capability。
+- 处理：新增 Go DSL Store 和结构化校验；新增 Go ControlPlane 工具适配器；将 actor 身份传入 Tool Call；删除 Python agent capability 路由、服务、schema、测试及其下游死代码；Browser Worker Client 只保留浏览器 capability。
+- 验证：真实 PostgreSQL 集成测试覆盖 Go GenerateDSL → ExecuteDSL → Report → FixAndRetry；全仓检索无 Python `agent_capabilities` 引用；Go/Python/前端回归通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--完成内部控制面迁移与-browser-worker-重命名`
+
+## BUG-112 | Go 控制面 SQL 与实际 PostgreSQL schema 不一致
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：Go 控制面真实 PostgreSQL 集成测试
+- 描述：Go 创建 Execution Job 和 Locator Correction 时遗漏无 server default 的非空字段；Project 删除也会被 Execution 外键 `RESTRICT` 阻断。
+- 复现步骤：
+  1. 在 Alembic `20260905_0038` schema 上调用 Go `CreateBatch`。
+  2. 创建执行记录后调用 Go `Correction.Create`。
+  3. 删除含执行历史的 Project。
+- 影响：Batch 创建、人工定位修正和项目删除三个核心操作在编译及 mock 测试通过后仍会在真实 PostgreSQL 上失败。
+- 根因：迁移期 Go SQL 依据 ORM 默认值编写，但部分默认值仅由 SQLAlchemy 客户端注入，数据库列本身没有默认值；项目删除也未处理 `RESTRICT` 历史表。
+- 处理：Job 插入显式写入 attempt/max-attempt/cancel 默认值；Correction 插入显式写入时间戳；Project 删除在同一事务中按外键顺序清理 correction、run 和 batch；同时补齐 Batch 幂等与 Planning Session 所有权校验。
+- 验证：真实 PostgreSQL 16.15 纵向集成测试通过，Go 全量 test/vet/build 通过。
+- 关联记录：`docs/execution-log.md#2026-09-05--补齐-go-报告聚合并验证-postgresql-控制面`
+
+## BUG-111 | Python Planning Agent 与 Go AgentService 重复决策
+
+- 日期：2026-09-05
+- 状态：fixed
+- 严重度：high
+- 来源：AgentService 全面迁移
+- 描述：Go AgentCore 已成为 Planning 主入口，但 Python 仍保留完整 ReAct Agent、Planning SSE/API，并被 Report Core 作为失败分析器调用，形成两套 Agent 决策源。
+- 影响：工具协议、Prompt、状态机和失败处理可能产生分叉，Python 无法收缩为稳定 Browser Worker。
+- 根因：Go 迁移仅替换前端主入口，没有同步切断 Report Core 和旧 API 对 Python Agent 的依赖。
+- 处理：报告改为确定性分析；浏览器 capability 从旧 Planning 工具注册表中提取；删除 Python Planning API、ReAct、Prompt、SSE、草案编排和持久化模型；Go 拆分为 `agent`、`harness`、`agentservice`，并增加工具调用前 policy gate。
+- 验证：全仓已无 Python Planning Agent 引用；Go/Python/前端测试及构建通过；Alembic `0037` 已应用且 schema check 无差异。
+- 关联记录：`docs/execution-log.md#2026-09-05--启动-go-agentservice-全面迁移`
+
 ## BUG-110 | Go 工具实现与前端旧 Planning 链路残留
 
 - 日期：2026-09-05

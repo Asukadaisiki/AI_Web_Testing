@@ -9,6 +9,7 @@ import (
 type DSLCapabilityClient interface {
 	GenerateDSL(
 		ctx context.Context,
+		actorUserID int64,
 		projectID int64,
 		conversationID string,
 		arguments json.RawMessage,
@@ -26,22 +27,29 @@ func NewGenerateDSLTool(client DSLCapabilityClient) GenerateDSLTool {
 func (t GenerateDSLTool) Definition() Definition {
 	return Definition{
 		Name: "generate_dsl",
-		Description: "Generate a candidate structured DSL after page element coverage has been validated. " +
-			"The result is a draft and must not be described as executed.",
+		Description: "Validate and persist a structured DSL candidate authored from the user's goal and verified page elements. " +
+			"The candidate must use only supported actions and grounded semantic targets.",
 		InputSchema: json.RawMessage(`{
 			"type":"object",
 			"properties":{
-				"prompt":{"type":"string","description":"Complete test intent and expected assertions"},
-				"base_url":{"type":"string"},
-				"flow_steps":{"type":"array","items":{"type":"object"}},
+					"case":{
+						"type":"object",
+						"properties":{
+							"name":{"type":"string"},
+							"description":{"type":"string"},
+							"base_url":{"type":"string"},
+							"input_contract":{"type":"array","items":{"type":"object"}},
+							"output_contract":{"type":"array","items":{"type":"object"}},
+							"steps":{"type":"array","items":{"type":"object"}}
+						},
+						"required":["name","steps"]
+					},
 				"a11y_nodes_by_state":{
 					"type":"object",
 					"additionalProperties":{"type":"array","items":{"type":"object"}}
-				},
-				"scenario_variables":{"type":"array","items":{"type":"object"}},
-				"user_context":{"type":"string"}
+					}
 			},
-			"required":["prompt","base_url","a11y_nodes_by_state"]
+				"required":["case","a11y_nodes_by_state"]
 		}`),
 	}
 }
@@ -49,6 +57,7 @@ func (t GenerateDSLTool) Definition() Definition {
 func (t GenerateDSLTool) Execute(ctx context.Context, call Call) (Result, error) {
 	content, err := t.client.GenerateDSL(
 		ctx,
+		call.ActorUserID,
 		call.ProjectID,
 		call.ConversationID,
 		call.Arguments,

@@ -47,7 +47,7 @@ Primary goals for the first milestone:
 The repository is organized as a Go control plane, a Python browser worker, and a TypeScript frontend.
 
 - `backend-go/` contains the Hertz HTTP/SSE API, AgentCore, tool registry, application services, and control-plane persistence.
-- `backend/` is the legacy FastAPI backend during migration and remains the Python Playwright/A11y/locator execution worker after migration.
+- `browser-worker/` contains the Python Playwright/A11y/locator execution worker and internal browser capability API.
 - `frontend/` contains the React + TypeScript platform UI.
 - `docs/` contains project planning, DSL specification, UI planning, and architecture notes.
 

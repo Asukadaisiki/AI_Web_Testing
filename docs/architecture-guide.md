@@ -9,6 +9,14 @@
 ## 一屏地图
 
 ```text
+backend-go/
+  cmd/agentservice/    Hertz AgentService 入口
+  internal/agent/      纯 Agent loop 与消息合同
+  internal/harness/    Prompt、工具和运行编排
+  internal/agentservice/ Run、Checkpoint、事件和持久化
+  internal/tools/      Agent 工具
+  internal/platform/   LLM 与 Python Worker 适配器
+
 frontend/src/
   app/                 应用启动、路由和全局 Provider
   pages/               URL 对应的页面级组件
@@ -17,12 +25,13 @@ frontend/src/
   shared/              无业务归属的 API 基础设施和通用 UI
   services/, types/    迁移中的旧兼容入口
 
-backend/app/
-  main.py              后端进程和 FastAPI 应用入口
-  api/                 HTTP 协议层：路由、鉴权依赖、状态码
-  application/         跨能力的业务用例编排
-  services/            可复用的领域能力和数据操作
-  ai/                  LLM、Agent、Prompt、页面探索和 AI 工具
+browser-worker/app/
+  main.py              Python Worker/FastAPI 入口
+  api/                 迁移期平台 API 与内部 capability
+  application/browser  Go AgentService 使用的浏览器能力
+  application/reporting 确定性报告投影和失败分析
+  services/            执行、DSL、Case 等迁移期领域能力
+  ai/                  DSL 生成、页面探索和 locator preflight
   runners/             解释 DSL 并驱动 Playwright
   locators/            元素定位、修正和 fallback
   reporters/           将执行证据组装为结构化报告
@@ -37,19 +46,20 @@ backend/app/
 ```text
 规划：
 Frontend Planning
-  -> api/routes/ai_planning.py
-  -> application/planning/*
-  -> ai/test_planning_agent.py + ai/planning_tools.py
+  -> Go /api/v2/agent
+  -> harness
+  -> agent loop + tools
 
 草案：
-application/planning/draft_service.py
-  -> services/dsl.py
-  -> ai/dsl_generator.py
-  -> ai/locator_preflight.py
-  -> models/ai_planning_draft.py
+Go generate_dsl tool
+  -> Python Browser Worker locator preflight
+  -> Go DSL validation and persistence
+  -> dsl_generation_runs
 
 执行：
-api/routes/executions.py 或 Planning save_execute_service.py
+Go execute_dsl tool
+  -> Go Case/ExecutionBatch/ExecutionJob
+  -> Python execution worker
   -> services/executions.py
   -> runners/playwright_runner.py
   -> locators/*
@@ -59,7 +69,7 @@ api/routes/executions.py 或 Planning save_execute_service.py
 展示：
 Frontend pages
   -> features/*/api.ts
-  -> backend api/routes/*
+  -> Go transport/http/*
   -> services/*
   -> schemas/*
 ```
@@ -107,32 +117,17 @@ Frontend pages
 
 - `api/router.py`：汇总所有子路由。
 - `api/routes/cases.py`：Case HTTP 接口。
-- `api/routes/ai_planning.py`：Planning HTTP/SSE 接口。
-- `api/auth.py`：路由使用的认证依赖。
+- `api/routes/browser_capabilities.py`：Go 调用的页面探索接口。
+- `api/auth.py`：Worker 内部接口使用的认证依赖。
 
-### `application/`：用例编排层
-
-这里的“用例”是业务 Use Case，不是自动化测试 Case。
-
-它负责将多个底层能力组合成一次完整操作，例如：
-
-- 保存草案后创建正式 Case，再触发执行。
-- 收到 Planning 消息后组装上下文、调用 Agent、持久化消息。
-- 根据历史执行结果分析并发起复测。
-
-当前只有复杂度最高的 Planning 域进入了这一层：
+### `application/`：Worker 能力边界
 
 | 文件 | 职责 |
 |---|---|
-| `planning/session_service.py` | Planning Session 的创建、列表、详情、删除 |
-| `planning/project_context.py` | Session 所有权、关联项目、active project |
-| `planning/conversation_service.py` | 对话消息、Agent 调用、流式消息持久化 |
-| `planning/context_service.py` | 拼装项目状态、历史洞察和错误上下文 |
-| `planning/draft_service.py` | 生成、更新、删除 Planning DSL 草案 |
-| `planning/save_execute_service.py` | 草案转正式 Case，并选择是否执行 |
-| `planning/analysis_retest_service.py` | 执行结果分析和复测 |
-| `planning/execution_inputs.py` | 从 Planning 数据解析执行输入变量 |
-| `planning/presenters.py` | ORM 对象到 Planning API Schema 的转换 |
+| `browser/service.py` | 页面探索和元素验证 capability |
+| `agent_capabilities/service.py` | DSL、执行和报告内部 capability |
+| `reporting/service.py` | Run/Batch/Project 报告投影 |
+| `reporting/analysis_service.py` | 确定性 FailureSignal 分析 |
 
 ### `services/`：可复用业务能力
 
@@ -147,32 +142,15 @@ Frontend pages
 | `corrections.py` | Locator 人工修正记录 |
 | `anti_patterns.py` | DSL 失败反例的记录和检索 |
 | `settings.py` | AI 配置读取、更新和运行状态 |
-| `sse_event_log.py` | SSE 事件持久化与重放 |
-| `ai_planning_streaming.py` | Planning SSE 到 application service 的桥接 |
-| `ai_planning.py` | 旧 Planning service 的兼容导出，非新代码入口 |
 
-`application` 与 `services` 的区别：
-
-- `application` 回答“完成一次用户操作需要哪些步骤”。
-- `services` 回答“某个业务能力本身如何工作”。
-- 新的 Planning 路由优先调用 `application/planning/`。
-- 非 Planning 的简单 CRUD 路由目前直接调用 `services/`。
-
-### `ai/`：模型与 Agent 能力
+### `ai/`：Worker 内 AI 辅助能力
 
 | 文件 | 职责 |
 |---|---|
-| `test_planning_agent.py` | Planning ReAct 循环和规划状态机 |
-| `planning_tools.py` | Agent 可调用工具的注册、分发和实现 |
 | `page_explorer.py` | 使用 Playwright/CDP 采集页面 A11y 信息 |
 | `dsl_generator.py` | 调用 LLM 生成结构化 DSL |
 | `locator_preflight.py` | 草案执行前检查 locator candidates |
-| `tool_result_cache.py` | 页面探索等工具结果缓存 |
 | `prompts/registry.py` | Prompt 模板和 stage 注册中心 |
-| `test_planning_prompts.py` | Planning Prompt 的组装与兼容入口 |
-
-这里的 `test_` 指“测试规划”，不是自动化测试文件。当前仅恢复了 `backend/tests/`
-中的执行分析聚焦合同测试，完整测试分层仍待重建。
 
 ### `runners/`、`locators/`、`reporters/`
 
@@ -196,7 +174,7 @@ Frontend pages
 同名概念的区别：
 
 ```text
-schemas.cases.StoredCaseDetail   API 返回的数据形状
+backend-go/internal/cases.Stored API 返回的数据形状
 models.test_case.TestCase        数据库中的 Case 记录
 schemas.dsl.DSLCase              Runner 消费的结构化 DSL
 ```
@@ -286,11 +264,10 @@ app -> pages -> features -> shared
 - `shared` 不依赖具体 feature。
 - 前端不得实现正式测试执行逻辑。
 
-当前已知过渡依赖：
+当前保留的跨进程依赖：
 
-- Planning `application` 仍直接调用多个 `services`，尚未抽成稳定 port。
-- `ai/planning_tools.py` 同时调用 ORM 和 service。
-- `locators/ai_visual.py` 依赖统一 Prompt Registry。
+- Go 通过内部 Browser capability 调用 Python 的探索与 locator preflight。
+- Python `locators/ai_visual.py` 依赖只包含 VLM 的 Prompt Registry。
 
 这些依赖不一定造成运行错误，但会降低“只看目录即可判断调用方向”的能力。
 
@@ -299,10 +276,10 @@ app -> pages -> features -> shared
 | 需求或问题 | 第一入口 | 继续追踪 |
 |---|---|---|
 | 新增/修改 HTTP 接口 | `api/routes/<domain>.py` | `application/` 或 `services/` |
-| Planning 对话异常 | `application/planning/conversation_service.py` | `ai/test_planning_agent.py` |
-| Agent 工具行为异常 | `ai/planning_tools.py` | 对应 service 或 `page_explorer.py` |
+| Planning 对话异常 | `backend-go/internal/harness/` | `internal/agent/loop.go` |
+| Agent 工具行为异常 | `backend-go/internal/tools/` | 对应 Go Store 或 Python Browser capability |
 | DSL 生成错误 | `services/dsl.py` | `ai/dsl_generator.py`、`schemas/dsl.py` |
-| 草案生成或保存错误 | `application/planning/draft_service.py` | `save_execute_service.py` |
+| DSL 候选生成错误 | `application/agent_capabilities/service.py` | `services/dsl.py` |
 | 浏览器步骤执行错误 | `services/executions.py` | `runners/playwright_runner.py` |
 | 元素找不到 | `locators/fallback.py` | `semantic.py`、`corrections.py`、`ai_visual.py` |
 | 报告统计错误 | `services/executions.py` | `reporters/json_report.py` |
@@ -316,11 +293,11 @@ app -> pages -> features -> shared
 第一次阅读不要按目录逐文件阅读，按一条业务链走：
 
 1. `frontend/src/app/AppRouter.tsx`
-2. `backend/app/main.py`
-3. `backend/app/api/router.py`
+2. `browser-worker/app/main.py`
+3. `browser-worker/app/api/router.py`
 4. 选择一个具体 route，例如 `api/routes/executions.py`
 5. 进入对应 service，例如 `services/executions.py`
 6. 再进入 Runner、Locator、Schema 和 Model
-7. 最后阅读 Planning Agent，因为它是当前复杂度最高的模块
+7. 最后阅读 Go `internal/agent`、`internal/harness` 和 `internal/agentservice`
 
-需要理解产品核心时，建议先走“创建 Case -> 执行 -> 查看报告”，再进入 AI Planning 和 DSL 自动生成。
+需要理解产品核心时，建议按“AgentRun -> ToolCall -> DSL 审批 -> Batch/Job -> Runner -> Report”阅读。

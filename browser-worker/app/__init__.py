@@ -1,0 +1,1 @@
+"""Browser Worker application package."""

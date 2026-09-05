@@ -11,7 +11,7 @@ import { mergeAgentEvents } from "./events";
 import type { AgentEvent, AgentRun } from "./types";
 
 function storageKey(conversationId: string): string {
-  return `agentcore:last-run:${conversationId}`;
+  return `agentservice:last-run:${conversationId}`;
 }
 
 export function useAgentRun(conversationId: string) {

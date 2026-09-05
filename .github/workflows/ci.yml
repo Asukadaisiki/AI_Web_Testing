@@ -36,11 +36,11 @@ jobs:
       - run: go build ./...
 
   python:
-    name: Python sync, compile, unittest
+    name: Browser Worker sync, compile, unittest
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend
+        working-directory: browser-worker
     env:
       AUTH_SESSION_SECRET: ci-only-session-secret
     steps:
@@ -49,7 +49,7 @@ jobs:
         with:
           version: "0.8.22"
           enable-cache: true
-          cache-dependency-glob: backend/uv.lock
+          cache-dependency-glob: browser-worker/uv.lock
       - run: uv python install 3.12
       - run: uv sync --frozen --no-dev
       - run: uv run python -m compileall -q app tests
@@ -97,7 +97,7 @@ jobs:
         run: docker compose --env-file deploy/prod.env.example -f compose.prod.yml up -d --build --wait
       - name: Verify reverse proxy and Chromium
         run: |
-          curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
+          curl --fail --silent --show-error http://127.0.0.1:8080/health
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/api/v1/internal/browser-capabilities)" = "404"
           docker compose --env-file deploy/prod.env.example -f compose.prod.yml run --rm --no-deps python-worker \
             python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(); page=b.new_page(); page.goto('http://frontend:8080'); assert page.locator('#root').count() == 1; b.close(); p.stop()"

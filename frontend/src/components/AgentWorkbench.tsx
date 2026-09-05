@@ -37,12 +37,10 @@ import {
   getPlanningSession,
   listPlanningSessions,
 } from "../features/planning/api";
-import type { AISettings } from "../types/api";
 import { NotebookLMLayout } from "../layouts/NotebookLMLayout";
 import { SessionProjectPanel } from "./SessionProjectPanel";
 
 interface AgentWorkbenchProps {
-  aiSettings?: AISettings | null;
   sessionId: number;
 }
 
@@ -134,7 +132,6 @@ function QuestionControl({
 }
 
 export function AgentWorkbench({
-  aiSettings,
   sessionId,
 }: AgentWorkbenchProps) {
   const navigate = useNavigate();
@@ -234,14 +231,6 @@ export function AgentWorkbench({
             });
           }}
         />
-      </div>
-      <div style={{ marginTop: 20 }}>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          当前模型
-        </Typography.Text>
-        <div style={{ marginTop: 4 }}>
-          <Tag>{aiSettings?.ai_planning_model ?? "未配置"}</Tag>
-        </div>
       </div>
       <div style={{ marginTop: 20 }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>

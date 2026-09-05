@@ -66,7 +66,6 @@ export function LocatorEvidencePanel({
         correction_type: correctionType,
         correction_value: correctionValue.trim(),
         source_execution_id: execution.id,
-        created_by: execution.triggered_by,
       }),
     onSuccess: () => setSaved(true),
   });

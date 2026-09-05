@@ -51,7 +51,7 @@ npm run dev
 
 开发代理默认将 `/api/v2/agent` 和 `/api/v2/planning` 转发到 Go
 `http://127.0.0.1:8081`，其余 `/api` 和 `/artifacts` 转发到 Python
-`http://127.0.0.1:8000`。可分别通过 `VITE_AGENTCORE_PROXY_TARGET` 和
+`http://127.0.0.1:8000`。可分别通过 `VITE_AGENT_SERVICE_PROXY_TARGET` 和
 `VITE_PYTHON_PROXY_TARGET` 覆盖。
 
 ## 测试
