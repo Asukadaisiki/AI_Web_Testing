@@ -14,11 +14,9 @@ type Config struct {
 	LLMAPIKey        string
 	LLMModel         string
 	AgentMaxTurns    int
+	DefaultActorID   int64
 	DatabaseURL      string
 	BrowserWorkerURL string
-	SessionSecret    string
-	SessionCookie    string
-	SessionMaxAge    int
 }
 
 func Load() Config {
@@ -42,19 +40,10 @@ func Load() Config {
 		LLMAPIKey:        os.Getenv("AI_PLANNING_API_KEY"),
 		LLMModel:         os.Getenv("AI_PLANNING_MODEL"),
 		AgentMaxTurns:    maxTurns,
+		DefaultActorID:   int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
 		DatabaseURL:      normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
 		BrowserWorkerURL: browserWorkerURL,
-		SessionSecret:    os.Getenv("AUTH_SESSION_SECRET"),
-		SessionCookie:    envOrDefault("AUTH_SESSION_COOKIE_NAME", "session"),
-		SessionMaxAge:    positiveIntOrDefault("AUTH_SESSION_MAX_AGE_SECONDS", 43200),
 	}
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func positiveIntOrDefault(name string, fallback int) int {

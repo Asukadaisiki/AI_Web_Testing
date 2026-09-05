@@ -13,7 +13,7 @@ Alembic + Playwright`。用户业务控制面和 Agent 决策均由 Go AgentServ
 - Playwright Runner、基础 Locator 与结构化执行报告
 - PostgreSQL Job polling、lease、heartbeat 与取消检测
 - 确定性 `FailureSignal`、执行分析和 evidence 持久化
-- Cookie Session 校验和 capability 项目权限校验
+- 固定 actor 上下文与 capability 项目归属校验
 
 ## 当前未完成
 
@@ -27,8 +27,7 @@ Alembic + Playwright`。用户业务控制面和 Agent 决策均由 Go AgentServ
 - 首次启动前先执行 `uv run alembic upgrade head`
 - Browser capability API：`uv run browser-worker-dev`
 - 执行队列 Worker：`uv run python -m app.workers.execution_worker --concurrency 2`
-- 初始化或重置账号：`AUTH_BOOTSTRAP_PASSWORD=... uv run python scripts/bootstrap_user.py --email admin@example.com`
-- 除健康检查和登录接口外，业务 API 与 artifact 下载均要求有效 Cookie Session
+- 当前不启用登录、Cookie、Token 或角色鉴权
 - AI visual 默认关闭；如需启用，额外设置 `ENABLE_AI_VISUAL_LOCATE=true`、`VLM_API_KEY`、`VLM_BASE_URL`、`VLM_MODEL` 与 `VLM_MODEL_FAMILY`
 
 ## Smoke 基准用例

@@ -174,6 +174,8 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 
 	report := `{"status":"failed","steps":[{"step_index":0,"action":"click","status":"failed","duration_ms":50,"error_message":"Element not found","url":"https://example.com/orders/123","screenshot_path":"artifacts/run.png"}]}`
 	failure := `{"category":"locator","fingerprint":"locator-test","title":"Element not found"}`
+	finishedAt := time.Now().UTC()
+	startedAt := finishedAt.Add(-2 * time.Second)
 	var executionID int64
 	err = db.QueryRowContext(ctx, `
 		INSERT INTO test_case_runs (
@@ -185,10 +187,10 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 			$1, $2, $3, $4, $5, 'failed',
 			1, '{}'::json, 'sha', 'execution.report.v1',
 			'Element not found', $6::json, $7::json, 'completed',
-			now() - interval '2 seconds', now()
+			$8, $9
 		)
 		RETURNING id`,
-		testCase.ID, projectID, batchID, jobID, actorID, report, failure,
+		testCase.ID, projectID, batchID, jobID, actorID, report, failure, startedAt, finishedAt,
 	).Scan(&executionID)
 	if err != nil {
 		t.Fatalf("insert execution: %v", err)
@@ -268,8 +270,8 @@ func insertUser(t *testing.T, db *sql.DB, email string) int64 {
 	t.Helper()
 	var id int64
 	if err := db.QueryRow(`
-		INSERT INTO users (email, display_name, password_hash, is_active)
-		VALUES ($1, 'Integration Test', 'unused', true)
+		INSERT INTO users (email, display_name)
+		VALUES ($1, 'Integration Test')
 		RETURNING id`, email).Scan(&id); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
@@ -281,6 +283,7 @@ type passthroughValidator struct{}
 func (passthroughValidator) ExecuteBrowserCapability(
 	_ context.Context,
 	_ string,
+	_ int64,
 	_ int64,
 	_ string,
 	arguments json.RawMessage,

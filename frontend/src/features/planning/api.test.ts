@@ -28,12 +28,16 @@ describe("planning metadata API", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/v2/planning/sessions",
-      expect.objectContaining({ credentials: "include" }),
+      expect.objectContaining({
+        headers: { "Content-Type": "application/json" },
+      }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/v2/planning/sessions/12",
-      expect.objectContaining({ credentials: "include" }),
+      expect.objectContaining({
+        headers: { "Content-Type": "application/json" },
+      }),
     );
   });
 });

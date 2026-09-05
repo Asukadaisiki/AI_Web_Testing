@@ -2,15 +2,9 @@ import {
   BugOutlined,
   ExperimentOutlined,
   FileTextOutlined,
-  LogoutOutlined,
   ProjectOutlined,
 } from "@ant-design/icons";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button } from "antd";
 import { useLocation, useNavigate } from "react-router-dom";
-
-import { currentUserQueryKey } from "../features/auth/AuthGuard";
-import { logout } from "../features/auth/api";
 
 const NAV_ITEMS = [
   { key: "/planning", label: "AI 规划", icon: <ExperimentOutlined /> },
@@ -27,14 +21,6 @@ function isActive(currentPath: string, navKey: string): boolean {
 export function NotebookNav() {
   const location = useLocation();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const logoutMutation = useMutation({
-    mutationFn: logout,
-    onSettled: () => {
-      queryClient.setQueryData(currentUserQueryKey, null);
-      navigate("/login", { replace: true });
-    },
-  });
 
   return (
     <div
@@ -76,16 +62,6 @@ export function NotebookNav() {
           </button>
         );
       })}
-      <Button
-        type="text"
-        size="small"
-        icon={<LogoutOutlined />}
-        loading={logoutMutation.isPending}
-        onClick={() => logoutMutation.mutate()}
-        style={{ justifyContent: "flex-start", color: "#666" }}
-      >
-        退出登录
-      </Button>
     </div>
   );
 }

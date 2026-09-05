@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-05 | 移除全环境鉴权并启动服务联调
+
+- 任务：开发与生产环境均不启用登录鉴权，并启动完整本地服务验证。
+- 操作：删除 Go Cookie/PBKDF2 登录、Auth middleware 和 `/api/v2/auth/*`；使用 `DEFAULT_ACTOR_USER_ID` 注入固定服务端 actor；删除 Browser Worker SessionMiddleware、认证依赖和 artifact 门禁，内部 capability 显式传递 actor；删除前端 LoginPage、AuthGuard、退出入口和 401 事件；新增 Alembic `0039` 删除用户密码与启停字段；清理 `AUTH_*`、bootstrap-user、itsdangerous/httpx 配置与依赖。
+- 结果：前端可直接进入工作台，Go 与 Browser Worker 均无需 Cookie；`users`、`actor_user_id` 和 membership 仅作为未来身份适配器的数据边界保留。
+- 验证：Go test/vet/build、Browser Worker unittest、Alembic upgrade/check、Frontend Vitest/build/Knip、PostgreSQL 集成测试通过；本地启动 Browser API、Execution Worker、Go AgentService 和 Vite，无 Cookie API 联调通过。
+- 后续：无。
+
 ## 2026-09-05 | 复核当前项目结构
 
 - 任务：说明完成控制面迁移后的仓库结构、服务职责和主调用链。

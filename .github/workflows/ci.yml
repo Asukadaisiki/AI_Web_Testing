@@ -41,8 +41,6 @@ jobs:
     defaults:
       run:
         working-directory: browser-worker
-    env:
-      AUTH_SESSION_SECRET: ci-only-session-secret
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

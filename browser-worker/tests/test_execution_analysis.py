@@ -28,7 +28,6 @@ class ExecutionAnalysisContractTest(unittest.TestCase):
         user = User(
             email="analysis@test.local",
             display_name="Analysis Test",
-            password_hash="not-used",
         )
         project = Project(name="analysis-project")
         self.session.add_all([user, project])

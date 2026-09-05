@@ -10,7 +10,7 @@ import (
 )
 
 func (h *Handler) listProjects(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -24,7 +24,7 @@ func (h *Handler) listProjects(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) createProject(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -89,11 +89,11 @@ func (h *Handler) deleteProject(ctx context.Context, c *app.RequestContext) {
 	c.Status(consts.StatusNoContent)
 }
 
-func ownedPathContext(c *app.RequestContext, name string) (identityValue, int64, error) {
-	identity, err := currentIdentity(c)
+func ownedPathContext(c *app.RequestContext, name string) (actorContext, int64, error) {
+	identity, err := currentActor(c)
 	if err != nil {
-		return identityValue{}, 0, err
+		return actorContext{}, 0, err
 	}
 	value, err := positivePathID(c.Param(name))
-	return identityValue{UserID: identity.UserID}, value, err
+	return actorContext{UserID: identity.UserID}, value, err
 }

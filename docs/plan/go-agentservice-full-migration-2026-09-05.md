@@ -120,14 +120,14 @@ Python Browser Worker
 ### M5：控制面归 Go
 
 1. 将 DSL Schema 校验和候选版本持久化迁至 Go。
-2. 将 Case、Batch/Job、Report 查询和认证逐域迁至 Go。
+2. 将 Case、Batch/Job、Report 查询和 actor 上下文逐域迁至 Go。
 3. Python API 改为仅内网可见的 Browser Worker。
 4. 将 `backend/` 重命名为 `browser-worker/`。
 
 当前进度：
 
-- 已完成 Go Auth、Project、Case、Batch/Job、Execution、Overview、Correction HTTP
-  API，并将前端全部切至 `/api/v2`。
+- 已完成 Go Project、Case、Batch/Job、Execution、Overview、Correction HTTP
+  API，并将前端全部切至 `/api/v2`；当前使用固定 actor，不启用鉴权。
 - 已完成完整 Overview 统计语义，包括双窗口对比、补零趋势、失败分类、
   失败动作、高频失败用例和根因聚合。
 - 已通过真实 PostgreSQL 纵向测试验证 Project → Case → Batch → Execution →

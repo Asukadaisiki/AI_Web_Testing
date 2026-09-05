@@ -83,7 +83,7 @@ frontend/src/
 ## Environment Setup
 
 - Backend requires Python 3.12+. Uses `uv` for dependency management.
-- `AUTH_SESSION_SECRET` is **required**. Set it in `browser-worker/.env` (copy from `.env.example`).
+- Go uses `DEFAULT_ACTOR_USER_ID` (default `1`); no login, Cookie, token, or role authentication is enabled.
 - `get_settings()` uses `@lru_cache` — in tests, the `reset_cached_state` autouse fixture clears caches on `get_settings`, `get_engine`, `get_session_factory`.
 - Browser Worker tests live under `browser-worker/tests/`.
 

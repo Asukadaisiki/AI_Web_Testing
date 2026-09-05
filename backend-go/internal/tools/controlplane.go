@@ -16,6 +16,7 @@ type BrowserValidator interface {
 	ExecuteBrowserCapability(
 		ctx context.Context,
 		capability string,
+		actorUserID int64,
 		projectID int64,
 		conversationID string,
 		arguments json.RawMessage,
@@ -69,7 +70,7 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		return nil, err
 	}
 	validatedRaw, err := c.browser.ExecuteBrowserCapability(
-		ctx, "validate_page_elements", projectID, conversationID, validationArguments,
+		ctx, "validate_page_elements", actorUserID, projectID, conversationID, validationArguments,
 	)
 	if err != nil {
 		return nil, err

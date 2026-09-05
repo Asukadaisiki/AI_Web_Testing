@@ -1,38 +1,27 @@
 import { expect, test } from "@playwright/test";
 
-test("未登录用户会被路由保护送到登录页", async ({ page }) => {
-  await page.route("**/api/v2/auth/me", (route) =>
+test("登录路由直接进入规划页", async ({ page }) => {
+  await page.route("**/api/v2/planning/sessions", (route) =>
     route.fulfill({
-      status: 401,
       contentType: "application/json",
-      body: JSON.stringify({ detail: "Unauthorized" }),
+      body: "[]",
     }),
   );
 
-  await page.goto("/reports");
+  await page.goto("/login");
 
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "AI Web Testing" })).toBeVisible();
+  await expect(page).toHaveURL(/\/planning$/);
+  await expect(page.getByRole("heading", { name: "AI 测试规划" })).toBeVisible();
 });
 
-test("已登录用户可进入回归编排并导航到定位调试", async ({ page }) => {
-  await page.route("**/api/v2/auth/me", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        id: 1,
-        email: "smoke@example.com",
-        display_name: "Smoke",
-      }),
-    }),
-  );
-  await page.route("**/api/v1/projects", (route) =>
+test("可进入回归编排并导航到定位调试", async ({ page }) => {
+  await page.route("**/api/v2/projects", (route) =>
     route.fulfill({
       contentType: "application/json",
       body: JSON.stringify([{ id: 1, name: "示例项目", description: null }]),
     }),
   );
-  await page.route("**/api/v1/cases?**", (route) =>
+  await page.route("**/api/v2/cases?**", (route) =>
     route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -46,10 +35,10 @@ test("已登录用户可进入回归编排并导航到定位调试", async ({ pa
       }),
     }),
   );
-  await page.route("**/api/v1/execution-batches?**", (route) =>
+  await page.route("**/api/v2/execution-batches?**", (route) =>
     route.fulfill({ contentType: "application/json", body: "[]" }),
   );
-  await page.route("**/api/v1/executions?**", (route) =>
+  await page.route("**/api/v2/executions?**", (route) =>
     route.fulfill({ contentType: "application/json", body: "[]" }),
   );
 

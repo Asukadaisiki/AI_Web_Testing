@@ -9,7 +9,6 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/authn"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/harness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/planning"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
@@ -36,38 +35,6 @@ func newTestServer(t *testing.T) AgentAPI {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	return harness.New(runService, staticModel{}, registry, 4)
-}
-
-type staticAuthenticator struct{}
-
-func (staticAuthenticator) Login(
-	_ context.Context,
-	email string,
-	_ string,
-) (authn.Identity, string, error) {
-	return authn.Identity{UserID: 1, Email: email, DisplayName: "Test"}, "signed", nil
-}
-
-func (staticAuthenticator) CookieName() string {
-	return "session"
-}
-
-func (staticAuthenticator) MaxAgeSeconds() int {
-	return 43200
-}
-
-func (staticAuthenticator) Authenticate(
-	_ context.Context,
-	cookieHeader string,
-) (authn.Identity, error) {
-	switch cookieHeader {
-	case "session=user-1":
-		return authn.Identity{UserID: 1, Cookie: cookieHeader}, nil
-	case "session=user-2":
-		return authn.Identity{UserID: 2, Cookie: cookieHeader}, nil
-	default:
-		return authn.Identity{}, authn.ErrUnauthenticated
-	}
 }
 
 type staticPlanningStore struct{}
@@ -129,7 +96,7 @@ func newHTTPTestServer(t *testing.T) *server.Hertz {
 	return NewServer(
 		"127.0.0.1:0",
 		newTestServer(t),
-		staticAuthenticator{},
+		1,
 		staticPlanningStore{},
 		nil,
 		nil,
@@ -150,32 +117,21 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-func TestAuthRoutes(t *testing.T) {
+func TestAuthRoutesAreNotExposed(t *testing.T) {
 	server := newHTTPTestServer(t)
-	payload := `{"email":"owner@example.com","password":"secret"}`
-	login := ut.PerformRequest(
-		server.Engine,
-		"POST",
-		"/api/v2/auth/login",
-		&ut.Body{Body: bytes.NewBufferString(payload), Len: len(payload)},
-		ut.Header{Key: "Content-Type", Value: "application/json"},
-	).Result()
-	if login.StatusCode() != consts.StatusOK {
-		t.Fatalf("login status = %d, body = %s", login.StatusCode(), login.Body())
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{method: "POST", path: "/api/v2/auth/login"},
+		{method: "GET", path: "/api/v2/auth/me"},
+		{method: "POST", path: "/api/v2/auth/logout"},
 	}
-	if len(login.Header.Peek("Set-Cookie")) == 0 {
-		t.Fatal("login response has no Set-Cookie header")
-	}
-
-	me := ut.PerformRequest(
-		server.Engine,
-		"GET",
-		"/api/v2/auth/me",
-		nil,
-		ut.Header{Key: "Cookie", Value: "session=user-1"},
-	).Result()
-	if me.StatusCode() != consts.StatusOK {
-		t.Fatalf("me status = %d, body = %s", me.StatusCode(), me.Body())
+	for _, route := range routes {
+		response := ut.PerformRequest(server.Engine, route.method, route.path, nil).Result()
+		if response.StatusCode() != consts.StatusNotFound {
+			t.Fatalf("%s %s status = %d, want 404", route.method, route.path, response.StatusCode())
+		}
 	}
 }
 
@@ -188,7 +144,6 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 		"/api/v2/agent/runs",
 		&ut.Body{Body: bytes.NewReader(body), Len: len(body)},
 		ut.Header{Key: "Content-Type", Value: "application/json"},
-		ut.Header{Key: "Cookie", Value: "session=user-1"},
 	).Result()
 	if response.StatusCode() != consts.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", response.StatusCode(), response.Body())
@@ -208,7 +163,6 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 			"GET",
 			"/api/v2/agent/runs/"+run.ID,
 			nil,
-			ut.Header{Key: "Cookie", Value: "session=user-1"},
 		).Result()
 		if err := json.Unmarshal(runResponse.Body(), &run); err != nil {
 			t.Fatalf("decode current run: %v", err)
@@ -227,7 +181,6 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 		"GET",
 		"/api/v2/agent/runs/"+run.ID+"/events?after_seq=0",
 		nil,
-		ut.Header{Key: "Cookie", Value: "session=user-1"},
 	).Result()
 	if eventsResponse.StatusCode() != consts.StatusOK {
 		t.Fatalf("events status = %d, body = %s", eventsResponse.StatusCode(), eventsResponse.Body())
@@ -246,21 +199,6 @@ func TestStartRunAndReplayEvents(t *testing.T) {
 		t.Fatalf("last event = %#v", payload.Events[4])
 	}
 
-	foreignResponse := ut.PerformRequest(
-		server.Engine,
-		"GET",
-		"/api/v2/agent/runs/"+run.ID,
-		nil,
-		ut.Header{Key: "Cookie", Value: "session=user-2"},
-	).Result()
-	if foreignResponse.StatusCode() != consts.StatusForbidden {
-		t.Fatalf(
-			"foreign status = %d, want %d; body = %s",
-			foreignResponse.StatusCode(),
-			consts.StatusForbidden,
-			foreignResponse.Body(),
-		)
-	}
 }
 
 func TestStartRunRejectsEmptyInput(t *testing.T) {
@@ -272,7 +210,6 @@ func TestStartRunRejectsEmptyInput(t *testing.T) {
 		"/api/v2/agent/runs",
 		&ut.Body{Body: bytes.NewReader(body), Len: len(body)},
 		ut.Header{Key: "Content-Type", Value: "application/json"},
-		ut.Header{Key: "Cookie", Value: "session=user-1"},
 	).Result()
 
 	if response.StatusCode() != consts.StatusBadRequest {
@@ -280,15 +217,15 @@ func TestStartRunRejectsEmptyInput(t *testing.T) {
 	}
 }
 
-func TestRunRoutesRequireAuthentication(t *testing.T) {
+func TestPlanningRoutesDoNotRequireAuthentication(t *testing.T) {
 	server := newHTTPTestServer(t)
 	response := ut.PerformRequest(
 		server.Engine,
 		"GET",
-		"/api/v2/agent/runs/run-1",
+		"/api/v2/planning/sessions",
 		nil,
 	).Result()
-	if response.StatusCode() != consts.StatusUnauthorized {
+	if response.StatusCode() != consts.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.StatusCode(), response.Body())
 	}
 }
@@ -300,7 +237,6 @@ func TestPlanningRoutesUseV2Contract(t *testing.T) {
 		"GET",
 		"/api/v2/planning/sessions",
 		nil,
-		ut.Header{Key: "Cookie", Value: "session=user-1"},
 	).Result()
 	if response.StatusCode() != consts.StatusOK {
 		t.Fatalf("v2 status = %d, body = %s", response.StatusCode(), response.Body())
@@ -311,7 +247,6 @@ func TestPlanningRoutesUseV2Contract(t *testing.T) {
 		"GET",
 		"/api/v1/ai-planning/sessions",
 		nil,
-		ut.Header{Key: "Cookie", Value: "session=user-1"},
 	).Result()
 	if legacyResponse.StatusCode() != consts.StatusNotFound {
 		t.Fatalf(

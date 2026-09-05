@@ -8,7 +8,7 @@
 - HTTP/SSE API
 - DSL、执行队列和报告的应用层编排
 - Planning Session 元数据与项目关联
-- 直接读取 PostgreSQL 用户并验证兼容 Starlette 的签名 Cookie
+- 使用服务端固定 actor 维护数据归属字段，不启用登录鉴权
 
 当前 Agent 工具：
 
@@ -30,7 +30,6 @@ cmd/agentservice/           Hertz 服务入口
 internal/agent/             纯 Agent loop 与消息合同
 internal/harness/           Prompt、工具和运行编排
 internal/agentservice/      AgentRun、Checkpoint、事件与持久化
-internal/authn/             Cookie 身份内省
 internal/config/            进程配置
 internal/planning/          Planning Session 元数据控制面
 internal/platform/          LLM 与 Python Worker 适配器
@@ -59,9 +58,9 @@ go run ./cmd/agentservice
 - `GET/PATCH/DELETE /api/v2/planning/sessions/{session_id}`
 - `GET/POST/DELETE /api/v2/planning/sessions/{session_id}/projects...`
 
-除 `/health` 和 `/api/v2/auth/login` 外，所有接口都要求签名 Cookie。AgentRun 会持久化
-`actor_user_id`，详情、事件、SSE 和恢复操作都执行所有权检查。创建 Run 时项目和会话
-上下文由服务端从已认证 Planning Session 推导，不接受客户端伪造。
+所有接口均无需登录。AgentService 使用 `DEFAULT_ACTOR_USER_ID`（默认 `1`）
+写入 `actor_user_id` 并维持 Project membership 数据边界，为未来身份适配器保留字段，
+但当前开发和生产环境都不校验 Cookie、Token 或角色。
 
 模型配置复用 `browser-worker/.env` 中的：
 

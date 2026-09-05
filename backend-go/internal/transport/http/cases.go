@@ -11,7 +11,7 @@ import (
 )
 
 func (h *Handler) listCases(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -55,7 +55,7 @@ func (h *Handler) getCase(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) createCase(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -107,7 +107,7 @@ func (h *Handler) deleteCase(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h *Handler) deleteCases(ctx context.Context, c *app.RequestContext) {
-	identity, err := currentIdentity(c)
+	identity, err := currentActor(c)
 	if err != nil {
 		writeServiceError(c, err)
 		return

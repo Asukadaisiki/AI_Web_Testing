@@ -13,7 +13,7 @@
 - 已补强：报告中心的当前/上一窗口对比、失败根因榜，以及根因榜回流到执行中心 `failure_fingerprint` 筛选链路
 - 已补强：Case 工作台自然语言生成入口，可预览 AI 草案并选择替换当前 DSL 或仅导入步骤
 - 已切换：Planning 工作台使用 Go AgentCore 的 AgentRun、ToolCall、Checkpoint 和 SSE 重放协议；Session 元数据与项目关联也由 Go 提供
-- 已补强：登录页与 AuthGuard、项目级回归编排、Batch 轮询/取消、基于步骤 evidence 的定位调试和人工修正
+- 已补强：无登录直达、项目级回归编排、Batch 轮询/取消、基于步骤 evidence 的定位调试和人工修正
 - 已补强：Vitest 组件/API 测试，以及 Chromium 桌面/移动 Playwright smoke
 
 ## 目标技术栈
@@ -49,10 +49,9 @@ npm run dev
 
 当前 Vite 已显式绑定 `127.0.0.1`，用于避免部分 Windows 环境只监听 IPv6 `::1` 导致浏览器访问 `localhost`/IPv4 时被拒绝。
 
-开发代理默认将 `/api/v2/agent` 和 `/api/v2/planning` 转发到 Go
-`http://127.0.0.1:8081`，其余 `/api` 和 `/artifacts` 转发到 Python
-`http://127.0.0.1:8000`。可分别通过 `VITE_AGENT_SERVICE_PROXY_TARGET` 和
-`VITE_PYTHON_PROXY_TARGET` 覆盖。
+开发代理默认将 `/api/v2` 转发到 Go `http://127.0.0.1:8081`，
+将 `/artifacts` 转发到 Python `http://127.0.0.1:8000`。可分别通过
+`VITE_AGENT_SERVICE_PROXY_TARGET` 和 `VITE_PYTHON_PROXY_TARGET` 覆盖。
 
 ## 测试
 

@@ -9,6 +9,7 @@ type BrowserCapabilityClient interface {
 	ExecuteBrowserCapability(
 		ctx context.Context,
 		capability string,
+		actorUserID int64,
 		projectID int64,
 		conversationID string,
 		arguments json.RawMessage,
@@ -116,6 +117,7 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 	content, err := t.client.ExecuteBrowserCapability(
 		ctx,
 		t.name,
+		call.ActorUserID,
 		call.ProjectID,
 		call.ConversationID,
 		call.Arguments,
