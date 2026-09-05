@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-06 | 合并 AgentCore 分支并切换 Main 开发
+
+- 任务：拉取并审阅远端新增研究文档，将 `xujinyuan/go-agentcore-v2` 的最终清理提交合并到 `main`，后续直接在 `main` 开发。
+- 操作：拉取 `origin/main` 的 Agentic Web Testing Research Roadmap；核对其研究假设、实验路线、数据模型与 12 周 SOP；将远端 `main` 快进到 `99b19cd`，再合并认证层清理提交 `eec340a`。
+- 结果：`main` 已同时包含研究路线文档与最终 AgentCore 清理，旧功能分支可删除。
+- 验证：Go `test/vet/build`、Browser Worker compile 与 10 项 unittest、Frontend 4 项 Vitest 与生产构建、Bug 编号唯一性检查均通过；本机缺少 Docker，未执行 Compose 配置校验。
+- 后续：后续开发直接基于 `main`。
+
 ## 2026-09-05 | 移除全环境鉴权并启动服务联调
 
 - 任务：开发与生产环境均不启用登录鉴权，并启动完整本地服务验证。
