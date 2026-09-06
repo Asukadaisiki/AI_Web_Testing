@@ -87,8 +87,10 @@ export function subscribeAgentEvents(
     "tool.finished",
     "tool.failed",
     "artifact.published",
+    "research.llm_call",
     "run.finished",
     "run.failed",
+    "run.cancelled",
   ];
   for (const type of eventTypes) {
     source.addEventListener(type, (rawEvent) => {

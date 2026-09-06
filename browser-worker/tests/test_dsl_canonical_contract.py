@@ -50,6 +50,37 @@ class DSLCanonicalContractTests(unittest.TestCase):
                         }
                     )
 
+    def test_input_trigger_contract_matches_go_validation(self) -> None:
+        for trigger in ("absent", None, "Enter", "Tab"):
+            step = {
+                "action": "input",
+                "target": "Search",
+                "value": "Blue Top",
+            }
+            if trigger != "absent":
+                step["trigger"] = trigger
+            case = DSLCase.model_validate({"name": "trigger", "steps": [step]})
+            self.assertEqual(
+                case.steps[0].trigger,
+                None if trigger == "absent" else trigger,
+            )
+
+        for trigger in ("", "Search Product textbox", "Escape"):
+            with self.subTest(trigger=trigger), self.assertRaises(ValidationError):
+                DSLCase.model_validate(
+                    {
+                        "name": "invalid trigger",
+                        "steps": [
+                            {
+                                "action": "input",
+                                "target": "Search",
+                                "value": "Blue Top",
+                                "trigger": trigger,
+                            }
+                        ],
+                    }
+                )
+
     def test_go_canonical_bytes_are_fully_materialized_for_python(self) -> None:
         fixture = json.loads(FIXTURE_PATH.read_text())
 

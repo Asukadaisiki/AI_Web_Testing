@@ -48,6 +48,93 @@
 
 ## 问题记录
 
+## BUG-145 | Canonical 二次审批被驱动器错误判定为上一代未绑定
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 2 Task 2.3 最终独立验收
+- 描述：Canonical #3 的 Generation 129 首次正式执行因非法 `InputStep.trigger="Search Product textbox"` 被透传给 Playwright `press` 而失败；Agent 随后生成修复版 Generation 130 并进入第二次 `approve_dsl`，此时服务按新 generation 清空 `approved_generation_id`，驱动器又在处理新审批前要求它仍等于 Generation 129，因而误报 `run approval is not bound to the preceding generation` 并取消 Run。
+- 复现步骤：
+  1. 从当前工作树启动长期 Browser API、Execution Worker 和 20-turn AgentService，关闭 VLM。
+  2. 连续执行纯自然语言 Canonical Goal；前两次通过，第三次创建 Project 83 / Session 36 / Run `run_7271a00b1898afb446109751`。
+  3. 审批 Generation 129 后观察 Batch 123 / Execution 114 因 `Locator.press: Unknown key: "Search Product textbox"` 失败。
+  4. Agent 调用 `fix_and_retry`，生成 Generation 130 并进入第二次 `approve_dsl`；Run 此时 `latest_generation_id=130`、`approved_generation_id=null`。
+  5. 驱动器到达该边界后，在用 Batch 123 结算上一轮前错误要求 `approved_generation_id=129`，返回上述错误并取消 Run。
+- 影响：Canonical 连续 3 次仅完成 2/3，Stage 2 最终验收、逐 Run 完整遥测重算和提交前收口无法完成；Task 2.3 与 Stage 2 checklist 保持未完成。
+- 根因：存在两个连续缺口。其一，`generate_dsl` Tool Schema、Go `ValidateCase` 和 Python `InputStep` 都允许任意 trigger 字符串，导致模型把语义目标名误当键名且直到 Playwright 执行时才失败。其二，`run_agentic_e2e.py` 在已有 `approvals` 时先无条件要求当前 `approved_generation_id` 等于上一 approval，没有先用新 Batch/Execution 和 DSL SHA 结算上一轮，也没有区分服务在新 generation 发布后合法清空审批绑定的状态。
+- 处理：Driver 只结算尚未绑定 Batch 的 approval，要求恰好一个新正式 Batch，并以 execution DSL SHA 绑定对应 generation；结算后若当前为严格递增 generation 的全新 `approve_dsl` checkpoint，允许 `approved_generation_id=null`，随后重新校验 generation result、artifact、声明/计算 SHA、checkpoint/tool call 唯一性并审批。Go Tool Schema、Go 校验和 Python schema 将 trigger 统一限制为可空 `Enter|Tab`；prompt 明确普通语义输入省略 trigger，搜索按钮单独使用 click。
+- 验证：Generation 129 失败 Batch -> Generation 130 二次审批回归通过，首 Batch 保留为 failed、`stage0.first_pass=false`，第二批通过也不会覆盖；generation 未前进时清空 approval 的负向回归仍失败。Go/Python 合同覆盖缺省/null/Enter/Tab 接受及空串、`Search Product textbox`、其他按键拒绝。最终独立验收的 Generation 139/140/141 均只使用 null trigger，三个全新 Canonical Run 均首批 passed、`first_pass=true`、无 recovery，正式执行与 Oracle/SHA/VLM 门禁通过；Task 2.3 已收口。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-stage-2-task-234--bug-145`
+
+## BUG-144 | 最终文本模型调用缺少显式 ToolCall 关联状态
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 2 Task 2.3 最终独立验收
+- 描述：Canonical #1 的 10 次真实模型调用均持久化了 Run、Step 和 `research.llm_call.v1`，但最终文本调用 `seq=78` 没有产生 ToolCall，事件 `tool_call_id` 为空且 payload 也没有“本次无 ToolCall”的显式状态或原因，无法满足“每次模型调用关联 Run/Step/ToolCall”的严格验收合同。
+- 复现步骤：
+  1. 从当前工作树启动 Browser API、Execution Worker 和 20-turn AgentService，显式关闭 VLM。
+  2. 执行纯自然语言 Canonical Goal，得到 Project 78 / Run `run_fa3eea9b15473865a2467d62` / Execution 107。
+  3. 查询该 Run 的 `agent_events` 中全部 `research.llm_call`；10 条事件均有 `run_id` 和 `step_id`，前 9 条有 `tool_call_id`，最终文本调用 `seq=78` 的 `tool_call_id` 为空。
+- 影响：单次 Canonical 的正式执行、first-pass、Oracle 和 VLM=0 均通过，但 LLM 调用关联完整性门禁失败；按失败即停规则未执行 Canonical #2/#3，Task 2.3 和 Stage 2 checklist 不能完成。
+- 根因：`RecordModelTelemetry` 仅在模型响应包含一个 ToolCall 时写事件级 `tool_call_id`；最终文本响应没有 ToolCall，当前 schema 没有 `unavailable` 状态及原因来区分“正常无 ToolCall”和“关联丢失”。
+- 处理：保留 `research.llm_call.v1` 并新增必填 `tool_call_status`。成功且有单/多 ToolCall 时写 `available` 并保留真实 `tool_call_ids`；仅单个时同步写事件级 `tool_call_id`，多个时事件级字段为空。最终文本写 `unavailable/model_returned_final_text`，失败 attempt 写 `unavailable/model_attempt_failed_without_response`；两类均不制造 ID。旧事件按原 payload 读取，不回填虚构状态。
+- 验证：内存持久化覆盖单/多/无 ToolCall 和失败 attempt；Harness 最终文本、REST/SSE 同字节合同、前端类型及真实 PostgreSQL 写入/回放与 legacy 事件读取均通过。完整 Go test/vet/build、Python 86 passed/1 skipped、Alembic upgrade/current/heads/check、Frontend 9/9/build/Knip、compileall 和 diff check 通过。Canonical 3 次按要求未执行，留给独立验收。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-stage-2-task-233--bug-144`
+
+## BUG-143 | 四个 repo-local 运行目录下 Chromium 退出仍访问 sandbox 根路径
+
+- 日期：2026-09-06
+- 状态：wont_fix（environment-limited）
+- 严重度：medium
+- 来源：Stage 2 Task 2.3.1 复验
+- 描述：预先创建并显式设置 repo-local `HOME`、`TMPDIR`、`XDG_CACHE_HOME`、`PLAYWRIGHT_BROWSERS_PATH`，直接调用 `.venv/bin/python` 后，真实 Chromium 测试仍在业务断言全部通过后由 TRAE sandbox 拒绝根路径 `/`，最终退出 1。
+- 复现步骤：
+  1. 创建 `/Users/bytedance/project/AI_Web_Testing/.sandbox-home`、`.sandbox-tmp`、`.sandbox-cache`、`.playwright-browsers`，并将 Playwright Chromium 1208 安装到最后一个目录。
+  2. 在 `browser-worker/` 执行 `HOME=/Users/bytedance/project/AI_Web_Testing/.sandbox-home TMPDIR=/Users/bytedance/project/AI_Web_Testing/.sandbox-tmp XDG_CACHE_HOME=/Users/bytedance/project/AI_Web_Testing/.sandbox-cache PLAYWRIGHT_BROWSERS_PATH=/Users/bytedance/project/AI_Web_Testing/.playwright-browsers RUN_BROWSER_INTEGRATION=1 /Users/bytedance/project/AI_Web_Testing/browser-worker/.venv/bin/python -m unittest tests.test_explore_flow_chromium -v`。
+  3. 命令输出精确 trace：`test_navigation_contract_and_same_url_modal_flow ... ok`、`Ran 1 test in 9.031s`、`OK`，随后输出 `TRAE Sandbox Error: hit restricted`、`Not allow operate files: /` 及 sandbox 配置提示，退出码为 1。
+- 影响：仅影响 TRAE 工具外层对独立子进程最终退出码的判定，不代表 Browser Worker 或产品真实浏览器能力失败；不再阻断 Stage 2。
+- 根因：已定位为 TRAE 外层 sandbox 在测试子进程结束后对根路径访问的限制。四个常见运行与缓存目录全部固定到仓库内仍复现，且 unittest 已先完成真实 Chromium 业务断言 1/1 `OK`。
+- 处理：按环境限制关闭，不修改业务逻辑、不放宽 sandbox。独立进程测试降为诊断项，必须保留非零退出码和 sandbox trace，禁止用 `|| true` 伪绿；Stage 2 真实浏览器门禁由通过长期 Browser API 执行真实 Chromium 的官方 Canonical E2E 覆盖。
+- 验证：repo-local 四目录配置下真实 Chromium 业务断言稳定 1/1 `OK`，失败发生在其后的 TRAE 外层；本次代理创建且整体未跟踪的 `.playwright-browsers` 缓存已删除，未删除其他文件。
+- 关联记录：`docs/execution-log.md#2026-09-06--task-231-四目录-sandbox-复验仍失败`
+
+## BUG-142 | Stage 2 独立验收中真实 Chromium 退出再次触发 sandbox 根路径限制
+
+- 日期：2026-09-06
+- 状态：wont_fix（environment-limited）
+- 严重度：medium
+- 来源：Stage 2 Task 2.3 独立验收
+- 描述：使用仓库内 `.sandbox-tmp` 作为绝对 `TMPDIR` 并直接调用 Browser Worker `.venv/bin/python` 时，真实 Chromium 回归的唯一测试断言通过并输出 `OK`，但进程退出阶段再次报告 `TRAE Sandbox Error: Not allow operate files: /`，命令最终退出 1。
+- 复现步骤：
+  1. 在仓库根创建 `.sandbox-tmp`。
+  2. 在 `browser-worker/` 执行 `TMPDIR=/Users/bytedance/project/AI_Web_Testing/.sandbox-tmp RUN_BROWSER_INTEGRATION=1 .venv/bin/python -m unittest tests.test_explore_flow_chromium -v`。
+  3. 观察测试为 `Ran 1 test ... OK`，随后 sandbox 拒绝访问 `/`，shell 退出码为 1。
+- 影响：仅影响 TRAE 外层 sandbox 中的独立进程诊断命令，不是产品失败，也不再作为 Stage 2 阻断门禁。
+- 根因：Task 2.3.2 已确认该非零退出来自业务断言完成后的 TRAE 外层 sandbox 限制，而非 Chromium unittest、Browser Worker 或官方 E2E 业务断言失败。
+- 处理：按环境限制关闭。独立进程测试继续严格报告真实退出码且禁止 `|| true`；Stage 2 真实浏览器门禁改由通过长期 Browser API 执行真实 Chromium 的官方 Canonical E2E 覆盖。
+- 验证：本轮 Go 全量 test/vet/build、三个 PostgreSQL integration（无 skip）、Python 86/86（另 1 项默认门控跳过）、Alembic upgrade/current/heads/check、Frontend 8/8/build、repo-local cache Knip、compileall 和 diff check 已通过；独立 Chromium unittest 业务断言 1/1 `OK`，随后才由 TRAE 外层改写为退出 1。
+- 关联记录：`docs/execution-log.md#2026-09-06--stage-2-task-23-独立验收在真实-chromium-门禁失败`
+
+## BUG-141 | Agent SSE 历史查询与订阅之间存在丢事件窗口
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 2 Task 2.2 explorer 审查
+- 描述：SSE 先查询 PostgreSQL 历史事件、后注册 broker 订阅，并直接向客户端转发 broker 中的 Event；两步之间新事件可能既不在历史结果中也没有订阅者，慢订阅者还可能因 channel 丢弃而出现序列缺口。
+- 复现步骤：
+  1. 客户端以 `after_seq=N` 建立 SSE。
+  2. 服务完成历史查询后、注册订阅前持久化 `seq=N+1`。
+  3. 观察该连接无法收到 `N+1`；或填满 broker channel 后观察实时流缺少中间序号。
+- 影响：LLM 遥测及普通 Agent Event 的 SSE 实时视图可能与 PostgreSQL 回放不一致，刷新前存在不可见事实。
+- 根因：broker 同时承担事件数据通道，且订阅建立晚于历史查询；SSE 没有把 PostgreSQL sequence 作为唯一读取游标。
+- 处理：先订阅再查询历史；broker 收敛为容量 1 的合并唤醒信号；每次唤醒及终态检查均按 `lastSeq` 从 repository 补洞；REST/SSE 统一使用 `MarshalEvent`；PostgreSQL append/cancel 返回数据库 `RETURNING` 后规范化的 Event。
+- 验证：Go SSE 订阅顺序、broker 合并唤醒、REST/SSE 字节一致性测试及 PostgreSQL append/replay 规范化集成测试通过；Go 全量 test/vet/build 通过。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-2-task-21-22-llm-遥测`
+
 ## BUG-140 | repo-local TMPDIR 下真实 Chromium 退出仍触发 sandbox 根路径限制
 
 - 日期：2026-09-06

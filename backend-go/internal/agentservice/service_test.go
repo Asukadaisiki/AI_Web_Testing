@@ -4,9 +4,176 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 )
+
+func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
+	service := NewService(NewMemoryRepository())
+	run, err := service.StartRun(context.Background(), "conversation-1", "private user prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawProviderError := "provider-private-detail-" + strings.Repeat("x", 300)
+	longRequestID := strings.Repeat("r", 300)
+	one := int64(1)
+	err = service.RecordModelTelemetry(context.Background(), run, agent.TelemetryRecord{
+		LogicalCallID: "logical-1",
+		StepID:        "step-1",
+		ToolCallIDs:   []string{"tool-1"},
+		Telemetry: agent.ModelTelemetry{
+			Provider:       "provider",
+			RequestedModel: "requested",
+			ResolvedModel:  "resolved",
+			FinishReason:   "tool_calls",
+			Prompt: agent.PromptSpec{
+				Version: agent.SystemPromptVersion, RequestSHA256: strings.Repeat("a", 64),
+				PromptSHA256: strings.Repeat("b", 64), ToolsetSHA256: strings.Repeat("c", 64),
+			},
+			Usage: agent.ModelUsage{
+				Status: agent.UsageAvailable, InputTokens: &one,
+				OutputTokens: &one, TotalTokens: &one,
+			},
+			Attempts: []agent.ModelAttempt{
+				{Attempt: 1, Status: "failed", Error: &agent.ModelError{
+					Category: "http", Code: "http_429", Message: rawProviderError, Retryable: true,
+				}},
+				{Attempt: 2, Status: "succeeded", ProviderRequestID: longRequestID},
+			},
+			TotalLatencyMS: 9,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := service.ListEvents(context.Background(), run.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %#v", events)
+	}
+	allowed := map[string]bool{
+		"schema_version": true, "logical_call_id": true, "provider": true,
+		"requested_model": true, "resolved_model": true, "prompt_spec": true,
+		"usage": true, "finish_reason": true, "attempt": true,
+		"attempt_status": true, "attempt_started_at": true,
+		"attempt_latency_ms": true, "total_latency_ms": true,
+		"http_status": true, "provider_request_id": true, "retry_count": true,
+		"tool_call_status": true, "tool_call_unavailable_reason": true,
+		"tool_call_ids": true, "error": true,
+	}
+	for index, event := range events {
+		if event.Type != EventResearchLLMCall || event.StepID != "step-1" {
+			t.Fatalf("event = %#v", event)
+		}
+		if event.Payload["schema_version"] != ResearchLLMCallSchemaV1 ||
+			event.Payload["attempt"].(float64) != float64(index+1) {
+			t.Fatalf("payload = %#v", event.Payload)
+		}
+		encoded := fmt.Sprintf("%v", event.Payload)
+		if strings.Contains(encoded, "provider-private-detail") {
+			t.Fatalf("payload leaked raw provider error: %s", encoded)
+		}
+		for key := range event.Payload {
+			if !allowed[key] {
+				t.Fatalf("payload contains non-whitelisted field %q", key)
+			}
+		}
+		for _, forbidden := range []string{"prompt", "messages", "headers", "cookie", "api_key", "raw_response"} {
+			if strings.Contains(encoded, forbidden+":") {
+				t.Fatalf("payload contains forbidden field %q: %s", forbidden, encoded)
+			}
+		}
+	}
+	if _, exists := events[0].Payload["error"].(map[string]any)["message"]; exists {
+		t.Fatalf("payload retained raw error message: %#v", events[0].Payload["error"])
+	}
+	if events[0].Payload["usage"].(map[string]any)["status"] != string(agent.UsageUnavailable) {
+		t.Fatalf("failed usage = %#v", events[0].Payload["usage"])
+	}
+	if events[0].ToolCallID != "" ||
+		events[0].Payload["tool_call_status"] != string(ToolCallUnavailable) ||
+		events[0].Payload["tool_call_unavailable_reason"] != string(ToolCallUnavailableAttemptFailedNoResponse) {
+		t.Fatalf("failed attempt association = %#v", events[0])
+	}
+	if _, exists := events[0].Payload["tool_call_ids"]; exists {
+		t.Fatalf("failed attempt retained tool call ids: %#v", events[0].Payload)
+	}
+	if events[1].ToolCallID != "tool-1" ||
+		events[1].Payload["tool_call_status"] != string(ToolCallAvailable) {
+		t.Fatalf("successful attempt association = %#v", events[1])
+	}
+	singleToolCallIDs := events[1].Payload["tool_call_ids"].([]any)
+	if len(singleToolCallIDs) != 1 || singleToolCallIDs[0] != "tool-1" {
+		t.Fatalf("single tool_call_ids = %#v", singleToolCallIDs)
+	}
+	if _, exists := events[1].Payload["tool_call_unavailable_reason"]; exists {
+		t.Fatalf("available attempt has unavailable reason: %#v", events[1].Payload)
+	}
+	if len(events[1].Payload["provider_request_id"].(string)) != 128 {
+		t.Fatalf("provider request id was not bounded")
+	}
+}
+
+func TestRecordModelTelemetryPersistsMultipleAndUnavailableToolCalls(t *testing.T) {
+	service := NewService(NewMemoryRepository())
+	run, err := service.StartRun(context.Background(), "conversation-1", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		logicalCallID string
+		toolCallIDs   []string
+	}{
+		{logicalCallID: "multiple", toolCallIDs: []string{"tool-1", "tool-2"}},
+		{logicalCallID: "none"},
+	} {
+		err = service.RecordModelTelemetry(context.Background(), run, agent.TelemetryRecord{
+			LogicalCallID: testCase.logicalCallID,
+			StepID:        "step-" + testCase.logicalCallID,
+			ToolCallIDs:   testCase.toolCallIDs,
+			Telemetry: agent.ModelTelemetry{
+				Provider:       "provider",
+				RequestedModel: "model",
+				FinishReason:   "stop",
+				Usage:          agent.ModelUsage{Status: agent.UsageUnavailable},
+				Attempts:       []agent.ModelAttempt{{Attempt: 1, Status: "succeeded"}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := service.ListEvents(context.Background(), run.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %#v", events)
+	}
+	multiple := events[0]
+	if multiple.ToolCallID != "" ||
+		multiple.Payload["tool_call_status"] != string(ToolCallAvailable) {
+		t.Fatalf("multiple association = %#v", multiple)
+	}
+	toolCallIDs := multiple.Payload["tool_call_ids"].([]any)
+	if len(toolCallIDs) != 2 || toolCallIDs[0] != "tool-1" || toolCallIDs[1] != "tool-2" {
+		t.Fatalf("multiple tool_call_ids = %#v", toolCallIDs)
+	}
+	none := events[1]
+	if none.ToolCallID != "" ||
+		none.Payload["tool_call_status"] != string(ToolCallUnavailable) ||
+		none.Payload["tool_call_unavailable_reason"] != string(ToolCallUnavailableModelReturnedFinalText) {
+		t.Fatalf("no-tool association = %#v", none)
+	}
+	if _, exists := none.Payload["tool_call_ids"]; exists {
+		t.Fatalf("no-tool event retained tool call ids: %#v", none.Payload)
+	}
+}
 
 func TestAskUserQuestionPauseAndResume(t *testing.T) {
 	repository := NewMemoryRepository()

@@ -3,26 +3,26 @@ package agentservice
 import "sync"
 
 type Subscription struct {
-	Events <-chan Event
+	Wake   <-chan struct{}
 	Cancel func()
 }
 
 type EventBroker struct {
 	mu          sync.RWMutex
 	nextID      uint64
-	subscribers map[string]map[uint64]chan Event
+	subscribers map[string]map[uint64]chan struct{}
 }
 
 func NewEventBroker() *EventBroker {
-	return &EventBroker{subscribers: make(map[string]map[uint64]chan Event)}
+	return &EventBroker{subscribers: make(map[string]map[uint64]chan struct{})}
 }
 
-func (b *EventBroker) Publish(event Event) {
+func (b *EventBroker) Publish(runID string) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	for _, channel := range b.subscribers[event.RunID] {
+	for _, channel := range b.subscribers[runID] {
 		select {
-		case channel <- event:
+		case channel <- struct{}{}:
 		default:
 			// A slow subscriber can recover skipped events from PostgreSQL by seq.
 		}
@@ -34,15 +34,15 @@ func (b *EventBroker) Subscribe(runID string) Subscription {
 	defer b.mu.Unlock()
 	b.nextID++
 	subscriptionID := b.nextID
-	channel := make(chan Event, 64)
+	channel := make(chan struct{}, 1)
 	if b.subscribers[runID] == nil {
-		b.subscribers[runID] = make(map[uint64]chan Event)
+		b.subscribers[runID] = make(map[uint64]chan struct{})
 	}
 	b.subscribers[runID][subscriptionID] = channel
 
 	var once sync.Once
 	return Subscription{
-		Events: channel,
+		Wake: channel,
 		Cancel: func() {
 			once.Do(func() {
 				b.mu.Lock()

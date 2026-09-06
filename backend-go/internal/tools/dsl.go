@@ -36,6 +36,8 @@ func (t GenerateDSLTool) Definition() Definition {
 			"never as assert_visible. Targets must be grounded in verified page elements. " +
 			"When a goal requires search through page controls, preserve the verified input then click steps; " +
 			"do not replace them with goto to a constructed search-result URL. " +
+			"Input trigger is optional and only accepts Enter or Tab; omit it for ordinary semantic input, " +
+			"and use a separate click step for a search button. " +
 			"Do not author candidates, match_count, or locator_confidence; locator preflight adds them.",
 		InputSchema: json.RawMessage(`{
 			"type":"object",
@@ -99,7 +101,7 @@ func (t GenerateDSLTool) Definition() Definition {
 												"action":{"type":"string","const":"input"},
 												"target":{"type":"string"},
 												"value":{"type":"string"},
-												"trigger":{"type":"string"},
+												"trigger":{"type":["string","null"],"enum":["Enter","Tab",null],"description":"Optional key pressed after input. Omit for ordinary semantic input; click search buttons with a separate click step."},
 												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
 												"page_state":{"type":"string"},
 												"preconditions":{"type":"array","items":{

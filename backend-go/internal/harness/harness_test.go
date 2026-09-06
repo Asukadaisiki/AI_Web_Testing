@@ -19,6 +19,25 @@ type scriptedModel struct {
 	requests  [][]agent.Message
 }
 
+type telemetryModel struct{}
+
+func (telemetryModel) Complete(
+	ctx context.Context,
+	_ []agent.Message,
+	_ []agent.ToolDefinition,
+) (agent.ModelResponse, error) {
+	telemetry := agent.ModelTelemetry{
+		Provider: "test", RequestedModel: "requested", ResolvedModel: "resolved",
+		Prompt:   agent.PromptSpec{Version: agent.SystemPromptVersion},
+		Usage:    agent.ModelUsage{Status: agent.UsageUnavailable},
+		Attempts: []agent.ModelAttempt{{Attempt: 1, Status: "succeeded"}},
+	}
+	if err := agent.EmitTelemetry(ctx, telemetry, nil); err != nil {
+		return agent.ModelResponse{}, err
+	}
+	return agent.ModelResponse{Content: "done", Telemetry: telemetry}, nil
+}
+
 type failingTool struct{}
 
 type cancellableTool struct {
@@ -75,6 +94,37 @@ func TestSystemPromptRequiresRealSearchControls(t *testing.T) {
 	}
 	if !strings.Contains(defaultSystemPrompt, "Never replace those actions with goto") {
 		t.Fatal("system prompt does not prohibit direct search URL bypass")
+	}
+	if !strings.Contains(defaultSystemPrompt, "Omit trigger for ordinary semantic input") ||
+		!strings.Contains(defaultSystemPrompt, "search-button action as a separate click step") {
+		t.Fatal("system prompt does not define safe input trigger semantics")
+	}
+}
+
+func TestHarnessPersistsLLMTelemetryBeforeCompletion(t *testing.T) {
+	runService := agentservice.NewService(agentservice.NewMemoryRepository())
+	registry, err := tools.NewRegistry(tools.AskUserTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(runService, telemetryModel{}, registry, 2)
+	run, err := engine.Start(context.Background(), "conversation-1", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := engine.ListEvents(context.Background(), run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 6 || events[1].Type != agentservice.EventResearchLLMCall ||
+		events[1].StepID == "" || events[5].Type != agentservice.EventRunFinished {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[1].ToolCallID != "" ||
+		events[1].Payload["tool_call_status"] != string(agentservice.ToolCallUnavailable) ||
+		events[1].Payload["tool_call_unavailable_reason"] !=
+			string(agentservice.ToolCallUnavailableModelReturnedFinalText) {
+		t.Fatalf("final text association = %#v", events[1])
 	}
 }
 

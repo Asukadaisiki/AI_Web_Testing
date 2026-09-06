@@ -2,6 +2,7 @@ package agentservice
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"sync"
 	"time"
@@ -80,7 +81,7 @@ func (r *MemoryRepository) CancelRun(
 	event.RunID = run.ID
 	event.ConversationID = run.ConversationID
 	event.Seq = int64(len(r.events[runID]) + 1)
-	event.Payload = cloneMap(event.Payload)
+	event = normalizeEvent(event)
 	r.events[runID] = append(r.events[runID], event)
 	return cloneRun(run), event, true, nil
 }
@@ -97,7 +98,7 @@ func (r *MemoryRepository) AppendEvent(_ context.Context, event Event) (Event, e
 		return Event{}, ErrRunCancelled
 	}
 	event.Seq = int64(len(r.events[event.RunID]) + 1)
-	event.Payload = cloneMap(event.Payload)
+	event = normalizeEvent(event)
 	r.events[event.RunID] = append(r.events[event.RunID], event)
 	return event, nil
 }
@@ -152,4 +153,17 @@ func cloneMap(source map[string]any) map[string]any {
 	result := make(map[string]any, len(source))
 	maps.Copy(result, source)
 	return result
+}
+
+func normalizeEvent(event Event) Event {
+	encoded, err := json.Marshal(event.Payload)
+	if err != nil {
+		return event
+	}
+	var payload map[string]any
+	if json.Unmarshal(encoded, &payload) == nil {
+		event.Payload = payload
+	}
+	event.Timestamp = event.Timestamp.UTC()
+	return event
 }

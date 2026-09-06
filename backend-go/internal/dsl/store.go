@@ -38,6 +38,7 @@ var (
 	targetStrategies   = stringSet(
 		"css", "xpath", "data-testid", "element_id", "tag",
 	)
+	inputTriggers      = stringSet("Enter", "Tab")
 	postconditionTypes = stringSet(
 		"url_contains", "url_changes", "text_visible", "text_gone",
 		"element_visible", "element_gone", "network_request", "dom_changed",
@@ -452,12 +453,13 @@ func validateStep(index int, action string, step map[string]any) error {
 	if !validOptionalEnum(step, "target_strategy", targetStrategies) {
 		return fmt.Errorf("case.steps[%d].target_strategy is invalid", index)
 	}
-	for _, field := range []string{"page_state", "trigger"} {
-		if value, exists := step[field]; exists && value != nil {
-			if _, ok := value.(string); !ok {
-				return fmt.Errorf("case.steps[%d].%s must be a string", index, field)
-			}
+	if value, exists := step["page_state"]; exists && value != nil {
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("case.steps[%d].page_state must be a string", index)
 		}
+	}
+	if action == "input" && !validOptionalEnum(step, "trigger", inputTriggers) {
+		return fmt.Errorf("case.steps[%d].trigger must be Enter, Tab, or null", index)
 	}
 	if action == "wait_for" {
 		if rawTimeout, exists := step["timeout_ms"]; exists {

@@ -17,6 +17,7 @@ type AgentEventType =
   | "tool.finished"
   | "tool.failed"
   | "artifact.published"
+  | "research.llm_call"
   | "run.finished"
   | "run.failed"
   | "run.cancelled";
@@ -49,7 +50,32 @@ export interface AgentQuestion {
   options?: AgentQuestionOption[];
 }
 
-export interface AgentEvent {
+type ToolCallUnavailableReason =
+  | "model_returned_final_text"
+  | "model_attempt_failed_without_response";
+
+type ResearchLLMCallToolAssociation =
+  | {
+      tool_call_status: "available";
+      tool_call_ids: string[];
+      tool_call_unavailable_reason?: never;
+    }
+  | {
+      tool_call_status: "unavailable";
+      tool_call_ids?: never;
+      tool_call_unavailable_reason: ToolCallUnavailableReason;
+    };
+
+export type ResearchLLMCallPayloadV1 = Record<string, unknown> & {
+  schema_version: "research.llm_call.v1";
+  logical_call_id: string;
+  attempt: number;
+  attempt_status: string;
+} & ResearchLLMCallToolAssociation;
+
+export interface AgentEvent<
+  Payload extends Record<string, unknown> = Record<string, unknown>,
+> {
   seq: number;
   type: AgentEventType;
   conversation_id: string;
@@ -59,7 +85,7 @@ export interface AgentEvent {
   parent_id?: string;
   checkpoint_id?: string;
   timestamp: string;
-  payload: Record<string, unknown>;
+  payload: Payload;
 }
 
 export interface AgentArtifact {

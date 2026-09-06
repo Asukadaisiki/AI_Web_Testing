@@ -46,6 +46,7 @@ func main() {
 	repository := agentservice.NewPostgresRepository(database)
 	runService := agentservice.NewService(repository)
 	model, err := llm.NewOpenAIClient(
+		cfg.LLMProvider,
 		cfg.LLMBaseURL,
 		cfg.LLMAPIKey,
 		cfg.LLMModel,

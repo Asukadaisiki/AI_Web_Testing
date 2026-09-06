@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -21,6 +22,43 @@ type staticModel struct{}
 
 type blockingModel struct {
 	started chan struct{}
+}
+
+type subscribeFirstAPI struct {
+	AgentAPI
+	subscribed bool
+	runID      string
+	event      agentservice.Event
+}
+
+func (api *subscribeFirstAPI) Subscribe(runID string) agentservice.Subscription {
+	api.subscribed = true
+	api.runID = runID
+	wake := make(chan struct{})
+	return agentservice.Subscription{Wake: wake, Cancel: func() { close(wake) }}
+}
+
+func (api *subscribeFirstAPI) ListOwnedEvents(
+	_ context.Context,
+	runID string,
+	_ int64,
+	afterSeq int64,
+) ([]agentservice.Event, error) {
+	if !api.subscribed {
+		return nil, errors.New("history queried before subscription")
+	}
+	if runID != api.runID || api.event.Seq <= afterSeq {
+		return nil, nil
+	}
+	return []agentservice.Event{api.event}, nil
+}
+
+func (api *subscribeFirstAPI) GetOwnedRun(
+	context.Context,
+	string,
+	int64,
+) (agentservice.AgentRun, error) {
+	return agentservice.AgentRun{Status: agentservice.RunStatusCompleted}, nil
 }
 
 func (staticModel) Complete(
@@ -391,5 +429,100 @@ func TestEncodeSSEEvent(t *testing.T) {
 	}
 	if decoded.RunID != "run-1" {
 		t.Fatalf("decoded event = %#v", decoded)
+	}
+	rest, err := marshalEventList([]agentservice.Event{event})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(rest, data) {
+		t.Fatalf("REST bytes do not contain shared MarshalEvent bytes:\n%s\n%s", rest, data)
+	}
+}
+
+func TestResearchLLMCallRESTAndSSEAssociationContract(t *testing.T) {
+	tests := []struct {
+		name       string
+		toolCallID string
+		payload    map[string]any
+	}{
+		{
+			name:       "single",
+			toolCallID: "tool-1",
+			payload: map[string]any{
+				"schema_version":   agentservice.ResearchLLMCallSchemaV1,
+				"tool_call_status": agentservice.ToolCallAvailable,
+				"tool_call_ids":    []string{"tool-1"},
+			},
+		},
+		{
+			name: "multiple",
+			payload: map[string]any{
+				"schema_version":   agentservice.ResearchLLMCallSchemaV1,
+				"tool_call_status": agentservice.ToolCallAvailable,
+				"tool_call_ids":    []string{"tool-1", "tool-2"},
+			},
+		},
+		{
+			name: "unavailable",
+			payload: map[string]any{
+				"schema_version":               agentservice.ResearchLLMCallSchemaV1,
+				"tool_call_status":             agentservice.ToolCallUnavailable,
+				"tool_call_unavailable_reason": agentservice.ToolCallUnavailableModelReturnedFinalText,
+			},
+		},
+		{
+			name: "legacy",
+			payload: map[string]any{
+				"schema_version": agentservice.ResearchLLMCallSchemaV1,
+			},
+		},
+	}
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			event := agentservice.Event{
+				Seq: int64(index + 1), Type: agentservice.EventResearchLLMCall,
+				RunID: "run-1", StepID: "step-1", ToolCallID: testCase.toolCallID,
+				Timestamp: time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC),
+				Payload:   testCase.payload,
+			}
+			_, eventType, sseData, err := encodeSSEEvent(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if eventType != string(agentservice.EventResearchLLMCall) {
+				t.Fatalf("event type = %q", eventType)
+			}
+			restData, err := marshalEventList([]agentservice.Event{event})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rest struct {
+				Events []json.RawMessage `json:"events"`
+			}
+			if err := json.Unmarshal(restData, &rest); err != nil {
+				t.Fatal(err)
+			}
+			if len(rest.Events) != 1 || !bytes.Equal(rest.Events[0], sseData) {
+				t.Fatalf("REST/SSE mismatch:\n%s\n%s", restData, sseData)
+			}
+		})
+	}
+}
+
+func TestStreamSubscribesBeforeHistoryReplay(t *testing.T) {
+	api := &subscribeFirstAPI{event: agentservice.Event{
+		Seq: 1, Type: agentservice.EventRunFinished, RunID: "run-1",
+		ConversationID: "conversation-1", Timestamp: time.Now().UTC(),
+		Payload: map[string]any{},
+	}}
+	subscription, events, err := subscribeAndList(
+		context.Background(), api, "run-1", 1, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.Cancel()
+	if !api.subscribed || len(events) != 1 || events[0].Seq != 1 {
+		t.Fatalf("subscribed = %v, events = %#v", api.subscribed, events)
 	}
 }

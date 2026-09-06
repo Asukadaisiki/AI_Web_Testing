@@ -252,7 +252,12 @@ func (h *Handler) listEvents(ctx context.Context, c *app.RequestContext) {
 		writeServiceError(c, err)
 		return
 	}
-	c.JSON(consts.StatusOK, map[string]any{"events": events})
+	data, err := marshalEventList(events)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.Data(consts.StatusOK, "application/json; charset=utf-8", data)
 }
 
 func (h *Handler) resumeToolCall(ctx context.Context, c *app.RequestContext) {
@@ -292,12 +297,13 @@ func (h *Handler) streamEvents(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	runID := c.Param("run_id")
-	history, err := h.agent.ListOwnedEvents(ctx, runID, identity.UserID, afterSeq)
+	subscription, history, err := subscribeAndList(
+		ctx, h.agent, runID, identity.UserID, afterSeq,
+	)
 	if err != nil {
 		writeServiceError(c, err)
 		return
 	}
-	subscription := h.agent.Subscribe(runID)
 	defer subscription.Cancel()
 	writer := sse.NewWriter(c)
 	defer writer.Close()
@@ -309,14 +315,26 @@ func (h *Handler) streamEvents(ctx context.Context, c *app.RequestContext) {
 		}
 		lastSeq = event.Seq
 	}
-	run, err := h.agent.GetOwnedRun(ctx, runID, identity.UserID)
-	if err != nil || isTerminal(run.Status) {
-		return
-	}
-
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()
 	for {
+		run, runErr := h.agent.GetOwnedRun(ctx, runID, identity.UserID)
+		if runErr != nil {
+			return
+		}
+		if isTerminal(run.Status) {
+			persisted, listErr := h.agent.ListOwnedEvents(ctx, runID, identity.UserID, lastSeq)
+			if listErr != nil {
+				return
+			}
+			for _, event := range persisted {
+				if writeSSEEvent(writer, event) != nil {
+					return
+				}
+				lastSeq = event.Seq
+			}
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -324,24 +342,38 @@ func (h *Handler) streamEvents(ctx context.Context, c *app.RequestContext) {
 			if writeErr := writer.WriteKeepAlive(); writeErr != nil {
 				return
 			}
-		case event, ok := <-subscription.Events:
+		case _, ok := <-subscription.Wake:
 			if !ok {
 				return
 			}
-			if event.Seq <= lastSeq {
-				continue
-			}
-			if writeErr := writeSSEEvent(writer, event); writeErr != nil {
+			persisted, listErr := h.agent.ListOwnedEvents(ctx, runID, identity.UserID, lastSeq)
+			if listErr != nil {
 				return
 			}
-			lastSeq = event.Seq
-			if event.Type == agentservice.EventRunFinished ||
-				event.Type == agentservice.EventRunFailed ||
-				event.Type == agentservice.EventRunCancelled {
-				return
+			for _, event := range persisted {
+				if writeErr := writeSSEEvent(writer, event); writeErr != nil {
+					return
+				}
+				lastSeq = event.Seq
 			}
 		}
 	}
+}
+
+func subscribeAndList(
+	ctx context.Context,
+	api AgentAPI,
+	runID string,
+	actorUserID int64,
+	afterSeq int64,
+) (agentservice.Subscription, []agentservice.Event, error) {
+	subscription := api.Subscribe(runID)
+	events, err := api.ListOwnedEvents(ctx, runID, actorUserID, afterSeq)
+	if err != nil {
+		subscription.Cancel()
+		return agentservice.Subscription{}, nil, err
+	}
+	return subscription, events, nil
 }
 
 func parseAfterSeq(c *app.RequestContext) (int64, error) {
@@ -368,11 +400,32 @@ func writeSSEEvent(writer *sse.Writer, event agentservice.Event) error {
 }
 
 func encodeSSEEvent(event agentservice.Event) (string, string, []byte, error) {
-	data, err := json.Marshal(event)
+	data, err := MarshalEvent(event)
 	if err != nil {
 		return "", "", nil, err
 	}
 	return strconv.FormatInt(event.Seq, 10), string(event.Type), data, nil
+}
+
+func MarshalEvent(event agentservice.Event) ([]byte, error) {
+	return json.Marshal(event)
+}
+
+func marshalEventList(events []agentservice.Event) ([]byte, error) {
+	var buffer strings.Builder
+	buffer.WriteString(`{"events":[`)
+	for index, event := range events {
+		data, err := MarshalEvent(event)
+		if err != nil {
+			return nil, err
+		}
+		if index > 0 {
+			buffer.WriteByte(',')
+		}
+		buffer.Write(data)
+	}
+	buffer.WriteString(`]}`)
+	return []byte(buffer.String()), nil
 }
 
 func isTerminal(status agentservice.RunStatus) bool {

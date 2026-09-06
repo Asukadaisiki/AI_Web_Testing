@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +295,10 @@ func TestGenerateDSLToolSchemaUsesRuntimeTargetStrategyEnum(t *testing.T) {
 	if !strings.Contains(definition.Description, "do not replace them with goto") {
 		t.Fatal("generate_dsl contract does not require real search input and click")
 	}
+	if !strings.Contains(definition.Description, "omit it for ordinary semantic input") ||
+		!strings.Contains(definition.Description, "separate click step for a search button") {
+		t.Fatal("generate_dsl contract does not explain input trigger semantics")
+	}
 	var schema map[string]any
 	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
 		t.Fatalf("decode generate_dsl schema: %v", err)
@@ -317,6 +322,34 @@ func TestGenerateDSLToolSchemaUsesRuntimeTargetStrategyEnum(t *testing.T) {
 			t.Fatalf("target_strategy type = %#v, want nullable string", types)
 		}
 	}
+}
+
+func TestGenerateDSLToolSchemaRestrictsInputTrigger(t *testing.T) {
+	definition := NewGenerateDSLTool(&fakeCapabilityClient{}).Definition()
+	var schema map[string]any
+	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
+		t.Fatalf("decode generate_dsl schema: %v", err)
+	}
+	caseSchema := schema["properties"].(map[string]any)["case"].(map[string]any)
+	steps := caseSchema["properties"].(map[string]any)["steps"].(map[string]any)
+	variants := steps["items"].(map[string]any)["oneOf"].([]any)
+	for _, raw := range variants {
+		properties := raw.(map[string]any)["properties"].(map[string]any)
+		action := properties["action"].(map[string]any)["const"]
+		if action != "input" {
+			continue
+		}
+		trigger := properties["trigger"].(map[string]any)
+		want := []any{"Enter", "Tab", nil}
+		if !reflect.DeepEqual(trigger["enum"], want) {
+			t.Fatalf("trigger enum = %#v, want %#v", trigger["enum"], want)
+		}
+		if !reflect.DeepEqual(trigger["type"], []any{"string", "null"}) {
+			t.Fatalf("trigger type = %#v, want nullable string", trigger["type"])
+		}
+		return
+	}
+	t.Fatal("input schema variant not found")
 }
 
 func TestExecuteDSLToolRequiresMatchingApproval(t *testing.T) {

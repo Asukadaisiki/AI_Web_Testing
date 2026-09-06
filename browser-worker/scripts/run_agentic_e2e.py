@@ -757,15 +757,13 @@ def _run_agentic_goal(
         )
         context["run"] = run
         context["events"] = events
+        pending: dict[str, Any] | None = None
         current_batch_ids = {
             int(batch["id"]) for batch in client.list_batches(project_id)
         }
 
-        if approvals:
-            if run.get("approved_generation_id") != approvals[-1]["generation_id"]:
-                raise AgenticE2EError(
-                    "run approval is not bound to the preceding generation"
-                )
+        if approvals and "batch_id" not in approvals[-1]:
+            preceding_approval = approvals[-1]
             new_batch_ids = current_batch_ids - observed_batch_ids
             if len(new_batch_ids) != 1:
                 raise AgenticE2EError(
@@ -773,16 +771,18 @@ def _run_agentic_goal(
                 )
             batch_id = next(iter(new_batch_ids))
             report = _validate_batch_binding(
-                client, events, approvals[-1], batch_id
+                client, events, preceding_approval, batch_id
             )
-            approvals[-1]["batch_ids_after_approval"] = sorted(current_batch_ids)
-            approvals[-1]["batch_id"] = batch_id
-            approvals[-1]["batch_status"] = report.get("status")
+            preceding_approval["batch_ids_after_approval"] = sorted(
+                current_batch_ids
+            )
+            preceding_approval["batch_id"] = batch_id
+            preceding_approval["batch_status"] = report.get("status")
             batch_rounds.append(
                 {
                     "round": len(batch_rounds) + 1,
-                    "generation_id": approvals[-1]["generation_id"],
-                    "dsl_sha256": approvals[-1]["dsl_sha256"],
+                    "generation_id": preceding_approval["generation_id"],
+                    "dsl_sha256": preceding_approval["dsl_sha256"],
                     "batch_id": batch_id,
                     "status": report.get("status"),
                 }
@@ -790,25 +790,58 @@ def _run_agentic_goal(
             if report.get("status") != "passed":
                 recoveries.append(
                     {
-                        "from_generation_id": approvals[-1]["generation_id"],
+                        "from_generation_id": preceding_approval["generation_id"],
                         "failed_batch_id": batch_id,
                         "failed_batch_status": report.get("status"),
                     }
                 )
             final_report = report
             observed_batch_ids = current_batch_ids
+
+            approved_generation_id = run.get("approved_generation_id")
+            if approved_generation_id != preceding_approval["generation_id"]:
+                if run.get("status") == "waiting_user":
+                    pending = _pending_checkpoint(run, events)
+                latest_generation_id = int(
+                    run.get("latest_generation_id") or 0
+                )
+                is_next_generation_approval = (
+                    pending is not None
+                    and _checkpoint_kind(pending) == "approve_dsl"
+                    and latest_generation_id
+                    > preceding_approval["generation_id"]
+                    and approved_generation_id is None
+                )
+                if not is_next_generation_approval:
+                    raise AgenticE2EError(
+                        "run approval is not bound to the preceding generation"
+                    )
         elif current_batch_ids != baseline_batch_ids:
             raise AgenticE2EError("a formal batch was created before DSL approval")
 
         if run.get("status") != "waiting_user":
             break
-        pending = _pending_checkpoint(run, events)
+        if pending is None:
+            pending = _pending_checkpoint(run, events)
         if _checkpoint_kind(pending) != "approve_dsl":
             raise AgenticE2EError("run requires clarification before DSL approval")
 
         generation_id = int(run.get("latest_generation_id") or 0)
         if generation_id < 1:
             raise AgenticE2EError("approval checkpoint has no latest generation")
+        if approvals:
+            if generation_id <= approvals[-1]["generation_id"]:
+                raise AgenticE2EError(
+                    "new approval checkpoint did not advance the generation"
+                )
+            if pending.get("checkpoint_id") in {
+                approval["checkpoint_id"] for approval in approvals
+            } or pending.get("tool_call_id") in {
+                approval["tool_call_id"] for approval in approvals
+            }:
+                raise AgenticE2EError(
+                    "new approval reused a preceding checkpoint"
+                )
         generated = _generation_result(events, generation_id)
         dsl_artifact = _artifact(events, "dsl_generation", generation_id)
         dsl_case = generated.get("case")

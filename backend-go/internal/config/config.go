@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	Address          string
+	LLMProvider      string
 	LLMBaseURL       string
 	LLMAPIKey        string
 	LLMModel         string
@@ -36,6 +37,7 @@ func Load() Config {
 	}
 	return Config{
 		Address:          address,
+		LLMProvider:      strings.TrimSpace(os.Getenv("AI_PLANNING_PROVIDER")),
 		LLMBaseURL:       strings.TrimRight(os.Getenv("AI_PLANNING_BASE_URL"), "/"),
 		LLMAPIKey:        os.Getenv("AI_PLANNING_API_KEY"),
 		LLMModel:         os.Getenv("AI_PLANNING_MODEL"),

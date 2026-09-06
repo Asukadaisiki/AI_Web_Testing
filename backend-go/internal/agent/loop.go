@@ -8,6 +8,7 @@ import (
 )
 
 type TurnHandler func(context.Context, ModelResponse) (continueLoop bool, err error)
+type ModelContextFactory func(context.Context) context.Context
 
 type Loop struct {
 	model        Model
@@ -38,9 +39,22 @@ func (l *Loop) Run(
 	transcript *[]Message,
 	handle TurnHandler,
 ) error {
+	return l.RunWithModelContext(ctx, transcript, nil, handle)
+}
+
+func (l *Loop) RunWithModelContext(
+	ctx context.Context,
+	transcript *[]Message,
+	modelContext ModelContextFactory,
+	handle TurnHandler,
+) error {
 	for range l.maxTurns {
+		callContext := ctx
+		if modelContext != nil {
+			callContext = modelContext(ctx)
+		}
 		response, err := l.model.Complete(
-			ctx,
+			callContext,
 			append([]Message{{Role: "system", Content: l.systemPrompt}}, (*transcript)...),
 			l.definitions,
 		)

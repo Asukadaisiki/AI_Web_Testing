@@ -123,20 +123,40 @@
 
 ## Stage 2：LLM 与运行成本遥测
 
-- [ ] Task 2.1：扩展模型响应与事件。
-  - [ ] 记录 provider、model、prompt version。
-  - [ ] 记录 input/output/total tokens。
-  - [ ] 记录请求 latency、重试和错误类别。
-  - [ ] usage 缺失时记录 unavailable，不得写 0。
-- [ ] Task 2.2：持久化并公开遥测。
-  - [ ] 使用版本化 research event payload。
-  - [ ] 确保 SSE 重放和 PostgreSQL 查询一致。
-  - [ ] 对敏感字段执行现有日志脱敏规则。
-- [ ] Task 2.3：验收、提交并推送 Stage 2。
-  - [ ] Canonical Goal 连续 3 次通过。
-  - [ ] 每次 LLM call 均可关联 Run/Step/ToolCall。
-  - [ ] Token 与 latency 可从持久化事实重算。
-  - [ ] 提交信息：`feat: record llm usage telemetry`
+- [x] Task 2.1：扩展模型响应与事件。
+  - [x] 记录 provider、model、prompt version。
+  - [x] 记录 input/output/total tokens。
+  - [x] 记录请求 latency、重试和错误类别。
+  - [x] usage 缺失时记录 unavailable，不得写 0。
+- [x] Task 2.2：持久化并公开遥测。
+  - [x] 使用版本化 research event payload。
+  - [x] 确保 SSE 重放和 PostgreSQL 查询一致。
+  - [x] 对敏感字段执行现有日志脱敏规则。
+- [x] Task 2.3：完成 Stage 2 最终验收与提交前准备；commit/push 待主代理执行。
+  - [x] Canonical Goal 连续 3 次通过。
+  - [x] 真实浏览器门禁由官方 Canonical E2E 覆盖：通过长期 Browser API 执行真实 Chromium，不以独立 Chromium unittest 的 TRAE 外层 sandbox 退出码阻断。
+  - [x] 每次 LLM call 均可关联 Run/Step/ToolCall。
+  - [x] Token 与 latency 可从持久化事实重算。
+  - [x] 提交信息（提交前准备完成）：`feat: record llm usage telemetry`
+- [x] Task 2.3.1：收敛 Stage 2 独立 Chromium unittest 的 sandbox 根路径退出问题。
+  - [x] 复现 repo-local `TMPDIR` 与 `.venv/bin/python` 下测试断言通过、进程仍因 `Not allow operate files: /` 退出 1。
+  - [x] 确认 unittest 业务断言稳定 1/1 `OK`，非零退出来自测试子进程结束后的 TRAE 外层 sandbox 根路径访问限制，不判定为产品失败。
+  - [x] 将该测试降为环境受限诊断项：保留真实退出码和 sandbox trace，禁止使用 `|| true` 伪造成功，但不再作为 Stage 2 阻断门禁。
+- [x] Task 2.3.2：确认四个 repo-local 运行目录无法规避 TRAE 外层 sandbox 限制并采用替代证据。
+  - [x] 将 `HOME`、`TMPDIR`、`XDG_CACHE_HOME`、`PLAYWRIGHT_BROWSERS_PATH` 全部固定为仓库内绝对路径后仍稳定复现业务断言 1/1 `OK`、外层 sandbox 退出 1。
+  - [x] 将问题边界定位为子进程退出后的 TRAE 外层 sandbox 限制，不修改业务代码、不放宽 sandbox、不忽略退出码。
+  - [x] Stage 2 真实浏览器阻断证据改由官方 Canonical E2E 提供；该链路通过长期 Browser API 执行真实 Chromium，独立进程测试仅保留为诊断项。
+- [x] Task 2.3.3：补齐无 ToolCall 模型调用的显式关联合同。
+  - [x] `research.llm_call.v1` 每个新事件均记录 `tool_call_status`；单/多 ToolCall 为 `available` 并保留真实 `tool_call_ids`，无 ToolCall 最终文本为 `unavailable/model_returned_final_text`，失败 attempt 为 `unavailable/model_attempt_failed_without_response`，不制造伪 ID。
+  - [x] 单 ToolCall 仅在事件级写对应 `tool_call_id`；多 ToolCall 的事件级字段为空但 payload 状态明确；旧事件缺少新增字段时保持可读取。
+  - [x] 增加单 ToolCall、多 ToolCall、无 ToolCall 和失败 attempt 的内存持久化、REST/SSE、Harness、前端类型与 PostgreSQL 回放测试。
+  - [x] 修复后完整静态门禁通过；Canonical Goal 连续 3 次与逐次 PostgreSQL 遥测重算按要求留给独立 Stage 2 验收。
+- [x] Task 2.3.4：修复 Canonical 受控修复进入第二次审批时的驱动器代际校验与非法 input trigger。
+  - [x] 复现 Run `run_7271a00b1898afb446109751`：Generation 129 的 Batch 123 / Execution 114 因 `trigger="Search Product textbox"` 被透传给 Playwright 而失败；Agent 生成 Generation 130 并进入第二次 `approve_dsl` 后，驱动器又因 `approved_generation_id` 已按新 generation 清空而误报上一代审批未绑定。
+  - [x] 驱动器先以唯一新 Batch/Execution 及其 DSL SHA 结算上一 approval，再允许 `latest_generation_id` 前进且 `approved_generation_id` 在新审批前为空；仍逐代校验 artifact、DSL SHA、checkpoint、审批和 Batch 唯一绑定。
+  - [x] Go Tool Schema、Go `ValidateCase` 和 Python `InputStep` 统一将 `trigger` 限制为可空的 `Enter|Tab`；缺省/null 兼容，空串、语义文本和其他按键在执行前拒绝，prompt 要求普通语义输入省略 trigger、搜索按钮使用独立 click。
+  - [x] 增加 Generation 129 失败 Batch -> Generation 130 -> 第二次审批回归及跨 Go/Python trigger canonical 合同测试，证明不会跳过失败首批、`first_pass=false`、不会误拒合法新审批，也不会放宽审批门。
+  - [x] 完整静态与专项门禁通过；按本轮要求不执行 live Canonical 3 次，最终 live 验收与逐 Run PostgreSQL 遥测重算仍归 Task 2.3。
 
 ## Stage 3：Research 数据模型
 

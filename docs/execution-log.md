@@ -56,6 +56,86 @@
 
 ## 任务记录
 
+## 2026-09-06 | Stage 2 最终交付
+
+- 任务：仅完成 Stage 2 提交前文档收口；确认 Task 2.1-2.3.4 与 Stage 2 checklist 除实际 commit/push 外均已完成，为主代理紧接着提交准备准确状态；不修改业务代码，不 commit/push。
+- 操作：复核 `tasks.md`、`checklist.md`、Stage 2 最终独立验收记录和 BUG-141..145；将 Task 2.3 与 Stage 2 commit/push 项统一标记为“提交前准备完成，commit/push 待主代理执行”，保留全局实际提交项未勾选；核对三次 Canonical Run、逐 Run token totals 与全部遥测门禁，不写入 commit SHA。
+- 结果：Stage 2 提交前交付完成，计划提交信息为 `feat: record llm usage telemetry`。最终通过样本为 Run `run_2c711b1f4ebf68964f76167f`、`run_db109f516446c6c086080c3a`、`run_54665eb2cfc8744afbc7f628`，token totals 依次为 2,190,967、1,691,112、2,671,567。三次均首批 passed、`first_pass=true`、无 recovery，正式执行、独立 DOM Oracle、Generation/Job/Execution canonical bytes 与 SHA、VLM=0 均通过。
+- 验证：逐 Run 的 logical/physical call 数一致，Run/Step、provider、requested/resolved model、prompt version、prompt/request/toolset hash、usage available/partial/unavailable、latency、retry、错误类别和 ToolCall available/unavailable 状态均可从 PostgreSQL 重算；REST/SSE 与 PostgreSQL 逐条一致，敏感字段命中为 0。静态门禁结果保持为 Go 全量及四个 PostgreSQL integration、Python 88 passed/1 个环境诊断项 skipped、Alembic 唯一 current/head `20260906_0040` 且无差异、Frontend Vitest 9/9、production build、Knip、compileall 全部通过。BUG-141、BUG-144、BUG-145 为 `fixed`；BUG-142、BUG-143 保持 `wont_fix（environment-limited）`，不误报为产品失败。
+- 后续：主代理可按 `feat: record llm usage telemetry` 创建 Stage 2 聚焦提交并推送 `origin/main`；本记录不声明 commit/push 已执行，也不包含虚假 commit SHA。
+
+## 2026-09-06 | Stage 2 最终独立验收通过
+
+- 任务：从完整门禁重新执行 Stage 2 最终独立验收并收口；独立 Chromium unittest 按 BUG-142/143 的 `environment-limited` 结论不阻断，以官方长期 Browser API Canonical 提供真实 Chromium 证据；重点复核 input trigger、多 generation 逐轮审批与 `first_pass`，逐 Run 重放并重算 LLM telemetry；不修改业务代码、不 commit/push。
+- 操作：执行显式 PostgreSQL DSN 的 Go 全量 test/vet/build、Python lock/全量测试、Alembic upgrade/current/heads/check、Frontend test/build/repo-local cache Knip、compileall 和 diff check。专项覆盖 usage available/partial/unavailable、408/429/500/502/503/504、普通 4xx、取消、caller deadline、retry exhausted、每物理 attempt 事件、prompt/request/toolset SHA-256、敏感字段白名单、单/多/无 ToolCall、失败 attempt、PG normalized/legacy replay、REST/SSE 重放及先订阅后补洞；临时验收测试运行后已删除。Trigger 合同覆盖仅 null/Enter/Tab，Driver 回归覆盖 Generation 129 失败首批到 Generation 130 二次审批并保持 `first_pass=false`。随后重启长期 Browser API、Execution Worker 和 20-turn AgentService，显式关闭 VLM，从零串行执行三次纯自然语言 Canonical，完成后停止三个服务。
+- 结果：Canonical #1 为 Project 88 / Session 37 / Run `run_2c711b1f4ebf68964f76167f` / Generation 139 / Batch 132 / Execution 123，14/14 步；#2 为 Project 89 / Session 38 / Run `run_db109f516446c6c086080c3a` / Generation 140 / Batch 133 / Execution 124，12/12 步；#3 为 Project 90 / Session 39 / Run `run_54665eb2cfc8744afbc7f628` / Generation 141 / Batch 134 / Execution 125，15/15 步。三次均首批 passed、`first_pass=true`、无 recovery，真实执行 Blue Top search input 与独立 search click，Report、独立 DOM Oracle、Generation/Job/Execution canonical bytes 与 SHA、VLM=0 全部通过。三代 input trigger 均为 null，非法 trigger 为 0。Task 2.3/2.3.4 和 Stage 2 非提交验收项已完成；Stage 2 commit/push 保持未完成。
+- 验证：Go 全量通过且四个 PostgreSQL integration 无 skip，Python 88 passed/1 个环境诊断项 skipped，Alembic 唯一 current/head 为 `20260906_0040` 且无差异，Frontend Vitest 9/9、production build、Knip、compileall 通过。Run #1/#2/#3 的 logical/physical calls 分别为 12/12、11/11、13/13；tokens 分别为 2,171,899/19,068/2,190,967、1,637,895/53,217/1,691,112、2,644,510/27,057/2,671,567；attempt latency 分别为 212,510/475,723/297,467 ms，retry 均为 0。每个事件的 Run/Step、provider=`unself`、requested/resolved model=`deepseek-v4-flash`、prompt version=`agentcore.system.v1`、三个 hash、usage、latency、retry 与 ToolCall 状态均可重算；关联/元数据/敏感字段错误均为 0，每个 Run 最终文本均为 `unavailable/model_returned_final_text`，其余分别 11/10/12 条为 `available`。三 Run 的 PostgreSQL、REST 和 SSE LLM 事件逐条一致。
+- 后续：Stage 2 已具备提交前条件；本轮按要求未 commit/push。
+
+## 2026-09-06 | 实施 Stage 2 Task 2.3.4 / BUG-145
+
+- 任务：修复 Agentic E2E Driver 多 generation 审批状态机和 Generation 129 首次执行失败的非法 input trigger 根因；增加 129 失败到 130 二次审批及跨 Go/Python 合同回归，运行完整静态门禁，不执行 live Canonical 3 次，不 commit/push。
+- 操作：Driver 仅对尚未绑定 Batch 的 approval 结算一次，先要求唯一新 Batch 并以 execution DSL SHA 绑定上一 generation，再识别严格递增 generation 的全新 `approve_dsl` checkpoint；仅该状态允许服务清空 `approved_generation_id`，随后仍校验 generation result、artifact、声明/计算 SHA、checkpoint/tool call 唯一性和审批后 Batch。Go Tool Schema、Go `ValidateCase` 与 Python `InputStep` 统一将 trigger 限制为可空 `Enter|Tab`，prompt 明确普通语义输入省略 trigger、搜索按钮另用 click。
+- 结果：BUG-145 修复，Task 2.3.4 完成。Generation 129 失败 Batch 会被保留并写入 recovery，Generation 130 可合法进入第二次审批；第二批成功不会覆盖首批，`stage0.first_pass=false`。generation 未前进、重复 checkpoint/tool call、非唯一 Batch、artifact/SHA 不匹配仍失败；`trigger="Search Product textbox"`、空串和其他按键在正式执行前被拒绝。Task 2.3、Stage 2 live 连续 3 次、逐 Run PostgreSQL 遥测重算及 commit/push 保持未完成。
+- 验证：Go 全量 test 通过，4 个 PostgreSQL integration 均 PASS 且无 skip；`go vet ./...`、`go build ./...` 通过。Python `uv lock --check`、88 passed/1 个既有真实 Chromium 诊断项 skipped、compileall 通过。Alembic upgrade/current/heads/check 通过，唯一 current/head 为 `20260906_0040` 且无差异。Frontend Vitest 9/9、production build、repo-local cache Knip 通过；最终 diff check 与 BUG 编号唯一性通过。按要求未执行 live Canonical 3 次。
+- 后续：Task 2.3 独立验收需从完整门禁开始运行官方长期 Browser API Canonical 连续 3 次，并逐 Run 从 PostgreSQL 重算 ToolCall 关联、token、latency 和 retry；本轮未 commit/push。
+
+## 2026-09-06 | Stage 2 最终独立验收在 Canonical #3 二次审批失败
+
+- 任务：执行 Stage 2 最终独立验收并收口；读取 tasks/checklist 与 BUG-141..144，运行完整静态和遥测专项门禁，以官方长期 Browser API/真实 Chromium 连续执行 3 次 Canonical 并逐 Run 从 PostgreSQL 重算 calls/tokens/latency/retries；独立 Chromium unittest 按已记录环境限制不阻断；不修改业务代码、不 commit/push，失败时新增 task/bug/log 并停止。
+- 操作：执行带显式 pgx DSN 的 Go 全量 test/vet/build、四个 PostgreSQL integration、Python 默认全量、Alembic upgrade/current/heads/check、Frontend test/build/repo-local cache Knip、compileall、bug-log 唯一性和 diff check。专项覆盖 usage available/partial/unavailable、408/429/500/502/503/504 重试、普通 4xx 与取消不重试、context deadline/retry exhausted、每物理请求事件、prompt/request/toolset SHA-256、敏感字段白名单、单/多/无 ToolCall、失败 attempt、PG 规范化/legacy 回放、REST/SSE 逐字一致及先订阅后按 seq 补洞；partial/timeout 使用运行后删除的临时验收测试。随后重启 Browser API、Execution Worker 和 20-turn AgentService，显式关闭 VLM，串行运行三个全新 Canonical。
+- 结果：静态与专项门禁全部通过。Canonical #1 为 Project 81 / Run `run_bec2965f88b1e0a7e6bcb0e3` / Generation 127 / Batch 121 / Execution 112，14/14 步、首轮正式执行、独立 Oracle、审批 SHA、VLM=0、无 recovery 均通过；#2 为 Project 82 / Run `run_78471f2bb56cf1324ce5c48c` / Generation 128 / Batch 122 / Execution 113，15/15 步及相同门禁通过。#3 的 Project 83 / Run `run_7271a00b1898afb446109751` 在 Generation 129 的 Batch 123 / Execution 114 因 `Locator.press: Unknown key: "Search Product textbox"` 失败后生成修复版 Generation 130 并请求第二次审批；驱动器因新 generation 已合法清空 `approved_generation_id` 而误报上一代未绑定，取消 Run 并退出 1。新增 Task 2.3.4 / BUG-145 后停止；Task 2.3、Canonical 3 连过与 Stage 2 checklist 保持未完成，BUG-144 仍为 fixed。
+- 验证：Go 全量通过，`TestPostgresAgentEventReturnsNormalizedPayload`、`TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay`、`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 四项 PG integration 均 PASS 且无 skip；Python 86 passed/1 个环境诊断项 skipped；Alembic 唯一 current/head `20260906_0040` 且无差异；Frontend 9/9、production build、Knip、compileall、bug-log 唯一性和 diff check 通过。Run #1 数据库重算 10 logical/10 physical calls、tokens 1,302,198/19,122/1,321,320、attempt latency 191,977 ms、retry 0；Run #2 为 13/13、tokens 2,075,622/47,789/2,123,411、latency 361,393 ms、retry 0。两者缺失 Step/schema/hash/ToolCall status/unavailable reason 和敏感字段命中均为 0，最终文本均为 `unavailable/model_returned_final_text`。失败 Run #3 在停止前记录 12/12 calls、total tokens 2,387,191、latency 226,072 ms、retry 0，关联状态无缺失；未把该失败样本计入连续通过。
+- 后续：实施 Task 2.3.4，修复驱动器对多 generation/多审批的状态校验并补失败 Batch 到第二次审批回归；随后从完整门禁重新执行 Stage 2 最终验收。本轮三个验收服务均已停止，未 commit/push。
+
+## 2026-09-06 | 实施 Stage 2 Task 2.3.3 / BUG-144
+
+- 任务：为 `research.llm_call.v1` 定义版本化显式 ToolCall 关联合同，覆盖单/多/无 ToolCall 与失败 attempt 的持久化、REST/SSE、PostgreSQL 和前端类型；处理遗留 Run `run_c03fa73b69892ed231ed7f01`；运行完整静态门禁，不执行 Canonical 3 次，不 commit/push。
+- 操作：Go 新增 `ToolCallStatus` 与 `ToolCallUnavailableReason` 类型和 payload 白名单字段；每个物理 attempt 都写 `tool_call_status`。成功单/多 ToolCall 保留原始 `tool_call_ids`，仅单个时设置事件级 `tool_call_id`；最终文本和失败 attempt 分别写 `model_returned_final_text`、`model_attempt_failed_without_response`，不生成替代 ID。前端新增 `ResearchLLMCallPayloadV1` 判别联合类型。增加内存持久化、Harness、REST/SSE 共用 wire、真实 PostgreSQL 回放及 legacy payload 兼容测试。临时启动正式 AgentService 检查遗留 Run；默认 actor 的 GET 因所有权返回 403，随后只读查询确认该 Run 已不存在，因此未调用 cancel、未直接修改数据库，并停止临时服务。
+- 结果：Task 2.3.3 完成，BUG-144 修复。新事件的 ToolCall 关联状态均可判定；多工具事件级 ID 保持为空但 payload 明确，旧事件继续原样读取。Stage 2 的 Canonical 连续 3 次、逐次 PostgreSQL 遥测重算及 commit/push 保持未完成，留给独立验收。
+- 验证：聚焦测试覆盖单/多/无 ToolCall、失败 attempt、Harness 最终文本、REST/SSE 四种 wire（含 legacy）和 PostgreSQL 四种写入及 legacy 回放。完整门禁通过：显式 PostgreSQL DSN 的 Go 全量 test（4 个 integration 均 PASS）、`go vet ./...`、`go build ./...`；Python `uv lock --check`、86 passed/1 skipped、compileall；Alembic upgrade/current/heads/check，唯一 current/head 为 `20260906_0040` 且无差异；Frontend Vitest 9/9、production build、repo-local cache Knip；`git diff --check`。
+- 后续：由独立验收从完整门禁开始执行 Canonical Goal 连续 3 次，并逐次从 PostgreSQL 重算 ToolCall 关联、token 与 latency。本轮未 commit/push。
+
+## 2026-09-06 | Stage 2 最终独立验收在 Canonical #1 关联门禁失败
+
+- 任务：执行 Stage 2 最终独立验收；接受已记录的外部 sandbox 限制，不运行独立 Chromium unittest，完整执行其余静态门禁、LLM/事件专项及官方 Canonical 连续 3 次，并逐次从 PostgreSQL 重算遥测；不修改业务代码、不 commit/push，任一失败记录后停止。
+- 操作：读取 tasks/checklist 与 BUG-141..143；执行 Go 全量 test/vet/build、三个 PostgreSQL integration、Python 默认全量、Alembic upgrade/current/heads/check、Frontend test/build/repo-local cache Knip、compileall 和 diff check。专项验证 available/partial/unavailable usage、408/429/500/502/503/504 retry、普通 4xx 与取消不重试、timeout/retry exhausted、每物理请求事件、SHA-256、敏感字段白名单、PostgreSQL 规范化、REST/SSE 共用字节及先订阅后回放补洞；partial/timeout 使用运行后立即删除的临时验收测试，不修改业务代码。随后启动 Browser API、Execution Worker 和 20-turn AgentService，显式关闭 VLM，执行第 1 次 Canonical 并查询数据库。
+- 结果：所有静态与专项门禁通过。Canonical #1 为 Project 78 / Session 33 / Run `run_fa3eea9b15473865a2467d62` / Generation 122 / Batch 116 / Execution 107，正式执行 passed、12/12 步有 evidence、`first_pass=true`、无 recovery、VLM=0，独立 Oracle 精确验证 Blue Top / Rs. 500 / 1 / Rs. 500。数据库 10 次 logical call 对应 10 个 physical request，均有 Run/Step；但最终文本模型调用 `seq=78` 未产生 ToolCall，事件 `tool_call_id` 为空且无显式 unavailable 原因。按严格关联门禁和失败即停规则，未执行 Canonical #2/#3，Task 2.3 与 Stage 2 checklist 保持未完成，新增 Task 2.3.3 / BUG-144，并停止本轮三个服务。
+- 验证：Go 全量测试通过且 `TestPostgresAgentEventReturnsNormalizedPayload`、`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 三项 PG integration 无 skip；Go vet/build 通过；Python 86 passed/1 个独立 Chromium 环境诊断项按默认门控 skipped；Alembic 唯一 current/head `20260906_0040` 且 check 无差异；Frontend Vitest 8/8、production build、repo-local cache Knip、compileall、diff check 通过。专项测试全部通过。Canonical #1 的 provider=`unself`、requested/resolved model=`deepseek-v4-flash`、prompt version=`agentcore.system.v1`，usage 全部 available，Token 可重算为 input 1,598,875 / output 23,268 / total 1,622,143，模型总延迟与 attempt 延迟均为 224,413 ms，retry=0；schema/provider/model/prompt/hash/敏感字段异常均为 0，缺失 Step=0、缺失事件级 ToolCall=1。
+- 后续：实施 Task 2.3.3，为无 ToolCall 的模型调用增加显式版本化关联状态及回归；修复后从完整门禁重新执行 Canonical 连续 3 次。本轮未 commit/push。
+
+## 2026-09-06 | 收敛 Stage 2 真实浏览器门禁的环境限制
+
+- 任务：收敛 Task 2.3.1/2.3.2 与 BUG-142/143；不修改业务逻辑、不执行 Stage 2 最终验收、不 commit/push。
+- 操作：依据独立真实 Chromium unittest 业务断言稳定 1/1 `OK`、随后由 TRAE 外层 sandbox 因根路径访问改写为退出 1，且 repo-local `HOME`、`TMPDIR`、`XDG_CACHE_HOME`、`PLAYWRIGHT_BROWSERS_PATH` 均无法规避的事实，将该命令从 Stage 2 阻断门禁降为环境受限诊断项。诊断仍须保留真实退出码和 sandbox trace，禁止使用 `|| true`；Stage 2 真实浏览器门禁改由通过长期 Browser API 执行真实 Chromium 的官方 Canonical E2E 覆盖。
+- 结果：Task 2.3.1/2.3.2 按“外部 sandbox 限制并采用官方 HTTP/E2E 替代证据”完成；BUG-142/143 标记为 `wont_fix（environment-limited）`，明确不是产品失败。确认 `.playwright-browsers/` 无 tracked 文件且整个目录为本次代理创建的未跟踪缓存后，仅删除该目录。
+- 验证：未运行 Stage 2 最终验收；执行 `git diff --check`，并核对 `.playwright-browsers/` 已不存在、其他工作区文件未因清理被删除。
+- 后续：Task 2.3 仍需按现有未完成项运行官方 Canonical E2E、核对 LLM call 关联及 PostgreSQL token/latency 可重算性；本轮不 commit/push。
+
+## 2026-09-06 | Task 2.3.1 四目录 sandbox 复验仍失败
+
+- 任务：继续 Task 2.3.1 与 Stage 2 最终验收；先使用四个已存在的 repo-local 绝对目录运行真实 Chromium，命令必须退出 0，若仍触发 sandbox 则记录精确 trace 并停止；不修改业务代码、不 commit/push。
+- 操作：创建 `.sandbox-home`、`.sandbox-tmp`、`.sandbox-cache`、`.playwright-browsers`；在同样四个绝对路径环境下将当前虚拟环境所需 Chromium 1208、headless shell 1208 和 FFmpeg 1011 安装到 `.playwright-browsers`。随后在 `browser-worker/` 显式设置 `HOME=/Users/bytedance/project/AI_Web_Testing/.sandbox-home`、`TMPDIR=/Users/bytedance/project/AI_Web_Testing/.sandbox-tmp`、`XDG_CACHE_HOME=/Users/bytedance/project/AI_Web_Testing/.sandbox-cache`、`PLAYWRIGHT_BROWSERS_PATH=/Users/bytedance/project/AI_Web_Testing/.playwright-browsers`、`RUN_BROWSER_INTEGRATION=1`，直接执行 `/Users/bytedance/project/AI_Web_Testing/browser-worker/.venv/bin/python -m unittest tests.test_explore_flow_chromium -v`。
+- 结果：测试输出 `test_navigation_contract_and_same_url_modal_flow ... ok`、`Ran 1 test in 9.031s`、`OK`，随后精确输出 `TRAE Sandbox Error: hit restricted`、`Not allow operate files: /`、`Hint: If the tool supports running outside the sandbox, you should try requesting to run this command outside the sandbox.`、`Alternatively, you can tell the user to configure sandbox rules via Settings -> Permission & Approval -> Custom Configuration.`，命令退出码为 1。按停止条件未执行完整 Stage 2 门禁与专项、三服务重启、Canonical 连续 3 次、LLM call 关联和 PostgreSQL token/latency 重算；Task 2.3.1、Task 2.3 与 Stage 2 checklist 保持未完成，新增 Task 2.3.2 / BUG-143。
+- 验证：真实 Chromium 业务断言 1/1 通过但整体门禁失败；测试后已删除 `.sandbox-home`、`.sandbox-tmp`、`.sandbox-cache`，保留项目 `.playwright-browsers` 缓存。未修改业务代码，未 commit/push。
+- 后续：Task 2.3.2 需在同一四目录约束下追踪退出阶段根路径访问来源；真实 Chromium 命令退出 0 前不得继续 Stage 2 最终验收。
+
+## 2026-09-06 | Stage 2 Task 2.3 独立验收在真实 Chromium 门禁失败
+
+- 任务：独立验收 Stage 2 Task 2.3；先审查 Task 2.1/2.2 与 BUG-141，运行完整静态门禁和 Stage 1 E2E 门禁，再执行 LLM 遥测专项、重启三服务、连续 Canonical 3 次及 PostgreSQL 重算；不修改业务代码、不 commit/push，任一失败新增 task/bug/log 并停止。
+- 操作：审查 OpenAI-compatible adapter、模型遥测类型、Harness 物理 attempt 事件、PostgreSQL 规范化、REST/SSE 共用 wire、先订阅后回放及 broker 合并唤醒；使用合法 pgx DSN 执行 Go 全量 test，并并行执行 Go vet/build、Python lock/全量测试、Alembic upgrade/current/heads/check、Frontend test/build、repo-local cache Knip、compileall 和 diff check；最后以 repo-local 绝对 `TMPDIR` 显式运行 Stage 1 真实 Chromium 回归。
+- 结果：Go、Python、Alembic、Frontend、Knip、compileall 和 diff 门禁通过；真实 Chromium 用例业务断言 1/1 通过并输出 `OK`，但进程退出后再次触发 `TRAE Sandbox Error: Not allow operate files: /` 并以 1 结束。按失败即停规则，未继续缺失/partial usage、401、timeout、retry exhausted、物理请求事件数、hash、脱敏、wire、订阅补洞等剩余专项，未重启三个服务，未运行 Canonical 3 次，也未执行 PostgreSQL 遥测重算。Task 2.3 与 Stage 2 checklist 保持未完成，新增 Task 2.3.1 / BUG-142。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...` 全部通过，`TestPostgresAgentEventReturnsNormalizedPayload`、`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 均实际 PASS 且无 skip；`go vet ./...`、`go build ./...` 通过；Python unittest 86 passed/1 skipped；Alembic 唯一 current/head 为 `20260906_0040` 且 check 无差异；Frontend Vitest 8/8、production build、Knip 通过；compileall、`git diff --check` 通过。额外 Vulture 命令因环境未安装该工具未执行，不属于用户指定门禁。
+- 后续：先完成 Task 2.3.1 并从完整门禁重新验收；本轮未修改业务代码，未 commit/push。
+
+## 2026-09-06 | 完成 Stage 2 Task 2.1/2.2 LLM 遥测
+
+- 任务：按 Stage 2 spec、tasks/checklist 与 explorer 结论实施 Task 2.1/2.2；不执行 Task 2.3，不 commit/push，保持 Go 为唯一 Agent 且 Python 不增加 LLM。
+- 操作：Agent 层新增 `PromptSpec`、`ModelUsage`、`ModelAttempt`、`Telemetry`、`Error` 并由 `ModelResponse` 携带遥测；系统 prompt 版本固定为 `agentcore.system.v1`，仅记录 request/prompt/toolset SHA256。OpenAI-compatible adapter 改为显式 provider 配置，解析 requested/resolved model、usage、finish reason、provider request ID、attempt 与总延迟，并仅对瞬时 transport/timeout/408/429/500/502/503/504 做最多 3 次有界重试。Harness 为每个逻辑调用分配 `logical_call_id`/`step_id`，每个物理请求写入一个 `research.llm_call` / `research.llm_call.v1` 事件，成功关联 tool call IDs，失败同样记录。事件 payload 采用 typed whitelist、长度上限和安全错误分类，不保存 prompt/messages/headers/key/cookie/raw response/raw provider error。复用 `agent_events`，无迁移；PostgreSQL repository 返回数据库规范化 Event。SSE 改为先订阅后查询历史，broker 仅合并唤醒，按 `lastSeq` 从数据库补洞，REST/SSE 共用 `MarshalEvent`。前端补充 `research.llm_call` 与 `run.cancelled` SSE 类型，research 事件不进入 tool activities。
+- 结果：Task 2.1、2.2 及 Stage 2 对应六项 checklist 已完成；新增 BUG-141 并修复。Task 2.3、Canonical 连续 3 次、Stage 2 commit/push 均保持未完成。Python Browser Worker 未新增或修改任何 LLM/Agent 逻辑。
+- 验证：Go 全量 test 通过，包含 PostgreSQL `TestPostgresAgentEventReturnsNormalizedPayload`、既有两个 PG integration、LLM usage/hash/security/retry/cancel、Harness 事件、broker/SSE/REST 合同测试；`go vet ./...`、`go build ./...` 通过。Frontend Vitest 8/8、production build、repo-local cache Knip 通过。Python `uv lock --check`、全量 unittest 86 passed/1 skipped、compileall 通过。最终 diff/格式检查见本记录后的收口验证。
+- 后续：Task 2.3 仍需独立执行 Canonical Goal 连续 3 次并验证真实 LLM call 关联与可重算指标；本轮按要求不 commit/push。
+
 ## 2026-09-06 | Stage 1 最终交付
 
 - 任务：完成 Stage 1 提交前文档收口；确认 Task 1.1-1.5.5、Stage 1 checklist、Canonical 与专项门禁结果，复核 BUG-134..140；不修改业务代码，不 commit/push。

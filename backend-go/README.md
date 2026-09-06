@@ -64,6 +64,7 @@ go run ./cmd/agentservice
 
 模型配置复用 `browser-worker/.env` 中的：
 
+- `AI_PLANNING_PROVIDER`
 - `AI_PLANNING_BASE_URL`
 - `AI_PLANNING_API_KEY`
 - `AI_PLANNING_MODEL`

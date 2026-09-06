@@ -27,6 +27,7 @@ Author the complete structured DSL in generate_dsl.case and include collected no
 	Only set target_strategy to css, xpath, data-testid, element_id, or tag. For semantic targets, omit it; null is accepted only as the equivalent optional boundary value.
 	Explicit CSS targets must exactly match a selector from verified_selectors. Never compose a new descendant CSS selector from separately observed nodes.
 	When the user asks to search through page controls, the final DSL must contain the real input step followed by the real search-control click. Never replace those actions with goto to a constructed search-result URL.
+	Input trigger is optional and only accepts Enter or Tab. Omit trigger for ordinary semantic input, and represent a search-button action as a separate click step.
 	Do not include candidates, match_count, or locator_confidence in generate_dsl.case; locator preflight derives those fields from a11y_nodes_by_state.
 After generate_dsl, use ask_user_question with a required confirm question whose id is approve_dsl.
 Never call execute_dsl until that approval tool result is true for the latest generation.
@@ -136,91 +137,107 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 		return run, nil
 	}
 
-	loopErr := e.loop.Run(ctx, &run.Transcript, func(ctx context.Context, response agent.ModelResponse) (bool, error) {
-		if strings.TrimSpace(response.Content) != "" {
-			if err := e.recordMessage(ctx, run, response.Content); err != nil {
-				return false, err
-			}
-		}
-		if len(response.ToolCalls) == 0 {
-			if err := e.runs.SaveRun(ctx, run); err != nil {
-				return false, err
-			}
-			run, err = e.runs.CompleteRun(ctx, run)
-			return false, err
-		}
-
-		for _, call := range response.ToolCalls {
+	loopErr := e.loop.RunWithModelContext(
+		ctx,
+		&run.Transcript,
+		func(callContext context.Context) context.Context {
+			logicalCallID := e.runs.NewID("llm")
 			stepID := e.runs.NewID("step")
-			if err := e.recordToolStart(ctx, run, stepID, call); err != nil {
-				return false, err
-			}
-			if err := e.policy.BeforeToolCall(run, call); err != nil {
-				if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, err); recordErr != nil {
-					return false, recordErr
-				}
-				continue
-			}
-			result, executeErr := e.tools.Execute(ctx, tools.Call{
-				RunID:                run.ID,
-				ActorUserID:          run.ActorUserID,
-				ConversationID:       run.ConversationID,
-				ProjectID:            run.ProjectID,
-				LatestGenerationID:   run.LatestGenerationID,
-				ApprovedGenerationID: run.ApprovedGenerationID,
-				ToolCallID:           call.ID,
-				Name:                 call.Name,
-				Arguments:            json.RawMessage(call.Arguments),
-			})
-			if executeErr != nil {
-				if errors.Is(executeErr, context.Canceled) {
-					return false, executeErr
-				}
-				if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, executeErr); recordErr != nil {
-					return false, recordErr
-				}
-				continue
-			}
-			if result.Pending != nil {
-				var request agentservice.AskUserRequest
-				if err := json.Unmarshal(result.Pending.Payload, &request); err != nil {
+			return agent.WithTelemetryRecorder(
+				callContext,
+				func(recordContext context.Context, record agent.TelemetryRecord) error {
+					return e.runs.RecordModelTelemetry(recordContext, run, record)
+				},
+				logicalCallID,
+				stepID,
+			)
+		},
+		func(ctx context.Context, response agent.ModelResponse) (bool, error) {
+			if strings.TrimSpace(response.Content) != "" {
+				if err := e.recordMessage(ctx, run, response.Content); err != nil {
 					return false, err
 				}
+			}
+			if len(response.ToolCalls) == 0 {
 				if err := e.runs.SaveRun(ctx, run); err != nil {
 					return false, err
 				}
-				run, _, err = e.runs.RequestUserInputForCall(
-					ctx,
-					run.ID,
-					call.ID,
-					stepID,
-					request,
-				)
+				run, err = e.runs.CompleteRun(ctx, run)
 				return false, err
 			}
-			if result.Artifact != nil && result.Artifact.Type == "dsl_generation" {
-				generationID, parseErr := strconv.ParseInt(result.Artifact.ID, 10, 64)
-				if parseErr != nil {
-					_ = e.recordToolFailure(ctx, run, stepID, call, parseErr)
-					return false, parseErr
+
+			for _, call := range response.ToolCalls {
+				stepID := e.runs.NewID("step")
+				if err := e.recordToolStart(ctx, run, stepID, call); err != nil {
+					return false, err
 				}
-				run.LatestGenerationID = &generationID
-				run.ApprovedGenerationID = nil
+				if err := e.policy.BeforeToolCall(run, call); err != nil {
+					if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, err); recordErr != nil {
+						return false, recordErr
+					}
+					continue
+				}
+				result, executeErr := e.tools.Execute(ctx, tools.Call{
+					RunID:                run.ID,
+					ActorUserID:          run.ActorUserID,
+					ConversationID:       run.ConversationID,
+					ProjectID:            run.ProjectID,
+					LatestGenerationID:   run.LatestGenerationID,
+					ApprovedGenerationID: run.ApprovedGenerationID,
+					ToolCallID:           call.ID,
+					Name:                 call.Name,
+					Arguments:            json.RawMessage(call.Arguments),
+				})
+				if executeErr != nil {
+					if errors.Is(executeErr, context.Canceled) {
+						return false, executeErr
+					}
+					if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, executeErr); recordErr != nil {
+						return false, recordErr
+					}
+					continue
+				}
+				if result.Pending != nil {
+					var request agentservice.AskUserRequest
+					if err := json.Unmarshal(result.Pending.Payload, &request); err != nil {
+						return false, err
+					}
+					if err := e.runs.SaveRun(ctx, run); err != nil {
+						return false, err
+					}
+					run, _, err = e.runs.RequestUserInputForCall(
+						ctx,
+						run.ID,
+						call.ID,
+						stepID,
+						request,
+					)
+					return false, err
+				}
+				if result.Artifact != nil && result.Artifact.Type == "dsl_generation" {
+					generationID, parseErr := strconv.ParseInt(result.Artifact.ID, 10, 64)
+					if parseErr != nil {
+						_ = e.recordToolFailure(ctx, run, stepID, call, parseErr)
+						return false, parseErr
+					}
+					run.LatestGenerationID = &generationID
+					run.ApprovedGenerationID = nil
+				}
+				if err := e.recordToolResult(ctx, run, stepID, call, result); err != nil {
+					return false, err
+				}
+				run.Transcript = append(run.Transcript, agent.Message{
+					Role:       "tool",
+					Content:    string(result.Content),
+					ToolCallID: call.ID,
+				})
+				if err := e.runs.SaveRun(ctx, run); err != nil {
+					return false, err
+				}
 			}
-			if err := e.recordToolResult(ctx, run, stepID, call, result); err != nil {
-				return false, err
-			}
-			run.Transcript = append(run.Transcript, agent.Message{
-				Role:       "tool",
-				Content:    string(result.Content),
-				ToolCallID: call.ID,
-			})
-			if err := e.runs.SaveRun(ctx, run); err != nil {
-				return false, err
-			}
-		}
-		return true, nil
-	})
+			return true, nil
+		},
+	)
 	if loopErr != nil {
 		current, getErr := e.runs.GetRun(context.WithoutCancel(ctx), run.ID)
 		if getErr == nil && current.Status == agentservice.RunStatusCancelled {

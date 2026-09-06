@@ -150,6 +150,31 @@ func TestValidateCaseAcceptsAbsentAndNullOptionalLocatorEnums(t *testing.T) {
 	}
 }
 
+func TestValidateCaseInputTriggerContract(t *testing.T) {
+	accepted := []string{
+		`{"name":"absent","steps":[{"action":"input","target":"Search","value":"Blue Top"}]}`,
+		`{"name":"null","steps":[{"action":"input","target":"Search","value":"Blue Top","trigger":null}]}`,
+		`{"name":"enter","steps":[{"action":"input","target":"Search","value":"Blue Top","trigger":"Enter"}]}`,
+		`{"name":"tab","steps":[{"action":"input","target":"Search","value":"Blue Top","trigger":"Tab"}]}`,
+	}
+	for _, raw := range accepted {
+		if _, _, err := ValidateCase(json.RawMessage(raw)); err != nil {
+			t.Fatalf("ValidateCase(%s) error = %v", raw, err)
+		}
+	}
+
+	rejected := []string{
+		`{"name":"empty","steps":[{"action":"input","target":"Search","value":"Blue Top","trigger":""}]}`,
+		`{"name":"semantic text","steps":[{"action":"input","target":"Search","value":"Blue Top","trigger":"Search Product textbox"}]}`,
+		`{"name":"unsupported key","steps":[{"action":"input","target":"Search","value":"Blue Top","trigger":"Escape"}]}`,
+	}
+	for _, raw := range rejected {
+		if _, _, err := ValidateCase(json.RawMessage(raw)); err == nil {
+			t.Fatalf("ValidateCase(%s) error = nil", raw)
+		}
+	}
+}
+
 func TestValidateCaseRejectsInvalidNestedContracts(t *testing.T) {
 	tests := []string{
 		`{"name":"x","steps":[{"action":"wait_for","target":"x","timeout_ms":60001}]}`,

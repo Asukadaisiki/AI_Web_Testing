@@ -248,7 +248,7 @@ class ClarificationClient(FakeClient):
         return [event for event in events if event["seq"] > after_seq]
 
 
-class MultiApprovalClient(FakeClient):
+class Generation129RecoveryClient(FakeClient):
     def __init__(self) -> None:
         super().__init__()
         self.approval_count = 0
@@ -273,26 +273,32 @@ class MultiApprovalClient(FakeClient):
                 "id": run_id,
                 "status": "waiting_user",
                 "pending_tool_call_id": "approval-1",
-                "latest_generation_id": 44,
+                "latest_generation_id": 129,
             }
         if self.approval_count == 1:
             return {
                 "id": run_id,
                 "status": "waiting_user",
                 "pending_tool_call_id": "approval-2",
-                "latest_generation_id": 45,
-                "approved_generation_id": 44,
+                "latest_generation_id": 130,
+                "approved_generation_id": None,
             }
         return {
             "id": run_id,
             "status": "completed",
-            "latest_generation_id": 45,
-            "approved_generation_id": 45,
+            "latest_generation_id": 130,
+            "approved_generation_id": 130,
         }
 
     def list_events(self, run_id, after_seq):
         first = super().list_events(run_id, after_seq) if self.approval_count == 0 else []
         if self.approval_count == 0:
+            for event in first:
+                payload = event.get("payload") or {}
+                if payload.get("tool") == "generate_dsl":
+                    payload["content"]["generation_id"] = 129
+                if payload.get("type") == "dsl_generation":
+                    payload["id"] = "129"
             return first
         if self.approval_count == 1:
             events = [
@@ -312,7 +318,7 @@ class MultiApprovalClient(FakeClient):
                     "payload": {
                         "tool": "generate_dsl",
                         "content": {
-                            "generation_id": 45,
+                            "generation_id": 130,
                             "case": self.repaired_case,
                             "dsl_sha256": self.repaired_hash,
                         },
@@ -321,7 +327,7 @@ class MultiApprovalClient(FakeClient):
                 {
                     "seq": 7,
                     "type": "artifact.published",
-                    "payload": {"type": "dsl_generation", "id": "45"},
+                    "payload": {"type": "dsl_generation", "id": "130"},
                 },
                 {
                     "seq": 8,
@@ -532,12 +538,16 @@ class AgenticE2EDriverTest(unittest.TestCase):
     def test_multiple_approvals_preserve_failed_first_batch(self) -> None:
         result = run_agentic_goal(
             CANONICAL_GOAL,
-            client=MultiApprovalClient(),
+            client=Generation129RecoveryClient(),
         )
 
         self.assertEqual(
             [approval["generation_id"] for approval in result["approvals"]],
-            [44, 45],
+            [129, 130],
+        )
+        self.assertEqual(
+            [approval["batch_id"] for approval in result["approvals"]],
+            [55, 56],
         )
         self.assertEqual(
             [batch["status"] for batch in result["batch_rounds"]],
@@ -547,10 +557,10 @@ class AgenticE2EDriverTest(unittest.TestCase):
             result["recovery"],
             [
                 {
-                    "from_generation_id": 44,
+                    "from_generation_id": 129,
                     "failed_batch_id": 55,
                     "failed_batch_status": "failed",
-                    "to_generation_id": 45,
+                    "to_generation_id": 130,
                     "approval_round": 2,
                 }
             ],
@@ -558,6 +568,24 @@ class AgenticE2EDriverTest(unittest.TestCase):
         self.assertTrue(result["formal_execution"]["passed"])
         self.assertFalse(result["stage0"]["first_pass"])
         self.assertFalse(result["success"])
+
+    def test_cleared_approval_requires_a_strictly_new_generation(self) -> None:
+        class StaleGenerationClient(Generation129RecoveryClient):
+            def get_run(self, run_id):
+                run = super().get_run(run_id)
+                if self.approval_count == 1:
+                    run["latest_generation_id"] = 129
+                return run
+
+        client = StaleGenerationClient()
+        with self.assertRaisesRegex(
+            AgenticE2EError,
+            "approval is not bound",
+        ):
+            run_agentic_goal(CANONICAL_GOAL, client=client)
+
+        self.assertEqual(client.approval_count, 1)
+        self.assertEqual(client.cancel_calls[0][0], "run-33")
 
     def test_clarification_is_not_approved_and_keeps_failure_diagnostic(self) -> None:
         client = ClarificationClient()

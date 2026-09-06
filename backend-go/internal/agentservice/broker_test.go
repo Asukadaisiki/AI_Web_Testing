@@ -10,25 +10,22 @@ func TestEventBrokerPublishesByRun(t *testing.T) {
 	subscription := broker.Subscribe("run-1")
 	defer subscription.Cancel()
 
-	broker.Publish(Event{RunID: "run-2", Seq: 1})
-	broker.Publish(Event{RunID: "run-1", Seq: 2})
+	broker.Publish("run-2")
+	broker.Publish("run-1")
 
 	select {
-	case event := <-subscription.Events:
-		if event.RunID != "run-1" || event.Seq != 2 {
-			t.Fatalf("event = %#v", event)
-		}
+	case <-subscription.Wake:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for event")
 	}
 }
 
-func TestEventBrokerDropsForSlowSubscriber(t *testing.T) {
+func TestEventBrokerCoalescesWakeupsForSlowSubscriber(t *testing.T) {
 	broker := NewEventBroker()
 	subscription := broker.Subscribe("run-1")
 	defer subscription.Cancel()
 
-	for sequence := int64(1); sequence <= 100; sequence++ {
-		broker.Publish(Event{RunID: "run-1", Seq: sequence})
+	for range 100 {
+		broker.Publish("run-1")
 	}
 }

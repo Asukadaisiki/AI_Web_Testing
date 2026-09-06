@@ -33,6 +33,7 @@ const (
 	EventToolFinished    EventType = "tool.finished"
 	EventToolFailed      EventType = "tool.failed"
 	EventArtifact        EventType = "artifact.published"
+	EventResearchLLMCall EventType = "research.llm_call"
 )
 
 type AgentRun struct {
@@ -62,6 +63,45 @@ type Event struct {
 	CheckpointID   string         `json:"checkpoint_id,omitempty"`
 	Timestamp      time.Time      `json:"timestamp"`
 	Payload        map[string]any `json:"payload"`
+}
+
+const ResearchLLMCallSchemaV1 = "research.llm_call.v1"
+
+type ToolCallStatus string
+
+const (
+	ToolCallAvailable   ToolCallStatus = "available"
+	ToolCallUnavailable ToolCallStatus = "unavailable"
+)
+
+type ToolCallUnavailableReason string
+
+const (
+	ToolCallUnavailableModelReturnedFinalText  ToolCallUnavailableReason = "model_returned_final_text"
+	ToolCallUnavailableAttemptFailedNoResponse ToolCallUnavailableReason = "model_attempt_failed_without_response"
+)
+
+type ResearchLLMCallPayload struct {
+	SchemaVersion             string                    `json:"schema_version"`
+	LogicalCallID             string                    `json:"logical_call_id"`
+	Provider                  string                    `json:"provider"`
+	RequestedModel            string                    `json:"requested_model"`
+	ResolvedModel             string                    `json:"resolved_model,omitempty"`
+	Prompt                    agent.PromptSpec          `json:"prompt_spec"`
+	Usage                     agent.ModelUsage          `json:"usage"`
+	FinishReason              string                    `json:"finish_reason,omitempty"`
+	Attempt                   int                       `json:"attempt"`
+	AttemptStatus             string                    `json:"attempt_status"`
+	AttemptStartedAt          time.Time                 `json:"attempt_started_at"`
+	AttemptLatencyMS          int64                     `json:"attempt_latency_ms"`
+	TotalLatencyMS            int64                     `json:"total_latency_ms"`
+	HTTPStatus                *int                      `json:"http_status,omitempty"`
+	ProviderRequestID         string                    `json:"provider_request_id,omitempty"`
+	RetryCount                int                       `json:"retry_count"`
+	ToolCallStatus            ToolCallStatus            `json:"tool_call_status"`
+	ToolCallUnavailableReason ToolCallUnavailableReason `json:"tool_call_unavailable_reason,omitempty"`
+	ToolCallIDs               []string                  `json:"tool_call_ids,omitempty"`
+	Error                     *agent.ModelError         `json:"error,omitempty"`
 }
 
 type QuestionType string

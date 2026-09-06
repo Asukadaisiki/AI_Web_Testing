@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -238,12 +239,101 @@ func (s *Service) CancelRun(
 	if err != nil || !transitioned {
 		return run, err
 	}
-	s.broker.Publish(event)
+	s.broker.Publish(event.RunID)
 	return run, nil
 }
 
 func (s *Service) RecordEvent(ctx context.Context, run AgentRun, event Event) (Event, error) {
 	return s.appendEvent(ctx, run, event)
+}
+
+func (s *Service) RecordModelTelemetry(
+	ctx context.Context,
+	run AgentRun,
+	record agent.TelemetryRecord,
+) error {
+	for index, attempt := range record.Telemetry.Attempts {
+		usage := agent.ModelUsage{Status: agent.UsageUnavailable}
+		finishReason := ""
+		resolvedModel := ""
+		toolCallIDs := []string(nil)
+		toolCallStatus := ToolCallUnavailable
+		unavailableReason := ToolCallUnavailableAttemptFailedNoResponse
+		if attempt.Status == "succeeded" {
+			usage = record.Telemetry.Usage
+			finishReason = record.Telemetry.FinishReason
+			resolvedModel = record.Telemetry.ResolvedModel
+			toolCallIDs = append(toolCallIDs, record.ToolCallIDs...)
+			if len(toolCallIDs) > 0 {
+				toolCallStatus = ToolCallAvailable
+				unavailableReason = ""
+			} else {
+				unavailableReason = ToolCallUnavailableModelReturnedFinalText
+			}
+		}
+		var safeError *agent.ModelError
+		if attempt.Error != nil {
+			safeError = &agent.ModelError{
+				Category:  limitString(attempt.Error.Category, 64),
+				Code:      limitString(attempt.Error.Code, 64),
+				Retryable: attempt.Error.Retryable,
+			}
+		}
+		payload := ResearchLLMCallPayload{
+			SchemaVersion:  ResearchLLMCallSchemaV1,
+			LogicalCallID:  limitString(record.LogicalCallID, 128),
+			Provider:       limitString(record.Telemetry.Provider, 128),
+			RequestedModel: limitString(record.Telemetry.RequestedModel, 128),
+			ResolvedModel:  limitString(resolvedModel, 128),
+			Prompt: agent.PromptSpec{
+				Version:       limitString(record.Telemetry.Prompt.Version, 64),
+				RequestSHA256: limitString(record.Telemetry.Prompt.RequestSHA256, 64),
+				PromptSHA256:  limitString(record.Telemetry.Prompt.PromptSHA256, 64),
+				ToolsetSHA256: limitString(record.Telemetry.Prompt.ToolsetSHA256, 64),
+			},
+			Usage:                     usage,
+			FinishReason:              limitString(finishReason, 64),
+			Attempt:                   attempt.Attempt,
+			AttemptStatus:             attempt.Status,
+			AttemptStartedAt:          attempt.StartedAt.UTC(),
+			AttemptLatencyMS:          attempt.LatencyMS,
+			TotalLatencyMS:            record.Telemetry.TotalLatencyMS,
+			HTTPStatus:                attempt.HTTPStatus,
+			ProviderRequestID:         limitString(attempt.ProviderRequestID, 128),
+			RetryCount:                index,
+			ToolCallStatus:            toolCallStatus,
+			ToolCallUnavailableReason: unavailableReason,
+			ToolCallIDs:               toolCallIDs,
+			Error:                     safeError,
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode LLM telemetry: %w", err)
+		}
+		var safePayload map[string]any
+		if err := json.Unmarshal(encoded, &safePayload); err != nil {
+			return fmt.Errorf("normalize LLM telemetry: %w", err)
+		}
+		toolCallID := ""
+		if len(toolCallIDs) == 1 {
+			toolCallID = toolCallIDs[0]
+		}
+		if _, err := s.appendEvent(ctx, run, Event{
+			Type: EventResearchLLMCall, StepID: record.StepID,
+			ToolCallID: toolCallID, Payload: safePayload,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func limitString(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit]
 }
 
 func (s *Service) CompleteRun(ctx context.Context, run AgentRun) (AgentRun, error) {
@@ -347,7 +437,7 @@ func (s *Service) appendEvent(ctx context.Context, run AgentRun, event Event) (E
 	if err != nil {
 		return Event{}, fmt.Errorf("append agent event: %w", err)
 	}
-	s.broker.Publish(persisted)
+	s.broker.Publish(persisted.RunID)
 	return persisted, nil
 }
 

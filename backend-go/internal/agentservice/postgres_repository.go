@@ -196,13 +196,15 @@ func (r *PostgresRepository) CancelRun(
 	}
 	event.RunID = run.ID
 	event.ConversationID = run.ConversationID
-	_, err = transaction.ExecContext(
+	var persistedPayload []byte
+	err = transaction.QueryRowContext(
 		ctx,
 		`INSERT INTO agent_events (
 			run_id, seq, event_type, conversation_id, step_id, tool_call_id,
 			parent_id, checkpoint_id, payload_json, created_at
 		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''),
-		          NULLIF($7, ''), NULLIF($8, ''), $9, $10)`,
+		          NULLIF($7, ''), NULLIF($8, ''), $9, $10)
+		RETURNING payload_json, created_at`,
 		event.RunID,
 		event.Seq,
 		event.Type,
@@ -213,9 +215,12 @@ func (r *PostgresRepository) CancelRun(
 		event.CheckpointID,
 		string(payload),
 		event.Timestamp,
-	)
+	).Scan(&persistedPayload, &event.Timestamp)
 	if err != nil {
 		return AgentRun{}, Event{}, false, fmt.Errorf("insert cancellation event: %w", err)
+	}
+	if err := json.Unmarshal(persistedPayload, &event.Payload); err != nil {
+		return AgentRun{}, Event{}, false, fmt.Errorf("decode cancellation event payload: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return AgentRun{}, Event{}, false, fmt.Errorf("commit agent cancellation: %w", err)
@@ -265,13 +270,15 @@ func (r *PostgresRepository) AppendEvent(ctx context.Context, event Event) (Even
 		return Event{}, fmt.Errorf("allocate agent event sequence: %w", err)
 	}
 
-	_, err = transaction.ExecContext(
+	var persistedPayload []byte
+	err = transaction.QueryRowContext(
 		ctx,
 		`INSERT INTO agent_events (
 			run_id, seq, event_type, conversation_id, step_id, tool_call_id,
 			parent_id, checkpoint_id, payload_json, created_at
 		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''),
-		          NULLIF($7, ''), NULLIF($8, ''), $9, $10)`,
+		          NULLIF($7, ''), NULLIF($8, ''), $9, $10)
+		RETURNING payload_json, created_at`,
 		event.RunID,
 		event.Seq,
 		event.Type,
@@ -282,9 +289,12 @@ func (r *PostgresRepository) AppendEvent(ctx context.Context, event Event) (Even
 		event.CheckpointID,
 		string(payload),
 		event.Timestamp,
-	)
+	).Scan(&persistedPayload, &event.Timestamp)
 	if err != nil {
 		return Event{}, fmt.Errorf("insert agent event: %w", err)
+	}
+	if err := json.Unmarshal(persistedPayload, &event.Payload); err != nil {
+		return Event{}, fmt.Errorf("decode inserted agent event payload: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return Event{}, fmt.Errorf("commit agent event: %w", err)

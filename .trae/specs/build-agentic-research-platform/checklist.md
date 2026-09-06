@@ -45,14 +45,15 @@
 
 ## Stage 2：LLM 遥测
 
-- [ ] 每次模型调用记录 provider、model 和 prompt version。
-- [ ] input/output/total tokens 可用时准确记录。
-- [ ] usage 不可用时记录 unavailable，而不是 0。
-- [ ] latency、retry 和错误类别可追踪。
-- [ ] 遥测事件可通过 PostgreSQL 和 SSE 重放。
-- [ ] 日志不泄漏 API Key、Cookie 或用户敏感值。
-- [ ] Canonical Goal 连续 3 次通过。
-- [ ] Stage 2 已 commit 并 push。
+- [x] 每次模型调用记录 provider、model 和 prompt version。
+- [x] input/output/total tokens 可用时准确记录。
+- [x] usage 不可用时记录 unavailable，而不是 0。
+- [x] latency、retry 和错误类别可追踪。
+- [x] 遥测事件可通过 PostgreSQL 和 SSE 重放。
+- [x] 日志不泄漏 API Key、Cookie 或用户敏感值。
+- [x] 每个新遥测事件显式标记 ToolCall available/unavailable；单/多/无 ToolCall 和失败 attempt 可判定，旧事件仍可读取。
+- [x] 官方 Canonical E2E 通过长期 Browser API 执行真实 Chromium，连续 3 次通过。
+- [x] Stage 2 提交前准备已完成；commit/push 待主代理执行。
 
 ## Stage 3：Research Persistence
 
