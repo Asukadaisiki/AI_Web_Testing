@@ -369,7 +369,9 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 		t.Fatalf("prepare repair through Go control plane: %v", err)
 	}
 	var repair map[string]any
-	if err := json.Unmarshal(repairRaw, &repair); err != nil || repair["strategy"] != "re_explore" {
+	if err := json.Unmarshal(repairRaw, &repair); err != nil ||
+		repair["strategy"] != "manual_reconcile" ||
+		repair["original_action_replay_allowed"] != false {
 		t.Fatalf("repair result = %#v, %v", repair, err)
 	}
 

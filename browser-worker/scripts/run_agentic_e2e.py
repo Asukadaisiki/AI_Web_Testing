@@ -336,6 +336,54 @@ def validate_goal(goal: str) -> str:
     return normalized
 
 
+def validate_canonical_search_contract(dsl_case: dict[str, Any]) -> None:
+    steps = dsl_case.get("steps")
+    if not isinstance(steps, list):
+        raise AgenticE2EError("canonical DSL has no steps")
+    for step in steps:
+        if not isinstance(step, dict) or step.get("action") != "goto":
+            continue
+        value = str(step.get("value") or "").casefold()
+        if "search=" in value:
+            raise AgenticE2EError(
+                "canonical DSL must perform search with input and click, not goto a search URL"
+            )
+
+    def has_selector(step: dict[str, Any], selector: str) -> bool:
+        return any(
+            isinstance(candidate, dict)
+            and str(candidate.get("selector") or "").strip() == selector
+            and bool((candidate.get("pre_features") or {}).get("verified"))
+            for candidate in step.get("candidates") or []
+        )
+
+    input_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if isinstance(step, dict)
+            and step.get("action") == "input"
+            and has_selector(step, "#search_product")
+        ),
+        -1,
+    )
+    click_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if isinstance(step, dict)
+            and step.get("action") == "click"
+            and has_selector(step, "#submit_search")
+        ),
+        -1,
+    )
+    if input_index < 0 or click_index <= input_index:
+        raise AgenticE2EError(
+            "canonical DSL must contain verified #search_product input followed by "
+            "verified #submit_search click"
+        )
+
+
 def oracle_expectation(mutation: str = "none") -> dict[str, str]:
     expected = {
         "name": "Blue Top",
@@ -765,6 +813,7 @@ def _run_agentic_goal(
         dsl_artifact = _artifact(events, "dsl_generation", generation_id)
         dsl_case = generated.get("case")
         DSLCase.model_validate(dsl_case)
+        validate_canonical_search_contract(dsl_case)
         dsl_sha256 = _go_json_sha256(dsl_case)
         declared_sha = generated.get("dsl_sha256")
         if declared_sha and declared_sha != dsl_sha256:

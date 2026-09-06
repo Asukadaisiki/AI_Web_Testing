@@ -13,7 +13,7 @@
 - [ ] VLM 默认关闭，启用时有明确策略、预算和调用记录。
 - [x] 所有新增 Schema 都有版本号和兼容迁移。
 - [x] 每个 Stage 通过后已更新任务、检查清单、执行日志和缺陷日志。
-- [x] 每个 Stage 有独立 commit 并已推送 `origin/main`。
+- [ ] 每个 Stage 有独立 commit 并已推送 `origin/main`。
 
 ## Stage 0：完整链路基线
 
@@ -33,15 +33,15 @@
 
 ## Stage 1：研究事实完整性
 
-- [ ] 所有 action 的 pre-state 在动作前采集。
-- [ ] Preconditions 和 Postconditions 输出逐条件结果。
-- [ ] `network_request` 使用真实网络事件，不再占位成功。
-- [ ] 已提交副作用的动作不会因验证失败自动重放。
-- [ ] FailureSignal 保留 category 并增加 stage/code/retryable/side_effect。
-- [ ] 同步和流式 Runner 产生一致 evidence。
-- [ ] Canonical Goal 连续 3 次通过。
-- [ ] 网络与重复副作用故障测试通过。
-- [ ] Stage 1 已 commit 并 push。
+- [x] 所有 action 的 pre-state 在动作前采集。
+- [x] Preconditions 和 Postconditions 输出逐条件结果。
+- [x] `network_request` 使用真实网络事件，不再占位成功。
+- [x] 已提交副作用的动作不会因验证失败自动重放。
+- [x] FailureSignal v2 保留 category，增加版本、stage/code/retryable/side-effect 与可验证来源，并兼容 v1。
+- [x] 同步和流式 Runner 产生一致 evidence。
+- [x] Canonical Goal 连续 3 次通过。
+- [x] 网络与重复副作用故障测试通过。
+- [x] Stage 1 提交前准备已完成；commit/push 待后续执行。
 
 ## Stage 2：LLM 遥测
 

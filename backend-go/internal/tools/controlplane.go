@@ -252,9 +252,29 @@ func (c *ControlPlaneCapabilities) PrepareFixAndRetry(
 	}
 
 	signals, sourceExecutionID, sourceDSL := reportFailures(report)
+	repairStatus, strategy, reason, originalActionReplayAllowed := repairDecision(signals)
+	return json.Marshal(map[string]any{
+		"status": repairStatus, "source_batch_id": report["id"],
+		"source_execution_id": sourceExecutionID, "strategy": strategy,
+		"reason": reason, "failure_signals": signals, "source_dsl": sourceDSL,
+		"original_action_replay_allowed": originalActionReplayAllowed, "report": report,
+	})
+}
+
+func repairDecision(signals []map[string]any) (string, string, string, bool) {
 	categories := make(map[string]bool)
+	originalActionReplayAllowed := len(signals) > 0
 	for _, signal := range signals {
-		if category, ok := signal["category"].(string); ok {
+		decoded, decodeErr := execution.DecodeFailureSignalValue(signal)
+		if decodeErr == nil {
+			categories[decoded.Category] = true
+			if !decoded.AllowsOriginalActionReplay() {
+				originalActionReplayAllowed = false
+			}
+			continue
+		}
+		originalActionReplayAllowed = false
+		if category, categoryOK := signal["category"].(string); categoryOK {
 			categories[category] = true
 		}
 	}
@@ -271,12 +291,12 @@ func (c *ControlPlaneCapabilities) PrepareFixAndRetry(
 	if strategy == "manual" {
 		repairStatus = "manual_required"
 	}
-	return json.Marshal(map[string]any{
-		"status": repairStatus, "source_batch_id": report["id"],
-		"source_execution_id": sourceExecutionID, "strategy": strategy,
-		"reason": reason, "failure_signals": signals, "source_dsl": sourceDSL,
-		"report": report,
-	})
+	if !originalActionReplayAllowed {
+		strategy = "manual_reconcile"
+		repairStatus = "manual_required"
+		reason = "The original action must not be replayed because its side effect is committed or unknown."
+	}
+	return repairStatus, strategy, reason, originalActionReplayAllowed
 }
 
 func caseMutation(projectID int64, raw json.RawMessage) (cases.Mutation, error) {

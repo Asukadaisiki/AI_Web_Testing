@@ -51,7 +51,7 @@ class TestCaseRun(Base):
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     dsl_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     dsl_sha256: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
-    report_schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="execution.report.v1")
+    report_schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="execution.report.v2")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     report: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     failure_signal_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

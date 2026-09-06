@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -256,6 +257,9 @@ func TestGenerateDSLToolSchemaRestrictsSupportedActions(t *testing.T) {
 
 func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *testing.T) {
 	definitions := NewBrowserTools(&fakeCapabilityClient{})
+	if !strings.Contains(definitions[1].Definition().Description, "do not jump directly") {
+		t.Fatal("explore_flow contract does not prohibit direct search URL bypass")
+	}
 	var flowSchema map[string]any
 	if err := json.Unmarshal(definitions[1].Definition().InputSchema, &flowSchema); err != nil {
 		t.Fatalf("decode explore_flow schema: %v", err)
@@ -287,6 +291,9 @@ func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *t
 
 func TestGenerateDSLToolSchemaUsesRuntimeTargetStrategyEnum(t *testing.T) {
 	definition := NewGenerateDSLTool(&fakeCapabilityClient{}).Definition()
+	if !strings.Contains(definition.Description, "do not replace them with goto") {
+		t.Fatal("generate_dsl contract does not require real search input and click")
+	}
 	var schema map[string]any
 	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
 		t.Fatalf("decode generate_dsl schema: %v", err)

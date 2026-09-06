@@ -121,7 +121,7 @@ def execute_case_streaming(
         attempt_number=context.attempt_number,
         dsl_snapshot=dsl_snapshot,
         dsl_sha256=dsl_sha256,
-        report_schema_version="execution.report.v1",
+        report_schema_version="execution.report.v2",
         started_at=datetime.now(UTC).replace(tzinfo=None),
     )
     session.add(execution)
@@ -256,6 +256,7 @@ def _to_execution_summary(
         failure_signal = _load_failure_signal(record.failure_signal_json) or build_failure_signal(
             report,
             record.error_message,
+            execution_id=record.id,
         )
     return StoredCaseExecutionSummary(
         id=record.id,
@@ -313,7 +314,11 @@ def _set_failure_signal(record: TestCaseRun) -> None:
     if record.status == "cancelled":
         record.failure_signal_json = None
         return
-    signal = build_failure_signal(_normalize_report(record.report), record.error_message)
+    signal = build_failure_signal(
+        _normalize_report(record.report),
+        record.error_message,
+        execution_id=record.id,
+    )
     record.failure_signal_json = signal.model_dump(mode="json") if signal else None
 
 

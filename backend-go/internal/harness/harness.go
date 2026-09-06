@@ -26,6 +26,7 @@ Author the complete structured DSL in generate_dsl.case and include collected no
 	Every click on an anchor that should move to another page must declare a url_contains postcondition whose value identifies the concrete destination URL or path. url_changes alone is insufficient because hash or interstitial navigation is not the intended destination.
 	Only set target_strategy to css, xpath, data-testid, element_id, or tag. For semantic targets, omit it; null is accepted only as the equivalent optional boundary value.
 	Explicit CSS targets must exactly match a selector from verified_selectors. Never compose a new descendant CSS selector from separately observed nodes.
+	When the user asks to search through page controls, the final DSL must contain the real input step followed by the real search-control click. Never replace those actions with goto to a constructed search-result URL.
 	Do not include candidates, match_count, or locator_confidence in generate_dsl.case; locator preflight derives those fields from a11y_nodes_by_state.
 After generate_dsl, use ask_user_question with a required confirm question whose id is approve_dsl.
 Never call execute_dsl until that approval tool result is true for the latest generation.

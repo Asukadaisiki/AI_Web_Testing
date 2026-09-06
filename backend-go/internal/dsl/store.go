@@ -298,6 +298,7 @@ func canonicalSteps(steps []any) []any {
 		switch action {
 		case "goto", "assert_url_contains":
 			canonical["value"] = trimmedString(step["value"])
+			canonicalOptionalConditions(canonical, step)
 		case "click", "wait_for", "assert_text", "capture_text":
 			canonicalLocatorFields(canonical, step)
 			if action == "wait_for" {
@@ -330,7 +331,10 @@ func canonicalLocatorDefaults(canonical, step map[string]any) {
 	canonical["target_strategy"] = optionalTrimmedString(step["target_strategy"])
 	canonical["locator_confidence"] = optionalTrimmedString(step["locator_confidence"])
 	canonical["candidates"] = canonicalCandidates(step["candidates"])
-	canonical["postconditions"] = canonicalPostconditions(step["postconditions"])
+	if _, exists := step["preconditions"]; exists {
+		canonical["preconditions"] = canonicalConditions(step["preconditions"])
+	}
+	canonical["postconditions"] = canonicalConditions(step["postconditions"])
 }
 
 func canonicalCandidates(raw any) []any {
@@ -367,16 +371,31 @@ func canonicalCandidates(raw any) []any {
 	return result
 }
 
-func canonicalPostconditions(raw any) []any {
-	postconditions, _ := raw.([]any)
-	result := make([]any, 0, len(postconditions))
-	for _, item := range postconditions {
-		postcondition := item.(map[string]any)
-		result = append(result, map[string]any{
-			"type":       trimmedString(postcondition["type"]),
-			"value":      optionalTrimmedString(postcondition["value"]),
-			"timeout_ms": valueOrDefault(postcondition, "timeout_ms", float64(3000)),
-		})
+func canonicalOptionalConditions(canonical, step map[string]any) {
+	for _, field := range []string{"preconditions", "postconditions"} {
+		if _, exists := step[field]; exists {
+			canonical[field] = canonicalConditions(step[field])
+		}
+	}
+}
+
+func canonicalConditions(raw any) []any {
+	conditions, _ := raw.([]any)
+	result := make([]any, 0, len(conditions))
+	for _, item := range conditions {
+		condition := item.(map[string]any)
+		canonical := map[string]any{
+			"type":       trimmedString(condition["type"]),
+			"value":      optionalTrimmedString(condition["value"]),
+			"timeout_ms": valueOrDefault(condition, "timeout_ms", float64(3000)),
+		}
+		if _, exists := condition["method"]; exists {
+			canonical["method"] = strings.ToUpper(trimmedString(condition["method"]))
+		}
+		if _, exists := condition["status"]; exists {
+			canonical["status"] = condition["status"]
+		}
+		result = append(result, canonical)
 	}
 	return result
 }
@@ -451,7 +470,10 @@ func validateStep(index int, action string, step map[string]any) error {
 	if err := validateCandidates(index, step["candidates"]); err != nil {
 		return err
 	}
-	if err := validatePostconditions(index, step["postconditions"]); err != nil {
+	if err := validateConditions(index, "preconditions", step["preconditions"]); err != nil {
+		return err
+	}
+	if err := validateConditions(index, "postconditions", step["postconditions"]); err != nil {
 		return err
 	}
 	if action == "click" {
@@ -551,42 +573,62 @@ func validateCandidates(stepIndex int, raw any) error {
 	return nil
 }
 
-func validatePostconditions(stepIndex int, raw any) error {
+func validateConditions(stepIndex int, field string, raw any) error {
 	if raw == nil {
 		return nil
 	}
-	postconditions, ok := raw.([]any)
+	conditions, ok := raw.([]any)
 	if !ok {
-		return fmt.Errorf("case.steps[%d].postconditions must be an array", stepIndex)
+		return fmt.Errorf("case.steps[%d].%s must be an array", stepIndex, field)
 	}
-	for index, rawPostcondition := range postconditions {
-		postcondition, ok := rawPostcondition.(map[string]any)
+	for index, rawCondition := range conditions {
+		condition, ok := rawCondition.(map[string]any)
 		if !ok {
-			return fmt.Errorf("case.steps[%d].postconditions[%d] must be an object", stepIndex, index)
+			return fmt.Errorf("case.steps[%d].%s[%d] must be an object", stepIndex, field, index)
 		}
-		kind, _ := postcondition["type"].(string)
+		kind, _ := condition["type"].(string)
 		if !postconditionTypes[strings.TrimSpace(kind)] {
-			return fmt.Errorf("case.steps[%d].postconditions[%d].type is invalid", stepIndex, index)
+			return fmt.Errorf("case.steps[%d].%s[%d].type is invalid", stepIndex, field, index)
 		}
 		if strings.TrimSpace(kind) == "url_contains" {
-			value, _ := postcondition["value"].(string)
+			value, _ := condition["value"].(string)
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf(
-					"case.steps[%d].postconditions[%d].value is required for url_contains",
+					"case.steps[%d].%s[%d].value is required for url_contains",
 					stepIndex,
+					field,
 					index,
 				)
 			}
 		}
-		if value, exists := postcondition["value"]; exists && value != nil {
+		if strings.TrimSpace(kind) == "network_request" &&
+			condition["value"] == nil && condition["method"] == nil && condition["status"] == nil {
+			return fmt.Errorf(
+				"case.steps[%d].%s[%d] requires URL, method, or status",
+				stepIndex, field, index,
+			)
+		}
+		if value, exists := condition["value"]; exists && value != nil {
 			if _, ok := value.(string); !ok {
-				return fmt.Errorf("case.steps[%d].postconditions[%d].value must be a string", stepIndex, index)
+				return fmt.Errorf("case.steps[%d].%s[%d].value must be a string", stepIndex, field, index)
 			}
 		}
-		if rawTimeout, exists := postcondition["timeout_ms"]; exists {
+		if method, exists := condition["method"]; exists && method != nil {
+			text, ok := method.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return fmt.Errorf("case.steps[%d].%s[%d].method must be a string", stepIndex, field, index)
+			}
+		}
+		if status, exists := condition["status"]; exists && status != nil {
+			number, ok := status.(float64)
+			if !ok || number < 100 || number > 599 || number != float64(int(number)) {
+				return fmt.Errorf("case.steps[%d].%s[%d].status must be between 100 and 599", stepIndex, field, index)
+			}
+		}
+		if rawTimeout, exists := condition["timeout_ms"]; exists {
 			timeout, ok := rawTimeout.(float64)
 			if !ok || timeout < 100 || timeout > 30000 {
-				return fmt.Errorf("case.steps[%d].postconditions[%d].timeout_ms must be between 100 and 30000", stepIndex, index)
+				return fmt.Errorf("case.steps[%d].%s[%d].timeout_ms must be between 100 and 30000", stepIndex, field, index)
 			}
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,15 @@ func (t cancellableTool) Execute(ctx context.Context, _ tools.Call) (tools.Resul
 	close(t.started)
 	<-ctx.Done()
 	return tools.Result{}, ctx.Err()
+}
+
+func TestSystemPromptRequiresRealSearchControls(t *testing.T) {
+	if !strings.Contains(defaultSystemPrompt, "real input step followed by the real search-control click") {
+		t.Fatal("system prompt does not require canonical search control actions")
+	}
+	if !strings.Contains(defaultSystemPrompt, "Never replace those actions with goto") {
+		t.Fatal("system prompt does not prohibit direct search URL bypass")
+	}
 }
 
 func TestBUG131ReplayReachesGenerationWithinExistingBudget(t *testing.T) {

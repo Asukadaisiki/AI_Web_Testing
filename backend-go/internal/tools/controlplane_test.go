@@ -108,3 +108,71 @@ func TestCanonicalJSONDigestMatchesWorkerContract(t *testing.T) {
 		t.Fatalf("digest = %s, want %s", digest, want)
 	}
 }
+
+func TestRepairDecisionAllowsOnlyExplicitlyUncommittedV2Signal(t *testing.T) {
+	signal := map[string]any{
+		"schema_version":        "failure.signal.v2",
+		"category":              "locator",
+		"fingerprint":           "locator-test",
+		"title":                 "Element not found",
+		"stage":                 "locator",
+		"code":                  "locator.no_match",
+		"retryable":             true,
+		"side_effect_committed": false,
+		"source_reference": map[string]any{
+			"type": "execution_report", "execution_id": 42,
+			"step_index": 1, "json_pointer": "/steps/1/action_outcome",
+		},
+	}
+
+	status, strategy, _, replayAllowed := repairDecision([]map[string]any{signal})
+
+	if status != "repair_ready" || strategy != "re_explore" || !replayAllowed {
+		t.Fatalf(
+			"decision = status %q, strategy %q, replay %t",
+			status, strategy, replayAllowed,
+		)
+	}
+}
+
+func TestRepairDecisionForbidsCommittedUnknownAndV1Replay(t *testing.T) {
+	for name, signal := range map[string]map[string]any{
+		"committed": {
+			"schema_version": "failure.signal.v2",
+			"category":       "assertion", "fingerprint": "assertion-test",
+			"title": "Postcondition failed", "stage": "postcondition",
+			"code": "condition.postcondition.text_visible.failed", "retryable": false,
+			"side_effect_committed": true,
+			"source_reference": map[string]any{
+				"type": "execution_report", "execution_id": 42,
+				"step_index": 1, "json_pointer": "/steps/1/condition_results/0",
+			},
+		},
+		"unknown": {
+			"schema_version": "failure.signal.v2",
+			"category":       "runner", "fingerprint": "runner-test",
+			"title": "Dispatch result unknown", "stage": "action",
+			"code": "action.unknown", "retryable": false,
+			"side_effect_committed": nil,
+			"source_reference": map[string]any{
+				"type": "execution_report", "execution_id": 43,
+				"step_index": 2, "json_pointer": "/steps/2/action_outcome",
+			},
+		},
+		"legacy_v1": {
+			"category": "locator", "fingerprint": "legacy-test",
+			"title": "Element not found",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, strategy, reason, replayAllowed := repairDecision([]map[string]any{signal})
+			if status != "manual_required" || strategy != "manual_reconcile" ||
+				replayAllowed || !strings.Contains(reason, "must not be replayed") {
+				t.Fatalf(
+					"decision = status %q, strategy %q, reason %q, replay %t",
+					status, strategy, reason, replayAllowed,
+				)
+			}
+		})
+	}
+}

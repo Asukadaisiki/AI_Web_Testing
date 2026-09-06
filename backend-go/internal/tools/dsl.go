@@ -29,9 +29,13 @@ func (t GenerateDSLTool) Definition() Definition {
 		Name: "generate_dsl",
 		Description: "Validate and persist a structured DSL candidate authored from the user's goal and verified page elements. " +
 			"Every step action must be one of: goto, click, input, wait_for, assert_text, " +
-			"assert_url_contains, capture_text. Express visibility checks as wait_for or postconditions, " +
+			"assert_url_contains, capture_text. Use preconditions for required pre-action state and postconditions for outcomes. " +
+			"network_request conditions may match URL substring, method, and status on one observed event. " +
+			"Express standalone visibility checks as wait_for, " +
 			"and give every cross-page anchor click a url_contains postcondition with the expected destination URL or path. " +
 			"never as assert_visible. Targets must be grounded in verified page elements. " +
+			"When a goal requires search through page controls, preserve the verified input then click steps; " +
+			"do not replace them with goto to a constructed search-result URL. " +
 			"Do not author candidates, match_count, or locator_confidence; locator preflight adds them.",
 		InputSchema: json.RawMessage(`{
 			"type":"object",
@@ -64,11 +68,24 @@ func (t GenerateDSLTool) Definition() Definition {
 												"target":{"type":"string"},
 												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
 												"page_state":{"type":"string"},
+												"preconditions":{"type":"array","items":{
+													"type":"object",
+													"properties":{
+														"type":{"type":"string","enum":["url_contains","url_changes","text_visible","text_gone","element_visible","element_gone","network_request","dom_changed","value_changed"]},
+														"value":{"type":["string","null"]},
+														"method":{"type":["string","null"]},
+														"status":{"type":["integer","null"],"minimum":100,"maximum":599},
+														"timeout_ms":{"type":"integer","minimum":100,"maximum":30000}
+													},
+													"required":["type"]
+												}},
 												"postconditions":{"type":"array","items":{
 													"type":"object",
 													"properties":{
 														"type":{"type":"string","enum":["url_contains","url_changes","text_visible","text_gone","element_visible","element_gone","network_request","dom_changed","value_changed"]},
 														"value":{"type":["string","null"],"description":"Expected destination URL/path, text, selector, or value. url_contains requires a non-empty target."},
+														"method":{"type":["string","null"]},
+														"status":{"type":["integer","null"],"minimum":100,"maximum":599},
 														"timeout_ms":{"type":"integer","minimum":100,"maximum":30000}
 													},
 													"required":["type"]
@@ -85,11 +102,24 @@ func (t GenerateDSLTool) Definition() Definition {
 												"trigger":{"type":"string"},
 												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
 												"page_state":{"type":"string"},
+												"preconditions":{"type":"array","items":{
+													"type":"object",
+													"properties":{
+														"type":{"type":"string","enum":["url_contains","url_changes","text_visible","text_gone","element_visible","element_gone","network_request","dom_changed","value_changed"]},
+														"value":{"type":["string","null"]},
+														"method":{"type":["string","null"]},
+														"status":{"type":["integer","null"],"minimum":100,"maximum":599},
+														"timeout_ms":{"type":"integer","minimum":100,"maximum":30000}
+													},
+													"required":["type"]
+												}},
 												"postconditions":{"type":"array","items":{
 													"type":"object",
 													"properties":{
 														"type":{"type":"string","enum":["url_contains","url_changes","text_visible","text_gone","element_visible","element_gone","network_request","dom_changed","value_changed"]},
 														"value":{"type":["string","null"]},
+														"method":{"type":["string","null"]},
+														"status":{"type":["integer","null"],"minimum":100,"maximum":599},
 														"timeout_ms":{"type":"integer","minimum":100,"maximum":30000}
 													},
 													"required":["type"]

@@ -1,0 +1,326 @@
+{
+  "contract_version": "failure.signal.v2",
+  "cases": [
+    {
+      "name": "configuration",
+      "execution_id": 101,
+      "report": null,
+      "error_message": "Relative goto step requires case.base_url or execution request base_url.",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "configuration",
+        "fingerprint": "79f657c8f00a5f71",
+        "title": "Relative goto step requires case.base_url or execution request base_url.",
+        "stage": "configuration",
+        "code": "fallback.configuration",
+        "retryable": false,
+        "side_effect_committed": null,
+        "source_reference": {
+          "type": "execution_error",
+          "execution_id": 101,
+          "step_index": null,
+          "json_pointer": "/error_message"
+        }
+      }
+    },
+    {
+      "name": "locator",
+      "execution_id": 102,
+      "report": {
+        "status": "failed",
+        "steps": [
+          {
+            "step_index": 2,
+            "action": "click",
+            "target": "Submit",
+            "status": "failed",
+            "action_outcome": {
+              "status": "not_executed",
+              "side_effect_state": "not_committed",
+              "error": "No visible candidate"
+            },
+            "locator_trace": {
+              "target": "Submit",
+              "failure_reason": "No visible candidate"
+            },
+            "error_message": "Locator target not found"
+          }
+        ]
+      },
+      "error_message": "Locator target not found",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "locator",
+        "fingerprint": "d56fca1a6fc11b7a",
+        "title": "Locator target not found",
+        "stage": "locator",
+        "code": "locator.no_match",
+        "retryable": true,
+        "side_effect_committed": false,
+        "source_reference": {
+          "type": "execution_report",
+          "execution_id": 102,
+          "step_index": 2,
+          "json_pointer": "/steps/2/action_outcome"
+        }
+      }
+    },
+    {
+      "name": "postcondition",
+      "execution_id": 103,
+      "report": {
+        "status": "failed",
+        "steps": [
+          {
+            "step_index": 3,
+            "action": "click",
+            "target": "Add to cart",
+            "status": "failed",
+            "condition_results": [
+              {
+                "phase": "postcondition",
+                "index": 0,
+                "type": "text_visible",
+                "expected": "Added",
+                "actual": false,
+                "status": "failed",
+                "duration_ms": 12,
+                "error": "postcondition 'text_visible' was not satisfied"
+              }
+            ],
+            "action_outcome": {
+              "status": "succeeded",
+              "side_effect_state": "committed"
+            },
+            "error_message": "Postcondition check failed"
+          }
+        ]
+      },
+      "error_message": "Postcondition check failed",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "assertion",
+        "fingerprint": "718f86e2482d80b2",
+        "title": "Postcondition check failed",
+        "stage": "postcondition",
+        "code": "condition.postcondition.text_visible.failed",
+        "retryable": false,
+        "side_effect_committed": true,
+        "source_reference": {
+          "type": "execution_report",
+          "execution_id": 103,
+          "step_index": 3,
+          "json_pointer": "/steps/3/condition_results/0"
+        }
+      }
+    },
+    {
+      "name": "navigation",
+      "execution_id": 104,
+      "report": {
+        "status": "failed",
+        "steps": [
+          {
+            "step_index": 0,
+            "action": "goto",
+            "status": "failed",
+            "action_outcome": {
+              "status": "failed",
+              "side_effect_state": "not_committed",
+              "error": "Navigation failed"
+            },
+            "error_message": "Navigation failed"
+          }
+        ]
+      },
+      "error_message": "Navigation failed",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "navigation",
+        "fingerprint": "766728a67bf5f3cf",
+        "title": "Navigation failed",
+        "stage": "action",
+        "code": "action.failed",
+        "retryable": true,
+        "side_effect_committed": false,
+        "source_reference": {
+          "type": "execution_report",
+          "execution_id": 104,
+          "step_index": 0,
+          "json_pointer": "/steps/0/action_outcome"
+        }
+      }
+    },
+    {
+      "name": "network_4xx",
+      "execution_id": 105,
+      "report": {
+        "status": "failed",
+        "steps": [
+          {
+            "step_index": 4,
+            "action": "wait_for",
+            "status": "failed",
+            "action_outcome": {
+              "status": "succeeded",
+              "side_effect_state": "not_applicable"
+            },
+            "network_events": [
+              {
+                "event_type": "response",
+                "url": "https://example.test/api/cart",
+                "method": "POST",
+                "status": 409
+              }
+            ],
+            "error_message": "Request rejected"
+          }
+        ]
+      },
+      "error_message": "Request rejected",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "network",
+        "fingerprint": "ab1485e6d4fa30f1",
+        "title": "Request rejected",
+        "stage": "network",
+        "code": "network.http_4xx",
+        "retryable": false,
+        "side_effect_committed": false,
+        "source_reference": {
+          "type": "execution_report",
+          "execution_id": 105,
+          "step_index": 4,
+          "json_pointer": "/steps/4/network_events/0"
+        }
+      }
+    },
+    {
+      "name": "network_5xx",
+      "execution_id": 106,
+      "report": {
+        "status": "failed",
+        "steps": [
+          {
+            "step_index": 5,
+            "action": "wait_for",
+            "status": "failed",
+            "action_outcome": {
+              "status": "succeeded",
+              "side_effect_state": "not_applicable"
+            },
+            "network_events": [
+              {
+                "event_type": "response",
+                "url": "https://example.test/api/cart",
+                "method": "POST",
+                "status": 503
+              }
+            ],
+            "error_message": "Service unavailable"
+          }
+        ]
+      },
+      "error_message": "Service unavailable",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "network",
+        "fingerprint": "0ce99a0c05b808ff",
+        "title": "Service unavailable",
+        "stage": "network",
+        "code": "network.http_5xx",
+        "retryable": true,
+        "side_effect_committed": false,
+        "source_reference": {
+          "type": "execution_report",
+          "execution_id": 106,
+          "step_index": 5,
+          "json_pointer": "/steps/5/network_events/0"
+        }
+      }
+    },
+    {
+      "name": "runner",
+      "execution_id": 107,
+      "report": {
+        "status": "failed",
+        "steps": [
+          {
+            "step_index": 6,
+            "action": "wait_for",
+            "status": "failed",
+            "action_outcome": {
+              "status": "failed",
+              "side_effect_state": "not_applicable",
+              "error": "RuntimeError: browser closed"
+            },
+            "error_message": "RuntimeError: browser closed"
+          }
+        ]
+      },
+      "error_message": "RuntimeError: browser closed",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "runner",
+        "fingerprint": "ee4c9f974d4e54af",
+        "title": "RuntimeError: browser closed",
+        "stage": "action",
+        "code": "exception.runtime_error",
+        "retryable": false,
+        "side_effect_committed": false,
+        "source_reference": {
+          "type": "execution_report",
+          "execution_id": 107,
+          "step_index": 6,
+          "json_pointer": "/steps/6/error_message"
+        }
+      }
+    },
+    {
+      "name": "unknown_side_effect",
+      "execution_id": 108,
+      "report": {
+        "status": "failed",
+        "steps": [
+          {
+            "step_index": 7,
+            "action": "click",
+            "target": "Pay",
+            "status": "failed",
+            "action_outcome": {
+              "status": "unknown",
+              "side_effect_state": "unknown",
+              "error": "TimeoutError: connection lost after dispatch"
+            },
+            "error_message": "TimeoutError: connection lost after dispatch"
+          }
+        ]
+      },
+      "error_message": "TimeoutError: connection lost after dispatch",
+      "expected": {
+        "schema_version": "failure.signal.v2",
+        "category": "runner",
+        "fingerprint": "e9f0145f30be785b",
+        "title": "TimeoutError: connection lost after dispatch",
+        "stage": "action",
+        "code": "exception.timeout_error",
+        "retryable": false,
+        "side_effect_committed": null,
+        "source_reference": {
+          "type": "execution_report",
+          "execution_id": 108,
+          "step_index": 7,
+          "json_pointer": "/steps/7/error_message"
+        }
+      }
+    }
+  ],
+  "legacy_v1": {
+    "category": "locator",
+    "fingerprint": "locator-test",
+    "title": "Element not found",
+    "step_index": 1,
+    "action": "click",
+    "target": "Login"
+  }
+}

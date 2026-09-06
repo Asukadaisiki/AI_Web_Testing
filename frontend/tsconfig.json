@@ -9,6 +9,7 @@
     "noUnusedParameters": true,
     "types": ["vite/client"],
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "skipLibCheck": true

@@ -50,11 +50,35 @@ export function ExecutionAnalysisPanel({
         <Space direction="vertical" size={4} style={{ width: "100%" }}>
           {analysis.failure_signals.map((signal) => (
             <div key={signal.fingerprint}>
-              <Tag color="red">{signal.category}</Tag>
-              <Typography.Text type="secondary">
-                {signal.action ? `${signal.action}: ` : ""}
-                {signal.title}
-              </Typography.Text>
+              <Space wrap size={4}>
+                <Tag color="red">{signal.category}</Tag>
+                {signal.schema_version === "failure.signal.v2" ? (
+                  <>
+                    <Tag>{signal.stage}</Tag>
+                    <Tag>{signal.code}</Tag>
+                    <Tag color={signal.retryable ? "blue" : "default"}>
+                      {signal.retryable ? "可重试" : "不可重试"}
+                    </Tag>
+                    {signal.side_effect_committed === true ? (
+                      <Tag color="orange">副作用已提交</Tag>
+                    ) : signal.side_effect_committed === null ? (
+                      <Tag color="orange">副作用未知</Tag>
+                    ) : null}
+                  </>
+                ) : null}
+                <Typography.Text type="secondary">
+                  {signal.action ? `${signal.action}: ` : ""}
+                  {signal.title}
+                </Typography.Text>
+              </Space>
+              {signal.schema_version === "failure.signal.v2" ? (
+                <div>
+                  <Typography.Text type="secondary">
+                    来源：执行 #{signal.source_reference.execution_id}
+                    {signal.source_reference.json_pointer}
+                  </Typography.Text>
+                </div>
+              ) : null}
             </div>
           ))}
         </Space>

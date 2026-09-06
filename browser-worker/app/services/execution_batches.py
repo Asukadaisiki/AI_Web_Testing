@@ -9,7 +9,7 @@ from threading import Event, Thread
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import ExecutionBatch, ExecutionJob
+from app.models import ExecutionBatch, ExecutionJob, TestCase, TestCaseRun
 from app.schemas.executions import CaseExecutionRequest, StoredCaseExecutionDetail
 from app.services.errors import EntityNotFoundError
 
@@ -33,6 +33,7 @@ def claim_next_execution_job(
 ) -> ExecutionJob | None:
     """Atomically claim one job while respecting its batch concurrency limit."""
     now = datetime.now(UTC).replace(tzinfo=None)
+    _quarantine_unsafe_expired_jobs(session, now)
     expired = or_(
         ExecutionJob.status == "pending",
         (ExecutionJob.status == "running") & (ExecutionJob.lease_expires_at < now),
@@ -105,6 +106,85 @@ def claim_next_execution_job(
         return job
 
     return None
+
+
+def _quarantine_unsafe_expired_jobs(session: Session, now: datetime) -> None:
+    expired_jobs = list(
+        session.scalars(
+            select(ExecutionJob)
+            .where(
+                ExecutionJob.status == "running",
+                ExecutionJob.lease_expires_at < now,
+            )
+            .with_for_update(skip_locked=True)
+        ).all()
+    )
+    changed_batches: set[int] = set()
+    for job in expired_jobs:
+        if not _requires_manual_recovery(session, job):
+            continue
+        message = (
+            "Lease expired after a non-idempotent action may have been dispatched; "
+            "automatic whole-case replay is blocked."
+        )
+        job.status = "needs_intervention"
+        job.last_error_message = message
+        job.finished_at = now
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.heartbeat_at = None
+        latest_run = session.scalar(
+            select(TestCaseRun)
+            .where(TestCaseRun.job_id == job.id)
+            .order_by(TestCaseRun.id.desc())
+            .limit(1)
+        )
+        if latest_run is not None and latest_run.status == "running":
+            latest_run.status = "needs_intervention"
+            latest_run.error_message = message
+            latest_run.finished_at = now
+        changed_batches.add(job.batch_id)
+
+    for batch_id in changed_batches:
+        batch = session.get(ExecutionBatch, batch_id)
+        if batch is not None:
+            _refresh_batch_status(session, batch)
+    if changed_batches:
+        session.commit()
+
+
+def _requires_manual_recovery(session: Session, job: ExecutionJob) -> bool:
+    dsl = job.dsl_snapshot
+    if not dsl:
+        case = session.get(TestCase, job.case_id)
+        dsl = case.dsl if case is not None else None
+    steps = (dsl or {}).get("steps") or []
+    if not any(step.get("action") == "click" for step in steps):
+        return False
+
+    latest_run = session.scalar(
+        select(TestCaseRun)
+        .where(TestCaseRun.job_id == job.id)
+        .order_by(TestCaseRun.id.desc())
+        .limit(1)
+    )
+    if latest_run is None or latest_run.status == "running":
+        return True
+
+    report_steps = (latest_run.report or {}).get("steps") or []
+    observed_click = False
+    for step in report_steps:
+        if step.get("action") != "click":
+            continue
+        observed_click = True
+        outcome = step.get("action_outcome") or {}
+        if not outcome:
+            return True
+        if outcome.get("status") in {"succeeded", "unknown"}:
+            return True
+        if outcome.get("side_effect_state") in {"committed", "unknown"}:
+            return True
+    return not observed_click
 
 
 def finish_execution_job(

@@ -27,6 +27,42 @@ IGNORED_A11Y_ROLES: set[str] = {
     "roletype", "structure", "widget", "window",
 }
 
+_DOM_INTERACTIVE_SELECTOR = ", ".join(
+    (
+        "a[href]",
+        "button",
+        "input:not([type='hidden'])",
+        "select",
+        "textarea",
+        "[contenteditable='true']",
+        "[role='button']",
+        "[role='link']",
+        "[role='checkbox']",
+        "[role='radio']",
+        "[role='switch']",
+        "[role='tab']",
+        "[role='combobox']",
+        "[role='searchbox']",
+        "[role='textbox']",
+        "[role='spinbutton']",
+    )
+)
+_DOM_ATTR_WHITELIST = {
+    "aria-label",
+    "data-cy",
+    "data-product-id",
+    "data-qa",
+    "data-test",
+    "data-testid",
+    "href",
+    "id",
+    "name",
+    "placeholder",
+    "role",
+    "title",
+    "type",
+}
+
 def _a11y_node_in_viewport(node: dict, viewport: dict) -> bool:
     bb = node.get("boundingBox")
     if not bb or not isinstance(bb, dict):
@@ -139,10 +175,12 @@ def _stable_dom_selectors(dom: dict[str, Any]) -> list[tuple[str, str]]:
     if data_testid:
         selectors.append(("data-testid", str(data_testid)))
 
-    data_product_id = attrs.get("data-product-id")
-    if data_product_id:
-        prefix = f"{tag}" if tag else ""
-        selectors.append(("css", f'{prefix}[data-product-id="{_css_attr_value(str(data_product_id))}"]:visible'))
+    for attribute in ("data-test", "data-qa", "data-cy", "data-product-id"):
+        value = attrs.get(attribute)
+        if value:
+            selectors.append(
+                ("css", f'{tag}[{attribute}="{_css_attr_value(str(value))}"]')
+            )
 
     href = attrs.get("href")
     if href and tag == "a" and not str(href).startswith(("javascript:", "#")):
@@ -151,6 +189,13 @@ def _stable_dom_selectors(dom: dict[str, Any]) -> list[tuple[str, str]]:
     elem_id = attrs.get("id")
     if elem_id and re.match(r"^[A-Za-z_][\w-]*$", str(elem_id)):
         selectors.append(("css", f"#{elem_id}"))
+
+    for attribute in ("name", "placeholder", "aria-label", "title"):
+        value = attrs.get(attribute)
+        if value and tag:
+            selectors.append(
+                ("css", f'{tag}[{attribute}="{_css_attr_value(str(value))}"]')
+            )
 
     return selectors
 
@@ -182,30 +227,31 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                 function() {
                   const attrs = {};
                   for (const attr of this.attributes || []) {
-                    attrs[attr.name] = attr.value;
+                    if ([
+                      "aria-label", "data-cy", "data-product-id", "data-qa", "data-test",
+                      "data-testid", "href", "id", "name", "placeholder",
+                      "role", "title", "type"
+                    ].includes(attr.name)) {
+                      attrs[attr.name] = attr.value;
+                    }
                   }
                   const rect = this.getBoundingClientRect();
                   const style = window.getComputedStyle(this);
-                  let advertisingContext = false;
-                  for (let current = this; current; current = current.parentElement) {
-                    const marker = [
-                      current.id,
-                      current.className,
-                      current.getAttribute && current.getAttribute('role'),
-                      current.getAttribute && current.getAttribute('aria-label'),
-                      current.getAttribute && current.getAttribute('title')
-                    ].filter(Boolean).join(' ').toLowerCase();
-                    if (/(^|[\\s_-])(ad|ads|advert|advertisement|sponsored|promoted)([\\s_-]|$)/.test(marker)) {
-                      advertisingContext = true;
-                      break;
-                    }
-                  }
+                  const advertisingContext = Boolean(this.closest(
+                    "iframe[src*='ad' i], [data-ad], [data-ad-slot], " +
+                    "[data-ad-unit], .adsbygoogle, [aria-label*='advertisement' i], " +
+                    "[aria-label*='sponsored' i]"
+                  ));
                   return {
                     tag: this.tagName ? this.tagName.toLowerCase() : "",
                     attrs,
+                    connected: this.isConnected,
                     visible: rect.width > 0 && rect.height > 0 &&
-                      style.visibility !== "hidden" && style.display !== "none",
-                    enabled: !this.disabled && this.getAttribute("aria-disabled") !== "true",
+                      style.visibility !== "hidden" && style.display !== "none" &&
+                      style.opacity !== "0" && !this.hidden,
+                    enabled: !this.disabled &&
+                      this.getAttribute("aria-disabled") !== "true" &&
+                      !this.closest("[inert]"),
                     textContent: this.textContent || "",
                     third_party_frame: window !== window.top && window.frameElement === null,
                     advertising_context: advertisingContext
@@ -213,6 +259,8 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                 }
                 """,
             }).get("result", {}).get("value") or {}
+            if str((payload.get("attrs") or {}).get("type") or "").lower() == "password":
+                payload["attrs"] = {}
             node["dom"] = payload
             # Use textContent instead of innerText to avoid CSS text-transform issues
             text_content = payload.get("textContent", "")
@@ -220,6 +268,12 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                 node["original_name"] = node.get("name")
                 node["name"] = text_content
             node["verified_selectors"] = []
+            if not (
+                payload.get("connected")
+                and payload.get("visible")
+                and payload.get("enabled")
+            ):
+                continue
             for strategy, selector in _stable_dom_selectors(payload):
                 try:
                     locator = page.get_by_test_id(selector) if strategy == "data-testid" else page.locator(selector)
@@ -242,6 +296,198 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                     pass
 
 
+def _dom_role(tag: str, attrs: dict[str, str]) -> str:
+    explicit = str(attrs.get("role") or "").strip().lower()
+    if explicit:
+        return explicit
+    input_type = str(attrs.get("type") or "text").strip().lower()
+    if tag == "a":
+        return "link"
+    if tag == "button" or (tag == "input" and input_type in {"button", "submit", "reset"}):
+        return "button"
+    if tag == "select":
+        return "combobox"
+    if tag == "textarea" or (tag == "input" and input_type not in {"checkbox", "radio", "range", "number"}):
+        return "searchbox" if input_type == "search" else "textbox"
+    return {
+        "checkbox": "checkbox",
+        "radio": "radio",
+        "range": "slider",
+        "number": "spinbutton",
+    }.get(input_type, "generic")
+
+
+def _collect_dom_interactive_supplement(
+    page,
+    client,
+    *,
+    page_state: str,
+    existing_nodes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    existing_backend_ids = {
+        int(node["backend_dom_node_id"])
+        for node in existing_nodes
+        if node.get("backend_dom_node_id")
+    }
+    existing_selectors = {
+        (str(selector.get("strategy") or ""), str(selector.get("selector") or ""))
+        for node in existing_nodes
+        for selector in node.get("verified_selectors", [])
+        if isinstance(selector, dict)
+    }
+    search_id = None
+    supplement: list[dict[str, Any]] = []
+    try:
+        client.send("DOM.getDocument", {"depth": -1, "pierce": False})
+        search = client.send(
+            "DOM.performSearch",
+            {"query": _DOM_INTERACTIVE_SELECTOR, "includeUserAgentShadowDOM": False},
+        )
+        search_id = search.get("searchId")
+        count = int(search.get("resultCount") or 0)
+        if not search_id or count < 1:
+            return []
+        node_ids = client.send(
+            "DOM.getSearchResults",
+            {"searchId": search_id, "fromIndex": 0, "toIndex": count},
+        ).get("nodeIds", [])
+        for node_id in node_ids:
+            object_id = None
+            try:
+                described = client.send(
+                    "DOM.describeNode", {"nodeId": int(node_id), "depth": 0}
+                ).get("node", {})
+                backend_id = int(described.get("backendNodeId") or 0)
+                if not backend_id or backend_id in existing_backend_ids:
+                    continue
+                resolved = client.send("DOM.resolveNode", {"nodeId": int(node_id)})
+                object_id = resolved.get("object", {}).get("objectId")
+                if not object_id:
+                    continue
+                payload = client.send(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": object_id,
+                        "returnByValue": True,
+                        "functionDeclaration": """
+                        function() {
+                          const allowed = new Set([
+                            "aria-label", "data-cy", "data-product-id", "data-qa", "data-test",
+                            "data-testid", "href", "id", "name", "placeholder",
+                            "role", "title", "type"
+                          ]);
+                          const attrs = {};
+                          for (const attr of this.attributes || []) {
+                            if (allowed.has(attr.name)) attrs[attr.name] = attr.value;
+                          }
+                          const rect = this.getBoundingClientRect();
+                          const style = window.getComputedStyle(this);
+                          const advertisingContext = Boolean(this.closest(
+                            "iframe[src*='ad' i], [data-ad], [data-ad-slot], " +
+                            "[data-ad-unit], .adsbygoogle, [aria-label*='advertisement' i], " +
+                            "[aria-label*='sponsored' i]"
+                          ));
+                          return {
+                            tag: this.tagName ? this.tagName.toLowerCase() : "",
+                            attrs,
+                            connected: this.isConnected,
+                            visible: rect.width > 0 && rect.height > 0 &&
+                              style.visibility !== "hidden" && style.display !== "none" &&
+                              style.opacity !== "0" && !this.hidden,
+                            enabled: !this.disabled &&
+                              this.getAttribute("aria-disabled") !== "true" &&
+                              !this.closest("[inert]"),
+                            textContent: (this.textContent || "").trim().slice(0, 120),
+                            advertising_context: advertisingContext,
+                            third_party_frame: window !== window.top && window.frameElement === null
+                          };
+                        }
+                        """,
+                    },
+                ).get("result", {}).get("value") or {}
+                attrs = {
+                    str(key): str(value)
+                    for key, value in (payload.get("attrs") or {}).items()
+                    if key in _DOM_ATTR_WHITELIST
+                }
+                if (
+                    not payload.get("connected")
+                    or not payload.get("visible")
+                    or not payload.get("enabled")
+                    or payload.get("advertising_context")
+                    or payload.get("third_party_frame")
+                    or attrs.get("type", "").lower() == "password"
+                ):
+                    continue
+                payload["attrs"] = attrs
+                verified: list[dict[str, Any]] = []
+                for strategy, selector in _stable_dom_selectors(payload):
+                    locator = (
+                        page.get_by_test_id(selector)
+                        if strategy == "data-testid"
+                        else page.locator(selector)
+                    )
+                    if locator.count() != 1:
+                        continue
+                    key = (strategy, selector)
+                    if key in existing_selectors:
+                        verified = []
+                        break
+                    verified.append(
+                        {
+                            "strategy": strategy,
+                            "selector": selector,
+                            "name": "",
+                            "source": "dom_verified_interactive_control",
+                        }
+                    )
+                if not verified:
+                    continue
+                name = next(
+                    (
+                        attrs.get(attribute, "").strip()
+                        for attribute in ("aria-label", "placeholder", "title", "name")
+                        if attrs.get(attribute, "").strip()
+                    ),
+                    str(payload.get("textContent") or "").strip(),
+                )[:120]
+                for selector in verified:
+                    selector["name"] = name
+                    existing_selectors.add(
+                        (str(selector["strategy"]), str(selector["selector"]))
+                    )
+                existing_backend_ids.add(backend_id)
+                supplement.append(
+                    {
+                        "node_id": f"d{backend_id}",
+                        "backend_dom_node_id": backend_id,
+                        "role": _dom_role(str(payload.get("tag") or ""), attrs),
+                        "name": name,
+                        "level": None,
+                        "parent_id": None,
+                        "focusable": True,
+                        "disabled": False,
+                        "page_state": page_state,
+                        "source": "dom_verified_interactive_control",
+                        "dom": payload,
+                        "verified_selectors": verified,
+                    }
+                )
+            except Exception:
+                continue
+            finally:
+                if object_id:
+                    with suppress(Exception):
+                        client.send("Runtime.releaseObject", {"objectId": object_id})
+    except Exception:
+        logger.warning("DOM interactive supplement collection failed", exc_info=True)
+    finally:
+        if search_id:
+            with suppress(Exception):
+                client.send("DOM.discardSearchResults", {"searchId": search_id})
+    return supplement
+
+
 def collect_a11y_nodes(
     page,
     *,
@@ -257,16 +503,30 @@ def collect_a11y_nodes(
         _expand_collapsed_components(page, keywords)
     client = page.context.new_cdp_session(page)
     try:
+        client.send("DOM.enable")
         client.send("Accessibility.enable")
         result = client.send("Accessibility.getFullAXTree", {})
         raw_nodes = result.get("nodes", [])
         filter_pass = _filter_a11y_nodes(raw_nodes, viewport=viewport)
         nodes = _cdp_to_a11y_nodes({"nodes": filter_pass}, page_state=page_state)
         _augment_a11y_nodes_with_dom(page, client, nodes)
-        return [node for node in nodes if _is_business_candidate(node)]
+        nodes = [node for node in nodes if _is_business_candidate(node)]
+        nodes.extend(
+            _collect_dom_interactive_supplement(
+                page,
+                client,
+                page_state=page_state,
+                existing_nodes=nodes,
+            )
+        )
+        return nodes
     finally:
         try:
             client.send("Accessibility.disable")
+        except Exception:
+            pass
+        try:
+            client.send("DOM.disable")
         except Exception:
             pass
         try:
@@ -664,8 +924,9 @@ def _wait_for_flow_target(page, target: str, timeout_ms: int) -> None:
             timeout=timeout_ms,
         )
         return
-    if target.startswith("css="):
-        page.locator(target.removeprefix("css=")).first.wait_for(
+    if target.startswith(("css=", "#", ".")):
+        selector = target.removeprefix("css=")
+        page.locator(selector).first.wait_for(
             state="visible",
             timeout=timeout_ms,
         )
@@ -822,12 +1083,51 @@ def _collect_flow_a11y(
     # Normalize all steps to explore format
     flow_steps = [_normalize_flow_step(s) for s in flow_steps]
 
+    managed = not bool(session_id)
+    pw = None
+    browser = None
+    context = None
+    managed_cleanup_done = False
+
+    def cleanup_managed_browser() -> None:
+        nonlocal managed_cleanup_done
+        if not managed or managed_cleanup_done:
+            return
+        managed_cleanup_done = True
+        try:
+            if context is not None:
+                context.close()
+        except Exception:
+            logger.warning(
+                "_collect_flow_a11y: failed to close managed browser context",
+                exc_info=True,
+            )
+        finally:
+            try:
+                if browser is not None:
+                    browser.close()
+            except Exception:
+                logger.warning(
+                    "_collect_flow_a11y: failed to close managed browser",
+                    exc_info=True,
+                )
+            finally:
+                try:
+                    if pw is not None:
+                        pw.__exit__(None, None, None)
+                except Exception:
+                    logger.warning(
+                        "_collect_flow_a11y: failed to exit managed Playwright",
+                        exc_info=True,
+                    )
+
     if session_id:
-        ctx, page = BrowserSessionManager.get_or_create_context(
+        _, page = BrowserSessionManager.get_or_create_context(
             session_id, storage_state_path=storage_state_path,
         )
     else:
         pw = sync_playwright()
+        startup_complete = False
         try:
             playwright = pw.__enter__()
             browser = playwright.chromium.launch(headless=True)
@@ -836,24 +1136,107 @@ def _collect_flow_a11y(
                 context_kwargs["storage_state"] = storage_state_path
             context = browser.new_context(**context_kwargs)
             page = context.new_page()
-        except Exception:
-            try:
-                pw.__exit__(None, None, None)
-            except Exception:
-                logger.warning(
-                    "_collect_flow_a11y: failed to clean up Playwright after launch failure",
-                    exc_info=True,
-                )
-            raise
+            startup_complete = True
+        finally:
+            if not startup_complete:
+                cleanup_managed_browser()
 
     results: list[dict[str, Any]] = []
     state_index = 0
     revision = 0
     url_to_state: dict[str, str] = {}
-    managed = not bool(session_id)
-
     # Tracks the most recently collected a11y nodes for DOM-level click resolution
     prev_action_nodes: list[dict[str, Any]] | None = None
+
+    def state_for(url: str, description: str) -> str:
+        nonlocal state_index
+        key = f"{urldefrag(url)[0]}|{description}"
+        if key not in url_to_state:
+            url_to_state[key] = f"S{state_index}"
+            state_index += 1
+        return url_to_state[key]
+
+    def collect_action_snapshot(
+        *,
+        step_index: int,
+        action_index: int,
+        action_description: str,
+        target: str,
+        description: str,
+        phase: str,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        nonlocal revision
+        snapshot_url = page.url
+        snapshot_state = state_for(snapshot_url, description)
+        nodes = collect_a11y_nodes(
+            page,
+            page_state=snapshot_state,
+            core_user_flow_text=core_user_flow_text,
+        )
+        revision += 1
+        normalized_target = re.sub(r"\s+", " ", target.strip().casefold())
+        target_evidence = []
+        for node in nodes:
+            selector_match = any(
+                str(selector.get("selector") or "").strip() == target.removeprefix("css=")
+                for selector in node.get("verified_selectors", [])
+                if isinstance(selector, dict)
+            )
+            normalized_name = re.sub(
+                r"\s+", " ", str(node.get("name") or "").strip().casefold()
+            )
+            name_match = bool(
+                normalized_target
+                and normalized_name
+                and (
+                    normalized_name == normalized_target
+                    or normalized_target in normalized_name
+                )
+            )
+            if not selector_match and not name_match:
+                continue
+            dom = node.get("dom") or {}
+            target_evidence.append(
+                {
+                    "node_id": node.get("node_id"),
+                    "backend_dom_node_id": node.get("backend_dom_node_id"),
+                    "role": node.get("role"),
+                    "name": node.get("name"),
+                    "page_state": node.get("page_state"),
+                    "source": node.get("source"),
+                    "dom": {
+                        "tag": dom.get("tag"),
+                        "attrs": dom.get("attrs") or {},
+                    },
+                    "verified_selectors": node.get("verified_selectors") or [],
+                }
+            )
+            if len(target_evidence) >= 10:
+                break
+        entry = {
+            "url": snapshot_url,
+            "page_state": snapshot_state,
+            "description": description,
+            "actions": [
+                {
+                    "step_index": step_index,
+                    "action_index": action_index,
+                    "action_description": action_description,
+                    "phase": phase,
+                    "status": "success",
+                    "url": snapshot_url,
+                    "page_state": snapshot_state,
+                    "target_evidence": target_evidence,
+                    "evidence_count": len(target_evidence),
+                }
+            ],
+            "a11y_nodes": nodes,
+            "element_count": len(nodes),
+            "status": "success",
+            "revision": revision,
+        }
+        results.append(entry)
+        return entry, nodes
 
     try:
         for step_i, step in enumerate(flow_steps):
@@ -881,16 +1264,39 @@ def _collect_flow_a11y(
                         })
                         break
                     url_str = urljoin(base_url, url_str.lstrip("/"))
-                try:
-                    logger.info("_collect_flow_a11y: navigating to %s", url_str)
-                    page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
+                if _same_document_url(page.url, url_str):
+                    logger.info(
+                        "_collect_flow_a11y: preserving current document for %s",
+                        url_str,
+                    )
+                    url_str = page.url
+                else:
                     try:
-                        page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                    except Exception:
-                        pass
-                    # Check if page actually loaded (not stuck on about:blank)
-                    if page.url == "about:blank":
-                        logger.warning("_collect_flow_a11y: page stuck on about:blank after goto %s", url_str)
+                        logger.info("_collect_flow_a11y: navigating to %s", url_str)
+                        page.goto(url_str, timeout=timeout_ms, wait_until="domcontentloaded")
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                        except Exception:
+                            pass
+                        # Check if page actually loaded (not stuck on about:blank)
+                        if page.url == "about:blank":
+                            logger.warning("_collect_flow_a11y: page stuck on about:blank after goto %s", url_str)
+                            revision += 1
+                            results.append({
+                                "url": url_str, "page_state": "ERROR",
+                                "a11y_nodes": [], "element_count": 0,
+                                "status": "error",
+                                "revision": revision,
+                                "failure": {
+                                    "code": "navigation_failed",
+                                    "step_index": step_i,
+                                    "message": "page remained on about:blank",
+                                },
+                                "error": "页面未能加载（停留在 about:blank），可能是网站无法访问或被反爬虫机制阻止",
+                            })
+                            break
+                    except Exception as exc:
+                        logger.warning("_collect_flow_a11y: goto failed for %s: %s", url_str, exc)
                         revision += 1
                         results.append({
                             "url": url_str, "page_state": "ERROR",
@@ -900,50 +1306,17 @@ def _collect_flow_a11y(
                             "failure": {
                                 "code": "navigation_failed",
                                 "step_index": step_i,
-                                "message": "page remained on about:blank",
+                                "message": str(exc),
                             },
-                            "error": "页面未能加载（停留在 about:blank），可能是网站无法访问或被反爬虫机制阻止",
+                            "error": str(exc),
                         })
                         break
-                except Exception as exc:
-                    logger.warning("_collect_flow_a11y: goto failed for %s: %s", url_str, exc)
-                    revision += 1
-                    results.append({
-                        "url": url_str, "page_state": "ERROR",
-                        "a11y_nodes": [], "element_count": 0,
-                        "status": "error",
-                        "revision": revision,
-                        "failure": {
-                            "code": "navigation_failed",
-                            "step_index": step_i,
-                            "message": str(exc),
-                        },
-                        "error": str(exc),
-                    })
-                    break
 
             actions = step.get("actions")
             if isinstance(actions, list) and actions:
                 logger.info("_collect_flow_a11y: executing %d actions", len(actions))
-                # Collect page state before actions
-                current_url = page.url
                 description = step.get("description", "")
-                page_key = f"{current_url.rstrip('/')}|{description}"
-                if page_key not in url_to_state:
-                    url_to_state[page_key] = f"S{state_index}"
-                    state_index += 1
-                page_state_id = url_to_state[page_key]
-
-                # Initialize page entry with actions list
-                page_entry = {
-                    "url": current_url,
-                    "page_state": page_state_id,
-                    "description": description,
-                    "actions": [],
-                    "element_count": 0,  # Will be updated after actions
-                    "status": "success",
-                }
-
+                action_failed = False
                 for action_idx, action_def in enumerate(actions):
                     if not isinstance(action_def, dict):
                         continue
@@ -953,6 +1326,16 @@ def _collect_flow_a11y(
                     if not act:
                         continue
 
+                    action_desc = f"{act} {target}" if target else act
+                    before_entry, before_nodes = collect_action_snapshot(
+                        step_index=step_i,
+                        action_index=action_idx,
+                        action_description=action_desc,
+                        target=target,
+                        description=description,
+                        phase="before",
+                    )
+                    prev_action_nodes = before_nodes
                     url_before_action = page.url
                     expected_navigation_url = None
                     try:
@@ -1043,81 +1426,69 @@ def _collect_flow_a11y(
                             "target": target,
                             "message": str(exc),
                         }
-                        page_entry["status"] = "error"
-                        page_entry["failure"] = failure
-                        page_entry["actions"].append(
+                        revision += 1
+                        results.append(
                             {
-                                "action_index": action_idx,
-                                "action_description": (
-                                    f"{act} {target}" if target else act
-                                ),
-                                "status": "error",
-                                "failure": failure,
+                                "url": page.url,
+                                "page_state": state_for(page.url, description),
+                                "description": description,
+                                "actions": [
+                                    {
+                                        "step_index": step_i,
+                                        "action_index": action_idx,
+                                        "action_description": action_desc,
+                                        "phase": "after",
+                                        "status": "error",
+                                        "failure": failure,
+                                        "url": page.url,
+                                        "page_state": state_for(page.url, description),
+                                        "target_evidence": [],
+                                        "evidence_count": 0,
+                                    }
+                                ],
                                 "a11y_nodes": [],
                                 "element_count": 0,
+                                "status": "error",
+                                "revision": revision,
+                                "failure": failure,
                             }
                         )
                         logger.warning(
                             "_collect_flow_a11y: action failed: %s",
                             failure,
                         )
+                        action_failed = True
                         break
 
-                    # Collect a11y nodes after this action
-                    action_desc = f"{act} {target}" if target else act
-                    nodes = collect_a11y_nodes(page, page_state=page_state_id, core_user_flow_text=core_user_flow_text)
-
-                    # Keep latest nodes for DOM-level click resolution in next actions
-                    prev_action_nodes = nodes
-
-                    # Add action entry with nodes
-                    action_entry = {
-                        "action_index": action_idx,
-                        "action_description": action_desc,
-                        "status": "success",
-                        "a11y_nodes": nodes,
-                        "element_count": len(nodes),
-                    }
-                    page_entry["actions"].append(action_entry)
-                    page_entry["element_count"] = max(page_entry["element_count"], len(nodes))
-
-                    logger.info("_collect_flow_a11y: step %d action %d (%s) completed, nodes=%d",
-                               step_i, action_idx, action_desc, len(nodes))
-
-                # If navigation happened during actions, attribute nodes to the final URL
-                final_url = page.url
-                if final_url and not _same_document_url(final_url, current_url):
-                    final_key = f"{final_url.rstrip('/')}|{description}"
-                    if final_key not in url_to_state:
-                        url_to_state[final_key] = f"S{state_index}"
-                        state_index += 1
-                    new_state = url_to_state[final_key]
-                    page_entry["url"] = final_url
-                    page_entry["page_state"] = new_state
-                    # Update action nodes' page_state too
-                    for a_entry in page_entry.get("actions", []):
-                        for n in a_entry.get("a11y_nodes", []):
-                            if isinstance(n, dict):
-                                n["page_state"] = new_state
-                    logger.info(
-                        "_collect_flow_a11y: step %d navigated %s → %s, re-assigned state=%s",
-                        step_i, current_url, final_url, new_state,
+                    after_entry, after_nodes = collect_action_snapshot(
+                        step_index=step_i,
+                        action_index=action_idx,
+                        action_description=action_desc,
+                        target=target,
+                        description=description,
+                        phase="after",
                     )
+                    prev_action_nodes = after_nodes
 
-                revision += 1
-                page_entry["revision"] = revision
-                results.append(page_entry)
-                if page_entry["status"] == "error":
+                    logger.info(
+                        "_collect_flow_a11y: step %d action %d (%s) completed, "
+                        "before=%s/%s after=%s/%s nodes=%d",
+                        step_i,
+                        action_idx,
+                        action_desc,
+                        before_entry["url"],
+                        before_entry["page_state"],
+                        after_entry["url"],
+                        after_entry["page_state"],
+                        len(after_nodes),
+                    )
+                if action_failed:
                     break
             else:
                 # No actions, just collect nodes for this step
                 current_url = page.url
                 description = step.get("description", "")
-                key = f"{current_url.rstrip('/')}|{description}" if description else current_url.rstrip("/")
-                if key not in url_to_state:
-                    url_to_state[key] = f"S{state_index}"
-                    state_index += 1
-                state_id = url_to_state[key]
+                state_id = state_for(current_url, description)
 
                 nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
                 prev_action_nodes = nodes
@@ -1150,15 +1521,7 @@ def _collect_flow_a11y(
             }
         )
     finally:
-        if managed:
-            try:
-                context.close()
-            except Exception:
-                pass
-            try:
-                browser.close()
-            except Exception:
-                pass
+        cleanup_managed_browser()
     logger.info("_collect_flow_a11y completed: %d results", len(results))
 
     # Deduplicate results: keep unique pages with their actions
@@ -1168,7 +1531,7 @@ def _collect_flow_a11y(
 
 
 def _same_document_url(left: str, right: str) -> bool:
-    return urldefrag(left)[0].rstrip("/") == urldefrag(right)[0].rstrip("/")
+    return urldefrag(left)[0] == urldefrag(right)[0]
 
 
 def _wait_for_expected_navigation(
@@ -1222,15 +1585,29 @@ def _deduplicate_explore_results(results: list[dict[str, Any]]) -> list[dict[str
     # Group by URL
     pages_by_url: dict[str, dict] = {}
     failures: list[dict[str, Any]] = []
+
+    def merge_actions(
+        older: list[dict[str, Any]],
+        newer: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for action in [*older, *newer]:
+            key = (
+                action.get("step_index"),
+                action.get("action_index"),
+                action.get("action_description", ""),
+                action.get("phase", ""),
+            )
+            merged[key] = action
+        return list(merged.values())
+
     for page in results:
         if page.get("status") == "error":
             failures.append(page)
             continue
-        url = (page.get("url") or "").strip().rstrip("/").lower()
+        url = urldefrag((page.get("url") or "").strip())[0]
         if not url:
             continue
-        # Remove hash fragments (ads, etc.)
-        url = url.split("#")[0]
         existing = pages_by_url.get(url)
         if existing is None:
             pages_by_url[url] = page
@@ -1238,36 +1615,54 @@ def _deduplicate_explore_results(results: list[dict[str, Any]]) -> list[dict[str
             existing_revision = int(existing.get("revision", 0))
             page_revision = int(page.get("revision", 0))
             if page_revision >= existing_revision:
+                page["actions"] = merge_actions(
+                    existing.get("actions", []),
+                    page.get("actions", []),
+                )
                 pages_by_url[url] = page
+            else:
+                existing["actions"] = merge_actions(
+                    page.get("actions", []),
+                    existing.get("actions", []),
+                )
 
     # Deduplicate actions within each page
     deduplicated = []
     for url, page in pages_by_url.items():
+        top_level_nodes = page.get("a11y_nodes", [])
+        if top_level_nodes:
+            page["a11y_nodes"] = _deduplicate_nodes(top_level_nodes)
+            page["element_count"] = len(page["a11y_nodes"])
         actions = page.get("actions", [])
         if not actions:
             deduplicated.append(page)
             continue
 
         # Deduplicate actions by action_description
-        seen_actions: dict[str, dict] = {}
+        seen_actions: dict[tuple[Any, ...], dict] = {}
         for action in actions:
-            desc = action.get("action_description", "")
-            if desc not in seen_actions:
-                seen_actions[desc] = action
+            action_key = (
+                action.get("step_index"),
+                action.get("action_index"),
+                action.get("action_description", ""),
+                action.get("phase", ""),
+            )
+            if action_key not in seen_actions:
+                seen_actions[action_key] = action
             else:
                 existing_success = (
-                    seen_actions[desc].get("status", "success") == "success"
+                    seen_actions[action_key].get("status", "success") == "success"
                 )
                 action_success = action.get("status", "success") == "success"
                 if action_success or not existing_success:
-                    seen_actions[desc] = action
+                    seen_actions[action_key] = action
 
         # Deduplicate nodes within each action
-        for desc, action in seen_actions.items():
-            nodes = action.get("a11y_nodes", [])
-            if nodes:
-                action["a11y_nodes"] = _deduplicate_nodes(nodes)
-                action["element_count"] = len(action["a11y_nodes"])
+        for action in seen_actions.values():
+            evidence = action.get("target_evidence", [])
+            if evidence:
+                action["target_evidence"] = _deduplicate_nodes(evidence)
+                action["evidence_count"] = len(action["target_evidence"])
 
         page["actions"] = list(seen_actions.values())
         deduplicated.append(page)

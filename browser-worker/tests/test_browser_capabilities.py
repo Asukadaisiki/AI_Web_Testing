@@ -25,7 +25,9 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                             "node_id": "button-1",
                             "role": "button",
                             "name": "Login",
-                            "verified_selectors": [],
+                            "verified_selectors": [
+                                {"strategy": "css", "selector": "#login"}
+                            ],
                         }
                     ]
                 },
@@ -39,7 +41,10 @@ class BrowserCapabilityContractTest(unittest.TestCase):
         self.assertEqual(result["locator_confidence"], "high")
         self.assertEqual(result["dsl_case"]["steps"][0]["match_count"], 1)
         self.assertEqual(result["dsl_case"]["steps"][0]["page_state"], "login")
-        self.assertEqual(result["dsl_case"]["steps"][0]["candidates"][0]["strategy"], "role")
+        self.assertEqual(
+            result["dsl_case"]["steps"][0]["candidates"][0]["strategy"],
+            "verified_css",
+        )
 
     def test_validate_page_elements_rejects_missing_target(self) -> None:
         result = execute_browser_capability(
@@ -136,6 +141,79 @@ class BrowserCapabilityContractTest(unittest.TestCase):
         self.assertEqual(click_step["match_count"], 1)
         self.assertEqual(click_step["page_state"], "details")
         self.assertEqual(click_step["candidates"][0]["strategy"], "verified_css")
+
+    def test_bug_136_search_selectors_require_exact_verified_evidence(self) -> None:
+        nodes = {
+            "products": [
+                {
+                    "node_id": "search-input",
+                    "role": "textbox",
+                    "name": "Search Product",
+                    "verified_selectors": [
+                        {
+                            "strategy": "css",
+                            "selector": "#search_product",
+                            "source": "dom_verified_interactive_control",
+                        }
+                    ],
+                },
+                {
+                    "node_id": "search-button",
+                    "role": "button",
+                    "name": "Search",
+                    "verified_selectors": [
+                        {
+                            "strategy": "css",
+                            "selector": "#submit_search",
+                            "source": "dom_verified_interactive_control",
+                        }
+                    ],
+                },
+            ]
+        }
+        result = execute_browser_capability(
+            None,  # type: ignore[arg-type]
+            capability="validate_page_elements",
+            project_id=1,
+            conversation_id="1",
+            arguments={
+                "dsl_case": {
+                    "name": "Search",
+                    "steps": [
+                        {"action": "input", "target": "#search_product", "value": "Blue Top"},
+                        {"action": "click", "target": "#submit_search"},
+                    ],
+                },
+                "a11y_nodes_by_state": nodes,
+            },
+        )
+        self.assertTrue(result["valid"])
+        self.assertEqual(
+            [step["match_count"] for step in result["dsl_case"]["steps"]],
+            [1, 1],
+        )
+
+        forged = execute_browser_capability(
+            None,  # type: ignore[arg-type]
+            capability="validate_page_elements",
+            project_id=1,
+            conversation_id="1",
+            arguments={
+                "dsl_case": {
+                    "name": "Forged search",
+                    "steps": [
+                        {"action": "input", "target": "#search_product_forged", "value": "Blue Top"},
+                        {"action": "click", "target": "#submit_search_forged"},
+                    ],
+                },
+                "a11y_nodes_by_state": nodes,
+            },
+        )
+        self.assertFalse(forged["valid"])
+        self.assertEqual(
+            [step["match_count"] for step in forged["dsl_case"]["steps"]],
+            [0, 0],
+        )
 
     def test_validate_page_elements_rejects_unverified_composite_css(self) -> None:
         result = execute_browser_capability(

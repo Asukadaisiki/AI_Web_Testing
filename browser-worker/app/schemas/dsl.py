@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Annotated, Literal
+from typing import Any, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -56,8 +56,8 @@ class LocatorCandidate(BaseModel):
     pre_features: dict | None = Field(default=None, description="Pre-score feature breakdown for debugging.")
 
 
-class Postcondition(BaseModel):
-    """Post-action verification condition."""
+class ConditionSpec(BaseModel):
+    """Deterministic condition evaluated before or after one action."""
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     type: Literal[
@@ -66,18 +66,32 @@ class Postcondition(BaseModel):
         "network_request", "dom_changed", "value_changed",
     ]
     value: str | None = Field(default=None, description="Expected value (URL fragment, text, selector).")
+    method: str | None = Field(default=None, description="Expected HTTP method for network_request.")
+    status: int | None = Field(default=None, ge=100, le=599, description="Expected HTTP status for network_request.")
     timeout_ms: int = Field(default=3000, ge=100, le=30000)
 
+    @field_validator("method")
+    @classmethod
+    def normalize_method(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
     @model_validator(mode="after")
-    def validate_required_value(self) -> "Postcondition":
+    def validate_required_value(self) -> "ConditionSpec":
         if self.type == "url_contains" and not self.value:
-            raise ValueError("url_contains postcondition requires a target URL value")
+            raise ValueError("url_contains condition requires a target URL value")
+        if self.type == "network_request" and not any((self.value, self.method, self.status)):
+            raise ValueError("network_request condition requires URL, method, or status")
         return self
+
+
+Postcondition = ConditionSpec
 
 
 class GotoStep(DSLModel):
     action: Literal["goto"]
     value: str = Field(min_length=1, description="Target URL or path.")
+    preconditions: list[ConditionSpec] = Field(default_factory=list)
+    postconditions: list[ConditionSpec] = Field(default_factory=list)
 
 
 class ClickStep(DSLModel):
@@ -89,7 +103,8 @@ class ClickStep(DSLModel):
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
     candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
-    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
+    preconditions: list[ConditionSpec] = Field(default_factory=list)
+    postconditions: list[ConditionSpec] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class InputStep(DSLModel):
@@ -103,7 +118,8 @@ class InputStep(DSLModel):
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
     candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
-    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
+    preconditions: list[ConditionSpec] = Field(default_factory=list)
+    postconditions: list[ConditionSpec] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class WaitForStep(DSLModel):
@@ -116,7 +132,8 @@ class WaitForStep(DSLModel):
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
     candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
-    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
+    preconditions: list[ConditionSpec] = Field(default_factory=list)
+    postconditions: list[ConditionSpec] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class AssertTextStep(DSLModel):
@@ -129,12 +146,15 @@ class AssertTextStep(DSLModel):
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
     candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
-    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
+    preconditions: list[ConditionSpec] = Field(default_factory=list)
+    postconditions: list[ConditionSpec] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 class AssertUrlContainsStep(DSLModel):
     action: Literal["assert_url_contains"]
     value: str = Field(min_length=1, description="Expected URL fragment.")
+    preconditions: list[ConditionSpec] = Field(default_factory=list)
+    postconditions: list[ConditionSpec] = Field(default_factory=list)
 
 
 class CaptureTextStep(DSLModel):
@@ -152,7 +172,8 @@ class CaptureTextStep(DSLModel):
         default=None, description="AI-assessed locator confidence. low triggers VLM pre-verification.",
     )
     candidates: list[LocatorCandidate] = Field(default_factory=list, description="Pre-scored candidate locators.")
-    postconditions: list[Postcondition] = Field(default_factory=list, description="Post-action verification conditions.")
+    preconditions: list[ConditionSpec] = Field(default_factory=list)
+    postconditions: list[ConditionSpec] = Field(default_factory=list, description="Post-action verification conditions.")
 
 
 DSLVariableType = Literal["string", "number", "boolean", "object", "array"]
@@ -205,6 +226,24 @@ class DSLCase(DSLModel):
     output_contract: list[DSLCaseOutputContract] = Field(default_factory=list)
     steps: list[DSLStep] = Field(min_length=1)
 
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        payload = super().model_dump(*args, **kwargs)
+        for index, step in enumerate(self.steps):
+            step_payload = payload["steps"][index]
+            for field_name in ("preconditions", "postconditions"):
+                if field_name not in step.model_fields_set:
+                    step_payload.pop(field_name, None)
+                    continue
+                conditions = getattr(step, field_name)
+                for condition_index, condition in enumerate(conditions):
+                    for condition_field in ("method", "status"):
+                        if condition_field not in condition.model_fields_set:
+                            step_payload[field_name][condition_index].pop(
+                                condition_field,
+                                None,
+                            )
+        return payload
+
 
 def load_canonical_dsl(
     canonical_json: str,
@@ -221,6 +260,20 @@ def load_canonical_dsl(
     if not isinstance(payload, dict):
         raise ValueError("Canonical DSL must be a JSON object.")
     case = DSLCase.model_validate(payload)
-    if case.model_dump(mode="json") != payload:
+    materialized = case.model_dump(mode="json")
+    for index, source_step in enumerate(payload.get("steps", [])):
+        for compatibility_field in ("preconditions", "postconditions"):
+            if compatibility_field not in source_step:
+                materialized["steps"][index].pop(compatibility_field, None)
+                continue
+            for condition_index, source_condition in enumerate(
+                source_step[compatibility_field]
+            ):
+                for condition_field in ("method", "status"):
+                    if condition_field not in source_condition:
+                        materialized["steps"][index][compatibility_field][
+                            condition_index
+                        ].pop(condition_field, None)
+    if materialized != payload:
         raise ValueError("Canonical DSL is not fully materialized or violates the worker schema.")
     return case, payload

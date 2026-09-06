@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import Field, model_serializer, model_validator
 
 from app.schemas.dsl import DSLModel
 
@@ -18,6 +18,15 @@ ExecutionStatus = Literal[
     "cancelled",
 ]
 FailureCategory = Literal["configuration", "locator", "assertion", "navigation", "network", "runner"]
+FailureStage = Literal[
+    "configuration",
+    "precondition",
+    "locator",
+    "action",
+    "postcondition",
+    "network",
+    "runner",
+]
 ExecutionAnalysisStatus = Literal["pending", "running", "completed", "skipped", "failed"]
 ExecutionAnalysisSource = Literal["deterministic", "ai"]
 
@@ -78,11 +87,42 @@ class ConsoleEvent(DSLModel):
 
 
 class NetworkEvent(DSLModel):
+    event_type: Literal["request", "response", "requestfailed"] = "response"
     url: str
     method: str
     status: int | None = None
     resource_type: str | None = None
     failure_text: str | None = None
+
+
+ConditionPhase = Literal["precondition", "postcondition"]
+ConditionStatus = Literal["passed", "failed", "error"]
+ActionOutcomeStatus = Literal["not_executed", "succeeded", "failed", "unknown"]
+SideEffectState = Literal["not_applicable", "not_committed", "committed", "unknown"]
+
+
+class PageStateSnapshot(DSLModel):
+    url: str
+    dom_hash: str
+    visible_texts: list[str] = Field(default_factory=list)
+    input_values: dict[str, str] = Field(default_factory=dict)
+
+
+class ConditionResult(DSLModel):
+    phase: ConditionPhase
+    index: int = Field(ge=0)
+    type: str
+    expected: Any = None
+    actual: Any = None
+    status: ConditionStatus
+    duration_ms: int = Field(ge=0)
+    error: str | None = None
+
+
+class ActionOutcome(DSLModel):
+    status: ActionOutcomeStatus
+    side_effect_state: SideEffectState
+    error: str | None = None
 
 
 class DOMElementSnapshot(DSLModel):
@@ -127,6 +167,14 @@ class StepExecutionEvidence(DSLModel):
     value: str | None = None
     status: Literal["passed", "failed"]
     duration_ms: int | None = Field(default=None, ge=0)
+    pre_state: PageStateSnapshot | None = None
+    condition_results: list[ConditionResult] = Field(default_factory=list)
+    action_outcome: ActionOutcome = Field(
+        default_factory=lambda: ActionOutcome(
+            status="unknown",
+            side_effect_state="unknown",
+        )
+    )
     resolved_by: str | None = None
     locator_trace: LocatorTrace | None = None
     url: str | None = None
@@ -164,16 +212,60 @@ class ExecutionReport(DSLModel):
     steps: list[StepExecutionEvidence] = Field(default_factory=list)
 
 
+class FailureSourceReference(DSLModel):
+    type: Literal["execution_report", "execution_error"]
+    execution_id: int = Field(ge=1)
+    step_index: int | None = Field(default=None, ge=0)
+    json_pointer: str = Field(min_length=1)
+
+
+class AgentEventReference(DSLModel):
+    run_id: str = Field(min_length=1)
+    seq: int = Field(ge=1)
+
+
 class FailureSignal(DSLModel):
+    schema_version: Literal["failure.signal.v2"] | None = None
     category: FailureCategory
     fingerprint: str = Field(min_length=1, max_length=40)
     title: str = Field(min_length=1, max_length=1000)
+    stage: FailureStage | None = None
+    code: str | None = Field(default=None, min_length=1, max_length=100)
+    retryable: bool | None = None
+    side_effect_committed: bool | None = None
+    source_reference: FailureSourceReference | None = None
+    agent_event_reference: AgentEventReference | None = None
     step_index: int | None = Field(default=None, ge=0)
     action: str | None = None
     target: str | None = None
     error_message: str | None = None
     locator_failure_reason: str | None = None
     screenshot_url: str | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_agent_event(self, handler):
+        payload = handler(self)
+        if self.agent_event_reference is None:
+            payload.pop("agent_event_reference", None)
+        return payload
+
+    @model_validator(mode="after")
+    def validate_versioned_contract(self) -> "FailureSignal":
+        if self.schema_version == "failure.signal.v2":
+            required = {
+                "stage": self.stage,
+                "code": self.code,
+                "retryable": self.retryable,
+                "source_reference": self.source_reference,
+            }
+            missing = [name for name, value in required.items() if value is None]
+            if "side_effect_committed" not in self.model_fields_set:
+                missing.append("side_effect_committed")
+            if missing:
+                raise ValueError(
+                    "failure.signal.v2 requires " + ", ".join(missing)
+                )
+        return self
 
 
 class FailureDetail(DSLModel):
@@ -217,7 +309,7 @@ class StoredCaseExecutionSummary(DSLModel):
     job_id: int | None = None
     attempt_number: int = Field(default=1, ge=1)
     dsl_sha256: str | None = None
-    report_schema_version: str = "execution.report.v1"
+    report_schema_version: str = "execution.report.v2"
     triggered_by: int
     status: ExecutionStatus
     error_message: str | None = None

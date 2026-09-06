@@ -48,6 +48,125 @@
 
 ## 问题记录
 
+## BUG-140 | repo-local TMPDIR 下真实 Chromium 退出仍触发 sandbox 根路径限制
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：medium
+- 来源：Stage 1 最终独立验收
+- 描述：使用仓库内 `.sandbox-tmp` 作为 `TMPDIR` 并直接调用 Browser Worker `.venv/bin/python` 执行真实 Chromium 回归时，唯一测试业务断言通过并输出 `OK`，但进程退出阶段仍报告 `Not allow operate files: /`，最终退出码为 1。
+- 复现步骤：
+  1. 在 `browser-worker/` 创建仓库内 `../.sandbox-tmp`。
+  2. 执行 `TMPDIR="$PWD/../.sandbox-tmp" RUN_BROWSER_INTEGRATION=1 .venv/bin/python -m unittest tests.test_explore_flow_chromium -v`。
+  3. 观察测试 `test_navigation_contract_and_same_url_modal_flow` 为 `ok`，汇总为 `Ran 1 test ... OK`，随后出现 TRAE sandbox 根路径限制并退出 1。
+- 影响：真实 Chromium 静态门禁未通过；按失败即停规则未继续 Alembic、Frontend、repo cache Knip、bug-log/diff 门禁，未重启服务，也未执行 Canonical 连续 3 次和 Stage 1 专项验收。Task 1.5、1.5.1、1.5.2、1.5.3 与 Stage 1 checklist 仍不能完成。
+- 根因：未发现新的业务代码生命周期缺陷；相同工作树在仓库根预先创建临时目录、从 `browser-worker/` 使用绝对且已存在的 `TMPDIR` 并直接调用 `.venv/bin/python` 后稳定退出 0，前次复发属于验收执行环境未稳定满足该组合条件。
+- 处理：固定最终验收命令使用仓库根绝对且已存在的 `.sandbox-tmp`，绕过 `uv run` 包装并直接调用 Browser Worker 虚拟环境 Python；命令完成后删除临时目录。
+- 验证：`TMPDIR=/Users/bytedance/project/AI_Web_Testing/.sandbox-tmp RUN_BROWSER_INTEGRATION=1 .venv/bin/python -m unittest tests.test_explore_flow_chromium -v` 输出 1/1 `ok` 和 `OK`，shell 退出码为 0，未出现 sandbox 错误；临时目录已删除。完整静态门禁与 live 验收继续由 Task 1.5.5 最后一项执行。
+- 关联记录：`docs/execution-log.md#2026-09-06--stage-1-最终验收在真实-chromium-退出门禁复发`
+
+## BUG-139 | 真实 Chromium 回归断言通过后触发 sandbox 根路径限制
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：medium
+- 来源：Stage 1 最终独立验收
+- 描述：显式运行 Task 1.5.3 真实 Chromium 回归时，unittest 的唯一测试断言通过并输出 `OK`，但 Chromium/Playwright 退出后 TRAE sandbox 报告 `Not allow operate files: /`，命令最终以退出码 1 结束。
+- 复现步骤：
+  1. 在 `browser-worker/` 执行 `RUN_BROWSER_INTEGRATION=1 uv run python -m unittest tests.test_explore_flow_chromium -v`。
+  2. 观察测试 `test_navigation_contract_and_same_url_modal_flow` 为 `ok`，测试汇总为 `Ran 1 test ... OK`。
+  3. 观察随后出现 `TRAE Sandbox Error: hit restricted` 和 `Not allow operate files: /`，命令退出码为 1。
+- 影响：完整静态门禁未通过；按失败即停规则未执行 Alembic、Frontend、Knip、compileall/diff、三个服务重启、Canonical 连续 3 次和 Stage 1 专项验收，Task 1.5/1.5.1/1.5.2/1.5.3 与 Stage 1 checklist 不能完成。
+- 根因：`_collect_flow_a11y` 的无 `session_id` managed 路径只关闭 context 和 browser，没有调用 `pw.__exit__(None, None, None)`；启动中途失败时又只尝试退出 Playwright，未可靠关闭已创建的 browser/context。Playwright driver 生命周期延迟到解释器退出阶段，叠加默认临时目录和 `uv run` 包装后触发 sandbox 越界。
+- 处理：为 managed 路径增加幂等清理函数，通过嵌套 `finally` 按 context、browser、Playwright 顺序执行，任一清理异常不阻断后续资源；启动失败和正常/异常执行均复用该清理函数。共享 `BrowserSessionManager` 路径不退出共享 Playwright。真实浏览器命令改用仓库内 `.sandbox-tmp` 设置 `TMPDIR` 并直接调用 `.venv/bin/python`。
+- 验证：mock 单测确认 managed 正常路径 `__exit__` 恰好 1 次、执行和三项清理均异常时仍恰好 1 次、`session_id` 路径 0 次；真实 Chromium 回归 1/1 通过且命令退出码为 0。Go 全量 test/vet/build、两个 PostgreSQL integration、Python 86/86（另 1 项默认门控跳过）、compileall、Alembic upgrade/current/heads/check、Frontend 7/7/build/Knip 均通过。Stage 1 Canonical 3 次按要求留给独立验收。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-task-154--bug-139`
+
+## BUG-138 | Canonical 加购弹层状态在探索步骤间丢失
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 1 Task 1.5.2 最终独立验收
+- 描述：Canonical #1 中，加购动作后的 A11y 快照一度包含可见的 View Cart，但 `explore_flow` 进入相邻同 URL 步骤时重新导航商品详情页，瞬态弹层被重置；后续 `#cartModal a[href="/view_cart"]` 持续解析为 hidden，Agent 最终进入 `modal_blocker` clarification。
+- 复现步骤：
+  1. 从当前工作树重启 Browser API、Execution Worker 和 Go AgentService，关闭 VLM。
+  2. 提交纯自然语言 Canonical Goal，真实执行 `#search_product` input 与 `#submit_search` click，并进入商品详情页。
+  3. 在 `explore_flow` 中点击 Add to cart，再把等待/点击 View Cart 放入相邻的同 URL step。
+  4. 观察后续 step 重新导航商品详情页，`#cartModal a[href="/view_cart"]` 变为 hidden，Run `run_41b69261be3e206fef61a034` 进入 clarification。
+- 影响：Canonical #1 在 DSL 生成和审批前失败，无 Generation、Batch 或 Execution；连续 3 次、Stage 1 专项验收和最终 checklist 均无法完成。
+- 根因：`explore_flow` 对每个 step 都执行导航，即使相邻 step URL 相同；加购弹层属于瞬态页面状态，同 URL 重新导航会清除该状态，使后续动作证据链断裂。
+- 处理：导航前将目标 URL 与 `page.url` 仅移除 fragment 后精确比较；同一文档不调用 `goto`/reload，保留当前 DOM/UI 状态，不同 query/path 继续导航。action pre/post 快照始终从动作当时的真实 `page.url` 建立 state 和递增 revision。
+- 验证：单元测试覆盖 fragment、query、path、导航调用与 evidence 归属；本地 HTTP + 真实 Chromium 回归确认产品页仅按预期请求、modal 未被重载、仅点击 `#cartModal a[href="/view_cart"]` 到达 `/view_cart`，页头 `/cart` 请求为 0。Go/Python/PostgreSQL/Frontend/Alembic/compileall/diff 门禁通过；Stage 1 Canonical 连续 3 次仍留在 Task 1.5.3 最终验收项。
+- 关联记录：`docs/execution-log.md#2026-09-06--实施-stage-1-task-153--bug-138`
+
+## BUG-137 | Stage 1 最终验收被 npm cache 权限错误阻断
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：medium
+- 来源：Stage 1 最终独立验收
+- 描述：Frontend test 和 production build 通过后，`npx knip` 在启动扫描前尝试安装 `knip@6.34.0`，因用户级 npm cache 目录创建失败而退出。
+- 复现步骤：
+  1. 在 `frontend/` 执行 `npx knip`。
+  2. 观察 npm 报告 `EEXIST` / `EACCES: permission denied, mkdir '/Users/bytedance/.npm/_cacache/content-v2/sha512/77/73'`。
+- 影响：完整静态门禁未通过；按失败即停规则未执行 compileall/diff、三个服务重启、Canonical 连续 3 次和 Stage 1 专项验收，Task 1.5/1.5.1 与 Stage 1 checklist 均不能完成。
+- 根因：Knip 不在当前 frontend 依赖中，`npx` 需要临时安装，但用户级 npm cache 路径不可写或存在异常目录状态。
+- 处理：在 `frontend/` 使用仓库内可写 cache 执行 `npm_config_cache="$PWD/.npm-cache" npx --yes knip`；未 chmod 用户全局目录，未忽略退出码。
+- 验证：最终验收使用仓库内 `.npm-cache` 完整扫描并以 0 退出；同轮 Go test/vet/build、两个 PostgreSQL integration（无 skip）、Python 86/86（另 1 项真实浏览器门控默认跳过）、Alembic upgrade/current/heads/check、Frontend 7/7/build、compileall、Vulture 和 diff check 全部通过。随后 Canonical 连续 3 次及 Stage 1 专项全部通过，缓存目录已清理。
+- 关联记录：`docs/execution-log.md#2026-09-06--stage-1-最终验收在-knip-环境门禁失败`
+
+## BUG-136 | Canonical 搜索控件偶发缺失导致 Agent 转入 clarification
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 1 Task 1.5 独立验收
+- 描述：Canonical Goal 第三次连续运行中，Products 页面的搜索框与搜索按钮虽已真实交互成功，但未进入该次可访问性快照，Agent 因无法为输入和点击步骤建立可验证的 preflight 证据而请求人工选择替代搜索方式。
+- 复现步骤：
+  1. 从零启动 Browser API、Execution Worker 和 Go AgentService，并关闭 VLM。
+  2. 连续提交纯自然语言 Canonical Goal。
+  3. 观察 Run `run_fa172186529e470c356e95dd` 在生成 DSL 前进入 clarification checkpoint `checkpoint_92927d271c5ddecd8bed2735`。
+- 影响：Canonical Goal 仅前两次通过，无法满足连续 3 次无人工提示验收；Stage 1 Task 1.5 不能完成。
+- 根因：探索仅依赖 AX 节点，且宽泛广告祖先正则会把位于 `section#advertisement` 下的真实搜索表单误判为广告；`explore_flow` 又在跨页后把旧 action 节点批量改绑最终 state，无法稳定保留动作前目标证据。
+- 处理：增加仅面向原生/显式交互控件的 DOM supplement，使用属性白名单生成实时唯一 selector，过滤 disconnected/hidden/disabled/password/广告节点，并按 backend node/selector 与 AX 去重；flow 改为 action 级 pre/post 目标证据和实际 URL/state，页面节点仍保留 latest revision；统一 wait_for 的 `#`/`.`/`css=`；保持 preflight 的 verified selector 精确匹配策略；Canonical 工具与驱动器强制真实 input + click。
+- 验证：聚焦、Python/Go/PostgreSQL/Frontend/Alembic/Knip/compileall/Vulture 门禁全部通过。最终验收的 Project 71/72/73 均从纯自然语言 Goal 和全新上下文开始，三次都真实执行已验证的 `#search_product` input 与 `#submit_search` click，首轮正式 Batch/Execution 和独立 Oracle 通过，VLM=0 且无 recovery。
+- 关联记录：`docs/execution-log.md#2026-09-06--stage-1-task-15-独立验收失败`
+
+## BUG-135 | fix_and_retry 对未知副作用仍建议自动修复流程
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 1 Task 1.4
+- 描述：旧 `FailureSignal` 没有副作用提交状态，Go `fix_and_retry` 仅按 category 返回 `re_explore` 或 `regenerate_dsl`，无法阻止已提交或状态未知的原动作在后续执行中被重放。
+- 复现步骤：
+  1. 构造 click 已成功派发但 postcondition 失败的 Execution。
+  2. 令 FailureSignal category 为 assertion 或 locator，且副作用为 committed/unknown 或使用无该字段的 v1 JSON。
+  3. 调用 `fix_and_retry`，旧实现返回自动修复策略且没有原动作重放门禁。
+- 影响：支付、提交、加购等非幂等动作可能被再次执行，业务状态和研究证据失真。
+- 根因：Go 控制面没有 FailureSignal typed decoder，也没有将未知字段按保守语义处理。
+- 处理：增加兼容 v1/v2 的 Go typed decoder；仅 v2 明确 `side_effect_committed=false` 时允许自动修复策略，`true`、`null`、v1 或畸形信号统一返回 `manual_reconcile` 和 `original_action_replay_allowed=false`。
+- 验证：Go 单元测试覆盖 false/true/null/v1，PostgreSQL 纵向测试确认 v1 返回人工核对；Go 全量与 PG integration 均通过。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-1-task-14-failuresignal-v2`
+
+## BUG-134 | lease 过期可自动重放状态不确定的非幂等用例
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：critical
+- 来源：Stage 1 Task 1.3 explorer 审查
+- 描述：`claim_next_execution_job` 会重新领取所有 lease 过期的 running Job；若 Worker 在 click/submit/add-to-cart 已提交后崩溃，整个 case 会从头执行。
+- 复现步骤：
+  1. 创建包含 click 的 ExecutionJob 并由 Worker 领取。
+  2. 在 click 已派发、Job 仍为 running 时让 Worker 崩溃并等待 lease 过期。
+  3. 另一个 Worker 调用 `claim_next_execution_job`。
+- 影响：购物车、提交或其他外部状态可能被重复修改，报告和研究指标失真。
+- 根因：lease reclaim 只检查 Job 状态、租约与最大尝试次数，没有结合 DSL 非幂等动作及最新 Execution 的 action outcome。
+- 处理：reclaim 前检查 DSL 与最新 Execution；包含 click 且执行仍 running、缺少可靠 v2 outcome、或 evidence 表明 side effect 为 committed/unknown 时，将 Job、Batch 及仍 running 的 Execution 收口为 `needs_intervention`，保留已有 report，禁止增加 attempt。
+- 验证：新增 committed click crash、legacy v1 unknown outcome 和只读 case 可安全 reclaim 回归；Python 全量测试通过。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-1-task-111213-研究事实完整性`
+
 ## BUG-133 | Canonical 商品详情跳转被广告插页截断并进入二次审批
 
 - 日期：2026-09-06
@@ -294,7 +413,7 @@
 ## BUG-118 | 候选后置验证失败可能重复执行非幂等动作
 
 - 日期：2026-09-06
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：Agentic Research SOP 可行性审计
 - 描述：候选执行路径在动作已执行但后置条件失败后继续尝试下一个候选，候选耗尽后还会回退到 legacy 路径，可能重复点击、提交或加购。
@@ -304,14 +423,14 @@
   3. Runner 继续尝试后续候选或 legacy fallback。
 - 影响：页面状态可能被重复修改，执行结果与候选策略评估均被污染，不能用于可靠消融实验。
 - 根因：候选循环没有区分“动作未执行”与“动作已执行但验证失败”。
-- 处理：待引入显式 action outcome 和安全重试策略；非幂等动作执行后验证失败时禁止自动换候选重放。
-- 验证：静态确认 `playwright_runner.py::_execute_step_with_candidates` 在 postcondition 失败后执行 `continue`，候选耗尽后进入 legacy fallback。
+- 处理：候选仅在 dispatch 前选择；dispatch 后固定候选并持久化 `not_executed/succeeded/failed/unknown` 与 side-effect state。postcondition 失败保留 `succeeded/committed` 并立即终止，不再换候选或重复 click。
+- 验证：add-to-cart/button postcondition 失败回归确认 click 调用严格为 1，action outcome 为 `succeeded/committed`；Python 全量测试通过。
 - 关联记录：`docs/execution-log.md#2026-09-06--实施-agentic-research-可行性试验`
 
 ## BUG-117 | network_request 后置条件无条件成功
 
 - 日期：2026-09-06
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：Agentic Research SOP 可行性审计
 - 描述：`network_request` 后置条件当前是占位实现，对任何输入都返回成功。
@@ -321,14 +440,14 @@
   3. 验证器仍返回成功。
 - 影响：Verification Success 指标会产生假阳性，无法用于研究实验。
 - 根因：PostconditionVerifier 尚未接入页面请求监听记录。
-- 处理：待将步骤级 network evidence 注入 verifier，并按 URL、方法和状态匹配。
-- 验证：静态确认 `postcondition_verifier.py` 的 `network_request` 分支固定返回 `True`。
+- 处理：新增步骤级 `StepNetworkObserver`，在 action 前注册 request/response/requestfailed 监听并在步骤结束卸载；`network_request` 要求同一事件同时满足 URL substring、method 和 status。
+- 验证：正例、字段分散到不同事件的反例、无观察反例、延迟 response、重复同类条件和三类网络生命周期隔离测试通过。
 - 关联记录：`docs/execution-log.md#2026-09-06--实施-agentic-research-可行性试验`
 
 ## BUG-116 | Legacy DSL 路径在动作后采集前置状态
 
 - 日期：2026-09-06
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：Agentic Research SOP 可行性审计
 - 描述：Legacy 执行路径在动作完成后才创建 PostconditionVerifier 并调用 `capture_pre_state`，导致 `url_changes`、`dom_changed` 和 `value_changed` 的前后状态比较失真。
@@ -338,8 +457,8 @@
   3. 验证器在跳转后采集所谓 pre-state。
 - 影响：部分后置验证产生假阴性，影响正式执行可靠性和研究指标有效性。
 - 根因：候选路径与 legacy 路径的 verifier 生命周期不一致。
-- 处理：待统一在动作执行前创建 verifier 并采集状态。
-- 验证：静态确认 `playwright_runner.py` legacy 分支的 pre-state capture 位于动作 dispatch 之后。
+- 处理：同步入口改为消费 streaming Runner 的同一步骤执行路径；所有 action 在 locator/action dispatch 前采集 `PageStateSnapshot` 并逐条件验证 Preconditions/Postconditions。
+- 验证：precondition 失败时 action 调用 0 次；同步与 streaming evidence JSON 一致合同、Stage 0 canonical v1 golden 和旧 report v1 兼容读取均通过。
 - 关联记录：`docs/execution-log.md#2026-09-06--实施-agentic-research-可行性试验`
 
 ## BUG-115 | 当前里程碑错误引入全环境登录鉴权

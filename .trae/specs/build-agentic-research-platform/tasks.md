@@ -77,26 +77,49 @@
 
 ## Stage 1：研究事实与验证完整性
 
-- [ ] Task 1.1：修复验证时序和结果合同。
-  - [ ] 动作前统一采集 pre-state。
-  - [ ] 持久化每个 precondition/postcondition 的期望值、实际值、状态和耗时。
-  - [ ] 保持同步与流式执行证据一致。
-- [ ] Task 1.2：实现真实 network_request verifier。
-  - [ ] 按步骤隔离网络事件监听。
-  - [ ] 支持 URL、method、status 匹配。
-  - [ ] 未观察到请求时返回失败。
-- [ ] Task 1.3：阻止非幂等动作被自动重复执行。
-  - [ ] 区分未执行、执行成功但验证失败、执行失败。
-  - [ ] click/submit/add-to-cart 已提交副作用后不得自动换候选重放。
-  - [ ] 将后续处理交给 Recovery Decision。
-- [ ] Task 1.4：扩展 FailureSignal。
-  - [ ] 保留现有 category。
-  - [ ] 增加 stage、code、retryable、side_effect_committed 和来源事件。
-- [ ] Task 1.5：验收、提交并推送 Stage 1。
-  - [ ] Canonical Goal 连续 3 次通过。
-  - [ ] network_request 正反例通过。
-  - [ ] Add-to-cart 验证失败注入后购物车数量不得重复增加。
-  - [ ] 提交信息：`fix: make execution evidence research-safe`
+- [x] Task 1.1：修复验证时序和结果合同。
+  - [x] 动作前统一采集 pre-state。
+  - [x] 持久化每个 precondition/postcondition 的期望值、实际值、状态和耗时。
+  - [x] 保持同步与流式执行证据一致。
+- [x] Task 1.2：实现真实 network_request verifier。
+  - [x] 按步骤隔离网络事件监听。
+  - [x] 支持 URL、method、status 匹配。
+  - [x] 未观察到请求时返回失败。
+- [x] Task 1.3：阻止非幂等动作被自动重复执行。
+  - [x] 区分未执行、执行成功但验证失败、执行失败。
+  - [x] click/submit/add-to-cart 已提交副作用后不得自动换候选重放。
+  - [x] 将后续处理交给 Recovery Decision。
+- [x] Task 1.4：扩展 FailureSignal。
+  - [x] 保留现有 category。
+  - [x] 增加 schema_version、stage、code、retryable、side_effect_committed 和直接执行来源；仅在真实存在时附加 Agent event 引用。
+  - [x] 保持 v1 可读取与 fingerprint 稳定，并阻止 committed/unknown 副作用的原动作重放建议。
+- [x] Task 1.5：完成 Stage 1 最终验收；提交与推送按本轮要求暂不执行。
+  - [x] Canonical Goal 连续 3 次通过。
+  - [x] network_request 正反例通过。
+  - [x] Add-to-cart 验证失败注入后购物车数量不得重复增加。
+  - [x] 提交信息（提交前准备完成）：`fix: make execution evidence research-safe`
+- [x] Task 1.5.1：修复 Canonical 搜索控件偶发缺失导致的 clarification。
+  - [x] 复现 Run `run_fa172186529e470c356e95dd`：Products 页搜索框和搜索按钮未进入该次 A11y 快照，导致预检无法验证输入/点击步骤。
+  - [x] 在不编造 selector、不绕过 preflight 和审批的前提下，让已真实交互成功的搜索控件形成稳定、可绑定的探索证据。
+  - [x] `explore_flow` 为每个 action 保存独立 pre/post 目标证据及对应 URL/page_state，并保持页面 latest revision 语义。
+  - [x] Canonical 验收合同拒绝用 goto 搜索 URL 代替已验证的 input + click。
+  - [x] 修复后从完整静态门禁开始，并从零连续重跑 Canonical Goal 3 次。
+- [x] Task 1.5.2：修复 Stage 1 最终验收的 Knip 执行环境。
+  - [x] 使用仓库内可写 `.npm-cache` 解决 `npx knip` 访问用户级 npm cache 时的 `EACCES/EEXIST`，未修改用户全局目录且未忽略退出码。
+  - [x] 从完整静态门禁开始重新执行，全部通过后再重启三个服务并运行 Canonical 与 Stage 1 专项验收。
+- [x] Task 1.5.3：修复 Canonical 加购弹层状态在探索步骤间丢失导致的 clarification。
+  - [x] 复现 Run `run_41b69261be3e206fef61a034`：加购后弹层中的 View Cart 在同一步可见，但相邻同 URL 步骤重新导航后变为 hidden。
+  - [x] 保留同一页面上的瞬态 UI 状态，使 add-to-cart、等待弹层和点击 View Cart 能形成连续且可绑定的探索证据，不得改用页头 Cart 或直接 goto 绕过用户 Goal。
+  - [x] 增加真实浏览器回归，覆盖相邻同 URL 步骤不重置弹层、View Cart 可见性及点击后的 `/view_cart` 状态。
+  - [x] 修复后从完整静态门禁开始，并从零连续重跑 Canonical Goal 3 次及 Stage 1 专项验收。
+- [x] Task 1.5.4：修复真实 Chromium 回归结束后的 sandbox 根路径访问失败。
+  - [x] 复现 `RUN_BROWSER_INTEGRATION=1` 下 Task 1.5.3 回归断言通过，但进程随后因 `Not allow operate files: /` 以 1 退出。
+  - [x] 定位 managed `_collect_flow_a11y` 未退出 Playwright 的生命周期缺口；以独立且互不阻断的 `finally` 清理 context、browser 和 Playwright，共享 session 不退出共享 Playwright。
+  - [x] 使用仓库内 `.sandbox-tmp`、`TMPDIR` 和 `.venv/bin/python` 完成全量门禁，真实 Chromium 命令整体退出码为 0；Canonical 3 次保留给独立 Stage 1 验收。
+- [x] Task 1.5.5：修复独立验收中真实 Chromium 退出阶段的 sandbox 根路径访问复发。
+  - [x] 复验 repo-local 绝对 `TMPDIR` 与 `.venv/bin/python`；业务断言输出 `OK`，未再出现 `Not allow operate files: /`。
+  - [x] 在不放宽 sandbox、不忽略退出码且不使用仓库外临时目录的前提下，真实 Chromium 回归命令退出 0。
+  - [x] 修复后从完整静态门禁开始，并从零连续重跑 Canonical Goal 3 次及 Stage 1 专项验收。
 
 ## Stage 2：LLM 与运行成本遥测
 

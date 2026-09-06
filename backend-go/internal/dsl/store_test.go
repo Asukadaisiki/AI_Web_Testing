@@ -103,6 +103,41 @@ func TestValidateCaseAcceptsRunnableContract(t *testing.T) {
 	}
 }
 
+func TestValidateCasePreservesConditionsAndNetworkFilters(t *testing.T) {
+	raw := json.RawMessage(`{
+		"name":"Cart",
+		"steps":[{
+			"action":"click",
+			"target":"Add to cart",
+			"preconditions":[{"type":"element_visible","value":"button.cart"}],
+			"postconditions":[{
+				"type":"network_request",
+				"value":"/api/cart",
+				"method":"post",
+				"status":201
+			}]
+		}]
+	}`)
+
+	normalized, _, err := ValidateCase(raw)
+	if err != nil {
+		t.Fatalf("ValidateCase() error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		t.Fatal(err)
+	}
+	step := payload["steps"].([]any)[0].(map[string]any)
+	precondition := step["preconditions"].([]any)[0].(map[string]any)
+	postcondition := step["postconditions"].([]any)[0].(map[string]any)
+	if precondition["type"] != "element_visible" {
+		t.Fatalf("precondition = %#v", precondition)
+	}
+	if postcondition["method"] != "POST" || postcondition["status"] != float64(201) {
+		t.Fatalf("postcondition = %#v", postcondition)
+	}
+}
+
 func TestValidateCaseAcceptsAbsentAndNullOptionalLocatorEnums(t *testing.T) {
 	tests := []string{
 		`{"name":"absent","steps":[{"action":"click","target":"Login"}]}`,

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from app.models import TestCase, TestCaseRun, User
 from app.schemas.dsl import DSLCase, load_canonical_dsl
 from app.schemas.executions import CaseExecutionRequest
-from app.services.executions import ExecutionRunContext, execute_case
+from app.services.executions import ExecutionRunContext, _normalize_report, execute_case
 
 
 FIXTURE_PATH = Path(__file__).parents[2] / "testdata" / "dsl_canonical_contract.json"
@@ -106,6 +106,31 @@ class DSLCanonicalContractTests(unittest.TestCase):
         self.assertEqual(result.dsl_sha256, fixture["sha256"])
         self.assertEqual(session.execution.dsl_snapshot, payload)
         self.assertEqual(session.execution.dsl_sha256, fixture["sha256"])
+
+    def test_execution_report_v1_is_read_with_v2_defaults(self) -> None:
+        report = _normalize_report(
+            {
+                "status": "passed",
+                "steps": [
+                    {
+                        "step_index": 0,
+                        "action": "goto",
+                        "status": "passed",
+                        "network_events": [
+                            {
+                                "url": "https://example.test",
+                                "method": "GET",
+                                "status": 200,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(report.steps[0].condition_results, [])
+        self.assertEqual(report.steps[0].action_outcome.status, "unknown")
+        self.assertEqual(report.steps[0].network_events[0].event_type, "response")
 
 
 class _FakeSession:

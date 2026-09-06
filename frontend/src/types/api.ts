@@ -175,7 +175,7 @@ export interface CreatePlanningSessionPayload {
   case_id?: number | null;
 }
 
-interface FailureSignal {
+interface FailureSignalBase {
   category: FailureCategory;
   fingerprint: string;
   title: string;
@@ -186,6 +186,39 @@ interface FailureSignal {
   locator_failure_reason?: string | null;
   screenshot_url?: string | null;
 }
+
+interface FailureSignalV1 extends FailureSignalBase {
+  schema_version?: null;
+}
+
+interface FailureSourceReference {
+  type: "execution_report" | "execution_error";
+  execution_id: number;
+  step_index?: number | null;
+  json_pointer: string;
+}
+
+interface FailureSignalV2 extends FailureSignalBase {
+  schema_version: "failure.signal.v2";
+  stage:
+    | "configuration"
+    | "precondition"
+    | "locator"
+    | "action"
+    | "postcondition"
+    | "network"
+    | "runner";
+  code: string;
+  retryable: boolean;
+  side_effect_committed: boolean | null;
+  source_reference: FailureSourceReference;
+  agent_event_reference?: {
+    run_id: string;
+    seq: number;
+  } | null;
+}
+
+export type FailureSignal = FailureSignalV1 | FailureSignalV2;
 
 interface FailureDetail {
   case_name: string;
@@ -275,11 +308,36 @@ export interface ConsoleEvent {
 }
 
 export interface NetworkEvent {
+  event_type?: "request" | "response" | "requestfailed";
   url: string;
   method: string;
   status?: number | null;
   resource_type?: string | null;
   failure_text?: string | null;
+}
+
+interface PageStateSnapshot {
+  url: string;
+  dom_hash: string;
+  visible_texts: string[];
+  input_values: Record<string, string>;
+}
+
+interface ConditionResult {
+  phase: "precondition" | "postcondition";
+  index: number;
+  type: string;
+  expected: unknown;
+  actual: unknown;
+  status: "passed" | "failed" | "error";
+  duration_ms: number;
+  error?: string | null;
+}
+
+interface ActionOutcome {
+  status: "not_executed" | "succeeded" | "failed" | "unknown";
+  side_effect_state: "not_applicable" | "not_committed" | "committed" | "unknown";
+  error?: string | null;
 }
 
 export interface DOMElementSnapshot {
@@ -319,6 +377,9 @@ export interface StepExecutionEvidence {
   value?: string | null;
   status: "passed" | "failed";
   duration_ms?: number | null;
+  pre_state?: PageStateSnapshot | null;
+  condition_results?: ConditionResult[];
+  action_outcome?: ActionOutcome;
   resolved_by?: string | null;
   locator_trace?: LocatorTrace | null;
   url?: string | null;

@@ -19,6 +19,7 @@ from scripts.run_agentic_e2e import (
     main,
     oracle_expectation,
     run_agentic_goal,
+    validate_canonical_search_contract,
     validate_goal,
 )
 
@@ -51,7 +52,32 @@ class FakeClient:
                 {
                     "action": "goto",
                     "value": "https://automationexercise.com/products",
-                }
+                },
+                {
+                    "action": "input",
+                    "target": "#search_product",
+                    "value": "Blue Top",
+                    "candidates": [
+                        {
+                            "strategy": "verified_css",
+                            "selector": "#search_product",
+                            "pre_score": 1.0,
+                            "pre_features": {"verified": True},
+                        }
+                    ],
+                },
+                {
+                    "action": "click",
+                    "target": "#submit_search",
+                    "candidates": [
+                        {
+                            "strategy": "verified_css",
+                            "selector": "#submit_search",
+                            "pre_score": 1.0,
+                            "pre_features": {"verified": True},
+                        }
+                    ],
+                },
             ],
         }
         self.dsl_hash = _go_json_sha256(self.case)
@@ -344,6 +370,45 @@ class MultiApprovalClient(FakeClient):
 class AgenticE2EDriverTest(unittest.TestCase):
     def test_goal_accepts_natural_language(self) -> None:
         self.assertEqual(validate_goal(CANONICAL_GOAL), CANONICAL_GOAL)
+
+    def test_canonical_search_requires_verified_input_then_click(self) -> None:
+        validate_canonical_search_contract(FakeClient().case)
+
+        with self.assertRaisesRegex(AgenticE2EError, "input followed by"):
+            validate_canonical_search_contract(
+                {
+                    "steps": [
+                        {"action": "goto", "value": "/products"},
+                        {"action": "click", "target": "#submit_search"},
+                    ]
+                }
+            )
+        with self.assertRaisesRegex(AgenticE2EError, "input followed by"):
+            validate_canonical_search_contract(
+                {
+                    "steps": [
+                        {
+                            "action": "input",
+                            "target": "#search_product",
+                            "value": "Blue Top",
+                        },
+                        {"action": "click", "target": "#submit_search"},
+                    ]
+                }
+            )
+
+    def test_canonical_search_rejects_direct_search_url(self) -> None:
+        with self.assertRaisesRegex(AgenticE2EError, "not goto"):
+            validate_canonical_search_contract(
+                {
+                    "steps": [
+                        {
+                            "action": "goto",
+                            "value": "/products?search=Blue%20Top",
+                        }
+                    ]
+                }
+            )
 
     def test_goal_rejects_dsl_css_xpath_and_candidates(self) -> None:
         invalid = [

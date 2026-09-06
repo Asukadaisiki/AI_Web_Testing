@@ -56,6 +56,102 @@
 
 ## 任务记录
 
+## 2026-09-06 | Stage 1 最终交付
+
+- 任务：完成 Stage 1 提交前文档收口；确认 Task 1.1-1.5.5、Stage 1 checklist、Canonical 与专项门禁结果，复核 BUG-134..140；不修改业务代码，不 commit/push。
+- 操作：核对 `tasks.md`、`checklist.md`、Stage 1 最终验收记录、`research/results/stage1-final-accepted-canonical-{1,2,3}.json`、Execution 96/97/98 artifacts 和缺陷日志；将 Task 1.5 的计划提交信息标为提交前准备完成，勾选 Stage 1 全部提交前验收项；全局项仅保留 Stage 0/1 现有证据支持的勾选，未来实验版本与 VLM 策略等条目保持未勾选。
+- 结果：Canonical 最终样本为 Project 71/72/73、Execution 96/97/98，三次均从纯自然语言 Goal 和全新浏览器上下文开始，首轮正式执行、独立 Oracle、审批与 DSL SHA 绑定均通过，VLM=0、recovery=0。真实 `network_request` URL/method/status 正例通过，无请求、错误 method、错误 status 负例失败；非幂等 Add-to-cart 失败注入仅产生 1 次 POST/click 且购物车数量为 1；committed/unknown lease 不重放，FailureSignal v2 与 v1 兼容、直接来源和保守恢复合同通过，同步与流式 Runner evidence 一致。BUG-134..140 均为 `fixed`，状态与最终证据一致。
+- 验证：既有最终全量门禁包括 Go test/vet/build 与两个 PostgreSQL integration、Python 86/86（另 1 项默认门控跳过）、真实 Chromium 1/1、专项 Python 16/16、Alembic upgrade/current/heads/check、compileall、Vulture、Frontend 7/7、production build、repo-local cache Knip、Go FailureSignal/Recovery 和 Frontend FailureSignal 3/3；本次文档收口执行 `git diff --check`。
+- 后续：计划提交信息为 `fix: make execution evidence research-safe`；本记录不声明提交或推送 SHA，本轮不 commit/push。
+
+## 2026-09-06 | Stage 1 最终验收通过
+
+- 任务：继续 Stage 1 最终验收；先按指定绝对 repo-local `TMPDIR` 复验 BUG-140，再执行完整静态门禁、重启三服务、从零连续执行 Canonical 3 次及 Stage 1 专项；不修改业务代码，不 commit/push。
+- 操作：在仓库根创建 `.sandbox-tmp`，从 `browser-worker/` 直接调用 `.venv/bin/python` 显式运行真实 Chromium 回归并在结束后删除临时目录；执行 Go/Python/PostgreSQL/Alembic/Frontend/Knip/Vulture/compileall/diff/bug-log 门禁；从当前工作树启动 Browser API、Execution Worker 和 20-turn AgentService，显式关闭 VLM；串行运行三个纯自然语言 Canonical；最后执行真实 Chromium `network_request` 正反例、非幂等 Add-to-cart 失败注入、lease reclaim、FailureSignal v2 和 sync/stream 等价专项。
+- 结果：BUG-140 复验输出 `OK` 且 shell 退出码为 0，Task 1.5.4/1.5.5 与 BUG-139/140 已收口。Canonical #1/#2/#3 分别为 Project 71/72/73、Run `run_1d31418807fa0ee82026650e` / `run_3cc84428a9fe276cdae9460c` / `run_5535389e7a7d9a76e2237bbb`、Generation 111/112/113、Batch 105/106/107、Execution 96/97/98；三次均首轮正式执行通过、独立 Oracle 通过、审批前 Batch=0、VLM=0、recovery=0。Task 1.5 及 1.5.1-1.5.5 的验收项、Stage 1 Canonical checklist 已完成，BUG-136/137 标记 fixed；提交/push 项按本轮要求保持未勾选。
+- 验证：Go 全量 test/vet/build 通过，两个 PostgreSQL integration 明确 PASS；Python 86/86（另 1 项默认门控跳过）、显式真实 Chromium 1/1、compileall、Vulture、Alembic upgrade/current/heads/check 通过；Frontend 7/7、production build、repo-local cache Knip 通过；专项 Python 16/16、Go FailureSignal/Recovery、Frontend FailureSignal 3/3 通过。真实 Chromium 专项确认网络 URL/method/status 正例通过，无请求、错误 method、错误 status 负例失败，Add-to-cart 后置条件失败时 POST/click 恰好 1 次且购物车计数为 1。数据库确认三个 Run 均 completed，Batch/Job/Execution 均 passed，报告均为 `execution.report.v2`。
+- 后续：Stage 1 提交与推送等待用户单独指示；本轮未 commit/push。
+
+## 2026-09-06 | Stage 1 最终验收在真实 Chromium 退出门禁复发
+
+- 任务：最终独立验收并收口 Stage 1；不修改业务代码、不 commit/push，完整执行静态门禁后重启服务，从零连续执行 Canonical 3 次和 Stage 1 专项验收，任一失败新增 task/bug/log 并停止。
+- 操作：读取 tasks/checklist、BUG-134..139、现有门禁和服务入口；使用合法 pgx DSN 执行 Go 全量 test/vet/build；执行 Python lock、compileall 和全量 unittest；随后创建仓库内 `.sandbox-tmp`，设置 repo-local `TMPDIR` 并直接调用 `.venv/bin/python` 显式运行 Task 1.5.3 真实 Chromium 回归。
+- 结果：Go 与 Python 门禁通过；真实 Chromium 唯一用例业务断言通过并输出 `OK`，但进程退出阶段再次触发 `TRAE Sandbox Error: Not allow operate files: /`，命令最终退出 1。按失败即停规则未继续 Alembic、Frontend、repo cache Knip、bug-log/diff 门禁，未重启 Browser API、Execution Worker 和 AgentService，也未执行 Canonical 3 次、network_request、非幂等注入、lease reclaim、FailureSignal 和同步/流式专项验收。新增 Task 1.5.5 / BUG-140；Task 1.5/1.5.1/1.5.2/1.5.3 与 Stage 1 checklist 保持未完成，BUG-136/137 保持 `in_progress`。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...`、`go vet ./...`、`go build ./...` 通过，`TestPostgresAgentRunCancellationCAS` 与 `TestPostgresControlPlaneLifecycle` 明确 PASS；`uv lock --check`、Python compileall、全量 unittest 86 passed/1 skipped 通过；显式真实 Chromium 1/1 断言通过但命令退出码为 1。
+- 后续：完成 Task 1.5.5 后必须从完整静态门禁重新执行 Stage 1 最终验收；本轮不 commit/push。
+
+## 2026-09-06 | 实施 Task 1.5.4 / BUG-139
+
+- 任务：按 explorer 证据最小修复 `_collect_flow_a11y` managed（无 `session_id`）生命周期，补充精确 mock 断言，以仓库内临时目录和 worker 虚拟环境验证真实 Chromium，并运行除 Stage 1 Canonical 3 次之外的全量门禁；不 commit/push。
+- 操作：为 managed 路径增加幂等清理函数，以嵌套 `finally` 依次关闭 context、browser 并调用 `pw.__exit__(None, None, None)`，每项异常独立记录且不阻断后续清理；启动失败与执行结束共用同一清理入口，共享 `BrowserSessionManager` 路径不退出共享 Playwright。新增 managed 正常、执行及清理异常、共享 session 三类 mock 回归；真实浏览器及 Python 命令使用仓库内 `.sandbox-tmp` 作为 `TMPDIR` 并直接调用 `.venv/bin/python`。
+- 结果：managed 正常和异常路径的 Playwright `__exit__` 均严格调用 1 次，context/browser 清理异常不会阻断后续步骤；`session_id` 路径调用 0 次。真实 Chromium 回归业务断言通过且命令整体退出码为 0，未再触发 sandbox 根路径限制。Task 1.5.4 和 BUG-139 已完成；Task 1.5、1.5.1、1.5.2、1.5.3 及 Stage 1 checklist 仍等待独立 Canonical 3 次验收。
+- 验证：聚焦生命周期单测 3/3；真实 Chromium 1/1，退出码 0；`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...`、`go vet ./...`、`go build ./...` 通过，`TestPostgresAgentRunCancellationCAS` 与 `TestPostgresControlPlaneLifecycle` 明确 PASS；Python 全量 86 passed、1 skipped，compileall 通过；Alembic upgrade/current/heads/check 通过且唯一 current/head 为 `20260906_0040`；Frontend Vitest 7/7、production build、仓库 cache Knip 通过；临时目录清理、日志唯一性和 `git diff --check` 通过。
+- 后续：独立执行 Stage 1 Canonical Goal 连续 3 次和专项验收；本轮按要求不执行 Canonical，不 commit/push。
+
+## 2026-09-06 | Stage 1 最终验收在真实 Chromium sandbox 门禁失败
+
+- 任务：执行 Stage 1 最终独立验收；不修改业务代码、不 commit/push，完整静态门禁通过后再从零执行 Canonical 连续 3 次和 Stage 1 专项验收，任一失败立即记录并停止。
+- 操作：读取最新 tasks/checklist 与 BUG-134..138，核对合法 pgx DSN、真实 Chromium Task 1.5.3、Canonical 和专项验收入口；依次执行 Go 全量 test/vet/build、Python 全量，并显式开启 `RUN_BROWSER_INTEGRATION=1` 运行 Task 1.5.3 真实 Chromium 回归。
+- 结果：Go 与 Python 单元门禁通过；显式真实 Chromium 用例的业务断言通过并输出 `OK`，但 Playwright/Chromium 退出后 TRAE sandbox 因禁止访问根路径 `/` 报错，命令最终退出 1。按失败即停规则，未继续 Alembic、Frontend、仓库本地 cache Knip、compileall/diff，未重启三个服务，也未执行 Canonical 3 次、network_request、非幂等注入、lease reclaim 和 FailureSignal 专项验收。新增 Task 1.5.4 / BUG-139；Task 1.5/1.5.1/1.5.2/1.5.3 与 Stage 1 checklist 保持未完成，BUG-136/137 保持 `in_progress`，BUG-138 保持 `fixed`。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...` 通过，`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 明确 PASS 且无 skip；`go vet ./...`、`go build ./...` 通过；Python 全量 82 passed、1 skipped；显式真实 Chromium 测试 1 passed，但整体命令因 `TRAE Sandbox Error: Not allow operate files: /` 退出 1。
+- 后续：定位并消除真实 Chromium/Playwright 退出阶段的根路径访问；修复后必须从完整静态门禁重新开始 Stage 1 最终验收。本轮不 commit/push。
+
+## 2026-09-06 | 实施 Stage 1 Task 1.5.3 / BUG-138
+
+- 任务：最小通用修复 `explore_flow` 相邻同 URL 步骤重新导航破坏瞬态 DOM/UI 状态；补单元与本地 HTTP 真实 Chromium 回归，不触碰 Stage 2，不 commit/push。
+- 操作：目标 URL 解析后与当前 `page.url` 仅忽略 fragment 做精确比较；同一文档跳过 `goto` 和 load-state 等待，不同 query/path 保持正常导航。沿用 action 快照机制，从动作当时的实际 URL 生成 page_state 和递增 revision；新增 URL 比较/导航调用单测，并以本地 HTTP 页面真实点击 Add to cart、等待并点击 modal 内 View Cart。
+- 结果：相邻 `/product?sku=blue#details` 与 `/product?sku=blue#cart-modal` 步骤共享当前 DOM，modal 未被 reload 清除，最终仅经 `#cartModal a[href="/view_cart"]` 到达 `/view_cart`；页头 `/cart` 请求为 0。不同 query 和 path 均产生真实导航。BUG-138 标记 fixed；Task 1.5.3 的实现与专项回归完成，Canonical 连续 3 次及 Stage 1 最终专项验收仍未执行，因此 Task 1.5/1.5.1/1.5.2/1.5.3 和 Stage 1 checklist 保持未完成。
+- 验证：Go 全量 test 通过，`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 明确 PASS 且无 skip；Go vet/build 通过。Python 单元 82 passed、1 个真实浏览器集成按门控跳过，显式真实 Chromium 集成 1 passed；Alembic upgrade/current/heads/check 通过且唯一 current/head 为 `20260906_0040`；Frontend Vitest 7/7、production build、Knip 通过；compileall 和 `git diff --check` 通过。真实 Chromium 回归断言产品页请求 3 次（两个 query 导航加返回产品页）、不同 path 请求 1 次、同文档 modal step 不增加请求、`/view_cart` 请求 1 次、`/cart` 请求 0 次。
+- 后续：从零执行 Canonical Goal 连续 3 次及 Stage 1 专项验收后，才能完成 Task 1.5.3 最后一项和 Stage 1 checklist；本轮按要求不 commit/push。
+
+## 2026-09-06 | Stage 1 最终验收在 Canonical #1 失败
+
+- 任务：完成 Task 1.5.2 并重新执行 Stage 1 最终验收；不修改业务代码、不 commit/push，任一业务失败新增 task/bug/log 并停止。
+- 操作：使用合法 pgx DSN 依次执行 Go test/vet/build、PostgreSQL integration、Python 全量、Alembic upgrade/current/heads/check、Frontend test/build、仓库内 cache 的 Knip、compileall 和 diff check；静态门禁全部通过后，从当前工作树重启 Browser API、Execution Worker 和 20-turn Go AgentService，显式关闭 VLM，并启动第 1 次纯自然语言 Canonical Goal。
+- 结果：Task 1.5.2 的 Knip 环境子项已解决；因 Stage 1 总验收未通过，BUG-137 按关闭条件保持 in_progress。Canonical #1 的 Project 65 / Session 29 / Run `run_41b69261be3e206fef61a034` 真实执行 `#search_product` input 和 `#submit_search` click，但加购弹层状态在相邻同 URL 探索步骤重新导航后丢失，`#cartModal a[href="/view_cart"]` 持续 hidden；Run 在生成 DSL 前进入 `modal_blocker` clarification，Generation/Batch/Execution 均未创建，驱动器取消 Run 并以 1 退出。按失败即停规则未执行 Canonical #2/#3、真实 network_request 正反例、非幂等注入、lease 和 FailureSignal v2 专项验收；新增 Task 1.5.3 / BUG-138，Task 1.5/1.5.1/1.5.2 与 Stage 1 checklist 保持未完成。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...` 通过，`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 明确 PASS 且无 skip；`go vet ./...`、`go build ./...` 通过；Python unittest 79/79；Alembic 唯一 current/head `20260906_0040` 且 check 无差异；Frontend Vitest 7/7、production build 通过；`npm_config_cache="$PWD/.npm-cache" npx --yes knip`、compileall、`git diff --check` 均通过。失败结果保存为 `research/results/stage1-final-canonical-1.json`，本轮三个验收服务已停止。
+- 后续：实施 Task 1.5.3，保证同 URL 连续探索动作不清除瞬态弹层状态；修复后从完整静态门禁重新执行 Stage 1 最终验收。本轮不 commit/push。
+
+## 2026-09-06 | Stage 1 最终验收在 Knip 环境门禁失败
+
+- 任务：独立执行 Stage 1 最终验收；先审查 BUG-136，再运行完整静态门禁，门禁通过后重启三个服务并执行 Canonical 连续 3 次及 Stage 1 专项验证；不修改业务逻辑、不 commit/push，任一失败立即记录并停止。
+- 操作：审查 DOM supplement 的真实 DOM 来源、属性白名单、connected/visible/enabled、唯一 selector、广告/password/第三方 frame 过滤、AX backend/selector 去重和 action pre/post state 归属；审查 Canonical 驱动器在审批前强制 verified `#search_product` input 后跟 verified `#submit_search` click，并拒绝含 `search=` 的 goto。随后依次运行 Go test/vet/build、Python 全量、Alembic upgrade/current/heads/check、Frontend test/build 和 Knip。
+- 结果：BUG-136 审查未发现阻断问题。Go、Python、Alembic、Frontend test/build 均通过；Knip 在扫描前因用户级 npm cache 的 `EACCES/EEXIST` 非零退出。按失败即停规则，未继续 compileall/diff，未重启三个服务，未执行 Canonical 和 Stage 1 专项验证；Task 1.5/1.5.1 与 Stage 1 checklist 保持未完成，新增 Task 1.5.2 / BUG-137。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...` 通过，`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 明确 PASS 且无 skip；`go vet ./...`、`go build ./...` 通过；Python unittest 79/79；Alembic 唯一 current/head `20260906_0040` 且 check 无差异；Frontend Vitest 7/7、production build 通过。`npx knip` 报 `EACCES: permission denied, mkdir '/Users/bytedance/.npm/_cacache/content-v2/sha512/77/73'`。
+- 后续：修复 Knip 的 npm cache 执行环境后，从完整静态门禁重新开始 Stage 1 最终验收；本轮不 commit/push。
+
+## 2026-09-06 | 实施 Stage 1 Task 1.5.1 / BUG-136
+
+- 任务：按 explorer 证据对页面探索做通用确定性修复，稳定保留搜索控件与跨页 action 证据，不放宽 preflight，不修改 Stage 2，不 commit/push。
+- 操作：新增原生/显式交互控件 DOM supplement，以白名单真实属性生成唯一 selector，校验 connected/visible/enabled，排除 password/value、广告和第三方 frame，并按 backend node/selector 与 AX 去重；收窄广告识别为结构化广告信号，避免通用祖先名称误伤业务控件。`explore_flow` 为每个 action 保存精简 pre/post 目标证据及实际 URL/page_state，页面完整节点按 latest revision 保留；`wait_for` 对齐 action locator 支持 `#`/`.`/`css=`。工具提示与 Agentic E2E 驱动器要求 Canonical 搜索必须是 verified input 后 click，拒绝 goto 搜索 URL。
+- 结果：真实 Chromium 可独立补入 `#search_product` 与 `#submit_search`，source 为 `dom_verified_interactive_control`，属性中无 value/password；真实搜索 flow 产生 Products `S0` 和搜索结果 `S1`，旧节点不再改绑最终 state。未修改 Stage 2，未 commit/push。
+- 验证：聚焦 37/37；Go 全量 test（含 PostgreSQL 两项 integration）、vet/build；Python 全量 79/79 与 compileall；Frontend 7/7、production build、Knip；Alembic upgrade/current/heads/check；`git diff --check` 均通过。Canonical 首次发现初版完整快照嵌套使模型请求达到 1,422,028 tokens，随后改为 action 目标证据；第二次已走完搜索、详情、加购和 View Cart 探索，但按用户要求取消等待，连续 3 次未完成。
+- 后续：Task 1.5.1 的实现与静态/真实浏览器专项验证完成；Canonical 连续 3 次和 Task 1.5 总验收仍待后续单独执行。
+
+## 2026-09-06 | Stage 1 Task 1.5 独立验收失败
+
+- 任务：不修改业务代码、不 commit/push，独立验收 Stage 1 Task 1.5；完整执行静态门禁、专项语义验证和纯自然语言 Canonical Goal 连续 3 次。
+- 操作：审查 spec/tasks/checklist 与当前未提交实现；使用 pgx 合法 PostgreSQL DSN 执行 Go 全量测试；执行 Python、Alembic、Frontend、compileall、Knip 和 diff 门禁；聚焦验证 pre-state、逐条件 evidence、同步/流式一致性、lease reclaim 和 `failure.signal.v2`。另以真实 Chromium 和本地 HTTP 服务验证 `network_request` URL/method/status 正例以及无请求、错误 method、错误 status 负例，并注入 add-to-cart postcondition 失败验证只 dispatch 一次、购物车计数保持 1。随后从当前代码重启 Browser API、Execution Worker、Go AgentService，显式关闭 VLM，并连续执行 Canonical Goal。
+- 结果：静态与专项验收通过。Canonical 第 1、2 次首批正式执行通过，审批、DSL SHA、Batch/Job/Execution、独立 Oracle 和 VLM=0 均通过；第 3 次在 DSL 审批前因搜索框与搜索按钮未进入 A11y 快照而转入 clarification，驱动器按合同拒绝自动回答并取消 Run，未创建 Batch。连续 3 次条件未满足，Task 1.5 和 Stage 1 checklist 保持未完成，新增 Task 1.5.1 与 BUG-136 后停止。
+- 验证：Go test/vet/build 通过，`TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 明确 PASS 且无 skip；Python unittest 71/71；Alembic current/heads/check 唯一为 `20260906_0040` 且无差异；Frontend Vitest 7/7、production build、Knip 通过；compileall、bug-log 唯一性和 `git diff --check` 通过。专项合同 28 个 Python 测试、Go failure/tool/DSL 测试、Frontend FailureSignal 3 个测试通过。真实本地 HTTP 验收的全部断言通过，但结果打印后 Chromium 子进程触发一次沙箱根路径限制退出码 1。Canonical 结果：Run `run_090fb1786e91b8124cdb817a` / Batch 87 / Execution 78 通过，Run `run_cbd092fb42cd447de3529e4d` / Batch 88 / Execution 79 通过，Run `run_fa172186529e470c356e95dd` 在 clarification checkpoint 失败并取消。
+- 后续：完成 Task 1.5.1 后重新执行完整门禁和连续 3 次 Canonical Goal；本次不得提交或推送。
+
+## 2026-09-06 | 完成 Stage 1 Task 1.4 FailureSignal v2
+
+- 任务：基于 Task 1.1-1.3 的结构化 condition/action/side-effect evidence 实施 `failure.signal.v2`；兼容 v1，不做数据库列迁移，不 commit/push。
+- 操作：Python 新增版本化 FailureSignal、直接 Execution JSON Pointer 来源和可选 Agent event 引用，按 condition/action outcome、locator/network、exception type、text fallback 的顺序确定 category/stage/code/retryable，并将 side-effect state 映射为 true/false/null；fingerprint 保持原 category/action/title 算法。Go 增加轻量 typed decoder，`fix_and_retry` 仅在 v2 明确未提交副作用时允许自动修复，其他情况转 `manual_reconcile`。前端使用 v1/v2 联合类型并展示 v2 分类、重试、副作用和来源。新增共享 golden，由 Python 生成校验、Go 解码、前端展示共同消费。
+- 结果：Task 1.4 与 checklist 对应项完成；覆盖六类 category、network 4xx/5xx、postcondition 优先级、unknown side effect、直接执行 source reference、v1 兼容和 fingerprint 稳定。未伪造 Agent event，现有 JSON 列可直接存储 v2，因此未新增迁移。BUG-135 已修复；Task 1.5、Canonical 3 次和 Stage 1 commit/push 保持未完成。
+- 验证：显式 PostgreSQL DSN 的 Go 全量测试通过，`TestPostgresAgentRunCancellationCAS` 与 `TestPostgresControlPlaneLifecycle` 明确 PASS；Go vet/build 通过。Python unittest 71/71 与 compileall 通过。Frontend Vitest 7/7、production build、Knip 通过。Alembic upgrade/current/heads/check 通过，唯一 current/head 为 `20260906_0040` 且无新迁移。`git diff --check` 通过。Coze CLI 已按技能调用，但项目列表为空且 CLI 日志目录受沙箱限制，未创建或修改外部项目。
+- 后续：执行 Task 1.5 的 Canonical 3 次验收后，再按用户指示决定是否 commit/push；本次明确不 commit/push。
+
+## 2026-09-06 | 完成 Stage 1 Task 1.1/1.2/1.3 研究事实完整性
+
+- 任务：按 spec 和 explorer 矩阵实施验证时序、真实网络条件、非幂等动作保护与 lease reclaim 防重放；不修改 Task 1.4，不执行 Task 1.5，不 commit/push。
+- 操作：先扩展 Python `ConditionSpec`、`ConditionResult`、`PageStateSnapshot`、`ActionOutcome` 和 `SideEffectState`；为全部 action 增加兼容的 Preconditions/Postconditions，并让 Go canonical v1 校验与 Tool Schema 保留新条件字段。Runner 在 locator/action 前采集 pre-state，按 phase/index 持久化 expected/actual/status/duration/error；新增步骤级 request/response/requestfailed observer 和同事件 URL substring/method/status 匹配；同步入口改为消费 streaming 执行路径。候选仅在 dispatch 前选择，dispatch 后固定 action outcome/side-effect state，postcondition 失败不再换候选或重复 click。过期 lease 遇到包含 click 且 Execution 状态 running、committed/unknown 或 legacy evidence 缺失 outcome 时转 `needs_intervention` 并保留 report。Report 默认升级为 `execution.report.v2`，读取 v1 时补兼容默认值；前端 API 类型同步兼容。
+- 结果：Task 1.1、1.2、1.3 及对应 checklist 项完成；Task 1.4、Task 1.5、Canonical 3 次和 Stage 1 commit/push 保持未完成。BUG-116/117/118 标记 fixed，新增并修复 BUG-134。
+- 验证：显式 `TEST_DATABASE_URL` 的 Go 全量 test 通过，`TestPostgresAgentRunCancellationCAS` 与 `TestPostgresControlPlaneLifecycle` 实际 PASS；Go vet/build 通过。Python compileall、Vulture 和 unittest 66/66 通过；覆盖 network 正反例/同事件字段/无观察/延迟响应、request-response-requestfailed 隔离、重复条件索引、precondition action 0 次、sync/stream JSON 一致、add-to-cart postcondition 失败 click 1 次、action 未知结果、v1 report/canonical 兼容、committed/legacy crash lease 不重放。Alembic upgrade/current/heads/check 通过且唯一 head/current 为 `20260906_0040`。Frontend Knip、Vitest 4/4、production build、Chromium desktop/mobile smoke 4/4 通过；bug-log 唯一性与 `git diff --check` 通过。Compose 配置门禁因本机无 `docker` 命令未运行；额外 Ruff 全仓扫描报告 164 个既有规则问题，未做无关清理。
+- 后续：按 spec 继续 Task 1.4 后再执行 Task 1.5 的 Canonical 3 次、Stage 1 原子提交和 push；本次按用户要求不 commit/push。
+
 ## 2026-09-06 | Stage 0 最终交付
 
 - 任务：完成 Stage 0 文档收尾，固化最终验收、测试门禁和计划提交信息；不修改业务代码，不执行 commit/push。

@@ -1,184 +1,263 @@
-"""PostconditionVerifier — capture pre-action page state and verify postconditions after execution.
+"""Step-scoped condition verification and network observation."""
 
-Captures url, dom_hash, visible_texts, and input_values before a step executes,
-then verifies declared Postcondition entries against the post-action page state.
-"""
 from __future__ import annotations
 
 import hashlib
 import logging
 from dataclasses import dataclass, field
 from time import monotonic, sleep
+from typing import Callable
 
 from playwright.sync_api import Page
 
-from app.schemas.dsl import Postcondition
+from app.schemas.dsl import ConditionSpec
+from app.schemas.executions import ConditionResult, NetworkEvent, PageStateSnapshot
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class PostconditionResult:
-    """Result of verifying one or more postconditions."""
-
+class VerificationResult:
     passed: bool
-    details: dict = field(default_factory=dict)
+    results: list[ConditionResult] = field(default_factory=list)
+
+    @property
+    def details(self) -> dict[str, str]:
+        return {
+            f"{result.phase}[{result.index}]/{result.type}": result.error or "failed"
+            for result in self.results
+            if result.status != "passed"
+        }
 
 
-class PostconditionVerifier:
-    """Capture pre-action page state and verify postconditions after execution."""
+PostconditionResult = VerificationResult
+
+
+class StepNetworkObserver:
+    """Collect request lifecycle events for exactly one executing step."""
 
     def __init__(self, page: Page) -> None:
         self._page = page
-        self._pre_state: dict = {}
+        self.events: list[NetworkEvent] = []
+        self._listeners: list[tuple[str, Callable]] = []
 
-    # ------------------------------------------------------------------
-    # State capture
-    # ------------------------------------------------------------------
+    def start(self) -> "StepNetworkObserver":
+        add_listener = getattr(self._page, "on", None)
+        if add_listener is None:
+            return self
+        listeners = (
+            ("request", self._on_request),
+            ("response", self._on_response),
+            ("requestfailed", self._on_request_failed),
+        )
+        for event_name, callback in listeners:
+            add_listener(event_name, callback)
+            self._listeners.append((event_name, callback))
+        return self
 
-    def capture_pre_state(self) -> dict:
-        """Capture the current page state before an action is executed.
+    def stop(self) -> None:
+        remove_listener = getattr(self._page, "remove_listener", None) or getattr(
+            self._page, "off", None
+        )
+        if remove_listener is not None:
+            for event_name, callback in self._listeners:
+                remove_listener(event_name, callback)
+        self._listeners.clear()
 
-        Returns the captured state dict (also stored internally for later
-        verification via :meth:`verify`).
-        """
-        self._pre_state = {
-            "url": self._page.url,
-            "dom_hash": self._compute_dom_hash(),
-            "visible_texts": self._get_visible_texts(),
-            "input_values": self._get_input_values(),
-        }
+    def _on_request(self, request) -> None:
+        self.events.append(
+            NetworkEvent(
+                event_type="request",
+                url=request.url,
+                method=request.method,
+                resource_type=request.resource_type,
+            )
+        )
+
+    def _on_response(self, response) -> None:
+        request = response.request
+        self.events.append(
+            NetworkEvent(
+                event_type="response",
+                url=response.url,
+                method=request.method,
+                status=response.status,
+                resource_type=request.resource_type,
+            )
+        )
+
+    def _on_request_failed(self, request) -> None:
+        failure = request.failure
+        failure_text = (
+            failure if isinstance(failure, str) else (failure or {}).get("errorText")
+        )
+        self.events.append(
+            NetworkEvent(
+                event_type="requestfailed",
+                url=request.url,
+                method=request.method,
+                resource_type=request.resource_type,
+                failure_text=failure_text,
+            )
+        )
+
+
+class PostconditionVerifier:
+    """Capture pre-action state and evaluate ordered conditions."""
+
+    def __init__(self, page: Page) -> None:
+        self._page = page
+        self._pre_state = PageStateSnapshot(url="", dom_hash="")
+
+    def capture_pre_state(self) -> PageStateSnapshot:
+        self._pre_state = PageStateSnapshot(
+            url=self._page.url,
+            dom_hash=self._compute_dom_hash(),
+            visible_texts=self._get_visible_texts(),
+            input_values=self._get_input_values(),
+        )
         return self._pre_state
 
-    # ------------------------------------------------------------------
-    # Verification
-    # ------------------------------------------------------------------
-
-    def verify(self, postconditions: list[Postcondition]) -> PostconditionResult:
-        """Verify every declared postcondition against the current page state.
-
-        All postconditions must pass for the overall result to be ``passed=True``.
-        """
-        if not postconditions:
-            return PostconditionResult(passed=True, details={})
-
-        post_dom_hash = self._compute_dom_hash()
-        post_input_values = self._get_input_values()
-
-        all_passed = True
-        details: dict = {}
-
-        for pc in postconditions:
+    def verify(
+        self,
+        conditions: list[ConditionSpec],
+        *,
+        phase: str = "postcondition",
+        network_events: list[NetworkEvent] | None = None,
+    ) -> VerificationResult:
+        results: list[ConditionResult] = []
+        for index, condition in enumerate(conditions):
+            started_at = monotonic()
+            expected = self._expected(condition)
             try:
-                ok = self._verify_single(
-                    pc,
-                    post_dom_hash=post_dom_hash,
-                    post_input_values=post_input_values,
+                passed, actual = self._verify_single(
+                    condition,
+                    network_events=network_events if network_events is not None else [],
                 )
+                error = None if passed else (
+                    f"{phase} '{condition.type}' was not satisfied"
+                )
+                status = "passed" if passed else "failed"
             except Exception as exc:
-                logger.warning("Postcondition %s check failed: %s", pc.type, exc)
-                ok = False
-
-            if not ok:
-                all_passed = False
-                details[pc.type] = (
-                    f"postcondition '{pc.type}' with value={pc.value!r} was not satisfied"
+                logger.warning("%s %s check failed: %s", phase, condition.type, exc)
+                actual = None
+                error = f"{type(exc).__name__}: {exc}"
+                status = "error"
+            results.append(
+                ConditionResult(
+                    phase=phase,
+                    index=index,
+                    type=condition.type,
+                    expected=expected,
+                    actual=actual,
+                    status=status,
+                    duration_ms=max(0, int((monotonic() - started_at) * 1000)),
+                    error=error,
                 )
-
-        return PostconditionResult(passed=all_passed, details=details)
-
-    # ------------------------------------------------------------------
-    # Single postcondition dispatch
-    # ------------------------------------------------------------------
+            )
+        return VerificationResult(
+            passed=all(result.status == "passed" for result in results),
+            results=results,
+        )
 
     def _verify_single(
         self,
-        pc: Postcondition,
+        condition: ConditionSpec,
         *,
-        post_dom_hash: str,
-        post_input_values: dict,
-    ) -> bool:
-        """Evaluate a single postcondition against the current page state."""
-        pre_url = self._pre_state.get("url", "")
-        pre_dom_hash = self._pre_state.get("dom_hash", "")
-        pre_input_values = self._pre_state.get("input_values", {})
+        network_events: list[NetworkEvent],
+    ) -> tuple[bool, object]:
+        condition_type = condition.type
+        value = condition.value
 
-        pc_type = pc.type
-        value = pc.value
-
-        if pc_type == "url_contains":
-            return value is not None and self._wait_for_url(
-                lambda current_url: value in current_url,
-                timeout_ms=pc.timeout_ms,
+        if condition_type == "url_contains":
+            actual = self._wait_for_url(
+                lambda current_url: value is not None and value in current_url,
+                timeout_ms=condition.timeout_ms,
             )
-
-        if pc_type == "url_changes":
-            return self._wait_for_url(
-                lambda current_url: current_url != pre_url,
-                timeout_ms=pc.timeout_ms,
+            return actual[0], actual[1]
+        if condition_type == "url_changes":
+            actual = self._wait_for_url(
+                lambda current_url: current_url != self._pre_state.url,
+                timeout_ms=condition.timeout_ms,
             )
-
-        if pc_type == "text_visible":
+            return actual[0], actual[1]
+        if condition_type in {"text_visible", "text_gone"}:
             if value is None:
-                return False
-            try:
-                return self._wait_for_visibility(
-                    self._page.locator(f"text={value}"),
-                    visible=True,
-                    timeout_ms=pc.timeout_ms,
-                )
-            except Exception:
-                return False
-
-        if pc_type == "text_gone":
+                return condition_type == "text_gone", False
+            passed = self._wait_for_visibility(
+                self._page.locator(f"text={value}"),
+                visible=condition_type == "text_visible",
+                timeout_ms=condition.timeout_ms,
+            )
+            expected_visible = condition_type == "text_visible"
+            return passed, expected_visible if passed else not expected_visible
+        if condition_type in {"element_visible", "element_gone"}:
             if value is None:
-                return True
-            try:
-                return self._wait_for_visibility(
-                    self._page.locator(f"text={value}"),
-                    visible=False,
-                    timeout_ms=pc.timeout_ms,
-                )
-            except Exception:
-                return True
+                return condition_type == "element_gone", False
+            passed = self._wait_for_visibility(
+                self._page.locator(value),
+                visible=condition_type == "element_visible",
+                timeout_ms=condition.timeout_ms,
+            )
+            expected_visible = condition_type == "element_visible"
+            return passed, expected_visible if passed else not expected_visible
+        if condition_type == "dom_changed":
+            post_hash = self._compute_dom_hash()
+            changed = post_hash != self._pre_state.dom_hash
+            return changed, {
+                "before": self._pre_state.dom_hash,
+                "after": post_hash,
+            }
+        if condition_type == "value_changed":
+            post_values = self._get_input_values()
+            changed = post_values != self._pre_state.input_values
+            return changed, {
+                "before": self._pre_state.input_values,
+                "after": post_values,
+            }
+        if condition_type == "network_request":
+            return self._wait_for_network(condition, network_events)
+        return False, None
 
-        if pc_type == "element_visible":
-            if value is None:
-                return False
-            try:
-                return self._wait_for_visibility(
-                    self._page.locator(value),
-                    visible=True,
-                    timeout_ms=pc.timeout_ms,
-                )
-            except Exception:
-                return False
+    def _wait_for_network(
+        self,
+        condition: ConditionSpec,
+        events: list[NetworkEvent],
+    ) -> tuple[bool, object]:
+        deadline = monotonic() + condition.timeout_ms / 1000
+        while True:
+            for event in list(events):
+                if condition.value and condition.value not in event.url:
+                    continue
+                if condition.method and condition.method != event.method.upper():
+                    continue
+                if condition.status is not None and condition.status != event.status:
+                    continue
+                return True, event.model_dump(mode="json")
+            if monotonic() >= deadline:
+                return False, {"observed_events": len(events)}
+            self._pump_events()
 
-        if pc_type == "element_gone":
-            if value is None:
-                return True
-            try:
-                return self._wait_for_visibility(
-                    self._page.locator(value),
-                    visible=False,
-                    timeout_ms=pc.timeout_ms,
-                )
-            except Exception:
-                return True
+    def _pump_events(self) -> None:
+        wait_for_timeout = getattr(self._page, "wait_for_timeout", None)
+        if wait_for_timeout is not None:
+            wait_for_timeout(50)
+        else:
+            sleep(0.05)
 
-        if pc_type == "dom_changed":
-            return post_dom_hash != pre_dom_hash
-
-        if pc_type == "value_changed":
-            return post_input_values != pre_input_values
-
-        if pc_type == "network_request":
-            # Placeholder — real implementation would need a network listener
-            logger.debug("network_request postcondition is a placeholder, returning True")
+    @staticmethod
+    def _expected(condition: ConditionSpec) -> object:
+        if condition.type == "network_request":
+            return {
+                "url_contains": condition.value,
+                "method": condition.method,
+                "status": condition.status,
+            }
+        if condition.type in {"url_changes", "dom_changed", "value_changed"}:
             return True
-
-        logger.warning("Unknown postcondition type: %s", pc_type)
-        return False
+        if condition.type in {"text_gone", "element_gone"}:
+            return False
+        return condition.value
 
     @staticmethod
     def _any_visible(locator) -> bool:
@@ -194,42 +273,31 @@ class PostconditionVerifier:
                 return False
             sleep(0.05)
 
-    def _wait_for_url(self, predicate, *, timeout_ms: int) -> bool:
+    def _wait_for_url(self, predicate, *, timeout_ms: int) -> tuple[bool, str]:
         deadline = monotonic() + timeout_ms / 1000
         while True:
-            if predicate(self._page.url):
-                return True
+            current_url = self._page.url
+            if predicate(current_url):
+                return True, current_url
             if monotonic() >= deadline:
-                return False
+                return False, current_url
             sleep(0.05)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _compute_dom_hash(self) -> str:
-        """Return an MD5 hash derived from the body innerHTML length.
-
-        Using length rather than full content keeps this cheap while still
-        detecting structural changes.
-        """
         try:
             body_html = self._page.evaluate("() => document.body.innerHTML")
-            length = len(body_html) if body_html else 0
-            return hashlib.md5(str(length).encode()).hexdigest()
+            return hashlib.sha256((body_html or "").encode()).hexdigest()
         except Exception:
             return ""
 
     def _get_visible_texts(self) -> list[str]:
-        """Extract visible text from key semantic elements."""
         try:
             texts: list[str] = []
             for selector in ("h1", "h2", "h3", "p", "span", "button", "a", "label"):
-                elements = self._page.locator(selector).all()
-                for el in elements:
+                for element in self._page.locator(selector).all():
                     try:
-                        if el.is_visible():
-                            text = el.inner_text()
+                        if element.is_visible():
+                            text = element.inner_text()
                             if text:
                                 texts.append(text.strip())
                     except Exception:
@@ -238,15 +306,14 @@ class PostconditionVerifier:
         except Exception:
             return []
 
-    def _get_input_values(self) -> dict:
-        """Extract current form input values keyed by name or id."""
+    def _get_input_values(self) -> dict[str, str]:
         try:
-            values: dict = {}
-            for el in self._page.locator("input, select, textarea").all():
+            values: dict[str, str] = {}
+            for element in self._page.locator("input, select, textarea").all():
                 try:
-                    name = el.get_attribute("name") or el.get_attribute("id") or ""
+                    name = element.get_attribute("name") or element.get_attribute("id") or ""
                     if name:
-                        values[name] = el.input_value()
+                        values[name] = element.input_value()
                 except Exception:
                     continue
             return values
