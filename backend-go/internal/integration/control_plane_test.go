@@ -2,7 +2,9 @@ package integration_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,13 +94,40 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 	if _, err := dslStore.GetGeneration(ctx, otherID, projectID, generation.ID); !errors.Is(err, dsl.ErrNotFound) {
 		t.Fatalf("unauthorized DSL generation get error = %v, want ErrNotFound", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE dsl_generation_runs
+		SET generated_case_json = $2::json, dsl_sha256 = NULL, dsl_canonical_version = NULL
+		WHERE id = $1`,
+		generation.ID,
+		`{"name":"generated checkout","base_url":"https://example.com","steps":[{"action":"goto","value":"/checkout"},{"action":"click","target":"Pay"}]}`,
+	); err != nil {
+		t.Fatalf("prepare legacy DSL generation: %v", err)
+	}
+	backfilledGeneration, err := dslStore.GetGeneration(ctx, actorID, projectID, generation.ID)
+	if err != nil {
+		t.Fatalf("backfill legacy DSL generation: %v", err)
+	}
+	var backfilledHash, backfilledVersion string
+	var backfilledCase string
+	if err := db.QueryRowContext(ctx, `
+		SELECT generated_case_json, dsl_sha256, dsl_canonical_version
+		FROM dsl_generation_runs WHERE id = $1`,
+		generation.ID,
+	).Scan(&backfilledCase, &backfilledHash, &backfilledVersion); err != nil {
+		t.Fatalf("read backfilled DSL generation: %v", err)
+	}
+	if backfilledHash != backfilledGeneration.DSLHash ||
+		backfilledVersion != dsl.CanonicalVersion ||
+		backfilledCase != string(backfilledGeneration.Case) {
+		t.Fatalf("legacy DSL generation was not canonically backfilled")
+	}
 	generatedRaw, err := controlPlane.GenerateDSL(
 		ctx,
 		actorID,
 		projectID,
 		"",
 		json.RawMessage(`{
-			"case":{"name":"tool generated","steps":[{"action":"goto","value":"https://example.com"}]},
+			"case":{"name":"tool generated","steps":[{"action":"click","target":"Pay"}]},
 			"a11y_nodes_by_state":{"S0":[]}
 		}`),
 	)
@@ -106,10 +135,27 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 		t.Fatalf("generate DSL through Go control plane: %v", err)
 	}
 	var generated struct {
-		GenerationID int64 `json:"generation_id"`
+		GenerationID     int64           `json:"generation_id"`
+		Case             json.RawMessage `json:"case"`
+		DSLHash          string          `json:"dsl_sha256"`
+		CanonicalVersion string          `json:"dsl_canonical_version"`
 	}
 	if err := json.Unmarshal(generatedRaw, &generated); err != nil {
 		t.Fatal(err)
+	}
+	var generatedCase struct {
+		Steps []struct {
+			TargetStrategy    *string `json:"target_strategy"`
+			LocatorConfidence *string `json:"locator_confidence"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(generated.Case, &generatedCase); err != nil {
+		t.Fatal(err)
+	}
+	if len(generatedCase.Steps) != 1 ||
+		generatedCase.Steps[0].TargetStrategy != nil ||
+		generatedCase.Steps[0].LocatorConfidence != nil {
+		t.Fatalf("semantic generation optional locator fields = %#v", generatedCase.Steps)
 	}
 	executedRaw, err := controlPlane.ExecuteDSL(
 		ctx,
@@ -128,6 +174,83 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 	}
 	if executed["report_api_url"] != fmt.Sprintf("/api/v2/execution-batches/%v/report", executed["batch_id"]) {
 		t.Fatalf("execution result = %#v", executed)
+	}
+	approvedBatchID := int64(executed["batch_id"].(float64))
+	var approvedJobID, approvedCaseID int64
+	var generationCase, persistedCase, jobSnapshot, jobCanonicalJSON, jobHash, jobVersion string
+	if err := db.QueryRowContext(ctx, `
+		SELECT j.id, tc.id, g.generated_case_json, tc.dsl, j.dsl_snapshot,
+		       j.dsl_canonical_json, j.dsl_sha256, j.dsl_canonical_version
+		FROM dsl_generation_runs g
+		JOIN execution_batches b ON b.id = $2
+		JOIN execution_jobs j ON j.batch_id = b.id
+		JOIN test_cases tc ON tc.id = j.case_id
+		WHERE g.id = $1`,
+		generated.GenerationID, approvedBatchID,
+	).Scan(
+		&approvedJobID, &approvedCaseID,
+		&generationCase, &persistedCase, &jobSnapshot,
+		&jobCanonicalJSON, &jobHash, &jobVersion,
+	); err != nil {
+		t.Fatalf("read canonical DSL binding: %v", err)
+	}
+	if jobHash != generated.DSLHash || jobCanonicalJSON != string(generated.Case) ||
+		jobVersion != generated.CanonicalVersion {
+		t.Fatalf("job canonical binding = (%s, %s, %s), want (%s, %s, %s)",
+			jobVersion, jobHash, jobCanonicalJSON,
+			generated.CanonicalVersion, generated.DSLHash, generated.Case)
+	}
+	var sameSemantics bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT $1::jsonb = $2::jsonb AND $2::jsonb = $3::jsonb`,
+		generationCase, persistedCase, jobSnapshot,
+	).Scan(&sameSemantics); err != nil || !sameSemantics {
+		t.Fatalf("generation/case/job DSL mismatch: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO test_case_runs (
+			case_id, project_id, batch_id, job_id, triggered_by, status,
+			attempt_number, dsl_snapshot, dsl_sha256, report_schema_version,
+			report, analysis_status, started_at, finished_at
+		) VALUES (
+			$1, $2, $3, $4, $5, 'passed',
+			1, $6::json, $7, 'execution.report.v1',
+			'{"status":"passed","steps":[]}'::json, 'skipped', now(), now()
+		)`,
+		approvedCaseID, projectID, approvedBatchID, approvedJobID, actorID,
+		jobSnapshot, jobHash,
+	); err != nil {
+		t.Fatalf("persist canonical execution report: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE execution_jobs SET status = 'passed', attempt_count = 1, finished_at = now()
+		WHERE id = $1`, approvedJobID,
+	); err != nil {
+		t.Fatalf("finalize canonical execution job: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE execution_batches SET status = 'passed', finished_at = now()
+		WHERE id = $1`, approvedBatchID,
+	); err != nil {
+		t.Fatalf("finalize canonical execution batch: %v", err)
+	}
+	approvedReport, err := executionStore.BatchReport(ctx, actorID, approvedBatchID)
+	if err != nil {
+		t.Fatalf("read canonical execution report: %v", err)
+	}
+	approvedJobs := approvedReport["jobs"].([]map[string]any)
+	approvedExecution := approvedJobs[0]["latest_execution"].(map[string]any)
+	if approvedExecution["dsl_sha256"] != generated.DSLHash {
+		t.Fatalf("report DSL SHA = %v, want %s", approvedExecution["dsl_sha256"], generated.DSLHash)
+	}
+	reportSnapshot, err := json.Marshal(approvedExecution["dsl_snapshot"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT $1::jsonb = $2::jsonb`,
+		string(generated.Case), string(reportSnapshot),
+	).Scan(&sameSemantics); err != nil || !sameSemantics {
+		t.Fatalf("generation/report DSL mismatch: %v", err)
 	}
 
 	testCase, err := caseStore.Create(ctx, actorID, cases.Mutation{
@@ -296,14 +419,20 @@ func (passthroughValidator) ExecuteBrowserCapability(
 	arguments json.RawMessage,
 ) (json.RawMessage, error) {
 	var request struct {
-		Case json.RawMessage `json:"dsl_case"`
+		Case     json.RawMessage `json:"dsl_case"`
+		Evidence json.RawMessage `json:"a11y_nodes_by_state"`
 	}
 	if err := json.Unmarshal(arguments, &request); err != nil {
 		return nil, err
 	}
+	caseHash := sha256.Sum256(request.Case)
+	evidenceHash := sha256.Sum256(request.Evidence)
 	return json.Marshal(map[string]any{
-		"dsl_case": request.Case,
-		"valid":    true,
-		"warnings": []string{},
+		"dsl_case":        request.Case,
+		"valid":           true,
+		"validation_mode": "dsl_case",
+		"case_digest":     hex.EncodeToString(caseHash[:]),
+		"evidence_digest": hex.EncodeToString(evidenceHash[:]),
+		"warnings":        []string{},
 	})
 }

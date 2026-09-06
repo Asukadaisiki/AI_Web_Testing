@@ -1,0 +1,52 @@
+{
+  "input": {
+    "name": "  Canonical checkout  ",
+    "input_contract": [
+      {
+        "name": " Account ",
+        "context_key": " account ",
+        "value_type": "string"
+      }
+    ],
+    "output_contract": [
+      {
+        "name": " Result ",
+        "context_key": " result ",
+        "value_type": "string"
+      }
+    ],
+    "steps": [
+      {
+        "action": "goto",
+        "value": " /checkout "
+      },
+      {
+        "action": "click",
+        "target": " Pay ",
+        "match_count": 1,
+        "candidates": [
+          {
+            "strategy": "css_selector",
+            "selector": " #pay ",
+            "pre_score": 1
+          }
+        ],
+        "postconditions": [
+          {
+            "type": "url_changes"
+          }
+        ]
+      },
+      {
+        "action": "wait_for",
+        "target": " Receipt "
+      }
+    ],
+    "_preflight": {
+      "locator_confidence": "high"
+    }
+  },
+  "canonical_version": "dsl.canonical.v1",
+  "canonical_json": "{\"base_url\":null,\"description\":null,\"input_contract\":[{\"context_key\":\"account\",\"description\":null,\"name\":\"Account\",\"required\":true,\"value\":null,\"value_type\":\"string\"}],\"name\":\"Canonical checkout\",\"output_contract\":[{\"context_key\":\"result\",\"description\":null,\"name\":\"Result\",\"source\":null,\"value_type\":\"string\"}],\"steps\":[{\"action\":\"goto\",\"value\":\"/checkout\"},{\"action\":\"click\",\"candidates\":[{\"pre_features\":null,\"pre_score\":1,\"selector\":\"#pay\",\"semantic_value\":null,\"strategy\":\"css\"}],\"locator_confidence\":null,\"page_state\":null,\"postconditions\":[{\"timeout_ms\":3000,\"type\":\"url_changes\",\"value\":null}],\"target\":\"Pay\",\"target_strategy\":null},{\"action\":\"wait_for\",\"candidates\":[],\"locator_confidence\":null,\"page_state\":null,\"postconditions\":[],\"target\":\"Receipt\",\"target_strategy\":null,\"timeout_ms\":5000}]}",
+  "sha256": "318e2e0fd0e7cad3cc28d522d5f41df2feebaf3f9b05d4e58cf454b2355a60dd"
+}

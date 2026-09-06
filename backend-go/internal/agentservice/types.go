@@ -22,6 +22,7 @@ const (
 	EventRunStarted      EventType = "run.started"
 	EventRunFinished     EventType = "run.finished"
 	EventRunFailed       EventType = "run.failed"
+	EventRunCancelled    EventType = "run.cancelled"
 	EventMessageStarted  EventType = "message.started"
 	EventMessageDelta    EventType = "message.delta"
 	EventMessageFinished EventType = "message.finished"

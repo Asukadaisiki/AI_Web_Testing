@@ -50,6 +50,7 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 					"flow_description":{"type":"string"},
 					"steps":{
 						"type":"array",
+						"minItems":1,
 						"items":{
 							"type":"object",
 							"properties":{
@@ -57,12 +58,14 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 								"description":{"type":"string"},
 								"actions":{
 									"type":"array",
+									"minItems":0,
 									"items":{
 										"type":"object",
 										"properties":{
 											"action":{"type":"string","enum":["click","input","wait_for"]},
 											"target":{"type":"string"},
-											"value":{"type":"string"}
+											"value":{"type":"string"},
+											"timeout_ms":{"type":"integer","minimum":1,"maximum":60000}
 										},
 										"required":["action","target"]
 									}
@@ -77,12 +80,11 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 		},
 		BrowserTool{
 			name: "validate_page_elements",
-			description: "Check whether explored accessibility elements cover every required user action and assertion. " +
-				"Call this before generate_dsl. It can also run locator preflight when dsl_case is provided.",
+			description: "Advisory check for whether explored accessibility elements cover required user actions and assertions. " +
+				"This does not authorize generation; generate_dsl performs bound case validation internally.",
 			inputSchema: json.RawMessage(`{
 				"type":"object",
 				"properties":{
-					"dsl_case":{"type":"object"},
 					"required_elements":{
 						"type":"array",
 						"items":{

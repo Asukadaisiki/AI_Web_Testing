@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 type PostgresRepository struct {
@@ -101,7 +102,8 @@ func (r *PostgresRepository) SaveRun(ctx context.Context, run AgentRun) error {
 		        approved_generation_id = $6,
 		        transcript_json = $7,
 		        updated_at = $8
-		  WHERE id = $1`,
+		  WHERE id = $1
+		    AND status <> 'cancelled'`,
 		run.ID,
 		run.Status,
 		run.PendingToolCallID,
@@ -119,9 +121,106 @@ func (r *PostgresRepository) SaveRun(ctx context.Context, run AgentRun) error {
 		return fmt.Errorf("read updated row count: %w", err)
 	}
 	if affected == 0 {
+		current, getErr := r.GetRun(ctx, run.ID)
+		if getErr != nil {
+			return getErr
+		}
+		if current.Status == RunStatusCancelled {
+			return ErrRunCancelled
+		}
 		return ErrRunNotFound
 	}
 	return nil
+}
+
+func (r *PostgresRepository) CancelRun(
+	ctx context.Context,
+	runID string,
+	updatedAt time.Time,
+	event Event,
+) (AgentRun, Event, bool, error) {
+	payload, err := json.Marshal(event.Payload)
+	if err != nil {
+		return AgentRun{}, Event{}, false, fmt.Errorf("encode cancellation event payload: %w", err)
+	}
+	transaction, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentRun{}, Event{}, false, fmt.Errorf("begin agent cancellation transaction: %w", err)
+	}
+	defer transaction.Rollback()
+
+	var run AgentRun
+	var transcript []byte
+	err = transaction.QueryRowContext(
+		ctx,
+		`UPDATE agent_runs
+		    SET status = 'cancelled',
+		        pending_tool_call_id = NULL,
+		        pending_step_id = NULL,
+		        last_event_seq = last_event_seq + 1,
+		        updated_at = $2
+		  WHERE id = $1
+		    AND status IN ('running', 'waiting_user')
+		RETURNING id, COALESCE(actor_user_id, 0), conversation_id,
+		          COALESCE(project_id, 0), status, input, pending_tool_call_id,
+		          pending_step_id, latest_generation_id, approved_generation_id,
+		          transcript_json, created_at, updated_at, last_event_seq`,
+		runID,
+		updatedAt,
+	).Scan(
+		&run.ID,
+		&run.ActorUserID,
+		&run.ConversationID,
+		&run.ProjectID,
+		&run.Status,
+		&run.Input,
+		&run.PendingToolCallID,
+		&run.PendingStepID,
+		&run.LatestGenerationID,
+		&run.ApprovedGenerationID,
+		&transcript,
+		&run.CreatedAt,
+		&run.UpdatedAt,
+		&event.Seq,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = transaction.Rollback()
+		current, getErr := r.GetRun(ctx, runID)
+		return current, Event{}, false, getErr
+	}
+	if err != nil {
+		return AgentRun{}, Event{}, false, fmt.Errorf("cancel agent run: %w", err)
+	}
+	if err := json.Unmarshal(transcript, &run.Transcript); err != nil {
+		return AgentRun{}, Event{}, false, fmt.Errorf("decode cancelled run transcript: %w", err)
+	}
+	event.RunID = run.ID
+	event.ConversationID = run.ConversationID
+	_, err = transaction.ExecContext(
+		ctx,
+		`INSERT INTO agent_events (
+			run_id, seq, event_type, conversation_id, step_id, tool_call_id,
+			parent_id, checkpoint_id, payload_json, created_at
+		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''),
+		          NULLIF($7, ''), NULLIF($8, ''), $9, $10)`,
+		event.RunID,
+		event.Seq,
+		event.Type,
+		event.ConversationID,
+		event.StepID,
+		event.ToolCallID,
+		event.ParentID,
+		event.CheckpointID,
+		string(payload),
+		event.Timestamp,
+	)
+	if err != nil {
+		return AgentRun{}, Event{}, false, fmt.Errorf("insert cancellation event: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return AgentRun{}, Event{}, false, fmt.Errorf("commit agent cancellation: %w", err)
+	}
+	return run, event, true, nil
 }
 
 func (r *PostgresRepository) AppendEvent(ctx context.Context, event Event) (Event, error) {
@@ -140,10 +239,26 @@ func (r *PostgresRepository) AppendEvent(ctx context.Context, event Event) (Even
 		`UPDATE agent_runs
 		    SET last_event_seq = last_event_seq + 1
 		  WHERE id = $1
+		    AND status <> 'cancelled'
 		  RETURNING last_event_seq`,
 		event.RunID,
 	).Scan(&event.Seq)
 	if errors.Is(err, sql.ErrNoRows) {
+		var status RunStatus
+		statusErr := transaction.QueryRowContext(
+			ctx,
+			`SELECT status FROM agent_runs WHERE id = $1`,
+			event.RunID,
+		).Scan(&status)
+		if errors.Is(statusErr, sql.ErrNoRows) {
+			return Event{}, ErrRunNotFound
+		}
+		if statusErr != nil {
+			return Event{}, fmt.Errorf("read agent run after event rejection: %w", statusErr)
+		}
+		if status == RunStatusCancelled {
+			return Event{}, ErrRunCancelled
+		}
 		return Event{}, ErrRunNotFound
 	}
 	if err != nil {

@@ -95,6 +95,8 @@ class DslGenerationRun(Base):
     )
     prompt_preview: Mapped[str] = mapped_column(String(200), nullable=False)
     prompt_sha256: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    dsl_sha256: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    dsl_canonical_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
     prompt_variant: Mapped[str] = mapped_column(String(32), nullable=False, default="baseline_draft")
     retry_from_generation_id: Mapped[int | None] = mapped_column(

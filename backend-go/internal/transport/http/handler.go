@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
@@ -52,6 +53,12 @@ type AgentAPI interface {
 		toolCallID string,
 		request agentservice.ResumeToolCallRequest,
 	) (agentservice.AgentRun, error)
+	CancelOwned(
+		ctx context.Context,
+		actorUserID int64,
+		runID string,
+		reason string,
+	) (agentservice.AgentRun, error)
 }
 
 func NewServer(
@@ -78,6 +85,7 @@ func NewServer(
 	v2.GET("/agent/runs/:run_id", handler.getRun)
 	v2.GET("/agent/runs/:run_id/events", handler.listEvents)
 	v2.GET("/agent/runs/:run_id/events/stream", handler.streamEvents)
+	v2.POST("/agent/runs/:run_id/cancel", handler.cancelRun)
 	v2.POST("/agent/runs/:run_id/tool-calls/:tool_call_id/resume", handler.resumeToolCall)
 	v2.POST("/planning/sessions", handler.createPlanningSession)
 	v2.GET("/planning/sessions", handler.listPlanningSessions)
@@ -179,6 +187,39 @@ func (h *Handler) getRun(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	run, err := h.agent.GetOwnedRun(ctx, c.Param("run_id"), identity.UserID)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(consts.StatusOK, run)
+}
+
+type cancelRunRequest struct {
+	Reason string `json:"reason" vd:"len($)>0"`
+}
+
+func (h *Handler) cancelRun(ctx context.Context, c *app.RequestContext) {
+	identity, err := currentActor(c)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	var request cancelRunRequest
+	if err := c.BindAndValidate(&request); err != nil {
+		writeError(c, consts.StatusBadRequest, err)
+		return
+	}
+	request.Reason = strings.TrimSpace(request.Reason)
+	if request.Reason == "" {
+		writeError(c, consts.StatusBadRequest, errors.New("cancel reason is required"))
+		return
+	}
+	run, err := h.agent.CancelOwned(
+		ctx,
+		identity.UserID,
+		c.Param("run_id"),
+		request.Reason,
+	)
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -294,7 +335,9 @@ func (h *Handler) streamEvents(ctx context.Context, c *app.RequestContext) {
 				return
 			}
 			lastSeq = event.Seq
-			if event.Type == agentservice.EventRunFinished || event.Type == agentservice.EventRunFailed {
+			if event.Type == agentservice.EventRunFinished ||
+				event.Type == agentservice.EventRunFailed ||
+				event.Type == agentservice.EventRunCancelled {
 				return
 			}
 		}

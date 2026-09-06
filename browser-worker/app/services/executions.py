@@ -16,7 +16,7 @@ from app.models import ExecutionBatch, TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, RunnerInterventionError
 from app.runners.playwright_runner import RunnerCancelledError, StepStreamEvent, execute_case_with_playwright_streaming
-from app.schemas.dsl import DSLCase, GotoStep
+from app.schemas.dsl import DSLCase, GotoStep, load_canonical_dsl
 from app.schemas.executions import (
     CaseExecutionRequest,
     ExecutionAnalysis,
@@ -34,6 +34,10 @@ class ExecutionRunContext:
     batch_id: int | None = None
     job_id: int | None = None
     attempt_number: int = 1
+    dsl_snapshot: dict | None = None
+    dsl_canonical_json: str | None = None
+    dsl_sha256: str | None = None
+    dsl_canonical_version: str | None = None
 
 
 def execute_case(
@@ -76,12 +80,37 @@ def execute_case_streaming(
         raise EntityNotFoundError(f"Case {case_id} not found.")
     _ensure_user_exists(session, payload.actor_user_id)
 
-    normalized_case = DSLCase.model_validate(record.dsl)
     context = run_context or ExecutionRunContext()
-    dsl_snapshot = normalized_case.model_dump(mode="json")
-    dsl_sha256 = hashlib.sha256(
-        json.dumps(dsl_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    canonical_fields = (
+        context.dsl_canonical_json,
+        context.dsl_sha256,
+        context.dsl_canonical_version,
+    )
+    if any(value is not None for value in canonical_fields) and any(
+        value is None for value in canonical_fields
+    ):
+        raise ValueError("Canonical DSL JSON, SHA-256, and version must be provided together.")
+    if (
+        context.dsl_canonical_json is not None
+        and context.dsl_sha256 is not None
+        and context.dsl_canonical_version is not None
+    ):
+        normalized_case, dsl_snapshot = load_canonical_dsl(
+            context.dsl_canonical_json,
+            context.dsl_sha256,
+            context.dsl_canonical_version,
+        )
+        if context.dsl_snapshot != dsl_snapshot:
+            raise ValueError("Queued DSL snapshot does not match its canonical JSON.")
+        if dsl_snapshot != record.dsl:
+            raise ValueError("Approved canonical DSL does not match the persisted case.")
+        dsl_sha256 = context.dsl_sha256
+    else:
+        normalized_case = DSLCase.model_validate(record.dsl)
+        dsl_snapshot = normalized_case.model_dump(mode="json")
+        dsl_sha256 = hashlib.sha256(
+            json.dumps(dsl_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
     execution = TestCaseRun(
         case_id=record.id,
         project_id=record.project_id,
@@ -293,12 +322,16 @@ def _load_failure_signal(payload: dict | None) -> FailureSignal | None:
 
 
 def _with_artifact_url(step: StepExecutionEvidence) -> StepExecutionEvidence:
-    if step.screenshot_url or not step.screenshot_path:
-        return step
-
-    normalized = step.screenshot_path.replace("\\", "/").lstrip("/")
-    screenshot_url = f"/{normalized}" if normalized.startswith("artifacts/") else None
-    return step.model_copy(update={"screenshot_url": screenshot_url})
+    updates: dict[str, str] = {}
+    if not step.screenshot_url and step.screenshot_path:
+        normalized = step.screenshot_path.replace("\\", "/").lstrip("/")
+        if normalized.startswith("artifacts/"):
+            updates["screenshot_url"] = f"/{normalized}"
+    if not step.dom_snapshot_url and step.dom_snapshot_path:
+        normalized = step.dom_snapshot_path.replace("\\", "/").lstrip("/")
+        if normalized.startswith("artifacts/"):
+            updates["dom_snapshot_url"] = f"/{normalized}"
+    return step.model_copy(update=updates) if updates else step
 
 
 def _derive_duration_ms(started_at: datetime, finished_at: datetime | None) -> int | None:

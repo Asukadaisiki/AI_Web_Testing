@@ -56,6 +56,151 @@
 
 ## 任务记录
 
+## 2026-09-06 | Stage 0 最终交付
+
+- 任务：完成 Stage 0 文档收尾，固化最终验收、测试门禁和计划提交信息；不修改业务代码，不执行 commit/push。
+- 操作：确认 `tasks.md` 的 Stage 0 所有任务均已勾选，并将 Task 0.4 的 commit/push 项标记为准备完成；勾选 `checklist.md` 中 Stage 0 及当前阶段已有证据支撑的全局条目，保留 Stage 1+、全局实验版本和尚未完整证明的 VLM 策略条目未勾选；复核 BUG-125 至 BUG-133 均为 `fixed`，其中 BUG-132 已明确标记 `fixed`。
+- 结果：Canonical 最终样本为 Project 45/46/47、Execution 59/60/61，三次均首轮正式执行通过、`first_pass=true`、独立 DOM Oracle 通过且 VLM=0；mutation 样本为 Project 48/49、Execution 62/63，正式执行通过但独立 Oracle 分别拒绝错误价格和错误商品，最终按预期失败。Stage 0 计划提交信息为 `fix: harden agent full-chain execution`，计划推送 `origin/main`；本记录不声明提交或推送 SHA。
+- 验证：既有最终门禁包括 Go 全量 test/vet/build，且 `TestPostgresAgentRunCancellationCAS`、`TestPostgresControlPlaneLifecycle` 明确 PASS 且无 skip；Python unittest 52/52；Alembic upgrade/current/heads/check 通过且唯一 current/head 为 `20260906_0040`；Frontend 4/4 与生产构建通过；compileall 通过；本次文档收尾执行 `git diff --check`。
+- 后续：由主代理紧接着创建上述聚焦提交、推送 `origin/main`，并在提交后确认远端 SHA 与工作区状态。
+
+## 2026-09-06 | Stage 0 调试清理与提交前验证
+
+- 任务：在用户确认 BUG-129 修复后完成 TRAE-debugger 会话清理与 Stage 0 提交前验证；不 commit/push，不修改 Stage 1。
+- 操作：将调试记录状态短暂更新为 `[FIXED]`；从 Browser Worker 两个模块移除全部 8 个网络埋点及仅供埋点使用的 imports；确认 PID 20790 不存在且 7777 无监听；删除调试记录、NDJSON、env 和空 `.dbg` 目录；核查五份 `stage0-final` 验收 JSON。
+- 结果：活动代码与调试目录中不存在调试标记、会话标识或 7777 地址残留。三份 Canonical JSON 均为正式执行通过、`first_pass=true`、Oracle 通过；`wrong-price` 与 `wrong-product` 均为正式执行通过、`first_pass=true`，但独立 Oracle 分别因价格和商品名不符而失败。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...`、`go vet ./...`、`go build ./...` 全部通过，两个 PostgreSQL integration 测试明确 PASS 且无 skip；Python unittest 52/52；Alembic current/heads 均为唯一 `20260906_0040` 且 check 无差异；Frontend 4/4 与生产构建、compileall、`git diff --check` 全部通过。
+- 后续：Stage 0 已完成清理与提交前验证；按用户要求未勾选或执行 commit/push。
+
+## 2026-09-06 | Stage 0 最终独立验收通过
+
+- 任务：重新读取 Stage 0 tasks/checklist 与 BUG-133，独立审查 Task 0.3.10，执行全部静态门禁，重启三个验收服务，验证超时取消无孤儿，并从零串行执行 Canonical 3 次及 `wrong-price`、`wrong-product` 各一次；不修改业务代码、不清理 debugger artifacts、不 commit/push。
+- 操作：使用 pgx DSN `postgres://bytedance@127.0.0.1:5432/ai_web_testing` 执行 Go PostgreSQL integration 与全量 test/vet/build；执行 Python 全量、Alembic upgrade/current/heads/check、compileall、Frontend test/build 和 diff check；保留 `7777` Debug Server 与 `.dbg`，从当前工作树重启 `8000` Browser API、Execution Worker 和 `8081` AgentService。先运行 1 秒超时取消样本，再串行运行 3 个 Canonical 与 2 个独立 Oracle mutation，并从结果 JSON 和 PostgreSQL 交叉核对审批前 Batch、Generation/SHA/snapshot、首 Batch/Execution、DOM Oracle、recovery 与 VLM。
+- 结果：Task 0.3.10 代码审查未发现阻断问题。超时 Project 44 / Run `run_46aa0c44b4a3a3069914610f` 正确取消，10 秒后事件仅 `run.started,run.cancelled` 且 Generation/Batch/Job/Execution 均为 0。Canonical #1/#2/#3 分别为 Project 45/46/47、Generation 74/75/76、Batch 68/69/70、Execution 59/60/61，三次均 `success=true`、`first_pass=true`、首 Batch/Job/Execution passed、`recovery=[]`、审批前 Batch=0、DOM Oracle 精确通过且 VLM=0；SHA 分别为 `6900ade20a8ed2564555d016eab01e6259eb0bc43c801d56855209b5dafa8b56`、`303f0927ae5e8730843f196ccafc46be3e991d6ea7111f2ce86094e0c0927cad`、`373538fe8529a40b93a8d55da78dbf8972923c91f6ba53417f98ff66bf98133d`。`wrong-price` Project 48 / Batch 71 / Execution 62 与 `wrong-product` Project 49 / Batch 72 / Execution 63 的首个正式执行均 passed，但独立 Oracle 分别因 `Rs. 501 != Rs. 500`、`Red Top != Blue Top` 失败，整体 `success=false` 且 CLI 退出 1。
+- 验证：Go 全量 test/vet/build 通过，`TestPostgresAgentRunCancellationCAS` 与 `TestPostgresControlPlaneLifecycle` 明确 PASS 且无 skip；Python unittest 52/52；Alembic 唯一 current/head `20260906_0040` 且 check 无差异；Frontend 4/4 与生产构建、compileall、`git diff --check` 全部通过。PostgreSQL 对 Project 45-49 逐项确认 latest/approved Generation 一致、Generation/Job/Execution SHA 一致、canonical JSON 与 job snapshot 相等。
+- 后续：Stage 0 除 Task 0.4 的 commit/push 外全部完成；按用户要求保留三个验收服务、Debug Server、`.dbg`、结果与 artifacts，不执行 commit/push。
+
+## 2026-09-06 | 完成 Task 0.3.10 / BUG-133 跨页导航与多审批修复
+
+- 任务：按 explorer 与 Run `run_a58e6c8888075b95f7b9dc61` 证据实施通用修复；复用现有 postcondition，限制安全 href fallback，统一正式执行路径，支持同 Run 多 Generation/多审批；不 commit/push，不清理 debugger artifacts。
+- 操作：细化 `generate_dsl` JSON Schema、Agent 提示和 Go/Python DSL 校验，要求已验证跨页 anchor click 携带匹配目的地址的 `url_contains`；preflight 将验证过的 href 绑定到 candidate。Worker 先选择唯一候选、采 pre-state、只派发一次动作并按 timeout 验证，只有实时 DOM 与 preflight href 一致且为同源 HTTP(S)、非 hash、非 download anchor 时才执行最多一次 `page.goto`，以 `href_navigation_fallback` 记录 evidence；同步与流式正式执行共用该步骤路径且失败均终止。Explorer 使用去 fragment URL 判断跨页到达，并过滤跨源 frame 或通用广告语义上下文节点。Driver 循环处理审批，逐轮校验 Generation/artifact/SHA/approved generation/审批前后 Batch/Report，记录 recovery，并由首个 Batch 单独决定 `stage0.first_pass`。
+- 结果：缺失或错误目的 URL postcondition 的跨页 anchor DSL 在审批前被拒绝；广告/hash 插页不会被视为到达业务目的页面；anchor click 成功派发后不会换候选重放，按钮及其他动作没有 href goto 路径；失败 Batch 后可继续验证新 Generation 和第二次审批，但后续成功不会覆盖 `first_pass=false`。Task 0.3.10 完成，BUG-133 标记 fixed。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...`、`go vet ./...`、`go build ./...` 全部通过，`TestPostgresAgentRunCancellationCAS` 与 `TestPostgresControlPlaneLifecycle` 明确 PASS；Python unittest 52/52；Alembic upgrade/current/heads/check 通过且唯一 head/current 为 `20260906_0040`；Frontend 4/4 与生产构建通过；compileall 与 `git diff --check` 通过。
+- 后续：从最新服务执行 Stage 0 Canonical 3 次及 `wrong-price`、`wrong-product` 两次 live 验收。本任务未 commit/push，未停止现有调试服务，也未清理 `.dbg`、`debug-playwright-thread-affinity.md` 或保留的失败结果；测试期间调试 NDJSON 继续按现有埋点采集。
+
+## 2026-09-06 | Stage 0 最终独立验收在 Canonical #1 正式执行失败
+
+- 任务：整合审查 BUG-132 的语义 target 合同与 AgentRun 超时取消修复，使用合法 pgx DSN 执行全部门禁，重启三个最新服务，独立验证短超时取消，再从零执行 Canonical 3 次及两个 mutation；不修改业务代码、不清理 debugger artifacts、不 commit/push，任一失败立即停止。
+- 操作：审查 Tool Schema、Go/Python canonicalization、Harness 活动 Run 取消、PostgreSQL CAS/事件事务和驱动器超时取消；执行 Go/Python/Alembic/Frontend 全部门禁及取消相关 race 聚焦；重启 `8000` Browser API、Execution Worker 和 `8081` AgentService；先运行不计入连续样本的 1 秒短超时，再启动 Canonical #1。
+- 结果：短超时 Project 40 / Run `run_5e6f7cf00052f8a7c5565056` 正确转为 `cancelled`，事件仅 `run.started,run.cancelled`，立即及 10 秒后 Generation/Batch/Job 均为 0。Canonical #1 创建 Project 41 / Session 17 / Run `run_a58e6c8888075b95f7b9dc61`，成功生成并审批 Generation 68；正式执行的商品详情 click 被 `#google_vignette` 广告插页截断，Batch 63 / Job 63 / Execution 54 在 `#quantity` 定位处失败。Agent 生成修复版 Generation 69 并请求第二次审批，驱动器以 `run requested unexpected approve_dsl input after approval` 失败并将 Run 取消。按停止规则未执行 Canonical #2/#3 和两个 mutation，未勾选任何 Stage 0 项，新增 Task 0.3.10 / BUG-133；BUG-132 保持 open。
+- 验证：`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...`、`go vet ./...`、`go build ./...` 全部通过，两个 PostgreSQL integration 测试明确执行且未 skip；取消相关 Go race 聚焦 3 包通过；Python unittest 45/45；Alembic current/heads 均为唯一 `20260906_0040` 且 check 无差异；compileall；Frontend 4/4 与生产构建；`git diff --check` 均通过。Generation 68 与 Execution 54 SHA 同为 `0a3eb6ac7fb8586a6ace031312b42e523c7cf0c19db9516042d7cc1742dd8681`。
+- 后续：实施 Task 0.3.10，明确跨页转换验证和二次审批验收合同；修复后从全部门禁开始重跑 Stage 0 Canonical 3+2。三个验收服务、数据库现场、`.dbg`、埋点和调试说明保持原状。
+
+## 2026-09-06 | Stage 0 最终独立验收在 Canonical #1 超时
+
+- 任务：独立审查 Task 0.3.8 的关键合同与回归覆盖，使用合法 pgx DSN 运行全部门禁，重启三个验收服务，并从零串行执行 Canonical 3 次及两个 mutation；不修改业务逻辑、不清理 debugger artifacts、不 commit/push，任一失败立即停止。
+- 操作：核对 state-aware preflight、case/evidence digest、advisory validation、真实 target enum、flow failure/revision 和 20-turn 回放合同；执行聚焦回归及全部门禁；从当前工作树重启 `8000` Browser API、Execution Worker 和 `8081` AgentService；启动第 1 次纯自然语言 Canonical Goal。
+- 结果：静态门禁全部通过，PostgreSQL `TestPostgresControlPlaneLifecycle` 明确执行且未 skip。Canonical #1 创建 Project 36 / Session 15 / Run `run_c77c8c19791d44bc2e761bcc`，5 次浏览器探索取得 Products、搜索结果、商品详情、加购弹层和购物车证据；随后连续调用 `generate_dsl`，事件 42-102 反复出现未匹配 selector、非法 JSON 和 `target_strategy is invalid`。驱动器在 900 秒内未到达审批边界并以 1 退出；服务端 Run 仍为 `running`，无 Generation、Approval、Batch、Job 或 Execution。按停止规则未执行 Canonical #2/#3 和两个 mutation，未勾选任何 Stage 0 项，新增 Task 0.3.9 / BUG-132。
+- 验证：Go 聚焦合同回归 6/6；Python 聚焦 15/15；`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 -v ./...`、`go vet ./...`、`go build ./...` 通过，integration 无 skip；Python 42/42；Alembic 唯一 head/current `20260906_0040` 且 check 无差异；compileall；Frontend 4/4 与生产构建；`git diff --check` 均通过。失败结果保存在 `research/results/stage0-final-canonical-1.json`。
+- 后续：实施 Task 0.3.9，统一语义 target 的 `target_strategy` 合同并处理驱动器超时后的服务端 Run；修复后从全部门禁开始重跑 Stage 0 Canonical 3+2。Debug Server、埋点、`.dbg` 和调试说明保持原状，等待用户确认。
+
+## 2026-09-06 | 完成 Task 0.3.8 / BUG-131 确定性收敛
+
+- 任务：读取 explorer 结论和失败 Run `run_847c3b804514fa7459cbd709`，在不提高 max turns/timeout、不弱化 preflight、不清理 `playwright-thread-affinity` 调试产物且不 commit/push 的前提下修复重复探索与 generation 失败。
+- 根因证据：PostgreSQL transcript 还原了 20 turns：3 次 `explore_page`、8 次 `explore_flow`、7 次 required-elements validation；空动作 cart step 返回 `element_count=0`，`text=View Cart` 等失败被吞掉，多次同 URL 状态由动作数而非 revision 选择；事件 29 起的裸 `valid=true` 与事件 40 最终 DSL 无绑定；事件 41 的 cart 复合 CSS 均未出现在 verified selectors；事件 140 只报告 max turns。
+- 改动：先对齐 Go Tool JSON Schema、Python capability 类型和实际 target strategy enum；`explore_flow` 支持空动作状态采集，结构化返回 navigation/action/flow failure，正确处理 `text=` 和 timeout，并以 latest-success revision 去重；移除会跳过真实副作用的 flow cache。required-elements validation 改为 advisory，`generate_dsl` 对最终规范化 case 和 `a11y_nodes_by_state` 立即执行绑定 preflight并核对双 digest；state-aware preflight 自动绑定唯一 state，拒绝未经验证的复合 CSS，接受精确 verified selector；max-turn 追加最后工具错误。
+- 回归：新增空动作、click 失败、wait_for、revision、state preflight、复合 CSS 正反例、digest 绑定、真实 target enum 和 max-turn 诊断测试；BUG-131 轨迹按 3 page + 8 flow + 1 advisory validation 复放，在原 20-turn 预算内第 13 turn 生成 DSL、第 14 turn 进入审批。
+- 验证：`TEST_DATABASE_URL=postgres://... go test -count=1 ./...`、`go vet ./...`、`go build ./...` 全部通过，PostgreSQL 集成测试未 skip；`uv run python -m unittest discover -s tests -v` 42/42；Alembic upgrade/current/heads/check 通过且唯一 head/current 为 `20260906_0040`；`compileall`、`git diff --check` 通过。首次 Go 全量运行仅因 integration fake validator 未实现新 digest 合同失败，补齐 fake 后完整复跑通过。
+- 备注：未执行 commit/push，未删除或修改 `.dbg`、`debug-playwright-thread-affinity.md` 等调试产物；Stage 0 Canonical 3+2 live 验收仍归 Task 0.3.3/0.3.7。
+
+## 2026-09-06 | Task 0.3.7 Stage 0 最终验收在 Canonical #2 失败
+
+- 任务：按 pgx 合法 DSN 重新执行 Task 0.3.7 与 Stage 0 最终独立验收；不修改业务代码、不清理 debugger artifacts、不 commit/push；任一业务失败立即记录并停止。
+- 操作：将 Browser Worker SQLAlchemy DSN 归一化为 `postgres://bytedance@127.0.0.1:5432/ai_web_testing`，依次执行 Go test/vet/build、Python 全量、Alembic current/heads/check、compileall 和 diff check；保留无关 `8001/8002` 服务，从当前工作树重启 `8000` Browser API、Execution Worker 和 `8081` AgentService；串行启动全新 Canonical Run。
+- 结果：静态门禁全部通过，PostgreSQL `TestPostgresControlPlaneLifecycle` 明确执行且未 skip。Canonical #1 为 Project 31 / Session 13 / Run `run_be16e8573563b96fa9e08f42` / Generation 56 / Batch 52 / Job 52 / Execution 43，18 步、正式 Report、SHA 绑定和独立 DOM Oracle 全部通过，VLM=0。Canonical #2 为 Project 32 / Session 14 / Run `run_847c3b804514fa7459cbd709`，在 3 次 `explore_page`、8 次 `explore_flow`、7 次 `validate_page_elements` 后，最终 `generate_dsl` preflight 报步骤 13-16 `match_count=0`，随后因超过 20 turns 失败；无 Generation、Approval、Batch、Job 或 Execution。按停止规则未执行 Canonical #3 和两个 mutation，Task 0.1/0.2/0.3/0.3.3/0.3.6/0.3.7 及 Stage 0 checklist 保持未完成，新增 Task 0.3.8 / BUG-131。
+- 验证：Go `go test -count=1 -v ./...`、`go vet ./...`、`go build ./...` 通过；Python unittest 36/36；Alembic current/唯一 head 均为 `20260906_0040` 且 check 无差异；compileall、`git diff --check` 通过。结果文件为 `research/results/stage0-task-037-canonical-1.json` 和 `research/results/stage0-task-037-canonical-2.json`。BUG-130 已验证修复；Debug Server、`.dbg`、埋点和调试说明均保留。
+- 后续：实施 Task 0.3.8，修复重复探索/验证与购物车页面状态到 preflight 的一致性；修复后从全部静态门禁开始重新执行 Canonical 3 次及两个 mutation。
+
+## 2026-09-06 | Stage 0 最终独立验收因 Go DSN 命令错误停止
+
+- 任务：执行 Stage 0 最终 3+2 独立验收；先审查 Task 0.3.6 与 post-fix NDJSON，再运行全部静态门禁，门禁通过后重启三个服务并执行 Canonical 3 次及两个 mutation；不修改业务逻辑、不清理调试现场、不 commit/push。
+- 操作：审查 `playwright-thread-affinity` post-fix 20 条 NDJSON、共享 Playwright/Browser runtime、Session 独立 context、部分初始化清理、真实 HTTP 三 Session 回归和 E2E 驱动器合同；并行执行 Go test/vet/build、Python 全量、Alembic upgrade/head/current/check、compileall 和 diff check。
+- 结果：Task 0.3.6 的 post-fix 证据与代码一致，未发现需预先停止的业务缺陷。Go 全量测试命令错误地把 SQLAlchemy `postgresql+psycopg://` DSN 原样传给 pgx，`internal/integration` 因 DSN 无法解析失败；按立即停止规则，未重启 Go AgentService、Browser API、Execution Worker，Canonical 3 次和两个 mutation 均未执行，所有 Stage 0 勾选项保持不变。新增 Task 0.3.7 / BUG-130。
+- 验证：Go vet/build 通过；Go 单元包通过，仅 PostgreSQL 集成包在连接前因 DSN scheme 失败；Python unittest 36/36、Alembic 唯一 head/current `20260906_0040` 且 check 无差异、compileall、`git diff --check` 通过。Debug Server、`.dbg`、8 个埋点和 `debug-playwright-thread-affinity.md` 均保留。
+- 后续：使用归一化为 `postgres://` 的 `TEST_DATABASE_URL` 从全部静态门禁重新开始 Task 0.3.7；全部门禁通过后方可重启服务并执行 3+2。
+
+## 2026-09-06 | 修复 BUG-129 Playwright 跨 Session runtime 污染
+
+- 任务：严格按 TRAE-debugger 调试 Task 0.3.6 / BUG-129；固定 Session `playwright-thread-affinity`，先采集 pre-fix 运行时证据，再做最小修复和 post-fix 对照；不 commit/push。
+- 操作：启动 `.dbg` Debug Server（idle 1200），增加 8 个 HTTP 网络埋点，覆盖 capability 入口、runtime submit/worker、BrowserSession 创建/复用/关闭和 Playwright enter；真实 Uvicorn HTTP capability + Chromium 复现后，改为专用线程只启动一个共享 Playwright/Browser runtime，各 Planning Session 使用独立 BrowserContext/Page，并保护未完成 `__enter__` 的启动失败清理；增加三 Session 串行 HTTP 回归和部分初始化清理测试。
+- 结果：pre-fix Session 1001 返回 200，1002/1003 返回 500；证据排除跨线程复用、executor 换线程和绕过 runtime，确认首个长期存活的 Playwright manager 令同线程后续调用观察到 running asyncio loop。post-fix Session 2001/2002/2003 均返回 200，并分别完成 context 创建/使用/关闭；只启动一次 Playwright。Task 0.3.6 的实现子项已完成，Task 0.3.3 与 Canonical 3+2 验收保持未完成。
+- 验证：聚焦测试 8/8、Browser Worker 全量 36/36、`compileall`、`git diff --check` 通过。最终 post-fix NDJSON 第 2/10/16 行保持同一 executor，第 3/11/17 行保持同一 worker，第 5 行为唯一 Playwright enter，第 6/8、12/14、18/20 行为三组 context 创建/关闭。
+- 后续：等待用户确认修复结果；确认前保留 `debug-playwright-thread-affinity.md`、`.dbg` 日志/env、8 个埋点和 Debug Server。确认后按 TRAE-debugger 清理，再执行 Task 0.3.3 Canonical 3 次及两个 mutation。
+
+## 2026-09-06 | Stage 0 最终独立验收在第 3 次 Canonical 发现缺陷
+
+- 任务：独立审查 Task 0.3.4/0.3.5 与 canonicalization 合同，执行全部静态门禁，重启三个验收服务，并从零串行执行 Canonical 3 次和两个 Oracle mutation；不修改业务代码，不 commit/push。
+- 操作：审查 DOM Oracle、Go 单点 canonical bytes、审批/入队绑定、Worker 执行前校验、迁移和共享 golden；执行 Alembic upgrade/current/heads/check、Go 全量 test/vet/build、Python 全量测试、compileall 和 diff check；从当前工作树重启 Browser API、Execution Worker、Go AgentService；串行运行纯自然语言 Canonical Goal，并从 PostgreSQL 独立核对 ID、审批顺序、canonical bytes、SHA、snapshot、Report 和 VLM 调用数。
+- 结果：静态门禁全部通过。Canonical #1 为 Project 27 / Session 10 / Run `run_22b2f344e82a891db448a781` / Generation 50 / Batch 48 / Job 48 / Execution 39，14 步、正式 Report 和 DOM Oracle 通过，SHA `fef1f89966ca0267ef5741f4e99f30d924bfd23164cdb2a7339280e504cf3409`，VLM=0；Canonical #2 为 Project 28 / Session 11 / Run `run_345332898c7ea09d6877b183` / Generation 52 / Batch 49 / Job 49 / Execution 40，18 步、正式 Report 和 DOM Oracle 通过，SHA `e7937c23e4c7dd954f7507adf8897906062d39491552473a3bb7f413d5826733`，VLM=0。两次均为审批前 Batch=0、approved generation 正确，generation canonical bytes 与 job 逐字节相等且 execution snapshot/report SHA 一致。Canonical #3 的 Project 29 / Session 12 / Run `run_d585273deeaf91967f6780e0` 在两次 `explore_page` 和一次 `explore_flow` 均触发 Sync Playwright/asyncio loop HTTP 500 后进入 clarification，Generation/Batch/Job/Execution 均不存在，CLI 非零退出。按停止规则未执行 `wrong-price` 和 `wrong-product`，未勾选 Task 0.1/0.2/0.3/0.3.3 或 Stage 0 checklist；新增 Task 0.3.6 / BUG-129。
+- 验证：Alembic 唯一 head/current 均为 `20260906_0040` 且 check 无差异；Go `go test ./...`（显式 PostgreSQL）、`go vet ./...`、`go build ./...` 通过；Python unittest 34/34、compileall、`git diff --check` 通过。失败 Run 为 `waiting_user`、事件 7/13/19 为 capability `tool.failed`、事件 25 为 `proceed_after_worker_error` clarification，项目 Batch 数为 0；Browser API traceback 指向 `_BrowserCapabilityRuntime` 内 `sync_playwright().__enter__()`，失败清理另有 `_connection` 未初始化异常。
+- 后续：实施 Task 0.3.6，补同进程至少 3 个全新 Planning Session 的真实 HTTP 串行回归；修复后必须从零重跑 Canonical 3 次及两个 mutation，全部通过前禁止勾选 Stage 0 或 commit/push。
+
+## 2026-09-06 | Task 0.3.5 统一 DSL canonicalization 与审批 SHA
+
+- 任务：修复 BUG-128，确保批准的 Generation、持久化 Case、正式 Execution snapshot 与 Report 使用同一语义 DSL 和 SHA；不修改 DOM Oracle parser，不 commit/push。
+- 操作：对比 Generation 37 与 Execution 29 的真实 JSON，确认差异来自 Python 二次物化默认字段、移除 `match_count` 等额外字段及数值类型化；定义 `dsl.canonical.v1`，由 Go 单点生成完整 canonical JSON 和 SHA；generation 持久化并返回版本/SHA，正式入队事务校验 case 后固化 snapshot/canonical bytes/版本/SHA，Worker 在浏览器启动前验证权威字节和 Pydantic 语义一致；新增兼容迁移、legacy generation 首读回填、公共合同文档和共享 golden。
+- 结果：Agent 审批与正式执行绑定到同一不可变 canonical bytes；Python 不再为正式 job 重算另一套 canonical JSON，SHA 或默认字段漂移会令 job 失败。Task 0.3.5 与 BUG-128 已完成；未修改 Task 0.3.4 的 DOM Oracle 实现。
+- 验证：Go `go test ./...`、`go vet ./...`、`go build ./...` 通过；显式 `TEST_DATABASE_URL` 的 PostgreSQL 纵向测试通过，覆盖 generation artifact、legacy 回填、持久化 case、job、execution snapshot 和 report SHA；Python unittest 34/34、compileall 通过；Alembic 位于 `20260906_0040` 且 `alembic check` 无差异；`git diff --check` 通过。
+- 后续：重新执行 Task 0.3.3 Stage 0 live 3+2 验收。
+
+## 2026-09-06 | 完成 Task 0.3.4 修复真实 DOM Oracle
+
+- 任务：实施 Task 0.3.4 / BUG-127，仅修复 Agentic E2E DOM Oracle 及其测试和日志状态，不修改 SHA 合同相关 Go/Python 执行代码，不 commit/push。
+- 操作：将 `_CartHTMLParser` 从不可靠的标签深度计数改为目标商品行内的可恢复标签栈；识别 `img`、`br` 等 void element，在新 `td`/`tr` 边界处理隐式闭合，并只从商品标题链接、单价格段、数量按钮和总价格段采集字段；从 Execution 29 真实购物车 DOM 提取 950 字节最小 fixture，增加真实形态、隐式闭合、后续页面标签和 CLI 退出码回归测试。
+- 结果：完整 Execution 29 `final.html` 不再发生 stack underflow，canonical Oracle 精确得到唯一 `product-1` 的 Blue Top、Rs. 500、1、Rs. 500；`wrong-price` 和 `wrong-product` 均失败，CLI 退出码保持 0/1/1。Task 0.3.4 与 BUG-127 已完成；Task 0.3.5、Task 0.3.3 和 Stage 0 总门禁仍未完成。
+- 验证：`uv run python -m unittest tests.test_agentic_e2e_driver -v` 11/11、`uv run python -m unittest discover -s tests -v` 31/31、`uv run python -m compileall -q app scripts tests`、完整 Execution 29 artifact 直接 Oracle 校验和 `git diff --check` 通过。
+- 后续：实施 Task 0.3.5 修复 BUG-128 后，再从零执行 Task 0.3.3 的 Canonical 3 次及两个 mutation live 验收。
+
+## 2026-09-06 | Task 0.3.3 严格独立验收发现新缺陷
+
+- 任务：重新执行 Stage 0 Task 0.3.3 的严格独立验收；不实施业务修复，不 commit/push。
+- 操作：重新读取 tasks/checklist 与最新代码；仅停止旧 AgentService 和 Execution Worker，保留无关的 `8001/8002` 用户进程；从当前工作树重启 Browser API、Execution Worker 和 Go AgentService；执行 BUG-125/126 聚焦测试及 Go/Python 全量门禁；从零启动第 1 次纯自然语言 Canonical Goal。
+- 结果：测试门禁全部通过，BUG-125/126 的 live 路径均已加载。Canonical #1 创建 Project 20 / Session 9 / Run `run_47d657c2f8f219cbc6ff0d99` / Generation 37 / Batch 36 / Job 36 / Execution 29；审批前 Batch 数为 0，Run 完成且批准 Generation 37，正式 Report 为 `passed`、21/21 步通过、最终 URL 为 `/view_cart`、VLM=0，并产出 `/artifacts/executions/29/final.html`。独立 Oracle 随后因 `_CartHTMLParser` 字段栈下溢抛出 `pop from empty list`，脚本以 1 退出；另确认 Generation SHA `d6fc...a3d1` 与 Execution SHA `1e36...ec58` 不一致。按负向规则和停止条件，本轮不通过，Canonical #2/#3 与两个 mutation 均未执行，Task 0.1/0.2/0.3/0.3.3 和 Stage 0 checklist 保持未勾选；新增 Task 0.3.4/0.3.5、BUG-127/128。
+- 验证：Python 聚焦 14/14、全量 28/28、`compileall` 通过；Go 聚焦包、`go test ./...`、`go vet ./...`、`go build ./...` 通过；`git diff --check` 通过。对 Execution 29 的真实 DOM 单独调用 `evaluate_cart_oracle` 可稳定复现 traceback；数据库确认 generation JSON 与 execution snapshot 不相等。
+- 后续：先修复 BUG-127/128 并补跨真实 DOM、跨 Go/Python SHA 合同测试，再从零重跑 Canonical 3 次及 `wrong-price`、`wrong-product` 各一次；全部通过前禁止勾选 Stage 0 或 commit/push。
+
+## 2026-09-06 | 修复 Browser capability Playwright 线程生命周期
+
+- 任务：执行 Task 0.3.1，消除 Browser capability 经 FastAPI HTTP 路由调用 `explore_page`/`explore_flow` 时偶发的 Sync Playwright 与 asyncio loop 冲突。
+- 操作：增加单例单线程 Browser capability runtime，将两类探索的全部 Sync Playwright 操作和 BrowserSession 复用固定到 `browser-capability` 专用线程；请求线程仅解析数据库上下文；FastAPI 关闭时在专用线程关闭全部浏览器会话后回收执行器；新增本地 Uvicorn 真实 HTTP 路由回归测试，以可控替身验证启动线程上下文且不依赖外网。
+- 结果：Browser Worker 继续保持纯执行器边界，Sync Playwright 不再依赖 FastAPI/AnyIO 请求线程，BUG-125 已修复，Task 0.3.1 已完成；未修改 Agentic E2E Driver。
+- 验证：`uv run python -m unittest tests.test_browser_capability_http tests.test_browser_capabilities tests.test_page_explorer -v` 6/6、`uv run python -m unittest discover -s tests -v` 28/28、`uv run python -m compileall -q app tests`、`git diff --check` 通过；真实 Chromium live 验证留待 Task 0.3.3。
+- 后续：执行 Task 0.3.3，从零完成 Canonical 3 次及 `wrong-price`、`wrong-product` 各一次 live 验收。
+
+## 2026-09-06 | 修复 Agentic E2E SSE 边界与失败诊断
+
+- 任务：修复 Agentic E2E Driver 因 SSE keepalive 长连接卡死的问题，并补齐可复现的结构化失败诊断和 checkpoint 类型门禁。
+- 操作：将边界等待改为持久化 events 与 run 状态的可靠轮询，为 SSE 客户端增加墙钟截止；统一保留 project/session/run ID、run status、pending tool call、问题、last seq 和关键事件引用；仅允许当前 `approve_dsl` checkpoint 自动审批，clarification 直接输出失败诊断；增加历史审批隔离、keepalive 和失败 JSON 测试。
+- 结果：Driver 不再依赖 SSE 长连接到达边界；`browser_backend_down` 等 clarification 不会被误审批。Task 0.3.2 已完成，Task 0.3 和 0.3.3 的 live 3+2 验收保持未完成，BUG-125 保持 open。
+- 验证：`uv run python -m unittest tests.test_agentic_e2e_driver -v` 8/8、`uv run python -m unittest discover -s tests -v` 28/28、`uv run python -m compileall -q app scripts tests`、`git diff --check` 通过。
+- 后续：修复 BUG-125 后，从零执行 Canonical 3 次及 `wrong-price`、`wrong-product` 各一次 live 验收。
+
+## 2026-09-06 | Stage 0 验收失败
+
+- 任务：验证已批准 spec 的 Stage 0；运行聚焦/全量测试、3 次 Canonical live E2E 和 2 个负向 Oracle，不修改业务代码。
+- 操作：审查 Stage 0 未提交实现及提交 `3fe967d` 的 DSL Schema、Harness 恢复、OpenAI arguments、复合 CSS、preflight、空 input 和 duration 修复；执行 Go 与 Browser Worker 聚焦/全量测试；启动 Canonical live E2E，并从 PostgreSQL、SSE 回放和进程连接定位失败。
+- 结果：静态门禁与测试通过，但 live 门禁失败。第 1 次为 Project 18 / Session 7 / Run `run_0f34d1e8127602d49b31de33`，`seq=1..22`，Browser capability 三次因 Sync Playwright/asyncio loop 冲突失败，终态 `waiting_user`，pending `browser_backend_down`，无 Generation/Batch/Execution。第 2 次为 Project 19 / Session 8 / Run `run_3f05e744b116ea7f1a9d2c7b`，成功生成 generation 36 和 `seq=73 dsl_generation`，到达 `seq=79 approve_dsl` 后驱动器被 SSE keepalive 长连接阻塞；按要求终止驱动器并保留现场，未审批且无 Batch/Execution。Canonical 第 3 次及 `wrong-price`、`wrong-product` 均未运行。Stage 0 不通过，Task 0.1-0.3 与 checklist 保持未勾选，并新增 Task 0.3.1-0.3.3。
+- 验证：Go 聚焦测试通过；`go test ./...`、`go vet ./...`、`go build ./...` 通过；Browser Worker 聚焦 15/15、全量 25/25、`compileall` 和 `git diff --check` 通过。数据库确认两个 Run 均为 `waiting_user` 且项目 Batch 数均为 0；独立 SSE 回放可立即读取第二次 Run 的 `seq=74..79`，排除 Agent 长循环卡死。
+- 后续：修复 BUG-125 与 BUG-126 后，从零重新执行连续 3 次 Canonical 和 2 个 mutation；全部通过前禁止勾选 Stage 0 或提交推送。
+
+## 2026-09-06 | 实施 Stage 0 Agentic E2E 驱动器
+
+- 任务：仅实施已批准规范的 Task 0.1-0.3，固化自然语言 Goal 到正式报告及独立 Oracle 的统一验收链路。
+- 操作：复核 `3fe967d` 中 DSL Schema、Harness 错误恢复、OpenAI arguments、复合 CSS、preflight、空 input 和 UTC duration 修复；新增仅接受自然语言的 Agentic E2E 驱动器，自动创建 clean project/session、订阅并回放事件、读取并校验 DSL artifact、核对审批前无新 Batch、提交 `approve_dsl=true`、等待正式报告并校验 generation/DSL SHA；Runner 新增终态 DOM artifact，独立 Oracle 精确检查唯一 `#product-1` 行的名称、单价、数量和总价；新增正负变异测试和运行说明。
+- 结果：驱动器输出 `agentic-e2e.result.v1` JSON，拒绝 DSL/CSS/XPath/candidates，错误价格与错误商品均会覆盖正式报告成功并令最终结果失败。按用户要求提前收口时，真实 Run `run_432606627f2a07c6dd64f5f4` 已完成 50 个探索事件但仍处于 `running`，尚未生成 generation、Batch 或 Execution；Canonical 完成 0/3，负向 live 变异完成 0/2。
+- 验证：Go `go test ./...`、`go vet ./...`、`go build ./...` 通过；Browser Worker 全量 unittest 25/25、compileall、`git diff --check` 通过；Ruff 未安装，未执行；真实运行因 Agent 探索耗时在用户要求尽快收口后停止客户端等待。
+- 后续：重新启动包含本次代码的 Execution Worker 后，继续同一驱动器完成 Canonical 3 次及 `wrong-price`、`wrong-product` 各一次 live 验收。
+
 ## 2026-09-06 | 验证自然语言到正式执行完整链路
 
 - 任务：继续验证自然语言需求经 Go Agent/LLM 生成 DSL、用户审批、正式队列执行和报告聚合的完整链路。

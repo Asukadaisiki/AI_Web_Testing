@@ -2,11 +2,16 @@ package execution
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
 )
 
 var (
@@ -16,12 +21,19 @@ var (
 )
 
 type BatchCreateRequest struct {
-	ProjectID       int64             `json:"project_id" vd:"$>0"`
-	CaseIDs         []int64           `json:"case_ids" vd:"len($)>0"`
-	PlanningSession *int64            `json:"planning_session_id,omitempty"`
-	IdempotencyKey  *string           `json:"idempotency_key,omitempty"`
-	Concurrency     int               `json:"concurrency_limit"`
-	InputValues     map[string]string `json:"input_values"`
+	ProjectID       int64                         `json:"project_id" vd:"$>0"`
+	CaseIDs         []int64                       `json:"case_ids" vd:"len($)>0"`
+	PlanningSession *int64                        `json:"planning_session_id,omitempty"`
+	IdempotencyKey  *string                       `json:"idempotency_key,omitempty"`
+	Concurrency     int                           `json:"concurrency_limit"`
+	InputValues     map[string]string             `json:"input_values"`
+	DSLBindings     map[int64]CanonicalDSLBinding `json:"-"`
+}
+
+type CanonicalDSLBinding struct {
+	CanonicalJSON json.RawMessage
+	SHA256        string
+	Version       string
 }
 
 type CaseExecutionRequest struct {
@@ -126,6 +138,9 @@ func (s *Store) CreateBatch(
 		}
 	}
 	request.CaseIDs = uniqueInt64s(request.CaseIDs)
+	if err := validateDSLBindings(request.CaseIDs, request.DSLBindings); err != nil {
+		return nil, err
+	}
 	var count int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*) FROM test_cases
@@ -136,6 +151,22 @@ func (s *Store) CreateBatch(
 	}
 	if count != len(request.CaseIDs) {
 		return nil, ErrNotFound
+	}
+	for caseID, binding := range request.DSLBindings {
+		var matches bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT dsl::jsonb = $2::jsonb
+			FROM test_cases
+			WHERE id = $1 AND project_id = $3
+			FOR SHARE`,
+			caseID, string(binding.CanonicalJSON), request.ProjectID,
+		).Scan(&matches); errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		} else if err != nil {
+			return nil, err
+		} else if !matches {
+			return nil, fmt.Errorf("%w: persisted case does not match canonical DSL", ErrConflict)
+		}
 	}
 	inputValues, _ := json.Marshal(request.InputValues)
 	var batchID int64
@@ -171,14 +202,26 @@ func (s *Store) CreateBatch(
 		return nil, fmt.Errorf("create execution batch: %w", err)
 	}
 	for index, caseID := range request.CaseIDs {
+		var snapshot any
+		var canonicalJSON any
+		var dslHash any
+		var canonicalVersion any
+		if binding, exists := request.DSLBindings[caseID]; exists {
+			snapshot = string(binding.CanonicalJSON)
+			canonicalJSON = string(binding.CanonicalJSON)
+			dslHash = binding.SHA256
+			canonicalVersion = binding.Version
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO execution_jobs (
 				batch_id, project_id, case_id, order_index, status,
-				attempt_count, max_attempts, cancel_requested
+				attempt_count, max_attempts, cancel_requested,
+				dsl_snapshot, dsl_canonical_json, dsl_sha256, dsl_canonical_version
 			)
-			VALUES ($1, $2, $3, $4, 'pending', 0, 2, false)
+			VALUES ($1, $2, $3, $4, 'pending', 0, 2, false, $5::json, $6, $7, $8)
 			ON CONFLICT (batch_id, case_id) DO NOTHING`,
 			batchID, request.ProjectID, caseID, index,
+			snapshot, canonicalJSON, dslHash, canonicalVersion,
 		); err != nil {
 			return nil, fmt.Errorf("create execution job: %w", err)
 		}
@@ -187,6 +230,29 @@ func (s *Store) CreateBatch(
 		return nil, err
 	}
 	return s.BatchDetail(ctx, actorUserID, batchID)
+}
+
+func validateDSLBindings(caseIDs []int64, bindings map[int64]CanonicalDSLBinding) error {
+	selected := make(map[int64]bool, len(caseIDs))
+	for _, caseID := range caseIDs {
+		selected[caseID] = true
+	}
+	for caseID, binding := range bindings {
+		if !selected[caseID] {
+			return fmt.Errorf("%w: DSL binding references unselected case %d", ErrConflict, caseID)
+		}
+		if !json.Valid(binding.CanonicalJSON) || len(binding.CanonicalJSON) == 0 {
+			return fmt.Errorf("%w: case %d canonical DSL is invalid", ErrConflict, caseID)
+		}
+		if binding.Version != dsl.CanonicalVersion {
+			return fmt.Errorf("%w: case %d canonical DSL version is unsupported", ErrConflict, caseID)
+		}
+		hash := sha256.Sum256(binding.CanonicalJSON)
+		if !strings.EqualFold(binding.SHA256, hex.EncodeToString(hash[:])) {
+			return fmt.Errorf("%w: case %d canonical DSL SHA mismatch", ErrConflict, caseID)
+		}
+	}
+	return nil
 }
 
 func uniqueInt64s(values []int64) []int64 {

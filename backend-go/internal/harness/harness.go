@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
@@ -17,11 +18,14 @@ const defaultSystemPrompt = `You are AgentCore for a web UI testing platform.
 Understand the user's goal, plan the work, and call the available tools.
 Use ask_user_question only when required information or explicit approval is missing.
 For a new test, use explore_page for the first known URL, then explore_flow when later page states require interaction.
-Before generate_dsl, call validate_page_elements with required_elements derived from the user's flow and the collected a11y_nodes.
-If validation reports missing requirements, explore again instead of inventing elements.
-Only call generate_dsl after validation allows it. Author the complete structured DSL in generate_dsl.case and include the explored a11y_nodes_by_state for preflight.
+You may call validate_page_elements with required_elements to find exploration gaps, but that advisory result does not authorize generation.
+As soon as the evidence is sufficient, call generate_dsl. It validates the exact final case against a11y_nodes_by_state and persists it atomically.
+Author the complete structured DSL in generate_dsl.case and include collected nodes grouped by their actual page state. Never flatten states.
 	DSL steps may only use goto, click, input, wait_for, assert_text, assert_url_contains, and capture_text. Use wait_for or postconditions for visibility checks; assert_visible is not supported.
 	goto and assert_url_contains store their URL in value. assert_text requires both target and expected value. input requires target and value. capture_text requires target and context_key.
+	Every click on an anchor that should move to another page must declare a url_contains postcondition whose value identifies the concrete destination URL or path. url_changes alone is insufficient because hash or interstitial navigation is not the intended destination.
+	Only set target_strategy to css, xpath, data-testid, element_id, or tag. For semantic targets, omit it; null is accepted only as the equivalent optional boundary value.
+	Explicit CSS targets must exactly match a selector from verified_selectors. Never compose a new descendant CSS selector from separately observed nodes.
 	Do not include candidates, match_count, or locator_confidence in generate_dsl.case; locator preflight derives those fields from a11y_nodes_by_state.
 After generate_dsl, use ask_user_question with a required confirm question whose id is approve_dsl.
 Never call execute_dsl until that approval tool result is true for the latest generation.
@@ -37,14 +41,22 @@ type Harness struct {
 	loop   *agent.Loop
 	tools  *tools.Registry
 	policy ToolPolicy
+
+	activeMu   sync.Mutex
+	activeRuns map[string]*activeRun
+}
+
+type activeRun struct {
+	cancel context.CancelFunc
 }
 
 func New(runs *agentservice.Service, model agent.Model, registry *tools.Registry, maxSteps int) *Harness {
 	return &Harness{
-		runs:   runs,
-		loop:   agent.NewLoop(model, toolDefinitions(registry), defaultSystemPrompt, maxSteps),
-		tools:  registry,
-		policy: DefaultToolPolicy{},
+		runs:       runs,
+		loop:       agent.NewLoop(model, toolDefinitions(registry), defaultSystemPrompt, maxSteps),
+		tools:      registry,
+		policy:     DefaultToolPolicy{},
+		activeRuns: make(map[string]*activeRun),
 	}
 }
 
@@ -93,6 +105,28 @@ func (e *Harness) StartOwnedProjectAsync(
 }
 
 func (e *Harness) Continue(ctx context.Context, runID string) (agentservice.AgentRun, error) {
+	runContext, cancel := context.WithCancel(ctx)
+	active := &activeRun{cancel: cancel}
+	e.activeMu.Lock()
+	previous := e.activeRuns[runID]
+	e.activeRuns[runID] = active
+	e.activeMu.Unlock()
+	if previous != nil {
+		previous.cancel()
+	}
+	defer func() {
+		e.activeMu.Lock()
+		if e.activeRuns[runID] == active {
+			delete(e.activeRuns, runID)
+		}
+		e.activeMu.Unlock()
+		cancel()
+	}()
+
+	return e.continueRun(runContext, runID)
+}
+
+func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.AgentRun, error) {
 	run, err := e.runs.GetRun(ctx, runID)
 	if err != nil {
 		return agentservice.AgentRun{}, err
@@ -138,6 +172,9 @@ func (e *Harness) Continue(ctx context.Context, runID string) (agentservice.Agen
 				Arguments:            json.RawMessage(call.Arguments),
 			})
 			if executeErr != nil {
+				if errors.Is(executeErr, context.Canceled) {
+					return false, executeErr
+				}
 				if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, executeErr); recordErr != nil {
 					return false, recordErr
 				}
@@ -184,6 +221,17 @@ func (e *Harness) Continue(ctx context.Context, runID string) (agentservice.Agen
 		return true, nil
 	})
 	if loopErr != nil {
+		current, getErr := e.runs.GetRun(context.WithoutCancel(ctx), run.ID)
+		if getErr == nil && current.Status == agentservice.RunStatusCancelled {
+			return current, nil
+		}
+		if errors.Is(loopErr, context.Canceled) ||
+			errors.Is(loopErr, agentservice.ErrRunCancelled) {
+			if getErr == nil {
+				return current, loopErr
+			}
+			return run, loopErr
+		}
 		failedRun, _ := e.runs.FailRun(ctx, run, loopErr)
 		return failedRun, loopErr
 	}
@@ -241,6 +289,27 @@ func (e *Harness) GetOwnedRun(
 	actorUserID int64,
 ) (agentservice.AgentRun, error) {
 	return e.runs.GetOwnedRun(ctx, runID, actorUserID)
+}
+
+func (e *Harness) CancelOwned(
+	ctx context.Context,
+	actorUserID int64,
+	runID string,
+	reason string,
+) (agentservice.AgentRun, error) {
+	run, err := e.runs.CancelOwnedRun(ctx, runID, actorUserID, reason)
+	if err != nil {
+		return agentservice.AgentRun{}, err
+	}
+	if run.Status == agentservice.RunStatusCancelled {
+		e.activeMu.Lock()
+		active := e.activeRuns[runID]
+		e.activeMu.Unlock()
+		if active != nil {
+			active.cancel()
+		}
+	}
+	return run, nil
 }
 
 func (e *Harness) ListEvents(ctx context.Context, runID string, afterSeq int64) ([]agentservice.Event, error) {

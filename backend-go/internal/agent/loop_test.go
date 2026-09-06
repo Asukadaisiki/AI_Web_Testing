@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +66,27 @@ func TestLoopEnforcesTurnLimit(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Run() error = nil, want turn limit error")
+	}
+}
+
+func TestLoopTurnLimitPreservesLatestToolError(t *testing.T) {
+	model := &sequenceModel{responses: []ModelResponse{
+		{ToolCalls: []ModelTool{{ID: "generate-1", Name: "generate_dsl", Arguments: `{}`}}},
+	}}
+	loop := NewLoop(model, nil, "system", 1)
+	transcript := []Message{{Role: "user", Content: "start"}}
+
+	err := loop.Run(context.Background(), &transcript, func(context.Context, ModelResponse) (bool, error) {
+		transcript = append(transcript, Message{
+			Role:       "tool",
+			ToolCallID: "generate-1",
+			Content:    `{"status":"error","message":"Step 13: composite CSS was not verified"}`,
+		})
+		return true, nil
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "last tool error: Step 13: composite CSS was not verified") {
+		t.Fatalf("Run() error = %v, want preserved tool diagnostic", err)
 	}
 }
 

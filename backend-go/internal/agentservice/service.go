@@ -208,6 +208,40 @@ func (s *Service) SaveRun(ctx context.Context, run AgentRun) error {
 	return s.repository.SaveRun(ctx, run)
 }
 
+func (s *Service) CancelOwnedRun(
+	ctx context.Context,
+	runID string,
+	actorUserID int64,
+	reason string,
+) (AgentRun, error) {
+	if _, err := s.GetOwnedRun(ctx, runID, actorUserID); err != nil {
+		return AgentRun{}, err
+	}
+	return s.CancelRun(ctx, runID, reason)
+}
+
+func (s *Service) CancelRun(
+	ctx context.Context,
+	runID string,
+	reason string,
+) (AgentRun, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return AgentRun{}, errors.New("cancel reason is required")
+	}
+	now := s.now().UTC()
+	run, event, transitioned, err := s.repository.CancelRun(ctx, runID, now, Event{
+		Type:      EventRunCancelled,
+		Timestamp: now,
+		Payload:   map[string]any{"reason": reason},
+	})
+	if err != nil || !transitioned {
+		return run, err
+	}
+	s.broker.Publish(event)
+	return run, nil
+}
+
 func (s *Service) RecordEvent(ctx context.Context, run AgentRun, event Event) (Event, error) {
 	return s.appendEvent(ctx, run, event)
 }
@@ -218,6 +252,9 @@ func (s *Service) CompleteRun(ctx context.Context, run AgentRun) (AgentRun, erro
 	run.PendingStepID = nil
 	run.UpdatedAt = s.now().UTC()
 	if err := s.repository.SaveRun(ctx, run); err != nil {
+		if errors.Is(err, ErrRunCancelled) {
+			return s.repository.GetRun(context.WithoutCancel(ctx), run.ID)
+		}
 		return AgentRun{}, err
 	}
 	if _, err := s.appendEvent(ctx, run, Event{Type: EventRunFinished}); err != nil {
@@ -232,6 +269,9 @@ func (s *Service) FailRun(ctx context.Context, run AgentRun, cause error) (Agent
 	run.PendingStepID = nil
 	run.UpdatedAt = s.now().UTC()
 	if err := s.repository.SaveRun(ctx, run); err != nil {
+		if errors.Is(err, ErrRunCancelled) {
+			return s.repository.GetRun(context.WithoutCancel(ctx), run.ID)
+		}
 		return AgentRun{}, err
 	}
 	payload := map[string]any{}

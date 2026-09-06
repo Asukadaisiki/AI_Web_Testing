@@ -18,7 +18,8 @@ type AgentEventType =
   | "tool.failed"
   | "artifact.published"
   | "run.finished"
-  | "run.failed";
+  | "run.failed"
+  | "run.cancelled";
 
 export interface AgentRun {
   id: string;

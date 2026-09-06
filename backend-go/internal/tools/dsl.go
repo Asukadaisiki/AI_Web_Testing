@@ -30,6 +30,7 @@ func (t GenerateDSLTool) Definition() Definition {
 		Description: "Validate and persist a structured DSL candidate authored from the user's goal and verified page elements. " +
 			"Every step action must be one of: goto, click, input, wait_for, assert_text, " +
 			"assert_url_contains, capture_text. Express visibility checks as wait_for or postconditions, " +
+			"and give every cross-page anchor click a url_contains postcondition with the expected destination URL or path. " +
 			"never as assert_visible. Targets must be grounded in verified page elements. " +
 			"Do not author candidates, match_count, or locator_confidence; locator preflight adds them.",
 		InputSchema: json.RawMessage(`{
@@ -61,8 +62,17 @@ func (t GenerateDSLTool) Definition() Definition {
 											"properties":{
 												"action":{"type":"string","const":"click"},
 												"target":{"type":"string"},
-												"target_strategy":{"type":"string"},
-												"postconditions":{"type":"array","items":{"type":"object"}}
+												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
+												"page_state":{"type":"string"},
+												"postconditions":{"type":"array","items":{
+													"type":"object",
+													"properties":{
+														"type":{"type":"string","enum":["url_contains","url_changes","text_visible","text_gone","element_visible","element_gone","network_request","dom_changed","value_changed"]},
+														"value":{"type":["string","null"],"description":"Expected destination URL/path, text, selector, or value. url_contains requires a non-empty target."},
+														"timeout_ms":{"type":"integer","minimum":100,"maximum":30000}
+													},
+													"required":["type"]
+												}}
 											},
 											"required":["action","target"]
 										},
@@ -73,8 +83,17 @@ func (t GenerateDSLTool) Definition() Definition {
 												"target":{"type":"string"},
 												"value":{"type":"string"},
 												"trigger":{"type":"string"},
-												"target_strategy":{"type":"string"},
-												"postconditions":{"type":"array","items":{"type":"object"}}
+												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
+												"page_state":{"type":"string"},
+												"postconditions":{"type":"array","items":{
+													"type":"object",
+													"properties":{
+														"type":{"type":"string","enum":["url_contains","url_changes","text_visible","text_gone","element_visible","element_gone","network_request","dom_changed","value_changed"]},
+														"value":{"type":["string","null"]},
+														"timeout_ms":{"type":"integer","minimum":100,"maximum":30000}
+													},
+													"required":["type"]
+												}}
 											},
 											"required":["action","target","value"]
 										},
@@ -83,6 +102,8 @@ func (t GenerateDSLTool) Definition() Definition {
 											"properties":{
 												"action":{"type":"string","const":"wait_for"},
 												"target":{"type":"string"},
+												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
+												"page_state":{"type":"string"},
 												"timeout_ms":{"type":"integer"}
 											},
 											"required":["action","target"]
@@ -92,6 +113,8 @@ func (t GenerateDSLTool) Definition() Definition {
 											"properties":{
 												"action":{"type":"string","const":"assert_text"},
 												"target":{"type":"string"},
+												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
+												"page_state":{"type":"string"},
 												"value":{"type":"string","description":"Expected text."}
 											},
 											"required":["action","target","value"]
@@ -109,6 +132,8 @@ func (t GenerateDSLTool) Definition() Definition {
 											"properties":{
 												"action":{"type":"string","const":"capture_text"},
 												"target":{"type":"string"},
+												"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
+												"page_state":{"type":"string"},
 												"context_key":{"type":"string"}
 											},
 											"required":["action","target","context_key"]

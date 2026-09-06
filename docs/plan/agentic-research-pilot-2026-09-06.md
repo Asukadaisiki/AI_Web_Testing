@@ -213,6 +213,30 @@ Full Agent validation:
   validation, DSL generation, user checkpoint approval, PostgreSQL queue,
   Execution Worker, Playwright, report aggregation, and final Agent response.
 
+### Task 0.3.10: Cross-page navigation and repeated approval integrity
+
+Status: completed on 2026-09-06.
+
+- [x] Require verified cross-page anchor clicks to declare a concrete
+  `url_contains` postcondition in the existing postcondition structure.
+- [x] Dispatch a click once and permit at most one
+  `href_navigation_fallback` for a verified, same-origin HTTP(S) anchor.
+- [x] Wait for URL postconditions for their declared timeout and reject
+  hash-only navigation as the expected cross-page destination.
+- [x] Exclude cross-origin-frame and semantically identified advertising nodes
+  from business candidates without site-specific rules.
+- [x] Use the same locator action and postcondition path for formal synchronous
+  and streaming Worker execution.
+- [x] Validate every Generation, artifact, SHA, approval, and Batch transition
+  across multiple approval rounds while preserving failed rounds as recovery.
+- [x] Set Stage 0 `first_pass` only from the first Batch result.
+- [x] Cover hash interstitials, one click plus one goto, button non-replay,
+  multiple approvals, and missing navigation postconditions with regression
+  tests.
+
+The Task implementation and static/integration gates are complete. The Stage 0
+Canonical 3+2 live rerun remains a separate acceptance run.
+
 ### Phase R1: Trajectory foundation
 
 Tasks:

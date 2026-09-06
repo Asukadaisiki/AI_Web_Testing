@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import uvicorn
 
 from app.api.routes.artifacts import router as artifacts_router
 from app.api.router import build_api_router
+from app.application.browser.service import shutdown_browser_capabilities
 from app.core.config import get_settings
 from app.core.idempotency import IdempotencyMiddleware
 from app.core.logging_config import get_uvicorn_log_config, setup_logging
@@ -18,6 +20,13 @@ from app.db import verify_database_connection
 
 
 ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "artifacts"
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    del _app
+    yield
+    shutdown_browser_capabilities()
 
 
 def create_app() -> FastAPI:
@@ -31,6 +40,7 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         debug=settings.debug,
+        lifespan=lifespan,
     )
     app.state.artifacts_dir = ARTIFACTS_DIR
     app.state.storage_states_dir = STORAGE_STATES_DIR

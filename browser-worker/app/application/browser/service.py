@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import hashlib
+import json
 from pathlib import Path
-from typing import Any
+import threading
+from typing import Any, Callable, TypeVar
 from urllib.parse import urljoin, urlparse
 
 from sqlalchemy.orm import Session
 
-from app.ai.locator_preflight import apply_preflight_to_dsl
+from app.ai.locator_preflight import apply_preflight_to_dsl_by_state
 from app.ai.page_explorer import (
     BrowserSessionManager,
     _collect_flow_a11y,
@@ -19,7 +23,44 @@ from app.ai.page_explorer import (
 )
 from app.core.config import get_settings
 from app.models import AIPlanningSession
-from app.schemas.browser_capabilities import BrowserCapabilityName
+from app.schemas.browser_capabilities import (
+    BrowserCapabilityName,
+    ExploreFlowArguments,
+    ExplorePageArguments,
+    ValidatePageElementsArguments,
+)
+
+
+T = TypeVar("T")
+
+
+class _BrowserCapabilityRuntime:
+    """Keep all Sync Playwright work on one dedicated thread."""
+
+    _lock = threading.Lock()
+    _executor: ThreadPoolExecutor | None = None
+
+    @classmethod
+    def run(cls, operation: Callable[[], T]) -> T:
+        with cls._lock:
+            if cls._executor is None:
+                cls._executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="browser-capability",
+                )
+            future = cls._executor.submit(operation)
+        return future.result()
+
+    @classmethod
+    def shutdown(cls) -> None:
+        with cls._lock:
+            executor = cls._executor
+            cls._executor = None
+            if executor is None:
+                return
+            close_future = executor.submit(BrowserSessionManager.close_all)
+        close_future.result()
+        executor.shutdown(wait=True)
 
 
 def execute_browser_capability(
@@ -31,13 +72,39 @@ def execute_browser_capability(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     if capability == "validate_page_elements":
-        return _validate_page_elements(arguments)
+        validated_arguments = ValidatePageElementsArguments.model_validate(arguments)
+        return _validate_page_elements(
+            validated_arguments.model_dump(exclude_none=True)
+        )
     planning_session_id = int(conversation_id) if conversation_id.isdigit() else 0
     if capability == "explore_page":
-        return _explore_page(session, project_id, planning_session_id, arguments)
+        arguments = ExplorePageArguments.model_validate(arguments).model_dump(
+            exclude_none=True
+        )
+        url = _resolve_page_url(session, planning_session_id, arguments)
+        return _BrowserCapabilityRuntime.run(
+            lambda: _explore_page(project_id, planning_session_id, url, arguments)
+        )
     if capability == "explore_flow":
-        return _explore_flow(session, project_id, planning_session_id, arguments)
+        arguments = ExploreFlowArguments.model_validate(arguments).model_dump(
+            exclude_none=True
+        )
+        base_url = str(arguments.get("base_url") or "").strip()
+        if not base_url:
+            base_url = _session_base_url(session, planning_session_id)
+        return _BrowserCapabilityRuntime.run(
+            lambda: _explore_flow(
+                project_id,
+                planning_session_id,
+                base_url,
+                arguments,
+            )
+        )
     raise ValueError(f"unsupported browser capability: {capability}")
+
+
+def shutdown_browser_capabilities() -> None:
+    _BrowserCapabilityRuntime.shutdown()
 
 
 def _storage_state_path(project_id: int) -> str | None:
@@ -56,12 +123,11 @@ def _session_base_url(session: Session, planning_session_id: int) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _explore_page(
+def _resolve_page_url(
     session: Session,
-    project_id: int,
     planning_session_id: int,
     arguments: dict[str, Any],
-) -> dict[str, Any]:
+) -> str:
     url = str(arguments.get("url") or "").strip()
     if not url:
         raise ValueError("url is required")
@@ -70,7 +136,15 @@ def _explore_page(
         if not base_url:
             raise ValueError("relative url requires a session base URL")
         url = urljoin(base_url + "/", url.lstrip("/"))
+    return url
 
+
+def _explore_page(
+    project_id: int,
+    planning_session_id: int,
+    url: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
     _, page = BrowserSessionManager.get_or_create_context(
         planning_session_id,
         storage_state_path=_storage_state_path(project_id),
@@ -105,17 +179,14 @@ def _explore_page(
 
 
 def _explore_flow(
-    session: Session,
     project_id: int,
     planning_session_id: int,
+    base_url: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     steps = arguments.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError("steps must be a non-empty array")
-    base_url = str(arguments.get("base_url") or "").strip()
-    if not base_url:
-        base_url = _session_base_url(session, planning_session_id)
     pages = _collect_flow_a11y(
         steps,
         base_url=base_url or None,
@@ -125,6 +196,12 @@ def _explore_flow(
     )
     return {
         "pages": pages,
+        "success": not any(page.get("status") == "error" for page in pages),
+        "failures": [
+            page["failure"]
+            for page in pages
+            if page.get("status") == "error" and isinstance(page.get("failure"), dict)
+        ],
         "total_pages": len(pages),
         "total_elements": sum(page.get("element_count", 0) for page in pages),
     }
@@ -132,24 +209,36 @@ def _explore_flow(
 
 def _validate_page_elements(arguments: dict[str, Any]) -> dict[str, Any]:
     dsl_case = arguments.get("dsl_case")
-    a11y_nodes = arguments.get("a11y_nodes")
-    if not isinstance(a11y_nodes, list):
-        raise ValueError("a11y_nodes must be an array")
-
     required_elements = arguments.get("required_elements")
     if isinstance(required_elements, list):
+        a11y_nodes = arguments["a11y_nodes"]
         return _validate_required_elements(required_elements, a11y_nodes)
-    if not isinstance(dsl_case, dict):
-        raise ValueError("provide required_elements or dsl_case")
 
-    validated = apply_preflight_to_dsl(deepcopy(dsl_case), a11y_nodes)
+    a11y_nodes_by_state = arguments["a11y_nodes_by_state"]
+    validated = apply_preflight_to_dsl_by_state(
+        deepcopy(dsl_case),
+        a11y_nodes_by_state,
+    )
     preflight = validated.get("_preflight") or {}
     return {
         "dsl_case": validated,
         "valid": preflight.get("locator_confidence") != "low",
+        "validation_mode": "dsl_case",
+        "case_digest": _json_digest(dsl_case),
+        "evidence_digest": _json_digest(a11y_nodes_by_state),
         "locator_confidence": preflight.get("locator_confidence", "low"),
         "warnings": preflight.get("warnings", []),
     }
+
+
+def _json_digest(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _validate_required_elements(

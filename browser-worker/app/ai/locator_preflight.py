@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from copy import deepcopy
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,30 @@ def _normalize_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", value.strip().casefold())
 
 
+def _is_business_node(node: dict[str, Any]) -> bool:
+    dom = node.get("dom") or {}
+    return not (dom.get("third_party_frame") or dom.get("advertising_context"))
+
+
+def _verified_anchor_href(step: dict[str, Any]) -> str:
+    for candidate in step.get("candidates") or []:
+        features = candidate.get("pre_features") or {}
+        href = str(features.get("verified_href") or "").strip()
+        if href and not href.startswith("#"):
+            return href
+    return ""
+
+
+def _has_navigation_postcondition(step: dict[str, Any], href: str) -> bool:
+    for postcondition in step.get("postconditions") or []:
+        if postcondition.get("type") != "url_contains":
+            continue
+        value = str(postcondition.get("value") or "").strip()
+        if value and (value in href or href in value):
+            return True
+    return False
+
+
 def apply_preflight_to_dsl(
     dsl_case: dict[str, Any],
     a11y_nodes: list[dict[str, Any]],
@@ -58,6 +83,7 @@ def apply_preflight_to_dsl(
     Mutates *dsl_case* in place and returns it.
     """
     steps = dsl_case.get("steps", [])
+    a11y_nodes = [node for node in a11y_nodes if _is_business_node(node)]
     if not steps or not a11y_nodes:
         return dsl_case
 
@@ -145,6 +171,14 @@ def apply_preflight_to_dsl(
                     vs_strategy = vs.get("strategy", "")
                     vs_selector = vs.get("selector", "")
                     if vs_strategy and vs_selector:
+                        dom = n.get("dom") or {}
+                        attrs = dom.get("attrs") or {}
+                        anchor_href = (
+                            str(attrs.get("href") or "").strip()
+                            if str(dom.get("tag") or "").lower() == "a"
+                            and not attrs.get("download")
+                            else ""
+                        )
                         candidates.append({
                             "strategy": f"verified_{vs_strategy}",
                             "selector": vs_selector,
@@ -153,6 +187,7 @@ def apply_preflight_to_dsl(
                             "pre_features": {
                                 "verified": True,
                                 "source": vs.get("source") or "a11y_backend_dom_node",
+                                "verified_href": anchor_href or None,
                                 **scope_ctx,
                             },
                         })
@@ -216,3 +251,113 @@ def apply_preflight_to_dsl(
         ],
     }
     return dsl_case
+
+
+def apply_preflight_to_dsl_by_state(
+    dsl_case: dict[str, Any],
+    a11y_nodes_by_state: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Bind each locator-bearing step to one evidence state.
+
+    A target that matches multiple states must declare ``page_state``. Explicit
+    CSS is accepted only when the exact selector was verified by exploration.
+    """
+    steps = dsl_case.get("steps", [])
+    warnings: list[str] = []
+    confidences: list[str] = []
+    normalized_states = {
+        str(state): [node for node in nodes if isinstance(node, dict)]
+        for state, nodes in a11y_nodes_by_state.items()
+        if isinstance(nodes, list)
+    }
+
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict) or not str(step.get("target") or "").strip():
+            continue
+        requested_state = str(step.get("page_state") or "").strip()
+        if requested_state:
+            state_names = [requested_state]
+        else:
+            state_names = list(normalized_states)
+
+        matches: list[tuple[str, dict[str, Any]]] = []
+        for state in state_names:
+            nodes = normalized_states.get(state)
+            if nodes is None:
+                continue
+            probe = {"steps": [deepcopy(step)]}
+            apply_preflight_to_dsl(probe, nodes)
+            evaluated = probe["steps"][0]
+            if evaluated.get("match_count", 0) > 0:
+                matches.append((state, evaluated))
+
+        target = str(step.get("target") or "").strip()
+        if not matches:
+            step["candidates"] = []
+            step["match_count"] = 0
+            step["locator_confidence"] = "low"
+            confidences.append("low")
+            if requested_state and requested_state not in normalized_states:
+                warnings.append(
+                    f"Step {index}: page_state '{requested_state}' has no exploration evidence"
+                )
+            elif _is_composite_css(target, step.get("target_strategy")):
+                warnings.append(
+                    f"Step {index}: composite CSS '{target}' was not verified in any "
+                    "matching page state; re-explore that state and use an exact "
+                    "verified_selectors entry"
+                )
+            else:
+                state_hint = requested_state or ", ".join(state_names) or "none"
+                warnings.append(
+                    f"Step {index}: target '{target}' matched 0 elements in states [{state_hint}]"
+                )
+            continue
+
+        if len(matches) > 1 and not requested_state:
+            step["candidates"] = []
+            step["match_count"] = sum(
+                int(evaluated.get("match_count", 0)) for _, evaluated in matches
+            )
+            step["locator_confidence"] = "low"
+            confidences.append("low")
+            warnings.append(
+                f"Step {index}: target '{target}' matches multiple page states "
+                f"{[state for state, _ in matches]}; set page_state explicitly"
+            )
+            continue
+
+        state, evaluated = matches[0]
+        for field in ("candidates", "match_count", "locator_confidence"):
+            step[field] = evaluated[field]
+        step["page_state"] = state
+        href = _verified_anchor_href(step)
+        if (
+            step.get("action") == "click"
+            and href
+            and not _has_navigation_postcondition(step, href)
+        ):
+            step["locator_confidence"] = "low"
+            warnings.append(
+                f"Step {index}: cross-page anchor '{href}' requires a matching "
+                "url_contains postcondition"
+            )
+        confidences.append(str(step["locator_confidence"]))
+
+    overall = "high"
+    if "low" in confidences:
+        overall = "low"
+    elif "medium" in confidences:
+        overall = "medium"
+    dsl_case["_preflight"] = {
+        "locator_confidence": overall,
+        "warnings": warnings,
+    }
+    return dsl_case
+
+
+def _is_composite_css(target: str, strategy: Any) -> bool:
+    if strategy != "css" and not target.startswith(("css=", "#", ".")):
+        return False
+    selector = target.removeprefix("css=").strip()
+    return bool(re.search(r"\s|>|\+|~", selector))

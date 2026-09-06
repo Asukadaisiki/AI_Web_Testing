@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type TurnHandler func(context.Context, ModelResponse) (continueLoop bool, err error)
@@ -58,5 +60,28 @@ func (l *Loop) Run(
 			return nil
 		}
 	}
-	return fmt.Errorf("agent exceeded maximum turns: %d", l.maxTurns)
+	message := fmt.Sprintf("agent exceeded maximum turns: %d", l.maxTurns)
+	if lastError := latestToolError(*transcript); lastError != "" {
+		message += "; last tool error: " + lastError
+	}
+	return fmt.Errorf("%s", message)
+}
+
+func latestToolError(transcript []Message) string {
+	for index := len(transcript) - 1; index >= 0; index-- {
+		message := transcript[index]
+		if message.Role != "tool" {
+			continue
+		}
+		var result struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(message.Content), &result) != nil ||
+			result.Status != "error" {
+			return ""
+		}
+		return strings.TrimSpace(result.Message)
+	}
+	return ""
 }

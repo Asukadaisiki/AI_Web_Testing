@@ -41,6 +41,19 @@ class FakePage:
         return ""
 
 
+class ChangingURLPage(FakePage):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.url_reads = 0
+
+    @property
+    def url(self) -> str:
+        self.url_reads += 1
+        if self.url_reads >= 4:
+            return "https://example.com/details/1"
+        return "https://example.com/products"
+
+
 class PostconditionVerifierTest(unittest.TestCase):
     def test_text_visible_passes_when_any_match_is_visible(self) -> None:
         verifier = PostconditionVerifier(FakePage([False, True]))  # type: ignore[arg-type]
@@ -59,6 +72,24 @@ class PostconditionVerifierTest(unittest.TestCase):
         )
 
         self.assertFalse(result.passed)
+
+    def test_url_postcondition_waits_until_destination_arrives(self) -> None:
+        page = ChangingURLPage()
+        verifier = PostconditionVerifier(page)  # type: ignore[arg-type]
+        verifier.capture_pre_state()
+
+        result = verifier.verify(
+            [
+                Postcondition(
+                    type="url_contains",
+                    value="/details/1",
+                    timeout_ms=500,
+                )
+            ]
+        )
+
+        self.assertTrue(result.passed)
+        self.assertGreaterEqual(page.url_reads, 4)
 
 
 if __name__ == "__main__":

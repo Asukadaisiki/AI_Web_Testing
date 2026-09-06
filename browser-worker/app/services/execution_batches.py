@@ -186,6 +186,10 @@ def execute_claimed_job(
                 batch_id=batch.id,
                 job_id=job.id,
                 attempt_number=job.attempt_count,
+                dsl_snapshot=job.dsl_snapshot,
+                dsl_canonical_json=job.dsl_canonical_json,
+                dsl_sha256=job.dsl_sha256,
+                dsl_canonical_version=job.dsl_canonical_version,
             ),
             cancel_event=cancel_event,
         )

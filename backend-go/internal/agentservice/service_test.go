@@ -142,3 +142,90 @@ func TestQuestionValidation(t *testing.T) {
 		t.Fatal("RequestUserInput() error = nil, want validation error")
 	}
 }
+
+func TestCancelRunIsIdempotentAndProtectsCancelledState(t *testing.T) {
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	stale, err := service.StartRun(context.Background(), "conversation-1", "测试登录")
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+
+	cancelled, err := service.CancelRun(context.Background(), stale.ID, "driver timeout")
+	if err != nil {
+		t.Fatalf("CancelRun() error = %v", err)
+	}
+	if cancelled.Status != RunStatusCancelled {
+		t.Fatalf("status = %q, want %q", cancelled.Status, RunStatusCancelled)
+	}
+
+	replayed, err := service.CancelRun(context.Background(), stale.ID, "duplicate request")
+	if err != nil {
+		t.Fatalf("second CancelRun() error = %v", err)
+	}
+	if replayed.Status != RunStatusCancelled {
+		t.Fatalf("replayed status = %q, want cancelled", replayed.Status)
+	}
+	if err := service.SaveRun(context.Background(), stale); !errors.Is(err, ErrRunCancelled) {
+		t.Fatalf("stale SaveRun() error = %v, want ErrRunCancelled", err)
+	}
+	completed, err := service.CompleteRun(context.Background(), stale)
+	if err != nil {
+		t.Fatalf("CompleteRun() after cancel error = %v", err)
+	}
+	if completed.Status != RunStatusCancelled {
+		t.Fatalf("completed status = %q, want cancelled", completed.Status)
+	}
+
+	events, err := service.ListEvents(context.Background(), stale.ID, 0)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(events) != 2 || events[1].Type != EventRunCancelled {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[1].Payload["reason"] != "driver timeout" {
+		t.Fatalf("cancel reason = %#v", events[1].Payload["reason"])
+	}
+}
+
+func TestCancelWaitingRunClearsPendingAndCompletedRunWins(t *testing.T) {
+	service := NewService(NewMemoryRepository())
+	waiting, err := service.StartRun(context.Background(), "conversation-1", "测试登录")
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	waiting, _, err = service.RequestUserInput(
+		context.Background(),
+		waiting.ID,
+		AskUserRequest{Questions: []Question{{
+			ID: "confirm", Prompt: "继续吗？", Type: QuestionConfirm, Required: true,
+		}}},
+	)
+	if err != nil {
+		t.Fatalf("RequestUserInput() error = %v", err)
+	}
+	cancelled, err := service.CancelRun(context.Background(), waiting.ID, "stale checkpoint")
+	if err != nil {
+		t.Fatalf("CancelRun() error = %v", err)
+	}
+	if cancelled.PendingToolCallID != nil || cancelled.PendingStepID != nil {
+		t.Fatalf("cancelled pending fields = %#v", cancelled)
+	}
+
+	running, err := service.StartRun(context.Background(), "conversation-2", "完成")
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	completed, err := service.CompleteRun(context.Background(), running)
+	if err != nil {
+		t.Fatalf("CompleteRun() error = %v", err)
+	}
+	afterCancel, err := service.CancelRun(context.Background(), running.ID, "too late")
+	if err != nil {
+		t.Fatalf("CancelRun() completed error = %v", err)
+	}
+	if afterCancel.Status != RunStatusCompleted || completed.Status != RunStatusCompleted {
+		t.Fatalf("completed run changed: %#v", afterCancel)
+	}
+}

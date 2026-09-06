@@ -1,7 +1,10 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,13 +62,9 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 	if err != nil {
 		return nil, err
 	}
-	nodes := make([]json.RawMessage, 0)
-	for _, stateNodes := range request.A11yNodesByState {
-		nodes = append(nodes, stateNodes...)
-	}
 	validationArguments, err := json.Marshal(map[string]any{
-		"dsl_case":   normalizedCase,
-		"a11y_nodes": nodes,
+		"dsl_case":            normalizedCase,
+		"a11y_nodes_by_state": request.A11yNodesByState,
 	})
 	if err != nil {
 		return nil, err
@@ -77,9 +76,12 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		return nil, err
 	}
 	var validated struct {
-		Case     json.RawMessage `json:"dsl_case"`
-		Valid    bool            `json:"valid"`
-		Warnings []string        `json:"warnings"`
+		Case           json.RawMessage `json:"dsl_case"`
+		Valid          bool            `json:"valid"`
+		ValidationMode string          `json:"validation_mode"`
+		CaseDigest     string          `json:"case_digest"`
+		EvidenceDigest string          `json:"evidence_digest"`
+		Warnings       []string        `json:"warnings"`
 	}
 	if err := json.Unmarshal(validatedRaw, &validated); err != nil {
 		return nil, fmt.Errorf("decode DSL preflight result: %w", err)
@@ -93,6 +95,19 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		}
 		return nil, errors.New("DSL locator preflight failed without details")
 	}
+	expectedCaseDigest, err := canonicalJSONDigest(normalizedCase)
+	if err != nil {
+		return nil, fmt.Errorf("digest normalized DSL case: %w", err)
+	}
+	expectedEvidenceDigest, err := canonicalJSONDigest(request.A11yNodesByState)
+	if err != nil {
+		return nil, fmt.Errorf("digest DSL evidence: %w", err)
+	}
+	if validated.ValidationMode != "dsl_case" ||
+		validated.CaseDigest != expectedCaseDigest ||
+		validated.EvidenceDigest != expectedEvidenceDigest {
+		return nil, errors.New("DSL locator preflight result is not bound to the submitted case and evidence")
+	}
 	generation, err := c.dsl.CreateGeneration(
 		ctx, actorUserID, projectID, validated.Case, validated.Warnings,
 	)
@@ -100,12 +115,37 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		return nil, err
 	}
 	return json.Marshal(map[string]any{
-		"generation_id":       generation.ID,
-		"case":                generation.Case,
-		"supported_actions":   []string{"goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"},
-		"warnings":            validated.Warnings,
-		"normalization_notes": []string{},
+		"generation_id":              generation.ID,
+		"case":                       generation.Case,
+		"dsl_sha256":                 generation.DSLHash,
+		"dsl_canonical_version":      generation.CanonicalVersion,
+		"validation_case_digest":     validated.CaseDigest,
+		"validation_evidence_digest": validated.EvidenceDigest,
+		"supported_actions":          []string{"goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"},
+		"warnings":                   validated.Warnings,
+		"normalization_notes":        []string{},
 	})
+}
+
+func canonicalJSONDigest(value any) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	var decoded any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		return "", err
+	}
+	var canonical bytes.Buffer
+	encoder := json.NewEncoder(&canonical)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(decoded); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(bytes.TrimSuffix(canonical.Bytes(), []byte("\n")))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (c *ControlPlaneCapabilities) ExecuteDSL(
@@ -155,6 +195,13 @@ func (c *ControlPlaneCapabilities) ExecuteDSL(
 		IdempotencyKey:  &idempotencyKey,
 		Concurrency:     1,
 		InputValues:     request.InputValues,
+		DSLBindings: map[int64]execution.CanonicalDSLBinding{
+			testCase.ID: {
+				CanonicalJSON: generation.Case,
+				SHA256:        generation.DSLHash,
+				Version:       generation.CanonicalVersion,
+			},
+		},
 	})
 	if err != nil {
 		return nil, err

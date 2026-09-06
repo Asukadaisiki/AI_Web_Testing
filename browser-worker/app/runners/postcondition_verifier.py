@@ -62,7 +62,6 @@ class PostconditionVerifier:
         if not postconditions:
             return PostconditionResult(passed=True, details={})
 
-        post_url = self._page.url
         post_dom_hash = self._compute_dom_hash()
         post_input_values = self._get_input_values()
 
@@ -73,7 +72,6 @@ class PostconditionVerifier:
             try:
                 ok = self._verify_single(
                     pc,
-                    post_url=post_url,
                     post_dom_hash=post_dom_hash,
                     post_input_values=post_input_values,
                 )
@@ -97,7 +95,6 @@ class PostconditionVerifier:
         self,
         pc: Postcondition,
         *,
-        post_url: str,
         post_dom_hash: str,
         post_input_values: dict,
     ) -> bool:
@@ -110,10 +107,16 @@ class PostconditionVerifier:
         value = pc.value
 
         if pc_type == "url_contains":
-            return value is not None and value in post_url
+            return value is not None and self._wait_for_url(
+                lambda current_url: value in current_url,
+                timeout_ms=pc.timeout_ms,
+            )
 
         if pc_type == "url_changes":
-            return post_url != pre_url
+            return self._wait_for_url(
+                lambda current_url: current_url != pre_url,
+                timeout_ms=pc.timeout_ms,
+            )
 
         if pc_type == "text_visible":
             if value is None:
@@ -186,6 +189,15 @@ class PostconditionVerifier:
         deadline = monotonic() + timeout_ms / 1000
         while True:
             if cls._any_visible(locator) is visible:
+                return True
+            if monotonic() >= deadline:
+                return False
+            sleep(0.05)
+
+    def _wait_for_url(self, predicate, *, timeout_ms: int) -> bool:
+        deadline = monotonic() + timeout_ms / 1000
+        while True:
+            if predicate(self._page.url):
                 return True
             if monotonic() >= deadline:
                 return False

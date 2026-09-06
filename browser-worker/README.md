@@ -74,4 +74,17 @@ uv run python -m app.workers.execution_worker --concurrency 2
 
 当前 Worker 使用 PostgreSQL 行锁领取任务。Planning SSE 已迁移为创建 Batch，
 并轮询 Report Core 输出兼容进度事件，不再在请求线程中直接执行 Playwright。
+
+## Agentic E2E
+
+统一驱动器只接受自然语言 Goal，通过 Go AgentService 跟踪事件、读取 DSL artifact、
+提交显式审批、等待正式报告，再从终态 DOM evidence 独立校验购物车：
+
+```bash
+uv run python scripts/run_agentic_e2e.py \
+  '匿名访问 Automation Exercise，从 Products 页面搜索 Blue Top，确认搜索结果，进入商品详情，将数量保持为 1，加入购物车，通过加购弹层打开 View Cart，并验证购物车中商品名为 Blue Top、单价和总价均为 Rs. 500、数量为 1。不得注册、登录、结账或填写个人信息；默认不使用 Vision。'
+```
+
+可用 `--oracle-mutation wrong-price` 或 `--oracle-mutation wrong-product`
+执行独立 Oracle 负向变异。结果使用 `agentic-e2e.result.v1` JSON。
 运行中 Job 通过 heartbeat 续租并读取持久化取消标记，取消会在 Runner 的下一安全步骤边界生效。

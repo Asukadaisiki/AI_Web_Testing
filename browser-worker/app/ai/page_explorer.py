@@ -1,7 +1,7 @@
 """Playwright-based page exploration and browser session management."""
 from __future__ import annotations
 
-import hashlib
+from contextlib import suppress
 import json
 import logging
 import re
@@ -10,6 +10,7 @@ import time as _time_module
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urldefrag, urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -154,6 +155,14 @@ def _stable_dom_selectors(dom: dict[str, Any]) -> list[tuple[str, str]]:
     return selectors
 
 
+def _is_business_candidate(node: dict[str, Any]) -> bool:
+    dom = node.get("dom") or {}
+    return not (
+        dom.get("third_party_frame")
+        or dom.get("advertising_context")
+    )
+
+
 def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> None:
     """Attach verified Playwright candidates to a11y nodes via backendDOMNodeId."""
     for node in nodes:
@@ -177,13 +186,29 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                   }
                   const rect = this.getBoundingClientRect();
                   const style = window.getComputedStyle(this);
+                  let advertisingContext = false;
+                  for (let current = this; current; current = current.parentElement) {
+                    const marker = [
+                      current.id,
+                      current.className,
+                      current.getAttribute && current.getAttribute('role'),
+                      current.getAttribute && current.getAttribute('aria-label'),
+                      current.getAttribute && current.getAttribute('title')
+                    ].filter(Boolean).join(' ').toLowerCase();
+                    if (/(^|[\\s_-])(ad|ads|advert|advertisement|sponsored|promoted)([\\s_-]|$)/.test(marker)) {
+                      advertisingContext = true;
+                      break;
+                    }
+                  }
                   return {
                     tag: this.tagName ? this.tagName.toLowerCase() : "",
                     attrs,
                     visible: rect.width > 0 && rect.height > 0 &&
                       style.visibility !== "hidden" && style.display !== "none",
                     enabled: !this.disabled && this.getAttribute("aria-disabled") !== "true",
-                    textContent: this.textContent || ""
+                    textContent: this.textContent || "",
+                    third_party_frame: window !== window.top && window.frameElement === null,
+                    advertising_context: advertisingContext
                   };
                 }
                 """,
@@ -238,7 +263,7 @@ def collect_a11y_nodes(
         filter_pass = _filter_a11y_nodes(raw_nodes, viewport=viewport)
         nodes = _cdp_to_a11y_nodes({"nodes": filter_pass}, page_state=page_state)
         _augment_a11y_nodes_with_dom(page, client, nodes)
-        return nodes
+        return [node for node in nodes if _is_business_candidate(node)]
     finally:
         try:
             client.send("Accessibility.disable")
@@ -281,70 +306,6 @@ def _expand_collapsed_components(page, keywords: set[str], max_clicks: int = 10)
 STALE_THRESHOLD_HOURS = 24
 
 
-class PageDataCache:
-    """Per-session cache of explored page data.
-
-    Avoids re-exploring the same (url, actions) combination within a session.
-    Shares the same 10-minute TTL as :class:`BrowserSessionManager`.
-    """
-
-    _lock = threading.Lock()
-    _cache: dict[int, dict[str, dict]] = {}
-    _timestamps: dict[int, dict[str, float]] = {}
-    _MAX_AGE_SECONDS: float = 600.0
-
-    @classmethod
-    def _prune_expired(cls, session_id: int) -> None:
-        now = _time_module.monotonic()
-        if session_id not in cls._timestamps:
-            return
-        stale = [
-            k for k, ts in cls._timestamps[session_id].items()
-            if now - ts > cls._MAX_AGE_SECONDS
-        ]
-        for k in stale:
-            cls._cache.get(session_id, {}).pop(k, None)
-            cls._timestamps[session_id].pop(k, None)
-
-    @classmethod
-    def _build_key(cls, step: dict) -> str:
-        url = (step.get("url") or "").strip().rstrip("/")
-        desc = (step.get("description") or "").strip()
-        actions = json.dumps(step.get("actions") or [], sort_keys=True, ensure_ascii=False)
-        raw = f"{url}|{desc}|{actions}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-    @classmethod
-    def get(cls, session_id: int, step: dict) -> dict | None:
-        if not session_id:
-            return None
-        with cls._lock:
-            cls._prune_expired(session_id)
-            key = cls._build_key(step)
-            result = cls._cache.get(session_id, {}).get(key)
-            if result is not None:
-                cls._timestamps.setdefault(session_id, {})[key] = _time_module.monotonic()
-                logger.info(
-                    "PageDataCache hit: session=%d url=%s",
-                    session_id, result.get("url", "?"),
-                )
-            return result
-
-    @classmethod
-    def put(cls, session_id: int, step: dict, result: dict) -> None:
-        if not session_id:
-            return
-        with cls._lock:
-            cls._prune_expired(session_id)
-            key = cls._build_key(step)
-            cls._cache.setdefault(session_id, {})[key] = result
-            cls._timestamps.setdefault(session_id, {})[key] = _time_module.monotonic()
-            logger.info(
-                "PageDataCache put: session=%d url=%s elements=%d",
-                session_id, result.get("url", "?"), result.get("element_count", 0),
-            )
-
-
 class BrowserSessionManager:
     """Per-session browser lifecycle manager.
 
@@ -356,7 +317,10 @@ class BrowserSessionManager:
     """
 
     _lock = threading.Lock()
-    _sessions: dict[int, dict] = {}
+    _sessions: dict[int, dict[str, Any]] = {}
+    _runtime_pw: Any | None = None
+    _runtime_playwright: Any | None = None
+    _runtime_browser: Any | None = None
     _MAX_AGE_SECONDS: float = 600.0  # auto-close after 10 min of inactivity
 
     @classmethod
@@ -390,28 +354,39 @@ class BrowserSessionManager:
                     logger.warning("BrowserSessionManager: session %d health check failed: %s", session_id, e)
                     cls._close_locked(session_id)
 
-            pw = sync_playwright()
+            if cls._runtime_browser is None:
+                pw = sync_playwright()
+                entered = False
+                try:
+                    playwright = pw.__enter__()
+                    entered = True
+                    browser = playwright.chromium.launch(headless=True)
+                except Exception:
+                    if entered:
+                        with suppress(Exception):
+                            pw.__exit__(None, None, None)
+                    raise
+                cls._runtime_pw = pw
+                cls._runtime_playwright = playwright
+                cls._runtime_browser = browser
+
+            browser = cls._runtime_browser
+            context = None
             try:
-                playwright = pw.__enter__()
-                browser = playwright.chromium.launch(headless=True)
                 context_kwargs: dict = {}
                 if storage_state_path and Path(storage_state_path).exists():
                     context_kwargs["storage_state"] = storage_state_path
                 context = browser.new_context(**context_kwargs)
                 page = context.new_page()
             except Exception:
-                try:
-                    pw.__exit__(None, None, None)
-                except Exception:
-                    logger.warning(
-                        "BrowserSessionManager: failed to clean up Playwright after launch failure",
-                        exc_info=True,
-                    )
+                if context is not None:
+                    with suppress(Exception):
+                        context.close()
                 raise
 
             cls._sessions[session_id] = {
-                "pw": pw,
-                "playwright": playwright,
+                "pw": cls._runtime_pw,
+                "playwright": cls._runtime_playwright,
                 "browser": browser,
                 "context": context,
                 "page": page,
@@ -428,19 +403,30 @@ class BrowserSessionManager:
             cls._close_locked(session_id)
 
     @classmethod
+    def close_all(cls) -> None:
+        """Close every managed browser on the owning Playwright thread."""
+        with cls._lock:
+            for session_id in list(cls._sessions):
+                cls._close_locked(session_id)
+            browser = cls._runtime_browser
+            pw = cls._runtime_pw
+            cls._runtime_browser = None
+            cls._runtime_playwright = None
+            cls._runtime_pw = None
+            if browser is not None:
+                with suppress(Exception):
+                    browser.close()
+            if pw is not None:
+                with suppress(Exception):
+                    pw.__exit__(None, None, None)
+
+    @classmethod
     def _close_locked(cls, session_id: int) -> None:
         entry = cls._sessions.pop(session_id, None)
         if entry is None:
             return
-        for attr in ("context", "browser"):
-            try:
-                getattr(entry[attr], "close", lambda: None)()
-            except Exception:
-                pass
-        try:
-            entry["pw"].__exit__(None, None, None)
-        except Exception:
-            pass
+        with suppress(Exception):
+            entry["context"].close()
 
     @classmethod
     def _cleanup(cls) -> None:
@@ -638,6 +624,58 @@ def _resolve_step_locator(page, target: str, *, kind: str, skip_vlm: bool = Fals
     return None
 
 
+def _resolve_flow_action_locator(
+    page,
+    target: str,
+    *,
+    kind: str,
+    previous_nodes: list[dict[str, Any]] | None,
+):
+    if target.startswith("text="):
+        text = target.removeprefix("text=").strip()
+        locator = page.get_by_text(text, exact=True)
+        return locator.first if locator.count() > 0 else None
+    if target.startswith("css="):
+        locator = page.locator(target.removeprefix("css="))
+        return locator.first if locator.count() > 0 else None
+    if target.startswith(("#", ".")):
+        locator = page.locator(target)
+        return locator.first if locator.count() > 0 else None
+    locator = _resolve_from_collected_nodes(page, target, previous_nodes)
+    if locator is not None:
+        return locator
+    return _resolve_step_locator(page, target, kind=kind, skip_vlm=True)
+
+
+def _flow_action_timeout(action: dict[str, Any]) -> int:
+    raw_timeout = action.get("timeout_ms", action.get("value", 5000))
+    try:
+        timeout = int(raw_timeout)
+    except (TypeError, ValueError):
+        timeout = 5000
+    return max(1, min(timeout, 60000))
+
+
+def _wait_for_flow_target(page, target: str, timeout_ms: int) -> None:
+    if target.startswith("text="):
+        text = target.removeprefix("text=").strip()
+        page.get_by_text(text, exact=True).first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        return
+    if target.startswith("css="):
+        page.locator(target.removeprefix("css=")).first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        return
+    page.get_by_text(target, exact=True).first.wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+
+
 def capture_browser_session(
     url: str,
     steps: list[dict[str, Any]],
@@ -784,8 +822,6 @@ def _collect_flow_a11y(
     # Normalize all steps to explore format
     flow_steps = [_normalize_flow_step(s) for s in flow_steps]
 
-    from urllib.parse import urljoin
-
     if session_id:
         ctx, page = BrowserSessionManager.get_or_create_context(
             session_id, storage_state_path=storage_state_path,
@@ -812,6 +848,7 @@ def _collect_flow_a11y(
 
     results: list[dict[str, Any]] = []
     state_index = 0
+    revision = 0
     url_to_state: dict[str, str] = {}
     managed = not bool(session_id)
 
@@ -823,23 +860,26 @@ def _collect_flow_a11y(
             logger.info("_collect_flow_a11y: step %d, step=%s", step_i, step)
             if not isinstance(step, dict):
                 continue
-            if session_id:
-                cached = PageDataCache.get(session_id, step)
-                if cached is not None:
-                    results.append(cached)
-                    continue
 
             step_url = step.get("url")
             if step_url and isinstance(step_url, str) and step_url.strip():
                 url_str = step_url.strip()
                 if not url_str.startswith(("http://", "https://")):
                     if not base_url:
+                        revision += 1
                         results.append({
                             "url": url_str, "page_state": "SKIPPED",
                             "a11y_nodes": [], "element_count": 0,
+                            "status": "error",
+                            "revision": revision,
+                            "failure": {
+                                "code": "relative_url_without_base",
+                                "step_index": step_i,
+                                "message": "relative URL requires base_url",
+                            },
                             "description": step.get("description", ""),
                         })
-                        continue
+                        break
                     url_str = urljoin(base_url, url_str.lstrip("/"))
                 try:
                     logger.info("_collect_flow_a11y: navigating to %s", url_str)
@@ -851,23 +891,39 @@ def _collect_flow_a11y(
                     # Check if page actually loaded (not stuck on about:blank)
                     if page.url == "about:blank":
                         logger.warning("_collect_flow_a11y: page stuck on about:blank after goto %s", url_str)
+                        revision += 1
                         results.append({
                             "url": url_str, "page_state": "ERROR",
                             "a11y_nodes": [], "element_count": 0,
+                            "status": "error",
+                            "revision": revision,
+                            "failure": {
+                                "code": "navigation_failed",
+                                "step_index": step_i,
+                                "message": "page remained on about:blank",
+                            },
                             "error": "页面未能加载（停留在 about:blank），可能是网站无法访问或被反爬虫机制阻止",
                         })
-                        continue
+                        break
                 except Exception as exc:
                     logger.warning("_collect_flow_a11y: goto failed for %s: %s", url_str, exc)
+                    revision += 1
                     results.append({
                         "url": url_str, "page_state": "ERROR",
                         "a11y_nodes": [], "element_count": 0,
+                        "status": "error",
+                        "revision": revision,
+                        "failure": {
+                            "code": "navigation_failed",
+                            "step_index": step_i,
+                            "message": str(exc),
+                        },
                         "error": str(exc),
                     })
-                    continue
+                    break
 
             actions = step.get("actions")
-            if isinstance(actions, list):
+            if isinstance(actions, list) and actions:
                 logger.info("_collect_flow_a11y: executing %d actions", len(actions))
                 # Collect page state before actions
                 current_url = page.url
@@ -885,6 +941,7 @@ def _collect_flow_a11y(
                     "description": description,
                     "actions": [],
                     "element_count": 0,  # Will be updated after actions
+                    "status": "success",
                 }
 
                 for action_idx, action_def in enumerate(actions):
@@ -896,62 +953,115 @@ def _collect_flow_a11y(
                     if not act:
                         continue
 
-                    # Execute the action
                     url_before_action = page.url
-                    if act in ("type", "fill", "input"):
-                        loc = _resolve_step_locator(page, target, kind="input", skip_vlm=True)
-                        if loc is not None:
+                    expected_navigation_url = None
+                    try:
+                        if act == "input":
+                            loc = _resolve_flow_action_locator(
+                                page,
+                                target,
+                                kind="input",
+                                previous_nodes=prev_action_nodes,
+                            )
+                            if loc is None:
+                                raise RuntimeError(f"input target not found: {target}")
                             try:
                                 tag = loc.evaluate("el => el.tagName.toLowerCase()")
                             except Exception:
                                 tag = ""
                             if tag not in ("input", "select", "textarea"):
                                 loc = _resolve_input_fallback(page, target)
-                            if loc is not None:
-                                loc.fill(str(value))
-                    elif act in ("click", "press", "tap"):
-                        # 1. Try DOM-level precise selectors from previously collected nodes
-                        logger.info(
-                            "_collect_flow_a11y: click target=%r, prev_nodes=%d",
-                            target, len(prev_action_nodes) if prev_action_nodes else 0,
-                        )
-                        loc = _resolve_from_collected_nodes(page, target, prev_action_nodes)
-                        if loc is not None:
-                            logger.info("_collect_flow_a11y: USED collected selector for %r", target)
-                        # 2. Fall back to a11y semantic locator
-                        if loc is None:
-                            logger.info("_collect_flow_a11y: FALLBACK to a11y for %r", target)
-                            loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
-                        if loc is None:
-                            page.wait_for_timeout(1500)
-                            loc = _resolve_step_locator(page, target, kind="click", skip_vlm=True)
-                        if loc is not None:
+                            if loc is None:
+                                raise RuntimeError(
+                                    f"input target is not editable: {target}"
+                                )
+                            loc.fill(str(value))
+                        elif act == "click":
+                            logger.info(
+                                "_collect_flow_a11y: click target=%r, prev_nodes=%d",
+                                target, len(prev_action_nodes) if prev_action_nodes else 0,
+                            )
+                            loc = _resolve_flow_action_locator(
+                                page,
+                                target,
+                                kind="click",
+                                previous_nodes=prev_action_nodes,
+                            )
+                            if loc is None:
+                                raise RuntimeError(f"click target not found: {target}")
+                            expected_navigation_url = _cross_page_anchor_href(
+                                loc, url_before_action
+                            )
                             from app.runners.click_preprocessor import (
                                 click_with_precheck,
                             )
-                            click_with_precheck(page, loc)
-                    elif act == "wait":
-                        try:
-                            ms = int(target)
-                            page.wait_for_timeout(ms)
-                        except (ValueError, TypeError):
-                            pass
-                    elif act == "wait_for":
-                        try:
-                            page.get_by_text(target).first.wait_for(state="visible", timeout=5000)
-                        except Exception:
+                            click_result = click_with_precheck(page, loc)
+                            if not click_result.succeeded:
+                                raise RuntimeError(
+                                    "click failed"
+                                    + (
+                                        f": {click_result.recovery_detail}"
+                                        if click_result.recovery_detail
+                                        else ""
+                                    )
+                                )
+                        elif act == "wait_for":
+                            _wait_for_flow_target(
+                                page,
+                                target,
+                                _flow_action_timeout(action_def),
+                            )
+                        else:
+                            raise RuntimeError(f"unsupported flow action: {act}")
+                        if page.url != url_before_action:
                             try:
-                                page.locator(f"text={target}").first.wait_for(state="visible", timeout=5000)
+                                page.wait_for_load_state(
+                                    "networkidle", timeout=timeout_ms
+                                )
                             except Exception:
                                 pass
-
-                    # Wait for page to settle after action
-                    if page.url != url_before_action:
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=timeout_ms)
-                        except Exception:
-                            pass
-                    page.wait_for_timeout(500)
+                        if expected_navigation_url:
+                            arrived = _wait_for_expected_navigation(
+                                page,
+                                expected_navigation_url,
+                                _flow_action_timeout(action_def),
+                            )
+                        else:
+                            page.wait_for_timeout(500)
+                            arrived = True
+                        if not arrived:
+                            raise RuntimeError(
+                                "click did not reach expected anchor destination: "
+                                f"expected={expected_navigation_url}, actual={page.url}"
+                            )
+                    except Exception as exc:
+                        failure = {
+                            "code": "flow_action_failed",
+                            "step_index": step_i,
+                            "action_index": action_idx,
+                            "action": act,
+                            "target": target,
+                            "message": str(exc),
+                        }
+                        page_entry["status"] = "error"
+                        page_entry["failure"] = failure
+                        page_entry["actions"].append(
+                            {
+                                "action_index": action_idx,
+                                "action_description": (
+                                    f"{act} {target}" if target else act
+                                ),
+                                "status": "error",
+                                "failure": failure,
+                                "a11y_nodes": [],
+                                "element_count": 0,
+                            }
+                        )
+                        logger.warning(
+                            "_collect_flow_a11y: action failed: %s",
+                            failure,
+                        )
+                        break
 
                     # Collect a11y nodes after this action
                     action_desc = f"{act} {target}" if target else act
@@ -964,6 +1074,7 @@ def _collect_flow_a11y(
                     action_entry = {
                         "action_index": action_idx,
                         "action_description": action_desc,
+                        "status": "success",
                         "a11y_nodes": nodes,
                         "element_count": len(nodes),
                     }
@@ -975,7 +1086,7 @@ def _collect_flow_a11y(
 
                 # If navigation happened during actions, attribute nodes to the final URL
                 final_url = page.url
-                if final_url and final_url != current_url:
+                if final_url and not _same_document_url(final_url, current_url):
                     final_key = f"{final_url.rstrip('/')}|{description}"
                     if final_key not in url_to_state:
                         url_to_state[final_key] = f"S{state_index}"
@@ -993,10 +1104,11 @@ def _collect_flow_a11y(
                         step_i, current_url, final_url, new_state,
                     )
 
-                # Add page entry to results
+                revision += 1
+                page_entry["revision"] = revision
                 results.append(page_entry)
-                if session_id:
-                    PageDataCache.put(session_id, step, page_entry)
+                if page_entry["status"] == "error":
+                    break
             else:
                 # No actions, just collect nodes for this step
                 current_url = page.url
@@ -1014,13 +1126,29 @@ def _collect_flow_a11y(
                     "a11y_nodes": nodes, "element_count": len(nodes),
                     "description": description,
                     "actions": [],
+                    "status": "success",
                 }
+                revision += 1
+                result["revision"] = revision
                 results.append(result)
                 logger.info("_collect_flow_a11y: step %d completed, state=%s, nodes=%d", step_i, state_id, len(nodes))
-                if session_id:
-                    PageDataCache.put(session_id, step, result)
     except Exception as exc:
         logger.error("_collect_flow_a11y failed: %s", exc, exc_info=True)
+        revision += 1
+        results.append(
+            {
+                "url": getattr(page, "url", ""),
+                "page_state": "ERROR",
+                "a11y_nodes": [],
+                "element_count": 0,
+                "status": "error",
+                "revision": revision,
+                "failure": {
+                    "code": "flow_failed",
+                    "message": str(exc),
+                },
+            }
+        )
     finally:
         if managed:
             try:
@@ -1039,18 +1167,65 @@ def _collect_flow_a11y(
     return deduplicated
 
 
+def _same_document_url(left: str, right: str) -> bool:
+    return urldefrag(left)[0].rstrip("/") == urldefrag(right)[0].rstrip("/")
+
+
+def _wait_for_expected_navigation(
+    page,
+    expected_url: str,
+    timeout_ms: int,
+) -> bool:
+    deadline = _time_module.monotonic() + timeout_ms / 1000
+    while True:
+        if _same_document_url(page.url, expected_url):
+            return True
+        if _time_module.monotonic() >= deadline:
+            return False
+        page.wait_for_timeout(50)
+
+
+def _cross_page_anchor_href(locator, current_url: str) -> str | None:
+    try:
+        attributes = locator.evaluate(
+            "el => ({tag: el.tagName.toLowerCase(), href: el.getAttribute('href') || '', "
+            "download: el.hasAttribute('download')})"
+        )
+    except Exception:
+        return None
+    if (
+        not isinstance(attributes, dict)
+        or attributes.get("tag") != "a"
+        or attributes.get("download")
+    ):
+        return None
+    href = str(attributes.get("href") or "").strip()
+    if not href or href.startswith("#"):
+        return None
+    resolved = urljoin(current_url, href)
+    if urlparse(resolved).scheme not in {"http", "https"}:
+        return None
+    if _same_document_url(resolved, current_url):
+        return None
+    return resolved
+
+
 def _deduplicate_explore_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deduplicate explore results while preserving structure.
 
     Strategy:
     1. Group by URL (normalized)
-    2. For each URL, keep the page with the most actions
-    3. Within each page, deduplicate actions by action_description
+    2. For each URL, keep the latest successful revision
+    3. Within each page, keep the latest successful action revision
     4. Within each action, deduplicate nodes by (role, name) to reduce size
     """
     # Group by URL
     pages_by_url: dict[str, dict] = {}
+    failures: list[dict[str, Any]] = []
     for page in results:
+        if page.get("status") == "error":
+            failures.append(page)
+            continue
         url = (page.get("url") or "").strip().rstrip("/").lower()
         if not url:
             continue
@@ -1060,10 +1235,9 @@ def _deduplicate_explore_results(results: list[dict[str, Any]]) -> list[dict[str
         if existing is None:
             pages_by_url[url] = page
         else:
-            # Keep page with more actions
-            existing_actions = existing.get("actions", [])
-            new_actions = page.get("actions", [])
-            if len(new_actions) > len(existing_actions):
+            existing_revision = int(existing.get("revision", 0))
+            page_revision = int(page.get("revision", 0))
+            if page_revision >= existing_revision:
                 pages_by_url[url] = page
 
     # Deduplicate actions within each page
@@ -1081,10 +1255,11 @@ def _deduplicate_explore_results(results: list[dict[str, Any]]) -> list[dict[str
             if desc not in seen_actions:
                 seen_actions[desc] = action
             else:
-                # Keep action with more nodes
-                existing_nodes = seen_actions[desc].get("element_count", 0)
-                new_nodes = action.get("element_count", 0)
-                if new_nodes > existing_nodes:
+                existing_success = (
+                    seen_actions[desc].get("status", "success") == "success"
+                )
+                action_success = action.get("status", "success") == "success"
+                if action_success or not existing_success:
                     seen_actions[desc] = action
 
         # Deduplicate nodes within each action
@@ -1097,7 +1272,7 @@ def _deduplicate_explore_results(results: list[dict[str, Any]]) -> list[dict[str
         page["actions"] = list(seen_actions.values())
         deduplicated.append(page)
 
-    return deduplicated
+    return deduplicated + failures
 
 
 def _deduplicate_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:

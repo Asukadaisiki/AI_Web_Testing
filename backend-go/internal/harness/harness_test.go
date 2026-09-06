@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
@@ -18,11 +20,206 @@ type scriptedModel struct {
 
 type failingTool struct{}
 
+type cancellableTool struct {
+	started chan struct{}
+}
+
+type staticResultTool struct {
+	name     string
+	content  json.RawMessage
+	artifact *tools.Artifact
+	calls    *int
+}
+
+func (t staticResultTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        t.name,
+		Description: t.name,
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
+}
+
+func (t staticResultTool) Execute(context.Context, tools.Call) (tools.Result, error) {
+	if t.calls != nil {
+		(*t.calls)++
+	}
+	return tools.Result{Content: t.content, Artifact: t.artifact}, nil
+}
+
 func (failingTool) Definition() tools.Definition {
 	return tools.Definition{
 		Name:        "failing_tool",
 		Description: "Always fails.",
 		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
+}
+
+func (t cancellableTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "cancellable_tool",
+		Description: "Blocks until its context is cancelled.",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
+}
+
+func (t cancellableTool) Execute(ctx context.Context, _ tools.Call) (tools.Result, error) {
+	close(t.started)
+	<-ctx.Done()
+	return tools.Result{}, ctx.Err()
+}
+
+func TestBUG131ReplayReachesGenerationWithinExistingBudget(t *testing.T) {
+	responses := make([]agent.ModelResponse, 0, 14)
+	for index, toolName := range []string{
+		"explore_page",
+		"explore_page",
+		"explore_flow",
+		"explore_page",
+		"explore_flow",
+		"explore_flow",
+		"explore_flow",
+		"explore_flow",
+		"explore_flow",
+		"explore_flow",
+		"explore_flow",
+		"validate_page_elements",
+	} {
+		responses = append(responses, agent.ModelResponse{
+			ToolCalls: []agent.ModelTool{{
+				ID:        fmt.Sprintf("replay-%02d", index+1),
+				Name:      toolName,
+				Arguments: `{}`,
+			}},
+		})
+	}
+	responses = append(
+		responses,
+		agent.ModelResponse{ToolCalls: []agent.ModelTool{{
+			ID: "generate-bound", Name: "generate_dsl", Arguments: `{}`,
+		}}},
+		agent.ModelResponse{ToolCalls: []agent.ModelTool{{
+			ID:   "approve-generated",
+			Name: "ask_user_question",
+			Arguments: `{"questions":[{
+				"id":"approve_dsl",
+				"question":"批准 DSL？",
+				"type":"confirm",
+				"required":true
+			}]}`,
+		}}},
+	)
+	model := &scriptedModel{responses: responses}
+	repository := agentservice.NewMemoryRepository()
+	runService := agentservice.NewService(repository)
+	registry, err := tools.NewRegistry(
+		staticResultTool{
+			name:    "explore_page",
+			content: json.RawMessage(`{"a11y_nodes":[]}`),
+		},
+		staticResultTool{
+			name:    "explore_flow",
+			content: json.RawMessage(`{"pages":[],"success":true}`),
+		},
+		staticResultTool{
+			name:    "validate_page_elements",
+			content: json.RawMessage(`{"valid":true}`),
+		},
+		staticResultTool{
+			name:    "generate_dsl",
+			content: json.RawMessage(`{"generation_id":131}`),
+			artifact: &tools.Artifact{
+				Type: "dsl_generation",
+				ID:   "131",
+			},
+		},
+		tools.AskUserTool{},
+	)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	run, err := New(runService, model, registry, 20).Start(
+		context.Background(),
+		"14",
+		"replay run_847c3b804514fa7459cbd709",
+	)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if run.Status != agentservice.RunStatusWaitingUser ||
+		run.LatestGenerationID == nil ||
+		*run.LatestGenerationID != 131 {
+		t.Fatalf("run = %#v, want approval checkpoint for generation 131", run)
+	}
+	if len(model.requests) != 14 {
+		t.Fatalf("turns = %d, want 14 within unchanged budget 20", len(model.requests))
+	}
+}
+
+func TestBUG132ReplayUsesSingleGenerationForSemanticTargets(t *testing.T) {
+	responses := []agent.ModelResponse{
+		{ToolCalls: []agent.ModelTool{{ID: "explore-1", Name: "explore_page", Arguments: `{}`}}},
+		{ToolCalls: []agent.ModelTool{{ID: "explore-2", Name: "explore_flow", Arguments: `{}`}}},
+		{ToolCalls: []agent.ModelTool{{ID: "explore-3", Name: "explore_page", Arguments: `{}`}}},
+		{ToolCalls: []agent.ModelTool{{ID: "explore-4", Name: "explore_flow", Arguments: `{}`}}},
+		{ToolCalls: []agent.ModelTool{{ID: "explore-5", Name: "explore_flow", Arguments: `{}`}}},
+		{ToolCalls: []agent.ModelTool{{
+			ID:   "generate-semantic",
+			Name: "generate_dsl",
+			Arguments: `{
+				"case":{"name":"BUG-132 replay","steps":[
+					{"action":"click","target":"View Cart"}
+				]},
+				"a11y_nodes_by_state":{"cart":[]}
+			}`,
+		}}},
+		{ToolCalls: []agent.ModelTool{{
+			ID:   "approve-generated",
+			Name: "ask_user_question",
+			Arguments: `{"questions":[{
+				"id":"approve_dsl",
+				"question":"批准 DSL？",
+				"type":"confirm",
+				"required":true
+			}]}`,
+		}}},
+	}
+	model := &scriptedModel{responses: responses}
+	runService := agentservice.NewService(agentservice.NewMemoryRepository())
+	generationCalls := 0
+	registry, err := tools.NewRegistry(
+		staticResultTool{name: "explore_page", content: json.RawMessage(`{"a11y_nodes":[]}`)},
+		staticResultTool{name: "explore_flow", content: json.RawMessage(`{"pages":[],"success":true}`)},
+		staticResultTool{
+			name:     "generate_dsl",
+			content:  json.RawMessage(`{"generation_id":132}`),
+			artifact: &tools.Artifact{Type: "dsl_generation", ID: "132"},
+			calls:    &generationCalls,
+		},
+		tools.AskUserTool{},
+	)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	run, err := New(runService, model, registry, 20).Start(
+		context.Background(),
+		"15",
+		"replay run_c77c8c19791d44bc2e761bcc",
+	)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if generationCalls != 1 {
+		t.Fatalf("generate_dsl calls = %d, want 1", generationCalls)
+	}
+	if run.Status != agentservice.RunStatusWaitingUser ||
+		run.LatestGenerationID == nil ||
+		*run.LatestGenerationID != 132 {
+		t.Fatalf("run = %#v, want approval checkpoint for generation 132", run)
+	}
+	if len(model.requests) != 7 {
+		t.Fatalf("turns = %d, want 7", len(model.requests))
 	}
 }
 
@@ -243,5 +440,159 @@ func TestEngineBindsApprovalToLatestGeneration(t *testing.T) {
 	}
 	if run.ApprovedGenerationID == nil || *run.ApprovedGenerationID != generationID {
 		t.Fatalf("approved generation = %#v", run.ApprovedGenerationID)
+	}
+}
+
+func TestCancelActiveRunStopsToolWithoutFailureEvents(t *testing.T) {
+	model := &scriptedModel{responses: []agent.ModelResponse{{
+		ToolCalls: []agent.ModelTool{{
+			ID: "call-1", Name: "cancellable_tool", Arguments: `{}`,
+		}},
+	}}}
+	repository := agentservice.NewMemoryRepository()
+	runService := agentservice.NewService(repository)
+	started := make(chan struct{})
+	registry, err := tools.NewRegistry(cancellableTool{started: started})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	engine := New(runService, model, registry, 2)
+
+	run, err := engine.StartOwnedProjectAsync(
+		context.Background(),
+		7,
+		"conversation-1",
+		11,
+		"run until cancelled",
+	)
+	if err != nil {
+		t.Fatalf("StartOwnedProjectAsync() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not start")
+	}
+
+	cancelled, err := engine.CancelOwned(
+		context.Background(),
+		7,
+		run.ID,
+		"test timeout",
+	)
+	if err != nil {
+		t.Fatalf("CancelOwned() error = %v", err)
+	}
+	if cancelled.Status != agentservice.RunStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", cancelled.Status)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		engine.activeMu.Lock()
+		_, active := engine.activeRuns[run.ID]
+		engine.activeMu.Unlock()
+		if !active {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancelled run remained registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events, err := engine.ListEvents(context.Background(), run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if events[len(events)-1].Type != agentservice.EventRunCancelled {
+		t.Fatalf("last event = %#v", events[len(events)-1])
+	}
+	for _, event := range events {
+		if event.Type == agentservice.EventToolFailed ||
+			event.Type == agentservice.EventRunFailed {
+			t.Fatalf("cancellation emitted failure event: %#v", event)
+		}
+	}
+}
+
+func TestCancelResumedRunUsesRegisteredCancelFunc(t *testing.T) {
+	started := make(chan struct{})
+	model := &scriptedModel{responses: []agent.ModelResponse{
+		{ToolCalls: []agent.ModelTool{{
+			ID: "approval-1", Name: "ask_user_question",
+			Arguments: `{"questions":[{"id":"continue","question":"继续？","type":"confirm","required":true}]}`,
+		}}},
+		{ToolCalls: []agent.ModelTool{{
+			ID: "call-2", Name: "cancellable_tool", Arguments: `{}`,
+		}}},
+	}}
+	runService := agentservice.NewService(agentservice.NewMemoryRepository())
+	registry, err := tools.NewRegistry(
+		tools.AskUserTool{},
+		cancellableTool{started: started},
+	)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	engine := New(runService, model, registry, 3)
+	run, err := engine.StartOwnedProjectAsync(
+		context.Background(),
+		7,
+		"conversation-1",
+		11,
+		"pause first",
+	)
+	if err != nil {
+		t.Fatalf("StartOwnedProjectAsync() error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for run.Status != agentservice.RunStatusWaitingUser {
+		if time.Now().After(deadline) {
+			t.Fatal("run did not reach waiting_user")
+		}
+		time.Sleep(time.Millisecond)
+		run, err = engine.GetRun(context.Background(), run.ID)
+		if err != nil {
+			t.Fatalf("GetRun() error = %v", err)
+		}
+	}
+
+	resumed := make(chan error, 1)
+	go func() {
+		_, resumeErr := engine.ResumeOwned(
+			context.Background(),
+			7,
+			run.ID,
+			*run.PendingToolCallID,
+			agentservice.ResumeToolCallRequest{
+				Answers: map[string]any{"continue": true},
+			},
+		)
+		resumed <- resumeErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("resumed tool did not start")
+	}
+	cancelled, err := engine.CancelOwned(
+		context.Background(),
+		7,
+		run.ID,
+		"resume timeout",
+	)
+	if err != nil {
+		t.Fatalf("CancelOwned() error = %v", err)
+	}
+	if cancelled.Status != agentservice.RunStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", cancelled.Status)
+	}
+	select {
+	case resumeErr := <-resumed:
+		if resumeErr != nil {
+			t.Fatalf("Resume() error = %v", resumeErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Resume() did not stop after cancellation")
 	}
 }

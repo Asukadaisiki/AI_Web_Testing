@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Event
 from time import perf_counter
 from typing import Generator, Literal
-from urllib.parse import urljoin
+from urllib.parse import urldefrag, urljoin, urlparse
 
 from app.core.structured_logging import get_structured_logger
 from app.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
@@ -279,6 +279,90 @@ def _candidate_to_trace_evidence(candidate_entry) -> LocatorCandidateEvidence:
     )
 
 
+def _candidate_feature(candidate, name: str):
+    features = (
+        getattr(candidate, "pre_features", None)
+        if hasattr(candidate, "pre_features")
+        else candidate.get("pre_features")
+    ) or {}
+    return features.get(name)
+
+
+def _same_origin(left: str, right: str) -> bool:
+    left_url = urlparse(left)
+    right_url = urlparse(right)
+
+    def origin(parsed):
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        if port is None:
+            port = 443 if parsed.scheme == "https" else 80
+        return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
+
+    return origin(left_url) == origin(right_url)
+
+
+def _verified_safe_anchor_href(locator, candidate, before_url: str) -> str | None:
+    verified_href = str(_candidate_feature(candidate, "verified_href") or "").strip()
+    if not verified_href or verified_href.startswith("#"):
+        return None
+    try:
+        live = locator.evaluate(
+            "el => ({tag: el.tagName.toLowerCase(), href: el.getAttribute('href') || '', "
+            "download: el.hasAttribute('download')})"
+        )
+    except Exception:
+        return None
+    if (
+        not isinstance(live, dict)
+        or live.get("tag") != "a"
+        or live.get("download")
+        or str(live.get("href") or "").strip() != verified_href
+    ):
+        return None
+    resolved = urljoin(before_url, verified_href)
+    parsed = urlparse(resolved)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.username
+        or parsed.password
+        or not _same_origin(before_url, resolved)
+    ):
+        return None
+    if urldefrag(resolved)[0] == urldefrag(before_url)[0]:
+        return None
+    return resolved
+
+
+def _verify_postconditions_with_navigation_fallback(
+    page,
+    step,
+    verifier: PostconditionVerifier,
+    resolved_href: str | None,
+) -> tuple[object, bool]:
+    result = verifier.verify(step.postconditions)
+    if result.passed or not resolved_href:
+        return result, False
+    expected_url = next(
+        (
+            postcondition
+            for postcondition in step.postconditions
+            if postcondition.type == "url_contains" and postcondition.value
+        ),
+        None,
+    )
+    if expected_url is None or expected_url.value in page.url:
+        return result, False
+    page.goto(
+        resolved_href,
+        wait_until="domcontentloaded",
+        timeout=expected_url.timeout_ms,
+    )
+    return verifier.verify(step.postconditions), True
+
+
 def _execute_step_with_candidates(
     page,
     step,
@@ -290,12 +374,7 @@ def _execute_step_with_candidates(
     input_values: dict[str, str] | None = None,
     runtime_context: dict[str, str] | None = None,
 ) -> StepExecutionEvidence:
-    """Execute a step using A11y pre-scored candidates.
-
-    Iterates through candidates (sorted by *pre_score* descending),
-    picks the first candidate that passes postcondition verification.
-    Falls back to the legacy ``_resolve_with_confidence_gate`` path if every candidate fails.
-    """
+    """Resolve once, dispatch once, then verify the action."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
     step_started_at = perf_counter()
@@ -304,12 +383,7 @@ def _execute_step_with_candidates(
     resolved_target = _substitute_variables(step.target, vars_map) or step.target
     candidates = sorted(step.candidates, key=lambda c: c.pre_score, reverse=True)
 
-    verifier = PostconditionVerifier(page)
-    verifier.capture_pre_state()
-
-    last_error: Exception | None = None
-    used_strategy: str | None = None
-
+    selected = None
     for candidate in candidates:
         locator = _build_locator_from_candidate(page, candidate)
         if locator is None:
@@ -321,14 +395,29 @@ def _execute_step_with_candidates(
                 continue
         except Exception:
             continue
+        selected = (candidate, locator)
+        break
 
-        # Attempt to execute the action
+    if selected is not None:
+        candidate, locator = selected
+        verifier = PostconditionVerifier(page)
+        verifier.capture_pre_state()
+        before_url = page.url
+        resolved_href = (
+            _verified_safe_anchor_href(locator, candidate, before_url)
+            if step.action == "click"
+            else None
+        )
+        step_value = getattr(step, "value", None)
+        click_recovery = None
+        click_recovery_detail = None
         try:
-            step_value = getattr(step, "value", None)
             if step.action == "click":
                 cr = click_with_precheck(page, locator)
                 if not cr.succeeded:
                     raise cr.original_error or RunnerExecutionError("Click failed")
+                click_recovery = cr.recovery_strategy
+                click_recovery_detail = cr.recovery_detail
             elif step.action == "input":
                 input_value = _substitute_variables(step.value, vars_map)
                 tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
@@ -336,9 +425,8 @@ def _execute_step_with_candidates(
                     locator.select_option(label=input_value)
                 else:
                     locator.fill(input_value)
-                step_trigger = getattr(step, "trigger", None)
-                if step_trigger:
-                    locator.press(step_trigger)
+                if getattr(step, "trigger", None):
+                    locator.press(step.trigger)
             elif step.action == "wait_for":
                 locator.wait_for(state="visible", timeout=step.timeout_ms)
             elif step.action == "assert_text":
@@ -350,20 +438,23 @@ def _execute_step_with_candidates(
                 captured = locator.inner_text()
                 step_value = captured.strip()
                 if runtime_context is not None:
-                    runtime_context[step.context_key] = captured.strip()
+                    runtime_context[step.context_key] = step_value
             else:
-                # Unsupported action for candidate path — skip to legacy
-                continue
+                raise RunnerExecutionError(f"Unsupported action: {step.action}")
 
-            # Verify postconditions
-            post_result = verifier.verify(step.postconditions)
+            post_result, used_href_fallback = (
+                _verify_postconditions_with_navigation_fallback(
+                    page, step, verifier, resolved_href
+                )
+            )
+            if used_href_fallback:
+                click_recovery = "href_navigation_fallback"
+                click_recovery_detail = f"navigated once to verified anchor href {resolved_href}"
             if not post_result.passed:
-                last_error = RunnerExecutionError(
+                raise RunnerExecutionError(
                     f"Postcondition check failed: {post_result.details}"
                 )
-                continue
 
-            # Success — build evidence
             used_strategy = candidate.strategy
             selected_candidate = _candidate_to_trace_evidence(candidate)
             used_trace = LocatorTrace(
@@ -373,7 +464,6 @@ def _execute_step_with_candidates(
                 selected_candidate=selected_candidate,
                 selection_reason="Selected verified candidate from a11y preflight.",
             )
-
             return StepExecutionEvidence(
                 step_index=step_index,
                 action=step.action,
@@ -394,14 +484,14 @@ def _execute_step_with_candidates(
                     if artifact_dir
                     else None
                 ),
+                click_recovery=click_recovery,
+                click_recovery_detail=click_recovery_detail,
                 locator_confidence=getattr(step, "locator_confidence", None),
             )
-
         except (PlaywrightTimeoutError, AssertionError, Exception) as exc:
-            last_error = exc
-            continue
+            raise RunnerExecutionError(str(exc), step_results=[]) from exc
 
-    # --- All candidates exhausted: fall back to legacy path ---
+    # No candidate was actionable; use the ordinary locator path once.
     from playwright.sync_api import expect as pw_expect
 
     try:
@@ -411,6 +501,8 @@ def _execute_step_with_candidates(
         click_recovery = None
         click_recovery_detail = None
         step_value = getattr(step, "value", None)
+        verifier = PostconditionVerifier(page)
+        verifier.capture_pre_state()
 
         if step.action == "click":
             resolved, vlm_preverify_used = _resolve_with_confidence_gate(
@@ -499,10 +591,7 @@ def _execute_step_with_candidates(
         else:
             raise RunnerExecutionError(f"Unsupported action: {step.action}")
 
-        # Verify postconditions in legacy path (if any)
-        if hasattr(step, 'postconditions') and step.postconditions:
-            verifier = PostconditionVerifier(page)
-            verifier.capture_pre_state()
+        if step.postconditions:
             post_result = verifier.verify(step.postconditions)
             if not post_result.passed:
                 raise RunnerExecutionError(f"Postcondition check failed: {post_result.details}")
@@ -622,13 +711,14 @@ def execute_case_with_playwright(
                     step_value = getattr(step, "value", None)
 
                     # --- Dual-layer scoring path (new) ---
-                    if _has_candidates(step):
+                    if hasattr(step, "candidates"):
                         evidence_for_step = _execute_step_with_candidates(
                             page, step, index,
                             artifact_dir=artifact_dir,
                             execution_id=execution_id,
                             correction_store=correction_store,
                             input_values=_vars(),
+                            runtime_context=runtime_context,
                         )
                         step_results.append(evidence_for_step)
                         continue
@@ -853,7 +943,10 @@ def execute_case_with_playwright(
                         "error_message": str(exc)[:500],
                         "resolved_by": resolved.strategy if resolved is not None else None,
                     }, execution_id=execution_id, level=logging.WARNING)
-                    # Continue to next step instead of terminating the entire loop
+                    raise RunnerExecutionError(
+                        str(exc), step_results=step_results
+                    ) from exc
+            _attach_final_dom_snapshot(page, artifact_dir, step_results)
         finally:
             browser.close()
 
@@ -949,13 +1042,14 @@ def execute_case_with_playwright_streaming(
                     step_value = getattr(step, "value", None)
 
                     # --- Dual-layer scoring path (new) ---
-                    if _has_candidates(step):
+                    if hasattr(step, "candidates"):
                         evidence_for_step = _execute_step_with_candidates(
                             page, step, index,
                             artifact_dir=artifact_dir,
                             execution_id=execution_id,
                             correction_store=correction_store,
                             input_values=_vars(),
+                            runtime_context=runtime_context,
                         )
                         step_results.append(evidence_for_step)
                         yield StepStreamEvent(
@@ -1162,6 +1256,7 @@ def execute_case_with_playwright_streaming(
                         duration_ms=evidence.duration_ms,
                     )
                     raise RunnerExecutionError(str(exc), step_results=step_results) from exc
+            _attach_final_dom_snapshot(page, artifact_dir, step_results)
         finally:
             browser.close()
 
@@ -1183,6 +1278,27 @@ def _take_step_screenshot(page, artifact_dir: Path, step_index: int) -> str | No
     except Exception:
         return None
     return str(screenshot_path.relative_to(Path(__file__).resolve().parents[2]))
+
+
+def _attach_final_dom_snapshot(
+    page,
+    artifact_dir: Path,
+    step_results: list[StepExecutionEvidence],
+) -> None:
+    if not step_results:
+        return
+    snapshot_path = artifact_dir / "final.html"
+    try:
+        snapshot_path.write_text(page.content(), encoding="utf-8")
+    except Exception:
+        return
+    relative_path = str(snapshot_path.relative_to(Path(__file__).resolve().parents[2]))
+    step_results[-1] = step_results[-1].model_copy(
+        update={
+            "dom_snapshot_path": relative_path,
+            "dom_snapshot_url": _artifact_url_for_path(relative_path),
+        }
+    )
 
 
 def _artifact_url_for_path(screenshot_path: str | None) -> str | None:

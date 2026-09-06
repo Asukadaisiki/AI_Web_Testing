@@ -254,6 +254,64 @@ func TestGenerateDSLToolSchemaRestrictsSupportedActions(t *testing.T) {
 	}
 }
 
+func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *testing.T) {
+	definitions := NewBrowserTools(&fakeCapabilityClient{})
+	var flowSchema map[string]any
+	if err := json.Unmarshal(definitions[1].Definition().InputSchema, &flowSchema); err != nil {
+		t.Fatalf("decode explore_flow schema: %v", err)
+	}
+	steps := flowSchema["properties"].(map[string]any)["steps"].(map[string]any)
+	actions := steps["items"].(map[string]any)["properties"].(map[string]any)["actions"].(map[string]any)
+	if actions["minItems"] != float64(0) {
+		t.Fatalf("actions.minItems = %#v, want 0", actions["minItems"])
+	}
+
+	var validationSchema map[string]any
+	if err := json.Unmarshal(definitions[2].Definition().InputSchema, &validationSchema); err != nil {
+		t.Fatalf("decode validate_page_elements schema: %v", err)
+	}
+	properties := validationSchema["properties"].(map[string]any)
+	if _, exists := properties["dsl_case"]; exists {
+		t.Fatal("model-visible validation schema exposes dsl_case")
+	}
+	if _, exists := properties["a11y_nodes_by_state"]; exists {
+		t.Fatal("model-visible validation schema exposes a11y_nodes_by_state")
+	}
+	required := validationSchema["required"].([]any)
+	if len(required) != 2 ||
+		required[0] != "required_elements" ||
+		required[1] != "a11y_nodes" {
+		t.Fatalf("validation required = %#v", required)
+	}
+}
+
+func TestGenerateDSLToolSchemaUsesRuntimeTargetStrategyEnum(t *testing.T) {
+	definition := NewGenerateDSLTool(&fakeCapabilityClient{}).Definition()
+	var schema map[string]any
+	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
+		t.Fatalf("decode generate_dsl schema: %v", err)
+	}
+	caseSchema := schema["properties"].(map[string]any)["case"].(map[string]any)
+	steps := caseSchema["properties"].(map[string]any)["steps"].(map[string]any)
+	variants := steps["items"].(map[string]any)["oneOf"].([]any)
+	want := []any{"css", "xpath", "data-testid", "element_id", "tag"}
+	for _, raw := range variants {
+		variant := raw.(map[string]any)
+		properties := variant["properties"].(map[string]any)
+		strategy, ok := properties["target_strategy"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if got := strategy["enum"].([]any); len(got) != len(want)+1 || got[len(got)-1] != nil {
+			t.Fatalf("target_strategy enum = %#v, want %#v", got, want)
+		}
+		types := strategy["type"].([]any)
+		if len(types) != 2 || types[0] != "string" || types[1] != "null" {
+			t.Fatalf("target_strategy type = %#v, want nullable string", types)
+		}
+	}
+}
+
 func TestExecuteDSLToolRequiresMatchingApproval(t *testing.T) {
 	client := &fakeCapabilityClient{}
 	handler := NewExecuteDSLTool(client)

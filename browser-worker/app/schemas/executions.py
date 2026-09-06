@@ -137,11 +137,13 @@ class StepExecutionEvidence(DSLModel):
     network_events: list[NetworkEvent] = Field(default_factory=list)
     screenshot_path: str | None = None
     screenshot_url: str | None = None
+    dom_snapshot_path: str | None = None
+    dom_snapshot_url: str | None = None
     error_message: str | None = None
     intervention_request: InterventionRequest | None = None
     click_recovery: str | None = Field(
         default=None,
-        description="Recovery strategy used when click was intercepted: wait|dismiss|avoid|force|remove.",
+        description="Click recovery strategy, including href_navigation_fallback for a verified anchor.",
     )
     click_recovery_detail: str | None = Field(
         default=None,

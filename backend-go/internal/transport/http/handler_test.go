@@ -19,12 +19,26 @@ import (
 
 type staticModel struct{}
 
+type blockingModel struct {
+	started chan struct{}
+}
+
 func (staticModel) Complete(
 	_ context.Context,
 	_ []agent.Message,
 	_ []agent.ToolDefinition,
 ) (agent.ModelResponse, error) {
 	return agent.ModelResponse{Content: "已收到测试需求。"}, nil
+}
+
+func (m blockingModel) Complete(
+	ctx context.Context,
+	_ []agent.Message,
+	_ []agent.ToolDefinition,
+) (agent.ModelResponse, error) {
+	close(m.started)
+	<-ctx.Done()
+	return agent.ModelResponse{}, ctx.Err()
 }
 
 func newTestServer(t *testing.T) AgentAPI {
@@ -214,6 +228,104 @@ func TestStartRunRejectsEmptyInput(t *testing.T) {
 
 	if response.StatusCode() != consts.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", response.StatusCode(), consts.StatusBadRequest, response.Body())
+	}
+}
+
+func TestCancelRunChecksOwnershipAndIsIdempotent(t *testing.T) {
+	repository := agentservice.NewMemoryRepository()
+	runService := agentservice.NewService(repository)
+	registry, err := tools.NewRegistry(tools.AskUserTool{})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	started := make(chan struct{})
+	engine := harness.New(runService, blockingModel{started: started}, registry, 2)
+	server := NewServer(
+		"127.0.0.1:0",
+		engine,
+		1,
+		staticPlanningStore{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	run, err := engine.StartOwnedProjectAsync(
+		context.Background(),
+		1,
+		"conversation-1",
+		42,
+		"block",
+	)
+	if err != nil {
+		t.Fatalf("StartOwnedProjectAsync() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("run did not start")
+	}
+
+	body := []byte(`{"reason":"driver timeout"}`)
+	for attempt := 0; attempt < 2; attempt++ {
+		response := ut.PerformRequest(
+			server.Engine,
+			"POST",
+			"/api/v2/agent/runs/"+run.ID+"/cancel",
+			&ut.Body{Body: bytes.NewReader(body), Len: len(body)},
+			ut.Header{Key: "Content-Type", Value: "application/json"},
+		).Result()
+		if response.StatusCode() != consts.StatusOK {
+			t.Fatalf("attempt %d status = %d, body = %s", attempt, response.StatusCode(), response.Body())
+		}
+		var cancelled agentservice.AgentRun
+		if err := json.Unmarshal(response.Body(), &cancelled); err != nil {
+			t.Fatalf("decode cancelled run: %v", err)
+		}
+		if cancelled.Status != agentservice.RunStatusCancelled {
+			t.Fatalf("cancelled run = %#v", cancelled)
+		}
+	}
+	events, err := runService.ListEvents(context.Background(), run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	cancelEvents := 0
+	for _, event := range events {
+		if event.Type == agentservice.EventRunCancelled {
+			cancelEvents++
+			if event.Payload["reason"] != "driver timeout" {
+				t.Fatalf("cancel reason = %#v", event.Payload["reason"])
+			}
+		}
+	}
+	if cancelEvents != 1 {
+		t.Fatalf("cancel event count = %d, want 1", cancelEvents)
+	}
+
+	foreign, err := runService.StartOwnedProjectRun(
+		context.Background(),
+		2,
+		"conversation-2",
+		42,
+		"foreign",
+	)
+	if err != nil {
+		t.Fatalf("StartOwnedProjectRun() error = %v", err)
+	}
+	response := ut.PerformRequest(
+		server.Engine,
+		"POST",
+		"/api/v2/agent/runs/"+foreign.ID+"/cancel",
+		&ut.Body{Body: bytes.NewReader(body), Len: len(body)},
+		ut.Header{Key: "Content-Type", Value: "application/json"},
+	).Result()
+	if response.StatusCode() != consts.StatusForbidden {
+		t.Fatalf("foreign status = %d, body = %s", response.StatusCode(), response.Body())
+	}
+	foreign, err = runService.GetRun(context.Background(), foreign.ID)
+	if err != nil || foreign.Status != agentservice.RunStatusRunning {
+		t.Fatalf("foreign run = %#v, error = %v", foreign, err)
 	}
 }
 

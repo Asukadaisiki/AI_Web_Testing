@@ -69,6 +69,7 @@ export function useAgentRun(conversationId: string) {
         if (
           event.type === "run.finished" ||
           event.type === "run.failed" ||
+          event.type === "run.cancelled" ||
           event.type === "tool.pending"
         ) {
           closeStreamRef.current?.();

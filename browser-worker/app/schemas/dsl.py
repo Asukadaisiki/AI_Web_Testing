@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+DSL_CANONICAL_VERSION = "dsl.canonical.v1"
 
 
 class DSLModel(BaseModel):
@@ -12,16 +17,11 @@ class DSLModel(BaseModel):
 
 
 TargetStrategy = Literal[
-    "css", "css_selector", "xpath", "data-testid", "data_testid",
-    "element_id", "elementId", "tag",
-    "role", "role_fuzzy", "link_role", "link_role_fuzzy",
-    "label", "label_fuzzy", "placeholder", "placeholder_fuzzy",
-    "text", "text_fuzzy", "semantic", "vlm",
-    "verified_role", "verified_role_fuzzy", "verified_css", "verified_xpath",
-    "verified_placeholder", "verified_placeholder_fuzzy",
-    "verified_label", "verified_label_fuzzy",
-    "verified_text", "verified_element_id", "verified_name",
-    "href", "link", "button", "aria", "id",
+    "css",
+    "xpath",
+    "data-testid",
+    "element_id",
+    "tag",
 ]
 LocatorConfidence = Literal["high", "medium", "low"]
 
@@ -67,6 +67,12 @@ class Postcondition(BaseModel):
     ]
     value: str | None = Field(default=None, description="Expected value (URL fragment, text, selector).")
     timeout_ms: int = Field(default=3000, ge=100, le=30000)
+
+    @model_validator(mode="after")
+    def validate_required_value(self) -> "Postcondition":
+        if self.type == "url_contains" and not self.value:
+            raise ValueError("url_contains postcondition requires a target URL value")
+        return self
 
 
 class GotoStep(DSLModel):
@@ -198,3 +204,23 @@ class DSLCase(DSLModel):
     input_contract: list[DSLCaseInputContract] = Field(default_factory=list)
     output_contract: list[DSLCaseOutputContract] = Field(default_factory=list)
     steps: list[DSLStep] = Field(min_length=1)
+
+
+def load_canonical_dsl(
+    canonical_json: str,
+    expected_sha256: str,
+    canonical_version: str,
+) -> tuple[DSLCase, dict]:
+    """Verify Go-owned canonical bytes and reject semantic normalization drift."""
+    if canonical_version != DSL_CANONICAL_VERSION:
+        raise ValueError(f"Unsupported DSL canonical version: {canonical_version}.")
+    actual_sha256 = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError("Canonical DSL SHA-256 does not match the approved generation.")
+    payload = json.loads(canonical_json)
+    if not isinstance(payload, dict):
+        raise ValueError("Canonical DSL must be a JSON object.")
+    case = DSLCase.model_validate(payload)
+    if case.model_dump(mode="json") != payload:
+        raise ValueError("Canonical DSL is not fully materialized or violates the worker schema.")
+    return case, payload

@@ -3,9 +3,10 @@ package agentservice
 import (
 	"context"
 	"maps"
+	"sync"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
-	"sync"
 )
 
 type MemoryRepository struct {
@@ -44,19 +45,56 @@ func (r *MemoryRepository) SaveRun(_ context.Context, run AgentRun) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, ok := r.runs[run.ID]; !ok {
+	current, ok := r.runs[run.ID]
+	if !ok {
 		return ErrRunNotFound
+	}
+	if current.Status == RunStatusCancelled {
+		return ErrRunCancelled
 	}
 	r.runs[run.ID] = cloneRun(run)
 	return nil
+}
+
+func (r *MemoryRepository) CancelRun(
+	_ context.Context,
+	runID string,
+	updatedAt time.Time,
+	event Event,
+) (AgentRun, Event, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	run, ok := r.runs[runID]
+	if !ok {
+		return AgentRun{}, Event{}, false, ErrRunNotFound
+	}
+	if run.Status != RunStatusRunning && run.Status != RunStatusWaitingUser {
+		return cloneRun(run), Event{}, false, nil
+	}
+	run.Status = RunStatusCancelled
+	run.PendingToolCallID = nil
+	run.PendingStepID = nil
+	run.UpdatedAt = updatedAt
+	r.runs[runID] = cloneRun(run)
+	event.RunID = run.ID
+	event.ConversationID = run.ConversationID
+	event.Seq = int64(len(r.events[runID]) + 1)
+	event.Payload = cloneMap(event.Payload)
+	r.events[runID] = append(r.events[runID], event)
+	return cloneRun(run), event, true, nil
 }
 
 func (r *MemoryRepository) AppendEvent(_ context.Context, event Event) (Event, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, ok := r.runs[event.RunID]; !ok {
+	run, ok := r.runs[event.RunID]
+	if !ok {
 		return Event{}, ErrRunNotFound
+	}
+	if run.Status == RunStatusCancelled {
+		return Event{}, ErrRunCancelled
 	}
 	event.Seq = int64(len(r.events[event.RunID]) + 1)
 	event.Payload = cloneMap(event.Payload)

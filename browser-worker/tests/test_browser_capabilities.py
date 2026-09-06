@@ -19,20 +19,26 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                         {"action": "click", "target": "Login"},
                     ],
                 },
-                "a11y_nodes": [
-                    {
-                        "node_id": "button-1",
-                        "role": "button",
-                        "name": "Login",
-                        "verified_selectors": [],
-                    }
-                ],
+                "a11y_nodes_by_state": {
+                    "login": [
+                        {
+                            "node_id": "button-1",
+                            "role": "button",
+                            "name": "Login",
+                            "verified_selectors": [],
+                        }
+                    ]
+                },
             },
         )
 
         self.assertTrue(result["valid"])
+        self.assertEqual(result["validation_mode"], "dsl_case")
+        self.assertEqual(len(result["case_digest"]), 64)
+        self.assertEqual(len(result["evidence_digest"]), 64)
         self.assertEqual(result["locator_confidence"], "high")
         self.assertEqual(result["dsl_case"]["steps"][0]["match_count"], 1)
+        self.assertEqual(result["dsl_case"]["steps"][0]["page_state"], "login")
         self.assertEqual(result["dsl_case"]["steps"][0]["candidates"][0]["strategy"], "role")
 
     def test_validate_page_elements_rejects_missing_target(self) -> None:
@@ -48,9 +54,11 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                         {"action": "click", "target": "Missing"},
                     ],
                 },
-                "a11y_nodes": [
-                    {"node_id": "button-1", "role": "button", "name": "Login"},
-                ],
+                "a11y_nodes_by_state": {
+                    "login": [
+                        {"node_id": "button-1", "role": "button", "name": "Login"},
+                    ]
+                },
             },
         )
 
@@ -107,16 +115,18 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                         },
                     ],
                 },
-                "a11y_nodes": [
-                    {
-                        "node_id": "button-1",
-                        "role": "button",
-                        "name": "Add to cart",
-                        "verified_selectors": [
-                            {"strategy": "css", "selector": "button.cart"}
-                        ],
-                    }
-                ],
+                "a11y_nodes_by_state": {
+                    "details": [
+                        {
+                            "node_id": "button-1",
+                            "role": "button",
+                            "name": "Add to cart",
+                            "verified_selectors": [
+                                {"strategy": "css", "selector": "button.cart"}
+                            ],
+                        }
+                    ]
+                },
             },
         )
 
@@ -124,7 +134,128 @@ class BrowserCapabilityContractTest(unittest.TestCase):
         self.assertEqual(result["warnings"], [])
         click_step = result["dsl_case"]["steps"][1]
         self.assertEqual(click_step["match_count"], 1)
+        self.assertEqual(click_step["page_state"], "details")
         self.assertEqual(click_step["candidates"][0]["strategy"], "verified_css")
+
+    def test_validate_page_elements_rejects_unverified_composite_css(self) -> None:
+        result = execute_browser_capability(
+            None,  # type: ignore[arg-type]
+            capability="validate_page_elements",
+            project_id=1,
+            conversation_id="1",
+            arguments={
+                "dsl_case": {
+                    "name": "Cart",
+                    "steps": [
+                        {
+                            "action": "assert_text",
+                            "target": "#product-1 td.cart_price",
+                            "target_strategy": "css",
+                            "value": "Rs. 500",
+                        }
+                    ],
+                },
+                "a11y_nodes_by_state": {
+                    "cart": [
+                        {
+                            "node_id": "price",
+                            "role": "cell",
+                            "name": "Rs. 500",
+                            "verified_selectors": [],
+                        }
+                    ]
+                },
+            },
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertIn("composite CSS", result["warnings"][0])
+        self.assertIn("verified_selectors", result["warnings"][0])
+
+    def test_bug_131_cart_selector_passes_when_verified_in_cart_state(self) -> None:
+        selector = "#product-1 td.cart_price"
+        result = execute_browser_capability(
+            None,  # type: ignore[arg-type]
+            capability="validate_page_elements",
+            project_id=1,
+            conversation_id="1",
+            arguments={
+                "dsl_case": {
+                    "name": "BUG-131 replay",
+                    "steps": [
+                        {
+                            "action": "assert_text",
+                            "target": selector,
+                            "target_strategy": "css",
+                            "page_state": "cart",
+                            "value": "Rs. 500",
+                        }
+                    ],
+                },
+                "a11y_nodes_by_state": {
+                    "details": [
+                        {"node_id": "price", "role": "text", "name": "Rs. 500"}
+                    ],
+                    "cart": [
+                        {
+                            "node_id": "cart-price",
+                            "role": "cell",
+                            "name": "Rs. 500",
+                            "verified_selectors": [
+                                {"strategy": "css", "selector": selector}
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        step = result["dsl_case"]["steps"][0]
+        self.assertEqual(step["page_state"], "cart")
+        self.assertEqual(step["match_count"], 1)
+
+    def test_cross_page_anchor_requires_target_url_postcondition(self) -> None:
+        result = execute_browser_capability(
+            None,  # type: ignore[arg-type]
+            capability="validate_page_elements",
+            project_id=1,
+            conversation_id="1",
+            arguments={
+                "dsl_case": {
+                    "name": "Details",
+                    "steps": [
+                        {
+                            "action": "click",
+                            "target": "View details",
+                            "page_state": "products",
+                        }
+                    ],
+                },
+                "a11y_nodes_by_state": {
+                    "products": [
+                        {
+                            "node_id": "details",
+                            "role": "link",
+                            "name": "View details",
+                            "dom": {
+                                "tag": "a",
+                                "attrs": {"href": "/details/1"},
+                            },
+                            "verified_selectors": [
+                                {
+                                    "strategy": "css",
+                                    "selector": "a[href='/details/1']",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            },
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertIn("url_contains postcondition", result["warnings"][0])
 
 
 if __name__ == "__main__":
