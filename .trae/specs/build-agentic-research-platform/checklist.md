@@ -70,15 +70,15 @@
 
 ## Stage 4：Trajectory 与 Dataset
 
-- [ ] `research.event.v1` envelope 已定义。
-- [ ] Observation/Decision/Action/Execution/Verification/Failure/Recovery/Reward 事件可持久化。
-- [ ] Projector 使用因果 ID 和 source seq，不依赖 wall-clock 排序。
-- [ ] Transition ordinal 连续且唯一。
-- [ ] 删除投影后可从原始事实完整重建。
-- [ ] 重复投影结果一致。
-- [ ] JSONL 导出顺序稳定并通过 Schema 校验。
-- [ ] Canonical Goal 连续 3 次通过且可完整回放。
-- [ ] Stage 4 已 commit 并 push。
+- [x] `research.event.v1` envelope 已定义。
+- [x] Observation/Decision/Action/Execution/Verification/Failure/Recovery/Reward 事件可持久化。
+- [x] Projector 使用因果 ID 和 source seq，不依赖 wall-clock 排序。
+- [x] Transition ordinal 连续且唯一。
+- [x] 删除投影后可从原始事实完整重建。
+- [x] 重复投影结果一致。
+- [x] JSONL 导出顺序稳定并通过 Schema 校验。
+- [x] Canonical Goal 连续 3 次通过且可完整回放。
+- [x] Stage 4 已完成提交前验收；按本轮要求未 commit/push。
 
 ## Stage 5：Metrics 与实验编排
 

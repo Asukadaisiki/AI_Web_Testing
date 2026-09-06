@@ -48,6 +48,42 @@
 
 ## 问题记录
 
+## BUG-152 | SourceReader 在未关闭 jobs rows 时嵌套查询 executions
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 4 Task 4.1-4.3 真实 Run CLI 验收
+- 描述：`research-export` 读取带正式 Batch/Job/Execution 的 Stage 3 Run 时稳定失败，错误为 `read job 337 executions: driver: bad connection`。
+- 复现步骤：
+  1. 对 ResearchRun `rr-stage3-run5c20dba537a3799109213761` 执行 `research-export --run-id ...`。
+  2. SourceReader 读取 Batch 337 和 Job 337。
+  3. 在 jobs 查询结果集仍打开时复用同一个 PostgreSQL transaction 查询 executions，pgx 返回 bad connection。
+- 影响：只有 Agent Event、没有正式执行链的测试可通过，但真实完成 Run 无法投影或导出，Task 4.2/4.3 主链被阻断。
+- 根因：`readJobs` 在遍历 `rows.Next()` 的过程中调用 `readExecutions`；`database/sql` transaction 绑定单一 pgx connection，不能在活动结果集上发起嵌套查询。
+- 处理：先扫描并校验全部 Job，显式关闭 rows，再在同一 repeatable-read transaction 中逐 Job 读取 executions 和构造 source ref。
+- 验证：真实 Run 成功读取 79 条 Agent Event 并投影/持久化 26 条连续 Transition；两次 CLI 导出 SHA-256 均为 `04b100f0824e4f64570d3ca435b30eb9d1fead5c1507f6f7f544e6ec66b21038`。带真实 PostgreSQL 的 Go 全量与 race、vet/build 均通过。
+- 最终复测：Stage 4 Experiment `exp-stage4-final-795-153241` 的三个正式 ResearchRun 分别从 seq 0 读取 130/95/131 条 Agent Event，并完成 30/26/31 条 Transition 的 A/B/Delete/C 重建；未再出现嵌套查询连接错误，状态保持 `fixed`。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-4-task-41-43-整合验收`
+
+## BUG-151 | SourceReader 错误要求 ToolResult 原始元数据等于事件内规范化 JSON
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 4 Task 4.1-4.3 真实 Run CLI 验收
+- 描述：SourceReader 首次读取 Stage 3 正式 Run 时在 event seq 8 报 `research source changed: tool result bytes`；该事件的 `content_sha256/content_bytes` 描述进入事件封装前的完整工具结果原文，而嵌套 `content` 会随外层事件 JSON 规范化。
+- 复现步骤：
+  1. 对 ResearchRun `rr-stage3-run5c20dba537a3799109213761` 执行 `research-export --run-id ...`。
+  2. 读取 `agent.tool_result.v1` event seq 8。
+  3. 对持久化 `content` canonicalize 后的字节数与事件 metadata 不相等，SourceReader 拒绝该源。
+- 影响：Stage 3 已完成且具备完整工具结果的真实 Run 无法由 Stage 4 重建；所有包含空白差异或 `<>&` 转义差异的合法工具结果都可能被误判为源损坏。
+- 根因：SourceReader 把 pre-envelope 原始字节 metadata 误当成嵌套 `content` 经外层 JSON 编码后的字节 metadata；外层编码会压缩空白并转义 HTML 字符，两种表示语义相同但字节不必相等。
+- 处理：保持 Stage 3 原始 metadata 合同不变；SourceReader 要求嵌套 content 为合法 JSON、原始 hash 格式合法且 bytes 为正，并将规范化后的持久化 content 与原始 metadata 同时纳入 source ref/source snapshot hash，不再错误比较两种 JSON 表示的字节数和 hash。
+- 验证：新增 raw metadata/normalized content 兼容和非法 metadata 拒绝回归；真实 Run 的 79 条事件全部可读，后续 Projector、ReplaceProjection 和 Exporter 链路通过。
+- 最终复测：三个 Stage 4 正式 ResearchRun 的全部 source ref、content SHA、cursor 和 manifest 均可重算，87 行实验级 JSONL 全部通过 Go 语义、安全规则与 Draft 2020-12 Schema 校验，状态保持 `fixed`。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-4-task-41-43-整合验收`
+
 ## BUG-150 | 完整探索结果直接进入模型 transcript 导致 DeepSeek 大上下文断流
 
 - 日期：2026-09-06

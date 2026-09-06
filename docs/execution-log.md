@@ -56,6 +56,22 @@
 
 ## 任务记录
 
+## 2026-09-06 | 完成 Stage 4 Task 4.4 提交前验收
+
+- 任务：只完成 Stage 4 最终验收和提交前收口，不进入 Stage 5、不修改业务代码、不 commit/push；复核中断点 repetition0，并在同一 Experiment 下完成 repetition1/2 的 clean-context Canonical、投影重建、逐行 Schema/安全和实验级稳定导出。
+- 操作：复核 Experiment `exp-stage4-final-795-153241` 和 repetition0 全链，重新执行 A/B、删除 30 条投影并确认归零、C 重建。随后在 Experiment 所属 Project 795 创建全新 Session 50/51，由官方 Agentic E2E 驱动串行执行 repetition1/2；仅断言 ignored `browser-worker/.env` 的官方 DeepSeek provider/model/base URL 和 key 非空，未读取或输出 key。两次通过后分别创建并完成 ResearchRun，从 source seq 0 投影，再执行 A/B/Delete/C 和外部 JSONL 逐行校验。一次默认驱动预跑新建了 Project 796，Canonical 通过但因 Experiment project 归属合同在 ResearchRun 插入前被正确拒绝，未计入实验；正式 repetition 使用 Project 795 的全新 Session/Browser context。
+- 结果：repetition0 为 Project 795 / Session 48 / Run `run_6750d52bb41d7e91b3b5c887` / Generation 300 / Batch 406 / Execution 397 / ResearchRun `rr-s4-r0-6750d52bb41d7e91b3b5c887`，130 个 source event 投影 30 条 Transition；repetition1 为 Session 50 / Run `run_9b893eadb339dcc382a4ba88` / Generation 302 / Batch 408 / Execution 399 / ResearchRun `rr-s4-r1-9b893eadb339dcc382a4ba88`，95 个 event 投影 26 条；repetition2 为 Session 51 / Run `run_8ebd11444a90eef5d37be3d5` / Generation 303 / Batch 409 / Execution 400 / ResearchRun `rr-s4-r2-8ebd11444a90eef5d37be3d5`，131 个 event 投影 31 条。三次均首批 passed、Report v2、独立 DOM Oracle、DSL SHA 绑定、VLM=0、recovery=0、clean context，Experiment 最终为 `completed`。
+- 验证：三组 A/B/Delete/C 分别为 30/26/31 行，删除后均为 0，重建后 ordinal 分别连续为 0..29/0..25/0..30；组内 SHA-256 分别稳定为 `dd63933164f66c928f7b1ce0c51b68dc2ef49ecdbf007b58d1faacac25108c5e`、`8f672f2fac7cc68654376e97b1b535dccdafaa9cfd1c2d5dced0f660e2d1b84d`、`6cbcb0981186856cddb86a2ef6146784958e88d7cd60244af755fd7633d96060`。实验级导出两次均为 87 行、1,176,839 bytes、SHA-256 `baf75bf13aa60affc8e8ee7f321ec6646159c8e88acbd2d1ad42ef23d03aff0e`，严格按 repetition 0/1/2 和 ordinal 排序，全部逐行通过 Draft 2020-12 Schema、Go 语义/content hash 与安全规则。带真实 PostgreSQL 的 `go test -count=1 ./internal/research` 通过，BUG-151/152 保持 `fixed`。
+- 后续：三服务和端口已停止；删除 73 条无 owner、无 project、无 ResearchRun 引用的测试遗留 running Run 及其 266 条级联事件，清理未跟踪 `backend-go/stage4-acceptance` 和 `/private/tmp/stage4-*`，保留 gitignored 的三份 Canonical 结果及实验 JSONL。Task 4.4 与 Stage 4 提交前 checklist 已完成；按本轮要求未 commit/push。
+
+## 2026-09-06 | 完成 Stage 4 Task 4.1-4.3 整合验收
+
+- 任务：整合 Stage 4 Task 4.1-4.3 的并行实现与两组测试，审查全部未提交 Stage 4 文件，统一 Research Event、SourceReader、Projector、ReplaceProjection、Exporter、JSON Schema 和 golden 合同；不执行 live Canonical，不 commit/push，不勾选 Task 4.4。
+- 操作：定义 `research.event.v1`、`research.transition.v1`、`research.projection_manifest.v1` 和 `research.trajectory.jsonl.v1`，以显式 availability slot、source ref、content hash、cursor 和 manifest 绑定原始事实及投影。实现 PostgreSQL repeatable-read SourceReader、因果/seq 排序 Projector、带 CAS/回滚的 ReplaceProjection、Run/Experiment JSONL Exporter 和 `research-export` CLI。整合时统一 ArtifactRef 全字段排序和空数组编码，补齐 DTO 长度/数量校验及 Draft 2020-12 Schema 的 attempt/source schema slot；恢复 CLI `--help`。真实 Run 验收中修复 BUG-151 对 ToolResult 原始 metadata 与外层规范化 content 的错误等值假设，以及 BUG-152 的同事务嵌套 rows 查询。
+- 结果：正式 Stage 3 ResearchRun `rr-stage3-run5c20dba537a3799109213761` 的 79 条 Agent Event、Generation 260、Batch 337、Job 337、Execution 328 和 Report 可由 SourceReader 读取，投影为 ordinal 0..25 的 26 条 Transition；全部 Transition 共用一个 manifest/source hash/cursor，cursor 指向 AgentRun `run_5c20dba537a3799109213761` seq 79。两次 CLI 导出均为 356,962 bytes、26 行、SHA-256 `04b100f0824e4f64570d3ca435b30eb9d1fead5c1507f6f7f544e6ec66b21038`。Task 4.1-4.3 与对应 checklist 已完成；Task 4.4、Canonical 连续 3 次和 Stage 4 commit/push 保持未完成。
+- 验证：带真实 PostgreSQL 的 Go 全量测试与全量 race、`go vet ./...`、`go build ./...` 通过；Research/Exporter 聚焦测试和真实 JSONL 逐行 Go 语义、hash、安全规则及 Draft 2020-12 Schema 验证通过。Python `uv lock --check`、88 passed/1 个既有 Chromium 门控 skipped、compileall 通过；主库 Alembic upgrade/current/heads/check 为唯一 `20260906_0041` 且无差异，一次性空库全链升级/check 与三张 research 表检查通过并已删除；Frontend Vitest 9/9、production build、Knip 通过。ignored `.env`、权限和非空 key 仅作断言且未输出 key；精确 key、通用 secret、gofmt、go mod tidy、BUG 编号、临时数据和 diff 扫描通过。
+- 后续：独立执行 Task 4.4 的 Canonical Goal 连续 3 次、从 seq=0 完整回放及最终 Stage 验收；通过后再 commit/push。本轮不执行这些动作。
+
 ## 2026-09-06 | Stage 3 最终独立验收通过并准备提交
 
 - 任务：不修改业务代码、不 commit/push，使用 ignored 官方 DeepSeek `.env` 完成 Stage 3 最终独立验收；覆盖完整静态/PG/race/迁移/Frontend 门禁、BUG-149/150 专项、一次从零 Canonical，以及正式 Experiment/ResearchRun/Transition 关联链。

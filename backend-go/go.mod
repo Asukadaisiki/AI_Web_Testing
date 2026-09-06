@@ -7,6 +7,7 @@ require github.com/cloudwego/hertz v0.10.6
 require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/joho/godotenv v1.5.1
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 )
 
 require (

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -433,6 +434,7 @@ func (a *ArtifactRef) NormalizeAndValidate() error {
 	a.URI = strings.TrimSpace(a.URI)
 	a.SHA256 = strings.ToLower(strings.TrimSpace(a.SHA256))
 	a.MediaType = strings.TrimSpace(a.MediaType)
+	a.SchemaVersion = strings.TrimSpace(a.SchemaVersion)
 	if a.Kind == "" || len(a.Kind) > 64 || a.URI == "" || len(a.URI) > 2048 ||
 		!sha256Pattern.MatchString(a.SHA256) || a.MediaType == "" || len(a.MediaType) > 200 ||
 		len(a.SchemaVersion) > 64 || a.SizeBytes != nil && *a.SizeBytes < 0 {
@@ -482,6 +484,7 @@ func (t *Transition) NormalizeAndValidate() error {
 			return err
 		}
 	}
+	sortArtifactRefs(t.ArtifactRefs)
 	contentSHA256, err := TransitionContentSHA256(
 		t.SchemaVersion,
 		t.PayloadJSON,
@@ -518,6 +521,7 @@ func TransitionContentSHA256(
 			return "", err
 		}
 	}
+	sortArtifactRefs(normalizedArtifacts)
 	envelope := struct {
 		SchemaVersion string         `json:"schema_version"`
 		Transition    map[string]any `json:"transition"`
@@ -533,6 +537,40 @@ func TransitionContentSHA256(
 	}
 	sum := sha256.Sum256(raw)
 	return fmt.Sprintf("%x", sum), nil
+}
+
+func sortArtifactRefs(refs []ArtifactRef) {
+	slices.SortFunc(refs, func(left, right ArtifactRef) int {
+		if value := strings.Compare(left.Kind, right.Kind); value != 0 {
+			return value
+		}
+		if value := strings.Compare(left.URI, right.URI); value != 0 {
+			return value
+		}
+		if value := strings.Compare(left.SHA256, right.SHA256); value != 0 {
+			return value
+		}
+		if value := strings.Compare(left.MediaType, right.MediaType); value != 0 {
+			return value
+		}
+		if value := strings.Compare(left.SchemaVersion, right.SchemaVersion); value != 0 {
+			return value
+		}
+		switch {
+		case left.SizeBytes == nil && right.SizeBytes != nil:
+			return -1
+		case left.SizeBytes != nil && right.SizeBytes == nil:
+			return 1
+		case left.SizeBytes == nil:
+			return 0
+		case *left.SizeBytes < *right.SizeBytes:
+			return -1
+		case *left.SizeBytes > *right.SizeBytes:
+			return 1
+		default:
+			return 0
+		}
+	})
 }
 
 type ExperimentFilter struct {
@@ -576,6 +614,14 @@ type Repository interface {
 	AppendTransitions(context.Context, string, []Transition) ([]Transition, error)
 	ListTransitions(context.Context, TransitionFilter) ([]Transition, error)
 	DeleteTransitions(context.Context, string) error
+	GetProjectionState(context.Context, string) (ProjectionState, error)
+	ReplaceProjection(
+		context.Context,
+		string,
+		ProjectionState,
+		ProjectionManifest,
+		[]Transition,
+	) ([]Transition, ProjectionState, error)
 }
 
 func validExperimentStatus(status ExperimentStatus) bool {

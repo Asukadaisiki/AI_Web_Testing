@@ -199,18 +199,25 @@
 
 ## Stage 4：Trajectory Projector 与 Dataset Export
 
-- [ ] Task 4.1：定义 `research.event.v1` envelope 和新增事件类型。
-- [ ] Task 4.2：实现 Event/Report 到 Transition 的版本化 Projector。
-  - [ ] 使用 causation/correlation ID 建立顺序，不按时间戳猜测。
-  - [ ] 保存 source seq/hash/cursor。
-  - [ ] 支持删除投影后重建。
-- [ ] Task 4.3：实现 schema-versioned JSONL 导出。
-- [ ] Task 4.4：验收、提交并推送 Stage 4。
-  - [ ] Canonical Goal 连续 3 次通过。
-  - [ ] 从 seq=0 完整回放。
-  - [ ] 重复投影结果逐字节一致，无重复 ordinal。
-  - [ ] JSONL 每行通过 Schema 校验。
-  - [ ] 提交信息：`feat: project and export agent trajectories`
+- [x] Task 4.1：定义 `research.event.v1` envelope 和新增事件类型。
+  - [x] Observation/Decision/Action/Execution/Verification/Failure/Recovery/Reward/Unknown 使用显式 available/unavailable/not_applicable slot。
+  - [x] Event ID、content SHA、source ref、source schema 与 UTF-8 canonical JSON 具备确定性校验。
+- [x] Task 4.2：实现 Event/Report 到 Transition 的版本化 Projector。
+  - [x] 使用 causation/correlation ID 和 source seq 建立顺序，不按时间戳猜测。
+  - [x] 保存 source seq/hash/cursor，并由同一 projection manifest 绑定全部 Transition。
+  - [x] 支持 compare-and-swap ReplaceProjection、删除投影后重建、并发替换单赢家和失败回滚。
+  - [x] 对齐 `agent.tool_result.v1` 的原始 metadata 与外层事件 JSON 规范化语义，SourceReader 同时绑定两者而不错误要求字节相等。
+  - [x] 修复同一 PostgreSQL transaction 中 jobs rows 未关闭即嵌套读取 executions 导致的 `driver: bad connection`。
+- [x] Task 4.3：实现 schema-versioned JSONL 导出。
+  - [x] Run/Experiment 导出支持分页、稳定排序、repeatable-read snapshot、原子文件替换和 stdout。
+  - [x] Draft 2020-12 JSON Schema、Exporter DTO、golden、artifact 排序与 content hash 一致。
+  - [x] `research-export --help` 可用；真实 Stage 3 Run 两次导出 26 行且逐字节一致，每行通过 Schema 与 Go 语义校验。
+- [x] Task 4.4：验收 Stage 4 并准备提交。
+  - [x] Canonical Goal 连续 3 次通过。
+  - [x] 从 seq=0 完整回放。
+  - [x] 重复投影结果逐字节一致，无重复 ordinal。
+  - [x] JSONL 每行通过 Schema 校验。
+  - [x] 提交信息已准备：`feat: project and export agent trajectories`；按本轮要求未 commit/push。
 
 ## Stage 5：Metrics 与实验控制面
 

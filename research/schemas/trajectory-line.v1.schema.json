@@ -1,0 +1,602 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/schemas/trajectory-line.v1.schema.json",
+  "title": "Research trajectory JSONL line v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "projector_version",
+    "research_run_id",
+    "experiment_id",
+    "repetition_index",
+    "warmup",
+    "ordinal",
+    "append_key",
+    "content_sha256",
+    "transition",
+    "artifact_refs"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "research.trajectory.jsonl.v1"
+    },
+    "projector_version": {
+      "const": "research.projector.v1"
+    },
+    "research_run_id": {
+      "$ref": "#/$defs/nonEmpty64"
+    },
+    "experiment_id": {
+      "$ref": "#/$defs/nonEmpty64"
+    },
+    "repetition_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "warmup": {
+      "type": "boolean"
+    },
+    "ordinal": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "append_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "content_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "transition": {
+      "$ref": "#/$defs/transition"
+    },
+    "artifact_refs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/artifactReference"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonEmpty64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "stringSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/unavailableSlot"
+        },
+        {
+          "$ref": "#/$defs/notApplicableSlot"
+        }
+      ]
+    },
+    "integerSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/unavailableSlot"
+        },
+        {
+          "$ref": "#/$defs/notApplicableSlot"
+        }
+      ]
+    },
+    "attemptSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/unavailableSlot"
+        },
+        {
+          "$ref": "#/$defs/notApplicableSlot"
+        }
+      ]
+    },
+    "schemaVersionSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/unavailableSlot"
+        },
+        {
+          "$ref": "#/$defs/notApplicableSlot"
+        }
+      ]
+    },
+    "unavailableSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {
+          "const": "unavailable"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "notApplicableSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {
+          "const": "not_applicable"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "sequence",
+        "content_sha256",
+        "schema_version"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "agent_event",
+            "dsl_generation",
+            "execution_batch",
+            "execution_job",
+            "execution",
+            "execution_report",
+            "independent_oracle"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "sequence": {
+          "$ref": "#/$defs/integerSlot"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/schemaVersionSlot"
+        }
+      }
+    },
+    "researchEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "id",
+        "content_sha256",
+        "kind",
+        "research_run_id",
+        "correlation_id",
+        "causation_id",
+        "tool_call_ids",
+        "attempt",
+        "step_index",
+        "sources",
+        "data"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "research.event.v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^rev_[0-9a-f]{64}$"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "kind": {
+          "enum": [
+            "observation",
+            "decision",
+            "action",
+            "execution",
+            "verification",
+            "failure",
+            "recovery",
+            "reward",
+            "unknown"
+          ]
+        },
+        "research_run_id": {
+          "$ref": "#/$defs/nonEmpty64"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/stringSlot"
+        },
+        "causation_id": {
+          "$ref": "#/$defs/stringSlot"
+        },
+        "tool_call_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "attempt": {
+          "$ref": "#/$defs/attemptSlot"
+        },
+        "step_index": {
+          "$ref": "#/$defs/integerSlot"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sourceReference"
+          }
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    },
+    "eventSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "value": {
+              "$ref": "#/$defs/researchEvent"
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/unavailableSlot"
+        },
+        {
+          "$ref": "#/$defs/notApplicableSlot"
+        }
+      ]
+    },
+    "costSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "latency_ms",
+        "vision_calls",
+        "sources"
+      ],
+      "properties": {
+        "input_tokens": {
+          "$ref": "#/$defs/integerSlot"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/integerSlot"
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/integerSlot"
+        },
+        "latency_ms": {
+          "$ref": "#/$defs/integerSlot"
+        },
+        "vision_calls": {
+          "$ref": "#/$defs/integerSlot"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sourceReference"
+          }
+        }
+      }
+    },
+    "costSlot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "value": {
+              "$ref": "#/$defs/costSummary"
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/unavailableSlot"
+        },
+        {
+          "$ref": "#/$defs/notApplicableSlot"
+        }
+      ]
+    },
+    "sourceCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "agent_run_id",
+        "agent_event_seq",
+        "approved_generation_ids",
+        "batch_ids",
+        "execution_ids"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "research.event.v1"
+        },
+        "agent_run_id": {
+          "$ref": "#/$defs/nonEmpty64"
+        },
+        "agent_event_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approved_generation_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "batch_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "execution_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "projectionManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "projector_version",
+        "source_cursor",
+        "source_sha256",
+        "transition_count",
+        "manifest_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "research.projection_manifest.v1"
+        },
+        "projector_version": {
+          "const": "research.projector.v1"
+        },
+        "source_cursor": {
+          "$ref": "#/$defs/sourceCursor"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transition_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "projector_version",
+        "unit",
+        "state",
+        "observation",
+        "candidate",
+        "decision",
+        "action",
+        "execution",
+        "verification",
+        "failure",
+        "recovery",
+        "reward",
+        "unknown",
+        "cost",
+        "done",
+        "projection"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "research.transition.v1"
+        },
+        "projector_version": {
+          "const": "research.projector.v1"
+        },
+        "unit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "id"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "state": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "observation": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "candidate": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "decision": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "action": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "execution": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "verification": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "failure": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "recovery": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "reward": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "unknown": {
+          "$ref": "#/$defs/eventSlot"
+        },
+        "cost": {
+          "$ref": "#/$defs/costSlot"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "projection": {
+          "$ref": "#/$defs/projectionManifest"
+        }
+      }
+    },
+    "artifactReference": {
+      "title": "Explicit external artifact reference",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "uri", "sha256", "media_type"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^artifact://[^/?#]+/[^?#]+$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "schema_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

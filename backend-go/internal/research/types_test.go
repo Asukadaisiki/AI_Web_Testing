@@ -149,6 +149,38 @@ func TestTransitionValidationBindsContentHash(t *testing.T) {
 	}
 }
 
+func TestTransitionArtifactOrderingUsesEveryDTOField(t *testing.T) {
+	small, large := int64(1), int64(2)
+	first := ArtifactRef{
+		Kind: "evidence", URI: "artifact://run/item",
+		SHA256: strings.Repeat("a", 64), MediaType: "application/json",
+		SchemaVersion: "evidence.v1", SizeBytes: &small,
+	}
+	second := first
+	second.SchemaVersion = "evidence.v2"
+	second.SizeBytes = &large
+
+	left, err := TransitionContentSHA256(
+		SchemaVersion,
+		json.RawMessage(`{"state":{"ready":true}}`),
+		[]ArtifactRef{second, first},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := TransitionContentSHA256(
+		SchemaVersion,
+		json.RawMessage(`{"state":{"ready":true}}`),
+		[]ArtifactRef{first, second},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left != right {
+		t.Fatalf("artifact order changed content hash: %s != %s", left, right)
+	}
+}
+
 func TestJSONLimitsRejectOversizedPayload(t *testing.T) {
 	experiment := validExperiment()
 	experiment.ConfigJSON = json.RawMessage(`{"value":"` +
