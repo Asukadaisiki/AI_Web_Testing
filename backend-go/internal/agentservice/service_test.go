@@ -32,6 +32,10 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 			Prompt: agent.PromptSpec{
 				Version: agent.SystemPromptVersion, RequestSHA256: strings.Repeat("a", 64),
 				PromptSHA256: strings.Repeat("b", 64), ToolsetSHA256: strings.Repeat("c", 64),
+				RequestBudget: agent.RequestSerializationBudget{
+					RequestBytes: 2048, MessageBytes: 1536, ToolDefinitionBytes: 512,
+					ExplorationSummaryBytes: 1024, ExplorationSummaryCount: 2,
+				},
 			},
 			Usage: agent.ModelUsage{
 				Status: agent.UsageAvailable, InputTokens: &one,
@@ -94,6 +98,11 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 	}
 	if events[0].Payload["usage"].(map[string]any)["status"] != string(agent.UsageUnavailable) {
 		t.Fatalf("failed usage = %#v", events[0].Payload["usage"])
+	}
+	requestBudget := events[1].Payload["prompt_spec"].(map[string]any)["request_budget"].(map[string]any)
+	if requestBudget["request_bytes"] != float64(2048) ||
+		requestBudget["exploration_summary_count"] != float64(2) {
+		t.Fatalf("request budget = %#v", requestBudget)
 	}
 	if events[0].ToolCallID != "" ||
 		events[0].Payload["tool_call_status"] != string(ToolCallUnavailable) ||

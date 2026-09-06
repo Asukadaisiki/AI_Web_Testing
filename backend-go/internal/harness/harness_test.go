@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,16 @@ type scriptedModel struct {
 }
 
 type telemetryModel struct{}
+
+type summaryDrivenModel struct {
+	turn     int
+	requests [][]agent.Message
+	evidence map[string][]agent.ToolResultNodeSummary
+}
+
+type recordingGenerateTool struct {
+	arguments *json.RawMessage
+}
 
 func (telemetryModel) Complete(
 	ctx context.Context,
@@ -64,6 +75,25 @@ func (t staticResultTool) Execute(context.Context, tools.Call) (tools.Result, er
 		(*t.calls)++
 	}
 	return tools.Result{Content: t.content, Artifact: t.artifact}, nil
+}
+
+func (t recordingGenerateTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        "generate_dsl",
+		Description: "record summarized preflight evidence",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
+}
+
+func (t recordingGenerateTool) Execute(_ context.Context, call tools.Call) (tools.Result, error) {
+	*t.arguments = append((*t.arguments)[:0], call.Arguments...)
+	return tools.Result{
+		Content: json.RawMessage(`{"generation_id":150}`),
+		Artifact: &tools.Artifact{
+			Type: "dsl_generation",
+			ID:   "150",
+		},
+	}, nil
 }
 
 func (failingTool) Definition() tools.Definition {
@@ -296,6 +326,176 @@ func (m *scriptedModel) Complete(
 	response := m.responses[0]
 	m.responses = m.responses[1:]
 	return response, nil
+}
+
+func (m *summaryDrivenModel) Complete(
+	_ context.Context,
+	messages []agent.Message,
+	_ []agent.ToolDefinition,
+) (agent.ModelResponse, error) {
+	m.requests = append(m.requests, append([]agent.Message(nil), messages...))
+	m.turn++
+	switch m.turn {
+	case 1:
+		return agent.ModelResponse{ToolCalls: []agent.ModelTool{{
+			ID: "explore-1", Name: "explore_page",
+			Arguments: `{"url":"https://example.com/login"}`,
+		}}}, nil
+	case 2:
+		var summary agent.ModelToolSummary
+		if err := json.Unmarshal([]byte(messages[len(messages)-1].Content), &summary); err != nil {
+			return agent.ModelResponse{}, err
+		}
+		m.evidence = map[string][]agent.ToolResultNodeSummary{
+			summary.Pages[0].PageState: summary.Pages[0].A11yNodes,
+		}
+		arguments, err := json.Marshal(map[string]any{
+			"case": map[string]any{
+				"name": "summary preflight",
+				"steps": []map[string]any{{
+					"action": "click",
+					"target": "#login",
+				}},
+			},
+			"a11y_nodes_by_state": m.evidence,
+		})
+		if err != nil {
+			return agent.ModelResponse{}, err
+		}
+		return agent.ModelResponse{ToolCalls: []agent.ModelTool{{
+			ID: "generate-1", Name: "generate_dsl", Arguments: string(arguments),
+		}}}, nil
+	default:
+		return agent.ModelResponse{ToolCalls: []agent.ModelTool{{
+			ID: "approve-1", Name: "ask_user_question",
+			Arguments: `{"questions":[{
+				"id":"approve_dsl",
+				"question":"批准 DSL？",
+				"type":"confirm",
+				"required":true
+			}]}`,
+		}}}, nil
+	}
+}
+
+func TestExplorationResultPersistsRawEventBeforeSummarizedTranscript(t *testing.T) {
+	raw := json.RawMessage(`{
+		"url":"https://example.com/login",
+		"page_state":"S0",
+		"element_count":2,
+		"a11y_nodes":[
+			{"node_id":"e1","role":"button","name":"Login","page_state":"S0","focusable":true,
+			 "verified_selectors":[{"strategy":"css","selector":"#login"}]},
+			{"node_id":"raw-only","role":"generic","name":"raw-only-secret","page_state":"S0"}
+		]
+	}`)
+	model := &scriptedModel{responses: []agent.ModelResponse{
+		{ToolCalls: []agent.ModelTool{{ID: "explore-1", Name: "explore_page", Arguments: `{}`}}},
+		{Content: "done"},
+	}}
+	runService := agentservice.NewService(agentservice.NewMemoryRepository())
+	registry, err := tools.NewRegistry(staticResultTool{name: "explore_page", content: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := New(runService, model, registry, 3).Start(
+		context.Background(),
+		"conversation-summary",
+		"explore",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := runService.ListEvents(context.Background(), run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawEvent agentservice.Event
+	for _, event := range events {
+		if event.Type == agentservice.EventToolResult {
+			rawEvent = event
+			break
+		}
+	}
+	if rawEvent.Seq == 0 ||
+		rawEvent.Payload["schema_version"] != agent.ToolResultSchemaV1 ||
+		rawEvent.Payload["content_sha256"] != fmt.Sprintf("%x", sha256.Sum256(raw)) ||
+		rawEvent.Payload["content_bytes"] != float64(len(raw)) {
+		t.Fatalf("tool result event = %#v", rawEvent)
+	}
+	content := rawEvent.Payload["content"].(map[string]any)
+	nodes := content["a11y_nodes"].([]any)
+	if len(nodes) != 2 || nodes[1].(map[string]any)["name"] != "raw-only-secret" {
+		t.Fatalf("raw event content = %#v", content)
+	}
+	persisted, err := runService.GetRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary agent.ModelToolSummary
+	for _, message := range persisted.Transcript {
+		if message.Role == "tool" && message.ToolCallID == "explore-1" {
+			if strings.Contains(message.Content, "raw-only-secret") {
+				t.Fatal("transcript copied the complete accessibility result")
+			}
+			if err := json.Unmarshal([]byte(message.Content), &summary); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if summary.Source.EventSeq != rawEvent.Seq ||
+		summary.Source.ContentSHA256 != rawEvent.Payload["content_sha256"] ||
+		summary.SummarySHA256 == "" {
+		t.Fatalf("summary = %#v, event = %#v", summary, rawEvent)
+	}
+}
+
+func TestGenerateDSLReceivesEvidenceSubmittedFromModelSummary(t *testing.T) {
+	raw := json.RawMessage(`{
+		"url":"https://example.com/login",
+		"page_state":"S0",
+		"element_count":1,
+		"a11y_nodes":[{
+			"node_id":"e1","role":"button","name":"Login","page_state":"S0",
+			"focusable":true,
+			"verified_selectors":[{"strategy":"css","selector":"#login","source":"dom"}]
+		}]
+	}`)
+	model := &summaryDrivenModel{}
+	var submitted json.RawMessage
+	runService := agentservice.NewService(agentservice.NewMemoryRepository())
+	registry, err := tools.NewRegistry(
+		staticResultTool{name: "explore_page", content: raw},
+		recordingGenerateTool{arguments: &submitted},
+		tools.AskUserTool{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := New(runService, model, registry, 4).Start(
+		context.Background(),
+		"conversation-preflight",
+		"generate from explored evidence",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != agentservice.RunStatusWaitingUser || len(submitted) == 0 {
+		t.Fatalf("run = %#v, submitted = %s", run, submitted)
+	}
+	var arguments struct {
+		Evidence map[string][]agent.ToolResultNodeSummary `json:"a11y_nodes_by_state"`
+	}
+	if err := json.Unmarshal(submitted, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	nodes := arguments.Evidence["S0"]
+	if len(nodes) != 1 || nodes[0].VerifiedSelectors[0].Selector != "#login" {
+		t.Fatalf("submitted evidence = %#v", arguments.Evidence)
+	}
+	if len(model.evidence["S0"]) != 1 {
+		t.Fatalf("model evidence = %#v", model.evidence)
+	}
 }
 
 func TestEnginePausesAndResumesWithToolResult(t *testing.T) {

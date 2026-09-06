@@ -610,6 +610,10 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         self.assertNotEqual(before["page_state"], after["page_state"])
         self.assertEqual(before["actions"][0]["phase"], "before")
         self.assertEqual(after["actions"][0]["phase"], "after")
+        self.assertEqual(before["actions"][0]["action"], "click")
+        self.assertEqual(before["actions"][0]["target"], "Details")
+        self.assertEqual(after["actions"][0]["action"], "click")
+        self.assertEqual(after["actions"][0]["target"], "Details")
         self.assertTrue(
             all(node["page_state"] == before["page_state"] for node in before["a11y_nodes"])
         )

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -87,6 +88,42 @@ func TestLoopTurnLimitPreservesLatestToolError(t *testing.T) {
 	if err == nil ||
 		!strings.Contains(err.Error(), "last tool error: Step 13: composite CSS was not verified") {
 		t.Fatalf("Run() error = %v, want preserved tool diagnostic", err)
+	}
+}
+
+func TestLoopTurnLimitPreservesExplorationSummaryError(t *testing.T) {
+	model := &sequenceModel{responses: []ModelResponse{
+		{ToolCalls: []ModelTool{{ID: "explore-1", Name: "explore_flow", Arguments: `{}`}}},
+	}}
+	loop := NewLoop(model, nil, "system", 1)
+	transcript := []Message{{Role: "user", Content: "start"}}
+
+	err := loop.Run(context.Background(), &transcript, func(context.Context, ModelResponse) (bool, error) {
+		content, summaryErr := BuildModelToolSummary(
+			"explore_flow",
+			json.RawMessage(`{
+				"success":false,
+				"failures":[{
+					"code":"flow_action_failed",
+					"message":"View Cart remained hidden",
+					"action":"click",
+					"target":"View Cart"
+				}],
+				"pages":[]
+			}`),
+			12,
+		)
+		if summaryErr != nil {
+			return false, summaryErr
+		}
+		transcript = append(transcript, Message{
+			Role: "tool", ToolCallID: "explore-1", Content: content,
+		})
+		return true, nil
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "last tool error: View Cart remained hidden") {
+		t.Fatalf("Run() error = %v, want exploration diagnostic", err)
 	}
 }
 

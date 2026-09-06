@@ -18,6 +18,8 @@ const defaultSystemPrompt = `You are AgentCore for a web UI testing platform.
 Understand the user's goal, plan the work, and call the available tools.
 Use ask_user_question only when required information or explicit approval is missing.
 For a new test, use explore_page for the first known URL, then explore_flow when later page states require interaction.
+Exploration tool results use agent.model_tool_summary.v1. Use pages[].a11y_nodes as the exact evidence submitted in generate_dsl.a11y_nodes_by_state; source.event_seq and hashes reference the complete persisted tool.result event.
+Never invent omitted nodes or selectors. Re-explore when the retained evidence is insufficient.
 You may call validate_page_elements with required_elements to find exploration gaps, but that advisory result does not authorize generation.
 As soon as the evidence is sufficient, call generate_dsl. It validates the exact final case against a11y_nodes_by_state and persists it atomically.
 Author the complete structured DSL in generate_dsl.case and include collected nodes grouped by their actual page state. Never flatten states.
@@ -223,14 +225,24 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 					run.LatestGenerationID = &generationID
 					run.ApprovedGenerationID = nil
 				}
-				if err := e.recordToolResult(ctx, run, stepID, call, result); err != nil {
+				sourceEventSeq, err := e.recordToolResult(ctx, run, stepID, call, result)
+				if err != nil {
 					return false, err
+				}
+				modelContent, err := agent.BuildModelToolSummary(
+					call.Name,
+					result.Content,
+					sourceEventSeq,
+				)
+				if err != nil {
+					return false, fmt.Errorf("summarize tool result: %w", err)
 				}
 				run.Transcript = append(run.Transcript, agent.Message{
 					Role:       "tool",
-					Content:    string(result.Content),
+					Content:    modelContent,
 					ToolCallID: call.ID,
 				})
+				run.Transcript = agent.CompactExplorationTranscript(run.Transcript)
 				if err := e.runs.SaveRun(ctx, run); err != nil {
 					return false, err
 				}
@@ -384,17 +396,29 @@ func (e *Harness) recordToolResult(
 	stepID string,
 	call agent.ModelTool,
 	result tools.Result,
-) error {
-	if len(result.Content) == 0 || !json.Valid(result.Content) {
-		return errors.New("tool result content must be valid JSON")
+) (int64, error) {
+	payload, err := agent.NewToolResultEventPayload(call.Name, result.Content)
+	if err != nil {
+		return 0, err
+	}
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("encode tool result event: %w", err)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(encodedPayload, &eventPayload); err != nil {
+		return 0, fmt.Errorf("normalize tool result event: %w", err)
+	}
+	persisted, err := e.runs.RecordEvent(ctx, run, agentservice.Event{
+		Type:       agentservice.EventToolResult,
+		StepID:     stepID,
+		ToolCallID: call.ID,
+		Payload:    eventPayload,
+	})
+	if err != nil {
+		return 0, err
 	}
 	events := []agentservice.Event{
-		{
-			Type:       agentservice.EventToolResult,
-			StepID:     stepID,
-			ToolCallID: call.ID,
-			Payload:    map[string]any{"tool": call.Name, "content": json.RawMessage(result.Content)},
-		},
 		{
 			Type:       agentservice.EventToolFinished,
 			StepID:     stepID,
@@ -415,10 +439,10 @@ func (e *Harness) recordToolResult(
 	}
 	for _, event := range events {
 		if _, err := e.runs.RecordEvent(ctx, run, event); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return persisted.Seq, nil
 }
 
 func (e *Harness) recordToolStart(

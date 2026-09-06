@@ -57,15 +57,16 @@
 
 ## Stage 3：Research Persistence
 
-- [ ] Experiment、ResearchRun、Transition Go 类型已定义。
-- [ ] Repository 接口和 PostgreSQL adapter 已实现。
-- [ ] 三张 research 表、外键、唯一约束和索引已迁移。
-- [ ] 空库与已有库 upgrade 通过。
-- [ ] downgrade/upgrade 往返通过。
-- [ ] 并发写入和重复写入测试通过。
-- [ ] Research Run 可关联 AgentRun、Generation、Batch 和 Execution。
-- [ ] Canonical Goal 通过并写入关联链。
-- [ ] Stage 3 已 commit 并 push。
+- [x] Experiment、ResearchRun、Transition Go 类型已定义。
+- [x] Repository 接口和 PostgreSQL adapter 已实现。
+- [x] 三张 research 表、外键、唯一约束和索引已迁移。
+- [x] 空库与已有库 upgrade 通过。
+- [x] downgrade/upgrade 往返通过。
+- [x] 并发写入和重复写入测试通过。
+- [x] Research Run 可关联 AgentRun、Generation、Batch 和 Execution。
+- [x] 完整工具结果持久化可回放，模型仅接收可追溯、有界的确定性探索摘要。
+- [x] Canonical Goal 通过并写入关联链。
+- [x] Stage 3 已完成提交前验收；主代理随后 commit 并 push。
 
 ## Stage 4：Trajectory 与 Dataset
 

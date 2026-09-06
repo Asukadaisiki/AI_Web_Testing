@@ -12,13 +12,26 @@ const (
 	UsageAvailable   ModelUsageStatus = "available"
 	UsagePartial     ModelUsageStatus = "partial"
 	UsageUnavailable ModelUsageStatus = "unavailable"
+
+	ToolResultSchemaV1       = "agent.tool_result.v1"
+	ModelToolSummarySchemaV1 = "agent.model_tool_summary.v1"
+	ToolSummaryPolicyV1      = "deterministic.exploration.v1"
 )
 
 type PromptSpec struct {
-	Version       string `json:"version"`
-	RequestSHA256 string `json:"request_sha256"`
-	PromptSHA256  string `json:"prompt_sha256"`
-	ToolsetSHA256 string `json:"toolset_sha256"`
+	Version       string                     `json:"version"`
+	RequestSHA256 string                     `json:"request_sha256"`
+	PromptSHA256  string                     `json:"prompt_sha256"`
+	ToolsetSHA256 string                     `json:"toolset_sha256"`
+	RequestBudget RequestSerializationBudget `json:"request_budget"`
+}
+
+type RequestSerializationBudget struct {
+	RequestBytes            int `json:"request_bytes"`
+	MessageBytes            int `json:"message_bytes"`
+	ToolDefinitionBytes     int `json:"tool_definition_bytes"`
+	ExplorationSummaryBytes int `json:"exploration_summary_bytes"`
+	ExplorationSummaryCount int `json:"exploration_summary_count"`
 }
 
 type ModelUsageStatus string
@@ -56,6 +69,7 @@ type Error struct {
 	Code      string `json:"code,omitempty"`
 	Message   string `json:"message,omitempty"`
 	Retryable bool   `json:"retryable"`
+	cause     error
 }
 
 type ModelTelemetry = Telemetry
@@ -69,6 +83,20 @@ func (e *Error) Error() string {
 		return e.Message
 	}
 	return e.Category
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func NewModelError(category, code, message string, retryable bool, cause error) *ModelError {
+	return &Error{
+		Category: category, Code: code, Message: message, Retryable: retryable,
+		cause: cause,
+	}
 }
 
 type TelemetryRecord struct {

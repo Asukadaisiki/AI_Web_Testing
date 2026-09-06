@@ -56,6 +56,79 @@
 
 ## 任务记录
 
+## 2026-09-06 | Stage 3 最终独立验收通过并准备提交
+
+- 任务：不修改业务代码、不 commit/push，使用 ignored 官方 DeepSeek `.env` 完成 Stage 3 最终独立验收；覆盖完整静态/PG/race/迁移/Frontend 门禁、BUG-149/150 专项、一次从零 Canonical，以及正式 Experiment/ResearchRun/Transition 关联链。
+- 操作：确认顶层 `.npm-cache` 全部为先前代理 Knip 产生的未跟踪缓存后删除，不触碰其他用户文件；仅断言 `.env` 被 ignore、权限 600、provider/model/base URL 与 key 非空，不输出 key。执行带真实 PostgreSQL 的 Go 全量、Research PG 专项 10 轮、全量 race、vet/build；Python lock、88 项测试与 compileall；主库 Alembic upgrade/current/heads/check、空库全链升级、带 sentinel 的 `0040→0041→0040→0041`；Frontend 9/9、build、Knip、gofmt、BUG 编号唯一性和 diff check。随后关闭 VLM 重启 Browser API、Execution Worker、20-turn AgentService，从零运行一次纯自然语言 Canonical，完成后停止三服务并清理本轮临时 cache/log/helper。
+- 结果：Project 502 / Session 47 / Run `run_5c20dba537a3799109213761` / Generation 260 / Batch 337 / Execution 328 在首批通过，15/15 步有 evidence、`first_pass=true`、无 recovery；Report `execution.report.v2`、独立 DOM Oracle、Generation/Job/Execution canonical bytes 与 SHA `175d4056afafc3e62b5adc84b7cc8ed36ecba13f9202a89ef7cfd359853850c7`、VLM=0 均通过。结果保存为 `research/results/stage3-final-accepted-canonical-2.json`。
+- 验证：官方 DeepSeek preflight 的最小文本和中等工具调用均 HTTP 200、`deepseek-v4-flash`、usage available。正式 Run 的 10 次 LLM input tokens 为 `3846, 14162, 26986, 38888, 48502, 61507, 89137, 89384, 89518, 133365`，最大 133,365；5 条探索摘要最大 32,470 bytes、累计 148,529 bytes，达到平台后不再随重复 A11y 增长，最终增量来自非探索的完整正式报告。全部调用 HTTP 200、retry=0、`response_read_failed=0`，telemetry 敏感字段键命中 0。8 个版本化完整 tool result 可回放，探索 summary 的 source seq/raw SHA/bytes 与 event 元数据一致，summary SHA 重算一致；PG/REST/SSE、错误语义和 GenerateDSL preflight 专项通过。
+- 结果链：创建并回读 Experiment `exp-stage3-final-502-run5c20dba537a3799` 与 ResearchRun `rr-stage3-run5c20dba537a3799109213761`，均为 `completed`；绑定本次 Project/AgentRun/Generation/Batch/Execution/DSL SHA。最小 Transition ordinal 0、append key `stage3-canonical-minimal-v1`、SHA `a7f8d26b44f15e0d2676b21026082d2f690e89bdb6cb2c151e49cf3b1f90389a` 写入、幂等重放和回读一致；实验记录当前工作树 code SHA-256 `94ab4b67e0c55936390cc3dbed7a3e0a4ab288df8e78e1fd4f25fb4d8217940f` 与 Chromium `145.0.7632.6`。
+- 后续：Task 3.4、3.4.2、3.4.4 与 Stage 3 非提交验收项已完成；提交信息准备为 `feat: add research persistence schema`。本轮按要求未 commit/push，Stage 3 commit/push checklist 保持未勾选。
+
+## 2026-09-06 | 完成 Stage 3 Task 3.4.4 / BUG-150
+
+- 任务：按 explorer 结论修复官方 DeepSeek 大上下文断流；完整工具结果先持久化，模型 transcript 仅保留确定性版本化摘要；不运行 Canonical，不 commit/push，不输出 ignored `.env` key。
+- 操作：定义 `agent.tool_result.v1`、`agent.model_tool_summary.v1`、`ToolResultSource`、`ToolResultTruncation` 及 Page/Action/Error/Node 摘要类型。Harness 改为先持久化完整 `tool.result` 并取得 seq，再生成带 source seq/raw hash/summary hash/policy version 的探索摘要；保留 URL/page state/revision、动作 status/target、target evidence、verified selectors、祖先/交互节点、failure 与 omission counters，执行去重和稳定排序。单摘要目标 32 KiB、硬上限 64 KiB，累计探索摘要约 160 KiB，旧同 URL/state revision 优先降为 reference-only；错误、pending 和非探索结果不改语义。OpenAI telemetry 增加请求、messages、tools 和探索摘要序列化字节统计，不设置非探索消息硬拒绝。
+- 结果：Agent Event/PostgreSQL/SSE 继续保存并公开完整 `content`，新增原始 SHA-256 与字节数，可供 Stage 4 按 source seq 重建；模型请求不再重复携带完整 A11y。GenerateDSL 仍仅使用模型从摘要实际提交的精简证据并执行原有绑定 preflight；`latestToolError` 可读取摘要中的结构化 failure。Task 3.4.4 与 BUG-150 完成，Task 3.4/3.4.2 的 Canonical 正式关联链及 Stage 3 commit/push 保持未完成。
+- 验证：带真实 PostgreSQL 的 `go test -count=1 -v ./...` 和全量 `go test -race -count=1 ./...` 通过；`go vet ./...`、`go build ./...` 通过。Python 88 passed/1 skipped、`uv lock --check`、compileall 通过；Alembic upgrade/current/heads/check 通过且唯一 head/current 为 `20260906_0041`。Frontend Vitest 9/9、production build、Knip 通过；gofmt、`git diff --check` 通过。官方 DeepSeek 中等工具调用返回 HTTP 200、`deepseek-v4-flash`、usage available、`success_tool`。按要求未运行 Canonical。
+- 后续：Task 3.4.2 仍需在后续独立执行 Canonical Goal 和正式 Experiment/ResearchRun/Transition 关联链；本轮不 commit/push。
+
+## 2026-09-06 | 完成 Stage 3 Task 3.4.3 / BUG-149
+
+- 任务：审查并修复 `backend-go/internal/platform/llm/openai.go` 的完整 `Complete/doRequest/classify/parse` 路径，消除 HTTP 2xx 响应读取、关闭、解码或协议失败被误分类为 `http_200` 的问题；使用 ignored `browser-worker/.env` 验证官方 endpoint，执行完整静态门禁，不运行完整 Canonical，不 commit/push。
+- 操作：为 `ModelError` 增加不参与 JSON 的 cause 链；新增 `request/read/decode/invalid_response` 内部阶段错误和仅由非 2xx 响应产生的 provider HTTP 错误。响应体改为 4 MiB+1 有界读取并显式关闭；读取/关闭 timeout、unexpected EOF、connection reset/pipe 进入有界重试，完整 malformed JSON、超限响应、空 choices 和无效 tool-call envelope 确定性失败且不重试。协议校验前保留已解码的 model、usage 和 provider request ID；持久化层继续仅复制稳定 category/code/retryable/http_status，不保存 body、key、cause 或底层错误文本。
+- 结果：BUG-149 已修复，HTTP 200 不再进入 provider HTTP 分类；截断响应可在第二次请求恢复，确定性响应错误不会消耗重试预算。官方 endpoint 最小文本调用和中等复杂度工具调用均返回 HTTP 200、`deepseek-v4-flash`、usage available，分类分别为 `success_text` 和 `success_tool`；响应符合现有 OpenAI 兼容类型，无需增加 DeepSeek 专用宽松解析。Task 3.4.3 完成；Task 3.4/3.4.2、Canonical 正式关联链和 Stage 3 commit/push 保持未完成。
+- 验证：新增/扩展 Go 回归覆盖 200+truncated EOF、读取 timeout、读取/关闭 connection reset、malformed JSON、oversized、empty choices、invalid tool-call envelope、non-2xx JSON/plaintext、request/read cancel、body close、cause 与遥测脱敏。带真实 PostgreSQL 的 Go 全量测试、Research PG 专项 10 轮、全量 race、vet/build 通过；Python 88 passed/1 skipped、`uv lock --check`、compileall 通过；主库 Alembic 唯一 current/head `20260906_0041` 且 check 无差异，空库全链升级有 3 张 research 表，既有 sentinel 库 `0040→0041→0040→0041` 保留数据且 research 表为 `3→0→3`；Frontend Vitest 9/9、production build、repo-local cache Knip、gofmt、BUG 编号和 diff check 通过。
+- 后续：后续从完整门禁重新执行 Task 3.4.2 的 Canonical Goal 与正式 Research Repository 关联链验收。本轮按要求未运行完整 Canonical，未 commit/push。
+
+## 2026-09-06 | Stage 3 Task 3.4.2 最终验收被 LLM HTTP 200 响应处理失败阻断
+
+- 任务：不修改业务代码、不 commit/push，使用 ignored `browser-worker/.env` 中的 `deepseek/deepseek-v4-flash` 配置，从完整静态、迁移和真实 PostgreSQL 门禁重跑 Stage 3 最终验收；通过后执行一次从零 Canonical，并从 Research Repository 创建正式完整关联链和最小 Transition；任一失败新增 task/bug/log 后停止。
+- 操作：仅断言 provider/base URL/model 精确匹配、API key 非空、`.env` 被 Git ignore 且权限为 600，不输出、记录或复制 key。执行带真实 PG 的 Go 全量、Research PG 专项 10 轮、全量 race、vet/build，Python lock/88 项测试/compileall，主库 upgrade/current/heads/check、一次性空库全链升级、带 sentinel 的既有库 `0040→0041→0040→0041`，Frontend 9 项测试/build/Knip、gofmt、BUG 编号和 diff 门禁。全部通过后从当前工作树启动关闭 Vision 的三服务，提交一次纯自然语言 Canonical。
+- 结果：BUG-148 的 HTTP 503 条件已消失并标记 fixed。Canonical 创建 Project 340 / Session 45 / Run `run_ad7093eca3d3b65d7aa00f8f`；前四次 LLM 调用均由 `deepseek/deepseek-v4-flash` 以 HTTP 200 成功返回 ToolCall，真实 Chromium 已探索至购物车并观察 Blue Top / Rs. 500 / 1 / Rs. 500。第五次调用收到 HTTP 200 后在响应读取或 JSON 解码阶段失败，adapter 误分类为非重试 `http/http_200`；现有安全遥测无法区分两个分支。Run 在 seq=32 failed，未生成 Generation/Batch/Execution。新增 Task 3.4.3 / BUG-149 后停止；未创建 Experiment/ResearchRun/Transition，Task 3.4/3.4.2 与 Stage 3 Canonical/checklist 保持未完成。
+- 验证：Go 全量与 PG integration、Research PG 专项 10 轮、全量 race、vet/build 通过；Python 88 passed/1 skipped；主库唯一 current/head `20260906_0041` 且 Alembic 无差异，空库 3 张研究表，既有库往返保留 1 个 sentinel 用户和项目；Frontend 9/9、build、Knip、compileall、gofmt、BUG 编号和 diff check 通过。五条 LLM telemetry 的 provider/requested model 全部正确，前四条 usage 可重算为 input/output/total `392819/3967/396786`，第五条 usage 为 unavailable，敏感字段名命中 0。事件 31 精确记录 logical call `llm_e39636f59a6734fd07ee47e4`、attempt=1、latency=31104 ms、HTTP 200、retry=0、`model_attempt_failed_without_response` 和非重试 `http/http_200`；原始读取/JSON 解码错误已被 adapter 覆盖且未落库，无法从历史事实进一步恢复，未读取响应正文。失败结果为 `research/results/stage3-final-accepted-canonical-1.json`，三服务已停止。
+- 后续：实施 Task 3.4.3，修复 2xx 响应读取/JSON 解码错误分类和安全重试合同；随后必须从完整门禁重新执行 Task 3.4.2。本轮未 commit/push。
+
+## 2026-09-06 | Task 3.4.2 LLM 网关健康复测仍为 HTTP 503
+
+- 任务：不修改业务代码、不 commit/push，先通过小范围正式 AgentRun 确认 LLM 网关健康；若仍为 503，则仅完成现有 adapter 的有界重试并记录后停止，保持 Task 3.4/3.4.2、Stage 3 checklist 和 BUG-148 未完成。
+- 操作：仅启动 `AGENTSERVICE_MAX_TURNS=2`、VLM 关闭的 Go AgentService，使用 Project 248 / Session 42 创建正式 AgentRun `run_a2cdc8f8eff2818a1295fde0`，提交“只回复 OK、不调用工具”的最小自然语言消息；从 PostgreSQL 读取版本化 LLM telemetry，不输出 API Key 或其他凭证。探测后停止 AgentService，未启动 Browser API 或 Execution Worker。
+- 结果：Run 在首次 logical LLM call 后进入 `failed`。事件 2、3、4 对应现有 OpenAI adapter 的完整 3 次有界物理请求，provider/model 为 `unself/deepseek-v4-flash`，`retry_count=0/1/2`，均返回 `http_status=503`、`code=http_503`、`retryable=true`；事件 5 为 `run.failed`。按约定停止，未执行完整静态/迁移/并发门禁、Canonical、report/oracle/SHA/VLM 验收或 Research 正式 ID 链。
+- 验证：AgentService 已停止，端口 8081 无监听；Run 无 latest/approved Generation；`research_experiments`、`research_runs`、`research_transitions` 行数仍为 0/0/0。Task 3.4、Task 3.4.2 与 Stage 3 Canonical/checklist 保持未勾选，BUG-148 保持 `open`，未 commit/push。
+- 后续：等待 `unself/deepseek-v4-flash` 恢复后，再从小范围正式 AgentRun 健康探测开始；成功后必须从完整静态、迁移和真实 PostgreSQL 门禁重新执行，再从零运行 Canonical 并建立 Experiment/ResearchRun/Transition 完整关联链。
+
+## 2026-09-06 | Stage 3 最终独立验收被 LLM HTTP 503 阻断
+
+- 任务：不修改业务代码、不 commit/push，从完整静态与迁移门禁重新执行 Stage 3 最终独立验收；通过后重启三服务，从零运行一次 Canonical Goal，并创建正式 Experiment/ResearchRun、完整关联链和最小 Transition；任一失败记录 task/bug/log 后停止。
+- 操作：复核 Stage 3 未提交实现与验收清单；对主库执行 upgrade/current/heads/check，对一次性空库执行全链升级，对带 sentinel 的临时库执行 `0040→0041→0040→0041`；执行带真实 PostgreSQL 的 Go 全量测试、research 专项连续 10 轮、全量 race、vet、build，以及 Python、Frontend、Knip、compileall、gofmt 和 diff 门禁。全部通过后重启 Browser API、Execution Worker 和 20-turn AgentService，关闭 VLM 并提交一次纯自然语言 Canonical Goal。
+- 结果：静态、迁移与 PostgreSQL 门禁全部通过；Canonical 在首次模型调用阶段失败。Project 246 / Session 40 / Run `run_8ec1321e5933a7ea3b95ce65` 的三个物理 attempt 均由 `unself/deepseek-v4-flash` 返回 HTTP 503，事件 5 将 Run 标记为 `failed`；未产生 Generation、Batch 或 Execution。按失败即停规则新增 Task 3.4.2 / BUG-148，未创建 Experiment/ResearchRun/Transition，未勾选 Task 3.4 或 Stage 3 checklist，未 commit/push，三个服务已停止。
+- 验证：主库为唯一 `20260906_0041` 且 Alembic 无差异；空库研究表为 3 张；临时既有数据在 `0041→0040→0041` 中保持 1 个用户和 1 个项目，研究表按 3→0→3 变化且临时库已清理。Go 全量、research 专项 10 轮、全量 race、vet、build 通过；Python 88 passed/1 skipped；Frontend Vitest 9/9、production build、Knip、compileall、gofmt 和 diff check 通过；新增 BUG-148 编号未重复。失败结果为 `research/results/stage3-final-canonical-1.json`。
+- 后续：确认 LLM 网关恢复后执行 Task 3.4.2，从完整门禁重新开始；Canonical 通过后再写入并核验正式研究关联链。本轮保持不 commit/push。
+
+## 2026-09-06 | 完成 Stage 3 Task 3.4.1 / BUG-147
+
+- 任务：不 commit/push、不执行 Canonical，审查并修复 PostgreSQL `CreateRun` 在 8 路以上相同 identity 并发时偶发暴露 `pk_research_runs` 的问题；覆盖同/异不可变 payload、主键 sequence 事实、事务隔离与数据库错误传播，执行 Go/PG/race/vet/build 和其余 Stage 3 静态门禁。
+- 操作：移除依赖单一 `ON CONFLICT (experiment_id, idempotency_key)` 仲裁顺序的创建路径；显式使用 `READ COMMITTED` 事务，对 identity、Run ID 和 repetition slot 的 64 位 advisory key 排序加事务锁，锁内先回读 identity 并比较不可变 payload，再显式检查主键/repetition 冲突。只有已知三类约束保留并发兜底映射，未知 unique 与其他数据库错误原样返回。测试升级为 20 轮 × 16 路同 identity，并加入已演进 Run 的同 payload 重放、异 ID/repetition/warmup payload、主键冲突后重试、无 varchar PK sequence、隔离覆盖、锁超时和未知唯一错误。
+- 结果：BUG-147 修复，Task 3.4.1 与 Stage 3“并发写入和重复写入”检查项完成。相同不可变 payload 始终返回同一当前 Run；不同不可变 payload、主键和 repetition slot 分别稳定返回 `ErrConflict`。`research_runs.id` 经 `pg_get_serial_sequence` 确认为无 sequence 的调用方 varchar 主键，未加入错误的 sequence 修复逻辑。Task 3.4 的 Canonical、正式关联链和 commit/push 仍未完成。
+- 验证：定向 PostgreSQL 测试最终重复 10 轮通过；带真实 PG 的 `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...`、`go build ./...` 全部通过。Python 88 passed/1 skipped、`uv lock --check`、compileall、Frontend Vitest 9/9、production build、Knip、BUG 编号唯一性和 diff check 通过。主库 upgrade/current/heads/check 为唯一 `20260906_0041` 且无差异；一次性空库全链 upgrade 与带 sentinel 的 0040→0041→0040→0041 往返通过，临时库已删除。
+- 后续：按本轮要求未运行 Canonical、未 commit/push；Task 3.4 后续仍需执行 Canonical Goal 并写入正式完整 ID 关联链。
+
+## 2026-09-06 | Stage 3 Task 3.4 独立验收在并发 CreateRun 失败
+
+- 任务：不修改业务代码、不 commit/push，独立审查 research types/repository/migration/model，执行完整静态、迁移、真实 PostgreSQL、Canonical Goal 和正式 Repository 关联链门禁；任一失败新增 task/bug/log 后停止。
+- 操作：逐文件审查 Go research domain/repository、0041 Alembic migration、SQLAlchemy model 与专项测试；使用两个一次性 PostgreSQL 数据库分别执行空库 `upgrade head`，以及带既有 project 数据的 0040→0041、0041→0040→0041 往返；在主库执行 Alembic current/heads/check。随后并行启动 Go 全量 test/vet/build、Python lock/compileall/unittest、Frontend test/build/Knip 和格式/diff 门禁。
+- 结果：迁移门禁全部通过，主库保持唯一 current/head `20260906_0041` 且 Alembic 无差异。Go 全量测试在 `TestPostgresRepositoryConcurrentCreateRun` 失败：8 路完全相同的并发请求中至少一个返回 `research resource conflict: pk_research_runs`；新增 Task 3.4.1 / BUG-147 后停止。Task 3.4、Stage 3 Canonical/关联链与 commit/push 项保持未完成，未重启三服务，未运行 Canonical，未创建正式 Experiment/ResearchRun。
+- 验证：空库 upgrade 后三张 research 表齐全；带既有数据临时库 0040→0041 保留 sentinel，0041→0040 删除三张 research 表且保留既有数据，再升级恢复三表；临时库均已删除。Go vet/build、Python 88 passed/1 skipped、Frontend Vitest 9/9 与 production build、Go fmt、diff check、BUG 编号唯一性通过；Knip 因失败即停未执行。真实 PG 的 Research CRUD/CAS/完整链与 Append 幂等、hash/ordinal 冲突、批次回滚通过；独立间断专项未继续，并发 CreateRun 阻断总门禁。
+- 后续：修复 BUG-147 后从完整静态、迁移、真实 PostgreSQL 和 Canonical 门禁重新执行 Task 3.4；本轮不 commit/push。
+
+## 2026-09-06 | 完成 Stage 3 Task 3.1-3.3 / BUG-146
+
+- 任务：接管中断的 Stage 3 Research Persistence 草稿，逐文件审查后完成 Go domain/repository、三表迁移与 PostgreSQL adapter；补真实 PG 并发、冲突、回滚、CAS 和完整 ID 链测试；不执行 Task 3.4，不 commit/push。
+- 操作：保留并收敛现有 `internal/research`、0041 migration 和 SQLAlchemy mapping；为 Experiment/ResearchRun/Transition/RunMetrics 增加精确版本、状态、时间、JSON 大小和 nullable metric 校验；禁止 Transition 嵌入 transcript、完整 DSL、report 或截图，仅允许摘要、hash 和 artifact reference。Repository 覆盖 CRUD、状态 CAS、单调 links、metrics、幂等 append/list/delete；adapter 使用 run row lock 串行化 ordinal，并通过 AgentRun latest/approved Generation、Generation SHA、Batch execution job SHA、Execution job/batch/SHA 验证完整 ID 链。
+- 结果：Task 3.1-3.3 与 Stage 3 对应前七项 checklist 完成。`research_experiments`、`research_runs`、`research_transitions` 已具备 FK、unique、check 和查询索引；现有数据库升级到 `20260906_0041`。Task 3.4、Canonical Goal、commit/push 保持未完成。
+- 验证：真实 PostgreSQL 专项覆盖 CRUD、pending/running/completed/cancelled CAS、同状态 CAS 时间不漂移、并发 8 路 CreateRun、并发幂等 Append、hash/ordinal 冲突、批量 append 事务回滚、重复写入、完整/错误 ID 链和清理；`go test -race` 通过。现有库 0040→0041、临时空库全链 upgrade、临时库 0041→0040→0041 往返及 Alembic current/heads/check 通过，临时库已删除。Go 全量 test/vet/build、Python 88 passed/1 skipped、uv lock、compileall、Frontend Vitest 9/9、production build、Knip、diff check 均通过；research 测试数据清理后为 0/0/0 行。
+- 后续：Task 3.4 仍需执行 Canonical Goal 并写入真实完整关联链，再创建 `feat: add research persistence schema` 提交并推送；本轮明确不 commit/push。
+
 ## 2026-09-06 | Stage 2 最终交付
 
 - 任务：仅完成 Stage 2 提交前文档收口；确认 Task 2.1-2.3.4 与 Stage 2 checklist 除实际 commit/push 外均已完成，为主代理紧接着提交准备准确状态；不修改业务代码，不 commit/push。

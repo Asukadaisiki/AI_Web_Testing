@@ -439,6 +439,54 @@ func TestEncodeSSEEvent(t *testing.T) {
 	}
 }
 
+func TestToolResultRESTAndSSEPreserveCompleteVersionedPayload(t *testing.T) {
+	raw := json.RawMessage(`{
+		"url":"https://example.com",
+		"a11y_nodes":[
+			{"node_id":"e1","role":"button","name":"Login"},
+			{"node_id":"e2","role":"generic","name":"complete raw node"}
+		]
+	}`)
+	typed, err := agent.NewToolResultEventPayload("explore_page", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadBytes, _ := json.Marshal(typed)
+	var payload map[string]any
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatal(err)
+	}
+	event := agentservice.Event{
+		Seq: 12, Type: agentservice.EventToolResult, RunID: "run-1",
+		StepID: "step-1", ToolCallID: "call-1",
+		Timestamp: time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC),
+		Payload:   payload,
+	}
+	_, eventType, sseData, err := encodeSSEEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "tool.result" {
+		t.Fatalf("event type = %q", eventType)
+	}
+	restData, err := marshalEventList([]agentservice.Event{event})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rest struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(restData, &rest); err != nil {
+		t.Fatal(err)
+	}
+	if len(rest.Events) != 1 || !bytes.Equal(rest.Events[0], sseData) ||
+		!bytes.Contains(sseData, []byte(`"complete raw node"`)) ||
+		!bytes.Contains(sseData, []byte(`"content_sha256"`)) ||
+		!bytes.Contains(sseData, []byte(`"content_bytes"`)) {
+		t.Fatalf("REST/SSE tool result mismatch:\n%s\n%s", restData, sseData)
+	}
+}
+
 func TestResearchLLMCallRESTAndSSEAssociationContract(t *testing.T) {
 	tests := []struct {
 		name       string

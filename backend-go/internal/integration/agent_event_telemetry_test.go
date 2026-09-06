@@ -162,3 +162,65 @@ func TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay(t *testing.T) {
 		t.Fatalf("legacy event was rewritten: %#v", events[4])
 	}
 }
+
+func TestPostgresToolResultPreservesCompleteContentAndDigest(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	service := agentservice.NewService(agentservice.NewPostgresRepository(db))
+	run, err := service.StartRun(ctx, "tool-result-integration", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM agent_events WHERE run_id = $1`, run.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM agent_runs WHERE id = $1`, run.ID)
+	})
+
+	raw := json.RawMessage(`{
+		"url":"https://example.com",
+		"a11y_nodes":[
+			{"node_id":"e1","role":"button","name":"Keep complete"},
+			{"node_id":"e2","role":"generic","name":"Do not truncate in event"}
+		]
+	}`)
+	typedPayload, err := agent.NewToolResultEventPayload("explore_page", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(typedPayload)
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := service.RecordEvent(ctx, run, agentservice.Event{
+		Type: agentservice.EventToolResult, StepID: "step-tool",
+		ToolCallID: "call-tool", Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := service.ListEvents(ctx, run.ID, persisted.Seq-1)
+	if err != nil || len(replayed) != 1 {
+		t.Fatalf("replayed = %#v, error = %v", replayed, err)
+	}
+	event := replayed[0]
+	if event.Payload["schema_version"] != agent.ToolResultSchemaV1 ||
+		event.Payload["content_sha256"] != typedPayload.ContentSHA256 ||
+		event.Payload["content_bytes"] != float64(len(raw)) {
+		t.Fatalf("payload metadata = %#v", event.Payload)
+	}
+	content := event.Payload["content"].(map[string]any)
+	nodes := content["a11y_nodes"].([]any)
+	if len(nodes) != 2 ||
+		nodes[1].(map[string]any)["name"] != "Do not truncate in event" {
+		t.Fatalf("persisted content = %#v", content)
+	}
+}

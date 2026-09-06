@@ -48,6 +48,95 @@
 
 ## 问题记录
 
+## BUG-150 | 完整探索结果直接进入模型 transcript 导致 DeepSeek 大上下文断流
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 3 Task 3.4.2/3.4.3 后续分析
+- 描述：`explore_page` / `explore_flow` 的完整 A11y 结果同时写入 Agent Event 和模型 transcript，连续探索会令请求体膨胀到超大上下文；官方 DeepSeek 在已完成多轮探索后的请求中发生 HTTP 200 响应断流。
+- 复现步骤：
+  1. 执行包含多个页面状态和动作证据的官方 AgentRun。
+  2. 观察每个探索结果的完整 `a11y_nodes` 被反复序列化进后续模型请求。
+  3. 随上下文累积，模型响应在 HTTP 200 body 读取阶段中断。
+- 影响：已获取的完整浏览事实虽存在于运行内存，但模型调用因上下文体积失稳，无法可靠进入 DSL 生成；后续 Stage 4 也缺少明确的原始事件引用与摘要版本合同。
+- 根因：持久化事实与模型工作上下文共用同一份完整工具结果，没有原始事件和有界模型摘要的分层；缺少单条/累计预算、确定性去重、旧 revision 降级和请求序列化统计。
+- 处理：完整结果先以 `agent.tool_result.v1` 写入 Agent Event/PostgreSQL，保留完整 `content`、`content_sha256` 和 `content_bytes`，并由 `recordToolResult` 返回持久化 seq。模型 transcript 对探索工具只写 `agent.model_tool_summary.v1`，携带 source seq/raw hash/summary hash/policy version，确定性保留 URL、page state、revision、动作 status/target、target evidence、verified selectors、祖先/交互节点、failure 和 omission counters；单摘要目标 32 KiB、硬上限 64 KiB，累计约 160 KiB，旧同 URL/state revision 优先降为 reference-only。错误、pending 和非探索工具结果保持既有语义；请求 telemetry 增加序列化预算统计但不拒绝必要非探索消息。
+- 验证：Go 回归覆盖确定性、raw/summary SHA、UTF-8、32/64 KiB 边界、omission、累计预算/reference-only、Event 完整内容与 transcript 摘要、recoverable error/latestToolError、模型摘要证据到 GenerateDSL preflight、PostgreSQL 和 REST/SSE 一致性；Python 覆盖 flow action status/target。带真实 PostgreSQL 的 Go 全量与 race、vet/build，Python 88 passed/1 skipped、compileall、Alembic upgrade/current/heads/check、Frontend 9/9/build/Knip、gofmt/diff 均通过；官方中等工具调用返回 HTTP 200、`deepseek-v4-flash`、usage available、`success_tool`。按要求未运行 Canonical。
+- 最终复测：Project 502 / Run `run_5c20dba537a3799109213761` 从零完成 Canonical。5 条探索摘要逐条与完整 `tool.result` event 的 source seq、raw SHA 和原始字节数一致，summary SHA 重算一致；最大摘要 32,470 bytes、累计 148,529 bytes，均低于 64/160 KiB 上限。10 次 LLM input tokens 为 `3846, 14162, 26986, 38888, 48502, 61507, 89137, 89384, 89518, 133365`；探索摘要在 148,529 bytes 后保持平台，最后增长来自完整正式报告这一非探索必要消息，无重复 A11y 失控。Run 首批 passed、Oracle/SHA/VLM=0 均通过，状态保持 `fixed`。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-3-task-344--bug-150`
+
+## BUG-149 | LLM HTTP 200 响应读取或解码失败被误分类为非重试 HTTP 错误
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 3 Task 3.4.2 最终验收
+- 描述：改用 `deepseek/deepseek-v4-flash` 后，Canonical 前四次模型调用均以 HTTP 200 成功并返回有效 ToolCall；第五次调用收到 HTTP 200 后在响应读取或 JSON 解码阶段失败，adapter 却持久化 `category=http`、`code=http_200`，Run 以 `LLM provider returned HTTP 200` 直接失败。现有安全遥测无法进一步区分读取与解码分支。
+- 复现步骤：
+  1. 从完整静态、迁移和真实 PostgreSQL 门禁开始验收，再启动关闭 Vision 的 Browser API、Execution Worker 和 20-turn AgentService。
+  2. 以纯自然语言 Canonical Goal 创建 Project 340 / Session 45 / Run `run_ad7093eca3d3b65d7aa00f8f`。
+  3. 等待 Run 完成四次成功 LLM 调用和首页、搜索、详情、加购弹层、购物车探索；观察第五次 `research.llm_call`（seq=31）记录 HTTP 200、usage unavailable、`http/http_200`，随后 seq=32 为 `run.failed`。
+- 影响：Run 未生成 Generation、Batch 或 Execution，无法完成 Report/Oracle/SHA/VLM 验收，也不能创建正式 Experiment/ResearchRun/Transition；Task 3.4/3.4.2 与 Stage 3 Canonical checklist 保持未完成。
+- 根因：`doRequest` 在 HTTP 2xx 响应体读取或 JSON 解码失败时同时返回非空 status 和 error；`classifyCallError` 只要 status 非空就统一映射为 HTTP 错误，因此把 2xx 响应处理错误归类为 `http_200`，丢失真实错误类别，并按非重试错误立即终止 Run。
+- 处理：引入 `request/read/decode/invalid_response` 内部阶段错误和仅供非 2xx 使用的 provider HTTP 错误；响应体在 4 MiB+1 有界读取后显式关闭。读取或关闭阶段的 timeout、unexpected EOF、connection reset/pipe 按 `timeout/transport` 有界重试，完整 malformed JSON、超限响应、空 choices 和无效 tool-call envelope 按确定性 `response` 错误不重试。`ModelError` 的 cause 仅保留在 Go 错误链中，持久化遥测继续白名单化为稳定 category/code/retryable/http_status，不包含原始 body、secret 或 cause；已解码响应的 usage、model 和 provider request ID 在协议校验失败时仍保留。
+- 验证：`httptest` 和自定义 response body 覆盖 HTTP 200 截断 EOF 后重试成功、读取 timeout、读取/关闭 connection reset、malformed JSON 单次失败、超限单次失败、空 choices、无效 tool-call envelope、非 2xx JSON/plaintext、请求及读取阶段取消、body close、cause 链和 telemetry 脱敏。官方 endpoint 的最小文本调用与中等工具调用均返回 HTTP 200、`deepseek-v4-flash`、usage available，分类分别为 `success_text`、`success_tool`，未发现需要 DeepSeek 专用字段分支。带真实 PostgreSQL 的 Go 全量、Research PG 专项 10 轮、全量 race、vet/build，Python 88 passed/1 skipped、compileall、主库 Alembic upgrade/current/heads/check、空库全链升级、既有 sentinel 库 `0040→0041→0040→0041`、Frontend 9/9/build/Knip、gofmt 和 diff 门禁通过。按要求未运行完整 Canonical。
+- 最终复测：同一正式 Canonical 的 10 次 DeepSeek 调用均为 HTTP 200、usage available、retry=0，全部成功产生 ToolCall 或最终文本；`response_read_failed` 为 0，持久化 telemetry 的敏感字段键命中为 0，Run 正常完成，状态保持 `fixed`。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-3-task-343--bug-149`
+
+## BUG-148 | Canonical 首次模型调用连续返回 HTTP 503
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 3 Task 3.4 最终独立验收
+- 描述：完整静态、迁移和真实 PostgreSQL 门禁通过后，从零执行一次 Canonical Goal；AgentRun 的首次模型调用对 `unself/deepseek-v4-flash` 连续三次收到 HTTP 503，Run 随后直接进入 `failed`。
+- 复现步骤：
+  1. 重启 Browser API、Execution Worker 和 `AGENTSERVICE_MAX_TURNS=20` 的 AgentService，显式关闭 VLM。
+  2. 运行 `browser-worker/scripts/run_agentic_e2e.py` 提交纯自然语言 Canonical Goal。
+  3. 查询 Run `run_8ec1321e5933a7ea3b95ce65` 的事件 2、3、4，三个物理 attempt 均记录 `http_status=503`、`code=http_503` 和 `retryable=true`；事件 5 为 `run.failed`。
+- 影响：Project 246 / Session 40 未生成 Generation、Batch 或 Execution，无法创建并验证本次正式 ResearchRun 关联链和最小 Transition；Task 3.4 与 Stage 3 checklist 保持未完成。
+- 根因：直接失败原因为上游 LLM 网关在全部三次重试中返回 HTTP 503；尚无证据表明 Research Persistence 或本地 Browser/Execution 服务存在缺陷，网关不可用的上游原因待确认。
+- 处理：按失败即停规则停止验收并关闭三个服务；不修改业务代码，不创建 Experiment/ResearchRun，不勾选 Task 3.4 或 Stage 3 checklist。新增 Task 3.4.2，待网关恢复后从完整门禁重新验收。
+- 验证：主库、空库、既有数据和 `0041→0040→0041` 迁移及 Alembic check 通过；Go 全量/PG 专项重复 10 轮/race/vet/build、Python 88 passed/1 skipped、Frontend 9/9/build/Knip、compileall/gofmt/diff 门禁均通过；新增 BUG-148 编号未重复。失败结果保存在 `research/results/stage3-final-canonical-1.json`。
+- 复测：Task 3.4.2 于 2026-09-06 16:23 使用 Project 248 / Session 42 / 正式 AgentRun `run_a2cdc8f8eff2818a1295fde0` 执行最小自然语言健康探测；事件 2、3、4 分别为现有 adapter 的第 1/2/3 次物理请求，`retry_count=0/1/2`，均由 `unself/deepseek-v4-flash` 返回 `http_status=503`、`code=http_503`、`retryable=true`，事件 5 为 `run.failed`。Run 未生成或批准 Generation，research 三表仍为 0/0/0；按约定未执行完整门禁、Canonical 或正式研究关联链，BUG 保持 open。
+- 关闭验证：改用 `deepseek/deepseek-v4-flash` 后，Project 340 / Run `run_ad7093eca3d3b65d7aa00f8f` 的前四次模型调用均以 HTTP 200 成功返回有效 ToolCall，未发生 503 或重试，证明本缺陷的网关不可用条件已消失。该 Run 后续因独立的 BUG-149 失败，不改变 BUG-148 的 fixed 结论。
+- 关联记录：`docs/execution-log.md#2026-09-06--stage-3-最终独立验收被-llm-http-503-阻断`
+
+## BUG-147 | 并发相同 CreateRun 请求偶发命中主键冲突
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 3 Task 3.4 独立验收
+- 描述：真实 PostgreSQL 下 8 路并发提交完全相同的 ResearchRun 创建请求时，至少一个请求返回 `research resource conflict: pk_research_runs`，未按幂等合同返回已持久化的同一 Run。
+- 复现步骤：
+  1. 将主库迁移到 `20260906_0041`，设置 `TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing`。
+  2. 执行 `go test -count=1 -v ./...`。
+  3. 观察 `TestPostgresRepositoryConcurrentCreateRun` 在 8 路并发 `CreateRun` 中报告 `create research run: research resource conflict: pk_research_runs`。
+- 影响：调用方对同一创建请求执行并发重试时会收到冲突，Stage 3 要求的真实 PostgreSQL 并发幂等门禁失败；Task 3.4、Canonical Goal 和正式 ResearchRun 关联链验收均被阻断。
+- 根因：`CreateRun` 的 `INSERT` 仅使用 `ON CONFLICT (experiment_id, idempotency_key) DO NOTHING` 处理幂等唯一键；并发相同请求同时携带相同 Run ID 时，PostgreSQL 可先报告 `pk_research_runs`，从而绕过 identity 回读。原测试只有单轮 8 路，无法稳定覆盖该约束仲裁顺序。
+- 处理：`CreateRun` 显式使用 `READ COMMITTED` 事务，并对 identity、Run ID、experiment/repetition/warmup 三类唯一维度生成稳定 64 位 advisory key，按最终 key 排序后获取事务锁。锁内先按 identity 回读并比较不可变创建 payload；相同 payload 返回当前持久化 Run，不同 payload 返回 `ErrConflict`，其余主键和 repetition 冲突在插入前显式归因。插入仅保留已知三类约束的竞争兜底，未知 unique、锁超时和其他数据库错误原样传播。`research_runs.id` 为调用方提供的 varchar 主键且没有 PostgreSQL sequence，因此不执行无效的 sequence 修复；主键冲突回滚后可用正确 ID 重试。
+- 验证：真实 PostgreSQL 定向测试覆盖 20 轮 × 16 路相同 identity、高并发演进后同 payload/异 payload 混跑、主键与 repetition 冲突、冲突后重试、无 Run ID sequence、会话默认 repeatable read 下强制 READ COMMITTED、表锁超时传播和未知唯一索引错误传播；最终重复 10 轮通过。带 PG 的 Go 全量与全量 race、vet、build 通过；Python 88 passed/1 skipped、Frontend Vitest 9/9、build、Knip、compileall、BUG 编号和 diff check 通过。主库及空库/既有数据迁移门禁通过；按要求未执行 Canonical。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-3-task-341--bug-147`
+
+## BUG-146 | Research Persistence 草稿的版本、CAS 和 ID 链校验不完整
+
+- 日期：2026-09-06
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 3 Task 3.1-3.3 接管审查与真实 PostgreSQL 测试
+- 描述：中断草稿只检查版本字段非空，会接受未知 persistence/projector/metric/policy 版本；Run CAS 的同一参数同时参与 varchar 更新和文本 CASE 判断，真实 PostgreSQL 报 `SQLSTATE 42P08`；Run link 校验仅确认各记录属于同一 project，未证明 Batch/Execution 实际执行目标 Generation 的 canonical DSL。
+- 复现步骤：
+  1. 构造 `schema_version=research.persistence.v2` 的 ResearchRun，原校验返回成功。
+  2. 在 PostgreSQL 对 pending Run 执行 `pending -> running` CAS，观察参数 `$3` 类型推断冲突。
+  3. 创建同 project 下使用不同 DSL SHA 的 Batch，将其与目标 AgentRun/Generation 组合传给 `UpdateRunLinks`，原实现会接受该伪链。
+- 影响：未知 schema 数据可能进入研究库；状态迁移无法在真实 PG 执行；同 project 内不相关的 Generation、Batch、Execution 可被错误拼接，破坏实验因果链和后续 Trajectory 可信度。
+- 根因：草稿验证只做通用非空/同 project 检查，未按当前支持版本白名单校验，也未利用 `execution_jobs.dsl_sha256` 与 `test_case_runs.job_id/batch_id/dsl_sha256` 验证实际执行绑定；CAS SQL 缺少显式 text cast。
+- 处理：精确校验四类版本；补齐状态时间约束并让同状态 CAS 不改写时间；CAS 参数显式 cast。完整链校验新增 Generation canonical SHA、Batch job SHA、Execution job/batch/SHA 一致性；唯一/FK/check 错误映射为稳定领域错误；Transition 拒绝嵌入大对象并只保存摘要、hash 和 artifact reference。
+- 验证：真实 PG CRUD/CAS、完整/错误链、8 路并发 CreateRun、并发幂等 Append、hash/ordinal 冲突、事务回滚和 race 通过；现有库、空库、0041→0040→0041 迁移通过；全量 Go/Python/Alembic/Frontend 门禁通过。
+- 关联记录：`docs/execution-log.md#2026-09-06--完成-stage-3-task-31-33--bug-146`
+
 ## BUG-145 | Canonical 二次审批被驱动器错误判定为上一代未绑定
 
 - 日期：2026-09-06

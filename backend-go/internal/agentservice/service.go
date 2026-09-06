@@ -290,6 +290,7 @@ func (s *Service) RecordModelTelemetry(
 				RequestSHA256: limitString(record.Telemetry.Prompt.RequestSHA256, 64),
 				PromptSHA256:  limitString(record.Telemetry.Prompt.PromptSHA256, 64),
 				ToolsetSHA256: limitString(record.Telemetry.Prompt.ToolsetSHA256, 64),
+				RequestBudget: record.Telemetry.Prompt.RequestBudget,
 			},
 			Usage:                     usage,
 			FinishReason:              limitString(finishReason, 64),

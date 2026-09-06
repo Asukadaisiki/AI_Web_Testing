@@ -23,6 +23,48 @@ const (
 	maxResponseBytes   = 4 << 20
 )
 
+type callStage string
+
+const (
+	stageRequest         callStage = "request"
+	stageRead            callStage = "read"
+	stageDecode          callStage = "decode"
+	stageInvalidResponse callStage = "invalid_response"
+)
+
+var (
+	errResponseTooLarge = errors.New("LLM response exceeds size limit")
+	errNoChoices        = errors.New("LLM response has no choices")
+	errInvalidToolCall  = errors.New("LLM returned an invalid tool call")
+	errNoResponseOutput = errors.New("LLM response has no content or tool calls")
+)
+
+type callStageError struct {
+	stage callStage
+	cause error
+}
+
+func (e *callStageError) Error() string {
+	return fmt.Sprintf("LLM %s stage failed", e.stage)
+}
+
+func (e *callStageError) Unwrap() error {
+	return e.cause
+}
+
+type providerHTTPError struct {
+	status int
+	cause  error
+}
+
+func (e *providerHTTPError) Error() string {
+	return fmt.Sprintf("LLM provider returned HTTP %d", e.status)
+}
+
+func (e *providerHTTPError) Unwrap() error {
+	return e.cause
+}
+
 type OpenAIClient struct {
 	provider    string
 	baseURL     string
@@ -126,6 +168,7 @@ func (c *OpenAIClient) Complete(
 			RequestSHA256: sha256Hex(body),
 			PromptSHA256:  promptSHA(messages),
 			ToolsetSHA256: toolsetSHA(definitions),
+			RequestBudget: requestSerializationBudget(payload, body),
 		},
 		Usage: agent.ModelUsage{Status: agent.UsageUnavailable},
 	}
@@ -147,7 +190,7 @@ func (c *OpenAIClient) Complete(
 		}
 		decoded, status, requestID, started, callErr := c.doRequest(ctx, body)
 		if callErr != nil {
-			lastErr = classifyCallError(callErr, status)
+			lastErr = classifyCallError(callErr)
 			telemetry.Attempts = append(
 				telemetry.Attempts,
 				failedAttempt(attempt, started, status, requestID, lastErr),
@@ -164,9 +207,14 @@ func (c *OpenAIClient) Complete(
 			}
 			continue
 		}
+		telemetry.ResolvedModel = decoded.Model
+		telemetry.Usage = usageFromResponse(decoded.Usage)
 		result, parseErr := parseResponse(decoded)
 		if parseErr != nil {
-			lastErr = &agent.ModelError{Category: "response", Code: "invalid_response", Message: parseErr.Error()}
+			lastErr = classifyCallError(&callStageError{
+				stage: stageInvalidResponse,
+				cause: parseErr,
+			})
 			telemetry.Attempts = append(
 				telemetry.Attempts,
 				failedAttempt(attempt, started, status, requestID, lastErr),
@@ -177,9 +225,7 @@ func (c *OpenAIClient) Complete(
 			}
 			return agent.ModelResponse{}, lastErr
 		}
-		telemetry.ResolvedModel = decoded.Model
 		telemetry.FinishReason = decoded.Choices[0].FinishReason
-		telemetry.Usage = usageFromResponse(decoded.Usage)
 		telemetry.Attempts = append(telemetry.Attempts, agent.ModelAttempt{
 			Attempt: attempt, Status: "succeeded", StartedAt: started.UTC(),
 			LatencyMS: elapsedMillis(started), HTTPStatus: status,
@@ -223,6 +269,33 @@ func buildRequest(model string, messages []agent.Message, definitions []agent.To
 	return request
 }
 
+func requestSerializationBudget(
+	request chatRequest,
+	body []byte,
+) agent.RequestSerializationBudget {
+	messageBytes, _ := json.Marshal(request.Messages)
+	toolBytes, _ := json.Marshal(request.Tools)
+	budget := agent.RequestSerializationBudget{
+		RequestBytes:        len(body),
+		MessageBytes:        len(messageBytes),
+		ToolDefinitionBytes: len(toolBytes),
+	}
+	for _, message := range request.Messages {
+		if message.Role != "tool" {
+			continue
+		}
+		var envelope struct {
+			SchemaVersion string `json:"schema_version"`
+		}
+		if json.Unmarshal([]byte(message.Content), &envelope) == nil &&
+			envelope.SchemaVersion == agent.ModelToolSummarySchemaV1 {
+			budget.ExplorationSummaryBytes += len(message.Content)
+			budget.ExplorationSummaryCount++
+		}
+	}
+	return budget
+}
+
 func (c *OpenAIClient) doRequest(
 	ctx context.Context,
 	body []byte,
@@ -230,27 +303,39 @@ func (c *OpenAIClient) doRequest(
 	started := time.Now()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return chatResponse{}, nil, "", started, fmt.Errorf("create request: %w", err)
+		return chatResponse{}, nil, "", started, &callStageError{stage: stageRequest, cause: err}
 	}
 	request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return chatResponse{}, nil, "", started, err
+		return chatResponse{}, nil, "", started, &callStageError{stage: stageRequest, cause: err}
 	}
-	defer response.Body.Close()
 	status := response.StatusCode
 	requestID := firstNonEmpty(response.Header.Get("x-request-id"), response.Header.Get("request-id"))
-	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-	if readErr != nil {
-		return chatResponse{}, &status, requestID, started, readErr
-	}
+	responseBody, readErr := readAndCloseResponse(response.Body)
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return chatResponse{}, &status, requestID, started, fmt.Errorf("provider returned HTTP %d", status)
+		return chatResponse{}, &status, requestID, started, &providerHTTPError{
+			status: status,
+			cause:  readErr,
+		}
+	}
+	if readErr != nil {
+		stage := stageRead
+		if errors.Is(readErr, errResponseTooLarge) {
+			stage = stageInvalidResponse
+		}
+		return chatResponse{}, &status, requestID, started, &callStageError{
+			stage: stage,
+			cause: readErr,
+		}
 	}
 	var decoded chatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return chatResponse{}, &status, requestID, started, err
+		return chatResponse{}, &status, requestID, started, &callStageError{
+			stage: stageDecode,
+			cause: err,
+		}
 	}
 	if decoded.ID != "" {
 		requestID = decoded.ID
@@ -258,22 +343,32 @@ func (c *OpenAIClient) doRequest(
 	return decoded, &status, requestID, started, nil
 }
 
+func readAndCloseResponse(body io.ReadCloser) ([]byte, error) {
+	responseBody, readErr := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	closeErr := body.Close()
+	if len(responseBody) > maxResponseBytes {
+		responseBody = nil
+		readErr = errors.Join(errResponseTooLarge, readErr)
+	}
+	return responseBody, errors.Join(readErr, closeErr)
+}
+
 func parseResponse(decoded chatResponse) (agent.ModelResponse, error) {
 	if len(decoded.Choices) == 0 {
-		return agent.ModelResponse{}, errors.New("LLM response has no choices")
+		return agent.ModelResponse{}, errNoChoices
 	}
 	message := decoded.Choices[0].Message
 	result := agent.ModelResponse{Content: message.Content}
 	for _, call := range message.ToolCalls {
 		if call.ID == "" || call.Function.Name == "" {
-			return agent.ModelResponse{}, errors.New("LLM returned an invalid tool call")
+			return agent.ModelResponse{}, errInvalidToolCall
 		}
 		result.ToolCalls = append(result.ToolCalls, agent.ModelTool{
 			ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments,
 		})
 	}
 	if strings.TrimSpace(result.Content) == "" && len(result.ToolCalls) == 0 {
-		return agent.ModelResponse{}, errors.New("LLM response has no content or tool calls")
+		return agent.ModelResponse{}, errNoResponseOutput
 	}
 	return result, nil
 }
@@ -299,24 +394,82 @@ func usageFromResponse(usage *struct {
 	return result
 }
 
-func classifyCallError(err error, status *int) *agent.ModelError {
-	if status != nil {
-		retryable := *status == 408 || *status == 429 || *status == 500 ||
-			*status == 502 || *status == 503 || *status == 504
-		return &agent.ModelError{
-			Category: "http", Code: fmt.Sprintf("http_%d", *status),
-			Message: fmt.Sprintf("LLM provider returned HTTP %d", *status), Retryable: retryable,
-		}
+func classifyCallError(err error) *agent.ModelError {
+	var httpErr *providerHTTPError
+	if errors.As(err, &httpErr) {
+		retryable := httpErr.status == 408 || httpErr.status == 429 || httpErr.status == 500 ||
+			httpErr.status == 502 || httpErr.status == 503 || httpErr.status == 504
+		return agent.NewModelError(
+			"http",
+			fmt.Sprintf("http_%d", httpErr.status),
+			httpErr.Error(),
+			retryable,
+			err,
+		)
 	}
-	return classifyTransportError(err)
+	var stageErr *callStageError
+	if !errors.As(err, &stageErr) {
+		return classifyTransportError(err)
+	}
+	switch stageErr.stage {
+	case stageRequest:
+		return classifyTransportError(err)
+	case stageRead:
+		return classifyResponseReadError(err)
+	case stageDecode:
+		return agent.NewModelError(
+			"response", "response_decode_failed",
+			"LLM response JSON is invalid", false, err,
+		)
+	case stageInvalidResponse:
+		code := "invalid_response"
+		message := "LLM response is invalid"
+		if errors.Is(err, errResponseTooLarge) {
+			code = "response_too_large"
+			message = "LLM response exceeds size limit"
+		}
+		return agent.NewModelError("response", code, message, false, err)
+	default:
+		return classifyTransportError(err)
+	}
+}
+
+func classifyResponseReadError(err error) *agent.ModelError {
+	if errors.Is(err, context.Canceled) {
+		return agent.NewModelError(
+			"cancelled", "context_cancelled", "LLM request cancelled", false, err,
+		)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return agent.NewModelError(
+			"timeout", "response_read_timeout", "LLM response read timed out", true, err,
+		)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return agent.NewModelError(
+			"timeout", "response_read_timeout", "LLM response read timed out", true, err,
+		)
+	}
+	retryable := errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE)
+	return agent.NewModelError(
+		"transport", "response_read_failed",
+		"LLM response read failed", retryable, err,
+	)
 }
 
 func classifyTransportError(err error) *agent.ModelError {
 	if errors.Is(err, context.Canceled) {
-		return &agent.ModelError{Category: "cancelled", Code: "context_cancelled", Message: "LLM request cancelled"}
+		return agent.NewModelError(
+			"cancelled", "context_cancelled", "LLM request cancelled", false, err,
+		)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return &agent.ModelError{Category: "timeout", Code: "deadline_exceeded", Message: "LLM request timed out", Retryable: true}
+		return agent.NewModelError(
+			"timeout", "deadline_exceeded", "LLM request timed out", true, err,
+		)
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
@@ -326,16 +479,14 @@ func classifyTransportError(err error) *agent.ModelError {
 			errors.Is(err, syscall.ECONNRESET) ||
 			errors.Is(err, syscall.ECONNREFUSED) ||
 			errors.Is(err, syscall.EPIPE)
-		return &agent.ModelError{
-			Category: "transport", Code: "network_error",
-			Message: "LLM network request failed", Retryable: retryable,
-		}
+		return agent.NewModelError(
+			"transport", "network_error", "LLM network request failed", retryable, err,
+		)
 	}
 	retryable := errors.Is(err, io.ErrUnexpectedEOF)
-	return &agent.ModelError{
-		Category: "transport", Code: "request_failed",
-		Message: "LLM transport request failed", Retryable: retryable,
-	}
+	return agent.NewModelError(
+		"transport", "request_failed", "LLM transport request failed", retryable, err,
+	)
 }
 
 func failedAttempt(

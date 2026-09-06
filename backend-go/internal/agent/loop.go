@@ -87,6 +87,28 @@ func latestToolError(transcript []Message) string {
 		if message.Role != "tool" {
 			continue
 		}
+		if summary, ok := decodeModelToolSummary(message.Content); ok {
+			for _, failure := range summary.Failures {
+				if value := strings.TrimSpace(failure.Message); value != "" {
+					return value
+				}
+			}
+			for _, page := range summary.Pages {
+				if page.Failure != nil {
+					if value := strings.TrimSpace(page.Failure.Message); value != "" {
+						return value
+					}
+				}
+				for _, action := range page.Actions {
+					if action.Failure != nil {
+						if value := strings.TrimSpace(action.Failure.Message); value != "" {
+							return value
+						}
+					}
+				}
+			}
+			return ""
+		}
 		var result struct {
 			Status  string `json:"status"`
 			Message string `json:"message"`

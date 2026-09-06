@@ -1221,7 +1221,9 @@ def _collect_flow_a11y(
                 {
                     "step_index": step_index,
                     "action_index": action_index,
+                    "action": action_description.split(" ", 1)[0],
                     "action_description": action_description,
+                    "target": target,
                     "phase": phase,
                     "status": "success",
                     "url": snapshot_url,
@@ -1436,7 +1438,9 @@ def _collect_flow_a11y(
                                     {
                                         "step_index": step_i,
                                         "action_index": action_idx,
+                                        "action": act,
                                         "action_description": action_desc,
+                                        "target": target,
                                         "phase": "after",
                                         "status": "error",
                                         "failure": failure,

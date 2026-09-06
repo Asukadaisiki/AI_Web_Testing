@@ -160,22 +160,42 @@
 
 ## Stage 3：Research 数据模型
 
-- [ ] Task 3.1：定义 Go research domain types 和 repository interfaces。
-  - [ ] Experiment、ResearchRun、Transition、RunMetrics。
-  - [ ] schema/projector/metric/policy version 字段。
-- [ ] Task 3.2：新增兼容迁移。
-  - [ ] `research_experiments`
-  - [ ] `research_runs`
-  - [ ] `research_transitions`
-  - [ ] 外键、唯一约束和必要索引。
-- [ ] Task 3.3：实现 PostgreSQL adapters。
-  - [ ] CRUD、状态迁移、幂等 append。
-  - [ ] 不复制截图、完整 transcript 或报告大对象。
-- [ ] Task 3.4：验收、提交并推送 Stage 3。
-  - [ ] 空库 upgrade、现有库 upgrade、downgrade/upgrade。
-  - [ ] 真实 PostgreSQL 并发与唯一约束测试。
-  - [ ] Canonical Goal 通过并建立完整 ID 关联链。
-  - [ ] 提交信息：`feat: add research persistence schema`
+- [x] Task 3.1：定义 Go research domain types 和 repository interfaces。
+  - [x] Experiment、ResearchRun、Transition、RunMetrics。
+  - [x] schema/projector/metric/policy version 字段。
+- [x] Task 3.2：新增兼容迁移。
+  - [x] `research_experiments`
+  - [x] `research_runs`
+  - [x] `research_transitions`
+  - [x] 外键、唯一约束和必要索引。
+- [x] Task 3.3：实现 PostgreSQL adapters。
+  - [x] CRUD、状态迁移、幂等 append。
+  - [x] 不复制截图、完整 transcript 或报告大对象。
+- [x] Task 3.4：验收 Stage 3 并准备提交。
+  - [x] 空库 upgrade、现有库 upgrade、downgrade/upgrade。
+  - [x] 真实 PostgreSQL 并发与唯一约束测试。
+  - [x] Canonical Goal 通过并建立完整 ID 关联链。
+  - [x] 提交信息已准备：`feat: add research persistence schema`；按本轮要求未 commit/push。
+- [x] Task 3.4.1：修复并发相同请求创建 ResearchRun 的偶发主键冲突。
+  - [x] 相同 `id`、experiment 和 idempotency key 的并发 `CreateRun` 全部返回同一持久化 Run，不得暴露主键冲突。
+  - [x] 不得把不同请求的主键、幂等键或 repetition 唯一约束冲突误判为幂等成功。
+  - [x] 增加稳定高并发循环回归，并重新执行完整静态、迁移、真实 PostgreSQL 与 race 门禁。
+  - [x] 按本轮要求不执行 Canonical；Task 3.4 的 Canonical、正式关联链和提交推送保持未完成。
+- [x] Task 3.4.2：恢复 Canonical 验收使用的 LLM 网关并重新执行 Stage 3 最终验收。
+  - [x] 确认 `deepseek/deepseek-v4-flash` 不再在首次模型调用的全部重试中返回 HTTP 503。
+  - [x] 从完整静态、迁移和真实 PostgreSQL 门禁重新执行 Task 3.4。
+  - [x] Canonical Goal 通过后创建正式 Experiment/ResearchRun，绑定本次 AgentRun/Generation/Batch/Execution，写入并读取最小 Transition。
+- [x] Task 3.4.3：修复 LLM HTTP 200 响应读取/解码失败被误分类为 `http_200` 并直接终止 Run。
+  - [x] 区分非 2xx HTTP 错误、2xx 响应体读取/JSON 解码错误和已解码但无有效 choice/tool call 的协议错误，不得将 2xx 解码失败记录为 HTTP 错误。
+  - [x] 为 2xx malformed/truncated/oversized JSON 增加不保存原始响应或敏感字段的安全诊断和明确重试合同，并补齐 telemetry、重试与失败回归。
+  - [x] 完整静态、迁移、真实 PostgreSQL 门禁与官方 endpoint 最小/中等工具调用通过；按本轮要求不运行完整 Canonical，Task 3.4.2 的正式关联链验收保持未完成。
+- [x] Task 3.4.4：修复官方 DeepSeek 大上下文工具结果导致的响应断流。
+  - [x] 完整工具结果先以 `agent.tool_result.v1` 持久化到 Agent Event/PostgreSQL，保留 `content` 并增加原始 SHA-256 与字节数；`recordToolResult` 返回已持久化 event seq。
+  - [x] `explore_page` / `explore_flow` 的模型 transcript 改用确定性 `agent.model_tool_summary.v1`，记录 source seq、raw hash、summary hash 和 policy version，并保留 URL/page state/revision、动作状态/target、target evidence、verified selectors、祖先/交互节点、failure 与 omission counters。
+  - [x] 单摘要目标 32 KiB、硬上限 64 KiB，累计探索摘要约 160 KiB；超预算时优先将旧同 URL/state revision 降为 reference-only，错误、pending 与非探索工具结果保持既有语义。
+  - [x] 增加模型请求序列化预算统计但不拒绝非探索必要消息；GenerateDSL preflight 继续只接收模型实际提交的精简证据，Stage 4 可从完整 tool.result event 重建。
+  - [x] 确定性、SHA、UTF-8、限长、omission、Event 完整内容与 transcript 摘要、PostgreSQL/SSE、recoverable error/latestToolError 和 preflight 回归通过；完整静态门禁与官方中等工具调用通过，未运行 Canonical。
+  - [x] 最终 Canonical live 验收通过；5 条探索摘要最大 32,470 bytes、累计 148,529 bytes，10 次 LLM 调用无 `response_read_failed`。
 
 ## Stage 4：Trajectory Projector 与 Dataset Export
 

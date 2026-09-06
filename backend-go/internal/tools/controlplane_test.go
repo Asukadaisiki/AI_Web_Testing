@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	dslstore "github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
 )
 
@@ -28,6 +29,10 @@ func (preflightFailureBrowser) ExecuteBrowserCapability(
 
 type unboundPreflightBrowser struct{}
 
+type evidenceCapturingBrowser struct {
+	evidence map[string][]json.RawMessage
+}
+
 func (unboundPreflightBrowser) ExecuteBrowserCapability(
 	context.Context,
 	string,
@@ -42,6 +47,31 @@ func (unboundPreflightBrowser) ExecuteBrowserCapability(
 		"validation_mode":"dsl_case",
 		"case_digest":"wrong",
 		"evidence_digest":"wrong"
+	}`), nil
+}
+
+func (browser *evidenceCapturingBrowser) ExecuteBrowserCapability(
+	_ context.Context,
+	capability string,
+	_ int64,
+	_ int64,
+	_ string,
+	arguments json.RawMessage,
+) (json.RawMessage, error) {
+	if capability != "validate_page_elements" {
+		return nil, nil
+	}
+	var request struct {
+		Evidence map[string][]json.RawMessage `json:"a11y_nodes_by_state"`
+	}
+	if err := json.Unmarshal(arguments, &request); err != nil {
+		return nil, err
+	}
+	browser.evidence = request.Evidence
+	return json.RawMessage(`{
+		"dsl_case":{"name":"Summary Evidence","steps":[{"action":"click","target":"#login"}]},
+		"valid":false,
+		"warnings":["stop after evidence capture"]
 	}`), nil
 }
 
@@ -90,6 +120,58 @@ func TestGenerateDSLRejectsUnboundPreflightResult(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "not bound") {
 		t.Fatalf("GenerateDSL() error = %v, want binding error", err)
+	}
+}
+
+func TestGenerateDSLPreflightReceivesModelSubmittedSummaryEvidence(t *testing.T) {
+	raw := json.RawMessage(`{
+		"url":"https://example.com/login",
+		"page_state":"S0",
+		"element_count":2,
+		"a11y_nodes":[
+			{"node_id":"e1","role":"button","name":"Login","page_state":"S0","focusable":true,
+			 "verified_selectors":[{"strategy":"css","selector":"#login","source":"dom"}]},
+			{"node_id":"raw-only","role":"generic","name":"raw-only-node","page_state":"S0"}
+		]
+	}`)
+	modelContent, err := agent.BuildModelToolSummary("explore_page", raw, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary agent.ModelToolSummary
+	if err := json.Unmarshal([]byte(modelContent), &summary); err != nil {
+		t.Fatal(err)
+	}
+	submitted, err := json.Marshal(map[string]any{
+		"case": map[string]any{
+			"name": "Summary Evidence",
+			"steps": []map[string]any{{
+				"action": "click", "target": "#login",
+			}},
+		},
+		"a11y_nodes_by_state": map[string]any{
+			"S0": summary.Pages[0].A11yNodes,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := &evidenceCapturingBrowser{}
+	capabilities := NewControlPlaneCapabilities(
+		dslstore.NewStore(nil),
+		nil,
+		nil,
+		browser,
+	)
+	_, err = capabilities.GenerateDSL(context.Background(), 1, 1, "1", submitted)
+	if err == nil || !strings.Contains(err.Error(), "stop after evidence capture") {
+		t.Fatalf("GenerateDSL() error = %v", err)
+	}
+	nodes := browser.evidence["S0"]
+	if len(nodes) != 1 ||
+		!strings.Contains(string(nodes[0]), `"selector":"#login"`) ||
+		strings.Contains(string(nodes[0]), "raw-only-node") {
+		t.Fatalf("preflight evidence = %s", nodes)
 	}
 }
 
