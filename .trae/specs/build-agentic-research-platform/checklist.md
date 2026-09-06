@@ -66,7 +66,7 @@
 - [x] Research Run 可关联 AgentRun、Generation、Batch 和 Execution。
 - [x] 完整工具结果持久化可回放，模型仅接收可追溯、有界的确定性探索摘要。
 - [x] Canonical Goal 通过并写入关联链。
-- [x] Stage 3 已完成提交前验收；主代理随后 commit 并 push。
+- [x] Stage 3 已 commit 并 push：`4508167`。
 
 ## Stage 4：Trajectory 与 Dataset
 
@@ -78,7 +78,7 @@
 - [x] 重复投影结果一致。
 - [x] JSONL 导出顺序稳定并通过 Schema 校验。
 - [x] Canonical Goal 连续 3 次通过且可完整回放。
-- [x] Stage 4 已完成提交前验收；按本轮要求未 commit/push。
+- [x] Stage 4 已 commit 并 push：`f98f20f`。
 
 ## Stage 5：Metrics 与实验编排
 

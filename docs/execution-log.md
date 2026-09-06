@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-07 | Stage 4 提交并停止后续阶段
+
+- 任务：完成 Stage 4 后提交并推送，按用户要求不进入 Stage 5。
+- 操作：核对同一 Experiment 的三次 Canonical、逐 Run A/B/删除重建/C 投影导出、实验级 JSONL、Schema 与安全检查；确认本地 DeepSeek API key 未进入跟踪文件。
+- 结果：Stage 3 已提交为 `4508167 feat: add research persistence schema`；Stage 4 已提交为 `f98f20f feat: project and export agent trajectories`，均已同步 `origin/main`。
+- 验证：Stage 4 三次 Canonical 均首批通过；Transition 为 30/26/31 行；实验导出 87 行，SHA-256 为 `baf75bf13aa60affc8e8ee7f321ec6646159c8e88acbd2d1ad42ef23d03aff0e`；工作区与远端一致。
+- 后续：按用户要求停止，不执行 Stage 5。
+
 ## 2026-09-06 | 完成 Stage 4 Task 4.4 提交前验收
 
 - 任务：只完成 Stage 4 最终验收和提交前收口，不进入 Stage 5、不修改业务代码、不 commit/push；复核中断点 repetition0，并在同一 Experiment 下完成 repetition1/2 的 clean-context Canonical、投影重建、逐行 Schema/安全和实验级稳定导出。

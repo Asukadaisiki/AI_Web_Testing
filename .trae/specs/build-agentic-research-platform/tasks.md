@@ -171,11 +171,11 @@
 - [x] Task 3.3：实现 PostgreSQL adapters。
   - [x] CRUD、状态迁移、幂等 append。
   - [x] 不复制截图、完整 transcript 或报告大对象。
-- [x] Task 3.4：验收 Stage 3 并准备提交。
+- [x] Task 3.4：验收、提交并推送 Stage 3。
   - [x] 空库 upgrade、现有库 upgrade、downgrade/upgrade。
   - [x] 真实 PostgreSQL 并发与唯一约束测试。
   - [x] Canonical Goal 通过并建立完整 ID 关联链。
-  - [x] 提交信息已准备：`feat: add research persistence schema`；按本轮要求未 commit/push。
+  - [x] 已提交并推送：`4508167 feat: add research persistence schema`。
 - [x] Task 3.4.1：修复并发相同请求创建 ResearchRun 的偶发主键冲突。
   - [x] 相同 `id`、experiment 和 idempotency key 的并发 `CreateRun` 全部返回同一持久化 Run，不得暴露主键冲突。
   - [x] 不得把不同请求的主键、幂等键或 repetition 唯一约束冲突误判为幂等成功。
@@ -212,12 +212,12 @@
   - [x] Run/Experiment 导出支持分页、稳定排序、repeatable-read snapshot、原子文件替换和 stdout。
   - [x] Draft 2020-12 JSON Schema、Exporter DTO、golden、artifact 排序与 content hash 一致。
   - [x] `research-export --help` 可用；真实 Stage 3 Run 两次导出 26 行且逐字节一致，每行通过 Schema 与 Go 语义校验。
-- [x] Task 4.4：验收 Stage 4 并准备提交。
+- [x] Task 4.4：验收、提交并推送 Stage 4。
   - [x] Canonical Goal 连续 3 次通过。
   - [x] 从 seq=0 完整回放。
   - [x] 重复投影结果逐字节一致，无重复 ordinal。
   - [x] JSONL 每行通过 Schema 校验。
-  - [x] 提交信息已准备：`feat: project and export agent trajectories`；按本轮要求未 commit/push。
+  - [x] 已提交并推送：`f98f20f feat: project and export agent trajectories`。
 
 ## Stage 5：Metrics 与实验控制面
 
