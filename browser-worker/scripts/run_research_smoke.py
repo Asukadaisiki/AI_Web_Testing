@@ -16,9 +16,9 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.runners.playwright_runner import execute_case_with_playwright
-from app.schemas.dsl import DSLCase
-from app.schemas.executions import StepExecutionEvidence
+from browser_worker.runners.playwright_runner import execute_case_with_playwright
+from browser_worker.contracts.dsl import DSLCase
+from browser_worker.contracts.executions import StepExecutionEvidence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

@@ -8,12 +8,12 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.ai.locator_preflight import apply_preflight_to_dsl_by_state
-from app.schemas.action_ir import (
+from browser_worker.exploration.locator_preflight import apply_preflight_to_dsl_by_state
+from browser_worker.contracts.action_ir import (
     EXECUTABLE_CANDIDATE_STRATEGIES,
     validate_research_dsl,
 )
-from app.schemas.dsl import DSLCase, load_canonical_dsl
+from browser_worker.contracts.dsl import DSLCase, load_canonical_dsl
 
 
 FIXTURE_PATH = (

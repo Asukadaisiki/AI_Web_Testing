@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.ai.page_explorer import (
+from browser_worker.exploration.page_explorer import (
     BrowserSessionManager,
     _collect_flow_a11y,
     _collect_dom_interactive_supplement,
@@ -13,7 +13,7 @@ from app.ai.page_explorer import (
     _same_document_url,
     _wait_for_flow_target,
 )
-from app.runners.click_preprocessor import ClickPrecheckResult
+from browser_worker.runners.click_preprocessor import ClickPrecheckResult
 
 
 class _PartiallyInitializedPlaywright:
@@ -191,7 +191,7 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "app.ai.page_explorer.collect_a11y_nodes",
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
                 return_value=[],
             ),
         ):
@@ -244,7 +244,7 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         BrowserSessionManager._runtime_browser = None
 
         with patch(
-            "app.ai.page_explorer.sync_playwright",
+            "browser_worker.exploration.page_explorer.sync_playwright",
             return_value=manager,
         ):
             with self.assertRaisesRegex(RuntimeError, "startup failed"):
@@ -260,8 +260,8 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         context.new_page.return_value = page
 
         with (
-            patch("app.ai.page_explorer.sync_playwright", return_value=pw),
-            patch("app.ai.page_explorer.collect_a11y_nodes", return_value=[]),
+            patch("browser_worker.exploration.page_explorer.sync_playwright", return_value=pw),
+            patch("browser_worker.exploration.page_explorer.collect_a11y_nodes", return_value=[]),
         ):
             _collect_flow_a11y([{"url": page.url}])
 
@@ -282,9 +282,9 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         pw.__exit__.side_effect = RuntimeError("playwright exit failed")
 
         with (
-            patch("app.ai.page_explorer.sync_playwright", return_value=pw),
+            patch("browser_worker.exploration.page_explorer.sync_playwright", return_value=pw),
             patch(
-                "app.ai.page_explorer.collect_a11y_nodes",
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
                 side_effect=RuntimeError("collection failed"),
             ),
         ):
@@ -306,8 +306,8 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 "get_or_create_context",
                 return_value=(context, page),
             ),
-            patch("app.ai.page_explorer.sync_playwright", return_value=pw),
-            patch("app.ai.page_explorer.collect_a11y_nodes", return_value=[]),
+            patch("browser_worker.exploration.page_explorer.sync_playwright", return_value=pw),
+            patch("browser_worker.exploration.page_explorer.collect_a11y_nodes", return_value=[]),
         ):
             _collect_flow_a11y([{"url": page.url}], session_id=7)
 
@@ -323,7 +323,7 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "app.ai.page_explorer.collect_a11y_nodes",
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
                 return_value=[{"node_id": "current", "role": "heading", "name": "Cart"}],
             ),
         ):
@@ -346,11 +346,11 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "app.ai.page_explorer._resolve_flow_action_locator",
+                "browser_worker.exploration.page_explorer._resolve_flow_action_locator",
                 return_value=None,
             ),
             patch(
-                "app.ai.page_explorer.collect_a11y_nodes",
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
                 return_value=[{"node_id": "current", "role": "heading", "name": "Cart"}],
             ),
         ):
@@ -530,15 +530,15 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "app.ai.page_explorer._resolve_flow_action_locator",
+                "browser_worker.exploration.page_explorer._resolve_flow_action_locator",
                 return_value=_FlowLocator(page.calls),
             ),
             patch(
-                "app.runners.click_preprocessor.click_with_precheck",
+                "browser_worker.runners.click_preprocessor.click_with_precheck",
                 side_effect=click,
             ),
             patch(
-                "app.ai.page_explorer.collect_a11y_nodes",
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
                 return_value=[{"node_id": "current", "role": "link", "name": "Details"}],
             ),
         ):
@@ -590,14 +590,14 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "app.ai.page_explorer._resolve_flow_action_locator",
+                "browser_worker.exploration.page_explorer._resolve_flow_action_locator",
                 return_value=_FlowLocator(page.calls),
             ),
             patch(
-                "app.runners.click_preprocessor.click_with_precheck",
+                "browser_worker.runners.click_preprocessor.click_with_precheck",
                 side_effect=click,
             ),
-            patch("app.ai.page_explorer.collect_a11y_nodes", side_effect=collect),
+            patch("browser_worker.exploration.page_explorer.collect_a11y_nodes", side_effect=collect),
         ):
             result = _collect_flow_a11y(
                 [{"actions": [{"action": "click", "target": "Details"}]}],
@@ -644,7 +644,7 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 "get_or_create_context",
                 return_value=(object(), page),
             ),
-            patch("app.ai.page_explorer.collect_a11y_nodes", side_effect=collect),
+            patch("browser_worker.exploration.page_explorer.collect_a11y_nodes", side_effect=collect),
         ):
             result = _collect_flow_a11y(
                 [{"actions": [{"action": "wait_for", "target": "Ready"}]}],

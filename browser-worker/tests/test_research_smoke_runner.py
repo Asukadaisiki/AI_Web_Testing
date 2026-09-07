@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.schemas.executions import StepExecutionEvidence
+from browser_worker.contracts.executions import StepExecutionEvidence
 from scripts.run_research_smoke import load_goal, run_goal
 
 

@@ -4,8 +4,8 @@ import unittest
 
 from fastapi.routing import APIRoute
 
-from app.api.router import build_api_router
-from app.api.routes.artifacts import router as artifacts_router
+from browser_worker.server.router import build_api_router
+from browser_worker.server.routes.artifacts import router as artifacts_router
 
 
 class RouterTest(unittest.TestCase):

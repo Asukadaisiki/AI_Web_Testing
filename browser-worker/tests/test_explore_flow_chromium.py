@@ -11,8 +11,8 @@ import unittest
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
-from app.ai.page_explorer import BrowserSessionManager, _collect_flow_a11y
-from app.application.browser.service import (
+from browser_worker.exploration.page_explorer import BrowserSessionManager, _collect_flow_a11y
+from browser_worker.capabilities.browser_capabilities import (
     execute_browser_capability,
     shutdown_browser_capabilities,
 )
@@ -201,7 +201,7 @@ class ExploreFlowChromiumTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch(
-                "app.application.browser.service._storage_state_path",
+                "browser_worker.capabilities.browser_capabilities._storage_state_path",
                 return_value=str(storage_state_path),
             ):
                 normal = execute_browser_capability(

@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-07 | 重命名 Browser Worker Python 包结构
+
+- 任务：回应 `app/` 目录语义不清的问题，重新设计 Browser Worker 为更容易阅读的项目结构。
+- 操作：将 `browser-worker/app` 改为领域包 `browser_worker`；按阅读路径拆分为 `server/`、`capabilities/`、`exploration/`、`contracts/`、`runners/`、`locators/`、`reporting/`、`runtime/`；同步所有 Python import、mock patch 路径、`browser-worker-dev` 入口、Docker/compose 启动命令、研究代码快照 owner root 和架构文档；新增 `browser_worker/README.md` 解释目录职责。
+- 结果：Browser Worker 入口、协议、浏览器能力、探索、执行、定位、报告和运行时基础设施的边界更直观；源码中不再使用无语义的 `app.*` 包路径。
+- 验证：`cd browser-worker && uv run python -m unittest discover -s tests -v` 通过（150 passed / 2 skipped）；`cd browser-worker && uv run python -m compileall -q browser_worker tests scripts` 通过；`cd browser-worker && uv run python -c "from browser_worker.server.main import create_app; app = create_app(); print(len(app.routes))"` 输出 9；`git diff --check` 通过。
+- 后续：如需要继续压缩阅读成本，可再把 `page_explorer.py` 和 `playwright_runner.py` 两个大文件拆成更小的按职责文件。
+
 ## 2026-09-07 | 同步 Browser Worker 收敛变更到 GitHub
 
 - 任务：将已完成并验证的 Browser Worker 去后端化收敛变更同步到 GitHub。

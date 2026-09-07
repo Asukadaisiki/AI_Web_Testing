@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.application.browser.execution import execute_browser_case
-from app.schemas.browser_executions import BrowserExecutionRequest
-from app.schemas.executions import StepExecutionEvidence
+from browser_worker.capabilities.browser_execution import execute_browser_case
+from browser_worker.contracts.browser_executions import BrowserExecutionRequest
+from browser_worker.contracts.executions import StepExecutionEvidence
 
 
 class BrowserExecutionRPCTest(unittest.TestCase):
@@ -34,7 +34,7 @@ class BrowserExecutionRPCTest(unittest.TestCase):
             screenshot_path="artifacts/executions/88/step-01.png",
         )
         with patch(
-            "app.application.browser.execution.execute_case_with_playwright",
+            "browser_worker.capabilities.browser_execution.execute_case_with_playwright",
             return_value=[step],
         ) as runner:
             result = execute_browser_case(

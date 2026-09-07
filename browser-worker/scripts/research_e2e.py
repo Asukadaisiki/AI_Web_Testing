@@ -87,7 +87,7 @@ CODE_SNAPSHOT_SOURCE_ROOTS = (
     "backend-go/internal/research/",
     "backend-go/internal/tools/",
     "backend-go/internal/transport/http/",
-    "browser-worker/app/",
+    "browser-worker/browser_worker/",
 )
 CODE_SNAPSHOT_IGNORED_PARTS = {
     "__pycache__",

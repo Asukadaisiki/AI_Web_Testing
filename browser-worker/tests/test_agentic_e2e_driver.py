@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.runners.playwright_runner import _attach_final_dom_snapshot
-from app.schemas.executions import StepExecutionEvidence
+from browser_worker.runners.playwright_runner import _attach_final_dom_snapshot
+from browser_worker.contracts.executions import StepExecutionEvidence
 from scripts.run_agentic_e2e import (
     AgenticE2EError,
     CANONICAL_GOAL,

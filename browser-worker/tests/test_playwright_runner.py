@@ -6,17 +6,17 @@ from unittest.mock import patch
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from app.runners.click_preprocessor import ClickPrecheckResult
-from app.runners.playwright_runner import (
+from browser_worker.runners.click_preprocessor import ClickPrecheckResult
+from browser_worker.runners.playwright_runner import (
     RunnerExecutionError,
     StepStreamEvent,
     _execute_non_target_step,
     _execute_step_with_candidates,
     execute_case_with_playwright,
 )
-from app.schemas.action_ir import validate_research_dsl
-from app.schemas.dsl import DSLCase
-from app.schemas.executions import StepExecutionEvidence
+from browser_worker.contracts.action_ir import validate_research_dsl
+from browser_worker.contracts.dsl import DSLCase
+from browser_worker.contracts.executions import StepExecutionEvidence
 
 
 class _Locator:
@@ -156,7 +156,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
             return expected
 
         with patch(
-            "app.runners.playwright_runner.execute_case_with_playwright_streaming",
+            "browser_worker.runners.playwright_runner.execute_case_with_playwright_streaming",
             side_effect=stream,
         ):
             actual = execute_case_with_playwright(
@@ -210,7 +210,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
             return ClickPrecheckResult(succeeded=True)
 
         with patch(
-            "app.runners.playwright_runner.click_with_precheck",
+            "browser_worker.runners.playwright_runner.click_with_precheck",
             side_effect=click,
         ):
             evidence = _execute_step_with_candidates(page, case.steps[0], 0)
@@ -264,7 +264,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
 
         with (
             patch(
-                "app.runners.playwright_runner.click_with_precheck",
+                "browser_worker.runners.playwright_runner.click_with_precheck",
                 side_effect=click,
             ),
             self.assertRaises(RunnerExecutionError) as raised,
@@ -459,7 +459,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
         )
 
         with (
-            patch("app.runners.playwright_runner.click_with_precheck") as click,
+            patch("browser_worker.runners.playwright_runner.click_with_precheck") as click,
             self.assertRaises(RunnerExecutionError) as raised,
         ):
             _execute_step_with_candidates(page, case.steps[0], 0)
@@ -500,7 +500,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
 
         with (
             patch(
-                "app.runners.playwright_runner.click_with_precheck",
+                "browser_worker.runners.playwright_runner.click_with_precheck",
                 side_effect=RuntimeError("connection lost after dispatch"),
             ) as click,
             self.assertRaises(RunnerExecutionError) as raised,
@@ -543,7 +543,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
         )
 
         with (
-            patch("app.runners.playwright_runner.click_with_precheck") as click,
+            patch("browser_worker.runners.playwright_runner.click_with_precheck") as click,
             self.assertRaises(RunnerExecutionError) as raised,
         ):
             _execute_step_with_candidates(page, case.steps[0], 0)
@@ -610,7 +610,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
             return ClickPrecheckResult(succeeded=True)
 
         with patch(
-            "app.runners.playwright_runner.click_with_precheck",
+            "browser_worker.runners.playwright_runner.click_with_precheck",
             side_effect=click,
         ):
             evidence = _execute_step_with_candidates(page, case.steps[0], 0)

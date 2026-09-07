@@ -6,8 +6,8 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.schemas.executions import AgentEventReference, ExecutionReport, FailureSignal
-from app.services.failure_signals import build_failure_signal
+from browser_worker.contracts.executions import AgentEventReference, ExecutionReport, FailureSignal
+from browser_worker.reporting.failure_signals import build_failure_signal
 
 
 FIXTURE_PATH = Path(__file__).parents[2] / "testdata" / "failure_signal_contract.json"

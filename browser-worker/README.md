@@ -16,6 +16,20 @@ Agent 决策、项目/会话归属校验和官方报告查询均由 Go AgentServ
 - Playwright Runner、基础 Locator 与结构化执行报告
 - 接收 Go 已裁决的 Browser context（如 `clean_context`、`entry_url_or_page`）
 
+## 目录结构
+
+```text
+browser_worker/
+  server/        FastAPI 入口、路由和 HTTP 适配
+  capabilities/  Go 调用的浏览器能力与无状态执行 RPC
+  exploration/   页面探索、A11y 采集、locator preflight、VLM prompt
+  runners/       Playwright DSL 执行器
+  locators/      元素定位和修正协议
+  reporting/     执行报告和 failure signal
+  contracts/     Pydantic 请求、响应和运行时数据合同
+  runtime/       配置、日志和中间件
+```
+
 ## 当前未完成
 
 - 更完整的 AI 接入层治理（模型管理、prompt 调优、审计与回放）
@@ -42,9 +56,9 @@ Agent 决策、项目/会话归属校验和官方报告查询均由 Go AgentServ
 
 - Runner 能正常执行真实页面
 - 执行详情中的 `latest_url` 与步骤证据是否完整
-- `GET /api/v1/executions/overview`、`GET /api/v1/executions`、`GET /api/v1/executions/{id}` 三处口径是否一致
+- `GET /api/v2/executions/overview`、`GET /api/v2/executions`、`GET /api/v2/executions/{id}` 三处口径是否一致
 - 仪表盘与报告中心读取 `overview` 聚合字段时，趋势、失败动作、高频失败用例、上一窗口对比和失败根因是否与明细一致
-- `GET /api/v1/executions?failure_fingerprint=...` 是否能承接报告中心根因榜回流筛选
+- `GET /api/v2/executions?failure_fingerprint=...` 是否能承接报告中心根因榜回流筛选
 
 ## 后端落地顺序
 

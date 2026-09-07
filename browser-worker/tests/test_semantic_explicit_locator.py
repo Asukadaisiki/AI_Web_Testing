@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.locators.semantic import _resolve_explicit_locator
+from browser_worker.locators.semantic import _resolve_explicit_locator
 
 
 class FakePage:

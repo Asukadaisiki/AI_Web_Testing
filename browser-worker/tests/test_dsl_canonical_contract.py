@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from app.application.browser.execution import execute_browser_case
-from app.schemas.dsl import DSLCase, load_canonical_dsl
-from app.schemas.browser_executions import BrowserExecutionRequest
-from app.schemas.executions import ExecutionReport, StepExecutionEvidence
+from browser_worker.capabilities.browser_execution import execute_browser_case
+from browser_worker.contracts.dsl import DSLCase, load_canonical_dsl
+from browser_worker.contracts.browser_executions import BrowserExecutionRequest
+from browser_worker.contracts.executions import ExecutionReport, StepExecutionEvidence
 
 
 FIXTURE_PATH = Path(__file__).parents[2] / "testdata" / "dsl_canonical_contract.json"
@@ -122,7 +122,7 @@ class DSLCanonicalContractTests(unittest.TestCase):
         fixture = json.loads(FIXTURE_PATH.read_text())
         payload = json.loads(fixture["canonical_json"])
         with patch(
-            "app.application.browser.execution.execute_case_with_playwright",
+            "browser_worker.capabilities.browser_execution.execute_case_with_playwright",
             return_value=[
                 StepExecutionEvidence(
                     step_index=0,
@@ -148,7 +148,7 @@ class DSLCanonicalContractTests(unittest.TestCase):
         fixture = json.loads(RESEARCH_FIXTURE_PATH.read_text())
         payload = json.loads(fixture["canonical_json"])
         with patch(
-            "app.application.browser.execution.execute_case_with_playwright",
+            "browser_worker.capabilities.browser_execution.execute_case_with_playwright",
             return_value=[
                 StepExecutionEvidence(
                     step_index=0,

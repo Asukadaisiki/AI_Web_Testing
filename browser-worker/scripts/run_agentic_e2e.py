@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.schemas.dsl import (
+from browser_worker.contracts.dsl import (
     DSL_CANONICAL_VERSION_V1,
     DSL_CANONICAL_VERSION_V2,
     validate_dsl_case,

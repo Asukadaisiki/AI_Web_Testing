@@ -63,7 +63,7 @@ services:
     <<: *browser-worker-service
     command:
       - uvicorn
-      - app.main:create_app
+      - browser_worker.server.main:create_app
       - --factory
       - --host
       - 0.0.0.0

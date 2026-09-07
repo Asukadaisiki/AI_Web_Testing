@@ -12,9 +12,9 @@ from unittest.mock import patch
 from fastapi import FastAPI
 import uvicorn
 
-from app.ai.page_explorer import BrowserSessionManager
-from app.api.router import build_api_router
-from app.application.browser.service import (
+from browser_worker.exploration.page_explorer import BrowserSessionManager
+from browser_worker.server.router import build_api_router
+from browser_worker.capabilities.browser_capabilities import (
     _BrowserCapabilityRuntime,
     shutdown_browser_capabilities,
 )
@@ -112,15 +112,15 @@ class BrowserCapabilityHTTPTest(unittest.TestCase):
         app.include_router(build_api_router())
 
         self.playwright_patch = patch(
-            "app.ai.page_explorer.sync_playwright",
+            "browser_worker.exploration.page_explorer.sync_playwright",
             side_effect=lambda: _FakePlaywrightContext(self.calls),
         )
         self.nodes_patch = patch(
-            "app.ai.page_explorer.collect_a11y_nodes",
+            "browser_worker.exploration.page_explorer.collect_a11y_nodes",
             return_value=[],
         )
         self.service_nodes_patch = patch(
-            "app.application.browser.service.collect_a11y_nodes",
+            "browser_worker.capabilities.browser_capabilities.collect_a11y_nodes",
             return_value=[],
         )
         self.playwright_patch.start()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.application.browser.service import (
+from browser_worker.capabilities.browser_capabilities import (
     _BrowserCapabilityRuntime,
     execute_browser_capability,
 )
@@ -23,11 +23,11 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                 side_effect=lambda operation: operation(),
             ),
             patch(
-                "app.application.browser.service._storage_state_path",
+                "browser_worker.capabilities.browser_capabilities._storage_state_path",
                 return_value="/tmp/project-7-state.json",
             ),
             patch(
-                "app.application.browser.service._collect_flow_a11y",
+                "browser_worker.capabilities.browser_capabilities._collect_flow_a11y",
                 return_value=[],
             ) as collect_flow,
         ):
@@ -116,15 +116,15 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                 side_effect=lambda operation: operation(),
             ),
             patch(
-                "app.application.browser.service._storage_state_path",
+                "browser_worker.capabilities.browser_capabilities._storage_state_path",
             ) as storage_state_path,
             patch(
-                "app.application.browser.service."
+                "browser_worker.capabilities.browser_capabilities."
                 "BrowserSessionManager.get_or_create_context",
                 return_value=(MagicMock(), page),
             ) as get_context,
             patch(
-                "app.application.browser.service.collect_a11y_nodes",
+                "browser_worker.capabilities.browser_capabilities.collect_a11y_nodes",
                 return_value=[],
             ),
         ):

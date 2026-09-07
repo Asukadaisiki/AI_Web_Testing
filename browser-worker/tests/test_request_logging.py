@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from app.core.request_logging import _format_json_body, _redact_sensitive
+from browser_worker.runtime.request_logging import _format_json_body, _redact_sensitive
 
 
 class RequestLoggingRedactionTest(unittest.TestCase):
