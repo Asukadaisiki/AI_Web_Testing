@@ -56,6 +56,22 @@
 
 ## 任务记录
 
+## 2026-09-07 | Stage 6 Action IR 非 live checkpoint
+
+- 任务：按用户要求先完成并推送 Stage 6 implementation checkpoint，暂停真实 E2E 和官方模型调用。
+- 操作：收口 research-v1 Action IR，覆盖 Intent、Target、Preconditions、Postconditions、Idempotency/side-effect、Go/Python canonical v2 合同、legacy-v1 兼容、ResearchRun/Execution profile 传递、非幂等执行租约、provider evidence 投影和官方调用审计字段；修复无 accessible name 但有 verified selector 的 locator preflight 崩溃；将 live E2E 验收改为 BUG-155 成本控制完成后的延期项。
+- 结果：Stage 6 代码达到非 live checkpoint；真实 provider E2E 未执行且未标记通过。新增 BUG-156 记录无名节点 preflight 修复，BUG-155 继续跟踪成本熔断方案。
+- 验证：未跑 live E2E、未调用 DeepSeek。通过 `go test -count=1 ./...`、`TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 ./...`、`go vet ./...`、`go build ./...`、`uv run python -m unittest discover -s tests -v`（159 passed/2 skipped）、`uv run python -m compileall -q app scripts tests`、`uv lock --check`、`uv run alembic current && uv run alembic heads && uv run alembic check`、`npm test -- --run`、`npm run build`、`npm_config_cache="$PWD/.npm-cache" npx --yes knip`、`git diff --check`。
+- 后续：提交并推送；恢复 live E2E 前先实现 BUG-155 的预算、摘要和成本预估门禁。
+
+## 2026-09-07 | Stage 6 Live E2E 成本与缓存命中审计
+
+- 任务：响应用户关于 DeepSeek 余额消耗过快和 prompt cache 命中低的反馈，立即停止真实模型调用并审计 Stage 6 live E2E 的调用、token、cache 与上下文增长来源。
+- 操作：确认当前无残留 `research_e2e`、AgentService、Browser Worker、Execution Worker 或 DeepSeek 调用进程；读取 `research/results/stage6-live-acceptance-20260907T080506Z` 的 provider evidence、run 状态和本地 PostgreSQL `agent_events`/`research_runs`，按 run 统计真实官方调用次数、input/output/total tokens、`prompt_cache_hit_tokens` 与 `prompt_cache_miss_tokens`；检查 Agent transcript、tool result 类型和摘要压缩代码路径。
+- 结果：Stage 6 live acceptance 在 3 个 ResearchRun 中累计产生 40 次官方 DeepSeek 调用，合计 input 3,532,269、output 137,661、total 3,669,930 tokens；其中 `prompt_cache_hit_tokens=0`、`prompt_cache_miss_tokens=3,532,269`。第一个 run 完成并产生 14 次调用，第二个 run 失败/取消前已产生 24 次调用，第三个 run 取消前产生 2 次调用。成本主要来自完整 Agent 循环多轮探索、验证、生成、执行、失败修复和报告读取，而不是单次无障碍树本身；`BuildModelToolSummary` 仅压缩 `explore_page/explore_flow`，`get_report`、`fix_and_retry`、`generate_dsl` 等非探索工具结果会以完整 JSON 回填 transcript，导致上下文从约 5.4k input tokens 增长到 120k、174k、203k 级别。新增 BUG-155 跟踪成本熔断、cache 指标聚合和非探索工具摘要缺口。
+- 验证：本轮只做只读审计和日志记录，未执行 live E2E、未调用 DeepSeek、未运行测试套件；通过本地 PostgreSQL 查询和已有 provider evidence 交叉核对调用数与 token 汇总。
+- 后续：暂停所有真实官方模型 E2E，先实现单 run/单调用预算上限、失败路径熔断、非探索工具摘要、cache hit/miss 汇总和验收前成本预估；修复后先用本地/recorded 路径验证，再经用户确认后执行最小 live smoke。
+
 ## 2026-09-07 | 完成 Stage 5 Metrics 与实验控制面
 
 - 任务：实现版本化 Metric Projector、Experiment/ResearchRun API 与确定性调度、统一 `research-e2e run/verify/export`，并以真实主链验证独立 Oracle、clean context、AI 决策轨迹和任务超时。

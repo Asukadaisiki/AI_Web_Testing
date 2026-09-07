@@ -82,26 +82,34 @@ const (
 )
 
 type ResearchLLMCallPayload struct {
-	SchemaVersion             string                    `json:"schema_version"`
-	LogicalCallID             string                    `json:"logical_call_id"`
-	Provider                  string                    `json:"provider"`
-	RequestedModel            string                    `json:"requested_model"`
-	ResolvedModel             string                    `json:"resolved_model,omitempty"`
-	Prompt                    agent.PromptSpec          `json:"prompt_spec"`
-	Usage                     agent.ModelUsage          `json:"usage"`
-	FinishReason              string                    `json:"finish_reason,omitempty"`
-	Attempt                   int                       `json:"attempt"`
-	AttemptStatus             string                    `json:"attempt_status"`
-	AttemptStartedAt          time.Time                 `json:"attempt_started_at"`
-	AttemptLatencyMS          int64                     `json:"attempt_latency_ms"`
-	TotalLatencyMS            int64                     `json:"total_latency_ms"`
-	HTTPStatus                *int                      `json:"http_status,omitempty"`
-	ProviderRequestID         string                    `json:"provider_request_id,omitempty"`
-	RetryCount                int                       `json:"retry_count"`
-	ToolCallStatus            ToolCallStatus            `json:"tool_call_status"`
-	ToolCallUnavailableReason ToolCallUnavailableReason `json:"tool_call_unavailable_reason,omitempty"`
-	ToolCallIDs               []string                  `json:"tool_call_ids,omitempty"`
-	Error                     *agent.ModelError         `json:"error,omitempty"`
+	SchemaVersion                 string                    `json:"schema_version"`
+	LogicalCallID                 string                    `json:"logical_call_id"`
+	Provider                      string                    `json:"provider"`
+	RequestedModel                string                    `json:"requested_model"`
+	ResolvedModel                 string                    `json:"resolved_model,omitempty"`
+	ClientRequestID               string                    `json:"client_request_id,omitempty"`
+	EndpointScheme                string                    `json:"endpoint_scheme,omitempty"`
+	EndpointHost                  string                    `json:"endpoint_host,omitempty"`
+	CredentialFingerprint         string                    `json:"credential_fingerprint,omitempty"`
+	ProviderResponseID            string                    `json:"provider_response_id,omitempty"`
+	ProviderHeaderRequestID       string                    `json:"provider_header_request_id,omitempty"`
+	ProviderHeaderRequestIDHeader string                    `json:"provider_header_request_id_header,omitempty"`
+	LocalResponseCache            string                    `json:"local_response_cache,omitempty"`
+	Prompt                        agent.PromptSpec          `json:"prompt_spec"`
+	Usage                         agent.ModelUsage          `json:"usage"`
+	FinishReason                  string                    `json:"finish_reason,omitempty"`
+	Attempt                       int                       `json:"attempt"`
+	AttemptStatus                 string                    `json:"attempt_status"`
+	AttemptStartedAt              time.Time                 `json:"attempt_started_at"`
+	AttemptLatencyMS              int64                     `json:"attempt_latency_ms"`
+	TotalLatencyMS                int64                     `json:"total_latency_ms"`
+	HTTPStatus                    *int                      `json:"http_status,omitempty"`
+	ProviderRequestID             string                    `json:"provider_request_id,omitempty"`
+	RetryCount                    int                       `json:"retry_count"`
+	ToolCallStatus                ToolCallStatus            `json:"tool_call_status"`
+	ToolCallUnavailableReason     ToolCallUnavailableReason `json:"tool_call_unavailable_reason,omitempty"`
+	ToolCallIDs                   []string                  `json:"tool_call_ids,omitempty"`
+	Error                         *agent.ModelError         `json:"error,omitempty"`
 }
 
 type QuestionType string

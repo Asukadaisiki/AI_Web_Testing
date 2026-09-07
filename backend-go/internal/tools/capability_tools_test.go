@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -203,55 +204,76 @@ func TestGenerateDSLToolForwardsRunContext(t *testing.T) {
 
 func TestGenerateDSLToolSchemaRestrictsSupportedActions(t *testing.T) {
 	definition := NewGenerateDSLTool(&fakeCapabilityClient{}).Definition()
-	var schema struct {
-		Properties struct {
-			Case struct {
-				Properties struct {
-					Steps struct {
-						Items struct {
-							OneOf []struct {
-								Properties struct {
-									Action struct {
-										Const string `json:"const"`
-									} `json:"action"`
-								} `json:"properties"`
-								Required []string `json:"required"`
-							} `json:"oneOf"`
-						} `json:"items"`
-					} `json:"steps"`
-				} `json:"properties"`
-			} `json:"case"`
-		} `json:"properties"`
-	}
+	var schema map[string]any
 	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	variants := schema.Properties.Case.Properties.Steps.Items.OneOf
+	definitions := schema["$defs"].(map[string]any)
+	caseSchema := definitions["case"].(map[string]any)
+	steps := caseSchema["properties"].(map[string]any)["steps"].(map[string]any)
+	variants := steps["items"].(map[string]any)["oneOf"].([]any)
 	if len(variants) != 7 {
 		t.Fatalf("variants = %#v, want 7 supported actions", variants)
 	}
-	requiredByAction := map[string][]string{
-		"goto":                {"action", "value"},
-		"click":               {"action", "target"},
-		"input":               {"action", "target", "value"},
-		"wait_for":            {"action", "target"},
-		"assert_text":         {"action", "target", "value"},
-		"assert_url_contains": {"action", "value"},
-		"capture_text":        {"action", "target", "context_key"},
+	wantActions := map[string]bool{
+		"goto": true, "click": true, "input": true, "wait_for": true,
+		"assert_text": true, "assert_url_contains": true, "capture_text": true,
 	}
-	for _, variant := range variants {
-		action := variant.Properties.Action.Const
-		required, ok := requiredByAction[action]
-		if !ok {
-			t.Fatalf("variant has no action schema: %#v", variant)
+	for _, rawVariant := range variants {
+		ref := rawVariant.(map[string]any)["$ref"].(string)
+		name := strings.TrimPrefix(ref, "#/$defs/")
+		variant := definitions[name].(map[string]any)
+		properties := variant["properties"].(map[string]any)
+		action := properties["action"].(map[string]any)["const"].(string)
+		if !wantActions[action] {
+			t.Fatalf("unexpected action schema: %q", action)
 		}
-		if len(variant.Required) != len(required) {
-			t.Fatalf("%s required = %#v, want %#v", action, variant.Required, required)
-		}
-		for index := range required {
-			if variant.Required[index] != required[index] {
-				t.Fatalf("%s required = %#v, want %#v", action, variant.Required, required)
+		delete(wantActions, action)
+		required := variant["required"].([]any)
+		for _, field := range []string{
+			"action", "intent", "preconditions", "postconditions",
+			"idempotency", "side_effect",
+		} {
+			if !containsSchemaString(required, field) {
+				t.Fatalf("%s does not require %s: %#v", action, field, required)
 			}
+		}
+	}
+	if len(wantActions) != 0 {
+		t.Fatalf("missing action schemas: %#v", wantActions)
+	}
+	profile := caseSchema["properties"].(map[string]any)["profile"].(map[string]any)
+	if profile["const"] != "research-v1" || profile["default"] != "research-v1" {
+		t.Fatalf("profile schema = %#v", profile)
+	}
+	if !strings.Contains(definition.Description, "never author selector, candidates, or locator_confidence") {
+		t.Fatal("generate_dsl description does not prohibit model-authored locators")
+	}
+	assertStrictObjectSchemas(t, schema, "$")
+}
+
+func containsSchemaString(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func assertStrictObjectSchemas(t *testing.T, value any, path string) {
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]any:
+		if typed["type"] == "object" && typed["additionalProperties"] != false {
+			t.Fatalf("%s object schema is not strict: %#v", path, typed)
+		}
+		for key, child := range typed {
+			assertStrictObjectSchemas(t, child, path+"."+key)
+		}
+	case []any:
+		for index, child := range typed {
+			assertStrictObjectSchemas(t, child, fmt.Sprintf("%s[%d]", path, index))
 		}
 	}
 }
@@ -303,24 +325,15 @@ func TestGenerateDSLToolSchemaUsesRuntimeTargetStrategyEnum(t *testing.T) {
 	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
 		t.Fatalf("decode generate_dsl schema: %v", err)
 	}
-	caseSchema := schema["properties"].(map[string]any)["case"].(map[string]any)
-	steps := caseSchema["properties"].(map[string]any)["steps"].(map[string]any)
-	variants := steps["items"].(map[string]any)["oneOf"].([]any)
+	definitions := schema["$defs"].(map[string]any)
+	strategy := definitions["target_strategy"].(map[string]any)
 	want := []any{"css", "xpath", "data-testid", "element_id", "tag"}
-	for _, raw := range variants {
-		variant := raw.(map[string]any)
-		properties := variant["properties"].(map[string]any)
-		strategy, ok := properties["target_strategy"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if got := strategy["enum"].([]any); len(got) != len(want)+1 || got[len(got)-1] != nil {
-			t.Fatalf("target_strategy enum = %#v, want %#v", got, want)
-		}
-		types := strategy["type"].([]any)
-		if len(types) != 2 || types[0] != "string" || types[1] != "null" {
-			t.Fatalf("target_strategy type = %#v, want nullable string", types)
-		}
+	if got := strategy["enum"].([]any); len(got) != len(want)+1 || got[len(got)-1] != nil {
+		t.Fatalf("target_strategy enum = %#v, want %#v", got, want)
+	}
+	types := strategy["type"].([]any)
+	if len(types) != 2 || types[0] != "string" || types[1] != "null" {
+		t.Fatalf("target_strategy type = %#v, want nullable string", types)
 	}
 }
 
@@ -330,26 +343,59 @@ func TestGenerateDSLToolSchemaRestrictsInputTrigger(t *testing.T) {
 	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
 		t.Fatalf("decode generate_dsl schema: %v", err)
 	}
-	caseSchema := schema["properties"].(map[string]any)["case"].(map[string]any)
-	steps := caseSchema["properties"].(map[string]any)["steps"].(map[string]any)
-	variants := steps["items"].(map[string]any)["oneOf"].([]any)
-	for _, raw := range variants {
-		properties := raw.(map[string]any)["properties"].(map[string]any)
-		action := properties["action"].(map[string]any)["const"]
-		if action != "input" {
-			continue
-		}
-		trigger := properties["trigger"].(map[string]any)
-		want := []any{"Enter", "Tab", nil}
-		if !reflect.DeepEqual(trigger["enum"], want) {
-			t.Fatalf("trigger enum = %#v, want %#v", trigger["enum"], want)
-		}
-		if !reflect.DeepEqual(trigger["type"], []any{"string", "null"}) {
-			t.Fatalf("trigger type = %#v, want nullable string", trigger["type"])
-		}
-		return
+	definitions := schema["$defs"].(map[string]any)
+	inputStep := definitions["input_step"].(map[string]any)
+	properties := inputStep["properties"].(map[string]any)
+	trigger := properties["trigger"].(map[string]any)
+	want := []any{"Enter", "Tab", nil}
+	if !reflect.DeepEqual(trigger["enum"], want) {
+		t.Fatalf("trigger enum = %#v, want %#v", trigger["enum"], want)
 	}
-	t.Fatal("input schema variant not found")
+	if !reflect.DeepEqual(trigger["type"], []any{"string", "null"}) {
+		t.Fatalf("trigger type = %#v, want nullable string", trigger["type"])
+	}
+}
+
+func TestGenerateDSLToolSchemaMatchesConditionAndActionConstraints(t *testing.T) {
+	definition := NewGenerateDSLTool(&fakeCapabilityClient{}).Definition()
+	var schema map[string]any
+	if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
+		t.Fatalf("decode generate_dsl schema: %v", err)
+	}
+	definitions := schema["$defs"].(map[string]any)
+	gotoProperties := definitions["goto_step"].(map[string]any)["properties"].(map[string]any)
+	gotoPreconditions := gotoProperties["preconditions"].(map[string]any)
+	gotoPostconditions := gotoProperties["postconditions"].(map[string]any)
+	if _, exists := gotoPreconditions["minItems"]; exists {
+		t.Fatalf("goto preconditions unexpectedly require an item: %#v", gotoPreconditions)
+	}
+	if gotoPostconditions["minItems"] != float64(1) {
+		t.Fatalf("goto postconditions = %#v, want minItems 1", gotoPostconditions)
+	}
+	for _, stepName := range []string{"click_step", "input_step"} {
+		properties := definitions[stepName].(map[string]any)["properties"].(map[string]any)
+		for _, field := range []string{"preconditions", "postconditions"} {
+			if properties[field].(map[string]any)["minItems"] != float64(1) {
+				t.Fatalf("%s.%s does not require an item", stepName, field)
+			}
+		}
+	}
+	for _, contractName := range []string{"input_contract", "output_contract"} {
+		properties := definitions[contractName].(map[string]any)["properties"].(map[string]any)
+		if properties["name"].(map[string]any)["minLength"] != float64(1) ||
+			properties["context_key"].(map[string]any)["pattern"] != "^[A-Za-z_][A-Za-z0-9_]*$" {
+			t.Fatalf("%s string constraints = %#v", contractName, properties)
+		}
+	}
+	condition := definitions["condition"].(map[string]any)
+	if len(condition["allOf"].([]any)) != 2 {
+		t.Fatalf("condition constraints = %#v, want url/network branches", condition)
+	}
+	networkBranch := condition["allOf"].([]any)[1].(map[string]any)
+	then := networkBranch["then"].(map[string]any)
+	if len(then["anyOf"].([]any)) != 3 {
+		t.Fatalf("network_request constraint = %#v, want three alternatives", then)
+	}
 }
 
 func TestExecuteDSLToolRequiresMatchingApproval(t *testing.T) {

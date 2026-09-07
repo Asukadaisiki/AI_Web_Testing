@@ -382,6 +382,13 @@ def _successful_side_effect_state(action: str) -> str:
     return "not_applicable"
 
 
+def _allows_click_recovery(step) -> bool:
+    return (
+        getattr(step, "idempotency", None) != "non_idempotent"
+        and getattr(step, "side_effect", None) not in {"external_state", "unknown"}
+    )
+
+
 def _build_step_evidence(
     page,
     step,
@@ -405,6 +412,12 @@ def _build_step_evidence(
     return StepExecutionEvidence(
         step_index=step_index,
         action=step.action,
+        dsl_profile=(
+            "research-v1" if hasattr(step, "intent") else "legacy-v1"
+        ),
+        intent=getattr(step, "intent", None),
+        idempotency=getattr(step, "idempotency", None),
+        declared_side_effect=getattr(step, "side_effect", None),
         target=getattr(step, "target", None),
         value=step_value if step_value is not None else getattr(step, "value", None),
         status="failed" if error_message else "passed",
@@ -595,9 +608,14 @@ def _execute_step_with_candidates(
                     page,
                     locator,
                     click_coordinates=resolved.click_coordinates,
+                    allow_recovery=_allows_click_recovery(step),
                 )
             else:
-                cr = click_with_precheck(page, locator)
+                cr = click_with_precheck(
+                    page,
+                    locator,
+                    allow_recovery=_allows_click_recovery(step),
+                )
             if not cr.succeeded:
                 raise cr.original_error or RunnerExecutionError("Click failed")
             click_recovery = cr.recovery_strategy

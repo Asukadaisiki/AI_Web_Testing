@@ -448,11 +448,11 @@ func readGenerations(
 		}
 		if item.ProjectID != projectID || !success ||
 			!storedHash.Valid || !storedVersion.Valid ||
-			storedVersion.String != dsl.CanonicalVersion {
+			!dsl.IsCanonicalVersion(storedVersion.String) {
 			return nil, fmt.Errorf("%w: approved generation %d", ErrBrokenLink, id)
 		}
-		canonical, _, err := dsl.ValidateCase(raw)
-		if err != nil || dsl.SHA256(canonical) != storedHash.String {
+		canonical, err := validateGenerationDSL(raw, storedHash.String, storedVersion.String)
+		if err != nil {
 			return nil, fmt.Errorf("%w: generation %d canonical DSL", ErrSourceChanged, id)
 		}
 		item.DSLCanonical = canonical
@@ -490,6 +490,21 @@ func readGenerations(
 		result = append(result, item)
 	}
 	return result, nil
+}
+
+func validateGenerationDSL(
+	raw json.RawMessage,
+	storedHash string,
+	storedVersion string,
+) (json.RawMessage, error) {
+	validated, err := dsl.ValidateCaseForVersion(raw, storedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if dsl.SHA256(validated.CanonicalJSON) != storedHash {
+		return nil, errors.New("canonical DSL SHA mismatch")
+	}
+	return validated.CanonicalJSON, nil
 }
 
 func readBatches(
@@ -543,7 +558,13 @@ func readBatches(
 			)
 		}
 		item.GenerationID = generationID
-		item.Jobs, err = readJobs(ctx, tx, item.ID, generation.DSLSHA256)
+		item.Jobs, err = readJobs(
+			ctx,
+			tx,
+			item.ID,
+			generation.DSLSHA256,
+			generation.CanonicalVersion,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -677,6 +698,7 @@ func readJobs(
 	tx *sql.Tx,
 	batchID int64,
 	generationSHA string,
+	generationCanonicalVersion string,
 ) ([]JobSnapshot, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, order_index, status, attempt_count, max_attempts,
@@ -702,7 +724,7 @@ func readJobs(
 		}
 		if item.OrderIndex != expectedOrder || !hash.Valid ||
 			hash.String != generationSHA || !version.Valid ||
-			version.String != dsl.CanonicalVersion ||
+			version.String != generationCanonicalVersion ||
 			item.AttemptCount < 0 || item.AttemptCount > item.MaxAttempts {
 			return nil, fmt.Errorf("%w: execution job %d", ErrSourceChanged, item.ID)
 		}
@@ -850,17 +872,30 @@ func readExecutions(
 	return result, nil
 }
 
+type agentEventValidationPayload struct {
+	SchemaVersion                 string          `json:"schema_version"`
+	Content                       json.RawMessage `json:"content"`
+	ContentSHA256                 string          `json:"content_sha256"`
+	ContentBytes                  int             `json:"content_bytes"`
+	Attempt                       int64           `json:"attempt"`
+	LogicalCallID                 string          `json:"logical_call_id"`
+	Provider                      string          `json:"provider"`
+	RequestedModel                string          `json:"requested_model"`
+	ToolCallIDs                   []string        `json:"tool_call_ids"`
+	ToolCallStatus                string          `json:"tool_call_status"`
+	ClientRequestID               string          `json:"client_request_id"`
+	EndpointScheme                string          `json:"endpoint_scheme"`
+	EndpointHost                  string          `json:"endpoint_host"`
+	CredentialFingerprint         string          `json:"credential_fingerprint"`
+	ProviderResponseID            string          `json:"provider_response_id"`
+	ProviderHeaderRequestID       string          `json:"provider_header_request_id"`
+	ProviderHeaderRequestIDHeader string          `json:"provider_header_request_id_header"`
+	ProviderRequestID             string          `json:"provider_request_id"`
+	LocalResponseCache            string          `json:"local_response_cache"`
+}
+
 func validateAgentEventSchema(event AgentEventSnapshot) error {
-	var payload struct {
-		SchemaVersion  string          `json:"schema_version"`
-		Content        json.RawMessage `json:"content"`
-		ContentSHA256  string          `json:"content_sha256"`
-		ContentBytes   int             `json:"content_bytes"`
-		Attempt        int64           `json:"attempt"`
-		LogicalCallID  string          `json:"logical_call_id"`
-		ToolCallIDs    []string        `json:"tool_call_ids"`
-		ToolCallStatus string          `json:"tool_call_status"`
-	}
+	var payload agentEventValidationPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("%w: event %d payload", ErrInvalid, event.Seq)
 	}
@@ -874,6 +909,13 @@ func validateAgentEventSchema(event AgentEventSnapshot) error {
 				"%w: event %d research.llm_call",
 				ErrUnsupportedSchema, event.Seq,
 			)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(event.Payload, &fields); err != nil {
+			return fmt.Errorf("%w: event %d payload", ErrInvalid, event.Seq)
+		}
+		if err := validateLLMProviderEvidence(event.Seq, fields, payload); err != nil {
+			return err
 		}
 		if event.ToolCallID.Value != nil &&
 			!slicesContains(payload.ToolCallIDs, *event.ToolCallID.Value) {
@@ -922,6 +964,127 @@ func validateAgentEventSchema(event AgentEventSnapshot) error {
 		}
 	}
 	return nil
+}
+
+func validateLLMProviderEvidence(
+	eventSeq int64,
+	fields map[string]json.RawMessage,
+	payload agentEventValidationPayload,
+) error {
+	evidenceFields := []string{
+		"client_request_id",
+		"endpoint_scheme",
+		"endpoint_host",
+		"credential_fingerprint",
+		"provider_response_id",
+		"provider_header_request_id",
+		"provider_header_request_id_header",
+		"local_response_cache",
+	}
+	hasProviderEvidence := false
+	for _, name := range evidenceFields {
+		if _, exists := fields[name]; exists {
+			hasProviderEvidence = true
+			break
+		}
+	}
+	if !hasProviderEvidence {
+		return nil
+	}
+	requiredFields := []string{
+		"client_request_id",
+		"endpoint_scheme",
+		"endpoint_host",
+		"credential_fingerprint",
+		"local_response_cache",
+	}
+	for _, name := range requiredFields {
+		if _, exists := fields[name]; !exists {
+			return fmt.Errorf(
+				"%w: event %d incomplete provider evidence",
+				ErrSourceChanged,
+				eventSeq,
+			)
+		}
+	}
+	fingerprint := strings.TrimPrefix(
+		payload.CredentialFingerprint,
+		"sha256:v1:",
+	)
+	if !validClientRequestID(payload.ClientRequestID) ||
+		strings.TrimSpace(payload.Provider) == "" ||
+		len(payload.Provider) > 128 ||
+		strings.TrimSpace(payload.RequestedModel) == "" ||
+		len(payload.RequestedModel) > 128 ||
+		payload.EndpointScheme != "https" ||
+		payload.EndpointHost == "" ||
+		len(payload.EndpointHost) > 255 ||
+		strings.ContainsAny(payload.EndpointHost, "/?#@") ||
+		fingerprint == payload.CredentialFingerprint ||
+		!sha256Pattern.MatchString(fingerprint) ||
+		payload.LocalResponseCache != "not_configured" ||
+		len(payload.ProviderResponseID) > 128 ||
+		len(payload.ProviderHeaderRequestID) > 128 ||
+		len(payload.ProviderRequestID) > 128 ||
+		len(payload.ProviderHeaderRequestIDHeader) > 64 {
+		return fmt.Errorf(
+			"%w: event %d invalid provider evidence",
+			ErrSourceChanged,
+			eventSeq,
+		)
+	}
+	switch payload.ProviderHeaderRequestIDHeader {
+	case "":
+		if payload.ProviderHeaderRequestID != "" {
+			return fmt.Errorf(
+				"%w: event %d provider header request ID",
+				ErrSourceChanged,
+				eventSeq,
+			)
+		}
+	case "x-request-id", "request-id", "x-ds-trace-id":
+		if payload.ProviderHeaderRequestID == "" {
+			return fmt.Errorf(
+				"%w: event %d provider header request ID",
+				ErrSourceChanged,
+				eventSeq,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: event %d provider header name",
+			ErrSourceChanged,
+			eventSeq,
+		)
+	}
+	legacyID := payload.ProviderResponseID
+	if legacyID == "" {
+		legacyID = payload.ProviderHeaderRequestID
+	}
+	if payload.ProviderRequestID != legacyID {
+		return fmt.Errorf(
+			"%w: event %d legacy provider request ID",
+			ErrSourceChanged,
+			eventSeq,
+		)
+	}
+	return nil
+}
+
+func validClientRequestID(value string) bool {
+	random, ok := strings.CutPrefix(value, "e2e_")
+	if !ok || len(random) < 16 || len(value) > 128 {
+		return false
+	}
+	for _, character := range random {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func canonicalToolArguments(raw json.RawMessage) (json.RawMessage, error) {

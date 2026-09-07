@@ -2,12 +2,15 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -81,7 +84,23 @@ func TestCompleteParsesNativeToolCall(t *testing.T) {
 
 func TestCompleteRecordsUsageHashesAndRetryAttempts(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	var clientRequestIDs []string
+	const apiKey = "sk-private-provider-credential"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" ||
+			request.URL.RawQuery != "private_query=must_not_be_persisted" {
+			t.Fatalf("request URL = %s", request.URL)
+		}
+		var payload chatRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		headerID := request.Header.Get("X-Client-Request-ID")
+		if payload.UserID == "" || payload.UserID != headerID ||
+			!strings.HasPrefix(payload.UserID, "e2e_") {
+			t.Fatalf("client request ID body/header = %q/%q", payload.UserID, headerID)
+		}
+		clientRequestIDs = append(clientRequestIDs, payload.UserID)
 		if calls.Add(1) == 1 {
 			writer.Header().Set("x-request-id", "failed-request")
 			http.Error(writer, "secret provider body", http.StatusTooManyRequests)
@@ -92,12 +111,16 @@ func TestCompleteRecordsUsageHashesAndRetryAttempts(t *testing.T) {
 		_, _ = writer.Write([]byte(`{
 			"id":"provider-request","model":"resolved-model",
 			"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"done"}}],
-			"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}
+			"usage":{
+				"prompt_tokens":11,"completion_tokens":3,"total_tokens":14,
+				"prompt_cache_hit_tokens":7,"prompt_cache_miss_tokens":4
+			}
 		}`))
 	}))
 	defer server.Close()
 
-	client, err := NewOpenAIClient("gateway", server.URL, "secret", "requested-model", time.Second)
+	baseURL := server.URL + "/v1?private_query=must_not_be_persisted"
+	client, err := NewOpenAIClient("gateway", baseURL, apiKey, "requested-model", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +140,14 @@ func TestCompleteRecordsUsageHashesAndRetryAttempts(t *testing.T) {
 	if calls.Load() != 2 || len(records) != 1 || len(records[0].Telemetry.Attempts) != 2 {
 		t.Fatalf("calls = %d, records = %#v", calls.Load(), records)
 	}
-	if records[0].Telemetry.Attempts[0].ProviderRequestID != "failed-request" {
+	if len(clientRequestIDs) != 2 || clientRequestIDs[0] != clientRequestIDs[1] {
+		t.Fatalf("retry client request IDs = %#v", clientRequestIDs)
+	}
+	failed := records[0].Telemetry.Attempts[0]
+	if failed.ProviderResponseID != "" ||
+		failed.ProviderHeaderRequestID != "failed-request" ||
+		failed.ProviderHeaderRequestIDHeader != "x-request-id" ||
+		failed.ProviderRequestID != "failed-request" {
 		t.Fatalf("failed attempt request id = %#v", records[0].Telemetry.Attempts[0])
 	}
 	telemetry := response.Telemetry
@@ -125,14 +155,44 @@ func TestCompleteRecordsUsageHashesAndRetryAttempts(t *testing.T) {
 		telemetry.ResolvedModel != "resolved-model" || telemetry.FinishReason != "stop" {
 		t.Fatalf("telemetry = %#v", telemetry)
 	}
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprintInput := "gateway\x00" + strings.ToLower(endpoint.Host) + "\x00" + apiKey
+	fingerprintSum := sha256.Sum256([]byte(fingerprintInput))
+	if telemetry.ClientRequestID != clientRequestIDs[0] ||
+		telemetry.EndpointScheme != "http" ||
+		telemetry.EndpointHost != strings.ToLower(endpoint.Host) ||
+		telemetry.CredentialFingerprint != "sha256:v1:"+hex.EncodeToString(fingerprintSum[:]) ||
+		telemetry.LocalResponseCache != localCacheStatus {
+		t.Fatalf("provider evidence = %#v", telemetry)
+	}
+	succeeded := telemetry.Attempts[1]
+	if succeeded.ProviderResponseID != "provider-request" ||
+		succeeded.ProviderHeaderRequestID != "header-request" ||
+		succeeded.ProviderHeaderRequestIDHeader != "x-request-id" ||
+		succeeded.ProviderRequestID != "provider-request" {
+		t.Fatalf("successful request IDs = %#v", succeeded)
+	}
 	if telemetry.Usage.Status != agent.UsageAvailable ||
-		telemetry.Usage.InputTokens == nil || *telemetry.Usage.InputTokens != 11 {
+		telemetry.Usage.InputTokens == nil || *telemetry.Usage.InputTokens != 11 ||
+		telemetry.Usage.PromptCacheHitTokens == nil ||
+		*telemetry.Usage.PromptCacheHitTokens != 7 ||
+		telemetry.Usage.PromptCacheMissTokens == nil ||
+		*telemetry.Usage.PromptCacheMissTokens != 4 {
 		t.Fatalf("usage = %#v", telemetry.Usage)
 	}
 	encoded, _ := json.Marshal(telemetry)
 	if strings.Contains(string(encoded), "private prompt") ||
 		strings.Contains(string(encoded), "private message") ||
-		strings.Contains(string(encoded), "secret provider body") {
+		strings.Contains(string(encoded), "secret provider body") ||
+		strings.Contains(string(encoded), apiKey) ||
+		strings.Contains(string(encoded), apiKey[:12]) ||
+		strings.Contains(string(encoded), apiKey[len(apiKey)-12:]) ||
+		strings.Contains(string(encoded), "Bearer ") ||
+		strings.Contains(string(encoded), "private_query") ||
+		strings.Contains(string(encoded), baseURL) {
 		t.Fatalf("telemetry leaked request or provider content: %s", encoded)
 	}
 	for _, hash := range []string{
@@ -143,6 +203,77 @@ func TestCompleteRecordsUsageHashesAndRetryAttempts(t *testing.T) {
 		if len(hash) != 64 {
 			t.Fatalf("hash = %q", hash)
 		}
+	}
+}
+
+func TestCompleteGeneratesDistinctClientRequestIDPerLogicalCall(t *testing.T) {
+	var ids []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload chatRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, payload.UserID)
+		_, _ = writer.Write([]byte(`{
+			"id":"response-id",
+			"choices":[{"message":{"content":"done"}}]
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIClient("provider", server.URL, "secret", "model", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := client.Complete(
+			context.Background(),
+			[]agent.Message{{Role: "user", Content: "test"}},
+			nil,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(ids) != 2 || ids[0] == ids[1] ||
+		len(ids[0]) != len("e2e_")+32 ||
+		len(ids[1]) != len("e2e_")+32 {
+		t.Fatalf("client request IDs = %#v", ids)
+	}
+}
+
+func TestProviderRequestIDFromHeaderRecordsSelectedHeaderName(t *testing.T) {
+	tests := []struct {
+		name       string
+		header     http.Header
+		wantID     string
+		wantHeader string
+	}{
+		{
+			name:       "OpenAI request ID",
+			header:     http.Header{"X-Request-Id": []string{"openai-id"}},
+			wantID:     "openai-id",
+			wantHeader: "x-request-id",
+		},
+		{
+			name:       "DeepSeek trace ID",
+			header:     http.Header{"X-Ds-Trace-Id": []string{"deepseek-id"}},
+			wantID:     "deepseek-id",
+			wantHeader: "x-ds-trace-id",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			gotID, gotHeader := providerRequestIDFromHeader(testCase.header)
+			if gotID != testCase.wantID || gotHeader != testCase.wantHeader {
+				t.Fatalf(
+					"providerRequestIDFromHeader() = %q/%q, want %q/%q",
+					gotID,
+					gotHeader,
+					testCase.wantID,
+					testCase.wantHeader,
+				)
+			}
+		})
 	}
 }
 
@@ -654,6 +785,15 @@ func TestOfficialEndpointCompatibility(t *testing.T) {
 	if os.Getenv("RUN_LLM_INTEGRATION") != "1" {
 		t.Skip("set RUN_LLM_INTEGRATION=1 to call the configured LLM endpoint")
 	}
+	endpoint, err := url.Parse(os.Getenv("AI_PLANNING_BASE_URL"))
+	if err != nil ||
+		endpoint.Scheme != "https" ||
+		strings.ToLower(endpoint.Host) != "api.deepseek.com" {
+		t.Fatal("status=0 model= usage=unavailable category=invalid_official_endpoint")
+	}
+	if strings.TrimSpace(os.Getenv("AI_PLANNING_PROVIDER")) != "deepseek" {
+		t.Fatal("status=0 model= usage=unavailable category=invalid_official_provider")
+	}
 	client, err := NewOpenAIClient(
 		os.Getenv("AI_PLANNING_PROVIDER"),
 		os.Getenv("AI_PLANNING_BASE_URL"),
@@ -734,22 +874,14 @@ func logOfficialProbe(
 			category,
 		)
 	}
+	if len(response.Telemetry.Attempts) == 0 {
+		t.Fatal("status=0 model=redacted usage=unavailable category=missing_attempt")
+	}
 	lastAttempt := response.Telemetry.Attempts[len(response.Telemetry.Attempts)-1]
 	status := 0
 	if lastAttempt.HTTPStatus != nil {
 		status = *lastAttempt.HTTPStatus
 	}
-	category := "success_text"
-	if len(response.ToolCalls) > 0 {
-		category = "success_tool"
-	}
-	t.Logf(
-		"status=%d model=%s usage=%s category=%s",
-		status,
-		response.Telemetry.ResolvedModel,
-		response.Telemetry.Usage.Status,
-		category,
-	)
 	if requireToolCall {
 		if len(response.ToolCalls) != 1 ||
 			response.ToolCalls[0].Name != "submit_plan" ||
@@ -757,6 +889,80 @@ func logOfficialProbe(
 			t.Fatal("status=200 model=redacted usage=unavailable category=invalid_response")
 		}
 	}
+	endpoint, parseErr := url.Parse(os.Getenv("AI_PLANNING_BASE_URL"))
+	if parseErr != nil {
+		t.Fatal("status=200 model=redacted usage=unavailable category=invalid_endpoint")
+	}
+	fingerprintInput := "deepseek\x00" +
+		strings.ToLower(endpoint.Host) + "\x00" +
+		strings.TrimSpace(os.Getenv("AI_PLANNING_API_KEY"))
+	fingerprintSum := sha256.Sum256([]byte(fingerprintInput))
+	if response.Telemetry.Provider != "deepseek" ||
+		response.Telemetry.EndpointHost != "api.deepseek.com" ||
+		status != http.StatusOK ||
+		lastAttempt.ProviderResponseID == "" ||
+		response.Telemetry.Usage.Status != agent.UsageAvailable ||
+		response.Telemetry.Usage.TotalTokens == nil ||
+		*response.Telemetry.Usage.TotalTokens <= 0 ||
+		response.Telemetry.Usage.OutputTokens == nil ||
+		*response.Telemetry.Usage.OutputTokens <= 0 {
+		t.Fatal("status=200 model=redacted usage=unavailable category=incompatible_official_response")
+	}
+	if lastAttempt.StartedAt.IsZero() ||
+		!strings.HasPrefix(response.Telemetry.ClientRequestID, "e2e_") ||
+		response.Telemetry.EndpointScheme != "https" ||
+		response.Telemetry.CredentialFingerprint !=
+			"sha256:v1:"+hex.EncodeToString(fingerprintSum[:]) ||
+		response.Telemetry.LocalResponseCache != localCacheStatus ||
+		(lastAttempt.ProviderHeaderRequestID == "") !=
+			(lastAttempt.ProviderHeaderRequestIDHeader == "") {
+		t.Fatal("status=200 model=redacted usage=unavailable category=missing_provider_evidence")
+	}
+
+	audit := struct {
+		StartedAt                     string `json:"started_at"`
+		EndpointHost                  string `json:"endpoint_host"`
+		Provider                      string `json:"provider"`
+		ResolvedModel                 string `json:"resolved_model"`
+		HTTPStatus                    int    `json:"http_status"`
+		ClientRequestID               string `json:"client_request_id"`
+		ProviderResponseID            string `json:"provider_response_id"`
+		ProviderHeaderRequestID       string `json:"provider_header_request_id,omitempty"`
+		ProviderHeaderRequestIDHeader string `json:"provider_header_request_id_header,omitempty"`
+		Usage                         struct {
+			Status                agent.ModelUsageStatus `json:"status"`
+			InputTokens           *int64                 `json:"input_tokens"`
+			OutputTokens          *int64                 `json:"output_tokens"`
+			TotalTokens           *int64                 `json:"total_tokens"`
+			PromptCacheHitTokens  *int64                 `json:"prompt_cache_hit_tokens"`
+			PromptCacheMissTokens *int64                 `json:"prompt_cache_miss_tokens"`
+		} `json:"usage"`
+		CredentialFingerprint string `json:"credential_fingerprint"`
+		LocalResponseCache    string `json:"local_response_cache"`
+	}{
+		StartedAt:                     lastAttempt.StartedAt.UTC().Format(time.RFC3339Nano),
+		EndpointHost:                  response.Telemetry.EndpointHost,
+		Provider:                      response.Telemetry.Provider,
+		ResolvedModel:                 response.Telemetry.ResolvedModel,
+		HTTPStatus:                    status,
+		ClientRequestID:               response.Telemetry.ClientRequestID,
+		ProviderResponseID:            lastAttempt.ProviderResponseID,
+		ProviderHeaderRequestID:       lastAttempt.ProviderHeaderRequestID,
+		ProviderHeaderRequestIDHeader: lastAttempt.ProviderHeaderRequestIDHeader,
+		CredentialFingerprint:         response.Telemetry.CredentialFingerprint,
+		LocalResponseCache:            response.Telemetry.LocalResponseCache,
+	}
+	audit.Usage.Status = response.Telemetry.Usage.Status
+	audit.Usage.InputTokens = response.Telemetry.Usage.InputTokens
+	audit.Usage.OutputTokens = response.Telemetry.Usage.OutputTokens
+	audit.Usage.TotalTokens = response.Telemetry.Usage.TotalTokens
+	audit.Usage.PromptCacheHitTokens = response.Telemetry.Usage.PromptCacheHitTokens
+	audit.Usage.PromptCacheMissTokens = response.Telemetry.Usage.PromptCacheMissTokens
+	encoded, marshalErr := json.Marshal(audit)
+	if marshalErr != nil {
+		t.Fatal("status=200 model=redacted usage=unavailable category=audit_encoding")
+	}
+	t.Logf("official_provider_smoke=%s", encoded)
 }
 
 func TestCompleteReturnsInvalidToolArgumentsForHarnessRecovery(t *testing.T) {

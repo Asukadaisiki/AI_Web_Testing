@@ -197,6 +197,12 @@ func validateMutation(request Mutation) error {
 	if strings.TrimSpace(request.Name) == "" {
 		return errors.New("case name is required")
 	}
+	if request.Profile != nil {
+		profile := strings.TrimSpace(*request.Profile)
+		if profile != "legacy-v1" && profile != "research-v1" {
+			return errors.New("case profile must be legacy-v1 or research-v1")
+		}
+	}
 	var steps []struct {
 		Action string `json:"action"`
 	}
@@ -212,12 +218,16 @@ func validateMutation(request Mutation) error {
 }
 
 func encodeDSL(request Mutation) ([]byte, error) {
-	return json.Marshal(map[string]any{
+	candidate := map[string]any{
 		"name": request.Name, "description": request.Description, "base_url": request.BaseURL,
 		"input_contract":  rawOrEmptyArray(request.InputContract),
 		"output_contract": rawOrEmptyArray(request.OutputContract),
 		"steps":           request.Steps,
-	})
+	}
+	if request.Profile != nil {
+		candidate["profile"] = strings.TrimSpace(*request.Profile)
+	}
+	return json.Marshal(candidate)
 }
 
 func scanCase(row rowScanner) (Stored, error) {
@@ -234,6 +244,7 @@ func scanCase(row rowScanner) (Stored, error) {
 		return Stored{}, fmt.Errorf("scan case: %w", err)
 	}
 	var dsl struct {
+		Profile        *string         `json:"profile"`
 		BaseURL        *string         `json:"base_url"`
 		InputContract  json.RawMessage `json:"input_contract"`
 		OutputContract json.RawMessage `json:"output_contract"`
@@ -242,6 +253,7 @@ func scanCase(row rowScanner) (Stored, error) {
 	if err := json.Unmarshal(raw, &dsl); err != nil {
 		return Stored{}, fmt.Errorf("decode case DSL: %w", err)
 	}
+	item.Profile = dsl.Profile
 	item.BaseURL = dsl.BaseURL
 	item.InputContract = rawOrEmptyArray(dsl.InputContract)
 	item.OutputContract = rawOrEmptyArray(dsl.OutputContract)

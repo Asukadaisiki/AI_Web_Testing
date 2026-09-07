@@ -14,6 +14,7 @@ var (
 
 type Mutation struct {
 	ProjectID      int64           `json:"project_id" vd:"$>0"`
+	Profile        *string         `json:"profile,omitempty"`
 	Name           string          `json:"name" vd:"len($)>0 && len($)<=200"`
 	Description    *string         `json:"description,omitempty"`
 	BaseURL        *string         `json:"base_url,omitempty"`
@@ -25,6 +26,7 @@ type Mutation struct {
 type Stored struct {
 	ID             int64           `json:"id"`
 	ProjectID      int64           `json:"project_id"`
+	Profile        *string         `json:"profile,omitempty"`
 	Name           string          `json:"name"`
 	Description    *string         `json:"description"`
 	BaseURL        *string         `json:"base_url"`

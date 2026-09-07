@@ -3,6 +3,9 @@
 ## 全局门禁
 
 - [x] 所有正式测试均从纯自然语言 Goal 开始，不包含 DSL、CSS、XPath 或人工 candidates。
+- [ ] 所有主链 E2E 均直接命中 Experiment 声明的官方模型 endpoint；DeepSeek 使用 `api.deepseek.com`，不以第三方兼容网关、mock、record/replay、本地响应缓存或 fallback 计数；供应商 prompt cache usage 单独记录。
+- [ ] 每次正式 repetition 都保存脱敏的 provider/model、endpoint host、HTTP status、response/request ID、usage、latency、调用时间、不可逆凭据指纹和 AgentRun/LLM-call event 关联。
+- [ ] 每次正式 repetition 都能在供应商控制台、usage API 或账单明细中核对到对应新增调用；平台无记录时 `provider_e2e_verified=false` 且 Stage 不得通过。
 - [x] 所有正式执行均经过 Go DSL 校验、Locator Preflight 和显式审批 Checkpoint。
 - [x] Python Browser Worker 中不存在 Planning、Agent loop、Reward 或策略选择逻辑。
 - [x] Agent 最终结论与 PostgreSQL 中的结构化 Report 一致。
@@ -91,17 +94,21 @@
 - [x] `research-e2e run/verify/export` 可用。
 - [x] 独立 Oracle 失败时 task_success=false。
 - [x] Canonical Goal 连续 3 次通过。
+- [ ] Stage 5 的 3 次 Canonical 和负向变异已用官方 DeepSeek API 重新执行，并在平台侧核对 response/request ID 与 usage；此前仅本地链路证据不计入本项。
 - [x] Stage 5 已 commit 并 push。
 
 ## Stage 6：Action IR
 
-- [ ] research-v1 步骤包含 Intent、Target、Preconditions、Action、Postconditions。
-- [ ] 非幂等语义和安全重试条件明确。
-- [ ] Go 先定义类型和校验，Python 合同保持一致。
-- [ ] Legacy DSL 仍可运行并标记 profile。
-- [ ] research-v1 未知字段和缺失字段在入队前失败。
-- [ ] Go/Python golden fixtures 全部通过。
-- [ ] Canonical Goal 连续 3 次通过。
+- [x] research-v1 步骤包含 Intent、Target、Preconditions、Action、Postconditions。
+- [x] 非幂等语义和安全重试条件明确。
+- [x] Go 先定义类型和校验，Python 合同保持一致。
+- [x] Legacy DSL 仍可运行并标记 profile。
+- [x] research-v1 未知字段和缺失字段在入队前失败。
+- [x] Go/Python golden fixtures 全部通过。
+- [x] 非 live implementation checkpoint 已通过 Go/Python/Frontend 静态与单元门禁。
+- [ ] Canonical Goal 连续 3 次通过。（因 BUG-155 成本熔断缺失，按用户要求暂停 live E2E）
+- [ ] 3 次 Canonical 均有不同的官方 DeepSeek response/request ID，且可在平台调用记录中核对。（暂停 live E2E）
+- [ ] 恢复 live E2E 前完成调用/token/失败重试预算、非探索工具摘要、cache hit/miss 聚合和成本预估。
 - [ ] Stage 6 已 commit 并 push。
 
 ## Stage 7：Ablation

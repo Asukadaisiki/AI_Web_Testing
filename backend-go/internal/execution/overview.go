@@ -101,12 +101,14 @@ func (s *Store) listOverviewExecutions(
 ) ([]map[string]any, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.id, r.case_id, tc.name, r.project_id, r.batch_id, r.job_id,
-		       r.attempt_number, r.dsl_sha256, r.report_schema_version, r.triggered_by,
+		       r.attempt_number, r.dsl_sha256, j.dsl_sha256, j.dsl_canonical_version,
+		       r.report_schema_version, r.triggered_by,
 		       r.status, r.error_message, r.started_at, r.finished_at, r.dsl_snapshot,
 		       r.report, r.failure_signal_json, r.analysis_status, r.analysis_json
 		FROM test_case_runs r
 		JOIN test_cases tc ON tc.id = r.case_id
 		JOIN project_members pm ON pm.project_id = r.project_id
+		LEFT JOIN execution_jobs j ON j.id = r.job_id
 		WHERE pm.user_id = $1
 		  AND ($2::bigint IS NULL OR r.project_id = $2)
 		  AND ($3::bigint IS NULL OR r.case_id = $3)

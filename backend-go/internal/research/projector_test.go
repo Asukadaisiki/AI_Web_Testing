@@ -8,6 +8,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -125,6 +126,141 @@ func TestProjectorProjectsAgentEventsExecutionRetriesAndTerminal(t *testing.T) {
 			payload.Reward.Reason != "independent_oracle_not_persisted" {
 			t.Fatalf("%s inferred an oracle reward: %#v", key, payload.Reward)
 		}
+	}
+}
+
+func TestProjectorPreservesProviderEvidenceWithoutSecrets(t *testing.T) {
+	snapshot := projectorFixture(t)
+	snapshot.Events[1] = agentEventFixture(
+		t, 2, "research.llm_call", "", "", `{
+			"schema_version":"research.llm_call.v1",
+			"logical_call_id":"logical-1",
+			"provider":"deepseek",
+			"requested_model":"deepseek-chat",
+			"attempt":1,
+			"attempt_status":"failed",
+			"attempt_latency_ms":7,
+			"tool_call_status":"unavailable",
+			"usage":{"status":"unavailable"},
+			"prompt_spec":{"version":"prompt.v1","prompt_sha256":"aaa","request_sha256":"bbb"},
+			"client_request_id":"e2e_0123456789abcdef0123456789abcdef",
+			"endpoint_scheme":"https",
+			"endpoint_host":"api.deepseek.com",
+			"credential_fingerprint":"sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"provider_header_request_id":"header-failed",
+			"provider_header_request_id_header":"x-request-id",
+			"provider_request_id":"header-failed",
+			"local_response_cache":"not_configured"
+		}`,
+	)
+	snapshot.Events[2] = agentEventFixture(
+		t, 3, "research.llm_call", "", "", `{
+			"schema_version":"research.llm_call.v1",
+			"logical_call_id":"logical-1",
+			"provider":"deepseek",
+			"requested_model":"deepseek-chat",
+			"resolved_model":"deepseek-chat",
+			"attempt":2,
+			"attempt_status":"succeeded",
+			"attempt_latency_ms":11,
+			"tool_call_status":"available",
+			"tool_call_ids":["tool-b","tool-a"],
+			"usage":{
+				"status":"available",
+				"input_tokens":10,
+				"output_tokens":4,
+				"total_tokens":14,
+				"prompt_cache_hit_tokens":6,
+				"prompt_cache_miss_tokens":4
+			},
+			"prompt_spec":{"version":"prompt.v1","prompt_sha256":"aaa","request_sha256":"bbb"},
+			"client_request_id":"e2e_0123456789abcdef0123456789abcdef",
+			"endpoint_scheme":"https",
+			"endpoint_host":"api.deepseek.com",
+			"credential_fingerprint":"sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"provider_response_id":"response-success",
+			"provider_header_request_id":"header-success",
+			"provider_header_request_id_header":"x-request-id",
+			"provider_request_id":"response-success",
+			"local_response_cache":"not_configured"
+		}`,
+	)
+	var err error
+	snapshot.SourceSHA256, err = sourceSnapshotHash(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transitions, _, err := NewProjector().Project(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := transitionPayloadsByKey(t, transitions)["tool:tool-a"].Decision
+	if decision.Value == nil {
+		t.Fatal("provider decision was not projected")
+	}
+	var data struct {
+		Attempts []struct {
+			ClientRequestID               string `json:"client_request_id"`
+			EndpointScheme                string `json:"endpoint_scheme"`
+			EndpointHost                  string `json:"endpoint_host"`
+			CredentialFingerprint         string `json:"credential_fingerprint"`
+			ProviderResponseID            string `json:"provider_response_id"`
+			ProviderHeaderRequestID       string `json:"provider_header_request_id"`
+			ProviderHeaderRequestIDHeader string `json:"provider_header_request_id_header"`
+			ProviderRequestID             string `json:"provider_request_id"`
+			LocalResponseCache            string `json:"local_response_cache"`
+			Usage                         struct {
+				PromptCacheHitTokens  *int64 `json:"prompt_cache_hit_tokens"`
+				PromptCacheMissTokens *int64 `json:"prompt_cache_miss_tokens"`
+			} `json:"usage"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(decision.Value.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Attempts) != 2 ||
+		data.Attempts[0].ClientRequestID != data.Attempts[1].ClientRequestID ||
+		data.Attempts[1].EndpointScheme != "https" ||
+		data.Attempts[1].EndpointHost != "api.deepseek.com" ||
+		data.Attempts[1].ProviderResponseID != "response-success" ||
+		data.Attempts[1].ProviderHeaderRequestID != "header-success" ||
+		data.Attempts[1].ProviderHeaderRequestIDHeader != "x-request-id" ||
+		data.Attempts[1].ProviderRequestID != "response-success" ||
+		data.Attempts[1].LocalResponseCache != "not_configured" ||
+		data.Attempts[1].Usage.PromptCacheHitTokens == nil ||
+		*data.Attempts[1].Usage.PromptCacheHitTokens != 6 ||
+		data.Attempts[1].Usage.PromptCacheMissTokens == nil ||
+		*data.Attempts[1].Usage.PromptCacheMissTokens != 4 {
+		t.Fatalf("projected provider evidence = %#v", data.Attempts)
+	}
+	encoded, err := json.Marshal(decision.Value.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"Authorization", "Bearer ", "api_key=", "https://api.deepseek.com",
+	} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("projected decision leaked %q: %s", forbidden, encoded)
+		}
+	}
+
+	changedPayload := strings.Replace(
+		string(snapshot.Events[2].Payload),
+		"e2e_0123456789abcdef0123456789abcdef",
+		"e2e_fedcba9876543210fedcba9876543210",
+		1,
+	)
+	snapshot.Events[2] = agentEventFixture(
+		t, 3, "research.llm_call", "", "", changedPayload,
+	)
+	snapshot.SourceSHA256, err = sourceSnapshotHash(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := NewProjector().Project(snapshot); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("provider evidence drift error = %v, want ErrSourceChanged", err)
 	}
 }
 

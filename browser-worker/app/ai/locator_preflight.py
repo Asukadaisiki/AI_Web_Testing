@@ -11,6 +11,9 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from app.schemas.action_ir import EXECUTABLE_CANDIDATE_STRATEGIES
+from app.schemas.dsl import validate_dsl_case
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -31,6 +34,13 @@ def _normalize_role_for_playwright(role: str) -> str:
 
 
 _GENERIC_REPEATED_TARGETS = {"add to cart", "view product"}
+_LOCATOR_ACTIONS = {
+    "click",
+    "input",
+    "wait_for",
+    "assert_text",
+    "capture_text",
+}
 
 # Matches: ... inside product "name"
 _SCOPE_RE = re.compile(
@@ -82,6 +92,9 @@ def apply_preflight_to_dsl(
     Each match produces 3 candidates (role exact / role fuzzy / text).
     Mutates *dsl_case* in place and returns it.
     """
+    research_profile = dsl_case.get("profile") == "research-v1"
+    if research_profile:
+        validate_dsl_case(dsl_case, phase="draft")
     steps = dsl_case.get("steps", [])
     a11y_nodes = [node for node in a11y_nodes if _is_business_node(node)]
     if not steps or not a11y_nodes:
@@ -101,6 +114,8 @@ def apply_preflight_to_dsl(
     confidences: list[str] = []
     for step in steps:
         if not isinstance(step, dict):
+            continue
+        if step.get("action") not in _LOCATOR_ACTIONS:
             continue
         target = (step.get("target") or "").strip()
         if not target:
@@ -163,8 +178,8 @@ def apply_preflight_to_dsl(
 
         if match_count > 0:
             for n in matches:
-                role = _normalize_role_for_playwright(n["role"])
-                name = n["name"]
+                role = _normalize_role_for_playwright(str(n.get("role") or ""))
+                name = str(n.get("name") or "")
                 scope_ctx = {"scope_name": scope_name} if scope_name else {}
 
                 for vs in n.get("verified_selectors", []):
@@ -192,21 +207,24 @@ def apply_preflight_to_dsl(
                             },
                         })
 
+                if not name:
+                    continue
+
                 if scope_name:
                     # Scoped candidates: higher scores to prioritize them
                     candidates.extend([
                         {"strategy": "a11y_scoped_role_exact", "selector": role,
                          "semantic_value": name, "pre_score": 0.95,
-                         "pre_features": {"source": "a11y_scoped_role_exact", **scope_ctx}},
+                         "pre_features": {"verified": True, "source": "a11y_scoped_role_exact", **scope_ctx}},
                         {"strategy": "a11y_scoped_role_fuzzy", "selector": role,
                          "semantic_value": name, "pre_score": 0.85,
-                         "pre_features": {"source": "a11y_scoped_role_fuzzy", **scope_ctx}},
+                         "pre_features": {"verified": True, "source": "a11y_scoped_role_fuzzy", **scope_ctx}},
                         {"strategy": "a11y_scoped_text_exact", "selector": name,
                          "semantic_value": name, "pre_score": 0.70,
-                         "pre_features": {"source": "a11y_scoped_text_exact", **scope_ctx}},
+                         "pre_features": {"verified": True, "source": "a11y_scoped_text_exact", **scope_ctx}},
                         {"strategy": "a11y_scoped_text_fuzzy", "selector": name,
                          "semantic_value": name, "pre_score": 0.60,
-                         "pre_features": {"source": "a11y_scoped_text_fuzzy", **scope_ctx}},
+                         "pre_features": {"verified": True, "source": "a11y_scoped_text_fuzzy", **scope_ctx}},
                     ])
                 else:
                     candidates.extend([
@@ -224,6 +242,12 @@ def apply_preflight_to_dsl(
         else:
             step["locator_confidence"] = "low"
 
+        if research_profile:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.get("strategy") in EXECUTABLE_CANDIDATE_STRATEGIES
+            ]
         step["candidates"] = candidates
         step["match_count"] = match_count
         confidences.append(step["locator_confidence"])
@@ -250,6 +274,17 @@ def apply_preflight_to_dsl(
             and s.get("match_count", 0) > 1
         ],
     }
+    if research_profile:
+        for step in steps:
+            if isinstance(step, dict):
+                step.pop("match_count", None)
+                if isinstance(step.get("candidates"), list):
+                    step["candidates"] = [
+                        candidate
+                        for candidate in step["candidates"]
+                        if candidate.get("strategy")
+                        in EXECUTABLE_CANDIDATE_STRATEGIES
+                    ]
     return dsl_case
 
 
@@ -262,6 +297,9 @@ def apply_preflight_to_dsl_by_state(
     A target that matches multiple states must declare ``page_state``. Explicit
     CSS is accepted only when the exact selector was verified by exploration.
     """
+    research_profile = dsl_case.get("profile") == "research-v1"
+    if research_profile:
+        validate_dsl_case(dsl_case, phase="draft")
     steps = dsl_case.get("steps", [])
     warnings: list[str] = []
     confidences: list[str] = []
@@ -272,7 +310,11 @@ def apply_preflight_to_dsl_by_state(
     }
 
     for index, step in enumerate(steps):
-        if not isinstance(step, dict) or not str(step.get("target") or "").strip():
+        if (
+            not isinstance(step, dict)
+            or step.get("action") not in _LOCATOR_ACTIONS
+            or not str(step.get("target") or "").strip()
+        ):
             continue
         requested_state = str(step.get("page_state") or "").strip()
         if requested_state:
@@ -330,7 +372,8 @@ def apply_preflight_to_dsl_by_state(
         state, evaluated = matches[0]
         for field in ("candidates", "match_count", "locator_confidence"):
             step[field] = evaluated[field]
-        step["page_state"] = state
+        if not research_profile:
+            step["page_state"] = state
         href = _verified_anchor_href(step)
         if (
             step.get("action") == "click"
@@ -353,6 +396,17 @@ def apply_preflight_to_dsl_by_state(
         "locator_confidence": overall,
         "warnings": warnings,
     }
+    if research_profile:
+        for step in steps:
+            if isinstance(step, dict):
+                step.pop("match_count", None)
+                if isinstance(step.get("candidates"), list):
+                    step["candidates"] = [
+                        candidate
+                        for candidate in step["candidates"]
+                        if candidate.get("strategy")
+                        in EXECUTABLE_CANDIDATE_STRATEGIES
+                    ]
     return dsl_case
 
 

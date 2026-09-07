@@ -1,0 +1,76 @@
+{
+  "input": {
+    "profile": "research-v1",
+    "name": "  Research checkout  ",
+    "steps": [
+      {
+        "action": "goto",
+        "intent": " Open the checkout page ",
+        "target": " Checkout page ",
+        "value": " /checkout ",
+        "preconditions": [
+          {
+            "type": "url_contains",
+            "value": "/cart"
+          }
+        ],
+        "postconditions": [
+          {
+            "type": "url_contains",
+            "value": "/checkout"
+          }
+        ],
+        "idempotency": "idempotent",
+        "side_effect": "browser_state"
+      },
+      {
+        "action": "click",
+        "intent": " Submit the order ",
+        "target": " Pay button ",
+        "page_state": " checkout ",
+        "preconditions": [
+          {
+            "type": "element_visible",
+            "value": "Pay button"
+          }
+        ],
+        "postconditions": [
+          {
+            "type": "text_visible",
+            "value": "Receipt"
+          }
+        ],
+        "idempotency": "non_idempotent",
+        "side_effect": "external_state",
+        "locator_confidence": "high",
+        "candidates": [
+          {
+            "strategy": "verified_css",
+            "selector": " #pay ",
+            "semantic_value": " Pay ",
+            "pre_score": 1,
+            "pre_features": {
+              "verified": true,
+              "source": "a11y_backend_dom_node",
+              "verified_href": null
+            }
+          }
+        ]
+      },
+      {
+        "action": "assert_url_contains",
+        "intent": " Confirm checkout remains active ",
+        "target": " Checkout URL ",
+        "value": " /checkout ",
+        "preconditions": [],
+        "postconditions": [],
+        "idempotency": "idempotent",
+        "side_effect": "none"
+      }
+    ]
+  },
+  "canonical_version": "dsl.canonical.v2",
+  "profile": "research-v1",
+  "canonical_json": "{\"base_url\":null,\"description\":null,\"input_contract\":[],\"name\":\"Research checkout\",\"output_contract\":[],\"profile\":\"research-v1\",\"steps\":[{\"action\":\"goto\",\"idempotency\":\"idempotent\",\"intent\":\"Open the checkout page\",\"postconditions\":[{\"timeout_ms\":3000,\"type\":\"url_contains\",\"value\":\"/checkout\"}],\"preconditions\":[{\"timeout_ms\":3000,\"type\":\"url_contains\",\"value\":\"/cart\"}],\"side_effect\":\"browser_state\",\"target\":\"Checkout page\",\"value\":\"/checkout\"},{\"action\":\"click\",\"candidates\":[{\"pre_features\":{\"source\":\"a11y_backend_dom_node\",\"verified\":true,\"verified_href\":null},\"pre_score\":1,\"selector\":\"#pay\",\"semantic_value\":\"Pay\",\"strategy\":\"verified_css\"}],\"idempotency\":\"non_idempotent\",\"intent\":\"Submit the order\",\"locator_confidence\":\"high\",\"page_state\":\"checkout\",\"postconditions\":[{\"timeout_ms\":3000,\"type\":\"text_visible\",\"value\":\"Receipt\"}],\"preconditions\":[{\"timeout_ms\":3000,\"type\":\"element_visible\",\"value\":\"Pay button\"}],\"side_effect\":\"external_state\",\"target\":\"Pay button\",\"target_strategy\":null},{\"action\":\"assert_url_contains\",\"idempotency\":\"idempotent\",\"intent\":\"Confirm checkout remains active\",\"postconditions\":[],\"preconditions\":[],\"side_effect\":\"none\",\"target\":\"Checkout URL\",\"value\":\"/checkout\"}]}",
+  "sha256": "ec70764ce72b2edfbc0835988c690a1e90716f32de8d3ae575c4163aff00863c"
+}

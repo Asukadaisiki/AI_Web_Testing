@@ -89,7 +89,12 @@ func TestGenerateDSLReturnsPreflightWarnings(t *testing.T) {
 		1,
 		"1",
 		json.RawMessage(`{
-			"case":{"name":"Example","steps":[{"action":"click","target":"Missing"}]},
+			"case":{"profile":"research-v1","name":"Example","steps":[{
+				"action":"click","intent":"Click missing element","target":"Missing",
+				"preconditions":[{"type":"element_visible","value":"Missing"}],
+				"postconditions":[{"type":"url_changes"}],
+				"idempotency":"idempotent","side_effect":"browser_state"
+			}]},
 			"a11y_nodes_by_state":{"S0":[]}
 		}`),
 	)
@@ -113,7 +118,12 @@ func TestGenerateDSLRejectsUnboundPreflightResult(t *testing.T) {
 		1,
 		"1",
 		json.RawMessage(`{
-			"case":{"name":"Example","steps":[{"action":"click","target":"Login"}]},
+			"case":{"profile":"research-v1","name":"Example","steps":[{
+				"action":"click","intent":"Click login","target":"Login",
+				"preconditions":[{"type":"element_visible","value":"Login"}],
+				"postconditions":[{"type":"url_changes"}],
+				"idempotency":"idempotent","side_effect":"browser_state"
+			}]},
 			"a11y_nodes_by_state":{"login":[{"role":"button","name":"Login"}]}
 		}`),
 	)
@@ -144,9 +154,16 @@ func TestGenerateDSLPreflightReceivesModelSubmittedSummaryEvidence(t *testing.T)
 	}
 	submitted, err := json.Marshal(map[string]any{
 		"case": map[string]any{
-			"name": "Summary Evidence",
+			"profile": "research-v1",
+			"name":    "Summary Evidence",
 			"steps": []map[string]any{{
-				"action": "click", "target": "#login",
+				"action": "click", "intent": "Click login", "target": "Login",
+				"preconditions": []map[string]any{{
+					"type": "element_visible", "value": "Login",
+				}},
+				"postconditions": []map[string]any{{"type": "url_changes"}},
+				"idempotency":    "idempotent",
+				"side_effect":    "browser_state",
 			}},
 		},
 		"a11y_nodes_by_state": map[string]any{
@@ -172,6 +189,165 @@ func TestGenerateDSLPreflightReceivesModelSubmittedSummaryEvidence(t *testing.T)
 		!strings.Contains(string(nodes[0]), `"selector":"#login"`) ||
 		strings.Contains(string(nodes[0]), "raw-only-node") {
 		t.Fatalf("preflight evidence = %s", nodes)
+	}
+}
+
+func TestStripPreflightMetadataPreservesExecutableEvidence(t *testing.T) {
+	draft := json.RawMessage(`{
+		"profile":"research-v1",
+		"name":"Login",
+		"steps":[{
+			"action":"wait_for","intent":"Wait for login","target":"Login",
+			"page_state":"draft-state",
+			"preconditions":[],"postconditions":[],
+			"idempotency":"idempotent","side_effect":"none"
+		}]
+	}`)
+	raw := json.RawMessage(`{
+		"profile":"research-v1",
+		"name":"Login",
+		"_preflight":{"locator_confidence":"high"},
+		"steps":[{
+			"action":"wait_for","intent":"Wait for login","target":"Login",
+			"page_state":"S0",
+			"preconditions":[],"postconditions":[],
+			"idempotency":"idempotent","side_effect":"none",
+			"match_count":1,"locator_confidence":"high",
+			"candidates":[{
+				"strategy":"verified_css","selector":"#login","semantic_value":"Login",
+				"pre_score":1,
+				"pre_features":{"verified":true,"source":"a11y_backend_dom_node"}
+			}]
+		}]
+	}`)
+	sanitized, err := stripPreflightMetadata(raw, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sanitized), "_preflight") ||
+		strings.Contains(string(sanitized), "match_count") {
+		t.Fatalf("sanitized case = %s", sanitized)
+	}
+	if !strings.Contains(string(sanitized), `"page_state":"S0"`) {
+		t.Fatalf("sanitized case did not merge preflight page state: %s", sanitized)
+	}
+	if _, err := dslstore.ValidateExecutableCase(sanitized); err != nil {
+		t.Fatalf("ValidateExecutableCase() error = %v", err)
+	}
+}
+
+func TestPreparePreflightCaseOmitsNonLocatorSemanticTargets(t *testing.T) {
+	raw := json.RawMessage(`{
+		"profile":"research-v1","name":"Navigation","steps":[
+			{"action":"goto","intent":"Open cart","target":"Cart page","value":"/cart","preconditions":[],"postconditions":[],"idempotency":"idempotent","side_effect":"browser_state"},
+			{"action":"wait_for","intent":"Wait for cart","target":"Cart heading","preconditions":[],"postconditions":[],"idempotency":"idempotent","side_effect":"none"}
+		]
+	}`)
+	preflight, err := preparePreflightCase(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate map[string]any
+	if err := json.Unmarshal(preflight, &candidate); err != nil {
+		t.Fatal(err)
+	}
+	steps := candidate["steps"].([]any)
+	if steps[0].(map[string]any)["target"] != "Cart page" {
+		t.Fatalf("goto preflight target changed: %s", preflight)
+	}
+	if steps[1].(map[string]any)["target"] != "Cart heading" {
+		t.Fatalf("locator preflight target changed: %s", preflight)
+	}
+}
+
+func TestCaseMutationPreservesResearchProfile(t *testing.T) {
+	raw := json.RawMessage(`{
+		"profile":"research-v1","name":"Navigation",
+		"input_contract":[],"output_contract":[],
+		"steps":[{
+			"action":"goto","intent":"Open cart","target":"Cart page","value":"/cart",
+			"preconditions":[],"postconditions":[{"type":"url_contains","value":"/cart"}],
+			"idempotency":"idempotent","side_effect":"browser_state"
+		}]
+	}`)
+	mutation, err := caseMutation(7, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutation.Profile == nil || *mutation.Profile != "research-v1" {
+		t.Fatalf("case mutation profile = %#v", mutation.Profile)
+	}
+}
+
+func TestStripPreflightMetadataRejectsBusinessSemanticChanges(t *testing.T) {
+	draft := json.RawMessage(`{
+		"profile":"research-v1","name":"Search","steps":[{
+			"action":"input","intent":"Enter query","target":"Search field","value":"dress",
+			"preconditions":[{"type":"element_visible","value":"Search field"}],
+			"postconditions":[{"type":"value_changed","value":"dress"}],
+			"idempotency":"idempotent","side_effect":"browser_state"
+		}]
+	}`)
+	var base map[string]any
+	if err := json.Unmarshal(draft, &base); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"intent", func(step map[string]any) { step["intent"] = "Rewrite intent" }},
+		{"target", func(step map[string]any) { step["target"] = "#search" }},
+		{"value", func(step map[string]any) { step["value"] = "shoes" }},
+		{"conditions", func(step map[string]any) { step["preconditions"] = []any{} }},
+		{"idempotency", func(step map[string]any) { step["idempotency"] = "non_idempotent" }},
+		{"side_effect", func(step map[string]any) { step["side_effect"] = "external_state" }},
+		{"action", func(step map[string]any) { step["action"] = "click" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clonedRaw, err := json.Marshal(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var returned map[string]any
+			if err := json.Unmarshal(clonedRaw, &returned); err != nil {
+				t.Fatal(err)
+			}
+			step := returned["steps"].([]any)[0].(map[string]any)
+			test.mutate(step)
+			step["page_state"] = "S0"
+			step["locator_confidence"] = "high"
+			step["candidates"] = []any{map[string]any{
+				"strategy": "verified_css", "selector": "#search",
+				"semantic_value": "Search field", "pre_score": 1.0,
+				"pre_features": map[string]any{
+					"verified": true, "source": "a11y_backend_dom_node",
+				},
+			}}
+			returnedRaw, err := json.Marshal(returned)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := stripPreflightMetadata(returnedRaw, draft); err == nil {
+				t.Fatal("stripPreflightMetadata() error = nil")
+			}
+		})
+	}
+}
+
+func TestStripPreflightMetadataRejectsStepCountChange(t *testing.T) {
+	draft := json.RawMessage(`{
+		"profile":"research-v1","name":"Navigation","steps":[{
+			"action":"goto","intent":"Open cart","target":"Cart page","value":"/cart",
+			"preconditions":[],"postconditions":[{"type":"url_contains","value":"/cart"}],
+			"idempotency":"idempotent","side_effect":"browser_state"
+		}]
+	}`)
+	returned := json.RawMessage(`{
+		"profile":"research-v1","name":"Navigation","steps":[]
+	}`)
+	if _, err := stripPreflightMetadata(returned, draft); err == nil {
+		t.Fatal("stripPreflightMetadata() error = nil")
 	}
 }
 

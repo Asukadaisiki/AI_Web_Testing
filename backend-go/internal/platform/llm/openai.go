@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +23,7 @@ import (
 const (
 	defaultMaxAttempts = 3
 	maxResponseBytes   = 4 << 20
+	localCacheStatus   = "not_configured"
 )
 
 type callStage string
@@ -66,13 +69,16 @@ func (e *providerHTTPError) Unwrap() error {
 }
 
 type OpenAIClient struct {
-	provider    string
-	baseURL     string
-	apiKey      string
-	model       string
-	httpClient  *http.Client
-	maxAttempts int
-	retryDelay  time.Duration
+	provider              string
+	chatCompletionsURL    string
+	apiKey                string
+	model                 string
+	endpointScheme        string
+	endpointHost          string
+	credentialFingerprint string
+	httpClient            *http.Client
+	maxAttempts           int
+	retryDelay            time.Duration
 }
 
 func NewOpenAIClient(
@@ -84,20 +90,42 @@ func NewOpenAIClient(
 ) (*OpenAIClient, error) {
 	provider = strings.TrimSpace(provider)
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	apiKey = strings.TrimSpace(apiKey)
 	if provider == "" {
 		return nil, errors.New("LLM provider is required")
 	}
 	if baseURL == "" {
 		return nil, errors.New("LLM base URL is required")
 	}
-	if strings.TrimSpace(apiKey) == "" {
+	endpoint, err := url.Parse(baseURL)
+	if err != nil || endpoint == nil {
+		return nil, errors.New("LLM base URL must be an absolute HTTP(S) URL without user info")
+	}
+	endpointScheme := strings.ToLower(endpoint.Scheme)
+	if endpoint.Hostname() == "" ||
+		(endpointScheme != "http" && endpointScheme != "https") ||
+		endpoint.User != nil {
+		return nil, errors.New("LLM base URL must be an absolute HTTP(S) URL without user info")
+	}
+	if apiKey == "" {
 		return nil, errors.New("LLM API key is required")
 	}
 	if strings.TrimSpace(model) == "" {
 		return nil, errors.New("LLM model is required")
 	}
+	endpointHost := strings.ToLower(endpoint.Host)
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/chat/completions"
+	endpoint.RawPath = ""
 	return &OpenAIClient{
-		provider: provider, baseURL: baseURL, apiKey: apiKey, model: model,
+		provider: provider, chatCompletionsURL: endpoint.String(),
+		apiKey: apiKey, model: model,
+		endpointScheme: endpointScheme,
+		endpointHost:   endpointHost,
+		credentialFingerprint: fingerprintCredential(
+			provider,
+			endpointHost,
+			apiKey,
+		),
 		httpClient:  &http.Client{Timeout: timeout},
 		maxAttempts: defaultMaxAttempts,
 		retryDelay:  100 * time.Millisecond,
@@ -109,6 +137,7 @@ type chatRequest struct {
 	Messages   []chatMessage `json:"messages"`
 	Tools      []chatTool    `json:"tools,omitempty"`
 	ToolChoice string        `json:"tool_choice,omitempty"`
+	UserID     string        `json:"user_id"`
 }
 
 type chatMessage struct {
@@ -144,10 +173,22 @@ type chatResponse struct {
 		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     *int64 `json:"prompt_tokens"`
-		CompletionTokens *int64 `json:"completion_tokens"`
-		TotalTokens      *int64 `json:"total_tokens"`
+		PromptTokens          *int64 `json:"prompt_tokens"`
+		CompletionTokens      *int64 `json:"completion_tokens"`
+		TotalTokens           *int64 `json:"total_tokens"`
+		PromptCacheHitTokens  *int64 `json:"prompt_cache_hit_tokens"`
+		PromptCacheMissTokens *int64 `json:"prompt_cache_miss_tokens"`
 	} `json:"usage,omitempty"`
+}
+
+type providerResponseEvidence struct {
+	responseID      string
+	headerRequestID string
+	headerName      string
+}
+
+func (e providerResponseEvidence) legacyRequestID() string {
+	return firstNonEmpty(e.responseID, e.headerRequestID)
 }
 
 func (c *OpenAIClient) Complete(
@@ -155,14 +196,23 @@ func (c *OpenAIClient) Complete(
 	messages []agent.Message,
 	definitions []agent.ToolDefinition,
 ) (agent.ModelResponse, error) {
-	payload := buildRequest(c.model, messages, definitions)
+	clientRequestID, err := newClientRequestID()
+	if err != nil {
+		return agent.ModelResponse{}, fmt.Errorf("generate LLM client request ID: %w", err)
+	}
+	payload := buildRequest(c.model, clientRequestID, messages, definitions)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return agent.ModelResponse{}, fmt.Errorf("encode LLM request: %w", err)
 	}
 	telemetry := agent.ModelTelemetry{
-		Provider:       c.provider,
-		RequestedModel: c.model,
+		Provider:              c.provider,
+		RequestedModel:        c.model,
+		ClientRequestID:       clientRequestID,
+		EndpointScheme:        c.endpointScheme,
+		EndpointHost:          c.endpointHost,
+		CredentialFingerprint: c.credentialFingerprint,
+		LocalResponseCache:    localCacheStatus,
 		Prompt: agent.PromptSpec{
 			Version:       agent.SystemPromptVersion,
 			RequestSHA256: sha256Hex(body),
@@ -188,12 +238,16 @@ func (c *OpenAIClient) Complete(
 			case <-timer.C:
 			}
 		}
-		decoded, status, requestID, started, callErr := c.doRequest(ctx, body)
+		decoded, status, evidence, started, callErr := c.doRequest(
+			ctx,
+			body,
+			clientRequestID,
+		)
 		if callErr != nil {
 			lastErr = classifyCallError(callErr)
 			telemetry.Attempts = append(
 				telemetry.Attempts,
-				failedAttempt(attempt, started, status, requestID, lastErr),
+				failedAttempt(attempt, started, status, evidence, lastErr),
 			)
 			if !lastErr.Retryable || attempt == c.maxAttempts {
 				telemetry.TotalLatencyMS = elapsedMillis(totalStarted)
@@ -217,7 +271,7 @@ func (c *OpenAIClient) Complete(
 			})
 			telemetry.Attempts = append(
 				telemetry.Attempts,
-				failedAttempt(attempt, started, status, requestID, lastErr),
+				failedAttempt(attempt, started, status, evidence, lastErr),
 			)
 			telemetry.TotalLatencyMS = elapsedMillis(totalStarted)
 			if emitErr := agent.EmitTelemetry(ctx, telemetry, nil); emitErr != nil {
@@ -229,7 +283,10 @@ func (c *OpenAIClient) Complete(
 		telemetry.Attempts = append(telemetry.Attempts, agent.ModelAttempt{
 			Attempt: attempt, Status: "succeeded", StartedAt: started.UTC(),
 			LatencyMS: elapsedMillis(started), HTTPStatus: status,
-			ProviderRequestID: truncate(requestID, 128),
+			ProviderResponseID:            truncate(evidence.responseID, 128),
+			ProviderHeaderRequestID:       truncate(evidence.headerRequestID, 128),
+			ProviderHeaderRequestIDHeader: truncate(evidence.headerName, 64),
+			ProviderRequestID:             truncate(evidence.legacyRequestID(), 128),
 		})
 		telemetry.TotalLatencyMS = elapsedMillis(totalStarted)
 		result.Telemetry = telemetry
@@ -245,8 +302,15 @@ func (c *OpenAIClient) Complete(
 	return agent.ModelResponse{}, lastErr
 }
 
-func buildRequest(model string, messages []agent.Message, definitions []agent.ToolDefinition) chatRequest {
-	request := chatRequest{Model: model, ToolChoice: "auto"}
+func buildRequest(
+	model string,
+	clientRequestID string,
+	messages []agent.Message,
+	definitions []agent.ToolDefinition,
+) chatRequest {
+	request := chatRequest{
+		Model: model, ToolChoice: "auto", UserID: clientRequestID,
+	}
 	for _, message := range messages {
 		converted := chatMessage{Role: message.Role, Content: message.Content, ToolCallID: message.ToolCallID}
 		for _, call := range message.ToolCalls {
@@ -299,23 +363,34 @@ func requestSerializationBudget(
 func (c *OpenAIClient) doRequest(
 	ctx context.Context,
 	body []byte,
-) (chatResponse, *int, string, time.Time, error) {
+	clientRequestID string,
+) (chatResponse, *int, providerResponseEvidence, time.Time, error) {
 	started := time.Now()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.chatCompletionsURL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
-		return chatResponse{}, nil, "", started, &callStageError{stage: stageRequest, cause: err}
+		return chatResponse{}, nil, providerResponseEvidence{}, started, &callStageError{stage: stageRequest, cause: err}
 	}
 	request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Client-Request-ID", clientRequestID)
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return chatResponse{}, nil, "", started, &callStageError{stage: stageRequest, cause: err}
+		return chatResponse{}, nil, providerResponseEvidence{}, started, &callStageError{stage: stageRequest, cause: err}
 	}
 	status := response.StatusCode
-	requestID := firstNonEmpty(response.Header.Get("x-request-id"), response.Header.Get("request-id"))
+	headerRequestID, headerName := providerRequestIDFromHeader(response.Header)
+	evidence := providerResponseEvidence{
+		headerRequestID: headerRequestID,
+		headerName:      headerName,
+	}
 	responseBody, readErr := readAndCloseResponse(response.Body)
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return chatResponse{}, &status, requestID, started, &providerHTTPError{
+		return chatResponse{}, &status, evidence, started, &providerHTTPError{
 			status: status,
 			cause:  readErr,
 		}
@@ -325,22 +400,20 @@ func (c *OpenAIClient) doRequest(
 		if errors.Is(readErr, errResponseTooLarge) {
 			stage = stageInvalidResponse
 		}
-		return chatResponse{}, &status, requestID, started, &callStageError{
+		return chatResponse{}, &status, evidence, started, &callStageError{
 			stage: stage,
 			cause: readErr,
 		}
 	}
 	var decoded chatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return chatResponse{}, &status, requestID, started, &callStageError{
+		return chatResponse{}, &status, evidence, started, &callStageError{
 			stage: stageDecode,
 			cause: err,
 		}
 	}
-	if decoded.ID != "" {
-		requestID = decoded.ID
-	}
-	return decoded, &status, requestID, started, nil
+	evidence.responseID = decoded.ID
+	return decoded, &status, evidence, started, nil
 }
 
 func readAndCloseResponse(body io.ReadCloser) ([]byte, error) {
@@ -374,9 +447,11 @@ func parseResponse(decoded chatResponse) (agent.ModelResponse, error) {
 }
 
 func usageFromResponse(usage *struct {
-	PromptTokens     *int64 `json:"prompt_tokens"`
-	CompletionTokens *int64 `json:"completion_tokens"`
-	TotalTokens      *int64 `json:"total_tokens"`
+	PromptTokens          *int64 `json:"prompt_tokens"`
+	CompletionTokens      *int64 `json:"completion_tokens"`
+	TotalTokens           *int64 `json:"total_tokens"`
+	PromptCacheHitTokens  *int64 `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens *int64 `json:"prompt_cache_miss_tokens"`
 }) agent.ModelUsage {
 	result := agent.ModelUsage{Status: agent.UsageUnavailable}
 	if usage == nil {
@@ -385,10 +460,13 @@ func usageFromResponse(usage *struct {
 	result.InputTokens = usage.PromptTokens
 	result.OutputTokens = usage.CompletionTokens
 	result.TotalTokens = usage.TotalTokens
+	result.PromptCacheHitTokens = usage.PromptCacheHitTokens
+	result.PromptCacheMissTokens = usage.PromptCacheMissTokens
 	switch {
 	case result.InputTokens != nil && result.OutputTokens != nil && result.TotalTokens != nil:
 		result.Status = agent.UsageAvailable
-	case result.InputTokens != nil || result.OutputTokens != nil || result.TotalTokens != nil:
+	case result.InputTokens != nil || result.OutputTokens != nil || result.TotalTokens != nil ||
+		result.PromptCacheHitTokens != nil || result.PromptCacheMissTokens != nil:
 		result.Status = agent.UsagePartial
 	}
 	return result
@@ -493,14 +571,44 @@ func failedAttempt(
 	attempt int,
 	started time.Time,
 	status *int,
-	requestID string,
+	evidence providerResponseEvidence,
 	modelErr *agent.ModelError,
 ) agent.ModelAttempt {
 	return agent.ModelAttempt{
 		Attempt: attempt, Status: "failed", StartedAt: started.UTC(),
 		LatencyMS: elapsedMillis(started), HTTPStatus: status,
-		ProviderRequestID: truncate(requestID, 128), Error: modelErr,
+		ProviderResponseID:            truncate(evidence.responseID, 128),
+		ProviderHeaderRequestID:       truncate(evidence.headerRequestID, 128),
+		ProviderHeaderRequestIDHeader: truncate(evidence.headerName, 64),
+		ProviderRequestID:             truncate(evidence.legacyRequestID(), 128),
+		Error:                         modelErr,
 	}
+}
+
+func newClientRequestID() (string, error) {
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return "e2e_" + hex.EncodeToString(random), nil
+}
+
+func fingerprintCredential(provider, host, apiKey string) string {
+	sum := sha256.Sum256([]byte(provider + "\x00" + host + "\x00" + apiKey))
+	return "sha256:v1:" + hex.EncodeToString(sum[:])
+}
+
+func providerRequestIDFromHeader(header http.Header) (string, string) {
+	for _, name := range []string{
+		"x-request-id",
+		"request-id",
+		"x-ds-trace-id",
+	} {
+		if value := strings.TrimSpace(header.Get(name)); value != "" {
+			return value, name
+		}
+	}
+	return "", ""
 }
 
 func promptSHA(messages []agent.Message) string {

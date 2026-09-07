@@ -12,6 +12,8 @@ from app.schemas.executions import StepExecutionEvidence
 from scripts.run_agentic_e2e import (
     AgenticE2EError,
     CANONICAL_GOAL,
+    DSL_CANONICAL_VERSION_V1,
+    DSL_CANONICAL_VERSION_V2,
     HTTPAgenticClient,
     _failure_result,
     _go_json_sha256,
@@ -144,7 +146,13 @@ class FakeClient:
                     "tool_call_id": "generate-1",
                     "payload": {
                         "tool": "generate_dsl",
-                        "content": {"generation_id": 44, "case": self.case},
+                        "content": {
+                            "generation_id": 44,
+                            "case": self.case,
+                            "profile": "legacy-v1",
+                            "dsl_canonical_version": DSL_CANONICAL_VERSION_V1,
+                            "dsl_sha256": self.dsl_hash,
+                        },
                     },
                 },
                 {
@@ -260,6 +268,140 @@ class ClarificationClient(FakeClient):
             }
         ]
         return [event for event in events if event["seq"] > after_seq]
+
+
+class ResearchProfileClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.case = {
+            "profile": "research-v1",
+            "name": "Blue Top",
+            "description": None,
+            "base_url": "https://automationexercise.com",
+            "input_contract": [],
+            "output_contract": [],
+            "steps": [
+                {
+                    "action": "goto",
+                    "intent": "Open products",
+                    "target": "Products page",
+                    "value": "https://automationexercise.com/products",
+                    "preconditions": [],
+                    "postconditions": [
+                        {
+                            "type": "url_contains",
+                            "value": "/products",
+                            "timeout_ms": 3000,
+                        }
+                    ],
+                    "idempotency": "idempotent",
+                    "side_effect": "browser_state",
+                },
+                {
+                    "action": "input",
+                    "intent": "Enter product query",
+                    "target": "Search Product",
+                    "value": "Blue Top",
+                    "trigger": None,
+                    "page_state": "products",
+                    "target_strategy": None,
+                    "locator_confidence": "high",
+                    "candidates": [
+                        {
+                            "strategy": "verified_css",
+                            "selector": "#search_product",
+                            "semantic_value": "Search Product",
+                            "pre_score": 1.0,
+                            "pre_features": {
+                                "verified": True,
+                                "source": "a11y_backend_dom_node",
+                            },
+                        }
+                    ],
+                    "preconditions": [
+                        {
+                            "type": "element_visible",
+                            "value": "Search Product",
+                            "timeout_ms": 3000,
+                        }
+                    ],
+                    "postconditions": [
+                        {
+                            "type": "value_changed",
+                            "value": "Blue Top",
+                            "timeout_ms": 3000,
+                        }
+                    ],
+                    "idempotency": "idempotent",
+                    "side_effect": "browser_state",
+                },
+                {
+                    "action": "click",
+                    "intent": "Submit product search",
+                    "target": "Search button",
+                    "page_state": "products",
+                    "target_strategy": None,
+                    "locator_confidence": "high",
+                    "candidates": [
+                        {
+                            "strategy": "verified_css",
+                            "selector": "#submit_search",
+                            "semantic_value": "Search",
+                            "pre_score": 1.0,
+                            "pre_features": {
+                                "verified": True,
+                                "source": "a11y_backend_dom_node",
+                            },
+                        }
+                    ],
+                    "preconditions": [
+                        {
+                            "type": "element_visible",
+                            "value": "Search button",
+                            "timeout_ms": 3000,
+                        }
+                    ],
+                    "postconditions": [
+                        {
+                            "type": "text_visible",
+                            "value": "Blue Top",
+                            "timeout_ms": 3000,
+                        }
+                    ],
+                    "idempotency": "idempotent",
+                    "side_effect": "browser_state",
+                },
+            ],
+        }
+        self.dsl_hash = _go_json_sha256(self.case)
+
+    def list_events(self, run_id, after_seq):
+        events = super().list_events(run_id, after_seq)
+        for event in events:
+            payload = event.get("payload") or {}
+            content = payload.get("content")
+            if payload.get("tool") == "generate_dsl" and isinstance(
+                content, dict
+            ):
+                content["profile"] = "research-v1"
+                content["dsl_canonical_version"] = DSL_CANONICAL_VERSION_V2
+                content["dsl_sha256"] = self.dsl_hash
+        return events
+
+    def get_report(self, batch_id):
+        report = super().get_report(batch_id)
+        binding = {
+            "dsl_profile": "research-v1",
+            "dsl_canonical_version": DSL_CANONICAL_VERSION_V2,
+            "dsl_sha256": self.dsl_hash,
+        }
+        report.update(binding)
+        job = report["jobs"][0]
+        job.update(binding)
+        execution = job["latest_execution"]
+        execution.update(binding)
+        execution["report"].update(binding)
+        return report
 
 
 class Generation129RecoveryClient(FakeClient):
@@ -539,6 +681,57 @@ class AgenticE2EDriverTest(unittest.TestCase):
         self.assertEqual(result["ids"]["job_id"], 66)
         self.assertEqual(result["ids"]["execution_id"], 77)
         self.assertEqual(result["schema_version"], "agentic-e2e.result.v1")
+
+    def test_research_profile_is_bound_through_formal_report(self) -> None:
+        result = run_agentic_goal(
+            CANONICAL_GOAL,
+            client=ResearchProfileClient(),
+            expected_dsl_profile="research-v1",
+        )
+
+        binding = {
+            "dsl_profile": "research-v1",
+            "dsl_canonical_version": DSL_CANONICAL_VERSION_V2,
+            "dsl_sha256": result["approval"]["dsl_sha256"],
+        }
+        self.assertEqual(
+            {
+                field: result["approval"][field]
+                for field in binding
+            },
+            binding,
+        )
+        self.assertTrue(result["formal_execution"]["passed"])
+
+    def test_research_generation_rejects_invalid_action_ir_before_approval(self) -> None:
+        mutations = []
+        missing_intent = ResearchProfileClient()
+        missing_intent.case["steps"][1].pop("intent")
+        mutations.append(("intent", missing_intent))
+
+        unknown_action = ResearchProfileClient()
+        unknown_action.case["steps"][1]["action"] = "eval"
+        mutations.append(("unsupported DSL action", unknown_action))
+
+        unexplored = ResearchProfileClient()
+        unexplored.case["steps"][1]["candidates"][0]["pre_features"] = {
+            "source": "model_authored"
+        }
+        mutations.append(("verified preflight", unexplored))
+
+        for expected, client in mutations:
+            client.dsl_hash = _go_json_sha256(client.case)
+            with (
+                self.subTest(expected=expected),
+                self.assertRaisesRegex(AgenticE2EError, expected),
+            ):
+                run_agentic_goal(
+                    CANONICAL_GOAL,
+                    client=client,
+                    expected_dsl_profile="research-v1",
+                )
+            self.assertFalse(client.approved)
+            self.assertEqual(client.list_batches(11), [])
 
     def test_configuration_reports_actual_clean_context(self) -> None:
         client = FakeClient()
@@ -829,7 +1022,111 @@ class AgenticE2EDriverTest(unittest.TestCase):
                 cancel_grace_seconds=0.2,
             )
 
-    def test_approval_uses_the_30_second_request_timeout(self) -> None:
+    def test_approval_read_timeout_polls_completed_run_without_reapproval(
+        self,
+    ) -> None:
+        class AcceptedTimeoutClient(FakeClient):
+            def __init__(self):
+                super().__init__()
+                self.resume_calls = 0
+                self.polls_after_resume = 0
+
+            def approve(self, run_id, tool_call_id):
+                self.resume_calls += 1
+                super().approve(run_id, tool_call_id)
+                raise TimeoutError("timed out while reading resume response")
+
+            def get_run(self, run_id):
+                if self.approved and not self.cancelled:
+                    self.polls_after_resume += 1
+                    if self.polls_after_resume == 1:
+                        return {"id": run_id, "status": "running"}
+                return super().get_run(run_id)
+
+        client = AcceptedTimeoutClient()
+        result = run_agentic_goal(CANONICAL_GOAL, client=client)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(client.resume_calls, 1)
+        self.assertGreaterEqual(client.polls_after_resume, 2)
+        self.assertEqual(client.cancel_calls, [])
+
+    def test_approval_read_timeout_still_cancels_at_absolute_deadline(
+        self,
+    ) -> None:
+        clock = [0.0]
+
+        class DeadlineAfterResumeClient(FakeClient):
+            def __init__(self):
+                super().__init__()
+                self.resume_calls = 0
+                self.resume_unknown = False
+                self.batch_cancelled = False
+
+            def approve(self, run_id, tool_call_id):
+                self.resume_calls += 1
+                self.resume_unknown = True
+                clock[0] = 0.75
+                raise TimeoutError("timed out while reading resume response")
+
+            def list_events(self, run_id, after_seq):
+                if self.resume_unknown:
+                    clock[0] = 1.1
+                    return []
+                return super().list_events(run_id, after_seq)
+
+            def get_run(self, run_id):
+                if self.cancelled:
+                    return {"id": run_id, "status": "cancelled"}
+                if self.resume_unknown:
+                    return {"id": run_id, "status": "running"}
+                return super().get_run(run_id)
+
+            def list_batches(self, project_id):
+                return [{"id": 55}] if self.resume_unknown else []
+
+            def get_batch(self, batch_id):
+                status = "cancelled" if self.batch_cancelled else "running"
+                return {
+                    "id": batch_id,
+                    "status": status,
+                    "jobs": [{"id": 66, "status": status}],
+                }
+
+            def cancel_batch(self, batch_id):
+                self.batch_cancel_calls.append(batch_id)
+                self.batch_cancelled = True
+                return self.get_batch(batch_id)
+
+        client = DeadlineAfterResumeClient()
+        with (
+            patch(
+                "scripts.run_agentic_e2e.time.monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            patch("scripts.run_agentic_e2e.time.sleep"),
+            self.assertRaisesRegex(AgenticE2EError, "absolute deadline") as raised,
+        ):
+            run_agentic_goal(
+                CANONICAL_GOAL,
+                client=client,
+                timeout_seconds=1,
+                cancel_grace_seconds=0.2,
+            )
+
+        self.assertEqual(client.resume_calls, 1)
+        self.assertEqual(client.batch_cancel_calls, [55])
+        self.assertEqual(len(client.cancel_calls), 1)
+        self.assertTrue(
+            raised.exception.diagnostic["batch_cleanup"]["terminal_verified"]
+        )
+        self.assertTrue(
+            raised.exception.diagnostic["cancellation"]["terminal_verified"]
+        )
+
+    def test_approval_uses_long_timeout_while_regular_http_stays_short(
+        self,
+    ) -> None:
         class Response:
             def __enter__(self):
                 return self
@@ -849,9 +1146,45 @@ class AgenticE2EDriverTest(unittest.TestCase):
             "scripts.run_agentic_e2e.urlopen",
             return_value=Response(),
         ) as request:
+            client.get_run("run-33")
             client.approve("run-33", "tool-44")
 
-        self.assertEqual(request.call_args.kwargs["timeout"], 30)
+        self.assertEqual(
+            [call.kwargs["timeout"] for call in request.call_args_list],
+            [30, 300],
+        )
+
+    def test_approval_long_timeout_is_bounded_by_run_deadline(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            @staticmethod
+            def read():
+                return b'{"status":"running"}'
+
+        client = HTTPAgenticClient(
+            agent_url="http://agent.test",
+            browser_url="http://browser.test",
+            long_operation_timeout=300,
+        )
+        client.set_run_deadline(180)
+        with (
+            patch(
+                "scripts.run_agentic_e2e.time.monotonic",
+                return_value=100,
+            ),
+            patch(
+                "scripts.run_agentic_e2e.urlopen",
+                return_value=Response(),
+            ) as request,
+        ):
+            client.approve("run-33", "tool-44")
+
+        self.assertEqual(request.call_args.kwargs["timeout"], 80)
 
     def test_http_client_reuses_batch_detail_and_cancel_apis(self) -> None:
         client = HTTPAgenticClient(

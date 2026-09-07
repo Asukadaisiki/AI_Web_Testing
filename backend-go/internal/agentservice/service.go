@@ -279,12 +279,44 @@ func (s *Service) RecordModelTelemetry(
 				Retryable: attempt.Error.Retryable,
 			}
 		}
+		providerRequestID := attempt.ProviderRequestID
+		if attempt.ProviderResponseID != "" {
+			providerRequestID = attempt.ProviderResponseID
+		} else if attempt.ProviderHeaderRequestID != "" {
+			providerRequestID = attempt.ProviderHeaderRequestID
+		}
 		payload := ResearchLLMCallPayload{
 			SchemaVersion:  ResearchLLMCallSchemaV1,
 			LogicalCallID:  limitString(record.LogicalCallID, 128),
 			Provider:       limitString(record.Telemetry.Provider, 128),
 			RequestedModel: limitString(record.Telemetry.RequestedModel, 128),
 			ResolvedModel:  limitString(resolvedModel, 128),
+			ClientRequestID: limitString(
+				record.Telemetry.ClientRequestID,
+				128,
+			),
+			EndpointScheme: limitString(record.Telemetry.EndpointScheme, 16),
+			EndpointHost:   limitString(record.Telemetry.EndpointHost, 255),
+			CredentialFingerprint: limitString(
+				record.Telemetry.CredentialFingerprint,
+				74,
+			),
+			ProviderResponseID: limitString(
+				attempt.ProviderResponseID,
+				128,
+			),
+			ProviderHeaderRequestID: limitString(
+				attempt.ProviderHeaderRequestID,
+				128,
+			),
+			ProviderHeaderRequestIDHeader: limitString(
+				attempt.ProviderHeaderRequestIDHeader,
+				64,
+			),
+			LocalResponseCache: limitString(
+				record.Telemetry.LocalResponseCache,
+				32,
+			),
 			Prompt: agent.PromptSpec{
 				Version:       limitString(record.Telemetry.Prompt.Version, 64),
 				RequestSHA256: limitString(record.Telemetry.Prompt.RequestSHA256, 64),
@@ -300,7 +332,7 @@ func (s *Service) RecordModelTelemetry(
 			AttemptLatencyMS:          attempt.LatencyMS,
 			TotalLatencyMS:            record.Telemetry.TotalLatencyMS,
 			HTTPStatus:                attempt.HTTPStatus,
-			ProviderRequestID:         limitString(attempt.ProviderRequestID, 128),
+			ProviderRequestID:         limitString(providerRequestID, 128),
 			RetryCount:                index,
 			ToolCallStatus:            toolCallStatus,
 			ToolCallUnavailableReason: unavailableReason,

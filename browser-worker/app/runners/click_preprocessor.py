@@ -298,11 +298,13 @@ def click_with_precheck(
     locator,
     *,
     click_coordinates: tuple[int, int] | None = None,
+    allow_recovery: bool = True,
     max_wait_retries: int = 3,
     wait_interval_ms: int = 1000,
 ) -> ClickPrecheckResult:
     """Attempt a click; if intercepted, diagnose and apply recovery strategies.
 
+    When recovery is disabled, the first dispatch error is returned unchanged.
     Non-interception errors (element not found, generic timeout) are returned
     immediately without entering the recovery chain.
     """
@@ -316,6 +318,8 @@ def click_with_precheck(
             locator.click()
         return ClickPrecheckResult(succeeded=True)
     except PlaywrightTimeoutError as exc:
+        if not allow_recovery:
+            return ClickPrecheckResult(succeeded=False, original_error=exc)
         error_message = str(exc)
         # Hidden element (e.g. modal button during CSS animation):
         # force-click bypasses Playwright's visibility check.

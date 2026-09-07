@@ -19,7 +19,7 @@ var (
 	ErrAccessDenied = errors.New("DSL generation access denied")
 )
 
-const CanonicalVersion = "dsl.canonical.v1"
+const CanonicalVersion = CanonicalVersionV1
 
 var supportedActions = map[string]struct{}{
 	"goto": {}, "click": {}, "input": {}, "wait_for": {},
@@ -51,6 +51,7 @@ type Generation struct {
 	Case             json.RawMessage
 	DSLHash          string
 	CanonicalVersion string
+	Profile          Profile
 	Success          bool
 }
 
@@ -68,10 +69,12 @@ func (s *Store) CreateGeneration(
 	candidate json.RawMessage,
 	warnings []string,
 ) (Generation, error) {
-	normalized, baseURL, err := ValidateCase(candidate)
+	validated, err := ValidateExecutableCase(candidate)
 	if err != nil {
 		return Generation{}, err
 	}
+	normalized := validated.CanonicalJSON
+	baseURL := validated.BaseURL
 	var member bool
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT EXISTS(
@@ -130,14 +133,16 @@ func (s *Store) CreateGeneration(
 		string(warningsJSON),
 		string(normalized),
 		dslHash,
-		CanonicalVersion,
+		validated.CanonicalVersion,
 	).Scan(&id)
 	if err != nil {
 		return Generation{}, fmt.Errorf("persist DSL generation: %w", err)
 	}
 	return Generation{
 		ID: id, Case: normalized, DSLHash: dslHash,
-		CanonicalVersion: CanonicalVersion, Success: true,
+		CanonicalVersion: validated.CanonicalVersion,
+		Profile:          validated.Profile,
+		Success:          true,
 	}, nil
 }
 
@@ -167,25 +172,29 @@ func (s *Store) GetGeneration(
 	if len(raw) == 0 {
 		return Generation{}, ErrNotFound
 	}
-	canonical, _, err := ValidateCase(raw)
+	var validated ValidatedCase
+	if storedVersion.Valid {
+		validated, err = ValidateCaseForVersion(raw, storedVersion.String)
+	} else {
+		validated, err = ValidateExecutableCase(raw)
+	}
 	if err != nil {
 		return Generation{}, fmt.Errorf("canonicalize persisted DSL generation: %w", err)
 	}
+	canonical := validated.CanonicalJSON
 	generation.Case = canonical
 	generation.DSLHash = SHA256(canonical)
-	generation.CanonicalVersion = CanonicalVersion
+	generation.CanonicalVersion = validated.CanonicalVersion
+	generation.Profile = validated.Profile
 	if storedHash.Valid && storedHash.String != generation.DSLHash {
 		return Generation{}, errors.New("persisted DSL generation SHA does not match its canonical JSON")
-	}
-	if storedVersion.Valid && storedVersion.String != CanonicalVersion {
-		return Generation{}, fmt.Errorf("unsupported DSL canonical version: %s", storedVersion.String)
 	}
 	if !storedHash.Valid || !storedVersion.Valid || string(raw) != string(canonical) {
 		if _, err := s.db.ExecContext(ctx, `
 			UPDATE dsl_generation_runs
 			SET generated_case_json = $2, dsl_sha256 = $3, dsl_canonical_version = $4
 			WHERE id = $1`,
-			generation.ID, string(canonical), generation.DSLHash, CanonicalVersion,
+			generation.ID, string(canonical), generation.DSLHash, generation.CanonicalVersion,
 		); err != nil {
 			return Generation{}, fmt.Errorf("backfill canonical DSL generation: %w", err)
 		}
@@ -193,7 +202,7 @@ func (s *Store) GetGeneration(
 	return generation, nil
 }
 
-func ValidateCase(raw json.RawMessage) (json.RawMessage, string, error) {
+func validateLegacyCase(raw json.RawMessage) (json.RawMessage, string, error) {
 	var candidate map[string]any
 	if !json.Valid(raw) || json.Unmarshal(raw, &candidate) != nil {
 		return nil, "", errors.New("case must be an object")

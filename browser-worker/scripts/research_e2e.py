@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,8 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.run_agentic_e2e import (
     DEFAULT_CANCEL_GRACE_SECONDS,
+    DEFAULT_LONG_OPERATION_TIMEOUT_SECONDS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     HTTPAgenticClient,
+    PROFILE_CANONICAL_VERSIONS,
+    _validate_generation_binding,
     run_agentic_goal,
     validate_goal,
 )
@@ -30,7 +35,7 @@ from scripts.run_agentic_e2e import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SPEC = (
-    REPOSITORY_ROOT / "research" / "experiments" / "stage5-canonical.v1.json"
+    REPOSITORY_ROOT / "research" / "experiments" / "stage6-canonical.v1.json"
 )
 EXPERIMENT_SPEC_VERSION = "research.experiment-spec.v1"
 MAX_EXPERIMENT_TIMEOUT_SECONDS = 24 * 60 * 60
@@ -71,10 +76,16 @@ CODE_SNAPSHOT_EXACT_PATHS = {
 }
 CODE_SNAPSHOT_SOURCE_ROOTS = (
     "backend-go/cmd/agentservice/",
+    "backend-go/internal/agent/",
     "backend-go/internal/agentservice/",
+    "backend-go/internal/config/",
+    "backend-go/internal/dsl/",
     "backend-go/internal/execution/",
+    "backend-go/internal/harness/",
     "backend-go/internal/planning/",
+    "backend-go/internal/platform/llm/",
     "backend-go/internal/research/",
+    "backend-go/internal/tools/",
     "backend-go/internal/transport/http/",
     "browser-worker/app/",
 )
@@ -96,6 +107,217 @@ CODE_SNAPSHOT_SECRET_SUFFIXES = {
     ".key",
     ".p12",
     ".pem",
+}
+PROVIDER_EVIDENCE_SCHEMA_VERSION = "research.provider-evidence.v1"
+PROVIDER_ATTESTATION_SCHEMA_VERSION = "research.provider-attestation.v1"
+PROVIDER_ATTESTATION_ALGORITHM = "hmac-sha256:v1"
+PROVIDER_ATTESTATION_KEY_ENV = "RESEARCH_PROVIDER_ATTESTATION_KEY"
+PROVIDER_ATTESTATION_SOURCES = (
+    "deepseek_console_export",
+    "deepseek_usage_api",
+    "deepseek_billing_export",
+    "deepseek_console_screenshot",
+)
+PROVIDER_ATTESTATION_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "research.provider-attestation.v1",
+    "title": "Research provider platform attestation",
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema_version",
+        "experiment_id",
+        "source_sha256",
+        "evidence_artifact_sha256",
+        "runs",
+        "platform_evidence",
+        "reviewer",
+        "signature",
+    ],
+    "properties": {
+        "schema_version": {"const": PROVIDER_ATTESTATION_SCHEMA_VERSION},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+        "evidence_artifact_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+        },
+        "runs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "research_run_id",
+                    "agent_run_id",
+                    "source_event_seqs",
+                    "run_started_at",
+                    "run_finished_at",
+                    "provider",
+                    "endpoint_scheme",
+                    "endpoint_host",
+                    "model",
+                    "credential_fingerprint",
+                    "attempts",
+                ],
+                "properties": {
+                    "research_run_id": {"type": "string", "minLength": 1},
+                    "agent_run_id": {"type": "string", "minLength": 1},
+                    "source_event_seqs": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "integer", "minimum": 1},
+                    },
+                    "run_started_at": {
+                        "type": "string",
+                        "format": "date-time",
+                    },
+                    "run_finished_at": {
+                        "type": "string",
+                        "format": "date-time",
+                    },
+                    "provider": {"type": "string", "minLength": 1},
+                    "endpoint_scheme": {"const": "https"},
+                    "endpoint_host": {"type": "string", "minLength": 1},
+                    "model": {"type": "string", "minLength": 1},
+                    "credential_fingerprint": {
+                        "type": "string",
+                        "pattern": "^sha256:v1:[0-9a-f]{64}$",
+                    },
+                    "attempts": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "client_request_id",
+                                "provider_response_id",
+                                "provider_header_request_id",
+                                "provider_header_request_id_header",
+                                "attempt_started_at",
+                                "usage",
+                            ],
+                            "properties": {
+                                "client_request_id": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                },
+                                "provider_response_id": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                },
+                                "provider_header_request_id": {
+                                    "type": ["string", "null"],
+                                },
+                                "provider_header_request_id_header": {
+                                    "type": ["string", "null"],
+                                },
+                                "attempt_started_at": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                },
+                                "usage": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": [
+                                        "status",
+                                        "input_tokens",
+                                        "output_tokens",
+                                        "total_tokens",
+                                        "prompt_cache_hit_tokens",
+                                        "prompt_cache_miss_tokens",
+                                    ],
+                                    "properties": {
+                                        "status": {"const": "available"},
+                                        "input_tokens": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                        },
+                                        "output_tokens": {
+                                            "type": "integer",
+                                            "minimum": 1,
+                                        },
+                                        "total_tokens": {
+                                            "type": "integer",
+                                            "minimum": 1,
+                                        },
+                                        "prompt_cache_hit_tokens": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                        },
+                                        "prompt_cache_miss_tokens": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        "platform_evidence": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "source",
+                "artifact_sha256",
+                "observed_at",
+                "matched_provider_response_ids",
+            ],
+            "properties": {
+                "source": {
+                    "type": ["string", "null"],
+                    "enum": [*PROVIDER_ATTESTATION_SOURCES, None],
+                },
+                "artifact_sha256": {
+                    "type": ["string", "null"],
+                    "pattern": "^[0-9a-f]{64}$",
+                },
+                "observed_at": {
+                    "type": ["string", "null"],
+                    "format": "date-time",
+                },
+                "matched_provider_response_ids": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "uniqueItems": True,
+                },
+            },
+        },
+        "reviewer": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["name", "organization", "reviewed_at"],
+            "properties": {
+                "name": {"type": ["string", "null"]},
+                "organization": {"type": ["string", "null"]},
+                "reviewed_at": {
+                    "type": ["string", "null"],
+                    "format": "date-time",
+                },
+            },
+        },
+        "signature": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["algorithm", "key_id", "value"],
+            "properties": {
+                "algorithm": {"const": PROVIDER_ATTESTATION_ALGORITHM},
+                "key_id": {"type": ["string", "null"]},
+                "value": {
+                    "type": ["string", "null"],
+                    "pattern": "^[0-9a-f]{64}$",
+                },
+            },
+        },
+    },
 }
 RunDriver = Callable[..., dict[str, Any]]
 
@@ -145,6 +367,18 @@ class ResearchAPIClient:
 
     def create_experiment(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._json("POST", "/api/v2/research/experiments", payload)
+
+    def get_experiment(
+        self, experiment_id: str, project_id: int
+    ) -> dict[str, Any]:
+        query = urlencode({"project_id": project_id})
+        return _unwrap_object(
+            self._json(
+                "GET",
+                f"/api/v2/research/experiments/{experiment_id}?{query}",
+            ),
+            "experiment",
+        )
 
     def start_experiment(
         self, experiment_id: str, project_id: int
@@ -265,6 +499,12 @@ class ResearchAPIClient:
 
     def get_agent_run(self, run_id: str) -> dict[str, Any]:
         return self._json("GET", f"/api/v2/agent/runs/{run_id}")
+
+    def list_agent_events(self, run_id: str) -> list[dict[str, Any]]:
+        payload = self._json(
+            "GET", f"/api/v2/agent/runs/{run_id}/events?after_seq=0"
+        )
+        return _unwrap_list(payload, "events")
 
     def get_planning_session(self, session_id: int) -> dict[str, Any]:
         return self._json(
@@ -424,6 +664,859 @@ def _parse_utc_deadline(value: Any) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _parse_utc_timestamp(value: Any, field: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ResearchE2EError(f"{field} must be a non-empty RFC3339 timestamp")
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ResearchE2EError(f"{field} is not a valid timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ResearchE2EError(f"{field} must include a UTC offset")
+    return parsed.astimezone(UTC)
+
+
+def _required_string(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ResearchE2EError(f"{field} must be a non-empty string")
+    return value.strip()
+
+
+def _required_non_negative_integer(value: Any, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ResearchE2EError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _provider_attestation_key() -> bytes:
+    raw = os.environ.get(PROVIDER_ATTESTATION_KEY_ENV)
+    if raw is None:
+        raise ResearchE2EError(
+            f"{PROVIDER_ATTESTATION_KEY_ENV} is required"
+        )
+    key = raw.encode("utf-8")
+    if len(key) < 32:
+        raise ResearchE2EError(
+            f"{PROVIDER_ATTESTATION_KEY_ENV} must contain at least 32 bytes"
+        )
+    for name, value in os.environ.items():
+        if (
+            name != PROVIDER_ATTESTATION_KEY_ENV
+            and name.endswith("_API_KEY")
+            and value
+            and hmac.compare_digest(key, value.encode("utf-8"))
+        ):
+            raise ResearchE2EError(
+                f"{PROVIDER_ATTESTATION_KEY_ENV} must not reuse {name}"
+            )
+    return key
+
+
+def _attestation_signature_payload(
+    attestation: dict[str, Any],
+) -> dict[str, Any]:
+    payload = json.loads(json.dumps(attestation))
+    signature = payload.get("signature")
+    if not isinstance(signature, dict):
+        raise ResearchE2EError("provider attestation signature is invalid")
+    signature.pop("value", None)
+    return payload
+
+
+def _provider_attestation_signature_value(
+    attestation: dict[str, Any],
+    key: bytes,
+) -> str:
+    return hmac.new(
+        key,
+        _canonical_json_bytes(_attestation_signature_payload(attestation)),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    try:
+        if not path.is_file():
+            raise ResearchE2EError(
+                f"platform evidence file is not a regular file: {path}"
+            )
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as exc:
+        raise ResearchE2EError(
+            f"cannot hash platform evidence file {path}: {exc}"
+        ) from exc
+
+
+def _provider_attempts_for_run(
+    *,
+    experiment: dict[str, Any],
+    run: dict[str, Any],
+    agent_run_id: str,
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    run_id = _required_string(run.get("id"), "research run id")
+    run_started_at = _parse_utc_timestamp(
+        run.get("started_at"), f"research run {run_id} started_at"
+    )
+    run_finished_at = _parse_utc_timestamp(
+        run.get("finished_at"), f"research run {run_id} finished_at"
+    )
+    if run_finished_at < run_started_at:
+        raise ResearchE2EError(
+            f"research run {run_id} finished_at precedes started_at"
+        )
+    expected_provider = _required_string(
+        experiment.get("model_provider"), "experiment model_provider"
+    )
+    expected_model = _required_string(
+        experiment.get("model_name"), "experiment model_name"
+    )
+    attempts: list[dict[str, Any]] = []
+    credential_fingerprint = ""
+    endpoint_hosts: set[str] = set()
+    for event in events:
+        if event.get("type") != "research.llm_call":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            raise ResearchE2EError(
+                f"research run {run_id} has a non-object LLM event payload"
+            )
+        if payload.get("attempt_status") != "succeeded":
+            continue
+        event_seq = event.get("seq")
+        if (
+            not isinstance(event_seq, int)
+            or isinstance(event_seq, bool)
+            or event_seq < 1
+        ):
+            raise ResearchE2EError(
+                f"research run {run_id} has an invalid LLM event sequence"
+            )
+        if event.get("run_id") != agent_run_id:
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} has a "
+                "mismatched AgentRun"
+            )
+        if payload.get("schema_version") != "research.llm_call.v1":
+            raise ResearchE2EError(
+                f"research run {run_id} has an unsupported LLM event schema"
+            )
+        provider = _required_string(
+            payload.get("provider"), f"LLM event {event_seq} provider"
+        )
+        requested_model = _required_string(
+            payload.get("requested_model"),
+            f"LLM event {event_seq} requested_model",
+        )
+        resolved_model = _required_string(
+            payload.get("resolved_model"),
+            f"LLM event {event_seq} resolved_model",
+        )
+        if provider != expected_provider:
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} provider mismatch"
+            )
+        if (
+            requested_model != expected_model
+            or resolved_model != expected_model
+        ):
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} model mismatch"
+            )
+        endpoint_scheme = _required_string(
+            payload.get("endpoint_scheme"),
+            f"LLM event {event_seq} endpoint_scheme",
+        )
+        endpoint_host = _required_string(
+            payload.get("endpoint_host"),
+            f"LLM event {event_seq} endpoint_host",
+        )
+        if endpoint_scheme != "https":
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} did not use https"
+            )
+        if provider == "deepseek" and endpoint_host != "api.deepseek.com":
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} used invalid "
+                f"DeepSeek host {endpoint_host!r}"
+            )
+        endpoint_hosts.add(endpoint_host)
+        http_status = payload.get("http_status")
+        if (
+            not isinstance(http_status, int)
+            or isinstance(http_status, bool)
+            or http_status != 200
+        ):
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} HTTP status "
+                "is not 200"
+            )
+        provider_response_id = _required_string(
+            payload.get("provider_response_id"),
+            f"LLM event {event_seq} provider_response_id",
+        )
+        client_request_id = _required_string(
+            payload.get("client_request_id"),
+            f"LLM event {event_seq} client_request_id",
+        )
+        fingerprint = _required_string(
+            payload.get("credential_fingerprint"),
+            f"LLM event {event_seq} credential_fingerprint",
+        )
+        if re.fullmatch(r"sha256:v1:[0-9a-f]{64}", fingerprint) is None:
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} has an "
+                "invalid credential fingerprint"
+            )
+        if credential_fingerprint and fingerprint != credential_fingerprint:
+            raise ResearchE2EError(
+                f"research run {run_id} used inconsistent credentials"
+            )
+        credential_fingerprint = fingerprint
+        if payload.get("local_response_cache") != "not_configured":
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} configured a "
+                "local response cache"
+            )
+        attempt_started_at = _parse_utc_timestamp(
+            payload.get("attempt_started_at"),
+            f"LLM event {event_seq} attempt_started_at",
+        )
+        if not run_started_at <= attempt_started_at <= run_finished_at:
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} started outside "
+                "the run window"
+            )
+        usage = payload.get("usage")
+        if not isinstance(usage, dict) or usage.get("status") != "available":
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} usage is unavailable"
+            )
+        normalized_usage = {
+            field: _required_non_negative_integer(
+                usage.get(field), f"LLM event {event_seq} usage.{field}"
+            )
+            for field in (
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "prompt_cache_hit_tokens",
+                "prompt_cache_miss_tokens",
+            )
+        }
+        if (
+            normalized_usage["output_tokens"] <= 0
+            or normalized_usage["total_tokens"] <= 0
+        ):
+            raise ResearchE2EError(
+                f"research run {run_id} LLM event {event_seq} usage must have "
+                "positive output and total tokens"
+            )
+        header_id = payload.get("provider_header_request_id")
+        header_name = payload.get("provider_header_request_id_header")
+        for value, field in (
+            (header_id, "provider_header_request_id"),
+            (header_name, "provider_header_request_id_header"),
+        ):
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise ResearchE2EError(
+                    f"LLM event {event_seq} {field} must be null or non-empty"
+                )
+        if bool(header_id) != bool(header_name):
+            raise ResearchE2EError(
+                f"LLM event {event_seq} provider header request ID is incomplete"
+            )
+        attempts.append(
+            {
+                "source_event_seq": event_seq,
+                "logical_call_id": _required_string(
+                    payload.get("logical_call_id"),
+                    f"LLM event {event_seq} logical_call_id",
+                ),
+                "client_request_id": client_request_id,
+                "provider_response_id": provider_response_id,
+                "provider_header_request_id": (
+                    header_id.strip() if isinstance(header_id, str) else None
+                ),
+                "provider_header_request_id_header": (
+                    header_name.strip()
+                    if isinstance(header_name, str)
+                    else None
+                ),
+                "attempt_started_at": attempt_started_at.isoformat(),
+                "http_status": http_status,
+                "usage": {"status": "available", **normalized_usage},
+            }
+        )
+    if not attempts:
+        raise ResearchE2EError(
+            f"research run {run_id} has no successful provider LLM attempt"
+        )
+    if len(endpoint_hosts) != 1:
+        raise ResearchE2EError(
+            f"research run {run_id} used inconsistent provider hosts"
+        )
+    attempts.sort(key=lambda attempt: attempt["source_event_seq"])
+    return {
+        "research_run_id": run_id,
+        "agent_run_id": agent_run_id,
+        "run_started_at": run_started_at.isoformat(),
+        "run_finished_at": run_finished_at.isoformat(),
+        "provider": expected_provider,
+        "model": expected_model,
+        "endpoint_scheme": "https",
+        "endpoint_host": next(iter(endpoint_hosts)),
+        "credential_fingerprint": credential_fingerprint,
+        "local_response_cache": "not_configured",
+        "attempts": attempts,
+    }
+
+
+def _provider_evidence_artifact(
+    *,
+    experiment_id: str,
+    project_id: int,
+    runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    runs = sorted(runs, key=lambda run: run["research_run_id"])
+    credential_fingerprints = {
+        run["credential_fingerprint"] for run in runs
+    }
+    if len(credential_fingerprints) != 1:
+        raise ResearchE2EError(
+            "formal research runs used inconsistent credential fingerprints"
+        )
+    response_owners: dict[str, str] = {}
+    client_owners: dict[str, str] = {}
+    for run in runs:
+        run_id = run["research_run_id"]
+        for attempt in run["attempts"]:
+            for value, owners, label in (
+                (
+                    attempt["provider_response_id"],
+                    response_owners,
+                    "provider response ID",
+                ),
+                (
+                    attempt["client_request_id"],
+                    client_owners,
+                    "client request ID",
+                ),
+            ):
+                previous = owners.get(value)
+                if previous is not None and previous != run_id:
+                    raise ResearchE2EError(
+                        f"{label} {value!r} is reused across formal runs "
+                        f"{previous} and {run_id}"
+                    )
+                owners[value] = run_id
+    source = {
+        "experiment_id": experiment_id,
+        "project_id": project_id,
+        "runs": runs,
+    }
+    artifact = {
+        "schema_version": PROVIDER_EVIDENCE_SCHEMA_VERSION,
+        **source,
+        "source_sha256": _canonical_sha256(source),
+    }
+    artifact["evidence_artifact_sha256"] = _canonical_sha256(artifact)
+    return artifact
+
+
+def _attestation_runs_from_evidence(
+    evidence: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "research_run_id": run["research_run_id"],
+            "agent_run_id": run["agent_run_id"],
+            "source_event_seqs": [
+                attempt["source_event_seq"] for attempt in run["attempts"]
+            ],
+            "run_started_at": run["run_started_at"],
+            "run_finished_at": run["run_finished_at"],
+            "provider": run["provider"],
+            "endpoint_scheme": run["endpoint_scheme"],
+            "endpoint_host": run["endpoint_host"],
+            "model": run["model"],
+            "credential_fingerprint": run["credential_fingerprint"],
+            "attempts": [
+                {
+                    key: attempt[key]
+                    for key in (
+                        "client_request_id",
+                        "provider_response_id",
+                        "provider_header_request_id",
+                        "provider_header_request_id_header",
+                        "attempt_started_at",
+                        "usage",
+                    )
+                }
+                for attempt in run["attempts"]
+            ],
+        }
+        for run in evidence["runs"]
+    ]
+
+
+def build_pending_provider_attestation(
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": PROVIDER_ATTESTATION_SCHEMA_VERSION,
+        "experiment_id": evidence["experiment_id"],
+        "source_sha256": evidence["source_sha256"],
+        "evidence_artifact_sha256": evidence["evidence_artifact_sha256"],
+        "runs": _attestation_runs_from_evidence(evidence),
+        "platform_evidence": {
+            "source": None,
+            "artifact_sha256": None,
+            "observed_at": None,
+            "matched_provider_response_ids": [],
+        },
+        "reviewer": {
+            "name": None,
+            "organization": None,
+            "reviewed_at": None,
+        },
+        "signature": {
+            "algorithm": PROVIDER_ATTESTATION_ALGORITHM,
+            "key_id": None,
+            "value": None,
+        },
+    }
+
+
+def _load_json_object(path: Path, label: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ResearchE2EError(f"cannot load {label} {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ResearchE2EError(f"{label} must be a JSON object")
+    return payload
+
+
+def _validate_attestation_runs(runs: Any) -> list[datetime]:
+    if not isinstance(runs, list) or not runs:
+        raise ResearchE2EError("provider attestation runs are invalid")
+    run_fields = {
+        "research_run_id",
+        "agent_run_id",
+        "source_event_seqs",
+        "run_started_at",
+        "run_finished_at",
+        "provider",
+        "endpoint_scheme",
+        "endpoint_host",
+        "model",
+        "credential_fingerprint",
+        "attempts",
+    }
+    attempt_fields = {
+        "client_request_id",
+        "provider_response_id",
+        "provider_header_request_id",
+        "provider_header_request_id_header",
+        "attempt_started_at",
+        "usage",
+    }
+    usage_fields = {
+        "status",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "prompt_cache_hit_tokens",
+        "prompt_cache_miss_tokens",
+    }
+    response_ids: set[str] = set()
+    finished_times: list[datetime] = []
+    for run_index, run in enumerate(runs):
+        label = f"provider attestation runs[{run_index}]"
+        if not isinstance(run, dict) or set(run) != run_fields:
+            raise ResearchE2EError(f"{label} fields are invalid")
+        for field in (
+            "research_run_id",
+            "agent_run_id",
+            "provider",
+            "endpoint_host",
+            "model",
+            "credential_fingerprint",
+        ):
+            _required_string(run.get(field), f"{label}.{field}")
+        if run.get("endpoint_scheme") != "https":
+            raise ResearchE2EError(f"{label}.endpoint_scheme must be https")
+        if re.fullmatch(
+            r"sha256:v1:[0-9a-f]{64}",
+            str(run.get("credential_fingerprint") or ""),
+        ) is None:
+            raise ResearchE2EError(
+                f"{label}.credential_fingerprint is invalid"
+            )
+        started_at = _parse_utc_timestamp(
+            run.get("run_started_at"), f"{label}.run_started_at"
+        )
+        finished_at = _parse_utc_timestamp(
+            run.get("run_finished_at"), f"{label}.run_finished_at"
+        )
+        if finished_at < started_at:
+            raise ResearchE2EError(
+                f"{label}.run_finished_at precedes run_started_at"
+            )
+        finished_times.append(finished_at)
+        attempts = run.get("attempts")
+        source_event_seqs = run.get("source_event_seqs")
+        if (
+            not isinstance(attempts, list)
+            or not attempts
+            or not isinstance(source_event_seqs, list)
+            or len(source_event_seqs) != len(attempts)
+            or any(
+                not isinstance(seq, int)
+                or isinstance(seq, bool)
+                or seq < 1
+                for seq in source_event_seqs
+            )
+            or len(set(source_event_seqs)) != len(source_event_seqs)
+        ):
+            raise ResearchE2EError(f"{label} attempts are invalid")
+        for attempt_index, attempt in enumerate(attempts):
+            attempt_label = f"{label}.attempts[{attempt_index}]"
+            if not isinstance(attempt, dict) or set(attempt) != attempt_fields:
+                raise ResearchE2EError(f"{attempt_label} fields are invalid")
+            for field in ("client_request_id", "provider_response_id"):
+                _required_string(
+                    attempt.get(field), f"{attempt_label}.{field}"
+                )
+            response_id = str(attempt["provider_response_id"])
+            if response_id in response_ids:
+                raise ResearchE2EError(
+                    "provider attestation response IDs must be unique"
+                )
+            response_ids.add(response_id)
+            header_id = attempt.get("provider_header_request_id")
+            header_name = attempt.get("provider_header_request_id_header")
+            for value, field in (
+                (header_id, "provider_header_request_id"),
+                (header_name, "provider_header_request_id_header"),
+            ):
+                if value is not None:
+                    _required_string(value, f"{attempt_label}.{field}")
+            if bool(header_id) != bool(header_name):
+                raise ResearchE2EError(
+                    f"{attempt_label} provider header ID is incomplete"
+                )
+            attempted_at = _parse_utc_timestamp(
+                attempt.get("attempt_started_at"),
+                f"{attempt_label}.attempt_started_at",
+            )
+            if not started_at <= attempted_at <= finished_at:
+                raise ResearchE2EError(
+                    f"{attempt_label} is outside the run window"
+                )
+            usage = attempt.get("usage")
+            if not isinstance(usage, dict) or set(usage) != usage_fields:
+                raise ResearchE2EError(f"{attempt_label}.usage is invalid")
+            if usage.get("status") != "available":
+                raise ResearchE2EError(
+                    f"{attempt_label}.usage.status is invalid"
+                )
+            for field in usage_fields - {"status"}:
+                _required_non_negative_integer(
+                    usage.get(field), f"{attempt_label}.usage.{field}"
+                )
+            if usage["output_tokens"] <= 0 or usage["total_tokens"] <= 0:
+                raise ResearchE2EError(
+                    f"{attempt_label}.usage must contain positive token output"
+                )
+    return finished_times
+
+
+def _validate_provider_attestation_shape(
+    attestation: dict[str, Any],
+    *,
+    allow_pending: bool,
+) -> None:
+    required = set(PROVIDER_ATTESTATION_JSON_SCHEMA["required"])
+    if set(attestation) != required:
+        raise ResearchE2EError(
+            "provider attestation fields do not match the required schema"
+        )
+    if attestation.get("schema_version") != PROVIDER_ATTESTATION_SCHEMA_VERSION:
+        raise ResearchE2EError("provider attestation schema_version is invalid")
+    _required_string(
+        attestation.get("experiment_id"),
+        "provider attestation experiment_id",
+    )
+    for field in (
+        "source_sha256",
+        "evidence_artifact_sha256",
+    ):
+        if (
+            re.fullmatch(
+                r"[0-9a-f]{64}", str(attestation.get(field) or "")
+            )
+            is None
+        ):
+            raise ResearchE2EError(
+                f"provider attestation {field} is invalid"
+            )
+    run_finished_times = _validate_attestation_runs(attestation.get("runs"))
+    platform_evidence = attestation.get("platform_evidence")
+    reviewer = attestation.get("reviewer")
+    signature = attestation.get("signature")
+    if not isinstance(platform_evidence, dict) or set(platform_evidence) != {
+        "source",
+        "artifact_sha256",
+        "observed_at",
+        "matched_provider_response_ids",
+    }:
+        raise ResearchE2EError(
+            "provider attestation platform_evidence is invalid"
+        )
+    if not isinstance(reviewer, dict) or set(reviewer) != {
+        "name",
+        "organization",
+        "reviewed_at",
+    }:
+        raise ResearchE2EError("provider attestation reviewer is invalid")
+    if not isinstance(signature, dict) or set(signature) != {
+        "algorithm",
+        "key_id",
+        "value",
+    }:
+        raise ResearchE2EError("provider attestation signature is invalid")
+    if signature.get("algorithm") != PROVIDER_ATTESTATION_ALGORITHM:
+        raise ResearchE2EError(
+            "provider attestation signature algorithm is invalid"
+        )
+    if allow_pending:
+        if platform_evidence != {
+            "source": None,
+            "artifact_sha256": None,
+            "observed_at": None,
+            "matched_provider_response_ids": [],
+        }:
+            raise ResearchE2EError(
+                "pending provider attestation platform_evidence is not empty"
+            )
+        if any(value is not None for value in reviewer.values()):
+            raise ResearchE2EError(
+                "pending provider attestation reviewer is not empty"
+            )
+        if (
+            signature.get("key_id") is not None
+            or signature.get("value") is not None
+        ):
+            raise ResearchE2EError(
+                "pending provider attestation signature is not empty"
+            )
+        return
+
+    source = platform_evidence.get("source")
+    if source not in PROVIDER_ATTESTATION_SOURCES:
+        raise ResearchE2EError(
+            "provider attestation platform_evidence.source is invalid"
+        )
+    if re.fullmatch(
+        r"[0-9a-f]{64}",
+        str(platform_evidence.get("artifact_sha256") or ""),
+    ) is None:
+        raise ResearchE2EError(
+            "provider attestation platform evidence artifact hash is invalid"
+        )
+    observed_at = _parse_utc_timestamp(
+        platform_evidence.get("observed_at"),
+        "provider attestation platform_evidence.observed_at",
+    )
+    matched_ids = platform_evidence.get("matched_provider_response_ids")
+    if (
+        not isinstance(matched_ids, list)
+        or not matched_ids
+        or any(
+            not isinstance(value, str) or not value.strip()
+            for value in matched_ids
+        )
+        or len(set(matched_ids)) != len(matched_ids)
+    ):
+        raise ResearchE2EError(
+            "provider attestation matched provider response IDs are invalid"
+        )
+    _required_string(
+        reviewer.get("name"), "provider attestation reviewer.name"
+    )
+    _required_string(
+        reviewer.get("organization"),
+        "provider attestation reviewer.organization",
+    )
+    reviewed_at = _parse_utc_timestamp(
+        reviewer.get("reviewed_at"),
+        "provider attestation reviewer.reviewed_at",
+    )
+    if observed_at < max(run_finished_times):
+        raise ResearchE2EError(
+            "platform evidence was observed before the provider runs finished"
+        )
+    if reviewed_at < observed_at:
+        raise ResearchE2EError(
+            "provider attestation was reviewed before platform evidence"
+        )
+    _required_string(
+        signature.get("key_id"), "provider attestation signature.key_id"
+    )
+    if re.fullmatch(r"[0-9a-f]{64}", str(signature.get("value") or "")) is None:
+        raise ResearchE2EError(
+            "provider attestation signature.value is invalid"
+        )
+
+
+def _verify_provider_attestation_signature(
+    attestation: dict[str, Any],
+) -> None:
+    expected = _provider_attestation_signature_value(
+        attestation, _provider_attestation_key()
+    )
+    actual = str(attestation["signature"]["value"])
+    if not hmac.compare_digest(actual, expected):
+        raise ResearchE2EError(
+            "provider attestation signature verification failed"
+        )
+
+
+def load_provider_attestation(path: Path) -> dict[str, Any]:
+    payload = _load_json_object(path, "provider attestation")
+    _validate_provider_attestation_shape(payload, allow_pending=False)
+    _verify_provider_attestation_signature(payload)
+    return payload
+
+
+def create_provider_attestation(
+    pending_path: Path,
+    platform_evidence_path: Path,
+    *,
+    source: str,
+    reviewer: str,
+    organization: str,
+    key_id: str,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> dict[str, Any]:
+    pending = _load_json_object(
+        pending_path, "pending provider attestation"
+    )
+    _validate_provider_attestation_shape(pending, allow_pending=True)
+    source = _required_string(source, "platform evidence source")
+    if source not in PROVIDER_ATTESTATION_SOURCES:
+        raise ResearchE2EError("platform evidence source is invalid")
+    reviewer = _required_string(reviewer, "reviewer")
+    organization = _required_string(organization, "organization")
+    key_id = _required_string(key_id, "key_id")
+    response_ids = sorted(
+        attempt["provider_response_id"]
+        for run in pending["runs"]
+        for attempt in run["attempts"]
+    )
+    if len(response_ids) != len(set(response_ids)):
+        raise ResearchE2EError(
+            "pending provider response IDs must be unique"
+        )
+    observed = now()
+    if observed.tzinfo is None:
+        raise ResearchE2EError("attestation timestamp must include a UTC offset")
+    observed_at = observed.astimezone(UTC).replace(
+        microsecond=0
+    ).isoformat()
+    attestation = json.loads(json.dumps(pending))
+    attestation["platform_evidence"] = {
+        "source": source,
+        "artifact_sha256": _sha256_file(platform_evidence_path),
+        "observed_at": observed_at,
+        "matched_provider_response_ids": response_ids,
+    }
+    attestation["reviewer"] = {
+        "name": reviewer,
+        "organization": organization,
+        "reviewed_at": observed_at,
+    }
+    attestation["signature"] = {
+        "algorithm": PROVIDER_ATTESTATION_ALGORITHM,
+        "key_id": key_id,
+        "value": None,
+    }
+    key = _provider_attestation_key()
+    attestation["signature"]["value"] = (
+        _provider_attestation_signature_value(attestation, key)
+    )
+    _validate_provider_attestation_shape(attestation, allow_pending=False)
+    return attestation
+
+
+def _validate_provider_attestation(
+    attestation: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    _validate_provider_attestation_shape(attestation, allow_pending=False)
+    _verify_provider_attestation_signature(attestation)
+    for field in (
+        "experiment_id",
+        "source_sha256",
+        "evidence_artifact_sha256",
+    ):
+        if attestation.get(field) != evidence.get(field):
+            raise ResearchE2EError(
+                f"provider attestation {field} does not match local evidence"
+            )
+    expected_runs = _attestation_runs_from_evidence(evidence)
+    if attestation.get("runs") != expected_runs:
+        raise ResearchE2EError(
+            "provider attestation runs do not match local provider evidence"
+        )
+    expected_response_ids = sorted(
+        attempt["provider_response_id"]
+        for run in evidence["runs"]
+        for attempt in run["attempts"]
+    )
+    if (
+        attestation["platform_evidence"]["matched_provider_response_ids"]
+        != expected_response_ids
+    ):
+        raise ResearchE2EError(
+            "platform evidence response IDs do not exactly cover local evidence"
+        )
+    return {
+        "provided": True,
+        "schema_valid": True,
+        "local_evidence_binding_verified": True,
+        "reviewer_fields_complete": True,
+        "signature_fields_complete": True,
+        "signature_verified": True,
+        "trust_reason": None,
+    }
+
+
 def load_experiment_spec(path: Path) -> dict[str, Any]:
     return load_experiment_spec_from_value(
         json.loads(path.read_text(encoding="utf-8"))
@@ -503,6 +1596,7 @@ def load_experiment_spec_from_value(
         "run_seconds",
         "experiment_seconds",
         "request_seconds",
+        "long_operation_seconds",
         "cancel_grace_seconds",
     }
     if unknown_timeouts:
@@ -510,6 +1604,12 @@ def load_experiment_spec_from_value(
     run_seconds = float(timeouts.get("run_seconds", 900))
     request_seconds = float(
         timeouts.get("request_seconds", DEFAULT_REQUEST_TIMEOUT_SECONDS)
+    )
+    long_operation_seconds = float(
+        timeouts.get(
+            "long_operation_seconds",
+            DEFAULT_LONG_OPERATION_TIMEOUT_SECONDS,
+        )
     )
     cancel_grace_seconds = float(
         timeouts.get("cancel_grace_seconds", DEFAULT_CANCEL_GRACE_SECONDS)
@@ -523,6 +1623,7 @@ def load_experiment_spec_from_value(
     if (
         run_seconds <= 0
         or request_seconds <= 0
+        or long_operation_seconds <= 0
         or cancel_grace_seconds < 0
         or experiment_seconds <= 0
         or experiment_seconds > MAX_EXPERIMENT_TIMEOUT_SECONDS
@@ -531,19 +1632,23 @@ def load_experiment_spec_from_value(
     if (
         not run_seconds.is_integer()
         or not request_seconds.is_integer()
+        or not long_operation_seconds.is_integer()
         or not cancel_grace_seconds.is_integer()
         or run_seconds < 60
         or run_seconds > 3600
         or request_seconds > 3600
+        or long_operation_seconds > 3600
         or cancel_grace_seconds > 300
     ):
         raise ValueError(
-            "run/request/cancel timeouts must be whole seconds within Go API limits"
+            "run/request/long-operation/cancel timeouts must be whole seconds "
+            "within supported limits"
         )
     payload["timeouts"] = {
         "run_seconds": run_seconds,
         "experiment_seconds": experiment_seconds,
         "request_seconds": request_seconds,
+        "long_operation_seconds": long_operation_seconds,
         "cancel_grace_seconds": cancel_grace_seconds,
     }
     mutation = payload.get("oracle_mutation", "none")
@@ -612,6 +1717,99 @@ def _links_from_driver_result(result: dict[str, Any]) -> dict[str, Any]:
         "dsl_sha256": approval.get("dsl_sha256"),
     }
     return {key: value for key, value in links.items() if value is not None}
+
+
+def _is_approval_question(payload: dict[str, Any]) -> bool:
+    questions = payload.get("questions")
+    return isinstance(questions, list) and any(
+        isinstance(question, dict)
+        and question.get("id") == "approve_dsl"
+        for question in questions
+    )
+
+
+def _approval_answer(payload: dict[str, Any]) -> bool:
+    answers = payload.get("answers")
+    return (
+        payload.get("tool") == "ask_user_question"
+        and isinstance(answers, dict)
+        and answers.get("approve_dsl") is True
+    )
+
+
+def _generation_approval_binding(
+    events: list[dict[str, Any]],
+    generation_id: int,
+    expected_profile: str,
+) -> dict[str, Any]:
+    generated: dict[str, Any] | None = None
+    artifact_seq = 0
+    for event in events:
+        payload = event.get("payload") or {}
+        content = payload.get("content")
+        if (
+            event.get("type") == "tool.result"
+            and payload.get("tool") == "generate_dsl"
+            and isinstance(content, dict)
+            and int(content.get("generation_id") or 0) == generation_id
+        ):
+            generated = content
+        if (
+            event.get("type") == "artifact.published"
+            and payload.get("type") == "dsl_generation"
+            and int(payload.get("id") or 0) == generation_id
+        ):
+            artifact_seq = int(event.get("seq") or 0)
+    if generated is None or artifact_seq <= 0:
+        raise ResearchE2EError(
+            f"generation {generation_id} is missing structured event facts"
+        )
+    try:
+        binding = _validate_generation_binding(
+            generated,
+            generation_id,
+            expected_profile=expected_profile,
+        )
+    except Exception as exc:
+        raise ResearchE2EError(
+            f"generation {generation_id} canonical binding is invalid: {exc}"
+        ) from exc
+
+    pending: dict[str, Any] | None = None
+    for event in events:
+        payload = event.get("payload") or {}
+        if (
+            int(event.get("seq") or 0) > artifact_seq
+            and event.get("type") == "tool.pending"
+            and _is_approval_question(payload)
+        ):
+            pending = event
+            break
+    if pending is None or not pending.get("tool_call_id"):
+        raise ResearchE2EError(
+            f"generation {generation_id} has no approval checkpoint"
+        )
+    approval = next(
+        (
+            event
+            for event in events
+            if int(event.get("seq") or 0) > int(pending.get("seq") or 0)
+            and event.get("type") == "tool.result"
+            and event.get("tool_call_id") == pending.get("tool_call_id")
+            and _approval_answer(event.get("payload") or {})
+        ),
+        None,
+    )
+    if approval is None:
+        raise ResearchE2EError(
+            f"generation {generation_id} has no positive approval result"
+        )
+    return {
+        **binding,
+        "generation_id": generation_id,
+        "approval_tool_call_id": pending["tool_call_id"],
+        "approval_event_seq": int(approval.get("seq") or 0),
+    }
 
 
 def _partial_links(exc: Exception) -> dict[str, Any]:
@@ -805,9 +2003,13 @@ def run_experiment(
                     agent_url=agent_url,
                     browser_url=browser_url,
                     request_timeout=spec["timeouts"]["request_seconds"],
+                    long_operation_timeout=spec["timeouts"][
+                        "long_operation_seconds"
+                    ],
                 ),
                 timeout_seconds=driver_timeout,
                 mutation=spec["oracle_mutation"],
+                expected_dsl_profile=spec["controls"]["dsl_profile"],
                 clean_context=True,
                 project_id=project_id,
                 cancel_grace_seconds=spec["timeouts"][
@@ -964,7 +2166,16 @@ def verify_experiment(
     project_id: int,
     expected_repetitions: int = 3,
     expected_task_success: bool = True,
+    provider_attestation: dict[str, Any] | None = None,
+    allow_pending_platform_attestation: bool = False,
 ) -> dict[str, Any]:
+    experiment = client.get_experiment(experiment_id, project_id)
+    dsl_profile = experiment.get("dsl_profile")
+    if dsl_profile not in PROFILE_CANONICAL_VERSIONS:
+        raise ResearchE2EError(
+            f"experiment {experiment_id} has unsupported dsl_profile {dsl_profile!r}"
+        )
+    canonical_version = PROFILE_CANONICAL_VERSIONS[dsl_profile]
     listed = client.list_runs(experiment_id, project_id)
     formal_runs = [run for run in listed if not bool(run.get("warmup"))]
     if len(formal_runs) != expected_repetitions:
@@ -981,6 +2192,7 @@ def verify_experiment(
 
     session_ids: set[str] = set()
     verified: list[dict[str, Any]] = []
+    provider_runs: list[dict[str, Any]] = []
     for listed_run in formal_runs:
         run_id = str(listed_run.get("id") or "")
         run = client.get_run(run_id, project_id)
@@ -1026,6 +2238,24 @@ def verify_experiment(
             raise ResearchE2EError(f"agent run {links['agent_run_id']} is not completed")
         if int(agent_run.get("project_id") or 0) != int(run.get("project_id") or 0):
             raise ResearchE2EError(f"research run {run_id} project link mismatch")
+        events = client.list_agent_events(str(links["agent_run_id"]))
+        approval = _generation_approval_binding(
+            events,
+            int(links["generation_id"]),
+            str(dsl_profile),
+        )
+        provider_runs.append(
+            _provider_attempts_for_run(
+                experiment=experiment,
+                run=run,
+                agent_run_id=str(links["agent_run_id"]),
+                events=events,
+            )
+        )
+        if approval["dsl_sha256"] != links["dsl_sha256"]:
+            raise ResearchE2EError(
+                f"research run {run_id} generation link SHA mismatch"
+            )
         session_payload = client.get_planning_session(int(session_id))
         session = _unwrap_object(session_payload, "session")
         requirements = session.get("requirements")
@@ -1038,6 +2268,26 @@ def verify_experiment(
 
         report = client.get_batch_report(int(links["batch_id"]))
         execution = _latest_execution(report)
+        job = report["jobs"][0]
+        expected_binding = {
+            "dsl_profile": dsl_profile,
+            "dsl_canonical_version": canonical_version,
+            "dsl_sha256": links["dsl_sha256"],
+        }
+        for label, value in (
+            ("approval", approval),
+            ("report", report),
+            ("job", job),
+            ("execution", execution),
+            ("structured report", execution.get("report") or {}),
+        ):
+            actual_binding = {
+                field: value.get(field) for field in expected_binding
+            }
+            if actual_binding != expected_binding:
+                raise ResearchE2EError(
+                    f"research run {run_id} {label} DSL binding mismatch"
+                )
         if (
             int(execution.get("id") or 0) != int(links["execution_id"])
             or execution.get("dsl_sha256") != links["dsl_sha256"]
@@ -1117,12 +2367,65 @@ def verify_experiment(
                 "agent_run_id": links["agent_run_id"],
                 "batch_id": links["batch_id"],
                 "execution_id": links["execution_id"],
+                "dsl_profile": dsl_profile,
+                "dsl_canonical_version": canonical_version,
+                "dsl_sha256": links["dsl_sha256"],
                 "task_success": task_success,
                 "execution_success": execution_success,
                 "verification_success": verification_success,
                 "oracle_passed": oracle_passed,
                 "vision_calls": vision_calls,
             }
+        )
+
+    provider_artifact = _provider_evidence_artifact(
+        experiment_id=experiment_id,
+        project_id=project_id,
+        runs=provider_runs,
+    )
+    attestation_status = {
+        "provided": False,
+        "schema_valid": False,
+        "local_evidence_binding_verified": False,
+        "reviewer_fields_complete": False,
+        "signature_fields_complete": False,
+        "signature_verified": False,
+        "trust_reason": "platform_attestation_not_provided",
+    }
+    if provider_attestation is not None:
+        attestation_status = _validate_provider_attestation(
+            provider_attestation, provider_artifact
+        )
+    provider_verified = attestation_status["signature_verified"]
+    business_gate_passed = (
+        len(verified) == expected_repetitions
+        and all(
+            run["task_success"] is expected_task_success
+            and run["oracle_passed"] is expected_task_success
+            and run["execution_success"] is True
+            and run["verification_success"] is True
+            and run["vision_calls"] == 0
+            for run in verified
+        )
+    )
+    provider_evidence = {
+        **provider_artifact,
+        "successful_attempt_count": sum(
+            len(run["attempts"]) for run in provider_runs
+        ),
+        "verification_scope": (
+            "local_and_platform_attested"
+            if provider_verified
+            else "local_only"
+        ),
+        "local_provider_evidence_verified": True,
+        "provider_e2e_verified": provider_verified,
+        "reason": None if provider_verified else "platform_attestation_required",
+        "attestation": attestation_status,
+    }
+    if allow_pending_platform_attestation:
+        provider_evidence["pending_platform_attestation"] = (
+            build_pending_provider_attestation(provider_artifact)
         )
 
     return {
@@ -1132,6 +2435,94 @@ def verify_experiment(
         "non_warmup_runs": len(formal_runs),
         "clean_session_count": len(session_ids),
         "expected_task_success": expected_task_success,
+        "dsl_profile": dsl_profile,
+        "dsl_canonical_version": canonical_version,
+        "provider_evidence": provider_evidence,
+        "runs": verified,
+        "passed": business_gate_passed and provider_verified,
+    }
+
+
+NEGATIVE_CONTRACT_MARKERS = {
+    "missing-intent": ("intent",),
+    "unknown-action": ("unsupported dsl action",),
+    "unexplored-selector": ("preflight", "verified"),
+}
+
+
+def verify_negative_contract_runs(
+    cases: dict[str, str],
+    *,
+    client: ResearchAPIClient,
+    project_id: int,
+) -> dict[str, Any]:
+    if set(cases) != set(NEGATIVE_CONTRACT_MARKERS):
+        raise ValueError(
+            "negative contract cases must include missing-intent, "
+            "unknown-action, and unexplored-selector"
+        )
+    verified = []
+    for name, run_id in sorted(cases.items()):
+        run = client.get_agent_run(run_id)
+        if int(run.get("project_id") or 0) != project_id:
+            raise ResearchE2EError(f"negative run {run_id} project mismatch")
+        if run.get("status") not in {"completed", "failed", "cancelled"}:
+            raise ResearchE2EError(f"negative run {run_id} is not terminal")
+        events = client.list_agent_events(run_id)
+        forbidden_artifacts = [
+            event
+            for event in events
+            if event.get("type") == "artifact.published"
+            and (event.get("payload") or {}).get("type")
+            in {"dsl_generation", "execution_batch"}
+        ]
+        if forbidden_artifacts:
+            raise ResearchE2EError(
+                f"negative run {run_id} published Generation/Batch artifacts"
+            )
+        if any(
+            event.get("type") == "tool.started"
+            and (event.get("payload") or {}).get("tool") == "execute_dsl"
+            for event in events
+        ):
+            raise ResearchE2EError(
+                f"negative run {run_id} reached execute_dsl"
+            )
+        failures = [
+            event
+            for event in events
+            if event.get("type") == "tool.failed"
+            and (event.get("payload") or {}).get("tool") == "generate_dsl"
+        ]
+        markers = NEGATIVE_CONTRACT_MARKERS[name]
+        matched = next(
+            (
+                event
+                for event in failures
+                if all(
+                    marker
+                    in str((event.get("payload") or {}).get("message") or "").casefold()
+                    for marker in markers
+                )
+            ),
+            None,
+        )
+        if matched is None:
+            raise ResearchE2EError(
+                f"negative run {run_id} has no matching generate_dsl rejection"
+            )
+        verified.append(
+            {
+                "case": name,
+                "agent_run_id": run_id,
+                "failure_event_seq": matched.get("seq"),
+                "generation_artifacts": 0,
+                "batch_artifacts": 0,
+            }
+        )
+    return {
+        "schema_version": "research.negative-contract-verification.v1",
+        "project_id": project_id,
         "runs": verified,
         "passed": True,
     }
@@ -1196,6 +2587,42 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         Path(temporary_name).unlink(missing_ok=True)
 
 
+def _add_provider_attestation_arguments(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument("--provider-attestation", type=Path)
+    parser.add_argument(
+        "--allow-pending-platform-attestation",
+        action="store_true",
+        help=(
+            "emit a pending attestation package without marking the "
+            "experiment verified"
+        ),
+    )
+    parser.add_argument("--pending-platform-attestation-output", type=Path)
+
+
+def _write_pending_attestation_if_requested(
+    args: argparse.Namespace,
+    result: dict[str, Any],
+) -> None:
+    output = args.pending_platform_attestation_output
+    if output is None:
+        return
+    provider_evidence = result.get("provider_evidence")
+    pending = (
+        provider_evidence.get("pending_platform_attestation")
+        if isinstance(provider_evidence, dict)
+        else None
+    )
+    if not isinstance(pending, dict):
+        raise ResearchE2EError(
+            "pending attestation output requires "
+            "--allow-pending-platform-attestation"
+        )
+    _atomic_write_json(output, pending)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1209,7 +2636,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--warmup-runs", type=int)
     run_parser.add_argument("--run-timeout-seconds", type=float)
     run_parser.add_argument("--experiment-timeout-seconds", type=float)
+    run_parser.add_argument("--long-operation-timeout-seconds", type=float)
     run_parser.add_argument("--output", type=Path)
+    _add_provider_attestation_arguments(run_parser)
 
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("experiment_id")
@@ -1223,6 +2652,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default="true",
     )
     verify_parser.add_argument("--output", type=Path)
+    _add_provider_attestation_arguments(verify_parser)
+
+    negative_parser = subparsers.add_parser("negative-contract")
+    negative_parser.add_argument("--project-id", type=int, required=True)
+    negative_parser.add_argument(
+        "--case",
+        action="append",
+        required=True,
+        metavar="NAME=AGENT_RUN_ID",
+    )
+    negative_parser.add_argument(
+        "--agent-url", default="http://127.0.0.1:8081"
+    )
+    negative_parser.add_argument(
+        "--request-timeout-seconds", type=float, default=30
+    )
+    negative_parser.add_argument("--output", type=Path)
 
     export_parser = subparsers.add_parser("export")
     selector = export_parser.add_mutually_exclusive_group(required=True)
@@ -1232,14 +2678,70 @@ def _build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--timeout-seconds", type=float, default=300)
     export_parser.add_argument("--export-binary", type=Path)
 
+    attest_parser = subparsers.add_parser("provider-attest")
+    attest_parser.add_argument("--pending", type=Path, required=True)
+    attest_parser.add_argument(
+        "--platform-evidence", type=Path, required=True
+    )
+    attest_parser.add_argument(
+        "--source",
+        choices=PROVIDER_ATTESTATION_SOURCES,
+        required=True,
+    )
+    attest_parser.add_argument("--reviewer", required=True)
+    attest_parser.add_argument("--organization", required=True)
+    attest_parser.add_argument("--key-id", required=True)
+    attest_parser.add_argument("--output", type=Path, required=True)
+
     subparsers.add_parser("code-sha256")
+    schema_parser = subparsers.add_parser("provider-attestation-schema")
+    schema_parser.add_argument("--output", type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
+        if args.command == "provider-attest":
+            attestation = create_provider_attestation(
+                args.pending,
+                args.platform_evidence,
+                source=args.source,
+                reviewer=args.reviewer,
+                organization=args.organization,
+                key_id=args.key_id,
+            )
+            _atomic_write_json(args.output, attestation)
+            print(
+                json.dumps(
+                    {
+                        "output": str(args.output.resolve()),
+                        "artifact_sha256": attestation[
+                            "platform_evidence"
+                        ]["artifact_sha256"],
+                        "matched_provider_response_ids": attestation[
+                            "platform_evidence"
+                        ]["matched_provider_response_ids"],
+                        "signature": {
+                            "algorithm": attestation["signature"][
+                                "algorithm"
+                            ],
+                            "key_id": attestation["signature"]["key_id"],
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 0
         if args.command == "run":
+            if (
+                args.pending_platform_attestation_output is not None
+                and not args.allow_pending_platform_attestation
+            ):
+                raise ValueError(
+                    "--pending-platform-attestation-output requires "
+                    "--allow-pending-platform-attestation"
+                )
             spec = load_experiment_spec(args.spec)
             if args.repetitions is not None:
                 spec["repetitions"] = args.repetitions
@@ -1251,22 +2753,66 @@ def main(argv: Sequence[str] | None = None) -> int:
                 spec["timeouts"][
                     "experiment_seconds"
                 ] = args.experiment_timeout_seconds
+            if args.long_operation_timeout_seconds is not None:
+                spec["timeouts"][
+                    "long_operation_seconds"
+                ] = args.long_operation_timeout_seconds
             spec = load_experiment_spec_from_value(spec)
+            research_client = ResearchAPIClient(
+                args.agent_url,
+                request_timeout=spec["timeouts"]["request_seconds"],
+            )
             result = run_experiment(
                 spec,
                 project_id=args.project_id,
-                research_client=ResearchAPIClient(
-                    args.agent_url,
-                    request_timeout=spec["timeouts"]["request_seconds"],
-                ),
+                research_client=research_client,
                 agent_url=args.agent_url,
                 browser_url=args.browser_url,
             )
+            if result["success"]:
+                verification = verify_experiment(
+                    result["experiment_id"],
+                    client=research_client,
+                    project_id=args.project_id,
+                    expected_repetitions=spec["repetitions"],
+                    expected_task_success=True,
+                    provider_attestation=(
+                        load_provider_attestation(args.provider_attestation)
+                        if args.provider_attestation is not None
+                        else None
+                    ),
+                    allow_pending_platform_attestation=(
+                        args.allow_pending_platform_attestation
+                    ),
+                )
+                result["verification"] = verification
+                result["provider_evidence"] = verification[
+                    "provider_evidence"
+                ]
+                result["success"] = bool(
+                    result["success"] and verification["passed"]
+                )
+                _write_pending_attestation_if_requested(args, result)
+            else:
+                result["provider_evidence"] = {
+                    "schema_version": PROVIDER_EVIDENCE_SCHEMA_VERSION,
+                    "local_provider_evidence_verified": False,
+                    "provider_e2e_verified": False,
+                    "reason": "research_run_failed_before_provider_gate",
+                }
             if args.output:
                 _atomic_write_json(args.output, result)
             print(json.dumps(result, ensure_ascii=False))
             return 0 if result["success"] else 1
         if args.command == "verify":
+            if (
+                args.pending_platform_attestation_output is not None
+                and not args.allow_pending_platform_attestation
+            ):
+                raise ValueError(
+                    "--pending-platform-attestation-output requires "
+                    "--allow-pending-platform-attestation"
+                )
             result = verify_experiment(
                 args.experiment_id,
                 client=ResearchAPIClient(
@@ -1276,6 +2822,36 @@ def main(argv: Sequence[str] | None = None) -> int:
                 project_id=args.project_id,
                 expected_repetitions=args.expected_repetitions,
                 expected_task_success=args.expected_task_success == "true",
+                provider_attestation=(
+                    load_provider_attestation(args.provider_attestation)
+                    if args.provider_attestation is not None
+                    else None
+                ),
+                allow_pending_platform_attestation=(
+                    args.allow_pending_platform_attestation
+                ),
+            )
+            _write_pending_attestation_if_requested(args, result)
+            if args.output:
+                _atomic_write_json(args.output, result)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result["passed"] else 1
+        if args.command == "negative-contract":
+            cases: dict[str, str] = {}
+            for raw in args.case:
+                name, separator, run_id = raw.partition("=")
+                if not separator or not name or not run_id or name in cases:
+                    raise ValueError(
+                        "--case must be unique NAME=AGENT_RUN_ID values"
+                    )
+                cases[name] = run_id
+            result = verify_negative_contract_runs(
+                cases,
+                client=ResearchAPIClient(
+                    args.agent_url,
+                    request_timeout=args.request_timeout_seconds,
+                ),
+                project_id=args.project_id,
             )
             if args.output:
                 _atomic_write_json(args.output, result)
@@ -1283,6 +2859,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "code-sha256":
             print(compute_code_snapshot_sha256())
+            return 0
+        if args.command == "provider-attestation-schema":
+            if args.output:
+                _atomic_write_json(
+                    args.output, PROVIDER_ATTESTATION_JSON_SCHEMA
+                )
+            print(
+                json.dumps(
+                    PROVIDER_ATTESTATION_JSON_SCHEMA,
+                    ensure_ascii=False,
+                )
+            )
             return 0
 
         command = (

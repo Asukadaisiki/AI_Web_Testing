@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 from app.runners.click_preprocessor import ClickPrecheckResult
 from app.runners.playwright_runner import (
     RunnerExecutionError,
@@ -12,17 +14,31 @@ from app.runners.playwright_runner import (
     _execute_step_with_candidates,
     execute_case_with_playwright,
 )
+from app.schemas.action_ir import validate_research_dsl
 from app.schemas.dsl import DSLCase
 from app.schemas.executions import StepExecutionEvidence
 
 
 class _Locator:
-    def __init__(self, *, tag: str, href: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        tag: str,
+        href: str = "",
+        click_errors: list[Exception] | None = None,
+    ) -> None:
         self.tag = tag
         self.href = href
+        self.click_errors = list(click_errors or [])
+        self.click_calls = 0
 
     def count(self) -> int:
         return 1
+
+    def click(self, **_kwargs) -> None:
+        self.click_calls += 1
+        if self.click_errors:
+            raise self.click_errors.pop(0)
 
     def evaluate(self, script: str):
         if "getAttribute('href')" in script:
@@ -65,6 +81,9 @@ class _Page:
     def goto(self, url: str, **_kwargs) -> None:
         self.goto_calls.append(url)
         self.url = url
+
+    def wait_for_timeout(self, _timeout_ms: int) -> None:
+        pass
 
     def title(self) -> str:
         return "Example"
@@ -184,7 +203,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
         )
         click_calls = 0
 
-        def click(_page, _locator):
+        def click(_page, _locator, **_kwargs):
             nonlocal click_calls
             click_calls += 1
             page.url = "https://example.test/products#interstitial"
@@ -237,8 +256,9 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
         )
         click_calls = 0
 
-        def click(_page, _locator):
+        def click(_page, _locator, **kwargs):
             nonlocal click_calls
+            self.assertTrue(kwargs["allow_recovery"])
             click_calls += 1
             return ClickPrecheckResult(succeeded=True)
 
@@ -259,6 +279,196 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
         self.assertEqual(evidence.action_outcome.side_effect_state, "committed")
         self.assertEqual(evidence.condition_results[0].phase, "postcondition")
         self.assertEqual(evidence.condition_results[0].status, "failed")
+
+    def test_research_risky_click_errors_dispatch_locator_once(self) -> None:
+        scenarios = [
+            (
+                "non-idempotent interception",
+                "non_idempotent",
+                "browser_state",
+                PlaywrightTimeoutError(
+                    "<div>Loading</div> intercepts pointer events"
+                ),
+            ),
+            (
+                "external-state timeout",
+                "idempotent",
+                "external_state",
+                PlaywrightTimeoutError("element is not visible"),
+            ),
+            (
+                "unknown-side-effect interception",
+                "idempotent",
+                "unknown",
+                PlaywrightTimeoutError(
+                    "<div>Loading</div> intercepts pointer events"
+                ),
+            ),
+        ]
+
+        for name, idempotency, side_effect, click_error in scenarios:
+            with self.subTest(name=name):
+                locator = _Locator(
+                    tag="button",
+                    click_errors=[click_error],
+                )
+                page = _Page(locator)
+                case = validate_research_dsl(
+                    {
+                        "profile": "research-v1",
+                        "name": "purchase",
+                        "steps": [
+                            {
+                                "action": "click",
+                                "intent": "Submit the order",
+                                "target": "Pay",
+                                "preconditions": [
+                                    {
+                                        "type": "url_contains",
+                                        "value": "/products",
+                                    }
+                                ],
+                                "postconditions": [
+                                    {
+                                        "type": "url_contains",
+                                        "value": "/receipt",
+                                    }
+                                ],
+                                "idempotency": idempotency,
+                                "side_effect": side_effect,
+                                "locator_confidence": "high",
+                                "candidates": [
+                                    {
+                                        "strategy": "verified_css",
+                                        "selector": "#pay",
+                                        "semantic_value": "Pay",
+                                        "pre_score": 1,
+                                        "pre_features": {
+                                            "verified": True,
+                                            "source": "a11y_backend_dom_node",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                )
+
+                with self.assertRaises(RunnerExecutionError) as raised:
+                    _execute_step_with_candidates(page, case.steps[0], 0)
+
+                self.assertEqual(locator.click_calls, 1)
+                evidence = raised.exception.step_evidence
+                self.assertEqual(evidence.dsl_profile, "research-v1")
+                self.assertEqual(evidence.intent, "Submit the order")
+                self.assertEqual(evidence.idempotency, idempotency)
+                self.assertEqual(evidence.declared_side_effect, side_effect)
+                self.assertEqual(evidence.action_outcome.status, "unknown")
+                self.assertEqual(
+                    evidence.action_outcome.side_effect_state,
+                    "unknown",
+                )
+
+    def test_research_idempotent_click_keeps_recovery(self) -> None:
+        locator = _Locator(
+            tag="button",
+            click_errors=[
+                PlaywrightTimeoutError(
+                    "<div>Loading</div> intercepts pointer events"
+                )
+            ],
+        )
+        page = _Page(locator)
+        case = validate_research_dsl(
+            {
+                "profile": "research-v1",
+                "name": "open details",
+                "steps": [
+                    {
+                        "action": "click",
+                        "intent": "Open product details",
+                        "target": "Details",
+                        "preconditions": [
+                            {"type": "url_contains", "value": "/products"}
+                        ],
+                        "postconditions": [
+                            {"type": "url_contains", "value": "/products"}
+                        ],
+                        "idempotency": "idempotent",
+                        "side_effect": "browser_state",
+                        "locator_confidence": "high",
+                        "candidates": [
+                            {
+                                "strategy": "verified_css",
+                                "selector": "#details",
+                                "semantic_value": "Details",
+                                "pre_score": 1,
+                                "pre_features": {
+                                    "verified": True,
+                                    "source": "a11y_backend_dom_node",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        evidence = _execute_step_with_candidates(page, case.steps[0], 0)
+
+        self.assertEqual(locator.click_calls, 2)
+        self.assertEqual(evidence.click_recovery, "wait")
+        self.assertEqual(evidence.action_outcome.status, "succeeded")
+
+    def test_research_precondition_failure_has_zero_dispatches(self) -> None:
+        locator = _Locator(tag="button")
+        page = _Page(locator)
+        case = validate_research_dsl(
+            {
+                "profile": "research-v1",
+                "name": "purchase",
+                "steps": [
+                    {
+                        "action": "click",
+                        "intent": "Submit the order",
+                        "target": "Pay",
+                        "preconditions": [
+                            {"type": "url_contains", "value": "/checkout"}
+                        ],
+                        "postconditions": [
+                            {"type": "url_contains", "value": "/receipt"}
+                        ],
+                        "idempotency": "non_idempotent",
+                        "side_effect": "external_state",
+                        "locator_confidence": "high",
+                        "candidates": [
+                            {
+                                "strategy": "verified_css",
+                                "selector": "#pay",
+                                "semantic_value": "Pay",
+                                "pre_score": 1,
+                                "pre_features": {
+                                    "verified": True,
+                                    "source": "a11y_backend_dom_node",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        with (
+            patch("app.runners.playwright_runner.click_with_precheck") as click,
+            self.assertRaises(RunnerExecutionError) as raised,
+        ):
+            _execute_step_with_candidates(page, case.steps[0], 0)
+
+        click.assert_not_called()
+        self.assertEqual(
+            raised.exception.step_evidence.action_outcome.side_effect_state,
+            "not_committed",
+        )
 
     def test_click_exception_is_unknown_and_does_not_switch_candidate(self) -> None:
         locator = _Locator(tag="button")
@@ -395,7 +605,7 @@ class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
             },
         )()
 
-        def click(_page, _locator):
+        def click(_page, _locator, **_kwargs):
             page.emit("response", response)
             return ClickPrecheckResult(succeeded=True)
 

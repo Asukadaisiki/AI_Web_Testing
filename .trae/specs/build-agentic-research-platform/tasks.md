@@ -8,6 +8,10 @@
 - 每个 Stage 只允许一个聚焦提交，提交前必须通过该 Stage 全部门禁。
 - 每个 Stage 完成后直接推送 `main`，确认远端 SHA；不创建 PR。
 - 任一门禁失败时禁止提交，先在本文件追加修复任务。
+- 主链 E2E 必须真实调用 Experiment 声明的官方模型 API；mock、record/replay、本地响应缓存、第三方兼容网关和 fallback provider 只能用于非正式测试；供应商 prompt cache 命中允许计入但必须记录 usage 明细。
+- 每次正式 E2E 必须保存脱敏的 endpoint host、provider/model、HTTP status、provider response/request ID、usage、latency、时间窗口、不可逆凭据指纹和 AgentRun/LLM-call event 关联，并在供应商平台核对到同一账号/Key 的对应调用记录。
+- 供应商平台无对应调用记录时，即使本地 AgentRun/Batch/Execution/Oracle 通过，也不得将该 repetition 或 Stage 标记为通过。
+- 自 BUG-155 起，真实官方 E2E 暂停执行，直到完成调用/token/失败重试预算、非探索工具摘要、cache hit/miss 聚合和运行前成本预估；暂停期间允许提交 implementation checkpoint，但不得勾选 provider E2E 或 fully accepted Stage 项。
 
 ## Stage 0：固化无提示完整链路
 
@@ -236,23 +240,37 @@
   - [x] Canonical Goal 连续 3 次通过。
   - [x] 独立 Oracle 与 Report 不一致时 task_success=false。
   - [x] 提交信息：`feat: add reproducible research runs and metrics`
+- [ ] Task 5.5：按官方 provider 平台记录重新审计 Stage 5 E2E。
+  - [ ] DeepSeek E2E 的实际 endpoint host 为 `api.deepseek.com`，不得经过第三方 OpenAI-compatible 网关或 fallback provider。
+  - [ ] 3 次 Canonical 和负向变异均保存不同的 provider response/request ID、usage、调用时间及 AgentRun/LLM-call event 关联。
+  - [ ] 保存不可逆凭据指纹并确认与平台查询的账号/API Key 一致，禁止记录 Key 前后缀或原文。
+  - [ ] 在 DeepSeek 控制台、usage API 或账单明细中核对到对应新增调用；平台无记录则 Stage 5 E2E 视为未通过。
+  - [ ] `research-e2e verify` 将 `provider_e2e_verified=false` 作为硬失败条件。
 
 ## Stage 6：DSL Action IR
 
-- [ ] Task 6.1：定义 research-v1 Action IR。
-  - [ ] Intent
-  - [ ] Target
-  - [ ] Preconditions
-  - [ ] Action
-  - [ ] Postconditions
-  - [ ] Idempotency/side-effect semantics
-- [ ] Task 6.2：先更新 Go 类型和校验，再更新 Python Schema 与 Runner。
-- [ ] Task 6.3：保留 legacy profile，research-v1 严格拒绝未知字段。
+- [x] Task 6.1：定义 research-v1 Action IR。
+  - [x] Intent
+  - [x] Target
+  - [x] Preconditions
+  - [x] Action
+  - [x] Postconditions
+  - [x] Idempotency/side-effect semantics
+- [x] Task 6.2：先更新 Go 类型和校验，再更新 Python Schema 与 Runner。
+- [x] Task 6.3：保留 legacy profile，research-v1 严格拒绝未知字段。
 - [ ] Task 6.4：验收、提交并推送 Stage 6。
-  - [ ] Canonical Goal 连续 3 次通过。
-  - [ ] 缺 Intent、未知 action、未探索 selector 均在入队前失败。
-  - [ ] Go/Python golden fixtures 一致。
+  - [ ] Canonical Goal 连续 3 次通过。（因 BUG-155 成本熔断缺失，按用户要求暂停 live E2E）
+  - [ ] 3 次正式运行均直接调用官方 DeepSeek API，并在平台侧核对到不同的 response/request ID 与 usage 记录。（暂停 live E2E）
+  - [x] 缺 Intent、未知 action、未探索 selector 均在入队前失败。
+  - [x] Go/Python golden fixtures 一致。
+  - [x] 非 live implementation checkpoint 已通过 Go/Python/Frontend 静态与单元门禁。
   - [ ] 提交信息：`feat: introduce executable action ir`
+- [ ] Task 6.5：恢复 live E2E 前完成成本控制方案。
+  - [ ] 单次 live run 最大 LLM call 数和最大 input/output/total tokens 硬上限。
+  - [ ] 失败修复次数、重复报告读取和长 transcript 字节数熔断。
+  - [ ] `get_report`、`fix_and_retry`、`generate_dsl` 等非探索工具结果提供模型可见摘要，不直接回填完整 JSON。
+  - [ ] provider evidence summary 聚合 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 和 cache hit ratio。
+  - [ ] 正式 live E2E 前输出成本预估并等待用户确认。
 
 ## Stage 7：Baseline 与 Ablation
 
@@ -268,6 +286,7 @@
   - [ ] 所有 variant 使用相同控制变量。
   - [ ] Direct 仍经过 DSL envelope 和审批。
   - [ ] 输出原始结果、聚合指标和可复现实验 manifest。
+  - [ ] 每个正式样本均具有可在官方模型平台核对的 provider 调用证据；无记录样本从统计中剔除并使门禁失败。
   - [ ] 提交信息：`feat: orchestrate agentic baseline ablations`
 
 ## Stage 8：Failure Diagnosis 与 Recovery
@@ -285,6 +304,7 @@
   - [ ] 不可恢复故障进入 MANUAL。
   - [ ] 每次恢复重新生成 DSL 时必须重新审批。
   - [ ] 不得重复非幂等副作用。
+  - [ ] Canonical 与恢复调用均有官方模型平台记录及 provider response/request ID 关联。
   - [ ] 提交信息：`feat: add bounded recovery policies`
 
 ## Stage 9：Adaptive Observation Routing
@@ -297,6 +317,7 @@
   - [ ] 无 accessible name 故障触发 A11y+DOM。
   - [ ] Vision 仅在显式策略允许时触发。
   - [ ] 每次路由均有 confidence、reason、cost 和 outcome。
+  - [ ] 所有涉及模型决策的正式样本均有官方模型平台记录；Vision 调用另行记录 provider/model/request ID 与成本。
   - [ ] 提交信息：`feat: add deterministic observation routing`
 
 ## Stage 10：Contextual Bandit

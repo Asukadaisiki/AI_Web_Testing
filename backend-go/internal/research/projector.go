@@ -399,17 +399,53 @@ func projectAgentUnits(snapshot SourceSnapshot) ([]projectedUnit, error) {
 }
 
 func validateModelAttempts(call modelCallAggregate) error {
+	type logicalProviderEvidence struct {
+		ClientRequestID       string
+		EndpointScheme        string
+		EndpointHost          string
+		CredentialFingerprint string
+		LocalResponseCache    string
+	}
 	attempts := make([]int64, 0, len(call.events))
+	evidenceMode := 0
+	var expectedEvidence logicalProviderEvidence
 	for _, event := range call.events {
 		var payload struct {
-			LogicalCallID string `json:"logical_call_id"`
-			Attempt       int64  `json:"attempt"`
+			LogicalCallID         string `json:"logical_call_id"`
+			Attempt               int64  `json:"attempt"`
+			ClientRequestID       string `json:"client_request_id"`
+			EndpointScheme        string `json:"endpoint_scheme"`
+			EndpointHost          string `json:"endpoint_host"`
+			CredentialFingerprint string `json:"credential_fingerprint"`
+			LocalResponseCache    string `json:"local_response_cache"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
 		if payload.LogicalCallID != call.id {
 			return fmt.Errorf("%w: logical call identity changed", ErrSourceChanged)
+		}
+		mode := 1
+		if payload.ClientRequestID != "" {
+			mode = 2
+		}
+		evidence := logicalProviderEvidence{
+			ClientRequestID:       payload.ClientRequestID,
+			EndpointScheme:        payload.EndpointScheme,
+			EndpointHost:          payload.EndpointHost,
+			CredentialFingerprint: payload.CredentialFingerprint,
+			LocalResponseCache:    payload.LocalResponseCache,
+		}
+		if evidenceMode == 0 {
+			evidenceMode = mode
+			expectedEvidence = evidence
+		} else if evidenceMode != mode ||
+			(mode == 2 && evidence != expectedEvidence) {
+			return fmt.Errorf(
+				"%w: logical call %s provider evidence changed",
+				ErrSourceChanged,
+				call.id,
+			)
 		}
 		attempts = append(attempts, payload.Attempt)
 	}
@@ -592,15 +628,29 @@ func projectDecisionAndCost(
 		return Unavailable[ResearchEvent]("model_decision_source_not_persisted"),
 			Unavailable[CostSummary]("model_cost_source_not_persisted"), nil
 	}
+	type attemptUsageSummary struct {
+		PromptCacheHitTokens  *int64 `json:"prompt_cache_hit_tokens,omitempty"`
+		PromptCacheMissTokens *int64 `json:"prompt_cache_miss_tokens,omitempty"`
+	}
 	type attemptSummary struct {
-		LogicalCallID string `json:"logical_call_id"`
-		Attempt       int64  `json:"attempt"`
-		Status        string `json:"status"`
-		Provider      string `json:"provider"`
-		Model         string `json:"model"`
-		PromptVersion string `json:"prompt_version"`
-		PromptSHA256  string `json:"prompt_sha256"`
-		RequestSHA256 string `json:"request_sha256"`
+		LogicalCallID                 string               `json:"logical_call_id"`
+		Attempt                       int64                `json:"attempt"`
+		Status                        string               `json:"status"`
+		Provider                      string               `json:"provider"`
+		Model                         string               `json:"model"`
+		PromptVersion                 string               `json:"prompt_version"`
+		PromptSHA256                  string               `json:"prompt_sha256"`
+		RequestSHA256                 string               `json:"request_sha256"`
+		ClientRequestID               string               `json:"client_request_id,omitempty"`
+		EndpointScheme                string               `json:"endpoint_scheme,omitempty"`
+		EndpointHost                  string               `json:"endpoint_host,omitempty"`
+		CredentialFingerprint         string               `json:"credential_fingerprint,omitempty"`
+		ProviderResponseID            string               `json:"provider_response_id,omitempty"`
+		ProviderHeaderRequestID       string               `json:"provider_header_request_id,omitempty"`
+		ProviderHeaderRequestIDHeader string               `json:"provider_header_request_id_header,omitempty"`
+		ProviderRequestID             string               `json:"provider_request_id,omitempty"`
+		LocalResponseCache            string               `json:"local_response_cache,omitempty"`
+		Usage                         *attemptUsageSummary `json:"usage,omitempty"`
 	}
 	attempts := make([]attemptSummary, 0, len(call.llmEvents))
 	var input, output, total, latency int64
@@ -609,24 +659,35 @@ func projectDecisionAndCost(
 	allToolCallIDs := make([]string, 0)
 	for _, event := range call.llmEvents {
 		var payload struct {
-			LogicalCallID  string   `json:"logical_call_id"`
-			Attempt        int64    `json:"attempt"`
-			AttemptStatus  string   `json:"attempt_status"`
-			Provider       string   `json:"provider"`
-			ResolvedModel  string   `json:"resolved_model"`
-			RequestedModel string   `json:"requested_model"`
-			AttemptLatency int64    `json:"attempt_latency_ms"`
-			ToolCallIDs    []string `json:"tool_call_ids"`
-			PromptSpec     struct {
+			LogicalCallID                 string   `json:"logical_call_id"`
+			Attempt                       int64    `json:"attempt"`
+			AttemptStatus                 string   `json:"attempt_status"`
+			Provider                      string   `json:"provider"`
+			ResolvedModel                 string   `json:"resolved_model"`
+			RequestedModel                string   `json:"requested_model"`
+			AttemptLatency                int64    `json:"attempt_latency_ms"`
+			ToolCallIDs                   []string `json:"tool_call_ids"`
+			ClientRequestID               string   `json:"client_request_id"`
+			EndpointScheme                string   `json:"endpoint_scheme"`
+			EndpointHost                  string   `json:"endpoint_host"`
+			CredentialFingerprint         string   `json:"credential_fingerprint"`
+			ProviderResponseID            string   `json:"provider_response_id"`
+			ProviderHeaderRequestID       string   `json:"provider_header_request_id"`
+			ProviderHeaderRequestIDHeader string   `json:"provider_header_request_id_header"`
+			ProviderRequestID             string   `json:"provider_request_id"`
+			LocalResponseCache            string   `json:"local_response_cache"`
+			PromptSpec                    struct {
 				Version       string `json:"version"`
 				PromptSHA256  string `json:"prompt_sha256"`
 				RequestSHA256 string `json:"request_sha256"`
 			} `json:"prompt_spec"`
 			Usage struct {
-				Status       string `json:"status"`
-				InputTokens  int64  `json:"input_tokens"`
-				OutputTokens int64  `json:"output_tokens"`
-				TotalTokens  int64  `json:"total_tokens"`
+				Status                string `json:"status"`
+				InputTokens           int64  `json:"input_tokens"`
+				OutputTokens          int64  `json:"output_tokens"`
+				TotalTokens           int64  `json:"total_tokens"`
+				PromptCacheHitTokens  *int64 `json:"prompt_cache_hit_tokens"`
+				PromptCacheMissTokens *int64 `json:"prompt_cache_miss_tokens"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -636,12 +697,30 @@ func projectDecisionAndCost(
 		if model == "" {
 			model = payload.RequestedModel
 		}
+		var cacheUsage *attemptUsageSummary
+		if payload.Usage.PromptCacheHitTokens != nil ||
+			payload.Usage.PromptCacheMissTokens != nil {
+			cacheUsage = &attemptUsageSummary{
+				PromptCacheHitTokens:  payload.Usage.PromptCacheHitTokens,
+				PromptCacheMissTokens: payload.Usage.PromptCacheMissTokens,
+			}
+		}
 		attempts = append(attempts, attemptSummary{
 			LogicalCallID: payload.LogicalCallID, Attempt: payload.Attempt,
 			Status: payload.AttemptStatus, Provider: payload.Provider, Model: model,
-			PromptVersion: payload.PromptSpec.Version,
-			PromptSHA256:  payload.PromptSpec.PromptSHA256,
-			RequestSHA256: payload.PromptSpec.RequestSHA256,
+			PromptVersion:                 payload.PromptSpec.Version,
+			PromptSHA256:                  payload.PromptSpec.PromptSHA256,
+			RequestSHA256:                 payload.PromptSpec.RequestSHA256,
+			ClientRequestID:               payload.ClientRequestID,
+			EndpointScheme:                payload.EndpointScheme,
+			EndpointHost:                  payload.EndpointHost,
+			CredentialFingerprint:         payload.CredentialFingerprint,
+			ProviderResponseID:            payload.ProviderResponseID,
+			ProviderHeaderRequestID:       payload.ProviderHeaderRequestID,
+			ProviderHeaderRequestIDHeader: payload.ProviderHeaderRequestIDHeader,
+			ProviderRequestID:             payload.ProviderRequestID,
+			LocalResponseCache:            payload.LocalResponseCache,
+			Usage:                         cacheUsage,
 		})
 		latency += payload.AttemptLatency
 		allToolCallIDs = append(allToolCallIDs, payload.ToolCallIDs...)

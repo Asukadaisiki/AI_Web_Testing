@@ -17,6 +17,8 @@
 - 增加 A11y、A11y+DOM、Vision 的确定性 Observation Routing。
 - 在数据门槛满足后增加 Contextual Bandit；Sequential RL 仅在序列依赖得到实验证明后实施。
 - 每个阶段都以真实自然语言 Goal 的官方 Agent 链路 E2E 为验收标准。
+- 每个主链 E2E 必须产生可由模型供应商平台核对的真实上游 API 调用记录；本地 mock、record/replay、本地响应缓存、兼容网关或仅有内部 Agent Event 均不能作为通过证据。供应商侧 prompt cache 命中仍属于真实调用，但必须记录其 usage 明细。
+- 若用户因成本风险明确暂停 E2E，可以创建阶段 implementation checkpoint 提交并推送，但不得将对应 Stage 标记为 provider-verified 或 fully accepted；恢复 live E2E 前必须先完成调用/token/失败重试预算、上下文压缩和成本预估门禁。
 - 每个阶段通过门禁后在 `main` 创建独立提交并直接推送。
 - 实施阶段全部使用子代理；无依赖任务并行执行，主代理负责整合、验收和提交。
 - 以本规范、任务清单和检查清单作为上下文压缩后的恢复锚点。
@@ -127,8 +129,38 @@ Natural Language Goal
 - 独立 Oracle 精确验证单一 `#product-1` 行中的名称、单价、数量和总价。
 - `vision_calls=0`，除非该 Stage 明确测试 Vision。
 - Agent 最终回答与持久化 Report 一致。
+- 模型请求的实际 endpoint host 与 Experiment 声明的官方 provider 一致；DeepSeek 验收必须直接使用 `api.deepseek.com`，不得使用 OpenAI-compatible 第三方网关或 fallback provider。
+- 每个正式 repetition 至少保存一个非缓存上游调用的脱敏证据：请求开始/结束时间、provider、model、endpoint host、HTTP status、provider response/request ID、usage、凭据指纹和关联的 AgentRun/LLM-call event；不得保存 API Key、Authorization header 或完整敏感请求体。
+- 同一实验的正式 repetitions 必须具有不同的 provider response/request ID，且时间落在该 repetition 的运行窗口内。
+- 验收前后必须通过供应商控制台、usage API 或账单明细核对新增调用；无法在供应商平台查到对应调用时，该 E2E 视为未执行，不得勾选、提交或推送。
+- E2E 被用户暂停时，允许提交非 live implementation checkpoint；该提交必须明确记录未执行 live E2E、不得勾选 provider E2E 项，并保留恢复 live 验收前的成本控制待办。
 
 ## ADDED Requirements
+
+### Requirement: Auditable Official Provider E2E
+
+所有涉及 Agent 主链的阶段 SHALL 使用真实官方模型 API，并形成可同时由本地持久化事实与供应商平台调用记录验证的证据闭环。
+
+#### Scenario: 真实模型调用
+
+- **WHEN** 执行 Canonical、Ablation、Recovery 或 Observation Routing 的正式 E2E
+- **THEN** 应用实际请求官方 provider endpoint，模型名称与 Experiment 固定值一致
+- **AND** 禁止 mock client、stub server、record/replay、本地响应缓存、第三方兼容网关或 fallback provider 计入正式样本；供应商 prompt cache 命中可以计入，但必须记录 cache hit/miss token usage
+- **AND** 每次上游调用记录脱敏的 endpoint host、HTTP status、provider response/request ID、usage、latency、retry、不可逆凭据指纹和 AgentRun/LLM-call event 关联
+
+#### Scenario: 平台侧核验
+
+- **WHEN** 一个正式 repetition 被判定为通过
+- **THEN** provider response/request ID 和调用时间必须能在供应商控制台、usage API 或账单明细中找到对应记录
+- **AND** 本地 token usage 与平台记录在供应商允许的计量差异内一致
+- **AND** 缺失平台记录、request ID 重复、endpoint 不匹配或 provider/model fallback 时 `provider_e2e_verified=false`，该 repetition 不计入通过次数
+
+#### Scenario: 安全证据
+
+- **WHEN** 持久化或导出 provider 调用证据
+- **THEN** 只保存可审计元数据和不可逆 hash
+- **AND** 凭据指纹只能由 API Key 的不可逆 hash 派生，用于确认本地运行与平台所查账号/Key 一致，不得记录 Key 前后缀
+- **AND** 不得保存 API Key、Authorization header、Cookie 或供应商返回的隐藏推理内容
 
 ### Requirement: Stage 0 Full-Chain Baseline
 

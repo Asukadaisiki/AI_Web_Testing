@@ -16,7 +16,8 @@ from app.models import ExecutionBatch, TestCase, TestCaseRun, User
 from app.reporters import build_execution_report
 from app.runners import RunnerExecutionError, RunnerInterventionError
 from app.runners.playwright_runner import RunnerCancelledError, StepStreamEvent, execute_case_with_playwright_streaming
-from app.schemas.dsl import DSLCase, GotoStep, load_canonical_dsl
+from app.schemas.action_ir import case_dsl_profile
+from app.schemas.dsl import DSLCase, GotoStep, load_canonical_dsl, validate_dsl_case
 from app.schemas.executions import (
     CaseExecutionRequest,
     ExecutionAnalysis,
@@ -106,11 +107,12 @@ def execute_case_streaming(
             raise ValueError("Approved canonical DSL does not match the persisted case.")
         dsl_sha256 = context.dsl_sha256
     else:
-        normalized_case = DSLCase.model_validate(record.dsl)
+        normalized_case = validate_dsl_case(record.dsl)
         dsl_snapshot = normalized_case.model_dump(mode="json")
         dsl_sha256 = hashlib.sha256(
             json.dumps(dsl_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+    dsl_profile = case_dsl_profile(normalized_case)
     execution = TestCaseRun(
         case_id=record.id,
         project_id=record.project_id,
@@ -142,7 +144,16 @@ def execute_case_streaming(
     step_results: list[StepExecutionEvidence] = []
     try:
         if missing_base_url_error is not None:
-            report = build_execution_report(status="failed", steps=[_with_artifact_url(missing_base_url_error)])
+            failed_steps = _with_action_ir_metadata(
+                [_with_artifact_url(missing_base_url_error)],
+                normalized_case,
+                dsl_profile,
+            )
+            report = build_execution_report(
+                status="failed",
+                steps=failed_steps,
+                dsl_profile=dsl_profile,
+            )
             execution.status = "failed"
             execution.report = report.model_dump(mode="json")
             execution.error_message = missing_base_url_error.error_message
@@ -156,29 +167,62 @@ def execute_case_streaming(
                 input_values=merged_input_values,
             )
             step_results = [_with_artifact_url(step) for step in step_results]
+            step_results = _with_action_ir_metadata(
+                step_results,
+                normalized_case,
+                dsl_profile,
+            )
             has_failure = any(s.status in ("failed", "cascade_blocked") for s in step_results)
             report = build_execution_report(
                 status="failed" if has_failure else "passed",
                 steps=step_results,
+                dsl_profile=dsl_profile,
             )
             execution.status = "failed" if has_failure else "passed"
             execution.report = report.model_dump(mode="json")
             execution.error_message = None
     except RunnerInterventionError as exc:
         step_results = [_with_artifact_url(step) for step in exc.step_results]
-        report = build_execution_report(status="failed", steps=step_results)
+        step_results = _with_action_ir_metadata(
+            step_results,
+            normalized_case,
+            dsl_profile,
+        )
+        report = build_execution_report(
+            status="failed",
+            steps=step_results,
+            dsl_profile=dsl_profile,
+        )
         execution.status = "needs_intervention"
         execution.report = report.model_dump(mode="json")
         execution.error_message = str(exc)
     except RunnerExecutionError as exc:
         step_results = [_with_artifact_url(step) for step in exc.step_results]
-        report = build_execution_report(status="failed", steps=step_results)
+        step_results = _with_action_ir_metadata(
+            step_results,
+            normalized_case,
+            dsl_profile,
+        )
+        report = build_execution_report(
+            status="failed",
+            steps=step_results,
+            dsl_profile=dsl_profile,
+        )
         execution.status = "failed"
         execution.report = report.model_dump(mode="json")
         execution.error_message = str(exc)
     except RunnerCancelledError as exc:
         step_results = [_with_artifact_url(step) for step in exc.step_results]
-        report = build_execution_report(status="failed", steps=step_results)
+        step_results = _with_action_ir_metadata(
+            step_results,
+            normalized_case,
+            dsl_profile,
+        )
+        report = build_execution_report(
+            status="failed",
+            steps=step_results,
+            dsl_profile=dsl_profile,
+        )
         execution.status = "cancelled"
         execution.report = report.model_dump(mode="json")
         execution.error_message = "Execution cancelled by user."
@@ -193,7 +237,16 @@ def execute_case_streaming(
         if persisted_execution is not None:
             raw_step_results = getattr(exc, "step_results", step_results)
             normalized_steps = [_with_artifact_url(step) for step in raw_step_results]
-            report = build_execution_report(status="failed", steps=normalized_steps)
+            normalized_steps = _with_action_ir_metadata(
+                normalized_steps,
+                normalized_case,
+                dsl_profile,
+            )
+            report = build_execution_report(
+                status="failed",
+                steps=normalized_steps,
+                dsl_profile=dsl_profile,
+            )
             persisted_execution.status = "failed"
             persisted_execution.report = report.model_dump(mode="json")
             persisted_execution.error_message = f"{type(exc).__name__}: {exc}"
@@ -303,11 +356,38 @@ def _to_execution_detail(session: Session, record: TestCaseRun, *, case_name: st
     )
 
 
+def _with_action_ir_metadata(
+    steps: list[StepExecutionEvidence],
+    case: object,
+    dsl_profile: str,
+) -> list[StepExecutionEvidence]:
+    case_steps = getattr(case, "steps", [])
+    result: list[StepExecutionEvidence] = []
+    for evidence in steps:
+        declared_step = (
+            case_steps[evidence.step_index]
+            if evidence.step_index < len(case_steps)
+            else None
+        )
+        updates = {
+            "dsl_profile": dsl_profile,
+            "intent": getattr(declared_step, "intent", None),
+            "idempotency": getattr(declared_step, "idempotency", None),
+            "declared_side_effect": getattr(declared_step, "side_effect", None),
+        }
+        result.append(evidence.model_copy(update=updates))
+    return result
+
+
 def _normalize_report(report: dict | None):
     if report is None:
         return None
     steps = [_with_artifact_url(StepExecutionEvidence.model_validate(step)) for step in report.get("steps", [])]
-    return build_execution_report(status=report["status"], steps=steps)
+    return build_execution_report(
+        status=report["status"],
+        steps=steps,
+        dsl_profile=report.get("dsl_profile"),
+    )
 
 
 def _set_failure_signal(record: TestCaseRun) -> None:

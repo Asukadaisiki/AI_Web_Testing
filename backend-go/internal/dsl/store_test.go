@@ -213,3 +213,254 @@ func TestValidateCaseRequiresTargetURLForVerifiedCrossPageAnchor(t *testing.T) {
 		t.Fatalf("ValidateCase(valid) error = %v", err)
 	}
 }
+
+func TestResearchCanonicalContractGolden(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "dsl_research_v1_contract.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Input            json.RawMessage `json:"input"`
+		CanonicalVersion string          `json:"canonical_version"`
+		Profile          Profile         `json:"profile"`
+		CanonicalJSON    string          `json:"canonical_json"`
+		SHA256           string          `json:"sha256"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	validated, err := ValidateExecutableCase(fixture.Input)
+	if err != nil {
+		t.Fatalf("ValidateExecutableCase() error = %v", err)
+	}
+	if string(validated.CanonicalJSON) != fixture.CanonicalJSON {
+		t.Fatalf(
+			"canonical JSON mismatch\n got: %s\nwant: %s",
+			validated.CanonicalJSON,
+			fixture.CanonicalJSON,
+		)
+	}
+	if hash := SHA256(validated.CanonicalJSON); hash != fixture.SHA256 {
+		t.Fatalf("SHA256() = %s, want %s", hash, fixture.SHA256)
+	}
+	if validated.CanonicalVersion != fixture.CanonicalVersion ||
+		validated.Profile != fixture.Profile {
+		t.Fatalf(
+			"contract = (%s, %s), want (%s, %s)",
+			validated.Profile,
+			validated.CanonicalVersion,
+			fixture.Profile,
+			fixture.CanonicalVersion,
+		)
+	}
+	revalidated, err := ValidateExecutableCase(validated.CanonicalJSON)
+	if err != nil {
+		t.Fatalf("revalidate canonical research case: %v", err)
+	}
+	if string(revalidated.CanonicalJSON) != string(validated.CanonicalJSON) {
+		t.Fatalf(
+			"research canonicalization is not idempotent\nfirst:  %s\nsecond: %s",
+			validated.CanonicalJSON,
+			revalidated.CanonicalJSON,
+		)
+	}
+}
+
+func TestResearchDraftRejectsMissingUnknownAndSelectorFields(t *testing.T) {
+	tests := []string{
+		`{"profile":"research-v1","name":"missing intent","steps":[{"action":"wait_for","target":"Ready","preconditions":[],"postconditions":[],"idempotency":"idempotent","side_effect":"none"}]}`,
+		`{"profile":"research-v1","name":"missing conditions","steps":[{"action":"assert_url_contains","intent":"Check URL","target":"Current URL","value":"/done","idempotency":"idempotent","side_effect":"none"}]}`,
+		`{"profile":"research-v1","name":"unknown case","unexpected":true,"steps":[{"action":"assert_url_contains","intent":"Check URL","target":"Current URL","value":"/done","preconditions":[],"postconditions":[],"idempotency":"idempotent","side_effect":"none"}]}`,
+		`{"profile":"research-v1","name":"unknown condition","steps":[{"action":"assert_url_contains","intent":"Check URL","target":"Current URL","value":"/done","preconditions":[{"type":"url_contains","value":"/","unexpected":true}],"postconditions":[],"idempotency":"idempotent","side_effect":"none"}]}`,
+		`{"profile":"research-v1","name":"selector","steps":[{"action":"click","intent":"Click login","target":"Login button","selector":"#login","preconditions":[{"type":"element_visible","value":"Login button"}],"postconditions":[{"type":"url_changes"}],"idempotency":"idempotent","side_effect":"browser_state"}]}`,
+		`{"profile":"research-v1","name":"candidates","steps":[{"action":"click","intent":"Click login","target":"Login button","candidates":[],"preconditions":[{"type":"element_visible","value":"Login button"}],"postconditions":[{"type":"url_changes"}],"idempotency":"idempotent","side_effect":"browser_state"}]}`,
+	}
+	for _, raw := range tests {
+		if _, err := ValidateDraftCase(json.RawMessage(raw)); err == nil {
+			t.Fatalf("ValidateDraftCase(%s) error = nil", raw)
+		}
+	}
+}
+
+func TestResearchDraftAndExecutablePhases(t *testing.T) {
+	draft := json.RawMessage(`{
+		"profile":"research-v1",
+		"name":"Login",
+		"steps":[{
+			"action":"click",
+			"intent":"Submit credentials",
+			"target":"Login button",
+			"page_state":"login",
+			"preconditions":[{"type":"element_visible","value":"Login button"}],
+			"postconditions":[{"type":"url_contains","value":"/home"}],
+			"idempotency":"non_idempotent",
+			"side_effect":"browser_state"
+		}]
+	}`)
+	validatedDraft, err := ValidateDraftCase(draft)
+	if err != nil {
+		t.Fatalf("ValidateDraftCase() error = %v", err)
+	}
+	if validatedDraft.Profile != ProfileResearchV1 ||
+		validatedDraft.CanonicalVersion != CanonicalVersionV2 {
+		t.Fatalf("draft contract = %#v", validatedDraft)
+	}
+	if _, err := ValidateExecutableCase(validatedDraft.CanonicalJSON); err == nil {
+		t.Fatal("ValidateExecutableCase(draft) error = nil")
+	}
+
+	executable := json.RawMessage(`{
+		"profile":"research-v1",
+		"name":"Login",
+		"steps":[{
+			"action":"click",
+			"intent":"Submit credentials",
+			"target":"Login button",
+			"page_state":"login",
+			"preconditions":[{"type":"element_visible","value":"Login button"}],
+			"postconditions":[{"type":"url_contains","value":"/home"}],
+			"idempotency":"non_idempotent",
+			"side_effect":"browser_state",
+			"locator_confidence":"high",
+			"candidates":[{
+				"strategy":"verified_css",
+				"selector":"#login",
+				"semantic_value":"Login",
+				"pre_score":1,
+				"pre_features":{"verified":true,"source":"a11y_backend_dom_node"}
+			}]
+		}]
+	}`)
+	if _, err := ValidateExecutableCase(executable); err != nil {
+		t.Fatalf("ValidateExecutableCase() error = %v", err)
+	}
+}
+
+func TestResearchExecutableRejectsUnverifiedCandidate(t *testing.T) {
+	tests := []string{
+		`{
+			"profile":"research-v1","name":"Login","steps":[{
+				"action":"wait_for","intent":"Wait for login","target":"Login button",
+				"preconditions":[],"postconditions":[],
+				"idempotency":"idempotent","side_effect":"none",
+				"locator_confidence":"medium",
+				"candidates":[{
+					"strategy":"role_fuzzy","selector":"button","semantic_value":"Login",
+					"pre_score":0.75,"pre_features":{"source":"a11y_role_fuzzy"}
+				}]
+			}]
+		}`,
+		`{
+			"profile":"research-v1","name":"Login","steps":[{
+				"action":"wait_for","intent":"Wait for login","target":"Login button",
+				"preconditions":[],"postconditions":[],
+				"idempotency":"idempotent","side_effect":"none",
+				"locator_confidence":"high",
+				"candidates":[{
+					"strategy":"verified_css","selector":"#login","semantic_value":"Login",
+					"pre_score":1,"pre_features":{"verified":true},"unexpected":true
+				}]
+			}]
+		}`,
+		`{
+			"profile":"research-v1","name":"Login","steps":[{
+				"action":"wait_for","intent":"Wait for login","target":"Login button",
+				"preconditions":[],"postconditions":[],
+				"idempotency":"idempotent","side_effect":"none",
+				"locator_confidence":"high",
+				"candidates":[{
+					"strategy":"verified_css","selector":"#login","semantic_value":"Login",
+					"pre_score":1,
+					"pre_features":{"verified":true,"source":"user_claim"}
+				}]
+			}]
+		}`,
+		`{
+			"profile":"research-v1","name":"Login","steps":[{
+				"action":"wait_for","intent":"Wait for login","target":"Login button",
+				"preconditions":[],"postconditions":[],
+				"idempotency":"idempotent","side_effect":"none",
+				"locator_confidence":"high",
+				"candidates":[{
+					"strategy":"invented_selector","selector":"#login","semantic_value":"Login",
+					"pre_score":1,
+					"pre_features":{"verified":true,"source":"a11y_backend_dom_node"}
+				}]
+			}]
+		}`,
+	}
+	for _, raw := range tests {
+		if _, err := ValidateExecutableCase(json.RawMessage(raw)); err == nil {
+			t.Fatalf("ValidateExecutableCase(%s) error = nil", raw)
+		}
+	}
+}
+
+func TestResearchExecutableAcceptsRealPreflightCandidateShape(t *testing.T) {
+	raw := json.RawMessage(`{
+		"profile":"research-v1","name":"Login","steps":[{
+			"action":"click","intent":"Click login","target":"Login button",
+			"page_state":"S0",
+			"preconditions":[{"type":"element_visible","value":"Login button"}],
+			"postconditions":[{"type":"url_changes"}],
+			"idempotency":"idempotent","side_effect":"browser_state",
+			"locator_confidence":"high",
+			"candidates":[
+				{
+					"strategy":"verified_css","selector":"#login",
+					"semantic_value":"Login","pre_score":1,
+					"pre_features":{
+						"verified":true,"source":"a11y_backend_dom_node",
+						"verified_href":null
+					}
+				},
+				{
+					"strategy":"role","selector":"button",
+					"semantic_value":"Login","pre_score":0.9,
+					"pre_features":{"verified":true,"source":"a11y_role_exact"}
+				}
+			]
+		}]
+	}`)
+	if _, err := ValidateExecutableCase(raw); err != nil {
+		t.Fatalf("ValidateExecutableCase() error = %v", err)
+	}
+}
+
+func TestResearchActionSemantics(t *testing.T) {
+	rejected := []string{
+		`{"profile":"research-v1","name":"goto","steps":[{"action":"goto","intent":"Open checkout","target":"Checkout page","value":"/checkout","preconditions":[],"postconditions":[],"idempotency":"idempotent","side_effect":"browser_state"}]}`,
+		`{"profile":"research-v1","name":"input","steps":[{"action":"input","intent":"Enter query","target":"Search field","value":"dress","preconditions":[{"type":"element_visible","value":"Search field"}],"postconditions":[{"type":"value_changed","value":"dress"}],"idempotency":"non_idempotent","side_effect":"browser_state"}]}`,
+		`{"profile":"research-v1","name":"wait","steps":[{"action":"wait_for","intent":"Wait for result","target":"Result","preconditions":[],"postconditions":[],"idempotency":"non_idempotent","side_effect":"none"}]}`,
+		`{"profile":"research-v1","name":"url","steps":[{"action":"assert_url_contains","intent":"Check URL","value":"/done","preconditions":[],"postconditions":[],"idempotency":"idempotent","side_effect":"none"}]}`,
+	}
+	for _, raw := range rejected {
+		if _, err := ValidateDraftCase(json.RawMessage(raw)); err == nil {
+			t.Fatalf("ValidateDraftCase(%s) error = nil", raw)
+		}
+	}
+
+	gotoStep := json.RawMessage(`{
+		"profile":"research-v1","name":"goto","steps":[{
+			"action":"goto","intent":"Open checkout","target":"Checkout page",
+			"value":"/checkout","preconditions":[],
+			"postconditions":[{"type":"url_contains","value":"/checkout"}],
+			"idempotency":"idempotent","side_effect":"browser_state"
+		}]
+	}`)
+	if _, err := ValidateDraftCase(gotoStep); err != nil {
+		t.Fatalf("ValidateDraftCase(goto) error = %v", err)
+	}
+
+	click := json.RawMessage(`{
+		"profile":"research-v1","name":"purchase","steps":[{
+			"action":"click","intent":"Place order","target":"Place order button",
+			"preconditions":[{"type":"element_visible","value":"Place order button"}],
+			"postconditions":[{"type":"text_visible","value":"Confirmation"}],
+			"idempotency":"non_idempotent","side_effect":"external_state"
+		}]
+	}`)
+	if _, err := ValidateDraftCase(click); err != nil {
+		t.Fatalf("ValidateDraftCase(click) error = %v", err)
+	}
+}

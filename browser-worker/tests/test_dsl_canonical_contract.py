@@ -15,6 +15,9 @@ from app.services.executions import ExecutionRunContext, _normalize_report, exec
 
 
 FIXTURE_PATH = Path(__file__).parents[2] / "testdata" / "dsl_canonical_contract.json"
+RESEARCH_FIXTURE_PATH = (
+    Path(__file__).parents[2] / "testdata" / "dsl_research_v1_contract.json"
+)
 
 
 class DSLCanonicalContractTests(unittest.TestCase):
@@ -138,6 +141,32 @@ class DSLCanonicalContractTests(unittest.TestCase):
         self.assertEqual(session.execution.dsl_snapshot, payload)
         self.assertEqual(session.execution.dsl_sha256, fixture["sha256"])
 
+    def test_research_execution_preserves_action_ir_evidence(self) -> None:
+        fixture = json.loads(RESEARCH_FIXTURE_PATH.read_text())
+        payload = json.loads(fixture["canonical_json"])
+        session = _FakeSession(payload)
+
+        result = execute_case(
+            session,
+            7,
+            CaseExecutionRequest(actor_user_id=3),
+            run_context=ExecutionRunContext(
+                job_id=11,
+                dsl_snapshot=payload,
+                dsl_canonical_json=fixture["canonical_json"],
+                dsl_sha256=fixture["sha256"],
+                dsl_canonical_version=fixture["canonical_version"],
+            ),
+        )
+
+        self.assertEqual(result.dsl_snapshot, payload)
+        self.assertEqual(result.report.dsl_profile, "research-v1")
+        step = result.report.steps[0]
+        self.assertEqual(step.dsl_profile, "research-v1")
+        self.assertEqual(step.intent, "Open the checkout page")
+        self.assertEqual(step.idempotency, "idempotent")
+        self.assertEqual(step.declared_side_effect, "browser_state")
+
     def test_execution_report_v1_is_read_with_v2_defaults(self) -> None:
         report = _normalize_report(
             {
@@ -162,6 +191,7 @@ class DSLCanonicalContractTests(unittest.TestCase):
         self.assertEqual(report.steps[0].condition_results, [])
         self.assertEqual(report.steps[0].action_outcome.status, "unknown")
         self.assertEqual(report.steps[0].network_events[0].event_type, "response")
+        self.assertIsNone(report.dsl_profile)
 
 
 class _FakeSession:

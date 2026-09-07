@@ -163,6 +163,15 @@ class InterventionRequest(DSLModel):
 class StepExecutionEvidence(DSLModel):
     step_index: int = Field(ge=0)
     action: str
+    dsl_profile: Literal["legacy-v1", "research-v1"] | None = None
+    intent: str | None = None
+    idempotency: Literal["idempotent", "non_idempotent"] | None = None
+    declared_side_effect: Literal[
+        "none",
+        "browser_state",
+        "external_state",
+        "unknown",
+    ] | None = None
     target: str | None = None
     value: str | None = None
     status: Literal["passed", "failed"]
@@ -209,6 +218,7 @@ class StepExecutionEvidence(DSLModel):
 
 class ExecutionReport(DSLModel):
     status: ExecutionStatus
+    dsl_profile: Literal["legacy-v1", "research-v1"] | None = None
     steps: list[StepExecutionEvidence] = Field(default_factory=list)
 
 

@@ -48,6 +48,40 @@
 
 ## 问题记录
 
+## BUG-156 | research-v1 locator preflight 对无 accessible name 节点崩溃
+
+- 日期：2026-09-07
+- 状态：fixed
+- 严重度：high
+- 来源：Stage 6 live 失败复盘 / 非 live 收口
+- 描述：`locator_preflight.py` 在处理真实 A11y 节点时直接读取 `n["name"]` 和 `n["role"]`；当节点没有 accessible name（例如商品详情页 quantity spinbutton）但存在 verified selector 时，会触发 `KeyError: 'name'`，阻断 research-v1 DSL 生成或 preflight。
+- 复现步骤：
+  1. 构造 `profile=research-v1` 的 input step，target 为 `#quantity`。
+  2. 提交的 a11y node 只有 `role`、`dom.attrs.id` 和 `verified_selectors`，没有 `name`。
+  3. 调用 `apply_preflight_to_dsl_by_state`。
+- 影响：真实 Stage 6 Canonical 在 DSL 生成前置 preflight 阶段失败，导致 live E2E 重试和成本扩大。
+- 根因：preflight 假设所有 matched nodes 都有 `name`；research-v1 又需要保留 verified selector 作为可执行候选，不能因为缺少语义 name 就崩溃。
+- 处理：改为使用 `n.get("role")` / `n.get("name")`；无 name 节点保留 verified selector 候选，但不生成 role/text/scoped semantic 候选；新增 Python 合同测试覆盖无名 verified selector。
+- 验证：`uv run python -m unittest tests.test_action_ir -v` 和 `uv run python -m unittest discover -s tests -v` 通过。
+- 关联记录：`docs/execution-log.md#2026-09-07--stage-6-action-ir-非-live-checkpoint`
+
+## BUG-155 | Stage 6 Live E2E 缺少成本熔断且非探索工具结果膨胀上下文
+
+- 日期：2026-09-07
+- 状态：open
+- 严重度：critical
+- 来源：用户反馈 / Stage 6 live 成本审计
+- 描述：Stage 6 live acceptance 直接执行 3 个真实官方 DeepSeek ResearchRun，失败路径仍持续进行多轮 Agent 调用；本地 provider summary 未展示 cache hit/miss 汇总，且 Agent transcript 只压缩探索工具摘要，`get_report`、`fix_and_retry`、`generate_dsl` 等非探索工具结果以完整 JSON 回填模型上下文，导致 token 和费用快速增长。
+- 复现步骤：
+  1. 使用官方 DeepSeek endpoint 运行 Stage 6 live acceptance。
+  2. 允许完整 3 repetition 和失败修复链路继续执行。
+  3. 查询 `agent_events` 中 `research.llm_call` 的 usage 和 `agent_runs.transcript_json`。
+- 影响：一次未通过验收的 Stage 6 live run 产生 40 次真实 DeepSeek 调用，累计 input 3,532,269、output 137,661、total 3,669,930 tokens；`prompt_cache_hit_tokens=0`，全部 input 计入 `prompt_cache_miss_tokens`。用户余额被快速消耗，且验收摘要不能第一时间暴露 cache 命中为 0。
+- 根因：验收策略没有先执行受限 live smoke 和成本上限；Agent loop 缺少单 run 最大调用数、最大 token、最大失败修复次数和上下文字节熔断；cache 依赖稳定长前缀，但实际请求包含持续变化的 tool result、report、failure signal、run id、时间和 DSL/IR 内容；现有摘要压缩只覆盖 `explore_page/explore_flow`，非探索工具结果未做模型可见摘要。
+- 处理：待修复。计划新增 live E2E 预算门禁、失败路径熔断、provider cache hit/miss 聚合、非探索工具模型摘要、最大 transcript 字节控制，并要求正式 3 repetition 前先输出成本预估并由用户确认。
+- 验证：未验证；当前仅完成只读审计并暂停真实模型调用。
+- 关联记录：`docs/execution-log.md#2026-09-07--stage-6-live-e2e-成本与缓存命中审计`
+
 ## BUG-154 | Stage 5 首次验收在应用 0042 前运行 PostgreSQL 测试
 
 - 日期：2026-09-07

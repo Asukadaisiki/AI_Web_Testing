@@ -124,7 +124,7 @@ def _quarantine_unsafe_expired_jobs(session: Session, now: datetime) -> None:
         if not _requires_manual_recovery(session, job):
             continue
         message = (
-            "Lease expired after a non-idempotent action may have been dispatched; "
+            "Lease expired after a protected action may have been dispatched; "
             "automatic whole-case replay is blocked."
         )
         job.status = "needs_intervention"
@@ -159,6 +159,9 @@ def _requires_manual_recovery(session: Session, job: ExecutionJob) -> bool:
         case = session.get(TestCase, job.case_id)
         dsl = case.dsl if case is not None else None
     steps = (dsl or {}).get("steps") or []
+    if (dsl or {}).get("profile") == "research-v1":
+        return _research_requires_manual_recovery(session, job, steps)
+
     if not any(step.get("action") == "click" for step in steps):
         return False
 
@@ -185,6 +188,56 @@ def _requires_manual_recovery(session: Session, job: ExecutionJob) -> bool:
         if outcome.get("side_effect_state") in {"committed", "unknown"}:
             return True
     return not observed_click
+
+
+def _research_requires_manual_recovery(
+    session: Session,
+    job: ExecutionJob,
+    steps: list,
+) -> bool:
+    protected_indexes = {
+        index
+        for index, step in enumerate(steps)
+        if isinstance(step, dict)
+        and (
+            step.get("idempotency") == "non_idempotent"
+            or step.get("side_effect") in {"external_state", "unknown"}
+        )
+    }
+    if not protected_indexes:
+        return False
+
+    latest_run = session.scalar(
+        select(TestCaseRun)
+        .where(TestCaseRun.job_id == job.id)
+        .order_by(TestCaseRun.id.desc())
+        .limit(1)
+    )
+    if latest_run is None or not latest_run.report:
+        return True
+
+    report_steps = latest_run.report.get("steps") or []
+    evidence_by_index = {
+        evidence.get("step_index"): evidence
+        for evidence in report_steps
+        if isinstance(evidence, dict)
+    }
+    for index in protected_indexes:
+        evidence = evidence_by_index.get(index)
+        if evidence is None:
+            if latest_run.status == "running":
+                return True
+            continue
+        outcome = evidence.get("action_outcome") or {}
+        side_effect_state = outcome.get("side_effect_state")
+        if side_effect_state in {"committed", "unknown"}:
+            return True
+        if side_effect_state in {"not_committed", "not_applicable"}:
+            continue
+        if outcome.get("status") in {"succeeded", "unknown"}:
+            return True
+        return True
+    return False
 
 
 def finish_execution_job(

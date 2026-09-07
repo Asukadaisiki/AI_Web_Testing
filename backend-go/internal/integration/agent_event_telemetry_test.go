@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
@@ -118,6 +119,26 @@ func TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay(t *testing.T) {
 			},
 		},
 	}
+	for index := range records {
+		record := &records[index]
+		record.Telemetry.ClientRequestID = "e2e_" +
+			strings.Repeat(string(rune('a'+index)), 32)
+		record.Telemetry.EndpointScheme = "https"
+		record.Telemetry.EndpointHost = "api.deepseek.com"
+		record.Telemetry.CredentialFingerprint = "sha256:v1:" +
+			strings.Repeat(string(rune('a'+index)), 64)
+		record.Telemetry.LocalResponseCache = "not_configured"
+		for attemptIndex := range record.Telemetry.Attempts {
+			attempt := &record.Telemetry.Attempts[attemptIndex]
+			attempt.ProviderHeaderRequestID = "header-request-id"
+			attempt.ProviderHeaderRequestIDHeader = "x-request-id"
+			attempt.ProviderRequestID = "header-request-id"
+			if attempt.Status == "succeeded" {
+				attempt.ProviderResponseID = "provider-response-id"
+				attempt.ProviderRequestID = "provider-response-id"
+			}
+		}
+	}
 	for _, record := range records {
 		if err := service.RecordModelTelemetry(ctx, run, record); err != nil {
 			t.Fatal(err)
@@ -142,7 +163,15 @@ func TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay(t *testing.T) {
 		t.Fatalf("events = %#v", events)
 	}
 	if events[0].ToolCallID != "tool-1" ||
-		events[0].Payload["tool_call_status"] != string(agentservice.ToolCallAvailable) {
+		events[0].Payload["tool_call_status"] != string(agentservice.ToolCallAvailable) ||
+		events[0].Payload["client_request_id"] != records[0].Telemetry.ClientRequestID ||
+		events[0].Payload["endpoint_scheme"] != "https" ||
+		events[0].Payload["endpoint_host"] != "api.deepseek.com" ||
+		events[0].Payload["provider_response_id"] != "provider-response-id" ||
+		events[0].Payload["provider_header_request_id"] != "header-request-id" ||
+		events[0].Payload["provider_header_request_id_header"] != "x-request-id" ||
+		events[0].Payload["provider_request_id"] != "provider-response-id" ||
+		events[0].Payload["local_response_cache"] != "not_configured" {
 		t.Fatalf("single event = %#v", events[0])
 	}
 	if events[1].ToolCallID != "" ||

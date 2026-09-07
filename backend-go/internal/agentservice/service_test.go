@@ -17,18 +17,27 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawProviderError := "provider-private-detail-" + strings.Repeat("x", 300)
+	rawProviderError := "provider-private-detail Authorization: Bearer sk-private?api_key=secret-" +
+		strings.Repeat("x", 300)
 	longRequestID := strings.Repeat("r", 300)
 	one := int64(1)
+	cacheHit := int64(7)
+	cacheMiss := int64(4)
 	err = service.RecordModelTelemetry(context.Background(), run, agent.TelemetryRecord{
 		LogicalCallID: "logical-1",
 		StepID:        "step-1",
 		ToolCallIDs:   []string{"tool-1"},
 		Telemetry: agent.ModelTelemetry{
-			Provider:       "provider",
-			RequestedModel: "requested",
-			ResolvedModel:  "resolved",
-			FinishReason:   "tool_calls",
+			Provider:        "provider",
+			RequestedModel:  "requested",
+			ResolvedModel:   "resolved",
+			FinishReason:    "tool_calls",
+			ClientRequestID: "e2e_" + strings.Repeat("1", 32),
+			EndpointScheme:  "https",
+			EndpointHost:    "api.deepseek.com",
+			CredentialFingerprint: "sha256:v1:" +
+				strings.Repeat("d", 64),
+			LocalResponseCache: "not_configured",
 			Prompt: agent.PromptSpec{
 				Version: agent.SystemPromptVersion, RequestSHA256: strings.Repeat("a", 64),
 				PromptSHA256: strings.Repeat("b", 64), ToolsetSHA256: strings.Repeat("c", 64),
@@ -40,12 +49,27 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 			Usage: agent.ModelUsage{
 				Status: agent.UsageAvailable, InputTokens: &one,
 				OutputTokens: &one, TotalTokens: &one,
+				PromptCacheHitTokens:  &cacheHit,
+				PromptCacheMissTokens: &cacheMiss,
 			},
 			Attempts: []agent.ModelAttempt{
-				{Attempt: 1, Status: "failed", Error: &agent.ModelError{
-					Category: "http", Code: "http_429", Message: rawProviderError, Retryable: true,
-				}},
-				{Attempt: 2, Status: "succeeded", ProviderRequestID: longRequestID},
+				{
+					Attempt: 1, Status: "failed",
+					ProviderHeaderRequestID:       "failed-header-id",
+					ProviderHeaderRequestIDHeader: "x-request-id",
+					ProviderRequestID:             "failed-header-id",
+					Error: &agent.ModelError{
+						Category: "http", Code: "http_429",
+						Message: rawProviderError, Retryable: true,
+					},
+				},
+				{
+					Attempt: 2, Status: "succeeded",
+					ProviderResponseID:            longRequestID,
+					ProviderHeaderRequestID:       "successful-header-id",
+					ProviderHeaderRequestIDHeader: "x-request-id",
+					ProviderRequestID:             "legacy-wrong-value",
+				},
 			},
 			TotalLatencyMS: 9,
 		},
@@ -66,7 +90,13 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 		"usage": true, "finish_reason": true, "attempt": true,
 		"attempt_status": true, "attempt_started_at": true,
 		"attempt_latency_ms": true, "total_latency_ms": true,
-		"http_status": true, "provider_request_id": true, "retry_count": true,
+		"http_status": true, "client_request_id": true,
+		"endpoint_scheme": true, "endpoint_host": true,
+		"credential_fingerprint": true, "provider_response_id": true,
+		"provider_header_request_id":        true,
+		"provider_header_request_id_header": true,
+		"provider_request_id":               true, "local_response_cache": true,
+		"retry_count":      true,
 		"tool_call_status": true, "tool_call_unavailable_reason": true,
 		"tool_call_ids": true, "error": true,
 	}
@@ -87,8 +117,11 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 				t.Fatalf("payload contains non-whitelisted field %q", key)
 			}
 		}
-		for _, forbidden := range []string{"prompt", "messages", "headers", "cookie", "api_key", "raw_response"} {
-			if strings.Contains(encoded, forbidden+":") {
+		for _, forbidden := range []string{
+			"provider-private-detail", "Authorization", "Bearer", "sk-private",
+			"api_key", "messages", "headers", "cookie", "raw_response",
+		} {
+			if strings.Contains(encoded, forbidden) {
 				t.Fatalf("payload contains forbidden field %q: %s", forbidden, encoded)
 			}
 		}
@@ -125,6 +158,20 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 	}
 	if len(events[1].Payload["provider_request_id"].(string)) != 128 {
 		t.Fatalf("provider request id was not bounded")
+	}
+	if events[1].Payload["provider_response_id"] != events[1].Payload["provider_request_id"] ||
+		events[1].Payload["provider_header_request_id"] != "successful-header-id" ||
+		events[1].Payload["provider_header_request_id_header"] != "x-request-id" ||
+		events[1].Payload["client_request_id"] != "e2e_"+strings.Repeat("1", 32) ||
+		events[1].Payload["endpoint_scheme"] != "https" ||
+		events[1].Payload["endpoint_host"] != "api.deepseek.com" ||
+		events[1].Payload["local_response_cache"] != "not_configured" {
+		t.Fatalf("provider evidence = %#v", events[1].Payload)
+	}
+	usage := events[1].Payload["usage"].(map[string]any)
+	if usage["prompt_cache_hit_tokens"] != float64(cacheHit) ||
+		usage["prompt_cache_miss_tokens"] != float64(cacheMiss) {
+		t.Fatalf("cache usage = %#v", usage)
 	}
 }
 

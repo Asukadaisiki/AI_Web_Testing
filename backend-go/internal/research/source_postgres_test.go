@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,10 +39,16 @@ func TestPostgresSourceReaderProjectsRealAgentEvents(t *testing.T) {
 			StepID:        "step-real",
 			ToolCallIDs:   []string{"tool-real"},
 			Telemetry: agent.ModelTelemetry{
-				Provider:       "provider",
-				RequestedModel: "model",
-				ResolvedModel:  "model-v1",
-				FinishReason:   "tool_calls",
+				Provider:        "provider",
+				RequestedModel:  "model",
+				ResolvedModel:   "model-v1",
+				FinishReason:    "tool_calls",
+				ClientRequestID: "e2e_" + strings.Repeat("a", 32),
+				EndpointScheme:  "https",
+				EndpointHost:    "api.deepseek.com",
+				CredentialFingerprint: "sha256:v1:" +
+					strings.Repeat("b", 64),
+				LocalResponseCache: "not_configured",
 				Prompt: agent.PromptSpec{
 					Version:       "prompt.v1",
 					RequestSHA256: "request-hash",
@@ -55,19 +62,26 @@ func TestPostgresSourceReaderProjectsRealAgentEvents(t *testing.T) {
 				},
 				Attempts: []agent.ModelAttempt{
 					{
-						Attempt:   1,
-						Status:    "failed",
-						StartedAt: time.Unix(1, 0).UTC(),
-						LatencyMS: 7,
+						Attempt:                       1,
+						Status:                        "failed",
+						StartedAt:                     time.Unix(1, 0).UTC(),
+						LatencyMS:                     7,
+						ProviderHeaderRequestID:       "header-failed",
+						ProviderHeaderRequestIDHeader: "x-request-id",
+						ProviderRequestID:             "header-failed",
 						Error: agent.NewModelError(
 							"http", "http_429", "private provider detail", true, nil,
 						),
 					},
 					{
-						Attempt:   2,
-						Status:    "succeeded",
-						StartedAt: time.Unix(2, 0).UTC(),
-						LatencyMS: 11,
+						Attempt:                       2,
+						Status:                        "succeeded",
+						StartedAt:                     time.Unix(2, 0).UTC(),
+						LatencyMS:                     11,
+						ProviderResponseID:            "response-success",
+						ProviderHeaderRequestID:       "header-success",
+						ProviderHeaderRequestIDHeader: "x-request-id",
+						ProviderRequestID:             "response-success",
 					},
 				},
 				TotalLatencyMS: 18,

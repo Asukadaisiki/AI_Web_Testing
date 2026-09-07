@@ -127,7 +127,12 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 		projectID,
 		"",
 		json.RawMessage(`{
-			"case":{"name":"tool generated","steps":[{"action":"click","target":"Pay"}]},
+			"case":{"name":"tool generated","steps":[{
+				"action":"click","intent":"Submit payment","target":"Pay",
+				"preconditions":[{"type":"element_visible","value":"Pay"}],
+				"postconditions":[{"type":"url_changes"}],
+				"idempotency":"non_idempotent","side_effect":"external_state"
+			}]},
 			"a11y_nodes_by_state":{"S0":[]}
 		}`),
 	)
@@ -139,6 +144,7 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 		Case             json.RawMessage `json:"case"`
 		DSLHash          string          `json:"dsl_sha256"`
 		CanonicalVersion string          `json:"dsl_canonical_version"`
+		Profile          dsl.Profile     `json:"profile"`
 	}
 	if err := json.Unmarshal(generatedRaw, &generated); err != nil {
 		t.Fatal(err)
@@ -154,8 +160,16 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 	}
 	if len(generatedCase.Steps) != 1 ||
 		generatedCase.Steps[0].TargetStrategy != nil ||
-		generatedCase.Steps[0].LocatorConfidence != nil {
-		t.Fatalf("semantic generation optional locator fields = %#v", generatedCase.Steps)
+		generatedCase.Steps[0].LocatorConfidence == nil ||
+		*generatedCase.Steps[0].LocatorConfidence != "high" ||
+		generated.Profile != dsl.ProfileResearchV1 ||
+		generated.CanonicalVersion != dsl.CanonicalVersionV2 {
+		t.Fatalf(
+			"research generation = profile %q version %q steps %#v",
+			generated.Profile,
+			generated.CanonicalVersion,
+			generatedCase.Steps,
+		)
 	}
 	executedRaw, err := controlPlane.ExecuteDSL(
 		ctx,
@@ -202,7 +216,7 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 	}
 	var sameSemantics bool
 	if err := db.QueryRowContext(ctx, `
-		SELECT $1::jsonb = $2::jsonb AND $2::jsonb = $3::jsonb`,
+		SELECT $1::jsonb = $2::jsonb AND $1::jsonb = $3::jsonb`,
 		generationCase, persistedCase, jobSnapshot,
 	).Scan(&sameSemantics); err != nil || !sameSemantics {
 		t.Fatalf("generation/case/job DSL mismatch: %v", err)
@@ -412,6 +426,32 @@ func insertUser(t *testing.T, db *sql.DB, email string) int64 {
 
 type passthroughValidator struct{}
 
+func TestPassthroughValidatorReturnsDSLCaseObject(t *testing.T) {
+	raw, err := (passthroughValidator{}).ExecuteBrowserCapability(
+		context.Background(),
+		"validate_page_elements",
+		1,
+		1,
+		"1",
+		json.RawMessage(`{
+			"dsl_case":{"name":"Example","steps":[{"action":"goto","value":"/"}]},
+			"a11y_nodes_by_state":{"S0":[]}
+		}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Case map[string]any `json:"dsl_case"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		t.Fatalf("passthrough validator dsl_case must be an object: %v; response=%s", err, raw)
+	}
+	if response.Case["name"] != "Example" {
+		t.Fatalf("passthrough validator dsl_case = %#v", response.Case)
+	}
+}
+
 func (passthroughValidator) ExecuteBrowserCapability(
 	_ context.Context,
 	_ string,
@@ -427,10 +467,34 @@ func (passthroughValidator) ExecuteBrowserCapability(
 	if err := json.Unmarshal(arguments, &request); err != nil {
 		return nil, err
 	}
+	var candidate map[string]any
+	if err := json.Unmarshal(request.Case, &candidate); err != nil {
+		return nil, err
+	}
+	steps, _ := candidate["steps"].([]any)
+	for _, rawStep := range steps {
+		step, _ := rawStep.(map[string]any)
+		switch step["action"] {
+		case "click", "input", "wait_for", "assert_text", "capture_text":
+			step["page_state"] = "S0"
+			step["match_count"] = 1
+			step["locator_confidence"] = "high"
+			step["candidates"] = []any{map[string]any{
+				"strategy": "verified_css", "selector": "#pay",
+				"semantic_value": step["target"], "pre_score": 1,
+				"pre_features": map[string]any{
+					"verified": true, "source": "a11y_backend_dom_node",
+				},
+			}}
+		}
+	}
+	candidate["_preflight"] = map[string]any{
+		"locator_confidence": "high", "warnings": []any{},
+	}
 	caseHash := sha256.Sum256(request.Case)
 	evidenceHash := sha256.Sum256(request.Evidence)
 	return json.Marshal(map[string]any{
-		"dsl_case":        request.Case,
+		"dsl_case":        candidate,
 		"valid":           true,
 		"validation_mode": "dsl_case",
 		"case_digest":     hex.EncodeToString(caseHash[:]),

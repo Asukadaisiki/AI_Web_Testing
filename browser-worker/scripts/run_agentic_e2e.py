@@ -7,18 +7,23 @@ import hashlib
 from html.parser import HTMLParser
 import json
 import re
+import socket
 import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.schemas.dsl import DSLCase
+from app.schemas.dsl import (
+    DSL_CANONICAL_VERSION_V1,
+    DSL_CANONICAL_VERSION_V2,
+    validate_dsl_case,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -27,8 +32,13 @@ TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 TERMINAL_BATCH_STATUSES = {"passed", "failed", "needs_intervention", "cancelled"}
 TERMINAL_JOB_STATUSES = {"passed", "failed", "needs_intervention", "cancelled"}
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_LONG_OPERATION_TIMEOUT_SECONDS = 300.0
 DEFAULT_CANCEL_GRACE_SECONDS = 10.0
 CANCEL_POLL_SECONDS = 0.05
+PROFILE_CANONICAL_VERSIONS = {
+    "legacy-v1": DSL_CANONICAL_VERSION_V1,
+    "research-v1": DSL_CANONICAL_VERSION_V2,
+}
 CANONICAL_GOAL = (
     "匿名访问 Automation Exercise，从 Products 页面搜索 Blue Top，确认搜索结果，"
     "进入商品详情，将数量保持为 1，加入购物车，通过加购弹层打开 View Cart，"
@@ -88,12 +98,14 @@ class HTTPAgenticClient:
         agent_url: str,
         browser_url: str,
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        long_operation_timeout: float = DEFAULT_LONG_OPERATION_TIMEOUT_SECONDS,
         stream_timeout: float = 180,
         stream_window_seconds: float = 2,
     ) -> None:
         self.agent_url = agent_url.rstrip("/") + "/"
         self.browser_url = browser_url.rstrip("/") + "/"
         self.request_timeout = request_timeout
+        self.long_operation_timeout = long_operation_timeout
         self.stream_timeout = stream_timeout
         self.stream_window_seconds = stream_window_seconds
         self.deadline_monotonic: float | None = None
@@ -228,6 +240,7 @@ class HTTPAgenticClient:
             "POST",
             f"/api/v2/agent/runs/{run_id}/tool-calls/{tool_call_id}/resume",
             {"answers": {"approve_dsl": True}},
+            timeout=self.long_operation_timeout,
         )
 
     def get_report(self, batch_id: int) -> dict[str, Any]:
@@ -487,19 +500,41 @@ def _merge_events(
     return [by_seq[seq] for seq in sorted(by_seq)]
 
 
+def _is_socket_timeout(exc: BaseException) -> bool:
+    current: object = exc
+    seen: set[int] = set()
+    while isinstance(current, BaseException) and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (TimeoutError, socket.timeout)):
+            return True
+        if isinstance(current, URLError):
+            current = current.reason
+            continue
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _wait_for_run_boundary(
     client: AgenticClient,
     run_id: str,
     events: list[dict[str, Any]],
     *,
     deadline_monotonic: float,
+    ambiguous_resume_tool_call_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     while time.monotonic() < deadline_monotonic:
         after_seq = int(events[-1]["seq"]) if events else 0
         events = _merge_events(events, client.list_events(run_id, after_seq))
         run = client.get_run(run_id)
-        if run["status"] == "waiting_user" or run["status"] in TERMINAL_RUN_STATUSES:
+        if run["status"] in TERMINAL_RUN_STATUSES:
             return run, events
+        if run["status"] == "waiting_user":
+            if (
+                ambiguous_resume_tool_call_id is None
+                or run.get("pending_tool_call_id")
+                != ambiguous_resume_tool_call_id
+            ):
+                return run, events
         time.sleep(0.25)
     raise TimeoutError(f"agent run {run_id} exceeded its absolute deadline")
 
@@ -860,6 +895,76 @@ def _generation_result(
     )
 
 
+def _validate_generation_binding(
+    generated: dict[str, Any],
+    generation_id: int,
+    *,
+    expected_profile: str | None,
+) -> dict[str, str]:
+    dsl_case = generated.get("case")
+    if not isinstance(dsl_case, dict):
+        raise AgenticE2EError(
+            f"generation {generation_id} has no DSL case object"
+        )
+    validated = validate_dsl_case(dsl_case)
+    profile = str(dsl_case.get("profile") or "legacy-v1")
+    canonical_version = PROFILE_CANONICAL_VERSIONS[profile]
+    if expected_profile is not None and profile != expected_profile:
+        raise AgenticE2EError(
+            f"generation {generation_id} profile is {profile}, "
+            f"expected {expected_profile}"
+        )
+    if profile == "research-v1":
+        if validated.model_dump(mode="json") != dsl_case:
+            raise AgenticE2EError(
+                f"generation {generation_id} research DSL is not canonical"
+            )
+        if generated.get("profile") != profile:
+            raise AgenticE2EError(
+                f"generation {generation_id} declared an invalid DSL profile"
+            )
+        if generated.get("dsl_canonical_version") != canonical_version:
+            raise AgenticE2EError(
+                f"generation {generation_id} declared an invalid canonical version"
+            )
+
+    dsl_sha256 = _go_json_sha256(dsl_case)
+    declared_sha = generated.get("dsl_sha256")
+    if profile == "research-v1" and not declared_sha:
+        raise AgenticE2EError(
+            f"generation {generation_id} has no declared DSL SHA"
+        )
+    if declared_sha and declared_sha != dsl_sha256:
+        raise AgenticE2EError(
+            f"generation {generation_id} declared an invalid DSL SHA"
+        )
+    return {
+        "dsl_profile": profile,
+        "dsl_canonical_version": canonical_version,
+        "dsl_sha256": dsl_sha256,
+    }
+
+
+def _assert_canonical_metadata(
+    value: dict[str, Any],
+    approval: dict[str, Any],
+    label: str,
+) -> None:
+    if approval["dsl_profile"] != "research-v1":
+        return
+    expected = {
+        "dsl_profile": approval["dsl_profile"],
+        "dsl_canonical_version": approval["dsl_canonical_version"],
+        "dsl_sha256": approval["dsl_sha256"],
+    }
+    actual = {field: value.get(field) for field in expected}
+    if actual != expected:
+        raise AgenticE2EError(
+            f"{label} canonical metadata mismatch: "
+            f"expected={expected} actual={actual}"
+        )
+
+
 def _validate_batch_binding(
     client: AgenticClient,
     events: list[dict[str, Any]],
@@ -872,14 +977,32 @@ def _validate_batch_binding(
     if report.get("status") not in TERMINAL_BATCH_STATUSES:
         raise AgenticE2EError(f"batch {batch_id} report is not terminal")
     jobs = report.get("jobs") or []
-    execution = jobs[0].get("latest_execution") if len(jobs) == 1 else None
+    job = jobs[0] if len(jobs) == 1 else None
+    execution = job.get("latest_execution") if isinstance(job, dict) else None
     if not isinstance(execution, dict):
         raise AgenticE2EError(f"batch {batch_id} has no single execution")
+    if not isinstance(job, dict):
+        raise AgenticE2EError(f"batch {batch_id} has no single job")
     if execution.get("dsl_sha256") != approval["dsl_sha256"]:
         raise AgenticE2EError(
             f"batch {batch_id} DSL SHA does not match generation "
             f"{approval['generation_id']}"
         )
+    _assert_canonical_metadata(report, approval, f"batch {batch_id} report")
+    _assert_canonical_metadata(job, approval, f"batch {batch_id} job")
+    _assert_canonical_metadata(
+        execution, approval, f"batch {batch_id} execution"
+    )
+    execution_report = execution.get("report")
+    if not isinstance(execution_report, dict):
+        raise AgenticE2EError(
+            f"batch {batch_id} execution has no structured report"
+        )
+    _assert_canonical_metadata(
+        execution_report,
+        approval,
+        f"batch {batch_id} structured report",
+    )
     return report
 
 
@@ -902,7 +1025,7 @@ def _formal_result(
     report: dict[str, Any],
     *,
     generation_id: int,
-    dsl_sha256: str,
+    approval: dict[str, Any],
 ) -> tuple[dict[str, Any], int, int]:
     jobs = report.get("jobs") or []
     execution = jobs[0].get("latest_execution") if len(jobs) == 1 else None
@@ -916,7 +1039,9 @@ def _formal_result(
         "job_passed": jobs[0].get("status") == "passed",
         "execution_passed": execution.get("status") == "passed",
         "generation_approved": run.get("approved_generation_id") == generation_id,
-        "dsl_sha256_bound": execution.get("dsl_sha256") == dsl_sha256,
+        "dsl_sha256_bound": (
+            execution.get("dsl_sha256") == approval["dsl_sha256"]
+        ),
         "all_steps_have_evidence": bool(steps)
         and all(
             step.get("status") == "passed"
@@ -964,6 +1089,7 @@ def _run_agentic_goal(
     client: AgenticClient,
     timeout_seconds: float = 900,
     mutation: str = "none",
+    expected_dsl_profile: str | None,
     clean_context: bool,
     project_id: int | None,
     started_at: datetime,
@@ -1015,6 +1141,7 @@ def _run_agentic_goal(
     recoveries: list[dict[str, Any]] = []
     observed_batch_ids = set(baseline_batch_ids)
     final_report: dict[str, Any] | None = None
+    ambiguous_resume_tool_call_id: str | None = None
 
     while True:
         run, events = _wait_for_run_boundary(
@@ -1022,7 +1149,9 @@ def _run_agentic_goal(
             run_id,
             events,
             deadline_monotonic=deadline_monotonic,
+            ambiguous_resume_tool_call_id=ambiguous_resume_tool_call_id,
         )
+        ambiguous_resume_tool_call_id = None
         context["run"] = run
         context["events"] = events
         pending: dict[str, Any] | None = None
@@ -1116,21 +1245,19 @@ def _run_agentic_goal(
                 )
         generated = _generation_result(events, generation_id)
         dsl_artifact = _artifact(events, "dsl_generation", generation_id)
-        dsl_case = generated.get("case")
-        DSLCase.model_validate(dsl_case)
+        binding = _validate_generation_binding(
+            generated,
+            generation_id,
+            expected_profile=expected_dsl_profile,
+        )
+        dsl_case = generated["case"]
         validate_canonical_search_contract(dsl_case)
-        dsl_sha256 = _go_json_sha256(dsl_case)
-        declared_sha = generated.get("dsl_sha256")
-        if declared_sha and declared_sha != dsl_sha256:
-            raise AgenticE2EError(
-                f"generation {generation_id} declared an invalid DSL SHA"
-            )
         approval = {
             "round": len(approvals) + 1,
             "checkpoint_id": pending.get("checkpoint_id"),
             "tool_call_id": pending.get("tool_call_id"),
             "generation_id": generation_id,
-            "dsl_sha256": dsl_sha256,
+            **binding,
             "artifact_event_seq": dsl_artifact["seq"],
             "batch_ids_before_approval": sorted(current_batch_ids),
         }
@@ -1140,7 +1267,16 @@ def _run_agentic_goal(
             recoveries[-1]["approval_round"] = len(approvals)
         context["ids"]["generation_id"] = generation_id
         _require_deadline(deadline_monotonic, "DSL approval")
-        client.approve(run_id, str(pending["tool_call_id"]))
+        tool_call_id = str(pending["tool_call_id"])
+        try:
+            client.approve(run_id, tool_call_id)
+        except Exception as exc:
+            if (
+                not _is_socket_timeout(exc)
+                or time.monotonic() >= deadline_monotonic
+            ):
+                raise
+            ambiguous_resume_tool_call_id = tool_call_id
 
     if run.get("status") != "completed":
         raise AgenticE2EError(f"run finished with status {run.get('status')}")
@@ -1148,7 +1284,8 @@ def _run_agentic_goal(
         raise AgenticE2EError("completed run has no approved formal execution")
 
     generation_id = approvals[-1]["generation_id"]
-    dsl_sha256 = approvals[-1]["dsl_sha256"]
+    approval = approvals[-1]
+    dsl_sha256 = approval["dsl_sha256"]
     batch_id = approvals[-1]["batch_id"]
     context["ids"]["batch_id"] = batch_id
     report_artifact = _artifact(events, "execution_report", batch_id)
@@ -1157,7 +1294,7 @@ def _run_agentic_goal(
         run,
         report,
         generation_id=generation_id,
-        dsl_sha256=dsl_sha256,
+        approval=approval,
     )
     context["ids"]["job_id"] = job_id
     context["ids"]["execution_id"] = execution_id
@@ -1205,6 +1342,13 @@ def _run_agentic_goal(
                     DEFAULT_REQUEST_TIMEOUT_SECONDS,
                 )
             ),
+            "long_operation_timeout_seconds": float(
+                getattr(
+                    client,
+                    "long_operation_timeout",
+                    DEFAULT_LONG_OPERATION_TIMEOUT_SECONDS,
+                )
+            ),
             "deadline_started_monotonic": context["timeout"][
                 "started_monotonic"
             ],
@@ -1227,6 +1371,8 @@ def _run_agentic_goal(
             "checkpoint_id": approvals[-1]["checkpoint_id"],
             "tool_call_id": approvals[-1]["tool_call_id"],
             "generation_id": generation_id,
+            "dsl_profile": approval["dsl_profile"],
+            "dsl_canonical_version": approval["dsl_canonical_version"],
             "dsl_sha256": dsl_sha256,
             "batch_ids_before_approval": approvals[-1][
                 "batch_ids_before_approval"
@@ -1286,6 +1432,7 @@ def run_agentic_goal(
     client: AgenticClient,
     timeout_seconds: float = 900,
     mutation: str = "none",
+    expected_dsl_profile: str | None = None,
     clean_context: bool = True,
     project_id: int | None = None,
     cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS,
@@ -1318,6 +1465,7 @@ def run_agentic_goal(
             client=client,
             timeout_seconds=timeout_seconds,
             mutation=mutation,
+            expected_dsl_profile=expected_dsl_profile,
             clean_context=clean_context,
             project_id=project_id,
             started_at=started_at,
@@ -1399,6 +1547,11 @@ def main() -> int:
         default=DEFAULT_REQUEST_TIMEOUT_SECONDS,
     )
     parser.add_argument(
+        "--long-operation-timeout-seconds",
+        type=float,
+        default=DEFAULT_LONG_OPERATION_TIMEOUT_SECONDS,
+    )
+    parser.add_argument(
         "--cancel-grace-seconds",
         type=float,
         default=DEFAULT_CANCEL_GRACE_SECONDS,
@@ -1407,6 +1560,11 @@ def main() -> int:
         "--oracle-mutation",
         choices=("none", "wrong-price", "wrong-product"),
         default="none",
+    )
+    parser.add_argument(
+        "--dsl-profile",
+        choices=("legacy-v1", "research-v1"),
+        default="research-v1",
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -1419,9 +1577,11 @@ def main() -> int:
                 agent_url=args.agent_url,
                 browser_url=args.browser_url,
                 request_timeout=args.request_timeout_seconds,
+                long_operation_timeout=args.long_operation_timeout_seconds,
             ),
             timeout_seconds=args.timeout_seconds,
             mutation=args.oracle_mutation,
+            expected_dsl_profile=args.dsl_profile,
             project_id=args.project_id,
             cancel_grace_seconds=args.cancel_grace_seconds,
         )

@@ -1,10 +1,9 @@
 package execution
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -141,32 +140,19 @@ func (s *Store) CreateBatch(
 	if err := validateDSLBindings(request.CaseIDs, request.DSLBindings); err != nil {
 		return nil, err
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT count(*) FROM test_cases
-		WHERE project_id = $1 AND id = ANY($2::bigint[])`,
-		request.ProjectID, request.CaseIDs,
-	).Scan(&count); err != nil {
+	persistedCases, err := readPersistedCasesForExecution(
+		ctx, tx, request.ProjectID, request.CaseIDs,
+	)
+	if err != nil {
 		return nil, err
 	}
-	if count != len(request.CaseIDs) {
+	if len(persistedCases) != len(request.CaseIDs) {
 		return nil, ErrNotFound
 	}
-	for caseID, binding := range request.DSLBindings {
-		var matches bool
-		if err := tx.QueryRowContext(ctx, `
-			SELECT dsl::jsonb = $2::jsonb
-			FROM test_cases
-			WHERE id = $1 AND project_id = $3
-			FOR SHARE`,
-			caseID, string(binding.CanonicalJSON), request.ProjectID,
-		).Scan(&matches); errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		} else if err != nil {
-			return nil, err
-		} else if !matches {
-			return nil, fmt.Errorf("%w: persisted case does not match canonical DSL", ErrConflict)
-		}
+	if err := validatePersistedCaseBindings(
+		request.CaseIDs, persistedCases, request.DSLBindings,
+	); err != nil {
+		return nil, err
 	}
 	inputValues, _ := json.Marshal(request.InputValues)
 	var batchID int64
@@ -232,7 +218,10 @@ func (s *Store) CreateBatch(
 	return s.BatchDetail(ctx, actorUserID, batchID)
 }
 
-func validateDSLBindings(caseIDs []int64, bindings map[int64]CanonicalDSLBinding) error {
+func validateDSLBindings(
+	caseIDs []int64,
+	bindings map[int64]CanonicalDSLBinding,
+) error {
 	selected := make(map[int64]bool, len(caseIDs))
 	for _, caseID := range caseIDs {
 		selected[caseID] = true
@@ -244,12 +233,79 @@ func validateDSLBindings(caseIDs []int64, bindings map[int64]CanonicalDSLBinding
 		if !json.Valid(binding.CanonicalJSON) || len(binding.CanonicalJSON) == 0 {
 			return fmt.Errorf("%w: case %d canonical DSL is invalid", ErrConflict, caseID)
 		}
-		if binding.Version != dsl.CanonicalVersion {
+		if !dsl.IsCanonicalVersion(binding.Version) {
 			return fmt.Errorf("%w: case %d canonical DSL version is unsupported", ErrConflict, caseID)
 		}
-		hash := sha256.Sum256(binding.CanonicalJSON)
-		if !strings.EqualFold(binding.SHA256, hex.EncodeToString(hash[:])) {
+		validated, err := dsl.ValidateCaseForVersion(binding.CanonicalJSON, binding.Version)
+		if err != nil || !bytes.Equal(validated.CanonicalJSON, binding.CanonicalJSON) {
+			return fmt.Errorf("%w: case %d canonical DSL failed validation", ErrConflict, caseID)
+		}
+		if !strings.EqualFold(binding.SHA256, dsl.SHA256(binding.CanonicalJSON)) {
 			return fmt.Errorf("%w: case %d canonical DSL SHA mismatch", ErrConflict, caseID)
+		}
+	}
+	return nil
+}
+
+func readPersistedCasesForExecution(
+	ctx context.Context,
+	tx *sql.Tx,
+	projectID int64,
+	caseIDs []int64,
+) (map[int64]json.RawMessage, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, dsl
+		FROM test_cases
+		WHERE project_id = $1 AND id = ANY($2::bigint[])
+		FOR SHARE`,
+		projectID, caseIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]json.RawMessage, len(caseIDs))
+	for rows.Next() {
+		var caseID int64
+		var raw []byte
+		if err := rows.Scan(&caseID, &raw); err != nil {
+			return nil, err
+		}
+		result[caseID] = json.RawMessage(raw)
+	}
+	return result, rows.Err()
+}
+
+func validatePersistedCaseBindings(
+	caseIDs []int64,
+	persistedCases map[int64]json.RawMessage,
+	bindings map[int64]CanonicalDSLBinding,
+) error {
+	for _, caseID := range caseIDs {
+		raw, exists := persistedCases[caseID]
+		if !exists {
+			continue
+		}
+		validated, err := dsl.ValidateExecutableCase(raw)
+		if err != nil {
+			return fmt.Errorf("%w: case %d persisted DSL is not executable", ErrConflict, caseID)
+		}
+		binding, hasBinding := bindings[caseID]
+		if validated.Profile == dsl.ProfileResearchV1 && !hasBinding {
+			return fmt.Errorf(
+				"%w: research-v1 case %d requires a canonical DSL binding",
+				ErrConflict,
+				caseID,
+			)
+		}
+		if hasBinding &&
+			(binding.Version != validated.CanonicalVersion ||
+				!bytes.Equal(binding.CanonicalJSON, validated.CanonicalJSON)) {
+			return fmt.Errorf(
+				"%w: case %d persisted DSL does not match its canonical binding",
+				ErrConflict,
+				caseID,
+			)
 		}
 	}
 	return nil
@@ -328,12 +384,14 @@ func (s *Store) ListExecutions(
 	}
 	query := `
 		SELECT r.id, r.case_id, tc.name, r.project_id, r.batch_id, r.job_id,
-		       r.attempt_number, r.dsl_sha256, r.report_schema_version, r.triggered_by,
+		       r.attempt_number, r.dsl_sha256, j.dsl_sha256, j.dsl_canonical_version,
+		       r.report_schema_version, r.triggered_by,
 		       r.status, r.error_message, r.started_at, r.finished_at, r.dsl_snapshot,
 		       r.report, r.failure_signal_json, r.analysis_status, r.analysis_json
 		FROM test_case_runs r
 		JOIN test_cases tc ON tc.id = r.case_id
 		JOIN project_members pm ON pm.project_id = r.project_id
+		LEFT JOIN execution_jobs j ON j.id = r.job_id
 		WHERE pm.user_id = $1
 		  AND ($2::bigint IS NULL OR r.project_id = $2)
 		  AND ($3::bigint IS NULL OR r.case_id = $3)
@@ -370,7 +428,8 @@ func (s *Store) ListExecutions(
 func (s *Store) GetExecution(ctx context.Context, actorUserID, executionID int64) (map[string]any, error) {
 	return scanExecution(s.db.QueryRowContext(ctx, `
 		SELECT r.id, r.case_id, tc.name, r.project_id, r.batch_id, r.job_id,
-		       r.attempt_number, r.dsl_sha256, r.report_schema_version, r.triggered_by,
+		       r.attempt_number, r.dsl_sha256, j.dsl_sha256, j.dsl_canonical_version,
+		       r.report_schema_version, r.triggered_by,
 		       r.status, r.error_message, r.started_at, r.finished_at, r.dsl_snapshot,
 		       r.report, r.failure_signal_json, r.analysis_status,
 		       COALESCE(r.analysis_json, b.analysis_json)
@@ -378,6 +437,7 @@ func (s *Store) GetExecution(ctx context.Context, actorUserID, executionID int64
 		JOIN test_cases tc ON tc.id = r.case_id
 		JOIN project_members pm ON pm.project_id = r.project_id
 		LEFT JOIN execution_batches b ON b.id = r.batch_id
+		LEFT JOIN execution_jobs j ON j.id = r.job_id
 		WHERE r.id = $1 AND pm.user_id = $2`, executionID, actorUserID))
 }
 
@@ -479,6 +539,13 @@ func (s *Store) BatchReport(ctx context.Context, actorUserID, batchID int64) (ma
 	result["pass_rate"] = float64(0)
 	if decisive > 0 {
 		result["pass_rate"] = float64(passed) / float64(decisive)
+	}
+	if jobs, ok := result["jobs"].([]map[string]any); ok && len(jobs) == 1 {
+		for _, field := range []string{
+			"dsl_profile", "dsl_canonical_version", "dsl_sha256",
+		} {
+			result[field] = jobs[0][field]
+		}
 	}
 	return result, nil
 }
@@ -600,9 +667,11 @@ func (s *Store) jobs(ctx context.Context, batchID int64) ([]map[string]any, map[
 		SELECT j.id, j.project_id, j.case_id, tc.name, j.order_index, j.status,
 		       j.attempt_count, j.max_attempts, j.cancel_requested, j.last_error_message,
 		       j.created_at, j.started_at, j.heartbeat_at, j.finished_at,
+		       j.dsl_snapshot, j.dsl_sha256, j.dsl_canonical_version,
 		       r.id, r.dsl_snapshot, r.report, r.failure_signal_json, r.analysis_status,
 		       r.analysis_json, r.status, r.error_message, r.started_at, r.finished_at,
-		       r.attempt_number, r.dsl_sha256, r.report_schema_version, r.triggered_by
+		       r.attempt_number, r.dsl_sha256,
+		       r.report_schema_version, r.triggered_by
 		FROM execution_jobs j
 		JOIN test_cases tc ON tc.id = j.case_id
 		LEFT JOIN LATERAL (
@@ -625,16 +694,19 @@ func (s *Store) jobs(ctx context.Context, batchID int64) ([]map[string]any, map[
 		var created time.Time
 		var started, heartbeat, finished sql.NullTime
 		var runID, runAttempt, runTriggered sql.NullInt64
-		var dsl, report, failure, runAnalysis []byte
-		var analysisStatus, runStatus, runError, hash, version sql.NullString
+		var jobDSL, dsl, report, failure, runAnalysis []byte
+		var jobHash, jobCanonicalVersion sql.NullString
+		var analysisStatus, runStatus, runError, hash sql.NullString
+		var reportVersion sql.NullString
 		var runStarted, runFinished sql.NullTime
 		if err := rows.Scan(
 			&id, &projectID, &caseID, &name, &orderIndex, &status,
 			&attempts, &maxAttempts, &cancel, &lastError,
 			&created, &started, &heartbeat, &finished,
+			&jobDSL, &jobHash, &jobCanonicalVersion,
 			&runID, &dsl, &report, &failure, &analysisStatus,
 			&runAnalysis, &runStatus, &runError, &runStarted, &runFinished,
-			&runAttempt, &hash, &version, &runTriggered,
+			&runAttempt, &hash, &reportVersion, &runTriggered,
 		); err != nil {
 			return nil, nil, err
 		}
@@ -642,9 +714,19 @@ func (s *Store) jobs(ctx context.Context, batchID int64) ([]map[string]any, map[
 		counts[status]++
 		var latest any
 		if runID.Valid {
+			resolvedHash, canonicalVersion, err := resolveExecutionCanonicalBinding(
+				true,
+				hash,
+				jobHash,
+				jobCanonicalVersion,
+			)
+			if err != nil {
+				return nil, nil, fmt.Errorf("job %d execution %d: %w", id, runID.Int64, err)
+			}
 			latest = executionDetail(
 				runID.Int64, caseID, name, projectID, batchID, id,
-				runAttempt.Int64, hash.String, version.String, runTriggered.Int64,
+				runAttempt.Int64, resolvedHash, canonicalVersion,
+				reportVersion.String, runTriggered.Int64,
 				runStatus.String, nullableString(runError), runStarted.Time,
 				nullableTime(runFinished), rawJSON(dsl), rawJSON(report),
 				rawJSON(failure), analysisStatus.String, rawJSON(runAnalysis),
@@ -654,7 +736,10 @@ func (s *Store) jobs(ctx context.Context, batchID int64) ([]map[string]any, map[
 			"id": id, "batch_id": batchID, "project_id": projectID, "case_id": caseID,
 			"case_name": name, "order_index": orderIndex, "status": status,
 			"attempt_count": attempts, "max_attempts": maxAttempts,
-			"cancel_requested": cancel, "last_error_message": nullableString(lastError),
+			"dsl_profile":           canonicalProfile(jobCanonicalVersion.String),
+			"dsl_canonical_version": nullableString(jobCanonicalVersion),
+			"dsl_sha256":            nullableString(jobHash),
+			"cancel_requested":      cancel, "last_error_message": nullableString(lastError),
 			"created_at": created, "started_at": nullableTime(started),
 			"heartbeat_at": nullableTime(heartbeat), "finished_at": nullableTime(finished),
 			"latest_execution": latest,
@@ -665,12 +750,20 @@ func (s *Store) jobs(ctx context.Context, batchID int64) ([]map[string]any, map[
 
 func executionDetail(
 	id, caseID int64, caseName string, projectID int64, batchID, jobID any, attempt int64,
-	hash, version string, triggeredBy int64, status string, errorMessage any,
+	hash, canonicalVersion, reportVersion string, triggeredBy int64,
+	status string, errorMessage any,
 	startedAt time.Time, finishedAt any, dsl, report, failure any,
 	analysisStatus string, analysis any,
 ) map[string]any {
 	steps := []any{}
+	var canonicalVersionValue any
+	if canonicalVersion != "" {
+		canonicalVersionValue = canonicalVersion
+	}
 	if reportMap, ok := report.(map[string]any); ok {
+		reportMap["dsl_profile"] = canonicalProfile(canonicalVersion)
+		reportMap["dsl_canonical_version"] = canonicalVersionValue
+		reportMap["dsl_sha256"] = hash
 		if value, ok := reportMap["steps"].([]any); ok {
 			steps = value
 		}
@@ -678,7 +771,9 @@ func executionDetail(
 	result := map[string]any{
 		"id": id, "case_id": caseID, "case_name": caseName, "project_id": projectID,
 		"batch_id": batchID, "job_id": jobID, "attempt_number": attempt,
-		"dsl_sha256": hash, "report_schema_version": version, "triggered_by": triggeredBy,
+		"dsl_profile":           canonicalProfile(canonicalVersion),
+		"dsl_canonical_version": canonicalVersionValue, "dsl_sha256": hash,
+		"report_schema_version": reportVersion, "triggered_by": triggeredBy,
 		"status": status, "error_message": errorMessage, "started_at": startedAt,
 		"finished_at": finishedAt, "total_steps": len(steps), "report": report,
 		"dsl_snapshot": dsl, "failure_signal": failure,
@@ -724,14 +819,17 @@ func scanExecution(row rowScanner) (map[string]any, error) {
 		id, caseID, projectID, attempt, triggeredBy int64
 		caseName, status, analysisStatus            string
 		batchID, jobID                              sql.NullInt64
-		hash, version, errorMessage                 sql.NullString
+		runHash, jobHash, canonicalVersion          sql.NullString
+		reportVersion                               sql.NullString
+		errorMessage                                sql.NullString
 		startedAt                                   time.Time
 		finishedAt                                  sql.NullTime
 		dsl, report, failure, analysis              []byte
 	)
 	err := row.Scan(
 		&id, &caseID, &caseName, &projectID, &batchID, &jobID,
-		&attempt, &hash, &version, &triggeredBy, &status, &errorMessage,
+		&attempt, &runHash, &jobHash, &canonicalVersion, &reportVersion, &triggeredBy,
+		&status, &errorMessage,
 		&startedAt, &finishedAt, &dsl, &report, &failure, &analysisStatus, &analysis,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -740,12 +838,51 @@ func scanExecution(row rowScanner) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan execution: %w", err)
 	}
+	hash, version, err := resolveExecutionCanonicalBinding(
+		jobID.Valid,
+		runHash,
+		jobHash,
+		canonicalVersion,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("execution %d: %w", id, err)
+	}
 	return executionDetail(
 		id, caseID, caseName, projectID, nullableInt(batchID), nullableInt(jobID),
-		attempt, hash.String, version.String, triggeredBy, status,
+		attempt, hash, version, reportVersion.String,
+		triggeredBy, status,
 		nullableString(errorMessage), startedAt, nullableTime(finishedAt),
 		rawJSON(dsl), rawJSON(report), rawJSON(failure), analysisStatus, rawJSON(analysis),
 	), nil
+}
+
+func resolveExecutionCanonicalBinding(
+	hasJob bool,
+	runHash, jobHash, canonicalVersion sql.NullString,
+) (string, string, error) {
+	hasJobHash := jobHash.Valid && jobHash.String != ""
+	hasCanonicalVersion := canonicalVersion.Valid && canonicalVersion.String != ""
+	if !hasJob || (!hasJobHash && !hasCanonicalVersion) {
+		return runHash.String, "", nil
+	}
+	if !hasJobHash || !hasCanonicalVersion {
+		return "", "", fmt.Errorf("%w: execution job canonical binding is incomplete", ErrConflict)
+	}
+	if !runHash.Valid || !strings.EqualFold(runHash.String, jobHash.String) {
+		return "", "", fmt.Errorf("%w: run DSL SHA does not match execution job", ErrConflict)
+	}
+	return jobHash.String, canonicalVersion.String, nil
+}
+
+func canonicalProfile(version string) any {
+	switch version {
+	case dsl.CanonicalVersionV1:
+		return string(dsl.ProfileLegacyV1)
+	case dsl.CanonicalVersionV2:
+		return string(dsl.ProfileResearchV1)
+	default:
+		return nil
+	}
 }
 
 type rowScanner interface {

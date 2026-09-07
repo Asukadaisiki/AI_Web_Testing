@@ -37,31 +37,41 @@ type RequestSerializationBudget struct {
 type ModelUsageStatus string
 
 type ModelUsage struct {
-	Status       ModelUsageStatus `json:"status"`
-	InputTokens  *int64           `json:"input_tokens,omitempty"`
-	OutputTokens *int64           `json:"output_tokens,omitempty"`
-	TotalTokens  *int64           `json:"total_tokens,omitempty"`
+	Status                ModelUsageStatus `json:"status"`
+	InputTokens           *int64           `json:"input_tokens,omitempty"`
+	OutputTokens          *int64           `json:"output_tokens,omitempty"`
+	TotalTokens           *int64           `json:"total_tokens,omitempty"`
+	PromptCacheHitTokens  *int64           `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens *int64           `json:"prompt_cache_miss_tokens,omitempty"`
 }
 
 type ModelAttempt struct {
-	Attempt           int         `json:"attempt"`
-	Status            string      `json:"status"`
-	StartedAt         time.Time   `json:"started_at"`
-	LatencyMS         int64       `json:"latency_ms"`
-	HTTPStatus        *int        `json:"http_status,omitempty"`
-	ProviderRequestID string      `json:"provider_request_id,omitempty"`
-	Error             *ModelError `json:"error,omitempty"`
+	Attempt                       int         `json:"attempt"`
+	Status                        string      `json:"status"`
+	StartedAt                     time.Time   `json:"started_at"`
+	LatencyMS                     int64       `json:"latency_ms"`
+	HTTPStatus                    *int        `json:"http_status,omitempty"`
+	ProviderResponseID            string      `json:"provider_response_id,omitempty"`
+	ProviderHeaderRequestID       string      `json:"provider_header_request_id,omitempty"`
+	ProviderHeaderRequestIDHeader string      `json:"provider_header_request_id_header,omitempty"`
+	ProviderRequestID             string      `json:"provider_request_id,omitempty"`
+	Error                         *ModelError `json:"error,omitempty"`
 }
 
 type Telemetry struct {
-	Provider       string         `json:"provider"`
-	RequestedModel string         `json:"requested_model"`
-	ResolvedModel  string         `json:"resolved_model,omitempty"`
-	FinishReason   string         `json:"finish_reason,omitempty"`
-	Prompt         PromptSpec     `json:"prompt"`
-	Usage          ModelUsage     `json:"usage"`
-	Attempts       []ModelAttempt `json:"attempts"`
-	TotalLatencyMS int64          `json:"total_latency_ms"`
+	Provider              string         `json:"provider"`
+	RequestedModel        string         `json:"requested_model"`
+	ResolvedModel         string         `json:"resolved_model,omitempty"`
+	FinishReason          string         `json:"finish_reason,omitempty"`
+	ClientRequestID       string         `json:"client_request_id,omitempty"`
+	EndpointScheme        string         `json:"endpoint_scheme,omitempty"`
+	EndpointHost          string         `json:"endpoint_host,omitempty"`
+	CredentialFingerprint string         `json:"credential_fingerprint,omitempty"`
+	LocalResponseCache    string         `json:"local_response_cache,omitempty"`
+	Prompt                PromptSpec     `json:"prompt"`
+	Usage                 ModelUsage     `json:"usage"`
+	Attempts              []ModelAttempt `json:"attempts"`
+	TotalLatencyMS        int64          `json:"total_latency_ms"`
 }
 
 type Error struct {

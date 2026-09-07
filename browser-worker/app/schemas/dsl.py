@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 DSL_CANONICAL_VERSION = "dsl.canonical.v1"
+DSL_CANONICAL_VERSION_V1 = DSL_CANONICAL_VERSION
+DSL_CANONICAL_VERSION_V2 = "dsl.canonical.v2"
 
 
 class DSLModel(BaseModel):
@@ -253,9 +255,12 @@ def load_canonical_dsl(
     canonical_json: str,
     expected_sha256: str,
     canonical_version: str,
-) -> tuple[DSLCase, dict]:
+) -> tuple[Any, dict]:
     """Verify Go-owned canonical bytes and reject semantic normalization drift."""
-    if canonical_version != DSL_CANONICAL_VERSION:
+    if canonical_version not in {
+        DSL_CANONICAL_VERSION_V1,
+        DSL_CANONICAL_VERSION_V2,
+    }:
         raise ValueError(f"Unsupported DSL canonical version: {canonical_version}.")
     actual_sha256 = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
     if actual_sha256 != expected_sha256:
@@ -263,21 +268,43 @@ def load_canonical_dsl(
     payload = json.loads(canonical_json)
     if not isinstance(payload, dict):
         raise ValueError("Canonical DSL must be a JSON object.")
-    case = DSLCase.model_validate(payload)
+    if canonical_version == DSL_CANONICAL_VERSION_V2:
+        from app.schemas.action_ir import validate_research_dsl
+
+        case = validate_research_dsl(payload, phase="executable")
+    else:
+        case = DSLCase.model_validate(payload)
     materialized = case.model_dump(mode="json")
-    for index, source_step in enumerate(payload.get("steps", [])):
-        for compatibility_field in ("preconditions", "postconditions"):
-            if compatibility_field not in source_step:
-                materialized["steps"][index].pop(compatibility_field, None)
-                continue
-            for condition_index, source_condition in enumerate(
-                source_step[compatibility_field]
-            ):
-                for condition_field in ("method", "status"):
-                    if condition_field not in source_condition:
-                        materialized["steps"][index][compatibility_field][
-                            condition_index
-                        ].pop(condition_field, None)
+    if canonical_version == DSL_CANONICAL_VERSION_V1:
+        for index, source_step in enumerate(payload.get("steps", [])):
+            for compatibility_field in ("preconditions", "postconditions"):
+                if compatibility_field not in source_step:
+                    materialized["steps"][index].pop(compatibility_field, None)
+                    continue
+                for condition_index, source_condition in enumerate(
+                    source_step[compatibility_field]
+                ):
+                    for condition_field in ("method", "status"):
+                        if condition_field not in source_condition:
+                            materialized["steps"][index][compatibility_field][
+                                condition_index
+                            ].pop(condition_field, None)
     if materialized != payload:
         raise ValueError("Canonical DSL is not fully materialized or violates the worker schema.")
     return case, payload
+
+
+def validate_dsl_case(
+    payload: dict[str, Any],
+    *,
+    phase: Literal["draft", "executable"] = "executable",
+) -> Any:
+    """Select the profile schema without changing legacy DSLCase behavior."""
+    profile = payload.get("profile")
+    if profile == "research-v1":
+        from app.schemas.action_ir import validate_research_dsl
+
+        return validate_research_dsl(payload, phase=phase)
+    if profile not in (None, "legacy-v1"):
+        raise ValueError("case.profile must be legacy-v1 or research-v1")
+    return DSLCase.model_validate(payload)

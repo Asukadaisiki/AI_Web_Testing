@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -58,12 +59,24 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 	if err := json.Unmarshal(arguments, &request); err != nil || len(request.Case) == 0 {
 		return nil, errors.New("generate_dsl requires a case object")
 	}
-	normalizedCase, _, err := dsl.ValidateCase(request.Case)
+	draftCase, err := withDefaultResearchProfile(request.Case)
+	if err != nil {
+		return nil, err
+	}
+	validatedDraft, err := dsl.ValidateDraftCase(draftCase)
+	if err != nil {
+		return nil, err
+	}
+	if validatedDraft.Profile != dsl.ProfileResearchV1 {
+		return nil, errors.New("generate_dsl requires the research-v1 profile")
+	}
+	normalizedCase := validatedDraft.CanonicalJSON
+	preflightCase, err := preparePreflightCase(normalizedCase)
 	if err != nil {
 		return nil, err
 	}
 	validationArguments, err := json.Marshal(map[string]any{
-		"dsl_case":            normalizedCase,
+		"dsl_case":            preflightCase,
 		"a11y_nodes_by_state": request.A11yNodesByState,
 	})
 	if err != nil {
@@ -95,7 +108,7 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		}
 		return nil, errors.New("DSL locator preflight failed without details")
 	}
-	expectedCaseDigest, err := canonicalJSONDigest(normalizedCase)
+	expectedCaseDigest, err := canonicalJSONDigest(preflightCase)
 	if err != nil {
 		return nil, fmt.Errorf("digest normalized DSL case: %w", err)
 	}
@@ -108,8 +121,19 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		validated.EvidenceDigest != expectedEvidenceDigest {
 		return nil, errors.New("DSL locator preflight result is not bound to the submitted case and evidence")
 	}
+	executableRaw, err := stripPreflightMetadata(validated.Case, normalizedCase)
+	if err != nil {
+		return nil, err
+	}
+	validatedExecutable, err := dsl.ValidateExecutableCase(executableRaw)
+	if err != nil {
+		return nil, fmt.Errorf("DSL locator preflight returned a non-executable case: %w", err)
+	}
+	if validatedExecutable.Profile != validatedDraft.Profile {
+		return nil, errors.New("DSL locator preflight changed the case profile")
+	}
 	generation, err := c.dsl.CreateGeneration(
-		ctx, actorUserID, projectID, validated.Case, validated.Warnings,
+		ctx, actorUserID, projectID, validatedExecutable.CanonicalJSON, validated.Warnings,
 	)
 	if err != nil {
 		return nil, err
@@ -119,12 +143,90 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		"case":                       generation.Case,
 		"dsl_sha256":                 generation.DSLHash,
 		"dsl_canonical_version":      generation.CanonicalVersion,
+		"profile":                    generation.Profile,
 		"validation_case_digest":     validated.CaseDigest,
 		"validation_evidence_digest": validated.EvidenceDigest,
 		"supported_actions":          []string{"goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"},
 		"warnings":                   validated.Warnings,
 		"normalization_notes":        []string{},
 	})
+}
+
+func withDefaultResearchProfile(raw json.RawMessage) (json.RawMessage, error) {
+	var candidate map[string]any
+	if err := json.Unmarshal(raw, &candidate); err != nil || candidate == nil {
+		return nil, errors.New("generate_dsl requires a case object")
+	}
+	if _, exists := candidate["profile"]; !exists {
+		candidate["profile"] = string(dsl.ProfileResearchV1)
+	}
+	return json.Marshal(candidate)
+}
+
+func preparePreflightCase(raw json.RawMessage) (json.RawMessage, error) {
+	var candidate map[string]any
+	if err := json.Unmarshal(raw, &candidate); err != nil || candidate == nil {
+		return nil, errors.New("DSL draft case must be an object")
+	}
+	return json.Marshal(candidate)
+}
+
+func stripPreflightMetadata(raw, draftRaw json.RawMessage) (json.RawMessage, error) {
+	var returned map[string]any
+	if err := json.Unmarshal(raw, &returned); err != nil || returned == nil {
+		return nil, errors.New("DSL locator preflight case must be an object")
+	}
+	var draftBusiness map[string]any
+	if err := json.Unmarshal(draftRaw, &draftBusiness); err != nil || draftBusiness == nil {
+		return nil, errors.New("DSL draft case must be an object")
+	}
+	var merged map[string]any
+	if err := json.Unmarshal(draftRaw, &merged); err != nil || merged == nil {
+		return nil, errors.New("DSL draft case must be an object")
+	}
+
+	returnedSteps, ok := returned["steps"].([]any)
+	if !ok {
+		return nil, errors.New("DSL locator preflight result must contain steps")
+	}
+	draftSteps, ok := draftBusiness["steps"].([]any)
+	if !ok || len(returnedSteps) != len(draftSteps) {
+		return nil, errors.New("DSL locator preflight changed the step count")
+	}
+	mergedSteps, _ := merged["steps"].([]any)
+	serverFields := make([]map[string]any, len(returnedSteps))
+	for index := range returnedSteps {
+		returnedStep, returnedOK := returnedSteps[index].(map[string]any)
+		draftStep, draftOK := draftSteps[index].(map[string]any)
+		if !returnedOK || !draftOK {
+			return nil, fmt.Errorf("DSL locator preflight changed step %d", index)
+		}
+		if returnedStep["action"] != draftStep["action"] {
+			return nil, fmt.Errorf("DSL locator preflight changed step %d action", index)
+		}
+		serverFields[index] = make(map[string]any, 3)
+		for _, field := range []string{"page_state", "candidates", "locator_confidence"} {
+			if value, exists := returnedStep[field]; exists {
+				serverFields[index][field] = value
+			}
+			delete(returnedStep, field)
+			delete(draftStep, field)
+		}
+		delete(returnedStep, "match_count")
+	}
+	delete(returned, "_preflight")
+	if !reflect.DeepEqual(returned, draftBusiness) {
+		return nil, errors.New("DSL locator preflight changed draft business semantics")
+	}
+	for index, fields := range serverFields {
+		step, _ := mergedSteps[index].(map[string]any)
+		delete(step, "match_count")
+		for field, value := range fields {
+			step[field] = value
+		}
+	}
+	delete(merged, "_preflight")
+	return json.Marshal(merged)
 }
 
 func canonicalJSONDigest(value any) (string, error) {
@@ -301,6 +403,7 @@ func repairDecision(signals []map[string]any) (string, string, string, bool) {
 
 func caseMutation(projectID int64, raw json.RawMessage) (cases.Mutation, error) {
 	var candidate struct {
+		Profile        *string         `json:"profile"`
 		Name           string          `json:"name"`
 		Description    *string         `json:"description"`
 		BaseURL        *string         `json:"base_url"`
@@ -312,7 +415,8 @@ func caseMutation(projectID int64, raw json.RawMessage) (cases.Mutation, error) 
 		return cases.Mutation{}, err
 	}
 	return cases.Mutation{
-		ProjectID: projectID, Name: candidate.Name, Description: candidate.Description,
+		ProjectID: projectID, Profile: candidate.Profile,
+		Name: candidate.Name, Description: candidate.Description,
 		BaseURL: candidate.BaseURL, InputContract: candidate.InputContract,
 		OutputContract: candidate.OutputContract, Steps: candidate.Steps,
 	}, nil

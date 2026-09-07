@@ -2,24 +2,48 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import UTC, datetime, timedelta
+from io import StringIO
 from pathlib import Path
 from unittest.mock import call, patch
 
 from scripts.research_e2e import (
     DEFAULT_SPEC,
+    PROVIDER_ATTESTATION_ALGORITHM,
+    PROVIDER_ATTESTATION_JSON_SCHEMA,
+    PROVIDER_ATTESTATION_KEY_ENV,
     ResearchAPIClient,
     ResearchE2EError,
     _assert_audit_safe,
+    _is_code_snapshot_path,
+    _provider_attestation_signature_value,
     compute_code_snapshot_sha256,
     export_research,
     load_experiment_spec,
     load_experiment_spec_from_value,
+    load_provider_attestation,
+    main,
     run_experiment,
+    verify_negative_contract_runs,
     verify_experiment,
 )
+
+RESEARCH_FIXTURE = json.loads(
+    (
+        Path(__file__).parents[2]
+        / "testdata"
+        / "dsl_research_v1_contract.json"
+    ).read_text(encoding="utf-8")
+)
+RESEARCH_CASE = json.loads(RESEARCH_FIXTURE["canonical_json"])
+RESEARCH_SHA = RESEARCH_FIXTURE["sha256"]
+RESEARCH_VERSION = RESEARCH_FIXTURE["canonical_version"]
+ATTESTATION_KEY = "stage6-provider-attestation-test-key-0123456789"
 
 
 class OrchestrationClient:
@@ -84,7 +108,11 @@ def driver_result(index: int, project_id: int = 7) -> dict:
             "batch_id": 300 + index,
             "execution_id": 400 + index,
         },
-        "approval": {"dsl_sha256": f"{index + 1:064x}"},
+        "approval": {
+            "dsl_profile": "research-v1",
+            "dsl_canonical_version": RESEARCH_VERSION,
+            "dsl_sha256": RESEARCH_SHA,
+        },
         "formal_execution": {"passed": True},
         "oracle": {
             "schema_version": "automationexercise.cart-oracle.v1",
@@ -108,6 +136,11 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
         spec = load_experiment_spec(DEFAULT_SPEC)
 
         self.assertEqual(spec["repetitions"], 3)
+        self.assertEqual(spec["controls"]["dsl_profile"], "research-v1")
+        self.assertEqual(spec["timeouts"]["run_seconds"], 900)
+        self.assertEqual(spec["timeouts"]["experiment_seconds"], 3600)
+        self.assertEqual(spec["timeouts"]["request_seconds"], 30)
+        self.assertEqual(spec["timeouts"]["long_operation_seconds"], 300)
         self.assertNotIn("dsl_case", spec)
         self.assertNotIn("selector", str(spec).casefold())
         self.assertNotIn("candidates", str(spec).casefold())
@@ -164,7 +197,20 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
         )
         self.assertTrue(
             all(
+                item[1]["expected_dsl_profile"] == "research-v1"
+                for item in invocations
+            )
+        )
+        self.assertTrue(
+            all(
                 item[1]["timeout_seconds"] == 900
+                for item in invocations
+            )
+        )
+        self.assertTrue(
+            all(
+                item[1]["client"]["request_timeout"] == 30
+                and item[1]["client"]["long_operation_timeout"] == 300
                 for item in invocations
             )
         )
@@ -176,6 +222,10 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
         self.assertEqual(create_payload["project_id"], 7)
         self.assertTrue(
             create_payload["config"]["clean_context"]
+        )
+        self.assertNotIn(
+            "long_operation_timeout_seconds",
+            create_payload["config"],
         )
         oracle_call = next(
             entry for entry in client.calls if entry[0] == "put_oracle"
@@ -295,7 +345,10 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
                 research_client=client,
                 agent_url="http://agent.test",
                 browser_url="http://browser.test",
-                code_snapshot_sha256=lambda: "0" * 64,
+                code_snapshot_sha256=lambda: (
+                    ("0" if spec["controls"]["code_sha256"][0] != "0" else "1")
+                    + spec["controls"]["code_sha256"][1:]
+                ),
             )
 
         self.assertEqual(client.calls, [])
@@ -317,6 +370,90 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertNotEqual(first, changed)
+
+    def test_code_snapshot_covers_stage6_contract_owners(self) -> None:
+        for path in (
+            "backend-go/internal/agent/loop.go",
+            "backend-go/internal/config/config.go",
+            "backend-go/internal/dsl/action_ir.go",
+            "backend-go/internal/platform/llm/openai.go",
+            "backend-go/internal/tools/dsl.go",
+            "backend-go/internal/harness/harness.go",
+            "browser-worker/app/schemas/action_ir.py",
+            "browser-worker/app/ai/locator_preflight.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(_is_code_snapshot_path(path))
+
+    def test_code_snapshot_hash_tracks_each_provider_owner_root(self) -> None:
+        source_paths = (
+            "backend-go/internal/agent/snapshot_probe.go",
+            "backend-go/internal/platform/llm/snapshot_probe.go",
+            "backend-go/internal/config/snapshot_probe.go",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "init", "--quiet", str(root)],
+                check=True,
+                capture_output=True,
+            )
+            for relative_path in source_paths:
+                source = root / relative_path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("package snapshot\n", encoding="utf-8")
+            baseline = compute_code_snapshot_sha256(root)
+
+            for relative_path in source_paths:
+                with self.subTest(path=relative_path):
+                    source = root / relative_path
+                    source.write_text(
+                        "package snapshot\n\nconst changed = true\n",
+                        encoding="utf-8",
+                    )
+                    self.assertNotEqual(
+                        baseline,
+                        compute_code_snapshot_sha256(root),
+                    )
+                    source.write_text(
+                        "package snapshot\n",
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(
+                        baseline,
+                        compute_code_snapshot_sha256(root),
+                    )
+
+    def test_code_snapshot_hash_ignores_non_source_tests_and_ignored_paths(
+        self,
+    ) -> None:
+        ignored_paths = (
+            "backend-go/internal/agent/README.md",
+            "backend-go/internal/platform/llm/openai_test.go",
+            "backend-go/internal/config/tests/config.go",
+            "backend-go/internal/config/build/generated.go",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "init", "--quiet", str(root)],
+                check=True,
+                capture_output=True,
+            )
+            source = root / "backend-go/internal/agent/snapshot_probe.go"
+            source.parent.mkdir(parents=True)
+            source.write_text("package snapshot\n", encoding="utf-8")
+            baseline = compute_code_snapshot_sha256(root)
+
+            for relative_path in ignored_paths:
+                ignored = root / relative_path
+                ignored.parent.mkdir(parents=True, exist_ok=True)
+                ignored.write_text("changed\n", encoding="utf-8")
+                with self.subTest(path=relative_path):
+                    self.assertEqual(
+                        baseline,
+                        compute_code_snapshot_sha256(root),
+                    )
 
     def test_audit_payload_rejects_hidden_reasoning(self) -> None:
         for key in ("thought", "reasoning_content", "scratchpad"):
@@ -348,6 +485,15 @@ class VerificationClient:
     def list_runs(self, experiment_id, project_id):
         return self.runs
 
+    def get_experiment(self, experiment_id, project_id):
+        return {
+            "id": experiment_id,
+            "project_id": project_id,
+            "dsl_profile": "research-v1",
+            "model_provider": "deepseek",
+            "model_name": "deepseek-v4-flash",
+        }
+
     def get_run(self, run_id, project_id):
         index = int(run_id.rsplit("-", 1)[1])
         oracle_passed = self.oracle_passed
@@ -358,12 +504,14 @@ class VerificationClient:
         return {
             **self.runs[index],
             "status": "completed",
+            "started_at": f"2026-09-07T06:{index:02d}:00Z",
+            "finished_at": f"2026-09-07T06:{index:02d}:59Z",
             "links": {
                 "agent_run_id": f"agent-{index}",
                 "generation_id": 10 + index,
                 "batch_id": 20 + index,
                 "execution_id": 30 + index,
-                "dsl_sha256": f"{index + 1:064x}",
+                "dsl_sha256": RESEARCH_SHA,
             },
             "metrics": {
                 "task_success": {
@@ -394,18 +542,107 @@ class VerificationClient:
             "project_id": 7,
         }
 
+    def list_agent_events(self, run_id):
+        index = int(run_id.rsplit("-", 1)[1])
+        generation_id = 10 + index
+        return [
+            {
+                "seq": 1,
+                "type": "tool.result",
+                "tool_call_id": f"generation-{index}",
+                "payload": {
+                    "tool": "generate_dsl",
+                    "content": {
+                        "generation_id": generation_id,
+                        "case": RESEARCH_CASE,
+                        "profile": "research-v1",
+                        "dsl_canonical_version": RESEARCH_VERSION,
+                        "dsl_sha256": RESEARCH_SHA,
+                    },
+                },
+            },
+            {
+                "seq": 2,
+                "type": "artifact.published",
+                "tool_call_id": f"generation-{index}",
+                "payload": {
+                    "type": "dsl_generation",
+                    "id": str(generation_id),
+                },
+            },
+            {
+                "seq": 3,
+                "type": "tool.pending",
+                "tool_call_id": f"approval-{index}",
+                "payload": {
+                    "tool": "ask_user_question",
+                    "questions": [{"id": "approve_dsl"}],
+                },
+            },
+            {
+                "seq": 4,
+                "type": "tool.result",
+                "tool_call_id": f"approval-{index}",
+                "payload": {
+                    "tool": "ask_user_question",
+                    "answers": {"approve_dsl": True},
+                },
+            },
+            {
+                "seq": 5,
+                "type": "research.llm_call",
+                "run_id": run_id,
+                "payload": {
+                    "schema_version": "research.llm_call.v1",
+                    "logical_call_id": f"logical-{index}",
+                    "provider": "deepseek",
+                    "requested_model": "deepseek-v4-flash",
+                    "resolved_model": "deepseek-v4-flash",
+                    "attempt_status": "succeeded",
+                    "attempt_started_at": (
+                        f"2026-09-07T06:{index:02d}:30Z"
+                    ),
+                    "http_status": 200,
+                    "endpoint_scheme": "https",
+                    "endpoint_host": "api.deepseek.com",
+                    "credential_fingerprint": "sha256:v1:" + "a" * 64,
+                    "client_request_id": f"client-{index}",
+                    "provider_response_id": f"response-{index}",
+                    "provider_header_request_id": f"header-{index}",
+                    "provider_header_request_id_header": "x-request-id",
+                    "local_response_cache": "not_configured",
+                    "usage": {
+                        "status": "available",
+                        "input_tokens": 15,
+                        "output_tokens": 5,
+                        "total_tokens": 20,
+                        "prompt_cache_hit_tokens": 10,
+                        "prompt_cache_miss_tokens": 5,
+                    },
+                },
+            },
+        ]
+
     def get_batch_report(self, batch_id):
         index = batch_id - 20
+        binding = {
+            "dsl_profile": "research-v1",
+            "dsl_canonical_version": RESEARCH_VERSION,
+            "dsl_sha256": RESEARCH_SHA,
+        }
         return {
             "id": batch_id,
             "status": "passed",
+            **binding,
             "jobs": [
                 {
+                    **binding,
                     "latest_execution": {
                         "id": 30 + index,
                         "status": "passed",
-                        "dsl_sha256": f"{index + 1:064x}",
+                        **binding,
                         "report": {
+                            **binding,
                             "steps": [
                                 {
                                     "condition_results": [
@@ -432,6 +669,63 @@ class VerificationClient:
 
 
 class ResearchE2EVerificationTest(unittest.TestCase):
+    def _signed_attestation(
+        self,
+        *,
+        key: str = ATTESTATION_KEY,
+    ) -> tuple[dict, str]:
+        pending_result = verify_experiment(
+            "experiment-1",
+            client=VerificationClient(),
+            project_id=7,
+            allow_pending_platform_attestation=True,
+        )
+        pending = pending_result["provider_evidence"][
+            "pending_platform_attestation"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pending_path = root / "pending.json"
+            platform_path = root / "deepseek-usage.json"
+            output_path = root / "attestation.json"
+            pending_path.write_text(
+                json.dumps(pending), encoding="utf-8"
+            )
+            platform_path.write_bytes(b'{"verified":"on-platform"}\n')
+            stdout = StringIO()
+            with (
+                patch.dict(
+                    "os.environ",
+                    {PROVIDER_ATTESTATION_KEY_ENV: key},
+                    clear=False,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "provider-attest",
+                        "--pending",
+                        str(pending_path),
+                        "--platform-evidence",
+                        str(platform_path),
+                        "--source",
+                        "deepseek_usage_api",
+                        "--reviewer",
+                        "Research Reviewer",
+                        "--organization",
+                        "Research Org",
+                        "--key-id",
+                        "research-attestation-2026-09",
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+            self.assertEqual(exit_code, 0)
+            return (
+                json.loads(output_path.read_text(encoding="utf-8")),
+                stdout.getvalue(),
+            )
+
     def test_verify_requires_three_canonical_successes(self) -> None:
         result = verify_experiment(
             "experiment-1",
@@ -439,11 +733,20 @@ class ResearchE2EVerificationTest(unittest.TestCase):
             project_id=7,
         )
 
-        self.assertTrue(result["passed"])
+        self.assertFalse(result["passed"])
         self.assertEqual(result["non_warmup_runs"], 3)
         self.assertEqual(result["clean_session_count"], 3)
         self.assertTrue(all(run["task_success"] for run in result["runs"]))
         self.assertTrue(all(run["oracle_passed"] for run in result["runs"]))
+        self.assertEqual(result["dsl_profile"], "research-v1")
+        self.assertEqual(result["dsl_canonical_version"], RESEARCH_VERSION)
+        evidence = result["provider_evidence"]
+        self.assertTrue(evidence["local_provider_evidence_verified"])
+        self.assertFalse(evidence["provider_e2e_verified"])
+        self.assertEqual(
+            evidence["reason"], "platform_attestation_required"
+        )
+        self.assertEqual(evidence["successful_attempt_count"], 3)
 
     def test_canonical_oracle_false_fails_verification(self) -> None:
         with self.assertRaisesRegex(
@@ -463,8 +766,323 @@ class ResearchE2EVerificationTest(unittest.TestCase):
             expected_task_success=False,
         )
 
-        self.assertTrue(result["passed"])
+        self.assertFalse(result["passed"])
         self.assertFalse(result["expected_task_success"])
+
+    def test_pending_attestation_cannot_mark_stage_passed(self) -> None:
+        result = verify_experiment(
+            "experiment-1",
+            client=VerificationClient(),
+            project_id=7,
+            allow_pending_platform_attestation=True,
+        )
+        package = result["provider_evidence"][
+            "pending_platform_attestation"
+        ]
+
+        self.assertFalse(result["passed"])
+        evidence = result["provider_evidence"]
+        self.assertTrue(evidence["local_provider_evidence_verified"])
+        self.assertFalse(evidence["provider_e2e_verified"])
+        self.assertEqual(
+            evidence["reason"], "platform_attestation_required"
+        )
+        self.assertEqual(
+            package["signature"]["algorithm"],
+            PROVIDER_ATTESTATION_ALGORITHM,
+        )
+        self.assertEqual(
+            package["platform_evidence"][
+                "matched_provider_response_ids"
+            ],
+            [],
+        )
+
+    def test_valid_platform_attestation_passes_provider_gate(self) -> None:
+        attestation, stdout = self._signed_attestation()
+
+        with patch.dict(
+            "os.environ",
+            {PROVIDER_ATTESTATION_KEY_ENV: ATTESTATION_KEY},
+            clear=False,
+        ):
+            result = verify_experiment(
+                "experiment-1",
+                client=VerificationClient(),
+                project_id=7,
+                provider_attestation=attestation,
+            )
+
+        self.assertTrue(result["passed"])
+        evidence = result["provider_evidence"]
+        self.assertTrue(evidence["provider_e2e_verified"])
+        self.assertEqual(
+            evidence["verification_scope"],
+            "local_and_platform_attested",
+        )
+        self.assertIsNone(evidence["reason"])
+        self.assertTrue(evidence["attestation"]["signature_verified"])
+        self.assertNotIn(ATTESTATION_KEY, stdout)
+        self.assertNotIn("verified", json.dumps(attestation))
+        self.assertEqual(
+            attestation["platform_evidence"][
+                "matched_provider_response_ids"
+            ],
+            ["response-0", "response-1", "response-2"],
+        )
+
+    def test_attestation_load_rejects_wrong_key(self) -> None:
+        attestation, _ = self._signed_attestation()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            path.write_text(json.dumps(attestation), encoding="utf-8")
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        PROVIDER_ATTESTATION_KEY_ENV:
+                            "different-attestation-key-01234567890123456789"
+                    },
+                    clear=False,
+                ),
+                self.assertRaisesRegex(
+                    ResearchE2EError, "signature verification failed"
+                ),
+            ):
+                load_provider_attestation(path)
+
+    def test_verify_rejects_signed_attestation_tampering(self) -> None:
+        attestation, _ = self._signed_attestation()
+        attestation["runs"][0]["attempts"][0]["usage"][
+            "total_tokens"
+        ] += 1
+
+        with (
+            patch.dict(
+                "os.environ",
+                {PROVIDER_ATTESTATION_KEY_ENV: ATTESTATION_KEY},
+                clear=False,
+            ),
+            self.assertRaisesRegex(
+                ResearchE2EError, "signature verification failed"
+            ),
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=VerificationClient(),
+                project_id=7,
+                provider_attestation=attestation,
+            )
+
+    def test_verify_rejects_attestation_replay(self) -> None:
+        attestation, _ = self._signed_attestation()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {PROVIDER_ATTESTATION_KEY_ENV: ATTESTATION_KEY},
+                clear=False,
+            ),
+            self.assertRaisesRegex(
+                ResearchE2EError, "experiment_id does not match"
+            ),
+        ):
+            verify_experiment(
+                "experiment-replay",
+                client=VerificationClient(),
+                project_id=7,
+                provider_attestation=attestation,
+            )
+
+    def test_verify_rejects_missing_platform_artifact_hash(self) -> None:
+        attestation, _ = self._signed_attestation()
+        attestation["platform_evidence"].pop("artifact_sha256")
+
+        with (
+            patch.dict(
+                "os.environ",
+                {PROVIDER_ATTESTATION_KEY_ENV: ATTESTATION_KEY},
+                clear=False,
+            ),
+            self.assertRaisesRegex(
+                ResearchE2EError, "platform_evidence is invalid"
+            ),
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=VerificationClient(),
+                project_id=7,
+                provider_attestation=attestation,
+            )
+
+    def test_verify_rejects_incomplete_platform_response_id_coverage(
+        self,
+    ) -> None:
+        attestation, _ = self._signed_attestation()
+        attestation["platform_evidence"][
+            "matched_provider_response_ids"
+        ].pop()
+        attestation["signature"]["value"] = (
+            _provider_attestation_signature_value(
+                attestation, ATTESTATION_KEY.encode("utf-8")
+            )
+        )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {PROVIDER_ATTESTATION_KEY_ENV: ATTESTATION_KEY},
+                clear=False,
+            ),
+            self.assertRaisesRegex(
+                ResearchE2EError, "do not exactly cover"
+            ),
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=VerificationClient(),
+                project_id=7,
+                provider_attestation=attestation,
+            )
+
+    def test_attestation_schema_exposes_required_audit_fields(self) -> None:
+        required = set(PROVIDER_ATTESTATION_JSON_SCHEMA["required"])
+
+        self.assertEqual(
+            required,
+            {
+                "schema_version",
+                "experiment_id",
+                "source_sha256",
+                "evidence_artifact_sha256",
+                "runs",
+                "platform_evidence",
+                "reviewer",
+                "signature",
+            },
+        )
+        self.assertEqual(
+            PROVIDER_ATTESTATION_JSON_SCHEMA["properties"]["signature"][
+                "properties"
+            ]["algorithm"]["const"],
+            PROVIDER_ATTESTATION_ALGORITHM,
+        )
+
+    def test_verify_rejects_missing_provider_field(self) -> None:
+        class MissingFieldClient(VerificationClient):
+            def list_agent_events(self, run_id):
+                events = super().list_agent_events(run_id)
+                del events[-1]["payload"]["endpoint_scheme"]
+                return events
+
+        with self.assertRaisesRegex(
+            ResearchE2EError, "endpoint_scheme"
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=MissingFieldClient(),
+                project_id=7,
+            )
+
+    def test_verify_rejects_wrong_deepseek_host(self) -> None:
+        class WrongHostClient(VerificationClient):
+            def list_agent_events(self, run_id):
+                events = super().list_agent_events(run_id)
+                events[-1]["payload"]["endpoint_host"] = "gateway.example"
+                return events
+
+        with self.assertRaisesRegex(
+            ResearchE2EError, "invalid DeepSeek host"
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=WrongHostClient(),
+                project_id=7,
+            )
+
+    def test_verify_rejects_cross_run_provider_ids(self) -> None:
+        class DuplicateIDClient(VerificationClient):
+            def list_agent_events(self, run_id):
+                events = super().list_agent_events(run_id)
+                events[-1]["payload"]["client_request_id"] = "duplicate"
+                events[-1]["payload"]["provider_response_id"] = "duplicate"
+                return events
+
+        with self.assertRaisesRegex(
+            ResearchE2EError, "reused across formal runs"
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=DuplicateIDClient(),
+                project_id=7,
+            )
+
+    def test_verify_rejects_attempt_outside_run_window(self) -> None:
+        class OutsideWindowClient(VerificationClient):
+            def list_agent_events(self, run_id):
+                events = super().list_agent_events(run_id)
+                events[-1]["payload"][
+                    "attempt_started_at"
+                ] = "2026-09-07T11:59:59Z"
+                return events
+
+        with self.assertRaisesRegex(
+            ResearchE2EError, "outside the run window"
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=OutsideWindowClient(),
+                project_id=7,
+            )
+
+    def test_verify_rejects_inconsistent_credentials(self) -> None:
+        class CredentialDriftClient(VerificationClient):
+            def list_agent_events(self, run_id):
+                events = super().list_agent_events(run_id)
+                if run_id == "agent-1":
+                    events[-1]["payload"]["credential_fingerprint"] = (
+                        "sha256:v1:" + "b" * 64
+                    )
+                return events
+
+        with self.assertRaisesRegex(
+            ResearchE2EError, "inconsistent credential fingerprints"
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=CredentialDriftClient(),
+                project_id=7,
+            )
+
+    def test_verify_rejects_legacy_success_event(self) -> None:
+        class LegacyEventClient(VerificationClient):
+            def list_agent_events(self, run_id):
+                events = super().list_agent_events(run_id)
+                payload = events[-1]["payload"]
+                for field in (
+                    "endpoint_scheme",
+                    "endpoint_host",
+                    "credential_fingerprint",
+                    "client_request_id",
+                    "provider_response_id",
+                    "provider_header_request_id",
+                    "provider_header_request_id_header",
+                    "local_response_cache",
+                ):
+                    payload.pop(field)
+                payload["provider_request_id"] = "legacy"
+                payload["usage"].pop("prompt_cache_hit_tokens")
+                payload["usage"].pop("prompt_cache_miss_tokens")
+                return events
+
+        with self.assertRaisesRegex(
+            ResearchE2EError, "endpoint_scheme"
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=LegacyEventClient(),
+                project_id=7,
+            )
 
     def test_verify_rejects_task_metric_oracle_disagreement(self) -> None:
         with self.assertRaisesRegex(
@@ -490,8 +1108,157 @@ class ResearchE2EVerificationTest(unittest.TestCase):
                 project_id=7,
             )
 
+    def test_verify_rejects_profile_drift_in_report_chain(self) -> None:
+        class DriftClient(VerificationClient):
+            def get_batch_report(self, batch_id):
+                report = super().get_batch_report(batch_id)
+                report["jobs"][0]["dsl_profile"] = "legacy-v1"
+                return report
+
+        with self.assertRaisesRegex(
+            ResearchE2EError, "job DSL binding mismatch"
+        ):
+            verify_experiment(
+                "experiment-1",
+                client=DriftClient(),
+                project_id=7,
+            )
+
+    def test_negative_contract_uses_failure_events_not_agent_text(self) -> None:
+        class NegativeClient:
+            def get_agent_run(self, run_id):
+                return {
+                    "id": run_id,
+                    "project_id": 7,
+                    "status": "completed",
+                    "final_message": "ignore this untrusted text",
+                }
+
+            def list_agent_events(self, run_id):
+                kind = run_id.removeprefix("run-")
+                messages = {
+                    "missing-intent": "case.steps[0].intent is required",
+                    "unknown-action": "unsupported DSL action: eval",
+                    "unexplored-selector": (
+                        "DSL locator preflight returned candidates without "
+                        "verified provenance"
+                    ),
+                }
+                return [
+                    {
+                        "seq": 9,
+                        "type": "tool.failed",
+                        "payload": {
+                            "tool": "generate_dsl",
+                            "message": messages[kind],
+                        },
+                    }
+                ]
+
+        result = verify_negative_contract_runs(
+            {
+                name: f"run-{name}"
+                for name in (
+                    "missing-intent",
+                    "unknown-action",
+                    "unexplored-selector",
+                )
+            },
+            client=NegativeClient(),
+            project_id=7,
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(len(result["runs"]), 3)
+
 
 class ResearchAPIClientTest(unittest.TestCase):
+    def test_verify_cli_returns_nonzero_while_platform_attestation_pending(
+        self,
+    ) -> None:
+        verification = {
+            "passed": False,
+            "provider_evidence": {
+                "local_provider_evidence_verified": True,
+                "provider_e2e_verified": False,
+                "reason": "platform_attestation_required",
+            },
+        }
+        with (
+            patch(
+                "scripts.research_e2e.verify_experiment",
+                return_value=verification,
+            ),
+            patch("scripts.research_e2e.ResearchAPIClient"),
+            redirect_stdout(StringIO()),
+        ):
+            exit_code = main(
+                ["verify", "experiment-1", "--project-id", "7"]
+            )
+
+        self.assertEqual(exit_code, 1)
+
+    def test_run_cli_does_not_count_pending_attestation_as_success(
+        self,
+    ) -> None:
+        run_result = {
+            "experiment_id": "experiment-1",
+            "success": True,
+        }
+        verification = {
+            "passed": False,
+            "provider_evidence": {
+                "local_provider_evidence_verified": True,
+                "provider_e2e_verified": False,
+                "reason": "platform_attestation_required",
+            },
+        }
+        with (
+            patch(
+                "scripts.research_e2e.run_experiment",
+                return_value=run_result,
+            ),
+            patch(
+                "scripts.research_e2e.verify_experiment",
+                return_value=verification,
+            ),
+            patch("scripts.research_e2e.ResearchAPIClient"),
+            redirect_stdout(StringIO()),
+        ):
+            exit_code = main(["run", "--project-id", "7"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(run_result["success"])
+
+    def test_profile_verification_routes_are_centralized_in_client(self) -> None:
+        client = ResearchAPIClient("http://agent.test")
+        with patch.object(
+            client,
+            "_json",
+            side_effect=[
+                {"id": "experiment-1", "dsl_profile": "research-v1"},
+                {"events": [{"seq": 1}]},
+            ],
+        ) as request:
+            experiment = client.get_experiment("experiment-1", 7)
+            events = client.list_agent_events("agent-1")
+
+        self.assertEqual(experiment["dsl_profile"], "research-v1")
+        self.assertEqual(events, [{"seq": 1}])
+        self.assertEqual(
+            request.call_args_list,
+            [
+                call(
+                    "GET",
+                    "/api/v2/research/experiments/experiment-1?project_id=7",
+                ),
+                call(
+                    "GET",
+                    "/api/v2/agent/runs/agent-1/events?after_seq=0",
+                ),
+            ],
+        )
+
     def test_research_routes_are_centralized_in_client(self) -> None:
         client = ResearchAPIClient("http://agent.test")
         with patch.object(
