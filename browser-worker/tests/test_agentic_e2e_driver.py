@@ -45,6 +45,8 @@ class FakeClient:
         self.approved = False
         self.cancelled = False
         self.cancel_calls = []
+        self.batch_cancel_calls = []
+        self.session_requests = []
         self.case = {
             "name": "Blue Top",
             "base_url": "https://automationexercise.com",
@@ -86,12 +88,24 @@ class FakeClient:
         self.project_name = name
         return {"id": 11}
 
-    def create_session(self, project_id):
+    def create_session(self, project_id, clean_context):
         self.project_id = project_id
+        self.session_requests.append((project_id, clean_context))
         return {"session": {"id": 22}}
 
     def list_batches(self, project_id):
         return [{"id": 55}] if self.approved else []
+
+    def get_batch(self, batch_id):
+        return self.get_report(batch_id)
+
+    def cancel_batch(self, batch_id):
+        self.batch_cancel_calls.append(batch_id)
+        return {
+            "id": batch_id,
+            "status": "cancelled",
+            "jobs": [{"id": 66, "status": "cancelled"}],
+        }
 
     def start_run(self, session_id, goal):
         self.goal = goal
@@ -513,9 +527,11 @@ class AgenticE2EDriverTest(unittest.TestCase):
                 )
 
     def test_run_drives_approval_report_and_oracle(self) -> None:
-        result = run_agentic_goal(CANONICAL_GOAL, client=FakeClient())
+        client = FakeClient()
+        result = run_agentic_goal(CANONICAL_GOAL, client=client)
 
         self.assertTrue(result["success"])
+        self.assertEqual(client.session_requests, [(11, True)])
         self.assertTrue(result["configuration"]["clean_browser_context"])
         self.assertEqual(result["ids"]["agent_run_id"], "run-33")
         self.assertEqual(result["ids"]["generation_id"], 44)
@@ -523,6 +539,18 @@ class AgenticE2EDriverTest(unittest.TestCase):
         self.assertEqual(result["ids"]["job_id"], 66)
         self.assertEqual(result["ids"]["execution_id"], 77)
         self.assertEqual(result["schema_version"], "agentic-e2e.result.v1")
+
+    def test_configuration_reports_actual_clean_context(self) -> None:
+        client = FakeClient()
+
+        result = run_agentic_goal(
+            CANONICAL_GOAL,
+            client=client,
+            clean_context=False,
+        )
+
+        self.assertEqual(client.session_requests, [(11, False)])
+        self.assertFalse(result["configuration"]["clean_browser_context"])
 
     def test_oracle_mutation_overrides_formal_pass(self) -> None:
         result = run_agentic_goal(
@@ -600,6 +628,9 @@ class AgenticE2EDriverTest(unittest.TestCase):
             {
                 "project_id": 11,
                 "session_id": 22,
+                "planning_session_id": 22,
+                "browser_session_id": 22,
+                "browser_context_key": 22,
                 "agent_run_id": "run-33",
             },
         )
@@ -635,7 +666,9 @@ class AgenticE2EDriverTest(unittest.TestCase):
 
             def get_run(self, run_id):
                 self.actions.append("get_run")
-                return super().get_run(run_id)
+                if self.cancelled:
+                    return {"id": run_id, "status": "cancelled"}
+                return {"id": run_id, "status": "running"}
 
             def list_events(self, run_id, after_seq):
                 return []
@@ -650,22 +683,83 @@ class AgenticE2EDriverTest(unittest.TestCase):
             run_agentic_goal(
                 CANONICAL_GOAL,
                 client=client,
-                timeout_seconds=0,
+                timeout_seconds=0.01,
+                cancel_grace_seconds=0.2,
             )
 
         diagnostic = raised.exception.diagnostic
-        self.assertIn("did not reach a boundary", str(raised.exception))
-        self.assertEqual(diagnostic["run"]["status"], "waiting_user")
+        self.assertIn("absolute deadline", str(raised.exception))
+        self.assertEqual(diagnostic["run"]["status"], "running")
         self.assertEqual(diagnostic["cancellation"]["status"], "cancelled")
+        self.assertTrue(diagnostic["cancellation"]["terminal_verified"])
+        self.assertTrue(diagnostic["cancellation"]["no_subsequent_events"])
         self.assertLess(
             client.actions.index("get_run"),
             client.actions.index("cancel_run"),
         )
 
+    def test_failure_cancels_new_batch_and_verifies_jobs_before_run(self) -> None:
+        class ActiveBatchFailureClient(FakeClient):
+            def __init__(self):
+                super().__init__()
+                self.batch_list_count = 0
+                self.batch_cancelled = False
+                self.actions = []
+
+            def list_batches(self, project_id):
+                self.batch_list_count += 1
+                return [] if self.batch_list_count == 1 else [{"id": 55}]
+
+            def get_batch(self, batch_id):
+                status = "cancelled" if self.batch_cancelled else "running"
+                return {
+                    "id": batch_id,
+                    "status": status,
+                    "jobs": [{"id": 66, "status": status}],
+                }
+
+            def cancel_batch(self, batch_id):
+                self.actions.append("cancel_batch")
+                self.batch_cancel_calls.append(batch_id)
+                self.batch_cancelled = True
+                return self.get_batch(batch_id)
+
+            def cancel_run(self, run_id, reason):
+                self.actions.append("cancel_run")
+                return super().cancel_run(run_id, reason)
+
+        client = ActiveBatchFailureClient()
+        with self.assertRaisesRegex(
+            AgenticE2EError, "formal batch was created before DSL approval"
+        ) as raised:
+            run_agentic_goal(
+                CANONICAL_GOAL,
+                client=client,
+                cancel_grace_seconds=0.2,
+            )
+
+        diagnostic = raised.exception.diagnostic
+        self.assertEqual(client.batch_cancel_calls, [55])
+        self.assertLess(
+            client.actions.index("cancel_batch"),
+            client.actions.index("cancel_run"),
+        )
+        self.assertTrue(diagnostic["batch_cleanup"]["terminal_verified"])
+        self.assertEqual(
+            diagnostic["batch_cleanup"]["batches"][0]["job_statuses"],
+            ["cancelled"],
+        )
+        self.assertTrue(diagnostic["cancellation"]["terminal_verified"])
+        self.assertTrue(diagnostic["cancellation"]["no_subsequent_events"])
+        self.assertTrue(diagnostic["cleanup_success"])
+
     def test_cancel_error_does_not_replace_original_timeout(self) -> None:
         class CancelFailureClient(FakeClient):
             def list_events(self, run_id, after_seq):
                 return []
+
+            def get_run(self, run_id):
+                return {"id": run_id, "status": "running"}
 
             def cancel_run(self, run_id, reason):
                 raise RuntimeError("cancel endpoint unavailable")
@@ -674,13 +768,135 @@ class AgenticE2EDriverTest(unittest.TestCase):
             run_agentic_goal(
                 CANONICAL_GOAL,
                 client=CancelFailureClient(),
-                timeout_seconds=0,
+                timeout_seconds=0.01,
+                cancel_grace_seconds=0.2,
             )
 
-        self.assertIn("did not reach a boundary", str(raised.exception))
+        self.assertIn("absolute deadline", str(raised.exception))
         self.assertEqual(
             raised.exception.diagnostic["cancellation"]["error"],
             "cancel endpoint unavailable",
+        )
+
+    def test_existing_project_still_creates_a_fresh_session(self) -> None:
+        class ExistingProjectClient(FakeClient):
+            def create_project(self, name):
+                raise AssertionError("existing project must not be recreated")
+
+        result = run_agentic_goal(
+            CANONICAL_GOAL,
+            client=ExistingProjectClient(),
+            project_id=99,
+        )
+
+        self.assertEqual(result["ids"]["project_id"], 99)
+        self.assertEqual(result["ids"]["planning_session_id"], 22)
+        self.assertEqual(result["ids"]["browser_context_key"], 22)
+        self.assertEqual(result["configuration"]["project_origin"], "existing")
+        self.assertEqual(
+            result["configuration"]["timeout_mode"],
+            "absolute_monotonic_deadline",
+        )
+        self.assertEqual(result["configuration"]["request_timeout_seconds"], 30)
+
+    def test_deadline_is_not_reset_after_an_approval_boundary(self) -> None:
+        clock = [0.0]
+
+        class DeadlineClient(Generation129RecoveryClient):
+            def approve(self, run_id, tool_call_id):
+                result = super().approve(run_id, tool_call_id)
+                clock[0] = 0.75
+                return result
+
+            def list_events(self, run_id, after_seq):
+                events = super().list_events(run_id, after_seq)
+                if self.approval_count == 1:
+                    clock[0] = 1.1
+                return events
+
+        with (
+            patch(
+                "scripts.run_agentic_e2e.time.monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            patch("scripts.run_agentic_e2e.time.sleep"),
+            self.assertRaisesRegex(AgenticE2EError, "absolute deadline"),
+        ):
+            run_agentic_goal(
+                CANONICAL_GOAL,
+                client=DeadlineClient(),
+                timeout_seconds=1,
+                cancel_grace_seconds=0.2,
+            )
+
+    def test_approval_uses_the_30_second_request_timeout(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            @staticmethod
+            def read():
+                return b'{"status":"running"}'
+
+        client = HTTPAgenticClient(
+            agent_url="http://agent.test",
+            browser_url="http://browser.test",
+        )
+        with patch(
+            "scripts.run_agentic_e2e.urlopen",
+            return_value=Response(),
+        ) as request:
+            client.approve("run-33", "tool-44")
+
+        self.assertEqual(request.call_args.kwargs["timeout"], 30)
+
+    def test_http_client_reuses_batch_detail_and_cancel_apis(self) -> None:
+        client = HTTPAgenticClient(
+            agent_url="http://agent.test",
+            browser_url="http://browser.test",
+        )
+        with patch.object(
+            client,
+            "_json",
+            side_effect=[
+                {"id": 55, "status": "running"},
+                {"id": 55, "status": "cancelled"},
+            ],
+        ) as request:
+            client.get_batch(55)
+            client.cancel_batch(55)
+
+        self.assertEqual(
+            request.call_args_list,
+            [
+                unittest.mock.call(
+                    "GET", "/api/v2/execution-batches/55"
+                ),
+                unittest.mock.call(
+                    "POST", "/api/v2/execution-batches/55/cancel"
+                ),
+            ],
+        )
+
+    def test_http_client_posts_clean_context_for_planning_session(self) -> None:
+        client = HTTPAgenticClient(
+            agent_url="http://agent.test",
+            browser_url="http://browser.test",
+        )
+        with patch.object(
+            client,
+            "_json",
+            return_value={"session": {"id": 22}},
+        ) as request:
+            client.create_session(11, True)
+
+        request.assert_called_once_with(
+            "POST",
+            "/api/v2/planning/sessions",
+            {"project_id": 11, "clean_context": True},
         )
 
     def test_sse_keepalive_has_wall_clock_bound(self) -> None:

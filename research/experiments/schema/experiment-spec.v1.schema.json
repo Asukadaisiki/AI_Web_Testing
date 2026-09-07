@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/schemas/research/experiment-spec.v1.schema.json",
+  "title": "Research E2E Experiment Spec v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "goal",
+    "controls",
+    "repetitions",
+    "warmup_runs",
+    "timeouts",
+    "oracle_mutation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "research.experiment-spec.v1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000,
+      "description": "Pure natural-language goal. DSL, selectors, and candidate hints are forbidden."
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_version",
+        "model_provider",
+        "model_name",
+        "model_version",
+        "prompt_version",
+        "browser_name",
+        "browser_version",
+        "viewport",
+        "code_sha256",
+        "policy_version",
+        "observation_profile",
+        "dsl_profile",
+        "seed",
+        "variant"
+      ],
+      "properties": {
+        "dataset_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "browser_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "browser_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "width",
+            "height"
+          ],
+          "properties": {
+            "width": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "code_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observation_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dsl_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "variant": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "repetitions": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3
+    },
+    "warmup_runs": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_seconds",
+        "experiment_seconds",
+        "request_seconds",
+        "cancel_grace_seconds"
+      ],
+      "properties": {
+        "run_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 900
+        },
+        "experiment_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 86400
+        },
+        "request_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30
+        },
+        "cancel_grace_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "default": 10
+        }
+      }
+    },
+    "oracle_mutation": {
+      "enum": [
+        "none",
+        "wrong-price",
+        "wrong-product"
+      ]
+    }
+  }
+}

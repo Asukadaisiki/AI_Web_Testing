@@ -41,10 +41,13 @@ var (
 		"full_report":       {},
 		"image_base64":      {},
 		"raw_report":        {},
+		"reasoning_content": {},
 		"report":            {},
 		"report_json":       {},
 		"screenshot":        {},
 		"screenshot_base64": {},
+		"scratchpad":        {},
+		"thought":           {},
 		"transcript":        {},
 		"transcript_json":   {},
 	}
@@ -345,6 +348,9 @@ func (v NullableValue[T]) validate(name string) error {
 
 type RunMetrics struct {
 	SchemaVersion       string                 `json:"schema_version"`
+	ProjectorVersion    string                 `json:"projector_version,omitempty"`
+	SourceSHA256        string                 `json:"source_sha256,omitempty"`
+	MetricsSHA256       string                 `json:"metrics_sha256,omitempty"`
 	TaskSuccess         NullableValue[bool]    `json:"task_success"`
 	GroundingAccuracy   NullableValue[float64] `json:"grounding_accuracy"`
 	InvalidActionRate   NullableValue[float64] `json:"invalid_action_rate"`
@@ -364,6 +370,28 @@ type RunMetrics struct {
 func (m RunMetrics) Validate() error {
 	if strings.TrimSpace(m.SchemaVersion) != MetricVersion {
 		return fmt.Errorf("%w: unsupported metrics schema_version %q", ErrInvalid, m.SchemaVersion)
+	}
+	provenanceFields := 0
+	for _, value := range []string{
+		m.ProjectorVersion, m.SourceSHA256, m.MetricsSHA256,
+	} {
+		if strings.TrimSpace(value) != "" {
+			provenanceFields++
+		}
+	}
+	if provenanceFields != 0 && provenanceFields != 3 {
+		return fmt.Errorf("%w: incomplete metrics provenance", ErrInvalid)
+	}
+	if provenanceFields == 3 {
+		if strings.TrimSpace(m.ProjectorVersion) != MetricProjectorVersion ||
+			!sha256Pattern.MatchString(strings.ToLower(strings.TrimSpace(m.SourceSHA256))) ||
+			!sha256Pattern.MatchString(strings.ToLower(strings.TrimSpace(m.MetricsSHA256))) {
+			return fmt.Errorf("%w: metrics provenance", ErrInvalid)
+		}
+		hash, err := runMetricsHash(m)
+		if err != nil || hash != strings.ToLower(strings.TrimSpace(m.MetricsSHA256)) {
+			return fmt.Errorf("%w: metrics_sha256 mismatch", ErrInvalid)
+		}
 	}
 	values := []struct {
 		name string

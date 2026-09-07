@@ -221,21 +221,21 @@
 
 ## Stage 5：Metrics 与实验控制面
 
-- [ ] Task 5.1：实现版本化 Metric Projector。
-  - [ ] task、execution、verification success 分开计算。
-  - [ ] grounding、invalid action、recovery、steps、retry、token、latency 和 vision 指标。
-  - [ ] 零分母和缺失 ground truth 返回 null 与原因。
-- [ ] Task 5.2：实现 Experiment/Run API 和调度。
-  - [ ] 固定 Goal/Dataset/Model/Prompt/Browser/Code/Policy/seed。
-  - [ ] 支持 repetitions、随机顺序、warm-up 标记和 clean context。
-- [ ] Task 5.3：实现统一 `research-e2e` 命令入口。
-  - [ ] `run`
-  - [ ] `verify`
-  - [ ] `export`
-- [ ] Task 5.4：验收、提交并推送 Stage 5。
-  - [ ] Canonical Goal 连续 3 次通过。
-  - [ ] 独立 Oracle 与 Report 不一致时 task_success=false。
-  - [ ] 提交信息：`feat: add reproducible research runs and metrics`
+- [x] Task 5.1：实现版本化 Metric Projector。
+  - [x] task、execution、verification success 分开计算。
+  - [x] grounding、invalid action、recovery、steps、retry、token、latency 和 vision 指标。
+  - [x] 零分母和缺失 ground truth 返回 null 与原因。
+- [x] Task 5.2：实现 Experiment/Run API 和调度。
+  - [x] 固定 Goal/Dataset/Model/Prompt/Browser/Code/Policy/seed。
+  - [x] 支持 repetitions、随机顺序、warm-up 标记和 clean context。
+- [x] Task 5.3：实现统一 `research-e2e` 命令入口。
+  - [x] `run`
+  - [x] `verify`
+  - [x] `export`
+- [x] Task 5.4：验收、提交并推送 Stage 5。
+  - [x] Canonical Goal 连续 3 次通过。
+  - [x] 独立 Oracle 与 Report 不一致时 task_success=false。
+  - [x] 提交信息：`feat: add reproducible research runs and metrics`
 
 ## Stage 6：DSL Action IR
 

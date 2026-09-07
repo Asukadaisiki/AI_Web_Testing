@@ -9,7 +9,7 @@ import json
 import re
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError
@@ -25,7 +25,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 RESULT_SCHEMA_VERSION = "agentic-e2e.result.v1"
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 TERMINAL_BATCH_STATUSES = {"passed", "failed", "needs_intervention", "cancelled"}
-CANCEL_WAIT_SECONDS = 10
+TERMINAL_JOB_STATUSES = {"passed", "failed", "needs_intervention", "cancelled"}
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_CANCEL_GRACE_SECONDS = 10.0
+CANCEL_POLL_SECONDS = 0.05
 CANONICAL_GOAL = (
     "匿名访问 Automation Exercise，从 Products 页面搜索 Blue Top，确认搜索结果，"
     "进入商品详情，将数量保持为 1，加入购物车，通过加购弹层打开 View Cart，"
@@ -62,8 +65,12 @@ class AgenticE2EError(RuntimeError):
 
 class AgenticClient(Protocol):
     def create_project(self, name: str) -> dict[str, Any]: ...
-    def create_session(self, project_id: int) -> dict[str, Any]: ...
+    def create_session(
+        self, project_id: int, clean_context: bool
+    ) -> dict[str, Any]: ...
     def list_batches(self, project_id: int) -> list[dict[str, Any]]: ...
+    def get_batch(self, batch_id: int) -> dict[str, Any]: ...
+    def cancel_batch(self, batch_id: int) -> dict[str, Any]: ...
     def start_run(self, session_id: int, goal: str) -> dict[str, Any]: ...
     def get_run(self, run_id: str) -> dict[str, Any]: ...
     def cancel_run(self, run_id: str, reason: str) -> dict[str, Any]: ...
@@ -80,7 +87,7 @@ class HTTPAgenticClient:
         *,
         agent_url: str,
         browser_url: str,
-        request_timeout: float = 30,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         stream_timeout: float = 180,
         stream_window_seconds: float = 2,
     ) -> None:
@@ -89,6 +96,19 @@ class HTTPAgenticClient:
         self.request_timeout = request_timeout
         self.stream_timeout = stream_timeout
         self.stream_window_seconds = stream_window_seconds
+        self.deadline_monotonic: float | None = None
+
+    def set_run_deadline(self, deadline_monotonic: float | None) -> None:
+        self.deadline_monotonic = deadline_monotonic
+
+    def _bounded_timeout(self, requested: float | None = None) -> float:
+        timeout = self.request_timeout if requested is None else requested
+        if self.deadline_monotonic is None:
+            return timeout
+        remaining = self.deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("agentic E2E absolute deadline exceeded")
+        return min(timeout, remaining)
 
     def _json(
         self,
@@ -107,7 +127,7 @@ class HTTPAgenticClient:
         )
         try:
             with urlopen(
-                request, timeout=timeout or self.request_timeout
+                request, timeout=self._bounded_timeout(timeout)
             ) as response:
                 return json.loads(response.read())
         except HTTPError as exc:
@@ -117,14 +137,29 @@ class HTTPAgenticClient:
     def create_project(self, name: str) -> dict[str, Any]:
         return self._json("POST", "/api/v2/projects", {"name": name})
 
-    def create_session(self, project_id: int) -> dict[str, Any]:
+    def create_session(
+        self, project_id: int, clean_context: bool
+    ) -> dict[str, Any]:
         return self._json(
-            "POST", "/api/v2/planning/sessions", {"project_id": project_id}
+            "POST",
+            "/api/v2/planning/sessions",
+            {
+                "project_id": project_id,
+                "clean_context": clean_context,
+            },
         )
 
     def list_batches(self, project_id: int) -> list[dict[str, Any]]:
         query = urlencode({"project_id": project_id, "limit": 100})
         return self._json("GET", f"/api/v2/execution-batches?{query}")
+
+    def get_batch(self, batch_id: int) -> dict[str, Any]:
+        return self._json("GET", f"/api/v2/execution-batches/{batch_id}")
+
+    def cancel_batch(self, batch_id: int) -> dict[str, Any]:
+        return self._json(
+            "POST", f"/api/v2/execution-batches/{batch_id}/cancel"
+        )
 
     def start_run(self, session_id: int, goal: str) -> dict[str, Any]:
         return self._json(
@@ -156,7 +191,9 @@ class HTTPAgenticClient:
         deadline = time.monotonic() + self.stream_window_seconds
         with urlopen(
             request,
-            timeout=min(self.stream_timeout, self.stream_window_seconds),
+            timeout=self._bounded_timeout(
+                min(self.stream_timeout, self.stream_window_seconds)
+            ),
         ) as response:
             for raw_line in response:
                 if time.monotonic() >= deadline:
@@ -191,7 +228,6 @@ class HTTPAgenticClient:
             "POST",
             f"/api/v2/agent/runs/{run_id}/tool-calls/{tool_call_id}/resume",
             {"answers": {"approve_dsl": True}},
-            timeout=self.stream_timeout,
         )
 
     def get_report(self, batch_id: int) -> dict[str, Any]:
@@ -201,7 +237,7 @@ class HTTPAgenticClient:
 
     def get_artifact(self, artifact_url: str) -> bytes:
         request = Request(urljoin(self.browser_url, artifact_url.lstrip("/")))
-        with urlopen(request, timeout=self.request_timeout) as response:
+        with urlopen(request, timeout=self._bounded_timeout()) as response:
             return response.read()
 
 
@@ -456,17 +492,16 @@ def _wait_for_run_boundary(
     run_id: str,
     events: list[dict[str, Any]],
     *,
-    timeout_seconds: float,
+    deadline_monotonic: float,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
+    while time.monotonic() < deadline_monotonic:
         after_seq = int(events[-1]["seq"]) if events else 0
         events = _merge_events(events, client.list_events(run_id, after_seq))
         run = client.get_run(run_id)
         if run["status"] == "waiting_user" or run["status"] in TERMINAL_RUN_STATUSES:
             return run, events
         time.sleep(0.25)
-    raise TimeoutError(f"agent run {run_id} did not reach a boundary")
+    raise TimeoutError(f"agent run {run_id} exceeded its absolute deadline")
 
 
 def _pending_checkpoint(
@@ -557,6 +592,134 @@ def _refresh_failure_context(
         context["run"] = client.get_run(str(run_id))
     except Exception:
         pass
+    project_id = (context.get("ids") or {}).get("project_id")
+    if project_id:
+        try:
+            current = {
+                int(batch["id"])
+                for batch in client.list_batches(int(project_id))
+            }
+            context.setdefault("batch_tracking", {})["current_ids"] = sorted(
+                current
+            )
+        except Exception:
+            pass
+
+
+def _failure_batch_ids(context: dict[str, Any]) -> list[int]:
+    tracking = context.get("batch_tracking") or {}
+    baseline = {int(value) for value in tracking.get("baseline_ids") or []}
+    candidates = {
+        int(value)
+        for key in ("observed_ids", "current_ids")
+        for value in tracking.get(key) or []
+    }
+    batch_id = (context.get("ids") or {}).get("batch_id")
+    if batch_id is not None:
+        candidates.add(int(batch_id))
+    return sorted(candidates - baseline)
+
+
+def _batch_terminal(detail: dict[str, Any]) -> bool:
+    jobs = detail.get("jobs")
+    return (
+        detail.get("status") in TERMINAL_BATCH_STATUSES
+        and isinstance(jobs, list)
+        and bool(jobs)
+        and all(
+            isinstance(job, dict)
+            and job.get("status") in TERMINAL_JOB_STATUSES
+            for job in jobs
+        )
+    )
+
+
+def _cleanup_failed_batches(
+    client: AgenticClient,
+    context: dict[str, Any],
+    *,
+    deadline: float,
+) -> dict[str, Any]:
+    cleanup: dict[str, Any] = {
+        "batch_ids": _failure_batch_ids(context),
+        "batches": [],
+        "terminal_verified": True,
+        "error": None,
+    }
+    entries: dict[int, dict[str, Any]] = {}
+    for batch_id in cleanup["batch_ids"]:
+        entry = {
+            "batch_id": batch_id,
+            "cancel_attempted": False,
+            "status": None,
+            "job_statuses": [],
+            "terminal_verified": False,
+            "error": None,
+        }
+        cleanup["batches"].append(entry)
+        entries[batch_id] = entry
+        try:
+            detail = client.get_batch(batch_id)
+            entry["status"] = detail.get("status")
+            entry["job_statuses"] = [
+                job.get("status")
+                for job in detail.get("jobs") or []
+                if isinstance(job, dict)
+            ]
+            if detail.get("status") not in TERMINAL_BATCH_STATUSES:
+                entry["cancel_attempted"] = True
+                detail = client.cancel_batch(batch_id)
+                entry["status"] = detail.get("status")
+                entry["job_statuses"] = [
+                    job.get("status")
+                    for job in detail.get("jobs") or []
+                    if isinstance(job, dict)
+                ]
+            entry["terminal_verified"] = _batch_terminal(detail)
+        except Exception as exc:
+            entry["error"] = str(exc)
+
+    while entries and not all(
+        entry["terminal_verified"] or entry["error"]
+        for entry in entries.values()
+    ):
+        if time.monotonic() >= deadline:
+            break
+        for batch_id, entry in entries.items():
+            if entry["terminal_verified"] or entry["error"]:
+                continue
+            try:
+                detail = client.get_batch(batch_id)
+                entry["status"] = detail.get("status")
+                entry["job_statuses"] = [
+                    job.get("status")
+                    for job in detail.get("jobs") or []
+                    if isinstance(job, dict)
+                ]
+                entry["terminal_verified"] = _batch_terminal(detail)
+            except Exception as exc:
+                entry["error"] = str(exc)
+        if not all(
+            entry["terminal_verified"] or entry["error"]
+            for entry in entries.values()
+        ):
+            time.sleep(
+                min(CANCEL_POLL_SECONDS, max(0, deadline - time.monotonic()))
+            )
+
+    for entry in entries.values():
+        if not entry["terminal_verified"] and not entry["error"]:
+            entry["error"] = (
+                "cancel grace expired before batch and jobs reached terminal states"
+            )
+    errors = [
+        f"batch {entry['batch_id']}: {entry['error']}"
+        for entry in entries.values()
+        if entry["error"]
+    ]
+    cleanup["terminal_verified"] = not errors
+    cleanup["error"] = "; ".join(errors) or None
+    return cleanup
 
 
 def _cancel_failed_run(
@@ -564,6 +727,8 @@ def _cancel_failed_run(
     context: dict[str, Any],
     diagnostic: dict[str, Any],
     cause: Exception,
+    *,
+    cancel_grace_seconds: float,
 ) -> None:
     run_id = (context.get("ids") or {}).get("agent_run_id")
     run_status = (context.get("run") or {}).get("status")
@@ -571,31 +736,89 @@ def _cancel_failed_run(
         "attempted": False,
         "reason": None,
         "status": run_status,
+        "terminal_verified": run_status in TERMINAL_RUN_STATUSES,
+        "no_subsequent_events": None,
+        "last_seq": (
+            context["events"][-1]["seq"] if context.get("events") else 0
+        ),
         "error": None,
     }
-    diagnostic["cancellation"] = cancellation
-    if not run_id or run_status not in {"running", "waiting_user"}:
-        return
-
     prefix = "driver timeout" if isinstance(cause, TimeoutError) else "driver error"
     reason = f"{prefix}: {cause}"
-    cancellation["attempted"] = True
+    deadline = time.monotonic() + cancel_grace_seconds
+    batch_cleanup = _cleanup_failed_batches(
+        client,
+        context,
+        deadline=deadline,
+    )
+    diagnostic["batch_cleanup"] = batch_cleanup
+    diagnostic["cancellation"] = cancellation
+    if not run_id:
+        cancellation["error"] = "agent run was not created"
+        diagnostic["cleanup_success"] = (
+            batch_cleanup["terminal_verified"] and not cancellation["error"]
+        )
+        return
+
     cancellation["reason"] = reason
     try:
-        run = client.cancel_run(str(run_id), reason)
-        cancellation["status"] = run.get("status")
-        deadline = time.monotonic() + CANCEL_WAIT_SECONDS
-        while cancellation["status"] != "cancelled":
-            if cancellation["status"] in TERMINAL_RUN_STATUSES:
-                return
-            if time.monotonic() >= deadline:
-                cancellation["error"] = "timed out waiting for cancelled status"
-                return
-            time.sleep(0.1)
-            run = client.get_run(str(run_id))
+        if run_status in {"running", "waiting_user"}:
+            cancellation["attempted"] = True
+            run = client.cancel_run(str(run_id), reason)
             cancellation["status"] = run.get("status")
+        events = context.get("events") or []
+        terminal_seq: int | None = None
+        while True:
+            after_seq = int(events[-1]["seq"]) if events else 0
+            incoming = client.list_events(str(run_id), after_seq)
+            if terminal_seq is not None:
+                unexpected = [
+                    event
+                    for event in incoming
+                    if event.get("type")
+                    not in {"run.finished", "run.failed", "run.cancelled"}
+                ]
+                if unexpected:
+                    cancellation["no_subsequent_events"] = False
+                    cancellation["error"] = (
+                        "events observed after terminal status: "
+                        + ", ".join(str(event.get("seq")) for event in unexpected)
+                    )
+                    break
+            events = _merge_events(events, incoming)
+            context["events"] = events
+            cancellation["last_seq"] = (
+                events[-1]["seq"] if events else after_seq
+            )
+            run = client.get_run(str(run_id))
+            context["run"] = run
+            cancellation["status"] = run.get("status")
+            if cancellation["status"] in TERMINAL_RUN_STATUSES:
+                cancellation["terminal_verified"] = True
+                if terminal_seq is None or incoming:
+                    terminal_seq = int(events[-1]["seq"]) if events else 0
+                elif not incoming:
+                    cancellation["no_subsequent_events"] = True
+                    break
+            if time.monotonic() >= deadline:
+                missing = []
+                if not cancellation["terminal_verified"]:
+                    missing.append("terminal status")
+                if cancellation["no_subsequent_events"] is not True:
+                    missing.append("event quiescence")
+                cancellation["error"] = (
+                    "cancel grace expired before " + " and ".join(missing)
+                )
+                break
+            time.sleep(min(CANCEL_POLL_SECONDS, max(0, deadline - time.monotonic())))
     except Exception as cancel_error:
         cancellation["error"] = str(cancel_error)
+    diagnostic["cleanup_success"] = (
+        batch_cleanup["terminal_verified"]
+        and cancellation["terminal_verified"]
+        and cancellation["no_subsequent_events"] is True
+        and cancellation["error"] is None
+    )
 
 
 def _artifact(
@@ -719,27 +942,69 @@ def _formal_result(
     )
 
 
+def _require_deadline(deadline_monotonic: float, operation: str) -> None:
+    if time.monotonic() >= deadline_monotonic:
+        raise TimeoutError(
+            f"agentic E2E absolute deadline exceeded before {operation}"
+        )
+
+
+def _set_client_deadline(
+    client: AgenticClient,
+    deadline_monotonic: float | None,
+) -> None:
+    setter = getattr(client, "set_run_deadline", None)
+    if callable(setter):
+        setter(deadline_monotonic)
+
+
 def _run_agentic_goal(
     goal: str,
     *,
     client: AgenticClient,
     timeout_seconds: float = 900,
     mutation: str = "none",
+    clean_context: bool,
+    project_id: int | None,
+    started_at: datetime,
+    deadline_monotonic: float,
+    deadline_at: datetime,
     context: dict[str, Any],
 ) -> dict[str, Any]:
     goal = validate_goal(goal)
-    started_at = datetime.now(UTC)
-    project = client.create_project(f"Agentic E2E {started_at:%Y%m%dT%H%M%S%fZ}")
-    project_id = int(project["id"])
+    _require_deadline(deadline_monotonic, "project setup")
+    project_origin = "existing"
+    if project_id is None:
+        project = client.create_project(
+            f"Agentic E2E {started_at:%Y%m%dT%H%M%S%fZ}"
+        )
+        project_id = int(project["id"])
+        project_origin = "created"
+    elif project_id < 1:
+        raise ValueError("project_id must be a positive integer")
     context["ids"]["project_id"] = project_id
-    session_payload = client.create_session(project_id)
+    _require_deadline(deadline_monotonic, "planning session creation")
+    session_payload = client.create_session(project_id, clean_context)
     session = session_payload.get("session", session_payload)
     session_id = int(session["id"])
-    context["ids"]["session_id"] = session_id
+    context["ids"].update(
+        {
+            "session_id": session_id,
+            "planning_session_id": session_id,
+            "browser_session_id": session_id,
+            "browser_context_key": session_id,
+        }
+    )
+    _require_deadline(deadline_monotonic, "baseline batch listing")
     baseline_batch_ids = {
         int(batch["id"]) for batch in client.list_batches(project_id)
     }
+    context["batch_tracking"] = {
+        "baseline_ids": sorted(baseline_batch_ids),
+        "observed_ids": sorted(baseline_batch_ids),
+    }
 
+    _require_deadline(deadline_monotonic, "agent run creation")
     run = client.start_run(session_id, goal)
     run_id = str(run["id"])
     context["ids"]["agent_run_id"] = run_id
@@ -753,14 +1018,21 @@ def _run_agentic_goal(
 
     while True:
         run, events = _wait_for_run_boundary(
-            client, run_id, events, timeout_seconds=timeout_seconds
+            client,
+            run_id,
+            events,
+            deadline_monotonic=deadline_monotonic,
         )
         context["run"] = run
         context["events"] = events
         pending: dict[str, Any] | None = None
+        _require_deadline(deadline_monotonic, "batch reconciliation")
         current_batch_ids = {
             int(batch["id"]) for batch in client.list_batches(project_id)
         }
+        context["batch_tracking"]["observed_ids"] = sorted(
+            current_batch_ids
+        )
 
         if approvals and "batch_id" not in approvals[-1]:
             preceding_approval = approvals[-1]
@@ -867,6 +1139,7 @@ def _run_agentic_goal(
             recoveries[-1]["to_generation_id"] = generation_id
             recoveries[-1]["approval_round"] = len(approvals)
         context["ids"]["generation_id"] = generation_id
+        _require_deadline(deadline_monotonic, "DSL approval")
         client.approve(run_id, str(pending["tool_call_id"]))
 
     if run.get("status") != "completed":
@@ -900,7 +1173,9 @@ def _run_agentic_goal(
     )
     if not snapshot_url:
         raise AgenticE2EError("formal execution has no final DOM snapshot artifact")
-    html = client.get_artifact(snapshot_url).decode("utf-8")
+    _require_deadline(deadline_monotonic, "oracle artifact download")
+    html_bytes = client.get_artifact(snapshot_url)
+    html = html_bytes.decode("utf-8")
     oracle = evaluate_cart_oracle(
         html, expected=oracle_expectation(mutation)
     )
@@ -915,12 +1190,33 @@ def _run_agentic_goal(
         ),
         "goal": goal,
         "configuration": {
-            "clean_browser_context": True,
+            "clean_browser_context": clean_context,
+            "project_origin": project_origin,
             "oracle_mutation": mutation,
+            "timeout_mode": "absolute_monotonic_deadline",
+            "run_timeout_seconds": timeout_seconds,
+            "cancel_grace_seconds": context["timeout"][
+                "cancel_grace_seconds"
+            ],
+            "request_timeout_seconds": float(
+                getattr(
+                    client,
+                    "request_timeout",
+                    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                )
+            ),
+            "deadline_started_monotonic": context["timeout"][
+                "started_monotonic"
+            ],
+            "deadline_monotonic": deadline_monotonic,
+            "deadline_at": deadline_at.isoformat(),
         },
         "ids": {
             "project_id": project_id,
             "session_id": session_id,
+            "planning_session_id": session_id,
+            "browser_session_id": session_id,
+            "browser_context_key": session_id,
             "agent_run_id": run_id,
             "generation_id": generation_id,
             "batch_id": batch_id,
@@ -966,7 +1262,12 @@ def _run_agentic_goal(
                 "id": str(batch_id),
                 "event_seq": report_artifact["seq"],
             },
-            "final_dom": {"url": snapshot_url},
+            "final_dom": {
+                "url": snapshot_url,
+                "sha256": hashlib.sha256(html_bytes).hexdigest(),
+                "size_bytes": len(html_bytes),
+                "media_type": "text/html",
+            },
         },
         "formal_execution": formal,
         "oracle": oracle,
@@ -985,24 +1286,63 @@ def run_agentic_goal(
     client: AgenticClient,
     timeout_seconds: float = 900,
     mutation: str = "none",
+    clean_context: bool = True,
+    project_id: int | None = None,
+    cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS,
 ) -> dict[str, Any]:
-    context: dict[str, Any] = {"ids": {}, "run": {}, "events": []}
+    if timeout_seconds <= 0:
+        deadline_monotonic = time.monotonic()
+    else:
+        deadline_monotonic = time.monotonic() + timeout_seconds
+    if cancel_grace_seconds < 0:
+        raise ValueError("cancel_grace_seconds must be non-negative")
+    started_at = datetime.now(UTC)
+    deadline_at = started_at + timedelta(seconds=max(0, timeout_seconds))
+    context: dict[str, Any] = {
+        "ids": {},
+        "run": {},
+        "events": [],
+        "timeout": {
+            "mode": "absolute_monotonic_deadline",
+            "timeout_seconds": timeout_seconds,
+            "started_monotonic": deadline_monotonic - max(0, timeout_seconds),
+            "deadline_monotonic": deadline_monotonic,
+            "deadline_at": deadline_at.isoformat(),
+            "cancel_grace_seconds": cancel_grace_seconds,
+        },
+    }
+    _set_client_deadline(client, deadline_monotonic)
     try:
         return _run_agentic_goal(
             goal,
             client=client,
             timeout_seconds=timeout_seconds,
             mutation=mutation,
+            clean_context=clean_context,
+            project_id=project_id,
+            started_at=started_at,
+            deadline_monotonic=deadline_monotonic,
+            deadline_at=deadline_at,
             context=context,
         )
     except Exception as exc:
+        _set_client_deadline(client, None)
         _refresh_failure_context(client, context)
         diagnostic = _failure_diagnostic(context)
-        _cancel_failed_run(client, context, diagnostic, exc)
+        diagnostic["timeout"] = dict(context["timeout"])
+        _cancel_failed_run(
+            client,
+            context,
+            diagnostic,
+            exc,
+            cancel_grace_seconds=cancel_grace_seconds,
+        )
         if isinstance(exc, AgenticE2EError):
             exc.diagnostic = {**diagnostic, **exc.diagnostic}
             raise
         raise AgenticE2EError(str(exc), diagnostic=diagnostic) from exc
+    finally:
+        _set_client_deadline(client, None)
 
 
 def _default_output(mutation: str) -> Path:
@@ -1047,7 +1387,22 @@ def main() -> int:
         default="http://127.0.0.1:8000",
         help="Browser Worker base URL used only to download evidence.",
     )
+    parser.add_argument(
+        "--project-id",
+        type=int,
+        help="Use an existing project while still creating a fresh planning/browser session.",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=900)
+    parser.add_argument(
+        "--request-timeout-seconds",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    )
+    parser.add_argument(
+        "--cancel-grace-seconds",
+        type=float,
+        default=DEFAULT_CANCEL_GRACE_SECONDS,
+    )
     parser.add_argument(
         "--oracle-mutation",
         choices=("none", "wrong-price", "wrong-product"),
@@ -1063,9 +1418,12 @@ def main() -> int:
             client=HTTPAgenticClient(
                 agent_url=args.agent_url,
                 browser_url=args.browser_url,
+                request_timeout=args.request_timeout_seconds,
             ),
             timeout_seconds=args.timeout_seconds,
             mutation=args.oracle_mutation,
+            project_id=args.project_id,
+            cancel_grace_seconds=args.cancel_grace_seconds,
         )
     except Exception as exc:
         result = _failure_result(args.goal, args.oracle_mutation, exc)

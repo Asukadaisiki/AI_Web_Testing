@@ -15,8 +15,9 @@ var (
 )
 
 type CreateSessionRequest struct {
-	CaseID    int64 `json:"case_id,omitempty"`
-	ProjectID int64 `json:"project_id,omitempty"`
+	CaseID       int64 `json:"case_id,omitempty"`
+	ProjectID    int64 `json:"project_id,omitempty"`
+	CleanContext bool  `json:"clean_context,omitempty"`
 }
 
 type UpdateSessionRequest struct {

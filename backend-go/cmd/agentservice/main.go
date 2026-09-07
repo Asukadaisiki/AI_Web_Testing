@@ -17,6 +17,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/browserworker"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/llm"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/projects"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/research"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 	httptransport "github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/transport/http"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -65,6 +66,11 @@ func main() {
 	executionStore := execution.NewStore(database)
 	correctionStore := corrections.NewStore(database)
 	dslStore := dsl.NewStore(database)
+	researchRepository := research.NewPostgresRepository(database)
+	researchService := research.NewService(
+		researchRepository,
+		research.NewPostgresSourceReader(database),
+	)
 	controlPlane := tools.NewControlPlaneCapabilities(
 		dslStore,
 		caseStore,
@@ -94,6 +100,7 @@ func main() {
 		caseStore,
 		executionStore,
 		correctionStore,
+		researchService,
 	)
 
 	log.Printf("agentservice API listening on %s", cfg.Address)

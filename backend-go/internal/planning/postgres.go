@@ -39,7 +39,10 @@ func (s *PostgresStore) CreateSession(
 	}
 	defer transaction.Rollback()
 
-	requirements := []byte(`{"app_under_test":null,"business_goal":null,"entry_url_or_page":null,"core_user_flow":null,"main_assertions":[],"test_data_or_account":null,"scope_limits":null,"test_context":null}`)
+	requirements, err := initialRequirements(request.CleanContext)
+	if err != nil {
+		return SessionDetail{}, fmt.Errorf("encode planning session requirements: %w", err)
+	}
 	missingSlots, _ := json.Marshal(requiredSlots)
 	var sessionID int64
 	err = transaction.QueryRowContext(
@@ -640,6 +643,20 @@ func normalizedJSON(value []byte, fallback string) json.RawMessage {
 		return json.RawMessage(fallback)
 	}
 	return json.RawMessage(value)
+}
+
+func initialRequirements(cleanContext bool) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"app_under_test":       nil,
+		"business_goal":        nil,
+		"clean_context":        cleanContext,
+		"core_user_flow":       nil,
+		"entry_url_or_page":    nil,
+		"main_assertions":      []any{},
+		"scope_limits":         nil,
+		"test_context":         nil,
+		"test_data_or_account": nil,
+	})
 }
 
 func nullableInt64(value sql.NullInt64) *int64 {

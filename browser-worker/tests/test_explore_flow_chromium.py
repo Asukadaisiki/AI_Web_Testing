@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
+import tempfile
 import threading
 import unittest
 from urllib.parse import urlsplit
+from unittest.mock import MagicMock, patch
 
-from app.ai.page_explorer import _collect_flow_a11y
+from app.ai.page_explorer import BrowserSessionManager, _collect_flow_a11y
+from app.application.browser.service import (
+    execute_browser_capability,
+    shutdown_browser_capabilities,
+)
 
 
 class _FlowHandler(BaseHTTPRequestHandler):
@@ -40,6 +49,10 @@ class _FlowHandler(BaseHTTPRequestHandler):
             body = "<!doctype html><html><body><h1>Modal cart destination</h1></body></html>"
         elif path == "/cart":
             body = "<!doctype html><html><body><h1>Header cart bypass</h1></body></html>"
+        elif path == "/context":
+            authenticated = "stage5_auth=1" in self.headers.get("Cookie", "")
+            label = "Authenticated session" if authenticated else "Anonymous session"
+            body = f"<!doctype html><html><body><button>{label}</button></body></html>"
         else:
             self.send_error(404)
             return
@@ -78,6 +91,9 @@ class ExploreFlowChromiumTest(unittest.TestCase):
 
     def setUp(self) -> None:
         _FlowHandler.requests.clear()
+
+    def tearDown(self) -> None:
+        shutdown_browser_capabilities()
 
     def test_navigation_contract_and_same_url_modal_flow(self) -> None:
         product_url = f"{self.base_url}/product?sku=blue#details"
@@ -157,6 +173,86 @@ class ExploreFlowChromiumTest(unittest.TestCase):
             cart_entry["actions"][0]["page_state"],
             product_entry["page_state"],
         )
+
+    def test_clean_context_skips_project_storage_state_between_sessions(self) -> None:
+        project_id = 41
+        normal_session_id = 4101
+        clean_session_id = 4102
+        database = MagicMock()
+        records = {
+            normal_session_id: SimpleNamespace(
+                requirements_json={"clean_context": False}
+            ),
+            clean_session_id: SimpleNamespace(
+                requirements_json={"clean_context": True}
+            ),
+        }
+        database.get.side_effect = lambda _, session_id: records[session_id]
+
+        with tempfile.TemporaryDirectory() as directory:
+            storage_state_path = Path(directory) / f"{project_id}.json"
+            storage_state_path.write_text(
+                json.dumps(
+                    {
+                        "cookies": [
+                            {
+                                "name": "stage5_auth",
+                                "value": "1",
+                                "domain": "127.0.0.1",
+                                "path": "/",
+                                "expires": -1,
+                                "httpOnly": False,
+                                "secure": False,
+                                "sameSite": "Lax",
+                            }
+                        ],
+                        "origins": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "app.application.browser.service._storage_state_path",
+                return_value=str(storage_state_path),
+            ):
+                normal = execute_browser_capability(
+                    database,
+                    capability="explore_page",
+                    project_id=project_id,
+                    conversation_id=str(normal_session_id),
+                    arguments={"url": f"{self.base_url}/context"},
+                )
+                clean = execute_browser_capability(
+                    database,
+                    capability="explore_page",
+                    project_id=project_id,
+                    conversation_id=str(clean_session_id),
+                    arguments={"url": f"{self.base_url}/context"},
+                )
+
+            self.assertIn(
+                "Authenticated session",
+                {node.get("name") for node in normal["a11y_nodes"]},
+            )
+            self.assertIn(
+                "Anonymous session",
+                {node.get("name") for node in clean["a11y_nodes"]},
+            )
+            self.assertTrue(normal["context_evidence"]["storage_state_loaded"])
+            self.assertFalse(clean["context_evidence"]["storage_state_loaded"])
+            self.assertEqual(
+                normal["context_evidence"]["planning_session_id"],
+                normal_session_id,
+            )
+            self.assertEqual(
+                clean["context_evidence"]["planning_session_id"],
+                clean_session_id,
+            )
+            self.assertEqual(
+                set(BrowserSessionManager._sessions),
+                {normal_session_id, clean_session_id},
+            )
+            self.assertTrue(storage_state_path.exists())
 
 
 if __name__ == "__main__":

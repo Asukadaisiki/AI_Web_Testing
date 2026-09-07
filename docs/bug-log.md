@@ -48,6 +48,40 @@
 
 ## 问题记录
 
+## BUG-154 | Stage 5 首次验收在应用 0042 前运行 PostgreSQL 测试
+
+- 日期：2026-09-07
+- 状态：fixed
+- 严重度：low
+- 来源：Stage 5 独立验收
+- 描述：首次完整门禁先运行依赖 `research_oracle_results` 的 Go PostgreSQL 测试，主库仍停在 `20260906_0041`，测试以 `research oracle migration is not applied` 失败。
+- 复现步骤：
+  1. 保持主库 Alembic revision 为 `20260906_0041`。
+  2. 设置真实 `TEST_DATABASE_URL` 并运行 `go test -count=1 -v ./...`。
+  3. `TestPostgresOracleIdempotencyBindingAndMetricsCAS` 因 0042 表不存在失败。
+- 影响：第一次 Stage 5 验收在静态门禁提前停止，未进入 E2E；业务实现和迁移本身未失败。
+- 根因：验收脚本把 `alembic upgrade head` 排在依赖最新 schema 的 Go PostgreSQL 测试之后。
+- 处理：将主库升级和 revision/table/data-preservation 检查前置，再从 Go 全量门禁重新执行。
+- 验证：主库 current/head 为 `20260907_0042`，Stage 4 Experiment/Run/Transition 计数保持 2/4/113；16 项 PostgreSQL 测试、空库升级和 `0041→0042→0041→0042` 往返全部通过。
+- 关联记录：`docs/execution-log.md#2026-09-07--完成-stage-5-metrics-与实验控制面`
+
+## BUG-153 | Stage 5 初版实验隔离、超时与 Oracle 门禁不完整
+
+- 日期：2026-09-07
+- 状态：fixed
+- 严重度：critical
+- 来源：Stage 5 整合审查
+- 描述：初版 CLI 丢弃服务端 deadline，只取消 AgentRun；同 project 新 session 仍加载 project storage state；`verify` 会接受 Canonical Oracle 失败；Oracle facts、完成态和 metrics 源缺少强一致约束。
+- 复现步骤：
+  1. 对 running ResearchRun 重入 `start`，观察客户端重新获得完整本地预算。
+  2. 在同 project 创建新 planning session，Browser Worker 仍读取 `<project_id>.json` storage state。
+  3. 构造 formal pass、Oracle false 的三次样本，旧 `verify` 仍返回 passed。
+- 影响：可能产生超时后孤儿 Batch/Job、跨 repetition 状态污染、Oracle 假通过或无完整证据的 completed ResearchRun，研究结论不可采信。
+- 根因：实验编排器把 session ID 唯一误当成浏览器状态隔离，并缺少服务端 deadline、下游取消、Oracle facts 闭包和完成态证据门禁。
+- 处理：客户端使用服务端 UTC deadline 并只允许进一步收紧；失败时级联取消并验证 AgentRun、Batch、Job 终态；planning session 持久化 `clean_context`，Worker 明确禁用 storage state并记录 `context_evidence.v1`；Oracle 强制 `passed == all(facts)`、来源闭包和 expected/actual；completed Run 必须具备完整 links、Oracle 和带来源 hash 的 Metrics。
+- 验证：45 项 CLI/driver 聚焦测试、Go research 全量与 PostgreSQL 集成、35 项 Browser capability 测试通过；Project 858 的 3 次 Canonical 均使用不同 clean session 且成功，wrong-price 正式执行通过但 Oracle/task_success=false，最终活动 AgentRun/Job/ResearchRun 为 0/0/0。
+- 关联记录：`docs/execution-log.md#2026-09-07--完成-stage-5-metrics-与实验控制面`
+
 ## BUG-152 | SourceReader 在未关闭 jobs rows 时嵌套查询 executions
 
 - 日期：2026-09-06

@@ -26,6 +26,29 @@ func NewPostgresRepository(db *sql.DB) *PostgresRepository {
 	return &PostgresRepository{db: db, now: time.Now}
 }
 
+func (r *PostgresRepository) OwnsProject(
+	ctx context.Context,
+	actorUserID int64,
+	projectID int64,
+) (bool, error) {
+	if actorUserID <= 0 || projectID <= 0 {
+		return false, fmt.Errorf("%w: actor or project", ErrInvalid)
+	}
+	var owned bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM project_members
+			WHERE project_id = $1 AND user_id = $2
+		)`,
+		projectID,
+		actorUserID,
+	).Scan(&owned); err != nil {
+		return false, fmt.Errorf("check research project ownership: %w", err)
+	}
+	return owned, nil
+}
+
 func (r *PostgresRepository) CreateExperiment(
 	ctx context.Context,
 	experiment Experiment,
@@ -442,6 +465,70 @@ func (r *PostgresRepository) PutRunMetrics(
 	}
 	if err != nil {
 		return ResearchRun{}, fmt.Errorf("put research run metrics: %w", err)
+	}
+	return result, nil
+}
+
+func (r *PostgresRepository) CompareAndSwapRunMetrics(
+	ctx context.Context,
+	runID string,
+	expectedSourceSHA256 string,
+	metrics RunMetrics,
+	updatedAt time.Time,
+) (ResearchRun, error) {
+	if err := metrics.Validate(); err != nil {
+		return ResearchRun{}, err
+	}
+	expectedSourceSHA256 = strings.ToLower(strings.TrimSpace(expectedSourceSHA256))
+	if expectedSourceSHA256 != "" && !sha256Pattern.MatchString(expectedSourceSHA256) {
+		return ResearchRun{}, fmt.Errorf("%w: expected metrics source hash", ErrInvalid)
+	}
+	raw, err := json.Marshal(metrics)
+	if err != nil {
+		return ResearchRun{}, fmt.Errorf("encode research metrics: %w", err)
+	}
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return ResearchRun{}, fmt.Errorf("begin research metrics transaction: %w", err)
+	}
+	defer tx.Rollback()
+	current, err := getRunForUpdate(ctx, tx, runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ResearchRun{}, ErrNotFound
+	}
+	if err != nil {
+		return ResearchRun{}, fmt.Errorf("lock research metrics run: %w", err)
+	}
+	currentSource := ""
+	if current.Metrics != nil {
+		currentSource = strings.ToLower(strings.TrimSpace(current.Metrics.SourceSHA256))
+		if currentSource == metrics.SourceSHA256 {
+			if current.Metrics.MetricsSHA256 != metrics.MetricsSHA256 {
+				return ResearchRun{}, ErrConflict
+			}
+			if err := tx.Commit(); err != nil {
+				return ResearchRun{}, fmt.Errorf("commit research metrics replay: %w", err)
+			}
+			return current, nil
+		}
+		return ResearchRun{}, ErrConflict
+	}
+	if currentSource != expectedSourceSHA256 {
+		return ResearchRun{}, ErrConflict
+	}
+	updatedAt = r.resolveTime(updatedAt)
+	result, err := scanRun(tx.QueryRowContext(ctx, `
+		UPDATE research_runs
+		SET metrics_json = $2, updated_at = $3
+		WHERE id = $1
+		RETURNING `+runColumns,
+		runID, string(raw), updatedAt,
+	))
+	if err != nil {
+		return ResearchRun{}, fmt.Errorf("compare and swap research metrics: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ResearchRun{}, fmt.Errorf("commit research metrics: %w", err)
 	}
 	return result, nil
 }

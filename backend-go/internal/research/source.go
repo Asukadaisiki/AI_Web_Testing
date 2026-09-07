@@ -95,6 +95,7 @@ type SourceSnapshot struct {
 	Reward         Slot[json.RawMessage] `json:"reward"`
 	Cursor         SourceCursor          `json:"cursor"`
 	SourceSHA256   string                `json:"source_sha256"`
+	FinalRunLinks  RunLinks              `json:"-"`
 }
 
 type SourceReader interface {
@@ -177,6 +178,10 @@ func (r *PostgresSourceReader) Read(
 	}
 	if err := validateSourceLinks(snapshot, links); err != nil {
 		return SourceSnapshot{}, err
+	}
+	snapshot.FinalRunLinks = materializeRunLinks(snapshot.AgentRunID, links)
+	if linkErr := snapshot.FinalRunLinks.NormalizeAndValidate(); linkErr != nil {
+		return SourceSnapshot{}, linkErr
 	}
 	snapshot.Reward = Unavailable[json.RawMessage](
 		"independent_oracle_not_persisted",
@@ -644,6 +649,27 @@ func validateSourceLinks(snapshot SourceSnapshot, links sourceIdentityLinks) err
 		}
 	}
 	return nil
+}
+
+func materializeRunLinks(agentRunID string, source sourceIdentityLinks) RunLinks {
+	links := RunLinks{AgentRunID: &agentRunID}
+	if source.generationID.Valid {
+		value := source.generationID.Int64
+		links.GenerationID = &value
+	}
+	if source.batchID.Valid {
+		value := source.batchID.Int64
+		links.BatchID = &value
+	}
+	if source.executionID.Valid {
+		value := source.executionID.Int64
+		links.ExecutionID = &value
+	}
+	if source.dslSHA256.Valid {
+		value := source.dslSHA256.String
+		links.DSLSHA256 = &value
+	}
+	return links
 }
 
 func readJobs(

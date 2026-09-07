@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-07 | 完成 Stage 5 Metrics 与实验控制面
+
+- 任务：实现版本化 Metric Projector、Experiment/ResearchRun API 与确定性调度、统一 `research-e2e run/verify/export`，并以真实主链验证独立 Oracle、clean context、AI 决策轨迹和任务超时。
+- 操作：新增 Oracle 原子事实及 `0042` 迁移；从 Agent Event、Transition、最终 Execution Report 和 Oracle 投影 task/execution/verification、grounding、invalid action、recovery、step/retry/token/latency/vision 指标，缺少真值或分母时保存 null 与稳定原因。新增固定版本/seed、warm-up、随机顺序和超时配置的 Research API；planning session 持久化 `clean_context`，Browser Worker 禁止加载 project storage state并输出 `context_evidence.v1`。统一 CLI 使用服务端绝对 deadline，超时级联取消 AgentRun 与 Batch/Job，只导出结构化 observation/decision/action/tool/verification/recovery 与 source hash，不保存隐藏 reasoning。
+- 结果：Canonical Experiment `research-experiment-646d8a5a99389fe319b48f9ab53eb35f` 在 Project 858 完成 3 个正式 repetition；ResearchRun `research-run-4e00876bf70aa1ce49f3f8917094d52b`、`research-run-00aa5b4255f2810dace87268a46320ea`、`research-run-d30566d890aa3d5190a7592543dad026` 均为 completed，分别关联 Session 52/54/53、Execution 425/427/426，task/execution/verification success=true、VLM=0。错误价格 Experiment `research-experiment-d18a7baf03c4a169c890eafb187c72b6` 的正式执行通过，但独立 Oracle 与 `task_success` 均为 false，CLI 按预期退出 1；Project 858 最终活动 AgentRun/Job/ResearchRun 为 0/0/0。
+- 验证：Go 16 packages、169 个顶层测试和 94 个子测试通过，16 项 PostgreSQL 测试实际执行；Research race、vet/build、Python 117 passed/2 个环境门控 skipped、Alembic 主库/空库/0041↔0042、Frontend 9/9/build/Knip、compileall、代码快照和 diff 检查通过。Canonical 导出 90 行、SHA-256 `f3ee57392806851d079d34065ad45d3d08b35a9087136327732cd43e67932f7e`；wrong-price 导出 28 行、SHA-256 `62ff12d71aba51478b9b53594f3ec6f1160d2597f78593fe9cfce05334b5a619`。
+- 后续：提交并推送 Stage 5 后进入 Stage 6 research-v1 Action IR。
+
 ## 2026-09-07 | Stage 4 提交并停止后续阶段
 
 - 任务：完成 Stage 4 后提交并推送，按用户要求不进入 Stage 5。

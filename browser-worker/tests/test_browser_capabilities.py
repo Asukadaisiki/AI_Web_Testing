@@ -1,11 +1,166 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 import unittest
+from unittest.mock import MagicMock, patch
 
-from app.application.browser.service import execute_browser_capability
+from app.application.browser.service import (
+    _BrowserCapabilityRuntime,
+    execute_browser_capability,
+)
 
 
 class BrowserCapabilityContractTest(unittest.TestCase):
+    def test_same_project_sessions_apply_independent_context_policies(self) -> None:
+        database = MagicMock()
+        database.get.side_effect = [
+            SimpleNamespace(requirements_json={"clean_context": False}),
+            SimpleNamespace(requirements_json={"clean_context": True}),
+        ]
+        flow_arguments = {
+            "base_url": "http://local.test",
+            "steps": [{"url": "/flow"}],
+        }
+
+        with (
+            patch.object(
+                _BrowserCapabilityRuntime,
+                "run",
+                side_effect=lambda operation: operation(),
+            ),
+            patch(
+                "app.application.browser.service._storage_state_path",
+                return_value="/tmp/project-7-state.json",
+            ),
+            patch(
+                "app.application.browser.service._collect_flow_a11y",
+                return_value=[],
+            ) as collect_flow,
+        ):
+            normal = execute_browser_capability(
+                database,
+                capability="explore_flow",
+                project_id=7,
+                conversation_id="101",
+                arguments=flow_arguments,
+            )
+            clean = execute_browser_capability(
+                database,
+                capability="explore_flow",
+                project_id=7,
+                conversation_id="102",
+                arguments=flow_arguments,
+            )
+
+        self.assertEqual(
+            collect_flow.call_args_list[0].kwargs["storage_state_path"],
+            "/tmp/project-7-state.json",
+        )
+        self.assertIsNone(
+            collect_flow.call_args_list[1].kwargs["storage_state_path"]
+        )
+        self.assertEqual(
+            [call.kwargs["session_id"] for call in collect_flow.call_args_list],
+            [101, 102],
+        )
+        self.assertEqual(
+            normal["context_evidence"],
+            {
+                "version": "v1",
+                "clean_context_requested": False,
+                "storage_state_loaded": True,
+                "planning_session_id": 101,
+            },
+        )
+        self.assertEqual(
+            clean["context_evidence"],
+            {
+                "version": "v1",
+                "clean_context_requested": True,
+                "storage_state_loaded": False,
+                "planning_session_id": 102,
+            },
+        )
+
+    def test_validate_page_elements_does_not_read_planning_context(self) -> None:
+        database = MagicMock()
+        database.get.side_effect = AssertionError(
+            "validation must not load browser context"
+        )
+
+        result = execute_browser_capability(
+            database,
+            capability="validate_page_elements",
+            project_id=7,
+            conversation_id="101",
+            arguments={
+                "required_elements": [
+                    {
+                        "id": "submit",
+                        "description": "submit button",
+                        "keywords": ["Submit"],
+                    }
+                ],
+                "a11y_nodes": [
+                    {
+                        "node_id": "button-1",
+                        "role": "button",
+                        "name": "Submit",
+                    }
+                ],
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        database.get.assert_not_called()
+
+    def test_explore_page_returns_clean_context_evidence(self) -> None:
+        database = MagicMock()
+        database.get.return_value = SimpleNamespace(
+            requirements_json={"clean_context": True}
+        )
+        page = MagicMock()
+        page.url = "http://local.test/page"
+
+        with (
+            patch.object(
+                _BrowserCapabilityRuntime,
+                "run",
+                side_effect=lambda operation: operation(),
+            ),
+            patch(
+                "app.application.browser.service._storage_state_path",
+            ) as storage_state_path,
+            patch(
+                "app.application.browser.service."
+                "BrowserSessionManager.get_or_create_context",
+                return_value=(MagicMock(), page),
+            ) as get_context,
+            patch(
+                "app.application.browser.service.collect_a11y_nodes",
+                return_value=[],
+            ),
+        ):
+            result = execute_browser_capability(
+                database,
+                capability="explore_page",
+                project_id=7,
+                conversation_id="103",
+                arguments={"url": "http://local.test/page"},
+            )
+
+        storage_state_path.assert_not_called()
+        get_context.assert_called_once_with(103, storage_state_path=None)
+        self.assertEqual(
+            result["context_evidence"],
+            {
+                "version": "v1",
+                "clean_context_requested": True,
+                "storage_state_loaded": False,
+                "planning_session_id": 103,
+            },
+        )
+
     def test_validate_page_elements_returns_grounded_candidates(self) -> None:
         result = execute_browser_capability(
             None,  # type: ignore[arg-type]

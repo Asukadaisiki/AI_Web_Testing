@@ -77,13 +77,30 @@ def execute_browser_capability(
             validated_arguments.model_dump(exclude_none=True)
         )
     planning_session_id = int(conversation_id) if conversation_id.isdigit() else 0
+    requirements = _planning_session_requirements(session, planning_session_id)
+    clean_context_requested = requirements.get("clean_context") is True
+    storage_state_path = (
+        None if clean_context_requested else _storage_state_path(project_id)
+    )
+    context_evidence = _context_evidence(
+        planning_session_id=planning_session_id,
+        clean_context_requested=clean_context_requested,
+        storage_state_path=storage_state_path,
+    )
     if capability == "explore_page":
         arguments = ExplorePageArguments.model_validate(arguments).model_dump(
             exclude_none=True
         )
-        url = _resolve_page_url(session, planning_session_id, arguments)
+        url = _resolve_page_url(requirements, arguments)
         return _BrowserCapabilityRuntime.run(
-            lambda: _explore_page(project_id, planning_session_id, url, arguments)
+            lambda: _explore_page(
+                project_id,
+                planning_session_id,
+                url,
+                arguments,
+                storage_state_path,
+                context_evidence,
+            )
         )
     if capability == "explore_flow":
         arguments = ExploreFlowArguments.model_validate(arguments).model_dump(
@@ -91,13 +108,14 @@ def execute_browser_capability(
         )
         base_url = str(arguments.get("base_url") or "").strip()
         if not base_url:
-            base_url = _session_base_url(session, planning_session_id)
+            base_url = _session_base_url(requirements)
         return _BrowserCapabilityRuntime.run(
             lambda: _explore_flow(
-                project_id,
                 planning_session_id,
                 base_url,
                 arguments,
+                storage_state_path,
+                context_evidence,
             )
         )
     raise ValueError(f"unsupported browser capability: {capability}")
@@ -112,11 +130,20 @@ def _storage_state_path(project_id: int) -> str | None:
     return str(path) if path.exists() else None
 
 
-def _session_base_url(session: Session, planning_session_id: int) -> str:
+def _planning_session_requirements(
+    session: Session,
+    planning_session_id: int,
+) -> dict[str, Any]:
     if planning_session_id < 1:
-        return ""
+        return {}
     record = session.get(AIPlanningSession, planning_session_id)
-    entry = (record.requirements_json or {}).get("entry_url_or_page", "") if record else ""
+    if record is None or not isinstance(record.requirements_json, dict):
+        return {}
+    return record.requirements_json
+
+
+def _session_base_url(requirements: dict[str, Any]) -> str:
+    entry = requirements.get("entry_url_or_page", "")
     if not isinstance(entry, str) or not entry.startswith(("http://", "https://")):
         return ""
     parsed = urlparse(entry)
@@ -124,19 +151,32 @@ def _session_base_url(session: Session, planning_session_id: int) -> str:
 
 
 def _resolve_page_url(
-    session: Session,
-    planning_session_id: int,
+    requirements: dict[str, Any],
     arguments: dict[str, Any],
 ) -> str:
     url = str(arguments.get("url") or "").strip()
     if not url:
         raise ValueError("url is required")
     if not url.startswith(("http://", "https://")):
-        base_url = _session_base_url(session, planning_session_id)
+        base_url = _session_base_url(requirements)
         if not base_url:
             raise ValueError("relative url requires a session base URL")
         url = urljoin(base_url + "/", url.lstrip("/"))
     return url
+
+
+def _context_evidence(
+    *,
+    planning_session_id: int,
+    clean_context_requested: bool,
+    storage_state_path: str | None,
+) -> dict[str, Any]:
+    return {
+        "version": "v1",
+        "clean_context_requested": clean_context_requested,
+        "storage_state_loaded": storage_state_path is not None,
+        "planning_session_id": planning_session_id,
+    }
 
 
 def _explore_page(
@@ -144,10 +184,12 @@ def _explore_page(
     planning_session_id: int,
     url: str,
     arguments: dict[str, Any],
+    storage_state_path: str | None,
+    context_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     _, page = BrowserSessionManager.get_or_create_context(
         planning_session_id,
-        storage_state_path=_storage_state_path(project_id),
+        storage_state_path=storage_state_path,
     )
     page.goto(url, timeout=30000, wait_until="domcontentloaded")
     try:
@@ -166,10 +208,15 @@ def _explore_page(
         "url": page.url,
         "a11y_nodes": nodes,
         "element_count": len(nodes),
+        "context_evidence": context_evidence,
     }
-    meta = load_storage_state_meta(
-        Path(get_settings().storage_state_dir),
-        project_id=project_id,
+    meta = (
+        load_storage_state_meta(
+            Path(get_settings().storage_state_dir),
+            project_id=project_id,
+        )
+        if storage_state_path
+        else None
     )
     if meta and is_storage_state_stale(meta):
         result["warning"] = "会话状态超过24小时未更新"
@@ -179,10 +226,11 @@ def _explore_page(
 
 
 def _explore_flow(
-    project_id: int,
     planning_session_id: int,
     base_url: str,
     arguments: dict[str, Any],
+    storage_state_path: str | None,
+    context_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     steps = arguments.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -190,7 +238,7 @@ def _explore_flow(
     pages = _collect_flow_a11y(
         steps,
         base_url=base_url or None,
-        storage_state_path=_storage_state_path(project_id),
+        storage_state_path=storage_state_path,
         session_id=planning_session_id,
         core_user_flow_text=arguments.get("flow_description"),
     )
@@ -204,6 +252,7 @@ def _explore_flow(
         ],
         "total_pages": len(pages),
         "total_elements": sum(page.get("element_count", 0) for page in pages),
+        "context_evidence": context_evidence,
     }
 
 

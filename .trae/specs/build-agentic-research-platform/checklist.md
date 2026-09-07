@@ -9,7 +9,7 @@
 - [x] 每步都有 observation/target/candidates/final match 或 failure reason/evidence。
 - [x] 独立 Oracle 参与 task_success 判定，不能仅依赖 DSL 自身断言。
 - [x] 负向变异 Goal 必须失败，且不能被 Agent 文本结论覆盖。
-- [ ] 所有实验记录 Goal/Dataset/Model/Prompt/Browser/Code/Policy/seed 版本。
+- [x] 所有实验记录 Goal/Dataset/Model/Prompt/Browser/Code/Policy/seed 版本。
 - [ ] VLM 默认关闭，启用时有明确策略、预算和调用记录。
 - [x] 所有新增 Schema 都有版本号和兼容迁移。
 - [x] 每个 Stage 通过后已更新任务、检查清单、执行日志和缺陷日志。
@@ -82,16 +82,16 @@
 
 ## Stage 5：Metrics 与实验编排
 
-- [ ] success、grounding、invalid action、verification、recovery 指标独立计算。
-- [ ] steps、retries、tokens、latency、vision cost 可重算。
-- [ ] 零分母和缺失真值返回 null 与原因。
-- [ ] Experiment API 支持固定版本、seed、variant 和 repetition。
-- [ ] 每个 repetition 使用 clean browser context。
-- [ ] warm-up 与正式样本分开。
-- [ ] `research-e2e run/verify/export` 可用。
-- [ ] 独立 Oracle 失败时 task_success=false。
-- [ ] Canonical Goal 连续 3 次通过。
-- [ ] Stage 5 已 commit 并 push。
+- [x] success、grounding、invalid action、verification、recovery 指标独立计算。
+- [x] steps、retries、tokens、latency、vision cost 可重算。
+- [x] 零分母和缺失真值返回 null 与原因。
+- [x] Experiment API 支持固定版本、seed、variant 和 repetition。
+- [x] 每个 repetition 使用 clean browser context。
+- [x] warm-up 与正式样本分开。
+- [x] `research-e2e run/verify/export` 可用。
+- [x] 独立 Oracle 失败时 task_success=false。
+- [x] Canonical Goal 连续 3 次通过。
+- [x] Stage 5 已 commit 并 push。
 
 ## Stage 6：Action IR
 

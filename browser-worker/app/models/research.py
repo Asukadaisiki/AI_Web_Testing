@@ -243,3 +243,46 @@ class ResearchTransition(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+class ResearchOracleResult(Base):
+    __tablename__ = "research_oracle_results"
+    __table_args__ = (
+        CheckConstraint(
+            "schema_version = 'research.oracle.v1'",
+            name="schema_version",
+        ),
+        CheckConstraint(
+            "length(content_sha256) = 64 AND "
+            "lower(content_sha256) = content_sha256",
+            name="content_sha256",
+        ),
+    )
+
+    research_run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("research_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    execution_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("test_case_runs.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluator: Mapped[str] = mapped_column(String(200), nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    decision_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        nullable=False,
+    )

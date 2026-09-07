@@ -5,9 +5,10 @@ import json
 import socket
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from urllib.request import Request, urlopen
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 import uvicorn
@@ -112,7 +113,11 @@ class BrowserCapabilityHTTPTest(unittest.TestCase):
 
         app = FastAPI()
         app.include_router(build_api_router())
-        app.dependency_overrides[get_db_session] = lambda: None
+        database = MagicMock()
+        database.get.return_value = SimpleNamespace(
+            requirements_json={"clean_context": False}
+        )
+        app.dependency_overrides[get_db_session] = lambda: database
 
         self.validate_patch = patch.object(
             capability_routes,

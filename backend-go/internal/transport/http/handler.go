@@ -15,6 +15,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/planning"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/projects"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/research"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -28,6 +29,7 @@ type Handler struct {
 	cases       cases.Store
 	executions  *execution.Store
 	corrections *corrections.Store
+	research    ResearchAPI
 }
 
 type AgentAPI interface {
@@ -70,12 +72,16 @@ func NewServer(
 	caseStore cases.Store,
 	executionStore *execution.Store,
 	correctionStore *corrections.Store,
+	researchAPI ...ResearchAPI,
 ) *server.Hertz {
 	h := server.New(server.WithHostPorts(address))
 	handler := &Handler{
 		agent: agent, planning: planningStore,
 		projects: projectStore, cases: caseStore, executions: executionStore,
 		corrections: correctionStore,
+	}
+	if len(researchAPI) > 0 {
+		handler.research = researchAPI[0]
 	}
 
 	h.GET("/health", handler.health)
@@ -124,6 +130,9 @@ func NewServer(
 	v2.GET("/executions/:execution_id", handler.getExecution)
 	v2.DELETE("/executions/:execution_id", handler.deleteExecution)
 	v2.POST("/corrections", handler.createCorrection)
+	if handler.research != nil {
+		registerResearchRoutes(v2, handler)
+	}
 	return h
 }
 
@@ -455,10 +464,21 @@ func writeServiceError(c *app.RequestContext, err error) {
 		writeError(c, consts.StatusNotFound, err)
 	case errors.Is(err, corrections.ErrNotFound):
 		writeError(c, consts.StatusNotFound, err)
+	case errors.Is(err, research.ErrNotFound):
+		writeError(c, consts.StatusNotFound, err)
 	case errors.Is(err, planning.ErrConflict),
 		errors.Is(err, projects.ErrConflict),
 		errors.Is(err, execution.ErrConflict):
 		writeError(c, consts.StatusConflict, err)
+	case errors.Is(err, research.ErrConflict),
+		errors.Is(err, research.ErrInvalidStatus),
+		errors.Is(err, research.ErrTerminalStatus),
+		errors.Is(err, research.ErrBrokenLink),
+		errors.Is(err, research.ErrSourceChanged):
+		writeError(c, consts.StatusConflict, err)
+	case errors.Is(err, research.ErrInvalid),
+		errors.Is(err, research.ErrUnsupportedSchema):
+		writeError(c, consts.StatusBadRequest, err)
 	case errors.Is(err, agentservice.ErrRunNotWaitingForUser),
 		errors.Is(err, agentservice.ErrToolCallMismatch):
 		writeError(c, consts.StatusConflict, err)

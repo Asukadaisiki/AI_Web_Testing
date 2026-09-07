@@ -139,6 +139,13 @@ func TestPostgresSourceReaderProjectsRealAgentEvents(t *testing.T) {
 	if snapshot.AgentRunStatus != "completed" || len(snapshot.Events) != 9 {
 		t.Fatalf("source snapshot status/events = %s/%d", snapshot.AgentRunStatus, len(snapshot.Events))
 	}
+	if snapshot.FinalRunLinks.AgentRunID == nil ||
+		*snapshot.FinalRunLinks.AgentRunID != agentRun.ID ||
+		snapshot.FinalRunLinks.GenerationID != nil ||
+		snapshot.FinalRunLinks.BatchID != nil ||
+		snapshot.FinalRunLinks.ExecutionID != nil {
+		t.Fatalf("source final run links = %#v", snapshot.FinalRunLinks)
+	}
 	if snapshot.Cursor.AgentRunID != agentRun.ID ||
 		snapshot.Cursor.AgentEventSeq != int64(len(snapshot.Events)) ||
 		len(snapshot.Cursor.ApprovedGenerationIDs) != 0 ||
@@ -159,6 +166,13 @@ func TestPostgresSourceReaderProjectsRealAgentEvents(t *testing.T) {
 	hash, err := research.CanonicalSHA256(copyForHash)
 	if err != nil || hash != snapshot.SourceSHA256 {
 		t.Fatalf("source hash = %s, recomputed = %s, err = %v", snapshot.SourceSHA256, hash, err)
+	}
+	encodedSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encodedSnapshot, []byte("final_run_links")) {
+		t.Fatalf("Stage 4 source JSON exposed final run links: %s", encodedSnapshot)
 	}
 
 	transitions, manifest, err := research.NewProjector().Project(snapshot)
