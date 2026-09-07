@@ -16,6 +16,7 @@ const (
 	ToolResultSchemaV1       = "agent.tool_result.v1"
 	ModelToolSummarySchemaV1 = "agent.model_tool_summary.v1"
 	ToolSummaryPolicyV1      = "deterministic.exploration.v1"
+	StructuredObservationV1  = "agent.structured_observation.v1"
 )
 
 type PromptSpec struct {

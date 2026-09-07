@@ -104,6 +104,7 @@ type ToolResultActionSummary struct {
 type ToolResultPageSummary struct {
 	URL           string                     `json:"url,omitempty"`
 	PageState     string                     `json:"page_state,omitempty"`
+	PageKind      string                     `json:"page_kind,omitempty"`
 	Revision      int                        `json:"revision,omitempty"`
 	Status        string                     `json:"status,omitempty"`
 	Description   string                     `json:"description,omitempty"`
@@ -116,18 +117,136 @@ type ToolResultPageSummary struct {
 }
 
 type ModelToolSummary struct {
-	SchemaVersion string                   `json:"schema_version"`
-	PolicyVersion string                   `json:"policy_version"`
-	Tool          string                   `json:"tool"`
-	Source        ToolResultSource         `json:"source"`
-	SummarySHA256 string                   `json:"summary_sha256,omitempty"`
-	Success       *bool                    `json:"success,omitempty"`
-	Status        string                   `json:"status,omitempty"`
-	Warnings      []string                 `json:"warnings,omitempty"`
-	Failures      []ToolResultErrorSummary `json:"failures,omitempty"`
-	Pages         []ToolResultPageSummary  `json:"pages,omitempty"`
-	Truncation    ToolResultTruncation     `json:"truncation"`
-	ReferenceOnly bool                     `json:"reference_only,omitempty"`
+	SchemaVersion string                    `json:"schema_version"`
+	PolicyVersion string                    `json:"policy_version"`
+	Tool          string                    `json:"tool"`
+	Source        ToolResultSource          `json:"source"`
+	SummarySHA256 string                    `json:"summary_sha256,omitempty"`
+	Success       *bool                     `json:"success,omitempty"`
+	Status        string                    `json:"status,omitempty"`
+	Warnings      []string                  `json:"warnings,omitempty"`
+	Failures      []ToolResultErrorSummary  `json:"failures,omitempty"`
+	Observation   *StructuredObservation    `json:"observation,omitempty"`
+	DSL           *ToolResultDSLSummary     `json:"dsl,omitempty"`
+	Report        *ToolResultReportSummary  `json:"report,omitempty"`
+	Repair        *ToolResultRepairSummary  `json:"repair,omitempty"`
+	Generic       *ToolResultGenericSummary `json:"generic,omitempty"`
+	Pages         []ToolResultPageSummary   `json:"pages,omitempty"`
+	Truncation    ToolResultTruncation      `json:"truncation"`
+	ReferenceOnly bool                      `json:"reference_only,omitempty"`
+}
+
+type StructuredObservation struct {
+	SchemaVersion     string                      `json:"schema_version"`
+	PageStates        []ObservedPageState         `json:"page_states,omitempty"`
+	ElementGroups     []ObservedElementGroup      `json:"element_groups,omitempty"`
+	CandidateCoverage []ObservedCandidateCoverage `json:"candidate_coverage,omitempty"`
+	ActionOptions     []ObservedActionOption      `json:"action_options,omitempty"`
+	VerificationFacts []ObservedVerificationFact  `json:"verification_facts,omitempty"`
+	RecoveryHints     []ObservedRecoveryHint      `json:"recovery_hints,omitempty"`
+}
+
+type ObservedPageState struct {
+	PageState    string `json:"page_state,omitempty"`
+	PageKind     string `json:"page_kind,omitempty"`
+	URL          string `json:"url,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Revision     int    `json:"revision,omitempty"`
+	ElementCount int    `json:"element_count"`
+}
+
+type ObservedElementGroup struct {
+	PageState      string   `json:"page_state,omitempty"`
+	Category       string   `json:"category"`
+	Count          int      `json:"count"`
+	VerifiedCount  int      `json:"verified_count,omitempty"`
+	Representative []string `json:"representative,omitempty"`
+}
+
+type ObservedCandidateCoverage struct {
+	PageState       string `json:"page_state,omitempty"`
+	Category        string `json:"category,omitempty"`
+	Label           string `json:"label,omitempty"`
+	Role            string `json:"role,omitempty"`
+	SelectorCount   int    `json:"selector_count"`
+	PrimarySelector string `json:"primary_selector,omitempty"`
+	Source          string `json:"source,omitempty"`
+	Executable      bool   `json:"executable"`
+	AmbiguousCount  int    `json:"ambiguous_count,omitempty"`
+}
+
+type ObservedActionOption struct {
+	PageState       string `json:"page_state,omitempty"`
+	Action          string `json:"action,omitempty"`
+	Target          string `json:"target,omitempty"`
+	Status          string `json:"status,omitempty"`
+	EvidenceCount   int    `json:"evidence_count,omitempty"`
+	SideEffect      string `json:"side_effect,omitempty"`
+	IdempotencyHint string `json:"idempotency_hint,omitempty"`
+}
+
+type ObservedVerificationFact struct {
+	PageState string `json:"page_state,omitempty"`
+	Kind      string `json:"kind"`
+	Label     string `json:"label,omitempty"`
+	Selector  string `json:"selector,omitempty"`
+	Source    string `json:"source,omitempty"`
+}
+
+type ObservedRecoveryHint struct {
+	Category string `json:"category"`
+	Reason   string `json:"reason"`
+	Action   string `json:"action"`
+}
+
+type ToolResultDSLSummary struct {
+	GenerationID any      `json:"generation_id,omitempty"`
+	Profile      string   `json:"profile,omitempty"`
+	CaseName     string   `json:"case_name,omitempty"`
+	StepCount    int      `json:"step_count"`
+	Actions      []string `json:"actions,omitempty"`
+	Targets      []string `json:"targets,omitempty"`
+}
+
+type ToolResultReportSummary struct {
+	BatchID           any                      `json:"batch_id,omitempty"`
+	Status            string                   `json:"status,omitempty"`
+	CaseResults       []ToolResultCaseResult   `json:"case_results,omitempty"`
+	FailureSignals    []ToolResultFailureBrief `json:"failure_signals,omitempty"`
+	RecommendedAction string                   `json:"recommended_action,omitempty"`
+}
+
+type ToolResultCaseResult struct {
+	CaseID         any    `json:"case_id,omitempty"`
+	CaseName       string `json:"case_name,omitempty"`
+	Status         string `json:"status,omitempty"`
+	PassedSteps    int    `json:"passed_steps,omitempty"`
+	TotalSteps     int    `json:"total_steps,omitempty"`
+	FailureSummary string `json:"failure_summary,omitempty"`
+}
+
+type ToolResultFailureBrief struct {
+	Category            string `json:"category,omitempty"`
+	Stage               string `json:"stage,omitempty"`
+	Code                string `json:"code,omitempty"`
+	Title               string `json:"title,omitempty"`
+	Retryable           *bool  `json:"retryable,omitempty"`
+	SideEffectCommitted any    `json:"side_effect_committed,omitempty"`
+}
+
+type ToolResultRepairSummary struct {
+	Status                      string                   `json:"status,omitempty"`
+	Strategy                    string                   `json:"strategy,omitempty"`
+	Reason                      string                   `json:"reason,omitempty"`
+	SourceBatchID               any                      `json:"source_batch_id,omitempty"`
+	SourceExecutionID           any                      `json:"source_execution_id,omitempty"`
+	OriginalActionReplayAllowed *bool                    `json:"original_action_replay_allowed,omitempty"`
+	FailureSignals              []ToolResultFailureBrief `json:"failure_signals,omitempty"`
+}
+
+type ToolResultGenericSummary struct {
+	Status       string   `json:"status,omitempty"`
+	TopLevelKeys []string `json:"top_level_keys,omitempty"`
 }
 
 type rawExploreResult struct {
@@ -220,12 +339,12 @@ func BuildModelToolSummary(
 	content json.RawMessage,
 	sourceEventSeq int64,
 ) (string, error) {
-	if !IsExplorationTool(tool) {
-		return string(content), nil
-	}
 	payload, err := NewToolResultEventPayload(tool, content)
 	if err != nil {
 		return "", err
+	}
+	if !IsExplorationTool(tool) {
+		return buildCapabilityToolSummary(tool, content, payload, sourceEventSeq)
 	}
 	var raw rawExploreResult
 	if err := json.Unmarshal(content, &raw); err != nil {
@@ -269,6 +388,7 @@ func BuildModelToolSummary(
 		}
 	}
 	normalizeSummary(&summary)
+	summary.Observation = buildStructuredObservation(summary.Pages, summary.Failures)
 	return encodeBoundedSummary(&summary)
 }
 
@@ -355,7 +475,8 @@ func CompactExplorationTranscript(transcript []Message) []Message {
 func explorationSummaryBytes(messages []Message) int {
 	total := 0
 	for _, message := range messages {
-		if _, ok := decodeModelToolSummary(message.Content); ok {
+		if summary, ok := decodeModelToolSummary(message.Content); ok &&
+			IsExplorationTool(summary.Tool) {
 			total += len(message.Content)
 		}
 	}
@@ -380,6 +501,7 @@ func decodeModelToolSummary(content string) (ModelToolSummary, bool) {
 func summarizePage(page rawPage) ToolResultPageSummary {
 	result := ToolResultPageSummary{
 		URL: boundedUTF8(page.URL, 2048), PageState: boundedUTF8(page.PageState, 256),
+		PageKind: classifyPageKind(page.URL, page.PageState, page.Description),
 		Revision: page.Revision, Status: boundedUTF8(firstNonEmptyString(page.Status, "success"), 64),
 		Description: boundedUTF8(page.Description, 512), ElementCount: page.ElementCount,
 		Failure: summarizeFailure(page.Failure),
@@ -424,6 +546,163 @@ func summarizePage(page rawPage) ToolResultPageSummary {
 		result.Actions = append(result.Actions, summarized)
 	}
 	return result
+}
+
+func buildCapabilityToolSummary(
+	tool string,
+	content json.RawMessage,
+	payload ToolResultEventPayload,
+	sourceEventSeq int64,
+) (string, error) {
+	summary := ModelToolSummary{
+		SchemaVersion: ModelToolSummarySchemaV1,
+		PolicyVersion: ToolSummaryPolicyV1,
+		Tool:          tool,
+		Source: ToolResultSource{
+			EventSeq:      sourceEventSeq,
+			ContentSHA256: payload.ContentSHA256,
+			ContentBytes:  payload.ContentBytes,
+		},
+		Truncation: ToolResultTruncation{
+			TargetBytes: ModelToolSummaryTargetBytes,
+			HardLimit:   ModelToolSummaryHardLimitBytes,
+		},
+	}
+	var value map[string]any
+	if err := json.Unmarshal(content, &value); err != nil {
+		return "", fmt.Errorf("decode tool result: %w", err)
+	}
+	summary.Status = boundedUTF8(stringValue(value["status"]), 64)
+	switch tool {
+	case "generate_dsl":
+		summary.DSL = summarizeDSLResult(value)
+	case "get_report":
+		summary.Report = summarizeReportResult(value)
+	case "fix_and_retry":
+		summary.Repair = summarizeRepairResult(value)
+	default:
+		summary.Generic = summarizeGenericResult(value)
+	}
+	return encodeBoundedSummary(&summary)
+}
+
+func summarizeDSLResult(value map[string]any) *ToolResultDSLSummary {
+	result := &ToolResultDSLSummary{
+		GenerationID: scalarValue(value["generation_id"]),
+	}
+	caseValue, _ := value["case"].(map[string]any)
+	if caseValue == nil {
+		return result
+	}
+	result.Profile = boundedUTF8(stringValue(caseValue["profile"]), 64)
+	result.CaseName = boundedUTF8(stringValue(caseValue["name"]), 256)
+	steps, _ := caseValue["steps"].([]any)
+	result.StepCount = len(steps)
+	actionSet := make(map[string]bool)
+	targetSet := make(map[string]bool)
+	for _, rawStep := range steps {
+		step, _ := rawStep.(map[string]any)
+		if step == nil {
+			continue
+		}
+		if action := boundedUTF8(stringValue(step["action"]), 64); action != "" {
+			actionSet[action] = true
+		}
+		if target := boundedUTF8(stringValue(step["target"]), 256); target != "" {
+			targetSet[target] = true
+		}
+	}
+	result.Actions = sortedKeys(actionSet, 16)
+	result.Targets = sortedKeys(targetSet, 24)
+	return result
+}
+
+func summarizeReportResult(value map[string]any) *ToolResultReportSummary {
+	result := &ToolResultReportSummary{
+		BatchID: scalarValue(firstPresent(value, "id", "batch_id")),
+		Status:  boundedUTF8(stringValue(value["status"]), 64),
+	}
+	if analysis, _ := value["analysis"].(map[string]any); analysis != nil {
+		result.RecommendedAction = boundedUTF8(
+			stringValue(analysis["recommended_action"]), 128,
+		)
+		for _, rawCase := range arrayValue(analysis["case_results"]) {
+			caseResult, _ := rawCase.(map[string]any)
+			if caseResult == nil {
+				continue
+			}
+			result.CaseResults = append(result.CaseResults, ToolResultCaseResult{
+				CaseID:         scalarValue(caseResult["case_id"]),
+				CaseName:       boundedUTF8(stringValue(caseResult["case_name"]), 256),
+				Status:         boundedUTF8(stringValue(caseResult["status"]), 64),
+				PassedSteps:    intFromAny(caseResult["passed_steps"]),
+				TotalSteps:     intFromAny(caseResult["total_steps"]),
+				FailureSummary: boundedUTF8(stringValue(caseResult["failure_summary"]), 512),
+			})
+		}
+		result.FailureSignals = append(
+			result.FailureSignals,
+			summarizeFailureSignals(arrayValue(analysis["failure_signals"]))...,
+		)
+	}
+	result.FailureSignals = append(
+		result.FailureSignals,
+		summarizeFailureSignals(arrayValue(value["failure_signals"]))...,
+	)
+	result.FailureSignals = deduplicateFailureBriefs(result.FailureSignals)
+	return result
+}
+
+func summarizeRepairResult(value map[string]any) *ToolResultRepairSummary {
+	result := &ToolResultRepairSummary{
+		Status:            boundedUTF8(stringValue(value["status"]), 64),
+		Strategy:          boundedUTF8(stringValue(value["strategy"]), 64),
+		Reason:            boundedUTF8(stringValue(value["reason"]), 512),
+		SourceBatchID:     scalarValue(value["source_batch_id"]),
+		SourceExecutionID: scalarValue(value["source_execution_id"]),
+		FailureSignals:    summarizeFailureSignals(arrayValue(value["failure_signals"])),
+	}
+	if replay, ok := boolValue(value["original_action_replay_allowed"]); ok {
+		result.OriginalActionReplayAllowed = &replay
+	}
+	return result
+}
+
+func summarizeGenericResult(value map[string]any) *ToolResultGenericSummary {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, boundedUTF8(key, 128))
+	}
+	sort.Strings(keys)
+	if len(keys) > 32 {
+		keys = keys[:32]
+	}
+	return &ToolResultGenericSummary{
+		Status:       boundedUTF8(stringValue(value["status"]), 64),
+		TopLevelKeys: keys,
+	}
+}
+
+func summarizeFailureSignals(values []any) []ToolResultFailureBrief {
+	result := make([]ToolResultFailureBrief, 0, len(values))
+	for _, raw := range values {
+		signal, _ := raw.(map[string]any)
+		if signal == nil {
+			continue
+		}
+		brief := ToolResultFailureBrief{
+			Category:            boundedUTF8(stringValue(signal["category"]), 64),
+			Stage:               boundedUTF8(stringValue(signal["stage"]), 64),
+			Code:                boundedUTF8(stringValue(signal["code"]), 128),
+			Title:               boundedUTF8(stringValue(signal["title"]), 256),
+			SideEffectCommitted: scalarValue(signal["side_effect_committed"]),
+		}
+		if retryable, ok := boolValue(signal["retryable"]); ok {
+			brief.Retryable = &retryable
+		}
+		result = append(result, brief)
+	}
+	return deduplicateFailureBriefs(result)
 }
 
 func summarizeAction(action rawAction) ToolResultActionSummary {
@@ -573,6 +852,9 @@ func encodeBoundedSummary(summary *ModelToolSummary) (string, error) {
 
 func encodeSummary(summary *ModelToolSummary) ([]byte, error) {
 	summary.SummarySHA256 = ""
+	if IsExplorationTool(summary.Tool) {
+		summary.Observation = buildStructuredObservation(summary.Pages, summary.Failures)
+	}
 	for range 3 {
 		encoded, err := json.Marshal(summary)
 		if err != nil {
@@ -858,6 +1140,438 @@ func isSemanticRole(role string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func buildStructuredObservation(
+	pages []ToolResultPageSummary,
+	failures []ToolResultErrorSummary,
+) *StructuredObservation {
+	observation := &StructuredObservation{SchemaVersion: StructuredObservationV1}
+	groupByKey := make(map[string]*ObservedElementGroup)
+	candidateByKey := make(map[string]ObservedCandidateCoverage)
+	labelCounts := make(map[string]int)
+	factByKey := make(map[string]ObservedVerificationFact)
+	actionByKey := make(map[string]ObservedActionOption)
+	for _, page := range pages {
+		observation.PageStates = append(observation.PageStates, ObservedPageState{
+			PageState:    page.PageState,
+			PageKind:     firstNonEmptyString(page.PageKind, "unknown"),
+			URL:          page.URL,
+			Status:       page.Status,
+			Revision:     page.Revision,
+			ElementCount: page.ElementCount,
+		})
+		for _, node := range page.A11yNodes {
+			category := classifyElement(node)
+			groupKey := page.PageState + "\x00" + category
+			group := groupByKey[groupKey]
+			if group == nil {
+				group = &ObservedElementGroup{
+					PageState: page.PageState,
+					Category:  category,
+				}
+				groupByKey[groupKey] = group
+			}
+			group.Count++
+			if len(node.VerifiedSelectors) > 0 {
+				group.VerifiedCount++
+			}
+			label := observationLabel(node)
+			if label != "" && len(group.Representative) < 6 &&
+				!containsString(group.Representative, label) {
+				group.Representative = append(group.Representative, label)
+			}
+			if label != "" {
+				labelCounts[node.PageState+"\x00"+category+"\x00"+label]++
+				candidate := ObservedCandidateCoverage{
+					PageState:     firstNonEmptyString(node.PageState, page.PageState),
+					Category:      category,
+					Label:         label,
+					Role:          node.Role,
+					SelectorCount: len(node.VerifiedSelectors),
+					Executable:    len(node.VerifiedSelectors) > 0 && !node.Disabled,
+				}
+				if len(node.VerifiedSelectors) > 0 {
+					candidate.PrimarySelector = node.VerifiedSelectors[0].Selector
+					candidate.Source = firstNonEmptyString(
+						node.VerifiedSelectors[0].Source,
+						node.VerifiedSelectors[0].Strategy,
+					)
+				}
+				candidateByKey[candidate.PageState+"\x00"+category+"\x00"+label] = candidate
+			}
+			if fact := verificationFactForNode(page.PageState, node); fact.Kind != "" {
+				factByKey[fact.PageState+"\x00"+fact.Kind+"\x00"+fact.Label+"\x00"+fact.Selector] = fact
+			}
+		}
+		for _, action := range page.Actions {
+			option := ObservedActionOption{
+				PageState:       firstNonEmptyString(action.PageState, page.PageState),
+				Action:          action.Action,
+				Target:          action.Target,
+				Status:          action.Status,
+				EvidenceCount:   action.EvidenceCount,
+				SideEffect:      actionSideEffect(action.Action, action.Target),
+				IdempotencyHint: actionIdempotencyHint(action.Action, action.Target),
+			}
+			key := option.PageState + "\x00" + option.Action + "\x00" + option.Target + "\x00" + option.Status
+			actionByKey[key] = option
+		}
+		if page.Failure != nil {
+			observation.RecoveryHints = append(
+				observation.RecoveryHints,
+				recoveryHintFromFailure(*page.Failure),
+			)
+		}
+	}
+	for key, candidate := range candidateByKey {
+		candidate.AmbiguousCount = labelCounts[key]
+		candidateByKey[key] = candidate
+	}
+	for _, failure := range failures {
+		observation.RecoveryHints = append(
+			observation.RecoveryHints,
+			recoveryHintFromFailure(failure),
+		)
+	}
+	for _, group := range groupByKey {
+		sort.Strings(group.Representative)
+		observation.ElementGroups = append(observation.ElementGroups, *group)
+	}
+	for _, candidate := range candidateByKey {
+		observation.CandidateCoverage = append(observation.CandidateCoverage, candidate)
+	}
+	for _, action := range actionByKey {
+		observation.ActionOptions = append(observation.ActionOptions, action)
+	}
+	for _, fact := range factByKey {
+		observation.VerificationFacts = append(observation.VerificationFacts, fact)
+	}
+	observation.RecoveryHints = deduplicateRecoveryHints(observation.RecoveryHints)
+	normalizeStructuredObservation(observation)
+	if len(observation.PageStates) == 0 &&
+		len(observation.ElementGroups) == 0 &&
+		len(observation.CandidateCoverage) == 0 &&
+		len(observation.ActionOptions) == 0 &&
+		len(observation.VerificationFacts) == 0 &&
+		len(observation.RecoveryHints) == 0 {
+		return nil
+	}
+	return observation
+}
+
+func classifyPageKind(url, pageState, description string) string {
+	value := strings.ToLower(url + " " + pageState + " " + description)
+	switch {
+	case strings.Contains(value, "view_cart") || strings.Contains(value, "cart"):
+		return "cart"
+	case strings.Contains(value, "product_details"):
+		return "product_detail"
+	case strings.Contains(value, "search="):
+		return "search_results"
+	case strings.Contains(value, "/products"):
+		return "products"
+	case strings.Contains(value, "login"):
+		return "login"
+	case strings.Contains(value, "checkout"):
+		return "checkout"
+	default:
+		return "unknown"
+	}
+}
+
+func classifyElement(node ToolResultNodeSummary) string {
+	role := strings.ToLower(strings.TrimSpace(node.Role))
+	tag := ""
+	inputType := ""
+	if node.DOM != nil {
+		tag = strings.ToLower(strings.TrimSpace(node.DOM.Tag))
+		inputType = strings.ToLower(strings.TrimSpace(node.DOM.Attrs["type"]))
+	}
+	name := strings.ToLower(node.Name)
+	switch {
+	case role == "searchbox" || role == "textbox" || tag == "input" ||
+		tag == "textarea" || inputType == "search":
+		return "input"
+	case role == "button" || tag == "button" || inputType == "submit":
+		return "button"
+	case role == "link" || tag == "a":
+		return "link"
+	case role == "spinbutton" || inputType == "number":
+		return "numeric_input"
+	case role == "product" || strings.Contains(name, "product"):
+		return "product"
+	case role == "row" || strings.Contains(name, "rs.") || strings.Contains(name, "blue top"):
+		return "cart_or_product_row"
+	case role == "heading":
+		return "heading"
+	case role == "cell":
+		return "cell"
+	default:
+		return "text"
+	}
+}
+
+func observationLabel(node ToolResultNodeSummary) string {
+	if trimmed := strings.TrimSpace(node.Name); trimmed != "" {
+		return boundedUTF8(trimmed, 256)
+	}
+	if node.DOM != nil {
+		for _, key := range []string{"id", "name", "placeholder", "aria-label", "href"} {
+			if value := strings.TrimSpace(node.DOM.Attrs[key]); value != "" {
+				return boundedUTF8(value, 256)
+			}
+		}
+	}
+	return ""
+}
+
+func verificationFactForNode(
+	pageState string,
+	node ToolResultNodeSummary,
+) ObservedVerificationFact {
+	label := observationLabel(node)
+	if label == "" {
+		return ObservedVerificationFact{}
+	}
+	category := classifyElement(node)
+	if category != "cart_or_product_row" && category != "cell" && category != "heading" {
+		return ObservedVerificationFact{}
+	}
+	fact := ObservedVerificationFact{
+		PageState: pageState,
+		Kind:      category,
+		Label:     label,
+		Source:    firstNonEmptyString(node.Source, "a11y_or_dom"),
+	}
+	if len(node.VerifiedSelectors) > 0 {
+		fact.Selector = node.VerifiedSelectors[0].Selector
+	}
+	return fact
+}
+
+func actionSideEffect(action, target string) string {
+	value := strings.ToLower(action + " " + target)
+	switch {
+	case strings.Contains(value, "add to cart") ||
+		strings.Contains(value, "submit") ||
+		strings.Contains(value, "delete") ||
+		strings.Contains(value, "checkout") ||
+		strings.Contains(value, "place order"):
+		return "external_or_business_state"
+	case strings.Contains(value, "click") || strings.Contains(value, "input") ||
+		strings.Contains(value, "fill") || strings.Contains(value, "goto"):
+		return "browser_state"
+	default:
+		return "none"
+	}
+}
+
+func actionIdempotencyHint(action, target string) string {
+	value := strings.ToLower(action + " " + target)
+	switch {
+	case strings.Contains(value, "add to cart") ||
+		strings.Contains(value, "submit") ||
+		strings.Contains(value, "delete") ||
+		strings.Contains(value, "place order"):
+		return "non_idempotent"
+	case strings.Contains(value, "input") || strings.Contains(value, "fill") ||
+		strings.Contains(value, "goto") || strings.Contains(value, "wait") ||
+		strings.Contains(value, "assert"):
+		return "idempotent"
+	default:
+		return "unknown"
+	}
+}
+
+func recoveryHintFromFailure(failure ToolResultErrorSummary) ObservedRecoveryHint {
+	code := strings.ToLower(failure.Code + " " + failure.Message)
+	switch {
+	case strings.Contains(code, "locator") || strings.Contains(code, "match") ||
+		strings.Contains(code, "selector") || strings.Contains(code, "not found"):
+		return ObservedRecoveryHint{
+			Category: "locator",
+			Reason:   "Target evidence is missing, stale, ambiguous, or non-executable.",
+			Action:   "re_explore_then_regenerate_dsl",
+		}
+	case strings.Contains(code, "condition") || strings.Contains(code, "precondition") ||
+		strings.Contains(code, "postcondition"):
+		return ObservedRecoveryHint{
+			Category: "verification",
+			Reason:   "A precondition or postcondition did not match the observed page state.",
+			Action:   "inspect_condition_semantics_before_retry",
+		}
+	case strings.Contains(code, "navigation") || strings.Contains(code, "url"):
+		return ObservedRecoveryHint{
+			Category: "navigation",
+			Reason:   "The browser did not reach the expected page state.",
+			Action:   "re_explore_navigation_path",
+		}
+	default:
+		return ObservedRecoveryHint{
+			Category: "unknown",
+			Reason:   "Failure could not be classified from structured fields.",
+			Action:   "manual_reconcile",
+		}
+	}
+}
+
+func normalizeStructuredObservation(observation *StructuredObservation) {
+	sort.Slice(observation.PageStates, func(i, j int) bool {
+		left, right := observation.PageStates[i], observation.PageStates[j]
+		if left.PageState != right.PageState {
+			return left.PageState < right.PageState
+		}
+		return left.URL < right.URL
+	})
+	sort.Slice(observation.ElementGroups, func(i, j int) bool {
+		left, right := observation.ElementGroups[i], observation.ElementGroups[j]
+		if left.PageState != right.PageState {
+			return left.PageState < right.PageState
+		}
+		return left.Category < right.Category
+	})
+	sort.Slice(observation.CandidateCoverage, func(i, j int) bool {
+		left, right := observation.CandidateCoverage[i], observation.CandidateCoverage[j]
+		if left.PageState != right.PageState {
+			return left.PageState < right.PageState
+		}
+		if left.Category != right.Category {
+			return left.Category < right.Category
+		}
+		return left.Label < right.Label
+	})
+	sort.Slice(observation.ActionOptions, func(i, j int) bool {
+		left, right := observation.ActionOptions[i], observation.ActionOptions[j]
+		if left.PageState != right.PageState {
+			return left.PageState < right.PageState
+		}
+		if left.Action != right.Action {
+			return left.Action < right.Action
+		}
+		return left.Target < right.Target
+	})
+	sort.Slice(observation.VerificationFacts, func(i, j int) bool {
+		left, right := observation.VerificationFacts[i], observation.VerificationFacts[j]
+		if left.PageState != right.PageState {
+			return left.PageState < right.PageState
+		}
+		if left.Kind != right.Kind {
+			return left.Kind < right.Kind
+		}
+		return left.Label < right.Label
+	})
+}
+
+func deduplicateRecoveryHints(hints []ObservedRecoveryHint) []ObservedRecoveryHint {
+	seen := make(map[string]ObservedRecoveryHint, len(hints))
+	for _, hint := range hints {
+		key := hint.Category + "\x00" + hint.Action
+		seen[key] = hint
+	}
+	result := make([]ObservedRecoveryHint, 0, len(seen))
+	for _, hint := range seen {
+		result = append(result, hint)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Category != result[j].Category {
+			return result[i].Category < result[j].Category
+		}
+		return result[i].Action < result[j].Action
+	})
+	return result
+}
+
+func deduplicateFailureBriefs(failures []ToolResultFailureBrief) []ToolResultFailureBrief {
+	seen := make(map[string]ToolResultFailureBrief, len(failures))
+	for _, failure := range failures {
+		encoded, _ := json.Marshal(failure)
+		seen[string(encoded)] = failure
+	}
+	result := make([]ToolResultFailureBrief, 0, len(seen))
+	for _, failure := range seen {
+		result = append(result, failure)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, _ := json.Marshal(result[i])
+		right, _ := json.Marshal(result[j])
+		return bytes.Compare(left, right) < 0
+	})
+	return result
+}
+
+func sortedKeys(values map[string]bool, limit int) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	if limit > 0 && len(result) > limit {
+		return result[:limit]
+	}
+	return result
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func stringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return ""
+	}
+}
+
+func boolValue(value any) (bool, bool) {
+	typed, ok := value.(bool)
+	return typed, ok
+}
+
+func arrayValue(value any) []any {
+	typed, _ := value.([]any)
+	return typed
+}
+
+func firstPresent(value map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if result, exists := value[key]; exists {
+			return result
+		}
+	}
+	return nil
+}
+
+func scalarValue(value any) any {
+	switch typed := value.(type) {
+	case nil, string, bool, float64, int, int64, json.Number:
+		return typed
+	default:
+		return nil
+	}
+}
+
+func intFromAny(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		result, _ := typed.Int64()
+		return int(result)
+	default:
+		return 0
 	}
 }
 

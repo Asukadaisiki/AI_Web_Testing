@@ -141,6 +141,29 @@ func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 		len(action.TargetEvidence) != 1 {
 		t.Fatalf("action = %#v", action)
 	}
+	if summary.Observation == nil ||
+		summary.Observation.SchemaVersion != StructuredObservationV1 ||
+		len(summary.Observation.PageStates) != 1 {
+		t.Fatalf("observation = %#v", summary.Observation)
+	}
+	if summary.Observation.PageStates[0].PageKind != "products" {
+		t.Fatalf("page kind = %#v", summary.Observation.PageStates[0])
+	}
+	if !hasElementGroup(summary.Observation.ElementGroups, "S1", "button", 1, 1) ||
+		!hasElementGroup(summary.Observation.ElementGroups, "S1", "product", 1, 0) {
+		t.Fatalf("element groups = %#v", summary.Observation.ElementGroups)
+	}
+	if !hasCandidate(
+		summary.Observation.CandidateCoverage,
+		"S1", "button", "Add to cart", "#add", true,
+	) {
+		t.Fatalf("candidate coverage = %#v", summary.Observation.CandidateCoverage)
+	}
+	if len(summary.Observation.ActionOptions) != 1 ||
+		summary.Observation.ActionOptions[0].SideEffect != "external_or_business_state" ||
+		summary.Observation.ActionOptions[0].IdempotencyHint != "non_idempotent" {
+		t.Fatalf("action options = %#v", summary.Observation.ActionOptions)
+	}
 }
 
 func TestBuildModelToolSummaryBoundsUTF8AndReportsOmissions(t *testing.T) {
@@ -238,15 +261,148 @@ func TestCompactExplorationTranscriptReferencesSupersededState(t *testing.T) {
 	}
 }
 
-func TestNonExplorationToolResultKeepsExistingTranscriptSemantics(t *testing.T) {
-	raw := json.RawMessage(`{"status":"pending","report":{"required":true}}`)
+func TestNonExplorationToolResultUsesStructuredModelSummary(t *testing.T) {
+	raw := json.RawMessage(`{
+		"id":3,
+		"status":"failed",
+		"analysis":{
+			"recommended_action":"targeted_retest",
+			"case_results":[{
+				"case_id":7,
+				"case_name":"Blue Top cart",
+				"status":"failed",
+				"passed_steps":8,
+				"total_steps":10,
+				"failure_summary":"Postcondition failed with a very long internal report that should be bounded."
+			}],
+			"failure_signals":[{
+				"category":"postcondition",
+				"stage":"postcondition",
+				"code":"condition.postcondition.text_visible.failed",
+				"title":"Cart item missing",
+				"retryable":false,
+				"side_effect_committed":true
+			}]
+		},
+		"report":{"large":"this full nested report must not be echoed to the model"}
+	}`)
 	content, err := BuildModelToolSummary("get_report", raw, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if content != string(raw) {
-		t.Fatalf("content = %s", content)
+	if content == string(raw) || strings.Contains(content, `"large"`) {
+		t.Fatalf("raw report leaked into model summary: %s", content)
 	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.Tool != "get_report" ||
+		summary.Report == nil ||
+		summary.Report.Status != "failed" ||
+		summary.Report.RecommendedAction != "targeted_retest" ||
+		len(summary.Report.CaseResults) != 1 ||
+		len(summary.Report.FailureSignals) != 1 {
+		t.Fatalf("report summary = %#v", summary.Report)
+	}
+	if summary.Report.FailureSignals[0].Category != "postcondition" ||
+		summary.Report.FailureSignals[0].SideEffectCommitted != true {
+		t.Fatalf("failure brief = %#v", summary.Report.FailureSignals[0])
+	}
+}
+
+func TestGenerateAndRepairToolResultsUseDecisionSummaries(t *testing.T) {
+	generated := json.RawMessage(`{
+		"generation_id":8,
+		"case":{
+			"profile":"research-v1",
+			"name":"Blue Top cart",
+			"steps":[
+				{"action":"goto","target":"Products","value":"/products"},
+				{"action":"input","target":"Search Product","value":"Blue Top"},
+				{"action":"click","target":"Add to cart"}
+			]
+		}
+	}`)
+	content, err := BuildModelToolSummary("generate_dsl", generated, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generation ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &generation); err != nil {
+		t.Fatal(err)
+	}
+	if generation.DSL == nil ||
+		generation.DSL.GenerationID != float64(8) ||
+		generation.DSL.StepCount != 3 ||
+		!containsString(generation.DSL.Actions, "click") ||
+		!containsString(generation.DSL.Targets, "Search Product") {
+		t.Fatalf("dsl summary = %#v", generation.DSL)
+	}
+
+	repair := json.RawMessage(`{
+		"source_batch_id":3,
+		"source_execution_id":9,
+		"status":"manual_required",
+		"strategy":"manual_reconcile",
+		"reason":"The original action must not be replayed.",
+		"original_action_replay_allowed":false,
+		"failure_signals":[{"category":"assertion","title":"Cart quantity mismatch"}],
+		"source_dsl":{"steps":[{"action":"click","target":"Add to cart"}]}
+	}`)
+	content, err = BuildModelToolSummary("fix_and_retry", repair, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repairSummary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &repairSummary); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "source_dsl") ||
+		repairSummary.Repair == nil ||
+		repairSummary.Repair.Strategy != "manual_reconcile" ||
+		repairSummary.Repair.OriginalActionReplayAllowed == nil ||
+		*repairSummary.Repair.OriginalActionReplayAllowed {
+		t.Fatalf("repair summary = %s", content)
+	}
+}
+
+func hasElementGroup(
+	groups []ObservedElementGroup,
+	pageState string,
+	category string,
+	count int,
+	verified int,
+) bool {
+	for _, group := range groups {
+		if group.PageState == pageState &&
+			group.Category == category &&
+			group.Count == count &&
+			group.VerifiedCount == verified {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCandidate(
+	candidates []ObservedCandidateCoverage,
+	pageState string,
+	category string,
+	label string,
+	selector string,
+	executable bool,
+) bool {
+	for _, candidate := range candidates {
+		if candidate.PageState == pageState &&
+			candidate.Category == category &&
+			candidate.Label == label &&
+			candidate.PrimarySelector == selector &&
+			candidate.Executable == executable {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNewToolResultEventPayloadRejectsInvalidUTF8(t *testing.T) {

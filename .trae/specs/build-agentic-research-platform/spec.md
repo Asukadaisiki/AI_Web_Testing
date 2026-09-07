@@ -266,6 +266,14 @@ Natural Language Goal
 
 研究 DSL v1 SHALL 表达 Intent、Target、Preconditions、Action、Postconditions 和幂等语义。
 
+#### Scenario: 结构化模型可见观察
+
+- **WHEN** Browser Worker 或控制面工具向 AI 返回探索、生成、报告或修复结果
+- **THEN** 模型可见内容 SHALL 使用结构化摘要，而不是完整原始 JSON
+- **AND** 探索摘要 SHALL 分类 page state、element group、candidate coverage、action option、verification fact 和 recovery hint
+- **AND** `generate_dsl`、`get_report`、`fix_and_retry` SHALL 只暴露生成摘要、报告摘要和修复决策摘要
+- **AND** 完整原始 tool result 仍 SHALL 持久化并通过 source event seq、content hash 和 bytes 可审计
+
 #### Scenario: Research DSL 校验
 
 - **WHEN** research-v1 DSL 缺失 Intent 或必需 Preconditions/Postconditions

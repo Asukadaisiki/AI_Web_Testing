@@ -353,6 +353,13 @@ func requestSerializationBudget(
 		}
 		if json.Unmarshal([]byte(message.Content), &envelope) == nil &&
 			envelope.SchemaVersion == agent.ModelToolSummarySchemaV1 {
+			var summary struct {
+				Tool string `json:"tool"`
+			}
+			if json.Unmarshal([]byte(message.Content), &summary) != nil ||
+				!agent.IsExplorationTool(summary.Tool) {
+				continue
+			}
 			budget.ExplorationSummaryBytes += len(message.Content)
 			budget.ExplorationSummaryCount++
 		}

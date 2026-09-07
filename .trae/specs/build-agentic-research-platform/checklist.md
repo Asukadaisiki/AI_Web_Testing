@@ -108,7 +108,8 @@
 - [x] 非 live implementation checkpoint 已通过 Go/Python/Frontend 静态与单元门禁。
 - [ ] Canonical Goal 连续 3 次通过。（因 BUG-155 成本熔断缺失，按用户要求暂停 live E2E）
 - [ ] 3 次 Canonical 均有不同的官方 DeepSeek response/request ID，且可在平台调用记录中核对。（暂停 live E2E）
-- [ ] 恢复 live E2E 前完成调用/token/失败重试预算、非探索工具摘要、cache hit/miss 聚合和成本预估。
+- [x] 模型可见工具结果包含结构化 Observation/DSL/Report/Repair 摘要，完整原始结果仅通过 source ref/hash 审计。
+- [ ] 恢复 live E2E 前完成调用/token/失败重试预算、cache hit/miss 聚合和成本预估。
 - [ ] Stage 6 已 commit 并 push。
 
 ## Stage 7：Ablation

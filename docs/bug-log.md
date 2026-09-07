@@ -78,8 +78,8 @@
   3. 查询 `agent_events` 中 `research.llm_call` 的 usage 和 `agent_runs.transcript_json`。
 - 影响：一次未通过验收的 Stage 6 live run 产生 40 次真实 DeepSeek 调用，累计 input 3,532,269、output 137,661、total 3,669,930 tokens；`prompt_cache_hit_tokens=0`，全部 input 计入 `prompt_cache_miss_tokens`。用户余额被快速消耗，且验收摘要不能第一时间暴露 cache 命中为 0。
 - 根因：验收策略没有先执行受限 live smoke 和成本上限；Agent loop 缺少单 run 最大调用数、最大 token、最大失败修复次数和上下文字节熔断；cache 依赖稳定长前缀，但实际请求包含持续变化的 tool result、report、failure signal、run id、时间和 DSL/IR 内容；现有摘要压缩只覆盖 `explore_page/explore_flow`，非探索工具结果未做模型可见摘要。
-- 处理：待修复。计划新增 live E2E 预算门禁、失败路径熔断、provider cache hit/miss 聚合、非探索工具模型摘要、最大 transcript 字节控制，并要求正式 3 repetition 前先输出成本预估并由用户确认。
-- 验证：未验证；当前仅完成只读审计并暂停真实模型调用。
+- 处理：部分修复。已将模型可见工具结果改为结构化摘要：探索结果新增 page state、element group、candidate coverage、action option、verification fact 和 recovery hint；`generate_dsl`、`get_report`、`fix_and_retry` 不再把完整 JSON 直接回填 transcript，而是提供 DSL/Report/Repair 摘要。仍待新增 live E2E 预算门禁、失败路径熔断、provider cache hit/miss 聚合、最大 transcript 字节控制，并要求正式 3 repetition 前先输出成本预估并由用户确认。
+- 验证：结构化摘要部分已通过 Go 全量、vet/build 和 `git diff --check`；未执行 live E2E，未调用模型。
 - 关联记录：`docs/execution-log.md#2026-09-07--stage-6-live-e2e-成本与缓存命中审计`
 
 ## BUG-154 | Stage 5 首次验收在应用 0042 前运行 PostgreSQL 测试

@@ -56,6 +56,46 @@
 
 ## 任务记录
 
+## 2026-09-07 | 评估 Blue Top 链路可靠性与结构化观察需求
+
+- 任务：回答当前链路是否能完成 Blue Top 加购物车任务，并梳理需要覆盖的测试场景和结构化返回数据要求。
+- 操作：基于 Stage 0-6 已有实验结果、BUG-155/156 和用户对 AI 可理解结构信息的要求，按 happy path、定位失败、页面理解失败、DSL/Runner 合同失败、验证失败、副作用重试和上下文压缩风险重新划分验收场景；随后在 Go Agent 层实现模型可见结构化摘要，未执行 E2E，未调用模型。
+- 结果：当前 legacy/canonical 链路已能在 Stage 5 完成 Blue Top happy path 和 wrong-price 负向 Oracle，但 research-v1/Action IR live 未连续通过，不能宣称产品级可靠。本轮将 `explore_page`/`explore_flow` 的模型可见摘要升级为结构化 Observation，包含 page state、element group、candidate coverage、action option、verification fact 和 recovery hint；同时将 `generate_dsl`、`get_report`、`fix_and_retry` 的模型可见结果改为 DSL/Report/Repair 摘要，完整原始 tool result 继续通过 source seq、hash 和 bytes 审计，避免完整 JSON 直接回填 transcript。
+- 验证：未执行 live E2E、未调用模型。通过 `cd backend-go && go test -count=1 ./internal/agent ./internal/platform/llm ./internal/harness ./internal/tools`、`cd backend-go && go test -count=1 ./...`、`cd backend-go && go vet ./...`、`cd backend-go && go build ./...`、`git diff --check`。
+- 后续：恢复 live E2E 前继续补调用/token/失败重试预算、provider cache hit/miss 聚合和成本预估；再用非 live fixture 扩展诊断矩阵，最后做一次低成本 live smoke。
+
+## 2026-09-07 | 梳理 Blue Top 购物车目标的 AI 失败重试链路
+
+- 任务：基于澄清后的 AI/后端职责边界，重新描述“添加蓝色短袖商品到购物车”的完整执行链路，并重点说明 AI 在失败重试环节的具体决策逻辑。
+- 操作：按自然语言目标、探索、元素验证、DSL/Action IR、审批、执行、报告、失败归因、恢复决策和学习样本沉淀拆分链路；未执行 E2E，未调用模型。
+- 结果：明确 AI 不只是生成 DSL，还负责页面理解、探索选择、验证请求、失败分析和 recovery plan；但每一步都必须被工具事实、DSL 校验、审批门、非幂等副作用约束、Runner evidence、FailureSignal 和 Oracle 裁决包住。失败重试逻辑应先分类 failure，再判定动作是否已提交副作用，之后决定 re-explore、regenerate DSL、retry same DSL、manual reconcile 或 stop。
+- 验证：本轮为架构说明，无测试执行。
+- 后续：将该链路转化为 Stage 7 前的诊断实验协议，记录每个 AI recovery decision 的输入事实、候选方案、裁决原因和后续验证结果。
+
+## 2026-09-07 | 澄清 AI 在执行链路中的职责边界
+
+- 任务：纠正“AI 只负责规划和生成 DSL”的过窄表述，明确 AI 在元素验证、页面理解、失败分析、恢复决策、重试和学习闭环中的职责。
+- 操作：基于当前 AgentCore + Browser Worker 架构和 Stage 0-6 实验记录，重新划分 AI 建议、工具验证、确定性执行和后端裁决的边界；未执行 E2E，未调用模型。
+- 结果：准确边界应为：AI 负责理解用户目标、决定探索范围、请求元素验证、提出候选定位与 DSL/Action IR、分析失败、选择恢复策略并生成修正版候选；Browser Worker/Runner 负责用 Playwright/A11y/DOM 产生可验证事实；Go 后端负责 DSL 校验、审批门、执行调度、重试安全、报告归因和持久化裁决。AI 可以参与验证和决策，但不能绕过结构化工具事实直接执行、直接判定通过或直接学习改写生产策略。
+- 验证：本轮为架构澄清，无测试执行。
+- 后续：后续诊断实验需要单独记录 AI 的每类决策输入、可选项、工具验证结果、最终裁决和反馈样本，支撑重试与学习，而不是只记录最终生成的 DSL。
+
+## 2026-09-07 | 复盘实验覆盖的问题类型与证据缺口
+
+- 任务：回答 Stage 0-6 既有实验是否覆盖用户关心的错误元素、页面理解、DSL/Playwright 合同、错误归因、元素/动作分类、重试、验证、上下文膨胀和压缩丢失问题。
+- 操作：只读检索 `docs/bug-log.md`、`docs/execution-log.md`、`.trae/specs/build-agentic-research-platform`，并查询本地 PostgreSQL 中 Stage 5/6 ResearchRun 状态、metrics 和关键 Agent event 失败片段；未执行 E2E，未调用模型。
+- 结果：既有实验确实暴露并修复过多类问题：搜索控件缺失和广告误判、未验证复合 CSS、错误页面归因、跨页 click 被广告截断、Playwright trigger 错误、pre/postcondition 验证时序、非幂等 click 重放、FailureSignal 归因、探索摘要压缩和无 accessible name preflight 崩溃。但 Stage 5 的 `grounding_accuracy` 与 `invalid_action_rate` 仍因缺少标注真值/分类事实记录为 unavailable，Stage 6 live 只说明 research-v1 合同在真实路径上仍有 preflight/condition 语义与上下文治理问题，未形成完整通过实验。
+- 验证：本轮只读审计，无测试执行。
+- 后续：下一步不应继续跑 live E2E，应先把实验协议升级为“错误类型可观测”的诊断矩阵：每个 run 显式记录目标选择、候选来源、最终 locator、condition 翻译、动作副作用、重试决策、失败归因、压缩输入/丢弃字段和 token 成本，确保实验能解释失败而不仅报告成功率。
+
+## 2026-09-07 | 复盘 Stage 3-6 实验结果与 token 暴增原因
+
+- 任务：回答当前已做实验、实验结果、失败原因、token 暴增原因及合理性问题，明确 token 上限不是根因方案。
+- 操作：只读查询本地 PostgreSQL 的 `research_experiments`、`research_runs`、`agent_events`，按实验汇总 completed/cancelled、task_success、LLM calls、tokens、cache hit/miss、prompt request bytes 和 tool result 类型；未执行 E2E，未调用模型。
+- 结果：Stage 4/5 实验已完成并产出可重建指标；Stage 6 做过两轮 research-v1 live 尝试，均为 3-run 实验但只有 1 个 completed、2 个 cancelled，未达到 provider-verified 验收。Stage 6 最新 live 轮累计 40 次官方调用、3,669,930 total tokens、cache hit 为 0；暴增原因是完整 Agent transcript 随探索、生成、报告、失败修复持续累积，且非探索工具结果未摘要化，不是单次 A11y 树本身不可接受。
+- 验证：本轮只读审计，无测试执行。
+- 后续：成本治理应聚焦实验协议和上下文结构重构：先固定最小实验样本和失败停止规则，再做非探索工具摘要、上下文窗口重建和 provider cache 友好请求形态，最后恢复低成本 live smoke。
+
 ## 2026-09-07 | Stage 6 Action IR 非 live checkpoint
 
 - 任务：按用户要求先完成并推送 Stage 6 implementation checkpoint，暂停真实 E2E 和官方模型调用。

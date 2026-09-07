@@ -268,7 +268,8 @@
 - [ ] Task 6.5：恢复 live E2E 前完成成本控制方案。
   - [ ] 单次 live run 最大 LLM call 数和最大 input/output/total tokens 硬上限。
   - [ ] 失败修复次数、重复报告读取和长 transcript 字节数熔断。
-  - [ ] `get_report`、`fix_and_retry`、`generate_dsl` 等非探索工具结果提供模型可见摘要，不直接回填完整 JSON。
+  - [x] `explore_page` / `explore_flow` 的模型可见摘要包含结构化 Observation：page state、element group、candidate coverage、action option、verification fact 和 recovery hint。
+  - [x] `get_report`、`fix_and_retry`、`generate_dsl` 等非探索工具结果提供模型可见摘要，不直接回填完整 JSON。
   - [ ] provider evidence summary 聚合 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 和 cache hit ratio。
   - [ ] 正式 live E2E 前输出成本预估并等待用户确认。
 
