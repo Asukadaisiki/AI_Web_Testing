@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException
 
-from app.api.capability_context import validate_capability_context
 from app.application.browser import execute_browser_capability
-from app.db import get_db_session
 from app.schemas.browser_capabilities import (
     BrowserCapabilityName,
     BrowserCapabilityRequest,
@@ -22,20 +19,14 @@ router = APIRouter(prefix="/internal/browser-capabilities", tags=["internal-brow
 def invoke_browser_capability(
     capability: BrowserCapabilityName,
     payload: BrowserCapabilityRequest,
-    session: Session = Depends(get_db_session),
 ) -> BrowserCapabilityResponse:
-    validate_capability_context(
-        session,
-        actor_user_id=payload.actor_user_id,
-        project_id=payload.project_id,
-        conversation_id=payload.conversation_id,
-    )
     try:
         result = execute_browser_capability(
-            session,
+            None,
             capability=capability,
             project_id=payload.project_id,
             conversation_id=payload.conversation_id,
+            context=payload.context.model_dump(exclude_none=True),
             arguments=payload.arguments,
         )
     except ValueError as exc:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -12,11 +11,6 @@ from app.application.browser.service import (
 
 class BrowserCapabilityContractTest(unittest.TestCase):
     def test_same_project_sessions_apply_independent_context_policies(self) -> None:
-        database = MagicMock()
-        database.get.side_effect = [
-            SimpleNamespace(requirements_json={"clean_context": False}),
-            SimpleNamespace(requirements_json={"clean_context": True}),
-        ]
         flow_arguments = {
             "base_url": "http://local.test",
             "steps": [{"url": "/flow"}],
@@ -38,17 +32,19 @@ class BrowserCapabilityContractTest(unittest.TestCase):
             ) as collect_flow,
         ):
             normal = execute_browser_capability(
-                database,
+                None,
                 capability="explore_flow",
                 project_id=7,
                 conversation_id="101",
+                context={"clean_context": False},
                 arguments=flow_arguments,
             )
             clean = execute_browser_capability(
-                database,
+                None,
                 capability="explore_flow",
                 project_id=7,
                 conversation_id="102",
+                context={"clean_context": True},
                 arguments=flow_arguments,
             )
 
@@ -82,17 +78,13 @@ class BrowserCapabilityContractTest(unittest.TestCase):
             },
         )
 
-    def test_validate_page_elements_does_not_read_planning_context(self) -> None:
-        database = MagicMock()
-        database.get.side_effect = AssertionError(
-            "validation must not load browser context"
-        )
-
+    def test_validate_page_elements_does_not_read_browser_context(self) -> None:
         result = execute_browser_capability(
-            database,
+            None,
             capability="validate_page_elements",
             project_id=7,
             conversation_id="101",
+            context={"clean_context": True},
             arguments={
                 "required_elements": [
                     {
@@ -112,13 +104,8 @@ class BrowserCapabilityContractTest(unittest.TestCase):
         )
 
         self.assertTrue(result["valid"])
-        database.get.assert_not_called()
 
     def test_explore_page_returns_clean_context_evidence(self) -> None:
-        database = MagicMock()
-        database.get.return_value = SimpleNamespace(
-            requirements_json={"clean_context": True}
-        )
         page = MagicMock()
         page.url = "http://local.test/page"
 
@@ -142,10 +129,11 @@ class BrowserCapabilityContractTest(unittest.TestCase):
             ),
         ):
             result = execute_browser_capability(
-                database,
+                None,
                 capability="explore_page",
                 project_id=7,
                 conversation_id="103",
+                context={"clean_context": True},
                 arguments={"url": "http://local.test/page"},
             )
 

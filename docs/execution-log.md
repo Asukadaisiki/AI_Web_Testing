@@ -56,6 +56,46 @@
 
 ## 任务记录
 
+## 2026-09-07 | 同步 Browser Worker 收敛变更到 GitHub
+
+- 任务：将已完成并验证的 Browser Worker 去后端化收敛变更同步到 GitHub。
+- 操作：复查当前分支、远端、工作区状态和变更统计；准备提交包含 Go migrate、Go execution worker、Browser execution RPC、Browser Worker DB/ORM/Alembic 删除、文档和测试更新的完整变更集。
+- 结果：待提交并推送到 `origin/main`。
+- 验证：同步前已完成 Go 全量测试、Go-migrated PostgreSQL 集成测试、Browser Worker Python 全量测试、真实 HTTP E2E、结构检索和 `git diff --check`。
+- 后续：推送后确认最新 commit hash 和工作区状态。
+
+## 2026-09-07 | 完成 Browser Worker 去后端化收敛
+
+- 任务：完成“先瘦身，后重构，最后测试”的 Browser Worker 收敛目标。
+- 操作：将数据库 schema 管理迁到 Go `cmd/migrate` 与 `internal/dbschema/schema.sql`；删除 Browser Worker 的 Alembic、SQLAlchemy ORM、DB session、旧清理脚本、旧 Python 执行持久化服务、旧 execution worker 和无引用服务；移除 Browser Worker 的 SQLAlchemy/Alembic/psycopg 依赖；将 production compose 的迁移和执行消费改为 Go 二进制；保留 Python 侧为 Browser capability/execution RPC、Playwright runner、locator、reporter 和 failure signal 纯逻辑。
+- 结果：`browser-worker` 不再包含业务数据库模型、迁移链或执行队列持久化职责；官方执行链路为 Go migrate -> Go AgentService -> Go execution-worker -> Python stateless Browser execution RPC -> Go 持久化报告。
+- 验证：Go migrate 在全新空库和仅有旧 `alembic_version` 的库上均成功建出 18 张表，且无 `alembic_version`/`dsl_anti_patterns`；本地 HTTP E2E 通过（新库、创建 case、创建 batch、Go worker 调用 Browser RPC 执行 `example.com`，Batch/Job/Execution 全部 passed，2 steps）；`cd backend-go && go test -count=1 ./... && go vet ./... && go build ./...` 通过；`cd backend-go && TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing_e2e_tmp go test -count=1 ./internal/execution ./internal/integration ./internal/research -run 'TestPostgres|TestControlPlane|TestAgent' -v` 通过；`cd browser-worker && uv run python -m unittest discover -s tests -v && uv run python -m compileall -q app tests scripts` 通过（150 passed / 2 skipped）；Browser Worker DB/ORM/Alembic 引用检索通过；`git diff --check` 通过。`docker compose -f compose.prod.yml config` 未运行，本机无 `docker` 命令。
+- 后续：无。
+
+## 2026-09-07 | 将执行队列消费迁移到 Go Worker
+
+- 任务：继续按“先瘦身，后重构，最后测试”收敛 Browser Worker，减少 Python 侧传统后端职责。
+- 操作：新增 Python 无状态 `/api/v1/internal/browser-executions` RPC，直接执行 DSL 并返回 report/failure_signal，不读写业务数据库；新增 Go `cmd/execution-worker`、Browser Worker execution client、`execution.Store` 的 claim/start/finish 持久化方法和过期 lease 安全隔离逻辑；生产 compose 默认改为 Go execution worker；删除 Python 旧 `execution_worker.py`、`execution_batches.py`、`executions.py`、Python reporting analysis 和 anti-pattern 持久化服务。
+- 结果：官方执行队列消费、Run 创建、Report/FailureSignal 持久化、Job/Batch 终态刷新已迁到 Go 主路径。Browser Worker 更接近“浏览器执行器”：HTTP API 负责页面探索和无状态 Playwright 执行，业务状态机由 Go 控制面负责。
+- 验证：`cd backend-go && go test -count=1 ./... && go vet ./... && go build ./...` 通过；`cd backend-go && TEST_DATABASE_URL=postgres://bytedance@127.0.0.1:5432/ai_web_testing go test -count=1 ./internal/execution -run 'TestPostgres' -v` 通过；`cd browser-worker && uv run python -m unittest discover -s tests -v && uv run python -m compileall -q app tests scripts` 通过（151 passed / 2 skipped）；`git diff --check` 通过。
+- 后续：继续把 `app/models` 中只服务旧执行持久化的部分和 Alembic 迁移链迁出 Browser Worker；如需要批次级分析，后续在 Go 控制面重建。
+
+## 2026-09-07 | Browser Worker capability 入口瘦身
+
+- 任务：按“先瘦身，后重构，最后测试”的目标，先收敛 Browser Worker 的 HTTP capability 边界。
+- 操作：删除 Python `api/capability_context.py`，移除 Browser capability 路由和 `create_app()` 启动阶段的 SQLAlchemy 依赖；新增 `BrowserCapabilityContext` 请求合同；Go Browser Worker client 支持 context resolver，并在 AgentService 启动时从 Go planning store 解析 `clean_context`、`entry_url_or_page` 与项目关联；同步更新部署和架构文档，把 Python execution worker 标注为过渡组件。
+- 结果：Browser capability API 不再读取业务数据库，也不再负责 Project/Planning ownership 校验；该职责回到 Go 控制面。当前 Python execution worker、模型、Alembic 和报告服务仍保留，因为它们仍是正式执行队列消费端，后续需迁移到 Go 后再删除。
+- 验证：`cd backend-go && go test -count=1 ./... && go vet ./... && go build ./...` 通过；`cd browser-worker && uv run python -m unittest discover -s tests -v && uv run python -m compileall -q app tests scripts` 通过（157 passed / 2 skipped）；`git diff --check` 通过。`ruff` 未运行，环境中未安装 `ruff`；`docker compose -f compose.prod.yml config` 未运行，本机无 `docker` 命令。
+- 后续：第二阶段应实现 Go 侧执行 Job consumer 或显式执行 RPC，把 `execution_worker.py`、Python 业务 models/services/reporters 和 Alembic 迁移链从主路径移除。
+
+## 2026-09-07 | 评估 Browser Worker 架构边界
+
+- 任务：回答 `browser-worker` 如果只作为浏览器控制进程，当前架构是否过重、是否偏离预期边界。
+- 操作：检查 `browser-worker` 目录结构、README、FastAPI 入口、Browser capability 路由、浏览器能力服务、执行队列和用例执行服务，判断 Python 侧仍承担的职责范围。
+- 结果：确认当前 `browser-worker` 仍保留数据库模型、Alembic、执行队列、lease/heartbeat、测试运行持久化、报告分析等传统后端职责；这与“Go AgentService 作为控制面、Python 只做 Browser Worker”的目标不完全一致，建议后续收敛为无业务持久化的浏览器能力适配器。
+- 验证：执行只读代码检查，未运行测试。
+- 后续：如进入重构，应先制定边界收敛 Spec，再按“能力接口瘦身 -> 持久化迁移到 Go -> Python 旧服务删除”的顺序推进。
+
 ## 2026-09-07 | 评估 Blue Top 链路可靠性与结构化观察需求
 
 - 任务：回答当前链路是否能完成 Blue Top 加购物车任务，并梳理需要覆盖的测试场景和结构化返回数据要求。

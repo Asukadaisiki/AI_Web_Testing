@@ -3,15 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from app.models import TestCase, TestCaseRun, User
+from app.application.browser.execution import execute_browser_case
 from app.schemas.dsl import DSLCase, load_canonical_dsl
-from app.schemas.executions import CaseExecutionRequest
-from app.services.executions import ExecutionRunContext, _normalize_report, execute_case
+from app.schemas.browser_executions import BrowserExecutionRequest
+from app.schemas.executions import ExecutionReport, StepExecutionEvidence
 
 
 FIXTURE_PATH = Path(__file__).parents[2] / "testdata" / "dsl_canonical_contract.json"
@@ -121,54 +121,59 @@ class DSLCanonicalContractTests(unittest.TestCase):
     def test_execution_snapshot_and_report_sha_use_authoritative_binding(self) -> None:
         fixture = json.loads(FIXTURE_PATH.read_text())
         payload = json.loads(fixture["canonical_json"])
-        session = _FakeSession(payload)
+        with patch(
+            "app.application.browser.execution.execute_case_with_playwright",
+            return_value=[
+                StepExecutionEvidence(
+                    step_index=0,
+                    action="goto",
+                    value="https://example.com",
+                    status="passed",
+                )
+            ],
+        ):
+            result = execute_browser_case(
+                BrowserExecutionRequest(
+                    execution_id=91,
+                    dsl_case=payload,
+                    base_url="https://example.com",
+                )
+            )
 
-        result = execute_case(
-            session,
-            7,
-            CaseExecutionRequest(actor_user_id=3),
-            run_context=ExecutionRunContext(
-                job_id=11,
-                dsl_snapshot=payload,
-                dsl_canonical_json=fixture["canonical_json"],
-                dsl_sha256=fixture["sha256"],
-                dsl_canonical_version=fixture["canonical_version"],
-            ),
-        )
-
-        self.assertEqual(result.dsl_snapshot, payload)
-        self.assertEqual(result.dsl_sha256, fixture["sha256"])
-        self.assertEqual(session.execution.dsl_snapshot, payload)
-        self.assertEqual(session.execution.dsl_sha256, fixture["sha256"])
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.report["dsl_profile"], "legacy-v1")
+        self.assertEqual(result.report["steps"][0]["dsl_profile"], "legacy-v1")
 
     def test_research_execution_preserves_action_ir_evidence(self) -> None:
         fixture = json.loads(RESEARCH_FIXTURE_PATH.read_text())
         payload = json.loads(fixture["canonical_json"])
-        session = _FakeSession(payload)
+        with patch(
+            "app.application.browser.execution.execute_case_with_playwright",
+            return_value=[
+                StepExecutionEvidence(
+                    step_index=0,
+                    action="goto",
+                    value="/checkout",
+                    status="passed",
+                )
+            ],
+        ):
+            result = execute_browser_case(
+                BrowserExecutionRequest(
+                    execution_id=92,
+                    dsl_case=payload,
+                )
+            )
 
-        result = execute_case(
-            session,
-            7,
-            CaseExecutionRequest(actor_user_id=3),
-            run_context=ExecutionRunContext(
-                job_id=11,
-                dsl_snapshot=payload,
-                dsl_canonical_json=fixture["canonical_json"],
-                dsl_sha256=fixture["sha256"],
-                dsl_canonical_version=fixture["canonical_version"],
-            ),
-        )
-
-        self.assertEqual(result.dsl_snapshot, payload)
-        self.assertEqual(result.report.dsl_profile, "research-v1")
-        step = result.report.steps[0]
-        self.assertEqual(step.dsl_profile, "research-v1")
-        self.assertEqual(step.intent, "Open the checkout page")
-        self.assertEqual(step.idempotency, "idempotent")
-        self.assertEqual(step.declared_side_effect, "browser_state")
+        self.assertEqual(result.report["dsl_profile"], "research-v1")
+        step = result.report["steps"][0]
+        self.assertEqual(step["dsl_profile"], "research-v1")
+        self.assertEqual(step["intent"], "Open the checkout page")
+        self.assertEqual(step["idempotency"], "idempotent")
+        self.assertEqual(step["declared_side_effect"], "browser_state")
 
     def test_execution_report_v1_is_read_with_v2_defaults(self) -> None:
-        report = _normalize_report(
+        report = ExecutionReport.model_validate(
             {
                 "status": "passed",
                 "steps": [
@@ -192,36 +197,6 @@ class DSLCanonicalContractTests(unittest.TestCase):
         self.assertEqual(report.steps[0].action_outcome.status, "unknown")
         self.assertEqual(report.steps[0].network_events[0].event_type, "response")
         self.assertIsNone(report.dsl_profile)
-
-
-class _FakeSession:
-    def __init__(self, dsl: dict) -> None:
-        self.case = SimpleNamespace(id=7, project_id=5, name=dsl["name"], dsl=dsl)
-        self.execution: TestCaseRun | None = None
-
-    def get(self, model, record_id):
-        if model is TestCase and record_id == 7:
-            return self.case
-        if model is User and record_id == 3:
-            return object()
-        if model is TestCaseRun and self.execution is not None and record_id == self.execution.id:
-            return self.execution
-        return None
-
-    def add(self, record) -> None:
-        if isinstance(record, TestCaseRun):
-            self.execution = record
-
-    def commit(self) -> None:
-        pass
-
-    def rollback(self) -> None:
-        pass
-
-    def refresh(self, record) -> None:
-        if isinstance(record, TestCaseRun) and record.id is None:
-            record.id = 91
-            record.analysis_status = "pending"
 
 
 if __name__ == "__main__":

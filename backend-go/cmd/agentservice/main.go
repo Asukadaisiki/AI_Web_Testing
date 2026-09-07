@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
@@ -61,6 +64,7 @@ func main() {
 		log.Fatalf("configure Browser Worker: %v", err)
 	}
 	planningStore := planning.NewPostgresStore(database)
+	browserClient.SetContextResolver(browserCapabilityContextResolver(planningStore))
 	projectStore := projects.NewPostgresStore(database)
 	caseStore := cases.NewPostgresStore(database)
 	executionStore := execution.NewStore(database)
@@ -105,4 +109,46 @@ func main() {
 
 	log.Printf("agentservice API listening on %s", cfg.Address)
 	server.Spin()
+}
+
+func browserCapabilityContextResolver(store planning.Store) browserworker.ContextResolver {
+	return func(
+		ctx context.Context,
+		actorUserID int64,
+		projectID int64,
+		conversationID string,
+	) (map[string]any, error) {
+		sessionID, err := strconv.ParseInt(conversationID, 10, 64)
+		if err != nil || sessionID < 1 {
+			return nil, nil
+		}
+		detail, err := store.GetSession(ctx, actorUserID, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		projectLinked := false
+		for _, project := range detail.Session.Projects {
+			if project.ID == projectID {
+				projectLinked = true
+				break
+			}
+		}
+		if !projectLinked {
+			return nil, fmt.Errorf("planning session %d is not linked to project %d", sessionID, projectID)
+		}
+		var requirements struct {
+			CleanContext   bool    `json:"clean_context"`
+			EntryURLOrPage *string `json:"entry_url_or_page"`
+		}
+		if err := json.Unmarshal(detail.Session.Requirements, &requirements); err != nil {
+			return nil, fmt.Errorf("decode planning session requirements: %w", err)
+		}
+		browserContext := map[string]any{
+			"clean_context": requirements.CleanContext,
+		}
+		if requirements.EntryURLOrPage != nil {
+			browserContext["entry_url_or_page"] = *requirements.EntryURLOrPage
+		}
+		return browserContext, nil
+	}
 }

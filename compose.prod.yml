@@ -3,8 +3,6 @@ name: ai-web-testing
 x-browser-worker-environment: &browser-worker-environment
   APP_ENV: production
   APP_DEBUG: "false"
-  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-  DATABASE_ECHO: "false"
   EXECUTION_BASE_URL: ${EXECUTION_BASE_URL:-http://frontend:8080}
   ENABLE_AI_VISUAL_LOCATE: ${ENABLE_AI_VISUAL_LOCATE:-false}
   STORAGE_STATE_DIR: /app/storage_states
@@ -47,11 +45,13 @@ services:
 
   migrate:
     build:
-      context: ./browser-worker
+      context: ./backend-go
       dockerfile: Dockerfile
-    image: ai-web-testing-browser-worker:${IMAGE_TAG:-latest}
-    command: ["alembic", "upgrade", "head"]
-    environment: *browser-worker-environment
+    image: ai-web-testing-agentservice:${IMAGE_TAG:-latest}
+    entrypoint:
+      - /usr/local/bin/migrate
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,9 +70,6 @@ services:
       - --port
       - "8000"
       - --no-access-log
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -85,30 +82,39 @@ services:
       start_period: 20s
     shm_size: 1gb
 
-  python-worker:
-    <<: *browser-worker-service
+  execution-worker:
+    build:
+      context: ./backend-go
+      dockerfile: Dockerfile
+    image: ai-web-testing-agentservice:${IMAGE_TAG:-latest}
+    entrypoint:
+      - /usr/local/bin/execution-worker
     command:
-      - python
-      - -m
-      - app.workers.execution_worker
       - --concurrency
       - ${WORKER_CONCURRENCY:-2}
       - --poll-seconds
       - ${WORKER_POLL_SECONDS:-1}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      BROWSER_WORKER_URL: http://browser-worker-api:8000/api/v1
     depends_on:
       migrate:
         condition: service_completed_successfully
+      browser-worker-api:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
-        - python
-        - -c
-        - "from app.db import verify_database_connection; verify_database_connection()"
+        - /usr/local/bin/execution-worker
+        - --help
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 20s
-    shm_size: 1gb
+    init: true
+    restart: unless-stopped
+    networks:
+      - app
 
   agentservice:
     build:

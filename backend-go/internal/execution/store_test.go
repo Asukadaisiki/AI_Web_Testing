@@ -253,3 +253,90 @@ func TestValidatePersistedCaseBindingsRejectsResearchMismatch(t *testing.T) {
 		t.Fatalf("research binding mismatch error = %v, want ErrConflict", err)
 	}
 }
+
+func TestDecodeBrowserExecutionResultRequiresTerminalStatusAndReport(t *testing.T) {
+	result, err := DecodeBrowserExecutionResult(json.RawMessage(
+		`{"status":"passed","report":{"status":"passed","steps":[]}}`,
+	))
+	if err != nil {
+		t.Fatalf("DecodeBrowserExecutionResult() error = %v", err)
+	}
+	if result.Status != "passed" || string(result.Report) != `{"status":"passed","steps":[]}` {
+		t.Fatalf("result = %#v", result)
+	}
+
+	if _, err := DecodeBrowserExecutionResult(json.RawMessage(
+		`{"status":"running","report":{"status":"failed","steps":[]}}`,
+	)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("running status error = %v, want ErrConflict", err)
+	}
+	if _, err := DecodeBrowserExecutionResult(json.RawMessage(
+		`{"status":"failed"}`,
+	)); err == nil {
+		t.Fatal("missing report error = nil")
+	}
+}
+
+func TestFailedBrowserExecutionResultIsPersistable(t *testing.T) {
+	result := FailedBrowserExecutionResult(errors.New("browser unavailable"))
+	if result.Status != "failed" {
+		t.Fatalf("status = %q", result.Status)
+	}
+	if result.ErrorMessage == nil || *result.ErrorMessage != "BrowserExecutionError: browser unavailable" {
+		t.Fatalf("error_message = %#v", result.ErrorMessage)
+	}
+	if !json.Valid(result.Report) {
+		t.Fatalf("report is invalid JSON: %s", result.Report)
+	}
+}
+
+func TestValidateClaimedJobDSLRejectsHashMismatch(t *testing.T) {
+	raw := json.RawMessage(`{"name":"legacy","steps":[{"action":"goto","value":"https://example.com"}]}`)
+	if _, err := validateClaimedJobDSL(ClaimedJob{
+		DSLCase: raw,
+		DSLHash: "bad",
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("hash mismatch error = %v, want ErrConflict", err)
+	}
+}
+
+func TestRequiresManualRecoveryBlocksCommittedResearchSideEffect(t *testing.T) {
+	rawDSL := []byte(`{
+		"profile":"research-v1",
+		"steps":[
+			{"action":"click","idempotency":"non_idempotent","side_effect":"external_state"}
+		]
+	}`)
+	report := []byte(`{
+		"steps":[{
+			"step_index":0,
+			"action":"click",
+			"action_outcome":{"status":"succeeded","side_effect_state":"committed"}
+		}]
+	}`)
+
+	if !requiresManualRecovery(
+		rawDSL,
+		sql.NullString{String: "running", Valid: true},
+		report,
+	) {
+		t.Fatal("requiresManualRecovery() = false, want true")
+	}
+}
+
+func TestRequiresManualRecoveryAllowsIdempotentExpiredJob(t *testing.T) {
+	rawDSL := []byte(`{
+		"profile":"research-v1",
+		"steps":[
+			{"action":"click","idempotency":"idempotent","side_effect":"browser_state"}
+		]
+	}`)
+
+	if requiresManualRecovery(
+		rawDSL,
+		sql.NullString{String: "running", Valid: true},
+		nil,
+	) {
+		t.Fatal("requiresManualRecovery() = true, want false")
+	}
+}

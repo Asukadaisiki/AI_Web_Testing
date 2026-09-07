@@ -1,3 +1,5 @@
 # Reporters
 
-这里预留步骤级证据、JSON 报告与导出能力。
+过渡期步骤级证据和 JSON 报告构建。
+
+长期报告聚合与归因属于 Go 控制面；Python 侧只应返回浏览器执行 evidence。

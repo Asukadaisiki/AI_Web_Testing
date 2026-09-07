@@ -5,11 +5,8 @@ description = "Playwright browser worker for the AI web testing platform"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116,<1.0",
-    "sqlalchemy>=2.0,<3.0",
-    "alembic>=1.16,<2.0",
     "playwright>=1.52,<2.0",
     "pillow>=11.0,<12.0",
-    "psycopg[binary]>=3.2,<4.0",
     "uvicorn>=0.35,<1.0",
 ]
 

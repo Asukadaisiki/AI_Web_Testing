@@ -77,10 +77,16 @@ class ValidatePageElementsArguments(DSLModel):
         return self
 
 
+class BrowserCapabilityContext(DSLModel):
+    clean_context: bool = False
+    entry_url_or_page: str | None = None
+
+
 class BrowserCapabilityRequest(DSLModel):
     actor_user_id: int = Field(ge=1)
     project_id: int = Field(ge=1)
     conversation_id: str = Field(min_length=1, max_length=100)
+    context: BrowserCapabilityContext = Field(default_factory=BrowserCapabilityContext)
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 

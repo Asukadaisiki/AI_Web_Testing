@@ -18,8 +18,6 @@ _THIRD_PARTY_LOGGERS = [
     "uvicorn.access",
     "httpx",
     "httpcore",
-    "sqlalchemy.engine",
-    "aiosqlite",
     "multipart",
 ]
 

@@ -5,12 +5,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import threading
 import unittest
 from urllib.parse import urlsplit
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.ai.page_explorer import BrowserSessionManager, _collect_flow_a11y
 from app.application.browser.service import (
@@ -178,16 +177,6 @@ class ExploreFlowChromiumTest(unittest.TestCase):
         project_id = 41
         normal_session_id = 4101
         clean_session_id = 4102
-        database = MagicMock()
-        records = {
-            normal_session_id: SimpleNamespace(
-                requirements_json={"clean_context": False}
-            ),
-            clean_session_id: SimpleNamespace(
-                requirements_json={"clean_context": True}
-            ),
-        }
-        database.get.side_effect = lambda _, session_id: records[session_id]
 
         with tempfile.TemporaryDirectory() as directory:
             storage_state_path = Path(directory) / f"{project_id}.json"
@@ -216,17 +205,19 @@ class ExploreFlowChromiumTest(unittest.TestCase):
                 return_value=str(storage_state_path),
             ):
                 normal = execute_browser_capability(
-                    database,
+                    None,
                     capability="explore_page",
                     project_id=project_id,
                     conversation_id=str(normal_session_id),
+                    context={"clean_context": False},
                     arguments={"url": f"{self.base_url}/context"},
                 )
                 clean = execute_browser_capability(
-                    database,
+                    None,
                     capability="explore_page",
                     project_id=project_id,
                     conversation_id=str(clean_session_id),
+                    context={"clean_context": True},
                     arguments={"url": f"{self.base_url}/context"},
                 )
 

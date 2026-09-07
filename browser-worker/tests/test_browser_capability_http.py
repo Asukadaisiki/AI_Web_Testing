@@ -5,22 +5,19 @@ import json
 import socket
 import threading
 import time
-from types import SimpleNamespace
 import unittest
 from urllib.request import Request, urlopen
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from fastapi import FastAPI
 import uvicorn
 
 from app.ai.page_explorer import BrowserSessionManager
 from app.api.router import build_api_router
-from app.api.routes import browser_capabilities as capability_routes
 from app.application.browser.service import (
     _BrowserCapabilityRuntime,
     shutdown_browser_capabilities,
 )
-from app.db import get_db_session
 
 
 class _FakePage:
@@ -113,17 +110,7 @@ class BrowserCapabilityHTTPTest(unittest.TestCase):
 
         app = FastAPI()
         app.include_router(build_api_router())
-        database = MagicMock()
-        database.get.return_value = SimpleNamespace(
-            requirements_json={"clean_context": False}
-        )
-        app.dependency_overrides[get_db_session] = lambda: database
 
-        self.validate_patch = patch.object(
-            capability_routes,
-            "validate_capability_context",
-            return_value=None,
-        )
         self.playwright_patch = patch(
             "app.ai.page_explorer.sync_playwright",
             side_effect=lambda: _FakePlaywrightContext(self.calls),
@@ -136,7 +123,6 @@ class BrowserCapabilityHTTPTest(unittest.TestCase):
             "app.application.browser.service.collect_a11y_nodes",
             return_value=[],
         )
-        self.validate_patch.start()
         self.playwright_patch.start()
         self.nodes_patch.start()
         self.service_nodes_patch.start()
@@ -166,7 +152,6 @@ class BrowserCapabilityHTTPTest(unittest.TestCase):
         self.service_nodes_patch.stop()
         self.nodes_patch.stop()
         self.playwright_patch.stop()
-        self.validate_patch.stop()
 
     def test_explore_routes_keep_sync_playwright_on_dedicated_thread(self) -> None:
         page_response = self._post(

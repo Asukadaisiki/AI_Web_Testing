@@ -57,8 +57,6 @@ class Settings:
     app_env: str = "development"
     debug: bool = True
     api_v1_prefix: str = "/api/v1"
-    database_url: str = "sqlite:///./app.db"
-    database_echo: bool = False
     execution_base_url: str | None = None
     enable_ai_visual_locate: bool = False
     ai_visual_timeout_ms: int = 600000
@@ -83,8 +81,6 @@ def get_settings() -> Settings:
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),
         debug=_get_bool(os.getenv("APP_DEBUG"), default=True),
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./app.db"),
-        database_echo=_get_bool(os.getenv("DATABASE_ECHO"), default=False),
         execution_base_url=os.getenv("EXECUTION_BASE_URL") or None,
         enable_ai_visual_locate=_get_bool(os.getenv("ENABLE_AI_VISUAL_LOCATE"), default=False),
         ai_visual_timeout_ms=max(10000, _get_int(os.getenv("AI_VISUAL_TIMEOUT_MS"), default=600000)),

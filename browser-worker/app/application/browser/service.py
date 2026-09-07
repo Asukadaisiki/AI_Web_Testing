@@ -11,8 +11,6 @@ import threading
 from typing import Any, Callable, TypeVar
 from urllib.parse import urljoin, urlparse
 
-from sqlalchemy.orm import Session
-
 from app.ai.locator_preflight import apply_preflight_to_dsl_by_state
 from app.ai.page_explorer import (
     BrowserSessionManager,
@@ -22,7 +20,6 @@ from app.ai.page_explorer import (
     load_storage_state_meta,
 )
 from app.core.config import get_settings
-from app.models import AIPlanningSession
 from app.schemas.browser_capabilities import (
     BrowserCapabilityName,
     ExploreFlowArguments,
@@ -64,21 +61,23 @@ class _BrowserCapabilityRuntime:
 
 
 def execute_browser_capability(
-    session: Session,
+    _session: object | None,
     *,
     capability: BrowserCapabilityName,
     project_id: int,
     conversation_id: str,
+    context: dict[str, Any] | None = None,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
+    del _session
     if capability == "validate_page_elements":
         validated_arguments = ValidatePageElementsArguments.model_validate(arguments)
         return _validate_page_elements(
             validated_arguments.model_dump(exclude_none=True)
         )
     planning_session_id = int(conversation_id) if conversation_id.isdigit() else 0
-    requirements = _planning_session_requirements(session, planning_session_id)
-    clean_context_requested = requirements.get("clean_context") is True
+    browser_context = context or {}
+    clean_context_requested = browser_context.get("clean_context") is True
     storage_state_path = (
         None if clean_context_requested else _storage_state_path(project_id)
     )
@@ -91,7 +90,7 @@ def execute_browser_capability(
         arguments = ExplorePageArguments.model_validate(arguments).model_dump(
             exclude_none=True
         )
-        url = _resolve_page_url(requirements, arguments)
+        url = _resolve_page_url(browser_context, arguments)
         return _BrowserCapabilityRuntime.run(
             lambda: _explore_page(
                 project_id,
@@ -108,7 +107,7 @@ def execute_browser_capability(
         )
         base_url = str(arguments.get("base_url") or "").strip()
         if not base_url:
-            base_url = _session_base_url(requirements)
+            base_url = _session_base_url(browser_context)
         return _BrowserCapabilityRuntime.run(
             lambda: _explore_flow(
                 planning_session_id,
@@ -128,18 +127,6 @@ def shutdown_browser_capabilities() -> None:
 def _storage_state_path(project_id: int) -> str | None:
     path = Path(get_settings().storage_state_dir) / f"{project_id}.json"
     return str(path) if path.exists() else None
-
-
-def _planning_session_requirements(
-    session: Session,
-    planning_session_id: int,
-) -> dict[str, Any]:
-    if planning_session_id < 1:
-        return {}
-    record = session.get(AIPlanningSession, planning_session_id)
-    if record is None or not isinstance(record.requirements_json, dict):
-        return {}
-    return record.requirements_json
 
 
 def _session_base_url(requirements: dict[str, Any]) -> str:

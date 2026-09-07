@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -291,6 +292,127 @@ func TestPostgresReportCanonicalMetadataUsesExecutionJob(t *testing.T) {
 	}
 	if _, err := store.BatchReport(ctx, actorID, batchID); !errors.Is(err, ErrConflict) {
 		t.Fatalf("BatchReport() mismatch error = %v, want ErrConflict", err)
+	}
+}
+
+func TestPostgresClaimStartAndFinishJobRun(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	var actorID, projectID, caseID, batchID int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO users (email, display_name)
+		VALUES ($1, 'Execution Worker Test')
+		RETURNING id`,
+		"execution-worker-"+suffix+"@example.com",
+	).Scan(&actorID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if projectID != 0 {
+			_, _ = db.ExecContext(ctx, `DELETE FROM test_case_runs WHERE project_id = $1`, projectID)
+			_, _ = db.ExecContext(ctx, `DELETE FROM execution_batches WHERE project_id = $1`, projectID)
+			_, _ = db.ExecContext(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		}
+		_, _ = db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, actorID)
+	})
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO projects (name, description)
+		VALUES ($1, 'execution worker integration test')
+		RETURNING id`,
+		"execution-worker-"+suffix,
+	).Scan(&projectID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO project_members (project_id, user_id, role)
+		VALUES ($1, $2, 'owner')`,
+		projectID, actorID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	rawCase := json.RawMessage(`{"name":"worker case","steps":[{"action":"goto","value":"https://example.com"}]}`)
+	validated, err := dsl.ValidateExecutableCase(rawCase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := dsl.SHA256(validated.CanonicalJSON)
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO test_cases (project_id, created_by, updated_by, name, dsl)
+		VALUES ($1, $2, $2, 'worker case', $3::json)
+		RETURNING id`,
+		projectID, actorID, string(validated.CanonicalJSON),
+	).Scan(&caseID); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db)
+	batch, err := store.CreateBatch(ctx, actorID, BatchCreateRequest{
+		ProjectID:   projectID,
+		CaseIDs:     []int64{caseID},
+		Concurrency: 1,
+		InputValues: map[string]string{"email": "worker@example.com"},
+		DSLBindings: map[int64]CanonicalDSLBinding{
+			caseID: {
+				CanonicalJSON: validated.CanonicalJSON,
+				SHA256:        hash,
+				Version:       validated.CanonicalVersion,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch() error = %v", err)
+	}
+	batchID = batch["id"].(int64)
+
+	job, ok, err := store.ClaimNextProjectJob(ctx, "test-worker", 60, projectID)
+	if err != nil || !ok {
+		t.Fatalf("ClaimNextProjectJob() = (%#v, %v, %v)", job, ok, err)
+	}
+	started, err := store.StartClaimedJobRun(ctx, job)
+	if err != nil {
+		t.Fatalf("StartClaimedJobRun() error = %v", err)
+	}
+	if started.ID < 1 || string(started.DSLCase) != string(validated.CanonicalJSON) {
+		t.Fatalf("started run = %#v", started)
+	}
+	if started.InputValues["email"] != "worker@example.com" {
+		t.Fatalf("input values = %#v", started.InputValues)
+	}
+	result := BrowserExecutionResult{
+		Status: "passed",
+		Report: json.RawMessage(
+			`{"status":"passed","steps":[]}`,
+		),
+	}
+	if err := store.FinishClaimedJobRun(ctx, "test-worker", job, started.ID, result); err != nil {
+		t.Fatalf("FinishClaimedJobRun() error = %v", err)
+	}
+	report, err := store.BatchReport(ctx, actorID, batchID)
+	if err != nil {
+		t.Fatalf("BatchReport() error = %v", err)
+	}
+	if report["status"] != "passed" {
+		t.Fatalf("batch status = %#v", report["status"])
+	}
+	jobs := report["jobs"].([]map[string]any)
+	if jobs[0]["status"] != "passed" {
+		t.Fatalf("job status = %#v", jobs[0]["status"])
+	}
+	latest := jobs[0]["latest_execution"].(map[string]any)
+	if latest["status"] != "passed" || latest["dsl_sha256"] != hash {
+		t.Fatalf("latest execution = %#v", latest)
 	}
 }
 

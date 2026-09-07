@@ -238,21 +238,30 @@ AI DSL 生成会输出最小治理信息：
 
 ### 1. 后端
 
+先应用数据库 schema：
+
+```powershell
+cd backend-go
+go run ./cmd/migrate
+```
+
+启动 Browser capability/execution API：
+
 ```powershell
 cd browser-worker
-uv sync
-uv run alembic upgrade head
 uv run browser-worker-dev
 ```
 
 默认后端地址：
 - `http://127.0.0.1:8000`
 
-另开终端启动执行队列 Worker：
+Browser capability API 只负责 Playwright/A11y 能力，不需要在启动时连接业务数据库。
+
+另开终端启动 Go 执行队列 Worker：
 
 ```powershell
-cd browser-worker
-uv run python -m app.workers.execution_worker --concurrency 2
+cd backend-go
+go run ./cmd/execution-worker --concurrency 2
 ```
 
 ### 2. Go AgentService

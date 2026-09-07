@@ -11,6 +11,7 @@
 ```text
 backend-go/
   cmd/agentservice/    Hertz AgentService 入口
+  cmd/execution-worker/ 官方执行队列消费者
   internal/agent/      纯 Agent loop 与消息合同
   internal/harness/    Prompt、工具和运行编排
   internal/agentservice/ Run、Checkpoint、事件和持久化
@@ -33,17 +34,14 @@ frontend/src/
 
 browser-worker/app/
   main.py              Python Worker/FastAPI 入口
-  api/                 health、artifact 与内部 Browser capability
-  application/browser  Go AgentService 使用的浏览器能力
-  application/reporting 确定性失败分析
-  services/            Job 执行、失败信号与 anti-pattern
+  api/                 health、artifact 与内部 Browser capability/execution RPC
+  application/browser  Go AgentService 使用的浏览器能力和无状态执行边界
+  services/            失败信号等无状态辅助逻辑
   ai/                  页面探索、locator preflight 与 VLM Prompt
   runners/             解释 DSL 并驱动 Playwright
   locators/            元素定位、修正和 fallback
   reporters/           将执行证据组装为结构化报告
   schemas/             Pydantic 请求、响应和运行时数据合同
-  models/              SQLAlchemy 持久化模型
-  db/                  数据库连接、Session 和 Base
   core/                配置、日志、中间件等横切基础设施
 ```
 
@@ -65,12 +63,12 @@ Go generate_dsl tool
 执行：
 Go execute_dsl tool
   -> Go Case/ExecutionBatch/ExecutionJob
-  -> Python execution worker
-  -> services/executions.py
+  -> Go execution worker
+  -> Python Browser execution RPC
   -> runners/playwright_runner.py
   -> locators/*
   -> reporters/json_report.py
-  -> models/test_case_run.py
+  -> Go 持久化 test_case_runs / report
 
 展示：
 Frontend pages
@@ -107,36 +105,36 @@ Frontend pages
 
 负责：
 
-- 提供 health、artifact 和 `/api/v1/internal/browser-capabilities/*`。
-- 校验 Go 转发的 actor、Planning Session 和 Project 上下文一致性。
+- 提供 health、artifact、`/api/v1/internal/browser-capabilities/*`
+  和 `/api/v1/internal/browser-executions`。
+- 接收 Go 控制面已裁决的 browser context，例如 `clean_context` 和入口 URL。
 - 不提供用户侧 Project、Case、DSL、Execution 或 Report API。
 
 不应负责：
 
 - 直接拼复杂 SQL。
+- 读取 Project、Case、Planning Session 等业务表。
 - 实现 DSL 生成、业务控制面或 Agent 决策。
 
 命名：
 
 - `api/router.py`：汇总所有子路由。
 - `api/routes/browser_capabilities.py`：Go 调用的页面探索接口。
+- `api/routes/browser_executions.py`：Go execution worker 调用的无状态 Playwright 执行接口。
 
 ### `application/`：Worker 能力边界
 
 | 文件 | 职责 |
 |---|---|
 | `browser/service.py` | 页面探索和元素验证 capability |
-| `reporting/analysis_service.py` | 确定性 FailureSignal 分析 |
+| `browser/execution.py` | 无状态 Playwright 执行 RPC，不读写业务数据库 |
 
-### `services/`：Worker 执行能力
+### `services/`：纯辅助能力
 
 | 文件 | 职责 |
 |---|---|
-| `execution_batches.py` | Job 领取、lease、heartbeat 和终态更新 |
-| `executions.py` | 调用 Runner 并持久化步骤 evidence |
-| `failure_signals.py` | 生成确定性失败信号 |
-| `anti_patterns.py` | DSL 失败反例的记录和检索 |
-| `errors.py` | Worker 服务共享异常 |
+| `failure_signals.py` | 无状态执行 RPC 使用的确定性失败信号分类 |
+| `errors.py` | 共享异常 |
 
 ### `ai/`：Worker 内 AI 辅助能力
 
@@ -152,18 +150,17 @@ Frontend pages
 - `runners/click_preprocessor.py`：点击前处理遮挡、弹窗等页面状态。
 - `runners/postcondition_verifier.py`：验证步骤后置条件。
 - `locators/semantic.py`：基于 A11y/文本的确定性定位。
-- `locators/corrections.py`：读取人工修正。
+- `locators/corrections.py`：定义人工修正协议；持久化由 Go 控制面负责。
 - `locators/fallback.py`：组织 Correction、Semantic、VLM、Intervention 回退顺序。
 - `locators/ai_visual.py`：可选 VLM 定位能力，默认关闭。
 - `reporters/json_report.py`：把步骤 evidence 组装成报告。
 
 边界原则：Runner 负责执行，Locator 负责找元素，Reporter 负责组装结果，三者不应决定业务权限或 Planning 流程。
 
-### `schemas/`、`models/`、`db/`
+### `schemas/`
 
 - `schemas/` 是内存中的数据合同，主要使用 Pydantic；文件按业务域命名。
-- `models/` 是数据库表映射，主要使用 SQLAlchemy；通常一个主要实体一个文件。
-- `db/` 只负责数据库基础设施。
+- 数据库表结构由 Go `cmd/migrate` 和 `internal/dbschema/schema.sql` 管理。
 
 同名概念的区别：
 
@@ -241,9 +238,8 @@ Agent 与 Planning 的边界：
 ```text
 Backend:
 api -> application -> services/ai/runners
-services -> models/schemas/runners/locators/reporters
+services -> schemas/runners/locators/reporters
 runners -> locators + schemas
-models -> db
 
 Frontend:
 app -> pages -> features -> shared
@@ -273,10 +269,10 @@ app -> pages -> features -> shared
 | Agent 工具行为异常 | `backend-go/internal/tools/` | 对应 Go Store 或 Python Browser capability |
 | DSL 生成错误 | `services/dsl.py` | `ai/dsl_generator.py`、`schemas/dsl.py` |
 | DSL 候选生成错误 | `application/agent_capabilities/service.py` | `services/dsl.py` |
-| 浏览器步骤执行错误 | `services/executions.py` | `runners/playwright_runner.py` |
+| 浏览器步骤执行错误 | `application/browser/execution.py` | `runners/playwright_runner.py` |
 | 元素找不到 | `locators/fallback.py` | `semantic.py`、`corrections.py`、`ai_visual.py` |
-| 报告统计错误 | `services/executions.py` | `reporters/json_report.py` |
-| 数据表或关系问题 | `models/` | `alembic/versions/` |
+| 报告统计错误 | `backend-go/internal/execution/` | `reporters/json_report.py` |
+| 数据表或关系问题 | `backend-go/internal/dbschema/schema.sql` | `backend-go/cmd/migrate` |
 | 前端路由问题 | `frontend/src/app/AppRouter.tsx` | 对应 `pages/` |
 | 前端 Agent 状态问题 | `features/agent/useAgentRun.ts` | `features/agent/events.ts` |
 | 前端 API 类型问题 | `features/<domain>/api.ts` | `types.ts`、`types/api.ts` |
@@ -288,8 +284,8 @@ app -> pages -> features -> shared
 1. `frontend/src/app/AppRouter.tsx`
 2. `browser-worker/app/main.py`
 3. `browser-worker/app/api/router.py`
-4. 选择一个具体 route，例如 `api/routes/executions.py`
-5. 进入对应 service，例如 `services/executions.py`
+4. 选择一个具体 route，例如 `api/routes/browser_executions.py`
+5. 进入对应 application service，例如 `application/browser/execution.py`
 6. 再进入 Runner、Locator、Schema 和 Model
 7. 最后阅读 Go `internal/agent`、`internal/harness` 和 `internal/agentservice`
 
