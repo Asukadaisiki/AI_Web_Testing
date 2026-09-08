@@ -59,6 +59,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure LLM: %v", err)
 	}
+	if cfg.LLMThinkMode {
+		model.EnableThinking(cfg.LLMReasoningEffort)
+	}
 	browserClient, err := browserworker.NewClient(cfg.BrowserWorkerURL, 10*time.Minute)
 	if err != nil {
 		log.Fatalf("configure Browser Worker: %v", err)

@@ -82,6 +82,115 @@ func TestCompleteParsesNativeToolCall(t *testing.T) {
 	}
 }
 
+func TestCompleteSendsThinkingModeAndPreservesReasoningForToolReplay(t *testing.T) {
+	var captured []chatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload chatRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		captured = append(captured, payload)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"id":"reasoning-request",
+			"model":"deepseek-v4-pro",
+			"choices":[{
+				"finish_reason":"tool_calls",
+				"message":{
+					"role":"assistant",
+					"reasoning_content":"private chain of thought",
+					"tool_calls":[{
+						"id":"call-1",
+						"type":"function",
+						"function":{"name":"explore_page","arguments":"{\"url\":\"https://example.com\"}"}
+					}]
+				}
+			}],
+			"usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIClient("deepseek", server.URL, "secret", "deepseek-v4-pro", time.Second)
+	if err != nil {
+		t.Fatalf("NewOpenAIClient() error = %v", err)
+	}
+	client.EnableThinking("max")
+	response, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{
+			Role:             "assistant",
+			Content:          "",
+			ReasoningContent: "prior reasoning",
+			ToolCalls: []agent.ModelTool{{
+				ID: "prior-call", Name: "explore_page", Arguments: "{}",
+			}},
+		}},
+		[]agent.ToolDefinition{{Name: "explore_page", InputSchema: []byte(`{"type":"object"}`)}},
+	)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if len(captured) != 1 ||
+		captured[0].Thinking == nil ||
+		captured[0].Thinking.Type != "enabled" ||
+		captured[0].ReasoningEffort != "max" {
+		t.Fatalf("thinking request = %#v", captured)
+	}
+	if captured[0].Messages[0].ReasoningContent != "prior reasoning" {
+		t.Fatalf("reasoning replay message = %#v", captured[0].Messages[0])
+	}
+	if response.ReasoningContent != "private chain of thought" ||
+		response.Telemetry.Reasoning == nil ||
+		!response.Telemetry.Reasoning.ContentAvailable ||
+		response.Telemetry.Reasoning.ContentBytes != len("private chain of thought") {
+		t.Fatalf("reasoning response = %#v", response)
+	}
+	sum := sha256.Sum256([]byte("private chain of thought"))
+	if response.Telemetry.Reasoning.ContentSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("reasoning SHA = %#v", response.Telemetry.Reasoning)
+	}
+	encoded, _ := json.Marshal(response.Telemetry)
+	if strings.Contains(string(encoded), "private chain of thought") {
+		t.Fatalf("telemetry leaked reasoning content: %s", encoded)
+	}
+}
+
+func TestCompleteOmitsReasoningReplayWhenThinkingDisabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload chatRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Thinking != nil ||
+			payload.ReasoningEffort != "" ||
+			payload.Messages[0].ReasoningContent != "" {
+			t.Fatalf("request leaked disabled reasoning state: %#v", payload)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"id":"plain-request",
+			"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"done"}}]
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIClient("gateway", server.URL, "secret", "model", time.Second)
+	if err != nil {
+		t.Fatalf("NewOpenAIClient() error = %v", err)
+	}
+	if _, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{
+			Role:             "assistant",
+			ReasoningContent: "old private reasoning",
+		}},
+		nil,
+	); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+}
+
 func TestCompleteRecordsUsageHashesAndRetryAttempts(t *testing.T) {
 	var calls atomic.Int32
 	var clientRequestIDs []string

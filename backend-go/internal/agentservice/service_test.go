@@ -52,6 +52,13 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 				PromptCacheHitTokens:  &cacheHit,
 				PromptCacheMissTokens: &cacheMiss,
 			},
+			Reasoning: &agent.ReasoningAudit{
+				ThinkingMode:     "enabled",
+				ReasoningEffort:  "max",
+				ContentAvailable: true,
+				ContentBytes:     32,
+				ContentSHA256:    strings.Repeat("e", 64),
+			},
 			Attempts: []agent.ModelAttempt{
 				{
 					Attempt: 1, Status: "failed",
@@ -98,7 +105,7 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 		"provider_request_id":               true, "local_response_cache": true,
 		"retry_count":      true,
 		"tool_call_status": true, "tool_call_unavailable_reason": true,
-		"tool_call_ids": true, "error": true,
+		"tool_call_ids": true, "error": true, "reasoning": true,
 	}
 	for index, event := range events {
 		if event.Type != EventResearchLLMCall || event.StepID != "step-1" {
@@ -120,6 +127,7 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 		for _, forbidden := range []string{
 			"provider-private-detail", "Authorization", "Bearer", "sk-private",
 			"api_key", "messages", "headers", "cookie", "raw_response",
+			"reasoning_content", "private chain of thought",
 		} {
 			if strings.Contains(encoded, forbidden) {
 				t.Fatalf("payload contains forbidden field %q: %s", forbidden, encoded)
@@ -172,6 +180,14 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 	if usage["prompt_cache_hit_tokens"] != float64(cacheHit) ||
 		usage["prompt_cache_miss_tokens"] != float64(cacheMiss) {
 		t.Fatalf("cache usage = %#v", usage)
+	}
+	reasoning := events[1].Payload["reasoning"].(map[string]any)
+	if reasoning["thinking_mode"] != "enabled" ||
+		reasoning["reasoning_effort"] != "max" ||
+		reasoning["content_available"] != true ||
+		reasoning["content_bytes"] != float64(32) ||
+		reasoning["content_sha256"] != strings.Repeat("e", 64) {
+		t.Fatalf("reasoning audit = %#v", reasoning)
 	}
 }
 

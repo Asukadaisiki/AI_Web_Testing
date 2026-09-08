@@ -258,6 +258,20 @@ _LOCATOR_ACTIONS = {
     "assert_text",
     "capture_text",
 }
+_PREFLIGHT_REQUIRED_ACTIONS = {
+    "click",
+    "input",
+    "capture_text",
+}
+
+
+def _step_requires_preflight_candidates(step: Any) -> bool:
+    if step.action in _PREFLIGHT_REQUIRED_ACTIONS:
+        return True
+    if getattr(step, "target_strategy", None):
+        return True
+    target = str(getattr(step, "target", "") or "").strip()
+    return target.startswith(("css=", "xpath=", "#", ".", "//"))
 
 
 class ResearchDSLCase(BaseModel):
@@ -348,6 +362,9 @@ class ResearchDSLCase(BaseModel):
                     raise ValueError(
                         f"case.steps[{index}].locator_confidence must be added by locator preflight"
                     )
+                continue
+
+            if not _step_requires_preflight_candidates(step) and not step.candidates:
                 continue
 
             if step.locator_confidence not in {"high", "medium"}:

@@ -68,8 +68,11 @@ go run ./cmd/agentservice
 - `AI_PLANNING_BASE_URL`
 - `AI_PLANNING_API_KEY`
 - `AI_PLANNING_MODEL`
+- `AI_PLANNING_THINK_MODE`：设为 `true` / `enabled` 时发送 `thinking: {"type":"enabled"}`
+- `AI_PLANNING_REASONING_EFFORT`：可选，`low` / `high` / `max`，默认按 `max` 归一化
 
 正式服务使用 PostgreSQL 保存 AgentRun、完整 transcript、pending tool/step 和事件流。事件序号通过 `agent_runs.last_event_seq` 在数据库中原子分配，保证同一 Run 内单调递增。
+开启 thinking 后，Agent transcript 会保留 provider 返回的 `reasoning_content` 以满足 DeepSeek 多轮工具调用回传要求；`research.llm_call` 事件只记录 reasoning 的开关、effort、字节数和 SHA，不记录原始推理正文。
 
 内存 Repository 仅用于快速单元测试。
 

@@ -97,6 +97,7 @@ type ResearchLLMCallPayload struct {
 	LocalResponseCache            string                    `json:"local_response_cache,omitempty"`
 	Prompt                        agent.PromptSpec          `json:"prompt_spec"`
 	Usage                         agent.ModelUsage          `json:"usage"`
+	Reasoning                     *agent.ReasoningAudit     `json:"reasoning,omitempty"`
 	FinishReason                  string                    `json:"finish_reason,omitempty"`
 	Attempt                       int                       `json:"attempt"`
 	AttemptStatus                 string                    `json:"attempt_status"`

@@ -60,19 +60,28 @@ type ModelAttempt struct {
 }
 
 type Telemetry struct {
-	Provider              string         `json:"provider"`
-	RequestedModel        string         `json:"requested_model"`
-	ResolvedModel         string         `json:"resolved_model,omitempty"`
-	FinishReason          string         `json:"finish_reason,omitempty"`
-	ClientRequestID       string         `json:"client_request_id,omitempty"`
-	EndpointScheme        string         `json:"endpoint_scheme,omitempty"`
-	EndpointHost          string         `json:"endpoint_host,omitempty"`
-	CredentialFingerprint string         `json:"credential_fingerprint,omitempty"`
-	LocalResponseCache    string         `json:"local_response_cache,omitempty"`
-	Prompt                PromptSpec     `json:"prompt"`
-	Usage                 ModelUsage     `json:"usage"`
-	Attempts              []ModelAttempt `json:"attempts"`
-	TotalLatencyMS        int64          `json:"total_latency_ms"`
+	Provider              string          `json:"provider"`
+	RequestedModel        string          `json:"requested_model"`
+	ResolvedModel         string          `json:"resolved_model,omitempty"`
+	FinishReason          string          `json:"finish_reason,omitempty"`
+	ClientRequestID       string          `json:"client_request_id,omitempty"`
+	EndpointScheme        string          `json:"endpoint_scheme,omitempty"`
+	EndpointHost          string          `json:"endpoint_host,omitempty"`
+	CredentialFingerprint string          `json:"credential_fingerprint,omitempty"`
+	LocalResponseCache    string          `json:"local_response_cache,omitempty"`
+	Prompt                PromptSpec      `json:"prompt"`
+	Usage                 ModelUsage      `json:"usage"`
+	Reasoning             *ReasoningAudit `json:"reasoning,omitempty"`
+	Attempts              []ModelAttempt  `json:"attempts"`
+	TotalLatencyMS        int64           `json:"total_latency_ms"`
+}
+
+type ReasoningAudit struct {
+	ThinkingMode     string `json:"thinking_mode,omitempty"`
+	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
+	ContentAvailable bool   `json:"content_available"`
+	ContentBytes     int    `json:"content_bytes,omitempty"`
+	ContentSHA256    string `json:"content_sha256,omitempty"`
 }
 
 type Error struct {
@@ -157,10 +166,11 @@ func AsModelError(err error) *ModelError {
 }
 
 type Message struct {
-	Role       string      `json:"role"`
-	Content    string      `json:"content,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	ToolCalls  []ModelTool `json:"tool_calls,omitempty"`
+	Role             string      `json:"role"`
+	Content          string      `json:"content,omitempty"`
+	ReasoningContent string      `json:"reasoning_content,omitempty"`
+	ToolCallID       string      `json:"tool_call_id,omitempty"`
+	ToolCalls        []ModelTool `json:"tool_calls,omitempty"`
 }
 
 type ModelTool struct {
@@ -170,9 +180,10 @@ type ModelTool struct {
 }
 
 type ModelResponse struct {
-	Content   string
-	ToolCalls []ModelTool
-	Telemetry ModelTelemetry
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ModelTool
+	Telemetry        ModelTelemetry
 }
 
 type Model interface {

@@ -36,8 +36,8 @@ type ValidatedCase struct {
 }
 
 var (
-	idempotencies = stringSet("idempotent", "non_idempotent")
-	sideEffects   = stringSet("none", "browser_state", "external_state", "unknown")
+	idempotencies                 = stringSet("idempotent", "non_idempotent")
+	sideEffects                   = stringSet("none", "browser_state", "external_state", "unknown")
 	executableCandidateStrategies = stringSet(
 		"css", "css_selector", "xpath", "data-testid", "data_testid",
 		"role", "text", "label", "placeholder", "element_id", "tag", "semantic",
@@ -273,7 +273,7 @@ func validateResearchStep(index int, step map[string]any, phase ValidationPhase)
 		}
 		return nil
 	}
-	if isLocatorAction(action) {
+	if requiresPreflightCandidates(action, step) || hasPreflightCandidates(step) {
 		if err := validateExecutableLocator(index, step); err != nil {
 			return err
 		}
@@ -539,13 +539,25 @@ func canonicalResearchLocatorFields(canonical, step map[string]any) {
 	}
 }
 
-func isLocatorAction(action string) bool {
+func requiresPreflightCandidates(action string, step map[string]any) bool {
 	switch action {
-	case "click", "input", "wait_for", "assert_text", "capture_text":
+	case "click", "input", "capture_text":
 		return true
-	default:
-		return false
 	}
+	if strategy, _ := step["target_strategy"].(string); strings.TrimSpace(strategy) != "" {
+		return true
+	}
+	target := strings.TrimSpace(trimmedString(step["target"]))
+	return strings.HasPrefix(target, "css=") ||
+		strings.HasPrefix(target, "xpath=") ||
+		strings.HasPrefix(target, "#") ||
+		strings.HasPrefix(target, ".") ||
+		strings.HasPrefix(target, "//")
+}
+
+func hasPreflightCandidates(step map[string]any) bool {
+	candidates, ok := step["candidates"].([]any)
+	return ok && len(candidates) > 0
 }
 
 func requireBoundedText(object map[string]any, field string, index, maxLength int) error {

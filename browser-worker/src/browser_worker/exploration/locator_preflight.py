@@ -41,6 +41,11 @@ _LOCATOR_ACTIONS = {
     "assert_text",
     "capture_text",
 }
+_PREFLIGHT_REQUIRED_ACTIONS = {
+    "click",
+    "input",
+    "capture_text",
+}
 
 # Matches: ... inside product "name"
 _SCOPE_RE = re.compile(
@@ -50,6 +55,16 @@ _SCOPE_RE = re.compile(
 
 def _target_is_generic_repeated_action(target: str) -> bool:
     return _normalize_text(target) in _GENERIC_REPEATED_TARGETS
+
+
+def _step_requires_preflight(step: dict[str, Any]) -> bool:
+    action = step.get("action")
+    if action in _PREFLIGHT_REQUIRED_ACTIONS:
+        return True
+    if str(step.get("target_strategy") or "").strip():
+        return True
+    target = str(step.get("target") or "").strip()
+    return target.startswith(("css=", "xpath=", "#", ".", "//"))
 
 
 def _normalize_text(value: str | None) -> str:
@@ -240,7 +255,10 @@ def apply_preflight_to_dsl(
             else:
                 step["locator_confidence"] = "high" if match_count == 1 else "medium"
         else:
-            step["locator_confidence"] = "low"
+            if _step_requires_preflight(step):
+                step["locator_confidence"] = "low"
+            else:
+                step["locator_confidence"] = "medium"
 
         if research_profile:
             candidates = [
@@ -265,6 +283,7 @@ def apply_preflight_to_dsl(
             for i, s in enumerate(steps)
             if isinstance(s, dict)
             and str(s.get("target") or "").strip()
+            and _step_requires_preflight(s)
             and s.get("match_count", 0) == 0
         ] + [
             f"Step {i}: target '{s.get('target')}' is a repeated product action; add product context"
@@ -343,6 +362,9 @@ def apply_preflight_to_dsl_by_state(
                 warnings.append(
                     f"Step {index}: page_state '{requested_state}' has no exploration evidence"
                 )
+            elif not _step_requires_preflight(step):
+                step["locator_confidence"] = "medium"
+                confidences[-1] = "medium"
             elif _is_composite_css(target, step.get("target_strategy")):
                 warnings.append(
                     f"Step {index}: composite CSS '{target}' was not verified in any "

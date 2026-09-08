@@ -73,6 +73,8 @@ type OpenAIClient struct {
 	chatCompletionsURL    string
 	apiKey                string
 	model                 string
+	thinkingMode          string
+	reasoningEffort       string
 	endpointScheme        string
 	endpointHost          string
 	credentialFingerprint string
@@ -132,19 +134,31 @@ func NewOpenAIClient(
 	}, nil
 }
 
+func (c *OpenAIClient) EnableThinking(reasoningEffort string) {
+	c.thinkingMode = "enabled"
+	c.reasoningEffort = normalizeReasoningEffort(reasoningEffort)
+}
+
 type chatRequest struct {
-	Model      string        `json:"model"`
-	Messages   []chatMessage `json:"messages"`
-	Tools      []chatTool    `json:"tools,omitempty"`
-	ToolChoice string        `json:"tool_choice,omitempty"`
-	UserID     string        `json:"user_id"`
+	Model           string           `json:"model"`
+	Messages        []chatMessage    `json:"messages"`
+	Tools           []chatTool       `json:"tools,omitempty"`
+	ToolChoice      string           `json:"tool_choice,omitempty"`
+	UserID          string           `json:"user_id"`
+	Thinking        *thinkingControl `json:"thinking,omitempty"`
+	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
+}
+
+type thinkingControl struct {
+	Type string `json:"type"`
 }
 
 type chatMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	Role             string     `json:"role"`
+	Content          string     `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 }
 
 type chatTool struct {
@@ -200,7 +214,7 @@ func (c *OpenAIClient) Complete(
 	if err != nil {
 		return agent.ModelResponse{}, fmt.Errorf("generate LLM client request ID: %w", err)
 	}
-	payload := buildRequest(c.model, clientRequestID, messages, definitions)
+	payload := c.buildRequest(clientRequestID, messages, definitions)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return agent.ModelResponse{}, fmt.Errorf("encode LLM request: %w", err)
@@ -280,6 +294,11 @@ func (c *OpenAIClient) Complete(
 			return agent.ModelResponse{}, lastErr
 		}
 		telemetry.FinishReason = decoded.Choices[0].FinishReason
+		telemetry.Reasoning = reasoningAudit(
+			c.thinkingMode,
+			c.reasoningEffort,
+			result.ReasoningContent,
+		)
 		telemetry.Attempts = append(telemetry.Attempts, agent.ModelAttempt{
 			Attempt: attempt, Status: "succeeded", StartedAt: started.UTC(),
 			LatencyMS: elapsedMillis(started), HTTPStatus: status,
@@ -302,17 +321,27 @@ func (c *OpenAIClient) Complete(
 	return agent.ModelResponse{}, lastErr
 }
 
-func buildRequest(
-	model string,
+func (c *OpenAIClient) buildRequest(
 	clientRequestID string,
 	messages []agent.Message,
 	definitions []agent.ToolDefinition,
 ) chatRequest {
 	request := chatRequest{
-		Model: model, ToolChoice: "auto", UserID: clientRequestID,
+		Model: c.model, ToolChoice: "auto", UserID: clientRequestID,
+	}
+	if c.thinkingMode != "" {
+		request.Thinking = &thinkingControl{Type: c.thinkingMode}
+		request.ReasoningEffort = c.reasoningEffort
 	}
 	for _, message := range messages {
-		converted := chatMessage{Role: message.Role, Content: message.Content, ToolCallID: message.ToolCallID}
+		converted := chatMessage{
+			Role:       message.Role,
+			Content:    message.Content,
+			ToolCallID: message.ToolCallID,
+		}
+		if c.thinkingMode != "" {
+			converted.ReasoningContent = message.ReasoningContent
+		}
 		for _, call := range message.ToolCalls {
 			converted.ToolCalls = append(converted.ToolCalls, toolCall{
 				ID: call.ID, Type: "function",
@@ -438,7 +467,10 @@ func parseResponse(decoded chatResponse) (agent.ModelResponse, error) {
 		return agent.ModelResponse{}, errNoChoices
 	}
 	message := decoded.Choices[0].Message
-	result := agent.ModelResponse{Content: message.Content}
+	result := agent.ModelResponse{
+		Content:          message.Content,
+		ReasoningContent: message.ReasoningContent,
+	}
 	for _, call := range message.ToolCalls {
 		if call.ID == "" || call.Function.Name == "" {
 			return agent.ModelResponse{}, errInvalidToolCall
@@ -447,10 +479,45 @@ func parseResponse(decoded chatResponse) (agent.ModelResponse, error) {
 			ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments,
 		})
 	}
-	if strings.TrimSpace(result.Content) == "" && len(result.ToolCalls) == 0 {
+	if strings.TrimSpace(result.Content) == "" &&
+		strings.TrimSpace(result.ReasoningContent) == "" &&
+		len(result.ToolCalls) == 0 {
 		return agent.ModelResponse{}, errNoResponseOutput
 	}
 	return result, nil
+}
+
+func reasoningAudit(
+	thinkingMode string,
+	reasoningEffort string,
+	reasoningContent string,
+) *agent.ReasoningAudit {
+	if thinkingMode == "" && strings.TrimSpace(reasoningContent) == "" {
+		return nil
+	}
+	audit := &agent.ReasoningAudit{
+		ThinkingMode:    thinkingMode,
+		ReasoningEffort: reasoningEffort,
+	}
+	if reasoningContent == "" {
+		return audit
+	}
+	sum := sha256.Sum256([]byte(reasoningContent))
+	audit.ContentAvailable = true
+	audit.ContentBytes = len([]byte(reasoningContent))
+	audit.ContentSHA256 = hex.EncodeToString(sum[:])
+	return audit
+}
+
+func normalizeReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low", "high", "max":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "":
+		return "max"
+	default:
+		return "max"
+	}
 }
 
 func usageFromResponse(usage *struct {

@@ -114,6 +114,13 @@ uv run python scripts/run_agentic_e2e.py \
   --acceptance-spec ../research/acceptance/automationexercise-blue-top-cart.v1.json
 ```
 
+需要打开 DeepSeek thinking mode 时，在启动 Go AgentService 前设置：
+
+```bash
+AI_PLANNING_THINK_MODE=true
+AI_PLANNING_REASONING_EFFORT=max
+```
+
 新增任务只允许增加 acceptance JSON，不得修改 Driver/Runner/Oracle 代码。结果使用
 `agentic-e2e.result.v1` JSON。
 运行中 Job 通过 heartbeat 续租并读取持久化取消标记，取消会在 Runner 的下一安全步骤边界生效。

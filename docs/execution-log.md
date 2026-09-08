@@ -56,6 +56,38 @@
 
 ## 任务记录
 
+## 2026-09-08 | 修复验证型文本事实预检阻断
+
+- 任务：修复 BUG-163，避免运行时可见但缺少 a11y 节点的文本事实被 locator preflight 永久阻断。
+- 操作：将 research-v1 的强预检动作收敛为 `click`、`input`、`capture_text`；`wait_for`、`assert_text` 在没有显式 selector/target_strategy 且无 candidates 时允许作为运行时文本验证步骤通过 DSL executable 校验；显式 CSS/XPath/selector 目标仍必须有预检 candidates。同步修改 Python Browser Worker preflight、Python research schema、Go research schema，并补充 Go/Python 回归测试。
+- 结果：交互定位仍保持 verified candidate 强约束；验证型文本事实可以进入正式 DSL，由 Runner 在执行时验证，避免再次卡在 `Rs. 400` 这类 action-only 文本事实上。
+- 验证：`go test -count=1 ./...` 通过；`uv run python -m unittest discover -s tests` 通过（161 passed / 2 skipped）；`uv run python -m compileall src tests scripts` 通过。
+- 后续：需要在下一次 live E2E 中确认 Men Tshirt 任务能越过 `generate_dsl` 并进入正式报告/Oracle；若仍失败，再根据 Runner 报告做归因修复。
+
+## 2026-09-08 | PlanStep 事实充分性门与 think-mode E2E 验证
+
+- 任务：补充确定性的 PlanStep 完成状态/事实充分性门，开启 DeepSeek thinking mode 后重跑 Men Tshirt live E2E。
+- 操作：在 Go Harness 增加探索门控，统计 `explore_page`/`explore_flow` 调用、重复 flow 签名、已完成动作、证据项、DSL 预检缺失 target；开启 DeepSeek `thinking` 请求与 reasoning 审计；修复探索摘要中同 URL/page_state 后续失败页覆盖前序成功 action 的问题；为 `execute_dsl` 模型可见摘要补充 `batch_id`/`case_id`/`report_api_url`。
+- 结果：多轮真实 E2E 均调用官方 `api.deepseek.com` 且 reasoning 审计生效。Run `run_fb9c4198c7ac06549b7c1f56` 已进入 `generate_dsl`、审批和 `execute_dsl`，创建 batch `562`，证明探索门能迫使模型收敛到 DSL；后续暴露出 `execute_dsl` 摘要缺 `batch_id` 导致模型猜测报告 ID，以及详情页价格/分类属于运行时可见但缺少 a11y 节点的文本事实，仍会被 locator preflight 拒绝。Run `run_642d52a779cb803da104bc69` 验证了预检失败后可按缺失 target 允许补探，但最终为避免继续 token 消耗手动取消。
+- 验证：`go test -count=1 ./internal/agent ./internal/harness ./internal/platform/llm ./internal/agentservice ./internal/config` 通过；E2E 结果文件写入 `research/results/e2e-smoke-men-tshirt-think-gated-3-20260908/run.json` 与 `research/results/e2e-smoke-men-tshirt-think-gated-4-20260908/run.json`；trace 中可见 `facts_sufficient_for_generation`、`unresolved_generation_targets`、`thinking_mode=enabled` 和 provider request/response ID。
+- 后续：继续实现验证型文本事实的结构化 evidence 通道，避免把已成功的运行时 `wait_for` 文本错误要求为 a11y locator；同时降低 thinking mode 下的上下文膨胀和 cache miss。
+
+## 2026-09-08 | Men Tshirt E2E trace 复盘
+
+- 任务：回答用户关于是否有 CoT、为什么 AI 持续调用 `explore_flow`、工具是否有使用上限以及 Agent 循环机制的问题。
+- 操作：按 Run `run_76d65f1db2ad473618b13385` 查询 `agent_events`，核对 8 个 `research.llm_call` 的 `logical_call_id`、DeepSeek provider response/request ID、usage、assistant 可见 content、tool_calls 和 tool result 顺序；复查 Agent loop、tool policy、`explore_flow` schema 与系统 prompt。
+- 结果：本地没有保存隐藏 CoT；trace 中可见内容显示模型持续认为分类/价格 evidence 不足并重复 probe。当前只有 `AGENTSERVICE_MAX_TURNS` 全局 turn 上限、driver 总超时和 `execute_dsl` 审批门，缺少 `explore_flow` per-run 上限、重复 probe 熔断、事实充分性判定和状态机收敛门。
+- 验证：8 次 `finish_reason=tool_calls`，2 次 `explore_page`、9 次 `explore_flow`，0 次 `generate_dsl`、0 Batch、0 Execution；DeepSeek 官方文档确认 thinking mode 可通过 API 响应返回 `reasoning_content`，但当前 OpenAI ChatCompletions 客户端没有解析或持久化该字段。
+- 后续：将 `reasoning_content`/Responses API reasoning 作为可配置审计输入单独设计，默认仍不得依赖隐藏 CoT 判定通过；Task 6.6 继续实现 PlanStep 状态、预算和收敛门。
+
+## 2026-09-08 | Men Tshirt 单次 live E2E
+
+- 任务：在 Task 6.7 完成后使用第二个声明式 acceptance fixture 跑一次真实 E2E，评估 AI 是否能完成不同任务。
+- 操作：确认 `AI_PLANNING_PROVIDER=deepseek`、官方 `api.deepseek.com`、`deepseek-v4-flash` 和 API key 已配置；应用数据库迁移，启动 Browser Worker、Go execution-worker 与 12-turn AgentService；以 600 秒总超时运行 `automationexercise-men-tshirt-details.v1.json`。当第 8 次模型调用后仍无 DSL generation 时主动取消，随后停止本轮服务。
+- 结果：Project 1058 / Session 64 / Run `run_76d65f1db2ad473618b13385`。Agent 成功搜索 Men Tshirt、打开 `/product_details/2` 并识别商品名与 `Rs. 400`，但因分类文本精确匹配失败和缺少完成状态，持续重复 probe，未进入 DSL、审批或正式执行；运行安全取消并生成失败结果 `research/results/e2e-smoke-men-tshirt-20260908T142400Z/run.json`。新增 BUG-161。
+- 验证：8 次官方 DeepSeek 调用，input 342,627、output 28,757、total 371,384 tokens，prompt cache hit 0、miss 342,627；8/8 provider response/request ID 和 credential fingerprint 已持久化，endpoint 全部为 HTTPS `api.deepseek.com`。共 2 次 `explore_page`、9 次 `explore_flow`，所有 flow 均为 `isolated_probe` 且不持久化状态；Generation/Batch/Execution 均为 0，取消清理成功。DeepSeek 平台访问落到登录页，未完成人工平台记录核对。
+- 后续：先完成 Task 6.6 的 Task Plan/PlanStep 完成条件、结构化文本条件语义、事实充分性/收敛门和模型调用预算熔断，再运行下一次 live E2E。
+
 ## 2026-09-08 | 完成 Task 6.7 声明式 E2E 验收迁移
 
 - 任务：移除可复用 E2E Driver/Oracle 中的 Canonical、Blue Top 和 cart 专用硬编码，使新增任务只需增加版本化数据文件。

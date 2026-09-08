@@ -459,6 +459,35 @@ func TestResearchExecutableAcceptsRealPreflightCandidateShape(t *testing.T) {
 	}
 }
 
+func TestResearchExecutableAllowsRuntimeTextVerificationWithoutCandidates(t *testing.T) {
+	raw := json.RawMessage(`{
+		"profile":"research-v1","name":"Verify text","steps":[{
+			"action":"wait_for","intent":"Wait for runtime text","target":"Rs. 400",
+			"preconditions":[],"postconditions":[],
+			"idempotency":"idempotent","side_effect":"none",
+			"locator_confidence":"medium","candidates":[]
+		}]
+	}`)
+	if _, err := ValidateExecutableCase(raw); err != nil {
+		t.Fatalf("ValidateExecutableCase(wait_for runtime text) error = %v", err)
+	}
+}
+
+func TestResearchExecutableStillRequiresCandidatesForInteractiveSteps(t *testing.T) {
+	raw := json.RawMessage(`{
+		"profile":"research-v1","name":"Click","steps":[{
+			"action":"click","intent":"Click submit","target":"Submit",
+			"preconditions":[{"type":"url_contains","value":"/form"}],
+			"postconditions":[{"type":"url_changes"}],
+			"idempotency":"idempotent","side_effect":"browser_state",
+			"locator_confidence":"medium","candidates":[]
+		}]
+	}`)
+	if _, err := ValidateExecutableCase(raw); err == nil {
+		t.Fatal("ValidateExecutableCase(click without candidates) error = nil")
+	}
+}
+
 func TestResearchActionSemantics(t *testing.T) {
 	rejected := []string{
 		`{"profile":"research-v1","name":"goto","steps":[{"action":"goto","intent":"Open checkout","target":"Checkout page","value":"/checkout","preconditions":[],"postconditions":[],"idempotency":"idempotent","side_effect":"browser_state"}]}`,

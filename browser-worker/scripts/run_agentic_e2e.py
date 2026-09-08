@@ -822,7 +822,6 @@ def _formal_result(
             and step.get("screenshot_url")
             for step in steps
         ),
-        "final_url": str(execution.get("latest_url") or "").endswith("/view_cart"),
         "vision_disabled": not any(
             bool(step.get("vlm_preverify_used")) for step in steps
         ),

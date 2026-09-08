@@ -117,25 +117,26 @@ type ToolResultPageSummary struct {
 }
 
 type ModelToolSummary struct {
-	SchemaVersion   string                    `json:"schema_version"`
-	PolicyVersion   string                    `json:"policy_version"`
-	Tool            string                    `json:"tool"`
-	Source          ToolResultSource          `json:"source"`
-	SummarySHA256   string                    `json:"summary_sha256,omitempty"`
-	Success         *bool                     `json:"success,omitempty"`
-	Status          string                    `json:"status,omitempty"`
-	Warnings        []string                  `json:"warnings,omitempty"`
-	Failures        []ToolResultErrorSummary  `json:"failures,omitempty"`
-	Context         *ToolResultContextSummary `json:"context,omitempty"`
-	Observation     *StructuredObservation    `json:"observation,omitempty"`
-	ExecutedEffects []ObservedActionOption    `json:"executed_effects,omitempty"`
-	DSL             *ToolResultDSLSummary     `json:"dsl,omitempty"`
-	Report          *ToolResultReportSummary  `json:"report,omitempty"`
-	Repair          *ToolResultRepairSummary  `json:"repair,omitempty"`
-	Generic         *ToolResultGenericSummary `json:"generic,omitempty"`
-	Pages           []ToolResultPageSummary   `json:"pages,omitempty"`
-	Truncation      ToolResultTruncation      `json:"truncation"`
-	ReferenceOnly   bool                      `json:"reference_only,omitempty"`
+	SchemaVersion   string                      `json:"schema_version"`
+	PolicyVersion   string                      `json:"policy_version"`
+	Tool            string                      `json:"tool"`
+	Source          ToolResultSource            `json:"source"`
+	SummarySHA256   string                      `json:"summary_sha256,omitempty"`
+	Success         *bool                       `json:"success,omitempty"`
+	Status          string                      `json:"status,omitempty"`
+	Warnings        []string                    `json:"warnings,omitempty"`
+	Failures        []ToolResultErrorSummary    `json:"failures,omitempty"`
+	Context         *ToolResultContextSummary   `json:"context,omitempty"`
+	Observation     *StructuredObservation      `json:"observation,omitempty"`
+	ExecutedEffects []ObservedActionOption      `json:"executed_effects,omitempty"`
+	DSL             *ToolResultDSLSummary       `json:"dsl,omitempty"`
+	Execution       *ToolResultExecutionSummary `json:"execution,omitempty"`
+	Report          *ToolResultReportSummary    `json:"report,omitempty"`
+	Repair          *ToolResultRepairSummary    `json:"repair,omitempty"`
+	Generic         *ToolResultGenericSummary   `json:"generic,omitempty"`
+	Pages           []ToolResultPageSummary     `json:"pages,omitempty"`
+	Truncation      ToolResultTruncation        `json:"truncation"`
+	ReferenceOnly   bool                        `json:"reference_only,omitempty"`
 }
 
 type ToolResultContextSummary struct {
@@ -217,6 +218,13 @@ type ToolResultDSLSummary struct {
 	StepCount    int      `json:"step_count"`
 	Actions      []string `json:"actions,omitempty"`
 	Targets      []string `json:"targets,omitempty"`
+}
+
+type ToolResultExecutionSummary struct {
+	BatchID      any    `json:"batch_id,omitempty"`
+	CaseID       any    `json:"case_id,omitempty"`
+	Status       string `json:"status,omitempty"`
+	ReportAPIURL string `json:"report_api_url,omitempty"`
 }
 
 type ToolResultReportSummary struct {
@@ -471,7 +479,7 @@ func CompactExplorationTranscript(transcript []Message) []Message {
 	located := make([]locatedSummary, 0)
 	latest := make(map[string]int64)
 	for index, message := range transcript {
-		summary, ok := decodeModelToolSummary(message.Content)
+		summary, ok := DecodeModelToolSummary(message.Content)
 		if !ok || message.Role != "tool" {
 			continue
 		}
@@ -542,7 +550,7 @@ func CompactExplorationTranscript(transcript []Message) []Message {
 func explorationSummaryBytes(messages []Message) int {
 	total := 0
 	for _, message := range messages {
-		if summary, ok := decodeModelToolSummary(message.Content); ok &&
+		if summary, ok := DecodeModelToolSummary(message.Content); ok &&
 			IsExplorationTool(summary.Tool) {
 			total += len(message.Content)
 		}
@@ -550,7 +558,7 @@ func explorationSummaryBytes(messages []Message) int {
 	return total
 }
 
-func decodeModelToolSummary(content string) (ModelToolSummary, bool) {
+func DecodeModelToolSummary(content string) (ModelToolSummary, bool) {
 	var envelope struct {
 		SchemaVersion string `json:"schema_version"`
 	}
@@ -643,6 +651,8 @@ func buildCapabilityToolSummary(
 	switch tool {
 	case "generate_dsl":
 		summary.DSL = summarizeDSLResult(value)
+	case "execute_dsl":
+		summary.Execution = summarizeExecutionResult(value)
 	case "get_report":
 		summary.Report = summarizeReportResult(value)
 	case "fix_and_retry":
@@ -682,6 +692,15 @@ func summarizeDSLResult(value map[string]any) *ToolResultDSLSummary {
 	result.Actions = sortedKeys(actionSet, 16)
 	result.Targets = sortedKeys(targetSet, 24)
 	return result
+}
+
+func summarizeExecutionResult(value map[string]any) *ToolResultExecutionSummary {
+	return &ToolResultExecutionSummary{
+		BatchID:      scalarValue(value["batch_id"]),
+		CaseID:       scalarValue(value["case_id"]),
+		Status:       boundedUTF8(stringValue(value["status"]), 64),
+		ReportAPIURL: boundedUTF8(stringValue(value["report_api_url"]), 256),
+	}
 }
 
 func summarizeReportResult(value map[string]any) *ToolResultReportSummary {
@@ -847,15 +866,10 @@ func normalizeSummary(summary *ModelToolSummary) {
 		page.Actions = normalizeActions(page.Actions)
 		key := page.URL + "\x00" + page.PageState
 		existing, exists := pageByKey[key]
-		if !exists || page.Revision > existing.Revision ||
-			(page.Revision == existing.Revision && jsonLess(page, existing)) {
-			if exists {
-				page.Omitted.Pages += 1 + existing.Omitted.Pages
-			}
-			pageByKey[key] = page
+		if exists {
+			pageByKey[key] = mergePageSummaries(existing, page)
 		} else {
-			existing.Omitted.Pages += 1 + page.Omitted.Pages
-			pageByKey[key] = existing
+			pageByKey[key] = page
 		}
 	}
 	summary.Pages = summary.Pages[:0]
@@ -881,6 +895,37 @@ func normalizeSummary(summary *ModelToolSummary) {
 		}
 		return left.Revision < right.Revision
 	})
+}
+
+func mergePageSummaries(
+	left ToolResultPageSummary,
+	right ToolResultPageSummary,
+) ToolResultPageSummary {
+	merged := left
+	if right.Revision > left.Revision ||
+		(right.Revision == left.Revision && jsonLess(right, left)) {
+		merged.URL = right.URL
+		merged.PageState = right.PageState
+		merged.PageKind = right.PageKind
+		merged.Revision = right.Revision
+		merged.Status = right.Status
+		merged.Description = right.Description
+		merged.ElementCount = right.ElementCount
+		merged.Failure = right.Failure
+	}
+	if merged.PageKind == "" {
+		merged.PageKind = firstNonEmptyString(left.PageKind, right.PageKind)
+	}
+	if merged.Status == "" {
+		merged.Status = firstNonEmptyString(left.Status, right.Status)
+	}
+	merged.A11yNodes = deduplicateNodes(append(merged.A11yNodes, right.A11yNodes...))
+	merged.Actions = normalizeActions(append(merged.Actions, right.Actions...))
+	merged.Omitted = left.Omitted
+	addOmissions(&merged.Omitted, right.Omitted)
+	merged.Omitted.Pages++
+	merged.ReferenceOnly = left.ReferenceOnly && right.ReferenceOnly
+	return merged
 }
 
 func encodeBoundedSummary(summary *ModelToolSummary) (string, error) {

@@ -125,6 +125,42 @@ class ResearchActionIRContractTest(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
                 validate_research_dsl(payload)
 
+    def test_runtime_text_verification_steps_do_not_require_candidates(self) -> None:
+        payload = {
+            "profile": "research-v1",
+            "name": "Verify runtime text",
+            "steps": [
+                {
+                    "action": "wait_for",
+                    "intent": "Wait for price text",
+                    "target": "Rs. 400",
+                    "timeout_ms": 5000,
+                    "page_state": "detail",
+                    "preconditions": [],
+                    "postconditions": [],
+                    "idempotency": "idempotent",
+                    "side_effect": "none",
+                    "locator_confidence": "medium",
+                    "candidates": [],
+                },
+                {
+                    "action": "assert_text",
+                    "intent": "Assert detail text",
+                    "target": "body",
+                    "value": "Rs. 400",
+                    "page_state": "detail",
+                    "preconditions": [],
+                    "postconditions": [],
+                    "idempotency": "idempotent",
+                    "side_effect": "none",
+                    "locator_confidence": "medium",
+                    "candidates": [],
+                },
+            ],
+        }
+
+        validate_research_dsl(payload)
+
     def test_goto_allows_empty_preconditions_but_requires_postconditions(self) -> None:
         payload = {
             "profile": "research-v1",

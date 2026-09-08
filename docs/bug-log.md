@@ -48,6 +48,58 @@
 
 ## 问题记录
 
+## BUG-163 | 验证型文本事实只有运行时证据时无法通过 locator preflight
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：high
+- 来源：think-mode Men Tshirt live E2E
+- 描述：详情页 `Rs. 400` 可被 Playwright `wait_for` 成功验证，但没有进入模型可见 a11y 节点；分类文本的 a11y name 又被轮播内容污染。模型将这些事实写成独立 `wait_for`/`assert_text` target 后，`generate_dsl` locator preflight 固定返回 matched 0。
+- 复现步骤：
+  1. 探索 `/product_details/2` 并用 `wait_for "Rs. 400"` 获取成功 action fact。
+  2. 将 `Rs. 400` 作为 `product_detail` 状态的独立 locator-bearing DSL step target。
+  3. `generate_dsl` 因 `a11y_nodes_by_state` 中无对应节点而拒绝生成。
+- 影响：运行时已验证但 A11y 未建模的文本事实无法进入正式 DSL，Agent 会在探索与预检之间反复补证。
+- 根因：当前 locator preflight 只接收 `a11y_nodes_by_state`，未接收结构化 action/verification facts；交互 locator 证据与纯验证事实共用同一门。
+- 处理：将 research-v1 强预检动作限定为 `click`、`input`、`capture_text`；`wait_for` 和 `assert_text` 在无显式 selector/target_strategy 且无 candidates 时允许作为运行时文本验证步骤通过 executable 校验。显式 CSS/XPath/selector 目标仍必须有 verified candidates，避免放松交互定位安全边界。
+- 验证：新增 Go/Python 回归测试覆盖 runtime text verification without candidates；`go test -count=1 ./...`、`uv run python -m unittest discover -s tests`、`uv run python -m compileall src tests scripts` 均通过。Run `run_642d52a779cb803da104bc69` 是修复前证据，下一次 live E2E 需验证端到端结果。
+- 关联记录：`docs/execution-log.md#2026-09-08--planstep-事实充分性门与-think-mode-e2e-验证`
+
+## BUG-162 | execute_dsl 模型摘要丢失 batch_id 导致报告 ID 猜测
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：high
+- 来源：think-mode Men Tshirt live E2E
+- 描述：`execute_dsl` 原始结果包含 `batch_id=562`，但通用模型摘要只保留 top-level keys，模型随后连续猜测 1、94、384 等错误 batch ID，最终向用户询问。
+- 复现步骤：
+  1. 完成 DSL 审批并调用 `execute_dsl`。
+  2. 查看模型 transcript，摘要中看不到 batch ID。
+  3. 模型对 `get_report` 传入多个错误 ID，driver 最终报 `missing execution_report artifact`。
+- 影响：正式执行已经创建，但 Agent 无法确定性读取报告，增加无效模型调用并使 E2E 失败。
+- 根因：`BuildModelToolSummary` 没有 `execute_dsl` 专用结构，错误落入 generic summary。
+- 处理：新增 `ToolResultExecutionSummary`，保留 `batch_id`、`case_id`、`status` 和 `report_api_url`；补充回归测试。
+- 验证：`TestExecuteDSLToolResultExposesBatchID` 通过；相关 Go 包测试通过。
+- 关联记录：`docs/execution-log.md#2026-09-08--planstep-事实充分性门与-think-mode-e2e-验证`
+
+## BUG-161 | Agent 获得目标页事实后仍重复 probe，未收敛到 DSL
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：high
+- 来源：Task 6.7 后 Men Tshirt 单次 live E2E
+- 描述：Agent 已通过搜索进入 `/product_details/2`，并从 A11y evidence 读到商品名、价格和包含分类信息的详情文本，但仍连续调用 `explore_flow` 验证相同事实，未调用 `generate_dsl`。
+- 复现步骤：
+  1. 使用 `automationexercise-men-tshirt-details.v1.json` 启动一次 `research-v1` live E2E。
+  2. 观察 Agent 先完成 Products 搜索、点击 `View Product` 并到达商品详情页。
+  3. 页面分类节点实际为包含不间断空格和附加推荐文本的 `Category: Men > Tshirts...`；精确 `wait_for` 失败后，Agent 重复发起详情页 probe。
+  4. 运行到第 8 次官方模型调用仍无 DSL generation、Batch 或 Execution。
+- 影响：只读任务也可能在已具备足够事实时耗尽大量 token，无法进入审批和正式执行；本次单 Run 累计 371,384 tokens，prompt cache hit 为 0。
+- 根因：当前尚无版本化 Task Plan/PlanStep 完成状态和事实充分性判定；`wait_for` 的精确文本语义与结构化 observation 中的规范化/包含关系不一致，失败恢复只能继续请求 probe，缺少“证据已足够则生成 DSL”的收敛门。
+- 处理：增加通用探索调用预算、重复 flow 签名门、PlanStep/action 完成统计、证据项充分性门和预检缺失 target 跟踪；失败页摘要改为合并同状态前序成功 action，避免完成事实被覆盖；没有加入任何任务专用商品、URL 或 selector 分支。
+- 验证：Run `run_fb9c4198c7ac06549b7c1f56` 在 `facts_sufficient_for_generation` 后进入 `generate_dsl`、审批、`execute_dsl`，创建 batch `562`；Run `run_642d52a779cb803da104bc69` 在预检缺失 target 后获准定向补探。剩余文本事实预检问题单列 BUG-163。
+- 关联记录：`docs/execution-log.md#2026-09-08--men-tshirt-单次-live-e2e`
+
 ## BUG-160 | Browser Worker src 迁移后残留旧工具路径和文件日志配置
 
 - 日期：2026-09-08

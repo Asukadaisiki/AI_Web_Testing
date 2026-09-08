@@ -9,15 +9,17 @@ import (
 )
 
 type Config struct {
-	Address          string
-	LLMProvider      string
-	LLMBaseURL       string
-	LLMAPIKey        string
-	LLMModel         string
-	AgentMaxTurns    int
-	DefaultActorID   int64
-	DatabaseURL      string
-	BrowserWorkerURL string
+	Address            string
+	LLMProvider        string
+	LLMBaseURL         string
+	LLMAPIKey          string
+	LLMModel           string
+	LLMThinkMode       bool
+	LLMReasoningEffort string
+	AgentMaxTurns      int
+	DefaultActorID     int64
+	DatabaseURL        string
+	BrowserWorkerURL   string
 }
 
 func Load() Config {
@@ -36,15 +38,26 @@ func Load() Config {
 		browserWorkerURL = "http://127.0.0.1:8000/api/v1"
 	}
 	return Config{
-		Address:          address,
-		LLMProvider:      strings.TrimSpace(os.Getenv("AI_PLANNING_PROVIDER")),
-		LLMBaseURL:       strings.TrimRight(os.Getenv("AI_PLANNING_BASE_URL"), "/"),
-		LLMAPIKey:        os.Getenv("AI_PLANNING_API_KEY"),
-		LLMModel:         os.Getenv("AI_PLANNING_MODEL"),
-		AgentMaxTurns:    maxTurns,
-		DefaultActorID:   int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
-		DatabaseURL:      normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
-		BrowserWorkerURL: browserWorkerURL,
+		Address:            address,
+		LLMProvider:        strings.TrimSpace(os.Getenv("AI_PLANNING_PROVIDER")),
+		LLMBaseURL:         strings.TrimRight(os.Getenv("AI_PLANNING_BASE_URL"), "/"),
+		LLMAPIKey:          os.Getenv("AI_PLANNING_API_KEY"),
+		LLMModel:           os.Getenv("AI_PLANNING_MODEL"),
+		LLMThinkMode:       boolFromEnv("AI_PLANNING_THINK_MODE"),
+		LLMReasoningEffort: strings.TrimSpace(os.Getenv("AI_PLANNING_REASONING_EFFORT")),
+		AgentMaxTurns:      maxTurns,
+		DefaultActorID:     int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
+		DatabaseURL:        normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
+		BrowserWorkerURL:   browserWorkerURL,
+	}
+}
+
+func boolFromEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	default:
+		return false
 	}
 }
 

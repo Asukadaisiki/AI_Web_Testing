@@ -62,9 +62,10 @@ func (l *Loop) RunWithModelContext(
 			return err
 		}
 		*transcript = append(*transcript, Message{
-			Role:      "assistant",
-			Content:   response.Content,
-			ToolCalls: response.ToolCalls,
+			Role:             "assistant",
+			Content:          response.Content,
+			ReasoningContent: response.ReasoningContent,
+			ToolCalls:        response.ToolCalls,
 		})
 		continueLoop, err := handle(ctx, response)
 		if err != nil {
@@ -87,7 +88,7 @@ func latestToolError(transcript []Message) string {
 		if message.Role != "tool" {
 			continue
 		}
-		if summary, ok := decodeModelToolSummary(message.Content); ok {
+		if summary, ok := DecodeModelToolSummary(message.Content); ok {
 			for _, failure := range summary.Failures {
 				if value := strings.TrimSpace(failure.Message); value != "" {
 					return value

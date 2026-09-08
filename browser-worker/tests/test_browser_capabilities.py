@@ -225,6 +225,49 @@ class BrowserCapabilityContractTest(unittest.TestCase):
         self.assertEqual(result["locator_confidence"], "low")
         self.assertEqual(len(result["warnings"]), 1)
 
+    def test_validate_page_elements_allows_runtime_text_wait_without_node(self) -> None:
+        result = execute_browser_capability(
+            None,  # type: ignore[arg-type]
+            capability="validate_page_elements",
+            project_id=1,
+            conversation_id="1",
+            arguments={
+                "dsl_case": {
+                    "profile": "research-v1",
+                    "name": "Runtime text",
+                    "steps": [
+                        {
+                            "action": "wait_for",
+                            "intent": "Wait for price text verified at runtime",
+                            "target": "Rs. 400",
+                            "timeout_ms": 5000,
+                            "page_state": "detail",
+                            "preconditions": [],
+                            "postconditions": [],
+                            "idempotency": "idempotent",
+                            "side_effect": "none",
+                        }
+                    ],
+                },
+                "a11y_nodes_by_state": {
+                    "detail": [
+                        {
+                            "node_id": "title",
+                            "role": "heading",
+                            "name": "Men Tshirt",
+                        }
+                    ]
+                },
+            },
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["warnings"], [])
+        step = result["dsl_case"]["steps"][0]
+        self.assertNotIn("match_count", step)
+        self.assertEqual(step["locator_confidence"], "medium")
+        self.assertEqual(step["candidates"], [])
+
     def test_validate_required_elements_recommends_reexplore_for_gaps(self) -> None:
         result = execute_browser_capability(
             None,  # type: ignore[arg-type]

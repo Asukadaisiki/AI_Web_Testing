@@ -186,6 +186,106 @@ func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 	}
 }
 
+func TestBuildModelToolSummaryMergesRepeatedPageStateActions(t *testing.T) {
+	raw := json.RawMessage(`{
+		"success": false,
+		"failures": [{
+			"code": "flow_action_failed",
+			"step_index": 0,
+			"action_index": 2,
+			"action": "wait_for",
+			"target": "Category: Men > Tshirts"
+		}],
+		"pages": [
+			{
+				"url": "https://example.com/product_details/2",
+				"page_state": "S0",
+				"revision": 1,
+				"status": "success",
+				"element_count": 3,
+				"actions": [{
+					"step_index": 0,
+					"action_index": 0,
+					"action": "wait_for",
+					"target": "Men Tshirt",
+					"phase": "after",
+					"status": "success",
+					"url": "https://example.com/product_details/2",
+					"page_state": "S0",
+					"evidence_count": 1
+				}]
+			},
+			{
+				"url": "https://example.com/product_details/2",
+				"page_state": "S0",
+				"revision": 2,
+				"status": "success",
+				"element_count": 3,
+				"actions": [{
+					"step_index": 0,
+					"action_index": 1,
+					"action": "wait_for",
+					"target": "Rs. 400",
+					"phase": "after",
+					"status": "success",
+					"url": "https://example.com/product_details/2",
+					"page_state": "S0",
+					"evidence_count": 0
+				}]
+			},
+			{
+				"url": "https://example.com/product_details/2",
+				"page_state": "S0",
+				"revision": 3,
+				"status": "error",
+				"element_count": 0,
+				"actions": [{
+					"step_index": 0,
+					"action_index": 2,
+					"action": "wait_for",
+					"target": "Category: Men > Tshirts",
+					"phase": "after",
+					"status": "error",
+					"url": "https://example.com/product_details/2",
+					"page_state": "S0",
+					"evidence_count": 0,
+					"failure": {
+						"code": "flow_action_failed",
+						"step_index": 0,
+						"action_index": 2,
+						"action": "wait_for",
+						"target": "Category: Men > Tshirts"
+					}
+				}]
+			}
+		]
+	}`)
+
+	content, err := BuildModelToolSummary("explore_flow", raw, 23)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Pages) != 1 {
+		t.Fatalf("pages = %d, want merged single page", len(summary.Pages))
+	}
+	actions := summary.Pages[0].Actions
+	if len(actions) != 3 {
+		t.Fatalf("actions = %#v, want successful and failed actions preserved", actions)
+	}
+	if actions[0].Target != "Men Tshirt" ||
+		actions[1].Target != "Rs. 400" ||
+		actions[2].Target != "Category: Men > Tshirts" {
+		t.Fatalf("merged actions = %#v", actions)
+	}
+	if summary.Observation == nil || len(summary.Observation.ActionOptions) != 3 {
+		t.Fatalf("observation action options = %#v", summary.Observation)
+	}
+}
+
 func TestBuildModelToolSummaryBoundsUTF8AndReportsOmissions(t *testing.T) {
 	nodes := make([]map[string]any, 0, 1200)
 	for index := 0; index < 1200; index++ {
@@ -366,6 +466,34 @@ func TestNonExplorationToolResultUsesStructuredModelSummary(t *testing.T) {
 	if summary.Report.FailureSignals[0].Category != "postcondition" ||
 		summary.Report.FailureSignals[0].SideEffectCommitted != true {
 		t.Fatalf("failure brief = %#v", summary.Report.FailureSignals[0])
+	}
+}
+
+func TestExecuteDSLToolResultExposesBatchID(t *testing.T) {
+	raw := json.RawMessage(`{
+		"batch_id":562,
+		"case_id":400,
+		"report_api_url":"/api/v2/execution-batches/562/report",
+		"status":"pending"
+	}`)
+	content, err := BuildModelToolSummary("execute_dsl", raw, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content == string(raw) {
+		t.Fatalf("raw execute_dsl result was not summarized: %s", content)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.Tool != "execute_dsl" ||
+		summary.Execution == nil ||
+		summary.Execution.BatchID != float64(562) ||
+		summary.Execution.CaseID != float64(400) ||
+		summary.Execution.Status != "pending" ||
+		summary.Execution.ReportAPIURL != "/api/v2/execution-batches/562/report" {
+		t.Fatalf("execution summary = %#v", summary.Execution)
 	}
 }
 

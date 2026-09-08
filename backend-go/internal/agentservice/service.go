@@ -325,6 +325,7 @@ func (s *Service) RecordModelTelemetry(
 				RequestBudget: record.Telemetry.Prompt.RequestBudget,
 			},
 			Usage:                     usage,
+			Reasoning:                 safeReasoningAudit(record.Telemetry.Reasoning),
 			FinishReason:              limitString(finishReason, 64),
 			Attempt:                   attempt.Attempt,
 			AttemptStatus:             attempt.Status,
@@ -359,6 +360,19 @@ func (s *Service) RecordModelTelemetry(
 		}
 	}
 	return nil
+}
+
+func safeReasoningAudit(reasoning *agent.ReasoningAudit) *agent.ReasoningAudit {
+	if reasoning == nil {
+		return nil
+	}
+	return &agent.ReasoningAudit{
+		ThinkingMode:     limitString(reasoning.ThinkingMode, 32),
+		ReasoningEffort:  limitString(reasoning.ReasoningEffort, 32),
+		ContentAvailable: reasoning.ContentAvailable,
+		ContentBytes:     reasoning.ContentBytes,
+		ContentSHA256:    limitString(reasoning.ContentSHA256, 64),
+	}
 }
 
 func limitString(value string, limit int) string {
