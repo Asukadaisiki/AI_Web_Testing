@@ -74,6 +74,57 @@ class AcceptanceSpecTest(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertTrue(result["checks"]["product_details"]["passed"])
 
+    def test_generic_oracle_ignores_hidden_modal_template_text(self) -> None:
+        acceptance = load_acceptance_spec(
+            ACCEPTANCE_ROOT / "automationexercise-men-tshirt-details.v1.json"
+        )
+        html = """
+        <html><body>
+          <div id="cartModal" class="modal fade">
+            <p>Your product has been added to cart.</p>
+          </div>
+          <h2>Men Tshirt</h2>
+          <p>Category: Men &gt; Tshirts</p>
+          <span>Rs. 400</span>
+        </body></html>
+        """
+
+        result = evaluate_acceptance(
+            acceptance,
+            html=html,
+            actual_url="https://automationexercise.com/product_details/2",
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertNotIn(
+            "Your product has been added to cart.",
+            result["checks"]["product_details"]["actual"]["texts"][0],
+        )
+
+    def test_generic_oracle_rejects_visible_modal_text(self) -> None:
+        acceptance = load_acceptance_spec(
+            ACCEPTANCE_ROOT / "automationexercise-men-tshirt-details.v1.json"
+        )
+        html = """
+        <html><body>
+          <div id="cartModal" class="modal fade show">
+            <p>Your product has been added to cart.</p>
+          </div>
+          <h2>Men Tshirt</h2>
+          <p>Category: Men &gt; Tshirts</p>
+          <span>Rs. 400</span>
+        </body></html>
+        """
+
+        result = evaluate_acceptance(
+            acceptance,
+            html=html,
+            actual_url="https://automationexercise.com/product_details/2",
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["checks"]["product_details"]["passed"])
+
     def test_generic_oracle_rejects_wrong_outcome(self) -> None:
         acceptance = load_acceptance_spec(
             ACCEPTANCE_ROOT / "automationexercise-men-tshirt-details.v1.json"

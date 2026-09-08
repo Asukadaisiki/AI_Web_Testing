@@ -47,6 +47,7 @@ class _DocumentParser(HTMLParser):
         self.elements: list[_Element] = []
         self._stack: list[_Element] = []
         self._ignored_depth = 0
+        self._hidden_depth = 0
 
     def handle_starttag(
         self,
@@ -58,7 +59,11 @@ class _DocumentParser(HTMLParser):
         self._stack.append(element)
         if tag in _IGNORED_TEXT_ELEMENTS:
             self._ignored_depth += 1
+        if _is_hidden_element(element):
+            self._hidden_depth += 1
         if tag in _VOID_ELEMENTS:
+            if _is_hidden_element(element) and self._hidden_depth > 0:
+                self._hidden_depth -= 1
             self._stack.pop()
 
     def handle_startendtag(
@@ -71,19 +76,36 @@ class _DocumentParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag in _IGNORED_TEXT_ELEMENTS and self._ignored_depth > 0:
             self._ignored_depth -= 1
+        for element in reversed(self._stack):
+            if element.tag == tag:
+                if _is_hidden_element(element) and self._hidden_depth > 0:
+                    self._hidden_depth -= 1
+                break
         for index in range(len(self._stack) - 1, -1, -1):
             if self._stack[index].tag == tag:
                 del self._stack[index:]
                 return
 
     def handle_data(self, data: str) -> None:
-        if self._ignored_depth > 0:
+        if self._ignored_depth > 0 or self._hidden_depth > 0:
             return
         normalized = " ".join(data.split())
         if not normalized:
             return
         for element in self._stack:
             element.text_parts.append(normalized)
+
+
+def _is_hidden_element(element: _Element) -> bool:
+    if "hidden" in element.attrs:
+        return True
+    if element.attrs.get("aria-hidden", "").casefold() == "true":
+        return True
+    style = element.attrs.get("style", "").replace(" ", "").casefold()
+    if "display:none" in style or "visibility:hidden" in style:
+        return True
+    classes = set(element.attrs.get("class", "").split())
+    return "modal" in classes and "show" not in classes
 
 
 def load_acceptance_spec(path: Path) -> dict[str, Any]:

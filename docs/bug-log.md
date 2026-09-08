@@ -48,6 +48,24 @@
 
 ## 问题记录
 
+## BUG-164 | Acceptance Oracle 将隐藏 modal 模板文本误判为可见副作用
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：high
+- 来源：Men Tshirt think-mode live E2E 复跑
+- 描述：Run `run_acb19d3bc85c373e0b7e3543` 的正式执行已通过，最终截图也未显示加购弹窗，但 Oracle 从 final HTML 的隐藏 `cartModal` 模板中读取到 “Your product has been added to cart.”，导致 `not_contains` 失败并将整次 E2E 标记为失败。
+- 复现步骤：
+  1. 执行 Men Tshirt details acceptance spec。
+  2. 正式 DSL 执行到 `/product_details/2`，未点击 `Add to cart`。
+  3. final HTML 中存在 `<div id="cartModal" class="modal fade">...Your product has been added to cart...</div>` 模板。
+  4. Oracle 对 `body` 做 raw text 聚合，误将隐藏模板文案纳入可见文本。
+- 影响：无副作用的详情页验证会被误判为加购副作用，掩盖真实 E2E 通过结果。
+- 根因：Acceptance Oracle 的 HTML parser 只忽略 `script/style/template`，未处理 `hidden`、`aria-hidden`、`display:none`、`visibility:hidden` 和 Bootstrap hidden modal。
+- 处理：新增隐藏元素文本过滤；`modal` 且未带 `show` 的元素按隐藏处理，隐藏子树文本不再传播到 `body`。
+- 验证：新增 hidden modal / visible modal 回归测试；`uv run python -m unittest tests.test_acceptance` 通过；同一 final HTML 复算 Oracle 后 passed=true；Python 全量单测和 compileall 通过。
+- 关联记录：`docs/execution-log.md#2026-09-08--men-tshirt-think-mode-e2e-复跑`
+
 ## BUG-163 | 验证型文本事实只有运行时证据时无法通过 locator preflight
 
 - 日期：2026-09-08
@@ -62,7 +80,7 @@
 - 影响：运行时已验证但 A11y 未建模的文本事实无法进入正式 DSL，Agent 会在探索与预检之间反复补证。
 - 根因：当前 locator preflight 只接收 `a11y_nodes_by_state`，未接收结构化 action/verification facts；交互 locator 证据与纯验证事实共用同一门。
 - 处理：将 research-v1 强预检动作限定为 `click`、`input`、`capture_text`；`wait_for` 和 `assert_text` 在无显式 selector/target_strategy 且无 candidates 时允许作为运行时文本验证步骤通过 executable 校验。显式 CSS/XPath/selector 目标仍必须有 verified candidates，避免放松交互定位安全边界。
-- 验证：新增 Go/Python 回归测试覆盖 runtime text verification without candidates；`go test -count=1 ./...`、`uv run python -m unittest discover -s tests`、`uv run python -m compileall src tests scripts` 均通过。Run `run_642d52a779cb803da104bc69` 是修复前证据，下一次 live E2E 需验证端到端结果。
+- 验证：新增 Go/Python 回归测试覆盖 runtime text verification without candidates；`go test -count=1 ./...`、`uv run python -m unittest discover -s tests`、`uv run python -m compileall src tests scripts` 均通过。Run `run_acb19d3bc85c373e0b7e3543` 已越过 `generate_dsl`，完成审批与正式执行。
 - 关联记录：`docs/execution-log.md#2026-09-08--planstep-事实充分性门与-think-mode-e2e-验证`
 
 ## BUG-162 | execute_dsl 模型摘要丢失 batch_id 导致报告 ID 猜测

@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-08 | Men Tshirt think-mode E2E 复跑
+
+- 任务：在修复验证型文本事实预检阻断后，复跑 Men Tshirt live E2E。
+- 操作：启动 Browser Worker、AgentService 和 execution-worker，使用 `automationexercise-men-tshirt-details.v1.json` 执行 `run_agentic_e2e.py`，显式开启 `AI_PLANNING_THINK_MODE=true` / `AI_PLANNING_REASONING_EFFORT=max`；复查 run trace、DSL、execution report、最终截图和 Oracle 输出。
+- 结果：Run `run_acb19d3bc85c373e0b7e3543` 真实调用官方 `api.deepseek.com` 9 次，成功生成 DSL `generation_id=385`，审批后创建 batch `563` / execution `572`，正式执行 7 步全部通过且 Vision disabled。原始 E2E 结果 `success=false`，根因为 Oracle 用 final HTML raw text 读取隐藏 `cartModal` 模板中的 “Your product has been added to cart.”，而截图和执行报告可见文本均证明未发生加购。已修复 Oracle 隐藏元素文本过滤，同一 final HTML 复算 Oracle 后通过。
+- 验证：`research/results/e2e-smoke-men-tshirt-think-gated-5-20260908T085435Z/run.json` 已生成；本地复算 final HTML 的 acceptance Oracle 通过；`uv run python -m unittest tests.test_acceptance` 通过；`uv run python -m unittest discover -s tests` 通过（163 passed / 2 skipped）；`uv run python -m compileall src tests scripts` 通过。
+- 后续：如需获得 `success=true` 的新 run.json，需要在 Oracle 修复后再跑一次 live E2E；考虑成本，本次未额外重复调用模型。
+
 ## 2026-09-08 | 修复验证型文本事实预检阻断
 
 - 任务：修复 BUG-163，避免运行时可见但缺少 a11y 节点的文本事实被 locator preflight 永久阻断。
