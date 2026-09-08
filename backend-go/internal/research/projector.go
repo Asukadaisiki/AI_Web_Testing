@@ -230,7 +230,7 @@ func projectAgentUnits(snapshot SourceSnapshot) ([]projectedUnit, error) {
 		"message.finished": true, "tool.started": true, "tool.args.delta": true,
 		"tool.pending": true, "tool.result": true, "tool.finished": true,
 		"tool.failed": true, "artifact.published": true,
-		"research.llm_call": true,
+		"research.llm_call": true, "task_plan.updated": true,
 	}
 	logicalAttempts := make(map[string]map[int64]bool)
 	for _, event := range snapshot.Events {

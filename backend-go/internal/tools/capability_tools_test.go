@@ -13,6 +13,7 @@ import (
 
 type fakeCapabilityClient struct {
 	capability      string
+	runID           string
 	projectID       int64
 	conversationID  string
 	arguments       json.RawMessage
@@ -83,11 +84,13 @@ func (c *fakeCapabilityClient) ExecuteBrowserCapability(
 func (c *fakeCapabilityClient) GenerateDSL(
 	_ context.Context,
 	_ int64,
+	runID string,
 	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,
 ) (json.RawMessage, error) {
 	c.capability = "generate_dsl"
+	c.runID = runID
 	c.projectID = projectID
 	c.conversationID = conversationID
 	c.arguments = arguments

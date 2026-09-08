@@ -56,6 +56,22 @@
 
 ## 任务记录
 
+## 2026-09-08 | 显式 TaskPlan/PlanStep 状态机落地
+
+- 任务：将目标语义、动作顺序与次数、副作用边界和禁止动作从 prompt/transcript 约束升级为 Go AgentCore 的可持久化裁决状态。
+- 操作：新增 `taskplan` 领域模型、内存/PostgreSQL Repository、基线 schema 与幂等迁移；新增 `set_task_plan` 工具；Harness 接入计划授权、grounding evidence、DSL generation、审批、执行、报告、失败和取消状态迁移；探索工具绑定 `plan_step_ids`，DSL generation 绑定 `plan_id/version/sha256`；新增 `task_plan.updated` SSE/研究事件和前端类型；删除旧 transcript-derived `observedPlanStep/facts_sufficient_for_generation` 双状态机；补充架构文档和单元/集成测试。
+- 结果：正式 Agent 主链必须先持久化 TaskPlan；探索不能改写任务语义或执行 external/unknown side effect；DSL 必须逐步保持计划动作、参数、次数、幂等性和副作用；计划改版自动废止旧 generation/审批；Run 只有在计划 `completed` 后才能正常结束。
+- 验证：`go test -count=1 ./...`、`go vet ./...`、`go build ./...` 通过；Frontend 4 个测试文件共 10 个测试和 `npm run build` 通过；`git diff --check` 通过。PostgreSQL 集成测试已添加，但本机无 `TEST_DATABASE_URL` 且无 Docker，未执行真实数据库迁移；未运行真实 DeepSeek Agentic E2E。
+- 后续：在具备 PostgreSQL 与官方 DeepSeek 配置的环境执行 `go run ./cmd/migrate` 和声明式 acceptance live E2E，核对 `task_plan.updated`、generation plan binding 与平台调用记录。关联 BUG-165。
+
+## 2026-09-08 | TaskPlan 状态机职责确认
+
+- 任务：确认显式 TaskPlan/PlanStep 在现有 Agent 架构中的归属和模块边界。
+- 操作：核对 AgentRun、Harness Policy、现有 transcript-derived `observedPlanStep` 以及历史 Task 6.6 记录。
+- 结果：TaskPlan/PlanStep 应作为 Go AgentCore 的持久化任务编排聚合与状态机；Harness 驱动状态迁移，Policy 只依据已持久化计划做工具授权裁决，Browser Worker 只提交 grounding/evidence，DSL 必须绑定 plan version/hash。目标语义、动作顺序/次数、禁止动作与副作用边界均归 TaskPlan 所有，不能继续仅依赖 prompt 或从 transcript 临时反推。
+- 验证：静态核对当前实现；确认现有 `observedPlanStep` 仅为探索门控的临时派生状态，尚不是完整 TaskPlan。
+- 后续：先定义版本化 TaskPlan/PlanStep schema、状态迁移和持久化，再接入 Harness、Policy、Context Materializer 与 DSL plan hash 校验。
+
 ## 2026-09-08 | Agent 工作链路流程图
 
 - 任务：将当前 Agent 工作链路画成流程图，并补充代码与架构讲解。

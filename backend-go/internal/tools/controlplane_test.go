@@ -8,6 +8,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	dslstore "github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 )
 
 type preflightFailureBrowser struct{}
@@ -86,6 +87,7 @@ func TestGenerateDSLReturnsPreflightWarnings(t *testing.T) {
 	_, err := capabilities.GenerateDSL(
 		context.Background(),
 		1,
+		"run-test",
 		1,
 		"1",
 		json.RawMessage(`{
@@ -115,6 +117,7 @@ func TestGenerateDSLRejectsUnboundPreflightResult(t *testing.T) {
 	_, err := capabilities.GenerateDSL(
 		context.Background(),
 		1,
+		"run-test",
 		1,
 		"1",
 		json.RawMessage(`{
@@ -180,7 +183,14 @@ func TestGenerateDSLPreflightReceivesModelSubmittedSummaryEvidence(t *testing.T)
 		nil,
 		browser,
 	)
-	_, err = capabilities.GenerateDSL(context.Background(), 1, 1, "1", submitted)
+	_, err = capabilities.GenerateDSL(
+		context.Background(),
+		1,
+		"run-test",
+		1,
+		"1",
+		submitted,
+	)
 	if err == nil || !strings.Contains(err.Error(), "stop after evidence capture") {
 		t.Fatalf("GenerateDSL() error = %v", err)
 	}
@@ -189,6 +199,78 @@ func TestGenerateDSLPreflightReceivesModelSubmittedSummaryEvidence(t *testing.T)
 		!strings.Contains(string(nodes[0]), `"selector":"#login"`) ||
 		strings.Contains(string(nodes[0]), "raw-only-node") {
 		t.Fatalf("preflight evidence = %s", nodes)
+	}
+}
+
+func TestGenerateDSLRejectsTaskPlanSemanticDrift(t *testing.T) {
+	ctx := context.Background()
+	repository := taskplan.NewMemoryRepository()
+	plans := taskplan.NewService(repository)
+	plan, err := plans.CreateVersion(ctx, taskplan.CreateRequest{
+		RunID: "run-plan",
+		Definition: taskplan.Definition{
+			Goal:             "Open products",
+			MaxSideEffect:    taskplan.SideEffectBrowserState,
+			ForbiddenActions: []string{"checkout"},
+			Steps: []taskplan.StepDefinition{{
+				ID: "open_products", Intent: "Open products",
+				Action: "goto", Target: "Products page",
+				Value:               "https://example.test/products",
+				ExpectedOccurrences: 1, Idempotency: "idempotent",
+				SideEffect:           taskplan.SideEffectBrowserState,
+				Preconditions:        []string{},
+				CompletionConditions: []string{"products visible"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = taskplan.StepGrounded
+	plan.Status = taskplan.StatusReadyForGeneration
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := NewControlPlaneCapabilitiesWithTaskPlans(
+		dslstore.NewStore(nil),
+		nil,
+		nil,
+		preflightFailureBrowser{},
+		plans,
+	)
+	arguments, err := json.Marshal(map[string]any{
+		"plan_binding": plan.Binding(),
+		"case": map[string]any{
+			"profile": "research-v1",
+			"name":    "Drifted plan",
+			"steps": []map[string]any{{
+				"action": "goto", "intent": "Open products",
+				"target":        "Products page",
+				"value":         "https://example.test/cart",
+				"preconditions": []any{},
+				"postconditions": []map[string]any{{
+					"type":  "url_contains",
+					"value": "/cart",
+				}},
+				"idempotency": "idempotent",
+				"side_effect": "browser_state",
+			}},
+		},
+		"a11y_nodes_by_state": map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = capabilities.GenerateDSL(
+		ctx,
+		0,
+		plan.RunID,
+		0,
+		"",
+		arguments,
+	)
+	if err == nil || !strings.Contains(err.Error(), "does not preserve") {
+		t.Fatalf("error = %v, want task plan semantic drift", err)
 	}
 }
 

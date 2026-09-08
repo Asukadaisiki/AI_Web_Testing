@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
@@ -23,41 +21,16 @@ type DefaultToolPolicy struct {
 }
 
 type ExplorationGateConfig struct {
-	MaxExplorePageCalls                     int
-	MaxExploreFlowCalls                     int
-	MaxRepeatedExploreFlowSignatureCalls    int
-	MinSuccessfulExplorationsForSufficiency int
-	MinEvidenceItemsForSufficiency          int
-}
-
-type planStepStatus string
-
-const (
-	planStepCompleted planStepStatus = "completed"
-	planStepFailed    planStepStatus = "failed"
-)
-
-type observedPlanStep struct {
-	Key            string
-	Status         planStepStatus
-	SourceEventSeq int64
+	MaxExplorePageCalls                  int
+	MaxExploreFlowCalls                  int
+	MaxRepeatedExploreFlowSignatureCalls int
 }
 
 type explorationState struct {
-	ExplorePageCalls                  int
-	ExploreFlowCalls                  int
-	SuccessfulExplorations            int
-	VerifiedSelectors                 int
-	SuccessfulActions                 int
-	FailureCount                      int
-	LatestGenerationNeedsMoreEvidence bool
-	UnresolvedGenerationTargets       []string
-	EvidenceItems                     map[string]struct{}
-	Steps                             []observedPlanStep
-	FlowSignatures                    map[string]int
+	ExplorePageCalls int
+	ExploreFlowCalls int
+	FlowSignatures   map[string]int
 }
-
-var preflightMissingTargetPattern = regexp.MustCompile(`target ['"]([^'"]+)['"] matched 0 elements`)
 
 func (c ExplorationGateConfig) withDefaults() ExplorationGateConfig {
 	if c.MaxExplorePageCalls <= 0 {
@@ -68,12 +41,6 @@ func (c ExplorationGateConfig) withDefaults() ExplorationGateConfig {
 	}
 	if c.MaxRepeatedExploreFlowSignatureCalls <= 0 {
 		c.MaxRepeatedExploreFlowSignatureCalls = 1
-	}
-	if c.MinSuccessfulExplorationsForSufficiency <= 0 {
-		c.MinSuccessfulExplorationsForSufficiency = 3
-	}
-	if c.MinEvidenceItemsForSufficiency <= 0 {
-		c.MinEvidenceItemsForSufficiency = 6
 	}
 	return c
 }
@@ -102,7 +69,7 @@ func (p DefaultToolPolicy) beforeExplorationCall(
 			return explorationGateError(
 				"explore_page_budget_exhausted",
 				state,
-				"call generate_dsl with the retained a11y_nodes_by_state, or ask_user_question if the goal is impossible to ground",
+				"stop probing; use the persisted TaskPlan state to generate only if all steps are grounded, otherwise ask the user or revise the plan",
 			)
 		}
 	case "explore_flow":
@@ -110,7 +77,7 @@ func (p DefaultToolPolicy) beforeExplorationCall(
 			return explorationGateError(
 				"explore_flow_budget_exhausted",
 				state,
-				"call generate_dsl with the retained a11y_nodes_by_state instead of probing again",
+				"stop probing; generate only when the persisted TaskPlan is ready, otherwise ask the user or revise the plan",
 			)
 		}
 		signature := exploreFlowSignature(call.Arguments)
@@ -119,15 +86,7 @@ func (p DefaultToolPolicy) beforeExplorationCall(
 			return explorationGateError(
 				"repeated_explore_flow_signature",
 				state,
-				"do not repeat the same probe; generate_dsl if evidence is enough, otherwise vary the semantic target once",
-			)
-		}
-		if !state.LatestGenerationNeedsMoreEvidence &&
-			state.sufficientForGeneration(config) {
-			return explorationGateError(
-				"facts_sufficient_for_generation",
-				state,
-				"stop exploring and call generate_dsl; later failures must be handled through report analysis and repair",
+				"do not repeat the same probe; follow the persisted TaskPlan state",
 			)
 		}
 	}
@@ -136,17 +95,7 @@ func (p DefaultToolPolicy) beforeExplorationCall(
 
 func buildExplorationState(transcript []agent.Message) explorationState {
 	state := explorationState{
-		EvidenceItems:  make(map[string]struct{}),
 		FlowSignatures: make(map[string]int),
-	}
-	generationRepairEvidence := make(map[string]struct{})
-	var latestGenerationMissingTargets []string
-	trackGenerationRepair := false
-	recordEvidence := func(parts ...string) {
-		addEvidence(state.EvidenceItems, parts...)
-		if trackGenerationRepair {
-			addEvidence(generationRepairEvidence, parts...)
-		}
 	}
 	for _, message := range transcript {
 		if message.Role == "assistant" {
@@ -162,12 +111,6 @@ func buildExplorationState(transcript []agent.Message) explorationState {
 		if message.Role != "tool" {
 			continue
 		}
-		if missingTargets, ok := generateDSLFailureEvidenceTargets(message.Content); ok {
-			latestGenerationMissingTargets = missingTargets
-			generationRepairEvidence = make(map[string]struct{})
-			trackGenerationRepair = true
-			continue
-		}
 		summary, ok := agent.DecodeModelToolSummary(message.Content)
 		if !ok || !agent.IsExplorationTool(summary.Tool) {
 			continue
@@ -177,92 +120,8 @@ func buildExplorationState(transcript []agent.Message) explorationState {
 		} else {
 			state.ExploreFlowCalls++
 		}
-		if isSuccessfulExploration(summary) {
-			state.SuccessfulExplorations++
-		}
-		state.FailureCount += len(summary.Failures)
-		for _, page := range summary.Pages {
-			if page.Failure != nil {
-				state.FailureCount++
-				state.Steps = append(state.Steps, observedPlanStep{
-					Key:    pageKey("page_failed", page.URL, page.PageState),
-					Status: planStepFailed, SourceEventSeq: summary.Source.EventSeq,
-				})
-			}
-			if !strings.EqualFold(page.Status, "error") {
-				recordEvidence("url", page.URL)
-				recordEvidence("page_state", page.PageState)
-				recordEvidence("page_kind", page.PageKind)
-				state.Steps = append(state.Steps, observedPlanStep{
-					Key:    pageKey("page_observed", page.URL, page.PageState),
-					Status: planStepCompleted, SourceEventSeq: summary.Source.EventSeq,
-				})
-				for _, node := range page.A11yNodes {
-					recordEvidence("node", node.Role, node.Name)
-					for _, selector := range node.VerifiedSelectors {
-						state.VerifiedSelectors++
-						recordEvidence(
-							"selector",
-							selector.Strategy,
-							selector.Selector,
-						)
-					}
-				}
-			}
-			for _, action := range page.Actions {
-				if action.Failure != nil {
-					state.FailureCount++
-					state.Steps = append(state.Steps, observedPlanStep{
-						Key:    pageKey("action_failed", action.Action, action.Target),
-						Status: planStepFailed, SourceEventSeq: summary.Source.EventSeq,
-					})
-					continue
-				}
-				if strings.EqualFold(action.Status, "success") {
-					state.SuccessfulActions++
-					recordEvidence("action", action.Action, action.Target)
-					state.Steps = append(state.Steps, observedPlanStep{
-						Key:    pageKey("action_verified", action.Action, action.Target),
-						Status: planStepCompleted, SourceEventSeq: summary.Source.EventSeq,
-					})
-				}
-			}
-		}
-		if summary.Observation != nil {
-			for _, candidate := range summary.Observation.CandidateCoverage {
-				if candidate.Executable {
-					recordEvidence(
-						"candidate",
-						candidate.Role,
-						candidate.Label,
-						candidate.PrimarySelector,
-					)
-				}
-			}
-			for _, option := range summary.Observation.ActionOptions {
-				if strings.EqualFold(option.Status, "success") {
-					state.SuccessfulActions++
-					recordEvidence("action_option", option.Action, option.Target)
-				}
-			}
-			for _, fact := range summary.Observation.VerificationFacts {
-				recordEvidence("fact", fact.Kind, fact.Label, fact.Selector)
-			}
-		}
 	}
-	state.UnresolvedGenerationTargets = unresolvedEvidenceTargets(
-		latestGenerationMissingTargets,
-		generationRepairEvidence,
-	)
-	state.LatestGenerationNeedsMoreEvidence = len(state.UnresolvedGenerationTargets) > 0
-	state.Steps = compactObservedPlanSteps(state.Steps)
 	return state
-}
-
-func (s explorationState) sufficientForGeneration(config ExplorationGateConfig) bool {
-	return s.SuccessfulExplorations >= config.MinSuccessfulExplorationsForSufficiency &&
-		len(s.EvidenceItems) >= config.MinEvidenceItemsForSufficiency &&
-		(s.VerifiedSelectors > 0 || s.SuccessfulActions > 0)
 }
 
 func explorationGateError(
@@ -271,149 +130,12 @@ func explorationGateError(
 	nextAction string,
 ) error {
 	return fmt.Errorf(
-		"exploration gate %s: completed_plan_steps=%d successful_explorations=%d explore_page_calls=%d explore_flow_calls=%d evidence_items=%d verified_selectors=%d successful_actions=%d failures=%d unresolved_generation_targets=%q; %s",
+		"exploration gate %s: explore_page_calls=%d explore_flow_calls=%d; %s",
 		code,
-		countStepsByStatus(state.Steps, planStepCompleted),
-		state.SuccessfulExplorations,
 		state.ExplorePageCalls,
 		state.ExploreFlowCalls,
-		len(state.EvidenceItems),
-		state.VerifiedSelectors,
-		state.SuccessfulActions,
-		state.FailureCount,
-		state.UnresolvedGenerationTargets,
 		nextAction,
 	)
-}
-
-func generateDSLFailureEvidenceTargets(content string) ([]string, bool) {
-	var failure struct {
-		Status  string `json:"status"`
-		Tool    string `json:"tool"`
-		Message string `json:"message"`
-	}
-	if json.Unmarshal([]byte(content), &failure) != nil ||
-		failure.Status != "error" ||
-		failure.Tool != "generate_dsl" {
-		return nil, false
-	}
-	normalized := normalizeSemanticText(failure.Message)
-	if !strings.Contains(normalized, "locator preflight failed") &&
-		!strings.Contains(normalized, "matched 0 elements") &&
-		!strings.Contains(normalized, "evidence") {
-		return nil, false
-	}
-	matches := preflightMissingTargetPattern.FindAllStringSubmatch(failure.Message, -1)
-	targets := make([]string, 0, len(matches))
-	seen := make(map[string]struct{}, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		target := normalizeSemanticText(match[1])
-		if target == "" {
-			continue
-		}
-		if _, exists := seen[target]; exists {
-			continue
-		}
-		seen[target] = struct{}{}
-		targets = append(targets, target)
-	}
-	if len(targets) == 0 {
-		targets = []string{"evidence"}
-	}
-	return targets, true
-}
-
-func unresolvedEvidenceTargets(targets []string, evidence map[string]struct{}) []string {
-	unresolved := make([]string, 0, len(targets))
-	for _, target := range targets {
-		if target == "" || evidenceContainsTarget(evidence, target) {
-			continue
-		}
-		unresolved = append(unresolved, target)
-	}
-	return unresolved
-}
-
-func evidenceContainsTarget(evidence map[string]struct{}, target string) bool {
-	target = normalizeSemanticText(target)
-	if target == "" {
-		return true
-	}
-	for item := range evidence {
-		normalizedItem := strings.ReplaceAll(item, "\x00", " ")
-		if strings.Contains(normalizedItem, target) {
-			return true
-		}
-	}
-	return false
-}
-
-func countStepsByStatus(steps []observedPlanStep, status planStepStatus) int {
-	count := 0
-	for _, step := range steps {
-		if step.Status == status {
-			count++
-		}
-	}
-	return count
-}
-
-func isSuccessfulExploration(summary agent.ModelToolSummary) bool {
-	if summary.Success != nil && !*summary.Success {
-		return false
-	}
-	if strings.EqualFold(summary.Status, "error") {
-		return false
-	}
-	for _, page := range summary.Pages {
-		if !strings.EqualFold(page.Status, "error") && page.Failure == nil {
-			return true
-		}
-	}
-	return false
-}
-
-func compactObservedPlanSteps(steps []observedPlanStep) []observedPlanStep {
-	byKey := make(map[string]observedPlanStep)
-	for _, step := range steps {
-		existing, ok := byKey[step.Key]
-		if !ok || step.SourceEventSeq > existing.SourceEventSeq {
-			byKey[step.Key] = step
-		}
-	}
-	result := make([]observedPlanStep, 0, len(byKey))
-	for _, step := range byKey {
-		result = append(result, step)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Key < result[j].Key
-	})
-	return result
-}
-
-func addEvidence(items map[string]struct{}, parts ...string) {
-	normalized := make([]string, 0, len(parts))
-	for _, part := range parts {
-		value := normalizeSemanticText(part)
-		if value != "" {
-			normalized = append(normalized, value)
-		}
-	}
-	if len(normalized) == 0 {
-		return
-	}
-	items[strings.Join(normalized, "\x00")] = struct{}{}
-}
-
-func pageKey(parts ...string) string {
-	normalized := make([]string, 0, len(parts))
-	for _, part := range parts {
-		normalized = append(normalized, normalizeSemanticText(part))
-	}
-	return strings.Join(normalized, "\x00")
 }
 
 func exploreFlowSignature(arguments string) string {

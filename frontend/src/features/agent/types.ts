@@ -18,6 +18,7 @@ type AgentEventType =
   | "tool.failed"
   | "artifact.published"
   | "research.llm_call"
+  | "task_plan.updated"
   | "run.finished"
   | "run.failed"
   | "run.cancelled";
@@ -92,6 +93,33 @@ export interface AgentArtifact {
   id: string;
   type: string;
   seq: number;
+}
+
+export type TaskPlanStatus =
+  | "grounding"
+  | "ready_for_generation"
+  | "awaiting_approval"
+  | "approved"
+  | "executing"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "superseded";
+
+export interface TaskPlanSnapshot {
+  schema_version: "agent.task_plan.v1";
+  plan_id: string;
+  version: number;
+  plan_sha256: string;
+  status: TaskPlanStatus;
+  bound_generation_id?: number;
+  steps: Array<{
+    id: string;
+    position: number;
+    status: "pending" | "grounded" | "failed" | "blocked";
+    grounding_attempts: number;
+    evidence_count: number;
+  }>;
 }
 
 export interface AgentToolActivity {

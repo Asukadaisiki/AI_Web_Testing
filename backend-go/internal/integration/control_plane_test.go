@@ -124,6 +124,7 @@ func TestPostgresControlPlaneLifecycle(t *testing.T) {
 	generatedRaw, err := controlPlane.GenerateDSL(
 		ctx,
 		actorID,
+		"run-"+suffix,
 		projectID,
 		"",
 		json.RawMessage(`{

@@ -2,6 +2,7 @@ import type {
   AgentArtifact,
   AgentEvent,
   AgentQuestion,
+  TaskPlanSnapshot,
   AgentToolActivity,
 } from "./types";
 
@@ -77,4 +78,16 @@ export function readArtifacts(events: AgentEvent[]): AgentArtifact[] {
       seq: event.seq,
     }))
     .filter((artifact) => artifact.id.length > 0);
+}
+
+export function readLatestTaskPlan(
+  events: AgentEvent[],
+): TaskPlanSnapshot | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === "task_plan.updated") {
+      return event.payload as unknown as TaskPlanSnapshot;
+    }
+  }
+  return null;
 }

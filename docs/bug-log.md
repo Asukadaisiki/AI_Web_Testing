@@ -48,6 +48,22 @@
 
 ## 问题记录
 
+## BUG-165 | TaskPlan 前端事件读取使用不兼容的 Array.findLast
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：low
+- 来源：TaskPlan 状态机实现期前端生产构建
+- 描述：新增 `readLatestTaskPlan` 后，Vitest 通过，但 TypeScript 生产构建报 `Array.findLast` 不存在。
+- 复现步骤：
+  1. 在 `frontend` 运行 `npm run build`。
+  2. TypeScript 在 `events.ts` 报 TS2550 和回调参数隐式 `any`。
+- 影响：TaskPlan 前端事件类型无法通过生产构建。
+- 根因：项目当前 TypeScript lib target 低于 ES2023，而实现使用了 ES2023 的 `Array.findLast`。
+- 处理：改为从数组尾部开始的显式索引遍历，不提高全项目编译目标。
+- 验证：Frontend 4 个测试文件共 10 个测试通过，`npm run build` 通过。
+- 关联记录：`docs/execution-log.md#2026-09-08--显式-taskplanplanstep-状态机落地`
+
 ## BUG-164 | Acceptance Oracle 将隐藏 modal 模板文本误判为可见副作用
 
 - 日期：2026-09-08

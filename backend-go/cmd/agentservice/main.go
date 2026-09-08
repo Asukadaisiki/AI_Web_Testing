@@ -21,6 +21,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/llm"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/projects"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/research"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 	httptransport "github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/transport/http"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -73,18 +74,25 @@ func main() {
 	executionStore := execution.NewStore(database)
 	correctionStore := corrections.NewStore(database)
 	dslStore := dsl.NewStore(database)
+	taskPlanService := taskplan.NewService(
+		taskplan.NewPostgresRepository(database),
+	)
 	researchRepository := research.NewPostgresRepository(database)
 	researchService := research.NewService(
 		researchRepository,
 		research.NewPostgresSourceReader(database),
 	)
-	controlPlane := tools.NewControlPlaneCapabilities(
+	controlPlane := tools.NewControlPlaneCapabilitiesWithTaskPlans(
 		dslStore,
 		caseStore,
 		executionStore,
 		browserClient,
+		taskPlanService,
 	)
-	toolHandlers := []tools.Handler{tools.AskUserTool{}}
+	toolHandlers := []tools.Handler{
+		tools.AskUserTool{},
+		tools.NewSetTaskPlanTool(taskPlanService),
+	}
 	toolHandlers = append(toolHandlers, tools.NewBrowserTools(browserClient)...)
 	toolHandlers = append(toolHandlers, tools.NewGenerateDSLTool(controlPlane))
 	toolHandlers = append(
@@ -97,7 +105,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure tools: %v", err)
 	}
-	engine := harness.New(runService, model, registry, cfg.AgentMaxTurns)
+	engine := harness.NewWithTaskPlans(
+		runService,
+		model,
+		registry,
+		taskPlanService,
+		cfg.AgentMaxTurns,
+	)
 	server := httptransport.NewServer(
 		cfg.Address,
 		engine,

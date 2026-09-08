@@ -114,6 +114,9 @@ CREATE TABLE public.dsl_generation_runs (
     governance_focus_reasons_json json NOT NULL,
     dsl_sha256 character varying(64),
     dsl_canonical_version character varying(32),
+    plan_id character varying(64),
+    plan_version integer,
+    plan_sha256 character varying(64),
     CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_base_url_source CHECK (((base_url_source)::text = ANY ((ARRAY['ai_output'::character varying, 'request'::character varying, 'current_case'::character varying, 'none'::character varying])::text[]))),
     CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_context_profile CHECK (((context_profile)::text = ANY ((ARRAY['blank_request'::character varying, 'rewrite_from_case'::character varying, 'repair_steps'::character varying, 'contracts_focus'::character varying])::text[]))),
     CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_feedback__53e7 CHECK (((((feedback_status)::text = 'accepted'::text) AND ((feedback_import_mode)::text = ANY ((ARRAY['replace'::character varying, 'steps_only'::character varying, 'contracts_only'::character varying])::text[]))) OR (((feedback_status)::text = ANY ((ARRAY['pending'::character varying, 'rejected'::character varying])::text[])) AND (feedback_import_mode IS NULL)))),
@@ -123,7 +126,8 @@ CREATE TABLE public.dsl_generation_runs (
     CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_prompt_variant CHECK (((prompt_variant)::text = ANY ((ARRAY['baseline_draft'::character varying, 'rewrite_from_case'::character varying, 'repair_steps'::character varying, 'contracts_focus'::character varying])::text[]))),
     CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_rejection_3831 CHECK (((((feedback_status)::text = 'rejected'::text) AND ((rejection_reason_code)::text = ANY ((ARRAY['wrong_actions'::character varying, 'invalid_structure'::character varying, 'context_mismatch'::character varying, 'bad_contracts'::character varying, 'other'::character varying])::text[]))) OR (((feedback_status)::text = ANY ((ARRAY['pending'::character varying, 'accepted'::character varying])::text[])) AND (rejection_reason_code IS NULL)))),
     CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_retry_context CHECK ((((retry_from_generation_id IS NULL) AND (retry_reason_code IS NULL) AND (retry_note IS NULL)) OR ((retry_from_generation_id IS NOT NULL) AND (retry_reason_code IS NOT NULL)))),
-    CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_retry_reason_code CHECK (((retry_reason_code IS NULL) OR ((retry_reason_code)::text = ANY ((ARRAY['wrong_actions'::character varying, 'invalid_structure'::character varying, 'context_mismatch'::character varying, 'bad_contracts'::character varying, 'other'::character varying])::text[]))))
+    CONSTRAINT ck_dsl_generation_runs_ck_dsl_generation_runs_retry_reason_code CHECK (((retry_reason_code IS NULL) OR ((retry_reason_code)::text = ANY ((ARRAY['wrong_actions'::character varying, 'invalid_structure'::character varying, 'context_mismatch'::character varying, 'bad_contracts'::character varying, 'other'::character varying])::text[])))),
+    CONSTRAINT ck_dsl_generation_runs_plan_binding CHECK ((((plan_id IS NULL) AND (plan_version IS NULL) AND (plan_sha256 IS NULL)) OR ((plan_id IS NOT NULL) AND (plan_version >= 1) AND (length((plan_sha256)::text) = 64) AND (lower((plan_sha256)::text) = (plan_sha256)::text))))
 );
 CREATE SEQUENCE public.dsl_generation_runs_id_seq
     AS integer
@@ -133,6 +137,56 @@ CREATE SEQUENCE public.dsl_generation_runs_id_seq
     NO MAXVALUE
     CACHE 1;
 ALTER SEQUENCE public.dsl_generation_runs_id_seq OWNED BY public.dsl_generation_runs.id;
+CREATE TABLE public.task_plans (
+    id character varying(64) NOT NULL,
+    schema_version character varying(64) NOT NULL,
+    run_id character varying(64) NOT NULL,
+    actor_user_id integer,
+    project_id integer,
+    version integer NOT NULL,
+    goal text NOT NULL,
+    status character varying(32) NOT NULL,
+    plan_sha256 character varying(64) NOT NULL,
+    max_side_effect character varying(32) NOT NULL,
+    forbidden_actions_json json NOT NULL,
+    bound_generation_id integer,
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_task_plans_schema_version CHECK (((schema_version)::text = 'agent.task_plan.v1'::text)),
+    CONSTRAINT ck_task_plans_version_positive CHECK ((version >= 1)),
+    CONSTRAINT ck_task_plans_hash CHECK (((length((plan_sha256)::text) = 64) AND (lower((plan_sha256)::text) = (plan_sha256)::text))),
+    CONSTRAINT ck_task_plans_status CHECK (((status)::text = ANY ((ARRAY['grounding'::character varying, 'ready_for_generation'::character varying, 'awaiting_approval'::character varying, 'approved'::character varying, 'executing'::character varying, 'completed'::character varying, 'failed'::character varying, 'blocked'::character varying, 'superseded'::character varying])::text[]))),
+    CONSTRAINT ck_task_plans_max_side_effect CHECK (((max_side_effect)::text = ANY ((ARRAY['none'::character varying, 'browser_state'::character varying, 'external_state'::character varying, 'unknown'::character varying])::text[])))
+);
+CREATE TABLE public.task_plan_steps (
+    plan_id character varying(64) NOT NULL,
+    step_id character varying(64) NOT NULL,
+    position integer NOT NULL,
+    intent text NOT NULL,
+    action character varying(32) NOT NULL,
+    target text,
+    value text,
+    trigger character varying(16),
+    context_key character varying(100),
+    timeout_ms integer,
+    expected_occurrences integer NOT NULL,
+    idempotency character varying(32) NOT NULL,
+    side_effect character varying(32) NOT NULL,
+    preconditions_json json NOT NULL,
+    completion_conditions_json json NOT NULL,
+    status character varying(32) NOT NULL,
+    grounding_attempts integer NOT NULL,
+    evidence_refs_json json NOT NULL,
+    CONSTRAINT ck_task_plan_steps_position CHECK ((position >= 0)),
+    CONSTRAINT ck_task_plan_steps_occurrences CHECK ((expected_occurrences >= 1)),
+    CONSTRAINT ck_task_plan_steps_grounding_attempts CHECK ((grounding_attempts >= 0)),
+    CONSTRAINT ck_task_plan_steps_timeout CHECK (((timeout_ms IS NULL) OR (timeout_ms >= 1))),
+    CONSTRAINT ck_task_plan_steps_action CHECK (((action)::text = ANY ((ARRAY['goto'::character varying, 'click'::character varying, 'input'::character varying, 'wait_for'::character varying, 'assert_text'::character varying, 'assert_url_contains'::character varying, 'capture_text'::character varying])::text[]))),
+    CONSTRAINT ck_task_plan_steps_trigger CHECK (((trigger IS NULL) OR ((trigger)::text = ANY ((ARRAY['Enter'::character varying, 'Tab'::character varying])::text[])))),
+    CONSTRAINT ck_task_plan_steps_idempotency CHECK (((idempotency)::text = ANY ((ARRAY['idempotent'::character varying, 'non_idempotent'::character varying])::text[]))),
+    CONSTRAINT ck_task_plan_steps_side_effect CHECK (((side_effect)::text = ANY ((ARRAY['none'::character varying, 'browser_state'::character varying, 'external_state'::character varying, 'unknown'::character varying])::text[]))),
+    CONSTRAINT ck_task_plan_steps_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'grounded'::character varying, 'failed'::character varying, 'blocked'::character varying])::text[])))
+);
 CREATE TABLE public.execution_batches (
     id integer NOT NULL,
     project_id integer NOT NULL,
@@ -459,6 +513,10 @@ ALTER TABLE ONLY public.ai_planning_sessions
     ADD CONSTRAINT pk_ai_planning_sessions PRIMARY KEY (id);
 ALTER TABLE ONLY public.dsl_generation_runs
     ADD CONSTRAINT pk_dsl_generation_runs PRIMARY KEY (id);
+ALTER TABLE ONLY public.task_plans
+    ADD CONSTRAINT pk_task_plans PRIMARY KEY (id);
+ALTER TABLE ONLY public.task_plan_steps
+    ADD CONSTRAINT pk_task_plan_steps PRIMARY KEY (plan_id, step_id);
 ALTER TABLE ONLY public.execution_batches
     ADD CONSTRAINT pk_execution_batches PRIMARY KEY (id);
 ALTER TABLE ONLY public.execution_jobs
@@ -489,6 +547,10 @@ ALTER TABLE ONLY public.users
     ADD CONSTRAINT pk_users PRIMARY KEY (id);
 ALTER TABLE ONLY public.agent_events
     ADD CONSTRAINT uq_agent_events_run_seq UNIQUE (run_id, seq);
+ALTER TABLE ONLY public.task_plans
+    ADD CONSTRAINT uq_task_plans_run_version UNIQUE (run_id, version);
+ALTER TABLE ONLY public.task_plan_steps
+    ADD CONSTRAINT uq_task_plan_steps_position UNIQUE (plan_id, position);
 ALTER TABLE ONLY public.execution_batches
     ADD CONSTRAINT uq_execution_batches_actor_idempotency UNIQUE (triggered_by, idempotency_key);
 ALTER TABLE ONLY public.execution_jobs
@@ -523,6 +585,7 @@ CREATE INDEX ix_dsl_generation_runs_case_id ON public.dsl_generation_runs USING 
 CREATE INDEX ix_dsl_generation_runs_created_at ON public.dsl_generation_runs USING btree (created_at);
 CREATE INDEX ix_dsl_generation_runs_dsl_sha256 ON public.dsl_generation_runs USING btree (dsl_sha256);
 CREATE INDEX ix_dsl_generation_runs_project_id ON public.dsl_generation_runs USING btree (project_id);
+CREATE INDEX ix_dsl_generation_runs_plan_id ON public.dsl_generation_runs USING btree (plan_id);
 CREATE INDEX ix_dsl_generation_runs_prompt_sha256 ON public.dsl_generation_runs USING btree (prompt_sha256);
 CREATE INDEX ix_dsl_generation_runs_retry_from_generation_id ON public.dsl_generation_runs USING btree (retry_from_generation_id);
 CREATE INDEX ix_dsl_generation_runs_success ON public.dsl_generation_runs USING btree (success);
@@ -574,6 +637,9 @@ CREATE INDEX ix_test_cases_created_by ON public.test_cases USING btree (created_
 CREATE INDEX ix_test_cases_name ON public.test_cases USING btree (name);
 CREATE INDEX ix_test_cases_project_id ON public.test_cases USING btree (project_id);
 CREATE INDEX ix_test_cases_updated_by ON public.test_cases USING btree (updated_by);
+CREATE INDEX ix_task_plans_project_id ON public.task_plans USING btree (project_id);
+CREATE INDEX ix_task_plans_run_id ON public.task_plans USING btree (run_id);
+CREATE INDEX ix_task_plans_status ON public.task_plans USING btree (status);
 CREATE UNIQUE INDEX ix_users_email ON public.users USING btree (email);
 CREATE UNIQUE INDEX uq_locator_corrections_active_lookup ON public.locator_corrections USING btree (page_url_pattern, normalized_target_description) WHERE is_active;
 ALTER TABLE ONLY public.agent_events
@@ -600,6 +666,16 @@ ALTER TABLE ONLY public.dsl_generation_runs
     ADD CONSTRAINT fk_dsl_generation_runs_project_id_projects FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE SET NULL;
 ALTER TABLE ONLY public.dsl_generation_runs
     ADD CONSTRAINT fk_dsl_generation_runs_retry_from_generation_id FOREIGN KEY (retry_from_generation_id) REFERENCES public.dsl_generation_runs(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.task_plans
+    ADD CONSTRAINT fk_task_plans_run FOREIGN KEY (run_id) REFERENCES public.agent_runs(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.task_plans
+    ADD CONSTRAINT fk_task_plans_actor FOREIGN KEY (actor_user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY public.task_plans
+    ADD CONSTRAINT fk_task_plans_project FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.task_plans
+    ADD CONSTRAINT fk_task_plans_generation FOREIGN KEY (bound_generation_id) REFERENCES public.dsl_generation_runs(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.task_plan_steps
+    ADD CONSTRAINT fk_task_plan_steps_plan FOREIGN KEY (plan_id) REFERENCES public.task_plans(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.execution_batches
     ADD CONSTRAINT fk_execution_batches_planning_session_id_ai_planning_sessions FOREIGN KEY (planning_session_id) REFERENCES public.ai_planning_sessions(id) ON DELETE SET NULL;
 ALTER TABLE ONLY public.execution_batches

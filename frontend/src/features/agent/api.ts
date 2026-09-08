@@ -88,6 +88,7 @@ export function subscribeAgentEvents(
     "tool.failed",
     "artifact.published",
     "research.llm_call",
+    "task_plan.updated",
     "run.finished",
     "run.failed",
     "run.cancelled",

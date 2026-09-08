@@ -497,6 +497,30 @@ func TestExecuteDSLToolResultExposesBatchID(t *testing.T) {
 	}
 }
 
+func TestTaskPlanToolResultExposesBindingAndSteps(t *testing.T) {
+	raw := json.RawMessage(`{
+		"status":"grounding",
+		"plan_id":"plan-1",
+		"version":2,
+		"plan_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"steps":[{"id":"open"},{"id":"verify"}]
+	}`)
+	content, err := BuildModelToolSummary("set_task_plan", raw, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.TaskPlan == nil ||
+		summary.TaskPlan.PlanID != "plan-1" ||
+		summary.TaskPlan.Version != 2 ||
+		len(summary.TaskPlan.StepIDs) != 2 {
+		t.Fatalf("task plan summary = %#v", summary.TaskPlan)
+	}
+}
+
 func TestGenerateAndRepairToolResultsUseDecisionSummaries(t *testing.T) {
 	generated := json.RawMessage(`{
 		"generation_id":8,

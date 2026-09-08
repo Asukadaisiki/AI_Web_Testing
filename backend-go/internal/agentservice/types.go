@@ -34,6 +34,7 @@ const (
 	EventToolFailed      EventType = "tool.failed"
 	EventArtifact        EventType = "artifact.published"
 	EventResearchLLMCall EventType = "research.llm_call"
+	EventTaskPlanUpdated EventType = "task_plan.updated"
 )
 
 type AgentRun struct {

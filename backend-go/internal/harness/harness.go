@@ -11,20 +11,27 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 )
 
 const defaultSystemPrompt = `You are AgentCore for a web UI testing platform.
 Understand the user's goal, plan the work, and call the available tools.
+Before browser exploration, call set_task_plan with the exact user goal and a complete ordered plan.
+The persisted TaskPlan owns action semantics, order, occurrence counts, forbidden actions, idempotency, and side-effect boundaries.
+Never change task semantics during exploration. To revise semantics, call set_task_plan again to create a new plan version.
+Every explore_page or explore_flow call must include plan_step_ids for the next contiguous pending steps.
+Never execute external_state or unknown side effects during exploration. Such steps may only be grounded by observing their controls or expected facts without triggering them.
 Use ask_user_question only when required information or explicit approval is missing.
 For a new test, use explore_page for the first known URL, then explore_flow when later page states require interaction.
 Tool results shown to you use agent.model_tool_summary.v1. For exploration, first read observation.page_states, observation.element_groups, observation.candidate_coverage, observation.action_options, and observation.verification_facts to understand the page; use pages[].a11y_nodes as the exact evidence submitted in generate_dsl.a11y_nodes_by_state. source.event_seq and hashes reference the complete persisted tool.result event.
 Never invent omitted nodes or selectors. Re-explore when the retained evidence is insufficient.
 Each explore_flow call runs in an isolated disposable probe context; its state is not reused by later probes or official execution. Express intended multiplicity such as quantity 2 inside one probe and in the final DSL, never by relying on state accumulated across calls. Prefer one self-contained flow that captures all downstream evidence.
-Exploration is budgeted and guarded by deterministic PlanStep evidence. When an exploration gate reports facts_sufficient_for_generation, repeated_explore_flow_signature, or an exploration budget exhaustion, stop probing and call generate_dsl using the retained evidence unless a user decision is required.
+Exploration is budgeted, and repeated probes are rejected. Persisted PlanStep status is the only authority for grounding completeness.
 You may call validate_page_elements with required_elements to find exploration gaps, but that advisory result does not authorize generation.
-As soon as the evidence is sufficient, call generate_dsl. It validates the exact final case against a11y_nodes_by_state and persists it atomically.
+As soon as every PlanStep is grounded, call generate_dsl with the exact plan binding returned by set_task_plan. It validates the exact final case against the plan and a11y_nodes_by_state, then persists it atomically.
 Author the complete structured DSL in generate_dsl.case and include collected nodes grouped by their actual page state. Never flatten states.
+The DSL must preserve every TaskPlan step's intent, action, target, value, idempotency, side_effect, order, and expected occurrence count exactly.
 	DSL steps may only use goto, click, input, wait_for, assert_text, assert_url_contains, and capture_text. Use wait_for or postconditions for visibility checks; assert_visible is not supported.
 	goto and assert_url_contains store their URL in value. assert_text requires both target and expected value. input requires target and value. capture_text requires target and context_key.
 	Only make wait_for, assert_text, or capture_text standalone DSL steps when their target exists in pages[].a11y_nodes for the same page_state. If a text was observed only as a successful explore_flow wait_for action or must be checked at runtime, express it as a text_visible postcondition on the preceding grounded step instead of as a locator-bearing step target.
@@ -48,6 +55,7 @@ type Harness struct {
 	loop   *agent.Loop
 	tools  *tools.Registry
 	policy ToolPolicy
+	plans  *taskplan.Service
 
 	activeMu   sync.Mutex
 	activeRuns map[string]*activeRun
@@ -58,11 +66,32 @@ type activeRun struct {
 }
 
 func New(runs *agentservice.Service, model agent.Model, registry *tools.Registry, maxSteps int) *Harness {
+	return newHarness(runs, model, registry, nil, maxSteps)
+}
+
+func NewWithTaskPlans(
+	runs *agentservice.Service,
+	model agent.Model,
+	registry *tools.Registry,
+	plans *taskplan.Service,
+	maxSteps int,
+) *Harness {
+	return newHarness(runs, model, registry, plans, maxSteps)
+}
+
+func newHarness(
+	runs *agentservice.Service,
+	model agent.Model,
+	registry *tools.Registry,
+	plans *taskplan.Service,
+	maxSteps int,
+) *Harness {
 	return &Harness{
 		runs:       runs,
 		loop:       agent.NewLoop(model, toolDefinitions(registry), defaultSystemPrompt, maxSteps),
 		tools:      registry,
 		policy:     DefaultToolPolicy{},
+		plans:      plans,
 		activeRuns: make(map[string]*activeRun),
 	}
 }
@@ -164,6 +193,21 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				}
 			}
 			if len(response.ToolCalls) == 0 {
+				if e.plans != nil {
+					plan, planErr := e.plans.GetCurrent(ctx, run.ID)
+					if planErr != nil {
+						return false, fmt.Errorf(
+							"agent cannot complete without a task plan: %w",
+							planErr,
+						)
+					}
+					if plan.Status != taskplan.StatusCompleted {
+						return false, fmt.Errorf(
+							"agent cannot complete while task plan status is %q",
+							plan.Status,
+						)
+					}
+				}
 				if err := e.runs.SaveRun(ctx, run); err != nil {
 					return false, err
 				}
@@ -176,6 +220,25 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				if err := e.recordToolStart(ctx, run, stepID, call); err != nil {
 					return false, err
 				}
+				if e.plans != nil {
+					if err := e.plans.Authorize(
+						ctx,
+						run.ID,
+						call.Name,
+						json.RawMessage(call.Arguments),
+					); err != nil {
+						if recordErr := e.recordRecoverableToolFailure(
+							ctx,
+							&run,
+							stepID,
+							call,
+							err,
+						); recordErr != nil {
+							return false, recordErr
+						}
+						continue
+					}
+				}
 				if err := e.policy.BeforeToolCall(run, call); err != nil {
 					if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, err); recordErr != nil {
 						return false, recordErr
@@ -184,6 +247,7 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				}
 				result, executeErr := e.tools.Execute(ctx, tools.Call{
 					RunID:                run.ID,
+					RunInput:             run.Input,
 					ActorUserID:          run.ActorUserID,
 					ConversationID:       run.ConversationID,
 					ProjectID:            run.ProjectID,
@@ -196,6 +260,28 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				if executeErr != nil {
 					if errors.Is(executeErr, context.Canceled) {
 						return false, executeErr
+					}
+					if e.plans != nil {
+						if planErr := e.plans.RecordToolFailure(
+							ctx,
+							run.ID,
+							call.Name,
+							executeErr.Error(),
+						); planErr != nil {
+							return false, fmt.Errorf(
+								"record task plan failure after %s: %w",
+								call.Name,
+								planErr,
+							)
+						}
+						if planErr := e.recordTaskPlanState(
+							ctx,
+							run,
+							stepID,
+							call.ID,
+						); planErr != nil {
+							return false, planErr
+						}
 					}
 					if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, executeErr); recordErr != nil {
 						return false, recordErr
@@ -228,9 +314,38 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 					run.LatestGenerationID = &generationID
 					run.ApprovedGenerationID = nil
 				}
+				if result.Artifact != nil &&
+					result.Artifact.Type == "task_plan" {
+					run.LatestGenerationID = nil
+					run.ApprovedGenerationID = nil
+				}
 				sourceEventSeq, err := e.recordToolResult(ctx, run, stepID, call, result)
 				if err != nil {
 					return false, err
+				}
+				if e.plans != nil {
+					if err := e.plans.RecordToolResult(
+						ctx,
+						run.ID,
+						call.Name,
+						json.RawMessage(call.Arguments),
+						result.Content,
+						sourceEventSeq,
+					); err != nil {
+						return false, fmt.Errorf(
+							"advance task plan after %s: %w",
+							call.Name,
+							err,
+						)
+					}
+					if err := e.recordTaskPlanState(
+						ctx,
+						run,
+						stepID,
+						call.ID,
+					); err != nil {
+						return false, err
+					}
 				}
 				modelContent, err := agent.BuildModelToolSummary(
 					call.Name,
@@ -265,6 +380,15 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 			}
 			return run, loopErr
 		}
+		if e.plans != nil {
+			_ = e.plans.MarkFailed(context.WithoutCancel(ctx), run.ID)
+			_ = e.recordTaskPlanState(
+				context.WithoutCancel(ctx),
+				run,
+				"",
+				"",
+			)
+		}
 		failedRun, _ := e.runs.FailRun(ctx, run, loopErr)
 		return failedRun, loopErr
 	}
@@ -291,12 +415,74 @@ func (e *Harness) Resume(
 		ToolCallID: toolCallID,
 	})
 	if approved, ok := request.Answers["approve_dsl"].(bool); ok && approved {
+		if e.plans != nil {
+			if run.LatestGenerationID == nil {
+				return agentservice.AgentRun{}, errors.New(
+					"cannot approve without a DSL generation",
+				)
+			}
+			if err := e.plans.Approve(
+				ctx,
+				run.ID,
+				*run.LatestGenerationID,
+			); err != nil {
+				return agentservice.AgentRun{}, err
+			}
+			if err := e.recordTaskPlanState(
+				ctx,
+				run,
+				"",
+				toolCallID,
+			); err != nil {
+				return agentservice.AgentRun{}, err
+			}
+		}
 		run.ApprovedGenerationID = run.LatestGenerationID
 	}
 	if err := e.runs.SaveRun(ctx, run); err != nil {
 		return agentservice.AgentRun{}, err
 	}
 	return e.Continue(ctx, run.ID)
+}
+
+func (e *Harness) recordTaskPlanState(
+	ctx context.Context,
+	run agentservice.AgentRun,
+	stepID string,
+	toolCallID string,
+) error {
+	plan, err := e.plans.GetCurrent(ctx, run.ID)
+	if err != nil {
+		if errors.Is(err, taskplan.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	steps := make([]map[string]any, 0, len(plan.Steps))
+	for _, step := range plan.Steps {
+		steps = append(steps, map[string]any{
+			"id":                 step.ID,
+			"position":           step.Position,
+			"status":             step.Status,
+			"grounding_attempts": step.GroundingAttempts,
+			"evidence_count":     len(step.Evidence),
+		})
+	}
+	_, err = e.runs.RecordEvent(ctx, run, agentservice.Event{
+		Type:       agentservice.EventTaskPlanUpdated,
+		StepID:     stepID,
+		ToolCallID: toolCallID,
+		Payload: map[string]any{
+			"schema_version":      plan.SchemaVersion,
+			"plan_id":             plan.ID,
+			"version":             plan.Version,
+			"plan_sha256":         plan.PlanSHA256,
+			"status":              plan.Status,
+			"bound_generation_id": plan.BoundGenerationID,
+			"steps":               steps,
+		},
+	})
+	return err
 }
 
 func (e *Harness) ResumeOwned(
@@ -335,6 +521,9 @@ func (e *Harness) CancelOwned(
 		return agentservice.AgentRun{}, err
 	}
 	if run.Status == agentservice.RunStatusCancelled {
+		if e.plans != nil {
+			_ = e.plans.MarkBlocked(context.WithoutCancel(ctx), run.ID)
+		}
 		e.activeMu.Lock()
 		active := e.activeRuns[runID]
 		e.activeMu.Unlock()

@@ -28,14 +28,16 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 		BrowserTool{
 			name: "explore_page",
 			description: "Open one known URL and return its accessibility elements and candidate links. " +
-				"Use this first when the user has only provided one entry URL.",
+				"Use this first when the user has only provided one entry URL. " +
+				"Bind the probe to the next pending task plan steps with plan_step_ids.",
 			inputSchema: json.RawMessage(`{
 				"type":"object",
 				"properties":{
 					"url":{"type":"string","description":"Absolute page URL"},
-					"core_user_flow_text":{"type":"string","description":"User flow used to prioritize relevant elements"}
+					"core_user_flow_text":{"type":"string","description":"User flow used to prioritize relevant elements"},
+					"plan_step_ids":{"type":"array","minItems":1,"items":{"type":"string"}}
 				},
-				"required":["url"]
+				"required":["url","plan_step_ids"]
 			}`),
 			client: client,
 		},
@@ -51,6 +53,7 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 				"properties":{
 					"base_url":{"type":"string"},
 					"flow_description":{"type":"string"},
+					"plan_step_ids":{"type":"array","minItems":1,"items":{"type":"string"}},
 					"steps":{
 						"type":"array",
 						"minItems":1,
@@ -77,7 +80,7 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 						}
 					}
 				},
-				"required":["steps"]
+				"required":["steps","plan_step_ids"]
 			}`),
 			client: client,
 		},
@@ -119,13 +122,26 @@ func (t BrowserTool) Definition() Definition {
 }
 
 func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
+	arguments := call.Arguments
+	if t.name == "explore_page" || t.name == "explore_flow" {
+		var payload map[string]any
+		if err := json.Unmarshal(call.Arguments, &payload); err != nil {
+			return Result{}, err
+		}
+		delete(payload, "plan_step_ids")
+		var err error
+		arguments, err = json.Marshal(payload)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	content, err := t.client.ExecuteBrowserCapability(
 		ctx,
 		t.name,
 		call.ActorUserID,
 		call.ProjectID,
 		call.ConversationID,
-		call.Arguments,
+		arguments,
 	)
 	if err != nil {
 		return Result{}, err

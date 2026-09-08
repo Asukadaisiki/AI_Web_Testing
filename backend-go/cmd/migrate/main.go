@@ -39,6 +39,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+	if _, err := db.ExecContext(ctx, dbschema.TaskPlanMigrationSQL); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, `
 		DROP TABLE IF EXISTS public.dsl_anti_patterns;
 		DROP TABLE IF EXISTS public.alembic_version;

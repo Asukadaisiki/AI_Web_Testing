@@ -76,6 +76,11 @@ go run ./cmd/agentservice
 
 内存 Repository 仅用于快速单元测试。
 
+正式 Agent 主链要求模型先调用 `set_task_plan`。TaskPlan/PlanStep 在 PostgreSQL
+中按版本持久化，拥有目标语义、动作顺序和次数、禁止动作、幂等性及副作用边界。
+探索工具只能为连续的待处理 PlanStep 补充 evidence，不能改写计划；DSL generation
+必须绑定当前 plan ID、version 和 SHA。计划状态变化通过 `task_plan.updated` 事件发布。
+
 创建 Run 返回 `202 Accepted` 后，Agent 在后台运行。客户端通过 SSE 订阅进度；断线或刷新后带 `after_seq` 或 `Last-Event-ID` 恢复，服务会先重放 PostgreSQL 事件，再推送实时事件。
 
 `execute_dsl` 只接受当前 Run 已由用户批准的 generation ID。执行通过现有 PostgreSQL Batch/Job 队列交给 Python Worker；`get_report` 在 Go 后端等待 Batch 终态，避免 LLM 高频轮询。失败后 `fix_and_retry` 返回失败事实、源 DSL 和修复策略，Agent 仍需显式完成探索、验证、重新生成、用户审批和重执行。

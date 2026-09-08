@@ -129,6 +129,7 @@ type ModelToolSummary struct {
 	Context         *ToolResultContextSummary   `json:"context,omitempty"`
 	Observation     *StructuredObservation      `json:"observation,omitempty"`
 	ExecutedEffects []ObservedActionOption      `json:"executed_effects,omitempty"`
+	TaskPlan        *ToolResultTaskPlanSummary  `json:"task_plan,omitempty"`
 	DSL             *ToolResultDSLSummary       `json:"dsl,omitempty"`
 	Execution       *ToolResultExecutionSummary `json:"execution,omitempty"`
 	Report          *ToolResultReportSummary    `json:"report,omitempty"`
@@ -218,6 +219,17 @@ type ToolResultDSLSummary struct {
 	StepCount    int      `json:"step_count"`
 	Actions      []string `json:"actions,omitempty"`
 	Targets      []string `json:"targets,omitempty"`
+	PlanID       string   `json:"plan_id,omitempty"`
+	PlanVersion  int      `json:"plan_version,omitempty"`
+	PlanSHA256   string   `json:"plan_sha256,omitempty"`
+}
+
+type ToolResultTaskPlanSummary struct {
+	PlanID     string   `json:"plan_id,omitempty"`
+	Version    int      `json:"version,omitempty"`
+	PlanSHA256 string   `json:"plan_sha256,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	StepIDs    []string `json:"step_ids,omitempty"`
 }
 
 type ToolResultExecutionSummary struct {
@@ -649,6 +661,8 @@ func buildCapabilityToolSummary(
 	}
 	summary.Status = boundedUTF8(stringValue(value["status"]), 64)
 	switch tool {
+	case "set_task_plan":
+		summary.TaskPlan = summarizeTaskPlanResult(value)
 	case "generate_dsl":
 		summary.DSL = summarizeDSLResult(value)
 	case "execute_dsl":
@@ -663,9 +677,36 @@ func buildCapabilityToolSummary(
 	return encodeBoundedSummary(&summary)
 }
 
+func summarizeTaskPlanResult(value map[string]any) *ToolResultTaskPlanSummary {
+	result := &ToolResultTaskPlanSummary{
+		PlanID:     boundedUTF8(stringValue(value["plan_id"]), 64),
+		Version:    intFromAny(value["version"]),
+		PlanSHA256: boundedUTF8(stringValue(value["plan_sha256"]), 64),
+		Status:     boundedUTF8(stringValue(value["status"]), 64),
+	}
+	for _, rawStep := range arrayValue(value["steps"]) {
+		step, _ := rawStep.(map[string]any)
+		if step == nil {
+			continue
+		}
+		if id := boundedUTF8(stringValue(step["id"]), 64); id != "" {
+			result.StepIDs = append(result.StepIDs, id)
+		}
+	}
+	return result
+}
+
 func summarizeDSLResult(value map[string]any) *ToolResultDSLSummary {
 	result := &ToolResultDSLSummary{
 		GenerationID: scalarValue(value["generation_id"]),
+	}
+	if binding, _ := value["plan_binding"].(map[string]any); binding != nil {
+		result.PlanID = boundedUTF8(stringValue(binding["plan_id"]), 64)
+		result.PlanVersion = intFromAny(binding["version"])
+		result.PlanSHA256 = boundedUTF8(
+			stringValue(binding["sha256"]),
+			64,
+		)
 	}
 	caseValue, _ := value["case"].(map[string]any)
 	if caseValue == nil {

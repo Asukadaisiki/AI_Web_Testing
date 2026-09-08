@@ -12,6 +12,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 )
 
@@ -133,9 +134,9 @@ func TestSystemPromptRequiresRealSearchControls(t *testing.T) {
 		!strings.Contains(defaultSystemPrompt, "quantity 2 inside one probe and in the final DSL") {
 		t.Fatal("system prompt does not separate probe state from task orchestration")
 	}
-	if !strings.Contains(defaultSystemPrompt, "facts_sufficient_for_generation") ||
-		!strings.Contains(defaultSystemPrompt, "stop probing and call generate_dsl") {
-		t.Fatal("system prompt does not explain deterministic exploration gate")
+	if !strings.Contains(defaultSystemPrompt, "set_task_plan") ||
+		!strings.Contains(defaultSystemPrompt, "Persisted PlanStep status is the only authority") {
+		t.Fatal("system prompt does not require persisted task plan state")
 	}
 	if !strings.Contains(defaultSystemPrompt, "observed only as a successful explore_flow wait_for action") ||
 		!strings.Contains(defaultSystemPrompt, "text_visible postcondition") {
@@ -322,90 +323,6 @@ func TestBUG132ReplayUsesSingleGenerationForSemanticTargets(t *testing.T) {
 	}
 	if len(model.requests) != 7 {
 		t.Fatalf("turns = %d, want 7", len(model.requests))
-	}
-}
-
-func TestHarnessExplorationGateRecoversToGeneration(t *testing.T) {
-	responses := []agent.ModelResponse{
-		{ToolCalls: []agent.ModelTool{{ID: "page-1", Name: "explore_page", Arguments: `{}`}}},
-		{ToolCalls: []agent.ModelTool{{ID: "flow-1", Name: "explore_flow", Arguments: `{"steps":[{"actions":[{"action":"click","target":"Details"}]}]}`}}},
-		{ToolCalls: []agent.ModelTool{{ID: "page-2", Name: "explore_page", Arguments: `{}`}}},
-		{ToolCalls: []agent.ModelTool{{ID: "flow-blocked", Name: "explore_flow", Arguments: `{"steps":[{"actions":[{"action":"wait_for","target":"More exact text"}]}]}`}}},
-		{ToolCalls: []agent.ModelTool{{ID: "generate-1", Name: "generate_dsl", Arguments: `{}`}}},
-		{ToolCalls: []agent.ModelTool{{
-			ID:   "approve-1",
-			Name: "ask_user_question",
-			Arguments: `{"questions":[{
-				"id":"approve_dsl",
-				"question":"批准 DSL？",
-				"type":"confirm",
-				"required":true
-			}]}`,
-		}}},
-	}
-	model := &scriptedModel{responses: responses}
-	runService := agentservice.NewService(agentservice.NewMemoryRepository())
-	pageCalls := 0
-	flowCalls := 0
-	generationCalls := 0
-	registry, err := tools.NewRegistry(
-		staticResultTool{
-			name:    "explore_page",
-			content: json.RawMessage(pageResultJSON("https://example.com", "S0")),
-			calls:   &pageCalls,
-		},
-		staticResultTool{
-			name:    "explore_flow",
-			content: json.RawMessage(flowResultJSON("https://example.com/products", "S1")),
-			calls:   &flowCalls,
-		},
-		staticResultTool{
-			name:     "generate_dsl",
-			content:  json.RawMessage(`{"generation_id":161}`),
-			artifact: &tools.Artifact{Type: "dsl_generation", ID: "161"},
-			calls:    &generationCalls,
-		},
-		tools.AskUserTool{},
-	)
-	if err != nil {
-		t.Fatalf("NewRegistry() error = %v", err)
-	}
-
-	run, err := New(runService, model, registry, 8).Start(
-		context.Background(),
-		"conversation-gate",
-		"generic goal",
-	)
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if pageCalls != 2 || flowCalls != 1 || generationCalls != 1 {
-		t.Fatalf(
-			"tool calls page=%d flow=%d generation=%d, want 2/1/1",
-			pageCalls,
-			flowCalls,
-			generationCalls,
-		)
-	}
-	if run.Status != agentservice.RunStatusWaitingUser ||
-		run.LatestGenerationID == nil ||
-		*run.LatestGenerationID != 161 {
-		t.Fatalf("run = %#v, want approval checkpoint for generated DSL", run)
-	}
-	events, err := runService.ListEvents(context.Background(), run.ID, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundGate := false
-	for _, event := range events {
-		if event.Type == agentservice.EventToolFailed &&
-			event.ToolCallID == "flow-blocked" &&
-			strings.Contains(fmt.Sprint(event.Payload["message"]), "facts_sufficient_for_generation") {
-			foundGate = true
-		}
-	}
-	if !foundGate {
-		t.Fatalf("events did not include exploration gate failure: %#v", events)
 	}
 }
 
@@ -950,5 +867,103 @@ func TestCancelResumedRunUsesRegisteredCancelFunc(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Resume() did not stop after cancellation")
+	}
+}
+
+func TestTaskPlanRevisionInvalidatesPriorDSLBinding(t *testing.T) {
+	planService := taskplan.NewService(taskplan.NewMemoryRepository())
+	model := &scriptedModel{responses: []agent.ModelResponse{
+		{ToolCalls: []agent.ModelTool{{
+			ID:   "plan-1",
+			Name: "set_task_plan",
+			Arguments: `{
+				"goal":"goal",
+				"max_side_effect":"browser_state",
+				"forbidden_actions":["checkout"],
+				"steps":[{
+					"id":"open",
+					"intent":"Open page",
+					"action":"goto",
+					"target":"Page",
+					"value":"https://example.test",
+					"expected_occurrences":1,
+					"idempotency":"idempotent",
+					"side_effect":"browser_state",
+					"preconditions":[],
+					"completion_conditions":["page visible"]
+				}]
+			}`,
+		}}},
+		{ToolCalls: []agent.ModelTool{{
+			ID:   "clarify-1",
+			Name: "ask_user_question",
+			Arguments: `{"questions":[{
+				"id":"continue",
+				"question":"Continue?",
+				"type":"confirm",
+				"required":true
+			}]}`,
+		}}},
+	}}
+	runService := agentservice.NewService(
+		agentservice.NewMemoryRepository(),
+	)
+	run, err := runService.StartRun(
+		context.Background(),
+		"conversation-plan",
+		"goal",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generationID := int64(9)
+	run.LatestGenerationID = &generationID
+	run.ApprovedGenerationID = &generationID
+	if err := runService.SaveRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := tools.NewRegistry(
+		tools.NewSetTaskPlanTool(planService),
+		tools.AskUserTool{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = NewWithTaskPlans(
+		runService,
+		model,
+		registry,
+		planService,
+		3,
+	).Continue(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != agentservice.RunStatusWaitingUser ||
+		run.LatestGenerationID != nil ||
+		run.ApprovedGenerationID != nil {
+		t.Fatalf("run did not invalidate prior DSL binding: %#v", run)
+	}
+	plan, err := planService.GetCurrent(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Status != taskplan.StatusGrounding || plan.Version != 1 {
+		t.Fatalf("plan = %#v", plan)
+	}
+	events, err := runService.ListEvents(context.Background(), run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPlanState := false
+	for _, event := range events {
+		if event.Type == agentservice.EventTaskPlanUpdated &&
+			event.Payload["plan_id"] == plan.ID &&
+			event.Payload["status"] == string(taskplan.StatusGrounding) {
+			foundPlanState = true
+		}
+	}
+	if !foundPlanState {
+		t.Fatalf("task plan state event not found: %#v", events)
 	}
 }

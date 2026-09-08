@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readToolActivities } from "./events";
+import { readLatestTaskPlan, readToolActivities } from "./events";
 import type {
   AgentEvent,
   ResearchLLMCallPayloadV1,
@@ -56,6 +56,31 @@ describe("readToolActivities", () => {
     expect(available.tool_call_ids).toEqual(["tool-1", "tool-2"]);
     expect(unavailable.tool_call_unavailable_reason).toBe(
       "model_returned_final_text",
+    );
+  });
+
+  it("reads the latest persisted task plan snapshot", () => {
+    const first = event("task_plan.updated", 2);
+    first.payload = {
+      schema_version: "agent.task_plan.v1",
+      plan_id: "plan-1",
+      version: 1,
+      plan_sha256: "a".repeat(64),
+      status: "grounding",
+      steps: [],
+    };
+    const latest = event("task_plan.updated", 4);
+    latest.payload = {
+      schema_version: "agent.task_plan.v1",
+      plan_id: "plan-1",
+      version: 1,
+      plan_sha256: "a".repeat(64),
+      status: "ready_for_generation",
+      steps: [],
+    };
+
+    expect(readLatestTaskPlan([first, latest])?.status).toBe(
+      "ready_for_generation",
     );
   });
 });

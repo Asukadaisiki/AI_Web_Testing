@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 )
 
 var (
@@ -53,6 +55,7 @@ type Generation struct {
 	CanonicalVersion string
 	Profile          Profile
 	Success          bool
+	PlanBinding      taskplan.Binding
 }
 
 type Store struct {
@@ -68,6 +71,23 @@ func (s *Store) CreateGeneration(
 	actorUserID, projectID int64,
 	candidate json.RawMessage,
 	warnings []string,
+) (Generation, error) {
+	return s.CreateGenerationWithPlan(
+		ctx,
+		actorUserID,
+		projectID,
+		candidate,
+		warnings,
+		taskplan.Binding{},
+	)
+}
+
+func (s *Store) CreateGenerationWithPlan(
+	ctx context.Context,
+	actorUserID, projectID int64,
+	candidate json.RawMessage,
+	warnings []string,
+	planBinding taskplan.Binding,
 ) (Generation, error) {
 	validated, err := ValidateExecutableCase(candidate)
 	if err != nil {
@@ -105,7 +125,8 @@ func (s *Store) CreateGeneration(
 			warnings_count, normalization_notes_count, warnings_json,
 			normalization_notes_json, governance_focus_reasons_json,
 			risk_flags_json, generated_case_json, dsl_sha256,
-			dsl_canonical_version, feedback_status,
+			dsl_canonical_version, plan_id, plan_version, plan_sha256,
+			feedback_status,
 			feedback_import_mode, rejection_reason_code, feedback_note,
 			feedback_recorded_at
 		) VALUES (
@@ -119,7 +140,9 @@ func (s *Store) CreateGeneration(
 			false, false,
 			$6, 0, $7,
 			'[]'::json, '[]'::json,
-			'[]'::json, $8, $9, $10, 'pending',
+			'[]'::json, $8, $9, $10,
+			NULLIF($11, ''), NULLIF($12, 0), NULLIF($13, ''),
+			'pending',
 			NULL, NULL, NULL,
 			NULL
 		)
@@ -134,6 +157,9 @@ func (s *Store) CreateGeneration(
 		string(normalized),
 		dslHash,
 		validated.CanonicalVersion,
+		planBinding.PlanID,
+		planBinding.Version,
+		planBinding.SHA256,
 	).Scan(&id)
 	if err != nil {
 		return Generation{}, fmt.Errorf("persist DSL generation: %w", err)
@@ -143,6 +169,7 @@ func (s *Store) CreateGeneration(
 		CanonicalVersion: validated.CanonicalVersion,
 		Profile:          validated.Profile,
 		Success:          true,
+		PlanBinding:      planBinding,
 	}, nil
 }
 
@@ -154,15 +181,27 @@ func (s *Store) GetGeneration(
 	var raw []byte
 	var storedHash sql.NullString
 	var storedVersion sql.NullString
+	var planID, planHash sql.NullString
+	var planVersion sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT g.id, g.generated_case_json, g.dsl_sha256,
-		       g.dsl_canonical_version, g.success
+		       g.dsl_canonical_version, g.success,
+		       g.plan_id, g.plan_version, g.plan_sha256
 		FROM dsl_generation_runs g
 		JOIN project_members pm ON pm.project_id = g.project_id
 		WHERE g.id = $1 AND g.project_id = $2
 		  AND g.actor_user_id = $3 AND pm.user_id = $3`,
 		generationID, projectID, actorUserID,
-	).Scan(&generation.ID, &raw, &storedHash, &storedVersion, &generation.Success)
+	).Scan(
+		&generation.ID,
+		&raw,
+		&storedHash,
+		&storedVersion,
+		&generation.Success,
+		&planID,
+		&planVersion,
+		&planHash,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Generation{}, ErrNotFound
 	}
@@ -186,6 +225,18 @@ func (s *Store) GetGeneration(
 	generation.DSLHash = SHA256(canonical)
 	generation.CanonicalVersion = validated.CanonicalVersion
 	generation.Profile = validated.Profile
+	if planID.Valid || planVersion.Valid || planHash.Valid {
+		if !planID.Valid || !planVersion.Valid || !planHash.Valid {
+			return Generation{}, errors.New(
+				"persisted DSL generation has an incomplete task plan binding",
+			)
+		}
+		generation.PlanBinding = taskplan.Binding{
+			PlanID:  planID.String,
+			Version: int(planVersion.Int64),
+			SHA256:  planHash.String,
+		}
+	}
 	if storedHash.Valid && storedHash.String != generation.DSLHash {
 		return Generation{}, errors.New("persisted DSL generation SHA does not match its canonical JSON")
 	}

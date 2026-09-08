@@ -15,6 +15,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/cases"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/execution"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 )
 
 type BrowserValidator interface {
@@ -33,6 +34,7 @@ type ControlPlaneCapabilities struct {
 	cases      *cases.PostgresStore
 	executions *execution.Store
 	browser    BrowserValidator
+	taskPlans  *taskplan.Service
 }
 
 func NewControlPlaneCapabilities(
@@ -46,13 +48,33 @@ func NewControlPlaneCapabilities(
 	}
 }
 
+func NewControlPlaneCapabilitiesWithTaskPlans(
+	dslStore *dsl.Store,
+	caseStore *cases.PostgresStore,
+	executionStore *execution.Store,
+	browser BrowserValidator,
+	taskPlans *taskplan.Service,
+) *ControlPlaneCapabilities {
+	capabilities := NewControlPlaneCapabilities(
+		dslStore,
+		caseStore,
+		executionStore,
+		browser,
+	)
+	capabilities.taskPlans = taskPlans
+	return capabilities
+}
+
 func (c *ControlPlaneCapabilities) GenerateDSL(
 	ctx context.Context,
-	actorUserID, projectID int64,
+	actorUserID int64,
+	runID string,
+	projectID int64,
 	conversationID string,
 	arguments json.RawMessage,
 ) (json.RawMessage, error) {
 	var request struct {
+		PlanBinding      taskplan.Binding             `json:"plan_binding"`
 		Case             json.RawMessage              `json:"case"`
 		A11yNodesByState map[string][]json.RawMessage `json:"a11y_nodes_by_state"`
 	}
@@ -69,6 +91,16 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 	}
 	if validatedDraft.Profile != dsl.ProfileResearchV1 {
 		return nil, errors.New("generate_dsl requires the research-v1 profile")
+	}
+	if c.taskPlans != nil {
+		if _, err := c.taskPlans.ValidateGenerationBinding(
+			ctx,
+			runID,
+			request.PlanBinding,
+			validatedDraft.CanonicalJSON,
+		); err != nil {
+			return nil, err
+		}
 	}
 	normalizedCase := validatedDraft.CanonicalJSON
 	preflightCase, err := preparePreflightCase(normalizedCase)
@@ -132,8 +164,13 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 	if validatedExecutable.Profile != validatedDraft.Profile {
 		return nil, errors.New("DSL locator preflight changed the case profile")
 	}
-	generation, err := c.dsl.CreateGeneration(
-		ctx, actorUserID, projectID, validatedExecutable.CanonicalJSON, validated.Warnings,
+	generation, err := c.dsl.CreateGenerationWithPlan(
+		ctx,
+		actorUserID,
+		projectID,
+		validatedExecutable.CanonicalJSON,
+		validated.Warnings,
+		request.PlanBinding,
 	)
 	if err != nil {
 		return nil, err
@@ -144,6 +181,7 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 		"dsl_sha256":                 generation.DSLHash,
 		"dsl_canonical_version":      generation.CanonicalVersion,
 		"profile":                    generation.Profile,
+		"plan_binding":               request.PlanBinding,
 		"validation_case_digest":     validated.CaseDigest,
 		"validation_evidence_digest": validated.EvidenceDigest,
 		"supported_actions":          []string{"goto", "click", "input", "wait_for", "assert_text", "assert_url_contains", "capture_text"},
@@ -277,6 +315,16 @@ func (c *ControlPlaneCapabilities) ExecuteDSL(
 	}
 	if !generation.Success {
 		return nil, errors.New("DSL generation has no executable case")
+	}
+	if c.taskPlans != nil {
+		if _, err := c.taskPlans.ValidateGenerationBinding(
+			ctx,
+			runID,
+			generation.PlanBinding,
+			generation.Case,
+		); err != nil {
+			return nil, err
+		}
 	}
 	mutation, err := caseMutation(projectID, generation.Case)
 	if err != nil {

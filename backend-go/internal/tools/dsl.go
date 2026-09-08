@@ -10,6 +10,7 @@ type DSLCapabilityClient interface {
 	GenerateDSL(
 		ctx context.Context,
 		actorUserID int64,
+		runID string,
 		projectID int64,
 		conversationID string,
 		arguments json.RawMessage,
@@ -28,6 +29,7 @@ func (t GenerateDSLTool) Definition() Definition {
 	return Definition{
 		Name: "generate_dsl",
 		Description: "Validate and persist a research-v1 Action IR case authored from the user's goal and verified page elements. " +
+			"The plan_binding must match the current persisted task plan. " +
 			"Every step action must be one of: goto, click, input, wait_for, assert_text, " +
 			"assert_url_contains, capture_text. Every step must declare intent, preconditions, postconditions, idempotency, and side_effect. " +
 			"Author only semantic target and optional page_state/target_strategy fields; never author selector, candidates, or locator_confidence. " +
@@ -45,6 +47,16 @@ func (t GenerateDSLTool) Definition() Definition {
 			"type":"object",
 			"additionalProperties":false,
 			"properties":{
+				"plan_binding":{
+					"type":"object",
+					"additionalProperties":false,
+					"properties":{
+						"plan_id":{"type":"string","minLength":1},
+						"version":{"type":"integer","minimum":1},
+						"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}
+					},
+					"required":["plan_id","version","sha256"]
+				},
 				"case":{"$ref":"#/$defs/case"},
 				"a11y_nodes_by_state":{
 					"type":"object",
@@ -52,7 +64,7 @@ func (t GenerateDSLTool) Definition() Definition {
 					"additionalProperties":false
 				}
 			},
-			"required":["case","a11y_nodes_by_state"],
+			"required":["plan_binding","case","a11y_nodes_by_state"],
 			"$defs":{
 				"condition":{
 					"type":"object",
@@ -244,6 +256,7 @@ func (t GenerateDSLTool) Execute(ctx context.Context, call Call) (Result, error)
 	content, err := t.client.GenerateDSL(
 		ctx,
 		call.ActorUserID,
+		call.RunID,
 		call.ProjectID,
 		call.ConversationID,
 		call.Arguments,
