@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-import logging.handlers
 import os
 import sys
 
-from browser_worker.runtime.paths import PROJECT_ROOT
 from browser_worker.runtime.structured_logging import StructuredJsonFormatter
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -23,7 +21,7 @@ _THIRD_PARTY_LOGGERS = [
 
 
 def setup_logging(level: str | None = None) -> None:
-    """Configure structured logging for the entire application.
+    """Configure stdout logging for the entire application.
 
     Args:
         level: Override log level. Falls back to env var ``LOG_LEVEL``,
@@ -33,36 +31,22 @@ def setup_logging(level: str | None = None) -> None:
 
     formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
 
-    # Console handler (for development)
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(formatter)
-
-    handlers: list[logging.Handler] = [console]
-
-    # Structured JSON file handler
-    structured_log_file = PROJECT_ROOT / "backend_structured.log"
-    structured_handler = logging.handlers.RotatingFileHandler(
-        structured_log_file,
-        maxBytes=50 * 1024 * 1024,  # 50MB
-        backupCount=5,
-        encoding="utf-8",
-    )
-    structured_handler.setFormatter(StructuredJsonFormatter())
-    handlers.append(structured_handler)
+    structured_console = logging.StreamHandler(sys.stdout)
+    structured_console.setFormatter(StructuredJsonFormatter())
 
     # Root logger
     root = logging.getLogger()
     root.handlers.clear()
-    for h in handlers:
-        root.addHandler(h)
+    root.addHandler(console)
     root.setLevel(logging.WARNING)
 
     # Application loggers
-    app_logger = logging.getLogger("app")
+    app_logger = logging.getLogger("browser_worker")
     app_logger.setLevel(getattr(logging, effective_level, logging.INFO))
     app_logger.handlers.clear()
-    for h in handlers:
-        app_logger.addHandler(h)
+    app_logger.addHandler(structured_console)
     app_logger.propagate = False
 
     # Quiet third-party loggers

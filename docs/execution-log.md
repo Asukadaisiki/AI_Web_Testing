@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-08 | 清理 Browser Worker 遗留文件和本地生成物
+
+- 任务：核对 `browser-worker/` 根目录内容是否仍被使用，删除可证明无用的遗留文件，并修复目录中可见的导入与日志问题。
+- 操作：将 Pyright include/extraPaths 从已删除的 `app/` 更新为 `src/`；删除无引用的 `locators/url_pattern.py`、旧 `app.db`、旧 `backend_structured.log`、空 `storage_states/` 和 Python/Ruff 缓存；重建 `.venv` 以清除已下线的 SQLAlchemy/Alembic/psycopg；将 `browser_worker` 应用日志统一为结构化 stdout；补充日志配置测试和本地生成物说明。保留可能被历史报告引用的 `artifacts/`。
+- 结果：Browser Worker 根目录只保留源码、测试、运行脚本、构建配置、本机环境和可追溯执行证据；不再创建本地 SQLite 或项目根日志文件。修复 BUG-160。
+- 验证：Python 153 tests passed / 2 skipped；compileall 通过；本次改动文件 Ruff 检查通过；Pyright 0 errors / 0 warnings；全目录 Ruff 仍有 190 个既有问题，未在本次清理中扩大修改范围。
+- 后续：如确认历史报告不再需要，可按 retention policy 单独清理约 206MB 的 `artifacts/`。
+
 ## 2026-09-08 | Browser Worker 改为标准 src 布局
 
 - 任务：消除 `browser-worker/browser_worker` 连续重复命名带来的阅读困惑，同时保留有语义的 Python import 包名。

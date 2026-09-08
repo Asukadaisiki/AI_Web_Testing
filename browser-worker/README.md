@@ -45,6 +45,16 @@ src/
 - 当前不启用登录、Cookie、Token 或角色鉴权
 - AI visual 默认关闭；如需启用，额外设置 `ENABLE_AI_VISUAL_LOCATE=true`、`VLM_API_KEY`、`VLM_BASE_URL`、`VLM_MODEL` 与 `VLM_MODEL_FAMILY`
 
+## 本地生成物
+
+- `.venv/`：`uv sync` 创建的 Python 环境，可删除后重建。
+- `artifacts/`：执行截图和 DOM evidence，可能被历史报告引用，不应自动清空。
+- `storage_states/`：浏览器会话状态，运行时按需创建。
+- `.ruff_cache/`、`__pycache__/`：纯缓存，可直接删除。
+- `.env`：本机配置，保留且不提交。
+
+Browser Worker 不再创建本地 SQLite 数据库或项目根日志文件；日志统一写到 stdout。
+
 ## Smoke 基准用例
 
 当前默认的真实联调基准是 `example.com` 冒烟用例：

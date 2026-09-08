@@ -6,7 +6,7 @@
   "reportMissingImports": "error",
   "reportMissingModuleSource": "warning",
   "include": [
-    "browser-worker/app",
+    "browser-worker/src",
     "browser-worker/tests",
     "browser-worker/scripts"
   ],
@@ -14,7 +14,7 @@
     {
       "root": "browser-worker",
       "extraPaths": [
-        "browser-worker"
+        "browser-worker/src"
       ]
     }
   ]

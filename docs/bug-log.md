@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-160 | Browser Worker src 迁移后残留旧工具路径和文件日志配置
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：medium
+- 来源：Browser Worker 目录清理 / IDE 报错排查
+- 描述：Python 包迁入 `src/browser_worker` 后，根 `pyrightconfig.json` 仍扫描已删除的 `browser-worker/app`，同时日志配置仍绑定旧的 `app` logger 并在项目根持续创建 `backend_structured.log`。
+- 复现步骤：
+  1. 在 IDE 中打开 `browser-worker/src` 下源码并检查导入诊断。
+  2. 启动 Browser Worker 后查看项目根目录和结构化日志 logger 名。
+  3. 可见旧路径导致的解析错误、自动生成的 `backend_structured.log`，以及历史 `app.*` logger 名。
+- 影响：IDE 无法正确解析 `src` 布局；应用日志配置未覆盖新的包命名，并在源码目录产生可删除的运行日志。
+- 根因：`src` 布局重构只迁移了包和运行路径，没有同步根级 Pyright 配置与旧日志输出策略。
+- 处理：Pyright include/extraPaths 改为 `browser-worker/src`；应用 logger 改为 `browser_worker`；结构化日志统一输出 stdout，不再创建项目根日志文件；删除旧日志并新增回归测试。
+- 验证：Python 153 tests passed / 2 skipped；本次改动文件 Ruff 检查通过；Pyright 0 errors / 0 warnings；compileall 通过。
+- 关联记录：`docs/execution-log.md#2026-09-08--清理-browser-worker-遗留文件和本地生成物`
+
 ## BUG-158 | Python 包移动后 artifact 路径仍依赖旧目录深度
 
 - 日期：2026-09-08
