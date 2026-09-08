@@ -1,0 +1,31 @@
+{
+  "schema_version": "agentic-e2e.acceptance.v1",
+  "id": "automationexercise-men-tshirt-details.v1",
+  "goal": "匿名访问 Automation Exercise，从 Products 页面搜索 Men Tshirt，确认搜索结果并进入商品详情页，验证商品名称为 Men Tshirt、分类为 Men > Tshirts、价格为 Rs. 400。不得注册、登录、加入购物车、结账或填写个人信息；默认不使用 Vision。",
+  "oracle": {
+    "final_url": {
+      "contains": "/product_details/2"
+    },
+    "elements": [
+      {
+        "id": "product_details",
+        "selector": {
+          "tag": "body"
+        },
+        "match_count": {
+          "equals": 1
+        },
+        "text": {
+          "contains": [
+            "Men Tshirt",
+            "Category: Men > Tshirts",
+            "Rs. 400"
+          ],
+          "not_contains": [
+            "Your product has been added to cart."
+          ]
+        }
+      }
+    ]
+  }
+}

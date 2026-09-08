@@ -614,40 +614,12 @@ class BrowserSessionManager:
                     logger.warning("BrowserSessionManager: session %d health check failed: %s", session_id, e)
                     cls._close_locked(session_id)
 
-            if cls._runtime_browser is None:
-                pw = sync_playwright()
-                entered = False
-                try:
-                    playwright = pw.__enter__()
-                    entered = True
-                    browser = playwright.chromium.launch(headless=True)
-                except Exception:
-                    if entered:
-                        with suppress(Exception):
-                            pw.__exit__(None, None, None)
-                    raise
-                cls._runtime_pw = pw
-                cls._runtime_playwright = playwright
-                cls._runtime_browser = browser
-
-            browser = cls._runtime_browser
-            context = None
-            try:
-                context_kwargs: dict = {}
-                if storage_state_path and Path(storage_state_path).exists():
-                    context_kwargs["storage_state"] = storage_state_path
-                context = browser.new_context(**context_kwargs)
-                page = context.new_page()
-            except Exception:
-                if context is not None:
-                    with suppress(Exception):
-                        context.close()
-                raise
+            context, page = cls._new_context_locked(storage_state_path)
 
             cls._sessions[session_id] = {
                 "pw": cls._runtime_pw,
                 "playwright": cls._runtime_playwright,
-                "browser": browser,
+                "browser": cls._runtime_browser,
                 "context": context,
                 "page": page,
                 "created_at": _time_module.monotonic(),
@@ -655,6 +627,48 @@ class BrowserSessionManager:
             }
             logger.info("BrowserSessionManager: created new session %d", session_id)
             return context, page
+
+    @classmethod
+    def create_isolated_context(
+        cls,
+        *,
+        storage_state_path: str | None = None,
+    ):
+        """Create a disposable context without changing session state."""
+        cls._cleanup()
+        with cls._lock:
+            return cls._new_context_locked(storage_state_path)
+
+    @classmethod
+    def _new_context_locked(cls, storage_state_path: str | None):
+        if cls._runtime_browser is None:
+            pw = sync_playwright()
+            entered = False
+            try:
+                playwright = pw.__enter__()
+                entered = True
+                browser = playwright.chromium.launch(headless=True)
+            except Exception:
+                if entered:
+                    with suppress(Exception):
+                        pw.__exit__(None, None, None)
+                raise
+            cls._runtime_pw = pw
+            cls._runtime_playwright = playwright
+            cls._runtime_browser = browser
+
+        context = None
+        try:
+            context_kwargs: dict[str, Any] = {}
+            if storage_state_path and Path(storage_state_path).exists():
+                context_kwargs["storage_state"] = storage_state_path
+            context = cls._runtime_browser.new_context(**context_kwargs)
+            return context, context.new_page()
+        except Exception:
+            if context is not None:
+                with suppress(Exception):
+                    context.close()
+            raise
 
     @classmethod
     def close_session(cls, session_id: int) -> None:
@@ -1068,6 +1082,7 @@ def _collect_flow_a11y(
     base_url: str | None = None,
     storage_state_path: str | None = None,
     session_id: int = 0,
+    isolated_context: bool = False,
     timeout_ms: int = 60000,
     core_user_flow_text: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -1083,7 +1098,7 @@ def _collect_flow_a11y(
     # Normalize all steps to explore format
     flow_steps = [_normalize_flow_step(s) for s in flow_steps]
 
-    managed = not bool(session_id)
+    managed = not bool(session_id) and not isolated_context
     pw = None
     browser = None
     context = None
@@ -1121,7 +1136,11 @@ def _collect_flow_a11y(
                         exc_info=True,
                     )
 
-    if session_id:
+    if isolated_context:
+        context, page = BrowserSessionManager.create_isolated_context(
+            storage_state_path=storage_state_path,
+        )
+    elif session_id:
         _, page = BrowserSessionManager.get_or_create_context(
             session_id, storage_state_path=storage_state_path,
         )
@@ -1525,7 +1544,11 @@ def _collect_flow_a11y(
             }
         )
     finally:
-        cleanup_managed_browser()
+        if isolated_context:
+            with suppress(Exception):
+                context.close()
+        else:
+            cleanup_managed_browser()
     logger.info("_collect_flow_a11y completed: %d results", len(results))
 
     # Deduplicate results: keep unique pages with their actions

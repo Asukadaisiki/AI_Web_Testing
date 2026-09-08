@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-08 | 完成 Task 6.7 声明式 E2E 验收迁移
+
+- 任务：移除可复用 E2E Driver/Oracle 中的 Canonical、Blue Top 和 cart 专用硬编码，使新增任务只需增加版本化数据文件。
+- 操作：新增严格的 `agentic-e2e.acceptance.v1` JSON Schema、通用 acceptance loader/evaluator 和空条件/非法正则校验；迁移 Blue Top cart 验收并增加 Men Tshirt details fixture；删除 Driver 内固定 Goal、搜索步骤校验、cart parser 和 Oracle mutation；Research experiment 改为引用 acceptance 并持久化 acceptance ID/SHA，Go config 升级为 v2 且保留 v1 只读兼容；DSL profile 与 acceptance 解耦，由实验 controls 独立管理。
+- 结果：两个不同任务通过同一 Driver/Oracle 合同，Stage 5 legacy 与 Stage 6 research 可复用同一 acceptance；通用运行时代码不再包含命名任务分支或相关商品、价格、URL、selector 示例；BUG-159 修复，Task 6.7 与对应 checklist 完成。
+- 验证：Go `go test -count=1 ./...`、`go vet ./...`、`go build ./...` 通过；Python 159 tests passed / 2 skipped，Pyright 0 errors / 0 warnings，compileall 通过；6 个新增/变更 JSON 文件解析通过，聚焦 acceptance/Driver/Research 74 tests 通过，`git diff --check` 通过。Ruff 对全量改动文件仍报告存量规则债务，本次新增文件的 import 排序已修复。未运行 live E2E，未调用 DeepSeek。
+- 后续：Task 6.6 尚需实现版本化 Task Plan/PlanStep、plan hash 绑定与 Context Materializer；恢复 live E2E 前仍需完成成本熔断、cache 指标聚合和人工预算确认。
+
 ## 2026-09-08 | 清理 Browser Worker 遗留文件和本地生成物
 
 - 任务：核对 `browser-worker/` 根目录内容是否仍被使用，删除可证明无用的遗留文件，并修复目录中可见的导入与日志问题。
@@ -64,6 +72,14 @@
 - 验证：Python 153 tests passed / 2 skipped；compileall 通过；本次改动文件 Ruff 检查通过；Pyright 0 errors / 0 warnings；全目录 Ruff 仍有 190 个既有问题，未在本次清理中扩大修改范围。
 - 后续：如确认历史报告不再需要，可按 retention policy 单独清理约 206MB 的 `artifacts/`。
 
+## 2026-09-08 | 撤销任务流程硬编码并建立仓库级禁令
+
+- 任务：响应用户关于禁止任何任务流程硬编码的要求，在运行新任务 E2E 前删除刚新增的 details Oracle/CLI 分支，并把规则固化到项目文档。
+- 操作：完整撤销 `run_agentic_e2e.py` 和 `test_agentic_e2e_driver.py` 中新增的详情页任务逻辑；在 `AGENTS.md`、研究 spec/tasks/checklist 中明确禁止可复用 Agent/Harness/Tool/Driver/Runner/Oracle 硬编码商品、价格、数量、URL、selector、动作顺序或任务预期；新增 Task 6.7 和 BUG-159 跟踪历史 Canonical 硬编码迁移。
+- 结果：刚新增的两个文件恢复为零 diff；现有通用 driver 因仍含历史 Blue Top/cart 专用逻辑，被明确判定为不能用于新任务 E2E。在迁移到版本化 declarative acceptance spec 前暂停新任务 live E2E，避免继续增加命名任务分支。
+- 验证：Go 全量 test/vet/build、Python 151 passed/2 skipped、`src/browser_worker`/tests/scripts compileall、`git diff --check` 通过；未运行 live E2E，未调用模型。
+- 后续：完成 Task 6.7：将历史 Canonical Goal、流程约束和 Oracle 预期迁出 driver，至少用两个声明式任务 fixture 证明新增任务不修改运行时代码。
+
 ## 2026-09-08 | Browser Worker 改为标准 src 布局
 
 - 任务：消除 `browser-worker/browser_worker` 连续重复命名带来的阅读困惑，同时保留有语义的 Python import 包名。
@@ -71,6 +87,30 @@
 - 结果：仓库目录层次变为“项目根 -> src -> Python 包”，不再出现项目目录与包目录紧邻重复；运行时 import 仍保持清晰的 `browser_worker.*`。同时修复了 BUG-158。
 - 验证：`cd browser-worker && uv run python -m unittest discover -s tests -v` 通过（151 passed / 2 skipped）；`uv run python -m compileall -q src/browser_worker tests scripts` 通过；FastAPI 入口、三个脚本导入和 `PROJECT_ROOT` 断言通过；旧路径检索无命中；`git diff --check` 通过。
 - 后续：无。
+
+## 2026-09-08 | 清理 explore_flow 调试会话并完成最终门禁
+
+- 任务：按用户要求删除 `.dbg` 和临时调试文件，并在无调试埋点状态下运行最终测试。
+- 操作：确认 `.dbg` 仅包含 `explore-flow-side-effects` 的 env/NDJSON，代码中无其他调试会话后删除 `.dbg` 与 `debug-explore-flow-side-effects.md`；复查 `policy.go` 仅保留 DSL 审批门，不包含 Add to cart/次数硬编码；运行 Go/Python 全量门禁和残留检索。
+- 结果：调试服务器未运行，调试网络上报、`.dbg`、debug session 文件全部清理；保留 disposable probe context、结构化 context/effect 摘要、quantity=2 DSL 回归及 Task Plan/Context Materializer 规格。BUG-157 标记 fixed。
+- 验证：`cd backend-go && go test -count=1 ./... && go vet ./... && go build ./...` 通过；`cd browser-worker && uv run python -m unittest discover -s tests -v` 为 151 passed/2 skipped；`uv run python -m compileall -q src/browser_worker tests scripts` 通过；`git diff --check`、调试标记和调试文件残留检查通过。未运行 live E2E，未调用模型。
+- 后续：实现版本化 Task Plan/PlanStep 与 Context Materializer；稳定前缀用于 provider cache，动态窗口只携带当前 PlanStep、observation delta、未解决 failure/recovery，完整事实通过 artifact ref/hash 引用。
+
+## 2026-09-08 | Mock 复现并修复 explore_flow 非幂等重放
+
+- 任务：针对 Blue Top live smoke 中 Agent 反复把 `explore_flow` 当执行器的问题，用 mock 复现并判断是工具合同、Agent 编排还是 Browser Worker 执行错误。
+- 操作：按 Debugger 科学调试流程建立 `explore-flow-side-effects` 会话和网络埋点；以记录轨迹构造 policy/tool mock；初版按 action/target/URL 拒绝重放，但用户指出会误伤“同一商品加两件”的合法任务，因此撤销硬拒绝，改为每次 `explore_flow` 创建并关闭独立 disposable BrowserContext；任务次数和顺序继续由 Agent 编排及最终 DSL 表达。
+- 结果：pre-fix 三次 probe 共享状态，mock cart 从 quantity 1 增长到 3；post-fix policy 不限制合法业务数量，但三次 probe 均返回 `execution_scope=isolated_probe`、`state_persisted=false` 和独立 quantity 1。模型摘要增加压缩稳定的 `executed_effects` 与 context metadata。
+- 验证：Go policy/summary/prompt/tool contract/DSL 聚焦测试通过，其中 research-v1 明确接受 `Quantity=2 -> Add to cart once`；Python capability/page explorer 隔离测试通过。Go/Python 全量、compileall 和 `git diff --check` 通过；未运行 live E2E，未调用 DeepSeek。
+- 后续：实现版本化 Task Plan/PlanStep 状态机：Plan 决定动作、顺序、次数；Explore 仅绑定 PlanStep 验证 feasibility/grounding；最终 DSL 必须绑定 plan hash，计划变更必须显式生成新版本。
+
+## 2026-09-07 | 架构更新后执行单次 Blue Top live E2E smoke
+
+- 任务：用户更新项目架构后，请求先跑一次 E2E 测试，观察 AI 完成“添加蓝色短袖商品到购物车”任务的能力。
+- 操作：确认工作区最新提交为 `430c0f2 refactor: clarify browser worker package layout`，执行 `go run ./cmd/migrate`；启动 Browser Worker、Go execution-worker 和 `AGENTSERVICE_MAX_TURNS=16` 的 AgentService；使用官方 DeepSeek 配置和 `browser-worker/scripts/run_agentic_e2e.py` 执行单次 `research-v1` Blue Top live smoke，未运行 3 repetition。首次运行因仓库内 Playwright Chromium/headless shell 缺失进入 clarification 并自动取消；安装到仓库内 `.playwright-browsers/` 后重跑一次，并在 AI 已采集购物车证据但未收敛到 DSL 时手动取消以控制成本。
+- 结果：第一次结果为 `research/results/e2e-smoke-20260907T120910Z/run.json`，Project 1056 / Session 62 / Run `run_e49928f24192bca810d2818e`，失败原因是浏览器内核缺失。第二次结果为 `research/results/e2e-smoke-20260907T121005Z/run.json`，Project 1057 / Session 63 / Run `run_fbe6208971669d7e43715c4d`，AI 成功完成 Products 搜索、进入 `/product_details/1`、点击 Add to cart、通过 modal View Cart 到达 `/view_cart`，并采集到 cart row evidence；但没有生成 DSL、没有进入审批、没有 Batch/Execution。最后证据显示购物车 `#product-1` 为 Blue Top，单价 `Rs. 500`，但数量为 `3`、总价为 `Rs. 1500`，偏离目标数量 1。新增 BUG-157 跟踪探索阶段重复执行非幂等加购的问题。
+- 验证：本轮只执行单次 live smoke，不做正式 Stage 验收。两次 Run 均被取消并确认无 Batch/Execution；第二次 DeepSeek 调用 6 次，input 214,385、output 20,703、total 235,088 tokens，prompt cache hit 0、miss 214,385。两次合计 DeepSeek 调用 8 次，total 251,861 tokens。服务进程已停止，本轮启动的后台进程已清理。
+- 后续：优先修复探索/执行边界：`explore_flow` 不得重复执行 Add to cart 等非幂等副作用动作；到达关键业务状态后应强制收敛到 DSL 生成或停止；cart evidence 若显示 quantity/total 偏离目标，应归因为探索污染并停止。修复前不应继续跑 live E2E。
 
 ## 2026-09-07 | 重命名 Browser Worker Python 包结构
 

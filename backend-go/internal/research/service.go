@@ -15,13 +15,16 @@ import (
 )
 
 const (
-	ExperimentConfigSchemaVersion = "research.experiment_config.v1"
-	ScheduleVersion               = "research.schedule.v1"
-	SupportedVariant              = "dsl_verification"
+	LegacyExperimentConfigSchemaVersion = "research.experiment_config.v1"
+	ExperimentConfigSchemaVersion       = "research.experiment_config.v2"
+	ScheduleVersion                     = "research.schedule.v1"
+	SupportedVariant                    = "dsl_verification"
 )
 
 type ExperimentConfig struct {
 	SchemaVersion         string `json:"schema_version"`
+	AcceptanceSpecID      string `json:"acceptance_spec_id"`
+	AcceptanceSpecSHA256  string `json:"acceptance_spec_sha256"`
 	RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
 	RunTimeoutSeconds     int    `json:"run_timeout_seconds"`
 	CancelGraceSeconds    int    `json:"cancel_grace_seconds"`
@@ -33,7 +36,10 @@ type ExperimentConfig struct {
 func (c *ExperimentConfig) NormalizeAndValidate() error {
 	c.SchemaVersion = strings.TrimSpace(c.SchemaVersion)
 	c.ScheduleVersion = strings.TrimSpace(c.ScheduleVersion)
-	if c.SchemaVersion != ExperimentConfigSchemaVersion ||
+	c.AcceptanceSpecID = strings.TrimSpace(c.AcceptanceSpecID)
+	c.AcceptanceSpecSHA256 = strings.TrimSpace(c.AcceptanceSpecSHA256)
+	if (c.SchemaVersion != ExperimentConfigSchemaVersion &&
+		c.SchemaVersion != LegacyExperimentConfigSchemaVersion) ||
 		c.ScheduleVersion != ScheduleVersion ||
 		c.RequestTimeoutSeconds <= 0 ||
 		c.RequestTimeoutSeconds > 3600 ||
@@ -45,7 +51,27 @@ func (c *ExperimentConfig) NormalizeAndValidate() error {
 		!c.CleanContext {
 		return fmt.Errorf("%w: experiment config", ErrInvalid)
 	}
+	if c.SchemaVersion == ExperimentConfigSchemaVersion &&
+		(c.AcceptanceSpecID == "" ||
+			len(c.AcceptanceSpecID) > 200 ||
+			len(c.AcceptanceSpecSHA256) != 64 ||
+			!isLowerHex(c.AcceptanceSpecSHA256)) {
+		return fmt.Errorf("%w: experiment acceptance binding", ErrInvalid)
+	}
+	if c.SchemaVersion == LegacyExperimentConfigSchemaVersion &&
+		(c.AcceptanceSpecID != "" || c.AcceptanceSpecSHA256 != "") {
+		return fmt.Errorf("%w: legacy experiment acceptance binding", ErrInvalid)
+	}
 	return nil
+}
+
+func isLowerHex(value string) bool {
+	for _, character := range value {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return false
+		}
+	}
+	return true
 }
 
 func ParseExperimentConfig(raw json.RawMessage) (ExperimentConfig, error) {

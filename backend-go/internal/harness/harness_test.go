@@ -129,6 +129,10 @@ func TestSystemPromptRequiresRealSearchControls(t *testing.T) {
 		!strings.Contains(defaultSystemPrompt, "search-button action as a separate click step") {
 		t.Fatal("system prompt does not define safe input trigger semantics")
 	}
+	if !strings.Contains(defaultSystemPrompt, "isolated disposable probe context") ||
+		!strings.Contains(defaultSystemPrompt, "quantity 2 inside one probe and in the final DSL") {
+		t.Fatal("system prompt does not separate probe state from task orchestration")
+	}
 }
 
 func TestHarnessPersistsLLMTelemetryBeforeCompletion(t *testing.T) {

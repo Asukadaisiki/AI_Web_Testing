@@ -117,23 +117,33 @@ type ToolResultPageSummary struct {
 }
 
 type ModelToolSummary struct {
-	SchemaVersion string                    `json:"schema_version"`
-	PolicyVersion string                    `json:"policy_version"`
-	Tool          string                    `json:"tool"`
-	Source        ToolResultSource          `json:"source"`
-	SummarySHA256 string                    `json:"summary_sha256,omitempty"`
-	Success       *bool                     `json:"success,omitempty"`
-	Status        string                    `json:"status,omitempty"`
-	Warnings      []string                  `json:"warnings,omitempty"`
-	Failures      []ToolResultErrorSummary  `json:"failures,omitempty"`
-	Observation   *StructuredObservation    `json:"observation,omitempty"`
-	DSL           *ToolResultDSLSummary     `json:"dsl,omitempty"`
-	Report        *ToolResultReportSummary  `json:"report,omitempty"`
-	Repair        *ToolResultRepairSummary  `json:"repair,omitempty"`
-	Generic       *ToolResultGenericSummary `json:"generic,omitempty"`
-	Pages         []ToolResultPageSummary   `json:"pages,omitempty"`
-	Truncation    ToolResultTruncation      `json:"truncation"`
-	ReferenceOnly bool                      `json:"reference_only,omitempty"`
+	SchemaVersion   string                    `json:"schema_version"`
+	PolicyVersion   string                    `json:"policy_version"`
+	Tool            string                    `json:"tool"`
+	Source          ToolResultSource          `json:"source"`
+	SummarySHA256   string                    `json:"summary_sha256,omitempty"`
+	Success         *bool                     `json:"success,omitempty"`
+	Status          string                    `json:"status,omitempty"`
+	Warnings        []string                  `json:"warnings,omitempty"`
+	Failures        []ToolResultErrorSummary  `json:"failures,omitempty"`
+	Context         *ToolResultContextSummary `json:"context,omitempty"`
+	Observation     *StructuredObservation    `json:"observation,omitempty"`
+	ExecutedEffects []ObservedActionOption    `json:"executed_effects,omitempty"`
+	DSL             *ToolResultDSLSummary     `json:"dsl,omitempty"`
+	Report          *ToolResultReportSummary  `json:"report,omitempty"`
+	Repair          *ToolResultRepairSummary  `json:"repair,omitempty"`
+	Generic         *ToolResultGenericSummary `json:"generic,omitempty"`
+	Pages           []ToolResultPageSummary   `json:"pages,omitempty"`
+	Truncation      ToolResultTruncation      `json:"truncation"`
+	ReferenceOnly   bool                      `json:"reference_only,omitempty"`
+}
+
+type ToolResultContextSummary struct {
+	ExecutionScope        string `json:"execution_scope,omitempty"`
+	StatePersisted        bool   `json:"state_persisted"`
+	CleanContextRequested bool   `json:"clean_context_requested"`
+	StorageStateLoaded    bool   `json:"storage_state_loaded"`
+	PlanningSessionID     int64  `json:"planning_session_id,omitempty"`
 }
 
 type StructuredObservation struct {
@@ -177,6 +187,7 @@ type ObservedCandidateCoverage struct {
 
 type ObservedActionOption struct {
 	PageState       string `json:"page_state,omitempty"`
+	URL             string `json:"url,omitempty"`
 	Action          string `json:"action,omitempty"`
 	Target          string `json:"target,omitempty"`
 	Status          string `json:"status,omitempty"`
@@ -250,18 +261,27 @@ type ToolResultGenericSummary struct {
 }
 
 type rawExploreResult struct {
-	URL          string       `json:"url"`
-	PageState    string       `json:"page_state"`
-	Revision     int          `json:"revision"`
-	Status       string       `json:"status"`
-	Warning      string       `json:"warning"`
-	Success      *bool        `json:"success"`
-	ElementCount int          `json:"element_count"`
-	A11yNodes    []rawNode    `json:"a11y_nodes"`
-	Actions      []rawAction  `json:"actions"`
-	Failure      *rawFailure  `json:"failure"`
-	Failures     []rawFailure `json:"failures"`
-	Pages        []rawPage    `json:"pages"`
+	URL             string              `json:"url"`
+	PageState       string              `json:"page_state"`
+	Revision        int                 `json:"revision"`
+	Status          string              `json:"status"`
+	Warning         string              `json:"warning"`
+	Success         *bool               `json:"success"`
+	ElementCount    int                 `json:"element_count"`
+	A11yNodes       []rawNode           `json:"a11y_nodes"`
+	Actions         []rawAction         `json:"actions"`
+	Failure         *rawFailure         `json:"failure"`
+	Failures        []rawFailure        `json:"failures"`
+	Pages           []rawPage           `json:"pages"`
+	ContextEvidence *rawContextEvidence `json:"context_evidence"`
+}
+
+type rawContextEvidence struct {
+	ExecutionScope        string `json:"execution_scope"`
+	StatePersisted        bool   `json:"state_persisted"`
+	CleanContextRequested bool   `json:"clean_context_requested"`
+	StorageStateLoaded    bool   `json:"storage_state_loaded"`
+	PlanningSessionID     int64  `json:"planning_session_id"`
 }
 
 type rawPage struct {
@@ -366,6 +386,15 @@ func BuildModelToolSummary(
 			HardLimit:   ModelToolSummaryHardLimitBytes,
 		},
 	}
+	if raw.ContextEvidence != nil {
+		summary.Context = &ToolResultContextSummary{
+			ExecutionScope:        boundedUTF8(raw.ContextEvidence.ExecutionScope, 64),
+			StatePersisted:        raw.ContextEvidence.StatePersisted,
+			CleanContextRequested: raw.ContextEvidence.CleanContextRequested,
+			StorageStateLoaded:    raw.ContextEvidence.StorageStateLoaded,
+			PlanningSessionID:     raw.ContextEvidence.PlanningSessionID,
+		}
+	}
 	if raw.Warning != "" {
 		summary.Warnings = []string{boundedUTF8(raw.Warning, 1024)}
 	}
@@ -389,7 +418,45 @@ func BuildModelToolSummary(
 	}
 	normalizeSummary(&summary)
 	summary.Observation = buildStructuredObservation(summary.Pages, summary.Failures)
+	summary.ExecutedEffects = executedEffectsFromObservation(summary.Observation)
 	return encodeBoundedSummary(&summary)
+}
+
+func executedEffectsFromObservation(
+	observation *StructuredObservation,
+) []ObservedActionOption {
+	if observation == nil {
+		return nil
+	}
+	seen := make(map[string]ObservedActionOption)
+	for _, option := range observation.ActionOptions {
+		if option.Status != "success" ||
+			(option.SideEffect != "external_or_business_state" &&
+				option.IdempotencyHint != "non_idempotent") {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(option.Action)) +
+			"\x00" + strings.ToLower(strings.Join(strings.Fields(option.Target), " ")) +
+			"\x00" + strings.ToLower(strings.TrimSpace(option.URL))
+		if key == "\x00\x00" {
+			continue
+		}
+		seen[key] = option
+	}
+	result := make([]ObservedActionOption, 0, len(seen))
+	for _, option := range seen {
+		result = append(result, option)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Action != result[j].Action {
+			return result[i].Action < result[j].Action
+		}
+		if result[i].Target != result[j].Target {
+			return result[i].Target < result[j].Target
+		}
+		return result[i].URL < result[j].URL
+	})
+	return result
 }
 
 func CompactExplorationTranscript(transcript []Message) []Message {
@@ -1208,6 +1275,7 @@ func buildStructuredObservation(
 		for _, action := range page.Actions {
 			option := ObservedActionOption{
 				PageState:       firstNonEmptyString(action.PageState, page.PageState),
+				URL:             action.URL,
 				Action:          action.Action,
 				Target:          action.Target,
 				Status:          action.Status,

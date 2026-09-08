@@ -4,27 +4,29 @@ import json
 import tempfile
 import time
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-from browser_worker.runners.playwright_runner import _attach_final_dom_snapshot
 from browser_worker.contracts.executions import StepExecutionEvidence
+from browser_worker.reporting.acceptance import (
+    evaluate_acceptance,
+    load_acceptance_spec,
+)
+from browser_worker.runners.playwright_runner import _attach_final_dom_snapshot
 from scripts.run_agentic_e2e import (
-    AgenticE2EError,
-    CANONICAL_GOAL,
     DSL_CANONICAL_VERSION_V1,
     DSL_CANONICAL_VERSION_V2,
+    AgenticE2EError,
     HTTPAgenticClient,
     _failure_result,
     _go_json_sha256,
-    evaluate_cart_oracle,
     main,
-    oracle_expectation,
-    run_agentic_goal,
-    validate_canonical_search_contract,
     validate_goal,
 )
-
+from scripts.run_agentic_e2e import (
+    run_agentic_goal as _run_agentic_goal,
+)
 
 CART_HTML = """
 <table>
@@ -40,6 +42,29 @@ CART_HTML = """
 EXECUTION_29_CART_HTML = (
     Path(__file__).parent / "fixtures" / "execution-29-cart-fragment.html"
 ).read_text(encoding="utf-8")
+ACCEPTANCE_ROOT = Path(__file__).parents[2] / "research" / "acceptance"
+BLUE_TOP_ACCEPTANCE_PATH = (
+    ACCEPTANCE_ROOT / "automationexercise-blue-top-cart.v1.json"
+)
+MEN_TSHIRT_ACCEPTANCE_PATH = (
+    ACCEPTANCE_ROOT / "automationexercise-men-tshirt-details.v1.json"
+)
+BLUE_TOP_ACCEPTANCE = load_acceptance_spec(BLUE_TOP_ACCEPTANCE_PATH)
+MEN_TSHIRT_ACCEPTANCE = load_acceptance_spec(MEN_TSHIRT_ACCEPTANCE_PATH)
+CANONICAL_GOAL = BLUE_TOP_ACCEPTANCE["goal"]
+
+
+def run_agentic_goal(goal, *, acceptance=None, **kwargs):
+    resolved = deepcopy(acceptance or BLUE_TOP_ACCEPTANCE)
+    if "expected_dsl_profile" not in kwargs:
+        client = kwargs.get("client")
+        case = getattr(client, "case", {})
+        kwargs["expected_dsl_profile"] = case.get("profile", "legacy-v1")
+    return _run_agentic_goal(
+        goal,
+        acceptance=resolved,
+        **kwargs,
+    )
 
 
 class FakeClient:
@@ -533,45 +558,6 @@ class AgenticE2EDriverTest(unittest.TestCase):
     def test_goal_accepts_natural_language(self) -> None:
         self.assertEqual(validate_goal(CANONICAL_GOAL), CANONICAL_GOAL)
 
-    def test_canonical_search_requires_verified_input_then_click(self) -> None:
-        validate_canonical_search_contract(FakeClient().case)
-
-        with self.assertRaisesRegex(AgenticE2EError, "input followed by"):
-            validate_canonical_search_contract(
-                {
-                    "steps": [
-                        {"action": "goto", "value": "/products"},
-                        {"action": "click", "target": "#submit_search"},
-                    ]
-                }
-            )
-        with self.assertRaisesRegex(AgenticE2EError, "input followed by"):
-            validate_canonical_search_contract(
-                {
-                    "steps": [
-                        {
-                            "action": "input",
-                            "target": "#search_product",
-                            "value": "Blue Top",
-                        },
-                        {"action": "click", "target": "#submit_search"},
-                    ]
-                }
-            )
-
-    def test_canonical_search_rejects_direct_search_url(self) -> None:
-        with self.assertRaisesRegex(AgenticE2EError, "not goto"):
-            validate_canonical_search_contract(
-                {
-                    "steps": [
-                        {
-                            "action": "goto",
-                            "value": "/products?search=Blue%20Top",
-                        }
-                    ]
-                }
-            )
-
     def test_goal_rejects_dsl_css_xpath_and_candidates(self) -> None:
         invalid = [
             '{"steps":[{"action":"click"}]}',
@@ -584,89 +570,83 @@ class AgenticE2EDriverTest(unittest.TestCase):
             with self.subTest(goal=goal), self.assertRaises(ValueError):
                 validate_goal(goal)
 
-    def test_oracle_passes_and_negative_mutations_fail(self) -> None:
-        self.assertTrue(evaluate_cart_oracle(CART_HTML)["passed"])
-        self.assertFalse(
-            evaluate_cart_oracle(
-                CART_HTML, expected=oracle_expectation("wrong-price")
+    def test_acceptance_oracle_passes_and_rejects_wrong_fact(self) -> None:
+        self.assertTrue(
+            evaluate_acceptance(
+                BLUE_TOP_ACCEPTANCE,
+                html=CART_HTML,
+                actual_url="https://automationexercise.com/view_cart",
             )["passed"]
         )
         self.assertFalse(
-            evaluate_cart_oracle(
-                CART_HTML, expected=oracle_expectation("wrong-product")
+            evaluate_acceptance(
+                BLUE_TOP_ACCEPTANCE,
+                html=CART_HTML.replace("Rs. 500", "Rs. 501"),
+                actual_url="https://automationexercise.com/view_cart",
             )["passed"]
         )
 
-    def test_oracle_parses_execution_29_dom_shape_precisely(self) -> None:
-        result = evaluate_cart_oracle(EXECUTION_29_CART_HTML)
-
-        self.assertTrue(result["passed"])
-        self.assertEqual(
-            result["actual"],
-            {
-                "id": "product-1",
-                "name": "Blue Top",
-                "unit_price": "Rs. 500",
-                "quantity": "1",
-                "total_price": "Rs. 500",
-            },
+    def test_acceptance_oracle_reads_existing_cart_artifact(self) -> None:
+        result = evaluate_acceptance(
+            BLUE_TOP_ACCEPTANCE,
+            html=EXECUTION_29_CART_HTML,
+            actual_url="https://automationexercise.com/view_cart",
         )
-        self.assertEqual(result["observed_row_ids"], ["product-1"])
-
-    def test_oracle_handles_implicit_table_cell_and_row_closing(self) -> None:
-        html = """
-        <table><tr id="product-1">
-          <td class="cart_description"><h4><a>Blue Top</a></h4><p>not the name
-          <td class="cart_price"><p>Rs. 500
-          <td class="cart_quantity"><button>1
-          <td class="cart_total"><p>Rs. 500
-        <tr id="summary"><td class="cart_price"><p>Rs. 999</table>
-        <footer><img src="footer.png"></footer></body></html>
-        """
-
-        result = evaluate_cart_oracle(html)
 
         self.assertTrue(result["passed"])
-        self.assertEqual(result["observed_row_ids"], ["product-1"])
+        self.assertTrue(result["checks"]["cart_row"]["passed"])
 
-    def test_cli_exit_codes_follow_oracle_result(self) -> None:
-        def run_with_oracle(*args, mutation, **kwargs):
-            return {
-                "success": evaluate_cart_oracle(
-                    EXECUTION_29_CART_HTML,
-                    expected=oracle_expectation(mutation),
-                )["passed"]
-            }
+    def test_cli_loads_different_tasks_without_driver_changes(self) -> None:
+        def run_with_acceptance(goal, *, acceptance, **_kwargs):
+            self.assertEqual(goal, acceptance["goal"])
+            return {"success": True}
 
         with tempfile.TemporaryDirectory() as directory:
-            for mutation, expected_code in (
-                ("none", 0),
-                ("wrong-price", 1),
-                ("wrong-product", 1),
+            for acceptance_path in (
+                BLUE_TOP_ACCEPTANCE_PATH,
+                MEN_TSHIRT_ACCEPTANCE_PATH,
             ):
-                output = Path(directory) / f"{mutation}.json"
+                output = Path(directory) / f"{acceptance_path.stem}.json"
                 argv = [
                     "run_agentic_e2e.py",
-                    CANONICAL_GOAL,
-                    "--oracle-mutation",
-                    mutation,
+                    "--acceptance-spec",
+                    str(acceptance_path),
                     "--output",
                     str(output),
                 ]
                 with (
-                    self.subTest(mutation=mutation),
+                    self.subTest(acceptance=acceptance_path.name),
                     patch("sys.argv", argv),
                     patch(
                         "scripts.run_agentic_e2e.run_agentic_goal",
-                        side_effect=run_with_oracle,
+                        side_effect=run_with_acceptance,
                     ),
                     patch("builtins.print"),
                 ):
-                    self.assertEqual(main(), expected_code)
-                self.assertEqual(
-                    json.loads(output.read_text(encoding="utf-8"))["success"],
-                    expected_code == 0,
+                    self.assertEqual(main(), 0)
+                self.assertTrue(
+                    json.loads(output.read_text(encoding="utf-8"))["success"]
                 )
+
+    def test_cli_returns_nonzero_when_acceptance_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "failed.json"
+            argv = [
+                "run_agentic_e2e.py",
+                "--acceptance-spec",
+                str(BLUE_TOP_ACCEPTANCE_PATH),
+                "--output",
+                str(output),
+            ]
+            with (
+                patch("sys.argv", argv),
+                patch(
+                    "scripts.run_agentic_e2e.run_agentic_goal",
+                    return_value={"success": False},
+                ),
+                patch("builtins.print"),
+            ):
+                self.assertEqual(main(), 1)
 
     def test_run_drives_approval_report_and_oracle(self) -> None:
         client = FakeClient()
@@ -745,11 +725,16 @@ class AgenticE2EDriverTest(unittest.TestCase):
         self.assertEqual(client.session_requests, [(11, False)])
         self.assertFalse(result["configuration"]["clean_browser_context"])
 
-    def test_oracle_mutation_overrides_formal_pass(self) -> None:
+    def test_acceptance_failure_overrides_formal_pass(self) -> None:
+        wrong_acceptance = deepcopy(BLUE_TOP_ACCEPTANCE)
+        wrong_acceptance["oracle"]["elements"][0]["text"]["contains"] = [
+            "Blue Top",
+            "Rs. 999",
+        ]
         result = run_agentic_goal(
             CANONICAL_GOAL,
             client=FakeClient(),
-            mutation="wrong-price",
+            acceptance=wrong_acceptance,
         )
 
         self.assertTrue(result["formal_execution"]["passed"])
@@ -842,7 +827,9 @@ class AgenticE2EDriverTest(unittest.TestCase):
             "clarification-1",
         )
         failure = _failure_result(
-            CANONICAL_GOAL, "none", raised.exception
+            CANONICAL_GOAL,
+            BLUE_TOP_ACCEPTANCE,
+            raised.exception,
         )
         self.assertFalse(failure["success"])
         self.assertEqual(failure["ids"], diagnostic["ids"])

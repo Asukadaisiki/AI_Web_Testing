@@ -20,6 +20,10 @@ dist/
 tmp/
 temp/
 .tools/
+.sandbox-home/
+.sandbox-tmp/
+.sandbox-cache/
+.playwright-browsers/
 *.log
 .worktrees/
 

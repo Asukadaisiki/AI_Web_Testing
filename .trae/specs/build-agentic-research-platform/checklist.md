@@ -109,6 +109,10 @@
 - [ ] Canonical Goal 连续 3 次通过。（因 BUG-155 成本熔断缺失，按用户要求暂停 live E2E）
 - [ ] 3 次 Canonical 均有不同的官方 DeepSeek response/request ID，且可在平台调用记录中核对。（暂停 live E2E）
 - [x] 模型可见工具结果包含结构化 Observation/DSL/Report/Repair 摘要，完整原始结果仅通过 source ref/hash 审计。
+- [x] `explore_flow` 使用 disposable probe context，探索副作用不跨调用或进入正式执行。
+- [ ] 版本化 Task Plan/PlanStep 成为动作、顺序、参数和次数的唯一编排来源，Explore 与最终 DSL 均绑定 plan hash。
+- [ ] Context Materializer 使用稳定可缓存前缀和有界动态窗口；压缩不丢 Goal、PlanStep、未解决失败、审批与 evidence binding。
+- [x] E2E driver/Oracle 不包含任务专用商品、价格、数量、URL、selector 或步骤硬编码；任务差异全部来自版本化 acceptance spec。
 - [ ] 恢复 live E2E 前完成调用/token/失败重试预算、cache hit/miss 聚合和成本预估。
 - [ ] Stage 6 已 commit 并 push。
 

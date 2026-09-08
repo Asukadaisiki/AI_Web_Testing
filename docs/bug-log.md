@@ -65,6 +65,23 @@
 - 验证：Python 153 tests passed / 2 skipped；本次改动文件 Ruff 检查通过；Pyright 0 errors / 0 warnings；compileall 通过。
 - 关联记录：`docs/execution-log.md#2026-09-08--清理-browser-worker-遗留文件和本地生成物`
 
+## BUG-159 | 可复用 E2E driver 内含 Canonical 任务流程和 Oracle 硬编码
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：high
+- 来源：更换 E2E 任务前的 driver 审查 / 用户架构约束
+- 描述：`browser-worker/scripts/run_agentic_e2e.py` 的可复用运行路径仍包含 `CANONICAL_GOAL`、固定搜索控件顺序、Blue Top、`product-1`、Rs. 500、数量 1 和 cart 专用 Oracle。直接换任务会被旧任务合同误判；为新任务继续增加代码分支会扩大任务流程硬编码。
+- 复现步骤：
+  1. 使用非 Blue Top/cart 的自然语言 Goal 调用 `run_agentic_e2e.py`。
+  2. Driver 仍执行 `validate_canonical_search_contract` 和 `evaluate_cart_oracle`。
+  3. 即使 AgentRun/DSL/Execution 正确，新任务也会因旧 Canonical 预期失败。
+- 影响：E2E driver 无法作为通用 Agent 能力评估入口；新增任务需要修改运行时代码，实验结果被任务专用逻辑污染。
+- 根因：早期 Canonical 验收逻辑直接实现于通用 driver，没有将 Goal、流程约束和预期事实迁入版本化 declarative acceptance spec。
+- 处理：新增严格的 `agentic-e2e.acceptance.v1` schema、通用 loader/evaluator 和 acceptance ID/SHA 绑定；将 Canonical Goal、Blue Top/cart 预期迁入 fixture；删除 Driver 中固定搜索顺序、cart parser、mutation 和命名任务分支。Acceptance 只包含 Goal 与结果事实，DSL profile 继续由实验 controls 管理。
+- 验证：Blue Top cart 与 Men Tshirt details 两个不同 fixture 通过同一解释器和 Driver 合同；Stage 5 legacy 与 Stage 6 research 共用同一 acceptance；Go 全量 test/vet/build、Python 159 passed/2 skipped、Pyright 0 errors/0 warnings、compileall、JSON 解析和 `git diff --check` 通过。未运行 live E2E，未调用模型。
+- 关联记录：`docs/execution-log.md#2026-09-08--完成-task-67-声明式-e2e-验收迁移`
+
 ## BUG-158 | Python 包移动后 artifact 路径仍依赖旧目录深度
 
 - 日期：2026-09-08
@@ -81,6 +98,24 @@
 - 处理：新增 `browser_worker.runtime.paths.PROJECT_ROOT` 作为唯一项目根定义；Runner、FastAPI 入口、配置和日志统一从该常量派生路径；脚本显式区分 `WORKER_ROOT` 与 `src` 源码根。
 - 验证：Browser Worker 全量 151 tests passed / 2 skipped；compileall、入口/脚本导入、项目根断言和 `git diff --check` 通过。
 - 关联记录：`docs/execution-log.md#2026-09-08--browser-worker-改为标准-src-布局`
+
+## BUG-157 | live smoke 中探索工具重复执行非幂等加购导致购物车数量膨胀
+
+- 日期：2026-09-07
+- 状态：fixed
+- 严重度：critical
+- 来源：架构更新后单次 live E2E smoke
+- 描述：在 Blue Top 加购物车 live smoke 中，AI 已完成 Products 搜索、进入商品详情、点击 Add to cart、通过 modal View Cart 到达购物车，并采集到 cart row evidence；但它没有及时收敛到 `generate_dsl` / 审批 / 正式执行，而是多次用 `explore_flow` 继续执行包含 Add to cart 的非幂等动作。最终购物车 row 显示 `Blue Top / Rs. 500 / quantity 3 / total Rs. 1500`，偏离目标要求的 quantity 1 / total Rs. 500。
+- 复现步骤：
+  1. 启动 Browser Worker、Go execution-worker 和 `AGENTSERVICE_MAX_TURNS=16` 的 AgentService。
+  2. 运行 `browser-worker/scripts/run_agentic_e2e.py`，目标为匿名访问 Automation Exercise，将 Blue Top 数量 1 加入购物车并验证购物车。
+  3. 观察 Run `run_fbe6208971669d7e43715c4d` 的事件：6 次 `explore_page`/`explore_flow` tool result 后仍无 Generation/Batch/Execution。
+  4. 查看最后一次 cart evidence：`#product-1` row 中数量为 `3`、总价为 `Rs. 1500`。
+- 影响：探索阶段本应用于采集证据，却实际改变了业务状态；AI 可能把探索当执行使用，重复触发非幂等动作，导致后续 DSL/Oracle 目标状态被污染。该问题会让“AI 能完成任务”的判断失真，并使正式 E2E 在进入 DSL 前已经破坏 clean context。
+- 根因：`explore_flow` 复用 Planning Session 的持久 BrowserContext，因此探索阶段的 click/input probe 会累计业务状态；系统又要求证据不足时 re-explore，AI 为补 cart cell evidence 重放整段路径。任务顺序和次数没有独立的 Task Plan 约束，探索动作与任务编排发生混淆。
+- 处理：已完成隔离修复，撤销按 `Add to cart` 文本或调用次数硬拒绝的方案。每次 `explore_flow` 改用独立 disposable BrowserContext，结束后关闭且不写回 Planning Session；模型摘要显式返回 `execution_scope=isolated_probe`、`state_persisted=false`，并保留 `executed_effects` 供分析。Agent prompt/tool contract 明确数量和顺序由最终 DSL 表达。完整的版本化 Task Plan/PlanStep 状态机仍作为后续架构项。
+- 验证：pre-fix mock 证明三次探测把 cart 从 quantity 1 累加到 3；post-fix isolation mock 证明 policy 不限制合法重复决策，但三次 probe 各自在独立状态中返回 quantity 1。Python 测试证明 `explore_flow` 创建并关闭 disposable context、不会复用 Planning Session context；research-v1 DSL 的 `Quantity=2 -> Add to cart once` 校验通过。Go 全量测试、Python 151 passed/2 skipped、`src/browser_worker`/tests/scripts compileall、`go vet ./...`、`go build ./...` 和 `git diff --check` 通过；调试网络埋点、`.dbg` 和 debug session 文件已全部删除。未运行 live E2E、未调用模型。
+- 关联记录：`docs/execution-log.md#2026-09-07--架构更新后执行单次-blue-top-live-e2e-smoke`
 
 ## BUG-156 | research-v1 locator preflight 对无 accessible name 节点崩溃
 

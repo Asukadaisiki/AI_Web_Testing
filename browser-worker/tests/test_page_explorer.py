@@ -314,6 +314,35 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         context.close.assert_not_called()
         pw.__exit__.assert_not_called()
 
+    def test_isolated_flow_uses_and_closes_disposable_context(self) -> None:
+        page = _FlowPage()
+        context = MagicMock()
+        with (
+            patch.object(
+                BrowserSessionManager,
+                "create_isolated_context",
+                return_value=(context, page),
+            ) as create_isolated,
+            patch.object(
+                BrowserSessionManager,
+                "get_or_create_context",
+            ) as get_shared,
+            patch(
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
+                return_value=[{"node_id": "current", "role": "heading", "name": "Cart"}],
+            ),
+        ):
+            result = _collect_flow_a11y(
+                [{"url": page.url, "actions": []}],
+                session_id=7,
+                isolated_context=True,
+            )
+
+        self.assertEqual(result[0]["status"], "success")
+        create_isolated.assert_called_once_with(storage_state_path=None)
+        get_shared.assert_not_called()
+        context.close.assert_called_once_with()
+
     def test_empty_actions_collect_current_page(self) -> None:
         page = _FlowPage()
         with (

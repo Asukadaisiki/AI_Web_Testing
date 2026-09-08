@@ -11,6 +11,13 @@ import (
 func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 	first := json.RawMessage(`{
 		"success":true,
+			"context_evidence":{
+				"execution_scope":"isolated_probe",
+				"state_persisted":false,
+				"clean_context_requested":true,
+				"storage_state_loaded":false,
+				"planning_session_id":63
+			},
 		"pages":[
 			{
 				"url":"https://example.com/products",
@@ -23,6 +30,7 @@ func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 					"action_index":0,
 					"action":"click",
 					"target":"Add to cart",
+						"url":"https://example.com/products",
 					"phase":"before",
 					"status":"success",
 					"target_evidence":[{
@@ -65,7 +73,7 @@ func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 					],
 					"focusable":true,"page_state":"S1","name":"Add to cart","role":"button","parent_id":"e1","node_id":"e2"
 				}],
-				"status":"success","phase":"before","target":"Add to cart","action":"click","action_index":0,"step_index":1
+					"status":"success","phase":"before","target":"Add to cart","url":"https://example.com/products","action":"click","action_index":0,"step_index":1
 			}],
 			"element_count":4,"status":"success","revision":2,"page_state":"S1","url":"https://example.com/products"
 		}],
@@ -146,6 +154,12 @@ func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 		len(summary.Observation.PageStates) != 1 {
 		t.Fatalf("observation = %#v", summary.Observation)
 	}
+	if summary.Context == nil ||
+		summary.Context.ExecutionScope != "isolated_probe" ||
+		summary.Context.StatePersisted ||
+		summary.Context.PlanningSessionID != 63 {
+		t.Fatalf("context = %#v", summary.Context)
+	}
 	if summary.Observation.PageStates[0].PageKind != "products" {
 		t.Fatalf("page kind = %#v", summary.Observation.PageStates[0])
 	}
@@ -163,6 +177,12 @@ func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 		summary.Observation.ActionOptions[0].SideEffect != "external_or_business_state" ||
 		summary.Observation.ActionOptions[0].IdempotencyHint != "non_idempotent" {
 		t.Fatalf("action options = %#v", summary.Observation.ActionOptions)
+	}
+	if len(summary.ExecutedEffects) != 1 ||
+		summary.ExecutedEffects[0].Action != "click" ||
+		summary.ExecutedEffects[0].Target != "Add to cart" ||
+		summary.ExecutedEffects[0].URL != "https://example.com/products" {
+		t.Fatalf("executed effects = %#v", summary.ExecutedEffects)
 	}
 }
 
@@ -258,6 +278,44 @@ func TestCompactExplorationTranscriptReferencesSupersededState(t *testing.T) {
 	}
 	if transcript[0].Content != "keep me" {
 		t.Fatal("non-exploration message was modified")
+	}
+}
+
+func TestReferenceOnlyExplorationSummaryPreservesExecutedEffects(t *testing.T) {
+	raw := json.RawMessage(`{
+		"success":true,
+		"pages":[{
+			"url":"https://example.com/view_cart",
+			"page_state":"S1",
+			"status":"success",
+			"actions":[{
+				"action":"click",
+				"target":"Add to cart",
+				"status":"success"
+			}]
+		}]
+	}`)
+	content, err := BuildModelToolSummary("explore_flow", raw, 19)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	makeSummaryReferenceOnly(&summary, "test")
+	encoded, err := encodeSummary(&summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compacted ModelToolSummary
+	if err := json.Unmarshal(encoded, &compacted); err != nil {
+		t.Fatal(err)
+	}
+	if !compacted.ReferenceOnly ||
+		len(compacted.ExecutedEffects) != 1 ||
+		compacted.ExecutedEffects[0].Target != "Add to cart" {
+		t.Fatalf("compacted executed effects = %#v", compacted.ExecutedEffects)
 	}
 }
 

@@ -29,8 +29,8 @@ from scripts.research_e2e import (
     load_provider_attestation,
     main,
     run_experiment,
-    verify_negative_contract_runs,
     verify_experiment,
+    verify_negative_contract_runs,
 )
 
 RESEARCH_FIXTURE = json.loads(
@@ -44,6 +44,12 @@ RESEARCH_CASE = json.loads(RESEARCH_FIXTURE["canonical_json"])
 RESEARCH_SHA = RESEARCH_FIXTURE["sha256"]
 RESEARCH_VERSION = RESEARCH_FIXTURE["canonical_version"]
 ATTESTATION_KEY = "stage6-provider-attestation-test-key-0123456789"
+STAGE5_SPEC = (
+    Path(__file__).parents[2]
+    / "research"
+    / "experiments"
+    / "stage5-canonical.v1.json"
+)
 
 
 class OrchestrationClient:
@@ -115,11 +121,16 @@ def driver_result(index: int, project_id: int = 7) -> dict:
         },
         "formal_execution": {"passed": True},
         "oracle": {
-            "schema_version": "automationexercise.cart-oracle.v1",
+            "schema_version": "agentic-e2e.oracle.v1",
+            "acceptance_id": "fixture-task.v1",
             "passed": True,
-            "checks": {"name": True},
-            "expected": {"name": "Blue Top"},
-            "actual": {"name": "Blue Top"},
+            "checks": {
+                "outcome": {
+                    "passed": True,
+                    "expected": "expected",
+                    "actual": "expected",
+                }
+            },
         },
         "artifacts": {
             "final_dom": {
@@ -132,7 +143,7 @@ def driver_result(index: int, project_id: int = 7) -> dict:
 
 
 class ResearchE2EOrchestrationTest(unittest.TestCase):
-    def test_spec_contains_only_natural_language_goal_and_controls(self) -> None:
+    def test_spec_references_versioned_acceptance_and_controls(self) -> None:
         spec = load_experiment_spec(DEFAULT_SPEC)
 
         self.assertEqual(spec["repetitions"], 3)
@@ -141,9 +152,24 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
         self.assertEqual(spec["timeouts"]["experiment_seconds"], 3600)
         self.assertEqual(spec["timeouts"]["request_seconds"], 30)
         self.assertEqual(spec["timeouts"]["long_operation_seconds"], 300)
+        self.assertEqual(
+            spec["acceptance_spec"],
+            "research/acceptance/automationexercise-blue-top-cart.v1.json",
+        )
+        self.assertEqual(
+            spec["acceptance"]["goal"],
+            spec["acceptance"]["goal"].strip(),
+        )
         self.assertNotIn("dsl_case", spec)
-        self.assertNotIn("selector", str(spec).casefold())
         self.assertNotIn("candidates", str(spec).casefold())
+
+    def test_same_acceptance_supports_legacy_and_research_profiles(self) -> None:
+        stage5 = load_experiment_spec(STAGE5_SPEC)
+        stage6 = load_experiment_spec(DEFAULT_SPEC)
+
+        self.assertEqual(stage5["controls"]["dsl_profile"], "legacy-v1")
+        self.assertEqual(stage6["controls"]["dsl_profile"], "research-v1")
+        self.assertEqual(stage5["acceptance"], stage6["acceptance"])
 
     def test_spec_rejects_dsl_selector_and_candidates(self) -> None:
         base = load_experiment_spec(DEFAULT_SPEC)
@@ -193,6 +219,12 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
             all(item[1]["project_id"] == 7 for item in invocations)
         )
         self.assertTrue(
+            all(
+                item[1]["acceptance"]["id"] == spec["acceptance"]["id"]
+                for item in invocations
+            )
+        )
+        self.assertTrue(
             all(item[1]["clean_context"] is True for item in invocations)
         )
         self.assertTrue(
@@ -223,6 +255,14 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
         self.assertTrue(
             create_payload["config"]["clean_context"]
         )
+        self.assertEqual(
+            create_payload["config"]["acceptance_spec_id"],
+            spec["acceptance"]["id"],
+        )
+        self.assertEqual(
+            len(create_payload["config"]["acceptance_spec_sha256"]),
+            64,
+        )
         self.assertNotIn(
             "long_operation_timeout_seconds",
             create_payload["config"],
@@ -231,8 +271,8 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
             entry for entry in client.calls if entry[0] == "put_oracle"
         )
         fact = oracle_call[4]["decision_facts"][0]
-        self.assertEqual(fact["expected"], "Blue Top")
-        self.assertEqual(fact["actual"], "Blue Top")
+        self.assertEqual(fact["expected"], "expected")
+        self.assertEqual(fact["actual"], "expected")
         self.assertEqual(fact["passed"], oracle_call[4]["passed"])
 
     def test_driver_failure_cancels_research_run(self) -> None:
@@ -299,8 +339,11 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
         failed = driver_result(1)
         failed["success"] = False
         failed["oracle"]["passed"] = False
-        failed["oracle"]["checks"]["name"] = False
-        failed["oracle"]["actual"]["name"] = "Red Top"
+        failed["oracle"]["checks"]["outcome"] = {
+            "passed": False,
+            "expected": "expected",
+            "actual": "unexpected",
+        }
 
         result = run_experiment(
             spec,

@@ -60,12 +60,21 @@ class BrowserCapabilityContractTest(unittest.TestCase):
             [101, 102],
         )
         self.assertEqual(
+            [
+                call.kwargs["isolated_context"]
+                for call in collect_flow.call_args_list
+            ],
+            [True, True],
+        )
+        self.assertEqual(
             normal["context_evidence"],
             {
                 "version": "v1",
                 "clean_context_requested": False,
                 "storage_state_loaded": True,
                 "planning_session_id": 101,
+                "execution_scope": "isolated_probe",
+                "state_persisted": False,
             },
         )
         self.assertEqual(
@@ -75,6 +84,8 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                 "clean_context_requested": True,
                 "storage_state_loaded": False,
                 "planning_session_id": 102,
+                "execution_scope": "isolated_probe",
+                "state_persisted": False,
             },
         )
 

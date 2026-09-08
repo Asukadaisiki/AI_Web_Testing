@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from html.parser import HTMLParser
 import json
 import re
 import socket
@@ -25,7 +24,12 @@ from browser_worker.contracts.dsl import (
     DSL_CANONICAL_VERSION_V2,
     validate_dsl_case,
 )
-
+from browser_worker.reporting.acceptance import (
+    acceptance_sha256,
+    evaluate_acceptance,
+    load_acceptance_spec,
+    validate_acceptance_spec,
+)
 
 REPOSITORY_ROOT = WORKER_ROOT.parent
 RESULT_SCHEMA_VERSION = "agentic-e2e.result.v1"
@@ -40,12 +44,6 @@ PROFILE_CANONICAL_VERSIONS = {
     "legacy-v1": DSL_CANONICAL_VERSION_V1,
     "research-v1": DSL_CANONICAL_VERSION_V2,
 }
-CANONICAL_GOAL = (
-    "匿名访问 Automation Exercise，从 Products 页面搜索 Blue Top，确认搜索结果，"
-    "进入商品详情，将数量保持为 1，加入购物车，通过加购弹层打开 View Cart，"
-    "并验证购物车中商品名为 Blue Top、单价和总价均为 Rs. 500、数量为 1。"
-    "不得注册、登录、结账或填写个人信息；默认不使用 Vision。"
-)
 
 _FORBIDDEN_GOAL_PATTERNS = (
     (re.compile(r"^\s*[\[{]"), "structured DSL/JSON"),
@@ -255,127 +253,6 @@ class HTTPAgenticClient:
             return response.read()
 
 
-class _CartHTMLParser(HTMLParser):
-    _FIELD_CLASSES = {
-        "cart_description": "name",
-        "cart_price": "unit_price",
-        "cart_quantity": "quantity",
-        "cart_total": "total_price",
-    }
-    _VOID_ELEMENTS = {
-        "area",
-        "base",
-        "br",
-        "col",
-        "embed",
-        "hr",
-        "img",
-        "input",
-        "link",
-        "meta",
-        "param",
-        "source",
-        "track",
-        "wbr",
-    }
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.rows: list[dict[str, Any]] = []
-        self._row: dict[str, Any] | None = None
-        self._stack: list[tuple[str, str | None, str | None]] = []
-
-    def _finish_row(self) -> None:
-        if self._row is not None:
-            self.rows.append(self._row)
-        self._row = None
-        self._stack.clear()
-
-    def _pop_through(self, tag: str) -> None:
-        for index in range(len(self._stack) - 1, -1, -1):
-            if self._stack[index][0] == tag:
-                del self._stack[index:]
-                return
-
-    def _current_cell(self) -> str | None:
-        return next(
-            (cell for _, cell, _ in reversed(self._stack) if cell),
-            None,
-        )
-
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
-        attributes = dict(attrs)
-        if tag == "tr":
-            if self._row is not None:
-                self._finish_row()
-            row_id = attributes.get("id") or ""
-            if row_id.startswith("product-"):
-                self._row = {
-                    "id": row_id,
-                    "name": [],
-                    "unit_price": [],
-                    "quantity": [],
-                    "total_price": [],
-                }
-                self._stack.append(("tr", None, None))
-                return
-        if self._row is None:
-            return
-        classes = set((attributes.get("class") or "").split())
-        if tag == "td":
-            self._pop_through("td")
-            cell = next(
-                (
-                    value
-                    for key, value in self._FIELD_CLASSES.items()
-                    if key in classes
-                ),
-                None,
-            )
-        else:
-            cell = self._current_cell()
-
-        ancestor_tags = {entry[0] for entry in self._stack}
-        capture = None
-        if cell == "name" and tag == "a" and "h4" in ancestor_tags:
-            capture = "name"
-        elif cell == "unit_price" and tag == "p":
-            capture = "unit_price"
-        elif cell == "quantity" and tag == "button":
-            capture = "quantity"
-        elif cell == "total_price" and tag == "p":
-            capture = "total_price"
-
-        if tag not in self._VOID_ELEMENTS:
-            self._stack.append((tag, cell if tag == "td" else None, capture))
-
-    def handle_data(self, data: str) -> None:
-        if self._row is None or not data.strip():
-            return
-        field = next(
-            (capture for _, _, capture in reversed(self._stack) if capture),
-            None,
-        )
-        if field:
-            self._row[field].append(data.strip())
-
-    def handle_endtag(self, tag: str) -> None:
-        if self._row is None:
-            return
-        if tag == "tr":
-            self._finish_row()
-            return
-        if tag not in self._VOID_ELEMENTS:
-            self._pop_through(tag)
-
-    def close(self) -> None:
-        super().close()
-        if self._row is not None:
-            self._finish_row()
-
-
 def validate_goal(goal: str) -> str:
     normalized = " ".join(goal.split())
     if not normalized:
@@ -384,111 +261,6 @@ def validate_goal(goal: str) -> str:
         if pattern.search(normalized):
             raise ValueError(f"goal must not contain {label}")
     return normalized
-
-
-def validate_canonical_search_contract(dsl_case: dict[str, Any]) -> None:
-    steps = dsl_case.get("steps")
-    if not isinstance(steps, list):
-        raise AgenticE2EError("canonical DSL has no steps")
-    for step in steps:
-        if not isinstance(step, dict) or step.get("action") != "goto":
-            continue
-        value = str(step.get("value") or "").casefold()
-        if "search=" in value:
-            raise AgenticE2EError(
-                "canonical DSL must perform search with input and click, not goto a search URL"
-            )
-
-    def has_selector(step: dict[str, Any], selector: str) -> bool:
-        return any(
-            isinstance(candidate, dict)
-            and str(candidate.get("selector") or "").strip() == selector
-            and bool((candidate.get("pre_features") or {}).get("verified"))
-            for candidate in step.get("candidates") or []
-        )
-
-    input_index = next(
-        (
-            index
-            for index, step in enumerate(steps)
-            if isinstance(step, dict)
-            and step.get("action") == "input"
-            and has_selector(step, "#search_product")
-        ),
-        -1,
-    )
-    click_index = next(
-        (
-            index
-            for index, step in enumerate(steps)
-            if isinstance(step, dict)
-            and step.get("action") == "click"
-            and has_selector(step, "#submit_search")
-        ),
-        -1,
-    )
-    if input_index < 0 or click_index <= input_index:
-        raise AgenticE2EError(
-            "canonical DSL must contain verified #search_product input followed by "
-            "verified #submit_search click"
-        )
-
-
-def oracle_expectation(mutation: str = "none") -> dict[str, str]:
-    expected = {
-        "name": "Blue Top",
-        "unit_price": "Rs. 500",
-        "quantity": "1",
-        "total_price": "Rs. 500",
-    }
-    if mutation == "wrong-price":
-        expected["unit_price"] = "Rs. 501"
-    elif mutation == "wrong-product":
-        expected["name"] = "Red Top"
-    elif mutation != "none":
-        raise ValueError(f"unsupported oracle mutation: {mutation}")
-    return expected
-
-
-def evaluate_cart_oracle(
-    html: str,
-    *,
-    expected: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    parser = _CartHTMLParser()
-    parser.feed(html)
-    parser.close()
-    normalized_rows = [
-        {
-            key: (
-                " ".join(" ".join(value).split())
-                if isinstance(value, list)
-                else value
-            )
-            for key, value in row.items()
-        }
-        for row in parser.rows
-    ]
-    target_rows = [row for row in normalized_rows if row["id"] == "product-1"]
-    actual = target_rows[0] if len(target_rows) == 1 else {}
-    expectation = expected or oracle_expectation()
-    checks = {
-        "single_cart_row": len(normalized_rows) == 1,
-        "single_product_1": len(target_rows) == 1,
-        **{
-            field: actual.get(field) == value
-            for field, value in expectation.items()
-        },
-    }
-    return {
-        "schema_version": "automationexercise.cart-oracle.v1",
-        "passed": all(checks.values()),
-        "selector": "#product-1",
-        "expected": expectation,
-        "actual": actual,
-        "checks": checks,
-        "observed_row_ids": [row["id"] for row in normalized_rows],
-    }
 
 
 def _merge_events(
@@ -1088,8 +860,8 @@ def _run_agentic_goal(
     goal: str,
     *,
     client: AgenticClient,
+    acceptance: dict[str, Any],
     timeout_seconds: float = 900,
-    mutation: str = "none",
     expected_dsl_profile: str | None,
     clean_context: bool,
     project_id: int | None,
@@ -1251,8 +1023,6 @@ def _run_agentic_goal(
             generation_id,
             expected_profile=expected_dsl_profile,
         )
-        dsl_case = generated["case"]
-        validate_canonical_search_contract(dsl_case)
         approval = {
             "round": len(approvals) + 1,
             "checkpoint_id": pending.get("checkpoint_id"),
@@ -1314,8 +1084,15 @@ def _run_agentic_goal(
     _require_deadline(deadline_monotonic, "oracle artifact download")
     html_bytes = client.get_artifact(snapshot_url)
     html = html_bytes.decode("utf-8")
-    oracle = evaluate_cart_oracle(
-        html, expected=oracle_expectation(mutation)
+    actual_url = str(
+        execution.get("latest_url")
+        or (steps[-1].get("url") if steps else "")
+        or ""
+    )
+    oracle = evaluate_acceptance(
+        acceptance,
+        html=html,
+        actual_url=actual_url,
     )
 
     finished_at = datetime.now(UTC)
@@ -1330,7 +1107,9 @@ def _run_agentic_goal(
         "configuration": {
             "clean_browser_context": clean_context,
             "project_origin": project_origin,
-            "oracle_mutation": mutation,
+            "acceptance_id": acceptance["id"],
+            "acceptance_schema_version": acceptance["schema_version"],
+            "acceptance_sha256": acceptance_sha256(acceptance),
             "timeout_mode": "absolute_monotonic_deadline",
             "run_timeout_seconds": timeout_seconds,
             "cancel_grace_seconds": context["timeout"][
@@ -1431,13 +1210,17 @@ def run_agentic_goal(
     goal: str,
     *,
     client: AgenticClient,
+    acceptance: dict[str, Any],
     timeout_seconds: float = 900,
-    mutation: str = "none",
     expected_dsl_profile: str | None = None,
     clean_context: bool = True,
     project_id: int | None = None,
     cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS,
 ) -> dict[str, Any]:
+    acceptance = validate_acceptance_spec(acceptance)
+    goal = validate_goal(goal)
+    if goal != validate_goal(acceptance["goal"]):
+        raise ValueError("goal must exactly match the acceptance spec goal")
     if timeout_seconds <= 0:
         deadline_monotonic = time.monotonic()
     else:
@@ -1464,8 +1247,8 @@ def run_agentic_goal(
         return _run_agentic_goal(
             goal,
             client=client,
+            acceptance=acceptance,
             timeout_seconds=timeout_seconds,
-            mutation=mutation,
             expected_dsl_profile=expected_dsl_profile,
             clean_context=clean_context,
             project_id=project_id,
@@ -1494,27 +1277,30 @@ def run_agentic_goal(
         _set_client_deadline(client, None)
 
 
-def _default_output(mutation: str) -> Path:
+def _default_output(acceptance_id: str) -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    suffix = "" if mutation == "none" else f"-{mutation}"
+    safe_id = re.sub(r"[^a-zA-Z0-9._-]+", "-", acceptance_id).strip("-")
     return (
         REPOSITORY_ROOT
         / "research"
         / "results"
-        / f"agentic-e2e-{timestamp}{suffix}.json"
+        / f"agentic-e2e-{safe_id}-{timestamp}.json"
     )
 
 
 def _failure_result(
     goal: str,
-    mutation: str,
+    acceptance: dict[str, Any],
     exc: Exception,
 ) -> dict[str, Any]:
     result = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "finished_at": datetime.now(UTC).isoformat(),
         "goal": goal,
-        "configuration": {"oracle_mutation": mutation},
+        "configuration": {
+            "acceptance_id": acceptance.get("id"),
+            "acceptance_schema_version": acceptance.get("schema_version"),
+        },
         "success": False,
         "error": {"type": type(exc).__name__, "message": str(exc)},
     }
@@ -1525,7 +1311,12 @@ def _failure_result(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("goal", help="Natural-language business goal only.")
+    parser.add_argument(
+        "--acceptance-spec",
+        type=Path,
+        required=True,
+        help="Versioned declarative acceptance JSON.",
+    )
     parser.add_argument(
         "--agent-url",
         default="http://127.0.0.1:8081",
@@ -1558,11 +1349,6 @@ def main() -> int:
         default=DEFAULT_CANCEL_GRACE_SECONDS,
     )
     parser.add_argument(
-        "--oracle-mutation",
-        choices=("none", "wrong-price", "wrong-product"),
-        default="none",
-    )
-    parser.add_argument(
         "--dsl-profile",
         choices=("legacy-v1", "research-v1"),
         default="research-v1",
@@ -1570,24 +1356,26 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    output = args.output or _default_output(args.oracle_mutation)
+    acceptance = load_acceptance_spec(args.acceptance_spec)
+    goal = acceptance["goal"]
+    output = args.output or _default_output(acceptance["id"])
     try:
         result = run_agentic_goal(
-            args.goal,
+            goal,
             client=HTTPAgenticClient(
                 agent_url=args.agent_url,
                 browser_url=args.browser_url,
                 request_timeout=args.request_timeout_seconds,
                 long_operation_timeout=args.long_operation_timeout_seconds,
             ),
+            acceptance=acceptance,
             timeout_seconds=args.timeout_seconds,
-            mutation=args.oracle_mutation,
             expected_dsl_profile=args.dsl_profile,
             project_id=args.project_id,
             cancel_grace_seconds=args.cancel_grace_seconds,
         )
     except Exception as exc:
-        result = _failure_result(args.goal, args.oracle_mutation, exc)
+        result = _failure_result(goal, acceptance, exc)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",

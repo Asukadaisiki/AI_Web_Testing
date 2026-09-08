@@ -91,6 +91,14 @@ Keep the following boundaries:
 - Every executed step must produce evidence.
 - Locator output should record target, candidates, final match, and failure reason when available.
 
+## No Task-Specific Hardcoding
+
+- Reusable Agent, Harness, Tool, E2E driver, Runner, and Oracle code must not hardcode task-specific product names, prices, quantities, URL paths, selectors, action order, or expected outcomes.
+- Task-specific goals, flows, and expected facts belong in versioned datasets, fixtures, or declarative acceptance specifications loaded as data.
+- The Agent Task Plan owns business actions, order, parameters, and occurrence counts. Exploration only grounds and verifies PlanSteps; it must not inject or rewrite task semantics.
+- Generic validators and Oracles may interpret declarative contracts, but must not add one-off branches for a named E2E task.
+- Do not modify reusable runtime code merely to make one acceptance task pass.
+
 
 ## Collaboration Preference
 

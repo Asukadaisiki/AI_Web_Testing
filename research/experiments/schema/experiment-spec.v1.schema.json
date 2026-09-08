@@ -8,12 +8,11 @@
     "schema_version",
     "id",
     "name",
-    "goal",
+    "acceptance_spec",
     "controls",
     "repetitions",
     "warmup_runs",
-    "timeouts",
-    "oracle_mutation"
+    "timeouts"
   ],
   "properties": {
     "schema_version": {
@@ -29,11 +28,12 @@
       "minLength": 1,
       "maxLength": 200
     },
-    "goal": {
+    "acceptance_spec": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 20000,
-      "description": "Pure natural-language goal. DSL, selectors, and candidate hints are forbidden."
+      "maxLength": 500,
+      "pattern": "^research/acceptance/[A-Za-z0-9._-]+\\.json$",
+      "description": "Repository-relative versioned declarative acceptance contract."
     },
     "controls": {
       "type": "object",
@@ -167,13 +167,6 @@
           "default": 10
         }
       }
-    },
-    "oracle_mutation": {
-      "enum": [
-        "none",
-        "wrong-price",
-        "wrong-product"
-      ]
     }
   }
 }

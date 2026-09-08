@@ -1231,7 +1231,7 @@ def execute_case_with_playwright_streaming(
                 if cancel_event is not None and cancel_event.is_set():
                     raise RunnerCancelledError("Execution cancelled by user.", step_results=step_results)
 
-                # Substitute runtime variables in target (e.g., "${cart_a_total}" → "Rs. 500")
+                # Substitute runtime variables in the target before locator resolution.
                 resolved_target = _substitute_variables(getattr(step, 'target', None), _vars()) or getattr(step, 'target', None)
 
                 yield StepStreamEvent(

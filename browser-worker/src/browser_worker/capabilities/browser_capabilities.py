@@ -222,11 +222,17 @@ def _explore_flow(
     steps = arguments.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError("steps must be a non-empty array")
+    probe_context_evidence = {
+        **context_evidence,
+        "execution_scope": "isolated_probe",
+        "state_persisted": False,
+    }
     pages = _collect_flow_a11y(
         steps,
         base_url=base_url or None,
         storage_state_path=storage_state_path,
         session_id=planning_session_id,
+        isolated_context=True,
         core_user_flow_text=arguments.get("flow_description"),
     )
     return {
@@ -239,7 +245,7 @@ def _explore_flow(
         ],
         "total_pages": len(pages),
         "total_elements": sum(page.get("element_count", 0) for page in pages),
-        "context_evidence": context_evidence,
+        "context_evidence": probe_context_evidence,
     }
 
 

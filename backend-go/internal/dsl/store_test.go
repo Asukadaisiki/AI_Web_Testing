@@ -336,6 +336,38 @@ func TestResearchDraftAndExecutablePhases(t *testing.T) {
 	}
 }
 
+func TestResearchDraftAllowsExplicitQuantityTwo(t *testing.T) {
+	draft := json.RawMessage(`{
+		"profile":"research-v1",
+		"name":"Add two Blue Tops",
+		"steps":[
+			{
+				"action":"input",
+				"intent":"Set the requested product quantity",
+				"target":"Quantity",
+				"value":"2",
+				"preconditions":[{"type":"element_visible","value":"#quantity"}],
+				"postconditions":[{"type":"value_changed","value":"2"}],
+				"idempotency":"idempotent",
+				"side_effect":"browser_state"
+			},
+			{
+				"action":"click",
+				"intent":"Add the requested quantity to the cart",
+				"target":"Add to cart",
+				"preconditions":[{"type":"element_visible","value":"button.cart"}],
+				"postconditions":[{"type":"text_visible","value":"Added!"}],
+				"idempotency":"non_idempotent",
+				"side_effect":"external_state"
+			}
+		]
+	}`)
+
+	if _, err := ValidateDraftCase(draft); err != nil {
+		t.Fatalf("ValidateDraftCase(quantity=2) error = %v", err)
+	}
+}
+
 func TestResearchExecutableRejectsUnverifiedCandidate(t *testing.T) {
 	tests := []string{
 		`{

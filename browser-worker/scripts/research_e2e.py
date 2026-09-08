@@ -23,17 +23,20 @@ WORKER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKER_ROOT / "src"))
 sys.path.insert(0, str(WORKER_ROOT))
 
+from browser_worker.reporting.acceptance import (
+    acceptance_sha256,
+    load_acceptance_spec,
+    validate_acceptance_spec,
+)
 from scripts.run_agentic_e2e import (
     DEFAULT_CANCEL_GRACE_SECONDS,
     DEFAULT_LONG_OPERATION_TIMEOUT_SECONDS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
-    HTTPAgenticClient,
     PROFILE_CANONICAL_VERSIONS,
+    HTTPAgenticClient,
     _validate_generation_binding,
     run_agentic_goal,
-    validate_goal,
 )
-
 
 REPOSITORY_ROOT = WORKER_ROOT.parent
 DEFAULT_SPEC = (
@@ -1520,9 +1523,15 @@ def _validate_provider_attestation(
 
 
 def load_experiment_spec(path: Path) -> dict[str, Any]:
-    return load_experiment_spec_from_value(
+    payload = load_experiment_spec_from_value(
         json.loads(path.read_text(encoding="utf-8"))
     )
+    acceptance_root = (REPOSITORY_ROOT / "research" / "acceptance").resolve()
+    acceptance_path = (REPOSITORY_ROOT / payload["acceptance_spec"]).resolve()
+    if not acceptance_path.is_relative_to(acceptance_root):
+        raise ValueError("acceptance_spec must stay under research/acceptance")
+    payload["acceptance"] = load_acceptance_spec(acceptance_path)
+    return payload
 
 
 def load_experiment_spec_from_value(
@@ -1531,17 +1540,19 @@ def load_experiment_spec_from_value(
     payload = json.loads(json.dumps(source))
     if not isinstance(payload, dict):
         raise ValueError("experiment spec must be a JSON object")
-    _reject_forbidden_keys(payload)
+    _reject_forbidden_keys(
+        {key: value for key, value in payload.items() if key != "acceptance"}
+    )
     allowed = {
         "schema_version",
         "id",
         "name",
-        "goal",
+        "acceptance_spec",
+        "acceptance",
         "controls",
         "repetitions",
         "warmup_runs",
         "timeouts",
-        "oracle_mutation",
     }
     unknown = set(payload) - allowed
     if unknown:
@@ -1553,7 +1564,14 @@ def load_experiment_spec_from_value(
     for field in ("id", "name"):
         if not isinstance(payload.get(field), str) or not payload[field].strip():
             raise ValueError(f"{field} must be a non-empty string")
-    payload["goal"] = validate_goal(str(payload.get("goal") or ""))
+    if (
+        not isinstance(payload.get("acceptance_spec"), str)
+        or not payload["acceptance_spec"].strip()
+    ):
+        raise ValueError("acceptance_spec must be a non-empty string")
+    payload["acceptance_spec"] = payload["acceptance_spec"].strip()
+    if "acceptance" in payload:
+        payload["acceptance"] = validate_acceptance_spec(payload["acceptance"])
 
     controls = payload.get("controls")
     if not isinstance(controls, dict):
@@ -1581,6 +1599,8 @@ def load_experiment_spec_from_value(
     for field in REQUIRED_CONTROL_FIELDS - {"viewport", "seed", "code_sha256"}:
         if not isinstance(controls[field], str) or not controls[field].strip():
             raise ValueError(f"controls.{field} must be a non-empty string")
+    if controls["dsl_profile"] not in PROFILE_CANONICAL_VERSIONS:
+        raise ValueError("controls.dsl_profile is unsupported")
 
     repetitions = payload.get("repetitions", 3)
     warmup_runs = payload.get("warmup_runs", 0)
@@ -1653,10 +1673,6 @@ def load_experiment_spec_from_value(
         "long_operation_seconds": long_operation_seconds,
         "cancel_grace_seconds": cancel_grace_seconds,
     }
-    mutation = payload.get("oracle_mutation", "none")
-    if mutation not in {"none", "wrong-price", "wrong-product"}:
-        raise ValueError("oracle_mutation is unsupported")
-    payload["oracle_mutation"] = mutation
     return payload
 
 
@@ -1668,11 +1684,13 @@ def _experiment_payload(
     payload = {
         "project_id": project_id,
         "name": spec["name"],
-        "goal": spec["goal"],
+        "goal": spec["acceptance"]["goal"],
         **controls,
         "repetitions": spec["repetitions"],
         "config": {
-            "schema_version": "research.experiment_config.v1",
+            "schema_version": "research.experiment_config.v2",
+            "acceptance_spec_id": spec["acceptance"]["id"],
+            "acceptance_spec_sha256": acceptance_sha256(spec["acceptance"]),
             "request_timeout_seconds": int(
                 spec["timeouts"]["request_seconds"]
             ),
@@ -1864,18 +1882,8 @@ def _oracle_payload(result: dict[str, Any]) -> dict[str, Any]:
             fact_actual = check.get("actual")
         else:
             passed = check
-            if name == "single_cart_row":
-                fact_expected = 1
-                fact_actual = len(oracle.get("observed_row_ids") or [])
-            elif name == "single_product_1":
-                fact_expected = 1
-                fact_actual = sum(
-                    row_id == "product-1"
-                    for row_id in oracle.get("observed_row_ids") or []
-                )
-            else:
-                fact_expected = expected.get(name)
-                fact_actual = actual.get(name)
+            fact_expected = expected.get(name)
+            fact_actual = actual.get(name)
         if not isinstance(passed, bool):
             raise ResearchE2EError(
                 f"driver oracle check {name} has no boolean result"
@@ -1902,7 +1910,7 @@ def _oracle_payload(result: dict[str, Any]) -> dict[str, Any]:
         "reason_code": (
             "task_passed"
             if facts_passed
-            else "cart_state_mismatch"
+            else "acceptance_mismatch"
         ),
         "decision_facts": facts,
         "sources": [source],
@@ -2000,7 +2008,7 @@ def run_experiment(
                     f"research run {research_run_id} server deadline exceeded"
                 )
             driver_result = driver(
-                spec["goal"],
+                spec["acceptance"]["goal"],
                 client=agent_client_factory(
                     agent_url=agent_url,
                     browser_url=browser_url,
@@ -2009,8 +2017,8 @@ def run_experiment(
                         "long_operation_seconds"
                     ],
                 ),
+                acceptance=spec["acceptance"],
                 timeout_seconds=driver_timeout,
-                mutation=spec["oracle_mutation"],
                 expected_dsl_profile=spec["controls"]["dsl_profile"],
                 clean_context=True,
                 project_id=project_id,

@@ -274,6 +274,33 @@ Natural Language Goal
 - **AND** `generate_dsl`、`get_report`、`fix_and_retry` SHALL 只暴露生成摘要、报告摘要和修复决策摘要
 - **AND** 完整原始 tool result 仍 SHALL 持久化并通过 source event seq、content hash 和 bytes 可审计
 
+#### Scenario: Task Plan 与探索职责分离
+
+- **WHEN** AI 接收自然语言 Goal 并准备探索页面
+- **THEN** Agent 状态机 SHALL 先形成版本化 Task Plan，由 PlanStep 明确动作、顺序、参数和预期执行次数
+- **AND** Explore SHALL 只验证对应 PlanStep 的链路可行性、元素真实性、候选唯一性和后置状态可观测性，不得自行改变 PlanStep 的动作顺序或次数
+- **AND** 每次 `explore_flow` SHALL 在 disposable probe context 中执行，调用结束后丢弃该上下文，不得把探索副作用带入下一次 probe 或正式执行
+- **AND** 最终 DSL SHALL 绑定 Task Plan version/hash；若 AI 修改动作、顺序或次数，必须创建显式 Plan revision 并重新 grounding
+- **AND** 正式执行 SHALL 在独立 clean context 中按已审批 DSL 执行，不能复用 exploration probe 的业务状态
+
+#### Scenario: 禁止任务流程硬编码
+
+- **WHEN** 新增 Goal、数据集样本或 E2E 验收任务
+- **THEN** Agent、Harness、Tool、E2E driver、Runner 和 Oracle 的可复用代码 SHALL NOT 硬编码商品名、价格、数量、URL path、selector、动作顺序或任务专用预期
+- **AND** 任务语义和预期事实 SHALL 存放在版本化 dataset、fixture 或 declarative acceptance spec 中
+- **AND** 通用执行器和 Oracle SHALL 只解释声明式合同，不得为某个命名任务增加专用分支
+- **AND** 不得为了让单个验收任务通过而修改可复用运行时代码
+
+#### Scenario: 状态机上下文物化与缓存稳定性
+
+- **WHEN** Agent 在 planning、grounding、generation、verification 或 recovery 阶段调用模型
+- **THEN** Context Materializer SHALL 从持久化事实按当前阶段重建模型上下文，不得无限追加完整 transcript
+- **AND** system prompt、tool schema、Goal 和当前 Task Plan SHALL 构成稳定前缀，以保持 provider prompt cache 可复用
+- **AND** 当前 PlanStep、最新 observation delta、未解决 failure 和 recovery decision SHALL 构成有界动态窗口
+- **AND** 完整 A11y/DOM/report/历史 tool result SHALL 保存在外部事实存储中，模型上下文只携带结构化摘要、artifact ref 和 content hash
+- **AND** 压缩不得删除 Goal、PlanStep 顺序/次数、未解决失败、审批状态和当前 evidence binding
+- **AND** 每轮 SHALL 记录 context manifest/hash、各分层字节数、cache hit/miss tokens 和被压缩 artifact refs
+
 #### Scenario: Research DSL 校验
 
 - **WHEN** research-v1 DSL 缺失 Intent 或必需 Preconditions/Postconditions

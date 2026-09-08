@@ -2,7 +2,7 @@
   "schema_version": "research.experiment-spec.v1",
   "id": "stage6-canonical",
   "name": "Stage 6 research-v1 canonical Agentic E2E",
-  "goal": "匿名访问 Automation Exercise，从 Products 页面搜索 Blue Top，确认搜索结果，进入商品详情，将数量保持为 1，加入购物车，通过加购弹层打开 View Cart，并验证购物车中商品名为 Blue Top、单价和总价均为 Rs. 500、数量为 1。不得注册、登录、结账或填写个人信息；默认不使用 Vision。",
+  "acceptance_spec": "research/acceptance/automationexercise-blue-top-cart.v1.json",
   "controls": {
     "dataset_version": "automationexercise.stage6.v1",
     "model_provider": "deepseek",
@@ -15,7 +15,7 @@
       "width": 1280,
       "height": 720
     },
-    "code_sha256": "be481ebceb13a8e96416e30ceee943f84031558584b43abf4534f5b679efb7cc",
+    "code_sha256": "d23e02143358d64a568d0078de6f5760f83d0899290ba3685a583cde1a7924b7",
     "policy_version": "research.policy.v1",
     "observation_profile": "dom-a11y.v1",
     "dsl_profile": "research-v1",
@@ -30,6 +30,5 @@
     "request_seconds": 30,
     "long_operation_seconds": 300,
     "cancel_grace_seconds": 10
-  },
-  "oracle_mutation": "none"
+  }
 }

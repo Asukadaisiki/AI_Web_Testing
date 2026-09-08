@@ -105,14 +105,15 @@ Go Report Core 输出兼容进度事件，不再在请求线程中直接执行 P
 
 ## Agentic E2E
 
-统一驱动器只接受自然语言 Goal，通过 Go AgentService 跟踪事件、读取 DSL artifact、
-提交显式审批、等待正式报告，再从终态 DOM evidence 独立校验购物车：
+统一驱动器从版本化 acceptance spec 读取自然语言 Goal 和独立结果事实。发送给
+Agent 的只有 Goal；Oracle 合同不会进入模型上下文。Driver 跟踪事件、读取 DSL
+artifact、提交显式审批、等待正式报告，再用通用 Oracle 解释声明式结果断言：
 
 ```bash
 uv run python scripts/run_agentic_e2e.py \
-  '匿名访问 Automation Exercise，从 Products 页面搜索 Blue Top，确认搜索结果，进入商品详情，将数量保持为 1，加入购物车，通过加购弹层打开 View Cart，并验证购物车中商品名为 Blue Top、单价和总价均为 Rs. 500、数量为 1。不得注册、登录、结账或填写个人信息；默认不使用 Vision。'
+  --acceptance-spec ../research/acceptance/automationexercise-blue-top-cart.v1.json
 ```
 
-可用 `--oracle-mutation wrong-price` 或 `--oracle-mutation wrong-product`
-执行独立 Oracle 负向变异。结果使用 `agentic-e2e.result.v1` JSON。
+新增任务只允许增加 acceptance JSON，不得修改 Driver/Runner/Oracle 代码。结果使用
+`agentic-e2e.result.v1` JSON。
 运行中 Job 通过 heartbeat 续租并读取持久化取消标记，取消会在 Runner 的下一安全步骤边界生效。

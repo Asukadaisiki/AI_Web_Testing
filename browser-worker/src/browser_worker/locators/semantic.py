@@ -160,7 +160,7 @@ def _build_a11y_candidates(
 ) -> list[tuple[str, object]]:
     """Build locator candidates from parsed a11y role+name.
 
-    When *scope_name* is provided (e.g. ``inside "Blue Top"``),
+    When *scope_name* is provided,
     candidates are scoped to the matching container via locator chaining.
     The container is found by locating any element that contains the scope text,
     then searching within it for the target element.

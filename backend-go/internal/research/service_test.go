@@ -65,6 +65,18 @@ func TestExperimentConfigValidation(t *testing.T) {
 	if _, err := ParseExperimentConfig(raw); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
+	legacy := json.RawMessage(`{
+		"schema_version":"research.experiment_config.v1",
+		"request_timeout_seconds":30,
+		"run_timeout_seconds":60,
+		"cancel_grace_seconds":5,
+		"warmup_repetitions":0,
+		"clean_context":true,
+		"schedule_version":"research.schedule.v1"
+	}`)
+	if _, err := ParseExperimentConfig(legacy); err != nil {
+		t.Fatalf("legacy config rejected: %v", err)
+	}
 
 	tests := []struct {
 		name   string
@@ -78,6 +90,8 @@ func TestExperimentConfigValidation(t *testing.T) {
 		{"warmup negative", func(c *ExperimentConfig) { c.WarmupRepetitions = -1 }},
 		{"dirty context", func(c *ExperimentConfig) { c.CleanContext = false }},
 		{"schedule version", func(c *ExperimentConfig) { c.ScheduleVersion = "research.schedule.v2" }},
+		{"acceptance id", func(c *ExperimentConfig) { c.AcceptanceSpecID = "" }},
+		{"acceptance hash", func(c *ExperimentConfig) { c.AcceptanceSpecSHA256 = "invalid" }},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -89,7 +103,9 @@ func TestExperimentConfigValidation(t *testing.T) {
 		})
 	}
 	if _, err := ParseExperimentConfig(json.RawMessage(`{
-		"schema_version":"research.experiment_config.v1",
+		"schema_version":"research.experiment_config.v2",
+		"acceptance_spec_id":"fixture.v1",
+		"acceptance_spec_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"request_timeout_seconds":30,
 		"run_timeout_seconds":60,
 		"cancel_grace_seconds":5,
@@ -105,6 +121,8 @@ func TestExperimentConfigValidation(t *testing.T) {
 func serviceConfigFixture() ExperimentConfig {
 	return ExperimentConfig{
 		SchemaVersion:         ExperimentConfigSchemaVersion,
+		AcceptanceSpecID:      "fixture.v1",
+		AcceptanceSpecSHA256:  strings.Repeat("a", 64),
 		RequestTimeoutSeconds: 30,
 		RunTimeoutSeconds:     120,
 		CancelGraceSeconds:    5,

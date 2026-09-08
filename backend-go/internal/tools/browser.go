@@ -43,7 +43,9 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 			name: "explore_flow",
 			description: "Explore multiple page states in one browser session. " +
 				"Use discovered links and a bounded sequence of click, input, and wait_for actions. " +
-				"For search workflows, explore the actual input and search-control click; do not jump directly to a constructed search URL.",
+				"For search workflows, explore the actual input and search-control click; do not jump directly to a constructed search URL. " +
+				"Each call runs in an isolated disposable probe context, so its browser and business state are never reused by another call or by official execution. " +
+				"Express intended multiplicity such as quantity 2 in the flow actions and final DSL, not by relying on state accumulated across calls.",
 			inputSchema: json.RawMessage(`{
 				"type":"object",
 				"properties":{

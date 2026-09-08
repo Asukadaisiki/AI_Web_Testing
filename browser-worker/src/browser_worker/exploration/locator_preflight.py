@@ -121,7 +121,7 @@ def apply_preflight_to_dsl(
         if not target:
             continue
 
-        # Parse scope: "link "Add to cart" inside product "Blue Top""
+        # Parse a semantic target with an optional named container scope.
         scope_name = None
         scope_match = _SCOPE_RE.search(target)
         if scope_match:

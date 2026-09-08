@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -18,6 +19,50 @@ type fakeCapabilityClient struct {
 	reportResponses []json.RawMessage
 	reportCalls     int
 	repairResponse  json.RawMessage
+}
+
+type isolatedProbeCapabilityClient struct {
+	calls int
+}
+
+func (c *isolatedProbeCapabilityClient) ExecuteBrowserCapability(
+	_ context.Context,
+	_ string,
+	_ int64,
+	_ int64,
+	_ string,
+	arguments json.RawMessage,
+) (json.RawMessage, error) {
+	if !strings.Contains(string(arguments), `"target":"Add to cart"`) {
+		return nil, errors.New("expected Add to cart probe")
+	}
+	c.calls++
+	return json.RawMessage(`{
+		"success":true,
+		"context_evidence":{
+			"execution_scope":"isolated_probe",
+			"state_persisted":false
+		},
+		"pages":[{
+			"url":"https://automationexercise.com/view_cart",
+			"page_state":"S1",
+			"status":"success",
+			"actions":[{
+				"action":"click",
+				"target":"Add to cart",
+				"status":"success"
+			}],
+			"a11y_nodes":[{
+				"node_id":"cart-row",
+				"role":"row",
+				"name":"Blue Top Rs. 500 1 Rs. 500",
+				"verified_selectors":[{
+					"strategy":"css",
+					"selector":"#product-1"
+				}]
+			}]
+		}]
+	}`), nil
 }
 
 func (c *fakeCapabilityClient) ExecuteBrowserCapability(
@@ -185,6 +230,41 @@ func TestBrowserToolForwardsRunContext(t *testing.T) {
 	}
 }
 
+func TestExploreFlowMockIsolatesRepeatedSideEffectProbes(t *testing.T) {
+	client := &isolatedProbeCapabilityClient{}
+	handler := NewBrowserTools(client)[1]
+	arguments := json.RawMessage(`{
+		"base_url":"https://automationexercise.com/product_details/1",
+		"steps":[{
+			"url":"https://automationexercise.com/product_details/1",
+			"actions":[
+				{"action":"input","target":"Quantity","value":"1"},
+				{"action":"click","target":"Add to cart"},
+				{"action":"click","target":"View Cart"}
+			]
+		}]
+	}`)
+
+	for range 3 {
+		result, err := handler.Execute(context.Background(), Call{
+			ProjectID:      1057,
+			ConversationID: "63",
+			Name:           "explore_flow",
+			Arguments:      arguments,
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !strings.Contains(string(result.Content), `"name":"Blue Top Rs. 500 1 Rs. 500"`) ||
+			strings.Contains(string(result.Content), "Rs. 1000") {
+			t.Fatalf("isolated probe result = %s", result.Content)
+		}
+	}
+	if client.calls != 3 {
+		t.Fatalf("probe calls = %d, want 3", client.calls)
+	}
+}
+
 func TestGenerateDSLToolForwardsRunContext(t *testing.T) {
 	client := &fakeCapabilityClient{}
 	handler := NewGenerateDSLTool(client)
@@ -282,6 +362,10 @@ func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *t
 	definitions := NewBrowserTools(&fakeCapabilityClient{})
 	if !strings.Contains(definitions[1].Definition().Description, "do not jump directly") {
 		t.Fatal("explore_flow contract does not prohibit direct search URL bypass")
+	}
+	if !strings.Contains(definitions[1].Definition().Description, "isolated disposable probe context") ||
+		!strings.Contains(definitions[1].Definition().Description, "quantity 2") {
+		t.Fatal("explore_flow contract does not separate probe state from task orchestration")
 	}
 	var flowSchema map[string]any
 	if err := json.Unmarshal(definitions[1].Definition().InputSchema, &flowSchema); err != nil {
