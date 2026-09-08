@@ -17,7 +17,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+WORKER_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(WORKER_ROOT / "src"))
 
 from browser_worker.contracts.dsl import (
     DSL_CANONICAL_VERSION_V1,
@@ -26,7 +27,7 @@ from browser_worker.contracts.dsl import (
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = WORKER_ROOT.parent
 RESULT_SCHEMA_VERSION = "agentic-e2e.result.v1"
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 TERMINAL_BATCH_STATUSES = {"passed", "failed", "needs_intervention", "cancelled"}

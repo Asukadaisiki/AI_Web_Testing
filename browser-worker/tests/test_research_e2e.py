@@ -356,7 +356,7 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
     def test_code_snapshot_hash_is_deterministic_and_content_sensitive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "browser-worker" / "browser_worker" / "worker.py"
+            source = root / "browser-worker" / "src" / "browser_worker" / "worker.py"
             source.parent.mkdir(parents=True)
             source.write_text("value = 1\n", encoding="utf-8")
             with patch(
@@ -379,8 +379,8 @@ class ResearchE2EOrchestrationTest(unittest.TestCase):
             "backend-go/internal/platform/llm/openai.go",
             "backend-go/internal/tools/dsl.go",
             "backend-go/internal/harness/harness.go",
-            "browser-worker/browser_worker/contracts/action_ir.py",
-            "browser-worker/browser_worker/exploration/locator_preflight.py",
+            "browser-worker/src/browser_worker/contracts/action_ir.py",
+            "browser-worker/src/browser_worker/exploration/locator_preflight.py",
         ):
             with self.subTest(path=path):
                 self.assertTrue(_is_code_snapshot_path(path))

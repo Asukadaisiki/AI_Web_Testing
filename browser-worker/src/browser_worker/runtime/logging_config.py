@@ -6,8 +6,8 @@ import logging
 import logging.handlers
 import os
 import sys
-from pathlib import Path
 
+from browser_worker.runtime.paths import PROJECT_ROOT
 from browser_worker.runtime.structured_logging import StructuredJsonFormatter
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -40,8 +40,7 @@ def setup_logging(level: str | None = None) -> None:
     handlers: list[logging.Handler] = [console]
 
     # Structured JSON file handler
-    backend_root = Path(__file__).resolve().parents[2]
-    structured_log_file = backend_root / "backend_structured.log"
+    structured_log_file = PROJECT_ROOT / "backend_structured.log"
     structured_handler = logging.handlers.RotatingFileHandler(
         structured_log_file,
         maxBytes=50 * 1024 * 1024,  # 50MB

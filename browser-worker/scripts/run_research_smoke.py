@@ -14,14 +14,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+WORKER_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(WORKER_ROOT / "src"))
 
 from browser_worker.runners.playwright_runner import execute_case_with_playwright
 from browser_worker.contracts.dsl import DSLCase
 from browser_worker.contracts.executions import StepExecutionEvidence
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = WORKER_ROOT.parent
 DEFAULT_GOAL = (
     REPOSITORY_ROOT
     / "research"

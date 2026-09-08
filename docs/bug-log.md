@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-158 | Python 包移动后 artifact 路径仍依赖旧目录深度
+
+- 日期：2026-09-08
+- 状态：fixed
+- 严重度：medium
+- 来源：Browser Worker `src` 布局重构自测
+- 描述：将 Python 包从 `browser-worker/browser_worker` 移入 `browser-worker/src/browser_worker` 后，Runner 仍使用 `Path(__file__).resolve().parents[2]` 作为项目根，导致 artifact 根被错误解析为 `browser-worker/src`，DOM snapshot 无法转换为相对路径。
+- 复现步骤：
+  1. 将包迁移到标准 `src` 布局。
+  2. 运行 `test_attaches_final_dom_snapshot_to_last_step`。
+  3. 观察 `snapshot_path.relative_to(...)` 抛出 `ValueError`。
+- 影响：截图和最终 DOM snapshot 的路径归属错误，真实执行可能写入错误目录或无法生成 artifact URL。
+- 根因：多个模块通过固定 `parents[n]` 推导项目根，包层级变化后索引失效。
+- 处理：新增 `browser_worker.runtime.paths.PROJECT_ROOT` 作为唯一项目根定义；Runner、FastAPI 入口、配置和日志统一从该常量派生路径；脚本显式区分 `WORKER_ROOT` 与 `src` 源码根。
+- 验证：Browser Worker 全量 151 tests passed / 2 skipped；compileall、入口/脚本导入、项目根断言和 `git diff --check` 通过。
+- 关联记录：`docs/execution-log.md#2026-09-08--browser-worker-改为标准-src-布局`
+
 ## BUG-156 | research-v1 locator preflight 对无 accessible name 节点崩溃
 
 - 日期：2026-09-07

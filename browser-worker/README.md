@@ -19,15 +19,16 @@ Agent 决策、项目/会话归属校验和官方报告查询均由 Go AgentServ
 ## 目录结构
 
 ```text
-browser_worker/
-  server/        FastAPI 入口、路由和 HTTP 适配
-  capabilities/  Go 调用的浏览器能力与无状态执行 RPC
-  exploration/   页面探索、A11y 采集、locator preflight、VLM prompt
-  runners/       Playwright DSL 执行器
-  locators/      元素定位和修正协议
-  reporting/     执行报告和 failure signal
-  contracts/     Pydantic 请求、响应和运行时数据合同
-  runtime/       配置、日志和中间件
+src/
+  browser_worker/
+    server/        FastAPI 入口、路由和 HTTP 适配
+    capabilities/  Go 调用的浏览器能力与无状态执行 RPC
+    exploration/   页面探索、A11y 采集、locator preflight、VLM prompt
+    runners/       Playwright DSL 执行器
+    locators/      元素定位和修正协议
+    reporting/     执行报告和 failure signal
+    contracts/     Pydantic 请求、响应和运行时数据合同
+    runtime/       配置、日志和中间件
 ```
 
 ## 当前未完成

@@ -16,6 +16,7 @@ from browser_worker.locators.corrections import CorrectionStore
 from browser_worker.locators.semantic import ResolvedLocator
 from browser_worker.runners.click_preprocessor import click_with_precheck
 from browser_worker.runners.postcondition_verifier import PostconditionVerifier, StepNetworkObserver
+from browser_worker.runtime.paths import PROJECT_ROOT
 from browser_worker.contracts.dsl import DSLCase
 from browser_worker.contracts.executions import (
     ActionOutcome,
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)
 
 
-ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts" / "executions"
+ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts" / "executions"
 
 _VARIABLE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -1514,7 +1515,7 @@ def _take_step_screenshot(page, artifact_dir: Path, step_index: int) -> str | No
         page.screenshot(path=str(screenshot_path), full_page=True)
     except Exception:
         return None
-    return str(screenshot_path.relative_to(Path(__file__).resolve().parents[2]))
+    return str(screenshot_path.relative_to(PROJECT_ROOT))
 
 
 def _attach_final_dom_snapshot(
@@ -1529,7 +1530,7 @@ def _attach_final_dom_snapshot(
         snapshot_path.write_text(page.content(), encoding="utf-8")
     except Exception:
         return
-    relative_path = str(snapshot_path.relative_to(Path(__file__).resolve().parents[2]))
+    relative_path = str(snapshot_path.relative_to(PROJECT_ROOT))
     step_results[-1] = step_results[-1].model_copy(
         update={
             "dom_snapshot_path": relative_path,

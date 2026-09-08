@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 import logging
 import os
-from pathlib import Path
+
+from browser_worker.runtime.paths import PROJECT_ROOT
 
 
-ENV_FILE_PATH = Path(__file__).resolve().parents[2] / ".env"
+ENV_FILE_PATH = PROJECT_ROOT / ".env"
 logger = logging.getLogger(__name__)
 
 

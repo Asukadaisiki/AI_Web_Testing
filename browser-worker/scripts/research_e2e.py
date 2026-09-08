@@ -19,7 +19,9 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+WORKER_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(WORKER_ROOT / "src"))
+sys.path.insert(0, str(WORKER_ROOT))
 
 from scripts.run_agentic_e2e import (
     DEFAULT_CANCEL_GRACE_SECONDS,
@@ -33,7 +35,7 @@ from scripts.run_agentic_e2e import (
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = WORKER_ROOT.parent
 DEFAULT_SPEC = (
     REPOSITORY_ROOT / "research" / "experiments" / "stage6-canonical.v1.json"
 )
@@ -87,7 +89,7 @@ CODE_SNAPSHOT_SOURCE_ROOTS = (
     "backend-go/internal/research/",
     "backend-go/internal/tools/",
     "backend-go/internal/transport/http/",
-    "browser-worker/browser_worker/",
+    "browser-worker/src/browser_worker/",
 )
 CODE_SNAPSHOT_IGNORED_PARTS = {
     "__pycache__",

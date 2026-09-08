@@ -32,7 +32,7 @@ frontend/src/
   components/          尚未完全归入业务域的复用组件
   shared/              无业务归属的 API 基础设施和通用 UI
 
-browser-worker/browser_worker/
+browser-worker/src/browser_worker/
   server/              FastAPI 入口、路由和 HTTP 适配层
   capabilities/        Go 调用的浏览器能力和无状态执行边界
   exploration/         页面探索、locator preflight 与 VLM Prompt
@@ -281,8 +281,8 @@ app -> pages -> features -> shared
 第一次阅读不要按目录逐文件阅读，按一条业务链走：
 
 1. `frontend/src/app/AppRouter.tsx`
-2. `browser-worker/browser_worker/server/main.py`
-3. `browser-worker/browser_worker/server/router.py`
+2. `browser-worker/src/browser_worker/server/main.py`
+3. `browser-worker/src/browser_worker/server/router.py`
 4. 选择一个具体 route，例如 `server/routes/browser_executions.py`
 5. 进入对应 capability，例如 `capabilities/browser_execution.py`
 6. 再进入 Runner、Locator、Contract 和 Reporting

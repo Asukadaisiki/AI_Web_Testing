@@ -14,11 +14,12 @@ from browser_worker.capabilities.browser_capabilities import shutdown_browser_ca
 from browser_worker.runtime.config import get_settings
 from browser_worker.runtime.idempotency import IdempotencyMiddleware
 from browser_worker.runtime.logging_config import get_uvicorn_log_config, setup_logging
+from browser_worker.runtime.paths import PROJECT_ROOT
 from browser_worker.runtime.rate_limit import RateLimitMiddleware
 from browser_worker.runtime.request_logging import RequestLoggingMiddleware
 
 
-ARTIFACTS_DIR = Path(__file__).resolve().parents[2] / "artifacts"
+ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 
 
 @asynccontextmanager

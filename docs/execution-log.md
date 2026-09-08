@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-08 | Browser Worker 改为标准 src 布局
+
+- 任务：消除 `browser-worker/browser_worker` 连续重复命名带来的阅读困惑，同时保留有语义的 Python import 包名。
+- 操作：将源码包迁移为 `browser-worker/src/browser_worker`；Hatch wheel 配置改为 `packages = ["src/browser_worker"]`；同步研究代码快照路径和架构文档；新增统一的 `runtime.paths.PROJECT_ROOT`，替代 artifact、`.env`、日志路径中的目录深度硬编码；三个直接运行脚本显式加入 `src` 源码根。
+- 结果：仓库目录层次变为“项目根 -> src -> Python 包”，不再出现项目目录与包目录紧邻重复；运行时 import 仍保持清晰的 `browser_worker.*`。同时修复了 BUG-158。
+- 验证：`cd browser-worker && uv run python -m unittest discover -s tests -v` 通过（151 passed / 2 skipped）；`uv run python -m compileall -q src/browser_worker tests scripts` 通过；FastAPI 入口、三个脚本导入和 `PROJECT_ROOT` 断言通过；旧路径检索无命中；`git diff --check` 通过。
+- 后续：无。
+
 ## 2026-09-07 | 重命名 Browser Worker Python 包结构
 
 - 任务：回应 `app/` 目录语义不清的问题，重新设计 Browser Worker 为更容易阅读的项目结构。
