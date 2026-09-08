@@ -56,6 +56,22 @@
 
 ## 任务记录
 
+## 2026-09-08 | Agent 工作链路流程图
+
+- 任务：将当前 Agent 工作链路画成流程图，并补充代码与架构讲解。
+- 操作：使用 TRAE dynamic UI 生成 AgentCore 端到端流程图，覆盖 acceptance spec、E2E driver、Harness、LLM turn、Policy gate、Browser Worker、DSL 生成、审批、正式执行、Report 和 Oracle；同步在图中标注核心代码入口与状态边界。
+- 结果：已输出交互式流程图，节点可点击查看职责、代码路径、状态字段和架构边界。
+- 验证：可视化内容基于当前代码文件与最近 run `research/results/e2e-smoke-men-tshirt-think-gated-5-20260908T085435Z/run.json`；未运行新的 E2E，未调用模型。
+- 后续：实现版本化 TaskPlan/PlanStep 后，需要更新流程图中的状态机层，替换当前 transcript-derived exploration state。
+
+## 2026-09-08 | Agent 当前工作链路复盘
+
+- 任务：说明当前 Agent 从 LLM 决策、工具调用、任务编排到状态机/验收的完整链路，并用最近实验数据佐证。
+- 操作：核对 `backend-go/internal/agent/loop.go`、`backend-go/internal/harness/harness.go`、`backend-go/internal/harness/policy.go`、`backend-go/internal/agentservice/service.go`、`browser-worker/scripts/run_agentic_e2e.py` 与最近结果 `research/results/e2e-smoke-men-tshirt-think-gated-5-20260908T085435Z/run.json`；尝试读取本地 AgentService 事件 API 和 SQLite 事件库，确认当前服务未运行且根 `app.db` 为空。
+- 结果：确认当前链路为 Go Harness 驱动的 ReAct 工具循环，Browser Worker 仅提供无状态浏览器能力；探索收敛、DSL 审批、正式执行和 Oracle 验收由控制面确定性门控串联。最近 run 产生 9 次 `research.llm_call`、1 个 DSL generation、1 次审批、1 个 batch/report artifact，正式执行通过但原始 Oracle 因隐藏 modal 文本误判失败。
+- 验证：静态核对代码与 `run.json` 事件序列；未运行新的 E2E，未调用模型。
+- 后续：继续补齐版本化 Task Plan/PlanStep 状态机，使目标语义、禁止动作、副作用边界和探索证据绑定从 prompt/隐式 transcript 收敛为显式持久状态。
+
 ## 2026-09-08 | Men Tshirt think-mode E2E 复跑
 
 - 任务：在修复验证型文本事实预检阻断后，复跑 Men Tshirt live E2E。
