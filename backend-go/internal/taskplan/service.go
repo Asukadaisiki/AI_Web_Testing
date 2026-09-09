@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 )
 
 var stepIDPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
@@ -65,7 +67,16 @@ func (s *Service) CreateVersion(ctx context.Context, request CreateRequest) (Pla
 	} else if !errors.Is(err, ErrNotFound) {
 		return Plan{}, err
 	}
-	return s.repository.CreateVersion(ctx, plan)
+	created, err := s.repository.CreateVersion(ctx, plan)
+	if err != nil {
+		return Plan{}, err
+	}
+	if rebindCarriedTargetBindings(&created) {
+		if err := s.repository.Save(ctx, created); err != nil {
+			return Plan{}, err
+		}
+	}
+	return created, nil
 }
 
 func (s *Service) GetCurrent(ctx context.Context, runID string) (Plan, error) {
@@ -167,6 +178,7 @@ func (s *Service) RecordToolResult(
 		hash := sha256.Sum256(result)
 		evidence := successfulExplorationEvidence(result)
 		groundedActions := map[string]bool{}
+		targetBindings := map[string]*browsercontract.TargetBinding{}
 		if tool == "explore_flow" {
 			actionOwners, mapErr := mapProbeActionOwners(
 				plan,
@@ -181,6 +193,17 @@ func (s *Service) RecordToolResult(
 					groundedActions[owner] = true
 				}
 			}
+			targetBindings = deriveTargetBindings(
+				plan,
+				actionOwners,
+				result,
+			)
+		} else {
+			targetBindings = derivePageTargetBindings(
+				plan,
+				pendingSteps,
+				result,
+			)
 		}
 		for _, pending := range pendingSteps {
 			index := planStepIndex(plan.Steps, pending.ID)
@@ -197,8 +220,15 @@ func (s *Service) RecordToolResult(
 				!groundedActions[plan.Steps[index].ID] {
 				break
 			}
+			if requiresTargetBinding(plan.Steps[index].Action) &&
+				targetBindings[plan.Steps[index].ID] == nil {
+				break
+			}
 			plan.Steps[index].Status = StepGrounded
 			plan.Steps[index].GroundingAttempts++
+			if binding := targetBindings[plan.Steps[index].ID]; binding != nil {
+				plan.Steps[index].TargetBinding = binding
+			}
 			plan.Steps[index].Evidence = append(
 				plan.Steps[index].Evidence,
 				EvidenceRef{
@@ -380,6 +410,16 @@ func (s *Service) ValidateGenerationBinding(
 			plan.Status,
 		)
 	}
+	var envelope struct {
+		Profile string `json:"profile"`
+	}
+	if json.Unmarshal(caseJSON, &envelope) == nil &&
+		envelope.Profile == "research-v2" {
+		if err := validateCompiledCaseSemantics(plan, caseJSON); err != nil {
+			return Plan{}, err
+		}
+		return plan, nil
+	}
 	if err := validateCaseSemantics(plan, caseJSON); err != nil {
 		return Plan{}, err
 	}
@@ -506,10 +546,36 @@ func carryForwardGrounding(next *Plan, previous Plan) {
 			previousStep.GroundingAttempts
 		next.Steps[index].Evidence =
 			append([]EvidenceRef(nil), previousStep.Evidence...)
+		if previousStep.TargetBinding != nil {
+			binding := *previousStep.TargetBinding
+			next.Steps[index].TargetBinding = &binding
+		}
 	}
 	if allGrounded(next.Steps) {
 		next.Status = StatusReadyForGeneration
 	}
+}
+
+func rebindCarriedTargetBindings(plan *Plan) bool {
+	changed := false
+	for index := range plan.Steps {
+		if plan.Steps[index].TargetBinding == nil {
+			continue
+		}
+		binding := *plan.Steps[index].TargetBinding
+		binding.PlanID = plan.ID
+		binding.PlanVersion = plan.Version
+		binding.PlanStepID = plan.Steps[index].ID
+		rebound, err := browsercontract.NewTargetBinding(binding)
+		if err != nil {
+			plan.Steps[index].TargetBinding = nil
+			plan.Steps[index].Status = StepPending
+			continue
+		}
+		plan.Steps[index].TargetBinding = &rebound
+		changed = true
+	}
+	return changed
 }
 
 func sameStepSemantics(left Step, right Step) bool {
@@ -581,9 +647,14 @@ type probeFlowRequest struct {
 	Steps []struct {
 		Description string `json:"description"`
 		Actions     []struct {
-			Action string `json:"action"`
-			Target string `json:"target"`
-			Value  string `json:"value"`
+			PlanStepID string `json:"plan_step_id"`
+			Action     string `json:"action"`
+			Target     string `json:"target"`
+			Value      string `json:"value"`
+			Condition  struct {
+				Type     string `json:"type"`
+				Expected string `json:"expected"`
+			} `json:"condition"`
 		} `json:"actions"`
 	} `json:"steps"`
 }
@@ -602,17 +673,42 @@ func mapProbeActionOwners(
 	owners := make(map[string]string)
 	for stepIndex, group := range request.Steps {
 		for actionIndex, action := range group.Actions {
+			value := action.Value
+			if value == "" &&
+				strings.EqualFold(action.Condition.Type, "value_equals") {
+				value = action.Condition.Expected
+			}
 			haystack := action.Action + " " + action.Target + " " +
-				action.Value + " " + group.Description
+				value + " " + group.Description
 			if forbidden(plan.ForbiddenActions, haystack) {
 				return nil, errors.New("explore_flow contains a forbidden action")
 			}
-			matchedSteps := matchingProbeSteps(
-				allowedSteps,
-				action.Action,
-				action.Target,
-				action.Value,
-			)
+			var matchedSteps []Step
+			if action.PlanStepID != "" {
+				matched, ok := stepByID(pending, action.PlanStepID)
+				if !ok {
+					return nil, fmt.Errorf(
+						"explore_flow action references unbound plan step %q",
+						action.PlanStepID,
+					)
+				}
+				if !probeActionMatches(matched.Action, action.Action) ||
+					!probeValueMatches(matched, action.Action, value) {
+					return nil, fmt.Errorf(
+						"explore_flow action %q does not match plan step %q",
+						action.Action,
+						action.PlanStepID,
+					)
+				}
+				matchedSteps = []Step{matched}
+			} else {
+				matchedSteps = matchingProbeSteps(
+					allowedSteps,
+					action.Action,
+					action.Target,
+					value,
+				)
+			}
 			if len(matchedSteps) == 0 {
 				if normalize(action.Action) == "wait_for" {
 					continue
@@ -621,7 +717,7 @@ func mapProbeActionOwners(
 					pending,
 					pendingCursor,
 					action.Action,
-					action.Value,
+					value,
 				)
 				if !ok {
 					return nil, fmt.Errorf(
@@ -640,8 +736,9 @@ func mapProbeActionOwners(
 				)
 			}
 			for _, step := range matchedSteps {
-				if step.SideEffect == SideEffectExternal ||
-					step.SideEffect == SideEffectUnknown {
+				if normalize(action.Action) != "wait_for" &&
+					(step.SideEffect == SideEffectExternal ||
+						step.SideEffect == SideEffectUnknown) {
 					return nil, fmt.Errorf(
 						"plan step %q cannot be probed because side_effect is %q",
 						step.ID,
@@ -654,6 +751,15 @@ func mapProbeActionOwners(
 		}
 	}
 	return owners, nil
+}
+
+func stepByID(steps []Step, id string) (Step, bool) {
+	for _, step := range steps {
+		if step.ID == id {
+			return step, true
+		}
+	}
+	return Step{}, false
 }
 
 func probeReachableSteps(plan Plan, pendingCount int) []Step {
@@ -686,6 +792,13 @@ func validateGenerationArguments(
 		return errors.New(
 			"generate_dsl plan_binding does not match the current task plan",
 		)
+	}
+	var envelope struct {
+		Profile string `json:"profile"`
+	}
+	if json.Unmarshal(request.Case, &envelope) == nil &&
+		envelope.Profile == "research-v2" {
+		return validateDraftCaseSemantics(plan, request.Case)
 	}
 	return validateCaseSemantics(plan, request.Case)
 }
@@ -900,7 +1013,8 @@ func probeActionMatches(planned string, actual string) bool {
 		return true
 	}
 	return actual == "wait_for" &&
-		(planned == "assert_text" ||
+		(requiresTargetBinding(planned) ||
+			planned == "assert_text" ||
 			planned == "assert_url_contains" ||
 			planned == "capture_text")
 }
@@ -940,14 +1054,16 @@ func resultContainsStepEvidence(decoded any, step Step) bool {
 
 func successfulExplorationEvidence(raw json.RawMessage) []any {
 	var result struct {
-		URL       string `json:"url"`
-		Status    string `json:"status"`
-		A11yNodes []any  `json:"a11y_nodes"`
-		Pages     []struct {
-			URL       string `json:"url"`
-			Status    string `json:"status"`
-			A11yNodes []any  `json:"a11y_nodes"`
-			Actions   []struct {
+		URL         string `json:"url"`
+		Status      string `json:"status"`
+		A11yNodes   []any  `json:"a11y_nodes"`
+		Observation any    `json:"observation_v2"`
+		Pages       []struct {
+			URL         string `json:"url"`
+			Status      string `json:"status"`
+			A11yNodes   []any  `json:"a11y_nodes"`
+			Observation any    `json:"observation_v2"`
+			Actions     []struct {
 				Action         string `json:"action"`
 				Target         string `json:"target"`
 				Status         string `json:"status"`
@@ -961,11 +1077,21 @@ func successfulExplorationEvidence(raw json.RawMessage) []any {
 	}
 	evidence := make([]any, 0, len(result.Pages)*3+2)
 	if !strings.EqualFold(result.Status, "error") {
-		evidence = append(evidence, result.URL, result.A11yNodes)
+		evidence = append(
+			evidence,
+			result.URL,
+			result.A11yNodes,
+			result.Observation,
+		)
 	}
 	for _, page := range result.Pages {
 		if !strings.EqualFold(page.Status, "error") {
-			evidence = append(evidence, page.URL, page.A11yNodes)
+			evidence = append(
+				evidence,
+				page.URL,
+				page.A11yNodes,
+				page.Observation,
+			)
 		}
 		for _, action := range page.Actions {
 			if strings.EqualFold(action.Status, "success") &&
@@ -1011,6 +1137,261 @@ func successfulFlowActions(raw json.RawMessage) map[string]bool {
 	return successful
 }
 
+type observedLocator struct {
+	Locator       browsercontract.LocatorSpec `json:"locator"`
+	Provenance    string                      `json:"provenance"`
+	ObservedCount int                         `json:"observed_count"`
+}
+
+type observedElement struct {
+	ElementRef  string                      `json:"element_ref"`
+	ContextPath browsercontract.ContextPath `json:"context_path"`
+	A11y        *struct {
+		Role string `json:"role"`
+		Name string `json:"name"`
+	} `json:"a11y"`
+	DOM *struct {
+		Tag   string            `json:"tag"`
+		Attrs map[string]string `json:"attrs"`
+		Text  string            `json:"text"`
+	} `json:"dom"`
+	Runtime struct {
+		Visible  bool `json:"visible"`
+		Enabled  bool `json:"enabled"`
+		Editable bool `json:"editable"`
+	} `json:"runtime"`
+	Locators []observedLocator `json:"locators"`
+}
+
+type observedSnapshot struct {
+	SchemaVersion string `json:"schema_version"`
+	ObservationID string `json:"observation_id"`
+	PageState     struct {
+		StateID string `json:"state_id"`
+		SHA256  string `json:"state_sha256"`
+	} `json:"page_state"`
+	Elements []observedElement `json:"elements"`
+}
+
+type observedFlowResult struct {
+	Observation observedSnapshot `json:"observation_v2"`
+	Pages       []struct {
+		Observation observedSnapshot `json:"observation_v2"`
+		Actions     []struct {
+			StepIndex   int    `json:"step_index"`
+			ActionIndex int    `json:"action_index"`
+			Action      string `json:"action"`
+			Target      string `json:"target"`
+			Status      string `json:"status"`
+			Phase       string `json:"phase"`
+		} `json:"actions"`
+	} `json:"pages"`
+}
+
+func deriveTargetBindings(
+	plan Plan,
+	owners map[string]string,
+	raw json.RawMessage,
+) map[string]*browsercontract.TargetBinding {
+	var result observedFlowResult
+	if json.Unmarshal(raw, &result) != nil {
+		return nil
+	}
+	successful := successfulFlowActions(raw)
+	bindings := make(map[string]*browsercontract.TargetBinding)
+	for _, page := range result.Pages {
+		for _, action := range page.Actions {
+			key := probeActionKey(action.StepIndex, action.ActionIndex)
+			if !successful[key] || !strings.EqualFold(action.Phase, "before") {
+				continue
+			}
+			owner := owners[key]
+			stepIndex := planStepIndex(plan.Steps, owner)
+			if stepIndex < 0 {
+				continue
+			}
+			binding := buildTargetBinding(
+				plan,
+				plan.Steps[stepIndex],
+				action.Target,
+				page.Observation,
+			)
+			if binding != nil {
+				bindings[owner] = binding
+			}
+		}
+	}
+	return bindings
+}
+
+func derivePageTargetBindings(
+	plan Plan,
+	steps []Step,
+	raw json.RawMessage,
+) map[string]*browsercontract.TargetBinding {
+	var result observedFlowResult
+	if json.Unmarshal(raw, &result) != nil {
+		return nil
+	}
+	bindings := make(map[string]*browsercontract.TargetBinding)
+	for _, step := range steps {
+		binding := buildTargetBinding(plan, step, step.Target, result.Observation)
+		if binding != nil {
+			bindings[step.ID] = binding
+		}
+	}
+	return bindings
+}
+
+func buildTargetBinding(
+	plan Plan,
+	step Step,
+	actualTarget string,
+	observation observedSnapshot,
+) *browsercontract.TargetBinding {
+	if observation.SchemaVersion != browsercontract.ObservationSchemaVersion ||
+		observation.ObservationID == "" ||
+		len(observation.PageState.SHA256) != 64 {
+		return nil
+	}
+	explicit := isSelectorTarget(actualTarget)
+	matched := make([]observedElement, 0, 1)
+	for _, element := range observation.Elements {
+		if !element.Runtime.Visible ||
+			!element.Runtime.Enabled ||
+			!elementHasExecutableLocator(element) {
+			continue
+		}
+		if step.Action == "input" && !element.Runtime.Editable {
+			continue
+		}
+		if explicit {
+			if elementHasLocatorValue(element, actualTarget) {
+				matched = append(matched, element)
+			}
+			continue
+		}
+		if elementMatchesSemanticTarget(element, actualTarget) ||
+			elementMatchesSemanticTarget(element, step.Target) {
+			matched = append(matched, element)
+		}
+	}
+	if len(matched) != 1 {
+		return nil
+	}
+	element := matched[0]
+	candidates := make([]browsercontract.LocatorCandidate, 0, len(element.Locators))
+	for _, observed := range element.Locators {
+		if observed.ObservedCount != 1 {
+			continue
+		}
+		candidateSeed, _ := json.Marshal(observed.Locator)
+		candidateHash := sha256.Sum256(candidateSeed)
+		candidates = append(candidates, browsercontract.LocatorCandidate{
+			CandidateID: "candidate_" + hex.EncodeToString(candidateHash[:8]),
+			ElementRef:  element.ElementRef,
+			ContextPath: element.ContextPath,
+			Locator:     observed.Locator, Provenance: observed.Provenance,
+			ObservedCount: observed.ObservedCount,
+			Visible:       element.Runtime.Visible, Enabled: element.Runtime.Enabled,
+			Score: locatorScore(observed.Locator.Kind),
+		})
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Score != candidates[j].Score {
+			return candidates[i].Score > candidates[j].Score
+		}
+		return candidates[i].CandidateID < candidates[j].CandidateID
+	})
+	binding, err := browsercontract.NewTargetBinding(
+		browsercontract.TargetBinding{
+			PlanID: plan.ID, PlanVersion: plan.Version,
+			PlanStepID: step.ID, SemanticTarget: step.Target,
+			Action: step.Action, PageStateID: observation.PageState.StateID,
+			ObservationID:     observation.ObservationID,
+			ObservationSHA256: observation.PageState.SHA256,
+			ElementRefs:       []string{element.ElementRef},
+			Candidates:        candidates, SelectedCandidateID: candidates[0].CandidateID,
+		},
+	)
+	if err != nil {
+		return nil
+	}
+	return &binding
+}
+
+func elementHasExecutableLocator(element observedElement) bool {
+	for _, observed := range element.Locators {
+		if observed.ObservedCount == 1 && observed.Locator.Validate() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func elementHasLocatorValue(element observedElement, target string) bool {
+	target = strings.TrimPrefix(strings.TrimSpace(target), "css=")
+	target = strings.TrimPrefix(target, "xpath=")
+	for _, observed := range element.Locators {
+		value := strings.TrimPrefix(
+			strings.TrimSpace(observed.Locator.Value),
+			"css=",
+		)
+		value = strings.TrimPrefix(value, "xpath=")
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func elementMatchesSemanticTarget(element observedElement, target string) bool {
+	target = normalize(target)
+	if target == "" {
+		return false
+	}
+	values := make([]string, 0, 6)
+	if element.A11y != nil {
+		values = append(values, element.A11y.Role, element.A11y.Name)
+	}
+	if element.DOM != nil {
+		values = append(values, element.DOM.Tag, element.DOM.Text)
+		for _, key := range []string{"aria-label", "name", "placeholder", "title"} {
+			values = append(values, element.DOM.Attrs[key])
+		}
+	}
+	for _, value := range values {
+		if semanticTargetMatches(target, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func locatorScore(kind string) float64 {
+	switch kind {
+	case "role":
+		return 0.95
+	case "label":
+		return 0.93
+	case "test_id":
+		return 0.92
+	case "placeholder":
+		return 0.9
+	case "text":
+		return 0.85
+	case "css":
+		return 0.8
+	case "xpath":
+		return 0.6
+	default:
+		return 0.5
+	}
+}
+
 func probeActionKey(stepIndex int, actionIndex int) string {
 	return fmt.Sprintf("%d:%d", stepIndex, actionIndex)
 }
@@ -1046,7 +1427,8 @@ func jsonContainsText(value any, target string) bool {
 
 func allGrounded(steps []Step) bool {
 	for _, step := range steps {
-		if step.Status != StepGrounded {
+		if step.Status != StepGrounded ||
+			(requiresTargetBinding(step.Action) && step.TargetBinding == nil) {
 			return false
 		}
 	}

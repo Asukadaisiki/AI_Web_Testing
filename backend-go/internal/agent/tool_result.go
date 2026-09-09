@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	ModelToolSummaryTargetBytes    = 32 << 10
-	ModelToolSummaryHardLimitBytes = 64 << 10
-	ModelExplorationBudgetBytes    = 160 << 10
+	ModelToolSummaryTargetBytes    = 16 << 10
+	ModelToolSummaryHardLimitBytes = 32 << 10
+	ModelExplorationBudgetBytes    = 48 << 10
 )
 
 type ToolResultEventPayload struct {
@@ -87,6 +87,7 @@ type ToolResultDOMSummary struct {
 type ToolResultActionSummary struct {
 	StepIndex        *int                    `json:"step_index,omitempty"`
 	ActionIndex      *int                    `json:"action_index,omitempty"`
+	PlanStepID       string                  `json:"plan_step_id,omitempty"`
 	Action           string                  `json:"action,omitempty"`
 	Target           string                  `json:"target,omitempty"`
 	Description      string                  `json:"description,omitempty"`
@@ -225,11 +226,37 @@ type ToolResultDSLSummary struct {
 }
 
 type ToolResultTaskPlanSummary struct {
-	PlanID     string   `json:"plan_id,omitempty"`
-	Version    int      `json:"version,omitempty"`
-	PlanSHA256 string   `json:"plan_sha256,omitempty"`
-	Status     string   `json:"status,omitempty"`
-	StepIDs    []string `json:"step_ids,omitempty"`
+	PlanID            string                              `json:"plan_id,omitempty"`
+	Version           int                                 `json:"version,omitempty"`
+	PlanSHA256        string                              `json:"plan_sha256,omitempty"`
+	Status            string                              `json:"status,omitempty"`
+	StepIDs           []string                            `json:"step_ids,omitempty"`
+	GroundedStepIDs   []string                            `json:"grounded_step_ids,omitempty"`
+	PendingStepIDs    []string                            `json:"pending_step_ids,omitempty"`
+	StepBindings      map[string]string                   `json:"step_bindings,omitempty"`
+	ExplorationBudget *ToolResultExplorationBudgetSummary `json:"exploration_budget,omitempty"`
+}
+
+type ToolResultBudgetCounter struct {
+	Used      int `json:"used"`
+	Limit     int `json:"limit"`
+	Remaining int `json:"remaining"`
+}
+
+type ToolResultExplorationBudgetSummary struct {
+	Scope                       string                  `json:"scope"`
+	PlanID                      string                  `json:"plan_id,omitempty"`
+	PlanVersion                 int                     `json:"plan_version,omitempty"`
+	ExplorePage                 ToolResultBudgetCounter `json:"explore_page"`
+	ExploreFlow                 ToolResultBudgetCounter `json:"explore_flow"`
+	RunExplorePage              ToolResultBudgetCounter `json:"run_explore_page"`
+	RunExploreFlow              ToolResultBudgetCounter `json:"run_explore_flow"`
+	RepeatedExplorePageLimit    int                     `json:"repeated_explore_page_signature_limit"`
+	RepeatedExploreFlowLimit    int                     `json:"repeated_explore_flow_signature_limit"`
+	CurrentTool                 string                  `json:"current_tool,omitempty"`
+	CurrentSignatureUses        *int                    `json:"current_signature_uses,omitempty"`
+	CurrentSignatureRemaining   *int                    `json:"current_signature_remaining,omitempty"`
+	CurrentSignatureFingerprint string                  `json:"current_signature_fingerprint,omitempty"`
 }
 
 type ToolResultExecutionSummary struct {
@@ -294,6 +321,7 @@ type rawExploreResult struct {
 	Failures        []rawFailure        `json:"failures"`
 	Pages           []rawPage           `json:"pages"`
 	ContextEvidence *rawContextEvidence `json:"context_evidence"`
+	ObservationV2   *rawObservationV2   `json:"observation_v2"`
 }
 
 type rawContextEvidence struct {
@@ -305,20 +333,52 @@ type rawContextEvidence struct {
 }
 
 type rawPage struct {
-	URL          string      `json:"url"`
-	PageState    string      `json:"page_state"`
-	Revision     int         `json:"revision"`
-	Status       string      `json:"status"`
-	Description  string      `json:"description"`
-	ElementCount int         `json:"element_count"`
-	A11yNodes    []rawNode   `json:"a11y_nodes"`
-	Actions      []rawAction `json:"actions"`
-	Failure      *rawFailure `json:"failure"`
+	URL           string            `json:"url"`
+	PageState     string            `json:"page_state"`
+	Revision      int               `json:"revision"`
+	Status        string            `json:"status"`
+	Description   string            `json:"description"`
+	ElementCount  int               `json:"element_count"`
+	A11yNodes     []rawNode         `json:"a11y_nodes"`
+	Actions       []rawAction       `json:"actions"`
+	Failure       *rawFailure       `json:"failure"`
+	ObservationV2 *rawObservationV2 `json:"observation_v2"`
+}
+
+type rawObservationV2 struct {
+	PageState struct {
+		StateID string `json:"state_id"`
+	} `json:"page_state"`
+	Elements []struct {
+		ElementRef string `json:"element_ref"`
+		A11y       *struct {
+			Role string `json:"role"`
+			Name string `json:"name"`
+		} `json:"a11y"`
+		DOM *struct {
+			Tag   string            `json:"tag"`
+			Attrs map[string]string `json:"attrs"`
+		} `json:"dom"`
+		Runtime struct {
+			Visible bool `json:"visible"`
+			Enabled bool `json:"enabled"`
+		} `json:"runtime"`
+		Locators []struct {
+			Locator struct {
+				Kind  string  `json:"kind"`
+				Role  string  `json:"role"`
+				Name  *string `json:"name"`
+				Value string  `json:"value"`
+			} `json:"locator"`
+			Provenance string `json:"provenance"`
+		} `json:"locators"`
+	} `json:"elements"`
 }
 
 type rawAction struct {
 	StepIndex         *int        `json:"step_index"`
 	ActionIndex       *int        `json:"action_index"`
+	PlanStepID        string      `json:"plan_step_id"`
 	Action            string      `json:"action"`
 	Target            string      `json:"target"`
 	ActionDescription string      `json:"action_description"`
@@ -378,13 +438,28 @@ func BuildModelToolSummary(
 	tool string,
 	content json.RawMessage,
 	sourceEventSeq int64,
+	taskPlan ...*ToolResultTaskPlanSummary,
 ) (string, error) {
 	payload, err := NewToolResultEventPayload(tool, content)
 	if err != nil {
 		return "", err
 	}
 	if !IsExplorationTool(tool) {
-		return buildCapabilityToolSummary(tool, content, payload, sourceEventSeq)
+		encoded, buildErr := buildCapabilityToolSummary(
+			tool,
+			content,
+			payload,
+			sourceEventSeq,
+		)
+		if buildErr != nil || len(taskPlan) == 0 || taskPlan[0] == nil {
+			return encoded, buildErr
+		}
+		var summary ModelToolSummary
+		if decodeErr := json.Unmarshal([]byte(encoded), &summary); decodeErr != nil {
+			return "", decodeErr
+		}
+		summary.TaskPlan = taskPlan[0]
+		return encodeBoundedSummary(&summary)
 	}
 	var raw rawExploreResult
 	if err := json.Unmarshal(content, &raw); err != nil {
@@ -430,6 +505,7 @@ func BuildModelToolSummary(
 			Revision: raw.Revision, Status: raw.Status,
 			ElementCount: raw.ElementCount, A11yNodes: raw.A11yNodes,
 			Actions: raw.Actions, Failure: raw.Failure,
+			ObservationV2: raw.ObservationV2,
 		})}
 	} else {
 		for _, page := range raw.Pages {
@@ -439,6 +515,9 @@ func BuildModelToolSummary(
 	normalizeSummary(&summary)
 	summary.Observation = buildStructuredObservation(summary.Pages, summary.Failures)
 	summary.ExecutedEffects = executedEffectsFromObservation(summary.Observation)
+	if len(taskPlan) > 0 {
+		summary.TaskPlan = taskPlan[0]
+	}
 	return encodeBoundedSummary(&summary)
 }
 
@@ -586,6 +665,14 @@ func DecodeModelToolSummary(content string) (ModelToolSummary, bool) {
 }
 
 func summarizePage(page rawPage) ToolResultPageSummary {
+	if len(page.A11yNodes) == 0 && page.ObservationV2 != nil {
+		page.A11yNodes = nodesFromObservation(*page.ObservationV2)
+		page.ElementCount = len(page.A11yNodes)
+		page.PageState = firstNonEmptyString(
+			page.PageState,
+			page.ObservationV2.PageState.StateID,
+		)
+	}
 	result := ToolResultPageSummary{
 		URL: boundedUTF8(page.URL, 2048), PageState: boundedUTF8(page.PageState, 256),
 		PageKind: classifyPageKind(page.URL, page.PageState, page.Description),
@@ -633,6 +720,55 @@ func summarizePage(page rawPage) ToolResultPageSummary {
 		result.Actions = append(result.Actions, summarized)
 	}
 	return result
+}
+
+func nodesFromObservation(observation rawObservationV2) []rawNode {
+	result := make([]rawNode, 0, len(observation.Elements))
+	for _, element := range observation.Elements {
+		node := rawNode{
+			NodeID:    element.ElementRef,
+			Focusable: false,
+			Disabled:  !element.Runtime.Enabled,
+		}
+		if element.A11y != nil {
+			node.Role = element.A11y.Role
+			node.Name = element.A11y.Name
+		}
+		if element.DOM != nil {
+			node.DOM.Tag = element.DOM.Tag
+			node.DOM.Attrs = element.DOM.Attrs
+		}
+		for _, observed := range element.Locators {
+			selector := observed.Locator.Value
+			if observed.Locator.Kind == "role" {
+				selector = observed.Locator.Role
+			}
+			if selector == "" {
+				continue
+			}
+			node.VerifiedSelectors = append(
+				node.VerifiedSelectors,
+				ToolResultSelectorSummary{
+					Strategy: observed.Locator.Kind,
+					Selector: selector,
+					Name: firstNonEmptyString(
+						stringPointerValue(observed.Locator.Name),
+						node.Name,
+					),
+					Source: observed.Provenance,
+				},
+			)
+		}
+		result = append(result, node)
+	}
+	return result
+}
+
+func stringPointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func buildCapabilityToolSummary(
@@ -726,7 +862,13 @@ func summarizeDSLResult(value map[string]any) *ToolResultDSLSummary {
 		if action := boundedUTF8(stringValue(step["action"]), 64); action != "" {
 			actionSet[action] = true
 		}
-		if target := boundedUTF8(stringValue(step["target"]), 256); target != "" {
+		if target := boundedUTF8(
+			firstNonEmptyString(
+				stringValue(step["target"]),
+				stringValue(step["semantic_target"]),
+			),
+			256,
+		); target != "" {
 			targetSet[target] = true
 		}
 	}
@@ -846,7 +988,8 @@ func summarizeAction(action rawAction) ToolResultActionSummary {
 	}
 	result := ToolResultActionSummary{
 		StepIndex: action.StepIndex, ActionIndex: action.ActionIndex,
-		Action: actionName, Target: target,
+		PlanStepID: boundedUTF8(action.PlanStepID, 64),
+		Action:     actionName, Target: target,
 		Description: boundedUTF8(action.ActionDescription, 1200),
 		Phase:       boundedUTF8(action.Phase, 64), Status: boundedUTF8(action.Status, 64),
 		URL: boundedUTF8(action.URL, 2048), PageState: boundedUTF8(action.PageState, 256),

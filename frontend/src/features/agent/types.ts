@@ -107,7 +107,7 @@ export type TaskPlanStatus =
   | "superseded";
 
 export interface TaskPlanSnapshot {
-  schema_version: "agent.task_plan.v1";
+  schema_version: "agent.task_plan.v1" | "agent.task_plan.v2";
   plan_id: string;
   version: number;
   plan_sha256: string;
@@ -119,6 +119,7 @@ export interface TaskPlanSnapshot {
     status: "pending" | "grounded" | "failed" | "blocked";
     grounding_attempts: number;
     evidence_count: number;
+    target_binding_id?: string;
   }>;
 }
 

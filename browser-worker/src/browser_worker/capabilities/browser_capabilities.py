@@ -19,6 +19,11 @@ from browser_worker.exploration.page_explorer import (
     is_storage_state_stale,
     load_storage_state_meta,
 )
+from browser_worker.exploration.observation import (
+    attach_observation_artifact,
+    build_browser_observation,
+)
+from browser_worker.runtime.paths import PROJECT_ROOT
 from browser_worker.runtime.config import get_settings
 from browser_worker.contracts.browser_capabilities import (
     BrowserCapabilityName,
@@ -166,6 +171,16 @@ def _context_evidence(
     }
 
 
+def _page_title(page) -> str:
+    title = getattr(page, "title", None)
+    if not callable(title):
+        return ""
+    try:
+        return str(title() or "")
+    except Exception:
+        return ""
+
+
 def _explore_page(
     project_id: int,
     planning_session_id: int,
@@ -196,6 +211,15 @@ def _explore_page(
         "a11y_nodes": nodes,
         "element_count": len(nodes),
         "context_evidence": context_evidence,
+        "observation_v2": build_browser_observation(
+            url=page.url,
+            title=_page_title(page),
+            state_id="S0",
+            revision=1,
+            nodes=nodes,
+            page=page,
+            artifact_root=PROJECT_ROOT / "artifacts",
+        ),
     }
     meta = (
         load_storage_state_meta(
@@ -209,6 +233,8 @@ def _explore_page(
         result["warning"] = "会话状态超过24小时未更新"
     elif not nodes:
         result["warning"] = "页面未发现可用 A11y 交互元素"
+    if arguments.get("observation_schema_version") == "v2":
+        result["a11y_nodes"] = []
     return result
 
 
@@ -235,6 +261,33 @@ def _explore_flow(
         isolated_context=True,
         core_user_flow_text=arguments.get("flow_description"),
     )
+    previous_state_sha256 = None
+    for page in pages:
+        if page.get("status") == "error":
+            continue
+        observation = page.get("observation_v2")
+        if not isinstance(observation, dict):
+            observation = build_browser_observation(
+                url=str(page.get("url") or ""),
+                title=str(page.get("title") or ""),
+                state_id=str(page.get("page_state") or "unknown"),
+                revision=max(1, int(page.get("revision") or 1)),
+                nodes=[
+                    node
+                    for node in page.get("a11y_nodes", [])
+                    if isinstance(node, dict)
+                ],
+                previous_state_sha256=previous_state_sha256,
+            )
+        if not observation.get("artifact"):
+            observation = attach_observation_artifact(
+                observation,
+                PROJECT_ROOT / "artifacts",
+            )
+        previous_state_sha256 = observation["page_state"]["state_sha256"]
+        page["observation_v2"] = observation
+        if arguments.get("observation_schema_version") == "v2":
+            page["a11y_nodes"] = []
     return {
         "pages": pages,
         "success": not any(page.get("status") == "error" for page in pages),
@@ -251,6 +304,22 @@ def _explore_flow(
 
 def _validate_page_elements(arguments: dict[str, Any]) -> dict[str, Any]:
     dsl_case = arguments.get("dsl_case")
+    if isinstance(dsl_case, dict) and dsl_case.get("profile") == "research-v2":
+        from browser_worker.contracts.action_ir_v2 import (
+            validate_research_v2_dsl,
+        )
+
+        validated = validate_research_v2_dsl(
+            dsl_case,
+            phase="executable",
+        ).model_dump(mode="json")
+        return {
+            "dsl_case": validated,
+            "valid": True,
+            "validation_mode": "target_binding",
+            "case_digest": _json_digest(dsl_case),
+            "warnings": [],
+        }
     required_elements = arguments.get("required_elements")
     if isinstance(required_elements, list):
         a11y_nodes = arguments["a11y_nodes"]

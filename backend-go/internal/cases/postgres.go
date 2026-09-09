@@ -199,8 +199,12 @@ func validateMutation(request Mutation) error {
 	}
 	if request.Profile != nil {
 		profile := strings.TrimSpace(*request.Profile)
-		if profile != "legacy-v1" && profile != "research-v1" {
-			return errors.New("case profile must be legacy-v1 or research-v1")
+		if profile != "legacy-v1" &&
+			profile != "research-v1" &&
+			profile != "research-v2" {
+			return errors.New(
+				"case profile must be legacy-v1, research-v1, or research-v2",
+			)
 		}
 	}
 	var steps []struct {

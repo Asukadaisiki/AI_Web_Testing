@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS public.task_plans (
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_task_plans_schema_version
-        CHECK (schema_version = 'agent.task_plan.v1'),
+        CHECK (schema_version IN ('agent.task_plan.v1', 'agent.task_plan.v2')),
     CONSTRAINT ck_task_plans_version_positive CHECK (version >= 1),
     CONSTRAINT ck_task_plans_hash
         CHECK (length(plan_sha256) = 64 AND lower(plan_sha256) = plan_sha256),
@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS public.task_plan_steps (
     status character varying(32) NOT NULL,
     grounding_attempts integer NOT NULL,
     evidence_refs_json json NOT NULL,
+    target_binding_json json,
     PRIMARY KEY (plan_id, step_id),
     CONSTRAINT uq_task_plan_steps_position UNIQUE (plan_id, position),
     CONSTRAINT ck_task_plan_steps_position CHECK (position >= 0),
@@ -104,6 +105,15 @@ CREATE INDEX IF NOT EXISTS ix_task_plans_project_id
     ON public.task_plans (project_id);
 CREATE INDEX IF NOT EXISTS ix_task_plans_status
     ON public.task_plans (status);
+
+ALTER TABLE public.task_plan_steps
+    ADD COLUMN IF NOT EXISTS target_binding_json json;
+
+ALTER TABLE public.task_plans
+    DROP CONSTRAINT IF EXISTS ck_task_plans_schema_version;
+ALTER TABLE public.task_plans
+    ADD CONSTRAINT ck_task_plans_schema_version
+    CHECK (schema_version IN ('agent.task_plan.v1', 'agent.task_plan.v2'));
 
 ALTER TABLE public.dsl_generation_runs
     ADD COLUMN IF NOT EXISTS plan_id character varying(64),

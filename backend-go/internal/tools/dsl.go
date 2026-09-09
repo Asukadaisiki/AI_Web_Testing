@@ -28,12 +28,12 @@ func NewGenerateDSLTool(client DSLCapabilityClient) GenerateDSLTool {
 func (t GenerateDSLTool) Definition() Definition {
 	return Definition{
 		Name: "generate_dsl",
-		Description: "Validate and persist a research-v1 Action IR case authored from the user's goal and verified page elements. " +
+		Description: "Validate and persist a research-v2 Action IR draft bound to the current task plan. " +
 			"The plan_binding must match the current persisted task plan. " +
 			"Every step action must be one of: goto, click, input, wait_for, assert_text, " +
 			"assert_url_contains, capture_text. Every step must declare intent, preconditions, postconditions, idempotency, and side_effect. " +
-			"Author only semantic target and optional page_state/target_strategy fields; never author selector, candidates, or locator_confidence. " +
-			"Locator preflight derives executable candidates from the submitted accessibility evidence. " +
+			"For research-v2, identify steps with plan_step_id and target_binding_id; never author selector, locator candidates, or locator confidence. " +
+			"The control plane compiles executable candidates from persisted browser observations. " +
 			"Use preconditions for required pre-action state and postconditions for outcomes. " +
 			"network_request conditions may match URL substring, method, and status on one observed event. " +
 			"Express standalone visibility checks as wait_for, " +
@@ -64,7 +64,7 @@ func (t GenerateDSLTool) Definition() Definition {
 					"additionalProperties":false
 				}
 			},
-			"required":["plan_binding","case","a11y_nodes_by_state"],
+				"required":["plan_binding","case"],
 			"$defs":{
 				"condition":{
 					"type":"object",
@@ -121,7 +121,7 @@ func (t GenerateDSLTool) Definition() Definition {
 					"type":"object",
 					"additionalProperties":false,
 					"properties":{
-						"profile":{"type":"string","const":"research-v1","default":"research-v1"},
+							"profile":{"type":"string","enum":["research-v1","research-v2"],"default":"research-v2"},
 						"name":{"type":"string","minLength":1,"maxLength":200},
 						"description":{"type":["string","null"],"minLength":1,"maxLength":1000},
 						"base_url":{"type":["string","null"],"minLength":1,"maxLength":500},
@@ -142,18 +142,19 @@ func (t GenerateDSLTool) Definition() Definition {
 				"goto_step":{
 					"type":"object","additionalProperties":false,
 					"properties":{
-						"action":{"const":"goto"},"intent":{"type":"string","minLength":1,"maxLength":500},
+							"action":{"const":"goto"},"plan_step_id":{"type":"string","minLength":1,"maxLength":64},"intent":{"type":"string","minLength":1,"maxLength":500},
 						"target":{"type":"string","minLength":1},"value":{"type":"string","minLength":1},
 						"preconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"postconditions":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/condition"}},
 						"idempotency":{"const":"idempotent"},"side_effect":{"const":"browser_state"}
 					},
-					"required":["action","intent","target","value","preconditions","postconditions","idempotency","side_effect"]
+						"required":["action","intent","value","preconditions","postconditions","idempotency","side_effect"],
+						"anyOf":[{"required":["target"]},{"required":["plan_step_id"]}]
 				},
 				"click_step":{
 					"type":"object","additionalProperties":false,
 					"properties":{
-						"action":{"const":"click"},"intent":{"type":"string","minLength":1,"maxLength":500},
+							"action":{"const":"click"},"plan_step_id":{"type":"string","minLength":1,"maxLength":64},"target_binding_id":{"type":"string","minLength":1,"maxLength":64},"intent":{"type":"string","minLength":1,"maxLength":500},
 						"target":{"type":"string","minLength":1},"page_state":{"type":["string","null"]},
 						"target_strategy":{"$ref":"#/$defs/target_strategy"},
 						"preconditions":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/condition"}},
@@ -161,12 +162,13 @@ func (t GenerateDSLTool) Definition() Definition {
 						"idempotency":{"type":"string","enum":["idempotent","non_idempotent"]},
 						"side_effect":{"type":"string","enum":["none","browser_state","external_state","unknown"]}
 					},
-					"required":["action","intent","target","preconditions","postconditions","idempotency","side_effect"]
+						"required":["action","intent","preconditions","postconditions","idempotency","side_effect"],
+						"anyOf":[{"required":["target"]},{"required":["plan_step_id","target_binding_id"]}]
 				},
 				"input_step":{
 					"type":"object","additionalProperties":false,
 					"properties":{
-						"action":{"const":"input"},"intent":{"type":"string","minLength":1,"maxLength":500},
+							"action":{"const":"input"},"plan_step_id":{"type":"string","minLength":1,"maxLength":64},"target_binding_id":{"type":"string","minLength":1,"maxLength":64},"intent":{"type":"string","minLength":1,"maxLength":500},
 						"target":{"type":"string","minLength":1},"value":{"type":"string"},
 						"trigger":{"type":["string","null"],"enum":["Enter","Tab",null]},
 						"page_state":{"type":["string","null"]},"target_strategy":{"$ref":"#/$defs/target_strategy"},
@@ -174,54 +176,59 @@ func (t GenerateDSLTool) Definition() Definition {
 						"postconditions":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/condition"}},
 						"idempotency":{"const":"idempotent"},"side_effect":{"const":"browser_state"}
 					},
-					"required":["action","intent","target","value","preconditions","postconditions","idempotency","side_effect"]
+						"required":["action","intent","value","preconditions","postconditions","idempotency","side_effect"],
+						"anyOf":[{"required":["target"]},{"required":["plan_step_id","target_binding_id"]}]
 				},
 				"wait_for_step":{
 					"type":"object","additionalProperties":false,
 					"properties":{
-						"action":{"const":"wait_for"},"intent":{"type":"string","minLength":1,"maxLength":500},
+							"action":{"const":"wait_for"},"plan_step_id":{"type":"string","minLength":1,"maxLength":64},"target_binding_id":{"type":["string","null"],"minLength":1,"maxLength":64},"intent":{"type":"string","minLength":1,"maxLength":500},
 						"target":{"type":"string","minLength":1},"timeout_ms":{"type":"integer","minimum":1,"maximum":60000},
 						"page_state":{"type":["string","null"]},"target_strategy":{"$ref":"#/$defs/target_strategy"},
 						"preconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"postconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"idempotency":{"const":"idempotent"},"side_effect":{"const":"none"}
 					},
-					"required":["action","intent","target","preconditions","postconditions","idempotency","side_effect"]
+						"required":["action","intent","preconditions","postconditions","idempotency","side_effect"],
+						"anyOf":[{"required":["target"]},{"required":["plan_step_id"]}]
 				},
 				"assert_text_step":{
 					"type":"object","additionalProperties":false,
 					"properties":{
-						"action":{"const":"assert_text"},"intent":{"type":"string","minLength":1,"maxLength":500},
+							"action":{"const":"assert_text"},"plan_step_id":{"type":"string","minLength":1,"maxLength":64},"target_binding_id":{"type":["string","null"],"minLength":1,"maxLength":64},"intent":{"type":"string","minLength":1,"maxLength":500},
 						"target":{"type":"string","minLength":1},"value":{"type":"string","minLength":1},
 						"page_state":{"type":["string","null"]},"target_strategy":{"$ref":"#/$defs/target_strategy"},
 						"preconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"postconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"idempotency":{"const":"idempotent"},"side_effect":{"const":"none"}
 					},
-					"required":["action","intent","target","value","preconditions","postconditions","idempotency","side_effect"]
+						"required":["action","intent","value","preconditions","postconditions","idempotency","side_effect"],
+						"anyOf":[{"required":["target"]},{"required":["plan_step_id"]}]
 				},
 				"assert_url_step":{
 					"type":"object","additionalProperties":false,
 					"properties":{
-						"action":{"const":"assert_url_contains"},"intent":{"type":"string","minLength":1,"maxLength":500},
+							"action":{"const":"assert_url_contains"},"plan_step_id":{"type":"string","minLength":1,"maxLength":64},"intent":{"type":"string","minLength":1,"maxLength":500},
 						"target":{"type":"string","minLength":1},"value":{"type":"string","minLength":1},
 						"preconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"postconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"idempotency":{"const":"idempotent"},"side_effect":{"const":"none"}
 					},
-					"required":["action","intent","target","value","preconditions","postconditions","idempotency","side_effect"]
+						"required":["action","intent","value","preconditions","postconditions","idempotency","side_effect"],
+						"anyOf":[{"required":["target"]},{"required":["plan_step_id"]}]
 				},
 				"capture_text_step":{
 					"type":"object","additionalProperties":false,
 					"properties":{
-						"action":{"const":"capture_text"},"intent":{"type":"string","minLength":1,"maxLength":500},
+							"action":{"const":"capture_text"},"plan_step_id":{"type":"string","minLength":1,"maxLength":64},"target_binding_id":{"type":"string","minLength":1,"maxLength":64},"intent":{"type":"string","minLength":1,"maxLength":500},
 						"target":{"type":"string","minLength":1},"context_key":{"type":"string","minLength":1},
 						"page_state":{"type":["string","null"]},"target_strategy":{"$ref":"#/$defs/target_strategy"},
 						"preconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"postconditions":{"type":"array","items":{"$ref":"#/$defs/condition"}},
 						"idempotency":{"const":"idempotent"},"side_effect":{"const":"none"}
 					},
-					"required":["action","intent","target","context_key","preconditions","postconditions","idempotency","side_effect"]
+						"required":["action","intent","context_key","preconditions","postconditions","idempotency","side_effect"],
+						"anyOf":[{"required":["target"]},{"required":["plan_step_id","target_binding_id"]}]
 				},
 				"target_strategy":{"type":["string","null"],"enum":["css","xpath","data-testid","element_id","tag",null]},
 				"selector_evidence":{

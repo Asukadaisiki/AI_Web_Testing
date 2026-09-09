@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 )
 
 func TestTaskPlanLifecycleBindsGroundingGenerationAndExecution(t *testing.T) {
@@ -95,11 +97,39 @@ func TestTaskPlanLifecycleBindsGroundingGenerationAndExecution(t *testing.T) {
 		flowArgs,
 		json.RawMessage(`{
 			"success":true,
-			"pages":[{"status":"success","actions":[{
-				"step_index":0,"action_index":0,
-				"action":"input","target":"Search","value":"Blue Top",
-				"phase":"after","status":"success"
-			}]}]
+			"pages":[{
+				"status":"success",
+				"observation_v2":{
+					"schema_version":"browser.observation.v2",
+					"observation_id":"obs-search",
+					"page_state":{
+						"state_id":"products",
+						"state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+					},
+					"elements":[{
+						"element_ref":"products:7",
+						"a11y":{"role":"textbox","name":"Search"},
+						"dom":{"tag":"input","attrs":{"id":"search"},"text":""},
+						"runtime":{"visible":true,"enabled":true,"editable":true},
+						"locators":[{
+							"locator":{"kind":"role","role":"textbox","name":"Search","exact":true},
+							"provenance":"a11y_exact","observed_count":1
+						}]
+					}]
+				},
+				"actions":[
+					{
+						"step_index":0,"action_index":0,
+						"action":"input","target":"Search","value":"Blue Top",
+						"phase":"before","status":"success"
+					},
+					{
+						"step_index":0,"action_index":0,
+						"action":"input","target":"Search","value":"Blue Top",
+						"phase":"after","status":"success"
+					}
+				]
+			}]
 		}`),
 		16,
 	); err != nil {
@@ -254,6 +284,59 @@ func TestTaskPlanRejectsForbiddenAndUnplannedProbeActions(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "not owned") {
 		t.Fatalf("error = %v, want unplanned action rejection", err)
+	}
+}
+
+func TestExploreFlowCanObserveExternalStepWithoutExecutingIt(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(NewMemoryRepository())
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-observe-external",
+		Definition: Definition{
+			Goal:             "Verify the delete control",
+			MaxSideEffect:    SideEffectExternal,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "delete", Intent: "Delete account", Action: "click",
+				Target: "Delete account", ExpectedOccurrences: 1,
+				Idempotency:          "non_idempotent",
+				SideEffect:           SideEffectExternal,
+				Preconditions:        []string{"account visible"},
+				CompletionConditions: []string{"account deleted"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observe := json.RawMessage(`{
+		"plan_step_ids":["delete"],
+		"steps":[{"actions":[{
+			"plan_step_id":"delete",
+			"action":"wait_for",
+			"target":"Delete account"
+		}]}]
+	}`)
+	if err := service.Authorize(
+		ctx,
+		plan.RunID,
+		"explore_flow",
+		observe,
+	); err != nil {
+		t.Fatalf("safe observation rejected: %v", err)
+	}
+
+	execute := json.RawMessage(`{
+		"plan_step_ids":["delete"],
+		"steps":[{"actions":[{
+			"plan_step_id":"delete",
+			"action":"click",
+			"target":"Delete account"
+		}]}]
+	}`)
+	err = service.Authorize(ctx, plan.RunID, "explore_flow", execute)
+	if err == nil || !strings.Contains(err.Error(), "cannot be probed") {
+		t.Fatalf("external click error = %v", err)
 	}
 }
 
@@ -584,5 +667,312 @@ func TestTaskPlanExpectedOccurrencesMustBePreservedByDSL(t *testing.T) {
 		oneStep,
 	); err == nil || !strings.Contains(err.Error(), "requires 2 occurrences") {
 		t.Fatalf("error = %v, want occurrence mismatch", err)
+	}
+}
+
+func TestExploreFlowPersistsStructuredTargetBinding(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-target-binding",
+		Definition: Definition{
+			Goal:             "Submit a form",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{
+				{
+					ID: "open", Intent: "Open form", Action: "goto",
+					Target: "Form", Value: "https://example.test/form",
+					ExpectedOccurrences: 1, Idempotency: "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{},
+					CompletionConditions: []string{"form visible"},
+				},
+				{
+					ID: "submit", Intent: "Submit form", Action: "click",
+					Target:              "Submit",
+					ExpectedOccurrences: 1, Idempotency: "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{"form visible"},
+					CompletionConditions: []string{"submitted"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	arguments := json.RawMessage(`{
+		"plan_step_ids":["open","submit"],
+		"steps":[{"actions":[{"action":"click","target":"Submit"}]}]
+	}`)
+	result := json.RawMessage(`{
+		"success":true,
+		"pages":[{
+			"status":"success",
+			"observation_v2":{
+				"schema_version":"browser.observation.v2",
+				"observation_id":"obs-1",
+				"page_state":{
+					"state_id":"form",
+					"state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				},
+				"elements":[{
+					"element_ref":"form:7",
+					"a11y":{"role":"button","name":"Submit"},
+					"dom":{"tag":"button","attrs":{"id":"submit"},"text":"Submit"},
+					"runtime":{"visible":true,"enabled":true,"editable":false},
+					"locators":[
+						{
+							"locator":{"kind":"role","role":"button","name":"Submit","exact":true},
+							"provenance":"a11y_exact",
+							"observed_count":1
+						},
+						{
+							"locator":{"kind":"css","value":"#submit","exact":true},
+							"provenance":"a11y_backend_dom_node",
+							"observed_count":1
+						}
+					]
+				}]
+			},
+			"actions":[
+				{
+					"step_index":0,"action_index":0,
+					"action":"click","target":"Submit",
+					"phase":"before","status":"success"
+				},
+				{
+					"step_index":0,"action_index":0,
+					"action":"click","target":"Submit",
+					"phase":"after","status":"success"
+				}
+			]
+		}]
+	}`)
+	if err := service.RecordToolResult(
+		ctx,
+		plan.RunID,
+		"explore_flow",
+		arguments,
+		result,
+		11,
+	); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.GetCurrent(ctx, plan.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := current.Steps[1].TargetBinding
+	if binding == nil {
+		t.Fatal("target binding was not persisted")
+	}
+	if binding.PlanID != current.ID ||
+		binding.PlanVersion != current.Version ||
+		binding.PlanStepID != "submit" ||
+		binding.SelectedCandidateID == "" ||
+		len(binding.Candidates) != 2 {
+		t.Fatalf("binding = %#v", binding)
+	}
+	if err := binding.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExploreFlowIgnoresNonExecutableSemanticContainers(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-container-filter",
+		Definition: Definition{
+			Goal:             "Open product details",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "details", Intent: "Open details", Action: "click",
+				Target: "Blue Top product details link", ExpectedOccurrences: 1,
+				Idempotency:          "idempotent",
+				SideEffect:           SideEffectBrowserState,
+				Preconditions:        []string{"result visible"},
+				CompletionConditions: []string{"details visible"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := json.RawMessage(`{
+		"plan_step_ids":["details"],
+		"steps":[{"actions":[{
+			"plan_step_id":"details",
+			"action":"click",
+			"target":"View Product"
+		}]}]
+	}`)
+	result := json.RawMessage(`{
+		"success":true,
+		"pages":[{
+			"status":"success",
+			"observation_v2":{
+				"schema_version":"browser.observation.v2",
+				"observation_id":"obs-details",
+				"page_state":{
+					"state_id":"results",
+					"state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				},
+				"elements":[
+					{
+						"element_ref":"results:list",
+						"a11y":{"role":"list","name":"View Product"},
+						"dom":{"tag":"ul","attrs":{},"text":"View Product"},
+						"runtime":{"visible":true,"enabled":true,"editable":false},
+						"locators":[{
+							"locator":{"kind":"role","role":"list","name":"View Product","exact":true},
+							"provenance":"a11y_exact",
+							"observed_count":0
+						}]
+					},
+					{
+						"element_ref":"results:item",
+						"a11y":{"role":"listitem","name":"View Product"},
+						"dom":{"tag":"li","attrs":{},"text":"View Product"},
+						"runtime":{"visible":true,"enabled":true,"editable":false},
+						"locators":[]
+					},
+					{
+						"element_ref":"results:link",
+						"a11y":{"role":"link","name":"View Product"},
+						"dom":{"tag":"a","attrs":{"href":"/details/1"},"text":"View Product"},
+						"runtime":{"visible":true,"enabled":true,"editable":false},
+						"locators":[{
+							"locator":{"kind":"css","value":"a[href=\"/details/1\"]","exact":true},
+							"provenance":"a11y_backend_dom_node",
+							"observed_count":1
+						}]
+					}
+				]
+			},
+			"actions":[
+				{"step_index":0,"action_index":0,"action":"click","target":"View Product","phase":"before","status":"success"},
+				{"step_index":0,"action_index":0,"action":"click","target":"View Product","phase":"after","status":"success"}
+			]
+		}]
+	}`)
+	if err := service.RecordToolResult(
+		ctx,
+		plan.RunID,
+		"explore_flow",
+		arguments,
+		result,
+		17,
+	); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.GetCurrent(ctx, plan.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := current.Steps[0].TargetBinding
+	if binding == nil ||
+		len(binding.Candidates) != 1 ||
+		binding.Candidates[0].ElementRef != "results:link" ||
+		binding.Candidates[0].Locator.Kind != "css" {
+		t.Fatalf("binding = %#v", binding)
+	}
+}
+
+func TestCompileResearchV2DraftInjectsPersistedTargetBinding(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-compile-v2",
+		Definition: Definition{
+			Goal:             "Submit a form",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "submit", Intent: "Submit form", Action: "click",
+				Target: "Submit", ExpectedOccurrences: 1,
+				Idempotency:          "idempotent",
+				SideEffect:           SideEffectBrowserState,
+				Preconditions:        []string{"form visible"},
+				CompletionConditions: []string{"saved"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Submit"
+	targetBinding, err := browsercontract.NewTargetBinding(
+		browsercontract.TargetBinding{
+			PlanID: plan.ID, PlanVersion: plan.Version,
+			PlanStepID: "submit", SemanticTarget: "Submit",
+			Action: "click", PageStateID: "form",
+			ObservationID: "obs-1", ObservationSHA256: strings.Repeat("a", 64),
+			ElementRefs: []string{"form:7"},
+			Candidates: []browsercontract.LocatorCandidate{{
+				CandidateID: "candidate-1", ElementRef: "form:7",
+				Locator: browsercontract.LocatorSpec{
+					Kind: "role", Role: "button", Name: &name, Exact: true,
+				},
+				Provenance: "a11y_exact", ObservedCount: 1,
+				Visible: true, Enabled: true, Score: 0.95,
+			}},
+			SelectedCandidateID: "candidate-1",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	plan.Steps[0].TargetBinding = &targetBinding
+	plan.Status = StatusReadyForGeneration
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		json.RawMessage(`{
+			"profile":"research-v2",
+			"name":"Submit form",
+			"steps":[{
+				"plan_step_id":"submit",
+				"action":"click",
+				"intent":"Submit form",
+				"target_binding_id":"`+targetBinding.BindingID+`",
+				"preconditions":[{"type":"text_visible","value":"Submit"}],
+				"postconditions":[{"type":"text_visible","value":"Saved"}],
+				"idempotency":"idempotent",
+				"side_effect":"browser_state"
+			}]
+		}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(compiled, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["profile"] != "research-v2" {
+		t.Fatalf("compiled profile = %#v", payload["profile"])
+	}
+	if !strings.Contains(
+		string(compiled),
+		targetBinding.BindingSHA256,
+	) {
+		t.Fatalf("compiled DSL lacks target binding: %s", compiled)
 	}
 }

@@ -15,9 +15,11 @@ type Profile string
 const (
 	ProfileLegacyV1   Profile = "legacy-v1"
 	ProfileResearchV1 Profile = "research-v1"
+	ProfileResearchV2 Profile = "research-v2"
 
 	CanonicalVersionV1 = "dsl.canonical.v1"
 	CanonicalVersionV2 = "dsl.canonical.v2"
+	CanonicalVersionV3 = "dsl.canonical.v3"
 )
 
 type ValidationPhase string
@@ -83,7 +85,9 @@ func ValidateCaseForVersion(raw json.RawMessage, version string) (ValidatedCase,
 }
 
 func IsCanonicalVersion(version string) bool {
-	return version == CanonicalVersionV1 || version == CanonicalVersionV2
+	return version == CanonicalVersionV1 ||
+		version == CanonicalVersionV2 ||
+		version == CanonicalVersionV3
 }
 
 func validateCase(raw json.RawMessage, phase ValidationPhase) (ValidatedCase, error) {
@@ -101,6 +105,9 @@ func validateCase(raw json.RawMessage, phase ValidationPhase) (ValidatedCase, er
 			CanonicalVersion: CanonicalVersionV1, Phase: phase,
 		}, nil
 	}
+	if profile == ProfileResearchV2 {
+		return validateResearchV2Case(normalizedRaw, phase)
+	}
 	return validateResearchCase(normalizedRaw, phase)
 }
 
@@ -116,7 +123,9 @@ func caseProfile(raw json.RawMessage) (Profile, json.RawMessage, error) {
 	}
 	profile, ok := value.(string)
 	if !ok {
-		return "", nil, errors.New("case.profile must be legacy-v1 or research-v1")
+		return "", nil, errors.New(
+			"case.profile must be legacy-v1, research-v1, or research-v2",
+		)
 	}
 	switch Profile(strings.TrimSpace(profile)) {
 	case ProfileLegacyV1:
@@ -127,8 +136,14 @@ func caseProfile(raw json.RawMessage) (Profile, json.RawMessage, error) {
 		candidate["profile"] = string(ProfileResearchV1)
 		normalized, err := json.Marshal(candidate)
 		return ProfileResearchV1, normalized, err
+	case ProfileResearchV2:
+		candidate["profile"] = string(ProfileResearchV2)
+		normalized, err := json.Marshal(candidate)
+		return ProfileResearchV2, normalized, err
 	default:
-		return "", nil, errors.New("case.profile must be legacy-v1 or research-v1")
+		return "", nil, errors.New(
+			"case.profile must be legacy-v1, research-v1, or research-v2",
+		)
 	}
 }
 

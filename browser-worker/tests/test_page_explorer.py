@@ -5,11 +5,12 @@ from unittest.mock import MagicMock, patch
 
 from browser_worker.exploration.page_explorer import (
     BrowserSessionManager,
-    _collect_flow_a11y,
     _collect_dom_interactive_supplement,
+    _collect_flow_a11y,
     _deduplicate_explore_results,
     _filter_a11y_nodes,
     _is_business_candidate,
+    _resolve_from_collected_nodes,
     _same_document_url,
     _wait_for_flow_target,
 )
@@ -43,6 +44,9 @@ class _FlowLocator:
     def evaluate(self, _script: str):
         return {"tag": "a", "href": "/expected", "download": False}
 
+    def input_value(self) -> str:
+        return "1"
+
 
 class _FlowPage:
     def __init__(self) -> None:
@@ -61,6 +65,10 @@ class _FlowPage:
 
     def get_by_text(self, text: str, *, exact: bool = False) -> _FlowLocator:
         self.calls.append(("get_by_text", text, exact))
+        return _FlowLocator(self.calls)
+
+    def get_by_role(self, role: str, **kwargs: object) -> _FlowLocator:
+        self.calls.append(("get_by_role", role, kwargs))
         return _FlowLocator(self.calls)
 
     def locator(self, selector: str) -> _FlowLocator:
@@ -415,6 +423,61 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                     page.calls,
                 )
 
+    def test_wait_for_structured_role_can_assert_control_value(self) -> None:
+        page = _FlowPage()
+
+        _wait_for_flow_target(
+            page,
+            "role=spinbutton",
+            900,
+            locator_spec={"kind": "role", "role": "spinbutton"},
+            condition={"type": "value_equals", "expected": "1"},
+        )
+
+        self.assertIn(("get_by_role", "spinbutton", {}), page.calls)
+        self.assertIn(
+            ("wait_for", {"state": "visible", "timeout": 900}),
+            page.calls,
+        )
+
+    def test_wait_for_structured_value_reports_mismatch(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "expected='2', actual='1'",
+        ):
+            _wait_for_flow_target(
+                _FlowPage(),
+                "role=spinbutton",
+                900,
+                locator_spec={"kind": "role", "role": "spinbutton"},
+                condition={"type": "value_equals", "expected": "2"},
+            )
+
+    def test_click_candidate_prefers_interactive_exact_match(self) -> None:
+        page = _FlowPage()
+        locator = _resolve_from_collected_nodes(
+            page,
+            "Products",
+            [
+                {
+                    "role": "banner",
+                    "name": "Home Products Cart",
+                    "dom": {"tag": "header", "attrs": {"id": "header"}},
+                    "verified_selectors": [{"selector": "#header"}],
+                },
+                {
+                    "role": "link",
+                    "name": "Products",
+                    "dom": {"tag": "a", "attrs": {"href": "/products"}},
+                    "verified_selectors": [{"selector": 'a[href="/products"]'}],
+                },
+            ],
+            kind="click",
+        )
+
+        self.assertIsNotNone(locator)
+        self.assertEqual(page.calls[0], ("locator", 'a[href="/products"]'))
+
     def test_dom_supplement_adds_only_unique_verified_controls(self) -> None:
         base = {
             "connected": True,
@@ -676,7 +739,17 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
             patch("browser_worker.exploration.page_explorer.collect_a11y_nodes", side_effect=collect),
         ):
             result = _collect_flow_a11y(
-                [{"actions": [{"action": "wait_for", "target": "Ready"}]}],
+                [
+                    {
+                        "actions": [
+                            {
+                                "action": "wait_for",
+                                "plan_step_id": "ready",
+                                "target": "Ready",
+                            }
+                        ]
+                    }
+                ],
                 session_id=7,
             )
 
@@ -699,6 +772,8 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
             after_action["target_evidence"][0]["node_id"],
             "after-node",
         )
+        self.assertEqual(before_action["plan_step_id"], "ready")
+        self.assertEqual(after_action["plan_step_id"], "ready")
 
     def test_advertising_context_is_not_a_business_candidate(self) -> None:
         self.assertFalse(

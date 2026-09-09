@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 )
 
 type PostgresRepository struct {
@@ -214,6 +216,14 @@ func insertSteps(
 		preconditions, _ := json.Marshal(step.Preconditions)
 		completion, _ := json.Marshal(step.CompletionConditions)
 		evidence, _ := json.Marshal(step.Evidence)
+		var targetBinding any
+		if step.TargetBinding != nil {
+			encoded, err := json.Marshal(step.TargetBinding)
+			if err != nil {
+				return fmt.Errorf("encode task plan step %q target binding: %w", step.ID, err)
+			}
+			targetBinding = string(encoded)
+		}
 		if _, err := executor.ExecContext(
 			ctx,
 			`INSERT INTO task_plan_steps (
@@ -221,11 +231,11 @@ func insertSteps(
 				trigger, context_key, timeout_ms,
 				expected_occurrences, idempotency, side_effect,
 				preconditions_json, completion_conditions_json, status,
-				grounding_attempts, evidence_refs_json
+				grounding_attempts, evidence_refs_json, target_binding_json
 			) VALUES (
 				$1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''),
 				NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, 0),
-				$11, $12, $13, $14, $15, $16, $17, $18
+				$11, $12, $13, $14, $15, $16, $17, $18, $19
 			)`,
 			plan.ID,
 			step.ID,
@@ -245,6 +255,7 @@ func insertSteps(
 			step.Status,
 			step.GroundingAttempts,
 			string(evidence),
+			targetBinding,
 		); err != nil {
 			return fmt.Errorf("insert task plan step %q: %w", step.ID, err)
 		}
@@ -265,7 +276,8 @@ func selectSteps(
 		        COALESCE(timeout_ms, 0),
 		        expected_occurrences, idempotency, side_effect,
 		        preconditions_json, completion_conditions_json,
-		        status, grounding_attempts, evidence_refs_json
+		        status, grounding_attempts, evidence_refs_json,
+		        target_binding_json
 		   FROM task_plan_steps
 		  WHERE plan_id = $1
 		  ORDER BY position`,
@@ -279,6 +291,7 @@ func selectSteps(
 	for rows.Next() {
 		var step Step
 		var preconditions, completion, evidence []byte
+		var targetBinding []byte
 		if err := rows.Scan(
 			&step.ID,
 			&step.Position,
@@ -297,6 +310,7 @@ func selectSteps(
 			&step.Status,
 			&step.GroundingAttempts,
 			&evidence,
+			&targetBinding,
 		); err != nil {
 			return nil, fmt.Errorf("scan task plan step: %w", err)
 		}
@@ -308,6 +322,19 @@ func selectSteps(
 		}
 		if err := json.Unmarshal(evidence, &step.Evidence); err != nil {
 			return nil, fmt.Errorf("decode task plan evidence: %w", err)
+		}
+		if len(targetBinding) > 0 {
+			var binding browsercontract.TargetBinding
+			if err := json.Unmarshal(targetBinding, &binding); err != nil {
+				return nil, fmt.Errorf("decode task plan target binding: %w", err)
+			}
+			if err := binding.Validate(); err != nil {
+				return nil, fmt.Errorf(
+					"validate task plan target binding: %w",
+					err,
+				)
+			}
+			step.TargetBinding = &binding
 		}
 		steps = append(steps, step)
 	}

@@ -7,9 +7,60 @@ from browser_worker.capabilities.browser_capabilities import (
     _BrowserCapabilityRuntime,
     execute_browser_capability,
 )
+from browser_worker.contracts.browser_capabilities import ExploreFlowArguments
 
 
 class BrowserCapabilityContractTest(unittest.TestCase):
+    def test_wait_for_accepts_structured_semantic_value_condition(self) -> None:
+        parsed = ExploreFlowArguments.model_validate(
+            {
+                "steps": [
+                    {
+                        "actions": [
+                            {
+                                "action": "wait_for",
+                                "plan_step_id": "quantity",
+                                "locator": {
+                                    "kind": "role",
+                                    "role": "spinbutton",
+                                },
+                                "condition": {
+                                    "type": "value_equals",
+                                    "expected": "1",
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+
+        action = parsed.steps[0].actions[0]
+        self.assertIsNotNone(action.locator)
+        self.assertIsNotNone(action.condition)
+        assert action.locator is not None
+        assert action.condition is not None
+        self.assertEqual(action.plan_step_id, "quantity")
+        self.assertEqual(action.locator.kind, "role")
+        self.assertEqual(action.condition.type, "value_equals")
+
+    def test_structured_exploration_locator_rejects_css_and_click(self) -> None:
+        invalid_actions = [
+            {
+                "action": "wait_for",
+                "locator": {"kind": "css", "value": "#quantity"},
+            },
+            {
+                "action": "click",
+                "locator": {"kind": "role", "role": "button", "name": "Save"},
+            },
+        ]
+        for action in invalid_actions:
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                ExploreFlowArguments.model_validate(
+                    {"steps": [{"actions": [action]}]}
+                )
+
     def test_same_project_sessions_apply_independent_context_policies(self) -> None:
         flow_arguments = {
             "base_url": "http://local.test",

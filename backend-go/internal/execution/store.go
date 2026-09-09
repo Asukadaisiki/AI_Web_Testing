@@ -291,9 +291,10 @@ func validatePersistedCaseBindings(
 			return fmt.Errorf("%w: case %d persisted DSL is not executable", ErrConflict, caseID)
 		}
 		binding, hasBinding := bindings[caseID]
-		if validated.Profile == dsl.ProfileResearchV1 && !hasBinding {
+		if (validated.Profile == dsl.ProfileResearchV1 ||
+			validated.Profile == dsl.ProfileResearchV2) && !hasBinding {
 			return fmt.Errorf(
-				"%w: research-v1 case %d requires a canonical DSL binding",
+				"%w: research case %d requires a canonical DSL binding",
 				ErrConflict,
 				caseID,
 			)
@@ -880,6 +881,8 @@ func canonicalProfile(version string) any {
 		return string(dsl.ProfileLegacyV1)
 	case dsl.CanonicalVersionV2:
 		return string(dsl.ProfileResearchV1)
+	case dsl.CanonicalVersionV3:
+		return string(dsl.ProfileResearchV2)
 	default:
 		return nil
 	}

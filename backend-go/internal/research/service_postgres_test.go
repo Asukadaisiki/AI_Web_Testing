@@ -179,6 +179,8 @@ func servicePostgresExperiment(
 ) research.Experiment {
 	config, _ := json.Marshal(research.ExperimentConfig{
 		SchemaVersion:         research.ExperimentConfigSchemaVersion,
+		AcceptanceSpecID:      "fixture.v1",
+		AcceptanceSpecSHA256:  strings.Repeat("b", 64),
 		RequestTimeoutSeconds: 30,
 		RunTimeoutSeconds:     90,
 		CancelGraceSeconds:    5,

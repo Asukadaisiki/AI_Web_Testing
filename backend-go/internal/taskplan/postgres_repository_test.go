@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dbschema"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -87,6 +89,40 @@ func TestPostgresRepositoryPersistsVersionedTaskPlan(t *testing.T) {
 	first, err := service.CreateVersion(ctx, request)
 	if err != nil {
 		t.Fatal(err)
+	}
+	name := "Page"
+	binding, err := browsercontract.NewTargetBinding(
+		browsercontract.TargetBinding{
+			PlanID: first.ID, PlanVersion: first.Version,
+			PlanStepID: "open", SemanticTarget: "Page", Action: "goto",
+			PageStateID: "state-1", ObservationID: "obs-1",
+			ObservationSHA256: strings.Repeat("a", 64),
+			ElementRefs:       []string{"state-1:7"},
+			Candidates: []browsercontract.LocatorCandidate{{
+				CandidateID: "candidate-1", ElementRef: "state-1:7",
+				Locator: browsercontract.LocatorSpec{
+					Kind: "role", Role: "document", Name: &name, Exact: true,
+				},
+				Provenance: "a11y_exact", ObservedCount: 1,
+				Visible: true, Enabled: true, Score: 0.95,
+			}},
+			SelectedCandidateID: "candidate-1",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Steps[0].TargetBinding = &binding
+	if err := service.repository.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := service.GetCurrent(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Steps[0].TargetBinding == nil ||
+		reloaded.Steps[0].TargetBinding.BindingSHA256 != binding.BindingSHA256 {
+		t.Fatalf("reloaded target binding = %#v", reloaded.Steps[0].TargetBinding)
 	}
 	request.Definition.Steps[0].Value = "https://example.test/next"
 	second, err := service.CreateVersion(ctx, request)

@@ -48,6 +48,174 @@
 
 ## 问题记录
 
+## BUG-177 | Overview UTC 窗口与本地 timestamp 日界线不一致
+
+- 日期：2026-09-10
+- 状态：open
+- 严重度：medium
+- 来源：探索预算修复后的 PostgreSQL 全量门禁
+- 描述：数据库 session timezone 为 `Asia/Shanghai`，`test_case_runs.started_at` 是 `timestamp without time zone` 并由 `now()` 写入本地墙上时间；Overview 却按 `time.Now().UTC()` 构造 UTC 日界线。本地午夜后的前 8 小时内，刚写入的记录可能落在 UTC 查询窗口之外。
+- 复现步骤：
+  1. 在本地日期已经进入 2026-09-10、UTC 仍为 2026-09-09 时运行 `TestPostgresReportCanonicalMetadataUsesExecutionJob`。
+  2. 测试写入 `started_at=now()`，ListExecutions 可读到记录。
+  3. Overview 的 7 天 UTC 窗口返回 `total_count=0`。
+- 影响：Overview 在非 UTC 数据库 session 下可能短暂遗漏当日执行；同时导致 PostgreSQL 全仓测试在本地午夜附近失败。
+- 根因：无时区数据库列、本地数据库 session 和 UTC 应用窗口混用了不同的日历语义。
+- 处理：待单独设计统一时间语义；候选方案是数据库与应用统一 UTC，或为 Overview 显式传入产品定义的业务时区。不得只修改测试掩盖运行时问题。
+- 验证：`SHOW timezone` 返回 `Asia/Shanghai`；同一时刻数据库日期为 2026-09-10、UTC 日期为 2026-09-09。与数据库无关的 Go 全量门禁和本轮相关 PostgreSQL 模块均通过。
+- 关联记录：`docs/execution-log.md#2026-09-10--探索预算重复调用与-grounding-修复`
+
+## BUG-176 | explore_flow wait_for 将控件值误当作精确文本
+
+- 日期：2026-09-10
+- 状态：fixed
+- 严重度：high
+- 来源：v4-pro research-v2 live E2E
+- 描述：详情页数量控件已在 Observation 中以 `role=spinbutton,value=1` 返回，但模型只能使用字符串 `wait_for Quantity`；Worker 将其解释为 `get_by_text("Quantity", exact=True)`，既无法匹配页面文本 `Quantity:`，也无法验证控件值为 1。
+- 复现步骤：
+  1. 打开 Automation Exercise 商品详情页。
+  2. 执行 `wait_for`，target 为 `Quantity`。
+  3. 观察 action 失败，但 Observation 中存在 `#quantity` spinbutton 且 value 为 1。
+- 影响：控件存在性与控件值被混为文本条件，浪费探索预算并阻断后续 grounding。
+- 根因：探索工具的 wait_for 合同只有自由字符串 target，没有结构化语义 locator 和 value condition。
+- 处理：为 wait_for 增加受限的 role/label/placeholder/text LocatorSpec，以及 `visible`、`value_equals` 条件；value_equals 要求唯一 locator 和 expected value。用于 grounding 的 action 额外携带 `plan_step_id`。
+- 验证：Python 合同、成功值和错误值测试通过；真实浏览器 smoke 使用 `role=spinbutton + value_equals=1` 成功，target evidence 为 1 个节点。
+- 关联记录：`docs/execution-log.md#2026-09-10--探索预算重复调用与-grounding-修复`
+
+## BUG-175 | Agentic E2E 失败结果保留取消前的 Run 状态
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：medium
+- 来源：v4-pro research-v2 live E2E
+- 描述：Driver 超时取消 Run 后，结果文件中的 `run.status` 仍为取消前读取到的 `running`，而同一结果的 `cancellation.status` 和数据库终态均为 `cancelled`。
+- 复现步骤：
+  1. 运行 Agentic E2E 并等待绝对截止时间触发取消。
+  2. 查看结果 JSON 的 `run.status` 与 `cancellation.status`。
+- 影响：消费方若只读取 `run.status` 会误判 Run 仍在执行，结果文件内部状态不一致。
+- 根因：失败路径在 `_cancel_failed_run` 前刷新一次 context，取消完成后没有用终态 Run 覆盖 `context["run"]`。
+- 处理：取消完成后重新读取 Run 和 event 状态并覆盖失败诊断，同时保留取消前 clarification checkpoint，保证结果终态一致且不丢失诊断上下文。
+- 验证：Driver 的 timeout 和 clarification cancellation 测试均要求 `run.status=cancelled`，Python 全量 183 tests passed / 2 skipped。
+- 关联记录：`docs/execution-log.md#2026-09-09--v4-pro-research-v2-live-agent-e2e`
+
+## BUG-174 | explore_flow 将 Products 文本误解析为 header 容器
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：high
+- 来源：v4-pro research-v2 live E2E
+- 描述：探索动作 `click Products` 在 41 个 substring candidates 中优先采用父级 `banner` 的唯一 CSS `#header`，点击后 URL 未变化，但动作仍被记录为 success。
+- 复现步骤：
+  1. 在 Automation Exercise 首页执行 `click`，target 为 `Products`。
+  2. `_resolve_from_collected_nodes` 先命中名称包含 Products 的 header，并选择 `#header`。
+  3. 观察 before/after URL 均为首页，但 action status 为 success。
+- 影响：探索动作事实可能与实际操作不一致，后续依赖显式 URL 跳转掩盖失败，并可能错误推进 PlanStep。
+- 根因：legacy exploration resolver 按节点顺序优先选择任意含 target 文本且有唯一 selector 的容器，没有先按 exact name、交互 role 和动作后置条件排序。
+- 处理：explore_flow 先按动作类型过滤可交互 role/tag，再按 exact name、verified selector 和名称长度排序；Go TargetBinding 同时忽略不可执行或 observed_count 非 1 的语义容器。已知 anchor 点击继续验证声明的目标 URL。
+- 验证：候选单测确认 link 优先于 banner；真实浏览器 smoke 的 `click Products` 到达 `https://automationexercise.com/products`，action status=success、evidence_count=6。
+- 关联记录：`docs/execution-log.md#2026-09-09--v4-pro-research-v2-live-agent-e2e`
+
+## BUG-173 | TaskPlan 改版后探索预算无法覆盖重新 grounding
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：high
+- 来源：v4-pro research-v2 live E2E
+- 描述：Agent 在 Plan v1 部分 grounding 后创建 Plan v2；只有语义完全相同的前两步继承证据，其余步骤回到 pending，但 Harness 仍按整个 transcript 累计旧版本的 4 次 `explore_flow`，使新版第一次有效补探直接被 `explore_flow_budget_exhausted` 拒绝。
+- 复现步骤：
+  1. Plan v1 执行 4 次 explore_flow，推进到 5/13 grounded。
+  2. 因 Quantity 文本观察失败创建精简 Plan v2，只有 2/8 grounded。
+  3. 为 v2 的 s3-s7 发起 explore_flow，被全局 4 次预算立即拒绝。
+- 影响：允许计划改版但不给新版剩余步骤任何补证预算，TaskPlan 无法进入 ready_for_generation，DSL generation、审批和正式执行均无法发生。
+- 根因：ExplorationGate 仅从完整 transcript 累计工具次数，不区分 plan ID/version、已继承 evidence、失败探测和当前 pending step 数量。
+- 处理：探索预算改为 TaskPlan ID/version 级 `explore_page=5`、`explore_flow=4`，同时保留 Run 级 `10/8` 硬上限；模型在 set_task_plan 和每次探索摘要中看到 used/limit/remaining。相同 page/flow 签名在同一计划版本内只能完成一次，description、timeout 和观察版本变化不能绕过。
+- 验证：覆盖新计划预算重置、Run 硬上限、page/flow 重复签名、动态预算摘要和结构化 gate error；相关 Go 与 PostgreSQL 模块测试通过。
+- 关联记录：`docs/execution-log.md#2026-09-09--v4-pro-research-v2-live-agent-e2e`
+
+## BUG-172 | Research PostgreSQL 生命周期测试夹具缺少 acceptance binding
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：low
+- 来源：research-v2 最终 PostgreSQL 全量门禁
+- 描述：显式设置 `TEST_DATABASE_URL` 后，`TestResearchServiceLifecycleOwnershipScheduleAndDeadline` 在创建实验时返回 `invalid research resource: experiment acceptance binding`。
+- 复现步骤：
+  1. 使用真实 PostgreSQL 运行 `go test -count=1 ./...`。
+  2. `internal/research` 生命周期测试构造当前版本 `ExperimentConfig`，但未填写必需的 acceptance spec ID 和 SHA。
+- 影响：不影响运行时代码，但会使真实 PostgreSQL 全量门禁失败，并掩盖后续集成测试结果。
+- 根因：测试夹具未随 `ExperimentConfig` 的 acceptance binding 合同升级。
+- 处理：为测试夹具补齐稳定的 `AcceptanceSpecID` 和 64 位小写十六进制 `AcceptanceSpecSHA256`。
+- 验证：聚焦测试通过；显式设置真实 `TEST_DATABASE_URL` 后 `go test -count=1 ./...` 全量通过。
+- 关联记录：`docs/execution-log.md#2026-09-09--browser-observationtargetbinding-与-research-v2-实施`
+
+## BUG-171 | Flow observation 在 artifact 写入后修改状态链导致 hash 不一致
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：medium
+- 来源：Observation v2 实现期代码复核
+- 描述：flow snapshot 在浏览器线程内完成内容寻址 artifact 写入后，capability 层又为返回对象补写 `previous_state_sha256`，导致返回 observation 与 artifact 中的 observation 内容不完全相同。
+- 复现步骤：
+  1. 在 action snapshot 中构建并写入 Observation v2 artifact。
+  2. `_explore_flow` 对已有 observation 补写 previous state hash。
+  3. 比较返回对象和 artifact 中的 observation，字段不同。
+- 影响：虽然 artifact 自身 SHA 仍正确，但返回 observation 不能再由 artifact 内容完整重建，破坏证据引用的一致性。
+- 根因：状态链字段在内容寻址持久化之后追加。
+- 处理：禁止对已有 artifact 的 observation 做事后修改；只有尚未持久化的 fallback observation 才在写入前设置 previous state hash。
+- 验证：Observation artifact 单元测试、Python 全量测试和 JSON hash 检查通过。
+- 关联记录：`docs/execution-log.md#2026-09-09--browser-observationtargetbinding-与-research-v2-落地`
+
+## BUG-170 | research-v2 空 candidate 属性导致 goto 被错误送入 locator 执行路径
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：high
+- 来源：research-v2 Selenium 正式 Runner smoke
+- 描述：ResearchV2Step 为兼容 Runner 暴露了 `candidates` 属性，旧分派逻辑仅使用 `hasattr` 判断，导致没有 locator 的 `goto` 也进入 `_execute_step_with_candidates` 并报 `Unsupported action: goto`。
+- 复现步骤：
+  1. 构造包含 `goto -> input -> click` 的 research-v2 Executable DSL。
+  2. 调用 Browser Worker `execute_browser_case`。
+  3. 第一个 goto 在 locator 分支失败。
+- 影响：任何 research-v2 正式执行都会在首个无 target 动作停止。
+- 根因：旧 Runner 用字段存在性代替非空 candidate 和 DSL profile 语义判断。
+- 处理：新增统一 `_uses_candidate_execution`；research-v2 只有存在编译候选时进入 candidate 路径，无 target 动作走确定性非 target executor；旧 research-v1 行为保持兼容。
+- 验证：Selenium Web Form research-v2 Chromium smoke 的 goto、input、click 3/3 通过，最终到达 `submitted-form.html`。
+- 关联记录：`docs/execution-log.md#2026-09-09--browser-observationtargetbinding-与-research-v2-落地`
+
+## BUG-169 | research-v2 继承 element_visible 的 selector 字符串歧义
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：high
+- 来源：research-v2 Selenium 正式 Runner smoke
+- 描述：v2 DSL 的 `element_visible` 条件仍沿用旧合同，将 `value` 直接传给 `page.locator(value)`；当值为语义文本 `Text input` 时被当作 CSS selector，导致动作执行前置条件失败。
+- 复现步骤：
+  1. 使用结构化 role candidate 绑定 Text input。
+  2. 将前置条件写为 `{"type":"element_visible","value":"Text input"}`。
+  3. Runner 将 `Text input` 当 CSS selector，正式执行在 input 前失败。
+- 影响：即使动作 locator 已完成结构化绑定，旧条件语义仍可绕回自由字符串 selector，破坏 DSL 统一性。
+- 根因：ConditionSpec 没有 TargetBinding 引用，`element_visible/element_gone` 的 value 同时承担 selector 和业务语义。
+- 处理：research-v2 暂时拒绝未绑定的 `element_visible/element_gone`；使用 URL/text/value 条件或独立的已绑定 `wait_for` 步骤。后续若恢复元素条件，必须增加 `target_binding_id`，不能继续复用自由字符串 value。
+- 验证：Go/Python v2 合同测试通过；改用无 selector 歧义的条件后 Selenium research-v2 Chromium smoke 3/3 通过。
+- 关联记录：`docs/execution-log.md#2026-09-09--browser-observationtargetbinding-与-research-v2-落地`
+
+## BUG-168 | 自定义 A11y scope target 在 preflight 与 Runner 中语法不一致
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：high
+- 来源：DSL、A11y 和 DOM 定位统一性复核
+- 描述：Runtime semantic locator 接受 `inside "name"` 和兼容形式 `inside product "name"`，但静态 locator preflight 只识别 `inside product "name"`。同一个语义 target 可能在 preflight 和正式 Playwright 执行阶段被不同方式解析。
+- 复现步骤：
+  1. 构造 target `link="View Product" inside "Blue Top"`。
+  2. Runtime `semantic._A11Y_SCOPE_RE` 能提取 scope `Blue Top`。
+  3. Preflight `locator_preflight._SCOPE_RE` 不匹配该通用形式，转为未限定的全页面 name matching。
+- 影响：预检候选数量、置信度和正式执行 locator 可能不一致；重复商品卡片中的按钮容易在预检阶段被误判为歧义或绑定到错误节点。
+- 根因：自定义字符串 locator 语法在 preflight 和 runtime 各自用正则独立实现，没有共享结构化 TargetBinding 合同。
+- 处理：research-v2 使用结构化 LocatorSpec，不再解析自定义 locator 字符串；research-v1 兼容期内 preflight 与 runtime 共用 `parse_a11y_target` 和 `playwright_role`，删除独立 scope 正则与错误的 `searchbox -> search` 映射。
+- 验证：新增通用 `button="Edit" inside "Alice"` preflight 回归；Python 全量 177 tests passed / 2 skipped。
+- 关联记录：`docs/execution-log.md#2026-09-09--a11y-dom-增强与定位语法复核`
+
 ## BUG-167 | 官方 DeepSeek 连续返回 HTTP 200 但响应流读取失败
 
 - 日期：2026-09-09

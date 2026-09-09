@@ -423,5 +423,11 @@ def is_research_case(case: object) -> bool:
     return isinstance(case, ResearchDSLCase)
 
 
-def case_dsl_profile(case: object) -> Literal["legacy-v1", "research-v1"]:
+def case_dsl_profile(case: object) -> Literal[
+    "legacy-v1",
+    "research-v1",
+    "research-v2",
+]:
+    if getattr(case, "profile", None) == "research-v2":
+        return "research-v2"
     return "research-v1" if is_research_case(case) else "legacy-v1"

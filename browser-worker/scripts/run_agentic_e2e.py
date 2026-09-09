@@ -22,6 +22,7 @@ sys.path.insert(0, str(WORKER_ROOT / "src"))
 from browser_worker.contracts.dsl import (
     DSL_CANONICAL_VERSION_V1,
     DSL_CANONICAL_VERSION_V2,
+    DSL_CANONICAL_VERSION_V3,
     validate_dsl_case,
 )
 from browser_worker.reporting.acceptance import (
@@ -43,6 +44,7 @@ CANCEL_POLL_SECONDS = 0.05
 PROFILE_CANONICAL_VERSIONS = {
     "legacy-v1": DSL_CANONICAL_VERSION_V1,
     "research-v1": DSL_CANONICAL_VERSION_V2,
+    "research-v2": DSL_CANONICAL_VERSION_V3,
 }
 
 _FORBIDDEN_GOAL_PATTERNS = (
@@ -621,6 +623,9 @@ def _cancel_failed_run(
             time.sleep(min(CANCEL_POLL_SECONDS, max(0, deadline - time.monotonic())))
     except Exception as cancel_error:
         cancellation["error"] = str(cancel_error)
+    refreshed = _failure_diagnostic(context)
+    for key in ("run", "events"):
+        diagnostic[key] = refreshed[key]
     diagnostic["cleanup_success"] = (
         batch_cleanup["terminal_verified"]
         and cancellation["terminal_verified"]
@@ -687,8 +692,12 @@ def _validate_generation_binding(
             f"generation {generation_id} profile is {profile}, "
             f"expected {expected_profile}"
         )
-    if profile == "research-v1":
-        if validated.model_dump(mode="json") != dsl_case:
+    if profile in {"research-v1", "research-v2"}:
+        materialized = validated.model_dump(
+            mode="json",
+            exclude_none=(profile == "research-v2"),
+        )
+        if materialized != dsl_case:
             raise AgenticE2EError(
                 f"generation {generation_id} research DSL is not canonical"
             )
@@ -703,7 +712,7 @@ def _validate_generation_binding(
 
     dsl_sha256 = _go_json_sha256(dsl_case)
     declared_sha = generated.get("dsl_sha256")
-    if profile == "research-v1" and not declared_sha:
+    if profile in {"research-v1", "research-v2"} and not declared_sha:
         raise AgenticE2EError(
             f"generation {generation_id} has no declared DSL SHA"
         )
@@ -723,7 +732,7 @@ def _assert_canonical_metadata(
     approval: dict[str, Any],
     label: str,
 ) -> None:
-    if approval["dsl_profile"] != "research-v1":
+    if approval["dsl_profile"] not in {"research-v1", "research-v2"}:
         return
     expected = {
         "dsl_profile": approval["dsl_profile"],
@@ -1349,8 +1358,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--dsl-profile",
-        choices=("legacy-v1", "research-v1"),
-        default="research-v1",
+        choices=("legacy-v1", "research-v1", "research-v2"),
+        default="research-v2",
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

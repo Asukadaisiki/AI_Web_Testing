@@ -163,7 +163,9 @@ class InterventionRequest(DSLModel):
 class StepExecutionEvidence(DSLModel):
     step_index: int = Field(ge=0)
     action: str
-    dsl_profile: Literal["legacy-v1", "research-v1"] | None = None
+    dsl_profile: Literal["legacy-v1", "research-v1", "research-v2"] | None = None
+    plan_step_id: str | None = None
+    target_binding_id: str | None = None
     intent: str | None = None
     idempotency: Literal["idempotent", "non_idempotent"] | None = None
     declared_side_effect: Literal[
@@ -218,7 +220,7 @@ class StepExecutionEvidence(DSLModel):
 
 class ExecutionReport(DSLModel):
     status: ExecutionStatus
-    dsl_profile: Literal["legacy-v1", "research-v1"] | None = None
+    dsl_profile: Literal["legacy-v1", "research-v1", "research-v2"] | None = None
     steps: list[StepExecutionEvidence] = Field(default_factory=list)
 
 

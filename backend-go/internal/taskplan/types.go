@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 )
 
-const SchemaVersion = "agent.task_plan.v1"
+const SchemaVersion = "agent.task_plan.v2"
 
 var (
 	ErrNotFound     = errors.New("task plan not found")
@@ -59,23 +61,24 @@ type EvidenceRef struct {
 }
 
 type Step struct {
-	ID                   string        `json:"id"`
-	Position             int           `json:"position"`
-	Intent               string        `json:"intent"`
-	Action               string        `json:"action"`
-	Target               string        `json:"target,omitempty"`
-	Value                string        `json:"value,omitempty"`
-	Trigger              string        `json:"trigger,omitempty"`
-	ContextKey           string        `json:"context_key,omitempty"`
-	TimeoutMS            int           `json:"timeout_ms,omitempty"`
-	ExpectedOccurrences  int           `json:"expected_occurrences"`
-	Idempotency          string        `json:"idempotency"`
-	SideEffect           SideEffect    `json:"side_effect"`
-	Preconditions        []string      `json:"preconditions"`
-	CompletionConditions []string      `json:"completion_conditions"`
-	Status               StepStatus    `json:"status"`
-	GroundingAttempts    int           `json:"grounding_attempts"`
-	Evidence             []EvidenceRef `json:"evidence"`
+	ID                   string                         `json:"id"`
+	Position             int                            `json:"position"`
+	Intent               string                         `json:"intent"`
+	Action               string                         `json:"action"`
+	Target               string                         `json:"target,omitempty"`
+	Value                string                         `json:"value,omitempty"`
+	Trigger              string                         `json:"trigger,omitempty"`
+	ContextKey           string                         `json:"context_key,omitempty"`
+	TimeoutMS            int                            `json:"timeout_ms,omitempty"`
+	ExpectedOccurrences  int                            `json:"expected_occurrences"`
+	Idempotency          string                         `json:"idempotency"`
+	SideEffect           SideEffect                     `json:"side_effect"`
+	Preconditions        []string                       `json:"preconditions"`
+	CompletionConditions []string                       `json:"completion_conditions"`
+	Status               StepStatus                     `json:"status"`
+	GroundingAttempts    int                            `json:"grounding_attempts"`
+	Evidence             []EvidenceRef                  `json:"evidence"`
+	TargetBinding        *browsercontract.TargetBinding `json:"target_binding,omitempty"`
 }
 
 type Plan struct {

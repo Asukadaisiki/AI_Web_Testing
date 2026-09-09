@@ -1,6 +1,12 @@
 # DSL Canonicalization Contract
 
-当前唯一合同版本为 `dsl.canonical.v1`，由 Go 控制面在 DSL generation 边界生成。
+当前合同版本：
+
+- `dsl.canonical.v1`：legacy-v1。
+- `dsl.canonical.v2`：research-v1，只读兼容。
+- `dsl.canonical.v3`：research-v2，由 TargetBinding 编译生成。
+
+所有新 Agent generation 默认使用 `research-v2` / `dsl.canonical.v3`。
 
 ## Canonical JSON
 
@@ -11,6 +17,18 @@
 - `_preflight`、`match_count` 和其他非 DSL 字段必须移除。
 - schema 声明的字符串按 `str_strip_whitespace` 处理；candidate strategy 使用与 Worker 相同的别名归一化。
 - Go `encoding/json.Marshal` 输出的 UTF-8 字节是该版本唯一的 `canonical_json`。不得重新排版后继续沿用原 SHA。
+
+`research-v2` 分为两个边界：
+
+1. LLM 只提交 Draft DSL，包括 `plan_step_id` 和必要的
+   `target_binding_id`，不得提交 selector、candidate 或 locator confidence。
+2. Go 使用当前 TaskPlan 和持久化 TargetBinding 注入
+   `semantic_target`、`locator_candidates`、`plan_binding` 和
+   `observation_bindings`，再生成 Executable DSL canonical bytes。
+
+TargetBinding 中的 locator 使用结构化 `LocatorSpec`，不允许
+`role="..." inside ...` 等自定义字符串语法。Python preflight 和 Runner
+必须通过同一个 LocatorSpec compiler 构造 Playwright locator。
 
 `dsl_sha256` 定义为：
 

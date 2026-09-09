@@ -11,7 +11,7 @@ def build_execution_report(
     *,
     status: str,
     steps: list[StepExecutionEvidence],
-    dsl_profile: Literal["legacy-v1", "research-v1"] | None = None,
+    dsl_profile: Literal["legacy-v1", "research-v1", "research-v2"] | None = None,
 ) -> ExecutionReport:
     return ExecutionReport(
         status=status,

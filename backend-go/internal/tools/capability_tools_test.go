@@ -26,6 +26,35 @@ type isolatedProbeCapabilityClient struct {
 	calls int
 }
 
+type observationCapabilityClient struct{}
+
+func (observationCapabilityClient) ExecuteBrowserCapability(
+	context.Context,
+	string,
+	int64,
+	int64,
+	string,
+	json.RawMessage,
+) (json.RawMessage, error) {
+	return json.RawMessage(`{
+		"url":"https://example.test/form",
+		"a11y_nodes":[{"role":"button","name":"legacy"}],
+		"observation_v2":{
+			"schema_version":"browser.observation.v2",
+			"observation_id":"obs-1",
+			"page_state":{
+				"state_id":"form",
+				"revision":1,
+				"url":"https://example.test/form",
+				"title":"Form",
+				"state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			},
+			"elements":[],
+			"relations":[]
+		}
+	}`), nil
+}
+
 func (c *isolatedProbeCapabilityClient) ExecuteBrowserCapability(
 	_ context.Context,
 	_ string,
@@ -231,6 +260,34 @@ func TestBrowserToolForwardsRunContext(t *testing.T) {
 		client.conversationID != "11" {
 		t.Fatalf("forwarded context = %#v", client)
 	}
+	var arguments map[string]any
+	if err := json.Unmarshal(client.arguments, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if arguments["observation_schema_version"] != "v2" {
+		t.Fatalf("forwarded arguments = %#v", arguments)
+	}
+}
+
+func TestBrowserToolV2KeepsObservationAndDropsLegacyNodes(t *testing.T) {
+	handler := NewBrowserTools(observationCapabilityClient{})[0]
+	result, err := handler.Execute(context.Background(), Call{
+		ProjectID: 7, ConversationID: "11", Name: "explore_page",
+		Arguments: json.RawMessage(`{"url":"https://example.test/form"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result.Content, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := payload["a11y_nodes"]; exists {
+		t.Fatalf("legacy a11y_nodes leaked into v2 result: %s", result.Content)
+	}
+	if _, exists := payload["observation_v2"]; !exists {
+		t.Fatalf("observation_v2 missing: %s", result.Content)
+	}
 }
 
 func TestExploreFlowMockIsolatesRepeatedSideEffectProbes(t *testing.T) {
@@ -326,10 +383,17 @@ func TestGenerateDSLToolSchemaRestrictsSupportedActions(t *testing.T) {
 		t.Fatalf("missing action schemas: %#v", wantActions)
 	}
 	profile := caseSchema["properties"].(map[string]any)["profile"].(map[string]any)
-	if profile["const"] != "research-v1" || profile["default"] != "research-v1" {
+	if profile["default"] != "research-v2" ||
+		!reflect.DeepEqual(
+			profile["enum"],
+			[]any{"research-v1", "research-v2"},
+		) {
 		t.Fatalf("profile schema = %#v", profile)
 	}
-	if !strings.Contains(definition.Description, "never author selector, candidates, or locator_confidence") {
+	if !strings.Contains(
+		definition.Description,
+		"never author selector, locator candidates, or locator confidence",
+	) {
 		t.Fatal("generate_dsl description does not prohibit model-authored locators")
 	}
 	assertStrictObjectSchemas(t, schema, "$")
@@ -370,6 +434,11 @@ func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *t
 		!strings.Contains(definitions[1].Definition().Description, "quantity 2") {
 		t.Fatal("explore_flow contract does not separate probe state from task orchestration")
 	}
+	if !strings.Contains(definitions[1].Definition().Description, "exploration_budget") ||
+		!strings.Contains(definitions[1].Definition().Description, "Do not repeat") ||
+		!strings.Contains(definitions[1].Definition().Description, "value_equals") {
+		t.Fatal("explore_flow contract does not expose budgets and repeat/value guidance")
+	}
 	var flowSchema map[string]any
 	if err := json.Unmarshal(definitions[1].Definition().InputSchema, &flowSchema); err != nil {
 		t.Fatalf("decode explore_flow schema: %v", err)
@@ -378,6 +447,16 @@ func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *t
 	actions := steps["items"].(map[string]any)["properties"].(map[string]any)["actions"].(map[string]any)
 	if actions["minItems"] != float64(0) {
 		t.Fatalf("actions.minItems = %#v, want 0", actions["minItems"])
+	}
+	actionProperties := actions["items"].(map[string]any)["properties"].(map[string]any)
+	if _, exists := actionProperties["plan_step_id"]; !exists {
+		t.Fatal("explore_flow action schema does not expose plan_step_id")
+	}
+	if _, exists := actionProperties["locator"]; !exists {
+		t.Fatal("explore_flow action schema does not expose structured locator")
+	}
+	if _, exists := actionProperties["condition"]; !exists {
+		t.Fatal("explore_flow action schema does not expose structured condition")
 	}
 
 	var validationSchema map[string]any

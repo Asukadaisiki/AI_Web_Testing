@@ -13,25 +13,16 @@ from typing import Any
 
 from browser_worker.contracts.action_ir import EXECUTABLE_CANDIDATE_STRATEGIES
 from browser_worker.contracts.dsl import validate_dsl_case
+from browser_worker.locators.semantic import (
+    parse_a11y_target,
+    playwright_role,
+)
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # A11y role → Playwright role normalization
 # ---------------------------------------------------------------------------
-
-_A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
-    "searchbox": "search",
-    "menuitemcheckbox": "checkbox",
-    "menuitemradio": "radio",
-}
-"""Roles that differ between the a11y tree and Playwright's get_by_role()."""
-
-
-def _normalize_role_for_playwright(role: str) -> str:
-    """Map a11y roles to Playwright-compatible role names."""
-    return _A11Y_TO_PLAYWRIGHT_ROLE.get(role, role)
-
 
 _GENERIC_REPEATED_TARGETS = {"add to cart", "view product"}
 _LOCATOR_ACTIONS = {
@@ -46,12 +37,6 @@ _PREFLIGHT_REQUIRED_ACTIONS = {
     "input",
     "capture_text",
 }
-
-# Matches: ... inside product "name"
-_SCOPE_RE = re.compile(
-    r"""\s+inside\s+product\s*["'](.+?)["']""",
-    re.IGNORECASE,
-)
 
 def _target_is_generic_repeated_action(target: str) -> bool:
     return _normalize_text(target) in _GENERIC_REPEATED_TARGETS
@@ -137,14 +122,9 @@ def apply_preflight_to_dsl(
             continue
 
         # Parse a semantic target with an optional named container scope.
-        scope_name = None
-        scope_match = _SCOPE_RE.search(target)
-        if scope_match:
-            scope_name = scope_match.group(1).strip().lower()
-            # Strip scope suffix for element matching
-            target_core = target[:scope_match.start()].strip()
-        else:
-            target_core = target
+        parsed_role, parsed_name, _, parsed_scope = parse_a11y_target(target)
+        scope_name = parsed_scope.lower() if parsed_scope else None
+        target_core = parsed_name if parsed_role else target
 
         target_lower = target_core.lower()
         matches = [
@@ -177,15 +157,26 @@ def apply_preflight_to_dsl(
                 # Found the right product container — match target against children
                 for child in children:
                     cname = (child.get("name") or "").lower()
-                    if cname and (cname == target_lower or target_lower in cname):
+                    child_role = playwright_role(
+                        str(child.get("role") or "")
+                    )
+                    if (
+                        cname
+                        and (not parsed_role or child_role == parsed_role)
+                        and (cname == target_lower or target_lower in cname)
+                    ):
                         matches.append(child)
         elif not matches:
             # Unscoped matching: match against all nodes
             for n in a11y_nodes:
                 name = (n.get("name") or "").lower()
+                role = playwright_role(str(n.get("role") or ""))
                 if not name:
                     continue
-                if name == target_lower or target_lower in name:
+                if (
+                    (not parsed_role or role == parsed_role)
+                    and (name == target_lower or target_lower in name)
+                ):
                     matches.append(n)
 
         match_count = len(matches)
@@ -193,7 +184,7 @@ def apply_preflight_to_dsl(
 
         if match_count > 0:
             for n in matches:
-                role = _normalize_role_for_playwright(str(n.get("role") or ""))
+                role = playwright_role(str(n.get("role") or ""))
                 name = str(n.get("name") or "")
                 scope_ctx = {"scope_name": scope_name} if scope_name else {}
 

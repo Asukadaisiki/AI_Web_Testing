@@ -1,18 +1,22 @@
 """Playwright-based page exploration and browser session management."""
 from __future__ import annotations
 
-from contextlib import suppress
 import json
 import logging
 import re
 import threading
 import time as _time_module
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
+
+from browser_worker.exploration.observation import build_browser_observation
+from browser_worker.locators.compiler import compile_locator
+from browser_worker.runtime.paths import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,16 @@ _DOM_ATTR_WHITELIST = {
     "title",
     "type",
 }
+
+
+def _safe_page_title(page) -> str:
+    title = getattr(page, "title", None)
+    if not callable(title):
+        return ""
+    try:
+        return str(title() or "")
+    except Exception:
+        return ""
 
 def _a11y_node_in_viewport(node: dict, viewport: dict) -> bool:
     bb = node.get("boundingBox")
@@ -143,16 +157,42 @@ def _cdp_to_a11y_nodes(
         if role in IGNORED_A11Y_ROLES:
             continue
         name = (n.get("name") or {}).get("value", "") or ""
+        description = (n.get("description") or {}).get("value")
+        value = (n.get("value") or {}).get("value")
         props: dict[str, Any] = {}
+        relations: dict[str, list[str] | str | None] = {}
         for p in n.get("properties", []):
             if "name" not in p or "value" not in p:
                 continue
-            props[p["name"]] = p["value"].get("value")
+            property_name = p["name"]
+            property_value = p["value"]
+            props[property_name] = property_value.get("value")
+            related = property_value.get("relatedNodes") or []
+            if related:
+                relations[property_name] = [
+                    str(item["backendDOMNodeId"])
+                    for item in related
+                    if item.get("backendDOMNodeId")
+                ]
         standardized.append({
             "node_id": f"e{n.get('nodeId', '?')}",
             "backend_dom_node_id": n.get("backendDOMNodeId"),
             "role": role,
             "name": (name or "")[:120],
+            "a11y_name": (name or "")[:256],
+            "a11y_description": str(description)[:256] if description else None,
+            "a11y_value": value,
+            "a11y_states": {
+                key: props[key]
+                for key in (
+                    "busy", "checked", "disabled", "editable", "expanded",
+                    "focusable", "focused", "invalid", "multiline",
+                    "multiselectable", "pressed", "readonly", "required",
+                    "selected", "valuemax", "valuemin", "valuetext",
+                )
+                if key in props
+            },
+            "a11y_relations": relations,
             "level": props.get("level") or None,
             "parent_id": f"e{n['parentId']}" if n.get("parentId") else None,
             "focusable": bool(props.get("focusable", False)),
@@ -237,6 +277,27 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                   }
                   const rect = this.getBoundingClientRect();
                   const style = window.getComputedStyle(this);
+                  const shadowHosts = [];
+                  let root = this.getRootNode();
+                  while (root && root.host) {
+                    const host = root.host;
+                    shadowHosts.unshift(
+                      host.id ? `#${host.id}` : host.tagName.toLowerCase()
+                    );
+                    root = host.getRootNode();
+                  }
+                  const frames = [];
+                  let currentWindow = this.ownerDocument &&
+                    this.ownerDocument.defaultView;
+                  while (currentWindow && currentWindow !== currentWindow.top) {
+                    const frame = currentWindow.frameElement;
+                    if (!frame) break;
+                    frames.unshift(
+                      frame.id ? `#${frame.id}` : frame.tagName.toLowerCase()
+                    );
+                    currentWindow = frame.ownerDocument &&
+                      frame.ownerDocument.defaultView;
+                  }
                   const advertisingContext = Boolean(this.closest(
                     "iframe[src*='ad' i], [data-ad], [data-ad-slot], " +
                     "[data-ad-unit], .adsbygoogle, [aria-label*='advertisement' i], " +
@@ -253,6 +314,7 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
                       this.getAttribute("aria-disabled") !== "true" &&
                       !this.closest("[inert]"),
                     textContent: this.textContent || "",
+                    contextPath: {frames, shadow_hosts: shadowHosts},
                     third_party_frame: window !== window.top && window.frameElement === null,
                     advertising_context: advertisingContext
                   };
@@ -262,8 +324,13 @@ def _augment_a11y_nodes_with_dom(page, client, nodes: list[dict[str, Any]]) -> N
             if str((payload.get("attrs") or {}).get("type") or "").lower() == "password":
                 payload["attrs"] = {}
             node["dom"] = payload
+            node["context_path"] = payload.pop(
+                "contextPath",
+                {"frames": [], "shadow_hosts": []},
+            )
             # Use textContent instead of innerText to avoid CSS text-transform issues
             text_content = payload.get("textContent", "")
+            node["dom_text"] = text_content
             if text_content and text_content != node.get("name"):
                 node["original_name"] = node.get("name")
                 node["name"] = text_content
@@ -338,10 +405,10 @@ def _collect_dom_interactive_supplement(
     search_id = None
     supplement: list[dict[str, Any]] = []
     try:
-        client.send("DOM.getDocument", {"depth": -1, "pierce": False})
+        client.send("DOM.getDocument", {"depth": -1, "pierce": True})
         search = client.send(
             "DOM.performSearch",
-            {"query": _DOM_INTERACTIVE_SELECTOR, "includeUserAgentShadowDOM": False},
+            {"query": _DOM_INTERACTIVE_SELECTOR, "includeUserAgentShadowDOM": True},
         )
         search_id = search.get("searchId")
         count = int(search.get("resultCount") or 0)
@@ -382,6 +449,15 @@ def _collect_dom_interactive_supplement(
                           }
                           const rect = this.getBoundingClientRect();
                           const style = window.getComputedStyle(this);
+                          const shadowHosts = [];
+                          let root = this.getRootNode();
+                          while (root && root.host) {
+                            const host = root.host;
+                            shadowHosts.unshift(
+                              host.id ? `#${host.id}` : host.tagName.toLowerCase()
+                            );
+                            root = host.getRootNode();
+                          }
                           const advertisingContext = Boolean(this.closest(
                             "iframe[src*='ad' i], [data-ad], [data-ad-slot], " +
                             "[data-ad-unit], .adsbygoogle, [aria-label*='advertisement' i], " +
@@ -398,6 +474,7 @@ def _collect_dom_interactive_supplement(
                               this.getAttribute("aria-disabled") !== "true" &&
                               !this.closest("[inert]"),
                             textContent: (this.textContent || "").trim().slice(0, 120),
+                            contextPath: {frames: [], shadow_hosts: shadowHosts},
                             advertising_context: advertisingContext,
                             third_party_frame: window !== window.top && window.frameElement === null
                           };
@@ -469,6 +546,10 @@ def _collect_dom_interactive_supplement(
                         "disabled": False,
                         "page_state": page_state,
                         "source": "dom_verified_interactive_control",
+                        "context_path": payload.pop(
+                            "contextPath",
+                            {"frames": [], "shadow_hosts": []},
+                        ),
                         "dom": payload,
                         "verified_selectors": verified,
                     }
@@ -762,7 +843,13 @@ def is_storage_state_stale(meta: dict[str, Any]) -> bool:
         return True
 
 
-def _resolve_from_collected_nodes(page, target: str, prev_nodes: list[dict] | None):
+def _resolve_from_collected_nodes(
+    page,
+    target: str,
+    prev_nodes: list[dict] | None,
+    *,
+    kind: str,
+):
     """Try to resolve *target* using verified_selectors or DOM attrs from *prev_nodes*.
 
     When the previous page state's a11y nodes contain a matching element with
@@ -803,6 +890,17 @@ def _resolve_from_collected_nodes(page, target: str, prev_nodes: list[dict] | No
             target, len(prev_nodes),
         )
         return None
+
+    compatible = [
+        candidate
+        for candidate in candidates
+        if _candidate_supports_action(candidate, kind)
+    ]
+    if compatible:
+        candidates = compatible
+    candidates.sort(
+        key=lambda candidate: _flow_candidate_sort_key(candidate, cleaned_target)
+    )
 
     logger.info(
         "_resolve_from_collected_nodes: target=%r, found %d candidates: %s",
@@ -855,6 +953,47 @@ def _resolve_from_collected_nodes(page, target: str, prev_nodes: list[dict] | No
                     continue
 
     return None
+
+
+def _candidate_supports_action(candidate: dict[str, Any], kind: str) -> bool:
+    role = str(candidate.get("role") or "").strip().lower()
+    dom = candidate.get("dom") or {}
+    tag = str(dom.get("tag") or "").strip().lower() if isinstance(dom, dict) else ""
+    if kind == "input":
+        return role in {"textbox", "searchbox", "combobox", "spinbutton"} or tag in {
+            "input",
+            "select",
+            "textarea",
+        }
+    if kind == "click":
+        return role in {
+            "button",
+            "checkbox",
+            "link",
+            "menuitem",
+            "menuitemcheckbox",
+            "menuitemradio",
+            "option",
+            "radio",
+            "switch",
+            "tab",
+        } or tag in {"a", "button", "input", "option"}
+    return True
+
+
+def _flow_candidate_sort_key(
+    candidate: dict[str, Any],
+    target: str,
+) -> tuple[int, int, int]:
+    name = str(candidate.get("name") or "").strip()
+    normalized_name = " ".join(re.findall(r"\w+", name.casefold()))
+    normalized_target = " ".join(re.findall(r"\w+", target.casefold()))
+    exact = normalized_name == normalized_target
+    verified = any(
+        isinstance(item, dict) and item.get("selector")
+        for item in candidate.get("verified_selectors") or []
+    )
+    return (0 if exact else 1, 0 if verified else 1, len(normalized_name))
 
 
 def _resolve_step_locator(page, target: str, *, kind: str, skip_vlm: bool = False):
@@ -915,7 +1054,12 @@ def _resolve_flow_action_locator(
     if target.startswith(("#", ".")):
         locator = page.locator(target)
         return locator.first if locator.count() > 0 else None
-    locator = _resolve_from_collected_nodes(page, target, previous_nodes)
+    locator = _resolve_from_collected_nodes(
+        page,
+        target,
+        previous_nodes,
+        kind=kind,
+    )
     if locator is not None:
         return locator
     return _resolve_step_locator(page, target, kind=kind, skip_vlm=True)
@@ -930,7 +1074,32 @@ def _flow_action_timeout(action: dict[str, Any]) -> int:
     return max(1, min(timeout, 60000))
 
 
-def _wait_for_flow_target(page, target: str, timeout_ms: int) -> None:
+def _wait_for_flow_target(
+    page,
+    target: str,
+    timeout_ms: int,
+    *,
+    locator_spec: dict[str, Any] | None = None,
+    condition: dict[str, Any] | None = None,
+) -> None:
+    if locator_spec is not None:
+        locator = compile_locator(page, locator_spec)
+        if locator.count() != 1:
+            raise RuntimeError(
+                "structured wait_for locator must resolve exactly once"
+            )
+        locator = locator.first
+        locator.wait_for(state="visible", timeout=timeout_ms)
+        condition_type = str((condition or {}).get("type") or "visible")
+        if condition_type == "value_equals":
+            expected = str((condition or {}).get("expected") or "")
+            actual = str(locator.input_value())
+            if actual != expected:
+                raise RuntimeError(
+                    "wait_for value mismatch: "
+                    f"expected={expected!r}, actual={actual!r}"
+                )
+        return
     if target.startswith("text="):
         text = target.removeprefix("text=").strip()
         page.get_by_text(text, exact=True).first.wait_for(
@@ -949,6 +1118,68 @@ def _wait_for_flow_target(page, target: str, timeout_ms: int) -> None:
         state="visible",
         timeout=timeout_ms,
     )
+
+
+def _flow_action_target_label(action: dict[str, Any]) -> str:
+    target = str(action.get("target") or "").strip()
+    if target:
+        return target
+    locator = action.get("locator")
+    if not isinstance(locator, dict):
+        return ""
+    kind = str(locator.get("kind") or "")
+    if kind == "role":
+        name = str(locator.get("name") or "").strip()
+        role = str(locator.get("role") or "").strip()
+        return f"role={role}, name={name}" if name else f"role={role}"
+    return f"{kind}={locator.get('value', '')}"
+
+
+def _node_matches_flow_locator(
+    node: dict[str, Any],
+    locator: dict[str, Any],
+) -> bool:
+    kind = str(locator.get("kind") or "")
+    exact = locator.get("exact") is not False
+    role = str(node.get("role") or "").strip()
+    name = str(node.get("name") or "").strip()
+    dom = node.get("dom") or {}
+    attrs = dom.get("attrs") or {} if isinstance(dom, dict) else {}
+    if kind == "role":
+        if role.casefold() != str(locator.get("role") or "").strip().casefold():
+            return False
+        expected_name = locator.get("name")
+        return expected_name is None or _flow_text_matches(
+            name,
+            str(expected_name),
+            exact=exact,
+        )
+    if kind == "label":
+        return _flow_text_matches(name, str(locator.get("value") or ""), exact=exact)
+    if kind == "placeholder":
+        return _flow_text_matches(
+            str(attrs.get("placeholder") or ""),
+            str(locator.get("value") or ""),
+            exact=exact,
+        )
+    if kind == "text":
+        dom_text = str(node.get("dom_text") or "")
+        return _flow_text_matches(
+            dom_text or name,
+            str(locator.get("value") or ""),
+            exact=exact,
+        )
+    return False
+
+
+def _flow_text_matches(actual: str, expected: str, *, exact: bool) -> bool:
+    normalized_actual = " ".join(actual.casefold().split())
+    normalized_expected = " ".join(expected.casefold().split())
+    if not normalized_actual or not normalized_expected:
+        return False
+    if exact:
+        return normalized_actual == normalized_expected
+    return normalized_expected in normalized_actual
 
 
 def capture_browser_session(
@@ -1011,7 +1242,9 @@ def capture_browser_session(
                     if kind == "input":
                         locator.fill(str(value))
                     elif kind == "click":
-                        from browser_worker.runners.click_preprocessor import click_with_precheck
+                        from browser_worker.runners.click_preprocessor import (
+                            click_with_precheck,
+                        )
                         cr = click_with_precheck(page, locator)
                         if not cr.succeeded:
                             logger.warning(
@@ -1179,8 +1412,11 @@ def _collect_flow_a11y(
         *,
         step_index: int,
         action_index: int,
+        plan_step_id: str | None,
         action_description: str,
         target: str,
+        locator_spec: dict[str, Any] | None,
+        condition: dict[str, Any] | None,
         description: str,
         phase: str,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1212,7 +1448,11 @@ def _collect_flow_a11y(
                     or normalized_target in normalized_name
                 )
             )
-            if not selector_match and not name_match:
+            locator_match = bool(
+                locator_spec
+                and _node_matches_flow_locator(node, locator_spec)
+            )
+            if not selector_match and not name_match and not locator_match:
                 continue
             dom = node.get("dom") or {}
             target_evidence.append(
@@ -1240,9 +1480,12 @@ def _collect_flow_a11y(
                 {
                     "step_index": step_index,
                     "action_index": action_index,
+                    "plan_step_id": plan_step_id,
                     "action": action_description.split(" ", 1)[0],
                     "action_description": action_description,
                     "target": target,
+                    "locator": locator_spec,
+                    "condition": condition,
                     "phase": phase,
                     "status": "success",
                     "url": snapshot_url,
@@ -1256,6 +1499,15 @@ def _collect_flow_a11y(
             "status": "success",
             "revision": revision,
         }
+        entry["observation_v2"] = build_browser_observation(
+            url=snapshot_url,
+            title=_safe_page_title(page),
+            state_id=snapshot_state,
+            revision=revision,
+            nodes=nodes,
+            page=page,
+            artifact_root=PROJECT_ROOT / "artifacts",
+        )
         results.append(entry)
         return entry, nodes
 
@@ -1342,7 +1594,12 @@ def _collect_flow_a11y(
                     if not isinstance(action_def, dict):
                         continue
                     act = str(action_def.get("action") or "").strip().lower()
-                    target = str(action_def.get("target") or "").strip()
+                    plan_step_id = str(
+                        action_def.get("plan_step_id") or ""
+                    ).strip() or None
+                    target = _flow_action_target_label(action_def)
+                    locator_spec = action_def.get("locator")
+                    condition = action_def.get("condition")
                     value = action_def.get("value", "")
                     if not act:
                         continue
@@ -1351,8 +1608,15 @@ def _collect_flow_a11y(
                     before_entry, before_nodes = collect_action_snapshot(
                         step_index=step_i,
                         action_index=action_idx,
+                        plan_step_id=plan_step_id,
                         action_description=action_desc,
                         target=target,
+                        locator_spec=(
+                            locator_spec if isinstance(locator_spec, dict) else None
+                        ),
+                        condition=(
+                            condition if isinstance(condition, dict) else None
+                        ),
                         description=description,
                         phase="before",
                     )
@@ -1414,6 +1678,16 @@ def _collect_flow_a11y(
                                 page,
                                 target,
                                 _flow_action_timeout(action_def),
+                                locator_spec=(
+                                    locator_spec
+                                    if isinstance(locator_spec, dict)
+                                    else None
+                                ),
+                                condition=(
+                                    condition
+                                    if isinstance(condition, dict)
+                                    else None
+                                ),
                             )
                         else:
                             raise RuntimeError(f"unsupported flow action: {act}")
@@ -1443,6 +1717,7 @@ def _collect_flow_a11y(
                             "code": "flow_action_failed",
                             "step_index": step_i,
                             "action_index": action_idx,
+                            "plan_step_id": plan_step_id,
                             "action": act,
                             "target": target,
                             "message": str(exc),
@@ -1457,9 +1732,12 @@ def _collect_flow_a11y(
                                     {
                                         "step_index": step_i,
                                         "action_index": action_idx,
+                                        "plan_step_id": plan_step_id,
                                         "action": act,
                                         "action_description": action_desc,
                                         "target": target,
+                                        "locator": locator_spec,
+                                        "condition": condition,
                                         "phase": "after",
                                         "status": "error",
                                         "failure": failure,
@@ -1486,8 +1764,15 @@ def _collect_flow_a11y(
                     after_entry, after_nodes = collect_action_snapshot(
                         step_index=step_i,
                         action_index=action_idx,
+                        plan_step_id=plan_step_id,
                         action_description=action_desc,
                         target=target,
+                        locator_spec=(
+                            locator_spec if isinstance(locator_spec, dict) else None
+                        ),
+                        condition=(
+                            condition if isinstance(condition, dict) else None
+                        ),
                         description=description,
                         phase="after",
                     )
@@ -1524,6 +1809,15 @@ def _collect_flow_a11y(
                 }
                 revision += 1
                 result["revision"] = revision
+                result["observation_v2"] = build_browser_observation(
+                    url=current_url,
+                    title=_safe_page_title(page),
+                    state_id=state_id,
+                    revision=revision,
+                    nodes=nodes,
+                    page=page,
+                    artifact_root=PROJECT_ROOT / "artifacts",
+                )
                 results.append(result)
                 logger.info("_collect_flow_a11y: step %d completed, state=%s, nodes=%d", step_i, state_id, len(nodes))
     except Exception as exc:

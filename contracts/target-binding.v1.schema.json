@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/target-binding.v1.schema.json",
+  "title": "Grounding TargetBinding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "grounding.target-binding.v1"},
+    "binding_id": {"type": "string", "minLength": 1},
+    "plan_id": {"type": "string", "minLength": 1},
+    "plan_version": {"type": "integer", "minimum": 1},
+    "plan_step_id": {"type": "string", "minLength": 1},
+    "semantic_target": {"type": "string", "minLength": 1},
+    "action": {"type": "string", "minLength": 1},
+    "page_state_id": {"type": "string", "minLength": 1},
+    "observation_id": {"type": "string", "minLength": 1},
+    "observation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "element_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {"type": "string", "minLength": 1},
+          "element_ref": {"type": "string", "minLength": 1},
+          "context_path": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "frames": {"type": "array", "items": {"type": "string"}},
+              "shadow_hosts": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["frames", "shadow_hosts"]
+          },
+          "locator": {
+            "$ref": "locator-spec.v1.schema.json#/$defs/locator"
+          },
+          "provenance": {"type": "string", "minLength": 1},
+          "observed_count": {"type": "integer", "minimum": 0},
+          "visible": {"type": "boolean"},
+          "enabled": {"type": "boolean"},
+          "score": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "required": [
+          "candidate_id",
+          "element_ref",
+          "context_path",
+          "locator",
+          "provenance",
+          "observed_count",
+          "visible",
+          "enabled",
+          "score"
+        ]
+      }
+    },
+    "selected_candidate_id": {"type": "string", "minLength": 1},
+    "binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "required": [
+    "schema_version",
+    "binding_id",
+    "plan_id",
+    "plan_version",
+    "plan_step_id",
+    "semantic_target",
+    "action",
+    "page_state_id",
+    "observation_id",
+    "observation_sha256",
+    "element_refs",
+    "candidates",
+    "selected_candidate_id",
+    "binding_sha256"
+  ]
+}

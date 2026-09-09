@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/browser-observation.v2.schema.json",
+  "title": "BrowserObservation v2",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "browser.observation.v2"},
+    "observation_id": {"type": "string", "minLength": 1},
+    "page_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state_id": {"type": "string", "minLength": 1},
+        "revision": {"type": "integer", "minimum": 1},
+        "url": {"type": "string"},
+        "title": {"type": "string"},
+        "state_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "previous_state_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": ["state_id", "revision", "url", "title", "state_sha256"]
+    },
+    "elements": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/element"}
+    },
+    "relations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/relation"}
+    },
+    "artifact": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "uri": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "content_bytes": {"type": "integer", "minimum": 0}
+      },
+      "required": ["uri", "sha256", "content_bytes"]
+    }
+  },
+  "required": [
+    "schema_version",
+    "observation_id",
+    "page_state",
+    "elements",
+    "relations"
+  ],
+  "$defs": {
+    "context_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frames": {"type": "array", "items": {"type": "string"}},
+        "shadow_hosts": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["frames", "shadow_hosts"]
+    },
+    "a11y": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": ["string", "null"]},
+        "value": {},
+        "states": {"type": "object"},
+        "relations": {"type": "object"}
+      },
+      "required": ["role", "name", "states", "relations"]
+    },
+    "dom": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "backend_node_id": {"type": ["integer", "null"]},
+        "tag": {"type": "string"},
+        "attrs": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "text": {"type": "string", "maxLength": 256}
+      },
+      "required": ["tag", "attrs", "text"]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connected": {"type": "boolean"},
+        "visible": {"type": "boolean"},
+        "enabled": {"type": "boolean"},
+        "editable": {"type": "boolean"}
+      },
+      "required": ["connected", "visible", "enabled", "editable"]
+    },
+    "element": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "element_ref": {"type": "string", "minLength": 1},
+        "context_path": {"$ref": "#/$defs/context_path"},
+        "a11y": {"$ref": "#/$defs/a11y"},
+        "dom": {"$ref": "#/$defs/dom"},
+        "runtime": {"$ref": "#/$defs/runtime"},
+        "locators": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "locator": {
+                "$ref": "locator-spec.v1.schema.json#/$defs/locator"
+              },
+              "provenance": {"type": "string", "minLength": 1},
+              "observed_count": {"type": "integer", "minimum": 0}
+            },
+            "required": ["locator", "provenance", "observed_count"]
+          }
+        }
+      },
+      "required": [
+        "element_ref",
+        "context_path",
+        "a11y",
+        "dom",
+        "runtime",
+        "locators"
+      ]
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "from": {"type": "string", "minLength": 1},
+        "to": {"type": "string", "minLength": 1}
+      },
+      "required": ["kind", "from", "to"]
+    }
+  }
+}

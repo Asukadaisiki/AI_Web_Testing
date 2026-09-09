@@ -9,17 +9,166 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/cases"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/corrections"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/projects"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+func TestPostgresResearchV2Compilation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actorID := insertUser(t, db, "research-v2-"+suffix+"@example.com")
+	projectStore := projects.NewPostgresStore(db)
+	project, err := projectStore.Create(ctx, actorID, projects.CreateRequest{
+		Name: "research-v2-" + suffix,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "run_research_v2_" + suffix
+	if _, err := db.ExecContext(
+		ctx,
+		`INSERT INTO agent_runs (
+			id, actor_user_id, conversation_id, project_id, status, input,
+			transcript_json, last_event_seq, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 'running', 'submit form', '[]'::json, 0, now(), now())`,
+		runID,
+		actorID,
+		"conversation-"+suffix,
+		project.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM agent_runs WHERE id = $1`, runID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM projects WHERE id = $1`, project.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, actorID)
+	})
+
+	planRepository := taskplan.NewPostgresRepository(db)
+	plans := taskplan.NewService(planRepository)
+	plan, err := plans.CreateVersion(ctx, taskplan.CreateRequest{
+		RunID: runID, ActorUserID: actorID, ProjectID: project.ID,
+		Definition: taskplan.Definition{
+			Goal: "submit form", MaxSideEffect: taskplan.SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []taskplan.StepDefinition{{
+				ID: "submit", Intent: "Submit form", Action: "click",
+				Target: "Submit", ExpectedOccurrences: 1,
+				Idempotency:          "idempotent",
+				SideEffect:           taskplan.SideEffectBrowserState,
+				Preconditions:        []string{"form visible"},
+				CompletionConditions: []string{"saved"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Submit"
+	targetBinding, err := browsercontract.NewTargetBinding(
+		browsercontract.TargetBinding{
+			PlanID: plan.ID, PlanVersion: plan.Version,
+			PlanStepID: "submit", SemanticTarget: "Submit",
+			Action: "click", PageStateID: "form",
+			ObservationID:     "obs-1",
+			ObservationSHA256: strings.Repeat("a", 64),
+			ElementRefs:       []string{"form:7"},
+			Candidates: []browsercontract.LocatorCandidate{{
+				CandidateID: "candidate-1", ElementRef: "form:7",
+				Locator: browsercontract.LocatorSpec{
+					Kind: "role", Role: "button", Name: &name, Exact: true,
+				},
+				Provenance: "a11y_exact", ObservedCount: 1,
+				Visible: true, Enabled: true, Score: 0.95,
+			}},
+			SelectedCandidateID: "candidate-1",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = taskplan.StepGrounded
+	plan.Steps[0].TargetBinding = &targetBinding
+	plan.Status = taskplan.StatusReadyForGeneration
+	if err := planRepository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	controlPlane := tools.NewControlPlaneCapabilitiesWithTaskPlans(
+		dsl.NewStore(db),
+		cases.NewPostgresStore(db),
+		execution.NewStore(db),
+		passthroughValidator{},
+		plans,
+	)
+	generatedRaw, err := controlPlane.GenerateDSL(
+		ctx,
+		actorID,
+		runID,
+		project.ID,
+		"1",
+		json.RawMessage(fmt.Sprintf(`{
+			"plan_binding":{
+				"plan_id":%q,"version":%d,"sha256":%q
+			},
+			"case":{
+				"profile":"research-v2",
+				"name":"Submit form",
+				"steps":[{
+					"plan_step_id":"submit",
+					"action":"click",
+					"intent":"Submit form",
+					"target_binding_id":%q,
+					"preconditions":[{"type":"text_visible","value":"Submit"}],
+					"postconditions":[{"type":"text_visible","value":"Saved"}],
+					"idempotency":"idempotent",
+					"side_effect":"browser_state"
+				}]
+			}
+		}`,
+			plan.ID,
+			plan.Version,
+			plan.PlanSHA256,
+			targetBinding.BindingID,
+		)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generated struct {
+		Profile          dsl.Profile     `json:"profile"`
+		CanonicalVersion string          `json:"dsl_canonical_version"`
+		Case             json.RawMessage `json:"case"`
+	}
+	if err := json.Unmarshal(generatedRaw, &generated); err != nil {
+		t.Fatal(err)
+	}
+	if generated.Profile != dsl.ProfileResearchV2 ||
+		generated.CanonicalVersion != dsl.CanonicalVersionV3 ||
+		!strings.Contains(string(generated.Case), targetBinding.BindingSHA256) {
+		t.Fatalf("generated = %s", generatedRaw)
+	}
+}
 
 func TestPostgresControlPlaneLifecycle(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -471,6 +620,16 @@ func (passthroughValidator) ExecuteBrowserCapability(
 	var candidate map[string]any
 	if err := json.Unmarshal(request.Case, &candidate); err != nil {
 		return nil, err
+	}
+	if candidate["profile"] == "research-v2" {
+		caseHash := sha256.Sum256(request.Case)
+		return json.Marshal(map[string]any{
+			"dsl_case":        candidate,
+			"valid":           true,
+			"validation_mode": "target_binding",
+			"case_digest":     hex.EncodeToString(caseHash[:]),
+			"warnings":        []string{},
+		})
 	}
 	steps, _ := candidate["steps"].([]any)
 	for _, rawStep := range steps {

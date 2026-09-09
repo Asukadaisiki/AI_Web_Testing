@@ -81,13 +81,27 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 	if err := json.Unmarshal(arguments, &request); err != nil || len(request.Case) == 0 {
 		return nil, errors.New("generate_dsl requires a case object")
 	}
-	draftCase, err := withDefaultResearchProfile(request.Case)
+	draftCase, err := withDefaultResearchProfile(
+		request.Case,
+		c.taskPlans != nil,
+	)
 	if err != nil {
 		return nil, err
 	}
 	validatedDraft, err := dsl.ValidateDraftCase(draftCase)
 	if err != nil {
 		return nil, err
+	}
+	if validatedDraft.Profile == dsl.ProfileResearchV2 {
+		return c.generateResearchV2(
+			ctx,
+			actorUserID,
+			runID,
+			projectID,
+			conversationID,
+			request.PlanBinding,
+			validatedDraft.CanonicalJSON,
+		)
 	}
 	if validatedDraft.Profile != dsl.ProfileResearchV1 {
 		return nil, errors.New("generate_dsl requires the research-v1 profile")
@@ -190,13 +204,110 @@ func (c *ControlPlaneCapabilities) GenerateDSL(
 	})
 }
 
-func withDefaultResearchProfile(raw json.RawMessage) (json.RawMessage, error) {
+func (c *ControlPlaneCapabilities) generateResearchV2(
+	ctx context.Context,
+	actorUserID int64,
+	runID string,
+	projectID int64,
+	conversationID string,
+	planBinding taskplan.Binding,
+	draft json.RawMessage,
+) (json.RawMessage, error) {
+	if c.taskPlans == nil {
+		return nil, errors.New("research-v2 requires task plan service")
+	}
+	compiled, _, err := c.taskPlans.CompileDraftCase(
+		ctx,
+		runID,
+		planBinding,
+		draft,
+	)
+	if err != nil {
+		return nil, err
+	}
+	validatedExecutable, err := dsl.ValidateExecutableCase(compiled)
+	if err != nil {
+		return nil, fmt.Errorf("compile research-v2 DSL: %w", err)
+	}
+	validationArguments, err := json.Marshal(map[string]any{
+		"dsl_case": validatedExecutable.CanonicalJSON,
+	})
+	if err != nil {
+		return nil, err
+	}
+	validatedRaw, err := c.browser.ExecuteBrowserCapability(
+		ctx,
+		"validate_page_elements",
+		actorUserID,
+		projectID,
+		conversationID,
+		validationArguments,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var validation struct {
+		Valid          bool     `json:"valid"`
+		ValidationMode string   `json:"validation_mode"`
+		CaseDigest     string   `json:"case_digest"`
+		Warnings       []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(validatedRaw, &validation); err != nil {
+		return nil, fmt.Errorf("decode research-v2 validation: %w", err)
+	}
+	expectedDigest, err := canonicalJSONDigest(validatedExecutable.CanonicalJSON)
+	if err != nil {
+		return nil, err
+	}
+	if !validation.Valid ||
+		validation.ValidationMode != "target_binding" ||
+		validation.CaseDigest != expectedDigest {
+		return nil, fmt.Errorf(
+			"research-v2 target binding validation failed: %s",
+			strings.Join(validation.Warnings, "; "),
+		)
+	}
+	generation, err := c.dsl.CreateGenerationWithPlan(
+		ctx,
+		actorUserID,
+		projectID,
+		validatedExecutable.CanonicalJSON,
+		validation.Warnings,
+		planBinding,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"generation_id":          generation.ID,
+		"case":                   generation.Case,
+		"dsl_sha256":             generation.DSLHash,
+		"dsl_canonical_version":  generation.CanonicalVersion,
+		"profile":                generation.Profile,
+		"plan_binding":           planBinding,
+		"validation_case_digest": validation.CaseDigest,
+		"supported_actions": []string{
+			"goto", "click", "input", "wait_for",
+			"assert_text", "assert_url_contains", "capture_text",
+		},
+		"warnings":            validation.Warnings,
+		"normalization_notes": []string{},
+	})
+}
+
+func withDefaultResearchProfile(
+	raw json.RawMessage,
+	useTargetBindings bool,
+) (json.RawMessage, error) {
 	var candidate map[string]any
 	if err := json.Unmarshal(raw, &candidate); err != nil || candidate == nil {
 		return nil, errors.New("generate_dsl requires a case object")
 	}
 	if _, exists := candidate["profile"]; !exists {
 		candidate["profile"] = string(dsl.ProfileResearchV1)
+		if useTargetBindings {
+			candidate["profile"] = string(dsl.ProfileResearchV2)
+		}
 	}
 	return json.Marshal(candidate)
 }

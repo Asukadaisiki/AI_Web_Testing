@@ -297,6 +297,55 @@ class ResearchActionIRContractTest(unittest.TestCase):
             }
         )
 
+    def test_legacy_scope_parser_matches_runtime_role_scope_syntax(self) -> None:
+        draft = {
+            "profile": "research-v1",
+            "name": "Edit one row",
+            "steps": [
+                {
+                    "action": "click",
+                    "intent": "Edit Alice",
+                    "target": 'button="Edit" inside "Alice"',
+                    "page_state": "table",
+                    "preconditions": [
+                        {"type": "element_visible", "value": "Alice"}
+                    ],
+                    "postconditions": [{"type": "dom_changed"}],
+                    "idempotency": "idempotent",
+                    "side_effect": "browser_state",
+                }
+            ],
+        }
+        result = apply_preflight_to_dsl_by_state(
+            draft,
+            {
+                "table": [
+                    {
+                        "node_id": "row-alice",
+                        "role": "product",
+                        "name": "Alice",
+                    },
+                    {
+                        "node_id": "alice-name",
+                        "parent_id": "row-alice",
+                        "role": "text",
+                        "name": "Alice",
+                    },
+                    {
+                        "node_id": "alice-edit",
+                        "parent_id": "row-alice",
+                        "role": "button",
+                        "name": "Edit",
+                    },
+                ]
+            },
+        )
+        self.assertEqual(result["_preflight"]["locator_confidence"], "high")
+        self.assertEqual(
+            result["steps"][0]["candidates"][0]["strategy"],
+            "a11y_scoped_role_exact",
+        )
+
     def test_legacy_case_still_ignores_extra_fields(self) -> None:
         case = DSLCase.model_validate(
             {

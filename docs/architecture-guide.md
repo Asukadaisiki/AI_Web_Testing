@@ -15,6 +15,7 @@ backend-go/
   internal/agent/      纯 Agent loop 与消息合同
   internal/harness/    Prompt、工具和运行编排
   internal/agentservice/ Run、Checkpoint、事件和持久化
+  internal/browsercontract/ Observation、LocatorSpec、TargetBinding 跨语言合同
   internal/tools/      Agent 工具与控制面工具编排
   internal/transport/  固定 actor 注入与 Hertz HTTP/SSE 路由
   internal/planning/   Planning Session 元数据
@@ -54,8 +55,9 @@ Frontend Planning
 
 草案：
 Go generate_dsl tool
-  -> Python Browser Worker locator preflight
-  -> Go DSL validation and persistence
+  -> Go TaskPlan/TargetBinding compiler
+  -> Python LocatorSpec contract validation
+  -> Go Executable DSL validation and persistence
   -> dsl_generation_runs
 
 执行：
@@ -159,6 +161,9 @@ Frontend pages
 ### `contracts/`
 
 - `contracts/` 是内存中的数据合同，主要使用 Pydantic；文件按业务域命名。
+- `browser_observation.py` 定义 A11y/DOM/runtime 分源的 ElementFact、
+  结构化 LocatorSpec 和 TargetBinding。
+- `action_ir_v2.py` 定义由 Go 编译的 research-v2 Draft/Executable DSL。
 - 数据库表结构由 Go `cmd/migrate` 和 `internal/dbschema/schema.sql` 管理。
 
 同名概念的区别：

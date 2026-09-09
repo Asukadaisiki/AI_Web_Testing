@@ -119,7 +119,11 @@ _A11Y_TO_PLAYWRIGHT_ROLE: dict[str, str] = {
 _TEXT_ONLY_ROLES: frozenset[str] = frozenset({"paragraph", "statictext"})
 
 
-def _parse_a11y_target(target: str) -> tuple[str, str, str | None, str | None]:
+def playwright_role(role: str) -> str:
+    return _A11Y_TO_PLAYWRIGHT_ROLE.get(role.lower(), role.lower())
+
+
+def parse_a11y_target(target: str) -> tuple[str, str, str | None, str | None]:
     """Parse ``role="name"`` format with optional scope.
 
     Returns ``(role, name, node_id, scope_name)`` where *scope_name* is the
@@ -167,7 +171,7 @@ def _build_a11y_candidates(
     """
     builders: list[tuple[str, object]] = []
 
-    pw_role = _A11Y_TO_PLAYWRIGHT_ROLE.get(role)
+    pw_role = playwright_role(role)
     is_text_only = role.lower() in _TEXT_ONLY_ROLES
 
     if scope_name:
@@ -286,7 +290,7 @@ def _build_candidate_builders(
         return [explicit]
 
     # 2. Parse a11y role="name" format (with optional scope)
-    role, name, node_id, scope_name = _parse_a11y_target(target)
+    role, name, node_id, scope_name = parse_a11y_target(target)
 
     # 3. Build a11y-based candidates (role="name" or role="name" inside "...")
     if role:

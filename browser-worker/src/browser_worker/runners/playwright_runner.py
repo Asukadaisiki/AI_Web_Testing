@@ -12,6 +12,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 
 from browser_worker.runtime.structured_logging import get_structured_logger
 from browser_worker.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
+from browser_worker.locators.compiler import compile_locator
 from browser_worker.locators.corrections import CorrectionStore
 from browser_worker.locators.semantic import ResolvedLocator
 from browser_worker.runners.click_preprocessor import click_with_precheck
@@ -180,11 +181,26 @@ def _has_candidates(step) -> bool:
     return hasattr(step, "candidates") and bool(step.candidates)
 
 
+def _uses_candidate_execution(step) -> bool:
+    if hasattr(step, "locator_candidates"):
+        return _has_candidates(step)
+    return hasattr(step, "candidates")
+
+
 def _build_locator_from_candidate(page, candidate_entry) -> object | None:
     """Build a Playwright locator from a candidate's strategy and selector.
 
     *candidate_entry* may be a ``LocatorCandidate`` model or a plain dict.
     """
+    if hasattr(candidate_entry, "locator"):
+        try:
+            return compile_locator(
+                page,
+                candidate_entry.locator,
+                context_path=candidate_entry.context_path,
+            )
+        except (TypeError, ValueError):
+            return None
     if hasattr(candidate_entry, "strategy"):
         strategy = candidate_entry.strategy
         selector = candidate_entry.selector or ""
@@ -261,6 +277,25 @@ def _build_locator_from_candidate(page, candidate_entry) -> object | None:
 
 
 def _candidate_to_trace_evidence(candidate_entry) -> LocatorCandidateEvidence:
+    if hasattr(candidate_entry, "locator"):
+        locator = candidate_entry.locator.model_dump(mode="json")
+        return LocatorCandidateEvidence(
+            strategy=locator["kind"],
+            preview_text=(
+                locator.get("name")
+                or locator.get("value")
+                or str(locator)
+            ),
+            role=locator.get("role"),
+            attributes=LocatorCandidateAttributes(),
+            score=int(float(candidate_entry.score) * 100),
+            matched_rules=[
+                "target-binding",
+                str(candidate_entry.provenance),
+            ],
+            visible=bool(candidate_entry.visible),
+            enabled=bool(candidate_entry.enabled),
+        )
     if hasattr(candidate_entry, "strategy"):
         strategy = candidate_entry.strategy
         selector = candidate_entry.selector or ""
@@ -284,11 +319,12 @@ def _candidate_to_trace_evidence(candidate_entry) -> LocatorCandidateEvidence:
 
 
 def _candidate_feature(candidate, name: str):
-    features = (
-        getattr(candidate, "pre_features", None)
-        if hasattr(candidate, "pre_features")
-        else candidate.get("pre_features")
-    ) or {}
+    if hasattr(candidate, "pre_features"):
+        features = getattr(candidate, "pre_features", None) or {}
+    elif isinstance(candidate, dict):
+        features = candidate.get("pre_features") or {}
+    else:
+        features = {}
     return features.get(name)
 
 
@@ -414,8 +450,14 @@ def _build_step_evidence(
         step_index=step_index,
         action=step.action,
         dsl_profile=(
-            "research-v1" if hasattr(step, "intent") else "legacy-v1"
+            "research-v2"
+            if hasattr(step, "locator_candidates")
+            else "research-v1"
+            if hasattr(step, "intent")
+            else "legacy-v1"
         ),
+        plan_step_id=getattr(step, "plan_step_id", None),
+        target_binding_id=getattr(step, "target_binding_id", None),
         intent=getattr(step, "intent", None),
         idempotency=getattr(step, "idempotency", None),
         declared_side_effect=getattr(step, "side_effect", None),
@@ -484,9 +526,17 @@ def _execute_step_with_candidates(
         raise RunnerExecutionError(message, step_evidence=evidence)
 
     resolved_target = _substitute_variables(step.target, vars_map) or step.target
-    candidates = sorted(step.candidates, key=lambda c: c.pre_score, reverse=True)
+    candidates = sorted(
+        step.candidates,
+        key=lambda candidate: float(
+            getattr(candidate, "score", getattr(candidate, "pre_score", 0.0))
+        ),
+        reverse=True,
+    )
     selected_candidate = None
     locator = None
+    candidate_attempts: list[LocatorCandidateEvidence] = []
+    structured_binding = hasattr(step, "locator_candidates")
     for candidate in candidates:
         candidate_locator = _build_locator_from_candidate(page, candidate)
         if candidate_locator is None:
@@ -494,8 +544,21 @@ def _execute_step_with_candidates(
         try:
             if candidate_locator.count() != 1:
                 continue
+            if (
+                structured_binding
+                and step.action in {"click", "input"}
+                and not candidate_locator.is_visible()
+            ):
+                continue
+            if (
+                structured_binding
+                and step.action in {"click", "input"}
+                and not candidate_locator.is_enabled()
+            ):
+                continue
         except Exception:
             continue
+        candidate_attempts.append(_candidate_to_trace_evidence(candidate))
         selected_candidate = candidate
         locator = candidate_locator
         break
@@ -508,6 +571,14 @@ def _execute_step_with_candidates(
     click_recovery_detail = None
     step_value = getattr(step, "value", None)
     try:
+        if (
+            locator is None
+            and structured_binding
+            and step.action in {"click", "input", "capture_text"}
+        ):
+            raise RunnerExecutionError(
+                "All bound locator candidates are stale or not actionable."
+            )
         if locator is None and step.action == "click":
             resolved, vlm_preverify_used = _resolve_with_confidence_gate(
                 page, step.target,
@@ -582,12 +653,16 @@ def _execute_step_with_candidates(
         raise RunnerExecutionError(str(exc), step_evidence=evidence) from exc
 
     if selected_candidate is not None:
-        resolved_by = selected_candidate.strategy
+        resolved_by = (
+            selected_candidate.strategy
+            if hasattr(selected_candidate, "strategy")
+            else selected_candidate.locator.kind
+        )
         trace_candidate = _candidate_to_trace_evidence(selected_candidate)
         locator_trace = LocatorTrace(
             target=resolved_target,
             match_strategy=resolved_by,
-            candidates=[trace_candidate],
+            candidates=candidate_attempts or [trace_candidate],
             selected_candidate=trace_candidate,
             selection_reason="Selected verified candidate before action dispatch.",
         )
@@ -764,6 +839,18 @@ def _execute_non_target_step(
                 _resolve_url(_substitute_variables(step.value, input_values), base_url),
                 wait_until="domcontentloaded",
             )
+        elif step.action == "wait_for":
+            target = _substitute_variables(step.target, input_values) or step.target
+            page.get_by_text(target, exact=False).first.wait_for(
+                state="visible",
+                timeout=step.timeout_ms,
+            )
+        elif step.action == "assert_text":
+            expected = _substitute_variables(step.value, input_values)
+            locator = page.get_by_text(expected, exact=False).first
+            locator.wait_for(state="visible", timeout=5000)
+            if expected not in locator.inner_text():
+                raise AssertionError(f"Text assertion failed: {expected}")
         elif step.action == "assert_url_contains":
             expected = _substitute_variables(step.value, input_values)
             if expected not in page.url:
@@ -902,7 +989,7 @@ def _execute_case_with_playwright_legacy(
                     vlm_preverify_used = False
                     step_value = getattr(step, "value", None)
 
-                    if hasattr(step, "candidates"):
+                    if _uses_candidate_execution(step):
                         evidence_for_step = _execute_step_with_candidates(
                             page, step, index,
                             artifact_dir=artifact_dir,
@@ -1256,7 +1343,7 @@ def execute_case_with_playwright_streaming(
                     step_value = getattr(step, "value", None)
 
                     # --- Dual-layer scoring path (new) ---
-                    if hasattr(step, "candidates"):
+                    if _uses_candidate_execution(step):
                         evidence_for_step = _execute_step_with_candidates(
                             page, step, index,
                             artifact_dir=artifact_dir,

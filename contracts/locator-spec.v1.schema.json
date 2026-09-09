@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/locator-spec.v1.schema.json",
+  "title": "LocatorSpec v1",
+  "$ref": "#/$defs/locator",
+  "$defs": {
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "role"},
+        "role": {"type": "string", "minLength": 1},
+        "name": {"type": ["string", "null"]},
+        "exact": {"type": "boolean", "default": true}
+      },
+      "required": ["kind", "role", "exact"]
+    },
+    "value": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["label", "placeholder", "text", "test_id", "css", "xpath"]
+        },
+        "value": {"type": "string", "minLength": 1},
+        "exact": {"type": "boolean", "default": true}
+      },
+      "required": ["kind", "value", "exact"]
+    },
+    "scoped": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "scoped"},
+        "scope": {"$ref": "#/$defs/leaf"},
+        "target": {"$ref": "#/$defs/leaf"}
+      },
+      "required": ["kind", "scope", "target"]
+    },
+    "leaf": {
+      "oneOf": [
+        {"$ref": "#/$defs/role"},
+        {"$ref": "#/$defs/value"}
+      ]
+    },
+    "locator": {
+      "oneOf": [
+        {"$ref": "#/$defs/leaf"},
+        {"$ref": "#/$defs/scoped"}
+      ]
+    }
+  }
+}

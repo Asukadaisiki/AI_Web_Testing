@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 DSL_CANONICAL_VERSION = "dsl.canonical.v1"
 DSL_CANONICAL_VERSION_V1 = DSL_CANONICAL_VERSION
 DSL_CANONICAL_VERSION_V2 = "dsl.canonical.v2"
+DSL_CANONICAL_VERSION_V3 = "dsl.canonical.v3"
 
 
 class DSLModel(BaseModel):
@@ -260,6 +261,7 @@ def load_canonical_dsl(
     if canonical_version not in {
         DSL_CANONICAL_VERSION_V1,
         DSL_CANONICAL_VERSION_V2,
+        DSL_CANONICAL_VERSION_V3,
     }:
         raise ValueError(f"Unsupported DSL canonical version: {canonical_version}.")
     actual_sha256 = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
@@ -268,13 +270,22 @@ def load_canonical_dsl(
     payload = json.loads(canonical_json)
     if not isinstance(payload, dict):
         raise ValueError("Canonical DSL must be a JSON object.")
-    if canonical_version == DSL_CANONICAL_VERSION_V2:
+    if canonical_version == DSL_CANONICAL_VERSION_V3:
+        from browser_worker.contracts.action_ir_v2 import (
+            validate_research_v2_dsl,
+        )
+
+        case = validate_research_v2_dsl(payload, phase="executable")
+    elif canonical_version == DSL_CANONICAL_VERSION_V2:
         from browser_worker.contracts.action_ir import validate_research_dsl
 
         case = validate_research_dsl(payload, phase="executable")
     else:
         case = DSLCase.model_validate(payload)
-    materialized = case.model_dump(mode="json")
+    materialized = case.model_dump(
+        mode="json",
+        exclude_none=(canonical_version == DSL_CANONICAL_VERSION_V3),
+    )
     if canonical_version == DSL_CANONICAL_VERSION_V1:
         for index, source_step in enumerate(payload.get("steps", [])):
             for compatibility_field in ("preconditions", "postconditions"):
@@ -301,10 +312,18 @@ def validate_dsl_case(
 ) -> Any:
     """Select the profile schema without changing legacy DSLCase behavior."""
     profile = payload.get("profile")
+    if profile == "research-v2":
+        from browser_worker.contracts.action_ir_v2 import (
+            validate_research_v2_dsl,
+        )
+
+        return validate_research_v2_dsl(payload, phase=phase)
     if profile == "research-v1":
         from browser_worker.contracts.action_ir import validate_research_dsl
 
         return validate_research_dsl(payload, phase=phase)
     if profile not in (None, "legacy-v1"):
-        raise ValueError("case.profile must be legacy-v1 or research-v1")
+        raise ValueError(
+            "case.profile must be legacy-v1, research-v1, or research-v2"
+        )
     return DSLCase.model_validate(payload)

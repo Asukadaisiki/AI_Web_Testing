@@ -56,6 +56,94 @@
 
 ## 任务记录
 
+## 2026-09-10 | 探索预算、重复调用与 grounding 修复
+
+- 任务：修复 v4-pro research-v2 live E2E 暴露的计划改版预算耗尽、Products 容器误点击、Quantity wait_for 语义错误和取消后结果状态不一致，并向模型暴露预算及防重复规则。
+- 操作：将 ExplorationGate 改为 TaskPlan ID/version 级 page/flow 预算并增加 Run 级硬上限；在 set_task_plan、探索摘要和 gate failure 中返回 used/limit/remaining、重复签名限制和当前签名 fingerprint；对 page/flow 的规范化签名忽略 description、timeout 和 observation version，同一计划版本内完成一次后禁止重复；为 flow action 增加显式 `plan_step_id`，TaskPlan 优先按 ID 做授权和结果归属；候选选择先过滤动作兼容的交互 role/tag，再按 exact name 和 verified selector 排序，TargetBinding 忽略不可执行容器；wait_for 增加受限语义 LocatorSpec 与 `value_equals`；Driver 取消后刷新 Run/event 终态。
+- 结果：Plan v2 不再继承 Plan v1 已耗尽的 4 次 flow 预算，但整个 Run 最多仍执行 8 次 flow；模型每轮都能看到剩余预算且不能用改写描述或 timeout 重复调用。`click Products` 不再选择 `#header`，`role=spinbutton + value_equals=1` 可以直接验证数量值。BUG-173、BUG-174、BUG-175、BUG-176 已修复；另发现与本轮无关的 Overview UTC/本地日界线 BUG-177。
+- 验证：Go 无外部数据库全量测试、vet、build 通过；真实 PostgreSQL 下 taskplan/integration/harness/agent/tools 相关模块通过；Python 全量 183 tests passed / 2 skipped、compileall、Pyright 0 errors、相关 Ruff 检查通过；Frontend 10 tests 和 production build 通过；真实浏览器 smoke 中 Products 导航到 `/products`，结构化数量检查 success 且 evidence_count=1。浏览器命令在业务输出后因 TRAE sandbox 禁止访问受限根路径返回 1，不影响已输出断言。全量 PostgreSQL 另因 BUG-177 的跨午夜时间窗缺陷失败。
+- 后续：暂不重复调用付费模型；是否再次执行 research-v2 live E2E 由用户确认。当前代码尚未提交或同步 GitHub。
+
+## 2026-09-09 | explore_page、explore_flow 与 grounding 语义复核
+
+- 任务：解释 4 次 explore_flow 仅得到 5/13 grounded 是否合理，以及工具注入、页面证据和探索失败的实际语义。
+- 操作：复核 Harness system prompt、浏览器工具 schema、TaskPlan `RecordToolResult` 连续推进规则和 live Run `run_7859949d26bb0c6dc7b31bc8` 的四次 flow 结果。
+- 结果：`explore_page` 只打开一个已知 URL 并返回该状态的 Observation；`explore_flow` 在一次 disposable BrowserContext 内执行模型声明的多页面步骤和 click/input/wait_for 动作，但不同 flow 调用之间不共享状态。四次 flow 后的 grounded 数依次为 2、5、5、5：第一次只推进 s2；第二次推进 s3-s5；第三、四次虽采到详情页元素和成功动作，但 View Product 同时匹配 list/listitem/link，无法生成唯一 TargetBinding，随后 Quantity 的精确文本 wait 又失败，因此没有继续推进。页面返回元素只代表 observation 成功；单个 action、整个 flow outcome、Tool RPC 和 PlanStep grounding 是四个不同状态。
+- 验证：TaskPlan updated 事件 seq 14/23/32/41/50 分别为 1/13、2/13、5/13、5/13、5/13 grounded；事件 48 同时包含详情页 Observation、成功的 View Product/Add to cart wait evidence 和 `Quantity` action failure。
+- 后续：统一探索 action 与 TargetBinding 的候选筛选；区分 RPC 成功、部分 flow 成功和 PlanStep grounding；修复预算前先保证一次有效 flow 能消费其已采集证据。
+
+## 2026-09-09 | v4-pro research-v2 live Agent E2E
+
+- 任务：使用官方 `deepseek-v4-pro` 运行一次真实 research-v2 Agent E2E，验证 TaskPlan、DSL 编译、审批、正式执行、报告和 Oracle 完整链路。
+- 操作：应用最新 Go schema；从当前工作树启动 Browser Worker、20-turn AgentService（thinking=max）和 execution-worker；运行 `automationexercise-blue-top-cart.v1.json`，设置 1200 秒绝对截止时间；从结果 JSON、PostgreSQL Agent events、TaskPlan/PlanStep 和 Browser Worker 日志交叉核验；终态后停止全部本轮服务。
+- 结果：E2E 失败，Run `run_7859949d26bb0c6dc7b31bc8` 在截止时间由 Driver 取消。9 次官方 v4-pro 调用全部 HTTP 200、retry=0，累计 input 393,786 / output 55,636 / total 449,422 tokens，最大单次延迟 281,000 ms，provider request ID 均已保存；BUG-167 的 response_read_failed 本次未复现。Plan v1 达到 5/13 grounded、3 个 TargetBinding；模型改版后 Plan v2 仅继承 2/8 grounded、1 个 binding，随后补探被全局 `explore_flow_calls=4` 预算拒绝，最终 Plan 为 blocked。没有生成 DSL、Approval、Batch、Execution 或 Oracle 结果。关联 BUG-173、BUG-174、BUG-175。
+- 验证：数据库终态为 `cancelled`、last event seq=75；9 条 `research.llm_call` 均为 `requested_model=resolved_model=deepseek-v4-pro` 且 usage available；Generation=0、Batch=0。结果文件 `research/results/agentic-e2e-v4-pro-research-v2-20260909T123800Z/run.json`，SHA-256 `40e6f3710a02f9282d349bddbc6afeec31af49160c70c579fe5dad7e01e2646c`。
+- 后续：先修复计划版本感知的探索预算、explore_flow 容器误点击和取消后结果状态刷新，再决定是否付费复跑；本次不重复调用模型。
+
+## 2026-09-09 | research-v2 DSL 链路完成度复核
+
+- 任务：确认 DSL 链路是否已经全部修复。
+- 操作：复核 research-v2 Draft 校验、TaskPlan 编译、TargetBinding/Observation binding、canonical v3、Python LocatorSpec compiler、Preflight/Runner 分派与执行证据字段，并对照统一方案完成标准和现有测试记录。
+- 结果：代码层主链已完成，`Draft DSL -> Go Compiler -> Executable DSL v3 -> TargetBinding Preflight -> Playwright Runner -> Step Evidence` 已连通；research-v2 不再允许模型提交 selector/candidates，也不会回退自由文本 locator。尚不能宣称端到端稳定，因为 v4-pro 下的真实 Agent E2E 尚未执行；research-v1 字符串路径仍作为兼容层保留。
+- 验证：静态复核关键入口与既有全量门禁记录；本次未新增测试、未启动服务。
+- 后续：使用 v4-pro 完成一次 research-v2 live E2E，核对 TaskPlan 全 grounded、generation/approval binding、正式执行、报告与 Oracle 后，再标记生产稳定并提交同步。
+
+## 2026-09-09 | DeepSeek Planning 模型切换至 v4-pro
+
+- 任务：将当前 DeepSeek Planning 模型切换为 v4-pro，并确认整体任务进度。
+- 操作：将本地运行配置、开发示例和生产部署示例的 `AI_PLANNING_MODEL` 更新为 `deepseek-v4-pro`；通过官方 `api.deepseek.com/chat/completions` 发起最小非思考请求；检查当前服务进程。
+- 结果：当前配置已统一为 `deepseek-v4-pro`；官方请求返回 HTTP 200、模型 `deepseek-v4-pro` 和内容 `OK`，usage 为 input 7 / output 1 / total 8 tokens，request ID 为 `df3a7bf2-8c08-4234-ae87-bb38233c959a`。AgentService 当前未运行，新配置会在下次启动时生效；现存 execution-worker 不读取 Planning 模型，无需重启。
+- 验证：Go config/LLM 聚焦测试通过；三个配置文件值一致；`git diff --check` 通过。
+- 后续：使用 v4-pro 运行一次真实 research-v2 Agent E2E，验证 TaskPlan 全 grounded、DSL generation、审批、正式执行、报告和 Oracle；通过后提交并同步当前改动。
+
+## 2026-09-09 | DeepSeek v4.1flash 模型可用性核验
+
+- 任务：将当前 DeepSeek Planning 模型切换为 v4.1flash。
+- 操作：核对本地非敏感 Planning 配置，并使用现有凭据只读查询官方 `https://api.deepseek.com/models`。
+- 结果：当前运行模型为 `deepseek-v4-flash`；官方 endpoint 仅返回 `deepseek-v4-flash`、`deepseek-v4-pro` 和 `deepseek-v4-flash-vision-exp`，未提供 `v4.1flash` 或 `deepseek-v4.1-flash`。为避免写入无效模型导致 Agent 调用失败，本次未修改配置。
+- 验证：官方 `/models` 请求成功，返回模型列表与官方 API 文档一致。
+- 后续：需要确认目标模型的准确 API model ID，或提供支持该模型的 endpoint/provider。
+
+## 2026-09-09 | Browser Observation、TargetBinding 与 research-v2 实施
+
+- 任务：按 Phase 0-6 实施 A11y Tree、DOM、DSL、preflight 和 Runner 的统一方案，并以非电商页面验证。
+- 操作：新增共享 capability manifest、BrowserObservation/LocatorSpec/TargetBinding JSON Schema 和 7 类跨站 fixture；Python 新增严格 Observation/TargetBinding 模型与唯一 LocatorSpec compiler；采集层保留原始 accessible name、AX states/relations、DOM text、runtime 和 frame/shadow context，生成最多 120 个 ElementFact，将 raw snapshot gzip 内容寻址并对超过 512 KiB 的节点集分片；Go 新增 browsercontract、PlanStep TargetBinding 持久化与 hash 校验，grounding 从成功 action/Observation 生成 binding；新增 research-v2 Draft DSL、Go 确定性编译、canonical v3 和 plan/observation binding；模型探索摘要预算收紧为 16/32/48 KiB；Runner 对 v2 只执行结构化 candidates 并在派发前检查唯一、可见、可用；修复 legacy scope/role parser 漂移及 v2 条件/执行分派问题。
+- 结果：新链路实现 `Intent Plan -> Observation v2 -> TargetBinding -> Draft DSL -> Executable DSL v3 -> Runner`，LLM 不再提交 selector/candidates；research-v1 保持兼容。真实 Selenium Web Form research-v2 Runner smoke 中 `goto -> input -> click` 3/3 通过；DataTables Observation 被裁剪为 120 个 ElementFact，499,383-byte raw evidence 不再内联，生成 1 个 499,451-byte shard，低于 512 KiB 上限；MDN Web Component observation 识别到 open Shadow DOM context。关联 BUG-168、BUG-169、BUG-170、BUG-171、BUG-172。
+- 验证：显式设置真实 `TEST_DATABASE_URL` 后 Go 全量测试通过，包含 research-v2 compilation、TargetBinding 持久化和 Research 生命周期测试；`go vet ./...`、`go build ./...` 通过；Python 全量 178 tests passed / 2 skipped、compileall、Pyright（0 errors）和新增文件 Ruff 检查通过；Frontend 10 tests 和 production build 通过；共享 canonical v3 golden、JSON Schema 解析和 `git diff --check` 通过。真实 Selenium 与 DataTables 浏览器 smoke 的业务断言通过，但命令退出时因 TRAE sandbox 禁止访问受限 macOS 路径返回非零。
+- 后续：尚未运行付费的真实 DeepSeek Agent E2E；待 provider 稳定后使用 research-v2 跑跨站矩阵，并依据结果决定何时停止 research-v1 写入。
+
+## 2026-09-09 | 跨站 Browser Observation 与 DSL 统一方案调研
+
+- 任务：跳出单一电商页面，基于不同网站的真实 A11y、DOM 和动态交互数据，设计统一的 Observation、TargetBinding、DSL、Preflight 和 Runner 合同。
+- 操作：只读访问 Selenium Web Form、GOV.UK Search、TodoMVC React、Wikipedia 人口表、DataTables、WAI ARIA Combobox 和 MDN Shadow DOM 示例；比较 compact A11y snapshot、DOM/ARIA/表格/Shadow DOM 规模及动态状态；复查 Playwright 官方 locator 建议、MDN Accessibility Tree 和 CDP Accessibility 协议；审计当前 Go/Python schema、preflight parser、semantic locator 和 Runner。
+- 结果：新增 `docs/plan/unified-browser-observation-dsl-2026-09-09.md`。方案将 Intent TaskPlan、BrowserObservation/ElementFact、Grounded TargetBinding、Draft DSL 和 Executable DSL 分层；用结构化 LocatorSpec 替换自定义定位字符串；要求 preflight 与 Runner 共用唯一 compiler；保留 A11y name、DOM text、runtime state 和 frame/shadow context 的独立语义；采用 snapshot artifact、delta/ref、step-scoped observation 和三层预算控制体积。跨站证据证明原生表单、SPA、长表格、ARIA composite 和 Shadow DOM 不能用商品卡片模型或单一 locator 规则概括。
+- 验证：7 个公开页面均完成真实浏览器只读检查，其中 Selenium 表单在 0 个显式 ARIA 元素下仍产生完整 A11y label；TodoMVC 动态 DOM 控件未全部进入 compact A11y；Wikipedia 超过 10,000 个 DOM 元素；DataTables 有排序/分页状态；WAI combobox 依赖 `expanded/controls/activedescendant`；MDN 示例包含 open Shadow DOM。官方文档确认 role/label/text/test id 优先、CSS/XPath 次选，XPath 不穿透 Shadow DOM。未运行项目 E2E，未调用 DeepSeek。
+- 后续：评审并批准规格后，按 Phase 0-6 先合同、再 Observation、再 TargetBinding/DSL Compiler、最后统一 Runner 的顺序实施；旧 `research-v1` 在跨站矩阵通过前保持只读兼容。
+
+## 2026-09-09 | A11y/DOM 增强与定位语法复核
+
+- 任务：说明 Browser Worker 如何把 A11y 与 DOM 信息组合为可执行 locator，并判断是否应继续使用自定义定位字符串语法。
+- 操作：核对 CDP A11y 节点转换、`backendDOMNodeId` 到 DOM 的局部增强、DOM-only interactive supplement、verified selector 生成、semantic runtime parser、locator preflight parser 和 candidate Runner。
+- 结果：A11y 与 DOM 是不同事实源且不是一一对应；当前通过 `backendDOMNodeId` 做部分关联，并补充 A11y 缺失的可交互 DOM 控件。系统现有 `role="name"`、`inside "scope"` 等自定义字符串语法不应继续扩展，应迁移为结构化 TargetBinding。发现 runtime 接受通用 `inside "name"`，preflight 只接受 `inside product "name"`，同一 target 存在解释漂移，新增 BUG-168。
+- 验证：静态核对两个 parser：`semantic._A11Y_SCOPE_RE` 接受可选 `product`，`locator_preflight._SCOPE_RE` 强制 `product`；本次未运行浏览器或修改业务代码。
+- 后续：统一保留 `accessible_name`、`dom_text`、DOM attrs 和 runtime state；通过共享结构化 schema 表达 role/name/scope，并由 Grounding 产出候选引用，preflight 与 Runner 禁止维护独立字符串解析规则。
+
+## 2026-09-09 | 当前 Agent 到 Playwright 的链路模拟与 DSL 边界复核
+
+- 任务：基于当前实现模拟 AI 接收长链 Web 测试任务后的决策、工具调用、服务触发和结果，并复核探索/执行隔离、A11y 事实、Playwright locator 与 DSL 的边界。
+- 操作：核对 Go Harness/TaskPlan/ControlPlane、Browser Worker capability/preflight、CDP A11y+DOM 增强、Playwright candidate runner、Execution Worker 和前端 Agent API；以 Blue Top 搜索加购任务逐阶段推演 `set_task_plan -> explore_page/flow -> generate_dsl -> approval -> execute_dsl -> get_report`；从 PostgreSQL 量化最近 Run 的 raw tool result、节点数、模型摘要和请求体字节。
+- 结果：正式执行会启动新的 headless Chromium 并清理存储，和 planning 完全隔离；每次 `explore_flow` 也使用并关闭 disposable BrowserContext，`explore_page` 则只在 planning session 内复用上下文。当前 DSL 已禁止模型直接编造 candidates，服务端会基于按 page state 分组的 A11y/DOM evidence 生成 verified CSS、role/text/scoped candidates，再由 Runner 按分数和唯一性执行。`run_a85adb2d33a4dcf463ba5e70` 的 3 条探索 raw result 合计 664,631 bytes，单条最大 259,481 bytes；模型侧 3 条摘要累计 95,641 bytes，最后请求达到 390,352 bytes / 95,865 input tokens，说明原文隔离已生效但多轮上下文仍明显增长。另有两个尚未通过完整 E2E 证明的结构风险：DOM augmentation 会以 `textContent` 覆盖 accessible `name`，可能偏离 Playwright `get_by_role` 的真实 name；TaskPlan 在探索前持有业务 target，而 generation 又要求 DSL target 与其完全一致，可能把业务语义和探索后 locator binding 耦合。
+- 验证：静态核对当前代码路径和数据库证据；同一 Run 的 Products/search/detail/cart 状态分别约为 240/62/72/55 个节点，单状态 JSON 约 120/39/46/46 KB；isolated probe 已完成 Products、搜索、详情、加购弹层和 `/view_cart`，但修复后尚无 Run 进入 DSL preflight，因此上述 DSL 风险是代码合同分析，不是已复现的最终失败结论。本次未运行服务、未调用模型。
+- 后续：后续设计应显式区分 Intent Plan 的 semantic target 与 Grounded Plan 的 TargetBinding；保留原始 accessible name、DOM text 和 verified selectors 为不同字段，让 preflight/Runner 共用同一候选语义和可执行性验证；page snapshot 以内容寻址 artifact 保存，事件和模型上下文只携带 step-scoped delta/ref，并增加 raw snapshot、模型 observation 和 run token 三层预算。
+
+## 2026-09-09 | 最近 Agent 链路实验综合复盘
+
+- 任务：复盘最近多轮 Agentic E2E 的实际运行效果、问题演进和修复范围，判断方案是任务级补丁还是覆盖完整控制链路的通用改进。
+- 操作：对照 Blue Top、Men Tshirt 和显式 TaskPlan Blue Top 的执行记录，复查 AgentRun 状态、LLM 调用量、工具失败、TaskPlan version/grounded 数量、isolated flow 页面路径、正式 Execution 和 Oracle 结果；重点区分浏览器动作成功、TaskPlan 状态推进、DSL/审批/正式执行及最终 Oracle 四个层次。
+- 结果：旧 Blue Top 暴露探索污染，隔离 BrowserContext 后解决；Men Tshirt 已证明 DSL、审批和正式执行 7/7 可完成，Oracle 隐藏文本误判也已修复；新 TaskPlan Blue Top 多轮实验进一步证明浏览器可用 12 个成功动作到达 `/view_cart`，但 grounding ownership/result mapping 阻断状态推进。该修复覆盖 Goal 权威、计划版本、前置重放、动作授权、成功 evidence 和连续状态迁移，不含任务专用硬编码；但修复后最终复跑在首次 DeepSeek 调用连续三次 `response_read_failed`，尚未取得 TaskPlan 全链通过证据。
+- 验证：数据库复核 8 个 TaskPlan Blue Top Run；其中 `run_a85adb2d33a4dcf463ba5e70` 的 isolated flow 为 `success=true`、0 failure、12 个成功 after-action，路径覆盖 Products、搜索结果、商品详情和 `/view_cart`，但最新 Plan 仅 2/12 grounded；`run_9f98a83f130f3465fae17b94` 为 3 次 HTTP 200 transport failure 后 `run.failed`。8 个 Run 已记录的可用 usage 合计 3,282,277 tokens，均未产生 DSL generation。
+- 后续：必须补一次修复后、provider 稳定时的完整 E2E，验证 12/12 grounded、generation plan binding、审批、正式执行、报告和 Oracle；另行处理模型调用预算/缓存、响应流恢复和历史 stale Run，未完成前不应将本轮定义为端到端稳定。
+
 ## 2026-09-09 | Blue Top 长链 TaskPlan live E2E 与状态推进修复
 
 - 任务：使用声明式 `automationexercise-blue-top-cart.v1.json` 和官方 DeepSeek 执行更长的真实 Agentic E2E，验证显式 TaskPlan 在搜索、详情、加购弹层和购物车验证链路中的状态推进。

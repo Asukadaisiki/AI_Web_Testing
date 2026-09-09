@@ -812,10 +812,8 @@ class AgenticE2EDriverTest(unittest.TestCase):
                 "agent_run_id": "run-33",
             },
         )
-        self.assertEqual(diagnostic["run"]["status"], "waiting_user")
-        self.assertEqual(
-            diagnostic["run"]["pending_tool_call_id"], "clarification-1"
-        )
+        self.assertEqual(diagnostic["run"]["status"], "cancelled")
+        self.assertIsNone(diagnostic["run"]["pending_tool_call_id"])
         self.assertEqual(diagnostic["checkpoint"]["kind"], "clarification")
         self.assertEqual(
             diagnostic["checkpoint"]["questions"][0]["id"],
@@ -838,7 +836,7 @@ class AgenticE2EDriverTest(unittest.TestCase):
         self.assertEqual(len(client.cancel_calls), 1)
         json.dumps(failure)
 
-    def test_timeout_snapshots_diagnostic_before_cancel(self) -> None:
+    def test_timeout_refreshes_diagnostic_after_cancel(self) -> None:
         class TimeoutClient(FakeClient):
             def __init__(self):
                 super().__init__()
@@ -869,7 +867,7 @@ class AgenticE2EDriverTest(unittest.TestCase):
 
         diagnostic = raised.exception.diagnostic
         self.assertIn("absolute deadline", str(raised.exception))
-        self.assertEqual(diagnostic["run"]["status"], "running")
+        self.assertEqual(diagnostic["run"]["status"], "cancelled")
         self.assertEqual(diagnostic["cancellation"]["status"], "cancelled")
         self.assertTrue(diagnostic["cancellation"]["terminal_verified"])
         self.assertTrue(diagnostic["cancellation"]["no_subsequent_events"])

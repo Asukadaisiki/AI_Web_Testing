@@ -1,0 +1,137 @@
+{
+  "schema_version": "browser-contract-cross-site.v1",
+  "captured_at": "2026-09-09",
+  "scenarios": [
+    {
+      "id": "native-form",
+      "url": "https://www.selenium.dev/selenium/web/web-form.html",
+      "page_kind": "form",
+      "facts": {
+        "dom_elements": 109,
+        "dom_controls": 18,
+        "explicit_aria_elements": 0,
+        "compact_ax_nodes": 24,
+        "compact_ax_interactive_nodes": 21
+      },
+      "required_capabilities": [
+        "implicit_accessible_name",
+        "label",
+        "placeholder",
+        "disabled",
+        "readonly",
+        "select",
+        "checked_state",
+        "file_input",
+        "date_input",
+        "range_input"
+      ]
+    },
+    {
+      "id": "government-search",
+      "url": "https://www.gov.uk/search/all",
+      "page_kind": "form",
+      "facts": {
+        "dom_elements": 605,
+        "dom_interactive_candidates": 141,
+        "forms": 3,
+        "compact_ax_nodes": 105,
+        "compact_ax_interactive_nodes": 44
+      },
+      "required_capabilities": [
+        "landmark",
+        "overlay",
+        "form_submit",
+        "duplicate_navigation"
+      ]
+    },
+    {
+      "id": "react-spa",
+      "url": "https://todomvc.com/examples/react/dist/",
+      "page_kind": "spa",
+      "facts": {
+        "dom_elements": 110,
+        "dom_interactive_candidates": 17,
+        "compact_ax_nodes_before": 36,
+        "compact_ax_nodes_after": 50
+      },
+      "required_capabilities": [
+        "same_url_revision",
+        "dynamic_list",
+        "hover_control",
+        "checked_state",
+        "dom_only_interactive"
+      ]
+    },
+    {
+      "id": "large-document-table",
+      "url": "https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population",
+      "page_kind": "document",
+      "facts": {
+        "dom_elements": 10443,
+        "tables": 4,
+        "table_rows": 259,
+        "compact_ax_nodes": 60
+      },
+      "required_capabilities": [
+        "region_query",
+        "table_query",
+        "bounded_observation",
+        "content_extraction"
+      ]
+    },
+    {
+      "id": "dynamic-data-table",
+      "url": "https://datatables.net/examples/core/basic_init/zero_configuration.html",
+      "page_kind": "data_grid",
+      "facts": {
+        "dom_elements": 2401,
+        "dom_interactive_candidates": 207,
+        "rendered_rows": 10,
+        "compact_ax_nodes": 418,
+        "compact_ax_interactive_nodes": 184
+      },
+      "required_capabilities": [
+        "row_cell_relations",
+        "sort_state",
+        "search",
+        "pagination",
+        "same_url_revision"
+      ]
+    },
+    {
+      "id": "aria-composite",
+      "url": "https://www.w3.org/WAI/ARIA/apg/patterns/combobox/examples/combobox-autocomplete-list/",
+      "page_kind": "composite_widget",
+      "facts": {
+        "dom_elements": 1229,
+        "explicit_aria_elements": 27,
+        "options": 56,
+        "compact_ax_nodes": 405,
+        "compact_ax_interactive_nodes": 61
+      },
+      "required_capabilities": [
+        "expanded_state",
+        "controls_relation",
+        "active_descendant_relation",
+        "option_selection",
+        "keyboard_navigation"
+      ]
+    },
+    {
+      "id": "open-shadow-dom",
+      "url": "https://mdn.github.io/web-components-examples/popup-info-box-web-component/",
+      "page_kind": "web_component",
+      "facts": {
+        "light_dom_elements": 52,
+        "open_shadow_roots": 1,
+        "compact_ax_nodes": 4,
+        "compact_ax_interactive_nodes": 1
+      },
+      "required_capabilities": [
+        "shadow_context",
+        "shadow_piercing_locator",
+        "xpath_shadow_rejection"
+      ]
+    }
+  ]
+}

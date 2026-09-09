@@ -274,7 +274,8 @@ func requiresManualRecovery(
 		return true
 	}
 	steps, _ := dslCase["steps"].([]any)
-	if dslCase["profile"] == string(dsl.ProfileResearchV1) {
+	if dslCase["profile"] == string(dsl.ProfileResearchV1) ||
+		dslCase["profile"] == string(dsl.ProfileResearchV2) {
 		return researchRequiresManualRecovery(steps, runStatus, report)
 	}
 	hasClick := false

@@ -1,0 +1,67 @@
+{
+  "schema_version": "browser.capabilities.v1",
+  "actions": {
+    "goto": {
+      "requires_target": false,
+      "requires_unique_match": false,
+      "requires_visible": false,
+      "requires_enabled": false,
+      "requires_editable": false
+    },
+    "click": {
+      "requires_target": true,
+      "requires_unique_match": true,
+      "requires_visible": true,
+      "requires_enabled": true,
+      "requires_editable": false
+    },
+    "input": {
+      "requires_target": true,
+      "requires_unique_match": true,
+      "requires_visible": true,
+      "requires_enabled": true,
+      "requires_editable": true
+    },
+    "wait_for": {
+      "requires_target": false,
+      "requires_unique_match": false,
+      "requires_visible": false,
+      "requires_enabled": false,
+      "requires_editable": false
+    },
+    "assert_text": {
+      "requires_target": false,
+      "requires_unique_match": false,
+      "requires_visible": false,
+      "requires_enabled": false,
+      "requires_editable": false
+    },
+    "assert_url_contains": {
+      "requires_target": false,
+      "requires_unique_match": false,
+      "requires_visible": false,
+      "requires_enabled": false,
+      "requires_editable": false
+    },
+    "capture_text": {
+      "requires_target": true,
+      "requires_unique_match": true,
+      "requires_visible": false,
+      "requires_enabled": false,
+      "requires_editable": false
+    }
+  },
+  "locator_kinds": [
+    "role",
+    "label",
+    "placeholder",
+    "text",
+    "test_id",
+    "css",
+    "xpath",
+    "scoped"
+  ],
+  "unsupported_contexts": [
+    "closed_shadow_root"
+  ]
+}

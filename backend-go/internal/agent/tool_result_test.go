@@ -521,6 +521,165 @@ func TestTaskPlanToolResultExposesBindingAndSteps(t *testing.T) {
 	}
 }
 
+func TestTaskPlanToolResultCanExposeFreshExplorationBudget(t *testing.T) {
+	budget := &ToolResultExplorationBudgetSummary{
+		Scope:       "plan_version",
+		PlanID:      "plan-2",
+		PlanVersion: 2,
+		ExplorePage: ToolResultBudgetCounter{
+			Used: 0, Limit: 5, Remaining: 5,
+		},
+		ExploreFlow: ToolResultBudgetCounter{
+			Used: 0, Limit: 4, Remaining: 4,
+		},
+		RunExplorePage: ToolResultBudgetCounter{
+			Used: 1, Limit: 10, Remaining: 9,
+		},
+		RunExploreFlow: ToolResultBudgetCounter{
+			Used: 4, Limit: 8, Remaining: 4,
+		},
+		RepeatedExplorePageLimit: 1,
+		RepeatedExploreFlowLimit: 1,
+	}
+	content, err := BuildModelToolSummary(
+		"set_task_plan",
+		json.RawMessage(`{
+			"status":"grounding",
+			"plan_id":"plan-2",
+			"version":2,
+			"plan_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"steps":[{"id":"search"}]
+		}`),
+		8,
+		&ToolResultTaskPlanSummary{
+			PlanID:            "plan-2",
+			Version:           2,
+			PlanSHA256:        strings.Repeat("b", 64),
+			Status:            "grounding",
+			StepIDs:           []string{"search"},
+			PendingStepIDs:    []string{"search"},
+			ExplorationBudget: budget,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, ok := DecodeModelToolSummary(content)
+	if !ok ||
+		summary.TaskPlan == nil ||
+		summary.TaskPlan.ExplorationBudget == nil ||
+		summary.TaskPlan.ExplorationBudget.ExploreFlow.Remaining != 4 ||
+		summary.TaskPlan.ExplorationBudget.RunExploreFlow.Used != 4 {
+		t.Fatalf("summary = %s", content)
+	}
+}
+
+func TestExplorationSummaryExposesPersistedTargetBindings(t *testing.T) {
+	content, err := BuildModelToolSummary(
+		"explore_page",
+		json.RawMessage(`{
+			"url":"https://example.test/form",
+			"status":"success",
+			"a11y_nodes":[]
+		}`),
+		17,
+		&ToolResultTaskPlanSummary{
+			PlanID: "plan-1", Version: 2,
+			PlanSHA256: strings.Repeat("a", 64),
+			Status:     "grounding", StepIDs: []string{"open", "submit"},
+			GroundedStepIDs: []string{"open"},
+			PendingStepIDs:  []string{"submit"},
+			StepBindings:    map[string]string{"submit": "binding-1"},
+			ExplorationBudget: &ToolResultExplorationBudgetSummary{
+				Scope:       "plan_version",
+				PlanID:      "plan-1",
+				PlanVersion: 2,
+				ExplorePage: ToolResultBudgetCounter{
+					Used: 1, Limit: 5, Remaining: 4,
+				},
+				ExploreFlow: ToolResultBudgetCounter{
+					Used: 2, Limit: 4, Remaining: 2,
+				},
+				RunExplorePage: ToolResultBudgetCounter{
+					Used: 1, Limit: 10, Remaining: 9,
+				},
+				RunExploreFlow: ToolResultBudgetCounter{
+					Used: 2, Limit: 8, Remaining: 6,
+				},
+				RepeatedExplorePageLimit:  1,
+				RepeatedExploreFlowLimit:  1,
+				CurrentTool:               "explore_flow",
+				CurrentSignatureUses:      intPointer(1),
+				CurrentSignatureRemaining: intPointer(0),
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, ok := DecodeModelToolSummary(content)
+	if !ok || summary.TaskPlan == nil {
+		t.Fatalf("summary = %s", content)
+	}
+	if summary.TaskPlan.StepBindings["submit"] != "binding-1" {
+		t.Fatalf("task plan summary = %#v", summary.TaskPlan)
+	}
+	if len(summary.TaskPlan.GroundedStepIDs) != 1 ||
+		len(summary.TaskPlan.PendingStepIDs) != 1 ||
+		summary.TaskPlan.ExplorationBudget == nil ||
+		summary.TaskPlan.ExplorationBudget.ExploreFlow.Remaining != 2 {
+		t.Fatalf("task plan summary = %#v", summary.TaskPlan)
+	}
+}
+
+func intPointer(value int) *int {
+	return &value
+}
+
+func TestExplorationSummaryReadsObservationV2WithoutLegacyNodes(t *testing.T) {
+	content, err := BuildModelToolSummary(
+		"explore_page",
+		json.RawMessage(`{
+			"url":"https://example.test/form",
+			"element_count":1,
+			"observation_v2":{
+				"schema_version":"browser.observation.v2",
+				"observation_id":"obs-1",
+				"page_state":{
+					"state_id":"form",
+					"state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				},
+				"elements":[{
+					"element_ref":"form:7",
+					"a11y":{"role":"button","name":"Submit"},
+					"dom":{"tag":"button","attrs":{"id":"submit"}},
+					"runtime":{"visible":true,"enabled":true},
+					"locators":[{
+						"locator":{"kind":"css","value":"#submit"},
+						"provenance":"a11y_backend_dom_node",
+						"observed_count":1
+					}]
+				}]
+			}
+		}`),
+		21,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, ok := DecodeModelToolSummary(content)
+	if !ok || len(summary.Pages) != 1 ||
+		len(summary.Pages[0].A11yNodes) != 1 {
+		t.Fatalf("summary = %s", content)
+	}
+	node := summary.Pages[0].A11yNodes[0]
+	if node.Name != "Submit" ||
+		len(node.VerifiedSelectors) != 1 ||
+		node.VerifiedSelectors[0].Selector != "#submit" {
+		t.Fatalf("node = %#v", node)
+	}
+}
+
 func TestGenerateAndRepairToolResultsUseDecisionSummaries(t *testing.T) {
 	generated := json.RawMessage(`{
 		"generation_id":8,
