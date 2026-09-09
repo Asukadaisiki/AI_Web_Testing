@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-09 | Blue Top 长链 TaskPlan live E2E 与状态推进修复
+
+- 任务：使用声明式 `automationexercise-blue-top-cart.v1.json` 和官方 DeepSeek 执行更长的真实 Agentic E2E，验证显式 TaskPlan 在搜索、详情、加购弹层和购物车验证链路中的状态推进。
+- 操作：多轮运行隔离的 Blue Top 长链 E2E；根据真实 trace 修复 authoritative Goal、grounded 前置步骤重放、连续 `plan_step_ids`、只读 `wait_for`、selector/语义 target 对齐、Plan 改版 evidence 继承、部分成功 flow evidence、连续前缀 grounding，以及授权 action 到 PlanStep 的结果映射；补充聚焦回归测试。中间 Run `run_a85adb2d33a4dcf463ba5e70` 的 disposable flow 成功执行 12 个动作并依次到达 Products、搜索结果、商品详情和 `/view_cart`，但修复前状态映射只推进到 2/12 grounded。
+- 结果：长链 TaskPlan grounding/action ownership 缺陷已在本地修复，且没有引入任务专用商品、URL、selector 或动作顺序分支。最终 Run `run_9f98a83f130f3465fae17b94` 未进入 TaskPlan、探索、DSL 或正式执行：首次官方 DeepSeek logical call 的三次物理请求均在 HTTP 200 后发生 `transport/response_read_failed`，Run 以 `LLM response read failed` 结束，因此本次 E2E 结论仍为失败，不能视为端到端验收通过。关联 BUG-166、BUG-167。
+- 验证：`go test -count=1 ./...`、`go vet ./...`、`go build ./...` 和 `git diff --check` 通过；最终失败结果保存在 ignored 文件 `research/results/agentic-e2e-blue-top-cart-taskplan-final9-20260909T010500Z.json`。三个失败请求均保存 request ID、HTTP 状态和错误分类，usage 均为 unavailable；本轮服务已停止。
+- 后续：在 provider 稳定后重新执行同一 acceptance，取得修复后 TaskPlan 全部 grounded、generation plan binding、审批、正式执行、报告和 Oracle 全通过的完整证据；另行设计 `response_read_failed` 的 deadline/watchdog/退避策略，并单独治理历史 stale Run。
+
 ## 2026-09-08 | 显式 TaskPlan/PlanStep 状态机落地
 
 - 任务：将目标语义、动作顺序与次数、副作用边界和禁止动作从 prompt/transcript 约束升级为 Go AgentCore 的可持久化裁决状态。

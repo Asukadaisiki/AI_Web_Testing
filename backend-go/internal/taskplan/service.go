@@ -59,6 +59,12 @@ func (s *Service) CreateVersion(ctx context.Context, request CreateRequest) (Pla
 		ForbiddenActions: definition.ForbiddenActions,
 		Steps:            steps, CreatedAt: now, UpdatedAt: now,
 	}
+	previous, err := s.repository.GetCurrent(ctx, request.RunID)
+	if err == nil {
+		carryForwardGrounding(&plan, previous)
+	} else if !errors.Is(err, ErrNotFound) {
+		return Plan{}, err
+	}
 	return s.repository.CreateVersion(ctx, plan)
 }
 
@@ -150,23 +156,46 @@ func (s *Service) RecordToolResult(
 	}
 	switch tool {
 	case "explore_page", "explore_flow":
-		if resultFailed(result) {
-			return nil
-		}
 		ids, err := planStepIDs(arguments)
 		if err != nil {
 			return err
 		}
+		pendingSteps, err := contiguousPendingSteps(plan, ids)
+		if err != nil {
+			return err
+		}
 		hash := sha256.Sum256(result)
-		for index := range plan.Steps {
-			if !contains(ids, plan.Steps[index].ID) {
-				continue
+		evidence := successfulExplorationEvidence(result)
+		groundedActions := map[string]bool{}
+		if tool == "explore_flow" {
+			actionOwners, mapErr := mapProbeActionOwners(
+				plan,
+				pendingSteps,
+				arguments,
+			)
+			if mapErr != nil {
+				return mapErr
 			}
-			if !resultContainsStepEvidence(result, plan.Steps[index]) {
-				return fmt.Errorf(
-					"exploration result has no evidence for plan step %q",
-					plan.Steps[index].ID,
-				)
+			for key := range successfulFlowActions(result) {
+				if owner := actionOwners[key]; owner != "" {
+					groundedActions[owner] = true
+				}
+			}
+		}
+		for _, pending := range pendingSteps {
+			index := planStepIndex(plan.Steps, pending.ID)
+			if index < 0 {
+				return fmt.Errorf("task plan step %q disappeared", pending.ID)
+			}
+			if tool == "explore_flow" &&
+				(plan.Steps[index].Action == "click" ||
+					plan.Steps[index].Action == "input") &&
+				!groundedActions[plan.Steps[index].ID] {
+				break
+			}
+			if !resultContainsStepEvidence(evidence, plan.Steps[index]) &&
+				!groundedActions[plan.Steps[index].ID] {
+				break
 			}
 			plan.Steps[index].Status = StepGrounded
 			plan.Steps[index].GroundingAttempts++
@@ -460,6 +489,59 @@ func semanticHash(definition Definition) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+func carryForwardGrounding(next *Plan, previous Plan) {
+	previousByID := make(map[string]Step, len(previous.Steps))
+	for _, step := range previous.Steps {
+		previousByID[step.ID] = step
+	}
+	for index := range next.Steps {
+		previousStep, exists := previousByID[next.Steps[index].ID]
+		if !exists ||
+			previousStep.Status != StepGrounded ||
+			!sameStepSemantics(previousStep, next.Steps[index]) {
+			continue
+		}
+		next.Steps[index].Status = StepGrounded
+		next.Steps[index].GroundingAttempts =
+			previousStep.GroundingAttempts
+		next.Steps[index].Evidence =
+			append([]EvidenceRef(nil), previousStep.Evidence...)
+	}
+	if allGrounded(next.Steps) {
+		next.Status = StatusReadyForGeneration
+	}
+}
+
+func sameStepSemantics(left Step, right Step) bool {
+	return left.Intent == right.Intent &&
+		left.Action == right.Action &&
+		left.Target == right.Target &&
+		left.Value == right.Value &&
+		left.Trigger == right.Trigger &&
+		left.ContextKey == right.ContextKey &&
+		left.TimeoutMS == right.TimeoutMS &&
+		left.ExpectedOccurrences == right.ExpectedOccurrences &&
+		left.Idempotency == right.Idempotency &&
+		left.SideEffect == right.SideEffect &&
+		equalStrings(left.Preconditions, right.Preconditions) &&
+		equalStrings(
+			left.CompletionConditions,
+			right.CompletionConditions,
+		)
+}
+
+func equalStrings(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func planID(runID string, hash string, now time.Time) string {
 	sum := sha256.Sum256([]byte(
 		runID + "\x00" + hash + "\x00" + now.Format(time.RFC3339Nano),
@@ -491,57 +573,102 @@ func authorizeExploration(
 	if tool != "explore_flow" {
 		return nil
 	}
-	var request struct {
-		Steps []struct {
-			Description string `json:"description"`
-			Actions     []struct {
-				Action string `json:"action"`
-				Target string `json:"target"`
-				Value  string `json:"value"`
-			} `json:"actions"`
-		} `json:"steps"`
-	}
+	_, err = mapProbeActionOwners(plan, steps, arguments)
+	return err
+}
+
+type probeFlowRequest struct {
+	Steps []struct {
+		Description string `json:"description"`
+		Actions     []struct {
+			Action string `json:"action"`
+			Target string `json:"target"`
+			Value  string `json:"value"`
+		} `json:"actions"`
+	} `json:"steps"`
+}
+
+func mapProbeActionOwners(
+	plan Plan,
+	pending []Step,
+	arguments json.RawMessage,
+) (map[string]string, error) {
+	var request probeFlowRequest
 	if json.Unmarshal(arguments, &request) != nil {
-		return errors.New("invalid explore_flow arguments")
+		return nil, errors.New("invalid explore_flow arguments")
 	}
-	for _, group := range request.Steps {
-		for _, action := range group.Actions {
+	allowedSteps := probeReachableSteps(plan, len(pending))
+	pendingCursor := 0
+	owners := make(map[string]string)
+	for stepIndex, group := range request.Steps {
+		for actionIndex, action := range group.Actions {
 			haystack := action.Action + " " + action.Target + " " +
 				action.Value + " " + group.Description
 			if forbidden(plan.ForbiddenActions, haystack) {
-				return errors.New("explore_flow contains a forbidden action")
+				return nil, errors.New("explore_flow contains a forbidden action")
 			}
-			if !matchesAnyStep(
-				steps,
+			matchedSteps := matchingProbeSteps(
+				allowedSteps,
 				action.Action,
 				action.Target,
 				action.Value,
-			) {
-				return fmt.Errorf(
-					"explore_flow action %q target %q is not owned by the bound plan steps",
+			)
+			if len(matchedSteps) == 0 {
+				if normalize(action.Action) == "wait_for" {
+					continue
+				}
+				matched, nextCursor, ok := nextPendingProbeStep(
+					pending,
+					pendingCursor,
 					action.Action,
-					action.Target,
+					action.Value,
+				)
+				if !ok {
+					return nil, fmt.Errorf(
+						"explore_flow action %q target %q is not owned by the bound plan steps",
+						action.Action,
+						action.Target,
+					)
+				}
+				matchedSteps = []Step{matched}
+				pendingCursor = nextCursor
+			} else {
+				pendingCursor = advancePendingCursor(
+					pending,
+					pendingCursor,
+					matchedSteps,
 				)
 			}
-			for _, step := range steps {
-				if matchesStep(
-					step,
-					action.Action,
-					action.Target,
-					action.Value,
-				) &&
-					(step.SideEffect == SideEffectExternal ||
-						step.SideEffect == SideEffectUnknown) {
-					return fmt.Errorf(
+			for _, step := range matchedSteps {
+				if step.SideEffect == SideEffectExternal ||
+					step.SideEffect == SideEffectUnknown {
+					return nil, fmt.Errorf(
 						"plan step %q cannot be probed because side_effect is %q",
 						step.ID,
 						step.SideEffect,
 					)
 				}
 			}
+			owners[probeActionKey(stepIndex, actionIndex)] =
+				matchedSteps[0].ID
 		}
 	}
-	return nil
+	return owners, nil
+}
+
+func probeReachableSteps(plan Plan, pendingCount int) []Step {
+	firstPending := len(plan.Steps)
+	for index, step := range plan.Steps {
+		if step.Status != StepGrounded {
+			firstPending = index
+			break
+		}
+	}
+	end := firstPending + pendingCount
+	if end > len(plan.Steps) {
+		end = len(plan.Steps)
+	}
+	return plan.Steps[:end]
 }
 
 func validateGenerationArguments(
@@ -647,84 +774,112 @@ func contiguousPendingSteps(plan Plan, ids []string) ([]Step, error) {
 	if first < 0 {
 		return nil, errors.New("all task plan steps are already grounded")
 	}
-	if len(ids) > len(plan.Steps)-first {
-		return nil, errors.New(
-			"plan_step_ids exceed remaining task plan steps",
+	firstSubmitted := -1
+	for index, step := range plan.Steps {
+		if step.ID == ids[0] {
+			firstSubmitted = index
+			break
+		}
+	}
+	if firstSubmitted < 0 || firstSubmitted > first {
+		return nil, fmt.Errorf(
+			"expected next plan step %q, got %q",
+			plan.Steps[first].ID,
+			ids[0],
 		)
 	}
-	result := make([]Step, len(ids))
+	if firstSubmitted+len(ids) > len(plan.Steps) {
+		return nil, errors.New("plan_step_ids exceed task plan steps")
+	}
 	for offset, id := range ids {
-		step := plan.Steps[first+offset]
+		step := plan.Steps[firstSubmitted+offset]
 		if step.ID != id {
 			return nil, fmt.Errorf(
-				"expected next plan step %q, got %q",
+				"plan_step_ids must be contiguous: expected %q, got %q",
 				step.ID,
 				id,
 			)
 		}
-		result[offset] = step
 	}
-	return result, nil
+	end := firstSubmitted + len(ids)
+	if end <= first {
+		return nil, fmt.Errorf(
+			"plan_step_ids must include next pending step %q",
+			plan.Steps[first].ID,
+		)
+	}
+	return append([]Step(nil), plan.Steps[first:end]...), nil
 }
 
-func resultFailed(raw json.RawMessage) bool {
-	var result struct {
-		Success  *bool  `json:"success"`
-		Status   string `json:"status"`
-		Failures []any  `json:"failures"`
-	}
-	if json.Unmarshal(raw, &result) != nil {
-		return true
-	}
-	if (result.Success != nil && !*result.Success) ||
-		strings.EqualFold(result.Status, "error") ||
-		len(result.Failures) > 0 {
-		return true
-	}
-	var value any
-	if json.Unmarshal(raw, &value) != nil {
-		return true
-	}
-	return containsFailure(value)
-}
-
-func containsFailure(value any) bool {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, nested := range typed {
-			if key == "failure" && nested != nil {
-				return true
-			}
-			if key == "status" &&
-				strings.EqualFold(fmt.Sprint(nested), "error") {
-				return true
-			}
-			if containsFailure(nested) {
-				return true
-			}
-		}
-	case []any:
-		for _, nested := range typed {
-			if containsFailure(nested) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func matchesAnyStep(
-	steps []Step,
+func matchingProbeSteps(
+	reachable []Step,
 	action string,
 	target string,
 	value string,
-) bool {
-	for _, step := range steps {
+) []Step {
+	matched := make([]Step, 0, 1)
+	for _, step := range reachable {
 		if matchesStep(step, action, target, value) {
-			return true
+			matched = append(matched, step)
 		}
 	}
-	return false
+	if len(matched) > 0 {
+		return matched
+	}
+	if !isSelectorTarget(target) && normalize(action) != "input" {
+		return nil
+	}
+	for _, step := range reachable {
+		if probeActionMatches(step.Action, action) &&
+			probeValueMatches(step, action, value) {
+			matched = append(matched, step)
+		}
+	}
+	if len(matched) == 1 {
+		return matched
+	}
+	return nil
+}
+
+func nextPendingProbeStep(
+	pending []Step,
+	cursor int,
+	action string,
+	value string,
+) (Step, int, bool) {
+	for index := cursor; index < len(pending); index++ {
+		step := pending[index]
+		if probeActionMatches(step.Action, action) &&
+			probeValueMatches(step, action, value) {
+			return step, index + 1, true
+		}
+	}
+	return Step{}, cursor, false
+}
+
+func advancePendingCursor(
+	pending []Step,
+	cursor int,
+	matched []Step,
+) int {
+	for index := cursor; index < len(pending); index++ {
+		for _, step := range matched {
+			if pending[index].ID == step.ID {
+				return index + 1
+			}
+		}
+	}
+	return cursor
+}
+
+func isSelectorTarget(target string) bool {
+	target = strings.TrimSpace(target)
+	return strings.HasPrefix(target, "#") ||
+		strings.HasPrefix(target, ".") ||
+		strings.HasPrefix(target, "[") ||
+		strings.HasPrefix(target, "//") ||
+		strings.HasPrefix(target, "css=") ||
+		strings.HasPrefix(target, "xpath=")
 }
 
 func matchesStep(
@@ -733,17 +888,46 @@ func matchesStep(
 	target string,
 	value string,
 ) bool {
-	return normalize(step.Action) == normalize(action) &&
-		normalize(step.Target) == normalize(target) &&
-		(step.Value == "" ||
-			strings.TrimSpace(step.Value) == strings.TrimSpace(value))
+	return probeActionMatches(step.Action, action) &&
+		semanticTargetMatches(step.Target, target) &&
+		probeValueMatches(step, action, value)
 }
 
-func resultContainsStepEvidence(raw json.RawMessage, step Step) bool {
-	var decoded any
-	if json.Unmarshal(raw, &decoded) != nil {
+func probeActionMatches(planned string, actual string) bool {
+	planned = normalize(planned)
+	actual = normalize(actual)
+	if planned == actual {
+		return true
+	}
+	return actual == "wait_for" &&
+		(planned == "assert_text" ||
+			planned == "assert_url_contains" ||
+			planned == "capture_text")
+}
+
+func semanticTargetMatches(planned string, actual string) bool {
+	planned = normalize(planned)
+	actual = normalize(actual)
+	if planned == actual {
+		return true
+	}
+	if len([]rune(planned)) < 3 || len([]rune(actual)) < 3 {
 		return false
 	}
+	return strings.Contains(planned, actual) ||
+		strings.Contains(actual, planned)
+}
+
+func probeValueMatches(step Step, action string, value string) bool {
+	if normalize(action) == "wait_for" &&
+		normalize(step.Action) != "wait_for" {
+		return true
+	}
+	return step.Value == "" ||
+		strings.TrimSpace(step.Value) == strings.TrimSpace(value)
+}
+
+func resultContainsStepEvidence(decoded any, step Step) bool {
 	for _, expected := range []string{step.Target, step.Value} {
 		if candidate := normalize(expected); candidate != "" &&
 			jsonContainsText(decoded, candidate) {
@@ -752,6 +936,92 @@ func resultContainsStepEvidence(raw json.RawMessage, step Step) bool {
 	}
 	return step.Action == "goto" &&
 		jsonContainsText(decoded, normalize(step.Intent))
+}
+
+func successfulExplorationEvidence(raw json.RawMessage) []any {
+	var result struct {
+		URL       string `json:"url"`
+		Status    string `json:"status"`
+		A11yNodes []any  `json:"a11y_nodes"`
+		Pages     []struct {
+			URL       string `json:"url"`
+			Status    string `json:"status"`
+			A11yNodes []any  `json:"a11y_nodes"`
+			Actions   []struct {
+				Action         string `json:"action"`
+				Target         string `json:"target"`
+				Status         string `json:"status"`
+				Phase          string `json:"phase"`
+				TargetEvidence []any  `json:"target_evidence"`
+			} `json:"actions"`
+		} `json:"pages"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return nil
+	}
+	evidence := make([]any, 0, len(result.Pages)*3+2)
+	if !strings.EqualFold(result.Status, "error") {
+		evidence = append(evidence, result.URL, result.A11yNodes)
+	}
+	for _, page := range result.Pages {
+		if !strings.EqualFold(page.Status, "error") {
+			evidence = append(evidence, page.URL, page.A11yNodes)
+		}
+		for _, action := range page.Actions {
+			if strings.EqualFold(action.Status, "success") &&
+				strings.EqualFold(action.Phase, "after") {
+				evidence = append(
+					evidence,
+					action.Action,
+					action.Target,
+					action.TargetEvidence,
+				)
+			}
+		}
+	}
+	return evidence
+}
+
+func successfulFlowActions(raw json.RawMessage) map[string]bool {
+	var result struct {
+		Pages []struct {
+			Actions []struct {
+				StepIndex   int    `json:"step_index"`
+				ActionIndex int    `json:"action_index"`
+				Status      string `json:"status"`
+				Phase       string `json:"phase"`
+			} `json:"actions"`
+		} `json:"pages"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return nil
+	}
+	successful := make(map[string]bool)
+	for _, page := range result.Pages {
+		for _, action := range page.Actions {
+			if strings.EqualFold(action.Status, "success") &&
+				strings.EqualFold(action.Phase, "after") {
+				successful[probeActionKey(
+					action.StepIndex,
+					action.ActionIndex,
+				)] = true
+			}
+		}
+	}
+	return successful
+}
+
+func probeActionKey(stepIndex int, actionIndex int) string {
+	return fmt.Sprintf("%d:%d", stepIndex, actionIndex)
+}
+
+func planStepIndex(steps []Step, id string) int {
+	for index := range steps {
+		if steps[index].ID == id {
+			return index
+		}
+	}
+	return -1
 }
 
 func jsonContainsText(value any, target string) bool {
@@ -781,15 +1051,6 @@ func allGrounded(steps []Step) bool {
 		}
 	}
 	return true
-}
-
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func forbidden(rules []string, value string) bool {

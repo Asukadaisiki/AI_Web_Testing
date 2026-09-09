@@ -71,11 +71,10 @@ func (t SetTaskPlanTool) Execute(
 	if err := json.Unmarshal(call.Arguments, &definition); err != nil {
 		return Result{}, err
 	}
-	if definition.Goal != call.RunInput {
-		return Result{}, errors.New(
-			"task plan goal must exactly match the agent run input",
-		)
+	if call.RunInput == "" {
+		return Result{}, errors.New("agent run input is unavailable")
 	}
+	definition.Goal = call.RunInput
 	plan, err := t.plans.CreateVersion(ctx, taskplan.CreateRequest{
 		RunID:       call.RunID,
 		ActorUserID: call.ActorUserID,

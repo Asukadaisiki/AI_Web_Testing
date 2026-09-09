@@ -57,9 +57,9 @@ func TestSetTaskPlanPersistsVersionedPlan(t *testing.T) {
 	}
 }
 
-func TestSetTaskPlanRejectsGoalRewrite(t *testing.T) {
+func TestSetTaskPlanUsesAuthoritativeRunGoal(t *testing.T) {
 	service := taskplan.NewService(taskplan.NewMemoryRepository())
-	_, err := NewSetTaskPlanTool(service).Execute(
+	result, err := NewSetTaskPlanTool(service).Execute(
 		context.Background(),
 		Call{
 			RunID:    "run-tool",
@@ -82,8 +82,21 @@ func TestSetTaskPlanRejectsGoalRewrite(t *testing.T) {
 			}`),
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "exactly match") {
-		t.Fatalf("error = %v, want goal mismatch", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		PlanID string `json:"plan_id"`
+	}
+	if err := json.Unmarshal(result.Content, &payload); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := service.GetCurrent(context.Background(), "run-tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.PlanID != plan.ID || plan.Goal != "Original goal" {
+		t.Fatalf("plan = %#v, payload = %#v", plan, payload)
 	}
 }
 

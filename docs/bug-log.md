@@ -48,6 +48,40 @@
 
 ## 问题记录
 
+## BUG-167 | 官方 DeepSeek 连续返回 HTTP 200 但响应流读取失败
+
+- 日期：2026-09-09
+- 状态：open
+- 严重度：high
+- 来源：Blue Top 长链 TaskPlan live E2E 最终复跑
+- 描述：最终 Run `run_9f98a83f130f3465fae17b94` 的首次 logical LLM call 连续三次从官方 `api.deepseek.com` 收到 HTTP 200，但均在读取响应流时以 `transport/response_read_failed` 失败，最终 Run 报 `LLM response read failed`。
+- 复现步骤：
+  1. 启动 Browser Worker、AgentService 和 execution-worker，使用官方 DeepSeek `deepseek-v4-flash` 与 thinking mode。
+  2. 运行 `automationexercise-blue-top-cart.v1.json` 长链 acceptance。
+  3. 查看 Run seq 2、3、4 的 `research.llm_call`，三次 attempt 均为 HTTP 200、retryable transport failure、usage unavailable。
+- 影响：Run 在第一轮模型响应阶段终止，没有创建 TaskPlan、DSL generation、Batch 或 Execution，无法验证本轮 TaskPlan 修复后的完整端到端链路。
+- 根因：当前证据只能确认官方 HTTP 连接建立并返回 200 后响应体读取失败；尚不能区分上游长响应断流、连接空闲超时或本地 transport deadline。历史 BUG-149 已修复错误分类，本次已被正确分类并重试，但三次均未恢复。
+- 处理：保留失败 trace 和三个 provider request ID，停止继续消耗真实模型预算；本次不修改 LLM adapter。后续需结合 attempt deadline、streaming watchdog、Retry-After 上限和调用级熔断单独设计恢复策略。
+- 验证：request ID 分别为 `4803301886b610ebe5565d9f6b6ab7a2`、`4498c9dcda3ab9c3420fa689e5a18cd1`、`a1a32c17b0e7d900885194403679ec72`；三次 `http_status=200`、`error.category=transport`、`error.code=response_read_failed`、`usage.status=unavailable`，随后 seq 5 为 `run.failed`。
+- 关联记录：`docs/execution-log.md#2026-09-09--blue-top-长链-taskplan-live-e2e-与状态推进修复`
+
+## BUG-166 | TaskPlan 长链 grounding 无法正确重放和推进动作
+
+- 日期：2026-09-09
+- 状态：fixed
+- 严重度：high
+- 来源：Blue Top 长链 TaskPlan live E2E
+- 描述：长链探索需要在 disposable BrowserContext 中重放已 grounded 前置动作后再验证后续步骤，但控制面只允许当前 pending step 的精确 action/target，并在结果落库时重新按文本匹配，导致 selector 与语义 target 不一致、部分成功 flow、计划改版或同页未来文本均可能错误拒绝、丢失或提前推进 PlanStep。
+- 复现步骤：
+  1. 创建包含 Products、搜索、详情、加购弹层和购物车验证的 12 步 TaskPlan。
+  2. 先 grounding 搜索输入，再为后续步骤提交包含搜索重放的 `explore_flow`。
+  3. 可观察到 `is not owned by the bound plan steps`、`expected next plan step`、只读 `wait_for` 被拒绝、Plan 改版丢失已 grounded evidence，或完整 flow 成功但 TaskPlan 仍停在 2/12。
+- 影响：Browser Worker 已能完成完整隔离 flow，TaskPlan 却无法确定性推进到 `ready_for_generation`，Agent 会重复探索、改版或最终耗尽调用预算。
+- 根因：探索授权只考虑本轮 pending steps；action ownership 依赖精确 target 文本；授权阶段映射没有复用于结果阶段；结果以整个 flow 成败为单位且扫描所有绑定步骤，缺少成功 action 索引和连续前缀语义。
+- 处理：允许 grounded prefix 与下一段 pending steps 连续绑定并重放；只读 `wait_for` 可作为额外观察；增加 selector/语义/顺序映射和 side-effect 门；通过 `step_index/action_index + phase=after + status=success` 复用 action ownership；仅推进有成功证据的连续前缀；语义未变的已 grounded step 在新 plan version 中继承 attempts/evidence；服务端强制使用 `AgentRun.Input` 作为权威 Goal。
+- 验证：新增测试覆盖 prerequisite replay、wait-only observation、selector/semantic mapping、future action 拒绝、external side effect 拒绝、partial success、连续前缀、revision carry-forward 和 occurrence preservation；`go test -count=1 ./...`、`go vet ./...`、`go build ./...`、`git diff --check` 通过。
+- 关联记录：`docs/execution-log.md#2026-09-09--blue-top-长链-taskplan-live-e2e-与状态推进修复`
+
 ## BUG-165 | TaskPlan 前端事件读取使用不兼容的 Array.findLast
 
 - 日期：2026-09-08

@@ -96,8 +96,9 @@ func TestTaskPlanLifecycleBindsGroundingGenerationAndExecution(t *testing.T) {
 		json.RawMessage(`{
 			"success":true,
 			"pages":[{"status":"success","actions":[{
+				"step_index":0,"action_index":0,
 				"action":"input","target":"Search","value":"Blue Top",
-				"status":"success"
+				"phase":"after","status":"success"
 			}]}]
 		}`),
 		16,
@@ -247,12 +248,183 @@ func TestTaskPlanRejectsForbiddenAndUnplannedProbeActions(t *testing.T) {
 		json.RawMessage(`{
 			"plan_step_ids":["open_detail"],
 			"steps":[{"actions":[{
-				"action":"click","target":"Different action"
+				"action":"input","target":"Different action","value":"unexpected"
 			}]}]
 		}`),
 	)
 	if err == nil || !strings.Contains(err.Error(), "not owned") {
 		t.Fatalf("error = %v, want unplanned action rejection", err)
+	}
+}
+
+func TestExploreFlowAllowsGroundedPrerequisiteReplay(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-prerequisite-replay",
+		Definition: Definition{
+			Goal:             "Search and open a product",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{"checkout"},
+			Steps: []StepDefinition{
+				{
+					ID: "search_input", Intent: "Enter search",
+					Action: "input",
+					Target: "Product search field",
+					Value:  "Blue Top", ExpectedOccurrences: 1,
+					Idempotency:          "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{},
+					CompletionConditions: []string{"search entered"},
+				},
+				{
+					ID: "search_submit", Intent: "Submit search",
+					Action: "click", Target: "Search button",
+					ExpectedOccurrences: 1, Idempotency: "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{"search entered"},
+					CompletionConditions: []string{"results visible"},
+				},
+				{
+					ID: "verify_result", Intent: "Verify result",
+					Action: "assert_text", Target: "Blue Top",
+					Value: "Blue Top", ExpectedOccurrences: 1,
+					Idempotency: "idempotent", SideEffect: SideEffectNone,
+					Preconditions:        []string{"results visible"},
+					CompletionConditions: []string{"Blue Top visible"},
+				},
+				{
+					ID: "open_detail", Intent: "Open detail",
+					Action: "click", Target: "View Product",
+					ExpectedOccurrences: 1, Idempotency: "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{"Blue Top visible"},
+					CompletionConditions: []string{"detail visible"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	plan.Steps[1].Status = StepGrounded
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	allowed := json.RawMessage(`{
+		"plan_step_ids":["search_input","search_submit","verify_result"],
+		"steps":[{"actions":[
+			{"action":"wait_for","target":"All Products"},
+			{"action":"input","target":"Search Product","value":"Blue Top"},
+			{"action":"click","target":"#submit_search"},
+			{"action":"wait_for","target":"Blue Top"}
+		]}]
+	}`)
+	if err := service.Authorize(
+		ctx,
+		plan.RunID,
+		"explore_flow",
+		allowed,
+	); err != nil {
+		t.Fatalf("prerequisite replay rejected: %v", err)
+	}
+
+	future := json.RawMessage(`{
+		"plan_step_ids":["verify_result"],
+		"steps":[{"actions":[
+			{"action":"click","target":"View Product"}
+		]}]
+	}`)
+	err = service.Authorize(
+		ctx,
+		plan.RunID,
+		"explore_flow",
+		future,
+	)
+	if err == nil || !strings.Contains(err.Error(), "not owned") {
+		t.Fatalf("future unbound action error = %v", err)
+	}
+}
+
+func TestExplorationOnlyGroundsStepsWithEvidence(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(NewMemoryRepository())
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-partial-grounding",
+		Definition: Definition{
+			Goal:             "Open and search",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{
+				{
+					ID: "open", Intent: "Open products", Action: "goto",
+					Target: "Products", Value: "https://example.test/products",
+					ExpectedOccurrences: 1, Idempotency: "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{},
+					CompletionConditions: []string{"products visible"},
+				},
+				{
+					ID: "submit", Intent: "Submit search", Action: "click",
+					Target: "Search button", ExpectedOccurrences: 1,
+					Idempotency:          "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{"products visible"},
+					CompletionConditions: []string{"results visible"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := json.RawMessage(`{
+		"plan_step_ids":["open","submit"],
+		"steps":[{"actions":[
+			{"action":"click","target":"Search button"}
+		]}]
+	}`)
+	if err := service.RecordToolResult(
+		ctx,
+		plan.RunID,
+		"explore_flow",
+		arguments,
+		json.RawMessage(`{
+			"success":false,
+			"pages":[
+				{
+					"url":"https://example.test/products",
+					"status":"success",
+					"a11y_nodes":[]
+				},
+				{
+					"url":"https://example.test/products",
+					"status":"error",
+					"actions":[{
+						"action":"click",
+						"target":"Search button",
+						"phase":"after",
+						"status":"error"
+					}],
+					"failure":{"code":"flow_action_failed"}
+				}
+			]
+		}`),
+		9,
+	); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.GetCurrent(ctx, plan.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Steps[0].Status != StepGrounded ||
+		current.Steps[1].Status != StepPending ||
+		current.Status != StatusGrounding {
+		t.Fatalf("partially grounded plan = %#v", current)
 	}
 }
 
@@ -298,6 +470,65 @@ func TestTaskPlanVersionsAreImmutableAndLatestWins(t *testing.T) {
 			second,
 			current,
 		)
+	}
+}
+
+func TestTaskPlanRevisionCarriesEquivalentGroundedSteps(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	request := CreateRequest{
+		RunID: "run-carry-forward",
+		Definition: Definition{
+			Goal:             "Open and verify a page",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{
+				{
+					ID: "open", Intent: "Open page", Action: "goto",
+					Target: "Page", Value: "https://example.test",
+					ExpectedOccurrences: 1, Idempotency: "idempotent",
+					SideEffect:           SideEffectBrowserState,
+					Preconditions:        []string{},
+					CompletionConditions: []string{"page visible"},
+				},
+				{
+					ID: "verify", Intent: "Verify text",
+					Action: "assert_text", Target: "Old",
+					Value: "Old", ExpectedOccurrences: 1,
+					Idempotency:          "idempotent",
+					SideEffect:           SideEffectNone,
+					Preconditions:        []string{"page visible"},
+					CompletionConditions: []string{"text visible"},
+				},
+			},
+		},
+	}
+	first, err := service.CreateVersion(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Steps[0].Status = StepGrounded
+	first.Steps[0].GroundingAttempts = 1
+	first.Steps[0].Evidence = []EvidenceRef{{
+		Tool: "explore_page", EventSeq: 7,
+		ContentSHA256: strings.Repeat("a", 64),
+	}}
+	if err := repository.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	request.Definition.Steps[1].Target = "New"
+	request.Definition.Steps[1].Value = "New"
+	second, err := service.CreateVersion(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Steps[0].Status != StepGrounded ||
+		second.Steps[0].GroundingAttempts != 1 ||
+		len(second.Steps[0].Evidence) != 1 ||
+		second.Steps[1].Status != StepPending {
+		t.Fatalf("carried revision = %#v", second.Steps)
 	}
 }
 
