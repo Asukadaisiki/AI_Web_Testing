@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-178 | 创建定位修正返回未注册查询路由的 Location
+
+- 日期：2026-09-10
+- 状态：open
+- 严重度：low
+- 来源：项目接口文档梳理
+- 描述：`POST /api/v2/corrections` 成功后返回 `Location: /api/v2/corrections/{id}`，但 Go 路由仅注册创建接口，没有对应 GET。调用方不能按该 Location 读取资源。
+- 复现步骤：
+  1. 使用可访问的 `source_execution_id` 提交合法定位修正。
+  2. 检查 201 响应的 Location。
+  3. 对该地址发送 GET；当前注册路由中不存在相应处理器。
+- 影响：按 Location 跟随资源的通用客户端会访问不可用地址；直接使用 POST 返回对象的现有调用方式不受此问题影响。
+- 根因：`internal/transport/http/corrections.go` 设置了资源地址，但 `handler.go` 未注册单条修正查询路由；Store.Get 仅被创建流程内部调用。
+- 处理：本轮只记录并在 `docs/api-reference.md` 标注限制，不新增业务接口。后续按产品需要选择补充只读 GET，或调整创建响应的 Location 行为。
+- 验证：静态核对 Go 全部路由注册和创建处理器，确认没有对应 GET；未创建真实修正数据或执行在线复现。
+- 关联记录：`docs/execution-log.md` 中的「2026-09-10 | 项目接口总览与用途文档整理」。
+
 ## BUG-177 | Overview UTC 窗口与本地 timestamp 日界线不一致
 
 - 日期：2026-09-10

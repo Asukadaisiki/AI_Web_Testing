@@ -56,6 +56,30 @@
 
 ## 任务记录
 
+## 2026-09-10 | 同步接口与函数目录到 GitHub
+
+- 任务：将接口参考文档、函数可视化 H5 及关联日志同步到 GitHub。
+- 操作：核对 `main` 与 `origin/main` 基线，确认提交范围仅包含 README 文档索引、`docs/api-reference.md`、`docs/function-atlas.html`、接口/函数任务日志和 BUG-178 记录；使用明确文件路径暂存并直接推送当前分支。
+- 结果：准备创建单一文档提交并同步至 `origin/main`。
+- 验证：提交前 `git diff --check` 通过；函数 H5 的 1461 个函数和 56 个接口映射 Playwright 回归已通过。提交推送后复核远端提交和工作区状态。
+- 后续：BUG-178 保持 open，后续独立决定补充修正详情 GET 或调整 Location。
+
+## 2026-09-10 | 函数与接口可视化 H5 目录
+
+- 任务：在接口清单基础上继续梳理项目函数名、分类和逐函数用途，并交付可交互 H5 页面。
+- 操作：使用 Tree-sitter 扫描 Go、Python、TypeScript 业务源码和维护脚本；按 21 个模块、语言、函数类型与职责归类；结合当前源码和 Understand Anything 图谱为每个实现函数补充用途；关联全部 HTTP/SSE 路由到处理函数；生成独立静态 `docs/function-atlas.html`，内嵌函数数据与源码片段，并在 README 添加入口。
+- 结果：H5 覆盖 154 个源码文件、1461 个有实现的函数/方法（Go 864、Python 443、TypeScript 154），包含 56 个 HTTP/SSE 接口、9 个 Agent 工具和 8 段主链路导航；支持全文搜索、模块/语言/职责/函数类型筛选、分页、函数详情、源码/GitHub 跳转、深链接和当前结果 JSON 导出。
+- 验证：1461/1461 函数均有用途说明，函数 ID 无重复，56/56 接口均映射实现函数；Playwright 回归通过内嵌数据、搜索、组合筛选、空状态、分页、源码详情、接口视图、JSON 导出、主链路、HTML 转义和深链接；桌面/移动布局在 320、390、768、1280、1440px 无横向溢出且无页面错误；`git diff --check` 通过。
+- 后续：页面是当前 commit `5e46d6c` 的静态快照；源码变化后需重新生成。询问是否同步本次文档变更到 GitHub。
+
+## 2026-09-10 | 项目接口总览与用途文档整理
+
+- 任务：梳理当前项目的大量接口，按业务模块说明各接口的用途、请求、响应与使用方式。
+- 操作：核对 Go Hertz 主路由与 Research 路由、处理器、领域类型和相关服务，核对 Python FastAPI 路由、Pydantic 合同与 Agent 工具注册；参照知识图谱定位模块，并确认图谱与当前提交仅存在执行日志差异；新增 `docs/api-reference.md`，在 README 文档索引添加入口。
+- 结果：文档覆盖 Go 51 个 HTTP/SSE 路由（平台业务 37、Research 13、健康检查 1）、Python 5 个自定义 HTTP 路由，以及 9 个非 HTTP Agent 工具；包含用途、关键请求/响应、SSE 重放、审批、幂等、取消边界、Research 验收、四条典型调用链与 curl 示例。发现创建修正返回的 Location 无对应 GET，已记录 BUG-178，未修改运行逻辑。
+- 验证：静态路由与文档对照 56/56，无遗漏、额外或重复条目；工具对照 9/9；58 个文档链接/锚点检查通过；7 个 JSON 代码块和 6 个 curl JSON 请求体解析通过；通过 FastAPI `app.openapi()` 及实际注册表确认 Worker 5 个自定义路由；2 个 Worker 请求及 DSL 示例通过 Pydantic 合同校验；`git diff --check` 通过。未执行数据库写请求、真实浏览器任务、付费模型调用或全量业务测试。
+- 后续：询问是否同步本次文档变更到 GitHub；BUG-178 留待独立修复。
+
 ## 2026-09-10 | 同步 Understand Anything 图谱记录到 GitHub
 
 - 任务：将当前本地变更同步到 GitHub。

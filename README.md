@@ -328,6 +328,8 @@ npm run build
 
 ## 文档索引
 
+- [`docs/function-atlas.html`](./docs/function-atlas.html)：可搜索、筛选并跳转源码的函数与接口 H5 目录，覆盖 Go、Python 和 TypeScript
+- [`docs/api-reference.md`](./docs/api-reference.md)：当前全部 HTTP/SSE、Browser Worker 与 Agent 工具接口，含数量、用途、关键参数、响应及调用示例
 - [`docs/architecture-guide.md`](./docs/architecture-guide.md)：当前代码目录、文件命名、模块职责、依赖关系和阅读顺序
 - [`docs/plan/codebase-optimization-plan-2026-08-28.md`](./docs/plan/codebase-optimization-plan-2026-08-28.md)：当前架构优化计划与验收标准
 - [`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)：能力状态与保留/下线决策
