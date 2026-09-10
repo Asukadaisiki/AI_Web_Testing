@@ -56,6 +56,38 @@
 
 ## 任务记录
 
+## 2026-09-10 | 同步 Understand Anything 图谱记录到 GitHub
+
+- 任务：将当前本地变更同步到 GitHub。
+- 操作：确认当前分支为 `main`，检查工作区仅有 `docs/execution-log.md` 变更；准备提交并推送当前分支到 `origin/main`。
+- 结果：本次同步范围限定为执行日志更新，`.ua/` 图谱缓存保持本地生成物不进入 Git。
+- 验证：提交推送后通过 `git status --short` 和 `git log -1 --stat --oneline` 复核。
+- 后续：无。
+
+## 2026-09-10 | Understand Anything 知识图谱生成与看板启动
+
+- 任务：按用户要求排除 docs 和 test 文件后运行 `/understand`，生成当前仓库的代码知识图谱并启动 dashboard。
+- 操作：更新 `.ua/.understandignore`，排除 `docs/`、Markdown/RST/TXT 文档、`testdata/`、各层 `tests/` 和常见测试文件模式，并排除 `.ua/` 生成物；重新扫描项目，计算 16 个语义批次，调度 file-analyzer 生成 batch graph，合并为完整 KnowledgeGraph；生成 9 个架构层和 14 步中文 guided tour；保存 `knowledge-graph.json`、`fingerprints.json`、`meta.json`，并启动本地 dashboard。
+- 结果：图谱分析 194 个文件（code 161、config 22、infra 7、data 2、markup 2），生成 1584 个节点、2976 条边、9 个架构层、14 个导览步骤；dashboard 地址为 `http://127.0.0.1:5173/?token=e1b5e5eb894eff19be52f33dec10a4ec`。
+- 验证：`scan-result.json` 中 docs/test 命中数为 0；批次合并完成且未恢复缺失 imports；inline graph validation 为 0 个 critical issue、18 个 orphan node warning；fingerprints baseline 覆盖 194 个文件。
+- 后续：询问用户是否同步当前变更到 GitHub；`.ua/` 已加入本地 `.git/info/exclude`，知识图谱作为本地生成物不进入 Git 变更。
+
+## 2026-09-10 | Understand Anything 看板启动前置检查
+
+- 任务：使用 `understand-dashboard` 启动当前项目的代码知识图谱看板。
+- 操作：按 Skill 说明解析项目目录、图谱数据目录与插件根目录，并检查图谱文件和插件版本。
+- 结果：项目使用 `.ua/` 数据目录，但 `.ua/knowledge-graph.json` 不存在，因此未启动看板；已确认项目级插件根目录可用，版本为 `2.9.6`。
+- 验证：检查 `/Users/bytedance/project/AI_Web_Testing/.ua/knowledge-graph.json` 返回不存在；成功解析 `/Users/bytedance/project/AI_Web_Testing/.trae/understand-anything/repo/understand-anything-plugin`。
+- 后续：先运行 `/understand` 生成知识图谱，再重新运行 `/understand-dashboard`。
+
+## 2026-09-10 | 安装 Understand Anything TRAE 插件
+
+- 任务：将 `Egonex-AI/Understand-Anything` 插件安装到本地 TRAE 工作区使用。
+- 操作：核验上游官方安装器与 TRAE Skill 目录约定；将上游 commit `5feed1f2ce4f9c368d860f4c0ebc36d98a4693fc`（插件版本 `2.9.6`）检出到工作区私有目录 `.trae/understand-anything/repo`；在 `.trae/skills/` 注册 9 个 Skill；启用 pnpm 10.6.2、安装依赖并构建 core；通过 `.git/info/exclude` 排除本地插件目录。由于 TRAE 沙箱禁止写入全局 `~/.agents/skills` 和 `~/.understand-anything-plugin`，改用项目级安装，并为需要解析插件根的 Skill 增加工作区路径回退。
+- 结果：`understand`、`understand-chat`、`understand-dashboard`、`understand-diff`、`understand-domain`、`understand-explain`、`understand-figma`、`understand-knowledge`、`understand-onboard` 均可从当前工作区读取；插件及依赖不进入主仓库 Git 变更。
+- 验证：9 个 `SKILL.md` 均可解析；core `dist/index.js` 已生成；运行上游 `scan-project.mjs` 成功扫描 357 个文件，返回 `scriptCompleted=true`、复杂度 `large`；主仓库与插件检出均无额外未跟踪或修改文件。
+- 后续：重启 TRAE 或重新打开当前工作区以刷新 Skill 列表；首次完整 `/understand --language zh` 会调用模型分析整个仓库并产生较高 Token 消耗。
+
 ## 2026-09-10 | 探索预算、重复调用与 grounding 修复
 
 - 任务：修复 v4-pro research-v2 live E2E 暴露的计划改版预算耗尽、Products 容器误点击、Quantity wait_for 语义错误和取消后结果状态不一致，并向模型暴露预算及防重复规则。
