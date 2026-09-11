@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-12 | 重置数据库并运行 v4-flash-vision-exp research-v2 E2E
+
+- 任务：重置本地 PostgreSQL 状态，将 DeepSeek 模型切换为 `deepseek-v4-flash-vision-exp`、thinking effort 设为 `high`，并运行一次官方 research-v2 E2E。
+- 操作：停止全链服务后重建数据库 `public` schema、重新执行迁移并写入默认 user/project；以 `AI_PLANNING_THINK_MODE=true`、`AI_PLANNING_REASONING_EFFORT=high` 启动 Browser Worker、execution-worker 和 AgentService；运行 `automationexercise-blue-top-cart.v1`，导出 `run.json`、`pipeline-audit.json` 和 provider evidence；E2E 后停止服务。审计发现不同 probe 的 candidate ID 碰撞，随后将 `probe_id` 纳入 candidate 哈希并新增跨 probe 回归。
+- 结果：Run `run_84e3cdde9a0df7d6553c789b` 最终失败：12/12 PlanStep 已 grounded 并进入 `ready_for_generation`，但第 12 轮后触发 max-turn，未生成 DSL、Batch、Execution 或 Report。12 次请求均直连 `api.deepseek.com`，requested model 为 `deepseek-v4-flash-vision-exp`，provider resolved model 为 `deepseek-flash`，thinking enabled、reasoning effort high；每次调用均保存 provider response ID、header request ID 和 usage。累计 input 373,810、output 62,693、total 436,503 tokens；请求体从 26,481 bytes 增长到 247,863 bytes。新增 BUG-185（已修复）和 BUG-186（待修复），BUG-155 补充本次上下文增长证据。
+- 验证：Python 189 tests passed / 2 skipped；Pyright 0 errors，修改文件 Ruff `F/I` 通过；`go test ./...`、`go vet ./...`、`go build ./...` 通过；三个证据文件 SHA-256 分别为 `68e9330c2c9dd20a1e8a7f5372503ac822a592c694be7a52c1e79c554905d419`、`a7e6f9f960351f8d405b72884b5cc50fd5030d812c0f90c5ffb0c964ffca42c8`、`1233a7450830cb2bda818b5ee1cf1ae84b12540394950de8502a3afe86e548d1`。
+- 后续：不自动重跑付费 E2E；先实施 Context Materializer/预算熔断、修复 max-turn stale error，并进入 Phase B 统一 Explore 与 Runner 的 resolved candidate。
+
 ## 2026-09-12 | Phase A 增量 2：跨层执行 Lineage
 
 - 任务：贯通 probe、observation、element、candidate、binding、generation、execution 和 report lineage，为 Explore/DSL/Runner 不一致提供可核对的事实链。

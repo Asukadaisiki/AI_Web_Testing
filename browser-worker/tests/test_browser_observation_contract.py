@@ -364,6 +364,43 @@ class BrowserObservationContractTest(unittest.TestCase):
         page.frame_locator.assert_called_once_with("iframe[name=editor]")
         frame.locator.assert_called_once_with("settings-panel")
 
+    def test_candidate_id_is_unique_across_probes(self) -> None:
+        nodes = [
+            {
+                "node_id": "submit",
+                "role": "button",
+                "a11y_name": "Submit",
+                "dom": {
+                    "tag": "button",
+                    "attrs": {"id": "submit"},
+                    "connected": True,
+                    "visible": True,
+                    "enabled": True,
+                },
+            }
+        ]
+        first = build_browser_observation(
+            url="https://example.test/form",
+            title="Form",
+            state_id="S0",
+            revision=1,
+            nodes=nodes,
+            probe_id="probe-a",
+        )
+        second = build_browser_observation(
+            url="https://example.test/form",
+            title="Form",
+            state_id="S0",
+            revision=1,
+            nodes=nodes,
+            probe_id="probe-b",
+        )
+
+        self.assertNotEqual(
+            first["elements"][0]["locators"][0]["candidate_id"],
+            second["elements"][0]["locators"][0]["candidate_id"],
+        )
+
     def test_target_binding_rejects_xpath_inside_shadow_root(self) -> None:
         payload = {
             "schema_version": "grounding.target-binding.v1",

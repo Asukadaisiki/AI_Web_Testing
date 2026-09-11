@@ -71,7 +71,18 @@ def build_browser_observation(
     artifact_root: Path | None = None,
     previous_state_sha256: str | None = None,
 ) -> dict[str, Any]:
-    elements = [_element_fact(node, state_id) for node in _bounded_nodes(nodes)]
+    effective_probe_id = probe_id or "probe_" + canonical_sha256(
+        {
+            "url": url,
+            "title": title,
+            "state_id": state_id,
+            "revision": max(1, revision),
+        }
+    )[:24]
+    elements = [
+        _element_fact(node, state_id, effective_probe_id)
+        for node in _bounded_nodes(nodes)
+    ]
     _set_observed_counts(elements, page=page)
     relations = _relations(elements)
     state_payload = {
@@ -91,7 +102,7 @@ def build_browser_observation(
     state_sha256 = canonical_sha256(state_payload)
     observation_id = f"obs_{state_sha256[:24]}"
     observation = BrowserObservation(
-        probe_id=probe_id or f"probe_{state_sha256[:24]}",
+        probe_id=effective_probe_id,
         observation_id=observation_id,
         page_state=PageStateFact(
             state_id=state_id,
@@ -139,7 +150,11 @@ def _bounded_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ranked[:MAX_ELEMENTS]
 
 
-def _element_fact(node: dict[str, Any], state_id: str) -> ElementFact:
+def _element_fact(
+    node: dict[str, Any],
+    state_id: str,
+    probe_id: str,
+) -> ElementFact:
     dom = node.get("dom") if isinstance(node.get("dom"), dict) else {}
     attrs = {
         str(key): str(value)
@@ -204,6 +219,7 @@ def _element_fact(node: dict[str, Any], state_id: str) -> ElementFact:
             node,
             role,
             a11y_name,
+            probe_id=probe_id,
             element_ref=element_ref,
             context_path=context_path,
         ),
@@ -240,6 +256,7 @@ def _locator_hints(
     role: str,
     accessible_name: str,
     *,
+    probe_id: str,
     element_ref: str,
     context_path: ContextPath,
 ) -> list[ObservedLocator]:
@@ -248,6 +265,7 @@ def _locator_hints(
         result.append(
             _observed_locator(
                 element_ref=element_ref,
+                probe_id=probe_id,
                 context_path=context_path,
                 locator={
                     "kind": "role",
@@ -269,6 +287,7 @@ def _locator_hints(
         result.append(
             _observed_locator(
                 element_ref=element_ref,
+                probe_id=probe_id,
                 context_path=context_path,
                 locator={"kind": kind, "value": selector, "exact": True},
                 provenance=str(raw.get("source") or "dom_verified"),
@@ -284,6 +303,7 @@ def _locator_hints(
 
 def _observed_locator(
     *,
+    probe_id: str,
     element_ref: str,
     context_path: ContextPath,
     locator: dict[str, Any],
@@ -293,6 +313,7 @@ def _observed_locator(
     validated = validate_locator_spec(locator)
     candidate_id = "candidate_" + canonical_sha256(
         {
+            "probe_id": probe_id,
             "element_ref": element_ref,
             "context_path": context_path.model_dump(mode="json"),
             "locator": validated.model_dump(mode="json"),

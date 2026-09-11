@@ -48,6 +48,40 @@
 
 ## 问题记录
 
+## BUG-186 | Max-turn 终态引用已恢复的旧工具错误
+
+- 日期：2026-09-12
+- 状态：open
+- 严重度：medium
+- 来源：v4-flash-vision-exp research-v2 live E2E
+- 描述：Run 在第 12 次模型调用的 `explore_flow` 成功后已将 12/12 PlanStep 全部 grounded，并发布 `ready_for_generation`；Loop 随即因 max turns 失败，但 `run.failed` 消息仍附带更早一次 `wait_for` 的旧错误。
+- 复现步骤：
+  1. 以 `AGENTSERVICE_MAX_TURNS=12` 运行长链 research-v2。
+  2. 在最后一轮成功 grounding 全部步骤。
+  3. 查看 seq 137/139/141/142：成功 ToolResult、ready_for_generation、failed TaskPlan 和 stale last-tool-error run.failed。
+- 影响：Run 确实因没有下一轮生成 DSL 的机会而失败，但错误归因误指向已恢复的旧工具失败，干扰自动修复和人工诊断。
+- 根因：Harness 在工具成功后没有清空 `latestToolError`；Agent loop 达到 max turns 时无条件把该历史值拼入终态错误。
+- 处理：后续将 last tool error 绑定到当前 state epoch，并在成功结果后清除；max-turn 终态单独报告预算耗尽及当前 TaskPlan 状态。
+- 验证：Run `run_84e3cdde9a0df7d6553c789b` 的事件序列与 TaskPlan 12/12 grounding 已核对。
+- 关联记录：`docs/execution-log.md#2026-09-12--重置数据库并运行-v4-flash-vision-exp-research-v2-e2e`；`research/results/agentic-e2e-v4-flash-vision-exp-research-v2-20260912T021400Z/`。
+
+## BUG-185 | Candidate ID 在不同 Probe 间发生碰撞
+
+- 日期：2026-09-12
+- 状态：fixed
+- 严重度：high
+- 来源：v4-flash-vision-exp research-v2 live E2E lineage 审计
+- 描述：candidate ID 仅由 `element_ref + context_path + locator` 计算；不同 disposable probe 都可能从 `S0` 和相同 backend node ID 开始，导致不同页面动作共享 candidate ID。
+- 复现步骤：
+  1. 在两个独立 probe 中生成相同 `S0:7` 和 locator。
+  2. 比较 TargetBinding；本次 Run 的 `add_to_cart` 与 `open_view_cart` 均得到 `candidate_fee8c982ad94f147`。
+  3. pipeline audit 无法仅凭 candidate ID 区分两个 probe。
+- 影响：candidate ID 不是跨 Run/Probe 稳定唯一引用，可能错误聚合定位决策和报告归因。
+- 根因：candidate 哈希缺少 probe 身份；`state_id/backend_node_id` 只在单次 probe 内稳定。
+- 处理：在生成 candidate ID 时加入 `probe_id`；fallback probe 在构造 ElementFact 前确定，同一 probe 内保持稳定。
+- 验证：新增跨 probe 回归，完全相同的 element/locator 在 `probe-a` 与 `probe-b` 下得到不同 candidate ID；BrowserObservation、Runner 和相关全量测试通过。
+- 关联记录：`docs/execution-log.md#2026-09-12--重置数据库并运行-v4-flash-vision-exp-research-v2-e2e`；`research/results/agentic-e2e-v4-flash-vision-exp-research-v2-20260912T021400Z/pipeline-audit.json`。
+
 ## BUG-184 | BrowserObservation relation 字段与共享 Schema 不一致
 
 - 日期：2026-09-12
@@ -555,7 +589,7 @@
 - 影响：一次未通过验收的 Stage 6 live run 产生 40 次真实 DeepSeek 调用，累计 input 3,532,269、output 137,661、total 3,669,930 tokens；`prompt_cache_hit_tokens=0`，全部 input 计入 `prompt_cache_miss_tokens`。用户余额被快速消耗，且验收摘要不能第一时间暴露 cache 命中为 0。
 - 根因：验收策略没有先执行受限 live smoke 和成本上限；Agent loop 缺少单 run 最大调用数、最大 token、最大失败修复次数和上下文字节熔断；cache 依赖稳定长前缀，但实际请求包含持续变化的 tool result、report、failure signal、run id、时间和 DSL/IR 内容；现有摘要压缩只覆盖 `explore_page/explore_flow`，非探索工具结果未做模型可见摘要。
 - 处理：部分修复。已将模型可见工具结果改为结构化摘要：探索结果新增 page state、element group、candidate coverage、action option、verification fact 和 recovery hint；`generate_dsl`、`get_report`、`fix_and_retry` 不再把完整 JSON 直接回填 transcript，而是提供 DSL/Report/Repair 摘要。仍待新增 live E2E 预算门禁、失败路径熔断、provider cache hit/miss 聚合、最大 transcript 字节控制，并要求正式 3 repetition 前先输出成本预估并由用户确认。
-- 验证：结构化摘要部分已通过 Go 全量、vet/build 和 `git diff --check`；未执行 live E2E，未调用模型。
+- 验证：结构化摘要部分已通过 Go 全量、vet/build 和 `git diff --check`。2026-09-12 的 v4-flash-vision-exp live Run 进一步实证：12 次模型调用累计 input 373,810 / output 62,693 / total 436,503 tokens，请求体从 26,481 bytes 增至 247,863 bytes，message bytes 从 6,641 增至 228,023，末轮 assistant reasoning 达 138,257 bytes；仍无硬熔断和 Context Materializer。
 - 关联记录：`docs/execution-log.md#2026-09-07--stage-6-live-e2e-成本与缓存命中审计`
 
 ## BUG-154 | Stage 5 首次验收在应用 0042 前运行 PostgreSQL 测试
