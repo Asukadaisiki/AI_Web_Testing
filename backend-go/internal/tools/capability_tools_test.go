@@ -247,6 +247,8 @@ func TestBrowserToolForwardsRunContext(t *testing.T) {
 	client := &fakeCapabilityClient{}
 	handler := NewBrowserTools(client)[0]
 	_, err := handler.Execute(context.Background(), Call{
+		RunID:          "run-1",
+		ToolCallID:     "call-1",
 		ProjectID:      7,
 		ConversationID: "11",
 		Name:           "explore_page",
@@ -266,6 +268,11 @@ func TestBrowserToolForwardsRunContext(t *testing.T) {
 	}
 	if arguments["observation_schema_version"] != "v2" {
 		t.Fatalf("forwarded arguments = %#v", arguments)
+	}
+	if arguments["probe_id"] != browserProbeID(Call{
+		RunID: "run-1", ToolCallID: "call-1", Name: "explore_page",
+	}) {
+		t.Fatalf("forwarded probe lineage = %#v", arguments)
 	}
 }
 

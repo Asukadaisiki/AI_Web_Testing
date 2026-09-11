@@ -490,6 +490,16 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				if err := e.runs.SaveRun(ctx, run); err != nil {
 					return false, err
 				}
+				traceIdentity.lineage, traceErr = e.pipelineLineage(
+					ctx,
+					run,
+					call.Name,
+					result.Content,
+					traceIdentity.planStepIDs,
+				)
+				if traceErr != nil {
+					return false, traceErr
+				}
 				if traceErr := e.recordPipelineToolTrace(
 					ctx,
 					run,
@@ -537,6 +547,7 @@ func modelTaskPlanSummary(plan taskplan.Plan) *agent.ToolResultTaskPlanSummary {
 		PlanID: plan.ID, Version: plan.Version,
 		PlanSHA256: plan.PlanSHA256, Status: string(plan.Status),
 		StepBindings: make(map[string]string),
+		StepLineage:  make(map[string]agent.ToolResultLineageSummary),
 	}
 	for _, step := range plan.Steps {
 		summary.StepIDs = append(summary.StepIDs, step.ID)
@@ -547,10 +558,23 @@ func modelTaskPlanSummary(plan taskplan.Plan) *agent.ToolResultTaskPlanSummary {
 		}
 		if step.TargetBinding != nil {
 			summary.StepBindings[step.ID] = step.TargetBinding.BindingID
+			summary.StepLineage[step.ID] = agent.ToolResultLineageSummary{
+				ProbeID:             step.TargetBinding.ProbeID,
+				ObservationID:       step.TargetBinding.ObservationID,
+				ObservationSHA256:   step.TargetBinding.ObservationSHA256,
+				PageStateID:         step.TargetBinding.PageStateID,
+				TargetBindingID:     step.TargetBinding.BindingID,
+				SelectedCandidateID: step.TargetBinding.SelectedCandidateID,
+				ElementRefs: append(
+					[]string(nil),
+					step.TargetBinding.ElementRefs...,
+				),
+			}
 		}
 	}
 	if len(summary.StepBindings) == 0 {
 		summary.StepBindings = nil
+		summary.StepLineage = nil
 	}
 	return summary
 }
@@ -651,6 +675,15 @@ func (e *Harness) recordTaskPlanState(
 		}
 		if step.TargetBinding != nil {
 			snapshot["target_binding_id"] = step.TargetBinding.BindingID
+			snapshot["probe_id"] = step.TargetBinding.ProbeID
+			snapshot["observation_id"] = step.TargetBinding.ObservationID
+			snapshot["observation_sha256"] =
+				step.TargetBinding.ObservationSHA256
+			snapshot["page_state_id"] = step.TargetBinding.PageStateID
+			snapshot["selected_candidate_id"] =
+				step.TargetBinding.SelectedCandidateID
+			snapshot["element_refs"] =
+				append([]string(nil), step.TargetBinding.ElementRefs...)
 		}
 		steps = append(steps, snapshot)
 	}

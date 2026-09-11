@@ -56,6 +56,15 @@
 
 ## 任务记录
 
+## 2026-09-12 | Phase A 增量 2：跨层执行 Lineage
+
+- 任务：贯通 probe、observation、element、candidate、binding、generation、execution 和 report lineage，为 Explore/DSL/Runner 不一致提供可核对的事实链。
+- 操作：Go BrowserTool 按 Run/ToolCall 生成稳定 `probe_id`；BrowserObservation 为每个 locator hint 生成稳定 `candidate_id`，并使用 context_path 计算实时 count；TargetBinding 保留 probe/observation/page state/element/candidate，Go compiler 将 lineage 和 planned candidate 注入 research-v2 Executable DSL；Runner StepEvidence 记录实际 candidate/element，并为全部候选保存 runtime count 和 rejected reason；FailureSignal、模型 FailureBrief、TaskPlan event、Research Transition、`agent.pipeline.trace` 和 `pipeline-audit` 保留同一组引用；新增 Go/Python 共用 Observation golden。
+- 结果：新 Run 可从单个 pipeline trace 按 PlanStep 追溯 grounding、generation、batch/case、execution 和 report；定位失败可区分 planned candidate 与 resolved candidate，并解释 0/N/hidden/disabled/compile/runtime-check 拒绝。BUG-183、BUG-184 修复；BUG-180 仍需 Phase B 的 ResolvedTargetEvidence 消除 Explore 实际动作与 Go 文本重绑定。
+- 兼容性：新增字段采用“新写必有、旧读兼容、部分出现严格校验”；旧 BrowserObservation v2、TargetBinding v1 和 pre-lineage research-v2 canonical payload 仍可读取，不需要数据库迁移。
+- 验证：`go test ./...`、`go vet ./...`、`go build ./...` 通过；Python 188 tests passed / 2 browser tests skipped，另以 `RUN_BROWSER_INTEGRATION=1` 运行 2 个真实 Chromium 测试通过；Pyright 0 errors，修改文件 Ruff `F/I` 检查通过，compileall 通过；Frontend 4 files / 11 tests 和 production build 通过；共享 JSON Schema 和 canonical/failure golden 通过。
+- 后续：部署后产生一个新 research-v2 Run，用 `pipeline-audit --run-id` 核验真实 lineage；随后进入 Phase B，实现 `browser.resolved-target.v1` 并删除 Explore/Go/Runner 三次独立目标解释。
+
 ## 2026-09-12 | Phase A 增量 1：Agent 管线诊断基线
 
 - 任务：按已批准的全链路治理计划实施 Phase A 第一个增量，完成后提交并同步 GitHub；本增量只增加可观测性，不改变 Agent 决策和执行策略。

@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 )
 
@@ -157,6 +159,7 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 			return Result{}, err
 		}
 		delete(payload, "plan_step_ids")
+		payload["probe_id"] = browserProbeID(call)
 		if _, exists := payload["observation_schema_version"]; !exists {
 			payload["observation_schema_version"] = "v2"
 		}
@@ -185,6 +188,13 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 		}
 	}
 	return Result{Content: content}, nil
+}
+
+func browserProbeID(call Call) string {
+	sum := sha256.Sum256([]byte(
+		call.RunID + "\x00" + call.ToolCallID + "\x00" + call.Name,
+	))
+	return "probe_" + hex.EncodeToString(sum[:12])
 }
 
 func compactV2ExplorationResult(raw json.RawMessage) (json.RawMessage, error) {

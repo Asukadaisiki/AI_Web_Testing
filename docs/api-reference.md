@@ -208,7 +208,7 @@ AgentRun 状态：`running`、`waiting_user`、`completed`、`failed`、`cancell
 | `artifact.published` | DSL、批次、报告、计划等产物引用 |
 | `task_plan.updated` | 计划版本、SHA、状态及步骤 grounding 摘要 |
 | `research.llm_call` | 模型请求、usage、延迟、重试与 request ID 审计 |
-| `agent.pipeline.trace` | 模型请求上下文组成、累计 usage，以及工具签名、state epoch、attempt 和 retry lineage |
+| `agent.pipeline.trace` | 模型请求上下文组成、累计 usage、工具签名/attempt，以及 PlanStep 到执行报告的 lineage |
 
 断线重连规则：
 
@@ -258,6 +258,9 @@ CasePage：`items`、`total`、`page`、`page_size`、`total_pages`、`has_next`
 - CRUD 成功仅说明定义已保存，不代表通过正式执行所需的全部 DSL/grounding 校验。
 - 当前稳定动作集为 `goto`、`click`、`input`、`wait_for`、`assert_text`、`assert_url_contains`、`capture_text`。
 - `research-v1/v2` 正式执行需要内部 canonical DSL binding；它不是公共 Batch API 可提交字段。不要把手工保存 research profile 后直接执行视为绕过 Agent 审批的入口。
+- 新生成的 `research-v2` 可执行步骤包含只读
+  `probe_id/observation_id/observation_sha256/page_state_id/selected_candidate_id`；
+  这些字段由 Go compiler 从 TargetBinding 注入，客户端和模型不得自行填写。
 - 批量删除按可访问记录实际删除，不承诺请求的每个 ID 都存在。
 
 源码：[路由处理](../backend-go/internal/transport/http/cases.go)、[类型](../backend-go/internal/cases/types.go)、[保存校验](../backend-go/internal/cases/postgres.go)、[正式执行校验](../backend-go/internal/execution/store.go)。
@@ -307,6 +310,9 @@ BatchCreateRequest：
 - `/report` 是当前快照，未执行完也能返回 `pending/running`，不会在 HTTP 层等待终态。
 - 取消不是即时终止所有浏览器动作的承诺。待执行 Job 直接取消，运行中 Job 设置 `cancel_requested`；返回批次仍可能为 `running`，继续轮询终态。
 - 仅对需要停止的活动批次使用 cancel，不要把它作为删除或归档接口。
+- research-v2 的步骤证据和失败信号保留
+  `plan_step_id -> probe_id -> observation_id -> element_ref/candidate_id ->
+  target_binding_id`，用于从报告反查 grounding 和定位决策。
 
 ### 7.2 执行记录与统计（4 个）
 
@@ -693,8 +699,9 @@ Worker 的在线接口文档：`http://127.0.0.1:8000/docs`。
 go run ./cmd/pipeline-audit --run-id <agent-run-id>
 ```
 
-输出包含计划版本、模型请求首末/峰值字节数、最新上下文组成、累计 token，
-以及相同 state epoch 下的重复工具签名。旧 Run 没有
+输出包含计划版本、模型请求首末/峰值字节数、最新上下文组成、累计 token、
+相同 state epoch 下的重复工具签名，以及
+probe/observation/element/candidate/binding/generation/execution/report lineage。旧 Run 没有
 `agent.pipeline.trace.v1` 时对应计数为空，不会从不完整历史中猜测。
 
 ### 13.2 手工创建普通用例并异步执行

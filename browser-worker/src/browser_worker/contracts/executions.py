@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
 from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import Field, model_serializer, model_validator
 
 from browser_worker.contracts.dsl import DSLModel
-
 
 ExecutionStatus = Literal[
     "running",
@@ -52,11 +51,14 @@ class LocatorCandidateAttributes(DSLModel):
 
 
 class LocatorCandidateEvidence(DSLModel):
+    candidate_id: str | None = None
+    element_ref: str | None = None
     strategy: str
     preview_text: str | None = None
     role: str | None = None
     attributes: LocatorCandidateAttributes = Field(default_factory=LocatorCandidateAttributes)
     score: int = Field(default=0, ge=0)
+    runtime_count: int | None = Field(default=None, ge=0)
     matched_rules: list[str] = Field(default_factory=list)
     rejected_reasons: list[str] = Field(default_factory=list)
     visible: bool = False
@@ -166,6 +168,13 @@ class StepExecutionEvidence(DSLModel):
     dsl_profile: Literal["legacy-v1", "research-v1", "research-v2"] | None = None
     plan_step_id: str | None = None
     target_binding_id: str | None = None
+    probe_id: str | None = None
+    observation_id: str | None = None
+    observation_sha256: str | None = None
+    page_state_id: str | None = None
+    planned_candidate_id: str | None = None
+    candidate_id: str | None = None
+    element_ref: str | None = None
     intent: str | None = None
     idempotency: Literal["idempotent", "non_idempotent"] | None = None
     declared_side_effect: Literal[
@@ -248,6 +257,15 @@ class FailureSignal(DSLModel):
     source_reference: FailureSourceReference | None = None
     agent_event_reference: AgentEventReference | None = None
     step_index: int | None = Field(default=None, ge=0)
+    plan_step_id: str | None = None
+    target_binding_id: str | None = None
+    probe_id: str | None = None
+    observation_id: str | None = None
+    observation_sha256: str | None = None
+    page_state_id: str | None = None
+    planned_candidate_id: str | None = None
+    candidate_id: str | None = None
+    element_ref: str | None = None
     action: str | None = None
     target: str | None = None
     error_message: str | None = None

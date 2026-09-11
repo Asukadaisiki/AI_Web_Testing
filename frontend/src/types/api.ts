@@ -180,6 +180,15 @@ interface FailureSignalBase {
   fingerprint: string;
   title: string;
   step_index?: number | null;
+  plan_step_id?: string | null;
+  target_binding_id?: string | null;
+  probe_id?: string | null;
+  observation_id?: string | null;
+  observation_sha256?: string | null;
+  page_state_id?: string | null;
+  planned_candidate_id?: string | null;
+  candidate_id?: string | null;
+  element_ref?: string | null;
   action?: string | null;
   target?: string | null;
   error_message?: string | null;
@@ -273,11 +282,14 @@ interface LocatorCandidateAttributes {
 }
 
 export interface LocatorCandidateEvidence {
+  candidate_id?: string | null;
+  element_ref?: string | null;
   strategy: string;
   preview_text?: string | null;
   role?: string | null;
   attributes: LocatorCandidateAttributes;
   score: number;
+  runtime_count?: number | null;
   matched_rules: string[];
   rejected_reasons: string[];
   visible: boolean;
@@ -373,6 +385,16 @@ export interface InterventionRequest {
 export interface StepExecutionEvidence {
   step_index: number;
   action: string;
+  dsl_profile?: "legacy-v1" | "research-v1" | "research-v2" | null;
+  plan_step_id?: string | null;
+  target_binding_id?: string | null;
+  probe_id?: string | null;
+  observation_id?: string | null;
+  observation_sha256?: string | null;
+  page_state_id?: string | null;
+  planned_candidate_id?: string | null;
+  candidate_id?: string | null;
+  element_ref?: string | null;
   target?: string | null;
   value?: string | null;
   status: "passed" | "failed";

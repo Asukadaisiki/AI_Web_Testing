@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,10 +97,17 @@ func validateResearchV2Case(
 				"research-v2 executable case requires plan_binding",
 			)
 		}
-		if _, ok := candidate["observation_bindings"].([]any); !ok {
+		bindings, err := validateV2ObservationBindings(
+			candidate["observation_bindings"],
+		)
+		if err != nil {
 			return ValidatedCase{}, errors.New(
-				"research-v2 executable case requires observation_bindings",
+				"research-v2 executable case has invalid observation_bindings: " +
+					err.Error(),
 			)
+		}
+		if err := validateV2StepLineage(steps, bindings); err != nil {
+			return ValidatedCase{}, err
 		}
 	}
 	normalized, err := json.Marshal(candidate)
@@ -146,7 +154,9 @@ func validateResearchV2Step(
 	}
 	allowed := stringSet(
 		"plan_step_id", "action", "intent", "target_binding_id",
-		"semantic_target", "locator_candidates", "value", "trigger",
+		"probe_id", "observation_id", "observation_sha256",
+		"page_state_id", "selected_candidate_id", "semantic_target",
+		"locator_candidates", "value", "trigger",
 		"context_key", "timeout_ms", "preconditions", "postconditions",
 		"idempotency", "side_effect",
 	)
@@ -208,17 +218,22 @@ func validateResearchV2Step(
 		return err
 	}
 	if phase == ValidationPhaseDraft {
-		if _, exists := step["locator_candidates"]; exists {
-			return fmt.Errorf(
-				"case.steps[%d].locator_candidates must be added by the compiler",
-				index,
-			)
-		}
-		if _, exists := step["semantic_target"]; exists {
-			return fmt.Errorf(
-				"case.steps[%d].semantic_target must be added by the compiler",
-				index,
-			)
+		for _, field := range []string{
+			"semantic_target",
+			"locator_candidates",
+			"probe_id",
+			"observation_id",
+			"observation_sha256",
+			"page_state_id",
+			"selected_candidate_id",
+		} {
+			if _, exists := step[field]; exists {
+				return fmt.Errorf(
+					"case.steps[%d].%s must be added by the compiler",
+					index,
+					field,
+				)
+			}
 		}
 		return nil
 	}
@@ -252,8 +267,163 @@ func validateResearchV2Step(
 		if err := validateV2Candidates(index, step["locator_candidates"]); err != nil {
 			return err
 		}
+		selectedCandidateID := v2StringValue(step["selected_candidate_id"])
+		if selectedCandidateID != "" &&
+			!v2CandidateExists(step["locator_candidates"], selectedCandidateID) {
+			return fmt.Errorf(
+				"case.steps[%d].selected_candidate_id is unknown",
+				index,
+			)
+		}
+		if hasV2Lineage(step) {
+			for _, field := range []struct {
+				name  string
+				limit int
+			}{
+				{name: "probe_id", limit: 64},
+				{name: "observation_id", limit: 64},
+				{name: "page_state_id", limit: 256},
+				{name: "selected_candidate_id", limit: 64},
+			} {
+				if err := requireBoundedText(
+					step,
+					field.name,
+					index,
+					field.limit,
+				); err != nil {
+					return err
+				}
+			}
+			if !validHexSHA256(v2StringValue(step["observation_sha256"])) {
+				return fmt.Errorf(
+					"case.steps[%d].observation_sha256 is invalid",
+					index,
+				)
+			}
+		}
 	}
 	return nil
+}
+
+type v2ObservationBinding struct {
+	BindingID         string `json:"binding_id"`
+	BindingSHA256     string `json:"binding_sha256"`
+	ProbeID           string `json:"probe_id"`
+	ObservationID     string `json:"observation_id"`
+	ObservationSHA256 string `json:"observation_sha256"`
+	PageStateID       string `json:"page_state_id"`
+}
+
+func validateV2ObservationBindings(
+	raw any,
+) (map[string]v2ObservationBinding, error) {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("must be an array")
+	}
+	result := make(map[string]v2ObservationBinding, len(values))
+	for index, value := range values {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		var binding v2ObservationBinding
+		if err := json.Unmarshal(encoded, &binding); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(binding.BindingID) == "" ||
+			!validHexSHA256(binding.BindingSHA256) ||
+			strings.TrimSpace(binding.ObservationID) == "" ||
+			!validHexSHA256(binding.ObservationSHA256) {
+			return nil, fmt.Errorf("item %d is incomplete", index)
+		}
+		if (binding.ProbeID == "") != (binding.PageStateID == "") {
+			return nil, fmt.Errorf("item %d has partial lineage", index)
+		}
+		if _, exists := result[binding.BindingID]; exists {
+			return nil, fmt.Errorf(
+				"binding_id %q is duplicated",
+				binding.BindingID,
+			)
+		}
+		result[binding.BindingID] = binding
+	}
+	return result, nil
+}
+
+func validateV2StepLineage(
+	steps []any,
+	bindings map[string]v2ObservationBinding,
+) error {
+	for index, rawStep := range steps {
+		step, _ := rawStep.(map[string]any)
+		if step == nil || !requiresV2TargetBinding(v2StringValue(step["action"])) {
+			continue
+		}
+		bindingID := v2StringValue(step["target_binding_id"])
+		binding, exists := bindings[bindingID]
+		if !exists {
+			return fmt.Errorf(
+				"case.steps[%d].target_binding_id is unknown",
+				index,
+			)
+		}
+		if !hasV2Lineage(step) && binding.ProbeID == "" {
+			continue
+		}
+		if !hasV2Lineage(step) ||
+			binding.ProbeID == "" ||
+			v2StringValue(step["probe_id"]) != binding.ProbeID ||
+			v2StringValue(step["observation_id"]) != binding.ObservationID ||
+			v2StringValue(step["observation_sha256"]) !=
+				binding.ObservationSHA256 ||
+			v2StringValue(step["page_state_id"]) != binding.PageStateID {
+			return fmt.Errorf(
+				"case.steps[%d] lineage does not match target binding %q",
+				index,
+				bindingID,
+			)
+		}
+	}
+	return nil
+}
+
+func hasV2Lineage(step map[string]any) bool {
+	for _, field := range []string{
+		"probe_id",
+		"observation_id",
+		"observation_sha256",
+		"page_state_id",
+	} {
+		if _, exists := step[field]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+func validHexSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func v2CandidateExists(raw any, candidateID string) bool {
+	values, _ := raw.([]any)
+	for _, value := range values {
+		candidate, _ := value.(map[string]any)
+		if v2StringValue(candidate["candidate_id"]) == candidateID {
+			return true
+		}
+	}
+	return false
+}
+
+func v2StringValue(value any) string {
+	result, _ := value.(string)
+	return strings.TrimSpace(result)
 }
 
 func validateResearchV2ActionSemantics(

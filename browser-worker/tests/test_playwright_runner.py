@@ -6,6 +6,10 @@ from unittest.mock import patch
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from browser_worker.contracts.action_ir import validate_research_dsl
+from browser_worker.contracts.action_ir_v2 import validate_research_v2_dsl
+from browser_worker.contracts.dsl import DSLCase
+from browser_worker.contracts.executions import StepExecutionEvidence
 from browser_worker.runners.click_preprocessor import ClickPrecheckResult
 from browser_worker.runners.playwright_runner import (
     RunnerExecutionError,
@@ -14,9 +18,6 @@ from browser_worker.runners.playwright_runner import (
     _execute_step_with_candidates,
     execute_case_with_playwright,
 )
-from browser_worker.contracts.action_ir import validate_research_dsl
-from browser_worker.contracts.dsl import DSLCase
-from browser_worker.contracts.executions import StepExecutionEvidence
 
 
 class _Locator:
@@ -34,6 +35,12 @@ class _Locator:
 
     def count(self) -> int:
         return 1
+
+    def is_visible(self) -> bool:
+        return True
+
+    def is_enabled(self) -> bool:
+        return True
 
     def click(self, **_kwargs) -> None:
         self.click_calls += 1
@@ -100,6 +107,124 @@ class _Page:
 
 
 class PlaywrightRunnerNavigationFallbackTest(unittest.TestCase):
+    def test_research_v2_evidence_preserves_full_locator_lineage(self) -> None:
+        page = _Page(_Locator(tag="button"))
+        case = validate_research_v2_dsl(
+            {
+                "profile": "research-v2",
+                "name": "Submit form",
+                "input_contract": [],
+                "output_contract": [],
+                "plan_binding": {
+                    "plan_id": "plan-1",
+                    "version": 1,
+                    "sha256": "a" * 64,
+                },
+                "observation_bindings": [
+                    {
+                        "binding_id": "binding-1",
+                        "binding_sha256": "b" * 64,
+                        "probe_id": "probe-1",
+                        "observation_id": "obs-1",
+                        "observation_sha256": "c" * 64,
+                        "page_state_id": "products",
+                    }
+                ],
+                "steps": [
+                    {
+                        "plan_step_id": "submit",
+                        "action": "click",
+                        "intent": "Submit form",
+                        "target_binding_id": "binding-1",
+                        "probe_id": "probe-1",
+                        "observation_id": "obs-1",
+                        "observation_sha256": "c" * 64,
+                        "page_state_id": "products",
+                        "selected_candidate_id": "candidate-planned",
+                        "semantic_target": "Submit",
+                        "locator_candidates": [
+                            {
+                                "candidate_id": "candidate-planned",
+                                "element_ref": "products:7",
+                                "context_path": {
+                                    "frames": [],
+                                    "shadow_hosts": [],
+                                },
+                                "locator": {
+                                    "kind": "role",
+                                    "role": "button",
+                                    "name": "Submit",
+                                    "exact": True,
+                                },
+                                "provenance": "a11y_exact",
+                                "observed_count": 1,
+                                "visible": True,
+                                "enabled": True,
+                                "score": 0.95,
+                            }
+                        ],
+                        "preconditions": [
+                            {
+                                "type": "url_contains",
+                                "value": "/products",
+                                "timeout_ms": 3000,
+                            }
+                        ],
+                        "postconditions": [
+                            {
+                                "type": "url_contains",
+                                "value": "/products",
+                                "timeout_ms": 3000,
+                            }
+                        ],
+                        "idempotency": "idempotent",
+                        "side_effect": "browser_state",
+                    }
+                ],
+            }
+        )
+
+        with patch(
+            "browser_worker.runners.playwright_runner.click_with_precheck",
+            return_value=ClickPrecheckResult(succeeded=True),
+        ):
+            evidence = _execute_step_with_candidates(page, case.steps[0], 0)
+
+        self.assertEqual(evidence.plan_step_id, "submit")
+        self.assertEqual(evidence.target_binding_id, "binding-1")
+        self.assertEqual(evidence.probe_id, "probe-1")
+        self.assertEqual(evidence.observation_id, "obs-1")
+        self.assertEqual(evidence.page_state_id, "products")
+        self.assertEqual(evidence.planned_candidate_id, "candidate-planned")
+        self.assertEqual(evidence.candidate_id, "candidate-planned")
+        self.assertEqual(evidence.element_ref, "products:7")
+        self.assertEqual(
+            evidence.locator_trace.selected_candidate.candidate_id,
+            "candidate-planned",
+        )
+
+        page._locator.count = lambda: 0
+        with self.assertRaises(RunnerExecutionError) as raised:
+            _execute_step_with_candidates(page, case.steps[0], 0)
+        failed = raised.exception.step_evidence
+        self.assertIsNotNone(failed)
+        assert failed is not None
+        self.assertIsNotNone(failed.locator_trace, failed.model_dump(mode="json"))
+        self.assertEqual(failed.planned_candidate_id, "candidate-planned")
+        self.assertIsNone(failed.candidate_id)
+        self.assertEqual(
+            failed.locator_trace.candidates[0].candidate_id,
+            "candidate-planned",
+        )
+        self.assertEqual(
+            failed.locator_trace.candidates[0].runtime_count,
+            0,
+        )
+        self.assertIn(
+            "runtime_count_0",
+            failed.locator_trace.candidates[0].rejected_reasons,
+        )
+
     def test_failed_read_only_action_has_explicit_failed_outcome(self) -> None:
         page = _Page(_Locator(tag="body"))
         case = DSLCase.model_validate(

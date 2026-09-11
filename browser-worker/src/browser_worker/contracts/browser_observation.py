@@ -80,6 +80,7 @@ class RuntimeFact(StrictContract):
 
 
 class ObservedLocator(StrictContract):
+    candidate_id: str | None = Field(default=None, min_length=1)
     locator: LocatorSpec
     provenance: str = Field(min_length=1)
     observed_count: int = Field(ge=0)
@@ -120,6 +121,7 @@ class ObservationArtifact(StrictContract):
 
 class BrowserObservation(StrictContract):
     schema_version: Literal["browser.observation.v2"] = BROWSER_OBSERVATION_VERSION
+    probe_id: str | None = Field(default=None, min_length=1)
     observation_id: str = Field(min_length=1)
     page_state: PageStateFact
     elements: list[ElementFact] = Field(default_factory=list)
@@ -151,6 +153,7 @@ class TargetBinding(StrictContract):
     plan_id: str = Field(min_length=1)
     plan_version: int = Field(ge=1)
     plan_step_id: str = Field(min_length=1)
+    probe_id: str | None = Field(default=None, min_length=1)
     semantic_target: str = Field(min_length=1)
     action: str = Field(min_length=1)
     page_state_id: str = Field(min_length=1)

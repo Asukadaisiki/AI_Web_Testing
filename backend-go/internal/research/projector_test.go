@@ -12,6 +12,26 @@ import (
 	"testing"
 )
 
+func TestExecutionLineageSummaryPreservesCrossLayerReferences(t *testing.T) {
+	lineage := executionLineageSummary(map[string]any{
+		"plan_step_id":         "submit",
+		"target_binding_id":    "binding-1",
+		"probe_id":             "probe-1",
+		"observation_id":       "obs-1",
+		"observation_sha256":   strings.Repeat("a", 64),
+		"page_state_id":        "form",
+		"planned_candidate_id": "candidate-planned",
+		"candidate_id":         "candidate-runtime",
+		"element_ref":          "form:7",
+	})
+	if len(lineage) != 9 ||
+		lineage["plan_step_id"] != "submit" ||
+		lineage["target_binding_id"] != "binding-1" ||
+		lineage["candidate_id"] != "candidate-runtime" {
+		t.Fatalf("lineage = %#v", lineage)
+	}
+}
+
 func TestProjectorProjectsAgentEventsExecutionRetriesAndTerminal(t *testing.T) {
 	snapshot := projectorFixture(t)
 

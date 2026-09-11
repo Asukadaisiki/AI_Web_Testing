@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-from collections import Counter
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
-from pathlib import Path
 import tempfile
 import threading
 import unittest
-from urllib.parse import urlsplit
+from collections import Counter
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
-from browser_worker.exploration.page_explorer import BrowserSessionManager, _collect_flow_a11y
 from browser_worker.capabilities.browser_capabilities import (
     execute_browser_capability,
     shutdown_browser_capabilities,
+)
+from browser_worker.exploration.page_explorer import (
+    BrowserSessionManager,
+    _collect_flow_a11y,
 )
 
 
@@ -124,6 +127,7 @@ class ExploreFlowChromiumTest(unittest.TestCase):
                 },
             ],
             timeout_ms=5000,
+            probe_id="probe-chromium",
         )
 
         self.assertTrue(all(entry["status"] == "success" for entry in result))
@@ -133,6 +137,12 @@ class ExploreFlowChromiumTest(unittest.TestCase):
         self.assertEqual(_FlowHandler.requests["/cart"], 0)
         self.assertEqual(len(result), 4)
         self.assertEqual(len({entry["page_state"] for entry in result}), 4)
+        self.assertTrue(
+            all(
+                entry["observation_v2"]["probe_id"] == "probe-chromium"
+                for entry in result
+            )
+        )
 
         product_entry = next(
             entry for entry in result if "/product?sku=blue" in entry["url"]

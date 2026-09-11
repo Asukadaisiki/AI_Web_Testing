@@ -77,7 +77,8 @@ go run ./cmd/pipeline-audit --run-id <agent-run-id>
 开启 thinking 后，Agent transcript 会保留 provider 返回的 `reasoning_content` 以满足 DeepSeek 多轮工具调用回传要求；`research.llm_call` 事件只记录 reasoning 的开关、effort、字节数和 SHA，不记录原始推理正文。
 `agent.pipeline.trace` 事件记录模型请求体积及累计 usage，以及工具调用的
 state epoch、规范化签名、状态、attempt 和 retry lineage；`pipeline-audit`
-可从 PostgreSQL 事件离线汇总上下文增长、计划版本与重复调用。
+可从 PostgreSQL 事件离线汇总上下文增长、计划版本、重复调用和
+PlanStep 到 probe/observation/element/candidate/binding/execution/report 的 lineage。
 
 内存 Repository 仅用于快速单元测试。
 

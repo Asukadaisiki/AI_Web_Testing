@@ -21,20 +21,31 @@ type AgentEventReference struct {
 }
 
 type FailureSignal struct {
-	SchemaVersion       string                  `json:"schema_version"`
-	Category            string                  `json:"category"`
-	Fingerprint         string                  `json:"fingerprint"`
-	Title               string                  `json:"title"`
-	Stage               string                  `json:"stage"`
-	Code                string                  `json:"code"`
-	Retryable           *bool                   `json:"retryable"`
-	SideEffectCommitted *bool                   `json:"side_effect_committed"`
-	SourceReference     *FailureSourceReference `json:"source_reference"`
-	AgentEventReference *AgentEventReference    `json:"agent_event_reference"`
-	StepIndex           *int                    `json:"step_index"`
-	Action              *string                 `json:"action"`
-	Target              *string                 `json:"target"`
-	ErrorMessage        *string                 `json:"error_message"`
+	SchemaVersion        string                  `json:"schema_version"`
+	Category             string                  `json:"category"`
+	Fingerprint          string                  `json:"fingerprint"`
+	Title                string                  `json:"title"`
+	Stage                string                  `json:"stage"`
+	Code                 string                  `json:"code"`
+	Retryable            *bool                   `json:"retryable"`
+	SideEffectCommitted  *bool                   `json:"side_effect_committed"`
+	SourceReference      *FailureSourceReference `json:"source_reference"`
+	AgentEventReference  *AgentEventReference    `json:"agent_event_reference"`
+	StepIndex            *int                    `json:"step_index"`
+	PlanStepID           *string                 `json:"plan_step_id,omitempty"`
+	TargetBindingID      *string                 `json:"target_binding_id,omitempty"`
+	ProbeID              *string                 `json:"probe_id,omitempty"`
+	ObservationID        *string                 `json:"observation_id,omitempty"`
+	ObservationSHA256    *string                 `json:"observation_sha256,omitempty"`
+	PageStateID          *string                 `json:"page_state_id,omitempty"`
+	PlannedCandidateID   *string                 `json:"planned_candidate_id,omitempty"`
+	CandidateID          *string                 `json:"candidate_id,omitempty"`
+	ElementRef           *string                 `json:"element_ref,omitempty"`
+	Action               *string                 `json:"action"`
+	Target               *string                 `json:"target"`
+	ErrorMessage         *string                 `json:"error_message"`
+	LocatorFailureReason *string                 `json:"locator_failure_reason,omitempty"`
+	ScreenshotURL        *string                 `json:"screenshot_url,omitempty"`
 }
 
 func DecodeFailureSignal(raw json.RawMessage) (FailureSignal, error) {

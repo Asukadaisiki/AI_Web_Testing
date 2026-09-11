@@ -41,6 +41,12 @@ func TestFailureSignalGoldenContract(t *testing.T) {
 			if signal.AgentEventReference != nil {
 				t.Fatalf("fixture fabricated agent event reference = %#v", signal.AgentEventReference)
 			}
+			if testCase.Name == "locator" &&
+				(signal.PlanStepID == nil || *signal.PlanStepID != "submit" ||
+					signal.TargetBindingID == nil || *signal.TargetBindingID != "binding-1" ||
+					signal.CandidateID == nil || *signal.CandidateID != "candidate-2") {
+				t.Fatalf("locator lineage = %#v", signal)
+			}
 		})
 	}
 	for _, category := range []string{

@@ -439,7 +439,16 @@ func TestNonExplorationToolResultUsesStructuredModelSummary(t *testing.T) {
 				"code":"condition.postcondition.text_visible.failed",
 				"title":"Cart item missing",
 				"retryable":false,
-				"side_effect_committed":true
+					"side_effect_committed":true,
+					"plan_step_id":"verify-cart",
+					"target_binding_id":"binding-1",
+					"probe_id":"probe-1",
+					"observation_id":"obs-1",
+					"observation_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"page_state_id":"cart",
+					"planned_candidate_id":"candidate-1",
+					"candidate_id":"candidate-2",
+					"element_ref":"cart:7"
 			}]
 		},
 		"report":{"large":"this full nested report must not be echoed to the model"}
@@ -464,7 +473,10 @@ func TestNonExplorationToolResultUsesStructuredModelSummary(t *testing.T) {
 		t.Fatalf("report summary = %#v", summary.Report)
 	}
 	if summary.Report.FailureSignals[0].Category != "postcondition" ||
-		summary.Report.FailureSignals[0].SideEffectCommitted != true {
+		summary.Report.FailureSignals[0].SideEffectCommitted != true ||
+		summary.Report.FailureSignals[0].PlanStepID != "verify-cart" ||
+		summary.Report.FailureSignals[0].TargetBindingID != "binding-1" ||
+		summary.Report.FailureSignals[0].CandidateID != "candidate-2" {
 		t.Fatalf("failure brief = %#v", summary.Report.FailureSignals[0])
 	}
 }
@@ -590,6 +602,15 @@ func TestExplorationSummaryExposesPersistedTargetBindings(t *testing.T) {
 			GroundedStepIDs: []string{"open"},
 			PendingStepIDs:  []string{"submit"},
 			StepBindings:    map[string]string{"submit": "binding-1"},
+			StepLineage: map[string]ToolResultLineageSummary{
+				"submit": {
+					ProbeID: "probe-1", ObservationID: "obs-1",
+					ObservationSHA256: strings.Repeat("b", 64),
+					PageStateID:       "form", TargetBindingID: "binding-1",
+					SelectedCandidateID: "candidate-1",
+					ElementRefs:         []string{"form:7"},
+				},
+			},
 			ExplorationBudget: &ToolResultExplorationBudgetSummary{
 				Scope:       "plan_version",
 				PlanID:      "plan-1",
@@ -624,6 +645,11 @@ func TestExplorationSummaryExposesPersistedTargetBindings(t *testing.T) {
 	if summary.TaskPlan.StepBindings["submit"] != "binding-1" {
 		t.Fatalf("task plan summary = %#v", summary.TaskPlan)
 	}
+	if summary.TaskPlan.StepLineage["submit"].ProbeID != "probe-1" ||
+		summary.TaskPlan.StepLineage["submit"].SelectedCandidateID !=
+			"candidate-1" {
+		t.Fatalf("task plan lineage = %#v", summary.TaskPlan.StepLineage)
+	}
 	if len(summary.TaskPlan.GroundedStepIDs) != 1 ||
 		len(summary.TaskPlan.PendingStepIDs) != 1 ||
 		summary.TaskPlan.ExplorationBudget == nil ||
@@ -644,6 +670,7 @@ func TestExplorationSummaryReadsObservationV2WithoutLegacyNodes(t *testing.T) {
 			"element_count":1,
 			"observation_v2":{
 				"schema_version":"browser.observation.v2",
+				"probe_id":"probe-1",
 				"observation_id":"obs-1",
 				"page_state":{
 					"state_id":"form",
@@ -655,6 +682,7 @@ func TestExplorationSummaryReadsObservationV2WithoutLegacyNodes(t *testing.T) {
 					"dom":{"tag":"button","attrs":{"id":"submit"}},
 					"runtime":{"visible":true,"enabled":true},
 					"locators":[{
+						"candidate_id":"candidate-1",
 						"locator":{"kind":"css","value":"#submit"},
 						"provenance":"a11y_backend_dom_node",
 						"observed_count":1
@@ -673,9 +701,15 @@ func TestExplorationSummaryReadsObservationV2WithoutLegacyNodes(t *testing.T) {
 		t.Fatalf("summary = %s", content)
 	}
 	node := summary.Pages[0].A11yNodes[0]
+	if summary.Pages[0].ProbeID != "probe-1" ||
+		summary.Pages[0].ObservationID != "obs-1" ||
+		summary.Pages[0].ObservationSHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("page lineage = %#v", summary.Pages[0])
+	}
 	if node.Name != "Submit" ||
 		len(node.VerifiedSelectors) != 1 ||
-		node.VerifiedSelectors[0].Selector != "#submit" {
+		node.VerifiedSelectors[0].Selector != "#submit" ||
+		node.VerifiedSelectors[0].CandidateID != "candidate-1" {
 		t.Fatalf("node = %#v", node)
 	}
 }

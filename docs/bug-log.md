@@ -51,7 +51,7 @@
 ## BUG-184 | BrowserObservation relation 字段与共享 Schema 不一致
 
 - 日期：2026-09-12
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 来源：Agent 全链路一致性审计
 - 描述：Python `ObservationRelation` 序列化字段为 `kind/source/target`，`contracts/browser-observation.v2.schema.json` 却要求 `kind/from/to`。
@@ -61,14 +61,14 @@
   3. 对照共享 Schema 的 relation `$defs`，其必填字段为 `from` 和 `to`。
 - 影响：包含 relation 的真实 Observation 不能通过声明的跨语言 Schema；当前测试只编译 Schema 并验证 TargetBinding，未验证真实 Observation payload。
 - 根因：Pydantic 模型与手写 JSON Schema 分别演进，缺少以真实序列化结果驱动的双向 golden。
-- 处理：统一字段命名并增加 Python 输出、共享 Schema、Go 解码的同一份 golden；禁止仅验证 Schema 可编译。
-- 验证：静态对照 `browser_worker/contracts/browser_observation.py` 与 `contracts/browser-observation.v2.schema.json`；本轮未修改合同。
+- 处理：共享 Schema 改为与 Python 模型一致的 `source/target`；新增包含真实 element、locator 和 relation 结构的 Schema 验证，避免只检查 Schema 可编译。
+- 验证：Go browsercontract 测试使用实际序列化形态通过 Draft 2020-12 Schema；Python BrowserObservation 聚焦测试通过。
 - 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
 
 ## BUG-183 | 定位失败报告丢失 PlanStep 与候选拒绝链
 
 - 日期：2026-09-12
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：Agent 全链路一致性审计
 - 描述：StepEvidence 已包含 `plan_step_id` 和 `target_binding_id`，但 FailureSignal 与模型可见 FailureBrief 不携带这些 ID；Runner 还会静默跳过编译失败、count 非 1、隐藏或禁用的 candidate，全部失败时可能没有完整 LocatorTrace。
@@ -78,8 +78,8 @@
   3. 检查 StepEvidence、FailureSignal 和模型摘要，无法得到每个 candidate 的拒绝原因及完整 plan/binding lineage。
 - 影响：报告只能按 step index 和错误文本做粗粒度归因，Agent 无法确定应 re-ground 哪个 binding，grounding/invalid-action 指标也可能 unavailable。
 - 根因：candidate trace 只记录通过运行时检查的候选，FailureSignal v2 没有纳入 research-v2 lineage 字段。
-- 处理：记录所有 candidate attempt 和 rejected reason；新增兼容的 FailureSignal v3，贯通 plan/step/observation/binding/candidate ID。
-- 验证：静态核对 Runner candidate 循环、StepEvidence、FailureSignal v2、ToolResultFailureBrief 和 Research Projector；本轮未修改运行逻辑。
+- 处理：Runner 现在记录所有 candidate 的 runtime count、可见/可用状态和 rejected reason；StepEvidence 记录 probe/observation/page-state、planned/resolved candidate 和 element；以兼容扩展方式将相同 lineage 写入 FailureSignal v2、模型摘要、Research Transition 和 pipeline trace。
+- 验证：Go execution/agent/research/harness 聚焦测试和 Python Runner/FailureSignal 聚焦测试通过；0-match candidate 回归确认报告保留 planned candidate、runtime_count=0 和 `runtime_count_0` 拒绝原因。
 - 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
 
 ## BUG-182 | research-v2 条件与文本断言未保持 TaskPlan 语义
@@ -129,7 +129,7 @@
   3. Go `buildTargetBinding` 看到多个语义匹配元素而拒绝 binding，或 Runner 在正式页面解析到不同候选。
 - 影响：出现“Explore 成功但 PlanStep 未 grounded”“DSL 编译成功但 Runner 定位不同元素”等核心一致性问题。
 - 根因：Explore resolver、Go semantic binding 和 Runner compiler 是三次独立决策；没有贯穿全链的 ResolvedTargetEvidence。
-- 处理：新增 `browser.resolved-target.v1`；Explore 也必须用共享 LocatorSpec compiler 和唯一性门，返回 observation/element/candidate ID；Go 直接校验并绑定该身份，不再按文本重匹配。
+- 处理：部分完成。Phase A 已让 probe、BrowserObservation、ElementFact、candidate、TargetBinding、Executable DSL、StepEvidence、FailureSignal 和 Report 使用同一组 lineage ID；仍需在 Phase B 新增 `browser.resolved-target.v1`，让 Explore 实际动作也返回命中的 candidate，并删除 Go 按文本重新匹配。
 - 验证：静态核对 `_resolve_flow_action_locator`、`collect_action_snapshot`、`deriveTargetBindings/buildTargetBinding` 和 `_execute_step_with_candidates`；最近 live 记录中的重复商品动作歧义与该结构一致。
 - 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
 

@@ -82,6 +82,7 @@ type TargetBinding struct {
 	PlanID              string             `json:"plan_id"`
 	PlanVersion         int                `json:"plan_version"`
 	PlanStepID          string             `json:"plan_step_id"`
+	ProbeID             string             `json:"probe_id,omitempty"`
 	SemanticTarget      string             `json:"semantic_target"`
 	Action              string             `json:"action"`
 	PageStateID         string             `json:"page_state_id"`
@@ -224,6 +225,7 @@ func (b TargetBinding) CalculateSHA256() (string, error) {
 
 type BrowserObservation struct {
 	SchemaVersion string          `json:"schema_version"`
+	ProbeID       string          `json:"probe_id,omitempty"`
 	ObservationID string          `json:"observation_id"`
 	PageState     json.RawMessage `json:"page_state"`
 	Elements      json.RawMessage `json:"elements"`

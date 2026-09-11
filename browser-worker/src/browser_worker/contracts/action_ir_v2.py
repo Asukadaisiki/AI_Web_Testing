@@ -36,8 +36,10 @@ class PlanBindingV2(StrictContract):
 class ObservationBindingV2(StrictContract):
     binding_id: str = Field(min_length=1)
     binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    probe_id: str | None = Field(default=None, min_length=1)
     observation_id: str = Field(min_length=1)
     observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    page_state_id: str | None = Field(default=None, min_length=1)
 
 
 class ResearchV2Step(StrictContract):
@@ -45,6 +47,14 @@ class ResearchV2Step(StrictContract):
     action: ResearchV2Action
     intent: str = Field(min_length=1, max_length=500)
     target_binding_id: str | None = Field(default=None, max_length=64)
+    probe_id: str | None = Field(default=None, max_length=64)
+    observation_id: str | None = Field(default=None, max_length=64)
+    observation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    page_state_id: str | None = Field(default=None, max_length=256)
+    selected_candidate_id: str | None = Field(default=None, max_length=64)
     semantic_target: str | None = Field(default=None, max_length=500)
     locator_candidates: list[LocatorCandidate] | None = None
     value: str | None = None
@@ -141,7 +151,18 @@ def validate_research_v2_dsl(
         if case.plan_binding is not None or case.observation_bindings is not None:
             raise ValueError("draft must not contain compiler-owned bindings")
         for step in case.steps:
-            if step.semantic_target is not None or step.locator_candidates is not None:
+            if any(
+                value is not None
+                for value in (
+                    step.semantic_target,
+                    step.locator_candidates,
+                    step.probe_id,
+                    step.observation_id,
+                    step.observation_sha256,
+                    step.page_state_id,
+                    step.selected_candidate_id,
+                )
+            ):
                 raise ValueError("draft must not contain compiler-owned locator fields")
             if _requires_binding(step.action) and not step.target_binding_id:
                 raise ValueError(f"{step.action} requires target_binding_id")
@@ -149,7 +170,7 @@ def validate_research_v2_dsl(
     if case.plan_binding is None or case.observation_bindings is None:
         raise ValueError("executable case requires plan and observation bindings")
     known_bindings = {
-        binding.binding_id for binding in case.observation_bindings
+        binding.binding_id: binding for binding in case.observation_bindings
     }
     for step in case.steps:
         if _has_target(step.action) and not step.semantic_target:
@@ -159,6 +180,35 @@ def validate_research_v2_dsl(
                 raise ValueError(f"{step.action} has an unknown target binding")
             if not step.locator_candidates:
                 raise ValueError(f"{step.action} requires locator candidates")
+            candidate_ids = {
+                candidate.candidate_id for candidate in step.locator_candidates
+            }
+            if (
+                step.selected_candidate_id is not None
+                and step.selected_candidate_id not in candidate_ids
+            ):
+                raise ValueError(
+                    f"{step.action} selected_candidate_id is unknown"
+                )
+            binding = known_bindings[step.target_binding_id]
+            lineage = (
+                step.probe_id,
+                step.observation_id,
+                step.observation_sha256,
+                step.page_state_id,
+                binding.probe_id,
+                binding.page_state_id,
+            )
+            if any(value is not None for value in lineage) and (
+                any(value is None for value in lineage)
+                or step.probe_id != binding.probe_id
+                or step.observation_id != binding.observation_id
+                or step.observation_sha256 != binding.observation_sha256
+                or step.page_state_id != binding.page_state_id
+            ):
+                raise ValueError(
+                    f"{step.action} lineage does not match its target binding"
+                )
     return case
 
 

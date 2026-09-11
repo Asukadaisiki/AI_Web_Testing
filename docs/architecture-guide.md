@@ -71,6 +71,11 @@ Go execute_dsl tool
   -> reporting/json_report.py
   -> Go 持久化 test_case_runs / report
 
+诊断 lineage：
+Agent ToolCall -> probe -> BrowserObservation -> ElementFact/candidate
+  -> TargetBinding -> Executable DSL -> StepEvidence/FailureSignal
+  -> agent.pipeline.trace / pipeline-audit
+
 展示：
 Frontend pages
   -> features/*/api.ts
@@ -165,6 +170,8 @@ Frontend pages
 - `browser_observation.py` 定义 A11y/DOM/runtime 分源的 ElementFact、
   结构化 LocatorSpec 和 TargetBinding。
 - `action_ir_v2.py` 定义由 Go 编译的 research-v2 Draft/Executable DSL。
+- 新写 research-v2 数据使用稳定 ID 贯通 probe、observation、element、
+  candidate、binding、generation、execution 和 report；旧合同字段保持可读。
 - 数据库表结构由 Go `cmd/migrate` 和 `internal/dbschema/schema.sql` 管理。
 
 同名概念的区别：

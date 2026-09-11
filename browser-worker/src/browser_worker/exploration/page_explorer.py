@@ -1318,6 +1318,7 @@ def _collect_flow_a11y(
     isolated_context: bool = False,
     timeout_ms: int = 60000,
     core_user_flow_text: str | None = None,
+    probe_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Execute flow steps using A11y extraction instead of DOM.
 
@@ -1505,6 +1506,7 @@ def _collect_flow_a11y(
             state_id=snapshot_state,
             revision=revision,
             nodes=nodes,
+            probe_id=probe_id,
             page=page,
             artifact_root=PROJECT_ROOT / "artifacts",
         )
@@ -1815,6 +1817,7 @@ def _collect_flow_a11y(
                     state_id=state_id,
                     revision=revision,
                     nodes=nodes,
+                    probe_id=probe_id,
                     page=page,
                     artifact_root=PROJECT_ROOT / "artifacts",
                 )
@@ -2041,7 +2044,7 @@ def _resolve_input_fallback(page, target: str):
         lambda: page.get_by_placeholder(target),
         lambda: page.get_by_role("textbox", name=target),
         lambda: page.locator("input, select, textarea").filter(has=page.get_by_text(target)),
-        lambda: page.locator(f"input[type='email']").first,
+        lambda: page.locator("input[type='email']").first,
         lambda: page.locator("input:visible").first,
     ]
     for strategy in fallback_strategies:

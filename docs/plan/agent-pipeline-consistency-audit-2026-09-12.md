@@ -2,7 +2,7 @@
 
 日期：2026-09-12
 
-状态：in_progress（Phase A 增量 1 已实现）
+状态：in_progress（Phase A 增量 1-2 已实现，等待新 Run 运行态核验）
 
 范围：任务编排、工具调用、上下文管理、任务规划、Explore、元素信息归类、
 DSL 治理、Playwright 解析、Runner 执行、报告归因。
@@ -263,6 +263,20 @@ Short Interaction Tail
   和 retry lineage；该增量仅观测，不执行去重裁决。
 - 已新增 `pipeline-audit --run-id` 离线汇总入口。
 - 历史 Run 不含新 trace，真实离线重放需在部署该增量并产生新 Run 后执行。
+
+增量 2 完成情况：
+
+- Go 为每个 Explore ToolCall 注入稳定 `probe_id`，BrowserObservation 保留该 ID，
+  每个 observed locator 生成稳定 `candidate_id`。
+- TargetBinding 直接保留 probe/observation/page state/element/candidate 引用；
+  Go compiler 将这些只读字段注入 Executable DSL。
+- Runner StepEvidence 同时记录 planned candidate 和实际 resolved
+  candidate/element；定位失败 trace 保留所有候选的 runtime count 和拒绝原因。
+- FailureSignal、模型可见 FailureBrief、Research Transition 和
+  `pipeline-audit` 均保留 lineage。
+- 新写数据必须具备完整 lineage；旧 Observation、TargetBinding 和 research-v2
+  canonical payload 保持可读。
+- 已修复 BrowserObservation relation 的 `source/target` 与共享 Schema 漂移。
 
 退出门槛：
 

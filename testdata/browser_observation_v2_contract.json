@@ -1,0 +1,101 @@
+{
+  "schema_version": "browser.observation.v2",
+  "probe_id": "probe-1",
+  "observation_id": "obs-1",
+  "page_state": {
+    "state_id": "form",
+    "revision": 1,
+    "url": "https://example.test/form",
+    "title": "Form",
+    "state_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "previous_state_sha256": null
+  },
+  "elements": [
+    {
+      "element_ref": "form:7",
+      "context_path": {
+        "frames": [],
+        "shadow_hosts": []
+      },
+      "a11y": {
+        "role": "button",
+        "name": "Submit",
+        "description": null,
+        "value": null,
+        "states": {
+          "focusable": true,
+          "disabled": false
+        },
+        "relations": {
+          "controls": [
+            "form:8"
+          ]
+        }
+      },
+      "dom": {
+        "backend_node_id": 7,
+        "tag": "button",
+        "attrs": {
+          "id": "submit"
+        },
+        "text": "Submit"
+      },
+      "runtime": {
+        "connected": true,
+        "visible": true,
+        "enabled": true,
+        "editable": false
+      },
+      "locators": [
+        {
+          "candidate_id": "candidate-1",
+          "locator": {
+            "kind": "role",
+            "role": "button",
+            "name": "Submit",
+            "exact": true
+          },
+          "provenance": "a11y_exact",
+          "observed_count": 1
+        }
+      ]
+    },
+    {
+      "element_ref": "form:8",
+      "context_path": {
+        "frames": [],
+        "shadow_hosts": []
+      },
+      "a11y": {
+        "role": "status",
+        "name": "Result",
+        "description": null,
+        "value": null,
+        "states": {},
+        "relations": {}
+      },
+      "dom": {
+        "backend_node_id": 8,
+        "tag": "div",
+        "attrs": {
+          "id": "result"
+        },
+        "text": "Saved"
+      },
+      "runtime": {
+        "connected": true,
+        "visible": true,
+        "enabled": true,
+        "editable": false
+      },
+      "locators": []
+    }
+  ],
+  "relations": [
+    {
+      "kind": "controls",
+      "source": "form:7",
+      "target": "form:8"
+    }
+  ]
+}

@@ -32,6 +32,15 @@
           {
             "step_index": 2,
             "action": "click",
+            "plan_step_id": "submit",
+            "target_binding_id": "binding-1",
+            "probe_id": "probe-1",
+            "observation_id": "obs-1",
+            "observation_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "page_state_id": "form",
+            "planned_candidate_id": "candidate-1",
+            "candidate_id": "candidate-2",
+            "element_ref": "form:7",
             "target": "Submit",
             "status": "failed",
             "action_outcome": {
@@ -62,7 +71,16 @@
           "execution_id": 102,
           "step_index": 2,
           "json_pointer": "/steps/2/action_outcome"
-        }
+        },
+        "plan_step_id": "submit",
+        "target_binding_id": "binding-1",
+        "probe_id": "probe-1",
+        "observation_id": "obs-1",
+        "observation_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "page_state_id": "form",
+        "planned_candidate_id": "candidate-1",
+        "candidate_id": "candidate-2",
+        "element_ref": "form:7"
       }
     },
     {

@@ -58,10 +58,17 @@ def _executable() -> dict:
         {
             "binding_id": "binding-1",
             "binding_sha256": "b" * 64,
+            "probe_id": "probe-1",
             "observation_id": "obs-1",
             "observation_sha256": "c" * 64,
+            "page_state_id": "form",
         }
     ]
+    payload["steps"][0]["probe_id"] = "probe-1"
+    payload["steps"][0]["observation_id"] = "obs-1"
+    payload["steps"][0]["observation_sha256"] = "c" * 64
+    payload["steps"][0]["page_state_id"] = "form"
+    payload["steps"][0]["selected_candidate_id"] = "candidate-1"
     payload["steps"][0]["semantic_target"] = "Submit"
     payload["steps"][0]["locator_candidates"] = [
         {
@@ -96,6 +103,31 @@ class ResearchV2ContractTest(unittest.TestCase):
         case = validate_research_v2_dsl(_executable())
         self.assertEqual(case.steps[0].target, "Submit")
         self.assertEqual(case.steps[0].candidates[0].locator.kind, "role")
+        self.assertEqual(case.steps[0].probe_id, "probe-1")
+        self.assertEqual(case.steps[0].selected_candidate_id, "candidate-1")
+
+    def test_executable_rejects_lineage_that_differs_from_binding(self) -> None:
+        payload = _executable()
+        payload["steps"][0]["observation_id"] = "obs-other"
+        with self.assertRaises(ValueError):
+            validate_research_v2_dsl(payload)
+
+    def test_executable_accepts_pre_lineage_v2_payload(self) -> None:
+        payload = _executable()
+        for field in ("probe_id", "page_state_id"):
+            payload["observation_bindings"][0].pop(field)
+        for field in (
+            "probe_id",
+            "observation_id",
+            "observation_sha256",
+            "page_state_id",
+            "selected_candidate_id",
+        ):
+            payload["steps"][0].pop(field)
+
+        case = validate_research_v2_dsl(payload)
+        self.assertIsNone(case.steps[0].probe_id)
+        self.assertEqual(case.steps[0].target_binding_id, "binding-1")
 
     def test_canonical_v3_round_trip(self) -> None:
         fixture = json.loads(

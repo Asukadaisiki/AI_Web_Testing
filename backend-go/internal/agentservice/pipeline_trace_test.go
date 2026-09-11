@@ -30,6 +30,14 @@ func TestRecordPipelineTracePersistsSchemaValidatedPayload(t *testing.T) {
 			Name: "explore_flow", Signature: strings.Repeat("c", 64),
 			Status: "failed", Attempt: 2, RetryOfToolCallID: "call-1",
 			ReasonCode: "tool_execution_failed", PlanStepIDs: []string{"s1", "s2"},
+			Lineage: []PipelineLineageRef{{
+				Stage: "grounding", PlanID: "plan-1", PlanVersion: 2,
+				PlanStepID: "s1", ProbeID: "probe-1",
+				ObservationID: "obs-1", ObservationSHA256: strings.Repeat("d", 64),
+				PageStateID: "form", ElementRefs: []string{"form:7"},
+				TargetBindingID:    "binding-1",
+				PlannedCandidateID: "candidate-1",
+			}},
 		},
 	}
 	if err := service.RecordPipelineTrace(
@@ -183,6 +191,10 @@ func TestSummarizePipelineTraceReportsGrowthAndRepeatedCalls(t *testing.T) {
 					Status: "proposed", Attempt: attempt + 1,
 					RetryOfToolCallID: map[bool]string{true: "call-1"}[attempt > 0],
 					PlanStepIDs:       []string{"s1"},
+					Lineage: []PipelineLineageRef{{
+						Stage: "grounding", PlanID: "plan-1", PlanVersion: 1,
+						PlanStepID: "s1", ProbeID: "probe-1",
+					}},
 				},
 			},
 		)
@@ -207,7 +219,9 @@ func TestSummarizePipelineTraceReportsGrowthAndRepeatedCalls(t *testing.T) {
 		summary.ContextGrowth.MaxMessageBytes != 220 ||
 		summary.Cumulative.LogicalCalls != 2 ||
 		summary.Cumulative.TotalTokens != 20 ||
-		len(summary.PlanVersions) != 1 {
+		len(summary.PlanVersions) != 1 ||
+		len(summary.Lineage) != 1 ||
+		summary.Lineage[0].ProbeID != "probe-1" {
 		t.Fatalf("summary = %#v", summary)
 	}
 }

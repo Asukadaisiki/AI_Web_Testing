@@ -103,13 +103,35 @@ type PipelineModelRequestTrace struct {
 }
 
 type PipelineToolCallTrace struct {
-	Name              string   `json:"name"`
-	Signature         string   `json:"signature"`
-	Status            string   `json:"status"`
-	Attempt           int      `json:"attempt"`
-	RetryOfToolCallID string   `json:"retry_of_tool_call_id,omitempty"`
-	ReasonCode        string   `json:"reason_code,omitempty"`
-	PlanStepIDs       []string `json:"plan_step_ids"`
+	Name              string               `json:"name"`
+	Signature         string               `json:"signature"`
+	Status            string               `json:"status"`
+	Attempt           int                  `json:"attempt"`
+	RetryOfToolCallID string               `json:"retry_of_tool_call_id,omitempty"`
+	ReasonCode        string               `json:"reason_code,omitempty"`
+	PlanStepIDs       []string             `json:"plan_step_ids"`
+	Lineage           []PipelineLineageRef `json:"lineage,omitempty"`
+}
+
+type PipelineLineageRef struct {
+	Stage               string   `json:"stage"`
+	PlanID              string   `json:"plan_id"`
+	PlanVersion         int      `json:"plan_version"`
+	PlanStepID          string   `json:"plan_step_id"`
+	ProbeID             string   `json:"probe_id,omitempty"`
+	ObservationID       string   `json:"observation_id,omitempty"`
+	ObservationSHA256   string   `json:"observation_sha256,omitempty"`
+	PageStateID         string   `json:"page_state_id,omitempty"`
+	ElementRefs         []string `json:"element_refs,omitempty"`
+	TargetBindingID     string   `json:"target_binding_id,omitempty"`
+	PlannedCandidateID  string   `json:"planned_candidate_id,omitempty"`
+	ResolvedCandidateID string   `json:"resolved_candidate_id,omitempty"`
+	ResolvedElementRef  string   `json:"resolved_element_ref,omitempty"`
+	GenerationID        int64    `json:"generation_id,omitempty"`
+	BatchID             int64    `json:"batch_id,omitempty"`
+	CaseID              int64    `json:"case_id,omitempty"`
+	ExecutionID         int64    `json:"execution_id,omitempty"`
+	ReportStatus        string   `json:"report_status,omitempty"`
 }
 
 type PipelineTracePayload struct {

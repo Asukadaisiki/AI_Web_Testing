@@ -43,14 +43,21 @@ func TestResearchV2DraftAndExecutableContracts(t *testing.T) {
 		"observation_bindings":[{
 			"binding_id":"binding-1",
 			"binding_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"probe_id":"probe-1",
 			"observation_id":"obs-1",
-			"observation_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+			"observation_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"page_state_id":"form"
 		}],
 		"steps":[{
 			"plan_step_id":"submit",
 			"action":"click",
 			"intent":"Submit form",
 			"target_binding_id":"binding-1",
+			"probe_id":"probe-1",
+			"observation_id":"obs-1",
+			"observation_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			"page_state_id":"form",
+			"selected_candidate_id":"candidate-1",
 			"semantic_target":"Submit",
 			"locator_candidates":[{
 				"candidate_id":"candidate-1",
@@ -96,6 +103,73 @@ func TestResearchV2RejectsModelAuthoredLocatorCandidates(t *testing.T) {
 	}`))
 	if err == nil {
 		t.Fatal("compiler-owned locator fields were accepted in a draft")
+	}
+}
+
+func TestResearchV2RejectsLineageThatDiffersFromBinding(t *testing.T) {
+	raw, err := os.ReadFile(
+		filepath.Join("..", "..", "..", "testdata", "dsl_research_v2_contract.json"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		CanonicalJSON string `json:"canonical_json"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(fixture.CanonicalJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	steps := payload["steps"].([]any)
+	steps[0].(map[string]any)["observation_id"] = "obs-other"
+	changed, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateExecutableCase(changed); err == nil {
+		t.Fatal("mismatched observation lineage was accepted")
+	}
+}
+
+func TestResearchV2AcceptsPreLineageExecutablePayload(t *testing.T) {
+	raw, err := os.ReadFile(
+		filepath.Join("..", "..", "..", "testdata", "dsl_research_v2_contract.json"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		CanonicalJSON string `json:"canonical_json"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(fixture.CanonicalJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	bindings := payload["observation_bindings"].([]any)
+	delete(bindings[0].(map[string]any), "probe_id")
+	delete(bindings[0].(map[string]any), "page_state_id")
+	steps := payload["steps"].([]any)
+	for _, field := range []string{
+		"probe_id",
+		"observation_id",
+		"observation_sha256",
+		"page_state_id",
+		"selected_candidate_id",
+	} {
+		delete(steps[0].(map[string]any), field)
+	}
+	changed, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateExecutableCase(changed); err != nil {
+		t.Fatalf("pre-lineage research-v2 payload became unreadable: %v", err)
 	}
 }
 

@@ -75,10 +75,48 @@ export type ResearchLLMCallPayloadV1 = Record<string, unknown> & {
   attempt_status: string;
 } & ResearchLLMCallToolAssociation;
 
-export interface AgentPipelineTracePayloadV1 extends Record<string, unknown> {
+export interface AgentPipelineLineageRef {
+  stage: string;
+  plan_id: string;
+  plan_version: number;
+  plan_step_id: string;
+  probe_id?: string;
+  observation_id?: string;
+  observation_sha256?: string;
+  page_state_id?: string;
+  element_refs?: string[];
+  target_binding_id?: string;
+  planned_candidate_id?: string;
+  resolved_candidate_id?: string;
+  resolved_element_ref?: string;
+  generation_id?: number;
+  batch_id?: number;
+  case_id?: number;
+  execution_id?: number;
+  report_status?: string;
+}
+
+export interface AgentPipelineTracePayloadV1 {
   schema_version: "agent.pipeline.trace.v1";
   kind: "model_request" | "tool_call";
   state_epoch: string;
+  plan?: {
+    plan_id: string;
+    version: number;
+    sha256: string;
+    status: string;
+  };
+  model_request?: Record<string, unknown>;
+  tool_call?: {
+    name: string;
+    signature: string;
+    status: string;
+    attempt: number;
+    retry_of_tool_call_id?: string;
+    reason_code?: string;
+    plan_step_ids: string[];
+    lineage?: AgentPipelineLineageRef[];
+  };
 }
 
 export interface AgentEvent<
@@ -127,6 +165,12 @@ export interface TaskPlanSnapshot {
     grounding_attempts: number;
     evidence_count: number;
     target_binding_id?: string;
+    probe_id?: string;
+    observation_id?: string;
+    observation_sha256?: string;
+    page_state_id?: string;
+    selected_candidate_id?: string;
+    element_refs?: string[];
   }>;
 }
 

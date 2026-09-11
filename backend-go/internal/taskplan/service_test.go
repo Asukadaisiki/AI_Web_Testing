@@ -101,6 +101,7 @@ func TestTaskPlanLifecycleBindsGroundingGenerationAndExecution(t *testing.T) {
 				"status":"success",
 				"observation_v2":{
 					"schema_version":"browser.observation.v2",
+					"probe_id":"probe-search",
 					"observation_id":"obs-search",
 					"page_state":{
 						"state_id":"products",
@@ -112,6 +113,7 @@ func TestTaskPlanLifecycleBindsGroundingGenerationAndExecution(t *testing.T) {
 						"dom":{"tag":"input","attrs":{"id":"search"},"text":""},
 						"runtime":{"visible":true,"enabled":true,"editable":true},
 						"locators":[{
+							"candidate_id":"candidate-search",
 							"locator":{"kind":"role","role":"textbox","name":"Search","exact":true},
 							"provenance":"a11y_exact","observed_count":1
 						}]
@@ -717,6 +719,7 @@ func TestExploreFlowPersistsStructuredTargetBinding(t *testing.T) {
 			"status":"success",
 			"observation_v2":{
 				"schema_version":"browser.observation.v2",
+				"probe_id":"probe-1",
 				"observation_id":"obs-1",
 				"page_state":{
 					"state_id":"form",
@@ -729,11 +732,13 @@ func TestExploreFlowPersistsStructuredTargetBinding(t *testing.T) {
 					"runtime":{"visible":true,"enabled":true,"editable":false},
 					"locators":[
 						{
+							"candidate_id":"candidate-role",
 							"locator":{"kind":"role","role":"button","name":"Submit","exact":true},
 							"provenance":"a11y_exact",
 							"observed_count":1
 						},
 						{
+							"candidate_id":"candidate-css",
 							"locator":{"kind":"css","value":"#submit","exact":true},
 							"provenance":"a11y_backend_dom_node",
 							"observed_count":1
@@ -776,7 +781,8 @@ func TestExploreFlowPersistsStructuredTargetBinding(t *testing.T) {
 	if binding.PlanID != current.ID ||
 		binding.PlanVersion != current.Version ||
 		binding.PlanStepID != "submit" ||
-		binding.SelectedCandidateID == "" ||
+		binding.ProbeID != "probe-1" ||
+		binding.SelectedCandidateID != "candidate-role" ||
 		len(binding.Candidates) != 2 {
 		t.Fatalf("binding = %#v", binding)
 	}
@@ -822,6 +828,7 @@ func TestExploreFlowIgnoresNonExecutableSemanticContainers(t *testing.T) {
 			"status":"success",
 			"observation_v2":{
 				"schema_version":"browser.observation.v2",
+				"probe_id":"probe-details",
 				"observation_id":"obs-details",
 				"page_state":{
 					"state_id":"results",
@@ -834,6 +841,7 @@ func TestExploreFlowIgnoresNonExecutableSemanticContainers(t *testing.T) {
 						"dom":{"tag":"ul","attrs":{},"text":"View Product"},
 						"runtime":{"visible":true,"enabled":true,"editable":false},
 						"locators":[{
+							"candidate_id":"candidate-list",
 							"locator":{"kind":"role","role":"list","name":"View Product","exact":true},
 							"provenance":"a11y_exact",
 							"observed_count":0
@@ -852,6 +860,7 @@ func TestExploreFlowIgnoresNonExecutableSemanticContainers(t *testing.T) {
 						"dom":{"tag":"a","attrs":{"href":"/details/1"},"text":"View Product"},
 						"runtime":{"visible":true,"enabled":true,"editable":false},
 						"locators":[{
+							"candidate_id":"candidate-link",
 							"locator":{"kind":"css","value":"a[href=\"/details/1\"]","exact":true},
 							"provenance":"a11y_backend_dom_node",
 							"observed_count":1
@@ -882,7 +891,9 @@ func TestExploreFlowIgnoresNonExecutableSemanticContainers(t *testing.T) {
 	binding := current.Steps[0].TargetBinding
 	if binding == nil ||
 		len(binding.Candidates) != 1 ||
+		binding.ProbeID != "probe-details" ||
 		binding.Candidates[0].ElementRef != "results:link" ||
+		binding.Candidates[0].CandidateID != "candidate-link" ||
 		binding.Candidates[0].Locator.Kind != "css" {
 		t.Fatalf("binding = %#v", binding)
 	}
@@ -916,7 +927,7 @@ func TestCompileResearchV2DraftInjectsPersistedTargetBinding(t *testing.T) {
 		browsercontract.TargetBinding{
 			PlanID: plan.ID, PlanVersion: plan.Version,
 			PlanStepID: "submit", SemanticTarget: "Submit",
-			Action: "click", PageStateID: "form",
+			ProbeID: "probe-1", Action: "click", PageStateID: "form",
 			ObservationID: "obs-1", ObservationSHA256: strings.Repeat("a", 64),
 			ElementRefs: []string{"form:7"},
 			Candidates: []browsercontract.LocatorCandidate{{
@@ -974,5 +985,13 @@ func TestCompileResearchV2DraftInjectsPersistedTargetBinding(t *testing.T) {
 		targetBinding.BindingSHA256,
 	) {
 		t.Fatalf("compiled DSL lacks target binding: %s", compiled)
+	}
+	steps := payload["steps"].([]any)
+	step := steps[0].(map[string]any)
+	if step["probe_id"] != "probe-1" ||
+		step["observation_id"] != "obs-1" ||
+		step["page_state_id"] != "form" ||
+		step["selected_candidate_id"] != "candidate-1" {
+		t.Fatalf("compiled lineage = %#v", step)
 	}
 }

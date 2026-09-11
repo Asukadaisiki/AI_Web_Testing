@@ -109,6 +109,17 @@ def build_failure_signal(
         source_reference=source_reference,
         agent_event_reference=agent_event_reference,
         step_index=failed_step.step_index if failed_step else None,
+        plan_step_id=failed_step.plan_step_id if failed_step else None,
+        target_binding_id=failed_step.target_binding_id if failed_step else None,
+        probe_id=failed_step.probe_id if failed_step else None,
+        observation_id=failed_step.observation_id if failed_step else None,
+        observation_sha256=failed_step.observation_sha256 if failed_step else None,
+        page_state_id=failed_step.page_state_id if failed_step else None,
+        planned_candidate_id=(
+            failed_step.planned_candidate_id if failed_step else None
+        ),
+        candidate_id=failed_step.candidate_id if failed_step else None,
+        element_ref=failed_step.element_ref if failed_step else None,
         action=action,
         target=failed_step.target if failed_step else None,
         error_message=raw_error,

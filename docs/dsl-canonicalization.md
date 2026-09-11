@@ -23,12 +23,19 @@
 1. LLM 只提交 Draft DSL，包括 `plan_step_id` 和必要的
    `target_binding_id`，不得提交 selector、candidate 或 locator confidence。
 2. Go 使用当前 TaskPlan 和持久化 TargetBinding 注入
-   `semantic_target`、`locator_candidates`、`plan_binding` 和
-   `observation_bindings`，再生成 Executable DSL canonical bytes。
+   `semantic_target`、`locator_candidates`、`plan_binding`、
+   `observation_bindings`，以及 probe/observation/page-state/selected-candidate
+   lineage，再生成 Executable DSL canonical bytes。
 
 TargetBinding 中的 locator 使用结构化 `LocatorSpec`，不允许
 `role="..." inside ...` 等自定义字符串语法。Python preflight 和 Runner
 必须通过同一个 LocatorSpec compiler 构造 Playwright locator。
+
+新生成的 BrowserObservation 为每个 probe 写入 `probe_id`，每个 locator hint
+写入稳定 `candidate_id`。TargetBinding 保留 probe、observation、element 和
+selected candidate；Runner 在 StepEvidence 中同时记录计划候选与实际解析候选。
+这些新增字段对旧 `browser.observation.v2`、`grounding.target-binding.v1` 和
+已持久化 research-v2 canonical payload 保持只读兼容。
 
 `dsl_sha256` 定义为：
 

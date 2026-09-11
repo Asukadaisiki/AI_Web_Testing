@@ -104,7 +104,7 @@ func TestBrowserToolDoesNotForwardPlanMetadata(t *testing.T) {
 	client := &fakeCapabilityClient{}
 	handler := NewBrowserTools(client)[0]
 	_, err := handler.Execute(context.Background(), Call{
-		Name: "explore_page",
+		RunID: "run-tool", ToolCallID: "call-tool", Name: "explore_page",
 		Arguments: json.RawMessage(`{
 			"url":"https://example.test",
 			"plan_step_ids":["open"]
@@ -115,5 +115,8 @@ func TestBrowserToolDoesNotForwardPlanMetadata(t *testing.T) {
 	}
 	if strings.Contains(string(client.arguments), "plan_step_ids") {
 		t.Fatalf("browser arguments leaked plan metadata: %s", client.arguments)
+	}
+	if !strings.Contains(string(client.arguments), `"probe_id":"probe_`) {
+		t.Fatalf("browser arguments have no probe lineage: %s", client.arguments)
 	}
 }

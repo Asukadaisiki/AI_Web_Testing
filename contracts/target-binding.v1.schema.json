@@ -10,6 +10,7 @@
     "plan_id": {"type": "string", "minLength": 1},
     "plan_version": {"type": "integer", "minimum": 1},
     "plan_step_id": {"type": "string", "minLength": 1},
+    "probe_id": {"type": ["string", "null"], "minLength": 1},
     "semantic_target": {"type": "string", "minLength": 1},
     "action": {"type": "string", "minLength": 1},
     "page_state_id": {"type": "string", "minLength": 1},

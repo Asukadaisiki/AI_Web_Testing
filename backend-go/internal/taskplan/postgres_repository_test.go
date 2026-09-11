@@ -95,7 +95,7 @@ func TestPostgresRepositoryPersistsVersionedTaskPlan(t *testing.T) {
 		browsercontract.TargetBinding{
 			PlanID: first.ID, PlanVersion: first.Version,
 			PlanStepID: "open", SemanticTarget: "Page", Action: "goto",
-			PageStateID: "state-1", ObservationID: "obs-1",
+			ProbeID: "probe-1", PageStateID: "state-1", ObservationID: "obs-1",
 			ObservationSHA256: strings.Repeat("a", 64),
 			ElementRefs:       []string{"state-1:7"},
 			Candidates: []browsercontract.LocatorCandidate{{

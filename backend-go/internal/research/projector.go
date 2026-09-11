@@ -855,6 +855,7 @@ func projectExecutionStep(
 		"execution_id": execution.ID, "attempt": execution.Attempt,
 		"step_index": stepIndex,
 	}
+	stateData = withExecutionLineage(step, stateData)
 	if preState, ok := step["pre_state"].(map[string]any); ok {
 		stateData["pre_state"] = map[string]any{
 			"url":                safeURLSummary(stringValue(preState["url"])),
@@ -878,12 +879,12 @@ func projectExecutionStep(
 		snapshot.ResearchRunID, EventKindObservation, correlation,
 		Available(state.ID), nil, Available(execution.Attempt), Available(stepIndex),
 		sources,
-		map[string]any{
+		withExecutionLineage(step, map[string]any{
 			"locator_confidence":     stringValue(step["locator_confidence"]),
 			"resolved_by":            stringValue(step["resolved_by"]),
 			"candidate_count":        arrayLength(locatorTrace["candidates"]),
 			"failure_reason_present": locatorTrace["failure_reason"] != nil,
-		},
+		}),
 	)
 	if err != nil {
 		return projectedUnit{}, 0, err
@@ -904,12 +905,12 @@ func projectExecutionStep(
 		snapshot.ResearchRunID, EventKindAction, correlation,
 		Available(candidate.ID), nil, Available(execution.Attempt), Available(stepIndex),
 		sources,
-		map[string]any{
+		withExecutionLineage(step, map[string]any{
 			"action":     stringValue(step["action"]),
 			"target":     summarizedScalar(step["target"]),
 			"value":      summarizedScalar(step["value"]),
 			"dsl_sha256": execution.DSLSHA256,
-		},
+		}),
 	)
 	if err != nil {
 		return projectedUnit{}, 0, err
@@ -942,10 +943,10 @@ func projectExecutionStep(
 	}
 	payload.Verification = Available(verification)
 	if stringValue(step["status"]) == "failed" {
-		failureData := map[string]any{
+		failureData := withExecutionLineage(step, map[string]any{
 			"error":             summarizedScalar(step["error_message"]),
 			"side_effect_state": stringValue(outcome["side_effect_state"]),
-		}
+		})
 		if execution.FailureSignal.Value != nil {
 			failureData["signal"] = failureSignalSummary(*execution.FailureSignal.Value)
 		}
@@ -1395,6 +1396,8 @@ func candidateSummary(trace map[string]any) map[string]any {
 	}
 	if selected, ok := trace["selected_candidate"].(map[string]any); ok {
 		result["selected_candidate"] = map[string]any{
+			"candidate_id":     stringValue(selected["candidate_id"]),
+			"element_ref":      stringValue(selected["element_ref"]),
 			"role":             stringValue(selected["role"]),
 			"strategy":         stringValue(selected["strategy"]),
 			"score":            selected["score"],
@@ -1402,6 +1405,36 @@ func candidateSummary(trace map[string]any) map[string]any {
 			"enabled":          selected["enabled"],
 			"matched_rules":    selected["matched_rules"],
 			"rejected_reasons": selected["rejected_reasons"],
+		}
+	}
+	return result
+}
+
+func withExecutionLineage(
+	step map[string]any,
+	target map[string]any,
+) map[string]any {
+	if lineage := executionLineageSummary(step); len(lineage) > 0 {
+		target["lineage"] = lineage
+	}
+	return target
+}
+
+func executionLineageSummary(step map[string]any) map[string]any {
+	result := make(map[string]any)
+	for _, field := range []string{
+		"plan_step_id",
+		"target_binding_id",
+		"probe_id",
+		"observation_id",
+		"observation_sha256",
+		"page_state_id",
+		"planned_candidate_id",
+		"candidate_id",
+		"element_ref",
+	} {
+		if value := stringValue(step[field]); value != "" {
+			result[field] = value
 		}
 	}
 	return result
@@ -1441,6 +1474,9 @@ func failureSignalSummary(raw json.RawMessage) map[string]any {
 	for _, key := range []string{
 		"schema_version", "category", "stage", "code", "retryable",
 		"side_effect_committed", "step_index", "fingerprint",
+		"plan_step_id", "target_binding_id", "probe_id", "observation_id",
+		"observation_sha256", "page_state_id", "planned_candidate_id",
+		"candidate_id", "element_ref",
 	} {
 		if value, exists := signal[key]; exists {
 			result[key] = value

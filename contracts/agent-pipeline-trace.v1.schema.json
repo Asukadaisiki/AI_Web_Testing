@@ -67,6 +67,10 @@
           "type": "array",
           "items": {"type": "string", "minLength": 1},
           "uniqueItems": true
+        },
+        "lineage": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/lineage"}
         }
       },
       "required": ["name", "signature", "status", "attempt", "plan_step_ids"]
@@ -84,6 +88,38 @@
     }
   ],
   "$defs": {
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "plan_id": {"type": "string", "minLength": 1},
+        "plan_version": {"type": "integer", "minimum": 1},
+        "plan_step_id": {"type": "string", "minLength": 1},
+        "probe_id": {"type": "string", "minLength": 1},
+        "observation_id": {"type": "string", "minLength": 1},
+        "observation_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "page_state_id": {"type": "string", "minLength": 1},
+        "element_refs": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "target_binding_id": {"type": "string", "minLength": 1},
+        "planned_candidate_id": {"type": "string", "minLength": 1},
+        "resolved_candidate_id": {"type": "string", "minLength": 1},
+        "resolved_element_ref": {"type": "string", "minLength": 1},
+        "generation_id": {"type": "integer", "minimum": 1},
+        "batch_id": {"type": "integer", "minimum": 1},
+        "case_id": {"type": "integer", "minimum": 1},
+        "execution_id": {"type": "integer", "minimum": 1},
+        "report_status": {"type": "string", "minLength": 1}
+      },
+      "required": ["stage", "plan_id", "plan_version", "plan_step_id"]
+    },
     "request_budget": {
       "type": "object",
       "additionalProperties": false,

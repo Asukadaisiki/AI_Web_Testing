@@ -59,10 +59,11 @@ type ToolResultErrorSummary struct {
 }
 
 type ToolResultSelectorSummary struct {
-	Strategy string `json:"strategy,omitempty"`
-	Selector string `json:"selector"`
-	Name     string `json:"name,omitempty"`
-	Source   string `json:"source,omitempty"`
+	CandidateID string `json:"candidate_id,omitempty"`
+	Strategy    string `json:"strategy,omitempty"`
+	Selector    string `json:"selector"`
+	Name        string `json:"name,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
 
 type ToolResultNodeSummary struct {
@@ -103,18 +104,21 @@ type ToolResultActionSummary struct {
 }
 
 type ToolResultPageSummary struct {
-	URL           string                     `json:"url,omitempty"`
-	PageState     string                     `json:"page_state,omitempty"`
-	PageKind      string                     `json:"page_kind,omitempty"`
-	Revision      int                        `json:"revision,omitempty"`
-	Status        string                     `json:"status,omitempty"`
-	Description   string                     `json:"description,omitempty"`
-	ElementCount  int                        `json:"element_count"`
-	Actions       []ToolResultActionSummary  `json:"actions,omitempty"`
-	A11yNodes     []ToolResultNodeSummary    `json:"a11y_nodes,omitempty"`
-	Failure       *ToolResultErrorSummary    `json:"failure,omitempty"`
-	Omitted       ToolResultOmissionCounters `json:"omitted"`
-	ReferenceOnly bool                       `json:"reference_only,omitempty"`
+	ProbeID           string                     `json:"probe_id,omitempty"`
+	ObservationID     string                     `json:"observation_id,omitempty"`
+	ObservationSHA256 string                     `json:"observation_sha256,omitempty"`
+	URL               string                     `json:"url,omitempty"`
+	PageState         string                     `json:"page_state,omitempty"`
+	PageKind          string                     `json:"page_kind,omitempty"`
+	Revision          int                        `json:"revision,omitempty"`
+	Status            string                     `json:"status,omitempty"`
+	Description       string                     `json:"description,omitempty"`
+	ElementCount      int                        `json:"element_count"`
+	Actions           []ToolResultActionSummary  `json:"actions,omitempty"`
+	A11yNodes         []ToolResultNodeSummary    `json:"a11y_nodes,omitempty"`
+	Failure           *ToolResultErrorSummary    `json:"failure,omitempty"`
+	Omitted           ToolResultOmissionCounters `json:"omitted"`
+	ReferenceOnly     bool                       `json:"reference_only,omitempty"`
 }
 
 type ModelToolSummary struct {
@@ -234,7 +238,18 @@ type ToolResultTaskPlanSummary struct {
 	GroundedStepIDs   []string                            `json:"grounded_step_ids,omitempty"`
 	PendingStepIDs    []string                            `json:"pending_step_ids,omitempty"`
 	StepBindings      map[string]string                   `json:"step_bindings,omitempty"`
+	StepLineage       map[string]ToolResultLineageSummary `json:"step_lineage,omitempty"`
 	ExplorationBudget *ToolResultExplorationBudgetSummary `json:"exploration_budget,omitempty"`
+}
+
+type ToolResultLineageSummary struct {
+	ProbeID             string   `json:"probe_id,omitempty"`
+	ObservationID       string   `json:"observation_id,omitempty"`
+	ObservationSHA256   string   `json:"observation_sha256,omitempty"`
+	PageStateID         string   `json:"page_state_id,omitempty"`
+	TargetBindingID     string   `json:"target_binding_id,omitempty"`
+	SelectedCandidateID string   `json:"selected_candidate_id,omitempty"`
+	ElementRefs         []string `json:"element_refs,omitempty"`
 }
 
 type ToolResultBudgetCounter struct {
@@ -290,6 +305,15 @@ type ToolResultFailureBrief struct {
 	Title               string `json:"title,omitempty"`
 	Retryable           *bool  `json:"retryable,omitempty"`
 	SideEffectCommitted any    `json:"side_effect_committed,omitempty"`
+	PlanStepID          string `json:"plan_step_id,omitempty"`
+	TargetBindingID     string `json:"target_binding_id,omitempty"`
+	ProbeID             string `json:"probe_id,omitempty"`
+	ObservationID       string `json:"observation_id,omitempty"`
+	ObservationSHA256   string `json:"observation_sha256,omitempty"`
+	PageStateID         string `json:"page_state_id,omitempty"`
+	PlannedCandidateID  string `json:"planned_candidate_id,omitempty"`
+	CandidateID         string `json:"candidate_id,omitempty"`
+	ElementRef          string `json:"element_ref,omitempty"`
 }
 
 type ToolResultRepairSummary struct {
@@ -348,8 +372,11 @@ type rawPage struct {
 type rawObservationV2 struct {
 	PageState struct {
 		StateID string `json:"state_id"`
+		SHA256  string `json:"state_sha256"`
 	} `json:"page_state"`
-	Elements []struct {
+	ProbeID       string `json:"probe_id"`
+	ObservationID string `json:"observation_id"`
+	Elements      []struct {
 		ElementRef string `json:"element_ref"`
 		A11y       *struct {
 			Role string `json:"role"`
@@ -364,7 +391,8 @@ type rawObservationV2 struct {
 			Enabled bool `json:"enabled"`
 		} `json:"runtime"`
 		Locators []struct {
-			Locator struct {
+			CandidateID string `json:"candidate_id"`
+			Locator     struct {
 				Kind  string  `json:"kind"`
 				Role  string  `json:"role"`
 				Name  *string `json:"name"`
@@ -680,6 +708,14 @@ func summarizePage(page rawPage) ToolResultPageSummary {
 		Description: boundedUTF8(page.Description, 512), ElementCount: page.ElementCount,
 		Failure: summarizeFailure(page.Failure),
 	}
+	if page.ObservationV2 != nil {
+		result.ProbeID = boundedUTF8(page.ObservationV2.ProbeID, 64)
+		result.ObservationID = boundedUTF8(page.ObservationV2.ObservationID, 64)
+		result.ObservationSHA256 = boundedUTF8(
+			page.ObservationV2.PageState.SHA256,
+			64,
+		)
+	}
 	nodesByID := make(map[string]rawNode, len(page.A11yNodes))
 	selectedIDs := make(map[string]bool)
 	for _, node := range page.A11yNodes {
@@ -749,8 +785,9 @@ func nodesFromObservation(observation rawObservationV2) []rawNode {
 			node.VerifiedSelectors = append(
 				node.VerifiedSelectors,
 				ToolResultSelectorSummary{
-					Strategy: observed.Locator.Kind,
-					Selector: selector,
+					CandidateID: boundedUTF8(observed.CandidateID, 64),
+					Strategy:    observed.Locator.Kind,
+					Selector:    selector,
 					Name: firstNonEmptyString(
 						stringPointerValue(observed.Locator.Name),
 						node.Name,
@@ -965,6 +1002,39 @@ func summarizeFailureSignals(values []any) []ToolResultFailureBrief {
 			Code:                boundedUTF8(stringValue(signal["code"]), 128),
 			Title:               boundedUTF8(stringValue(signal["title"]), 256),
 			SideEffectCommitted: scalarValue(signal["side_effect_committed"]),
+			PlanStepID: boundedUTF8(
+				stringValue(signal["plan_step_id"]),
+				64,
+			),
+			TargetBindingID: boundedUTF8(
+				stringValue(signal["target_binding_id"]),
+				64,
+			),
+			ProbeID: boundedUTF8(stringValue(signal["probe_id"]), 64),
+			ObservationID: boundedUTF8(
+				stringValue(signal["observation_id"]),
+				64,
+			),
+			ObservationSHA256: boundedUTF8(
+				stringValue(signal["observation_sha256"]),
+				64,
+			),
+			PageStateID: boundedUTF8(
+				stringValue(signal["page_state_id"]),
+				256,
+			),
+			PlannedCandidateID: boundedUTF8(
+				stringValue(signal["planned_candidate_id"]),
+				64,
+			),
+			CandidateID: boundedUTF8(
+				stringValue(signal["candidate_id"]),
+				64,
+			),
+			ElementRef: boundedUTF8(
+				stringValue(signal["element_ref"]),
+				128,
+			),
 		}
 		if retryable, ok := boolValue(signal["retryable"]); ok {
 			brief.Retryable = &retryable
@@ -1319,6 +1389,7 @@ func deduplicateNodes(nodes []ToolResultNodeSummary) []ToolResultNodeSummary {
 func deduplicateSelectors(selectors []ToolResultSelectorSummary) []ToolResultSelectorSummary {
 	seen := make(map[string]ToolResultSelectorSummary, len(selectors))
 	for _, selector := range selectors {
+		selector.CandidateID = boundedUTF8(selector.CandidateID, 64)
 		selector.Strategy = boundedUTF8(selector.Strategy, 64)
 		selector.Selector = boundedUTF8(selector.Selector, 1024)
 		selector.Name = boundedUTF8(selector.Name, 512)

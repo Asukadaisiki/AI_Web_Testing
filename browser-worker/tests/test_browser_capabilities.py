@@ -64,6 +64,7 @@ class BrowserCapabilityContractTest(unittest.TestCase):
     def test_same_project_sessions_apply_independent_context_policies(self) -> None:
         flow_arguments = {
             "base_url": "http://local.test",
+            "probe_id": "probe-flow",
             "steps": [{"url": "/flow"}],
         }
 
@@ -117,6 +118,12 @@ class BrowserCapabilityContractTest(unittest.TestCase):
             ],
             [True, True],
         )
+        self.assertEqual(
+            [call.kwargs["probe_id"] for call in collect_flow.call_args_list],
+            ["probe-flow", "probe-flow"],
+        )
+        self.assertEqual(normal["probe_id"], "probe-flow")
+        self.assertEqual(clean["probe_id"], "probe-flow")
         self.assertEqual(
             normal["context_evidence"],
             {
@@ -196,7 +203,10 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                 project_id=7,
                 conversation_id="103",
                 context={"clean_context": True},
-                arguments={"url": "http://local.test/page"},
+                arguments={
+                    "url": "http://local.test/page",
+                    "probe_id": "probe-1",
+                },
             )
 
         storage_state_path.assert_not_called()
@@ -210,6 +220,7 @@ class BrowserCapabilityContractTest(unittest.TestCase):
                 "planning_session_id": 103,
             },
         )
+        self.assertEqual(result["observation_v2"]["probe_id"], "probe-1")
 
     def test_validate_page_elements_returns_grounded_candidates(self) -> None:
         result = execute_browser_capability(

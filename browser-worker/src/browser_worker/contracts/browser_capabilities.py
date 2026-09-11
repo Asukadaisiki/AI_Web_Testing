@@ -20,6 +20,7 @@ class ExplorePageArguments(DSLModel):
     url: str = Field(min_length=1)
     core_user_flow_text: str | None = None
     observation_schema_version: Literal["v1", "v2"] = "v1"
+    probe_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class ExploreFlowWaitCondition(DSLModel):
@@ -80,6 +81,7 @@ class ExploreFlowArguments(DSLModel):
     base_url: str | None = None
     flow_description: str | None = None
     observation_schema_version: Literal["v1", "v2"] = "v1"
+    probe_id: str | None = Field(default=None, min_length=1, max_length=64)
     steps: list[ExploreFlowStep] = Field(min_length=1)
 
 

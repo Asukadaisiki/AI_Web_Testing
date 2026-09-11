@@ -47,6 +47,7 @@ func TestTargetBindingValidatesHashAndSelectedCandidate(t *testing.T) {
 		PlanID:            "plan-1",
 		PlanVersion:       1,
 		PlanStepID:        "step-1",
+		ProbeID:           "probe-1",
 		SemanticTarget:    "Submit form",
 		Action:            "click",
 		PageStateID:       "state-1",
@@ -128,6 +129,7 @@ func TestSharedSchemasCompileAndValidateTargetBinding(t *testing.T) {
 	name := "Submit"
 	binding, err := NewTargetBinding(TargetBinding{
 		PlanID: "plan-1", PlanVersion: 1, PlanStepID: "submit",
+		ProbeID:        "probe-1",
 		SemanticTarget: "Submit form", Action: "click",
 		PageStateID: "state-1", ObservationID: "obs-1",
 		ObservationSHA256: repeat("a", 64),
@@ -158,6 +160,39 @@ func TestSharedSchemasCompileAndValidateTargetBinding(t *testing.T) {
 	}
 }
 
+func TestSharedSchemaValidatesSerializedBrowserObservation(t *testing.T) {
+	compiler := jsonschema.NewCompiler()
+	for _, name := range []string{
+		"locator-spec.v1.schema.json",
+		"browser-observation.v2.schema.json",
+	} {
+		content := readRepositoryFile(t, "contracts/"+name)
+		if err := compiler.AddResource(
+			"https://ai-web-testing.local/contracts/"+name,
+			bytes.NewReader(content),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema, err := compiler.Compile(
+		"https://ai-web-testing.local/contracts/browser-observation.v2.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := readRepositoryFile(t, "testdata/browser_observation_v2_contract.json")
+	var observation any
+	if err := json.Unmarshal(raw, &observation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeObservation(raw); err != nil {
+		t.Fatalf("Go observation contract rejected shared fixture: %v", err)
+	}
+	if err := schema.Validate(observation); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTargetBindingRejectsXPathInsideShadowRoot(t *testing.T) {
 	binding := TargetBinding{
 		SchemaVersion:     TargetBindingVersion,
@@ -165,6 +200,7 @@ func TestTargetBindingRejectsXPathInsideShadowRoot(t *testing.T) {
 		PlanID:            "plan-1",
 		PlanVersion:       1,
 		PlanStepID:        "step-1",
+		ProbeID:           "probe-1",
 		SemanticTarget:    "Shadow action",
 		Action:            "click",
 		PageStateID:       "state-1",

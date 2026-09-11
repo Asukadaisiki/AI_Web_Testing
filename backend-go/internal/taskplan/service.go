@@ -1138,6 +1138,7 @@ func successfulFlowActions(raw json.RawMessage) map[string]bool {
 }
 
 type observedLocator struct {
+	CandidateID   string                      `json:"candidate_id"`
 	Locator       browsercontract.LocatorSpec `json:"locator"`
 	Provenance    string                      `json:"provenance"`
 	ObservedCount int                         `json:"observed_count"`
@@ -1165,6 +1166,7 @@ type observedElement struct {
 
 type observedSnapshot struct {
 	SchemaVersion string `json:"schema_version"`
+	ProbeID       string `json:"probe_id"`
 	ObservationID string `json:"observation_id"`
 	PageState     struct {
 		StateID string `json:"state_id"`
@@ -1250,6 +1252,7 @@ func buildTargetBinding(
 	observation observedSnapshot,
 ) *browsercontract.TargetBinding {
 	if observation.SchemaVersion != browsercontract.ObservationSchemaVersion ||
+		observation.ProbeID == "" ||
 		observation.ObservationID == "" ||
 		len(observation.PageState.SHA256) != 64 {
 		return nil
@@ -1282,13 +1285,11 @@ func buildTargetBinding(
 	element := matched[0]
 	candidates := make([]browsercontract.LocatorCandidate, 0, len(element.Locators))
 	for _, observed := range element.Locators {
-		if observed.ObservedCount != 1 {
+		if observed.CandidateID == "" || observed.ObservedCount != 1 {
 			continue
 		}
-		candidateSeed, _ := json.Marshal(observed.Locator)
-		candidateHash := sha256.Sum256(candidateSeed)
 		candidates = append(candidates, browsercontract.LocatorCandidate{
-			CandidateID: "candidate_" + hex.EncodeToString(candidateHash[:8]),
+			CandidateID: observed.CandidateID,
 			ElementRef:  element.ElementRef,
 			ContextPath: element.ContextPath,
 			Locator:     observed.Locator, Provenance: observed.Provenance,
@@ -1310,7 +1311,8 @@ func buildTargetBinding(
 		browsercontract.TargetBinding{
 			PlanID: plan.ID, PlanVersion: plan.Version,
 			PlanStepID: step.ID, SemanticTarget: step.Target,
-			Action: step.Action, PageStateID: observation.PageState.StateID,
+			ProbeID: observation.ProbeID, Action: step.Action,
+			PageStateID:       observation.PageState.StateID,
 			ObservationID:     observation.ObservationID,
 			ObservationSHA256: observation.PageState.SHA256,
 			ElementRefs:       []string{element.ElementRef},

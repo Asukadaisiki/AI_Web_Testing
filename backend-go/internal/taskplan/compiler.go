@@ -72,14 +72,29 @@ func (s *Service) CompileDraftCase(
 		if binding == nil {
 			continue
 		}
+		if binding.ProbeID != "" {
+			step["probe_id"] = binding.ProbeID
+			step["observation_id"] = binding.ObservationID
+			step["observation_sha256"] = binding.ObservationSHA256
+			step["page_state_id"] = binding.PageStateID
+			step["selected_candidate_id"] = binding.SelectedCandidateID
+		}
 		step["locator_candidates"] = binding.Candidates
 		if !seenBinding[binding.BindingID] {
-			observationBindings = append(observationBindings, map[string]any{
+			observationBinding := map[string]any{
 				"binding_id":         binding.BindingID,
 				"binding_sha256":     binding.BindingSHA256,
 				"observation_id":     binding.ObservationID,
 				"observation_sha256": binding.ObservationSHA256,
-			})
+			}
+			if binding.ProbeID != "" {
+				observationBinding["probe_id"] = binding.ProbeID
+				observationBinding["page_state_id"] = binding.PageStateID
+			}
+			observationBindings = append(
+				observationBindings,
+				observationBinding,
+			)
 			seenBinding[binding.BindingID] = true
 		}
 	}
@@ -141,17 +156,22 @@ func compileDraftStep(
 			planned.ID,
 		)
 	}
-	if _, exists := step["locator_candidates"]; exists {
-		return fmt.Errorf(
-			"case.steps[%d].locator_candidates are compiler-owned",
-			index,
-		)
-	}
-	if _, exists := step["semantic_target"]; exists {
-		return fmt.Errorf(
-			"case.steps[%d].semantic_target is compiler-owned",
-			index,
-		)
+	for _, field := range []string{
+		"semantic_target",
+		"locator_candidates",
+		"probe_id",
+		"observation_id",
+		"observation_sha256",
+		"page_state_id",
+		"selected_candidate_id",
+	} {
+		if _, exists := step[field]; exists {
+			return fmt.Errorf(
+				"case.steps[%d].%s is compiler-owned",
+				index,
+				field,
+			)
+		}
 	}
 	if requiresTargetBinding(planned.Action) {
 		if planned.TargetBinding == nil {
@@ -212,18 +232,23 @@ func validateCompiledCaseSemantics(plan Plan, raw json.RawMessage) error {
 		Profile     string  `json:"profile"`
 		PlanBinding Binding `json:"plan_binding"`
 		Steps       []struct {
-			PlanStepID        string                             `json:"plan_step_id"`
-			Action            string                             `json:"action"`
-			Intent            string                             `json:"intent"`
-			SemanticTarget    string                             `json:"semantic_target"`
-			TargetBindingID   string                             `json:"target_binding_id"`
-			LocatorCandidates []browsercontract.LocatorCandidate `json:"locator_candidates"`
-			Value             string                             `json:"value"`
-			Trigger           string                             `json:"trigger"`
-			ContextKey        string                             `json:"context_key"`
-			TimeoutMS         int                                `json:"timeout_ms"`
-			Idempotency       string                             `json:"idempotency"`
-			SideEffect        SideEffect                         `json:"side_effect"`
+			PlanStepID          string                             `json:"plan_step_id"`
+			Action              string                             `json:"action"`
+			Intent              string                             `json:"intent"`
+			SemanticTarget      string                             `json:"semantic_target"`
+			TargetBindingID     string                             `json:"target_binding_id"`
+			ProbeID             string                             `json:"probe_id"`
+			ObservationID       string                             `json:"observation_id"`
+			ObservationSHA256   string                             `json:"observation_sha256"`
+			PageStateID         string                             `json:"page_state_id"`
+			SelectedCandidateID string                             `json:"selected_candidate_id"`
+			LocatorCandidates   []browsercontract.LocatorCandidate `json:"locator_candidates"`
+			Value               string                             `json:"value"`
+			Trigger             string                             `json:"trigger"`
+			ContextKey          string                             `json:"context_key"`
+			TimeoutMS           int                                `json:"timeout_ms"`
+			Idempotency         string                             `json:"idempotency"`
+			SideEffect          SideEffect                         `json:"side_effect"`
 		} `json:"steps"`
 	}
 	if json.Unmarshal(raw, &candidate) != nil ||
@@ -256,6 +281,13 @@ func validateCompiledCaseSemantics(plan Plan, raw json.RawMessage) error {
 		if requiresTargetBinding(expected.Action) {
 			if expected.TargetBinding == nil ||
 				step.TargetBindingID != expected.TargetBinding.BindingID ||
+				step.ProbeID != expected.TargetBinding.ProbeID ||
+				step.ObservationID != expected.TargetBinding.ObservationID ||
+				step.ObservationSHA256 !=
+					expected.TargetBinding.ObservationSHA256 ||
+				step.PageStateID != expected.TargetBinding.PageStateID ||
+				step.SelectedCandidateID !=
+					expected.TargetBinding.SelectedCandidateID ||
 				!sameCandidates(
 					step.LocatorCandidates,
 					expected.TargetBinding.Candidates,

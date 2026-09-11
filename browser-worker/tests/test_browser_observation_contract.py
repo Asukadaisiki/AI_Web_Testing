@@ -22,6 +22,27 @@ ROOT = Path(__file__).parents[2]
 
 
 class BrowserObservationContractTest(unittest.TestCase):
+    def test_shared_observation_golden_matches_python_contract(self) -> None:
+        payload = json.loads(
+            (
+                ROOT
+                / "testdata"
+                / "browser_observation_v2_contract.json"
+            ).read_text()
+        )
+        observation = BrowserObservation.model_validate(payload)
+        serialized = observation.model_dump(mode="json")
+        serialized.pop("artifact", None)
+
+        self.assertEqual(serialized, payload)
+        self.assertEqual(observation.probe_id, "probe-1")
+        self.assertEqual(
+            observation.elements[0].locators[0].candidate_id,
+            "candidate-1",
+        )
+        self.assertEqual(observation.relations[0].source, "form:7")
+        self.assertEqual(observation.relations[0].target, "form:8")
+
     def test_capability_manifest_matches_locator_contract(self) -> None:
         manifest = json.loads(
             (ROOT / "contracts" / "browser-capabilities.v1.json").read_text()
@@ -57,6 +78,7 @@ class BrowserObservationContractTest(unittest.TestCase):
         observation = BrowserObservation.model_validate(
             {
                 "schema_version": BROWSER_OBSERVATION_VERSION,
+                "probe_id": "probe-1",
                 "observation_id": "obs-1",
                 "page_state": {
                     "state_id": "state-1",
@@ -129,6 +151,8 @@ class BrowserObservationContractTest(unittest.TestCase):
             self.assertEqual(parsed.elements[0].a11y.name, "Submit")
             self.assertEqual(len(parsed.elements[0].dom.text), 256)
             self.assertEqual(parsed.page_state.revision, 2)
+            self.assertTrue(parsed.probe_id.startswith("probe_"))
+            self.assertTrue(parsed.elements[0].locators[0].candidate_id.startswith("candidate_"))
             self.assertIsNotNone(parsed.artifact)
             artifacts = list(
                 (Path(directory) / "browser-observations").glob("*.json.gz")
@@ -142,6 +166,7 @@ class BrowserObservationContractTest(unittest.TestCase):
             "plan_id": "plan-1",
             "plan_version": 1,
             "plan_step_id": "step-1",
+            "probe_id": "probe-1",
             "semantic_target": "Submit form",
             "action": "click",
             "page_state_id": "state-1",
@@ -296,6 +321,49 @@ class BrowserObservationContractTest(unittest.TestCase):
             name="Save",
         )
 
+    def test_observation_counts_candidates_in_their_context_path(self) -> None:
+        page = MagicMock()
+        frame = MagicMock()
+        host = MagicMock()
+        locator = MagicMock()
+        locator.count.return_value = 1
+        page.frame_locator.return_value = frame
+        frame.locator.return_value = host
+        host.get_by_role.return_value = locator
+
+        observation = build_browser_observation(
+            url="https://example.test/editor",
+            title="Editor",
+            state_id="editor",
+            revision=1,
+            probe_id="probe-editor",
+            page=page,
+            nodes=[
+                {
+                    "node_id": "save",
+                    "role": "button",
+                    "a11y_name": "Save",
+                    "context_path": {
+                        "frames": ["iframe[name=editor]"],
+                        "shadow_hosts": ["settings-panel"],
+                    },
+                    "dom": {
+                        "tag": "button",
+                        "attrs": {},
+                        "connected": True,
+                        "visible": True,
+                        "enabled": True,
+                    },
+                }
+            ],
+        )
+
+        observed = observation["elements"][0]["locators"][0]
+        self.assertEqual(observed["observed_count"], 1)
+        self.assertTrue(observed["candidate_id"].startswith("candidate_"))
+        page.frame_locator.assert_called_once_with("iframe[name=editor]")
+        frame.locator.assert_called_once_with("settings-panel")
+
     def test_target_binding_rejects_xpath_inside_shadow_root(self) -> None:
         payload = {
             "schema_version": "grounding.target-binding.v1",
@@ -303,6 +371,7 @@ class BrowserObservationContractTest(unittest.TestCase):
             "plan_id": "plan-1",
             "plan_version": 1,
             "plan_step_id": "step-1",
+            "probe_id": "probe-1",
             "semantic_target": "Shadow action",
             "action": "click",
             "page_state_id": "state-1",

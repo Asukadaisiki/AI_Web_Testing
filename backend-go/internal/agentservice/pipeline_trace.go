@@ -42,6 +42,7 @@ type PipelineTraceSummary struct {
 	ToolCalls            int                        `json:"tool_calls"`
 	ToolStateTransitions int                        `json:"tool_state_transitions"`
 	RepeatedToolCalls    []PipelineRepeatedToolCall `json:"repeated_tool_calls"`
+	Lineage              []PipelineLineageRef       `json:"lineage"`
 	ModelRequests        int                        `json:"model_requests"`
 	Cumulative           PipelineCumulativeUsage    `json:"cumulative"`
 	ContextGrowth        PipelineContextGrowth      `json:"context_growth"`
@@ -166,6 +167,7 @@ func SummarizePipelineTrace(
 		RunID:             strings.TrimSpace(runID),
 		PlanVersions:      []PipelinePlanRef{},
 		RepeatedToolCalls: []PipelineRepeatedToolCall{},
+		Lineage:           []PipelineLineageRef{},
 	}
 	if result.RunID == "" {
 		return PipelineTraceSummary{}, errors.New("pipeline trace summary requires run_id")
@@ -239,6 +241,7 @@ func SummarizePipelineTrace(
 			result.Cumulative = trace.ModelRequest.Cumulative
 		case PipelineTraceToolCall:
 			result.ToolStateTransitions++
+			result.Lineage = append(result.Lineage, trace.ToolCall.Lineage...)
 			if event.ToolCallID != "" {
 				toolCalls[event.ToolCallID] = struct{}{}
 			}
@@ -275,6 +278,7 @@ func SummarizePipelineTrace(
 		return result.RepeatedToolCalls[i].ToolCallID <
 			result.RepeatedToolCalls[j].ToolCallID
 	})
+	result.Lineage = deduplicatePipelineLineage(result.Lineage)
 	return result, nil
 }
 
@@ -312,6 +316,20 @@ func validatePipelineTrace(payload PipelineTracePayload) error {
 			!validToolTraceStatus(payload.ToolCall.Status) {
 			return errors.New("tool_call trace is incomplete")
 		}
+		for _, lineage := range payload.ToolCall.Lineage {
+			if strings.TrimSpace(lineage.Stage) == "" ||
+				strings.TrimSpace(lineage.PlanID) == "" ||
+				lineage.PlanVersion < 1 ||
+				strings.TrimSpace(lineage.PlanStepID) == "" {
+				return errors.New("tool_call trace has invalid lineage")
+			}
+			if lineage.ObservationSHA256 != "" &&
+				!validSHA256(lineage.ObservationSHA256) {
+				return errors.New(
+					"tool_call trace lineage has invalid observation_sha256",
+				)
+			}
+		}
 	default:
 		return fmt.Errorf("unsupported pipeline trace kind %q", payload.Kind)
 	}
@@ -329,6 +347,37 @@ func validToolTraceStatus(status string) bool {
 
 func planKey(plan PipelinePlanRef) string {
 	return fmt.Sprintf("%s:%d:%s", plan.PlanID, plan.Version, plan.SHA256)
+}
+
+func deduplicatePipelineLineage(
+	values []PipelineLineageRef,
+) []PipelineLineageRef {
+	seen := make(map[string]PipelineLineageRef, len(values))
+	for _, value := range values {
+		encoded, _ := json.Marshal(value)
+		seen[string(encoded)] = value
+	}
+	result := make([]PipelineLineageRef, 0, len(seen))
+	for _, value := range seen {
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := result[i], result[j]
+		if left.PlanVersion != right.PlanVersion {
+			return left.PlanVersion < right.PlanVersion
+		}
+		if left.PlanStepID != right.PlanStepID {
+			return left.PlanStepID < right.PlanStepID
+		}
+		if left.Stage != right.Stage {
+			return left.Stage < right.Stage
+		}
+		if left.ExecutionID != right.ExecutionID {
+			return left.ExecutionID < right.ExecutionID
+		}
+		return left.ResolvedCandidateID < right.ResolvedCandidateID
+	})
+	return result
 }
 
 func validSHA256(value string) bool {

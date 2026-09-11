@@ -2,16 +2,27 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 import hashlib
 import json
-from pathlib import Path
 import threading
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, TypeVar
 from urllib.parse import urljoin, urlparse
 
+from browser_worker.contracts.browser_capabilities import (
+    BrowserCapabilityName,
+    ExploreFlowArguments,
+    ExplorePageArguments,
+    ValidatePageElementsArguments,
+)
 from browser_worker.exploration.locator_preflight import apply_preflight_to_dsl_by_state
+from browser_worker.exploration.observation import (
+    attach_observation_artifact,
+    build_browser_observation,
+)
 from browser_worker.exploration.page_explorer import (
     BrowserSessionManager,
     _collect_flow_a11y,
@@ -19,19 +30,8 @@ from browser_worker.exploration.page_explorer import (
     is_storage_state_stale,
     load_storage_state_meta,
 )
-from browser_worker.exploration.observation import (
-    attach_observation_artifact,
-    build_browser_observation,
-)
-from browser_worker.runtime.paths import PROJECT_ROOT
 from browser_worker.runtime.config import get_settings
-from browser_worker.contracts.browser_capabilities import (
-    BrowserCapabilityName,
-    ExploreFlowArguments,
-    ExplorePageArguments,
-    ValidatePageElementsArguments,
-)
-
+from browser_worker.runtime.paths import PROJECT_ROOT
 
 T = TypeVar("T")
 
@@ -95,6 +95,12 @@ def execute_browser_capability(
         arguments = ExplorePageArguments.model_validate(arguments).model_dump(
             exclude_none=True
         )
+        arguments["probe_id"] = _probe_id(
+            capability,
+            project_id,
+            conversation_id,
+            arguments,
+        )
         url = _resolve_page_url(browser_context, arguments)
         return _BrowserCapabilityRuntime.run(
             lambda: _explore_page(
@@ -109,6 +115,12 @@ def execute_browser_capability(
     if capability == "explore_flow":
         arguments = ExploreFlowArguments.model_validate(arguments).model_dump(
             exclude_none=True
+        )
+        arguments["probe_id"] = _probe_id(
+            capability,
+            project_id,
+            conversation_id,
+            arguments,
         )
         base_url = str(arguments.get("base_url") or "").strip()
         if not base_url:
@@ -127,6 +139,29 @@ def execute_browser_capability(
 
 def shutdown_browser_capabilities() -> None:
     _BrowserCapabilityRuntime.shutdown()
+
+
+def _probe_id(
+    capability: str,
+    project_id: int,
+    conversation_id: str,
+    arguments: dict[str, Any],
+) -> str:
+    existing = str(arguments.get("probe_id") or "").strip()
+    if existing:
+        return existing
+    payload = json.dumps(
+        {
+            "capability": capability,
+            "project_id": project_id,
+            "conversation_id": conversation_id,
+            "arguments": arguments,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "probe_" + hashlib.sha256(payload).hexdigest()[:24]
 
 
 def _storage_state_path(project_id: int) -> str | None:
@@ -207,6 +242,7 @@ def _explore_page(
         core_user_flow_text=arguments.get("core_user_flow_text"),
     )
     result: dict[str, Any] = {
+        "probe_id": arguments.get("probe_id"),
         "url": page.url,
         "a11y_nodes": nodes,
         "element_count": len(nodes),
@@ -217,6 +253,7 @@ def _explore_page(
             state_id="S0",
             revision=1,
             nodes=nodes,
+            probe_id=arguments.get("probe_id"),
             page=page,
             artifact_root=PROJECT_ROOT / "artifacts",
         ),
@@ -260,6 +297,7 @@ def _explore_flow(
         session_id=planning_session_id,
         isolated_context=True,
         core_user_flow_text=arguments.get("flow_description"),
+        probe_id=arguments.get("probe_id"),
     )
     previous_state_sha256 = None
     for page in pages:
@@ -277,6 +315,7 @@ def _explore_flow(
                     for node in page.get("a11y_nodes", [])
                     if isinstance(node, dict)
                 ],
+                probe_id=arguments.get("probe_id"),
                 previous_state_sha256=previous_state_sha256,
             )
         if not observation.get("artifact"):
@@ -289,6 +328,7 @@ def _explore_flow(
         if arguments.get("observation_schema_version") == "v2":
             page["a11y_nodes"] = []
     return {
+        "probe_id": arguments.get("probe_id"),
         "pages": pages,
         "success": not any(page.get("status") == "error" for page in pages),
         "failures": [

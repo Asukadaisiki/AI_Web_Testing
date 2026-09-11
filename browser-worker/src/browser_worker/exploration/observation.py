@@ -66,6 +66,7 @@ def build_browser_observation(
     state_id: str,
     revision: int,
     nodes: list[dict[str, Any]],
+    probe_id: str | None = None,
     page=None,
     artifact_root: Path | None = None,
     previous_state_sha256: str | None = None,
@@ -90,6 +91,7 @@ def build_browser_observation(
     state_sha256 = canonical_sha256(state_payload)
     observation_id = f"obs_{state_sha256[:24]}"
     observation = BrowserObservation(
+        probe_id=probe_id or f"probe_{state_sha256[:24]}",
         observation_id=observation_id,
         page_state=PageStateFact(
             state_id=state_id,
@@ -155,6 +157,10 @@ def _element_fact(node: dict[str, Any], state_id: str) -> ElementFact:
     backend_id = node.get("backend_dom_node_id")
     identity = str(backend_id or node.get("node_id") or canonical_sha256(node)[:16])
     element_ref = f"{state_id}:{identity}"
+    context_path = ContextPath.model_validate(
+        node.get("context_path")
+        or {"frames": [], "shadow_hosts": []}
+    )
     role = str(node.get("role") or "")
     states = dict(node.get("a11y_states") or {})
     states.setdefault("focusable", bool(node.get("focusable", False)))
@@ -173,10 +179,7 @@ def _element_fact(node: dict[str, Any], state_id: str) -> ElementFact:
         dom_text = ""
     return ElementFact(
         element_ref=element_ref,
-        context_path=ContextPath.model_validate(
-            node.get("context_path")
-            or {"frames": [], "shadow_hosts": []}
-        ),
+        context_path=context_path,
         a11y=A11yFact(
             role=role,
             name=a11y_name[:256],
@@ -197,7 +200,13 @@ def _element_fact(node: dict[str, Any], state_id: str) -> ElementFact:
             enabled=bool(dom.get("enabled", not node.get("disabled", False))),
             editable=editable,
         ),
-        locators=_locator_hints(node, role, a11y_name),
+        locators=_locator_hints(
+            node,
+            role,
+            a11y_name,
+            element_ref=element_ref,
+            context_path=context_path,
+        ),
     )
 
 
@@ -230,19 +239,22 @@ def _locator_hints(
     node: dict[str, Any],
     role: str,
     accessible_name: str,
+    *,
+    element_ref: str,
+    context_path: ContextPath,
 ) -> list[ObservedLocator]:
     result: list[ObservedLocator] = []
     if role and accessible_name:
         result.append(
-            ObservedLocator(
-                locator=validate_locator_spec(
-                    {
-                        "kind": "role",
-                        "role": role,
-                        "name": accessible_name[:256],
-                        "exact": True,
-                    }
-                ),
+            _observed_locator(
+                element_ref=element_ref,
+                context_path=context_path,
+                locator={
+                    "kind": "role",
+                    "role": role,
+                    "name": accessible_name[:256],
+                    "exact": True,
+                },
                 provenance="a11y_exact",
                 observed_count=0,
             )
@@ -255,10 +267,10 @@ def _locator_hints(
             continue
         kind = "test_id" if raw.get("strategy") == "data-testid" else "css"
         result.append(
-            ObservedLocator(
-                locator=validate_locator_spec(
-                    {"kind": kind, "value": selector, "exact": True}
-                ),
+            _observed_locator(
+                element_ref=element_ref,
+                context_path=context_path,
+                locator={"kind": kind, "value": selector, "exact": True},
                 provenance=str(raw.get("source") or "dom_verified"),
                 observed_count=1,
             )
@@ -268,6 +280,30 @@ def _locator_hints(
         key = canonical_sha256(locator.locator.model_dump(mode="json"))
         deduplicated[key] = locator
     return list(deduplicated.values())
+
+
+def _observed_locator(
+    *,
+    element_ref: str,
+    context_path: ContextPath,
+    locator: dict[str, Any],
+    provenance: str,
+    observed_count: int,
+) -> ObservedLocator:
+    validated = validate_locator_spec(locator)
+    candidate_id = "candidate_" + canonical_sha256(
+        {
+            "element_ref": element_ref,
+            "context_path": context_path.model_dump(mode="json"),
+            "locator": validated.model_dump(mode="json"),
+        }
+    )[:16]
+    return ObservedLocator(
+        candidate_id=candidate_id,
+        locator=validated,
+        provenance=provenance,
+        observed_count=observed_count,
+    )
 
 
 def _set_observed_counts(elements: list[ElementFact], *, page=None) -> None:
@@ -283,6 +319,7 @@ def _set_observed_counts(elements: list[ElementFact], *, page=None) -> None:
                     observed.observed_count = compile_locator(
                         page,
                         observed.locator,
+                        context_path=element.context_path,
                     ).count()
                     continue
                 except (AttributeError, PlaywrightError, TypeError, ValueError):

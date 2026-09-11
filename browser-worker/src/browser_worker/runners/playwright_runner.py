@@ -4,20 +4,15 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Generator
 from pathlib import Path
 from threading import Event
 from time import perf_counter
-from typing import Generator, Literal
+from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlparse
 
-from browser_worker.runtime.structured_logging import get_structured_logger
-from browser_worker.locators import InterventionNeededError, LocatorResolutionError, resolve_with_fallback
-from browser_worker.locators.compiler import compile_locator
-from browser_worker.locators.corrections import CorrectionStore
-from browser_worker.locators.semantic import ResolvedLocator
-from browser_worker.runners.click_preprocessor import click_with_precheck
-from browser_worker.runners.postcondition_verifier import PostconditionVerifier, StepNetworkObserver
-from browser_worker.runtime.paths import PROJECT_ROOT
+from playwright.sync_api import Error as PlaywrightError
+
 from browser_worker.contracts.dsl import DSLCase
 from browser_worker.contracts.executions import (
     ActionOutcome,
@@ -32,6 +27,21 @@ from browser_worker.contracts.executions import (
     StepExecutionEvidence,
     ViewportSnapshot,
 )
+from browser_worker.locators import (
+    InterventionNeededError,
+    LocatorResolutionError,
+    resolve_with_fallback,
+)
+from browser_worker.locators.compiler import compile_locator
+from browser_worker.locators.corrections import CorrectionStore
+from browser_worker.locators.semantic import ResolvedLocator
+from browser_worker.runners.click_preprocessor import click_with_precheck
+from browser_worker.runners.postcondition_verifier import (
+    PostconditionVerifier,
+    StepNetworkObserver,
+)
+from browser_worker.runtime.paths import PROJECT_ROOT
+from browser_worker.runtime.structured_logging import get_structured_logger
 
 logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)
@@ -280,6 +290,8 @@ def _candidate_to_trace_evidence(candidate_entry) -> LocatorCandidateEvidence:
     if hasattr(candidate_entry, "locator"):
         locator = candidate_entry.locator.model_dump(mode="json")
         return LocatorCandidateEvidence(
+            candidate_id=candidate_entry.candidate_id,
+            element_ref=candidate_entry.element_ref,
             strategy=locator["kind"],
             preview_text=(
                 locator.get("name")
@@ -307,6 +319,20 @@ def _candidate_to_trace_evidence(candidate_entry) -> LocatorCandidateEvidence:
         semantic_value = candidate_entry.get("semantic_value", "")
         pre_score = candidate_entry.get("pre_score", 0.0)
     return LocatorCandidateEvidence(
+        candidate_id=(
+            getattr(candidate_entry, "candidate_id", None)
+            if hasattr(candidate_entry, "candidate_id")
+            else candidate_entry.get("candidate_id")
+            if isinstance(candidate_entry, dict)
+            else None
+        ),
+        element_ref=(
+            getattr(candidate_entry, "element_ref", None)
+            if hasattr(candidate_entry, "element_ref")
+            else candidate_entry.get("element_ref")
+            if isinstance(candidate_entry, dict)
+            else None
+        ),
         strategy=strategy,
         preview_text=semantic_value or selector or None,
         role=strategy,
@@ -445,7 +471,18 @@ def _build_step_evidence(
     click_recovery: str | None = None,
     click_recovery_detail: str | None = None,
     vlm_preverify_used: bool = False,
+    selected_candidate=None,
 ) -> StepExecutionEvidence:
+    candidate_id = (
+        getattr(selected_candidate, "candidate_id", None)
+        if selected_candidate is not None
+        else None
+    )
+    element_ref = (
+        getattr(selected_candidate, "element_ref", None)
+        if selected_candidate is not None
+        else None
+    )
     return StepExecutionEvidence(
         step_index=step_index,
         action=step.action,
@@ -458,6 +495,13 @@ def _build_step_evidence(
         ),
         plan_step_id=getattr(step, "plan_step_id", None),
         target_binding_id=getattr(step, "target_binding_id", None),
+        probe_id=getattr(step, "probe_id", None),
+        observation_id=getattr(step, "observation_id", None),
+        observation_sha256=getattr(step, "observation_sha256", None),
+        page_state_id=getattr(step, "page_state_id", None),
+        planned_candidate_id=getattr(step, "selected_candidate_id", None),
+        candidate_id=candidate_id,
+        element_ref=element_ref,
         intent=getattr(step, "intent", None),
         idempotency=getattr(step, "idempotency", None),
         declared_side_effect=getattr(step, "side_effect", None),
@@ -534,31 +578,48 @@ def _execute_step_with_candidates(
         reverse=True,
     )
     selected_candidate = None
+    selected_trace = None
     locator = None
+    locator_trace = None
     candidate_attempts: list[LocatorCandidateEvidence] = []
     structured_binding = hasattr(step, "locator_candidates")
     for candidate in candidates:
+        trace_candidate = _candidate_to_trace_evidence(candidate)
+        candidate_attempts.append(trace_candidate)
         candidate_locator = _build_locator_from_candidate(page, candidate)
         if candidate_locator is None:
+            trace_candidate.rejected_reasons.append("compile_failed")
             continue
         try:
-            if candidate_locator.count() != 1:
+            runtime_count = candidate_locator.count()
+            trace_candidate.runtime_count = runtime_count
+            if runtime_count != 1:
+                trace_candidate.rejected_reasons.append(
+                    f"runtime_count_{runtime_count}"
+                )
                 continue
             if (
                 structured_binding
                 and step.action in {"click", "input"}
                 and not candidate_locator.is_visible()
             ):
+                trace_candidate.visible = False
+                trace_candidate.rejected_reasons.append("not_visible")
                 continue
             if (
                 structured_binding
                 and step.action in {"click", "input"}
                 and not candidate_locator.is_enabled()
             ):
+                trace_candidate.enabled = False
+                trace_candidate.rejected_reasons.append("not_enabled")
                 continue
-        except Exception:
+        except (AttributeError, PlaywrightError, TypeError, ValueError) as exc:
+            trace_candidate.rejected_reasons.append(
+                f"runtime_check_failed:{type(exc).__name__}"
+            )
             continue
-        candidate_attempts.append(_candidate_to_trace_evidence(candidate))
+        selected_trace = trace_candidate
         selected_candidate = candidate
         locator = candidate_locator
         break
@@ -576,6 +637,13 @@ def _execute_step_with_candidates(
             and structured_binding
             and step.action in {"click", "input", "capture_text"}
         ):
+            locator_trace = LocatorTrace(
+                target=resolved_target or "",
+                candidates=candidate_attempts,
+                failure_reason=(
+                    "All bound locator candidates are stale or not actionable."
+                ),
+            )
             raise RunnerExecutionError(
                 "All bound locator candidates are stale or not actionable."
             )
@@ -646,9 +714,11 @@ def _execute_step_with_candidates(
             condition_results=pre_result.results,
             pre_state=pre_state,
             error_message=str(exc),
+            locator_trace=locator_trace,
             resolved=resolved,
             resolved_by=resolved_by,
             vlm_preverify_used=vlm_preverify_used,
+            selected_candidate=selected_candidate,
         )
         raise RunnerExecutionError(str(exc), step_evidence=evidence) from exc
 
@@ -658,7 +728,9 @@ def _execute_step_with_candidates(
             if hasattr(selected_candidate, "strategy")
             else selected_candidate.locator.kind
         )
-        trace_candidate = _candidate_to_trace_evidence(selected_candidate)
+        trace_candidate = selected_trace or _candidate_to_trace_evidence(
+            selected_candidate
+        )
         locator_trace = LocatorTrace(
             target=resolved_target,
             match_strategy=resolved_by,
@@ -759,6 +831,7 @@ def _execute_step_with_candidates(
             click_recovery=click_recovery,
             click_recovery_detail=click_recovery_detail,
             vlm_preverify_used=vlm_preverify_used,
+            selected_candidate=selected_candidate,
         )
     except Exception as exc:
         post_results = getattr(locals().get("post_result"), "results", [])
@@ -797,6 +870,7 @@ def _execute_step_with_candidates(
             click_recovery=click_recovery,
             click_recovery_detail=click_recovery_detail,
             vlm_preverify_used=vlm_preverify_used,
+            selected_candidate=selected_candidate,
         )
         raise RunnerExecutionError(str(exc), step_evidence=evidence) from exc
     finally:

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from pydantic import ValidationError
 
-from browser_worker.contracts.executions import AgentEventReference, ExecutionReport, FailureSignal
+from browser_worker.contracts.executions import (
+    AgentEventReference,
+    ExecutionReport,
+    FailureSignal,
+)
 from browser_worker.reporting.failure_signals import build_failure_signal
-
 
 FIXTURE_PATH = Path(__file__).parents[2] / "testdata" / "failure_signal_contract.json"
 
@@ -105,6 +108,13 @@ class FailureSignalContractTests(unittest.TestCase):
         )
 
         self.assertEqual(first.fingerprint, second.fingerprint)
+        self.assertEqual(first.plan_step_id, "submit")
+        self.assertEqual(first.target_binding_id, "binding-1")
+        self.assertEqual(first.probe_id, "probe-1")
+        self.assertEqual(first.observation_id, "obs-1")
+        self.assertEqual(first.planned_candidate_id, "candidate-1")
+        self.assertEqual(first.candidate_id, "candidate-2")
+        self.assertEqual(first.element_ref, "form:7")
         self.assertIsNone(first.agent_event_reference)
         self.assertNotIn("agent_event_reference", first.model_dump(mode="json"))
         self.assertIn("side_effect_committed", first.model_dump(mode="json"))

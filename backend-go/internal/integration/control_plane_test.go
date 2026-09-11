@@ -89,7 +89,7 @@ func TestPostgresResearchV2Compilation(t *testing.T) {
 		browsercontract.TargetBinding{
 			PlanID: plan.ID, PlanVersion: plan.Version,
 			PlanStepID: "submit", SemanticTarget: "Submit",
-			Action: "click", PageStateID: "form",
+			ProbeID: "probe-1", Action: "click", PageStateID: "form",
 			ObservationID:     "obs-1",
 			ObservationSHA256: strings.Repeat("a", 64),
 			ElementRefs:       []string{"form:7"},
