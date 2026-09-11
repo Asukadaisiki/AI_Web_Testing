@@ -28,11 +28,20 @@ type PromptSpec struct {
 }
 
 type RequestSerializationBudget struct {
-	RequestBytes            int `json:"request_bytes"`
-	MessageBytes            int `json:"message_bytes"`
-	ToolDefinitionBytes     int `json:"tool_definition_bytes"`
-	ExplorationSummaryBytes int `json:"exploration_summary_bytes"`
-	ExplorationSummaryCount int `json:"exploration_summary_count"`
+	RequestBytes               int `json:"request_bytes"`
+	MessageBytes               int `json:"message_bytes"`
+	ToolDefinitionBytes        int `json:"tool_definition_bytes"`
+	MessageCount               int `json:"message_count"`
+	SystemContentBytes         int `json:"system_content_bytes"`
+	UserContentBytes           int `json:"user_content_bytes"`
+	AssistantContentBytes      int `json:"assistant_content_bytes"`
+	AssistantReasoningBytes    int `json:"assistant_reasoning_bytes"`
+	AssistantToolArgumentBytes int `json:"assistant_tool_argument_bytes"`
+	ToolContentBytes           int `json:"tool_content_bytes"`
+	ExplorationSummaryBytes    int `json:"exploration_summary_bytes"`
+	ExplorationSummaryCount    int `json:"exploration_summary_count"`
+	NonExplorationSummaryBytes int `json:"non_exploration_summary_bytes"`
+	RecoverableToolErrorBytes  int `json:"recoverable_tool_error_bytes"`
 }
 
 type ModelUsageStatus string
@@ -123,7 +132,16 @@ type TelemetryRecord struct {
 	LogicalCallID string
 	StepID        string
 	ToolCallIDs   []string
+	State         PipelineState
 	Telemetry     ModelTelemetry
+}
+
+type PipelineState struct {
+	Epoch      string
+	PlanID     string
+	Version    int
+	PlanSHA256 string
+	Status     string
 }
 
 type TelemetrySink func(context.Context, TelemetryRecord) error
@@ -146,14 +164,25 @@ func EmitTelemetry(ctx context.Context, telemetry ModelTelemetry, toolCallIDs []
 
 type telemetrySinkContextKey struct{}
 
-func WithTelemetryRecorder(ctx context.Context, sink TelemetrySink, logicalCallID, stepID string) context.Context {
+func WithTelemetryRecorder(
+	ctx context.Context,
+	sink TelemetrySink,
+	logicalCallID string,
+	stepID string,
+	state ...PipelineState,
+) context.Context {
 	if sink == nil {
 		return ctx
+	}
+	pipelineState := PipelineState{}
+	if len(state) > 0 {
+		pipelineState = state[0]
 	}
 	ctx = context.WithValue(ctx, telemetrySinkContextKey{}, sink)
 	return context.WithValue(ctx, telemetryContextKey{}, TelemetryRecord{
 		LogicalCallID: logicalCallID,
 		StepID:        stepID,
+		State:         pipelineState,
 	})
 }
 

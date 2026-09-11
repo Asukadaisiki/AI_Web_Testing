@@ -208,6 +208,7 @@ AgentRun 状态：`running`、`waiting_user`、`completed`、`failed`、`cancell
 | `artifact.published` | DSL、批次、报告、计划等产物引用 |
 | `task_plan.updated` | 计划版本、SHA、状态及步骤 grounding 摘要 |
 | `research.llm_call` | 模型请求、usage、延迟、重试与 request ID 审计 |
+| `agent.pipeline.trace` | 模型请求上下文组成、累计 usage，以及工具签名、state epoch、attempt 和 retry lineage |
 
 断线重连规则：
 
@@ -684,6 +685,17 @@ curl -sS http://127.0.0.1:8081/api/v2/projects
 ```
 
 Worker 的在线接口文档：`http://127.0.0.1:8000/docs`。
+
+已有 AgentRun 可通过 PostgreSQL 事件生成只读诊断摘要：
+
+```bash
+# backend-go/
+go run ./cmd/pipeline-audit --run-id <agent-run-id>
+```
+
+输出包含计划版本、模型请求首末/峰值字节数、最新上下文组成、累计 token，
+以及相同 state epoch 下的重复工具签名。旧 Run 没有
+`agent.pipeline.trace.v1` 时对应计数为空，不会从不完整历史中猜测。
 
 ### 13.2 手工创建普通用例并异步执行
 

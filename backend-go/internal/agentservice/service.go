@@ -358,6 +358,14 @@ func (s *Service) RecordModelTelemetry(
 		}); err != nil {
 			return err
 		}
+		if err := s.recordPipelineModelTrace(
+			ctx,
+			run,
+			record,
+			attempt,
+		); err != nil {
+			return fmt.Errorf("record pipeline model trace: %w", err)
+		}
 	}
 	return nil
 }

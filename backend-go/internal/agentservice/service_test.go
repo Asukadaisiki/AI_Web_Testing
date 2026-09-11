@@ -88,8 +88,23 @@ func TestRecordModelTelemetryEmitsOneSafeEventPerAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pipelineEvents := eventsByType(events, EventPipelineTrace)
+	events = eventsByType(events, EventResearchLLMCall)
 	if len(events) != 2 {
 		t.Fatalf("events = %#v", events)
+	}
+	if len(pipelineEvents) != 2 {
+		t.Fatalf("pipeline events = %#v", pipelineEvents)
+	}
+	firstCumulative := pipelineEvents[0].Payload["model_request"].(map[string]any)["cumulative"].(map[string]any)
+	secondCumulative := pipelineEvents[1].Payload["model_request"].(map[string]any)["cumulative"].(map[string]any)
+	if firstCumulative["logical_calls"] != float64(1) ||
+		firstCumulative["physical_attempts"] != float64(1) ||
+		firstCumulative["usage_unavailable_attempts"] != float64(1) ||
+		secondCumulative["logical_calls"] != float64(1) ||
+		secondCumulative["physical_attempts"] != float64(2) ||
+		secondCumulative["total_tokens"] != float64(1) {
+		t.Fatalf("pipeline cumulative usage = %#v / %#v", firstCumulative, secondCumulative)
 	}
 	allowed := map[string]bool{
 		"schema_version": true, "logical_call_id": true, "provider": true,
@@ -224,6 +239,7 @@ func TestRecordModelTelemetryPersistsMultipleAndUnavailableToolCalls(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	events = eventsByType(events, EventResearchLLMCall)
 	if len(events) != 2 {
 		t.Fatalf("events = %#v", events)
 	}
@@ -245,6 +261,16 @@ func TestRecordModelTelemetryPersistsMultipleAndUnavailableToolCalls(t *testing.
 	if _, exists := none.Payload["tool_call_ids"]; exists {
 		t.Fatalf("no-tool event retained tool call ids: %#v", none.Payload)
 	}
+}
+
+func eventsByType(events []Event, eventType EventType) []Event {
+	result := make([]Event, 0, len(events))
+	for _, event := range events {
+		if event.Type == eventType {
+			result = append(result, event)
+		}
+	}
+	return result
 }
 
 func TestAskUserQuestionPauseAndResume(t *testing.T) {

@@ -12,6 +12,7 @@
 backend-go/
   cmd/agentservice/    Hertz AgentService 入口
   cmd/execution-worker/ 官方执行队列消费者
+  cmd/pipeline-audit/  AgentRun 管线诊断汇总
   internal/agent/      纯 Agent loop 与消息合同
   internal/harness/    Prompt、工具和运行编排
   internal/agentservice/ Run、Checkpoint、事件和持久化

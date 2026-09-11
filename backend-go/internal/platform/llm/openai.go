@@ -372,25 +372,41 @@ func requestSerializationBudget(
 		RequestBytes:        len(body),
 		MessageBytes:        len(messageBytes),
 		ToolDefinitionBytes: len(toolBytes),
+		MessageCount:        len(request.Messages),
 	}
 	for _, message := range request.Messages {
+		switch message.Role {
+		case "system":
+			budget.SystemContentBytes += len(message.Content)
+		case "user":
+			budget.UserContentBytes += len(message.Content)
+		case "assistant":
+			budget.AssistantContentBytes += len(message.Content)
+			budget.AssistantReasoningBytes += len(message.ReasoningContent)
+			for _, call := range message.ToolCalls {
+				budget.AssistantToolArgumentBytes += len(call.Function.Arguments)
+			}
+		case "tool":
+			budget.ToolContentBytes += len(message.Content)
+		}
 		if message.Role != "tool" {
 			continue
 		}
+		if summary, ok := agent.DecodeModelToolSummary(message.Content); ok {
+			if agent.IsExplorationTool(summary.Tool) {
+				budget.ExplorationSummaryBytes += len(message.Content)
+				budget.ExplorationSummaryCount++
+			} else {
+				budget.NonExplorationSummaryBytes += len(message.Content)
+			}
+			continue
+		}
 		var envelope struct {
-			SchemaVersion string `json:"schema_version"`
+			Status string `json:"status"`
 		}
 		if json.Unmarshal([]byte(message.Content), &envelope) == nil &&
-			envelope.SchemaVersion == agent.ModelToolSummarySchemaV1 {
-			var summary struct {
-				Tool string `json:"tool"`
-			}
-			if json.Unmarshal([]byte(message.Content), &summary) != nil ||
-				!agent.IsExplorationTool(summary.Tool) {
-				continue
-			}
-			budget.ExplorationSummaryBytes += len(message.Content)
-			budget.ExplorationSummaryCount++
+			envelope.Status == "error" {
+			budget.RecoverableToolErrorBytes += len(message.Content)
 		}
 	}
 	return budget

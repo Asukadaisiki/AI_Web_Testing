@@ -35,6 +35,7 @@ const (
 	EventArtifact        EventType = "artifact.published"
 	EventResearchLLMCall EventType = "research.llm_call"
 	EventTaskPlanUpdated EventType = "task_plan.updated"
+	EventPipelineTrace   EventType = "agent.pipeline.trace"
 )
 
 type AgentRun struct {
@@ -67,6 +68,58 @@ type Event struct {
 }
 
 const ResearchLLMCallSchemaV1 = "research.llm_call.v1"
+const PipelineTraceSchemaV1 = "agent.pipeline.trace.v1"
+
+type PipelineTraceKind string
+
+const (
+	PipelineTraceModelRequest PipelineTraceKind = "model_request"
+	PipelineTraceToolCall     PipelineTraceKind = "tool_call"
+)
+
+type PipelinePlanRef struct {
+	PlanID  string `json:"plan_id"`
+	Version int    `json:"version"`
+	SHA256  string `json:"sha256"`
+	Status  string `json:"status"`
+}
+
+type PipelineCumulativeUsage struct {
+	LogicalCalls             int   `json:"logical_calls"`
+	PhysicalAttempts         int   `json:"physical_attempts"`
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	TotalTokens              int64 `json:"total_tokens"`
+	UsageUnavailableAttempts int   `json:"usage_unavailable_attempts"`
+}
+
+type PipelineModelRequestTrace struct {
+	LogicalCallID string                           `json:"logical_call_id"`
+	Attempt       int                              `json:"attempt"`
+	AttemptStatus string                           `json:"attempt_status"`
+	RequestBudget agent.RequestSerializationBudget `json:"request_budget"`
+	Cumulative    PipelineCumulativeUsage          `json:"cumulative"`
+	ToolCallIDs   []string                         `json:"tool_call_ids"`
+}
+
+type PipelineToolCallTrace struct {
+	Name              string   `json:"name"`
+	Signature         string   `json:"signature"`
+	Status            string   `json:"status"`
+	Attempt           int      `json:"attempt"`
+	RetryOfToolCallID string   `json:"retry_of_tool_call_id,omitempty"`
+	ReasonCode        string   `json:"reason_code,omitempty"`
+	PlanStepIDs       []string `json:"plan_step_ids"`
+}
+
+type PipelineTracePayload struct {
+	SchemaVersion string                     `json:"schema_version"`
+	Kind          PipelineTraceKind          `json:"kind"`
+	StateEpoch    string                     `json:"state_epoch"`
+	Plan          *PipelinePlanRef           `json:"plan,omitempty"`
+	ModelRequest  *PipelineModelRequestTrace `json:"model_request,omitempty"`
+	ToolCall      *PipelineToolCallTrace     `json:"tool_call,omitempty"`
+}
 
 type ToolCallStatus string
 

@@ -27,6 +27,7 @@ Python Browser Worker 仅保留 Playwright、A11y、Locator、Evidence 和 locat
 
 ```text
 cmd/agentservice/           Hertz 服务入口
+cmd/pipeline-audit/         AgentRun 管线诊断汇总
 internal/agent/             纯 Agent loop 与消息合同
 internal/harness/           Prompt、工具和运行编排
 internal/agentservice/      AgentRun、Checkpoint、事件与持久化
@@ -42,6 +43,7 @@ internal/transport/http/    HTTP 协议适配
 ```bash
 go test ./...
 go run ./cmd/agentservice
+go run ./cmd/pipeline-audit --run-id <agent-run-id>
 ```
 
 默认监听 `127.0.0.1:8081`，可通过 `AGENTSERVICE_HTTP_ADDR` 修改。
@@ -73,6 +75,9 @@ go run ./cmd/agentservice
 
 正式服务使用 PostgreSQL 保存 AgentRun、完整 transcript、pending tool/step 和事件流。事件序号通过 `agent_runs.last_event_seq` 在数据库中原子分配，保证同一 Run 内单调递增。
 开启 thinking 后，Agent transcript 会保留 provider 返回的 `reasoning_content` 以满足 DeepSeek 多轮工具调用回传要求；`research.llm_call` 事件只记录 reasoning 的开关、effort、字节数和 SHA，不记录原始推理正文。
+`agent.pipeline.trace` 事件记录模型请求体积及累计 usage，以及工具调用的
+state epoch、规范化签名、状态、attempt 和 retry lineage；`pipeline-audit`
+可从 PostgreSQL 事件离线汇总上下文增长、计划版本与重复调用。
 
 内存 Repository 仅用于快速单元测试。
 

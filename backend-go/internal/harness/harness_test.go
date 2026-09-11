@@ -159,6 +159,7 @@ func TestHarnessPersistsLLMTelemetryBeforeCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	events = withoutPipelineTrace(events)
 	if len(events) != 6 || events[1].Type != agentservice.EventResearchLLMCall ||
 		events[1].StepID == "" || events[5].Type != agentservice.EventRunFinished {
 		t.Fatalf("events = %#v", events)
@@ -581,6 +582,11 @@ func TestEnginePausesAndResumesWithToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}
+	statuses := pipelineToolStatuses(events, "call-1")
+	if strings.Join(statuses, ",") != "proposed,authorized,running,pending,succeeded" {
+		t.Fatalf("pipeline tool statuses = %#v", statuses)
+	}
+	events = withoutPipelineTrace(events)
 	wantTypes := []agentservice.EventType{
 		agentservice.EventRunStarted,
 		agentservice.EventToolStarted,
@@ -650,6 +656,11 @@ func TestEngineReturnsToolFailureToModelForRecovery(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListEvents() error = %v", listErr)
 	}
+	statuses := pipelineToolStatuses(events, "call-1")
+	if strings.Join(statuses, ",") != "proposed,authorized,running,failed" {
+		t.Fatalf("pipeline tool statuses = %#v", statuses)
+	}
+	events = withoutPipelineTrace(events)
 	wantTypes := []agentservice.EventType{
 		agentservice.EventRunStarted,
 		agentservice.EventToolStarted,
@@ -668,6 +679,38 @@ func TestEngineReturnsToolFailureToModelForRecovery(t *testing.T) {
 			t.Fatalf("events[%d].Type = %q, want %q", index, event.Type, wantTypes[index])
 		}
 	}
+}
+
+func withoutPipelineTrace(events []agentservice.Event) []agentservice.Event {
+	result := make([]agentservice.Event, 0, len(events))
+	for _, event := range events {
+		if event.Type != agentservice.EventPipelineTrace {
+			result = append(result, event)
+		}
+	}
+	return result
+}
+
+func pipelineToolStatuses(
+	events []agentservice.Event,
+	toolCallID string,
+) []string {
+	result := make([]string, 0)
+	for _, event := range events {
+		if event.Type != agentservice.EventPipelineTrace ||
+			event.ToolCallID != toolCallID {
+			continue
+		}
+		detail, _ := event.Payload["tool_call"].(map[string]any)
+		if detail == nil {
+			continue
+		}
+		status, _ := detail["status"].(string)
+		if status != "" {
+			result = append(result, status)
+		}
+	}
+	return result
 }
 
 func TestEngineBindsApprovalToLatestGeneration(t *testing.T) {

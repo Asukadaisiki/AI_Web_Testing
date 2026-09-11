@@ -18,6 +18,7 @@ type AgentEventType =
   | "tool.failed"
   | "artifact.published"
   | "research.llm_call"
+  | "agent.pipeline.trace"
   | "task_plan.updated"
   | "run.finished"
   | "run.failed"
@@ -73,6 +74,12 @@ export type ResearchLLMCallPayloadV1 = Record<string, unknown> & {
   attempt: number;
   attempt_status: string;
 } & ResearchLLMCallToolAssociation;
+
+export interface AgentPipelineTracePayloadV1 extends Record<string, unknown> {
+  schema_version: "agent.pipeline.trace.v1";
+  kind: "model_request" | "tool_call";
+  state_epoch: string;
+}
 
 export interface AgentEvent<
   Payload extends Record<string, unknown> = Record<string, unknown>,

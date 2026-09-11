@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { readLatestTaskPlan, readToolActivities } from "./events";
 import type {
+  AgentPipelineTracePayloadV1,
   AgentEvent,
   ResearchLLMCallPayloadV1,
 } from "./types";
@@ -23,8 +24,9 @@ describe("readToolActivities", () => {
     const activities = readToolActivities([
       event("tool.started", 1),
       event("research.llm_call", 2),
-      event("run.cancelled", 3),
-      event("tool.finished", 4),
+      event("agent.pipeline.trace", 3),
+      event("run.cancelled", 4),
+      event("tool.finished", 5),
     ]);
 
     expect(activities).toHaveLength(1);
@@ -57,6 +59,16 @@ describe("readToolActivities", () => {
     expect(unavailable.tool_call_unavailable_reason).toBe(
       "model_returned_final_text",
     );
+  });
+
+  it("types pipeline diagnostics without mixing them into tool activity", () => {
+    const payload = {
+      schema_version: "agent.pipeline.trace.v1",
+      kind: "tool_call",
+      state_epoch: "a".repeat(64),
+    } satisfies AgentPipelineTracePayloadV1;
+
+    expect(payload.kind).toBe("tool_call");
   });
 
   it("reads the latest persisted task plan snapshot", () => {

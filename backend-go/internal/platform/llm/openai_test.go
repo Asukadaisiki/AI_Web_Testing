@@ -432,8 +432,66 @@ func TestCompleteRecordsRequestSerializationBudgetWithoutRejectingRequiredMessag
 	if budget.RequestBytes < requiredPayloadBytes ||
 		budget.MessageBytes < requiredPayloadBytes ||
 		budget.ToolDefinitionBytes == 0 ||
+		budget.MessageCount != 3 ||
+		budget.UserContentBytes != len("required") ||
+		budget.ToolContentBytes != len(summary)+requiredPayloadBytes ||
 		budget.ExplorationSummaryCount != 1 ||
-		budget.ExplorationSummaryBytes != len(summary) {
+		budget.ExplorationSummaryBytes != len(summary) ||
+		budget.NonExplorationSummaryBytes != 0 {
+		t.Fatalf("request budget = %#v", budget)
+	}
+}
+
+func TestRequestSerializationBudgetPartitionsMessageContent(t *testing.T) {
+	exploration, err := agent.BuildModelToolSummary(
+		"explore_page",
+		json.RawMessage(`{"url":"https://example.com","a11y_nodes":[]}`),
+		7,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := agent.BuildModelToolSummary(
+		"get_report",
+		json.RawMessage(`{"id":1,"status":"passed"}`),
+		8,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoverableError := `{"status":"error","tool":"explore_page","message":"rejected"}`
+	request := chatRequest{
+		Messages: []chatMessage{
+			{Role: "system", Content: "system"},
+			{Role: "user", Content: "user"},
+			{
+				Role: "assistant", Content: "assistant", ReasoningContent: "reasoning",
+				ToolCalls: []toolCall{{
+					Function: toolFunction{Arguments: `{"value":"x"}`},
+				}},
+			},
+			{Role: "tool", Content: exploration},
+			{Role: "tool", Content: report},
+			{Role: "tool", Content: recoverableError},
+		},
+		Tools: []chatTool{{Type: "function"}},
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := requestSerializationBudget(request, body)
+	if budget.MessageCount != len(request.Messages) ||
+		budget.SystemContentBytes != len("system") ||
+		budget.UserContentBytes != len("user") ||
+		budget.AssistantContentBytes != len("assistant") ||
+		budget.AssistantReasoningBytes != len("reasoning") ||
+		budget.AssistantToolArgumentBytes != len(`{"value":"x"}`) ||
+		budget.ToolContentBytes != len(exploration)+len(report)+len(recoverableError) ||
+		budget.ExplorationSummaryBytes != len(exploration) ||
+		budget.ExplorationSummaryCount != 1 ||
+		budget.NonExplorationSummaryBytes != len(report) ||
+		budget.RecoverableToolErrorBytes != len(recoverableError) {
 		t.Fatalf("request budget = %#v", budget)
 	}
 }

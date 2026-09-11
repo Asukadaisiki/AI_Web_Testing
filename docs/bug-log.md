@@ -48,6 +48,108 @@
 
 ## 问题记录
 
+## BUG-184 | BrowserObservation relation 字段与共享 Schema 不一致
+
+- 日期：2026-09-12
+- 状态：open
+- 严重度：medium
+- 来源：Agent 全链路一致性审计
+- 描述：Python `ObservationRelation` 序列化字段为 `kind/source/target`，`contracts/browser-observation.v2.schema.json` 却要求 `kind/from/to`。
+- 复现步骤：
+  1. 使用 `ObservationRelation(kind="controls", source="a", target="b")` 生成 BrowserObservation。
+  2. 查看实际 relation JSON，字段为 `source` 和 `target`。
+  3. 对照共享 Schema 的 relation `$defs`，其必填字段为 `from` 和 `to`。
+- 影响：包含 relation 的真实 Observation 不能通过声明的跨语言 Schema；当前测试只编译 Schema 并验证 TargetBinding，未验证真实 Observation payload。
+- 根因：Pydantic 模型与手写 JSON Schema 分别演进，缺少以真实序列化结果驱动的双向 golden。
+- 处理：统一字段命名并增加 Python 输出、共享 Schema、Go 解码的同一份 golden；禁止仅验证 Schema 可编译。
+- 验证：静态对照 `browser_worker/contracts/browser_observation.py` 与 `contracts/browser-observation.v2.schema.json`；本轮未修改合同。
+- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+
+## BUG-183 | 定位失败报告丢失 PlanStep 与候选拒绝链
+
+- 日期：2026-09-12
+- 状态：open
+- 严重度：high
+- 来源：Agent 全链路一致性审计
+- 描述：StepEvidence 已包含 `plan_step_id` 和 `target_binding_id`，但 FailureSignal 与模型可见 FailureBrief 不携带这些 ID；Runner 还会静默跳过编译失败、count 非 1、隐藏或禁用的 candidate，全部失败时可能没有完整 LocatorTrace。
+- 复现步骤：
+  1. 构造 research-v2 步骤，使所有 bound candidates 在运行时为 0/N、hidden 或 disabled。
+  2. Runner 抛出 `All bound locator candidates are stale or not actionable.`。
+  3. 检查 StepEvidence、FailureSignal 和模型摘要，无法得到每个 candidate 的拒绝原因及完整 plan/binding lineage。
+- 影响：报告只能按 step index 和错误文本做粗粒度归因，Agent 无法确定应 re-ground 哪个 binding，grounding/invalid-action 指标也可能 unavailable。
+- 根因：candidate trace 只记录通过运行时检查的候选，FailureSignal v2 没有纳入 research-v2 lineage 字段。
+- 处理：记录所有 candidate attempt 和 rejected reason；新增兼容的 FailureSignal v3，贯通 plan/step/observation/binding/candidate ID。
+- 验证：静态核对 Runner candidate 循环、StepEvidence、FailureSignal v2、ToolResultFailureBrief 和 Research Projector；本轮未修改运行逻辑。
+- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+
+## BUG-182 | research-v2 条件与文本断言未保持 TaskPlan 语义
+
+- 日期：2026-09-12
+- 状态：open
+- 严重度：high
+- 来源：Agent 全链路一致性审计
+- 描述：TaskPlan 的 preconditions/completion_conditions 没有被 Go 编译器确定性翻译或与 DSL 结构化 conditions 比较；`assert_text`、`wait_for` 又允许没有 TargetBinding，Runner 会退化为全页文本 `.first`，其中 `assert_text` 实际忽略 semantic target。
+- 复现步骤：
+  1. 创建带明确业务区域和 completion condition 的 PlanStep。
+  2. 生成 action/value 相同但 conditions 不同的 research-v2 Draft。
+  3. 当前 `compileDraftStep` 不比较 conditions；无 binding 的 `assert_text` 在全页按 expected value 查找并可能通过。
+- 影响：DSL 可以改变计划的验证语义；错误区域中的同名文本可能造成假通过，且 Explore、DSL 与 Runner 对 target 的解释不一致。
+- 根因：Plan 条件仍是字符串，DSL 条件已结构化，但中间缺少确定性 Condition compiler；binding 规则只覆盖 click/input/capture_text。
+- 处理：引入结构化 ConditionIntent；明确 element/region assertion 与 page-level fact 两类合同；逐字段验证 Plan 到 DSL 的条件保持性，移除 research-v2 自由文本 fallback。
+- 验证：静态核对 TaskPlan compiler、research-v2 Pydantic validator 和 Runner 非 target 执行路径；现有聚焦测试通过但未覆盖该跨层不变量。
+- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+
+## BUG-181 | 相同 TaskPlan 与非 Explore 工具调用缺少统一幂等治理
+
+- 日期：2026-09-12
+- 状态：open
+- 严重度：high
+- 来源：Agent 全链路一致性审计
+- 描述：相同 semantic hash 的 `set_task_plan` 仍创建新版本，计划更新不要求旧版本 CAS 或 revision reason；重复调用门只覆盖成功完成的 explore，未覆盖失败/拒绝调用及 generate_dsl/get_report/fix_and_retry。
+- 复现步骤：
+  1. 对同一 Run 连续提交内容完全相同的 `set_task_plan`。
+  2. 观察 `CreateVersion` 使用新时间生成 plan ID 并创建下一版本。
+  3. 对失败或被 Policy 拒绝的相同工具签名重试，当前没有统一 ToolCallLedger 阻止重复。
+- 影响：模型可通过重复规划或重复工具调用消耗 turn/token，导致旧 generation/审批失效，并放大失败路径成本。
+- 根因：Plan revision 与工具幂等分别由局部代码处理，缺少 `state_epoch + normalized signature + outcome` 的持久调用账本。
+- 处理：相同 plan hash 返回当前版本；revision 增加 expected binding、reason、evidence 和次数预算；建立覆盖全部工具结果状态的 ToolCallLedger。
+- 验证：静态核对 `CreateVersion`、`Authorize`、`DefaultToolPolicy` 和 recoverable failure 路径；现有聚焦测试通过但没有 identical-plan/no-op 与失败签名重复门禁。
+- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+
+## BUG-180 | Explore 实际命中元素未原样传递给 TargetBinding 和 Runner
+
+- 日期：2026-09-12
+- 状态：open
+- 严重度：critical
+- 来源：Agent 全链路一致性审计
+- 描述：research-v2 Explore 的 click/input 仍使用字符串、DOM selector 和 semantic fallback 选择元素，部分路径对多匹配结果直接取 `.first`；动作结果不返回实际使用的 element_ref/candidate_id。Go 随后按 target 文本重新匹配 BrowserObservation，Runner 又按 LocatorSpec 和唯一性重新解析。
+- 复现步骤：
+  1. 页面提供多个同名 `View Product` 或 `Add to cart` 元素。
+  2. Explore resolver 选择排序后的首个元素并成功执行。
+  3. Go `buildTargetBinding` 看到多个语义匹配元素而拒绝 binding，或 Runner 在正式页面解析到不同候选。
+- 影响：出现“Explore 成功但 PlanStep 未 grounded”“DSL 编译成功但 Runner 定位不同元素”等核心一致性问题。
+- 根因：Explore resolver、Go semantic binding 和 Runner compiler 是三次独立决策；没有贯穿全链的 ResolvedTargetEvidence。
+- 处理：新增 `browser.resolved-target.v1`；Explore 也必须用共享 LocatorSpec compiler 和唯一性门，返回 observation/element/candidate ID；Go 直接校验并绑定该身份，不再按文本重匹配。
+- 验证：静态核对 `_resolve_flow_action_locator`、`collect_action_snapshot`、`deriveTargetBindings/buildTargetBinding` 和 `_execute_step_with_candidates`；最近 live 记录中的重复商品动作歧义与该结构一致。
+- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+
+## BUG-179 | Stage 6 清单未同步已落地的 TaskPlan 状态
+
+- 日期：2026-09-11
+- 状态：open
+- 严重度：low
+- 来源：项目进展核查
+- 描述：Stage 6 的 tasks/checklist 仍将版本化 TaskPlan、PlanStep 绑定和 Stage 6 提交标为未完成，但相关实现已由 `da26c70`、`e9fdd50`、`3be098d` 落地并推送到 `origin/main`。
+- 复现步骤：
+  1. 查看 `.trae/specs/build-agentic-research-platform/checklist.md` 的 Stage 6 第 113、117 行。
+  2. 查看 `.trae/specs/build-agentic-research-platform/tasks.md` 的 Task 6.6 第 278-281 行。
+  3. 对照上述三个提交及 `backend-go/internal/taskplan/`、research-v2 compiler 和 TargetBinding 实现。
+- 影响：按清单判断项目阶段时会低估已完成的控制面能力，并混淆“实现已落地”和“live E2E 尚未验收”两个状态。
+- 根因：TaskPlan 与 research-v2 后续实现、修复和提交后，没有同步回填原 Stage 6 任务清单。
+- 处理：后续应逐项复核 Task 6.5/6.6，只勾选已有代码和验证证据的条目；Context Materializer、成本硬熔断和 live Canonical 验收继续保持未完成。
+- 验证：`main` 与 `origin/main` 一致；三个提交均包含 TaskPlan 持久化、grounding、TargetBinding 和 research-v2 编译/执行相关实现，仓库中未找到 Context Materializer 实现。
+- 关联记录：`docs/execution-log.md` 中的「2026-09-11 | 当前项目阶段与完成度核查」。
+
 ## BUG-178 | 创建定位修正返回未注册查询路由的 Location
 
 - 日期：2026-09-10

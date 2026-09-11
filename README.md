@@ -334,6 +334,7 @@ npm run build
 - [`docs/plan/codebase-optimization-plan-2026-08-28.md`](./docs/plan/codebase-optimization-plan-2026-08-28.md)：当前架构优化计划与验收标准
 - [`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)：能力状态与保留/下线决策
 - [`docs/plan/agentic-research-pilot-2026-09-06.md`](./docs/plan/agentic-research-pilot-2026-09-06.md)：Agentic Research 分阶段实施与 Automation Exercise 基线
+- [`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`](./docs/plan/agent-pipeline-consistency-audit-2026-09-12.md)：Agent 全链路一致性排查、合同治理与分阶段验收计划
 - `docs/frontend-design.md`：前端设计说明
 - `docs/execution-log.md`：任务执行记录
 - `docs/bug-log.md`：缺陷记录

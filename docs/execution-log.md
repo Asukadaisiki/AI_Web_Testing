@@ -56,6 +56,30 @@
 
 ## 任务记录
 
+## 2026-09-12 | Phase A 增量 1：Agent 管线诊断基线
+
+- 任务：按已批准的全链路治理计划实施 Phase A 第一个增量，完成后提交并同步 GitHub；本增量只增加可观测性，不改变 Agent 决策和执行策略。
+- 操作：新增 `agent.pipeline.trace.v1` 共享 Schema 与 Go 类型；在模型调用遥测中记录 request/message/tool definition 大小、消息角色内容、reasoning、tool arguments、探索/非探索摘要和可恢复错误字节分布，并聚合 Run 级 logical/physical calls 与 token usage；在 Harness 为全部工具调用记录 state epoch、plan binding、规范化签名、PlanStep IDs、attempt、retry lineage 及 proposed/authorized/running/succeeded/failed/rejected/pending 状态；审批恢复后补齐 pending tool 的 succeeded 终态；新增只读 `pipeline-audit --run-id` 汇总命令和前端 SSE 事件类型。
+- 结果：新 Run 可从 PostgreSQL/SSE 获取不进入模型 transcript 的诊断事件，并离线统计计划版本、重复工具调用、上下文首末/峰值和累计模型用量。历史 Run `run_7859949d26bb0c6dc7b31bc8` 可读取两个 TaskPlan 版本；因历史数据没有新 trace，模型和工具诊断计数按合同返回 0，不进行推测回填。
+- 验证：`go test ./...`、`go vet ./...`、`go build ./...` 全部通过；Frontend 4 files / 11 tests 和 production build 通过；Python 相关 66 tests 通过；`pipeline-audit` 对历史 Run 成功输出 `agent.pipeline.trace-summary.v1`；共享 Pipeline Trace Schema 已由 Go 测试使用真实序列化 payload 验证。
+- 后续：下一增量进入 Phase A 的跨层 lineage 诊断，将 probe/observation/element/candidate/binding/generation/execution/report ID 补入同一追踪链；随后执行 Phase B，消除 Explore、Go Binding 与 Runner 的三次独立目标解释。提交信息：`feat: add agent pipeline diagnostics`。
+
+## 2026-09-12 | Agent 全链路一致性审计与排查计划
+
+- 任务：检测 Agent 在任务编排、工具调用、上下文管理、任务规划、Explore、元素归类、DSL 治理、Playwright 解析、Runner 执行和报告归因上的一致性问题，并制定排查与治理方案。
+- 操作：沿 `Goal -> TaskPlan -> Tool -> BrowserObservation -> TargetBinding -> Draft/Executable DSL -> LocatorSpec -> Runner -> StepEvidence/FailureSignal` 静态追踪 Go/Python 合同与状态迁移；核对最近 v4-pro research-v2 失败记录、现有测试和知识图谱；运行 Go 与 Python 聚焦门禁；新增 `docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+- 结果：确认主要问题不是单一 parser 缺陷，而是跨层重复解释和身份丢失：Explore 实际命中的元素没有以 candidate ID 传给 Go，Go 会按文本重新 binding，Runner 再次解析；相同 TaskPlan 和非 Explore 工具没有统一幂等账本；模型上下文仍追加完整 transcript；Plan 条件没有被 DSL 编译器确定性保持；定位失败报告缺少完整候选拒绝与 PlanStep/Binding lineage；BrowserObservation relation 的代码字段与共享 Schema 不一致。新增 BUG-180 至 BUG-184，Context 爆炸继续由 BUG-155 跟踪。
+- 验证：Go `agent/harness/taskplan/browsercontract/tools/execution/research` 聚焦测试全部通过；Python `browser_observation_contract/action_ir_v2/page_explorer/playwright_runner/failure_signals/browser_capabilities` 共 66 tests passed。测试通过同时证明现有门禁没有覆盖上述跨层不变量；尝试用 Python `jsonschema` 动态验证 Observation 时因该依赖未安装而未执行，字段漂移已通过模型和 Schema 静态对照确认。
+- 后续：按计划依次实施诊断事件、ResolvedTargetEvidence、TaskPlan/ToolCall 幂等、结构化 Condition、Context Materializer、FailureSignal v3；所有离线与本地门禁通过后，先运行单次官方 DeepSeek smoke，经成本确认后再执行 3 次 Canonical 和负向变异。
+
+## 2026-09-11 | 当前项目阶段与完成度核查
+
+- 任务：核查当前项目进展，判断已经完成的能力、实际所处阶段和进入下一阶段前的阻塞项。
+- 操作：检查 `main`/`origin/main`、最近提交、README 能力矩阵、Agentic Research tasks/checklist、最新 live E2E 与修复记录、开放缺陷及 Understand Anything 知识图谱；区分代码实现、静态门禁和官方模型 live 验收。
+- 结果：平台基础、Go AgentCore 控制面、结构化执行、持久化队列、报告、TaskPlan/PlanStep、BrowserObservation/TargetBinding 和 research-v2 DSL 主链均已落地；当前处于 Stage 6 后段的稳定化与验收收口，尚未进入 Stage 7 Ablation。最近一次 v4-pro research-v2 live E2E 在修复前因 grounding/预算问题超时，修复后只完成静态、PostgreSQL 聚焦和真实浏览器 smoke，尚未重新取得 TaskPlan 全 grounded、DSL、审批、正式执行、报告和 Oracle 的端到端通过证据。发现 Stage 6 清单未同步 TaskPlan 已完成事实，记录 BUG-179。
+- 验证：核对 `HEAD=2e646e6`，核查前 `main` 与 `origin/main` 为 0 ahead / 0 behind、工作区干净；知识图谱代码基线为 `3be098d`，其后仅有 README/API/日志/H5 文档变化，因此代码架构信息仍可使用。未启动服务、未运行测试、未调用付费模型。
+- 后续：先修正 Stage 6 清单，完成 Context Materializer、Run 级 token/call/重试熔断、cache 指标和成本预估；随后用官方 DeepSeek 直连完成可对账的 research-v2 Canonical 验收。Stage 6 通过后再进入 Stage 7 四 profile Ablation。
+
 ## 2026-09-10 | 同步接口与函数目录到 GitHub
 
 - 任务：将接口参考文档、函数可视化 H5 及关联日志同步到 GitHub。

@@ -180,6 +180,7 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 		func(callContext context.Context) context.Context {
 			logicalCallID := e.runs.NewID("llm")
 			stepID := e.runs.NewID("step")
+			state, _, _ := e.currentPipelineState(callContext, run)
 			return agent.WithTelemetryRecorder(
 				callContext,
 				func(recordContext context.Context, record agent.TelemetryRecord) error {
@@ -187,6 +188,7 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				},
 				logicalCallID,
 				stepID,
+				state,
 			)
 		},
 		func(ctx context.Context, response agent.ModelResponse) (bool, error) {
@@ -220,6 +222,30 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 
 			for _, call := range response.ToolCalls {
 				stepID := e.runs.NewID("step")
+				_, tracePlan, traceErr := e.currentPipelineState(ctx, run)
+				if traceErr != nil {
+					return false, traceErr
+				}
+				traceIdentity, traceErr := e.newToolTraceIdentity(
+					ctx,
+					run,
+					call,
+					tracePlan,
+				)
+				if traceErr != nil {
+					return false, traceErr
+				}
+				if traceErr := e.recordPipelineToolTrace(
+					ctx,
+					run,
+					stepID,
+					call,
+					traceIdentity,
+					"proposed",
+					"",
+				); traceErr != nil {
+					return false, traceErr
+				}
 				if err := e.recordToolStart(ctx, run, stepID, call); err != nil {
 					return false, err
 				}
@@ -231,6 +257,17 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 						call.Name,
 						json.RawMessage(call.Arguments),
 					); err != nil {
+						if traceErr := e.recordPipelineToolTrace(
+							ctx,
+							run,
+							stepID,
+							call,
+							traceIdentity,
+							"rejected",
+							"task_plan_authorization_failed",
+						); traceErr != nil {
+							return false, traceErr
+						}
 						if recordErr := e.recordRecoverableToolFailure(
 							ctx,
 							&run,
@@ -251,10 +288,43 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 					}
 				}
 				if err := e.policy.BeforeToolCall(run, call, policyPlan); err != nil {
+					if traceErr := e.recordPipelineToolTrace(
+						ctx,
+						run,
+						stepID,
+						call,
+						traceIdentity,
+						"rejected",
+						pipelineReasonCode(err, "tool_policy_rejected"),
+					); traceErr != nil {
+						return false, traceErr
+					}
 					if recordErr := e.recordRecoverableToolFailure(ctx, &run, stepID, call, err); recordErr != nil {
 						return false, recordErr
 					}
 					continue
+				}
+				if traceErr := e.recordPipelineToolTrace(
+					ctx,
+					run,
+					stepID,
+					call,
+					traceIdentity,
+					"authorized",
+					"",
+				); traceErr != nil {
+					return false, traceErr
+				}
+				if traceErr := e.recordPipelineToolTrace(
+					ctx,
+					run,
+					stepID,
+					call,
+					traceIdentity,
+					"running",
+					"",
+				); traceErr != nil {
+					return false, traceErr
 				}
 				result, executeErr := e.tools.Execute(ctx, tools.Call{
 					RunID:                run.ID,
@@ -271,6 +341,17 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				if executeErr != nil {
 					if errors.Is(executeErr, context.Canceled) {
 						return false, executeErr
+					}
+					if traceErr := e.recordPipelineToolTrace(
+						ctx,
+						run,
+						stepID,
+						call,
+						traceIdentity,
+						"failed",
+						"tool_execution_failed",
+					); traceErr != nil {
+						return false, traceErr
 					}
 					if e.plans != nil {
 						if planErr := e.plans.RecordToolFailure(
@@ -300,6 +381,17 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 					continue
 				}
 				if result.Pending != nil {
+					if traceErr := e.recordPipelineToolTrace(
+						ctx,
+						run,
+						stepID,
+						call,
+						traceIdentity,
+						"pending",
+						"user_input_required",
+					); traceErr != nil {
+						return false, traceErr
+					}
 					var request agentservice.AskUserRequest
 					if err := json.Unmarshal(result.Pending.Payload, &request); err != nil {
 						return false, err
@@ -398,6 +490,17 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				if err := e.runs.SaveRun(ctx, run); err != nil {
 					return false, err
 				}
+				if traceErr := e.recordPipelineToolTrace(
+					ctx,
+					run,
+					stepID,
+					call,
+					traceIdentity,
+					"succeeded",
+					"",
+				); traceErr != nil {
+					return false, traceErr
+				}
 			}
 			return true, nil
 		},
@@ -458,6 +561,15 @@ func (e *Harness) Resume(
 	toolCallID string,
 	request agentservice.ResumeToolCallRequest,
 ) (agentservice.AgentRun, error) {
+	pendingRun, err := e.runs.GetRun(ctx, runID)
+	if err != nil {
+		return agentservice.AgentRun{}, err
+	}
+	pendingCall, pendingTrace, hasPendingTrace, err :=
+		e.pendingToolTraceIdentity(ctx, pendingRun, toolCallID)
+	if err != nil {
+		return agentservice.AgentRun{}, err
+	}
 	run, err := e.runs.ResumeToolCall(ctx, runID, toolCallID, request)
 	if err != nil {
 		return agentservice.AgentRun{}, err
@@ -498,6 +610,19 @@ func (e *Harness) Resume(
 	}
 	if err := e.runs.SaveRun(ctx, run); err != nil {
 		return agentservice.AgentRun{}, err
+	}
+	if hasPendingTrace {
+		if err := e.recordPipelineToolTrace(
+			ctx,
+			run,
+			"",
+			pendingCall,
+			pendingTrace,
+			"succeeded",
+			"user_input_received",
+		); err != nil {
+			return agentservice.AgentRun{}, err
+		}
 	}
 	return e.Continue(ctx, run.ID)
 }
