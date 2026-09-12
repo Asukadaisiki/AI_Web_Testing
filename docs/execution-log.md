@@ -56,6 +56,15 @@
 
 ## 任务记录
 
+## 2026-09-12 | ResolvedTarget 修复后 Live E2E 重跑
+
+- 任务：在 `ec1f8cc` 修复 ResolvedTarget ownership 后，以 `deepseek-v4-flash-vision-exp`、thinking enabled、reasoning effort high 再运行一次官方 `automationexercise-blue-top-cart.v1` research-v2 E2E。
+- 操作：启动 Browser Worker、12-turn AgentService 和 execution-worker；执行单次 E2E；导出 `run.json`、`pipeline-audit.json` 和 provider evidence；核对 TaskPlan 版本、GroundingQuery、resolved target、pipeline lineage 和上下文增长；终态后停止全部服务。
+- 结果：Run `run_bc085ed5e7a5368c19c452ea` 失败，共 12 次模型调用、159 个事件和 3 个 TaskPlan 版本，最终 2 个 PlanStep grounded，未生成 DSL/Batch/Execution。BUG-187 修复有效，结构化 input ResolvedTarget 已稳定转为 Binding；新发现 BUG-188：GroundingQuery 不能直接引用 Observation candidate，模型只能重新猜测图标搜索按钮的 LocatorSpec，依次产生多匹配或 0 匹配，并伴随 PlanStep owner、next-step 和 contiguous 校验拒绝。
+- Provider：12/12 调用直连 `api.deepseek.com`，requested model `deepseek-v4-flash-vision-exp`、resolved model `deepseek-flash`、thinking enabled、effort high。累计 input 788,632、output 142,330、total 930,962 tokens；请求体从 28,834 bytes 增至 573,595 bytes，末轮消息 552,810 bytes、reasoning 429,889 bytes。
+- 验证：结果目录 `research/results/agentic-e2e-resolved-target-fix-20260912T132527Z/`；SHA-256：`run.json=9cdc37eae1f257853cd61d909f78f5052be7b8159728a2b49829004fc82afa1e`、`pipeline-audit.json=0a0c1bd86b3391b83d11c75fd07dafe184a58aa940d575a991a082ef7acb8d14`、`provider-evidence-summary.json=68b382a4ed6275a3f0125580fe413b232238c6013b1b40a98163b5152dee64da`。
+- 后续：实现 Observation 查询/切片和 GroundingQuery candidate reference，避免模型重新描述已观察候选；继续处理 BUG-181 ToolCallLedger 与 BUG-155 Context Materializer，修复前不自动重跑付费 E2E。
+
 ## 2026-09-12 | Phase B 增量 1 后 Live E2E
 
 - 任务：在 `deepseek-v4-flash-vision-exp`、thinking enabled、reasoning effort high 下运行一次官方 `automationexercise-blue-top-cart.v1` research-v2 E2E，验证结构化 Grounding/ResolvedTarget 改造。

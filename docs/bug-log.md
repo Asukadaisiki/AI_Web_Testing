@@ -48,6 +48,24 @@
 
 ## 问题记录
 
+## BUG-188 | GroundingQuery 无法直接引用 Observation Candidate
+
+- 日期：2026-09-12
+- 状态：open
+- 严重度：critical
+- 来源：BUG-187 修复后 live research-v2 E2E
+- 描述：Explore 页面已返回结构化 ElementFact 和 candidate ID，但下一次 GroundingQuery 只能重新编写 role/name/label 等 LocatorSpec，不能直接选择已观察 candidate。图标搜索按钮没有稳定文本名称时，模型先后提交空 name、错误 scoped locator 和错误 test-id，反复得到 0/N match。
+- 复现步骤：
+  1. 对 Automation Exercise Products 页执行 `explore_page`。
+  2. 模型查看裁剪摘要后为搜索按钮生成 `role=button,name=""`，运行时匹配 3 个元素。
+  3. 后续尝试 scoped locator 和 `test_id=submit_search`，均匹配 0 个元素。
+  4. 模型无法用 Observation 中已有 candidate ID 直接执行动作，最终耗尽 12 turns。
+- 影响：即使完整 Observation 已采集，AI 仍需重新猜 LocatorSpec；无文本按钮、重复文本和复杂区域会触发多轮探索、计划重建和上下文膨胀。
+- 根因：`grounding.query.v1` 只有 LocatorSpec 输入，没有 `probe_id + observation_id + candidate_id` 选择模式；模型摘要也没有面向 pending PlanStep 的确定性候选查询工具。
+- 处理：新增 Observation 查询/切片工具，并让 GroundingQuery 支持引用当前 Observation candidate；Worker 校验 candidate 属于指定 Observation 且 runtime count 为 1 后执行，不允许模型重新描述已存在候选。
+- 验证：Run `run_bc085ed5e7a5368c19c452ea` 共 12 次模型调用、3 个 TaskPlan 版本，最终仅 2 个步骤 grounded；结构化 input candidate 成功绑定，搜索按钮定位持续失败。
+- 关联记录：`docs/execution-log.md#2026-09-12--resolved-target-修复后-live-e2e-重跑`。
+
 ## BUG-187 | Explore 页面去重使 ResolvedTarget 与 Observation Revision 错配
 
 - 日期：2026-09-12
