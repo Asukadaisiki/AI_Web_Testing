@@ -21,7 +21,10 @@ func (t SetTaskPlanTool) Definition() Definition {
 		Name: "set_task_plan",
 		Description: "Create a persisted, versioned task plan before browser exploration. " +
 			"The plan owns business action order, exact occurrence counts, side-effect boundaries, " +
-			"forbidden actions, preconditions, and completion conditions. " +
+			"forbidden actions, preconditions, and completion conditions. Use only supported DSL " +
+			"actions and describe targets as observable user-facing semantics. Record the expected " +
+			"value, URL transition, or page fact needed to prove each step. Do not include CSS, XPath, " +
+			"DOM node IDs, candidate IDs, or accessibility facts before they are observed. " +
 			"Exploration may ground these steps but must never rewrite their semantics.",
 		InputSchema: json.RawMessage(`{
 			"type":"object",

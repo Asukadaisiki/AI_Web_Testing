@@ -49,8 +49,8 @@ func TestDefaultToolPolicyRequiresApprovalBeforeExecution(t *testing.T) {
 
 func TestDefaultToolPolicyBlocksRepeatedExploreFlowSignature(t *testing.T) {
 	policy := DefaultToolPolicy{}
-	arguments := `{"flow_description":"first wording","steps":[{"description":"first step wording","actions":[{"action":"wait_for","target":" Same Text ","timeout_ms":1000}]}]}`
-	repeated := `{"flow_description":"different wording","steps":[{"description":"different step wording","actions":[{"action":"wait_for","target":"same   text","timeout_ms":5000}]}]}`
+	arguments := `{"flow_description":"first wording","steps":[{"description":"first step wording","actions":[{"action":"wait_for","locator":{"kind":"text","value":" Same Text ","exact":true},"timeout_ms":1000}]}]}`
+	repeated := `{"flow_description":"different wording","steps":[{"description":"different step wording","actions":[{"action":"wait_for","locator":{"kind":"text","value":"same   text","exact":true},"timeout_ms":5000}]}]}`
 	run := agentservice.AgentRun{Transcript: []agent.Message{
 		{Role: "assistant", ToolCalls: []agent.ModelTool{{
 			ID: "flow-1", Name: "explore_flow", Arguments: arguments,
@@ -118,7 +118,7 @@ func TestDefaultToolPolicyLimitsExploreFlowCalls(t *testing.T) {
 
 	err := policy.BeforeToolCall(run, agent.ModelTool{
 		Name:      "explore_flow",
-		Arguments: `{"steps":[{"actions":[{"action":"wait_for","target":"next"}]}]}`,
+		Arguments: `{"steps":[{"actions":[{"action":"wait_for","locator":{"kind":"text","value":"next","exact":true}}]}]}`,
 	})
 	if err == nil || !strings.Contains(err.Error(), "explore_flow_budget_exhausted") {
 		t.Fatalf("BeforeToolCall() error = %v, want budget gate", err)

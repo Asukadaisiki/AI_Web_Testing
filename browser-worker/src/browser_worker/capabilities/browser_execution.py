@@ -4,17 +4,20 @@ from __future__ import annotations
 
 from typing import cast
 
-from browser_worker.reporting import build_execution_report
-from browser_worker.runners import RunnerExecutionError, RunnerInterventionError
-from browser_worker.runners.playwright_runner import RunnerCancelledError, execute_case_with_playwright
 from browser_worker.contracts.action_ir import case_dsl_profile
-from browser_worker.contracts.dsl import DSLCase, GotoStep, validate_dsl_case
-from browser_worker.contracts.executions import StepExecutionEvidence
 from browser_worker.contracts.browser_executions import (
     BrowserExecutionRequest,
     BrowserExecutionResponse,
 )
+from browser_worker.contracts.dsl import DSLCase, GotoStep, validate_dsl_case
+from browser_worker.contracts.executions import StepExecutionEvidence
+from browser_worker.reporting import build_execution_report
 from browser_worker.reporting.failure_signals import build_failure_signal
+from browser_worker.runners import RunnerExecutionError, RunnerInterventionError
+from browser_worker.runners.playwright_runner import (
+    RunnerCancelledError,
+    execute_case_with_playwright,
+)
 
 
 def execute_browser_case(payload: BrowserExecutionRequest) -> BrowserExecutionResponse:

@@ -11,7 +11,6 @@ from browser_worker.contracts.browser_capabilities import (
     BrowserCapabilityResponse,
 )
 
-
 router = APIRouter(prefix="/internal/browser-capabilities", tags=["internal-browser"])
 
 

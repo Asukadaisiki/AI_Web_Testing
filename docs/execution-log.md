@@ -56,6 +56,30 @@
 
 ## 任务记录
 
+## 2026-09-12 | Phase B 增量 1：统一 Grounding 与 Resolved Target
+
+- 任务：开始改造 AI 任务规划、页面探索和 DSL 生成链路，使 AI 基于 DOM/A11y 页面事实规划动作，Explore 返回完整页面结构与单动作实际命中证据，并消除新路径的 Go 文本重绑定。
+- 操作：将 Agent system prompt 拆分为 Task Planning、Grounding、DSL Authoring、Execution/Repair 四阶段，要求 TaskPlan 只保存业务语义和证据要求；新增 `grounding.query.v1`、`browser.resolved-target.v1` 共享 Schema 和 Go/Python 类型；将 click/input/wait_for 收紧为只接受结构化语义 Locator；Browser Worker 通过共享 `compile_locator` 执行唯一性检查，将请求 Locator 写入 BrowserObservation candidate，并返回 probe/observation/page-state/element/candidate/runtime/action status；模型摘要保留 resolved target；Go 将证据与完整 Observation 交叉校验后直接构造 TargetBinding。
+- 结果：AI 只能提交 Playwright 可编译的 role/name/label/placeholder/text/test-id/scoped 查询；Explore 字符串 `target`、legacy flow resolver、按动作顺序猜测 PlanStep owner 和 Go flow 文本重绑定均已删除。已 grounded 的 click/input 支撑动作必须引用原 PlanStep ID，pending `plan_step_ids` 必须从下一步严格连续。完整页面结构继续保存为 BrowserObservation Artifact，模型获得结构索引和 resolved target；按条件读取完整 Artifact 的 Observation 查询工具留待下一增量。BUG-180 已修复。
+- 验证：`go test ./...`、`go vet ./...`、`go build ./...` 通过；Python 189 tests passed / 2 skipped；Pyright 0 errors；Ruff 全仓 `F/I` 通过；`RUN_BROWSER_INTEGRATION=1` 的 2 个真实 Chromium 测试通过；共享 GroundingQuery/ResolvedTarget Schema、模型摘要和 Go 直接 Binding 均有回归。
+- 后续：Phase B 下一增量新增 Observation 搜索/切片工具；随后实施 ToolCallLedger 和 Context Materializer。未运行付费模型 E2E。
+
+## 2026-09-12 | TaskPlan、Explore 与 DSL 职责重新对齐
+
+- 任务：核对“AI 接受目标、规划动作、分析完整页面结构、生成合理 DSL”的目标流程与当前实现差异，并明确改造顺序。
+- 操作：对照 Harness system prompt、`set_task_plan`、`explore_page/explore_flow` 输入合同、BrowserObservation/Artifact、TargetBinding 派生和 research-v2 compiler；结合十二轮 grounding live 证据区分 AI 语义决策与 Worker/Control Plane 确定性职责。
+- 结果：当前流程要求 AI 在首次页面事实不足时先生成完整 TaskPlan，随后直接手写 `plan_step_ids + click/input/wait_for + target/locator` 的低层 Probe；Worker 执行动作后，Go 再按文本从 Observation 推导 TargetBinding，Runner 最后重新编译 LocatorSpec，形成三次目标解释。完整 BrowserObservation 已持久化为结构化数据/Artifact，但模型主要接收裁剪摘要，缺少按页面区域、角色、名称、状态和 pending PlanStep 查询完整 Observation 的工具。目标流程应保留 AI 对任务语义、Probe 意图、页面事实解释和 Draft DSL 的主导权，同时由共享合同确定性完成元素解析、candidate 身份、LocatorSpec 编译、Plan/DSL 校验和执行。
+- 验证：静态核对当前代码与已保存 live Run；知识图谱基线为 `3be098d`，早于 Phase A lineage 改动，因此仅用于架构定位，结论以当前源码为准。
+- 后续：先重写分阶段 system prompt 和 TaskPlan typed condition/evidence requirement，再新增 `grounding.query.v1`、`browser.resolved-target.v1` 与 Observation 查询工具；随后让 Explore/Runner 共用同一 LocatorSpec compiler，删除 Go 文本重绑定，最后让 AI 仅通过 plan/binding ID 编写 Draft DSL。
+
+## 2026-09-12 | v4-flash-vision-exp 十二轮 Grounding 归因
+
+- 任务：聚焦工具调用与任务规划，解释 Run `run_84e3cdde9a0df7d6553c789b` 为什么耗尽 12 个模型回合才完成 grounding。
+- 操作：从 PostgreSQL 对齐 12 条 `research.llm_call`、12 个 ToolCall、40 次工具状态迁移和 9 次 TaskPlan 快照；核对当前 Loop max-turn、Explore 参数 Schema、TaskPlan 连续 pending-step 授权、Probe action owner 映射和探索预算统计逻辑。
+- 结果：该 Run 不是执行了 12 次有效 grounding，也没有重复规划；TaskPlan 仅创建一次且始终为 v1。12 轮由 1 次 `set_task_plan`、1 次成功 `explore_page`、10 次 `explore_flow` 构成；10 次 flow 中 4 次产生部分 grounding，另 6 次无推进（2 次 PlanStep action/value 不匹配、2 次 `plan_step_ids` 连续性/ownership 拒绝、2 次 Worker 422 参数校验失败）。有效进度依次为 1/12、4/12、6/12、7/12、12/12；最后一轮才进入 `ready_for_generation`，但全局 `AGENTSERVICE_MAX_TURNS=12` 已耗尽，没有第 13 轮调用 `generate_dsl`。
+- 验证：核对事件 seq 2-142、TaskPlan 状态 seq 15/29/70/111/125/139/141、全部 ToolCall 参数和终态；确认探索预算只统计可解码的成功工具摘要，失败/授权拒绝不计入当前调用数，且 normalized signature 因参数细节变化未判定这些调用为重复。
+- 后续：工具侧优先实现全状态 ToolCallLedger、共享参数校验、明确的 `partial_success` 和下一 pending-step 调用合同；规划侧将业务 TaskPlan 与 GroundingPlan 分离，按页面状态批量获取证据，并为 DSL generation 保留独立回合预算。
+
 ## 2026-09-12 | 重置数据库并运行 v4-flash-vision-exp research-v2 E2E
 
 - 任务：重置本地 PostgreSQL 状态，将 DeepSeek 模型切换为 `deepseek-v4-flash-vision-exp`、thinking effort 设为 `high`，并运行一次官方 research-v2 E2E。

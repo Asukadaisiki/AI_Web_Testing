@@ -14,7 +14,10 @@ from urllib.parse import urldefrag, urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
 
-from browser_worker.exploration.observation import build_browser_observation
+from browser_worker.exploration.observation import (
+    build_browser_observation,
+    build_resolved_target_evidence,
+)
 from browser_worker.locators.compiler import compile_locator
 from browser_worker.runtime.paths import PROJECT_ROOT
 
@@ -843,159 +846,6 @@ def is_storage_state_stale(meta: dict[str, Any]) -> bool:
         return True
 
 
-def _resolve_from_collected_nodes(
-    page,
-    target: str,
-    prev_nodes: list[dict] | None,
-    *,
-    kind: str,
-):
-    """Try to resolve *target* using verified_selectors or DOM attrs from *prev_nodes*.
-
-    When the previous page state's a11y nodes contain a matching element with
-    precise CSS selectors, use them directly — bypassing the a11y text-matching
-    locator that can match the wrong element (e.g. ``click "Polo"`` matching
-    a product paragraph instead of the brand link).
-
-    Returns a Playwright locator or None.
-    """
-    if not prev_nodes:
-        return None
-
-    cleaned_target = target.strip().strip('"').strip("'")
-
-    # Find nodes whose name contains the target text
-    candidates = []
-    for n in prev_nodes:
-        name = str(n.get("name", "")).strip()
-        if not name:
-            continue
-        # Match: exact, contains, or target is substring of name
-        if cleaned_target.lower() == name.lower() or cleaned_target.lower() in name.lower():
-            candidates.append(n)
-
-    if not candidates:
-        # Try fuzzy: target words appear in name
-        target_words = cleaned_target.lower().split()
-        for n in prev_nodes:
-            name = str(n.get("name", "")).strip().lower()
-            if not name:
-                continue
-            if all(w in name for w in target_words):
-                candidates.append(n)
-
-    if not candidates:
-        logger.info(
-            "_resolve_from_collected_nodes: target=%r, no candidates in %d prev_nodes",
-            target, len(prev_nodes),
-        )
-        return None
-
-    compatible = [
-        candidate
-        for candidate in candidates
-        if _candidate_supports_action(candidate, kind)
-    ]
-    if compatible:
-        candidates = compatible
-    candidates.sort(
-        key=lambda candidate: _flow_candidate_sort_key(candidate, cleaned_target)
-    )
-
-    logger.info(
-        "_resolve_from_collected_nodes: target=%r, found %d candidates: %s",
-        target, len(candidates),
-        [(c.get("role"), str(c.get("name", ""))[:50]) for c in candidates[:8]],
-    )
-
-    # Prefer candidates with verified_selectors or DOM attrs
-    for n in candidates:
-        # Try verified_selectors first (already tested as unique)
-        verified = n.get("verified_selectors") or []
-        if isinstance(verified, list):
-            for vs in verified:
-                if isinstance(vs, dict) and vs.get("selector"):
-                    sel = vs["selector"]
-                    try:
-                        loc = page.locator(sel)
-                        if loc.count() == 1:
-                            logger.info(
-                                "_resolve_from_collected_nodes: target=%r → verified selector %s (source=%s)",
-                                target, sel, vs.get("source", "?"),
-                            )
-                            return loc.first
-                    except Exception:
-                        continue
-
-        # Try DOM attrs (tag + key attributes)
-        dom = n.get("dom") or {}
-        attrs = dom.get("attrs") or {} if isinstance(dom, dict) else {}
-        tag = dom.get("tag") if isinstance(dom, dict) else None
-
-        if tag and attrs:
-            # Build candidate selectors from attributes
-            selectors_to_try = []
-            for attr in ("data-product-id", "href", "id", "name"):
-                val = attrs.get(attr)
-                if val and isinstance(val, str):
-                    selectors_to_try.append(f'{tag}[{attr}="{val}"]')
-
-            for css in selectors_to_try:
-                try:
-                    loc = page.locator(css)
-                    if loc.count() == 1:
-                        logger.info(
-                            "_resolve_from_collected_nodes: target=%r → DOM selector %s",
-                            target, css,
-                        )
-                        return loc.first
-                except Exception:
-                    continue
-
-    return None
-
-
-def _candidate_supports_action(candidate: dict[str, Any], kind: str) -> bool:
-    role = str(candidate.get("role") or "").strip().lower()
-    dom = candidate.get("dom") or {}
-    tag = str(dom.get("tag") or "").strip().lower() if isinstance(dom, dict) else ""
-    if kind == "input":
-        return role in {"textbox", "searchbox", "combobox", "spinbutton"} or tag in {
-            "input",
-            "select",
-            "textarea",
-        }
-    if kind == "click":
-        return role in {
-            "button",
-            "checkbox",
-            "link",
-            "menuitem",
-            "menuitemcheckbox",
-            "menuitemradio",
-            "option",
-            "radio",
-            "switch",
-            "tab",
-        } or tag in {"a", "button", "input", "option"}
-    return True
-
-
-def _flow_candidate_sort_key(
-    candidate: dict[str, Any],
-    target: str,
-) -> tuple[int, int, int]:
-    name = str(candidate.get("name") or "").strip()
-    normalized_name = " ".join(re.findall(r"\w+", name.casefold()))
-    normalized_target = " ".join(re.findall(r"\w+", target.casefold()))
-    exact = normalized_name == normalized_target
-    verified = any(
-        isinstance(item, dict) and item.get("selector")
-        for item in candidate.get("verified_selectors") or []
-    )
-    return (0 if exact else 1, 0 if verified else 1, len(normalized_name))
-
-
 def _resolve_step_locator(page, target: str, *, kind: str, skip_vlm: bool = False):
     """Resolve a step target to a Playwright locator using the semantic chain.
 
@@ -1037,34 +887,6 @@ def _resolve_step_locator(page, target: str, *, kind: str, skip_vlm: bool = Fals
     return None
 
 
-def _resolve_flow_action_locator(
-    page,
-    target: str,
-    *,
-    kind: str,
-    previous_nodes: list[dict[str, Any]] | None,
-):
-    if target.startswith("text="):
-        text = target.removeprefix("text=").strip()
-        locator = page.get_by_text(text, exact=True)
-        return locator.first if locator.count() > 0 else None
-    if target.startswith("css="):
-        locator = page.locator(target.removeprefix("css="))
-        return locator.first if locator.count() > 0 else None
-    if target.startswith(("#", ".")):
-        locator = page.locator(target)
-        return locator.first if locator.count() > 0 else None
-    locator = _resolve_from_collected_nodes(
-        page,
-        target,
-        previous_nodes,
-        kind=kind,
-    )
-    if locator is not None:
-        return locator
-    return _resolve_step_locator(page, target, kind=kind, skip_vlm=True)
-
-
 def _flow_action_timeout(action: dict[str, Any]) -> int:
     raw_timeout = action.get("timeout_ms", action.get("value", 5000))
     try:
@@ -1076,54 +898,33 @@ def _flow_action_timeout(action: dict[str, Any]) -> int:
 
 def _wait_for_flow_target(
     page,
-    target: str,
     timeout_ms: int,
     *,
-    locator_spec: dict[str, Any] | None = None,
+    locator_spec: dict[str, Any],
     condition: dict[str, Any] | None = None,
+    resolved_locator=None,
 ) -> None:
-    if locator_spec is not None:
-        locator = compile_locator(page, locator_spec)
-        if locator.count() != 1:
-            raise RuntimeError(
-                "structured wait_for locator must resolve exactly once"
-            )
-        locator = locator.first
-        locator.wait_for(state="visible", timeout=timeout_ms)
-        condition_type = str((condition or {}).get("type") or "visible")
-        if condition_type == "value_equals":
-            expected = str((condition or {}).get("expected") or "")
-            actual = str(locator.input_value())
-            if actual != expected:
-                raise RuntimeError(
-                    "wait_for value mismatch: "
-                    f"expected={expected!r}, actual={actual!r}"
-                )
-        return
-    if target.startswith("text="):
-        text = target.removeprefix("text=").strip()
-        page.get_by_text(text, exact=True).first.wait_for(
-            state="visible",
-            timeout=timeout_ms,
-        )
-        return
-    if target.startswith(("css=", "#", ".")):
-        selector = target.removeprefix("css=")
-        page.locator(selector).first.wait_for(
-            state="visible",
-            timeout=timeout_ms,
-        )
-        return
-    page.get_by_text(target, exact=True).first.wait_for(
-        state="visible",
-        timeout=timeout_ms,
+    locator = (
+        resolved_locator
+        if resolved_locator is not None
+        else compile_locator(page, locator_spec)
     )
+    if resolved_locator is None and locator.count() != 1:
+        raise RuntimeError("structured wait_for locator must resolve exactly once")
+    locator = locator.first if resolved_locator is None else locator
+    locator.wait_for(state="visible", timeout=timeout_ms)
+    condition_type = str((condition or {}).get("type") or "visible")
+    if condition_type == "value_equals":
+        expected = str((condition or {}).get("expected") or "")
+        actual = str(locator.input_value())
+        if actual != expected:
+            raise RuntimeError(
+                "wait_for value mismatch: "
+                f"expected={expected!r}, actual={actual!r}"
+            )
 
 
 def _flow_action_target_label(action: dict[str, Any]) -> str:
-    target = str(action.get("target") or "").strip()
-    if target:
-        return target
     locator = action.get("locator")
     if not isinstance(locator, dict):
         return ""
@@ -1132,6 +933,8 @@ def _flow_action_target_label(action: dict[str, Any]) -> str:
         name = str(locator.get("name") or "").strip()
         role = str(locator.get("role") or "").strip()
         return f"role={role}, name={name}" if name else f"role={role}"
+    if kind == "scoped":
+        return "scoped semantic locator"
     return f"{kind}={locator.get('value', '')}"
 
 
@@ -1140,6 +943,9 @@ def _node_matches_flow_locator(
     locator: dict[str, Any],
 ) -> bool:
     kind = str(locator.get("kind") or "")
+    if kind == "scoped":
+        target = locator.get("target")
+        return isinstance(target, dict) and _node_matches_flow_locator(node, target)
     exact = locator.get("exact") is not False
     role = str(node.get("role") or "").strip()
     name = str(node.get("name") or "").strip()
@@ -1275,40 +1081,6 @@ def capture_browser_session(
     }
 
 
-# ── A11y-based flow collection (replaces collect_multi_page_elements + collect_flow_elements)
-
-
-def _normalize_flow_step(step: dict[str, Any]) -> dict[str, Any]:
-    """Normalize DSL format steps to explore_flow format.
-
-    DSL format: {"action": "goto", "target": "https://..."} or {"action": "click", "target": "..."}
-    Explore format: {"url": "https://...", "actions": [{"action": "click", "target": "..."}]}
-    """
-    if not isinstance(step, dict):
-        return step
-
-    # Already in explore format (has url or actions)
-    if "url" in step or "actions" in step:
-        return step
-
-    # DSL format: has action + target
-    action = (step.get("action") or "").strip().lower()
-    target = step.get("target", "")
-
-    if not action:
-        return step
-
-    # goto -> url
-    if action == "goto" and target:
-        return {"url": target, "description": step.get("description", "")}
-
-    # click/input/wait_for -> actions
-    if action in ("click", "input", "wait_for") and target:
-        return {"actions": [step], "description": step.get("description", "")}
-
-    return step
-
-
 def _collect_flow_a11y(
     flow_steps: list[dict[str, Any]],
     *,
@@ -1330,8 +1102,6 @@ def _collect_flow_a11y(
         return []
 
     # Normalize all steps to explore format
-    flow_steps = [_normalize_flow_step(s) for s in flow_steps]
-
     managed = not bool(session_id) and not isolated_context
     pw = None
     browser = None
@@ -1398,9 +1168,6 @@ def _collect_flow_a11y(
     state_index = 0
     revision = 0
     url_to_state: dict[str, str] = {}
-    # Tracks the most recently collected a11y nodes for DOM-level click resolution
-    prev_action_nodes: list[dict[str, Any]] | None = None
-
     def state_for(url: str, description: str) -> str:
         nonlocal state_index
         key = f"{urldefrag(url)[0]}|{description}"
@@ -1509,6 +1276,9 @@ def _collect_flow_a11y(
             probe_id=probe_id,
             page=page,
             artifact_root=PROJECT_ROOT / "artifacts",
+            requested_locators=(
+                [locator_spec] if isinstance(locator_spec, dict) else None
+            ),
         )
         results.append(entry)
         return entry, nodes
@@ -1605,60 +1375,69 @@ def _collect_flow_a11y(
                     value = action_def.get("value", "")
                     if not act:
                         continue
+                    if not isinstance(locator_spec, dict):
+                        raise ValueError(
+                            "explore_flow actions require a structured semantic locator"
+                        )
 
                     action_desc = f"{act} {target}" if target else act
-                    before_entry, before_nodes = collect_action_snapshot(
+                    before_entry, _ = collect_action_snapshot(
                         step_index=step_i,
                         action_index=action_idx,
                         plan_step_id=plan_step_id,
                         action_description=action_desc,
                         target=target,
-                        locator_spec=(
-                            locator_spec if isinstance(locator_spec, dict) else None
-                        ),
+                        locator_spec=locator_spec,
                         condition=(
                             condition if isinstance(condition, dict) else None
                         ),
                         description=description,
                         phase="before",
                     )
-                    prev_action_nodes = before_nodes
                     url_before_action = page.url
                     expected_navigation_url = None
+                    resolved_target = None
                     try:
-                        if act == "input":
-                            loc = _resolve_flow_action_locator(
-                                page,
-                                target,
-                                kind="input",
-                                previous_nodes=prev_action_nodes,
+                        loc = compile_locator(page, locator_spec)
+                        runtime_count = loc.count()
+                        if runtime_count != 1:
+                            raise RuntimeError(
+                                "structured action locator must resolve exactly once: "
+                                f"count={runtime_count}"
                             )
-                            if loc is None:
-                                raise RuntimeError(f"input target not found: {target}")
+                        loc = loc.first
+                        if plan_step_id:
+                            resolved_target = build_resolved_target_evidence(
+                                before_entry["observation_v2"],
+                                plan_step_id=plan_step_id,
+                                step_index=step_i,
+                                action_index=action_idx,
+                                action=act,
+                                locator_value=locator_spec,
+                            )
+                            if resolved_target is None:
+                                raise RuntimeError(
+                                    "structured action locator has no unique "
+                                    "BrowserObservation candidate"
+                                )
+                            before_entry["actions"][0][
+                                "resolved_target"
+                            ] = resolved_target
+                        if act == "input":
                             try:
                                 tag = loc.evaluate("el => el.tagName.toLowerCase()")
                             except Exception:
                                 tag = ""
                             if tag not in ("input", "select", "textarea"):
-                                loc = _resolve_input_fallback(page, target)
-                            if loc is None:
                                 raise RuntimeError(
                                     f"input target is not editable: {target}"
                                 )
                             loc.fill(str(value))
                         elif act == "click":
                             logger.info(
-                                "_collect_flow_a11y: click target=%r, prev_nodes=%d",
-                                target, len(prev_action_nodes) if prev_action_nodes else 0,
-                            )
-                            loc = _resolve_flow_action_locator(
-                                page,
+                                "_collect_flow_a11y: click target=%r",
                                 target,
-                                kind="click",
-                                previous_nodes=prev_action_nodes,
                             )
-                            if loc is None:
-                                raise RuntimeError(f"click target not found: {target}")
                             expected_navigation_url = _cross_page_anchor_href(
                                 loc, url_before_action
                             )
@@ -1678,18 +1457,14 @@ def _collect_flow_a11y(
                         elif act == "wait_for":
                             _wait_for_flow_target(
                                 page,
-                                target,
                                 _flow_action_timeout(action_def),
-                                locator_spec=(
-                                    locator_spec
-                                    if isinstance(locator_spec, dict)
-                                    else None
-                                ),
+                                locator_spec=locator_spec,
                                 condition=(
                                     condition
                                     if isinstance(condition, dict)
                                     else None
                                 ),
+                                resolved_locator=loc,
                             )
                         else:
                             raise RuntimeError(f"unsupported flow action: {act}")
@@ -1714,7 +1489,11 @@ def _collect_flow_a11y(
                                 "click did not reach expected anchor destination: "
                                 f"expected={expected_navigation_url}, actual={page.url}"
                             )
+                        if resolved_target is not None:
+                            resolved_target["action_status"] = "succeeded"
                     except Exception as exc:
+                        if resolved_target is not None:
+                            resolved_target["action_status"] = "failed"
                         failure = {
                             "code": "flow_action_failed",
                             "step_index": step_i,
@@ -1763,23 +1542,19 @@ def _collect_flow_a11y(
                         action_failed = True
                         break
 
-                    after_entry, after_nodes = collect_action_snapshot(
+                    after_entry, _ = collect_action_snapshot(
                         step_index=step_i,
                         action_index=action_idx,
                         plan_step_id=plan_step_id,
                         action_description=action_desc,
                         target=target,
-                        locator_spec=(
-                            locator_spec if isinstance(locator_spec, dict) else None
-                        ),
+                        locator_spec=locator_spec,
                         condition=(
                             condition if isinstance(condition, dict) else None
                         ),
                         description=description,
                         phase="after",
                     )
-                    prev_action_nodes = after_nodes
-
                     logger.info(
                         "_collect_flow_a11y: step %d action %d (%s) completed, "
                         "before=%s/%s after=%s/%s nodes=%d",
@@ -1790,7 +1565,7 @@ def _collect_flow_a11y(
                         before_entry["page_state"],
                         after_entry["url"],
                         after_entry["page_state"],
-                        len(after_nodes),
+                        after_entry["element_count"],
                     )
                 if action_failed:
                     break
@@ -1801,7 +1576,6 @@ def _collect_flow_a11y(
                 state_id = state_for(current_url, description)
 
                 nodes = collect_a11y_nodes(page, page_state=state_id, core_user_flow_text=core_user_flow_text)
-                prev_action_nodes = nodes
                 result = {
                     "url": current_url, "page_state": state_id,
                     "a11y_nodes": nodes, "element_count": len(nodes),
@@ -2035,25 +1809,3 @@ def _deduplicate_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             result.append(node)
 
     return result
-
-
-
-def _resolve_input_fallback(page, target: str):
-    """Try alternative strategies when semantic locator resolves to non-input element."""
-    fallback_strategies = [
-        lambda: page.get_by_placeholder(target),
-        lambda: page.get_by_role("textbox", name=target),
-        lambda: page.locator("input, select, textarea").filter(has=page.get_by_text(target)),
-        lambda: page.locator("input[type='email']").first,
-        lambda: page.locator("input:visible").first,
-    ]
-    for strategy in fallback_strategies:
-        try:
-            loc = strategy()
-            if loc.count() > 0:
-                tag = loc.first.evaluate("el => el.tagName.toLowerCase()")
-                if tag in ("input", "select", "textarea"):
-                    return loc.first
-        except Exception:
-            continue
-    return None

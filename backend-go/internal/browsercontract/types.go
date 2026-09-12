@@ -12,6 +12,7 @@ import (
 const (
 	ObservationSchemaVersion = "browser.observation.v2"
 	TargetBindingVersion     = "grounding.target-binding.v1"
+	ResolvedTargetVersion    = "browser.resolved-target.v1"
 )
 
 type LocatorSpec struct {
@@ -74,6 +75,72 @@ type LocatorCandidate struct {
 type ContextPath struct {
 	Frames      []string `json:"frames"`
 	ShadowHosts []string `json:"shadow_hosts"`
+}
+
+type ResolvedTargetEvidence struct {
+	SchemaVersion     string      `json:"schema_version"`
+	ProbeID           string      `json:"probe_id"`
+	PlanStepID        string      `json:"plan_step_id"`
+	StepIndex         int         `json:"step_index"`
+	ActionIndex       int         `json:"action_index"`
+	Action            string      `json:"action"`
+	ObservationID     string      `json:"observation_id"`
+	PageStateID       string      `json:"page_state_id"`
+	PageStateSHA256   string      `json:"page_state_sha256"`
+	ElementRef        string      `json:"element_ref"`
+	CandidateID       string      `json:"candidate_id"`
+	Locator           LocatorSpec `json:"locator"`
+	ContextPath       ContextPath `json:"context_path"`
+	Provenance        string      `json:"provenance"`
+	RuntimeMatchCount int         `json:"runtime_match_count"`
+	Visible           bool        `json:"visible"`
+	Enabled           bool        `json:"enabled"`
+	Editable          bool        `json:"editable"`
+	Score             float64     `json:"score"`
+	ActionStatus      string      `json:"action_status"`
+}
+
+func (e ResolvedTargetEvidence) Validate() error {
+	if e.SchemaVersion != ResolvedTargetVersion ||
+		strings.TrimSpace(e.ProbeID) == "" ||
+		strings.TrimSpace(e.PlanStepID) == "" ||
+		e.StepIndex < 0 ||
+		e.ActionIndex < 0 ||
+		(e.Action != "click" && e.Action != "input" && e.Action != "wait_for") ||
+		strings.TrimSpace(e.ObservationID) == "" ||
+		strings.TrimSpace(e.PageStateID) == "" ||
+		len(e.PageStateSHA256) != 64 ||
+		strings.TrimSpace(e.ElementRef) == "" ||
+		strings.TrimSpace(e.CandidateID) == "" ||
+		strings.TrimSpace(e.Provenance) == "" ||
+		e.RuntimeMatchCount != 1 ||
+		!e.Visible ||
+		e.Score < 0 ||
+		e.Score > 1 {
+		return errors.New("resolved target evidence is incomplete")
+	}
+	if e.ActionStatus != "resolved" &&
+		e.ActionStatus != "succeeded" &&
+		e.ActionStatus != "failed" {
+		return errors.New("resolved target action status is invalid")
+	}
+	if (e.Action == "click" || e.Action == "input") && !e.Enabled {
+		return errors.New("resolved action target must be enabled")
+	}
+	if e.Action == "input" && !e.Editable {
+		return errors.New("resolved input target must be editable")
+	}
+	if e.ContextPath.Frames == nil || e.ContextPath.ShadowHosts == nil {
+		return errors.New("resolved target context path is incomplete")
+	}
+	if err := e.Locator.Validate(); err != nil {
+		return fmt.Errorf("resolved target locator: %w", err)
+	}
+	if len(e.ContextPath.ShadowHosts) > 0 &&
+		e.Locator.containsKind("xpath") {
+		return errors.New("resolved target uses xpath inside shadow DOM")
+	}
+	return nil
 }
 
 type TargetBinding struct {

@@ -86,21 +86,45 @@ type ToolResultDOMSummary struct {
 }
 
 type ToolResultActionSummary struct {
-	StepIndex        *int                    `json:"step_index,omitempty"`
-	ActionIndex      *int                    `json:"action_index,omitempty"`
-	PlanStepID       string                  `json:"plan_step_id,omitempty"`
-	Action           string                  `json:"action,omitempty"`
-	Target           string                  `json:"target,omitempty"`
-	Description      string                  `json:"description,omitempty"`
-	Phase            string                  `json:"phase,omitempty"`
-	Status           string                  `json:"status,omitempty"`
-	URL              string                  `json:"url,omitempty"`
-	PageState        string                  `json:"page_state,omitempty"`
-	TargetEvidence   []ToolResultNodeSummary `json:"target_evidence,omitempty"`
-	EvidenceCount    int                     `json:"evidence_count"`
-	OmittedEvidence  int                     `json:"omitted_target_evidence,omitempty"`
-	OmittedSelectors int                     `json:"omitted_selectors,omitempty"`
-	Failure          *ToolResultErrorSummary `json:"failure,omitempty"`
+	StepIndex        *int                             `json:"step_index,omitempty"`
+	ActionIndex      *int                             `json:"action_index,omitempty"`
+	PlanStepID       string                           `json:"plan_step_id,omitempty"`
+	Action           string                           `json:"action,omitempty"`
+	Target           string                           `json:"target,omitempty"`
+	Description      string                           `json:"description,omitempty"`
+	Phase            string                           `json:"phase,omitempty"`
+	Status           string                           `json:"status,omitempty"`
+	URL              string                           `json:"url,omitempty"`
+	PageState        string                           `json:"page_state,omitempty"`
+	TargetEvidence   []ToolResultNodeSummary          `json:"target_evidence,omitempty"`
+	EvidenceCount    int                              `json:"evidence_count"`
+	OmittedEvidence  int                              `json:"omitted_target_evidence,omitempty"`
+	OmittedSelectors int                              `json:"omitted_selectors,omitempty"`
+	ResolvedTarget   *ToolResultResolvedTargetSummary `json:"resolved_target,omitempty"`
+	Failure          *ToolResultErrorSummary          `json:"failure,omitempty"`
+}
+
+type ToolResultResolvedTargetSummary struct {
+	SchemaVersion     string          `json:"schema_version"`
+	ProbeID           string          `json:"probe_id"`
+	PlanStepID        string          `json:"plan_step_id"`
+	StepIndex         int             `json:"step_index"`
+	ActionIndex       int             `json:"action_index"`
+	Action            string          `json:"action"`
+	ObservationID     string          `json:"observation_id"`
+	PageStateID       string          `json:"page_state_id"`
+	PageStateSHA256   string          `json:"page_state_sha256"`
+	ElementRef        string          `json:"element_ref"`
+	CandidateID       string          `json:"candidate_id"`
+	Locator           json.RawMessage `json:"locator"`
+	ContextPath       json.RawMessage `json:"context_path"`
+	Provenance        string          `json:"provenance"`
+	RuntimeMatchCount int             `json:"runtime_match_count"`
+	Visible           bool            `json:"visible"`
+	Enabled           bool            `json:"enabled"`
+	Editable          bool            `json:"editable"`
+	Score             float64         `json:"score"`
+	ActionStatus      string          `json:"action_status"`
 }
 
 type ToolResultPageSummary struct {
@@ -404,19 +428,20 @@ type rawObservationV2 struct {
 }
 
 type rawAction struct {
-	StepIndex         *int        `json:"step_index"`
-	ActionIndex       *int        `json:"action_index"`
-	PlanStepID        string      `json:"plan_step_id"`
-	Action            string      `json:"action"`
-	Target            string      `json:"target"`
-	ActionDescription string      `json:"action_description"`
-	Phase             string      `json:"phase"`
-	Status            string      `json:"status"`
-	URL               string      `json:"url"`
-	PageState         string      `json:"page_state"`
-	EvidenceCount     int         `json:"evidence_count"`
-	TargetEvidence    []rawNode   `json:"target_evidence"`
-	Failure           *rawFailure `json:"failure"`
+	StepIndex         *int                             `json:"step_index"`
+	ActionIndex       *int                             `json:"action_index"`
+	PlanStepID        string                           `json:"plan_step_id"`
+	Action            string                           `json:"action"`
+	Target            string                           `json:"target"`
+	ActionDescription string                           `json:"action_description"`
+	Phase             string                           `json:"phase"`
+	Status            string                           `json:"status"`
+	URL               string                           `json:"url"`
+	PageState         string                           `json:"page_state"`
+	EvidenceCount     int                              `json:"evidence_count"`
+	TargetEvidence    []rawNode                        `json:"target_evidence"`
+	ResolvedTarget    *ToolResultResolvedTargetSummary `json:"resolved_target"`
+	Failure           *rawFailure                      `json:"failure"`
 }
 
 type rawNode struct {
@@ -1064,6 +1089,7 @@ func summarizeAction(action rawAction) ToolResultActionSummary {
 		Phase:       boundedUTF8(action.Phase, 64), Status: boundedUTF8(action.Status, 64),
 		URL: boundedUTF8(action.URL, 2048), PageState: boundedUTF8(action.PageState, 256),
 		EvidenceCount: action.EvidenceCount, Failure: summarizeFailure(action.Failure),
+		ResolvedTarget: action.ResolvedTarget,
 	}
 	for _, node := range action.TargetEvidence {
 		summarized, omittedSelectors := summarizeNode(node)

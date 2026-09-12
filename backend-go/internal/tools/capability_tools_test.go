@@ -63,7 +63,7 @@ func (c *isolatedProbeCapabilityClient) ExecuteBrowserCapability(
 	_ string,
 	arguments json.RawMessage,
 ) (json.RawMessage, error) {
-	if !strings.Contains(string(arguments), `"target":"Add to cart"`) {
+	if !strings.Contains(string(arguments), `"name":"Add to cart"`) {
 		return nil, errors.New("expected Add to cart probe")
 	}
 	c.calls++
@@ -302,12 +302,13 @@ func TestExploreFlowMockIsolatesRepeatedSideEffectProbes(t *testing.T) {
 	handler := NewBrowserTools(client)[1]
 	arguments := json.RawMessage(`{
 		"base_url":"https://automationexercise.com/product_details/1",
+		"plan_step_ids":["quantity","add_to_cart","open_view_cart"],
 		"steps":[{
 			"url":"https://automationexercise.com/product_details/1",
 			"actions":[
-				{"action":"input","target":"Quantity","value":"1"},
-				{"action":"click","target":"Add to cart"},
-				{"action":"click","target":"View Cart"}
+				{"action":"input","plan_step_id":"quantity","locator":{"kind":"role","role":"spinbutton"},"value":"1"},
+				{"action":"click","plan_step_id":"add_to_cart","locator":{"kind":"role","role":"button","name":"Add to cart"}},
+				{"action":"click","plan_step_id":"open_view_cart","locator":{"kind":"role","role":"link","name":"View Cart"}}
 			]
 		}]
 	}`)
@@ -443,7 +444,8 @@ func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *t
 	}
 	if !strings.Contains(definitions[1].Definition().Description, "exploration_budget") ||
 		!strings.Contains(definitions[1].Definition().Description, "Do not repeat") ||
-		!strings.Contains(definitions[1].Definition().Description, "value_equals") {
+		!strings.Contains(definitions[1].Definition().Description, "value_equals") ||
+		!strings.Contains(definitions[1].Definition().Description, "resolved target evidence") {
 		t.Fatal("explore_flow contract does not expose budgets and repeat/value guidance")
 	}
 	var flowSchema map[string]any
@@ -456,11 +458,17 @@ func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *t
 		t.Fatalf("actions.minItems = %#v, want 0", actions["minItems"])
 	}
 	actionProperties := actions["items"].(map[string]any)["properties"].(map[string]any)
+	if flowSchema["properties"].(map[string]any)["schema_version"].(map[string]any)["const"] != "grounding.query.v1" {
+		t.Fatal("explore_flow schema does not expose grounding query version")
+	}
 	if _, exists := actionProperties["plan_step_id"]; !exists {
 		t.Fatal("explore_flow action schema does not expose plan_step_id")
 	}
 	if _, exists := actionProperties["locator"]; !exists {
 		t.Fatal("explore_flow action schema does not expose structured locator")
+	}
+	if _, exists := actionProperties["target"]; exists {
+		t.Fatal("explore_flow action schema still exposes legacy string target")
 	}
 	if _, exists := actionProperties["condition"]; !exists {
 		t.Fatal("explore_flow action schema does not expose structured condition")

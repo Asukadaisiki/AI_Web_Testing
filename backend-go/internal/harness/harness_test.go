@@ -120,6 +120,24 @@ func (t cancellableTool) Execute(ctx context.Context, _ tools.Call) (tools.Resul
 }
 
 func TestSystemPromptRequiresRealSearchControls(t *testing.T) {
+	for _, phase := range []string{
+		"PHASE 1 - TASK PLANNING",
+		"PHASE 2 - GROUNDING",
+		"PHASE 3 - DSL AUTHORING",
+		"PHASE 4 - EXECUTION AND REPAIR",
+	} {
+		if !strings.Contains(defaultSystemPrompt, phase) {
+			t.Fatalf("system prompt does not define %s", phase)
+		}
+	}
+	if !strings.Contains(defaultSystemPrompt, "must not") ||
+		!strings.Contains(defaultSystemPrompt, "CSS, XPath, DOM node IDs, candidate IDs") ||
+		!strings.Contains(
+			defaultSystemPrompt,
+			"structured semantic LocatorSpec",
+		) {
+		t.Fatal("system prompt does not separate semantic planning from grounding")
+	}
 	if !strings.Contains(defaultSystemPrompt, "real input step followed by the real search-control click") {
 		t.Fatal("system prompt does not require canonical search control actions")
 	}

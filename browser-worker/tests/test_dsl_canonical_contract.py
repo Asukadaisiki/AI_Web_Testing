@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from pydantic import ValidationError
 
 from browser_worker.capabilities.browser_execution import execute_browser_case
-from browser_worker.contracts.dsl import DSLCase, load_canonical_dsl
 from browser_worker.contracts.browser_executions import BrowserExecutionRequest
+from browser_worker.contracts.dsl import DSLCase, load_canonical_dsl
 from browser_worker.contracts.executions import ExecutionReport, StepExecutionEvidence
-
 
 FIXTURE_PATH = Path(__file__).parents[2] / "testdata" / "dsl_canonical_contract.json"
 RESEARCH_FIXTURE_PATH = (

@@ -11,11 +11,15 @@ from browser_worker.contracts.browser_observation import (
     BROWSER_OBSERVATION_VERSION,
     LOCATOR_KINDS,
     BrowserObservation,
+    ResolvedTargetEvidence,
     TargetBinding,
     canonical_sha256,
     validate_locator_spec,
 )
-from browser_worker.exploration.observation import build_browser_observation
+from browser_worker.exploration.observation import (
+    build_browser_observation,
+    build_resolved_target_evidence,
+)
 from browser_worker.locators.compiler import compile_locator
 
 ROOT = Path(__file__).parents[2]
@@ -400,6 +404,55 @@ class BrowserObservationContractTest(unittest.TestCase):
             first["elements"][0]["locators"][0]["candidate_id"],
             second["elements"][0]["locators"][0]["candidate_id"],
         )
+
+    def test_grounding_query_produces_resolved_target_evidence(self) -> None:
+        locator = {
+            "kind": "placeholder",
+            "value": "Search Product",
+            "exact": True,
+        }
+        observation = build_browser_observation(
+            url="https://example.test/products",
+            title="Products",
+            state_id="S0",
+            revision=1,
+            probe_id="probe-query",
+            requested_locators=[locator],
+            nodes=[
+                {
+                    "node_id": "search",
+                    "role": "textbox",
+                    "a11y_name": "Search Product",
+                    "dom": {
+                        "tag": "input",
+                        "attrs": {
+                            "id": "search_product",
+                            "placeholder": "Search Product",
+                        },
+                        "connected": True,
+                        "visible": True,
+                        "enabled": True,
+                    },
+                }
+            ],
+        )
+
+        resolved = build_resolved_target_evidence(
+            observation,
+            plan_step_id="input_search",
+            step_index=0,
+            action_index=0,
+            action="input",
+            locator_value=locator,
+            action_status="succeeded",
+        )
+
+        self.assertIsNotNone(resolved)
+        parsed = ResolvedTargetEvidence.model_validate(resolved)
+        self.assertEqual(parsed.plan_step_id, "input_search")
+        self.assertEqual(parsed.element_ref, "S0:search")
+        self.assertEqual(parsed.locator.kind, "placeholder")
+        self.assertEqual(parsed.runtime_match_count, 1)
 
     def test_target_binding_rejects_xpath_inside_shadow_root(self) -> None:
         payload = {

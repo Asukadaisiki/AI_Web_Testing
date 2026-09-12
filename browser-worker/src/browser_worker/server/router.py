@@ -2,10 +2,14 @@
 
 from fastapi import APIRouter
 
-from browser_worker.server.routes.browser_capabilities import router as browser_capabilities_router
-from browser_worker.server.routes.browser_executions import router as browser_executions_router
-from browser_worker.server.routes.health import router as health_router
 from browser_worker.runtime.config import get_settings
+from browser_worker.server.routes.browser_capabilities import (
+    router as browser_capabilities_router,
+)
+from browser_worker.server.routes.browser_executions import (
+    router as browser_executions_router,
+)
+from browser_worker.server.routes.health import router as health_router
 
 
 def build_api_router() -> APIRouter:

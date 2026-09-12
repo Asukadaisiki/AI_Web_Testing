@@ -44,22 +44,83 @@ class BrowserCapabilityContractTest(unittest.TestCase):
         self.assertEqual(action.locator.kind, "role")
         self.assertEqual(action.condition.type, "value_equals")
 
-    def test_structured_exploration_locator_rejects_css_and_click(self) -> None:
-        invalid_actions = [
+    def test_all_actions_accept_structured_semantic_locators(self) -> None:
+        parsed = ExploreFlowArguments.model_validate(
             {
-                "action": "wait_for",
-                "locator": {"kind": "css", "value": "#quantity"},
-            },
-            {
-                "action": "click",
-                "locator": {"kind": "role", "role": "button", "name": "Save"},
-            },
-        ]
-        for action in invalid_actions:
-            with self.subTest(action=action), self.assertRaises(ValueError):
-                ExploreFlowArguments.model_validate(
-                    {"steps": [{"actions": [action]}]}
-                )
+                "steps": [
+                    {
+                        "actions": [
+                            {
+                                "action": "input",
+                                "plan_step_id": "input_search",
+                                "locator": {
+                                    "kind": "placeholder",
+                                    "value": "Search",
+                                },
+                                "value": "Blue Top",
+                            },
+                            {
+                                "action": "click",
+                                "plan_step_id": "click_search",
+                                "locator": {
+                                    "kind": "role",
+                                    "role": "button",
+                                    "name": "Search",
+                                },
+                            },
+                        ]
+                    }
+                ]
+            }
+        )
+
+        first = parsed.steps[0].actions[0].locator
+        second = parsed.steps[0].actions[1].locator
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        assert first is not None
+        assert second is not None
+        self.assertEqual(parsed.schema_version, "grounding.query.v1")
+        self.assertEqual(first.kind, "placeholder")
+        self.assertEqual(second.kind, "role")
+
+    def test_structured_exploration_locator_rejects_css(self) -> None:
+        with self.assertRaises(ValueError):
+            ExploreFlowArguments.model_validate(
+                {
+                    "steps": [
+                        {
+                            "actions": [
+                                {
+                                    "action": "wait_for",
+                                    "locator": {
+                                        "kind": "css",
+                                        "value": "#quantity",
+                                    },
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+
+    def test_explore_flow_rejects_legacy_string_target(self) -> None:
+        with self.assertRaises(ValueError):
+            ExploreFlowArguments.model_validate(
+                {
+                    "steps": [
+                        {
+                            "actions": [
+                                {
+                                    "action": "click",
+                                    "plan_step_id": "submit",
+                                    "target": "Submit",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
 
     def test_same_project_sessions_apply_independent_context_policies(self) -> None:
         flow_arguments = {

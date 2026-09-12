@@ -17,13 +17,16 @@ from browser_worker.contracts.browser_observation import (
     ContextPath,
     DOMFact,
     ElementFact,
+    LocatorSpec,
     ObservationArtifact,
     ObservationRelation,
     ObservedLocator,
     PageStateFact,
+    ResolvedTargetEvidence,
     RuntimeFact,
     canonical_sha256,
     validate_locator_spec,
+    validate_semantic_locator_spec,
 )
 from browser_worker.locators.compiler import compile_locator
 
@@ -70,6 +73,7 @@ def build_browser_observation(
     page=None,
     artifact_root: Path | None = None,
     previous_state_sha256: str | None = None,
+    requested_locators: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     effective_probe_id = probe_id or "probe_" + canonical_sha256(
         {
@@ -80,9 +84,20 @@ def build_browser_observation(
         }
     )[:24]
     elements = [
-        _element_fact(node, state_id, effective_probe_id)
+        _element_fact(
+            node,
+            state_id,
+            effective_probe_id,
+            requested_locators=requested_locators,
+        )
         for node in _bounded_nodes(nodes)
     ]
+    _attach_runtime_requested_locators(
+        elements,
+        page=page,
+        probe_id=effective_probe_id,
+        requested_locators=requested_locators,
+    )
     _set_observed_counts(elements, page=page)
     relations = _relations(elements)
     state_payload = {
@@ -154,6 +169,8 @@ def _element_fact(
     node: dict[str, Any],
     state_id: str,
     probe_id: str,
+    *,
+    requested_locators: list[dict[str, Any]] | None = None,
 ) -> ElementFact:
     dom = node.get("dom") if isinstance(node.get("dom"), dict) else {}
     attrs = {
@@ -192,7 +209,7 @@ def _element_fact(
     ) and input_type not in {"button", "checkbox", "file", "hidden", "radio", "reset", "submit"}
     if input_type == "password":
         dom_text = ""
-    return ElementFact(
+    element = ElementFact(
         element_ref=element_ref,
         context_path=context_path,
         a11y=A11yFact(
@@ -224,6 +241,245 @@ def _element_fact(
             context_path=context_path,
         ),
     )
+    for raw_locator in requested_locators or []:
+        try:
+            locator = validate_semantic_locator_spec(raw_locator)
+        except ValueError:
+            continue
+        if not _element_matches_locator(element, locator):
+            continue
+        element.locators.append(
+            _observed_locator(
+                element_ref=element.element_ref,
+                probe_id=probe_id,
+                context_path=element.context_path,
+                locator=locator.model_dump(mode="json"),
+                provenance="grounding_query",
+                observed_count=0,
+            )
+        )
+    deduplicated: dict[str, ObservedLocator] = {}
+    for locator in element.locators:
+        key = canonical_sha256(locator.locator.model_dump(mode="json"))
+        deduplicated[key] = locator
+    element.locators = list(deduplicated.values())
+    return element
+
+
+def build_resolved_target_evidence(
+    observation_value: dict[str, Any],
+    *,
+    plan_step_id: str,
+    step_index: int,
+    action_index: int,
+    action: str,
+    locator_value: dict[str, Any],
+    action_status: str = "resolved",
+) -> dict[str, Any] | None:
+    observation = BrowserObservation.model_validate(observation_value)
+    if not observation.probe_id:
+        return None
+    locator = validate_semantic_locator_spec(locator_value)
+    locator_key = canonical_sha256(locator.model_dump(mode="json"))
+    matched: list[tuple[ElementFact, ObservedLocator]] = []
+    for element in observation.elements:
+        for candidate in element.locators:
+            if (
+                canonical_sha256(candidate.locator.model_dump(mode="json"))
+                == locator_key
+                and candidate.observed_count == 1
+            ):
+                matched.append((element, candidate))
+    if len(matched) != 1:
+        return None
+    element, candidate = matched[0]
+    if not element.runtime.visible:
+        return None
+    if action in {"click", "input"} and not element.runtime.enabled:
+        return None
+    if action == "input" and not element.runtime.editable:
+        return None
+    return ResolvedTargetEvidence(
+        probe_id=observation.probe_id,
+        plan_step_id=plan_step_id,
+        step_index=step_index,
+        action_index=action_index,
+        action=action,
+        observation_id=observation.observation_id,
+        page_state_id=observation.page_state.state_id,
+        page_state_sha256=observation.page_state.state_sha256,
+        element_ref=element.element_ref,
+        candidate_id=candidate.candidate_id or "",
+        locator=candidate.locator,
+        context_path=element.context_path,
+        provenance=candidate.provenance,
+        runtime_match_count=1,
+        visible=True,
+        enabled=element.runtime.enabled,
+        editable=element.runtime.editable,
+        score=_locator_score(candidate.locator.kind),
+        action_status=action_status,
+    ).model_dump(mode="json")
+
+
+def _element_matches_locator(element: ElementFact, locator: LocatorSpec) -> bool:
+    if locator.kind == "scoped":
+        return False
+    a11y = element.a11y
+    dom = element.dom
+    if locator.kind == "role":
+        if a11y is None or a11y.role.casefold() != locator.role.casefold():
+            return False
+        if locator.name is None:
+            return True
+        if locator.exact:
+            return a11y.name == locator.name
+        return locator.name.casefold() in a11y.name.casefold()
+    if dom is None:
+        return False
+    if locator.kind == "placeholder":
+        return _value_matches(
+            dom.attrs.get("placeholder", ""),
+            locator.value,
+            locator.exact,
+        )
+    if locator.kind == "label":
+        return _value_matches(
+            dom.attrs.get("aria-label", ""),
+            locator.value,
+            locator.exact,
+        )
+    if locator.kind == "test_id":
+        return dom.attrs.get("data-testid", "") == locator.value
+    if locator.kind == "text":
+        values = [dom.text, a11y.name if a11y else ""]
+        return any(
+            _value_matches(value, locator.value, locator.exact)
+            for value in values
+        )
+    return False
+
+
+def _attach_runtime_requested_locators(
+    elements: list[ElementFact],
+    *,
+    page,
+    probe_id: str,
+    requested_locators: list[dict[str, Any]] | None,
+) -> None:
+    if page is None:
+        return
+    for raw_locator in requested_locators or []:
+        try:
+            locator = validate_semantic_locator_spec(raw_locator)
+            compiled = compile_locator(page, locator)
+            if compiled.count() != 1:
+                continue
+            fingerprint = compiled.first.evaluate(
+                """
+                element => ({
+                  tag: element.tagName.toLowerCase(),
+                  text: (element.innerText || element.textContent || "")
+                    .replace(/\\s+/g, " ").trim().slice(0, 256),
+                  role: element.getAttribute("role") || "",
+                  attrs: {
+                    id: element.getAttribute("id") || "",
+                    name: element.getAttribute("name") || "",
+                    href: element.getAttribute("href") || "",
+                    placeholder: element.getAttribute("placeholder") || "",
+                    aria_label: element.getAttribute("aria-label") || "",
+                    data_testid: element.getAttribute("data-testid") || ""
+                  }
+                })
+                """
+            )
+        except Exception:
+            continue
+        matched = [
+            element
+            for element in elements
+            if _element_matches_fingerprint(element, fingerprint)
+        ]
+        if len(matched) != 1:
+            continue
+        element = matched[0]
+        element.locators.append(
+            _observed_locator(
+                element_ref=element.element_ref,
+                probe_id=probe_id,
+                context_path=element.context_path,
+                locator=locator.model_dump(mode="json"),
+                provenance="grounding_query_runtime",
+                observed_count=1,
+            )
+        )
+        deduplicated: dict[str, ObservedLocator] = {}
+        for candidate in element.locators:
+            key = canonical_sha256(candidate.locator.model_dump(mode="json"))
+            deduplicated[key] = candidate
+        element.locators = list(deduplicated.values())
+
+
+def _element_matches_fingerprint(
+    element: ElementFact,
+    fingerprint: object,
+) -> bool:
+    if not isinstance(fingerprint, dict) or element.dom is None:
+        return False
+    if element.dom.tag.casefold() != str(
+        fingerprint.get("tag") or ""
+    ).casefold():
+        return False
+    raw_attrs = fingerprint.get("attrs")
+    attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
+    pairs = (
+        ("id", "id"),
+        ("name", "name"),
+        ("href", "href"),
+        ("placeholder", "placeholder"),
+        ("aria_label", "aria-label"),
+        ("data_testid", "data-testid"),
+    )
+    stable = [
+        (dom_key, str(attrs.get(js_key) or ""))
+        for js_key, dom_key in pairs
+        if str(attrs.get(js_key) or "")
+    ]
+    if stable:
+        return all(
+            element.dom.attrs.get(key, "") == value
+            for key, value in stable
+        )
+    text = str(fingerprint.get("text") or "")
+    role = str(fingerprint.get("role") or "")
+    return bool(
+        text
+        and element.dom.text == text
+        and (
+            not role
+            or (
+                element.a11y is not None
+                and element.a11y.role.casefold() == role.casefold()
+            )
+        )
+    )
+
+
+def _value_matches(actual: str, expected: str, exact: bool) -> bool:
+    if exact:
+        return actual == expected
+    return expected.casefold() in actual.casefold()
+
+
+def _locator_score(kind: str) -> float:
+    return {
+        "role": 0.95,
+        "label": 0.93,
+        "test_id": 0.92,
+        "placeholder": 0.9,
+        "text": 0.85,
+        "scoped": 0.97,
+    }.get(kind, 0.5)
 
 
 def _relations(elements: list[ElementFact]) -> list[ObservationRelation]:

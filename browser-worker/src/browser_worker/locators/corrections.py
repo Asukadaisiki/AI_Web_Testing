@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-
 MAX_CONSECUTIVE_FAILURES = 3
 EVENT_TIER0_HIT = "tier0_hit"
 EVENT_TIER0_MISS = "tier0_miss"

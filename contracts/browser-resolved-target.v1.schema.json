@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/browser-resolved-target.v1.schema.json",
+  "title": "Browser ResolvedTargetEvidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "browser.resolved-target.v1"},
+    "probe_id": {"type": "string", "minLength": 1},
+    "plan_step_id": {"type": "string", "minLength": 1},
+    "step_index": {"type": "integer", "minimum": 0},
+    "action_index": {"type": "integer", "minimum": 0},
+    "action": {"type": "string", "enum": ["click", "input", "wait_for"]},
+    "observation_id": {"type": "string", "minLength": 1},
+    "page_state_id": {"type": "string", "minLength": 1},
+    "page_state_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "element_ref": {"type": "string", "minLength": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "locator": {"$ref": "locator-spec.v1.schema.json#/$defs/locator"},
+    "context_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frames": {"type": "array", "items": {"type": "string"}},
+        "shadow_hosts": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["frames", "shadow_hosts"]
+    },
+    "provenance": {"type": "string", "minLength": 1},
+    "runtime_match_count": {"const": 1},
+    "visible": {"const": true},
+    "enabled": {"type": "boolean"},
+    "editable": {"type": "boolean"},
+    "score": {"type": "number", "minimum": 0, "maximum": 1},
+    "action_status": {
+      "type": "string",
+      "enum": ["resolved", "succeeded", "failed"]
+    }
+  },
+  "required": [
+    "schema_version",
+    "probe_id",
+    "plan_step_id",
+    "step_index",
+    "action_index",
+    "action",
+    "observation_id",
+    "page_state_id",
+    "page_state_sha256",
+    "element_ref",
+    "candidate_id",
+    "locator",
+    "context_path",
+    "provenance",
+    "runtime_match_count",
+    "visible",
+    "enabled",
+    "editable",
+    "score",
+    "action_status"
+  ]
+}

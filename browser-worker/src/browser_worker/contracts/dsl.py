@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
 
 DSL_CANONICAL_VERSION = "dsl.canonical.v1"
 DSL_CANONICAL_VERSION_V1 = DSL_CANONICAL_VERSION

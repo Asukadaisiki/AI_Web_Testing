@@ -6,7 +6,10 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from browser_worker.contracts.browser_observation import LocatorSpec
+from browser_worker.contracts.browser_observation import (
+    LocatorSpec,
+    validate_semantic_locator_spec,
+)
 from browser_worker.contracts.dsl import DSLModel
 
 BrowserCapabilityName = Literal[
@@ -39,31 +42,22 @@ class ExploreFlowWaitCondition(DSLModel):
 class ExploreFlowAction(DSLModel):
     action: Literal["click", "input", "wait_for"]
     plan_step_id: str | None = Field(default=None, min_length=1, max_length=64)
-    target: str | None = Field(default=None, min_length=1)
-    locator: LocatorSpec | None = None
+    locator: LocatorSpec
     condition: ExploreFlowWaitCondition | None = None
     value: str | None = None
     timeout_ms: int | None = Field(default=None, ge=1, le=60000)
 
     @model_validator(mode="after")
     def validate_target_and_condition(self) -> ExploreFlowAction:
-        if (self.target is None) == (self.locator is None):
-            raise ValueError("provide exactly one of target or locator")
-        if self.locator is not None and self.locator.kind not in {
-            "role",
-            "label",
-            "placeholder",
-            "text",
-        }:
-            raise ValueError("exploration locator must use a semantic kind")
-        if self.locator is not None and self.action != "wait_for":
-            raise ValueError("structured exploration locator is only supported by wait_for")
+        validate_semantic_locator_spec(self.locator)
+        if self.action in {"click", "input"} and self.plan_step_id is None:
+            raise ValueError("click and input require plan_step_id")
         if self.condition is not None and self.action != "wait_for":
             raise ValueError("condition is only supported by wait_for")
         if (
             self.condition is not None
             and self.condition.type == "value_equals"
-            and (self.locator is None or self.condition.expected is None)
+            and self.condition.expected is None
         ):
             raise ValueError(
                 "value_equals requires a structured locator and expected value"
@@ -78,6 +72,7 @@ class ExploreFlowStep(DSLModel):
 
 
 class ExploreFlowArguments(DSLModel):
+    schema_version: Literal["grounding.query.v1"] = "grounding.query.v1"
     base_url: str | None = None
     flow_description: str | None = None
     observation_schema_version: Literal["v1", "v2"] = "v1"

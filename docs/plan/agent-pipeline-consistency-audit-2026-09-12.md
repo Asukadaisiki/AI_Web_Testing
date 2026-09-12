@@ -2,7 +2,7 @@
 
 日期：2026-09-12
 
-状态：in_progress（Phase A 增量 1-2 已实现，等待新 Run 运行态核验）
+状态：in_progress（Phase A 已完成；Phase B 增量 1 已实现，等待新 Run 核验）
 
 范围：任务编排、工具调用、上下文管理、任务规划、Explore、元素信息归类、
 DSL 治理、Playwright 解析、Runner 执行、报告归因。
@@ -292,6 +292,38 @@ Short Interaction Tail
 5. `observed_count` 使用与 Runner 相同的 context_path。
 6. ElementFact 裁剪改为“当前 PlanStep 相关元素优先 + 交互元素 + 必要祖先/关系节点”。
 7. 移除 research-v2 主链对 legacy `node.name` 和字符串 parser 的依赖。
+
+增量 1 规格：
+
+- 将 Agent prompt 明确拆成 Task Planning、Grounding、DSL Authoring 和
+  Execution/Repair 四个阶段。TaskPlan 只描述业务动作、可观察语义、顺序、条件和
+  副作用，不包含 CSS/XPath 或假定已观察到的 DOM 事实。
+- `explore_flow` 的 click/input/wait_for 只允许结构化语义 LocatorSpec，并统一通过
+  Browser Worker `compile_locator` 执行；移除字符串 `target` 输入和 legacy resolver。
+- 每个成功解析的动作返回 `browser.resolved-target.v1`，至少包含
+  probe/observation/page-state、element/candidate、LocatorSpec、context path、
+  runtime count、visible/enabled 和 action status。
+- Go 仅在 resolved target 完整且与同一 Observation 一致时构造 TargetBinding，不再
+  使用 action target 文本筛选 Observation；缺少 resolved target 的 flow 结果不得绑定。
+- 完整 BrowserObservation 继续持久化为 Artifact，模型摘要保留页面结构索引和
+  resolved target。按条件搜索完整 Observation 的专用工具放入后续增量，避免把完整
+  页面 JSON 直接追加到 transcript。
+- 本增量不提高 turn/token 限额，不运行付费 E2E，不改变正式 Runner 的候选唯一性
+  门禁。
+
+增量 1 完成情况：
+
+- Agent system prompt 已拆分为 Task Planning、Grounding、DSL Authoring 和
+  Execution/Repair 四个阶段；`set_task_plan` 明确禁止在观察前编造 DOM/locator。
+- 新增 `grounding.query.v1` 和 `browser.resolved-target.v1` 共享 Schema。
+- `explore_flow` 的 click/input/wait_for 仅接受 role/name/label/placeholder/text/
+  test-id/scoped 语义 Locator，并统一调用 Browser Worker `compile_locator`。
+- BrowserObservation 将请求 Locator 纳入候选并计算实时 count；成功动作返回
+  probe/observation/page-state/element/candidate/locator/runtime 状态。
+- Go 会将 ResolvedTargetEvidence 与同一 BrowserObservation 逐字段交叉校验，再直接
+  构造 TargetBinding；缺失或不合法的证据不会回退文本匹配。
+- 完整 Observation 仍存 Artifact，模型摘要已保留 resolved target；按条件查询完整
+  Observation 的独立工具留在 Phase B 下一增量。
 
 退出门槛：
 

@@ -6,18 +6,18 @@ import socket
 import threading
 import time
 import unittest
-from urllib.request import Request, urlopen
 from unittest.mock import patch
+from urllib.request import Request, urlopen
 
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
 
-from browser_worker.exploration.page_explorer import BrowserSessionManager
-from browser_worker.server.router import build_api_router
 from browser_worker.capabilities.browser_capabilities import (
     _BrowserCapabilityRuntime,
     shutdown_browser_capabilities,
 )
+from browser_worker.exploration.page_explorer import BrowserSessionManager
+from browser_worker.server.router import build_api_router
 
 
 class _FakePage:

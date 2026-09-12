@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -649,7 +650,7 @@ type probeFlowRequest struct {
 		Actions     []struct {
 			PlanStepID string `json:"plan_step_id"`
 			Action     string `json:"action"`
-			Target     string `json:"target"`
+			Locator    any    `json:"locator"`
 			Value      string `json:"value"`
 			Condition  struct {
 				Type     string `json:"type"`
@@ -668,86 +669,69 @@ func mapProbeActionOwners(
 	if json.Unmarshal(arguments, &request) != nil {
 		return nil, errors.New("invalid explore_flow arguments")
 	}
-	allowedSteps := probeReachableSteps(plan, len(pending))
-	pendingCursor := 0
 	owners := make(map[string]string)
 	for stepIndex, group := range request.Steps {
 		for actionIndex, action := range group.Actions {
+			if action.Locator == nil {
+				return nil, errors.New(
+					"explore_flow action requires structured locator",
+				)
+			}
 			value := action.Value
 			if value == "" &&
 				strings.EqualFold(action.Condition.Type, "value_equals") {
 				value = action.Condition.Expected
 			}
-			haystack := action.Action + " " + action.Target + " " +
+			locatorJSON, _ := json.Marshal(action.Locator)
+			haystack := action.Action + " " + string(locatorJSON) + " " +
 				value + " " + group.Description
 			if forbidden(plan.ForbiddenActions, haystack) {
 				return nil, errors.New("explore_flow contains a forbidden action")
 			}
-			var matchedSteps []Step
-			if action.PlanStepID != "" {
-				matched, ok := stepByID(pending, action.PlanStepID)
-				if !ok {
+			if action.PlanStepID == "" {
+				if normalize(action.Action) != "wait_for" {
 					return nil, fmt.Errorf(
-						"explore_flow action references unbound plan step %q",
-						action.PlanStepID,
-					)
-				}
-				if !probeActionMatches(matched.Action, action.Action) ||
-					!probeValueMatches(matched, action.Action, value) {
-					return nil, fmt.Errorf(
-						"explore_flow action %q does not match plan step %q",
+						"explore_flow %s action requires plan_step_id",
 						action.Action,
-						action.PlanStepID,
 					)
 				}
-				matchedSteps = []Step{matched}
-			} else {
-				matchedSteps = matchingProbeSteps(
-					allowedSteps,
-					action.Action,
-					action.Target,
-					value,
+				continue
+			}
+			matched, ok := stepByID(plan.Steps, action.PlanStepID)
+			if !ok {
+				return nil, fmt.Errorf(
+					"explore_flow action references unknown plan step %q",
+					action.PlanStepID,
 				)
 			}
-			if len(matchedSteps) == 0 {
-				if normalize(action.Action) == "wait_for" {
-					continue
-				}
-				matched, nextCursor, ok := nextPendingProbeStep(
-					pending,
-					pendingCursor,
+			if !probeActionMatches(matched.Action, action.Action) ||
+				!probeValueMatches(matched, action.Action, value) {
+				return nil, fmt.Errorf(
+					"explore_flow action %q does not match plan step %q",
 					action.Action,
-					value,
-				)
-				if !ok {
-					return nil, fmt.Errorf(
-						"explore_flow action %q target %q is not owned by the bound plan steps",
-						action.Action,
-						action.Target,
-					)
-				}
-				matchedSteps = []Step{matched}
-				pendingCursor = nextCursor
-			} else {
-				pendingCursor = advancePendingCursor(
-					pending,
-					pendingCursor,
-					matchedSteps,
+					action.PlanStepID,
 				)
 			}
-			for _, step := range matchedSteps {
-				if normalize(action.Action) != "wait_for" &&
-					(step.SideEffect == SideEffectExternal ||
-						step.SideEffect == SideEffectUnknown) {
-					return nil, fmt.Errorf(
-						"plan step %q cannot be probed because side_effect is %q",
-						step.ID,
-						step.SideEffect,
-					)
-				}
+			if normalize(action.Action) != "wait_for" &&
+				(matched.SideEffect == SideEffectExternal ||
+					matched.SideEffect == SideEffectUnknown) {
+				return nil, fmt.Errorf(
+					"plan step %q cannot be probed because side_effect is %q",
+					matched.ID,
+					matched.SideEffect,
+				)
+			}
+			if matched.Status == StepGrounded {
+				continue
+			}
+			if _, ok := stepByID(pending, matched.ID); !ok {
+				return nil, fmt.Errorf(
+					"explore_flow action references unbound plan step %q",
+					action.PlanStepID,
+				)
 			}
 			owners[probeActionKey(stepIndex, actionIndex)] =
-				matchedSteps[0].ID
+				matched.ID
 		}
 	}
 	return owners, nil
@@ -760,21 +744,6 @@ func stepByID(steps []Step, id string) (Step, bool) {
 		}
 	}
 	return Step{}, false
-}
-
-func probeReachableSteps(plan Plan, pendingCount int) []Step {
-	firstPending := len(plan.Steps)
-	for index, step := range plan.Steps {
-		if step.Status != StepGrounded {
-			firstPending = index
-			break
-		}
-	}
-	end := firstPending + pendingCount
-	if end > len(plan.Steps) {
-		end = len(plan.Steps)
-	}
-	return plan.Steps[:end]
 }
 
 func validateGenerationArguments(
@@ -894,7 +863,7 @@ func contiguousPendingSteps(plan Plan, ids []string) ([]Step, error) {
 			break
 		}
 	}
-	if firstSubmitted < 0 || firstSubmitted > first {
+	if firstSubmitted != first {
 		return nil, fmt.Errorf(
 			"expected next plan step %q, got %q",
 			plan.Steps[first].ID,
@@ -914,75 +883,10 @@ func contiguousPendingSteps(plan Plan, ids []string) ([]Step, error) {
 			)
 		}
 	}
-	end := firstSubmitted + len(ids)
-	if end <= first {
-		return nil, fmt.Errorf(
-			"plan_step_ids must include next pending step %q",
-			plan.Steps[first].ID,
-		)
-	}
-	return append([]Step(nil), plan.Steps[first:end]...), nil
-}
-
-func matchingProbeSteps(
-	reachable []Step,
-	action string,
-	target string,
-	value string,
-) []Step {
-	matched := make([]Step, 0, 1)
-	for _, step := range reachable {
-		if matchesStep(step, action, target, value) {
-			matched = append(matched, step)
-		}
-	}
-	if len(matched) > 0 {
-		return matched
-	}
-	if !isSelectorTarget(target) && normalize(action) != "input" {
-		return nil
-	}
-	for _, step := range reachable {
-		if probeActionMatches(step.Action, action) &&
-			probeValueMatches(step, action, value) {
-			matched = append(matched, step)
-		}
-	}
-	if len(matched) == 1 {
-		return matched
-	}
-	return nil
-}
-
-func nextPendingProbeStep(
-	pending []Step,
-	cursor int,
-	action string,
-	value string,
-) (Step, int, bool) {
-	for index := cursor; index < len(pending); index++ {
-		step := pending[index]
-		if probeActionMatches(step.Action, action) &&
-			probeValueMatches(step, action, value) {
-			return step, index + 1, true
-		}
-	}
-	return Step{}, cursor, false
-}
-
-func advancePendingCursor(
-	pending []Step,
-	cursor int,
-	matched []Step,
-) int {
-	for index := cursor; index < len(pending); index++ {
-		for _, step := range matched {
-			if pending[index].ID == step.ID {
-				return index + 1
-			}
-		}
-	}
-	return cursor
+	return append(
+		[]Step(nil),
+		plan.Steps[firstSubmitted:firstSubmitted+len(ids)]...,
+	), nil
 }
 
 func isSelectorTarget(target string) bool {
@@ -993,17 +897,6 @@ func isSelectorTarget(target string) bool {
 		strings.HasPrefix(target, "//") ||
 		strings.HasPrefix(target, "css=") ||
 		strings.HasPrefix(target, "xpath=")
-}
-
-func matchesStep(
-	step Step,
-	action string,
-	target string,
-	value string,
-) bool {
-	return probeActionMatches(step.Action, action) &&
-		semanticTargetMatches(step.Target, target) &&
-		probeValueMatches(step, action, value)
 }
 
 func probeActionMatches(planned string, actual string) bool {
@@ -1180,12 +1073,13 @@ type observedFlowResult struct {
 	Pages       []struct {
 		Observation observedSnapshot `json:"observation_v2"`
 		Actions     []struct {
-			StepIndex   int    `json:"step_index"`
-			ActionIndex int    `json:"action_index"`
-			Action      string `json:"action"`
-			Target      string `json:"target"`
-			Status      string `json:"status"`
-			Phase       string `json:"phase"`
+			StepIndex      int                                     `json:"step_index"`
+			ActionIndex    int                                     `json:"action_index"`
+			Action         string                                  `json:"action"`
+			Target         string                                  `json:"target"`
+			Status         string                                  `json:"status"`
+			Phase          string                                  `json:"phase"`
+			ResolvedTarget *browsercontract.ResolvedTargetEvidence `json:"resolved_target"`
 		} `json:"actions"`
 	} `json:"pages"`
 }
@@ -1212,10 +1106,13 @@ func deriveTargetBindings(
 			if stepIndex < 0 {
 				continue
 			}
-			binding := buildTargetBinding(
+			if action.ResolvedTarget == nil {
+				continue
+			}
+			binding := buildResolvedTargetBinding(
 				plan,
 				plan.Steps[stepIndex],
-				action.Target,
+				*action.ResolvedTarget,
 				page.Observation,
 			)
 			if binding != nil {
@@ -1224,6 +1121,79 @@ func deriveTargetBindings(
 		}
 	}
 	return bindings
+}
+
+func buildResolvedTargetBinding(
+	plan Plan,
+	step Step,
+	resolved browsercontract.ResolvedTargetEvidence,
+	observation observedSnapshot,
+) *browsercontract.TargetBinding {
+	if resolved.Validate() != nil ||
+		resolved.ActionStatus != "succeeded" ||
+		resolved.PlanStepID != step.ID ||
+		!probeActionMatches(step.Action, resolved.Action) ||
+		!resolvedTargetMatchesObservation(resolved, observation) {
+		return nil
+	}
+	binding, err := browsercontract.NewTargetBinding(
+		browsercontract.TargetBinding{
+			PlanID: plan.ID, PlanVersion: plan.Version,
+			PlanStepID: step.ID, SemanticTarget: step.Target,
+			ProbeID: resolved.ProbeID, Action: step.Action,
+			PageStateID:       resolved.PageStateID,
+			ObservationID:     resolved.ObservationID,
+			ObservationSHA256: resolved.PageStateSHA256,
+			ElementRefs:       []string{resolved.ElementRef},
+			Candidates: []browsercontract.LocatorCandidate{{
+				CandidateID:   resolved.CandidateID,
+				ElementRef:    resolved.ElementRef,
+				ContextPath:   resolved.ContextPath,
+				Locator:       resolved.Locator,
+				Provenance:    resolved.Provenance,
+				ObservedCount: resolved.RuntimeMatchCount,
+				Visible:       resolved.Visible,
+				Enabled:       resolved.Enabled,
+				Score:         resolved.Score,
+			}},
+			SelectedCandidateID: resolved.CandidateID,
+		},
+	)
+	if err != nil {
+		return nil
+	}
+	return &binding
+}
+
+func resolvedTargetMatchesObservation(
+	resolved browsercontract.ResolvedTargetEvidence,
+	observation observedSnapshot,
+) bool {
+	if observation.SchemaVersion != browsercontract.ObservationSchemaVersion ||
+		observation.ProbeID != resolved.ProbeID ||
+		observation.ObservationID != resolved.ObservationID ||
+		observation.PageState.StateID != resolved.PageStateID ||
+		observation.PageState.SHA256 != resolved.PageStateSHA256 {
+		return false
+	}
+	for _, element := range observation.Elements {
+		if element.ElementRef != resolved.ElementRef ||
+			!reflect.DeepEqual(element.ContextPath, resolved.ContextPath) ||
+			element.Runtime.Visible != resolved.Visible ||
+			element.Runtime.Enabled != resolved.Enabled ||
+			element.Runtime.Editable != resolved.Editable {
+			continue
+		}
+		for _, candidate := range element.Locators {
+			if candidate.CandidateID == resolved.CandidateID &&
+				candidate.Provenance == resolved.Provenance &&
+				candidate.ObservedCount == resolved.RuntimeMatchCount &&
+				reflect.DeepEqual(candidate.Locator, resolved.Locator) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func derivePageTargetBindings(

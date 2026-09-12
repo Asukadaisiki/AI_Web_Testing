@@ -147,13 +147,13 @@
 - 影响：模型可通过重复规划或重复工具调用消耗 turn/token，导致旧 generation/审批失效，并放大失败路径成本。
 - 根因：Plan revision 与工具幂等分别由局部代码处理，缺少 `state_epoch + normalized signature + outcome` 的持久调用账本。
 - 处理：相同 plan hash 返回当前版本；revision 增加 expected binding、reason、evidence 和次数预算；建立覆盖全部工具结果状态的 ToolCallLedger。
-- 验证：静态核对 `CreateVersion`、`Authorize`、`DefaultToolPolicy` 和 recoverable failure 路径；现有聚焦测试通过但没有 identical-plan/no-op 与失败签名重复门禁。
-- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+- 验证：静态核对 `CreateVersion`、`Authorize`、`DefaultToolPolicy` 和 recoverable failure 路径；现有聚焦测试通过但没有 identical-plan/no-op 与失败签名重复门禁。Run `run_84e3cdde9a0df7d6553c789b` 中 10 次 `explore_flow` 有 6 次失败或授权拒绝，这些调用未占用当前成功摘要驱动的 per-plan/run budget；参数细节变化也使 normalized signature 未报告重复调用。
+- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`；`docs/execution-log.md#2026-09-12--v4-flash-vision-exp-十二轮-grounding-归因`。
 
 ## BUG-180 | Explore 实际命中元素未原样传递给 TargetBinding 和 Runner
 
 - 日期：2026-09-12
-- 状态：open
+- 状态：fixed
 - 严重度：critical
 - 来源：Agent 全链路一致性审计
 - 描述：research-v2 Explore 的 click/input 仍使用字符串、DOM selector 和 semantic fallback 选择元素，部分路径对多匹配结果直接取 `.first`；动作结果不返回实际使用的 element_ref/candidate_id。Go 随后按 target 文本重新匹配 BrowserObservation，Runner 又按 LocatorSpec 和唯一性重新解析。
@@ -163,9 +163,9 @@
   3. Go `buildTargetBinding` 看到多个语义匹配元素而拒绝 binding，或 Runner 在正式页面解析到不同候选。
 - 影响：出现“Explore 成功但 PlanStep 未 grounded”“DSL 编译成功但 Runner 定位不同元素”等核心一致性问题。
 - 根因：Explore resolver、Go semantic binding 和 Runner compiler 是三次独立决策；没有贯穿全链的 ResolvedTargetEvidence。
-- 处理：部分完成。Phase A 已让 probe、BrowserObservation、ElementFact、candidate、TargetBinding、Executable DSL、StepEvidence、FailureSignal 和 Report 使用同一组 lineage ID；仍需在 Phase B 新增 `browser.resolved-target.v1`，让 Explore 实际动作也返回命中的 candidate，并删除 Go 按文本重新匹配。
-- 验证：静态核对 `_resolve_flow_action_locator`、`collect_action_snapshot`、`deriveTargetBindings/buildTargetBinding` 和 `_execute_step_with_candidates`；最近 live 记录中的重复商品动作歧义与该结构一致。
-- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+- 处理：Phase A 已贯通 lineage；Phase B 增量 1 新增 `grounding.query.v1` 和 `browser.resolved-target.v1`。Explore action 只接受结构化语义 Locator，由 Worker 使用共享 `compile_locator` 唯一解析并返回实际 element/candidate；字符串 target 和 legacy flow resolver 已删除。Go 与同一 BrowserObservation 交叉校验后直接构造 TargetBinding，缺少或篡改 resolved target 时不再回退文本匹配。
+- 验证：Go BrowserContract/TaskPlan/Agent/Harness/Tools 聚焦及全量测试通过；Python 全量、Pyright 和 Ruff 全仓 `F/I` 通过；真实 Chromium 2 tests passed，确认 structured click 返回 candidate、element 和 succeeded action status。
+- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`；`docs/execution-log.md#2026-09-12--phase-b-增量-1统一-grounding-与-resolved-target`。
 
 ## BUG-179 | Stage 6 清单未同步已落地的 TaskPlan 状态
 

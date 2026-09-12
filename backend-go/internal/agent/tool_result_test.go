@@ -186,6 +186,64 @@ func TestBuildModelToolSummaryIsDeterministicAndTraceable(t *testing.T) {
 	}
 }
 
+func TestBuildModelToolSummaryPreservesResolvedTarget(t *testing.T) {
+	raw := json.RawMessage(`{
+		"success":true,
+		"pages":[{
+			"url":"https://example.test/form",
+			"page_state":"S0",
+			"status":"success",
+			"actions":[{
+				"step_index":0,
+				"action_index":0,
+				"plan_step_id":"submit",
+				"action":"click",
+				"target":"role=button, name=Submit",
+				"phase":"before",
+				"status":"success",
+				"resolved_target":{
+					"schema_version":"browser.resolved-target.v1",
+					"probe_id":"probe-1",
+					"plan_step_id":"submit",
+					"step_index":0,
+					"action_index":0,
+					"action":"click",
+					"observation_id":"obs-1",
+					"page_state_id":"S0",
+					"page_state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"element_ref":"S0:7",
+					"candidate_id":"candidate-1",
+					"locator":{"kind":"role","role":"button","name":"Submit","exact":true},
+					"context_path":{"frames":[],"shadow_hosts":[]},
+					"provenance":"grounding_query",
+					"runtime_match_count":1,
+					"visible":true,
+					"enabled":true,
+					"editable":false,
+					"score":0.95,
+					"action_status":"succeeded"
+				}
+			}]
+		}]
+	}`)
+
+	encoded, err := BuildModelToolSummary("explore_flow", raw, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(encoded), &summary); err != nil {
+		t.Fatal(err)
+	}
+	resolved := summary.Pages[0].Actions[0].ResolvedTarget
+	if resolved == nil ||
+		resolved.CandidateID != "candidate-1" ||
+		resolved.ElementRef != "S0:7" ||
+		resolved.ActionStatus != "succeeded" {
+		t.Fatalf("resolved target = %#v", resolved)
+	}
+}
+
 func TestBuildModelToolSummaryMergesRepeatedPageStateActions(t *testing.T) {
 	raw := json.RawMessage(`{
 		"success": false,

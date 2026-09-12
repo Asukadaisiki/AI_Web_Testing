@@ -110,6 +110,8 @@ func TestSharedSchemasCompileAndValidateTargetBinding(t *testing.T) {
 	for _, name := range []string{
 		"locator-spec.v1.schema.json",
 		"browser-observation.v2.schema.json",
+		"browser-resolved-target.v1.schema.json",
+		"grounding-query.v1.schema.json",
 		"target-binding.v1.schema.json",
 	} {
 		content := readRepositoryFile(t, "contracts/"+name)
@@ -156,6 +158,62 @@ func TestSharedSchemasCompileAndValidateTargetBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := schema.Validate(value); err != nil {
+		t.Fatal(err)
+	}
+	resolvedSchema, err := compiler.Compile(
+		"https://ai-web-testing.local/contracts/browser-resolved-target.v1.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := ResolvedTargetEvidence{
+		SchemaVersion: ResolvedTargetVersion,
+		ProbeID:       "probe-1", PlanStepID: "submit",
+		StepIndex: 0, ActionIndex: 0, Action: "click",
+		ObservationID: "obs-1", PageStateID: "state-1",
+		PageStateSHA256: repeat("a", 64),
+		ElementRef:      "form:7", CandidateID: "candidate-1",
+		Locator: LocatorSpec{
+			Kind: "role", Role: "button", Name: &name, Exact: true,
+		},
+		ContextPath: ContextPath{Frames: []string{}, ShadowHosts: []string{}},
+		Provenance:  "grounding_query", RuntimeMatchCount: 1,
+		Visible: true, Enabled: true, Score: 0.95,
+		ActionStatus: "succeeded",
+	}
+	if err := resolved.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolvedSchema.Validate(value); err != nil {
+		t.Fatal(err)
+	}
+	groundingSchema, err := compiler.Compile(
+		"https://ai-web-testing.local/contracts/grounding-query.v1.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groundingQuery := map[string]any{
+		"schema_version": "grounding.query.v1",
+		"plan_step_ids":  []any{"submit"},
+		"steps": []any{map[string]any{
+			"actions": []any{map[string]any{
+				"action":       "click",
+				"plan_step_id": "submit",
+				"locator": map[string]any{
+					"kind": "role", "role": "button", "name": "Submit",
+				},
+			}},
+		}},
+	}
+	if err := groundingSchema.Validate(groundingQuery); err != nil {
 		t.Fatal(err)
 	}
 }

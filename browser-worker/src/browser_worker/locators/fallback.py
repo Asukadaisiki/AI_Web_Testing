@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import logging
 
+from browser_worker.contracts.executions import LocatorTrace
 from browser_worker.locators.ai_visual import (
     AILocateResult,
     locate_element_by_vision,
@@ -23,9 +24,7 @@ from browser_worker.locators.semantic import (
     ResolvedLocator,
     resolve_semantic_locator,
 )
-from browser_worker.contracts.executions import LocatorTrace
 from browser_worker.runtime.structured_logging import get_structured_logger
-
 
 logger = logging.getLogger(__name__)
 slog = get_structured_logger(__name__)
@@ -237,7 +236,7 @@ def _try_ai_visual_locate(page, *, target: str) -> AILocateResult | None:
 def _get_vlm_failure_reason() -> str | None:
     """Retrieve the last VLM failure reason from the runtime state."""
     try:
-        from browser_worker.locators.ai_visual import RUNTIME_STATE, _STATE_LOCK
+        from browser_worker.locators.ai_visual import _STATE_LOCK, RUNTIME_STATE
         with _STATE_LOCK:
             return RUNTIME_STATE.last_failure_reason or None
     except Exception:

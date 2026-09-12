@@ -10,7 +10,6 @@ from browser_worker.exploration.page_explorer import (
     _deduplicate_explore_results,
     _filter_a11y_nodes,
     _is_business_candidate,
-    _resolve_from_collected_nodes,
     _same_document_url,
     _wait_for_flow_target,
 )
@@ -376,6 +375,8 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
 
     def test_missing_click_returns_structured_failure(self) -> None:
         page = _FlowPage()
+        missing = MagicMock()
+        missing.count.return_value = 0
         with (
             patch.object(
                 BrowserSessionManager,
@@ -383,8 +384,8 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "browser_worker.exploration.page_explorer._resolve_flow_action_locator",
-                return_value=None,
+                "browser_worker.exploration.page_explorer.compile_locator",
+                return_value=missing,
             ),
             patch(
                 "browser_worker.exploration.page_explorer.collect_a11y_nodes",
@@ -392,7 +393,16 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
             ),
         ):
             result = _collect_flow_a11y(
-                [{"actions": [{"action": "click", "target": "Missing"}]}],
+                [{
+                    "actions": [{
+                        "action": "click",
+                        "locator": {
+                            "kind": "role",
+                            "role": "button",
+                            "name": "Missing",
+                        },
+                    }],
+                }],
                 session_id=7,
             )
 
@@ -400,35 +410,11 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         self.assertEqual(result[-1]["failure"]["code"], "flow_action_failed")
         self.assertEqual(result[-1]["failure"]["action"], "click")
 
-    def test_wait_for_text_prefix_uses_requested_timeout(self) -> None:
-        page = _FlowPage()
-
-        _wait_for_flow_target(page, "text=View Cart", 8123)
-
-        self.assertIn(("get_by_text", "View Cart", True), page.calls)
-        self.assertIn(("wait_for", {"state": "visible", "timeout": 8123}), page.calls)
-
-    def test_wait_for_css_forms_use_locator(self) -> None:
-        for target, expected in (
-            ("#search_product", "#search_product"),
-            (".search-form", ".search-form"),
-            ("css=button.search", "button.search"),
-        ):
-            with self.subTest(target=target):
-                page = _FlowPage()
-                _wait_for_flow_target(page, target, 900)
-                self.assertIn(("locator", expected), page.calls)
-                self.assertIn(
-                    ("wait_for", {"state": "visible", "timeout": 900}),
-                    page.calls,
-                )
-
     def test_wait_for_structured_role_can_assert_control_value(self) -> None:
         page = _FlowPage()
 
         _wait_for_flow_target(
             page,
-            "role=spinbutton",
             900,
             locator_spec={"kind": "role", "role": "spinbutton"},
             condition={"type": "value_equals", "expected": "1"},
@@ -447,36 +433,10 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         ):
             _wait_for_flow_target(
                 _FlowPage(),
-                "role=spinbutton",
                 900,
                 locator_spec={"kind": "role", "role": "spinbutton"},
                 condition={"type": "value_equals", "expected": "2"},
             )
-
-    def test_click_candidate_prefers_interactive_exact_match(self) -> None:
-        page = _FlowPage()
-        locator = _resolve_from_collected_nodes(
-            page,
-            "Products",
-            [
-                {
-                    "role": "banner",
-                    "name": "Home Products Cart",
-                    "dom": {"tag": "header", "attrs": {"id": "header"}},
-                    "verified_selectors": [{"selector": "#header"}],
-                },
-                {
-                    "role": "link",
-                    "name": "Products",
-                    "dom": {"tag": "a", "attrs": {"href": "/products"}},
-                    "verified_selectors": [{"selector": 'a[href="/products"]'}],
-                },
-            ],
-            kind="click",
-        )
-
-        self.assertIsNotNone(locator)
-        self.assertEqual(page.calls[0], ("locator", 'a[href="/products"]'))
 
     def test_dom_supplement_adds_only_unique_verified_controls(self) -> None:
         base = {
@@ -622,7 +582,7 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "browser_worker.exploration.page_explorer._resolve_flow_action_locator",
+                "browser_worker.exploration.page_explorer.compile_locator",
                 return_value=_FlowLocator(page.calls),
             ),
             patch(
@@ -640,7 +600,11 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                         "actions": [
                             {
                                 "action": "click",
-                                "target": "Details",
+                                "locator": {
+                                    "kind": "role",
+                                    "role": "link",
+                                    "name": "Details",
+                                },
                                 "timeout_ms": 100,
                             }
                         ]
@@ -682,7 +646,7 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 return_value=(object(), page),
             ),
             patch(
-                "browser_worker.exploration.page_explorer._resolve_flow_action_locator",
+                "browser_worker.exploration.page_explorer.compile_locator",
                 return_value=_FlowLocator(page.calls),
             ),
             patch(
@@ -692,7 +656,16 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
             patch("browser_worker.exploration.page_explorer.collect_a11y_nodes", side_effect=collect),
         ):
             result = _collect_flow_a11y(
-                [{"actions": [{"action": "click", "target": "Details"}]}],
+                [{
+                    "actions": [{
+                        "action": "click",
+                        "locator": {
+                            "kind": "role",
+                            "role": "link",
+                            "name": "Details",
+                        },
+                    }],
+                }],
                 session_id=7,
             )
 
@@ -703,9 +676,15 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
         self.assertEqual(before["actions"][0]["phase"], "before")
         self.assertEqual(after["actions"][0]["phase"], "after")
         self.assertEqual(before["actions"][0]["action"], "click")
-        self.assertEqual(before["actions"][0]["target"], "Details")
+        self.assertEqual(
+            before["actions"][0]["target"],
+            "role=link, name=Details",
+        )
         self.assertEqual(after["actions"][0]["action"], "click")
-        self.assertEqual(after["actions"][0]["target"], "Details")
+        self.assertEqual(
+            after["actions"][0]["target"],
+            "role=link, name=Details",
+        )
         self.assertTrue(
             all(node["page_state"] == before["page_state"] for node in before["a11y_nodes"])
         )
@@ -745,7 +724,11 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                             {
                                 "action": "wait_for",
                                 "plan_step_id": "ready",
-                                "target": "Ready",
+                                "locator": {
+                                    "kind": "role",
+                                    "role": "button",
+                                    "name": "Ready",
+                                },
                             }
                         ]
                     }

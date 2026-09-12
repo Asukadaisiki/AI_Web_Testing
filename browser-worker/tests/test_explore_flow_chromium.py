@@ -108,7 +108,16 @@ class ExploreFlowChromiumTest(unittest.TestCase):
                     "url": product_url,
                     "description": "product modal",
                     "actions": [
-                        {"action": "click", "target": "#add-to-cart"},
+                        {
+                            "action": "click",
+                            "plan_step_id": "add_to_cart",
+                            "locator": {
+                                "kind": "role",
+                                "role": "button",
+                                "name": "Add to cart",
+                                "exact": True,
+                            },
+                        },
                     ],
                 },
                 {
@@ -117,11 +126,22 @@ class ExploreFlowChromiumTest(unittest.TestCase):
                     "actions": [
                         {
                             "action": "wait_for",
-                            "target": '#cartModal a[href="/view_cart"]',
+                            "locator": {
+                                "kind": "role",
+                                "role": "link",
+                                "name": "View Cart",
+                                "exact": True,
+                            },
                         },
                         {
                             "action": "click",
-                            "target": '#cartModal a[href="/view_cart"]',
+                            "plan_step_id": "open_view_cart",
+                            "locator": {
+                                "kind": "role",
+                                "role": "link",
+                                "name": "View Cart",
+                                "exact": True,
+                            },
                         },
                     ],
                 },
@@ -174,6 +194,27 @@ class ExploreFlowChromiumTest(unittest.TestCase):
                 and action["page_state"] == product_entry["page_state"]
                 for action in product_actions
             )
+        )
+        resolved_action = next(
+            action
+            for action in product_actions
+            if action["step_index"] == 3 and action["phase"] == "before"
+        )
+        self.assertEqual(
+            resolved_action["resolved_target"]["schema_version"],
+            "browser.resolved-target.v1",
+        )
+        self.assertEqual(
+            resolved_action["resolved_target"]["plan_step_id"],
+            "add_to_cart",
+        )
+        self.assertEqual(
+            resolved_action["resolved_target"]["action_status"],
+            "succeeded",
+        )
+        self.assertEqual(
+            resolved_action["resolved_target"]["runtime_match_count"],
+            1,
         )
         self.assertGreater(cart_entry["revision"], product_entry["revision"])
         self.assertEqual(cart_entry["actions"][0]["phase"], "after")

@@ -25,7 +25,6 @@ from browser_worker.contracts.dsl import (
     WaitForStep,
 )
 
-
 ResearchProfile = Literal["research-v1"]
 ResearchIdempotency = Literal["idempotent", "non_idempotent"]
 ResearchSideEffect = Literal[

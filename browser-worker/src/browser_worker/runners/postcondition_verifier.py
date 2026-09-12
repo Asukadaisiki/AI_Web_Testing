@@ -11,7 +11,11 @@ from typing import Callable
 from playwright.sync_api import Page
 
 from browser_worker.contracts.dsl import ConditionSpec
-from browser_worker.contracts.executions import ConditionResult, NetworkEvent, PageStateSnapshot
+from browser_worker.contracts.executions import (
+    ConditionResult,
+    NetworkEvent,
+    PageStateSnapshot,
+)
 
 logger = logging.getLogger(__name__)
 

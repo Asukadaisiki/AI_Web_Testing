@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
 import json
-from pathlib import Path
 import unittest
+from copy import deepcopy
+from pathlib import Path
 
 from pydantic import ValidationError
 
-from browser_worker.exploration.locator_preflight import apply_preflight_to_dsl_by_state
 from browser_worker.contracts.action_ir import (
     EXECUTABLE_CANDIDATE_STRATEGIES,
     validate_research_dsl,
 )
 from browser_worker.contracts.dsl import DSLCase, load_canonical_dsl
-
+from browser_worker.exploration.locator_preflight import apply_preflight_to_dsl_by_state
 
 FIXTURE_PATH = (
     Path(__file__).parents[2] / "testdata" / "dsl_research_v1_contract.json"

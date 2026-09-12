@@ -10,8 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 BROWSER_OBSERVATION_VERSION = "browser.observation.v2"
 TARGET_BINDING_VERSION = "grounding.target-binding.v1"
+RESOLVED_TARGET_VERSION = "browser.resolved-target.v1"
 LOCATOR_KINDS = frozenset(
     {"role", "label", "placeholder", "text", "test_id", "css", "xpath", "scoped"}
+)
+SEMANTIC_LOCATOR_KINDS = frozenset(
+    {"role", "label", "placeholder", "text", "test_id", "scoped"}
 )
 
 
@@ -129,6 +133,39 @@ class BrowserObservation(StrictContract):
     artifact: ObservationArtifact | None = None
 
 
+class ResolvedTargetEvidence(StrictContract):
+    schema_version: Literal[
+        "browser.resolved-target.v1"
+    ] = RESOLVED_TARGET_VERSION
+    probe_id: str = Field(min_length=1)
+    plan_step_id: str = Field(min_length=1)
+    step_index: int = Field(ge=0)
+    action_index: int = Field(ge=0)
+    action: Literal["click", "input", "wait_for"]
+    observation_id: str = Field(min_length=1)
+    page_state_id: str = Field(min_length=1)
+    page_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    element_ref: str = Field(min_length=1)
+    candidate_id: str = Field(min_length=1)
+    locator: LocatorSpec
+    context_path: ContextPath = Field(default_factory=ContextPath)
+    provenance: str = Field(min_length=1)
+    runtime_match_count: Literal[1] = 1
+    visible: Literal[True] = True
+    enabled: bool
+    editable: bool
+    score: float = Field(ge=0.0, le=1.0)
+    action_status: Literal["resolved", "succeeded", "failed"] = "resolved"
+
+    @model_validator(mode="after")
+    def validate_actionability(self) -> ResolvedTargetEvidence:
+        if self.action in {"click", "input"} and not self.enabled:
+            raise ValueError("resolved action target must be enabled")
+        if self.action == "input" and not self.editable:
+            raise ValueError("resolved input target must be editable")
+        return self
+
+
 class LocatorCandidate(StrictContract):
     candidate_id: str = Field(min_length=1)
     element_ref: str = Field(min_length=1)
@@ -183,6 +220,21 @@ class TargetBinding(StrictContract):
 
 def validate_locator_spec(value: object) -> LocatorSpec:
     return _LOCATOR_ADAPTER.validate_python(value)
+
+
+def validate_semantic_locator_spec(value: object) -> LocatorSpec:
+    locator = validate_locator_spec(value)
+    if not _is_semantic_locator(locator):
+        raise ValueError("grounding locator must use semantic locator kinds")
+    return locator
+
+
+def _is_semantic_locator(locator: LocatorSpec) -> bool:
+    if isinstance(locator, ScopedLocatorSpec):
+        return _is_semantic_locator(locator.scope) and _is_semantic_locator(
+            locator.target
+        )
+    return locator.kind in SEMANTIC_LOCATOR_KINDS
 
 
 def _contains_xpath(locator: LocatorSpec) -> bool:

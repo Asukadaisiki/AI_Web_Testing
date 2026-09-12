@@ -19,7 +19,7 @@ func TestNormalizedToolCallSignatureUsesSemanticExploreArguments(t *testing.T) {
 			"plan_step_ids":["s1"],
 			"steps":[{
 				"description":"first step",
-				"actions":[{"action":"wait_for","target":" Same Text ","timeout_ms":1000}]
+				"actions":[{"action":"wait_for","locator":{"kind":"text","value":" Same Text ","exact":true},"timeout_ms":1000}]
 			}]
 		}`,
 	}
@@ -30,7 +30,7 @@ func TestNormalizedToolCallSignatureUsesSemanticExploreArguments(t *testing.T) {
 			"plan_step_ids":["s1"],
 			"steps":[{
 				"description":"other step",
-				"actions":[{"action":"wait_for","target":"same   text","timeout_ms":5000}]
+				"actions":[{"action":"wait_for","locator":{"kind":"text","value":"same   text","exact":true},"timeout_ms":5000}]
 			}]
 		}`,
 	}

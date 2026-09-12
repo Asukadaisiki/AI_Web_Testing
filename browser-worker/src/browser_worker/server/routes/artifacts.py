@@ -7,7 +7,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
-
 router = APIRouter(tags=["artifacts"])
 
 

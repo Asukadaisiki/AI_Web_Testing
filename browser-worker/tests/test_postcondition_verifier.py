@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from browser_worker.runners.postcondition_verifier import PostconditionVerifier, StepNetworkObserver
 from browser_worker.contracts.dsl import Postcondition
 from browser_worker.contracts.executions import NetworkEvent
+from browser_worker.runners.postcondition_verifier import (
+    PostconditionVerifier,
+    StepNetworkObserver,
+)
 
 
 class FakeLocator:

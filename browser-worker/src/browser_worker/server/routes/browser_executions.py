@@ -10,7 +10,6 @@ from browser_worker.contracts.browser_executions import (
     BrowserExecutionResponse,
 )
 
-
 router = APIRouter(prefix="/internal/browser-executions", tags=["internal-browser"])
 
 

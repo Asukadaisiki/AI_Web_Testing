@@ -1,23 +1,24 @@
 """FastAPI application entrypoint."""
 
-from contextlib import asynccontextmanager
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
 
-from browser_worker.server.routes.artifacts import router as artifacts_router
-from browser_worker.server.router import build_api_router
-from browser_worker.capabilities.browser_capabilities import shutdown_browser_capabilities
+from browser_worker.capabilities.browser_capabilities import (
+    shutdown_browser_capabilities,
+)
 from browser_worker.runtime.config import get_settings
 from browser_worker.runtime.idempotency import IdempotencyMiddleware
 from browser_worker.runtime.logging_config import get_uvicorn_log_config, setup_logging
 from browser_worker.runtime.paths import PROJECT_ROOT
 from browser_worker.runtime.rate_limit import RateLimitMiddleware
 from browser_worker.runtime.request_logging import RequestLoggingMiddleware
-
+from browser_worker.server.router import build_api_router
+from browser_worker.server.routes.artifacts import router as artifacts_router
 
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 

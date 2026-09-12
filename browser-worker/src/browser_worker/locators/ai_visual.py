@@ -17,7 +17,6 @@ from urllib import request
 from browser_worker.exploration.prompts import PromptStage, render_prompt
 from browser_worker.runtime.config import get_settings
 
-
 ModelFamily = Literal["qwen-vl", "gemini", "gpt-4o", "qwen2.5-vl", "glm"]
 
 SYSTEM_PROMPT = render_prompt(PromptStage.VLM_LOCATE_SYSTEM).content

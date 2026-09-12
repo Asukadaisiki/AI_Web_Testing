@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from functools import lru_cache
 import logging
 import os
+from dataclasses import dataclass, field
+from functools import lru_cache
 
 from browser_worker.runtime.paths import PROJECT_ROOT
-
 
 ENV_FILE_PATH = PROJECT_ROOT / ".env"
 logger = logging.getLogger(__name__)
