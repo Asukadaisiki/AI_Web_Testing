@@ -48,6 +48,24 @@
 
 ## 问题记录
 
+## BUG-187 | Explore 页面去重使 ResolvedTarget 与 Observation Revision 错配
+
+- 日期：2026-09-12
+- 状态：fixed
+- 严重度：critical
+- 来源：Phase B 增量 1 后 live research-v2 E2E
+- 描述：同一 URL/page state 中连续执行多个 action 时，每个 before snapshot 都产生独立 Observation；`_deduplicate_explore_results` 合并页面后只保留最新 Observation，却保留早期 action 的 ResolvedTargetEvidence。Go 将 resolved target 与合并后的 Observation 交叉校验时发现 observation ID/SHA 不一致，因此拒绝合法 binding。
+- 复现步骤：
+  1. 在 Products 页面依次执行结构化 input 和 click。
+  2. input 成功并产生 `obs_f162619f0473722270f40917` 与 candidate。
+  3. dedup 后承载该 action 的页面 Observation 变成 `obs_37ca3293821f90f2739702e0`。
+  4. Go 拒绝跨 revision 证据，`search_blue_top` 保持 pending。
+- 影响：结构化动作实际执行成功且有 candidate，但 TaskPlan 无法推进；模型重复 Explore 和重建 TaskPlan，最终耗尽 max-turn。
+- 根因：action evidence 依赖 action 时刻的 Observation，但页面 dedup 把多个 revision 合并为单一 page 对象，没有保留 action-to-observation 映射。
+- 处理：ResolvedTargetEvidence 被定义为动作时刻的 immutable Worker 证据；Go 校验其 schema、PlanStep/action、唯一 runtime match、可见/可用/可编辑状态和 LocatorSpec 后直接构造 TargetBinding，不再错误地要求它等于 dedup 展示页的最新 Observation revision。模型仍通过 resolved target 自带的 observation ID/SHA 保留来源。
+- 验证：Run `run_a3a88ff6383697b01e61d990` 的 seq 107 中，`search_blue_top` resolved observation 为 `obs_f162619f0473722270f40917`，所在 page observation 为 `obs_37ca3293821f90f2739702e0`；新增回归使用该错配形态并确认合法 resolved target 仍可直接绑定。
+- 关联记录：`docs/execution-log.md#2026-09-12--phase-b-增量-1-后-live-e2e`。
+
 ## BUG-186 | Max-turn 终态引用已恢复的旧工具错误
 
 - 日期：2026-09-12
@@ -163,7 +181,7 @@
   3. Go `buildTargetBinding` 看到多个语义匹配元素而拒绝 binding，或 Runner 在正式页面解析到不同候选。
 - 影响：出现“Explore 成功但 PlanStep 未 grounded”“DSL 编译成功但 Runner 定位不同元素”等核心一致性问题。
 - 根因：Explore resolver、Go semantic binding 和 Runner compiler 是三次独立决策；没有贯穿全链的 ResolvedTargetEvidence。
-- 处理：Phase A 已贯通 lineage；Phase B 增量 1 新增 `grounding.query.v1` 和 `browser.resolved-target.v1`。Explore action 只接受结构化语义 Locator，由 Worker 使用共享 `compile_locator` 唯一解析并返回实际 element/candidate；字符串 target 和 legacy flow resolver 已删除。Go 与同一 BrowserObservation 交叉校验后直接构造 TargetBinding，缺少或篡改 resolved target 时不再回退文本匹配。
+- 处理：Phase A 已贯通 lineage；Phase B 增量 1 新增 `grounding.query.v1` 和 `browser.resolved-target.v1`。Explore action 只接受结构化语义 Locator，由 Worker 使用共享 `compile_locator` 唯一解析并返回实际 element/candidate；字符串 target 和 legacy flow resolver 已删除。Go 校验动作级 immutable resolved target 后直接构造 TargetBinding，缺少或不合法证据时不再回退文本匹配。
 - 验证：Go BrowserContract/TaskPlan/Agent/Harness/Tools 聚焦及全量测试通过；Python 全量、Pyright 和 Ruff 全仓 `F/I` 通过；真实 Chromium 2 tests passed，确认 structured click 返回 candidate、element 和 succeeded action status。
 - 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`；`docs/execution-log.md#2026-09-12--phase-b-增量-1统一-grounding-与-resolved-target`。
 

@@ -855,10 +855,10 @@ func TestExploreFlowUsesResolvedTargetWithoutTextRebinding(t *testing.T) {
 			"observation_v2":{
 				"schema_version":"browser.observation.v2",
 				"probe_id":"probe-resolved",
-				"observation_id":"obs-resolved",
+				"observation_id":"obs-latest-revision",
 				"page_state":{
 					"state_id":"form",
-					"state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+					"state_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 				},
 				"elements":[{
 					"element_ref":"form:7",

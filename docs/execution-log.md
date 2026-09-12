@@ -56,10 +56,19 @@
 
 ## 任务记录
 
+## 2026-09-12 | Phase B 增量 1 后 Live E2E
+
+- 任务：在 `deepseek-v4-flash-vision-exp`、thinking enabled、reasoning effort high 下运行一次官方 `automationexercise-blue-top-cart.v1` research-v2 E2E，验证结构化 Grounding/ResolvedTarget 改造。
+- 操作：从已提交的 `f96f73e` 启动 Browser Worker、12-turn AgentService 和 execution-worker；运行 900 秒单次 E2E；导出 `run.json`、`pipeline-audit.json` 和 provider evidence；核对 PostgreSQL 的 163 条 Agent 事件、TaskPlan 版本、工具参数、resolved target 与 page Observation；终态后停止全部服务。
+- 结果：Run `run_a3a88ff6383697b01e61d990` 失败，未生成 DSL/Batch/Execution。新 Prompt 生效，模型全部使用结构化 Locator，input 和图标搜索按钮均成功返回 candidate；但同页 action snapshot dedup 导致早期 resolved-target 引用动作时 Observation、展示页仅保留最新 Observation，Go 错误地要求两个 revision 相同并拒绝 binding。模型随后创建 3 个 TaskPlan 版本并在 12 turns 后失败。新增并修复 BUG-187：动作级 ResolvedTarget 作为 immutable Worker 证据直接绑定，不再与 dedup 展示快照错误比较。
+- Provider：12/12 调用直连 `api.deepseek.com`，requested model `deepseek-v4-flash-vision-exp`、resolved model `deepseek-flash`、thinking enabled、effort high，usage 和两类 provider request ID 均完整。累计 input 827,041、output 119,211、total 946,252 tokens；请求体从 28,527 bytes 增至 592,931 bytes，末轮 reasoning 456,602 bytes。
+- 验证：结果文件 SHA-256：`run.json=bfe76ff9555edea1bd1c00041d25ae33f6cdb8e354cb0d8d280a868b81c8b688`、`pipeline-audit.json=9f31edd45d6ed785f600e9e89814682560e901b8c0d67101f91420bfd1c027ea`、`provider-evidence-summary.json=774cfa7655c9f2a3904f3aa137dbcc73ac6983fb2db84288490efa3029886cfc`。
+- 后续：先完成 BUG-181 的计划幂等/ToolCallLedger 与 BUG-155 Context Materializer，再决定下一次付费 E2E。
+
 ## 2026-09-12 | Phase B 增量 1：统一 Grounding 与 Resolved Target
 
 - 任务：开始改造 AI 任务规划、页面探索和 DSL 生成链路，使 AI 基于 DOM/A11y 页面事实规划动作，Explore 返回完整页面结构与单动作实际命中证据，并消除新路径的 Go 文本重绑定。
-- 操作：将 Agent system prompt 拆分为 Task Planning、Grounding、DSL Authoring、Execution/Repair 四阶段，要求 TaskPlan 只保存业务语义和证据要求；新增 `grounding.query.v1`、`browser.resolved-target.v1` 共享 Schema 和 Go/Python 类型；将 click/input/wait_for 收紧为只接受结构化语义 Locator；Browser Worker 通过共享 `compile_locator` 执行唯一性检查，将请求 Locator 写入 BrowserObservation candidate，并返回 probe/observation/page-state/element/candidate/runtime/action status；模型摘要保留 resolved target；Go 将证据与完整 Observation 交叉校验后直接构造 TargetBinding。
+- 操作：将 Agent system prompt 拆分为 Task Planning、Grounding、DSL Authoring、Execution/Repair 四阶段，要求 TaskPlan 只保存业务语义和证据要求；新增 `grounding.query.v1`、`browser.resolved-target.v1` 共享 Schema 和 Go/Python 类型；将 click/input/wait_for 收紧为只接受结构化语义 Locator；Browser Worker 通过共享 `compile_locator` 执行唯一性检查，将请求 Locator 写入 BrowserObservation candidate，并返回 probe/observation/page-state/element/candidate/runtime/action status；模型摘要保留 resolved target；Go 校验动作级 immutable evidence 后直接构造 TargetBinding。
 - 结果：AI 只能提交 Playwright 可编译的 role/name/label/placeholder/text/test-id/scoped 查询；Explore 字符串 `target`、legacy flow resolver、按动作顺序猜测 PlanStep owner 和 Go flow 文本重绑定均已删除。已 grounded 的 click/input 支撑动作必须引用原 PlanStep ID，pending `plan_step_ids` 必须从下一步严格连续。完整页面结构继续保存为 BrowserObservation Artifact，模型获得结构索引和 resolved target；按条件读取完整 Artifact 的 Observation 查询工具留待下一增量。BUG-180 已修复。
 - 验证：`go test ./...`、`go vet ./...`、`go build ./...` 通过；Python 189 tests passed / 2 skipped；Pyright 0 errors；Ruff 全仓 `F/I` 通过；`RUN_BROWSER_INTEGRATION=1` 的 2 个真实 Chromium 测试通过；共享 GroundingQuery/ResolvedTarget Schema、模型摘要和 Go 直接 Binding 均有回归。
 - 后续：Phase B 下一增量新增 Observation 搜索/切片工具；随后实施 ToolCallLedger 和 Context Materializer。未运行付费模型 E2E。

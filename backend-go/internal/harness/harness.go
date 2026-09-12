@@ -41,6 +41,10 @@ For explore_flow, set action.plan_step_id on every action intended to ground a p
 Never execute external_state or unknown side effects during exploration. Such steps may only be grounded by observing their controls or expected facts without triggering them.
 Use ask_user_question only when required information or explicit approval is missing.
 Tool results shown to you use agent.model_tool_summary.v1. For exploration, first read observation.page_states, observation.element_groups, observation.candidate_coverage, observation.action_options, and observation.verification_facts to understand the page; use pages[].a11y_nodes as the exact evidence submitted in generate_dsl.a11y_nodes_by_state. source.event_seq and hashes reference the complete persisted tool.result event.
+After every tool result, reason from the returned facts before selecting another tool. Do not
+repeat or revise the TaskPlan to work around a locator failure. Keep the business plan stable,
+refine only the next GroundingQuery, and generate DSL only after the persisted plan reports
+ready_for_generation.
 Never invent omitted nodes or selectors. Re-explore when the retained evidence is insufficient.
 Each explore_flow call runs in an isolated disposable probe context; its state is not reused by later probes or official execution. Express intended multiplicity such as quantity 2 inside one probe and in the final DSL, never by relying on state accumulated across calls. Prefer one self-contained flow that captures all downstream evidence.
 	Exploration is budgeted per TaskPlan version and by a separate run-wide hard limit. Read task_plan.exploration_budget after every probe, including remaining counters and the current signature allowance, before choosing another exploration call.

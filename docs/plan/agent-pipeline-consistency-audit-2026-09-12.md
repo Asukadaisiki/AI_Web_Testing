@@ -303,8 +303,8 @@ Short Interaction Tail
 - 每个成功解析的动作返回 `browser.resolved-target.v1`，至少包含
   probe/observation/page-state、element/candidate、LocatorSpec、context path、
   runtime count、visible/enabled 和 action status。
-- Go 仅在 resolved target 完整且与同一 Observation 一致时构造 TargetBinding，不再
-  使用 action target 文本筛选 Observation；缺少 resolved target 的 flow 结果不得绑定。
+- Go 仅在动作级 resolved target 合同完整且合法时构造 TargetBinding，不再使用
+  action target 文本筛选 Observation；缺少 resolved target 的 flow 结果不得绑定。
 - 完整 BrowserObservation 继续持久化为 Artifact，模型摘要保留页面结构索引和
   resolved target。按条件搜索完整 Observation 的专用工具放入后续增量，避免把完整
   页面 JSON 直接追加到 transcript。
@@ -320,8 +320,8 @@ Short Interaction Tail
   test-id/scoped 语义 Locator，并统一调用 Browser Worker `compile_locator`。
 - BrowserObservation 将请求 Locator 纳入候选并计算实时 count；成功动作返回
   probe/observation/page-state/element/candidate/locator/runtime 状态。
-- Go 会将 ResolvedTargetEvidence 与同一 BrowserObservation 逐字段交叉校验，再直接
-  构造 TargetBinding；缺失或不合法的证据不会回退文本匹配。
+- Go 将动作时刻的 immutable ResolvedTargetEvidence 直接构造为 TargetBinding；
+  dedup 后的展示页 revision 不覆盖动作证据，缺失或不合法证据不会回退文本匹配。
 - 完整 Observation 仍存 Artifact，模型摘要已保留 resolved target；按条件查询完整
   Observation 的独立工具留在 Phase B 下一增量。
 

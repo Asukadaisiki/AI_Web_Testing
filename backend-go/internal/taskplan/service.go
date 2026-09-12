@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -1113,7 +1112,6 @@ func deriveTargetBindings(
 				plan,
 				plan.Steps[stepIndex],
 				*action.ResolvedTarget,
-				page.Observation,
 			)
 			if binding != nil {
 				bindings[owner] = binding
@@ -1127,13 +1125,11 @@ func buildResolvedTargetBinding(
 	plan Plan,
 	step Step,
 	resolved browsercontract.ResolvedTargetEvidence,
-	observation observedSnapshot,
 ) *browsercontract.TargetBinding {
 	if resolved.Validate() != nil ||
 		resolved.ActionStatus != "succeeded" ||
 		resolved.PlanStepID != step.ID ||
-		!probeActionMatches(step.Action, resolved.Action) ||
-		!resolvedTargetMatchesObservation(resolved, observation) {
+		!probeActionMatches(step.Action, resolved.Action) {
 		return nil
 	}
 	binding, err := browsercontract.NewTargetBinding(
@@ -1163,37 +1159,6 @@ func buildResolvedTargetBinding(
 		return nil
 	}
 	return &binding
-}
-
-func resolvedTargetMatchesObservation(
-	resolved browsercontract.ResolvedTargetEvidence,
-	observation observedSnapshot,
-) bool {
-	if observation.SchemaVersion != browsercontract.ObservationSchemaVersion ||
-		observation.ProbeID != resolved.ProbeID ||
-		observation.ObservationID != resolved.ObservationID ||
-		observation.PageState.StateID != resolved.PageStateID ||
-		observation.PageState.SHA256 != resolved.PageStateSHA256 {
-		return false
-	}
-	for _, element := range observation.Elements {
-		if element.ElementRef != resolved.ElementRef ||
-			!reflect.DeepEqual(element.ContextPath, resolved.ContextPath) ||
-			element.Runtime.Visible != resolved.Visible ||
-			element.Runtime.Enabled != resolved.Enabled ||
-			element.Runtime.Editable != resolved.Editable {
-			continue
-		}
-		for _, candidate := range element.Locators {
-			if candidate.CandidateID == resolved.CandidateID &&
-				candidate.Provenance == resolved.Provenance &&
-				candidate.ObservedCount == resolved.RuntimeMatchCount &&
-				reflect.DeepEqual(candidate.Locator, resolved.Locator) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func derivePageTargetBindings(
