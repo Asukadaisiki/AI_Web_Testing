@@ -105,10 +105,206 @@ func TestCrossSiteFixtureCoversDistinctPageKinds(t *testing.T) {
 	}
 }
 
+func TestCandidateRefMatchesSharedFixtureAndRejectsLocator(t *testing.T) {
+	raw := readRepositoryFile(t, "testdata/grounding_candidate_ref_v1_contract.json")
+	var candidate CandidateRef
+	if err := json.Unmarshal(raw, &candidate); err != nil {
+		t.Fatal(err)
+	}
+	want := CandidateRef{
+		SchemaVersion:  "grounding.candidate-ref.v1",
+		SourceEventSeq: 27,
+		ProbeID:        "probe-source",
+		ObservationID:  "obs-source",
+		CandidateID:    "candidate-source",
+	}
+	if candidate != want {
+		t.Fatalf("candidate ref = %#v, want %#v", candidate, want)
+	}
+
+	compiler := jsonschema.NewCompiler()
+	content := readRepositoryFile(t, "contracts/grounding-candidate-ref.v1.schema.json")
+	if err := compiler.AddResource(
+		"https://ai-web-testing.local/contracts/grounding-candidate-ref.v1.schema.json",
+		bytes.NewReader(content),
+	); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(
+		"https://ai-web-testing.local/contracts/grounding-candidate-ref.v1.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(value); err != nil {
+		t.Fatal(err)
+	}
+	value["locator"] = map[string]any{"kind": "css", "value": "#submit"}
+	if err := schema.Validate(value); err == nil {
+		t.Fatal("candidate reference containing locator was accepted")
+	}
+
+	trusted := TrustedResolvedCandidate{
+		Source:          candidate,
+		PageStateID:     "state-source",
+		PageStateSHA256: repeat("a", 64),
+		ElementRef:      "S0:42",
+		Locator:         LocatorSpec{Kind: "css", Value: "#submit", Exact: true},
+		ContextPath:     ContextPath{Frames: []string{}, ShadowHosts: []string{}},
+		Provenance:      "a11y_backend_dom_node",
+	}
+	if trusted.Source != want || trusted.Locator.Kind != "css" {
+		t.Fatalf("trusted candidate = %#v", trusted)
+	}
+}
+
+func TestGroundingContractSchemasAcceptQueriesAndEnforceV2TargetMode(t *testing.T) {
+	compiler := jsonschema.NewCompiler()
+	for _, name := range []string{
+		"locator-spec.v1.schema.json",
+		"grounding-candidate-ref.v1.schema.json",
+		"grounding-observation-query.v1.schema.json",
+		"grounding-observation-query-result.v1.schema.json",
+		"grounding-query.v1.schema.json",
+		"grounding-query.v2.schema.json",
+	} {
+		content := readRepositoryFile(t, "contracts/"+name)
+		if err := compiler.AddResource(
+			"https://ai-web-testing.local/contracts/"+name,
+			bytes.NewReader(content),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	candidateRef := map[string]any{
+		"schema_version":   "grounding.candidate-ref.v1",
+		"source_event_seq": 27,
+		"probe_id":         "probe-source",
+		"observation_id":   "obs-source",
+		"candidate_id":     "candidate-source",
+	}
+	querySchema, err := compiler.Compile(
+		"https://ai-web-testing.local/contracts/grounding-observation-query.v1.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := querySchema.Validate(map[string]any{
+		"schema_version":   "grounding.observation-query.v1",
+		"plan_step_id":     "submit_search",
+		"source_event_seq": 27,
+		"observation_id":   "obs-source",
+		"action":           "click",
+		"query":            "submit_search",
+		"role":             "button",
+		"limit":            20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resultSchema, err := compiler.Compile(
+		"https://ai-web-testing.local/contracts/grounding-observation-query-result.v1.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resultSchema.Validate(map[string]any{
+		"schema_version":   "grounding.observation-query-result.v1",
+		"plan_step_id":     "submit_search",
+		"source_event_seq": 27,
+		"matches": []any{map[string]any{
+			"candidate_ref": candidateRef,
+			"element_ref":   "S0:42",
+			"role":          "button",
+			"name":          "",
+			"dom": map[string]any{
+				"tag": "button",
+				"attrs": map[string]any{
+					"id": "submit_search", "type": "button",
+				},
+			},
+			"locator":        map[string]any{"kind": "css", "value": "#submit_search", "exact": true},
+			"provenance":     "a11y_backend_dom_node",
+			"observed_count": 1,
+		}},
+		"omitted_count": 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v2Schema, err := compiler.Compile(
+		"https://ai-web-testing.local/contracts/grounding-query.v2.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator := map[string]any{
+		"kind": "role", "role": "button", "name": "Submit", "exact": true,
+	}
+	tests := []struct {
+		name   string
+		action map[string]any
+		valid  bool
+	}{
+		{
+			name: "locator",
+			action: map[string]any{
+				"action": "click", "plan_step_id": "submit", "locator": locator,
+			},
+			valid: true,
+		},
+		{
+			name: "candidate reference",
+			action: map[string]any{
+				"action": "click", "plan_step_id": "submit",
+				"candidate_ref": candidateRef,
+			},
+			valid: true,
+		},
+		{
+			name: "missing target",
+			action: map[string]any{
+				"action": "click", "plan_step_id": "submit",
+			},
+		},
+		{
+			name: "two targets",
+			action: map[string]any{
+				"action": "click", "plan_step_id": "submit",
+				"locator": locator, "candidate_ref": candidateRef,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := map[string]any{
+				"schema_version": "grounding.query.v2",
+				"plan_step_ids":  []any{"submit"},
+				"steps": []any{map[string]any{
+					"actions": []any{test.action},
+				}},
+			}
+			err := v2Schema.Validate(value)
+			if test.valid && err != nil {
+				t.Fatal(err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("invalid target mode was accepted")
+			}
+		})
+	}
+}
+
 func TestSharedSchemasCompileAndValidateTargetBinding(t *testing.T) {
 	compiler := jsonschema.NewCompiler()
 	for _, name := range []string{
 		"locator-spec.v1.schema.json",
+		"grounding-candidate-ref.v1.schema.json",
 		"browser-observation.v2.schema.json",
 		"browser-resolved-target.v1.schema.json",
 		"grounding-query.v1.schema.json",
@@ -180,6 +376,26 @@ func TestSharedSchemasCompileAndValidateTargetBinding(t *testing.T) {
 		Provenance:  "grounding_query", RuntimeMatchCount: 1,
 		Visible: true, Enabled: true, Score: 0.95,
 		ActionStatus: "succeeded",
+	}
+	if err := resolved.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolvedSchema.Validate(value); err != nil {
+		t.Fatal(err)
+	}
+	resolved.SourceCandidate = &CandidateRef{
+		SchemaVersion:  "grounding.candidate-ref.v1",
+		SourceEventSeq: 27,
+		ProbeID:        "probe-source",
+		ObservationID:  "obs-source",
+		CandidateID:    "candidate-source",
 	}
 	if err := resolved.Validate(); err != nil {
 		t.Fatal(err)

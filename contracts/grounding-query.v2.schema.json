@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/grounding-query.v2.schema.json",
+  "title": "GroundingQuery v2",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "grounding.query.v2"},
+    "flow_description": {"type": "string"},
+    "plan_step_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {"type": "string"},
+          "description": {"type": "string"},
+          "actions": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/action"}
+          }
+        }
+      }
+    }
+  },
+  "required": ["schema_version", "plan_step_ids", "steps"],
+  "$defs": {
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {"type": "string", "enum": ["click", "input", "wait_for"]},
+        "plan_step_id": {"type": "string", "minLength": 1},
+        "locator": {
+          "$ref": "grounding-query.v1.schema.json#/$defs/semantic_locator"
+        },
+        "candidate_ref": {
+          "$ref": "grounding-candidate-ref.v1.schema.json"
+        },
+        "condition": {
+          "$ref": "grounding-query.v1.schema.json#/$defs/condition"
+        },
+        "value": {"type": "string"},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 60000}
+      },
+      "required": ["action"],
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": ["locator"],
+              "not": {"required": ["candidate_ref"]}
+            },
+            {
+              "required": ["candidate_ref"],
+              "not": {"required": ["locator"]}
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {"action": {"enum": ["click", "input"]}},
+            "required": ["action"]
+          },
+          "then": {"required": ["plan_step_id"]}
+        },
+        {
+          "if": {"required": ["condition"]},
+          "then": {
+            "properties": {"action": {"const": "wait_for"}}
+          }
+        }
+      ]
+    }
+  }
+}

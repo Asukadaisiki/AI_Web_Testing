@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/grounding-observation-query-result.v1.schema.json",
+  "title": "Grounding ObservationQueryResult v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "grounding.observation-query-result.v1"},
+    "plan_step_id": {"type": "string", "minLength": 1},
+    "source_event_seq": {"type": "integer", "minimum": 1},
+    "matches": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"$ref": "#/$defs/match"}
+    },
+    "omitted_count": {"type": "integer", "minimum": 0}
+  },
+  "required": [
+    "schema_version",
+    "plan_step_id",
+    "source_event_seq",
+    "matches",
+    "omitted_count"
+  ],
+  "$defs": {
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "candidate_ref": {
+          "$ref": "grounding-candidate-ref.v1.schema.json"
+        },
+        "element_ref": {"type": "string", "minLength": 1},
+        "role": {"type": "string"},
+        "name": {"type": "string"},
+        "dom": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tag": {"type": "string"},
+            "attrs": {
+              "type": "object",
+              "additionalProperties": {"type": "string"}
+            }
+          },
+          "required": ["tag", "attrs"]
+        },
+        "locator": {
+          "$ref": "locator-spec.v1.schema.json#/$defs/locator"
+        },
+        "provenance": {"type": "string", "minLength": 1},
+        "observed_count": {"const": 1}
+      },
+      "required": [
+        "candidate_ref",
+        "element_ref",
+        "role",
+        "name",
+        "dom",
+        "locator",
+        "provenance",
+        "observed_count"
+      ]
+    }
+  }
+}

@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from browser_worker.contracts.browser_observation import (
+    CandidateRef,
     LocatorSpec,
     validate_semantic_locator_spec,
 )
@@ -42,14 +43,18 @@ class ExploreFlowWaitCondition(DSLModel):
 class ExploreFlowAction(DSLModel):
     action: Literal["click", "input", "wait_for"]
     plan_step_id: str | None = Field(default=None, min_length=1, max_length=64)
-    locator: LocatorSpec
+    locator: LocatorSpec | None = None
+    candidate_ref: CandidateRef | None = None
     condition: ExploreFlowWaitCondition | None = None
     value: str | None = None
     timeout_ms: int | None = Field(default=None, ge=1, le=60000)
 
     @model_validator(mode="after")
     def validate_target_and_condition(self) -> ExploreFlowAction:
-        validate_semantic_locator_spec(self.locator)
+        if (self.locator is None) == (self.candidate_ref is None):
+            raise ValueError("provide exactly one of locator or candidate_ref")
+        if self.locator is not None:
+            validate_semantic_locator_spec(self.locator)
         if self.action in {"click", "input"} and self.plan_step_id is None:
             raise ValueError("click and input require plan_step_id")
         if self.condition is not None and self.action != "wait_for":
@@ -72,12 +77,25 @@ class ExploreFlowStep(DSLModel):
 
 
 class ExploreFlowArguments(DSLModel):
-    schema_version: Literal["grounding.query.v1"] = "grounding.query.v1"
+    schema_version: Literal[
+        "grounding.query.v1",
+        "grounding.query.v2",
+    ] = "grounding.query.v1"
     base_url: str | None = None
     flow_description: str | None = None
     observation_schema_version: Literal["v1", "v2"] = "v1"
     probe_id: str | None = Field(default=None, min_length=1, max_length=64)
     steps: list[ExploreFlowStep] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_versioned_targets(self) -> ExploreFlowArguments:
+        if self.schema_version == "grounding.query.v1" and any(
+            action.candidate_ref is not None
+            for step in self.steps
+            for action in step.actions
+        ):
+            raise ValueError("grounding.query.v1 actions require locator")
+        return self
 
 
 class RequiredElement(DSLModel):

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 BROWSER_OBSERVATION_VERSION = "browser.observation.v2"
 TARGET_BINDING_VERSION = "grounding.target-binding.v1"
 RESOLVED_TARGET_VERSION = "browser.resolved-target.v1"
+CANDIDATE_REF_VERSION = "grounding.candidate-ref.v1"
 LOCATOR_KINDS = frozenset(
     {"role", "label", "placeholder", "text", "test_id", "css", "xpath", "scoped"}
 )
@@ -21,6 +22,16 @@ SEMANTIC_LOCATOR_KINDS = frozenset(
 
 class StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+
+class CandidateRef(StrictContract):
+    schema_version: Literal[
+        "grounding.candidate-ref.v1"
+    ] = CANDIDATE_REF_VERSION
+    source_event_seq: int = Field(ge=1)
+    probe_id: str = Field(min_length=1)
+    observation_id: str = Field(min_length=1)
+    candidate_id: str = Field(min_length=1)
 
 
 class RoleLocatorSpec(StrictContract):
@@ -58,6 +69,16 @@ _LOCATOR_ADAPTER = TypeAdapter(LocatorSpec)
 class ContextPath(StrictContract):
     frames: list[str] = Field(default_factory=list)
     shadow_hosts: list[str] = Field(default_factory=list)
+
+
+class TrustedResolvedCandidate(StrictContract):
+    source: CandidateRef
+    page_state_id: str = Field(min_length=1)
+    page_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    element_ref: str = Field(min_length=1)
+    locator: LocatorSpec
+    context_path: ContextPath
+    provenance: str = Field(min_length=1)
 
 
 class A11yFact(StrictContract):
@@ -147,6 +168,7 @@ class ResolvedTargetEvidence(StrictContract):
     page_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     element_ref: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
+    source_candidate: CandidateRef | None = None
     locator: LocatorSpec
     context_path: ContextPath = Field(default_factory=ContextPath)
     provenance: str = Field(min_length=1)

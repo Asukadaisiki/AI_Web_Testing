@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/grounding-observation-query.v1.schema.json",
+  "title": "Grounding ObservationQuery v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "grounding.observation-query.v1"},
+    "plan_step_id": {"type": "string", "minLength": 1},
+    "source_event_seq": {"type": "integer", "minimum": 1},
+    "observation_id": {"type": "string", "minLength": 1},
+    "page_state_id": {"type": "string", "minLength": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "action": {"type": "string", "enum": ["click", "input", "wait_for"]},
+    "query": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "minLength": 1},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+  },
+  "required": [
+    "schema_version",
+    "plan_step_id",
+    "source_event_seq",
+    "action"
+  ]
+}

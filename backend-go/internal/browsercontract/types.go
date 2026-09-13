@@ -13,7 +13,27 @@ const (
 	ObservationSchemaVersion = "browser.observation.v2"
 	TargetBindingVersion     = "grounding.target-binding.v1"
 	ResolvedTargetVersion    = "browser.resolved-target.v1"
+	CandidateRefVersion      = "grounding.candidate-ref.v1"
 )
+
+type CandidateRef struct {
+	SchemaVersion  string `json:"schema_version"`
+	SourceEventSeq int64  `json:"source_event_seq"`
+	ProbeID        string `json:"probe_id"`
+	ObservationID  string `json:"observation_id"`
+	CandidateID    string `json:"candidate_id"`
+}
+
+func (r CandidateRef) Validate() error {
+	if r.SchemaVersion != CandidateRefVersion ||
+		r.SourceEventSeq < 1 ||
+		strings.TrimSpace(r.ProbeID) == "" ||
+		strings.TrimSpace(r.ObservationID) == "" ||
+		strings.TrimSpace(r.CandidateID) == "" {
+		return errors.New("candidate reference is incomplete")
+	}
+	return nil
+}
 
 type LocatorSpec struct {
 	Kind   string       `json:"kind"`
@@ -77,27 +97,38 @@ type ContextPath struct {
 	ShadowHosts []string `json:"shadow_hosts"`
 }
 
+type TrustedResolvedCandidate struct {
+	Source          CandidateRef `json:"source"`
+	PageStateID     string       `json:"page_state_id"`
+	PageStateSHA256 string       `json:"page_state_sha256"`
+	ElementRef      string       `json:"element_ref"`
+	Locator         LocatorSpec  `json:"locator"`
+	ContextPath     ContextPath  `json:"context_path"`
+	Provenance      string       `json:"provenance"`
+}
+
 type ResolvedTargetEvidence struct {
-	SchemaVersion     string      `json:"schema_version"`
-	ProbeID           string      `json:"probe_id"`
-	PlanStepID        string      `json:"plan_step_id"`
-	StepIndex         int         `json:"step_index"`
-	ActionIndex       int         `json:"action_index"`
-	Action            string      `json:"action"`
-	ObservationID     string      `json:"observation_id"`
-	PageStateID       string      `json:"page_state_id"`
-	PageStateSHA256   string      `json:"page_state_sha256"`
-	ElementRef        string      `json:"element_ref"`
-	CandidateID       string      `json:"candidate_id"`
-	Locator           LocatorSpec `json:"locator"`
-	ContextPath       ContextPath `json:"context_path"`
-	Provenance        string      `json:"provenance"`
-	RuntimeMatchCount int         `json:"runtime_match_count"`
-	Visible           bool        `json:"visible"`
-	Enabled           bool        `json:"enabled"`
-	Editable          bool        `json:"editable"`
-	Score             float64     `json:"score"`
-	ActionStatus      string      `json:"action_status"`
+	SchemaVersion     string        `json:"schema_version"`
+	ProbeID           string        `json:"probe_id"`
+	PlanStepID        string        `json:"plan_step_id"`
+	StepIndex         int           `json:"step_index"`
+	ActionIndex       int           `json:"action_index"`
+	Action            string        `json:"action"`
+	ObservationID     string        `json:"observation_id"`
+	PageStateID       string        `json:"page_state_id"`
+	PageStateSHA256   string        `json:"page_state_sha256"`
+	ElementRef        string        `json:"element_ref"`
+	CandidateID       string        `json:"candidate_id"`
+	SourceCandidate   *CandidateRef `json:"source_candidate,omitempty"`
+	Locator           LocatorSpec   `json:"locator"`
+	ContextPath       ContextPath   `json:"context_path"`
+	Provenance        string        `json:"provenance"`
+	RuntimeMatchCount int           `json:"runtime_match_count"`
+	Visible           bool          `json:"visible"`
+	Enabled           bool          `json:"enabled"`
+	Editable          bool          `json:"editable"`
+	Score             float64       `json:"score"`
+	ActionStatus      string        `json:"action_status"`
 }
 
 func (e ResolvedTargetEvidence) Validate() error {
@@ -132,6 +163,11 @@ func (e ResolvedTargetEvidence) Validate() error {
 	}
 	if e.ContextPath.Frames == nil || e.ContextPath.ShadowHosts == nil {
 		return errors.New("resolved target context path is incomplete")
+	}
+	if e.SourceCandidate != nil {
+		if err := e.SourceCandidate.Validate(); err != nil {
+			return fmt.Errorf("resolved target source candidate: %w", err)
+		}
 	}
 	if err := e.Locator.Validate(); err != nil {
 		return fmt.Errorf("resolved target locator: %w", err)

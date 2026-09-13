@@ -11,8 +11,10 @@ from browser_worker.contracts.browser_observation import (
     BROWSER_OBSERVATION_VERSION,
     LOCATOR_KINDS,
     BrowserObservation,
+    CandidateRef,
     ResolvedTargetEvidence,
     TargetBinding,
+    TrustedResolvedCandidate,
     canonical_sha256,
     validate_locator_spec,
 )
@@ -26,6 +28,56 @@ ROOT = Path(__file__).parents[2]
 
 
 class BrowserObservationContractTest(unittest.TestCase):
+    def test_candidate_ref_matches_shared_fixture_and_rejects_locator(self) -> None:
+        payload = json.loads(
+            (
+                ROOT
+                / "testdata"
+                / "grounding_candidate_ref_v1_contract.json"
+            ).read_text()
+        )
+
+        candidate = CandidateRef.model_validate(payload)
+
+        self.assertEqual(candidate.model_dump(mode="json"), payload)
+        with self.assertRaises(ValueError):
+            CandidateRef.model_validate(
+                {
+                    **payload,
+                    "locator": {
+                        "kind": "css",
+                        "value": "#submit_search",
+                        "exact": True,
+                    },
+                }
+            )
+
+    def test_trusted_resolved_candidate_uses_strict_source_lineage(self) -> None:
+        candidate = TrustedResolvedCandidate.model_validate(
+            {
+                "source": {
+                    "schema_version": "grounding.candidate-ref.v1",
+                    "source_event_seq": 27,
+                    "probe_id": "probe-source",
+                    "observation_id": "obs-source",
+                    "candidate_id": "candidate-source",
+                },
+                "page_state_id": "state-source",
+                "page_state_sha256": "a" * 64,
+                "element_ref": "S0:42",
+                "locator": {
+                    "kind": "css",
+                    "value": "#submit_search",
+                    "exact": True,
+                },
+                "context_path": {"frames": [], "shadow_hosts": []},
+                "provenance": "a11y_backend_dom_node",
+            }
+        )
+
+        self.assertEqual(candidate.source.source_event_seq, 27)
+        self.assertEqual(candidate.locator.kind, "css")
+
     def test_shared_observation_golden_matches_python_contract(self) -> None:
         payload = json.loads(
             (
@@ -453,6 +505,21 @@ class BrowserObservationContractTest(unittest.TestCase):
         self.assertEqual(parsed.element_ref, "S0:search")
         self.assertEqual(parsed.locator.kind, "placeholder")
         self.assertEqual(parsed.runtime_match_count, 1)
+
+        resolved["source_candidate"] = {
+            "schema_version": "grounding.candidate-ref.v1",
+            "source_event_seq": 27,
+            "probe_id": "probe-source",
+            "observation_id": "obs-source",
+            "candidate_id": "candidate-source",
+        }
+        parsed_with_source = ResolvedTargetEvidence.model_validate(resolved)
+        self.assertIsNotNone(parsed_with_source.source_candidate)
+        assert parsed_with_source.source_candidate is not None
+        self.assertEqual(
+            parsed_with_source.source_candidate.candidate_id,
+            "candidate-source",
+        )
 
     def test_target_binding_rejects_xpath_inside_shadow_root(self) -> None:
         payload = {

@@ -16,6 +16,9 @@
     "page_state_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "element_ref": {"type": "string", "minLength": 1},
     "candidate_id": {"type": "string", "minLength": 1},
+    "source_candidate": {
+      "$ref": "grounding-candidate-ref.v1.schema.json"
+    },
     "locator": {"$ref": "locator-spec.v1.schema.json#/$defs/locator"},
     "context_path": {
       "type": "object",

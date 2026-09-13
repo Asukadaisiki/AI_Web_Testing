@@ -1,0 +1,7 @@
+{
+  "schema_version": "grounding.candidate-ref.v1",
+  "source_event_seq": 27,
+  "probe_id": "probe-source",
+  "observation_id": "obs-source",
+  "candidate_id": "candidate-source"
+}

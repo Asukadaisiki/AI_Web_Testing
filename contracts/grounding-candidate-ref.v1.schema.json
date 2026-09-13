@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-web-testing.local/contracts/grounding-candidate-ref.v1.schema.json",
+  "title": "Grounding CandidateRef v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "grounding.candidate-ref.v1"},
+    "source_event_seq": {"type": "integer", "minimum": 1},
+    "probe_id": {"type": "string", "minLength": 1},
+    "observation_id": {"type": "string", "minLength": 1},
+    "candidate_id": {"type": "string", "minLength": 1}
+  },
+  "required": [
+    "schema_version",
+    "source_event_seq",
+    "probe_id",
+    "observation_id",
+    "candidate_id"
+  ]
+}

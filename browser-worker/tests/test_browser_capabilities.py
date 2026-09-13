@@ -11,6 +11,86 @@ from browser_worker.contracts.browser_capabilities import ExploreFlowArguments
 
 
 class BrowserCapabilityContractTest(unittest.TestCase):
+    def test_grounding_query_v2_accepts_exactly_one_target_mode(self) -> None:
+        candidate_ref = {
+            "schema_version": "grounding.candidate-ref.v1",
+            "source_event_seq": 27,
+            "probe_id": "probe-source",
+            "observation_id": "obs-source",
+            "candidate_id": "candidate-source",
+        }
+        parsed = ExploreFlowArguments.model_validate(
+            {
+                "schema_version": "grounding.query.v2",
+                "steps": [
+                    {
+                        "actions": [
+                            {
+                                "action": "input",
+                                "plan_step_id": "input_search",
+                                "locator": {
+                                    "kind": "placeholder",
+                                    "value": "Search",
+                                },
+                                "value": "Blue Top",
+                            },
+                            {
+                                "action": "click",
+                                "plan_step_id": "click_search",
+                                "candidate_ref": candidate_ref,
+                            },
+                        ]
+                    }
+                ],
+            }
+        )
+
+        locator_action, candidate_action = parsed.steps[0].actions
+        self.assertEqual(parsed.schema_version, "grounding.query.v2")
+        self.assertIsNotNone(locator_action.locator)
+        self.assertIsNone(locator_action.candidate_ref)
+        self.assertIsNone(candidate_action.locator)
+        self.assertIsNotNone(candidate_action.candidate_ref)
+        assert candidate_action.candidate_ref is not None
+        self.assertEqual(
+            candidate_action.candidate_ref.model_dump(mode="json"),
+            candidate_ref,
+        )
+
+    def test_grounding_query_v2_rejects_zero_or_two_target_modes(self) -> None:
+        candidate_ref = {
+            "schema_version": "grounding.candidate-ref.v1",
+            "source_event_seq": 27,
+            "probe_id": "probe-source",
+            "observation_id": "obs-source",
+            "candidate_id": "candidate-source",
+        }
+        actions = {
+            "zero": {
+                "action": "click",
+                "plan_step_id": "click_search",
+            },
+            "two": {
+                "action": "click",
+                "plan_step_id": "click_search",
+                "locator": {
+                    "kind": "role",
+                    "role": "button",
+                    "name": "Search",
+                },
+                "candidate_ref": candidate_ref,
+            },
+        }
+
+        for name, action in actions.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                ExploreFlowArguments.model_validate(
+                    {
+                        "schema_version": "grounding.query.v2",
+                        "steps": [{"actions": [action]}],
+                    }
+                )
+
     def test_wait_for_accepts_structured_semantic_value_condition(self) -> None:
         parsed = ExploreFlowArguments.model_validate(
             {
