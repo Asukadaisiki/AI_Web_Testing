@@ -539,6 +539,117 @@ func TestNonExplorationToolResultUsesStructuredModelSummary(t *testing.T) {
 	}
 }
 
+func TestObservationQueryToolResultUsesDedicatedCandidateSummary(t *testing.T) {
+	raw := json.RawMessage(`{
+		"schema_version":"grounding.observation-query-result.v1",
+		"plan_step_id":"submit",
+		"source_event_seq":27,
+		"matches":[{
+			"candidate_ref":{
+				"schema_version":"grounding.candidate-ref.v1",
+				"source_event_seq":27,
+				"probe_id":"probe-query",
+				"observation_id":"obs-query",
+				"candidate_id":"candidate-submit"
+			},
+			"element_ref":"form:7",
+			"role":"button",
+			"name":"",
+			"dom":{"tag":"button","attrs":{"id":"submit_search","type":"button"}},
+			"locator":{"kind":"css","value":"#submit_search","exact":true},
+			"provenance":"a11y_backend_dom_node",
+			"observed_count":1
+		}],
+		"omitted_count":0,
+		"private_worker_cache":"must not be summarized"
+	}`)
+	content, err := BuildModelToolSummary("query_observation", raw, 31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "private_worker_cache") {
+		t.Fatalf("untrusted extra data leaked into query summary: %s", content)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.ObservationQuery == nil ||
+		summary.Generic != nil ||
+		summary.ObservationQuery.PlanStepID != "submit" ||
+		summary.ObservationQuery.SourceEventSeq != 27 ||
+		len(summary.ObservationQuery.Matches) != 1 {
+		t.Fatalf("observation query summary = %#v", summary)
+	}
+	match := summary.ObservationQuery.Matches[0]
+	if match.CandidateRef.CandidateID != "candidate-submit" ||
+		match.ElementRef != "form:7" ||
+		match.Role != "button" ||
+		match.Name != "" ||
+		match.DOM.Tag != "button" ||
+		match.DOM.Attrs["id"] != "submit_search" {
+		t.Fatalf("candidate summary = %#v", match)
+	}
+}
+
+func TestObservationQueryToolResultSummaryIsBounded(t *testing.T) {
+	matches := make([]map[string]any, 100)
+	for index := range matches {
+		id := fmt.Sprintf("candidate-%03d", index)
+		matches[index] = map[string]any{
+			"candidate_ref": map[string]any{
+				"schema_version":   "grounding.candidate-ref.v1",
+				"source_event_seq": 27,
+				"probe_id":         "probe-query",
+				"observation_id":   "obs-query",
+				"candidate_id":     id,
+			},
+			"element_ref": fmt.Sprintf("form:%d", index),
+			"role":        "button",
+			"name":        strings.Repeat("candidate name ", 40),
+			"dom": map[string]any{
+				"tag": "button",
+				"attrs": map[string]string{
+					"id":    id,
+					"title": strings.Repeat("candidate title ", 40),
+				},
+			},
+			"locator": map[string]any{
+				"kind": "css", "value": "#" + id, "exact": true,
+			},
+			"provenance":     "a11y_backend_dom_node",
+			"observed_count": 1,
+		}
+	}
+	raw, err := json.Marshal(map[string]any{
+		"schema_version":   "grounding.observation-query-result.v1",
+		"plan_step_id":     "submit",
+		"source_event_seq": 27,
+		"matches":          matches,
+		"omitted_count":    3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := BuildModelToolSummary("query_observation", raw, 31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) > ModelToolSummaryTargetBytes {
+		t.Fatalf("query summary bytes = %d", len(content))
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.ObservationQuery == nil ||
+		len(summary.ObservationQuery.Matches) >= len(matches) ||
+		summary.ObservationQuery.OmittedCount <= 3 ||
+		!summary.Truncation.Truncated {
+		t.Fatalf("bounded query summary = %#v", summary)
+	}
+}
+
 func TestExecuteDSLToolResultExposesBatchID(t *testing.T) {
 	raw := json.RawMessage(`{
 		"batch_id":562,

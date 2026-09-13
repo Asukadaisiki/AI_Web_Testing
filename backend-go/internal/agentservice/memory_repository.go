@@ -103,6 +103,25 @@ func (r *MemoryRepository) AppendEvent(_ context.Context, event Event) (Event, e
 	return event, nil
 }
 
+func (r *MemoryRepository) GetEvent(
+	_ context.Context,
+	runID string,
+	seq int64,
+) (Event, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if _, ok := r.runs[runID]; !ok {
+		return Event{}, ErrRunNotFound
+	}
+	if seq < 1 || seq > int64(len(r.events[runID])) {
+		return Event{}, ErrEventNotFound
+	}
+	event := r.events[runID][seq-1]
+	event.Payload = cloneMap(event.Payload)
+	return event, nil
+}
+
 func (r *MemoryRepository) ListEvents(_ context.Context, runID string, afterSeq int64) ([]Event, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

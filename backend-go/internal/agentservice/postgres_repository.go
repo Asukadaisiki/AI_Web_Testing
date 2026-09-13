@@ -302,6 +302,49 @@ func (r *PostgresRepository) AppendEvent(ctx context.Context, event Event) (Even
 	return event, nil
 }
 
+func (r *PostgresRepository) GetEvent(
+	ctx context.Context,
+	runID string,
+	seq int64,
+) (Event, error) {
+	event := Event{RunID: runID}
+	var stepID, toolCallID, parentID, checkpointID sql.NullString
+	var payload []byte
+	err := r.db.QueryRowContext(
+		ctx,
+		`SELECT event_type, conversation_id, step_id, tool_call_id,
+		        parent_id, checkpoint_id, payload_json, created_at
+		   FROM agent_events
+		  WHERE run_id = $1 AND seq = $2`,
+		runID,
+		seq,
+	).Scan(
+		&event.Type,
+		&event.ConversationID,
+		&stepID,
+		&toolCallID,
+		&parentID,
+		&checkpointID,
+		&payload,
+		&event.Timestamp,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Event{}, ErrEventNotFound
+	}
+	if err != nil {
+		return Event{}, fmt.Errorf("select agent event: %w", err)
+	}
+	event.Seq = seq
+	event.StepID = stepID.String
+	event.ToolCallID = toolCallID.String
+	event.ParentID = parentID.String
+	event.CheckpointID = checkpointID.String
+	if err := json.Unmarshal(payload, &event.Payload); err != nil {
+		return Event{}, fmt.Errorf("decode agent event payload: %w", err)
+	}
+	return event, nil
+}
+
 func (r *PostgresRepository) ListEvents(
 	ctx context.Context,
 	runID string,

@@ -121,6 +121,20 @@ func (s *Service) ListEvents(ctx context.Context, runID string, afterSeq int64) 
 	return s.repository.ListEvents(ctx, runID, afterSeq)
 }
 
+func (s *Service) GetEvent(
+	ctx context.Context,
+	runID string,
+	seq int64,
+) (Event, error) {
+	if strings.TrimSpace(runID) == "" {
+		return Event{}, errors.New("run_id is required")
+	}
+	if seq < 1 {
+		return Event{}, errors.New("event seq must be positive")
+	}
+	return s.repository.GetEvent(ctx, runID, seq)
+}
+
 func (s *Service) Subscribe(runID string) Subscription {
 	return s.broker.Subscribe(runID)
 }

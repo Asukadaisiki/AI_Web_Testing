@@ -12,6 +12,7 @@ var (
 	ErrRunCancelled         = errors.New("agent run is cancelled")
 	ErrRunNotWaitingForUser = errors.New("agent run is not waiting for user input")
 	ErrToolCallMismatch     = errors.New("tool call does not match the pending call")
+	ErrEventNotFound        = errors.New("agent event not found")
 )
 
 type Repository interface {
@@ -25,5 +26,6 @@ type Repository interface {
 		event Event,
 	) (AgentRun, Event, bool, error)
 	AppendEvent(ctx context.Context, event Event) (Event, error)
+	GetEvent(ctx context.Context, runID string, seq int64) (Event, error)
 	ListEvents(ctx context.Context, runID string, afterSeq int64) ([]Event, error)
 }

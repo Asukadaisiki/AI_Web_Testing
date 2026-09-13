@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 )
 
 const (
@@ -38,6 +40,7 @@ type ToolResultOmissionCounters struct {
 	Nodes          int `json:"nodes,omitempty"`
 	TargetEvidence int `json:"target_evidence,omitempty"`
 	Selectors      int `json:"selectors,omitempty"`
+	Candidates     int `json:"candidates,omitempty"`
 }
 
 type ToolResultTruncation struct {
@@ -146,27 +149,28 @@ type ToolResultPageSummary struct {
 }
 
 type ModelToolSummary struct {
-	SchemaVersion   string                      `json:"schema_version"`
-	PolicyVersion   string                      `json:"policy_version"`
-	Tool            string                      `json:"tool"`
-	Source          ToolResultSource            `json:"source"`
-	SummarySHA256   string                      `json:"summary_sha256,omitempty"`
-	Success         *bool                       `json:"success,omitempty"`
-	Status          string                      `json:"status,omitempty"`
-	Warnings        []string                    `json:"warnings,omitempty"`
-	Failures        []ToolResultErrorSummary    `json:"failures,omitempty"`
-	Context         *ToolResultContextSummary   `json:"context,omitempty"`
-	Observation     *StructuredObservation      `json:"observation,omitempty"`
-	ExecutedEffects []ObservedActionOption      `json:"executed_effects,omitempty"`
-	TaskPlan        *ToolResultTaskPlanSummary  `json:"task_plan,omitempty"`
-	DSL             *ToolResultDSLSummary       `json:"dsl,omitempty"`
-	Execution       *ToolResultExecutionSummary `json:"execution,omitempty"`
-	Report          *ToolResultReportSummary    `json:"report,omitempty"`
-	Repair          *ToolResultRepairSummary    `json:"repair,omitempty"`
-	Generic         *ToolResultGenericSummary   `json:"generic,omitempty"`
-	Pages           []ToolResultPageSummary     `json:"pages,omitempty"`
-	Truncation      ToolResultTruncation        `json:"truncation"`
-	ReferenceOnly   bool                        `json:"reference_only,omitempty"`
+	SchemaVersion    string                             `json:"schema_version"`
+	PolicyVersion    string                             `json:"policy_version"`
+	Tool             string                             `json:"tool"`
+	Source           ToolResultSource                   `json:"source"`
+	SummarySHA256    string                             `json:"summary_sha256,omitempty"`
+	Success          *bool                              `json:"success,omitempty"`
+	Status           string                             `json:"status,omitempty"`
+	Warnings         []string                           `json:"warnings,omitempty"`
+	Failures         []ToolResultErrorSummary           `json:"failures,omitempty"`
+	Context          *ToolResultContextSummary          `json:"context,omitempty"`
+	Observation      *StructuredObservation             `json:"observation,omitempty"`
+	ExecutedEffects  []ObservedActionOption             `json:"executed_effects,omitempty"`
+	TaskPlan         *ToolResultTaskPlanSummary         `json:"task_plan,omitempty"`
+	DSL              *ToolResultDSLSummary              `json:"dsl,omitempty"`
+	Execution        *ToolResultExecutionSummary        `json:"execution,omitempty"`
+	Report           *ToolResultReportSummary           `json:"report,omitempty"`
+	Repair           *ToolResultRepairSummary           `json:"repair,omitempty"`
+	ObservationQuery *ToolResultObservationQuerySummary `json:"observation_query,omitempty"`
+	Generic          *ToolResultGenericSummary          `json:"generic,omitempty"`
+	Pages            []ToolResultPageSummary            `json:"pages,omitempty"`
+	Truncation       ToolResultTruncation               `json:"truncation"`
+	ReferenceOnly    bool                               `json:"reference_only,omitempty"`
 }
 
 type ToolResultContextSummary struct {
@@ -353,6 +357,29 @@ type ToolResultRepairSummary struct {
 type ToolResultGenericSummary struct {
 	Status       string   `json:"status,omitempty"`
 	TopLevelKeys []string `json:"top_level_keys,omitempty"`
+}
+
+type ToolResultObservationQuerySummary struct {
+	PlanStepID     string                                  `json:"plan_step_id"`
+	SourceEventSeq int64                                   `json:"source_event_seq"`
+	Matches        []ToolResultObservationCandidateSummary `json:"matches"`
+	OmittedCount   int                                     `json:"omitted_count"`
+}
+
+type ToolResultObservationCandidateSummary struct {
+	CandidateRef  browsercontract.CandidateRef `json:"candidate_ref"`
+	ElementRef    string                       `json:"element_ref"`
+	Role          string                       `json:"role"`
+	Name          string                       `json:"name"`
+	DOM           ToolResultObservationDOM     `json:"dom"`
+	Locator       browsercontract.LocatorSpec  `json:"locator"`
+	Provenance    string                       `json:"provenance"`
+	ObservedCount int                          `json:"observed_count"`
+}
+
+type ToolResultObservationDOM struct {
+	Tag   string            `json:"tag"`
+	Attrs map[string]string `json:"attrs"`
 }
 
 type rawExploreResult struct {
@@ -861,6 +888,8 @@ func buildCapabilityToolSummary(
 	switch tool {
 	case "set_task_plan":
 		summary.TaskPlan = summarizeTaskPlanResult(value)
+	case "query_observation":
+		summary.ObservationQuery = summarizeObservationQueryResult(value)
 	case "generate_dsl":
 		summary.DSL = summarizeDSLResult(value)
 	case "execute_dsl":
@@ -873,6 +902,89 @@ func buildCapabilityToolSummary(
 		summary.Generic = summarizeGenericResult(value)
 	}
 	return encodeBoundedSummary(&summary)
+}
+
+func summarizeObservationQueryResult(
+	value map[string]any,
+) *ToolResultObservationQuerySummary {
+	raw, _ := json.Marshal(value)
+	var source struct {
+		PlanStepID     string                                  `json:"plan_step_id"`
+		SourceEventSeq int64                                   `json:"source_event_seq"`
+		Matches        []ToolResultObservationCandidateSummary `json:"matches"`
+		OmittedCount   int                                     `json:"omitted_count"`
+	}
+	_ = json.Unmarshal(raw, &source)
+	result := &ToolResultObservationQuerySummary{
+		PlanStepID:     boundedUTF8(source.PlanStepID, 64),
+		SourceEventSeq: source.SourceEventSeq,
+		Matches:        make([]ToolResultObservationCandidateSummary, 0, len(source.Matches)),
+		OmittedCount:   max(0, source.OmittedCount),
+	}
+	for _, match := range source.Matches {
+		match.CandidateRef.SchemaVersion = boundedUTF8(
+			match.CandidateRef.SchemaVersion,
+			64,
+		)
+		match.CandidateRef.ProbeID = boundedUTF8(match.CandidateRef.ProbeID, 64)
+		match.CandidateRef.ObservationID = boundedUTF8(
+			match.CandidateRef.ObservationID,
+			64,
+		)
+		match.CandidateRef.CandidateID = boundedUTF8(
+			match.CandidateRef.CandidateID,
+			64,
+		)
+		match.ElementRef = boundedUTF8(match.ElementRef, 256)
+		match.Role = boundedUTF8(match.Role, 64)
+		match.Name = boundedUTF8(match.Name, 256)
+		match.DOM.Tag = boundedUTF8(match.DOM.Tag, 64)
+		match.DOM.Attrs = boundedStringMap(match.DOM.Attrs, 16, 64, 256)
+		match.Locator = boundedLocator(match.Locator)
+		match.Provenance = boundedUTF8(match.Provenance, 64)
+		result.Matches = append(result.Matches, match)
+	}
+	return result
+}
+
+func boundedStringMap(
+	values map[string]string,
+	limit int,
+	keyBytes int,
+	valueBytes int,
+) map[string]string {
+	result := make(map[string]string)
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	for _, key := range keys {
+		result[boundedUTF8(key, keyBytes)] = boundedUTF8(values[key], valueBytes)
+	}
+	return result
+}
+
+func boundedLocator(locator browsercontract.LocatorSpec) browsercontract.LocatorSpec {
+	locator.Kind = boundedUTF8(locator.Kind, 32)
+	locator.Role = boundedUTF8(locator.Role, 64)
+	locator.Value = boundedUTF8(locator.Value, 512)
+	if locator.Name != nil {
+		value := boundedUTF8(*locator.Name, 256)
+		locator.Name = &value
+	}
+	if locator.Scope != nil {
+		value := boundedLocator(*locator.Scope)
+		locator.Scope = &value
+	}
+	if locator.Target != nil {
+		value := boundedLocator(*locator.Target)
+		locator.Target = &value
+	}
+	return locator
 }
 
 func summarizeTaskPlanResult(value map[string]any) *ToolResultTaskPlanSummary {
@@ -1278,6 +1390,16 @@ func marshalUnsignedSummary(summary ModelToolSummary) ([]byte, error) {
 }
 
 func omitOneSummaryDetail(summary *ModelToolSummary) bool {
+	if summary.ObservationQuery != nil &&
+		len(summary.ObservationQuery.Matches) > 0 {
+		omitCount := max(1, len(summary.ObservationQuery.Matches)/4)
+		keep := len(summary.ObservationQuery.Matches) - omitCount
+		summary.ObservationQuery.Matches =
+			summary.ObservationQuery.Matches[:keep]
+		summary.ObservationQuery.OmittedCount += omitCount
+		summary.Truncation.Omitted.Candidates += omitCount
+		return true
+	}
 	pageIndex := pageWithMostNodes(summary.Pages)
 	if pageIndex >= 0 {
 		page := &summary.Pages[pageIndex]
@@ -1353,6 +1475,12 @@ func makePageReferenceOnly(page *ToolResultPageSummary) ToolResultOmissionCounte
 }
 
 func makeSummaryReferenceOnly(summary *ModelToolSummary, reason string) {
+	if summary.ObservationQuery != nil {
+		omitted := len(summary.ObservationQuery.Matches)
+		summary.ObservationQuery.Matches = nil
+		summary.ObservationQuery.OmittedCount += omitted
+		summary.Truncation.Omitted.Candidates += omitted
+	}
 	for index := range summary.Pages {
 		addOmissions(
 			&summary.Truncation.Omitted,
