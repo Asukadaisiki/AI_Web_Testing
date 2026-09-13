@@ -262,14 +262,26 @@ func (r *ObservationReader) readObservations(
 	}
 	observations := make([]persistedObservation, 0, len(content.Pages)+1)
 	if payload.Tool == "explore_page" {
-		if content.Observation == nil {
+		if !hasObservation(content.Observation) {
 			return nil, errors.New("explore_page source has no observation")
 		}
-		observations = append(observations, *content.Observation)
+		observation, err := decodePersistedObservation(content.Observation)
+		if err != nil {
+			return nil, err
+		}
+		observations = append(observations, observation)
 	} else {
-		for _, page := range content.Pages {
-			if page.Observation != nil {
-				observations = append(observations, *page.Observation)
+		for index, page := range content.Pages {
+			if hasObservation(page.Observation) {
+				observation, err := decodePersistedObservation(page.Observation)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"decode source page %d observation: %w",
+						index,
+						err,
+					)
+				}
+				observations = append(observations, observation)
 			}
 		}
 	}
@@ -291,6 +303,30 @@ func (r *ObservationReader) readObservations(
 		seenObservations[key] = true
 	}
 	return observations, nil
+}
+
+func hasObservation(raw json.RawMessage) bool {
+	value := strings.TrimSpace(string(raw))
+	return value != "" && value != "null"
+}
+
+func decodePersistedObservation(
+	raw json.RawMessage,
+) (persistedObservation, error) {
+	if _, err := browsercontract.DecodeObservation(raw); err != nil {
+		return persistedObservation{}, fmt.Errorf(
+			"validate persisted observation: %w",
+			err,
+		)
+	}
+	var observation persistedObservation
+	if err := json.Unmarshal(raw, &observation); err != nil {
+		return persistedObservation{}, fmt.Errorf(
+			"decode persisted observation: %w",
+			err,
+		)
+	}
+	return observation, nil
 }
 
 func validateObservationQuery(query ObservationQuery) error {
@@ -441,10 +477,10 @@ func candidateOption(
 }
 
 type persistedExplorationResult struct {
-	ProbeID     string                `json:"probe_id"`
-	Observation *persistedObservation `json:"observation_v2"`
+	ProbeID     string          `json:"probe_id"`
+	Observation json.RawMessage `json:"observation_v2"`
 	Pages       []struct {
-		Observation *persistedObservation `json:"observation_v2"`
+		Observation json.RawMessage `json:"observation_v2"`
 	} `json:"pages"`
 }
 

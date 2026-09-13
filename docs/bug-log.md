@@ -48,6 +48,23 @@
 
 ## 问题记录
 
+## BUG-193 | ObservationReader 接受结构不完整的持久化 Observation
+
+- 日期：2026-09-13
+- 状态：fixed
+- 严重度：high
+- 来源：Task 3 代码审查
+- 描述：ObservationReader 在信任持久化 Observation 前只检查 schema、lineage、部分 ID 和 SHA 长度，缺失 `context_path` 会退化为 nil slices，64 个非 hex 字符也可通过，其他必需字段同样未完整验证。
+- 复现步骤：
+  1. 将合法 `observation_v2` fixture 的 `context_path`、`element_ref`、`provenance` 或 runtime 必需字段删除或置空。
+  2. 或将 `state_sha256` 替换为 64 个非 hex 字符。
+  3. 通过 `ObservationReader.Query` 读取对应 current-run `tool.result`，旧实现不返回错误。
+- 影响：畸形持久化数据可被提升为可信 candidate 来源，导致缺失上下文、来源或运行时事实的 locator 进入 grounding 流程。
+- 根因：reader 直接反序列化到只包含查询字段的私有结构，JSON 缺失字段被 Go 零值吞掉；`validatePersistedObservation` 未执行完整 BrowserObservation v2 契约校验。
+- 处理：共享 `browsercontract.DecodeObservation` 新增完整 v2 结构校验；reader 保留原始 Observation JSON 并在投影前调用该校验，同时保留 lineage 和 candidate 唯一性检查。
+- 验证：15 个畸形 payload 回归测试、Task 3 四包测试和 `go test ./...` 全部通过。
+- 关联记录：`docs/execution-log.md#2026-09-13--task-3-持久化-observation-严格校验修复`。
+
 ## BUG-192 | PostgreSQL 事件集成测试仍按旧事件数量断言
 
 - 日期：2026-09-13

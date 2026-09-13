@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-13 | Task 3 持久化 Observation 严格校验修复
+
+- 任务：修复 ObservationReader 将仅部分校验的持久化 Observation 当作可信 candidate 来源的问题。
+- 操作：先增加 15 个畸形 payload 回归用例并确认 RED；随后让 reader 在字段投影前调用共享 `browsercontract.DecodeObservation`，并将共享解码升级为完整 v2 结构校验。
+- 结果：缺失 `context_path`、非 hex SHA、空 `element_ref` / `provenance`、缺失 runtime 必需字段及其他畸形 Observation 均被拒绝，合法旧 payload 的查询和 candidate 解析保持兼容。关联 `BUG-193`。
+- 验证：`internal/groundingplan` 聚焦测试、Task 3 四包测试和 `go test ./...` 全部通过；当前未设置 `TEST_DATABASE_URL`，真实 PostgreSQL 测试按仓库约定 skip。
+- 后续：无。
+
 ## 2026-09-13 | Task 2 GroundingPlan 修复轮 1
 
 - 任务：修复 GroundingPlan 生产迁移遗漏、TaskPlan 换版非原子和无效 probe evidence 产生脏 revision 三项 review finding。

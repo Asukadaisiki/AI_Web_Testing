@@ -337,6 +337,9 @@ type BrowserObservation struct {
 }
 
 func DecodeObservation(raw json.RawMessage) (BrowserObservation, error) {
+	if err := validateObservationJSON(raw); err != nil {
+		return BrowserObservation{}, err
+	}
 	var observation BrowserObservation
 	if err := json.Unmarshal(raw, &observation); err != nil {
 		return BrowserObservation{}, err
