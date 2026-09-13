@@ -48,6 +48,24 @@
 
 ## 问题记录
 
+## BUG-194 | 当前环境无法连接 GitHub 远端
+
+- 日期：2026-09-13
+- 状态：open
+- 严重度：low
+- 来源：GroundingPlan 修复分支同步
+- 描述：本地分支和提交均正常，但当前执行环境无法连接 GitHub，导致远端检查与 `git push` 失败。
+- 复现步骤：
+  1. 执行 `git ls-remote --heads origin feat/dynamic-grounding-plan`。
+  2. 执行 `git push -u origin feat/dynamic-grounding-plan`。
+  3. 分别尝试 HTTPS 443、SSH 22 和 `ssh.github.com` 443。
+  4. 所有连接均超时，HTTPS 报 `Failed to connect to github.com port 443`。
+- 影响：`feat/dynamic-grounding-plan` 的本地提交暂时无法同步到 GitHub；本地分支和工作树不受影响。
+- 根因：当前环境到 GitHub 的 HTTPS/SSH 网络路径不可达；没有证据表明是凭据、分支冲突或仓库权限问题。
+- 处理：保留本地分支和提交；网络恢复后重试 `git push -u origin feat/dynamic-grounding-plan`。
+- 验证：`git status --short` 为空；本地 HEAD 和提交历史完整；三种 GitHub 连接方式均超时。
+- 关联记录：`docs/execution-log.md#2026-09-13--groundingplan-修复分支同步-github`。
+
 ## BUG-193 | ObservationReader 接受结构不完整的持久化 Observation
 
 - 日期：2026-09-13

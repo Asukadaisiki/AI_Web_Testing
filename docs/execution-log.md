@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-13 | GroundingPlan 修复分支同步 GitHub
+
+- 任务：将 `feat/dynamic-grounding-plan` 的设计、TDD 计划和已完成 Task 1-4 修复提交推送到远程仓库。
+- 操作：核对分支、工作树、`origin/main..HEAD` 的 11 个提交和远端配置；尝试 HTTPS 远端检查和 `git push -u origin feat/dynamic-grounding-plan`，并补充尝试 SSH 22 与 `ssh.github.com` 443。
+- 结果：本地分支、提交和工作树完整；当前环境到 GitHub 的三条网络路径均连接超时，尚未完成远端推送。记录 `BUG-194`。
+- 验证：分支为 `feat/dynamic-grounding-plan`；推送前 HEAD 为 `ab6d5c1`；工作区干净；HTTPS 明确返回 `Failed to connect to github.com port 443`，两条 SSH 路径同样超时。
+- 后续：当前日志提交后再做一次 HTTPS 推送；若仍超时，保留本地提交，网络恢复后重试。
+
 ## 2026-09-13 | Task 4 candidate_ref hydration 审查问题修复
 
 - 任务：修复 candidate_ref hydration 审查发现的 forbidden-action 绕过、重复 occurrence 状态推进和 probing 状态悬挂三类问题。
