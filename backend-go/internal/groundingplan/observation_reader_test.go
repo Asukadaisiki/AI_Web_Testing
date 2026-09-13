@@ -57,6 +57,9 @@ func TestObservationReaderResolvesCandidateOnlyFromCurrentRun(t *testing.T) {
 		resolved.Locator.Kind != "css" ||
 		resolved.Locator.Value != "#submit_search" ||
 		resolved.Provenance != "a11y_backend_dom_node" ||
+		resolved.Metadata.Role != "button" ||
+		resolved.Metadata.DOMTag != "button" ||
+		resolved.Metadata.DOMAttrs["id"] != "submit_search" ||
 		len(resolved.ContextPath.Frames) != 0 ||
 		len(resolved.ContextPath.ShadowHosts) != 0 {
 		t.Fatalf("resolved candidate = %#v", resolved)

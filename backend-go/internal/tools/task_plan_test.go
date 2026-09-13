@@ -102,7 +102,7 @@ func TestSetTaskPlanUsesAuthoritativeRunGoal(t *testing.T) {
 
 func TestBrowserToolDoesNotForwardPlanMetadata(t *testing.T) {
 	client := &fakeCapabilityClient{}
-	handler := NewBrowserTools(client, nil, nil)[0]
+	handler := NewBrowserTools(client, nil, nil, nil)[0]
 	_, err := handler.Execute(context.Background(), Call{
 		RunID: "run-tool", ToolCallID: "call-tool", Name: "explore_page",
 		Arguments: json.RawMessage(`{

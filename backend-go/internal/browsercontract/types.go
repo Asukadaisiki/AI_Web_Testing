@@ -99,14 +99,23 @@ type ContextPath struct {
 	ShadowHosts []string `json:"shadow_hosts"`
 }
 
+type CandidateElementMetadata struct {
+	Role     string
+	Name     string
+	DOMTag   string
+	DOMText  string
+	DOMAttrs map[string]string
+}
+
 type TrustedResolvedCandidate struct {
-	Source          CandidateRef `json:"source"`
-	PageStateID     string       `json:"page_state_id"`
-	PageStateSHA256 string       `json:"page_state_sha256"`
-	ElementRef      string       `json:"element_ref"`
-	Locator         LocatorSpec  `json:"locator"`
-	ContextPath     ContextPath  `json:"context_path"`
-	Provenance      string       `json:"provenance"`
+	Source          CandidateRef             `json:"source"`
+	PageStateID     string                   `json:"page_state_id"`
+	PageStateSHA256 string                   `json:"page_state_sha256"`
+	ElementRef      string                   `json:"element_ref"`
+	Locator         LocatorSpec              `json:"locator"`
+	ContextPath     ContextPath              `json:"context_path"`
+	Provenance      string                   `json:"provenance"`
+	Metadata        CandidateElementMetadata `json:"-"`
 }
 
 func (c TrustedResolvedCandidate) Validate() error {

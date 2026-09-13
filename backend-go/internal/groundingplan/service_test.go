@@ -336,6 +336,57 @@ func TestRecordProbeResultRejectsInvalidEvidenceWithoutAppendingRevision(
 	}
 }
 
+func TestStartCandidateProbeAdvancesSelectionAndProbingAtomically(t *testing.T) {
+	ctx := context.Background()
+	repository := newRecordingRepository()
+	service := NewService(repository)
+	taskPlan := testTaskPlan("task-plan-start-probe", "run-start-probe", 1, "click")
+	if _, err := service.EnsureForTaskPlan(ctx, taskPlan); err != nil {
+		t.Fatal(err)
+	}
+	ref := testCandidateRef("candidate-start-probe")
+	if _, err := service.RecordObservationQuery(
+		ctx,
+		taskPlan.RunID,
+		QueryRecord{
+			PlanStepID: taskPlan.Steps[0].ID, SourceEventSeq: ref.SourceEventSeq,
+			ObservationID: ref.ObservationID, Action: taskPlan.Steps[0].Action,
+			Query: "submit",
+		},
+		[]CandidateOption{{
+			CandidateRef: ref, ElementRef: "state-1:7",
+			Locator: browsercontract.LocatorSpec{
+				Kind: "role", Role: "button",
+				Name: stringPointer("Submit"), Exact: true,
+			},
+			Provenance: "a11y_exact", ObservedCount: 1,
+		}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	revisionCount := len(repository.history[taskPlan.ID])
+
+	probing, err := service.StartCandidateProbe(
+		ctx,
+		taskPlan.RunID,
+		taskPlan.Steps[0].ID,
+		ref,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repository.history[taskPlan.ID]); got != revisionCount+1 {
+		t.Fatalf("revision rows = %d, want %d", got, revisionCount+1)
+	}
+	if probing.Steps[0].Status != StepProbing ||
+		probing.Steps[0].SelectedCandidateRef == nil ||
+		*probing.Steps[0].SelectedCandidateRef != ref ||
+		len(probing.Steps[0].ProbeAttempts) != 1 ||
+		probing.Steps[0].ProbeAttempts[0].Status != StepProbing {
+		t.Fatalf("probing plan = %#v", probing)
+	}
+}
+
 func assertPlanState(
 	t *testing.T,
 	plan Plan,

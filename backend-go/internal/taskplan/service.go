@@ -148,6 +148,66 @@ func (s *Service) Authorize(
 	return nil
 }
 
+func (s *Service) AuthorizeResolvedCandidates(
+	ctx context.Context,
+	runID string,
+	candidates []ResolvedCandidateAuthorization,
+) error {
+	plan, err := s.repository.GetCurrent(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if plan.Status != StatusGrounding {
+		return fmt.Errorf(
+			"resolved candidate authorization requires task plan status %q, got %q",
+			StatusGrounding,
+			plan.Status,
+		)
+	}
+	occurrences := make(map[string]int)
+	for index, candidate := range candidates {
+		if err := candidate.Candidate.Validate(); err != nil {
+			return fmt.Errorf("resolved candidate %d: %w", index, err)
+		}
+		step, ok := stepByID(plan.Steps, candidate.PlanStepID)
+		if !ok {
+			return fmt.Errorf(
+				"resolved candidate references unknown plan step %q",
+				candidate.PlanStepID,
+			)
+		}
+		if !probeActionMatches(step.Action, candidate.Action) {
+			return fmt.Errorf(
+				"resolved candidate action %q does not match plan step %q",
+				candidate.Action,
+				candidate.PlanStepID,
+			)
+		}
+		if forbidden(
+			plan.ForbiddenActions,
+			resolvedCandidateAuthorizationText(candidate.Candidate),
+		) {
+			return fmt.Errorf(
+				"resolved candidate for plan step %q violates forbidden_actions",
+				candidate.PlanStepID,
+			)
+		}
+		occurrences[candidate.PlanStepID]++
+	}
+	for planStepID, actual := range occurrences {
+		step, _ := stepByID(plan.Steps, planStepID)
+		if actual != step.ExpectedOccurrences {
+			return fmt.Errorf(
+				"resolved candidate plan step %q has %d occurrences, requires %d occurrences",
+				planStepID,
+				actual,
+				step.ExpectedOccurrences,
+			)
+		}
+	}
+	return nil
+}
+
 func (s *Service) RecordToolResult(
 	ctx context.Context,
 	runID string,
@@ -753,6 +813,30 @@ func mapProbeActionOwners(
 		}
 	}
 	return owners, nil
+}
+
+func resolvedCandidateAuthorizationText(
+	candidate browsercontract.TrustedResolvedCandidate,
+) string {
+	locator, _ := json.Marshal(candidate.Locator)
+	values := []string{
+		string(locator),
+		candidate.ElementRef,
+		candidate.Provenance,
+		candidate.Metadata.Role,
+		candidate.Metadata.Name,
+		candidate.Metadata.DOMTag,
+		candidate.Metadata.DOMText,
+	}
+	keys := make([]string, 0, len(candidate.Metadata.DOMAttrs))
+	for key := range candidate.Metadata.DOMAttrs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		values = append(values, key, candidate.Metadata.DOMAttrs[key])
+	}
+	return strings.Join(values, " ")
 }
 
 func stepByID(steps []Step, id string) (Step, bool) {

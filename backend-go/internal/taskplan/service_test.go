@@ -323,6 +323,188 @@ func TestTaskPlanRejectsForbiddenAndUnplannedProbeActions(t *testing.T) {
 	}
 }
 
+func TestAuthorizeResolvedCandidatesUsesTrustedElementMetadata(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(NewMemoryRepository())
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-trusted-candidate",
+		Definition: Definition{
+			Goal:             "Open account options",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{"checkout"},
+			Steps: []StepDefinition{{
+				ID: "open_options", Intent: "Open account options",
+				Action: "click", Target: "Account options",
+				ExpectedOccurrences: 1, Idempotency: "idempotent",
+				SideEffect:           SideEffectBrowserState,
+				Preconditions:        []string{},
+				CompletionConditions: []string{"options visible"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := browsercontract.TrustedResolvedCandidate{
+		Source: browsercontract.CandidateRef{
+			SchemaVersion:  browsercontract.CandidateRefVersion,
+			SourceEventSeq: 27,
+			ProbeID:        "probe-source",
+			ObservationID:  "obs-source",
+			CandidateID:    "candidate-options",
+		},
+		PageStateID:     "S0",
+		PageStateSHA256: strings.Repeat("a", 64),
+		ElementRef:      "S0:42",
+		Locator: browsercontract.LocatorSpec{
+			Kind: "css", Value: "#account-options",
+		},
+		ContextPath: browsercontract.ContextPath{
+			Frames: []string{}, ShadowHosts: []string{},
+		},
+		Provenance: "a11y_backend_dom_node",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*browsercontract.TrustedResolvedCandidate)
+	}{
+		{
+			name: "locator",
+			mutate: func(candidate *browsercontract.TrustedResolvedCandidate) {
+				candidate.Locator.Value = "#checkout"
+			},
+		},
+		{
+			name: "accessible name",
+			mutate: func(candidate *browsercontract.TrustedResolvedCandidate) {
+				candidate.Metadata.Name = "Checkout"
+			},
+		},
+		{
+			name: "DOM text",
+			mutate: func(candidate *browsercontract.TrustedResolvedCandidate) {
+				candidate.Metadata.DOMText = "Proceed to checkout"
+			},
+		},
+		{
+			name: "DOM attribute",
+			mutate: func(candidate *browsercontract.TrustedResolvedCandidate) {
+				candidate.Metadata.DOMAttrs = map[string]string{
+					"data-action": "checkout",
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := base
+			test.mutate(&candidate)
+			err := service.AuthorizeResolvedCandidates(
+				ctx,
+				plan.RunID,
+				[]ResolvedCandidateAuthorization{{
+					PlanStepID: "open_options",
+					Action:     "click",
+					Candidate:  candidate,
+				}},
+			)
+			if err == nil || !strings.Contains(err.Error(), "forbidden") {
+				t.Fatalf("error = %v, want forbidden candidate rejection", err)
+			}
+		})
+	}
+
+	if err := service.AuthorizeResolvedCandidates(
+		ctx,
+		plan.RunID,
+		[]ResolvedCandidateAuthorization{{
+			PlanStepID: "open_options",
+			Action:     "click",
+			Candidate:  base,
+		}},
+	); err != nil {
+		t.Fatalf("benign candidate rejected: %v", err)
+	}
+}
+
+func TestAuthorizeResolvedCandidatesRequiresExpectedOccurrences(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(NewMemoryRepository())
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-candidate-occurrences",
+		Definition: Definition{
+			Goal:             "Increase twice",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "increment", Intent: "Increase quantity",
+				Action: "click", Target: "Increase",
+				ExpectedOccurrences: 2, Idempotency: "non_idempotent",
+				SideEffect:           SideEffectBrowserState,
+				Preconditions:        []string{},
+				CompletionConditions: []string{"quantity increased twice"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := browsercontract.TrustedResolvedCandidate{
+		Source: browsercontract.CandidateRef{
+			SchemaVersion:  browsercontract.CandidateRefVersion,
+			SourceEventSeq: 27,
+			ProbeID:        "probe-source",
+			ObservationID:  "obs-source",
+			CandidateID:    "candidate-increment",
+		},
+		PageStateID:     "S0",
+		PageStateSHA256: strings.Repeat("a", 64),
+		ElementRef:      "S0:42",
+		Locator: browsercontract.LocatorSpec{
+			Kind: "css", Value: "#increment",
+		},
+		ContextPath: browsercontract.ContextPath{
+			Frames: []string{}, ShadowHosts: []string{},
+		},
+		Provenance: "a11y_backend_dom_node",
+	}
+	authorization := ResolvedCandidateAuthorization{
+		PlanStepID: "increment",
+		Action:     "click",
+		Candidate:  candidate,
+	}
+
+	err = service.AuthorizeResolvedCandidates(
+		ctx,
+		plan.RunID,
+		[]ResolvedCandidateAuthorization{authorization},
+	)
+	if err == nil || !strings.Contains(err.Error(), "requires 2 occurrences") {
+		t.Fatalf("one occurrence error = %v", err)
+	}
+
+	if err := service.AuthorizeResolvedCandidates(
+		ctx,
+		plan.RunID,
+		[]ResolvedCandidateAuthorization{authorization, authorization},
+	); err != nil {
+		t.Fatalf("two occurrences rejected: %v", err)
+	}
+
+	err = service.AuthorizeResolvedCandidates(
+		ctx,
+		plan.RunID,
+		[]ResolvedCandidateAuthorization{
+			authorization,
+			authorization,
+			authorization,
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "requires 2 occurrences") {
+		t.Fatalf("three occurrences error = %v", err)
+	}
+}
+
 func TestExploreFlowRequiresExactlyOneLocatorOrCandidateReference(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(NewMemoryRepository())

@@ -133,6 +133,12 @@ type CreateRequest struct {
 	Definition  Definition
 }
 
+type ResolvedCandidateAuthorization struct {
+	PlanStepID string
+	Action     string
+	Candidate  browsercontract.TrustedResolvedCandidate
+}
+
 type Repository interface {
 	CreateVersion(ctx context.Context, plan Plan) (Plan, error)
 	GetCurrent(ctx context.Context, runID string) (Plan, error)

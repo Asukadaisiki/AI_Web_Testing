@@ -218,6 +218,13 @@ func (r *ObservationReader) ResolveCandidate(
 		Locator:         found.candidate.Locator,
 		ContextPath:     found.element.ContextPath,
 		Provenance:      found.candidate.Provenance,
+		Metadata: browsercontract.CandidateElementMetadata{
+			Role:     found.element.A11y.Role,
+			Name:     found.element.A11y.Name,
+			DOMTag:   found.element.DOM.Tag,
+			DOMText:  found.element.DOM.Text,
+			DOMAttrs: maps.Clone(found.element.DOM.Attrs),
+		},
 	}, nil
 }
 

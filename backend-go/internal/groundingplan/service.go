@@ -209,6 +209,57 @@ func (s *Service) RecordCandidateSelection(
 	return s.appendRevision(ctx, next)
 }
 
+func (s *Service) StartCandidateProbe(
+	ctx context.Context,
+	runID string,
+	planStepID string,
+	candidate browsercontract.CandidateRef,
+) (Plan, error) {
+	current, err := s.activePlan(ctx, runID)
+	if err != nil {
+		return Plan{}, err
+	}
+	index, err := currentStepIndex(current, planStepID)
+	if err != nil {
+		return Plan{}, err
+	}
+	step := current.Steps[index]
+	if step.Status != StepCandidatesAvailable {
+		return Plan{}, fmt.Errorf(
+			"grounding step %q cannot start a candidate probe from status %q",
+			step.PlanStepID,
+			step.Status,
+		)
+	}
+	if err := candidate.Validate(); err != nil {
+		return Plan{}, err
+	}
+	found := false
+	for _, option := range step.CandidateRefs {
+		if option.CandidateRef == candidate {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Plan{}, errors.New(
+			"selected candidate is not available for the grounding step",
+		)
+	}
+
+	next := clonePlan(current)
+	selected := candidate
+	next.Steps[index].SelectedCandidateRef = &selected
+	next.Steps[index].Status = StepProbing
+	next.Steps[index].LastError = ""
+	next.Steps[index].ProbeAttempts = append(
+		next.Steps[index].ProbeAttempts,
+		ProbeAttempt{Status: StepProbing},
+	)
+	next.Status = StatusActive
+	return s.appendRevision(ctx, next)
+}
+
 func (s *Service) RecordProbeResult(
 	ctx context.Context,
 	runID string,

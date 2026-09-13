@@ -109,6 +109,7 @@ func main() {
 			browserClient,
 			observationReader,
 			groundingPlanService,
+			taskPlanService,
 		)...,
 	)
 	toolHandlers = append(toolHandlers, tools.NewGenerateDSLTool(controlPlane))
