@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-13 | Task 4 candidate_ref hydration 审查问题修复
+
+- 任务：修复 candidate_ref hydration 审查发现的 forbidden-action 绕过、重复 occurrence 状态推进和 probing 状态悬挂三类问题。
+- 操作：按 TDD 增加可信候选元数据授权、expected occurrences、重复 PlanStep 去重、Worker/postprocess 失败持久化以及 A11y description/value 禁止语义回归；完成两轮修复和 scoped 复审。
+- 结果：Go 在调用 Worker 前使用完整可信 locator、A11y 和 DOM 元数据执行二次禁止动作授权；同一步多次 occurrence 只原子推进一次 GroundingPlan 状态且数量必须匹配；所有 Worker/postprocess 错误均退出 probing 并保留持久化错误；内部 metadata 不会序列化给 Worker。
+- 验证：三项原始 finding 均由复审确认 addressed；`go test -count=1 ./internal/tools ./internal/taskplan ./internal/groundingplan ./internal/harness` 通过，先前修复提交的 `go test -count=1 ./...`、`go vet ./...` 和 `git diff --check` 通过。
+- 后续：进入 Task 5，实现 Python Worker 对 Go 注入 `resolved_candidate` 的当前页面 runtime 复验；BUG-188 在 Chromium 端到端 candidate 复用验收完成前保持 open。
+
 ## 2026-09-13 | Task 3 持久化 Observation 严格校验修复
 
 - 任务：修复 ObservationReader 将仅部分校验的持久化 Observation 当作可信 candidate 来源的问题。
