@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-13 | Dynamic GroundingPlan TDD 实施计划
+
+- 任务：将已批准的 Semantic TaskPlan + Dynamic GroundingPlan 设计拆分为可执行的 TDD 开发计划。
+- 操作：按共享合同、GroundingPlan 持久化、Observation 查询、Go candidate hydration、Python runtime 复验、Harness/事件集成、真实 Chromium 与全量验收、最终审查和 GitHub 同步拆分 8 个任务；为每项定义文件、接口、RED/GREEN 命令和提交边界。
+- 结果：新增 `docs/superpowers/plans/2026-09-13-dynamic-grounding-plan.md`，实施默认采用 Subagent-Driven Development；计划明确不运行付费模型 E2E。
+- 验证：占位扫描为空；核对计划中的既有文件路径并修正 compiler 测试归属；合同名称和跨任务接口一致；`git diff --check` 通过。
+- 后续：提交计划后创建隔离 worktree，建立 SDD ledger，运行基线门禁并从 Task 1 开始严格 RED-GREEN-REFACTOR。
+
 ## 2026-09-13 | Semantic TaskPlan 与动态 GroundingPlan 设计
 
 - 任务：按用户确认的方案 1 设计“保留原子级 Semantic TaskPlan，新增独立动态 GroundingPlan”，并覆盖 BUG-188 candidate 复用。
