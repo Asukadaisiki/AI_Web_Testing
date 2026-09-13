@@ -56,6 +56,54 @@
 
 ## 任务记录
 
+## 2026-09-13 | Semantic TaskPlan 与动态 GroundingPlan 设计
+
+- 任务：按用户确认的方案 1 设计“保留原子级 Semantic TaskPlan，新增独立动态 GroundingPlan”，并覆盖 BUG-188 candidate 复用。
+- 操作：梳理 TaskPlan PostgreSQL 持久化、Agent Event 完整 ToolResult、BrowserObservation artifact、Harness 工具授权、Worker GroundingQuery 和 research-v2 compiler；新增设计规格 `docs/superpowers/specs/2026-09-13-semantic-taskplan-dynamic-grounding-plan-design.md`。
+- 结果：确定 TaskPlan 继续负责业务动作语义；新增与精确 TaskPlan binding 关联、按不可变 revision 持久化的 `grounding.plan.v1`；新增只读 `query_observation`、不可伪造的当前 Run `candidate_ref`、`grounding.query.v2` 和 Worker 当前页面 runtime 复验；v1 和旧数据保持兼容，一对多动作展开留作后续。
+- 验证：设计自检确认无 TBD/TODO，占位扫描为空；候选引用、查询结果、GroundingQuery、持久化、状态机、错误分类、安全边界和离线验收均有明确合同；`git diff --check` 通过。
+- 后续：用户审阅设计规格后，使用 Superpowers `writing-plans` 生成 TDD 实施计划。
+
+## 2026-09-13 | TaskPlan 权威边界复核
+
+- 任务：解释模型在首次规划时尚无页面事实的情况下，TaskPlan 如何作为权威，以及工具结果与 DSL 生成的关系。
+- 操作：核对 `agent.task_plan.v2` 的 Plan/Step 字段、`set_task_plan` 工具约束、Harness 四阶段 Prompt、TaskPlan `RecordToolResult` 推进条件和 research-v2 compiler。
+- 结果：TaskPlan 仅是业务语义权威，不是页面事实或 locator 权威；首次内容应限定为目标分解、动作类型、语义目标、值、顺序、次数、前置/完成条件、幂等性、副作用和禁止动作，不得包含未观察的 CSS、DOM、A11y 或 candidate。探索结果为 PlanStep 补充 `EvidenceRef`、状态和 `TargetBinding`；只有全部 PlanStep grounded 并进入 `ready_for_generation` 后，模型才能用 plan/binding ID 生成 Draft DSL，Go compiler 再注入可信 locator candidates。
+- 验证：`types.go` 明确区分 Step 的业务字段与运行后填充的 Evidence/TargetBinding；`set_task_plan` Schema 禁止 locator 字段；Harness Prompt 禁止首次规划虚构页面事实；`RecordToolResult` 仅在证据和必需 binding 齐备时推进 Step，并在全部 grounded 后切换状态。
+- 后续：BUG-188 方案保持 TaskPlan 业务语义不变，补齐 Observation 查询和 candidate reference，使模型基于工具事实选择候选，而不是在 TaskPlan 或下一次 GroundingQuery 中猜元素。
+
+## 2026-09-13 | Agent 新旧 Grounding 路径可视化对比
+
+- 任务：对比 Phase B 统一 Grounding 前后的 Agent 执行路径，并通过流程图说明差异。
+- 操作：以当前源码和最近 Agent 路径复核为基础，将旧路径的 Explorer/Go/Runner 三次目标解释与当前 TaskPlan/ResolvedTarget/TargetBinding/Compiler 身份链并行展示；单独标出 BUG-188 位于 Observation candidate 到下一次 GroundingQuery 的引用缺口。
+- 结果：旧路径中 AI target、Explorer 实际元素、Go 文本重绑定和 Runner locator 可能不一致；当前路径已将 Worker 唯一解析结果通过 candidate 和 TargetBinding 传入 DSL compiler/Runner，但尚不能在后续 GroundingQuery 中直接复用已有 candidate。
+- 验证：可视化内容与当前 `harness.go`、`tools/browser.go`、Python `page_explorer.py`、TaskPlan `service.go/compiler.go` 的实际职责对应；未修改业务代码。
+- 后续：用户确认 BUG-188 目标路径后，进入设计文档和实施计划。
+
+## 2026-09-13 | 当前 Agent 执行路径代码复核
+
+- 任务：在实施 BUG-188 前，按真实代码说明 Agent 如何从用户目标完成任务规划、页面探索、Grounding、DSL 生成、审批、正式执行和报告处理。
+- 操作：沿 Hertz `/api/v2/agent/runs`、Harness ReAct loop、TaskPlan 授权与推进、Browser Worker capability、BrowserObservation/ResolvedTarget、research-v2 compiler、审批恢复、Execution Worker 和 Playwright Runner 逐层核对当前源码；对照知识图谱定位模块，并以当前源码覆盖图谱基线后的 Grounding 变化。
+- 结果：当前 Agent 是 Go Harness 驱动的模型/工具循环，Python Worker 只提供浏览器事实和执行能力。LLM 负责业务 TaskPlan、探索意图和 Draft DSL；Go 负责计划持久化、连续步骤授权、工具策略、TargetBinding、确定性编译、审批门、队列和结果状态；Python 负责 Playwright 页面操作、A11y/DOM Observation、runtime 唯一性检查、正式执行证据和 FailureSignal。BUG-188 位于“已持久化 Observation candidate -> 下一次 GroundingQuery”边界，当前模型只能重写 LocatorSpec，不能引用已有 candidate。
+- 验证：静态核对 AgentService 组装、HTTP run 入口、Harness `continueRun`、TaskPlan `Authorize/RecordToolResult`、Browser Worker `_explore_flow`、research-v2 `CompileDraftCase`、Control Plane `ExecuteDSL`、Go execution-worker 和 Python `execute_browser_case`。
+- 后续：用户确认 BUG-188 方案后再进入设计文档、实施计划和 TDD 实现；验收使用跨语言合同测试、Go/Python 全量测试和真实 Chromium 聚焦测试，不运行付费模型 E2E。
+
+## 2026-09-13 | BUG-188 修复状态核验
+
+- 任务：确认最近核心 E2E 故障 BUG-188 是否已经修复成功。
+- 操作：重新核对缺陷状态、`grounding.query.v1` 当前 action 合同、Observation/candidate 查询能力、相关文件提交历史和工作区变更。
+- 结果：BUG-188 尚未修复，状态仍为 `open`。当前 action 仍强制提供 `locator`，没有 `probe_id + observation_id + candidate_id` 引用模式；仓库内也没有 Observation 查询/切片工具。上一轮只完成根因分析和日志记录，没有修改业务代码或重跑原始 E2E。
+- 验证：`jq` 确认 GroundingQuery action 的必填字段仍为 `action`、`locator`；相关源码检索未找到 candidate reference/Observation query 实现；最新相关实现提交仍是 `f96f73e refactor: unify agent grounding flow`，其后没有 BUG-188 修复提交。
+- 后续：需要按 BUG-188 方案完成合同、Worker、Go 工具、模型摘要和回归测试改造，再重跑原始 E2E，只有搜索按钮 candidate 可直接引用且完整链路通过后才能标记 `fixed`。
+
+## 2026-09-13 | 最近 Bug 根因复核
+
+- 任务：分析最近出现的 Bug 及其根因，区分最新文档缺陷与最近一次真实 E2E 的核心运行故障。
+- 操作：核对 BUG-188/190、最近提交、GroundingQuery/ResolvedTarget 合同、TaskPlan 连续推进和 Agent max-turn 实现；从 PostgreSQL 复查 Run `run_bc085ed5e7a5368c19c452ea` 的 159 条事件、工具参数、完整 Observation、模型 transcript 和计划状态。
+- 结果：字面上的最新缺陷 BUG-190 是 Browser Worker 已迁移为 `src` 布局但 README 编译命令仍指向 `app`。最近核心 E2E 故障 BUG-188 的首因是 Phase B 只完成了“Worker 生成 candidate/ResolvedTarget”，未完成“模型按 observation/candidate 引用既有证据”：`grounding.query.v1` 只接受语义 LocatorSpec，禁止 CSS 且没有 candidate reference；搜索按钮虽已被 Observation 唯一识别为 `#submit_search` candidate，但模型只能重写 role/scoped/test_id 查询，依次得到 3/0/0/0 match。严格 PlanStep 连续性校验造成 2 次前置拒绝，完整 reasoning transcript 从 8,049 bytes 增至 552,810 bytes，最终 12 turns 和 930,962 tokens 仅推进到 2/14 grounded；这些是放大因素，不是首因。
+- 验证：数据库确认搜索按钮 Observation candidate 的 `observed_count=1`，五次搜索点击查询分别为无名 role、input scope、form scope、banner scope 和错误 test_id；TaskPlan 从 seq 53 至 seq 158 始终只有 `open_products_page`、`input_search_term` 两步 grounded，seq 159 以 `agent exceeded maximum turns: 12` 结束。静态合同确认 GroundingQuery action 必须提供 LocatorSpec，当前没有 observation/candidate 引用字段或 Observation 查询工具。
+- 后续：优先增加 Observation 搜索/切片工具及 `probe_id + observation_id + candidate_id` 引用模式，并由 Worker 校验 candidate 归属、revision 和 runtime 唯一性；随后再处理 ToolCallLedger、Context Materializer 和 max-turn 预算分层。未运行付费 E2E。
+
 ## 2026-09-13 | 同步日志变更到 GitHub
 
 - 任务：将当前日志变更提交并同步到 GitHub。
