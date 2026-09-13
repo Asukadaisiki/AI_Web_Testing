@@ -644,14 +644,16 @@ func authorizeExploration(
 }
 
 type probeFlowRequest struct {
-	Steps []struct {
+	SchemaVersion string `json:"schema_version"`
+	Steps         []struct {
 		Description string `json:"description"`
 		Actions     []struct {
-			PlanStepID string `json:"plan_step_id"`
-			Action     string `json:"action"`
-			Locator    any    `json:"locator"`
-			Value      string `json:"value"`
-			Condition  struct {
+			PlanStepID   string                        `json:"plan_step_id"`
+			Action       string                        `json:"action"`
+			Locator      any                           `json:"locator"`
+			CandidateRef *browsercontract.CandidateRef `json:"candidate_ref"`
+			Value        string                        `json:"value"`
+			Condition    struct {
 				Type     string `json:"type"`
 				Expected string `json:"expected"`
 			} `json:"condition"`
@@ -671,19 +673,36 @@ func mapProbeActionOwners(
 	owners := make(map[string]string)
 	for stepIndex, group := range request.Steps {
 		for actionIndex, action := range group.Actions {
-			if action.Locator == nil {
+			if (action.Locator == nil) == (action.CandidateRef == nil) {
 				return nil, errors.New(
-					"explore_flow action requires structured locator",
+					"explore_flow action requires exactly one of locator or candidate_ref",
 				)
+			}
+			if action.CandidateRef != nil {
+				if request.SchemaVersion != browsercontract.GroundingQueryV2 {
+					return nil, errors.New(
+						"explore_flow candidate_ref requires grounding.query.v2",
+					)
+				}
+				if action.PlanStepID == "" {
+					return nil, errors.New(
+						"explore_flow candidate_ref requires plan_step_id",
+					)
+				}
+				if err := action.CandidateRef.Validate(); err != nil {
+					return nil, fmt.Errorf(
+						"explore_flow candidate_ref: %w",
+						err,
+					)
+				}
 			}
 			value := action.Value
 			if value == "" &&
 				strings.EqualFold(action.Condition.Type, "value_equals") {
 				value = action.Condition.Expected
 			}
-			locatorJSON, _ := json.Marshal(action.Locator)
-			haystack := action.Action + " " + string(locatorJSON) + " " +
-				value + " " + group.Description
+			haystack := action.Action + " " + value + " " +
+				group.Description
 			if forbidden(plan.ForbiddenActions, haystack) {
 				return nil, errors.New("explore_flow contains a forbidden action")
 			}

@@ -1,10 +1,17 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/groundingplan"
 )
 
 type BrowserCapabilityClient interface {
@@ -18,14 +25,29 @@ type BrowserCapabilityClient interface {
 	) (json.RawMessage, error)
 }
 
-type BrowserTool struct {
-	name        string
-	description string
-	inputSchema json.RawMessage
-	client      BrowserCapabilityClient
+type CandidateResolver interface {
+	ResolveCandidate(
+		context.Context,
+		string,
+		string,
+		browsercontract.CandidateRef,
+	) (browsercontract.TrustedResolvedCandidate, error)
 }
 
-func NewBrowserTools(client BrowserCapabilityClient) []Handler {
+type BrowserTool struct {
+	name           string
+	description    string
+	inputSchema    json.RawMessage
+	client         BrowserCapabilityClient
+	candidates     CandidateResolver
+	groundingPlans *groundingplan.Service
+}
+
+func NewBrowserTools(
+	client BrowserCapabilityClient,
+	candidates CandidateResolver,
+	groundingPlans *groundingplan.Service,
+) []Handler {
 	return []Handler{
 		BrowserTool{
 			name: "explore_page",
@@ -50,6 +72,7 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 			name: "explore_flow",
 			description: "Explore multiple page states in one browser session. " +
 				"Use discovered links and a bounded sequence of click, input, and wait_for actions. " +
+				"Use grounding.query.v2 candidate_ref after query_observation; the control plane resolves it from current-run evidence before the Worker call. " +
 				"For search workflows, explore the actual input and search-control click; do not jump directly to a constructed search URL. " +
 				"Each call runs in an isolated disposable probe context, so its browser and business state are never reused by another call or by official execution. " +
 				"Express intended multiplicity such as quantity 2 in the flow actions and final DSL, not by relying on state accumulated across calls. " +
@@ -61,53 +84,28 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 				"For a control value check, use wait_for with a semantic locator and condition value_equals instead of treating its label as text.",
 			inputSchema: json.RawMessage(`{
 				"type":"object",
+				"additionalProperties":false,
 				"properties":{
-					"schema_version":{"const":"grounding.query.v1","default":"grounding.query.v1"},
+					"schema_version":{"type":"string","enum":["grounding.query.v1","grounding.query.v2"],"default":"grounding.query.v2"},
 					"base_url":{"type":"string"},
 					"flow_description":{"type":"string"},
-						"observation_schema_version":{"type":"string","enum":["v1","v2"],"default":"v2"},
+					"observation_schema_version":{"type":"string","enum":["v1","v2"],"default":"v2"},
 					"plan_step_ids":{"type":"array","minItems":1,"items":{"type":"string"}},
 					"steps":{
 						"type":"array",
 						"minItems":1,
-						"items":{
-							"type":"object",
-							"properties":{
-								"url":{"type":"string"},
-								"description":{"type":"string"},
-								"actions":{
-									"type":"array",
-									"minItems":0,
-									"items":{
-										"type":"object",
-										"properties":{
-											"action":{"type":"string","enum":["click","input","wait_for"]},
-												"plan_step_id":{"type":"string","minLength":1,"maxLength":64},
-												"locator":{"$ref":"#/$defs/semantic_locator"},
-												"condition":{
-													"type":"object",
-													"properties":{
-														"type":{"type":"string","enum":["visible","value_equals"]},
-														"expected":{"type":"string"}
-													},
-													"required":["type"],
-													"allOf":[{"if":{"properties":{"type":{"const":"value_equals"}}},"then":{"required":["expected"]}}],
-													"additionalProperties":false
-												},
-											"value":{"type":"string"},
-											"timeout_ms":{"type":"integer","minimum":1,"maximum":60000}
-										},
-											"required":["action","locator"],
-											"allOf":[
-												{"if":{"properties":{"action":{"enum":["click","input"]}},"required":["action"]},"then":{"required":["plan_step_id"]}}
-											]
-									}
-								}
-							}
-						}
+						"items":{}
 					}
 				},
 				"required":["steps","plan_step_ids"],
+				"allOf":[{
+					"if":{
+						"properties":{"schema_version":{"const":"grounding.query.v2"}},
+						"required":["schema_version"]
+					},
+					"then":{"properties":{"steps":{"items":{"$ref":"#/$defs/step_v2"}}}},
+					"else":{"properties":{"steps":{"items":{"$ref":"#/$defs/step_v1"}}}}
+				}],
 				"$defs":{
 					"semantic_leaf":{
 						"oneOf":[
@@ -120,10 +118,82 @@ func NewBrowserTools(client BrowserCapabilityClient) []Handler {
 							{"$ref":"#/$defs/semantic_leaf"},
 							{"type":"object","properties":{"kind":{"const":"scoped"},"scope":{"$ref":"#/$defs/semantic_leaf"},"target":{"$ref":"#/$defs/semantic_leaf"}},"required":["kind","scope","target"],"additionalProperties":false}
 						]
+					},
+					"candidate_ref":{
+						"type":"object",
+						"properties":{
+							"schema_version":{"const":"grounding.candidate-ref.v1"},
+							"source_event_seq":{"type":"integer","minimum":1},
+							"probe_id":{"type":"string","minLength":1},
+							"observation_id":{"type":"string","minLength":1},
+							"candidate_id":{"type":"string","minLength":1}
+						},
+						"required":["schema_version","source_event_seq","probe_id","observation_id","candidate_id"],
+						"additionalProperties":false
+					},
+					"condition":{
+						"type":"object",
+						"properties":{
+							"type":{"type":"string","enum":["visible","value_equals"]},
+							"expected":{"type":"string"}
+						},
+						"required":["type"],
+						"allOf":[{"if":{"properties":{"type":{"const":"value_equals"}},"required":["type"]},"then":{"required":["expected"]}}],
+						"additionalProperties":false
+					},
+					"action":{
+						"type":"object",
+						"properties":{
+							"action":{"type":"string","enum":["click","input","wait_for"]},
+							"plan_step_id":{"type":"string","minLength":1,"maxLength":64},
+							"locator":{"$ref":"#/$defs/semantic_locator"},
+							"candidate_ref":{"$ref":"#/$defs/candidate_ref"},
+							"condition":{"$ref":"#/$defs/condition"},
+							"value":{"type":"string"},
+							"timeout_ms":{"type":"integer","minimum":1,"maximum":60000}
+						},
+						"required":["action"],
+						"allOf":[
+							{"if":{"properties":{"action":{"enum":["click","input"]}},"required":["action"]},"then":{"required":["plan_step_id"]}}
+						],
+						"additionalProperties":false
+					},
+					"action_v1":{
+						"allOf":[
+							{"$ref":"#/$defs/action"},
+							{"required":["locator"],"not":{"required":["candidate_ref"]}}
+						]
+					},
+					"action_v2":{
+						"allOf":[
+							{"$ref":"#/$defs/action"},
+							{"oneOf":[
+								{"required":["locator"],"not":{"required":["candidate_ref"]}},
+								{"required":["candidate_ref","plan_step_id"],"not":{"required":["locator"]}}
+							]}
+						]
+					},
+					"step_v1":{
+						"type":"object",
+						"properties":{
+							"url":{"type":"string"},
+							"description":{"type":"string"},
+							"actions":{"type":"array","minItems":0,"items":{"$ref":"#/$defs/action_v1"}}
+						},
+						"additionalProperties":false
+					},
+					"step_v2":{
+						"type":"object",
+						"properties":{
+							"url":{"type":"string"},
+							"description":{"type":"string"},
+							"actions":{"type":"array","minItems":0,"items":{"$ref":"#/$defs/action_v2"}}
+						},
+						"additionalProperties":false
 					}
 				}
 			}`),
-			client: client,
+			client: client, candidates: candidates, groundingPlans: groundingPlans,
 		},
 		BrowserTool{
 			name: "validate_page_elements",
@@ -165,6 +235,7 @@ func (t BrowserTool) Definition() Definition {
 func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 	arguments := call.Arguments
 	observationVersion := ""
+	hydratedPlanSteps := []string{}
 	if t.name == "explore_page" || t.name == "explore_flow" {
 		var payload map[string]any
 		if err := json.Unmarshal(call.Arguments, &payload); err != nil {
@@ -174,7 +245,18 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 		payload["probe_id"] = browserProbeID(call)
 		if t.name == "explore_flow" {
 			if _, exists := payload["schema_version"]; !exists {
-				payload["schema_version"] = "grounding.query.v1"
+				payload["schema_version"] = browsercontract.GroundingQueryV1
+			}
+			if payload["schema_version"] == browsercontract.GroundingQueryV2 {
+				var err error
+				hydratedPlanSteps, err = t.hydrateCandidateReferences(
+					ctx,
+					call.RunID,
+					payload,
+				)
+				if err != nil {
+					return Result{}, err
+				}
 			}
 		}
 		if _, exists := payload["observation_schema_version"]; !exists {
@@ -196,6 +278,7 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 		arguments,
 	)
 	if err != nil {
+		t.recordProbeFailures(ctx, call.RunID, hydratedPlanSteps, err)
 		return Result{}, err
 	}
 	if observationVersion == "v2" {
@@ -205,6 +288,201 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 		}
 	}
 	return Result{Content: content}, nil
+}
+
+func (t BrowserTool) hydrateCandidateReferences(
+	ctx context.Context,
+	runID string,
+	payload map[string]any,
+) ([]string, error) {
+	steps, ok := payload["steps"].([]any)
+	if !ok {
+		return nil, errors.New("grounding.query.v2 steps are invalid")
+	}
+	hydratedPlanSteps := make([]string, 0)
+	for stepIndex, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf(
+				"grounding.query.v2 step %d is invalid",
+				stepIndex,
+			)
+		}
+		rawActions, exists := step["actions"]
+		if !exists {
+			continue
+		}
+		actions, ok := rawActions.([]any)
+		if !ok {
+			return nil, fmt.Errorf(
+				"grounding.query.v2 step %d actions are invalid",
+				stepIndex,
+			)
+		}
+		for actionIndex, rawAction := range actions {
+			action, ok := rawAction.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf(
+					"grounding.query.v2 action %d:%d is invalid",
+					stepIndex,
+					actionIndex,
+				)
+			}
+			if _, exists := action["resolved_candidate"]; exists {
+				return nil, errors.New(
+					"model-supplied resolved_candidate is forbidden",
+				)
+			}
+			locator, hasLocator := action["locator"]
+			candidate, hasCandidate := action["candidate_ref"]
+			hasLocator = hasLocator && locator != nil
+			hasCandidate = hasCandidate && candidate != nil
+			if hasLocator == hasCandidate {
+				return nil, fmt.Errorf(
+					"grounding.query.v2 action %d:%d requires exactly one of locator or candidate_ref",
+					stepIndex,
+					actionIndex,
+				)
+			}
+			if !hasCandidate {
+				continue
+			}
+			if t.candidates == nil || t.groundingPlans == nil {
+				return nil, errors.New(
+					"candidate hydration dependencies are unavailable",
+				)
+			}
+			planStepID, _ := action["plan_step_id"].(string)
+			actionName, _ := action["action"].(string)
+			if planStepID == "" || actionName == "" {
+				return nil, errors.New(
+					"candidate_ref action requires action and plan_step_id",
+				)
+			}
+			ref, err := decodeCandidateRef(candidate)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"decode candidate_ref for plan step %q: %w",
+					planStepID,
+					err,
+				)
+			}
+			if _, err := t.groundingPlans.RecordCandidateSelection(
+				ctx,
+				runID,
+				planStepID,
+				ref,
+			); err != nil {
+				return nil, fmt.Errorf(
+					"record candidate selection for plan step %q: %w",
+					planStepID,
+					err,
+				)
+			}
+			if _, err := t.groundingPlans.RecordProbeResult(
+				ctx,
+				runID,
+				planStepID,
+				nil,
+				"",
+			); err != nil {
+				return nil, fmt.Errorf(
+					"record candidate probe for plan step %q: %w",
+					planStepID,
+					err,
+				)
+			}
+			hydratedPlanSteps = append(hydratedPlanSteps, planStepID)
+			resolved, err := t.candidates.ResolveCandidate(
+				ctx,
+				runID,
+				actionName,
+				ref,
+			)
+			if err != nil {
+				t.recordProbeFailures(
+					ctx,
+					runID,
+					[]string{planStepID},
+					err,
+				)
+				return nil, fmt.Errorf(
+					"resolve candidate for plan step %q: %w",
+					planStepID,
+					err,
+				)
+			}
+			if resolved.Source != ref {
+				err = errors.New(
+					"resolved candidate source does not match candidate_ref",
+				)
+			} else {
+				err = resolved.Validate()
+			}
+			if err != nil {
+				t.recordProbeFailures(
+					ctx,
+					runID,
+					[]string{planStepID},
+					err,
+				)
+				return nil, fmt.Errorf(
+					"validate candidate for plan step %q: %w",
+					planStepID,
+					err,
+				)
+			}
+			delete(action, "candidate_ref")
+			action["resolved_candidate"] = resolved
+		}
+	}
+	return hydratedPlanSteps, nil
+}
+
+func decodeCandidateRef(value any) (browsercontract.CandidateRef, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return browsercontract.CandidateRef{}, err
+	}
+	var ref browsercontract.CandidateRef
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&ref); err != nil {
+		return browsercontract.CandidateRef{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return browsercontract.CandidateRef{}, errors.New(
+				"candidate_ref contains multiple JSON values",
+			)
+		}
+		return browsercontract.CandidateRef{}, err
+	}
+	if err := ref.Validate(); err != nil {
+		return browsercontract.CandidateRef{}, err
+	}
+	return ref, nil
+}
+
+func (t BrowserTool) recordProbeFailures(
+	ctx context.Context,
+	runID string,
+	planStepIDs []string,
+	failure error,
+) {
+	if t.groundingPlans == nil || failure == nil {
+		return
+	}
+	for _, planStepID := range planStepIDs {
+		_, _ = t.groundingPlans.RecordProbeResult(
+			ctx,
+			runID,
+			planStepID,
+			nil,
+			failure.Error(),
+		)
+	}
 }
 
 func browserProbeID(call Call) string {

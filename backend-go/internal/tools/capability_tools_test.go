@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/groundingplan"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
+	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 type fakeCapabilityClient struct {
@@ -17,9 +23,19 @@ type fakeCapabilityClient struct {
 	projectID       int64
 	conversationID  string
 	arguments       json.RawMessage
+	executeCalls    int
 	reportResponses []json.RawMessage
 	reportCalls     int
 	repairResponse  json.RawMessage
+}
+
+type fakeCandidateResolver struct {
+	resolved browsercontract.TrustedResolvedCandidate
+	err      error
+	calls    int
+	runID    string
+	action   string
+	ref      browsercontract.CandidateRef
 }
 
 type isolatedProbeCapabilityClient struct {
@@ -103,11 +119,25 @@ func (c *fakeCapabilityClient) ExecuteBrowserCapability(
 	conversationID string,
 	arguments json.RawMessage,
 ) (json.RawMessage, error) {
+	c.executeCalls++
 	c.capability = capability
 	c.projectID = projectID
 	c.conversationID = conversationID
 	c.arguments = arguments
 	return json.RawMessage(`{"ok":true}`), nil
+}
+
+func (r *fakeCandidateResolver) ResolveCandidate(
+	_ context.Context,
+	runID string,
+	action string,
+	ref browsercontract.CandidateRef,
+) (browsercontract.TrustedResolvedCandidate, error) {
+	r.calls++
+	r.runID = runID
+	r.action = action
+	r.ref = ref
+	return r.resolved, r.err
 }
 
 func (c *fakeCapabilityClient) GenerateDSL(
@@ -245,7 +275,7 @@ func TestFixAndRetryDoesNotPublishPlanWhenRepairIsNotRequired(t *testing.T) {
 
 func TestBrowserToolForwardsRunContext(t *testing.T) {
 	client := &fakeCapabilityClient{}
-	handler := NewBrowserTools(client)[0]
+	handler := NewBrowserTools(client, nil, nil)[0]
 	_, err := handler.Execute(context.Background(), Call{
 		RunID:          "run-1",
 		ToolCallID:     "call-1",
@@ -277,7 +307,7 @@ func TestBrowserToolForwardsRunContext(t *testing.T) {
 }
 
 func TestBrowserToolV2KeepsObservationAndDropsLegacyNodes(t *testing.T) {
-	handler := NewBrowserTools(observationCapabilityClient{})[0]
+	handler := NewBrowserTools(observationCapabilityClient{}, nil, nil)[0]
 	result, err := handler.Execute(context.Background(), Call{
 		ProjectID: 7, ConversationID: "11", Name: "explore_page",
 		Arguments: json.RawMessage(`{"url":"https://example.test/form"}`),
@@ -299,7 +329,7 @@ func TestBrowserToolV2KeepsObservationAndDropsLegacyNodes(t *testing.T) {
 
 func TestExploreFlowMockIsolatesRepeatedSideEffectProbes(t *testing.T) {
 	client := &isolatedProbeCapabilityClient{}
-	handler := NewBrowserTools(client)[1]
+	handler := NewBrowserTools(client, nil, nil)[1]
 	arguments := json.RawMessage(`{
 		"base_url":"https://automationexercise.com/product_details/1",
 		"plan_step_ids":["quantity","add_to_cart","open_view_cart"],
@@ -330,6 +360,266 @@ func TestExploreFlowMockIsolatesRepeatedSideEffectProbes(t *testing.T) {
 	}
 	if client.calls != 3 {
 		t.Fatalf("probe calls = %d, want 3", client.calls)
+	}
+}
+
+func TestExploreFlowHydratesCandidateReferenceForWorker(t *testing.T) {
+	ref := browsercontract.CandidateRef{
+		SchemaVersion:  browsercontract.CandidateRefVersion,
+		SourceEventSeq: 27,
+		ProbeID:        "probe-source",
+		ObservationID:  "obs-source",
+		CandidateID:    "candidate-submit",
+	}
+	resolved := browsercontract.TrustedResolvedCandidate{
+		Source:          ref,
+		PageStateID:     "S0",
+		PageStateSHA256: strings.Repeat("a", 64),
+		ElementRef:      "S0:42",
+		Locator: browsercontract.LocatorSpec{
+			Kind: "css", Value: "#submit_search",
+		},
+		ContextPath: browsercontract.ContextPath{
+			Frames: []string{}, ShadowHosts: []string{},
+		},
+		Provenance: "a11y_backend_dom_node",
+	}
+	client := &fakeCapabilityClient{}
+	resolver := &fakeCandidateResolver{resolved: resolved}
+	plans := preparedCandidateGroundingPlan(t, "run-hydrate", ref)
+	handler := NewBrowserTools(client, resolver, plans)[1]
+
+	_, err := handler.Execute(context.Background(), Call{
+		RunID:      "run-hydrate",
+		ToolCallID: "call-hydrate",
+		Name:       "explore_flow",
+		Arguments: json.RawMessage(`{
+			"schema_version":"grounding.query.v2",
+			"plan_step_ids":["submit"],
+			"steps":[{"actions":[{
+				"plan_step_id":"submit",
+				"action":"click",
+				"candidate_ref":{
+					"schema_version":"grounding.candidate-ref.v1",
+					"source_event_seq":27,
+					"probe_id":"probe-source",
+					"observation_id":"obs-source",
+					"candidate_id":"candidate-submit"
+				}
+			}]}]
+		}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 1 ||
+		resolver.runID != "run-hydrate" ||
+		resolver.action != "click" ||
+		resolver.ref != ref {
+		t.Fatalf("resolver call = %#v", resolver)
+	}
+	if client.executeCalls != 1 {
+		t.Fatalf("worker calls = %d, want 1", client.executeCalls)
+	}
+	var workerRequest map[string]any
+	if err := json.Unmarshal(client.arguments, &workerRequest); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := workerRequest["plan_step_ids"]; exists {
+		t.Fatalf("plan_step_ids leaked to Worker: %s", client.arguments)
+	}
+	steps := workerRequest["steps"].([]any)
+	actions := steps[0].(map[string]any)["actions"].([]any)
+	action := actions[0].(map[string]any)
+	if _, exists := action["candidate_ref"]; exists {
+		t.Fatalf("candidate_ref leaked to Worker: %s", client.arguments)
+	}
+	rawResolved, exists := action["resolved_candidate"]
+	if !exists {
+		t.Fatalf("resolved_candidate missing from Worker request: %s", client.arguments)
+	}
+	wantResolved, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantResolvedValue any
+	if err := json.Unmarshal(wantResolved, &wantResolvedValue); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rawResolved, wantResolvedValue) {
+		t.Fatalf("resolved_candidate = %#v, want %#v", rawResolved, wantResolvedValue)
+	}
+	current, err := plans.EnsureForTaskPlan(
+		context.Background(),
+		candidateTaskPlan("run-hydrate"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Steps[0].Status != groundingplan.StepProbing ||
+		current.Steps[0].SelectedCandidateRef == nil ||
+		*current.Steps[0].SelectedCandidateRef != ref {
+		t.Fatalf("grounding plan = %#v", current)
+	}
+}
+
+func TestExploreFlowCandidateResolutionErrorsDoNotCallWorker(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "cross run",
+			err:  errors.New("source event does not belong to the current run"),
+		},
+		{
+			name: "stale source",
+			err:  errors.New("candidate reference was not found"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ref := browsercontract.CandidateRef{
+				SchemaVersion:  browsercontract.CandidateRefVersion,
+				SourceEventSeq: 27,
+				ProbeID:        "probe-source",
+				ObservationID:  "obs-source",
+				CandidateID:    "candidate-submit",
+			}
+			client := &fakeCapabilityClient{}
+			resolver := &fakeCandidateResolver{err: test.err}
+			plans := preparedCandidateGroundingPlan(t, "run-reject", ref)
+			handler := NewBrowserTools(client, resolver, plans)[1]
+
+			_, err := handler.Execute(context.Background(), Call{
+				RunID: "run-reject", ToolCallID: "call-reject",
+				Name: "explore_flow",
+				Arguments: json.RawMessage(`{
+					"schema_version":"grounding.query.v2",
+					"plan_step_ids":["submit"],
+					"steps":[{"actions":[{
+						"plan_step_id":"submit",
+						"action":"click",
+						"candidate_ref":{
+							"schema_version":"grounding.candidate-ref.v1",
+							"source_event_seq":27,
+							"probe_id":"probe-source",
+							"observation_id":"obs-source",
+							"candidate_id":"candidate-submit"
+						}
+					}]}]
+				}`),
+			})
+			if !errors.Is(err, test.err) {
+				t.Fatalf("Execute() error = %v, want %v", err, test.err)
+			}
+			if client.executeCalls != 0 {
+				t.Fatalf("worker calls = %d, want 0", client.executeCalls)
+			}
+		})
+	}
+}
+
+func TestExploreFlowV1WorkerRequestRemainsByteSemanticallyCompatible(t *testing.T) {
+	client := &fakeCapabilityClient{}
+	handler := NewBrowserTools(client, nil, nil)[1]
+	call := Call{
+		RunID: "run-v1", ToolCallID: "call-v1", Name: "explore_flow",
+		Arguments: json.RawMessage(`{
+			"schema_version":"grounding.query.v1",
+			"base_url":"https://example.test/form",
+			"flow_description":"submit form",
+			"observation_schema_version":"v2",
+			"plan_step_ids":["submit"],
+			"steps":[{"url":"https://example.test/form","actions":[{
+				"plan_step_id":"submit",
+				"action":"click",
+				"locator":{"kind":"role","role":"button","name":"Submit","exact":true}
+			}]}]
+		}`),
+	}
+	if _, err := handler.Execute(context.Background(), call); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"base_url":"https://example.test/form","flow_description":"submit form","observation_schema_version":"v2","probe_id":"probe_c9ef81bab42d9d9e2c95aed3","schema_version":"grounding.query.v1","steps":[{"actions":[{"action":"click","locator":{"exact":true,"kind":"role","name":"Submit","role":"button"},"plan_step_id":"submit"}],"url":"https://example.test/form"}]}`
+	if string(client.arguments) != want {
+		t.Fatalf("Worker request changed\n got: %s\nwant: %s", client.arguments, want)
+	}
+}
+
+func TestExploreFlowSchemaRejectsModelSuppliedResolvedCandidate(t *testing.T) {
+	definition := NewBrowserTools(&fakeCapabilityClient{}, nil, nil)[1].Definition()
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(
+		"https://example.test/explore-flow.schema.json",
+		bytes.NewReader(definition.InputSchema),
+	); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(
+		"https://example.test/explore-flow.schema.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request any
+	if err := json.Unmarshal([]byte(`{
+		"schema_version":"grounding.query.v2",
+		"plan_step_ids":["submit"],
+		"steps":[{"actions":[{
+			"plan_step_id":"submit",
+			"action":"click",
+			"resolved_candidate":{
+				"source":{"schema_version":"grounding.candidate-ref.v1"}
+			}
+		}]}]
+	}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(request); err == nil {
+		t.Fatal("model-supplied resolved_candidate passed explore_flow schema")
+	}
+}
+
+func preparedCandidateGroundingPlan(
+	t *testing.T,
+	runID string,
+	ref browsercontract.CandidateRef,
+) *groundingplan.Service {
+	t.Helper()
+	service := groundingplan.NewService(groundingplan.NewMemoryRepository())
+	plan := candidateTaskPlan(runID)
+	if _, err := service.EnsureForTaskPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecordObservationQuery(
+		context.Background(),
+		runID,
+		groundingplan.QueryRecord{
+			PlanStepID: "submit", SourceEventSeq: ref.SourceEventSeq,
+			ObservationID: ref.ObservationID, Action: "click",
+		},
+		[]groundingplan.CandidateOption{{
+			CandidateRef: ref, ElementRef: "S0:42",
+			Locator: browsercontract.LocatorSpec{
+				Kind: "css", Value: "#submit_search",
+			},
+			Provenance: "a11y_backend_dom_node", ObservedCount: 1,
+		}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+func candidateTaskPlan(runID string) taskplan.Plan {
+	return taskplan.Plan{
+		ID: "plan-" + runID, RunID: runID, Version: 1,
+		PlanSHA256: strings.Repeat("a", 64),
+		Steps: []taskplan.Step{{
+			ID: "submit", Position: 0, Action: "click",
+			Status: taskplan.StepPending,
+		}},
 	}
 }
 
@@ -434,7 +724,7 @@ func assertStrictObjectSchemas(t *testing.T, value any, path string) {
 }
 
 func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *testing.T) {
-	definitions := NewBrowserTools(&fakeCapabilityClient{})
+	definitions := NewBrowserTools(&fakeCapabilityClient{}, nil, nil)
 	if !strings.Contains(definitions[1].Definition().Description, "do not jump directly") {
 		t.Fatal("explore_flow contract does not prohibit direct search URL bypass")
 	}
@@ -452,20 +742,31 @@ func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *t
 	if err := json.Unmarshal(definitions[1].Definition().InputSchema, &flowSchema); err != nil {
 		t.Fatalf("decode explore_flow schema: %v", err)
 	}
-	steps := flowSchema["properties"].(map[string]any)["steps"].(map[string]any)
-	actions := steps["items"].(map[string]any)["properties"].(map[string]any)["actions"].(map[string]any)
+	defs := flowSchema["$defs"].(map[string]any)
+	stepV2 := defs["step_v2"].(map[string]any)
+	actions := stepV2["properties"].(map[string]any)["actions"].(map[string]any)
 	if actions["minItems"] != float64(0) {
 		t.Fatalf("actions.minItems = %#v, want 0", actions["minItems"])
 	}
-	actionProperties := actions["items"].(map[string]any)["properties"].(map[string]any)
-	if flowSchema["properties"].(map[string]any)["schema_version"].(map[string]any)["const"] != "grounding.query.v1" {
-		t.Fatal("explore_flow schema does not expose grounding query version")
+	actionProperties := defs["action"].(map[string]any)["properties"].(map[string]any)
+	schemaVersions := flowSchema["properties"].(map[string]any)["schema_version"].(map[string]any)["enum"].([]any)
+	if !reflect.DeepEqual(
+		schemaVersions,
+		[]any{"grounding.query.v1", "grounding.query.v2"},
+	) {
+		t.Fatalf("explore_flow schema versions = %#v", schemaVersions)
 	}
 	if _, exists := actionProperties["plan_step_id"]; !exists {
 		t.Fatal("explore_flow action schema does not expose plan_step_id")
 	}
 	if _, exists := actionProperties["locator"]; !exists {
 		t.Fatal("explore_flow action schema does not expose structured locator")
+	}
+	if _, exists := actionProperties["candidate_ref"]; !exists {
+		t.Fatal("explore_flow action schema does not expose candidate_ref")
+	}
+	if _, exists := actionProperties["resolved_candidate"]; exists {
+		t.Fatal("explore_flow action schema exposes Worker-only resolved_candidate")
 	}
 	if _, exists := actionProperties["target"]; exists {
 		t.Fatal("explore_flow action schema still exposes legacy string target")

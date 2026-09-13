@@ -14,6 +14,8 @@ const (
 	TargetBindingVersion     = "grounding.target-binding.v1"
 	ResolvedTargetVersion    = "browser.resolved-target.v1"
 	CandidateRefVersion      = "grounding.candidate-ref.v1"
+	GroundingQueryV1         = "grounding.query.v1"
+	GroundingQueryV2         = "grounding.query.v2"
 )
 
 type CandidateRef struct {
@@ -105,6 +107,31 @@ type TrustedResolvedCandidate struct {
 	Locator         LocatorSpec  `json:"locator"`
 	ContextPath     ContextPath  `json:"context_path"`
 	Provenance      string       `json:"provenance"`
+}
+
+func (c TrustedResolvedCandidate) Validate() error {
+	if err := c.Source.Validate(); err != nil {
+		return fmt.Errorf("resolved candidate source: %w", err)
+	}
+	if strings.TrimSpace(c.PageStateID) == "" ||
+		len(c.PageStateSHA256) != 64 ||
+		strings.TrimSpace(c.ElementRef) == "" ||
+		strings.TrimSpace(c.Provenance) == "" ||
+		c.ContextPath.Frames == nil ||
+		c.ContextPath.ShadowHosts == nil {
+		return errors.New("resolved candidate is incomplete")
+	}
+	if len(c.ContextPath.Frames) > 0 {
+		return errors.New("resolved candidate frame context is unsupported")
+	}
+	if err := c.Locator.Validate(); err != nil {
+		return fmt.Errorf("resolved candidate locator: %w", err)
+	}
+	if len(c.ContextPath.ShadowHosts) > 0 &&
+		c.Locator.containsKind("xpath") {
+		return errors.New("resolved candidate uses xpath inside shadow DOM")
+	}
+	return nil
 }
 
 type ResolvedTargetEvidence struct {

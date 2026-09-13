@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -293,10 +294,10 @@ func TestTaskPlanRejectsForbiddenAndUnplannedProbeActions(t *testing.T) {
 		"explore_flow",
 		json.RawMessage(`{
 			"plan_step_ids":["open_detail"],
-			"steps":[{"actions":[{
+			"steps":[{"description":"Add to cart","actions":[{
 				"plan_step_id":"open_detail",
 				"action":"click",
-				"locator":{"kind":"text","value":"Add to cart","exact":true}
+				"locator":{"kind":"text","value":"View Product","exact":true}
 			}]}]
 		}`),
 	)
@@ -319,6 +320,97 @@ func TestTaskPlanRejectsForbiddenAndUnplannedProbeActions(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("error = %v, want unplanned action rejection", err)
+	}
+}
+
+func TestExploreFlowRequiresExactlyOneLocatorOrCandidateReference(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(NewMemoryRepository())
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-target-mode",
+		Definition: Definition{
+			Goal:             "Submit a form",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "submit", Intent: "Submit form", Action: "click",
+				Target:              "Submit",
+				ExpectedOccurrences: 1, Idempotency: "idempotent",
+				SideEffect:           SideEffectBrowserState,
+				Preconditions:        []string{},
+				CompletionConditions: []string{"submitted"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := `"candidate_ref":{
+		"schema_version":"grounding.candidate-ref.v1",
+		"source_event_seq":27,
+		"probe_id":"probe-source",
+		"observation_id":"obs-source",
+		"candidate_id":"candidate-submit"
+	}`
+	tests := []struct {
+		name       string
+		version    string
+		targetMode string
+		wantError  bool
+	}{
+		{
+			name: "v1 locator", version: "grounding.query.v1",
+			targetMode: `"locator":{
+				"kind":"role","role":"button","name":"Submit","exact":true
+			}`,
+		},
+		{
+			name: "v2 candidate reference", version: "grounding.query.v2",
+			targetMode: ref,
+		},
+		{
+			name: "missing target", version: "grounding.query.v2",
+			wantError: true,
+		},
+		{
+			name: "two targets", version: "grounding.query.v2",
+			targetMode: `"locator":{
+				"kind":"role","role":"button","name":"Submit","exact":true
+			},` + ref,
+			wantError: true,
+		},
+		{
+			name: "v1 candidate reference", version: "grounding.query.v1",
+			targetMode: ref, wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			separator := ""
+			if test.targetMode != "" {
+				separator = ","
+			}
+			arguments := json.RawMessage(`{
+				"schema_version":` + strconv.Quote(test.version) + `,
+				"plan_step_ids":["submit"],
+				"steps":[{"actions":[{
+					"plan_step_id":"submit",
+					"action":"click"` + separator + test.targetMode + `
+				}]}]
+			}`)
+			err := service.Authorize(
+				ctx,
+				plan.RunID,
+				"explore_flow",
+				arguments,
+			)
+			if test.wantError && err == nil {
+				t.Fatal("Authorize() error = nil")
+			}
+			if !test.wantError && err != nil {
+				t.Fatalf("Authorize() error = %v", err)
+			}
+		})
 	}
 }
 

@@ -32,10 +32,12 @@ const groundingPrompt = `PHASE 2 - GROUNDING
 Use explore_page to obtain the first BrowserObservation, then use explore_flow for later
 page states. Analyze the returned accessibility facts, DOM facts, runtime state,
 relations, candidate coverage, and action evidence before choosing the next action.
-Every explore_flow action must use a structured semantic LocatorSpec using role,
-accessible name, label, placeholder, text, test ID, or a semantic scoped locator. The
-Browser Worker compiles that LocatorSpec with Playwright and requires one actionable
-runtime match. Do not author CSS or XPath on the new grounding path.
+Use query_observation on persisted current-run evidence to obtain a candidate_ref, then
+submit it in an explicit grounding.query.v2 explore_flow action. The Go control plane
+hydrates that opaque reference before the Browser Worker receives it. A direct locator
+action must use a structured semantic LocatorSpec using role, accessible name, label,
+placeholder, text, test ID, or a semantic scoped locator. Never submit resolved_candidate,
+CSS, or XPath; resolved_candidate is Worker-only trusted state.
 Every explore_page or explore_flow call must include plan_step_ids for the next contiguous pending steps.
 For explore_flow, set action.plan_step_id on every action intended to ground a pending PlanStep. A click or input that replays an already grounded prerequisite must keep that original plan_step_id and is treated as a supporting action. Supporting wait_for observations may omit plan_step_id. Never rely on action order or target text to infer ownership.
 Never execute external_state or unknown side effects during exploration. Such steps may only be grounded by observing their controls or expected facts without triggering them.
