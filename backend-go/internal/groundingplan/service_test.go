@@ -3,6 +3,7 @@ package groundingplan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +177,41 @@ func TestEnsureForTaskPlanSupersedesPreviousTaskPlan(t *testing.T) {
 	}
 }
 
+func TestEnsureForTaskPlanDoesNotSupersedePreviousWhenReplacementFails(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	repository := newRecordingRepository()
+	service := NewService(repository)
+	firstTaskPlan := testTaskPlan("task-plan-old", "run-atomic", 1, "click")
+	first, err := service.EnsureForTaskPlan(ctx, firstTaskPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	injected := errors.New("injected replacement failure")
+	repository.createErr = injected
+	repository.replaceErr = injected
+	secondTaskPlan := testTaskPlan("task-plan-new", "run-atomic", 2, "input")
+	if _, err := service.EnsureForTaskPlan(ctx, secondTaskPlan); !errors.Is(err, injected) {
+		t.Fatalf("EnsureForTaskPlan() error = %v, want %v", err, injected)
+	}
+
+	oldCurrent, err := repository.GetCurrent(ctx, firstTaskPlan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldCurrent.ID != first.ID ||
+		oldCurrent.Revision != first.Revision ||
+		oldCurrent.Status != StatusActive {
+		t.Fatalf("old grounding plan changed after failed replacement: %#v", oldCurrent)
+	}
+	if len(repository.history[firstTaskPlan.ID]) != 1 ||
+		len(repository.history[secondTaskPlan.ID]) != 0 {
+		t.Fatalf("histories after failed replacement = %#v", repository.history)
+	}
+}
+
 func TestServiceRejectsOutOfOrderAndMismatchedMutations(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(newRecordingRepository())
@@ -230,6 +266,73 @@ func TestServiceRejectsOutOfOrderAndMismatchedMutations(t *testing.T) {
 		"",
 	); err == nil {
 		t.Fatal("mismatched resolved target action succeeded")
+	}
+}
+
+func TestRecordProbeResultRejectsInvalidEvidenceWithoutAppendingRevision(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	repository := newRecordingRepository()
+	service := NewService(repository)
+	taskPlan := testTaskPlan("task-plan-invalid-evidence", "run-invalid-evidence", 1, "click")
+	if _, err := service.EnsureForTaskPlan(ctx, taskPlan); err != nil {
+		t.Fatal(err)
+	}
+	ref := testCandidateRef("candidate-invalid-evidence")
+	if _, err := service.RecordObservationQuery(
+		ctx,
+		taskPlan.RunID,
+		QueryRecord{
+			PlanStepID: taskPlan.Steps[0].ID, SourceEventSeq: ref.SourceEventSeq,
+			ObservationID: ref.ObservationID, Action: taskPlan.Steps[0].Action,
+			Query: "submit",
+		},
+		[]CandidateOption{{
+			CandidateRef: ref, ElementRef: "state-1:7",
+			Locator: browsercontract.LocatorSpec{
+				Kind: "role", Role: "button",
+				Name: stringPointer("Submit"), Exact: true,
+			},
+			Provenance: "a11y_exact", ObservedCount: 1,
+		}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := service.RecordCandidateSelection(
+		ctx,
+		taskPlan.RunID,
+		taskPlan.Steps[0].ID,
+		ref,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionCount := len(repository.history[taskPlan.ID])
+
+	evidence := testResolvedTarget(taskPlan.Steps[0], ref)
+	evidence.Action = "input"
+	if _, err := service.RecordProbeResult(
+		ctx,
+		taskPlan.RunID,
+		taskPlan.Steps[0].ID,
+		&evidence,
+		"",
+	); err == nil {
+		t.Fatal("invalid resolved target evidence succeeded")
+	}
+
+	if got := len(repository.history[taskPlan.ID]); got != revisionCount {
+		t.Fatalf("revision rows = %d, want %d", got, revisionCount)
+	}
+	current, err := repository.GetCurrent(ctx, taskPlan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != selected.ID ||
+		current.Revision != selected.Revision ||
+		current.Steps[0].Status != StepCandidateSelected {
+		t.Fatalf("current plan changed after invalid evidence: %#v", current)
 	}
 }
 
@@ -311,7 +414,9 @@ func mustJSON(t *testing.T, value any) string {
 }
 
 type recordingRepository struct {
-	history map[string][]Plan
+	history    map[string][]Plan
+	createErr  error
+	replaceErr error
 }
 
 func newRecordingRepository() *recordingRepository {
@@ -322,6 +427,9 @@ func (r *recordingRepository) CreateInitial(
 	_ context.Context,
 	plan Plan,
 ) (Plan, error) {
+	if r.createErr != nil {
+		return Plan{}, r.createErr
+	}
 	r.history[plan.TaskPlanID] = append(
 		r.history[plan.TaskPlanID],
 		cloneTestPlan(plan),
@@ -391,6 +499,29 @@ func (r *recordingRepository) SupersedeForTaskPlan(
 	current.ContentSHA256 = hash
 	r.history[taskPlanID] = append(revisions, cloneTestPlan(current))
 	return nil
+}
+
+func (r *recordingRepository) ReplaceForTaskPlan(
+	ctx context.Context,
+	plan Plan,
+) (Plan, error) {
+	if r.replaceErr != nil {
+		return Plan{}, r.replaceErr
+	}
+	if current, err := r.GetCurrent(ctx, plan.TaskPlanID); err == nil {
+		return current, nil
+	}
+	previous, err := r.GetCurrent(ctx, plan.RunID)
+	if err == nil && previous.TaskPlanID != plan.TaskPlanID {
+		if err := r.SupersedeForTaskPlan(
+			ctx,
+			previous.TaskPlanID,
+			plan.UpdatedAt,
+		); err != nil {
+			return Plan{}, err
+		}
+	}
+	return r.CreateInitial(ctx, plan)
 }
 
 func cloneTestPlan(plan Plan) Plan {

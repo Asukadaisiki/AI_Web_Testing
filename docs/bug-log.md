@@ -48,6 +48,40 @@
 
 ## 问题记录
 
+## BUG-192 | PostgreSQL 事件集成测试仍按旧事件数量断言
+
+- 日期：2026-09-13
+- 状态：open
+- 严重度：low
+- 来源：Task 2 修复轮 1 全量数据库验证
+- 描述：启用 `TEST_DATABASE_URL` 运行全量 Go 测试时，两个既有测试仍假设一次模型 telemetry 只产生 `research.llm_call`，未计入当前同时生成的 `agent.pipeline.trace`。
+- 复现步骤：
+  1. 设置可用的 `TEST_DATABASE_URL`。
+  2. 执行 `go test -count=1 ./...`。
+  3. `TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay` 预期 5 个事件但得到 9 个；`TestPostgresSourceReaderProjectsRealAgentEvents` 预期 9 个事件但得到 11 个。
+- 影响：带真实 PostgreSQL 的全量测试无法全绿；不影响本轮 GroundingPlan 聚焦 PostgreSQL 测试。
+- 根因：生产 telemetry 已同时持久化 `research.llm_call` 和 `agent.pipeline.trace`，测试事件数量及投影预期未同步。
+- 处理：待独立修复测试预期和对应投影断言，本轮不扩展 Task 2 修复范围。
+- 验证：两个失败用例已分别单独运行并稳定复现；不设置 `TEST_DATABASE_URL` 的 `go test -count=1 ./...` 通过。
+- 关联记录：`docs/execution-log.md#2026-09-13--task-2-groundingplan-修复轮-1`。
+
+## BUG-191 | GroundingPlan 迁移、换版原子性和 probe revision 缺陷
+
+- 日期：2026-09-13
+- 状态：fixed
+- 严重度：critical
+- 来源：Task 2 代码审查
+- 描述：生产迁移入口未执行 GroundingPlan migration；TaskPlan 换版分事务 supersede/创建；无效 probe evidence 会先追加 probing revision。
+- 复现步骤：
+  1. 对已有数据库执行生产 `migrate`，观察 `grounding_plans` 未创建。
+  2. 在旧计划 supersede 后注入新计划插入失败，观察旧计划留下 `superseded` 半状态。
+  3. 从 `candidate_selected` 提交 action 不匹配的 evidence，观察错误返回前 revision 增加。
+- 影响：升级数据库可能缺少必需表；换版失败可能使 run 无活动 GroundingPlan；无效 evidence 污染不可变 revision 历史。
+- 根因：migration 调用链漏接 embedded SQL；服务跨两个仓储事务执行换版；evidence 校验位于 probing revision 写入之后。
+- 处理：生产迁移入口接入 `GroundingPlanMigrationSQL`；新增同一 transaction/run advisory lock 内执行的 `ReplaceForTaskPlan`；将 evidence 校验前置到任何 revision 写入之前。
+- 验证：聚焦 PostgreSQL race 测试、迁移升级测试、服务回归测试及无数据库全量 Go 测试通过。
+- 关联记录：`docs/execution-log.md#2026-09-13--task-2-groundingplan-修复轮-1`。
+
 ## BUG-190 | Browser Worker 编译验证命令路径过期
 
 - 日期：2026-09-13

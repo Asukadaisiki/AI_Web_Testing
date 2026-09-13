@@ -123,6 +123,7 @@ func (p Plan) TaskPlanBinding() taskplan.Binding {
 
 type Repository interface {
 	CreateInitial(context.Context, Plan) (Plan, error)
+	ReplaceForTaskPlan(context.Context, Plan) (Plan, error)
 	AppendRevision(context.Context, Plan) (Plan, error)
 	GetCurrent(context.Context, string) (Plan, error)
 	SupersedeForTaskPlan(context.Context, string, time.Time) error

@@ -44,18 +44,6 @@ func (s *Service) EnsureForTaskPlan(
 	}
 
 	now := s.now().UTC()
-	previous, previousErr := s.repository.GetCurrent(ctx, source.RunID)
-	if previousErr == nil && previous.TaskPlanID != source.ID {
-		if err := s.repository.SupersedeForTaskPlan(
-			ctx,
-			previous.TaskPlanID,
-			now,
-		); err != nil {
-			return Plan{}, err
-		}
-	} else if previousErr != nil && !errors.Is(previousErr, ErrNotFound) {
-		return Plan{}, previousErr
-	}
 	steps := make([]Step, len(source.Steps))
 	for index, sourceStep := range source.Steps {
 		steps[index] = Step{
@@ -93,7 +81,7 @@ func (s *Service) EnsureForTaskPlan(
 	if err := validatePlan(plan); err != nil {
 		return Plan{}, err
 	}
-	return s.repository.CreateInitial(ctx, plan)
+	return s.repository.ReplaceForTaskPlan(ctx, plan)
 }
 
 func (s *Service) RecordObservationQuery(
@@ -239,6 +227,11 @@ func (s *Service) RecordProbeResult(
 	if evidence != nil && strings.TrimSpace(failure) != "" {
 		return Plan{}, errors.New("probe result cannot contain evidence and an error")
 	}
+	if evidence != nil {
+		if err := validateResolvedTarget(current.Steps[index], *evidence); err != nil {
+			return Plan{}, err
+		}
+	}
 	if current.Steps[index].Status == StepCandidateSelected {
 		next := clonePlan(current)
 		next.Steps[index].Status = StepProbing
@@ -279,9 +272,6 @@ func (s *Service) RecordProbeResult(
 		step.LastError = attempt.Error
 		next.Status = StatusFailed
 		return s.appendRevision(ctx, next)
-	}
-	if err := validateResolvedTarget(*step, *evidence); err != nil {
-		return Plan{}, err
 	}
 	resolved := *evidence
 	attempt.Status = StepGrounded

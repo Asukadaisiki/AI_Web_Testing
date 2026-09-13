@@ -51,6 +51,59 @@ func (r *PostgresRepository) CreateInitial(
 	return plan, nil
 }
 
+func (r *PostgresRepository) ReplaceForTaskPlan(
+	ctx context.Context,
+	plan Plan,
+) (Plan, error) {
+	if err := validatePlan(plan); err != nil {
+		return Plan{}, err
+	}
+	if plan.Revision != 1 {
+		return Plan{}, ErrConflict
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Plan{}, fmt.Errorf("begin grounding plan replacement: %w", err)
+	}
+	defer tx.Rollback()
+	if err := lockRun(ctx, tx, plan.RunID); err != nil {
+		return Plan{}, err
+	}
+	existing, err := selectCurrent(ctx, tx, plan.TaskPlanID, false)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Plan{}, err
+	}
+
+	previous, err := selectCurrent(ctx, tx, plan.RunID, true)
+	if err == nil {
+		if previous.TaskPlanVersion > plan.TaskPlanVersion {
+			return Plan{}, ErrConflict
+		}
+		if previous.TaskPlanID != plan.TaskPlanID &&
+			previous.Status != StatusSuperseded {
+			superseded, err := supersededRevision(previous, plan.UpdatedAt)
+			if err != nil {
+				return Plan{}, err
+			}
+			if err := insertPlan(ctx, tx, superseded); err != nil {
+				return Plan{}, err
+			}
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return Plan{}, err
+	}
+	if err := insertPlan(ctx, tx, plan); err != nil {
+		return Plan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Plan{}, fmt.Errorf("commit grounding plan replacement: %w", err)
+	}
+	return plan, nil
+}
+
 func (r *PostgresRepository) AppendRevision(
 	ctx context.Context,
 	plan Plan,
@@ -126,15 +179,8 @@ func (r *PostgresRepository) SupersedeForTaskPlan(
 		return err
 	}
 	if plan.Status != StatusSuperseded {
-		plan.Revision++
-		plan.Status = StatusSuperseded
-		plan.UpdatedAt = at.UTC()
-		plan.ID = revisionID(plan, plan.UpdatedAt)
-		plan.ContentSHA256, err = contentHash(plan)
+		plan, err = supersededRevision(plan, at)
 		if err != nil {
-			return err
-		}
-		if err := validatePlan(plan); err != nil {
 			return err
 		}
 		if err := insertPlan(ctx, tx, plan); err != nil {
@@ -145,6 +191,22 @@ func (r *PostgresRepository) SupersedeForTaskPlan(
 		return fmt.Errorf("commit grounding plan supersede: %w", err)
 	}
 	return nil
+}
+
+func supersededRevision(plan Plan, at time.Time) (Plan, error) {
+	plan.Revision++
+	plan.Status = StatusSuperseded
+	plan.UpdatedAt = at.UTC()
+	plan.ID = revisionID(plan, plan.UpdatedAt)
+	hash, err := contentHash(plan)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.ContentSHA256 = hash
+	if err := validatePlan(plan); err != nil {
+		return Plan{}, err
+	}
+	return plan, nil
 }
 
 type rowScanner interface {

@@ -56,6 +56,14 @@
 
 ## 任务记录
 
+## 2026-09-13 | Task 2 GroundingPlan 修复轮 1
+
+- 任务：修复 GroundingPlan 生产迁移遗漏、TaskPlan 换版非原子和无效 probe evidence 产生脏 revision 三项 review finding。
+- 操作：先增加迁移入口真实升级、替换失败回滚、并发 Ensure 和无效 evidence revision 不变测试并确认 RED；随后接入 `GroundingPlanMigrationSQL`，新增仓储级原子 `ReplaceForTaskPlan`，并将 evidence 校验前置。
+- 结果：已有数据库可通过生产迁移入口补建 `grounding_plans`；旧计划 supersede 与新计划 revision 1 在同一 PostgreSQL transaction/run advisory lock 内完成；无效 evidence 不再写入 probing revision。关联 `BUG-191`。
+- 验证：聚焦 PostgreSQL `go test -race -count=1 ./internal/groundingplan ./internal/dbschema ./cmd/migrate` 通过且无 skip；`env -u TEST_DATABASE_URL go test -count=1 ./...` 通过；`go vet`、gofmt 和 `git diff --check` 通过。带数据库运行全量测试另暴露既有事件计数断言问题，见 `BUG-192`。
+- 后续：修复 `BUG-192` 中 PostgreSQL 集成测试对 `agent.pipeline.trace` 的旧事件数量预期。
+
 ## 2026-09-13 | Dynamic GroundingPlan TDD 实施计划
 
 - 任务：将已批准的 Semantic TaskPlan + Dynamic GroundingPlan 设计拆分为可执行的 TDD 开发计划。

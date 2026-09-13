@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,6 +164,154 @@ func TestPostgresRepositorySupersedesOldPlanForTaskPlanRevision(t *testing.T) {
 	}
 	if oldRows != 2 || newRows != 1 {
 		t.Fatalf("revision row counts old=%d new=%d", oldRows, newRows)
+	}
+}
+
+func TestPostgresRepositoryRollsBackSupersedeWhenReplacementInsertFails(
+	t *testing.T,
+) {
+	fixture := newGroundingPostgresFixture(t)
+	taskPlanService := taskplan.NewService(taskplan.NewPostgresRepository(fixture.db))
+	firstTaskPlan := fixture.createTaskPlanWithService(
+		taskPlanService,
+		"Submit the form",
+	)
+	service := NewService(NewPostgresRepository(fixture.db))
+	first, err := service.EnsureForTaskPlan(fixture.ctx, firstTaskPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTaskPlan := fixture.createTaskPlanWithService(
+		taskPlanService,
+		"Submit the revised form",
+	)
+
+	fixedNow := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return fixedNow }
+	collision := clonePlan(first)
+	collision.ID = revisionID(Plan{
+		RunID: secondTaskPlan.RunID, TaskPlanID: secondTaskPlan.ID,
+		Revision: 1, Status: StatusActive,
+	}, fixedNow)
+	collision.Revision++
+	collision.UpdatedAt = fixedNow.Add(-time.Second)
+	collision.ContentSHA256, err = contentHash(collision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := insertPlan(fixture.ctx, fixture.db, collision); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.EnsureForTaskPlan(
+		fixture.ctx,
+		secondTaskPlan,
+	); err == nil {
+		t.Fatal("replacement with colliding revision ID succeeded")
+	}
+
+	var revision, rows int
+	var status Status
+	if err := fixture.db.QueryRowContext(
+		fixture.ctx,
+		`SELECT max(revision), count(*),
+		        (array_agg(status ORDER BY revision DESC))[1]
+		   FROM grounding_plans
+		  WHERE task_plan_id = $1`,
+		firstTaskPlan.ID,
+	).Scan(&revision, &rows, &status); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 2 || rows != 2 || status != StatusActive {
+		t.Fatalf(
+			"old plan after failed replacement: revision=%d rows=%d status=%q",
+			revision,
+			rows,
+			status,
+		)
+	}
+}
+
+func TestPostgresRepositorySerializesConcurrentEnsureForTaskPlan(t *testing.T) {
+	fixture := newGroundingPostgresFixture(t)
+	taskPlanService := taskplan.NewService(taskplan.NewPostgresRepository(fixture.db))
+	firstTaskPlan := fixture.createTaskPlanWithService(
+		taskPlanService,
+		"Submit the form",
+	)
+	service := NewService(NewPostgresRepository(fixture.db))
+	if _, err := service.EnsureForTaskPlan(fixture.ctx, firstTaskPlan); err != nil {
+		t.Fatal(err)
+	}
+	secondTaskPlan := fixture.createTaskPlanWithService(
+		taskPlanService,
+		"Submit the revised form",
+	)
+
+	const workers = 2
+	start := make(chan struct{})
+	results := make(chan Plan, workers)
+	errs := make(chan error, workers)
+	var wait sync.WaitGroup
+	for range workers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			plan, err := service.EnsureForTaskPlan(fixture.ctx, secondTaskPlan)
+			results <- plan
+			errs <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(errs)
+
+	var resultID string
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for plan := range results {
+		if resultID == "" {
+			resultID = plan.ID
+		}
+		if plan.ID != resultID {
+			t.Fatalf("concurrent Ensure returned IDs %q and %q", resultID, plan.ID)
+		}
+	}
+
+	var oldRows, newRows, activeRows int
+	if err := fixture.db.QueryRowContext(
+		fixture.ctx,
+		`SELECT
+			count(*) FILTER (WHERE task_plan_id = $1),
+			count(*) FILTER (WHERE task_plan_id = $2),
+			count(*) FILTER (
+				WHERE status <> 'superseded'
+				AND revision = (
+					SELECT max(current.revision)
+					FROM grounding_plans current
+					WHERE current.task_plan_id = grounding_plans.task_plan_id
+				)
+			)
+		   FROM grounding_plans
+		  WHERE run_id = $3`,
+		firstTaskPlan.ID,
+		secondTaskPlan.ID,
+		firstTaskPlan.RunID,
+	).Scan(&oldRows, &newRows, &activeRows); err != nil {
+		t.Fatal(err)
+	}
+	if oldRows != 2 || newRows != 1 || activeRows != 1 {
+		t.Fatalf(
+			"concurrent rows old=%d new=%d active=%d",
+			oldRows,
+			newRows,
+			activeRows,
+		)
 	}
 }
 
