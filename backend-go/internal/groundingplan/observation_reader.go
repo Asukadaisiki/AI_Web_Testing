@@ -219,11 +219,13 @@ func (r *ObservationReader) ResolveCandidate(
 		ContextPath:     found.element.ContextPath,
 		Provenance:      found.candidate.Provenance,
 		Metadata: browsercontract.CandidateElementMetadata{
-			Role:     found.element.A11y.Role,
-			Name:     found.element.A11y.Name,
-			DOMTag:   found.element.DOM.Tag,
-			DOMText:  found.element.DOM.Text,
-			DOMAttrs: maps.Clone(found.element.DOM.Attrs),
+			Role:        found.element.A11y.Role,
+			Name:        found.element.A11y.Name,
+			Description: found.element.A11y.Description,
+			Value:       found.element.A11y.Value,
+			DOMTag:      found.element.DOM.Tag,
+			DOMText:     found.element.DOM.Text,
+			DOMAttrs:    maps.Clone(found.element.DOM.Attrs),
 		},
 	}, nil
 }
@@ -506,8 +508,10 @@ type persistedElement struct {
 	ElementRef  string                      `json:"element_ref"`
 	ContextPath browsercontract.ContextPath `json:"context_path"`
 	A11y        struct {
-		Role string `json:"role"`
-		Name string `json:"name"`
+		Role        string `json:"role"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Value       any    `json:"value"`
 	} `json:"a11y"`
 	DOM struct {
 		Tag   string            `json:"tag"`

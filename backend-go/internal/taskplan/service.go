@@ -825,8 +825,13 @@ func resolvedCandidateAuthorizationText(
 		candidate.Provenance,
 		candidate.Metadata.Role,
 		candidate.Metadata.Name,
+		candidate.Metadata.Description,
 		candidate.Metadata.DOMTag,
 		candidate.Metadata.DOMText,
+	}
+	if candidate.Metadata.Value != nil {
+		a11yValue, _ := json.Marshal(candidate.Metadata.Value)
+		values = append(values, string(a11yValue))
 	}
 	keys := make([]string, 0, len(candidate.Metadata.DOMAttrs))
 	for key := range candidate.Metadata.DOMAttrs {

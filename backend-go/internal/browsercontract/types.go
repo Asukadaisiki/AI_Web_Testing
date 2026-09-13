@@ -100,11 +100,13 @@ type ContextPath struct {
 }
 
 type CandidateElementMetadata struct {
-	Role     string
-	Name     string
-	DOMTag   string
-	DOMText  string
-	DOMAttrs map[string]string
+	Role        string
+	Name        string
+	Description string
+	Value       any
+	DOMTag      string
+	DOMText     string
+	DOMAttrs    map[string]string
 }
 
 type TrustedResolvedCandidate struct {

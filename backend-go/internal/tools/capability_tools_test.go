@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/groundingplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
@@ -395,6 +396,9 @@ func TestExploreFlowHydratesCandidateReferenceForWorker(t *testing.T) {
 			Frames: []string{}, ShadowHosts: []string{},
 		},
 		Provenance: "a11y_backend_dom_node",
+		Metadata: browsercontract.CandidateElementMetadata{
+			Name: "internal-metadata",
+		},
 	}
 	client := &fakeCapabilityClient{}
 	resolver := &fakeCandidateResolver{resolved: resolved}
@@ -461,6 +465,9 @@ func TestExploreFlowHydratesCandidateReferenceForWorker(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rawResolved, wantResolvedValue) {
 		t.Fatalf("resolved_candidate = %#v, want %#v", rawResolved, wantResolvedValue)
+	}
+	if strings.Contains(string(client.arguments), "internal-metadata") {
+		t.Fatalf("candidate metadata leaked to Worker: %s", client.arguments)
 	}
 	current, err := plans.EnsureForTaskPlan(
 		context.Background(),
@@ -671,6 +678,125 @@ func TestExploreFlowRejectsForbiddenTrustedCandidateBeforeWorker(t *testing.T) {
 	}
 	if client.executeCalls != 0 {
 		t.Fatalf("worker calls = %d, want 0", client.executeCalls)
+	}
+}
+
+func TestExploreFlowRejectsForbiddenPersistedA11yMetadataBeforeWorker(t *testing.T) {
+	tests := []struct {
+		name string
+		a11y string
+	}{
+		{
+			name: "description",
+			a11y: `"a11y":{
+				"role":"button",
+				"name":"Confirm",
+				"description":"Delete account",
+				"value":null,
+				"states":{"focusable":true,"disabled":false},
+				"relations":{}
+			}`,
+		},
+		{
+			name: "value",
+			a11y: `"a11y":{
+				"role":"button",
+				"name":"Confirm",
+				"description":null,
+				"value":"Delete account permanently",
+				"states":{"focusable":true,"disabled":false},
+				"relations":{}
+			}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			runs := agentservice.NewService(agentservice.NewMemoryRepository())
+			run, err := runs.StartRun(
+				ctx,
+				"conversation-"+test.name,
+				"Open account options",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rawPayload := strings.Replace(
+				observationQueryToolResultFixture,
+				`"a11y":{"role":"button","name":"","states":{"focusable":true,"disabled":false},"relations":{}}`,
+				test.a11y,
+				1,
+			)
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(rawPayload), &payload); err != nil {
+				t.Fatal(err)
+			}
+			event, err := runs.RecordEvent(ctx, run, agentservice.Event{
+				Type:    agentservice.EventToolResult,
+				Payload: payload,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			taskPlans := taskplan.NewService(taskplan.NewMemoryRepository())
+			plan, err := taskPlans.CreateVersion(ctx, taskplan.CreateRequest{
+				RunID: run.ID,
+				Definition: taskplan.Definition{
+					Goal:             "Open account options",
+					MaxSideEffect:    taskplan.SideEffectBrowserState,
+					ForbiddenActions: []string{"delete account"},
+					Steps: []taskplan.StepDefinition{{
+						ID: "open_options", Intent: "Open account options",
+						Action: "click", Target: "Confirm",
+						ExpectedOccurrences: 1, Idempotency: "idempotent",
+						SideEffect:           taskplan.SideEffectBrowserState,
+						Preconditions:        []string{},
+						CompletionConditions: []string{"options visible"},
+					}},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := browsercontract.CandidateRef{
+				SchemaVersion:  browsercontract.CandidateRefVersion,
+				SourceEventSeq: event.Seq,
+				ProbeID:        "probe-query",
+				ObservationID:  "obs-query",
+				CandidateID:    "candidate-submit",
+			}
+			client := &fakeCapabilityClient{}
+			plans := preparedCandidateGroundingPlanForTaskPlan(
+				t,
+				plan,
+				ref,
+				nil,
+			)
+			handler := NewBrowserTools(
+				client,
+				groundingplan.NewObservationReader(runs),
+				plans,
+				taskPlans,
+			)[1]
+
+			_, err = handler.Execute(ctx, Call{
+				RunID: run.ID, ToolCallID: "call-" + test.name,
+				Name: "explore_flow",
+				Arguments: candidateFlowArguments(
+					"open_options",
+					"click",
+					ref,
+					1,
+				),
+			})
+			if err == nil || !strings.Contains(err.Error(), "forbidden") {
+				t.Fatalf("Execute() error = %v, want forbidden candidate rejection", err)
+			}
+			if client.executeCalls != 0 {
+				t.Fatalf("worker calls = %d, want 0", client.executeCalls)
+			}
+		})
 	}
 }
 
