@@ -188,6 +188,25 @@ CREATE TABLE public.task_plan_steps (
     CONSTRAINT ck_task_plan_steps_side_effect CHECK (((side_effect)::text = ANY ((ARRAY['none'::character varying, 'browser_state'::character varying, 'external_state'::character varying, 'unknown'::character varying])::text[]))),
     CONSTRAINT ck_task_plan_steps_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'grounded'::character varying, 'failed'::character varying, 'blocked'::character varying])::text[])))
 );
+CREATE TABLE public.grounding_plans (
+    id character varying(64) NOT NULL,
+    schema_version character varying(64) NOT NULL,
+    run_id character varying(64) NOT NULL,
+    task_plan_id character varying(64) NOT NULL,
+    task_plan_version integer NOT NULL,
+    revision integer NOT NULL,
+    status character varying(32) NOT NULL,
+    current_plan_step_id character varying(64),
+    content_json jsonb NOT NULL,
+    content_sha256 character varying(64) NOT NULL,
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_grounding_plans_schema_version CHECK (((schema_version)::text = 'grounding.plan.v1'::text)),
+    CONSTRAINT ck_grounding_plans_task_plan_version CHECK ((task_plan_version >= 1)),
+    CONSTRAINT ck_grounding_plans_revision CHECK ((revision >= 1)),
+    CONSTRAINT ck_grounding_plans_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'ready'::character varying, 'failed'::character varying, 'blocked'::character varying, 'superseded'::character varying])::text[]))),
+    CONSTRAINT ck_grounding_plans_hash CHECK (((length((content_sha256)::text) = 64) AND (lower((content_sha256)::text) = (content_sha256)::text)))
+);
 CREATE TABLE public.execution_batches (
     id integer NOT NULL,
     project_id integer NOT NULL,
@@ -518,6 +537,8 @@ ALTER TABLE ONLY public.task_plans
     ADD CONSTRAINT pk_task_plans PRIMARY KEY (id);
 ALTER TABLE ONLY public.task_plan_steps
     ADD CONSTRAINT pk_task_plan_steps PRIMARY KEY (plan_id, step_id);
+ALTER TABLE ONLY public.grounding_plans
+    ADD CONSTRAINT pk_grounding_plans PRIMARY KEY (id);
 ALTER TABLE ONLY public.execution_batches
     ADD CONSTRAINT pk_execution_batches PRIMARY KEY (id);
 ALTER TABLE ONLY public.execution_jobs
@@ -552,6 +573,8 @@ ALTER TABLE ONLY public.task_plans
     ADD CONSTRAINT uq_task_plans_run_version UNIQUE (run_id, version);
 ALTER TABLE ONLY public.task_plan_steps
     ADD CONSTRAINT uq_task_plan_steps_position UNIQUE (plan_id, position);
+ALTER TABLE ONLY public.grounding_plans
+    ADD CONSTRAINT uq_grounding_plans_task_plan_revision UNIQUE (task_plan_id, revision);
 ALTER TABLE ONLY public.execution_batches
     ADD CONSTRAINT uq_execution_batches_actor_idempotency UNIQUE (triggered_by, idempotency_key);
 ALTER TABLE ONLY public.execution_jobs
@@ -602,6 +625,9 @@ CREATE INDEX ix_execution_jobs_lease_expires_at ON public.execution_jobs USING b
 CREATE INDEX ix_execution_jobs_lease_owner ON public.execution_jobs USING btree (lease_owner);
 CREATE INDEX ix_execution_jobs_project_id ON public.execution_jobs USING btree (project_id);
 CREATE INDEX ix_execution_jobs_status ON public.execution_jobs USING btree (status);
+CREATE INDEX ix_grounding_plans_run_id ON public.grounding_plans USING btree (run_id);
+CREATE INDEX ix_grounding_plans_status ON public.grounding_plans USING btree (status);
+CREATE INDEX ix_grounding_plans_task_plan_id ON public.grounding_plans USING btree (task_plan_id);
 CREATE INDEX ix_locator_correction_events_correction_id ON public.locator_correction_events USING btree (correction_id);
 CREATE INDEX ix_locator_correction_events_event_type ON public.locator_correction_events USING btree (event_type);
 CREATE INDEX ix_locator_correction_events_execution_id ON public.locator_correction_events USING btree (execution_id);
@@ -677,6 +703,10 @@ ALTER TABLE ONLY public.task_plans
     ADD CONSTRAINT fk_task_plans_generation FOREIGN KEY (bound_generation_id) REFERENCES public.dsl_generation_runs(id) ON DELETE SET NULL;
 ALTER TABLE ONLY public.task_plan_steps
     ADD CONSTRAINT fk_task_plan_steps_plan FOREIGN KEY (plan_id) REFERENCES public.task_plans(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.grounding_plans
+    ADD CONSTRAINT fk_grounding_plans_run FOREIGN KEY (run_id) REFERENCES public.agent_runs(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.grounding_plans
+    ADD CONSTRAINT fk_grounding_plans_task_plan FOREIGN KEY (task_plan_id) REFERENCES public.task_plans(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.execution_batches
     ADD CONSTRAINT fk_execution_batches_planning_session_id_ai_planning_sessions FOREIGN KEY (planning_session_id) REFERENCES public.ai_planning_sessions(id) ON DELETE SET NULL;
 ALTER TABLE ONLY public.execution_batches

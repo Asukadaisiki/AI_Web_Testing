@@ -7,3 +7,6 @@ var SchemaSQL string
 
 //go:embed taskplan.sql
 var TaskPlanMigrationSQL string
+
+//go:embed groundingplan.sql
+var GroundingPlanMigrationSQL string
