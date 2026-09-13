@@ -56,6 +56,38 @@
 
 ## 任务记录
 
+## 2026-09-13 | 同步日志变更到 GitHub
+
+- 任务：将当前日志变更提交并同步到 GitHub。
+- 操作：核对 `main` 分支和 `origin` 远端；检查日志差异；执行 Go 测试/静态检查、Browser Worker 编译/单元测试、前端单元测试和构建。
+- 结果：待提交并推送 `docs/bug-log.md` 与 `docs/execution-log.md`；同步前发现 README 的 Browser Worker 编译路径过期，记录为 BUG-190。
+- 验证：Go 测试和 `go vet` 通过；`src` 编译通过；Python 单元测试 189 项通过、2 项条件跳过；前端 11 项测试通过并成功构建。README 中的 `app` 编译命令单独失败。
+- 后续：无。
+
+## 2026-09-13 | 迁移 Superpowers Skill 到全局目录
+
+- 任务：将当前项目 `.agents/skills` 中的 Superpowers Skill 迁移到用户全局目录。
+- 操作：确认用户修复 `/Users/bytedance/.agents` 所有权后，将项目级 Skill 复制到全局目录，保留原有全局 Skill，并清理项目级副本与 `skills-lock.json`。
+- 结果：14 个 Superpowers Skill 已迁移至 `/Users/bytedance/.agents/skills`；项目目录不再包含 `.agents/` 或 `skills-lock.json`。
+- 验证：51 个迁移文件逐一哈希校验一致；全局目录共保留 18 个 Skill，原有 4 个 Skill 未受影响。
+- 后续：无。
+
+## 2026-09-13 | 检查工作区未暂存文件
+
+- 任务：确认本地工作区中未暂存文件的来源和内容。
+- 操作：执行 `git status --short`、`git diff --stat`，检查两个日志差异及 `.agents/`、`skills-lock.json` 的文件内容。
+- 结果：确认变更均来自当前项目级 `obra/superpowers` Skill 安装及其安装记录，没有发现其他未暂存文件。
+- 验证：`.agents/` 包含 14 个 Skill 及配套文件，大小约 472 KB；`skills-lock.json` 记录来源和内容哈希。
+- 后续：无。
+
+## 2026-09-13 | 安装并启用 obra/superpowers Skill
+
+- 任务：从 GitHub 安装 `obra/superpowers`，并在当前项目的 Codex 环境中启用。
+- 操作：核对 GitHub 官方仓库和安装方式；使用独立 npm 缓存绕过 root-owned npm cache；全局安装因 `~/.agents/skills` 属于 root 被拒绝后，改为当前项目级 Codex 安装；读取 `using-superpowers/SKILL.md` 及 Codex 适配说明。
+- 结果：14 个 Superpowers Skill 已复制到 `.agents/skills/`，`skills-lock.json` 已记录 `obra/superpowers` 来源和内容哈希；本次会话已按 `using-superpowers` 启动规则启用。
+- 验证：`npx skills list --json` 识别到 14 个项目级 Skill，14 个 `SKILL.md` 全部存在；安装器安全评估为 Gen Safe、Socket 0 alerts，`using-superpowers` 的 Snyk 评级为 Low。
+- 后续：新建或重启 Codex 会话后会自动发现项目级 Skill；全局安装仍受 `/Users/bytedance/.agents` 的 root 所有权限制，如需所有项目共享需先修复该目录权限。
+
 ## 2026-09-12 | ResolvedTarget 修复后 Live E2E 重跑
 
 - 任务：在 `ec1f8cc` 修复 ResolvedTarget ownership 后，以 `deepseek-v4-flash-vision-exp`、thinking enabled、reasoning effort high 再运行一次官方 `automationexercise-blue-top-cart.v1` research-v2 E2E。

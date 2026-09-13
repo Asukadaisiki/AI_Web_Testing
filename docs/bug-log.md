@@ -48,6 +48,36 @@
 
 ## 问题记录
 
+## BUG-190 | Browser Worker 编译验证命令路径过期
+
+- 日期：2026-09-13
+- 状态：open
+- 严重度：low
+- 来源：同步前验证
+- 描述：根目录 README 的构建验证命令使用 `uv run python -m compileall -q app`，但当前 Browser Worker 的 Python 包目录是 `src/`。
+- 影响：按文档执行编译验证会因 `Can't list 'app'` 失败，无法直接完成 README 指定的验证流程。
+- 根因：Browser Worker 已采用 `src` 布局，README 中的验证路径未同步更新。
+- 处理：本次使用 `uv run python -m compileall -q src` 完成实际编译验证；文档路径修复留作后续任务。
+- 验证：`src` 编译通过；Browser Worker 单元测试 189 项通过，2 项真实 Chromium 测试按条件跳过。
+- 关联记录：`docs/execution-log.md#2026-09-13--同步日志变更到-github`。
+
+## BUG-189 | 全局 Skill 安装目录权限错误
+
+- 日期：2026-09-13
+- 状态：resolved
+- 严重度：low
+- 来源：自测
+- 描述：`npx skills add ... --global` 无法写入 `/Users/bytedance/.agents/skills`，CLI 对 14 个 Skill 均返回 `EACCES: permission denied`。
+- 复现步骤：
+  1. 执行 `npx skills add https://github.com/obra/superpowers --global --yes`。
+  2. 观察安装器尝试创建 `/Users/bytedance/.agents/skills/<skill>`。
+  3. 得到目录权限拒绝。
+- 影响：Superpowers 无法通过全局路径供所有项目共享；当前项目级安装不受影响。
+- 根因：`/Users/bytedance/.agents` 及其 `skills` 子目录的所有者为 `root`，当前用户没有写权限。
+- 处理：用户修复 `/Users/bytedance/.agents` 所有权后，将项目级 14 个 Skill 迁移到全局 `/Users/bytedance/.agents/skills`，并清理项目级副本。
+- 验证：全局 14 个 Skill 的 51 个文件与项目源文件哈希一致；原有 4 个全局 Skill 未受影响。
+- 关联记录：`docs/execution-log.md#2026-09-13--安装并启用-obra-superpowers-skill`。
+
 ## BUG-188 | GroundingQuery 无法直接引用 Observation Candidate
 
 - 日期：2026-09-12
