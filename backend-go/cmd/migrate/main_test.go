@@ -13,21 +13,22 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func TestMigrateAddsGroundingPlansToExistingDatabase(t *testing.T) {
+func TestMigrateRemovesGroundingPlans(t *testing.T) {
 	ctx := context.Background()
 	db := newMigrationTestDatabase(t, ctx)
 	if _, err := db.ExecContext(ctx, dbschema.SchemaSQL); err != nil {
 		t.Fatalf("apply baseline schema: %v", err)
 	}
+	// Simulate a legacy database that still holds the superseded table.
 	if _, err := db.ExecContext(
 		ctx,
-		`DROP TABLE public.grounding_plans`,
+		`CREATE TABLE public.grounding_plans (id bigint PRIMARY KEY)`,
 	); err != nil {
-		t.Fatalf("remove grounding plans from existing schema: %v", err)
+		t.Fatalf("create legacy grounding_plans table: %v", err)
 	}
 
 	if err := migrate(ctx, db); err != nil {
-		t.Fatalf("migrate existing database: %v", err)
+		t.Fatalf("migrate legacy database: %v", err)
 	}
 
 	var exists bool
@@ -37,8 +38,8 @@ func TestMigrateAddsGroundingPlansToExistingDatabase(t *testing.T) {
 	).Scan(&exists); err != nil {
 		t.Fatal(err)
 	}
-	if !exists {
-		t.Fatal("grounding_plans table does not exist after migration")
+	if exists {
+		t.Fatal("grounding_plans table still exists after migration")
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 	"io"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/groundingplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 )
 
@@ -36,19 +35,17 @@ type CandidateResolver interface {
 }
 
 type BrowserTool struct {
-	name           string
-	description    string
-	inputSchema    json.RawMessage
-	client         BrowserCapabilityClient
-	candidates     CandidateResolver
-	groundingPlans *groundingplan.Service
-	taskPlans      *taskplan.Service
+	name        string
+	description string
+	inputSchema json.RawMessage
+	client      BrowserCapabilityClient
+	candidates  CandidateResolver
+	taskPlans   *taskplan.Service
 }
 
 func NewBrowserTools(
 	client BrowserCapabilityClient,
 	candidates CandidateResolver,
-	groundingPlans *groundingplan.Service,
 	taskPlans *taskplan.Service,
 ) []Handler {
 	return []Handler{
@@ -75,7 +72,7 @@ func NewBrowserTools(
 			name: "explore_flow",
 			description: "Explore multiple page states in one browser session. " +
 				"Use discovered links and a bounded sequence of click, input, and wait_for actions. " +
-				"Use grounding.query.v2 candidate_ref after query_observation; the control plane resolves it from current-run evidence before the Worker call. " +
+				"Use grounding.query.v2 candidate_ref from the current-run explore summary; the control plane resolves it from current-run evidence before the Worker call. " +
 				"For search workflows, explore the actual input and search-control click; do not jump directly to a constructed search URL. " +
 				"Each call runs in an isolated disposable probe context, so its browser and business state are never reused by another call or by official execution. " +
 				"Express intended multiplicity such as quantity 2 in the flow actions and final DSL, not by relying on state accumulated across calls. " +
@@ -197,7 +194,7 @@ func NewBrowserTools(
 				}
 			}`),
 			client: client, candidates: candidates,
-			groundingPlans: groundingPlans, taskPlans: taskPlans,
+			taskPlans: taskPlans,
 		},
 		BrowserTool{
 			name: "validate_page_elements",
@@ -239,7 +236,6 @@ func (t BrowserTool) Definition() Definition {
 func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 	arguments := call.Arguments
 	observationVersion := ""
-	hydratedPlanSteps := []string{}
 	if t.name == "explore_page" || t.name == "explore_flow" {
 		var payload map[string]any
 		if err := json.Unmarshal(call.Arguments, &payload); err != nil {
@@ -252,13 +248,11 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 				payload["schema_version"] = browsercontract.GroundingQueryV1
 			}
 			if payload["schema_version"] == browsercontract.GroundingQueryV2 {
-				var err error
-				hydratedPlanSteps, err = t.hydrateCandidateReferences(
+				if err := t.hydrateCandidateReferences(
 					ctx,
 					call.RunID,
 					payload,
-				)
-				if err != nil {
+				); err != nil {
 					return Result{}, err
 				}
 			}
@@ -282,22 +276,12 @@ func (t BrowserTool) Execute(ctx context.Context, call Call) (Result, error) {
 		arguments,
 	)
 	if err != nil {
-		return Result{}, t.withProbeFailures(
-			ctx,
-			call.RunID,
-			hydratedPlanSteps,
-			err,
-		)
+		return Result{}, err
 	}
 	if observationVersion == "v2" {
 		content, err = compactV2ExplorationResult(content)
 		if err != nil {
-			return Result{}, t.withProbeFailures(
-				ctx,
-				call.RunID,
-				hydratedPlanSteps,
-				err,
-			)
+			return Result{}, err
 		}
 	}
 	return Result{Content: content}, nil
@@ -315,16 +299,16 @@ func (t BrowserTool) hydrateCandidateReferences(
 	ctx context.Context,
 	runID string,
 	payload map[string]any,
-) ([]string, error) {
+) error {
 	steps, ok := payload["steps"].([]any)
 	if !ok {
-		return nil, errors.New("grounding.query.v2 steps are invalid")
+		return errors.New("grounding.query.v2 steps are invalid")
 	}
 	hydrations := make([]candidateHydration, 0)
 	for stepIndex, rawStep := range steps {
 		step, ok := rawStep.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"grounding.query.v2 step %d is invalid",
 				stepIndex,
 			)
@@ -335,7 +319,7 @@ func (t BrowserTool) hydrateCandidateReferences(
 		}
 		actions, ok := rawActions.([]any)
 		if !ok {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"grounding.query.v2 step %d actions are invalid",
 				stepIndex,
 			)
@@ -343,14 +327,14 @@ func (t BrowserTool) hydrateCandidateReferences(
 		for actionIndex, rawAction := range actions {
 			action, ok := rawAction.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf(
+				return fmt.Errorf(
 					"grounding.query.v2 action %d:%d is invalid",
 					stepIndex,
 					actionIndex,
 				)
 			}
 			if _, exists := action["resolved_candidate"]; exists {
-				return nil, errors.New(
+				return errors.New(
 					"model-supplied resolved_candidate is forbidden",
 				)
 			}
@@ -359,7 +343,7 @@ func (t BrowserTool) hydrateCandidateReferences(
 			hasLocator = hasLocator && locator != nil
 			hasCandidate = hasCandidate && candidate != nil
 			if hasLocator == hasCandidate {
-				return nil, fmt.Errorf(
+				return fmt.Errorf(
 					"grounding.query.v2 action %d:%d requires exactly one of locator or candidate_ref",
 					stepIndex,
 					actionIndex,
@@ -369,22 +353,21 @@ func (t BrowserTool) hydrateCandidateReferences(
 				continue
 			}
 			if t.candidates == nil ||
-				t.groundingPlans == nil ||
 				t.taskPlans == nil {
-				return nil, errors.New(
+				return errors.New(
 					"candidate hydration dependencies are unavailable",
 				)
 			}
 			planStepID, _ := action["plan_step_id"].(string)
 			actionName, _ := action["action"].(string)
 			if planStepID == "" || actionName == "" {
-				return nil, errors.New(
+				return errors.New(
 					"candidate_ref action requires action and plan_step_id",
 				)
 			}
 			ref, err := decodeCandidateRef(candidate)
 			if err != nil {
-				return nil, fmt.Errorf(
+				return fmt.Errorf(
 					"decode candidate_ref for plan step %q: %w",
 					planStepID,
 					err,
@@ -397,7 +380,7 @@ func (t BrowserTool) hydrateCandidateReferences(
 				ref,
 			)
 			if err != nil {
-				return nil, fmt.Errorf(
+				return fmt.Errorf(
 					"resolve candidate for plan step %q: %w",
 					planStepID,
 					err,
@@ -411,7 +394,7 @@ func (t BrowserTool) hydrateCandidateReferences(
 				err = resolved.Validate()
 			}
 			if err != nil {
-				return nil, fmt.Errorf(
+				return fmt.Errorf(
 					"validate candidate for plan step %q: %w",
 					planStepID,
 					err,
@@ -427,59 +410,40 @@ func (t BrowserTool) hydrateCandidateReferences(
 		}
 	}
 	if len(hydrations) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	authorizations := make(
 		[]taskplan.ResolvedCandidateAuthorization,
 		len(hydrations),
 	)
-	selectedByStep := make(map[string]browsercontract.CandidateRef)
-	planStepIDs := make([]string, 0, len(hydrations))
+	seenSteps := make(map[string]browsercontract.CandidateRef)
 	for index, hydration := range hydrations {
 		authorizations[index] = taskplan.ResolvedCandidateAuthorization{
 			PlanStepID: hydration.planStepID,
 			Action:     hydration.actionName,
 			Candidate:  hydration.resolved,
 		}
-		selected, exists := selectedByStep[hydration.planStepID]
-		if exists && selected != hydration.ref {
-			return nil, fmt.Errorf(
+		if selected, exists := seenSteps[hydration.planStepID]; exists && selected != hydration.ref {
+			return fmt.Errorf(
 				"plan step %q references multiple candidates",
 				hydration.planStepID,
 			)
 		}
-		if !exists {
-			selectedByStep[hydration.planStepID] = hydration.ref
-			planStepIDs = append(planStepIDs, hydration.planStepID)
-		}
+		seenSteps[hydration.planStepID] = hydration.ref
 	}
 	if err := t.taskPlans.AuthorizeResolvedCandidates(
 		ctx,
 		runID,
 		authorizations,
 	); err != nil {
-		return nil, err
-	}
-	for _, planStepID := range planStepIDs {
-		if _, err := t.groundingPlans.StartCandidateProbe(
-			ctx,
-			runID,
-			planStepID,
-			selectedByStep[planStepID],
-		); err != nil {
-			return nil, fmt.Errorf(
-				"start candidate probe for plan step %q: %w",
-				planStepID,
-				err,
-			)
-		}
+		return err
 	}
 	for _, hydration := range hydrations {
 		delete(hydration.action, "candidate_ref")
 		hydration.action["resolved_candidate"] = hydration.resolved
 	}
-	return planStepIDs, nil
+	return nil
 }
 
 func decodeCandidateRef(value any) (browsercontract.CandidateRef, error) {
@@ -506,55 +470,6 @@ func decodeCandidateRef(value any) (browsercontract.CandidateRef, error) {
 		return browsercontract.CandidateRef{}, err
 	}
 	return ref, nil
-}
-
-func (t BrowserTool) recordProbeFailures(
-	ctx context.Context,
-	runID string,
-	planStepIDs []string,
-	failure error,
-) error {
-	if t.groundingPlans == nil || failure == nil {
-		return nil
-	}
-	seen := make(map[string]bool, len(planStepIDs))
-	var result error
-	recordContext := context.WithoutCancel(ctx)
-	for _, planStepID := range planStepIDs {
-		if seen[planStepID] {
-			continue
-		}
-		seen[planStepID] = true
-		if _, err := t.groundingPlans.RecordProbeResult(
-			recordContext,
-			runID,
-			planStepID,
-			nil,
-			failure.Error(),
-		); err != nil {
-			result = errors.Join(
-				result,
-				fmt.Errorf(
-					"record probe failure for plan step %q: %w",
-					planStepID,
-					err,
-				),
-			)
-		}
-	}
-	return result
-}
-
-func (t BrowserTool) withProbeFailures(
-	ctx context.Context,
-	runID string,
-	planStepIDs []string,
-	failure error,
-) error {
-	return errors.Join(
-		failure,
-		t.recordProbeFailures(ctx, runID, planStepIDs, failure),
-	)
 }
 
 func browserProbeID(call Call) string {

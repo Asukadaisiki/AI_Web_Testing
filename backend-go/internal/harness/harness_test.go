@@ -160,9 +160,9 @@ func TestSystemPromptRequiresRealSearchControls(t *testing.T) {
 		!strings.Contains(defaultSystemPrompt, "text_visible postcondition") {
 		t.Fatal("system prompt does not route action-only text facts to runtime postconditions")
 	}
-	if !strings.Contains(defaultSystemPrompt, "query_observation") ||
-		!strings.Contains(defaultSystemPrompt, "candidate_ref") ||
-		!strings.Contains(defaultSystemPrompt, "grounding.query.v2") {
+	if !strings.Contains(defaultSystemPrompt, "candidate_ref") ||
+		!strings.Contains(defaultSystemPrompt, "grounding.query.v2") ||
+		!strings.Contains(defaultSystemPrompt, "probe_id") {
 		t.Fatal("system prompt does not describe candidate-reference grounding")
 	}
 }

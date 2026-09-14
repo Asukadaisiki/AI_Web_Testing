@@ -42,12 +42,10 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, dbschema.TaskPlanMigrationSQL); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, dbschema.GroundingPlanMigrationSQL); err != nil {
-		return err
-	}
 	if _, err := db.ExecContext(ctx, `
 		DROP TABLE IF EXISTS public.dsl_anti_patterns;
 		DROP TABLE IF EXISTS public.alembic_version;
+		DROP TABLE IF EXISTS public.grounding_plans;
 	`); err != nil {
 		return err
 	}

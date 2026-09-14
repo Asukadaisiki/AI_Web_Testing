@@ -48,6 +48,60 @@
 
 ## 问题记录
 
+## BUG-195 | AGENTSERVICE_MAX_TURNS 默认值不足以完成多步 TaskPlan 的 grounding
+
+- 日期：2026-09-13
+- 状态：open
+- 严重度：medium
+- 来源：Agentic E2E（automationexercise Blue Top 加购）
+- 描述：默认 `AGENTSERVICE_MAX_TURNS=12` 下，12 步 TaskPlan 在 grounding 阶段即触发 `agent exceeded maximum turns: 12`，无法走到 DSL 生成/审批。每个 PlanStep 至少需要 1 次 probe + 1 次 query，12 轮远不够 12 步用例。
+- 复现步骤：
+  1. 以默认 12 轮启动 agentservice。
+  2. 运行 `run_agentic_e2e.py --acceptance-spec …/automationexercise-blue-top-cart.v1.json`。
+  3. 观察 run 终态为 `run.failed`，原因 `agent exceeded maximum turns: 12`。
+- 影响：多步用例几乎必然耗尽轮次，阻断完整 E2E。
+- 根因：轮次上限默认值与「步数 × 每步多轮」的实际需求不匹配。
+- 处理：临时以 `AGENTSERVICE_MAX_TURNS=40` 重启；建议后续按 TaskPlan 步数成比例/动态配置上限。
+- 验证：40 轮下事件数从 198 增至 489，grounding 明显推进（未完全跑绿，受 BUG-196/197 与 900s 超时限制）。
+- 关联记录：docs/execution-log.md 2026-09-13。
+
+## BUG-196 | grounding 状态机拒绝当前步骤的 query_observation
+
+- 日期：2026-09-13
+- 状态：fixed
+- 严重度：high
+- 来源：Agentic E2E（automationexercise Blue Top 加购）
+- 描述：Agent 对当前 grounding 步骤 `click_search` 调用 `query_observation` 时，`groundingplan.currentStepIndex` 因 `CurrentPlanStepID != planStepID` 返回 `mutation does not target the current grounding step`，工具按 `tool_execution_failed` 失败并将 TaskPlan 置为 failed。
+- 复现步骤：
+  1. 运行 E2E，Agent 完成 `search_input` grounding。
+  2. Agent 对 `click_search` 发起 probe + query。
+  3. 事件流（seq 189–196）固化：query_observation authorized → running → failed，`task_plan.updated` status=failed。
+- 影响：grounding 状态机在步骤推进时失配，可能阻断合法 grounding；与 BUG-191（GroundingPlan 迁移/换版原子性/probe revision）同域。
+- 根因：（已用 DB 实据 + grep 双重定位）`groundingplan` 与 `taskplan` 是两套并行 grounding 状态机，且互不同步：
+  1. `groundingplan.EnsureForTaskPlan` 创建 grounding plan 时把全部步骤初始化为 `pending`、`CurrentPlanStepID`=第 0 步，无视 task plan 已 grounded 的步骤（DB：`task_plan_steps` 已 grounded `open_products`/`search_input`，而 `grounding_plans` 12 步全 pending、`current_plan_step_id=open_products`）。
+  2. grounding plan 对 `goto`/`assert_text` 等不可 query 的步骤也建立 grounding step，`CurrentPlanStepID` 被永久卡在最前面（`open_products` 是 goto，`query_observation` 的 action 仅限 click/input/wait_for，永远无法推进它）。
+  3. 成功路径从不调用 `groundingplan.RecordProbeResult(evidence)`（grep 确认仅失败分支 `browser.go recordProbeFailures` 与测试调用），probe 成功的步骤永远停在 `probing`，终态 `grounded` 在生产代码中不可达。
+- 处理：删除 `groundingplan` 影子状态机与 `query_observation` 工具，回归 taskplan 单一权威（`docs/plan/2026-09-13-grounding-plan-collapse.md`）；保留 `candidate_ref` → 控制面水合安全边界。
+- 验证：`go build` / `go vet` / `go test ./...` 全绿；migrate 新增 `DROP TABLE IF EXISTS public.grounding_plans` 并由 `TestMigrateRemovesGroundingPlans` 锁定；`ObservationQuery*` 摘要死代码与测试已删除。另已用 PostgreSQL 实据确认根因（run_a304308…：`grounding_plans` 12 步全 pending、`current=open_products`；`task_plan_steps` `open_products`/`search_input`=grounded）。
+- 关联记录：docs/execution-log.md 2026-09-13；同域 BUG-191。
+
+## BUG-197 | 空无障碍名按钮语义定位反复失败并拉爆 E2E 墙钟超时
+
+- 日期：2026-09-13
+- 状态：open
+- 严重度：medium
+- 来源：Agentic E2E（automationexercise Blue Top 加购）
+- 描述：目标站点搜索按钮（`#submit_search`，内含 FontAwesome 图标）无障碍名称为空，语义定位器 `role=button name=""` 命中 count=0、`role=button` 命中 count=3，Agent 反复重试；单次 a11y 探索 60–90s，900s 绝对截止内无法收敛，本轮 `run_88714368cc20d0afbc1180d9` 超时被取消。
+- 复现步骤：
+  1. 运行 E2E，Agent grounding `submit_search` 步骤。
+  2. 观察 explore_flow 中 click 动作报 `structured action locator must resolve exactly once: count=0/3`。
+  3. 直至 900s `exceeded its absolute deadline`。
+- 影响：无障碍名称缺失的图标按钮（搜索、购物车等）语义 grounding 不可靠，拖垮整体吞吐。
+- 根因：待定位（怀疑 grounding 候选选择未及时落到 `verified_selectors` 中的 CSS 候选，如 `#submit_search`）。
+- 处理：未修复；与 BUG-196 交互（若 query_observation 可用，本可选定 CSS 候选提前收敛）。
+- 验证：未验证。
+- 关联记录：docs/execution-log.md 2026-09-13；相关历史 BUG-156。
+
 ## BUG-194 | 当前环境无法连接 GitHub 远端
 
 - 日期：2026-09-13

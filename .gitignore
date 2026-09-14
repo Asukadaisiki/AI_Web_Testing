@@ -58,3 +58,13 @@ browser-worker/.python-version
 .claude/settings.local.json
 !.claude/skills/
 .superpowers
+backend/artifacts
+
+# Go build/runtime caches redirected into the workspace
+.gocache/
+.gomodcache/
+.gopath/
+backend-go/.gocache/
+backend-go/.gomodcache/
+backend-go/bin/
+.pgdata/

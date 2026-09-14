@@ -13,7 +13,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/groundingplan"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/observation"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
@@ -288,7 +288,7 @@ func TestFixAndRetryDoesNotPublishPlanWhenRepairIsNotRequired(t *testing.T) {
 
 func TestBrowserToolForwardsRunContext(t *testing.T) {
 	client := &fakeCapabilityClient{}
-	handler := NewBrowserTools(client, nil, nil, nil)[0]
+	handler := NewBrowserTools(client, nil, nil)[0]
 	_, err := handler.Execute(context.Background(), Call{
 		RunID:          "run-1",
 		ToolCallID:     "call-1",
@@ -320,7 +320,7 @@ func TestBrowserToolForwardsRunContext(t *testing.T) {
 }
 
 func TestBrowserToolV2KeepsObservationAndDropsLegacyNodes(t *testing.T) {
-	handler := NewBrowserTools(observationCapabilityClient{}, nil, nil, nil)[0]
+	handler := NewBrowserTools(observationCapabilityClient{}, nil, nil)[0]
 	result, err := handler.Execute(context.Background(), Call{
 		ProjectID: 7, ConversationID: "11", Name: "explore_page",
 		Arguments: json.RawMessage(`{"url":"https://example.test/form"}`),
@@ -342,7 +342,7 @@ func TestBrowserToolV2KeepsObservationAndDropsLegacyNodes(t *testing.T) {
 
 func TestExploreFlowMockIsolatesRepeatedSideEffectProbes(t *testing.T) {
 	client := &isolatedProbeCapabilityClient{}
-	handler := NewBrowserTools(client, nil, nil, nil)[1]
+	handler := NewBrowserTools(client, nil, nil)[1]
 	arguments := json.RawMessage(`{
 		"base_url":"https://automationexercise.com/product_details/1",
 		"plan_step_ids":["quantity","add_to_cart","open_view_cart"],
@@ -402,9 +402,8 @@ func TestExploreFlowHydratesCandidateReferenceForWorker(t *testing.T) {
 	}
 	client := &fakeCapabilityClient{}
 	resolver := &fakeCandidateResolver{resolved: resolved}
-	taskPlans, taskPlan := preparedCandidateTaskPlan(t, "run-hydrate")
-	plans := preparedCandidateGroundingPlanForTaskPlan(t, taskPlan, ref, nil)
-	handler := NewBrowserTools(client, resolver, plans, taskPlans)[1]
+	taskPlans, _ := preparedCandidateTaskPlan(t, "run-hydrate")
+	handler := NewBrowserTools(client, resolver, taskPlans)[1]
 
 	_, err := handler.Execute(context.Background(), Call{
 		RunID:      "run-hydrate",
@@ -469,18 +468,6 @@ func TestExploreFlowHydratesCandidateReferenceForWorker(t *testing.T) {
 	if strings.Contains(string(client.arguments), "internal-metadata") {
 		t.Fatalf("candidate metadata leaked to Worker: %s", client.arguments)
 	}
-	current, err := plans.EnsureForTaskPlan(
-		context.Background(),
-		taskPlan,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current.Steps[0].Status != groundingplan.StepProbing ||
-		current.Steps[0].SelectedCandidateRef == nil ||
-		*current.Steps[0].SelectedCandidateRef != ref {
-		t.Fatalf("grounding plan = %#v", current)
-	}
 }
 
 func TestExploreFlowCandidateResolutionErrorsDoNotCallWorker(t *testing.T) {
@@ -499,23 +486,10 @@ func TestExploreFlowCandidateResolutionErrorsDoNotCallWorker(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ref := browsercontract.CandidateRef{
-				SchemaVersion:  browsercontract.CandidateRefVersion,
-				SourceEventSeq: 27,
-				ProbeID:        "probe-source",
-				ObservationID:  "obs-source",
-				CandidateID:    "candidate-submit",
-			}
 			client := &fakeCapabilityClient{}
 			resolver := &fakeCandidateResolver{err: test.err}
-			taskPlans, taskPlan := preparedCandidateTaskPlan(t, "run-reject")
-			plans := preparedCandidateGroundingPlanForTaskPlan(
-				t,
-				taskPlan,
-				ref,
-				nil,
-			)
-			handler := NewBrowserTools(client, resolver, plans, taskPlans)[1]
+			taskPlans, _ := preparedCandidateTaskPlan(t, "run-reject")
+			handler := NewBrowserTools(client, resolver, taskPlans)[1]
 
 			_, err := handler.Execute(context.Background(), Call{
 				RunID: "run-reject", ToolCallID: "call-reject",
@@ -548,7 +522,7 @@ func TestExploreFlowCandidateResolutionErrorsDoNotCallWorker(t *testing.T) {
 
 func TestExploreFlowV1WorkerRequestRemainsByteSemanticallyCompatible(t *testing.T) {
 	client := &fakeCapabilityClient{}
-	handler := NewBrowserTools(client, nil, nil, nil)[1]
+	handler := NewBrowserTools(client, nil, nil)[1]
 	call := Call{
 		RunID: "run-v1", ToolCallID: "call-v1", Name: "explore_flow",
 		Arguments: json.RawMessage(`{
@@ -574,7 +548,7 @@ func TestExploreFlowV1WorkerRequestRemainsByteSemanticallyCompatible(t *testing.
 }
 
 func TestExploreFlowSchemaRejectsModelSuppliedResolvedCandidate(t *testing.T) {
-	definition := NewBrowserTools(&fakeCapabilityClient{}, nil, nil, nil)[1].Definition()
+	definition := NewBrowserTools(&fakeCapabilityClient{}, nil, nil)[1].Definition()
 	compiler := jsonschema.NewCompiler()
 	if err := compiler.AddResource(
 		"https://example.test/explore-flow.schema.json",
@@ -610,7 +584,7 @@ func TestExploreFlowSchemaRejectsModelSuppliedResolvedCandidate(t *testing.T) {
 func TestExploreFlowRejectsForbiddenTrustedCandidateBeforeWorker(t *testing.T) {
 	ctx := context.Background()
 	taskPlans := taskplan.NewService(taskplan.NewMemoryRepository())
-	plan, err := taskPlans.CreateVersion(ctx, taskplan.CreateRequest{
+	_, err := taskPlans.CreateVersion(ctx, taskplan.CreateRequest{
 		RunID: "run-forbidden-candidate",
 		Definition: taskplan.Definition{
 			Goal:             "Open account options",
@@ -655,11 +629,9 @@ func TestExploreFlowRejectsForbiddenTrustedCandidateBeforeWorker(t *testing.T) {
 		},
 	}
 	client := &fakeCapabilityClient{}
-	plans := preparedCandidateGroundingPlanForTaskPlan(t, plan, ref, nil)
 	handler := NewBrowserTools(
 		client,
 		&fakeCandidateResolver{resolved: resolved},
-		plans,
 		taskPlans,
 	)[1]
 
@@ -680,6 +652,45 @@ func TestExploreFlowRejectsForbiddenTrustedCandidateBeforeWorker(t *testing.T) {
 		t.Fatalf("worker calls = %d, want 0", client.executeCalls)
 	}
 }
+
+const observationQueryToolResultFixture = `{
+	"schema_version":"agent.tool_result.v1",
+	"tool":"explore_page",
+	"content":{
+		"probe_id":"probe-query",
+		"url":"https://example.test/form",
+		"element_count":1,
+		"observation_v2":{
+			"schema_version":"browser.observation.v2",
+			"probe_id":"probe-query",
+			"observation_id":"obs-query",
+			"page_state":{
+				"state_id":"form",
+				"revision":1,
+				"url":"https://example.test/form",
+				"title":"Form",
+				"state_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"previous_state_sha256":null
+			},
+			"elements":[{
+				"element_ref":"form:7",
+				"context_path":{"frames":[],"shadow_hosts":[]},
+				"a11y":{"role":"button","name":"","states":{"focusable":true,"disabled":false},"relations":{}},
+				"dom":{"backend_node_id":7,"tag":"button","attrs":{"id":"submit_search","type":"button"},"text":""},
+				"runtime":{"connected":true,"visible":true,"enabled":true,"editable":false},
+				"locators":[{
+					"candidate_id":"candidate-submit",
+					"locator":{"kind":"css","value":"#submit_search","exact":true},
+					"provenance":"a11y_backend_dom_node",
+					"observed_count":1
+				}]
+			}],
+			"relations":[]
+		}
+	},
+	"content_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	"content_bytes":1024
+}`
 
 func TestExploreFlowRejectsForbiddenPersistedA11yMetadataBeforeWorker(t *testing.T) {
 	tests := []struct {
@@ -740,7 +751,7 @@ func TestExploreFlowRejectsForbiddenPersistedA11yMetadataBeforeWorker(t *testing
 			}
 
 			taskPlans := taskplan.NewService(taskplan.NewMemoryRepository())
-			plan, err := taskPlans.CreateVersion(ctx, taskplan.CreateRequest{
+			_, err = taskPlans.CreateVersion(ctx, taskplan.CreateRequest{
 				RunID: run.ID,
 				Definition: taskplan.Definition{
 					Goal:             "Open account options",
@@ -767,16 +778,9 @@ func TestExploreFlowRejectsForbiddenPersistedA11yMetadataBeforeWorker(t *testing
 				CandidateID:    "candidate-submit",
 			}
 			client := &fakeCapabilityClient{}
-			plans := preparedCandidateGroundingPlanForTaskPlan(
-				t,
-				plan,
-				ref,
-				nil,
-			)
 			handler := NewBrowserTools(
 				client,
-				groundingplan.NewObservationReader(runs),
-				plans,
+				observation.NewObservationReader(runs),
 				taskPlans,
 			)[1]
 
@@ -803,7 +807,7 @@ func TestExploreFlowRejectsForbiddenPersistedA11yMetadataBeforeWorker(t *testing
 func TestExploreFlowStartsOneProbeForRepeatedPlanStepOccurrences(t *testing.T) {
 	ctx := context.Background()
 	taskPlans := taskplan.NewService(taskplan.NewMemoryRepository())
-	plan, err := taskPlans.CreateVersion(ctx, taskplan.CreateRequest{
+	_, err := taskPlans.CreateVersion(ctx, taskplan.CreateRequest{
 		RunID: "run-repeated-candidate",
 		Definition: taskplan.Definition{
 			Goal:             "Increase twice",
@@ -843,11 +847,9 @@ func TestExploreFlowStartsOneProbeForRepeatedPlanStepOccurrences(t *testing.T) {
 		Provenance: "a11y_backend_dom_node",
 	}
 	client := &fakeCapabilityClient{}
-	plans := preparedCandidateGroundingPlanForTaskPlan(t, plan, ref, nil)
 	handler := NewBrowserTools(
 		client,
 		&fakeCandidateResolver{resolved: resolved},
-		plans,
 		taskPlans,
 	)[1]
 
@@ -866,163 +868,6 @@ func TestExploreFlowStartsOneProbeForRepeatedPlanStepOccurrences(t *testing.T) {
 	if client.executeCalls != 1 {
 		t.Fatalf("worker calls = %d, want 1", client.executeCalls)
 	}
-	current, err := plans.EnsureForTaskPlan(ctx, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	step := current.Steps[0]
-	if current.Revision != 3 ||
-		step.Status != groundingplan.StepProbing ||
-		len(step.ProbeAttempts) != 1 {
-		t.Fatalf("grounding plan = %#v", current)
-	}
-}
-
-func TestExploreFlowRecordsPostWorkerFailures(t *testing.T) {
-	t.Run("invalid worker JSON", func(t *testing.T) {
-		ref := testBrowserCandidateRef("candidate-invalid-json")
-		taskPlans, plan := preparedCandidateTaskPlan(t, "run-invalid-json")
-		plans := preparedCandidateGroundingPlanForTaskPlan(t, plan, ref, nil)
-		client := &fakeCapabilityClient{
-			browserResponse: json.RawMessage(`not-json`),
-		}
-		handler := NewBrowserTools(
-			client,
-			&fakeCandidateResolver{resolved: trustedBrowserCandidate(ref)},
-			plans,
-			taskPlans,
-		)[1]
-
-		_, err := handler.Execute(context.Background(), Call{
-			RunID: "run-invalid-json", ToolCallID: "call-invalid-json",
-			Name:      "explore_flow",
-			Arguments: candidateFlowArguments("submit", "click", ref, 1),
-		})
-		if err == nil || !strings.Contains(err.Error(), "invalid character") {
-			t.Fatalf("Execute() error = %v, want invalid JSON", err)
-		}
-		current, getErr := plans.EnsureForTaskPlan(context.Background(), plan)
-		if getErr != nil {
-			t.Fatal(getErr)
-		}
-		if current.Status != groundingplan.StatusFailed ||
-			current.Steps[0].Status != groundingplan.StepFailed {
-			t.Fatalf("grounding plan = %#v", current)
-		}
-	})
-
-	t.Run("failure persistence error is joined", func(t *testing.T) {
-		ref := testBrowserCandidateRef("candidate-worker-error")
-		taskPlans, plan := preparedCandidateTaskPlan(t, "run-worker-error")
-		writeErr := errors.New("injected grounding write failure")
-		repository := &failingGroundingRepository{
-			MemoryRepository: groundingplan.NewMemoryRepository(),
-			failAppendAt:     3,
-			err:              writeErr,
-		}
-		plans := preparedCandidateGroundingPlanForTaskPlan(
-			t,
-			plan,
-			ref,
-			repository,
-		)
-		workerErr := errors.New("injected worker failure")
-		handler := NewBrowserTools(
-			&fakeCapabilityClient{browserErr: workerErr},
-			&fakeCandidateResolver{resolved: trustedBrowserCandidate(ref)},
-			plans,
-			taskPlans,
-		)[1]
-
-		_, err := handler.Execute(context.Background(), Call{
-			RunID: "run-worker-error", ToolCallID: "call-worker-error",
-			Name:      "explore_flow",
-			Arguments: candidateFlowArguments("submit", "click", ref, 1),
-		})
-		if !errors.Is(err, workerErr) || !errors.Is(err, writeErr) {
-			t.Fatalf("Execute() error = %v, want worker and persistence errors", err)
-		}
-	})
-
-	t.Run("canceled worker context still records failure", func(t *testing.T) {
-		ref := testBrowserCandidateRef("candidate-canceled-worker")
-		taskPlans, plan := preparedCandidateTaskPlan(t, "run-canceled-worker")
-		repository := &contextAwareGroundingRepository{
-			MemoryRepository: groundingplan.NewMemoryRepository(),
-		}
-		plans := preparedCandidateGroundingPlanForTaskPlan(
-			t,
-			plan,
-			ref,
-			repository,
-		)
-		ctx, cancel := context.WithCancel(context.Background())
-		workerErr := errors.New("worker stopped after cancellation")
-		handler := NewBrowserTools(
-			&fakeCapabilityClient{
-				browserErr: workerErr, browserCancel: cancel,
-			},
-			&fakeCandidateResolver{resolved: trustedBrowserCandidate(ref)},
-			plans,
-			taskPlans,
-		)[1]
-
-		_, err := handler.Execute(ctx, Call{
-			RunID: "run-canceled-worker", ToolCallID: "call-canceled-worker",
-			Name:      "explore_flow",
-			Arguments: candidateFlowArguments("submit", "click", ref, 1),
-		})
-		if !errors.Is(err, workerErr) {
-			t.Fatalf("Execute() error = %v, want worker error", err)
-		}
-		current, getErr := plans.EnsureForTaskPlan(context.Background(), plan)
-		if getErr != nil {
-			t.Fatal(getErr)
-		}
-		step := current.Steps[0]
-		if current.Status != groundingplan.StatusFailed ||
-			step.Status != groundingplan.StepFailed ||
-			step.LastError != workerErr.Error() ||
-			len(step.ProbeAttempts) != 1 ||
-			step.ProbeAttempts[0].Error != workerErr.Error() {
-			t.Fatalf("grounding plan = %#v", current)
-		}
-	})
-}
-
-func preparedCandidateGroundingPlanForTaskPlan(
-	t *testing.T,
-	plan taskplan.Plan,
-	ref browsercontract.CandidateRef,
-	repository groundingplan.Repository,
-) *groundingplan.Service {
-	t.Helper()
-	if repository == nil {
-		repository = groundingplan.NewMemoryRepository()
-	}
-	service := groundingplan.NewService(repository)
-	if _, err := service.EnsureForTaskPlan(context.Background(), plan); err != nil {
-		t.Fatal(err)
-	}
-	step := plan.Steps[0]
-	if _, err := service.RecordObservationQuery(
-		context.Background(),
-		plan.RunID,
-		groundingplan.QueryRecord{
-			PlanStepID: step.ID, SourceEventSeq: ref.SourceEventSeq,
-			ObservationID: ref.ObservationID, Action: step.Action,
-		},
-		[]groundingplan.CandidateOption{{
-			CandidateRef: ref, ElementRef: "S0:42",
-			Locator: browsercontract.LocatorSpec{
-				Kind: "css", Value: "#submit_search",
-			},
-			Provenance: "a11y_backend_dom_node", ObservedCount: 1,
-		}},
-	); err != nil {
-		t.Fatal(err)
-	}
-	return service
 }
 
 func preparedCandidateTaskPlan(
@@ -1088,38 +933,6 @@ func trustedBrowserCandidate(
 		},
 		Provenance: "a11y_backend_dom_node",
 	}
-}
-
-type failingGroundingRepository struct {
-	*groundingplan.MemoryRepository
-	appendCalls  int
-	failAppendAt int
-	err          error
-}
-
-func (r *failingGroundingRepository) AppendRevision(
-	ctx context.Context,
-	plan groundingplan.Plan,
-) (groundingplan.Plan, error) {
-	r.appendCalls++
-	if r.appendCalls == r.failAppendAt {
-		return groundingplan.Plan{}, r.err
-	}
-	return r.MemoryRepository.AppendRevision(ctx, plan)
-}
-
-type contextAwareGroundingRepository struct {
-	*groundingplan.MemoryRepository
-}
-
-func (r *contextAwareGroundingRepository) AppendRevision(
-	ctx context.Context,
-	plan groundingplan.Plan,
-) (groundingplan.Plan, error) {
-	if err := ctx.Err(); err != nil {
-		return groundingplan.Plan{}, err
-	}
-	return r.MemoryRepository.AppendRevision(ctx, plan)
 }
 
 func candidateTaskPlan(runID string) taskplan.Plan {
@@ -1235,7 +1048,7 @@ func assertStrictObjectSchemas(t *testing.T, value any, path string) {
 }
 
 func TestBrowserToolSchemasAllowStateCaptureAndExposeOnlyAdvisoryValidation(t *testing.T) {
-	definitions := NewBrowserTools(&fakeCapabilityClient{}, nil, nil, nil)
+	definitions := NewBrowserTools(&fakeCapabilityClient{}, nil, nil)
 	if !strings.Contains(definitions[1].Definition().Description, "do not jump directly") {
 		t.Fatal("explore_flow contract does not prohibit direct search URL bypass")
 	}

@@ -32,9 +32,10 @@ const groundingPrompt = `PHASE 2 - GROUNDING
 Use explore_page to obtain the first BrowserObservation, then use explore_flow for later
 page states. Analyze the returned accessibility facts, DOM facts, runtime state,
 relations, candidate coverage, and action evidence before choosing the next action.
-Use query_observation on persisted current-run evidence to obtain a candidate_ref, then
-submit it in an explicit grounding.query.v2 explore_flow action. The Go control plane
-hydrates that opaque reference before the Browser Worker receives it. A direct locator
+Build a candidate_ref from the current-run explore summary (source.event_seq, probe_id,
+observation_id, and candidate_id), then submit it in an explicit grounding.query.v2
+explore_flow action. The Go control plane hydrates the reference before the Browser
+Worker receives it. A direct locator
 action must use a structured semantic LocatorSpec using role, accessible name, label,
 placeholder, text, test ID, or a semantic scoped locator. Never submit resolved_candidate,
 CSS, or XPath; resolved_candidate is Worker-only trusted state.

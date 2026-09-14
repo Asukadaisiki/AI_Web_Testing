@@ -32,29 +32,3 @@ func TestTaskPlanSchemaIsPresentInBaselineAndUpgrade(t *testing.T) {
 		}
 	}
 }
-
-func TestGroundingPlanSchemaIsPresentInBaselineAndUpgrade(t *testing.T) {
-	required := []string{
-		"CREATE TABLE public.grounding_plans",
-		"content_json jsonb",
-		"content_sha256 character varying(64)",
-		"uq_grounding_plans_task_plan_revision",
-		"fk_grounding_plans_task_plan",
-	}
-	for _, fragment := range required {
-		if !strings.Contains(SchemaSQL, fragment) {
-			t.Fatalf("baseline schema missing %q", fragment)
-		}
-	}
-	for _, fragment := range []string{
-		"CREATE TABLE IF NOT EXISTS public.grounding_plans",
-		"content_json jsonb",
-		"content_sha256 character varying(64)",
-		"uq_grounding_plans_task_plan_revision",
-		"fk_grounding_plans_task_plan",
-	} {
-		if !strings.Contains(GroundingPlanMigrationSQL, fragment) {
-			t.Fatalf("grounding plan migration missing %q", fragment)
-		}
-	}
-}

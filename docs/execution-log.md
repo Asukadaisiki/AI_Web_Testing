@@ -56,6 +56,52 @@
 
 ## 任务记录
 
+## 2026-09-13 | 实施精简 Grounding：删除 groundingplan 影子状态机与 query_observation
+
+- 任务：按 `docs/plan/2026-09-13-grounding-plan-collapse.md` 落地架构简化——移除 `groundingplan` 双状态机与 `query_observation` 工具，回归 taskplan 单一权威。
+- 操作：
+  1. 删除 `backend-go/internal/groundingplan/` 整包、`internal/tools/observation_query.go`（含测试）、`internal/dbschema/groundingplan.sql`。
+  2. 迁移 `ObservationReader` → 新包 `internal/observation`（仅保留 `CandidateResolver`，删除查询侧 `ObservationQuery*` 类型）。
+  3. `browser.go` 摘除 `groundingPlans` 依赖、`StartCandidateProbe`、`recordProbeFailures`/`withProbeFailures`；`hydrateCandidateReferences` 收敛为单遍返回 `error`。
+  4. `agentservice`/`migrate` 装配重连为 `NewBrowserTools(client, candidates, taskPlans)`；migrate 增加 `DROP TABLE IF EXISTS public.grounding_plans`。
+  5. 删除 `tool_result.go` 中 query_observation 摘要死代码及测试；更新 harness 系统提示词与 explore_flow 描述（candidate_ref 由 explore 摘要直接提供）。
+- 结果：`groundingplan` 与 `query_observation` 全部移除，taskplan 成为唯一 grounding 权威；`candidate_ref` → 控制面水合安全边界保留。
+- 验证：`go build ./...`、`go vet ./...`、`go test ./...` 全绿（含改写后的 migrate/dbschema/agent/tools 测试）。
+- 后续：无（BUG-197 空无障碍名按钮定位另案）。
+
+## 2026-09-13 | 起草精简 Grounding 架构设计文档
+
+- 任务：定位 E2E 卡死根因并输出架构简化方案。
+- 操作：整读 groundingplan / taskplan / browser / observation_query 代码 + grep 依赖 + 用 DB 实据确认两套状态机脱节；起草 `docs/plan/2026-09-13-grounding-plan-collapse.md`，更新 BUG-196 根因。
+- 结果：确认 `groundingplan` 是未完成重构留下的半接线影子状态机；提出「删除 groundingplan、回归 taskplan 单一权威」方案（query_observation 只读化、保留 candidate_ref 水合安全边界）。
+- 验证：DB 实据（task_plan_steps 已 grounded、grounding_plans 全 pending、current=open_products）；grep 确认 RecordProbeResult 无成功路径调用。
+- 后续：待确认后按文档 5 阶段实施；BUG-197 空无障碍名按钮定位另案。
+
+## 2026-09-13 | 配置 DeepSeek 环境并跑通 Agentic E2E（首跑至 grounding / 墙钟超时）
+
+- 任务：配置 DeepSeek 大模型环境、启动 Go/Python 全栈，运行 automationexercise「Blue Top 加购」Agentic E2E。
+- 操作：
+  1. 生成 `browser-worker/.env`：`AI_PLANNING_*` 指向 `https://api.deepseek.com`，模型 `deepseek-flash`（DeepSeek-V4.1-Flash）。
+  2. 工作区 `initdb` 独立 PostgreSQL(:5432, trust) + 运行 `migrate.exe`（21 表、`users` id=1 种子、`grounding_plans` 就位）。
+  3. 用 goproxy.cn 编译 Go 三件套（GOCACHE/GOMODCACHE/GOPATH/GOTMPDIR 重定向到工作区）。
+  4. `uv sync`（Aliyun 镜像、UV_CACHE_DIR 重定向）后启动 browser-worker(:8000) / execution-worker / agentservice(:8081)。
+  5. browser-worker 首跑因沙箱禁制命名管道无法启动 Playwright Chromium（WinError 5），改用完整访问（danger-full-access）重启后 Chromium 正常启动。
+  6. 运行 `run_agentic_e2e.py` 三轮：首轮/次轮 12 轮、第三轮提升至 40 轮。
+- 结果：**全链路已打通**（浏览器启动/导航、a11y 采集 400+ 节点、文本输入、DeepSeek 规划、TaskPlan grounding、candidate hydration、Observation 校验均工作）；E2E 未跑绿：
+  - 第 1 轮：浏览器无法启动（沙箱命名管道）。
+  - 第 2 轮：grounding 第 3 步触发 `mutation does not target the current grounding step` + 12 轮耗尽。
+  - 第 3 轮（40 轮）：推进到 489 事件、grounding 更多步骤，但 900s 绝对截止超时；目标站点搜索按钮无障碍名称为空，语义定位在 count=3/0 间反复重试，单次 a11y 探索约 60–90s。
+- 验证：agentservice / browser-worker `/health` 均 200；PG 连接正常；浏览器请求日志确认导航至 `automationexercise.com/products`。
+- 后续：见 BUG-195/196/197；需按步骤数调整 Agent 轮次 / 驱动超时、修复空无障碍名按钮的语义 grounding、复核 grounding 状态机 `CurrentPlanStepID` 推进逻辑。
+
+## 2026-09-13 | 复核近期 bug 修复是否成功
+
+- 任务：复核 2026-09-13 的几项 bug 修复是否落地成功，范围包括 BUG-193（ObservationReader 严格校验）、BUG-191（GroundingPlan 迁移/换版原子性/probe revision）以及 Task 4 candidate_ref hydration 的三项审查问题修复。
+- 操作：核对 git 提交历史，确认 c6399d4、0e7186e、9251e98、b278b39 均在 main 上；静态核对三处实现——`browsercontract.DecodeObservation` 完整 v2 结构校验、`cmd/migrate/main.go` 已执行 `GroundingPlanMigrationSQL` 且 `PostgresRepository.ReplaceForTaskPlan` 在单事务 + advisory lock 内完成 supersede/insert、`tools/browser.go#hydrateCandidateReferences` 拒绝模型自造 `resolved_candidate` 并调用 `AuthorizeResolvedCandidates` 做基于完整 A11y 元数据的二次 forbidden-action 与 occurrence 校验；确认对应回归测试函数已存在。
+- 结果：三项修复的实现与回归测试均已落地在 main，并通过独立全量验证。定位本机 Go 模块下载失败根因是 `proxy.golang.org`（Google）在当前网络不可达（其 IPv4/IPv6 均超时，属环境墙而非沙箱问题），改用国内代理 `GOPROXY=https://goproxy.cn,direct` + `GOSUMDB=off` 后依赖正常下载。工作树除一条无关的 `backend/artifacts` 进 `.gitignore` 的暂存改动外干净。
+- 验证：`go test -count=1 ./...` 退出码 0、全部包 ok（groundingplan / tools / taskplan / browsercontract / migrate / dbschema / integration 等与三项修复直接相关的包均通过）；`go vet ./...`、`go build ./...` 退出码均为 0。未设置 `TEST_DATABASE_URL`，PostgreSQL 门禁按仓库约定 skip。
+- 后续：无（本地已做静态 + 动态双重复核）；如需覆盖 BUG-191 的真实 PostgreSQL 换版原子性与迁移升级路径，在具备可用 PostgreSQL 的环境设置 `TEST_DATABASE_URL` 后重跑 `go test -race -count=1 ./internal/groundingplan ./internal/dbschema ./cmd/migrate`。
+
 ## 2026-09-13 | 合并 GroundingPlan 分支并重试推送
 
 - 任务：将 `feat/dynamic-grounding-plan` 合并到 `main`，重新推送远程仓库。

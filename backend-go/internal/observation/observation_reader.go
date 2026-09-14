@@ -1,4 +1,4 @@
-package groundingplan
+package observation
 
 import (
 	"context"
@@ -13,54 +13,12 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 )
 
-const (
-	ObservationQueryVersion       = "grounding.observation-query.v1"
-	ObservationQueryResultVersion = "grounding.observation-query-result.v1"
-	defaultObservationQueryLimit  = 20
-	maxObservationQueryLimit      = 100
-)
-
-type ObservationQuery struct {
-	SchemaVersion  string `json:"schema_version"`
-	PlanStepID     string `json:"plan_step_id"`
-	SourceEventSeq int64  `json:"source_event_seq"`
-	ObservationID  string `json:"observation_id,omitempty"`
-	PageStateID    string `json:"page_state_id,omitempty"`
-	CandidateID    string `json:"candidate_id,omitempty"`
-	Action         string `json:"action"`
-	Query          string `json:"query,omitempty"`
-	Role           string `json:"role,omitempty"`
-	Limit          int    `json:"limit,omitempty"`
-}
-
-type ObservationQueryResult struct {
-	SchemaVersion  string                  `json:"schema_version"`
-	PlanStepID     string                  `json:"plan_step_id"`
-	SourceEventSeq int64                   `json:"source_event_seq"`
-	Matches        []ObservationQueryMatch `json:"matches"`
-	OmittedCount   int                     `json:"omitted_count"`
-}
-
-type ObservationQueryMatch struct {
-	CandidateRef  browsercontract.CandidateRef `json:"candidate_ref"`
-	ElementRef    string                       `json:"element_ref"`
-	Role          string                       `json:"role"`
-	Name          string                       `json:"name"`
-	DOM           ObservationQueryDOM          `json:"dom"`
-	Locator       browsercontract.LocatorSpec  `json:"locator"`
-	Provenance    string                       `json:"provenance"`
-	ObservedCount int                          `json:"observed_count"`
-}
-
-type ObservationQueryDOM struct {
-	Tag   string            `json:"tag"`
-	Attrs map[string]string `json:"attrs"`
-}
-
 type observationEventReader interface {
 	GetEvent(context.Context, string, int64) (agentservice.Event, error)
 }
 
+// ObservationReader resolves opaque candidate references against persisted
+// exploration tool results. It is read-only: it never mutates any plan state.
 type ObservationReader struct {
 	events observationEventReader
 }
@@ -69,73 +27,8 @@ func NewObservationReader(events observationEventReader) *ObservationReader {
 	return &ObservationReader{events: events}
 }
 
-func (r *ObservationReader) Query(
-	ctx context.Context,
-	runID string,
-	query ObservationQuery,
-) (ObservationQueryResult, error) {
-	if err := validateObservationQuery(query); err != nil {
-		return ObservationQueryResult{}, err
-	}
-	observations, err := r.readObservations(
-		ctx,
-		runID,
-		query.SourceEventSeq,
-	)
-	if err != nil {
-		return ObservationQueryResult{}, err
-	}
-
-	matches := make([]ObservationQueryMatch, 0)
-	observationMatched := query.ObservationID == ""
-	for _, observation := range observations {
-		if query.ObservationID != "" &&
-			observation.ObservationID != query.ObservationID {
-			continue
-		}
-		observationMatched = true
-		if query.PageStateID != "" &&
-			observation.PageState.StateID != query.PageStateID {
-			continue
-		}
-		for _, element := range observation.Elements {
-			for _, candidate := range element.Locators {
-				if !candidateMatches(element, candidate, query) {
-					continue
-				}
-				matches = append(matches, candidateOption(
-					query.SourceEventSeq,
-					observation,
-					element,
-					candidate,
-				))
-			}
-		}
-	}
-	if !observationMatched {
-		return ObservationQueryResult{}, errors.New(
-			"observation_id does not match the source event",
-		)
-	}
-
-	limit := query.Limit
-	if limit == 0 {
-		limit = defaultObservationQueryLimit
-	}
-	omitted := 0
-	if len(matches) > limit {
-		omitted = len(matches) - limit
-		matches = matches[:limit]
-	}
-	return ObservationQueryResult{
-		SchemaVersion:  ObservationQueryResultVersion,
-		PlanStepID:     query.PlanStepID,
-		SourceEventSeq: query.SourceEventSeq,
-		Matches:        matches,
-		OmittedCount:   omitted,
-	}, nil
-}
-
+// ResolveCandidate looks up a trusted resolved candidate for the opaque
+// candidate reference produced by an earlier exploration tool result.
 func (r *ObservationReader) ResolveCandidate(
 	ctx context.Context,
 	runID string,
@@ -338,18 +231,6 @@ func decodePersistedObservation(
 	return observation, nil
 }
 
-func validateObservationQuery(query ObservationQuery) error {
-	if query.SchemaVersion != ObservationQueryVersion ||
-		strings.TrimSpace(query.PlanStepID) == "" ||
-		query.SourceEventSeq < 1 ||
-		!validObservationAction(query.Action) ||
-		query.Limit < 0 ||
-		query.Limit > maxObservationQueryLimit {
-		return errors.New("observation query is invalid")
-	}
-	return nil
-}
-
 func validObservationAction(action string) bool {
 	return action == "click" || action == "input" || action == "wait_for"
 }
@@ -380,64 +261,6 @@ func validatePersistedObservation(
 	return nil
 }
 
-func candidateMatches(
-	element persistedElement,
-	candidate persistedCandidate,
-	query ObservationQuery,
-) bool {
-	if !sourceActionable(element, candidate, query.Action) ||
-		candidate.Locator.Validate() != nil ||
-		len(element.ContextPath.Frames) > 0 {
-		return false
-	}
-	if query.CandidateID != "" && candidate.CandidateID != query.CandidateID {
-		return false
-	}
-	if query.Role != "" &&
-		!strings.EqualFold(strings.TrimSpace(element.A11y.Role), strings.TrimSpace(query.Role)) {
-		return false
-	}
-	needle := strings.ToLower(strings.TrimSpace(query.Query))
-	if needle == "" {
-		return true
-	}
-	values := []string{
-		element.ElementRef,
-		element.A11y.Role,
-		element.A11y.Name,
-		element.DOM.Tag,
-		element.DOM.Text,
-		candidate.CandidateID,
-	}
-	values = appendLocatorSearchValues(values, candidate.Locator)
-	for key, value := range element.DOM.Attrs {
-		values = append(values, key, value)
-	}
-	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func appendLocatorSearchValues(
-	values []string,
-	locator browsercontract.LocatorSpec,
-) []string {
-	values = append(values, locator.Kind, locator.Role, locator.Value)
-	if locator.Name != nil {
-		values = append(values, *locator.Name)
-	}
-	if locator.Scope != nil {
-		values = appendLocatorSearchValues(values, *locator.Scope)
-	}
-	if locator.Target != nil {
-		values = appendLocatorSearchValues(values, *locator.Target)
-	}
-	return values
-}
-
 func sourceActionable(
 	element persistedElement,
 	candidate persistedCandidate,
@@ -452,37 +275,6 @@ func sourceActionable(
 		return false
 	}
 	return action != "input" || element.Runtime.Editable
-}
-
-func candidateOption(
-	sourceEventSeq int64,
-	observation persistedObservation,
-	element persistedElement,
-	candidate persistedCandidate,
-) ObservationQueryMatch {
-	attrs := maps.Clone(element.DOM.Attrs)
-	if attrs == nil {
-		attrs = map[string]string{}
-	}
-	return ObservationQueryMatch{
-		CandidateRef: browsercontract.CandidateRef{
-			SchemaVersion:  browsercontract.CandidateRefVersion,
-			SourceEventSeq: sourceEventSeq,
-			ProbeID:        observation.ProbeID,
-			ObservationID:  observation.ObservationID,
-			CandidateID:    candidate.CandidateID,
-		},
-		ElementRef: element.ElementRef,
-		Role:       element.A11y.Role,
-		Name:       element.A11y.Name,
-		DOM: ObservationQueryDOM{
-			Tag:   element.DOM.Tag,
-			Attrs: attrs,
-		},
-		Locator:       candidate.Locator,
-		Provenance:    candidate.Provenance,
-		ObservedCount: candidate.ObservedCount,
-	}
 }
 
 type persistedExplorationResult struct {

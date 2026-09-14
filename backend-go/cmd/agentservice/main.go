@@ -15,8 +15,8 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/corrections"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/execution"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/groundingplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/harness"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/observation"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/planning"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/browserworker"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/platform/llm"
@@ -78,10 +78,7 @@ func main() {
 	taskPlanService := taskplan.NewService(
 		taskplan.NewPostgresRepository(database),
 	)
-	groundingPlanService := groundingplan.NewService(
-		groundingplan.NewPostgresRepository(database),
-	)
-	observationReader := groundingplan.NewObservationReader(runService)
+	observationReader := observation.NewObservationReader(runService)
 	researchRepository := research.NewPostgresRepository(database)
 	researchService := research.NewService(
 		researchRepository,
@@ -97,18 +94,12 @@ func main() {
 	toolHandlers := []tools.Handler{
 		tools.AskUserTool{},
 		tools.NewSetTaskPlanTool(taskPlanService),
-		tools.NewObservationQueryTool(
-			observationReader,
-			taskPlanService,
-			groundingPlanService,
-		),
 	}
 	toolHandlers = append(
 		toolHandlers,
 		tools.NewBrowserTools(
 			browserClient,
 			observationReader,
-			groundingPlanService,
 			taskPlanService,
 		)...,
 	)
