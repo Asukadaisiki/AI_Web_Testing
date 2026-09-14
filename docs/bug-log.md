@@ -85,27 +85,27 @@
 - 验证：`go build` / `go vet` / `go test ./...` 全绿；migrate 新增 `DROP TABLE IF EXISTS public.grounding_plans` 并由 `TestMigrateRemovesGroundingPlans` 锁定；`ObservationQuery*` 摘要死代码与测试已删除。另已用 PostgreSQL 实据确认根因（run_a304308…：`grounding_plans` 12 步全 pending、`current=open_products`；`task_plan_steps` `open_products`/`search_input`=grounded）。
 - 关联记录：docs/execution-log.md 2026-09-13；同域 BUG-191。
 
-## BUG-197 | 空无障碍名按钮语义定位反复失败并拉爆 E2E 墙钟超时
+## BUG-197 | 空/图标字形名按钮语义定位反复失败并拉爆 E2E 墙钟超时
 
 - 日期：2026-09-13
 - 状态：open
 - 严重度：medium
 - 来源：Agentic E2E（automationexercise Blue Top 加购）
-- 描述：目标站点搜索按钮（`#submit_search`，内含 FontAwesome 图标）无障碍名称为空，语义定位器 `role=button name=""` 命中 count=0、`role=button` 命中 count=3，Agent 反复重试；单次 a11y 探索 60–90s，900s 绝对截止内无法收敛，本轮 `run_88714368cc20d0afbc1180d9` 超时被取消。
+- 描述：目标站点搜索按钮（`#submit_search`，内含 FontAwesome 图标）无障碍名称为图标字形 `\uf002`（U+F002），语义定位器 `role=button name=Search` 命中 count=0、`role=button` 命中 count=3，Agent 反复重试；单次 a11y 探索 60–90s，900s 绝对截止内无法收敛，`run_8788bf9b24f90b3792b5a765`（215 事件）超时被取消。此前 `run_88714368cc20d0afbc1180d9` 同样超时。
 - 复现步骤：
   1. 运行 E2E，Agent grounding `submit_search` 步骤。
   2. 观察 explore_flow 中 click 动作报 `structured action locator must resolve exactly once: count=0/3`。
   3. 直至 900s `exceeded its absolute deadline`。
-- 影响：无障碍名称缺失的图标按钮（搜索、购物车等）语义 grounding 不可靠，拖垮整体吞吐。
-- 根因：待定位（怀疑 grounding 候选选择未及时落到 `verified_selectors` 中的 CSS 候选，如 `#submit_search`）。
-- 处理：未修复；与 BUG-196 交互（若 query_observation 可用，本可选定 CSS 候选提前收敛）。
-- 验证：未验证。
-- 关联记录：docs/execution-log.md 2026-09-13；相关历史 BUG-156。
+- 影响：无障碍名称缺失/退化为图标字形的按钮（搜索、购物车等）语义 grounding 不可靠，拖垮整体吞吐。
+- 根因：图标按钮的可访问名退化为 FontAwesome 图标字形 `\uf002`（非空但非语义文本），语义定位器按 `name=` 精确匹配无法命中；CSS 候选（如 `#submit_search`）未能及时作为首选落地。
+- 处理：未修复；BUG-196 已修复（groundingplan 影子状态机删除后，候选源自 explore 摘要的 `candidate_ref`，本轮引用=7），但 BUG-197 仍独立存在并触发超时。
+- 验证：2026-09-14 复跑，DB 实据 `bug196_desync=0、candidate_ref_refs=7、bug197_locator_count=2`；仍未跑绿。
+- 关联记录：docs/execution-log.md 2026-09-14；相关历史 BUG-156。
 
 ## BUG-194 | 当前环境无法连接 GitHub 远端
 
 - 日期：2026-09-13
-- 状态：open
+- 状态：fixed
 - 严重度：low
 - 来源：GroundingPlan 修复分支同步
 - 描述：本地分支和提交均正常，但当前执行环境无法连接 GitHub，导致远端检查与 `git push` 失败。
@@ -116,8 +116,8 @@
   4. 所有连接均超时，HTTPS 报 `Failed to connect to github.com port 443`。
 - 影响：`feat/dynamic-grounding-plan` 的本地提交暂时无法同步到 GitHub；本地分支和工作树不受影响。
 - 根因：当前环境到 GitHub 的 HTTPS/SSH 网络路径不可达；没有证据表明是凭据、分支冲突或仓库权限问题。
-- 处理：保留本地分支和提交；网络恢复后重试 `git push -u origin feat/dynamic-grounding-plan`。
-- 验证：`git status --short` 为空；本地 HEAD 和提交历史完整；三种 GitHub 连接方式均超时。
+- 处理：2026-09-14 在 danger-full-access（沙箱完整访问）模式下 `git push origin main` 成功，确认此前是本地沙箱对 ssh 信号管道/网络的限制；放开后 GitHub 同步恢复正常。
+- 验证：`git push origin main` 返回成功，远端 main 更新至 d6d3aca（372f832..d6d3aca）。
 - 关联记录：`docs/execution-log.md#2026-09-13--groundingplan-修复分支同步-github`。
 
 ## BUG-193 | ObservationReader 接受结构不完整的持久化 Observation

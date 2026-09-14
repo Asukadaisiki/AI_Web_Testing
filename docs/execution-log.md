@@ -56,6 +56,18 @@
 
 ## 任务记录
 
+## 2026-09-14 | 同步 GitHub 并复跑 Agentic E2E 验证 BUG-196 修复
+
+- 任务：将「删除 groundingplan 影子状态机 + query_observation」改动同步到 GitHub，并复跑 automationexercise「Blue Top 加购」Agentic E2E 验证 BUG-196 修复效果。
+- 操作：
+  1. `git commit`（28 文件，+413/-4265）并 `git push origin main`；初试被沙箱拦截 ssh 信号管道（Win32 error 5），改用 danger-full-access 后成功（372f832..d6d3aca）。
+  2. 重建 Go 三件套，启动独立 PostgreSQL(:5432) + `migrate`（`DROP TABLE IF EXISTS public.grounding_plans`，`to_regclass` 确认为空）。
+  3. 启动 browser-worker(:8000，入口 `browser-worker-dev`)、agentservice(:8081，MAX_TURNS=40)、execution-worker。
+  4. 运行 `run_agentic_e2e.py --acceptance-spec …/automationexercise-blue-top-cart.v1.json` 至 900s 截止。
+- 结果：E2E 仍 900s 墙钟超时（`run_8788bf9b24f90b3792b5a765`、215 事件）；但 BUG-196 特征事件数=0、`query_observation` 引用=0、`candidate_ref` 引用=7，即影子状态机脱节被根除、候选回归 explore 摘要路径。
+- 验证：DB 实据 `bug196_desync=0 / query_observation_refs=0 / candidate_ref_refs=7 / bug197_locator_count=2 / flow_action_failed=2`；`go build/vet/test` 已全绿。
+- 后续：BUG-197 空/图标字形名按钮定位仍独立阻断开跑（本轮确认搜索按钮无障碍名为 FontAwesome 字形 `\uf002`）；建议下一轮聚焦候选落地到 `verified_selectors` 的 CSS 候选。
+
 ## 2026-09-13 | 实施精简 Grounding：删除 groundingplan 影子状态机与 query_observation
 
 - 任务：按 `docs/plan/2026-09-13-grounding-plan-collapse.md` 落地架构简化——移除 `groundingplan` 双状态机与 `query_observation` 工具，回归 taskplan 单一权威。
