@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,6 +225,59 @@ func TestSummarizePipelineTraceReportsGrowthAndRepeatedCalls(t *testing.T) {
 		summary.Lineage[0].ProbeID != "probe-1" {
 		t.Fatalf("summary = %#v", summary)
 	}
+}
+
+func TestPipelineCumulativeUsageAggregatesCacheHits(t *testing.T) {
+	service := NewService(NewMemoryRepository())
+	run, err := service.StartRun(context.Background(), "conversation-1", "goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, usage := range []struct {
+		hit   int64
+		miss  int64
+		total int64
+	}{
+		{hit: 7, miss: 3, total: 10},
+		{hit: 20, miss: 30, total: 50},
+		{hit: 0, miss: 60, total: 60},
+	} {
+		hit, miss, total := usage.hit, usage.miss, usage.total
+		err := service.RecordModelTelemetry(context.Background(), run, agent.TelemetryRecord{
+			LogicalCallID: fmt.Sprintf("llm-%d", index+1),
+			StepID:        fmt.Sprintf("step-%d", index+1),
+			Telemetry: agent.ModelTelemetry{
+				Provider: "provider", RequestedModel: "model",
+				Prompt: agent.PromptSpec{Version: agent.SystemPromptVersion},
+				Usage: agent.ModelUsage{
+					Status: agent.UsageAvailable,
+					InputTokens: &miss, OutputTokens: &total,
+					TotalTokens: &total,
+					PromptCacheHitTokens: &hit,
+					PromptCacheMissTokens: &miss,
+				},
+				Attempts: []agent.ModelAttempt{{Attempt: 1, Status: "succeeded"}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := service.ListEvents(context.Background(), run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	traces := eventsByType(events, EventPipelineTrace)
+	if len(traces) != 3 {
+		t.Fatalf("pipeline traces = %#v", traces)
+	}
+	cumulative := traces[2].Payload["model_request"].(map[string]any)["cumulative"].(map[string]any)
+	if cumulative["prompt_cache_hit_tokens"] != float64(27) ||
+		cumulative["prompt_cache_miss_tokens"] != float64(93) ||
+		cumulative["total_tokens"] != float64(120) {
+		t.Fatalf("cumulative = %#v", cumulative)
+	}
+	validatePipelinePayloadWithSharedSchema(t, traces[2].Payload)
 }
 
 func validatePipelinePayloadWithSharedSchema(t *testing.T, payload map[string]any) {

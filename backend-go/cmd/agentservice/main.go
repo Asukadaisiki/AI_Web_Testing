@@ -114,13 +114,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure tools: %v", err)
 	}
-	engine := harness.NewWithTaskPlans(
+	engine := harness.NewWithTaskPlansAndExploration(
 		runService,
 		model,
 		registry,
 		taskPlanService,
 		cfg.AgentMaxTurns,
+		harness.ExplorationGateConfig{
+			MaxRunWallTime: cfg.AgentMaxWallTime(),
+			ExploreReserve: cfg.AgentExploreReserve(),
+		},
 	)
+	engine.SetRunCostLimits(harness.RunCostLimits{
+		MaxModelCalls:      cfg.AgentMaxModelCalls,
+		MaxTotalTokens:     cfg.AgentMaxTotalTokens,
+		MaxTranscriptBytes: cfg.AgentMaxTranscriptBytes,
+	})
 	server := httptransport.NewServer(
 		cfg.Address,
 		engine,

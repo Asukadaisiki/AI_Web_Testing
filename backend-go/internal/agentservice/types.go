@@ -90,6 +90,8 @@ type PipelineCumulativeUsage struct {
 	InputTokens              int64 `json:"input_tokens"`
 	OutputTokens             int64 `json:"output_tokens"`
 	TotalTokens              int64 `json:"total_tokens"`
+	PromptCacheHitTokens     int64 `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens    int64 `json:"prompt_cache_miss_tokens"`
 	UsageUnavailableAttempts int   `json:"usage_unavailable_attempts"`
 }
 

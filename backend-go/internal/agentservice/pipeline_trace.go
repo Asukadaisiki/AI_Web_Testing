@@ -153,6 +153,8 @@ func (s *Service) pipelineCumulativeUsage(
 		result.InputTokens += int64Value(usage["input_tokens"])
 		result.OutputTokens += int64Value(usage["output_tokens"])
 		result.TotalTokens += int64Value(usage["total_tokens"])
+		result.PromptCacheHitTokens += int64Value(usage["prompt_cache_hit_tokens"])
+		result.PromptCacheMissTokens += int64Value(usage["prompt_cache_miss_tokens"])
 	}
 	result.LogicalCalls = len(logicalCalls)
 	return result, nil
