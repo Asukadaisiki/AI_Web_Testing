@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,20 +19,13 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/execution"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/projects"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/testpg"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestPostgresResearchV2Compilation(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testpg.Open(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	actorID := insertUser(t, db, "research-v2-"+suffix+"@example.com")
@@ -171,19 +163,8 @@ func TestPostgresResearchV2Compilation(t *testing.T) {
 }
 
 func TestPostgresControlPlaneLifecycle(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testpg.Open(t)
 	ctx := context.Background()
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatal(err)
-	}
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	actorID := insertUser(t, db, "owner-"+suffix+"@example.com")

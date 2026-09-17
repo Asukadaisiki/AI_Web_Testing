@@ -2,31 +2,19 @@ package integration_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/testpg"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestPostgresAgentRunCancellationCAS(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testpg.Open(t)
 	ctx := context.Background()
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatal(err)
-	}
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	actorID := insertUser(t, db, "agent-cancel-"+suffix+"@example.com")

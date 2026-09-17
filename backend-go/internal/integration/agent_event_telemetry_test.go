@@ -2,27 +2,18 @@ package integration_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/testpg"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestPostgresAgentEventReturnsNormalizedPayload(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testpg.Open(t)
 	ctx := context.Background()
 	service := agentservice.NewService(agentservice.NewPostgresRepository(db))
 	run, err := service.StartRun(ctx, "telemetry-integration", "test")
@@ -60,15 +51,7 @@ func TestPostgresAgentEventReturnsNormalizedPayload(t *testing.T) {
 }
 
 func TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testpg.Open(t)
 	ctx := context.Background()
 	service := agentservice.NewService(agentservice.NewPostgresRepository(db))
 	run, err := service.StartRun(ctx, "telemetry-association-integration", "test")
@@ -159,49 +142,57 @@ func TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 5 {
-		t.Fatalf("events = %#v", events)
+	// BUG-192: RecordModelTelemetry now also persists agent.pipeline.trace
+	// per attempt, so filter by event type before asserting counts and
+	// field-level content instead of indexing the raw event stream.
+	traceEvents := 0
+	llmEvents := make([]agentservice.Event, 0, len(events))
+	for _, event := range events {
+		switch event.Type {
+		case agentservice.EventPipelineTrace:
+			traceEvents++
+		case agentservice.EventResearchLLMCall:
+			llmEvents = append(llmEvents, event)
+		}
 	}
-	if events[0].ToolCallID != "tool-1" ||
-		events[0].Payload["tool_call_status"] != string(agentservice.ToolCallAvailable) ||
-		events[0].Payload["client_request_id"] != records[0].Telemetry.ClientRequestID ||
-		events[0].Payload["endpoint_scheme"] != "https" ||
-		events[0].Payload["endpoint_host"] != "api.deepseek.com" ||
-		events[0].Payload["provider_response_id"] != "provider-response-id" ||
-		events[0].Payload["provider_header_request_id"] != "header-request-id" ||
-		events[0].Payload["provider_header_request_id_header"] != "x-request-id" ||
-		events[0].Payload["provider_request_id"] != "provider-response-id" ||
-		events[0].Payload["local_response_cache"] != "not_configured" {
-		t.Fatalf("single event = %#v", events[0])
+	if traceEvents != 4 {
+		t.Fatalf("pipeline trace events = %d, want 4", traceEvents)
 	}
-	if events[1].ToolCallID != "" ||
-		events[1].Payload["tool_call_status"] != string(agentservice.ToolCallAvailable) ||
-		len(events[1].Payload["tool_call_ids"].([]any)) != 2 {
-		t.Fatalf("multiple event = %#v", events[1])
+	if len(llmEvents) != 5 {
+		t.Fatalf("llm_call events = %d, want 5", len(llmEvents))
 	}
-	if events[2].Payload["tool_call_unavailable_reason"] !=
+	if llmEvents[0].ToolCallID != "tool-1" ||
+		llmEvents[0].Payload["tool_call_status"] != string(agentservice.ToolCallAvailable) ||
+		llmEvents[0].Payload["client_request_id"] != records[0].Telemetry.ClientRequestID ||
+		llmEvents[0].Payload["endpoint_scheme"] != "https" ||
+		llmEvents[0].Payload["endpoint_host"] != "api.deepseek.com" ||
+		llmEvents[0].Payload["provider_response_id"] != "provider-response-id" ||
+		llmEvents[0].Payload["provider_header_request_id"] != "header-request-id" ||
+		llmEvents[0].Payload["provider_header_request_id_header"] != "x-request-id" ||
+		llmEvents[0].Payload["provider_request_id"] != "provider-response-id" ||
+		llmEvents[0].Payload["local_response_cache"] != "not_configured" {
+		t.Fatalf("single event = %#v", llmEvents[0])
+	}
+	if llmEvents[1].ToolCallID != "" ||
+		llmEvents[1].Payload["tool_call_status"] != string(agentservice.ToolCallAvailable) ||
+		len(llmEvents[1].Payload["tool_call_ids"].([]any)) != 2 {
+		t.Fatalf("multiple event = %#v", llmEvents[1])
+	}
+	if llmEvents[2].Payload["tool_call_unavailable_reason"] !=
 		string(agentservice.ToolCallUnavailableModelReturnedFinalText) {
-		t.Fatalf("no-tool event = %#v", events[2])
+		t.Fatalf("no-tool event = %#v", llmEvents[2])
 	}
-	if events[3].Payload["tool_call_unavailable_reason"] !=
+	if llmEvents[3].Payload["tool_call_unavailable_reason"] !=
 		string(agentservice.ToolCallUnavailableAttemptFailedNoResponse) {
-		t.Fatalf("failed event = %#v", events[3])
+		t.Fatalf("failed event = %#v", llmEvents[3])
 	}
-	if _, exists := events[4].Payload["tool_call_status"]; exists {
-		t.Fatalf("legacy event was rewritten: %#v", events[4])
+	if _, exists := llmEvents[4].Payload["tool_call_status"]; exists {
+		t.Fatalf("legacy event was rewritten: %#v", llmEvents[4])
 	}
 }
 
 func TestPostgresToolResultPreservesCompleteContentAndDigest(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testpg.Open(t)
 	ctx := context.Background()
 	service := agentservice.NewService(agentservice.NewPostgresRepository(db))
 	run, err := service.StartRun(ctx, "tool-result-integration", "test")

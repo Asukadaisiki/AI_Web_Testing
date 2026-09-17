@@ -150,7 +150,10 @@ func TestPostgresSourceReaderProjectsRealAgentEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.AgentRunStatus != "completed" || len(snapshot.Events) != 9 {
+	// BUG-192: RecordModelTelemetry now also persists agent.pipeline.trace
+	// per attempt (2 attempts here), so the source snapshot carries 11 events
+	// instead of 9; the two trace events project as unknown units.
+	if snapshot.AgentRunStatus != "completed" || len(snapshot.Events) != 11 {
 		t.Fatalf("source snapshot status/events = %s/%d", snapshot.AgentRunStatus, len(snapshot.Events))
 	}
 	if snapshot.FinalRunLinks.AgentRunID == nil ||
@@ -193,7 +196,7 @@ func TestPostgresSourceReaderProjectsRealAgentEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SourceCursor.AgentEventSeq != 9 || len(transitions) != 3 {
+	if manifest.SourceCursor.AgentEventSeq != 11 || len(transitions) != 5 {
 		t.Fatalf("projected manifest/transitions = %#v / %d", manifest, len(transitions))
 	}
 	keys := make([]string, 0, len(transitions))
@@ -202,7 +205,13 @@ func TestPostgresSourceReaderProjectsRealAgentEvents(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		keys,
-		[]string{"tool:tool-real", "unknown:8", "terminal:" + agentRun.ID},
+		[]string{
+			"tool:tool-real",
+			"unknown:3",
+			"unknown:5",
+			"unknown:10",
+			"terminal:" + agentRun.ID,
+		},
 	) {
 		t.Fatalf("transition keys = %#v", keys)
 	}

@@ -2,32 +2,20 @@ package taskplan
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dbschema"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/testpg"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestPostgresRepositoryPersistsVersionedTaskPlan(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testpg.Open(t)
 	ctx := context.Background()
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.ExecContext(ctx, dbschema.TaskPlanMigrationSQL); err != nil {
 		t.Fatalf("apply task plan migration: %v", err)
 	}

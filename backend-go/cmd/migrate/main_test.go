@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dbschema"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/testpg"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -80,7 +81,7 @@ func newMigrationTestDatabase(t *testing.T, ctx context.Context) *sql.DB {
 	testURL := *parsed
 	testURL.Path = "/" + databaseName
 	testURL.RawPath = ""
-	db, err := sql.Open("pgx", testURL.String())
+	db, err := sql.Open("pgx", testpg.WithUTCSession(testURL.String()))
 	if err != nil {
 		_, _ = admin.ExecContext(ctx, "DROP DATABASE "+databaseName+" WITH (FORCE)")
 		admin.Close()

@@ -304,7 +304,7 @@ go test ./...
 go vet ./...
 
 cd browser-worker
-uv run python -m compileall -q app
+uv run python -m compileall -q src
 uv run python -m unittest discover -s tests -p "test_*.py" -v
 
 cd ../frontend

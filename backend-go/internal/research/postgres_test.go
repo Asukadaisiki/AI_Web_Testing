@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/dsl"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/research"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/testpg"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -351,11 +351,7 @@ func TestPostgresRepositoryCreateRunIsolationAndDatabaseErrors(t *testing.T) {
 		t.Fatalf("CreateRun() did not enforce read committed: %v", err)
 	}
 
-	lockerDB, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lockerDB.Close()
+	lockerDB := testpg.Open(t)
 	locker, err := lockerDB.BeginTx(fixture.ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -590,18 +586,8 @@ type postgresFixture struct {
 
 func newPostgresFixture(t *testing.T, withChain bool) *postgresFixture {
 	t.Helper()
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testpg.Open(t)
 	ctx := context.Background()
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatal(err)
-	}
 	var researchTable sql.NullString
 	if err := db.QueryRowContext(
 		ctx,

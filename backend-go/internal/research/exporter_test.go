@@ -19,6 +19,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/santhosh-tekuri/jsonschema/v5"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/testpg"
 )
 
 func TestJSONLExporterRunPaginationDeterminismAndEncoding(t *testing.T) {
@@ -281,21 +283,8 @@ func TestTrajectoryJSONLExternalFileValidatesLineByLine(t *testing.T) {
 }
 
 func TestPostgresJSONLExporterUsesRepeatableReadSnapshot(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	database, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = database.Close()
-	})
+	database := testpg.Open(t)
 	ctx := context.Background()
-	if err := database.PingContext(ctx); err != nil {
-		t.Fatal(err)
-	}
 	var researchTable sql.NullString
 	if err := database.QueryRowContext(
 		ctx, `SELECT to_regclass('public.research_runs')::text`,
