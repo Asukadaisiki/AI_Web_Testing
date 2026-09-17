@@ -28,8 +28,22 @@ type Handler struct {
 	projects    projects.Store
 	cases       cases.Store
 	executions  *execution.Store
-	corrections *corrections.Store
+	corrections CorrectionStore
 	research    ResearchAPI
+}
+
+// CorrectionStore is the slice of the corrections store the HTTP layer uses.
+// *corrections.Store satisfies it; a fake is used in handler tests.
+type CorrectionStore interface {
+	Create(
+		ctx context.Context,
+		actorUserID int64,
+		request corrections.CreateRequest,
+	) (map[string]any, error)
+	Get(
+		ctx context.Context,
+		actorUserID, correctionID int64,
+	) (map[string]any, error)
 }
 
 type AgentAPI interface {
@@ -71,7 +85,7 @@ func NewServer(
 	projectStore projects.Store,
 	caseStore cases.Store,
 	executionStore *execution.Store,
-	correctionStore *corrections.Store,
+	correctionStore CorrectionStore,
 	researchAPI ...ResearchAPI,
 ) *server.Hertz {
 	h := server.New(server.WithHostPorts(address))
@@ -130,6 +144,7 @@ func NewServer(
 	v2.GET("/executions/:execution_id", handler.getExecution)
 	v2.DELETE("/executions/:execution_id", handler.deleteExecution)
 	v2.POST("/corrections", handler.createCorrection)
+	v2.GET("/corrections/:correction_id", handler.getCorrection)
 	if handler.research != nil {
 		registerResearchRoutes(v2, handler)
 	}

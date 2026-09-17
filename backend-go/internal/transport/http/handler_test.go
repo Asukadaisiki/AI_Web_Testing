@@ -10,6 +10,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/corrections"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/harness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/planning"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
@@ -572,5 +573,88 @@ func TestStreamSubscribesBeforeHistoryReplay(t *testing.T) {
 	defer subscription.Cancel()
 	if !api.subscribed || len(events) != 1 || events[0].Seq != 1 {
 		t.Fatalf("subscribed = %v, events = %#v", api.subscribed, events)
+	}
+}
+
+type fakeCorrectionStore struct {
+	created map[string]any
+	got     map[string]any
+	err     error
+}
+
+func (s *fakeCorrectionStore) Create(
+	_ context.Context,
+	_ int64,
+	_ corrections.CreateRequest,
+) (map[string]any, error) {
+	return s.created, s.err
+}
+
+func (s *fakeCorrectionStore) Get(
+	_ context.Context,
+	_ int64,
+	_ int64,
+) (map[string]any, error) {
+	return s.got, s.err
+}
+
+func TestGetCorrectionRouteReturnsStoredCorrection(t *testing.T) {
+	store := &fakeCorrectionStore{got: map[string]any{
+		"id": int64(7), "page_url_pattern": "https://example.com/form",
+		"target_description": "提交按钮", "correction_type": "test_id",
+		"correction_value": "submit", "verified_count": int64(0),
+		"consecutive_failures": int64(0), "is_active": true,
+		"source_execution_id": int64(100), "created_by": int64(1),
+		"created_at": time.Now().UTC(), "updated_at": time.Now().UTC(),
+	}}
+	server := NewServer(
+		"127.0.0.1:0",
+		newTestServer(t),
+		1,
+		staticPlanningStore{},
+		nil,
+		nil,
+		nil,
+		store,
+	)
+	response := ut.PerformRequest(
+		server.Engine,
+		"GET",
+		"/api/v2/corrections/7",
+		nil,
+	).Result()
+	if response.StatusCode() != consts.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["id"] != float64(7) ||
+		body["target_description"] != "提交按钮" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestGetCorrectionRouteReportsNotFound(t *testing.T) {
+	store := &fakeCorrectionStore{err: corrections.ErrNotFound}
+	server := NewServer(
+		"127.0.0.1:0",
+		newTestServer(t),
+		1,
+		staticPlanningStore{},
+		nil,
+		nil,
+		nil,
+		store,
+	)
+	response := ut.PerformRequest(
+		server.Engine,
+		"GET",
+		"/api/v2/corrections/404",
+		nil,
+	).Result()
+	if response.StatusCode() != consts.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.StatusCode())
 	}
 }

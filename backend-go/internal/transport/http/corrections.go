@@ -28,3 +28,17 @@ func (h *Handler) createCorrection(ctx context.Context, c *app.RequestContext) {
 	c.Header("Location", "/api/v2/corrections/"+strconv.FormatInt(result["id"].(int64), 10))
 	c.JSON(consts.StatusCreated, result)
 }
+
+func (h *Handler) getCorrection(ctx context.Context, c *app.RequestContext) {
+	identity, correctionID, err := ownedPathContext(c, "correction_id")
+	if err != nil {
+		writeError(c, consts.StatusBadRequest, err)
+		return
+	}
+	result, err := h.corrections.Get(ctx, identity.UserID, correctionID)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(consts.StatusOK, result)
+}

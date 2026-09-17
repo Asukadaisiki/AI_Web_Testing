@@ -8,13 +8,13 @@
 
 | 接口层 | 数量 | 谁来调用 | 用来做什么 |
 |---|---:|---|---|
-| Go 平台业务 HTTP/SSE | 37 | 前端、平台调用方、E2E Driver | 会话、项目、用例、Agent、执行、报告和人工修正 |
+| Go 平台业务 HTTP/SSE | 38 | 前端、平台调用方、E2E Driver | 会话、项目、用例、Agent、执行、报告和人工修正 |
 | Go Research HTTP | 13 | 实验与验收 Driver | 实验调度、证据关联、独立验收和指标计算 |
 | Go 健康检查 | 1 | 本地联调、部署探针 | 检查 Go 服务是否响应 |
 | Python Worker 自定义 HTTP | 5 | Go 控制面、执行 Worker、证据查看页面 | 浏览器能力、DSL 执行、证据下载、健康和元信息 |
 | Agent 工具 | 9 | AgentCore 经 Harness 调用 | 计划、探索、生成、审批提问、执行与修复 |
 
-**合计：56 个自定义 HTTP 路由，其中 Go 51 个、Python 5 个；另有 9 个非 HTTP Agent 工具。**
+**合计：57 个自定义 HTTP 路由，其中 Go 52 个、Python 5 个；另有 9 个非 HTTP Agent 工具。**
 
 计数按“HTTP 方法 + 路径模板”，同一路径的 GET/POST 分别计数。Worker 的 `{capability}` 是一个路由，支持三种能力；不重复计为三个接口。FastAPI 自动提供的文档路由、自动 HEAD/OPTIONS 不纳入自定义接口数。Research 在注入 ResearchAPI 时注册，当前正式 `cmd/agentservice` 已注入。
 
@@ -22,7 +22,7 @@
 
 - 接平台页面：[项目](#3-项目管理5-个)、[会话](#4-planning-会话与项目关联9-个)、[用例](#6-用例管理6-个)。
 - 接 AI 工作台：[Agent 与 SSE](#5-agent-run-与事件6-个)、[Agent 工具](#11-agent-工具9-个不是-http-接口)。
-- 做回归和报告：[执行与报告](#7-执行与报告10-个)、[人工修正](#8-人工定位修正1-个)。
+- 做回归和报告：[执行与报告](#7-执行与报告10-个)、[人工修正](#8-人工定位修正2-个)。
 - 做实验验收：[Research](#9-research-实验与验收13-个)。
 - 接 Python 或查截图：[Browser Worker](#10-browser-worker5-个自定义-http-路由)。
 - 跑通整体流程：[典型调用链](#12-典型调用链)、[本地调用示例](#13-本地调用示例)。
@@ -362,11 +362,12 @@ Batch/Job 常见状态：`pending`、`running`、`passed`、`failed`、`needs_in
 
 源码：[路由处理](../backend-go/internal/transport/http/execution.go)、[请求、队列与报告](../backend-go/internal/execution/store.go)、[统计口径](../backend-go/internal/execution/overview.go)、[步骤证据合同](../browser-worker/src/browser_worker/contracts/executions.py)。
 
-## 8. 人工定位修正（1 个）
+## 8. 人工定位修正（2 个）
 
 | 方法 | 完整路径 | 用途 | 请求关键字段 | 成功响应 |
 |---|---|---|---|---|
 | POST | `/api/v2/corrections` | 保存人工提供的定位修正，关联原执行以供后续定位流程使用 | 下列字段均必填 | `201`，StoredCorrection |
+| GET | `/api/v2/corrections/{id}` | 按 id 读取单条人工定位修正（需有该修正来源执行的访问权限） | 路径 `id` | `200`，StoredCorrection |
 
 ```json
 {
@@ -384,7 +385,7 @@ Batch/Job 常见状态：`pending`、`running`、`passed`、`failed`、`needs_in
 - 同一 URL 模式和归一化 target 已有活动修正时，更新已有记录。
 - 响应包含 `id`、`page_url_pattern`、target/type/value、`verified_count`、`consecutive_failures`、`is_active`、来源和时间。
 - 该请求只保存修正，不会自动重跑，也不证明修正后的 locator 已在真实页面验证。
-- **当前没有修正列表、单条 GET 或删除 HTTP 路由。** POST 虽返回 `/api/v2/corrections/{id}` 的 `Location`，该地址当前不能 GET；见 BUG-178。请使用 POST 返回的完整对象。
+- **没有修正列表或删除路由。** GET 单条仅支持 POST 返回的 `Location` 对应 id。
 
 源码：[HTTP 处理](../backend-go/internal/transport/http/corrections.go)、[请求与保存](../backend-go/internal/corrections/store.go)。
 
@@ -787,7 +788,7 @@ curl -sS -X POST \
 - 独立 Suite CRUD；当前批量回归入口是 execution-batches。
 - 公开的 TaskPlan CRUD、DSL generation 查询/审批 REST、通用 Tool 调用 API。
 - 独立 Job HTTP CRUD、单个 Execution cancel。
-- 修正记录列表/GET/DELETE。
+- 修正记录列表/DELETE（单条 GET 已提供，见第 8 节）。
 - 公共 WebSocket 执行协议；当前 Agent 进度使用 SSE。
 - Go Swagger/OpenAPI 端点；Python `/docs` 不能代表整个平台 API。
 
