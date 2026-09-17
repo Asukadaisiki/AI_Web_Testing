@@ -205,6 +205,9 @@ func compileDraftStep(
 			)
 		}
 	}
+	if err := validateConditionPreservation(step, planned, index); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -249,6 +252,8 @@ func validateCompiledCaseSemantics(plan Plan, raw json.RawMessage) error {
 			TimeoutMS           int                                `json:"timeout_ms"`
 			Idempotency         string                             `json:"idempotency"`
 			SideEffect          SideEffect                         `json:"side_effect"`
+			Preconditions       []map[string]any                   `json:"preconditions"`
+			Postconditions      []map[string]any                   `json:"postconditions"`
 		} `json:"steps"`
 	}
 	if json.Unmarshal(raw, &candidate) != nil ||
@@ -278,6 +283,14 @@ func validateCompiledCaseSemantics(plan Plan, raw json.RawMessage) error {
 				expected.ID,
 			)
 		}
+		if err := validateCompiledConditions(
+			index,
+			step.Preconditions,
+			step.Postconditions,
+			expected,
+		); err != nil {
+			return err
+		}
 		if requiresTargetBinding(expected.Action) {
 			if expected.TargetBinding == nil ||
 				step.TargetBindingID != expected.TargetBinding.BindingID ||
@@ -297,6 +310,64 @@ func validateCompiledCaseSemantics(plan Plan, raw json.RawMessage) error {
 					index,
 				)
 			}
+		}
+	}
+	return nil
+}
+
+func validateCompiledConditions(
+	index int,
+	preconditions, postconditions []map[string]any,
+	expected Step,
+) error {
+	dslPre := make([]ConditionIntent, 0, len(preconditions))
+	for _, condition := range preconditions {
+		dslPre = append(dslPre, dslConditionIntent(condition))
+	}
+	dslPost := make([]ConditionIntent, 0, len(postconditions))
+	for _, condition := range postconditions {
+		dslPost = append(dslPost, dslConditionIntent(condition))
+	}
+	if len(expected.Preconditions) > 0 && len(dslPre) == 0 {
+		return fmt.Errorf(
+			"compiled DSL step %d drops plan step %q preconditions",
+			index,
+			expected.ID,
+		)
+	}
+	if len(expected.CompletionConditions) > 0 && len(dslPost) == 0 {
+		return fmt.Errorf(
+			"compiled DSL step %d drops plan step %q completion conditions",
+			index,
+			expected.ID,
+		)
+	}
+	for _, raw := range expected.Preconditions {
+		intent := parseConditionIntent(raw)
+		if intent.Kind == "free_text" {
+			continue
+		}
+		if !anyMatches(dslPre, intent) {
+			return fmt.Errorf(
+				"compiled DSL step %d does not preserve plan step %q precondition %q",
+				index,
+				expected.ID,
+				raw,
+			)
+		}
+	}
+	for _, raw := range expected.CompletionConditions {
+		intent := parseConditionIntent(raw)
+		if intent.Kind == "free_text" {
+			continue
+		}
+		if !anyMatches(dslPost, intent) {
+			return fmt.Errorf(
+				"compiled DSL step %d does not preserve plan step %q completion condition %q",
+				index,
+				expected.ID,
+				raw,
+			)
 		}
 	}
 	return nil

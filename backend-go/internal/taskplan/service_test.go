@@ -1209,6 +1209,92 @@ func TestExploreFlowUsesResolvedTargetWithoutTextRebinding(t *testing.T) {
 	}
 }
 
+func TestExploreFlowCandidateRefClickSkipsRedundantValueMatch(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-click-candidate-ref-value",
+		Definition: Definition{
+			Goal:             "Click a nav item",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "click_products", Intent: "Click Products", Action: "click",
+				Target: "Products", Value: "products",
+				ExpectedOccurrences: 1, Idempotency: "idempotent",
+				SideEffect: SideEffectBrowserState,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.GetCurrent(ctx, plan.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clickArgs := json.RawMessage(`{
+		"schema_version":"grounding.query.v2",
+		"plan_step_ids":["click_products"],
+		"steps":[{"url":"https://example.com","actions":[{
+			"plan_step_id":"click_products",
+			"action":"click",
+			"candidate_ref":{
+				"schema_version":"grounding.candidate-ref.v1",
+				"source_event_seq":3,
+				"probe_id":"probe-1",
+				"observation_id":"obs-1",
+				"candidate_id":"candidate-1"
+			}
+		}]}]
+	}`)
+	if err := authorizeExploration(current, "explore_flow", clickArgs); err != nil {
+		t.Fatalf("click candidate_ref must not require a redundant value: %v", err)
+	}
+
+	inputPlan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-input-candidate-ref-value",
+		Definition: Definition{
+			Goal:             "Type a query",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "search_input", Intent: "Type the query", Action: "input",
+				Target: "Search Product", Value: "Blue Top",
+				ExpectedOccurrences: 1, Idempotency: "idempotent",
+				SideEffect: SideEffectBrowserState,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputCurrent, err := service.GetCurrent(ctx, inputPlan.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputArgs := json.RawMessage(`{
+		"schema_version":"grounding.query.v2",
+		"plan_step_ids":["search_input"],
+		"steps":[{"url":"https://example.com","actions":[{
+			"plan_step_id":"search_input",
+			"action":"input",
+			"value":"Wrong Text",
+			"candidate_ref":{
+				"schema_version":"grounding.candidate-ref.v1",
+				"source_event_seq":3,
+				"probe_id":"probe-1",
+				"observation_id":"obs-1",
+				"candidate_id":"candidate-1"
+			}
+		}]}]
+	}`)
+	if err := authorizeExploration(inputCurrent, "explore_flow", inputArgs); err == nil {
+		t.Fatal("input candidate_ref with mismatched value must still be rejected")
+	}
+}
+
 func TestExploreFlowRequiresResolvedTargetForBinding(t *testing.T) {
 	ctx := context.Background()
 	repository := NewMemoryRepository()
@@ -1406,5 +1492,308 @@ func TestCompileResearchV2DraftInjectsPersistedTargetBinding(t *testing.T) {
 		step["page_state_id"] != "form" ||
 		step["selected_candidate_id"] != "candidate-1" {
 		t.Fatalf("compiled lineage = %#v", step)
+	}
+}
+
+func TestCompileDraftCasePreservesPlanConditions(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-conditions",
+		Definition: Definition{
+			Goal:             "Checkout a product",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "pay", Intent: "Pay now", Action: "click",
+				Target: "Pay", ExpectedOccurrences: 1,
+				Idempotency:          "idempotent",
+				SideEffect:           SideEffectBrowserState,
+				Preconditions:        []string{"cart visible"},
+				CompletionConditions: []string{"url contains /checkout"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Pay"
+	targetBinding, err := browsercontract.NewTargetBinding(
+		browsercontract.TargetBinding{
+			PlanID: plan.ID, PlanVersion: plan.Version,
+			PlanStepID: "pay", SemanticTarget: "Pay",
+			ProbeID: "probe-1", Action: "click", PageStateID: "cart",
+			ObservationID: "obs-1", ObservationSHA256: strings.Repeat("a", 64),
+			ElementRefs: []string{"cart:3"},
+			Candidates: []browsercontract.LocatorCandidate{{
+				CandidateID: "candidate-1", ElementRef: "cart:3",
+				Locator: browsercontract.LocatorSpec{
+					Kind: "role", Role: "button", Name: &name, Exact: true,
+				},
+				Provenance: "a11y_exact", ObservedCount: 1,
+				Visible: true, Enabled: true, Score: 0.95,
+			}},
+			SelectedCandidateID: "candidate-1",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	plan.Steps[0].TargetBinding = &targetBinding
+	plan.Status = StatusReadyForGeneration
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	draft := func(postconditions string) json.RawMessage {
+		return json.RawMessage(`{
+			"profile":"research-v2",
+			"name":"Pay",
+			"steps":[{
+				"plan_step_id":"pay",
+				"action":"click",
+				"intent":"Pay now",
+				"target_binding_id":"` + targetBinding.BindingID + `",
+				"preconditions":[{"type":"text_visible","value":"Cart"}],
+				"postconditions":[` + postconditions + `],
+				"idempotency":"idempotent",
+				"side_effect":"browser_state"
+			}]
+		}`)
+	}
+
+	// Same action/value, different completion condition value: the DSL swaps
+	// the asserted destination, which must be rejected (BUG-182).
+	if _, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		draft(`{"type":"url_contains","value":"/cart"}`),
+	); err == nil {
+		t.Fatal("compiled DSL that swaps the completion URL was accepted")
+	}
+
+	// Dropping the completion conditions entirely must also be rejected.
+	if _, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		draft(``),
+	); err == nil {
+		t.Fatal("compiled DSL that drops completion conditions was accepted")
+	}
+
+	// A preserved completion condition compiles cleanly.
+	compiled, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		draft(`{"type":"url_contains","value":"/checkout"}`),
+	)
+	if err != nil {
+		t.Fatalf("preserving plan conditions should compile: %v", err)
+	}
+	if !strings.Contains(string(compiled), "/checkout") {
+		t.Fatalf("compiled DSL lacks preserved URL condition: %s", compiled)
+	}
+
+	// The same preservation contract applies to already-generated DSL bound
+	// back to the plan (ValidateGenerationBinding path).
+	generated := json.RawMessage(`{
+		"profile":"research-v2",
+		"name":"Pay",
+		"plan_binding":{"plan_id":` + strconv.Quote(plan.ID) + `,"version":` +
+		strconv.Itoa(plan.Version) + `,"sha256":` +
+		strconv.Quote(plan.PlanSHA256) + `},
+		"observation_bindings":[{
+			"binding_id":"` + targetBinding.BindingID + `",
+			"binding_sha256":"` + targetBinding.BindingSHA256 + `",
+			"observation_id":"obs-1",
+			"observation_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"page_state_id":"cart"
+		}],
+		"steps":[{
+			"plan_step_id":"pay",
+			"action":"click",
+			"intent":"Pay now",
+			"target_binding_id":"` + targetBinding.BindingID + `",
+			"semantic_target":"Pay",
+			"locator_candidates":[{
+				"candidate_id":"candidate-1",
+				"element_ref":"cart:3",
+				"locator":{"kind":"role","role":"button","name":"Pay","exact":true},
+				"provenance":"a11y_exact",
+				"observed_count":1,
+				"visible":true,
+				"enabled":true,
+				"score":0.95
+			}],
+			"preconditions":[{"type":"text_visible","value":"Cart"}],
+			"postconditions":[{"type":"url_contains","value":"/cart"}],
+			"idempotency":"idempotent",
+			"side_effect":"browser_state"
+		}]
+	}`)
+	if _, err := service.ValidateGenerationBinding(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		generated,
+	); err == nil {
+		t.Fatal("generated DSL that swaps the completion URL was accepted")
+	}
+}
+
+func TestCompileDraftCasePreservesPlanConditionKind(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-condition-kind",
+		Definition: Definition{
+			Goal:             "Verify the detail page",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "open_detail", Intent: "Open detail", Action: "click",
+				Target: "View Product", ExpectedOccurrences: 1,
+				Idempotency:          "idempotent",
+				SideEffect:           SideEffectBrowserState,
+				Preconditions:        []string{"results visible"},
+				CompletionConditions: []string{"detail page loads"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "View Product"
+	targetBinding, err := browsercontract.NewTargetBinding(
+		browsercontract.TargetBinding{
+			PlanID: plan.ID, PlanVersion: plan.Version,
+			PlanStepID: "open_detail", SemanticTarget: "View Product",
+			ProbeID: "probe-1", Action: "click", PageStateID: "results",
+			ObservationID: "obs-1", ObservationSHA256: strings.Repeat("b", 64),
+			ElementRefs: []string{"results:9"},
+			Candidates: []browsercontract.LocatorCandidate{{
+				CandidateID: "candidate-1", ElementRef: "results:9",
+				Locator: browsercontract.LocatorSpec{
+					Kind: "role", Role: "button", Name: &name, Exact: true,
+				},
+				Provenance: "a11y_exact", ObservedCount: 1,
+				Visible: true, Enabled: true, Score: 0.9,
+			}},
+			SelectedCandidateID: "candidate-1",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	plan.Steps[0].TargetBinding = &targetBinding
+	plan.Status = StatusReadyForGeneration
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	// "detail page loads" is a page-level fact; replacing it with an unrelated
+	// text_visible assertion must be rejected even though a condition exists.
+	if _, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		json.RawMessage(`{
+			"profile":"research-v2",
+			"name":"Open detail",
+			"steps":[{
+				"plan_step_id":"open_detail",
+				"action":"click",
+				"intent":"Open detail",
+				"target_binding_id":"`+targetBinding.BindingID+`",
+				"preconditions":[{"type":"text_visible","value":"Results"}],
+				"postconditions":[{"type":"text_visible","value":"Price"}],
+				"idempotency":"idempotent",
+				"side_effect":"browser_state"
+			}]
+		}`),
+	); err == nil {
+		t.Fatal("compiled DSL that replaced a page-level fact with text assertion was accepted")
+	}
+
+	// A page-level fact such as url_changes satisfies the page_fact intent.
+	if _, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		json.RawMessage(`{
+			"profile":"research-v2",
+			"name":"Open detail",
+			"steps":[{
+				"plan_step_id":"open_detail",
+				"action":"click",
+				"intent":"Open detail",
+				"target_binding_id":"`+targetBinding.BindingID+`",
+				"preconditions":[{"type":"text_visible","value":"Results"}],
+				"postconditions":[{"type":"url_changes"}],
+				"idempotency":"idempotent",
+				"side_effect":"browser_state"
+			}]
+		}`),
+	); err != nil {
+		t.Fatalf("url_changes should preserve a page-level completion intent: %v", err)
+	}
+}
+
+func TestCreateVersionIsIdempotentForIdenticalPlan(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(NewMemoryRepository())
+	request := CreateRequest{
+		RunID: "run-idempotent-plan",
+		Definition: Definition{
+			Goal:             "Verify the product page",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "open", Intent: "Open page", Action: "goto",
+				Value:               "https://example.test/products",
+				ExpectedOccurrences: 1, Idempotency: "idempotent",
+				SideEffect: SideEffectBrowserState,
+			}},
+		},
+	}
+	first, err := service.CreateVersion(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// BUG-181: an identical semantic plan must not mint a new version.
+	second, err := service.CreateVersion(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.GetCurrent(ctx, request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Version != 1 || second.Version != 1 ||
+		second.ID != first.ID ||
+		current.Version != 1 ||
+		len(current.Steps) != 1 {
+		t.Fatalf(
+			"idempotent plan versions first=%#v second=%#v current=%#v",
+			first,
+			second,
+			current,
+		)
+	}
+	// A genuinely different plan still advances the revision.
+	request.Definition.Steps[0].Value = "https://example.test/details"
+	third, err := service.CreateVersion(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Version != 2 || third.PlanSHA256 == first.PlanSHA256 {
+		t.Fatalf("changed plan should advance version: %#v", third)
 	}
 }

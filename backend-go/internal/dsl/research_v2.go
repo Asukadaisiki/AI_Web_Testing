@@ -535,7 +535,7 @@ func validateResearchV2ActionFields(
 
 func requiresV2TargetBinding(action string) bool {
 	switch action {
-	case "click", "input", "capture_text":
+	case "click", "input", "capture_text", "assert_text":
 		return true
 	default:
 		return false

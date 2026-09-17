@@ -213,7 +213,7 @@ def validate_research_v2_dsl(
 
 
 def _requires_binding(action: str) -> bool:
-    return action in {"click", "input", "capture_text"}
+    return action in {"click", "input", "capture_text", "assert_text"}
 
 
 def _has_target(action: str) -> bool:

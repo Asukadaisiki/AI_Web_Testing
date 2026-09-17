@@ -921,10 +921,30 @@ def _execute_non_target_step(
             )
         elif step.action == "assert_text":
             expected = _substitute_variables(step.value, input_values)
-            locator = page.get_by_text(expected, exact=False).first
-            locator.wait_for(state="visible", timeout=5000)
-            if expected not in locator.inner_text():
-                raise AssertionError(f"Text assertion failed: {expected}")
+            semantic_target = getattr(step, "semantic_target", None)
+            if semantic_target:
+                # BUG-182: never fall back to a full-page text search when a
+                # semantic target is available — a same-name text in the wrong
+                # region must not cause a false pass. Resolve the semantic
+                # target and assert only inside it.
+                resolved, _ = _resolve_with_confidence_gate(
+                    page,
+                    _substitute_variables(semantic_target, input_values)
+                    or semantic_target,
+                    locator_confidence=getattr(step, "locator_confidence", None),
+                    target_strategy=getattr(step, "target_strategy", None),
+                    require_visible=False,
+                    expected_text=expected,
+                )
+                locator = resolved.locator
+                locator.wait_for(state="visible", timeout=5000)
+                if expected not in locator.inner_text():
+                    raise AssertionError(f"Text assertion failed: {expected}")
+            else:
+                locator = page.get_by_text(expected, exact=False).first
+                locator.wait_for(state="visible", timeout=5000)
+                if expected not in locator.inner_text():
+                    raise AssertionError(f"Text assertion failed: {expected}")
         elif step.action == "assert_url_contains":
             expected = _substitute_variables(step.value, input_values)
             if expected not in page.url:

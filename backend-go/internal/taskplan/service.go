@@ -63,6 +63,12 @@ func (s *Service) CreateVersion(ctx context.Context, request CreateRequest) (Pla
 	}
 	previous, err := s.repository.GetCurrent(ctx, request.RunID)
 	if err == nil {
+		// BUG-181: submitting a semantically identical plan must be a no-op
+		// instead of minting a new version. Only a content change advances the
+		// revision, so the model cannot consume turns by re-planning.
+		if previous.PlanSHA256 == hash {
+			return previous, nil
+		}
 		carryForwardGrounding(&plan, previous)
 	} else if !errors.Is(err, ErrNotFound) {
 		return Plan{}, err
@@ -782,12 +788,26 @@ func mapProbeActionOwners(
 					action.PlanStepID,
 				)
 			}
-			if !probeActionMatches(matched.Action, action.Action) ||
-				!probeValueMatches(matched, action.Action, value) {
+			if !probeActionMatches(matched.Action, action.Action) {
 				return nil, fmt.Errorf(
 					"explore_flow action %q does not match plan step %q",
 					action.Action,
 					action.PlanStepID,
+				)
+			}
+			// A candidate_ref already pins the exact element, so the redundant
+			// target/value string must not be required for click probes. For
+			// input and wait_for the value carries typed text or the expected
+			// condition and remains mandatory.
+			valueMismatch := normalize(action.Action) != "click" ||
+				action.CandidateRef == nil
+			if valueMismatch &&
+				!probeValueMatches(matched, action.Action, value) {
+				return nil, fmt.Errorf(
+					"explore_flow value %q does not match plan step %q value %q",
+					value,
+					action.PlanStepID,
+					matched.Value,
 				)
 			}
 			if normalize(action.Action) != "wait_for" &&
