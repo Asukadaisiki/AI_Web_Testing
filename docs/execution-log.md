@@ -56,6 +56,30 @@
 
 ## 任务记录
 
+## 2026-09-17 | 切换 LLM 提供方并重跑 Blue Top live E2E（墙钟超时未收敛）
+
+- 任务：承接上一轮（LLM 提供方欠费 402 阻塞），按用户指示切换 LLM 端点配置并重跑 live E2E，验证 grounding 断链修复。
+- 操作：
+  1. 用户提供新 LLM 提供方配置（openai-completions 兼容、模型选 flash 档），指示不拼接路径。
+  2. 诊断 `browser-worker/.env`：端点与密钥已切到新提供方，但模型名仍是旧值；且此前写入引入 UTF-8 BOM 导致 `config.Load`（godotenv）读不出 provider。
+  3. 修正模型名、重写 `.env` 为无 BOM UTF-8；用最小请求直接验证端点返回 HTTP 200（openai-completions 风格，客户端自动追加 `/chat/completions`，无需手工拼路径）。
+  4. 重启 agentservice(:8081，MAX_TURNS=40、thinking=max)，health 200；重跑 `run_agentic_e2e.py`（900s 截止）。
+- 结果：`run_99a84dcbcf6e76dbb110e873` 192 事件、14 次逻辑调用全部 HTTP 200（无 402/401/404）；grounding 推进正常——`selectable_candidates` 全量携带候选、`resolved_candidate` 水合动作正常、candidate_ref 引用出现、语义定位门禁按预期工作。模型已走到产品详情页（`/product_details/1`）的最后一步 flow（点 Add to cart → 等 Added modal → View Cart），但该 flow 中 `wait_for role=heading, name=Shopping Cart` 报 `flow_action_failed: count=0`，未在 900s 墙钟内收敛到 DSL 生成，driver 超时取消。
+- 验证：`.env` 无 BOM（首字节 65,80,80）；最小请求 HTTP 200；`research.llm_call` 事件全部 200 且为 flash 档模型；agentservice/browser-worker/execution-worker health 均正常。
+- 后续：模型在 900s/61 万 input tokens 内已抵达最后一步，但 Add-to-cart→modal→View Cart 链路在单 flow 内未走通（详情页 wait_for Shopping Cart heading count=0）；需分析该 flow 内动作顺序/候选（可能按钮点击失败或 modal 未出现）并重跑；断链类（BUG-198/197/188）在本次运行中无复现迹象。
+
+## 2026-09-17 | Live E2E 复验尝试（Blue Top 加购，DeepSeek 欠费 402 阻塞）
+
+- 任务：按 open-bugs 修复计划复跑官方 `automationexercise-blue-top-cart.v1.json` research-v2 live E2E，复验 BUG-198/197/188 断链修复。
+- 操作：
+  1. 在 `66d38c0`（本地/远端 main 一致、工作区干净）上重建 `agentservice`/`execution-worker`/`migrate` 二进制。
+  2. 启动 browser-worker(:8000)、agentservice(:8081，MAX_TURNS=40、thinking=max)、execution-worker；健康检查均通过。
+  3. 首次运行因 Playwright Chromium 缺失进入 clarification 并自动取消（build 1208 与 playwright 1.57 期望的 1200 不匹配，且此前 install 中断残留 `__dirlock`）；`python -m playwright install chromium` 重新下载 143.0.7499.4 (v1200) 至 `D:\PlaywrightBrowsers`，并用本地脚本确认可启动且能访问 `automationexercise.com`。
+  4. 重跑 `run_agentic_e2e.py`（900s 截止），事件推进到 seq 90 后 run 以 `failed` 终态结束。
+- 结果：`run_fbd4c42a964a67b779116966` 90 事件；前 86 事件 grounding 正常推进（`selectable_candidates` 全量携带候选、`resolved_candidate` 水合动作正常、`candidate_ref` 引用出现），seq 83 显示 grounding 门禁正确拒绝语义定位之外的选择器（`flow_action_failed: grounding locator must use semantic locator kinds` 针对 `css=#submit_search`）——即 BUG-188 门禁按预期拦截。seq 87 `research.llm_call` 记录 `http_402` 失败，seq 90 `run.failed: LLM provider returned HTTP 402`。
+- 验证：`GET https://api.deepseek.com/user/balance` 返回 `{"is_available": false, total_balance: "-0.23"}` —— DeepSeek 账户欠费 0.23 元，402 为余额/配额问题而非代码缺陷。本地 Chromium 启动与目标站点访问已验证 OK。
+- 后续：DeepSeek 账户充值或配置有效 key 后重跑同一条 E2E，完成 BUG-198/197/188 的 live 终验；代码侧门禁（Go build/vet/test、Python pytest 195/1/2、Frontend build/11 tests）全部通过。
+
 ## 2026-09-17 | 按计划修复全部 open 问题并提交本地 main（A/B/C/D 四线）
 
 - 任务：按 `docs/plan/2026-09-14-open-bugs-fix-plan.md` 修复 `docs/bug-log.md` 全部 open 问题，门禁全绿后提交本地 `main`，并询问是否推送 GitHub。
