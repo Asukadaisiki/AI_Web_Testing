@@ -9,6 +9,7 @@ from browser_worker.exploration.page_explorer import (
     _collect_flow_a11y,
     _deduplicate_explore_results,
     _filter_a11y_nodes,
+    _flow_action_locator,
     _is_business_candidate,
     _same_document_url,
     _wait_for_flow_target,
@@ -437,6 +438,127 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 locator_spec={"kind": "role", "role": "spinbutton"},
                 condition={"type": "value_equals", "expected": "2"},
             )
+
+    def test_flow_action_locator_prefers_explicit_locator(self) -> None:
+        action = {
+            "locator": {"kind": "role", "role": "button", "name": "Search"},
+            "resolved_candidate": {
+                "locator": {"kind": "css", "value": "#submit_search"},
+            },
+        }
+        self.assertEqual(
+            _flow_action_locator(action),
+            {"kind": "role", "role": "button", "name": "Search"},
+        )
+
+    def test_flow_action_locator_falls_back_to_resolved_candidate(self) -> None:
+        action = {
+            "resolved_candidate": {
+                "locator": {"kind": "css", "value": "#submit_search"},
+            },
+        }
+        self.assertEqual(
+            _flow_action_locator(action),
+            {"kind": "css", "value": "#submit_search"},
+        )
+
+    def test_flow_action_locator_returns_none_when_unavailable(self) -> None:
+        self.assertIsNone(_flow_action_locator({}))
+        self.assertIsNone(
+            _flow_action_locator({"resolved_candidate": {"locator": None}})
+        )
+        self.assertIsNone(_flow_action_locator({"resolved_candidate": {}}))
+
+    def test_collect_flow_a11y_uses_resolved_candidate_locator(self) -> None:
+        page = _FlowPage()
+        captured: list[tuple[object, ...]] = []
+
+        class _ButtonLocator:
+            first = None
+
+            def count(self) -> int:
+                return 1
+
+            def evaluate(self, _script: str):
+                return {"tag": "button", "href": "", "download": False}
+
+        loc = _ButtonLocator()
+        loc.first = loc
+
+        def fake_compile_locator(pg, locator_spec, **kwargs):
+            captured.append((pg, locator_spec))
+            return loc
+
+        with (
+            patch.object(
+                BrowserSessionManager,
+                "get_or_create_context",
+                return_value=(object(), page),
+            ),
+            patch(
+                "browser_worker.exploration.page_explorer.compile_locator",
+                side_effect=fake_compile_locator,
+            ),
+            patch(
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
+                return_value=[{"node_id": "current", "role": "heading", "name": "Cart"}],
+            ),
+            patch(
+                "browser_worker.runners.click_preprocessor.click_with_precheck",
+                return_value=ClickPrecheckResult(succeeded=True),
+            ),
+        ):
+            result = _collect_flow_a11y(
+                [{
+                    "actions": [{
+                        "action": "click",
+                        "resolved_candidate": {
+                            "locator": {
+                                "kind": "role",
+                                "role": "button",
+                                "name": "Search",
+                            },
+                        },
+                    }],
+                }],
+                session_id=7,
+            )
+        # The action must resolve through the resolved_candidate locator
+        # instead of raising "require a structured semantic locator".
+        self.assertEqual(result[-1]["status"], "success")
+        self.assertEqual(
+            result[-1]["actions"][0]["locator"],
+            {"kind": "role", "role": "button", "name": "Search"},
+        )
+        # compile_locator received the locator lifted from resolved_candidate.
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(
+            captured[0][1],
+            {"kind": "role", "role": "button", "name": "Search"},
+        )
+
+    def test_collect_flow_a11y_requires_locator_when_no_resolved_candidate(
+        self,
+    ) -> None:
+        page = _FlowPage()
+        with (
+            patch.object(
+                BrowserSessionManager,
+                "get_or_create_context",
+                return_value=(object(), page),
+            ),
+            patch(
+                "browser_worker.exploration.page_explorer.collect_a11y_nodes",
+                return_value=[{"node_id": "current", "role": "heading", "name": "Cart"}],
+            ),
+        ):
+            result = _collect_flow_a11y(
+                [{"actions": [{"action": "click"}]}],
+                session_id=7,
+            )
+        self.assertEqual(result[-1]["status"], "error")
+        self.assertEqual(result[-1]["failure"]["code"], "flow_failed")
+        self.assertIn("structured semantic locator", result[-1]["failure"]["message"])
 
     def test_dom_supplement_adds_only_unique_verified_controls(self) -> None:
         base = {

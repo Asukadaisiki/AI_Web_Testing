@@ -924,9 +924,34 @@ def _wait_for_flow_target(
             )
 
 
-def _flow_action_target_label(action: dict[str, Any]) -> str:
+def _flow_action_locator(action: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the semantic locator for an explore_flow action.
+
+    Prefers the explicit ``locator``; falls back to the locator carried by a
+    trusted ``resolved_candidate`` that the control plane resolved from
+    current-run evidence.
+    """
     locator = action.get("locator")
+    if isinstance(locator, dict):
+        return locator
+    resolved = action.get("resolved_candidate")
+    if isinstance(resolved, dict):
+        candidate_locator = resolved.get("locator")
+        if isinstance(candidate_locator, dict):
+            return candidate_locator
+    return None
+
+
+def _flow_action_target_label(action: dict[str, Any]) -> str:
+    locator = _flow_action_locator(action)
     if not isinstance(locator, dict):
+        resolved = action.get("resolved_candidate")
+        if isinstance(resolved, dict):
+            source = resolved.get("source")
+            if isinstance(source, dict):
+                candidate_id = str(source.get("candidate_id") or "").strip()
+                if candidate_id:
+                    return f"resolved_candidate={candidate_id}"
         return ""
     kind = str(locator.get("kind") or "")
     if kind == "role":
@@ -1370,7 +1395,7 @@ def _collect_flow_a11y(
                         action_def.get("plan_step_id") or ""
                     ).strip() or None
                     target = _flow_action_target_label(action_def)
-                    locator_spec = action_def.get("locator")
+                    locator_spec = _flow_action_locator(action_def)
                     condition = action_def.get("condition")
                     value = action_def.get("value", "")
                     if not act:

@@ -9,6 +9,7 @@ from pydantic import Field, model_validator
 from browser_worker.contracts.browser_observation import (
     CandidateRef,
     LocatorSpec,
+    TrustedResolvedCandidate,
     validate_semantic_locator_spec,
 )
 from browser_worker.contracts.dsl import DSLModel
@@ -45,14 +46,26 @@ class ExploreFlowAction(DSLModel):
     plan_step_id: str | None = Field(default=None, min_length=1, max_length=64)
     locator: LocatorSpec | None = None
     candidate_ref: CandidateRef | None = None
+    resolved_candidate: TrustedResolvedCandidate | None = None
     condition: ExploreFlowWaitCondition | None = None
     value: str | None = None
     timeout_ms: int | None = Field(default=None, ge=1, le=60000)
 
     @model_validator(mode="after")
     def validate_target_and_condition(self) -> ExploreFlowAction:
-        if (self.locator is None) == (self.candidate_ref is None):
-            raise ValueError("provide exactly one of locator or candidate_ref")
+        provided = sum(
+            field is not None
+            for field in (
+                self.locator,
+                self.candidate_ref,
+                self.resolved_candidate,
+            )
+        )
+        if provided != 1:
+            raise ValueError(
+                "provide exactly one of locator, candidate_ref, "
+                "or resolved_candidate"
+            )
         if self.locator is not None:
             validate_semantic_locator_spec(self.locator)
         if self.action in {"click", "input"} and self.plan_step_id is None:
@@ -90,7 +103,7 @@ class ExploreFlowArguments(DSLModel):
     @model_validator(mode="after")
     def validate_versioned_targets(self) -> ExploreFlowArguments:
         if self.schema_version == "grounding.query.v1" and any(
-            action.candidate_ref is not None
+            action.candidate_ref is not None or action.resolved_candidate is not None
             for step in self.steps
             for action in step.actions
         ):
