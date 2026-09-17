@@ -56,6 +56,51 @@
 
 ## 任务记录
 
+## 2026-09-17 | 按计划修复全部 open 问题并提交本地 main（A/B/C/D 四线）
+
+- 任务：按 `docs/plan/2026-09-14-open-bugs-fix-plan.md` 修复 `docs/bug-log.md` 全部 open 问题，门禁全绿后提交本地 `main`，并询问是否推送 GitHub。
+- 操作：
+  1. **A1（BUG-198/197/188 断链闭合）**：`browser-worker/src/browser_worker/exploration/page_explorer.py#_collect_flow_a11y` 主执行路径改用 `_flow_action_locator`（优先顶层 `locator`，回退 `resolved_candidate.locator`），使 Go 水合后的 `resolved_candidate` 动作不再抛 `ValueError`；新增 `_flow_action_locator` 单测与 `_collect_flow_a11y` 集成测试。
+  2. **A2（BUG-195 动态轮数）**：`agent.Loop` 支持按轮查询/调整预算的 `turnsRemaining` 回调；harness 在 TaskPlan 更新后把预算提升为 `步数×2+reserve`；`config.go` 默认 `AGENTSERVICE_MAX_TURNS` 从 12 提到 24。
+  3. **B1（BUG-192）**：两个 PostgreSQL 集成测试的事件数量断言改为按事件类型分组计数，并对 `research.llm_call` 与 `agent.pipeline.trace` 分别断言存在性。
+  4. **B2（BUG-190）**：README 编译验证命令 `compileall app` → `compileall src`。
+  5. **C1（BUG-186）**：`latestToolError` 只在「最后一条 tool 消息本身失败」时返回，成功结果后置空；max-turn 终态独立报告预算与 TaskPlan 状态，不再拼接历史工具错误。
+  6. **C2（BUG-182）**：新增 `taskplan/condition.go` 结构化 `ConditionIntent`，`compileDraftStep` 对 Plan/DSL 条件逐字段比对，收紧 research-v2 `assert_text`/`wait_for` 的 binding 合同。
+  7. **C3（BUG-181）**：`CreateVersion` 相同 PlanSHA256 返回当前版本（no-op）；新增 `ToolCallLedger` 以 `state_epoch+normalized_signature+outcome` 三重键对全部工具结果（含失败/拒绝）去重。
+  8. **D 线**：BUG-179 回填 `.trae/.../checklist.md` 与 `tasks.md`；BUG-178 注册 `GET /api/v2/corrections/{id}` 只读路由并更新 `docs/api-reference.md`；BUG-177 新增共享 `internal/testpg` 包并在 `config.normalizeDatabaseURL` 统一 postgres DSN `timezone=UTC`；BUG-167 `openai.go` 增加 attempt deadline、流式 watchdog、Retry-After 上限与调用级熔断；BUG-155 新增 Run 级成本熔断（max model calls / max total tokens / max transcript bytes，harness 执行期硬门禁 + `RunCostLimitError`）与 provider cache hit/miss 累计聚合（`PipelineCumulativeUsage` 新字段 + `agent-pipeline-trace.v1.schema.json` 更新）。
+- 结果：A/B/C/D 全部 open 问题代码层修复落地；本地测试库 `ai_web_testing` 因旧 schema 重建并重新迁移后，PG 相关测试全部恢复通过。
+- 验证：`go build ./...`、`go vet ./...`、`go test -count=1 ./...`（含 `TEST_DATABASE_URL` 指向重建后的 `ai_web_testing`）全绿；Python `pytest tests -q --ignore=tests/integration` 195 passed / 1 failed / 2 skipped（唯一失败为既有的 Windows 路径分隔符问题 `FinalDOMArtifactTest::test_attaches_final_dom_snapshot_to_last_step`，记录在案不属本轮范围）；Frontend `npm run build` + `npm test -- --run`（4 文件 11 用例）全绿；`git diff --check` 无空白错误。
+- 后续：live E2E（需 DeepSeek + Chromium）尚未复跑，BUG-198/197/188 保持 open（代码已闭合、待实跑验收）；已按提交策略将改动拆分为 A1/A2/B1+B2/C1/C2/C3/D 多个 commit 提交本地 `main`，待用户确认是否 `git push origin main`。
+
+## 2026-09-14 | 未修复问题整体修复方案（先方案后实施）
+
+- 任务：梳理 `docs/bug-log.md` 最新的 open 问题，核实根因并输出可执行的修复方案（用户要求先只出方案、不改业务代码）。
+- 操作：
+  1. 通读 BUG-198/197/195/188/192/190/186/182/181 等相关代码：`backend-go/internal/agent/tool_result.go`（selectable_candidates、isSemanticName、observationLabel）、`internal/tools/browser.go`（hydrateCandidateReferences）、`internal/observation/observation_reader.go`、`internal/harness/{harness,policy}.go`、`internal/agent/loop.go`、`internal/config/config.go`、`internal/taskplan/{service,compiler}.go`，以及 `browser-worker/src/browser_worker/exploration/page_explorer.py`、`contracts/browser_capabilities.py`。
+  2. 核实 BUG-198 修复链路的完整性与闭合性。
+- 结果（关键发现）：
+  1. **BUG-198 修复在 Python 执行层断链**：Go 端已把模型提交的 `candidate_ref` 水合成 `resolved_candidate`（`browser.go:443-444` 删除 candidate_ref、写入 resolved_candidate），worker 合同层也已允许三选一；但主执行路径 `_collect_flow_a11y`（`page_explorer.py:1398`）仍只读顶层 `locator` 字段，新增的 `_flow_action_locator`（支持 `resolved_candidate.locator` 回退）只在日志标签函数里被调用——任何带 candidate_ref 的动作都会抛 `ValueError("explore_flow actions require a structured semantic locator")`，live E2E 复跑必然失败。
+  2. BUG-195 根因确认：`config.go` 默认 12 轮固定上限，12 步用例每步需 probe+query，轮数必然不足。
+  3. BUG-186 根因确认：`loop.go#latestToolError` 从 transcript 尾部取历史失败文本拼入 max-turn 终态错误，成功工具结果未清除。
+  4. BUG-192/190 为低成本文档/测试问题，位置已定位（两个 PG 测试文件、README.md:307）。
+- 验证：静态核实全部相关文件；未运行测试、未改业务代码（用户选择先出方案）。方案文档含每条的修复动作、测试计划与验收口径。
+- 后续：产出 `docs/plan/2026-09-14-open-bugs-fix-plan.md`；按用户选择的提交策略，在 A1 断链修复等实施后提交到本地 main 并询问是否推送 GitHub。
+
+## 2026-09-14 | 按 a11y 方向修复图标/空名控件 grounding（selectable_candidates 契约 + 墙钟预算）
+
+- 任务：按用户确认的方向（相信 a11y 树足够、max-turns 非主因），定位并修复 Agent 无法收敛多步用例的根因，一次性落地 4 项改进。
+- 操作：
+  1. 排查定位：通读 Go Harness/Policy/结果摘要与 Python explore/observation 采集链路，确认「采集端已产出图标按钮的 count=1 CSS 候选」，根因在「模型摘要把可访问名渲染成字形 `\uf002`、candidate_id 埋三层嵌套、提示词未指向可复制候选」。
+  2. 用两个并行 subagent 分发实现：subagent-A 改 `internal/agent`（标签回退 + selectable_candidates 一等公民）；subagent-B 改 `harness/config/main`（提示词补丁 + 探索预算墙钟校准/可配置）。
+  3. 统一全量门禁 `go build/vet/test ./...` 验证。
+- 结果（四项改动均落地且通用、无站点硬编码）：
+  1. `observationLabel` 增加 `isSemanticName` 判定，字形/空名回退 DOM id/role/tag，`candidate_coverage`/`selectable_candidates` 显示可读标签。
+  2. `observation.selectable_candidates`（上限 64）每项携带完整 `grounding.candidate-ref.v1` candidate_ref，模型可整段复制进 `explore_flow`。
+  3. grounding 提示词明确 selectable_candidates 用法、图标控件走 count=1 候选、禁止靠 set_task_plan 重置预算。
+  4. 探索预算新增墙钟 deadline 门禁（env `AGENTSERVICE_MAX_WALL_TIME_SECONDS` / `AGENTSERVICE_EXPLORE_RESERVE_SECONDS`），避免 count 预算未满但墙钟先到。
+- 验证：`go build ./...`、`go vet ./...`、`go test -count=1 ./...` 全绿；含 9 项新增聚焦测试（label 回退、candidate_ref 完整、截断计数、提示词断言、墙钟 gate、config 解析）。
+- 后续：需在具备 DeepSeek + Chromium 的环境复跑 `run_agentic_e2e.py --acceptance-spec …/automationexercise-blue-top-cart.v1.json` 做 live 复验；本轮未改 Python 与前端。
+
 ## 2026-09-14 | 同步 GitHub 并复跑 Agentic E2E 验证 BUG-196 修复
 
 - 任务：将「删除 groundingplan 影子状态机 + query_observation」改动同步到 GitHub，并复跑 automationexercise「Blue Top 加购」Agentic E2E 验证 BUG-196 修复效果。

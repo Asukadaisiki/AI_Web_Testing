@@ -275,10 +275,10 @@
 - [ ] Task 6.6：将任务编排从 exploration 中分离为 Agent 状态机。
   - [x] `explore_flow` 每次使用 disposable probe context，探索副作用不跨调用或进入正式执行。
   - [x] 模型可见摘要标记 `execution_scope=isolated_probe`、`state_persisted=false`，并保留 `executed_effects` 供分析。
-  - [ ] 定义版本化 Task Plan/PlanStep，由其表达动作、顺序、参数和预期次数。
-  - [ ] `explore_page` / `explore_flow` 只绑定 PlanStep 做 feasibility、grounding 和 verification，不得隐式修改计划。
-  - [ ] `generate_dsl` 必须绑定 Task Plan version/hash；动作、顺序或次数改变时创建显式 Plan revision。
-  - [ ] 增加数量 1、数量 2、多商品、重复 probe、失败后 plan revision 的状态机回归。
+  - [x] 定义版本化 Task Plan/PlanStep，由其表达动作、顺序、参数和预期次数。
+  - [x] `explore_page` / `explore_flow` 只绑定 PlanStep 做 feasibility、grounding 和 verification，不得隐式修改计划。
+  - [x] `generate_dsl` 必须绑定 Task Plan version/hash；动作、顺序或次数改变时创建显式 Plan revision。
+  - [x] 增加数量 1、数量 2、多商品、重复 probe、失败后 plan revision 的状态机回归。
   - [ ] 实现 Context Materializer：稳定前缀为 system/tool schema/Goal/Task Plan，动态窗口仅包含当前 PlanStep、最新 observation delta、未解决 failure 和 recovery decision。
   - [ ] 完整 A11y/DOM/report/history 留在事实存储，模型只接收结构化摘要、artifact ref 和 content hash。
   - [ ] 增加压缩不变量与缓存指标：Goal、步骤顺序/次数、未解决失败、审批和 evidence binding 不得丢失；记录各层字节数及 cache hit/miss。

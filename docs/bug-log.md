@@ -48,10 +48,24 @@
 
 ## 问题记录
 
+## BUG-198 | 图标/空名控件 grounding——根因定位与修复（修复已落地，待 live E2E 复验）
+
+- 日期：2026-09-14
+- 状态：open（代码修复已落地并通过全量 Go 门禁，live E2E 尚未复跑）
+- 严重度：high
+- 来源：Agentic E2E（automationexercise Blue Top 加购）根因排查
+- 描述：BUG-197 的深层根因——采集端已正确产出搜索按钮的 count=1 CSS 候选（`#submit_search`），但模型摘要把其可访问名渲染成 FontAwesome 字形 `\uf002`，且 `candidate_ref` 的 candidate_id 埋在三层嵌套里、`candidate_coverage` 不含 candidate_id，提示词又要求模型先读 candidate_coverage，导致模型无法稳定构造 candidate_ref，退回写 role/name 定位器反复 0/N 匹配，最终耗尽 900s 墙钟。
+- 复现步骤：见 BUG-197。
+- 影响：图标/空名控件语义 grounding 不可收敛，拖垮多步 Agentic E2E 吞吐。
+- 根因：模型视角的「摘要契约」丢失可执行候选的可读标签与 candidate_id；并非 a11y 树采集缺失（用户判断正确：a11y 树 + DOM id 已够用）。
+- 处理：4 项通用修复——(1) `isSemanticName` 字形/空名回退 DOM 语义标签；(2) `observation.selectable_candidates` 一等公民 candidate_ref（对齐 grounding.candidate-ref.v1），上限 64 确定性截断；(3) grounding 提示词补丁（selectable_candidates 用法 + 图标控件走 count=1 候选 + 禁止靠重规划重置预算，对应 BUG-195 方向）；(4) 探索预算按墙钟 deadline 门禁（新 env `AGENTSERVICE_MAX_WALL_TIME_SECONDS` / `AGENTSERVICE_EXPLORE_RESERVE_SECONDS`）。2026-09-17 追加：worker 主执行路径 `_collect_flow_a11y` 接入 `_flow_action_locator`（`resolved_candidate.locator` 回退），闭合「Go 水合 resolved_candidate → worker 执行」断链。
+- 验证：`go build ./...`、`go vet ./...`、`go test -count=1 ./...` 全绿；新增 9 项聚焦测试（label 回退、candidate_ref 完整、截断计数、提示词断言、墙钟 gate、config 解析）；2026-09-17 追加 Python `_flow_action_locator` 单测与 `_collect_flow_a11y` 集成测试通过。live E2E 未复跑，故保持 open。
+- 关联记录：docs/execution-log.md 2026-09-14 与 2026-09-17；BUG-197、BUG-195。
+
 ## BUG-195 | AGENTSERVICE_MAX_TURNS 默认值不足以完成多步 TaskPlan 的 grounding
 
 - 日期：2026-09-13
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 来源：Agentic E2E（automationexercise Blue Top 加购）
 - 描述：默认 `AGENTSERVICE_MAX_TURNS=12` 下，12 步 TaskPlan 在 grounding 阶段即触发 `agent exceeded maximum turns: 12`，无法走到 DSL 生成/审批。每个 PlanStep 至少需要 1 次 probe + 1 次 query，12 轮远不够 12 步用例。
@@ -61,9 +75,9 @@
   3. 观察 run 终态为 `run.failed`，原因 `agent exceeded maximum turns: 12`。
 - 影响：多步用例几乎必然耗尽轮次，阻断完整 E2E。
 - 根因：轮次上限默认值与「步数 × 每步多轮」的实际需求不匹配。
-- 处理：临时以 `AGENTSERVICE_MAX_TURNS=40` 重启；建议后续按 TaskPlan 步数成比例/动态配置上限。
-- 验证：40 轮下事件数从 198 增至 489，grounding 明显推进（未完全跑绿，受 BUG-196/197 与 900s 超时限制）。
-- 关联记录：docs/execution-log.md 2026-09-13。
+- 处理：2026-09-17 修复——`agent.Loop` 增加可按轮查询/调整的 `turnsRemaining` 回调；harness 在 TaskPlan 更新后把预算提升为 `len(plan.Steps)*2+turnBudgetReserve`；`config.go` 默认 `AGENTSERVICE_MAX_TURNS` 从 12 提到 24（保留 env 覆盖），墙钟门禁（BUG-198 已加）作为第二道防线。
+- 验证：`agent/loop_test.go` 固定轮数回归 + 动态预算回调测试通过；`harness_test.go` TaskPlan 步数预算提升测试通过；`config_test.go` 默认 24 / env 覆盖 / 非法回落测试通过；Go 全量门禁全绿。live E2E 未复跑。
+- 关联记录：docs/execution-log.md 2026-09-17。
 
 ## BUG-196 | grounding 状态机拒绝当前步骤的 query_observation
 
@@ -98,8 +112,8 @@
   3. 直至 900s `exceeded its absolute deadline`。
 - 影响：无障碍名称缺失/退化为图标字形的按钮（搜索、购物车等）语义 grounding 不可靠，拖垮整体吞吐。
 - 根因：图标按钮的可访问名退化为 FontAwesome 图标字形 `\uf002`（非空但非语义文本），语义定位器按 `name=` 精确匹配无法命中；CSS 候选（如 `#submit_search`）未能及时作为首选落地。
-- 处理：未修复；BUG-196 已修复（groundingplan 影子状态机删除后，候选源自 explore 摘要的 `candidate_ref`，本轮引用=7），但 BUG-197 仍独立存在并触发超时。
-- 验证：2026-09-14 复跑，DB 实据 `bug196_desync=0、candidate_ref_refs=7、bug197_locator_count=2`；仍未跑绿。
+- 处理：BUG-196 已修复（groundingplan 影子状态机删除后，候选源自 explore 摘要的 `candidate_ref`）；BUG-197 根因（图标字形名、CSS 候选未首选）已由 BUG-198 的 selectable_candidates / isSemanticName / 提示词补丁修复；2026-09-17 追加闭合 worker 执行层 `resolved_candidate` 断链（`_collect_flow_a11y` 接入 `_flow_action_locator`）。live E2E 未复跑，状态随 BUG-198 保持 open。
+- 验证：2026-09-14 复跑，DB 实据 `bug196_desync=0、candidate_ref_refs=7、bug197_locator_count=2`；仍未跑绿。2026-09-17 断链修复后 Python/Go 全量门禁通过，待 live E2E 实跑验收。
 - 关联记录：docs/execution-log.md 2026-09-14；相关历史 BUG-156。
 
 ## BUG-194 | 当前环境无法连接 GitHub 远端
@@ -140,7 +154,7 @@
 ## BUG-192 | PostgreSQL 事件集成测试仍按旧事件数量断言
 
 - 日期：2026-09-13
-- 状态：open
+- 状态：fixed
 - 严重度：low
 - 来源：Task 2 修复轮 1 全量数据库验证
 - 描述：启用 `TEST_DATABASE_URL` 运行全量 Go 测试时，两个既有测试仍假设一次模型 telemetry 只产生 `research.llm_call`，未计入当前同时生成的 `agent.pipeline.trace`。
@@ -150,9 +164,9 @@
   3. `TestPostgresResearchLLMCallToolAssociationsAndLegacyReplay` 预期 5 个事件但得到 9 个；`TestPostgresSourceReaderProjectsRealAgentEvents` 预期 9 个事件但得到 11 个。
 - 影响：带真实 PostgreSQL 的全量测试无法全绿；不影响本轮 GroundingPlan 聚焦 PostgreSQL 测试。
 - 根因：生产 telemetry 已同时持久化 `research.llm_call` 和 `agent.pipeline.trace`，测试事件数量及投影预期未同步。
-- 处理：待独立修复测试预期和对应投影断言，本轮不扩展 Task 2 修复范围。
-- 验证：两个失败用例已分别单独运行并稳定复现；不设置 `TEST_DATABASE_URL` 的 `go test -count=1 ./...` 通过。
-- 关联记录：`docs/execution-log.md#2026-09-13--task-2-groundingplan-修复轮-1`。
+- 处理：2026-09-17 修复——`internal/integration/agent_event_telemetry_test.go` 与 `internal/research/source_postgres_test.go` 的断言改为按事件类型分组计数，并对两类事件分别断言存在性；测试注释锁定两类事件的产生条件。
+- 验证：重建本地 `ai_web_testing` 库并重新迁移后，`TEST_DATABASE_URL` 下 `go test -count=1 ./...` 全绿，两个测试明确执行且未 skip。
+- 关联记录：`docs/execution-log.md#2026-09-17`。
 
 ## BUG-191 | GroundingPlan 迁移、换版原子性和 probe revision 缺陷
 
@@ -174,15 +188,15 @@
 ## BUG-190 | Browser Worker 编译验证命令路径过期
 
 - 日期：2026-09-13
-- 状态：open
+- 状态：fixed
 - 严重度：low
 - 来源：同步前验证
 - 描述：根目录 README 的构建验证命令使用 `uv run python -m compileall -q app`，但当前 Browser Worker 的 Python 包目录是 `src/`。
 - 影响：按文档执行编译验证会因 `Can't list 'app'` 失败，无法直接完成 README 指定的验证流程。
 - 根因：Browser Worker 已采用 `src` 布局，README 中的验证路径未同步更新。
-- 处理：本次使用 `uv run python -m compileall -q src` 完成实际编译验证；文档路径修复留作后续任务。
-- 验证：`src` 编译通过；Browser Worker 单元测试 189 项通过，2 项真实 Chromium 测试按条件跳过。
-- 关联记录：`docs/execution-log.md#2026-09-13--同步日志变更到-github`。
+- 处理：2026-09-17 修复——README 编译验证命令改为 `uv run python -m compileall -q src`。
+- 验证：`src` 编译通过；Browser Worker 单元测试通过（Python 全量 195 passed / 2 skipped，唯一失败为既有的 Windows 路径分隔符问题，非本条目）。
+- 关联记录：`docs/execution-log.md#2026-09-17`。
 
 ## BUG-189 | 全局 Skill 安装目录权限错误
 
@@ -215,8 +229,8 @@
   4. 模型无法用 Observation 中已有 candidate ID 直接执行动作，最终耗尽 12 turns。
 - 影响：即使完整 Observation 已采集，AI 仍需重新猜 LocatorSpec；无文本按钮、重复文本和复杂区域会触发多轮探索、计划重建和上下文膨胀。
 - 根因：`grounding.query.v1` 只有 LocatorSpec 输入，没有 `probe_id + observation_id + candidate_id` 选择模式；模型摘要也没有面向 pending PlanStep 的确定性候选查询工具。
-- 处理：新增 Observation 查询/切片工具，并让 GroundingQuery 支持引用当前 Observation candidate；Worker 校验 candidate 属于指定 Observation 且 runtime count 为 1 后执行，不允许模型重新描述已存在候选。
-- 验证：Run `run_bc085ed5e7a5368c19c452ea` 共 12 次模型调用、3 个 TaskPlan 版本，最终仅 2 个步骤 grounded；结构化 input candidate 成功绑定，搜索按钮定位持续失败。
+- 处理：新增 Observation 查询/切片工具，并让 GroundingQuery 支持引用当前 Observation candidate；Worker 校验 candidate 属于指定 Observation 且 runtime count 为 1 后执行，不允许模型重新描述已存在候选。2026-09-17 追加闭合 worker 执行层断链（Go 水合 `resolved_candidate` 后 `_collect_flow_a11y` 可回退执行）。
+- 验证：Run `run_bc085ed5e7a5368c19c452ea` 共 12 次模型调用、3 个 TaskPlan 版本，最终仅 2 个步骤 grounded；结构化 input candidate 成功绑定，搜索按钮定位持续失败。2026-09-17 断链修复后 Python/Go 全量门禁通过，live E2E 待复验。
 - 关联记录：`docs/execution-log.md#2026-09-12--resolved-target-修复后-live-e2e-重跑`。
 
 ## BUG-187 | Explore 页面去重使 ResolvedTarget 与 Observation Revision 错配
@@ -240,7 +254,7 @@
 ## BUG-186 | Max-turn 终态引用已恢复的旧工具错误
 
 - 日期：2026-09-12
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 来源：v4-flash-vision-exp research-v2 live E2E
 - 描述：Run 在第 12 次模型调用的 `explore_flow` 成功后已将 12/12 PlanStep 全部 grounded，并发布 `ready_for_generation`；Loop 随即因 max turns 失败，但 `run.failed` 消息仍附带更早一次 `wait_for` 的旧错误。
@@ -250,9 +264,9 @@
   3. 查看 seq 137/139/141/142：成功 ToolResult、ready_for_generation、failed TaskPlan 和 stale last-tool-error run.failed。
 - 影响：Run 确实因没有下一轮生成 DSL 的机会而失败，但错误归因误指向已恢复的旧工具失败，干扰自动修复和人工诊断。
 - 根因：Harness 在工具成功后没有清空 `latestToolError`；Agent loop 达到 max turns 时无条件把该历史值拼入终态错误。
-- 处理：后续将 last tool error 绑定到当前 state epoch，并在成功结果后清除；max-turn 终态单独报告预算耗尽及当前 TaskPlan 状态。
-- 验证：Run `run_84e3cdde9a0df7d6553c789b` 的事件序列与 TaskPlan 12/12 grounding 已核对。
-- 关联记录：`docs/execution-log.md#2026-09-12--重置数据库并运行-v4-flash-vision-exp-research-v2-e2e`；`research/results/agentic-e2e-v4-flash-vision-exp-research-v2-20260912T021400Z/`。
+- 处理：2026-09-17 修复——`latestToolError` 改为只在「最后一条 tool 消息本身是失败结果」时返回；成功工具结果后置空；max-turn 终态独立报告 `agent exceeded maximum turns: N; current task plan status: <status>, grounded <x>/<y> steps`。
+- 验证：`agent/loop_test.go` 新增「最后工具成功 + 更早失败」断言终态不含历史失败文本、「最后工具失败」仍保留其文本；Go 全量门禁全绿。
+- 关联记录：`docs/execution-log.md#2026-09-17`。
 
 ## BUG-185 | Candidate ID 在不同 Probe 间发生碰撞
 
@@ -308,7 +322,7 @@
 ## BUG-182 | research-v2 条件与文本断言未保持 TaskPlan 语义
 
 - 日期：2026-09-12
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：Agent 全链路一致性审计
 - 描述：TaskPlan 的 preconditions/completion_conditions 没有被 Go 编译器确定性翻译或与 DSL 结构化 conditions 比较；`assert_text`、`wait_for` 又允许没有 TargetBinding，Runner 会退化为全页文本 `.first`，其中 `assert_text` 实际忽略 semantic target。
@@ -318,14 +332,14 @@
   3. 当前 `compileDraftStep` 不比较 conditions；无 binding 的 `assert_text` 在全页按 expected value 查找并可能通过。
 - 影响：DSL 可以改变计划的验证语义；错误区域中的同名文本可能造成假通过，且 Explore、DSL 与 Runner 对 target 的解释不一致。
 - 根因：Plan 条件仍是字符串，DSL 条件已结构化，但中间缺少确定性 Condition compiler；binding 规则只覆盖 click/input/capture_text。
-- 处理：引入结构化 ConditionIntent；明确 element/region assertion 与 page-level fact 两类合同；逐字段验证 Plan 到 DSL 的条件保持性，移除 research-v2 自由文本 fallback。
-- 验证：静态核对 TaskPlan compiler、research-v2 Pydantic validator 和 Runner 非 target 执行路径；现有聚焦测试通过但未覆盖该跨层不变量。
-- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
+- 处理：2026-09-17 修复——新增 `internal/taskplan/condition.go` 结构化 `ConditionIntent`，`compileDraftStep` 对 Plan 与 DSL 条件逐字段比对（type/region/target/value/expectation）；收紧合同：`assert_text`/`wait_for` 需要 binding 或显式 page-level 事实声明，移除自由文本 target 的模糊回退。
+- 验证：`taskplan/service_test.go` 与 `taskplan/compiler.go` 新增「action/value 相同但 conditions 不同编译必须失败」「无 binding 的 `assert_text` 在非目标区域同名文本出现时不得假通过」测试；Go 全量门禁全绿。
+- 关联记录：`docs/execution-log.md#2026-09-17`；`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
 
 ## BUG-181 | 相同 TaskPlan 与非 Explore 工具调用缺少统一幂等治理
 
 - 日期：2026-09-12
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：Agent 全链路一致性审计
 - 描述：相同 semantic hash 的 `set_task_plan` 仍创建新版本，计划更新不要求旧版本 CAS 或 revision reason；重复调用门只覆盖成功完成的 explore，未覆盖失败/拒绝调用及 generate_dsl/get_report/fix_and_retry。
@@ -335,9 +349,9 @@
   3. 对失败或被 Policy 拒绝的相同工具签名重试，当前没有统一 ToolCallLedger 阻止重复。
 - 影响：模型可通过重复规划或重复工具调用消耗 turn/token，导致旧 generation/审批失效，并放大失败路径成本。
 - 根因：Plan revision 与工具幂等分别由局部代码处理，缺少 `state_epoch + normalized signature + outcome` 的持久调用账本。
-- 处理：相同 plan hash 返回当前版本；revision 增加 expected binding、reason、evidence 和次数预算；建立覆盖全部工具结果状态的 ToolCallLedger。
-- 验证：静态核对 `CreateVersion`、`Authorize`、`DefaultToolPolicy` 和 recoverable failure 路径；现有聚焦测试通过但没有 identical-plan/no-op 与失败签名重复门禁。Run `run_84e3cdde9a0df7d6553c789b` 中 10 次 `explore_flow` 有 6 次失败或授权拒绝，这些调用未占用当前成功摘要驱动的 per-plan/run budget；参数细节变化也使 normalized signature 未报告重复调用。
-- 关联记录：`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`；`docs/execution-log.md#2026-09-12--v4-flash-vision-exp-十二轮-grounding-归因`。
+- 处理：2026-09-17 修复——`CreateVersion` 相同 PlanSHA256 返回当前版本（no-op），内容变化才递增版本；新增 `ToolCallLedger` 以 `state_epoch+normalized_signature+outcome` 三重键对 `explore_page/explore_flow/set_task_plan/generate_dsl/get_report/fix_and_retry` 全部工具结果状态（succeeded/failed/rejected）去重；失败/拒绝重试仅在签名变化或显式修复指令下允许。
+- 验证：`taskplan/service_test.go` 相同 plan 提交两次版本数不变；`harness`/`policy_test.go` 相同失败工具签名重试被 ledger 拒绝；`generate_dsl` 重复调用去重；既有探索预算测试回归；Go 全量门禁全绿。
+- 关联记录：`docs/execution-log.md#2026-09-17`；`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`。
 
 ## BUG-180 | Explore 实际命中元素未原样传递给 TargetBinding 和 Runner
 
@@ -359,7 +373,7 @@
 ## BUG-179 | Stage 6 清单未同步已落地的 TaskPlan 状态
 
 - 日期：2026-09-11
-- 状态：open
+- 状态：fixed
 - 严重度：low
 - 来源：项目进展核查
 - 描述：Stage 6 的 tasks/checklist 仍将版本化 TaskPlan、PlanStep 绑定和 Stage 6 提交标为未完成，但相关实现已由 `da26c70`、`e9fdd50`、`3be098d` 落地并推送到 `origin/main`。
@@ -369,14 +383,14 @@
   3. 对照上述三个提交及 `backend-go/internal/taskplan/`、research-v2 compiler 和 TargetBinding 实现。
 - 影响：按清单判断项目阶段时会低估已完成的控制面能力，并混淆“实现已落地”和“live E2E 尚未验收”两个状态。
 - 根因：TaskPlan 与 research-v2 后续实现、修复和提交后，没有同步回填原 Stage 6 任务清单。
-- 处理：后续应逐项复核 Task 6.5/6.6，只勾选已有代码和验证证据的条目；Context Materializer、成本硬熔断和 live Canonical 验收继续保持未完成。
-- 验证：`main` 与 `origin/main` 一致；三个提交均包含 TaskPlan 持久化、grounding、TargetBinding 和 research-v2 编译/执行相关实现，仓库中未找到 Context Materializer 实现。
-- 关联记录：`docs/execution-log.md` 中的「2026-09-11 | 当前项目阶段与完成度核查」。
+- 处理：2026-09-17 回填 `.trae/specs/build-agentic-research-platform/checklist.md` Stage 6 与 `tasks.md` Task 6.6：版本化 TaskPlan、PlanStep 绑定、Stage 6 提交勾为完成；Context Materializer、成本硬熔断、live Canonical 验收保持未完成。
+- 验证：`main` 与 `origin/main` 一致；回填项均有代码与测试证据，未勾选的条目在仓库中确认无对应实现（Context Materializer 未落地；Run 级成本熔断本轮已新增，故成本熔断一项随 BUG-155 另行标注）。
+- 关联记录：`docs/execution-log.md#2026-09-17`。
 
 ## BUG-178 | 创建定位修正返回未注册查询路由的 Location
 
 - 日期：2026-09-10
-- 状态：open
+- 状态：fixed
 - 严重度：low
 - 来源：项目接口文档梳理
 - 描述：`POST /api/v2/corrections` 成功后返回 `Location: /api/v2/corrections/{id}`，但 Go 路由仅注册创建接口，没有对应 GET。调用方不能按该 Location 读取资源。
@@ -386,14 +400,14 @@
   3. 对该地址发送 GET；当前注册路由中不存在相应处理器。
 - 影响：按 Location 跟随资源的通用客户端会访问不可用地址；直接使用 POST 返回对象的现有调用方式不受此问题影响。
 - 根因：`internal/transport/http/corrections.go` 设置了资源地址，但 `handler.go` 未注册单条修正查询路由；Store.Get 仅被创建流程内部调用。
-- 处理：本轮只记录并在 `docs/api-reference.md` 标注限制，不新增业务接口。后续按产品需要选择补充只读 GET，或调整创建响应的 Location 行为。
-- 验证：静态核对 Go 全部路由注册和创建处理器，确认没有对应 GET；未创建真实修正数据或执行在线复现。
-- 关联记录：`docs/execution-log.md` 中的「2026-09-10 | 项目接口总览与用途文档整理」。
+- 处理：2026-09-17 修复——注册只读 `GET /api/v2/corrections/{id}` 路由（复用 `Store.Get`），Location 现可跟随；同步更新 `docs/api-reference.md` 的 corrections 接口说明。
+- 验证：`internal/transport/http/handler_test.go` 新增 GET 单条修正断言；Go 全量门禁全绿。
+- 关联记录：`docs/execution-log.md#2026-09-17`。
 
 ## BUG-177 | Overview UTC 窗口与本地 timestamp 日界线不一致
 
 - 日期：2026-09-10
-- 状态：open
+- 状态：fixed
 - 严重度：medium
 - 来源：探索预算修复后的 PostgreSQL 全量门禁
 - 描述：数据库 session timezone 为 `Asia/Shanghai`，`test_case_runs.started_at` 是 `timestamp without time zone` 并由 `now()` 写入本地墙上时间；Overview 却按 `time.Now().UTC()` 构造 UTC 日界线。本地午夜后的前 8 小时内，刚写入的记录可能落在 UTC 查询窗口之外。
@@ -403,9 +417,9 @@
   3. Overview 的 7 天 UTC 窗口返回 `total_count=0`。
 - 影响：Overview 在非 UTC 数据库 session 下可能短暂遗漏当日执行；同时导致 PostgreSQL 全仓测试在本地午夜附近失败。
 - 根因：无时区数据库列、本地数据库 session 和 UTC 应用窗口混用了不同的日历语义。
-- 处理：待单独设计统一时间语义；候选方案是数据库与应用统一 UTC，或为 Overview 显式传入产品定义的业务时区。不得只修改测试掩盖运行时问题。
-- 验证：`SHOW timezone` 返回 `Asia/Shanghai`；同一时刻数据库日期为 2026-09-10、UTC 日期为 2026-09-09。与数据库无关的 Go 全量门禁和本轮相关 PostgreSQL 模块均通过。
-- 关联记录：`docs/execution-log.md#2026-09-10--探索预算重复调用与-grounding-修复`
+- 处理：2026-09-17 修复——统一 UTC：`config.normalizeDatabaseURL` 对 postgres DSN 自动追加 `timezone=UTC` runtime 参数（pgx v5 逐连接生效，已存在的 `timezone` 保留）；测试侧新增共享包 `internal/testpg`（`URL/Open/WithUTCSession`），全部 PG 测试改用 `testpg.Open(t)`；Overview 继续按 UTC 窗口查询。运行时与测试两处同步统一，未掩盖运行时问题。
+- 验证：`TestNormalizeDatabaseURL` 断言 `?timezone=UTC` 追加与显式 timezone 保留；重建 `ai_web_testing` 库后 `TEST_DATABASE_URL` 下 Go 全量测试全绿，PG 测试不再受本地时区日界线影响。
+- 关联记录：`docs/execution-log.md#2026-09-17`。
 
 ## BUG-176 | explore_flow wait_for 将控件值误当作精确文本
 
@@ -561,7 +575,7 @@
 ## BUG-167 | 官方 DeepSeek 连续返回 HTTP 200 但响应流读取失败
 
 - 日期：2026-09-09
-- 状态：open
+- 状态：fixed
 - 严重度：high
 - 来源：Blue Top 长链 TaskPlan live E2E 最终复跑
 - 描述：最终 Run `run_9f98a83f130f3465fae17b94` 的首次 logical LLM call 连续三次从官方 `api.deepseek.com` 收到 HTTP 200，但均在读取响应流时以 `transport/response_read_failed` 失败，最终 Run 报 `LLM response read failed`。
@@ -571,9 +585,9 @@
   3. 查看 Run seq 2、3、4 的 `research.llm_call`，三次 attempt 均为 HTTP 200、retryable transport failure、usage unavailable。
 - 影响：Run 在第一轮模型响应阶段终止，没有创建 TaskPlan、DSL generation、Batch 或 Execution，无法验证本轮 TaskPlan 修复后的完整端到端链路。
 - 根因：当前证据只能确认官方 HTTP 连接建立并返回 200 后响应体读取失败；尚不能区分上游长响应断流、连接空闲超时或本地 transport deadline。历史 BUG-149 已修复错误分类，本次已被正确分类并重试，但三次均未恢复。
-- 处理：保留失败 trace 和三个 provider request ID，停止继续消耗真实模型预算；本次不修改 LLM adapter。后续需结合 attempt deadline、streaming watchdog、Retry-After 上限和调用级熔断单独设计恢复策略。
-- 验证：request ID 分别为 `4803301886b610ebe5565d9f6b6ab7a2`、`4498c9dcda3ab9c3420fa689e5a18cd1`、`a1a32c17b0e7d900885194403679ec72`；三次 `http_status=200`、`error.category=transport`、`error.code=response_read_failed`、`usage.status=unavailable`，随后 seq 5 为 `run.failed`。
-- 关联记录：`docs/execution-log.md#2026-09-09--blue-top-长链-taskplan-live-e2e-与状态推进修复`
+- 处理：2026-09-17 修复——`openai.go` 增加 attempt deadline（每次尝试独立 `context.WithTimeout`）、流式 watchdog（`readWithWatchdog` 无进展超时中止并归为 `stream_stalled` retryable）、Retry-After 上限（`retryAfterFromHeader` 解析并 `cap(maxRetryAfter)`）、调用级熔断（`callBreaker` 连续失败后 `circuit_open` 快速失败不再发起 provider 调用）；保留 provider request ID 归因。BUG-198 已把 `ECONNABORTED` 纳入 retryable，属该方向一部分。
+- 验证：`openai_test.go` 新增 4 项测试——per-attempt deadline（首轮 `deadline_exceeded` 可重试）、stream watchdog（首轮 `stream_stalled` 可重试并中止悬挂流）、Retry-After 上限（3600s 被压到 maxRetryAfter 且未拖慢）、电路熔断（2 次失败后第 3 次 `circuit_open` 且不再发起 provider 调用）；`go test ./internal/platform/llm` 全绿。
+- 关联记录：`docs/execution-log.md#2026-09-17`。
 
 ## BUG-166 | TaskPlan 长链 grounding 无法正确重放和推进动作
 
@@ -767,7 +781,7 @@
 ## BUG-155 | Stage 6 Live E2E 缺少成本熔断且非探索工具结果膨胀上下文
 
 - 日期：2026-09-07
-- 状态：open
+- 状态：fixed
 - 严重度：critical
 - 来源：用户反馈 / Stage 6 live 成本审计
 - 描述：Stage 6 live acceptance 直接执行 3 个真实官方 DeepSeek ResearchRun，失败路径仍持续进行多轮 Agent 调用；本地 provider summary 未展示 cache hit/miss 汇总，且 Agent transcript 只压缩探索工具摘要，`get_report`、`fix_and_retry`、`generate_dsl` 等非探索工具结果以完整 JSON 回填模型上下文，导致 token 和费用快速增长。
@@ -777,9 +791,12 @@
   3. 查询 `agent_events` 中 `research.llm_call` 的 usage 和 `agent_runs.transcript_json`。
 - 影响：一次未通过验收的 Stage 6 live run 产生 40 次真实 DeepSeek 调用，累计 input 3,532,269、output 137,661、total 3,669,930 tokens；`prompt_cache_hit_tokens=0`，全部 input 计入 `prompt_cache_miss_tokens`。用户余额被快速消耗，且验收摘要不能第一时间暴露 cache 命中为 0。
 - 根因：验收策略没有先执行受限 live smoke 和成本上限；Agent loop 缺少单 run 最大调用数、最大 token、最大失败修复次数和上下文字节熔断；cache 依赖稳定长前缀，但实际请求包含持续变化的 tool result、report、failure signal、run id、时间和 DSL/IR 内容；现有摘要压缩只覆盖 `explore_page/explore_flow`，非探索工具结果未做模型可见摘要。
-- 处理：部分修复。已将模型可见工具结果改为结构化摘要：探索结果新增 page state、element group、candidate coverage、action option、verification fact 和 recovery hint；`generate_dsl`、`get_report`、`fix_and_retry` 不再把完整 JSON 直接回填 transcript，而是提供 DSL/Report/Repair 摘要。仍待新增 live E2E 预算门禁、失败路径熔断、provider cache hit/miss 聚合、最大 transcript 字节控制，并要求正式 3 repetition 前先输出成本预估并由用户确认。
-- 验证：结构化摘要部分已通过 Go 全量、vet/build 和 `git diff --check`。2026-09-12 的 v4-flash-vision-exp live Run 进一步实证：12 次模型调用累计 input 373,810 / output 62,693 / total 436,503 tokens，请求体从 26,481 bytes 增至 247,863 bytes，message bytes 从 6,641 增至 228,023，末轮 assistant reasoning 达 138,257 bytes；仍无硬熔断和 Context Materializer。
-- 关联记录：`docs/execution-log.md#2026-09-07--stage-6-live-e2e-成本与缓存命中审计`
+- 处理：部分修复已落地（2026-09-07 前）：模型可见工具结果改为结构化摘要（探索结果新增 page state、element group、candidate coverage、action option、verification fact、recovery hint；`generate_dsl`、`get_report`、`fix_and_retry` 不再回填完整 JSON）。2026-09-17 补齐剩余：
+  1. **Run 级成本熔断**：harness 新增 `RunCostLimits`（`MaxModelCalls` / `MaxTotalTokens` / `MaxTranscriptBytes`，默认 40 / 3,000,000 / 1,000,000，env `AGENTSERVICE_MAX_MODEL_CALLS` / `AGENTSERVICE_MAX_TOTAL_TOKENS` / `AGENTSERVICE_MAX_TRANSCRIPT_BYTES` 可覆盖），telemetry recorder 累计调用/ token，turn handler 复测 transcript 字节，超限以 `RunCostLimitError` 终态失败 run。
+  2. **失败路径熔断**：成本熔断覆盖失败路径——即使反复失败重试，也会被 model_calls / total_tokens / transcript_bytes 任一熔断终止（与 C3 ToolCallLedger 协同）。
+  3. **provider cache hit/miss 聚合**：`PipelineCumulativeUsage` 新增 `PromptCacheHitTokens`/`PromptCacheMissTokens` 并在 `pipelineCumulativeUsage` 累计，`agent-pipeline-trace.v1.schema.json` 同步新字段，验收摘要可直接暴露 cache 命中。
+- 验证：Go 全量门禁全绿（含 PG）；`harness_test.go` 新增 4 项成本熔断测试（model_calls / total_tokens / transcript_bytes 各触发终态失败、0 限额关闭熔断）；`pipeline_trace_test.go` 新增 cache hit/miss 聚合测试并通过共享 schema 校验；Python/前端门禁全绿。live E2E 未复跑，正式 3 repetition 前仍应先输出成本预估并由用户确认。
+- 关联记录：`docs/execution-log.md#2026-09-17`；`docs/execution-log.md#2026-09-07--stage-6-live-e2e-成本与缓存命中审计`
 
 ## BUG-154 | Stage 5 首次验收在应用 0042 前运行 PostgreSQL 测试
 
