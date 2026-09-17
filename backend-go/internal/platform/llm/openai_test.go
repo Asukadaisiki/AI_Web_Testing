@@ -778,6 +778,20 @@ func TestCompleteRetriesTransientResponseReadFailures(t *testing.T) {
 			wantCategory: "transport",
 			wantCode:     "response_read_failed",
 		},
+		{
+			name:         "connection aborted",
+			readErr:      syscall.ECONNABORTED,
+			cause:        syscall.ECONNABORTED,
+			wantCategory: "transport",
+			wantCode:     "response_read_failed",
+		},
+		{
+			name:         "unexpected eof",
+			readErr:      io.ErrUnexpectedEOF,
+			cause:        io.ErrUnexpectedEOF,
+			wantCategory: "transport",
+			wantCode:     "response_read_failed",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1204,3 +1218,158 @@ type timeoutReadError struct{}
 func (timeoutReadError) Error() string   { return "read timeout" }
 func (timeoutReadError) Timeout() bool   { return true }
 func (timeoutReadError) Temporary() bool { return true }
+
+func TestCompleteAppliesPerAttemptDeadline(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			time.Sleep(300 * time.Millisecond)
+			http.Error(writer, "too slow", http.StatusInternalServerError)
+			return
+		}
+		_, _ = writer.Write([]byte(`{
+			"model":"resolved",
+			"choices":[{"finish_reason":"stop","message":{"content":"done"}}]
+		}`))
+	}))
+	defer server.Close()
+
+	client, _ := NewOpenAIClient("gateway", server.URL, "secret", "model", time.Minute)
+	client.attemptTimeout = 80 * time.Millisecond
+	client.maxAttempts = 2
+	client.retryDelay = 0
+	response, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{Role: "user", Content: "x"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if calls.Load() != 2 || len(response.Telemetry.Attempts) != 2 {
+		t.Fatalf("calls = %d, attempts = %d", calls.Load(), len(response.Telemetry.Attempts))
+	}
+	failed := response.Telemetry.Attempts[0]
+	if failed.Error == nil ||
+		failed.Error.Code != "deadline_exceeded" ||
+		!failed.Error.Retryable {
+		t.Fatalf("failed attempt = %#v, want retryable deadline_exceeded", failed)
+	}
+}
+
+func TestCompleteStreamWatchdogAbortsStalledResponse(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if calls.Add(1) == 1 {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write([]byte(`{"model":"resolved","choices":[`))
+			writer.(http.Flusher).Flush()
+			// Stall until the watchdog aborts the client read; the request
+			// context is canceled when the client closes the connection.
+			<-request.Context().Done()
+			return
+		}
+		_, _ = writer.Write([]byte(`{
+			"model":"resolved",
+			"choices":[{"finish_reason":"stop","message":{"content":"done"}}]
+		}`))
+	}))
+	defer server.Close()
+
+	client, _ := NewOpenAIClient("gateway", server.URL, "secret", "model", time.Minute)
+	client.streamWatchdog = 80 * time.Millisecond
+	client.maxAttempts = 2
+	client.retryDelay = 0
+	response, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{Role: "user", Content: "x"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if calls.Load() != 2 || len(response.Telemetry.Attempts) != 2 {
+		t.Fatalf("calls = %d, attempts = %d", calls.Load(), len(response.Telemetry.Attempts))
+	}
+	failed := response.Telemetry.Attempts[0]
+	if failed.Error == nil ||
+		failed.Error.Code != "stream_stalled" ||
+		!failed.Error.Retryable {
+		t.Fatalf("failed attempt = %#v, want retryable stream_stalled", failed)
+	}
+}
+
+func TestCompleteCapsRetryAfterDelay(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			writer.Header().Set("Retry-After", "3600")
+			http.Error(writer, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = writer.Write([]byte(`{
+			"model":"resolved",
+			"choices":[{"finish_reason":"stop","message":{"content":"done"}}]
+		}`))
+	}))
+	defer server.Close()
+
+	client, _ := NewOpenAIClient("gateway", server.URL, "secret", "model", time.Minute)
+	client.maxRetryAfter = 100 * time.Millisecond
+	client.maxAttempts = 2
+	client.retryDelay = 0
+	started := time.Now()
+	if _, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{Role: "user", Content: "x"}},
+		nil,
+	); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2", calls.Load())
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("retry waited %s, Retry-After cap was not applied", elapsed)
+	}
+}
+
+func TestCompleteCircuitBreakerOpensAfterRepeatedFailures(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(writer, "down", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	client, _ := NewOpenAIClient("gateway", server.URL, "secret", "model", time.Minute)
+	client.breaker = newCallBreaker(2, time.Minute)
+	client.maxAttempts = 1
+	client.retryDelay = 0
+
+	for range 2 {
+		if _, err := client.Complete(
+			context.Background(),
+			[]agent.Message{{Role: "user", Content: "x"}},
+			nil,
+		); err == nil {
+			t.Fatal("expected provider failure before breaker opens")
+		}
+	}
+	before := calls.Load()
+	if _, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{Role: "user", Content: "x"}},
+		nil,
+	); err == nil {
+		t.Fatal("expected circuit_open error while breaker is open")
+	} else if modelErr := agent.AsModelError(err); modelErr == nil ||
+		modelErr.Code != "circuit_open" ||
+		modelErr.Retryable {
+		t.Fatalf("breaker error = %#v, want non-retryable circuit_open", err)
+	}
+	if calls.Load() != before {
+		t.Fatalf("breaker did not short-circuit provider: calls %d -> %d", before, calls.Load())
+	}
+}

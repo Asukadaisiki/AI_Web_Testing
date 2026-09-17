@@ -13,7 +13,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +26,12 @@ const (
 	defaultMaxAttempts = 3
 	maxResponseBytes   = 4 << 20
 	localCacheStatus   = "not_configured"
+
+	// BUG-167 resilience defaults.
+	defaultStreamWatchdog     = 60 * time.Second
+	defaultMaxRetryAfter      = 10 * time.Second
+	defaultBreakerMaxFailures = 3
+	defaultBreakerCooldown    = 30 * time.Second
 )
 
 type callStage string
@@ -40,6 +48,7 @@ var (
 	errNoChoices        = errors.New("LLM response has no choices")
 	errInvalidToolCall  = errors.New("LLM returned an invalid tool call")
 	errNoResponseOutput = errors.New("LLM response has no content or tool calls")
+	errStreamStalled    = errors.New("LLM response stream stalled")
 )
 
 type callStageError struct {
@@ -81,6 +90,12 @@ type OpenAIClient struct {
 	httpClient            *http.Client
 	maxAttempts           int
 	retryDelay            time.Duration
+
+	// BUG-167 resilience knobs (override in tests).
+	attemptTimeout  time.Duration // per-attempt deadline; 0 = inherit request ctx
+	streamWatchdog  time.Duration // no-progress stall watchdog for response read
+	maxRetryAfter   time.Duration // cap for Retry-After honored on 429
+	breaker         *callBreaker  // call-level circuit breaker
 }
 
 func NewOpenAIClient(
@@ -128,9 +143,13 @@ func NewOpenAIClient(
 			endpointHost,
 			apiKey,
 		),
-		httpClient:  &http.Client{Timeout: timeout},
-		maxAttempts: defaultMaxAttempts,
-		retryDelay:  100 * time.Millisecond,
+		httpClient:     &http.Client{Timeout: timeout},
+		maxAttempts:    defaultMaxAttempts,
+		retryDelay:     100 * time.Millisecond,
+		attemptTimeout: timeout,
+		streamWatchdog: defaultStreamWatchdog,
+		maxRetryAfter:  defaultMaxRetryAfter,
+		breaker:        newCallBreaker(defaultBreakerMaxFailures, defaultBreakerCooldown),
 	}, nil
 }
 
@@ -199,6 +218,7 @@ type providerResponseEvidence struct {
 	responseID      string
 	headerRequestID string
 	headerName      string
+	retryAfter      time.Duration
 }
 
 func (e providerResponseEvidence) legacyRequestID() string {
@@ -238,9 +258,29 @@ func (c *OpenAIClient) Complete(
 	}
 	totalStarted := time.Now()
 	var lastErr *agent.ModelError
+	if !c.breaker.allow() {
+		lastErr = agent.NewModelError(
+			"circuit", "circuit_open",
+			"LLM calls suspended by circuit breaker after repeated failures",
+			false, nil,
+		)
+		telemetry.TotalLatencyMS = elapsedMillis(totalStarted)
+		if emitErr := agent.EmitTelemetry(ctx, telemetry, nil); emitErr != nil {
+			return agent.ModelResponse{}, emitErr
+		}
+		return agent.ModelResponse{}, lastErr
+	}
+	var pendingRetryAfter time.Duration
 	for attempt := 1; attempt <= c.maxAttempts; attempt++ {
 		if attempt > 1 {
-			timer := time.NewTimer(c.retryDelay * time.Duration(attempt-1))
+			delay := c.retryDelay * time.Duration(attempt-1)
+			if pendingRetryAfter > delay {
+				delay = pendingRetryAfter
+			}
+			if c.maxRetryAfter > 0 && delay > c.maxRetryAfter {
+				delay = c.maxRetryAfter
+			}
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -252,13 +292,20 @@ func (c *OpenAIClient) Complete(
 			case <-timer.C:
 			}
 		}
+		attemptCtx := ctx
+		attemptCancel := func() {}
+		if c.attemptTimeout > 0 {
+			attemptCtx, attemptCancel = context.WithTimeout(ctx, c.attemptTimeout)
+		}
 		decoded, status, evidence, started, callErr := c.doRequest(
-			ctx,
+			attemptCtx,
 			body,
 			clientRequestID,
 		)
+		attemptCancel()
 		if callErr != nil {
 			lastErr = classifyCallError(callErr)
+			pendingRetryAfter = evidence.retryAfter
 			telemetry.Attempts = append(
 				telemetry.Attempts,
 				failedAttempt(attempt, started, status, evidence, lastErr),
@@ -270,6 +317,9 @@ func (c *OpenAIClient) Complete(
 				}
 				if errors.Is(callErr, context.Canceled) {
 					return agent.ModelResponse{}, context.Canceled
+				}
+				if !errors.Is(callErr, context.Canceled) {
+					c.breaker.recordFailure()
 				}
 				return agent.ModelResponse{}, lastErr
 			}
@@ -291,6 +341,7 @@ func (c *OpenAIClient) Complete(
 			if emitErr := agent.EmitTelemetry(ctx, telemetry, nil); emitErr != nil {
 				return agent.ModelResponse{}, emitErr
 			}
+			c.breaker.recordFailure()
 			return agent.ModelResponse{}, lastErr
 		}
 		telemetry.FinishReason = decoded.Choices[0].FinishReason
@@ -316,8 +367,10 @@ func (c *OpenAIClient) Complete(
 		if err := agent.EmitTelemetry(ctx, telemetry, toolCallIDs); err != nil {
 			return agent.ModelResponse{}, err
 		}
+		c.breaker.recordSuccess()
 		return result, nil
 	}
+	c.breaker.recordFailure()
 	return agent.ModelResponse{}, lastErr
 }
 
@@ -439,8 +492,12 @@ func (c *OpenAIClient) doRequest(
 	evidence := providerResponseEvidence{
 		headerRequestID: headerRequestID,
 		headerName:      headerName,
+		retryAfter:      retryAfterFromHeader(response.Header),
 	}
-	responseBody, readErr := readAndCloseResponse(response.Body)
+	if c.maxRetryAfter > 0 && evidence.retryAfter > c.maxRetryAfter {
+		evidence.retryAfter = c.maxRetryAfter
+	}
+	responseBody, readErr := c.readAndCloseResponse(response.Body)
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		return chatResponse{}, &status, evidence, started, &providerHTTPError{
 			status: status,
@@ -466,6 +523,19 @@ func (c *OpenAIClient) doRequest(
 	}
 	evidence.responseID = decoded.ID
 	return decoded, &status, evidence, started, nil
+}
+
+func (c *OpenAIClient) readAndCloseResponse(body io.ReadCloser) ([]byte, error) {
+	if c.streamWatchdog <= 0 {
+		return readAndCloseResponse(body)
+	}
+	responseBody, readErr := readWithWatchdog(body, maxResponseBytes+1, c.streamWatchdog)
+	closeErr := body.Close()
+	if len(responseBody) > maxResponseBytes {
+		responseBody = nil
+		readErr = errors.Join(errResponseTooLarge, readErr)
+	}
+	return responseBody, errors.Join(readErr, closeErr)
 }
 
 func readAndCloseResponse(body io.ReadCloser) ([]byte, error) {
@@ -608,6 +678,11 @@ func classifyResponseReadError(err error) *agent.ModelError {
 			"cancelled", "context_cancelled", "LLM request cancelled", false, err,
 		)
 	}
+	if errors.Is(err, errStreamStalled) {
+		return agent.NewModelError(
+			"timeout", "stream_stalled", "LLM response stream stalled", true, err,
+		)
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return agent.NewModelError(
 			"timeout", "response_read_timeout", "LLM response read timed out", true, err,
@@ -621,6 +696,7 @@ func classifyResponseReadError(err error) *agent.ModelError {
 	}
 	retryable := errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
 		errors.Is(err, syscall.EPIPE)
 	return agent.NewModelError(
 		"transport", "response_read_failed",
@@ -646,6 +722,7 @@ func classifyTransportError(err error) *agent.ModelError {
 			(errors.As(err, &dnsErr) && dnsErr.IsTemporary) ||
 			errors.Is(err, syscall.ECONNRESET) ||
 			errors.Is(err, syscall.ECONNREFUSED) ||
+			errors.Is(err, syscall.ECONNABORTED) ||
 			errors.Is(err, syscall.EPIPE)
 		return agent.NewModelError(
 			"transport", "network_error", "LLM network request failed", retryable, err,
@@ -673,6 +750,134 @@ func failedAttempt(
 		ProviderRequestID:             truncate(evidence.legacyRequestID(), 128),
 		Error:                         modelErr,
 	}
+}
+
+// callBreaker is a call-level circuit breaker: after maxFailures consecutive
+// failed Complete calls it refuses new calls for cooldown, then lets a probe
+// through and resets on success.
+type callBreaker struct {
+	mu          sync.Mutex
+	maxFailures int
+	cooldown    time.Duration
+	failures    int
+	openUntil   time.Time
+}
+
+func newCallBreaker(maxFailures int, cooldown time.Duration) *callBreaker {
+	return &callBreaker{maxFailures: maxFailures, cooldown: cooldown}
+}
+
+func (b *callBreaker) allow() bool {
+	if b == nil || b.maxFailures <= 0 {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failures >= b.maxFailures {
+		if time.Now().Before(b.openUntil) {
+			return false
+		}
+		b.failures = 0
+	}
+	return true
+}
+
+func (b *callBreaker) recordFailure() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.failures++
+	if b.failures >= b.maxFailures {
+		b.openUntil = time.Now().Add(b.cooldown)
+	}
+}
+
+func (b *callBreaker) recordSuccess() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.failures = 0
+	b.openUntil = time.Time{}
+}
+
+// readProgress tracks the last moment bytes arrived so a stalled stream can be
+// distinguished from a slow-but-alive one.
+type readProgress struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+func (p *readProgress) touch() {
+	p.mu.Lock()
+	p.last = time.Now()
+	p.mu.Unlock()
+}
+
+func (p *readProgress) stalled(idle time.Duration) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return time.Since(p.last) >= idle
+}
+
+type progressReader struct {
+	body     io.Reader
+	progress *readProgress
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.body.Read(p)
+	if n > 0 {
+		r.progress.touch()
+	}
+	return n, err
+}
+
+// readWithWatchdog reads up to limit bytes, aborting with errStreamStalled when
+// no progress is made for idle. The caller must close the underlying body after
+// a watchdog abort so the blocked read goroutine can unwind.
+func readWithWatchdog(body io.Reader, limit int64, idle time.Duration) ([]byte, error) {
+	progress := &readProgress{last: time.Now()}
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(&progressReader{body: body, progress: progress}, limit))
+		done <- readResult{data: data, err: err}
+	}()
+	ticker := time.NewTicker(idle)
+	defer ticker.Stop()
+	for {
+		select {
+		case result := <-done:
+			return result.data, result.err
+		case <-ticker.C:
+			if progress.stalled(idle) {
+				return nil, errStreamStalled
+			}
+		}
+	}
+}
+
+func retryAfterFromHeader(header http.Header) time.Duration {
+	raw := strings.TrimSpace(header.Get("Retry-After"))
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if date, err := http.ParseTime(raw); err == nil {
+		if delta := time.Until(date); delta > 0 {
+			return delta
+		}
+	}
+	return 0
 }
 
 func newClientRequestID() (string, error) {
