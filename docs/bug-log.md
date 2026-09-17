@@ -48,6 +48,25 @@
 
 ## 问题记录
 
+## BUG-199 | Blue Top live E2E：购物车页断言用错 heading 语义且 grounding 时间撞墙钟
+
+- 日期：2026-09-17
+- 状态：open
+- 严重度：high
+- 来源：live E2E（automationexercise Blue Top 加购，`run_99a84dcbcf6e76dbb110e873`）
+- 描述：切换到火山引擎 flash 档模型后重跑，API/浏览器/grounding 全链路正常（14 次 LLM 调用全部 HTTP 200，无 402/401/404；`selectable_candidates`、`resolved_candidate` 水合、语义定位门禁均按预期工作），但 run 在 900s 墙钟处被 driver 取消，未收敛到 DSL 生成。
+- 复现步骤：
+  1. 以 flash 档模型 + 900s 截止运行 `run_agentic_e2e.py --acceptance-spec …/automationexercise-blue-top-cart.v1.json`。
+  2. 观察模型推进到产品详情页 `/product_details/1` 的最后一步 flow。
+  3. seq 188 flow 中 `wait_for role=heading, name=Shopping Cart` 报 `flow_action_failed: count=0`；seq 190 plan 变 `ready_for_generation`（14/14 步 grounded），seq 192 墙钟取消。
+- 影响：最后一步断言语义错误 + grounding 总耗时超过 900s，阻断完整 E2E 收敛。
+- 根因（两层）：
+  1. **定位语义错误**：Automation Exercise 购物车页 `/view_cart` 无任何 `role=heading` 元素（实跑确认 `role=heading` count=0），"Shopping Cart" 是 breadcrumb `<li class="active">` 文本；模型从详情页 modal 的 `role=heading name=Added!` 成功经验错误推广，在购物车页写了 heading 定位，`wait_for` 必然 count=0。该 flow 错误虽不阻塞 plan grounding（plan 用 observation element_refs 判定 grounded），但消耗了最后一轮。
+  2. **耗时超预算**：第一版 plan 探索预算两次耗尽（seq 91/seq 125）被迫重建 plan 版本，v2 重新 grounding 已完成步骤，14 步总 grounding 消耗 14 次逻辑调用、61 万 input tokens、近 15 分钟，撞上 900s 墙钟，仅差最后一步 generate_dsl。
+- 处理：待定。候选方向——(1) 提示词/契约明确「页面存在性/标题类事实优先用 breadcrumb 或 page title 证据，不要默认 heading 角色」；(2) 探索预算按步骤而非固定额度、减少改版重放；(3) 提高 E2E 墙钟或分阶段断言。
+- 验证：本地 Playwright 实跑确认 `/view_cart` 无 `role=heading`、"Shopping Cart" 仅存在于 breadcrumb `LI.active`；seq 190 `task_plan.updated` 显示 14/14 步 grounded 且 status=`ready_for_generation`。
+- 关联记录：docs/execution-log.md 2026-09-17（LLM 提供方切换与重跑）。
+
 ## BUG-198 | 图标/空名控件 grounding——根因定位与修复（修复已落地，待 live E2E 复验）
 
 - 日期：2026-09-14
