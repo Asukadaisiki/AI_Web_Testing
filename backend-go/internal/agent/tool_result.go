@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -16,6 +17,7 @@ const (
 	ModelToolSummaryTargetBytes    = 16 << 10
 	ModelToolSummaryHardLimitBytes = 32 << 10
 	ModelExplorationBudgetBytes    = 48 << 10
+	selectableCandidatesLimit      = 64
 )
 
 type ToolResultEventPayload struct {
@@ -179,13 +181,14 @@ type ToolResultContextSummary struct {
 }
 
 type StructuredObservation struct {
-	SchemaVersion     string                      `json:"schema_version"`
-	PageStates        []ObservedPageState         `json:"page_states,omitempty"`
-	ElementGroups     []ObservedElementGroup      `json:"element_groups,omitempty"`
-	CandidateCoverage []ObservedCandidateCoverage `json:"candidate_coverage,omitempty"`
-	ActionOptions     []ObservedActionOption      `json:"action_options,omitempty"`
-	VerificationFacts []ObservedVerificationFact  `json:"verification_facts,omitempty"`
-	RecoveryHints     []ObservedRecoveryHint      `json:"recovery_hints,omitempty"`
+	SchemaVersion        string                          `json:"schema_version"`
+	PageStates           []ObservedPageState             `json:"page_states,omitempty"`
+	ElementGroups        []ObservedElementGroup          `json:"element_groups,omitempty"`
+	CandidateCoverage    []ObservedCandidateCoverage     `json:"candidate_coverage,omitempty"`
+	ActionOptions        []ObservedActionOption          `json:"action_options,omitempty"`
+	VerificationFacts    []ObservedVerificationFact      `json:"verification_facts,omitempty"`
+	RecoveryHints        []ObservedRecoveryHint          `json:"recovery_hints,omitempty"`
+	SelectableCandidates []ToolResultSelectableCandidate `json:"selectable_candidates,omitempty"`
 }
 
 type ObservedPageState struct {
@@ -240,6 +243,25 @@ type ObservedRecoveryHint struct {
 	Category string `json:"category"`
 	Reason   string `json:"reason"`
 	Action   string `json:"action"`
+}
+
+type ToolResultCandidateRefSummary struct {
+	SchemaVersion  string `json:"schema_version"`
+	SourceEventSeq int64  `json:"source_event_seq"`
+	ProbeID        string `json:"probe_id"`
+	ObservationID  string `json:"observation_id"`
+	CandidateID    string `json:"candidate_id"`
+}
+
+type ToolResultSelectableCandidate struct {
+	PageState    string                         `json:"page_state,omitempty"`
+	Category     string                         `json:"category,omitempty"`
+	Role         string                         `json:"role,omitempty"`
+	Name         string                         `json:"name,omitempty"`
+	Strategy     string                         `json:"strategy,omitempty"`
+	Selector     string                         `json:"selector,omitempty"`
+	Executable   bool                           `json:"executable,omitempty"`
+	CandidateRef *ToolResultCandidateRefSummary `json:"candidate_ref"`
 }
 
 type ToolResultDSLSummary struct {
@@ -567,7 +589,13 @@ func BuildModelToolSummary(
 		}
 	}
 	normalizeSummary(&summary)
-	summary.Observation = buildStructuredObservation(summary.Pages, summary.Failures)
+	var omittedCandidates int
+	summary.Observation, omittedCandidates = buildStructuredObservation(summary.Pages, summary.Failures, sourceEventSeq)
+	if omittedCandidates > 0 {
+		summary.Truncation.Omitted.Candidates += omittedCandidates
+		summary.Truncation.Truncated = true
+		summary.Truncation.Reason = "deterministic_filter"
+	}
 	summary.ExecutedEffects = executedEffectsFromObservation(summary.Observation)
 	if len(taskPlan) > 0 {
 		summary.TaskPlan = taskPlan[0]
@@ -1246,7 +1274,7 @@ func encodeBoundedSummary(summary *ModelToolSummary) (string, error) {
 func encodeSummary(summary *ModelToolSummary) ([]byte, error) {
 	summary.SummarySHA256 = ""
 	if IsExplorationTool(summary.Tool) {
-		summary.Observation = buildStructuredObservation(summary.Pages, summary.Failures)
+		summary.Observation, _ = buildStructuredObservation(summary.Pages, summary.Failures, summary.Source.EventSeq)
 	}
 	for range 3 {
 		encoded, err := json.Marshal(summary)
@@ -1540,7 +1568,8 @@ func isSemanticRole(role string) bool {
 func buildStructuredObservation(
 	pages []ToolResultPageSummary,
 	failures []ToolResultErrorSummary,
-) *StructuredObservation {
+	sourceEventSeq int64,
+) (*StructuredObservation, int) {
 	observation := &StructuredObservation{SchemaVersion: StructuredObservationV1}
 	groupByKey := make(map[string]*ObservedElementGroup)
 	candidateByKey := make(map[string]ObservedCandidateCoverage)
@@ -1598,6 +1627,32 @@ func buildStructuredObservation(
 			if fact := verificationFactForNode(page.PageState, node); fact.Kind != "" {
 				factByKey[fact.PageState+"\x00"+fact.Kind+"\x00"+fact.Label+"\x00"+fact.Selector] = fact
 			}
+			for _, selector := range node.VerifiedSelectors {
+				if strings.TrimSpace(selector.CandidateID) == "" ||
+					strings.TrimSpace(page.ProbeID) == "" ||
+					strings.TrimSpace(page.ObservationID) == "" {
+					continue
+				}
+				observation.SelectableCandidates = append(
+					observation.SelectableCandidates,
+					ToolResultSelectableCandidate{
+						PageState:  firstNonEmptyString(node.PageState, page.PageState),
+						Category:   category,
+						Role:       node.Role,
+						Name:       label,
+						Strategy:   selector.Strategy,
+						Selector:   selector.Selector,
+						Executable: len(node.VerifiedSelectors) > 0 && !node.Disabled,
+						CandidateRef: &ToolResultCandidateRefSummary{
+							SchemaVersion:  "grounding.candidate-ref.v1",
+							SourceEventSeq: sourceEventSeq,
+							ProbeID:        page.ProbeID,
+							ObservationID:  page.ObservationID,
+							CandidateID:    selector.CandidateID,
+						},
+					},
+				)
+			}
 		}
 		for _, action := range page.Actions {
 			option := ObservedActionOption{
@@ -1645,15 +1700,21 @@ func buildStructuredObservation(
 	}
 	observation.RecoveryHints = deduplicateRecoveryHints(observation.RecoveryHints)
 	normalizeStructuredObservation(observation)
+	omittedCandidates := 0
+	if len(observation.SelectableCandidates) > selectableCandidatesLimit {
+		omittedCandidates = len(observation.SelectableCandidates) - selectableCandidatesLimit
+		observation.SelectableCandidates = observation.SelectableCandidates[:selectableCandidatesLimit]
+	}
 	if len(observation.PageStates) == 0 &&
 		len(observation.ElementGroups) == 0 &&
 		len(observation.CandidateCoverage) == 0 &&
 		len(observation.ActionOptions) == 0 &&
 		len(observation.VerificationFacts) == 0 &&
-		len(observation.RecoveryHints) == 0 {
-		return nil
+		len(observation.RecoveryHints) == 0 &&
+		len(observation.SelectableCandidates) == 0 {
+		return nil, 0
 	}
-	return observation
+	return observation, omittedCandidates
 }
 
 func classifyPageKind(url, pageState, description string) string {
@@ -1708,8 +1769,21 @@ func classifyElement(node ToolResultNodeSummary) string {
 	}
 }
 
+// isSemanticName reports whether the trimmed value carries any human-readable
+// letter or number. FontAwesome glyphs and other private-use/symbol-only labels
+// (for example "\uf002") are non-semantic and should fall back to a DOM label.
+func isSemanticName(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	for _, r := range trimmed {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return true
+		}
+	}
+	return false
+}
+
 func observationLabel(node ToolResultNodeSummary) string {
-	if trimmed := strings.TrimSpace(node.Name); trimmed != "" {
+	if trimmed := strings.TrimSpace(node.Name); trimmed != "" && isSemanticName(trimmed) {
 		return boundedUTF8(trimmed, 256)
 	}
 	if node.DOM != nil {
@@ -1717,6 +1791,14 @@ func observationLabel(node ToolResultNodeSummary) string {
 			if value := strings.TrimSpace(node.DOM.Attrs[key]); value != "" {
 				return boundedUTF8(value, 256)
 			}
+		}
+	}
+	if role := strings.TrimSpace(node.Role); role != "" {
+		return boundedUTF8(role, 256)
+	}
+	if node.DOM != nil {
+		if tag := strings.TrimSpace(node.DOM.Tag); tag != "" {
+			return boundedUTF8(tag, 256)
 		}
 	}
 	return ""
@@ -1856,6 +1938,28 @@ func normalizeStructuredObservation(observation *StructuredObservation) {
 			return left.Kind < right.Kind
 		}
 		return left.Label < right.Label
+	})
+	sort.Slice(observation.SelectableCandidates, func(i, j int) bool {
+		left, right := observation.SelectableCandidates[i], observation.SelectableCandidates[j]
+		if left.Executable != right.Executable {
+			return left.Executable
+		}
+		if left.Category != right.Category {
+			return left.Category < right.Category
+		}
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		if left.Strategy != right.Strategy {
+			return left.Strategy < right.Strategy
+		}
+		if left.Selector != right.Selector {
+			return left.Selector < right.Selector
+		}
+		if left.Role != right.Role {
+			return left.Role < right.Role
+		}
+		return jsonLess(left, right)
 	})
 }
 

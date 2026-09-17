@@ -772,6 +772,201 @@ func TestExplorationSummaryReadsObservationV2WithoutLegacyNodes(t *testing.T) {
 	}
 }
 
+func TestIconNameFallsBackToSemanticLabel(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"url":           "https://example.test/search",
+		"element_count": 1,
+		"observation_v2": map[string]any{
+			"probe_id":       "probe-search",
+			"observation_id": "obs-search",
+			"page_state": map[string]any{
+				"state_id": "S0", "state_sha256": strings.Repeat("a", 64),
+			},
+			"elements": []map[string]any{{
+				"element_ref": "S0:1",
+				"a11y":        map[string]any{"role": "button", "name": "\uf002"},
+				"dom":         map[string]any{"tag": "button", "attrs": map[string]any{"id": "submit_search", "type": "submit"}},
+				"runtime":     map[string]any{"visible": true, "enabled": true},
+				"locators": []map[string]any{{
+					"candidate_id": "cand-search",
+					"locator":      map[string]any{"kind": "css", "value": "#submit_search"},
+					"provenance":   "a11y_backend_dom_node",
+				}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := BuildModelToolSummary("explore_page", raw, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Pages) != 1 || len(summary.Pages[0].A11yNodes) != 1 {
+		t.Fatalf("pages = %#v", summary.Pages)
+	}
+	node := summary.Pages[0].A11yNodes[0]
+	if node.Name != "\uf002" {
+		t.Fatalf("evidence a11y name was rewritten: %q", node.Name)
+	}
+	if !hasCandidate(
+		summary.Observation.CandidateCoverage,
+		"S0", "button", "submit_search", "#submit_search", true,
+	) {
+		t.Fatalf("candidate coverage = %#v", summary.Observation.CandidateCoverage)
+	}
+	if len(summary.Observation.SelectableCandidates) != 1 ||
+		summary.Observation.SelectableCandidates[0].Name != "submit_search" {
+		t.Fatalf("selectable candidates = %#v", summary.Observation.SelectableCandidates)
+	}
+}
+
+func TestSelectableCandidateCarriesCompleteCandidateRef(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"url":           "https://example.test/form",
+		"element_count": 1,
+		"observation_v2": map[string]any{
+			"probe_id":       "probe-1",
+			"observation_id": "obs-1",
+			"page_state": map[string]any{
+				"state_id": "S0", "state_sha256": strings.Repeat("a", 64),
+			},
+			"elements": []map[string]any{{
+				"element_ref": "S0:1",
+				"a11y":        map[string]any{"role": "button", "name": "Submit"},
+				"dom":         map[string]any{"tag": "button", "attrs": map[string]any{"id": "submit"}},
+				"runtime":     map[string]any{"visible": true, "enabled": true},
+				"locators": []map[string]any{{
+					"candidate_id": "candidate-1",
+					"locator":      map[string]any{"kind": "css", "value": "#submit"},
+					"provenance":   "a11y_backend_dom_node",
+				}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := BuildModelToolSummary("explore_page", raw, 31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Observation.SelectableCandidates) != 1 {
+		t.Fatalf("selectable candidates = %#v", summary.Observation.SelectableCandidates)
+	}
+	ref := summary.Observation.SelectableCandidates[0].CandidateRef
+	if ref == nil ||
+		ref.SchemaVersion != "grounding.candidate-ref.v1" ||
+		ref.SourceEventSeq != 31 ||
+		ref.ProbeID != "probe-1" ||
+		ref.ObservationID != "obs-1" ||
+		ref.CandidateID != "candidate-1" {
+		t.Fatalf("candidate ref = %#v", ref)
+	}
+}
+
+func TestSelectableCandidatesTruncatedAtLimit(t *testing.T) {
+	const total = 80
+	nodes := make([]ToolResultNodeSummary, 0, total)
+	for index := 0; index < total; index++ {
+		nodes = append(nodes, ToolResultNodeSummary{
+			NodeID: fmt.Sprintf("n-%d", index),
+			Role:   "button",
+			Name:   fmt.Sprintf("Button-%d", index),
+			VerifiedSelectors: []ToolResultSelectorSummary{{
+				CandidateID: fmt.Sprintf("cand-%d", index),
+				Strategy:    "css",
+				Selector:    fmt.Sprintf("#btn-%d", index),
+			}},
+		})
+	}
+	observation, omitted := buildStructuredObservation([]ToolResultPageSummary{{
+		ProbeID:       "probe-1",
+		ObservationID: "obs-1",
+		PageState:     "S0",
+		ElementCount:  total,
+		A11yNodes:     nodes,
+	}}, nil, 9)
+	if observation == nil {
+		t.Fatal("expected structured observation")
+	}
+	if len(observation.SelectableCandidates) != selectableCandidatesLimit {
+		t.Fatalf(
+			"selectable candidates = %d, want %d",
+			len(observation.SelectableCandidates),
+			selectableCandidatesLimit,
+		)
+	}
+	wantOmitted := total - selectableCandidatesLimit
+	if omitted != wantOmitted {
+		t.Fatalf("omitted candidates = %d, want %d", omitted, wantOmitted)
+	}
+	if ref := observation.SelectableCandidates[0].CandidateRef; ref == nil ||
+		ref.SchemaVersion != "grounding.candidate-ref.v1" ||
+		ref.ProbeID != "probe-1" ||
+		ref.ObservationID != "obs-1" {
+		t.Fatalf("candidate ref = %#v", ref)
+	}
+}
+
+func TestSelectableCandidateOmissionsRecordedInSummary(t *testing.T) {
+	const total = 80
+	elements := make([]map[string]any, 0, total)
+	for index := 0; index < total; index++ {
+		elements = append(elements, map[string]any{
+			"element_ref": fmt.Sprintf("n-%d", index),
+			"a11y":        map[string]any{"role": "button", "name": fmt.Sprintf("Button-%d", index)},
+			"runtime":     map[string]any{"visible": true, "enabled": true},
+			"locators": []map[string]any{{
+				"candidate_id": fmt.Sprintf("cand-%d", index),
+				"locator":      map[string]any{"kind": "css", "value": fmt.Sprintf("#btn-%d", index)},
+			}},
+		})
+	}
+	raw, err := json.Marshal(map[string]any{
+		"url":           "https://example.test/form",
+		"element_count": total,
+		"observation_v2": map[string]any{
+			"probe_id":       "probe-1",
+			"observation_id": "obs-1",
+			"page_state": map[string]any{
+				"state_id": "S0", "state_sha256": strings.Repeat("a", 64),
+			},
+			"elements": elements,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := BuildModelToolSummary("explore_page", raw, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ModelToolSummary
+	if err := json.Unmarshal([]byte(content), &summary); err != nil {
+		t.Fatal(err)
+	}
+	wantOmitted := total - selectableCandidatesLimit
+	if summary.Truncation.Omitted.Candidates != wantOmitted {
+		t.Fatalf("omitted candidates = %d, want %d", summary.Truncation.Omitted.Candidates, wantOmitted)
+	}
+	if summary.Observation == nil ||
+		len(summary.Observation.SelectableCandidates) > selectableCandidatesLimit {
+		t.Fatalf("selectable candidates = %#v", summary.Observation)
+	}
+	if !summary.Truncation.Truncated {
+		t.Fatalf("truncation = %#v", summary.Truncation)
+	}
+}
+
 func TestGenerateAndRepairToolResultsUseDecisionSummaries(t *testing.T) {
 	generated := json.RawMessage(`{
 		"generation_id":8,
