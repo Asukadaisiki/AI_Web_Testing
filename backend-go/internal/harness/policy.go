@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
@@ -31,6 +32,7 @@ type explorationBudgetProvider interface {
 
 type DefaultToolPolicy struct {
 	Exploration ExplorationGateConfig
+	Now         func() time.Time
 }
 
 type ExplorationGateConfig struct {
@@ -40,6 +42,8 @@ type ExplorationGateConfig struct {
 	MaxRunExploreFlowCalls               int
 	MaxRepeatedExplorePageSignatureCalls int
 	MaxRepeatedExploreFlowSignatureCalls int
+	MaxRunWallTime                       time.Duration
+	ExploreReserve                       time.Duration
 }
 
 type explorationState struct {
@@ -48,6 +52,17 @@ type explorationState struct {
 	RunExplorePageCalls  int
 	RunExploreFlowCalls  int
 	PlanSignatures       map[string]int
+}
+
+// governanceToolNames are the non-exploration tools whose identical-signature
+// retries are gated by the ToolCallLedger. A repeated call with the same
+// normalized signature after a failed or rejected outcome is rejected so the
+// model cannot burn turns retrying the same failing call.
+var governanceToolNames = map[string]bool{
+	"set_task_plan": true,
+	"generate_dsl":  true,
+	"get_report":    true,
+	"fix_and_retry": true,
 }
 
 func (c ExplorationGateConfig) withDefaults() ExplorationGateConfig {
@@ -69,7 +84,17 @@ func (c ExplorationGateConfig) withDefaults() ExplorationGateConfig {
 	if c.MaxRepeatedExploreFlowSignatureCalls <= 0 {
 		c.MaxRepeatedExploreFlowSignatureCalls = 1
 	}
+	if c.MaxRunWallTime > 0 && c.ExploreReserve <= 0 {
+		c.ExploreReserve = 90 * time.Second
+	}
 	return c
+}
+
+func (p DefaultToolPolicy) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
 }
 
 func (p DefaultToolPolicy) BeforeToolCall(
@@ -84,8 +109,104 @@ func (p DefaultToolPolicy) BeforeToolCall(
 		}
 	case "explore_page", "explore_flow":
 		return p.beforeExplorationCall(run, call, firstPlan(currentPlan))
+	case "set_task_plan", "generate_dsl", "get_report", "fix_and_retry":
+		return p.beforeGovernanceCall(run, call)
 	}
 	return nil
+}
+
+// beforeGovernanceCall rejects a retry whose normalized signature already
+// produced a failed or rejected outcome in this run. The model must change
+// the call's substance (signature) instead of repeating the same failing call.
+func (p DefaultToolPolicy) beforeGovernanceCall(
+	run agentservice.AgentRun,
+	call agent.ModelTool,
+) error {
+	signature := governanceCallSignature(call)
+	if signature == "" {
+		return nil
+	}
+	outcome, seen := governanceOutcome(run.Transcript, call, signature)
+	if !seen || outcome == "succeeded" {
+		return nil
+	}
+	return &ExplorationGateError{
+		Code: "repeated_" + call.Name + "_signature",
+		Budget: &agent.ToolResultExplorationBudgetSummary{
+			Scope:                       "run",
+			CurrentTool:                 call.Name,
+			CurrentSignatureFingerprint: signature,
+			RepeatedExplorePageLimit:    1,
+			RepeatedExploreFlowLimit:    1,
+		},
+		NextAction: "do not repeat the same " + call.Name + " call; change the arguments to make the call substantively different",
+	}
+}
+
+// governanceCallSignature normalizes a governance tool call's arguments for
+// signature comparison, dropping fields that do not change the call's meaning.
+func governanceCallSignature(call agent.ModelTool) string {
+	var arguments any
+	if json.Unmarshal([]byte(call.Arguments), &arguments) != nil {
+		return ""
+	}
+	normalized := map[string]any{
+		"tool":      call.Name,
+		"arguments": normalizeJSONForSignature(arguments),
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+// governanceOutcome scans the transcript for the last completed attempt of the
+// same governance signature and reports its outcome. Rejected policy gates are
+// recorded as tool messages with an error payload, so both failed and rejected
+// attempts are visible here.
+func governanceOutcome(
+	transcript []agent.Message,
+	call agent.ModelTool,
+	signature string,
+) (string, bool) {
+	calls := make(map[string]agent.ModelTool)
+	for _, message := range transcript {
+		if message.Role == "assistant" {
+			for _, candidate := range message.ToolCalls {
+				if candidate.ID != "" {
+					calls[candidate.ID] = candidate
+				}
+			}
+			continue
+		}
+		if message.Role != "tool" || message.ToolCallID == "" {
+			continue
+		}
+		original, exists := calls[message.ToolCallID]
+		if !exists || original.Name != call.Name {
+			continue
+		}
+		if governanceCallSignature(original) != signature {
+			continue
+		}
+		summary, ok := agent.DecodeModelToolSummary(message.Content)
+		if ok {
+			if summary.Success != nil && *summary.Success {
+				return "succeeded", true
+			}
+			return "failed", true
+		}
+		var payload struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal([]byte(message.Content), &payload) == nil &&
+			payload.Status == "error" {
+			return "failed", true
+		}
+	}
+	return "", false
 }
 
 func (p DefaultToolPolicy) beforeExplorationCall(
@@ -96,6 +217,16 @@ func (p DefaultToolPolicy) beforeExplorationCall(
 	config := p.Exploration.withDefaults()
 	state := buildExplorationState(run.Transcript, currentPlan)
 	budget := explorationBudgetSummary(config, state, currentPlan, &call, false)
+	if config.MaxRunWallTime > 0 {
+		deadline := run.CreatedAt.Add(config.MaxRunWallTime)
+		if p.now().Add(config.ExploreReserve).After(deadline) {
+			return newExplorationGateError(
+				"explore_deadline_budget_exhausted",
+				budget,
+				"stop probing; if the persisted TaskPlan reports ready_for_generation, generate DSL, otherwise call ask_user_question",
+			)
+		}
+	}
 	switch call.Name {
 	case "explore_page":
 		if state.RunExplorePageCalls >= config.MaxRunExplorePageCalls {

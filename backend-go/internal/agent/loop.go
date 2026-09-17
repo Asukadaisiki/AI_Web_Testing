@@ -10,6 +10,11 @@ import (
 type TurnHandler func(context.Context, ModelResponse) (continueLoop bool, err error)
 type ModelContextFactory func(context.Context) context.Context
 
+// TurnBudget returns the effective maximum number of turns for the current
+// loop run. A value <= 0 keeps the fixed NewLoop budget. The loop re-queries
+// the budget before every turn so a harness can scale it with TaskPlan size.
+type TurnBudget func(used int) int
+
 type Loop struct {
 	model        Model
 	definitions  []ToolDefinition
@@ -48,7 +53,33 @@ func (l *Loop) RunWithModelContext(
 	modelContext ModelContextFactory,
 	handle TurnHandler,
 ) error {
-	for range l.maxTurns {
+	return l.RunWithTurnBudget(ctx, transcript, modelContext, handle, nil)
+}
+
+// RunWithTurnBudget runs the loop like RunWithModelContext but consults the
+// optional budget before every turn. The budget may grow as the TaskPlan
+// grows; a nil budget keeps the fixed NewLoop limit.
+func (l *Loop) RunWithTurnBudget(
+	ctx context.Context,
+	transcript *[]Message,
+	modelContext ModelContextFactory,
+	handle TurnHandler,
+	turnBudget TurnBudget,
+) error {
+	for used := 0; ; used++ {
+		limit := l.maxTurns
+		if turnBudget != nil {
+			if dynamic := turnBudget(used); dynamic > limit {
+				limit = dynamic
+			}
+		}
+		if used >= limit {
+			message := fmt.Sprintf("agent exceeded maximum turns: %d", limit)
+			if lastError := latestToolError(*transcript); lastError != "" {
+				message += "; last tool error: " + lastError
+			}
+			return fmt.Errorf("%s", message)
+		}
 		callContext := ctx
 		if modelContext != nil {
 			callContext = modelContext(ctx)
@@ -75,13 +106,13 @@ func (l *Loop) RunWithModelContext(
 			return nil
 		}
 	}
-	message := fmt.Sprintf("agent exceeded maximum turns: %d", l.maxTurns)
-	if lastError := latestToolError(*transcript); lastError != "" {
-		message += "; last tool error: " + lastError
-	}
-	return fmt.Errorf("%s", message)
 }
 
+// latestToolError returns the failure message of the most recent tool result
+// that is itself a failure. A successful tool result (success=true) clears
+// the stale error even if an earlier turn failed: max-turn terminal state
+// must not misattribute a recovered failure. When the latest tool result is
+// a success, "" is returned.
 func latestToolError(transcript []Message) string {
 	for index := len(transcript) - 1; index >= 0; index-- {
 		message := transcript[index]
@@ -89,6 +120,9 @@ func latestToolError(transcript []Message) string {
 			continue
 		}
 		if summary, ok := DecodeModelToolSummary(message.Content); ok {
+			if summary.Success != nil && *summary.Success {
+				return ""
+			}
 			for _, failure := range summary.Failures {
 				if value := strings.TrimSpace(failure.Message); value != "" {
 					return value

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
@@ -168,6 +169,61 @@ func TestDefaultToolPolicyUsesPerPlanBudgetWithRunHardLimit(t *testing.T) {
 	}
 }
 
+func TestDefaultToolPolicyRejectsExplorationNearWallClockDeadline(t *testing.T) {
+	created := time.Date(2025, 1, 1, 9, 0, 0, 0, time.UTC)
+	now := created.Add(5 * time.Minute)
+	policy := DefaultToolPolicy{
+		Exploration: ExplorationGateConfig{
+			// deadline = created + 6m = 09:06; now + reserve = 09:07 > deadline.
+			MaxRunWallTime: 6 * time.Minute,
+			ExploreReserve: 2 * time.Minute,
+		},
+		Now: func() time.Time { return now },
+	}
+	run := agentservice.AgentRun{CreatedAt: created}
+
+	for _, name := range []string{"explore_page", "explore_flow"} {
+		err := policy.BeforeToolCall(run, agent.ModelTool{
+			Name:      name,
+			Arguments: `{}`,
+		})
+		if err == nil || !strings.Contains(err.Error(), "explore_deadline_budget_exhausted") {
+			t.Fatalf("%s: BeforeToolCall() error = %v, want deadline budget exhausted", name, err)
+		}
+		var gateError *ExplorationGateError
+		if !errors.As(err, &gateError) {
+			t.Fatalf("%s: error is not an ExplorationGateError: %#v", name, err)
+		}
+		if gateError.NextAction == "" {
+			t.Fatalf("%s: NextAction is empty", name)
+		}
+		if gateError.Budget == nil {
+			t.Fatalf("%s: budget summary is nil", name)
+		}
+	}
+}
+
+func TestDefaultToolPolicyAllowsExplorationWithinWallClockDeadline(t *testing.T) {
+	now := time.Date(2025, 1, 1, 9, 4, 0, 0, time.UTC)
+	policy := DefaultToolPolicy{
+		Exploration: ExplorationGateConfig{
+			MaxRunWallTime: 6 * time.Minute,
+			ExploreReserve: 2 * time.Minute,
+		},
+		Now: func() time.Time { return now },
+	}
+	run := agentservice.AgentRun{
+		CreatedAt: now.Add(-2 * time.Minute),
+	}
+	err := policy.BeforeToolCall(run, agent.ModelTool{
+		Name:      "explore_flow",
+		Arguments: `{"plan_step_ids":["open"],"steps":[{"actions":[]}]}`,
+	})
+	if err != nil {
+		t.Fatalf("BeforeToolCall() error = %v, want exploration allowed within deadline", err)
+	}
+}
+
 func TestExplorationBudgetExposesRemainingAndCompletedSignature(t *testing.T) {
 	policy := DefaultToolPolicy{Exploration: ExplorationGateConfig{
 		MaxExplorePageCalls:                  2,
@@ -262,4 +318,64 @@ func flowResultJSON(url string, state string) string {
 			}]
 		}]
 	}`
+}
+
+func TestDefaultToolPolicyBlocksRepeatedFailedGovernanceSignature(t *testing.T) {
+	policy := DefaultToolPolicy{}
+	arguments := `{
+		"goal":"goal",
+		"max_side_effect":"browser_state",
+		"forbidden_actions":[],
+		"steps":[{"id":"open","intent":"Open","action":"goto","value":"https://example.test","expected_occurrences":1,"idempotency":"idempotent","side_effect":"browser_state","preconditions":[],"completion_conditions":[]}]
+	}`
+	run := agentservice.AgentRun{Transcript: []agent.Message{
+		{Role: "assistant", ToolCalls: []agent.ModelTool{{
+			ID: "plan-1", Name: "set_task_plan", Arguments: arguments,
+		}}},
+		{Role: "tool", ToolCallID: "plan-1",
+			Content: `{"status":"error","tool":"set_task_plan","message":"boom"}`},
+	}}
+
+	err := policy.BeforeToolCall(run, agent.ModelTool{
+		Name:      "set_task_plan",
+		Arguments: arguments,
+	})
+	if err == nil || !strings.Contains(err.Error(), "repeated_set_task_plan_signature") {
+		t.Fatalf("BeforeToolCall() error = %v, want repeated governance signature gate", err)
+	}
+
+	// A changed signature is allowed to retry.
+	changed := `{
+		"goal":"goal",
+		"max_side_effect":"browser_state",
+		"forbidden_actions":[],
+		"steps":[{"id":"open","intent":"Open differently","action":"goto","value":"https://example.test/next","expected_occurrences":1,"idempotency":"idempotent","side_effect":"browser_state","preconditions":[],"completion_conditions":[]}]
+	}`
+	if err := policy.BeforeToolCall(run, agent.ModelTool{
+		Name:      "set_task_plan",
+		Arguments: changed,
+	}); err != nil {
+		t.Fatalf("changed governance signature should be allowed: %v", err)
+	}
+}
+
+func TestDefaultToolPolicyAllowsRepeatedSucceededGovernanceSignature(t *testing.T) {
+	policy := DefaultToolPolicy{}
+	arguments := `{"case":{"name":"replay","steps":[{"action":"click","target":"#pay"}]},"a11y_nodes_by_state":{"S0":[]}}`
+	run := agentservice.AgentRun{Transcript: []agent.Message{
+		{Role: "assistant", ToolCalls: []agent.ModelTool{{
+			ID: "gen-1", Name: "generate_dsl", Arguments: arguments,
+		}}},
+		{Role: "tool", ToolCallID: "gen-1",
+			Content: `{"success":true,"generation_id":42}`},
+	}}
+	// The identical signature already succeeded: the policy allows the retry
+	// (the control plane deduplicates the result); the ledger only blocks
+	// failed/rejected repeats so it cannot dead-end a legitimate resubmit.
+	if err := policy.BeforeToolCall(run, agent.ModelTool{
+		Name:      "generate_dsl",
+		Arguments: arguments,
+	}); err != nil {
+		t.Fatalf("succeeded governance signature should not be blocked: %v", err)
+	}
 }

@@ -1,25 +1,32 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Address            string
-	LLMProvider        string
-	LLMBaseURL         string
-	LLMAPIKey          string
-	LLMModel           string
-	LLMThinkMode       bool
-	LLMReasoningEffort string
-	AgentMaxTurns      int
-	DefaultActorID     int64
-	DatabaseURL        string
-	BrowserWorkerURL   string
+	Address                    string
+	LLMProvider                string
+	LLMBaseURL                 string
+	LLMAPIKey                  string
+	LLMModel                   string
+	LLMThinkMode               bool
+	LLMReasoningEffort         string
+	AgentMaxTurns              int
+	AgentMaxWallTimeSeconds    int
+	AgentExploreReserveSeconds int
+	AgentMaxModelCalls         int
+	AgentMaxTotalTokens        int64
+	AgentMaxTranscriptBytes    int
+	DefaultActorID             int64
+	DatabaseURL                string
+	BrowserWorkerURL           string
 }
 
 func Load() Config {
@@ -29,7 +36,10 @@ func Load() Config {
 	if address == "" {
 		address = "127.0.0.1:8081"
 	}
-	maxTurns := 12
+	// Default floor for agent turns. The harness scales the effective budget
+	// with TaskPlan step count (BUG-195), so this value is a lower bound for
+	// multi-step plans rather than a hard cap.
+	maxTurns := 24
 	if parsed, err := strconv.Atoi(os.Getenv("AGENTSERVICE_MAX_TURNS")); err == nil && parsed > 0 {
 		maxTurns = parsed
 	}
@@ -38,18 +48,31 @@ func Load() Config {
 		browserWorkerURL = "http://127.0.0.1:8000/api/v1"
 	}
 	return Config{
-		Address:            address,
-		LLMProvider:        strings.TrimSpace(os.Getenv("AI_PLANNING_PROVIDER")),
-		LLMBaseURL:         strings.TrimRight(os.Getenv("AI_PLANNING_BASE_URL"), "/"),
-		LLMAPIKey:          os.Getenv("AI_PLANNING_API_KEY"),
-		LLMModel:           os.Getenv("AI_PLANNING_MODEL"),
-		LLMThinkMode:       boolFromEnv("AI_PLANNING_THINK_MODE"),
-		LLMReasoningEffort: strings.TrimSpace(os.Getenv("AI_PLANNING_REASONING_EFFORT")),
-		AgentMaxTurns:      maxTurns,
-		DefaultActorID:     int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
-		DatabaseURL:        normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
-		BrowserWorkerURL:   browserWorkerURL,
+		Address:                    address,
+		LLMProvider:                strings.TrimSpace(os.Getenv("AI_PLANNING_PROVIDER")),
+		LLMBaseURL:                 strings.TrimRight(os.Getenv("AI_PLANNING_BASE_URL"), "/"),
+		LLMAPIKey:                  os.Getenv("AI_PLANNING_API_KEY"),
+		LLMModel:                   os.Getenv("AI_PLANNING_MODEL"),
+		LLMThinkMode:               boolFromEnv("AI_PLANNING_THINK_MODE"),
+		LLMReasoningEffort:         strings.TrimSpace(os.Getenv("AI_PLANNING_REASONING_EFFORT")),
+		AgentMaxTurns:              maxTurns,
+		AgentMaxWallTimeSeconds:    nonNegativeIntOrDefault("AGENTSERVICE_MAX_WALL_TIME_SECONDS", 0),
+		AgentExploreReserveSeconds: positiveIntOrDefault("AGENTSERVICE_EXPLORE_RESERVE_SECONDS", 90),
+		AgentMaxModelCalls:         nonNegativeIntOrDefault("AGENTSERVICE_MAX_MODEL_CALLS", 40),
+		AgentMaxTotalTokens:        nonNegativeInt64OrDefault("AGENTSERVICE_MAX_TOTAL_TOKENS", 3_000_000),
+		AgentMaxTranscriptBytes:    nonNegativeIntOrDefault("AGENTSERVICE_MAX_TRANSCRIPT_BYTES", 1_000_000),
+		DefaultActorID:             int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
+		DatabaseURL:                normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
+		BrowserWorkerURL:           browserWorkerURL,
 	}
+}
+
+func (c Config) AgentMaxWallTime() time.Duration {
+	return time.Duration(c.AgentMaxWallTimeSeconds) * time.Second
+}
+
+func (c Config) AgentExploreReserve() time.Duration {
+	return time.Duration(c.AgentExploreReserveSeconds) * time.Second
 }
 
 func boolFromEnv(name string) bool {
@@ -68,9 +91,35 @@ func positiveIntOrDefault(name string, fallback int) int {
 	return fallback
 }
 
+func nonNegativeInt64OrDefault(name string, fallback int64) int64 {
+	if value, err := strconv.ParseInt(os.Getenv(name), 10, 64); err == nil && value >= 0 {
+		return value
+	}
+	return fallback
+}
+
+func nonNegativeIntOrDefault(name string, fallback int) int {
+	if value, err := strconv.Atoi(os.Getenv(name)); err == nil && value >= 0 {
+		return value
+	}
+	return fallback
+}
+
 func normalizeDatabaseURL(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.Replace(value, "postgresql+psycopg://", "postgres://", 1)
 	value = strings.Replace(value, "postgresql://", "postgres://", 1)
+	// BUG-177: force a UTC session so `now()`-written timestamp columns and
+	// UTC window queries (Overview, agent deadlines) share one calendar.
+	// pgx v5 passes unrecognized connection parameters as runtime parameters.
+	if strings.HasPrefix(value, "postgres://") {
+		parsed, err := url.Parse(value)
+		if err == nil && parsed.Query().Get("timezone") == "" {
+			query := parsed.Query()
+			query.Set("timezone", "UTC")
+			parsed.RawQuery = query.Encode()
+			value = parsed.String()
+		}
+	}
 	return value
 }

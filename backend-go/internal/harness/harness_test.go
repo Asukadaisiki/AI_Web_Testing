@@ -167,6 +167,24 @@ func TestSystemPromptRequiresRealSearchControls(t *testing.T) {
 	}
 }
 
+func TestSystemPromptDescribesSelectableCandidateGrounding(t *testing.T) {
+	for _, want := range []string{
+		"observation.selectable_candidates",
+		"grounding.candidate-ref.v1",
+		"source_event_seq, probe_id, observation_id, and candidate_id",
+		"Copy the whole candidate_ref",
+		"count 1",
+		"Do not author a role/name semantic locator to guess",
+		"reuse its returned selectable_candidates",
+		"never call set_task_plan merely to reset exploration budget",
+		"already holds a count=1 candidate_ref",
+	} {
+		if !strings.Contains(defaultSystemPrompt, want) {
+			t.Fatalf("system prompt missing %q", want)
+		}
+	}
+}
+
 func TestHarnessPersistsLLMTelemetryBeforeCompletion(t *testing.T) {
 	runService := agentservice.NewService(agentservice.NewMemoryRepository())
 	registry, err := tools.NewRegistry(tools.AskUserTool{})
@@ -1031,5 +1049,142 @@ func TestTaskPlanRevisionInvalidatesPriorDSLBinding(t *testing.T) {
 	}
 	if !foundPlanState {
 		t.Fatalf("task plan state event not found: %#v", events)
+	}
+}
+
+type costingModel struct {
+	turn         int
+	perCallTokens int64
+}
+
+func (m *costingModel) Complete(
+	ctx context.Context,
+	_ []agent.Message,
+	_ []agent.ToolDefinition,
+) (agent.ModelResponse, error) {
+	m.turn++
+	tokens := m.perCallTokens
+	telemetry := agent.ModelTelemetry{
+		Provider: "test", RequestedModel: "requested", ResolvedModel: "resolved",
+		Prompt: agent.PromptSpec{Version: agent.SystemPromptVersion},
+		Usage: agent.ModelUsage{
+			Status: agent.UsageAvailable, TotalTokens: &tokens,
+		},
+		Attempts: []agent.ModelAttempt{{Attempt: 1, Status: "succeeded"}},
+	}
+	if err := agent.EmitTelemetry(ctx, telemetry, nil); err != nil {
+		return agent.ModelResponse{}, err
+	}
+	response := agent.ModelResponse{Telemetry: telemetry}
+	if m.turn == 1 {
+		// First turn drives one tool call so the loop schedules a second
+		// model call, letting the fuses observe growth.
+		response.ToolCalls = []agent.ModelTool{{
+			ID: "cost-1", Name: "never_used", Arguments: `{}`,
+		}}
+	} else {
+		response.Content = "done"
+	}
+	return response, nil
+}
+
+func TestRunCostFuseTripsOnModelCalls(t *testing.T) {
+	repository := agentservice.NewMemoryRepository()
+	runService := agentservice.NewService(repository)
+	model := &costingModel{perCallTokens: 10}
+	registry, err := tools.NewRegistry(staticResultTool{
+		name:    "never_used",
+		content: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(runService, model, registry, 20)
+	engine.SetRunCostLimits(RunCostLimits{MaxModelCalls: 1})
+	run, err := engine.Start(context.Background(), "cost-calls", "budget test")
+	if err == nil {
+		t.Fatalf("run %#v: expected a cost fuse error", run)
+	}
+	var limitErr *RunCostLimitError
+	if !errors.As(err, &limitErr) || limitErr.LimitType != "model_calls" {
+		t.Fatalf("error = %v, want model_calls RunCostLimitError", err)
+	}
+	if run.Status != agentservice.RunStatusFailed {
+		t.Fatalf("run status = %s, want failed", run.Status)
+	}
+}
+
+func TestRunCostFuseTripsOnTotalTokens(t *testing.T) {
+	repository := agentservice.NewMemoryRepository()
+	runService := agentservice.NewService(repository)
+	model := &costingModel{perCallTokens: 100}
+	registry, err := tools.NewRegistry(staticResultTool{
+		name:    "never_used",
+		content: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(runService, model, registry, 20)
+	engine.SetRunCostLimits(RunCostLimits{MaxTotalTokens: 150})
+	run, err := engine.Start(context.Background(), "cost-tokens", "budget test")
+	if err == nil {
+		t.Fatalf("run %#v: expected a cost fuse error", run)
+	}
+	var limitErr *RunCostLimitError
+	if !errors.As(err, &limitErr) || limitErr.LimitType != "total_tokens" {
+		t.Fatalf("error = %v, want total_tokens RunCostLimitError", err)
+	}
+}
+
+func TestRunCostFuseTripsOnTranscriptBytes(t *testing.T) {
+	repository := agentservice.NewMemoryRepository()
+	runService := agentservice.NewService(repository)
+	model := &scriptedModel{responses: []agent.ModelResponse{
+		{ToolCalls: []agent.ModelTool{{ID: "explore-1", Name: "explore_page", Arguments: `{}`}}},
+		{ToolCalls: []agent.ModelTool{{ID: "explore-2", Name: "explore_page", Arguments: `{}`}}},
+		{ToolCalls: []agent.ModelTool{{ID: "explore-3", Name: "explore_page", Arguments: `{}`}}},
+		{Content: "done"},
+	}}
+	registry, err := tools.NewRegistry(staticResultTool{
+		name:    "explore_page",
+		content: json.RawMessage(`{"a11y_nodes":[{"node_id":"n1"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(runService, model, registry, 10)
+	// Every tool result adds a summary; a 1-byte cap trips the fuse on the
+	// first tool message.
+	engine.SetRunCostLimits(RunCostLimits{MaxTranscriptBytes: 1})
+	run, err := engine.Start(context.Background(), "cost-transcript", "budget test")
+	if err == nil {
+		t.Fatalf("run %#v: expected a cost fuse error", run)
+	}
+	var limitErr *RunCostLimitError
+	if !errors.As(err, &limitErr) || limitErr.LimitType != "transcript_bytes" {
+		t.Fatalf("error = %v, want transcript_bytes RunCostLimitError", err)
+	}
+}
+
+func TestRunCostFusesDisabledWithZeroLimits(t *testing.T) {
+	repository := agentservice.NewMemoryRepository()
+	runService := agentservice.NewService(repository)
+	model := &costingModel{perCallTokens: 1_000_000}
+	registry, err := tools.NewRegistry(staticResultTool{
+		name:    "never_used",
+		content: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(runService, model, registry, 3)
+	engine.SetRunCostLimits(RunCostLimits{})
+	run, err := engine.Start(context.Background(), "cost-off", "budget test")
+	if err != nil {
+		t.Fatalf("Start() error = %v, want fuses disabled", err)
+	}
+	if run.Status != agentservice.RunStatusCompleted {
+		t.Fatalf("run status = %s, want completed", run.Status)
 	}
 }

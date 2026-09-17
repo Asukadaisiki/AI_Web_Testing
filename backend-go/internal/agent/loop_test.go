@@ -127,6 +127,116 @@ func TestLoopTurnLimitPreservesExplorationSummaryError(t *testing.T) {
 	}
 }
 
+func TestLoopTurnLimitClearsStaleToolErrorAfterSuccess(t *testing.T) {
+	// BUG-186: a recovered failure must not leak into the max-turn terminal
+	// error when the latest tool result succeeded.
+	model := &sequenceModel{responses: []ModelResponse{
+		{ToolCalls: []ModelTool{{ID: "explore-1", Name: "explore_flow", Arguments: `{}`}}},
+	}}
+	loop := NewLoop(model, nil, "system", 1)
+	transcript := []Message{{Role: "user", Content: "start"}}
+
+	err := loop.Run(context.Background(), &transcript, func(context.Context, ModelResponse) (bool, error) {
+		content, summaryErr := BuildModelToolSummary(
+			"explore_flow",
+			json.RawMessage(`{
+				"success":true,
+				"failures":[],
+				"pages":[{
+					"url":"https://example.test/products",
+					"page_state":"S0",
+					"status":"success",
+					"actions":[{
+						"action":"wait_for",
+						"target":"Quantity",
+						"status":"failed",
+						"failure":{"message":"stale wait_for error"}
+					}]
+				}]
+			}`),
+			12,
+		)
+		if summaryErr != nil {
+			return false, summaryErr
+		}
+		transcript = append(transcript, Message{
+			Role: "tool", ToolCallID: "explore-1", Content: content,
+		})
+		return true, nil
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want turn limit error")
+	}
+	if strings.Contains(err.Error(), "stale wait_for error") {
+		t.Fatalf("Run() error = %v, must not cite recovered stale tool error", err)
+	}
+}
+
+func TestLoopTurnBudgetScalesWithDynamicBudget(t *testing.T) {
+	// The loop must re-query the budget before each turn so a harness can
+	// grow the limit as the TaskPlan grows (BUG-195).
+	model := &sequenceModel{responses: []ModelResponse{
+		{ToolCalls: []ModelTool{{ID: "call-1", Name: "read", Arguments: `{}`}}},
+		{ToolCalls: []ModelTool{{ID: "call-2", Name: "read", Arguments: `{}`}}},
+		{ToolCalls: []ModelTool{{ID: "call-3", Name: "read", Arguments: `{}`}}},
+		{Content: "done"},
+	}}
+	loop := NewLoop(model, nil, "system", 2)
+	transcript := []Message{{Role: "user", Content: "start"}}
+	turns := 0
+
+	err := loop.RunWithTurnBudget(
+		context.Background(),
+		&transcript,
+		nil,
+		func(_ context.Context, response ModelResponse) (bool, error) {
+			turns++
+			if len(response.ToolCalls) > 0 {
+				transcript = append(transcript, Message{
+					Role:       "tool",
+					ToolCallID: response.ToolCalls[0].ID,
+					Content:    `{"ok":true}`,
+				})
+				return true, nil
+			}
+			return false, nil
+		},
+		func(used int) int {
+			if used < 2 {
+				return 2
+			}
+			return 4
+		},
+	)
+	if err != nil {
+		t.Fatalf("RunWithTurnBudget() error = %v", err)
+	}
+	if turns != 4 {
+		t.Fatalf("turns = %d, want 4 with dynamic budget", turns)
+	}
+}
+
+func TestLoopTurnBudgetStillEnforcesWhenStatic(t *testing.T) {
+	model := &sequenceModel{responses: []ModelResponse{
+		{ToolCalls: []ModelTool{{ID: "call-1", Name: "read", Arguments: `{}`}}},
+	}}
+	loop := NewLoop(model, nil, "system", 1)
+	transcript := []Message{{Role: "user", Content: "start"}}
+
+	err := loop.RunWithTurnBudget(
+		context.Background(),
+		&transcript,
+		nil,
+		func(context.Context, ModelResponse) (bool, error) {
+			return true, nil
+		},
+		func(used int) int { return 1 },
+	)
+	if err == nil {
+		t.Fatal("RunWithTurnBudget() error = nil, want turn limit error")
+	}
+}
+
 func TestLoopReturnsModelError(t *testing.T) {
 	expected := errors.New("model unavailable")
 	model := ModelFunc(func(context.Context, []Message, []ToolDefinition) (ModelResponse, error) {

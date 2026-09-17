@@ -43,7 +43,10 @@ Every explore_page or explore_flow call must include plan_step_ids for the next 
 For explore_flow, set action.plan_step_id on every action intended to ground a pending PlanStep. A click or input that replays an already grounded prerequisite must keep that original plan_step_id and is treated as a supporting action. Supporting wait_for observations may omit plan_step_id. Never rely on action order or target text to infer ownership.
 Never execute external_state or unknown side effects during exploration. Such steps may only be grounded by observing their controls or expected facts without triggering them.
 Use ask_user_question only when required information or explicit approval is missing.
-Tool results shown to you use agent.model_tool_summary.v1. For exploration, first read observation.page_states, observation.element_groups, observation.candidate_coverage, observation.action_options, and observation.verification_facts to understand the page; use pages[].a11y_nodes as the exact evidence submitted in generate_dsl.a11y_nodes_by_state. source.event_seq and hashes reference the complete persisted tool.result event.
+Tool results shown to you use agent.model_tool_summary.v1. For exploration, first read observation.page_states, observation.selectable_candidates, observation.element_groups, observation.candidate_coverage, observation.action_options, and observation.verification_facts to understand the page; use pages[].a11y_nodes as the exact evidence submitted in generate_dsl.a11y_nodes_by_state. source.event_seq and hashes reference the complete persisted tool.result event.
+	Each observation.selectable_candidates entry carries a complete candidate_ref object of schema_version "grounding.candidate-ref.v1" with source_event_seq, probe_id, observation_id, and candidate_id. Copy the whole candidate_ref into the candidate_ref field of a grounding.query.v2 explore_flow action; never rebuild or edit its fields.
+	For icon buttons or any control whose accessible name is empty, glyph-only, or not reliably readable, choose the semantic-name candidate with count 1 from observation.selectable_candidates and drive it through candidate_ref. Do not author a role/name semantic locator to guess at such a control: a guess can match zero controls or several controls and fail grounding.
+	After the first explore_page, reuse its returned selectable_candidates instead of exploring again to recover them; never call set_task_plan merely to reset exploration budget; and do not re-explore a page state that already holds a count=1 candidate_ref for the required control.
 After every tool result, reason from the returned facts before selecting another tool. Do not
 repeat or revise the TaskPlan to work around a locator failure. Keep the business plan stable,
 refine only the next GroundingQuery, and generate DSL only after the persisted plan reports
@@ -61,7 +64,7 @@ const dslAuthoringPrompt = `PHASE 3 - DSL AUTHORING
 As soon as every PlanStep is grounded, call generate_dsl with the exact plan binding and
 step binding IDs returned in the latest tool summary.
 Author a research-v2 Draft DSL from the TaskPlan and verified BrowserObservation facts.
-Each step must include plan_step_id; click, input, and capture_text steps must include
+Each step must include plan_step_id; click, input, assert_text, and capture_text steps must include
 target_binding_id. Do not copy A11y nodes or author selectors/candidates.
 	The control plane compiles the Draft DSL into an immutable Executable DSL and preserves every TaskPlan step's intent, action, value, idempotency, side_effect, order, and expected occurrence count exactly.
 	DSL steps may only use goto, click, input, wait_for, assert_text, assert_url_contains, and capture_text. Use wait_for or postconditions for visibility checks; assert_visible is not supported.
@@ -96,13 +99,191 @@ type Harness struct {
 	policy ToolPolicy
 	plans  *taskplan.Service
 
+	// BUG-155: run-level hard cost fuses. Zero fields mean "unlimited".
+	costLimits RunCostLimits
+
 	activeMu   sync.Mutex
 	activeRuns map[string]*activeRun
 }
 
-type activeRun struct {
-	cancel context.CancelFunc
+// RunCostLimits caps cumulative model cost per run. A zero value disables the
+// corresponding fuse; all values below must be >= 0.
+type RunCostLimits struct {
+	MaxModelCalls     int   // cumulative model calls (logical Complete calls)
+	MaxTotalTokens    int64 // cumulative total tokens across calls
+	MaxTranscriptBytes int  // serialized transcript size in bytes
 }
+
+func (l RunCostLimits) withDefaults() RunCostLimits {
+	if l.MaxModelCalls <= 0 {
+		l.MaxModelCalls = 40
+	}
+	if l.MaxTotalTokens <= 0 {
+		l.MaxTotalTokens = 3_000_000
+	}
+	if l.MaxTranscriptBytes <= 0 {
+		l.MaxTranscriptBytes = 2_000_000
+	}
+	return l
+}
+
+func (l RunCostLimits) Enabled() bool {
+	return l.MaxModelCalls > 0 || l.MaxTotalTokens > 0 || l.MaxTranscriptBytes > 0
+}
+
+type activeRun struct {
+	cancel     context.CancelFunc
+	turnBudget int
+	// BUG-155 cumulative cost state.
+	modelCalls      int
+	totalTokens     int64
+	transcriptBytes int
+	lastLimit       string
+}
+
+func (a *activeRun) updateCost(calls int, totalTokens int64, transcriptBytes int) {
+	a.modelCalls += calls
+	a.totalTokens += totalTokens
+	a.transcriptBytes = transcriptBytes
+}
+
+// exceed returns the first violated limit name or "".
+func (a *activeRun) exceed(limits RunCostLimits) string {
+	if limits.MaxModelCalls > 0 && a.modelCalls > limits.MaxModelCalls {
+		return "model_calls"
+	}
+	if limits.MaxTotalTokens > 0 && a.totalTokens > limits.MaxTotalTokens {
+		return "total_tokens"
+	}
+	if limits.MaxTranscriptBytes > 0 && a.transcriptBytes > limits.MaxTranscriptBytes {
+		return "transcript_bytes"
+	}
+	return ""
+}
+
+// turnBudgetReserve reserves extra turns beyond grounding (2 per PlanStep)
+// for DSL generation, approval, and repair phases.
+const turnBudgetReserve = 8
+
+func (e *Harness) turnBudgetFor(runID string) int {
+	e.activeMu.Lock()
+	defer e.activeMu.Unlock()
+	if active := e.activeRuns[runID]; active != nil {
+		return active.turnBudget
+	}
+	return 0
+}
+
+func (e *Harness) raiseTurnBudget(runID string, needed int) {
+	e.activeMu.Lock()
+	defer e.activeMu.Unlock()
+	if active := e.activeRuns[runID]; active != nil && needed > active.turnBudget {
+		active.turnBudget = needed
+	}
+}
+
+// RunCostLimitError is a terminal run failure produced by a BUG-155 cost fuse.
+type RunCostLimitError struct {
+	Limit    string `json:"limit"`
+	Current  string `json:"current"`
+	Max      string `json:"max"`
+	LimitType string `json:"limit_type"`
+}
+
+func (e *RunCostLimitError) Error() string {
+	return fmt.Sprintf(
+		"agent run cost limit exceeded (%s: %s > %s)",
+		e.LimitType, e.Current, e.Max,
+	)
+}
+
+// recordRunCost accumulates model call and token usage into the active run and
+// returns a RunCostLimitError when a hard cost fuse trips. Called from the
+// telemetry recorder after each model call.
+func (e *Harness) recordRunCost(run agentservice.AgentRun, record agent.TelemetryRecord) error {
+	if !e.costLimits.Enabled() {
+		return nil
+	}
+	var totalTokens int64
+	if usage := record.Telemetry.Usage; usage.TotalTokens != nil {
+		totalTokens = *usage.TotalTokens
+	}
+	e.activeMu.Lock()
+	active := e.activeRuns[run.ID]
+	if active != nil {
+		active.updateCost(1, totalTokens, active.transcriptBytes)
+	}
+	var exceeded string
+	var calls int
+	var tokens int64
+	var transcriptBytes int
+	if active != nil {
+		exceeded = active.exceed(e.costLimits)
+		calls = active.modelCalls
+		tokens = active.totalTokens
+		transcriptBytes = active.transcriptBytes
+	}
+	e.activeMu.Unlock()
+	if active == nil {
+		return nil
+	}
+	return e.costLimitError(exceeded, calls, tokens, transcriptBytes)
+}
+
+// recordTranscriptCost re-measures the serialized transcript and trips the
+// transcript byte fuse when the transcript grows past the configured cap.
+func (e *Harness) recordTranscriptCost(run agentservice.AgentRun) error {
+	if e.costLimits.MaxTranscriptBytes <= 0 {
+		return nil
+	}
+	bytes := serializedTranscriptBytes(run.Transcript)
+	e.activeMu.Lock()
+	active := e.activeRuns[run.ID]
+	if active != nil {
+		active.transcriptBytes = bytes
+	}
+	var exceeded string
+	var calls int
+	var tokens int64
+	if active != nil {
+		exceeded = active.exceed(e.costLimits)
+		calls = active.modelCalls
+		tokens = active.totalTokens
+	}
+	e.activeMu.Unlock()
+	return e.costLimitError(exceeded, calls, tokens, bytes)
+}
+
+func (e *Harness) costLimitError(limit string, calls int, tokens int64, transcriptBytes int) error {
+	if limit == "" {
+		return nil
+	}
+	limits := e.costLimits
+	max, current := "", ""
+	switch limit {
+	case "model_calls":
+		max, current = intString(limits.MaxModelCalls), intString(calls)
+	case "total_tokens":
+		max, current = int64String(limits.MaxTotalTokens), int64String(tokens)
+	case "transcript_bytes":
+		max, current = intString(limits.MaxTranscriptBytes), intString(transcriptBytes)
+	}
+	return &RunCostLimitError{
+		Limit: limit, LimitType: limit,
+		Current: current, Max: max,
+	}
+}
+
+func serializedTranscriptBytes(messages []agent.Message) int {
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		return 0
+	}
+	return len(encoded)
+}
+
+func intString(value int) string { return strconv.Itoa(value) }
+func int64String(value int64) string { return strconv.FormatInt(value, 10) }
 
 func New(runs *agentservice.Service, model agent.Model, registry *tools.Registry, maxSteps int) *Harness {
 	return newHarness(runs, model, registry, nil, maxSteps)
@@ -118,6 +299,19 @@ func NewWithTaskPlans(
 	return newHarness(runs, model, registry, plans, maxSteps)
 }
 
+func NewWithTaskPlansAndExploration(
+	runs *agentservice.Service,
+	model agent.Model,
+	registry *tools.Registry,
+	plans *taskplan.Service,
+	maxSteps int,
+	exploration ExplorationGateConfig,
+) *Harness {
+	engine := newHarness(runs, model, registry, plans, maxSteps)
+	engine.policy = DefaultToolPolicy{Exploration: exploration}
+	return engine
+}
+
 func newHarness(
 	runs *agentservice.Service,
 	model agent.Model,
@@ -131,8 +325,25 @@ func newHarness(
 		tools:      registry,
 		policy:     DefaultToolPolicy{},
 		plans:      plans,
+		costLimits: defaultRunCostLimits(),
 		activeRuns: make(map[string]*activeRun),
 	}
+}
+
+func defaultRunCostLimits() RunCostLimits {
+	return RunCostLimits{
+		MaxModelCalls:     40,
+		MaxTotalTokens:    3_000_000,
+		MaxTranscriptBytes: 1_000_000,
+	}
+}
+
+// SetRunCostLimits overrides the default hard cost fuses. Zero fields disable
+// the corresponding fuse (a nil pointer also disables all fuses).
+func (e *Harness) SetRunCostLimits(limits RunCostLimits) {
+	e.activeMu.Lock()
+	defer e.activeMu.Unlock()
+	e.costLimits = limits
 }
 
 func (e *Harness) Start(ctx context.Context, conversationID string, input string) (agentservice.AgentRun, error) {
@@ -210,7 +421,7 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 		return run, nil
 	}
 
-	loopErr := e.loop.RunWithModelContext(
+	loopErr := e.loop.RunWithTurnBudget(
 		ctx,
 		&run.Transcript,
 		func(callContext context.Context) context.Context {
@@ -220,7 +431,12 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 			return agent.WithTelemetryRecorder(
 				callContext,
 				func(recordContext context.Context, record agent.TelemetryRecord) error {
-					return e.runs.RecordModelTelemetry(recordContext, run, record)
+					if err := e.runs.RecordModelTelemetry(recordContext, run, record); err != nil {
+						return err
+					}
+					// BUG-155: accumulate run-level cost; trip the hard fuse
+					// before the loop schedules the next model call.
+					return e.recordRunCost(run, record)
 				},
 				logicalCallID,
 				stepID,
@@ -494,6 +710,10 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 					if planErr != nil {
 						return false, planErr
 					}
+					e.raiseTurnBudget(
+						run.ID,
+						len(currentPlan.Steps)*2+turnBudgetReserve,
+					)
 					taskPlanSummary = modelTaskPlanSummary(currentPlan)
 					if provider, ok := e.policy.(explorationBudgetProvider); ok {
 						var completedCall *agent.ModelTool
@@ -526,6 +746,9 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				if err := e.runs.SaveRun(ctx, run); err != nil {
 					return false, err
 				}
+				if err := e.recordTranscriptCost(run); err != nil {
+					return false, err
+				}
 				traceIdentity.lineage, traceErr = e.pipelineLineage(
 					ctx,
 					run,
@@ -549,6 +772,9 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				}
 			}
 			return true, nil
+		},
+		func(used int) int {
+			return e.turnBudgetFor(run.ID)
 		},
 	)
 	if loopErr != nil {
