@@ -64,6 +64,7 @@ backend/artifacts
 .gocache/
 .gomodcache/
 .gopath/
+.gotmp/
 backend-go/.gocache/
 backend-go/.gomodcache/
 backend-go/bin/
