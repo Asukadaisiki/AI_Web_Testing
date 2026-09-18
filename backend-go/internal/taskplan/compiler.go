@@ -65,6 +65,10 @@ func (s *Service) CompileDraftCase(
 		if err := compileDraftStep(step, planned[index], index); err != nil {
 			return nil, Plan{}, err
 		}
+		// The plan owns the semantic target and the compiler injects it below, so
+		// drop any descriptive target the author carried over from the plan
+		// rather than letting it leak into the executable case.
+		delete(step, "target")
 		if planned[index].Target != "" {
 			step["semantic_target"] = planned[index].Target
 		}
@@ -451,17 +455,12 @@ func planStepSemanticChecks(
 	idempotency, sideEffect string,
 	expected Step,
 ) []planStepCheck {
-	return []planStepCheck{
+	checks := []planStepCheck{
 		{Field: "plan_step_id", Actual: planStepID, Expected: expected.ID},
 		{Field: "action", Actual: normalize(action), Expected: expected.Action},
 		{Field: "value", Actual: strings.TrimSpace(value), Expected: expected.Value},
 		{Field: "trigger", Actual: trigger, Expected: expected.Trigger},
 		{Field: "context_key", Actual: contextKey, Expected: expected.ContextKey},
-		{
-			Field:    "timeout_ms",
-			Actual:   fmt.Sprintf("%d", timeoutMS),
-			Expected: fmt.Sprintf("%d", expected.TimeoutMS),
-		},
 		{Field: "idempotency", Actual: idempotency, Expected: expected.Idempotency},
 		{
 			Field:    "side_effect",
@@ -469,6 +468,19 @@ func planStepSemanticChecks(
 			Expected: string(expected.SideEffect),
 		},
 	}
+	// A plan that leaves the timeout unset (0) must not constrain the DSL. The
+	// research-v2 validation materializes a default timeout for wait_for steps
+	// and rejects an explicit zero, so demanding the plan's 0 made every
+	// unset-timeout step uncompilable and deadlocked DSL generation: the model
+	// could neither omit the field nor set it to zero.
+	if expected.TimeoutMS > 0 {
+		checks = append(checks, planStepCheck{
+			Field:    "timeout_ms",
+			Actual:   fmt.Sprintf("%d", timeoutMS),
+			Expected: fmt.Sprintf("%d", expected.TimeoutMS),
+		})
+	}
+	return checks
 }
 
 // firstPlanStepMismatch describes the first field that disagrees with the plan

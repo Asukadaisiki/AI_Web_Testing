@@ -1798,6 +1798,109 @@ func TestCreateVersionIsIdempotentForIdenticalPlan(t *testing.T) {
 	}
 }
 
+// A plan revision must survive cosmetic rephrasing of a step while still
+// refusing to reuse a binding whose target actually changed.
+func TestCreateVersionCarriesGroundingAcrossIntentRewording(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+
+	definition := func(intent, target string) Definition {
+		return Definition{
+			Goal:             "Add a product to the cart",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "add_to_cart", Intent: intent, Action: "click",
+				Target: target, ExpectedOccurrences: 1,
+				Idempotency: "idempotent",
+				SideEffect:  SideEffectBrowserState,
+			}},
+		}
+	}
+
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID:      "run-carry",
+		Definition: definition("点击 Add to cart 按钮", "详情页 Add to cart 按钮"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Add to cart"
+	binding, err := browsercontract.NewTargetBinding(browsercontract.TargetBinding{
+		PlanID: plan.ID, PlanVersion: plan.Version,
+		PlanStepID: "add_to_cart", SemanticTarget: "详情页 Add to cart 按钮",
+		ProbeID: "probe-1", Action: "click", PageStateID: "detail",
+		ObservationID: "obs-1", ObservationSHA256: strings.Repeat("a", 64),
+		ElementRefs: []string{"detail:7"},
+		Candidates: []browsercontract.LocatorCandidate{{
+			CandidateID: "candidate-1", ElementRef: "detail:7",
+			Locator: browsercontract.LocatorSpec{
+				Kind: "role", Role: "button", Name: &name, Exact: true,
+			},
+			Provenance: "a11y_exact", ObservedCount: 1,
+			Visible: true, Enabled: true, Score: 0.95,
+		}},
+		SelectedCandidateID: "candidate-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	plan.Steps[0].TargetBinding = &binding
+	plan.Status = StatusReadyForGeneration
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewording only the intent must keep the carried grounding.
+	reworded, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-carry",
+		Definition: definition(
+			"点击商品详情页的 Add to cart 按钮将商品加入购物车",
+			"详情页 Add to cart 按钮",
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reworded.Version != 2 {
+		t.Fatalf("reworded plan version = %d, want 2", reworded.Version)
+	}
+	if reworded.Steps[0].Status != StepGrounded ||
+		reworded.Steps[0].TargetBinding == nil {
+		t.Fatalf(
+			"a reworded intent must keep the grounding: %#v",
+			reworded.Steps[0],
+		)
+	}
+	if reworded.Steps[0].TargetBinding.SelectedCandidateID != "candidate-1" {
+		t.Fatalf("carried binding = %#v", reworded.Steps[0].TargetBinding)
+	}
+	if reworded.Status != StatusReadyForGeneration {
+		t.Fatalf("all-grounded plan status = %q", reworded.Status)
+	}
+
+	// Changing the target must force a fresh probe.
+	retargeted, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-carry",
+		Definition: definition(
+			"点击商品详情页的 Add to cart 按钮将商品加入购物车",
+			"购物车页的 Checkout 按钮",
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retargeted.Steps[0].Status != StepPending ||
+		retargeted.Steps[0].TargetBinding != nil {
+		t.Fatalf(
+			"a changed target must drop the carried binding: %#v",
+			retargeted.Steps[0],
+		)
+	}
+}
+
 // BUG-201: the plan's `intent` is descriptive free text. A DSL that reproduces
 // every plan-owned field but paraphrases the intent must compile, while a real
 // semantic drift must still be rejected with a message that names the field.
@@ -1909,5 +2012,124 @@ func TestCompileDraftCaseAcceptsParaphrasedIntentAndNamesMismatchedField(
 		draft("goto", ""),
 	); err == nil {
 		t.Fatal("empty intent was accepted")
+	}
+}
+
+// A plan that leaves the timeout unset must not constrain the DSL, and the
+// plan's own descriptive target must not have to be stripped by the author.
+func TestCompileDraftCaseToleratesUnsetPlanTimeoutAndTarget(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-timeout-tolerance",
+		Definition: Definition{
+			Goal:             "Wait for the cart page",
+			MaxSideEffect:    SideEffectNone,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "wait_cart", Intent: "Wait for the cart", Action: "wait_for",
+				Target: "Cart heading",
+				// The plan left the timeout unset.
+				TimeoutMS:           0,
+				ExpectedOccurrences: 1,
+				Idempotency:         "idempotent",
+				SideEffect:          SideEffectNone,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	plan.Status = StatusReadyForGeneration
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	// The research-v2 validator materialises timeout_ms=5000 for wait_for, so a
+	// compiler that demanded the plan's 0 deadlocked generation: omitting the
+	// field yielded 5000 and writing 0 was rejected as invalid.
+	compiled, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		json.RawMessage(`{
+			"profile":"research-v2",
+			"name":"Wait for cart",
+			"steps":[{
+				"plan_step_id":"wait_cart",
+				"action":"wait_for",
+				"intent":"Wait for the cart",
+				"target":"Cart heading",
+				"timeout_ms":5000,
+				"preconditions":[],
+				"postconditions":[],
+				"idempotency":"idempotent",
+				"side_effect":"none"
+			}]
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("an unset plan timeout must not constrain the DSL: %v", err)
+	}
+	if strings.Contains(string(compiled), `"target"`) {
+		t.Fatalf(
+			"the descriptive target must be dropped from the compiled case: %s",
+			compiled,
+		)
+	}
+	if !strings.Contains(string(compiled), `"semantic_target":"Cart heading"`) {
+		t.Fatalf(
+			"the plan's semantic target must be injected: %s",
+			compiled,
+		)
+	}
+
+	// A plan that does set a timeout still enforces it.
+	second, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-timeout-enforced",
+		Definition: Definition{
+			Goal:             "Wait for the cart page",
+			MaxSideEffect:    SideEffectNone,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "wait_cart", Intent: "Wait for the cart", Action: "wait_for",
+				Target: "Cart heading", TimeoutMS: 8000,
+				ExpectedOccurrences: 1,
+				Idempotency:         "idempotent",
+				SideEffect:          SideEffectNone,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.Steps[0].Status = StepGrounded
+	second.Status = StatusReadyForGeneration
+	if err := repository.Save(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = service.CompileDraftCase(
+		ctx,
+		second.RunID,
+		second.Binding(),
+		json.RawMessage(`{
+			"profile":"research-v2",
+			"name":"Wait for cart",
+			"steps":[{
+				"plan_step_id":"wait_cart",
+				"action":"wait_for",
+				"intent":"Wait for the cart",
+				"timeout_ms":5000,
+				"preconditions":[],
+				"postconditions":[],
+				"idempotency":"idempotent",
+				"side_effect":"none"
+			}]
+		}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), `"timeout_ms"`) {
+		t.Fatalf("a set plan timeout must still be enforced: %v", err)
 	}
 }

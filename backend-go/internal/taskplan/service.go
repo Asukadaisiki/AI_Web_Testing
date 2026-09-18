@@ -644,9 +644,18 @@ func rebindCarriedTargetBindings(plan *Plan) bool {
 	return changed
 }
 
+// sameStepSemantics reports whether a carried binding still describes the step
+// it was grounded for.
+//
+// `Intent` is deliberately excluded. It is descriptive free text that neither
+// grounding nor the runner locates by, so a caller revising a plan routinely
+// rewords it while leaving the step's meaning intact. Comparing it verbatim
+// discarded the bindings of every reworded step and forced a full re-grounding
+// (measured in the 2026-09-18 live round: 3 of 7 grounded steps were lost to
+// pure rephrasing). `Target` stays exact because it is the string grounding
+// searches by, so a changed target genuinely warrants a fresh probe.
 func sameStepSemantics(left Step, right Step) bool {
-	return left.Intent == right.Intent &&
-		left.Action == right.Action &&
+	return left.Action == right.Action &&
 		left.Target == right.Target &&
 		left.Value == right.Value &&
 		left.Trigger == right.Trigger &&
@@ -746,8 +755,11 @@ func mapProbeActionOwners(
 			}
 			if action.CandidateRef != nil {
 				if request.SchemaVersion != browsercontract.GroundingQueryV2 {
-					return nil, errors.New(
-						"explore_flow candidate_ref requires grounding.query.v2",
+					return nil, fmt.Errorf(
+						"explore_flow action %q uses candidate_ref, which requires schema_version %q on the call itself; add \"schema_version\": %q and retry",
+						action.PlanStepID,
+						browsercontract.GroundingQueryV2,
+						browsercontract.GroundingQueryV2,
 					)
 				}
 				if action.PlanStepID == "" {

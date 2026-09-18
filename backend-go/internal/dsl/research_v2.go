@@ -159,6 +159,11 @@ func validateResearchV2Step(
 		"locator_candidates", "value", "trigger",
 		"context_key", "timeout_ms", "preconditions", "postconditions",
 		"idempotency", "side_effect",
+		// Authors routinely carry the plan's own `target` description into the
+		// draft. The compiler owns the semantic target and injects it from the
+		// plan, so the field is dropped rather than rejected: rejecting it only
+		// cost a turn per draft (BUG-201 class).
+		"target",
 	)
 	if err := rejectUnknownFields(
 		fmt.Sprintf("case.steps[%d]", index),

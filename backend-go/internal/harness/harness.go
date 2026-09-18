@@ -808,6 +808,21 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				}
 				var taskPlanSummary *agent.ToolResultTaskPlanSummary
 				var readyPlan *taskplan.Plan
+				if e.plans != nil {
+					// Grounding can complete with any tool result, and once the
+					// plan is ready every exploration call is rejected before the
+					// exploration-only branch below runs. Opening the generation
+					// segment here is therefore what makes the boundary fire at
+					// all; the earlier placement never reached it.
+					if plan, planErr := e.plans.GetCurrent(
+						ctx,
+						run.ID,
+					); planErr == nil &&
+						plan.Status == taskplan.StatusReadyForGeneration &&
+						e.markGenerationSegment(run.ID, plan.PlanSHA256) {
+						readyPlan = &plan
+					}
+				}
 				if e.plans != nil &&
 					(agent.IsExplorationTool(call.Name) ||
 						call.Name == "set_task_plan") {
@@ -831,10 +846,6 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 								&currentPlan,
 								completedCall,
 							)
-					}
-					if currentPlan.Status == taskplan.StatusReadyForGeneration {
-						plan := currentPlan
-						readyPlan = &plan
 					}
 				}
 				modelContent, err := agent.BuildModelToolSummary(
