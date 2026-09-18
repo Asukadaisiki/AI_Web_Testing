@@ -48,6 +48,22 @@
 
 ## 问题记录
 
+## BUG-204 | LLM 请求的 user_id 每次调用都变，导致 provider 前缀缓存永不命中
+
+- 日期：2026-09-18
+- 状态：fixed
+- 严重度：high（性能/成本，是 live E2E 撞墙钟的直接放大器）
+- 来源：live E2E 实测（`run_d71e9218a2788ec4c3a14d72`）+ DeepSeek 官方端点对照实验
+- 描述：`OpenAIClient.Complete` 每次调用都生成一个新的 `clientRequestID`，并由 `buildRequest` 写入 `chatRequest.UserID`。而 provider 的 prompt cache 按请求身份隔离，因此**同一 run 内没有任何一次调用能复用上一次的前缀缓存**——上下文越大，这个损失越大。首轮 live 实测：17 次调用中仅 2 次命中，且全部来自「同一次逻辑调用的重试」复用了同一个 client request id（106,240 / 862,091 input tokens = 12%）。
+- 复现步骤：
+  1. 对照实验：向 `https://api.deepseek.com/chat/completions` 发送完全相同、仅 `user_id` 不同的两个请求体 —— 第二个（新 `user_id`）`prompt_cache_hit_tokens=0`；把同一 body 在同一个 `user_id` 下重发 —— 命中 128/369。
+  2. 生产库核对：`run_d71e9218…` 每次 `research.llm_call` 的 `client_request_id` 互不相同；仅 seq 87/89 与 117/119 两对复用同一 id（重试），也恰好只有这两对出现非零命中。
+- 影响：整轮 900s 中 **843s（94%）耗在 LLM**；上下文增长到 533KB / 138K input tokens 时每次调用都要全量重算前缀。这是「上下文爆炸」在延迟与成本上的直接放大器，也是 P4/L3 方案无法兑现收益的原因。
+- 根因：把「每次 HTTP 请求的唯一标识」误用为「缓存身份」。前者用于追踪与去重，后者必须在一个 run 内稳定。
+- 处理：新增 `agent.WithCacheIdentity` / `agent.CacheIdentity`；harness 在每轮模型调用前以 **run ID** 固定身份；`Complete` 优先使用该身份，未固定时回落到 per-call request id（避免发送空 `user_id`）。
+- 验证：新增 `TestCompleteUsesPinnedCacheIdentityAcrossCalls`（两次调用 user_id 必须一致；未固定时回落为非空 per-call id）；`go build/vet/test ./...` 全绿。**live 复验（`run_e4e33a54c3a52ee3ff59628f`）：缓存命中率 12% → 95%（1,366,400 / 1,436,190 tokens），平均单次 LLM 延迟 50s → 35s，LLM 总耗时 843s → 662s。**
+- 关联记录：docs/execution-log.md 2026-09-18（两轮 live E2E）；docs/plan/2026-09-18-context-budget-design.md（L3）；BUG-203。
+
 ## BUG-203 | 约束记录：thinking + tools 下 reasoning_content 必须全量回放，禁止裁剪（裁剪即 400）
 
 - 日期：2026-09-18

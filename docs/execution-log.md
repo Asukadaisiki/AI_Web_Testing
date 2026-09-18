@@ -56,6 +56,25 @@
 
 ## 任务记录
 
+## 2026-09-18 | 两轮 live E2E：发现并修复 prompt 缓存身份缺陷（命中率 12% → 95%）
+
+- 任务：按用户要求提交改动后跑一轮 live E2E；用实测数据检验 P2/P3/P4 与配置修正的效果。
+- 操作：
+  1. 三个提交（BUG-201 修复 / 阶段边界与压缩策略 / 文档）并 `git push origin main`（`f4ecc05..409e594`）。
+  2. 应用迁移、构建二进制，启动 browser-worker(:8000)、execution-worker、agentservice(:8081)。发现 8081 被 21:08 启动的**旧二进制**占用（健康检查响应来自旧进程），停止后换用新构建。
+  3. **run 1**（`run_d71e9218…`，203 事件，900s 取消）后分析 `prompt_spec.request_budget` 与 `usage`。
+  4. 用 DeepSeek 官方端点做 `user_id` 对照实验，定位缓存不命中的根因（BUG-204），实施修复。
+  5. 重建并替换 agentservice，**run 2**（`run_e4e33a54c3a52ee3ff59628f`，236 事件，900s 取消）复验。
+- 结果：
+  1. **发现并修复 BUG-204（high）**：`Complete` 每次调用生成新的 `clientRequestID` 并作为 `user_id` 发送，而 provider 的 prompt cache 按身份隔离，导致同一 run 内**从不**复用前缀缓存。对照实验：同 body 换 `user_id` → 0/369 命中；同 `user_id` 重发 → 128/369 命中。生产库佐证：run 1 唯一的两处命中恰好来自复用同一 id 的重试。
+  2. **修复效果（两轮对照）**：缓存命中率 **12% → 95%**（106,240/862,091 → 1,366,400/1,436,190 tokens）；平均单次 LLM 延迟 **50s → 35s**；LLM 总耗时 **843s → 662s**。这是本轮唯一的确定性收益。
+  3. **P2 的门禁错误改进已生效**：实测错误形如 `expected next plan step "s4_click_search_button", got "s3_input_search_box"; pending steps in order: s4_…, s5_…, s6_…`，模型可直接据此纠正。但两轮中各出现 2-3 次门禁拒绝，仍是轮次浪费来源。
+  4. **P3/P4 未获得验证机会**：两轮都在 900s 内**未走到 `ready_for_generation`**（run 1 停在 7/14 grounded，run 2 因 plan 改版最终 4/14 被 blocked），因此阶段边界从未触发；`prompt_cache_hit_tokens` 的可观测性正常。
+  5. **仍未收敛**：两轮均以 900s 墙钟取消。上下文继续增长（run 2 最大请求 728,750 字节、138K+ input tokens），LLM 占比仍高（run 2: 662s/900s ≈ 74%）。根因已从「缓存全失效」转为「grounding 轮次过多 + plan 改版重置进度」。
+  6. `explore_flow candidate_ref requires grounding.query.v2` 在两轮均复现（run 2 seq 68），是尚未处理的固定摩擦点。
+- 验证：两轮 live E2E 均落库（`research/results/agentic-e2e-context-budget-round1.json`、`agentic-e2e-cache-identity-round2.json`）；结论取自 `agent_events` 的 `request_budget`/`usage`；`user_id` 分区缓存经官方端点对照实验确认；修复后 `go build/vet/test ./...` 全绿（新增 `TestCompleteUsesPinnedCacheIdentityAcrossCalls`）。
+- 后续：① 把 `explore_flow` 的 `schema_version: grounding.query.v2` 要求做成可行动错误或自动补全（两轮均踩）；② 抑制 plan 改版导致 grounding 进度重置（run 2 的核心损耗）；③ P5 未开始；④ 服务当前仍在后台运行（browser-worker :8000、agentservice :8081、execution-worker），如需释放端口请告知。
+
 ## 2026-09-18 | 实施上下文预算 P0+P2+P3+P4（轮次最小化 / 缓存友好 / 阶段边界重置）
 
 - 任务：按用户决定（P0 用 `deepseek-flash`；P2+P3+P4 一起做）实施 `docs/plan/2026-09-18-context-budget-design.md`。
