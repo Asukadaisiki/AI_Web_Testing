@@ -10,12 +10,12 @@ AI 增强的 Web UI 自动化测试平台。
 
 ## 当前状态
 
-当前阶段：**Go AgentCore 纵向闭环和受控自愈已可用，进入控制面收敛与生产化阶段**。
+当前阶段：**Go AgentCore 纵向闭环和受控自愈已可用，Agentic Research live E2E 进入收尾冲刺（grounding 与 DSL 生成已打通）**。
 
 后端架构已经收敛：AgentCore 与业务控制面使用 Go，浏览器执行能力保留在
 Python Worker；Hertz 提供 HTTP/SSE，Python FastAPI 仅提供内部浏览器 capability。
 
-截至 2026-09-05：
+截至 2026-09-18：
 
 | 能力域 | 当前状态 |
 |------|------|
@@ -25,11 +25,32 @@ Python Worker；Hertz 提供 HTTP/SSE，Python FastAPI 仅提供内部浏览器 
 | 执行调度 | PostgreSQL 持久化 Batch/Job 队列、并发限制、幂等、lease、heartbeat 和取消已落地 |
 | 报告聚合 | Report Core 可按 run、batch、project 聚合结果，并返回持久化 FailureSignal 与分析总结 |
 | AI 自愈 | `fix_and_retry` 可按失败事实执行重探索或 DSL 重生成，并强制经过用户审批后重运行 |
+| Agent 运行时 | run 级成本熔断、上下文阶段边界重置、run 级 prompt 缓存身份（命中率约 98%）已落地；LLM 适配器具备重试、看门狗与熔断 |
 | 身份与权限 | 当前开发与生产均不启用登录鉴权；服务端固定 actor 并保留资源归属字段 |
 | 生产运行 | Docker Compose 管理 PostgreSQL、迁移、Python API/Worker、Go AgentCore 和 Nginx；SSE 反向代理已配置 |
 | 质量门禁 | Go 测试/vet/build、Python 合同测试、Vitest、桌面/移动 Playwright smoke 和生产构建进入 CI |
 
 不再使用单一完成度百分比描述项目状态；各能力的完成标准和风险不同，应以上述能力矩阵、执行日志和缺陷日志为准。
+
+### 2026-09-18 Agentic Research live E2E 冲刺
+
+以 Blue Top 加购任务为基线，连续 10 轮 live E2E 驱动收敛，当前最好成绩为 round 10：
+
+- **Grounding 打通**：12/12 步骤全部 grounded，且经历 4 次计划改版（v1→v4）每次都保持 12/12。
+- **DSL 生成打通**：`dsl_generation_runs` 出现成功记录；`timeout_ms` 死锁与冗余 `target` 误拒已修复。
+- **Prompt 缓存修复**：以 run ID 固定缓存身份（BUG-204），命中率从 12% 提升到约 98%。
+- **上下文预算**：按阶段边界重置上下文，推理内容回放与 thinking+tools 硬约束（BUG-203）已适配。
+- **E2E 驱动增强**：每 30s 输出进度，事件序号停滞 300s 即判定 STALLED 并提前取消（BUG-205），不再空等墙钟。
+- round 10 终止于 run 级成本熔断（约 309 万 tokens > 3M 默认预算），非代码缺陷；剩余待验证环节为执行与报告。
+
+环境侧已定位并解决 Windows 作业对象 kill 服务树的问题（改用 `Win32_Process.Create` 在作业对象外启动）。
+
+下一阶段优先级：
+
+1. 提高 `AGENTSERVICE_MAX_TOTAL_TOKENS` 预算后重跑 live E2E，验证执行与报告闭环。
+2. 完成 Agentic Research Pilot 的分阶段验收。
+3. 将 Planning 消息、草稿和事件从 Python legacy API 继续迁入 Go 控制面。
+4. 为生产容器补充真实镜像构建、TLS 入口和对象存储验收，扩大跨浏览器回归矩阵。
 
 ### 2026-09-04 Go AgentCore 与受控自愈
 
@@ -169,6 +190,7 @@ Python Worker；Hertz 提供 HTTP/SSE，Python FastAPI 仅提供内部浏览器 
 - **数据质量保障**：14 项孤儿数据清理 + 19 项数据传递与校验问题修复
 
 当前仍在推进的事项：
+- 完成 Agentic Research live E2E 收尾：提高成本熔断预算后验证执行与报告闭环
 - 扩大真实 Runner 的跨浏览器矩阵，并验证生产镜像、TLS 和持久化卷恢复
 - 完善 Agent trajectory、离线评测和策略发布能力
 
@@ -335,6 +357,9 @@ npm run build
 - [`docs/plan/capability-status-2026-08-28.md`](./docs/plan/capability-status-2026-08-28.md)：能力状态与保留/下线决策
 - [`docs/plan/agentic-research-pilot-2026-09-06.md`](./docs/plan/agentic-research-pilot-2026-09-06.md)：Agentic Research 分阶段实施与 Automation Exercise 基线
 - [`docs/plan/agent-pipeline-consistency-audit-2026-09-12.md`](./docs/plan/agent-pipeline-consistency-audit-2026-09-12.md)：Agent 全链路一致性排查、合同治理与分阶段验收计划
+- [`docs/plan/2026-09-13-grounding-plan-collapse.md`](./docs/plan/2026-09-13-grounding-plan-collapse.md)：精简 Grounding 架构，删除 groundingplan 双状态机，回归 taskplan 单一权威
+- [`docs/plan/2026-09-14-open-bugs-fix-plan.md`](./docs/plan/2026-09-14-open-bugs-fix-plan.md)：未修复问题整体修复方案
+- [`docs/plan/2026-09-18-context-budget-design.md`](./docs/plan/2026-09-18-context-budget-design.md)：DeepSeek thinking+tools 硬约束下的上下文预算设计
 - `docs/frontend-design.md`：前端设计说明
 - `docs/execution-log.md`：任务执行记录
 - `docs/bug-log.md`：缺陷记录

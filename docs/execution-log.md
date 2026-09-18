@@ -56,6 +56,16 @@
 
 ## 任务记录
 
+## 2026-09-18 | 更新 README 项目状态并同步 GitHub
+
+- 任务：将 README 状态从 2026-09-05 更新到当前（Agentic Research live E2E 收尾阶段），并同步到 GitHub。
+- 操作：
+  1. 复核 `docs/execution-log.md`、`docs/bug-log.md` 与近 20 条 git 提交，提取当前最新状态。
+  2. 更新 README：阶段描述改为「Agentic Research live E2E 进入收尾冲刺（grounding 与 DSL 生成已打通）」；状态矩阵新增「Agent 运行时」行（成本熔断、阶段边界重置、缓存身份、LLM 适配器防护）；新增「2026-09-18 Agentic Research live E2E 冲刺」小节（round 10 成果、BUG-203/204/205、后续优先级）；「当前仍在推进的事项」补充 live E2E 收尾；文档索引补充 2026-09-13/09-14/09-18 三份计划文档链接。
+  3. 校验 README 中全部相对链接均存在。
+- 结果：README 状态与 2026-09-18 执行日志一致，提交并推送 main 分支。
+- 验证：文档链接检查全部通过（无 MISSING）；git push 成功。
+- 后续：无。
 ## 2026-09-18 | round 10 复盘：grounding 与 DSL 生成均已打通，终止于成本熔断
 
 - 任务：跟进第 10 轮 live E2E（含本轮全部修复）。
