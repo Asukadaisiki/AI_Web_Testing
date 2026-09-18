@@ -92,10 +92,10 @@ type OpenAIClient struct {
 	retryDelay            time.Duration
 
 	// BUG-167 resilience knobs (override in tests).
-	attemptTimeout  time.Duration // per-attempt deadline; 0 = inherit request ctx
-	streamWatchdog  time.Duration // no-progress stall watchdog for response read
-	maxRetryAfter   time.Duration // cap for Retry-After honored on 429
-	breaker         *callBreaker  // call-level circuit breaker
+	attemptTimeout time.Duration // per-attempt deadline; 0 = inherit request ctx
+	streamWatchdog time.Duration // no-progress stall watchdog for response read
+	maxRetryAfter  time.Duration // cap for Retry-After honored on 429
+	breaker        *callBreaker  // call-level circuit breaker
 }
 
 func NewOpenAIClient(
@@ -234,7 +234,7 @@ func (c *OpenAIClient) Complete(
 	if err != nil {
 		return agent.ModelResponse{}, fmt.Errorf("generate LLM client request ID: %w", err)
 	}
-	payload := c.buildRequest(clientRequestID, messages, definitions)
+	payload := c.buildRequest(clientRequestID, cacheUserID(ctx, clientRequestID), messages, definitions)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return agent.ModelResponse{}, fmt.Errorf("encode LLM request: %w", err)
@@ -374,13 +374,26 @@ func (c *OpenAIClient) Complete(
 	return agent.ModelResponse{}, lastErr
 }
 
+// cacheUserID selects the identity the provider partitions its prompt cache by.
+// It must stay stable across the calls of one run: a per-call identity makes
+// every request a cache miss, which was measured against the DeepSeek API
+// (identical body, new identity: 0 of 369 prompt tokens hit). The per-call
+// request ID remains the fallback for callers that pin no identity.
+func cacheUserID(ctx context.Context, clientRequestID string) string {
+	if identity := agent.CacheIdentity(ctx); identity != "" {
+		return identity
+	}
+	return clientRequestID
+}
+
 func (c *OpenAIClient) buildRequest(
 	clientRequestID string,
+	userID string,
 	messages []agent.Message,
 	definitions []agent.ToolDefinition,
 ) chatRequest {
 	request := chatRequest{
-		Model: c.model, ToolChoice: "auto", UserID: clientRequestID,
+		Model: c.model, ToolChoice: "auto", UserID: userID,
 	}
 	if c.thinkingMode != "" {
 		request.Thinking = &thinkingControl{Type: c.thinkingMode}

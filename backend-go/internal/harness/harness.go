@@ -528,6 +528,10 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 			logicalCallID := e.runs.NewID("llm")
 			stepID := e.runs.NewID("step")
 			state, _, _ := e.currentPipelineState(callContext, run)
+			// Pin one prompt-cache identity for the whole run. Providers
+			// isolate their cache per identity, so a per-call identity would
+			// make every request of a growing transcript a cache miss.
+			callContext = agent.WithCacheIdentity(callContext, run.ID)
 			return agent.WithTelemetryRecorder(
 				callContext,
 				func(recordContext context.Context, record agent.TelemetryRecord) error {

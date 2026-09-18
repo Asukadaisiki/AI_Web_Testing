@@ -1373,3 +1373,64 @@ func TestCompleteCircuitBreakerOpensAfterRepeatedFailures(t *testing.T) {
 		t.Fatalf("breaker did not short-circuit provider: calls %d -> %d", before, calls.Load())
 	}
 }
+
+// Providers isolate their prompt cache per request identity: an identical body
+// under a new identity was measured to hit 0 of 369 prompt tokens, while a
+// repeat under the same identity hit 128. The identity therefore has to stay
+// stable across the calls of one run.
+func TestCompleteUsesPinnedCacheIdentityAcrossCalls(t *testing.T) {
+	var captured []chatRequest
+	server := httptest.NewServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			var payload chatRequest
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			captured = append(captured, payload)
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"x","choices":[` +
+				`{"finish_reason":"stop","message":{"role":"assistant","content":"done"}}]}`))
+		},
+	))
+	defer server.Close()
+
+	client, err := NewOpenAIClient(
+		"gateway", server.URL, "secret", "model", time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := agent.WithCacheIdentity(context.Background(), "run-stable")
+	for call := 0; call < 2; call++ {
+		if _, err := client.Complete(
+			ctx,
+			[]agent.Message{{Role: "user", Content: "hi"}},
+			nil,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(captured) != 2 {
+		t.Fatalf("captured %d requests, want 2", len(captured))
+	}
+	if captured[0].UserID != "run-stable" || captured[1].UserID != "run-stable" {
+		t.Fatalf(
+			"cache identity must stay stable across calls: %q then %q",
+			captured[0].UserID,
+			captured[1].UserID,
+		)
+	}
+
+	// Without a pinned identity the per-call request ID remains the identity,
+	// so the fallback never sends an empty user_id.
+	if _, err := client.Complete(
+		context.Background(),
+		[]agent.Message{{Role: "user", Content: "hi"}},
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if captured[2].UserID == "" || captured[2].UserID == "run-stable" {
+		t.Fatalf("unpinned identity = %q", captured[2].UserID)
+	}
+}

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -163,6 +164,29 @@ func EmitTelemetry(ctx context.Context, telemetry ModelTelemetry, toolCallIDs []
 }
 
 type telemetrySinkContextKey struct{}
+
+type cacheIdentityContextKey struct{}
+
+// WithCacheIdentity pins a stable identity for provider-side prompt caching.
+//
+// Providers isolate their prompt cache per request identity: two requests with
+// identical bodies but different identities do not share a cache, which was
+// measured against the DeepSeek API (a repeat with the same identity hit 128 of
+// 369 prompt tokens; the same body under a new identity hit 0). Identify a run,
+// not a call, so a growing transcript keeps reusing its own prefix.
+func WithCacheIdentity(ctx context.Context, identity string) context.Context {
+	if strings.TrimSpace(identity) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, cacheIdentityContextKey{}, identity)
+}
+
+// CacheIdentity returns the prompt-cache identity pinned by WithCacheIdentity,
+// or "" when the caller did not pin one.
+func CacheIdentity(ctx context.Context) string {
+	identity, _ := ctx.Value(cacheIdentityContextKey{}).(string)
+	return identity
+}
 
 func WithTelemetryRecorder(
 	ctx context.Context,
