@@ -824,8 +824,9 @@ func mapProbeActionOwners(
 			}
 			if _, ok := stepByID(pending, matched.ID); !ok {
 				return nil, fmt.Errorf(
-					"explore_flow action references unbound plan step %q",
+					"explore_flow action references plan step %q outside the submitted window; this probe may only act on: %s",
 					action.PlanStepID,
+					strings.Join(stepIDs(pending), ", "),
 				)
 			}
 			owners[probeActionKey(stepIndex, actionIndex)] =
@@ -992,9 +993,10 @@ func contiguousPendingSteps(plan Plan, ids []string) ([]Step, error) {
 	}
 	if firstSubmitted != first {
 		return nil, fmt.Errorf(
-			"expected next plan step %q, got %q",
+			"expected next plan step %q, got %q; pending steps in order: %s",
 			plan.Steps[first].ID,
 			ids[0],
+			strings.Join(pendingStepIDs(plan), ", "),
 		)
 	}
 	if firstSubmitted+len(ids) > len(plan.Steps) {
@@ -1004,9 +1006,10 @@ func contiguousPendingSteps(plan Plan, ids []string) ([]Step, error) {
 		step := plan.Steps[firstSubmitted+offset]
 		if step.ID != id {
 			return nil, fmt.Errorf(
-				"plan_step_ids must be contiguous: expected %q, got %q",
+				"plan_step_ids must be contiguous: expected %q, got %q; pending steps in order: %s",
 				step.ID,
 				id,
+				strings.Join(pendingStepIDs(plan), ", "),
 			)
 		}
 	}
@@ -1014,6 +1017,30 @@ func contiguousPendingSteps(plan Plan, ids []string) ([]Step, error) {
 		[]Step(nil),
 		plan.Steps[firstSubmitted:firstSubmitted+len(ids)]...,
 	), nil
+}
+
+// pendingStepIDs lists the not-yet-grounded plan steps in plan order. Ordering
+// gate errors embed this list so the model can see exactly which step the
+// control plane expects next instead of guessing and burning a whole turn
+// (each wasted turn permanently enlarges the replayed reasoning context, see
+// docs/plan/2026-09-18-context-budget-design.md).
+func pendingStepIDs(plan Plan) []string {
+	ids := make([]string, 0, len(plan.Steps))
+	for _, step := range plan.Steps {
+		if step.Status != StepGrounded {
+			ids = append(ids, step.ID)
+		}
+	}
+	return ids
+}
+
+// stepIDs lists the identifiers of the given steps in order.
+func stepIDs(steps []Step) []string {
+	ids := make([]string, 0, len(steps))
+	for _, step := range steps {
+		ids = append(ids, step.ID)
+	}
+	return ids
 }
 
 func isSelectorTarget(target string) bool {

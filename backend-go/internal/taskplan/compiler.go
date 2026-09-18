@@ -141,17 +141,29 @@ func compileDraftStep(
 	planned Step,
 	index int,
 ) error {
-	if stringValue(step["plan_step_id"]) != planned.ID ||
-		normalize(stringValue(step["action"])) != planned.Action ||
-		normalize(stringValue(step["intent"])) != normalize(planned.Intent) ||
-		strings.TrimSpace(stringValue(step["value"])) != planned.Value ||
-		stringValue(step["trigger"]) != planned.Trigger ||
-		stringValue(step["context_key"]) != planned.ContextKey ||
-		intValue(step["timeout_ms"]) != planned.TimeoutMS ||
-		stringValue(step["idempotency"]) != planned.Idempotency ||
-		SideEffect(stringValue(step["side_effect"])) != planned.SideEffect {
+	if mismatch := firstPlanStepMismatch(planStepSemanticChecks(
+		stringValue(step["plan_step_id"]),
+		stringValue(step["action"]),
+		stringValue(step["value"]),
+		stringValue(step["trigger"]),
+		stringValue(step["context_key"]),
+		intValue(step["timeout_ms"]),
+		stringValue(step["idempotency"]),
+		stringValue(step["side_effect"]),
+		planned,
+	)); mismatch != "" {
 		return fmt.Errorf(
-			"DSL step %d does not preserve plan step %q semantics",
+			"DSL step %d does not preserve plan step %q semantics: %s",
+			index,
+			planned.ID,
+			mismatch,
+		)
+	}
+	// `intent` is descriptive free text, so only its presence is required
+	// here; see planStepSemanticChecks for why it is not compared verbatim.
+	if stringValue(step["intent"]) == "" {
+		return fmt.Errorf(
+			"DSL step %d for plan step %q must carry a non-empty intent",
 			index,
 			planned.ID,
 		)
@@ -267,18 +279,33 @@ func validateCompiledCaseSemantics(plan Plan, raw json.RawMessage) error {
 	}
 	for index, step := range candidate.Steps {
 		expected := planned[index]
-		if step.PlanStepID != expected.ID ||
-			normalize(step.Action) != expected.Action ||
-			normalize(step.Intent) != normalize(expected.Intent) ||
-			step.SemanticTarget != expected.Target ||
-			step.Value != expected.Value ||
-			step.Trigger != expected.Trigger ||
-			step.ContextKey != expected.ContextKey ||
-			step.TimeoutMS != expected.TimeoutMS ||
-			step.Idempotency != expected.Idempotency ||
-			step.SideEffect != expected.SideEffect {
+		checks := planStepSemanticChecks(
+			step.PlanStepID,
+			step.Action,
+			step.Value,
+			step.Trigger,
+			step.ContextKey,
+			step.TimeoutMS,
+			step.Idempotency,
+			string(step.SideEffect),
+			expected,
+		)
+		checks = append(checks, planStepCheck{
+			Field:    "semantic_target",
+			Actual:   step.SemanticTarget,
+			Expected: expected.Target,
+		})
+		if mismatch := firstPlanStepMismatch(checks); mismatch != "" {
 			return fmt.Errorf(
-				"compiled DSL step %d does not preserve plan step %q",
+				"compiled DSL step %d does not preserve plan step %q: %s",
+				index,
+				expected.ID,
+				mismatch,
+			)
+		}
+		if strings.TrimSpace(step.Intent) == "" {
+			return fmt.Errorf(
+				"compiled DSL step %d for plan step %q must carry a non-empty intent",
 				index,
 				expected.ID,
 			)
@@ -399,4 +426,66 @@ func intValue(value any) int {
 	default:
 		return 0
 	}
+}
+
+// planStepCheck is one field-level comparison between a DSL step and the plan
+// step it claims to implement.
+type planStepCheck struct {
+	Field    string
+	Actual   string
+	Expected string
+}
+
+// planStepSemanticChecks lists the plan-owned fields that a DSL step must
+// reproduce exactly.
+//
+// `intent` is deliberately NOT among them. It is descriptive free text: the
+// DSL validators only require it to be non-empty and bounded, and neither the
+// compiler nor the runner consumes it. Comparing it verbatim rejected any
+// faithful paraphrase of the plan's own wording -- including the case where the
+// plan's intent carried an implementation note in parentheses -- and stalled
+// generation until the wall clock expired (BUG-201).
+func planStepSemanticChecks(
+	planStepID, action, value, trigger, contextKey string,
+	timeoutMS int,
+	idempotency, sideEffect string,
+	expected Step,
+) []planStepCheck {
+	return []planStepCheck{
+		{Field: "plan_step_id", Actual: planStepID, Expected: expected.ID},
+		{Field: "action", Actual: normalize(action), Expected: expected.Action},
+		{Field: "value", Actual: strings.TrimSpace(value), Expected: expected.Value},
+		{Field: "trigger", Actual: trigger, Expected: expected.Trigger},
+		{Field: "context_key", Actual: contextKey, Expected: expected.ContextKey},
+		{
+			Field:    "timeout_ms",
+			Actual:   fmt.Sprintf("%d", timeoutMS),
+			Expected: fmt.Sprintf("%d", expected.TimeoutMS),
+		},
+		{Field: "idempotency", Actual: idempotency, Expected: expected.Idempotency},
+		{
+			Field:    "side_effect",
+			Actual:   sideEffect,
+			Expected: string(expected.SideEffect),
+		},
+	}
+}
+
+// firstPlanStepMismatch describes the first field that disagrees with the plan
+// and returns "" when every field agrees. The message names the field and both
+// values so a caller can repair the draft directly: the previous opaque
+// "does not preserve semantics" error left the model guessing which field was
+// wrong, and every guess cost a full turn (BUG-201).
+func firstPlanStepMismatch(checks []planStepCheck) string {
+	for _, check := range checks {
+		if check.Actual != check.Expected {
+			return fmt.Sprintf(
+				"field %q is %q but the plan requires %q",
+				check.Field,
+				check.Actual,
+				check.Expected,
+			)
+		}
+	}
+	return ""
 }

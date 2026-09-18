@@ -1797,3 +1797,117 @@ func TestCreateVersionIsIdempotentForIdenticalPlan(t *testing.T) {
 		t.Fatalf("changed plan should advance version: %#v", third)
 	}
 }
+
+// BUG-201: the plan's `intent` is descriptive free text. A DSL that reproduces
+// every plan-owned field but paraphrases the intent must compile, while a real
+// semantic drift must still be rejected with a message that names the field.
+func TestCompileDraftCaseAcceptsParaphrasedIntentAndNamesMismatchedField(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	service := NewService(repository)
+	plan, err := service.CreateVersion(ctx, CreateRequest{
+		RunID: "run-intent-fidelity",
+		Definition: Definition{
+			Goal:             "Open the products list",
+			MaxSideEffect:    SideEffectBrowserState,
+			ForbiddenActions: []string{},
+			Steps: []StepDefinition{{
+				ID: "open_products", Action: "goto",
+				// Mirrors the live round2 plan: the plan's own intent carried
+				// an implementation note in parentheses.
+				Intent:              "进入 Products 商品列表页（导航点击会被广告插页拦截，故直接访问 /products）",
+				Target:              "Products 商品列表页",
+				Value:               "https://automationexercise.com/products",
+				ExpectedOccurrences: 1,
+				Idempotency:         "idempotent",
+				SideEffect:          SideEffectBrowserState,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Steps[0].Status = StepGrounded
+	plan.Status = StatusReadyForGeneration
+	if err := repository.Save(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	draft := func(action, intent string) json.RawMessage {
+		return json.RawMessage(`{
+			"profile":"research-v2",
+			"name":"Open products",
+			"steps":[{
+				"plan_step_id":"open_products",
+				"action":"` + action + `",
+				"intent":"` + intent + `",
+				"value":"https://automationexercise.com/products",
+				"preconditions":[],
+				"postconditions":[],
+				"idempotency":"idempotent",
+				"side_effect":"browser_state"
+			}]
+		}`)
+	}
+
+	// Every plan-owned field matches, so the abbreviated intent is acceptable.
+	if _, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		draft("goto", "进入 Products 商品列表页"),
+	); err != nil {
+		t.Fatalf("paraphrased intent should compile: %v", err)
+	}
+
+	// A genuine semantic drift must still be rejected, and the error must name
+	// the offending field so the model can repair the draft without guessing.
+	_, _, err = service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		draft("click", "进入 Products 商品列表页"),
+	)
+	if err == nil {
+		t.Fatal("DSL that changes the plan action was accepted")
+	}
+	if !strings.Contains(err.Error(), `"action"`) {
+		t.Fatalf("mismatch error must name the action field: %v", err)
+	}
+
+	// A drifted value is reported by name as well.
+	driftedValue := json.RawMessage(`{
+		"profile":"research-v2",
+		"name":"Open products",
+		"steps":[{
+			"plan_step_id":"open_products",
+			"action":"goto",
+			"intent":"进入 Products 商品列表页",
+			"value":"https://automationexercise.com/",
+			"preconditions":[],
+			"postconditions":[],
+			"idempotency":"idempotent",
+			"side_effect":"browser_state"
+		}]
+	}`)
+	_, _, err = service.CompileDraftCase(
+		ctx, plan.RunID, plan.Binding(), driftedValue,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), `"value"`) {
+		t.Fatalf("value mismatch must be reported by field: %v", err)
+	}
+
+	// An empty intent is still invalid: presence is required even though the
+	// wording is free.
+	if _, _, err := service.CompileDraftCase(
+		ctx,
+		plan.RunID,
+		plan.Binding(),
+		draft("goto", ""),
+	); err == nil {
+		t.Fatal("empty intent was accepted")
+	}
+}
