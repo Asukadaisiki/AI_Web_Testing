@@ -51,7 +51,7 @@
 ## BUG-205 | E2E 驱动缺少停滞检测：卡住时无法及时发现，只能等墙钟超时
 
 - 日期：2026-09-18
-- 状态：open
+- 状态：fixed
 - 严重度：medium（不影响正确性，但严重拖慢迭代与排障）
 - 来源：本轮连续 10 轮 live E2E 的实操体验
 - 描述：`run_agentic_e2e.py` 只在**运行结束时**输出结果；一旦 agent 在某个步骤上原地打转（重复同签名探针、反复被门禁拒绝、或 LLM 调用长时间无响应），外部只能看到"没有进展"，直到 900–2400s 墙钟耗尽才拿到失败结论。本轮多次出现"以为在跑、实际早已卡住"的情况。
@@ -61,8 +61,8 @@
   3. 驱动既不打印进度、也不报告停滞，直到 deadline 才退出。
 - 影响：每轮迭代成本被墙钟上限放大（15–40 分钟），排障需要人工反复查库；无法区分"正在推进"与"已经卡死"。
 - 根因：驱动只有"最终结果"这一种输出，没有基于事件流的活性/进度判据（例如事件序号停滞时长、同一工具签名重复次数、单次 LLM 调用超时）。
-- 处理：待修——建议在驱动中加入：① 周期性进度行（事件序号、plan 状态、已 grounded 步数）；② 停滞检测（N 秒内 `last_event_seq` 无增长即判定 stalled 并可主动取消，附最后几条事件摘要）；③ 单次 LLM 调用超阈值预警。三项都能从既有 `agent_events` 流推导，无需改动执行链路。
-- 验证：未修复；本轮的真实停滞均靠人工查 `agent_runs`/`agent_events` 才发现。
+- 处理（已实施）：`run_agentic_e2e.py` 的主等待循环 `_wait_for_run_boundary` 现会：① **每 30s 打印进度行**（已用时长、事件序号、run 状态、`plan vN <status> X/Y grounded`、静默秒数）；② **停滞检测**：事件序号在 `STALL_SECONDS`（默认 300s）内无增长即打印 `STALLED` 并附最近 6 条事件类型尾部，随后抛 `TimeoutError`，走既有取消路径，不再空等墙钟；③ 新增 `_plan_progress`/`_stall_diagnostic` 两个纯函数从既有 `agent_events` 流推导状态，无需改动执行链路。单次 LLM 调用超时由同一静默计时覆盖（尾部事件会显示为进行中的 `agent.pipeline.trace`）。
+- 验证：新增 `StallDetectionTest` 三项测试——`_plan_progress` 解析最新 plan 事件、静默流抛出含 `stalled` 的 `TimeoutError`、持续增长的流不会被误判为停滞（在 deadline 处结束）。`tests/test_agentic_e2e_driver.py` 29 项通过；Python 全量 **216 passed / 1 known-fail / 2 skipped**。
 - 关联记录：docs/execution-log.md 2026-09-18（round 10 复盘）。
 
 ## BUG-204 | LLM 请求的 user_id 每次调用都变，导致 provider 前缀缓存永不命中

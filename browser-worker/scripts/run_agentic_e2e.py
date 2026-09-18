@@ -289,6 +289,40 @@ def _is_socket_timeout(exc: BaseException) -> bool:
     return False
 
 
+# A stalled run used to be indistinguishable from a progressing one: the driver
+# only reported a verdict at the end, so a run spinning on the same step burned
+# the whole wall clock before anyone learned it was stuck (BUG-205).
+PROGRESS_INTERVAL_SECONDS = 30.0
+STALL_SECONDS = 300.0
+
+
+def _plan_progress(events: list[dict[str, Any]]) -> str:
+    """Summarise the latest task-plan state carried by the event stream."""
+    for event in reversed(events):
+        if event.get("type") != "task_plan.updated":
+            continue
+        payload = event.get("payload") or {}
+        steps = payload.get("steps") or []
+        grounded = sum(
+            1 for step in steps if step.get("status") == "grounded"
+        )
+        return (
+            f"plan v{payload.get('version')} {payload.get('status')} "
+            f"{grounded}/{len(steps)} grounded"
+        )
+    return "plan not created yet"
+
+
+def _stall_diagnostic(events: list[dict[str, Any]]) -> str:
+    """Describe the tail of the stream so a stalled run explains itself."""
+    tail = events[-6:]
+    if not tail:
+        return "no events recorded yet"
+    return " | ".join(
+        f"{event.get('seq')}:{event.get('type')}" for event in tail
+    )
+
+
 def _wait_for_run_boundary(
     client: AgenticClient,
     run_id: str,
@@ -296,7 +330,14 @@ def _wait_for_run_boundary(
     *,
     deadline_monotonic: float,
     ambiguous_resume_tool_call_id: str | None = None,
+    stall_seconds: float | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if stall_seconds is None:
+        stall_seconds = STALL_SECONDS
+    started = time.monotonic()
+    last_seq = -1
+    last_progress = started
+    next_report = started + PROGRESS_INTERVAL_SECONDS
     while time.monotonic() < deadline_monotonic:
         after_seq = int(events[-1]["seq"]) if events else 0
         events = _merge_events(events, client.list_events(run_id, after_seq))
@@ -310,6 +351,32 @@ def _wait_for_run_boundary(
                 != ambiguous_resume_tool_call_id
             ):
                 return run, events
+
+        now = time.monotonic()
+        seq = int(events[-1]["seq"]) if events else 0
+        if seq != last_seq:
+            last_seq = seq
+            last_progress = now
+        if now >= next_report:
+            next_report = now + PROGRESS_INTERVAL_SECONDS
+            print(
+                f"[e2e] {int(now - started):>5}s seq={seq} "
+                f"status={run['status']} {_plan_progress(events)} "
+                f"(quiet {int(now - last_progress)}s)",
+                flush=True,
+            )
+        if stall_seconds > 0 and now - last_progress >= stall_seconds:
+            quiet = int(now - last_progress)
+            print(
+                f"[e2e] STALLED: no new events for {quiet}s "
+                f"(last seq {seq}, status {run['status']}). "
+                f"Tail: {_stall_diagnostic(events)}",
+                flush=True,
+            )
+            raise TimeoutError(
+                f"agent run {run_id} stalled: no events for {quiet}s "
+                f"after seq {seq} ({_plan_progress(events)})"
+            )
         time.sleep(0.25)
     raise TimeoutError(f"agent run {run_id} exceeded its absolute deadline")
 

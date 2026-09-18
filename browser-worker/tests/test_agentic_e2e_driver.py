@@ -21,6 +21,8 @@ from scripts.run_agentic_e2e import (
     HTTPAgenticClient,
     _failure_result,
     _go_json_sha256,
+    _plan_progress,
+    _wait_for_run_boundary,
     main,
     validate_goal,
 )
@@ -1272,6 +1274,76 @@ class FinalDOMArtifactTest(unittest.TestCase):
             )
             self.assertTrue(steps[0].dom_snapshot_path.endswith("/final.html"))
             self.assertTrue(steps[0].dom_snapshot_url.endswith("/final.html"))
+
+
+class _SilentRunClient:
+    """A run whose event stream stops growing while it stays 'running'."""
+
+    def list_events(self, run_id: str, after_seq: int) -> list[dict]:
+        del run_id, after_seq
+        return []
+
+    def get_run(self, run_id: str) -> dict:
+        del run_id
+        return {"status": "running", "pending_tool_call_id": None}
+
+
+class StallDetectionTest(unittest.TestCase):
+    """A stuck run must announce itself instead of burning the whole deadline."""
+
+    def test_plan_progress_reads_the_latest_plan_event(self) -> None:
+        events = [
+            {
+                "seq": 1,
+                "type": "task_plan.updated",
+                "payload": {
+                    "version": 2,
+                    "status": "grounding",
+                    "steps": [{"status": "grounded"}, {"status": "pending"}],
+                },
+            }
+        ]
+        self.assertEqual(
+            _plan_progress(events), "plan v2 grounding 1/2 grounded"
+        )
+        self.assertEqual(_plan_progress([]), "plan not created yet")
+
+    def test_stalled_run_raises_instead_of_waiting_for_the_deadline(self) -> None:
+        with self.assertRaises(TimeoutError) as raised:
+            _wait_for_run_boundary(
+                _SilentRunClient(),
+                "run-stalled",
+                [],
+                deadline_monotonic=time.monotonic() + 30,
+                stall_seconds=0.3,
+            )
+        self.assertIn("stalled", str(raised.exception))
+
+    def test_growing_stream_is_not_reported_as_stalled(self) -> None:
+        class _GrowingClient:
+            def __init__(self) -> None:
+                self.seq = 0
+
+            def list_events(self, run_id: str, after_seq: int) -> list[dict]:
+                del run_id
+                self.seq += 1
+                return [{"seq": self.seq, "type": "message.delta"}]
+
+            def get_run(self, run_id: str) -> dict:
+                del run_id
+                return {"status": "running", "pending_tool_call_id": None}
+
+        client = _GrowingClient()
+        with self.assertRaises(TimeoutError) as raised:
+            _wait_for_run_boundary(
+                client,
+                "run-growing",
+                [],
+                deadline_monotonic=time.monotonic() + 0.9,
+                stall_seconds=0.3,
+            )
+        self.assertIn("absolute deadline", str(raised.exception))
+        self.assertGreater(client.seq, 1)
 
 
 if __name__ == "__main__":
