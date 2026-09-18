@@ -56,6 +56,25 @@
 
 ## 任务记录
 
+## 2026-09-18 | 冲刺「E2E 跑通」：9 项阻塞修复 + 环境根因定位（round 7 达成 17/17 grounding）
+
+- 任务：承接上一轮，继续修复直到 live E2E 跑通；并定位"服务反复消失/启动卡住"的原因。
+- 操作与结果（按发现顺序）：
+  1. **prompt 缓存从未命中**（BUG-204，已修）：`Complete` 每次调用生成新 `clientRequestID` 并作为 `user_id` 发送，而 provider 按身份隔离缓存。以 run ID 固定身份后，命中率 **12% → 95%**，平均单次延迟 **50s → 35s**，LLM 总耗时 843s → 662s。
+  2. **计划改版丢失 grounded 步骤**：`sameStepSemantics` 对 `intent` 逐字比对（与 BUG-201 同类）。移除 `intent` 后，round 7 实测改版不再丢措辞漂移步骤的 binding；`target` 保持严格（它是 grounding 的检索键）。
+  3. **无语义名的交互控件无法 grounding**：数量输入框有 `role=spinbutton` 但可访问名为空，worker 只产出 CSS 候选，而语义门禁拒绝 CSS → 模型被迫改版计划（round 2 因此损失 3/7 已 grounded 步骤）。新增无名 role 候选后实测 `{"kind":"role","role":"spinbutton","name":null,"observed_count":1}`。
+  4. **图标字形污染可访问名**：`<i class="fa fa-plus-square"></i>View Product` 的真实可访问名是 `"\uf0fe View Product"`，而平台发布的是去字形名 + `exact=true` → Playwright **0 匹配**（实测 exact=True→0、exact=False→1）。修复：发布候选时按**实测计数**回退为子串匹配；运行时再加 `_compile_spec_locator` 字形容错回退。
+  5. **证据链接要求定位器哈希全等**：`build_resolved_target_evidence` 用 `canonical_sha256(locator)` 比对，`exact` 标志或字形差异即判定"无匹配候选"。改为 `_locator_equivalent` 按元素身份等价（忽略 `exact`、剥离私有区字形），修掉 round 7 的 "resolves at runtime but the platform lacks a matching observation candidate"。
+  6. **AdSense 插页劫持**：探针上下文注入通用广告插页清理脚本（`#google_vignette`、`aswift` iframe 等），并在出现时移除以解除 `overflow` 冻结。
+  7. **平台自相矛盾导致 DSL 生成死锁**（关键）：`materializeResearchV2Defaults` 为 `wait_for` 注入 `timeout_ms=5000`，而 `compileDraftStep` 要求等于计划的 `0`；模型改写成 `0` 又被校验器判 `timeout_ms is invalid` —— **既不能省略也不能写 0**。修复：计划未设 timeout（0）时不再约束该字段。
+  8. **冗余 `target` 被拒**：作者自然带出计划的 `target` 描述，被判 unknown field。改为容忍并在编译时丢弃（编译器从计划注入 `semantic_target`）。
+  9. **P4 阶段边界从未触发**：边界插入点在"探索工具分支"内，而计划 ready 后探索调用会被**拒绝**，该分支不可达。移到计划状态变更处后可在任意工具结果后触发。
+  10. **门禁错误可行动化**：DSL 语义校验改为指明具体字段与双方取值；顺序/越界门禁附完整 pending 步骤序列；`candidate_ref` 缺 v2 声明的错误直接给出应补的 `schema_version`。
+- 结果：**round 7 达成 17/17 全部 grounded、状态 `ready_for_generation`、并进入 DSL 生成阶段**（416 事件），此前最好成绩是 4/12。当时的 DSL 阻塞正是上面的第 7、8 项，现已修复。grounding 阶段不再是瓶颈。
+- 环境根因：反复出现的"服务启动后卡住/消失"（round 8、round 9 报 `WinError 10061`、0 事件）**不是代码问题**——服务由启动脚本的 pwsh 进程派生，Windows 作业对象在工具调用被中止时 kill-on-close 整棵树，服务随之消失。改用 `Win32_Process.Create` 在作业对象外启动后，postgres 与三个服务可在调用中断后存活。
+- 验证：Go `build`/`vet`/`gofmt` 干净，DB 相关包全绿（一次并发干扰导致的偶发失败已单独复现排除）；Python **213 passed**（唯一失败为既有的 Windows 路径问题）；新增测试覆盖缓存身份、字形容错、无名 role 候选、证据等价、广告守卫、计划交接、timeout/target 容忍。
+- 后续：round 10 已在后台运行（含全部修复）；E2E 仍未判定跑通，目标保持 active。
+
 ## 2026-09-18 | 两轮 live E2E：发现并修复 prompt 缓存身份缺陷（命中率 12% → 95%）
 
 - 任务：按用户要求提交改动后跑一轮 live E2E；用实测数据检验 P2/P3/P4 与配置修正的效果。
