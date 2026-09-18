@@ -871,8 +871,9 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 				// handoff is appended after the tool result to keep the
 				// assistant/tool message pairing valid, and it starts a new
 				// segment so the model stops replaying every grounding turn.
-				if readyPlan != nil &&
-					e.markGenerationSegment(run.ID, readyPlan.PlanSHA256) {
+				// The once-per-revision marker is claimed by the detection
+				// above, so it must not be requested a second time here.
+				if readyPlan != nil {
 					run.Transcript = append(
 						run.Transcript,
 						generationHandoffMessage(*readyPlan),
