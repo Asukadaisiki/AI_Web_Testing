@@ -56,6 +56,93 @@
 
 ## 任务记录
 
+## 2026-09-18 | 实施上下文预算 P0+P2+P3+P4（轮次最小化 / 缓存友好 / 阶段边界重置）
+
+- 任务：按用户决定（P0 用 `deepseek-flash`；P2+P3+P4 一起做）实施 `docs/plan/2026-09-18-context-budget-design.md`。
+- 操作：
+  1. **P0**：`browser-worker/.env` 修正 `AI_PLANNING_BASE_URL=https://api.deepseek.com`、`AI_PLANNING_MODEL=deepseek-flash`（此前两处均实测阻断，见 BUG-202）。
+  2. **P2（BUG-201）**：`taskplan/compiler.go` 新增 `planStepSemanticChecks`/`firstPlanStepMismatch`，把 `intent` 移出全等比对（仅要求非空），`compileDraftStep` 与 `validateCompiledCaseSemantics` 两条路径同步；错误信息改为指明字段与双方取值。`taskplan/service.go` 的顺序门禁（`expected next plan step`、`plan_step_ids must be contiguous`）与越界门禁（`references unbound plan step`）改为附「当前 pending 步骤序列」，新增 `pendingStepIDs`/`stepIDs` 辅助。
+  3. **P3**：`harness` 新增 `perTurnTranscriptCompaction` 开关（默认 false）与 `SetPerTurnTranscriptCompaction`；轮内改写由每轮无条件执行改为显式开启（改写历史消息会作废 provider 前缀缓存）。`config.go` 新增 `AGENTSERVICE_PER_TURN_TRANSCRIPT_COMPACTION`，`main.go` 装配。
+  4. **P4**：`agent.Message` 新增 `SegmentBoundary`；`agent.ModelContext` 投影「从最近一个边界起」的消息，`loop.go` 的模型调用改用该投影（transcript 仍全量保留给治理与审计）。`harness` 在 plan 状态转为 `ready_for_generation` 时追加 `generationHandoffMessage`（含 goal/plan 元信息与**逐步全部 plan-owned 字段 + target_binding_id/selected_candidate_id**），并以 `markGenerationSegment` 保证每个 plan 修订只开一次边界。
+- 结果：
+  1. BUG-201 修复：DSL 可对 plan 的 `intent` 做忠实改写（复刻 round2 的括号备注场景），而 action/value 等真实漂移仍被拒且错误直接指明字段——消除了 round2 中两次盲猜 `generate_dsl` 的空转。
+  2. 门禁错误从「只说期望一个 id」变为「给出完整 pending 序列」，降低模型试错轮次（每浪费一轮都会永久增大回放推理）。
+  3. 默认 transcript 变为 append-only，不再作废前缀缓存；需要压体积时可显式开启旧行为。
+  4. grounding 完成后模型不再回放整个探索历史与推理，改为从 grounded plan 交接继续；`taskplan` 仍是唯一权威（不变量 2 未破坏），治理所需的完整 transcript 原样保留（`buildExplorationState`/`governanceOutcome` 依赖它）。
+- 验证：
+  - 新增/更新测试：`TestCompileDraftCaseAcceptsParaphrasedIntentAndNamesMismatchedField`、`TestLoadPerTurnTranscriptCompactionDefaultsOff`、`TestPerTurnTranscriptCompactionIsOptIn`（默认超预算仍 append-only / 开启后压缩且体积下降）、`TestModelContextStartsAtLatestSegmentBoundary`、`TestGenerationHandoffCarriesGroundedPlan`、`TestMarkGenerationSegmentIsOncePerRevision`。
+  - 门禁：`go build ./...`、`go vet ./...`、`gofmt`（改动文件）无差异；`go test -count=1 ./...`（含 `TEST_DATABASE_URL` 指向本地 `ai_web_testing`）**全部包通过**。
+  - 说明：本轮未跑 live E2E（需启动 browser-worker/agentservice/execution-worker 与真实站点），故「900s 内收敛」这一端到端验收标准尚未验证。
+- 后续：P5 未开始（`get_observation` 只读取回工具、下调 exploration 预算、精简 tool 定义与 system prompt）；建议 P0 修正后先跑一轮 live E2E 建立 cache hit 与轮次基线，再决定 P5 取舍。未执行 GitHub 同步。
+
+## 2026-09-18 | DeepSeek 官方端点 live 实测：确认两处配置阻断 + 验证设计核心假设
+
+- 任务：用户开启权限后，实测此前因沙箱 TLS 受限无法验证的端点，落实设计方案的 P0 与关键假设。
+- 操作：
+  1. `GET https://api.deepseek.com/models` 取官方模型清单。
+  2. 分别请求「重复路径」与「当前模型名」两种配置，复现失败。
+  3. 构造携带 `tools` 的请求，对照「省略 / 回传 `reasoning_content`」两版，验证设计不变量 1。
+  4. 对同一请求体连发 3 次，验证前缀缓存命中与可观测字段。
+- 结果（全部 live 实测）：
+  1. **官方模型清单**：仅 `deepseek-flash`、`deepseek-v4-pro` 两个。`.env` 的 `deepseek-v4.1-flash` **无效** → 实测 400：`The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-v4.1-flash.`
+  2. **路径重复拼接确认**：`POST …/chat/completions/chat/completions` → **404**。改用 `https://api.deepseek.com` + `deepseek-flash` → **200**。BUG-202 两处阻断均实测复现（原为静态推演，现已升级为实测确认）。
+  3. **设计不变量 1 实测成立**：带 `tools` 且 assistant 省略 `reasoning_content` → **400** `The reasoning_content in the thinking mode must be passed back to the API.`；补回后 → **200**。**证实上一轮「只回放最近一轮推理」的方案会导致生产 400，必须废弃**；`openai.go:395-397` 的全量回放是正确行为，登记 BUG-203 以防后续被误优化。
+  4. **L3 缓存前提成立**：同一请求体连续 3 次，`usage` 稳定为 `prompt=369 / hit=128 / miss=241 / cached_tokens=128`，即前缀缓存确实生效且响应带 `prompt_cache_hit_tokens`、`prompt_cache_miss_tokens`、`prompt_tokens_details.cached_tokens` 三个可观测字段，度量闭环可直接落地。
+- 验证：上述四条均为 live API 调用结果（HTTP 状态码与响应体原文），非推演。本次未改业务代码与 `.env`，故无测试门禁。
+- 后续：待用户确认是否执行 P0（改 `.env` 的 base URL 与模型名）。P0 未执行前任何 E2E 仍不可用。未执行 GitHub 同步。
+
+## 2026-09-18 | 上下文预算完整设计方案（联网核实 DeepSeek 官方约束，推翻上一轮 P1 假设）
+
+- 任务：按用户要求先出完整设计方案；用户提示"遇到问题上网查资料"，并告知配置已切换到 DeepSeek 官方端点（`browser-worker/.env`）。
+- 操作：
+  1. 读取 `browser-worker/.env` 确认端点/provider/模型/thinking 配置；核对 `config.go:37` 的 `.env` 加载路径。
+  2. 联网核实 DeepSeek 官方《Thinking Mode》与《Context Caching》文档，确认 `reasoning_content` 回传规则与缓存命中规则。
+  3. 复核 `openai.go`（推理回填、URL 拼接）、`loop.go`（transcript 追加与回放）、`tool_result.go`（预算常量与压缩）、`harness.go:822`（压缩调用点）。
+  4. 输出设计方案 `docs/plan/2026-09-18-context-budget-design.md`。
+- 结果（关键结论）：
+  1. **上一轮 P1 假设被官方文档推翻**：官方明确「携带 `tools` 的请求，所有历史轮次的 `reasoning_content` 必须全量回传，否则返回 400」。本项目每轮都带 tools，故**推理通道不可裁剪**；现有 `openai.go:395-397` 的全量回填是正确的，须固化为不变量。原「只回放最近一轮、立减 54%」方案作废。
+  2. **可压缩性边界重划**：推理不可压；tool 结果可压（48KB 预算已生效）；因此唯一能压制推理的手段是**控制轮次**，其次是**阶段边界重置对话**。
+  3. **缓存与压缩互相拆台（新发现）**：DeepSeek 上下文缓存默认开启且按前缀匹配，而我们 append-only 的 transcript 本应天然吃满缓存；但 `CompactExplorationTranscript` 每轮都可能改写历史消息，破坏前缀导致缓存失效。方案据此把压缩策略改为「缓存优先、仅在阶段边界整理」。
+  4. **按需加载闭环只建了一半**：`CompactExplorationTranscript` 会把被取代页面降级为 `reference_only` 并保留 id，但取回工具 `query_observation` 已于 `d6d3aca` 删除，降级数据当前无取回路径；方案提出重建**只读、无状态机**的 `get_observation`（规避 BUG-196 影子状态机失败模式）。
+  5. **发现配置阻断缺陷**：`.env` 的 `AI_PLANNING_BASE_URL` 已含 `/chat/completions`，而 `openai.go:134` 会再追加一次，实际 URL 重复拼接（预期 404），登记为 BUG-202。
+  6. 方案提出四杠杆（L1 轮次最小化 / L2 阶段边界重置 / L3 缓存友好化 / L4 非推理通道收紧）与 P0–P5 分阶段实施，并给出可量化验收标准（推理占比、轮次、cache hit 率、门禁空转归零）。
+- 验证：官方约束以文档原文为准（thinking_mode、kv_cache 两页）；配置缺陷为静态分析定论。**未能联网实测端点**——本机沙箱 TLS 被禁用（`schannel: SEC_E_NO_CREDENTIALS`），`/models` 探测失败，故 404 与模型名 `deepseek-v4.1-flash` 均标记为待实测项。本次未改业务代码，无测试门禁。
+- 后续：待用户决策 P0 是否立即修正 base URL/模型名、是否接受 P4 的 run 内多 segment 结构性变更、effort 是否允许分档、压缩与缓存如何取舍。未执行 GitHub 同步。
+
+## 2026-09-18 | 上下文爆炸根因定位：推理内容回放占请求 54%，工具预加工已生效但未覆盖推理通道
+
+- 任务：回答「怎么修复和解决上下文爆炸」，核实「工具返回数据预加工是否已生效」，并评估「数据按需加载 + 放宽时间多调工具」方向的可行性。
+- 操作：
+  1. 通读现有上下文加工链路：`agent/tool_result.go`（`BuildModelToolSummary`、`CompactExplorationTranscript`、`ModelToolSummaryTargetBytes=16KB`/`HardLimitBytes=32KB`/`ModelExplorationBudgetBytes=48KB`）、`harness/harness.go:822`（每轮工具结果后调用压缩）、`agent/loop.go:87-100`（全量 transcript 回放）。
+  2. 从 `agent_events` 的 `prompt_spec.request_budget` 提取 round2/round3 每次调用的请求构成，定位膨胀来源。
+  3. 比对 `assistant_reasoning_bytes` 与逐轮新增推理（`reasoning.content_bytes`），确认回放是累加式。
+  4. 复核 `d6d3aca` 删除 `query_observation` 的原因（影子状态机 BUG-196，非「检索方向错误」）。
+- 结果（关键发现）：
+  1. **工具预加工确实已生效**：exploration 摘要有 48KB 聚合预算且被强制执行，实测 round2/round3 稳定在 39-48KB 触顶不再增长。「对工具返回数据预加工」的记忆正确。
+  2. **真正的膨胀源是 assistant 推理内容回放**：round3 末次请求 252,918 字节中 `assistant_reasoning_bytes` = 137,896（**54.5%**）；round2 为 140,003 / 269,813（51.9%）。`openai.go:395-397` 在 thinking 开启时为**每条** assistant 消息回填 `ReasoningContent`，而 `loop.go:95-100` 把推理写入 transcript 并永久保留，`CompactExplorationTranscript` 只压缩 exploration 工具摘要、从不触碰推理。
+  3. **回放是累加式的**：round3 逐轮新增推理 11,973→117→22,905→…→39,789 字节，末次回放值 137,896 = 前 12 轮之和（精确吻合）；input tokens 从 10,059 涨到 63,694。单轮推理峰值 39,789 字节。
+  4. **按需加载方向只建了一半**：`CompactExplorationTranscript` 会把被取代的页面降级为 `reference_only`（保留 observation_id/candidate_id 供再取），但 `query_observation` 已在 `d6d3aca` 整体删除，**降级后的数据当前无取回路径**。删除理由是它绑定了影子状态机 `groundingplan`（BUG-196），不是检索本身有问题。
+  5. **「放宽时间多调工具」单独实施会让问题更严重**：每多一轮 = 多一份 10-40KB 推理永久进入回放；round3 仅 13 轮已累积 137KB，放宽到 30 轮推理回放将达 300KB+，且 LLM 延迟随上下文增长（900s 中 651s 花在 LLM），会更快撞墙钟。
+- 验证：全部数字取自 `agent_events` 落库的 `request_budget` 与 `reasoning.content_bytes`，并用 `openai.go`/`loop.go`/`tool_result.go`/`harness.go` 源码逐条核对；本次为分析任务，未改动业务代码，无测试门禁。
+- 后续：建议按 P1→P4 分阶段修复（P1 只回放最近一轮推理，预计单次请求立减约 136KB/54%；P2 重建只读、无状态机的 observation 取回工具，补齐按需加载闭环；P3 transcript 轮次窗口化；P4 前两项落地后再放宽时间预算）。未执行 GitHub 同步，待用户确认。
+
+## 2026-09-18 | 最新 live E2E 问题复核：BUG-200 根因误判订正 + 收敛瓶颈量化
+
+- 任务：回答「最新的 e2e 测暴露了什么问题」，不停留在文档既有结论，改用 `agent_events` / `task_plans` / `task_plan_steps` 原始落库数据复核 2026-09-18 三轮 live E2E（round1 `run_abbca1f0…`、round2 `run_19741c82…`、round3 `run_4a7be4be…`）的真实失败原因。
+- 操作：
+  1. 定位最近运行数据：本地 PostgreSQL `ai_web_testing` 库中三轮 run 的完整事件流（39 / 226 / 173 事件）与 plan 版本落库（含 superseded v1 与 blocked v2）。
+  2. 逐字段比对 round2 的 `generate_dsl` 入参（seq 213 / 223）与 plan v2 落库字段，复现 `compileDraftStep`（`backend-go/internal/taskplan/compiler.go:144-158`）的全部比对项。
+  3. 追溯 plan v2 的 `intent` 作者（seq 66 的 `set_task_plan` 入参），确认是模型在 plan 层的合法演进而非 DSL 改写。
+  4. 量化时间分布：按 `research.llm_call` 的 `total_latency_ms` 汇总 LLM 耗时与 run 墙钟占比。
+  5. 复核 round3 广告浮层的实际影响（`vignette` 出现次数 + grounding 推进轨迹）。
+- 结果（关键发现）：
+  1. **BUG-200 根因误判**：原记录称「模型把 plan 的 click 步骤改写为 goto 被拒」，实测不成立。plan v1→v2 中模型自己把 `open_products` 从 `click` 改成 `goto`（并注明「导航点击会被广告插页拦截，故直接访问 /products」）；提交的 DSL `action=goto`、`value=https://automationexercise.com/products` 与 plan v2 **完全一致**。唯一不等的是自由文本 `intent`：DSL `进入 Products 商品列表页` vs plan `进入 Products 商品列表页（导航点击会被广告插页拦截，故直接访问 /products）`。`compileDraftStep` 对 `intent` 做 `normalize()` 后全等比对，导致语义保真校验退化为逐字复现校验。已立 BUG-201，并把 BUG-200 标为 `wont_fix`（历史记录保留）。
+  2. **round3 广告浮层并非致命阻塞**：`vignette` 仅 5 处提及；seq 79 拦截一次后模型按 AD OVERLAYS 指引重试即通过，`open_products` 于 seq 109 成功 grounded，run 继续推进到 5/13。真实卡点是 grounding 耗时 + seq 148 `explore_flow action references unbound plan step "add_to_cart"`（模型试图引用尚未绑定的后续步骤）。
+  3. **收敛瓶颈是 LLM 推理耗时而非浏览器**：round2 LLM 629s/900s（70%）、round3 651s/900s（72%），17 次与 13 次调用的单次峰值分别达 251s 与 191s；同时上下文持续膨胀（round2 请求 35KB→270KB、input 9.9K→69.5K tokens；round3 36KB→253KB、10K→63.7K tokens），推理字节数同步涨到 137KB。900s 墙钟对 13 步链路偏紧，需提高超时或压缩上下文/分段验证。
+  4. round1（39 事件）失败原因为环境问题：Playwright Chromium 缺失（`chrome-headless-shell.exe` 不存在）导致 `explore_page` HTTP 500，模型正确识别为环境问题。当前 `D:\PlaywrightBrowsers\chromium_headless_shell-1200` 已就位，该问题已消除。
+- 验证：所有结论均来自原始落库数据（`agent_events` 事件 payload、`task_plans`/`task_plan_steps` 行、`generate_dsl` 与 `set_task_plan` 工具入参），并用 `compiler.go` 源码逐项核对；本次为分析任务，未改动业务代码，故无测试门禁。
+- 后续：修复 BUG-201（`intent` 降级为非空/语义片段比对，或把 plan 的 intent 与实现备注分离）；订正 BUG-200/BUG-199 相关结论；提高 E2E 墙钟或压缩上下文以提升收敛率；未执行 GitHub 同步，待用户确认。
+
 ## 2026-09-18 | 探索工具可用性改进：预算固定、失败返回候选、Web 知识 skill、DSL 保真、广告浮层处理
 
 - 任务：live E2E（Blue Top 加购）暴露 explore_flow 工具"不好用"——模型频繁因定位失败重试、预算被失败调用耗尽、DSL 阶段改写计划动作、广告浮层劫持导航。按用户要求研究工具设计合理性并修复，同时给模型补充 Web 平台/自动化知识（相当于一个 skill），治"全凭感觉猜"。

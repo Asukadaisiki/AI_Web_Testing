@@ -48,22 +48,76 @@
 
 ## 问题记录
 
-## BUG-200 | generate_dsl 把 plan 的 click 步骤改写为 goto 被语义校验拒绝
+## BUG-203 | 约束记录：thinking + tools 下 reasoning_content 必须全量回放，禁止裁剪（裁剪即 400）
+
+- 日期：2026-09-18
+- 状态：wont_fix（**这是必须保留的正确行为，登记以防被误优化**）
+- 严重度：critical（若被裁掉会造成生产 400）
+- 来源：上下文预算设计期间的联网核实 + live API 实测
+- 描述：`platform/llm/openai.go:395-397` 在 thinking 开启时为**每条** assistant 消息回填 `ReasoningContent`，导致推理内容随轮次累加回放（实测占末次请求 54.5%）。该行为曾被误判为"可优化的膨胀源"，拟改为"只回放最近一轮以立减 54%"。
+- 复现步骤（证明裁剪会失败）：
+  1. 向 `https://api.deepseek.com/chat/completions` 发携带 `tools` 的请求，assistant 消息含 `tool_calls` 但省略 `reasoning_content`。
+  2. 返回 **HTTP 400**：`The \`reasoning_content\` in the thinking mode must be passed back to the API.`
+  3. 同一请求补回 `reasoning_content` 后返回 **HTTP 200**。
+- 影响：若按"优化"裁剪推理回放，所有多轮工具调用将立即 400，run 全线失败。
+- 根因：DeepSeek 官方《Thinking Mode》规定——**携带 `tools` 的请求，所有历史轮次的 `reasoning_content` 必须全量回传**（含模型未发起工具调用的轮次），否则 400。本项目每轮恒定携带 tools（`agent/loop.go:90`），故该约束始终生效。
+- 处理：**保持现状，不裁剪。** 上下文体量问题改由「控制轮次 + 阶段边界重置对话 + 缓存友好化」解决（见 `docs/plan/2026-09-18-context-budget-design.md`），而非裁剪推理。若将 `thinking` 关闭（`thinkingMode==""`）则不产生推理、也无回放，但那会牺牲 CoT 质量，需另行评估。
+- 验证：已 live 实测（2026-09-18，DeepSeek 官方端点 `deepseek-flash`）：省略→400、回传→200，双向确认。
+- 关联记录：docs/plan/2026-09-18-context-budget-design.md §2.1（不变量 1）；docs/execution-log.md 2026-09-18；BUG-202。
+
+## BUG-202 | DeepSeek 官方配置两处阻断：base URL 路径重复拼接 + 模型名无效
+
+- 日期：2026-09-18
+- 状态：open
+- 严重度：high（阻断，任何 E2E 都无法启动）
+- 来源：配置复核（切换 DeepSeek 官方端点后）+ live API 实测
+- 描述：`browser-worker/.env` 切换到 DeepSeek 官方后存在**两处独立阻断**：
+  1. `AI_PLANNING_BASE_URL=https://api.deepseek.com/chat/completions` 已带完整端点路径，而 `NewOpenAIClient` 会无条件再追加一次 `/chat/completions`，最终请求 `https://api.deepseek.com/chat/completions/chat/completions`。
+  2. `AI_PLANNING_MODEL=deepseek-v4.1-flash` **不是官方有效模型名**；官方仅有 `deepseek-flash` 与 `deepseek-v4-pro`。
+- 复现步骤：
+  1. `GET https://api.deepseek.com/models` → 返回 `deepseek-flash`、`deepseek-v4-pro`（HTTP 200）。
+  2. `POST https://api.deepseek.com/chat/completions/chat/completions` → **HTTP 404**（路径重复）。
+  3. `POST https://api.deepseek.com/chat/completions`，body 用 `deepseek-v4.1-flash` → **HTTP 400**：`The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-v4.1-flash.`
+  4. 同路径改用 `deepseek-flash` → **HTTP 200**。
+- 影响：任一缺陷单独即导致所有 LLM 调用失败，agentservice 完全不可用，live E2E 无法启动。
+- 根因：① 配置约定与代码约定不一致——代码约定 base URL 只到主机（可含 `/v1`），由客户端负责拼接端点路径；`.env` 却填了完整端点。② 模型名沿用了非官方命名。
+- 处理：待修——`AI_PLANNING_BASE_URL` 改为 `https://api.deepseek.com`；`AI_PLANNING_MODEL` 改为 `deepseek-flash`（或 `deepseek-v4-pro`）。可选加固：`NewOpenAIClient` 对已以 `/chat/completions` 结尾的 base URL 做幂等处理或显式报错，避免同类误配静默发生。
+- 验证：**已 live 实测确认**（2026-09-18，DeepSeek 官方端点）：404 与 400 均复现，改用正确 URL+模型名返回 200。
+- 关联记录：docs/plan/2026-09-18-context-budget-design.md（P0）；docs/execution-log.md 2026-09-18。
+
+## BUG-201 | BUG-200 根因误判：generate_dsl 真实拒绝原因是 intent 自由文本全等比对，而非 click→goto 改写
 
 - 日期：2026-09-18
 - 状态：fixed
 - 严重度：high
-- 来源：live E2E（`run_19741c82ceea2af9b0081db5`，round2）
-- 描述：模型成功推进到 `ready_for_generation` 并调用 generate_dsl（13 步、plan_step_id 齐全），但 DSL step 2 把 plan 中 action=`click`（"点击导航栏 Products 链接"）的 `open_products` 步骤改写为 `goto https://automationexercise.com/products`，编译器 `compileDraftStep` 逐字段校验（action/intent/value 必须与 plan 一致）报 `DSL step 1 does not preserve plan step "open_products" semantics`，两次尝试均被拒，随后 900s 墙钟超时。
+- 来源：live E2E 事件库复核（`run_19741c82ceea2af9b0081db5` 事件 seq 66/204/213/215/223/225 + `task_plans`/`task_plan_steps` 落库数据）
+- 描述：BUG-200 记录「模型把 plan 的 click 步骤改写为 goto，被编译器语义校验拒绝」，并把修复做成「提示词新增 DSL FIDELITY 段，禁止 click 改写成 goto」。逐字段复核原始事件后确认该根因不成立：模型并没有在 DSL 里擅自改写动作，它是在 **plan 层**（v1→v2）把 `open_products` 从 `click` 改成 `goto`（这是 plan 语义的合法演进），随后提交的 DSL `action=goto`、`value=https://automationexercise.com/products` 与 plan v2 **完全一致**。真正触发拒绝的只有 `intent` 一个字段：DSL 写 `进入 Products 商品列表页`，plan v2 写 `进入 Products 商品列表页（导航点击会被广告插页拦截，故直接访问 /products）`，模型省略了括号内的补充说明。
 - 复现步骤：
+  1. 查询 `agent_events` 中 `run_19741c82ceea2af9b0081db5` 的 `set_task_plan` 入参（seq 66）：模型自己把 `open_products` 写成 `action=goto`、`intent=进入 Products 商品列表页（导航点击会被广告插页拦截，故直接访问 /products）`，plan v2 落库与之一致。
+  2. 查询 seq 213 与 seq 223 两次 `generate_dsl` 入参：两次 `open_products` 均为 `action=goto`、`value=https://automationexercise.com/products`，与 plan v2 的 action/value/idempotency/side_effect 全部匹配。
+  3. 逐字段比对 `compileDraftStep`（`compiler.go:144-158`）比对项：`plan_step_id`/`action`/`value`/`trigger`/`context_key`/`timeout_ms`/`idempotency`/`side_effect` 全部相等，仅 `normalize(intent)` 不等，故报 `DSL step 1 does not preserve plan step "open_products" semantics`。
+- 影响：BUG-200 的「修复」针对的是不存在的行为，无法消除该拒绝路径；只要 plan 的 intent 含较长补充说明，模型在 DSL 中做任何自然缩写都会被判为「语义不保真」，多步用例在最后一步反复空转直至墙钟超时（round2 两次 generate_dsl 均因此被拒）。
+- 根因：`compileDraftStep` 对 `intent` 采用 `normalize()` 后**全等**比对（仅小写化 + 折叠空白），而 `intent` 是模型自由生成的描述性长文本；plan v2 的 intent 还把「为什么改用 goto」的实现备注写进了括号，进一步抬高了逐字复现难度。语义保真校验退化成了字符串复现校验。
+- 处理（已实施 2026-09-18）：`compiler.go` 新增 `planStepSemanticChecks`/`firstPlanStepMismatch`，把 `intent` 从全等比对中移除（仅要求非空），语义校验只覆盖 plan 真正拥有且执行链消费的字段（`plan_step_id`/`action`/`value`/`trigger`/`context_key`/`timeout_ms`/`idempotency`/`side_effect`，编译后校验另含 `semantic_target`）；同时把原先笼统的「does not preserve plan step semantics」改为**指明字段与双方取值**，让模型无需猜测即可自愈。`compileDraftStep` 与 `validateCompiledCaseSemantics` 两条路径同步修改。
+- 验证：新增 `TestCompileDraftCaseAcceptsParaphrasedIntentAndNamesMismatchedField`（复刻 round2 场景：plan intent 含括号备注、DSL 缩写 → 必须通过；action 漂移 → 必须拒绝且错误含 `"action"`；value 漂移 → 错误含 `"value"`；空 intent → 必须拒绝）；`go build ./...`、`go vet ./...`、`go test -count=1 ./...` 全绿。
+- 关联记录：docs/execution-log.md 2026-09-18（最新复核记录）；BUG-200、BUG-199、docs/plan/2026-09-18-context-budget-design.md（P2）。
+
+## BUG-200 | generate_dsl 把 plan 的 click 步骤改写为 goto 被语义校验拒绝
+
+- 日期：2026-09-18
+- 状态：wont_fix（根因误判，见 BUG-201；本条保留为历史记录）
+- 严重度：high
+- 来源：live E2E（`run_19741c82ceea2af9b0081db5`，round2）
+- 描述：模型成功推进到 `ready_for_generation` 并调用 generate_dsl（13 步、plan_step_id 齐全），但编译器 `compileDraftStep` 报 `DSL step 1 does not preserve plan step "open_products" semantics`，两次尝试均被拒，随后 900s 墙钟超时。**原记录归因于「DSL 把 plan 的 click 步骤改写为 goto」，经事件库逐字段复核不成立**——plan v2 的 `open_products` 本身已是 `goto`（模型在 plan 层合法演进），DSL 与 plan 的 action/value 完全一致，唯一不等的是自由文本 `intent`。详见 BUG-201。
+- 复现步骤（原始记录，归因已被 BUG-201 推翻，仅作历史留存）：
   1. 运行 Blue Top live E2E，模型完成 14/14 grounding。
   2. generate_dsl 时把 plan 的 click(open_products) 写成 goto(/products)。
   3. 编译器语义校验拒绝，模型重试仍改写，超时取消。
 - 影响：grounding 成功后卡在最后一步 DSL 生成，阻断完整收敛。
-- 根因：模型不知道「点击导航进入列表页」与「直接 goto 列表 URL」语义不同——前者验证导航链接可用，后者只证明 URL 可加载；DSL 必须逐字段忠实于 plan（编译器有意强制）。
-- 处理：`harness.go` webPlatformKnowledgePrompt 新增 DSL FIDELITY 段，明确 click 步骤不得改写为 goto、intent/value 必须原样保留、编译器会拒绝改写；新增 `TestSystemPromptPreservesPlanStepActionFidelity` 断言。
-- 验证：harness 测试通过、Go 全量门禁全绿；round3 E2E 中模型未再出现 goto 改写（改卡在广告浮层，见 BUG-199 更新）。
-- 关联记录：docs/execution-log.md 2026-09-18；BUG-199。
+- 根因（原记录，已推翻）：模型不知道「点击导航进入列表页」与「直接 goto 列表 URL」语义不同——前者验证导航链接可用，后者只证明 URL 可加载；DSL 必须逐字段忠实于 plan（编译器有意强制）。**实测：模型是在 plan 层合法地把 click 演进为 goto，DSL 未改写动作，拒绝来自 `intent` 全等比对，见 BUG-201。**
+- 处理：`harness.go` webPlatformKnowledgePrompt 新增 DSL FIDELITY 段，明确 click 步骤不得改写为 goto、intent/value 必须原样保留、编译器会拒绝改写；新增 `TestSystemPromptPreservesPlanStepActionFidelity` 断言。**注：该提示词对本次真实拒绝路径无效，因 DSL 并未改写 action。**
+- 验证：harness 测试通过、Go 全量门禁全绿；round3 E2E 中模型未再出现 goto 改写（但 round3 亦未走到 generate_dsl，故不能证明该提示词生效）。
+- 关联记录：docs/execution-log.md 2026-09-18；BUG-199、BUG-201。
 
 ## BUG-199 | Blue Top live E2E：购物车页断言用错 heading 语义且 grounding 时间撞墙钟
 
@@ -82,9 +136,10 @@
   2. **预算耗在失败重试上**：第一版 plan 探索预算 4/8 默认值太小且不可配，失败 flow 也扣额度，v1 在第 4 次 flow 时 `explore_flow_budget_exhausted`，被迫重建 plan 版本重复 grounding。已修复：预算默认提到 10/12 且新增 env 可配（`AGENTSERVICE_MAX_EXPLORE_*_CALLS`），失败调用仍计预算但浪费性同签名重试由签名门禁拦截；round2 实跑预算告警归零。
   3. **失败信息不可行动**：count=0 只给数字不给候选，模型只能盲猜。已修复：`_flow_failure_candidate_hints` 在失败时返回页面候选语义 locator（role/placeholder/text + element_ref）附到 failure。
   4. **广告浮层劫持**（2026-09-18 round3 新发现）：Products 点击被间歇性 Google AdSense vignette（`#google_vignette`）劫持，`click did not reach expected anchor destination`。已由 Web 知识 skill（AD OVERLAYS 段）覆盖：识别广告 URL、重试 1-2 次、新 probe context。
-  5. **DSL 动作改写**：见 BUG-200（round2 独立发现，已修复）。
-- 处理（2026-09-18）：探索预算 env 化 + 默认提到 10/12；`_flow_failure_candidate_hints` 失败返回候选；`webPlatformKnowledgePrompt`（PHASE 2.5）注入页面结构/可访问名/定位策略/flow/DSL 保真/广告浮层六段知识；失败重试指引（`failure.candidate_locators` 优先、改实质参数）。round2 已走到 ready_for_generation + generate_dsl（仅卡 BUG-200），round3 卡广告浮层。
-- 验证：Go 全量门禁全绿；Python 200 passed / 1 known-fail / 2 skipped；Frontend build 通过；本地实测 Products 点击多数直达 /products（vignette 间歇）。live E2E 收敛性待提高超时后复验。
+  5. **DSL 动作改写**：原记 BUG-200（round2 独立发现）。经 BUG-201 复核，该根因不成立——真实拒绝原因是 `intent` 自由文本全等比对；DSL FIDELITY 提示词对本次拒绝无效。
+  6. **广告浮层并非 round3 的致命阻塞**（2026-09-18 复核新增）：round3 仅 5 处提及 `#google_vignette`，seq 79 拦截一次后模型按 AD OVERLAYS 指引重试即通过（`open_products` 在 seq 109 成功 grounded），run 继续推进到 5/13。真正的失败是 grounding 总耗时（LLM 13 次调用 651s / 900s，占 72%）叠加 seq 148 的 `references unbound plan step "add_to_cart"` 空转，与广告无关。
+- 处理（2026-09-18）：探索预算 env 化 + 默认提到 10/12；`_flow_failure_candidate_hints` 失败返回候选；`webPlatformKnowledgePrompt`（PHASE 2.5）注入页面结构/可访问名/定位策略/flow/DSL 保真/广告浮层六段知识；失败重试指引（`failure.candidate_locators` 优先、改实质参数）。round2 已走到 ready_for_generation + generate_dsl（卡点是 BUG-201 的 intent 全等比对，非 BUG-200）；round3 广告浮层已可自愈，卡点是 grounding 耗时与 unbound plan step。
+- 验证：Go 全量门禁全绿；Python 200 passed / 1 known-fail / 2 skipped；Frontend build 通过；本地实测 Products 点击多数直达 /products（vignette 间歇）。live E2E 收敛性待提高超时后复验。2026-09-18 复核：用 `agent_events` 三轮落库事件重新量化，LLM 耗时占墙钟 70-72%，为收敛主瓶颈。
 - 关联记录：docs/execution-log.md 2026-09-17 与 2026-09-18；BUG-200、BUG-198。
 
 ## BUG-198 | 图标/空名控件 grounding——根因定位与修复（修复已落地，待 live E2E 复验）
