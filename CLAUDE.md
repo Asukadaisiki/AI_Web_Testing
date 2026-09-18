@@ -4,113 +4,147 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 
-Read and follow all instructions in AGENTS.md in this repository. Key rules inlined here:
+Read and follow all instructions in `AGENTS.md` in this repository. Key rules inlined here:
 
 - **Language**: Respond in Chinese unless user requests otherwise. Final responses include Summary, Changes, How to run, Tests, Notes sections.
 - **Git**: Single-owner repo, direct push preferred over PRs. Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`). One focused commit per task.
-- **Task logging**: Append to `docs/execution-log.md` after completing tasks. Append to `docs/bug-log.md` for defects found. Ask user about GitHub sync after completing requirements.
-- **Boundaries**: Frontend must not contain test execution logic. Backend runner is the only source of truth for results. AI generation cannot bypass DSL validation.
+- **Task logging**: After every meaningful task, add a record **at the top** of `docs/execution-log.md`. Log defects to `docs/bug-log.md` (also newest first). Ask user about GitHub sync after completing requirements.
+- **Boundaries**: Frontend must not contain test execution logic. Backend runner is the only source of truth for results. AI generation cannot bypass DSL validation. No task-specific hardcoding in reusable runtime code.
+- **Architecture truth**: If docs conflict with code, trust `docs/architecture-guide.md`, current schemas, and the code itself.
+
+## Current Architecture (2026-09)
+
+Go control plane + stateless Python browser worker + React frontend:
+
+- **Go (`backend-go/`)** owns: AgentRun/TaskPlan/research state machines, DSL validation, cases, execution queue (PostgreSQL `FOR UPDATE SKIP LOCKED`), reports, SSE, cost fuses, prompt-cache identity, migrations.
+- **Python (`browser-worker/`)** is a **stateless** browser capability worker: Playwright runner, A11y observation, locator preflight, evidence collection. It does **not** touch the business database; SQLAlchemy/Alembic were removed.
+- **Frontend (`frontend/`)** talks only to Go `/api/v2` (plus `/artifacts` from the Python worker). No login/auth anywhere; the server uses a fixed actor and keeps ownership fields.
+- **`contracts/`** holds versioned JSON schemas (browser observation, locator spec, target binding, grounding queries, agent pipeline trace). Contract changes must stay backward compatible.
+
+```
+backend-go/
+  cmd/
+    agentservice/        Hertz HTTP/SSE service (:8081)
+    execution-worker/    Queue worker consuming execution_jobs
+    migrate/             PostgreSQL schema migrations
+    pipeline-audit/      AgentRun pipeline diagnostics
+    research-export/     Research trajectory export
+  internal/
+    agent/               Pure agent loop + message contracts
+    agentservice/        AgentRun, events, checkpoints, repositories
+    harness/             Prompt, tools, run orchestration, phase boundaries
+    taskplan/            TaskPlan state machine + DSL compiler
+    research/            Agentic research: events, metrics, oracle, exporter
+    tools/               Tool contracts and registry (ask_user, browser, dsl, execution, task_plan)
+    execution/ cases/ corrections/ planning/ projects/ platform/ observation/ dsl/ dbschema/
+    transport/http/      Thin HTTP handlers
+    integration/ testpg/ Test helpers
+
+browser-worker/
+  src/browser_worker/
+    server/              FastAPI entry, routes (:8000)
+    capabilities/        Browser capability + stateless execution RPC
+    exploration/         Page exploration, A11y collection, locator preflight
+    runners/             Playwright DSL executor
+    locators/            Locators + correction protocol
+    reporting/           Execution reports, failure signals, acceptance
+    contracts/           Pydantic request/response contracts
+    runtime/             Config, logging, middleware
+  scripts/
+    research_e2e.py      Orchestrate, verify, export research experiments
+    run_agentic_e2e.py   Live agentic E2E driver (progress + stalled detection)
+    run_research_smoke.py
+
+frontend/
+  src/
+    pages/               PlanningPage, CasesPage, CaseEditPage, ReportPage,
+                         ExecutionDetailPage, RegressionPage, LocatorDebugPage, SessionListPage
+    features/ components/ layouts/ services/ shared/ hooks/ types/
+  e2e/                   Playwright smoke (desktop + mobile)
+
+contracts/               Versioned JSON schemas shared across services
+research/                Acceptance specs, fixtures, goals, experiment results
+testdata/                Contract test fixtures
+docs/                    Planning, specs, execution-log, bug-log
+deploy/ + compose.prod.yml  Production stack (PostgreSQL, migrations, Python API/Worker, Go AgentCore, Nginx)
+.claude/skills/          Claude Code skills
+```
 
 ## Commands
 
-### Browser Worker (from `browser-worker/`)
+### Go control plane (from `backend-go/`)
 
 ```bash
-cp .env.example .env                          # First-time: create env config
-uv sync                                       # Install dependencies
-uv run alembic upgrade head                   # Run database migrations
-uv run alembic revision --autogenerate -m "description"  # Create new migration
-uv run backend-dev                            # Start dev server (http://127.0.0.1:8000)
-uv run pytest tests/unit -q                   # Run unit tests (505 tests)
-uv run pytest tests/integration -m browser_integration    # Browser regression tests (needs Playwright + chromium)
-uv run pytest tests/integration/test_platform_api_chain.py -v  # API chain integration tests
-uv run pytest tests/unit/test_dsl_validation.py -k "test_name"  # Run single test
+go run ./cmd/migrate                          # Apply PostgreSQL schema migrations
+go run ./cmd/agentservice                     # Start Hertz API (:8081)
+go run ./cmd/execution-worker --concurrency 2 # Start execution queue worker
+go test ./...                                 # Unit tests
+go vet ./... && go build ./...                # Vet + build gate
 ```
+
+Requires a reachable PostgreSQL (local dev uses `.pgdata/` via compose or local install).
+
+### Browser worker (from `browser-worker/`)
+
+```bash
+cp .env.example .env                          # First-time env config
+uv sync                                       # Install dependencies
+uv run browser-worker-dev                     # Start FastAPI (:8000)
+uv run python -m compileall -q src tests      # Compile gate (matches CI)
+uv run python -m unittest discover -s tests -p "test_*.py"   # Full test suite
+```
+
+Playwright browser regression lives under `tests/` (e.g. `test_explore_flow_chromium.py`); it needs Playwright + chromium installed.
 
 ### Frontend (from `frontend/`)
 
 ```bash
-npm install          # Install dependencies
-npm run dev          # Start dev server (http://127.0.0.1:5173, proxies /api → backend:8000)
-npm run build        # Production build (tsc --noEmit && vite build)
-npm test -- --run    # Run Vitest tests
+npm install
+npm run dev                 # Vite dev server (:5173), proxies /api/v2 → :8081, /artifacts → :8000
+npm test                    # Vitest run
+npm run build               # tsc --noEmit && vite build
+npm run test:smoke:install  # Install Playwright chromium (local browsers path)
+npm run test:smoke          # Playwright desktop + mobile smoke
 ```
 
-## Architecture
+### Research / agentic E2E
 
-Monorepo with Python backend, TypeScript frontend, and docs:
-
+```bash
+./scripts/research-e2e --help               # Wrapper for browser-worker/scripts/research_e2e.py
+cd browser-worker && uv run python scripts/run_agentic_e2e.py --help   # Live E2E driver
 ```
-browser-worker/app/
-  main.py              # FastAPI app factory, Uvicorn entry
-  api/router.py        # Route assembly (auth, cases, executions, corrections, dsl, ai-planning, etc.)
-  api/routes/          # Thin route handlers
-  services/            # Business logic
-    ai_planning.py              # AI planning core logic (largest service)
-    ai_planning_streaming.py    # SSE streaming helpers (CancellationManager, event formatter)
-    executions.py, dsl.py, cases.py, corrections.py, auth.py, settings.py
-  models/              # SQLAlchemy 2.x ORM
-    test_case.py, test_case_run.py, locator_correction.py
-    ai_planning_session.py, ai_planning_draft.py, ai_planning_message.py
-    project.py, dsl_generation_run.py
-  runners/
-    playwright_runner.py    # Execution engine: sync + streaming modes, artifact collection
-  locators/            # 5-tier hybrid locator system
-    corrections.py     # Tier 0: historical manual corrections (priority match)
-    semantic.py        # Tier 1-2: A11y candidates + DOM semantic (text_parent_chain, element_id, CSS/XPath)
-    ai_visual.py       # Tier 3: VLM-based visual locate (disabled by default)
-    fallback.py        # Tier 4: raise InterventionNeededError, collect DOM snapshot
-  ai/
-    test_planning_agent.py   # ReAct-style conversational test planning agent
-    dsl_generator.py         # NL→DSL with governance, auto-repair, rejection tracking
-    page_explorer.py         # Page structure exploration
-    planning_tools.py        # Agent tool implementations
-  schemas/dsl.py       # Pydantic DSL models (GotoStep, ClickStep, InputStep, etc.)
-  reporters/json_report.py   # JSON report generation
-  core/config.py       # Settings from env vars (.env file)
 
-frontend/src/
-  app/AppRouter.tsx          # React Router v6, lazy-loaded pages
-  pages/                     # PlanningPage, CasesPage, ReportPage, ExecutionDetailPage, CaseEditPage
-  components/                # AITestPlanningPanel, ChatInput, StepList, InterventionPanel
-  services/
-    api.ts                   # REST API client (fetch wrappers)
-    sseClient.ts             # Generic SSE client (POST + ReadableStream, with AbortSignal)
-  layouts/                   # NotebookLMLayout (three-column layout)
-  types/api.ts               # TypeScript type definitions for API contracts
-```
+Live E2E needs PostgreSQL + the three services running and an LLM API key configured for the Go service. The driver prints progress every 30s and aborts on stalled event sequences instead of waiting out the wall clock.
 
 ## Environment Setup
 
-- Backend requires Python 3.12+. Uses `uv` for dependency management.
-- Go uses `DEFAULT_ACTOR_USER_ID` (default `1`); no login, Cookie, token, or role authentication is enabled.
-- `get_settings()` uses `@lru_cache` — in tests, the `reset_cached_state` autouse fixture clears caches on `get_settings`, `get_engine`, `get_session_factory`.
-- Browser Worker tests live under `browser-worker/tests/`.
+- Python 3.12+, dependencies via `uv` (`browser-worker/pyproject.toml`, no dev extras beyond stdlib unittest).
+- Go: PostgreSQL via `pgx/v5`; no SQLite in production paths.
+- No login/token/role auth; server fixes the actor (`DEFAULT_ACTOR_USER_ID`, default `1`).
+- LLM config lives in the Go service env (provider base URL, model, key, `AGENTSERVICE_MAX_TOTAL_TOKENS` cost fuse).
+- AI visual (VLM) locating is **off by default**; enabling it is a governed opt-in, never a default.
 
 ## Key Data Flows
 
-**Execution flow**: Case DSL → `playwright_runner` → per-step locator fallback chain → evidence (screenshot, console, network) → `TestCaseRun` with step-level results.
+**Agentic planning flow**: User conversation → Go AgentCore (native tool calling; explore/validate/generate/execute/report tools) → TaskPlan grounding → DSL generation → **user approval** → `execute_dsl` → queue → report. `execute_dsl` only accepts the user-approved generation; the model cannot bypass approval. SSE streams messages, ToolCalls, and artifacts; refresh replays events by sequence number from PostgreSQL.
 
-**SSE streaming flow**: All AI planning operations use SSE over POST (not WebSocket):
-- Frontend `callSSE()` sends POST with JSON body → backend `StreamingResponse` with `text/event-stream`
-- Endpoints: `/chat`, `/drafts`, `/execute` under `/api/v1/ai-planning/sessions/{id}/`
-- Cancellation: frontend `AbortController` → `POST .../cancel` → backend `CancellationManager`
+**Execution queue flow**: Case DSL → `ExecutionBatch -> ExecutionJob -> TestCaseRun` in PostgreSQL → `cmd/execution-worker` claims jobs with `FOR UPDATE SKIP LOCKED` → stateless Python `/api/v1/internal/browser-executions` RPC runs Playwright → Go writes back step-level results with evidence (screenshot, console, network) and DSL snapshot/hash/attempt.
 
-**AI Planning flow**: User conversation → `test_planning_agent` (ReAct + tool calls) → DSL draft → user review → save as TestCase → trigger execution → stream progress.
+**Correction flow**: Failed locator → run lands `needs_intervention` → user submits correction (LocatorDebugPage) → Tier 0 priority match on future runs; rerun from the UI.
 
-**Correction flow**: Failed step → `needs_intervention` → user submits correction → stored as `LocatorCorrection` → Tier 0 priority match on future runs.
+**Report aggregation**: Report Core reads run/batch/project levels from persisted structured JSON; FailureSignals and analysis summaries are stored, not recomputed ad hoc.
 
 ## Conventions
 
-- **Backend**: FastAPI + SQLAlchemy 2.x + Alembic. Route handlers thin, logic in services. SQLite for local dev, PostgreSQL for production design.
-- **Frontend**: React + TypeScript + Vite + Ant Design + TanStack Query. Vite dev server proxies `/api` and `/artifacts` to backend. No execution logic in frontend.
-- **Streaming**: Use SSE (fetch-based `sseClient.ts`), not WebSocket. All streaming endpoints are POST with JSON body.
-- **Testing**: `tests/unit/` for unit tests, `tests/integration/` for integration tests. `browser_integration` pytest marker for browser-level tests. All meaningful features need tests.
-- **DSL**: All test cases must be structured DSL. No free-form NL into executor. Validate before execution. Every step produces evidence.
-- **AI**: AI generation cannot bypass DSL validation. AI visual is opt-in (disabled by default). DSL generator outputs governance metadata (warnings, normalization_notes, generation_meta).
-- **Design docs**: Specs and plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/` (date-prefixed filenames). Read the relevant spec before implementing a feature.
-- **Structured logging**: JSONL format in `backend_structured.log`. 4 categories: `ai_thinking`, `tool_call`, `dsl_execution`, `locator_fallback`. Query with `jq 'select(.category == "ai_thinking")' backend_structured.log`.
+- **DSL**: Structured DSL only; no free-form NL into the executor. Targets use A11y semantic format `role="name"` — no XPath/CSS in DSL targets. `${var}` placeholders allowed in `value` only. Every executed step produces evidence.
+- **Contracts first**: Change/version JSON schemas in `contracts/` before wiring new logic; both Go and Python sides validate against them.
+- **Go style**: Domain-organized packages, thin HTTP handlers, application services, repository interfaces, infrastructure adapters. Ordinary Go interfaces in-process; Kitex only for separately deployed capabilities.
+- **Python style**: Stateless HTTP worker; Pydantic contracts; stdlib `unittest` (no pytest dependency); SQLAlchemy only if a business-DB dependency is ever reintroduced (currently none).
+- **Frontend style**: React 18 + TypeScript + Vite + Ant Design + TanStack Query + React Router. Streaming uses fetch-based SSE (POST + JSON body), not WebSocket.
+- **LLM calls**: Reuse the run-scoped prompt-cache identity (BUG-204); never per-call identities. Respect context budget resets at phase boundaries; DeepSeek thinking+tools requires full reasoning-content replay (BUG-203).
+- **No task-specific hardcoding**: Goals, flows, and expected facts belong in `research/` fixtures and declarative acceptance specs, never in runtime code.
+- **Structured logging**: Go logs pipeline traces into `agent_events` (DB-backed, replayable); Python request logging is middleware-based. Do not reintroduce file-based `backend_structured.log` conventions.
 
 ## Project Skills
 
-- **e2e-testing-workflow** (`.claude/skills/e2e-testing-workflow.md`): E2E 手动测试完整链路 — 启动系统 → AI 会话规划 → 保存执行 DSL → 分析报告 → 用户反馈迭代。当用户说 "测试平台"、"E2E 测试"、"手动测试" 时自动触发。
+- **e2e-testing-workflow** (`.claude/skills/e2e-testing-workflow.md`): E2E manual testing of the platform — start the three services → AI planning conversation → approve & execute DSL → analyze reports → feedback loop (`fix_and_retry` / corrections). Triggered by "测试平台", "E2E 测试", "手动测试", etc.

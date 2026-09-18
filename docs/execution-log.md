@@ -56,6 +56,19 @@
 
 ## 任务记录
 
+## 2026-09-18 | 同步 AGENTS.md/CLAUDE.md/技能文件到当前架构，并修复 CI 空转门禁
+
+- 任务：用户指出智能体指导文件落后于项目结构，要求优化 AGENTS.md 与 CLAUDE 相关文件。
+- 操作：
+  1. 复核实际目录结构：`backend-go/internal/` 21 个域包（含 taskplan/research/harness）、`browser-worker/src/browser_worker/` 无状态化（已无 SQLAlchemy/Alembic/pytest 依赖）、`contracts/` 11 份版本化 schema、`research/` 与 `testdata/` 数据资产、`scripts/research-e2e` 包装脚本。
+  2. 重写 `CLAUDE.md`：删除已不存在的 `browser-worker/app/` 单体架构描述，改为当前三层架构（Go 控制面 + 无状态 Python worker + React 前端），命令区改为 go/uv/npm 三套真实命令并补充 research E2E 驱动，数据流改为 Agentic 规划、执行队列、修正与报告聚合四条真实链路，约定区补充合同治理、缓存身份（BUG-204）、推理回放约束（BUG-203）与禁止旧文件日志约定。
+  3. 更新 `AGENTS.md`：Architecture Rules 明确「stateless Python browser worker」与 `contracts/` 目录；Backend Rules 删除 SQLAlchemy 2.x/SQLite 保留规则，改为「Python worker 无 ORM 无业务库访问，禁止未经架构决策重新引入；PostgreSQL 唯一生产存储，迁移在 Go」；新增 LLM 运行时规则（run 级缓存身份、成本熔断、推理回放硬约束）；DSL Rules 补充 `role="name"` target 格式、`${var}` 仅限 value、`execute_dsl` 仅接受已批准 generation。
+  4. 重写 `.claude/skills/e2e-testing-workflow.md`：删除已删除的 `backend/` 目录与 Alembic/VLM candidate 描述，改为三服务启动 → AI 规划（grounding/审批检查点）→ 队列执行 → 报告与 fix_and_retry/corrections 反馈闭环。
+  5. 修复 BUG-206：`.github/workflows/ci.yml` Python job 的 `compileall -q app tests` 改为 `src tests`（app 目录已删除且旧命令退出码为 0，门禁空转）。
+- 结果：三个智能体指导文件与技能文件与 2026-09 当前架构一致；CI Python 编译门禁恢复实效。
+- 验证：`uv run python -m compileall -q src tests` 通过；全量 unittest 219 项（1 known-fail 为既有 Windows 路径问题、2 skipped，与改动前一致）；未触及运行时代码。
+- 后续：无。
+
 ## 2026-09-18 | 更新 README 项目状态并同步 GitHub
 
 - 任务：将 README 状态从 2026-09-05 更新到当前（Agentic Research live E2E 收尾阶段），并同步到 GitHub。

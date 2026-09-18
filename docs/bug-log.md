@@ -48,6 +48,22 @@
 
 ## 问题记录
 
+## BUG-206 | CI Python 编译门禁引用已删除的 app 目录，门禁空转
+
+- 日期：2026-09-18
+- 状态：fixed
+- 严重度：medium（质量门禁失效，非运行时缺陷）
+- 来源：同步 AGENTS.md/CLAUDE.md 时按新目录结构复核 CI 配置发现
+- 描述：`.github/workflows/ci.yml` 的 Python job 执行 `uv run python -m compileall -q app tests`，但 `browser-worker/app/` 已在 Go 控制面收敛时删除（源码在 `src/`）。`compileall -q` 对不存在的目录仅打印 "Can't list 'app'" 且退出码为 0，导致 Python 编译门禁自目录迁移以来一直空转，只有 unittest 步骤在实际把关。
+- 复现步骤：
+  1. 在 `browser-worker/` 执行 `python -m compileall -q app tests`。
+  2. 观察输出 "Can't list 'app'"，但退出码为 0。
+- 影响：CI 的 Go/Frontend 门禁正常，但 Python 编译检查从未覆盖 `src/`，语法错误只能等到 unittest 导入时才暴露。
+- 根因：`app/` → `src/browser_worker/` 目录迁移时未同步更新 CI 命令；`compileall` 对缺失目录不报错的设计掩盖了该问题。
+- 处理：改为 `uv run python -m compileall -q src tests`，与 CLAUDE.md/README 构建验证命令保持一致。
+- 验证：本地 `uv run python -m compileall -q src tests` 通过；全量 unittest 219 项（1 known-fail 为既有 Windows 路径问题、2 skipped），与改动前一致。
+- 关联记录：docs/execution-log.md 2026-09-18（同步智能体指导文件）。
+
 ## BUG-205 | E2E 驱动缺少停滞检测：卡住时无法及时发现，只能等墙钟超时
 
 - 日期：2026-09-18

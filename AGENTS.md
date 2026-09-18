@@ -44,11 +44,12 @@ Primary goals for the first milestone:
 
 ## Architecture Rules
 
-The repository is organized as a Go control plane, a Python browser worker, and a TypeScript frontend.
+The repository is organized as a Go control plane, a stateless Python browser worker, and a TypeScript frontend.
 
-- `backend-go/` contains the Hertz HTTP/SSE API, AgentCore, tool registry, application services, and control-plane persistence.
-- `browser-worker/` contains the Python Playwright/A11y/locator execution worker and internal browser capability API.
-- `frontend/` contains the React + TypeScript platform UI.
+- `backend-go/` contains the Hertz HTTP/SSE API, AgentCore, tool registry, TaskPlan/research state machines, execution queue, report aggregation, application services, and control-plane PostgreSQL persistence.
+- `browser-worker/` contains the stateless Python Playwright/A11y/locator worker: browser capability API and a stateless browser-execution RPC. It must not touch the business database.
+- `frontend/` contains the React + TypeScript platform UI; it calls the Go `/api/v2` API only.
+- `contracts/` contains versioned JSON schemas (browser observation, locator spec, target binding, grounding queries, pipeline trace) shared across services.
 - `docs/` contains project planning, DSL specification, UI planning, and architecture notes.
 
 Keep the following boundaries:
@@ -57,6 +58,7 @@ Keep the following boundaries:
 - The backend runner is the only source of truth for test execution results.
 - AI generation and analysis must not bypass structured DSL validation.
 - Reports must be based on structured JSON data first, with UI rendering built on top of that data.
+- Schema/contract changes must be versioned and backward compatible on the wire.
 
 ## Backend Rules
 
@@ -64,13 +66,13 @@ Keep the following boundaries:
 - Use Hertz for browser-facing HTTP and SSE APIs.
 - Use ordinary Go interfaces for in-process boundaries; use Kitex only when a capability is deployed as a separate service.
 - Organize Go code by domain with thin transport handlers, application services, repository interfaces, and infrastructure adapters.
-- Keep the existing Python Playwright/A11y/locator implementation as an isolated browser worker until replacement has equivalent contract and browser coverage.
+- Keep the Python Playwright/A11y/locator implementation as an isolated stateless browser worker; it exposes only internal browser capability and execution RPCs.
 - Use `uv` for the Python worker dependency and environment management.
-- Use SQLAlchemy 2.x style models and sessions in retained Python modules.
-- Use PostgreSQL for production design assumptions.
-- Use SQLite only for lightweight tests that do not validate production migrations or queue locking.
+- The Python worker holds no ORM and no business-database access; SQLAlchemy/Alembic were removed. Do not reintroduce them without an explicit architecture decision.
+- PostgreSQL is the only production datastore; all business persistence and migrations live in Go (`backend-go/cmd/migrate`, `internal/dbschema`).
 - Add compatible migrations for schema changes.
 - Keep execution logic, locator logic, and reporting logic in separate modules.
+- LLM runtime rules: reuse the run-scoped prompt-cache identity per run, keep the cost fuse (`AGENTSERVICE_MAX_TOTAL_TOKENS`) enforced, and respect provider hard constraints on reasoning-content replay and context budget resets (see `docs/plan/2026-09-18-context-budget-design.md`).
 - The current local milestone does not implement login, token, or role authorization. Preserve project and actor ownership fields for a later identity adapter.
 
 
@@ -88,8 +90,10 @@ Keep the following boundaries:
 - Validate DSL before execution.
 - Do not allow free-form natural language directly into the executor.
 - Keep first-phase actions limited to a small stable set.
+- DSL targets must use A11y semantic format `role="name"`; XPath/CSS targets and `${var}` placeholders in `target` are not allowed. `${var}` placeholders are allowed in `value` only.
 - Every executed step must produce evidence.
 - Locator output should record target, candidates, final match, and failure reason when available.
+- `execute_dsl` only accepts the user-approved DSL generation of the current AgentRun; the model must never be able to bypass approval.
 
 ## No Task-Specific Hardcoding
 
