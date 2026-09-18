@@ -56,6 +56,22 @@
 
 ## 任务记录
 
+## 2026-09-18 | round 10 复盘：grounding 与 DSL 生成均已打通，终止于成本熔断
+
+- 任务：跟进第 10 轮 live E2E（含本轮全部修复）。
+- 结果：**round 10 是迄今最好的一轮**，也是第一次走通 grounding 与 DSL 生成：
+  1. **12/12 全部 grounded**，且**经历 4 次计划改版（v1→v4）每次都保持 12/12** —— `sameStepSemantics` 去掉 `intent` 比对后，改版不再丢失已 grounded 步骤的 binding（对比 round 2 的 7/15 → 4/14）。
+  2. **DSL 生成成功**（`dsl_generation_runs` 多条 `success=t`）——`timeout_ms` 死锁与冗余 `target` 误拒修复后，DSL 从 round 7 的反复失败转为成功。
+  3. **缓存命中 2,881,024 / 2,940,000 ≈ 98%** —— BUG-204 修复效果稳定。
+  4. 终止原因：**run 级成本熔断** `total_tokens: 3,089,800 > 3,000,000`（`AGENTSERVICE_MAX_TOTAL_TOKENS` 默认 3M），27 次逻辑调用、上下文约 485KB/次。**不是环境问题也不是代码缺陷**，是配置余量不足。
+  5. 未开始执行（`execution_batches` 为空）。
+- 另修一处 P4 缺陷：第 10 轮 transcript 中无 `grounding_handoff`。根因是我把边界检测移到计划状态变更处时，检测点与追加点**各调用了一次** `markGenerationSegment`（一次性标记），追加点因此恒判"已分段"而从不追加交接消息。已修复（仅检测点claim标记）。
+- 环境侧确认：改用 `Win32_Process.Create`（作业对象外）启动后，postgres 与三个服务在工具调用被中止后仍存活 —— 此前 round 8/9 的 `WinError 10061`（0 事件）确实是"服务随启动 shell 的作业对象被 kill"所致。
+- 后续（用户已指示暂停测试，仅同步状态）：
+  1. 提高 `AGENTSERVICE_MAX_TOTAL_TOKENS`（如 12M）后再跑；此时 grounding 与 DSL 均已通，剩余是执行与报告。
+  2. **BUG-205（新登记）**：E2E 驱动缺少停滞检测，卡住时无法及时发现，只能等墙钟超时 —— 这是本轮迭代效率低的主因，建议优先补进度输出与 stalled 判定。
+- 验证：本轮改动 Go `build`/`vet`/`gofmt` 干净、`internal/harness` 测试通过；Python 213 passed（唯一失败为既有 Windows 路径问题）。round 10 结论取自 `agent_runs`/`agent_events`/`dsl_generation_runs` 落库数据。
+
 ## 2026-09-18 | 冲刺「E2E 跑通」：9 项阻塞修复 + 环境根因定位（round 7 达成 17/17 grounding）
 
 - 任务：承接上一轮，继续修复直到 live E2E 跑通；并定位"服务反复消失/启动卡住"的原因。
