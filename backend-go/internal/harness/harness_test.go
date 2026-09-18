@@ -12,6 +12,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agent"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/agentservice"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/browsercontract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/taskplan"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend-go/internal/tools"
 )
@@ -1112,7 +1113,7 @@ func TestTaskPlanRevisionInvalidatesPriorDSLBinding(t *testing.T) {
 }
 
 type costingModel struct {
-	turn         int
+	turn          int
 	perCallTokens int64
 }
 
@@ -1245,5 +1246,275 @@ func TestRunCostFusesDisabledWithZeroLimits(t *testing.T) {
 	}
 	if run.Status != agentservice.RunStatusCompleted {
 		t.Fatalf("run status = %s, want completed", run.Status)
+	}
+}
+
+// perTurnCompactionFixture builds an exploration result whose summary is large.
+// Each fixture uses a distinct page state: re-observing the same state yields a
+// deliberately compact delta summary, which would not exercise the budget.
+func perTurnCompactionFixture(pageState string, nodes int) json.RawMessage {
+	entries := make([]string, 0, nodes)
+	for index := 0; index < nodes; index++ {
+		entries = append(entries, fmt.Sprintf(
+			`{"node_id":"%s-e%d","role":"button","name":"%s","page_state":"%s",`+
+				`"focusable":true,"verified_selectors":[`+
+				`{"strategy":"css","selector":"#%s-node-%d"}]}`,
+			pageState,
+			index,
+			strings.Repeat("product-candidate-", 12)+fmt.Sprintf("%d", index),
+			pageState,
+			pageState,
+			index,
+		))
+	}
+	return json.RawMessage(`{
+		"url":"https://example.com/products/` + pageState + `",
+		"page_state":"` + pageState + `",
+		"status":"success",
+		"element_count":` + fmt.Sprintf("%d", nodes) + `,
+		"a11y_nodes":[` + strings.Join(entries, ",") + `]
+	}`)
+}
+
+// sequencedResultTool returns a different exploration page per call so each
+// tool result carries a full-size summary.
+type sequencedResultTool struct {
+	name     string
+	contents []json.RawMessage
+	calls    int
+}
+
+func (t *sequencedResultTool) Definition() tools.Definition {
+	return tools.Definition{
+		Name:        t.name,
+		Description: t.name,
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
+}
+
+func (t *sequencedResultTool) Execute(
+	context.Context,
+	tools.Call,
+) (tools.Result, error) {
+	content := t.contents[t.calls%len(t.contents)]
+	t.calls++
+	return tools.Result{Content: content}, nil
+}
+
+// P4: the generation phase receives the grounded plan as a self-contained
+// handoff, because opening a segment drops the exploration turns that carried
+// the plan fields the DSL author must reproduce.
+func TestGenerationHandoffCarriesGroundedPlan(t *testing.T) {
+	plan := taskplan.Plan{
+		ID: "plan-1", Version: 2, PlanSHA256: strings.Repeat("a", 64),
+		Goal:   "Open the products page",
+		Status: taskplan.StatusReadyForGeneration,
+		Steps: []taskplan.Step{{
+			ID: "open_products", Position: 0, Action: "goto",
+			Intent: "进入 Products 商品列表页", Target: "Products page",
+			Value:               "https://example.test/products",
+			Idempotency:         "idempotent",
+			SideEffect:          taskplan.SideEffectBrowserState,
+			ExpectedOccurrences: 1,
+			Preconditions:       []string{"home visible"},
+			CompletionConditions: []string{
+				"url contains /products",
+			},
+			Status: taskplan.StepGrounded,
+			TargetBinding: &browsercontract.TargetBinding{
+				BindingID: "binding-1", SelectedCandidateID: "candidate-1",
+			},
+		}, {
+			ID: "click_search", Position: 1, Action: "click",
+			Intent: "Submit the search", Target: "Search button",
+			Idempotency:         "idempotent",
+			SideEffect:          taskplan.SideEffectBrowserState,
+			ExpectedOccurrences: 1,
+			Status:              taskplan.StepGrounded,
+		}},
+	}
+	message := generationHandoffMessage(plan)
+	if !message.SegmentBoundary || message.Role != "user" {
+		t.Fatalf("handoff must open a user segment: %#v", message)
+	}
+	var payload struct {
+		SchemaVersion string `json:"schema_version"`
+		Kind          string `json:"kind"`
+		Goal          string `json:"goal"`
+		PlanID        string `json:"plan_id"`
+		PlanVersion   int    `json:"plan_version"`
+		Steps         []struct {
+			ID                   string   `json:"id"`
+			Action               string   `json:"action"`
+			Intent               string   `json:"intent"`
+			Target               string   `json:"target"`
+			Value                string   `json:"value"`
+			Idempotency          string   `json:"idempotency"`
+			SideEffect           string   `json:"side_effect"`
+			Preconditions        []string `json:"preconditions"`
+			CompletionConditions []string `json:"completion_conditions"`
+			TargetBindingID      string   `json:"target_binding_id"`
+			SelectedCandidateID  string   `json:"selected_candidate_id"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(message.Content), &payload); err != nil {
+		t.Fatalf("handoff payload is not JSON: %v", err)
+	}
+	if payload.SchemaVersion != "agent.grounding_handoff.v1" ||
+		payload.Kind != "grounding_complete" ||
+		payload.Goal != plan.Goal ||
+		payload.PlanID != plan.ID ||
+		payload.PlanVersion != plan.Version ||
+		len(payload.Steps) != 2 {
+		t.Fatalf("handoff envelope = %#v", payload)
+	}
+	first := payload.Steps[0]
+	if first.ID != "open_products" ||
+		first.Action != "goto" ||
+		first.Intent != "进入 Products 商品列表页" ||
+		first.Value != "https://example.test/products" ||
+		first.Idempotency != "idempotent" ||
+		first.SideEffect != "browser_state" ||
+		first.TargetBindingID != "binding-1" ||
+		first.SelectedCandidateID != "candidate-1" ||
+		len(first.Preconditions) != 1 ||
+		len(first.CompletionConditions) != 1 {
+		t.Fatalf("handoff step must restate every plan-owned field: %#v", first)
+	}
+}
+
+// The boundary opens once per plan revision: a later turn that merely observes
+// the same ready status must not reset the model context again.
+func TestMarkGenerationSegmentIsOncePerRevision(t *testing.T) {
+	runService := agentservice.NewService(agentservice.NewMemoryRepository())
+	registry, err := tools.NewRegistry(staticResultTool{
+		name: "explore_page", content: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(runService, &scriptedModel{}, registry, 3)
+	engine.activeRuns["run-segment"] = &activeRun{}
+
+	if !engine.markGenerationSegment("run-segment", "sha-1") {
+		t.Fatal("the first ready observation must open the segment")
+	}
+	if engine.markGenerationSegment("run-segment", "sha-1") {
+		t.Fatal("the same plan revision must not re-open the segment")
+	}
+	if !engine.markGenerationSegment("run-segment", "sha-2") {
+		t.Fatal("a new plan revision must open a new segment")
+	}
+	if engine.markGenerationSegment("unknown-run", "sha-1") {
+		t.Fatal("an unknown run must not be segmented")
+	}
+}
+
+// P3: rewriting a historical tool summary changes the request prefix and
+// discards the provider's prompt cache from that point onward, so the harness
+// must leave the transcript append-only unless per-turn compaction is
+// explicitly enabled.
+func TestPerTurnTranscriptCompactionIsOptIn(t *testing.T) {
+	const exploreCalls = 6
+	contents := make([]json.RawMessage, 0, exploreCalls)
+	for index := 0; index < exploreCalls; index++ {
+		contents = append(contents, perTurnCompactionFixture(
+			fmt.Sprintf("S%d", index),
+			120,
+		))
+	}
+
+	runTranscript := func(compact bool) []agent.Message {
+		t.Helper()
+		responses := make([]agent.ModelResponse, 0, exploreCalls+1)
+		for index := 0; index < exploreCalls; index++ {
+			// Distinct arguments keep the repeated-call ledger (BUG-181) from
+			// collapsing probes that only look identical by tool name.
+			responses = append(responses, agent.ModelResponse{
+				ToolCalls: []agent.ModelTool{{
+					ID:   fmt.Sprintf("explore-%d", index),
+					Name: "explore_page",
+					Arguments: fmt.Sprintf(
+						`{"url":"https://example.com/products/S%d"}`,
+						index,
+					),
+				}},
+			})
+		}
+		responses = append(responses, agent.ModelResponse{Content: "done"})
+
+		runService := agentservice.NewService(agentservice.NewMemoryRepository())
+		registry, err := tools.NewRegistry(&sequencedResultTool{
+			name:     "explore_page",
+			contents: contents,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine := New(
+			runService,
+			&scriptedModel{responses: responses},
+			registry,
+			exploreCalls+2,
+		)
+		engine.SetPerTurnTranscriptCompaction(compact)
+		started, err := engine.Start(
+			context.Background(),
+			"conversation-compaction",
+			"explore",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		persisted, err := runService.GetRun(context.Background(), started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return persisted.Transcript
+	}
+
+	explorationTotals := func(transcript []agent.Message) (int, int) {
+		total, referenceOnly := 0, 0
+		for _, message := range transcript {
+			if message.Role != "tool" {
+				continue
+			}
+			summary, ok := agent.DecodeModelToolSummary(message.Content)
+			if !ok || !agent.IsExplorationTool(summary.Tool) {
+				continue
+			}
+			total += len(message.Content)
+			if summary.ReferenceOnly {
+				referenceOnly++
+			}
+		}
+		return total, referenceOnly
+	}
+
+	appendOnly := runTranscript(false)
+	total, referenceOnly := explorationTotals(appendOnly)
+	if total <= agent.ModelExplorationBudgetBytes {
+		t.Fatalf(
+			"fixture must exceed the exploration budget to exercise compaction: got %d",
+			total,
+		)
+	}
+	if referenceOnly != 0 {
+		t.Fatalf(
+			"default run rewrote %d historical summaries; transcript must stay append-only",
+			referenceOnly,
+		)
+	}
+
+	compactedTotal, compactedReferenceOnly := explorationTotals(runTranscript(true))
+	if compactedReferenceOnly == 0 {
+		t.Fatal("opt-in run did not compact superseded summaries")
+	}
+	if compactedTotal >= total {
+		t.Fatalf(
+			"compaction must shrink the exploration summaries: %d -> %d",
+			total,
+			compactedTotal,
+		)
 	}
 }

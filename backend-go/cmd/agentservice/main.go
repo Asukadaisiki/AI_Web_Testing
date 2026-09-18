@@ -121,10 +121,10 @@ func main() {
 		taskPlanService,
 		cfg.AgentMaxTurns,
 		harness.ExplorationGateConfig{
-			MaxRunWallTime: cfg.AgentMaxWallTime(),
-			ExploreReserve: cfg.AgentExploreReserve(),
-			MaxExplorePageCalls:  cfg.AgentMaxExplorePageCalls,
-			MaxExploreFlowCalls:  cfg.AgentMaxExploreFlowCalls,
+			MaxRunWallTime:         cfg.AgentMaxWallTime(),
+			ExploreReserve:         cfg.AgentExploreReserve(),
+			MaxExplorePageCalls:    cfg.AgentMaxExplorePageCalls,
+			MaxExploreFlowCalls:    cfg.AgentMaxExploreFlowCalls,
 			MaxRunExplorePageCalls: cfg.AgentMaxRunExplorePageCalls,
 			MaxRunExploreFlowCalls: cfg.AgentMaxRunExploreFlowCalls,
 		},
@@ -134,6 +134,9 @@ func main() {
 		MaxTotalTokens:     cfg.AgentMaxTotalTokens,
 		MaxTranscriptBytes: cfg.AgentMaxTranscriptBytes,
 	})
+	engine.SetPerTurnTranscriptCompaction(
+		cfg.AgentPerTurnTranscriptCompaction,
+	)
 	server := httptransport.NewServer(
 		cfg.Address,
 		engine,

@@ -179,6 +179,12 @@ type Harness struct {
 	// BUG-155: run-level hard cost fuses. Zero fields mean "unlimited".
 	costLimits RunCostLimits
 
+	// perTurnTranscriptCompaction keeps the legacy behaviour of rewriting
+	// historical tool summaries inside a turn. It bounds the request size but
+	// invalidates the provider's prefix cache from the rewritten message
+	// onward, so it is opt-in; see SetPerTurnTranscriptCompaction.
+	perTurnTranscriptCompaction bool
+
 	activeMu   sync.Mutex
 	activeRuns map[string]*activeRun
 }
@@ -186,9 +192,9 @@ type Harness struct {
 // RunCostLimits caps cumulative model cost per run. A zero value disables the
 // corresponding fuse; all values below must be >= 0.
 type RunCostLimits struct {
-	MaxModelCalls     int   // cumulative model calls (logical Complete calls)
-	MaxTotalTokens    int64 // cumulative total tokens across calls
-	MaxTranscriptBytes int  // serialized transcript size in bytes
+	MaxModelCalls      int   // cumulative model calls (logical Complete calls)
+	MaxTotalTokens     int64 // cumulative total tokens across calls
+	MaxTranscriptBytes int   // serialized transcript size in bytes
 }
 
 func (l RunCostLimits) withDefaults() RunCostLimits {
@@ -211,6 +217,11 @@ func (l RunCostLimits) Enabled() bool {
 type activeRun struct {
 	cancel     context.CancelFunc
 	turnBudget int
+	// generationSegmentPlanSHA256 records the plan revision for which the run
+	// already received its dedicated generation context, so the boundary is
+	// opened once per revision instead of on every turn that observes the
+	// ready status.
+	generationSegmentPlanSHA256 string
 	// BUG-155 cumulative cost state.
 	modelCalls      int
 	totalTokens     int64
@@ -261,9 +272,9 @@ func (e *Harness) raiseTurnBudget(runID string, needed int) {
 
 // RunCostLimitError is a terminal run failure produced by a BUG-155 cost fuse.
 type RunCostLimitError struct {
-	Limit    string `json:"limit"`
-	Current  string `json:"current"`
-	Max      string `json:"max"`
+	Limit     string `json:"limit"`
+	Current   string `json:"current"`
+	Max       string `json:"max"`
 	LimitType string `json:"limit_type"`
 }
 
@@ -359,7 +370,7 @@ func serializedTranscriptBytes(messages []agent.Message) int {
 	return len(encoded)
 }
 
-func intString(value int) string { return strconv.Itoa(value) }
+func intString(value int) string     { return strconv.Itoa(value) }
 func int64String(value int64) string { return strconv.FormatInt(value, 10) }
 
 func New(runs *agentservice.Service, model agent.Model, registry *tools.Registry, maxSteps int) *Harness {
@@ -409,8 +420,8 @@ func newHarness(
 
 func defaultRunCostLimits() RunCostLimits {
 	return RunCostLimits{
-		MaxModelCalls:     40,
-		MaxTotalTokens:    3_000_000,
+		MaxModelCalls:      40,
+		MaxTotalTokens:     3_000_000,
 		MaxTranscriptBytes: 1_000_000,
 	}
 }
@@ -421,6 +432,18 @@ func (e *Harness) SetRunCostLimits(limits RunCostLimits) {
 	e.activeMu.Lock()
 	defer e.activeMu.Unlock()
 	e.costLimits = limits
+}
+
+// SetPerTurnTranscriptCompaction opts into rewriting historical tool summaries
+// after every tool result. Rewriting an earlier message changes the request
+// prefix, which discards the provider's prompt cache from that point onward,
+// so the default is off: the transcript stays append-only and phase boundaries
+// bound its growth instead. Enable it only when request size must be capped
+// and cache locality does not matter.
+func (e *Harness) SetPerTurnTranscriptCompaction(enabled bool) {
+	e.activeMu.Lock()
+	defer e.activeMu.Unlock()
+	e.perTurnTranscriptCompaction = enabled
 }
 
 func (e *Harness) Start(ctx context.Context, conversationID string, input string) (agentservice.AgentRun, error) {
@@ -780,6 +803,7 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 					}
 				}
 				var taskPlanSummary *agent.ToolResultTaskPlanSummary
+				var readyPlan *taskplan.Plan
 				if e.plans != nil &&
 					(agent.IsExplorationTool(call.Name) ||
 						call.Name == "set_task_plan") {
@@ -804,6 +828,10 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 								completedCall,
 							)
 					}
+					if currentPlan.Status == taskplan.StatusReadyForGeneration {
+						plan := currentPlan
+						readyPlan = &plan
+					}
 				}
 				modelContent, err := agent.BuildModelToolSummary(
 					call.Name,
@@ -819,7 +847,22 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 					Content:    modelContent,
 					ToolCallID: call.ID,
 				})
-				run.Transcript = agent.CompactExplorationTranscript(run.Transcript)
+				if e.perTurnTranscriptCompaction {
+					run.Transcript = agent.CompactExplorationTranscript(
+						run.Transcript,
+					)
+				}
+				// Grounding finished, so close the exploration context. The
+				// handoff is appended after the tool result to keep the
+				// assistant/tool message pairing valid, and it starts a new
+				// segment so the model stops replaying every grounding turn.
+				if readyPlan != nil &&
+					e.markGenerationSegment(run.ID, readyPlan.PlanSHA256) {
+					run.Transcript = append(
+						run.Transcript,
+						generationHandoffMessage(*readyPlan),
+					)
+				}
 				if err := e.runs.SaveRun(ctx, run); err != nil {
 					return false, err
 				}
@@ -879,6 +922,100 @@ func (e *Harness) continueRun(ctx context.Context, runID string) (agentservice.A
 		return failedRun, loopErr
 	}
 	return run, nil
+}
+
+// markGenerationSegment records that the run has been handed its dedicated
+// generation context for this plan revision. It returns false when the run was
+// already segmented for the same revision, so a later turn that merely
+// observes the ready status again does not reset the context repeatedly.
+func (e *Harness) markGenerationSegment(runID, planSHA256 string) bool {
+	e.activeMu.Lock()
+	defer e.activeMu.Unlock()
+	active, ok := e.activeRuns[runID]
+	if !ok {
+		return false
+	}
+	if active.generationSegmentPlanSHA256 == planSHA256 {
+		return false
+	}
+	active.generationSegmentPlanSHA256 = planSHA256
+	return true
+}
+
+// generationHandoffMessage opens the generation segment. Grounding results are
+// carried by the persisted TaskPlan, so the handoff restates the grounded plan
+// in full and the model no longer has to re-read the exploration turns (and
+// their replayed reasoning) to author the DSL.
+func generationHandoffMessage(plan taskplan.Plan) agent.Message {
+	type handoffStep struct {
+		ID                   string   `json:"id"`
+		Position             int      `json:"position"`
+		Action               string   `json:"action"`
+		Intent               string   `json:"intent"`
+		Target               string   `json:"target,omitempty"`
+		Value                string   `json:"value,omitempty"`
+		Trigger              string   `json:"trigger,omitempty"`
+		ContextKey           string   `json:"context_key,omitempty"`
+		TimeoutMS            int      `json:"timeout_ms,omitempty"`
+		Idempotency          string   `json:"idempotency"`
+		SideEffect           string   `json:"side_effect"`
+		Preconditions        []string `json:"preconditions"`
+		CompletionConditions []string `json:"completion_conditions"`
+		TargetBindingID      string   `json:"target_binding_id,omitempty"`
+		SelectedCandidateID  string   `json:"selected_candidate_id,omitempty"`
+	}
+	payload := struct {
+		SchemaVersion string        `json:"schema_version"`
+		Kind          string        `json:"kind"`
+		Goal          string        `json:"goal"`
+		PlanID        string        `json:"plan_id"`
+		PlanVersion   int           `json:"plan_version"`
+		PlanSHA256    string        `json:"plan_sha256"`
+		Status        string        `json:"status"`
+		Steps         []handoffStep `json:"steps"`
+		Instruction   string        `json:"instruction"`
+	}{
+		SchemaVersion: "agent.grounding_handoff.v1",
+		Kind:          "grounding_complete",
+		Goal:          plan.Goal,
+		PlanID:        plan.ID,
+		PlanVersion:   plan.Version,
+		PlanSHA256:    plan.PlanSHA256,
+		Status:        string(plan.Status),
+		Instruction: "Every plan step is grounded. The exploration context was closed to " +
+			"bound the request size, so treat this handoff and the persisted TaskPlan as " +
+			"the authoritative plan. Author the research-v2 DSL with generate_dsl: bind " +
+			"each step to its plan_step_id and target_binding_id, and reproduce every " +
+			"plan-owned field (action, value, trigger, context_key, timeout_ms, " +
+			"idempotency, side_effect, preconditions, completion conditions) exactly.",
+	}
+	for _, step := range plan.Steps {
+		entry := handoffStep{
+			ID: step.ID, Position: step.Position, Action: step.Action,
+			Intent: step.Intent, Target: step.Target, Value: step.Value,
+			Trigger: step.Trigger, ContextKey: step.ContextKey,
+			TimeoutMS: step.TimeoutMS, Idempotency: step.Idempotency,
+			SideEffect:           string(step.SideEffect),
+			Preconditions:        append([]string(nil), step.Preconditions...),
+			CompletionConditions: append([]string(nil), step.CompletionConditions...),
+		}
+		if step.TargetBinding != nil {
+			entry.TargetBindingID = step.TargetBinding.BindingID
+			entry.SelectedCandidateID = step.TargetBinding.SelectedCandidateID
+		}
+		payload.Steps = append(payload.Steps, entry)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		// Every field is a plain value, so encoding cannot realistically fail;
+		// fall back to the goal rather than dropping the boundary message.
+		encoded = []byte(plan.Goal)
+	}
+	return agent.Message{
+		Role:            "user",
+		Content:         string(encoded),
+		SegmentBoundary: true,
+	}
 }
 
 func modelTaskPlanSummary(plan taskplan.Plan) *agent.ToolResultTaskPlanSummary {

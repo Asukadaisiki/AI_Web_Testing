@@ -253,6 +253,45 @@ func TestLoopReturnsModelError(t *testing.T) {
 	}
 }
 
+// A phase boundary must bound what the model re-reads without disturbing the
+// durable transcript that tool governance and audit read.
+func TestModelContextStartsAtLatestSegmentBoundary(t *testing.T) {
+	transcript := []Message{
+		{Role: "user", Content: "goal"},
+		{Role: "assistant", Content: "exploring", ReasoningContent: "long"},
+		{Role: "tool", Content: "{}", ToolCallID: "call-1"},
+		{
+			Role: "user", Content: `{"kind":"grounding_complete"}`,
+			SegmentBoundary: true,
+		},
+		{
+			Role: "assistant", Content: "authoring",
+			ReasoningContent: "short",
+		},
+	}
+
+	context := ModelContext(transcript)
+	if len(context) != 2 {
+		t.Fatalf("context length = %d, want 2", len(context))
+	}
+	if !context[0].SegmentBoundary ||
+		context[0].Role != "user" ||
+		context[1].Content != "authoring" {
+		t.Fatalf("context = %#v", context)
+	}
+	// The caller's transcript must not be aliased or reordered: governance
+	// still needs every earlier turn.
+	if len(transcript) != 5 || transcript[0].Content != "goal" {
+		t.Fatalf("transcript was mutated: %#v", transcript)
+	}
+
+	// With no boundary the whole transcript is the context.
+	full := ModelContext(transcript[:3])
+	if len(full) != 3 {
+		t.Fatalf("boundary-free context = %#v", full)
+	}
+}
+
 type ModelFunc func(context.Context, []Message, []ToolDefinition) (ModelResponse, error)
 
 func (f ModelFunc) Complete(

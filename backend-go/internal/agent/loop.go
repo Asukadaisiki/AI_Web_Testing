@@ -86,7 +86,10 @@ func (l *Loop) RunWithTurnBudget(
 		}
 		response, err := l.model.Complete(
 			callContext,
-			append([]Message{{Role: "system", Content: l.systemPrompt}}, (*transcript)...),
+			append(
+				[]Message{{Role: "system", Content: l.systemPrompt}},
+				ModelContext(*transcript)...,
+			),
 			l.definitions,
 		)
 		if err != nil {
@@ -106,6 +109,24 @@ func (l *Loop) RunWithTurnBudget(
 			return nil
 		}
 	}
+}
+
+// ModelContext returns the messages a model call should see: the tail of the
+// transcript starting at the most recent segment boundary.
+//
+// A tool-carrying request must replay the reasoning of every assistant turn it
+// still contains (BUG-203), so replaying the whole run would grow the request
+// without bound. Segmenting closes a finished phase: the durable transcript
+// keeps every turn for tool governance and audit, while the model starts the
+// next phase from a compact handoff instead of the full exploration history.
+// See docs/plan/2026-09-18-context-budget-design.md.
+func ModelContext(transcript []Message) []Message {
+	for index := len(transcript) - 1; index >= 0; index-- {
+		if transcript[index].SegmentBoundary {
+			return transcript[index:]
+		}
+	}
+	return transcript
 }
 
 // latestToolError returns the failure message of the most recent tool result

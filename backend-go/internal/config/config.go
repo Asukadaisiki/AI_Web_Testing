@@ -11,26 +11,31 @@ import (
 )
 
 type Config struct {
-	Address                    string
-	LLMProvider                string
-	LLMBaseURL                 string
-	LLMAPIKey                  string
-	LLMModel                   string
-	LLMThinkMode               bool
-	LLMReasoningEffort         string
-	AgentMaxTurns              int
-	AgentMaxWallTimeSeconds    int
-	AgentExploreReserveSeconds int
-	AgentMaxModelCalls         int
-	AgentMaxTotalTokens        int64
-	AgentMaxTranscriptBytes    int
-	AgentMaxExplorePageCalls   int
-	AgentMaxExploreFlowCalls   int
+	Address                     string
+	LLMProvider                 string
+	LLMBaseURL                  string
+	LLMAPIKey                   string
+	LLMModel                    string
+	LLMThinkMode                bool
+	LLMReasoningEffort          string
+	AgentMaxTurns               int
+	AgentMaxWallTimeSeconds     int
+	AgentExploreReserveSeconds  int
+	AgentMaxModelCalls          int
+	AgentMaxTotalTokens         int64
+	AgentMaxTranscriptBytes     int
+	AgentMaxExplorePageCalls    int
+	AgentMaxExploreFlowCalls    int
 	AgentMaxRunExplorePageCalls int
 	AgentMaxRunExploreFlowCalls int
-	DefaultActorID             int64
-	DatabaseURL                string
-	BrowserWorkerURL           string
+	// AgentPerTurnTranscriptCompaction rewrites historical tool summaries
+	// inside a turn to cap request size. That invalidates the provider's
+	// prefix cache, so the default is false and growth is bounded by phase
+	// boundaries instead.
+	AgentPerTurnTranscriptCompaction bool
+	DefaultActorID                   int64
+	DatabaseURL                      string
+	BrowserWorkerURL                 string
 }
 
 func Load() Config {
@@ -70,13 +75,16 @@ func Load() Config {
 		// across the whole run. Both count failed calls too (a failure returns
 		// evidence the model must learn from), so defaults are sized generously
 		// to leave room for legitimate retry-after-failure.
-		AgentMaxExplorePageCalls:     positiveIntOrDefault("AGENTSERVICE_MAX_EXPLORE_PAGE_CALLS", 10),
-		AgentMaxExploreFlowCalls:     positiveIntOrDefault("AGENTSERVICE_MAX_EXPLORE_FLOW_CALLS", 10),
-		AgentMaxRunExplorePageCalls:  positiveIntOrDefault("AGENTSERVICE_MAX_RUN_EXPLORE_PAGE_CALLS", 12),
-		AgentMaxRunExploreFlowCalls:  positiveIntOrDefault("AGENTSERVICE_MAX_RUN_EXPLORE_FLOW_CALLS", 12),
-		DefaultActorID:               int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
-		DatabaseURL:                  normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
-		BrowserWorkerURL:             browserWorkerURL,
+		AgentMaxExplorePageCalls:    positiveIntOrDefault("AGENTSERVICE_MAX_EXPLORE_PAGE_CALLS", 10),
+		AgentMaxExploreFlowCalls:    positiveIntOrDefault("AGENTSERVICE_MAX_EXPLORE_FLOW_CALLS", 10),
+		AgentMaxRunExplorePageCalls: positiveIntOrDefault("AGENTSERVICE_MAX_RUN_EXPLORE_PAGE_CALLS", 12),
+		AgentMaxRunExploreFlowCalls: positiveIntOrDefault("AGENTSERVICE_MAX_RUN_EXPLORE_FLOW_CALLS", 12),
+		AgentPerTurnTranscriptCompaction: boolFromEnv(
+			"AGENTSERVICE_PER_TURN_TRANSCRIPT_COMPACTION",
+		),
+		DefaultActorID:   int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
+		DatabaseURL:      normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
+		BrowserWorkerURL: browserWorkerURL,
 	}
 }
 

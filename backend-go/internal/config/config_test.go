@@ -7,10 +7,10 @@ import (
 
 func TestNormalizeDatabaseURL(t *testing.T) {
 	tests := map[string]string{
-		"postgresql+psycopg://user:pass@localhost/db": "postgres://user:pass@localhost/db?timezone=UTC",
-		"postgresql://user:pass@localhost/db":         "postgres://user:pass@localhost/db?timezone=UTC",
-		"postgres://user:pass@localhost/db":           "postgres://user:pass@localhost/db?timezone=UTC",
-		"postgres://user:pass@localhost/db?sslmode=disable": "postgres://user:pass@localhost/db?sslmode=disable&timezone=UTC",
+		"postgresql+psycopg://user:pass@localhost/db":              "postgres://user:pass@localhost/db?timezone=UTC",
+		"postgresql://user:pass@localhost/db":                      "postgres://user:pass@localhost/db?timezone=UTC",
+		"postgres://user:pass@localhost/db":                        "postgres://user:pass@localhost/db?timezone=UTC",
+		"postgres://user:pass@localhost/db?sslmode=disable":        "postgres://user:pass@localhost/db?sslmode=disable&timezone=UTC",
 		"postgres://user:pass@localhost/db?timezone=Asia/Shanghai": "postgres://user:pass@localhost/db?timezone=Asia/Shanghai",
 	}
 	for input, want := range tests {
@@ -118,5 +118,24 @@ func TestLoadExplorationCallBudgetDefaultsAndOverrides(t *testing.T) {
 	}
 	if loaded.AgentMaxRunExploreFlowCalls != 30 {
 		t.Fatalf("AgentMaxRunExploreFlowCalls = %d, want 30", loaded.AgentMaxRunExploreFlowCalls)
+	}
+}
+
+// Per-turn transcript compaction rewrites historical messages, which discards
+// the provider's prefix cache, so it must stay off unless explicitly enabled.
+func TestLoadPerTurnTranscriptCompactionDefaultsOff(t *testing.T) {
+	t.Setenv("AGENTSERVICE_PER_TURN_TRANSCRIPT_COMPACTION", "")
+	if loaded := Load(); loaded.AgentPerTurnTranscriptCompaction {
+		t.Fatal("per-turn transcript compaction must default to off")
+	}
+
+	t.Setenv("AGENTSERVICE_PER_TURN_TRANSCRIPT_COMPACTION", "true")
+	if loaded := Load(); !loaded.AgentPerTurnTranscriptCompaction {
+		t.Fatal("per-turn transcript compaction must honour an opt-in")
+	}
+
+	t.Setenv("AGENTSERVICE_PER_TURN_TRANSCRIPT_COMPACTION", "no")
+	if loaded := Load(); loaded.AgentPerTurnTranscriptCompaction {
+		t.Fatal("per-turn transcript compaction must stay off for a false value")
 	}
 }

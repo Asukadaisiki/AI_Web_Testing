@@ -200,6 +200,12 @@ type Message struct {
 	ReasoningContent string      `json:"reasoning_content,omitempty"`
 	ToolCallID       string      `json:"tool_call_id,omitempty"`
 	ToolCalls        []ModelTool `json:"tool_calls,omitempty"`
+	// SegmentBoundary marks a control-plane message that opens a new model
+	// context segment. The full transcript stays the durable record that tool
+	// governance and cost accounting read; only the model's view is reset at a
+	// phase boundary, because a tool-carrying request must replay the reasoning
+	// of every turn it still contains (BUG-203).
+	SegmentBoundary bool `json:"segment_boundary,omitempty"`
 }
 
 type ModelTool struct {
