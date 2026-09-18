@@ -649,6 +649,49 @@ def _expand_collapsed_components(page, keywords: set[str], max_clicks: int = 10)
 
 STALE_THRESHOLD_HOURS = 24
 
+# Google AdSense presents a full-page interstitial ("vignette") that declares
+# itself through #google_vignette and hijacks the navigation target, so a click
+# lands on the ad URL and the page state stops settling. Probes then read a
+# broken state and callers retry blindly. Strip those interstitials as they
+# appear: this is a generic ad-host mitigation and touches only ad containers,
+# never the page's own controls.
+_AD_INTERSTITIAL_GUARD = """
+(() => {
+  const INTERSTITIALS = [
+    '#google_vignette',
+    'ins.adsbygoogle[data-ad-status="filled"]',
+    'iframe[id^="aswift"]',
+    'iframe[name^="aswift"]',
+    'div[id^="google_ads_iframe"]',
+  ].join(',');
+  const strip = () => {
+    for (const node of document.querySelectorAll(INTERSTITIALS)) {
+      if (node.id === 'google_vignette' || node.tagName === 'IFRAME') {
+        node.remove();
+      }
+    }
+    const root = document.documentElement;
+    if (root && root.style.overflow) root.style.overflow = '';
+    const body = document.body;
+    if (body && body.style.overflow) body.style.overflow = '';
+  };
+  const start = () => {
+    strip();
+    new MutationObserver(strip).observe(document.documentElement, {
+      childList: true, subtree: true,
+    });
+  };
+  if (document.documentElement) start();
+  else document.addEventListener('DOMContentLoaded', start);
+})();
+"""
+
+
+def _install_ad_interstitial_guard(context) -> None:
+    """Apply the ad-interstitial guard to every page of a probe context."""
+    with suppress(Exception):
+        context.add_init_script(_AD_INTERSTITIAL_GUARD)
+
 
 class BrowserSessionManager:
     """Per-session browser lifecycle manager.
@@ -747,6 +790,7 @@ class BrowserSessionManager:
             if storage_state_path and Path(storage_state_path).exists():
                 context_kwargs["storage_state"] = storage_state_path
             context = cls._runtime_browser.new_context(**context_kwargs)
+            _install_ad_interstitial_guard(context)
             return context, context.new_page()
         except Exception:
             if context is not None:
@@ -896,6 +940,40 @@ def _flow_action_timeout(action: dict[str, Any]) -> int:
     return max(1, min(timeout, 60000))
 
 
+def _compile_spec_locator(page, locator_spec: dict[str, Any]):
+    """Compile a locator spec, tolerating icon glyphs in role accessible names.
+
+    Chromium folds CSS-generated icon glyphs into the accessible name, so a link
+    rendered as ``<i class="fa fa-plus-square"></i>View Product`` is announced as
+    ``"\\uf0fe View Product"``. An exact role name then resolves zero times even
+    though the element is plainly present (measured on the Automation Exercise
+    results page: exact=True -> 0 matches, exact=False -> 1 match). Retry once as
+    a substring match so a caller is never stranded by an invisible glyph; the
+    caller still enforces the "exactly once" uniqueness rule on the result.
+    """
+    locator = compile_locator(page, locator_spec)
+    try:
+        if locator.count() != 0:
+            return locator
+    except Exception:
+        return locator
+    if (
+        str(locator_spec.get("kind") or "") != "role"
+        or locator_spec.get("name") is None
+        or not locator_spec.get("exact", True)
+    ):
+        return locator
+    relaxed = dict(locator_spec)
+    relaxed["exact"] = False
+    try:
+        fallback = compile_locator(page, relaxed)
+        if fallback.count() >= 1:
+            return fallback
+    except Exception:
+        return locator
+    return locator
+
+
 def _wait_for_flow_target(
     page,
     timeout_ms: int,
@@ -907,7 +985,7 @@ def _wait_for_flow_target(
     locator = (
         resolved_locator
         if resolved_locator is not None
-        else compile_locator(page, locator_spec)
+        else _compile_spec_locator(page, locator_spec)
     )
     if resolved_locator is None and locator.count() != 1:
         raise RuntimeError("structured wait_for locator must resolve exactly once")
@@ -1123,6 +1201,7 @@ def capture_browser_session(
             with pw as playwright:
                 browser = playwright.chromium.launch(headless=True)
                 context = browser.new_context()
+                _install_ad_interstitial_guard(context)
                 page = context.new_page()
 
         page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
@@ -1270,6 +1349,7 @@ def _collect_flow_a11y(
             if storage_state_path and Path(storage_state_path).exists():
                 context_kwargs["storage_state"] = storage_state_path
             context = browser.new_context(**context_kwargs)
+            _install_ad_interstitial_guard(context)
             page = context.new_page()
             startup_complete = True
         finally:
@@ -1510,7 +1590,7 @@ def _collect_flow_a11y(
                     expected_navigation_url = None
                     resolved_target = None
                     try:
-                        loc = compile_locator(page, locator_spec)
+                        loc = _compile_spec_locator(page, locator_spec)
                         runtime_count = loc.count()
                         if runtime_count != 1:
                             raise RuntimeError(

@@ -7,10 +7,12 @@ from browser_worker.exploration.page_explorer import (
     BrowserSessionManager,
     _collect_dom_interactive_supplement,
     _collect_flow_a11y,
+    _compile_spec_locator,
     _deduplicate_explore_results,
     _filter_a11y_nodes,
     _flow_action_locator,
     _flow_failure_candidate_hints,
+    _install_ad_interstitial_guard,
     _is_business_candidate,
     _same_document_url,
     _wait_for_flow_target,
@@ -989,6 +991,83 @@ class FlowFailureCandidateHintsTest(unittest.TestCase):
     def test_empty_or_missing_observation_returns_empty(self) -> None:
         self.assertEqual(_flow_failure_candidate_hints(None, target="x"), [])
         self.assertEqual(_flow_failure_candidate_hints({}, target="x"), [])
+
+
+class AdInterstitialGuardTest(unittest.TestCase):
+    """The AdSense vignette hijacks navigation and freezes page-state capture."""
+
+    def test_guard_is_installed_on_the_probe_context(self) -> None:
+        context = MagicMock()
+        _install_ad_interstitial_guard(context)
+        context.add_init_script.assert_called_once()
+        script = context.add_init_script.call_args.args[0]
+        self.assertIn("#google_vignette", script)
+        self.assertIn("MutationObserver", script)
+
+    def test_guard_never_raises_when_playwright_rejects_it(self) -> None:
+        context = MagicMock()
+        context.add_init_script.side_effect = RuntimeError("context closed")
+        # Probing must continue even when the browser refuses the script.
+        _install_ad_interstitial_guard(context)
+
+
+class GlyphTolerantRoleLocatorTest(unittest.TestCase):
+    """Chromium folds icon glyphs into accessible names, breaking exact match."""
+
+    def test_exact_role_name_falls_back_to_substring(self) -> None:
+        page = object()
+        exact = MagicMock()
+        exact.count.return_value = 0
+        relaxed = MagicMock()
+        relaxed.count.return_value = 1
+
+        def compile_(page_arg, spec):
+            del page_arg
+            return exact if spec.get("exact", True) else relaxed
+
+        with patch(
+            "browser_worker.exploration.page_explorer.compile_locator",
+            side_effect=compile_,
+        ):
+            locator = _compile_spec_locator(
+                page,
+                {
+                    "kind": "role",
+                    "role": "link",
+                    "name": "View Product",
+                    "exact": True,
+                },
+            )
+        self.assertIs(locator, relaxed)
+
+    def test_unique_exact_match_is_kept(self) -> None:
+        page = object()
+        exact = MagicMock()
+        exact.count.return_value = 1
+        with patch(
+            "browser_worker.exploration.page_explorer.compile_locator",
+            return_value=exact,
+        ) as compile_mock:
+            locator = _compile_spec_locator(
+                page,
+                {"kind": "role", "role": "link", "name": "Cart", "exact": True},
+            )
+        self.assertIs(locator, exact)
+        self.assertEqual(compile_mock.call_count, 1)
+
+    def test_non_role_locator_is_not_relaxed(self) -> None:
+        page = object()
+        css = MagicMock()
+        css.count.return_value = 0
+        with patch(
+            "browser_worker.exploration.page_explorer.compile_locator",
+            return_value=css,
+        ) as compile_mock:
+            locator = _compile_spec_locator(
+                page, {"kind": "css", "value": "#quantity", "exact": True}
+            )
+        self.assertIs(locator, css)
+        self.assertEqual(compile_mock.call_count, 1)
 
 
 if __name__ == "__main__":

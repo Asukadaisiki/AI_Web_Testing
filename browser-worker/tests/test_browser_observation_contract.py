@@ -19,6 +19,7 @@ from browser_worker.contracts.browser_observation import (
     validate_locator_spec,
 )
 from browser_worker.exploration.observation import (
+    _locator_equivalent,
     build_browser_observation,
     build_resolved_target_evidence,
 )
@@ -214,6 +215,198 @@ class BrowserObservationContractTest(unittest.TestCase):
                 (Path(directory) / "browser-observations").glob("*.json.gz")
             )
             self.assertEqual(len(artifacts), 1)
+
+    def test_unnamed_interactive_role_still_yields_semantic_candidate(self) -> None:
+        # An unnamed but roled control (the quantity spinbutton on a product
+        # page) used to carry only css/test_id hints, which the semantic
+        # grounding gate rejects, so the step could not be grounded at all and
+        # callers were pushed into rewriting the plan.
+        with tempfile.TemporaryDirectory() as directory:
+            observation = build_browser_observation(
+                url="https://example.test/product_details/1",
+                title="Product",
+                state_id="S1",
+                revision=1,
+                nodes=[
+                    {
+                        "node_id": "e1",
+                        "backend_dom_node_id": 9,
+                        "role": "spinbutton",
+                        "a11y_name": "",
+                        "name": "",
+                        "dom": {
+                            "tag": "input",
+                            "attrs": {
+                                "id": "quantity",
+                                "name": "quantity",
+                                "type": "number",
+                            },
+                            "connected": True,
+                            "visible": True,
+                            "enabled": True,
+                        },
+                        "verified_selectors": [
+                            {"strategy": "css", "selector": "#quantity"}
+                        ],
+                    }
+                ],
+                artifact_root=Path(directory),
+            )
+
+            parsed = BrowserObservation.model_validate(observation)
+            locators = parsed.elements[0].locators
+            roles = [
+                locator for locator in locators if locator.locator.kind == "role"
+            ]
+            self.assertEqual(
+                len(roles),
+                1,
+                msg=f"unnamed spinbutton must expose a role candidate: {locators}",
+            )
+            self.assertEqual(roles[0].locator.role, "spinbutton")
+            self.assertIsNone(roles[0].locator.name)
+            self.assertEqual(roles[0].provenance, "a11y_role_only")
+
+    def test_unnamed_non_interactive_role_emits_no_role_candidate(self) -> None:
+        # Only actionable roles can be addressed by role alone; a nameless
+        # generic node must not gain a role candidate it cannot support.
+        with tempfile.TemporaryDirectory() as directory:
+            observation = build_browser_observation(
+                url="https://example.test/page",
+                title="Page",
+                state_id="S1",
+                revision=1,
+                nodes=[
+                    {
+                        "node_id": "e1",
+                        "backend_dom_node_id": 11,
+                        "role": "generic",
+                        "a11y_name": "",
+                        "name": "",
+                        "dom": {
+                            "tag": "div",
+                            "attrs": {},
+                            "connected": True,
+                            "visible": True,
+                            "enabled": True,
+                        },
+                        "verified_selectors": [],
+                    }
+                ],
+                artifact_root=Path(directory),
+            )
+
+            parsed = BrowserObservation.model_validate(observation)
+            roles = [
+                locator
+                for locator in parsed.elements[0].locators
+                if locator.locator.kind == "role"
+            ]
+            self.assertEqual(roles, [])
+
+    def test_exact_role_name_that_cannot_match_falls_back_to_substring(self) -> None:
+        # Chromium folds CSS-generated icon glyphs into the accessible name, so
+        # a link rendered as `<i class="fa fa-plus-square"></i>View Product` is
+        # announced as "\uf0fe View Product". The recorded name is the readable
+        # text, so an exact match resolves nothing while the substring form
+        # resolves the element; publishing the exact form would strand callers.
+        page = MagicMock()
+
+        def get_by_role(role: str, **options: object):
+            locator = MagicMock()
+            locator.count.return_value = 0 if options.get("exact") else 1
+            return locator
+
+        page.get_by_role.side_effect = get_by_role
+        # The css/test_id hints are counted through page.locator().
+        page.locator.return_value.count.return_value = 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            observation = build_browser_observation(
+                url="https://example.test/products",
+                title="Products",
+                state_id="S1",
+                revision=1,
+                probe_id="probe_role_fallback",
+                nodes=[
+                    {
+                        "node_id": "e1",
+                        "backend_dom_node_id": 21,
+                        "role": "link",
+                        "a11y_name": "View Product",
+                        "dom": {
+                            "tag": "a",
+                            "attrs": {"href": "/product_details/1"},
+                            "connected": True,
+                            "visible": True,
+                            "enabled": True,
+                        },
+                        "verified_selectors": [
+                            {
+                                "strategy": "css",
+                                "selector": 'a[href="/product_details/1"]',
+                            }
+                        ],
+                    }
+                ],
+                page=page,
+                artifact_root=Path(directory),
+            )
+
+        parsed = BrowserObservation.model_validate(observation)
+        roles = [
+            locator
+            for locator in parsed.elements[0].locators
+            if locator.locator.kind == "role"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertFalse(
+            roles[0].locator.exact,
+            msg="an exact name that matches nothing must fall back to substring",
+        )
+        self.assertEqual(roles[0].observed_count, 1)
+
+    def test_exact_role_name_kept_when_substring_also_misses(self) -> None:
+        page = MagicMock()
+        page.get_by_role.return_value.count.return_value = 0
+        page.locator.return_value.count.return_value = 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            observation = build_browser_observation(
+                url="https://example.test/products",
+                title="Products",
+                state_id="S1",
+                revision=1,
+                probe_id="probe_role_kept",
+                nodes=[
+                    {
+                        "node_id": "e1",
+                        "backend_dom_node_id": 22,
+                        "role": "link",
+                        "a11y_name": "View Product",
+                        "dom": {
+                            "tag": "a",
+                            "attrs": {"href": "/product_details/2"},
+                            "connected": True,
+                            "visible": True,
+                            "enabled": True,
+                        },
+                        "verified_selectors": [],
+                    }
+                ],
+                page=page,
+                artifact_root=Path(directory),
+            )
+
+        parsed = BrowserObservation.model_validate(observation)
+        roles = [
+            locator
+            for locator in parsed.elements[0].locators
+            if locator.locator.kind == "role"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertTrue(roles[0].locator.exact)
+        self.assertEqual(roles[0].observed_count, 0)
 
     def test_target_binding_requires_selected_candidate(self) -> None:
         payload = {
@@ -560,6 +753,53 @@ class BrowserObservationContractTest(unittest.TestCase):
         }
         with self.assertRaises(ValueError):
             TargetBinding.model_validate(payload)
+
+
+class LocatorEquivalenceTest(unittest.TestCase):
+    """Element identity must not hinge on the exact flag or an icon glyph."""
+
+    def test_exact_flag_does_not_change_identity(self) -> None:
+        exact = validate_locator_spec(
+            {"kind": "role", "role": "link", "name": "View Product", "exact": True}
+        )
+        relaxed = validate_locator_spec(
+            {"kind": "role", "role": "link", "name": "View Product", "exact": False}
+        )
+        self.assertTrue(_locator_equivalent(exact, relaxed))
+
+    def test_icon_glyph_does_not_change_identity(self) -> None:
+        announced = validate_locator_spec(
+            {
+                "kind": "role",
+                "role": "link",
+                "name": "\uf0fe View Product",
+                "exact": True,
+            }
+        )
+        readable = validate_locator_spec(
+            {"kind": "role", "role": "link", "name": "View Product", "exact": True}
+        )
+        self.assertTrue(_locator_equivalent(announced, readable))
+
+    def test_different_elements_stay_distinct(self) -> None:
+        cart = validate_locator_spec(
+            {"kind": "role", "role": "link", "name": "View Cart", "exact": True}
+        )
+        product = validate_locator_spec(
+            {"kind": "role", "role": "link", "name": "View Product", "exact": True}
+        )
+        button = validate_locator_spec(
+            {"kind": "role", "role": "button", "name": "View Product", "exact": True}
+        )
+        self.assertFalse(_locator_equivalent(cart, product))
+        self.assertFalse(_locator_equivalent(product, button))
+
+    def test_value_locators_compare_by_value(self) -> None:
+        left = validate_locator_spec({"kind": "css", "value": "#quantity", "exact": True})
+        same = validate_locator_spec({"kind": "css", "value": "#quantity", "exact": False})
+        other = validate_locator_spec({"kind": "css", "value": "#other", "exact": True})
+        self.assertTrue(_locator_equivalent(left, same))
+        self.assertFalse(_locator_equivalent(left, other))
 
 
 if __name__ == "__main__":

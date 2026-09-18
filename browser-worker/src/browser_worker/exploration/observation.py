@@ -266,6 +266,56 @@ def _element_fact(
     return element
 
 
+_ICON_GLYPH_PATTERN = re.compile(
+    "[\ue000-\uf8ff\U000f0000-\U000ffffd\U00100000-\U0010fffd]+"
+)
+
+
+def _normalized_accessible_name(value: str | None) -> str:
+    """Collapse whitespace and drop icon-font glyphs from an accessible name.
+
+    Chromium folds CSS-generated icon glyphs into the accessible name, so a link
+    rendered as ``<i class="fa fa-plus-square"></i>View Product`` is announced as
+    ``"\\uf0fe View Product"`` while the readable summary drops the glyph.
+    """
+    if not value:
+        return ""
+    return " ".join(_ICON_GLYPH_PATTERN.sub(" ", value).split()).casefold()
+
+
+def _locator_equivalent(left: LocatorSpec, right: LocatorSpec) -> bool:
+    """Whether two locator specs address the same element.
+
+    ``exact`` selects a matching strategy rather than an element, and an icon
+    glyph contaminates only how a name is announced, so neither may decide
+    element identity. The evidence linker used to require byte-identical
+    locators, which stranded every element whose announced name carries an icon.
+    """
+    if left.kind != right.kind:
+        return False
+    if left.kind == "role":
+        if str(getattr(left, "role", "")).casefold() != str(
+            getattr(right, "role", "")
+        ).casefold():
+            return False
+        return _normalized_accessible_name(
+            getattr(left, "name", None)
+        ) == _normalized_accessible_name(getattr(right, "name", None))
+    if left.kind == "scoped":
+        left_scope = getattr(left, "scope", None)
+        right_scope = getattr(right, "scope", None)
+        left_target = getattr(left, "target", None)
+        right_target = getattr(right, "target", None)
+        if None in (left_scope, right_scope, left_target, right_target):
+            return False
+        return _locator_equivalent(
+            left_scope, right_scope
+        ) and _locator_equivalent(left_target, right_target)
+    return str(getattr(left, "value", "")).strip().casefold() == str(
+        getattr(right, "value", "")
+    ).strip().casefold()
+
+
 def build_resolved_target_evidence(
     observation_value: dict[str, Any],
     *,
@@ -280,14 +330,11 @@ def build_resolved_target_evidence(
     if not observation.probe_id:
         return None
     locator = validate_semantic_locator_spec(locator_value)
-    locator_key = canonical_sha256(locator.model_dump(mode="json"))
     matched: list[tuple[ElementFact, ObservedLocator]] = []
     for element in observation.elements:
         for candidate in element.locators:
-            if (
-                canonical_sha256(candidate.locator.model_dump(mode="json"))
-                == locator_key
-                and candidate.observed_count == 1
+            if candidate.observed_count == 1 and _locator_equivalent(
+                candidate.locator, locator
             ):
                 matched.append((element, candidate))
     if len(matched) != 1:
@@ -533,6 +580,24 @@ def _locator_hints(
                 observed_count=0,
             )
         )
+    elif role and role.lower() in _INTERACTIVE_ROLES:
+        # An interactive control can be missing an accessible name while still
+        # being addressable by role alone; the quantity spinbutton on a product
+        # page is the canonical case. Without this candidate the element only
+        # carries css/test_id hints, which the semantic grounding gate rejects,
+        # so the step could not be grounded at all and callers were pushed into
+        # rewriting the plan. Whether the unnamed role is unique is decided by
+        # the probed observed count, exactly as for a named role candidate.
+        result.append(
+            _observed_locator(
+                element_ref=element_ref,
+                probe_id=probe_id,
+                context_path=context_path,
+                locator={"kind": "role", "role": role, "exact": True},
+                provenance="a11y_role_only",
+                observed_count=0,
+            )
+        )
     for raw in node.get("verified_selectors") or []:
         if not isinstance(raw, dict):
             continue
@@ -583,6 +648,32 @@ def _observed_locator(
     )
 
 
+def _relax_unmatched_role_name(page, observed, context_path) -> None:
+    """Fall back to a substring role name when the exact name matches nothing.
+
+    Chromium folds CSS-generated icon glyphs into the accessible name, so a link
+    rendered as ``<i class="fa fa-plus-square"></i>View Product`` is announced as
+    ``"\\uf0fe View Product"``. The recorded name is the readable text, so an
+    exact match resolves zero times even though the element is plainly there
+    (measured on the Automation Exercise results page: exact=True -> 0 matches,
+    exact=False -> 1 match). Publishing a locator that can never match sends
+    callers into blind retry loops, so adopt the substring form whenever that is
+    the one that actually resolves; its observed count still reports ambiguity.
+    """
+    locator = observed.locator
+    if locator.kind != "role" or locator.name is None or not locator.exact:
+        return
+    relaxed = locator.model_copy(update={"exact": False})
+    try:
+        count = compile_locator(page, relaxed, context_path=context_path).count()
+    except (AttributeError, PlaywrightError, TypeError, ValueError):
+        return
+    if count < 1:
+        return
+    observed.locator = relaxed
+    observed.observed_count = count
+
+
 def _set_observed_counts(elements: list[ElementFact], *, page=None) -> None:
     counts: dict[str, int] = {}
     for element in elements:
@@ -598,10 +689,14 @@ def _set_observed_counts(elements: list[ElementFact], *, page=None) -> None:
                         observed.locator,
                         context_path=element.context_path,
                     ).count()
-                    continue
                 except (AttributeError, PlaywrightError, TypeError, ValueError):
                     observed.observed_count = 0
                     continue
+                if observed.observed_count == 0:
+                    _relax_unmatched_role_name(
+                        page, observed, element.context_path
+                    )
+                continue
             if observed.observed_count == 1 and observed.locator.kind in {
                 "css",
                 "test_id",
