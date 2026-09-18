@@ -92,3 +92,31 @@ func TestLoadMaxTurnsDefaultAndOverride(t *testing.T) {
 		t.Fatalf("AgentMaxTurns = %d, want fallback 24", loaded.AgentMaxTurns)
 	}
 }
+
+func TestLoadExplorationCallBudgetDefaultsAndOverrides(t *testing.T) {
+	for _, key := range []string{
+		"AGENTSERVICE_MAX_EXPLORE_PAGE_CALLS",
+		"AGENTSERVICE_MAX_EXPLORE_FLOW_CALLS",
+		"AGENTSERVICE_MAX_RUN_EXPLORE_PAGE_CALLS",
+		"AGENTSERVICE_MAX_RUN_EXPLORE_FLOW_CALLS",
+	} {
+		t.Setenv(key, "")
+	}
+	loaded := Load()
+	if loaded.AgentMaxExplorePageCalls != 10 ||
+		loaded.AgentMaxExploreFlowCalls != 10 ||
+		loaded.AgentMaxRunExplorePageCalls != 12 ||
+		loaded.AgentMaxRunExploreFlowCalls != 12 {
+		t.Fatalf("exploration budget defaults = %+v", loaded)
+	}
+
+	t.Setenv("AGENTSERVICE_MAX_EXPLORE_FLOW_CALLS", "20")
+	t.Setenv("AGENTSERVICE_MAX_RUN_EXPLORE_FLOW_CALLS", "30")
+	loaded = Load()
+	if loaded.AgentMaxExploreFlowCalls != 20 {
+		t.Fatalf("AgentMaxExploreFlowCalls = %d, want 20", loaded.AgentMaxExploreFlowCalls)
+	}
+	if loaded.AgentMaxRunExploreFlowCalls != 30 {
+		t.Fatalf("AgentMaxRunExploreFlowCalls = %d, want 30", loaded.AgentMaxRunExploreFlowCalls)
+	}
+}

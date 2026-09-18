@@ -123,6 +123,10 @@ func main() {
 		harness.ExplorationGateConfig{
 			MaxRunWallTime: cfg.AgentMaxWallTime(),
 			ExploreReserve: cfg.AgentExploreReserve(),
+			MaxExplorePageCalls:  cfg.AgentMaxExplorePageCalls,
+			MaxExploreFlowCalls:  cfg.AgentMaxExploreFlowCalls,
+			MaxRunExplorePageCalls: cfg.AgentMaxRunExplorePageCalls,
+			MaxRunExploreFlowCalls: cfg.AgentMaxRunExploreFlowCalls,
 		},
 	)
 	engine.SetRunCostLimits(harness.RunCostLimits{

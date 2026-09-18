@@ -56,6 +56,18 @@
 
 ## 任务记录
 
+## 2026-09-18 | 探索工具可用性改进：预算固定、失败返回候选、Web 知识 skill、DSL 保真、广告浮层处理
+
+- 任务：live E2E（Blue Top 加购）暴露 explore_flow 工具"不好用"——模型频繁因定位失败重试、预算被失败调用耗尽、DSL 阶段改写计划动作、广告浮层劫持导航。按用户要求研究工具设计合理性并修复，同时给模型补充 Web 平台/自动化知识（相当于一个 skill），治"全凭感觉猜"。
+- 操作：
+  1. 逐条拆解 `run_99a84dcbcf6e76dbb110e873` 的 10 次探索调用，确认失败分布：Products 链接 exact 匹配失败（图标字形）、css 定位被语义门禁拒绝、placeholder 无唯一候选、购物车页 heading 不存在。
+  2. 预算侧：默认 per-plan flow 4/page 5 太小且不可配，新增 env `AGENTSERVICE_MAX_EXPLORE_PAGE_CALLS`/`MAX_EXPLORE_FLOW_CALLS`/`MAX_RUN_EXPLORE_PAGE_CALLS`/`MAX_RUN_EXPLORE_FLOW_CALLS`（默认 10/10/12/12），`main.go` 装配；**失败调用仍计入预算**（失败也返回证据，模型须学习），浪费性同签名重试由既有 repeated-signature 门禁拦截（改实质参数→签名变→放行；只改描述/超时→签名同→拒绝）。
+  3. 失败返回数据：`page_explorer.py` 新增 `_flow_failure_candidate_hints`，flow 动作失败时从当前观察提取候选语义 locator（role/placeholder/text + element_ref）附到 failure.message 与 `candidate_locators`，让模型直接复制而非盲猜。
+  4. Web 知识 skill：`harness.go` 新增 `webPlatformKnowledgePrompt`（PHASE 2.5），覆盖页面结构（breadcrumb≠heading、modal）、可访问名（图标字形、exact 匹配）、定位策略（候选优先、count=0/>1 换证据）、flow 动作、DSL 保真（click 不得改写为 goto）、广告浮层（`#google_vignette` 等插页会劫持点击，重试 1-2 次 + 新 probe context）。
+- 结果：门禁全绿（Go vet+test 全过；Python 200 passed / 1 known-fail / 2 skipped；Frontend build 通过）。live E2E 三轮演进：round2（`run_19741c82…`）预算告警消失（0 次，预算 10 生效）、**走到 seq 204 ready_for_generation + generate_dsl**，仅因 DSL step 2 把 plan 的 click(open_products) 改写为 goto 被编译器语义校验拒绝；round3（`run_4a7be4be…`）DSL 保真提示词生效但卡在 Products 点击被间歇性 Google AdSense vignette 劫持（`actual=/#google_vignette`），900s 墙钟超时。
+- 验证：新增 Go 测试（web 知识、失败重试指引、DSL 保真、广告浮层、config 预算解析）+ Python 测试（`_flow_failure_candidate_hints` 5 项）全部通过；本地 Playwright 实测 Products 点击多数直接到 /products（vignette 为间歇性广告）。
+- 后续：两轮 E2E 根因均已定位并修复，但 900s 墙钟对 13 步链路偏紧；用户选择先提交本地 main，E2E 复验另行安排（建议提高超时或分段验证）。
+
 ## 2026-09-17 | 切换 LLM 提供方并重跑 Blue Top live E2E（墙钟超时未收敛）
 
 - 任务：承接上一轮（LLM 提供方欠费 402 阻塞），按用户指示切换 LLM 端点配置并重跑 live E2E，验证 grounding 断链修复。

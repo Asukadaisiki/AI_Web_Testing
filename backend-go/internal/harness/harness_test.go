@@ -185,6 +185,65 @@ func TestSystemPromptDescribesSelectableCandidateGrounding(t *testing.T) {
 	}
 }
 
+func TestSystemPromptIncludesWebPlatformKnowledge(t *testing.T) {
+	for _, want := range []string{
+		"PHASE 2.5 - WEB PLATFORM KNOWLEDGE",
+		"breadcrumb",
+		"role=heading",
+		"FontAwesome",
+		"candidate_ref",
+		"count=0",
+		"- One explore_flow call can walk several page states",
+		"must execute the real input and the real search-control click",
+	} {
+		if !strings.Contains(defaultSystemPrompt, want) {
+			t.Fatalf("web platform knowledge missing %q", want)
+		}
+	}
+}
+
+func TestSystemPromptGuidesFailureRetry(t *testing.T) {
+	for _, want := range []string{
+		"failure.candidate_locators",
+		"observation.selectable_candidates before retrying",
+		"exact, role, placeholder, or a candidate_ref",
+		"rejects identical signatures",
+		"Failed calls still count against the exploration budget",
+	} {
+		if !strings.Contains(defaultSystemPrompt, want) {
+			t.Fatalf("failure-retry guidance missing %q", want)
+		}
+	}
+}
+
+func TestSystemPromptPreservesPlanStepActionFidelity(t *testing.T) {
+	for _, want := range []string{
+		"DSL FIDELITY",
+		"preserve every TaskPlan step's action, intent, and value",
+		"never rewrite it as goto",
+		"The compiler rejects any rewritten",
+		"Navigating by real UI",
+	} {
+		if !strings.Contains(defaultSystemPrompt, want) {
+			t.Fatalf("DSL fidelity guidance missing %q", want)
+		}
+	}
+}
+
+func TestSystemPromptHandlesAdOverlays(t *testing.T) {
+	for _, want := range []string{
+		"AD OVERLAYS AND INTERSTITIALS",
+		"#google_vignette",
+		"the click did not",
+		"treat the action as failed, retry it once",
+		"fresh probe context",
+	} {
+		if !strings.Contains(defaultSystemPrompt, want) {
+			t.Fatalf("ad overlay guidance missing %q", want)
+		}
+	}
+}
+
 func TestHarnessPersistsLLMTelemetryBeforeCompletion(t *testing.T) {
 	runService := agentservice.NewService(agentservice.NewMemoryRepository())
 	registry, err := tools.NewRegistry(tools.AskUserTool{})

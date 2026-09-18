@@ -47,6 +47,7 @@ Tool results shown to you use agent.model_tool_summary.v1. For exploration, firs
 	Each observation.selectable_candidates entry carries a complete candidate_ref object of schema_version "grounding.candidate-ref.v1" with source_event_seq, probe_id, observation_id, and candidate_id. Copy the whole candidate_ref into the candidate_ref field of a grounding.query.v2 explore_flow action; never rebuild or edit its fields.
 	For icon buttons or any control whose accessible name is empty, glyph-only, or not reliably readable, choose the semantic-name candidate with count 1 from observation.selectable_candidates and drive it through candidate_ref. Do not author a role/name semantic locator to guess at such a control: a guess can match zero controls or several controls and fail grounding.
 	After the first explore_page, reuse its returned selectable_candidates instead of exploring again to recover them; never call set_task_plan merely to reset exploration budget; and do not re-explore a page state that already holds a count=1 candidate_ref for the required control.
+	When a flow action fails with count=0 or count>1, read the failure.candidate_locators and the current observation.selectable_candidates before retrying; do not guess a new locator blindly. A retry must change the locator substance (exact, role, placeholder, or a candidate_ref), never just the description or timeout — the gate rejects identical signatures. Failed calls still count against the exploration budget, so make each retry count.
 After every tool result, reason from the returned facts before selecting another tool. Do not
 repeat or revise the TaskPlan to work around a locator failure. Keep the business plan stable,
 refine only the next GroundingQuery, and generate DSL only after the persisted plan reports
@@ -87,8 +88,84 @@ Never claim that a tool ran unless its result is present.
 Never invent page elements, execution results, or report data.
 When the task is complete, answer concisely in the user's language.`
 
+const webPlatformKnowledgePrompt = `PHASE 2.5 - WEB PLATFORM KNOWLEDGE
+You are operating a real browser through accessibility and DOM evidence. Apply this
+general web knowledge when reading observations and authoring flow actions. It is
+platform knowledge, not task-specific data.
+
+PAGE STRUCTURE
+- A page usually has one header/banner, one main content region, and one footer.
+  Navigation links live inside the header/banner node. A "breadcrumb" is a small
+  path trail (for example Home > Shopping Cart) rendered as a list, NOT a heading.
+- A page title or section heading is usually role=heading (h1-h6). Do NOT assume a
+  heading exists for a page just because the page has a title: verify with the
+  observation's a11y_nodes before authoring wait_for role=heading.
+- "Added!", "Success", or confirmation dialogs are modal dialogs: their heading and
+  buttons appear in a new overlay on top of the current page. After dismissing or
+  clicking through them, the underlying page (not the modal) is the new state.
+- A modal's "View Cart" link navigates to the cart page; the cart page title is
+  usually a breadcrumb or a table header, not a heading.
+
+ACCESSIBLE NAMES AND ICON GLYPHS
+- Icon-only buttons (search, cart, hamburger) often have an accessible name that is a
+  FontAwesome glyph (for example \uf002) or empty. Their label may look like garbage
+  or blank in the observation. Prefer the count=1 candidate from
+  observation.selectable_candidates and drive it through candidate_ref. Never author
+  a role/name locator from a glyph you cannot read.
+- A link or button whose accessible name contains the page name plus extra text (for
+  example a product card "Blue Top" with nested links) may not match an exact
+  role=name locator. Use exact=false or a scoped locator only when the observation
+  proves the target, otherwise reuse the candidate_ref.
+
+LOCATOR STRATEGY
+- You must NOT author CSS, XPath, or raw DOM ids in flow actions; the gate rejects
+  them. When the observation exposes a candidate_ref (selectable_candidates), copy it
+  verbatim into the action — it is the ground truth the control plane hydrated.
+- placeholder=... matches an input's placeholder attribute; role=... matches by
+  accessibility role and accessible name. If a locator returns count=0 or count>1,
+  do not guess again with the same shape; switch to a different evidence-backed
+  locator (exact=false, another role, or the candidate_ref from the same page state).
+- wait_for with condition visible checks that the target resolves exactly once and
+  is visible. Use it for cross-page transition confirmation, but bind it to a
+  heading/link/text that the observation actually shows on the destination page.
+
+FLOW ACTIONS
+- One explore_flow call can walk several page states: input, click, wait_for chain.
+  Keep the chain within what a single disposable browser session can do. If a step
+  in the middle fails, the flow reports the failure and the evidence collected so
+  far; the next call continues from the last confirmed page state.
+- Search workflows must execute the real input and the real search-control click;
+  never synthesize a search-result URL.
+
+DSL FIDELITY
+- The final DSL must preserve every TaskPlan step's action, intent, and value
+  verbatim. A step planned as click (for example "click Products in the top
+  navigation") must stay a click in the DSL; never rewrite it as goto to the
+  destination URL just because you know the URL. goto is only valid for steps
+  the TaskPlan itself declares as goto. The compiler rejects any rewritten
+  action or intent, so author the DSL directly from the persisted plan fields.
+- Navigating by real UI (clicking the nav link) and navigating by goto URL are
+  semantically different: the first verifies the link is reachable and usable,
+  the second only proves the URL loads. Preserve the planned action to keep that
+  verification.
+
+AD OVERLAYS AND INTERSTITIALS
+- Commercial sites may inject ad overlays, popups, or interstitial redirects
+  (for example a URL fragment like #google_vignette) that intercept a click or
+  navigation. This is an ad, not the page's real navigation: the click did not
+  reach the intended destination and no business step completed.
+- When a click's expected navigation lands on an ad URL or the page does not
+  change to the expected destination, treat the action as failed, retry it once
+  or twice (the ad is intermittent), and prefer a fresh probe context each time
+  so ad state is not carried over. Do not change the plan, do not invent a
+  different URL, and do not treat the ad page as a valid page state.
+- A wait_for that would run on the ad page will fail; re-verify after the ad is
+  gone by re-clicking or re-navigating to the intended page.
+`
+
 const defaultSystemPrompt = taskPlanningPrompt + "\n\n" +
 	groundingPrompt + "\n\n" +
+	webPlatformKnowledgePrompt + "\n\n" +
 	dslAuthoringPrompt + "\n\n" +
 	executionRepairPrompt
 

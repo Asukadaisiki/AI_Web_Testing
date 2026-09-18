@@ -48,10 +48,27 @@
 
 ## 问题记录
 
+## BUG-200 | generate_dsl 把 plan 的 click 步骤改写为 goto 被语义校验拒绝
+
+- 日期：2026-09-18
+- 状态：fixed
+- 严重度：high
+- 来源：live E2E（`run_19741c82ceea2af9b0081db5`，round2）
+- 描述：模型成功推进到 `ready_for_generation` 并调用 generate_dsl（13 步、plan_step_id 齐全），但 DSL step 2 把 plan 中 action=`click`（"点击导航栏 Products 链接"）的 `open_products` 步骤改写为 `goto https://automationexercise.com/products`，编译器 `compileDraftStep` 逐字段校验（action/intent/value 必须与 plan 一致）报 `DSL step 1 does not preserve plan step "open_products" semantics`，两次尝试均被拒，随后 900s 墙钟超时。
+- 复现步骤：
+  1. 运行 Blue Top live E2E，模型完成 14/14 grounding。
+  2. generate_dsl 时把 plan 的 click(open_products) 写成 goto(/products)。
+  3. 编译器语义校验拒绝，模型重试仍改写，超时取消。
+- 影响：grounding 成功后卡在最后一步 DSL 生成，阻断完整收敛。
+- 根因：模型不知道「点击导航进入列表页」与「直接 goto 列表 URL」语义不同——前者验证导航链接可用，后者只证明 URL 可加载；DSL 必须逐字段忠实于 plan（编译器有意强制）。
+- 处理：`harness.go` webPlatformKnowledgePrompt 新增 DSL FIDELITY 段，明确 click 步骤不得改写为 goto、intent/value 必须原样保留、编译器会拒绝改写；新增 `TestSystemPromptPreservesPlanStepActionFidelity` 断言。
+- 验证：harness 测试通过、Go 全量门禁全绿；round3 E2E 中模型未再出现 goto 改写（改卡在广告浮层，见 BUG-199 更新）。
+- 关联记录：docs/execution-log.md 2026-09-18；BUG-199。
+
 ## BUG-199 | Blue Top live E2E：购物车页断言用错 heading 语义且 grounding 时间撞墙钟
 
-- 日期：2026-09-17
-- 状态：open
+- 日期：2026-09-17（2026-09-18 更新：两轮复验 + 预算/失败提示修复落地）
+- 状态：in_progress（部分修复已落地并通过门禁；live E2E 复验未收敛）
 - 严重度：high
 - 来源：live E2E（automationexercise Blue Top 加购，`run_99a84dcbcf6e76dbb110e873`）
 - 描述：切换到火山引擎 flash 档模型后重跑，API/浏览器/grounding 全链路正常（14 次 LLM 调用全部 HTTP 200，无 402/401/404；`selectable_candidates`、`resolved_candidate` 水合、语义定位门禁均按预期工作），但 run 在 900s 墙钟处被 driver 取消，未收敛到 DSL 生成。
@@ -60,12 +77,15 @@
   2. 观察模型推进到产品详情页 `/product_details/1` 的最后一步 flow。
   3. seq 188 flow 中 `wait_for role=heading, name=Shopping Cart` 报 `flow_action_failed: count=0`；seq 190 plan 变 `ready_for_generation`（14/14 步 grounded），seq 192 墙钟取消。
 - 影响：最后一步断言语义错误 + grounding 总耗时超过 900s，阻断完整 E2E 收敛。
-- 根因（两层）：
-  1. **定位语义错误**：Automation Exercise 购物车页 `/view_cart` 无任何 `role=heading` 元素（实跑确认 `role=heading` count=0），"Shopping Cart" 是 breadcrumb `<li class="active">` 文本；模型从详情页 modal 的 `role=heading name=Added!` 成功经验错误推广，在购物车页写了 heading 定位，`wait_for` 必然 count=0。该 flow 错误虽不阻塞 plan grounding（plan 用 observation element_refs 判定 grounded），但消耗了最后一轮。
-  2. **耗时超预算**：第一版 plan 探索预算两次耗尽（seq 91/seq 125）被迫重建 plan 版本，v2 重新 grounding 已完成步骤，14 步总 grounding 消耗 14 次逻辑调用、61 万 input tokens、近 15 分钟，撞上 900s 墙钟，仅差最后一步 generate_dsl。
-- 处理：待定。候选方向——(1) 提示词/契约明确「页面存在性/标题类事实优先用 breadcrumb 或 page title 证据，不要默认 heading 角色」；(2) 探索预算按步骤而非固定额度、减少改版重放；(3) 提高 E2E 墙钟或分阶段断言。
-- 验证：本地 Playwright 实跑确认 `/view_cart` 无 `role=heading`、"Shopping Cart" 仅存在于 breadcrumb `LI.active`；seq 190 `task_plan.updated` 显示 14/14 步 grounded 且 status=`ready_for_generation`。
-- 关联记录：docs/execution-log.md 2026-09-17（LLM 提供方切换与重跑）。
+- 根因（多层，2026-09-18 更新）：
+  1. **定位语义错误**：Automation Exercise 购物车页 `/view_cart` 无任何 `role=heading` 元素（实跑确认 `role=heading` count=0），"Shopping Cart" 是 breadcrumb `<li class="active">` 文本；模型从详情页 modal 的 `role=heading name=Added!` 成功经验错误推广。已由 Web 知识 skill（PAGE STRUCTURE 段：breadcrumb≠heading、modal 结构）覆盖。
+  2. **预算耗在失败重试上**：第一版 plan 探索预算 4/8 默认值太小且不可配，失败 flow 也扣额度，v1 在第 4 次 flow 时 `explore_flow_budget_exhausted`，被迫重建 plan 版本重复 grounding。已修复：预算默认提到 10/12 且新增 env 可配（`AGENTSERVICE_MAX_EXPLORE_*_CALLS`），失败调用仍计预算但浪费性同签名重试由签名门禁拦截；round2 实跑预算告警归零。
+  3. **失败信息不可行动**：count=0 只给数字不给候选，模型只能盲猜。已修复：`_flow_failure_candidate_hints` 在失败时返回页面候选语义 locator（role/placeholder/text + element_ref）附到 failure。
+  4. **广告浮层劫持**（2026-09-18 round3 新发现）：Products 点击被间歇性 Google AdSense vignette（`#google_vignette`）劫持，`click did not reach expected anchor destination`。已由 Web 知识 skill（AD OVERLAYS 段）覆盖：识别广告 URL、重试 1-2 次、新 probe context。
+  5. **DSL 动作改写**：见 BUG-200（round2 独立发现，已修复）。
+- 处理（2026-09-18）：探索预算 env 化 + 默认提到 10/12；`_flow_failure_candidate_hints` 失败返回候选；`webPlatformKnowledgePrompt`（PHASE 2.5）注入页面结构/可访问名/定位策略/flow/DSL 保真/广告浮层六段知识；失败重试指引（`failure.candidate_locators` 优先、改实质参数）。round2 已走到 ready_for_generation + generate_dsl（仅卡 BUG-200），round3 卡广告浮层。
+- 验证：Go 全量门禁全绿；Python 200 passed / 1 known-fail / 2 skipped；Frontend build 通过；本地实测 Products 点击多数直达 /products（vignette 间歇）。live E2E 收敛性待提高超时后复验。
+- 关联记录：docs/execution-log.md 2026-09-17 与 2026-09-18；BUG-200、BUG-198。
 
 ## BUG-198 | 图标/空名控件 grounding——根因定位与修复（修复已落地，待 live E2E 复验）
 

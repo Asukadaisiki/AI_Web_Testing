@@ -24,6 +24,10 @@ type Config struct {
 	AgentMaxModelCalls         int
 	AgentMaxTotalTokens        int64
 	AgentMaxTranscriptBytes    int
+	AgentMaxExplorePageCalls   int
+	AgentMaxExploreFlowCalls   int
+	AgentMaxRunExplorePageCalls int
+	AgentMaxRunExploreFlowCalls int
 	DefaultActorID             int64
 	DatabaseURL                string
 	BrowserWorkerURL           string
@@ -61,9 +65,18 @@ func Load() Config {
 		AgentMaxModelCalls:         nonNegativeIntOrDefault("AGENTSERVICE_MAX_MODEL_CALLS", 40),
 		AgentMaxTotalTokens:        nonNegativeInt64OrDefault("AGENTSERVICE_MAX_TOTAL_TOKENS", 3_000_000),
 		AgentMaxTranscriptBytes:    nonNegativeIntOrDefault("AGENTSERVICE_MAX_TRANSCRIPT_BYTES", 1_000_000),
-		DefaultActorID:             int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
-		DatabaseURL:                normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
-		BrowserWorkerURL:           browserWorkerURL,
+		// Exploration budget. Per-plan values bound how many page/flow probes a
+		// single TaskPlan version may spend; run-wide values are hard limits
+		// across the whole run. Both count failed calls too (a failure returns
+		// evidence the model must learn from), so defaults are sized generously
+		// to leave room for legitimate retry-after-failure.
+		AgentMaxExplorePageCalls:     positiveIntOrDefault("AGENTSERVICE_MAX_EXPLORE_PAGE_CALLS", 10),
+		AgentMaxExploreFlowCalls:     positiveIntOrDefault("AGENTSERVICE_MAX_EXPLORE_FLOW_CALLS", 10),
+		AgentMaxRunExplorePageCalls:  positiveIntOrDefault("AGENTSERVICE_MAX_RUN_EXPLORE_PAGE_CALLS", 12),
+		AgentMaxRunExploreFlowCalls:  positiveIntOrDefault("AGENTSERVICE_MAX_RUN_EXPLORE_FLOW_CALLS", 12),
+		DefaultActorID:               int64(positiveIntOrDefault("DEFAULT_ACTOR_USER_ID", 1)),
+		DatabaseURL:                  normalizeDatabaseURL(os.Getenv("DATABASE_URL")),
+		BrowserWorkerURL:             browserWorkerURL,
 	}
 }
 

@@ -1013,6 +1013,93 @@ def _flow_text_matches(actual: str, expected: str, *, exact: bool) -> bool:
     return normalized_expected in normalized_actual
 
 
+def _flow_failure_candidate_hints(
+    observation_v2: dict[str, Any] | None,
+    *,
+    target: str,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    """Build actionable locator suggestions for a failed flow action.
+
+    BUG-199: a bare "count=0" failure tells the model nothing it can act on,
+    so it guesses again and burns budget. When a structured locator fails to
+    resolve exactly once, scan the current observation for elements whose
+    accessible name, role, or DOM attributes overlap the failed target and
+    return concrete role/name, placeholder, or text locator candidates the
+    model can copy verbatim (or better, reuse the candidate_ref from
+    selectable_candidates).
+    """
+    if not observation_v2 or not isinstance(observation_v2, dict):
+        return []
+    elements = observation_v2.get("elements") or []
+    if not isinstance(elements, list):
+        return []
+    wanted = " ".join(str(target or "").casefold().split())
+    hints: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        a11y = element.get("a11y") or {}
+        if not isinstance(a11y, dict):
+            continue
+        name = str(a11y.get("name") or "").strip()
+        role = str(a11y.get("role") or "").strip()
+        dom = element.get("dom") or {}
+        attrs = dom.get("attrs") or {} if isinstance(dom, dict) else {}
+        placeholder = str(attrs.get("placeholder") or "").strip()
+        text = str(element.get("dom_text") or "") or name
+        candidate: dict[str, Any] | None = None
+        normalized_name = " ".join(name.casefold().split())
+        normalized_placeholder = " ".join(placeholder.casefold().split())
+        normalized_text = " ".join(str(text).casefold().split())
+        if wanted and (
+            normalized_name == wanted
+            or normalized_name
+            and wanted in normalized_name
+            or normalized_placeholder == wanted
+            or normalized_text == wanted
+        ):
+            if role and name:
+                candidate = {
+                    "kind": "role",
+                    "role": role,
+                    "name": name,
+                    "exact": False,
+                }
+            elif placeholder:
+                candidate = {"kind": "placeholder", "value": placeholder}
+            elif name:
+                candidate = {"kind": "text", "value": name}
+        if candidate is None and wanted and wanted in normalized_name:
+            if role and name:
+                candidate = {"kind": "role", "role": role, "name": name, "exact": False}
+            elif name:
+                candidate = {"kind": "text", "value": name}
+        if candidate is None:
+            continue
+        key = f"{candidate.get('kind')}:{candidate.get('role','')}:{candidate.get('name','') or candidate.get('value','')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        hint: dict[str, Any] = {
+            "locator": candidate,
+            "reason": (
+                "match by accessible name"
+                if candidate.get("kind") == "role"
+                else "match by placeholder"
+                if candidate.get("kind") == "placeholder"
+                else "match by visible text"
+            ),
+        }
+        if element.get("element_ref"):
+            hint["element_ref"] = element["element_ref"]
+        hints.append(hint)
+        if len(hints) >= limit:
+            break
+    return hints
+
+
 def capture_browser_session(
     url: str,
     steps: list[dict[str, Any]],
@@ -1519,6 +1606,20 @@ def _collect_flow_a11y(
                     except Exception as exc:
                         if resolved_target is not None:
                             resolved_target["action_status"] = "failed"
+                        hints = _flow_failure_candidate_hints(
+                            before_entry.get("observation_v2"),
+                            target=target,
+                        )
+                        message = str(exc)
+                        if hints:
+                            hint_text = "; ".join(
+                                json.dumps(h["locator"], ensure_ascii=False)
+                                for h in hints
+                            )
+                            message += (
+                                " Candidate semantic locators observed on this "
+                                f"page state: {hint_text}"
+                            )
                         failure = {
                             "code": "flow_action_failed",
                             "step_index": step_i,
@@ -1526,8 +1627,13 @@ def _collect_flow_a11y(
                             "plan_step_id": plan_step_id,
                             "action": act,
                             "target": target,
-                            "message": str(exc),
+                            "message": message,
                         }
+                        if hints:
+                            failure["candidate_locators"] = [
+                                h["locator"] for h in hints
+                            ]
+                        failure["candidates_observed"] = len(hints)
                         revision += 1
                         results.append(
                             {

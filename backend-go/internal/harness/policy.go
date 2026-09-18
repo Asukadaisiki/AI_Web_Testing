@@ -295,6 +295,11 @@ func buildExplorationState(
 		if !ok || !agent.IsExplorationTool(summary.Tool) {
 			continue
 		}
+		// BUG-199: failed calls still count toward budget — they return
+		// evidence (even a count=0 failure) the model must learn from, so a
+		// failure is never "free". Wasteful identical repeats are blocked
+		// earlier by the repeated-signature gate, not by silently discounting
+		// the call here.
 		if summary.Tool == "explore_page" {
 			state.RunExplorePageCalls++
 		} else {

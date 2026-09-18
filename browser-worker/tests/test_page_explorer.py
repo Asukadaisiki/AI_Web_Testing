@@ -10,6 +10,7 @@ from browser_worker.exploration.page_explorer import (
     _deduplicate_explore_results,
     _filter_a11y_nodes,
     _flow_action_locator,
+    _flow_failure_candidate_hints,
     _is_business_candidate,
     _same_document_url,
     _wait_for_flow_target,
@@ -908,6 +909,86 @@ class PageExplorerA11yFilterTest(unittest.TestCase):
                 }
             )
         )
+
+
+class FlowFailureCandidateHintsTest(unittest.TestCase):
+    """BUG-199: failed flow actions must return actionable candidate hints."""
+
+    def _observation(self, elements: list[dict]) -> dict:
+        return {"elements": elements}
+
+    def test_exact_role_miss_suggests_non_exact_role_candidate(self) -> None:
+        observation = self._observation(
+            [
+                {
+                    "a11y": {"role": "link", "name": " Products"},
+                    "dom": {"tag": "a", "attrs": {}},
+                    "element_ref": "S0:1001",
+                },
+                {
+                    "a11y": {"role": "link", "name": "Cart"},
+                    "dom": {"tag": "a", "attrs": {}},
+                    "element_ref": "S0:1002",
+                },
+            ]
+        )
+        hints = _flow_failure_candidate_hints(observation, target="Products")
+        self.assertEqual(len(hints), 1)
+        self.assertEqual(hints[0]["locator"]["kind"], "role")
+        self.assertEqual(hints[0]["locator"]["role"], "link")
+        self.assertEqual(hints[0]["locator"]["name"], "Products")
+        self.assertIs(hints[0]["locator"]["exact"], False)
+        self.assertEqual(hints[0]["element_ref"], "S0:1001")
+
+    def test_placeholder_candidate_for_input_target(self) -> None:
+        observation = self._observation(
+            [
+                {
+                    "a11y": {"role": "textbox", "name": ""},
+                    "dom": {
+                        "tag": "input",
+                        "attrs": {"placeholder": "Search Product"},
+                    },
+                    "element_ref": "S0:2001",
+                },
+            ]
+        )
+        hints = _flow_failure_candidate_hints(observation, target="Search Product")
+        self.assertEqual(len(hints), 1)
+        self.assertEqual(hints[0]["locator"]["kind"], "placeholder")
+        self.assertEqual(hints[0]["locator"]["value"], "Search Product")
+
+    def test_text_candidate_fallback(self) -> None:
+        observation = self._observation(
+            [
+                {
+                    "a11y": {"role": "link", "name": "View Product"},
+                    "dom": {"tag": "a", "attrs": {}},
+                    "element_ref": "S0:3001",
+                },
+            ]
+        )
+        hints = _flow_failure_candidate_hints(observation, target="View Product")
+        self.assertTrue(hints)
+        self.assertEqual(hints[0]["locator"]["kind"], "role")
+
+    def test_no_match_returns_empty(self) -> None:
+        observation = self._observation(
+            [
+                {
+                    "a11y": {"role": "button", "name": "Submit"},
+                    "dom": {"tag": "button", "attrs": {}},
+                },
+            ]
+        )
+        self.assertEqual(
+            _flow_failure_candidate_hints(observation, target="Totally Missing"),
+            [],
+        )
+
+    def test_empty_or_missing_observation_returns_empty(self) -> None:
+        self.assertEqual(_flow_failure_candidate_hints(None, target="x"), [])
+        self.assertEqual(_flow_failure_candidate_hints({}, target="x"), [])
 
 
 if __name__ == "__main__":
