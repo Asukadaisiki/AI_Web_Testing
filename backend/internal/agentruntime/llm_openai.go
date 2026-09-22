@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/planner"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
 // OpenAIConfig 是 OpenAI 兼容端点（DeepSeek 等）的配置。

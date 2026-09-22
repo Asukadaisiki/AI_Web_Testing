@@ -48,7 +48,10 @@ export default function InjectionPage(): JSX.Element {
     setActionError(null);
     try {
       const created = await confirmFeedback(runId, candidate.id, input);
-      navigate(`/?run=${encodeURIComponent(created.run_id)}`);
+      // 回灌的下一轮属于同一个会话（CONTRACT §9.1），所以带上 session 一起跳。
+      navigate(
+        `/?session=${encodeURIComponent(created.session_id)}&run=${encodeURIComponent(created.run_id)}`,
+      );
     } catch (err: unknown) {
       setActionError(errorMessage(err));
     } finally {

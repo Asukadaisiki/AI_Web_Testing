@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 // 提示词与校验器不能漂移：模型看到的取值清单必须就是校验器接受的清单。

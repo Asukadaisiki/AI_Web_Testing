@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 // CaseArtifact 是不可变的 case 工件，按内容哈希寻址。
+//
+// SessionID 让 case / DSL 直接挂在会话上（CONTRACT §9）：RunID 回答"哪一轮产出的"，
+// SessionID 回答"属于哪个会话"，回灌换轮次时后者不变。
 type CaseArtifact struct {
 	ID          int64           `json:"id"`
+	SessionID   *string         `json:"session_id"`
 	RunID       string          `json:"run_id"`
 	ContentHash string          `json:"content_hash"`
 	Payload     json.RawMessage `json:"payload"`
@@ -54,20 +58,27 @@ type FeedbackCandidate struct {
 }
 
 // SaveCase 保存 case 工件；同一 run 重复保存会覆盖（重新规划时）。
+//
+// sessionID 由调用方从 run 上取，落库后 case 就同时挂在会话与轮次上。
 func (s *Store) SaveCase(
-	ctx context.Context, runID string, artifact contract.Case,
+	ctx context.Context, sessionID, runID string, artifact contract.Case,
 ) (CaseArtifact, error) {
 	payload := artifact.JSON()
 	now := time.Now().UTC()
+	var session any
+	if sessionID != "" {
+		session = sessionID
+	}
 	if _, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO cases (run_id, content_hash, payload_json, created_at)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO cases (session_id, run_id, content_hash, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT (run_id) DO UPDATE SET
+		   session_id = excluded.session_id,
 		   content_hash = excluded.content_hash,
 		   payload_json = excluded.payload_json,
 		   created_at = excluded.created_at`,
-		runID, artifact.ContentHash(), string(payload), formatTime(now),
+		session, runID, artifact.ContentHash(), string(payload), formatTime(now),
 	); err != nil {
 		return CaseArtifact{}, fmt.Errorf("save case: %w", err)
 	}
@@ -78,19 +89,25 @@ func (s *Store) SaveCase(
 func (s *Store) GetCase(ctx context.Context, runID string) (CaseArtifact, error) {
 	var (
 		artifact  CaseArtifact
+		sessionID sql.NullString
 		payload   string
 		createdAt string
 	)
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, run_id, content_hash, payload_json, created_at FROM cases WHERE run_id = ?`,
+		`SELECT id, session_id, run_id, content_hash, payload_json, created_at
+		 FROM cases WHERE run_id = ?`,
 		runID,
-	).Scan(&artifact.ID, &artifact.RunID, &artifact.ContentHash, &payload, &createdAt)
+	).Scan(&artifact.ID, &sessionID, &artifact.RunID, &artifact.ContentHash, &payload, &createdAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return CaseArtifact{}, ErrNotFound
 		}
 		return CaseArtifact{}, fmt.Errorf("get case: %w", err)
+	}
+	if sessionID.Valid {
+		value := sessionID.String
+		artifact.SessionID = &value
 	}
 	artifact.Payload = json.RawMessage(payload)
 	artifact.CreatedAt = parseTime(createdAt)

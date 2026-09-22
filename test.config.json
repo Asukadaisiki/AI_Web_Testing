@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "description": "全部测试与验证入口的唯一配置。改端口/目录/模型只改这里，脚本与 README 都引用它。",
+
+  "env": {
+    "LOOP_WORKER_URL": "http://127.0.0.1:8100",
+    "LOOP_ADDR": "127.0.0.1:8101",
+    "LOOP_DATA_DIR": "data",
+    "LOOP_ARTIFACTS_DIR": "data/sessions",
+    "LOOP_DB_PATH": "data/loop.db",
+    "LOOP_MAX_MODEL_CALLS": "40",
+    "LOOP_MAX_TOTAL_TOKENS": "1500000",
+    "PLAYWRIGHT_BROWSERS_PATH": "D:\\PlaywrightBrowsers"
+  },
+
+  "ports": {
+    "worker": 8100,
+    "loopd": 8101,
+    "web": 5174,
+    "fixtureSite": 8123
+  },
+
+  "offline": {
+    "llmScript": "fixtures/scripts/catalog_alpha.json",
+    "fixtureSite": "fixtures/site",
+    "contractFixture": "fixtures/contract/case_contract.json"
+  },
+
+  "live": {
+    "provider": "lark",
+    "model": "deepseek-v4.1-flash[1m]",
+    "baseURL": "https://ark.cn-beijing.volces.com/api/plan/v3",
+    "apiKeyEnv": "LARK_API_KEY"
+  },
+
+  "layers": [
+    {
+      "name": "契约一致性（Go）",
+      "cwd": "backend",
+      "cmd": ["go", "test", "./internal/contract/"]
+    },
+    {
+      "name": "契约一致性（Python）",
+      "cwd": "worker",
+      "cmd": ["uv", "run", "python", "-m", "unittest", "tests.test_contract_conformance"]
+    },
+    {
+      "name": "闭环全链路（Go，假执行器 + 脚本模型）",
+      "cwd": "backend",
+      "cmd": ["go", "test", "./..."]
+    },
+    {
+      "name": "真执行器（Python + Playwright）",
+      "cwd": "worker",
+      "cmd": ["uv", "run", "python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+    },
+    {
+      "name": "Web 类型与构建",
+      "cwd": "web",
+      "cmd": ["npm", "run", "build"]
+    }
+  ],
+
+  "verify": {
+    "ui": "http://127.0.0.1:5174",
+    "goal": "在商品列表页筛选 alpha，打开详情页并确认有 Add to cart 按钮",
+    "shots": "data/ui-shots",
+    "script": "web/tests/verify_pages.py"
+  },
+
+  "format": {
+    "go": ["gofmt", "-l", "."],
+    "python": ["uv", "run", "python", "-m", "compileall", "-q", "loop_worker", "tests"]
+  }
+}

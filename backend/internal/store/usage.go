@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
 // AddUsage 把一次模型调用的用量累加到该 run 上，返回累加后的总量。

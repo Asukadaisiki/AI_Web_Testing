@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 // SystemPrompt 是规划阶段的系统提示。

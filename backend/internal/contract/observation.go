@@ -19,16 +19,27 @@ type Element struct {
 
 // Observation 是一次页面观测，也是接地的唯一依据。
 type Observation struct {
-	ObservationID  string    `json:"observation_id"`
-	PageStateID    string    `json:"page_state_id"`
-	URL            string    `json:"url"`
-	Title          string    `json:"title"`
-	Elements       []Element `json:"elements"`
-	ScreenshotPath string    `json:"screenshot_path"`
+	ObservationID string `json:"observation_id"`
+	PageStateID   string `json:"page_state_id"`
+	// BrowserSessionID 是执行器内部的浏览器上下文句柄，用完即弃，
+	// 与会话（session，CONTRACT §9）无关，不得混用。
+	BrowserSessionID string    `json:"browser_session_id"`
+	URL              string    `json:"url"`
+	Title            string    `json:"title"`
+	Elements         []Element `json:"elements"`
+	ScreenshotPath   string    `json:"screenshot_path"`
 }
 
-// Session 是作者态（规划阶段）的浏览器会话。
+// Session 是作者态（规划阶段）的浏览器会话句柄。
+//
+// SessionID 是 browser session（`bsess_...`），不是会话（CONTRACT §9.3）。
 type Session struct {
+	SessionID string `json:"session_id"`
+}
+
+// OpenSessionRequest 开一个浏览器会话，并声明它属于哪个领域会话——
+// 观测截图要落进那个会话的产物目录（CONTRACT §9.2）。
+type OpenSessionRequest struct {
 	SessionID string `json:"session_id"`
 }
 
@@ -45,8 +56,11 @@ type NavigateRequest struct {
 }
 
 // ExecuteRequest 是执行整个 case 的请求。
+//
+// SessionID 必填：产物必须能落到会话目录里（CONTRACT §9.2）。
 type ExecuteRequest struct {
-	Case Case `json:"case"`
+	SessionID string `json:"session_id"`
+	Case      Case   `json:"case"`
 }
 
 // WorkerError 是执行器返回的结构化错误。

@@ -181,7 +181,10 @@ _ARIA_SNAPSHOT_NAME_RE = re.compile(r'^-\s+([A-Za-z]+)(?:\s+"((?:[^"\\]|\\.)*)")
 
 
 def new_id(prefix: str) -> str:
-    """契约里的 id 形态：`obs_7f3a...` / `ps_...` / `sess_...` / `exec_...`。"""
+    """契约里的 id 形态：`obs_7f3a...` / `ps_...` / `bsess_...` / `exec_...`。
+
+    注意 `bsess_` 是浏览器会话句柄，不是领域会话 `sess_`（CONTRACT §9.3）。
+    """
     return f"{prefix}_{secrets.token_hex(8)}"
 
 
@@ -301,6 +304,7 @@ class ObservationRecorder:
         screenshot_path: str | None = None,
         observation_id: str | None = None,
         page_state_id: str | None = None,
+        browser_session_id: str | None = None,
         max_elements: int = MAX_ELEMENTS,
     ) -> Observation:
         raw = await self.collect_raw(max_elements)
@@ -341,6 +345,7 @@ class ObservationRecorder:
         return Observation(
             observation_id=observation_id or new_id("obs"),
             page_state_id=page_state_id or new_id("ps"),
+            browser_session_id=browser_session_id,
             url=self._page.url,
             title=await self._page.title(),
             elements=elements,
@@ -354,6 +359,7 @@ async def observe_page(
     screenshot_path: str | None = None,
     observation_id: str | None = None,
     page_state_id: str | None = None,
+    browser_session_id: str | None = None,
     max_elements: int = MAX_ELEMENTS,
 ) -> Observation:
     """对当前页面做一次完整观测（会话 `/navigate`、`/act` 与 runner 共用同一条路径）。"""
@@ -361,6 +367,7 @@ async def observe_page(
         screenshot_path=screenshot_path,
         observation_id=observation_id,
         page_state_id=page_state_id,
+        browser_session_id=browser_session_id,
         max_elements=max_elements,
     )
 

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 // fakeSite 是一个内存里的假站点，用来离线、确定性地验证整条闭环。
@@ -189,6 +189,8 @@ type fakeWorker struct {
 	mu       sync.Mutex
 	sessions map[string]map[string]string
 	execErr  bool
+	// artifactSessions 记录每一次"该往哪个会话写产物"的声明（开浏览器会话 + 执行）。
+	artifactSessions []string
 }
 
 func newFakeWorker(site *fakeSite) *fakeWorker {
@@ -198,7 +200,20 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 		writeFake(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("POST /sessions", func(w http.ResponseWriter, r *http.Request) {
-		id := fmt.Sprintf("sess_%d", time.Now().UnixNano())
+		// 领域会话必须传进来：观测截图按它落目录（CONTRACT §9.2）。
+		var body contract.OpenSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeFakeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+			return
+		}
+		if body.SessionID == "" {
+			writeFakeError(w, http.StatusBadRequest, "session_required", "session_id is required")
+			return
+		}
+		worker.mu.Lock()
+		worker.artifactSessions = append(worker.artifactSessions, body.SessionID)
+		worker.mu.Unlock()
+		id := fmt.Sprintf("bsess_%d", time.Now().UnixNano())
 		worker.mu.Lock()
 		worker.sessions[id] = map[string]string{}
 		worker.mu.Unlock()
@@ -268,10 +283,28 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 			writeFakeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 			return
 		}
+		// 执行也必须带会话：每步截图要落进 <session_id>/ 目录。
+		if body.SessionID == "" {
+			writeFakeError(w, http.StatusBadRequest, "session_required", "session_id is required")
+			return
+		}
+		worker.mu.Lock()
+		worker.artifactSessions = append(worker.artifactSessions, body.SessionID)
+		worker.mu.Unlock()
 		writeFake(w, http.StatusOK, worker.execute(body.Case))
 	})
 	worker.server = httptest.NewServer(mux)
 	return worker
+}
+
+// artifactSessionIDs 返回假执行器收到过的全部"产物归哪个会话"的声明，
+// 按收到顺序（开浏览器会话、干跑、真实执行都会声明一次）。
+func (w *fakeWorker) artifactSessionIDs() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]string, len(w.artifactSessions))
+	copy(out, w.artifactSessions)
+	return out
 }
 
 func (w *fakeWorker) values(sessionID string) (map[string]string, bool) {

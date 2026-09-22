@@ -27,9 +27,17 @@ from local_site import LocalSite  # noqa: E402
 from pw_support import launched_browser, run  # noqa: E402
 
 from loop_worker.contracts import ExecutionResult, Observation  # noqa: E402
-from loop_worker.evidence import REPO_ROOT, artifacts_dir, display_path  # noqa: E402
+from loop_worker.evidence import (  # noqa: E402
+    REPO_ROOT,
+    artifacts_dir,
+    display_path,
+    session_dir,
+)
 from loop_worker.observer import observe_page  # noqa: E402
 from loop_worker.runner import run_case  # noqa: E402
+
+#: 执行器要求每个 case 都声明产物归哪个会话（CONTRACT §9.2）。
+TEST_SESSION = "sess_test"
 
 
 def locator_from(observation: Observation, *, kind: str, **matches: str) -> dict:
@@ -193,7 +201,7 @@ class RunnerEndToEndTest(unittest.TestCase):
                     base_url=site.base_url,
                 )
 
-                result = await run_case(case, browser=browser)
+                result = await run_case(case, browser=browser, session_id=TEST_SESSION)
 
                 self.assertIsInstance(result, ExecutionResult)
                 self.assertEqual(result.status, "passed", result.model_dump())
@@ -207,13 +215,21 @@ class RunnerEndToEndTest(unittest.TestCase):
                 self.assertEqual(result.steps[0].action, "goto")
                 self.assertEqual(result.steps[0].index, 0)
 
-                # 每步都有证据
+                # 每步都有证据，且截图落在本会话的目录里（CONTRACT §9.2）
                 for step in result.steps:
                     self.assertIsNotNone(step.evidence.screenshot_path, step.index)
-                    screenshot = Path(step.evidence.screenshot_path)
+                    screenshot_path = step.evidence.screenshot_path
+                    self.assertTrue(
+                        screenshot_path.startswith(f"{TEST_SESSION}/"), screenshot_path
+                    )
+                    screenshot = Path(screenshot_path)
                     if not screenshot.is_absolute():
-                        screenshot = REPO_ROOT / screenshot
+                        # 相对产物根，不是相对仓库根。
+                        screenshot = artifacts_dir() / screenshot
                     self.assertTrue(screenshot.is_file(), f"missing {screenshot}")
+                    self.assertTrue(
+                        screenshot.is_relative_to(session_dir(TEST_SESSION)), screenshot
+                    )
                     self.assertIsInstance(step.url_before, str)
                     self.assertIsInstance(step.url_after, str)
                     self.assertGreaterEqual(step.duration_ms, 0)
@@ -264,7 +280,7 @@ class RunnerEndToEndTest(unittest.TestCase):
                     ],
                     base_url=site.base_url,
                 )
-                result = await run_case(case, browser=browser)
+                result = await run_case(case, browser=browser, session_id=TEST_SESSION)
 
                 self.assertEqual(result.status, "failed")
                 # 失败即止：后续步骤不再执行
@@ -307,7 +323,7 @@ class RunnerEndToEndTest(unittest.TestCase):
                     ],
                     base_url=site.base_url,
                 )
-                result = await run_case(case, browser=browser)
+                result = await run_case(case, browser=browser, session_id=TEST_SESSION)
 
                 self.assertEqual(result.status, "failed")
                 self.assertEqual(len(result.steps), 2)
@@ -341,7 +357,7 @@ class RunnerEndToEndTest(unittest.TestCase):
                     ],
                     base_url=site.base_url,
                 )
-                result = await run_case(case, browser=browser)
+                result = await run_case(case, browser=browser, session_id=TEST_SESSION)
                 self.assertEqual(result.status, "failed")
                 failed = result.steps[1]
                 self.assertEqual(failed.error.kind, "condition_unmet")
@@ -368,7 +384,7 @@ class RunnerEndToEndTest(unittest.TestCase):
                     ],
                     base_url=site.base_url,
                 )
-                result = await run_case(case, browser=browser)
+                result = await run_case(case, browser=browser, session_id=TEST_SESSION)
                 self.assertEqual(result.status, "error")
                 self.assertEqual(result.steps, [])
                 self.assertIsNotNone(result.error)
@@ -377,20 +393,33 @@ class RunnerEndToEndTest(unittest.TestCase):
 
 
 class ArtifactsDirTest(unittest.TestCase):
-    """证据目录：环境变量 LOOP_ARTIFACTS_DIR 优先，默认 v2/data/artifacts。"""
+    """证据目录：环境变量 LOOP_ARTIFACTS_DIR 优先，默认 data/sessions（按会话分）。"""
 
     def test_default_artifacts_dir(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LOOP_ARTIFACTS_DIR", None)
-            self.assertEqual(artifacts_dir(), (REPO_ROOT / "v2" / "data" / "artifacts").resolve())
+            self.assertEqual(artifacts_dir(), (REPO_ROOT / "data" / "sessions").resolve())
 
     def test_env_override_artifacts_dir(self) -> None:
         with mock.patch.dict(os.environ, {"LOOP_ARTIFACTS_DIR": str(TESTS_DIR)}):
             self.assertEqual(artifacts_dir(), TESTS_DIR.resolve())
 
-    def test_display_path_is_relative_to_repo_root(self) -> None:
-        path = REPO_ROOT / "v2" / "data" / "artifacts" / "exec_x_0.png"
-        self.assertEqual(display_path(path), "v2/data/artifacts/exec_x_0.png")
+    def test_session_dir_is_under_the_artifacts_root(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LOOP_ARTIFACTS_DIR", None)
+            self.assertEqual(session_dir("sess_abc"), artifacts_dir() / "sess_abc")
+
+    def test_session_dir_rejects_an_empty_session(self) -> None:
+        # 没有会话就没法归属产物，宁可报错也不要落到产物根目录里跟别人混着。
+        with self.assertRaises(ValueError):
+            session_dir("")
+
+    def test_display_path_is_relative_to_artifacts_root(self) -> None:
+        # 契约里存的是 `<session_id>/<文件名>`，控制面直接拼成 /artifacts/<path>。
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LOOP_ARTIFACTS_DIR", None)
+            path = artifacts_dir() / "sess_4d1a" / "exec_x_0.png"
+            self.assertEqual(display_path(path), "sess_4d1a/exec_x_0.png")
 
 
 if __name__ == "__main__":

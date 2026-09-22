@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/store"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/worker"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 // 一条真实感的离线脚本：打开列表 → 点 Widget → 断言详情页 → 结束。
@@ -63,11 +63,12 @@ func newHarnessWithLLM(t *testing.T, llm LLM, maxTokens int) *harness {
 	return &harness{runtime: runtime, store: database, site: site, fake: fake}
 }
 
+// plan 建一个会话（含第 1 轮）并跑到 case 就绪。
 func (h *harness) plan(t *testing.T, input string) store.Run {
 	t.Helper()
-	run, err := h.store.CreateRun(context.Background(), input, nil)
+	_, run, err := h.store.CreateSession(context.Background(), input)
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	if err := h.runtime.Plan(context.Background(), run); err != nil {
 		t.Fatalf("plan: %v", err)
@@ -88,6 +89,20 @@ func TestClosedLoopOffline(t *testing.T) {
 	run := h.plan(t, "打开第一个商品的详情页，并确认可以加入购物车")
 	if run.Status != store.StatusAwaitingApproval {
 		t.Fatalf("status = %q, want %q", run.Status, store.StatusAwaitingApproval)
+	}
+	if run.SessionID == nil || *run.SessionID == "" {
+		t.Fatal("a planned run must belong to a session")
+	}
+
+	// 干跑也要声明产物归属：干跑截图同样是这个会话的证据（CONTRACT §9.2）。
+	dryRunSessions := h.fake.artifactSessionIDs()
+	if len(dryRunSessions) == 0 {
+		t.Fatal("the dry run must tell the executor which session owns its evidence")
+	}
+	for _, id := range dryRunSessions {
+		if id != *run.SessionID {
+			t.Fatalf("dry run artifact session = %q, want %q", id, *run.SessionID)
+		}
 	}
 
 	record, err := h.store.GetCase(ctx, run.ID)
@@ -142,6 +157,17 @@ func TestClosedLoopOffline(t *testing.T) {
 	}
 	if final.Status != store.StatusCompleted {
 		t.Fatalf("final status = %q, want %q (error: %v)", final.Status, store.StatusCompleted, final.Error)
+	}
+
+	// 规划（含干跑）与真实执行声明的产物会话，必须全是这一轮所属的会话。
+	allSessions := h.fake.artifactSessionIDs()
+	if len(allSessions) < 2 {
+		t.Fatalf("expected the dry run and the real execution to declare a session, got %v", allSessions)
+	}
+	for _, id := range allSessions {
+		if id != *run.SessionID {
+			t.Fatalf("artifact session = %q, want %q", id, *run.SessionID)
+		}
 	}
 
 	execution, err := h.store.GetExecution(ctx, run.ID)
@@ -398,9 +424,9 @@ func TestDryRunThatNeverPassesFailsTheRun(t *testing.T) {
 	}
 	h := newHarness(t, steps)
 
-	run, err := h.store.CreateRun(ctx, "打开第一个商品", nil)
+	_, run, err := h.store.CreateSession(ctx, "打开第一个商品")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	if err := h.runtime.Plan(ctx, run); err == nil {
 		t.Fatal("plan must fail when the model stops calling tools without a verified case")
@@ -427,9 +453,9 @@ func TestAskUserPausesTheRun(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	run, err := h.store.CreateRun(ctx, "测一个商品", nil)
+	_, run, err := h.store.CreateSession(ctx, "测一个商品")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- h.runtime.Plan(ctx, run) }()
@@ -508,9 +534,9 @@ func TestUnreachableWorkerFailsTheRun(t *testing.T) {
 		MaxModelCalls: 5,
 		AnswerTimeout: time.Second,
 	})
-	run, err := database.CreateRun(ctx, "随便测点什么", nil)
+	_, run, err := database.CreateSession(ctx, "随便测点什么")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	if err := runtime.Plan(ctx, run); err == nil {
 		t.Fatal("plan must fail when the executor is unreachable")

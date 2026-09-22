@@ -4,6 +4,12 @@
 
 **改契约的唯一正确流程**：改本文件 → 改 Go 类型 → 改 Python/TS 镜像 → 补 fixture → 跑一致性测试。
 
+**阅读顺序**：先看 §9 的**会话**——它是整个闭环的容器，case / 执行 / 产物都挂在它下面；
+然后 §2（case 工件）、§3（观测）、§4（执行结果）。
+
+**一物一名**：`session` 只有一种含义（§9，用户可见的会话）。执行器内部那个浏览器上下文
+叫 **browser session**（id 前缀 `bsess_`），与 `session` 无关，任何地方都不得混用。
+
 ---
 
 ## 1. 为什么不给模型写 JSON 的机会
@@ -143,12 +149,14 @@
 
 ## 3. 观测（接地用的证据）
 
-`POST /sessions/{id}/navigate` 与 `act` 返回：
+`POST /sessions/{id}/navigate` 与 `act` 返回（这里的 `{id}` 是**执行器的 browser session**，
+见 §9 的命名约定）：
 
 ```jsonc
 {
   "observation_id": "obs_7f3a",
   "page_state_id": "ps_2b91",
+  "browser_session_id": "bsess_9c02",
   "url": "https://automationexercise.com/products",
   "title": "Automation Exercise - All Products",
   "elements": [
@@ -168,7 +176,7 @@
       ]
     }
   ],
-  "screenshot_path": "v2/data/artifacts/obs_7f3a.png"
+  "screenshot_path": "sess_4d1a/obs_7f3a.png"
 }
 ```
 
@@ -190,7 +198,8 @@
 
 ## 4. 执行结果
 
-`POST /execute {case}` 返回：
+`POST /execute {"session_id": "sess_...", "case": {...}}` 返回
+（`session_id` 必填：产物必须能落到会话目录里，见 §9）：
 
 ```jsonc
 {
@@ -212,7 +221,7 @@
         { "phase": "post", "type": "url_contains", "value": "/products", "satisfied": true, "detail": null }
       ],
       "evidence": {
-        "screenshot_path": "v2/data/artifacts/exec_..._0.png",
+        "screenshot_path": "sess_4d1a/exec_..._0.png",
         "console": [ { "level": "error", "text": "..." } ],
         "network": [ { "method": "GET", "url": "...", "status": 200 } ]
       },
@@ -223,6 +232,10 @@
 ```
 
 `status` 取值：`passed`（全部步骤与条件通过）、`failed`（有步骤或条件未通过）、`error`（执行器自身故障，例如浏览器启动失败、case 非法）。
+
+`screenshot_path` 是**相对产物根目录**的 POSIX 路径，形如 `<session_id>/<文件名>`；
+控制面把它直接拼成 `/artifacts/<screenshot_path>` 提供下载（§9.2）。不给出仓库绝对路径，
+避免"换了工作目录就 404"。
 
 `error` 字段（`steps[].error` 与顶层 `error`）是**对象**，不是字符串：
 
@@ -289,21 +302,28 @@ Python 侧只有一处实现：`loop_worker/observer.py::accessible_name`。
      请在重新规划时避免上述失败。
      ```
 3. 人在错误注入页编辑/确认后，创建新 run：`input = 候选文本`，`parent_run_id = 原 run`。
+   候选是**一次性的**：确认后即标记 `used`，同一条候选再确认返回 409 `candidate_already_used`——
+   一个失败只允许回灌一轮，要再试就编辑输入后走“在同一会话里再开一轮”（页面 1）。
 
 ---
 
 ## 8. 数据表（SQLite）
 
 ```sql
-runs(id, input, status, parent_run_id, error, created_at, updated_at)
+sessions(id, goal, created_at, updated_at)                           -- 闭环的容器（§9）
+runs(id, session_id, input, status, parent_run_id, error, created_at, updated_at)
 run_events(id, run_id, seq, type, payload_json, created_at)          -- SSE 重放
-cases(id, run_id, content_hash, payload_json, created_at)            -- 不可变工件
+cases(id, session_id, run_id, content_hash, payload_json, created_at) -- 不可变工件
 case_approvals(id, case_id, approved_by, created_at)
 executions(id, run_id, case_id, status, result_json, started_at, finished_at)
 execution_steps(id, execution_id, step_index, action, status, evidence_json, error)
 report_signals(id, run_id, execution_id, step_index, kind, message, created_at)
 feedback_candidates(id, run_id, signal_kind, proposed_input, status, created_at)
+model_usage(run_id, model_calls, prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, cached_tokens, updated_at)
 ```
+
+`runs.session_id` 与 `cases.session_id` 都指向 §9 的会话；`cases.run_id` 仍保留，
+用于回答"这个 case 是哪一轮产出的"。`runs.parent_run_id` 指出回灌链条上的上一轮。
 
 `runs.status`：`planning` → `awaiting_approval` → `executing` → `reporting` → `completed` / `failed`；分支状态 `awaiting_input`。
 
@@ -331,3 +351,58 @@ feedback_candidates(id, run_id, signal_kind, proposed_input, status, created_at)
 因此 `awaiting_approval` 状态下的 case 天然满足两条：过得了契约校验（构建即校验）、
 在当前站点上确实跑得通（干跑证明）。真实执行仍可能失败（站点变了、抖动），
 那一类失败由 §7 的回灌闭环处理。
+
+---
+
+## 9. 会话（session）：闭环的容器
+
+### 9.1 一个会话 = 一个目标 + 它的全部轮次
+
+```
+session (sess_...)
+├── run 1  planning → awaiting_approval → executing → reporting → completed
+│     └── case 1 (payload_json)   executions / signals / feedback
+└── run 2  （由 run 1 的失败回灌产生，parent_run_id = run 1）
+      └── case 2 ...
+```
+
+- **会话是唯一的产品级容器**。人输入的"目标"属于会话，不属于某一轮；
+  回灌产生的下一轮**属于同一个会话**，不是新会话。
+- 一个会话至少有一轮 run。第一轮在会话创建时同时产生。
+- `runs.parent_run_id` 记录轮次链条（第 1 轮为 `null`），`runs.session_id` 记录归属。
+- **case / DSL 绑定会话**：`cases.session_id`。`cases.run_id` 保留，回答"哪一轮产出的"。
+- **产物绑定会话**：证据文件落在 `<产物根>/<session_id>/`，见 §9.2。
+- **成本按会话汇总**：会话的 token 用量 = 它全部轮次的 `model_usage` 之和。
+
+### 9.2 产物路径（唯一约定）
+
+产物根目录由 `LOOP_ARTIFACTS_DIR` 指定，默认 `<仓库根>/data/sessions`。布局：
+
+```
+data/sessions/
+└── sess_4d1a/                      ← 一个会话一个目录
+    ├── obs_7f3a.png                ← 规划期观测截图
+    ├── exec_b118d79f_0.png         ← 执行期每步截图
+    └── exec_b118d79f_1.png
+```
+
+- 执行器**只**往 `<产物根>/<session_id>/` 写，文件名自定。
+- 控制面**只**从同一个根目录读，HTTP 路径为 `/artifacts/<session_id>/<文件名>`。
+- 契约里出现的 `screenshot_path` 一律是 `<session_id>/<文件名>` 这种**相对产物根**的形式，
+  两边都不写绝对路径。
+
+### 9.3 命名（一物一名，不得混用）
+
+| 名字 | 含义 | id 前缀 | 谁能看见 |
+|---|---|---|---|
+| `session` / 会话 | 目标 + 全部轮次 | `sess_` | 用户 |
+| `run` | 会话里的一轮闭环 | `run_` | 用户 |
+| `browser session` | 执行器里的一个浏览器上下文，用完即弃 | `bsess_` | 仅执行器内部 |
+
+`browser session` **不是**会话：它没有目标、不跨轮次、不进数据库。契约里凡出现
+`browser_session_id` 的地方都只表示这个临时句柄。
+
+### 9.4 会话状态
+
+会话自身**没有状态机**——状态是每轮 run 的事（§8）。会话列表里显示的"状态"
+是**它最新一轮**的状态，仅用于列表展示，不参与任何判断。

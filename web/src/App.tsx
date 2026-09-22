@@ -1,24 +1,17 @@
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
-import { RunList } from './components/RunList';
+import { SessionList } from './components/SessionList';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import InjectionPage from './pages/InjectionPage';
 import InputSessionPage from './pages/InputSessionPage';
 import ReportPage from './pages/ReportPage';
 
 /**
- * 从当前地址里取出 run id，仅用于高亮侧边列表。
- * Shell 在 Routes 之外，拿不到 useParams，故直接解析 pathname。
+ * 从当前地址里取出会话 id，仅用于高亮侧边列表。
+ * 页面 1 用 `?session=`；报告/执行/注入页用 run id，从 run 反查会话由页面自己负责。
  */
-function activeRunIdFrom(pathname: string, search: string): string | null {
-  if (pathname === '/') {
-    const run = new URLSearchParams(search).get('run');
-    return run === '' ? null : run;
-  }
-  const segments = pathname.split('/').filter((segment) => segment !== '');
-  if (segments.length >= 2 && (segments[0] === 'runs' || segments[0] === 'executions')) {
-    return decodeURIComponent(segments[1] ?? '') || null;
-  }
-  return null;
+function activeSessionIdFrom(search: string): string | null {
+  const session = new URLSearchParams(search).get('session');
+  return session === null || session === '' ? null : session;
 }
 
 function Fallback(): JSX.Element {
@@ -33,7 +26,7 @@ function Fallback(): JSX.Element {
 
 function Shell(): JSX.Element {
   const location = useLocation();
-  const activeRunId = activeRunIdFrom(location.pathname, location.search);
+  const activeSessionId = activeSessionIdFrom(location.search);
   return (
     <div className="app">
       <aside className="sidebar">
@@ -43,7 +36,7 @@ function Shell(): JSX.Element {
             输入 / 会话
           </NavLink>
         </nav>
-        <RunList activeRunId={activeRunId} />
+        <SessionList activeSessionId={activeSessionId} />
       </aside>
       <main className="main">
         <Routes>

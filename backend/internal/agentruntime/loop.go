@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/feedback"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/planner"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/report"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/store"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/worker"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/feedback"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/report"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 // SSE 事件类型，与 web/src/api.ts 的 RunEventType 一一对应。
@@ -191,6 +191,17 @@ func (r *Runtime) fail(ctx context.Context, runID, message string) error {
 	return errors.New(message)
 }
 
+// sessionIDOf 取 run 的会话 id（CONTRACT §9）。
+//
+// 规划与执行都要用它决定产物落哪个目录，所以宁可在这里失败，也不带着空 id 往下跑——
+// 否则产物会落到产物根目录下、与所有会话混在一起。
+func sessionIDOf(run store.Run) (string, error) {
+	if run.SessionID == nil || *run.SessionID == "" {
+		return "", fmt.Errorf("run %s 没有关联会话（session_id 为空）", run.ID)
+	}
+	return *run.SessionID, nil
+}
+
 // Plan 跑"输入 → 规划"这一段，直到 case 就绪（进入 awaiting_approval）或失败。
 func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 	if err := r.claim(run.ID, "planning"); err != nil {
@@ -203,7 +214,11 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 	if restarter, ok := r.llm.(interface{ Restart() }); ok {
 		restarter.Restart()
 	}
-	session, err := planner.New(ctx, r.client, run.Input)
+	sessionID, err := sessionIDOf(run)
+	if err != nil {
+		return r.fail(ctx, run.ID, err.Error())
+	}
+	session, err := planner.New(ctx, r.client, sessionID, run.Input)
 	if err != nil {
 		return r.fail(ctx, run.ID, fmt.Sprintf("无法连接执行器（%v）", err))
 	}
@@ -347,7 +362,11 @@ func (r *Runtime) askUser(ctx context.Context, run store.Run, call ToolCall) (Me
 func (r *Runtime) awaitApproval(
 	ctx context.Context, run store.Run, artifact contract.Case, dryRun *contract.ExecutionResult,
 ) error {
-	saved, err := r.store.SaveCase(ctx, run.ID, artifact)
+	sessionID, err := sessionIDOf(run)
+	if err != nil {
+		return r.fail(ctx, run.ID, err.Error())
+	}
+	saved, err := r.store.SaveCase(ctx, sessionID, run.ID, artifact)
 	if err != nil {
 		return r.fail(ctx, run.ID, fmt.Sprintf("保存 case 失败（%v）", err))
 	}
@@ -376,6 +395,10 @@ func (r *Runtime) Execute(ctx context.Context, run store.Run) error {
 	if err != nil {
 		return r.fail(ctx, run.ID, "找不到已就绪的 case 工件")
 	}
+	sessionID, err := sessionIDOf(run)
+	if err != nil {
+		return r.fail(ctx, run.ID, err.Error())
+	}
 	// 落库形态必须能直接过契约校验：这是"生成的 DSL 过不了校验"的最后一道防线。
 	artifact, err := contract.Validate(record.Payload)
 	if err != nil {
@@ -390,7 +413,7 @@ func (r *Runtime) Execute(ctx context.Context, run store.Run) error {
 	}
 
 	r.status(ctx, run.ID, store.StatusExecuting, nil)
-	result, err := r.client.Execute(ctx, artifact)
+	result, err := r.client.Execute(ctx, sessionID, artifact)
 	if err != nil {
 		return r.executionError(ctx, run, contract.SignalWorkerError, err.Error())
 	}

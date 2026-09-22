@@ -1,8 +1,11 @@
 """证据采集：截图 / console / network（CONTRACT §4 evidence）。
 
-产物目录：环境变量 `LOOP_ARTIFACTS_DIR` 覆盖，默认 `v2/data/artifacts`。
-`screenshot_path` 的形态与契约例子一致：相对仓库根的 POSIX 路径（如
-`v2/data/artifacts/exec_ab12_0.png`）；若目录被覆盖到仓库之外，则给出绝对路径。
+产物根目录：环境变量 `LOOP_ARTIFACTS_DIR` 覆盖，默认 `data/sessions`。
+**每个会话一个子目录**：`<产物根>/<session_id>/<文件名>`（CONTRACT §9.2）。
+
+`screenshot_path` 的形态是**相对产物根**的 POSIX 路径，如 `sess_4d1a/exec_ab12_0.png`；
+控制面把它直接拼成 `/artifacts/<screenshot_path>`。这里不写绝对路径，也不写仓库相对路径——
+否则控制面得知道"产物根在仓库的哪个位置"才能拼对 URL，换个工作目录就 404。
 """
 
 from __future__ import annotations
@@ -14,30 +17,38 @@ from playwright.async_api import Page
 
 from .contracts import ConsoleEvent, Evidence, NetworkEvent
 
-#: v2/worker/loop_worker/evidence.py → parents[0]=loop_worker, [1]=worker, [2]=v2, [3]=仓库根
-V2_ROOT = Path(__file__).resolve().parents[2]
-REPO_ROOT = V2_ROOT.parent
+#: worker/loop_worker/evidence.py → parents[0]=loop_worker, [1]=worker, [2]=仓库根
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_ARTIFACTS_DIR = V2_ROOT / "data" / "artifacts"
+DEFAULT_ARTIFACTS_DIR = REPO_ROOT / "data" / "sessions"
 
 #: 单步证据里 console / network 的条数上限（防止长跑页面把结果撑爆）
 MAX_EVENTS = 500
 
 
 def artifacts_dir() -> Path:
-    """证据产物目录（环境变量 LOOP_ARTIFACTS_DIR 优先）。"""
+    """产物**根**目录（环境变量 LOOP_ARTIFACTS_DIR 优先）。会话目录是它的子目录。"""
     override = os.environ.get("LOOP_ARTIFACTS_DIR")
     if override:
         return Path(override).expanduser().resolve()
     return DEFAULT_ARTIFACTS_DIR
 
 
+def session_dir(session_id: str) -> Path:
+    """某个会话的产物目录。session_id 必填——产物必须能归属到会话。"""
+    if not session_id:
+        raise ValueError("session_id is required to locate the artifact directory")
+    return artifacts_dir() / session_id
+
+
 def display_path(path: Path) -> str:
-    """仓库内路径 → 相对仓库根的 POSIX 路径；仓库外 → 绝对 POSIX 路径。"""
+    """产物路径 → 相对**产物根**的 POSIX 路径（如 `sess_4d1a/exec_1_0.png`）。"""
     resolved = Path(path).resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(artifacts_dir()).as_posix()
     except ValueError:
+        # 产物根之外（例如被 LOOP_ARTIFACTS_DIR 指到别处时的相对路径计算失败）：
+        # 报绝对路径，宁可控制面 404 也不要静默给出错误路径。
         return resolved.as_posix()
 
 
@@ -103,9 +114,11 @@ class EvidenceCollector:
         self._console, self._network = [], []
         return Evidence(console=list(console), network=list(network))
 
-    async def screenshot(self, filename: str, *, full_page: bool = True) -> str | None:
-        """截图并返回契约形态的路径；失败返回 None（证据缺失不应让执行崩掉）。"""
-        path = artifacts_dir() / filename
+    async def screenshot(
+        self, session_id: str, filename: str, *, full_page: bool = True
+    ) -> str | None:
+        """截图到 `<产物根>/<session_id>/<filename>`；失败返回 None（证据缺失不应让执行崩掉）。"""
+        path = session_dir(session_id) / filename
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             await self._page.screenshot(path=str(path), full_page=full_page)
@@ -114,9 +127,11 @@ class EvidenceCollector:
         return display_path(path)
 
 
-async def capture_screenshot(page: Page, filename: str, *, full_page: bool = True) -> str | None:
-    """不持有采集器时的一次性截图。"""
-    path = artifacts_dir() / filename
+async def capture_screenshot(
+    page: Page, session_id: str, filename: str, *, full_page: bool = True
+) -> str | None:
+    """不持有采集器时的一次性截图（同样按会话分目录）。"""
+    path = session_dir(session_id) / filename
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         await page.screenshot(path=str(path), full_page=full_page)
@@ -129,9 +144,9 @@ __all__ = [
     "DEFAULT_ARTIFACTS_DIR",
     "MAX_EVENTS",
     "REPO_ROOT",
-    "V2_ROOT",
     "EvidenceCollector",
     "artifacts_dir",
     "capture_screenshot",
     "display_path",
+    "session_dir",
 ]

@@ -1,4 +1,4 @@
-# v2/ — 单闭环重构
+# 单闭环重构（分支 `v2`）
 
 ## 这是什么
 
@@ -8,7 +8,31 @@
 输入 → 规划(agentruntime) → 执行 → 报告 → 失败回灌 → 输入
 ```
 
-`v1/` 是旧项目（含 git 历史），**只作参考，不改动**。本目录是独立模块，有自己的 Go module、Python 包、前端工程与 SQLite 库。
+仓库只有两个分支，项目都在仓库根：
+
+| 分支 | 内容 |
+|---|---|
+| `v1` | 旧项目（保留原有提交历史），**只作参考，不改动**。物理副本在 `.legacy-v1/`（已 gitignore，含 2.4 GB 缓存与不可再生的 `.pgdata`） |
+| `v2` | 本分支：独立模块，有自己的 Go module、Python 包、前端工程与 SQLite 库 |
+
+两个分支**没有共同祖先**（v2 是根提交），所以不要在它们之间 merge，只用 `git checkout` 切换。
+
+## 会话（session）—— 一条目标，多轮
+
+一条闭环里"目标"会重复出现：第 1 轮失败 → 回灌 → 第 2 轮还是同一个目标。所以
+**会话是目标，run 是轮次**（`CONTRACT.md` §9）：
+
+```
+session (sess_…)  一个目标 + 它的全部轮次
+  ├── run (run_…) 第 1 轮
+  ├── run (run_…) 第 2 轮（由第 1 轮的失败回灌产生，parent_run_id 指回上一轮）
+  └── …
+```
+
+- 用例、报告、证据产物**全部绑在会话上**：证据落在 `<LOOP_ARTIFACTS_DIR>/<session_id>/`，
+  `screenshot_path` 是**相对产物根**的路径（`sess_4d1a/exec_…_0.png`）。
+- 会话**没有状态机**，列表里显示的 `status` 就是它最新一轮的状态；`usage` 是全会话累计。
+- `bsess_…` 是执行器内部的浏览器会话句柄，与领域会话 `sess_…` 不是一回事。
 
 ## 为什么重做执行器与契约
 
@@ -33,53 +57,71 @@
 ## 目录
 
 ```
-v2/
-  README.md       本文件
-  CONTRACT.md     数据契约（唯一权威，人读版）
-  plan/           重构计划与诊断（v1 结构问题的证据与分期方案，决策记录）
-  backend/        Go：agentruntime + planner 工具 + executor 桥 + report + feedback + API（SQLite）
-  worker/         Python：全新精简 Playwright 执行器（5 个 action）
-  web/            React：4 个页面
-  fixtures/       离线夹具（契约一致性用例、工具调用脚本、静态测试页）
-  data/           SQLite 文件与证据产物
+README.md        本文件
+CONTRACT.md      数据契约（唯一权威，人读版）
+test.config.json 全部测试入口的唯一配置（端口/目录/浏览器/模型）
+run_tests.py     按上面那份配置跑全部测试层
+plan/            重构计划与诊断（v1 结构问题的证据与分期方案，决策记录）
+backend/         Go：agentruntime + planner 工具 + executor 桥 + report + feedback + API（SQLite）
+worker/          Python：全新精简 Playwright 执行器（5 个 action）
+web/             React：4 个页面
+fixtures/        离线夹具（契约一致性用例、工具调用脚本、静态测试页）
+data/            SQLite 文件与证据产物（data/sessions/<session_id>/）
 ```
 
 ## 4 个页面（不多不少）
 
 | 路径 | 页面 | 作用 |
 |---|---|---|
-| `/` | 输入/会话 | 输入目标 → SSE 时间线（工具调用、观测摘要）→ 审批 |
+| `/?session=<id>` | 输入/会话 | 输入目标（= 建会话）→ 会话卡片 + 轮次表 + 当前轮 SSE 时间线 → 审批 |
 | `/executions/:id` | 执行详情 | 每步状态 + 证据（截图、console、network、URL 前后） |
 | `/runs/:id/report` | 报告 | 汇总 + 失败信号表 |
-| `/runs/:id/injection` | 错误注入 | 失败回灌候选 → 编辑 → 确认 → 开下一轮 |
+| `/runs/:id/injection` | 错误注入 | 失败回灌候选 → 编辑 → 确认 → 在**同一会话**里开下一轮 |
+
+侧边栏列的是**会话**（目标 + 最新状态 + 轮次数 + 累计用量），点进去看它的每一轮。
 
 ## 运行
 
 ```bash
 # 1) 执行器（Python，:8100）
-cd v2/worker && uv sync && uv run uvicorn loop_worker.main:app --port 8100
+cd worker && uv sync && uv run uvicorn loop_worker.main:app --port 8100
 
 # 2) 控制面（Go，:8101）
-cd v2/backend && go run ./cmd/loopd
+cd backend && go run ./cmd/loopd
 
 # 3) Web（Vite，:5174）
-cd v2/web && npm install && npm run dev
+cd web && npm install && npm run dev
 ```
 
 ### 离线验证（不调用模型、不花钱）
 
-三层，从下往上：
+**一个入口**，读 `test.config.json`：
+
+```bash
+python run_tests.py            # 全部层
+python run_tests.py --list     # 看有哪些层
+python run_tests.py --layer 契约   # 只跑名字含"契约"的层
+python run_tests.py --verify   # 各层跑完再跑真实浏览器页面验证（需先起控制面与 preview）
+```
+
+它按顺序跑这 5 层：
 
 ```bash
 # 契约一致性：Go 与 Python 共读同一份夹具，错误码必须逐字一致
-cd v2/backend && go test ./internal/contract/
-cd v2/worker && uv run python -m unittest tests.test_contract_conformance
+cd backend && go test ./internal/contract/
+cd worker && uv run python -m unittest tests.test_contract_conformance
 
 # 闭环全链路：假执行器 + 脚本模型，确定性验证 规划/审批/执行/报告/回灌/提问/改口
-cd v2/backend && go test ./internal/agentruntime/
+cd backend && go test ./...
 
 # 真执行器（需要 Playwright 浏览器）
-cd v2/worker && uv run python -m unittest discover -s tests -t .
+cd worker && uv run python -m unittest discover -s tests -t .
+
+# 前端类型与构建
+cd web && npm run build
+```
+
+端口、数据目录、浏览器路径、模型都从 `test.config.json` 读，不再散在各处。
 ```
 
 ### 不花钱地跑一次真实闭环（脚本模型 + 真浏览器）
@@ -89,16 +131,19 @@ cd v2/worker && uv run python -m unittest discover -s tests -t .
 
 ```bash
 # 站点夹具
-cd v2/worker && uv run python -m http.server 8123 --directory fixtures/site
+cd worker && uv run python -m http.server 8123 --directory fixtures/site
 
 # 执行器（另开一个终端）
-cd v2/worker && uv run uvicorn loop_worker.main:app --port 8100
+cd worker && uv run uvicorn loop_worker.main:app --port 8100
 
 # 控制面（另开一个终端；脚本见 fixtures/scripts/catalog_alpha.json）
-cd v2/backend && LOOP_LLM_SCRIPT=../fixtures/scripts/catalog_alpha.json go run ./cmd/loopd
+cd backend && LOOP_LLM_SCRIPT=../fixtures/scripts/catalog_alpha.json go run ./cmd/loopd
 ```
 
-然后 POST `/api/runs`、轮询、`POST /api/runs/{id}/approve`、看 `/api/runs/{id}/report`。
+然后 `POST /api/sessions` 建会话（含第 1 轮）、轮询、`POST /api/runs/{id}/approve`、
+看 `/api/runs/{id}/report`。回灌确认走 `POST /api/runs/{id}/feedback/confirm`，
+新轮次落在**同一个会话**里。
+
 `fixtures/scripts/catalog_alpha.json` 里的 URL 指向 `127.0.0.1:8123`，与上面第 1 步对应。
 
 ## 配置

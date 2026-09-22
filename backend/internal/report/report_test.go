@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/store"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
 )
 
 func failedStep(index int, kind contract.SignalKind, message string, unmet ...string) contract.StepResult {

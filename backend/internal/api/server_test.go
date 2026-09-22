@@ -11,13 +11,14 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/agentruntime"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/store"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/worker"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentruntime"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 const (
@@ -26,9 +27,20 @@ const (
 )
 
 // fakeExecutor 是控制面测试用的最小执行器：一页、一个链接、一步到位。
+// FailExecution 可切换 /execute 的结果，用于验证失败→回灌→同会话下一轮的链条。
 type fakeExecutor struct {
 	server       *httptest.Server
 	artifactsDir string
+
+	mu       sync.Mutex
+	failExec bool
+}
+
+// FailExecution 让下一次 /execute 返回 target_not_found 失败（步骤 1）。
+func (f *fakeExecutor) FailExecution() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failExec = true
 }
 
 func newFakeExecutor(artifactsDir string) *fakeExecutor {
@@ -76,6 +88,25 @@ func newFakeExecutor(artifactsDir string) *fakeExecutor {
 	})
 	mux.HandleFunc("POST /execute", func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC()
+		fake.mu.Lock()
+		fail := fake.failExec
+		fake.failExec = false
+		fake.mu.Unlock()
+		if fail {
+			write(w, http.StatusOK, contract.ExecutionResult{
+				ExecutionID: "exec_1",
+				Status:      contract.ExecutionFailed,
+				StartedAt:   now,
+				FinishedAt:  now.Add(1200 * time.Millisecond),
+				FinalURL:    testListURL,
+				Steps: []contract.StepResult{{
+					Index: 0, Action: contract.ActionGoto, Status: "failed", StartedAt: now,
+					URLBefore: "about:blank", URLAfter: testListURL,
+					Error: &contract.StepError{Kind: contract.SignalTargetNotFound, Message: "no such element"},
+				}},
+			})
+			return
+		}
 		write(w, http.StatusOK, contract.ExecutionResult{
 			ExecutionID: "exec_1",
 			Status:      contract.ExecutionPassed,
@@ -109,9 +140,10 @@ func testScript() []agentruntime.ScriptedStep {
 }
 
 type testServer struct {
-	server *Server
-	http   *httptest.Server
-	store  *store.Store
+	server   *Server
+	http     *httptest.Server
+	store    *store.Store
+	executor *fakeExecutor
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -142,7 +174,7 @@ func newTestServerWith(t *testing.T, executor *fakeExecutor, artifactsDir string
 	t.Cleanup(server.Close)
 	httpServer := httptest.NewServer(server.Handler())
 	t.Cleanup(httpServer.Close)
-	return &testServer{server: server, http: httpServer, store: database}
+	return &testServer{server: server, http: httpServer, store: database, executor: executor}
 }
 
 func (ts *testServer) do(t *testing.T, method, path string, body any) (int, []byte) {
@@ -210,14 +242,16 @@ func TestControlPlaneEndToEnd(t *testing.T) {
 		t.Fatalf("health: %d %s", status, raw)
 	}
 
-	status, raw := ts.do(t, http.MethodPost, "/api/runs", map[string]string{"input": "打开第一个商品"})
+	// 人输入一个目标 = 建一个会话（含第 1 轮），CONTRACT §9.1。
+	status, raw := ts.do(t, http.MethodPost, "/api/sessions", map[string]string{"goal": "打开第一个商品"})
 	if status != http.StatusAccepted {
-		t.Fatalf("create run: %d %s", status, raw)
+		t.Fatalf("create session: %d %s", status, raw)
 	}
 	created := decode[map[string]string](t, raw)
 	runID := created["run_id"]
-	if runID == "" {
-		t.Fatal("create run must return run_id")
+	sessionID := created["session_id"]
+	if runID == "" || sessionID == "" {
+		t.Fatalf("create session must return both ids, got %+v", created)
 	}
 
 	ts.waitForStatus(t, runID, store.StatusAwaitingApproval)
@@ -317,6 +351,51 @@ func TestControlPlaneEndToEnd(t *testing.T) {
 	}](t, raw)
 	if len(list.Runs) != 1 || list.Runs[0].ID != runID {
 		t.Fatalf("runs = %+v", list.Runs)
+	}
+	if list.Runs[0].SessionID == nil || *list.Runs[0].SessionID != sessionID {
+		t.Fatalf("run in the list must carry its session: %+v", list.Runs[0])
+	}
+
+	// 会话详情：会话 + 它的全部轮次（页面 1 的左侧列表用这个）。
+	status, raw = ts.do(t, http.MethodGet, "/api/sessions/"+sessionID, nil)
+	if status != http.StatusOK {
+		t.Fatalf("get session: %d %s", status, raw)
+	}
+	detail := decode[struct {
+		ID       string `json:"id"`
+		Goal     string `json:"goal"`
+		RunCount int    `json:"run_count"`
+		Status   string `json:"status"`
+		Runs     []struct {
+			ID string `json:"id"`
+		} `json:"runs"`
+	}](t, raw)
+	if detail.ID != sessionID || detail.Goal != "打开第一个商品" {
+		t.Fatalf("session detail = %+v", detail)
+	}
+	if detail.RunCount != 1 || len(detail.Runs) != 1 || detail.Runs[0].ID != runID {
+		t.Fatalf("session runs = %+v (count %d)", detail.Runs, detail.RunCount)
+	}
+	if detail.Status != store.StatusCompleted {
+		t.Fatalf("session status = %q, want %q", detail.Status, store.StatusCompleted)
+	}
+
+	status, raw = ts.do(t, http.MethodGet, "/api/sessions?limit=10", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list sessions: %d %s", status, raw)
+	}
+	sessionList := decode[struct {
+		Sessions []struct {
+			ID   string `json:"id"`
+			Goal string `json:"goal"`
+		} `json:"sessions"`
+	}](t, raw)
+	if len(sessionList.Sessions) != 1 || sessionList.Sessions[0].ID != sessionID {
+		t.Fatalf("sessions = %+v", sessionList.Sessions)
+	}
+
+	if status, _ := ts.do(t, http.MethodGet, "/api/sessions/sess_missing", nil); status != http.StatusNotFound {
+		t.Fatalf("unknown session must be 404, got %d", status)
 	}
 }
 
@@ -438,11 +517,163 @@ func TestHealthConfirmsMatchingArtifactsDir(t *testing.T) {
 // TestApproveRequiresAwaitingApproval 确认不能跳过审批直接执行。
 func TestApproveRequiresAwaitingApproval(t *testing.T) {
 	ts := newTestServer(t)
-	_, raw := ts.do(t, http.MethodPost, "/api/runs", map[string]string{"input": "打开第一个商品"})
+	_, raw := ts.do(t, http.MethodPost, "/api/sessions", map[string]string{"goal": "打开第一个商品"})
 	runID := decode[map[string]string](t, raw)["run_id"]
 
 	status, body := ts.do(t, http.MethodPost, "/api/runs/"+runID+"/approve", map[string]any{})
 	if status != http.StatusConflict {
 		t.Fatalf("approve during planning must be 409, got %d %s", status, body)
+	}
+}
+
+// 建轮次必须带 session_id：没有容器的孤儿 run 是设计上不允许的状态。
+func TestCreateRunRequiresSession(t *testing.T) {
+	ts := newTestServer(t)
+
+	status, raw := ts.do(t, http.MethodPost, "/api/runs", map[string]string{"input": "打开第一个商品"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("create run without a session must be 400, got %d %s", status, raw)
+	}
+	if decode[map[string]string](t, raw)["error"] != "session_required" {
+		t.Fatalf("error code = %s", raw)
+	}
+
+	status, raw = ts.do(t, http.MethodPost, "/api/runs", map[string]string{
+		"input": "打开第一个商品", "session_id": "sess_missing",
+	})
+	if status != http.StatusNotFound {
+		t.Fatalf("create run in an unknown session must be 404, got %d %s", status, raw)
+	}
+
+	status, raw = ts.do(t, http.MethodPost, "/api/sessions", map[string]string{"goal": "   "})
+	if status != http.StatusBadRequest {
+		t.Fatalf("an empty goal must be 400, got %d %s", status, raw)
+	}
+}
+
+// TestCreateRunContinuesTheSameSession 验证 POST /api/runs 的成功路径：
+// 新的一轮落在同一个会话里，parent_run_id 指向上一轮，会话的轮次计数随之增长。
+func TestCreateRunContinuesTheSameSession(t *testing.T) {
+	ts := newTestServer(t)
+
+	_, raw := ts.do(t, http.MethodPost, "/api/sessions", map[string]string{"goal": "打开第一个商品"})
+	created := decode[map[string]string](t, raw)
+	sessionID := created["session_id"]
+	firstRunID := created["run_id"]
+	ts.waitForStatus(t, firstRunID, store.StatusAwaitingApproval)
+
+	status, raw := ts.do(t, http.MethodPost, "/api/runs", map[string]string{
+		"input": "换个说法再试一次", "session_id": sessionID, "parent_run_id": firstRunID,
+	})
+	if status != http.StatusAccepted {
+		t.Fatalf("create run: %d %s", status, raw)
+	}
+	second := decode[map[string]string](t, raw)
+	if second["session_id"] != sessionID || second["run_id"] == "" || second["run_id"] == firstRunID {
+		t.Fatalf("create run must stay in the session, got %+v", second)
+	}
+
+	secondRun := decode[store.Run](t, func() []byte {
+		status, raw := ts.do(t, http.MethodGet, "/api/runs/"+second["run_id"], nil)
+		if status != http.StatusOK {
+			t.Fatalf("get run: %d", status)
+		}
+		return raw
+	}())
+	if secondRun.SessionID == nil || *secondRun.SessionID != sessionID {
+		t.Fatalf("the new run must carry the session id: %+v", secondRun)
+	}
+	if secondRun.ParentRunID == nil || *secondRun.ParentRunID != firstRunID {
+		t.Fatalf("the new run must point back at its parent: %+v", secondRun)
+	}
+
+	detail := decode[struct {
+		RunCount int `json:"run_count"`
+		Runs     []struct {
+			ID string `json:"id"`
+		} `json:"runs"`
+	}](t, func() []byte {
+		status, raw := ts.do(t, http.MethodGet, "/api/sessions/"+sessionID, nil)
+		if status != http.StatusOK {
+			t.Fatalf("get session: %d", status)
+		}
+		return raw
+	}())
+	if detail.RunCount != 2 || len(detail.Runs) != 2 {
+		t.Fatalf("session must have 2 rounds, got count=%d runs=%d", detail.RunCount, len(detail.Runs))
+	}
+	if detail.Runs[0].ID != firstRunID || detail.Runs[1].ID != second["run_id"] {
+		t.Fatalf("rounds must be in insertion order: %v", detail.Runs)
+	}
+}
+
+// TestFeedbackConfirmStartsARunInTheSameSession 验证回灌闭环的会话归属：
+// 失败 → 报告生成候选 → 确认后新 run 必须落在同一个会话里，parent_run_id 指回失败轮。
+func TestFeedbackConfirmStartsARunInTheSameSession(t *testing.T) {
+	ts := newTestServer(t)
+
+	_, raw := ts.do(t, http.MethodPost, "/api/sessions", map[string]string{"goal": "打开第一个商品"})
+	created := decode[map[string]string](t, raw)
+	sessionID, firstRunID := created["session_id"], created["run_id"]
+	ts.waitForStatus(t, firstRunID, store.StatusAwaitingApproval)
+
+	// 注入一次执行失败，让报告产出回灌候选。注意：case 失败 ≠ run 失败——
+	// 只要闭环走完，run 就是 completed（CONTRACT §8）；只有执行器自身故障才是 failed。
+	ts.executor.FailExecution()
+	if status, _ := ts.do(t, http.MethodPost, "/api/runs/"+firstRunID+"/approve", map[string]any{}); status != http.StatusAccepted {
+		t.Fatalf("approve: %d", status)
+	}
+	ts.waitForStatus(t, firstRunID, store.StatusCompleted)
+
+	status, raw := ts.do(t, http.MethodGet, "/api/runs/"+firstRunID+"/feedback", nil)
+	if status != http.StatusOK {
+		t.Fatalf("get feedback: %d %s", status, raw)
+	}
+	feedback := decode[struct {
+		Candidates []struct {
+			ID            int64  `json:"id"`
+			SignalKind    string `json:"signal_kind"`
+			ProposedInput string `json:"proposed_input"`
+		} `json:"candidates"`
+	}](t, raw)
+	if len(feedback.Candidates) == 0 {
+		t.Fatalf("a failed run must propose at least one feedback candidate")
+	}
+	candidate := feedback.Candidates[0]
+	if candidate.SignalKind != string(contract.SignalTargetNotFound) {
+		t.Fatalf("signal kind = %q, want target_not_found", candidate.SignalKind)
+	}
+
+	status, raw = ts.do(t, http.MethodPost, "/api/runs/"+firstRunID+"/feedback/confirm", map[string]any{
+		"candidate_id": candidate.ID, "input": candidate.ProposedInput,
+	})
+	if status != http.StatusAccepted {
+		t.Fatalf("confirm feedback: %d %s", status, raw)
+	}
+	second := decode[map[string]string](t, raw)
+	if second["session_id"] != sessionID {
+		t.Fatalf("the feedback round must stay in the same session: %+v", second)
+	}
+
+	secondRun := decode[store.Run](t, func() []byte {
+		status, raw := ts.do(t, http.MethodGet, "/api/runs/"+second["run_id"], nil)
+		if status != http.StatusOK {
+			t.Fatalf("get run: %d", status)
+		}
+		return raw
+	}())
+	if secondRun.ParentRunID == nil || *secondRun.ParentRunID != firstRunID {
+		t.Fatalf("the feedback run must point back at the failed run: %+v", secondRun)
+	}
+	if secondRun.SessionID == nil || *secondRun.SessionID != sessionID {
+		t.Fatalf("the feedback run must carry the session: %+v", secondRun)
+	}
+
+	// 候选用掉之后不能再确认第二次（status 已被标记 used）。
+	status, raw = ts.do(t, http.MethodPost, "/api/runs/"+firstRunID+"/feedback/confirm", map[string]any{
+		"candidate_id": candidate.ID, "input": candidate.ProposedInput,
+	})
+	if status == http.StatusAccepted {
+		t.Fatalf("confirming a used candidate must not be accepted: %d %s", status, raw)
 	}
 }

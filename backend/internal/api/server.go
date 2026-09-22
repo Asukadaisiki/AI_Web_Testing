@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/agentruntime"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/report"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/store"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/worker"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentruntime"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/report"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 // Server 是控制面服务。
@@ -63,6 +64,9 @@ func (s *Server) Handler() http.Handler { return s.mux }
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
+	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
+	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /api/runs", s.handleListRuns)
 	mux.HandleFunc("POST /api/runs", s.handleCreateRun)
 	mux.HandleFunc("GET /api/runs/{id}", s.handleGetRun)
@@ -169,9 +173,79 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
 }
 
+// handleCreateSession 建会话并跑它的第 1 轮。
+//
+// 这是"人输入一个目标"的唯一入口：目标属于会话，不属于某一轮（CONTRACT §9.1）。
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Goal string `json:"goal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	goal := strings.TrimSpace(body.Goal)
+	if goal == "" {
+		writeError(w, http.StatusBadRequest, "goal_required", "goal 不能为空")
+		return
+	}
+	session, run, err := s.store.CreateSession(r.Context(), goal)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create_session_failed", err.Error())
+		return
+	}
+	s.startPlanning(run)
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"session_id": session.ID,
+		"run_id":     run.ID,
+	})
+}
+
+// handleListSessions 列出会话（含轮次数、最新一轮状态、累计用量）。
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	sessions, err := s.store.ListSessions(r.Context(), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list_sessions_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+// handleGetSession 返回会话本身 + 它的全部轮次（第 1 轮在前）。
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	session, err := s.store.GetSession(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "session_not_found", "会话不存在")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_session_failed", err.Error())
+		return
+	}
+	runs, err := s.store.ListRunsBySession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list_runs_failed", err.Error())
+		return
+	}
+	// 轮次用与 /api/runs 完全相同的形状，前端只写一套解析。
+	out := make([]runResponse, 0, len(runs))
+	for _, run := range runs {
+		spent, err := s.store.GetUsage(r.Context(), run.ID)
+		if err != nil {
+			log.Printf("api: get usage for %s: %v", run.ID, err)
+		}
+		out = append(out, runResponse{Run: run, Usage: spent})
+	}
+	writeJSON(w, http.StatusOK, sessionResponse{Session: session, Runs: out})
+}
+
+// handleCreateRun 在既有会话里再开一轮（回灌链条上的下一轮）。
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Input       string  `json:"input"`
+		SessionID   string  `json:"session_id"`
 		ParentRunID *string `json:"parent_run_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -183,13 +257,24 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "input_required", "input 不能为空")
 		return
 	}
-	run, err := s.store.CreateRun(r.Context(), input, body.ParentRunID)
+	if strings.TrimSpace(body.SessionID) == "" {
+		writeError(w, http.StatusBadRequest, "session_required", "session_id 不能为空；新建目标请用 POST /api/sessions")
+		return
+	}
+	run, err := s.store.CreateRun(r.Context(), body.SessionID, input, body.ParentRunID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "session_not_found", "会话不存在")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "create_run_failed", err.Error())
 		return
 	}
 	s.startPlanning(run)
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": run.ID})
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"session_id": body.SessionID,
+		"run_id":     run.ID,
+	})
 }
 
 func (s *Server) startPlanning(run store.Run) {
@@ -217,6 +302,12 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 type runResponse struct {
 	store.Run
 	Usage usage.Usage `json:"usage"`
+}
+
+// sessionResponse 是会话 + 它的全部轮次。
+type sessionResponse struct {
+	store.Session
+	Runs []runResponse `json:"runs"`
 }
 
 func (s *Server) handleGetCase(w http.ResponseWriter, r *http.Request) {
@@ -370,18 +461,41 @@ func (s *Server) handleConfirmFeedback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "candidate_run_mismatch", "该候选不属于这个 run")
 		return
 	}
+	// 候选是一次性的：确认过（used）就不能再开新一轮，否则同一个失败会被重复回灌。
+	if candidate.Status != "pending" {
+		writeError(w, http.StatusConflict, "candidate_already_used",
+			fmt.Sprintf("该候选已被确认过（status=%s），一条候选只能开一轮", candidate.Status))
+		return
+	}
 	if err := s.store.MarkFeedbackUsed(r.Context(), candidate.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "mark_feedback_failed", err.Error())
 		return
 	}
+	// 回灌的下一轮属于**同一个会话**：会话是目标 + 它的全部轮次（CONTRACT §9.1）。
+	sessionID, err := sessionIDOfRun(run)
+	if err != nil {
+		writeError(w, http.StatusConflict, "run_without_session", err.Error())
+		return
+	}
 	parentRunID := run.ID
-	child, err := s.store.CreateRun(r.Context(), input, &parentRunID)
+	child, err := s.store.CreateRun(r.Context(), sessionID, input, &parentRunID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create_run_failed", err.Error())
 		return
 	}
 	s.startPlanning(child)
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": child.ID})
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"session_id": sessionID,
+		"run_id":     child.ID,
+	})
+}
+
+// sessionIDOfRun 取 run 的会话 id。
+func sessionIDOfRun(run store.Run) (string, error) {
+	if run.SessionID == nil || *run.SessionID == "" {
+		return "", fmt.Errorf("run %s 没有关联会话", run.ID)
+	}
+	return *run.SessionID, nil
 }
 
 // handleEvents 是 SSE：先按 seq 重放，再实时推送；断线重连带 from 即可补齐。

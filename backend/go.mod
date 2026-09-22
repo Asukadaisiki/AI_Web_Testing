@@ -1,4 +1,4 @@
-module github.com/Asukadaisiki/AI_Web_Testing/v2/backend
+module github.com/Asukadaisiki/AI_Web_Testing/backend
 
 go 1.24
 

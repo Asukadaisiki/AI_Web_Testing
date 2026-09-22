@@ -99,6 +99,8 @@ export interface RunUsage {
 /** GET /api/runs、GET /api/runs/{id} 的 run 对象。 */
 export interface Run {
   id: string;
+  /** 所属会话（CONTRACT §9.1）。旧数据可能没有。 */
+  session_id: string | null;
   input: string;
   status: RunStatus;
   parent_run_id: string | null;
@@ -106,6 +108,28 @@ export interface Run {
   updated_at: string;
   error: string | null;
   usage: RunUsage;
+}
+
+/**
+ * 会话：一个目标 + 它的全部轮次（CONTRACT §9）。
+ *
+ * `status` 是**最新一轮**的状态，只用于列表展示；会话自身没有状态机。
+ * `usage` 是这个会话全部轮次的累计用量。
+ */
+export interface Session {
+  id: string;
+  goal: string;
+  created_at: string;
+  updated_at: string;
+  run_count: number;
+  status: RunStatus | '';
+  usage: RunUsage;
+}
+
+/** GET /api/sessions/{id} 的响应：会话 + 它的全部轮次（第 1 轮在前）。 */
+export interface SessionDetail {
+  session: Session;
+  runs: Run[];
 }
 
 /** CONTRACT §2.1：Step.target（仅 click / input 需要）。 */
@@ -283,8 +307,20 @@ export interface RunsResponse {
   runs: Run[];
 }
 
-/** POST /api/runs 的响应。 */
+/** GET /api/sessions?limit=20 的响应。 */
+export interface SessionsResponse {
+  sessions: Session[];
+}
+
+/** POST /api/sessions 的响应：新会话与它的第 1 轮。 */
+export interface CreateSessionResponse {
+  session_id: string;
+  run_id: string;
+}
+
+/** POST /api/runs 的响应（在既有会话里再开一轮）。 */
 export interface CreateRunResponse {
+  session_id: string;
   run_id: string;
 }
 
@@ -298,8 +334,9 @@ export interface AnswerResponse {
   status: string;
 }
 
-/** POST /api/runs/{id}/feedback/confirm 的响应（新 run）。 */
+/** POST /api/runs/{id}/feedback/confirm 的响应（同一会话里的新 run）。 */
 export interface ConfirmFeedbackResponse {
+  session_id: string;
   run_id: string;
 }
 
@@ -435,12 +472,33 @@ export function parseRun(value: unknown): Run {
   if (!isRecord(value)) throw new ApiError(0, 'run 响应不是对象');
   return {
     id: requireString(value, 'id', 'run'),
+    session_id: optionalString(value, 'session_id'),
     input: optionalString(value, 'input') ?? '',
     status: parseRunStatus(value['status']),
     parent_run_id: optionalString(value, 'parent_run_id'),
     created_at: optionalString(value, 'created_at') ?? '',
     updated_at: optionalString(value, 'updated_at') ?? '',
     error: optionalString(value, 'error'),
+    usage: parseRunUsage(value['usage']),
+  };
+}
+
+/** 会话状态可能是空串（会话刚建出来还没轮次时后端给 ''）。 */
+function parseOptionalRunStatus(value: unknown): RunStatus | '' {
+  const raw = asString(value);
+  if (raw === null || raw === '') return '';
+  return parseRunStatus(raw);
+}
+
+export function parseSession(value: unknown): Session {
+  if (!isRecord(value)) throw new ApiError(0, 'session 响应不是对象');
+  return {
+    id: requireString(value, 'id', 'session'),
+    goal: optionalString(value, 'goal') ?? '',
+    created_at: optionalString(value, 'created_at') ?? '',
+    updated_at: optionalString(value, 'updated_at') ?? '',
+    run_count: optionalNumber(value, 'run_count') ?? 0,
+    status: parseOptionalRunStatus(value['status']),
     usage: parseRunUsage(value['usage']),
   };
 }
@@ -678,11 +736,35 @@ function postJson(path: string, body: unknown): Promise<unknown> {
 /* API 调用（与 Go 端点一一对应）                                        */
 /* ------------------------------------------------------------------ */
 
-/** POST /api/runs */
-export async function createRun(input: string): Promise<CreateRunResponse> {
-  const data = await postJson(`${API_BASE}/runs`, { input });
-  if (!isRecord(data)) throw new ApiError(0, 'createRun 响应不是对象');
-  return { run_id: requireString(data, 'run_id', 'createRun') };
+/**
+ * POST /api/sessions —— 人输入一个目标的唯一入口（CONTRACT §9.1）。
+ *
+ * 建会话的同时产出第 1 轮，所以返回两个 id。
+ */
+export async function createSession(goal: string): Promise<CreateSessionResponse> {
+  const data = await postJson(`${API_BASE}/sessions`, { goal });
+  if (!isRecord(data)) throw new ApiError(0, 'createSession 响应不是对象');
+  return {
+    session_id: requireString(data, 'session_id', 'createSession'),
+    run_id: requireString(data, 'run_id', 'createSession'),
+  };
+}
+
+/** GET /api/sessions?limit=20 */
+export async function listSessions(limit = 20): Promise<Session[]> {
+  const data = await requestJson(`${API_BASE}/sessions?limit=${String(limit)}`);
+  if (!isRecord(data)) throw new ApiError(0, 'sessions 响应不是对象');
+  return asArray(data['sessions']).map(parseSession);
+}
+
+/** GET /api/sessions/{id} —— 会话 + 它的全部轮次。 */
+export async function getSession(id: string): Promise<SessionDetail> {
+  const data = await requestJson(`${API_BASE}/sessions/${encodeURIComponent(id)}`);
+  if (!isRecord(data)) throw new ApiError(0, 'session 响应不是对象');
+  return {
+    session: parseSession(data),
+    runs: asArray(data['runs']).map(parseRun),
+  };
 }
 
 /** GET /api/runs?limit=20 */
@@ -690,6 +772,29 @@ export async function listRuns(limit = 20): Promise<Run[]> {
   const data = await requestJson(`${API_BASE}/runs?limit=${String(limit)}`);
   if (!isRecord(data)) throw new ApiError(0, 'runs 响应不是对象');
   return asArray(data['runs']).map(parseRun);
+}
+
+/**
+ * POST /api/runs —— 在既有会话里再开一轮（CONTRACT §9.1，新轮次属于同一会话）。
+ *
+ * `parentRunId` 记录轮次链条；失败回灌的正规入口是错误注入页的 confirmFeedback，
+ * 这里服务的是人想对同一目标手动重跑/换个说法再试的场景。
+ */
+export async function createRun(
+  sessionId: string,
+  input: string,
+  parentRunId: FeedbackCandidateId | null = null,
+): Promise<CreateRunResponse> {
+  const data = await postJson(`${API_BASE}/runs`, {
+    session_id: sessionId,
+    input,
+    parent_run_id: parentRunId,
+  });
+  if (!isRecord(data)) throw new ApiError(0, 'createRun 响应不是对象');
+  return {
+    session_id: requireString(data, 'session_id', 'createRun'),
+    run_id: requireString(data, 'run_id', 'createRun'),
+  };
 }
 
 /** GET /api/runs/{id} */
@@ -759,7 +864,10 @@ export async function confirmFeedback(
     input,
   });
   if (!isRecord(data)) throw new ApiError(0, 'feedback/confirm 响应不是对象');
-  return { run_id: requireString(data, 'run_id', 'feedback/confirm') };
+  return {
+    session_id: requireString(data, 'session_id', 'feedback/confirm'),
+    run_id: requireString(data, 'run_id', 'feedback/confirm'),
+  };
 }
 
 /** SSE 地址；from 为已收到的最大 seq，重连时带上以实现重放。 */
@@ -784,15 +892,19 @@ export function parseRunEvent(data: string): RunEvent | null {
 
 /**
  * 证据图片路径 → `/artifacts/<path>` URL。
- * CONTRACT §4 里 screenshot_path 形如 `v2/data/artifacts/exec_..._0.png`，
- * 而证据端点只接受 artifacts 目录下的相对路径，故取最后一个 `artifacts/` 之后的部分。
+ *
+ * CONTRACT §4/§9.2 里 screenshot_path 是**相对产物根**的路径，形如
+ * `sess_4d1a/exec_..._0.png`，控制面直接按 `/artifacts/<path>` 提供，
+ * 所以这里几乎不用加工。旧数据里出现过仓库相对路径（`.../data/artifacts/x.png`），
+ * 仍然兼容：取最后一个 `artifacts/` 之后的部分。
  */
 export function artifactUrl(path: string): string {
   if (path === '') return '';
   if (/^https?:\/\//i.test(path)) return path;
   if (path.startsWith('/artifacts/')) return path;
+  const normalized = path.split('\\').join('/').replace(/^[\\/]+/, '');
   const marker = 'artifacts/';
-  const at = path.lastIndexOf(marker);
-  const relative = at >= 0 ? path.slice(at + marker.length) : path.replace(/^[\\/]+/, '');
-  return `/artifacts/${relative.split('\\').join('/')}`;
+  const at = normalized.lastIndexOf(marker);
+  const relative = at >= 0 ? normalized.slice(at + marker.length) : normalized;
+  return `/artifacts/${relative}`;
 }

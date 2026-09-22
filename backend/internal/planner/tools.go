@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 // Tool 是暴露给模型的工具定义（OpenAI 兼容 function schema）。

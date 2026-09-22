@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/worker"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 // maxPageElements 限制回给模型的元素数量，控制 token。
@@ -22,32 +22,43 @@ const maxPageElements = 60
 
 // Planner 是一次规划过程中的 case 构建器。
 type Planner struct {
-	client    *worker.Client
+	client *worker.Client
+	// sessionID 是领域会话（CONTRACT §9）：观测截图按它落目录。
 	sessionID string
-	goal      string
-	baseURL   string
+	// browserSessionID 是执行器里的浏览器上下文句柄，用完即弃，与 sessionID 无关。
+	browserSessionID string
+	goal             string
+	baseURL          string
 
 	observation contract.Observation
 	hasPage     bool
 	steps       []contract.Step
 }
 
-// New 开一个作者态浏览器会话。
-func New(ctx context.Context, client *worker.Client, goal string) (*Planner, error) {
-	sessionID, err := client.OpenSession(ctx)
+// New 开一个作者态浏览器会话，并把它绑到领域会话上（决定产物落哪个目录）。
+func New(ctx context.Context, client *worker.Client, sessionID, goal string) (*Planner, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("planning requires a session id")
+	}
+	browserSessionID, err := client.OpenSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("open authoring session: %w", err)
 	}
-	return &Planner{client: client, sessionID: sessionID, goal: goal}, nil
+	return &Planner{
+		client:           client,
+		sessionID:        sessionID,
+		browserSessionID: browserSessionID,
+		goal:             goal,
+	}, nil
 }
 
-// Close 关闭作者态会话。
+// Close 关闭作者态浏览器会话。
 func (p *Planner) Close(ctx context.Context) {
-	if p.sessionID == "" {
+	if p.browserSessionID == "" {
 		return
 	}
-	_ = p.client.CloseSession(ctx, p.sessionID)
-	p.sessionID = ""
+	_ = p.client.CloseSession(ctx, p.browserSessionID)
+	p.browserSessionID = ""
 }
 
 // Steps 返回当前已构建的步骤。
@@ -76,15 +87,17 @@ func (p *Planner) Build(name string) (contract.Case, error) {
 }
 
 // DryRun 在全新上下文里跑一遍，作为"生成的就是对的"的证明。
+//
+// 干跑的截图同样落进本次会话的产物目录——它也是这个会话的证据。
 func (p *Planner) DryRun(ctx context.Context, artifact contract.Case) (contract.ExecutionResult, error) {
-	return p.client.Execute(ctx, artifact)
+	return p.client.Execute(ctx, p.sessionID, artifact)
 }
 
 func (p *Planner) openPage(ctx context.Context, url, intent string) (Result, error) {
 	if !isAbsoluteURL(url) {
 		return failure("url_not_absolute", fmt.Sprintf("open_page requires an absolute url, got %q", url)), nil
 	}
-	observation, err := p.client.Navigate(ctx, p.sessionID, url)
+	observation, err := p.client.Navigate(ctx, p.browserSessionID, url)
 	if err != nil {
 		return workerFailure("navigate_failed", err), nil
 	}
@@ -160,7 +173,7 @@ func (p *Planner) act(
 	if value != nil {
 		request.Value = *value
 	}
-	observation, err := p.client.Act(ctx, p.sessionID, request)
+	observation, err := p.client.Act(ctx, p.browserSessionID, request)
 	if err != nil {
 		return workerFailure("action_failed", err), nil
 	}

@@ -17,10 +17,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// schema 是全部表定义。SQLite 单库，不需要增量迁移框架。
+// schema 是全部表定义。SQLite 单库，不需要增量迁移框架；
+// 但给已存在的库补列由 ensureColumn 负责（CREATE TABLE IF NOT EXISTS 不会补列）。
 const schema = `
+CREATE TABLE IF NOT EXISTS sessions (
+  id         TEXT PRIMARY KEY,
+  goal       TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS runs (
   id            TEXT PRIMARY KEY,
+  session_id    TEXT,
   input         TEXT NOT NULL,
   status        TEXT NOT NULL,
   parent_run_id TEXT,
@@ -39,6 +47,7 @@ CREATE TABLE IF NOT EXISTS run_events (
 );
 CREATE TABLE IF NOT EXISTS cases (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id   TEXT,
   run_id       TEXT NOT NULL UNIQUE,
   content_hash TEXT NOT NULL,
   payload_json TEXT NOT NULL,
@@ -104,6 +113,53 @@ CREATE INDEX IF NOT EXISTS idx_signals_run ON report_signals (run_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_run ON feedback_candidates (run_id);
 `
 
+// sessionIndexes 依赖 session_id 列，所以必须在 ensureColumn 之后建。
+//
+// 放在 schema 里会在旧库上炸：旧库的 runs 还没有 session_id，
+// 而 CREATE INDEX 会先于补列执行，直接报 "no such column: session_id"。
+const sessionIndexes = `
+CREATE INDEX IF NOT EXISTS idx_runs_session ON runs (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cases_session ON cases (session_id);
+`
+
+// ensureColumn 给已存在的表补一列；列已存在时是空操作。
+//
+// 为什么需要它：`CREATE TABLE IF NOT EXISTS` 对已存在的库不会补列，
+// 而 session_id 是给 runs / cases 加的真实列（不是独立表能替代的）。
+// SQLite 没有 `ADD COLUMN IF NOT EXISTS`，所以先用 PRAGMA 查一遍。
+func ensureColumn(db *sql.DB, table, column, definition string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("read table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			ctype     string
+			notNull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
+			return fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read table_info(%s): %w", table, err)
+	}
+	if _, err := db.Exec(
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition),
+	); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
 // Store 是 SQLite 存储。
 type Store struct {
 	db     *sql.DB
@@ -136,6 +192,21 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	// 已存在的库：CREATE TABLE IF NOT EXISTS 不会补列，这里补上。
+	for _, migration := range []struct{ table, column, definition string }{
+		{"runs", "session_id", "TEXT"},
+		{"cases", "session_id", "TEXT"},
+	} {
+		if err := ensureColumn(db, migration.table, migration.column, migration.definition); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	// 补列之后才建依赖它的索引。
+	if _, err := db.Exec(sessionIndexes); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply session indexes: %w", err)
 	}
 	return &Store{db: db, broker: NewBroker()}, nil
 }

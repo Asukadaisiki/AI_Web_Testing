@@ -1,7 +1,7 @@
 """HTTP API 形状（Go 侧依赖）—— 用 httpx ASGITransport 直接打 app，不占端口。
 
 覆盖：`/health`、会话生命周期（create → navigate → act → delete）、404 session_not_found、
-`/execute` 的 400（契约非法 / body 形状非法）与 200（跑通一个本地 case）。
+`/execute` 的 400（契约非法 / body 形状非法 / 缺 session_id）与 200（跑通一个本地 case）。
 """
 
 from __future__ import annotations
@@ -31,8 +31,11 @@ from case_builder import (  # noqa: E402
 from local_site import LocalSite  # noqa: E402
 from pw_support import run  # noqa: E402
 
-from loop_worker.evidence import artifacts_dir  # noqa: E402
+from loop_worker.evidence import artifacts_dir, session_dir  # noqa: E402
 from loop_worker.main import create_app  # noqa: E402
+
+#: 领域会话 id：执行器据此把证据落到 <产物根>/<session_id>/（CONTRACT §9.2）。
+SESSION = "sess_test"
 
 
 @contextlib.asynccontextmanager
@@ -102,7 +105,9 @@ class HealthAndErrorsTest(unittest.TestCase):
                     )
                 ]
             )
-            response = await client.post("/execute", json={"case": case})
+            response = await client.post(
+                "/execute", json={"session_id": SESSION, "case": case}
+            )
             self.assertEqual(response.status_code, 400)
             body = response.json()
             self.assertEqual(body["error"], "case_not_goto_first")
@@ -117,6 +122,16 @@ class HealthAndErrorsTest(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
             self.assertEqual(response.json()["error"], "case_invalid_json")
 
+    def test_execute_requires_a_session_id(self) -> None:
+        run(self._execute_requires_a_session_id())
+
+    async def _execute_requires_a_session_id(self) -> None:
+        # 没有会话就没法归属产物，所以 body 里必须带 session_id（CONTRACT §9.2）。
+        async with api_client() as client:
+            response = await client.post("/execute", json={"case": {}})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("session_id", response.text)
+
 
 class SessionLifecycleTest(unittest.TestCase):
     """真实浏览器：create → navigate → act → delete。"""
@@ -128,10 +143,12 @@ class SessionLifecycleTest(unittest.TestCase):
         with LocalSite() as site:
             index_url = site.url("index.html")
             async with api_client() as client:
-                created = await client.post("/sessions")
+                created = await client.post("/sessions", json={"session_id": SESSION})
                 self.assertEqual(created.status_code, 200)
-                session_id = created.json()["session_id"]
-                self.assertTrue(session_id.startswith("sess_"), session_id)
+                browser_session_id = created.json()["session_id"]
+                # 返回的是浏览器会话句柄，不是领域会话（CONTRACT §9.3）。
+                self.assertTrue(browser_session_id.startswith("bsess_"), browser_session_id)
+                session_id = browser_session_id
 
                 navigated = await client.post(
                     f"/sessions/{session_id}/navigate", json={"url": index_url}
@@ -143,6 +160,17 @@ class SessionLifecycleTest(unittest.TestCase):
                 self.assertEqual(observation["url"], index_url)
                 self.assertIn("Demo Catalog", observation["title"])
                 self.assertTrue(observation["screenshot_path"])
+                # 观测截图必须落在本会话的目录里（CONTRACT §9.2）。
+                self.assertTrue(
+                    observation["screenshot_path"].startswith(f"{SESSION}/"),
+                    observation["screenshot_path"],
+                )
+                self.assertTrue(
+                    (artifacts_dir() / observation["screenshot_path"]).is_relative_to(
+                        session_dir(SESSION)
+                    )
+                )
+                self.assertEqual(observation["browser_session_id"], browser_session_id)
                 self.assertTrue(observation["elements"])
                 for element in observation["elements"]:
                     self.assertTrue(element["locators"])
@@ -227,7 +255,9 @@ class SessionLifecycleTest(unittest.TestCase):
                 base_url=site.base_url,
             )
             async with api_client() as client:
-                response = await client.post("/execute", json={"case": case})
+                response = await client.post(
+                    "/execute", json={"session_id": SESSION, "case": case}
+                )
                 self.assertEqual(response.status_code, 200, response.text)
                 result = response.json()
                 self.assertEqual(result["status"], "passed", result)
@@ -238,6 +268,11 @@ class SessionLifecycleTest(unittest.TestCase):
                 for step in result["steps"]:
                     self.assertEqual(step["status"], "passed")
                     self.assertTrue(step["evidence"]["screenshot_path"])
+                    # 执行期每步截图也按会话分目录。
+                    self.assertTrue(
+                        step["evidence"]["screenshot_path"].startswith(f"{SESSION}/"),
+                        step["evidence"]["screenshot_path"],
+                    )
                     self.assertIsInstance(step["evidence"]["console"], list)
                     self.assertIsInstance(step["evidence"]["network"], list)
                     self.assertIsNone(step["error"])

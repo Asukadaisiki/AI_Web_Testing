@@ -24,9 +24,10 @@ const (
 // ErrNotFound 表示记录不存在。
 var ErrNotFound = errors.New("not found")
 
-// Run 是一次闭环执行。
+// Run 是一次闭环执行，属于某个会话（§9）。
 type Run struct {
 	ID          string    `json:"id"`
+	SessionID   *string   `json:"session_id"`
 	Input       string    `json:"input"`
 	Status      string    `json:"status"`
 	ParentRunID *string   `json:"parent_run_id"`
@@ -35,8 +36,15 @@ type Run struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// CreateRun 新建一次 run。
-func (s *Store) CreateRun(ctx context.Context, input string, parentRunID *string) (Run, error) {
+// execer 让「建会话 + 建首轮 run」能在一个事务里复用同一段插入逻辑。
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// insertRun 插入一轮 run。
+func insertRun(
+	ctx context.Context, db execer, sessionID, input string, parentRunID *string,
+) (Run, error) {
 	now := time.Now().UTC()
 	run := Run{
 		ID:          NewID("run"),
@@ -46,25 +54,71 @@ func (s *Store) CreateRun(ctx context.Context, input string, parentRunID *string
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if _, err := s.db.ExecContext(
+	if sessionID != "" {
+		value := sessionID
+		run.SessionID = &value
+	}
+	if _, err := db.ExecContext(
 		ctx,
-		`INSERT INTO runs (id, input, status, parent_run_id, error, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, NULL, ?, ?)`,
-		run.ID, run.Input, run.Status, run.ParentRunID, formatTime(now), formatTime(now),
+		`INSERT INTO runs (id, session_id, input, status, parent_run_id, error, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+		run.ID, run.SessionID, run.Input, run.Status, run.ParentRunID,
+		formatTime(now), formatTime(now),
 	); err != nil {
 		return Run{}, fmt.Errorf("insert run: %w", err)
 	}
 	return run, nil
 }
 
+// CreateRun 在既有会话里新建一轮 run（回灌链条上的下一轮）。
+func (s *Store) CreateRun(
+	ctx context.Context, sessionID, input string, parentRunID *string,
+) (Run, error) {
+	if sessionID == "" {
+		return Run{}, fmt.Errorf("create run: session_id is required")
+	}
+	if _, err := s.GetSession(ctx, sessionID); err != nil {
+		return Run{}, err
+	}
+	return insertRun(ctx, s.db, sessionID, input, parentRunID)
+}
+
 // GetRun 读取一次 run。
 func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, input, status, parent_run_id, error, created_at, updated_at FROM runs WHERE id = ?`,
+		`SELECT id, session_id, input, status, parent_run_id, error, created_at, updated_at
+		 FROM runs WHERE id = ?`,
 		id,
 	)
 	return scanRun(row)
+}
+
+// ListRunsBySession 按轮次顺序列出一个会话的全部轮次（第 1 轮在前）。
+//
+// 用 rowid 而不是 id 做 tie-break：同一毫秒内建出来的两轮 created_at 可能逐字相同
+// （Windows 时钟精度约 15ms），而 id 是随机 hex，排序会变成随机的。
+// rowid 是插入顺序，正好就是轮次顺序。
+func (s *Store) ListRunsBySession(ctx context.Context, sessionID string) ([]Run, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, session_id, input, status, parent_run_id, error, created_at, updated_at
+		 FROM runs WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list runs by session: %w", err)
+	}
+	defer rows.Close()
+	runs := make([]Run, 0, 4)
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
 }
 
 // UpdateRunStatus 更新状态与错误信息。
@@ -94,7 +148,7 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]Run, error) {
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, input, status, parent_run_id, error, created_at, updated_at
+		`SELECT id, session_id, input, status, parent_run_id, error, created_at, updated_at
 		 FROM runs ORDER BY created_at DESC LIMIT ?`,
 		limit,
 	)
@@ -120,18 +174,23 @@ type rowScanner interface {
 func scanRun(row rowScanner) (Run, error) {
 	var (
 		run         Run
+		sessionID   sql.NullString
 		parentRunID sql.NullString
 		runErr      sql.NullString
 		createdAt   string
 		updatedAt   string
 	)
 	if err := row.Scan(
-		&run.ID, &run.Input, &run.Status, &parentRunID, &runErr, &createdAt, &updatedAt,
+		&run.ID, &sessionID, &run.Input, &run.Status, &parentRunID, &runErr, &createdAt, &updatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Run{}, ErrNotFound
 		}
 		return Run{}, fmt.Errorf("scan run: %w", err)
+	}
+	if sessionID.Valid {
+		value := sessionID.String
+		run.SessionID = &value
 	}
 	if parentRunID.Valid {
 		value := parentRunID.String

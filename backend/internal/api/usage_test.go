@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
 // runUsageView 是 GET /api/runs/{id} 里我们关心的部分。
@@ -20,9 +20,9 @@ func TestGetRunCarriesModelUsage(t *testing.T) {
 	ctx := context.Background()
 	ts := newTestServer(t)
 
-	run, err := ts.store.CreateRun(ctx, "目标", nil)
+	_, run, err := ts.store.CreateSession(ctx, "目标")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	if _, err := ts.store.AddUsage(ctx, run.ID, usage.Call(1200, 300, 80, 0)); err != nil {
 		t.Fatalf("add usage: %v", err)
@@ -46,9 +46,9 @@ func TestListRunsCarriesTheSameUsageShape(t *testing.T) {
 	ctx := context.Background()
 	ts := newTestServer(t)
 
-	run, err := ts.store.CreateRun(ctx, "目标", nil)
+	_, run, err := ts.store.CreateSession(ctx, "目标")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	if _, err := ts.store.AddUsage(ctx, run.ID, usage.Call(700, 70, 0, 30)); err != nil {
 		t.Fatalf("add usage: %v", err)
@@ -75,9 +75,9 @@ func TestGetRunAlwaysReturnsAUsageObject(t *testing.T) {
 	ctx := context.Background()
 	ts := newTestServer(t)
 
-	run, err := ts.store.CreateRun(ctx, "目标", nil)
+	_, run, err := ts.store.CreateSession(ctx, "目标")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	status, raw := ts.do(t, http.MethodGet, "/api/runs/"+run.ID, nil)
 	if status != http.StatusOK {

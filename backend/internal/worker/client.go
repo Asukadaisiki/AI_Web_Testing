@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 // Client 是执行器客户端。
@@ -67,10 +67,13 @@ func (c *Client) Health(ctx context.Context) (Health, error) {
 	return payload, nil
 }
 
-// OpenSession 开一个作者态会话。
-func (c *Client) OpenSession(ctx context.Context) (string, error) {
+// OpenSession 开一个作者态浏览器会话。
+//
+// sessionID 是领域会话（CONTRACT §9）：执行器据此把观测截图落进该会话的产物目录。
+func (c *Client) OpenSession(ctx context.Context, sessionID string) (string, error) {
 	var session contract.Session
-	if err := c.do(ctx, http.MethodPost, "/sessions", map[string]any{}, &session); err != nil {
+	body := contract.OpenSessionRequest{SessionID: sessionID}
+	if err := c.do(ctx, http.MethodPost, "/sessions", body, &session); err != nil {
 		return "", err
 	}
 	if session.SessionID == "" {
@@ -106,11 +109,13 @@ func (c *Client) Act(
 }
 
 // Execute 在全新上下文里执行整个 case。
+//
+// sessionID 是领域会话：每步截图的路径形如 `<session_id>/exec_..._0.png`（CONTRACT §9.2）。
 func (c *Client) Execute(
-	ctx context.Context, artifact contract.Case,
+	ctx context.Context, sessionID string, artifact contract.Case,
 ) (contract.ExecutionResult, error) {
 	var result contract.ExecutionResult
-	body := contract.ExecuteRequest{Case: artifact}
+	body := contract.ExecuteRequest{SessionID: sessionID, Case: artifact}
 	if err := c.do(ctx, http.MethodPost, "/execute", body, &result); err != nil {
 		return contract.ExecutionResult{}, err
 	}

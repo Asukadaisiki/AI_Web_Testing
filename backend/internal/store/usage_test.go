@@ -5,15 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
 func TestUsageAccumulatesAndReadsBack(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	run, err := store.CreateRun(ctx, "目标", nil)
+	_, run, err := store.CreateSession(ctx, "目标")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 
 	// 未知 run 读出来是零值，不是错误——页面在第一次调用之前就会来读。
@@ -57,8 +57,8 @@ func TestUsageAccumulatesAndReadsBack(t *testing.T) {
 func TestUsageIsPerRun(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	first, _ := store.CreateRun(ctx, "第一个", nil)
-	second, _ := store.CreateRun(ctx, "第二个", nil)
+	_, first, _ := store.CreateSession(ctx, "第一个")
+	_, second, _ := store.CreateSession(ctx, "第二个")
 
 	if _, err := store.AddUsage(ctx, first.ID, usage.Call(500, 50, 0, 0)); err != nil {
 		t.Fatalf("add usage: %v", err)
@@ -81,9 +81,9 @@ func TestOpenAddsUsageTableToAnExistingDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	run, err := first.CreateRun(ctx, "旧库里的目标", nil)
+	_, run, err := first.CreateSession(ctx, "旧库里的目标")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	if _, err := first.AddUsage(ctx, run.ID, usage.Call(10, 1, 0, 0)); err != nil {
 		t.Fatalf("add usage: %v", err)

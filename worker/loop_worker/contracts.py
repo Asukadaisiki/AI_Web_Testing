@@ -483,10 +483,21 @@ class Observation(BaseModel):
 
     observation_id: str
     page_state_id: str
+    #: 执行器内部的浏览器上下文句柄（`bsess_...`），用完即弃。
+    #: 与领域会话（`sess_...`，CONTRACT §9）无关，不得混用。
+    browser_session_id: str | None = None
     url: str
     title: str
     elements: list[ElementObservation] = Field(default_factory=list)
     screenshot_path: str | None = None
+
+
+class OpenSessionRequest(BaseModel):
+    """开一个浏览器会话，并声明它服务的领域会话（决定证据落哪个目录）。"""
+
+    model_config = _CONTRACT_CONFIG
+
+    session_id: str = Field(min_length=1)
 
 
 # --------------------------------------------------------------------------------------
@@ -585,6 +596,8 @@ class ActRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     model_config = _CONTRACT_CONFIG
 
+    #: 必填：每步截图要落进 `<产物根>/<session_id>/`（CONTRACT §9.2）。
+    session_id: str = Field(min_length=1)
     case: dict[str, Any]
 
 

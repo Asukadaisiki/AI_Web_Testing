@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -24,12 +24,15 @@ func TestRunLifecycleAndEventSequence(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 
-	run, err := store.CreateRun(ctx, "check the cart", nil)
+	session, run, err := store.CreateSession(ctx, "check the cart")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	if run.Status != StatusPlanning {
 		t.Fatalf("status = %q", run.Status)
+	}
+	if run.SessionID == nil || *run.SessionID != session.ID {
+		t.Fatalf("run.SessionID = %v, want %q", run.SessionID, session.ID)
 	}
 
 	for index := 1; index <= 3; index++ {
@@ -74,9 +77,9 @@ func TestCaseArtifactApprovalAndExecution(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 
-	run, err := store.CreateRun(ctx, "check the cart", nil)
+	session, run, err := store.CreateSession(ctx, "check the cart")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 
 	caseValue, err := contract.DeriveGotoStep(0, "open the list", "https://shop.test/products")
@@ -94,12 +97,19 @@ func TestCaseArtifactApprovalAndExecution(t *testing.T) {
 		t.Fatalf("validate: %v", err)
 	}
 
-	saved, err := store.SaveCase(ctx, run.ID, artifact)
+	saved, err := store.SaveCase(ctx, session.ID, run.ID, artifact)
 	if err != nil {
 		t.Fatalf("save case: %v", err)
 	}
 	if saved.ContentHash != artifact.ContentHash() {
 		t.Fatalf("hash = %q, want %q", saved.ContentHash, artifact.ContentHash())
+	}
+	// case 必须同时挂在会话与轮次上（CONTRACT §9.1）。
+	if saved.SessionID == nil || *saved.SessionID != session.ID {
+		t.Fatalf("case.SessionID = %v, want %q", saved.SessionID, session.ID)
+	}
+	if saved.RunID != run.ID {
+		t.Fatalf("case.RunID = %q, want %q", saved.RunID, run.ID)
 	}
 
 	// 落库形态必须能直接过契约校验：不存在"第二副身子"。
@@ -157,9 +167,9 @@ func TestSignalsAndFeedbackRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 
-	run, err := store.CreateRun(ctx, "check the cart", nil)
+	_, run, err := store.CreateSession(ctx, "check the cart")
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	signals := []Signal{
 		{RunID: run.ID, ExecutionID: "exec_test", StepIndex: 2, Kind: string(contract.SignalTargetNotFound), Message: "not found"},

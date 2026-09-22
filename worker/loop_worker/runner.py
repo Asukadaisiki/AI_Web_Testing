@@ -47,9 +47,15 @@ async def run_case(
     case: dict[str, Any] | Case,
     *,
     browser: Browser,
+    session_id: str,
     execution_id: str | None = None,
 ) -> ExecutionResult:
-    """执行整个 case，返回 ExecutionResult（永不抛业务异常）。"""
+    """执行整个 case，返回 ExecutionResult（永不抛业务异常）。
+
+    `session_id` 是领域会话：每步截图落进 `<产物根>/<session_id>/`（CONTRACT §9.2）。
+    """
+    if not session_id:
+        raise ValueError("session_id is required to run a case")
     execution_id = execution_id or new_id("exec")
     started_at = utc_now_iso()
 
@@ -79,7 +85,7 @@ async def run_case(
 
     try:
         for step in validated.steps:
-            result = await _run_step(page, collector, step, execution_id)
+            result = await _run_step(page, collector, step, execution_id, session_id)
             step_results.append(result)
             final_url = result.url_after
             if result.status == "failed":
@@ -118,6 +124,7 @@ async def _run_step(
     collector: EvidenceCollector,
     step: Step,
     execution_id: str,
+    session_id: str,
 ) -> StepResult:
     url_before = page.url
     started_at = utc_now_iso()
@@ -174,7 +181,9 @@ async def _run_step(
                 kind=SIGNAL_CONDITION_UNMET, message=f"postcondition unmet: {summary}"
             )
 
-    screenshot_path = await collector.screenshot(f"{execution_id}_{step.index}.png")
+    screenshot_path = await collector.screenshot(
+        session_id, f"{execution_id}_{step.index}.png"
+    )
     snapshot = collector.snapshot()
     duration_ms = int((time.perf_counter() - clock) * 1000)
 

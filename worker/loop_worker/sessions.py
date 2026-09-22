@@ -51,9 +51,20 @@ def ensure_browsers_path() -> None:
 
 
 class WorkerSession:
-    """一个会话 = 一个 BrowserContext + 一个 Page + 一个证据采集器。"""
+    """一个浏览器会话 = 一个 BrowserContext + 一个 Page + 一个证据采集器。
 
-    def __init__(self, session_id: str, context: BrowserContext, page: Page) -> None:
+    `browser_session_id` 是这个临时句柄自己的 id（`bsess_...`）；
+    `session_id` 是它服务的**领域会话**（`sess_...`），决定证据落哪个目录（CONTRACT §9）。
+    """
+
+    def __init__(
+        self,
+        browser_session_id: str,
+        session_id: str,
+        context: BrowserContext,
+        page: Page,
+    ) -> None:
+        self.browser_session_id = browser_session_id
         self.session_id = session_id
         self.context = context
         self.page = page
@@ -116,15 +127,18 @@ class SessionManager:
 
     # ---- 会话表 ----
 
-    async def create(self) -> WorkerSession:
+    async def create(self, session_id: str) -> WorkerSession:
+        """开一个浏览器会话，并把它绑到领域会话上（决定证据落哪个目录）。"""
+        if not session_id:
+            raise ValueError("session_id is required to open a browser session")
         browser = await self.browser()
         context = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await context.new_page()
         # 兜底超时：不让任何漏传 timeout 的 Playwright 调用吃默认的 30s
         page.set_default_timeout(DEFAULT_STEP_TIMEOUT_MS)
         page.set_default_navigation_timeout(DEFAULT_STEP_TIMEOUT_MS)
-        session = WorkerSession(new_id("sess"), context, page)
-        self._sessions[session.session_id] = session
+        session = WorkerSession(new_id("bsess"), session_id, context, page)
+        self._sessions[session.browser_session_id] = session
         return session
 
     def get(self, session_id: str) -> WorkerSession:
@@ -159,11 +173,14 @@ class SessionManager:
     async def observe(self, session: WorkerSession) -> Observation:
         """会话观测：截图 → 采集 elements（定位器就地验证）。"""
         observation_id = new_id("obs")
-        screenshot_path = await capture_screenshot(session.page, f"{observation_id}.png")
+        screenshot_path = await capture_screenshot(
+            session.page, session.session_id, f"{observation_id}.png"
+        )
         return await observe_page(
             session.page,
             screenshot_path=screenshot_path,
             observation_id=observation_id,
+            browser_session_id=session.browser_session_id,
         )
 
 

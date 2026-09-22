@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
 // ScriptedStep 是离线脚本的一步。

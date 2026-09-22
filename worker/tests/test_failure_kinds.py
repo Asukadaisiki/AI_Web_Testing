@@ -92,7 +92,7 @@ class FailureKindTest(unittest.TestCase):
         async def scenario():
             async with pw_support.launched_browser() as browser:
                 # 端口 1 上不会有任何东西在听：这是硬失败，不是超时。
-                return await run_case(goto_case("http://127.0.0.1:1/", 3000), browser=browser)
+                return await run_case(goto_case("http://127.0.0.1:1/", 3000), browser=browser, session_id="sess_test")
 
         result = pw_support.run(scenario())
         self.assertEqual(result.status, "failed")
@@ -109,7 +109,7 @@ class FailureKindTest(unittest.TestCase):
 
             async def scenario():
                 async with pw_support.launched_browser() as browser:
-                    return await run_case(goto_case(site.url, 400), browser=browser)
+                    return await run_case(goto_case(site.url, 400), browser=browser, session_id="sess_test")
 
             result = pw_support.run(scenario())
 

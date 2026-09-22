@@ -2,12 +2,15 @@
 
 | 方法 | 路径 | body | 返回 |
 |---|---|---|---|
-| GET | `/health` | — | `{"status":"ok"}` |
-| POST | `/sessions` | — | `{"session_id":"sess_..."}` |
+| GET | `/health` | — | `{"status":"ok","artifacts_dir":"..."}` |
+| POST | `/sessions` | `{"session_id":"sess_..."}` | `{"session_id":"bsess_..."}` |
 | POST | `/sessions/{id}/navigate` | `{"url":"..."}` | Observation |
 | POST | `/sessions/{id}/act` | `{"action":"click"|"input","locator":{...},"value":"..."}` | Observation |
 | DELETE | `/sessions/{id}` | — | `{"closed":true}` |
-| POST | `/execute` | `{"case":{...}}` | ExecutionResult |
+| POST | `/execute` | `{"session_id":"sess_...","case":{...}}` | ExecutionResult |
+
+路径里的 `{id}` 是**浏览器会话**句柄（`bsess_...`）；body 里的 `session_id` 是**领域会话**
+（`sess_...`，CONTRACT §9）。两者不是一回事：前者用完即弃，后者决定证据落哪个目录。
 
 错误响应统一 `{"error":"<code>","detail":"<人类可读>"}`：会话不存在 404，case 非法 400
 （`error` 用 `CaseInvalid.code`，与 Go 侧 `internal/contract` 的错误码逐字一致），
@@ -34,6 +37,7 @@ from .contracts import (
     ExecutionResult,
     NavigateRequest,
     Observation,
+    OpenSessionRequest,
     validate_case,
 )
 from .evidence import artifacts_dir
@@ -104,9 +108,10 @@ def create_app() -> FastAPI:
         return {"status": "ok", "artifacts_dir": str(artifacts_dir())}
 
     @app.post("/sessions")
-    async def create_session() -> dict[str, str]:
-        session = await manager.create()
-        return {"session_id": session.session_id}
+    async def create_session(body: OpenSessionRequest) -> dict[str, str]:
+        # 返回的是浏览器会话句柄；body.session_id（领域会话）记在会话上，决定证据目录。
+        session = await manager.create(body.session_id)
+        return {"session_id": session.browser_session_id}
 
     @app.post("/sessions/{session_id}/navigate")
     async def navigate(session_id: str, body: NavigateRequest) -> Observation:
@@ -126,7 +131,7 @@ def create_app() -> FastAPI:
         # 先校验：契约非法一律 400，且不浪费一次浏览器启动
         case = validate_case(body.case)
         browser = await manager.browser()
-        return await run_case(case, browser=browser)
+        return await run_case(case, browser=browser, session_id=body.session_id)
 
     return app
 

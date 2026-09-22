@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/agentruntime"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/api"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/planner"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/store"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/worker"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentruntime"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/api"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 func main() {
@@ -25,9 +25,10 @@ func main() {
 func run() error {
 	root := findProjectRoot()
 	dataDir := envOr("LOOP_DATA_DIR", filepath.Join(root, "data"))
-	// 证据目录默认与执行器的默认值一致（v2/data/artifacts），否则开箱即用时
-	// 控制面提供的截图会全部 404。两边都可以用 LOOP_ARTIFACTS_DIR 覆盖。
-	artifactsDir := envOr("LOOP_ARTIFACTS_DIR", filepath.Join(root, "data", "artifacts"))
+	// 证据目录按会话分：<根>/data/sessions/<session_id>/<文件>（CONTRACT §9.2）。
+	// 默认值必须与执行器的默认值一致，否则开箱即用时控制面提供的截图会全部 404。
+	// 两边都可以用 LOOP_ARTIFACTS_DIR 覆盖。
+	artifactsDir := envOr("LOOP_ARTIFACTS_DIR", filepath.Join(root, "data", "sessions"))
 	dbPath := envOr("LOOP_DB_PATH", filepath.Join(dataDir, "loop.db"))
 	addr := envOr("LOOP_ADDR", "127.0.0.1:8101")
 	workerURL := envOr("LOOP_WORKER_URL", "http://127.0.0.1:8100")

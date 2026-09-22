@@ -3,14 +3,17 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   approveRun,
   answerRun,
+  createSession,
   createRun,
   errorMessage,
   getRun,
   getRunCase,
   getRunExecution,
+  getSession,
   lastEventOfType,
   payloadString,
   type Run,
+  type SessionDetail,
 } from '../api';
 import { CaseStepsTable } from '../components/CaseStepsTable';
 import { StatusBadge } from '../components/StatusBadge';
@@ -19,30 +22,58 @@ import { describeEvent, eventLabel } from '../eventView';
 import { useApi } from '../hooks/useApi';
 import { useRunEvents } from '../hooks/useRunEvents';
 
-/** 页面 1：输入 / 会话（`/`，run 上下文用 `?run=<run_id>` 指定）。 */
+/**
+ * 页面 1：输入 / 会话。
+ *
+ * URL 形态：`/?session=<session_id>`，可选 `&run=<run_id>` 指定会话里的某一轮。
+ * 会话是目标 + 它的全部轮次（CONTRACT §9），所以这里既显示会话本身（目标、轮次数、
+ * 累计用量），也显示它的每一轮，以及当前选中那一轮的状态与时间线。
+ */
 export default function InputSessionPage(): JSX.Element {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const runId = searchParams.get('run');
+  const sessionParam = searchParams.get('session');
+  const runParam = searchParams.get('run');
 
   const [goal, setGoal] = useState('');
   const [answerText, setAnswerText] = useState('');
-  const [busy, setBusy] = useState<'create' | 'approve' | 'answer' | null>(null);
+  const [retryText, setRetryText] = useState('');
+  const [busy, setBusy] = useState<'create' | 'approve' | 'answer' | 'retry' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const run = useApi<Run | null>(
-    () => (runId === null ? Promise.resolve(null) : getRun(runId)),
-    [runId],
+  // 只给了 run 参数（例如从报告页的链接进来）时，先从 run 反查它的会话。
+  const seedRun = useApi<Run | null>(
+    () => (runParam === null ? Promise.resolve(null) : getRun(runParam)),
+    [runParam],
   );
-  const events = useRunEvents(runId);
+  const sessionId = sessionParam ?? seedRun.data?.session_id ?? null;
 
-  // 后端每次状态迁移都会发 run_status；收到就重新拉 run，状态一律以后端为准。
+  // 事件流只服务当前选中的那一轮，所以先按 URL 定出 run；没给就用会话的最后一轮。
+  const session = useApi<SessionDetail | null>(
+    () => (sessionId === null ? Promise.resolve(null) : getSession(sessionId)),
+    [sessionId],
+  );
+  const rounds = session.data?.runs ?? [];
+  const latestRoundId = rounds.length === 0 ? null : rounds[rounds.length - 1]!.id;
+  const activeRunId = runParam ?? latestRoundId;
+
+  const run = useApi<Run | null>(
+    () => (activeRunId === null ? Promise.resolve(null) : getRun(activeRunId)),
+    [activeRunId],
+  );
+  const events = useRunEvents(activeRunId);
+
+  // 后端每次状态迁移都会发 run_status；收到就重新拉 run 与会话，状态一律以后端为准。
   const lastStatusEvent = lastEventOfType(events.events, 'run_status');
   const statusSeq = lastStatusEvent === null ? 0 : lastStatusEvent.seq;
   const reloadRun = run.reload;
+  const reloadSession = session.reload;
   useEffect(() => {
-    if (statusSeq > 0) reloadRun();
-  }, [statusSeq, reloadRun]);
+    if (statusSeq > 0) {
+      reloadRun();
+      reloadSession();
+    }
+  }, [statusSeq, reloadRun, reloadSession]);
 
   // case 就绪事件到达时重新拉 case（404 表示尚未生成，由后端决定）。
   // 但正在 planning 的 run 一定还没有 case：先问一次必然 404，只会在浏览器控制台
@@ -52,14 +83,14 @@ export default function InputSessionPage(): JSX.Element {
   const caseFetchable = run.data !== null && run.data.status !== 'planning';
   const runCase = useApi(
     () =>
-      runId === null || !caseFetchable ? Promise.resolve(null) : getRunCase(runId),
-    [runId, caseSeq, caseFetchable],
+      activeRunId === null || !caseFetchable ? Promise.resolve(null) : getRunCase(activeRunId),
+    [activeRunId, caseSeq, caseFetchable],
   );
 
   // 执行 id 只用于给出跳转链接；仍然来自后端响应。
   const execution = useApi(
-    () => (runId === null ? Promise.resolve(null) : getRunExecution(runId)),
-    [runId, statusSeq],
+    () => (activeRunId === null ? Promise.resolve(null) : getRunExecution(activeRunId)),
+    [activeRunId, statusSeq],
   );
 
   const questionEvent = lastEventOfType(events.events, 'question');
@@ -75,9 +106,11 @@ export default function InputSessionPage(): JSX.Element {
     setBusy('create');
     setActionError(null);
     try {
-      const created = await createRun(goal);
+      const created = await createSession(goal);
       setGoal('');
-      navigate(`/?run=${encodeURIComponent(created.run_id)}`);
+      navigate(
+        `/?session=${encodeURIComponent(created.session_id)}&run=${encodeURIComponent(created.run_id)}`,
+      );
     } catch (err: unknown) {
       setActionError(errorMessage(err));
     } finally {
@@ -86,11 +119,11 @@ export default function InputSessionPage(): JSX.Element {
   }
 
   async function handleApprove(): Promise<void> {
-    if (runId === null) return;
+    if (activeRunId === null) return;
     setBusy('approve');
     setActionError(null);
     try {
-      await approveRun(runId);
+      await approveRun(activeRunId);
       reloadRun();
     } catch (err: unknown) {
       setActionError(errorMessage(err));
@@ -100,13 +133,33 @@ export default function InputSessionPage(): JSX.Element {
   }
 
   async function handleAnswer(): Promise<void> {
-    if (runId === null) return;
+    if (activeRunId === null) return;
     setBusy('answer');
     setActionError(null);
     try {
-      await answerRun(runId, answerText);
+      await answerRun(activeRunId, answerText);
       setAnswerText('');
       reloadRun();
+    } catch (err: unknown) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRetry(): Promise<void> {
+    if (sessionId === null || run.data === null) return;
+    setBusy('retry');
+    setActionError(null);
+    // 输入留空 = 原样重跑当前轮的 input（后端要求 input 非空，所以这里必须回退）。
+    const nextInput = retryText.trim() === '' ? run.data.input : retryText;
+    try {
+      // 新的一轮属于同一个会话（CONTRACT §9.1）；URL 跳到新轮次上。
+      const created = await createRun(sessionId, nextInput, activeRunId);
+      setRetryText('');
+      navigate(
+        `/?session=${encodeURIComponent(created.session_id)}&run=${encodeURIComponent(created.run_id)}`,
+      );
     } catch (err: unknown) {
       setActionError(errorMessage(err));
     } finally {
@@ -136,19 +189,94 @@ export default function InputSessionPage(): JSX.Element {
           >
             {busy === 'create' ? '提交中…' : '开始'}
           </button>
-          <span className="muted small">当前 run：{runId ?? '未选择'}</span>
+          <span className="muted small">当前会话：{sessionId ?? '未选择'}</span>
         </div>
         {actionError !== null ? <p className="error-text">{actionError}</p> : null}
       </section>
 
-      {runId === null ? (
+      {sessionId === null ? (
         <section className="card">
-          <p className="muted">提交目标后开始规划；也可以从左侧 run 列表选一个历史 run。</p>
+          <p className="muted">提交目标后开始规划；也可以从左侧会话列表选一个历史会话。</p>
         </section>
       ) : (
         <>
           <section className="card">
-            <h2>run 状态</h2>
+            <h2>会话</h2>
+            {session.error !== null ? <p className="error-text">{session.error}</p> : null}
+            {session.data === null ? (
+              <p className="muted">{session.loading ? '加载中…' : '未取到会话'}</p>
+            ) : (
+              <div className="stack">
+                <div className="row">
+                  {session.data.session.status === '' ? null : (
+                    <StatusBadge status={session.data.session.status} />
+                  )}
+                  <span className="mono small">{session.data.session.id}</span>
+                  <span className="muted small">{session.data.session.run_count} 轮</span>
+                </div>
+                <div className="muted small">
+                  创建 {session.data.session.created_at} · 更新 {session.data.session.updated_at}
+                </div>
+                <UsageLine usage={session.data.session.usage} />
+                <div className="break">{session.data.session.goal}</div>
+              </div>
+            )}
+          </section>
+
+          <section className="card">
+            <h2>轮次</h2>
+            {rounds.length === 0 ? (
+              <p className="muted">{session.loading ? '加载中…' : '这个会话还没有轮次'}</p>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>状态</th>
+                    <th>用量</th>
+                    <th>run</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rounds.map((round, index) => (
+                    <tr
+                      key={round.id}
+                      className={round.id === activeRunId ? 'row-open' : undefined}
+                    >
+                      <td>{index + 1}</td>
+                      <td>
+                        <StatusBadge status={round.status} />
+                        {round.parent_run_id === null || round.parent_run_id === '' ? null : (
+                          <span className="muted small"> 回灌</span>
+                        )}
+                      </td>
+                      <td className="muted small">
+                        {round.usage.model_calls === 0
+                          ? '—'
+                          : `${round.usage.model_calls} 次 / ${round.usage.total_tokens} tokens`}
+                      </td>
+                      <td className="mono small">
+                        <Link
+                          to={`/?session=${encodeURIComponent(sessionId)}&run=${encodeURIComponent(round.id)}`}
+                        >
+                          {round.id}
+                        </Link>
+                      </td>
+                      <td className="row">
+                        <Link to={`/runs/${encodeURIComponent(round.id)}/report`}>报告</Link>
+                        <Link to={`/executions/${encodeURIComponent(round.id)}`}>执行</Link>
+                        <Link to={`/runs/${encodeURIComponent(round.id)}/injection`}>注入</Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section className="card">
+            <h2>当前轮次</h2>
             {run.error !== null ? <p className="error-text">{run.error}</p> : null}
             {run.data === null ? (
               <p className="muted">{run.loading ? '加载中…' : '未取到 run'}</p>
@@ -229,6 +357,43 @@ export default function InputSessionPage(): JSX.Element {
                 >
                   {busy === 'answer' ? '提交中…' : '提交回答'}
                 </button>
+              </div>
+            </section>
+          ) : null}
+
+          {/*
+            手动再开一轮：只对已结束的轮次开放（planning/executing 中再开一轮只会
+            和当前轮互相踩；回灌的正规入口是错误注入页）。输入留空 = 原样重跑当前轮的 input。
+          */}
+          {run.data !== null &&
+          (run.data.status === 'completed' || run.data.status === 'failed') ? (
+            <section className="card">
+              <h2>在同一会话里再开一轮</h2>
+              <textarea
+                className="textarea"
+                rows={2}
+                value={retryText}
+                placeholder={
+                  run.data.input === ''
+                    ? '输入新一轮的目标（留空则原样重跑）'
+                    : `留空则原样重跑：${run.data.input}`
+                }
+                onChange={(event) => setRetryText(event.target.value)}
+              />
+              <div className="row">
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    void handleRetry();
+                  }}
+                >
+                  {busy === 'retry' ? '提交中…' : '开新一轮'}
+                </button>
+                <span className="muted small">
+                  新轮次属于同一个会话（CONTRACT §9.1），可在上方轮次表里看到整条链条。
+                </span>
               </div>
             </section>
           ) : null}

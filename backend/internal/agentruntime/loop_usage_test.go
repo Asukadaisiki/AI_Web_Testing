@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/store"
-	"github.com/Asukadaisiki/AI_Web_Testing/v2/backend/internal/usage"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
 // meteredLLM 在脚本模型外面套一层"报用量"，用来在离线测试里造出真实成本。
@@ -30,9 +30,9 @@ func meteredPerCall() usage.Usage { return usage.Call(1000, 100, 20, 0) }
 
 func startRun(t *testing.T, h *harness, input string) store.Run {
 	t.Helper()
-	run, err := h.store.CreateRun(context.Background(), input, nil)
+	_, run, err := h.store.CreateSession(context.Background(), input)
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 	return run
 }
