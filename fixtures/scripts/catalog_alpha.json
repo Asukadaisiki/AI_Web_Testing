@@ -1,0 +1,67 @@
+{
+  "note": "离线脚本模型：不花一分钱、可重复地驱动整条闭环。它扮演模型，只发工具调用。站点由 v2/worker/fixtures/site 提供，须在 127.0.0.1:8123 上静态服务（见 v2/README.md）。",
+  "steps": [
+    {
+      "tool": "open_page",
+      "arguments": {
+        "url": "http://127.0.0.1:8123/index.html",
+        "intent": "打开商品列表页"
+      }
+    },
+    {
+      "tool": "input",
+      "arguments": {
+        "hint": "Search items",
+        "value": "alpha",
+        "intent": "在搜索框里输入 alpha",
+        "expect_value": "alpha"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "Filter",
+        "intent": "点击筛选按钮",
+        "expect_text": "Results ready"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "Alpha",
+        "intent": "打开 Alpha 的详情页",
+        "expect_url": "detail.html"
+      }
+    },
+    {
+      "tool": "assert_text",
+      "arguments": {
+        "text": "Add to cart",
+        "intent": "详情页上出现加购按钮"
+      }
+    },
+    {
+      "tool": "input",
+      "arguments": {
+        "hint": "Quantity",
+        "value": "2",
+        "intent": "把数量改成 2",
+        "expect_value": "2"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "Add to cart",
+        "intent": "加入购物车并看到提示",
+        "expect_text": "Added to cart"
+      }
+    },
+    {
+      "tool": "finish_case",
+      "arguments": {
+        "name": "把 Alpha 加入购物车"
+      }
+    }
+  ]
+}

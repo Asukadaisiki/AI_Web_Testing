@@ -1,0 +1,437 @@
+{
+  "version": "loop.case.v1",
+  "note": "Go 与 Python 两侧校验器共读本文件，必须给出相同的 accept 与 code。新增契约规则时必须在这里补用例。",
+  "cases": [
+    {
+      "name": "valid-full-flow",
+      "expect": { "accept": true },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "search and open a product",
+        "goal": "find a product and open its detail page",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the product list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "input",
+            "intent": "type the query",
+            "value": "widget",
+            "target": {
+              "hint": "Search",
+              "locator": { "kind": "role", "role": "textbox", "name": "Search", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e3:0",
+                "page_url": "https://shop.test/products"
+              }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "value_equals", "value": "widget", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 2,
+            "action": "click",
+            "intent": "submit the search",
+            "target": {
+              "hint": "Search",
+              "locator": { "kind": "role", "role": "button", "name": "Search", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e4:0",
+                "page_url": "https://shop.test/products"
+              }
+            },
+            "preconditions": [{ "type": "text_visible", "value": "Search", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 3,
+            "action": "assert_text",
+            "intent": "the result is listed",
+            "value": "Widget",
+            "preconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "Widget", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "accept-value-equals-as-postcondition",
+      "expect": { "accept": true },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "value equality is a postcondition",
+        "goal": "set a quantity",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the detail page",
+            "value": "https://shop.test/item/1",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/item/1", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "input",
+            "intent": "set the quantity",
+            "value": "2",
+            "target": {
+              "hint": "Quantity",
+              "locator": { "kind": "css", "css": "#quantity", "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_2",
+                "page_state_id": "ps_2",
+                "candidate_id": "e7:2",
+                "page_url": "https://shop.test/item/1"
+              }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/item/1", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "value_equals", "value": "2", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-not-goto-first",
+      "expect": { "accept": false, "code": "case_not_goto_first" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "first step must navigate",
+        "goal": "click something",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "click",
+            "intent": "click the button",
+            "target": {
+              "hint": "Go",
+              "locator": { "kind": "role", "role": "button", "name": "Go", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e1:0",
+                "page_url": "https://shop.test/"
+              }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "shop.test", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "Done", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-goto-with-precondition",
+      "expect": { "accept": false, "code": "goto_precondition_forbidden" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "goto cannot have a precondition",
+        "goal": "navigate",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-transition-precondition",
+      "expect": { "accept": false, "code": "condition_phase" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "a change cannot hold before the action",
+        "goal": "click and watch the url change",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "click",
+            "intent": "open the first result",
+            "target": {
+              "hint": "Widget",
+              "locator": { "kind": "text", "text": "Widget", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e2:1",
+                "page_url": "https://shop.test/products"
+              }
+            },
+            "preconditions": [{ "type": "url_changes", "value": "anything", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "url_contains", "value": "/item", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-unknown-condition-type",
+      "expect": { "accept": false, "code": "condition_unknown_type" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "element_visible is not part of the vocabulary",
+        "goal": "assert",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "element_visible", "value": "#item", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-click-without-postcondition",
+      "expect": { "accept": false, "code": "step_missing_postcondition" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "every step declares an outcome",
+        "goal": "click",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "click",
+            "intent": "click the button",
+            "target": {
+              "hint": "Go",
+              "locator": { "kind": "role", "role": "button", "name": "Go", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e1:0",
+                "page_url": "https://shop.test/products"
+              }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "postconditions": [],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-click-without-precondition",
+      "expect": { "accept": false, "code": "step_missing_precondition" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "every action declares the state it needs",
+        "goal": "click",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "click",
+            "intent": "click the button",
+            "target": {
+              "hint": "Go",
+              "locator": { "kind": "role", "role": "button", "name": "Go", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e1:0",
+                "page_url": "https://shop.test/products"
+              }
+            },
+            "preconditions": [],
+            "postconditions": [{ "type": "text_visible", "value": "Done", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-ungrounded-target",
+      "expect": { "accept": false, "code": "step_target_ungrounded" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "a target must come from a real observation",
+        "goal": "click",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "click",
+            "intent": "click the button",
+            "target": {
+              "hint": "Go",
+              "locator": { "kind": "role", "role": "button", "name": "Go", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "", "page_state_id": "", "candidate_id": "", "page_url": "" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "Done", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-unknown-locator-kind",
+      "expect": { "accept": false, "code": "locator_invalid" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "only role, text and css are allowed",
+        "goal": "click",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "click",
+            "intent": "click the button",
+            "target": {
+              "hint": "Go",
+              "locator": { "kind": "xpath", "css": "//button", "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e1:0",
+                "page_url": "https://shop.test/products"
+              }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "Done", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-click-with-value",
+      "expect": { "accept": false, "code": "step_unexpected_value" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "click does not take a value",
+        "goal": "click",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "click",
+            "intent": "click the button",
+            "value": "unexpected",
+            "target": {
+              "hint": "Go",
+              "locator": { "kind": "role", "role": "button", "name": "Go", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e1:0",
+                "page_url": "https://shop.test/products"
+              }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "Done", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-unknown-field",
+      "expect": { "accept": false, "code": "case_invalid_json" },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "legacy spelling must not sneak back in",
+        "goal": "navigate",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the list",
+            "value": "https://shop.test/products",
+            "page_state": "products",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/products", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    }
+  ]
+}

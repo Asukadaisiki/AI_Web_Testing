@@ -1,0 +1,23 @@
+# Go
+.gocache/
+.gotmp/
+*.exe
+
+# 运行期数据：SQLite 库与执行证据
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+
+# 本地环境
+.env
+
+# v1 的物理工作副本（含 .pgdata 与各类缓存）。
+# v1 的权威源码是 git 的 v1 分支，这里只是没被删掉的旧目录，避免误入版本库。
+.legacy-v1/

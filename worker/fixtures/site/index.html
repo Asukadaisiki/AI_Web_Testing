@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Demo Catalog</title>
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <h1>Demo Catalog</h1>
+
+  <p id="hint">Tip: type in the search box to filter the list.</p>
+
+  <form id="filter-form" onsubmit="return false;">
+    <label for="search">Search items</label>
+    <input id="search" name="search" type="text" placeholder="Search items">
+    <button id="filter" type="submit">Filter</button>
+  </form>
+
+  <div id="status">Loading results</div>
+
+  <ul id="items">
+    <li class="item" data-name="alpha"><a href="detail.html?item=alpha">Alpha</a></li>
+    <li class="item" data-name="beta"><a href="detail.html?item=beta">Beta</a></li>
+    <li class="item" data-name="gamma"><a href="detail.html?item=gamma">Gamma</a></li>
+  </ul>
+
+  <script src="site.js"></script>
+  <script>
+    (function () {
+      console.log("catalog ready");
+
+      var status = document.getElementById("status");
+      window.setTimeout(function () {
+        status.textContent = "Results ready";
+      }, 250);
+
+      var search = document.getElementById("search");
+      search.addEventListener("input", function () {
+        var hint = document.getElementById("hint");
+        if (hint) {
+          hint.remove();
+        }
+      });
+
+      document.getElementById("filter").addEventListener("click", function () {
+        var query = search.value.trim().toLowerCase();
+        var items = document.querySelectorAll("#items .item");
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          var name = item.getAttribute("data-name") || "";
+          item.style.display = (!query || name.indexOf(query) >= 0) ? "" : "none";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "name": "loop-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "极简 React + TypeScript + Vite 控制台：4 个页面，只调用 Go 控制面 API",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 5174 --strictPort"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

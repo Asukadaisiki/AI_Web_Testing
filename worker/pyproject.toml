@@ -1,0 +1,26 @@
+[project]
+name = "loop-worker"
+version = "0.1.0"
+description = "v2 精简 Playwright 执行器：5 个 action、观测即验证定位器"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    # 固定 1.57：它要的 chromium 版本是 1200，本机 D:\PlaywrightBrowsers 已装 chromium-1200
+    # 与 chromium_headless_shell-1200（1.58 要 1208，但缺 headless shell 1208）。见 NOTES。
+    "playwright==1.57.0",
+    "pydantic>=2.9",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+]
+
+[tool.uv]
+# 本目录不是可安装分发包：loop_worker 直接以 cwd 上的包被导入（uv run 的工作目录即 v2/worker）。
+package = false
+
+[tool.uv.pip]
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"

@@ -1,0 +1,36 @@
+/* 本地静态夹具的最小样式：保证元素有非零尺寸（可见性判定依赖它）。 */
+body {
+  font-family: system-ui, sans-serif;
+  margin: 16px;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+.item {
+  margin: 4px 0;
+}
+
+#status,
+#detail-status,
+#cart-status {
+  color: #555;
+  margin: 8px 0;
+}
+
+#nameless-button {
+  width: 48px;
+  height: 24px;
+}
+
+#toast {
+  margin-top: 8px;
+  padding: 4px 8px;
+  background: #e6f4ea;
+  display: inline-block;
+}
+
+#duplicate-row button {
+  margin-right: 4px;
+}

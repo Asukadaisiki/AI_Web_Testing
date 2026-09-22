@@ -1,0 +1,333 @@
+# CONTRACT.md — 唯一权威契约
+
+本文件是 `v2/` 里所有跨进程数据的唯一权威描述。Go 的 `internal/contract`、Python 的 `loop_worker/contracts.py`、Web 的 `types.ts` 都是它的镜像；三者由 `fixtures/contract/*.json` 的一致性测试保证不漂移。
+
+**改契约的唯一正确流程**：改本文件 → 改 Go 类型 → 改 Python/TS 镜像 → 补 fixture → 跑一致性测试。
+
+---
+
+## 1. 为什么不给模型写 JSON 的机会
+
+模型**不能**产出 case。模型只能调用工具（§5），case 由 Go 侧根据工具调用序列构建。因此：
+
+- 不存在"模型写出的 JSON 过不了校验"这种情况 —— 校验发生在每次工具调用上。
+- 不存在"模型把条件写错阶段"这种情况 —— 条件由 Go 派生，模型只表达期望。
+
+---
+
+## 2. Case 工件（唯一可执行形态）
+
+```jsonc
+{
+  "case_version": "loop.case.v1",
+  "name": "把 Blue Top 加入购物车并校验",
+  "goal": "用户原始目标",
+  "base_url": "https://automationexercise.com",
+  "steps": [ /* Step[]，至少 1 步，且 steps[0].action 必须是 "goto" */ ]
+}
+```
+
+### 2.1 Step
+
+```jsonc
+{
+  "index": 0,
+  "action": "goto",              // goto | click | input | assert_text | assert_url
+  "intent": "打开商品列表",       // 人类可读，来自模型的自然语言
+  "value": "https://...",        // goto: 绝对 URL；input: 输入值；assert_text: 期望文本；assert_url: URL 子串；click: null
+  "target": {                    // 仅 click / input 需要；必须已接地
+    "hint": "Add to cart",
+    "locator": { "kind": "role", "role": "button", "name": "Add to cart", "exact": true },
+    "grounding": {
+      "observation_id": "obs_...",
+      "page_state_id": "ps_...",
+      "candidate_id": "cand_...",
+      "page_url": "https://automationexercise.com/product_details/1"
+    }
+  },
+  "preconditions":  [ /* Condition[] */ ],
+  "postconditions": [ /* Condition[] */ ],
+  "timeout_ms": 5000
+}
+```
+
+约束：
+
+| action | value | target | preconditions | postconditions |
+|---|---|---|---|---|
+| `goto` | 必填，绝对 URL | 禁止 | **必须为空**（首步在 `about:blank` 上，任何前置条件都不可满足） | ≥1 |
+| `click` | 禁止 | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
+| `input` | 必填（可为空串） | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
+| `assert_text` | 必填 | 禁止 | ≥1（只能状态事实） | ≥1 |
+| `assert_url` | 必填 | 禁止 | ≥1（只能状态事实） | ≥1 |
+
+`steps[0].action != "goto"` 一律拒绝：执行器不为首步做隐式预导航。
+
+### 2.2 Condition
+
+```jsonc
+{ "type": "text_visible", "value": "Added!", "timeout_ms": 3000 }
+```
+
+**条件阶段表（唯一权威，全仓库只有这一处）**：
+
+| type | 可作 pre | 可作 post | 语义 |
+|---|---|---|---|
+| `url_contains` | ✅ | ✅ | 当前 URL 包含 `value` |
+| `text_visible` | ✅ | ✅ | 页面上存在可见的、文本包含 `value` 的元素 |
+| `text_gone` | ✅ | ✅ | 页面上不存在可见的、文本包含 `value` 的元素 |
+| `url_changes` | ❌ | ✅ | 当前 URL 与执行本步前不同 |
+| `value_equals` | ❌ | ✅ | 本步 target 元素的 `value` 等于 `value` |
+
+规则：
+
+- **pre 只能是状态事实**（`url_contains` / `text_visible` / `text_gone`）。`url_changes` / `value_equals` 是变化事实，动作前没有真值，作为 pre 一律拒绝。
+- 不存在 `element_visible` / `element_gone` / `network_request`：v1 不支持，未在表中即为非法。
+
+### 2.3 条件派生规则（模型不写条件，Go 派生）
+
+| 工具调用 | 派生的 preconditions | 派生的 postconditions |
+|---|---|---|
+| `open_page(url)` | `[]` | `[{url_contains, path(url)}]` |
+| `click(hint, expect_*)` | `[{url_contains, path(最近观测页 URL)}]` | 由 `expect_*` 派生，见下 |
+| `input(hint, value, expect_*)` | `[{url_contains, path(最近观测页 URL)}]` | 同上 |
+| `assert_text(text)` | `[{url_contains, path(最近观测页 URL)}]` | `[{text_visible, text}]` |
+| `assert_url(contains)` | `[{url_contains, path(最近观测页 URL)}]` | `[{url_contains, contains}]` |
+
+`expect_*` → postcondition 的映射：
+
+| 模型表达 | 派生条件 |
+|---|---|
+| `expect_text: "Added!"` | `{text_visible, "Added!"}` |
+| `expect_gone: "Loading"` | `{text_gone, "Loading"}` |
+| `expect_url: "/view_cart"` | `{url_contains, "/view_cart"}` |
+| `expect_value: "1"` | `{value_equals, "1"}` |
+| 都没给 | 工具报错：动作步骤必须声明至少一个期望 |
+
+因为 pre 由"最近观测页 URL"派生，而前一步的 postconditions 已保证到达该页，**pre 天然可满足**，不会出现"条件永远判不过"。
+
+### 2.4 校验错误码（Go 与 Python 必须逐字一致）
+
+`fixtures/contract/case_contract.json` 是两侧共读的一致性夹具：同一份 case，Go 的
+`contract.Validate` 与 Python 的 `contracts.validate_case` 必须给出相同的 accept 与错误码。
+
+| 错误码 | 触发条件 |
+|---|---|
+| `case_invalid_json` | 不是 JSON、类型不符、出现未知字段 |
+| `case_version_mismatch` | `case_version` 非空且不等于 `loop.case.v1` |
+| `case_name_required` | `name` 为空 |
+| `case_empty_steps` | `steps` 为空 |
+| `case_not_goto_first` | `steps[0].action != "goto"` |
+| `step_index_mismatch` | `index` 与下标不符（归一化后不应出现） |
+| `step_intent_required` | `intent` 为空 |
+| `step_unknown_action` | `action` 不在 5 个动作内 |
+| `step_missing_value` | `goto` / `input` / `assert_*` 缺 `value` |
+| `step_unexpected_value` | `click` 带了 `value` |
+| `step_missing_target` | `click` / `input` 缺 `target` 或 `target.hint` 为空 |
+| `step_unexpected_target` | `goto` / `assert_*` 带了 `target` |
+| `step_target_ungrounded` | `target.grounding` 缺 `observation_id` / `candidate_id` / `page_url` |
+| `locator_invalid` | 定位器 kind 非法或缺该 kind 的必填字段 |
+| `step_missing_precondition` | 非 goto 步骤没有 preconditions |
+| `step_missing_postcondition` | 任何步骤没有 postconditions |
+| `goto_precondition_forbidden` | `goto` 声明了 preconditions |
+| `condition_unknown_type` | 条件 type 不在阶段表中 |
+| `condition_phase` | 变化事实（`url_changes` / `value_equals`）被用作 pre |
+| `condition_missing_value` | 条件 `value` 为空 |
+| `condition_missing_timeout` | 条件 `timeout_ms <= 0`（归一化后不应出现） |
+| `goto_value_not_absolute` | `goto` 的 `value` 不是绝对 http(s) URL |
+
+检查顺序也是契约的一部分：先整包解码（未知字段 / 类型），再 case 级，再逐步骤，
+步骤内按上表自上而下。两侧必须一致，否则同一个坏 case 会得到不同错误码。
+
+---
+
+## 3. 观测（接地用的证据）
+
+`POST /sessions/{id}/navigate` 与 `act` 返回：
+
+```jsonc
+{
+  "observation_id": "obs_7f3a",
+  "page_state_id": "ps_2b91",
+  "url": "https://automationexercise.com/products",
+  "title": "Automation Exercise - All Products",
+  "elements": [
+    {
+      "ref": "e12",
+      "tag": "button",
+      "role": "button",
+      "name": "Add to cart",
+      "text": "Add to cart",
+      "value": null,
+      "visible": true,
+      "enabled": true,
+      "locators": [
+        { "kind": "role", "role": "button", "name": "Add to cart", "exact": true, "match_count": 1 },
+        { "kind": "text", "text": "Add to cart", "exact": true, "match_count": 1 },
+        { "kind": "css", "css": "#cart-12 > button", "match_count": 1 }
+      ]
+    }
+  ],
+  "screenshot_path": "v2/data/artifacts/obs_7f3a.png"
+}
+```
+
+`elements` 只保留可交互或有文本的元素，上限 200 条（超出时优先保留可见且 enabled 的）。`name` 的可访问名计算规则见 §6。
+
+### 3.1 定位器必须在观测时就地验证（关键约束）
+
+`locators` 是**按偏好排序、且已在当前页面上验证过**的定位器列表：
+
+- 每条都必须是**当场真实解析过**的，`match_count` 为实际命中数；
+- 只有 `match_count == 1` 的定位器才允许出现（保证"观测时能解析、执行时能命中"）；
+- 偏好顺序：`role`（用浏览器计算的可访问名）→ `text` → `css`（结构路径，最后手段）；
+- 若某元素的 `role` 定位器命中数 ≠ 1（例如可访问名含图标字体的私有区字形、或存在同名元素），**不得**输出该定位器，改用下一种；
+- 一个元素一条定位器都验证不出来时，该元素不进入 `elements`。
+
+执行期只使用 case 里已经记录的那一条定位器，不再重新推导。`candidate_id` 形如 `"<element ref>:<locators 下标>"`。
+
+---
+
+## 4. 执行结果
+
+`POST /execute {case}` 返回：
+
+```jsonc
+{
+  "execution_id": "exec_...",
+  "status": "passed" | "failed" | "error",
+  "started_at": "2026-09-21T10:00:00Z",
+  "finished_at": "2026-09-21T10:00:42Z",
+  "final_url": "https://automationexercise.com/view_cart",
+  "steps": [
+    {
+      "index": 0,
+      "action": "goto",
+      "status": "passed" | "failed",
+      "started_at": "...",
+      "duration_ms": 1830,
+      "url_before": "about:blank",
+      "url_after": "https://automationexercise.com/products",
+      "conditions": [
+        { "phase": "post", "type": "url_contains", "value": "/products", "satisfied": true, "detail": null }
+      ],
+      "evidence": {
+        "screenshot_path": "v2/data/artifacts/exec_..._0.png",
+        "console": [ { "level": "error", "text": "..." } ],
+        "network": [ { "method": "GET", "url": "...", "status": 200 } ]
+      },
+      "error": null
+    }
+  ]
+}
+```
+
+`status` 取值：`passed`（全部步骤与条件通过）、`failed`（有步骤或条件未通过）、`error`（执行器自身故障，例如浏览器启动失败、case 非法）。
+
+`error` 字段（`steps[].error` 与顶层 `error`）是**对象**，不是字符串：
+
+```jsonc
+{ "kind": "target_not_found", "message": "locator role=button name='Add to cart' matched 0 elements" }
+```
+
+`kind` 取值即 §4.1 的信号种类；`message` 是给人看的原因。Go 侧直接把它当作失败信号，
+不再从字符串里猜 kind。
+
+### 4.1 失败信号
+
+Go 侧从执行结果派生，落 `report_signals` 表：
+
+| kind | 触发条件 |
+|---|---|
+| `target_not_found` | 元素定位在超时内未命中 |
+| `condition_unmet` | 前置或后置条件未满足 |
+| `step_timeout` | 单步超时 |
+| `worker_error` | 执行器返回 error 或不可达 |
+| `case_invalid` | case 未通过契约校验（正常情况下不应出现） |
+
+---
+
+## 5. 模型可用的工具（模型唯一的输出形式）
+
+| 工具 | 参数 | 行为 |
+|---|---|---|
+| `open_page` | `url`, `intent` | 真实导航并观测；记录 goto 步骤 |
+| `click` | `hint`, `intent`, `expect_text?`, `expect_gone?`, `expect_url?`, `expect_value?` | 在最近观测中解析 `hint`；**必须唯一命中**；记录 click 步骤 |
+| `input` | `hint`, `value`, `intent`, `expect_*` | 同上，另填 `value` |
+| `assert_text` | `text`, `intent` | 记录页面级文本断言 |
+| `assert_url` | `contains`, `intent` | 记录页面级 URL 断言 |
+| `finish_case` | `name` | 全量校验并落库为工件；run 进入 `awaiting_approval` |
+| `ask_user` | `question` | run 进入 `awaiting_input`，等人回答后继续 |
+
+工具失败时返回结构化错误（例如 `{"error":"target_not_found","hint":"...","candidates":[...]}`），模型必须据此改口重试，**不允许**把未接地的目标写进 case。
+
+`click` / `input` 只在**最近一次观测所在的页面**上解析目标。模型若想点下一页的元素，必须先 `click`（带 `expect_url`）再继续用新观测。
+
+---
+
+## 6. 可访问名（a11y name）的唯一实现
+
+`name` 一律取浏览器计算的可访问名（Playwright `get_by_role` 的匹配语义），**不允许**用 DOM 文本拼接代替。若元素的可访问名含私有区字形（图标字体），执行期必须使用同一条计算路径，保证"观测时能解析、执行时能命中"。
+
+Python 侧只有一处实现：`loop_worker/observer.py::accessible_name`。
+
+---
+
+## 7. 失败回灌（报告 → 输入）
+
+半自动：
+
+1. Go 侧在报告生成时，对每个 run 的失败信号生成候选输入，落 `feedback_candidates`。
+2. 候选生成规则（通用，不含任何任务专有名词）：
+   - 按 `kind` 去重，最多 3 条；
+   - 每条候选输入 = 原始 `input` + 结构化失败摘要块：
+
+     ```
+     原目标：<input>
+     上一轮失败：
+     - 第 <n> 步（<intent>）：<kind 的中文说明>
+     请在重新规划时避免上述失败。
+     ```
+3. 人在错误注入页编辑/确认后，创建新 run：`input = 候选文本`，`parent_run_id = 原 run`。
+
+---
+
+## 8. 数据表（SQLite）
+
+```sql
+runs(id, input, status, parent_run_id, error, created_at, updated_at)
+run_events(id, run_id, seq, type, payload_json, created_at)          -- SSE 重放
+cases(id, run_id, content_hash, payload_json, created_at)            -- 不可变工件
+case_approvals(id, case_id, approved_by, created_at)
+executions(id, run_id, case_id, status, result_json, started_at, finished_at)
+execution_steps(id, execution_id, step_index, action, status, evidence_json, error)
+report_signals(id, run_id, execution_id, step_index, kind, message, created_at)
+feedback_candidates(id, run_id, signal_kind, proposed_input, status, created_at)
+```
+
+`runs.status`：`planning` → `awaiting_approval` → `executing` → `reporting` → `completed` / `failed`；分支状态 `awaiting_input`。
+
+`completed` 与 `failed` 的区别是**闭环有没有走完**，不是用例有没有通过：
+
+| 情况 | runs.status | 报告里体现 |
+|---|---|---|
+| 用例执行完，全部步骤通过 | `completed` | `steps_failed = 0`，无 signals |
+| 用例执行完，有步骤失败 | `completed` | `steps_failed > 0`，signals 非空，自动生成回灌候选 |
+| 执行器返回 `status = "error"` | `failed` | signals 含 `worker_error` |
+| 执行器不可达 / case 过不了校验 | `failed` | signals 含 `worker_error` / `case_invalid`，仍有回灌候选 |
+| 规划期出错（模型失败、超上限、干跑一直不过） | `failed` | 没有 case 工件，没有执行 |
+
+只有"执行跑完"才可能产出报告；`failed` 时报告页仍会给出 signals 与回灌候选，避免死路。
+
+`cases` 只有一个形态，执行与报告都按 `case_id` 读 `payload_json`，**没有第二数据源，没有回退链**。
+
+### 8.1 规划阶段的干跑（写进契约的硬约束）
+
+`finish_case` 不是"落库"，而是"**校验 + 在全新浏览器上下文里干跑一遍**"：
+
+- 干跑通过 → 落 `cases`，run 进入 `awaiting_approval`，人看到的是**已经被证明能跑通的**工件；
+- 干跑失败 → **不落库**，把失败步骤与未满足的条件结构化回给模型，让它改口重来。
+
+因此 `awaiting_approval` 状态下的 case 天然满足两条：过得了契约校验（构建即校验）、
+在当前站点上确实跑得通（干跑证明）。真实执行仍可能失败（站点变了、抖动），
+那一类失败由 §7 的回灌闭环处理。

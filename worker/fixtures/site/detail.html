@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Item detail</title>
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <h1 id="item-title">Item</h1>
+
+  <div id="detail-status">Loading details</div>
+
+  <form id="buy-form" onsubmit="return false;">
+    <label for="quantity">Quantity</label>
+    <input id="quantity" name="quantity" type="number" value="1" min="1">
+    <button id="add-to-cart" type="submit">Add to cart</button>
+  </form>
+
+  <div id="toast" hidden>Added to cart</div>
+
+  <p><a id="go-to-cart" href="cart.html">Go to cart</a></p>
+
+  <script src="site.js"></script>
+  <script>
+    (function () {
+      var item = window.DemoSite.titleCase(window.DemoSite.param("item")) || "Item";
+      document.getElementById("item-title").textContent = item;
+      document.title = item + " - detail";
+
+      var status = document.getElementById("detail-status");
+      window.setTimeout(function () {
+        status.remove();
+      }, 250);
+
+      document.getElementById("add-to-cart").addEventListener("click", function () {
+        var quantity = document.getElementById("quantity").value;
+        window.DemoSite.writeCart({ item: item, quantity: quantity });
+        document.getElementById("toast").hidden = false;
+      });
+    })();
+  </script>
+</body>
+</html>

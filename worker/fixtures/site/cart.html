@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cart</title>
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <h1>Cart</h1>
+
+  <div id="cart-status">Loading cart</div>
+
+  <div id="cart-body" hidden>
+    <p id="cart-summary">Cart is empty</p>
+    <p><a id="back-to-catalog" href="index.html">Back to catalog</a></p>
+  </div>
+
+  <script src="site.js"></script>
+  <script>
+    (function () {
+      var cart = window.DemoSite.readCart();
+      window.setTimeout(function () {
+        var status = document.getElementById("cart-status");
+        if (status) {
+          status.remove();
+        }
+        document.getElementById("cart-body").hidden = false;
+        if (cart) {
+          document.getElementById("cart-summary").textContent =
+            cart.item + " x " + cart.quantity;
+        }
+      }, 250);
+    })();
+  </script>
+</body>
+</html>
