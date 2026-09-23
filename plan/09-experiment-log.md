@@ -238,3 +238,152 @@ Web    : tsc --noEmit + vite build → ✓ built
 - **没有并发**：一次一个 run。
 - **成本熔断只在单测里触发过**，真实运行没接近过上限。
 - **D11 无数据**：只有一个数据点。
+
+---
+
+# 实验 B：真实模型 + 真实站点的首次闭环（2026-09-23）
+
+终于用真实模型（`deepseek-v4.1-flash[1m]`）在 `automationexercise.com` 上跑了。三次运行，
+结论**推翻了本文件里的若干猜测**。以下全部是实测，不是推理。
+
+## B1. 运行 1：搜索目标 —— 卡死在 planning，烧掉 138 万 token
+
+目标：`打开 https://automationexercise.com ，用站内搜索找 Blue Top，并确认搜索结果里出现 Blue Top`
+（只给首页，不给搜索结果 URL）。
+
+结果：**33 次模型调用、1,383,141 token 后被我手工掐掉**，状态仍是 `planning`。
+缓存命中 1,256,960 / 1,338,915 prompt token = **93.9%**（这一项远好于预期）。
+
+三个独立的病因：
+
+1. **`goto` 的 5000ms 步超时对真实站点太紧。** 三次 `open_page` 全部
+   `step_timeout: goto 'https://automationexercise.com' timed out after 5000ms`。
+2. **搜索提交控件是 `type="button"`，回车根本提交不了**（详见 B4）——D10-C 的
+   `submit` 字段解决不了这个站。
+3. **`dry_run_failed` 事件不带失败明细**，只写一句
+   "the authored case did not pass a full dry run"。模型在对话里看得到哪一步没过，
+   **读事件流的人看不到**——我的诊断因此瞎了一轮。已修（见 B5）。
+
+## B2. 运行 2：导航+断言目标 —— 首次跑完整条闭环
+
+目标：`打开 https://automationexercise.com ，点进商品列表页，确认列表里有 Blue Top 这个商品`
+
+结果：**`awaiting_approval` → 审批 → 执行 → `completed`**。15 次调用、208,287 token。
+模型自建的 case 是 4 步：`goto 首页 → click Products → goto /products → assert_text "Blue Top"`。
+
+注意模型自己加的第 2 步 `goto /products`（意图写着"站点负载高时会出现排队提示页"）——
+它在**主动给自己加冗余**来对抗它观察到的抖动。这说明抖动是可观测的，模型会试图补偿。
+
+## B3. 真实执行失败：不是站点慢，是 `domcontentloaded` 等错了东西
+
+运行 2 的执行结果：`run.status = completed`，但报告是
+`steps_total=1, steps_passed=0, steps_failed=1`，信号
+`step_timeout: goto 'https://automationexercise.com/' timed out after 20000ms`。
+
+数据库里的取证推翻了"站点太慢"这个直觉：
+
+```
+url_after = "https://automationexercise.com/"     ← URL 是对的，页面到了
+duration_ms = 20778
+console: Mixed Content: ... insecure stylesheet 'http://fonts.googleapis.com/css?...'
+         This request has been blocked
+```
+
+**页面早就好了，是 `domcontentloaded` 没触发。** 站点在 HTTPS 下引用
+`http://fonts.googleapis.com/...`，被浏览器按 Mixed Content 拦掉，挂起的外部资源
+（配合样式表之后的经典脚本）把 DOMContentLoaded 拖到 20s 之后。
+
+于是出现最难查的一类现象：**同一份 case，干跑过、真实执行红**——因为干跑偶然在
+20s 内过，真实执行 20.8s。不是站点不稳定，是等待条件选错了。
+
+**修法**：`goto` 等 `commit`（导航已提交），页面就绪交给**后置条件轮询**——
+那本来就是 v2 的就绪判据，每个条件有自己的 `timeout_ms`，独立于步超时。
+步超时应当约束"动作"，不该被目标站点的外部资源绑架。
+
+代价（诚实记录）：`commit` 返回时 DOM 可能只解析到 `<head>`，内容还没出来。
+这不是缺陷，是职责划分——就绪由后置条件负责。实测验证：同一 case 连跑 3 轮，
+`goto` 全过，后一步 `assert_text` 的 `text_visible` 也都等到了内容。
+
+回归测试：`worker/tests/test_goto_wait_condition.py`。它自带一个**故意不响应**的
+资源服务，并**先自证夹具真的会挂**（断言 `domcontentloaded` 在 2s 内到不了），
+所以不会空过。已用变异测试验证：把 `commit` 改回 `domcontentloaded`，测试立刻红。
+
+## B4. D10 的结论要改：`submit` 解决不了 `type="button"`
+
+零模型成本直接问执行器（真实站点，3 个变体）：
+
+| 做法 | 结果 |
+|---|---|
+| `input(submit=true)`（回车） | ❌ URL 不变 |
+| 点 `#submit_search` | ✅ 跳 `/products?search=Blue%20Top` |
+| `form.requestSubmit()` | ❌ URL 不变 |
+
+原因在 HTML 里：`<button type="button" id="submit_search"><i class="fa fa-search"></i></button>`
+——是 `type="button"`，不是 `type="submit"`。表单里没有 submit 按钮，回车不做隐式提交。
+
+**所以 D10-C（回车）只覆盖"表单能被回车提交"这一类站点；D10-A（别名匹配面）才是
+这个站的唯一出路**——因为提交控件就是那个纯图标按钮。本文件第 218 行"建议 A + C"
+依然成立，但**优先级要反过来：A 是必需，C 是补充**。
+
+`#submit_search` 的可访问名是 `"\uf002"`（私有区码位），`text` 也是同一个码位，
+且两个面完全相同的字形按钮会互相冲突、无法通过唯一性校验——F1 精确复现。
+
+## B5. 已修 / 已确认
+
+- **步超时 5000 → 20000，条件超时 3000 → 10000**（Go 与 Python 两侧常量 + 文档）。
+  依据：冷启动 goto 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。
+- **`goto` 等 `commit`**（B3）+ 变异验证过的回归测试。
+- **`dry_run_failed` 事件带上失败步骤与未满足条件**（`payload.failure`）+ 测试。
+- **`input` 的 `submit` 字段**（B4 的边界已写进 CONTRACT.md，不再声称"回车是唯一通用方式"）。
+
+## B6. F5 的真实形状：是前缀字形，不阻塞
+
+模型自建的 case 里，导航链接的定位器是：
+
+```json
+{"kind":"role","role":"link","name":"\ue8f8 Products","exact":true,"match_count":1}
+```
+
+可访问名带一个私有区字形**前缀**，但后半截是有意义的文本。解析器的子串匹配（80 分）
+唯一命中，存的精确定位器 `match_count == 1` 也是对的。**所以 F5 单独不阻塞**——
+真正阻塞的只有"名字完全由字形构成"的 F1。
+
+## B7. 仍未解决：谷歌广告插屏（F3 的真实机制）
+
+把运行 2 的 case 直接投给执行器连跑 3 轮（零模型成本）：
+
+| 轮次 | 结果 |
+|---|---|
+| 0 | ❌ `click Products`：`condition_unmet: url_contains='products'`，当前 URL `https://automationexercise.com/#google_vignette...` |
+| 1 | ✅ 4 步全过 |
+| 2 | ✅ 4 步全过 |
+
+`#google_vignette` 是 Google AdSense 的插屏广告。点击没有导航，广告脚本改了 URL 片段。
+**这就是模型在运行 1 里说的"Google ad interstitial that intercepts the click"。**
+
+2/3 通过。这是真实的站点侧条件，v2 目前的表现是诚实的（`condition_unmet` +
+回灌候选），但没有缓解手段。**本文件第 6 行 F3 记的"广告 iframe 元素排在前面"机制
+是错的**——`_COLLECT_JS` 只走主文档，不采 iframe；真实机制是**点击被插屏拦截**。
+
+## B8. 成本与缓存的真实数字
+
+| 指标 | 运行 1（失败） | 运行 2（成功） |
+|---|---|---|
+| 模型调用 | 33 | 15 |
+| 总 token | 1,383,141 | 208,287 |
+| 缓存命中 | 93.9% | 88.4% |
+| 推理 token | 44,226 | 6,346 |
+
+缓存命中率**远高于**本文件原先假设的水平。输入仍然是输出的数十倍（运行 2：
+prompt 200,853 vs completion 7,434 = 27 倍），所以 D11 的压缩问题依然存在。
+
+## B9. 诚实清单更新
+
+- **样本量从 1 涨到 3 次真实运行**，2 种目标形态，1 个站点。
+- **跑通过一次完整闭环**（规划 → 干跑 → 审批 → 执行 → 报告）。
+- **失败回灌闭环仍然没有在真实站点上跑过**——需要一个真实失败的 run 再确认候选与下一轮。
+  运行 1 失败了但没进到回灌（卡在 planning 就被掐掉）。
+- **`run.status = completed` 与"用例通过"是两件事**：运行 2 的 run 是 completed，
+  而用例是 failed。这是契约设计（只有 `ExecutionError` 才让 run 失败），但
+  前端和运维读起来容易误解，值得再看一眼。
+- 并发仍然没有；熔断仍然没在真实运行里触发过（运行 1 被掐在 138 万 / 150 万）。
