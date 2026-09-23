@@ -44,10 +44,14 @@ type OpenSessionRequest struct {
 }
 
 // ActRequest 是作者态执行单个动作的请求，用于让模型"走到下一页"。
+//
+// Submit 只对 input 有意义：填完之后按回车提交。作者态必须真的提交，
+// 否则观测停在原页面，后续步骤的接地就会锚在错的页面上。
 type ActRequest struct {
 	Action  Action  `json:"action"`
 	Locator Locator `json:"locator"`
 	Value   string  `json:"value"`
+	Submit  bool    `json:"submit,omitempty"`
 }
 
 // NavigateRequest 是作者态导航请求。

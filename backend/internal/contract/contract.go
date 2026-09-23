@@ -25,9 +25,16 @@ import (
 const CaseVersion = "loop.case.v1"
 
 // 缺省超时（毫秒）。
+//
+// 这两个数是按真实站点的实测值定的，不是拍脑袋：冷启动（干跑用的是全新 context，
+// 没有任何缓存）打开 automationexercise.com 的 domcontentloaded 实测 5.0–6.1s，
+// 站内跳转 /products 实测 6.3s。原来的 5000/3000 正好卡在真实耗时上，导致
+// **干跑永远不可能通过**——而干跑不过，case 就永远建不出来，整条闭环死在这里。
+//
+// 宁可慢也不要假红：超时给足，让失败是真的失败。
 const (
-	DefaultConditionTimeoutMS = 3000
-	DefaultStepTimeoutMS      = 5000
+	DefaultConditionTimeoutMS = 10000
+	DefaultStepTimeoutMS      = 20000
 )
 
 // 错误码：模型与跨语言一致性测试都依赖这些字符串，不要随手改。
@@ -54,6 +61,7 @@ const (
 	CodeConditionMissingValue   = "condition_missing_value"
 	CodeConditionMissingTimeout = "condition_missing_timeout"
 	CodeURLNotAbsolute          = "goto_value_not_absolute"
+	CodeUnexpectedSubmit        = "step_unexpected_submit"
 )
 
 // Violation 是结构化契约违规。Code 稳定可机读，Message 面向人与模型。
@@ -146,10 +154,21 @@ type Condition struct {
 
 // Step 是 case 里的一步。
 type Step struct {
-	Index          int         `json:"index"`
-	Action         Action      `json:"action"`
-	Intent         string      `json:"intent"`
-	Value          *string     `json:"value,omitempty"`
+	Index  int     `json:"index"`
+	Action Action  `json:"action"`
+	Intent string  `json:"intent"`
+	Value  *string `json:"value,omitempty"`
+	// Submit 只对 input 有意义：填完之后按回车提交。
+	//
+	// 真实站点上的搜索提交控件常常是纯图标按钮——可访问名只有一个私有区字形
+	// （例如 "\uf002"），text 也是同一个不可见码位，模型不可能用任何 hint 指到它。
+	// 回车不需要指到任何控件，是表单的原生提交方式，因此把它做成契约的一部分。
+	//
+	// 实测边界：只对"表单能被回车提交"的站点有效。若站点的提交控件是
+	// `type="button"` + JS（automationexercise.com 的 #submit_search 就是），
+	// 回车与 form.requestSubmit() 都不提交，唯一出路是能指到那个按钮本身——
+	// 那是别名匹配面的活，尚未实现。
+	Submit         bool        `json:"submit,omitempty"`
 	Target         *Target     `json:"target,omitempty"`
 	Preconditions  []Condition `json:"preconditions"`
 	Postconditions []Condition `json:"postconditions"`
@@ -286,6 +305,13 @@ func ValidateStep(index int, step Step) error {
 		return violation(
 			CodeUnknownAction, index,
 			"case.steps[%d] unknown action %q; allowed actions: %s", index, step.Action, strings.Join(ActionNames(), ", "),
+		)
+	}
+	// submit 只对 input 有意义。放在 switch 之后：未知 action 仍应先报 unknown_action。
+	if step.Submit && step.Action != ActionInput {
+		return violation(
+			CodeUnexpectedSubmit, index,
+			"case.steps[%d] only input may carry submit, got %s", index, step.Action,
 		)
 	}
 	if len(step.Postconditions) == 0 {

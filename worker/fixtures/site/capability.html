@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Capability fixture</title>
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <h1>Capability fixture</h1>
+  <p>
+    本页把 plan/09-experiment-log.md 里记录的真实站点能力边界（F1 / F2 / F5、D12）
+    搬进本地夹具，让这些坑可以被离线复现与回归。页面上每一段都标注了它对应哪一条发现。
+  </p>
+
+  <!-- ============================================================
+       F1 + F5：图标字体字形污染可访问名
+       真实站点上 <i class="fa fa-search"> 没加 aria-hidden，浏览器把私有区
+       字形算进了可访问名（\uf002 等），纯字形元素的 text 为空。
+       ============================================================ -->
+  <section id="icons">
+    <h2>Icon buttons (F1 / F5)</h2>
+
+    <p id="icon-only-note">icon-only：可访问名只有私有区字形，没有文本</p>
+    <button id="icon-only" type="button">&#xf002;</button>
+
+    <p id="icon-plus-text-note">icon-plus-text：字形与文本拼在同一个可访问名里</p>
+    <button id="icon-plus-text" type="button">&#xf07a; Cart</button>
+
+    <p id="icon-hidden-note">icon-hidden：正确写法，aria-hidden 把字形排除在可访问名之外</p>
+    <button id="icon-hidden" type="button"><span aria-hidden="true">&#xf00c;</span>Save</button>
+
+    <p id="icon-form-note">icon-search-form：纯字形提交按钮 + 搜索框</p>
+    <form id="search-form" action="index.html" method="get">
+      <input id="search-input" name="q" type="search" placeholder="Search items">
+      <button id="search-submit" type="submit">&#xf002;</button>
+    </form>
+  </section>
+
+  <!-- ============================================================
+       F2 + D12：商品名在非交互元素里，多个链接的可访问名完全相同
+       真实站点上商品名在 <p> 里，而 34 个 "View Product" 链接无法区分。
+       ============================================================ -->
+  <section id="cards">
+    <h2>Duplicate links, names in non-interactive text (F2 / D12)</h2>
+
+    <div class="card" data-item="alpha">
+      <p class="card-name">Blue Top</p>
+      <a class="card-link" href="detail.html?item=alpha">View Product</a>
+    </div>
+
+    <div class="card" data-item="beta">
+      <p class="card-name">Red Top</p>
+      <a class="card-link" href="detail.html?item=beta">View Product</a>
+    </div>
+
+    <div class="card" data-item="gamma">
+      <p class="card-name">Green Top</p>
+      <a class="card-link" href="detail.html?item=gamma">View Product</a>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       D12：完全不可交互的纯文本，看它到底进不进观测
+       ============================================================ -->
+  <section id="plain">
+    <h2>Non-interactive text (D12)</h2>
+    <p id="plain-note">Plain paragraph text</p>
+    <div id="plain-block">Block text without any interactive child</div>
+  </section>
+</body>
+</html>

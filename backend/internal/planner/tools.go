@@ -84,12 +84,17 @@ func Tools() []Tool {
 			}, []string{"hint", "intent"}),
 		},
 		{
-			Name:        ToolInput,
-			Description: "Type a value into an element on the current page. Same matching and expectation rules as click.",
+			Name: ToolInput,
+			Description: "Type a value into an element on the current page. Same matching and expectation rules as click. " +
+				"Set submit=true to press Enter after typing — use it for search forms whose submit control has no usable name (for example an icon-only button).",
 			Parameters: withExpects(map[string]any{
 				"hint":   map[string]any{"type": "string", "description": "visible text or accessible name of the input"},
 				"value":  map[string]any{"type": "string", "description": "value to type (empty string is allowed)"},
 				"intent": map[string]any{"type": "string", "description": "why this input is needed"},
+				"submit": map[string]any{
+					"type":        "boolean",
+					"description": "press Enter after typing, to submit the form (input only)",
+				},
 			}, []string{"hint", "value", "intent"}),
 		},
 		{
@@ -166,6 +171,7 @@ type actionArgs struct {
 	Hint        string  `json:"hint"`
 	Value       string  `json:"value"`
 	Intent      string  `json:"intent"`
+	Submit      bool    `json:"submit"`
 	ExpectText  *string `json:"expect_text"`
 	ExpectGone  *string `json:"expect_gone"`
 	ExpectURL   *string `json:"expect_url"`
@@ -217,7 +223,7 @@ func (p *Planner) Call(ctx context.Context, name string, args json.RawMessage) (
 		if err := decodeArgs(args, &parsed); err != nil {
 			return CallOutcome{}, err
 		}
-		result, err := p.input(ctx, parsed.Hint, parsed.Value, parsed.Intent, parsed.expects())
+		result, err := p.input(ctx, parsed.Hint, parsed.Value, parsed.Intent, parsed.expects(), parsed.Submit)
 		return CallOutcome{Result: result}, err
 	case ToolAssertText:
 		var parsed assertTextArgs

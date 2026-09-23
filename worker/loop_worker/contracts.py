@@ -30,9 +30,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 CASE_VERSION = "loop.case.v1"
 
-#: 缺省超时（CONTRACT §2.2）：条件 3000ms，步骤 5000ms
-DEFAULT_CONDITION_TIMEOUT_MS = 3000
-DEFAULT_STEP_TIMEOUT_MS = 5000
+#: 缺省超时（CONTRACT §2.2）：条件 10000ms，步骤 20000ms。
+#:
+#: 按真实站点实测值定：冷启动打开 automationexercise.com 的 domcontentloaded
+#: 实测 5.0–6.1s，站内跳转 /products 实测 6.3s。原来的 5000/3000 正好卡在真实
+#: 耗时上，干跑（全新 context，无缓存）永远过不了。
+DEFAULT_CONDITION_TIMEOUT_MS = 10000
+DEFAULT_STEP_TIMEOUT_MS = 20000
 
 ACTION_GOTO = "goto"
 ACTION_CLICK = "click"
@@ -104,6 +108,7 @@ CODE_CONDITION_PHASE = "condition_phase"
 CODE_CONDITION_MISSING_VALUE = "condition_missing_value"
 CODE_CONDITION_MISSING_TIMEOUT = "condition_missing_timeout"
 CODE_URL_NOT_ABSOLUTE = "goto_value_not_absolute"
+CODE_UNEXPECTED_SUBMIT = "step_unexpected_submit"
 
 #: HTTP 层错误码
 ERROR_SESSION_NOT_FOUND = "session_not_found"
@@ -219,6 +224,9 @@ class Step(BaseModel):
     preconditions: list[Condition] = Field(default_factory=list)
     postconditions: list[Condition] = Field(default_factory=list)
     timeout_ms: int = DEFAULT_STEP_TIMEOUT_MS
+    #: 只对 input 有意义：填完之后按回车提交。契约把它做成显式字段，
+    #: 而不是让执行器"填完顺手回车"——隐式行为会在需要纯填值的场景里帮倒忙。
+    submit: bool = False
 
 
 class Case(BaseModel):
@@ -365,6 +373,12 @@ def _validate_step(step: Step, where: str) -> None:
         raise CaseInvalid(
             CODE_UNKNOWN_ACTION,
             f"{where} unknown action {action!r}; allowed actions: {', '.join(ACTIONS)}",
+        )
+
+    # submit 只对 input 有意义。放在 action 分派之后：未知 action 仍应先报 unknown_action。
+    if step.submit and action != ACTION_INPUT:
+        raise CaseInvalid(
+            CODE_UNEXPECTED_SUBMIT, f"{where} only input may carry submit, got {action}"
         )
 
     if not step.postconditions:
@@ -591,6 +605,8 @@ class ActRequest(BaseModel):
     action: Literal["click", "input"]
     locator: LocatorSpec
     value: str | None = None
+    #: 只对 input 有意义：填完之后按回车提交（作者态也必须真的提交）。
+    submit: bool = False
 
 
 class ExecuteRequest(BaseModel):

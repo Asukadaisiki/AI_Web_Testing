@@ -75,6 +75,7 @@ def action_step(
     pre_value: str,
     post: list[dict],
     value: str | None = None,
+    submit: bool = False,
     timeout_ms: int = 5000,
 ) -> dict:
     step: dict = {
@@ -89,10 +90,64 @@ def action_step(
         step["target"] = step_target(locator, page_url)
     if value is not None:
         step["value"] = value
+    if submit:
+        step["submit"] = True
     return step
 
 
 class RunnerEndToEndTest(unittest.TestCase):
+    def test_input_with_submit_presses_enter(self) -> None:
+        run(self._input_with_submit_presses_enter())
+
+    async def _input_with_submit_presses_enter(self) -> None:
+        """`input(submit=True)` 必须真的按回车提交（CONTRACT §2.1）。
+
+        夹具页的搜索框是"回车提交"的：过滤逻辑同时挂在表单 submit 与「Filter」按钮上。
+        这个 case **不点任何按钮**——如果执行器只是 fill 而不按回车，
+        `text_gone: "Beta"` 就不成立，测试会红。
+
+        存在的理由：真实站点的搜索提交控件常常是纯图标按钮，可访问名与 text 都是
+        不可见的私有区码位，模型无法用任何 hint 指到它（见 test_capability_gaps.py 的 F1）。
+        """
+        with LocalSite() as site:
+            index_url = site.url("index.html")
+
+            async with launched_browser() as browser:
+                scout = await browser.new_page()
+                await scout.goto(index_url)
+                index_obs = await observe_page(scout)
+                await scout.close()
+
+                search = locator_from(index_obs, kind="role", role="textbox", name="Search items")
+
+                case = build_case(
+                    [
+                        goto_step(0, index_url, "/index.html"),
+                        action_step(
+                            1,
+                            "input",
+                            page_url=index_url,
+                            locator=search,
+                            pre_value="/index.html",
+                            post=[
+                                condition("value_equals", "alpha"),
+                                condition("text_gone", "Beta"),
+                                condition("text_gone", "Gamma"),
+                            ],
+                            value="alpha",
+                            submit=True,
+                        ),
+                    ],
+                    base_url=site.base_url,
+                )
+
+                result = await run_case(case, browser=browser, session_id=TEST_SESSION)
+
+                self.assertIsInstance(result, ExecutionResult)
+                self.assertEqual(result.status, "passed", result.model_dump())
+                self.assertEqual(len(result.steps), 2)
+                self.assertTrue(all(step.status == "passed" for step in result.steps))
+
     def test_full_flow_passes_with_evidence(self) -> None:
         run(self._full_flow_passes_with_evidence())
 

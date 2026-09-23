@@ -167,7 +167,9 @@ class SessionManager:
         if request.action == "click":
             await click_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
         else:
-            await fill_target(page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS)
+            await fill_target(
+                page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS, request.submit
+            )
         return await self.observe(session)
 
     async def observe(self, session: WorkerSession) -> Observation:

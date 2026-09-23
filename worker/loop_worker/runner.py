@@ -157,7 +157,7 @@ async def _run_step(
                     await actions.click_target(page, target_locator, step.timeout_ms)
                 else:
                     await actions.fill_target(
-                        page, target_locator, step.value or "", step.timeout_ms
+                        page, target_locator, step.value or "", step.timeout_ms, step.submit
                     )
             # assert_text / assert_url 不改动页面：断言由 postconditions 承担
         except ActionFailure as exc:

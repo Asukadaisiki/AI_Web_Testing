@@ -319,6 +319,12 @@ func (r *Runtime) emitToolCall(
 	if outcome.Result.Detail != "" {
 		payload["detail"] = outcome.Result.Detail
 	}
+	// 干跑失败必须把"哪一步、哪个条件没过"写进事件。
+	// 只写一句 "did not pass a full dry run" 会让运维侧完全瞎掉：
+	// 模型在对话里看得到明细，但读事件流的人（和事后复盘）看不到。
+	if outcome.Result.Failure != nil {
+		payload["failure"] = outcome.Result.Failure
+	}
 	r.emit(ctx, runID, EventToolCall, payload)
 
 	if page := outcome.Result.Page; page != nil {

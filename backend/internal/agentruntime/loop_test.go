@@ -80,6 +80,62 @@ func (h *harness) plan(t *testing.T, input string) store.Run {
 	return reloaded
 }
 
+// TestInputSubmitReachesTheAuthoringBrowser 钉住 submit 的透传链路：
+// 模型调 input(submit=true) → 落库的步骤带 submit → 作者态执行请求也带 submit。
+//
+// 最后这一环很关键：作者态如果不真的提交，观测会停在原页面，
+// 后续步骤的接地就锚在错的页面上（CONTRACT §2.1）。
+func TestInputSubmitReachesTheAuthoringBrowser(t *testing.T) {
+	h := newHarness(t, []ScriptedStep{
+		{Tool: "open_page", Arguments: json.RawMessage(
+			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
+		{Tool: "input", Arguments: json.RawMessage(
+			`{"hint":"Search","value":"widget","intent":"搜索并回车提交","expect_value":"widget","submit":true}`)},
+		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"回车提交搜索"}`)},
+	})
+
+	run := h.plan(t, "在列表页搜索 widget")
+	if run.Status != store.StatusAwaitingApproval {
+		t.Fatalf("status = %q, want %q", run.Status, store.StatusAwaitingApproval)
+	}
+
+	record, err := h.store.GetCase(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("get case: %v", err)
+	}
+	artifact, err := contract.Validate(record.Payload)
+	if err != nil {
+		t.Fatalf("persisted case must validate: %v", err)
+	}
+	if len(artifact.Steps) != 2 {
+		t.Fatalf("steps = %d, want 2", len(artifact.Steps))
+	}
+	inputStep := artifact.Steps[1]
+	if inputStep.Action != contract.ActionInput {
+		t.Fatalf("step 1 action = %q, want input", inputStep.Action)
+	}
+	if !inputStep.Submit {
+		t.Fatal("the stored input step must carry submit")
+	}
+
+	// 作者态必须收到 submit=true；click 步骤则必须不带。
+	var sawSubmit bool
+	for _, request := range h.fake.actRequestSnapshot() {
+		if request.Action != contract.ActionInput {
+			if request.Submit {
+				t.Fatalf("non-input act request carried submit: %+v", request)
+			}
+			continue
+		}
+		if request.Submit {
+			sawSubmit = true
+		}
+	}
+	if !sawSubmit {
+		t.Fatal("the authoring browser never received submit=true")
+	}
+}
+
 // TestClosedLoopOffline 是整条闭环的离线验证：
 // 输入 → 规划（工具调用构建 + 干跑验证）→ 审批 → 执行 → 报告。
 func TestClosedLoopOffline(t *testing.T) {
@@ -394,6 +450,50 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 	}
 	if !sawFailure {
 		t.Fatal("the model never saw dry_run_failed")
+	}
+
+	// 事件流里也必须留下失败明细。只写一句 "did not pass a full dry run"
+	// 会让读事件的人（和事后复盘）完全看不到是哪一步、哪个条件没过——
+	// 模型在对话里看得到，运维侧看不到，等于这个失败在事件流里是隐形的。
+	events, err := h.store.ListEvents(ctx, run.ID, 0)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	sawDetail := false
+	for _, event := range events {
+		if event.Type != EventToolCall {
+			continue
+		}
+		var payload struct {
+			Tool    string `json:"tool"`
+			Error   string `json:"error"`
+			Failure *struct {
+				Status string `json:"status"`
+				Steps  []struct {
+					Index       int      `json:"index"`
+					Action      string   `json:"action"`
+					Status      string   `json:"status"`
+					Error       string   `json:"error"`
+					Unsatisfied []string `json:"unsatisfied_conditions"`
+				} `json:"steps"`
+			} `json:"failure"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			continue
+		}
+		if payload.Tool != "finish_case" || payload.Error != "dry_run_failed" {
+			continue
+		}
+		if payload.Failure == nil || len(payload.Failure.Steps) == 0 {
+			t.Fatalf("dry_run_failed event must carry the failing steps: %s", event.Payload)
+		}
+		if payload.Failure.Steps[0].Status == "passed" {
+			t.Fatalf("dry-run failure must list only non-passed steps: %s", event.Payload)
+		}
+		sawDetail = true
+	}
+	if !sawDetail {
+		t.Fatal("no dry_run_failed tool_call event with step detail found")
 	}
 
 	// 落库的是修好之后的那一份：期望已被改对。

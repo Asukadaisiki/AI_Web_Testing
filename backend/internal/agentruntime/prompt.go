@@ -28,6 +28,7 @@ Hard rules (all of them are enforced; violations are rejected):
 9. If you opened the wrong page, call drop_last_step to remove that goto before opening the right one. A stray navigation is not harmless: the case would execute it.
 10. Keep the case minimal: only the steps needed to prove the goal. No exploratory clicks.
 11. If the goal is ambiguous or a required value is missing, call ask_user instead of guessing.
+12. When a search or form has no targetable submit control, use input with submit=true to press Enter. An icon-only submit button has an accessible name made of a private-use glyph and a text made of the same invisible code point: NO hint can ever match it, so do not try to click it and do not ask the user for a url instead.
 
 `)
 	builder.WriteString("Allowed actions: ")

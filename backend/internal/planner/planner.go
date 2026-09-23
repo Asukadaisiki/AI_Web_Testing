@@ -122,13 +122,13 @@ func (p *Planner) openPage(ctx context.Context, url, intent string) (Result, err
 func (p *Planner) click(
 	ctx context.Context, hint, intent string, expects contract.Expects,
 ) (Result, error) {
-	return p.act(ctx, contract.ActionClick, hint, nil, intent, expects)
+	return p.act(ctx, contract.ActionClick, hint, nil, intent, expects, false)
 }
 
 func (p *Planner) input(
-	ctx context.Context, hint, value, intent string, expects contract.Expects,
+	ctx context.Context, hint, value, intent string, expects contract.Expects, submit bool,
 ) (Result, error) {
-	return p.act(ctx, contract.ActionInput, hint, &value, intent, expects)
+	return p.act(ctx, contract.ActionInput, hint, &value, intent, expects, submit)
 }
 
 func (p *Planner) act(
@@ -138,6 +138,7 @@ func (p *Planner) act(
 	value *string,
 	intent string,
 	expects contract.Expects,
+	submit bool,
 ) (Result, error) {
 	if !p.hasPage {
 		return failure("no_observation", "no page has been observed yet; call open_page first"), nil
@@ -163,13 +164,13 @@ func (p *Planner) act(
 		},
 	}
 	step, err := contract.DeriveActionStep(
-		len(p.steps), action, intent, target, value, p.observation.URL, expects,
+		len(p.steps), action, intent, target, value, submit, p.observation.URL, expects,
 	)
 	if err != nil {
 		return failure("step_rejected", err.Error()), nil
 	}
 	// 先真的执行动作，成功后才记录步骤：动作失败不该留下一条假步骤。
-	request := contract.ActRequest{Action: action, Locator: locator}
+	request := contract.ActRequest{Action: action, Locator: locator, Submit: submit}
 	if value != nil {
 		request.Value = *value
 	}

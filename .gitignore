@@ -24,3 +24,7 @@ dist/
 
 #测试资料
 data/
+
+# 能力缺口取证工具的产物（worker/tests/_explore_capability.py 生成）
+worker/capability-dump.json
+worker/capability-dump.txt

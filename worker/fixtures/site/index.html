@@ -10,7 +10,7 @@
 
   <p id="hint">Tip: type in the search box to filter the list.</p>
 
-  <form id="filter-form" onsubmit="return false;">
+  <form id="filter-form">
     <label for="search">Search items</label>
     <input id="search" name="search" type="text" placeholder="Search items">
     <button id="filter" type="submit">Filter</button>
@@ -42,7 +42,10 @@
         }
       });
 
-      document.getElementById("filter").addEventListener("click", function () {
+      // 过滤逻辑同时挂在按钮点击和表单 submit 上：真实站点的搜索框普遍是
+      // "回车提交"，而提交控件常常是模型无法指到的图标按钮（CONTRACT §2.1 的 submit）。
+      // 表单没有 action，所以必须 preventDefault，否则回车会真的导航。
+      function applyFilter() {
         var query = search.value.trim().toLowerCase();
         var items = document.querySelectorAll("#items .item");
         for (var i = 0; i < items.length; i++) {
@@ -50,6 +53,13 @@
           var name = item.getAttribute("data-name") || "";
           item.style.display = (!query || name.indexOf(query) >= 0) ? "" : "none";
         }
+      }
+
+      document.getElementById("filter").addEventListener("click", applyFilter);
+
+      document.getElementById("filter-form").addEventListener("submit", function (event) {
+        event.preventDefault();
+        applyFilter();
       });
     })();
   </script>

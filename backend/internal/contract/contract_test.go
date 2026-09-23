@@ -120,14 +120,14 @@ func TestDerivedStepsAlwaysSatisfyTheContract(t *testing.T) {
 		},
 	}
 	clickStep, err := DeriveActionStep(
-		1, ActionClick, "add it", target, nil, pageURL,
+		1, ActionClick, "add it", target, nil, false, pageURL,
 		Expects{Text: &expectText, URL: &expectURL},
 	)
 	if err != nil {
 		t.Fatalf("click: %v", err)
 	}
 	inputStep, err := DeriveActionStep(
-		2, ActionInput, "set quantity", target, strPtr("2"), pageURL,
+		2, ActionInput, "set quantity", target, strPtr("2"), false, pageURL,
 		Expects{Value: &expectValue},
 	)
 	if err != nil {
@@ -172,8 +172,60 @@ func TestDeriveActionStepRequiresAnExpectation(t *testing.T) {
 			ObservationID: "o", PageStateID: "p", CandidateID: "c", PageURL: "https://shop.test/a",
 		},
 	}
-	if _, err := DeriveActionStep(1, ActionClick, "click", target, nil, "https://shop.test/a", Expects{}); err == nil {
+	if _, err := DeriveActionStep(1, ActionClick, "click", target, nil, false, "https://shop.test/a", Expects{}); err == nil {
 		t.Fatal("expected an error when no expectation is declared")
+	}
+}
+
+func TestSubmitIsOnlyAllowedOnInput(t *testing.T) {
+	target := Target{
+		Hint:    "Search items",
+		Locator: Locator{Kind: "role", Role: "searchbox", Name: "Search items", Exact: true, MatchCount: 1},
+		Grounding: Grounding{
+			ObservationID: "o", PageStateID: "p", CandidateID: "c", PageURL: "https://shop.test/a",
+		},
+	}
+	expectURL := "/search"
+
+	// input 可以带 submit：填完按回车提交。
+	step, err := DeriveActionStep(
+		1, ActionInput, "search", target, strPtr("alpha"), true, "https://shop.test/a",
+		Expects{URL: &expectURL},
+	)
+	if err != nil {
+		t.Fatalf("input with submit: %v", err)
+	}
+	if !step.Submit {
+		t.Fatal("input step must carry submit")
+	}
+
+	// click 带 submit 必须被拒：回车只对"填值"有意义。
+	_, err = DeriveActionStep(
+		1, ActionClick, "click", target, nil, true, "https://shop.test/a",
+		Expects{URL: &expectURL},
+	)
+	if err == nil {
+		t.Fatal("expected click with submit to be rejected")
+	}
+	if code := CodeOf(err); code != CodeUnexpectedSubmit {
+		t.Fatalf("code = %q, want %q", code, CodeUnexpectedSubmit)
+	}
+
+	// 契约本身也要挡住：绕过 Derive* 手写一个带 submit 的 click 同样非法。
+	manual := Step{
+		Index:         0,
+		Action:        ActionClick,
+		Intent:        "click",
+		Target:        &target,
+		Submit:        true,
+		Preconditions: []Condition{{Type: CondURLContains, Value: "shop.test", TimeoutMS: 1000}},
+		Postconditions: []Condition{
+			{Type: CondURLContains, Value: "/search", TimeoutMS: 1000},
+		},
+		TimeoutMS: 5000,
+	}
+	if code := CodeOf(ValidateStep(0, manual)); code != CodeUnexpectedSubmit {
+		t.Fatalf("manual click+submit code = %q, want %q", code, CodeUnexpectedSubmit)
 	}
 }
 

@@ -195,6 +195,7 @@ func DeriveActionStep(
 	intent string,
 	target Target,
 	value *string,
+	submit bool,
 	observedPageURL string,
 	expects Expects,
 ) (Step, error) {
@@ -229,6 +230,10 @@ func DeriveActionStep(
 		}
 		step.Value = value
 	}
+	// 无条件带上 submit，合法性交给 ValidateStep 判：只允许出现在 input 上。
+	// 不在这里静默丢弃——静默丢弃会把调用方的错误藏起来，而"构建即校验"的意义
+	// 就是让派生逻辑自身的问题在作者态暴露。
+	step.Submit = submit
 	return finishDerivedStep(step)
 }
 

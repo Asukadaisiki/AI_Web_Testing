@@ -40,6 +40,13 @@ const (
 	cartURL   = "https://shop.test/view_cart"
 )
 
+// searchGlyph 是 Font Awesome 搜索图标（U+F002）——纯图标按钮的"可访问名"。
+//
+// 假站点故意让它当搜索提交按钮：真实站点就是这样（`<i class="fa fa-search">` 没加
+// `aria-hidden`），可访问名与 text 都是同一个不可见码位，模型不可能用任何 hint 指到它。
+// 于是"在列表页搜索"只能靠 input 的 submit=true 走回车。
+const searchGlyph = "\uf002"
+
 func roleLocator(role, name string) contract.Locator {
 	return contract.Locator{Kind: "role", Role: role, Name: name, Exact: true, MatchCount: 1}
 }
@@ -72,7 +79,8 @@ func (s *fakeSite) page(url string, values map[string]string) (contract.Observat
 	case strings.HasPrefix(url, listURL):
 		elements := []contract.Element{
 			element("e1", "input", "textbox", "Search", "", nil, roleLocator("textbox", "Search")),
-			element("e2", "button", "button", "Search", "Search", nil, roleLocator("button", "Search")),
+			// 纯图标搜索按钮：模型指不到它（F1），只能靠 input 的 submit 走回车。
+			element("e2", "button", "button", searchGlyph, searchGlyph, nil, roleLocator("button", searchGlyph)),
 			element("e4", "button", "button", "Add to cart", "Add to cart", nil, roleLocator("button", "Add to cart")),
 		}
 		if !s.isBroken() {
@@ -191,6 +199,9 @@ type fakeWorker struct {
 	execErr  bool
 	// artifactSessions 记录每一次"该往哪个会话写产物"的声明（开浏览器会话 + 执行）。
 	artifactSessions []string
+	// actRequests 记录作者态动作请求：用来断言工具参数确实透传到了执行器
+	// （例如 input 的 submit 必须到达作者态，否则观测停在原页面）。
+	actRequests []contract.ActRequest
 }
 
 func newFakeWorker(site *fakeSite) *fakeWorker {
@@ -250,6 +261,9 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 			writeFakeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 			return
 		}
+		worker.mu.Lock()
+		worker.actRequests = append(worker.actRequests, body)
+		worker.mu.Unlock()
 		values, ok := worker.values(r.PathValue("id"))
 		if !ok {
 			writeFakeError(w, http.StatusNotFound, "session_not_found", "no session")
@@ -304,6 +318,15 @@ func (w *fakeWorker) artifactSessionIDs() []string {
 	defer w.mu.Unlock()
 	out := make([]string, len(w.artifactSessions))
 	copy(out, w.artifactSessions)
+	return out
+}
+
+// actRequestSnapshot 返回假执行器收到过的全部作者态动作请求，按收到顺序。
+func (w *fakeWorker) actRequestSnapshot() []contract.ActRequest {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]contract.ActRequest, len(w.actRequests))
+	copy(out, w.actRequests)
 	return out
 }
 

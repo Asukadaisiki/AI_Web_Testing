@@ -41,6 +41,7 @@
   "action": "goto",              // goto | click | input | assert_text | assert_url
   "intent": "打开商品列表",       // 人类可读，来自模型的自然语言
   "value": "https://...",        // goto: 绝对 URL；input: 输入值；assert_text: 期望文本；assert_url: URL 子串；click: null
+  "submit": false,               // 仅 input 允许；true = 填完之后按回车提交
   "target": {                    // 仅 click / input 需要；必须已接地
     "hint": "Add to cart",
     "locator": { "kind": "role", "role": "button", "name": "Add to cart", "exact": true },
@@ -53,7 +54,7 @@
   },
   "preconditions":  [ /* Condition[] */ ],
   "postconditions": [ /* Condition[] */ ],
-  "timeout_ms": 5000
+  "timeout_ms": 20000
 }
 ```
 
@@ -69,10 +70,39 @@
 
 `steps[0].action != "goto"` 一律拒绝：执行器不为首步做隐式预导航。
 
+**`submit` 只允许出现在 `input` 上**（其他动作带 `submit` → `step_unexpected_submit`）。
+
+存在的理由：真实站点上的搜索提交控件常常是纯图标按钮——可访问名与 `text` 都是同一个
+私有区码位（例如 `"\uf002"`），**模型不可能用任何 hint 指到它**，于是"在页面里搜索"
+这一步在契约层面无法表达。回车是表单的原生提交方式，不需要指到任何控件，因此把它做成
+契约的显式字段，而不是让执行器"填完顺手回车"（那会在需要纯填值的场景里帮倒忙）。
+
+作者态执行（`POST /sessions/{id}/act`）同样带 `submit`：作者态必须真的提交，
+否则观测停在原页面，后续步骤的接地会锚在错的页面上。
+
+**实测边界（automationexercise.com，2026-09-23）**：该站的搜索按钮是
+`<button type="button" id="submit_search"><i class="fa fa-search"></i></button>`——
+是 `type="button"`，不是 `type="submit"`。于是：
+
+| 做法 | 结果 |
+|---|---|
+| `input(submit=true)`（回车） | ❌ 不提交，URL 不变 |
+| 点 `#submit_search` | ✅ 提交，跳 `/products?search=Blue%20Top` |
+| `form.requestSubmit()` | ❌ 不提交 |
+
+**`submit` 只解决"表单能被回车提交"这一类站点。** 当站点的提交控件是 `type="button"`
++ JS 时，回车不是出路，唯一出路是能指到那个纯图标按钮本身——那是另一个能力缺口
+（别名匹配面），尚未实现。不要因为本字段存在就假定搜索一定能跑通。
+
+**缺省超时**：条件 `10000ms`、步骤 `20000ms`。这两个数是按真实站点实测定的：
+冷启动（干跑用的是全新 context，没有任何缓存）打开 automationexercise.com 的
+domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原来的 5000/3000
+正好卡在真实耗时上，导致**干跑永远不可能通过**，而干跑不过 case 就永远建不出来。
+
 ### 2.2 Condition
 
 ```jsonc
-{ "type": "text_visible", "value": "Added!", "timeout_ms": 3000 }
+{ "type": "text_visible", "value": "Added!", "timeout_ms": 10000 }
 ```
 
 **条件阶段表（唯一权威，全仓库只有这一处）**：
@@ -129,6 +159,7 @@
 | `step_unknown_action` | `action` 不在 5 个动作内 |
 | `step_missing_value` | `goto` / `input` / `assert_*` 缺 `value` |
 | `step_unexpected_value` | `click` 带了 `value` |
+| `step_unexpected_submit` | 非 `input` 动作带了 `submit` |
 | `step_missing_target` | `click` / `input` 缺 `target` 或 `target.hint` 为空 |
 | `step_unexpected_target` | `goto` / `assert_*` 带了 `target` |
 | `step_target_ungrounded` | `target.grounding` 缺 `observation_id` / `candidate_id` / `page_url` |
@@ -266,7 +297,7 @@ Go 侧从执行结果派生，落 `report_signals` 表：
 |---|---|---|
 | `open_page` | `url`, `intent` | 真实导航并观测；记录 goto 步骤 |
 | `click` | `hint`, `intent`, `expect_text?`, `expect_gone?`, `expect_url?`, `expect_value?` | 在最近观测中解析 `hint`；**必须唯一命中**；记录 click 步骤 |
-| `input` | `hint`, `value`, `intent`, `expect_*` | 同上，另填 `value` |
+| `input` | `hint`, `value`, `intent`, `expect_*`, `submit?` | 同上，另填 `value`；`submit: true` 表示填完按回车提交 |
 | `assert_text` | `text`, `intent` | 记录页面级文本断言 |
 | `assert_url` | `contains`, `intent` | 记录页面级 URL 断言 |
 | `finish_case` | `name` | 全量校验并落库为工件；run 进入 `awaiting_approval` |

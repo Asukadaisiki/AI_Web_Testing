@@ -72,9 +72,25 @@ async def wait_for_stable(page: Page) -> None:
 
 
 async def goto(page: Page, url: str, timeout_ms: int) -> None:
-    """导航到绝对 URL。"""
+    """导航到绝对 URL。
+
+    等待条件是 `commit`，**不是 `domcontentloaded`**。
+
+    实测（automationexercise.com，2026-09-23）：这个站点的页面在 HTTPS 下引用了
+    `http://fonts.googleapis.com/...`，被浏览器按 Mixed Content 拦掉；挂起的外部资源
+    把 DOMContentLoaded 拖到 20s 之后才触发。结果是"页面其实早就好了、URL 也对，
+    但 goto 报 step_timeout"——干跑偶然在 20s 内过、真实执行 20.8s 就红，
+    同一份 case 一会儿过一会儿不过。
+
+    正确做法：`commit` 只等导航被提交（快且可靠），页面就绪交给**后置条件轮询**决定——
+    那本来就是 v2 的就绪判据（每个条件有自己的 timeout_ms，独立于步超时）。
+    步超时应当约束"动作"，不该被目标站点的外部资源绑架。
+
+    这不掩盖真实故障：连不上仍然是 `worker_error`，内容迟迟不出现仍然是
+    后置条件 `condition_unmet`——都是诚实的失败。
+    """
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        await page.goto(url, wait_until="commit", timeout=timeout_ms)
     except PlaywrightTimeoutError as exc:
         raise step_timeout(f"goto {url!r} timed out after {timeout_ms}ms") from exc
     except PlaywrightError as exc:
@@ -119,10 +135,24 @@ async def click_target(page: Page, locator: Locator, timeout_ms: int) -> None:
     await wait_for_stable(page)
 
 
-async def fill_target(page: Page, locator: Locator, value: str, timeout_ms: int) -> None:
-    """`input` 动作：用 fill 语义写入（先清空再输入），因此 value 可以为空串。"""
+async def fill_target(
+    page: Page, locator: Locator, value: str, timeout_ms: int, submit: bool = False
+) -> None:
+    """`input` 动作：用 fill 语义写入（先清空再输入），因此 value 可以为空串。
+
+    `submit=True` 时填完按回车。真实站点上的搜索提交控件常常是纯图标按钮——
+    可访问名与文本都只有一个不可见的私有区码位，模型无法用任何 hint 指到它，
+    回车不需要指到任何控件，是表单的原生提交方式（CONTRACT §2.1）。
+
+    **边界（实测）**：这只对"表单能被回车提交"的站点有效。若站点的提交控件是
+    `type="button"` + JS（例如 automationexercise.com 的 `#submit_search`），
+    回车与 `form.requestSubmit()` 都不会提交，唯一出路是能指到那个按钮本身——
+    那是别名匹配面的活，不在本函数职责内。
+    """
     try:
         await locator.fill(value, timeout=timeout_ms)
+        if submit:
+            await locator.press("Enter", timeout=timeout_ms)
     except PlaywrightTimeoutError as exc:
         raise step_timeout(f"input timed out after {timeout_ms}ms") from exc
     except PlaywrightError as exc:

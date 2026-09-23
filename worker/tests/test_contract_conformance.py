@@ -83,13 +83,21 @@ class CaseValidationTest(unittest.TestCase):
         self.assertEqual(case.case_version, "loop.case.v1")
 
     def test_missing_timeouts_are_filled_not_rejected(self) -> None:
+        from loop_worker.contracts import (
+            DEFAULT_CONDITION_TIMEOUT_MS,
+            DEFAULT_STEP_TIMEOUT_MS,
+        )
+
         payload = self._goto_case()
         payload["steps"][0].pop("timeout_ms")
-        # postcondition 本来就没写 timeout_ms，归一化必须补 3000
+        # postcondition 本来就没写 timeout_ms，归一化必须补默认值。
+        # 断言常量而不是字面量：默认值是按真实站点实测调过的，写死会变成假红。
         self.assertNotIn("timeout_ms", payload["steps"][0]["postconditions"][0])
         case = validate_case(payload)
-        self.assertEqual(case.steps[0].timeout_ms, 5000)
-        self.assertEqual(case.steps[0].postconditions[0].timeout_ms, 3000)
+        self.assertEqual(case.steps[0].timeout_ms, DEFAULT_STEP_TIMEOUT_MS)
+        self.assertEqual(
+            case.steps[0].postconditions[0].timeout_ms, DEFAULT_CONDITION_TIMEOUT_MS
+        )
 
     def test_wrong_case_version_is_rejected(self) -> None:
         payload = self._goto_case()
