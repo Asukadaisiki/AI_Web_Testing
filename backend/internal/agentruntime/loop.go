@@ -102,27 +102,30 @@ func (r *Runtime) recordUsage(ctx context.Context, runID string, spent usage.Usa
 		return nil
 	}
 	spent = spent.Normalize()
-	total, err := r.store.AddUsage(ctx, runID, spent)
-	if err != nil {
-		// 记账失败不该拖垮这次 run：把用量写进事件，至少不丢证据。
+	total, accountingErr := r.store.AddUsage(ctx, runID, spent)
+	if accountingErr != nil {
+		// 事件是尽力而为；即使账本不可用，也要先保留单次调用证据。
 		r.emit(ctx, runID, EventModelUsage, map[string]any{
-			"call": spent, "error": err.Error(),
+			"call": spent, "error": accountingErr.Error(),
 		})
-		return nil
+	} else {
+		r.emit(ctx, runID, EventModelUsage, map[string]any{
+			"call":                         spent,
+			"total":                        total,
+			"limit":                        r.maxTokens,
+			"fresh_total_limit":            r.maxFreshTokens,
+			"prompt_tokens_per_call_limit": r.maxPromptTokensPerCall,
+		})
 	}
-	r.emit(ctx, runID, EventModelUsage, map[string]any{
-		"call":                         spent,
-		"total":                        total,
-		"limit":                        r.maxTokens,
-		"fresh_total_limit":            r.maxFreshTokens,
-		"prompt_tokens_per_call_limit": r.maxPromptTokensPerCall,
-	})
 	if r.maxPromptTokensPerCall > 0 && spent.PromptTokens > r.maxPromptTokensPerCall {
 		return fmt.Errorf(
 			"单次模型调用输入 token 超过上限：已用 %d / 上限 %d。"+
 				"本 run 已中止；调大 LOOP_MAX_PROMPT_TOKENS_PER_CALL，或缩小请求上下文",
 			spent.PromptTokens, r.maxPromptTokensPerCall,
 		)
+	}
+	if accountingErr != nil {
+		return fmt.Errorf("模型用量记账失败，本 run 已中止：%w", accountingErr)
 	}
 	if r.maxFreshTokens > 0 && total.FreshTotalTokens > r.maxFreshTokens {
 		return fmt.Errorf(

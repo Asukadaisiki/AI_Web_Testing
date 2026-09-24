@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -235,6 +236,50 @@ func TestPromptTokenPerCallLimitStopsTheRun(t *testing.T) {
 	}
 	if spent.ModelCalls != 1 || spent.PromptTokens != 31000 {
 		t.Fatalf("usage = %+v, want the rejected call recorded", spent)
+	}
+}
+
+func TestRecordUsageFailsClosedWhenAccountingFails(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "loop.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		spent     usage.Usage
+		wantError string
+	}{
+		{
+			name:      "usage within the per-call limit",
+			spent:     usage.Call(1000, 100, 0, 0),
+			wantError: "模型用量记账失败",
+		},
+		{
+			name:      "prompt over the per-call limit",
+			spent:     usage.Call(31000, 100, 0, 0),
+			wantError: "LOOP_MAX_PROMPT_TOKENS_PER_CALL",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := New(Config{
+				Store:                  database,
+				MaxPromptTokensPerCall: 30000,
+			})
+
+			err := runtime.recordUsage(context.Background(), "run-accounting-failure", tt.spent)
+			if err == nil {
+				t.Fatal("accounting failure must stop the run")
+			}
+			if !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %q, want it to contain %q", err, tt.wantError)
+			}
+		})
 	}
 }
 
