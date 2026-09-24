@@ -130,13 +130,34 @@ func (p *Planner) openPage(ctx context.Context, url, intent string) (Result, err
 	if !isAbsoluteURL(url) {
 		return failure("url_not_absolute", fmt.Sprintf("open_page requires an absolute url, got %q", url)), nil
 	}
+	pageFingerprint := PageFingerprint(p.observation)
+	targetKey := canonicalPageURL(url)
+	if p.failedStrategy(pageFingerprint, contract.ActionGoto, targetKey) {
+		return repeatedStrategyFailure(), nil
+	}
+	step, err := contract.DeriveGotoStep(len(p.steps), intent, url)
+	if err != nil {
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          contract.ActionGoto,
+			TargetKey:       targetKey,
+			ErrorCode:       "step_rejected",
+		})
+		return failure("step_rejected", err.Error()), nil
+	}
 	observation, err := p.client.Navigate(ctx, p.browserSessionID, url)
 	if err != nil {
 		return workerFailure("navigate_failed", err), nil
 	}
-	step, err := contract.DeriveGotoStep(len(p.steps), intent, url)
-	if err != nil {
-		return failure("step_rejected", err.Error()), nil
+	if err := evaluatePageConditions(observation, step.Postconditions); err != nil {
+		result := failure(string(contract.SignalConditionUnmet), err.Error())
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          contract.ActionGoto,
+			TargetKey:       targetKey,
+			ErrorCode:       result.Error,
+		})
+		return p.restoreAfterFailedAction(ctx, result)
 	}
 	if len(p.steps) == 0 {
 		p.baseURL = origin(url)
@@ -196,15 +217,26 @@ func (p *Planner) act(
 		return failure("no_observation", "no page has been observed yet; call open_page first"), nil
 	}
 	targetKey := failureTargetKey(requestedCandidateID, spec, hint)
+	pageFingerprint := PageFingerprint(p.observation)
+	if p.failedStrategy(pageFingerprint, action, targetKey) {
+		return repeatedStrategyFailure(), nil
+	}
 	element, locator, selectedCandidateID, candidates, err := p.resolveTarget(action, hint, spec, requestedCandidateID)
 	if err != nil {
-		return Result{
+		result := Result{
 			OK:         false,
 			Error:      errorCode(err),
 			Detail:     err.Error(),
 			Page:       pageView(p.observation),
 			Candidates: candidates,
-		}, nil
+		}
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          action,
+			TargetKey:       targetKey,
+			ErrorCode:       result.Error,
+		})
+		return result, nil
 	}
 	targetHint := hint
 	if strings.TrimSpace(targetHint) == "" {
@@ -228,23 +260,13 @@ func (p *Planner) act(
 		len(p.steps), action, intent, target, value, submit, p.observation.URL, expects,
 	)
 	if err != nil {
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          action,
+			TargetKey:       targetKey,
+			ErrorCode:       "step_rejected",
+		})
 		return failure("step_rejected", err.Error()), nil
-	}
-	pageFingerprint := PageFingerprint(p.observation)
-	if p.failedStrategy(pageFingerprint, action, targetKey) {
-		return failure(
-			CodeStrategyRepeated,
-			"this action and target already failed on the unchanged page; change target, scope, action, or page state",
-		), nil
-	}
-	if isTargetAssertion(action) {
-		p.steps = append(p.steps, step)
-		return Result{
-			OK:      true,
-			Summary: fmt.Sprintf("recorded %s step %d on %q", action, step.Index, displayName(element)),
-			Page:    pageView(p.observation),
-			Steps:   stepViews(p.steps),
-		}, nil
 	}
 	// 先真的执行动作，成功后才记录步骤：动作失败不该留下一条假步骤。
 	request := contract.ActRequest{
@@ -309,12 +331,6 @@ func (p *Planner) restoreAfterFailedAction(ctx context.Context, result Result) (
 	return result, nil
 }
 
-func isTargetAssertion(action contract.Action) bool {
-	return action == contract.ActionAssertElement ||
-		action == contract.ActionAssertAttribute ||
-		action == contract.ActionAssertCount
-}
-
 func displayName(element contract.Element) string {
 	if strings.TrimSpace(element.Name) != "" {
 		return element.Name
@@ -368,18 +384,36 @@ func (p *Planner) assertText(text, intent string) (Result, error) {
 	if !p.hasPage {
 		return failure("no_observation", "no page has been observed yet; call open_page first"), nil
 	}
+	pageFingerprint := PageFingerprint(p.observation)
+	targetKey := normalize(text)
+	if p.failedStrategy(pageFingerprint, contract.ActionAssertText, targetKey) {
+		return repeatedStrategyFailure(), nil
+	}
 	step, err := contract.DeriveAssertTextStep(len(p.steps), intent, text, p.observation.URL)
 	if err != nil {
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          contract.ActionAssertText,
+			TargetKey:       targetKey,
+			ErrorCode:       "step_rejected",
+		})
 		return failure("step_rejected", err.Error()), nil
 	}
 	if !observationHasText(p.observation, text) {
-		return Result{
+		result := Result{
 			OK:     false,
 			Error:  string(contract.SignalConditionUnmet),
 			Detail: fmt.Sprintf("the text %q is not present in the current observation", text),
 			Page:   pageView(p.observation),
 			Steps:  stepViews(p.steps),
-		}, nil
+		}
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          contract.ActionAssertText,
+			TargetKey:       targetKey,
+			ErrorCode:       result.Error,
+		})
+		return result, nil
 	}
 	p.steps = append(p.steps, step)
 	return Result{
@@ -394,12 +428,23 @@ func (p *Planner) assertURL(contains, intent string) (Result, error) {
 	if !p.hasPage {
 		return failure("no_observation", "no page has been observed yet; call open_page first"), nil
 	}
+	pageFingerprint := PageFingerprint(p.observation)
+	targetKey := strings.TrimSpace(contains)
+	if p.failedStrategy(pageFingerprint, contract.ActionAssertURL, targetKey) {
+		return repeatedStrategyFailure(), nil
+	}
 	step, err := contract.DeriveAssertURLStep(len(p.steps), intent, contains, p.observation.URL)
 	if err != nil {
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          contract.ActionAssertURL,
+			TargetKey:       targetKey,
+			ErrorCode:       "step_rejected",
+		})
 		return failure("step_rejected", err.Error()), nil
 	}
 	if !strings.Contains(p.observation.URL, contains) {
-		return Result{
+		result := Result{
 			OK:    false,
 			Error: string(contract.SignalConditionUnmet),
 			Detail: fmt.Sprintf(
@@ -409,7 +454,14 @@ func (p *Planner) assertURL(contains, intent string) (Result, error) {
 			),
 			Page:  pageView(p.observation),
 			Steps: stepViews(p.steps),
-		}, nil
+		}
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          contract.ActionAssertURL,
+			TargetKey:       targetKey,
+			ErrorCode:       result.Error,
+		})
+		return result, nil
 	}
 	p.steps = append(p.steps, step)
 	return Result{

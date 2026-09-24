@@ -303,6 +303,7 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 				"ok":              false,
 				"error":           lastResult.Error,
 				"detail":          detail,
+				"tool":            "multiple_tool_calls",
 				"tool_call_count": len(message.ToolCalls),
 			})
 			continue

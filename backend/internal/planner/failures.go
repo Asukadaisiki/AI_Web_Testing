@@ -17,6 +17,8 @@ const (
 	CodeStrategyRepeated = "strategy_repeated"
 )
 
+const strategyRepeatedDetail = "this action and target already failed on the unchanged page; change target, scope, action, or page state"
+
 // FailureSignature describes an action strategy that failed on a semantic page state.
 type FailureSignature struct {
 	PageFingerprint string          `json:"page_fingerprint"`
@@ -100,6 +102,10 @@ func (p *Planner) failedStrategy(pageFingerprint string, action contract.Action,
 		}
 	}
 	return false
+}
+
+func repeatedStrategyFailure() Result {
+	return failure(CodeStrategyRepeated, strategyRepeatedDetail)
 }
 
 func (p *Planner) rememberFailure(signature FailureSignature) {

@@ -191,6 +191,7 @@ func TestMultipleToolCallsExecuteNoneAndRemainInNextContext(t *testing.T) {
 			OK            bool   `json:"ok"`
 			Error         string `json:"error"`
 			Detail        string `json:"detail"`
+			Tool          string `json:"tool"`
 			ToolCallCount int    `json:"tool_call_count"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -202,6 +203,9 @@ func TestMultipleToolCallsExecuteNoneAndRemainInNextContext(t *testing.T) {
 		found = true
 		if payload.OK || payload.ToolCallCount != 2 || payload.Detail == "" {
 			t.Fatalf("multiple-tool-call event is not explanatory: %s", event.Payload)
+		}
+		if payload.Tool != "multiple_tool_calls" {
+			t.Fatalf("multiple-tool-call event tool = %q, want stable timeline name", payload.Tool)
 		}
 	}
 	if !found {

@@ -1,10 +1,15 @@
 package planner
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 func TestObservationHasTextChecksEachVisibleNodeWithoutJoiningNodes(t *testing.T) {
@@ -162,5 +167,106 @@ func TestSatisfiedPageAssertionsCommit(t *testing.T) {
 		got[0].Action != contract.ActionAssertText ||
 		got[1].Action != contract.ActionAssertURL {
 		t.Fatalf("committed steps = %#v, want text and url assertions", got)
+	}
+}
+
+func TestFailedTargetAssertionsUseWorkerEvaluationBeforeCommit(t *testing.T) {
+	tests := []struct {
+		name    string
+		action  contract.Action
+		expects contract.Expects
+	}{
+		{
+			name:    "element state",
+			action:  contract.ActionAssertElement,
+			expects: contract.Expects{Element: stringPointer("disabled")},
+		},
+		{
+			name:    "attribute",
+			action:  contract.ActionAssertAttribute,
+			expects: contract.Expects{Attribute: stringPointer("data-state=ready")},
+		},
+		{
+			name:    "count",
+			action:  contract.ActionAssertCount,
+			expects: contract.Expects{Count: stringPointer("2")},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const pageURL = "https://shop.test/products"
+			locator := contract.Locator{
+				Kind: "role", Role: "button", Name: "Continue", Exact: true, MatchCount: 1,
+			}
+			observation := contract.Observation{
+				ObservationID: "obs-products",
+				PageStateID:   "page-products",
+				URL:           pageURL,
+				Title:         "Products",
+				Elements: []contract.Element{{
+					Ref: "continue", Tag: "button", Role: "button", Name: "Continue",
+					Visible: true, Enabled: true, Locators: []contract.Locator{locator},
+				}},
+			}
+			gotoStep, err := contract.DeriveGotoStep(0, "open products", pageURL)
+			if err != nil {
+				t.Fatalf("derive goto: %v", err)
+			}
+			var acts []contract.ActRequest
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /sessions/{id}/act", func(w http.ResponseWriter, r *http.Request) {
+				var request contract.ActRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				acts = append(acts, request)
+				message := "assertion did not hold"
+				writeReplayJSON(w, contract.ActResponse{
+					Status:      "failed",
+					Observation: observation,
+					Error: &contract.StepError{
+						Kind: contract.SignalConditionUnmet, Message: message,
+					},
+				})
+			})
+			mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			mux.HandleFunc("POST /sessions", func(w http.ResponseWriter, _ *http.Request) {
+				writeReplayJSON(w, contract.Session{SessionID: "browser-replayed"})
+			})
+			mux.HandleFunc("POST /sessions/{id}/navigate", func(w http.ResponseWriter, _ *http.Request) {
+				writeReplayJSON(w, observation)
+			})
+			server := httptest.NewServer(mux)
+			t.Cleanup(server.Close)
+
+			planner := &Planner{
+				client:           worker.New(server.URL),
+				sessionID:        "assertion-test",
+				browserSessionID: "browser-original",
+				observation:      observation,
+				hasPage:          true,
+				steps:            []contract.Step{gotoStep},
+			}
+			result, err := planner.targetAction(
+				context.Background(), test.action, "Continue", nil, "", "",
+				"verify continue", test.expects,
+			)
+			if err != nil {
+				t.Fatalf("target assertion: %v", err)
+			}
+			if result.OK || result.Error != string(contract.SignalConditionUnmet) {
+				t.Fatalf("target assertion result = %+v, want condition_unmet", result)
+			}
+			if len(acts) != 1 || acts[0].Action != test.action {
+				t.Fatalf("worker assertion requests = %#v, want one %s", acts, test.action)
+			}
+			if got := planner.Steps(); !reflect.DeepEqual(got, []contract.Step{gotoStep}) {
+				t.Fatalf("committed steps = %#v, want only goto", got)
+			}
+		})
 	}
 }

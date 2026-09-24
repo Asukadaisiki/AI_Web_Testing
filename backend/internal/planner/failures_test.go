@@ -254,6 +254,157 @@ func TestRepeatedFailureLedgerRetainsNewestEightUniqueSignatures(t *testing.T) {
 	}
 }
 
+func TestRedirectedOpenPageDoesNotCommit(t *testing.T) {
+	planner, navigateCalls := redirectedOpenPagePlanner(t)
+
+	result, err := planner.openPage(
+		context.Background(), "https://shop.test/products", "open products",
+	)
+	if err != nil {
+		t.Fatalf("open page: %v", err)
+	}
+	if result.OK || result.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("open page result = %+v, want condition_unmet", result)
+	}
+	if got := planner.Steps(); len(got) != 0 {
+		t.Fatalf("committed steps = %#v, want none", got)
+	}
+	if *navigateCalls != 1 {
+		t.Fatalf("navigate calls = %d, want 1", *navigateCalls)
+	}
+}
+
+func TestRepeatedRedirectedOpenPageIsRejectedBeforeNavigation(t *testing.T) {
+	planner, navigateCalls := redirectedOpenPagePlanner(t)
+	call := func() Result {
+		t.Helper()
+		result, err := planner.openPage(
+			context.Background(), "https://shop.test/products", "open products",
+		)
+		if err != nil {
+			t.Fatalf("open page: %v", err)
+		}
+		return result
+	}
+
+	first := call()
+	if first.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("first open page = %+v, want condition_unmet", first)
+	}
+	repeated := call()
+	if repeated.Error != CodeStrategyRepeated {
+		t.Fatalf("repeated open page = %+v, want strategy_repeated", repeated)
+	}
+	if *navigateCalls != 1 {
+		t.Fatalf("navigate calls = %d, want 1", *navigateCalls)
+	}
+}
+
+func TestDeterministicPlannerFailuresAreRejectedOnIdenticalRetry(t *testing.T) {
+	tests := []struct {
+		name        string
+		observation contract.Observation
+		call        func(*Planner) (Result, error)
+		wantError   string
+	}{
+		{
+			name:        "target not found",
+			observation: failureTestObservation("control-17", "widget"),
+			call: func(planner *Planner) (Result, error) {
+				return planner.click(
+					context.Background(), "Missing", nil, "", "click missing",
+					contract.Expects{Text: stringPointer("done")},
+				)
+			},
+			wantError: CodeTargetNotFound,
+		},
+		{
+			name: "target ambiguous",
+			observation: contract.Observation{
+				URL: "https://shop.test/products", Title: "Products",
+				Elements: []contract.Element{
+					failureTestObservation("first", "one").Elements[0],
+					failureTestObservation("second", "two").Elements[0],
+				},
+			},
+			call: func(planner *Planner) (Result, error) {
+				return planner.click(
+					context.Background(), "Widget", nil, "", "click widget",
+					contract.Expects{Text: stringPointer("done")},
+				)
+			},
+			wantError: CodeTargetAmbiguous,
+		},
+		{
+			name:        "step rejected",
+			observation: failureTestObservation("control-17", "widget"),
+			call: func(planner *Planner) (Result, error) {
+				return planner.click(
+					context.Background(), "Widget", nil, "", "click widget", contract.Expects{},
+				)
+			},
+			wantError: "step_rejected",
+		},
+		{
+			name:        "text assertion unmet",
+			observation: failureTestObservation("control-17", "widget"),
+			call: func(planner *Planner) (Result, error) {
+				return planner.assertText("Missing", "verify missing")
+			},
+			wantError: string(contract.SignalConditionUnmet),
+		},
+		{
+			name:        "url assertion unmet",
+			observation: failureTestObservation("control-17", "widget"),
+			call: func(planner *Planner) (Result, error) {
+				return planner.assertURL("/missing", "verify missing url")
+			},
+			wantError: string(contract.SignalConditionUnmet),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			planner, workerCalls := failureTestPlanner(t, test.observation)
+			first, err := test.call(planner)
+			if err != nil {
+				t.Fatalf("first call: %v", err)
+			}
+			if first.Error != test.wantError {
+				t.Fatalf("first result = %+v, want %s", first, test.wantError)
+			}
+			repeated, err := test.call(planner)
+			if err != nil {
+				t.Fatalf("repeated call: %v", err)
+			}
+			if repeated.Error != CodeStrategyRepeated {
+				t.Fatalf("repeated result = %+v, want strategy_repeated", repeated)
+			}
+			if *workerCalls != 0 {
+				t.Fatalf("worker calls = %d, want 0", *workerCalls)
+			}
+		})
+	}
+}
+
+func TestFailedPageAssertionCanRetryAfterPageFingerprintChanges(t *testing.T) {
+	observation := failureTestObservation("control-17", "widget")
+	planner, _ := failureTestPlanner(t, observation)
+
+	first, err := planner.assertText("Missing", "verify missing")
+	if err != nil || first.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("first assertion: result=%+v err=%v", first, err)
+	}
+	planner.observation.Title = "Updated Products"
+	second, err := planner.assertText("Missing", "verify missing")
+	if err != nil {
+		t.Fatalf("second assertion: %v", err)
+	}
+	if second.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("second assertion = %+v, want a fresh condition_unmet result", second)
+	}
+}
+
 func stringPointer(value string) *string {
 	return &value
 }
@@ -296,4 +447,32 @@ func failureTestPlanner(
 		observation:      observation,
 		hasPage:          true,
 	}, &workerCalls
+}
+
+func redirectedOpenPagePlanner(t *testing.T) (*Planner, *int) {
+	t.Helper()
+	navigateCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /sessions/{id}/navigate", func(w http.ResponseWriter, _ *http.Request) {
+		navigateCalls++
+		writeReplayJSON(w, contract.Observation{
+			ObservationID: "redirected",
+			PageStateID:   "redirected",
+			URL:           "https://auth.test/login",
+			Title:         "Login",
+		})
+	})
+	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /sessions", func(w http.ResponseWriter, _ *http.Request) {
+		writeReplayJSON(w, contract.Session{SessionID: "browser-replayed"})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return &Planner{
+		client:           worker.New(server.URL),
+		sessionID:        "redirect-test",
+		browserSessionID: "browser-original",
+	}, &navigateCalls
 }
