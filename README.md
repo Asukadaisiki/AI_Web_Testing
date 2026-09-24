@@ -62,6 +62,9 @@ name/text/aliases 匹配最新完整 Observation 中动作、role 兼容的 Acti
 验证通过才会提交；文本按每个可见 element 的 Name/Text/FullText 和每个可见 structure 的
 FullText 分别做规范化匹配，不跨节点拼接。已提交断言仍由全新干跑复验；`finish_case` 若在第
 `k` 步失败，也只有后端可以删除 `k..end` 并重放 `0..k-1`，模型没有删除已提交步骤的工具。
+调用 `finish_case` 前，模型必须回看已提交步骤，确保 goal 中每项明确预期结果都在相关最终状态上
+有断言或动作 postcondition 作为证据。仅导航到页面或看到相关对象不构成结果证明；较早输入某个值
+也不证明该值在后续或最终页面仍然成立，goal 要求的最终值和数量必须在该页面明确断言。
 
 ## 为什么重做执行器与契约
 

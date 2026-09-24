@@ -412,7 +412,7 @@ Go 侧从执行结果派生，落 `report_signals` 表：
 | `input` | `hint?`, `candidate_id?`, `target?`, `value`, `intent`, `expect_*`, `submit?` | 同上，另填 `value`；`submit: true` 表示填完按回车提交 |
 | `assert_text` | `text`, `intent` | 当前完整 Observation 满足文本断言后记录步骤 |
 | `assert_url` | `contains`, `intent` | 当前完整 Observation 满足 URL 断言后记录步骤 |
-| `finish_case` | `name` | 全量校验并落库为工件；run 进入 `awaiting_approval` |
+| `finish_case` | `name` | 先确认 goal 的每项明确预期结果在相关最终状态上已有提交证据，再全量校验和干跑；通过后落库并进入 `awaiting_approval` |
 | `ask_user` | `question` | run 进入 `awaiting_input`，等人回答后继续 |
 
 工具失败时返回结构化错误（例如 `{"error":"target_not_found","hint":"...","candidates":[...]}`），模型必须据此改口重试，**不允许**把未接地的目标写进 case。
@@ -442,6 +442,9 @@ proposed → derived and validated → action executed when applicable
 - 派生、目标解析、动作执行或作者态 expectation 失败时，该尝试不追加到 case；
 - 失败动作可能已经改变页面，因此后端会重建 browser session 并重放当前已提交前缀；
 - 已提交步骤对模型不可变，工具列表中不存在删除或回退步骤的操作；
+- 调用 `finish_case` 前，模型必须检查已提交步骤，确保 goal 中每项明确预期结果在相关最终状态上
+  都有断言或明确编码该结果的动作 postcondition；导航到页面或当前可见相关对象本身不构成证明；
+- 较早设置 input 不证明该值在后续或最终页面持续成立；goal 要求的最终值和数量必须在该页面断言；
 - `finish_case` 干跑在第 `k` 步失败时，只有后端可以按新鲜执行证据移除 `k..end`，再重放
   `0..k-1`；重放失败以 `committed_prefix_replay_failed` 终止 run。
 

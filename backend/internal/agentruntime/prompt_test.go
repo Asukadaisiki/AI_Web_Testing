@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
 )
 
 // 提示词与校验器不能漂移：模型看到的取值清单必须就是校验器接受的清单。
@@ -52,6 +53,52 @@ func TestSystemPromptProtectsCommittedSteps(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "committed") || !strings.Contains(prompt, "backend") {
 		t.Fatal("prompt must explain that the backend repairs failed tails while committed steps remain protected")
+	}
+}
+
+func TestSystemPromptRequiresCommittedFinalStateProofBeforeFinish(t *testing.T) {
+	prompt := SystemPrompt()
+	for _, want := range []string{
+		"before calling finish_case",
+		"every explicit expected outcome",
+		"committed proof",
+		"relevant final state",
+		"Navigation or current visibility alone is not proof",
+		"assertion or an action postcondition",
+		"Setting an input earlier does not prove",
+		"persisted on a later or final page",
+		"Final requested values and counts must be asserted there",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt must require final-state proof with %q", want)
+		}
+	}
+}
+
+func TestFinishCaseToolRequiresCommittedFinalStateProofBeforeFinish(t *testing.T) {
+	finishDescription := ""
+	for _, tool := range planner.Tools() {
+		if tool.Name == planner.ToolFinishCase {
+			finishDescription = tool.Description
+			break
+		}
+	}
+	if finishDescription == "" {
+		t.Fatal("finish_case tool definition is missing")
+	}
+	for _, want := range []string{
+		"every explicit expected outcome",
+		"committed proof",
+		"relevant final state",
+		"Navigation or current visibility alone is not proof",
+		"assertion or an action postcondition",
+		"Setting an input earlier does not prove",
+		"persisted on a later or final page",
+		"Final requested values and counts must be asserted there",
+	} {
+		if !strings.Contains(finishDescription, want) {
+			t.Fatalf("finish_case tool must require final-state proof with %q", want)
+		}
 	}
 }
 

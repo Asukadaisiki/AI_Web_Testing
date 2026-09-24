@@ -277,7 +277,10 @@ func Tools() []Tool {
 		},
 		{
 			Name: ToolFinishCase,
-			Description: "Finish the case. The backend validates it and runs it once in a fresh browser; only a case that passes that dry run is stored and sent to the user for approval. " +
+			Description: "Finish the case only after inspecting the committed steps and ensuring every explicit expected outcome from the user's goal has committed proof on the relevant final state. " +
+				"Navigation or current visibility alone is not proof; use an assertion or an action postcondition that explicitly encodes the expected outcome. " +
+				"Setting an input earlier does not prove its value persisted on a later or final page. Final requested values and counts must be asserted there. " +
+				"The backend validates the case and runs it once in a fresh browser; only a case that passes that dry run is stored and sent to the user for approval. " +
 				"If the dry run fails you get the failing steps back and must fix them.",
 			Parameters: map[string]any{
 				"type": "object",

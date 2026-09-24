@@ -332,6 +332,9 @@ cd worker && uv run python -m unittest tests.test_observation_v2.ObservationV2Te
   可能改变页面时由后端重放已提交前缀。页面断言也必须先对当前完整 Observation 验证通过才提交；
   文本按可见 element 的 Name/Text/FullText 和可见 structure 的 FullText 逐节点规范化匹配，
   不跨节点拼接，已提交断言再由全新干跑复验。
+- `finish_case` 前必须检查 goal 中每项明确预期结果是否在相关最终状态上已有提交断言或动作
+  postcondition。导航或当前可见性不是最终结果证据；较早设置 input 也不能替代在最终页面断言
+  goal 指定的值或数量。
 - 新鲜干跑在第 `k` 步失败时，后端删除 `k..end` 并重放 `0..k-1`；模型不能删除已提交步骤。
 - 生产 planner 没有电商专用 action 或硬编码 selector；离线脚本只用于确定性回归。
 
@@ -378,9 +381,11 @@ cd worker && uv run python -m unittest tests.test_api tests.test_ecommerce_basel
 ### 控制器追加：真实 quantity-3 canary
 
 本工作树不运行真实 canary，下面字段明确留给持有 staged credentials 的控制器追加。控制器的
-首次尝试暴露了 `committed_prefix_replay_failed` 的 planner 生命周期缺陷，因此没有可接受的本次
-基线指标；代码与离线回归修复后，仍需控制器重跑。上文历史 canary 不能替代本次有界规划器
-quantity-`3` 验收，也不构成本次通过证据。
+首次尝试暴露了 `committed_prefix_replay_failed` 的 planner 生命周期缺陷。后续一次运行到达
+`awaiting_approval`，审批后执行完成 15/15 步，但最终截图中目标商品数量为 `12`，不是 goal 要求的
+`3`：此前失败 canary 已累积购物车状态，而本次 case 末尾只有导航步骤，没有在最终购物车状态断言
+数量，因此 `finish_case` 干跑没有证明明确预期结果。本轮只修正通用 authoring guidance，仍需
+控制器以隔离状态重跑；上文历史 canary 不能替代本次 quantity-`3` 验收，也不构成本次通过证据。
 
 必过条件：
 
@@ -396,7 +401,7 @@ repeated failure signatures = 0
 
 | 项 | 控制器实测值 |
 |---|---|
-| 验证状态 | `PENDING — offline fix complete; controller live rerun required` |
+| 验证状态 | `FAILED — execution passed 15/15, but final cart quantity was 12; controller rerun required` |
 | run id | `<append after live canary>` |
 | session id | `<append after live canary>` |
 | execution id | `<append after live canary>` |
