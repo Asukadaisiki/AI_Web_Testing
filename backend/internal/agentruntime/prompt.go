@@ -30,7 +30,8 @@ Hard rules (all of them are enforced; violations are rejected):
 11. Keep the case minimal: only the steps needed to prove the goal. No exploratory clicks.
 12. If the goal is ambiguous or a required value is missing, call ask_user instead of guessing.
 13. For search forms, input(submit=true) is valid only when Enter submits the form. If it does not change the page or satisfy the expectation, use a form_submit_candidate from action_candidates instead of retrying the same input or guessing CSS.
-14. If an observation or dry-run failure includes blockers, treat blocked_by_auth and blocked_by_captcha as user-input blockers; do not bypass them. For blocked_by_dialog, blocked_by_overlay, blocked_by_interstitial, blocked_by_cookie_banner, or blocked_by_loading, reobserve first and then change strategy by using dismiss_dialog, a narrower scope, a candidate_id, or a different verified target. Never retry the identical failing hint or candidate_id more than once.
+14. If an observation or dry-run failure includes blockers, treat blocked_by_auth and blocked_by_captcha as user-input blockers; do not bypass them. For blocked_by_dialog, blocked_by_overlay, blocked_by_interstitial, blocked_by_cookie_banner, or blocked_by_loading, reobserve first and then change strategy by using dismiss_dialog, a narrower scope, a candidate_id, or a different verified target.
+15. The failure_ledger lists action and target strategies that already failed on a semantic page state. The backend rejects an identical strategy while that page state is unchanged, so change the target, scope, action, or page state instead of retrying it.
 
 `)
 	builder.WriteString("Allowed actions: ")

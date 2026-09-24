@@ -220,6 +220,14 @@ func (p *Planner) act(
 	if err != nil {
 		return failure("step_rejected", err.Error()), nil
 	}
+	pageFingerprint := PageFingerprint(p.observation)
+	targetKey := failureTargetKey(selectedCandidateID, spec)
+	if p.failedStrategy(pageFingerprint, action, targetKey) {
+		return failure(
+			CodeStrategyRepeated,
+			"this action and target already failed on the unchanged page; change target, scope, action, or page state",
+		), nil
+	}
 	if isTargetAssertion(action) {
 		p.steps = append(p.steps, step)
 		return Result{
@@ -241,7 +249,14 @@ func (p *Planner) act(
 	}
 	response, err := p.client.Act(ctx, p.browserSessionID, request)
 	if err != nil {
-		return p.restoreAfterFailedAction(ctx, workerFailure("action_failed", err))
+		result := workerFailure("action_failed", err)
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          action,
+			TargetKey:       targetKey,
+			ErrorCode:       result.Error,
+		})
+		return p.restoreAfterFailedAction(ctx, result)
 	}
 	if response.Status != "passed" {
 		code := "action_failed"
@@ -250,11 +265,18 @@ func (p *Planner) act(
 			code = string(response.Error.Kind)
 			detail = response.Error.Message
 		}
-		return p.restoreAfterFailedAction(ctx, Result{
+		result := Result{
 			OK:     false,
 			Error:  code,
 			Detail: detail,
+		}
+		p.rememberFailure(FailureSignature{
+			PageFingerprint: pageFingerprint,
+			Action:          action,
+			TargetKey:       targetKey,
+			ErrorCode:       result.Error,
 		})
+		return p.restoreAfterFailedAction(ctx, result)
 	}
 	p.observation = response.Observation
 	p.steps = append(p.steps, step)

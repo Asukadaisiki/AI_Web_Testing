@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
@@ -481,6 +482,107 @@ func TestUngroundedHintIsRejectedAndModelRetries(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the model never saw target_not_found in canonical state")
+	}
+}
+
+func TestRepeatedFailureIsRejectedBeforeWorkerCall(t *testing.T) {
+	h := newHarness(t, nil)
+	session, err := planner.New(
+		context.Background(),
+		h.runtime.client,
+		"sess_repeated_failure",
+		"open a product",
+	)
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	t.Cleanup(func() { session.Close(context.Background()) })
+
+	opened, err := session.Call(
+		context.Background(),
+		planner.ToolOpenPage,
+		json.RawMessage(`{"url":"`+listURL+`","intent":"open products"}`),
+	)
+	if err != nil || !opened.Result.OK {
+		t.Fatalf("open page: outcome=%+v err=%v", opened, err)
+	}
+	failingCall := json.RawMessage(
+		`{"candidate_id":"act_search_submit","intent":"submit search","expect_url":"/never"}`,
+	)
+	first, err := session.Call(context.Background(), planner.ToolClick, failingCall)
+	if err != nil {
+		t.Fatalf("first click: %v", err)
+	}
+	if first.Result.OK || first.Result.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("first click = %+v, want condition_unmet", first.Result)
+	}
+	requestsAfterFirstFailure := len(h.fake.actRequestSnapshot())
+
+	repeated, err := session.Call(context.Background(), planner.ToolClick, failingCall)
+	if err != nil {
+		t.Fatalf("repeated click: %v", err)
+	}
+	if repeated.Result.OK || repeated.Result.Error != "strategy_repeated" {
+		t.Fatalf("repeated click = %+v, want strategy_repeated", repeated.Result)
+	}
+	const detail = "this action and target already failed on the unchanged page; change target, scope, action, or page state"
+	if repeated.Result.Detail != detail {
+		t.Fatalf("detail = %q, want %q", repeated.Result.Detail, detail)
+	}
+	if requests := len(h.fake.actRequestSnapshot()); requests != requestsAfterFirstFailure {
+		t.Fatalf("act requests = %d, want %d; duplicate reached worker", requests, requestsAfterFirstFailure)
+	}
+	if steps := session.Steps(); len(steps) != 1 {
+		t.Fatalf("steps = %d, want only the committed goto", len(steps))
+	}
+}
+
+func TestSameCandidateCanRunAfterPageFingerprintChanges(t *testing.T) {
+	h := newHarness(t, nil)
+	session, err := planner.New(
+		context.Background(),
+		h.runtime.client,
+		"sess_changed_fingerprint",
+		"open a product",
+	)
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	t.Cleanup(func() { session.Close(context.Background()) })
+
+	open := func(url string) {
+		t.Helper()
+		outcome, callErr := session.Call(
+			context.Background(),
+			planner.ToolOpenPage,
+			json.RawMessage(`{"url":"`+url+`","intent":"open products"}`),
+		)
+		if callErr != nil || !outcome.Result.OK {
+			t.Fatalf("open %s: outcome=%+v err=%v", url, outcome, callErr)
+		}
+	}
+	failingCall := json.RawMessage(
+		`{"candidate_id":"act_search_submit","intent":"submit search","expect_url":"/never"}`,
+	)
+	open(listURL)
+	first, err := session.Call(context.Background(), planner.ToolClick, failingCall)
+	if err != nil || first.Result.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("first click: outcome=%+v err=%v", first, err)
+	}
+
+	open(listURL + "?page=2")
+	second, err := session.Call(context.Background(), planner.ToolClick, failingCall)
+	if err != nil {
+		t.Fatalf("second click: %v", err)
+	}
+	if second.Result.Error == "strategy_repeated" {
+		t.Fatalf("same candidate was rejected after page fingerprint changed: %+v", second.Result)
+	}
+	if second.Result.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("second click = %+v, want worker condition_unmet", second.Result)
+	}
+	if requests := len(h.fake.actRequestSnapshot()); requests != 2 {
+		t.Fatalf("act requests = %d, want 2", requests)
 	}
 }
 
