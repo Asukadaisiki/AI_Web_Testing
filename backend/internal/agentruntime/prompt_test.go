@@ -46,6 +46,84 @@ func TestSystemPromptForbidsGuessingUrls(t *testing.T) {
 	}
 }
 
+func TestSystemPromptRequiresOneActionCompatibleToolCallPerTurn(t *testing.T) {
+	prompt := SystemPrompt()
+	for _, want := range []string{
+		"exactly ONE tool call per model turn",
+		"Never batch or parallelize tool calls",
+		"rejected in full",
+		"no call executes and no progress is made",
+		"candidate_id may only be used with the exact action advertised by that candidate",
+		"Never reuse a click or input candidate for an assertion or another tool",
+		"If no compatible assertion candidate exists",
+		"semantic target or hint grounded in the current elements",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt must state the tool-call contract with %q", want)
+		}
+	}
+	if singleCall := strings.Index(prompt, "exactly ONE tool call per model turn"); singleCall < 0 ||
+		singleCall > strings.Index(prompt, "The first tool call must be open_page") {
+		t.Fatal("the one-tool-call contract must be the first numbered hard rule")
+	}
+}
+
+func TestCandidateIDToolMetadataRequiresCurrentToolAction(t *testing.T) {
+	actionTools := []string{
+		planner.ToolClick,
+		planner.ToolInput,
+		planner.ToolSelect,
+		planner.ToolCheck,
+		planner.ToolUncheck,
+		planner.ToolScrollIntoView,
+		planner.ToolHover,
+		planner.ToolDismissDialog,
+		planner.ToolUploadFile,
+		planner.ToolAssertElement,
+		planner.ToolAssertAttribute,
+		planner.ToolAssertCount,
+	}
+	toolsByName := make(map[string]planner.Tool)
+	for _, tool := range planner.Tools() {
+		toolsByName[tool.Name] = tool
+	}
+	for _, toolName := range actionTools {
+		tool, ok := toolsByName[toolName]
+		if !ok {
+			t.Fatalf("tool definition %q is missing", toolName)
+		}
+		properties, ok := tool.Parameters["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s properties schema = %#v", toolName, tool.Parameters["properties"])
+		}
+		candidate, ok := properties["candidate_id"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s candidate_id schema = %#v", toolName, properties["candidate_id"])
+		}
+		description, _ := candidate["description"].(string)
+		for _, want := range []string{
+			"latest page view",
+			"advertised action is exactly " + toolName,
+			"matching this tool",
+			"never use a candidate advertised for another action",
+		} {
+			if !strings.Contains(description, want) {
+				t.Errorf("%s candidate_id description must contain %q: %q", toolName, want, description)
+			}
+		}
+		if strings.HasPrefix(toolName, "assert_") {
+			for _, want := range []string{
+				"never reuse a click or input candidate",
+				"use hint or target grounded in current elements",
+			} {
+				if !strings.Contains(description, want) {
+					t.Errorf("%s candidate_id description must contain %q: %q", toolName, want, description)
+				}
+			}
+		}
+	}
+}
+
 func TestSystemPromptProtectsCommittedSteps(t *testing.T) {
 	prompt := SystemPrompt()
 	if strings.Contains(prompt, "drop_last_step") {

@@ -82,6 +82,16 @@ func Tools() []Tool {
 			"required":   required,
 		}
 	}
+	candidateIDSchema := func(action contract.Action, assertion bool) map[string]any {
+		description := fmt.Sprintf(
+			"candidate id from the latest page view only when its advertised action is exactly %s, matching this tool; never use a candidate advertised for another action",
+			action,
+		)
+		if assertion {
+			description += "; never reuse a click or input candidate. If no compatible assertion candidate exists, use hint or target grounded in current elements"
+		}
+		return map[string]any{"type": "string", "description": description}
+	}
 	targetSpecSchema := map[string]any{
 		"type":        "object",
 		"description": "structured semantic target. It may include object/scope hints, but never CSS or XPath; the system grounds it to a verified locator.",
@@ -125,7 +135,7 @@ func Tools() []Tool {
 				"If the page view includes a suitable action candidate, pass candidate_id instead of describing a low-semantics target. You must declare at least one expectation, otherwise the step cannot be verified.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the element"},
-				"candidate_id": map[string]any{"type": "string", "description": "action candidate id from the latest page view; preferred for icon-only or form-submit controls"},
+				"candidate_id": candidateIDSchema(contract.ActionClick, false),
 				"target":       targetSpecSchema,
 				"intent":       map[string]any{"type": "string", "description": "why this click is needed"},
 			}, []string{"intent"}),
@@ -136,7 +146,7 @@ func Tools() []Tool {
 				"Set submit=true to press Enter after typing — use it for search forms whose submit control has no usable name (for example an icon-only button).",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the input"},
-				"candidate_id": map[string]any{"type": "string", "description": "input action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionInput, false),
 				"target":       targetSpecSchema,
 				"value":        map[string]any{"type": "string", "description": "value to type (empty string is allowed)"},
 				"intent":       map[string]any{"type": "string", "description": "why this input is needed"},
@@ -151,7 +161,7 @@ func Tools() []Tool {
 			Description: "Select an option in a native select/combobox. Defaults to verifying the selected value.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the select"},
-				"candidate_id": map[string]any{"type": "string", "description": "select action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionSelect, false),
 				"target":       targetSpecSchema,
 				"value":        map[string]any{"type": "string", "description": "option label or value"},
 				"intent":       map[string]any{"type": "string", "description": "why this select is needed"},
@@ -162,7 +172,7 @@ func Tools() []Tool {
 			Description: "Check a checkbox or radio target. Defaults to verifying checked state.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the checkbox/radio"},
-				"candidate_id": map[string]any{"type": "string", "description": "check action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionCheck, false),
 				"target":       targetSpecSchema,
 				"intent":       map[string]any{"type": "string", "description": "why this check is needed"},
 			}, []string{"intent"}),
@@ -172,7 +182,7 @@ func Tools() []Tool {
 			Description: "Uncheck a checkbox target. Defaults to verifying unchecked state.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the checkbox"},
-				"candidate_id": map[string]any{"type": "string", "description": "uncheck action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionUncheck, false),
 				"target":       targetSpecSchema,
 				"intent":       map[string]any{"type": "string", "description": "why this uncheck is needed"},
 			}, []string{"intent"}),
@@ -182,7 +192,7 @@ func Tools() []Tool {
 			Description: "Scroll a target into view before a later action. Declare an expectation such as expect_element=visible.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the element"},
-				"candidate_id": map[string]any{"type": "string", "description": "scroll action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionScrollIntoView, false),
 				"target":       targetSpecSchema,
 				"intent":       map[string]any{"type": "string", "description": "why this scroll is needed"},
 			}, []string{"intent"}),
@@ -192,7 +202,7 @@ func Tools() []Tool {
 			Description: "Hover a target, usually to open a menu. Declare the expected menu text, url, attribute, or element state.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the element"},
-				"candidate_id": map[string]any{"type": "string", "description": "hover action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionHover, false),
 				"target":       targetSpecSchema,
 				"intent":       map[string]any{"type": "string", "description": "why this hover is needed"},
 			}, []string{"intent"}),
@@ -202,7 +212,7 @@ func Tools() []Tool {
 			Description: "Dismiss a visible dialog/modal by clicking a close control inside it. Declare expect_element=hidden when appropriate.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the dialog"},
-				"candidate_id": map[string]any{"type": "string", "description": "dismiss action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionDismissDialog, false),
 				"target":       targetSpecSchema,
 				"intent":       map[string]any{"type": "string", "description": "why this dialog should be dismissed"},
 			}, []string{"intent"}),
@@ -212,7 +222,7 @@ func Tools() []Tool {
 			Description: "Upload a local file through a file input. The value is the local file path.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the file input"},
-				"candidate_id": map[string]any{"type": "string", "description": "upload action candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionUploadFile, false),
 				"target":       targetSpecSchema,
 				"value":        map[string]any{"type": "string", "description": "local file path"},
 				"intent":       map[string]any{"type": "string", "description": "why this upload is needed"},
@@ -247,7 +257,7 @@ func Tools() []Tool {
 			Description: "Assert a target element state: visible, hidden, enabled, disabled, checked, or unchecked.",
 			Parameters: withExpects(map[string]any{
 				"hint":           map[string]any{"type": "string", "description": "visible text or accessible name of the element"},
-				"candidate_id":   map[string]any{"type": "string", "description": "assertion candidate id from the latest page view"},
+				"candidate_id":   candidateIDSchema(contract.ActionAssertElement, true),
 				"target":         targetSpecSchema,
 				"intent":         map[string]any{"type": "string", "description": "what this assertion proves"},
 				"expect_element": map[string]any{"type": "string", "description": "state to assert"},
@@ -258,7 +268,7 @@ func Tools() []Tool {
 			Description: "Assert a target element attribute in attr=value form.",
 			Parameters: withExpects(map[string]any{
 				"hint":             map[string]any{"type": "string", "description": "visible text or accessible name of the element"},
-				"candidate_id":     map[string]any{"type": "string", "description": "assertion candidate id from the latest page view"},
+				"candidate_id":     candidateIDSchema(contract.ActionAssertAttribute, true),
 				"target":           targetSpecSchema,
 				"intent":           map[string]any{"type": "string", "description": "what this assertion proves"},
 				"expect_attribute": map[string]any{"type": "string", "description": "attr=value assertion"},
@@ -269,7 +279,7 @@ func Tools() []Tool {
 			Description: "Assert the grounded target locator resolves to an expected count.",
 			Parameters: withExpects(map[string]any{
 				"hint":         map[string]any{"type": "string", "description": "visible text or accessible name of the element set"},
-				"candidate_id": map[string]any{"type": "string", "description": "assertion candidate id from the latest page view"},
+				"candidate_id": candidateIDSchema(contract.ActionAssertCount, true),
 				"target":       targetSpecSchema,
 				"intent":       map[string]any{"type": "string", "description": "what this assertion proves"},
 				"expect_count": map[string]any{"type": "string", "description": "expected integer count"},
