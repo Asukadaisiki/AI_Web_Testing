@@ -39,6 +39,7 @@ from .contracts import (
 )
 from .conditions import evaluate_postcondition_list, unmet_summary
 from .evidence import EvidenceCollector, capture_screenshot
+from .locators import to_playwright_locator
 from .observer import new_id, observe_page
 
 #: 本机 Playwright 浏览器的默认位置；只在环境变量未设置时兜底（见 NOTES）
@@ -175,7 +176,10 @@ class SessionManager:
         session = self.get(session_id)
         page = session.page
         url_before = page.url
-        locator = await resolve_target(page, request.locator, DEFAULT_STEP_TIMEOUT_MS)
+        if request.action == "assert_count":
+            locator = to_playwright_locator(page, request.locator)
+        else:
+            locator = await resolve_target(page, request.locator, DEFAULT_STEP_TIMEOUT_MS)
         if request.action == "click":
             await click_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
         elif request.action == "input":

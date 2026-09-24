@@ -136,6 +136,53 @@ class HealthAndErrorsTest(unittest.TestCase):
 class SessionLifecycleTest(unittest.TestCase):
     """真实浏览器：create → navigate → act → delete。"""
 
+    def test_authoring_assert_count_accepts_non_unique_locators(self) -> None:
+        run(self._authoring_assert_count_accepts_non_unique_locators())
+
+    async def _authoring_assert_count_accepts_non_unique_locators(self) -> None:
+        with LocalSite() as site:
+            async with api_client() as client:
+                created = await client.post("/sessions", json={"session_id": SESSION})
+                session_id = created.json()["session_id"]
+                navigated = await client.post(
+                    f"/sessions/{session_id}/navigate",
+                    json={"url": site.url("generic_form.html")},
+                )
+                self.assertEqual(navigated.status_code, 200, navigated.text)
+
+                for selector, expected_count in (("option", 2), (".missing", 0)):
+                    with self.subTest(expected_count=expected_count):
+                        acted = await client.post(
+                            f"/sessions/{session_id}/act",
+                            json={
+                                "action": "assert_count",
+                                "locator": {"kind": "css", "css": selector},
+                                "postconditions": [
+                                    {
+                                        "type": "count_equals",
+                                        "value": str(expected_count),
+                                        "timeout_ms": 100,
+                                    }
+                                ],
+                            },
+                        )
+                        self.assertEqual(acted.status_code, 200, acted.text)
+                        response = acted.json()
+                        self.assertEqual(response["status"], "passed", response)
+                        self.assertEqual(
+                            response["conditions"],
+                            [
+                                {
+                                    "phase": "post",
+                                    "type": "count_equals",
+                                    "value": str(expected_count),
+                                    "satisfied": True,
+                                    "detail": None,
+                                }
+                            ],
+                        )
+                        self.assertIsNone(response["error"])
+
     def test_authoring_assertions_evaluate_without_mutating_the_page(self) -> None:
         run(self._authoring_assertions_evaluate_without_mutating_the_page())
 
