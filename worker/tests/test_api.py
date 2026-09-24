@@ -136,6 +136,87 @@ class HealthAndErrorsTest(unittest.TestCase):
 class SessionLifecycleTest(unittest.TestCase):
     """真实浏览器：create → navigate → act → delete。"""
 
+    def test_authoring_act_waits_for_postconditions_before_observing(self) -> None:
+        run(self._authoring_act_waits_for_postconditions_before_observing())
+
+    async def _authoring_act_waits_for_postconditions_before_observing(self) -> None:
+        with LocalSite() as site:
+            async with api_client() as client:
+                created = await client.post("/sessions", json={"session_id": SESSION})
+                self.assertEqual(created.status_code, 200)
+                session_id = created.json()["session_id"]
+
+                navigated = await client.post(
+                    f"/sessions/{session_id}/navigate",
+                    json={"url": site.url("detail.html?item=alpha")},
+                )
+                self.assertEqual(navigated.status_code, 200, navigated.text)
+
+                acted = await client.post(
+                    f"/sessions/{session_id}/act",
+                    json={
+                        "action": "click",
+                        "locator": {"kind": "css", "css": "#add-to-cart"},
+                        "postconditions": [
+                            {
+                                "type": "text_visible",
+                                "value": "Added!",
+                                "timeout_ms": 1000,
+                            }
+                        ],
+                    },
+                )
+                self.assertEqual(acted.status_code, 200, acted.text)
+                response = acted.json()
+                self.assertEqual(response["status"], "passed", response)
+                self.assertTrue(response["conditions"][0]["satisfied"], response)
+                visible_text = " ".join(
+                    element["text"] or ""
+                    for element in response["observation"]["elements"]
+                    if element["visible"]
+                )
+                self.assertIn("View Cart", visible_text)
+
+    def test_authoring_act_returns_failed_response_for_unmet_condition(self) -> None:
+        run(self._authoring_act_returns_failed_response_for_unmet_condition())
+
+    async def _authoring_act_returns_failed_response_for_unmet_condition(self) -> None:
+        with LocalSite() as site:
+            async with api_client() as client:
+                created = await client.post("/sessions", json={"session_id": SESSION})
+                session_id = created.json()["session_id"]
+                navigated = await client.post(
+                    f"/sessions/{session_id}/navigate",
+                    json={"url": site.url("detail.html?item=alpha")},
+                )
+                before = navigated.json()
+
+                acted = await client.post(
+                    f"/sessions/{session_id}/act",
+                    json={
+                        "action": "click",
+                        "locator": {"kind": "css", "css": "#add-to-cart"},
+                        "postconditions": [
+                            {
+                                "type": "text_visible",
+                                "value": "Never appears",
+                                "timeout_ms": 100,
+                            }
+                        ],
+                    },
+                )
+
+                self.assertEqual(acted.status_code, 200, acted.text)
+                response = acted.json()
+                self.assertEqual(response["status"], "failed", response)
+                self.assertFalse(response["conditions"][0]["satisfied"], response)
+                self.assertEqual(response["error"]["kind"], "condition_unmet")
+                self.assertTrue(response["error"]["message"])
+                self.assertNotEqual(
+                    response["observation"]["observation_id"],
+                    before["observation_id"],
+                )
+
     def test_session_observe_act_and_close(self) -> None:
         run(self._session_observe_act_and_close())
 
@@ -186,9 +267,13 @@ class SessionLifecycleTest(unittest.TestCase):
                     },
                 )
                 self.assertEqual(typed.status_code, 200, typed.text)
+                typed_response = typed.json()
+                self.assertEqual(typed_response["status"], "passed")
+                self.assertEqual(typed_response["conditions"], [])
+                self.assertIsNone(typed_response["error"])
                 search_element = next(
                     element
-                    for element in typed.json()["elements"]
+                    for element in typed_response["observation"]["elements"]
                     if element["value"] == "alpha"
                 )
                 self.assertEqual(search_element["tag"], "input")
@@ -198,6 +283,7 @@ class SessionLifecycleTest(unittest.TestCase):
                     json={"action": "click", "locator": {"kind": "css", "css": "#filter"}},
                 )
                 self.assertEqual(clicked.status_code, 200, clicked.text)
+                self.assertEqual(clicked.json()["status"], "passed")
 
                 missing_target = await client.post(
                     f"/sessions/{session_id}/act",

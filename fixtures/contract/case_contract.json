@@ -1,6 +1,55 @@
 {
   "version": "loop.case.v1",
   "note": "Go 与 Python 两侧校验器共读本文件，必须给出相同的 accept 与 code。新增契约规则时必须在这里补用例。",
+  "authoring_action": {
+    "request": {
+      "action": "click",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Add to cart",
+        "exact": true,
+        "match_count": 1
+      },
+      "postconditions": [
+        {
+          "type": "text_visible",
+          "value": "Added!",
+          "timeout_ms": 1000
+        }
+      ]
+    },
+    "response": {
+      "status": "failed",
+      "observation": {
+        "observation_id": "obs_authoring",
+        "page_state_id": "ps_authoring",
+        "browser_session_id": "bsess_authoring",
+        "url": "https://shop.test/item/1",
+        "title": "Item detail",
+        "elements": [],
+        "structures": [],
+        "blockers": [],
+        "action_candidates": [],
+        "truncated": false,
+        "truncation_reason": "",
+        "screenshot_path": "sess_authoring/obs_authoring.png"
+      },
+      "conditions": [
+        {
+          "phase": "post",
+          "type": "text_visible",
+          "value": "Added!",
+          "satisfied": false,
+          "detail": "no element contains text 'Added!'"
+        }
+      ],
+      "error": {
+        "kind": "condition_unmet",
+        "message": "postcondition unmet: Added! was not visible"
+      }
+    }
+  },
   "cases": [
     {
       "name": "valid-full-flow",

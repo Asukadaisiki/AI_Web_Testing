@@ -5,7 +5,7 @@
 | GET | `/health` | — | `{"status":"ok","artifacts_dir":"..."}` |
 | POST | `/sessions` | `{"session_id":"sess_..."}` | `{"session_id":"bsess_..."}` |
 | POST | `/sessions/{id}/navigate` | `{"url":"..."}` | Observation |
-| POST | `/sessions/{id}/act` | `{"action":"click"|"input","locator":{...},"value":"..."}` | Observation |
+| POST | `/sessions/{id}/act` | `{"action":"click"|"input","locator":{...},"postconditions":[...]}` | ActResponse |
 | DELETE | `/sessions/{id}` | — | `{"closed":true}` |
 | POST | `/execute` | `{"session_id":"sess_...","case":{...}}` | ExecutionResult |
 
@@ -32,6 +32,7 @@ from .contracts import (
     ERROR_SESSION_NOT_FOUND,
     ERROR_WORKER_ERROR,
     ActRequest,
+    ActResponse,
     CaseInvalid,
     ExecuteRequest,
     ExecutionResult,
@@ -118,7 +119,7 @@ def create_app() -> FastAPI:
         return await manager.navigate(session_id, body.url)
 
     @app.post("/sessions/{session_id}/act")
-    async def act(session_id: str, body: ActRequest) -> Observation:
+    async def act(session_id: str, body: ActRequest) -> ActResponse:
         return await manager.act(session_id, body)
 
     @app.delete("/sessions/{session_id}")

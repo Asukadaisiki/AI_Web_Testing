@@ -818,6 +818,16 @@ class ActRequest(BaseModel):
     value: str | None = None
     #: 只对 input 有意义：填完之后按回车提交（作者态也必须真的提交）。
     submit: bool = False
+    postconditions: list[Condition] = Field(default_factory=list)
+
+
+class ActResponse(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    status: Literal["passed", "failed"]
+    observation: Observation
+    conditions: list[ConditionResult] = Field(default_factory=list)
+    error: StepError | None = None
 
 
 class ExecuteRequest(BaseModel):

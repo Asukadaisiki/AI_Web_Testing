@@ -491,8 +491,8 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 	steps := []ScriptedStep{
 		{Tool: "open_page", Arguments: json.RawMessage(
 			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
-		{Tool: "click", Arguments: json.RawMessage(
-			`{"hint":"Widget","intent":"打开详情","expect_url":"/this/never/happens"}`)},
+		{Tool: "assert_text", Arguments: json.RawMessage(
+			`{"text":"This never appears","intent":"制造一个只能在干跑发现的错误"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"第一次注定失败"}`)},
 		{Tool: "drop_last_step", Arguments: json.RawMessage(`{}`)},
 		{Tool: "open_page", Arguments: json.RawMessage(
@@ -593,8 +593,8 @@ func TestDryRunThatNeverPassesFailsTheRun(t *testing.T) {
 	steps := []ScriptedStep{
 		{Tool: "open_page", Arguments: json.RawMessage(
 			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
-		{Tool: "click", Arguments: json.RawMessage(
-			`{"hint":"Widget","intent":"打开详情","expect_url":"/this/never/happens"}`)},
+		{Tool: "assert_text", Arguments: json.RawMessage(
+			`{"text":"This never appears","intent":"制造一个只能在干跑发现的错误"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"注定失败"}`)},
 		{Final: "我无法让它通过。"},
 	}

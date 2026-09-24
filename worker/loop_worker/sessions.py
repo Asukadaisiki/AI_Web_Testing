@@ -31,9 +31,13 @@ from .actions import (
 )
 from .contracts import (
     DEFAULT_STEP_TIMEOUT_MS,
+    SIGNAL_CONDITION_UNMET,
     ActRequest,
+    ActResponse,
     Observation,
+    StepError,
 )
+from .conditions import evaluate_postcondition_list, unmet_summary
 from .evidence import EvidenceCollector, capture_screenshot
 from .observer import new_id, observe_page
 
@@ -167,9 +171,10 @@ class SessionManager:
         await goto(session.page, url, DEFAULT_STEP_TIMEOUT_MS)
         return await self.observe(session)
 
-    async def act(self, session_id: str, request: ActRequest) -> Observation:
+    async def act(self, session_id: str, request: ActRequest) -> ActResponse:
         session = self.get(session_id)
         page = session.page
+        url_before = page.url
         locator = await resolve_target(page, request.locator, DEFAULT_STEP_TIMEOUT_MS)
         if request.action == "click":
             await click_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
@@ -191,7 +196,26 @@ class SessionManager:
             await dismiss_dialog(page, locator, DEFAULT_STEP_TIMEOUT_MS)
         elif request.action == "upload_file":
             await upload_file_target(page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS)
-        return await self.observe(session)
+        conditions = await evaluate_postcondition_list(
+            page,
+            request.postconditions,
+            url_before=url_before,
+            target_locator=locator,
+        )
+        summary = unmet_summary(conditions)
+        return ActResponse(
+            status="failed" if summary is not None else "passed",
+            observation=await self.observe(session),
+            conditions=conditions,
+            error=(
+                StepError(
+                    kind=SIGNAL_CONDITION_UNMET,
+                    message=f"postcondition unmet: {summary}",
+                )
+                if summary is not None
+                else None
+            ),
+        )
 
     async def observe(self, session: WorkerSession) -> Observation:
         """会话观测：截图 → 采集 elements（定位器就地验证）。"""

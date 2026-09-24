@@ -1,15 +1,19 @@
 package agentruntime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 // fakeSite 是一个内存里的假站点，用来离线、确定性地验证整条闭环。
@@ -366,16 +370,50 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 			writeFakeError(w, http.StatusBadRequest, "target_not_found", "locator matched nothing")
 			return
 		}
+		urlBefore := current
+		var targetValue *string
 		if body.Action == contract.ActionInput {
 			values[target.Name] = body.Value
-			page, _ = worker.site.page(current, values)
-			writeFake(w, http.StatusOK, page)
-			return
+			value := values[target.Name]
+			targetValue = &value
+		} else {
+			current = clickTarget(current, target, values)
+			worker.setURL(r.PathValue("id"), current)
 		}
-		next := clickTarget(current, target, values)
-		worker.setURL(r.PathValue("id"), next)
-		page, _ = worker.site.page(next, values)
-		writeFake(w, http.StatusOK, page)
+		page, _ = worker.site.page(current, values)
+		conditions := make([]contract.ConditionResult, 0, len(body.Postconditions))
+		status := "passed"
+		var unmet []string
+		for _, condition := range body.Postconditions {
+			satisfied, detail := evalCondition(
+				condition,
+				contract.Observation{URL: urlBefore},
+				page,
+				targetValue,
+			)
+			result := contract.ConditionResult{
+				Phase:     contract.PhasePost,
+				Type:      condition.Type,
+				Value:     condition.Value,
+				Satisfied: satisfied,
+			}
+			if !satisfied {
+				result.Detail = &detail
+				status = "failed"
+				unmet = append(unmet, detail)
+			}
+			conditions = append(conditions, result)
+		}
+		response := contract.ActResponse{
+			Status: status, Observation: page, Conditions: conditions,
+		}
+		if status == "failed" {
+			response.Error = &contract.StepError{
+				Kind:    contract.SignalConditionUnmet,
+				Message: "postcondition unmet: " + strings.Join(unmet, "; "),
+			}
+		}
+		writeFake(w, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /execute", func(w http.ResponseWriter, r *http.Request) {
 		var body contract.ExecuteRequest
@@ -573,4 +611,57 @@ func writeFake(w http.ResponseWriter, status int, payload any) {
 
 func writeFakeError(w http.ResponseWriter, status int, code, detail string) {
 	writeFake(w, status, contract.WorkerError{Error: code, Detail: detail})
+}
+
+func TestPlannerRejectsUnmetAuthoringPostconditionsTransactionally(t *testing.T) {
+	fake := newFakeWorker(&fakeSite{})
+	t.Cleanup(fake.Close)
+	session, err := planner.New(
+		context.Background(),
+		worker.New(fake.URL()),
+		"sess_authoring_postconditions",
+		"open the product",
+	)
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	t.Cleanup(func() { session.Close(context.Background()) })
+
+	opened, err := session.Call(
+		context.Background(),
+		planner.ToolOpenPage,
+		json.RawMessage(`{"url":"`+listURL+`","intent":"open products"}`),
+	)
+	if err != nil || !opened.Result.OK {
+		t.Fatalf("open page: outcome=%+v err=%v", opened, err)
+	}
+	clicked, err := session.Call(
+		context.Background(),
+		planner.ToolClick,
+		json.RawMessage(`{"hint":"Widget","intent":"open widget","expect_url":"/never"}`),
+	)
+	if err != nil {
+		t.Fatalf("click: %v", err)
+	}
+	if clicked.Result.OK || clicked.Result.Error != string(contract.SignalConditionUnmet) {
+		t.Fatalf("click result = %+v, want condition_unmet", clicked.Result)
+	}
+	if clicked.Result.Page == nil || clicked.Result.Page.URL != detailURL {
+		t.Fatalf("planner did not retain fresh observation: %+v", clicked.Result.Page)
+	}
+	if steps := session.Steps(); len(steps) != 1 {
+		t.Fatalf("steps = %d, want only the committed goto", len(steps))
+	}
+
+	requests := fake.actRequestSnapshot()
+	if len(requests) != 1 {
+		t.Fatalf("act requests = %d, want 1", len(requests))
+	}
+	if len(requests[0].Postconditions) != 1 {
+		t.Fatalf("postconditions = %+v, want one derived condition", requests[0].Postconditions)
+	}
+	condition := requests[0].Postconditions[0]
+	if condition.Type != contract.CondURLContains || condition.Value != "/never" {
+		t.Fatalf("postcondition = %+v, want url_contains /never", condition)
+	}
 }

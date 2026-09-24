@@ -230,20 +230,40 @@ func (p *Planner) act(
 		}, nil
 	}
 	// 先真的执行动作，成功后才记录步骤：动作失败不该留下一条假步骤。
-	request := contract.ActRequest{Action: action, Locator: locator, Submit: submit}
+	request := contract.ActRequest{
+		Action:         action,
+		Locator:        locator,
+		Submit:         submit,
+		Postconditions: step.Postconditions,
+	}
 	if value != nil {
 		request.Value = *value
 	}
-	observation, err := p.client.Act(ctx, p.browserSessionID, request)
+	response, err := p.client.Act(ctx, p.browserSessionID, request)
 	if err != nil {
 		return workerFailure("action_failed", err), nil
 	}
+	p.observation = response.Observation
+	if response.Status != "passed" {
+		code := "action_failed"
+		detail := fmt.Sprintf("worker returned authoring action status %q", response.Status)
+		if response.Error != nil {
+			code = string(response.Error.Kind)
+			detail = response.Error.Message
+		}
+		return Result{
+			OK:     false,
+			Error:  code,
+			Detail: detail,
+			Page:   pageView(response.Observation),
+			Steps:  stepViews(p.steps),
+		}, nil
+	}
 	p.steps = append(p.steps, step)
-	p.observation = observation
 	result := Result{
 		OK:      true,
 		Summary: fmt.Sprintf("recorded %s step %d on %q", action, step.Index, displayName(element)),
-		Page:    pageView(observation),
+		Page:    pageView(response.Observation),
 		Steps:   stepViews(p.steps),
 	}
 	return result, nil

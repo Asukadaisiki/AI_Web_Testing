@@ -97,15 +97,15 @@ func (c *Client) Navigate(ctx context.Context, sessionID, url string) (contract.
 	return observation, nil
 }
 
-// Act 在会话里执行一个动作（用于让模型走到下一页）并返回新观测。
+// Act 在会话里执行一个动作，等待期望判定完成，再返回事务结果与新观测。
 func (c *Client) Act(
 	ctx context.Context, sessionID string, request contract.ActRequest,
-) (contract.Observation, error) {
-	var observation contract.Observation
-	if err := c.do(ctx, http.MethodPost, "/sessions/"+sessionID+"/act", request, &observation); err != nil {
-		return contract.Observation{}, err
+) (contract.ActResponse, error) {
+	var response contract.ActResponse
+	if err := c.do(ctx, http.MethodPost, "/sessions/"+sessionID+"/act", request, &response); err != nil {
+		return contract.ActResponse{}, err
 	}
-	return observation, nil
+	return response, nil
 }
 
 // Execute 在全新上下文里执行整个 case。

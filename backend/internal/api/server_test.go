@@ -84,7 +84,11 @@ func newFakeExecutor(artifactsDir string) *fakeExecutor {
 		write(w, http.StatusOK, observe(body.URL))
 	})
 	mux.HandleFunc("POST /sessions/{id}/act", func(w http.ResponseWriter, r *http.Request) {
-		write(w, http.StatusOK, observe(testNextURL))
+		write(w, http.StatusOK, contract.ActResponse{
+			Status:      "passed",
+			Observation: observe(testNextURL),
+			Conditions:  []contract.ConditionResult{},
+		})
 	})
 	mux.HandleFunc("POST /execute", func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC()

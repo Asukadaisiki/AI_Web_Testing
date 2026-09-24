@@ -15,7 +15,12 @@ WORKER_ROOT = Path(__file__).resolve().parents[1]
 if str(WORKER_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKER_ROOT))
 
-from loop_worker.contracts import CaseInvalid, validate_case  # noqa: E402
+from loop_worker.contracts import (  # noqa: E402
+    ActRequest,
+    ActResponse,
+    CaseInvalid,
+    validate_case,
+)
 
 FIXTURE_PATH = WORKER_ROOT.parent / "fixtures" / "contract" / "case_contract.json"
 
@@ -52,6 +57,19 @@ class ContractConformanceTest(unittest.TestCase):
                     expect["code"],
                     f"{item['name']}: got {caught.exception}",
                 )
+
+    def test_authoring_action_fixture_matches_python_contract(self) -> None:
+        fixture = load_fixtures()["authoring_action"]
+        request = ActRequest.model_validate(fixture["request"])
+        self.assertEqual(len(request.postconditions), 1)
+        self.assertEqual(request.postconditions[0].type, "text_visible")
+
+        response = ActResponse.model_validate(fixture["response"])
+        self.assertEqual(response.status, "failed")
+        self.assertEqual(response.observation.observation_id, "obs_authoring")
+        self.assertFalse(response.conditions[0].satisfied)
+        self.assertIsNotNone(response.error)
+        self.assertEqual(response.error.kind, "condition_unmet")
 
 
 class CaseValidationTest(unittest.TestCase):

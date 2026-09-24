@@ -10,8 +10,14 @@ import (
 
 // fixtureFile 是 Go 与 Python 共读的契约一致性夹具。
 type fixtureFile struct {
-	Version string        `json:"version"`
-	Cases   []fixtureCase `json:"cases"`
+	Version         string                 `json:"version"`
+	Cases           []fixtureCase          `json:"cases"`
+	AuthoringAction fixtureAuthoringAction `json:"authoring_action"`
+}
+
+type fixtureAuthoringAction struct {
+	Request  json.RawMessage `json:"request"`
+	Response json.RawMessage `json:"response"`
 }
 
 type fixtureCase struct {
@@ -70,6 +76,31 @@ func TestContractFixtures(t *testing.T) {
 				t.Fatalf("code = %q, want %q (error: %v)", code, item.Expect.Code, err)
 			}
 		})
+	}
+}
+
+func TestAuthoringActionFixtureMatchesGoContract(t *testing.T) {
+	fixture := loadFixtures(t).AuthoringAction
+	var request ActRequest
+	if err := json.Unmarshal(fixture.Request, &request); err != nil {
+		t.Fatalf("decode authoring request: %v", err)
+	}
+	if len(request.Postconditions) != 1 || request.Postconditions[0].Type != CondTextVisible {
+		t.Fatalf("request postconditions = %+v", request.Postconditions)
+	}
+
+	var response ActResponse
+	if err := json.Unmarshal(fixture.Response, &response); err != nil {
+		t.Fatalf("decode authoring response: %v", err)
+	}
+	if response.Status != "failed" || response.Observation.ObservationID != "obs_authoring" {
+		t.Fatalf("authoring response = %+v", response)
+	}
+	if len(response.Conditions) != 1 || response.Conditions[0].Satisfied {
+		t.Fatalf("response conditions = %+v", response.Conditions)
+	}
+	if response.Error == nil || response.Error.Kind != SignalConditionUnmet {
+		t.Fatalf("response error = %+v", response.Error)
 	}
 }
 

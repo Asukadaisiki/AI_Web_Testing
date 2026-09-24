@@ -152,10 +152,19 @@ type OpenSessionRequest struct {
 // Submit 只对 input 有意义：填完之后按回车提交。作者态必须真的提交，
 // 否则观测停在原页面，后续步骤的接地就会锚在错的页面上。
 type ActRequest struct {
-	Action  Action  `json:"action"`
-	Locator Locator `json:"locator"`
-	Value   string  `json:"value"`
-	Submit  bool    `json:"submit,omitempty"`
+	Action         Action      `json:"action"`
+	Locator        Locator     `json:"locator"`
+	Value          string      `json:"value"`
+	Submit         bool        `json:"submit,omitempty"`
+	Postconditions []Condition `json:"postconditions"`
+}
+
+// ActResponse 是作者态动作的事务结果：动作后的期望先判定，再生成新观测。
+type ActResponse struct {
+	Status      string            `json:"status"`
+	Observation Observation       `json:"observation"`
+	Conditions  []ConditionResult `json:"conditions"`
+	Error       *StepError        `json:"error,omitempty"`
 }
 
 // NavigateRequest 是作者态导航请求。

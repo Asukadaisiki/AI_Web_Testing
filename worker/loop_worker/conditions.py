@@ -214,8 +214,24 @@ async def evaluate_postconditions(
     target_locator: Locator | None = None,
 ) -> list[ConditionResult]:
     """post 阶段：动作后按各自 timeout_ms 轮询评估。"""
+    return await evaluate_postcondition_list(
+        page,
+        step.postconditions,
+        url_before=url_before,
+        target_locator=target_locator,
+    )
+
+
+async def evaluate_postcondition_list(
+    page: Page,
+    conditions: list[Condition],
+    *,
+    url_before: str,
+    target_locator: Locator | None,
+) -> list[ConditionResult]:
+    """按列表评估 post 条件，供 case 执行与作者态动作共用。"""
     results: list[ConditionResult] = []
-    for condition in step.postconditions:
+    for condition in conditions:
         results.append(
             await wait_condition(
                 page,
@@ -244,6 +260,7 @@ __all__ = [
     "POLL_INTERVAL_MS",
     "ConditionPhaseError",
     "evaluate_condition",
+    "evaluate_postcondition_list",
     "evaluate_postconditions",
     "evaluate_preconditions",
     "unmet_summary",

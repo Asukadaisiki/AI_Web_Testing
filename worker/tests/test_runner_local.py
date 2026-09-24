@@ -163,6 +163,11 @@ class RunnerEndToEndTest(unittest.TestCase):
                 index_obs = await observe_page(scout)
                 await scout.goto(detail_url)
                 detail_obs = await observe_page(scout)
+                await scout.locator("#add-to-cart").click()
+                await scout.get_by_text("Added!", exact=False).wait_for(
+                    state="visible", timeout=1000
+                )
+                detail_after_add_obs = await observe_page(scout)
                 await scout.close()
 
                 search = locator_from(index_obs, kind="role", role="textbox", name="Search items")
@@ -172,7 +177,9 @@ class RunnerEndToEndTest(unittest.TestCase):
                 add_to_cart = locator_from(
                     detail_obs, kind="role", role="button", name="Add to cart"
                 )
-                go_to_cart = locator_from(detail_obs, kind="role", role="link", name="Go to cart")
+                go_to_cart = locator_from(
+                    detail_after_add_obs, kind="role", role="link", name="View Cart"
+                )
 
                 case = build_case(
                     [
@@ -223,7 +230,7 @@ class RunnerEndToEndTest(unittest.TestCase):
                             page_url=detail_url,
                             locator=add_to_cart,
                             pre_value="detail.html",
-                            post=[condition("text_visible", "Added to cart")],
+                            post=[condition("text_visible", "Added!")],
                         ),
                         action_step(
                             6,
