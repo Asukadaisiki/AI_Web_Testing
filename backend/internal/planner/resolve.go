@@ -34,12 +34,13 @@ type Result struct {
 
 // CompactResult 保留规划下一轮需要的结果，不重复携带页面与完整步骤。
 type CompactResult struct {
-	OK      bool           `json:"ok"`
-	Summary string         `json:"summary,omitempty"`
-	Warning string         `json:"warning,omitempty"`
-	Error   string         `json:"error,omitempty"`
-	Detail  string         `json:"detail,omitempty"`
-	Failure *DryRunFailure `json:"dry_run_failure,omitempty"`
+	OK             bool           `json:"ok"`
+	Summary        string         `json:"summary,omitempty"`
+	Warning        string         `json:"warning,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	Detail         string         `json:"detail,omitempty"`
+	Failure        *DryRunFailure `json:"dry_run_failure,omitempty"`
+	RelevanceTerms []string       `json:"relevance_terms,omitempty"`
 }
 
 // StateSnapshot 是每次模型调用看到的唯一规划状态。
@@ -58,6 +59,8 @@ const (
 	maxPageBlockers         = 5
 	maxPageElementText      = 120
 	maxPageSummaryText      = 160
+	maxResultRelevanceTerms = 16
+	maxResultRelevanceText  = 120
 )
 
 // PageView 是给模型看的紧凑观测视图。

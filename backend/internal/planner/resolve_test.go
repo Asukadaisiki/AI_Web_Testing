@@ -425,6 +425,187 @@ func TestPageViewKeepsGoalRelevantFormSubmitAheadOfAds(t *testing.T) {
 	}
 }
 
+func TestSnapshotRanksLatestSuccessfulStepTargetAndExpectationAheadOfAds(t *testing.T) {
+	observation := rankedPageViewObservation(31)
+	observation.Elements = append(observation.Elements,
+		contract.Element{
+			Ref: "target-checkout", Tag: "button", Role: "button", Name: "Proceed to checkout",
+			Text: "Proceed to checkout", Visible: true, Enabled: true, VisibleInViewport: true,
+			Locators: []contract.Locator{roleLocator("button", "Proceed to checkout")},
+		},
+		contract.Element{
+			Ref: "target-confirmation", Tag: "a", Role: "link", Name: "Order confirmed",
+			Text: "Order confirmed", Visible: true, Enabled: true, VisibleInViewport: true,
+			Locators: []contract.Locator{roleLocator("link", "Order confirmed")},
+		},
+	)
+	observation.ActionCandidates = append(observation.ActionCandidates,
+		contract.ActionCandidate{
+			CandidateID: "candidate-checkout", Kind: "element_candidate",
+			Action: string(contract.ActionClick), TargetRef: "target-checkout",
+			Role: "button", Name: "Proceed to checkout", Text: "Proceed to checkout",
+			Locator: roleLocator("button", "Proceed to checkout"), Confidence: "low",
+		},
+		contract.ActionCandidate{
+			CandidateID: "candidate-confirmation", Kind: "element_candidate",
+			Action: string(contract.ActionClick), TargetRef: "target-confirmation",
+			Role: "link", Name: "Order confirmed", Text: "Order confirmed",
+			Locator: roleLocator("link", "Order confirmed"), Confidence: "low",
+		},
+	)
+	planner := &Planner{
+		goal:        "finish the purchase",
+		observation: observation,
+		hasPage:     true,
+		steps: []contract.Step{
+			{
+				Target: &contract.Target{Hint: "Sponsored offer"},
+				Postconditions: []contract.Condition{{
+					Type: contract.CondTextVisible, Value: "Legacy advertisement",
+				}},
+			},
+			{
+				Target: &contract.Target{
+					Hint: "  Proceed to checkout  ",
+					Spec: &contract.TargetSpec{
+						Object: contract.TargetObject{
+							Role: "button", Name: "Checkout",
+							Aliases: []string{"complete purchase", "Checkout"},
+						},
+						Scope: &contract.TargetScope{
+							Kind: "cart", ContainsText: "Blue Top", Ref: "scope-private-ref",
+						},
+						Relation: "inside",
+						Role:     "button",
+						Text:     "Proceed to checkout",
+						Name:     "Checkout",
+						Aliases:  []string{"complete purchase"},
+					},
+				},
+				Postconditions: []contract.Condition{{
+					Type: contract.CondTextVisible, Value: " Order confirmed ",
+				}},
+			},
+		},
+	}
+
+	snapshot := planner.Snapshot(&Result{
+		OK:      true,
+		Summary: "clicked Sponsored offer and recorded an advertisement",
+	})
+
+	wantTerms := []string{
+		"Proceed to checkout", "button", "Checkout", "complete purchase",
+		"cart", "Blue Top", "inside", "Order confirmed",
+	}
+	if fmt.Sprintf("%q", snapshot.LastResult.RelevanceTerms) != fmt.Sprintf("%q", wantTerms) {
+		t.Fatalf("relevance terms = %q, want %q", snapshot.LastResult.RelevanceTerms, wantTerms)
+	}
+	if len(snapshot.Page.ActionCandidates) < 2 ||
+		snapshot.Page.ActionCandidates[0].CandidateID != "candidate-checkout" ||
+		snapshot.Page.ActionCandidates[1].CandidateID != "candidate-confirmation" {
+		t.Fatalf("latest successful target/expectation did not outrank ads: %#v", snapshot.Page.ActionCandidates)
+	}
+}
+
+func TestSnapshotOmitsRelevanceTermsWithoutSuccessfulCommittedStep(t *testing.T) {
+	step := contract.Step{
+		Target: &contract.Target{Hint: "Checkout"},
+		Postconditions: []contract.Condition{{
+			Type: contract.CondTextVisible, Value: "Order confirmed",
+		}},
+	}
+	tests := []struct {
+		name   string
+		steps  []contract.Step
+		result *Result
+	}{
+		{name: "failed result", steps: []contract.Step{step}, result: &Result{OK: false}},
+		{name: "no committed step", result: &Result{OK: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := (&Planner{steps: test.steps}).Snapshot(test.result)
+			if len(snapshot.LastResult.RelevanceTerms) != 0 {
+				t.Fatalf("relevance terms = %q, want none", snapshot.LastResult.RelevanceTerms)
+			}
+		})
+	}
+}
+
+func TestSnapshotBoundsAndDeduplicatesRelevanceTerms(t *testing.T) {
+	aliases := []string{" duplicate "}
+	for index := 0; index < 30; index++ {
+		aliases = append(aliases, fmt.Sprintf("alias-%02d", index))
+	}
+	planner := &Planner{steps: []contract.Step{{
+		Target: &contract.Target{
+			Hint: strings.Repeat("x", 140),
+			Spec: &contract.TargetSpec{
+				Object: contract.TargetObject{Text: "duplicate", Aliases: aliases},
+			},
+		},
+		Postconditions: []contract.Condition{{
+			Type: contract.CondTextVisible, Value: "duplicate",
+		}},
+	}}}
+
+	terms := planner.Snapshot(&Result{OK: true}).LastResult.RelevanceTerms
+	if len(terms) != 16 {
+		t.Fatalf("relevance term count = %d, want 16: %q", len(terms), terms)
+	}
+	if len([]rune(terms[0])) != 120 {
+		t.Fatalf("first relevance term length = %d, want 120", len([]rune(terms[0])))
+	}
+	duplicateCount := 0
+	for _, term := range terms {
+		if term == "duplicate" {
+			duplicateCount++
+		}
+	}
+	if duplicateCount != 1 {
+		t.Fatalf("trimmed duplicate count = %d, want 1: %q", duplicateCount, terms)
+	}
+}
+
+func TestSnapshotKeepsChineseGoalMatchingCandidate(t *testing.T) {
+	observation := rankedPageViewObservation(31)
+	observation.Elements = append(observation.Elements, contract.Element{
+		Ref: "target-add-cart", Tag: "button", Role: "button", Name: "加入购物车",
+		Text: "加入购物车", Visible: true, Enabled: true, VisibleInViewport: true,
+		Locators: []contract.Locator{roleLocator("button", "加入购物车")},
+	})
+	observation.ActionCandidates = append(observation.ActionCandidates, contract.ActionCandidate{
+		CandidateID: "candidate-add-cart", Kind: "element_candidate",
+		Action: string(contract.ActionClick), TargetRef: "target-add-cart",
+		Role: "button", Name: "加入购物车", Text: "加入购物车",
+		Locator: roleLocator("button", "加入购物车"), Confidence: "low",
+	})
+	planner := &Planner{
+		goal:        "搜索蓝色上衣并加入购物车",
+		observation: observation,
+		hasPage:     true,
+	}
+
+	snapshot := planner.Snapshot(nil)
+	if !hasActionCandidate(snapshot.Page, "candidate-add-cart") {
+		t.Fatalf("Chinese goal-matching candidate was omitted: %#v", snapshot.Page.ActionCandidates)
+	}
+}
+
+func TestPageViewTokensPreserveLatinNumbersAndAddHanBigrams(t *testing.T) {
+	got := pageViewTokens("BlueTop 123 搜索商品")
+	want := []string{"bluetop", "123", "搜索商品", "搜索", "索商", "商品"}
+	if len(got) != len(want) {
+		t.Fatalf("tokens = %#v, want exactly %q", got, want)
+	}
+	for _, token := range want {
+		if _, ok := got[token]; !ok {
+			t.Fatalf("tokens = %#v, missing %q", got, token)
+		}
+	}
+}
+
 func TestPageViewKeepsVisibleDialogCandidatesAfterAction(t *testing.T) {
 	observation := rankedPageViewObservation(31)
 	observation.Structures = append(observation.Structures, contract.StructureNode{

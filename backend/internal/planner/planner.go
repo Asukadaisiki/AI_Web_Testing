@@ -70,7 +70,7 @@ func (p *Planner) Steps() []contract.Step {
 
 // Snapshot 返回下一次模型调用所需的完整、紧凑规划状态。
 func (p *Planner) Snapshot(lastResult *Result) StateSnapshot {
-	compact := compactResult(lastResult)
+	compact := compactResult(lastResult, p.steps)
 	snapshot := StateSnapshot{
 		Version:    1,
 		Steps:      stepViews(p.steps),
@@ -83,11 +83,11 @@ func (p *Planner) Snapshot(lastResult *Result) StateSnapshot {
 	return snapshot
 }
 
-func compactResult(result *Result) *CompactResult {
+func compactResult(result *Result, steps []contract.Step) *CompactResult {
 	if result == nil {
 		return nil
 	}
-	return &CompactResult{
+	compact := &CompactResult{
 		OK:      result.OK,
 		Summary: result.Summary,
 		Warning: result.Warning,
@@ -95,6 +95,10 @@ func compactResult(result *Result) *CompactResult {
 		Detail:  result.Detail,
 		Failure: result.Failure,
 	}
+	if result.OK && len(steps) > 0 {
+		compact.RelevanceTerms = stepRelevanceTerms(steps[len(steps)-1])
+	}
+	return compact
 }
 
 // Build 组装 case（不落库）。
@@ -863,15 +867,20 @@ func pageViewLastTokens(last *CompactResult) map[string]struct{} {
 	if last == nil {
 		return nil
 	}
-	values := []string{last.Summary, last.Warning, last.Error, last.Detail}
+	var values []string
+	if last.OK {
+		values = append(values, last.RelevanceTerms...)
+	}
 	if last.Failure != nil {
-		values = append(values, last.Failure.Error)
-		values = append(values, last.Failure.RepairHints...)
 		for _, step := range last.Failure.Steps {
-			values = append(values, step.Action, step.Error)
-			values = append(values, step.Unsatisfied...)
+			values = append(values, step.Action)
 			if step.Blocker != nil {
-				values = append(values, step.Blocker.Kind, step.Blocker.Reason)
+				values = append(
+					values,
+					step.Blocker.Kind,
+					step.Blocker.Ref,
+					step.Blocker.CoversTargetRef,
+				)
 			}
 			if step.HitTest != nil {
 				values = append(values, step.HitTest.TargetRef, step.HitTest.HitRef, step.HitTest.BlockerKind)
@@ -890,15 +899,26 @@ func pageViewLastTokens(last *CompactResult) map[string]struct{} {
 func pageViewTokens(value string) map[string]struct{} {
 	tokens := map[string]struct{}{}
 	var current []rune
+	currentIsHan := false
 	flush := func() {
 		if len(current) == 0 {
 			return
 		}
 		tokens[string(current)] = struct{}{}
+		if currentIsHan {
+			for index := 0; index+1 < len(current); index++ {
+				tokens[string(current[index:index+2])] = struct{}{}
+			}
+		}
 		current = current[:0]
 	}
 	for _, char := range strings.ToLower(value) {
+		isHan := unicode.Is(unicode.Han, char)
 		if unicode.IsLetter(char) || unicode.IsNumber(char) {
+			if len(current) > 0 && currentIsHan != isHan {
+				flush()
+			}
+			currentIsHan = isHan
 			current = append(current, char)
 			continue
 		}
@@ -906,6 +926,31 @@ func pageViewTokens(value string) map[string]struct{} {
 	}
 	flush()
 	return tokens
+}
+
+func stepRelevanceTerms(step contract.Step) []string {
+	var values []string
+	if step.Target != nil {
+		values = append(values, step.Target.Hint)
+		if spec := step.Target.Spec; spec != nil {
+			values = append(
+				values,
+				spec.Object.Role,
+				spec.Object.Text,
+				spec.Object.Name,
+			)
+			values = append(values, spec.Object.Aliases...)
+			if spec.Scope != nil {
+				values = append(values, spec.Scope.Kind, spec.Scope.ContainsText)
+			}
+			values = append(values, spec.Relation, spec.Role, spec.Text, spec.Name)
+			values = append(values, spec.Aliases...)
+		}
+	}
+	for _, condition := range step.Postconditions {
+		values = append(values, condition.Value)
+	}
+	return compactStrings(values, maxResultRelevanceTerms, maxResultRelevanceText)
 }
 
 func pageViewResultStopToken(token string) bool {
