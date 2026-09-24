@@ -59,5 +59,5 @@ FROM model_usage WHERE run_id = ?`, runID).Scan(
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("get model usage: %w", err)
 	}
-	return value, nil
+	return value.Normalize(), nil
 }

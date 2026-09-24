@@ -110,7 +110,7 @@ export type RunEventType =
  * 模型累计用量。镜像 Go 的 `internal/usage.Usage`。
  *
  * `model_calls` 是调用次数；`reasoning_tokens` 已包含在 `completion_tokens` 里、
- * `cached_tokens` 已包含在 `prompt_tokens` 里，两者只是成本构成，不可再加一遍。
+ * `cached_tokens` 已包含在 `prompt_tokens` 里。fresh 字段排除缓存输入，不可和 raw 字段相加。
  */
 export interface RunUsage {
   model_calls: number;
@@ -119,6 +119,8 @@ export interface RunUsage {
   total_tokens: number;
   reasoning_tokens: number;
   cached_tokens: number;
+  fresh_prompt_tokens: number;
+  fresh_total_tokens: number;
 }
 
 /** GET /api/runs、GET /api/runs/{id} 的 run 对象。 */
@@ -620,6 +622,8 @@ export function parseRunUsage(value: unknown): RunUsage {
     total_tokens: optionalNumber(record, 'total_tokens') ?? 0,
     reasoning_tokens: optionalNumber(record, 'reasoning_tokens') ?? 0,
     cached_tokens: optionalNumber(record, 'cached_tokens') ?? 0,
+    fresh_prompt_tokens: optionalNumber(record, 'fresh_prompt_tokens') ?? 0,
+    fresh_total_tokens: optionalNumber(record, 'fresh_total_tokens') ?? 0,
   };
 }
 

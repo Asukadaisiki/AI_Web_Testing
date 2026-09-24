@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -27,6 +28,25 @@ func (m *meteredLLM) Next(ctx context.Context, messages []Message) (Message, usa
 
 // 每次调用 1000 输入 + 100 输出（其中 20 是思考 token）。
 func meteredPerCall() usage.Usage { return usage.Call(1000, 100, 20, 0) }
+
+func newHarnessWithUsageLimits(
+	t *testing.T,
+	llm LLM,
+	maxTotalTokens, maxFreshTotalTokens, maxPromptTokensPerCall int,
+) *harness {
+	t.Helper()
+	h := newHarnessWithLLM(t, llm, maxTotalTokens)
+	h.runtime = New(Config{
+		Store:                  h.store,
+		Worker:                 h.runtime.client,
+		LLM:                    llm,
+		MaxModelCalls:          20,
+		MaxTotalTokens:         maxTotalTokens,
+		MaxFreshTotalTokens:    maxFreshTotalTokens,
+		MaxPromptTokensPerCall: maxPromptTokensPerCall,
+	})
+	return h
+}
 
 func startRun(t *testing.T, h *harness, input string) store.Run {
 	t.Helper()
@@ -137,6 +157,87 @@ func TestTokenBudgetAllowsARunWithinLimit(t *testing.T) {
 	}
 }
 
+func TestFreshTokenBudgetAllowsCachedPromptTokens(t *testing.T) {
+	script := happyScript()
+	steps := []ScriptedStep{script[0], script[len(script)-1]}
+	per := usage.Call(1000, 100, 0, 900)
+	h := newHarnessWithUsageLimits(
+		t,
+		&meteredLLM{inner: NewScriptedLLM(steps), per: per},
+		0,
+		500,
+		0,
+	)
+	run := startRun(t, h, "打开商品列表")
+
+	if err := h.runtime.Plan(context.Background(), run); err != nil {
+		t.Fatalf("two cached calls must fit the fresh-token budget: %v", err)
+	}
+	spent, err := h.store.GetUsage(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("get usage: %v", err)
+	}
+	if spent.ModelCalls != 2 || spent.TotalTokens != 2200 || spent.FreshTotalTokens != 400 {
+		t.Fatalf("usage = %+v, want 2 calls / 2200 raw / 400 fresh tokens", spent)
+	}
+}
+
+func TestFreshTokenBudgetStopsTheRun(t *testing.T) {
+	per := usage.Call(1000, 100, 0, 800)
+	h := newHarnessWithUsageLimits(
+		t,
+		&meteredLLM{inner: NewScriptedLLM(happyScript()), per: per},
+		0,
+		500,
+		0,
+	)
+	run := startRun(t, h, "打开第一个商品的详情页")
+
+	err := h.runtime.Plan(context.Background(), run)
+	if err == nil {
+		t.Fatal("the run must fail once the fresh-token budget is exceeded")
+	}
+	if !strings.Contains(err.Error(), "LOOP_MAX_FRESH_TOTAL_TOKENS") {
+		t.Fatalf("error must name the fresh-token limit: %v", err)
+	}
+
+	spent, getErr := h.store.GetUsage(context.Background(), run.ID)
+	if getErr != nil {
+		t.Fatalf("get usage: %v", getErr)
+	}
+	if spent.ModelCalls != 2 || spent.FreshTotalTokens != 600 {
+		t.Fatalf("usage = %+v, want the over-budget call recorded", spent)
+	}
+}
+
+func TestPromptTokenPerCallLimitStopsTheRun(t *testing.T) {
+	per := usage.Call(31000, 100, 0, 30000)
+	h := newHarnessWithUsageLimits(
+		t,
+		&meteredLLM{inner: NewScriptedLLM(happyScript()), per: per},
+		0,
+		0,
+		30000,
+	)
+	run := startRun(t, h, "打开第一个商品的详情页")
+
+	err := h.runtime.Plan(context.Background(), run)
+	if err == nil {
+		t.Fatal("a prompt over the per-call limit must fail the run")
+	}
+	if !strings.Contains(err.Error(), "LOOP_MAX_PROMPT_TOKENS_PER_CALL") {
+		t.Fatalf("error must name the per-call prompt limit: %v", err)
+	}
+
+	spent, getErr := h.store.GetUsage(context.Background(), run.ID)
+	if getErr != nil {
+		t.Fatalf("get usage: %v", getErr)
+	}
+	if spent.ModelCalls != 1 || spent.PromptTokens != 31000 {
+		t.Fatalf("usage = %+v, want the rejected call recorded", spent)
+	}
+}
+
 // 脚本模型不花钱：即使把预算设成 1，离线闭环也必须照跑不误。
 // 这条是"离线验证可以反复跑"的前提。
 func TestScriptedModelIsNotBilled(t *testing.T) {
@@ -169,6 +270,29 @@ func TestModelUsageEventsAreEmitted(t *testing.T) {
 	for _, event := range events {
 		if event.Type == EventModelUsage {
 			count++
+			var payload struct {
+				Call  map[string]any `json:"call"`
+				Total map[string]any `json:"total"`
+			}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatalf("decode model_usage event: %v", err)
+			}
+			for _, counter := range []string{
+				"prompt_tokens",
+				"completion_tokens",
+				"total_tokens",
+				"reasoning_tokens",
+				"cached_tokens",
+				"fresh_prompt_tokens",
+				"fresh_total_tokens",
+			} {
+				if _, ok := payload.Call[counter]; !ok {
+					t.Fatalf("model_usage call is missing %q: %s", counter, event.Payload)
+				}
+				if _, ok := payload.Total[counter]; !ok {
+					t.Fatalf("model_usage total is missing %q: %s", counter, event.Payload)
+				}
+			}
 		}
 	}
 	if count != len(steps) {

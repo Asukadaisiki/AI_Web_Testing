@@ -32,16 +32,7 @@ func run() error {
 	dbPath := envOr("LOOP_DB_PATH", filepath.Join(dataDir, "loop.db"))
 	addr := envOr("LOOP_ADDR", "127.0.0.1:8101")
 	workerURL := envOr("LOOP_WORKER_URL", "http://127.0.0.1:8100")
-	maxModelCalls, err := strconv.Atoi(envOr("LOOP_MAX_MODEL_CALLS", "40"))
-	if err != nil || maxModelCalls <= 0 {
-		maxModelCalls = 40
-	}
-	// 成本熔断：默认 150 万 token（一次正常规划在几万量级，留足重试空间）。
-	// 设 0 关闭；离线脚本模型不报用量，本来就不会触发。
-	maxTotalTokens, err := strconv.Atoi(envOr("LOOP_MAX_TOTAL_TOKENS", "1500000"))
-	if err != nil || maxTotalTokens < 0 {
-		maxTotalTokens = 1500000
-	}
+	runtimeConfig := runtimeConfigFromEnv()
 
 	if err := api.EnsureArtifactsDir(artifactsDir); err != nil {
 		return fmt.Errorf("create artifacts dir: %w", err)
@@ -57,20 +48,47 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	runtime := agentruntime.New(agentruntime.Config{
-		Store:          database,
-		Worker:         client,
-		LLM:            model,
-		MaxModelCalls:  maxModelCalls,
-		MaxTotalTokens: maxTotalTokens,
-		AnswerTimeout:  30 * time.Minute,
-	})
+	runtimeConfig.Store = database
+	runtimeConfig.Worker = client
+	runtimeConfig.LLM = model
+	runtime := agentruntime.New(runtimeConfig)
 	server := api.New(database, runtime, client, artifactsDir)
 	defer server.Close()
 
-	log.Printf("loopd: db=%s artifacts=%s worker=%s model=%s tools=%d budget=%d calls/%d tokens",
-		dbPath, artifactsDir, workerURL, model.Label(), len(planner.Tools()), maxModelCalls, maxTotalTokens)
+	log.Printf(
+		"loopd: db=%s artifacts=%s worker=%s model=%s tools=%d limits=%d calls/%d raw/%d fresh/%d prompt/%d bytes",
+		dbPath, artifactsDir, workerURL, model.Label(), len(planner.Tools()),
+		runtimeConfig.MaxModelCalls, runtimeConfig.MaxTotalTokens, runtimeConfig.MaxFreshTotalTokens,
+		runtimeConfig.MaxPromptTokensPerCall, runtimeConfig.MaxRequestBytes,
+	)
 	return api.Serve(addr, server.Handler())
+}
+
+func runtimeConfigFromEnv() agentruntime.Config {
+	return agentruntime.Config{
+		MaxModelCalls:          positiveEnvInt("LOOP_MAX_MODEL_CALLS", 25),
+		MaxTotalTokens:         nonNegativeEnvInt("LOOP_MAX_TOTAL_TOKENS", 1500000),
+		MaxFreshTotalTokens:    nonNegativeEnvInt("LOOP_MAX_FRESH_TOTAL_TOKENS", 300000),
+		MaxPromptTokensPerCall: nonNegativeEnvInt("LOOP_MAX_PROMPT_TOKENS_PER_CALL", 30000),
+		MaxRequestBytes:        nonNegativeEnvInt("LOOP_MAX_REQUEST_BYTES", 98304),
+		AnswerTimeout:          30 * time.Minute,
+	}
+}
+
+func positiveEnvInt(key string, fallback int) int {
+	value, err := strconv.Atoi(envOr(key, strconv.Itoa(fallback)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func nonNegativeEnvInt(key string, fallback int) int {
+	value, err := strconv.Atoi(envOr(key, strconv.Itoa(fallback)))
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
 }
 
 // buildLLM 依据环境变量选模型。LOOP_LLM_SCRIPT 一旦设置就切到离线脚本回放，

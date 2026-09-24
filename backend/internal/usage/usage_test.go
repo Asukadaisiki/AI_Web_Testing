@@ -2,6 +2,20 @@ package usage
 
 import "testing"
 
+func TestCallSeparatesFreshPromptTokens(t *testing.T) {
+	got := Call(1000, 100, 20, 800)
+	if got.FreshPromptTokens != 200 || got.FreshTotalTokens != 300 {
+		t.Fatalf("fresh usage = %+v", got)
+	}
+}
+
+func TestFreshPromptNeverGoesNegative(t *testing.T) {
+	got := Call(100, 10, 0, 120)
+	if got.FreshPromptTokens != 0 || got.FreshTotalTokens != 10 {
+		t.Fatalf("fresh usage = %+v", got)
+	}
+}
+
 func TestCallNormalizesTotal(t *testing.T) {
 	// 方舟会返回 total，但有的提供方只给 prompt/completion，不能因此把成本算成 0。
 	value := Call(100, 20, 15, 0)
@@ -27,7 +41,8 @@ func TestAddAccumulatesEveryField(t *testing.T) {
 	total := Call(100, 20, 15, 0).Add(Call(200, 30, 0, 80))
 	want := Usage{
 		ModelCalls: 2, PromptTokens: 300, CompletionTokens: 50,
-		TotalTokens: 350, ReasoningTokens: 15, CachedTokens: 80,
+		TotalTokens: 350, FreshPromptTokens: 220, FreshTotalTokens: 270,
+		ReasoningTokens: 15, CachedTokens: 80,
 	}
 	if total != want {
 		t.Fatalf("total = %+v, want %+v", total, want)

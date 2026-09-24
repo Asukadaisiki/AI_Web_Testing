@@ -36,10 +36,13 @@ const (
 
 // Config 是 Runtime 的构造参数。
 type Config struct {
-	Store         *store.Store
-	Worker        *worker.Client
-	LLM           LLM
-	MaxModelCalls int
+	Store                  *store.Store
+	Worker                 *worker.Client
+	LLM                    LLM
+	MaxModelCalls          int
+	MaxFreshTotalTokens    int
+	MaxPromptTokensPerCall int
+	MaxRequestBytes        int
 	// MaxTotalTokens 是成本熔断：整个 run 累计超过这个 token 数就中止。
 	// 0 表示不限（离线脚本模型本来就不花钱，用它跑不需要熔断）。
 	MaxTotalTokens int
@@ -48,13 +51,16 @@ type Config struct {
 
 // Runtime 驱动闭环：输入 → 规划 → （人审批）→ 执行 → 报告 → 失败回灌候选。
 type Runtime struct {
-	store         *store.Store
-	client        *worker.Client
-	llm           LLM
-	tools         []planner.Tool
-	maxModelCalls int
-	maxTokens     int
-	answerTimeout time.Duration
+	store                  *store.Store
+	client                 *worker.Client
+	llm                    LLM
+	tools                  []planner.Tool
+	maxModelCalls          int
+	maxTokens              int
+	maxFreshTokens         int
+	maxPromptTokensPerCall int
+	maxRequestBytes        int
+	answerTimeout          time.Duration
 
 	mu       sync.Mutex
 	answers  map[string]chan string
@@ -65,22 +71,25 @@ type Runtime struct {
 func New(config Config) *Runtime {
 	maxCalls := config.MaxModelCalls
 	if maxCalls <= 0 {
-		maxCalls = 40
+		maxCalls = 25
 	}
 	answerTimeout := config.AnswerTimeout
 	if answerTimeout <= 0 {
 		answerTimeout = 30 * time.Minute
 	}
 	return &Runtime{
-		store:         config.Store,
-		client:        config.Worker,
-		llm:           config.LLM,
-		tools:         planner.Tools(),
-		maxModelCalls: maxCalls,
-		maxTokens:     config.MaxTotalTokens,
-		answerTimeout: answerTimeout,
-		answers:       map[string]chan string{},
-		inflight:      map[string]string{},
+		store:                  config.Store,
+		client:                 config.Worker,
+		llm:                    config.LLM,
+		tools:                  planner.Tools(),
+		maxModelCalls:          maxCalls,
+		maxTokens:              config.MaxTotalTokens,
+		maxFreshTokens:         config.MaxFreshTotalTokens,
+		maxPromptTokensPerCall: config.MaxPromptTokensPerCall,
+		maxRequestBytes:        config.MaxRequestBytes,
+		answerTimeout:          answerTimeout,
+		answers:                map[string]chan string{},
+		inflight:               map[string]string{},
 	}
 }
 
@@ -92,6 +101,7 @@ func (r *Runtime) recordUsage(ctx context.Context, runID string, spent usage.Usa
 	if spent.IsZero() {
 		return nil
 	}
+	spent = spent.Normalize()
 	total, err := r.store.AddUsage(ctx, runID, spent)
 	if err != nil {
 		// 记账失败不该拖垮这次 run：把用量写进事件，至少不丢证据。
@@ -101,10 +111,26 @@ func (r *Runtime) recordUsage(ctx context.Context, runID string, spent usage.Usa
 		return nil
 	}
 	r.emit(ctx, runID, EventModelUsage, map[string]any{
-		"call":  spent,
-		"total": total,
-		"limit": r.maxTokens,
+		"call":                         spent,
+		"total":                        total,
+		"limit":                        r.maxTokens,
+		"fresh_total_limit":            r.maxFreshTokens,
+		"prompt_tokens_per_call_limit": r.maxPromptTokensPerCall,
 	})
+	if r.maxPromptTokensPerCall > 0 && spent.PromptTokens > r.maxPromptTokensPerCall {
+		return fmt.Errorf(
+			"单次模型调用输入 token 超过上限：已用 %d / 上限 %d。"+
+				"本 run 已中止；调大 LOOP_MAX_PROMPT_TOKENS_PER_CALL，或缩小请求上下文",
+			spent.PromptTokens, r.maxPromptTokensPerCall,
+		)
+	}
+	if r.maxFreshTokens > 0 && total.FreshTotalTokens > r.maxFreshTokens {
+		return fmt.Errorf(
+			"新鲜 token 预算用尽：已用 %d / 上限 %d（%d 次模型调用）。"+
+				"本 run 已中止；调大 LOOP_MAX_FRESH_TOTAL_TOKENS，或把目标拆小",
+			total.FreshTotalTokens, r.maxFreshTokens, total.ModelCalls,
+		)
+	}
 	if r.maxTokens > 0 && total.TotalTokens > r.maxTokens {
 		return fmt.Errorf(
 			"token 预算用尽：已用 %d / 上限 %d（%d 次模型调用）。"+

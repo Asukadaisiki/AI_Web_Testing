@@ -5,6 +5,44 @@ import (
 	"testing"
 )
 
+func TestRuntimeConfigUsesBoundedUsageDefaults(t *testing.T) {
+	for _, key := range []string{
+		"LOOP_MAX_MODEL_CALLS",
+		"LOOP_MAX_TOTAL_TOKENS",
+		"LOOP_MAX_FRESH_TOTAL_TOKENS",
+		"LOOP_MAX_PROMPT_TOKENS_PER_CALL",
+		"LOOP_MAX_REQUEST_BYTES",
+	} {
+		t.Setenv(key, "")
+	}
+
+	config := runtimeConfigFromEnv()
+	if config.MaxModelCalls != 25 ||
+		config.MaxTotalTokens != 1500000 ||
+		config.MaxFreshTotalTokens != 300000 ||
+		config.MaxPromptTokensPerCall != 30000 ||
+		config.MaxRequestBytes != 98304 {
+		t.Fatalf("runtime config defaults = %+v", config)
+	}
+}
+
+func TestRuntimeConfigReadsBoundedUsageEnvironment(t *testing.T) {
+	t.Setenv("LOOP_MAX_MODEL_CALLS", "12")
+	t.Setenv("LOOP_MAX_TOTAL_TOKENS", "1200")
+	t.Setenv("LOOP_MAX_FRESH_TOTAL_TOKENS", "900")
+	t.Setenv("LOOP_MAX_PROMPT_TOKENS_PER_CALL", "700")
+	t.Setenv("LOOP_MAX_REQUEST_BYTES", "600")
+
+	config := runtimeConfigFromEnv()
+	if config.MaxModelCalls != 12 ||
+		config.MaxTotalTokens != 1200 ||
+		config.MaxFreshTotalTokens != 900 ||
+		config.MaxPromptTokensPerCall != 700 ||
+		config.MaxRequestBytes != 600 {
+		t.Fatalf("runtime config from environment = %+v", config)
+	}
+}
+
 // 密钥的两种给法必须都成立，且都不能把密钥写进错误信息里。
 func TestResolveAPIKeyPrefersTheDirectValue(t *testing.T) {
 	t.Setenv("LOOP_LLM_API_KEY", "direct-key")

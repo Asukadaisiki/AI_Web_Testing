@@ -8,10 +8,12 @@ package usage
 //
 // ModelCalls 也算在内，这样单次用量与累计用量是同一个类型，Add 可以无差别累加。
 type Usage struct {
-	ModelCalls       int `json:"model_calls"`
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	ModelCalls        int `json:"model_calls"`
+	PromptTokens      int `json:"prompt_tokens"`
+	CompletionTokens  int `json:"completion_tokens"`
+	TotalTokens       int `json:"total_tokens"`
+	FreshPromptTokens int `json:"fresh_prompt_tokens"`
+	FreshTotalTokens  int `json:"fresh_total_tokens"`
 	// ReasoningTokens 是推理模型（如方舟上的 deepseek-v4.1）单独计费的思考 token，
 	// 已包含在 CompletionTokens 里，这里只是把它显式暴露出来便于观察成本构成。
 	ReasoningTokens int `json:"reasoning_tokens"`
@@ -36,6 +38,8 @@ func (u Usage) Normalize() Usage {
 	if u.TotalTokens == 0 {
 		u.TotalTokens = u.PromptTokens + u.CompletionTokens
 	}
+	u.FreshPromptTokens = max(u.PromptTokens-u.CachedTokens, 0)
+	u.FreshTotalTokens = u.FreshPromptTokens + u.CompletionTokens
 	return u
 }
 
@@ -48,7 +52,7 @@ func (u Usage) Add(other Usage) Usage {
 		TotalTokens:      u.TotalTokens + other.TotalTokens,
 		ReasoningTokens:  u.ReasoningTokens + other.ReasoningTokens,
 		CachedTokens:     u.CachedTokens + other.CachedTokens,
-	}
+	}.Normalize()
 }
 
 // IsZero 表示这一次调用没有报用量（例如离线脚本模型，或提供方不返回 usage）。

@@ -43,6 +43,9 @@ func TestUsageAccumulatesAndReadsBack(t *testing.T) {
 	if second.CachedTokens != 60 {
 		t.Fatalf("cached = %d, want 60", second.CachedTokens)
 	}
+	if second.FreshPromptTokens != 340 || second.FreshTotalTokens != 400 {
+		t.Fatalf("fresh usage = %+v, want 340 fresh prompt / 400 fresh total", second)
+	}
 
 	reread, err := store.GetUsage(ctx, run.ID)
 	if err != nil {

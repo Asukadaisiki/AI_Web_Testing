@@ -8,8 +8,11 @@
     "LOOP_DATA_DIR": "data",
     "LOOP_ARTIFACTS_DIR": "data/sessions",
     "LOOP_DB_PATH": "data/loop.db",
-    "LOOP_MAX_MODEL_CALLS": "40",
-    "LOOP_MAX_TOTAL_TOKENS": "1500000"
+    "LOOP_MAX_MODEL_CALLS": "25",
+    "LOOP_MAX_TOTAL_TOKENS": "1500000",
+    "LOOP_MAX_FRESH_TOTAL_TOKENS": "300000",
+    "LOOP_MAX_PROMPT_TOKENS_PER_CALL": "30000",
+    "LOOP_MAX_REQUEST_BYTES": "98304"
   },
 
   "ports": {
