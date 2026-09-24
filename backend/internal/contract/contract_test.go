@@ -85,6 +85,9 @@ func TestAuthoringActionFixtureMatchesGoContract(t *testing.T) {
 	if err := json.Unmarshal(fixture.Request, &request); err != nil {
 		t.Fatalf("decode authoring request: %v", err)
 	}
+	if request.Action != ActionAssertElement {
+		t.Fatalf("request action = %q, want %q", request.Action, ActionAssertElement)
+	}
 	if len(request.Postconditions) != 1 || request.Postconditions[0].Type != CondTextVisible {
 		t.Fatalf("request postconditions = %+v", request.Postconditions)
 	}

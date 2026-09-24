@@ -3,7 +3,7 @@
   "note": "Go 与 Python 两侧校验器共读本文件，必须给出相同的 accept 与 code。新增契约规则时必须在这里补用例。",
   "authoring_action": {
     "request": {
-      "action": "click",
+      "action": "assert_element",
       "locator": {
         "kind": "role",
         "role": "button",

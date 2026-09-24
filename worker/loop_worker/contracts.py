@@ -813,6 +813,9 @@ class ActRequest(BaseModel):
         "hover",
         "dismiss_dialog",
         "upload_file",
+        "assert_element",
+        "assert_attribute",
+        "assert_count",
     ]
     locator: LocatorSpec
     value: str | None = None

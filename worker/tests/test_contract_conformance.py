@@ -61,6 +61,7 @@ class ContractConformanceTest(unittest.TestCase):
     def test_authoring_action_fixture_matches_python_contract(self) -> None:
         fixture = load_fixtures()["authoring_action"]
         request = ActRequest.model_validate(fixture["request"])
+        self.assertEqual(request.action, "assert_element")
         self.assertEqual(len(request.postconditions), 1)
         self.assertEqual(request.postconditions[0].type, "text_visible")
 

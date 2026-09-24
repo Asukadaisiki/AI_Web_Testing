@@ -136,6 +136,69 @@ class HealthAndErrorsTest(unittest.TestCase):
 class SessionLifecycleTest(unittest.TestCase):
     """真实浏览器：create → navigate → act → delete。"""
 
+    def test_authoring_assertions_evaluate_without_mutating_the_page(self) -> None:
+        run(self._authoring_assertions_evaluate_without_mutating_the_page())
+
+    async def _authoring_assertions_evaluate_without_mutating_the_page(self) -> None:
+        with LocalSite() as site:
+            async with api_client() as client:
+                created = await client.post("/sessions", json={"session_id": SESSION})
+                session_id = created.json()["session_id"]
+                navigated = await client.post(
+                    f"/sessions/{session_id}/navigate",
+                    json={"url": site.url("generic_form.html")},
+                )
+                self.assertEqual(navigated.status_code, 200, navigated.text)
+
+                assertions = (
+                    (
+                        "assert_element",
+                        {"kind": "role", "role": "checkbox", "name": "Public", "exact": True},
+                        [{"type": "element_state", "value": "unchecked", "timeout_ms": 100}],
+                    ),
+                    (
+                        "assert_attribute",
+                        {"kind": "css", "css": "#save"},
+                        [
+                            {
+                                "type": "attribute_equals",
+                                "value": "data-state=ready",
+                                "timeout_ms": 100,
+                            }
+                        ],
+                    ),
+                    (
+                        "assert_count",
+                        {"kind": "css", "css": "#save"},
+                        [
+                            {"type": "count_equals", "value": "1", "timeout_ms": 100},
+                            {
+                                "type": "attribute_equals",
+                                "value": "data-state=ready",
+                                "timeout_ms": 100,
+                            },
+                        ],
+                    ),
+                )
+                for action, locator, postconditions in assertions:
+                    with self.subTest(action=action):
+                        acted = await client.post(
+                            f"/sessions/{session_id}/act",
+                            json={
+                                "action": action,
+                                "locator": locator,
+                                "postconditions": postconditions,
+                            },
+                        )
+                        self.assertEqual(acted.status_code, 200, acted.text)
+                        response = acted.json()
+                        self.assertEqual(response["status"], "passed", response)
+                        self.assertTrue(
+                            all(item["satisfied"] for item in response["conditions"]),
+                            response,
+                        )
+                        self.assertIsNone(response["error"])
+
     def test_authoring_act_waits_for_postconditions_before_observing(self) -> None:
         run(self._authoring_act_waits_for_postconditions_before_observing())
 

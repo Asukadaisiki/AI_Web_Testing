@@ -196,6 +196,9 @@ class SessionManager:
             await dismiss_dialog(page, locator, DEFAULT_STEP_TIMEOUT_MS)
         elif request.action == "upload_file":
             await upload_file_target(page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS)
+        elif request.action in ("assert_element", "assert_attribute", "assert_count"):
+            # Target assertions only resolve their locator; their postconditions do the evaluation.
+            pass
         conditions = await evaluate_postcondition_list(
             page,
             request.postconditions,
