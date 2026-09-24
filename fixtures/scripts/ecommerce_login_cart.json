@@ -1,0 +1,120 @@
+{
+  "note": "Offline scripted model for the complete ecommerce login-to-cart baseline.",
+  "steps": [
+    {
+      "tool": "open_page",
+      "arguments": {
+        "url": "http://127.0.0.1:8123/ecommerce_login.html",
+        "intent": "Open the ecommerce login page"
+      }
+    },
+    {
+      "tool": "input",
+      "arguments": {
+        "hint": "Email Address",
+        "value": "shopper@example.test",
+        "intent": "Enter the shopper email",
+        "expect_value": "shopper@example.test"
+      }
+    },
+    {
+      "tool": "input",
+      "arguments": {
+        "hint": "Password",
+        "value": "offline-secret",
+        "intent": "Enter the shopper password",
+        "expect_value": "offline-secret"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "Login",
+        "intent": "Sign in to the store",
+        "expect_url": "ecommerce_products.html"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "Products",
+        "intent": "Open the product catalog",
+        "expect_text": "All Products"
+      }
+    },
+    {
+      "tool": "input",
+      "arguments": {
+        "hint": "Search products",
+        "value": "Blue Top",
+        "intent": "Enter the product name",
+        "expect_value": "Blue Top"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "candidate_id": "act_ff2a77e4ceaa",
+        "intent": "Submit the product search with the icon-only button",
+        "expect_text": "Searched Products"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "View Product",
+        "target": {
+          "object": {
+            "role": "link",
+            "text": "View Product"
+          },
+          "scope": {
+            "kind": "card",
+            "contains_text": "Blue Top"
+          },
+          "relation": "within"
+        },
+        "intent": "Open the Blue Top product detail",
+        "expect_url": "ecommerce_detail.html"
+      }
+    },
+    {
+      "tool": "input",
+      "arguments": {
+        "hint": "Quantity",
+        "value": "3",
+        "intent": "Set the quantity to 3 before adding the product",
+        "expect_value": "3"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "Add to cart",
+        "intent": "Add three Blue Top items and wait for confirmation",
+        "expect_text": "Added!"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": {
+        "hint": "View Cart",
+        "intent": "Open the cart from the added confirmation modal",
+        "expect_url": "cart"
+      }
+    },
+    {
+      "tool": "assert_text",
+      "arguments": {
+        "text": "Blue Top quantity 3",
+        "intent": "Verify the Blue Top cart row contains quantity 3"
+      }
+    },
+    {
+      "tool": "finish_case",
+      "arguments": {
+        "name": "Login, search, and add Blue Top quantity 3"
+      }
+    }
+  ]
+}

@@ -39,9 +39,11 @@ func (s *fakeSite) isBroken() bool {
 }
 
 const (
-	listURL   = "https://shop.test/products"
-	detailURL = "https://shop.test/item/1"
-	cartURL   = "https://shop.test/view_cart"
+	loginURL                   = "https://shop.test/login"
+	listURL                    = "https://shop.test/products"
+	detailURL                  = "https://shop.test/item/1"
+	cartURL                    = "https://shop.test/view_cart"
+	ecommerceSearchCandidateID = "act_search_submit"
 )
 
 // searchGlyph 是 Font Awesome 搜索图标（U+F002）——纯图标按钮的"可访问名"。
@@ -85,6 +87,31 @@ func observation(url, title string, elements []contract.Element) contract.Observ
 // page 返回某个 URL 在假站点里的观测。values 是输入框的当前值。
 func (s *fakeSite) page(url string, values map[string]string) (contract.Observation, bool) {
 	switch {
+	case strings.HasPrefix(url, loginURL):
+		email := values["Email Address"]
+		password := values["Password"]
+		return observation(url, "Ecommerce Login", []contract.Element{
+			element("e20", "input", "textbox", "Email Address", "", &email,
+				roleLocator("textbox", "Email Address")),
+			element("e21", "input", "textbox", "Password", "", &password,
+				roleLocator("textbox", "Password")),
+			element("e22", "button", "button", "Login", "Login", nil,
+				roleLocator("button", "Login")),
+		}), true
+	case strings.HasPrefix(url, listURL+"?search="):
+		observation := observation(url, "Searched Products", []contract.Element{
+			element("e30", "h1", "heading", "Searched Products", "Searched Products", nil,
+				roleLocator("heading", "Searched Products")),
+			element("e31", "p", "paragraph", "", "Blue Top", nil, textLocator("Blue Top")),
+			element("e32", "a", "link", "View Product", "View Product", nil,
+				cssLocator("#blue-top-view")),
+		})
+		observation.Structures = []contract.StructureNode{{
+			Ref: "s3", Kind: "card", FullText: "Blue Top View Product", Visible: true,
+		}}
+		observation.Elements[1].ContainerRef = "s3"
+		observation.Elements[2].ContainerRef = "s3"
+		return observation, true
 	case strings.HasPrefix(url, listURL+"?cards=1"):
 		observation := observation(url, "All Products", []contract.Element{
 			element("e10", "p", "paragraph", "", "Blue Top", nil, textLocator("Blue Top")),
@@ -108,10 +135,14 @@ func (s *fakeSite) page(url string, values map[string]string) (contract.Observat
 		return observation, true
 	case strings.HasPrefix(url, listURL):
 		elements := []contract.Element{
-			element("e1", "input", "textbox", "Search", "", nil, roleLocator("textbox", "Search")),
+			element("e1", "input", "textbox", "Search products", "", nil,
+				roleLocator("textbox", "Search products")),
 			// 纯图标搜索按钮：模型不该猜 selector，而应选择系统给出的 form submit candidate。
 			element("e2", "button", "button", searchGlyph, searchGlyph, nil, roleLocator("button", searchGlyph)),
 			element("e4", "button", "button", "Add to cart", "Add to cart", nil, roleLocator("button", "Add to cart")),
+			element("e16", "a", "link", "Products", "Products", nil, roleLocator("link", "Products")),
+			element("e17", "h1", "heading", "All Products", "All Products", nil,
+				roleLocator("heading", "All Products")),
 		}
 		if !s.isBroken() {
 			elements = append(elements,
@@ -135,7 +166,7 @@ func (s *fakeSite) page(url string, values map[string]string) (contract.Observat
 		}
 		observation.Elements[1].Locators = []contract.Locator{cssLocator("#submit_search")}
 		observation.ActionCandidates = []contract.ActionCandidate{{
-			CandidateID: "act_search_submit",
+			CandidateID: ecommerceSearchCandidateID,
 			Kind:        "form_submit_candidate",
 			Action:      string(contract.ActionClick),
 			TargetRef:   "e2",
@@ -150,7 +181,7 @@ func (s *fakeSite) page(url string, values map[string]string) (contract.Observat
 			}, {
 				Type:  "near_control",
 				Ref:   "e1",
-				Label: "Search",
+				Label: "Search products",
 			}},
 			Locator:    cssLocator("#submit_search"),
 			Confidence: "high",
@@ -158,17 +189,40 @@ func (s *fakeSite) page(url string, values map[string]string) (contract.Observat
 		return observation, true
 	case strings.HasPrefix(url, detailURL):
 		quantity := values["Quantity"]
+		if quantity == "" {
+			quantity = "1"
+		}
 		elements := []contract.Element{
 			element("e5", "input", "spinbutton", "Quantity", "", &quantity, roleLocator("spinbutton", "Quantity")),
 			element("e6", "button", "button", "Add to cart", "Add to cart", nil, roleLocator("button", "Add to cart")),
-			element("e7", "h1", "heading", "Widget", "Widget", nil, roleLocator("heading", "Widget")),
+			element("e7", "h1", "heading", "Blue Top", "Blue Top", nil, roleLocator("heading", "Blue Top")),
 		}
-		return observation(url, "Widget", elements), true
+		observation := observation(url, "Blue Top", elements)
+		if values["__added"] == "true" {
+			observation.Elements = append(observation.Elements,
+				element("e18", "h2", "heading", "Added!", "Added!", nil,
+					roleLocator("heading", "Added!")),
+				element("e19", "a", "link", "View Cart", "View Cart", nil,
+					roleLocator("link", "View Cart")),
+			)
+			observation.Structures = []contract.StructureNode{{
+				Ref: "s4", Kind: "dialog", FullText: "Added! View Cart", Visible: true,
+			}}
+			observation.Elements[3].ContainerRef = "s4"
+			observation.Elements[4].ContainerRef = "s4"
+		}
+		return observation, true
 	case strings.HasPrefix(url, cartURL):
 		elements := []contract.Element{
 			element("e8", "button", "button", "Proceed To Checkout", "Proceed To Checkout", nil,
 				roleLocator("button", "Proceed To Checkout")),
 			element("e9", "td", "cell", "Widget", "Widget", nil, textLocator("Widget")),
+		}
+		if product := values["Cart Product"]; product != "" {
+			summary := product + " quantity " + values["Cart Quantity"]
+			elements = append(elements,
+				element("e23", "td", "cell", summary, summary, nil, textLocator(summary)),
+			)
 		}
 		return observation(url, "Shopping Cart", elements), true
 	default:
@@ -181,21 +235,39 @@ func clickTarget(url string, target contract.Element, values map[string]string) 
 	if target.Ref == "e11" || hasLocator(target, cssLocator("#blue-view")) {
 		return detailURL
 	}
+	if target.Ref == "e32" || hasLocator(target, cssLocator("#blue-top-view")) {
+		return detailURL
+	}
 	if target.Ref == "e2" || hasLocator(target, cssLocator("#submit_search")) {
-		query := values["Search"]
+		query := values["Search products"]
+		if query == "" {
+			query = values["Search"]
+		}
 		if query == "" {
 			return url
 		}
 		return listURL + "?search=" + query
 	}
 	switch target.Name {
+	case "Login":
+		if values["Email Address"] != "" && values["Password"] != "" {
+			values["__logged_in"] = "true"
+			return listURL
+		}
+		return url
+	case "Products":
+		return listURL
 	case "Widget":
 		return detailURL
 	case "Add to cart":
 		if strings.HasPrefix(url, detailURL) {
-			return cartURL
+			values["Cart Product"] = "Blue Top"
+			values["Cart Quantity"] = values["Quantity"]
+			values["__added"] = "true"
 		}
 		return url
+	case "View Cart":
+		return cartURL
 	case "Proceed To Checkout":
 		return "https://shop.test/checkout"
 	default:

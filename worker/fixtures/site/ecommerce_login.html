@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ecommerce Login</title>
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <main>
+    <h1>Login to your account</h1>
+    <form id="login-form">
+      <p>
+        <label for="email">Email Address</label>
+        <input id="email" name="email" type="email" autocomplete="username" required>
+      </p>
+      <p>
+        <label for="password">Password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autocomplete="current-password"
+          required
+        >
+      </p>
+      <button type="submit">Login</button>
+    </form>
+  </main>
+
+  <script src="ecommerce.js"></script>
+  <script>
+    (function () {
+      document.getElementById("login-form").addEventListener("submit", function (event) {
+        event.preventDefault();
+        var email = document.getElementById("email").value;
+        window.EcommerceFixture.signIn(email);
+        console.log("login submitted");
+        window.location.assign("ecommerce_products.html");
+      });
+    })();
+  </script>
+</body>
+</html>

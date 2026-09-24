@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shopping Cart</title>
+  <link rel="stylesheet" href="site.css">
+  <style>
+    table { border-collapse: collapse; margin-top: 16px; }
+    th, td { border: 1px solid #bbb; padding: 8px 12px; text-align: left; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav aria-label="Store">
+      <a href="ecommerce_products.html">Products</a>
+      <a href="ecommerce_cart.html">Cart</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Shopping Cart</h1>
+    <p id="empty-cart">Cart is empty</p>
+    <table id="cart-table" aria-label="Cart items" hidden>
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th>Quantity</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr id="cart-row" data-item="blue-top">
+          <td id="cart-summary" colspan="2"></td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+
+  <script src="ecommerce.js"></script>
+  <script>
+    (function () {
+      var cart = window.EcommerceFixture.readCart();
+      if (!cart) {
+        return;
+      }
+      document.getElementById("empty-cart").hidden = true;
+      document.getElementById("cart-table").hidden = false;
+      document.getElementById("cart-summary").textContent =
+        cart.product + " quantity " + cart.quantity;
+      console.log("cart restored");
+    })();
+  </script>
+</body>
+</html>

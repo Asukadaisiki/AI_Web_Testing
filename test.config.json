@@ -57,6 +57,11 @@
       "cmd": ["uv", "run", "python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
     },
     {
+      "name": "完整电商闭环（脚本模型 + 真浏览器）",
+      "cwd": "worker",
+      "cmd": ["uv", "run", "python", "../integration/ecommerce_closed_loop.py"]
+    },
+    {
       "name": "Web 类型与构建",
       "cwd": "web",
       "cmd": ["npm", "run", "build"]

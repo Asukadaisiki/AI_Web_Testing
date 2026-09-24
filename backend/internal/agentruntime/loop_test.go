@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
+	reportpkg "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/report"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
@@ -144,7 +146,7 @@ func TestCandidateIDClickReachesIconOnlyFormSubmit(t *testing.T) {
 		{Tool: "input", Arguments: json.RawMessage(
 			`{"hint":"Search","value":"widget","intent":"填写搜索词","expect_value":"widget"}`)},
 		{Tool: "click", Arguments: json.RawMessage(
-			`{"candidate_id":"act_search_submit","intent":"提交搜索表单","expect_url":"search=widget"}`)},
+			`{"candidate_id":"` + ecommerceSearchCandidateID + `","intent":"提交搜索表单","expect_url":"search=widget"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"候选提交搜索"}`)},
 	})
 
@@ -168,11 +170,105 @@ func TestCandidateIDClickReachesIconOnlyFormSubmit(t *testing.T) {
 	if clickStep.Action != contract.ActionClick {
 		t.Fatalf("step 2 action = %q, want click", clickStep.Action)
 	}
-	if clickStep.Target == nil || clickStep.Target.Grounding.CandidateID != "act_search_submit" {
+	if clickStep.Target == nil || clickStep.Target.Grounding.CandidateID != ecommerceSearchCandidateID {
 		t.Fatalf("candidate grounding missing: %#v", clickStep.Target)
 	}
 	if clickStep.Target.Locator != cssLocator("#submit_search") {
 		t.Fatalf("candidate locator = %#v", clickStep.Target.Locator)
+	}
+}
+
+func TestEcommerceClosedLoopOffline(t *testing.T) {
+	scriptPath := filepath.Join("..", "..", "..", "fixtures", "scripts", "ecommerce_login_cart.json")
+	raw, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read ecommerce script: %v", err)
+	}
+	if strings.Contains(string(raw), "drop_last_step") {
+		t.Fatal("ecommerce script must use only public planner tools")
+	}
+	raw = []byte(strings.ReplaceAll(
+		string(raw),
+		"http://127.0.0.1:8123/ecommerce_login.html",
+		"https://shop.test/login",
+	))
+	raw = []byte(strings.ReplaceAll(string(raw), "ecommerce_products.html", "/products"))
+	raw = []byte(strings.ReplaceAll(string(raw), "ecommerce_detail.html", "/item/1"))
+	raw = []byte(strings.ReplaceAll(
+		string(raw), "act_ff2a77e4ceaa", ecommerceSearchCandidateID,
+	))
+	scripted, err := ScriptedFromJSON(raw)
+	if err != nil {
+		t.Fatalf("parse ecommerce script: %v", err)
+	}
+
+	ctx := context.Background()
+	h := newHarnessWithLLM(t, scripted, 0)
+	run := h.plan(t, "log in, find Blue Top, add quantity 3, and verify the cart")
+	if run.Status != store.StatusAwaitingApproval {
+		t.Fatalf("status = %q, want %q (error: %v)", run.Status, store.StatusAwaitingApproval, run.Error)
+	}
+
+	record, err := h.store.GetCase(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get case: %v", err)
+	}
+	artifact, err := contract.Validate(record.Payload)
+	if err != nil {
+		t.Fatalf("persisted ecommerce case must validate: %v", err)
+	}
+	if len(artifact.Steps) != 12 {
+		t.Fatalf("steps = %d, want 12", len(artifact.Steps))
+	}
+	searchClick := artifact.Steps[6]
+	if searchClick.Target == nil ||
+		searchClick.Target.Grounding.CandidateID != ecommerceSearchCandidateID {
+		t.Fatalf("search click was not candidate-grounded: %#v", searchClick.Target)
+	}
+	productClick := artifact.Steps[7]
+	if productClick.Target == nil || productClick.Target.Spec == nil ||
+		productClick.Target.Spec.Scope == nil ||
+		productClick.Target.Spec.Scope.ContainsText != "Blue Top" {
+		t.Fatalf("Blue Top product click was not card-scoped: %#v", productClick.Target)
+	}
+	quantity := artifact.Steps[8]
+	if quantity.Action != contract.ActionInput || quantity.Value == nil || *quantity.Value != "3" {
+		t.Fatalf("quantity step = %#v, want input value 3", quantity)
+	}
+	if artifact.Steps[9].Target == nil || artifact.Steps[9].Target.Hint != "Add to cart" {
+		t.Fatalf("step 9 must add to cart after quantity is set: %#v", artifact.Steps[9])
+	}
+	if artifact.Steps[10].Target == nil || artifact.Steps[10].Target.Hint != "View Cart" {
+		t.Fatalf("step 10 must observe and click modal View Cart: %#v", artifact.Steps[10])
+	}
+
+	if err := h.store.ApproveCase(ctx, record.ID, "owner"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if err := h.runtime.Execute(ctx, run); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	final, err := h.store.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get final run: %v", err)
+	}
+	if final.Status != store.StatusCompleted {
+		t.Fatalf("final status = %q, want completed (error: %v)", final.Status, final.Error)
+	}
+	execution, err := h.store.GetExecution(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get execution: %v", err)
+	}
+	var result contract.ExecutionResult
+	if err := json.Unmarshal(execution.Result, &result); err != nil {
+		t.Fatalf("decode execution: %v", err)
+	}
+	builtReport := reportpkg.Build(run.ID, final.Status, result, nil)
+	if builtReport.StepsFailed != 0 || builtReport.StepsPassed != 12 {
+		t.Fatalf("ecommerce report = %#v", builtReport)
+	}
+	if result.FinalURL != cartURL {
+		t.Fatalf("final url = %q, want %q", result.FinalURL, cartURL)
 	}
 }
 

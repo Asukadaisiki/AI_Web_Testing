@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>All Products</title>
+  <link rel="stylesheet" href="site.css">
+  <style>
+    .product-grid { display: flex; gap: 16px; margin-top: 16px; }
+    .product-card { border: 1px solid #bbb; padding: 12px; width: 180px; }
+    #submit_search { height: 30px; width: 36px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav aria-label="Store">
+      <a href="ecommerce_products.html">Products</a>
+      <a href="ecommerce_cart.html">Cart</a>
+    </nav>
+    <p id="signed-in-user"></p>
+  </header>
+
+  <main>
+    <h1 id="products-heading">All Products</h1>
+    <form id="search-form">
+      <label for="search_product">Search products</label>
+      <input id="search_product" name="search" type="search">
+      <button id="submit_search" type="button">
+        <span aria-hidden="true">&#128269;</span>
+      </button>
+    </form>
+
+    <section class="product-grid" aria-label="Products">
+      <article class="product-card" data-item="blue-top" data-name="Blue Top">
+        <h2>Blue Top</h2>
+        <p>Soft cotton top</p>
+        <a id="blue-top-view" href="ecommerce_detail.html?product=blue-top">View Product</a>
+      </article>
+      <article class="product-card" data-item="men-tshirt" data-name="Men Tshirt">
+        <h2>Men Tshirt</h2>
+        <p>Classic crew neck</p>
+        <a id="men-tshirt-view" href="ecommerce_detail.html?product=men-tshirt">View Product</a>
+      </article>
+    </section>
+  </main>
+
+  <script src="ecommerce.js"></script>
+  <script>
+    (function () {
+      var user = window.EcommerceFixture.currentUser();
+      document.getElementById("signed-in-user").textContent =
+        user ? "Logged in as " + user.email : "Guest";
+
+      document.getElementById("submit_search").addEventListener("click", function () {
+        var query = document.getElementById("search_product").value.trim().toLowerCase();
+        var cards = document.querySelectorAll(".product-card");
+        for (var index = 0; index < cards.length; index++) {
+          var name = (cards[index].getAttribute("data-name") || "").toLowerCase();
+          cards[index].hidden = Boolean(query) && name.indexOf(query) === -1;
+        }
+        document.getElementById("products-heading").textContent = "Searched Products";
+        console.log("product search submitted");
+      });
+    })();
+  </script>
+</body>
+</html>

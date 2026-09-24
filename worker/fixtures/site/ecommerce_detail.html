@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Blue Top</title>
+  <link rel="stylesheet" href="site.css">
+  <style>
+    dialog { border: 1px solid #777; padding: 20px; }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.25); }
+  </style>
+</head>
+<body>
+  <header>
+    <nav aria-label="Store">
+      <a href="ecommerce_products.html">Products</a>
+      <a href="ecommerce_cart.html">Cart</a>
+    </nav>
+  </header>
+
+  <main>
+    <article class="product-detail" data-item="blue-top">
+      <h1>Blue Top</h1>
+      <p>Soft cotton top</p>
+      <form id="cart-form">
+        <label for="quantity">Quantity</label>
+        <input id="quantity" name="quantity" type="number" min="1" value="1">
+        <button id="add-to-cart" type="submit">Add to cart</button>
+      </form>
+    </article>
+  </main>
+
+  <dialog id="added-modal" aria-label="Added!">
+    <h2>Added!</h2>
+    <p>Your product has been added to cart.</p>
+    <a href="ecommerce_cart.html">View Cart</a>
+  </dialog>
+
+  <script src="ecommerce.js"></script>
+  <script>
+    (function () {
+      document.getElementById("cart-form").addEventListener("submit", function (event) {
+        event.preventDefault();
+        var quantity = document.getElementById("quantity").value;
+        window.EcommerceFixture.writeCart("Blue Top", quantity);
+        console.log("add to cart requested");
+        window.setTimeout(function () {
+          document.getElementById("added-modal").showModal();
+          console.log("added modal shown");
+        }, 250);
+      });
+    })();
+  </script>
+</body>
+</html>
