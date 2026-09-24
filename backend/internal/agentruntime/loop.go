@@ -253,12 +253,19 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 	}
 	defer session.Close(context.WithoutCancel(ctx))
 
-	messages := []Message{
-		{Role: RoleSystem, Content: SystemPrompt()},
-		{Role: RoleUser, Content: GoalMessage(run.Input)},
-	}
 	textOnly := 0
+	totalUsage := usage.Usage{}
+	var lastResult *planner.Result
 	for call := 0; call < r.maxModelCalls; call++ {
+		messages := BuildPlanningMessages(PlanningContext{
+			Goal:      run.Input,
+			State:     session.Snapshot(lastResult),
+			Usage:     totalUsage,
+			Remaining: r.remainingBudget(call, totalUsage),
+		})
+		if err := r.enforceRequestSize(messages); err != nil {
+			return r.fail(ctx, run.ID, err.Error())
+		}
 		message, spent, err := r.llm.Next(ctx, messages)
 		if err != nil {
 			return r.fail(ctx, run.ID, fmt.Sprintf("模型调用失败（%v）", err))
@@ -267,7 +274,7 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 		if err := r.recordUsage(ctx, run.ID, spent); err != nil {
 			return r.fail(ctx, run.ID, err.Error())
 		}
-		messages = append(messages, message)
+		totalUsage = totalUsage.Add(spent)
 		if strings.TrimSpace(message.Content) != "" {
 			r.emit(ctx, run.ID, EventAssistant, map[string]any{"text": message.Content})
 		}
@@ -276,18 +283,22 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 			if textOnly >= 2 {
 				return r.fail(ctx, run.ID, "模型连续两轮只输出文本、没有调用任何工具")
 			}
-			messages = append(messages, Message{Role: RoleUser, Content: NudgeMessage})
+			lastResult = &planner.Result{
+				OK:     false,
+				Error:  "tool_call_required",
+				Detail: NudgeMessage,
+			}
 			continue
 		}
 		textOnly = 0
 
 		for _, toolCall := range message.ToolCalls {
 			if toolCall.Name == planner.ToolAskUser {
-				answer, err := r.askUser(ctx, run, toolCall)
+				result, err := r.askUser(ctx, run, toolCall)
 				if err != nil {
 					return err
 				}
-				messages = append(messages, answer)
+				lastResult = &result
 				continue
 			}
 			outcome, err := session.Call(ctx, toolCall.Name, toolCall.Arguments)
@@ -297,19 +308,14 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 				r.emit(ctx, run.ID, EventToolCall, map[string]any{
 					"tool": toolCall.Name, "ok": false, "error": "tool_arguments_invalid", "detail": detail,
 				})
-				messages = append(messages, toolMessage(toolCall.ID, map[string]any{
-					"ok": false, "error": "tool_arguments_invalid", "detail": detail,
-				}))
+				lastResult = &planner.Result{
+					OK: false, Error: "tool_arguments_invalid", Detail: detail,
+				}
 				continue
 			}
 			r.emitToolCall(ctx, run.ID, toolCall, outcome)
-			encoded, err := json.Marshal(outcome.Result)
-			if err != nil {
-				return r.fail(ctx, run.ID, fmt.Sprintf("工具结果无法序列化（%v）", err))
-			}
-			messages = append(messages, Message{
-				Role: RoleTool, ToolCallID: toolCall.ID, Content: string(encoded),
-			})
+			result := outcome.Result
+			lastResult = &result
 			if outcome.Case != nil {
 				return r.awaitApproval(ctx, run, *outcome.Case, outcome.DryRun)
 			}
@@ -318,12 +324,43 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 	return r.fail(ctx, run.ID, fmt.Sprintf("模型调用次数达到上限 %d，已终止规划", r.maxModelCalls))
 }
 
-func toolMessage(callID string, payload any) Message {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		encoded = []byte(`{"ok":false,"error":"internal_error"}`)
+func (r *Runtime) enforceRequestSize(messages []Message) error {
+	if r.maxRequestBytes <= 0 {
+		return nil
 	}
-	return Message{Role: RoleTool, ToolCallID: callID, Content: string(encoded)}
+	sizer, ok := r.llm.(RequestSizer)
+	if !ok {
+		return nil
+	}
+	size, err := sizer.RequestSize(messages)
+	if err != nil {
+		return fmt.Errorf("模型请求大小计算失败（%v）", err)
+	}
+	if size > r.maxRequestBytes {
+		return fmt.Errorf(
+			"模型请求超过大小上限：%d bytes / 上限 %d bytes。"+
+				"本 run 已在网络调用前中止；调大 LOOP_MAX_REQUEST_BYTES，或缩小请求上下文",
+			size, r.maxRequestBytes,
+		)
+	}
+	return nil
+}
+
+func (r *Runtime) remainingBudget(call int, spent usage.Usage) BudgetView {
+	return BudgetView{
+		ModelCalls:          remaining(r.maxModelCalls, call),
+		TotalTokens:         remaining(r.maxTokens, spent.TotalTokens),
+		FreshTotalTokens:    remaining(r.maxFreshTokens, spent.FreshTotalTokens),
+		PromptTokensPerCall: r.maxPromptTokensPerCall,
+		RequestBytesPerCall: r.maxRequestBytes,
+	}
+}
+
+func remaining(limit, spent int) int {
+	if limit <= 0 {
+		return 0
+	}
+	return max(limit-spent, 0)
 }
 
 func (r *Runtime) emitToolCall(
@@ -367,7 +404,7 @@ func (r *Runtime) emitToolCall(
 	}
 }
 
-func (r *Runtime) askUser(ctx context.Context, run store.Run, call ToolCall) (Message, error) {
+func (r *Runtime) askUser(ctx context.Context, run store.Run, call ToolCall) (planner.Result, error) {
 	var args struct {
 		Question string `json:"question"`
 	}
@@ -385,11 +422,13 @@ func (r *Runtime) askUser(ctx context.Context, run store.Run, call ToolCall) (Me
 	select {
 	case answer := <-channel:
 		r.status(ctx, run.ID, store.StatusPlanning, nil)
-		return toolMessage(call.ID, map[string]any{"ok": true, "answer": answer}), nil
+		return planner.Result{
+			OK: true, Summary: "user supplied requested information", Detail: answer,
+		}, nil
 	case <-ctx.Done():
-		return Message{}, ctx.Err()
+		return planner.Result{}, ctx.Err()
 	case <-time.After(r.answerTimeout):
-		return Message{}, r.fail(ctx, run.ID, "等待人工回答超时")
+		return planner.Result{}, r.fail(ctx, run.ID, "等待人工回答超时")
 	}
 }
 

@@ -29,6 +29,7 @@ type ScriptedLLM struct {
 	index  int
 	steps  []ScriptedStep
 	seen   []Message
+	calls  [][]Message
 	repeat string
 }
 
@@ -60,6 +61,7 @@ func (s *ScriptedLLM) Restart() {
 	s.mu.Lock()
 	s.index = 0
 	s.seen = nil
+	s.calls = nil
 	s.mu.Unlock()
 }
 
@@ -74,8 +76,17 @@ func (s *ScriptedLLM) Calls() int {
 func (s *ScriptedLLM) Seen() []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Message, len(s.seen))
-	copy(out, s.seen)
+	return cloneMessages(s.seen)
+}
+
+// CallsSeen 返回每次调用收到的独立消息批次。
+func (s *ScriptedLLM) CallsSeen() [][]Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]Message, 0, len(s.calls))
+	for _, call := range s.calls {
+		out = append(out, cloneMessages(call))
+	}
 	return out
 }
 
@@ -86,7 +97,9 @@ func (s *ScriptedLLM) Seen() []Message {
 func (s *ScriptedLLM) Next(_ context.Context, messages []Message) (Message, usage.Usage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seen = append(s.seen, messages...)
+	captured := cloneMessages(messages)
+	s.seen = append(s.seen, captured...)
+	s.calls = append(s.calls, captured)
 	if s.index >= len(s.steps) {
 		if s.repeat != "" {
 			return Message{Role: RoleAssistant, Content: s.repeat}, usage.Usage{}, nil
@@ -122,6 +135,21 @@ func (s *ScriptedLLM) Next(_ context.Context, messages []Message) (Message, usag
 			Arguments: arguments,
 		}},
 	}, usage.Usage{}, nil
+}
+
+func cloneMessages(messages []Message) []Message {
+	out := make([]Message, len(messages))
+	for index, message := range messages {
+		out[index] = message
+		out[index].ToolCalls = append([]ToolCall{}, message.ToolCalls...)
+		for callIndex := range out[index].ToolCalls {
+			out[index].ToolCalls[callIndex].Arguments = append(
+				json.RawMessage(nil),
+				message.ToolCalls[callIndex].Arguments...,
+			)
+		}
+	}
+	return out
 }
 
 // scriptedSummary 只用于错误信息里提示脚本进度。

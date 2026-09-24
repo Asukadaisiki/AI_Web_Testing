@@ -32,6 +32,35 @@ type Result struct {
 	Failure    *DryRunFailure  `json:"dry_run_failure,omitempty"`
 }
 
+// CompactResult 保留规划下一轮需要的结果，不重复携带页面与完整步骤。
+type CompactResult struct {
+	OK      bool           `json:"ok"`
+	Summary string         `json:"summary,omitempty"`
+	Warning string         `json:"warning,omitempty"`
+	Error   string         `json:"error,omitempty"`
+	Detail  string         `json:"detail,omitempty"`
+	Failure *DryRunFailure `json:"dry_run_failure,omitempty"`
+}
+
+// FailureSignature 描述在某个页面状态上失败过的动作策略。
+//
+// Task 5 会负责生成、去重并限制这份 ledger；Task 2 只负责把它放进快照。
+type FailureSignature struct {
+	PageFingerprint string          `json:"page_fingerprint"`
+	Action          contract.Action `json:"action"`
+	TargetKey       string          `json:"target_key"`
+	ErrorCode       string          `json:"error_code"`
+}
+
+// StateSnapshot 是每次模型调用看到的唯一规划状态。
+type StateSnapshot struct {
+	Version    int                `json:"version"`
+	Steps      []StepView         `json:"committed_steps"`
+	Page       *PageView          `json:"current_page,omitempty"`
+	LastResult *CompactResult     `json:"last_result,omitempty"`
+	Failures   []FailureSignature `json:"failure_ledger,omitempty"`
+}
+
 // PageView 是给模型看的紧凑观测视图。
 type PageView struct {
 	URL              string                `json:"url"`

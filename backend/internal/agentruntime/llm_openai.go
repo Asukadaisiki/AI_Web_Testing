@@ -139,17 +139,9 @@ func (w *wireUsage) toUsage() usage.Usage {
 
 // Next 实现 LLM。
 func (c *OpenAILLM) Next(ctx context.Context, messages []Message) (Message, usage.Usage, error) {
-	request := wireRequest{
-		Model:       c.config.Model,
-		Messages:    toWireMessages(messages),
-		Tools:       c.wireTools(),
-		ToolChoice:  "auto",
-		Temperature: c.config.Temperature,
-		MaxTokens:   c.config.MaxTokens,
-	}
-	raw, err := json.Marshal(request)
+	raw, err := c.marshalRequest(messages)
 	if err != nil {
-		return Message{}, usage.Usage{}, fmt.Errorf("marshal model request: %w", err)
+		return Message{}, usage.Usage{}, err
 	}
 
 	var lastErr error
@@ -171,6 +163,31 @@ func (c *OpenAILLM) Next(ctx context.Context, messages []Message) (Message, usag
 		return message, spent, nil
 	}
 	return Message{}, usage.Usage{}, lastErr
+}
+
+// RequestSize returns the exact JSON byte length that Next posts.
+func (c *OpenAILLM) RequestSize(messages []Message) (int, error) {
+	raw, err := c.marshalRequest(messages)
+	if err != nil {
+		return 0, err
+	}
+	return len(raw), nil
+}
+
+func (c *OpenAILLM) marshalRequest(messages []Message) ([]byte, error) {
+	request := wireRequest{
+		Model:       c.config.Model,
+		Messages:    toWireMessages(messages),
+		Tools:       c.wireTools(),
+		ToolChoice:  "auto",
+		Temperature: c.config.Temperature,
+		MaxTokens:   c.config.MaxTokens,
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("marshal model request: %w", err)
+	}
+	return raw, nil
 }
 
 func (c *OpenAILLM) call(ctx context.Context, raw []byte) (Message, usage.Usage, error) {

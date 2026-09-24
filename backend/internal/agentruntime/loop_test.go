@@ -456,32 +456,31 @@ func TestUngroundedHintIsRejectedAndModelRetries(t *testing.T) {
 		t.Fatalf("second step target = %#v", artifact.Steps[1].Target)
 	}
 
-	// 模型确实收到了带错误码的拒绝与候选。
+	// 模型确实在当前状态里收到了错误码与可重新选择的页面元素。
 	scripted := h.runtime.llm.(*ScriptedLLM)
 	found := false
-	for _, message := range scripted.Seen() {
-		if message.Role != RoleTool {
+	for _, messages := range scripted.CallsSeen() {
+		if len(messages) != 4 {
 			continue
 		}
-		var result struct {
-			OK         bool `json:"ok"`
-			Error      string
-			Candidates []struct {
-				Name string
-			}
+		var state struct {
+			Page *struct {
+				Elements []json.RawMessage `json:"elements"`
+			} `json:"current_page"`
+			LastResult *struct {
+				Error string `json:"error"`
+			} `json:"last_result"`
 		}
-		if err := json.Unmarshal([]byte(message.Content), &result); err != nil {
-			continue
-		}
-		if result.Error == "target_not_found" {
+		decodeContextMessage(t, messages[3].Content, currentStatePrefix, &state)
+		if state.LastResult != nil && state.LastResult.Error == "target_not_found" {
 			found = true
-			if len(result.Candidates) == 0 {
-				t.Fatal("a rejected target must come with candidates")
+			if state.Page == nil || len(state.Page.Elements) == 0 {
+				t.Fatal("a rejected target must retain the current page choices")
 			}
 		}
 	}
 	if !found {
-		t.Fatal("the model never saw a target_not_found tool result")
+		t.Fatal("the model never saw target_not_found in canonical state")
 	}
 }
 
@@ -513,12 +512,12 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 	scripted := h.runtime.llm.(*ScriptedLLM)
 	sawFailure := false
 	for _, message := range scripted.Seen() {
-		if message.Role == RoleTool && strings.Contains(message.Content, "dry_run_failed") {
+		if strings.Contains(message.Content, "dry_run_failed") {
 			sawFailure = true
 		}
 	}
 	if !sawFailure {
-		t.Fatal("the model never saw dry_run_failed")
+		t.Fatal("the model never saw dry_run_failed in canonical state")
 	}
 
 	// 事件流里也必须留下失败明细。只写一句 "did not pass a full dry run"
@@ -670,7 +669,7 @@ func TestAskUserPausesTheRun(t *testing.T) {
 	scripted := h.runtime.llm.(*ScriptedLLM)
 	found := false
 	for _, message := range scripted.Seen() {
-		if message.Role == RoleTool && strings.Contains(message.Content, "就测 Widget") {
+		if strings.Contains(message.Content, "就测 Widget") {
 			found = true
 		}
 	}

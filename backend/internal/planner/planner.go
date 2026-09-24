@@ -33,6 +33,7 @@ type Planner struct {
 	observation contract.Observation
 	hasPage     bool
 	steps       []contract.Step
+	failures    []FailureSignature
 }
 
 // New 开一个作者态浏览器会话，并把它绑到领域会话上（决定产物落哪个目录）。
@@ -66,6 +67,29 @@ func (p *Planner) Steps() []contract.Step {
 	out := make([]contract.Step, len(p.steps))
 	copy(out, p.steps)
 	return out
+}
+
+// Snapshot 返回下一次模型调用所需的完整、紧凑规划状态。
+func (p *Planner) Snapshot(lastResult *Result) StateSnapshot {
+	snapshot := StateSnapshot{
+		Version:  1,
+		Steps:    stepViews(p.steps),
+		Failures: append([]FailureSignature{}, p.failures...),
+	}
+	if p.hasPage {
+		snapshot.Page = pageView(p.observation)
+	}
+	if lastResult != nil {
+		snapshot.LastResult = &CompactResult{
+			OK:      lastResult.OK,
+			Summary: lastResult.Summary,
+			Warning: lastResult.Warning,
+			Error:   lastResult.Error,
+			Detail:  lastResult.Detail,
+			Failure: lastResult.Failure,
+		}
+	}
+	return snapshot
 }
 
 // Build 组装 case（不落库）。
