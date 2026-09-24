@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,24 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
+
+type sequenceLLM struct {
+	responses []Message
+	calls     [][]Message
+}
+
+func (s *sequenceLLM) Label() string { return "sequence" }
+
+func (s *sequenceLLM) Next(
+	_ context.Context, messages []Message,
+) (Message, usage.Usage, error) {
+	s.calls = append(s.calls, cloneMessages(messages))
+	index := len(s.calls) - 1
+	if index >= len(s.responses) {
+		return Message{}, usage.Usage{}, fmt.Errorf("sequence exhausted after %d calls", index)
+	}
+	return s.responses[index], usage.Usage{}, nil
+}
 
 func TestPlanningCallsContainOneCurrentStateInsteadOfHistory(t *testing.T) {
 	const goal = "搜索 widget 并提交"
@@ -92,6 +111,101 @@ func TestPlanningCallsContainOneCurrentStateInsteadOfHistory(t *testing.T) {
 		if _, duplicated := lastResult["steps"]; duplicated {
 			t.Fatalf("call %d embeds old steps in last_result: %s", callIndex, messages[3].Content)
 		}
+	}
+}
+
+func TestMultipleToolCallsExecuteNoneAndRemainInNextContext(t *testing.T) {
+	firstURL := listURL + "?unexpected=first"
+	secondURL := listURL + "?unexpected=second"
+	llm := &sequenceLLM{responses: []Message{
+		{
+			Role: RoleAssistant,
+			ToolCalls: []ToolCall{
+				{ID: "call_1", Name: "open_page", Arguments: json.RawMessage(
+					`{"url":"` + firstURL + `","intent":"must not execute"}`)},
+				{ID: "call_2", Name: "open_page", Arguments: json.RawMessage(
+					`{"url":"` + secondURL + `","intent":"must not execute either"}`)},
+			},
+		},
+		{
+			Role: RoleAssistant,
+			ToolCalls: []ToolCall{{
+				ID: "call_3", Name: "open_page", Arguments: json.RawMessage(
+					`{"url":"` + listURL + `","intent":"retry with one tool"}`),
+			}},
+		},
+		{
+			Role: RoleAssistant,
+			ToolCalls: []ToolCall{{
+				ID: "call_4", Name: "finish_case",
+				Arguments: json.RawMessage(`{"name":"single-call retry"}`),
+			}},
+		},
+	}}
+	h := newHarnessWithLLM(t, llm, 0)
+
+	run := h.plan(t, "open the catalog")
+	if run.Status != store.StatusAwaitingApproval {
+		t.Fatalf("status = %q, want %q", run.Status, store.StatusAwaitingApproval)
+	}
+
+	if len(llm.calls) < 2 {
+		t.Fatalf("model calls = %d, want at least 2", len(llm.calls))
+	}
+	var state struct {
+		LastResult *struct {
+			OK     bool   `json:"ok"`
+			Error  string `json:"error"`
+			Detail string `json:"detail"`
+		} `json:"last_result"`
+	}
+	decodeContextMessage(t, llm.calls[1][3].Content, currentStatePrefix, &state)
+	if state.LastResult == nil {
+		t.Fatal("next model call has no last_result")
+	}
+	if state.LastResult.OK || state.LastResult.Error != "multiple_tool_calls_not_supported" {
+		t.Fatalf("next model call last_result = %#v", state.LastResult)
+	}
+	if !strings.Contains(state.LastResult.Detail, "2") {
+		t.Fatalf("last_result detail does not explain the rejected count: %q", state.LastResult.Detail)
+	}
+
+	navigations := h.fake.navigateRequestSnapshot()
+	if len(navigations) != 1 {
+		t.Fatalf("worker navigations = %d, want only the single-call retry: %#v", len(navigations), navigations)
+	}
+	if navigations[0].URL != listURL {
+		t.Fatalf("worker navigation URL = %q, want retry URL %q", navigations[0].URL, listURL)
+	}
+
+	events, err := h.store.ListEvents(context.Background(), run.ID, 0)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	var found bool
+	for _, event := range events {
+		if event.Type != EventToolCall {
+			continue
+		}
+		var payload struct {
+			OK            bool   `json:"ok"`
+			Error         string `json:"error"`
+			Detail        string `json:"detail"`
+			ToolCallCount int    `json:"tool_call_count"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("decode tool-call event: %v", err)
+		}
+		if payload.Error != "multiple_tool_calls_not_supported" {
+			continue
+		}
+		found = true
+		if payload.OK || payload.ToolCallCount != 2 || payload.Detail == "" {
+			t.Fatalf("multiple-tool-call event is not explanatory: %s", event.Payload)
+		}
+	}
+	if !found {
+		t.Fatal("no multiple_tool_calls_not_supported event was emitted")
 	}
 }
 

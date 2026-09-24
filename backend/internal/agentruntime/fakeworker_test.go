@@ -283,7 +283,8 @@ type fakeWorker struct {
 	artifactSessions []string
 	// actRequests 记录作者态动作请求：用来断言工具参数确实透传到了执行器
 	// （例如 input 的 submit 必须到达作者态，否则观测停在原页面）。
-	actRequests []contract.ActRequest
+	actRequests      []contract.ActRequest
+	navigateRequests []contract.NavigateRequest
 }
 
 func newFakeWorker(site *fakeSite) *fakeWorker {
@@ -324,6 +325,9 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 			writeFakeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 			return
 		}
+		worker.mu.Lock()
+		worker.navigateRequests = append(worker.navigateRequests, body)
+		worker.mu.Unlock()
 		values, ok := worker.values(r.PathValue("id"))
 		if !ok {
 			writeFakeError(w, http.StatusNotFound, "session_not_found", "no session")
@@ -409,6 +413,14 @@ func (w *fakeWorker) actRequestSnapshot() []contract.ActRequest {
 	defer w.mu.Unlock()
 	out := make([]contract.ActRequest, len(w.actRequests))
 	copy(out, w.actRequests)
+	return out
+}
+
+func (w *fakeWorker) navigateRequestSnapshot() []contract.NavigateRequest {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]contract.NavigateRequest, len(w.navigateRequests))
+	copy(out, w.navigateRequests)
 	return out
 }
 

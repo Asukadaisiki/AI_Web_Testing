@@ -290,35 +290,51 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 			}
 			continue
 		}
+		if len(message.ToolCalls) > 1 {
+			textOnly = 0
+			detail := fmt.Sprintf(
+				"model returned %d tool calls; exactly one is supported per turn",
+				len(message.ToolCalls),
+			)
+			lastResult = &planner.Result{
+				OK: false, Error: "multiple_tool_calls_not_supported", Detail: detail,
+			}
+			r.emit(ctx, run.ID, EventToolCall, map[string]any{
+				"ok":              false,
+				"error":           lastResult.Error,
+				"detail":          detail,
+				"tool_call_count": len(message.ToolCalls),
+			})
+			continue
+		}
 		textOnly = 0
 
-		for _, toolCall := range message.ToolCalls {
-			if toolCall.Name == planner.ToolAskUser {
-				result, err := r.askUser(ctx, run, toolCall)
-				if err != nil {
-					return err
-				}
-				lastResult = &result
-				continue
-			}
-			outcome, err := session.Call(ctx, toolCall.Name, toolCall.Arguments)
+		toolCall := message.ToolCalls[0]
+		if toolCall.Name == planner.ToolAskUser {
+			result, err := r.askUser(ctx, run, toolCall)
 			if err != nil {
-				// 参数不是合法 JSON 之类的内部问题：当成工具结果回给模型，让它改口。
-				detail := err.Error()
-				r.emit(ctx, run.ID, EventToolCall, map[string]any{
-					"tool": toolCall.Name, "ok": false, "error": "tool_arguments_invalid", "detail": detail,
-				})
-				lastResult = &planner.Result{
-					OK: false, Error: "tool_arguments_invalid", Detail: detail,
-				}
-				continue
+				return err
 			}
-			r.emitToolCall(ctx, run.ID, toolCall, outcome)
-			result := outcome.Result
 			lastResult = &result
-			if outcome.Case != nil {
-				return r.awaitApproval(ctx, run, *outcome.Case, outcome.DryRun)
+			continue
+		}
+		outcome, err := session.Call(ctx, toolCall.Name, toolCall.Arguments)
+		if err != nil {
+			// 参数不是合法 JSON 之类的内部问题：当成工具结果回给模型，让它改口。
+			detail := err.Error()
+			r.emit(ctx, run.ID, EventToolCall, map[string]any{
+				"tool": toolCall.Name, "ok": false, "error": "tool_arguments_invalid", "detail": detail,
+			})
+			lastResult = &planner.Result{
+				OK: false, Error: "tool_arguments_invalid", Detail: detail,
 			}
+			continue
+		}
+		r.emitToolCall(ctx, run.ID, toolCall, outcome)
+		result := outcome.Result
+		lastResult = &result
+		if outcome.Case != nil {
+			return r.awaitApproval(ctx, run, *outcome.Case, outcome.DryRun)
 		}
 	}
 	return r.fail(ctx, run.ID, fmt.Sprintf("模型调用次数达到上限 %d，已终止规划", r.maxModelCalls))
