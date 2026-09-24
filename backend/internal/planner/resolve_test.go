@@ -495,8 +495,8 @@ func TestSnapshotRanksLatestSuccessfulStepTargetAndExpectationAheadOfAds(t *test
 	})
 
 	wantTerms := []string{
-		"Proceed to checkout", "button", "Checkout", "complete purchase",
-		"cart", "Blue Top", "inside", "Order confirmed",
+		"Order confirmed", "Proceed to checkout", "button", "Checkout",
+		"cart", "Blue Top", "inside", "complete purchase",
 	}
 	if fmt.Sprintf("%q", snapshot.LastResult.RelevanceTerms) != fmt.Sprintf("%q", wantTerms) {
 		t.Fatalf("relevance terms = %q, want %q", snapshot.LastResult.RelevanceTerms, wantTerms)
@@ -546,7 +546,7 @@ func TestSnapshotBoundsAndDeduplicatesRelevanceTerms(t *testing.T) {
 			},
 		},
 		Postconditions: []contract.Condition{{
-			Type: contract.CondTextVisible, Value: "duplicate",
+			Type: contract.CondTextVisible, Value: strings.Repeat("y", 140),
 		}},
 	}}}
 
@@ -565,6 +565,39 @@ func TestSnapshotBoundsAndDeduplicatesRelevanceTerms(t *testing.T) {
 	}
 	if duplicateCount != 1 {
 		t.Fatalf("trimmed duplicate count = %d, want 1: %q", duplicateCount, terms)
+	}
+}
+
+func TestSnapshotPrioritizesPostconditionsOverMoreThanSixteenAliases(t *testing.T) {
+	aliases := make([]string, 20)
+	for index := range aliases {
+		aliases[index] = fmt.Sprintf("alias-%02d", index)
+	}
+	planner := &Planner{steps: []contract.Step{{
+		Target: &contract.Target{
+			Hint: "Checkout",
+			Spec: &contract.TargetSpec{
+				Object: contract.TargetObject{
+					Role: "button", Text: "Place order", Aliases: aliases,
+				},
+				Scope:    &contract.TargetScope{Kind: "cart", ContainsText: "Blue Top"},
+				Relation: "within",
+			},
+		},
+		Postconditions: []contract.Condition{{
+			Type: contract.CondTextVisible, Value: "Order confirmed",
+		}},
+	}}}
+
+	terms := planner.Snapshot(&Result{OK: true}).LastResult.RelevanceTerms
+	if len(terms) != maxResultRelevanceTerms {
+		t.Fatalf("relevance term count = %d, want %d: %q", len(terms), maxResultRelevanceTerms, terms)
+	}
+	wantPrefix := []string{
+		"Order confirmed", "Checkout", "button", "Place order", "cart", "Blue Top", "within",
+	}
+	if fmt.Sprintf("%q", terms[:len(wantPrefix)]) != fmt.Sprintf("%q", wantPrefix) {
+		t.Fatalf("relevance term priority = %q, want prefix %q", terms, wantPrefix)
 	}
 }
 
@@ -593,16 +626,77 @@ func TestSnapshotKeepsChineseGoalMatchingCandidate(t *testing.T) {
 	}
 }
 
-func TestPageViewTokensPreserveLatinNumbersAndAddHanBigrams(t *testing.T) {
-	got := pageViewTokens("BlueTop 123 搜索商品")
-	want := []string{"bluetop", "123", "搜索商品", "搜索", "索商", "商品"}
-	if len(got) != len(want) {
-		t.Fatalf("tokens = %#v, want exactly %q", got, want)
+func TestPageViewTokensPreserveLatinAndNumberBehavior(t *testing.T) {
+	assertPageViewTokens(t, "BlueTop 123 Alpha_beta", []string{
+		"bluetop", "123", "alpha", "beta",
+	})
+}
+
+func TestPageViewTokensAddJapaneseAndKoreanRunBigrams(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{
+			name:  "Japanese scripts form one run",
+			value: "商品かなカナ",
+			want:  []string{"商品かなカナ", "商品", "品か", "かな", "なカ", "カナ"},
+		},
+		{
+			name:  "Hangul forms one run",
+			value: "장바구니",
+			want:  []string{"장바구니", "장바", "바구", "구니"},
+		},
 	}
-	for _, token := range want {
-		if _, ok := got[token]; !ok {
-			t.Fatalf("tokens = %#v, missing %q", got, token)
-		}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertPageViewTokens(t, test.value, test.want)
+		})
+	}
+}
+
+func TestPageViewKeepsJapaneseAndKoreanGoalMatchesAheadOfAds(t *testing.T) {
+	tests := []struct {
+		name      string
+		goal      string
+		target    string
+		candidate string
+	}{
+		{
+			name:      "Japanese",
+			goal:      "商品かなカナ追加",
+			target:    "なカ",
+			candidate: "candidate-japanese",
+		},
+		{
+			name:      "Korean",
+			goal:      "장바구니상품추가",
+			target:    "상품추가",
+			candidate: "candidate-korean",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			observation := rankedPageViewObservation(31)
+			targetRef := "target-" + test.candidate
+			observation.Elements = append(observation.Elements, contract.Element{
+				Ref: targetRef, Tag: "button", Role: "button", Name: test.target,
+				Text: test.target, Visible: true, Enabled: true, VisibleInViewport: true,
+				Locators: []contract.Locator{roleLocator("button", test.target)},
+			})
+			observation.ActionCandidates = append(observation.ActionCandidates, contract.ActionCandidate{
+				CandidateID: test.candidate, Kind: "element_candidate",
+				Action: string(contract.ActionClick), TargetRef: targetRef,
+				Role: "button", Name: test.target, Text: test.target,
+				Locator: roleLocator("button", test.target), Confidence: "low",
+			})
+
+			view := BuildPageView(observation, test.goal, nil)
+			if !hasActionCandidate(view, test.candidate) {
+				t.Fatalf("%s goal-matching candidate was omitted: %#v", test.name, view.ActionCandidates)
+			}
+		})
 	}
 }
 
@@ -784,6 +878,19 @@ func hasPageElement(view *PageView, ref string) bool {
 		}
 	}
 	return false
+}
+
+func assertPageViewTokens(t *testing.T, value string, want []string) {
+	t.Helper()
+	got := pageViewTokens(value)
+	if len(got) != len(want) {
+		t.Fatalf("tokens for %q = %#v, want exactly %q", value, got, want)
+	}
+	for _, token := range want {
+		if _, ok := got[token]; !ok {
+			t.Fatalf("tokens for %q = %#v, missing %q", value, got, token)
+		}
+	}
 }
 
 func TestResolveActionCandidateGroundsLatestObservationCandidate(t *testing.T) {

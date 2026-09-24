@@ -899,13 +899,13 @@ func pageViewLastTokens(last *CompactResult) map[string]struct{} {
 func pageViewTokens(value string) map[string]struct{} {
 	tokens := map[string]struct{}{}
 	var current []rune
-	currentIsHan := false
+	currentIsCJK := false
 	flush := func() {
 		if len(current) == 0 {
 			return
 		}
 		tokens[string(current)] = struct{}{}
-		if currentIsHan {
+		if currentIsCJK {
 			for index := 0; index+1 < len(current); index++ {
 				tokens[string(current[index:index+2])] = struct{}{}
 			}
@@ -913,12 +913,12 @@ func pageViewTokens(value string) map[string]struct{} {
 		current = current[:0]
 	}
 	for _, char := range strings.ToLower(value) {
-		isHan := unicode.Is(unicode.Han, char)
-		if unicode.IsLetter(char) || unicode.IsNumber(char) {
-			if len(current) > 0 && currentIsHan != isHan {
+		isCJK := isCJKRune(char)
+		if isCJK || unicode.IsLetter(char) || unicode.IsNumber(char) {
+			if len(current) > 0 && currentIsCJK != isCJK {
 				flush()
 			}
-			currentIsHan = isHan
+			currentIsCJK = isCJK
 			current = append(current, char)
 			continue
 		}
@@ -928,28 +928,40 @@ func pageViewTokens(value string) map[string]struct{} {
 	return tokens
 }
 
+func isCJKRune(char rune) bool {
+	return unicode.Is(unicode.Han, char) ||
+		unicode.Is(unicode.Hiragana, char) ||
+		unicode.Is(unicode.Katakana, char) ||
+		unicode.Is(unicode.Hangul, char)
+}
+
 func stepRelevanceTerms(step contract.Step) []string {
-	var values []string
+	var postconditions []string
+	for _, condition := range step.Postconditions {
+		postconditions = append(postconditions, condition.Value)
+	}
+
+	var semantics []string
+	var aliases []string
 	if step.Target != nil {
-		values = append(values, step.Target.Hint)
+		semantics = append(semantics, step.Target.Hint)
 		if spec := step.Target.Spec; spec != nil {
-			values = append(
-				values,
+			semantics = append(
+				semantics,
 				spec.Object.Role,
 				spec.Object.Text,
 				spec.Object.Name,
 			)
-			values = append(values, spec.Object.Aliases...)
 			if spec.Scope != nil {
-				values = append(values, spec.Scope.Kind, spec.Scope.ContainsText)
+				semantics = append(semantics, spec.Scope.Kind, spec.Scope.ContainsText)
 			}
-			values = append(values, spec.Relation, spec.Role, spec.Text, spec.Name)
-			values = append(values, spec.Aliases...)
+			semantics = append(semantics, spec.Relation, spec.Role, spec.Text, spec.Name)
+			aliases = append(aliases, spec.Object.Aliases...)
+			aliases = append(aliases, spec.Aliases...)
 		}
 	}
-	for _, condition := range step.Postconditions {
-		values = append(values, condition.Value)
-	}
+	values := append(postconditions, semantics...)
+	values = append(values, aliases...)
 	return compactStrings(values, maxResultRelevanceTerms, maxResultRelevanceText)
 }
 
