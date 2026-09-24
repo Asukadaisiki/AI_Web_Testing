@@ -11,14 +11,13 @@ package planner
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
-
-// maxPageElements 限制回给模型的元素数量，控制 token。
-const maxPageElements = 60
 
 // Planner 是一次规划过程中的 case 构建器。
 type Planner struct {
@@ -71,25 +70,31 @@ func (p *Planner) Steps() []contract.Step {
 
 // Snapshot 返回下一次模型调用所需的完整、紧凑规划状态。
 func (p *Planner) Snapshot(lastResult *Result) StateSnapshot {
+	compact := compactResult(lastResult)
 	snapshot := StateSnapshot{
-		Version:  1,
-		Steps:    stepViews(p.steps),
-		Failures: append([]FailureSignature{}, p.failures...),
+		Version:    1,
+		Steps:      stepViews(p.steps),
+		LastResult: compact,
+		Failures:   append([]FailureSignature{}, p.failures...),
 	}
 	if p.hasPage {
-		snapshot.Page = pageView(p.observation)
-	}
-	if lastResult != nil {
-		snapshot.LastResult = &CompactResult{
-			OK:      lastResult.OK,
-			Summary: lastResult.Summary,
-			Warning: lastResult.Warning,
-			Error:   lastResult.Error,
-			Detail:  lastResult.Detail,
-			Failure: lastResult.Failure,
-		}
+		snapshot.Page = BuildPageView(p.observation, p.goal, compact)
 	}
 	return snapshot
+}
+
+func compactResult(result *Result) *CompactResult {
+	if result == nil {
+		return nil
+	}
+	return &CompactResult{
+		OK:      result.OK,
+		Summary: result.Summary,
+		Warning: result.Warning,
+		Error:   result.Error,
+		Detail:  result.Detail,
+		Failure: result.Failure,
+	}
 }
 
 // Build 组装 case（不落库）。
@@ -463,32 +468,114 @@ func conditionViews(conditions []contract.Condition) []string {
 	return out
 }
 
-func pageView(observation contract.Observation) *PageView {
+type pageViewRank struct {
+	lastMatches int
+	kind        int
+	goalMatches int
+	confidence  int
+	viewport    int
+	stableRef   string
+}
+
+type rankedBlocker struct {
+	value contract.Blocker
+	rank  pageViewRank
+}
+
+type rankedCandidate struct {
+	value contract.ActionCandidate
+	rank  pageViewRank
+}
+
+type rankedScope struct {
+	value contract.StructureNode
+	rank  pageViewRank
+}
+
+type rankedElement struct {
+	value contract.Element
+	rank  pageViewRank
+}
+
+type pageViewRanking struct {
+	goalTokens          map[string]struct{}
+	lastTokens          map[string]struct{}
+	elementsByRef       map[string]contract.Element
+	scopesByRef         map[string]contract.StructureNode
+	preferredTargetRefs map[string]bool
+	dismissLocators     map[contract.Locator]bool
+}
+
+// BuildPageView projects a full observation into the ranked, bounded state
+// sent to the model. Resolver code continues to use the original observation.
+func BuildPageView(
+	observation contract.Observation, goal string, last *CompactResult,
+) *PageView {
 	view := &PageView{
 		URL:              observation.URL,
 		Title:            observation.Title,
 		Truncated:        observation.Truncated,
 		TruncationReason: observation.TruncationReason,
 	}
+	ranking := newPageViewRanking(observation, goal, last)
+
+	blockers := make([]rankedBlocker, 0, len(observation.Blockers))
 	for _, blocker := range observation.Blockers {
+		text := ranking.blockerText(blocker)
+		blockers = append(blockers, rankedBlocker{
+			value: blocker,
+			rank: ranking.rank(
+				strings.Join([]string{blocker.Ref, blocker.CoversTargetRef, text}, " "),
+				text,
+				ranking.preferredBlocker(blocker),
+				blocker.Confidence,
+				true,
+				stablePageRef(blocker.Ref, blocker.Kind, blocker.Reason),
+			),
+		})
+	}
+	sort.SliceStable(blockers, func(i, j int) bool {
+		return pageViewRankBefore(blockers[i].rank, blockers[j].rank)
+	})
+	omittedBlockers := omittedPageItems(len(blockers), maxPageBlockers)
+	for _, item := range blockers[:len(blockers)-omittedBlockers] {
+		blocker := item.value
 		view.Blockers = append(view.Blockers, BlockerView{
 			Kind:              blocker.Kind,
 			Ref:               blocker.Ref,
 			Confidence:        blocker.Confidence,
 			CoversTargetRef:   blocker.CoversTargetRef,
 			DismissCandidates: len(blocker.DismissCandidates),
-			Reason:            compactText(blocker.Reason, 160),
+			Reason:            compactText(blocker.Reason, maxPageSummaryText),
 		})
 	}
-	const maxActionCandidates = 30
+
+	candidates := make([]rankedCandidate, 0, len(observation.ActionCandidates))
 	for _, candidate := range observation.ActionCandidates {
-		if len(view.ActionCandidates) >= maxActionCandidates {
-			view.Truncated = true
-			if view.TruncationReason == "" {
-				view.TruncationReason = fmt.Sprintf("action_candidate_view_limit=%d", maxActionCandidates)
-			}
-			break
+		target := ranking.elementsByRef[candidate.TargetRef]
+		text := ranking.candidateText(candidate)
+		relationValues := []string{candidate.CandidateID, candidate.TargetRef, text}
+		for _, relation := range candidate.Relations {
+			relationValues = append(relationValues, relation.Ref)
 		}
+		candidates = append(candidates, rankedCandidate{
+			value: candidate,
+			rank: ranking.rank(
+				strings.Join(relationValues, " "),
+				text,
+				ranking.preferredCandidate(candidate),
+				candidate.Confidence,
+				target.VisibleInViewport,
+				stablePageRef(candidate.CandidateID, candidate.TargetRef),
+			),
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return pageViewRankBefore(candidates[i].rank, candidates[j].rank)
+	})
+	omittedCandidates := omittedPageItems(len(candidates), maxPageActionCandidates)
+	for _, item := range candidates[:len(candidates)-omittedCandidates] {
+		candidate := item.value
 		view.ActionCandidates = append(view.ActionCandidates, ActionCandidateView{
 			CandidateID: candidate.CandidateID,
 			Kind:        candidate.Kind,
@@ -496,49 +583,75 @@ func pageView(observation contract.Observation) *PageView {
 			TargetRef:   candidate.TargetRef,
 			Role:        candidate.Role,
 			Name:        candidate.Name,
-			Text:        compactText(candidate.Text, 120),
+			Text:        compactText(candidate.Text, maxPageElementText),
 			Aliases:     compactStrings(candidate.Aliases, 12, 80),
 			Attributes:  compactAttributes(candidate.Attributes, 8, 80),
 			Relations:   candidate.Relations,
 			Confidence:  candidate.Confidence,
 		})
 	}
-	const maxScopes = 30
+
+	scopes := make([]rankedScope, 0, len(observation.Structures))
 	for _, scope := range observation.Structures {
 		if !scope.Visible {
 			continue
 		}
-		if len(view.Scopes) >= maxScopes {
-			view.Truncated = true
-			if view.TruncationReason == "" {
-				view.TruncationReason = fmt.Sprintf("scope_view_limit=%d", maxScopes)
-			}
-			break
-		}
+		text := ranking.scopeText(scope)
+		scopes = append(scopes, rankedScope{
+			value: scope,
+			rank: ranking.rank(
+				strings.Join([]string{scope.Ref, scope.ParentRef, text}, " "),
+				text,
+				isPreferredPageKind(scope.Kind),
+				"",
+				boundingBoxVisible(scope.BBox),
+				stablePageRef(scope.Ref, scope.Kind, scope.FullText),
+			),
+		})
+	}
+	sort.SliceStable(scopes, func(i, j int) bool {
+		return pageViewRankBefore(scopes[i].rank, scopes[j].rank)
+	})
+	omittedScopes := omittedPageItems(len(scopes), maxPageScopes)
+	for _, item := range scopes[:len(scopes)-omittedScopes] {
+		scope := item.value
 		view.Scopes = append(view.Scopes, ScopeView{
 			Ref:       scope.Ref,
 			Kind:      scope.Kind,
-			Text:      compactText(scope.FullText, 160),
+			Text:      compactText(scope.FullText, maxPageSummaryText),
 			ParentRef: scope.ParentRef,
 		})
 	}
-	actionable := make([]contract.Element, 0, len(observation.Elements))
+
+	elements := make([]rankedElement, 0, len(observation.Elements))
 	for _, element := range observation.Elements {
 		if element.Visible && element.Enabled {
-			actionable = append(actionable, element)
+			text := ranking.elementText(element)
+			elements = append(elements, rankedElement{
+				value: element,
+				rank: ranking.rank(
+					strings.Join([]string{element.Ref, element.ParentRef, element.ContainerRef, text}, " "),
+					text,
+					ranking.preferredElement(element),
+					"",
+					element.VisibleInViewport,
+					stablePageRef(element.Ref, element.Role, element.Name, element.Text),
+				),
+			})
 		}
 	}
-	if len(actionable) > maxPageElements {
-		view.Truncated = true
-		actionable = actionable[:maxPageElements]
-	}
-	for _, element := range actionable {
+	sort.SliceStable(elements, func(i, j int) bool {
+		return pageViewRankBefore(elements[i].rank, elements[j].rank)
+	})
+	omittedElements := omittedPageItems(len(elements), maxPageElements)
+	for _, item := range elements[:len(elements)-omittedElements] {
+		element := item.value
 		elementView := ElementView{
 			Ref:          element.Ref,
 			Tag:          element.Tag,
 			Role:         element.Role,
 			Name:         element.Name,
-			Text:         compactText(element.Text, 120),
+			Text:         compactText(element.Text, maxPageElementText),
 			ContainerRef: element.ContainerRef,
 		}
 		if element.Value != nil {
@@ -549,7 +662,327 @@ func pageView(observation contract.Observation) *PageView {
 		}
 		view.Elements = append(view.Elements, elementView)
 	}
+	if omittedBlockers+omittedCandidates+omittedScopes+omittedElements > 0 {
+		view.Truncated = true
+		reason := fmt.Sprintf(
+			"page_view_omitted blockers=%d action_candidates=%d scopes=%d elements=%d",
+			omittedBlockers,
+			omittedCandidates,
+			omittedScopes,
+			omittedElements,
+		)
+		if view.TruncationReason == "" {
+			view.TruncationReason = reason
+		} else {
+			view.TruncationReason += "; " + reason
+		}
+	}
 	return view
+}
+
+func pageView(observation contract.Observation) *PageView {
+	return BuildPageView(observation, "", nil)
+}
+
+func newPageViewRanking(
+	observation contract.Observation, goal string, last *CompactResult,
+) pageViewRanking {
+	ranking := pageViewRanking{
+		goalTokens:          pageViewTokens(goal),
+		lastTokens:          pageViewLastTokens(last),
+		elementsByRef:       make(map[string]contract.Element, len(observation.Elements)),
+		scopesByRef:         make(map[string]contract.StructureNode, len(observation.Structures)),
+		preferredTargetRefs: map[string]bool{},
+		dismissLocators:     map[contract.Locator]bool{},
+	}
+	for _, element := range observation.Elements {
+		ranking.elementsByRef[element.Ref] = element
+	}
+	for _, scope := range observation.Structures {
+		ranking.scopesByRef[scope.Ref] = scope
+	}
+	for _, blocker := range observation.Blockers {
+		for _, locator := range blocker.DismissCandidates {
+			ranking.dismissLocators[locator] = true
+		}
+	}
+	for _, candidate := range observation.ActionCandidates {
+		if ranking.preferredCandidate(candidate) {
+			ranking.preferredTargetRefs[candidate.TargetRef] = true
+		}
+	}
+	return ranking
+}
+
+func (ranking pageViewRanking) rank(
+	relationText string,
+	semanticText string,
+	preferred bool,
+	confidence string,
+	viewport bool,
+	stableRef string,
+) pageViewRank {
+	return pageViewRank{
+		lastMatches: tokenMatches(ranking.lastTokens, pageViewTokens(relationText)),
+		kind:        boolRank(preferred),
+		goalMatches: tokenMatches(ranking.goalTokens, pageViewTokens(semanticText)),
+		confidence:  confidenceRank(confidence),
+		viewport:    boolRank(viewport),
+		stableRef:   stableRef,
+	}
+}
+
+func pageViewRankBefore(left, right pageViewRank) bool {
+	switch {
+	case left.lastMatches != right.lastMatches:
+		return left.lastMatches > right.lastMatches
+	case left.kind != right.kind:
+		return left.kind > right.kind
+	case left.goalMatches != right.goalMatches:
+		return left.goalMatches > right.goalMatches
+	case left.confidence != right.confidence:
+		return left.confidence > right.confidence
+	case left.viewport != right.viewport:
+		return left.viewport > right.viewport
+	default:
+		return left.stableRef < right.stableRef
+	}
+}
+
+func (ranking pageViewRanking) preferredBlocker(blocker contract.Blocker) bool {
+	return isDialogPageKind(blocker.Kind) || len(blocker.DismissCandidates) > 0
+}
+
+func (ranking pageViewRanking) preferredCandidate(candidate contract.ActionCandidate) bool {
+	if normalizedPageKind(candidate.Kind) == "form submit candidate" ||
+		isDialogPageKind(candidate.Kind) ||
+		ranking.dismissLocators[candidate.Locator] {
+		return true
+	}
+	for _, relation := range candidate.Relations {
+		if isDialogPageKind(relation.Type) {
+			return true
+		}
+	}
+	target, ok := ranking.elementsByRef[candidate.TargetRef]
+	return ok && ranking.scopeHasDialogKind(target.ContainerRef)
+}
+
+func (ranking pageViewRanking) preferredElement(element contract.Element) bool {
+	return ranking.preferredTargetRefs[element.Ref] ||
+		ranking.scopeHasDialogKind(element.ContainerRef)
+}
+
+func (ranking pageViewRanking) scopeHasDialogKind(ref string) bool {
+	seen := map[string]bool{}
+	for ref != "" && !seen[ref] {
+		seen[ref] = true
+		scope, ok := ranking.scopesByRef[ref]
+		if !ok {
+			return false
+		}
+		if isDialogPageKind(scope.Kind) {
+			return true
+		}
+		ref = scope.ParentRef
+	}
+	return false
+}
+
+func (ranking pageViewRanking) blockerText(blocker contract.Blocker) string {
+	values := []string{blocker.Kind, blocker.Reason}
+	if element, ok := ranking.elementsByRef[blocker.CoversTargetRef]; ok {
+		values = append(values, ranking.elementText(element))
+	}
+	return strings.Join(values, " ")
+}
+
+func (ranking pageViewRanking) candidateText(candidate contract.ActionCandidate) string {
+	values := []string{
+		candidate.Kind,
+		candidate.Role,
+		candidate.Name,
+		candidate.Text,
+	}
+	values = append(values, candidate.Aliases...)
+	for key, value := range candidate.Attributes {
+		values = append(values, key, value)
+	}
+	for _, relation := range candidate.Relations {
+		values = append(values, relation.Type, relation.Label)
+	}
+	if element, ok := ranking.elementsByRef[candidate.TargetRef]; ok {
+		values = append(values, ranking.elementText(element))
+	}
+	return strings.Join(values, " ")
+}
+
+func (ranking pageViewRanking) scopeText(scope contract.StructureNode) string {
+	var values []string
+	seen := map[string]bool{}
+	for {
+		values = append(values, scope.Kind, scope.Role, scope.FullText)
+		for key, value := range scope.Attributes {
+			values = append(values, key, value)
+		}
+		if scope.ParentRef == "" || seen[scope.ParentRef] {
+			break
+		}
+		seen[scope.ParentRef] = true
+		parent, ok := ranking.scopesByRef[scope.ParentRef]
+		if !ok {
+			break
+		}
+		scope = parent
+	}
+	return strings.Join(values, " ")
+}
+
+func (ranking pageViewRanking) elementText(element contract.Element) string {
+	values := []string{
+		element.Tag,
+		element.Role,
+		element.Name,
+		element.Text,
+		element.OwnText,
+		element.FullText,
+	}
+	if element.Value != nil {
+		values = append(values, *element.Value)
+	}
+	for key, value := range element.Attributes {
+		values = append(values, key, value)
+	}
+	if scope, ok := ranking.scopesByRef[element.ContainerRef]; ok {
+		values = append(values, ranking.scopeText(scope))
+	}
+	return strings.Join(values, " ")
+}
+
+func pageViewLastTokens(last *CompactResult) map[string]struct{} {
+	if last == nil {
+		return nil
+	}
+	values := []string{last.Summary, last.Warning, last.Error, last.Detail}
+	if last.Failure != nil {
+		values = append(values, last.Failure.Error)
+		values = append(values, last.Failure.RepairHints...)
+		for _, step := range last.Failure.Steps {
+			values = append(values, step.Action, step.Error)
+			values = append(values, step.Unsatisfied...)
+			if step.Blocker != nil {
+				values = append(values, step.Blocker.Kind, step.Blocker.Reason)
+			}
+			if step.HitTest != nil {
+				values = append(values, step.HitTest.TargetRef, step.HitTest.HitRef, step.HitTest.BlockerKind)
+			}
+		}
+	}
+	tokens := pageViewTokens(strings.Join(values, " "))
+	for token := range tokens {
+		if pageViewResultStopToken(token) {
+			delete(tokens, token)
+		}
+	}
+	return tokens
+}
+
+func pageViewTokens(value string) map[string]struct{} {
+	tokens := map[string]struct{}{}
+	var current []rune
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		tokens[string(current)] = struct{}{}
+		current = current[:0]
+	}
+	for _, char := range strings.ToLower(value) {
+		if unicode.IsLetter(char) || unicode.IsNumber(char) {
+			current = append(current, char)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return tokens
+}
+
+func pageViewResultStopToken(token string) bool {
+	switch token {
+	case "action", "click", "current", "error", "failed", "failure", "input",
+		"on", "page", "recorded", "step", "target":
+		return true
+	default:
+		return false
+	}
+}
+
+func tokenMatches(wanted, available map[string]struct{}) int {
+	matches := 0
+	for token := range wanted {
+		if _, ok := available[token]; ok {
+			matches++
+		}
+	}
+	return matches
+}
+
+func confidenceRank(confidence string) int {
+	switch normalize(confidence) {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func isPreferredPageKind(kind string) bool {
+	normalized := normalizedPageKind(kind)
+	return normalized == "form" || isDialogPageKind(normalized)
+}
+
+func isDialogPageKind(kind string) bool {
+	normalized := normalizedPageKind(kind)
+	return strings.Contains(normalized, "dialog") ||
+		strings.Contains(normalized, "modal") ||
+		strings.Contains(normalized, "dismiss")
+}
+
+func normalizedPageKind(kind string) string {
+	replacer := strings.NewReplacer("_", " ", "-", " ")
+	return normalize(replacer.Replace(kind))
+}
+
+func boundingBoxVisible(box contract.BoundingBox) bool {
+	return box.Width > 0 && box.Height > 0 && box.X+box.Width > 0 && box.Y+box.Height > 0
+}
+
+func stablePageRef(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func omittedPageItems(count, limit int) int {
+	if count <= limit {
+		return 0
+	}
+	return count - limit
+}
+
+func boolRank(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func compactStrings(values []string, limit int, textLimit int) []string {
@@ -597,10 +1030,14 @@ func compactAttributes(values map[string]string, limit int, textLimit int) map[s
 
 func compactText(value string, limit int) string {
 	normalized := strings.Join(strings.Fields(value), " ")
-	if len(normalized) <= limit {
+	runes := []rune(normalized)
+	if len(runes) <= limit {
 		return normalized
 	}
-	return normalized[:limit] + "..."
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
 }
 
 func observationHasText(observation contract.Observation, text string) bool {

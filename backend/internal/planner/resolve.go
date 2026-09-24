@@ -51,6 +51,15 @@ type StateSnapshot struct {
 	Failures   []FailureSignature `json:"failure_ledger,omitempty"`
 }
 
+const (
+	maxPageElements         = 20
+	maxPageActionCandidates = 12
+	maxPageScopes           = 8
+	maxPageBlockers         = 5
+	maxPageElementText      = 120
+	maxPageSummaryText      = 160
+)
+
 // PageView 是给模型看的紧凑观测视图。
 type PageView struct {
 	URL              string                `json:"url"`
