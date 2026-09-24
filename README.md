@@ -34,6 +34,28 @@ session (sess_…)  一个目标 + 它的全部轮次
 - 会话**没有状态机**，列表里显示的 `status` 就是它最新一轮的状态；`usage` 是全会话累计。
 - `bsess_…` 是执行器内部的浏览器会话句柄，与领域会话 `sess_…` 不是一回事。
 
+## 一次输入，自主规划
+
+用户在创建 session 时一次性给出完整目标；例如真实电商基线需要同时包含入口 URL、测试账号、
+测试密码、期望登录名、商品、数量和预期购物车结果。账号密码在本项目中是普通测试数据，直接写在
+goal 里即可；系统不要求脱敏，不使用 `secret_ref`，也没有凭据保险库。只有目标确实缺少必要信息，
+或站点出现必须由用户处理的 auth/captcha blocker 时，规划器才会 `ask_user`。
+
+规划器每轮都从后端持有的规范状态重新构造请求，而不是累加完整对话历史：
+
+1. 稳定的系统提示和原始目标；
+2. 按确定顺序序列化的已提交步骤前缀；
+3. 一个当前页面的有界 `PageView`；
+4. 一个紧凑的最近结果、最多 8 个失败签名和剩余预算。
+
+完整 Observation 始终留在服务端参与接地、指纹和重放。给模型的 `PageView` 最多包含 20 个元素、
+12 个动作候选、8 个 scope、5 个 blocker；旧 PageView、旧工具结果和 assistant 文本不会重发。
+
+会改变页面的步骤只有在完成派生与校验、执行作者态动作并确认 postconditions 全部满足后才会提交。
+派生、目标解析、动作执行或作者态 expectation 失败时不会进入 case；动作可能改变页面时，后端会
+重建浏览器并重放已提交前缀。断言在作者态记录后由全新干跑最终验证；`finish_case` 若在第 `k`
+步失败，也只有后端可以删除 `k..end` 并重放 `0..k-1`，模型没有删除已提交步骤的工具。
+
 ## 为什么重做执行器与契约
 
 上一版坏在两处，都出在数据契约：
@@ -104,7 +126,7 @@ python run_tests.py --layer 契约   # 只跑名字含"契约"的层
 python run_tests.py --verify   # 各层跑完再跑真实浏览器页面验证（需先起控制面与 preview）
 ```
 
-它按顺序跑这 5 层：
+它按顺序跑这 6 层：
 
 ```bash
 # 契约一致性：Go 与 Python 共读同一份夹具，错误码必须逐字一致
@@ -116,6 +138,9 @@ cd backend && go test ./...
 
 # 真执行器（需要 Playwright 浏览器）
 cd worker && uv run python -m unittest discover -s tests -t .
+
+# 完整电商闭环：脚本模型 + 真浏览器 + 控制面 + 报告与截图服务
+cd worker && uv run python ../integration/ecommerce_closed_loop.py
 
 # 前端类型与构建
 cd web && npm run build
@@ -159,8 +184,11 @@ cd backend && LOOP_LLM_SCRIPT=../fixtures/scripts/catalog_alpha.json go run ./cm
 | `LOOP_ADDR` | 控制面监听地址，默认 `127.0.0.1:8101` |
 | `LOOP_DATA_DIR` | 数据目录，默认 `<v2 根>/data`（从工作目录向上找 `CONTRACT.md` + `backend/`） |
 | `LOOP_DB_PATH` / `LOOP_ARTIFACTS_DIR` | 覆盖 SQLite 路径 / 证据目录。证据目录必须与执行器一致，否则截图 404 |
-| `LOOP_MAX_MODEL_CALLS` | 调用次数上限，默认 40 |
+| `LOOP_MAX_MODEL_CALLS` | 调用次数上限，默认 `25` |
 | `LOOP_MAX_TOTAL_TOKENS` | **成本熔断**：整个 run 累计 token 超过它就中止，默认 1500000；设 `0` 关闭 |
+| `LOOP_MAX_FRESH_TOTAL_TOKENS` | 整个 run 的 fresh token 累计上限，默认 `300000`；设 `0` 关闭 |
+| `LOOP_MAX_PROMPT_TOKENS_PER_CALL` | 单次已完成模型调用的 prompt token 上限，默认 `30000`；设 `0` 关闭 |
+| `LOOP_MAX_REQUEST_BYTES` | 发起模型调用前的完整序列化请求大小上限，默认 `98304` bytes（96 KiB）；设 `0` 关闭 |
 | `PLAYWRIGHT_BROWSERS_PATH` | 执行器需要；本机浏览器在 `D:\PlaywrightBrowsers` |
 
 缺密钥会直接启动失败，不会静默降级到别的模型。`/api/health` 会回报当前模型、端点，
@@ -190,12 +218,23 @@ go run ./cmd/loopd
 
 ```json
 {"model_calls":7,"prompt_tokens":41230,"completion_tokens":1180,
- "total_tokens":42410,"reasoning_tokens":640,"cached_tokens":0}
+ "total_tokens":42410,"fresh_prompt_tokens":18230,"fresh_total_tokens":19410,
+ "reasoning_tokens":640,"cached_tokens":23000}
 ```
 
-`reasoning_tokens` 已含在 `completion_tokens` 内、`cached_tokens` 已含在 `prompt_tokens` 内，
-只是把成本构成摊开，**不能再加一遍**。前端只显示 token，不做金额换算（单价随模型与时段变，
-前端算钱只会算错）。
+字段含义：
+
+- raw：`prompt_tokens`、`completion_tokens` 和 `total_tokens` 是提供方报告的原始用量；
+  `total_tokens` 缺失时按前两者之和补齐。
+- cached：`cached_tokens` 是 `prompt_tokens` 中命中提示词缓存的部分，不是额外 token。
+- fresh：`fresh_prompt_tokens = max(prompt_tokens - cached_tokens, 0)`；
+  `fresh_total_tokens = fresh_prompt_tokens + completion_tokens`。
+- `reasoning_tokens` 已包含在 `completion_tokens` 内。cached、fresh、reasoning 都是成本构成，
+  不能与 raw total 再相加。
+
+前端只显示 token，不做金额换算。raw total 熔断仍保留为总量保护；fresh total 单独限制新增成本，
+单次 prompt 和序列化 request 则分别限制上下文与请求体增长。每次已完成调用的用量都先记账、
+再判断 token 熔断；request bytes 在网络调用前检查。
 
 超预算时 run 直接失败（`status=failed`，不是 case 失败），错误信息给出已用/上限与调法；
 超预算那一次调用的用量同样记账。离线脚本模型不报用量，因此熔断对它天然不生效——

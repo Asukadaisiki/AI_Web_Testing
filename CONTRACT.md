@@ -413,6 +413,31 @@ Go 侧从执行结果派生，落 `report_signals` 表：
 
 `click` / `input` 只在**最近一次观测所在的页面**上解析目标。模型若想点下一页的元素，必须先 `click`（带 `expect_url`）再继续用新观测。
 
+### 5.1 一次输入与已提交步骤
+
+创建 session 的 goal 是规划所需信息的唯一用户输入。URL、测试账号、测试密码、商品、数量和预期
+结果都直接放在 goal 中；凭据是普通测试数据，不使用 `secret_ref`、脱敏或凭据保险库。信息完整时，
+规划器自主完成编写和干跑，不得把已提供的字段再次问用户。只有必要信息缺失或遇到必须由用户处理的
+auth/captcha blocker 时才允许 `ask_user`。
+
+会改变页面的作者态动作生命周期是：
+
+```text
+proposed → derived and validated → action executed when applicable
+         → postconditions verified/awaited → committed
+```
+
+- worker 必须用与正式执行相同的条件求值器等待作者态动作的所有 postconditions，再生成下一份观测；
+- 页面断言由后端对当前完整 Observation 检查，不满足时随 warning 提交并由全新干跑最终验证；
+  目标断言在当前 Observation 解析定位器，条件同样由全新干跑最终验证；
+- 派生、目标解析、动作执行或作者态 expectation 失败时，该尝试不追加到 case；
+- 失败动作可能已经改变页面，因此后端会重建 browser session 并重放当前已提交前缀；
+- 已提交步骤对模型不可变，工具列表中不存在删除或回退步骤的操作；
+- `finish_case` 干跑在第 `k` 步失败时，只有后端可以按新鲜执行证据移除 `k..end`，再重放
+  `0..k-1`；重放失败以 `committed_prefix_replay_failed` 终止 run。
+
+因此 `CommittedSteps` 是 case 的唯一规划期来源；被拒绝或失败的作者态尝试不会进入工件。
+
 ---
 
 ## 6. 可访问名（a11y name）的唯一实现
@@ -543,3 +568,49 @@ data/sessions/
 
 会话自身**没有状态机**——状态是每轮 run 的事（§8）。会话列表里显示的"状态"
 是**它最新一轮**的状态，仅用于列表展示，不参与任何判断。
+
+---
+
+## 10. 模型上下文与用量
+
+### 10.1 滚动上下文
+
+每次模型调用都从后端规范状态重新构造为四条消息：系统提示、原始 goal、确定性序列化的已提交
+步骤、当前可变状态。可变状态只含一个当前 `PageView`、一个紧凑结果、最多 8 个失败签名、累计
+用量和剩余预算；旧 assistant 文本、旧工具结果、旧 PageView 不会重发。
+
+完整 `Observation` 只保留在服务端，用于目标解析、页面指纹、重放和修复。发送给模型的当前
+`PageView` 按目标与最近结果排序，并限制为最多 20 个 elements、12 个 action candidates、
+8 个 scopes、5 个 blockers；element/candidate 文本最多 120 字符，scope/blocker 摘要最多
+160 字符。截断时必须携带遗漏数量。
+
+### 10.2 raw / cached / fresh
+
+`model_usage` 对外保留原字段并增加派生字段：
+
+```text
+fresh_prompt_tokens = max(prompt_tokens - cached_tokens, 0)
+fresh_total_tokens  = fresh_prompt_tokens + completion_tokens
+```
+
+- raw：`prompt_tokens`、`completion_tokens`、`total_tokens` 是提供方报告的原始计数；
+  未提供 total 时用 prompt + completion 补齐。
+- cached：`cached_tokens` 已包含在 prompt 中，只表示缓存命中的输入部分。
+- fresh：fresh prompt 是未命中缓存的输入，fresh total 再加 completion。
+- `reasoning_tokens` 已包含在 completion 中。
+
+这些字段是不同口径或组成部分，不能重复相加。SQLite 继续保存原始累计字段；fresh 值在单次调用
+归一化以及读取 run/session 累计值时确定性派生，现有 run/session HTTP 字段保持兼容。
+
+### 10.3 运行时限制
+
+| 环境变量 | 默认值 | 触发时机 |
+|---|---:|---|
+| `LOOP_MAX_MODEL_CALLS` | `25` | 完成 25 次调用仍未产出 case 时 |
+| `LOOP_MAX_REQUEST_BYTES` | `98304` | 网络调用前，完整序列化请求超过 96 KiB 时 |
+| `LOOP_MAX_PROMPT_TOKENS_PER_CALL` | `30000` | 已完成的一次调用报告的 prompt token 超限时 |
+| `LOOP_MAX_FRESH_TOTAL_TOKENS` | `300000` | run 累计 fresh total 超限时 |
+| `LOOP_MAX_TOTAL_TOKENS` | `1500000` | run 累计 raw total 超限时 |
+
+除调用次数外，数值设为 `0` 表示关闭对应限制。模型已返回的调用必须先记录用量再判断 token
+限制；request bytes 限制在发请求前判断。
