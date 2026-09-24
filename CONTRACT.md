@@ -299,10 +299,11 @@ domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原�
 
 未提供 `candidate_id` 时，控制面仍先执行普通 hint/TargetSpec 解析。只有普通解析失败后，才可将
 hint 与 object 的 name/text/aliases 对照最新完整 Observation 中候选的 name/text/aliases 及
-id/name/title/aria-label/placeholder/data-testid；分隔符统一后必须存在唯一正分候选，候选 action
-必须精确相同，显式 role 必须兼容。若 TargetSpec 的严格 scope 有效，候选分数还必须比原 scope 内
-最佳结果至少高 20 分。最终仍调用上述 `candidate_id` 校验路径；无匹配、并列或校验失败时保留原解析
-错误与候选建议。
+id/name/title/aria-label/placeholder/data-testid。分隔符统一后的值必须完全相等，或一侧至少两个
+完整 token 被另一侧全部覆盖，才能达到实质匹配标准；候选 action 必须精确相同，显式 role 必须
+兼容。必须恰好一个兼容候选达到该标准；即使分数不同，多个实质匹配也不能用最高分消除歧义。若
+TargetSpec 的严格 scope 有效，该唯一候选的分数还必须比原 scope 内最佳结果至少高 20 分。最终仍
+调用上述 `candidate_id` 校验路径；无实质匹配、多个实质匹配或校验失败时保留原解析错误与候选建议。
 
 ### 3.3 Blocker 摘要
 

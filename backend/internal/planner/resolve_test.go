@@ -1102,6 +1102,87 @@ func TestResolveTargetSemanticFallbackRejectsAmbiguousCandidates(t *testing.T) {
 	}
 }
 
+func TestResolveTargetSemanticFallbackRejectsConflictingTwoTokenOverlap(t *testing.T) {
+	observation := semanticCandidateObservation()
+	observation.ActionCandidates[0].Aliases = []string{"delete_saved_address"}
+	observation.ActionCandidates[0].Attributes = map[string]string{"id": "delete_saved_address"}
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "button", Name: "delete saved card"},
+		Scope:  &contract.TargetScope{Kind: "form", Ref: "missing-payment-form"},
+	}
+
+	_, _, _, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "delete saved card", spec, "",
+	)
+	if err == nil {
+		t.Fatal("a conflicting two-token overlap must not select an action candidate")
+	}
+	if code := errorCode(err); code != CodeScopeNotFound {
+		t.Fatalf("code = %q, want original %q", code, CodeScopeNotFound)
+	}
+	if len(candidates) != 1 || candidates[0].Ref != "products-region" {
+		t.Fatalf("original scope candidates = %#v", candidates)
+	}
+}
+
+func TestResolveTargetSemanticFallbackRejectsSubstringInsideToken(t *testing.T) {
+	observation := semanticCandidateObservation()
+	observation.ActionCandidates[0].Aliases = []string{"express"}
+	observation.ActionCandidates[0].Attributes = map[string]string{"id": "express"}
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "button", Name: "press"},
+		Scope:  &contract.TargetScope{Kind: "form", Ref: "missing-form"},
+	}
+
+	_, _, _, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "press", spec, "",
+	)
+	if err == nil {
+		t.Fatal("a substring inside one token must not select an action candidate")
+	}
+	if code := errorCode(err); code != CodeScopeNotFound {
+		t.Fatalf("code = %q, want original %q", code, CodeScopeNotFound)
+	}
+	if len(candidates) != 1 || candidates[0].Ref != "products-region" {
+		t.Fatalf("original scope candidates = %#v", candidates)
+	}
+}
+
+func TestResolveTargetSemanticFallbackRejectsUnequalMaterialCandidates(t *testing.T) {
+	observation := semanticCandidateObservation()
+	second := observation.Elements[0]
+	second.Ref = "header-search-submit"
+	second.Locators = []contract.Locator{cssLocator("#header-submit-search")}
+	observation.Elements = append(observation.Elements, second)
+	weaker := observation.ActionCandidates[0]
+	weaker.CandidateID = "act_header_search_submit"
+	weaker.TargetRef = second.Ref
+	weaker.Locator = second.Locators[0]
+	weaker.Aliases = []string{"submit search control"}
+	weaker.Attributes = map[string]string{"id": "submit-search-control"}
+	observation.ActionCandidates = append(observation.ActionCandidates, weaker)
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "button", Name: "submit search"},
+		Scope:  &contract.TargetScope{Kind: "form", Ref: "missing-search-form"},
+	}
+
+	_, _, _, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "submit search", spec, "",
+	)
+	if err == nil {
+		t.Fatal("multiple material candidates must preserve the original resolver error")
+	}
+	if code := errorCode(err); code != CodeScopeNotFound {
+		t.Fatalf("code = %q, want original %q", code, CodeScopeNotFound)
+	}
+	if len(candidates) != 1 || candidates[0].Ref != "products-region" {
+		t.Fatalf("original scope candidates = %#v", candidates)
+	}
+}
+
 func TestResolveTargetNormalResolutionPrecedesSemanticCandidateFallback(t *testing.T) {
 	observation := semanticCandidateObservation()
 	normal := element(

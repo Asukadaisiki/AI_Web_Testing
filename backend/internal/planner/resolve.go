@@ -398,31 +398,30 @@ func resolveSemanticActionCandidate(
 		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
 	}
 
-	bestIndex := -1
-	bestScore := 0
-	ambiguous := false
+	matchIndex := -1
+	matchScore := 0
+	materialMatches := 0
 	for index, candidate := range observation.ActionCandidates {
 		if candidate.Action != string(action) || !candidateRoleCompatible(role, candidate.Role) {
 			continue
 		}
 		score := semanticCandidateScore(hints, candidate)
-		if score > bestScore {
-			bestIndex = index
-			bestScore = score
-			ambiguous = false
-		} else if score > 0 && score == bestScore {
-			ambiguous = true
+		if score == 0 {
+			continue
 		}
+		materialMatches++
+		matchIndex = index
+		matchScore = score
 	}
-	if bestIndex < 0 || bestScore == 0 || ambiguous {
+	if materialMatches != 1 {
 		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
 	}
 	if hasValidStrictScope(spec, observation) &&
-		bestScore < bestResolverCandidateScore(resolverCandidates)+strictScopeCandidateScoreMargin {
+		matchScore < bestResolverCandidateScore(resolverCandidates)+strictScopeCandidateScoreMargin {
 		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
 	}
 
-	candidate := observation.ActionCandidates[bestIndex]
+	candidate := observation.ActionCandidates[matchIndex]
 	element, locator, verified, err := resolveActionCandidate(action, candidate.CandidateID, observation)
 	if err != nil {
 		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
@@ -477,22 +476,44 @@ func semanticCandidateScore(hints []string, candidate contract.ActionCandidate) 
 }
 
 func semanticValueScore(normalizedHint, candidateValue string) int {
+	normalizedHint = normalizeAlias(normalizedHint)
 	candidateValue = normalizeAlias(candidateValue)
 	if normalizedHint == "" || candidateValue == "" {
 		return 0
 	}
-	switch {
-	case candidateValue == normalizedHint:
+	if candidateValue == normalizedHint {
 		return 100
-	case strings.Contains(candidateValue, normalizedHint):
+	}
+
+	overlap, hintTokens, candidateTokens := semanticTokenCoverage(normalizedHint, candidateValue)
+	if overlap < 2 {
+		return 0
+	}
+	switch overlap {
+	case hintTokens:
 		return 80
-	case strings.Contains(normalizedHint, candidateValue):
+	case candidateTokens:
 		return 60
-	case tokenOverlap(normalizedHint, candidateValue) >= 2:
-		return 50
 	default:
 		return 0
 	}
+}
+
+func semanticTokenCoverage(a, b string) (overlap, aTokens, bTokens int) {
+	aSet := map[string]bool{}
+	for token := range strings.FieldsSeq(a) {
+		aSet[token] = true
+	}
+	bSet := map[string]bool{}
+	for token := range strings.FieldsSeq(b) {
+		bSet[token] = true
+	}
+	for token := range aSet {
+		if bSet[token] {
+			overlap++
+		}
+	}
+	return overlap, len(aSet), len(bSet)
 }
 
 func stableDescriptiveAttribute(key string) bool {

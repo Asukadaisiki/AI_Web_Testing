@@ -51,9 +51,10 @@ goal 里即可；系统不要求脱敏，不使用 `secret_ref`，也没有凭�
 完整 Observation 始终留在服务端参与接地、指纹和重放。给模型的 `PageView` 最多包含 20 个元素、
 12 个动作候选、8 个 scope、5 个 blocker；旧 PageView、旧工具结果和 assistant 文本不会重发。
 目标解析仍优先使用普通 hint/TargetSpec；仅当普通解析失败时，后端才会用 hint 与 object
-name/text/aliases 匹配最新完整 Observation 中动作、role 兼容的 ActionCandidate。只有唯一正分候选
-可以回退，且仍须通过 candidate 的最新观测与 locator 校验；有效严格 scope 只允许被语义分数显著
-更强的候选覆盖。
+name/text/aliases 匹配最新完整 Observation 中动作、role 兼容的 ActionCandidate。规范化值完全
+相等，或一侧至少两个完整 token 被另一侧全部覆盖，才构成实质匹配；必须恰好一个兼容候选达到该
+标准，分数高低不能消除多候选歧义。该候选仍须通过最新观测与 locator 校验；有效严格 scope 只允许
+被语义分数显著更强的候选覆盖。
 
 会改变页面的步骤只有在完成派生与校验、执行作者态动作并确认 postconditions 全部满足后才会提交。
 派生、目标解析、动作执行或作者态 expectation 失败时不会进入 case；动作可能改变页面时，后端会
