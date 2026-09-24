@@ -15,11 +15,18 @@ const (
 type SignalKind string
 
 const (
-	SignalTargetNotFound SignalKind = "target_not_found"
-	SignalConditionUnmet SignalKind = "condition_unmet"
-	SignalStepTimeout    SignalKind = "step_timeout"
-	SignalWorkerError    SignalKind = "worker_error"
-	SignalCaseInvalid    SignalKind = "case_invalid"
+	SignalTargetNotFound        SignalKind = "target_not_found"
+	SignalConditionUnmet        SignalKind = "condition_unmet"
+	SignalStepTimeout           SignalKind = "step_timeout"
+	SignalWorkerError           SignalKind = "worker_error"
+	SignalCaseInvalid           SignalKind = "case_invalid"
+	SignalBlockedByDialog       SignalKind = "blocked_by_dialog"
+	SignalBlockedByOverlay      SignalKind = "blocked_by_overlay"
+	SignalBlockedByInterstitial SignalKind = "blocked_by_interstitial"
+	SignalBlockedByCookieBanner SignalKind = "blocked_by_cookie_banner"
+	SignalBlockedByAuth         SignalKind = "blocked_by_auth"
+	SignalBlockedByCaptcha      SignalKind = "blocked_by_captcha"
+	SignalBlockedByLoading      SignalKind = "blocked_by_loading"
 )
 
 // Message 返回信号的中文说明，供失败回灌候选复用。
@@ -35,6 +42,20 @@ func (k SignalKind) Message() string {
 		return "执行器故障或不可达"
 	case SignalCaseInvalid:
 		return "用例未通过契约校验"
+	case SignalBlockedByDialog:
+		return "目标被弹窗阻塞"
+	case SignalBlockedByOverlay:
+		return "目标被遮罩或固定层阻塞"
+	case SignalBlockedByInterstitial:
+		return "目标被插屏或广告阻塞"
+	case SignalBlockedByCookieBanner:
+		return "目标被 Cookie 横幅阻塞"
+	case SignalBlockedByAuth:
+		return "目标被登录墙阻塞"
+	case SignalBlockedByCaptcha:
+		return "目标被验证码阻塞"
+	case SignalBlockedByLoading:
+		return "目标被加载状态阻塞"
 	default:
 		return string(k)
 	}
@@ -75,6 +96,32 @@ type StepError struct {
 	Message string     `json:"message"`
 }
 
+// HitTest 是动作前目标可达性检查的结果。
+type HitTest struct {
+	TargetRef   string  `json:"target_ref,omitempty"`
+	X           float64 `json:"x"`
+	Y           float64 `json:"y"`
+	HitRef      string  `json:"hit_ref,omitempty"`
+	HitTag      string  `json:"hit_tag,omitempty"`
+	HitRole     string  `json:"hit_role,omitempty"`
+	HitText     string  `json:"hit_text,omitempty"`
+	Covered     bool    `json:"covered"`
+	BlockerKind string  `json:"blocker_kind,omitempty"`
+}
+
+// RecoveryAttempt 记录执行器为移除通用 blocker 做过的一次安全恢复。
+type RecoveryAttempt struct {
+	Blocker               Blocker `json:"blocker"`
+	Action                string  `json:"action"`
+	Succeeded             bool    `json:"succeeded"`
+	Reason                string  `json:"reason,omitempty"`
+	BeforeScreenshotPath  string  `json:"before_screenshot_path,omitempty"`
+	AfterScreenshotPath   string  `json:"after_screenshot_path,omitempty"`
+	URLBefore             string  `json:"url_before,omitempty"`
+	URLAfter              string  `json:"url_after,omitempty"`
+	RetriedOriginalAction bool    `json:"retried_original_action"`
+}
+
 // StepResult 是单步执行结果。
 type StepResult struct {
 	Index      int               `json:"index"`
@@ -87,6 +134,9 @@ type StepResult struct {
 	Conditions []ConditionResult `json:"conditions"`
 	Evidence   Evidence          `json:"evidence"`
 	Error      *StepError        `json:"error"`
+	Blocker    *Blocker          `json:"blocker,omitempty"`
+	HitTest    *HitTest          `json:"hit_test,omitempty"`
+	Recovery   []RecoveryAttempt `json:"recovery,omitempty"`
 }
 
 // ExecutionResult 是一次完整执行的结果。

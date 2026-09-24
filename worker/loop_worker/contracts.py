@@ -41,14 +41,34 @@ DEFAULT_STEP_TIMEOUT_MS = 20000
 ACTION_GOTO = "goto"
 ACTION_CLICK = "click"
 ACTION_INPUT = "input"
+ACTION_SELECT = "select"
+ACTION_CHECK = "check"
+ACTION_UNCHECK = "uncheck"
+ACTION_SCROLL_INTO_VIEW = "scroll_into_view"
+ACTION_HOVER = "hover"
+ACTION_DISMISS_DIALOG = "dismiss_dialog"
+ACTION_UPLOAD_FILE = "upload_file"
 ACTION_ASSERT_TEXT = "assert_text"
 ACTION_ASSERT_URL = "assert_url"
+ACTION_ASSERT_ELEMENT = "assert_element"
+ACTION_ASSERT_ATTRIBUTE = "assert_attribute"
+ACTION_ASSERT_COUNT = "assert_count"
 ACTIONS: tuple[str, ...] = (
     ACTION_GOTO,
     ACTION_CLICK,
     ACTION_INPUT,
+    ACTION_SELECT,
+    ACTION_CHECK,
+    ACTION_UNCHECK,
+    ACTION_SCROLL_INTO_VIEW,
+    ACTION_HOVER,
+    ACTION_DISMISS_DIALOG,
+    ACTION_UPLOAD_FILE,
     ACTION_ASSERT_TEXT,
     ACTION_ASSERT_URL,
+    ACTION_ASSERT_ELEMENT,
+    ACTION_ASSERT_ATTRIBUTE,
+    ACTION_ASSERT_COUNT,
 )
 
 CONDITION_URL_CONTAINS = "url_contains"
@@ -56,10 +76,13 @@ CONDITION_TEXT_VISIBLE = "text_visible"
 CONDITION_TEXT_GONE = "text_gone"
 CONDITION_URL_CHANGES = "url_changes"
 CONDITION_VALUE_EQUALS = "value_equals"
+CONDITION_ELEMENT_STATE = "element_state"
+CONDITION_ATTRIBUTE_EQUALS = "attribute_equals"
+CONDITION_COUNT_EQUALS = "count_equals"
 
 #: 条件阶段表（CONTRACT §2.2）：pre 只能是状态事实
 PRE_ALLOWED: frozenset[str] = frozenset(
-    {CONDITION_URL_CONTAINS, CONDITION_TEXT_VISIBLE, CONDITION_TEXT_GONE}
+    {CONDITION_URL_CONTAINS, CONDITION_TEXT_VISIBLE, CONDITION_TEXT_GONE, CONDITION_ELEMENT_STATE}
 )
 POST_ALLOWED: frozenset[str] = frozenset(
     {
@@ -68,6 +91,9 @@ POST_ALLOWED: frozenset[str] = frozenset(
         CONDITION_TEXT_GONE,
         CONDITION_URL_CHANGES,
         CONDITION_VALUE_EQUALS,
+        CONDITION_ELEMENT_STATE,
+        CONDITION_ATTRIBUTE_EQUALS,
+        CONDITION_COUNT_EQUALS,
     }
 )
 ALL_CONDITION_TYPES: tuple[str, ...] = (
@@ -76,6 +102,9 @@ ALL_CONDITION_TYPES: tuple[str, ...] = (
     CONDITION_TEXT_GONE,
     CONDITION_URL_CHANGES,
     CONDITION_VALUE_EQUALS,
+    CONDITION_ELEMENT_STATE,
+    CONDITION_ATTRIBUTE_EQUALS,
+    CONDITION_COUNT_EQUALS,
 )
 
 #: 失败信号 kind（CONTRACT §4.1）
@@ -84,6 +113,13 @@ SIGNAL_CONDITION_UNMET = "condition_unmet"
 SIGNAL_STEP_TIMEOUT = "step_timeout"
 SIGNAL_WORKER_ERROR = "worker_error"
 SIGNAL_CASE_INVALID = "case_invalid"
+SIGNAL_BLOCKED_BY_DIALOG = "blocked_by_dialog"
+SIGNAL_BLOCKED_BY_OVERLAY = "blocked_by_overlay"
+SIGNAL_BLOCKED_BY_INTERSTITIAL = "blocked_by_interstitial"
+SIGNAL_BLOCKED_BY_COOKIE_BANNER = "blocked_by_cookie_banner"
+SIGNAL_BLOCKED_BY_AUTH = "blocked_by_auth"
+SIGNAL_BLOCKED_BY_CAPTCHA = "blocked_by_captcha"
+SIGNAL_BLOCKED_BY_LOADING = "blocked_by_loading"
 
 #: 错误码，与 Go 侧 `internal/contract` 的 Code* 常量逐字一致。
 CODE_INVALID_JSON = "case_invalid_json"
@@ -114,7 +150,22 @@ CODE_UNEXPECTED_SUBMIT = "step_unexpected_submit"
 ERROR_SESSION_NOT_FOUND = "session_not_found"
 ERROR_WORKER_ERROR = "worker_error"
 
-_ACTIONS_REQUIRING_TARGET: frozenset[str] = frozenset({ACTION_CLICK, ACTION_INPUT})
+_ACTIONS_REQUIRING_TARGET: frozenset[str] = frozenset(
+    {
+        ACTION_CLICK,
+        ACTION_INPUT,
+        ACTION_SELECT,
+        ACTION_CHECK,
+        ACTION_UNCHECK,
+        ACTION_SCROLL_INTO_VIEW,
+        ACTION_HOVER,
+        ACTION_DISMISS_DIALOG,
+        ACTION_UPLOAD_FILE,
+        ACTION_ASSERT_ELEMENT,
+        ACTION_ASSERT_ATTRIBUTE,
+        ACTION_ASSERT_COUNT,
+    }
+)
 
 
 class CaseInvalid(Exception):
@@ -211,6 +262,36 @@ class Target(BaseModel):
     locator: LocatorSpec | None = None
     hint: str = ""
     grounding: Grounding | None = None
+    spec: "TargetSpec | None" = None
+
+
+class TargetObject(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    role: str | None = None
+    text: str | None = None
+    name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+
+
+class TargetScope(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    kind: str | None = None
+    contains_text: str | None = None
+    ref: str | None = None
+
+
+class TargetSpec(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    object: TargetObject = Field(default_factory=TargetObject)
+    scope: TargetScope | None = None
+    relation: str | None = None
+    role: str | None = None
+    text: str | None = None
+    name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
 
 
 class Step(BaseModel):
@@ -349,10 +430,16 @@ def _validate_step(step: Step, where: str) -> None:
         _validate_target(step.target)
         if action == ACTION_CLICK and step.value is not None:
             raise CaseInvalid(CODE_UNEXPECTED_VALUE, f"{where} click must not carry a value")
-        if action == ACTION_INPUT and step.value is None:
+        if action in (ACTION_INPUT, ACTION_SELECT, ACTION_UPLOAD_FILE) and step.value is None:
             raise CaseInvalid(
-                CODE_MISSING_VALUE, f"{where} input requires a value (empty string is allowed)"
+                CODE_MISSING_VALUE,
+                f"{where} {action} requires a value (empty string is allowed)",
             )
+        if (
+            action not in (ACTION_INPUT, ACTION_SELECT, ACTION_UPLOAD_FILE)
+            and step.value is not None
+        ):
+            raise CaseInvalid(CODE_UNEXPECTED_VALUE, f"{where} {action} must not carry a value")
         if not step.preconditions:
             raise CaseInvalid(
                 CODE_MISSING_PRECONDITION, f"{where} {action} requires at least one precondition"
@@ -478,6 +565,23 @@ VerifiedLocator = Annotated[
 ]
 
 
+class BoundingBox(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    x: float = 0
+    y: float = 0
+    width: float = 0
+    height: float = 0
+
+
+class ElementFormInfo(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    form_ref: str = ""
+    submit_candidate_ref: str | None = None
+    enter_submittable: bool = False
+
+
 class ElementObservation(BaseModel):
     model_config = _CONTRACT_CONFIG
 
@@ -490,6 +594,67 @@ class ElementObservation(BaseModel):
     visible: bool
     enabled: bool
     locators: list[VerifiedLocator] = Field(min_length=1)
+    parent_ref: str | None = None
+    container_ref: str | None = None
+    own_text: str | None = None
+    full_text: str | None = None
+    bbox: BoundingBox = Field(default_factory=BoundingBox)
+    visible_in_viewport: bool = False
+    z_index: int | None = None
+    attributes: dict[str, str] = Field(default_factory=dict)
+    form: ElementFormInfo | None = None
+
+
+class StructureNode(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    ref: str
+    kind: str
+    tag: str
+    role: str | None = None
+    parent_ref: str | None = None
+    full_text: str = ""
+    visible: bool
+    bbox: BoundingBox = Field(default_factory=BoundingBox)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    submit_candidate_ref: str | None = None
+    enter_submittable: bool = False
+
+
+class Blocker(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    kind: str
+    ref: str | None = None
+    confidence: Literal["high", "medium", "low"] = "medium"
+    covers_target_ref: str | None = None
+    dismiss_candidates: list[VerifiedLocator] = Field(default_factory=list)
+    reason: str = ""
+
+
+class CandidateRelation(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    type: str
+    ref: str
+    label: str | None = None
+
+
+class ActionCandidate(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    candidate_id: str
+    kind: str
+    action: str
+    target_ref: str
+    role: str | None = None
+    name: str | None = None
+    text: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    relations: list[CandidateRelation] = Field(default_factory=list)
+    locator: VerifiedLocator
+    confidence: Literal["high", "medium", "low"] = "medium"
 
 
 class Observation(BaseModel):
@@ -503,6 +668,11 @@ class Observation(BaseModel):
     url: str
     title: str
     elements: list[ElementObservation] = Field(default_factory=list)
+    structures: list[StructureNode] = Field(default_factory=list)
+    blockers: list[Blocker] = Field(default_factory=list)
+    action_candidates: list[ActionCandidate] = Field(default_factory=list)
+    truncated: bool = False
+    truncation_reason: str | None = None
     screenshot_path: str | None = None
 
 
@@ -561,6 +731,34 @@ class Evidence(BaseModel):
     network: list[NetworkEvent] = Field(default_factory=list)
 
 
+class HitTest(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    target_ref: str | None = None
+    x: float = 0
+    y: float = 0
+    hit_ref: str | None = None
+    hit_tag: str | None = None
+    hit_role: str | None = None
+    hit_text: str | None = None
+    covered: bool = False
+    blocker_kind: str | None = None
+
+
+class RecoveryAttempt(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    blocker: Blocker
+    action: str
+    succeeded: bool
+    reason: str = ""
+    before_screenshot_path: str | None = None
+    after_screenshot_path: str | None = None
+    url_before: str | None = None
+    url_after: str | None = None
+    retried_original_action: bool = False
+
+
 class StepResult(BaseModel):
     model_config = _CONTRACT_CONFIG
 
@@ -574,6 +772,9 @@ class StepResult(BaseModel):
     conditions: list[ConditionResult] = Field(default_factory=list)
     evidence: Evidence
     error: StepError | None = None
+    blocker: Blocker | None = None
+    hit_test: HitTest | None = None
+    recovery: list[RecoveryAttempt] = Field(default_factory=list)
 
 
 class ExecutionResult(BaseModel):
@@ -602,7 +803,17 @@ class NavigateRequest(BaseModel):
 class ActRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    action: Literal["click", "input"]
+    action: Literal[
+        "click",
+        "input",
+        "select",
+        "check",
+        "uncheck",
+        "scroll_into_view",
+        "hover",
+        "dismiss_dialog",
+        "upload_file",
+    ]
     locator: LocatorSpec
     value: str | None = None
     #: 只对 input 有意义：填完之后按回车提交（作者态也必须真的提交）。

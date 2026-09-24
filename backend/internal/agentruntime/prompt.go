@@ -20,15 +20,17 @@ Hard rules (all of them are enforced; violations are rejected):
 1. The first tool call must be open_page with an absolute http(s) url.
 2. NEVER invent or recall a url from memory. If the goal does not contain an absolute http(s) url, call ask_user FIRST and ask for the entry url. Guessing a well-known site is a failure, not a shortcut.
 3. Targets only ever come from the LATEST observation returned by the previous tool result. Never invent an element and never reuse one from an older page.
-4. "hint" must resolve to exactly ONE visible, enabled element. If a result comes back with error target_not_found or target_ambiguous, choose a different, more specific hint from the returned candidates and call the tool again. Never retry the same hint.
-5. Every click/input must declare at least one expectation (expect_text / expect_gone / expect_url / expect_value). The backend derives the postcondition from it; an action without an expectation is rejected.
-6. Preconditions are derived by the backend from the page you observed. You never declare them.
-7. assert_text / assert_url describe the page AS IT IS NOW. Only assert something the current observation already shows.
-8. finish_case runs the case once in a fresh browser. If it fails, you get the failing steps back: fix them (drop_last_step to rebuild the tail, open_page to re-anchor) and call finish_case again.
-9. If you opened the wrong page, call drop_last_step to remove that goto before opening the right one. A stray navigation is not harmless: the case would execute it.
-10. Keep the case minimal: only the steps needed to prove the goal. No exploratory clicks.
-11. If the goal is ambiguous or a required value is missing, call ask_user instead of guessing.
-12. When a search or form has no targetable submit control, use input with submit=true to press Enter. An icon-only submit button has an accessible name made of a private-use glyph and a text made of the same invisible code point: NO hint can ever match it, so do not try to click it and do not ask the user for a url instead.
+4. Prefer candidate_id from the latest observation's action_candidates when it matches the intended action, especially for icon-only buttons, form submits, dialog dismissals, and other low-semantics controls. A candidate_id is not a selector: the backend validates that it came from the latest observation and uses its verified locator.
+5. If you do not use candidate_id, "hint" must resolve to exactly ONE visible, enabled element. If a result comes back with error target_not_found or target_ambiguous, choose a different, more specific hint from the returned candidates or action_candidates and call the tool again. Never retry the same hint.
+6. Every click/input must declare at least one expectation (expect_text / expect_gone / expect_url / expect_value). The backend derives the postcondition from it; an action without an expectation is rejected.
+7. Preconditions are derived by the backend from the page you observed. You never declare them.
+8. assert_text / assert_url describe the page AS IT IS NOW. Only assert something the current observation already shows.
+9. finish_case runs the case once in a fresh browser. If it fails, you get the failing steps back: fix them (drop_last_step to rebuild the tail, open_page to re-anchor) and call finish_case again.
+10. If you opened the wrong page, call drop_last_step to remove that goto before opening the right one. A stray navigation is not harmless: the case would execute it.
+11. Keep the case minimal: only the steps needed to prove the goal. No exploratory clicks.
+12. If the goal is ambiguous or a required value is missing, call ask_user instead of guessing.
+13. For search forms, input(submit=true) is valid only when Enter submits the form. If it does not change the page or satisfy the expectation, use a form_submit_candidate from action_candidates instead of retrying the same input or guessing CSS.
+14. If an observation or dry-run failure includes blockers, treat blocked_by_auth and blocked_by_captcha as user-input blockers; do not bypass them. For blocked_by_dialog, blocked_by_overlay, blocked_by_interstitial, blocked_by_cookie_banner, or blocked_by_loading, reobserve first and then change strategy by using dismiss_dialog, a narrower scope, a candidate_id, or a different verified target. Never retry the identical failing hint or candidate_id more than once.
 
 `)
 	builder.WriteString("Allowed actions: ")

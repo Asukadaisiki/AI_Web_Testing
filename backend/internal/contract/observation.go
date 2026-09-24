@@ -6,15 +6,114 @@ package contract
 // 只有 match_count == 1 的定位器才允许出现在这里，这保证"观测时能解析、
 // 执行时能命中"，也是旧版 BUG-211 一类问题的根治手段。
 type Element struct {
-	Ref      string    `json:"ref"`
-	Tag      string    `json:"tag"`
-	Role     string    `json:"role"`
-	Name     string    `json:"name"`
-	Text     string    `json:"text"`
-	Value    *string   `json:"value"`
-	Visible  bool      `json:"visible"`
-	Enabled  bool      `json:"enabled"`
-	Locators []Locator `json:"locators"`
+	Ref               string            `json:"ref"`
+	Tag               string            `json:"tag"`
+	Role              string            `json:"role"`
+	Name              string            `json:"name"`
+	Text              string            `json:"text"`
+	Value             *string           `json:"value"`
+	Visible           bool              `json:"visible"`
+	Enabled           bool              `json:"enabled"`
+	Locators          []Locator         `json:"locators"`
+	ParentRef         string            `json:"parent_ref,omitempty"`
+	ContainerRef      string            `json:"container_ref,omitempty"`
+	OwnText           string            `json:"own_text,omitempty"`
+	FullText          string            `json:"full_text,omitempty"`
+	BBox              BoundingBox       `json:"bbox,omitempty"`
+	VisibleInViewport bool              `json:"visible_in_viewport,omitempty"`
+	ZIndex            *int              `json:"z_index,omitempty"`
+	Attributes        map[string]string `json:"attributes,omitempty"`
+	Form              *ElementFormInfo  `json:"form,omitempty"`
+}
+
+// BoundingBox 是元素或结构节点在 viewport 坐标系里的几何事实。
+type BoundingBox struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+// ElementFormInfo 描述一个控件所属表单与提交候选。
+type ElementFormInfo struct {
+	FormRef            string `json:"form_ref"`
+	SubmitCandidateRef string `json:"submit_candidate_ref,omitempty"`
+	EnterSubmittable   bool   `json:"enter_submittable"`
+}
+
+// StructureNode 是可作为 TargetSpec scope 的页面结构节点。
+type StructureNode struct {
+	Ref                string            `json:"ref"`
+	Kind               string            `json:"kind"`
+	Tag                string            `json:"tag"`
+	Role               string            `json:"role,omitempty"`
+	ParentRef          string            `json:"parent_ref,omitempty"`
+	FullText           string            `json:"full_text"`
+	Visible            bool              `json:"visible"`
+	BBox               BoundingBox       `json:"bbox,omitempty"`
+	Attributes         map[string]string `json:"attributes,omitempty"`
+	SubmitCandidateRef string            `json:"submit_candidate_ref,omitempty"`
+	EnterSubmittable   bool              `json:"enter_submittable,omitempty"`
+}
+
+// Blocker 是页面上通用阻塞物的观测摘要，例如弹层、cookie banner、登录墙或验证码。
+type Blocker struct {
+	Kind              string    `json:"kind"`
+	Ref               string    `json:"ref,omitempty"`
+	Confidence        string    `json:"confidence"`
+	CoversTargetRef   string    `json:"covers_target_ref,omitempty"`
+	DismissCandidates []Locator `json:"dismiss_candidates,omitempty"`
+	Reason            string    `json:"reason"`
+}
+
+// CandidateRelation records why an action candidate is relevant to nearby page structure.
+type CandidateRelation struct {
+	Type  string `json:"type"`
+	Ref   string `json:"ref"`
+	Label string `json:"label,omitempty"`
+}
+
+// ActionCandidate is a system-verified target option from the latest observation.
+// Models may select it by candidate_id; the planner still validates action
+// compatibility and uses only the verified locator stored here.
+type ActionCandidate struct {
+	CandidateID string              `json:"candidate_id"`
+	Kind        string              `json:"kind"`
+	Action      string              `json:"action"`
+	TargetRef   string              `json:"target_ref"`
+	Role        string              `json:"role,omitempty"`
+	Name        string              `json:"name,omitempty"`
+	Text        string              `json:"text,omitempty"`
+	Aliases     []string            `json:"aliases,omitempty"`
+	Attributes  map[string]string   `json:"attributes,omitempty"`
+	Relations   []CandidateRelation `json:"relations,omitempty"`
+	Locator     Locator             `json:"locator"`
+	Confidence  string              `json:"confidence"`
+}
+
+// TargetSpec 是 v2 结构化定位请求。模型提供 object/scope 语义；系统仍只
+// 输出已在 Observation 中验证过的 locator。
+type TargetSpec struct {
+	Object   TargetObject `json:"object"`
+	Scope    *TargetScope `json:"scope,omitempty"`
+	Relation string       `json:"relation,omitempty"`
+	Role     string       `json:"role,omitempty"`
+	Text     string       `json:"text,omitempty"`
+	Name     string       `json:"name,omitempty"`
+	Aliases  []string     `json:"aliases,omitempty"`
+}
+
+type TargetObject struct {
+	Role    string   `json:"role,omitempty"`
+	Text    string   `json:"text,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
+}
+
+type TargetScope struct {
+	Kind         string `json:"kind,omitempty"`
+	ContainsText string `json:"contains_text,omitempty"`
+	Ref          string `json:"ref,omitempty"`
 }
 
 // Observation 是一次页面观测，也是接地的唯一依据。
@@ -23,11 +122,16 @@ type Observation struct {
 	PageStateID   string `json:"page_state_id"`
 	// BrowserSessionID 是执行器内部的浏览器上下文句柄，用完即弃，
 	// 与会话（session，CONTRACT §9）无关，不得混用。
-	BrowserSessionID string    `json:"browser_session_id"`
-	URL              string    `json:"url"`
-	Title            string    `json:"title"`
-	Elements         []Element `json:"elements"`
-	ScreenshotPath   string    `json:"screenshot_path"`
+	BrowserSessionID string            `json:"browser_session_id"`
+	URL              string            `json:"url"`
+	Title            string            `json:"title"`
+	Elements         []Element         `json:"elements"`
+	Structures       []StructureNode   `json:"structures,omitempty"`
+	Blockers         []Blocker         `json:"blockers,omitempty"`
+	ActionCandidates []ActionCandidate `json:"action_candidates,omitempty"`
+	Truncated        bool              `json:"truncated,omitempty"`
+	TruncationReason string            `json:"truncation_reason,omitempty"`
+	ScreenshotPath   string            `json:"screenshot_path"`
 }
 
 // Session 是作者态（规划阶段）的浏览器会话句柄。

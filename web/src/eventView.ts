@@ -89,6 +89,17 @@ export function describeEvent(event: RunEvent): string {
       if (isRecord(payload)) {
         const elements = payload['elements'];
         if (Array.isArray(elements)) count = elements.length;
+        const observation = payloadRecord(payload, 'observation');
+        const actionCandidates =
+          observation === null ? null : observation['action_candidates'];
+        if (Array.isArray(actionCandidates)) {
+          return joinParts([
+            url,
+            title,
+            count === null ? null : `${String(count)} 个元素`,
+            `${String(actionCandidates.length)} 个候选动作`,
+          ]);
+        }
       }
       const countText = count === null ? null : `${String(count)} 个元素`;
       return joinParts([url, title, countText]);

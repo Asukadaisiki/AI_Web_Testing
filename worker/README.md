@@ -37,10 +37,11 @@ uv run python -m unittest discover -s tests -t .
 | 文件 | 职责 |
 |---|---|
 | `loop_worker/contracts.py` | pydantic 镜像（case / 观测 / 执行结果 + 条件阶段表） |
-| `loop_worker/observer.py` | 观测采集 + `accessible_name`（可访问名唯一实现） |
+| `loop_worker/observer.py` | 观测采集 + `accessible_name`（可访问名唯一实现）+ action candidate 编译 |
 | `loop_worker/locators.py` | 定位器就地验证与偏好排序（role → text → css） |
+| `loop_worker/blockers.py` | blocker 识别、hit-test 可达性检查与安全恢复 |
 | `loop_worker/conditions.py` | 条件评估（pre 快照 / post 轮询） |
-| `loop_worker/actions.py` | goto / click / input |
+| `loop_worker/actions.py` | goto / click / input / select / check / uncheck / scroll / hover / dismiss / upload |
 | `loop_worker/runner.py` | case 执行循环 |
 | `loop_worker/evidence.py` | 截图 / console / network |
 | `loop_worker/sessions.py` | 内存会话管理 |

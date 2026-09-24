@@ -17,10 +17,17 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from .actions import (
+    check_target,
     click_target,
+    dismiss_dialog,
     fill_target,
     goto,
+    hover_target,
     resolve_target,
+    scroll_into_view_target,
+    select_target,
+    uncheck_target,
+    upload_file_target,
 )
 from .contracts import (
     DEFAULT_STEP_TIMEOUT_MS,
@@ -166,10 +173,24 @@ class SessionManager:
         locator = await resolve_target(page, request.locator, DEFAULT_STEP_TIMEOUT_MS)
         if request.action == "click":
             await click_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
-        else:
+        elif request.action == "input":
             await fill_target(
                 page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS, request.submit
             )
+        elif request.action == "select":
+            await select_target(page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS)
+        elif request.action == "check":
+            await check_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
+        elif request.action == "uncheck":
+            await uncheck_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
+        elif request.action == "scroll_into_view":
+            await scroll_into_view_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
+        elif request.action == "hover":
+            await hover_target(page, locator, DEFAULT_STEP_TIMEOUT_MS)
+        elif request.action == "dismiss_dialog":
+            await dismiss_dialog(page, locator, DEFAULT_STEP_TIMEOUT_MS)
+        elif request.action == "upload_file":
+            await upload_file_target(page, locator, request.value or "", DEFAULT_STEP_TIMEOUT_MS)
         return await self.observe(session)
 
     async def observe(self, session: WorkerSession) -> Observation:

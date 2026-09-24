@@ -120,21 +120,40 @@ func (p *Planner) openPage(ctx context.Context, url, intent string) (Result, err
 }
 
 func (p *Planner) click(
-	ctx context.Context, hint, intent string, expects contract.Expects,
+	ctx context.Context, hint string, spec *contract.TargetSpec, candidateID string, intent string, expects contract.Expects,
 ) (Result, error) {
-	return p.act(ctx, contract.ActionClick, hint, nil, intent, expects, false)
+	return p.act(ctx, contract.ActionClick, hint, spec, candidateID, nil, intent, expects, false)
 }
 
 func (p *Planner) input(
-	ctx context.Context, hint, value, intent string, expects contract.Expects, submit bool,
+	ctx context.Context, hint string, spec *contract.TargetSpec, candidateID string, value, intent string, expects contract.Expects, submit bool,
 ) (Result, error) {
-	return p.act(ctx, contract.ActionInput, hint, &value, intent, expects, submit)
+	return p.act(ctx, contract.ActionInput, hint, spec, candidateID, &value, intent, expects, submit)
+}
+
+func (p *Planner) targetAction(
+	ctx context.Context,
+	action contract.Action,
+	hint string,
+	spec *contract.TargetSpec,
+	candidateID string,
+	value string,
+	intent string,
+	expects contract.Expects,
+) (Result, error) {
+	var ptr *string
+	if action == contract.ActionSelect || action == contract.ActionUploadFile {
+		ptr = &value
+	}
+	return p.act(ctx, action, hint, spec, candidateID, ptr, intent, expects, false)
 }
 
 func (p *Planner) act(
 	ctx context.Context,
 	action contract.Action,
 	hint string,
+	spec *contract.TargetSpec,
+	requestedCandidateID string,
 	value *string,
 	intent string,
 	expects contract.Expects,
@@ -143,7 +162,7 @@ func (p *Planner) act(
 	if !p.hasPage {
 		return failure("no_observation", "no page has been observed yet; call open_page first"), nil
 	}
-	element, locator, candidates, err := resolve(hint, p.observation.Elements)
+	element, locator, selectedCandidateID, candidates, err := p.resolveTarget(action, hint, spec, requestedCandidateID)
 	if err != nil {
 		return Result{
 			OK:         false,
@@ -153,21 +172,38 @@ func (p *Planner) act(
 			Candidates: candidates,
 		}, nil
 	}
+	targetHint := hint
+	if strings.TrimSpace(targetHint) == "" {
+		targetHint = selectedCandidateID
+		if strings.TrimSpace(intent) != "" {
+			targetHint = intent
+		}
+	}
 	target := contract.Target{
-		Hint:    hint,
+		Hint:    targetHint,
 		Locator: locator,
 		Grounding: contract.Grounding{
 			ObservationID: p.observation.ObservationID,
 			PageStateID:   p.observation.PageStateID,
-			CandidateID:   candidateID(element, locator),
+			CandidateID:   selectedCandidateID,
 			PageURL:       p.observation.URL,
 		},
+		Spec: spec,
 	}
 	step, err := contract.DeriveActionStep(
 		len(p.steps), action, intent, target, value, submit, p.observation.URL, expects,
 	)
 	if err != nil {
 		return failure("step_rejected", err.Error()), nil
+	}
+	if isTargetAssertion(action) {
+		p.steps = append(p.steps, step)
+		return Result{
+			OK:      true,
+			Summary: fmt.Sprintf("recorded %s step %d on %q", action, step.Index, displayName(element)),
+			Page:    pageView(p.observation),
+			Steps:   stepViews(p.steps),
+		}, nil
 	}
 	// 先真的执行动作，成功后才记录步骤：动作失败不该留下一条假步骤。
 	request := contract.ActRequest{Action: action, Locator: locator, Submit: submit}
@@ -182,11 +218,56 @@ func (p *Planner) act(
 	p.observation = observation
 	result := Result{
 		OK:      true,
-		Summary: fmt.Sprintf("recorded %s step %d on %q", action, step.Index, element.Name),
+		Summary: fmt.Sprintf("recorded %s step %d on %q", action, step.Index, displayName(element)),
 		Page:    pageView(observation),
 		Steps:   stepViews(p.steps),
 	}
 	return result, nil
+}
+
+func isTargetAssertion(action contract.Action) bool {
+	return action == contract.ActionAssertElement ||
+		action == contract.ActionAssertAttribute ||
+		action == contract.ActionAssertCount
+}
+
+func displayName(element contract.Element) string {
+	if strings.TrimSpace(element.Name) != "" {
+		return element.Name
+	}
+	if strings.TrimSpace(element.Text) != "" {
+		return element.Text
+	}
+	return element.Ref
+}
+
+func (p *Planner) resolveTarget(
+	action contract.Action, hint string, spec *contract.TargetSpec, requestedCandidateID string,
+) (contract.Element, contract.Locator, string, []CandidateView, error) {
+	if strings.TrimSpace(requestedCandidateID) != "" {
+		element, locator, candidate, err := resolveActionCandidate(action, requestedCandidateID, p.observation)
+		if err != nil {
+			return contract.Element{}, contract.Locator{}, "", nil, err
+		}
+		return element, locator, candidate.CandidateID, nil, nil
+	}
+	if spec == nil {
+		element, locator, candidates, err := resolve(hint, p.observation.Elements)
+		if err != nil {
+			return contract.Element{}, contract.Locator{}, "", candidates, err
+		}
+		return element, locator, candidateID(element, locator), nil, nil
+	}
+	if len(objectHints(spec.Object)) == 0 && strings.TrimSpace(hint) != "" {
+		specCopy := *spec
+		specCopy.Object.Text = hint
+		spec = &specCopy
+	}
+	element, locator, candidates, err := resolveSpec(*spec, p.observation)
+	if err != nil {
+		return contract.Element{}, contract.Locator{}, "", candidates, err
+	}
+	return element, locator, candidateID(element, locator), nil, nil
 }
 
 func (p *Planner) assertText(text, intent string) (Result, error) {
@@ -327,8 +408,62 @@ func conditionViews(conditions []contract.Condition) []string {
 
 func pageView(observation contract.Observation) *PageView {
 	view := &PageView{
-		URL:   observation.URL,
-		Title: observation.Title,
+		URL:              observation.URL,
+		Title:            observation.Title,
+		Truncated:        observation.Truncated,
+		TruncationReason: observation.TruncationReason,
+	}
+	for _, blocker := range observation.Blockers {
+		view.Blockers = append(view.Blockers, BlockerView{
+			Kind:              blocker.Kind,
+			Ref:               blocker.Ref,
+			Confidence:        blocker.Confidence,
+			CoversTargetRef:   blocker.CoversTargetRef,
+			DismissCandidates: len(blocker.DismissCandidates),
+			Reason:            compactText(blocker.Reason, 160),
+		})
+	}
+	const maxActionCandidates = 30
+	for _, candidate := range observation.ActionCandidates {
+		if len(view.ActionCandidates) >= maxActionCandidates {
+			view.Truncated = true
+			if view.TruncationReason == "" {
+				view.TruncationReason = fmt.Sprintf("action_candidate_view_limit=%d", maxActionCandidates)
+			}
+			break
+		}
+		view.ActionCandidates = append(view.ActionCandidates, ActionCandidateView{
+			CandidateID: candidate.CandidateID,
+			Kind:        candidate.Kind,
+			Action:      candidate.Action,
+			TargetRef:   candidate.TargetRef,
+			Role:        candidate.Role,
+			Name:        candidate.Name,
+			Text:        compactText(candidate.Text, 120),
+			Aliases:     compactStrings(candidate.Aliases, 12, 80),
+			Attributes:  compactAttributes(candidate.Attributes, 8, 80),
+			Relations:   candidate.Relations,
+			Confidence:  candidate.Confidence,
+		})
+	}
+	const maxScopes = 30
+	for _, scope := range observation.Structures {
+		if !scope.Visible {
+			continue
+		}
+		if len(view.Scopes) >= maxScopes {
+			view.Truncated = true
+			if view.TruncationReason == "" {
+				view.TruncationReason = fmt.Sprintf("scope_view_limit=%d", maxScopes)
+			}
+			break
+		}
+		view.Scopes = append(view.Scopes, ScopeView{
+			Ref:       scope.Ref,
+			Kind:      scope.Kind,
+			Text:      compactText(scope.FullText, 160),
+			ParentRef: scope.ParentRef,
+		})
 	}
 	actionable := make([]contract.Element, 0, len(observation.Elements))
 	for _, element := range observation.Elements {
@@ -342,11 +477,12 @@ func pageView(observation contract.Observation) *PageView {
 	}
 	for _, element := range actionable {
 		elementView := ElementView{
-			Ref:  element.Ref,
-			Tag:  element.Tag,
-			Role: element.Role,
-			Name: element.Name,
-			Text: element.Text,
+			Ref:          element.Ref,
+			Tag:          element.Tag,
+			Role:         element.Role,
+			Name:         element.Name,
+			Text:         compactText(element.Text, 120),
+			ContainerRef: element.ContainerRef,
 		}
 		if element.Value != nil {
 			elementView.Value = *element.Value
@@ -357,6 +493,57 @@ func pageView(observation contract.Observation) *PageView {
 		view.Elements = append(view.Elements, elementView)
 	}
 	return view
+}
+
+func compactStrings(values []string, limit int, textLimit int) []string {
+	out := make([]string, 0, limit)
+	seen := map[string]bool{}
+	for _, value := range values {
+		if len(out) >= limit {
+			break
+		}
+		value = compactText(value, textLimit)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func compactAttributes(values map[string]string, limit int, textLimit int) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	allowed := map[string]bool{
+		"id": true, "name": true, "type": true, "title": true,
+		"placeholder": true, "aria-label": true, "data-testid": true,
+	}
+	out := map[string]string{}
+	for key, value := range values {
+		if len(out) >= limit {
+			break
+		}
+		if !allowed[key] {
+			continue
+		}
+		if compacted := compactText(value, textLimit); compacted != "" {
+			out[key] = compacted
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func compactText(value string, limit int) string {
+	normalized := strings.Join(strings.Fields(value), " ")
+	if len(normalized) <= limit {
+		return normalized
+	}
+	return normalized[:limit] + "..."
 }
 
 func observationHasText(observation contract.Observation, text string) bool {
@@ -378,6 +565,7 @@ func dryRunFailure(result contract.ExecutionResult) *DryRunFailure {
 		ExecutionID: result.ExecutionID,
 		Status:      string(result.Status),
 		FinalURL:    result.FinalURL,
+		CurrentURL:  result.FinalURL,
 	}
 	if result.Error != nil {
 		failure.Error = fmt.Sprintf("%s: %s", result.Error.Kind, result.Error.Message)
@@ -395,6 +583,9 @@ func dryRunFailure(result contract.ExecutionResult) *DryRunFailure {
 		if step.Error != nil {
 			item.Error = fmt.Sprintf("%s: %s", step.Error.Kind, step.Error.Message)
 		}
+		item.Blocker = step.Blocker
+		item.HitTest = step.HitTest
+		item.Recovery = step.Recovery
 		for _, condition := range step.Conditions {
 			if condition.Satisfied {
 				continue
@@ -409,8 +600,42 @@ func dryRunFailure(result contract.ExecutionResult) *DryRunFailure {
 			)
 		}
 		failure.Steps = append(failure.Steps, item)
+		if failure.FailedStep == nil {
+			clone := item
+			failure.FailedStep = &clone
+			if clone.URL != "" {
+				failure.CurrentURL = clone.URL
+			}
+			failure.RepairHints = repairHintsForStep(step)
+		}
 	}
 	return failure
+}
+
+func repairHintsForStep(step contract.StepResult) []string {
+	hints := []string{"reobserve current page before retrying"}
+	if step.Error != nil {
+		switch step.Error.Kind {
+		case contract.SignalBlockedByAuth:
+			hints = append(hints, "ask the user to clear the auth wall, then open_page to reobserve")
+		case contract.SignalBlockedByCaptcha:
+			hints = append(hints, "ask the user to complete the captcha, then open_page to reobserve")
+		case contract.SignalBlockedByDialog, contract.SignalBlockedByOverlay,
+			contract.SignalBlockedByInterstitial, contract.SignalBlockedByCookieBanner:
+			hints = append(hints, "try dismiss_dialog or reobserve after the safe recovery attempt")
+		case contract.SignalBlockedByLoading:
+			hints = append(hints, "wait for loading to disappear, then open_page to reobserve")
+		case contract.SignalTargetNotFound:
+			hints = append(hints, "narrow target scope or use an alias from the current observation")
+		case contract.SignalConditionUnmet:
+			hints = append(hints, "drop_last_step and rebuild the failing tail with a different expectation")
+		case contract.SignalStepTimeout:
+			hints = append(hints, "scroll target into view or wait for a stable visible element")
+		default:
+			hints = append(hints, "ask the user only if required information is missing")
+		}
+	}
+	return hints
 }
 
 func failure(code, detail string) Result {

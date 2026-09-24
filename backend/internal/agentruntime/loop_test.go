@@ -136,6 +136,75 @@ func TestInputSubmitReachesTheAuthoringBrowser(t *testing.T) {
 	}
 }
 
+func TestCandidateIDClickReachesIconOnlyFormSubmit(t *testing.T) {
+	h := newHarness(t, []ScriptedStep{
+		{Tool: "open_page", Arguments: json.RawMessage(
+			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
+		{Tool: "input", Arguments: json.RawMessage(
+			`{"hint":"Search","value":"widget","intent":"填写搜索词","expect_value":"widget"}`)},
+		{Tool: "click", Arguments: json.RawMessage(
+			`{"candidate_id":"act_search_submit","intent":"提交搜索表单","expect_url":"search=widget"}`)},
+		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"候选提交搜索"}`)},
+	})
+
+	run := h.plan(t, "用站内搜索找 widget")
+	if run.Status != store.StatusAwaitingApproval {
+		t.Fatalf("status = %q, want %q (error: %v)", run.Status, store.StatusAwaitingApproval, run.Error)
+	}
+
+	record, err := h.store.GetCase(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("get case: %v", err)
+	}
+	artifact, err := contract.Validate(record.Payload)
+	if err != nil {
+		t.Fatalf("persisted case must validate: %v", err)
+	}
+	if len(artifact.Steps) != 3 {
+		t.Fatalf("steps = %d, want 3", len(artifact.Steps))
+	}
+	clickStep := artifact.Steps[2]
+	if clickStep.Action != contract.ActionClick {
+		t.Fatalf("step 2 action = %q, want click", clickStep.Action)
+	}
+	if clickStep.Target == nil || clickStep.Target.Grounding.CandidateID != "act_search_submit" {
+		t.Fatalf("candidate grounding missing: %#v", clickStep.Target)
+	}
+	if clickStep.Target.Locator != cssLocator("#submit_search") {
+		t.Fatalf("candidate locator = %#v", clickStep.Target.Locator)
+	}
+}
+
+func TestStructuredTargetScopesDuplicateCardLinks(t *testing.T) {
+	h := newHarness(t, []ScriptedStep{
+		{Tool: "open_page", Arguments: json.RawMessage(
+			`{"url":"` + listURL + `?cards=1","intent":"打开商品列表"}`)},
+		{Tool: "click", Arguments: json.RawMessage(
+			`{"hint":"View Product","target":{"object":{"role":"link","text":"View Product"},"scope":{"kind":"card","contains_text":"Blue Top"},"relation":"within"},"intent":"打开 Blue Top 的详情","expect_url":"/item/1"}`)},
+		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"打开 Blue Top 详情"}`)},
+	})
+
+	run := h.plan(t, "打开 Blue Top 的商品详情")
+	if run.Status != store.StatusAwaitingApproval {
+		t.Fatalf("status = %q, want %q", run.Status, store.StatusAwaitingApproval)
+	}
+	record, err := h.store.GetCase(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("get case: %v", err)
+	}
+	artifact, err := contract.Validate(record.Payload)
+	if err != nil {
+		t.Fatalf("persisted case must validate: %v", err)
+	}
+	target := artifact.Steps[1].Target
+	if target == nil || target.Spec == nil || target.Spec.Scope == nil {
+		t.Fatalf("structured target was not preserved: %#v", target)
+	}
+	if target.Grounding.CandidateID == "" || target.Locator.Kind != "css" {
+		t.Fatalf("target was not grounded to the scoped card link: %#v", target)
+	}
+}
+
 // TestClosedLoopOffline 是整条闭环的离线验证：
 // 输入 → 规划（工具调用构建 + 干跑验证）→ 审批 → 执行 → 报告。
 func TestClosedLoopOffline(t *testing.T) {
@@ -468,8 +537,13 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 			Tool    string `json:"tool"`
 			Error   string `json:"error"`
 			Failure *struct {
-				Status string `json:"status"`
-				Steps  []struct {
+				Status      string   `json:"status"`
+				CurrentURL  string   `json:"current_url"`
+				RepairHints []string `json:"repair_hints"`
+				FailedStep  *struct {
+					Index int `json:"index"`
+				} `json:"failed_step"`
+				Steps []struct {
 					Index       int      `json:"index"`
 					Action      string   `json:"action"`
 					Status      string   `json:"status"`
@@ -486,6 +560,9 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 		}
 		if payload.Failure == nil || len(payload.Failure.Steps) == 0 {
 			t.Fatalf("dry_run_failed event must carry the failing steps: %s", event.Payload)
+		}
+		if payload.Failure.FailedStep == nil || payload.Failure.CurrentURL == "" || len(payload.Failure.RepairHints) == 0 {
+			t.Fatalf("dry_run_failed event must carry repair context: %s", event.Payload)
 		}
 		if payload.Failure.Steps[0].Status == "passed" {
 			t.Fatalf("dry-run failure must list only non-passed steps: %s", event.Payload)

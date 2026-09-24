@@ -44,7 +44,8 @@ const (
 //
 // 假站点故意让它当搜索提交按钮：真实站点就是这样（`<i class="fa fa-search">` 没加
 // `aria-hidden`），可访问名与 text 都是同一个不可见码位，模型不可能用任何 hint 指到它。
-// 于是"在列表页搜索"只能靠 input 的 submit=true 走回车。
+// P5 之前"在列表页搜索"只能靠 input 的 submit=true 走回车；P5 之后应优先用
+// 系统从 form 关系编译出的 action candidate。
 const searchGlyph = "\uf002"
 
 func roleLocator(role, name string) contract.Locator {
@@ -53,6 +54,10 @@ func roleLocator(role, name string) contract.Locator {
 
 func textLocator(text string) contract.Locator {
 	return contract.Locator{Kind: "text", Text: text, Exact: true, MatchCount: 1}
+}
+
+func cssLocator(css string) contract.Locator {
+	return contract.Locator{Kind: "css", CSS: css, MatchCount: 1}
 }
 
 func element(ref, tag, role, name, text string, value *string, locators ...contract.Locator) contract.Element {
@@ -76,10 +81,31 @@ func observation(url, title string, elements []contract.Element) contract.Observ
 // page 返回某个 URL 在假站点里的观测。values 是输入框的当前值。
 func (s *fakeSite) page(url string, values map[string]string) (contract.Observation, bool) {
 	switch {
+	case strings.HasPrefix(url, listURL+"?cards=1"):
+		observation := observation(url, "All Products", []contract.Element{
+			element("e10", "p", "paragraph", "", "Blue Top", nil, textLocator("Blue Top")),
+			element("e11", "a", "link", "", "View Product", nil, cssLocator("#blue-view")),
+			element("e12", "p", "paragraph", "", "Red Top", nil, textLocator("Red Top")),
+			element("e13", "a", "link", "", "View Product", nil, cssLocator("#red-view")),
+			element("e14", "p", "paragraph", "", "Green Top", nil, textLocator("Green Top")),
+			element("e15", "a", "link", "", "View Product", nil, cssLocator("#green-view")),
+		})
+		observation.Structures = []contract.StructureNode{
+			{Ref: "s1", Kind: "card", FullText: "Blue Top View Product", Visible: true},
+			{Ref: "s2", Kind: "card", FullText: "Red Top View Product", Visible: true},
+			{Ref: "s3", Kind: "card", FullText: "Green Top View Product", Visible: true},
+		}
+		observation.Elements[0].ContainerRef = "s1"
+		observation.Elements[1].ContainerRef = "s1"
+		observation.Elements[2].ContainerRef = "s2"
+		observation.Elements[3].ContainerRef = "s2"
+		observation.Elements[4].ContainerRef = "s3"
+		observation.Elements[5].ContainerRef = "s3"
+		return observation, true
 	case strings.HasPrefix(url, listURL):
 		elements := []contract.Element{
 			element("e1", "input", "textbox", "Search", "", nil, roleLocator("textbox", "Search")),
-			// 纯图标搜索按钮：模型指不到它（F1），只能靠 input 的 submit 走回车。
+			// 纯图标搜索按钮：模型不该猜 selector，而应选择系统给出的 form submit candidate。
 			element("e2", "button", "button", searchGlyph, searchGlyph, nil, roleLocator("button", searchGlyph)),
 			element("e4", "button", "button", "Add to cart", "Add to cart", nil, roleLocator("button", "Add to cart")),
 		}
@@ -87,7 +113,45 @@ func (s *fakeSite) page(url string, values map[string]string) (contract.Observat
 			elements = append(elements,
 				element("e3", "a", "link", "Widget", "Widget", nil, textLocator("Widget")))
 		}
-		return observation(url, "All Products", elements), true
+		observation := observation(url, "All Products", elements)
+		observation.Structures = []contract.StructureNode{{
+			Ref: "s1", Kind: "form", FullText: "Search", Visible: true, SubmitCandidateRef: "e2",
+		}}
+		observation.Elements[0].ContainerRef = "s1"
+		observation.Elements[0].Form = &contract.ElementFormInfo{
+			FormRef:            "s1",
+			SubmitCandidateRef: "e2",
+			EnterSubmittable:   true,
+		}
+		observation.Elements[1].ContainerRef = "s1"
+		observation.Elements[1].Form = &contract.ElementFormInfo{
+			FormRef:            "s1",
+			SubmitCandidateRef: "e2",
+			EnterSubmittable:   false,
+		}
+		observation.Elements[1].Locators = []contract.Locator{cssLocator("#submit_search")}
+		observation.ActionCandidates = []contract.ActionCandidate{{
+			CandidateID: "act_search_submit",
+			Kind:        "form_submit_candidate",
+			Action:      string(contract.ActionClick),
+			TargetRef:   "e2",
+			Role:        "button",
+			Name:        searchGlyph,
+			Text:        searchGlyph,
+			Aliases:     []string{"form submit", "search submit", "submit_search"},
+			Attributes:  map[string]string{"id": "submit_search", "type": "button"},
+			Relations: []contract.CandidateRelation{{
+				Type: "form_submit_candidate",
+				Ref:  "s1",
+			}, {
+				Type:  "near_control",
+				Ref:   "e1",
+				Label: "Search",
+			}},
+			Locator:    cssLocator("#submit_search"),
+			Confidence: "high",
+		}}
+		return observation, true
 	case strings.HasPrefix(url, detailURL):
 		quantity := values["Quantity"]
 		elements := []contract.Element{
@@ -109,8 +173,18 @@ func (s *fakeSite) page(url string, values map[string]string) (contract.Observat
 }
 
 // clickTarget 是"点这个元素会去哪"。
-func clickTarget(url, name string) string {
-	switch name {
+func clickTarget(url string, target contract.Element, values map[string]string) string {
+	if target.Ref == "e11" || hasLocator(target, cssLocator("#blue-view")) {
+		return detailURL
+	}
+	if target.Ref == "e2" || hasLocator(target, cssLocator("#submit_search")) {
+		query := values["Search"]
+		if query == "" {
+			return url
+		}
+		return listURL + "?search=" + query
+	}
+	switch target.Name {
 	case "Widget":
 		return detailURL
 	case "Add to cart":
@@ -123,6 +197,14 @@ func clickTarget(url, name string) string {
 	default:
 		return url
 	}
+}
+func hasLocator(element contract.Element, locator contract.Locator) bool {
+	for _, candidate := range element.Locators {
+		if candidate == locator {
+			return true
+		}
+	}
+	return false
 }
 
 // matchLocator 在观测里按定位器找元素。
@@ -286,7 +368,7 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 			writeFake(w, http.StatusOK, page)
 			return
 		}
-		next := clickTarget(current, target.Name)
+		next := clickTarget(current, target, values)
 		worker.setURL(r.PathValue("id"), next)
 		page, _ = worker.site.page(next, values)
 		writeFake(w, http.StatusOK, page)
@@ -419,7 +501,7 @@ func (w *fakeWorker) execute(artifact contract.Case) contract.ExecutionResult {
 				value := values[target.Name]
 				targetValue = &value
 			} else {
-				current = clickTarget(current, target.Name)
+				current = clickTarget(current, target, values)
 			}
 		}
 		after, ok := w.site.page(current, values)

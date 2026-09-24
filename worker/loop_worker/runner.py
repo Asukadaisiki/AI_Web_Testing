@@ -22,8 +22,18 @@ from .actions import ActionFailure
 from .conditions import evaluate_postconditions, evaluate_preconditions, unmet_summary
 from .contracts import (
     ACTION_CLICK,
+    ACTION_CHECK,
+    ACTION_DISMISS_DIALOG,
+    ACTION_ASSERT_ATTRIBUTE,
+    ACTION_ASSERT_COUNT,
+    ACTION_ASSERT_ELEMENT,
     ACTION_GOTO,
+    ACTION_HOVER,
     ACTION_INPUT,
+    ACTION_SCROLL_INTO_VIEW,
+    ACTION_SELECT,
+    ACTION_UNCHECK,
+    ACTION_UPLOAD_FILE,
     DEFAULT_STEP_TIMEOUT_MS,
     SIGNAL_CASE_INVALID,
     SIGNAL_CONDITION_UNMET,
@@ -33,6 +43,7 @@ from .contracts import (
     ConditionResult,
     Evidence,
     ExecutionResult,
+    RecoveryAttempt,
     Step,
     StepError,
     StepResult,
@@ -40,6 +51,7 @@ from .contracts import (
     validate_case,
 )
 from .evidence import EvidenceCollector
+from .locators import to_playwright_locator
 from .observer import new_id
 
 
@@ -133,6 +145,9 @@ async def _run_step(
     status = "passed"
     error: StepError | None = None
     target_locator = None
+    recovery: list[RecoveryAttempt] = []
+    blocker = None
+    hit_test = None
 
     preconditions = await evaluate_preconditions(page, step)
     conditions.extend(preconditions)
@@ -145,24 +160,57 @@ async def _run_step(
         try:
             if step.action == ACTION_GOTO:
                 await actions.goto(page, step.value or "", step.timeout_ms)
-            elif step.action in (ACTION_CLICK, ACTION_INPUT):
+            elif step.action in (
+                ACTION_CLICK,
+                ACTION_INPUT,
+                ACTION_SELECT,
+                ACTION_CHECK,
+                ACTION_UNCHECK,
+                ACTION_SCROLL_INTO_VIEW,
+                ACTION_HOVER,
+                ACTION_DISMISS_DIALOG,
+                ACTION_UPLOAD_FILE,
+                ACTION_ASSERT_ELEMENT,
+                ACTION_ASSERT_ATTRIBUTE,
+                ACTION_ASSERT_COUNT,
+            ):
                 if step.target is None or step.target.locator is None:
                     raise ActionFailure(
                         SIGNAL_WORKER_ERROR, f"{step.action} step has no resolvable target"
                     )
-                target_locator = await actions.resolve_target(
-                    page, step.target.locator, step.timeout_ms
-                )
-                if step.action == ACTION_CLICK:
-                    await actions.click_target(page, target_locator, step.timeout_ms)
+                if step.action == ACTION_ASSERT_COUNT:
+                    target_locator = to_playwright_locator(page, step.target.locator)
                 else:
+                    target_locator = await actions.resolve_target(
+                        page, step.target.locator, step.timeout_ms
+                    )
+                if step.action == ACTION_CLICK:
+                    recovery = await actions.click_target(page, target_locator, step.timeout_ms)
+                elif step.action == ACTION_INPUT:
                     await actions.fill_target(
                         page, target_locator, step.value or "", step.timeout_ms, step.submit
                     )
+                elif step.action == ACTION_SELECT:
+                    recovery = await actions.select_target(page, target_locator, step.value or "", step.timeout_ms)
+                elif step.action == ACTION_CHECK:
+                    recovery = await actions.check_target(page, target_locator, step.timeout_ms)
+                elif step.action == ACTION_UNCHECK:
+                    recovery = await actions.uncheck_target(page, target_locator, step.timeout_ms)
+                elif step.action == ACTION_SCROLL_INTO_VIEW:
+                    await actions.scroll_into_view_target(page, target_locator, step.timeout_ms)
+                elif step.action == ACTION_HOVER:
+                    recovery = await actions.hover_target(page, target_locator, step.timeout_ms)
+                elif step.action == ACTION_DISMISS_DIALOG:
+                    await actions.dismiss_dialog(page, target_locator, step.timeout_ms)
+                elif step.action == ACTION_UPLOAD_FILE:
+                    recovery = await actions.upload_file_target(page, target_locator, step.value or "", step.timeout_ms)
             # assert_text / assert_url 不改动页面：断言由 postconditions 承担
         except ActionFailure as exc:
             status = "failed"
             error = StepError(kind=exc.kind, message=exc.detail)
+            blocker = exc.blocker
+            hit_test = exc.hit_test
+            recovery = exc.recovery
         except Exception as exc:
             status = "failed"
             error = StepError(
@@ -202,6 +250,9 @@ async def _run_step(
             network=snapshot.network,
         ),
         error=error,
+        blocker=blocker,
+        hit_test=hit_test,
+        recovery=recovery,
     )
 
 

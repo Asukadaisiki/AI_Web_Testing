@@ -10,11 +10,14 @@ import (
 type ConditionType string
 
 const (
-	CondURLContains ConditionType = "url_contains"
-	CondTextVisible ConditionType = "text_visible"
-	CondTextGone    ConditionType = "text_gone"
-	CondURLChanges  ConditionType = "url_changes"
-	CondValueEquals ConditionType = "value_equals"
+	CondURLContains     ConditionType = "url_contains"
+	CondTextVisible     ConditionType = "text_visible"
+	CondTextGone        ConditionType = "text_gone"
+	CondURLChanges      ConditionType = "url_changes"
+	CondValueEquals     ConditionType = "value_equals"
+	CondElementState    ConditionType = "element_state"
+	CondAttributeEquals ConditionType = "attribute_equals"
+	CondCountEquals     ConditionType = "count_equals"
 )
 
 type phaseSet struct {
@@ -28,11 +31,14 @@ type phaseSet struct {
 // 变化与事件，因此"变化型/事件型"条件作为前置条件在结构上永远为假。旧版把
 // 这类条件写成前置条件、又要求动作步骤必须有前置条件，直接把作者逼进死路。
 var conditionPhases = map[ConditionType]phaseSet{
-	CondURLContains: {pre: true, post: true},
-	CondTextVisible: {pre: true, post: true},
-	CondTextGone:    {pre: true, post: true},
-	CondURLChanges:  {post: true},
-	CondValueEquals: {post: true},
+	CondURLContains:     {pre: true, post: true},
+	CondTextVisible:     {pre: true, post: true},
+	CondTextGone:        {pre: true, post: true},
+	CondURLChanges:      {post: true},
+	CondValueEquals:     {post: true},
+	CondElementState:    {pre: true, post: true},
+	CondAttributeEquals: {post: true},
+	CondCountEquals:     {post: true},
 }
 
 // conditionOrder 固定遍历顺序，保证提示词与错误信息稳定。
@@ -42,14 +48,27 @@ var conditionOrder = []ConditionType{
 	CondTextGone,
 	CondURLChanges,
 	CondValueEquals,
+	CondElementState,
+	CondAttributeEquals,
+	CondCountEquals,
 }
 
 var actionOrder = []Action{
 	ActionGoto,
 	ActionClick,
 	ActionInput,
+	ActionSelect,
+	ActionCheck,
+	ActionUncheck,
+	ActionScrollIntoView,
+	ActionHover,
+	ActionDismissDialog,
+	ActionUploadFile,
 	ActionAssertText,
 	ActionAssertURL,
+	ActionAssertElement,
+	ActionAssertAttribute,
+	ActionAssertCount,
 }
 
 // ConditionAllowed 判断某条件类型能否出现在指定阶段。
@@ -111,24 +130,31 @@ func PreconditionTypeNames() []string {
 
 // ConditionSemantics 是给提示词用的语义说明，避免提示词与代码各写一份。
 var ConditionSemantics = map[ConditionType]string{
-	CondURLContains: "current page url contains the value",
-	CondTextVisible: "an element whose visible text contains the value exists",
-	CondTextGone:    "no visible element whose text contains the value exists",
-	CondURLChanges:  "the page url differs from the url before this step (postcondition only)",
-	CondValueEquals: "the target element's value equals the value (postcondition only)",
+	CondURLContains:     "current page url contains the value",
+	CondTextVisible:     "an element whose visible text contains the value exists",
+	CondTextGone:        "no visible element whose text contains the value exists",
+	CondURLChanges:      "the page url differs from the url before this step (postcondition only)",
+	CondValueEquals:     "the target element's value equals the value (postcondition only)",
+	CondElementState:    "the target element state matches visible, hidden, enabled, disabled, checked, or unchecked",
+	CondAttributeEquals: "the target element attribute/value assertion matches attr=value",
+	CondCountEquals:     "the target locator count equals the numeric value",
 }
 
 // Expects 是模型能表达的期望。模型不写条件，只写期望。
 type Expects struct {
-	Text  *string `json:"text,omitempty"`
-	Gone  *string `json:"gone,omitempty"`
-	URL   *string `json:"url,omitempty"`
-	Value *string `json:"value,omitempty"`
+	Text      *string `json:"text,omitempty"`
+	Gone      *string `json:"gone,omitempty"`
+	URL       *string `json:"url,omitempty"`
+	Value     *string `json:"value,omitempty"`
+	Element   *string `json:"element,omitempty"`
+	Attribute *string `json:"attribute,omitempty"`
+	Count     *string `json:"count,omitempty"`
 }
 
 // IsZero 表示模型没有声明任何期望。
 func (e Expects) IsZero() bool {
-	return e.Text == nil && e.Gone == nil && e.URL == nil && e.Value == nil
+	return e.Text == nil && e.Gone == nil && e.URL == nil && e.Value == nil &&
+		e.Element == nil && e.Attribute == nil && e.Count == nil
 }
 
 // Conditions 把期望翻译成后置条件。至少一个，否则报错。
@@ -152,6 +178,15 @@ func (e Expects) Conditions() ([]Condition, error) {
 	}
 	if e.Value != nil {
 		appendCondition(CondValueEquals, *e.Value)
+	}
+	if e.Element != nil {
+		appendCondition(CondElementState, *e.Element)
+	}
+	if e.Attribute != nil {
+		appendCondition(CondAttributeEquals, *e.Attribute)
+	}
+	if e.Count != nil {
+		appendCondition(CondCountEquals, *e.Count)
 	}
 	if len(conditions) == 0 {
 		return nil, errors.New(
@@ -185,7 +220,7 @@ func DeriveGotoStep(index int, intent, rawURL string) (Step, error) {
 	return finishDerivedStep(step)
 }
 
-// DeriveActionStep 派生 click / input 步骤。
+// DeriveActionStep 派生带 target 的动作/断言步骤。
 //
 // 前置条件来自"最近一次观测所在页面的锚点"：前一步的后置条件已保证到达该页，
 // 因此这个前置条件天然可满足，不会出现"条件永远判不过"。
@@ -199,7 +234,7 @@ func DeriveActionStep(
 	observedPageURL string,
 	expects Expects,
 ) (Step, error) {
-	if action != ActionClick && action != ActionInput {
+	if !actionRequiresTarget(action) {
 		return Step{}, fmt.Errorf("derive action step: unsupported action %q", action)
 	}
 	anchor := PageAnchor(observedPageURL)
@@ -223,7 +258,7 @@ func DeriveActionStep(
 		Postconditions: postconditions,
 		TimeoutMS:      DefaultStepTimeoutMS,
 	}
-	if action == ActionInput {
+	if action == ActionInput || action == ActionSelect || action == ActionUploadFile {
 		if value == nil {
 			empty := ""
 			value = &empty
@@ -235,6 +270,17 @@ func DeriveActionStep(
 	// 就是让派生逻辑自身的问题在作者态暴露。
 	step.Submit = submit
 	return finishDerivedStep(step)
+}
+
+func actionRequiresTarget(action Action) bool {
+	switch action {
+	case ActionClick, ActionInput, ActionSelect, ActionCheck, ActionUncheck,
+		ActionScrollIntoView, ActionHover, ActionDismissDialog, ActionUploadFile,
+		ActionAssertElement, ActionAssertAttribute, ActionAssertCount:
+		return true
+	default:
+		return false
+	}
 }
 
 // DeriveAssertTextStep 派生页面级文本断言。

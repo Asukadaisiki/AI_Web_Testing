@@ -73,6 +73,23 @@ func TestSignalsCoerceUnknownKinds(t *testing.T) {
 	}
 }
 
+func TestSignalsKeepBlockerKinds(t *testing.T) {
+	result := contract.ExecutionResult{
+		ExecutionID: "exec_1",
+		Status:      contract.ExecutionFailed,
+		Steps: []contract.StepResult{
+			failedStep(2, contract.SignalBlockedByAuth, "sign in required"),
+		},
+	}
+	signals := Signals("run_1", result)
+	if len(signals) != 1 {
+		t.Fatalf("signals = %#v", signals)
+	}
+	if signals[0].Kind != string(contract.SignalBlockedByAuth) || signals[0].StepIndex != 2 {
+		t.Fatalf("blocker signal was not preserved: %#v", signals[0])
+	}
+}
+
 func TestSignalsForExecutorLevelError(t *testing.T) {
 	result := contract.ExecutionResult{
 		ExecutionID: "exec_1",

@@ -1,6 +1,9 @@
-# 重构计划（2026-09-21）
+# v2 架构演进计划（2026-09-21，2026-09-24 调整）
 
-本目录是 AI Web Testing 平台的结构性重构计划。它不是"重写愿望清单"，而是基于**一次完整实战失败复盘**得出的、可分批执行、每批都能保持系统可运行的迁移方案。
+本目录是 AI Web Testing 平台的结构性演进计划。最初目标是收敛 v1 的契约与执行链路；
+2026-09-24 起，v2 已作为独立单闭环实现存在，本计划调整为：
+
+**在保留 v2 单闭环的前提下，把它演进成通用 Web E2E 能力平台。**
 
 ## 为什么现在重构
 
@@ -14,7 +17,18 @@
 
 如果不做结构收敛，下一轮还会以同样的方式再坏一次。
 
-## 现状体量（实测）
+结构收敛只是第一步。真实站点实验又暴露出另一类问题：纯图标按钮、重复卡片、广告插屏、
+观测截断、token 成本。这些不是电商专属问题，而是普通 Web 页面自动化都会遇到的通用能力缺口。
+因此后续路线从“迁移旧实现”调整为：
+
+```
+契约底座 → 页面世界模型 → 通用定位语义 → 通用动作代数 → 规划修复循环 → 干扰恢复 → 跨场景基准
+```
+
+## 历史诊断体量（v1 复盘）
+
+下表保留的是最初复盘旧实现时的体量数据，用来解释为什么不能继续在 v1 形态上叠功能。
+当前 v2 已经是新的独立仓库结构，实际目录为 `backend/`、`worker/`、`web/`。
 
 | 部分 | 文件数 | 行数 |
 |---|---|---|
@@ -36,10 +50,10 @@
 | 文档 | 内容 |
 |---|---|
 | [01-diagnosis.md](01-diagnosis.md) | 诊断：用本次 6 个缺陷的复盘，定位 3 个结构性根因（含文件与函数级证据） |
-| [02-target-architecture.md](02-target-architecture.md) | 目标架构：限界上下文、模块边界、依赖方向、单一定义点 |
+| [02-target-architecture.md](02-target-architecture.md) | 目标架构：通用 Web E2E 分层、页面世界模型、通用定位语义与动作代数 |
 | [03-contract-redesign.md](03-contract-redesign.md) | 数据契约重做：一份 schema、一个校验器、工件与落库形态统一、条件阶段模型 |
 | [04-naming-and-boundaries.md](04-naming-and-boundaries.md) | 命名与分类：重命名对照表、包/模块重新划分、目录树目标形态 |
-| [05-migration-phases.md](05-migration-phases.md) | 分阶段迁移（strangler）：每阶段目标、步骤、验收门禁、回滚 |
+| [05-migration-phases.md](05-migration-phases.md) | 分阶段演进：P0 基线冻结、Observation v2、TargetSpec v2、Action/Condition v2、Planner v2、Blocker、跨场景基准 |
 | [06-test-strategy.md](06-test-strategy.md) | 测试策略：能提前抓住这 6 个缺陷的测试形态，以及"禁止绕过契约"的硬规则 |
 | [07-deletion-list.md](07-deletion-list.md) | 删除与合并清单：可减掉的代码（含行数估算）与风险 |
 | [08-open-decisions.md](08-open-decisions.md) | 需要项目所有者拍板的决策点 |
@@ -55,15 +69,19 @@
 ## 非目标
 
 - 不引入新框架、不引入消息队列/微服务、不做分布式改造。
-- 不改产品范围（仍然只做"结构化 DSL + 确定性执行 + 结构化报告"）。
-- 不在重构期新增 profile、新增条件类型、新增工具。
+- 不做行业专用 DSL；电商、SaaS、后台、内容站都必须使用同一套 Web 能力。
+- 不让模型手写 CSS/XPath 作为常规路径。
+- 不把真实站点 canary 作为本地必过门禁；本地必过门禁必须依赖离线 fixture。
 - 不追求一次性达到目标形态：允许中间态存在，但不允许中间态破坏"每阶段可运行"。
 
-## 当前工作区状态（重要）
+## 当前 v2 工作区状态（重要）
 
-本次会话为打通 E2E 已经改动了若干文件，**这些改动尚未提交**，重构计划必须把它们当作既有事实：
+当前 v2 是独立单闭环实现，代码目录为：
 
-- 已改：`backend-go/internal/{dsl,taskplan,execution,harness,agentservice,planning,integration}`、`browser-worker/src/browser_worker/{exploration,runners,contracts}`、`browser-worker/tests`、`cmd/migrate`、`docs/bug-log.md`
-- 临时文件（计划外，需要清理）：`backend-go/cmd/tmp-execute-generation/`、`_mk_draft50.py`、`_draft50.json`、`_gen50.json`、`_batch107_report.json`、`_flow*.json`、`_page_products.json`、`_ev*.json`、`_plan_dump.json`、`_steps_dump.json`、`_smoke_dsl.json`、`_probe_real.py`、`_real_probe.json`、`_migrate_dump.txt`、`_case59_dsl.json`
+- `backend/`：Go 控制面、规划器、契约、报告、回灌、API、SQLite store。
+- `worker/`：Python Playwright 执行器、观测、定位、动作、条件、runner。
+- `web/`：React 前端四个页面。
+- `fixtures/`：契约 fixture、脚本模型、静态测试站点。
 
-建议：**先把"打通 E2E 的最小修复集"整理成一次提交并冻结**，再开始阶段 0，避免重构与在途修复互相污染。
+P0 的第一件事是冻结当前 v2 基线：除规划文档外，工作区不应有非预期改动；离线门禁
+`python run_tests.py` 必须作为后续阶段的共同回归入口。

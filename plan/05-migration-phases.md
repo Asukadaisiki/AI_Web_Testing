@@ -1,209 +1,330 @@
-# 05 分阶段迁移
+# 05 分阶段演进
+
+本文件替代原来的“旧系统迁移阶段”。当前 v2 已经是独立单闭环实现，后续重点不再是
+搬迁 v1 代码，而是把 v2 演进成**通用 Web E2E 能力平台**。
 
 原则：
 
-1. **每个阶段结束系统都必须可运行**（三条服务起得来、离线链路测试绿、E2E 能跑）。
-2. **每阶段都有可执行的验收门禁**，门禁不过不进入下一阶段。
-3. **不做大爆炸切换**：新形态与旧形态双写/双读一个版本周期，再删旧的。
-4. **删除动作分散在各阶段内**，不集中到最后。
+1. **领域不进核心**：不做电商专用能力，电商只作为验收场景之一。
+2. **每阶段结束系统都必须可运行**：三条服务起得来，离线门禁绿，核心闭环不退化。
+3. **契约先行**：任何新增观测字段、定位语义、动作、条件都先改 `CONTRACT.md` 与一致性 fixture。
+4. **模型不写 selector**：即使补 alias / scope，也必须由系统接地并验证唯一命中。
+5. **失败可回灌**：新增能力必须让失败信号更结构化，而不是只让执行“看起来更能点”。
 
 阶段总览：
 
 | 阶段 | 主题 | 预计工作量 | 是否改变行为 |
 |---|---|---|---|
-| P0 | 冻结与可信门禁 | 0.5 天 | 否 |
-| P1 | 契约收敛（schema + 单校验器） | 3~5 天 | 否（等价重构） |
-| P2 | 权威形态统一（工件化） | 3~4 天 | 是（删除回退链） |
-| P3 | profile 删除（v1/legacy） | 1~2 天 | 是（删除能力） |
-| P4 | Go 模块与命名重构 | 3~4 天 | 否 |
-| P5 | Python worker 重构 | 3~4 天 | 否 |
-| P6 | 前端与文档对齐 | 1~2 天 | 是（编辑器写工件） |
+| P0 | v2 基线冻结与可信门禁 | 0.5~1 天 | 否 |
+| P1 | Observation v2：页面世界模型 | 3~5 天 | 是 |
+| P2 | TargetSpec v2：scope 与 alias 定位 | 3~5 天 | 是 |
+| P3 | Action/Condition v2：通用动作代数 | 4~6 天 | 是 |
+| P4 | Planner v2：探索、压缩、修复循环 | 4~6 天 | 是 |
+| P5 | Blocker 恢复层：弹层/广告/遮挡 | 2~4 天 | 是 |
+| P6 | 跨场景基准矩阵与文档对齐 | 2~4 天 | 是 |
 
 ---
 
-## P0 冻结与可信门禁
+## P0 v2 基线冻结与可信门禁
 
-**目标**：在重构开始前，先把"什么叫做绿"定义清楚，并把在途修复冻结成一次提交。
-
-**动作**
-
-1. 把本次为打通 E2E 的修复整理成**一次提交**（建议 `fix: unblock agentic research e2e execution path`），确认离线门禁全绿后再提交。
-2. 删除临时产物：`backend-go/cmd/tmp-execute-generation/`、`_mk_draft50.py`、`_draft50.json`、`_gen50.json`、`_batch107_report.json`、`_flow*.json`、`_page_products.json`、`_ev*.json`、`_plan_dump.json`、`_steps_dump.json`、`_smoke_dsl.json`、`_probe_real.py`、`_real_probe.json`、`_migrate_dump.txt`、`_case59_dsl.json`。
-3. 固化门禁脚本（`make gate` 或 `scripts/gate.ps1`）：
-   - Go：`gofmt -l`、`go build ./...`、`go vet ./...`、`go test -count=1 ./...`（需 `TEST_DATABASE_URL`）
-   - Python：`compileall`、`unittest discover`（含 `RUN_BROWSER_INTEGRATION=1` 的 Chromium 用例）
-   - 前端：`npm test`、`npm run build`
-   - 契约：`make contracts && git diff --exit-code`（P1 后生效）
-4. 记录一次基线：把当前 Go/Python/前端测试数量、E2E 结果写入 `refactor-plan/baseline.md`。
-
-**验收门禁**：`make gate` 全绿；工作区无未跟踪临时文件。
-
-**风险**：低。**回滚**：不需要。
-
----
-
-## P1 契约收敛（最高优先级）
-
-**目标**：把"case 长什么样"从 14 个定义点收敛到 1 个 schema + 1 个校验器，并让漂移不可能发生。
+**目标**：先把当前 v2 的可用状态钉住，形成后续演进的回归基线。P0 不新增能力、不改契约语义、
+不修架构，只回答一句话：**现在什么算绿，后续不能退化什么。**
 
 **动作**
 
-1. 写 `contracts/case.v3.schema.json`：合并现有三套 case 契约，包含
-   - action 枚举与每种 action 的必填字段、是否要求 target binding；
-   - condition 类型表 + **阶段表**（pre/post 是否允许，见 03 §5.1）；
-   - step 字段（含 `evidence` 子对象）；
-   - 明确 `draft` / `executable` 两阶段的差异（旧拼写容忍清单）。
-2. 写生成器（Go + Python + 提示词片段），产物入 `contracts/generated/`，CI 校验不可手改。
-3. 实现唯一入口 `casegen.Validate(payload, phase)`：
-   - 计划条件保留规则只写一次（草稿与可执行共用）；
-   - 条件阶段规则读生成的表，不再散落 `if type ==`；
-   - 删除 `validateConditionPreservation` / `validateCompiledConditions` 双份实现。
-4. 提示词中所有取值清单改由生成器注入；删除手写清单。
-5. 新增**跨语言契约一致性测试**：`contracts/fixtures/case/*.json`（每个 fixture 标注期望结论与错误码），Go 与 Python 各跑一遍并比对结论。
-6. 把历史 golden fixture 全部纳入该测试集（含 `dsl_research_v2_contract.json`）。
+1. 确认当前仓库状态：
+   - 当前分支为 `v2`，跟踪 `origin/v2`。
+   - 工作区无未提交的非文档改动。
+   - `test.config.json` 是唯一测试入口配置。
+2. 固化离线门禁：
+   - `python3 run_tests.py --list` 能列出全部层（若本机提供 `python` 别名，也可用 `python`）。
+   - `python3 run_tests.py` 覆盖 Go 契约、Python 契约、Go 闭环、Python 真执行器、Web build。
+   - 门禁不依赖真实模型、不依赖外网目标站点。
+3. 固化本地通用能力基线：
+   - 本地 fixture 能跑通：搜索/筛选、进入详情、改数量、加购、进入购物车、断言数量。
+   - `input(submit=true)` 的回车提交行为有测试。
+   - 每步证据必须有 screenshot、URL before/after、console/network。
+4. 固化真实站点能力边界：
+   - 记录 `automationexercise.com` 已通过的路径：给定搜索结果 URL → 详情页 → `Add to cart` 可见。
+   - 记录未解决 blocker：纯图标 `type=button` 搜索提交、重复商品卡片定位、Google vignette 插屏、观测 token 成本。
+   - 这些 blocker 必须以测试或实验记录固定，后续修复时要把对应断言翻转。
+5. 固化失败回灌基线：
+   - 假执行器/脚本模型覆盖：执行失败 → 报告信号 → feedback candidate → 同 session 下一轮。
+   - 明确真实站点失败回灌尚未验收，作为 P6 前必须补的 canary。
+6. 记录基线文档：
+   - 在 `docs/execution-log.md` 或新建 `plan/10-baseline.md` 记录：命令、测试结果、当前能力边界、真实站点样本。
+   - 基线只记录事实，不写“应该能”的推测。
 
 **验收门禁**
 
-- `grep -rn "func Validate" backend-go/internal` 可人工审阅完毕（目标 ≤ 3 个）。
-- 跨语言一致性测试用例数 ≥ 30，全部通过。
-- `grep -rn "value_equals" .` 为空。
-- 条件类型集合在全仓库只出现于 schema 与生成物。
-- 行为等价证明：P1 前后跑同一批历史 fixture，结论完全一致（新增阶段规则导致的差异必须逐条记录并解释）。
+- `python3 run_tests.py` 退出码为 0（若本机提供 `python` 别名，也可用 `python`）。
+- `git status --short` 中除本次规划文档外无非预期改动。
+- `worker/tests/test_runner_local.py::RunnerEndToEndTest.test_full_flow_passes_with_evidence` 覆盖完整本地购物车 happy path。
+- `worker/tests/test_capability_gaps.py` 仍固定 F1/F2/F5/D12 当前边界，且注释说明哪些断言修复后需要翻转。
+- `backend/internal/agentruntime/loop_test.go::TestFailureIsFedBackAsCandidates` 与 `backend/internal/api/server_test.go::TestFeedbackConfirmStartsARunInTheSameSession` 继续证明半自动回灌链路。
+- `plan/09-experiment-log.md` 中真实站点结论保持可追溯：已通过路径、未解决 blocker、成本数字都能对应到实验记录。
+- P0 不允许修改 `CONTRACT.md` 的动作/条件语义；如发现必须改契约，升级为 P1。
 
-**风险**：中。生成器本身是新代码，可能引入"生成物与手写逻辑不一致"。**缓解**：先只生成**常量表与类型**，业务规则仍手写在单校验器里；生成器成熟后再扩大范围。
-
-**回滚**：保留旧校验器一个版本，通过 feature flag 切换入口；一致性测试发现差异即回退 flag。
-
----
-
-## P2 权威形态统一（工件化）
-
-**目标**：消灭 BUG-212 那一类"同一对象两副身子"的问题。
-
-**动作**
-
-1. 建 `case_artifacts(id, content_hash, payload, created_at)`，不可变、按 hash 去重。
-2. 生成器改为写工件；`test_cases` 增加 `artifact_id` 并**双写** `dsl`（一个版本周期）。
-3. 执行队列改为按 `artifact_id` 取 payload；**删除 `COALESCE(j.dsl_canonical_json, j.dsl_snapshot::text, tc.dsl::text)`**。
-4. 删除 `validatePersistedCaseBindings` / `validatePersistedCaseMatchesBinding`（不再存在"落库形态 vs 工件形态"的比较需求）。
-5. 审批记录独立成 `case_approvals(artifact_id, plan_id, plan_version, actor, created_at)`，`execute_dsl` 只接受已审批的 artifact_id。
-6. 前端用例编辑器改走同一编译器产出工件（可与 P6 合并）。
-
-**验收门禁**
-
-- `grep -rn "COALESCE" backend-go/internal/execution` 为空。
-- 新增集成测试：从"生成 → 审批 → 入队 → worker 领取"全链路取到的 payload **字节等于**工件 payload。
-- 手工验证：直接改 `test_cases` 行不再影响执行结果（因为它已不参与）。
-
-**风险**：中高（涉及数据迁移）。**回滚**：双写期内可回退读取路径；迁移脚本可逆（工件表只增不减）。
+**风险**：低。
+**回滚**：仅文档和门禁脚本变更，可直接 revert。
 
 ---
 
-## P3 profile 删除
+## P1 Observation v2：页面世界模型
 
-**目标**：删掉没有产品价值的并行实现，直接减少代码量与分支。
+**目标**：把观测从扁平元素表升级为页面世界模型，为跨行业定位打基础。
 
 **动作**
 
-1. 确认 `legacy-v1` / `research-v1` 无生产数据（当前 `execution_batches` 为空、research 结果为试点产物）→ 归档 `research/results/*` 后删除读取路径。
-2. 删除 Go：`validateLegacyCase`、`validateResearchCase`、v1 相关常量与迁移分支。
-3. 删除 Python：`contracts/dsl.py`、`contracts/action_ir.py`、v1 runner 分支。
-4. 删除 v1 相关 fixture 与测试（保留 1 个"历史 payload 必须被明确拒绝"的负例）。
-5. 数据库：删除仅服务 v1 的列/表（`page_state` 相关、v1 snapshot 列）。
+1. 扩展 `Observation` 契约：
+   - 元素层级与父容器引用；
+   - 结构节点：card/list item/table row/form/dialog/frame；
+   - 邻近文本与 own/full text；
+   - 几何信息：bounding box、viewport 可见性、z-index/遮挡摘要；
+   - 表单信息：label、控件类型、submit 候选、是否可 Enter 提交；
+   - 候选属性：`aria-label`、`title`、`placeholder`、`id`、`name`、`data-testid`。
+2. 更新 worker `observer`：
+   - 收录可作为 scope 的容器节点；
+   - 保留当前“locator 必须观测时唯一验证”的规则；
+   - 给结构节点与交互节点建立关系。
+3. 更新 Go `PageView`：
+   - 模型看到的是目标相关摘要，不是完整 Observation；
+   - 解析器仍使用完整 Observation。
+4. 增加 fixture：
+   - 重复卡片；
+   - 表格行；
+   - 表单；
+   - 弹层；
+   - iframe 最小页。
 
 **验收门禁**
 
-- `grep -rn "research-v1\|legacy-v1" backend-go browser-worker/src` 为空。
-- Go/Python 测试数下降但全绿；E2E 仍能跑通。
-- 代码量：Go 生产代码 ≤ 24,000 行。
+- 契约一致性测试覆盖 Observation v2 的新增字段。
+- fixture 中 `Blue Top` 文本、卡片容器、卡片内 `View Product` 能在同一个结构关系里表达。
+- 旧 case 继续能执行；旧扁平定位器语义不退化。
+- 观测结果大小有上限，超限时返回 `truncated` 与摘要策略说明。
 
-**风险**：低（无数据）。**回滚**：git revert。
+**风险**：中。观测字段扩展容易推高 token。
+**缓解**：完整 Observation 留给解析器，给模型的 PageView 单独压缩。
 
 ---
 
-## P4 Go 模块与命名重构
+## P2 TargetSpec v2：scope 与 alias 定位
 
-**目标**：20 个包 → 4 上下文 + 3 内核；拆开 7 个千行文件；执行 04 的重命名表。
+**目标**：解决通用 Web 中最常见的定位问题：同名重复元素、纯图标控件、表格行内操作。
 
 **动作**
 
-1. 按 04 §2.1 移动包（先移动、后重命名、最后拆文件，三步分开提交）。
-2. 依赖方向由 CI 检查：新增 `scripts/check-deps`（解析 import 图，禁止跨上下文直接 import 内部实现）。
-3. 拆巨型文件（04 §3 表），每次只拆一个文件并保持测试绿。
-4. 统一命名（`semantic_target`→`target` 等），同步改 DB 列名与迁移。
+1. 新增 `TargetSpec`：
+   - `object`：目标元素语义，如 role/text/name；
+   - `scope`：包含某文本的容器、表格行、表单、dialog、frame；
+   - `relation`：`within`、`near`、`label_for`、`row_contains`；
+   - `locator`：最终已验证 locator；
+   - `grounding`：观测 lineage。
+2. 更新 `planner.resolve`：
+   - 先解析 scope，再在 scope 内解析 object；
+   - alias 面参与评分，但不能直接让模型写 CSS；
+   - 同分仍返回 `target_ambiguous`。
+3. 更新 worker `locators`：
+   - 支持 scoped locator 的执行期解析；
+   - 对 alias 生成的 locator 做唯一验证。
+4. 更新工具协议：
+   - `click/input` 可带结构化 target hint；
+   - 错误返回候选时包含 scope 解释。
 
 **验收门禁**
 
-- `internal/` 顶层包 ≤ 10。
-- 无 > 800 行文件。
-- 依赖检查脚本通过。
-- `make gate` 全绿。
+- 能表达并执行“包含 Blue Top 的卡片里的 View Product”。
+- 能表达并执行“搜索表单里的图标提交按钮”，即使按钮没有自然语言文本。
+- 对三个同名按钮仍拒绝裸 hint，必须要求 scope。
+- 不允许模型直接输出 CSS/XPath 作为常规路径。
 
-**风险**：中（大范围移动容易冲突）。**缓解**：移动与逻辑修改**不放在同一个提交**里。
-
-**回滚**：逐包提交，可单包回退。
+**风险**：中高。定位语义扩展会影响 case 形态。
+**缓解**：先保留现有 `Target`，新增 `TargetSpec` 后双读一个阶段。
 
 ---
 
-## P5 Python worker 重构
+## P3 Action/Condition v2：通用动作代数
 
-**目标**：9 模块 → 6 模块；拆开 3 个巨型文件；合并契约家族。
+**目标**：把当前 5 个动作扩展到普通 Web 应用所需的最小通用集合。
 
 **动作**
 
-1. 合并 `contracts/dsl.py` + `action_ir.py` + `action_ir_v2.py` → 生成物 `contracts/case.py`。
-2. 拆 `exploration/page_explorer.py` → `explorer.py` / `collector.py` / `a11y_name.py`；**可访问名计算收敛到 `a11y_name.py`**（BUG-211 的根治点，需为私有区字形补测试）。
-3. 拆 `runners/playwright_runner.py` → `runner.py` / `conditions.py` / `actions.py`；条件评估唯一化并显式接收 `phase`。
-4. 合并或删除 `scripts/research_e2e.py`（2759 行）与 `run_agentic_e2e.py` 的重复部分，驱动逻辑进 `e2e/` 包。
-5. 契约形状校验改由生成模型承担，删除手写业务规则。
+1. 新增动作：
+   - `select`：下拉/combobox；
+   - `check` / `uncheck`：checkbox/radio；
+   - `scroll_into_view`：长页面与懒加载；
+   - `hover`：hover 菜单；
+   - `dismiss_dialog`：关闭弹层；
+   - `switch_frame` / `switch_tab`：frame 和新窗口；
+   - `upload_file`：文件上传。
+2. 新增断言：
+   - `assert_element`：可见、不可见、enabled、disabled；
+   - `assert_attribute`：属性/文本/值；
+   - `assert_count`：列表、搜索结果、表格行数量；
+   - `assert_network`：可选，用于强业务回调验证。
+3. 每个动作补：
+   - Go 契约；
+   - Python 执行器；
+   - 工具 schema；
+   - 派生 pre/post 规则；
+   - 跨语言 fixture。
 
 **验收门禁**
 
-- Python 无 > 800 行文件。
-- 契约一致性测试（P1 建立）仍全绿。
-- Chromium 集成测试（`RUN_BROWSER_INTEGRATION=1`）全绿。
-- 代码量：Python ≤ 15,000 行。
+- SaaS CRUD fixture 能覆盖表单、下拉、确认弹窗。
+- 内容站 fixture 能覆盖搜索、分页、详情断言。
+- 后台表格 fixture 能覆盖筛选、行内操作、删除确认。
+- 所有新增动作必须经过干跑验证后才能进入审批。
 
-**风险**：中（runner 是执行正确性的关键路径）。**缓解**：拆分为纯移动，行为改动单独提交；保留 `tests/test_playwright_runner.py` 作为行为锚。
+**风险**：中。动作越多，契约漂移风险越大。
+**缓解**：一类动作一个 PR，先 fixture 后实现。
 
 ---
 
-## P6 前端与文档对齐
+## P4 Planner v2：探索、压缩、修复循环
 
-**目标**：前端跟随契约变化；文档与代码一致。
+**目标**：让模型在有限 token 内做稳定规划，并在失败后能修复而不是反复烧钱。
 
 **动作**
 
-1. 用例编辑器写工件（走同一编译器），删除旧字段处理。
-2. `services/` 按上下文分组。
-3. 重写 `docs/architecture-guide.md` 与 DSL 规范，使其与新契约一致；删除已失效的 profile 文档。
-4. 把本目录的 `01`~`08` 归档为"重构完成报告"，记录实际与计划的差异。
+1. PageView 改为目标相关视图：
+   - 保留与目标词、可交互元素、scope 候选相关的信息；
+   - 支持按需展开候选；
+   - 明确标注 `truncated` 与省略规则。
+2. 干跑失败返回结构化修复上下文：
+   - 失败步骤；
+   - 当前 URL；
+   - 未满足条件；
+   - blocker；
+   - 可替代候选。
+3. 规划器支持修复策略：
+   - `drop_last_step` 重建尾部；
+   - 重新观测；
+   - 缩小 scope；
+   - 改用 alias；
+   - 请求用户补充必需信息。
+4. 成本控制：
+   - 每轮观测 payload 预算；
+   - 每 run 工具调用预算；
+   - 超预算失败信号可回灌。
 
 **验收门禁**
 
-- `npm test`、`npm run build`、Playwright smoke 全绿。
-- 文档中提到的每个契约名都能在 `contracts/` 找到。
-- 端到端手工验收：新用户按 `docs/` 从零跑通一次"目标 → 报告"。
+- 同一真实目标的规划 token 明显低于 P0 基线，且不得牺牲通过率。
+- 干跑失败事件必须包含足够信息，让模型能做一次有差异的修复尝试。
+- 禁止模型重复同一个失败 hint 超过一次。
+
+**风险**：中。过度压缩会让模型缺上下文。
+**缓解**：完整 Observation 不丢，只压缩给模型的 PageView。
+
+---
+
+## P5 Blocker + Grounding Recovery：弹层/广告/遮挡/低语义控件
+
+**目标**：把真实 Web 的干扰归为通用 blocker，并把低语义控件编译成可验证 candidate，
+而不是让每个场景单独处理或让模型裸写 selector。
+
+**动作**
+
+1. 识别 blocker：
+   - cookie banner；
+   - modal/dialog；
+   - interstitial；
+   - sticky header 遮挡；
+   - auth wall；
+   - captcha；
+   - loading overlay。
+2. 增加安全恢复动作：
+   - 关闭明显可关闭弹层；
+   - 等待 loading 消失；
+   - 滚动目标到可点击区域；
+   - 遇到 auth/captcha 时结构化暂停。
+3. 执行结果记录恢复过程：
+   - blocker 类型；
+   - 尝试过的恢复动作；
+   - 是否恢复成功；
+   - 恢复失败时给回灌候选。
+4. 增加 candidate-first 接地机制：
+   - Observation 输出 `action_candidates`，包含 element/form submit/dialog dismiss/navigation/assertion 候选；
+   - 每个 candidate 绑定 `candidate_id`、目标 ref、关系、属性 alias 和已验证 locator；
+   - 模型可选择 candidate，但不能写 CSS/XPath；
+   - 控制面校验 candidate 来自最近一次观测，且 action 类型兼容；
+   - 对 `type=button` + JS 的图标提交按钮，优先通过 `form_submit_candidate` 接地。
+5. 增加失败签名记忆：
+   - 同一 hint/action/page_state 失败后必须换策略；
+   - 同一 candidate 执行失败后不得在页面未变化时重试；
+   - `input(submit=true)` 不生效时必须改用 form submit candidate 或已验证按钮；
+   - 干跑同根因失败两次后停止自动修复，返回结构化失败。
+
+**验收门禁**
+
+- Google vignette / cookie banner fixture 能被识别。
+- 可安全关闭的弹层不导致主步骤失败。
+- 登录墙和验证码不绕过，必须进入 `awaiting_input` 或明确失败信号。
+- 纯图标 `type=button` 搜索提交 fixture 能通过 candidate 机制稳定接地并执行。
+- 真实站点 canary 至少要证明：模型不写 selector，也能通过系统给出的 candidate 选择搜索提交按钮。
+
+**风险**：中高。自动关闭弹层可能误点业务按钮。
+**缓解**：只对高置信 UI 执行恢复；低置信时返回 blocker，不强点。candidate 只能来自最近一次
+Observation，且最终动作仍必须作用在已验证 locator 上。
+
+---
+
+## P6 跨场景基准矩阵与文档对齐
+
+**目标**：用多行业 fixture 和少量真实站点 canary 证明平台通用性。
+
+**动作**
+
+1. 建立 benchmark 目录：
+   - `fixtures/sites/ecommerce`；
+   - `fixtures/sites/saas-crud`；
+   - `fixtures/sites/content-search`；
+   - `fixtures/sites/admin-table`；
+   - `fixtures/sites/frame-dialog`。
+2. 每类 fixture 至少覆盖一条自然语言目标到报告的完整闭环。
+3. 保留少量真实站点 canary：
+   - 电商真实站点；
+   - 一个公开内容站；
+   - 一个可控 demo SaaS。
+4. 更新 README、CONTRACT、plan 文档。
+5. 前端报告页明确区分：
+   - run 是否走完整闭环；
+   - case 是否通过；
+   - 是否有 blocker；
+   - 是否生成回灌候选。
+
+**验收门禁**
+
+- 离线 benchmark 全绿。
+- 至少 2 个真实站点 canary 有记录，失败也必须有结构化报告。
+- 新用户按 README 可以从零跑通本地 benchmark。
+- 文档中不再把电商当作唯一目标场景。
+
+**风险**：中。真实站点不稳定。
+**缓解**：真实站点只做 canary，不作为本地必过门禁；必过门禁只依赖离线 fixture。
 
 ---
 
 ## 进度与度量
 
-每个阶段结束时记录到 `refactor-plan/progress.md`：
+每个阶段结束时记录到 `plan/10-baseline.md` 或 `docs/execution-log.md`：
 
-| 指标 | 基线（P0） | 目标 |
+| 指标 | P0 基线 | 目标 |
 |---|---|---|
-| Go 生产行数 | 29,458 | ≤ 18,000 |
-| Python 行数 | 22,660 | ≤ 14,000 |
-| > 800 行文件数 | 21 | 0 |
-| case 契约定义点 | 14 | 1 |
-| profile 数 | 3 | 1 |
-| `internal/` 顶层包 | 20 | ≤ 10 |
-| 门禁耗时 | 待测 | ≤ 10 分钟 |
+| 离线门禁耗时 | 待测 | ≤ 10 分钟 |
+| 本地 benchmark 场景数 | 1（电商 fixture） | ≥ 5 |
+| 真实站点 canary 数 | 1 | ≥ 2 |
+| 平均规划 token | 待测 | P4 后下降 |
+| 目标定位失败类型 | F1/F2 已知 | 可结构化解释 |
+| blocker 类型 | 未建模 | ≥ 5 类 |
+| 契约定义点 | Go/Python 镜像 | 单一来源 + 一致性 fixture |
 
 ## 明确禁止的做法
 
-- 禁止"边重构边加功能"：重构期内只允许修 bug，不允许新增 profile/条件类型/工具。
-- 禁止"重写而不是迁移"：不允许新建一套并行实现然后切换（这正是当前混乱的来源）。
-- 禁止在没有跨语言一致性测试的情况下修改任何契约。
-- 禁止为了让某个测试通过而放宽契约；契约变更必须同时更新 schema、生成物、fixture 与文档。
+- 禁止新增行业专用 action，例如 `add_to_cart`、`create_ticket`、`publish_article`。
+- 禁止让模型手写 CSS/XPath 作为常规方案。
+- 禁止为了绕过 blocker 直接点击页面坐标。
+- 禁止只在真实站点上验证新能力；必须先有离线 fixture。
+- 禁止新增契约字段但不补 Go/Python 一致性测试。

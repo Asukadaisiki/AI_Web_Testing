@@ -99,6 +99,71 @@ async def evaluate_condition(
             else:
                 satisfied = actual == condition.value
                 detail = None if satisfied else f"target value is {actual!r}, expected {condition.value!r}"
+    elif condition.type == "element_state":
+        if target_locator is None:
+            satisfied = False
+            detail = "condition element_state requires a step target"
+        else:
+            try:
+                state = condition.value.strip().lower()
+                if state == "visible":
+                    satisfied = await target_locator.is_visible()
+                elif state in ("hidden", "not_visible"):
+                    satisfied = not await target_locator.is_visible()
+                elif state == "enabled":
+                    satisfied = await target_locator.is_enabled()
+                elif state == "disabled":
+                    satisfied = not await target_locator.is_enabled()
+                elif state == "checked":
+                    satisfied = await target_locator.is_checked()
+                elif state == "unchecked":
+                    satisfied = not await target_locator.is_checked()
+                else:
+                    detail = "element_state must be visible, hidden, enabled, disabled, checked, or unchecked"
+                if detail is None and not satisfied:
+                    detail = f"target state is not {condition.value!r}"
+            except Exception as exc:
+                satisfied = False
+                detail = f"could not read target state: {exc}"
+    elif condition.type == "attribute_equals":
+        if target_locator is None:
+            satisfied = False
+            detail = "condition attribute_equals requires a step target"
+        else:
+            if "=" not in condition.value:
+                satisfied = False
+                detail = "attribute_equals value must be attr=value"
+            else:
+                attr, expected = condition.value.split("=", 1)
+                attr = attr.strip()
+                expected = expected.strip()
+                try:
+                    actual = await target_locator.get_attribute(attr, timeout=1000)
+                except Exception as exc:
+                    satisfied = False
+                    detail = f"could not read target attribute {attr!r}: {exc}"
+                else:
+                    satisfied = actual == expected
+                    detail = None if satisfied else f"target attribute {attr!r} is {actual!r}, expected {expected!r}"
+    elif condition.type == "count_equals":
+        if target_locator is None:
+            satisfied = False
+            detail = "condition count_equals requires a step target"
+        else:
+            try:
+                expected = int(condition.value)
+            except ValueError:
+                satisfied = False
+                detail = "count_equals value must be an integer"
+            else:
+                try:
+                    actual = await target_locator.count()
+                except Exception as exc:
+                    satisfied = False
+                    detail = f"could not count target locator: {exc}"
+                else:
+                    satisfied = actual == expected
+                    detail = None if satisfied else f"target count is {actual}, expected {expected}"
     else:  # pragma: no cover - pydantic 已限制取值
         raise ConditionPhaseError(f"unknown condition type: {condition.type!r}")
 

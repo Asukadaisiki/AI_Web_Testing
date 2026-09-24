@@ -38,9 +38,9 @@
 ```jsonc
 {
   "index": 0,
-  "action": "goto",              // goto | click | input | assert_text | assert_url
+  "action": "goto",              // 见下方 action 表
   "intent": "打开商品列表",       // 人类可读，来自模型的自然语言
-  "value": "https://...",        // goto: 绝对 URL；input: 输入值；assert_text: 期望文本；assert_url: URL 子串；click: null
+  "value": "https://...",        // goto/input/select/upload/assert_* 等动作按表使用
   "submit": false,               // 仅 input 允许；true = 填完之后按回车提交
   "target": {                    // 仅 click / input 需要；必须已接地
     "hint": "Add to cart",
@@ -50,6 +50,11 @@
       "page_state_id": "ps_...",
       "candidate_id": "cand_...",
       "page_url": "https://automationexercise.com/product_details/1"
+    },
+    "spec": {
+      "object": { "role": "link", "text": "View Product" },
+      "scope": { "kind": "card", "contains_text": "Blue Top" },
+      "relation": "within"
     }
   },
   "preconditions":  [ /* Condition[] */ ],
@@ -65,8 +70,13 @@
 | `goto` | 必填，绝对 URL | 禁止 | **必须为空**（首步在 `about:blank` 上，任何前置条件都不可满足） | ≥1 |
 | `click` | 禁止 | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
 | `input` | 必填（可为空串） | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
+| `select` | 必填（option label/value） | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
+| `check` / `uncheck` | 禁止 | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
+| `scroll_into_view` / `hover` / `dismiss_dialog` | 禁止 | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
+| `upload_file` | 必填（本地文件路径） | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
 | `assert_text` | 必填 | 禁止 | ≥1（只能状态事实） | ≥1 |
 | `assert_url` | 必填 | 禁止 | ≥1（只能状态事实） | ≥1 |
+| `assert_element` / `assert_attribute` / `assert_count` | 禁止 | 必填且已接地 | ≥1（只能状态事实） | ≥1 |
 
 `steps[0].action != "goto"` 一律拒绝：执行器不为首步做隐式预导航。
 
@@ -114,10 +124,14 @@ domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原�
 | `text_gone` | ✅ | ✅ | 页面上不存在可见的、文本包含 `value` 的元素 |
 | `url_changes` | ❌ | ✅ | 当前 URL 与执行本步前不同 |
 | `value_equals` | ❌ | ✅ | 本步 target 元素的 `value` 等于 `value` |
+| `element_state` | ✅ | ✅ | 本步 target 元素状态为 `visible` / `hidden` / `enabled` / `disabled` / `checked` / `unchecked` |
+| `attribute_equals` | ❌ | ✅ | 本步 target 元素属性满足 `attr=value` |
+| `count_equals` | ❌ | ✅ | 本步 target locator 命中数量等于整数 `value` |
 
 规则：
 
-- **pre 只能是状态事实**（`url_contains` / `text_visible` / `text_gone`）。`url_changes` / `value_equals` 是变化事实，动作前没有真值，作为 pre 一律拒绝。
+- **pre 只能是状态事实**（`url_contains` / `text_visible` / `text_gone` / `element_state`）。
+  `url_changes` / `value_equals` / `attribute_equals` / `count_equals` 是变化或目标断言事实，作为 pre 一律拒绝。
 - 不存在 `element_visible` / `element_gone` / `network_request`：v1 不支持，未在表中即为非法。
 
 ### 2.3 条件派生规则（模型不写条件，Go 派生）
@@ -138,6 +152,9 @@ domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原�
 | `expect_gone: "Loading"` | `{text_gone, "Loading"}` |
 | `expect_url: "/view_cart"` | `{url_contains, "/view_cart"}` |
 | `expect_value: "1"` | `{value_equals, "1"}` |
+| `expect_element: "visible"` | `{element_state, "visible"}` |
+| `expect_attribute: "data-state=ready"` | `{attribute_equals, "data-state=ready"}` |
+| `expect_count: "3"` | `{count_equals, "3"}` |
 | 都没给 | 工具报错：动作步骤必须声明至少一个期望 |
 
 因为 pre 由"最近观测页 URL"派生，而前一步的 postconditions 已保证到达该页，**pre 天然可满足**，不会出现"条件永远判不过"。
@@ -207,6 +224,37 @@ domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原�
       ]
     }
   ],
+  "action_candidates": [
+    {
+      "candidate_id": "act_18",
+      "kind": "form_submit_candidate",
+      "action": "click",
+      "target_ref": "e18",
+      "role": "button",
+      "name": "\uf002",
+      "text": "\uf002",
+      "aliases": ["form submit", "search submit", "submit_search"],
+      "attributes": { "id": "submit_search", "type": "button" },
+      "relations": [
+        { "type": "form_submit_candidate", "ref": "s12" },
+        { "type": "near_control", "ref": "e3", "label": "Search Product" }
+      ],
+      "locator": { "kind": "css", "css": "#submit_search", "match_count": 1 },
+      "confidence": "high"
+    }
+  ],
+  "blockers": [
+    {
+      "kind": "cookie_banner",
+      "ref": "cookie-consent",
+      "confidence": "high",
+      "covers_target_ref": null,
+      "dismiss_candidates": [
+        { "kind": "css", "css": "#accept-cookies", "match_count": 1 }
+      ],
+      "reason": "visible cookie or consent prompt covers content"
+    }
+  ],
   "screenshot_path": "sess_4d1a/obs_7f3a.png"
 }
 ```
@@ -223,7 +271,49 @@ domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原�
 - 若某元素的 `role` 定位器命中数 ≠ 1（例如可访问名含图标字体的私有区字形、或存在同名元素），**不得**输出该定位器，改用下一种；
 - 一个元素一条定位器都验证不出来时，该元素不进入 `elements`。
 
-执行期只使用 case 里已经记录的那一条定位器，不再重新推导。`candidate_id` 形如 `"<element ref>:<locators 下标>"`。
+执行期只使用 case 里已经记录的那一条定位器，不再重新推导。传统语义解析得到的
+`candidate_id` 形如 `"<element ref>:<locators 下标>"`；若模型选择 `action_candidates[]`
+里的候选，则 `candidate_id` 使用该候选自己的稳定 ID。
+
+### 3.2 ActionCandidate 摘要
+
+`action_candidates` 是系统从当前 DOM、表单、弹层和已验证 locator 编译出的可执行候选。
+它解决纯图标按钮、`type=button` + JS 提交、同名控件和弹层关闭控件等低语义目标。
+
+| 字段 | 含义 |
+|---|---|
+| `candidate_id` | 当前观测内稳定候选 ID；模型只能选择它，不能手写 selector |
+| `kind` | `element_candidate` / `form_submit_candidate` / `dialog_dismiss_candidate` / `navigation_candidate` / `assertion_candidate` |
+| `action` | 该候选支持的契约动作，例如 `click` / `input` / `select` |
+| `target_ref` | 候选绑定的 `elements[].ref` |
+| `role` / `name` / `text` | 目标的页面事实摘要 |
+| `aliases` | 从表单关系、label、placeholder、id/name/title/aria-label/data-testid 等事实派生的别名 |
+| `attributes` | 与接地相关的稳定属性摘要 |
+| `relations` | 与 form、control、dialog、scope 等结构的关系 |
+| `locator` | 观测期已唯一验证的最终 locator；控制面用它构建 case，模型不应复述它 |
+| `confidence` | `high` / `medium` / `low` |
+
+控制面收到 `candidate_id` 后必须校验：候选来自最近一次 Observation；候选 `action` 与工具动作兼容；
+`target_ref` 仍存在且可见可用；候选 locator 仍在该元素的已验证 locator 列表中。校验失败返回结构化
+错误，要求重新 `open_page` 或换策略，不允许跨页面复用旧候选。
+
+### 3.3 Blocker 摘要
+
+`blockers` 描述当前页面上的通用阻塞物，只使用页面事实识别：`dialog`/`aria-modal`、固定或粘性遮罩、
+可见 cookie/consent 文案、auth/login 文案、captcha/recaptcha 标记、loading 文案、覆盖 iframe 等。
+这些字段用于规划修复与执行期可达性判断：
+
+| 字段 | 含义 |
+|---|---|
+| `kind` | `dialog` / `overlay` / `interstitial` / `cookie_banner` / `auth_wall` / `captcha` / `loading` |
+| `ref` | blocker 对应元素或结构引用 |
+| `confidence` | `high` / `medium` / `low` |
+| `covers_target_ref` | hit-test 发现遮挡目标时记录目标引用 |
+| `dismiss_candidates` | 可安全尝试的关闭控件候选；仍必须是已验证 locator |
+| `reason` | 命中规则摘要 |
+
+执行器只自动处理低风险通用恢复：等待 loading、滚动后重测、点击明确 close/accept/reject/cancel
+等已验证关闭控件。`auth_wall` 与 `captcha` 不自动绕过，只返回结构化失败。
 
 ---
 
@@ -256,7 +346,10 @@ domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原�
         "console": [ { "level": "error", "text": "..." } ],
         "network": [ { "method": "GET", "url": "...", "status": 200 } ]
       },
-      "error": null
+      "error": null,
+      "blocker": null,
+      "hit_test": null,
+      "recovery": []
     }
   ]
 }
@@ -277,6 +370,10 @@ domcontentloaded 实测 5.0–6.1s，站内跳转 `/products` 实测 6.3s。原�
 `kind` 取值即 §4.1 的信号种类；`message` 是给人看的原因。Go 侧直接把它当作失败信号，
 不再从字符串里猜 kind。
 
+`steps[].blocker` / `steps[].hit_test` / `steps[].recovery` 记录 grounding recovery 过程：
+坐标只用于 `elementFromPoint` 判断“谁挡住了目标”，真正动作仍作用于 case 里已接地的 locator。
+恢复成功时，主步骤可以继续通过；恢复失败时，`steps[].error.kind` 使用 §4.1 的 `blocked_by_*`。
+
 ### 4.1 失败信号
 
 Go 侧从执行结果派生，落 `report_signals` 表：
@@ -288,6 +385,13 @@ Go 侧从执行结果派生，落 `report_signals` 表：
 | `step_timeout` | 单步超时 |
 | `worker_error` | 执行器返回 error 或不可达 |
 | `case_invalid` | case 未通过契约校验（正常情况下不应出现） |
+| `blocked_by_dialog` | 目标被弹窗阻塞 |
+| `blocked_by_overlay` | 目标被遮罩或固定层阻塞 |
+| `blocked_by_interstitial` | 目标被插屏或广告 iframe 阻塞 |
+| `blocked_by_cookie_banner` | 目标被 cookie/consent 横幅阻塞 |
+| `blocked_by_auth` | 目标被登录墙阻塞；不得自动绕过 |
+| `blocked_by_captcha` | 目标被验证码阻塞；不得自动绕过 |
+| `blocked_by_loading` | 目标被加载状态阻塞 |
 
 ---
 
@@ -296,14 +400,16 @@ Go 侧从执行结果派生，落 `report_signals` 表：
 | 工具 | 参数 | 行为 |
 |---|---|---|
 | `open_page` | `url`, `intent` | 真实导航并观测；记录 goto 步骤 |
-| `click` | `hint`, `intent`, `expect_text?`, `expect_gone?`, `expect_url?`, `expect_value?` | 在最近观测中解析 `hint`；**必须唯一命中**；记录 click 步骤 |
-| `input` | `hint`, `value`, `intent`, `expect_*`, `submit?` | 同上，另填 `value`；`submit: true` 表示填完按回车提交 |
+| `click` | `hint?`, `candidate_id?`, `target?`, `intent`, `expect_text?`, `expect_gone?`, `expect_url?`, `expect_value?` | 在最近观测中解析 `hint` / `target`，或校验 `candidate_id`；**必须唯一接地**；记录 click 步骤 |
+| `input` | `hint?`, `candidate_id?`, `target?`, `value`, `intent`, `expect_*`, `submit?` | 同上，另填 `value`；`submit: true` 表示填完按回车提交 |
 | `assert_text` | `text`, `intent` | 记录页面级文本断言 |
 | `assert_url` | `contains`, `intent` | 记录页面级 URL 断言 |
 | `finish_case` | `name` | 全量校验并落库为工件；run 进入 `awaiting_approval` |
 | `ask_user` | `question` | run 进入 `awaiting_input`，等人回答后继续 |
 
 工具失败时返回结构化错误（例如 `{"error":"target_not_found","hint":"...","candidates":[...]}`），模型必须据此改口重试，**不允许**把未接地的目标写进 case。
+当 PageView 提供匹配意图的 `action_candidates` 时，模型应优先传 `candidate_id`。这不是 selector 绕路：
+最终 locator 仍由系统从最近一次 Observation 中取出并校验后写入 case。
 
 `click` / `input` 只在**最近一次观测所在的页面**上解析目标。模型若想点下一页的元素，必须先 `click`（带 `expect_url`）再继续用新观测。
 

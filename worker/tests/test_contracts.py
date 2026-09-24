@@ -37,10 +37,11 @@ class ConditionPhaseTableTest(unittest.TestCase):
 
     def test_pre_allowed_is_state_facts_only(self) -> None:
         self.assertEqual(
-            PRE_ALLOWED, frozenset({"url_contains", "text_visible", "text_gone"})
+            PRE_ALLOWED,
+            frozenset({"url_contains", "text_visible", "text_gone", "element_state"}),
         )
 
-    def test_post_allowed_is_all_five(self) -> None:
+    def test_post_allowed_contains_all_condition_types(self) -> None:
         self.assertEqual(
             POST_ALLOWED,
             frozenset(
@@ -50,6 +51,9 @@ class ConditionPhaseTableTest(unittest.TestCase):
                     "text_gone",
                     "url_changes",
                     "value_equals",
+                    "element_state",
+                    "attribute_equals",
+                    "count_equals",
                 }
             ),
         )
@@ -63,11 +67,14 @@ class ConditionPhaseTableTest(unittest.TestCase):
                 "text_gone",
                 "url_changes",
                 "value_equals",
+                "element_state",
+                "attribute_equals",
+                "count_equals",
             ),
         )
 
     def test_transition_conditions_are_rejected_as_preconditions(self) -> None:
-        for type_ in ("url_changes", "value_equals"):
+        for type_ in ("url_changes", "value_equals", "attribute_equals", "count_equals"):
             with self.subTest(type=type_):
                 case = build_case(
                     [
@@ -305,7 +312,7 @@ class CaseShapeTest(unittest.TestCase):
                 goto_step(0, PAGE_URL, "/index.html"),
                 {
                     "index": 1,
-                    "action": "hover",
+                    "action": "drag",
                     "intent": "hover",
                     "preconditions": [condition("url_contains", "/index.html")],
                     "postconditions": [condition("text_visible", "Alpha")],

@@ -37,7 +37,22 @@ export const RUN_STATUSES: readonly RunStatus[] = [
 ];
 
 /** CONTRACT §2.1：Step.action 的全部取值。 */
-export type StepAction = 'goto' | 'click' | 'input' | 'assert_text' | 'assert_url';
+export type StepAction =
+  | 'goto'
+  | 'click'
+  | 'input'
+  | 'select'
+  | 'check'
+  | 'uncheck'
+  | 'scroll_into_view'
+  | 'hover'
+  | 'dismiss_dialog'
+  | 'upload_file'
+  | 'assert_text'
+  | 'assert_url'
+  | 'assert_element'
+  | 'assert_attribute'
+  | 'assert_count';
 
 /** CONTRACT §2.2：Condition.type 的全部取值（表中未列出即为非法）。 */
 export type ConditionType =
@@ -45,7 +60,10 @@ export type ConditionType =
   | 'text_visible'
   | 'text_gone'
   | 'url_changes'
-  | 'value_equals';
+  | 'value_equals'
+  | 'element_state'
+  | 'attribute_equals'
+  | 'count_equals';
 
 /** CONTRACT §3：定位器偏好顺序 role → text → css。 */
 export type LocatorKind = 'role' | 'text' | 'css';
@@ -65,7 +83,14 @@ export type SignalKind =
   | 'condition_unmet'
   | 'step_timeout'
   | 'worker_error'
-  | 'case_invalid';
+  | 'case_invalid'
+  | 'blocked_by_dialog'
+  | 'blocked_by_overlay'
+  | 'blocked_by_interstitial'
+  | 'blocked_by_cookie_banner'
+  | 'blocked_by_auth'
+  | 'blocked_by_captcha'
+  | 'blocked_by_loading';
 
 /** Go API 列出的 SSE 事件类型；后端可能扩展，故用 `RunEventType | (string & {})`。 */
 export type RunEventType =
@@ -156,6 +181,26 @@ export interface CaseTarget {
   hint: string;
   locator: CaseLocator;
   grounding: CaseGrounding;
+  spec: TargetSpec | null;
+}
+
+export interface TargetSpec {
+  object: TargetObject;
+  scope: TargetScope | null;
+  relation: string | null;
+}
+
+export interface TargetObject {
+  role: string | null;
+  text: string | null;
+  name: string | null;
+  aliases: string[];
+}
+
+export interface TargetScope {
+  kind: string | null;
+  contains_text: string | null;
+  ref: string | null;
 }
 
 /** CONTRACT §2.2：Condition。 */
@@ -221,6 +266,39 @@ export interface StepEvidence {
   network: NetworkEntry[];
 }
 
+export interface Blocker {
+  kind: string;
+  ref: string | null;
+  confidence: string;
+  covers_target_ref: string | null;
+  dismiss_candidates: CaseLocator[];
+  reason: string;
+}
+
+export interface HitTest {
+  target_ref: string | null;
+  x: number;
+  y: number;
+  hit_ref: string | null;
+  hit_tag: string | null;
+  hit_role: string | null;
+  hit_text: string | null;
+  covered: boolean;
+  blocker_kind: string | null;
+}
+
+export interface RecoveryAttempt {
+  blocker: Blocker;
+  action: string;
+  succeeded: boolean;
+  reason: string;
+  before_screenshot_path: string | null;
+  after_screenshot_path: string | null;
+  url_before: string | null;
+  url_after: string | null;
+  retried_original_action: boolean;
+}
+
 /** CONTRACT §4：执行结果的单步。 */
 export interface ExecutionStep {
   index: number;
@@ -233,6 +311,9 @@ export interface ExecutionStep {
   conditions: ConditionResult[];
   evidence: StepEvidence;
   error: string | null;
+  blocker: Blocker | null;
+  hit_test: HitTest | null;
+  recovery: RecoveryAttempt[];
 }
 
 /**
@@ -442,13 +523,32 @@ function parseRunStatus(value: unknown): RunStatus {
   throw new ApiError(0, `未知的 run.status：${String(value)}`);
 }
 
-const STEP_ACTIONS: readonly StepAction[] = ['goto', 'click', 'input', 'assert_text', 'assert_url'];
+const STEP_ACTIONS: readonly StepAction[] = [
+  'goto',
+  'click',
+  'input',
+  'select',
+  'check',
+  'uncheck',
+  'scroll_into_view',
+  'hover',
+  'dismiss_dialog',
+  'upload_file',
+  'assert_text',
+  'assert_url',
+  'assert_element',
+  'assert_attribute',
+  'assert_count',
+];
 const CONDITION_TYPES: readonly ConditionType[] = [
   'url_contains',
   'text_visible',
   'text_gone',
   'url_changes',
   'value_equals',
+  'element_state',
+  'attribute_equals',
+  'count_equals',
 ];
 const LOCATOR_KINDS: readonly LocatorKind[] = ['role', 'text', 'css'];
 const SIGNAL_KINDS: readonly SignalKind[] = [
@@ -457,6 +557,13 @@ const SIGNAL_KINDS: readonly SignalKind[] = [
   'step_timeout',
   'worker_error',
   'case_invalid',
+  'blocked_by_dialog',
+  'blocked_by_overlay',
+  'blocked_by_interstitial',
+  'blocked_by_cookie_banner',
+  'blocked_by_auth',
+  'blocked_by_captcha',
+  'blocked_by_loading',
 ];
 const EXECUTION_STATUSES: readonly ExecutionStatus[] = ['passed', 'failed', 'error'];
 
@@ -544,12 +651,46 @@ function parseCaseGrounding(value: unknown): CaseGrounding {
   };
 }
 
+function parseTargetObject(value: unknown): TargetObject {
+  const record = isRecord(value) ? value : {};
+  return {
+    role: optionalString(record, 'role'),
+    text: optionalString(record, 'text'),
+    name: optionalString(record, 'name'),
+    aliases: Array.isArray(record['aliases'])
+      ? record['aliases'].flatMap((item) => {
+          const text = asString(item);
+          return text ? [text] : [];
+        })
+      : [],
+  };
+}
+
+function parseTargetScope(value: unknown): TargetScope | null {
+  if (!isRecord(value)) return null;
+  return {
+    kind: optionalString(value, 'kind'),
+    contains_text: optionalString(value, 'contains_text'),
+    ref: optionalString(value, 'ref'),
+  };
+}
+
+function parseTargetSpec(value: unknown): TargetSpec | null {
+  if (!isRecord(value)) return null;
+  return {
+    object: parseTargetObject(value['object']),
+    scope: parseTargetScope(value['scope']),
+    relation: optionalString(value, 'relation'),
+  };
+}
+
 function parseCaseTarget(value: unknown): CaseTarget | null {
   if (!isRecord(value)) return null;
   return {
     hint: optionalString(value, 'hint') ?? '',
     locator: parseCaseLocator(value['locator']),
     grounding: parseCaseGrounding(value['grounding']),
+    spec: parseTargetSpec(value['spec']),
   };
 }
 
@@ -624,6 +765,55 @@ function parseEvidence(value: unknown): StepEvidence {
   };
 }
 
+function parseBlocker(value: unknown): Blocker | null {
+  if (!isRecord(value)) return null;
+  return {
+    kind: optionalString(value, 'kind') ?? '',
+    ref: optionalString(value, 'ref'),
+    confidence: optionalString(value, 'confidence') ?? '',
+    covers_target_ref: optionalString(value, 'covers_target_ref'),
+    dismiss_candidates: asArray(value['dismiss_candidates']).map(parseCaseLocator),
+    reason: optionalString(value, 'reason') ?? '',
+  };
+}
+
+function parseHitTest(value: unknown): HitTest | null {
+  if (!isRecord(value)) return null;
+  return {
+    target_ref: optionalString(value, 'target_ref'),
+    x: optionalNumber(value, 'x') ?? 0,
+    y: optionalNumber(value, 'y') ?? 0,
+    hit_ref: optionalString(value, 'hit_ref'),
+    hit_tag: optionalString(value, 'hit_tag'),
+    hit_role: optionalString(value, 'hit_role'),
+    hit_text: optionalString(value, 'hit_text'),
+    covered: asBoolean(value['covered']) ?? false,
+    blocker_kind: optionalString(value, 'blocker_kind'),
+  };
+}
+
+function parseRecoveryAttempt(value: unknown): RecoveryAttempt {
+  const record = isRecord(value) ? value : {};
+  return {
+    blocker: parseBlocker(record['blocker']) ?? {
+      kind: '',
+      ref: null,
+      confidence: '',
+      covers_target_ref: null,
+      dismiss_candidates: [],
+      reason: '',
+    },
+    action: optionalString(record, 'action') ?? '',
+    succeeded: asBoolean(record['succeeded']) ?? false,
+    reason: optionalString(record, 'reason') ?? '',
+    before_screenshot_path: optionalString(record, 'before_screenshot_path'),
+    after_screenshot_path: optionalString(record, 'after_screenshot_path'),
+    url_before: optionalString(record, 'url_before'),
+    url_after: optionalString(record, 'url_after'),
+    retried_original_action: asBoolean(record['retried_original_action']) ?? false,
+  };
+}
+
 function parseExecutionStep(value: unknown): ExecutionStep {
   const record = isRecord(value) ? value : {};
   return {
@@ -637,6 +827,9 @@ function parseExecutionStep(value: unknown): ExecutionStep {
     conditions: asArray(record['conditions']).map(parseConditionResult),
     evidence: parseEvidence(record['evidence']),
     error: errorText(record['error']),
+    blocker: parseBlocker(record['blocker']),
+    hit_test: parseHitTest(record['hit_test']),
+    recovery: asArray(record['recovery']).map(parseRecoveryAttempt),
   };
 }
 

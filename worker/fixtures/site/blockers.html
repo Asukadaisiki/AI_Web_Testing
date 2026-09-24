@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Blocker Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 48px; }
+    #overlay, #auth {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, .94);
+    }
+    .panel { border: 1px solid #ccc; padding: 24px; background: white; }
+  </style>
+</head>
+<body>
+  <button id="target">Continue</button>
+  <p id="status">Waiting</p>
+  <div id="overlay">
+    <div class="panel">
+      <p>Temporary overlay</p>
+      <button id="close">Close</button>
+    </div>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const target = document.querySelector('#target');
+    const overlay = document.querySelector('#overlay');
+    if (params.get('mode') === 'auth') {
+      overlay.id = 'auth';
+      overlay.querySelector('p').textContent = 'Sign in required';
+      overlay.querySelector('button').textContent = 'Log in';
+    }
+    document.querySelector('#close').addEventListener('click', () => overlay.remove());
+    target.addEventListener('click', () => {
+      target.setAttribute('data-clicked', 'yes');
+      document.querySelector('#status').textContent = 'Done';
+    });
+  </script>
+</body>
+</html>

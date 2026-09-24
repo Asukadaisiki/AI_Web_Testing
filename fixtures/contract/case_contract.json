@@ -493,6 +493,51 @@
       }
     },
     {
+      "name": "accept-select-action",
+      "expect": { "accept": true },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "select a status",
+        "goal": "choose a filter",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open the settings page",
+            "value": "https://shop.test/settings",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "select",
+            "intent": "set status to active",
+            "value": "Active",
+            "target": {
+              "hint": "Status",
+              "locator": { "kind": "role", "role": "combobox", "name": "Status", "exact": true, "match_count": 1 },
+              "grounding": {
+                "observation_id": "obs_1",
+                "page_state_id": "ps_1",
+                "candidate_id": "e1:0",
+                "page_url": "https://shop.test/settings"
+              },
+              "spec": {
+                "object": { "role": "combobox", "name": "Status" },
+                "scope": { "kind": "form", "contains_text": "Settings" },
+                "relation": "within"
+              }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "value_equals", "value": "active", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
       "name": "reject-unknown-field",
       "expect": { "accept": false, "code": "case_invalid_json" },
       "case": {

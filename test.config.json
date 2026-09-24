@@ -9,8 +9,7 @@
     "LOOP_ARTIFACTS_DIR": "data/sessions",
     "LOOP_DB_PATH": "data/loop.db",
     "LOOP_MAX_MODEL_CALLS": "40",
-    "LOOP_MAX_TOTAL_TOKENS": "1500000",
-    "PLAYWRIGHT_BROWSERS_PATH": "D:\\PlaywrightBrowsers"
+    "LOOP_MAX_TOTAL_TOKENS": "1500000"
   },
 
   "ports": {
@@ -30,7 +29,7 @@
     "provider": "lark",
     "model": "deepseek-v4.1-flash[1m]",
     "baseURL": "https://ark.cn-beijing.volces.com/api/plan/v3",
-    "apiKeyEnv": "LARK_API_KEY"
+    "apiKeyEnv": "ARK_API_KEY"
   },
 
   "layers": [

@@ -10,7 +10,11 @@ from playwright.async_api import Locator, Page
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from .blockers import NON_BYPASSABLE, attempt_recovery, blocker_for_hit, signal_for_blocker, target_hit_test
 from .contracts import (
+    Blocker,
+    HitTest,
+    RecoveryAttempt,
     SIGNAL_STEP_TIMEOUT,
     SIGNAL_TARGET_NOT_FOUND,
     SIGNAL_WORKER_ERROR,
@@ -28,10 +32,21 @@ SETTLE_MS = 50
 class ActionFailure(Exception):
     """动作失败，`kind` 是 CONTRACT §4.1 的失败信号 kind。"""
 
-    def __init__(self, kind: str, detail: str) -> None:
+    def __init__(
+        self,
+        kind: str,
+        detail: str,
+        *,
+        blocker: Blocker | None = None,
+        hit_test: HitTest | None = None,
+        recovery: list[RecoveryAttempt] | None = None,
+    ) -> None:
         super().__init__(detail)
         self.kind = kind
         self.detail = detail
+        self.blocker = blocker
+        self.hit_test = hit_test
+        self.recovery = recovery or []
 
     @property
     def error(self) -> str:
@@ -125,7 +140,60 @@ async def resolve_target(page: Page, spec: LocatorSpec, timeout_ms: int) -> Loca
     return locator
 
 
-async def click_target(page: Page, locator: Locator, timeout_ms: int) -> None:
+async def ensure_actionable(
+    page: Page, locator: Locator, timeout_ms: int
+) -> list[RecoveryAttempt]:
+    """Check that a grounded target is reachable; safely recover once if blocked."""
+    try:
+        hit = await target_hit_test(page, locator)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"target hit-test timed out after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"target hit-test failed: {exc}") from exc
+    if not hit.covered:
+        return []
+
+    blocker = await blocker_for_hit(page, hit)
+    if blocker.kind in NON_BYPASSABLE:
+        raise ActionFailure(
+            signal_for_blocker(blocker.kind),
+            f"{blocker.kind} blocks target: {blocker.reason}",
+            blocker=blocker,
+            hit_test=hit,
+        )
+
+    attempt = await attempt_recovery(page, blocker, timeout_ms)
+    recovery = [attempt]
+    if not attempt.succeeded:
+        raise ActionFailure(
+            signal_for_blocker(blocker.kind),
+            f"{blocker.kind} blocks target and recovery failed: {attempt.reason}",
+            blocker=blocker,
+            hit_test=hit,
+            recovery=recovery,
+        )
+    await wait_for_stable(page)
+    try:
+        retry_hit = await target_hit_test(page, locator)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"target hit-test timed out after recovery after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"target hit-test failed after recovery: {exc}") from exc
+    attempt.retried_original_action = True
+    if retry_hit.covered:
+        retry_blocker = await blocker_for_hit(page, retry_hit)
+        raise ActionFailure(
+            signal_for_blocker(retry_blocker.kind),
+            f"{retry_blocker.kind} still blocks target after recovery: {retry_blocker.reason}",
+            blocker=retry_blocker,
+            hit_test=retry_hit,
+            recovery=recovery,
+        )
+    return recovery
+
+
+async def click_target(page: Page, locator: Locator, timeout_ms: int) -> list[RecoveryAttempt]:
+    recovery = await ensure_actionable(page, locator, timeout_ms)
     try:
         await locator.click(timeout=timeout_ms)
     except PlaywrightTimeoutError as exc:
@@ -133,6 +201,7 @@ async def click_target(page: Page, locator: Locator, timeout_ms: int) -> None:
     except PlaywrightError as exc:
         raise worker_error(f"click failed: {exc}") from exc
     await wait_for_stable(page)
+    return recovery
 
 
 async def fill_target(
@@ -160,6 +229,97 @@ async def fill_target(
     await wait_for_stable(page)
 
 
+async def select_target(page: Page, locator: Locator, value: str, timeout_ms: int) -> list[RecoveryAttempt]:
+    recovery = await ensure_actionable(page, locator, timeout_ms)
+    try:
+        await locator.select_option(label=value, timeout=timeout_ms)
+    except PlaywrightError:
+        try:
+            await locator.select_option(value=value, timeout=timeout_ms)
+        except PlaywrightTimeoutError as exc:
+            raise step_timeout(f"select timed out after {timeout_ms}ms") from exc
+        except PlaywrightError as exc:
+            raise worker_error(f"select failed: {exc}") from exc
+    await wait_for_stable(page)
+    return recovery
+
+
+async def check_target(page: Page, locator: Locator, timeout_ms: int) -> list[RecoveryAttempt]:
+    recovery = await ensure_actionable(page, locator, timeout_ms)
+    try:
+        await locator.check(timeout=timeout_ms)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"check timed out after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"check failed: {exc}") from exc
+    await wait_for_stable(page)
+    return recovery
+
+
+async def uncheck_target(page: Page, locator: Locator, timeout_ms: int) -> list[RecoveryAttempt]:
+    recovery = await ensure_actionable(page, locator, timeout_ms)
+    try:
+        await locator.uncheck(timeout=timeout_ms)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"uncheck timed out after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"uncheck failed: {exc}") from exc
+    await wait_for_stable(page)
+    return recovery
+
+
+async def scroll_into_view_target(page: Page, locator: Locator, timeout_ms: int) -> None:
+    try:
+        await locator.scroll_into_view_if_needed(timeout=timeout_ms)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"scroll_into_view timed out after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"scroll_into_view failed: {exc}") from exc
+    await wait_for_stable(page)
+
+
+async def hover_target(page: Page, locator: Locator, timeout_ms: int) -> list[RecoveryAttempt]:
+    recovery = await ensure_actionable(page, locator, timeout_ms)
+    try:
+        await locator.hover(timeout=timeout_ms)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"hover timed out after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"hover failed: {exc}") from exc
+    await wait_for_stable(page)
+    return recovery
+
+
+async def dismiss_dialog(page: Page, locator: Locator, timeout_ms: int) -> None:
+    try:
+        close_button = locator.get_by_role("button", name="Close")
+        if await close_button.count() != 1:
+            close_button = locator.locator(
+                'button[aria-label*="Close" i], button[title*="Close" i], '
+                'button:has-text("Close"), button:has-text("×"), button:has-text("x")'
+            ).first
+        await close_button.click(timeout=timeout_ms)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"dismiss_dialog timed out after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"dismiss_dialog failed: {exc}") from exc
+    await wait_for_stable(page)
+
+
+async def upload_file_target(
+    page: Page, locator: Locator, file_path: str, timeout_ms: int
+) -> list[RecoveryAttempt]:
+    recovery = await ensure_actionable(page, locator, timeout_ms)
+    try:
+        await locator.set_input_files(file_path, timeout=timeout_ms)
+    except PlaywrightTimeoutError as exc:
+        raise step_timeout(f"upload_file timed out after {timeout_ms}ms") from exc
+    except PlaywrightError as exc:
+        raise worker_error(f"upload_file failed: {exc}") from exc
+    await wait_for_stable(page)
+    return recovery
+
+
 async def _safe_count(locator: Locator) -> int:
     try:
         return await locator.count()
@@ -172,9 +332,17 @@ __all__ = [
     "click_target",
     "fill_target",
     "goto",
+    "check_target",
+    "dismiss_dialog",
+    "ensure_actionable",
+    "hover_target",
     "resolve_target",
+    "scroll_into_view_target",
+    "select_target",
     "step_timeout",
     "target_not_found",
+    "uncheck_target",
+    "upload_file_target",
     "wait_for_stable",
     "worker_error",
 ]

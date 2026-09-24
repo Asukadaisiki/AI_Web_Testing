@@ -177,6 +177,58 @@ func TestDeriveActionStepRequiresAnExpectation(t *testing.T) {
 	}
 }
 
+func TestGenericV2ActionsAndAssertionsSatisfyTheContract(t *testing.T) {
+	pageURL := "https://app.test/settings"
+	expectText := "Saved"
+	expectAttr := "data-state=ready"
+	expectCount := "3"
+	target := Target{
+		Hint:    "Status",
+		Locator: Locator{Kind: "role", Role: "combobox", Name: "Status", Exact: true, MatchCount: 1},
+		Grounding: Grounding{
+			ObservationID: "o", PageStateID: "p", CandidateID: "c", PageURL: pageURL,
+		},
+	}
+
+	for _, item := range []struct {
+		action Action
+		value  *string
+	}{
+		{ActionSelect, strPtr("Active")},
+		{ActionCheck, nil},
+		{ActionUncheck, nil},
+		{ActionScrollIntoView, nil},
+		{ActionHover, nil},
+		{ActionDismissDialog, nil},
+		{ActionUploadFile, strPtr("/tmp/avatar.png")},
+	} {
+		if _, err := DeriveActionStep(
+			1, item.action, "generic action", target, item.value, false, pageURL,
+			Expects{Text: &expectText},
+		); err != nil {
+			t.Fatalf("%s should satisfy contract: %v", item.action, err)
+		}
+	}
+	if _, err := DeriveActionStep(
+		1, ActionAssertElement, "element visible", target, nil, false, pageURL,
+		Expects{Element: strPtr("visible")},
+	); err != nil {
+		t.Fatalf("assert_element should satisfy contract: %v", err)
+	}
+	if _, err := DeriveActionStep(
+		1, ActionAssertAttribute, "attribute ready", target, nil, false, pageURL,
+		Expects{Attribute: &expectAttr},
+	); err != nil {
+		t.Fatalf("assert_attribute should satisfy contract: %v", err)
+	}
+	if _, err := DeriveActionStep(
+		1, ActionAssertCount, "three rows", target, nil, false, pageURL,
+		Expects{Count: &expectCount},
+	); err != nil {
+		t.Fatalf("assert_count should satisfy contract: %v", err)
+	}
+}
+
 func TestSubmitIsOnlyAllowedOnInput(t *testing.T) {
 	target := Target{
 		Hint:    "Search items",

@@ -33,11 +33,18 @@ type SignalView struct {
 // knownKinds 是合法的信号种类。执行器报上来的 kind 不在其中时收敛为 worker_error，
 // 避免脏数据一路流进回灌候选。
 var knownKinds = map[contract.SignalKind]bool{
-	contract.SignalTargetNotFound: true,
-	contract.SignalConditionUnmet: true,
-	contract.SignalStepTimeout:    true,
-	contract.SignalWorkerError:    true,
-	contract.SignalCaseInvalid:    true,
+	contract.SignalTargetNotFound:        true,
+	contract.SignalConditionUnmet:        true,
+	contract.SignalStepTimeout:           true,
+	contract.SignalWorkerError:           true,
+	contract.SignalCaseInvalid:           true,
+	contract.SignalBlockedByDialog:       true,
+	contract.SignalBlockedByOverlay:      true,
+	contract.SignalBlockedByInterstitial: true,
+	contract.SignalBlockedByCookieBanner: true,
+	contract.SignalBlockedByAuth:         true,
+	contract.SignalBlockedByCaptcha:      true,
+	contract.SignalBlockedByLoading:      true,
 }
 
 // Signals 从执行结果派生失败信号（CONTRACT §4.1）。

@@ -90,11 +90,21 @@ func violation(code string, step int, format string, args ...any) *Violation {
 type Action string
 
 const (
-	ActionGoto       Action = "goto"
-	ActionClick      Action = "click"
-	ActionInput      Action = "input"
-	ActionAssertText Action = "assert_text"
-	ActionAssertURL  Action = "assert_url"
+	ActionGoto            Action = "goto"
+	ActionClick           Action = "click"
+	ActionInput           Action = "input"
+	ActionSelect          Action = "select"
+	ActionCheck           Action = "check"
+	ActionUncheck         Action = "uncheck"
+	ActionScrollIntoView  Action = "scroll_into_view"
+	ActionHover           Action = "hover"
+	ActionDismissDialog   Action = "dismiss_dialog"
+	ActionUploadFile      Action = "upload_file"
+	ActionAssertText      Action = "assert_text"
+	ActionAssertURL       Action = "assert_url"
+	ActionAssertElement   Action = "assert_element"
+	ActionAssertAttribute Action = "assert_attribute"
+	ActionAssertCount     Action = "assert_count"
 )
 
 // Phase 是条件的评估阶段。
@@ -140,9 +150,10 @@ type Grounding struct {
 
 // Target 是 click / input 的作用对象，必须已接地。
 type Target struct {
-	Hint      string    `json:"hint"`
-	Locator   Locator   `json:"locator"`
-	Grounding Grounding `json:"grounding"`
+	Hint      string      `json:"hint"`
+	Locator   Locator     `json:"locator"`
+	Grounding Grounding   `json:"grounding"`
+	Spec      *TargetSpec `json:"spec,omitempty"`
 }
 
 // Condition 是一个可判定的状态或变化断言。
@@ -260,7 +271,8 @@ func ValidateStep(index int, step Step) error {
 				index,
 			)
 		}
-	case ActionClick, ActionInput:
+	case ActionClick, ActionInput, ActionSelect, ActionCheck, ActionUncheck, ActionScrollIntoView,
+		ActionHover, ActionDismissDialog, ActionUploadFile, ActionAssertElement, ActionAssertAttribute, ActionAssertCount:
 		if step.Target == nil {
 			return violation(
 				CodeMissingTarget, index,
@@ -273,11 +285,14 @@ func ValidateStep(index int, step Step) error {
 		if step.Action == ActionClick && step.Value != nil {
 			return violation(CodeUnexpectedValue, index, "case.steps[%d] click must not carry a value", index)
 		}
-		if step.Action == ActionInput && step.Value == nil {
+		if (step.Action == ActionInput || step.Action == ActionSelect || step.Action == ActionUploadFile) && step.Value == nil {
 			return violation(
 				CodeMissingValue, index,
-				"case.steps[%d] input requires a value (empty string is allowed)", index,
+				"case.steps[%d] %s requires a value (empty string is allowed)", index, step.Action,
 			)
+		}
+		if step.Action != ActionInput && step.Action != ActionSelect && step.Action != ActionUploadFile && step.Value != nil {
+			return violation(CodeUnexpectedValue, index, "case.steps[%d] %s must not carry a value", index, step.Action)
 		}
 		if len(step.Preconditions) == 0 {
 			return violation(
