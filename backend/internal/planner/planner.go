@@ -241,9 +241,8 @@ func (p *Planner) act(
 	}
 	response, err := p.client.Act(ctx, p.browserSessionID, request)
 	if err != nil {
-		return workerFailure("action_failed", err), nil
+		return p.restoreAfterFailedAction(ctx, workerFailure("action_failed", err))
 	}
-	p.observation = response.Observation
 	if response.Status != "passed" {
 		code := "action_failed"
 		detail := fmt.Sprintf("worker returned authoring action status %q", response.Status)
@@ -251,20 +250,30 @@ func (p *Planner) act(
 			code = string(response.Error.Kind)
 			detail = response.Error.Message
 		}
-		return Result{
+		return p.restoreAfterFailedAction(ctx, Result{
 			OK:     false,
 			Error:  code,
 			Detail: detail,
-			Page:   pageView(response.Observation),
-			Steps:  stepViews(p.steps),
-		}, nil
+		})
 	}
+	p.observation = response.Observation
 	p.steps = append(p.steps, step)
 	result := Result{
 		OK:      true,
 		Summary: fmt.Sprintf("recorded %s step %d on %q", action, step.Index, displayName(element)),
 		Page:    pageView(response.Observation),
 		Steps:   stepViews(p.steps),
+	}
+	return result, nil
+}
+
+func (p *Planner) restoreAfterFailedAction(ctx context.Context, result Result) (Result, error) {
+	if err := p.ReplayCommitted(ctx, len(p.steps)); err != nil {
+		return Result{}, &FatalError{Code: CodeCommittedPrefixReplayFailed, Err: err}
+	}
+	result.Steps = stepViews(p.steps)
+	if p.hasPage {
+		result.Page = pageView(p.observation)
 	}
 	return result, nil
 }
@@ -362,19 +371,6 @@ func (p *Planner) assertURL(contains, intent string) (Result, error) {
 	return result, nil
 }
 
-func (p *Planner) dropLastStep() (Result, error) {
-	if len(p.steps) == 0 {
-		return failure("no_steps", "there is no step to drop"), nil
-	}
-	dropped := p.steps[len(p.steps)-1]
-	p.steps = p.steps[:len(p.steps)-1]
-	return Result{
-		OK:      true,
-		Summary: fmt.Sprintf("dropped step %d (%s %s)", dropped.Index, dropped.Action, dropped.Intent),
-		Steps:   stepViews(p.steps),
-	}, nil
-}
-
 // Finish 校验 + 干跑，跑通才返回可落库的工件。
 func (p *Planner) Finish(ctx context.Context, name string) (contract.Case, contract.ExecutionResult, Result, error) {
 	artifact, err := p.Build(name)
@@ -390,13 +386,8 @@ func (p *Planner) Finish(ctx context.Context, name string) (contract.Case, contr
 		return contract.Case{}, contract.ExecutionResult{}, workerFailure("dry_run_failed", err), nil
 	}
 	if result.Status != contract.ExecutionPassed {
-		return contract.Case{}, result, Result{
-			OK:      false,
-			Error:   "dry_run_failed",
-			Detail:  "the authored case did not pass a full dry run; fix the failing step and call finish_case again",
-			Failure: dryRunFailure(result),
-			Steps:   stepViews(p.steps),
-		}, nil
+		repair, err := p.PrepareDryRunRepair(ctx, result)
+		return contract.Case{}, result, repair, err
 	}
 	return artifact, result, Result{
 		OK:      true,
@@ -672,7 +663,7 @@ func repairHintsForStep(step contract.StepResult) []string {
 		case contract.SignalTargetNotFound:
 			hints = append(hints, "narrow target scope or use an alias from the current observation")
 		case contract.SignalConditionUnmet:
-			hints = append(hints, "drop_last_step and rebuild the failing tail with a different expectation")
+			hints = append(hints, "rebuild the removed failing tail with a different expectation")
 		case contract.SignalStepTimeout:
 			hints = append(hints, "scroll target into view or wait for a stable visible element")
 		default:

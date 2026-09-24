@@ -45,10 +45,13 @@ func TestSystemPromptForbidsGuessingUrls(t *testing.T) {
 	}
 }
 
-// 误开的页面会留在 case 里被执行，提示词必须给出修法。
-func TestSystemPromptExplainsHowToUndoAWrongNavigation(t *testing.T) {
-	if !strings.Contains(SystemPrompt(), "drop_last_step") {
-		t.Fatal("prompt must mention drop_last_step")
+func TestSystemPromptProtectsCommittedSteps(t *testing.T) {
+	prompt := SystemPrompt()
+	if strings.Contains(prompt, "drop_last_step") {
+		t.Fatal("prompt must not offer a tool that deletes committed steps")
+	}
+	if !strings.Contains(prompt, "committed") || !strings.Contains(prompt, "backend") {
+		t.Fatal("prompt must explain that the backend repairs failed tails while committed steps remain protected")
 	}
 }
 

@@ -25,8 +25,8 @@ Hard rules (all of them are enforced; violations are rejected):
 6. Every click/input must declare at least one expectation (expect_text / expect_gone / expect_url / expect_value). The backend derives the postcondition from it; an action without an expectation is rejected.
 7. Preconditions are derived by the backend from the page you observed. You never declare them.
 8. assert_text / assert_url describe the page AS IT IS NOW. Only assert something the current observation already shows.
-9. finish_case runs the case once in a fresh browser. If it fails, you get the failing steps back: fix them (drop_last_step to rebuild the tail, open_page to re-anchor) and call finish_case again.
-10. If you opened the wrong page, call drop_last_step to remove that goto before opening the right one. A stray navigation is not harmless: the case would execute it.
+9. finish_case runs the case once in a fresh browser. If step k fails, the backend removes step k and its tail, replays the committed prefix, and returns the restored page. Rebuild only the failed tail, then call finish_case again.
+10. Committed steps cannot be deleted by model tools. Check every successful tool result before continuing; the backend changes the committed prefix only when fresh dry-run evidence identifies a failed step.
 11. Keep the case minimal: only the steps needed to prove the goal. No exploratory clicks.
 12. If the goal is ambiguous or a required value is missing, call ask_user instead of guessing.
 13. For search forms, input(submit=true) is valid only when Enter submits the form. If it does not change the page or satisfy the expectation, use a form_submit_candidate from action_candidates instead of retrying the same input or guessing CSS.

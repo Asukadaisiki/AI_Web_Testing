@@ -32,7 +32,6 @@ const (
 	ToolAssertElement   = "assert_element"
 	ToolAssertAttribute = "assert_attribute"
 	ToolAssertCount     = "assert_count"
-	ToolDropLastStep    = "drop_last_step"
 	ToolFinishCase      = "finish_case"
 	ToolAskUser         = "ask_user"
 )
@@ -277,14 +276,6 @@ func Tools() []Tool {
 			}, []string{"intent", "expect_count"}),
 		},
 		{
-			Name:        ToolDropLastStep,
-			Description: "Remove the most recently recorded step. Use it when a step was wrong, or to rebuild the tail of the case after a failed dry run.",
-			Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		{
 			Name: ToolFinishCase,
 			Description: "Finish the case. The backend validates it and runs it once in a fresh browser; only a case that passes that dry run is stored and sent to the user for approval. " +
 				"If the dry run fails you get the failing steps back and must fix them.",
@@ -418,9 +409,6 @@ func (p *Planner) Call(ctx context.Context, name string, args json.RawMessage) (
 			return CallOutcome{}, err
 		}
 		result, err := p.assertURL(parsed.Contains, parsed.Intent)
-		return CallOutcome{Result: result}, err
-	case ToolDropLastStep:
-		result, err := p.dropLastStep()
 		return CallOutcome{Result: result}, err
 	case ToolFinishCase:
 		var parsed finishArgs

@@ -320,6 +320,9 @@ func (r *Runtime) Plan(ctx context.Context, run store.Run) error {
 		}
 		outcome, err := session.Call(ctx, toolCall.Name, toolCall.Arguments)
 		if err != nil {
+			if planner.IsFatalError(err) {
+				return r.fail(ctx, run.ID, err.Error())
+			}
 			// 参数不是合法 JSON 之类的内部问题：当成工具结果回给模型，让它改口。
 			detail := err.Error()
 			r.emit(ctx, run.ID, EventToolCall, map[string]any{

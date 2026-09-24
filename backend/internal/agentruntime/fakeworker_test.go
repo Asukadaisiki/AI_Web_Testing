@@ -283,6 +283,10 @@ type fakeWorker struct {
 	mu       sync.Mutex
 	sessions map[string]map[string]string
 	execErr  bool
+	// failNavigateAfterExecution makes the next authoring navigation fail after
+	// a dry run, so tests can prove replay failure terminates planning.
+	failNavigateAfterExecution bool
+	failNextNavigate           bool
 	// artifactSessions 记录每一次"该往哪个会话写产物"的声明（开浏览器会话 + 执行）。
 	artifactSessions []string
 	// actRequests 记录作者态动作请求：用来断言工具参数确实透传到了执行器
@@ -331,7 +335,13 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 		}
 		worker.mu.Lock()
 		worker.navigateRequests = append(worker.navigateRequests, body)
+		failNavigate := worker.failNextNavigate
+		worker.failNextNavigate = false
 		worker.mu.Unlock()
+		if failNavigate {
+			writeFakeError(w, http.StatusInternalServerError, "worker_error", "replay navigation failed")
+			return
+		}
 		values, ok := worker.values(r.PathValue("id"))
 		if !ok {
 			writeFakeError(w, http.StatusNotFound, "session_not_found", "no session")
@@ -428,6 +438,9 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 		}
 		worker.mu.Lock()
 		worker.artifactSessions = append(worker.artifactSessions, body.SessionID)
+		if worker.failNavigateAfterExecution {
+			worker.failNextNavigate = true
+		}
 		worker.mu.Unlock()
 		writeFake(w, http.StatusOK, worker.execute(body.Case))
 	})
@@ -487,6 +500,12 @@ func (w *fakeWorker) setURL(sessionID, url string) {
 func (w *fakeWorker) FailExecution() {
 	w.mu.Lock()
 	w.execErr = true
+	w.mu.Unlock()
+}
+
+func (w *fakeWorker) FailReplayNavigationAfterExecution() {
+	w.mu.Lock()
+	w.failNavigateAfterExecution = true
 	w.mu.Unlock()
 }
 
@@ -613,7 +632,7 @@ func writeFakeError(w http.ResponseWriter, status int, code, detail string) {
 	writeFake(w, status, contract.WorkerError{Error: code, Detail: detail})
 }
 
-func TestPlannerRejectsUnmetAuthoringPostconditionsTransactionally(t *testing.T) {
+func TestFailedAuthoringActionDoesNotCommitStep(t *testing.T) {
 	fake := newFakeWorker(&fakeSite{})
 	t.Cleanup(fake.Close)
 	session, err := planner.New(
@@ -646,11 +665,17 @@ func TestPlannerRejectsUnmetAuthoringPostconditionsTransactionally(t *testing.T)
 	if clicked.Result.OK || clicked.Result.Error != string(contract.SignalConditionUnmet) {
 		t.Fatalf("click result = %+v, want condition_unmet", clicked.Result)
 	}
-	if clicked.Result.Page == nil || clicked.Result.Page.URL != detailURL {
-		t.Fatalf("planner did not retain fresh observation: %+v", clicked.Result.Page)
+	if clicked.Result.Page == nil || clicked.Result.Page.URL != listURL {
+		t.Fatalf("planner did not restore the committed prefix: %+v", clicked.Result.Page)
 	}
 	if steps := session.Steps(); len(steps) != 1 {
 		t.Fatalf("steps = %d, want only the committed goto", len(steps))
+	}
+	if sessions := fake.artifactSessionIDs(); len(sessions) != 2 {
+		t.Fatalf("browser sessions opened = %d, want initial plus replay", len(sessions))
+	}
+	if navigations := fake.navigateRequestSnapshot(); len(navigations) != 2 {
+		t.Fatalf("navigate requests = %d, want initial plus replay", len(navigations))
 	}
 
 	requests := fake.actRequestSnapshot()

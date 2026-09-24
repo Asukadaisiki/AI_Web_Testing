@@ -485,7 +485,7 @@ func TestUngroundedHintIsRejectedAndModelRetries(t *testing.T) {
 }
 
 // TestFinishRefusesACaseThatFailsItsDryRun 验证"生成的就是错的"在审批前就被拦住，
-// 并且模型能按结构化反馈改口修好（drop_last_step 重建尾巴 + open_page 重新接地）。
+// 并且后端保留已通过前缀、恢复浏览器后，模型能直接重建失败尾巴。
 func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 	ctx := context.Background()
 	steps := []ScriptedStep{
@@ -494,9 +494,6 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 		{Tool: "assert_text", Arguments: json.RawMessage(
 			`{"text":"This never appears","intent":"制造一个只能在干跑发现的错误"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"第一次注定失败"}`)},
-		{Tool: "drop_last_step", Arguments: json.RawMessage(`{}`)},
-		{Tool: "open_page", Arguments: json.RawMessage(
-			`{"url":"` + listURL + `","intent":"重新接地"}`)},
 		{Tool: "click", Arguments: json.RawMessage(
 			`{"hint":"Widget","intent":"用正确的期望重做","expect_url":"/item/1"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"修好之后的用例"}`)},
@@ -584,6 +581,34 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 	last := artifact.Steps[len(artifact.Steps)-1]
 	if last.Action != contract.ActionClick || last.Postconditions[0].Value != "/item/1" {
 		t.Fatalf("the stored case was not the corrected one: %#v", last)
+	}
+}
+
+func TestReplayFailureStopsPlanning(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, []ScriptedStep{
+		{Tool: "open_page", Arguments: json.RawMessage(
+			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
+		{Tool: "assert_text", Arguments: json.RawMessage(
+			`{"text":"This never appears","intent":"制造干跑失败"}`)},
+		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"回放失败"}`)},
+	})
+	h.fake.FailReplayNavigationAfterExecution()
+
+	_, run, err := h.store.CreateSession(ctx, "打开第一个商品")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	err = h.runtime.Plan(ctx, run)
+	if err == nil || !strings.Contains(err.Error(), "committed_prefix_replay_failed") {
+		t.Fatalf("plan error = %v, want committed_prefix_replay_failed", err)
+	}
+	final, getErr := h.store.GetRun(ctx, run.ID)
+	if getErr != nil {
+		t.Fatalf("get run: %v", getErr)
+	}
+	if final.Status != store.StatusFailed {
+		t.Fatalf("status = %q, want %q", final.Status, store.StatusFailed)
 	}
 }
 
