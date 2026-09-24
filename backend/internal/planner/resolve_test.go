@@ -977,6 +977,260 @@ func TestResolveActionCandidateRejectsIncompatibleActions(t *testing.T) {
 	}
 }
 
+func TestResolveTargetFallsBackToUniqueSemanticCandidateAfterInvalidScope(t *testing.T) {
+	observation := semanticCandidateObservation()
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{
+			Role:    "button",
+			Aliases: []string{"submit search"},
+		},
+		Scope: &contract.TargetScope{Kind: "form", Ref: "missing-search-form"},
+	}
+
+	winner, locator, selectedCandidateID, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "submit search", spec, "",
+	)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v candidates=%#v", err, candidates)
+	}
+	if winner.Ref != "search-submit" {
+		t.Fatalf("winner = %q, want search-submit", winner.Ref)
+	}
+	if locator != cssLocator("#submit_search") {
+		t.Fatalf("locator = %#v", locator)
+	}
+	if selectedCandidateID != "act_4c26e56e455a" {
+		t.Fatalf("candidate id = %q, want act_4c26e56e455a", selectedCandidateID)
+	}
+}
+
+func TestResolveTargetSemanticFallbackRequiresCompatibleAction(t *testing.T) {
+	observation := semanticCandidateObservation()
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "button", Name: "submit search"},
+		Scope:  &contract.TargetScope{Kind: "form", Ref: "missing-search-form"},
+	}
+
+	_, _, _, candidates, err := planner.resolveTarget(
+		contract.ActionInput, "submit_search", spec, "",
+	)
+	if err == nil {
+		t.Fatal("an input action must not fall back to a click candidate")
+	}
+	if code := errorCode(err); code != CodeScopeNotFound {
+		t.Fatalf("code = %q, want original %q", code, CodeScopeNotFound)
+	}
+	if len(candidates) != 1 || candidates[0].Ref != "products-region" {
+		t.Fatalf("original scope candidates = %#v", candidates)
+	}
+}
+
+func TestResolveTargetSemanticFallbackRequiresCompatibleRole(t *testing.T) {
+	observation := semanticCandidateObservation()
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "link", Name: "submit search"},
+		Scope:  &contract.TargetScope{Kind: "form", Ref: "missing-search-form"},
+	}
+
+	_, _, _, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "submit search", spec, "",
+	)
+	if err == nil {
+		t.Fatal("a button candidate must not satisfy a requested link role")
+	}
+	if code := errorCode(err); code != CodeScopeNotFound {
+		t.Fatalf("code = %q, want original %q", code, CodeScopeNotFound)
+	}
+	if len(candidates) != 1 || candidates[0].Ref != "products-region" {
+		t.Fatalf("original scope candidates = %#v", candidates)
+	}
+}
+
+func TestResolveTargetSemanticFallbackPreservesOriginalErrorWithoutMatch(t *testing.T) {
+	observation := semanticCandidateObservation()
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "button", Name: "open filters"},
+		Scope:  &contract.TargetScope{Kind: "form", Ref: "missing-search-form"},
+	}
+
+	_, _, _, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "open filters", spec, "",
+	)
+	if err == nil {
+		t.Fatal("an unrelated candidate must not replace the original resolver failure")
+	}
+	if code := errorCode(err); code != CodeScopeNotFound {
+		t.Fatalf("code = %q, want original %q", code, CodeScopeNotFound)
+	}
+	if len(candidates) != 1 || candidates[0].Ref != "products-region" {
+		t.Fatalf("original scope candidates = %#v", candidates)
+	}
+}
+
+func TestResolveTargetSemanticFallbackRejectsAmbiguousCandidates(t *testing.T) {
+	observation := semanticCandidateObservation()
+	second := observation.Elements[0]
+	second.Ref = "header-search-submit"
+	second.Locators = []contract.Locator{cssLocator("#header-submit-search")}
+	observation.Elements = append(observation.Elements, second)
+	ambiguous := observation.ActionCandidates[0]
+	ambiguous.CandidateID = "act_header_search_submit"
+	ambiguous.TargetRef = second.Ref
+	ambiguous.Locator = second.Locators[0]
+	observation.ActionCandidates = append(observation.ActionCandidates, ambiguous)
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "button", Text: "submit search"},
+		Scope:  &contract.TargetScope{Kind: "form", Ref: "missing-search-form"},
+	}
+
+	_, _, _, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "submit search", spec, "",
+	)
+	if err == nil {
+		t.Fatal("equally strong semantic candidates must remain ambiguous")
+	}
+	if code := errorCode(err); code != CodeScopeNotFound {
+		t.Fatalf("code = %q, want original %q", code, CodeScopeNotFound)
+	}
+	if len(candidates) != 1 || candidates[0].Ref != "products-region" {
+		t.Fatalf("original scope candidates = %#v", candidates)
+	}
+}
+
+func TestResolveTargetNormalResolutionPrecedesSemanticCandidateFallback(t *testing.T) {
+	observation := semanticCandidateObservation()
+	normal := element(
+		"visible-submit", "button", "Submit Search", "Submit Search",
+		roleLocator("button", "Submit Search"),
+	)
+	observation.Elements = append([]contract.Element{normal}, observation.Elements...)
+	planner := &Planner{observation: observation, hasPage: true}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Role: "button", Name: "Submit Search"},
+	}
+
+	winner, locator, selectedCandidateID, candidates, err := planner.resolveTarget(
+		contract.ActionClick, "submit search", spec, "",
+	)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v candidates=%#v", err, candidates)
+	}
+	if winner.Ref != "visible-submit" {
+		t.Fatalf("winner = %q, want normal semantic element", winner.Ref)
+	}
+	if locator != roleLocator("button", "Submit Search") {
+		t.Fatalf("locator = %#v", locator)
+	}
+	if selectedCandidateID != "visible-submit:0" {
+		t.Fatalf("candidate id = %q, want normal element grounding", selectedCandidateID)
+	}
+}
+
+func TestResolveTargetOnlyOverridesValidScopeForMateriallyStrongerCandidate(t *testing.T) {
+	tests := []struct {
+		name                string
+		candidateAlias      string
+		candidateAttributes map[string]string
+		wantCandidate       bool
+	}{
+		{
+			name:                "exact candidate beats partial scoped ambiguity",
+			candidateAlias:      "submit_search",
+			candidateAttributes: map[string]string{"id": "submit_search", "type": "button"},
+			wantCandidate:       true,
+		},
+		{
+			name:                "partial candidate does not bypass strict scope",
+			candidateAlias:      "submit search control",
+			candidateAttributes: map[string]string{"id": "submit-search-control", "type": "button"},
+			wantCandidate:       false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			observation := semanticCandidateObservation()
+			observation.ActionCandidates[0].Aliases = []string{test.candidateAlias}
+			observation.ActionCandidates[0].Attributes = test.candidateAttributes
+			observation.Structures = []contract.StructureNode{{
+				Ref: "account-form", Kind: "form", FullText: "Account actions", Visible: true,
+			}}
+			for _, ref := range []string{"save-search", "share-search"} {
+				scoped := element(
+					ref, "button", "Submit search option", "Submit search option",
+					cssLocator("#"+ref),
+				)
+				scoped.ContainerRef = "account-form"
+				observation.Elements = append(observation.Elements, scoped)
+			}
+			planner := &Planner{observation: observation, hasPage: true}
+			spec := &contract.TargetSpec{
+				Object: contract.TargetObject{Role: "button", Name: "submit search"},
+				Scope:  &contract.TargetScope{Kind: "form", Ref: "account-form"},
+			}
+
+			winner, _, selectedCandidateID, candidates, err := planner.resolveTarget(
+				contract.ActionClick, "submit search", spec, "",
+			)
+			if test.wantCandidate {
+				if err != nil {
+					t.Fatalf("resolveTarget: %v candidates=%#v", err, candidates)
+				}
+				if winner.Ref != "search-submit" || selectedCandidateID != "act_4c26e56e455a" {
+					t.Fatalf("fallback winner = %q candidate=%q", winner.Ref, selectedCandidateID)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("a partial candidate match must not bypass a valid strict scope")
+			}
+			if code := errorCode(err); code != CodeTargetAmbiguous {
+				t.Fatalf("code = %q, want original %q", code, CodeTargetAmbiguous)
+			}
+			if len(candidates) != 2 {
+				t.Fatalf("original element candidates = %#v", candidates)
+			}
+		})
+	}
+}
+
+func semanticCandidateObservation() contract.Observation {
+	locator := cssLocator("#submit_search")
+	return contract.Observation{
+		ObservationID: "obs_current",
+		PageStateID:   "ps_current",
+		URL:           "https://shop.test/products",
+		Structures: []contract.StructureNode{{
+			Ref: "products-region", Kind: "region", FullText: "Search products", Visible: true,
+		}},
+		Elements: []contract.Element{{
+			Ref: "search-submit", Tag: "button", Role: "button", Name: "\uf002", Text: "\uf002",
+			Visible: true, Enabled: true, Locators: []contract.Locator{locator},
+			Attributes: map[string]string{"id": "submit_search", "type": "button"},
+		}},
+		ActionCandidates: []contract.ActionCandidate{{
+			CandidateID: "act_4c26e56e455a",
+			Kind:        "form_submit_candidate",
+			Action:      string(contract.ActionClick),
+			TargetRef:   "search-submit",
+			Role:        "button",
+			Name:        "\uf002",
+			Text:        "\uf002",
+			Aliases:     []string{"form submit", "submit_search", "submit search"},
+			Attributes:  map[string]string{"id": "submit_search", "type": "button"},
+			Relations: []contract.CandidateRelation{{
+				Type: "form_submit_candidate", Ref: "missing-search-form",
+			}},
+			Locator:    locator,
+			Confidence: "high",
+		}},
+	}
+}
+
 func TestDryRunFailureCarriesRepairContext(t *testing.T) {
 	detail := "matched 0"
 	failure := dryRunFailure(contract.ExecutionResult{

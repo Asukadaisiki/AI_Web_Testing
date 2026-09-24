@@ -178,6 +178,8 @@ type scoredElement struct {
 	score   int
 }
 
+const strictScopeCandidateScoreMargin = 20
+
 // resolve 把模型的 hint 解析成唯一元素与已验证定位器。
 //
 // 只在"可见且可用"的元素里匹配；命中不唯一时一律拒绝，要求模型说得更具体。
@@ -382,6 +384,148 @@ func resolveActionCandidate(
 			"candidate %q is not present in the latest observation; call open_page again before using stale candidates",
 			candidateID,
 		)
+}
+
+func resolveSemanticActionCandidate(
+	action contract.Action,
+	hint string,
+	spec *contract.TargetSpec,
+	observation contract.Observation,
+	resolverCandidates []CandidateView,
+) (contract.Element, contract.Locator, contract.ActionCandidate, bool) {
+	hints, role := semanticCandidateRequest(hint, spec)
+	if len(hints) == 0 {
+		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
+	}
+
+	bestIndex := -1
+	bestScore := 0
+	ambiguous := false
+	for index, candidate := range observation.ActionCandidates {
+		if candidate.Action != string(action) || !candidateRoleCompatible(role, candidate.Role) {
+			continue
+		}
+		score := semanticCandidateScore(hints, candidate)
+		if score > bestScore {
+			bestIndex = index
+			bestScore = score
+			ambiguous = false
+		} else if score > 0 && score == bestScore {
+			ambiguous = true
+		}
+	}
+	if bestIndex < 0 || bestScore == 0 || ambiguous {
+		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
+	}
+	if hasValidStrictScope(spec, observation) &&
+		bestScore < bestResolverCandidateScore(resolverCandidates)+strictScopeCandidateScoreMargin {
+		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
+	}
+
+	candidate := observation.ActionCandidates[bestIndex]
+	element, locator, verified, err := resolveActionCandidate(action, candidate.CandidateID, observation)
+	if err != nil {
+		return contract.Element{}, contract.Locator{}, contract.ActionCandidate{}, false
+	}
+	return element, locator, verified, true
+}
+
+func semanticCandidateRequest(hint string, spec *contract.TargetSpec) ([]string, string) {
+	raw := []string{hint}
+	role := ""
+	if spec != nil {
+		object := normalizeTargetObject(*spec)
+		role = object.Role
+		raw = append(raw, object.Name, object.Text)
+		raw = append(raw, object.Aliases...)
+	}
+	seen := map[string]bool{}
+	hints := make([]string, 0, len(raw))
+	for _, value := range raw {
+		value = normalizeAlias(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		hints = append(hints, value)
+	}
+	return hints, role
+}
+
+func candidateRoleCompatible(requestedRole, candidateRole string) bool {
+	requestedRole = normalizeAlias(requestedRole)
+	return requestedRole == "" || requestedRole == normalizeAlias(candidateRole)
+}
+
+func semanticCandidateScore(hints []string, candidate contract.ActionCandidate) int {
+	values := []string{candidate.Name, candidate.Text}
+	values = append(values, candidate.Aliases...)
+	for key, value := range candidate.Attributes {
+		if stableDescriptiveAttribute(key) {
+			values = append(values, value)
+		}
+	}
+	best := 0
+	for _, hint := range hints {
+		for _, value := range values {
+			if score := semanticValueScore(hint, value); score > best {
+				best = score
+			}
+		}
+	}
+	return best
+}
+
+func semanticValueScore(normalizedHint, candidateValue string) int {
+	candidateValue = normalizeAlias(candidateValue)
+	if normalizedHint == "" || candidateValue == "" {
+		return 0
+	}
+	switch {
+	case candidateValue == normalizedHint:
+		return 100
+	case strings.Contains(candidateValue, normalizedHint):
+		return 80
+	case strings.Contains(normalizedHint, candidateValue):
+		return 60
+	case tokenOverlap(normalizedHint, candidateValue) >= 2:
+		return 50
+	default:
+		return 0
+	}
+}
+
+func stableDescriptiveAttribute(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "aria-label", "title", "placeholder", "id", "name", "data-testid":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasValidStrictScope(spec *contract.TargetSpec, observation contract.Observation) bool {
+	if spec == nil || spec.Scope == nil {
+		return false
+	}
+	scope := *spec.Scope
+	if strings.TrimSpace(scope.Ref) == "" &&
+		strings.TrimSpace(scope.Kind) == "" &&
+		strings.TrimSpace(scope.ContainsText) == "" {
+		return false
+	}
+	_, err := elementsInScope(scope, observation)
+	return err == nil
+}
+
+func bestResolverCandidateScore(candidates []CandidateView) int {
+	best := 0
+	for _, candidate := range candidates {
+		if candidate.Score > best {
+			best = candidate.Score
+		}
+	}
+	return best
 }
 
 func normalizeTargetObject(spec contract.TargetSpec) contract.TargetObject {

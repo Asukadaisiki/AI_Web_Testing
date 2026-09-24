@@ -338,6 +338,11 @@ func (p *Planner) resolveTarget(
 	if spec == nil {
 		element, locator, candidates, err := resolve(hint, p.observation.Elements)
 		if err != nil {
+			if fallbackElement, fallbackLocator, candidate, ok := resolveSemanticActionCandidate(
+				action, hint, nil, p.observation, candidates,
+			); ok {
+				return fallbackElement, fallbackLocator, candidate.CandidateID, nil, nil
+			}
 			return contract.Element{}, contract.Locator{}, "", candidates, err
 		}
 		return element, locator, candidateID(element, locator), nil, nil
@@ -349,6 +354,11 @@ func (p *Planner) resolveTarget(
 	}
 	element, locator, candidates, err := resolveSpec(*spec, p.observation)
 	if err != nil {
+		if fallbackElement, fallbackLocator, candidate, ok := resolveSemanticActionCandidate(
+			action, hint, spec, p.observation, candidates,
+		); ok {
+			return fallbackElement, fallbackLocator, candidate.CandidateID, nil, nil
+		}
 		return contract.Element{}, contract.Locator{}, "", candidates, err
 	}
 	return element, locator, candidateID(element, locator), nil, nil
