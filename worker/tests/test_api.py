@@ -39,9 +39,13 @@ SESSION = "sess_test"
 
 
 @contextlib.asynccontextmanager
-async def api_client() -> AsyncIterator[httpx.AsyncClient]:
+async def api_client(
+    *, raise_app_exceptions: bool = True
+) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app()
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx.ASGITransport(
+        app=app, raise_app_exceptions=raise_app_exceptions
+    )
     async with httpx.AsyncClient(transport=transport, base_url="http://worker.test") as client:
         try:
             yield client
@@ -135,6 +139,34 @@ class HealthAndErrorsTest(unittest.TestCase):
 
 class SessionLifecycleTest(unittest.TestCase):
     """真实浏览器：create → navigate → act → delete。"""
+
+    def test_authoring_assert_count_rejects_incomplete_locator_as_target_not_found(self) -> None:
+        run(self._authoring_assert_count_rejects_incomplete_locator_as_target_not_found())
+
+    async def _authoring_assert_count_rejects_incomplete_locator_as_target_not_found(
+        self,
+    ) -> None:
+        async with api_client(raise_app_exceptions=False) as client:
+            created = await client.post("/sessions", json={"session_id": SESSION})
+            self.assertEqual(created.status_code, 200, created.text)
+            session_id = created.json()["session_id"]
+
+            acted = await client.post(
+                f"/sessions/{session_id}/act",
+                json={
+                    "action": "assert_count",
+                    "locator": {"kind": "css"},
+                },
+            )
+
+            self.assertEqual(acted.status_code, 400, acted.text)
+            self.assertEqual(
+                acted.json(),
+                {
+                    "error": "target_not_found",
+                    "detail": "css locator requires 'css'",
+                },
+            )
 
     def test_authoring_assert_count_accepts_non_unique_locators(self) -> None:
         run(self._authoring_assert_count_accepts_non_unique_locators())

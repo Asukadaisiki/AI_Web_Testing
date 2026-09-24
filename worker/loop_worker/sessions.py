@@ -26,6 +26,7 @@ from .actions import (
     resolve_target,
     scroll_into_view_target,
     select_target,
+    target_not_found,
     uncheck_target,
     upload_file_target,
 )
@@ -39,7 +40,7 @@ from .contracts import (
 )
 from .conditions import evaluate_postcondition_list, unmet_summary
 from .evidence import EvidenceCollector, capture_screenshot
-from .locators import to_playwright_locator
+from .locators import LocatorResolutionError, to_playwright_locator
 from .observer import new_id, observe_page
 
 #: 本机 Playwright 浏览器的默认位置；只在环境变量未设置时兜底（见 NOTES）
@@ -177,7 +178,10 @@ class SessionManager:
         page = session.page
         url_before = page.url
         if request.action == "assert_count":
-            locator = to_playwright_locator(page, request.locator)
+            try:
+                locator = to_playwright_locator(page, request.locator)
+            except LocatorResolutionError as exc:
+                raise target_not_found(str(exc)) from exc
         else:
             locator = await resolve_target(page, request.locator, DEFAULT_STEP_TIMEOUT_MS)
         if request.action == "click":
