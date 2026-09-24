@@ -362,20 +362,22 @@ func (p *Planner) assertText(text, intent string) (Result, error) {
 	if err != nil {
 		return failure("step_rejected", err.Error()), nil
 	}
+	if !observationHasText(p.observation, text) {
+		return Result{
+			OK:     false,
+			Error:  string(contract.SignalConditionUnmet),
+			Detail: fmt.Sprintf("the text %q is not present in the current observation", text),
+			Page:   pageView(p.observation),
+			Steps:  stepViews(p.steps),
+		}, nil
+	}
 	p.steps = append(p.steps, step)
-	result := Result{
+	return Result{
 		OK:      true,
 		Summary: fmt.Sprintf("recorded assert_text step %d", step.Index),
 		Page:    pageView(p.observation),
 		Steps:   stepViews(p.steps),
-	}
-	if !observationHasText(p.observation, text) {
-		result.Warning = fmt.Sprintf(
-			"the text %q is not present in the current observation; the step was recorded but the dry run will fail unless the page changes first",
-			text,
-		)
-	}
-	return result, nil
+	}, nil
 }
 
 func (p *Planner) assertURL(contains, intent string) (Result, error) {
@@ -386,20 +388,26 @@ func (p *Planner) assertURL(contains, intent string) (Result, error) {
 	if err != nil {
 		return failure("step_rejected", err.Error()), nil
 	}
+	if !strings.Contains(p.observation.URL, contains) {
+		return Result{
+			OK:    false,
+			Error: string(contract.SignalConditionUnmet),
+			Detail: fmt.Sprintf(
+				"the current url %q does not contain %q",
+				p.observation.URL,
+				contains,
+			),
+			Page:  pageView(p.observation),
+			Steps: stepViews(p.steps),
+		}, nil
+	}
 	p.steps = append(p.steps, step)
-	result := Result{
+	return Result{
 		OK:      true,
 		Summary: fmt.Sprintf("recorded assert_url step %d", step.Index),
 		Page:    pageView(p.observation),
 		Steps:   stepViews(p.steps),
-	}
-	if !strings.Contains(p.observation.URL, contains) {
-		result.Warning = fmt.Sprintf(
-			"the current url %q does not contain %q; the step was recorded but the dry run will fail unless the page changes first",
-			p.observation.URL, contains,
-		)
-	}
-	return result, nil
+	}, nil
 }
 
 // Finish 校验 + 干跑，跑通才返回可落库的工件。
@@ -1103,8 +1111,15 @@ func observationHasText(observation contract.Observation, text string) bool {
 		if !element.Visible {
 			continue
 		}
-		if strings.Contains(normalize(element.Text), needle) ||
-			strings.Contains(normalize(element.Name), needle) {
+		if strings.Contains(normalize(element.Name), needle) ||
+			strings.Contains(normalize(element.Text), needle) ||
+			strings.Contains(normalize(element.FullText), needle) {
+			return true
+		}
+	}
+	for _, structure := range observation.Structures {
+		if structure.Visible &&
+			strings.Contains(normalize(structure.FullText), needle) {
 			return true
 		}
 	}

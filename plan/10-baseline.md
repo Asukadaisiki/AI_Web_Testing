@@ -329,7 +329,9 @@ cd worker && uv run python -m unittest tests.test_observation_v2.ObservationV2Te
 - 每轮从原始 goal、不可由模型修改的 committed prefix、一个当前有界 PageView、紧凑结果和最多
   8 个失败签名重建上下文；完整 Observation 只留在服务端。
 - 会改变页面的作者态步骤必须等派生 expectation 通过后才提交；这类失败尝试不进入 case，动作
-  可能改变页面时由后端重放已提交前缀。断言在作者态记录后由全新干跑最终验证。
+  可能改变页面时由后端重放已提交前缀。页面断言也必须先对当前完整 Observation 验证通过才提交；
+  文本按可见 element 的 Name/Text/FullText 和可见 structure 的 FullText 逐节点规范化匹配，
+  不跨节点拼接，已提交断言再由全新干跑复验。
 - 新鲜干跑在第 `k` 步失败时，后端删除 `k..end` 并重放 `0..k-1`；模型不能删除已提交步骤。
 - 生产 planner 没有电商专用 action 或硬编码 selector；离线脚本只用于确定性回归。
 
@@ -377,8 +379,8 @@ cd worker && uv run python -m unittest tests.test_api tests.test_ecommerce_basel
 
 本工作树不运行真实 canary，下面字段明确留给持有 staged credentials 的控制器追加。控制器的
 首次尝试暴露了 `committed_prefix_replay_failed` 的 planner 生命周期缺陷，因此没有可接受的本次
-基线指标；修复并重跑前保持阻塞。上文历史 canary 不能替代本次有界规划器 quantity-`3` 验收，
-也不构成本次通过证据。
+基线指标；代码与离线回归修复后，仍需控制器重跑。上文历史 canary 不能替代本次有界规划器
+quantity-`3` 验收，也不构成本次通过证据。
 
 必过条件：
 
@@ -394,7 +396,7 @@ repeated failure signatures = 0
 
 | 项 | 控制器实测值 |
 |---|---|
-| 验证状态 | `BLOCKED — controller-owned defect fix and rerun required` |
+| 验证状态 | `PENDING — offline fix complete; controller live rerun required` |
 | run id | `<append after live canary>` |
 | session id | `<append after live canary>` |
 | execution id | `<append after live canary>` |

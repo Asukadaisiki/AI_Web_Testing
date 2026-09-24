@@ -402,8 +402,8 @@ Go 侧从执行结果派生，落 `report_signals` 表：
 | `open_page` | `url`, `intent` | 真实导航并观测；记录 goto 步骤 |
 | `click` | `hint?`, `candidate_id?`, `target?`, `intent`, `expect_text?`, `expect_gone?`, `expect_url?`, `expect_value?` | 在最近观测中解析 `hint` / `target`，或校验 `candidate_id`；**必须唯一接地**；记录 click 步骤 |
 | `input` | `hint?`, `candidate_id?`, `target?`, `value`, `intent`, `expect_*`, `submit?` | 同上，另填 `value`；`submit: true` 表示填完按回车提交 |
-| `assert_text` | `text`, `intent` | 记录页面级文本断言 |
-| `assert_url` | `contains`, `intent` | 记录页面级 URL 断言 |
+| `assert_text` | `text`, `intent` | 当前完整 Observation 满足文本断言后记录步骤 |
+| `assert_url` | `contains`, `intent` | 当前完整 Observation 满足 URL 断言后记录步骤 |
 | `finish_case` | `name` | 全量校验并落库为工件；run 进入 `awaiting_approval` |
 | `ask_user` | `question` | run 进入 `awaiting_input`，等人回答后继续 |
 
@@ -428,8 +428,9 @@ proposed → derived and validated → action executed when applicable
 ```
 
 - worker 必须用与正式执行相同的条件求值器等待作者态动作的所有 postconditions，再生成下一份观测；
-- 页面断言由后端对当前完整 Observation 检查，不满足时随 warning 提交并由全新干跑最终验证；
-  目标断言在当前 Observation 解析定位器，条件同样由全新干跑最终验证；
+- 页面断言由后端对当前完整 Observation 检查，只有满足时才提交，并由全新干跑复验；
+  `assert_text` 分别规范化匹配每个可见 element 的 Name/Text/FullText 和每个可见 structure 的
+  FullText，不拼接无关节点；目标断言在当前 Observation 解析定位器，条件同样由全新干跑复验；
 - 派生、目标解析、动作执行或作者态 expectation 失败时，该尝试不追加到 case；
 - 失败动作可能已经改变页面，因此后端会重建 browser session 并重放当前已提交前缀；
 - 已提交步骤对模型不可变，工具列表中不存在删除或回退步骤的操作；

@@ -225,6 +225,52 @@ func TestDryRunFailureRejectsAnUnknownFailedStep(t *testing.T) {
 	}
 }
 
+func TestReplayCommittedAcceptsTextFromVisibleStructure(t *testing.T) {
+	const pageURL = "https://shop.test/account"
+	observation := replayObservation(pageURL)
+	observation.Structures = []contract.StructureNode{{
+		Ref: "account-summary", Kind: "navigation",
+		FullText: "  Logged   in as AI Web Test ", Visible: true,
+	}}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /sessions", func(w http.ResponseWriter, _ *http.Request) {
+		writeReplayJSON(w, contract.Session{SessionID: "bsess_replay"})
+	})
+	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /sessions/{id}/navigate", func(w http.ResponseWriter, _ *http.Request) {
+		writeReplayJSON(w, observation)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	gotoStep, err := contract.DeriveGotoStep(0, "open account", pageURL)
+	if err != nil {
+		t.Fatalf("derive goto: %v", err)
+	}
+	assertionStep, err := contract.DeriveAssertTextStep(
+		1, "verify login", "logged in as ai web test", pageURL,
+	)
+	if err != nil {
+		t.Fatalf("derive text assertion: %v", err)
+	}
+	planner := &Planner{
+		client:           worker.New(server.URL),
+		sessionID:        "sess_structure_replay",
+		browserSessionID: "bsess_old",
+		steps:            []contract.Step{gotoStep, assertionStep},
+	}
+
+	if err := planner.ReplayCommitted(context.Background(), 2); err != nil {
+		t.Fatalf("replay committed structure-only text assertion: %v", err)
+	}
+	if !planner.hasPage || planner.observation.URL != pageURL {
+		t.Fatalf("replayed observation = %+v", planner.observation)
+	}
+}
+
 func replayActionStep(
 	t *testing.T,
 	index int,

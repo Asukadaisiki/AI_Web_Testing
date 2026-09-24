@@ -690,13 +690,14 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 		{Tool: "open_page", Arguments: json.RawMessage(
 			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
 		{Tool: "assert_text", Arguments: json.RawMessage(
-			`{"text":"This never appears","intent":"制造一个只能在干跑发现的错误"}`)},
+			`{"text":"Widget","intent":"记录作者态当前可见文本"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"第一次注定失败"}`)},
-		{Tool: "click", Arguments: json.RawMessage(
-			`{"hint":"Widget","intent":"用正确的期望重做","expect_url":"/item/1"}`)},
+		{Tool: "assert_text", Arguments: json.RawMessage(
+			`{"text":"All Products","intent":"用仍然成立的断言重做"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"修好之后的用例"}`)},
 	}
 	h := newHarness(t, steps)
+	h.fake.BreakSiteBeforeNextExecution()
 
 	run := h.plan(t, "打开第一个商品")
 	if run.Status != store.StatusAwaitingApproval {
@@ -777,7 +778,7 @@ func TestFinishRefusesACaseThatFailsItsDryRun(t *testing.T) {
 		t.Fatalf("validate: %v", err)
 	}
 	last := artifact.Steps[len(artifact.Steps)-1]
-	if last.Action != contract.ActionClick || last.Postconditions[0].Value != "/item/1" {
+	if last.Action != contract.ActionAssertText || last.Postconditions[0].Value != "All Products" {
 		t.Fatalf("the stored case was not the corrected one: %#v", last)
 	}
 }
@@ -788,9 +789,10 @@ func TestReplayFailureStopsPlanning(t *testing.T) {
 		{Tool: "open_page", Arguments: json.RawMessage(
 			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
 		{Tool: "assert_text", Arguments: json.RawMessage(
-			`{"text":"This never appears","intent":"制造干跑失败"}`)},
+			`{"text":"Widget","intent":"记录作者态当前可见文本"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"回放失败"}`)},
 	})
+	h.fake.BreakSiteBeforeNextExecution()
 	h.fake.FailReplayNavigationAfterExecution()
 
 	_, run, err := h.store.CreateSession(ctx, "打开第一个商品")
@@ -817,11 +819,12 @@ func TestDryRunThatNeverPassesFailsTheRun(t *testing.T) {
 		{Tool: "open_page", Arguments: json.RawMessage(
 			`{"url":"` + listURL + `","intent":"打开商品列表"}`)},
 		{Tool: "assert_text", Arguments: json.RawMessage(
-			`{"text":"This never appears","intent":"制造一个只能在干跑发现的错误"}`)},
+			`{"text":"Widget","intent":"记录作者态当前可见文本"}`)},
 		{Tool: "finish_case", Arguments: json.RawMessage(`{"name":"注定失败"}`)},
 		{Final: "我无法让它通过。"},
 	}
 	h := newHarness(t, steps)
+	h.fake.BreakSiteBeforeNextExecution()
 
 	_, run, err := h.store.CreateSession(ctx, "打开第一个商品")
 	if err != nil {

@@ -359,6 +359,7 @@ type fakeWorker struct {
 	// a dry run, so tests can prove replay failure terminates planning.
 	failNavigateAfterExecution bool
 	failNextNavigate           bool
+	breakBeforeNextExecution   bool
 	// artifactSessions 记录每一次"该往哪个会话写产物"的声明（开浏览器会话 + 执行）。
 	artifactSessions []string
 	// actRequests 记录作者态动作请求：用来断言工具参数确实透传到了执行器
@@ -510,10 +511,15 @@ func newFakeWorker(site *fakeSite) *fakeWorker {
 		}
 		worker.mu.Lock()
 		worker.artifactSessions = append(worker.artifactSessions, body.SessionID)
+		breakSite := worker.breakBeforeNextExecution
+		worker.breakBeforeNextExecution = false
 		if worker.failNavigateAfterExecution {
 			worker.failNextNavigate = true
 		}
 		worker.mu.Unlock()
+		if breakSite {
+			worker.site.Break()
+		}
 		writeFake(w, http.StatusOK, worker.execute(body.Case))
 	})
 	worker.server = httptest.NewServer(mux)
@@ -578,6 +584,12 @@ func (w *fakeWorker) FailExecution() {
 func (w *fakeWorker) FailReplayNavigationAfterExecution() {
 	w.mu.Lock()
 	w.failNavigateAfterExecution = true
+	w.mu.Unlock()
+}
+
+func (w *fakeWorker) BreakSiteBeforeNextExecution() {
+	w.mu.Lock()
+	w.breakBeforeNextExecution = true
 	w.mu.Unlock()
 }
 

@@ -13,8 +13,7 @@
 - Added the canonical `https://www.automationexercise.com/` quantity-`3` goal template and an appendable live
   evidence table to `plan/10-baseline.md`.
 - Preserved the pre-existing baseline history. This documentation continuation did not run the live canary or access
-  credentials. The controller's attempt exposed `committed_prefix_replay_failed`; its fix, rerun, and measured live
-  evidence remain controller-owned, so no live success is recorded here.
+  credentials. The controller's attempt exposed `committed_prefix_replay_failed`; no live success is recorded here.
 
 Offline evidence:
 
@@ -31,7 +30,15 @@ cd worker && uv run python -m unittest tests.test_api tests.test_ecommerce_basel
 - The first full regression reported `RESULT: OK（6 层全通过）`: 10 Python contract tests, all Go packages,
   94 Python/Playwright tests, a 12-step complete ecommerce loop with served cart evidence, and the web build.
 - Both focused Go commands returned `ok`; the focused Python command passed 13 tests.
-- Code review corrected the lifecycle wording to match implementation: authoring actions wait for postconditions before
-  commit, while assertions are finally enforced by the fresh dry run.
+- Code review exposed a lifecycle defect: page assertions were committed before current-observation validation, while
+  text detection omitted visible element and structure `FullText`.
 - The final gate is `git diff --check`, `git status --short`, then `python3 run_tests.py`; exact exit codes and the
   status snapshot are retained in the ignored Task 8 report.
+
+Task 8 fix round 1:
+
+- Page assertions now return `condition_unmet` without changing committed steps unless the current full Observation
+  satisfies them; successful assertions remain committed and are revalidated by the fresh dry run.
+- Text presence checks normalized Name/Text/FullText on each visible element and FullText on each visible structure
+  independently. Replay coverage includes structure-only aggregate text.
+- The credentialed live canary was not run. Its metrics remain pending for the controller rerun.
