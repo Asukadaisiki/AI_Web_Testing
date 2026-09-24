@@ -1,6 +1,6 @@
 # 10 P0 基线记录
 
-记录时间：2026-09-24
+记录时间：2026-09-25
 
 ## 环境
 
@@ -319,10 +319,18 @@ cd worker && uv run python -m unittest tests.test_observation_v2.ObservationV2Te
 
 ```text
 打开 https://www.automationexercise.com/，使用账号 <测试账号邮箱> 和密码 <测试账号密码> 登录，
-确认页面显示 Logged in as AI Web Test；打开 Products，搜索 Blue Top，进入 Blue Top 商品详情页，
-把数量设置为 3 后加入购物车，从 Added! 弹窗点击 View Cart，最后确认购物车行显示 Blue Top 且
-数量为 3。不要结账，不要下单，不要删除账号。
+确认页面显示 Logged in as AI Web Test。先打开 Cart，从已有 Blue Top 行进入商品详情；在删除前
+先设置数量 1 并加入购物车，再从 Added! 弹窗回到 Cart，删除 Blue Top 行并确认它消失。这个
+add-before-remove 前置步骤必须保留，使作者态、全新干跑、重放和审批后执行都能重置共享测试购物车。
+然后打开 Products，在 Search Product 输入 Blue Top 并点击图标搜索按钮（Enter 不提交该搜索），
+进入 Blue Top 商品详情页，把数量设置为 3 后加入购物车，从 Added! 弹窗点击 View Cart，最后确认
+购物车行显示 Blue Top 且数量为 3。不要结账，不要下单，不要删除账号。
 ```
+
+真实站点会把登录账号的购物车保存在远端；作者态、全新干跑和审批后执行使用不同浏览器上下文，但
+共享同一账号状态。只在 canary 外清空一次会导致三阶段分别把数量累加为 3、6、9。上述前置步骤先
+保证删除目标存在、再清空，因此每个阶段都以空购物车执行最终 quantity-`3` 验证；它删除的是测试
+购物车行，不是账号。
 
 规划器行为基线：
 
@@ -380,12 +388,9 @@ cd worker && uv run python -m unittest tests.test_api tests.test_ecommerce_basel
 
 ### 控制器追加：真实 quantity-3 canary
 
-本工作树不运行真实 canary，下面字段明确留给持有 staged credentials 的控制器追加。控制器的
-首次尝试暴露了 `committed_prefix_replay_failed` 的 planner 生命周期缺陷。后续一次运行到达
-`awaiting_approval`，审批后执行完成 15/15 步，但最终截图中目标商品数量为 `12`，不是 goal 要求的
-`3`：此前失败 canary 已累积购物车状态，而本次 case 末尾只有导航步骤，没有在最终购物车状态断言
-数量，因此 `finish_case` 干跑没有证明明确预期结果。本轮只修正通用 authoring guidance，仍需
-控制器以隔离状态重跑；上文历史 canary 不能替代本次 quantity-`3` 验收，也不构成本次通过证据。
+控制器使用 staged credentials 运行真实模型与真实站点。早期运行先后暴露并修正了结构文本重放、
+语义 candidate 回退、最终结果证明和单轮工具调用约束。最终运行使用上面的自幂等输入，作者态、
+全新干跑和审批后执行均完成；上文历史 canary 不作为本次验收证据。
 
 必过条件：
 
@@ -401,16 +406,22 @@ repeated failure signatures = 0
 
 | 项 | 控制器实测值 |
 |---|---|
-| 验证状态 | `FAILED — execution passed 15/15, but final cart quantity was 12; controller rerun required` |
-| run id | `<append after live canary>` |
-| session id | `<append after live canary>` |
-| execution id | `<append after live canary>` |
-| 状态序列 | `<append after live canary>` |
-| 单次 prompt 最大值 | `<append after live canary>` |
-| raw prompt / completion / total | `<append after live canary>` |
-| cached prompt total | `<append after live canary>` |
-| fresh prompt / total | `<append after live canary>` |
-| report summary | `<append after live canary>` |
-| final URL | `<append after live canary>` |
-| cart 与 screenshot 检查 | `<append after live canary>` |
-| repeated failure signatures | `<append after live canary>` |
+| 验证状态 | `PASSED` |
+| run id | `run_b7a57de3e19bccc7` |
+| session id | `sess_ba64da877258b2aa` |
+| execution id | `exec_68b1723fd305c69c` |
+| 状态序列 | `planning -> awaiting_approval -> executing -> completed` |
+| case / execution | 20 steps；20 passed；0 failed |
+| 单次 prompt 最大值 | 13,672 |
+| raw prompt / completion / total | 267,902 / 12,168 / 280,070 |
+| cached prompt total | 208,384 |
+| fresh prompt / total | 59,518 / 71,686 |
+| reasoning tokens | 8,804（已包含在 completion） |
+| report summary | `completed`；0 report signals |
+| final URL | `https://www.automationexercise.com/view_cart` |
+| cart 与 screenshot 检查 | 20/20 截图可读取；最终图 `sess_ba64da877258b2aa/exec_68b1723fd305c69c_19.png` 显示 `Blue Top`、quantity `3`、total `Rs. 1500` |
+| 最终数量证明 | cart 页 `assert_element`：`text_visible("3")` 且目标 `visible` |
+| repeated failure signatures | 0 |
+
+所有接受阈值均满足：22 model calls、单次 prompt 13,672、raw total 280,070，分别低于
+25、30,000、600,000；fresh total 为 71,686，低于 300,000。

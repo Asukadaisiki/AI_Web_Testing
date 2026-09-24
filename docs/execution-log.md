@@ -41,4 +41,21 @@ Task 8 fix round 1:
   satisfies them; successful assertions remain committed and are revalidated by the fresh dry run.
 - Text presence checks normalized Name/Text/FullText on each visible element and FullText on each visible structure
   independently. Replay coverage includes structure-only aggregate text.
-- The credentialed live canary was not run. Its metrics remain pending for the controller rerun.
+- Semantic target resolution now falls back only to one action-compatible, materially matching verified candidate;
+  weak overlap, action/role mismatch, ambiguity, and unsafe scope overrides fail closed.
+- The model protocol now requires exactly one tool call per turn, exact candidate/tool action compatibility, and
+  committed final-state proof for every explicit goal outcome before `finish_case`.
+
+Live canary evidence:
+
+- The real account uses a server-side cart shared by authoring, fresh dry run, and approved execution. The accepted
+  one-input goal therefore uses an idempotent add-before-remove cart prelude before the required quantity-3 flow.
+- Run `run_b7a57de3e19bccc7`, session `sess_ba64da877258b2aa`, execution
+  `exec_68b1723fd305c69c` reached
+  `planning -> awaiting_approval -> executing -> completed`.
+- Execution passed 20/20 steps with 0 failed steps and 0 report signals. All 20 screenshots were served.
+- Final URL was `https://www.automationexercise.com/view_cart`; the final screenshot showed `Blue Top`, quantity
+  `3`, and total `Rs. 1500`. The case also carried a cart-page assertion proving visible quantity `3`.
+- Usage: 22 calls; max prompt per call 13,672; raw prompt/completion/total
+  267,902/12,168/280,070; cached 208,384; fresh prompt/total 59,518/71,686; reasoning 8,804;
+  repeated failure signatures 0.
