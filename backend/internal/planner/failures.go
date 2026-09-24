@@ -38,6 +38,15 @@ type fingerprintControlValue struct {
 	Value string `json:"value"`
 }
 
+type fingerprintLocator struct {
+	Kind  string `json:"kind"`
+	Role  string `json:"role,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Exact bool   `json:"exact,omitempty"`
+	Text  string `json:"text,omitempty"`
+	CSS   string `json:"css,omitempty"`
+}
+
 // PageFingerprint hashes the stable, user-visible parts of an observation.
 func PageFingerprint(observation contract.Observation) string {
 	payload := pageFingerprintPayload{
@@ -52,16 +61,11 @@ func PageFingerprint(observation contract.Observation) string {
 	payload.ActionCandidateIDs = sortedUnique(payload.ActionCandidateIDs)
 
 	for _, element := range observation.Elements {
-		if !element.Visible || element.Value == nil {
+		if !element.Visible || element.Value == nil || len(element.Locators) == 0 {
 			continue
 		}
 		payload.ControlValues = append(payload.ControlValues, fingerprintControlValue{
-			Key: strings.Join([]string{
-				strings.TrimSpace(element.Ref),
-				canonicalText(element.Tag),
-				canonicalText(element.Role),
-				canonicalText(element.Name),
-			}, "\x00"),
+			Key:   canonicalLocator(element.Locators[0]),
 			Value: *element.Value,
 		})
 	}
@@ -112,27 +116,51 @@ func (p *Planner) rememberFailure(signature FailureSignature) {
 	p.failures = unique
 }
 
-func failureTargetKey(candidateID string, spec *contract.TargetSpec) string {
-	key := strings.TrimSpace(candidateID)
-	if spec == nil || spec.Scope == nil {
+func failureTargetKey(candidateID string, spec *contract.TargetSpec, hint string) string {
+	if key := strings.TrimSpace(candidateID); key != "" {
 		return key
 	}
-	scope := struct {
-		Kind         string `json:"kind,omitempty"`
-		ContainsText string `json:"contains_text,omitempty"`
-		Ref          string `json:"ref,omitempty"`
-		Relation     string `json:"relation,omitempty"`
-	}{
-		Kind:         normalize(spec.Scope.Kind),
-		ContainsText: normalize(spec.Scope.ContainsText),
-		Ref:          strings.TrimSpace(spec.Scope.Ref),
-		Relation:     normalize(spec.Relation),
+	if spec == nil {
+		return normalize(hint)
 	}
-	encoded, err := json.Marshal(scope)
+	normalized := *spec
+	normalized.Object = normalizeTargetObject(*spec)
+	normalized.Object.Role = normalize(normalized.Object.Role)
+	normalized.Object.Text = normalize(normalized.Object.Text)
+	normalized.Object.Name = normalize(normalized.Object.Name)
+	normalized.Object.Aliases = normalizedStrings(normalized.Object.Aliases)
+	normalized.Relation = normalize(normalized.Relation)
+	normalized.Role = ""
+	normalized.Text = ""
+	normalized.Name = ""
+	normalized.Aliases = nil
+	if normalized.Scope != nil {
+		scope := *normalized.Scope
+		scope.Kind = normalize(scope.Kind)
+		scope.ContainsText = normalize(scope.ContainsText)
+		scope.Ref = strings.TrimSpace(scope.Ref)
+		normalized.Scope = &scope
+	}
+	encoded, err := json.Marshal(normalized)
 	if err != nil {
 		panic(err)
 	}
-	return key + "|scope:" + string(encoded)
+	return string(encoded)
+}
+
+func canonicalLocator(locator contract.Locator) string {
+	encoded, err := json.Marshal(fingerprintLocator{
+		Kind:  locator.Kind,
+		Role:  locator.Role,
+		Name:  locator.Name,
+		Exact: locator.Exact,
+		Text:  locator.Text,
+		CSS:   locator.CSS,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
 
 func canonicalPageURL(raw string) string {
@@ -164,6 +192,16 @@ func canonicalPageURL(raw string) string {
 
 func canonicalText(value string) string {
 	return strings.Join(strings.Fields(value), " ")
+}
+
+func normalizedStrings(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = normalize(value); value != "" {
+			normalized = append(normalized, value)
+		}
+	}
+	return sortedUnique(normalized)
 }
 
 func sortedUnique(values []string) []string {

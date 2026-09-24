@@ -1,10 +1,15 @@
 package planner
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/worker"
 )
 
 func TestEquivalentReplayPageHasSameFingerprint(t *testing.T) {
@@ -20,7 +25,13 @@ func TestEquivalentReplayPageHasSameFingerprint(t *testing.T) {
 		},
 		Elements: []contract.Element{
 			{Ref: "hidden", Visible: false, Value: stringPointer("ignored")},
-			{Ref: "search", Tag: "input", Role: "searchbox", Name: "Search", Visible: true, Value: &searchValue},
+			{
+				Ref: "control-17", Tag: "input", Role: "searchbox", Name: "Search",
+				Visible: true, Value: &searchValue,
+				Locators: []contract.Locator{{
+					Kind: "role", Role: "searchbox", Name: "Search", Exact: true, MatchCount: 1,
+				}},
+			},
 		},
 		Blockers: []contract.Blocker{
 			{Kind: "blocked_by_overlay"},
@@ -37,7 +48,13 @@ func TestEquivalentReplayPageHasSameFingerprint(t *testing.T) {
 			{CandidateID: "candidate-b"},
 		},
 		Elements: []contract.Element{
-			{Ref: "search", Tag: "input", Role: "searchbox", Name: "Search", Visible: true, Value: &searchValue},
+			{
+				Ref: "control-93", Tag: "input", Role: "searchbox", Name: "Search",
+				Visible: true, Value: &searchValue,
+				Locators: []contract.Locator{{
+					Kind: "role", Role: "searchbox", Name: "Search", Exact: true, MatchCount: 7,
+				}},
+			},
 			{Ref: "hidden", Visible: false, Value: stringPointer("changed but hidden")},
 		},
 		Blockers: []contract.Blocker{
@@ -53,6 +70,128 @@ func TestEquivalentReplayPageHasSameFingerprint(t *testing.T) {
 	}
 	if firstFingerprint != replayedFingerprint {
 		t.Fatalf("equivalent pages differ: %q != %q", firstFingerprint, replayedFingerprint)
+	}
+}
+
+func TestFailureTargetKeyPrefersExplicitCandidateID(t *testing.T) {
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{Name: "ignored"},
+		Scope:  &contract.TargetScope{Ref: "ignored"},
+	}
+
+	if got := failureTargetKey("  candidate-7  ", spec, "ignored"); got != "candidate-7" {
+		t.Fatalf("target key = %q, want explicit candidate id", got)
+	}
+}
+
+func TestNormalizedHintDuplicateIsRejectedBeforeWorkerCall(t *testing.T) {
+	observation := failureTestObservation("control-17", "widget")
+	planner, workerCalls := failureTestPlanner(t, observation)
+	planner.failures = []FailureSignature{{
+		PageFingerprint: PageFingerprint(observation),
+		Action:          contract.ActionClick,
+		TargetKey:       "widget",
+		ErrorCode:       "condition_unmet",
+	}}
+
+	result, err := planner.click(
+		context.Background(),
+		"  WIDGET \n",
+		nil,
+		"",
+		"open widget",
+		contract.Expects{Element: stringPointer("visible")},
+	)
+	if err != nil {
+		t.Fatalf("click: %v", err)
+	}
+	if result.Error != CodeStrategyRepeated {
+		t.Fatalf("click result = %+v, want %s", result, CodeStrategyRepeated)
+	}
+	if *workerCalls != 0 {
+		t.Fatalf("worker calls = %d, want 0", *workerCalls)
+	}
+}
+
+func TestSemanticallyEquivalentStructuredSpecDuplicateIsRejected(t *testing.T) {
+	observation := failureTestObservation("control-17", "buy now")
+	observation.Elements[0].Role = "button"
+	observation.Elements[0].Name = "Add to cart"
+	observation.Elements[0].ContainerRef = "scope-7"
+	observation.Elements[0].Locators = []contract.Locator{{
+		Kind: "role", Role: "button", Name: "Add to cart", Exact: true, MatchCount: 1,
+	}}
+	observation.Structures = []contract.StructureNode{{
+		Ref: "scope-7", Kind: "card", FullText: "Blue Top Buy now", Visible: true,
+	}}
+	planner, workerCalls := failureTestPlanner(t, observation)
+	planner.failures = []FailureSignature{{
+		PageFingerprint: PageFingerprint(observation),
+		Action:          contract.ActionClick,
+		TargetKey: `{"object":{"role":"button","text":"buy now","name":"add to cart",` +
+			`"aliases":["add","buy"]},"scope":{"kind":"card","contains_text":"blue top",` +
+			`"ref":"scope-7"},"relation":"within"}`,
+		ErrorCode: "condition_unmet",
+	}}
+	spec := &contract.TargetSpec{
+		Object: contract.TargetObject{
+			Text:    " Buy   Now ",
+			Aliases: []string{" BUY ", "add", "buy"},
+		},
+		Scope: &contract.TargetScope{
+			Kind: "card", ContainsText: "Blue Top", Ref: "scope-7",
+		},
+		Relation: " WITHIN ",
+		Role:     "button",
+		Name:     "Add to cart",
+	}
+
+	result, err := planner.click(
+		context.Background(),
+		"",
+		spec,
+		"",
+		"buy item",
+		contract.Expects{Element: stringPointer("visible")},
+	)
+	if err != nil {
+		t.Fatalf("click: %v", err)
+	}
+	if result.Error != CodeStrategyRepeated {
+		t.Fatalf("click result = %+v, want %s", result, CodeStrategyRepeated)
+	}
+	if *workerCalls != 0 {
+		t.Fatalf("worker calls = %d, want 0", *workerCalls)
+	}
+}
+
+func TestRealSemanticPageChangeAllowsHintRetry(t *testing.T) {
+	before := failureTestObservation("control-17", "before")
+	after := failureTestObservation("control-93", "after")
+	planner, workerCalls := failureTestPlanner(t, after)
+	planner.failures = []FailureSignature{{
+		PageFingerprint: PageFingerprint(before),
+		Action:          contract.ActionClick,
+		TargetKey:       "widget",
+		ErrorCode:       "condition_unmet",
+	}}
+
+	result, err := planner.click(
+		context.Background(),
+		"Widget",
+		nil,
+		"",
+		"retry widget",
+		contract.Expects{Element: stringPointer("visible")},
+	)
+	if err != nil {
+		t.Fatalf("click: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("click result = %+v, want worker retry", result)
+	}
+	if *workerCalls != 1 {
+		t.Fatalf("worker calls = %d, want 1", *workerCalls)
 	}
 }
 
@@ -72,6 +211,9 @@ func TestChangedInputValueChangesFingerprint(t *testing.T) {
 		Elements: []contract.Element{{
 			Ref: "search", Tag: "input", Role: "searchbox", Name: "Search",
 			Visible: true, Value: stringPointer("widget"),
+			Locators: []contract.Locator{{
+				Kind: "role", Role: "searchbox", Name: "Search", Exact: true, MatchCount: 1,
+			}},
 		}},
 	}
 	after := before
@@ -114,4 +256,44 @@ func TestRepeatedFailureLedgerRetainsNewestEightUniqueSignatures(t *testing.T) {
 
 func stringPointer(value string) *string {
 	return &value
+}
+
+func failureTestObservation(ref, controlValue string) contract.Observation {
+	return contract.Observation{
+		ObservationID: "observation-" + ref,
+		PageStateID:   "page-" + ref,
+		URL:           "https://shop.test/products",
+		Title:         "Products",
+		Elements: []contract.Element{{
+			Ref: ref, Tag: "a", Role: "link", Name: "Widget", Text: "Widget",
+			Value: stringPointer(controlValue), Visible: true, Enabled: true,
+			Locators: []contract.Locator{{
+				Kind: "role", Role: "link", Name: "Widget", Exact: true, MatchCount: 1,
+			}},
+		}},
+	}
+}
+
+func failureTestPlanner(
+	t *testing.T, observation contract.Observation,
+) (*Planner, *int) {
+	t.Helper()
+	workerCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		workerCalls++
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(contract.ActResponse{
+			Status: "passed", Observation: observation,
+		}); err != nil {
+			t.Errorf("encode worker response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return &Planner{
+		client:           worker.New(server.URL),
+		sessionID:        "failure-test",
+		browserSessionID: "browser-test",
+		observation:      observation,
+		hasPage:          true,
+	}, &workerCalls
 }

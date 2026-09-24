@@ -186,6 +186,7 @@ func (p *Planner) act(
 	if !p.hasPage {
 		return failure("no_observation", "no page has been observed yet; call open_page first"), nil
 	}
+	targetKey := failureTargetKey(requestedCandidateID, spec, hint)
 	element, locator, selectedCandidateID, candidates, err := p.resolveTarget(action, hint, spec, requestedCandidateID)
 	if err != nil {
 		return Result{
@@ -221,7 +222,6 @@ func (p *Planner) act(
 		return failure("step_rejected", err.Error()), nil
 	}
 	pageFingerprint := PageFingerprint(p.observation)
-	targetKey := failureTargetKey(selectedCandidateID, spec)
 	if p.failedStrategy(pageFingerprint, action, targetKey) {
 		return failure(
 			CodeStrategyRepeated,
