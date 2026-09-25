@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
+	"net"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
 )
 
 func TestRuntimeConfigUsesBoundedUsageDefaults(t *testing.T) {
@@ -124,5 +129,70 @@ func TestProviderDefaults(t *testing.T) {
 func TestLarkBaseURLDoesNotIncludeThePath(t *testing.T) {
 	if strings.HasSuffix(defaultBaseURL("lark"), "/chat/completions") {
 		t.Fatal("the base url must not include /chat/completions")
+	}
+}
+
+func TestRecoverInterruptedRunsAtStartup(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(filepath.Join(t.TempDir(), "loop.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer database.Close()
+
+	_, run, err := database.CreateSession(ctx, "interrupted planning")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	listener, recovered, err := claimControlPlane(ctx, "127.0.0.1:0", database)
+	if err != nil {
+		t.Fatalf("recover interrupted runs: %v", err)
+	}
+	defer listener.Close()
+	if recovered != 1 {
+		t.Fatalf("recovered = %d, want 1", recovered)
+	}
+	got, err := database.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.Status != store.StatusFailed {
+		t.Fatalf("status = %q, want failed", got.Status)
+	}
+	if got.Error == nil || !strings.Contains(*got.Error, "控制面重启") {
+		t.Fatalf("error = %v, want restart explanation", got.Error)
+	}
+}
+
+func TestStartupDoesNotRecoverRunsBeforeClaimingTheListenAddress(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(filepath.Join(t.TempDir(), "loop.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer database.Close()
+	_, run, err := database.CreateSession(ctx, "still owned by the active loopd")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	owner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve listen address: %v", err)
+	}
+	defer owner.Close()
+
+	listener, _, err := claimControlPlane(ctx, owner.Addr().String(), database)
+	if err == nil {
+		listener.Close()
+		t.Fatal("a second loopd must not claim an occupied address")
+	}
+	got, err := database.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.Status != store.StatusPlanning || got.Error != nil {
+		t.Fatalf("failed startup mutated an active run: %+v", got)
 	}
 }

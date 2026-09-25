@@ -230,3 +230,129 @@ func TestGetMissingRecordsReturnsNotFound(t *testing.T) {
 		t.Fatal("expected not found")
 	}
 }
+
+func TestRecoverInterruptedRunsFailsOnlyNonResumableStates(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	statuses := []string{
+		StatusPlanning,
+		StatusAwaitingInput,
+		StatusExecuting,
+		StatusReporting,
+		StatusAwaitingApproval,
+		StatusCompleted,
+		StatusFailed,
+	}
+	runs := make(map[string]Run, len(statuses))
+	for _, status := range statuses {
+		_, run, err := store.CreateSession(ctx, "run in "+status)
+		if err != nil {
+			t.Fatalf("create %s run: %v", status, err)
+		}
+		if err := store.UpdateRunStatus(ctx, run.ID, status, nil); err != nil {
+			t.Fatalf("set %s run status: %v", status, err)
+		}
+		runs[status] = run
+	}
+
+	const reason = "control plane restarted while run was active"
+	recovered, err := store.RecoverInterruptedRuns(ctx, reason)
+	if err != nil {
+		t.Fatalf("recover interrupted runs: %v", err)
+	}
+	if recovered != 4 {
+		t.Fatalf("recovered = %d, want 4", recovered)
+	}
+
+	for _, status := range statuses {
+		got, err := store.GetRun(ctx, runs[status].ID)
+		if err != nil {
+			t.Fatalf("get %s run: %v", status, err)
+		}
+		switch status {
+		case StatusPlanning, StatusAwaitingInput, StatusExecuting, StatusReporting:
+			if got.Status != StatusFailed {
+				t.Errorf("%s run status = %q, want failed", status, got.Status)
+			}
+			if got.Error == nil || *got.Error != reason {
+				t.Errorf("%s run error = %v, want %q", status, got.Error, reason)
+			}
+		default:
+			if got.Status != status {
+				t.Errorf("%s run status = %q, want unchanged", status, got.Status)
+			}
+			if got.Error != nil {
+				t.Errorf("%s run error = %q, want nil", status, *got.Error)
+			}
+		}
+	}
+}
+
+func TestRecoverInterruptedRunsAppendsEventsExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	_, run, err := store.CreateSession(ctx, "interrupted planning")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, run.ID, "assistant", map[string]string{"text": "working"}); err != nil {
+		t.Fatalf("append initial event: %v", err)
+	}
+
+	const reason = "control plane restarted while run was active"
+	recovered, err := store.RecoverInterruptedRuns(ctx, reason)
+	if err != nil {
+		t.Fatalf("recover interrupted runs: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered = %d, want 1", recovered)
+	}
+
+	events, err := store.ListEvents(ctx, run.ID, 0)
+	if err != nil {
+		t.Fatalf("list recovery events: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want initial + error + run_status", len(events))
+	}
+	if events[1].Seq != 2 || events[1].Type != "error" {
+		t.Fatalf("error event = %+v", events[1])
+	}
+	if events[2].Seq != 3 || events[2].Type != "run_status" {
+		t.Fatalf("status event = %+v", events[2])
+	}
+	var errorPayload struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(events[1].Payload, &errorPayload); err != nil {
+		t.Fatalf("decode error event: %v", err)
+	}
+	if errorPayload.Message != reason {
+		t.Fatalf("error event message = %q, want %q", errorPayload.Message, reason)
+	}
+	var statusPayload struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(events[2].Payload, &statusPayload); err != nil {
+		t.Fatalf("decode status event: %v", err)
+	}
+	if statusPayload.Status != StatusFailed || statusPayload.Error != reason {
+		t.Fatalf("status event = %+v", statusPayload)
+	}
+
+	recovered, err = store.RecoverInterruptedRuns(ctx, reason)
+	if err != nil {
+		t.Fatalf("recover interrupted runs again: %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("second recovery = %d, want 0", recovered)
+	}
+	events, err = store.ListEvents(ctx, run.ID, 0)
+	if err != nil {
+		t.Fatalf("list events after second recovery: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("second recovery appended duplicate events: %d", len(events))
+	}
+}

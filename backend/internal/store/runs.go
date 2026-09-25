@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -139,6 +140,124 @@ func (s *Store) UpdateRunStatus(ctx context.Context, id, status string, runErr *
 		return ErrNotFound
 	}
 	return nil
+}
+
+// RecoverInterruptedRuns fails work that depended on the previous process's
+// in-memory planner, answer channel, or executor request. Awaiting approval is
+// intentionally durable because its case artifact can be approved after restart.
+func (s *Store) RecoverInterruptedRuns(ctx context.Context, reason string) (int, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return 0, fmt.Errorf("recover interrupted runs: reason is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("recover interrupted runs: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT id, status FROM runs
+		 WHERE status IN (?, ?, ?, ?)
+		 ORDER BY rowid`,
+		StatusPlanning, StatusAwaitingInput, StatusExecuting, StatusReporting,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("list interrupted runs: %w", err)
+	}
+	type interruptedRun struct {
+		id     string
+		status string
+	}
+	interrupted := make([]interruptedRun, 0)
+	for rows.Next() {
+		var run interruptedRun
+		if scanErr := rows.Scan(&run.id, &run.status); scanErr != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan interrupted run: %w", scanErr)
+		}
+		interrupted = append(interrupted, run)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		rows.Close()
+		return 0, fmt.Errorf("list interrupted runs: %w", rowsErr)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return 0, fmt.Errorf("close interrupted runs: %w", closeErr)
+	}
+
+	now := time.Now().UTC()
+	errorPayload, err := json.Marshal(map[string]any{"message": reason})
+	if err != nil {
+		return 0, fmt.Errorf("marshal recovery error event: %w", err)
+	}
+	statusPayload, err := json.Marshal(map[string]any{
+		"status": StatusFailed,
+		"error":  reason,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("marshal recovery status event: %w", err)
+	}
+
+	events := make([]Event, 0, len(interrupted)*2)
+	recovered := 0
+	for _, run := range interrupted {
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE runs SET status = ?, error = ?, updated_at = ?
+			 WHERE id = ? AND status = ?`,
+			StatusFailed, reason, formatTime(now), run.id, run.status,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("fail interrupted run %s: %w", run.id, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("count recovered run %s: %w", run.id, err)
+		}
+		if affected == 0 {
+			continue
+		}
+
+		var nextSeq int64
+		if err := tx.QueryRowContext(
+			ctx, `SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = ?`, run.id,
+		).Scan(&nextSeq); err != nil {
+			return 0, fmt.Errorf("next recovery event seq for %s: %w", run.id, err)
+		}
+		for offset, event := range []struct {
+			eventType string
+			payload   []byte
+		}{
+			{eventType: "error", payload: errorPayload},
+			{eventType: "run_status", payload: statusPayload},
+		} {
+			seq := nextSeq + int64(offset)
+			if _, err := tx.ExecContext(
+				ctx,
+				`INSERT INTO run_events (run_id, seq, type, payload_json, created_at)
+				 VALUES (?, ?, ?, ?, ?)`,
+				run.id, seq, event.eventType, string(event.payload), formatTime(now),
+			); err != nil {
+				return 0, fmt.Errorf("append recovery event for %s: %w", run.id, err)
+			}
+			events = append(events, Event{
+				RunID: run.id, Seq: seq, Type: event.eventType,
+				Payload: append(json.RawMessage(nil), event.payload...), CreatedAt: now,
+			})
+		}
+		recovered++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit interrupted run recovery: %w", err)
+	}
+	for _, event := range events {
+		s.broker.Publish(event)
+	}
+	return recovered, nil
 }
 
 // ListRuns 按创建时间倒序列出 run。

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -583,15 +584,15 @@ func writeEvent(w http.ResponseWriter, event store.Event) bool {
 	return true
 }
 
-// Serve 是便捷入口，给 cmd/loopd 用。
-func Serve(addr string, handler http.Handler) error {
+// Serve 在调用方已取得的监听器上启动服务。loopd 在恢复中断任务前先绑定地址，
+// 避免第二个实例因端口冲突启动失败，却提前修改第一个实例仍在处理的 run。
+func Serve(listener net.Listener, handler http.Handler) error {
 	server := &http.Server{
-		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("loopd listening on http://%s", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	log.Printf("loopd listening on http://%s", listener.Addr())
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil

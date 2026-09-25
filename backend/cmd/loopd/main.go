@@ -2,8 +2,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,6 +44,14 @@ func run() error {
 		return err
 	}
 	defer database.Close()
+	listener, recovered, err := claimControlPlane(context.Background(), addr, database)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	if recovered > 0 {
+		log.Printf("loopd: marked %d interrupted runs as failed", recovered)
+	}
 
 	client := worker.New(workerURL)
 	model, err := buildLLM()
@@ -61,7 +71,32 @@ func run() error {
 		runtimeConfig.MaxModelCalls, runtimeConfig.MaxTotalTokens, runtimeConfig.MaxFreshTotalTokens,
 		runtimeConfig.MaxPromptTokensPerCall, runtimeConfig.MaxRequestBytes,
 	)
-	return api.Serve(addr, server.Handler())
+	return api.Serve(listener, server.Handler())
+}
+
+const interruptedRunReason = "控制面重启中断了正在运行的任务；内存中的规划或执行状态无法恢复，请新开一轮重试"
+
+func claimControlPlane(
+	ctx context.Context, addr string, database *store.Store,
+) (net.Listener, int, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	recovered, err := recoverInterruptedRuns(ctx, database)
+	if err != nil {
+		listener.Close()
+		return nil, 0, err
+	}
+	return listener, recovered, nil
+}
+
+func recoverInterruptedRuns(ctx context.Context, database *store.Store) (int, error) {
+	recovered, err := database.RecoverInterruptedRuns(ctx, interruptedRunReason)
+	if err != nil {
+		return 0, fmt.Errorf("recover interrupted runs: %w", err)
+	}
+	return recovered, nil
 }
 
 func runtimeConfigFromEnv() agentruntime.Config {
