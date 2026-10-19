@@ -579,8 +579,10 @@ function refreshEmployee(auth) {
     const detail = errorOf(value)
     if (
       [401, 403].includes(response.status) ||
-      lapsedCode(detail.code, SITES["trae-bytedance"]) ||
-      employeeLapsedWords.test(detail.message)
+      (response.status < 500 && (
+        lapsedCode(detail.code, SITES["trae-bytedance"]) ||
+        employeeLapsedWords.test(detail.message)
+      ))
     ) {
       throw new Expired("Trae ByteDance's sign-in has expired; sign in again")
     }
@@ -3055,10 +3057,17 @@ const makePlugin = (site) => async ({ client }) => {
       id: site.id,
       // the account's own list, when Trae answers; else the list above
       async models(provider, { auth }) {
-        if (auth?.type !== "oauth" || !auth.access) return provider.models
+        const fallback = () => {
+          if (site.employee) {
+            availableModels.clear()
+            for (const id of Object.keys(provider.models ?? {})) availableModels.add(id)
+          }
+          return provider.models
+        }
+        if (auth?.type !== "oauth" || !auth.access) return fallback()
         try {
           const ms = await liveModels(await fresh(async () => auth))
-          if (!ms.length) return provider.models
+          if (!ms.length) return fallback()
           const ids = new Set(ms.map((m) => String(m.config_name)))
           return Object.fromEntries(ms.flatMap((m) => {
             const id = String(m.config_name)
@@ -3071,7 +3080,7 @@ const makePlugin = (site) => async ({ client }) => {
           }))
         } catch (e) {
           if (e instanceof Expired) throw e
-          return provider.models
+          return fallback()
         }
       },
     },

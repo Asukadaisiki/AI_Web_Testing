@@ -55,7 +55,7 @@ test("refreshes once per old employee token", async () => {
 
 test("a temporary refresh failure does not modify existing auth", async () => {
   await routeRefresh((_request, res) => json(res, 503, {
-    message: "JWT service temporarily unavailable",
+    message: "JWT token is invalid while auth backend is unavailable",
   }))
   const auth = {
     type: "oauth",

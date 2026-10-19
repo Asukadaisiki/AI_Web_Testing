@@ -94,11 +94,23 @@ test("model discovery does not follow credential-bearing redirects", async (t) =
 })
 
 test("an empty discovery result leaves fallback models usable", async () => {
+  let batchRequests = 0
   upstream = await startFakeUpstream((request, res) => {
-    if (request.path.includes("detail_param")) {
-      json(res, 200, request.path.includes("batch_")
-        ? { function_configs: [] }
-        : { config_info_list: [] })
+    if (request.path.includes("batch_get_detail_param")) {
+      batchRequests += 1
+      json(res, 200, batchRequests === 1 ? {
+        function_configs: [{
+          function: "chat_v3",
+          config_info_list: [{
+            config_name: "employee-model",
+            usage: "chat_completion",
+          }],
+        }],
+      } : { function_configs: [] })
+      return
+    }
+    if (request.path.includes("get_detail_param")) {
+      json(res, 200, { config_info_list: [] })
       return
     }
     res.writeHead(200, { "content-type": "text/event-stream" })
@@ -111,7 +123,7 @@ test("an empty discovery result leaves fallback models usable", async () => {
 
   const hooks = await TraeByteDanceAuthPlugin({ client: {} })
   const fallback = { "glm-5": { id: "glm-5" } }
-  assert.deepEqual(await hooks.provider.models({ models: fallback }, {
+  const context = {
     auth: {
       type: "oauth",
       access: "employee-empty-model-token",
@@ -120,16 +132,16 @@ test("an empty discovery result leaves fallback models usable", async () => {
       accountId: "employee.test",
       scope: "bytedance",
     },
+  }
+  assert.deepEqual(
+    Object.keys(await hooks.provider.models({ models: fallback }, context)),
+    ["employee-model"],
+  )
+  assert.deepEqual(await hooks.provider.models({ models: fallback }, {
+    auth: context.auth,
   }), fallback)
 
-  const loader = await hooks.auth.loader(async () => ({
-    type: "oauth",
-    access: "employee-empty-model-token",
-    refresh: "",
-    expires: Date.now() + 3_600_000,
-    accountId: "employee.test",
-    scope: "bytedance",
-  }))
+  const loader = await hooks.auth.loader(async () => context.auth)
   const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
     method: "POST",
     body: JSON.stringify({
