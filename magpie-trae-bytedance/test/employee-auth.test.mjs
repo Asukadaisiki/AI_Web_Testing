@@ -64,6 +64,9 @@ test("employee browser login uses a one-shot loopback callback", async () => {
 
   const wrong = new URL("/wrong", callback)
   assert.equal((await fetch(wrong)).status, 404)
+  assert.equal((await fetch(wrong, { method: "OPTIONS" })).status, 404)
+  assert.equal((await fetch(callback, { method: "POST" })).status, 405)
+  assert.equal((await fetch(callback, { method: "OPTIONS" })).status, 204)
 
   callback.searchParams.set("IDEUserToken", "synthetic-callback-token")
   callback.searchParams.set("ExpiredAt", "1893456000000")

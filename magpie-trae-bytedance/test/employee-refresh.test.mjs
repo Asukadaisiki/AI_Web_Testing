@@ -77,3 +77,38 @@ test("an unauthorized refresh marks the sign-in expired", async () => {
   assert.equal(error.signIn, "expired")
   assert.doesNotMatch(String(error), /employee-token-old/)
 })
+
+test("a business-level invalid token marks the sign-in expired", async () => {
+  await routeRefresh((_request, res) => json(res, 200, {
+    code: 1001,
+    message: "token invalid",
+  }))
+  const error = await _internal.refreshEmployee({
+    type: "oauth",
+    access: "employee-token-business-invalid",
+    expires: 1,
+  }).catch((caught) => caught)
+
+  assert.equal(error.signIn, "expired")
+})
+
+test("refresh does not follow a credential-bearing redirect", async (t) => {
+  const attacker = await startFakeUpstream((_request, res) => json(res, 200, {
+    Result: {
+      Token: "redirected-token",
+      ExpiredAt: 1893456000000,
+    },
+  }))
+  t.after(() => attacker.close())
+  await routeRefresh((_request, res) => {
+    res.writeHead(302, { location: `${attacker.origin}/collect` })
+    res.end()
+  })
+
+  await assert.rejects(_internal.refreshEmployee({
+    type: "oauth",
+    access: "employee-token-redirect",
+    expires: 1,
+  }), /renewing the sign-in/)
+  assert.equal(attacker.requests.length, 0)
+})

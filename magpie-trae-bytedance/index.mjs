@@ -559,6 +559,7 @@ function refreshEmployee(auth) {
     try {
       response = await fetch(url, {
         method: "POST",
+        redirect: "manual",
         headers: {
           "Content-Type": "application/json",
           "X-Cloudide-Token": auth.access,
@@ -575,7 +576,12 @@ function refreshEmployee(auth) {
     const access = String(result?.Token ?? result?.token ?? "")
     const expires = whenOf(result?.ExpiredAt ?? result?.expiredAt ?? result?.TokenExpireAt)
     if (response.ok && access && expires) return { access, expires }
-    if ([401, 403].includes(response.status)) {
+    const detail = errorOf(value)
+    if (
+      [401, 403].includes(response.status) ||
+      lapsedCode(detail.code, SITES["trae-bytedance"]) ||
+      lapsedWords.test(detail.message)
+    ) {
       throw new Expired("Trae ByteDance's sign-in has expired; sign in again")
     }
     throw new Error(`Trae ByteDance: renewing the sign-in: ${statusLine(response.status)}`)
@@ -904,11 +910,10 @@ async function employeeBrowserSignIn(site) {
       "Access-Control-Allow-Headers": "Content-Type",
       "Cache-Control": "no-store",
     }
-    if (req.method === "OPTIONS") return res.writeHead(204, headers).end()
-    if (req.method !== "GET") return res.writeHead(405, headers).end()
-
     const url = new URL(req.url ?? "/", "http://127.0.0.1")
     if (url.pathname !== "/authorize") return res.writeHead(404, headers).end()
+    if (req.method === "OPTIONS") return res.writeHead(204, headers).end()
+    if (req.method !== "GET") return res.writeHead(405, headers).end()
     if (settled) return res.writeHead(410, headers).end()
 
     let auth
@@ -1280,6 +1285,21 @@ function sessionOf(headers) {
   const s = String(headers.get(SESSION) ?? "").trim()
   headers.delete(SESSION)
   return s.slice(0, 128)
+}
+
+function unsupportedEmployeeOption(req) {
+  const nonDefault = [
+    ["n", req.n !== undefined && req.n !== 1],
+    ["stop", req.stop != null && (!Array.isArray(req.stop) || req.stop.length > 0)],
+    ["response_format", req.response_format != null && req.response_format?.type !== "text"],
+    ["top_p", req.top_p !== undefined && req.top_p !== 1],
+    ["frequency_penalty", req.frequency_penalty !== undefined && req.frequency_penalty !== 0],
+    ["presence_penalty", req.presence_penalty !== undefined && req.presence_penalty !== 0],
+    ["logprobs", req.logprobs !== undefined && req.logprobs !== false],
+    ["top_logprobs", req.top_logprobs !== undefined],
+    ["seed", req.seed !== undefined],
+  ]
+  return nonDefault.find(([, unsupported]) => unsupported)?.[0] ?? ""
 }
 
 // chatBody is the request for llm_utils_chat; modelName is the model the
@@ -2429,9 +2449,13 @@ async function* chain(held, it) {
 function failure(site, status, code, message) {
   message = message || statusLine(status)
   if (status === 401 || lapsedCode(code, site) || (status === 403 && lapsedWords.test(message))) {
-    return errorResponse(401, `${site.realm}'s sign-in has expired (${message}); sign in again`, "expired")
+    const detail = site.employee ? "" : ` (${message})`
+    return errorResponse(401, `${site.realm}'s sign-in has expired${detail}; sign in again`, "expired")
   }
-  if (status === 429 || quotaCode(code, site) || (status === 403 && quotaWords.test(message))) return errorResponse(429, `${site.realm}: ${message}`)
+  if (status === 429 || quotaCode(code, site) || (status === 403 && quotaWords.test(message))) {
+    return errorResponse(429, site.employee ? redactedError() : `${site.realm}: ${message}`)
+  }
+  if (site.employee) return errorResponse(status >= 400 ? status : 502, redactedError())
   return errorResponse(status >= 400 ? status : 502, `${site.realm}: ${message}${code ? ` (code ${code})` : ""}`)
 }
 
@@ -2471,7 +2495,7 @@ async function openai(req, it, abort, site) {
   // ends with the error and [DONE], not a finish that says it stopped; the
   // stream is closed whatever happens, and an agent that goes away stops
   // the reading of Trae's
-  const error = (message, code = null) => enc.encode(`data: ${JSON.stringify({ error: { message: `Trae CN: ${message}`, type: "api_error", code } })}\n\n`)
+  const error = (message, code = null) => enc.encode(`data: ${JSON.stringify({ error: { message: site.employee ? redactedError() : `Trae CN: ${message}`, type: "api_error", code } })}\n\n`)
   let gone = false
   const stream = new ReadableStream({
     async start(ctl) {
@@ -2628,6 +2652,7 @@ const makePlugin = (site) => async ({ client }) => {
   // model it names there
   const listedBy = new Map()
   const modelNames = new Map()
+  const availableModels = new Set(Object.keys(site.models))
   // the Max each model the list last read has (null: none)
   const maxes = new Map()
   // whether each model the list last read takes images (its multimodal)
@@ -2714,7 +2739,7 @@ const makePlugin = (site) => async ({ client }) => {
 
   // post asks one of Trae's JSON pages with the account
   const post = async (a, url, body) => {
-    const res = await fetch(url, { method: "POST", headers: ideHeaders(a, site, { Accept: "application/json" }), body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) })
+    const res = await fetch(url, { method: "POST", redirect: site.employee ? "manual" : "follow", headers: ideHeaders(a, site, { Accept: "application/json" }), body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) })
     const text = await res.text()
     return { status: res.status, text, v: parseJSON(text) }
   }
@@ -2948,6 +2973,13 @@ const makePlugin = (site) => async ({ client }) => {
         modelNames.delete(id + MAX)
       }
     }
+    if (site.employee) {
+      availableModels.clear()
+      for (const id of out.keys()) {
+        availableModels.add(id)
+        if (maxes.get(id)) availableModels.add(id + MAX)
+      }
+    }
     return [...out.values()].map((x) => x.m)
   }
 
@@ -3059,6 +3091,13 @@ const makePlugin = (site) => async ({ client }) => {
             if (ownPage(url, site)) return ownRequest(getAuth, a0, url, init.method ?? r0?.method ?? "POST", body, init.signal ?? r0?.signal)
             const req = parseJSON(body)
             if (!Array.isArray(req.messages)) return errorResponse(400, `${site.realm}: only chat completions are served`)
+            if (site.employee && !availableModels.has(String(req.model))) {
+              return errorResponse(400, `${site.realm}: the requested model is not available`)
+            }
+            if (site.employee) {
+              const unsupported = unsupportedEmployeeOption(req)
+              if (unsupported) return errorResponse(400, `${site.realm}: unsupported option ${unsupported}`)
+            }
             let a
             try {
               a = await fresh(getAuth)
@@ -3102,6 +3141,7 @@ const makePlugin = (site) => async ({ client }) => {
             for (const fn of [...new Set(fns)]) {
               const res = await fetch(apiOf(a, site) + "/api/agent/v3/llm_utils_chat", {
                 method: "POST",
+                redirect: site.employee ? "manual" : "follow",
                 headers: ideHeaders(a, site, { Accept: "text/event-stream", "X-Request-ID": randomUUID() }),
                 body: JSON.stringify(chatBody(req, fn, named?.fn === fn || max ? named.name : "", named?.fn === fn || max ? named.most : 0, max, session, sees)),
                 signal: ac.signal,

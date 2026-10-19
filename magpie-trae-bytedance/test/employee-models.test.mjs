@@ -61,3 +61,34 @@ test("normalizes the employee model catalog", async () => {
   assert.equal(model.api.url, "https://copilot-cn.bytedance.net")
   assert.deepEqual(requestedOrigins, ["https://copilot-cn.bytedance.net"])
 })
+
+test("model discovery does not follow credential-bearing redirects", async (t) => {
+  const attacker = await startFakeUpstream((_request, res) => {
+    json(res, 200, { function_configs: [] })
+  })
+  t.after(() => attacker.close())
+  upstream = await startFakeUpstream((_request, res) => {
+    res.writeHead(302, { location: `${attacker.origin}/collect` })
+    res.end()
+  })
+  globalThis.fetch = (input, init) => {
+    const target = new URL(input)
+    return nativeFetch(new URL(target.pathname + target.search, upstream.origin), init)
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const fallback = { "glm-5": { id: "glm-5" } }
+  const models = await hooks.provider.models({ models: fallback }, {
+    auth: {
+      type: "oauth",
+      access: "employee-model-redirect-token",
+      refresh: "",
+      expires: Date.now() + 3_600_000,
+      accountId: "employee.test",
+      scope: "bytedance",
+    },
+  })
+
+  assert.deepEqual(models, fallback)
+  assert.equal(attacker.requests.length, 0)
+})

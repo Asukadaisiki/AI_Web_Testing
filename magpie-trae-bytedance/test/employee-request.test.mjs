@@ -196,3 +196,101 @@ test("rejects a non-employee model host before fetch runs", async () => {
     site.apiOf = original
   }
 })
+
+test("does not follow a credential-bearing model redirect", async (t) => {
+  const attacker = await startFakeUpstream((_request, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end('event: done\ndata: {}\n\n')
+  })
+  t.after(() => attacker.close())
+  upstream = await startFakeUpstream((_request, res) => {
+    res.writeHead(302, { location: `${attacker.origin}/collect` })
+    res.end()
+  })
+  globalThis.fetch = (input, init) => {
+    const target = new URL(input)
+    return nativeFetch(new URL(target.pathname + target.search, upstream.origin), init)
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const loader = await hooks.auth.loader(async () => auth)
+  const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "glm-5",
+      messages: [{ role: "user", content: "Reply with OK" }],
+    }),
+  })
+
+  assert.equal(response.status, 502)
+  assert.equal(attacker.requests.length, 0)
+})
+
+test("redacts employee upstream error details", async () => {
+  upstream = await startFakeUpstream((_request, res) => {
+    res.writeHead(500, { "content-type": "application/json" })
+    res.end(JSON.stringify({ message: "token=must-not-appear" }))
+  })
+  globalThis.fetch = (input, init) => {
+    const target = new URL(input)
+    return nativeFetch(new URL(target.pathname + target.search, upstream.origin), init)
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const loader = await hooks.auth.loader(async () => auth)
+  const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "glm-5",
+      messages: [{ role: "user", content: "Reply with OK" }],
+    }),
+  })
+  const text = await response.text()
+
+  assert.equal(response.status, 500)
+  assert.doesNotMatch(text, /must-not-appear/)
+  assert.match(text, /request failed/)
+})
+
+test("rejects unknown employee models before an upstream request", async () => {
+  let fetched = false
+  globalThis.fetch = async () => {
+    fetched = true
+    throw new Error("must not fetch")
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const loader = await hooks.auth.loader(async () => auth)
+  const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "not-in-employee-catalog",
+      messages: [{ role: "user", content: "Reply with OK" }],
+    }),
+  })
+
+  assert.equal(response.status, 400)
+  assert.equal(fetched, false)
+})
+
+test("rejects unsupported OpenAI request options", async () => {
+  let fetched = false
+  globalThis.fetch = async () => {
+    fetched = true
+    throw new Error("must not fetch")
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const loader = await hooks.auth.loader(async () => auth)
+  const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "glm-5",
+      messages: [{ role: "user", content: "Return JSON" }],
+      response_format: { type: "json_object" },
+    }),
+  })
+
+  assert.equal(response.status, 400)
+  assert.equal(fetched, false)
+})

@@ -49,9 +49,10 @@ Upstream requests are restricted in code to these HTTPS hosts:
 The OAuth callback listens only on a random `127.0.0.1` port, accepts one
 credential, and closes immediately. Credential values are not logged.
 
-Magpie stores provider sign-ins under `~/.config/magpie/logins.json`. The
-Magpie configuration directory should be accessible only by its owner, and
-credential-bearing files must use mode `0600`.
+Magpie stores plugin provider credentials in
+`~/.config/magpie/plugin-auth.json`. The Magpie configuration directory
+should be accessible only by its owner, and credential-bearing files must
+use mode `0600`.
 
 ## Live Check
 
