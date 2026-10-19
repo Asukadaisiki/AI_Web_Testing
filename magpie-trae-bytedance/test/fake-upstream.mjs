@@ -9,7 +9,9 @@ export async function startFakeUpstream(handler) {
     const headers = Object.fromEntries(
       Object.entries(req.headers).map(([name, value]) => [
         name,
-        /authorization|token/i.test(name) ? "<redacted>" : value,
+        name === "authorization"
+          ? String(value).replace(/\s+.*/, " <redacted>")
+          : /token/i.test(name) ? "<redacted>" : value,
       ]),
     )
     const request = {

@@ -240,7 +240,6 @@ const SITES = {
 }
 
 SITES["trae-bytedance"] = {
-  ...SITES["trae-cn"],
   id: "trae-bytedance",
   name: "Trae ByteDance",
   realm: "Trae ByteDance",
@@ -252,7 +251,20 @@ SITES["trae-bytedance"] = {
     auth: "https://solo-web.bytedance.net",
     api: "https://copilot-cn.bytedance.net",
   },
+  clientId: "ono9krqynydwx5",
+  appId: "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8",
+  ideVersion: "3.3.65",
+  ideVersionCode: "20260401",
+  clientVersion: "0.1.69",
+  clientVersionCode: "20260917",
+  pluginVersion: "2.3.24254",
+  brand: "TRAE",
+  functions: ["chat_v3", "solo_work_lite", "solo_agent", "solo_agent_lite"],
   models: { ...SITES["trae-cn"].models },
+  apiOf: () => SITES["trae-bytedance"].hosts.api,
+  modelHost: (raw) => isEmployeeURL(raw, "model"),
+  ownPage: () => false,
+  regionOf: () => "CN",
 }
 
 const EMPLOYEE_HOSTS = Object.freeze({
@@ -511,7 +523,8 @@ function fromAuth(auth, site) {
 
 // apiOf is the model host for an account
 function apiOf(a, site) {
-  return site.apiOf(a)
+  const url = site.apiOf(a)
+  return site.employee ? employeeURL(url, "model").origin : url
 }
 
 // ownPage: url is one of Trae's own JSON pages (the daily check-in,
@@ -2646,8 +2659,21 @@ const makePlugin = (site) => async ({ client }) => {
   // fresh is the account with a token that has a while to go, renewed
   // when it hasn't
   const fresh = async (getAuth) => {
-    let a = fromAuth(await getAuth(), site)
+    const auth = await getAuth()
+    let a = fromAuth(auth, site)
     if (!a) throw new Expired(`${site.realm}: not signed in`)
+    if (site.employee) {
+      if (!a.expires || a.expires - Date.now() > EARLY_MS) return a
+      try {
+        const changed = await refreshEmployee(auth)
+        const got = { ...a, token: changed.access, expires: changed.expires, renewed: true }
+        await save({ ...auth, ...changed })
+        return got
+      } catch (e) {
+        if (!(e instanceof Expired) && a.expires > Date.now()) return a
+        throw e
+      }
+    }
     // a renewal the sign-in doesn't hold yet. A device-bound one keeps the
     // refresh token, so the token tells it, and it is renewed in its turn
     if (newerHere(a)) a = { ...renewed.get(a.uid || a.name).got, renewed: false }
@@ -3012,8 +3038,7 @@ const makePlugin = (site) => async ({ client }) => {
     },
     auth: {
       provider: site.id,
-      usage,
-      checkin,
+      ...(site.employee ? {} : { usage, checkin }),
       // magpie renews the token LEAD_MS before its end, once, before its
       // requests, models and usage ask; the check before each request
       // stays for OpenCode, which doesn't call this
