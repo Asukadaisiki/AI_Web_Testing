@@ -320,11 +320,14 @@ test('accepts reasoning_effort "none" as an omitted option', async () => {
   assert.equal("reasoning_effort" in upstream.requests[0].body, false)
 })
 
-test("rejects unknown OpenAI request fields", async () => {
-  let fetched = false
-  globalThis.fetch = async () => {
-    fetched = true
-    throw new Error("must not fetch")
+test("accepts normalized reasoning effort as an advisory option", async () => {
+  upstream = await startFakeUpstream((_request, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end('event: output\ndata: {"response":"OK"}\n\nevent: done\ndata: {}\n\n')
+  })
+  globalThis.fetch = (input, init) => {
+    const target = new URL(input)
+    return nativeFetch(new URL(target.pathname + target.search, upstream.origin), init)
   }
 
   const hooks = await TraeByteDanceAuthPlugin({ client: {} })
@@ -334,10 +337,10 @@ test("rejects unknown OpenAI request fields", async () => {
     body: JSON.stringify({
       model: "glm-5",
       messages: [{ role: "user", content: "Reply with OK" }],
-      reasoning_effort: "high",
+      reasoning_effort: "low",
     }),
   })
 
-  assert.equal(response.status, 400)
-  assert.equal(fetched, false)
+  assert.equal(response.status, 200)
+  assert.equal("reasoning_effort" in upstream.requests[0].body, false)
 })

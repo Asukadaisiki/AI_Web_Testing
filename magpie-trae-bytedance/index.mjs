@@ -1308,7 +1308,6 @@ function unsupportedEmployeeOption(req) {
   if (unknown) return unknown
   const nonDefault = [
     ["stream_options", req.stream_options != null && typeof req.stream_options !== "object"],
-    ["reasoning_effort", req.reasoning_effort !== undefined && req.reasoning_effort !== "none"],
   ]
   return nonDefault.find(([, unsupported]) => unsupported)?.[0] ?? ""
 }
