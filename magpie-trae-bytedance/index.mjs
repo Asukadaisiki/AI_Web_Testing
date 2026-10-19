@@ -823,6 +823,77 @@ async function browserSignIn(site) {
   }
 }
 
+async function employeeBrowserSignIn(site) {
+  let settled = false
+  let resolveResult
+  const result = new Promise((resolve) => (resolveResult = resolve))
+  let server
+  let timer
+
+  const close = () => {
+    clearTimeout(timer)
+    server.close()
+    setImmediate(() => server.closeAllConnections?.())
+  }
+  const finish = (value) => {
+    if (settled) return
+    settled = true
+    resolveResult(value)
+    close()
+  }
+
+  server = createServer((req, res) => {
+    const headers = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Cache-Control": "no-store",
+    }
+    if (req.method === "OPTIONS") return res.writeHead(204, headers).end()
+    if (req.method !== "GET") return res.writeHead(405, headers).end()
+
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    if (url.pathname !== "/authorize") return res.writeHead(404, headers).end()
+    if (settled) return res.writeHead(410, headers).end()
+
+    let auth
+    try {
+      auth = parseEmployeeCredential(url.searchParams)
+    } catch {
+      res.writeHead(400, { ...headers, "Content-Type": "text/html; charset=utf-8" })
+      res.end(page(false, "Sign-in didn't finish", "Trae ByteDance returned an incomplete employee credential."))
+      finish({ type: "failed", error: "Trae ByteDance returned an incomplete employee credential" })
+      return
+    }
+
+    res.writeHead(200, { ...headers, "Content-Type": "text/html; charset=utf-8" })
+    res.end(page(true, "You're signed in", "Your ByteDance employee account is signed in. You can close this tab."))
+    finish({ ...auth, type: "success" })
+  })
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", resolve)
+  })
+
+  timer = setTimeout(
+    () => finish({ type: "failed", error: "the sign-in timed out" }),
+    5 * 60 * 1000,
+  )
+  timer.unref?.()
+
+  const callbackURL = `http://127.0.0.1:${server.address().port}/authorize`
+  const login = employeeURL(new URL("/authorization", site.hosts.web), "login")
+  login.searchParams.set("auth_callback_url", callbackURL)
+  login.searchParams.set("product_name", "TRAE CN")
+  return {
+    url: login.href,
+    instructions: "Sign in with your ByteDance employee account in the browser.",
+    method: "auto",
+    callback: () => result,
+  }
+}
+
 // ---- requests ---------------------------------------------------------------------
 
 // headers are the IDE's, for the account and its device
@@ -3006,11 +3077,15 @@ const makePlugin = (site) => async ({ client }) => {
           },
         }
       },
-      methods: [{ type: "oauth", label: `${site.authLabel ?? `${site.name} account`} (browser)`, authorize: () => browserSignIn(site) }],
+      methods: [{
+        type: "oauth",
+        label: `${site.authLabel ?? `${site.name} account`} (browser)`,
+        authorize: () => site.employee ? employeeBrowserSignIn(site) : browserSignIn(site),
+      }],
     },
   }
 }
 
 export const TraeByteDanceAuthPlugin = makePlugin(SITES["trae-bytedance"])
 
-export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, employeeURL, isEmployeeURL, parseEmployeeCredential, redactedError, accountOf, HOSTS: SITES["trae-bytedance"].hosts, MODELS: SITES["trae-bytedance"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
+export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, employeeURL, isEmployeeURL, parseEmployeeCredential, employeeBrowserSignIn, redactedError, accountOf, HOSTS: SITES["trae-bytedance"].hosts, MODELS: SITES["trae-bytedance"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
