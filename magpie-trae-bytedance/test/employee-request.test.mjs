@@ -295,6 +295,31 @@ test("rejects unsupported OpenAI request options", async () => {
   assert.equal(fetched, false)
 })
 
+test('accepts reasoning_effort "none" as an omitted option', async () => {
+  upstream = await startFakeUpstream((_request, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end('event: output\ndata: {"response":"OK"}\n\nevent: done\ndata: {}\n\n')
+  })
+  globalThis.fetch = (input, init) => {
+    const target = new URL(input)
+    return nativeFetch(new URL(target.pathname + target.search, upstream.origin), init)
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const loader = await hooks.auth.loader(async () => auth)
+  const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "glm-5",
+      messages: [{ role: "user", content: "Reply with OK" }],
+      reasoning_effort: "none",
+    }),
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal("reasoning_effort" in upstream.requests[0].body, false)
+})
+
 test("rejects unknown OpenAI request fields", async () => {
   let fetched = false
   globalThis.fetch = async () => {
