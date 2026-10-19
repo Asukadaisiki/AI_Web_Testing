@@ -1,0 +1,9 @@
+{
+  "name": "opencode-trae-bytedance-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.mjs",
+  "files": ["index.mjs", "README.md", "LICENSE", "NOTICE"],
+  "license": "MIT"
+}
