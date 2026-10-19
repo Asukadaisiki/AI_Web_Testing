@@ -530,6 +530,48 @@ class Expired extends Error {
   }
 }
 
+const EMPLOYEE_REFRESH =
+  "https://solo-web.bytedance.net/trae/api/v3/UpgradeBytecloudToken"
+const employeeRefreshing = new Map()
+
+function refreshEmployee(auth) {
+  if (auth?.type !== "oauth" || !auth.access) return Promise.resolve(undefined)
+  const key = auth.access
+  let pending = employeeRefreshing.get(key)
+  if (pending) return pending
+
+  pending = (async () => {
+    const url = employeeURL(EMPLOYEE_REFRESH, "refresh")
+    let response
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cloudide-Token": auth.access,
+        },
+        body: "{}",
+        signal: AbortSignal.timeout(20_000),
+      })
+    } catch {
+      throw new Error("Trae ByteDance: renewing the sign-in failed")
+    }
+
+    const value = parseJSON(await response.text())
+    const result = value.Result ?? value.result ?? value
+    const access = String(result?.Token ?? result?.token ?? "")
+    const expires = whenOf(result?.ExpiredAt ?? result?.expiredAt ?? result?.TokenExpireAt)
+    if (response.ok && access && expires) return { access, expires }
+    if ([401, 403].includes(response.status)) {
+      throw new Expired("Trae ByteDance's sign-in has expired; sign in again")
+    }
+    throw new Error(`Trae ByteDance: renewing the sign-in: ${statusLine(response.status)}`)
+  })().finally(() => employeeRefreshing.delete(key))
+
+  employeeRefreshing.set(key, pending)
+  return pending
+}
+
 // errorOf is what Trae said went wrong, from its several shapes: a business
 // {code, message}, {error: {code, message}}, or ByteDance's
 // {ResponseMetadata: {Error: {Code, Message}}}
@@ -2622,6 +2664,7 @@ const makePlugin = (site) => async ({ client }) => {
   // refresh is magpie's auth.refresh: the token renewed LEAD_MS before its
   // end, as the fields that changed
   const refresh = async (auth) => {
+    if (site.employee) return refreshEmployee(auth)
     const a = fromAuth(auth, site)
     if (!a || !a.refresh) return undefined
     const last = renewed.get(a.uid || a.name)
@@ -3088,4 +3131,4 @@ const makePlugin = (site) => async ({ client }) => {
 
 export const TraeByteDanceAuthPlugin = makePlugin(SITES["trae-bytedance"])
 
-export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, employeeURL, isEmployeeURL, parseEmployeeCredential, employeeBrowserSignIn, redactedError, accountOf, HOSTS: SITES["trae-bytedance"].hosts, MODELS: SITES["trae-bytedance"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
+export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, employeeURL, isEmployeeURL, parseEmployeeCredential, employeeBrowserSignIn, refreshEmployee, redactedError, accountOf, HOSTS: SITES["trae-bytedance"].hosts, MODELS: SITES["trae-bytedance"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
