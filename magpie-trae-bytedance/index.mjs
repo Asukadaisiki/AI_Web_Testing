@@ -255,6 +255,37 @@ SITES["trae-bytedance"] = {
   models: { ...SITES["trae-cn"].models },
 }
 
+const EMPLOYEE_HOSTS = Object.freeze({
+  login: new Set(["solo-web.bytedance.net", "sso.bytedance.com", "accounts.feishu.cn"]),
+  refresh: new Set(["solo-web.bytedance.net"]),
+  model: new Set(["copilot-cn.bytedance.net"]),
+})
+
+function employeeURL(raw, purpose) {
+  const url = new URL(raw)
+  const allowed = EMPLOYEE_HOSTS[purpose]
+  if (
+    !allowed ||
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    !allowed.has(url.hostname.toLowerCase())
+  ) {
+    throw new Error(`Trae ByteDance ${purpose} URL is not allowed`)
+  }
+  return url
+}
+
+function isEmployeeURL(raw, purpose) {
+  try {
+    employeeURL(raw, purpose)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // traeHost is a host a sign-in named, when it is a well-formed https one
 // on Trae's own domains (no port, no credentials), as origin plus any path;
 // "" for anything else, which is then not taken
@@ -2940,4 +2971,4 @@ const makePlugin = (site) => async ({ client }) => {
 
 export const TraeByteDanceAuthPlugin = makePlugin(SITES["trae-bytedance"])
 
-export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, accountOf, HOSTS: SITES["trae-cn"].hosts, MODELS: SITES["trae-cn"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
+export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, employeeURL, isEmployeeURL, accountOf, HOSTS: SITES["trae-bytedance"].hosts, MODELS: SITES["trae-bytedance"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
