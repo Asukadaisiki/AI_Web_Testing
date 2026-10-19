@@ -54,7 +54,9 @@ test("refreshes once per old employee token", async () => {
 })
 
 test("a temporary refresh failure does not modify existing auth", async () => {
-  await routeRefresh((_request, res) => json(res, 503, { message: "unavailable" }))
+  await routeRefresh((_request, res) => json(res, 503, {
+    message: "JWT service temporarily unavailable",
+  }))
   const auth = {
     type: "oauth",
     access: "employee-token-old",
@@ -62,7 +64,9 @@ test("a temporary refresh failure does not modify existing auth", async () => {
   }
   const before = structuredClone(auth)
 
-  await assert.rejects(_internal.refreshEmployee(auth), /renewing the sign-in/)
+  const error = await _internal.refreshEmployee(auth).catch((caught) => caught)
+  assert.match(String(error), /renewing the sign-in/)
+  assert.equal(error.signIn, undefined)
   assert.deepEqual(auth, before)
 })
 

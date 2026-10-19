@@ -580,7 +580,7 @@ function refreshEmployee(auth) {
     if (
       [401, 403].includes(response.status) ||
       lapsedCode(detail.code, SITES["trae-bytedance"]) ||
-      lapsedWords.test(detail.message)
+      employeeLapsedWords.test(detail.message)
     ) {
       throw new Expired("Trae ByteDance's sign-in has expired; sign in again")
     }
@@ -610,6 +610,7 @@ function errorOf(v) {
 const CN_LAPSED = [1001, "1001", 401, "401"]
 const lapsedCode = (code, site) => (site?.lapsed ?? CN_LAPSED).includes(code)
 const lapsedWords = /not ?log(ged)? ?in|unauthori[sz]ed|token (is )?(expired|invalid)|jwt|未登录|登录(已)?(过期|失效)/i
+const employeeLapsedWords = /not ?log(ged)? ?in|unauthori[sz]ed|token (is )?(expired|invalid)|token (was )?revoked|未登录|登录(已)?(过期|失效)/i
 const CN_QUOTA = [4008, "4008", 1005, "1005"]
 const quotaCode = (code, site) => (site?.quota ?? CN_QUOTA).includes(code)
 const quotaWords = /quota|credit|insufficient|exceed|limit|额度|积分|次数|上限|用完/i
@@ -1288,16 +1289,22 @@ function sessionOf(headers) {
 }
 
 function unsupportedEmployeeOption(req) {
+  const supported = new Set([
+    "model",
+    "messages",
+    "stream",
+    "stream_options",
+    "max_tokens",
+    "max_completion_tokens",
+    "temperature",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+  ])
+  const unknown = Object.keys(req).find((key) => !supported.has(key))
+  if (unknown) return unknown
   const nonDefault = [
-    ["n", req.n !== undefined && req.n !== 1],
-    ["stop", req.stop != null && (!Array.isArray(req.stop) || req.stop.length > 0)],
-    ["response_format", req.response_format != null && req.response_format?.type !== "text"],
-    ["top_p", req.top_p !== undefined && req.top_p !== 1],
-    ["frequency_penalty", req.frequency_penalty !== undefined && req.frequency_penalty !== 0],
-    ["presence_penalty", req.presence_penalty !== undefined && req.presence_penalty !== 0],
-    ["logprobs", req.logprobs !== undefined && req.logprobs !== false],
-    ["top_logprobs", req.top_logprobs !== undefined],
-    ["seed", req.seed !== undefined],
+    ["stream_options", req.stream_options != null && typeof req.stream_options !== "object"],
   ]
   return nonDefault.find(([, unsupported]) => unsupported)?.[0] ?? ""
 }
@@ -2973,7 +2980,7 @@ const makePlugin = (site) => async ({ client }) => {
         modelNames.delete(id + MAX)
       }
     }
-    if (site.employee) {
+    if (site.employee && out.size) {
       availableModels.clear()
       for (const id of out.keys()) {
         availableModels.add(id)

@@ -92,3 +92,51 @@ test("model discovery does not follow credential-bearing redirects", async (t) =
   assert.deepEqual(models, fallback)
   assert.equal(attacker.requests.length, 0)
 })
+
+test("an empty discovery result leaves fallback models usable", async () => {
+  upstream = await startFakeUpstream((request, res) => {
+    if (request.path.includes("detail_param")) {
+      json(res, 200, request.path.includes("batch_")
+        ? { function_configs: [] }
+        : { config_info_list: [] })
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end('event: output\ndata: {"response":"OK"}\n\nevent: done\ndata: {}\n\n')
+  })
+  globalThis.fetch = (input, init) => {
+    const target = new URL(input)
+    return nativeFetch(new URL(target.pathname + target.search, upstream.origin), init)
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const fallback = { "glm-5": { id: "glm-5" } }
+  assert.deepEqual(await hooks.provider.models({ models: fallback }, {
+    auth: {
+      type: "oauth",
+      access: "employee-empty-model-token",
+      refresh: "",
+      expires: Date.now() + 3_600_000,
+      accountId: "employee.test",
+      scope: "bytedance",
+    },
+  }), fallback)
+
+  const loader = await hooks.auth.loader(async () => ({
+    type: "oauth",
+    access: "employee-empty-model-token",
+    refresh: "",
+    expires: Date.now() + 3_600_000,
+    accountId: "employee.test",
+    scope: "bytedance",
+  }))
+  const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "glm-5",
+      messages: [{ role: "user", content: "Reply with OK" }],
+    }),
+  })
+
+  assert.equal(response.status, 200)
+})

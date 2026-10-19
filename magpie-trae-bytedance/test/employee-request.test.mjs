@@ -294,3 +294,25 @@ test("rejects unsupported OpenAI request options", async () => {
   assert.equal(response.status, 400)
   assert.equal(fetched, false)
 })
+
+test("rejects unknown OpenAI request fields", async () => {
+  let fetched = false
+  globalThis.fetch = async () => {
+    fetched = true
+    throw new Error("must not fetch")
+  }
+
+  const hooks = await TraeByteDanceAuthPlugin({ client: {} })
+  const loader = await hooks.auth.loader(async () => auth)
+  const response = await loader.fetch(`${loader.baseURL}/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({
+      model: "glm-5",
+      messages: [{ role: "user", content: "Reply with OK" }],
+      reasoning_effort: "high",
+    }),
+  })
+
+  assert.equal(response.status, 400)
+  assert.equal(fetched, false)
+})

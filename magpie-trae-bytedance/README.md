@@ -70,7 +70,7 @@ logs, issues, screenshots, or chat.
 
 ```bash
 magpie plugin logout trae-bytedance
-magpie plugin rm opencode-trae-bytedance-auth
+magpie plugin rm /absolute/path/to/magpie-trae-bytedance
 ```
 
 Removing the plugin does not affect `trae-cn` or its account.
