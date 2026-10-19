@@ -418,6 +418,48 @@ const parseJSON = (s) => {
   }
 }
 
+function parseCredentialValue(raw) {
+  if (!raw) return {}
+  let value = String(raw)
+  try {
+    value = decodeURIComponent(value)
+  } catch {}
+  let parsed = parseJSON(value)
+  if (!Object.keys(parsed).length) parsed = Object.fromEntries(new URLSearchParams(value))
+  return Object.fromEntries(
+    ["IDEUserToken", "ExpiredAt", "userInfo"]
+      .filter((key) => Object.hasOwn(parsed, key))
+      .map((key) => [key, parsed[key]]),
+  )
+}
+
+function parseEmployeeCredential(input) {
+  const outer = Object.fromEntries(input.entries())
+  const nested = parseCredentialValue(outer.credential)
+  const value = { ...outer, ...nested }
+  const access = String(value.IDEUserToken ?? "")
+  const info = parseJSON(value.userInfo)
+  const accountId = String(info.username ?? "")
+  const expires = whenOf(value.ExpiredAt)
+
+  if (!access || !accountId || !expires) {
+    throw new Error("Trae ByteDance returned an incomplete employee credential")
+  }
+  return {
+    type: "oauth",
+    access,
+    refresh: "",
+    expires,
+    accountId,
+    scope: "bytedance",
+    ...(info.ai_region ? { region: String(info.ai_region) } : {}),
+  }
+}
+
+function redactedError() {
+  return "Trae ByteDance request failed"
+}
+
 // ---- the sign-in as kept ------------------------------------------------------
 
 // The sign-in is kept as OpenCode keeps an OAuth one: access the
@@ -2971,4 +3013,4 @@ const makePlugin = (site) => async ({ client }) => {
 
 export const TraeByteDanceAuthPlugin = makePlugin(SITES["trae-bytedance"])
 
-export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, employeeURL, isEmployeeURL, accountOf, HOSTS: SITES["trae-bytedance"].hosts, MODELS: SITES["trae-bytedance"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
+export const _internal = { ownClient, clientStoragePaths, clientDevice, clientDecode, thisMachine, traeHost, employeeURL, isEmployeeURL, parseEmployeeCredential, redactedError, accountOf, HOSTS: SITES["trae-bytedance"].hosts, MODELS: SITES["trae-bytedance"].models, TextTools, NativeCalls, looseJSON, glmCall, nameCall, toolNamed, unwrapped, traeMessages, chatBody, credits, dollarUsageOf, whenOf, newDevice, ugDevice, proofOf, SITES, SESSION, conversationID }
