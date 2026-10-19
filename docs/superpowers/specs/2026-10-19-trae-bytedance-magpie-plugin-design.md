@@ -105,28 +105,29 @@ magpie-trae-bytedance/
   package.json
   README.md
   index.mjs
-  auth.mjs
-  protocol.mjs
-  hosts.mjs
   test/
-    auth.test.mjs
+    employee-auth.test.mjs
+    employee-refresh.test.mjs
+    employee-request.test.mjs
+    employee-models.test.mjs
     hosts.test.mjs
-    protocol.test.mjs
     plugin.test.mjs
     fake-upstream.mjs
 ```
 
 Responsibilities:
 
-- `index.mjs`: exports the OpenCode/Magpie plugin hooks.
-- `auth.mjs`: loopback OAuth, callback parsing, credential refresh, and
-  redacted authentication errors.
-- `protocol.mjs`: model discovery plus request and stream translation.
-- `hosts.mjs`: immutable internal endpoints and strict URL validation.
+- `index.mjs`: a narrow fork of the community Trae plugin, retaining its
+  upstream single-file layout so future protocol fixes remain comparable. It
+  exports only the employee provider and keeps employee authentication and
+  host-policy functions in clearly marked sections.
+- `test/*.test.mjs`: tests split by authentication, refresh, host policy,
+  model discovery, request conversion, and package contract.
 - `test/fake-upstream.mjs`: local HTTP fixtures for deterministic tests.
 
-The first implementation may combine small modules if the final code remains
-clear, but authentication and protocol conversion must stay separate.
+The single-file production layout is deliberate compatibility with the
+upstream package. Authentication and protocol behavior remain independently
+testable even though they are colocated.
 
 ## Provider Contract
 
@@ -155,7 +156,10 @@ The plugin must not claim the `trae-cn` provider id.
 1. Verify that the internal login host is reachable. Failure is reported as
    "ByteDance network unavailable"; it is not treated as invalid credentials.
 2. Start an HTTP server on a random `127.0.0.1` port.
-3. Generate an unguessable login nonce kept only in memory.
+3. Use the random loopback port and a one-shot callback as the local
+   correlation boundary. The observed employee authorization URL does not
+   define a `state` round trip, so the plugin must not invent one and assume
+   the server will preserve it.
 4. Open:
 
    ```text
