@@ -3,6 +3,7 @@ package operation
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 type httpOperation struct {
@@ -108,6 +111,9 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, call Call) (Result, error
 	if err := operation.schema.validateRaw(call.Arguments); err != nil {
 		return Result{}, fmt.Errorf("operation %q: %w", call.Name, err)
 	}
+	if err := validateExecutableArguments(call); err != nil {
+		return Result{}, fmt.Errorf("operation %q: %w", call.Name, err)
+	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, operation.definition.Timeout)
 	defer cancel()
@@ -175,14 +181,86 @@ func (d *HTTPDispatcher) dispatchAttempt(
 		)
 	}
 
-	var result Result
-	if err := decodeOneJSON(body, &result, true); err != nil {
+	var envelope callbackResultEnvelope
+	if err := decodeOneJSON(body, &envelope, true); err != nil {
 		return Result{}, false, fmt.Errorf("decode callback result: %w", err)
 	}
-	if result.Status != "succeeded" && result.Status != "failed" {
-		return Result{}, false, fmt.Errorf("callback result has invalid status %q", result.Status)
+	result, err := envelope.result()
+	if err != nil {
+		return Result{}, false, fmt.Errorf("validate callback result: %w", err)
 	}
 	return result, false, nil
+}
+
+type browserExecuteArguments struct {
+	SessionID string          `json:"session_id"`
+	Case      json.RawMessage `json:"case"`
+}
+
+func validateExecutableArguments(call Call) error {
+	if call.Name != "browser_execute_case" {
+		return nil
+	}
+	var arguments browserExecuteArguments
+	if err := decodeOneJSON(call.Arguments, &arguments, true); err != nil {
+		return fmt.Errorf("decode browser arguments: %w", err)
+	}
+	if _, err := contract.Validate(arguments.Case); err != nil {
+		return fmt.Errorf("case contract: %w", err)
+	}
+	return nil
+}
+
+type callbackResultEnvelope struct {
+	Status    string          `json:"status"`
+	Output    json.RawMessage `json:"output"`
+	Artifacts json.RawMessage `json:"artifacts"`
+	Error     json.RawMessage `json:"error"`
+}
+
+func (e callbackResultEnvelope) result() (Result, error) {
+	if e.Status != "succeeded" && e.Status != "failed" {
+		return Result{}, fmt.Errorf("invalid status %q", e.Status)
+	}
+	if err := requireJSONObject("output", e.Output); err != nil {
+		return Result{}, err
+	}
+	if err := requireJSONObject("artifacts", e.Artifacts); err != nil {
+		return Result{}, err
+	}
+	if len(e.Error) == 0 {
+		return Result{}, errors.New("error is required")
+	}
+
+	errorIsNull := bytes.Equal(bytes.TrimSpace(e.Error), []byte("null"))
+	switch {
+	case e.Status == "succeeded" && !errorIsNull:
+		return Result{}, errors.New("succeeded result must have a null error")
+	case e.Status == "failed" && errorIsNull:
+		return Result{}, errors.New("failed result must have an error object")
+	case e.Status == "failed":
+		if err := requireJSONObject("error", e.Error); err != nil {
+			return Result{}, err
+		}
+	}
+
+	return Result{
+		Status:    e.Status,
+		Output:    e.Output,
+		Artifacts: e.Artifacts,
+		Error:     e.Error,
+	}, nil
+}
+
+func requireJSONObject(name string, raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("%s is required", name)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return fmt.Errorf("%s must be an object", name)
+	}
+	return nil
 }
 
 func validateCallIdentity(call Call) error {

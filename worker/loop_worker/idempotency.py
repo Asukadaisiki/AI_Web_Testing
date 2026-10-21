@@ -23,6 +23,16 @@ class IdempotencyConflict(Exception):
         self.operation_id = operation_id
 
 
+class IdempotencyOverloaded(Exception):
+    """A distinct operation cannot start because active capacity is full."""
+
+    def __init__(self, max_active: int) -> None:
+        super().__init__(
+            f"worker already has the maximum {max_active} active operations"
+        )
+        self.max_active = max_active
+
+
 @dataclass(frozen=True)
 class _Completed(Generic[T]):
     request_hash: str
@@ -38,10 +48,13 @@ class _InFlight(Generic[T]):
 class IdempotencyCache(Generic[T]):
     """Shares in-flight work and retains a bounded LRU of completed results."""
 
-    def __init__(self, max_entries: int = 256) -> None:
+    def __init__(self, max_entries: int = 256, max_active: int = 32) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be at least 1")
+        if max_active < 1:
+            raise ValueError("max_active must be at least 1")
         self._max_entries = max_entries
+        self._max_active = max_active
         self._completed: OrderedDict[str, _Completed[T]] = OrderedDict()
         self._in_flight: dict[str, _InFlight[T]] = {}
         self._lock = asyncio.Lock()
@@ -71,6 +84,8 @@ class IdempotencyCache(Generic[T]):
                     raise IdempotencyConflict(operation_id)
                 task = in_flight.task
             else:
+                if len(self._in_flight) >= self._max_active:
+                    raise IdempotencyOverloaded(self._max_active)
                 task = asyncio.create_task(
                     self._execute_and_store(operation_id, request_hash, factory)
                 )
@@ -122,5 +137,6 @@ def canonical_request_hash(value: Any) -> str:
 __all__ = [
     "IdempotencyCache",
     "IdempotencyConflict",
+    "IdempotencyOverloaded",
     "canonical_request_hash",
 ]

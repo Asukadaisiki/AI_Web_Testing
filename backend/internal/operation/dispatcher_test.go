@@ -3,6 +3,7 @@ package operation_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -57,6 +58,38 @@ func TestHTTPDispatcherRejectsInvalidArgumentsBeforeHTTP(t *testing.T) {
 	}
 }
 
+func TestHTTPDispatcherRejectsInvalidNestedCaseBeforeHTTP(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls.Add(1)
+	}))
+	defer server.Close()
+
+	dispatcher := newDispatcher(t, server.Client(), operation.Definition{
+		Name:           "browser_execute_case",
+		InputSchema:    browserArgumentsSchema,
+		CallbackURL:    server.URL,
+		Timeout:        time.Second,
+		MaxAttempts:    1,
+		MaxResultBytes: 1024,
+	}, server.URL)
+
+	_, err := dispatcher.Dispatch(context.Background(), operation.Call{
+		RunID:       "run_invalid_case",
+		SpanID:      "span_invalid_case",
+		OperationID: "op_invalid_case",
+		ToolCallID:  "tool_invalid_case",
+		Name:        "browser_execute_case",
+		Arguments:   json.RawMessage(`{"session_id":"sess_invalid_case","case":{}}`),
+	})
+	if err == nil {
+		t.Fatal("invalid nested case must be rejected")
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("HTTP calls = %d, want 0", got)
+	}
+}
+
 func TestHTTPDispatcherRejectsCallbackOutsideServerProfile(t *testing.T) {
 	_, err := operation.NewHTTPDispatcher(operation.HTTPConfig{
 		Operations: []operation.Definition{{
@@ -105,7 +138,7 @@ func TestHTTPDispatcherDoesNotFollowCallbackRedirects(t *testing.T) {
 		OperationID: "op_redirect",
 		ToolCallID:  "tool_redirect",
 		Name:        "browser_execute_case",
-		Arguments:   json.RawMessage(`{"session_id":"sess_redirect","case":{}}`),
+		Arguments:   validBrowserArguments("sess_redirect"),
 	})
 	if err == nil {
 		t.Fatal("callback redirects must be rejected")
@@ -136,7 +169,10 @@ func TestHTTPDispatcherRetriesWithStableTracingHeaders(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"succeeded","output":{"execution_id":"exec_123"}}`))
+		_, _ = w.Write([]byte(
+			`{"status":"succeeded","output":{"execution_id":"exec_123"},` +
+				`"artifacts":{"screenshot_paths":[]},"error":null}`,
+		))
 	}))
 	defer server.Close()
 
@@ -149,7 +185,7 @@ func TestHTTPDispatcherRetriesWithStableTracingHeaders(t *testing.T) {
 		RetryBackoff:   time.Millisecond,
 		MaxResultBytes: 1024,
 	}, server.URL)
-	arguments := json.RawMessage(`{"session_id":"sess_123","case":{"case_version":"loop.case.v1"}}`)
+	arguments := validBrowserArguments("sess_123")
 
 	result, err := dispatcher.Dispatch(context.Background(), operation.Call{
 		RunID:       "run_123",
@@ -164,6 +200,9 @@ func TestHTTPDispatcherRetriesWithStableTracingHeaders(t *testing.T) {
 	}
 	if result.Status != "succeeded" || string(result.Output) != `{"execution_id":"exec_123"}` {
 		t.Fatalf("result = %#v", result)
+	}
+	if string(result.Artifacts) != `{"screenshot_paths":[]}` || string(result.Error) != "null" {
+		t.Fatalf("result envelope = %#v", result)
 	}
 
 	mu.Lock()
@@ -187,6 +226,136 @@ func TestHTTPDispatcherRetriesWithStableTracingHeaders(t *testing.T) {
 		if bodies[index] != string(arguments) {
 			t.Fatalf("attempt %d body = %s", index+1, bodies[index])
 		}
+	}
+}
+
+func TestHTTPDispatcherRejectsMalformedCallbackEnvelopes(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing output",
+			body: `{"status":"succeeded","artifacts":{},"error":null}`,
+		},
+		{
+			name: "missing artifacts",
+			body: `{"status":"succeeded","output":{},"error":null}`,
+		},
+		{
+			name: "missing error",
+			body: `{"status":"succeeded","output":{},"artifacts":{}}`,
+		},
+		{
+			name: "scalar output",
+			body: `{"status":"succeeded","output":"bad","artifacts":{},"error":null}`,
+		},
+		{
+			name: "scalar artifacts",
+			body: `{"status":"succeeded","output":{},"artifacts":7,"error":null}`,
+		},
+		{
+			name: "scalar error",
+			body: `{"status":"failed","output":{},"artifacts":{},"error":"bad"}`,
+		},
+		{
+			name: "succeeded with error",
+			body: `{"status":"succeeded","output":{},"artifacts":{},` +
+				`"error":{"kind":"worker_error","message":"bad"}}`,
+		},
+		{
+			name: "failed without error",
+			body: `{"status":"failed","output":{},"artifacts":{},"error":null}`,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			dispatcher := newDispatcher(t, server.Client(), operation.Definition{
+				Name:           "browser_execute_case",
+				InputSchema:    browserArgumentsSchema,
+				CallbackURL:    server.URL,
+				Timeout:        time.Second,
+				MaxAttempts:    1,
+				MaxResultBytes: 1024,
+			}, server.URL)
+
+			_, err := dispatcher.Dispatch(context.Background(), validCall(
+				"op_malformed_"+strings.ReplaceAll(test.name, " ", "_"),
+			))
+			if err == nil {
+				t.Fatalf("callback body %s must be rejected", test.body)
+			}
+		})
+	}
+}
+
+func TestHTTPDispatcherEnforcesTotalTimeout(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(
+		_ http.ResponseWriter,
+		request *http.Request,
+	) {
+		select {
+		case <-request.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	dispatcher := newDispatcher(t, server.Client(), operation.Definition{
+		Name:           "browser_execute_case",
+		InputSchema:    browserArgumentsSchema,
+		CallbackURL:    server.URL,
+		Timeout:        30 * time.Millisecond,
+		MaxAttempts:    2,
+		RetryBackoff:   time.Second,
+		MaxResultBytes: 1024,
+	}, server.URL)
+
+	started := time.Now()
+	_, err := dispatcher.Dispatch(context.Background(), validCall("op_timeout"))
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("blocking callback must time out")
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("error = %v, want deadline exceeded", err)
+	}
+	if elapsed >= 500*time.Millisecond {
+		t.Fatalf("elapsed = %v, total timeout was not enforced", elapsed)
+	}
+}
+
+func TestHTTPDispatcherRejectsOversizedCallbackResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", 65)))
+	}))
+	defer server.Close()
+
+	dispatcher := newDispatcher(t, server.Client(), operation.Definition{
+		Name:           "browser_execute_case",
+		InputSchema:    browserArgumentsSchema,
+		CallbackURL:    server.URL,
+		Timeout:        time.Second,
+		MaxAttempts:    1,
+		MaxResultBytes: 64,
+	}, server.URL)
+
+	_, err := dispatcher.Dispatch(context.Background(), validCall("op_oversized"))
+	if err == nil {
+		t.Fatal("oversized callback response must be rejected")
+	}
+	if !strings.Contains(err.Error(), "response exceeds 64 bytes") {
+		t.Fatalf("error = %v, want response size error", err)
 	}
 }
 
@@ -231,6 +400,42 @@ func TestBrowserEvalProfileUsesServerOwnedWorkerEndpointAndModelDefaults(t *test
 		runOperations[0].Callback.URL != definition.CallbackURL {
 		t.Fatalf("run operations = %#v", runOperations)
 	}
+}
+
+func validCall(operationID string) operation.Call {
+	return operation.Call{
+		RunID:       "run_valid",
+		SpanID:      "span_valid",
+		OperationID: operationID,
+		ToolCallID:  "tool_valid",
+		Name:        "browser_execute_case",
+		Arguments:   validBrowserArguments("sess_valid"),
+	}
+}
+
+func validBrowserArguments(sessionID string) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{
+		"session_id":%q,
+		"case":{
+			"case_version":"loop.case.v1",
+			"name":"callback case",
+			"goal":"exercise callback dispatch",
+			"base_url":"https://fixture.invalid",
+			"steps":[{
+				"index":0,
+				"action":"goto",
+				"intent":"open fixture",
+				"value":"https://fixture.invalid/start",
+				"preconditions":[],
+				"postconditions":[{
+					"type":"url_contains",
+					"value":"/start",
+					"timeout_ms":10000
+				}],
+				"timeout_ms":20000
+			}]
+		}
+	}`, sessionID))
 }
 
 func newDispatcher(
