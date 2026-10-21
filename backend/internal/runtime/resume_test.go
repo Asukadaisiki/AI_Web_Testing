@@ -72,9 +72,11 @@ type memoryCheckpointStore struct {
 	mu               sync.Mutex
 	checkpoint       Checkpoint
 	steps            []StepResult
+	started          []StepResult
 	completion       Completion
 	commits          int
 	failAfterCommits int
+	crashAfterStart  bool
 }
 
 func newMemoryCheckpointStore(command event.RunCommand) *memoryCheckpointStore {
@@ -118,6 +120,27 @@ func (s *memoryCheckpointStore) CommitStep(_ context.Context, step StepResult) e
 	return nil
 }
 
+func (s *memoryCheckpointStore) StartAttempt(_ context.Context, attempt StepResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if attempt.RunID != s.checkpoint.RunID || attempt.Checkpoint != s.checkpoint.NextCheckpoint {
+		return errors.New("checkpoint conflict")
+	}
+	for _, started := range s.started {
+		if started.AttemptID == attempt.AttemptID {
+			if s.crashAfterStart {
+				return errInjectedCrash
+			}
+			return nil
+		}
+	}
+	s.started = append(s.started, attempt)
+	if s.crashAfterStart {
+		return errInjectedCrash
+	}
+	return nil
+}
+
 func (s *memoryCheckpointStore) CompleteRun(_ context.Context, completion Completion) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,6 +173,23 @@ func (s *memoryCheckpointStore) clone() Checkpoint {
 		out.PendingOperation = &pending
 	}
 	return out
+}
+
+func (s *memoryCheckpointStore) currentCheckpoint() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checkpoint.NextCheckpoint
+}
+
+func (s *memoryCheckpointStore) hasStarted(checkpoint int64, kind StepKind) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, attempt := range s.started {
+		if attempt.Checkpoint == checkpoint && attempt.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func stepKinds(steps []StepResult) []StepKind {

@@ -67,18 +67,22 @@ func (e Engine) runModel(ctx context.Context, checkpoint Checkpoint) error {
 		Messages: initialMessages(checkpoint),
 		Tools:    modelTools(checkpoint.Command.Operations),
 	}
-	response, err := e.Model.Complete(ctx, request)
-	if err != nil {
-		return e.complete(ctx, checkpoint, CompletionFailed, "", fmt.Errorf("model completion: %w", err))
-	}
 	step := StepResult{
 		RunID:         checkpoint.RunID,
 		Checkpoint:    checkpoint.NextCheckpoint,
 		Kind:          StepModel,
 		LogicalSpanID: LogicalSpanID(checkpoint.RunID, checkpoint.NextCheckpoint, StepModel),
-		Model:         response,
+		ModelRequest:  request,
 	}
 	step.AttemptID = AttemptID(step.LogicalSpanID, 1)
+	if err := e.Store.StartAttempt(ctx, step); err != nil {
+		return fmt.Errorf("start model attempt: %w", err)
+	}
+	response, err := e.Model.Complete(ctx, request)
+	if err != nil {
+		return e.complete(ctx, checkpoint, CompletionFailed, "", fmt.Errorf("model completion: %w", err))
+	}
+	step.Model = response
 	if len(response.Message.ToolCalls) > 1 {
 		return e.complete(ctx, checkpoint, CompletionFailed, "", errors.New("multiple tool calls are not supported"))
 	}
@@ -108,26 +112,30 @@ func (e Engine) runOperation(ctx context.Context, checkpoint Checkpoint) error {
 	}
 	pending := checkpoint.PendingOperation
 	spanID := LogicalSpanID(checkpoint.RunID, checkpoint.NextCheckpoint, StepOperation)
-	result, err := e.Operations.Dispatch(ctx, operation.Call{
+	call := operation.Call{
 		RunID:       checkpoint.RunID,
 		SpanID:      spanID,
 		OperationID: pending.OperationID,
 		ToolCallID:  pending.ToolCallID,
 		Name:        pending.Name,
 		Arguments:   pending.Arguments,
-	})
+	}
+	step := StepResult{
+		RunID:         checkpoint.RunID,
+		Checkpoint:    checkpoint.NextCheckpoint,
+		Kind:          StepOperation,
+		LogicalSpanID: spanID,
+		AttemptID:     AttemptID(spanID, 1),
+		OperationCall: pending,
+	}
+	if err := e.Store.StartAttempt(ctx, step); err != nil {
+		return fmt.Errorf("start operation attempt: %w", err)
+	}
+	result, err := e.Operations.Dispatch(ctx, call)
 	if err != nil {
 		return e.complete(ctx, checkpoint, CompletionFailed, "", fmt.Errorf("dispatch operation: %w", err))
 	}
-	step := StepResult{
-		RunID:           checkpoint.RunID,
-		Checkpoint:      checkpoint.NextCheckpoint,
-		Kind:            StepOperation,
-		LogicalSpanID:   spanID,
-		AttemptID:       AttemptID(spanID, 1),
-		OperationCall:   pending,
-		OperationResult: result,
-	}
+	step.OperationResult = result
 	if err := e.Store.CommitStep(ctx, step); err != nil {
 		return fmt.Errorf("commit operation checkpoint: %w", err)
 	}

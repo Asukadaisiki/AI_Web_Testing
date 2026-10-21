@@ -34,8 +34,8 @@ func TestMigrateAppliesSchemaOnceAndEnforcesContracts(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatalf("count applied migrations: %v", err)
 	}
-	if applied != 2 {
-		t.Fatalf("applied migrations = %d, want 2", applied)
+	if applied != 3 {
+		t.Fatalf("applied migrations = %d, want 3", applied)
 	}
 
 	for _, unique := range []struct {
@@ -112,8 +112,8 @@ func TestMigrateSerializesConcurrentInitialMigration(t *testing.T) {
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 			t.Fatalf("count applied migrations after attempt %d: %v", attempt, err)
 		}
-		if applied != 2 {
-			t.Fatalf("applied migrations after attempt %d = %d, want 2", attempt, applied)
+		if applied != 3 {
+			t.Fatalf("applied migrations after attempt %d = %d, want 3", attempt, applied)
 		}
 	}
 }

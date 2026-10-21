@@ -31,6 +31,12 @@ type Inbox interface {
 	Handle(context.Context, eventbus.Message, func(context.Context) error) error
 }
 
+// RetryStore records failed deliveries independently of a Consumer process.
+type RetryStore interface {
+	Increment(context.Context, string, []byte) (int, error)
+	Clear(context.Context, string) error
+}
+
 // DeduplicatedInbox adapts the Task 4 PostgreSQL inbox primitive.
 type DeduplicatedInbox struct {
 	Deduplicator *inboxconsumer.Deduplicator
@@ -55,6 +61,7 @@ type Consumer struct {
 	Inbox       Inbox
 	Runner      CommandRunner
 	Publisher   eventbus.EventBus
+	RetryStore  RetryStore
 	Live        live.LiveStore
 	LeaseOwner  string
 	LeaseTTL    time.Duration
@@ -99,7 +106,9 @@ func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
 	if err != nil {
 		return c.recordFailure(ctx, eventID, message, err)
 	}
-	c.clearAttempts(eventID)
+	if err := c.clearAttempts(ctx, eventID); err != nil {
+		return fmt.Errorf("clear run command retry count: %w", err)
+	}
 	return nil
 }
 
@@ -123,17 +132,24 @@ func decodeRunCommand(message eventbus.Message) (event.RunCommand, string, error
 
 func (c *Consumer) recordFailure(ctx context.Context, eventID string, message eventbus.Message, cause error) error {
 	if eventID == "" {
-		eventID = string(message.Value)
+		eventID = stableID("consumer-retry", message.Topic, string(message.Value))
 	}
-	attempt := c.incrementAttempts(eventID)
+	attempt, err := c.incrementAttempts(ctx, eventID, message.Value)
+	if err != nil {
+		return fmt.Errorf("record run command failure: %w", err)
+	}
 	if attempt < c.maxAttempts() {
 		return cause
 	}
 	if c.Publisher == nil {
 		return fmt.Errorf("run command failed after %d attempts: %w", attempt, cause)
 	}
+	original := any(json.RawMessage(message.Value))
+	if !json.Valid(message.Value) {
+		original = string(message.Value)
+	}
 	payload, err := json.Marshal(map[string]any{
-		"original": json.RawMessage(message.Value),
+		"original": original,
 		"error":    cause.Error(),
 		"attempt":  attempt,
 	})
@@ -143,7 +159,9 @@ func (c *Consumer) recordFailure(ctx context.Context, eventID string, message ev
 	if _, err := c.Publisher.Publish(ctx, c.dlqTopic(), message.Key, payload); err != nil {
 		return fmt.Errorf("publish run command DLQ: %w", err)
 	}
-	c.clearAttempts(eventID)
+	if err := c.clearAttempts(ctx, eventID); err != nil {
+		return fmt.Errorf("clear run command retry count after DLQ: %w", err)
+	}
 	return nil
 }
 
@@ -174,20 +192,27 @@ func (c *Consumer) renewLease(ctx context.Context, runID string) func() {
 	return func() { close(stop) }
 }
 
-func (c *Consumer) incrementAttempts(eventID string) int {
+func (c *Consumer) incrementAttempts(ctx context.Context, eventID string, payload []byte) (int, error) {
+	if c.RetryStore != nil {
+		return c.RetryStore.Increment(ctx, eventID, payload)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.attempts == nil {
 		c.attempts = make(map[string]int)
 	}
 	c.attempts[eventID]++
-	return c.attempts[eventID]
+	return c.attempts[eventID], nil
 }
 
-func (c *Consumer) clearAttempts(eventID string) {
+func (c *Consumer) clearAttempts(ctx context.Context, eventID string) error {
+	if c.RetryStore != nil {
+		return c.RetryStore.Clear(ctx, eventID)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.attempts, eventID)
+	return nil
 }
 
 func (c *Consumer) maxAttempts() int {

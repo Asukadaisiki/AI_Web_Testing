@@ -22,6 +22,22 @@ type PostgresCheckpointStore struct {
 	Store *postgres.Store
 }
 
+// PostgresRetryStore persists consumer failures across Consumer instances.
+type PostgresRetryStore struct {
+	Store    *postgres.Store
+	Consumer string
+}
+
+// Increment atomically increments the durable delivery count.
+func (s PostgresRetryStore) Increment(ctx context.Context, eventID string, payload []byte) (int, error) {
+	return s.Store.IncrementConsumerRetry(ctx, s.Consumer, eventID, payload)
+}
+
+// Clear removes a completed delivery's retry state.
+func (s PostgresRetryStore) Clear(ctx context.Context, eventID string) error {
+	return s.Store.ClearConsumerRetry(ctx, s.Consumer, eventID)
+}
+
 // Load reconstructs Engine state only from PostgreSQL's immutable request and durable events.
 func (s PostgresCheckpointStore) Load(ctx context.Context, runID string) (Checkpoint, error) {
 	run, command, err := s.Store.LoadRunCommand(ctx, runID)
@@ -51,6 +67,53 @@ func (s PostgresCheckpointStore) Load(ctx context.Context, runID string) (Checkp
 		applyStep(&checkpoint, step)
 	}
 	return checkpoint, nil
+}
+
+// StartAttempt records an external call before it is issued without changing
+// the completed-step checkpoint.
+func (s PostgresCheckpointStore) StartAttempt(ctx context.Context, step StepResult) error {
+	now := time.Now().UTC()
+	span := domain.Span{
+		ID:        step.LogicalSpanID,
+		RunID:     step.RunID,
+		TraceID:   stableID("trace", step.RunID),
+		SpanID:    step.LogicalSpanID,
+		Kind:      spanKind(step.Kind),
+		Name:      string(step.Kind),
+		Status:    "started",
+		StartedAt: now,
+	}
+	attempt := postgres.TraceAttempt{
+		ID:            step.AttemptID,
+		AttemptNumber: 1,
+		Status:        "started",
+		StartedAt:     now,
+	}
+	switch step.Kind {
+	case StepModel:
+		request, err := json.Marshal(step.ModelRequest)
+		if err != nil {
+			return fmt.Errorf("marshal started model request: %w", err)
+		}
+		span.Input = request
+		attempt.Provider = "model"
+		attempt.Request = request
+	case StepOperation:
+		request, err := json.Marshal(step.OperationCall)
+		if err != nil {
+			return fmt.Errorf("marshal started operation request: %w", err)
+		}
+		span.Input = request
+		attempt.OperationID = step.OperationCall.OperationID
+		attempt.Request = request
+	default:
+		return fmt.Errorf("unknown attempt kind %q", step.Kind)
+	}
+	return s.Store.StartTraceAttempt(ctx, postgres.TraceAttemptStart{
+		ExpectedCheckpoint: step.Checkpoint,
+		Span:               span,
+		Attempt:            attempt,
+	})
 }
 
 // CommitStep persists a complete trace step, event, checkpoint advance, and outbox notification.
@@ -96,7 +159,7 @@ func (s PostgresCheckpointStore) CommitStep(ctx context.Context, step StepResult
 	}
 	switch step.Kind {
 	case StepModel:
-		request, _ := json.Marshal(map[string]any{"kind": "model"})
+		request, _ := json.Marshal(step.ModelRequest)
 		response, _ := json.Marshal(step.Model)
 		attempt.Provider = "model"
 		attempt.Request = request

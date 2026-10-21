@@ -173,7 +173,7 @@ func (c *OpenAI) marshalRequest(request Request) ([]byte, error) {
 		Model:           modelName,
 		Messages:        toWireMessages(request.Messages),
 		Tools:           toWireTools(request.Tools),
-		ToolChoice:      "auto",
+		ToolChoice:      toolChoice(request.ToolChoice),
 		Temperature:     c.config.Temperature,
 		MaxTokens:       c.config.MaxTokens,
 		ReasoningEffort: reasoningEffort,
@@ -182,6 +182,13 @@ func (c *OpenAI) marshalRequest(request Request) ([]byte, error) {
 		return nil, fmt.Errorf("marshal model request: %w", err)
 	}
 	return raw, nil
+}
+
+func toolChoice(choice string) string {
+	if choice == "" {
+		return "auto"
+	}
+	return choice
 }
 
 func (c *OpenAI) call(ctx context.Context, raw []byte) (Response, error) {

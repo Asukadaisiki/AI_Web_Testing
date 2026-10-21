@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
@@ -49,23 +50,56 @@ type LLM interface {
 
 // AdaptModel exposes a provider-independent model.Model through the retained
 // v2 planner LLM interface.
-func AdaptModel(value model.Model) LLM {
-	return modelLLM{model: value}
+func AdaptModel(value model.Model, tools ...[]planner.Tool) LLM {
+	var plannerTools []planner.Tool
+	if len(tools) > 0 {
+		plannerTools = tools[0]
+	}
+	return modelLLM{model: value, tools: toModelTools(plannerTools)}
 }
 
 type modelLLM struct {
 	model model.Model
+	tools []model.Tool
 }
 
 func (l modelLLM) Label() string { return l.model.Label() }
 
 func (l modelLLM) Next(ctx context.Context, messages []Message) (Message, usage.Usage, error) {
-	request := model.Request{Messages: toModelMessages(messages)}
+	request := l.request(messages)
 	response, err := l.model.Complete(ctx, request)
 	if err != nil {
 		return Message{}, usage.Usage{}, err
 	}
 	return fromModelMessage(response.Message), response.Usage, nil
+}
+
+func (l modelLLM) RequestSize(messages []Message) (int, error) {
+	sizer, ok := l.model.(model.RequestSizer)
+	if !ok {
+		return 0, nil
+	}
+	return sizer.RequestSize(l.request(messages))
+}
+
+func (l modelLLM) request(messages []Message) model.Request {
+	return model.Request{
+		Messages:   toModelMessages(messages),
+		Tools:      append([]model.Tool(nil), l.tools...),
+		ToolChoice: "auto",
+	}
+}
+
+func toModelTools(tools []planner.Tool) []model.Tool {
+	out := make([]model.Tool, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, model.Tool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  tool.Parameters,
+		})
+	}
+	return out
 }
 
 func toModelMessages(messages []Message) []model.Message {

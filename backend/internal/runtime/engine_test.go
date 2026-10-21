@@ -55,6 +55,70 @@ func TestEnginePersistsModelAndOperationSpans(t *testing.T) {
 	}
 }
 
+func TestEnginePersistsStartedAttemptsBeforeExternalCalls(t *testing.T) {
+	store := newMemoryCheckpointStore(commandFor("run-started-attempts"))
+	engine := Engine{
+		Model: &startedAttemptModel{
+			store: store,
+			responses: []model.Response{
+				{Message: model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
+					ID: "tool-call-1", Name: "inspect", Arguments: json.RawMessage(`{}`),
+				}}}},
+				{Message: model.Message{Role: model.RoleAssistant, Content: "finished"}},
+			},
+		},
+		Operations: &startedAttemptDispatcher{
+			store:  store,
+			result: operation.Result{Status: "succeeded", Output: json.RawMessage(`{"ok":true}`)},
+		},
+		Store: store,
+	}
+
+	if err := engine.Run(context.Background(), commandFor("run-started-attempts")); err != nil {
+		t.Fatalf("run engine: %v", err)
+	}
+	if len(store.started) != 3 {
+		t.Fatalf("started attempts = %d, want 3", len(store.started))
+	}
+	if got, want := store.started[0].AttemptID, AttemptID(LogicalSpanID("run-started-attempts", 0, StepModel), 1); got != want {
+		t.Fatalf("model attempt ID = %q, want %q", got, want)
+	}
+	if got, want := store.started[1].AttemptID, AttemptID(LogicalSpanID("run-started-attempts", 1, StepOperation), 1); got != want {
+		t.Fatalf("operation attempt ID = %q, want %q", got, want)
+	}
+}
+
+func TestEngineResumesStartedAttemptAfterCrashBeforeExternalCall(t *testing.T) {
+	store := newMemoryCheckpointStore(commandFor("run-started-crash"))
+	store.crashAfterStart = true
+	model := &startedAttemptModel{
+		store:     store,
+		responses: []model.Response{{Message: model.Message{Role: model.RoleAssistant, Content: "resumed"}}},
+	}
+	engine := Engine{Model: model, Store: store}
+
+	if err := engine.Run(context.Background(), commandFor("run-started-crash")); !errors.Is(err, errInjectedCrash) {
+		t.Fatalf("first run error = %v, want %v", err, errInjectedCrash)
+	}
+	if model.calls != 0 {
+		t.Fatalf("model calls before crash = %d, want 0", model.calls)
+	}
+	if got := store.checkpoint.NextCheckpoint; got != 0 {
+		t.Fatalf("checkpoint after crash = %d, want 0", got)
+	}
+
+	store.crashAfterStart = false
+	if err := engine.Run(context.Background(), commandFor("run-started-crash")); err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if model.calls != 1 {
+		t.Fatalf("model calls after resume = %d, want 1", model.calls)
+	}
+	if len(store.started) != 1 {
+		t.Fatalf("started attempts = %d, want one idempotent attempt", len(store.started))
+	}
+}
+
 func TestEngineStopsAtModelCallBudget(t *testing.T) {
 	store := newMemoryCheckpointStore(commandFor("run-budget"))
 	dispatcher := &fakeDispatcher{result: operation.Result{Status: "succeeded"}}
@@ -138,6 +202,40 @@ func TestDuplicateCommandDoesNotCreateSecondAssistantMessage(t *testing.T) {
 	if got := store.assistantMessages(); len(got) != 1 || got[0] != "one durable answer" {
 		t.Fatalf("assistant messages = %#v, want one durable answer", got)
 	}
+}
+
+type startedAttemptModel struct {
+	store     *memoryCheckpointStore
+	responses []model.Response
+	calls     int
+}
+
+func (m *startedAttemptModel) Label() string { return "started-attempt-test" }
+
+func (m *startedAttemptModel) Complete(_ context.Context, _ model.Request) (model.Response, error) {
+	checkpoint := m.store.currentCheckpoint()
+	if !m.store.hasStarted(checkpoint, StepModel) {
+		return model.Response{}, errors.New("model called without durable started attempt")
+	}
+	if m.calls >= len(m.responses) {
+		return model.Response{}, errors.New("unexpected model call")
+	}
+	response := m.responses[m.calls]
+	m.calls++
+	return response, nil
+}
+
+type startedAttemptDispatcher struct {
+	store  *memoryCheckpointStore
+	result operation.Result
+}
+
+func (d *startedAttemptDispatcher) Dispatch(_ context.Context, _ operation.Call) (operation.Result, error) {
+	checkpoint := d.store.currentCheckpoint()
+	if !d.store.hasStarted(checkpoint, StepOperation) {
+		return operation.Result{}, errors.New("operation called without durable started attempt")
+	}
+	return d.result, nil
 }
 
 func commandFor(runID string) event.RunCommand {

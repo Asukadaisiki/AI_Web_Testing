@@ -58,6 +58,7 @@ type StepResult struct {
 	Kind            StepKind
 	LogicalSpanID   string
 	AttemptID       string
+	ModelRequest    model.Request
 	Model           model.Response
 	OperationCall   *OperationCall
 	OperationResult operation.Result
@@ -75,6 +76,7 @@ type Completion struct {
 // CheckpointStore persists checkpoints, trace evidence, durable events, and terminal state.
 type CheckpointStore interface {
 	Load(context.Context, string) (Checkpoint, error)
+	StartAttempt(context.Context, StepResult) error
 	CommitStep(context.Context, StepResult) error
 	CompleteRun(context.Context, Completion) error
 }

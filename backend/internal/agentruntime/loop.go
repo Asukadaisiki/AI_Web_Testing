@@ -72,7 +72,7 @@ type Runtime struct {
 // New 创建 Runtime。
 func New(config Config) *Runtime {
 	if config.LLM == nil && config.Model != nil {
-		config.LLM = AdaptModel(config.Model)
+		config.LLM = AdaptModel(config.Model, planner.Tools())
 	}
 	maxCalls := config.MaxModelCalls
 	if maxCalls <= 0 {

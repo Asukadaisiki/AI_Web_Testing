@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
@@ -59,6 +60,59 @@ func (s *Store) ListRunEvents(ctx context.Context, runID string) ([]event.Envelo
 		return nil, fmt.Errorf("iterate runtime events: %w", err)
 	}
 	return events, nil
+}
+
+// IncrementConsumerRetry atomically counts an unprocessed delivery failure.
+func (s *Store) IncrementConsumerRetry(
+	ctx context.Context,
+	consumerName string,
+	eventID string,
+	payload []byte,
+) (int, error) {
+	if s == nil || s.pool == nil {
+		return 0, errors.New("postgres store is not configured")
+	}
+	if strings.TrimSpace(consumerName) == "" || strings.TrimSpace(eventID) == "" {
+		return 0, errors.New("consumer retry consumer and event id are required")
+	}
+	storedPayload := payload
+	if !json.Valid(storedPayload) {
+		var err error
+		storedPayload, err = json.Marshal(map[string]string{"raw": string(payload)})
+		if err != nil {
+			return 0, fmt.Errorf("marshal malformed consumer payload: %w", err)
+		}
+	}
+	var attempts int
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO consumer_retry_counts (consumer, event_id, payload, attempt_count)
+		VALUES ($1, $2, $3::jsonb, 1)
+		ON CONFLICT (consumer, event_id) DO UPDATE SET
+			attempt_count = consumer_retry_counts.attempt_count + 1,
+			updated_at = now()
+		RETURNING attempt_count`,
+		consumerName, eventID, storedPayload,
+	).Scan(&attempts)
+	if err != nil {
+		return 0, fmt.Errorf("increment consumer retry: %w", err)
+	}
+	return attempts, nil
+}
+
+// ClearConsumerRetry removes failure state after a successful delivery or DLQ handoff.
+func (s *Store) ClearConsumerRetry(ctx context.Context, consumerName string, eventID string) error {
+	if s == nil || s.pool == nil {
+		return errors.New("postgres store is not configured")
+	}
+	if strings.TrimSpace(consumerName) == "" || strings.TrimSpace(eventID) == "" {
+		return errors.New("consumer retry consumer and event id are required")
+	}
+	if _, err := s.pool.Exec(ctx, `
+		DELETE FROM consumer_retry_counts
+		WHERE consumer = $1 AND event_id = $2`, consumerName, eventID); err != nil {
+		return fmt.Errorf("clear consumer retry: %w", err)
+	}
+	return nil
 }
 
 // FinishRun atomically records terminal state, a durable event, and its outbox row.

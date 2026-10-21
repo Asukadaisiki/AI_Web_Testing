@@ -70,6 +70,69 @@ func TestConsumerSendsPermanentFailuresToDLQAfterLimit(t *testing.T) {
 	}
 }
 
+func TestConsumerRoutesFailureToDLQAcrossFreshInstances(t *testing.T) {
+	runner := &recordingRunner{err: errors.New("permanent failure")}
+	bus := &eventbus.Fake{}
+	retries := &memoryRetryStore{}
+	message := commandMessage(t, "evt-durable-fail", commandFor("run-durable-dlq"))
+
+	first := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		Publisher:   bus,
+		RetryStore:  retries,
+		MaxAttempts: 2,
+	}
+	if err := first.Handle(context.Background(), message); err == nil {
+		t.Fatal("first failure returned nil")
+	}
+
+	second := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		Publisher:   bus,
+		RetryStore:  retries,
+		MaxAttempts: 2,
+	}
+	if err := second.Handle(context.Background(), message); err != nil {
+		t.Fatalf("durable second failure must escalate to DLQ: %v", err)
+	}
+	published := bus.Published()
+	if len(published) != 1 || published[0].Topic != defaultDLQTopic {
+		t.Fatalf("DLQ publishes = %#v, want exactly %q", published, defaultDLQTopic)
+	}
+}
+
+func TestConsumerRoutesMalformedCommandsToDLQAfterDurableLimit(t *testing.T) {
+	bus := &eventbus.Fake{}
+	retries := &memoryRetryStore{}
+	message := eventbus.Message{
+		Topic: runCommandTopic,
+		Key:   "malformed",
+		Value: []byte(`{"schema_version":`),
+	}
+
+	first := Consumer{Publisher: bus, RetryStore: retries, MaxAttempts: 2}
+	if err := first.Handle(context.Background(), message); err == nil {
+		t.Fatal("first malformed command returned nil")
+	}
+	second := Consumer{Publisher: bus, RetryStore: retries, MaxAttempts: 2}
+	if err := second.Handle(context.Background(), message); err != nil {
+		t.Fatalf("malformed command must escalate to DLQ: %v", err)
+	}
+	published := bus.Published()
+	if len(published) != 1 || published[0].Topic != defaultDLQTopic {
+		t.Fatalf("DLQ publishes = %#v, want exactly %q", published, defaultDLQTopic)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(published[0].Value, &payload); err != nil {
+		t.Fatalf("DLQ payload must be valid JSON: %v", err)
+	}
+	if got, ok := payload["original"].(string); !ok || got != string(message.Value) {
+		t.Fatalf("DLQ original = %#v, want malformed source text", payload["original"])
+	}
+}
+
 type recordingRunner struct {
 	calls int
 	err   error
@@ -99,6 +162,23 @@ func (i *memoryInbox) Handle(_ context.Context, message eventbus.Message, handle
 		return err
 	}
 	i.seen[envelope.EventID] = true
+	return nil
+}
+
+type memoryRetryStore struct {
+	attempts map[string]int
+}
+
+func (s *memoryRetryStore) Increment(_ context.Context, eventID string, _ []byte) (int, error) {
+	if s.attempts == nil {
+		s.attempts = make(map[string]int)
+	}
+	s.attempts[eventID]++
+	return s.attempts[eventID], nil
+}
+
+func (s *memoryRetryStore) Clear(_ context.Context, eventID string) error {
+	delete(s.attempts, eventID)
 	return nil
 }
 

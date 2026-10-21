@@ -46,6 +46,7 @@ type Request struct {
 	Model           string    `json:"model,omitempty"`
 	Messages        []Message `json:"messages"`
 	Tools           []Tool    `json:"tools,omitempty"`
+	ToolChoice      string    `json:"tool_choice,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 }
 

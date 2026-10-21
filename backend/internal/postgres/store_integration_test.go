@@ -118,6 +118,113 @@ func TestClaimRunClaimsOnlyExpectedCheckpoint(t *testing.T) {
 	}
 }
 
+func TestStartTraceAttemptDoesNotAdvanceCheckpointAndCompletes(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+		ConversationID: conversationID,
+		Content:        "start trace attempt",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+		IdempotencyKey: "start-trace-attempt",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, ok, err := store.ClaimRun(ctx, run.ID, 0); err != nil || !ok {
+		t.Fatalf("claim run = (ok=%v, err=%v)", ok, err)
+	}
+
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	started := TraceAttemptStart{
+		ExpectedCheckpoint: 1,
+		Span: domain.Span{
+			ID: "spn_started", RunID: run.ID, TraceID: "trc_started", SpanID: "model-1",
+			Kind: domain.SpanModel, Name: "model", Status: "started",
+			Input: json.RawMessage(`{"messages":[{"role":"user","content":"hello"}]}`), StartedAt: now,
+		},
+		Attempt: TraceAttempt{
+			ID: "att_started", AttemptNumber: 1, Provider: "model", Status: "started",
+			Request: json.RawMessage(`{"messages":[{"role":"user","content":"hello"}]}`), StartedAt: now,
+		},
+	}
+	if err := store.StartTraceAttempt(ctx, started); err != nil {
+		t.Fatalf("start trace attempt: %v", err)
+	}
+	if err := store.StartTraceAttempt(ctx, started); err != nil {
+		t.Fatalf("idempotent start trace attempt: %v", err)
+	}
+
+	var checkpoint int64
+	if err := pool.QueryRow(ctx, `SELECT checkpoint_version FROM runs WHERE id = $1`, run.ID).Scan(&checkpoint); err != nil {
+		t.Fatalf("read checkpoint after start: %v", err)
+	}
+	if checkpoint != 1 {
+		t.Fatalf("checkpoint after start = %d, want 1", checkpoint)
+	}
+	assertRowCount(t, ctx, pool, "spans", 1)
+	assertRowCount(t, ctx, pool, "span_attempts", 1)
+
+	finished := now.Add(time.Second)
+	step := TraceStep{
+		ExpectedCheckpoint: 1,
+		Span: domain.Span{
+			ID: "spn_started", RunID: run.ID, TraceID: "trc_started", SpanID: "model-1",
+			Kind: domain.SpanModel, Name: "model", Status: "succeeded",
+			Input:  json.RawMessage(`{"messages":[{"role":"user","content":"hello"}]}`),
+			Output: json.RawMessage(`{"content":"done"}`), StartedAt: finished, EndedAt: &finished,
+		},
+		Attempt: &TraceAttempt{
+			ID: "att_started", AttemptNumber: 1, Provider: "model", Status: "succeeded",
+			Request:  json.RawMessage(`{"messages":[{"role":"user","content":"hello"}]}`),
+			Response: json.RawMessage(`{"content":"done"}`), StartedAt: finished, EndedAt: &finished,
+		},
+		Event: event.Envelope[json.RawMessage]{
+			SchemaVersion: "agenttrace.event.v1", EventID: "evt_started_complete",
+			EventType: "runtime.step.completed", AggregateID: run.ID, CorrelationID: run.ID,
+			OccurredAt: finished, Payload: json.RawMessage(`{"checkpoint":1}`),
+		},
+	}
+	if err := store.AppendTraceStep(ctx, step); err != nil {
+		t.Fatalf("complete started trace attempt: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT checkpoint_version FROM runs WHERE id = $1`, run.ID).Scan(&checkpoint); err != nil {
+		t.Fatalf("read checkpoint after completion: %v", err)
+	}
+	if checkpoint != 2 {
+		t.Fatalf("checkpoint after completion = %d, want 2", checkpoint)
+	}
+	var status string
+	var endedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT status, ended_at FROM span_attempts WHERE id = 'att_started'`).Scan(&status, &endedAt); err != nil {
+		t.Fatalf("load completed attempt: %v", err)
+	}
+	if status != "succeeded" || endedAt == nil {
+		t.Fatalf("completed attempt = status %q ended_at %v, want succeeded with end time", status, endedAt)
+	}
+}
+
+func TestConsumerRetryCountPersistsAcrossStoreInstances(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	if got, err := store.IncrementConsumerRetry(ctx, "runtime", "evt-retry", []byte(`not-json`)); err != nil || got != 1 {
+		t.Fatalf("first retry count = (%d, %v), want (1, nil)", got, err)
+	}
+	second := NewStore(pool)
+	if got, err := second.IncrementConsumerRetry(ctx, "runtime", "evt-retry", []byte(`not-json`)); err != nil || got != 2 {
+		t.Fatalf("second retry count = (%d, %v), want (2, nil)", got, err)
+	}
+	if err := second.ClearConsumerRetry(ctx, "runtime", "evt-retry"); err != nil {
+		t.Fatalf("clear retry count: %v", err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM consumer_retry_counts`).Scan(&count); err != nil {
+		t.Fatalf("count retry rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("retry rows = %d, want 0", count)
+	}
+}
+
 func TestAppendTraceStepCommitsTraceAndReplaysMatchingPayload(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)
