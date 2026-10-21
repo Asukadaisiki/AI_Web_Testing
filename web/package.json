@@ -1,9 +1,9 @@
 {
-  "name": "loop-web",
+  "name": "agenttrace-eval-hub-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "极简 React + TypeScript + Vite 控制台：4 个页面，只调用 Go 控制面 API",
+  "description": "AgentTrace Eval Hub v3 web console",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
