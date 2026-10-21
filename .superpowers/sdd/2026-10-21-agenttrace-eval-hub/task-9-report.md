@@ -529,3 +529,83 @@ the `langfuse` profile adds only `exporter`.
   covered by the focused and full suites.
 - No ledger, dispatch, reviewer, schema, configuration, or Compose content was
   changed for this round.
+
+## Fix Round 5
+
+### Findings Addressed
+
+- Replaced the `RawMessage` source-length guard with a bounded streaming JSON
+  scanner. It elides insignificant whitespace while validating one complete JSON
+  value, preserves number and escape token bytes, and performs the same HTML and
+  U+2028/U+2029 escaping as `encoding/json`.
+- The shared scanner drives both the length counter and the `io.Pipe` writer. It
+  holds only the original raw slice and parser state, emits raw string and number
+  tokens incrementally, and stops on the first canonical output byte over the
+  request budget. The pipe side uses a fixed 4 KiB buffer; neither path decodes
+  strings or materializes a canonical raw-message buffer.
+- The existing 128-level nesting boundary remains enforced through the shared
+  writer interface. Malformed values and trailing JSON are rejected before HTTP;
+  a canonical overflow returns immediately without inspecting a hostile tail.
+
+### TDD Evidence
+
+RED:
+
+```text
+TestIngestionSerializerCompactsHugeWhitespacePaddedRawMessage
+count whitespace-padded raw message: Langfuse ingestion request exceeds maximum encoded size: limit is 210 bytes
+
+TestIngestionSerializerStopsRawMessageAtCanonicalOverflow
+count error = invalid Langfuse json.RawMessage: unexpected end of JSON input, want ErrRequestTooLarge
+```
+
+GREEN focused verification:
+
+```text
+cd backend && GOTOOLCHAIN=go1.24.11 go test ./internal/export/langfuse -count=1 -v
+PASS
+
+cd backend && GOTOOLCHAIN=go1.24.11 go test -race ./internal/export/langfuse -count=1
+PASS
+```
+
+New coverage proves canonical-small acceptance with multi-megabyte leading,
+internal, and trailing whitespace; canonical string overflow; depth limits;
+HTML and Unicode escaping; malformed and trailing raw values; byte-for-byte
+`json.Marshal` equivalence; and canonical-overflow early stop before a hostile
+tail.
+
+### Complete Verification
+
+```text
+cd backend && GOTOOLCHAIN=go1.24.11 go test ./... -count=1
+PASS
+
+cd backend && GOTOOLCHAIN=go1.24.11 go vet ./...
+PASS
+
+docker compose config --quiet
+docker compose --profile langfuse config --quiet
+PASS
+
+git diff --check
+PASS
+```
+
+Default Compose services remain `kafka postgres api web worker redis runtime`; the
+`langfuse` profile adds only `exporter`.
+
+### Self-Review
+
+- Raw messages are counted and emitted by the same scanner, so the proven
+  `Content-Length` and pipe bytes retain standard-library compatibility.
+- Raw string and number bytes are counted incrementally; only the standard JSON
+  HTML and line-separator transformations are emitted separately.
+- Round 4 map-key allocation checks and pipe-close behavior are unchanged.
+- No ledger, subagent, configuration, schema, or Compose content changed.
+
+### Concern
+
+PostgreSQL integration tests remain skipped without `AGENTTRACE_TEST_POSTGRES_DSN`.
+This RawMessage-only repair has full unit, race, HTTP pipe, and Compose validation,
+but does not exercise a live Langfuse endpoint.

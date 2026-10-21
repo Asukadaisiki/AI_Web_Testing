@@ -114,6 +114,51 @@ func TestIngestionSerializerAcceptsRawMessageWithUseNumberAndCanonicalBytes(t *t
 	}
 }
 
+func TestIngestionSerializerCompactsHugeWhitespacePaddedRawMessage(t *testing.T) {
+	raw := json.RawMessage(
+		strings.Repeat(" ", 1<<20) +
+			"{\n" + strings.Repeat("\t", 1<<20) +
+			`"value"` + strings.Repeat("\r\n", 1<<19) +
+			":" + strings.Repeat(" ", 1<<20) +
+			"null" + strings.Repeat("\n", 1<<20) +
+			"}" + strings.Repeat(" ", 1<<20),
+	)
+	payload := rawMessagePayload(raw)
+	want, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal canonical JSON: %v", err)
+	}
+
+	gotCount, err := countIngestionRequest(payload, len(want))
+	if err != nil {
+		t.Fatalf("count whitespace-padded raw message: %v", err)
+	}
+	if gotCount != len(want) {
+		t.Fatalf("count = %d, want %d", gotCount, len(want))
+	}
+	got := serializedIngestionRequest(t, payload)
+	if string(got) != string(want) {
+		t.Fatalf("whitespace-padded raw message differs:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+func TestIngestionSerializerRawMessageMatchesStandardJSONEscaping(t *testing.T) {
+	raw := json.RawMessage(` { "literal": "<>&` + "\u2028\u2029" + `", "escaped": "\u003c\u003e\u0026" } `)
+	payload := rawMessagePayload(raw)
+	want, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal canonical JSON: %v", err)
+	}
+
+	got := serializedIngestionRequest(t, payload)
+	if string(got) != string(want) {
+		t.Fatalf("raw message escaping differs:\ngot:  %s\nwant: %s", got, want)
+	}
+	if gotCount, err := countIngestionRequest(payload, len(want)); err != nil || gotCount != len(want) {
+		t.Fatalf("count = %d, %v; want %d, nil", gotCount, err, len(want))
+	}
+}
+
 func TestIngestionSerializerAcceptsOnlyValidJSONNumbers(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -143,17 +188,15 @@ func TestIngestionSerializerAcceptsOnlyValidJSONNumbers(t *testing.T) {
 	}
 }
 
-func TestIngestionSerializerRejectsMalformedRawMessage(t *testing.T) {
-	payload := ingestionRequest{Batch: []ingestionEvent{{
-		ID: "event-trace", Type: "trace-create",
-		Body: traceBody{
-			ID: "trace-1", SessionID: "session-1", Name: "trace",
-			Input: json.RawMessage(`{"unterminated":`),
-		},
-	}}}
-
-	if _, err := countIngestionRequest(payload, DefaultMaxRequestBytes); err == nil {
-		t.Fatal("accepted malformed RawMessage")
+func TestIngestionSerializerRejectsMalformedOrTrailingRawMessage(t *testing.T) {
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"unterminated":`),
+		json.RawMessage(`{"valid":true} false`),
+		json.RawMessage(`["bad escape: \x"]`),
+	} {
+		if _, err := countIngestionRequest(rawMessagePayload(raw), DefaultMaxRequestBytes); err == nil {
+			t.Fatalf("accepted invalid RawMessage %q", raw)
+		}
 	}
 }
 
@@ -210,31 +253,43 @@ func TestIngestionSerializerRejectsHugeMapBeforeSortingKeys(t *testing.T) {
 	}
 }
 
-func TestIngestionSerializerRejectsHugeEscapedRawMessageBeforeDecoding(t *testing.T) {
+func TestIngestionSerializerRejectsHugeCanonicalRawString(t *testing.T) {
 	raw := json.RawMessage(`"` + strings.Repeat(`\u0000`, 1024) + `"`)
-	payload := ingestionRequest{Batch: []ingestionEvent{{
-		ID: "event-trace", Type: "trace-create",
-		Body: traceBody{
-			ID: "trace-1", SessionID: "session-1", Name: "trace", Input: raw,
-		},
-	}}}
-
-	var decodes atomic.Int64
-	originalDecoder := newRawMessageDecoder
-	newRawMessageDecoder = func(raw json.RawMessage) *json.Decoder {
-		decodes.Add(1)
-		return originalDecoder(raw)
-	}
-	t.Cleanup(func() {
-		newRawMessageDecoder = originalDecoder
-	})
-
-	_, err := countIngestionRequest(payload, 256)
+	_, err := countIngestionRequest(rawMessagePayload(raw), 256)
 	if !errors.Is(err, ErrRequestTooLarge) {
 		t.Fatalf("count error = %v, want ErrRequestTooLarge", err)
 	}
-	if decodes.Load() != 0 {
-		t.Fatalf("raw message decodes = %d, want 0", decodes.Load())
+}
+
+func TestIngestionSerializerBoundsRawMessageNesting(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		depth int
+		want  error
+	}{
+		{name: "at limit", depth: maxIngestionJSONDepth},
+		{name: "above limit", depth: maxIngestionJSONDepth + 1, want: ErrRequestTooLarge},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := json.RawMessage(strings.Repeat("[", test.depth) + "null" + strings.Repeat("]", test.depth))
+			_, err := countIngestionRequest(rawMessagePayload(raw), DefaultMaxRequestBytes)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("count error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestIngestionSerializerStopsRawMessageAtCanonicalOverflow(t *testing.T) {
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`"` + strings.Repeat("x", 1024) + `" malformed hostile tail`),
+		json.RawMessage(`"` + strings.Repeat("x", 1024)),
+		json.RawMessage("1" + strings.Repeat("0", 1024) + "e"),
+	} {
+		_, err := countIngestionRequest(rawMessagePayload(raw), 256)
+		if !errors.Is(err, ErrRequestTooLarge) {
+			t.Fatalf("count error = %v, want ErrRequestTooLarge", err)
+		}
 	}
 }
 
@@ -513,6 +568,15 @@ func minimalBatch() Batch {
 		Name:      "trace",
 		StartTime: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC),
 	}}
+}
+
+func rawMessagePayload(raw json.RawMessage) ingestionRequest {
+	return ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create",
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace", Input: raw,
+		},
+	}}}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

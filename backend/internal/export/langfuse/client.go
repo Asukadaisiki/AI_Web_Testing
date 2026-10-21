@@ -1,7 +1,7 @@
 package langfuse
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding"
 	"encoding/json"
@@ -23,17 +23,14 @@ const DefaultMaxRequestBytes = 1 << 20
 
 const maxIngestionJSONDepth = 128
 
+const streamingJSONBufferBytes = 4 << 10
+
 // ErrRequestTooLarge is returned before HTTP when the encoded ingestion batch
 // exceeds the configured request boundary.
 var ErrRequestTooLarge = errors.New("Langfuse ingestion request exceeds maximum encoded size")
 
 var (
-	sortJSONMapKeys      = sort.Strings
-	newRawMessageDecoder = func(raw json.RawMessage) *json.Decoder {
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		return decoder
-	}
+	sortJSONMapKeys = sort.Strings
 )
 
 // HTTPError is a provider response outside the successful 2xx range.
@@ -192,14 +189,27 @@ type boundedJSONCounter struct {
 
 type ingestionJSONWriter interface {
 	writeString(string)
+	writeBytes([]byte)
 	writeByte(byte)
 	fail(error)
 	errValue() error
 	enterContainer()
 	leaveContainer()
+	flush()
 }
 
 func (w *boundedJSONCounter) writeString(value string) {
+	if w.err != nil {
+		return
+	}
+	if len(value) > w.limit-w.length {
+		w.err = ErrRequestTooLarge
+		return
+	}
+	w.length += len(value)
+}
+
+func (w *boundedJSONCounter) writeBytes(value []byte) {
 	if w.err != nil {
 		return
 	}
@@ -249,12 +259,11 @@ func (w *boundedJSONCounter) leaveContainer() {
 	}
 }
 
-func (w *boundedJSONCounter) hasRoom(size int) bool {
-	return size <= w.limit-w.length
-}
+func (w *boundedJSONCounter) flush() {}
 
 type streamingJSONWriter struct {
 	writer io.Writer
+	buffer *bufio.Writer
 	depth  int
 	err    error
 }
@@ -263,7 +272,21 @@ func (w *streamingJSONWriter) writeString(value string) {
 	if w.err != nil {
 		return
 	}
-	written, err := io.WriteString(w.writer, value)
+	written, err := io.WriteString(w.output(), value)
+	if err != nil {
+		w.err = err
+		return
+	}
+	if written != len(value) {
+		w.err = io.ErrShortWrite
+	}
+}
+
+func (w *streamingJSONWriter) writeBytes(value []byte) {
+	if w.err != nil {
+		return
+	}
+	written, err := w.output().Write(value)
 	if err != nil {
 		w.err = err
 		return
@@ -277,13 +300,9 @@ func (w *streamingJSONWriter) writeByte(value byte) {
 	if w.err != nil {
 		return
 	}
-	written, err := w.writer.Write([]byte{value})
+	err := w.output().WriteByte(value)
 	if err != nil {
 		w.err = err
-		return
-	}
-	if written != 1 {
-		w.err = io.ErrShortWrite
 	}
 }
 
@@ -314,6 +333,20 @@ func (w *streamingJSONWriter) leaveContainer() {
 	}
 }
 
+func (w *streamingJSONWriter) flush() {
+	if w.err != nil || w.buffer == nil {
+		return
+	}
+	w.err = w.buffer.Flush()
+}
+
+func (w *streamingJSONWriter) output() *bufio.Writer {
+	if w.buffer == nil {
+		w.buffer = bufio.NewWriterSize(w.writer, streamingJSONBufferBytes)
+	}
+	return w.buffer
+}
+
 func countIngestionRequest(payload ingestionRequest, limit int) (int, error) {
 	counter := &boundedJSONCounter{limit: limit}
 	writeIngestionRequest(counter, payload)
@@ -338,6 +371,10 @@ func writeIngestionRequest(writer ingestionJSONWriter, payload ingestionRequest)
 		writeIngestionEvent(writer, item)
 	}
 	writer.writeString(`]}`)
+	if writer.errValue() != nil {
+		return writer.errValue()
+	}
+	writer.flush()
 	return writer.errValue()
 }
 
@@ -590,105 +627,307 @@ func writeRawJSONMessage(writer ingestionJSONWriter, raw json.RawMessage) {
 		writer.writeString("null")
 		return
 	}
-	if counter, ok := writer.(*boundedJSONCounter); ok && !counter.hasRoom(len(raw)) {
-		writer.fail(ErrRequestTooLarge)
+	(&rawMessageWriter{raw: raw, writer: writer}).write()
+}
+
+type rawMessageWriter struct {
+	raw    []byte
+	index  int
+	writer ingestionJSONWriter
+}
+
+func (w *rawMessageWriter) write() {
+	w.skipSpace()
+	if !w.writeValue() || w.writer.errValue() != nil {
 		return
 	}
-	decoder := newRawMessageDecoder(raw)
-	writeDecodedJSONValue(writer, decoder)
-	if writer.errValue() != nil {
-		return
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		if err == nil {
-			writer.fail(errors.New("invalid Langfuse json.RawMessage: multiple JSON values"))
-			return
-		}
-		writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage: %w", err))
+	w.skipSpace()
+	if w.index != len(w.raw) {
+		w.fail("multiple JSON values")
 	}
 }
 
-func writeDecodedJSONValue(writer ingestionJSONWriter, decoder *json.Decoder) {
-	token, err := decoder.Token()
-	if err != nil {
-		writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage: %w", err))
-		return
+func (w *rawMessageWriter) writeValue() bool {
+	if w.writer.errValue() != nil {
+		return false
 	}
-	switch typed := token.(type) {
-	case json.Delim:
-		switch typed {
-		case '{':
-			writer.enterContainer()
-			if writer.errValue() != nil {
-				return
-			}
-			defer writer.leaveContainer()
-			writer.writeByte('{')
-			first := true
-			for decoder.More() {
-				if writer.errValue() != nil {
-					return
-				}
-				key, err := decoder.Token()
-				if err != nil {
-					writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage: %w", err))
-					return
-				}
-				name, ok := key.(string)
-				if !ok {
-					writer.fail(errors.New("invalid Langfuse json.RawMessage object key"))
-					return
-				}
-				if !first {
-					writer.writeByte(',')
-				}
-				first = false
-				writeJSONString(writer, name)
-				writer.writeByte(':')
-				writeDecodedJSONValue(writer, decoder)
-			}
-			if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-				writer.fail(errors.New("invalid Langfuse json.RawMessage object"))
-				return
-			}
-			writer.writeByte('}')
-		case '[':
-			writer.enterContainer()
-			if writer.errValue() != nil {
-				return
-			}
-			defer writer.leaveContainer()
-			writer.writeByte('[')
-			first := true
-			for decoder.More() {
-				if writer.errValue() != nil {
-					return
-				}
-				if !first {
-					writer.writeByte(',')
-				}
-				first = false
-				writeDecodedJSONValue(writer, decoder)
-			}
-			if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
-				writer.fail(errors.New("invalid Langfuse json.RawMessage array"))
-				return
-			}
-			writer.writeByte(']')
-		default:
-			writer.fail(errors.New("invalid Langfuse json.RawMessage delimiter"))
-		}
-	case nil:
-		writer.writeString("null")
-	case bool:
-		writer.writeString(strconv.FormatBool(typed))
-	case string:
-		writeJSONString(writer, typed)
-	case json.Number:
-		writeJSONNumber(writer, typed)
+	if w.index == len(w.raw) {
+		w.fail("unexpected end of JSON input")
+		return false
+	}
+	switch w.raw[w.index] {
+	case '{':
+		return w.writeObject()
+	case '[':
+		return w.writeArray()
+	case '"':
+		return w.writeString()
+	case 't':
+		return w.writeLiteral("true")
+	case 'f':
+		return w.writeLiteral("false")
+	case 'n':
+		return w.writeLiteral("null")
+	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return w.writeNumber()
 	default:
-		writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage token %T", token))
+		w.fail("invalid JSON value")
+		return false
 	}
+}
+
+func (w *rawMessageWriter) writeObject() bool {
+	w.writer.enterContainer()
+	if w.writer.errValue() != nil {
+		return false
+	}
+	defer w.writer.leaveContainer()
+
+	w.writeByte('{')
+	w.skipSpace()
+	if w.consume('}') {
+		return true
+	}
+	for {
+		if w.index == len(w.raw) || w.raw[w.index] != '"' {
+			w.fail("object key must be a string")
+			return false
+		}
+		if !w.writeString() {
+			return false
+		}
+		w.skipSpace()
+		if !w.consume(':') {
+			w.fail("object key is missing a value")
+			return false
+		}
+		w.skipSpace()
+		if !w.writeValue() {
+			return false
+		}
+		w.skipSpace()
+		if w.consume('}') {
+			return true
+		}
+		if !w.consume(',') {
+			w.fail("object is missing a comma or closing brace")
+			return false
+		}
+		w.skipSpace()
+	}
+}
+
+func (w *rawMessageWriter) writeArray() bool {
+	w.writer.enterContainer()
+	if w.writer.errValue() != nil {
+		return false
+	}
+	defer w.writer.leaveContainer()
+
+	w.writeByte('[')
+	w.skipSpace()
+	if w.consume(']') {
+		return true
+	}
+	for {
+		if !w.writeValue() {
+			return false
+		}
+		w.skipSpace()
+		if w.consume(']') {
+			return true
+		}
+		if !w.consume(',') {
+			w.fail("array is missing a comma or closing bracket")
+			return false
+		}
+		w.skipSpace()
+	}
+}
+
+func (w *rawMessageWriter) writeString() bool {
+	w.writer.writeByte('"')
+	if w.writer.errValue() != nil {
+		return false
+	}
+	w.index++
+	for w.index < len(w.raw) {
+		switch current := w.raw[w.index]; current {
+		case '"':
+			w.index++
+			w.writer.writeByte('"')
+			return w.writer.errValue() == nil
+		case '\\':
+			start := w.index
+			w.index++
+			if w.index == len(w.raw) {
+				break
+			}
+			switch w.raw[w.index] {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+				w.index++
+			case 'u':
+				w.index++
+				for offset := 0; offset < 4; offset++ {
+					if w.index == len(w.raw) || !isHex(w.raw[w.index]) {
+						w.fail("invalid string escape")
+						return false
+					}
+					w.index++
+				}
+			default:
+				w.fail("invalid string escape")
+				return false
+			}
+			w.writer.writeBytes(w.raw[start:w.index])
+		case '<', '>', '&':
+			w.writer.writeString(`\u00`)
+			w.writer.writeByte("0123456789abcdef"[current>>4])
+			w.writer.writeByte("0123456789abcdef"[current&0xF])
+			w.index++
+		case 0xE2:
+			if w.index+2 < len(w.raw) && w.raw[w.index+1] == 0x80 && w.raw[w.index+2]&^byte(1) == 0xA8 {
+				w.writer.writeString(`\u202`)
+				w.writer.writeByte("0123456789abcdef"[w.raw[w.index+2]&0xF])
+				w.index += 3
+				continue
+			}
+			w.writer.writeByte(current)
+			w.index++
+		case '\n', '\r', '\t':
+			w.fail("invalid character in string")
+			return false
+		default:
+			if current < 0x20 {
+				w.fail("invalid character in string")
+				return false
+			}
+			w.writer.writeByte(current)
+			w.index++
+		}
+		if w.writer.errValue() != nil {
+			return false
+		}
+	}
+	w.fail("unexpected end of JSON input")
+	return false
+}
+
+func (w *rawMessageWriter) writeLiteral(value string) bool {
+	if len(w.raw)-w.index < len(value) || string(w.raw[w.index:w.index+len(value)]) != value {
+		w.fail("invalid JSON literal")
+		return false
+	}
+	w.writer.writeString(value)
+	w.index += len(value)
+	return w.writer.errValue() == nil
+}
+
+func (w *rawMessageWriter) writeNumber() bool {
+	if w.index < len(w.raw) && w.raw[w.index] == '-' {
+		w.writeByte('-')
+		if w.writer.errValue() != nil {
+			return false
+		}
+	}
+	if w.index == len(w.raw) {
+		w.fail("invalid JSON number")
+		return false
+	}
+	if w.raw[w.index] == '0' {
+		w.writeByte('0')
+		if w.writer.errValue() != nil {
+			return false
+		}
+		// A following digit is rejected by the delimiter check below.
+	} else if w.index < len(w.raw) && w.raw[w.index] >= '1' && w.raw[w.index] <= '9' {
+		for w.index < len(w.raw) && w.raw[w.index] >= '0' && w.raw[w.index] <= '9' {
+			w.writeByte(w.raw[w.index])
+			if w.writer.errValue() != nil {
+				return false
+			}
+		}
+	} else {
+		w.fail("invalid JSON number")
+		return false
+	}
+	if w.index < len(w.raw) && w.raw[w.index] == '.' {
+		w.writeByte('.')
+		if w.writer.errValue() != nil {
+			return false
+		}
+		fractionStart := w.index
+		for w.index < len(w.raw) && w.raw[w.index] >= '0' && w.raw[w.index] <= '9' {
+			w.writeByte(w.raw[w.index])
+			if w.writer.errValue() != nil {
+				return false
+			}
+		}
+		if w.index == fractionStart {
+			w.fail("invalid JSON number")
+			return false
+		}
+	}
+	if w.index < len(w.raw) && (w.raw[w.index] == 'e' || w.raw[w.index] == 'E') {
+		w.writeByte(w.raw[w.index])
+		if w.writer.errValue() != nil {
+			return false
+		}
+		if w.index < len(w.raw) && (w.raw[w.index] == '+' || w.raw[w.index] == '-') {
+			w.writeByte(w.raw[w.index])
+			if w.writer.errValue() != nil {
+				return false
+			}
+		}
+		exponentStart := w.index
+		for w.index < len(w.raw) && w.raw[w.index] >= '0' && w.raw[w.index] <= '9' {
+			w.writeByte(w.raw[w.index])
+			if w.writer.errValue() != nil {
+				return false
+			}
+		}
+		if w.index == exponentStart {
+			w.fail("invalid JSON number")
+			return false
+		}
+	}
+	return true
+}
+
+func (w *rawMessageWriter) consume(want byte) bool {
+	if w.index == len(w.raw) || w.raw[w.index] != want {
+		return false
+	}
+	w.writeByte(want)
+	return w.writer.errValue() == nil
+}
+
+func (w *rawMessageWriter) writeByte(value byte) {
+	w.writer.writeByte(value)
+	w.index++
+}
+
+func (w *rawMessageWriter) skipSpace() {
+	for w.index < len(w.raw) {
+		switch w.raw[w.index] {
+		case ' ', '\t', '\r', '\n':
+			w.index++
+		default:
+			return
+		}
+	}
+}
+
+func (w *rawMessageWriter) fail(reason string) {
+	if w.writer.errValue() == nil {
+		w.writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage: %s", reason))
+	}
+}
+
+func isHex(value byte) bool {
+	return value >= '0' && value <= '9' ||
+		value >= 'a' && value <= 'f' ||
+		value >= 'A' && value <= 'F'
 }
 
 func writeJSONFloat(writer ingestionJSONWriter, value float64, bits int) {
