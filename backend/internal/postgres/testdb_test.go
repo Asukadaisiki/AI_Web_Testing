@@ -91,10 +91,12 @@ func TestMigrateSerializesConcurrentInitialMigration(t *testing.T) {
 		errs := make(chan error, 2)
 		var group sync.WaitGroup
 		for range 2 {
-			group.Go(func() {
+			group.Add(1)
+			go func() {
+				defer group.Done()
 				<-start
 				errs <- Migrate(ctx, pool)
-			})
+			}()
 		}
 		close(start)
 		group.Wait()
