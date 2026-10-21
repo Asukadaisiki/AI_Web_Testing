@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -317,7 +318,14 @@ func receiveStreamEvent(t *testing.T, events <-chan StreamEvent) StreamEvent {
 
 func assertStreamEvent(t *testing.T, got, want StreamEvent) {
 	t.Helper()
-	if got.ID != want.ID || got.Type != want.Type || string(got.Data) != string(want.Data) {
+	var gotData, wantData bytes.Buffer
+	if err := json.Compact(&gotData, got.Data); err != nil {
+		t.Fatalf("compact received stream event JSON: %v", err)
+	}
+	if err := json.Compact(&wantData, want.Data); err != nil {
+		t.Fatalf("compact expected stream event JSON: %v", err)
+	}
+	if got.ID != want.ID || got.Type != want.Type || gotData.String() != wantData.String() {
 		t.Fatalf("stream event = %#v, want %#v", got, want)
 	}
 }
