@@ -19,6 +19,12 @@ type Client struct {
 
 const cancellationCheckInterval = 100 * time.Millisecond
 
+const appendAndExpireScript = `
+local id = redis.call("XADD", KEYS[1], "MAXLEN", "~", ARGV[1], "*", "event", ARGV[2])
+redis.call("EXPIRE", KEYS[1], ARGV[3])
+return id
+`
+
 // NewClient binds a live store to a Redis command client.
 func NewClient(client goredis.Cmdable) *Client {
 	return &Client{client: client}
@@ -33,16 +39,9 @@ func (c *Client) Append(ctx context.Context, runID string, event live.LiveEvent)
 	if err != nil {
 		return fmt.Errorf("marshal live event: %w", err)
 	}
-	if _, err := c.client.XAdd(ctx, &goredis.XAddArgs{
-		Stream: liveKey(runID),
-		MaxLen: live.MaxStreamLength,
-		Approx: true,
-		Values: map[string]any{"event": string(encoded)},
-	}).Result(); err != nil {
+	if err := c.client.Eval(ctx, appendAndExpireScript, []string{liveKey(runID)},
+		live.MaxStreamLength, string(encoded), int64(live.StreamTTL/time.Second)).Err(); err != nil {
 		return fmt.Errorf("append live event: %w", err)
-	}
-	if err := c.client.Expire(ctx, liveKey(runID), live.StreamTTL).Err(); err != nil {
-		return fmt.Errorf("expire live stream: %w", err)
 	}
 	return nil
 }

@@ -130,6 +130,42 @@ func TestLiveEventsAfterDurableSequenceAreNotDuplicated(t *testing.T) {
 	assertNoStreamError(t, streamErrs)
 }
 
+func TestDurableRedisNoticesCatchUpPostgresWithoutSkippingOrDuplicating(t *testing.T) {
+	reader := &memoryDurableReader{events: []DurableEvent{
+		{Sequence: 1, Type: "run.started", Data: json.RawMessage(`{"state":"running"}`)},
+	}}
+	liveStore := &noticeLiveStore{
+		events: []live.LiveEvent{
+			{ID: "1-0", Sequence: 3, Type: "run.finished", Data: json.RawMessage(`{"state":"succeeded"}`)},
+			{ID: "2-0", Sequence: 2, Type: "span.completed", Data: json.RawMessage(`{"span":"plan"}`)},
+		},
+		onFirstRead: func() {
+			reader.Append(DurableEvent{
+				Sequence: 2, Type: "span.completed", Data: json.RawMessage(`{"span":"plan"}`),
+			})
+			reader.Append(DurableEvent{
+				Sequence: 3, Type: "run.finished", Data: json.RawMessage(`{"state":"succeeded"}`),
+			})
+		},
+	}
+	service := NewService(reader, liveStore, Config{ReadBlock: 10 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, streamErrs := service.Subscribe(ctx, "run-1", "0")
+
+	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
+		ID: "1", Type: "run.started", Data: json.RawMessage(`{"state":"running"}`),
+	})
+	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
+		ID: "2", Type: "span.completed", Data: json.RawMessage(`{"span":"plan"}`),
+	})
+	assertStreamEvent(t, receiveStreamEvent(t, events), StreamEvent{
+		ID: "3", Type: "run.finished", Data: json.RawMessage(`{"state":"succeeded"}`),
+	})
+	assertNoStreamError(t, streamErrs)
+}
+
 func TestSubscribeStopsBlockingReadWhenContextIsCanceled(t *testing.T) {
 	service := NewService(&memoryDurableReader{}, live.NewMemoryStore(), Config{ReadBlock: time.Minute})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -218,6 +254,51 @@ func (s *recoveringLiveStore) Read(
 		return nil, errors.New("redis is unavailable")
 	}
 	return s.MemoryStore.Read(ctx, runID, afterID, block)
+}
+
+type noticeLiveStore struct {
+	mu          sync.Mutex
+	events      []live.LiveEvent
+	onFirstRead func()
+	read        bool
+}
+
+func (s *noticeLiveStore) Append(context.Context, string, live.LiveEvent) error {
+	return errors.New("append is not supported")
+}
+
+func (s *noticeLiveStore) Read(
+	ctx context.Context, _ string, _ string, block time.Duration,
+) ([]live.LiveEvent, error) {
+	s.mu.Lock()
+	if !s.read {
+		s.read = true
+		events := s.events
+		onFirstRead := s.onFirstRead
+		s.mu.Unlock()
+		onFirstRead()
+		return events, nil
+	}
+	s.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(block):
+		return nil, nil
+	}
+}
+
+func (s *noticeLiveStore) SetLease(context.Context, string, string, time.Duration) error {
+	return errors.New("set lease is not supported")
+}
+
+func (s *noticeLiveStore) RequestCancel(context.Context, string, time.Duration) error {
+	return errors.New("request cancel is not supported")
+}
+
+func (s *noticeLiveStore) IsCancelRequested(context.Context, string) (bool, error) {
+	return false, errors.New("read cancel is not supported")
 }
 
 func receiveStreamEvent(t *testing.T, events <-chan StreamEvent) StreamEvent {

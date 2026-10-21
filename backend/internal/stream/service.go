@@ -130,17 +130,12 @@ func (s *Service) Subscribe(
 					afterLiveID = event.ID
 				}
 				if event.Sequence > 0 {
-					if event.Sequence <= afterSequence {
-						continue
-					}
-					if err := sendStreamEvent(ctx, events, StreamEvent{
-						ID:   strconv.FormatInt(event.Sequence, 10),
-						Type: event.Type,
-						Data: event.Data,
-					}); err != nil {
+					if err := emitDurable(); err != nil {
+						if !errors.Is(err, context.Canceled) {
+							sendStreamError(ctx, streamErrs, err)
+						}
 						return
 					}
-					afterSequence = event.Sequence
 					continue
 				}
 				if err := sendStreamEvent(ctx, events, StreamEvent{
