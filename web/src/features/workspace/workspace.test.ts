@@ -1,0 +1,92 @@
+import { describe, expect, it } from 'vitest';
+import type { RunEvent } from '../../api';
+import {
+  keepSelectedSpan,
+  mergeRunEvents,
+  workspaceSelectionReducer,
+  type WorkspaceSelection,
+} from './useWorkspace';
+import type { TraceNode } from '../trace/projectTrace';
+
+const emptySelection: WorkspaceSelection = {
+  projectId: null,
+  conversationId: null,
+  runId: null,
+  spanId: null,
+};
+
+function event(sequence: number | null, type: string): RunEvent {
+  return {
+    id: sequence === null ? null : String(sequence),
+    sequence,
+    type,
+    data: { type },
+  };
+}
+
+function node(spanId: string): TraceNode {
+  return {
+    id: `row-${spanId}`,
+    run_id: 'run-1',
+    trace_id: 'trace-1',
+    span_id: spanId,
+    parent_span_id: '',
+    kind: 'model',
+    name: spanId,
+    status: 'succeeded',
+    input: null,
+    output: null,
+    started_at: '2026-10-21T12:00:00Z',
+    ended_at: '2026-10-21T12:00:01Z',
+    created_at: '2026-10-21T12:00:00Z',
+    updated_at: '2026-10-21T12:00:01Z',
+    children: [],
+  };
+}
+
+describe('workspace state', () => {
+  it('keeps selected project conversation run and span in one workspace state', () => {
+    const selected = workspaceSelectionReducer(emptySelection, {
+      type: 'restore',
+      selection: {
+        projectId: 'project-1',
+        conversationId: 'conversation-1',
+        runId: 'run-1',
+        spanId: 'span-1',
+      },
+    });
+
+    expect(selected).toEqual({
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      runId: 'run-1',
+      spanId: 'span-1',
+    });
+  });
+
+  it('merges replayed SSE events without duplicating a sequence', () => {
+    const merged = mergeRunEvents(
+      [event(1, 'run.started'), event(2, 'runtime.step.completed')],
+      [
+        event(2, 'runtime.step.completed'),
+        event(null, 'token.delta'),
+        event(3, 'runtime.completed'),
+      ],
+    );
+
+    expect(merged.map(({ sequence, type }) => ({ sequence, type }))).toEqual([
+      { sequence: 1, type: 'run.started' },
+      { sequence: 2, type: 'runtime.step.completed' },
+      { sequence: null, type: 'token.delta' },
+      { sequence: 3, type: 'runtime.completed' },
+    ]);
+  });
+
+  it('keeps the selected node when a sibling live update arrives', () => {
+    const before = [node('model-1')];
+    const after = [node('model-1'), node('operation-1')];
+
+    expect(keepSelectedSpan('model-1', before)).toBe('model-1');
+    expect(keepSelectedSpan('model-1', after)).toBe('model-1');
+  });
+});
