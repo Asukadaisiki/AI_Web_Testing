@@ -74,7 +74,7 @@ func (s *Service) Subscribe(
 			sendStreamError(ctx, streamErrs, err)
 			return
 		}
-		if s == nil || s.durable == nil || s.live == nil {
+		if s == nil || s.durable == nil {
 			sendStreamError(ctx, streamErrs, errors.New("stream service is not configured"))
 			return
 		}
@@ -108,6 +108,18 @@ func (s *Service) Subscribe(
 
 		afterLiveID := "0-0"
 		for {
+			if s.live == nil {
+				if err := emitDurable(); err != nil {
+					if !errors.Is(err, context.Canceled) {
+						sendStreamError(ctx, streamErrs, err)
+					}
+					return
+				}
+				if !wait(ctx, s.config.PollInterval) {
+					return
+				}
+				continue
+			}
 			liveEvents, readErr := s.live.Read(ctx, runID, afterLiveID, s.config.ReadBlock)
 			if readErr != nil {
 				if ctx.Err() != nil {

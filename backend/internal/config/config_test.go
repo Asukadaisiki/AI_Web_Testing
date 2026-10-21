@@ -45,3 +45,23 @@ func TestLoadUsesRunTopicDefaults(t *testing.T) {
 		t.Fatalf("DLQ topic = %q, want %q", cfg.Kafka.DLQTopic, "agenttrace.run.dlq.v1")
 	}
 }
+
+func TestLoadUsesConfiguredOpenAICompatibleModelDefaults(t *testing.T) {
+	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://agenttrace:agenttrace@localhost:5432/agenttrace?sslmode=disable")
+	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
+	t.Setenv("AGENTTRACE_MODEL_BASE_URL", "")
+	t.Setenv("AGENTTRACE_MODEL_NAME", "")
+	t.Setenv("AGENTTRACE_MODEL_REASONING_EFFORT", "")
+	t.Setenv("AGENTTRACE_MODEL_API_KEY", "runtime-only-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.BaseURL != "https://api.unself.cn/v1" ||
+		cfg.Model.Name != "glm-5.3-flash" ||
+		cfg.Model.ReasoningEffort != "high" ||
+		cfg.Model.APIKey != "runtime-only-secret" {
+		t.Fatalf("model configuration = %#v", cfg.Model)
+	}
+}

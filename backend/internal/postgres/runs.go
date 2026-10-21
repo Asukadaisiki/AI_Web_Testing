@@ -18,6 +18,7 @@ type CreateMessageParams struct {
 	Content        string
 	AgentID        string
 	Model          event.ModelRef
+	Operations     []event.Operation
 	IdempotencyKey string
 }
 
@@ -43,15 +44,17 @@ func (s *Store) CreateMessageAndRun(
 		return domain.Message{}, domain.Run{}, err
 	}
 	requestHash, err := payloadHash(struct {
-		ConversationID string         `json:"conversation_id"`
-		Content        string         `json:"content"`
-		AgentID        string         `json:"agent_id"`
-		Model          event.ModelRef `json:"model"`
+		ConversationID string            `json:"conversation_id"`
+		Content        string            `json:"content"`
+		AgentID        string            `json:"agent_id"`
+		Model          event.ModelRef    `json:"model"`
+		Operations     []event.Operation `json:"operations"`
 	}{
 		ConversationID: p.ConversationID,
 		Content:        p.Content,
 		AgentID:        p.AgentID,
 		Model:          p.Model,
+		Operations:     p.Operations,
 	})
 	if err != nil {
 		return domain.Message{}, domain.Run{}, err
@@ -130,6 +133,7 @@ func (s *Store) CreateMessageAndRun(
 		ConversationID:    p.ConversationID,
 		Model:             p.Model,
 		Messages:          []domain.Message{message},
+		Operations:        append([]event.Operation(nil), p.Operations...),
 		CheckpointVersion: 0,
 	}
 	specification, err := json.Marshal(runSpecification{AgentID: p.AgentID, Command: command})
@@ -152,7 +156,7 @@ func (s *Store) CreateMessageAndRun(
 	message.RunID = run.ID
 
 	outboxEvent := event.Envelope[event.RunCommand]{
-		SchemaVersion: "agenttrace.event.v1",
+		SchemaVersion: "agenttrace.run-command.v1",
 		EventID:       eventID,
 		EventType:     "run.requested",
 		AggregateID:   run.ID,

@@ -16,6 +16,7 @@ type Config struct {
 	WorkerURL          string
 	ArtifactDir        string
 	RuntimeConcurrency int
+	Model              Model
 }
 
 type Postgres struct{ DSN string }
@@ -33,6 +34,16 @@ type Redis struct {
 	Addr     string
 	Password string
 	DB       int
+}
+
+// Model contains runtime-only OpenAI-compatible provider configuration.
+// APIKey is intentionally loaded only from the environment and is never logged.
+type Model struct {
+	BaseURL         string
+	Name            string
+	ReasoningEffort string
+	APIKey          string
+	ScriptPath      string
 }
 
 func Load() (Config, error) {
@@ -73,6 +84,13 @@ func Load() (Config, error) {
 		WorkerURL:          envOr("AGENTTRACE_WORKER_URL", "http://worker:8100"),
 		ArtifactDir:        envOr("AGENTTRACE_ARTIFACT_DIR", "/artifacts"),
 		RuntimeConcurrency: runtimeConcurrency,
+		Model: Model{
+			BaseURL:         envOr("AGENTTRACE_MODEL_BASE_URL", "https://api.unself.cn/v1"),
+			Name:            envOr("AGENTTRACE_MODEL_NAME", "glm-5.3-flash"),
+			ReasoningEffort: envOr("AGENTTRACE_MODEL_REASONING_EFFORT", "high"),
+			APIKey:          os.Getenv("AGENTTRACE_MODEL_API_KEY"),
+			ScriptPath:      strings.TrimSpace(os.Getenv("AGENTTRACE_MODEL_SCRIPT")),
+		},
 	}, nil
 }
 

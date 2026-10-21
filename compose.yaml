@@ -83,6 +83,11 @@ services:
       AGENTTRACE_REDIS_ADDR: ${AGENTTRACE_REDIS_ADDR:-redis:6379}
       AGENTTRACE_WORKER_URL: ${AGENTTRACE_WORKER_URL:-http://worker:8100}
       AGENTTRACE_ARTIFACT_DIR: /artifacts
+      AGENTTRACE_MODEL_BASE_URL: ${AGENTTRACE_MODEL_BASE_URL:-https://api.unself.cn/v1}
+      AGENTTRACE_MODEL_NAME: ${AGENTTRACE_MODEL_NAME:-glm-5.3-flash}
+      AGENTTRACE_MODEL_REASONING_EFFORT: ${AGENTTRACE_MODEL_REASONING_EFFORT:-high}
+      AGENTTRACE_MODEL_API_KEY: ${AGENTTRACE_MODEL_API_KEY:-}
+      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT:-/app/backend/testdata/scripted-model.json}
     depends_on:
       postgres:
         condition: service_healthy

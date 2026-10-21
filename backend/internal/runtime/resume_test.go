@@ -8,6 +8,7 @@ import (
 
 	"testing"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/operation"
@@ -52,6 +53,31 @@ func TestEngineResumesAfterCompletedOperation(t *testing.T) {
 	}
 	if got := store.assistantMessages(); len(got) != 1 || got[0] != "resumed answer" {
 		t.Fatalf("assistant messages = %#v, want resumed answer", got)
+	}
+}
+
+func TestInitialMessagesPreservesPersistedResponseAfterCheckpoint(t *testing.T) {
+	checkpoint := Checkpoint{
+		Command: event.RunCommand{
+			Messages: []domain.Message{
+				{Role: "user", Content: "initial request"},
+				{Role: "user", Content: "approved"},
+			},
+		},
+		Messages: []model.Message{
+			{Role: model.RoleAssistant, Content: "need approval"},
+			{Role: model.RoleTool, Content: `{"status":"waiting"}`, ToolCallID: "call_1"},
+		},
+	}
+	messages := initialMessages(checkpoint)
+	if len(messages) != 4 {
+		t.Fatalf("messages = %#v, want initial, response, and checkpoint history", messages)
+	}
+	if messages[0].Content != "initial request" ||
+		messages[1].Content != "approved" ||
+		messages[2].Content != "need approval" ||
+		messages[3].ToolCallID != "call_1" {
+		t.Fatalf("reconstructed messages = %#v", messages)
 	}
 }
 

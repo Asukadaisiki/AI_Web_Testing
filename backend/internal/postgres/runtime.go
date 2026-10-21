@@ -34,6 +34,28 @@ func (s *Store) LoadRunCommand(ctx context.Context, runID string) (domain.Run, e
 	if err := json.Unmarshal(run.Specification, &specification); err != nil {
 		return domain.Run{}, event.RunCommand{}, fmt.Errorf("decode run specification: %w", err)
 	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, conversation_id, COALESCE(run_id, ''), ordinal, role, content, metadata, created_at
+		FROM messages
+		WHERE conversation_id = $1
+		  AND metadata ->> 'run_id' = $2
+		ORDER BY ordinal ASC`,
+		run.ConversationID, runID,
+	)
+	if err != nil {
+		return domain.Run{}, event.RunCommand{}, fmt.Errorf("load persisted run responses: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		message, err := scanMessage(rows)
+		if err != nil {
+			return domain.Run{}, event.RunCommand{}, err
+		}
+		specification.Command.Messages = append(specification.Command.Messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Run{}, event.RunCommand{}, fmt.Errorf("iterate persisted run responses: %w", err)
+	}
 	return run, specification.Command, nil
 }
 

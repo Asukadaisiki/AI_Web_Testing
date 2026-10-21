@@ -58,6 +58,17 @@ func (c *Client) Publish(ctx context.Context, topic, key string, value []byte) (
 	return eventbus.Metadata{Partition: record.Partition, Offset: record.Offset}, nil
 }
 
+// Health verifies that the configured Kafka broker is reachable.
+func (c *Client) Health(ctx context.Context) error {
+	if c == nil || c.producer == nil {
+		return errors.New("Kafka client is not configured")
+	}
+	if err := c.producer.Ping(ctx); err != nil {
+		return fmt.Errorf("ping Kafka: %w", err)
+	}
+	return nil
+}
+
 // Consume disables auto-commit and commits each record only after its handler succeeds.
 func (c *Client) Consume(ctx context.Context, topic, group string, handler eventbus.Handler) error {
 	if c == nil {

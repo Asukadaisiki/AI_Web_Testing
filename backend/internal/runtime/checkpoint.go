@@ -106,10 +106,7 @@ func stableID(prefix string, values ...string) string {
 }
 
 func initialMessages(checkpoint Checkpoint) []model.Message {
-	if len(checkpoint.Messages) > 0 {
-		return append([]model.Message(nil), checkpoint.Messages...)
-	}
-	messages := make([]model.Message, 0, len(checkpoint.Command.Messages))
+	messages := make([]model.Message, 0, len(checkpoint.Command.Messages)+len(checkpoint.Messages))
 	for _, message := range checkpoint.Command.Messages {
 		role := model.Role(message.Role)
 		if role == "" {
@@ -117,6 +114,7 @@ func initialMessages(checkpoint Checkpoint) []model.Message {
 		}
 		messages = append(messages, model.Message{Role: role, Content: message.Content})
 	}
+	messages = append(messages, checkpoint.Messages...)
 	return messages
 }
 
