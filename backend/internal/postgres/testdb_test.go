@@ -34,8 +34,8 @@ func TestMigrateAppliesSchemaOnceAndEnforcesContracts(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatalf("count applied migrations: %v", err)
 	}
-	if applied != 1 {
-		t.Fatalf("applied migrations = %d, want 1", applied)
+	if applied != 2 {
+		t.Fatalf("applied migrations = %d, want 2", applied)
 	}
 
 	for _, unique := range []struct {
@@ -54,7 +54,7 @@ func TestMigrateAppliesSchemaOnceAndEnforcesContracts(t *testing.T) {
 		assertUniqueConstraint(t, ctx, pool, unique.table, unique.columns)
 	}
 
-	for _, column := range []string{"next_attempt_at", "locked_by", "locked_until"} {
+	for _, column := range []string{"next_attempt_at", "locked_by", "locked_until", "claim_token"} {
 		assertColumn(t, ctx, pool, "outbox_events", column)
 	}
 }
@@ -112,8 +112,8 @@ func TestMigrateSerializesConcurrentInitialMigration(t *testing.T) {
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 			t.Fatalf("count applied migrations after attempt %d: %v", attempt, err)
 		}
-		if applied != 1 {
-			t.Fatalf("applied migrations after attempt %d = %d, want 1", attempt, applied)
+		if applied != 2 {
+			t.Fatalf("applied migrations after attempt %d = %d, want 2", attempt, applied)
 		}
 	}
 }
