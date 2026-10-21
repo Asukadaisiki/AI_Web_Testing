@@ -79,6 +79,21 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	return projects, nil
 }
 
+// GetProject returns the canonical project projection by ID.
+func (s *Store) GetProject(ctx context.Context, projectID string) (Project, error) {
+	if s == nil || s.pool == nil {
+		return Project{}, errors.New("postgres store is not configured")
+	}
+	project, err := scanProject(s.pool.QueryRow(ctx, `
+		SELECT id, name, metadata, created_at, updated_at
+		FROM projects
+		WHERE id = $1`, projectID))
+	if err != nil {
+		return Project{}, fmt.Errorf("get project: %w", err)
+	}
+	return project, nil
+}
+
 func (s *Store) CreateProject(ctx context.Context, p CreateProjectParams) (Project, error) {
 	if s == nil || s.pool == nil {
 		return Project{}, errors.New("postgres store is not configured")

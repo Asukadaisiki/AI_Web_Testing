@@ -65,3 +65,75 @@ func TestLoadUsesConfiguredOpenAICompatibleModelDefaults(t *testing.T) {
 		t.Fatalf("model configuration = %#v", cfg.Model)
 	}
 }
+
+func TestLoadExporterDisabledRequiresNoDependenciesOrCredentials(t *testing.T) {
+	t.Setenv("AGENTTRACE_LANGFUSE_ENABLED", "false")
+	t.Setenv("AGENTTRACE_POSTGRES_DSN", "")
+	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "")
+	t.Setenv("AGENTTRACE_LANGFUSE_BASE_URL", "not a URL")
+	t.Setenv("AGENTTRACE_LANGFUSE_PUBLIC_KEY", "")
+	t.Setenv("AGENTTRACE_LANGFUSE_SECRET_KEY", "")
+
+	cfg, err := LoadExporter()
+	if err != nil {
+		t.Fatalf("load disabled exporter: %v", err)
+	}
+	if cfg.Enabled {
+		t.Fatal("exporter must be disabled")
+	}
+}
+
+func TestLoadExporterEnabledValidatesProviderConfiguration(t *testing.T) {
+	setValidExporterEnvironment(t)
+
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "base URL", key: "AGENTTRACE_LANGFUSE_BASE_URL", value: "file:///tmp/langfuse"},
+		{name: "public key", key: "AGENTTRACE_LANGFUSE_PUBLIC_KEY", value: ""},
+		{name: "secret key", key: "AGENTTRACE_LANGFUSE_SECRET_KEY", value: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(test.key, test.value)
+			if _, err := LoadExporter(); err == nil {
+				t.Fatalf("accepted invalid %s", test.name)
+			}
+		})
+	}
+}
+
+func TestLoadExporterEnabledUsesExactTopicsAndRedactionFields(t *testing.T) {
+	setValidExporterEnvironment(t)
+	t.Setenv("AGENTTRACE_LANGFUSE_REDACT_FIELDS", "authorization, password,api_key")
+	t.Setenv("AGENTTRACE_LANGFUSE_MAX_ATTEMPTS", "4")
+
+	cfg, err := LoadExporter()
+	if err != nil {
+		t.Fatalf("load enabled exporter: %v", err)
+	}
+	if !cfg.Enabled {
+		t.Fatal("exporter must be enabled")
+	}
+	if cfg.Kafka.EventTopic != "agenttrace.run.events.v1" ||
+		cfg.Kafka.DLQTopic != "agenttrace.run.dlq.v1" {
+		t.Fatalf("exporter topics = (%q, %q)", cfg.Kafka.EventTopic, cfg.Kafka.DLQTopic)
+	}
+	if cfg.Langfuse.MaxAttempts != 4 {
+		t.Fatalf("max attempts = %d, want 4", cfg.Langfuse.MaxAttempts)
+	}
+	if len(cfg.Langfuse.SecretFields) != 3 {
+		t.Fatalf("redaction fields = %#v", cfg.Langfuse.SecretFields)
+	}
+}
+
+func setValidExporterEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("AGENTTRACE_LANGFUSE_ENABLED", "true")
+	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://agenttrace:agenttrace@localhost:5432/agenttrace?sslmode=disable")
+	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
+	t.Setenv("AGENTTRACE_LANGFUSE_BASE_URL", "https://langfuse.example")
+	t.Setenv("AGENTTRACE_LANGFUSE_PUBLIC_KEY", "public-test")
+	t.Setenv("AGENTTRACE_LANGFUSE_SECRET_KEY", "secret-test")
+}

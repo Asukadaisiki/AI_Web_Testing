@@ -99,6 +99,29 @@ services:
       - .:/app
       - artifacts:/artifacts
 
+  exporter:
+    profiles: ["langfuse"]
+    image: golang:1.24
+    working_dir: /app/backend
+    command: ["go", "run", "./cmd/agenttrace-exporter"]
+    environment:
+      AGENTTRACE_LANGFUSE_ENABLED: "true"
+      AGENTTRACE_POSTGRES_DSN: ${AGENTTRACE_POSTGRES_DSN:-postgres://agenttrace:agenttrace@postgres:5432/agenttrace?sslmode=disable}
+      AGENTTRACE_KAFKA_BROKERS: ${AGENTTRACE_KAFKA_BROKERS:-kafka:9092}
+      AGENTTRACE_LANGFUSE_BASE_URL: ${AGENTTRACE_LANGFUSE_BASE_URL:-}
+      AGENTTRACE_LANGFUSE_PUBLIC_KEY: ${AGENTTRACE_LANGFUSE_PUBLIC_KEY:-}
+      AGENTTRACE_LANGFUSE_SECRET_KEY: ${AGENTTRACE_LANGFUSE_SECRET_KEY:-}
+      AGENTTRACE_LANGFUSE_GROUP_ID: ${AGENTTRACE_LANGFUSE_GROUP_ID:-agenttrace-langfuse-exporter}
+      AGENTTRACE_LANGFUSE_MAX_ATTEMPTS: ${AGENTTRACE_LANGFUSE_MAX_ATTEMPTS:-3}
+      AGENTTRACE_LANGFUSE_REDACT_FIELDS: ${AGENTTRACE_LANGFUSE_REDACT_FIELDS:-authorization,cookie,password,token,api_key,secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
   web:
     image: node:22-alpine
     working_dir: /app/web

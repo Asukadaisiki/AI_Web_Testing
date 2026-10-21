@@ -12,6 +12,28 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 )
 
+func TestGetProjectReturnsCanonicalMetadata(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO projects (id, name, metadata)
+		VALUES ('prj_export', 'Export project', '{"environment":"fixture"}')`); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	project, err := store.GetProject(ctx, "prj_export")
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal(project.Metadata, &metadata); err != nil {
+		t.Fatalf("decode project metadata: %v", err)
+	}
+	if project.ID != "prj_export" || project.Name != "Export project" ||
+		metadata["environment"] != "fixture" {
+		t.Fatalf("project = %#v", project)
+	}
+}
+
 func TestResponsePersistsMessageAndContinuationOutbox(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)

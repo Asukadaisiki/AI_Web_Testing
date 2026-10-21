@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -44,6 +45,24 @@ type Model struct {
 	ReasoningEffort string
 	APIKey          string
 	ScriptPath      string
+}
+
+// Exporter contains only the dependencies used by the optional Langfuse process.
+type Exporter struct {
+	Enabled  bool
+	Postgres Postgres
+	Kafka    Kafka
+	Langfuse Langfuse
+}
+
+// Langfuse contains exporter-only provider settings.
+type Langfuse struct {
+	BaseURL      string
+	PublicKey    string
+	SecretKey    string
+	GroupID      string
+	SecretFields []string
+	MaxAttempts  int
 }
 
 func Load() (Config, error) {
@@ -94,6 +113,64 @@ func Load() (Config, error) {
 	}, nil
 }
 
+// LoadExporter validates no dependencies while the optional process is disabled.
+func LoadExporter() (Exporter, error) {
+	enabled, err := boolEnv("AGENTTRACE_LANGFUSE_ENABLED", false)
+	if err != nil {
+		return Exporter{}, err
+	}
+	if !enabled {
+		return Exporter{Enabled: false}, nil
+	}
+
+	postgresDSN := strings.TrimSpace(os.Getenv("AGENTTRACE_POSTGRES_DSN"))
+	brokers := commaSeparated(os.Getenv("AGENTTRACE_KAFKA_BROKERS"))
+	if postgresDSN == "" || len(brokers) == 0 {
+		return Exporter{}, fmt.Errorf(
+			"missing required exporter configuration: set AGENTTRACE_POSTGRES_DSN and AGENTTRACE_KAFKA_BROKERS",
+		)
+	}
+	baseURL := strings.TrimSpace(os.Getenv("AGENTTRACE_LANGFUSE_BASE_URL"))
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" ||
+		(parsedURL.Scheme != "http" && parsedURL.Scheme != "https") ||
+		parsedURL.User != nil {
+		return Exporter{}, fmt.Errorf("AGENTTRACE_LANGFUSE_BASE_URL must be an absolute HTTP URL without credentials")
+	}
+	publicKey := strings.TrimSpace(os.Getenv("AGENTTRACE_LANGFUSE_PUBLIC_KEY"))
+	secretKey := strings.TrimSpace(os.Getenv("AGENTTRACE_LANGFUSE_SECRET_KEY"))
+	if publicKey == "" || secretKey == "" {
+		return Exporter{}, fmt.Errorf(
+			"missing required Langfuse credentials: set AGENTTRACE_LANGFUSE_PUBLIC_KEY and AGENTTRACE_LANGFUSE_SECRET_KEY",
+		)
+	}
+	maxAttempts, err := positiveIntEnv("AGENTTRACE_LANGFUSE_MAX_ATTEMPTS", 3)
+	if err != nil {
+		return Exporter{}, err
+	}
+	secretFields := commaSeparated(envOr(
+		"AGENTTRACE_LANGFUSE_REDACT_FIELDS",
+		"authorization,cookie,password,token,api_key,secret",
+	))
+	return Exporter{
+		Enabled:  true,
+		Postgres: Postgres{DSN: postgresDSN},
+		Kafka: Kafka{
+			Brokers:    brokers,
+			EventTopic: "agenttrace.run.events.v1",
+			DLQTopic:   "agenttrace.run.dlq.v1",
+		},
+		Langfuse: Langfuse{
+			BaseURL:      baseURL,
+			PublicKey:    publicKey,
+			SecretKey:    secretKey,
+			GroupID:      envOr("AGENTTRACE_LANGFUSE_GROUP_ID", "agenttrace-langfuse-exporter"),
+			SecretFields: secretFields,
+			MaxAttempts:  maxAttempts,
+		},
+	}, nil
+}
+
 func commaSeparated(value string) []string {
 	var result []string
 	for _, item := range strings.Split(value, ",") {
@@ -102,6 +179,18 @@ func commaSeparated(value string) []string {
 		}
 	}
 	return result
+}
+
+func boolEnv(key string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean: %w", key, err)
+	}
+	return parsed, nil
 }
 
 func intEnv(key string, fallback int) (int, error) {
