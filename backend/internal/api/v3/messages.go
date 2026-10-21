@@ -30,12 +30,8 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown_agent", "agent_id is not available")
 		return
 	}
-	if err := requiredText(input.Model.Provider, "model.provider"); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if err := requiredText(input.Model.Name, "model.name"); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	if input.Model != s.model {
+		writeError(w, http.StatusBadRequest, "model_not_available", "model is not available")
 		return
 	}
 	if err := requiredText(input.IdempotencyKey, "idempotency_key"); err != nil {
@@ -46,7 +42,7 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		ConversationID: r.PathValue("id"),
 		Content:        input.Content,
 		AgentID:        s.profile.ID,
-		Model:          input.Model,
+		Model:          s.model,
 		Operations:     s.profile.RunOperations(),
 		IdempotencyKey: input.IdempotencyKey,
 	})

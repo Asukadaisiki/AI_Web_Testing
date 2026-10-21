@@ -2,7 +2,9 @@ package v3
 
 import (
 	"net/http"
+	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
 
@@ -10,6 +12,19 @@ type responseRequest struct {
 	Kind           string `json:"kind"`
 	Content        string `json:"content"`
 	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type publicRun struct {
+	ID                string           `json:"id"`
+	ProjectID         string           `json:"project_id"`
+	ConversationID    string           `json:"conversation_id"`
+	Status            domain.RunStatus `json:"status"`
+	CheckpointVersion int64            `json:"checkpoint_version"`
+	CancelRequestedAt *time.Time       `json:"cancel_requested_at,omitempty"`
+	StartedAt         *time.Time       `json:"started_at,omitempty"`
+	FinishedAt        *time.Time       `json:"finished_at,omitempty"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +36,18 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, run)
+	writeJSON(w, http.StatusOK, publicRun{
+		ID:                run.ID,
+		ProjectID:         run.ProjectID,
+		ConversationID:    run.ConversationID,
+		Status:            run.Status,
+		CheckpointVersion: run.CheckpointVersion,
+		CancelRequestedAt: run.CancelRequestedAt,
+		StartedAt:         run.StartedAt,
+		FinishedAt:        run.FinishedAt,
+		CreatedAt:         run.CreatedAt,
+		UpdatedAt:         run.UpdatedAt,
+	})
 }
 
 func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +131,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 		ID:          s.profile.ID,
 		ProductName: s.profile.ProductName,
 		Model: publicModel{
-			Provider: s.profile.Model.Provider, Name: s.profile.Model.Name,
+			Provider: s.model.Provider, Name: s.model.Name,
 			ReasoningEffort: s.profile.Model.ReasoningEffort,
 		},
 		Safety: s.profile.Safety,

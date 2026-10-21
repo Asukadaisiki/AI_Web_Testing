@@ -294,6 +294,15 @@ func (s *Store) SubmitResponse(ctx context.Context, p SubmitResponseParams) erro
 		return fmt.Errorf("begin submit response: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var conversationID string
+	if err := tx.QueryRow(ctx, `SELECT conversation_id FROM runs WHERE id = $1`, p.RunID).Scan(&conversationID); errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("run %q: %w", p.RunID, ErrNotFound)
+	} else if err != nil {
+		return fmt.Errorf("read response run conversation: %w", err)
+	}
+	if _, err := lockConversation(ctx, tx, conversationID); err != nil {
+		return err
+	}
 	run, err := scanRun(tx.QueryRow(ctx, `
 		SELECT id, project_id, conversation_id, status, specification, checkpoint_version,
 		       cancel_requested_at, started_at, finished_at, created_at, updated_at

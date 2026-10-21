@@ -17,6 +17,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	v3 "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/api/v3"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus/kafka"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	liveredis "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live/redis"
@@ -97,6 +98,7 @@ func run() error {
 	api := v3.New(v3.ServerConfig{
 		Repository: store,
 		Profile:    profile,
+		Model:      configuredModel(cfg.Model, profile),
 		Stream:     stream.NewService(stream.NewPostgreSQLReader(pool), liveStore, stream.Config{}),
 		Live:       liveStore,
 		Health: v3.HealthDependencies{
@@ -129,6 +131,13 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+func configuredModel(cfg config.Model, profile agentprofile.Profile) event.ModelRef {
+	if cfg.ScriptPath != "" {
+		return event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"}
+	}
+	return event.ModelRef{Provider: profile.Model.Provider, Name: cfg.Name}
 }
 
 func relayLoop(ctx context.Context, relay *outbox.Relay) {

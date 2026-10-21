@@ -62,3 +62,29 @@ func TestOpenAICompletePreservesReasoningEffortToolCallsAndUsage(t *testing.T) {
 		t.Fatalf("normalized usage = %#v", response.Usage)
 	}
 }
+
+func TestOpenAICompleteUsesConfiguredModelWhenRequestModelDiffers(t *testing.T) {
+	var request wireRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAI(OpenAIConfig{BaseURL: server.URL, Model: "glm-5.3-flash"})
+	if _, err := client.Complete(context.Background(), Request{
+		Model:    "unapproved-client-model",
+		Messages: []Message{{Role: RoleUser, Content: "inspect"}},
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if request.Model != "glm-5.3-flash" {
+		t.Fatalf("wire model = %q, want configured model", request.Model)
+	}
+}

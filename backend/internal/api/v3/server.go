@@ -13,6 +13,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/stream"
@@ -53,6 +54,7 @@ type healthDependencies = HealthDependencies
 type ServerConfig struct {
 	Repository        Repository
 	Profile           agentprofile.Profile
+	Model             event.ModelRef
 	Stream            *stream.Service
 	Live              live.LiveStore
 	Health            HealthDependencies
@@ -64,6 +66,7 @@ type ServerConfig struct {
 type Server struct {
 	repository Repository
 	profile    agentprofile.Profile
+	model      event.ModelRef
 	stream     *stream.Service
 	live       live.LiveStore
 	health     HealthDependencies
@@ -83,9 +86,17 @@ func New(config ServerConfig) *Server {
 	if writeWait <= 0 {
 		writeWait = defaultSSEWriteWait
 	}
+	model := config.Model
+	if model.Provider == "" {
+		model.Provider = config.Profile.Model.Provider
+	}
+	if model.Name == "" {
+		model.Name = config.Profile.Model.Name
+	}
 	server := &Server{
 		repository: config.Repository,
 		profile:    config.Profile,
+		model:      model,
 		stream:     config.Stream,
 		live:       config.Live,
 		health:     config.Health,

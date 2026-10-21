@@ -12,6 +12,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/stream"
@@ -24,7 +25,7 @@ func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 	response := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", `{
 		"content":"verify the cart",
 		"agent_id":"browser-eval",
-		"model":{"provider":"scripted","name":"fixture"},
+		"model":{"provider":"openai-compatible","name":"glm-5.3-flash"},
 		"idempotency_key":"request-1"
 	}`)
 	if response.Code != http.StatusAccepted {
@@ -46,15 +47,59 @@ func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 	if repository.message.AgentID != "browser-eval" {
 		t.Fatalf("agent id = %q", repository.message.AgentID)
 	}
+	if repository.message.Model != (event.ModelRef{Provider: "openai-compatible", Name: "glm-5.3-flash"}) {
+		t.Fatalf("stored model = %#v, want configured model", repository.message.Model)
+	}
 	if len(repository.message.Operations) != 1 || repository.message.Operations[0].Callback.URL == "" {
 		t.Fatalf("run operations = %#v, want server-owned browser operation", repository.message.Operations)
+	}
+}
+
+func TestSendMessageRejectsUnconfiguredModel(t *testing.T) {
+	repository := &fakeRepository{}
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
+
+	response := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", `{
+		"content":"verify the cart",
+		"agent_id":"browser-eval",
+		"model":{"provider":"openai-compatible","name":"unapproved-model"},
+		"idempotency_key":"request-unapproved-model"
+	}`)
+	assertErrorCode(t, response, http.StatusBadRequest, "model_not_available")
+}
+
+func TestGetRunDoesNotExposeInternalSpecification(t *testing.T) {
+	repository := &fakeRepository{run: domain.Run{
+		ID:             "run_1",
+		ProjectID:      "prj_1",
+		ConversationID: "conv_1",
+		Status:         domain.RunRunning,
+		Specification: json.RawMessage(`{
+			"command":{
+				"operations":[{
+					"callback":{"url":"https://worker.internal/private-callback"},
+					"input_schema":{"secret":"must-not-leak"}
+				}]
+			}
+		}`),
+	}}
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/runs/run_1", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	for _, forbidden := range []string{"specification", "callback", "worker.internal", "input_schema", "must-not-leak"} {
+		if strings.Contains(strings.ToLower(response.Body.String()), strings.ToLower(forbidden)) {
+			t.Fatalf("/runs response leaked %q: %s", forbidden, response.Body.String())
+		}
 	}
 }
 
 func TestSendMessageDuplicateIdempotencyKeyReturnsSameRun(t *testing.T) {
 	repository := &fakeRepository{}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
-	body := `{"content":"verify the cart","agent_id":"browser-eval","model":{"provider":"scripted","name":"fixture"},"idempotency_key":"request-1"}`
+	body := `{"content":"verify the cart","agent_id":"browser-eval","model":{"provider":"openai-compatible","name":"glm-5.3-flash"},"idempotency_key":"request-1"}`
 
 	first := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", body)
 	second := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", body)
@@ -147,6 +192,27 @@ func TestHealthReportsKafkaAndRedisSeparately(t *testing.T) {
 		body.Dependencies["kafka"].PendingOutbox != 3 ||
 		body.Dependencies["redis"].Mode != "postgres_poll" {
 		t.Fatalf("health = %#v", body)
+	}
+}
+
+func TestHealthPreservesZeroPendingOutbox(t *testing.T) {
+	handler := newTestServerWithHealth(t, &fakeRepository{pendingOutbox: 0}, healthDependencies{
+		Postgres: func(context.Context) error { return nil },
+		Kafka:    func(context.Context) error { return nil },
+	})
+
+	response := request(t, handler, http.MethodGet, "/api/v1/health", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var body map[string]json.RawMessage
+	decodeJSON(t, response, &body)
+	var dependencies map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(body["dependencies"], &dependencies); err != nil {
+		t.Fatalf("decode dependencies: %v", err)
+	}
+	if _, ok := dependencies["kafka"]["pending_outbox"]; !ok {
+		t.Fatalf("health response omitted zero pending_outbox: %s", response.Body.String())
 	}
 }
 
@@ -333,6 +399,7 @@ type fakeRepository struct {
 	cancelledRunID string
 	response       postgres.SubmitResponseParams
 	pendingOutbox  int
+	run            domain.Run
 }
 
 func (r *fakeRepository) CreateMessageAndRun(_ context.Context, input postgres.CreateMessageParams) (domain.Message, domain.Run, error) {
@@ -368,6 +435,9 @@ func (r *fakeRepository) GetConversation(context.Context, string) (postgres.Conv
 	return postgres.Conversation{}, nil, postgres.ErrNotFound
 }
 func (r *fakeRepository) GetRun(context.Context, string) (domain.Run, error) {
+	if r.run.ID != "" {
+		return r.run, nil
+	}
 	return domain.Run{}, postgres.ErrNotFound
 }
 func (r *fakeRepository) ListTrace(context.Context, string) ([]domain.Span, error) { return nil, nil }

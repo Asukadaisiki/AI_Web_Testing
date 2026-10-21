@@ -161,16 +161,12 @@ func (c *OpenAI) RequestSize(request Request) (int, error) {
 }
 
 func (c *OpenAI) marshalRequest(request Request) ([]byte, error) {
-	modelName := request.Model
-	if modelName == "" {
-		modelName = c.config.Model
-	}
 	reasoningEffort := request.ReasoningEffort
 	if reasoningEffort == "" {
 		reasoningEffort = c.config.ReasoningEffort
 	}
 	raw, err := json.Marshal(wireRequest{
-		Model:           modelName,
+		Model:           c.config.Model,
 		Messages:        toWireMessages(request.Messages),
 		Tools:           toWireTools(request.Tools),
 		ToolChoice:      toolChoice(request.ToolChoice),

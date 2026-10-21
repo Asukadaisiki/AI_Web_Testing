@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
@@ -107,10 +108,42 @@ func run() error {
 		LeaseOwner: processID("runtime"),
 		DLQTopic:   cfg.Kafka.DLQTopic,
 	}
-	if err := consumerRuntime.Consume(ctx, bus, cfg.Kafka.GroupID); err != nil && !errors.Is(err, context.Canceled) {
+	if err := consumeWorkers(ctx, cfg.RuntimeConcurrency, func(workerCtx context.Context) error {
+		return consumerRuntime.Consume(workerCtx, bus, cfg.Kafka.GroupID)
+	}); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("consume AgentTrace commands: %w", err)
 	}
 	return nil
+}
+
+func consumeWorkers(ctx context.Context, count int, consume func(context.Context) error) error {
+	if count < 1 {
+		return errors.New("runtime consumer count must be at least 1")
+	}
+	if consume == nil {
+		return errors.New("runtime consumer worker is required")
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errs := make(chan error, count)
+	var workers sync.WaitGroup
+	for range count {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if err := consume(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
+				errs <- err
+				cancel()
+			}
+		}()
+	}
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		return err
+	}
+	return ctx.Err()
 }
 
 func selectModel(cfg config.Model) (model.Model, error) {

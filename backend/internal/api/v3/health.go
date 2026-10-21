@@ -10,7 +10,7 @@ type healthDependency struct {
 	Status        string `json:"status"`
 	Required      bool   `json:"required"`
 	Mode          string `json:"mode,omitempty"`
-	PendingOutbox int    `json:"pending_outbox,omitempty"`
+	PendingOutbox int    `json:"pending_outbox"`
 }
 
 type healthResponse struct {
