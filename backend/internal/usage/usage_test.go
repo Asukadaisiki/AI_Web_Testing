@@ -38,11 +38,15 @@ func TestCallKeepsProviderTotalWhenGiven(t *testing.T) {
 }
 
 func TestAddAccumulatesEveryField(t *testing.T) {
-	total := Call(100, 20, 15, 0).Add(Call(200, 30, 0, 80))
+	total := Call(100, 20, 15, 0)
+	total.CostMicros = 250
+	other := Call(200, 30, 0, 80)
+	other.CostMicros = 375
+	total = total.Add(other)
 	want := Usage{
 		ModelCalls: 2, PromptTokens: 300, CompletionTokens: 50,
 		TotalTokens: 350, FreshPromptTokens: 220, FreshTotalTokens: 270,
-		ReasoningTokens: 15, CachedTokens: 80,
+		ReasoningTokens: 15, CachedTokens: 80, CostMicros: 625,
 	}
 	if total != want {
 		t.Fatalf("total = %+v, want %+v", total, want)
