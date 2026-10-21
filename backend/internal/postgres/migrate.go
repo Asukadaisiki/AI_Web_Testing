@@ -55,6 +55,13 @@ func applyMigration(ctx context.Context, pool *pgxpool.Pool, version string) err
 	}
 	defer tx.Rollback(ctx)
 
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(24137, hashtext($1))`,
+		version,
+	); err != nil {
+		return fmt.Errorf("lock migration %s: %w", version, err)
+	}
+
 	var appliedVersion string
 	err = tx.QueryRow(ctx,
 		`SELECT version FROM schema_migrations WHERE version = $1 FOR UPDATE`,

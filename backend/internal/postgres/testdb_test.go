@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,6 +56,63 @@ func TestMigrateAppliesSchemaOnceAndEnforcesContracts(t *testing.T) {
 
 	for _, column := range []string{"next_attempt_at", "locked_by", "locked_until"} {
 		assertColumn(t, ctx, pool, "outbox_events", column)
+	}
+}
+
+func TestMigrateSerializesConcurrentInitialMigration(t *testing.T) {
+	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN is not configured")
+	}
+
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test database DSN: %v", err)
+	}
+	config.MaxConns = 4
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect test database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	for attempt := 1; attempt <= 10; attempt++ {
+		resetDatabase(t, ctx, pool)
+		if _, err := pool.Exec(ctx, `
+			CREATE TABLE schema_migrations (
+				version TEXT PRIMARY KEY,
+				applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			)`); err != nil {
+			t.Fatalf("create migration ledger for attempt %d: %v", attempt, err)
+		}
+
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var group sync.WaitGroup
+		for range 2 {
+			group.Go(func() {
+				<-start
+				errs <- Migrate(ctx, pool)
+			})
+		}
+		close(start)
+		group.Wait()
+		close(errs)
+
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("concurrent migration attempt %d: %v", attempt, err)
+			}
+		}
+
+		var applied int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
+			t.Fatalf("count applied migrations after attempt %d: %v", attempt, err)
+		}
+		if applied != 1 {
+			t.Fatalf("applied migrations after attempt %d = %d, want 1", attempt, applied)
+		}
 	}
 }
 
