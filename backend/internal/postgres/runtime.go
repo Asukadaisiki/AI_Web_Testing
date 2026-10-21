@@ -115,6 +115,117 @@ func (s *Store) ClearConsumerRetry(ctx context.Context, consumerName string, eve
 	return nil
 }
 
+// HandoffConsumerRetryToOutbox atomically replaces retry state with one
+// idempotent DLQ outbox record. The relay owns broker publication afterward.
+func (s *Store) HandoffConsumerRetryToOutbox(
+	ctx context.Context,
+	consumerName string,
+	retryEventID string,
+	outboxEventID string,
+	topic string,
+	key string,
+	payload []byte,
+) error {
+	if s == nil || s.pool == nil {
+		return errors.New("postgres store is not configured")
+	}
+	if strings.TrimSpace(consumerName) == "" ||
+		strings.TrimSpace(retryEventID) == "" ||
+		strings.TrimSpace(outboxEventID) == "" ||
+		strings.TrimSpace(topic) == "" {
+		return errors.New("consumer retry handoff identifiers are required")
+	}
+	if !json.Valid(payload) {
+		return errors.New("consumer retry DLQ payload must be valid JSON")
+	}
+	hash, err := payloadHash(json.RawMessage(payload))
+	if err != nil {
+		return fmt.Errorf("hash consumer retry DLQ payload: %w", err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin consumer retry DLQ handoff: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var present bool
+	err = tx.QueryRow(ctx, `
+		SELECT true
+		FROM consumer_retry_counts
+		WHERE consumer = $1 AND event_id = $2
+		FOR UPDATE`, consumerName, retryEventID).Scan(&present)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("lock consumer retry for DLQ handoff: %w", err)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		present = false
+	}
+
+	var storedHash, storedTopic, storedKey string
+	err = tx.QueryRow(ctx, `
+		SELECT headers ->> 'payload_hash', topic, key
+		FROM outbox_events
+		WHERE event_id = $1
+		FOR UPDATE`, outboxEventID).Scan(&storedHash, &storedTopic, &storedKey)
+	switch {
+	case err == nil:
+		if storedHash != hash || storedTopic != topic || storedKey != key {
+			return ErrConflict
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		if !present {
+			return tx.Commit(ctx)
+		}
+		inserted, err := insertOutbox(
+			ctx,
+			tx,
+			outboxEventID,
+			topic,
+			key,
+			json.RawMessage(payload),
+			hash,
+		)
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			return ErrConflict
+		}
+	default:
+		return fmt.Errorf("read consumer retry DLQ outbox event: %w", err)
+	}
+	if present {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM consumer_retry_counts
+			WHERE consumer = $1 AND event_id = $2`, consumerName, retryEventID); err != nil {
+			return fmt.Errorf("clear consumer retry after DLQ handoff: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit consumer retry DLQ handoff: %w", err)
+	}
+	return nil
+}
+
+// HasConsumerRetryDLQHandoff reports whether a retry event already has a
+// durable DLQ outbox handoff, so a broker replay can be acknowledged.
+func (s *Store) HasConsumerRetryDLQHandoff(ctx context.Context, outboxEventID string) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, errors.New("postgres store is not configured")
+	}
+	if strings.TrimSpace(outboxEventID) == "" {
+		return false, errors.New("consumer retry DLQ outbox event id is required")
+	}
+	var handedOff bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM outbox_events WHERE event_id = $1
+		)`, outboxEventID).Scan(&handedOff); err != nil {
+		return false, fmt.Errorf("check consumer retry DLQ handoff: %w", err)
+	}
+	return handedOff, nil
+}
+
 // FinishRun atomically records terminal state, a durable event, and its outbox row.
 func (s *Store) FinishRun(
 	ctx context.Context,

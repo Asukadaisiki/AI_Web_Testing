@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,9 +98,11 @@ func TestConsumerRoutesFailureToDLQAcrossFreshInstances(t *testing.T) {
 	if err := second.Handle(context.Background(), message); err != nil {
 		t.Fatalf("durable second failure must escalate to DLQ: %v", err)
 	}
-	published := bus.Published()
-	if len(published) != 1 || published[0].Topic != defaultDLQTopic {
-		t.Fatalf("DLQ publishes = %#v, want exactly %q", published, defaultDLQTopic)
+	if retries.handoffCount != 1 {
+		t.Fatalf("durable DLQ handoffs = %d, want one", retries.handoffCount)
+	}
+	if len(bus.Published()) != 0 {
+		t.Fatalf("direct DLQ publishes = %#v, want none with durable retry state", bus.Published())
 	}
 }
 
@@ -120,12 +123,19 @@ func TestConsumerRoutesMalformedCommandsToDLQAfterDurableLimit(t *testing.T) {
 	if err := second.Handle(context.Background(), message); err != nil {
 		t.Fatalf("malformed command must escalate to DLQ: %v", err)
 	}
-	published := bus.Published()
-	if len(published) != 1 || published[0].Topic != defaultDLQTopic {
-		t.Fatalf("DLQ publishes = %#v, want exactly %q", published, defaultDLQTopic)
+	if retries.handoffCount != 1 {
+		t.Fatalf("durable DLQ handoffs = %d, want one", retries.handoffCount)
+	}
+	if len(bus.Published()) != 0 {
+		t.Fatalf("direct DLQ publishes = %#v, want none with durable retry state", bus.Published())
+	}
+	fallbackID := stableID("consumer-retry", message.Topic, message.Key, string(message.Value))
+	handoff, ok := retries.dlq[fallbackID]
+	if !ok {
+		t.Fatalf("missing durable DLQ handoff for %q", fallbackID)
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(published[0].Value, &payload); err != nil {
+	if err := json.Unmarshal(handoff.Payload, &payload); err != nil {
 		t.Fatalf("DLQ payload must be valid JSON: %v", err)
 	}
 	if got, ok := payload["original"].(string); !ok || got != string(message.Value) {
@@ -133,12 +143,116 @@ func TestConsumerRoutesMalformedCommandsToDLQAfterDurableLimit(t *testing.T) {
 	}
 }
 
+func TestConsumerDerivesStableFallbackForWhitespaceEnvelopeIDAtDurableLimit(t *testing.T) {
+	runner := &recordingRunner{err: errors.New("permanent failure")}
+	bus := &eventbus.Fake{}
+	retries := &memoryRetryStore{}
+	message := commandMessage(t, " \t ", commandFor("run-whitespace-event-id"))
+	wantID := stableID("consumer-retry", message.Topic, message.Key, string(message.Value))
+
+	first := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		Publisher:   bus,
+		RetryStore:  retries,
+		MaxAttempts: 2,
+	}
+	if err := first.Handle(context.Background(), message); err == nil {
+		t.Fatal("first whitespace event ID failure returned nil")
+	}
+	second := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		Publisher:   bus,
+		RetryStore:  retries,
+		MaxAttempts: 2,
+	}
+	if err := second.Handle(context.Background(), message); err != nil {
+		t.Fatalf("whitespace event ID must reach durable limit: %v", err)
+	}
+	if len(retries.incremented) != 2 {
+		t.Fatalf("recorded retry IDs = %#v, want two attempts", retries.incremented)
+	}
+	for _, eventID := range retries.incremented {
+		if eventID != wantID {
+			t.Fatalf("retry event ID = %q, want stable fallback %q", eventID, wantID)
+		}
+	}
+	if retries.handoffCount != 1 {
+		t.Fatalf("durable DLQ handoffs = %d, want one", retries.handoffCount)
+	}
+}
+
+func TestConsumerConcurrentFreshInstancesCreateOneDLQHandoff(t *testing.T) {
+	runner := &recordingRunner{err: errors.New("permanent failure")}
+	retries := &memoryRetryStore{}
+	message := commandMessage(t, "evt-concurrent-dlq", commandFor("run-concurrent-dlq"))
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+
+	for range 2 {
+		consumer := Consumer{
+			Inbox:       &memoryInbox{},
+			Runner:      runner,
+			RetryStore:  retries,
+			MaxAttempts: 1,
+		}
+		go func() {
+			<-start
+			errs <- consumer.Handle(context.Background(), message)
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent durable DLQ handoff: %v", err)
+		}
+	}
+	if retries.handoffCount != 1 {
+		t.Fatalf("durable DLQ handoffs = %d, want one", retries.handoffCount)
+	}
+}
+
+func TestConsumerReplayAfterDLQHandoffDoesNotCreateAnotherHandoff(t *testing.T) {
+	runner := &recordingRunner{err: errors.New("permanent failure")}
+	retries := &memoryRetryStore{}
+	message := commandMessage(t, "evt-dlq-replay", commandFor("run-dlq-replay"))
+
+	first := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		RetryStore:  retries,
+		MaxAttempts: 1,
+	}
+	if err := first.Handle(context.Background(), message); err != nil {
+		t.Fatalf("initial durable DLQ handoff: %v", err)
+	}
+	replay := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		RetryStore:  retries,
+		MaxAttempts: 1,
+	}
+	if err := replay.Handle(context.Background(), message); err != nil {
+		t.Fatalf("replay after durable DLQ handoff: %v", err)
+	}
+	if retries.handoffCount != 1 {
+		t.Fatalf("durable DLQ handoffs after replay = %d, want one", retries.handoffCount)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("runner calls after replay = %d, want one", runner.calls)
+	}
+}
+
 type recordingRunner struct {
+	mu    sync.Mutex
 	calls int
 	err   error
 }
 
 func (r *recordingRunner) Run(_ context.Context, _ event.RunCommand) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls++
 	return r.err
 }
@@ -166,20 +280,52 @@ func (i *memoryInbox) Handle(_ context.Context, message eventbus.Message, handle
 }
 
 type memoryRetryStore struct {
-	attempts map[string]int
+	mu           sync.Mutex
+	attempts     map[string]int
+	incremented  []string
+	handoffCount int
+	dlq          map[string]DLQHandoff
 }
 
 func (s *memoryRetryStore) Increment(_ context.Context, eventID string, _ []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.attempts == nil {
 		s.attempts = make(map[string]int)
 	}
+	s.incremented = append(s.incremented, eventID)
 	s.attempts[eventID]++
 	return s.attempts[eventID], nil
 }
 
 func (s *memoryRetryStore) Clear(_ context.Context, eventID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.attempts, eventID)
 	return nil
+}
+
+func (s *memoryRetryStore) HandoffDLQ(_ context.Context, eventID string, handoff DLQHandoff) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dlq == nil {
+		s.dlq = make(map[string]DLQHandoff)
+	}
+	if _, exists := s.dlq[eventID]; exists {
+		return nil
+	}
+	handoff.Payload = append([]byte(nil), handoff.Payload...)
+	s.dlq[eventID] = handoff
+	s.handoffCount++
+	delete(s.attempts, eventID)
+	return nil
+}
+
+func (s *memoryRetryStore) HasDLQHandoff(_ context.Context, eventID string, outboxEventID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	handoff, exists := s.dlq[eventID]
+	return exists && handoff.EventID == outboxEventID, nil
 }
 
 func commandMessage(t *testing.T, eventID string, command event.RunCommand) eventbus.Message {

@@ -225,6 +225,48 @@ func TestConsumerRetryCountPersistsAcrossStoreInstances(t *testing.T) {
 	}
 }
 
+func TestConsumerDLQHandoffMovesRetryStateToOneOutboxEvent(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	const (
+		consumer = "runtime"
+		retryID  = "evt-dlq-handoff"
+		outboxID = "evt-dlq-outbox"
+		topic    = "agenttrace.run.dlq.v1"
+		key      = "run-dlq-handoff"
+	)
+	dlqPayload := []byte(`{"original":{"event_id":"evt-dlq-handoff"},"error":"permanent failure","attempt":2}`)
+	if _, err := store.IncrementConsumerRetry(ctx, consumer, retryID, []byte(`{"event_id":"evt-dlq-handoff"}`)); err != nil {
+		t.Fatalf("record first failure: %v", err)
+	}
+	if _, err := store.IncrementConsumerRetry(ctx, consumer, retryID, []byte(`{"event_id":"evt-dlq-handoff"}`)); err != nil {
+		t.Fatalf("record final failure: %v", err)
+	}
+
+	if err := store.HandoffConsumerRetryToOutbox(ctx, consumer, retryID, outboxID, topic, key, dlqPayload); err != nil {
+		t.Fatalf("handoff consumer retry to outbox: %v", err)
+	}
+	if err := store.HandoffConsumerRetryToOutbox(ctx, consumer, retryID, outboxID, topic, key, dlqPayload); err != nil {
+		t.Fatalf("idempotent handoff consumer retry to outbox: %v", err)
+	}
+
+	var retryRows, outboxRows int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM consumer_retry_counts
+		WHERE consumer = $1 AND event_id = $2`, consumer, retryID).Scan(&retryRows); err != nil {
+		t.Fatalf("count retry state: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM outbox_events
+		WHERE event_id = $1 AND topic = $2 AND key = $3 AND payload = $4::jsonb`,
+		outboxID, topic, key, dlqPayload,
+	).Scan(&outboxRows); err != nil {
+		t.Fatalf("count DLQ outbox event: %v", err)
+	}
+	if retryRows != 0 || outboxRows != 1 {
+		t.Fatalf("retry rows=%d outbox rows=%d, want 0 and 1", retryRows, outboxRows)
+	}
+}
+
 func TestAppendTraceStepCommitsTraceAndReplaysMatchingPayload(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)

@@ -35,6 +35,16 @@ type Inbox interface {
 type RetryStore interface {
 	Increment(context.Context, string, []byte) (int, error)
 	Clear(context.Context, string) error
+	HandoffDLQ(context.Context, string, DLQHandoff) error
+	HasDLQHandoff(context.Context, string, string) (bool, error)
+}
+
+// DLQHandoff describes an idempotent, durable transfer to the DLQ outbox.
+type DLQHandoff struct {
+	EventID string
+	Topic   string
+	Key     string
+	Payload []byte
 }
 
 // DeduplicatedInbox adapts the Task 4 PostgreSQL inbox primitive.
@@ -88,9 +98,16 @@ func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
 	if message.Topic != "" && message.Topic != runCommandTopic {
 		return c.recordFailure(ctx, "", message, fmt.Errorf("unsupported command topic %q", message.Topic))
 	}
-	command, eventID, err := decodeRunCommand(message)
+	command, eventID, normalizedMessage, err := decodeRunCommand(message)
 	if err != nil {
 		return c.recordFailure(ctx, eventID, message, err)
+	}
+	handedOff, err := c.hasDLQHandoff(ctx, eventID)
+	if err != nil {
+		return fmt.Errorf("check run command DLQ handoff: %w", err)
+	}
+	if handedOff {
+		return nil
 	}
 	if c.Inbox == nil {
 		return c.recordFailure(ctx, eventID, message, errors.New("runtime inbox is required"))
@@ -98,7 +115,7 @@ func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
 	if c.Runner == nil {
 		return c.recordFailure(ctx, eventID, message, errors.New("runtime command runner is required"))
 	}
-	err = c.Inbox.Handle(ctx, message, func(runCtx context.Context) error {
+	err = c.Inbox.Handle(ctx, normalizedMessage, func(runCtx context.Context) error {
 		stopLease := c.renewLease(runCtx, command.RunID)
 		defer stopLease()
 		return c.Runner.Run(runCtx, command)
@@ -112,27 +129,41 @@ func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
 	return nil
 }
 
-func decodeRunCommand(message eventbus.Message) (event.RunCommand, string, error) {
+func decodeRunCommand(message eventbus.Message) (event.RunCommand, string, eventbus.Message, error) {
 	var envelope event.Envelope[json.RawMessage]
 	if err := json.Unmarshal(message.Value, &envelope); err != nil {
-		return event.RunCommand{}, "", fmt.Errorf("decode run command: %w", err)
+		return event.RunCommand{}, "", message, fmt.Errorf("decode run command: %w", err)
 	}
 	if envelope.SchemaVersion != runCommandSchema {
-		return event.RunCommand{}, envelope.EventID, fmt.Errorf("unsupported run command schema %q", envelope.SchemaVersion)
+		return event.RunCommand{}, envelope.EventID, message, fmt.Errorf("unsupported run command schema %q", envelope.SchemaVersion)
 	}
 	var command event.RunCommand
 	if err := json.Unmarshal(envelope.Payload, &command); err != nil {
-		return event.RunCommand{}, envelope.EventID, fmt.Errorf("decode run command payload: %w", err)
+		return event.RunCommand{}, envelope.EventID, message, fmt.Errorf("decode run command payload: %w", err)
 	}
 	if strings.TrimSpace(command.RunID) == "" {
-		return event.RunCommand{}, envelope.EventID, errors.New("run command run id is required")
+		return event.RunCommand{}, envelope.EventID, message, errors.New("run command run id is required")
 	}
-	return command, envelope.EventID, nil
+	eventID := retryEventID(envelope.EventID, message)
+	if envelope.EventID != eventID {
+		envelope.EventID = eventID
+		normalized, err := json.Marshal(envelope)
+		if err != nil {
+			return event.RunCommand{}, eventID, message, fmt.Errorf("normalize run command event id: %w", err)
+		}
+		message.Value = normalized
+	}
+	return command, eventID, message, nil
 }
 
 func (c *Consumer) recordFailure(ctx context.Context, eventID string, message eventbus.Message, cause error) error {
-	if eventID == "" {
-		eventID = stableID("consumer-retry", message.Topic, string(message.Value))
+	eventID = retryEventID(eventID, message)
+	handedOff, err := c.hasDLQHandoff(ctx, eventID)
+	if err != nil {
+		return fmt.Errorf("check run command DLQ handoff: %w", err)
+	}
+	if handedOff {
+		return nil
 	}
 	attempt, err := c.incrementAttempts(ctx, eventID, message.Value)
 	if err != nil {
@@ -140,9 +171,6 @@ func (c *Consumer) recordFailure(ctx context.Context, eventID string, message ev
 	}
 	if attempt < c.maxAttempts() {
 		return cause
-	}
-	if c.Publisher == nil {
-		return fmt.Errorf("run command failed after %d attempts: %w", attempt, cause)
 	}
 	original := any(json.RawMessage(message.Value))
 	if !json.Valid(message.Value) {
@@ -156,6 +184,21 @@ func (c *Consumer) recordFailure(ctx context.Context, eventID string, message ev
 	if err != nil {
 		return fmt.Errorf("marshal run command DLQ: %w", err)
 	}
+	if c.RetryStore != nil {
+		handoff := DLQHandoff{
+			EventID: stableID("consumer-dlq", eventID),
+			Topic:   c.dlqTopic(),
+			Key:     message.Key,
+			Payload: payload,
+		}
+		if err := c.RetryStore.HandoffDLQ(ctx, eventID, handoff); err != nil {
+			return fmt.Errorf("handoff run command DLQ: %w", err)
+		}
+		return nil
+	}
+	if c.Publisher == nil {
+		return fmt.Errorf("run command failed after %d attempts: %w", attempt, cause)
+	}
 	if _, err := c.Publisher.Publish(ctx, c.dlqTopic(), message.Key, payload); err != nil {
 		return fmt.Errorf("publish run command DLQ: %w", err)
 	}
@@ -163,6 +206,13 @@ func (c *Consumer) recordFailure(ctx context.Context, eventID string, message ev
 		return fmt.Errorf("clear run command retry count after DLQ: %w", err)
 	}
 	return nil
+}
+
+func retryEventID(eventID string, message eventbus.Message) string {
+	if normalized := strings.TrimSpace(eventID); normalized != "" {
+		return normalized
+	}
+	return stableID("consumer-retry", message.Topic, message.Key, string(message.Value))
 }
 
 func (c *Consumer) renewLease(ctx context.Context, runID string) func() {
@@ -213,6 +263,13 @@ func (c *Consumer) clearAttempts(ctx context.Context, eventID string) error {
 	defer c.mu.Unlock()
 	delete(c.attempts, eventID)
 	return nil
+}
+
+func (c *Consumer) hasDLQHandoff(ctx context.Context, eventID string) (bool, error) {
+	if c.RetryStore == nil {
+		return false, nil
+	}
+	return c.RetryStore.HasDLQHandoff(ctx, eventID, stableID("consumer-dlq", eventID))
 }
 
 func (c *Consumer) maxAttempts() int {
