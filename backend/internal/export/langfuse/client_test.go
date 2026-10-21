@@ -1,9 +1,11 @@
 package langfuse
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +14,7 @@ import (
 	"time"
 )
 
-func TestBoundedEncoderMatchesCanonicalJSONEncoding(t *testing.T) {
+func TestIngestionSerializerMatchesCanonicalJSONEncoding(t *testing.T) {
 	start := time.Date(2026, 10, 21, 12, 0, 0, 123, time.UTC)
 	end := start.Add(time.Second)
 	payload := ingestionRequest{Batch: []ingestionEvent{
@@ -47,29 +49,29 @@ func TestBoundedEncoderMatchesCanonicalJSONEncoding(t *testing.T) {
 		t.Fatalf("marshal canonical JSON: %v", err)
 	}
 
-	got, err := encodeIngestionRequest(payload, len(want))
-	if err != nil {
-		t.Fatalf("encode bounded request: %v", err)
-	}
+	got := serializedIngestionRequest(t, payload)
 	if string(got) != string(want) {
-		t.Fatalf("bounded JSON differs:\ngot:  %s\nwant: %s", got, want)
+		t.Fatalf("serialized JSON differs:\ngot:  %s\nwant: %s", got, want)
 	}
-	if _, err := encodeIngestionRequest(payload, len(want)-1); !errors.Is(err, ErrRequestTooLarge) {
+	if got, err := countIngestionRequest(payload, len(want)); err != nil || got != len(want) {
+		t.Fatalf("count = %d, %v; want %d, nil", got, err, len(want))
+	}
+	if _, err := countIngestionRequest(payload, len(want)-1); !errors.Is(err, ErrRequestTooLarge) {
 		t.Fatalf("boundary error = %v, want ErrRequestTooLarge", err)
 	}
 }
 
-func TestBoundedEncoderCountsStandardJSONValuesExactly(t *testing.T) {
+func TestIngestionSerializerCountsSupportedJSONValuesExactly(t *testing.T) {
 	start := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	payload := ingestionRequest{Batch: []ingestionEvent{{
 		ID: "event-trace", Type: "trace-create", Timestamp: start,
 		Body: traceBody{
 			ID: "trace-1", SessionID: "session-1", Name: "trace",
-			Input:  []int{1, 2, 3},
+			Input:  []any{1, 2, 3},
 			Output: []any(nil),
 			Metadata: map[string]any{
 				"escaped": "<>&\u2028\u2029",
-				"nested":  map[string]int{"b": 2, "a": 1},
+				"nested":  map[string]any{"b": 2, "a": 1},
 				"nil_map": map[string]any(nil),
 			},
 			Timestamp: start,
@@ -80,16 +82,81 @@ func TestBoundedEncoderCountsStandardJSONValuesExactly(t *testing.T) {
 		t.Fatalf("marshal canonical JSON: %v", err)
 	}
 
-	got, err := encodeIngestionRequest(payload, len(want))
-	if err != nil {
-		t.Fatalf("encode bounded request: %v", err)
-	}
+	got := serializedIngestionRequest(t, payload)
 	if string(got) != string(want) {
-		t.Fatalf("bounded JSON differs:\ngot:  %s\nwant: %s", got, want)
+		t.Fatalf("serialized JSON differs:\ngot:  %s\nwant: %s", got, want)
+	}
+	if gotCount, err := countIngestionRequest(payload, len(want)); err != nil || gotCount != len(want) {
+		t.Fatalf("count = %d, %v; want %d, nil", gotCount, err, len(want))
 	}
 }
 
-func TestBoundedEncoderStopsBeforeHostileTailMarshal(t *testing.T) {
+func TestIngestionSerializerAcceptsRawMessageWithUseNumberAndCanonicalBytes(t *testing.T) {
+	raw := json.RawMessage(` { "z": 9007199254740993123456789, "a": [true, null, "<>&"] } `)
+	payload := ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create",
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace", Input: raw,
+		},
+	}}}
+	want, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal canonical JSON: %v", err)
+	}
+
+	got := serializedIngestionRequest(t, payload)
+	if string(got) != string(want) {
+		t.Fatalf("raw message encoding differs:\ngot:  %s\nwant: %s", got, want)
+	}
+	if !strings.Contains(string(got), `9007199254740993123456789`) {
+		t.Fatalf("raw number was not preserved: %s", got)
+	}
+}
+
+func TestIngestionSerializerAcceptsOnlyValidJSONNumbers(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value json.Number
+		valid bool
+	}{
+		{name: "integer", value: json.Number("9007199254740993123456789"), valid: true},
+		{name: "decimal exponent", value: json.Number("-1.25e+8"), valid: true},
+		{name: "leading zero", value: json.Number("01"), valid: false},
+		{name: "literal", value: json.Number("true"), valid: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := ingestionRequest{Batch: []ingestionEvent{{
+				ID: "event-trace", Type: "trace-create",
+				Body: traceBody{
+					ID: "trace-1", SessionID: "session-1", Name: "trace", Input: test.value,
+				},
+			}}}
+			_, err := countIngestionRequest(payload, DefaultMaxRequestBytes)
+			if test.valid && err != nil {
+				t.Fatalf("valid json.Number rejected: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("invalid json.Number accepted")
+			}
+		})
+	}
+}
+
+func TestIngestionSerializerRejectsMalformedRawMessage(t *testing.T) {
+	payload := ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create",
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace",
+			Input: json.RawMessage(`{"unterminated":`),
+		},
+	}}}
+
+	if _, err := countIngestionRequest(payload, DefaultMaxRequestBytes); err == nil {
+		t.Fatal("accepted malformed RawMessage")
+	}
+}
+
+func TestIngestionSerializerStopsBeforeHostileTailMarshal(t *testing.T) {
 	var calls atomic.Int64
 	payload := ingestionRequest{Batch: []ingestionEvent{{
 		ID: "event-trace", Type: "trace-create",
@@ -102,9 +169,9 @@ func TestBoundedEncoderStopsBeforeHostileTailMarshal(t *testing.T) {
 		},
 	}}}
 
-	_, err := encodeIngestionRequest(payload, 128)
+	_, err := countIngestionRequest(payload, 128)
 	if !errors.Is(err, ErrRequestTooLarge) {
-		t.Fatalf("encode error = %v, want ErrRequestTooLarge", err)
+		t.Fatalf("count error = %v, want ErrRequestTooLarge", err)
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("hostile tail MarshalJSON calls = %d, want 0", calls.Load())
@@ -162,6 +229,90 @@ func TestHTTPClientClassifiesNetworkFailureAsTransient(t *testing.T) {
 	}
 	if !IsTransient(err) {
 		t.Fatalf("network failure classified permanent: %v", err)
+	}
+}
+
+func TestHTTPClientRejectsUnsafeJSONValuesBeforeRequest(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	var marshalCalls atomic.Int64
+	for _, test := range []struct {
+		name      string
+		value     any
+		wantError string
+	}{
+		{name: "bytes", value: []byte("secret"), wantError: "[]byte"},
+		{name: "json marshaler", value: marshalTail{calls: &marshalCalls}, wantError: "json.Marshaler"},
+		{name: "text marshaler", value: textTail{}, wantError: "encoding.TextMarshaler"},
+		{name: "binary marshaler", value: binaryTail{}, wantError: "encoding.BinaryMarshaler"},
+		{name: "pointer", value: &plainJSONValue{Value: "value"}, wantError: "pointer"},
+		{name: "custom string", value: customJSONText("value"), wantError: "custom"},
+		{name: "custom slice", value: customJSONList{"value"}, wantError: "custom"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := newHTTPTestClient(t, server.URL, server.Client())
+			err := client.Ingest(context.Background(), Batch{Trace: Trace{
+				ID: "trace-1", SessionID: "session-1", Name: "trace",
+				Input: test.value, StartTime: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC),
+			}})
+			if err == nil {
+				t.Fatal("unsafe JSON value was accepted")
+			}
+			if !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("ingestion error = %v, want %q rejection", err, test.wantError)
+			}
+		})
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", requests.Load())
+	}
+	if marshalCalls.Load() != 0 {
+		t.Fatalf("MarshalJSON calls = %d, want 0", marshalCalls.Load())
+	}
+}
+
+func TestHTTPClientStreamsCountedBytesWithContentLength(t *testing.T) {
+	batch := Batch{Trace: Trace{
+		ID: "trace-1", SessionID: "session-1", Name: "trace",
+		Input: map[string]any{
+			"raw": json.RawMessage(`{"large":9007199254740993123456789,"escaped":"<>&"}`),
+		},
+		StartTime: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC),
+	}}
+	payload := ingestionRequest{Batch: []ingestionEvent{traceEvent(batch.Trace)}}
+	want := serializedIngestionRequest(t, payload)
+	wantCount, err := countIngestionRequest(payload, DefaultMaxRequestBytes)
+	if err != nil {
+		t.Fatalf("count expected request: %v", err)
+	}
+
+	var gotBody []byte
+	var gotLength int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var err error
+		gotBody, err = io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		gotLength = request.ContentLength
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	client := newHTTPTestClient(t, server.URL, server.Client())
+	if err := client.Ingest(context.Background(), batch); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if gotLength != int64(wantCount) {
+		t.Fatalf("Content-Length = %d, want %d", gotLength, wantCount)
+	}
+	if string(gotBody) != string(want) {
+		t.Fatalf("pipe bytes differ:\ngot:  %s\nwant: %s", gotBody, want)
 	}
 }
 
@@ -235,4 +386,34 @@ type marshalTail struct {
 func (tail marshalTail) MarshalJSON() ([]byte, error) {
 	tail.calls.Add(1)
 	return []byte(`"tail"`), nil
+}
+
+type textTail struct{}
+
+func (textTail) MarshalText() ([]byte, error) {
+	return []byte("tail"), nil
+}
+
+type binaryTail struct{}
+
+func (binaryTail) MarshalBinary() ([]byte, error) {
+	return []byte("tail"), nil
+}
+
+type plainJSONValue struct {
+	Value string
+}
+
+type customJSONText string
+
+type customJSONList []string
+
+func serializedIngestionRequest(t *testing.T, payload ingestionRequest) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := &streamingJSONWriter{writer: &buffer}
+	if err := writeIngestionRequest(writer, payload); err != nil {
+		t.Fatalf("serialize ingestion request: %v", err)
+	}
+	return buffer.Bytes()
 }

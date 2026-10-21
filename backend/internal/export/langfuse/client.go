@@ -3,6 +3,7 @@ package langfuse
 import (
 	"bytes"
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,22 +114,35 @@ func (c *HTTPClient) Ingest(ctx context.Context, batch Batch) error {
 	for _, observation := range batch.Observations {
 		payload.Batch = append(payload.Batch, observationEvent(observation))
 	}
-	raw, err := encodeIngestionRequest(payload, c.maxRequestBytes)
+	contentLength, err := countIngestionRequest(payload, c.maxRequestBytes)
 	if err != nil {
 		return fmt.Errorf("encode Langfuse ingestion batch: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(raw))
+	bodyReader, bodyWriter := io.Pipe()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bodyReader)
 	if err != nil {
 		return errors.New("build Langfuse ingestion request")
 	}
+	request.ContentLength = int64(contentLength)
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth(c.publicKey, c.secretKey)
+	writeResult := make(chan error, 1)
+	go func() {
+		err := writeIngestionRequest(&streamingJSONWriter{writer: bodyWriter}, payload)
+		_ = bodyWriter.CloseWithError(err)
+		writeResult <- err
+	}()
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
+		_ = bodyReader.Close()
+		<-writeResult
 		return fmt.Errorf("request Langfuse ingestion: %w", err)
 	}
 	defer response.Body.Close()
+	if err := <-writeResult; err != nil {
+		return fmt.Errorf("stream Langfuse ingestion batch: %w", err)
+	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return &HTTPError{StatusCode: response.StatusCode}
@@ -140,6 +154,13 @@ type boundedJSONCounter struct {
 	limit  int
 	length int
 	err    error
+}
+
+type ingestionJSONWriter interface {
+	writeString(string)
+	writeByte(byte)
+	fail(error)
+	errValue() error
 }
 
 func (w *boundedJSONCounter) writeString(value string) {
@@ -164,34 +185,88 @@ func (w *boundedJSONCounter) writeByte(value byte) {
 	w.length++
 }
 
-func encodeIngestionRequest(payload ingestionRequest, limit int) ([]byte, error) {
-	counter := &boundedJSONCounter{limit: limit}
-	counter.writeString(`{"batch":[`)
-	for index, item := range payload.Batch {
-		if index > 0 {
-			counter.writeByte(',')
-		}
-		writeIngestionEvent(counter, item)
+func (w *boundedJSONCounter) fail(err error) {
+	if w.err == nil {
+		w.err = err
 	}
-	counter.writeString(`]}`)
-	if counter.err != nil {
-		if errors.Is(counter.err, ErrRequestTooLarge) {
-			return nil, fmt.Errorf("%w: limit is %d bytes", ErrRequestTooLarge, limit)
-		}
-		return nil, counter.err
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal Langfuse ingestion batch: %w", err)
-	}
-	if len(raw) != counter.length {
-		return nil, errors.New("Langfuse ingestion JSON length counter mismatch")
-	}
-	return raw, nil
 }
 
-func writeIngestionEvent(writer *boundedJSONCounter, item ingestionEvent) {
-	if writer.err != nil {
+func (w *boundedJSONCounter) errValue() error {
+	return w.err
+}
+
+type streamingJSONWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *streamingJSONWriter) writeString(value string) {
+	if w.err != nil {
+		return
+	}
+	written, err := io.WriteString(w.writer, value)
+	if err != nil {
+		w.err = err
+		return
+	}
+	if written != len(value) {
+		w.err = io.ErrShortWrite
+	}
+}
+
+func (w *streamingJSONWriter) writeByte(value byte) {
+	if w.err != nil {
+		return
+	}
+	written, err := w.writer.Write([]byte{value})
+	if err != nil {
+		w.err = err
+		return
+	}
+	if written != 1 {
+		w.err = io.ErrShortWrite
+	}
+}
+
+func (w *streamingJSONWriter) fail(err error) {
+	if w.err == nil {
+		w.err = err
+	}
+}
+
+func (w *streamingJSONWriter) errValue() error {
+	return w.err
+}
+
+func countIngestionRequest(payload ingestionRequest, limit int) (int, error) {
+	counter := &boundedJSONCounter{limit: limit}
+	writeIngestionRequest(counter, payload)
+	if err := counter.errValue(); err != nil {
+		if errors.Is(err, ErrRequestTooLarge) {
+			return 0, fmt.Errorf("%w: limit is %d bytes", ErrRequestTooLarge, limit)
+		}
+		return 0, err
+	}
+	return counter.length, nil
+}
+
+func writeIngestionRequest(writer ingestionJSONWriter, payload ingestionRequest) error {
+	writer.writeString(`{"batch":[`)
+	for index, item := range payload.Batch {
+		if writer.errValue() != nil {
+			return writer.errValue()
+		}
+		if index > 0 {
+			writer.writeByte(',')
+		}
+		writeIngestionEvent(writer, item)
+	}
+	writer.writeString(`]}`)
+	return writer.errValue()
+}
+
+func writeIngestionEvent(writer ingestionJSONWriter, item ingestionEvent) {
+	if writer.errValue() != nil {
 		return
 	}
 	writer.writeByte('{')
@@ -206,13 +281,13 @@ func writeIngestionEvent(writer *boundedJSONCounter, item ingestionEvent) {
 	case observationBody:
 		writeObservationBody(writer, body)
 	default:
-		writer.err = fmt.Errorf("unsupported Langfuse ingestion body %T", item.Body)
+		writer.fail(fmt.Errorf("unsupported Langfuse ingestion body %T", item.Body))
 	}
 	writer.writeByte('}')
 }
 
-func writeTraceBody(writer *boundedJSONCounter, body traceBody) {
-	if writer.err != nil {
+func writeTraceBody(writer ingestionJSONWriter, body traceBody) {
+	if writer.errValue() != nil {
 		return
 	}
 	writer.writeByte('{')
@@ -233,8 +308,8 @@ func writeTraceBody(writer *boundedJSONCounter, body traceBody) {
 	writer.writeByte('}')
 }
 
-func writeObservationBody(writer *boundedJSONCounter, body observationBody) {
-	if writer.err != nil {
+func writeObservationBody(writer ingestionJSONWriter, body observationBody) {
+	if writer.errValue() != nil {
 		return
 	}
 	writer.writeByte('{')
@@ -267,29 +342,29 @@ func writeObservationBody(writer *boundedJSONCounter, body observationBody) {
 	writer.writeByte('}')
 }
 
-func writeJSONField(writer *boundedJSONCounter, first *bool, name string, value any) {
-	if writer.err != nil {
+func writeJSONField(writer ingestionJSONWriter, first *bool, name string, value any) {
+	if writer.errValue() != nil {
 		return
 	}
 	writeFieldName(writer, first, name)
 	writeJSONValue(writer, value)
 }
 
-func writeTimeField(writer *boundedJSONCounter, first *bool, name string, value time.Time) {
-	if writer.err != nil {
+func writeTimeField(writer ingestionJSONWriter, first *bool, name string, value time.Time) {
+	if writer.errValue() != nil {
 		return
 	}
 	writeFieldName(writer, first, name)
 	raw, err := value.MarshalJSON()
 	if err != nil {
-		writer.err = fmt.Errorf("encode Langfuse timestamp: %w", err)
+		writer.fail(fmt.Errorf("encode Langfuse timestamp: %w", err))
 		return
 	}
 	writer.writeString(string(raw))
 }
 
-func writeFieldName(writer *boundedJSONCounter, first *bool, name string) {
-	if writer.err != nil {
+func writeFieldName(writer ingestionJSONWriter, first *bool, name string) {
+	if writer.errValue() != nil {
 		return
 	}
 	if !*first {
@@ -300,8 +375,8 @@ func writeFieldName(writer *boundedJSONCounter, first *bool, name string) {
 	writer.writeByte(':')
 }
 
-func writeJSONValue(writer *boundedJSONCounter, value any) {
-	if writer.err != nil {
+func writeJSONValue(writer ingestionJSONWriter, value any) {
+	if writer.errValue() != nil {
 		return
 	}
 	switch typed := value.(type) {
@@ -336,12 +411,17 @@ func writeJSONValue(writer *boundedJSONCounter, value any) {
 	case uint32:
 		writer.writeString(strconv.FormatUint(uint64(typed), 10))
 	case json.Number:
-		raw := typed.String()
-		if !json.Valid([]byte(raw)) {
-			writer.err = fmt.Errorf("invalid JSON number %q", raw)
-			return
-		}
-		writer.writeString(raw)
+		writeJSONNumber(writer, typed)
+	case json.RawMessage:
+		writeRawJSONMessage(writer, typed)
+	case []byte:
+		writer.fail(errors.New("unsupported Langfuse JSON []byte value"))
+	case json.Marshaler:
+		writer.fail(fmt.Errorf("unsupported Langfuse json.Marshaler value %T", value))
+	case encoding.TextMarshaler:
+		writer.fail(fmt.Errorf("unsupported Langfuse encoding.TextMarshaler value %T", value))
+	case encoding.BinaryMarshaler:
+		writer.fail(fmt.Errorf("unsupported Langfuse encoding.BinaryMarshaler value %T", value))
 	case map[string]any:
 		if typed == nil {
 			writer.writeString("null")
@@ -355,7 +435,7 @@ func writeJSONValue(writer *boundedJSONCounter, value any) {
 		}
 		writer.writeByte('[')
 		for index, item := range typed {
-			if writer.err != nil {
+			if writer.errValue() != nil {
 				return
 			}
 			if index > 0 {
@@ -371,7 +451,7 @@ func writeJSONValue(writer *boundedJSONCounter, value any) {
 		}
 		writer.writeByte('[')
 		for index, item := range typed {
-			if writer.err != nil {
+			if writer.errValue() != nil {
 				return
 			}
 			if index > 0 {
@@ -381,97 +461,180 @@ func writeJSONValue(writer *boundedJSONCounter, value any) {
 		}
 		writer.writeByte(']')
 	default:
-		writeReflectedJSONValue(writer, reflect.ValueOf(value))
+		writeUnsupportedJSONValue(writer, value)
 	}
 }
 
-func writeReflectedJSONValue(writer *boundedJSONCounter, value reflect.Value) {
-	if writer.err != nil {
+func writeUnsupportedJSONValue(writer ingestionJSONWriter, value any) {
+	valueType := reflect.TypeOf(value)
+	switch {
+	case valueType.Kind() == reflect.Pointer:
+		writer.fail(fmt.Errorf("unsupported Langfuse JSON pointer value %T", value))
+	case valueType.PkgPath() != "":
+		writer.fail(fmt.Errorf("unsupported Langfuse JSON custom type %T", value))
+	default:
+		writer.fail(fmt.Errorf("unsupported Langfuse JSON value %T", value))
+	}
+}
+
+func writeJSONNumber(writer ingestionJSONWriter, value json.Number) {
+	raw := value.String()
+	if !isJSONNumber(raw) {
+		writer.fail(fmt.Errorf("invalid JSON number %q", raw))
 		return
 	}
-	if !value.IsValid() {
+	writer.writeString(raw)
+}
+
+func isJSONNumber(value string) bool {
+	index := 0
+	if index < len(value) && value[index] == '-' {
+		index++
+	}
+	if index == len(value) {
+		return false
+	}
+	if value[index] == '0' {
+		index++
+	} else if value[index] >= '1' && value[index] <= '9' {
+		for index < len(value) && value[index] >= '0' && value[index] <= '9' {
+			index++
+		}
+	} else {
+		return false
+	}
+	if index < len(value) && value[index] == '.' {
+		index++
+		fractionStart := index
+		for index < len(value) && value[index] >= '0' && value[index] <= '9' {
+			index++
+		}
+		if index == fractionStart {
+			return false
+		}
+	}
+	if index < len(value) && (value[index] == 'e' || value[index] == 'E') {
+		index++
+		if index < len(value) && (value[index] == '+' || value[index] == '-') {
+			index++
+		}
+		exponentStart := index
+		for index < len(value) && value[index] >= '0' && value[index] <= '9' {
+			index++
+		}
+		if index == exponentStart {
+			return false
+		}
+	}
+	return index == len(value)
+}
+
+func writeRawJSONMessage(writer ingestionJSONWriter, raw json.RawMessage) {
+	if raw == nil {
 		writer.writeString("null")
 		return
 	}
-	switch value.Kind() {
-	case reflect.Interface, reflect.Pointer:
-		if value.IsNil() {
-			writer.writeString("null")
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	writeDecodedJSONValue(writer, decoder)
+	if writer.errValue() != nil {
+		return
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			writer.fail(errors.New("invalid Langfuse json.RawMessage: multiple JSON values"))
 			return
 		}
-		writeReflectedJSONValue(writer, value.Elem())
-	case reflect.Bool:
-		writer.writeString(strconv.FormatBool(value.Bool()))
-	case reflect.String:
-		writeJSONString(writer, value.String())
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		writer.writeString(strconv.FormatInt(value.Int(), 10))
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		writer.writeString(strconv.FormatUint(value.Uint(), 10))
-	case reflect.Float32:
-		writeJSONFloat(writer, value.Float(), 32)
-	case reflect.Float64:
-		writeJSONFloat(writer, value.Float(), 64)
-	case reflect.Array, reflect.Slice:
-		if value.Kind() == reflect.Slice && value.IsNil() {
-			writer.writeString("null")
-			return
-		}
-		writer.writeByte('[')
-		for index := 0; index < value.Len(); index++ {
-			if writer.err != nil {
-				return
-			}
-			if index > 0 {
-				writer.writeByte(',')
-			}
-			writeReflectedJSONValue(writer, value.Index(index))
-		}
-		writer.writeByte(']')
-	case reflect.Map:
-		if value.IsNil() {
-			writer.writeString("null")
-			return
-		}
-		if value.Type().Key().Kind() != reflect.String {
-			writer.err = fmt.Errorf("unsupported Langfuse JSON map key %s", value.Type().Key())
-			return
-		}
-		keys := value.MapKeys()
-		sort.Slice(keys, func(i, j int) bool {
-			return keys[i].String() < keys[j].String()
-		})
-		writer.writeByte('{')
-		for index, key := range keys {
-			if writer.err != nil {
-				return
-			}
-			if index > 0 {
-				writer.writeByte(',')
-			}
-			writeJSONString(writer, key.String())
-			writer.writeByte(':')
-			writeReflectedJSONValue(writer, value.MapIndex(key))
-		}
-		writer.writeByte('}')
-	default:
-		writer.err = fmt.Errorf("unsupported Langfuse JSON value %s", value.Type())
+		writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage: %w", err))
 	}
 }
 
-func writeJSONFloat(writer *boundedJSONCounter, value float64, bits int) {
-	if writer.err != nil {
+func writeDecodedJSONValue(writer ingestionJSONWriter, decoder *json.Decoder) {
+	token, err := decoder.Token()
+	if err != nil {
+		writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage: %w", err))
+		return
+	}
+	switch typed := token.(type) {
+	case json.Delim:
+		switch typed {
+		case '{':
+			writer.writeByte('{')
+			first := true
+			for decoder.More() {
+				if writer.errValue() != nil {
+					return
+				}
+				key, err := decoder.Token()
+				if err != nil {
+					writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage: %w", err))
+					return
+				}
+				name, ok := key.(string)
+				if !ok {
+					writer.fail(errors.New("invalid Langfuse json.RawMessage object key"))
+					return
+				}
+				if !first {
+					writer.writeByte(',')
+				}
+				first = false
+				writeJSONString(writer, name)
+				writer.writeByte(':')
+				writeDecodedJSONValue(writer, decoder)
+			}
+			if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+				writer.fail(errors.New("invalid Langfuse json.RawMessage object"))
+				return
+			}
+			writer.writeByte('}')
+		case '[':
+			writer.writeByte('[')
+			first := true
+			for decoder.More() {
+				if writer.errValue() != nil {
+					return
+				}
+				if !first {
+					writer.writeByte(',')
+				}
+				first = false
+				writeDecodedJSONValue(writer, decoder)
+			}
+			if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
+				writer.fail(errors.New("invalid Langfuse json.RawMessage array"))
+				return
+			}
+			writer.writeByte(']')
+		default:
+			writer.fail(errors.New("invalid Langfuse json.RawMessage delimiter"))
+		}
+	case nil:
+		writer.writeString("null")
+	case bool:
+		writer.writeString(strconv.FormatBool(typed))
+	case string:
+		writeJSONString(writer, typed)
+	case json.Number:
+		writeJSONNumber(writer, typed)
+	default:
+		writer.fail(fmt.Errorf("invalid Langfuse json.RawMessage token %T", token))
+	}
+}
+
+func writeJSONFloat(writer ingestionJSONWriter, value float64, bits int) {
+	if writer.errValue() != nil {
 		return
 	}
 	if math.IsInf(value, 0) || math.IsNaN(value) {
-		writer.err = fmt.Errorf("unsupported Langfuse JSON number %v", value)
+		writer.fail(fmt.Errorf("unsupported Langfuse JSON number %v", value))
 		return
 	}
 	writer.writeString(strconv.FormatFloat(value, 'g', -1, bits))
 }
 
-func writeJSONMap(writer *boundedJSONCounter, value map[string]any) {
-	if writer.err != nil {
+func writeJSONMap(writer ingestionJSONWriter, value map[string]any) {
+	if writer.errValue() != nil {
 		return
 	}
 	keys := make([]string, 0, len(value))
@@ -481,7 +644,7 @@ func writeJSONMap(writer *boundedJSONCounter, value map[string]any) {
 	sort.Strings(keys)
 	writer.writeByte('{')
 	for index, key := range keys {
-		if writer.err != nil {
+		if writer.errValue() != nil {
 			return
 		}
 		if index > 0 {
@@ -494,8 +657,8 @@ func writeJSONMap(writer *boundedJSONCounter, value map[string]any) {
 	writer.writeByte('}')
 }
 
-func writeJSONString(writer *boundedJSONCounter, value string) {
-	if writer.err != nil {
+func writeJSONString(writer ingestionJSONWriter, value string) {
+	if writer.errValue() != nil {
 		return
 	}
 	const hex = "0123456789abcdef"
