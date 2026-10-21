@@ -436,3 +436,96 @@ The focused package suite skips PostgreSQL integration tests unless
 `AGENTTRACE_TEST_POSTGRES_DSN` is configured. This repair does not require a
 database schema or Compose runtime change; HTTP streaming is covered with
 `httptest`, not a live Langfuse service.
+
+## Fix Round 4
+
+### Findings Addressed
+
+- The bounded counter now proves object-key allocation is within the configured
+  request limit before collecting or sorting keys. Its first map pass computes
+  exact escaped-key, colon, delimiter, and brace minimum bytes without building
+  a key slice; it stops as soon as that minimum exceeds the remaining budget.
+  Only then does the serializer allocate and sort keys. The key slice, sort
+  workspace, decoder input, container count, and maximum nesting are therefore
+  bounded by `AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES` (with a 128-level nesting
+  ceiling), rather than hostile input cardinality.
+- `json.RawMessage` now rejects source input larger than the current remaining
+  request budget before constructing a JSON decoder. This prevents a huge
+  escaped token from allocating its decoded Go string before the request-size
+  error. Plain escaped strings still use the streaming encoder with no
+  batch-sized output allocation.
+- `Ingest` closes the `io.PipeReader` and joins the producer as soon as
+  `http.Client.Do` resolves, including early 2xx/4xx responses and cancellation.
+  A reader-close `io.ErrClosedPipe` is expected after an early response and
+  does not hide that response; a canceled context returns `context.Canceled`.
+  The buffered producer result is always joined, so no producer goroutine is
+  left blocked on an unread request body.
+
+### TDD Evidence
+
+RED focused command:
+
+```text
+cd backend && go test ./internal/export/langfuse -run \
+  'TestIngestionSerializerRejectsHugeMapBeforeSortingKeys|TestIngestionSerializerRejectsHugeEscapedRawMessageBeforeDecoding|TestIngestionSerializerRejectsHugeEscapedString|TestHTTPClientReturnsAfterEarlyResponseWithoutConsumingBody|TestHTTPClientCancelsWhenEarlyResponseLeavesWriterBlocked' \
+  -count=1 -v
+
+undefined: sortJSONMapKeys
+undefined: newRawMessageDecoder
+```
+
+The failures identify the missing, instrumentable structural boundaries: map
+sort was reachable before a budget proof, and raw decoding was reachable before
+the source-length guard.
+
+GREEN focused verification:
+
+```text
+cd backend && go test ./internal/export/langfuse -count=1 -v
+PASS
+```
+
+New coverage proves:
+
+- a 4,096-key map with a 256-byte request budget is rejected before key sorting;
+- a huge escaped `RawMessage` with that budget is rejected before decoder
+  construction;
+- a huge HTML-escaped string rejects with `ErrRequestTooLarge`;
+- transports that return 202 or 400 without reading the request body return
+  promptly with the expected success or typed HTTP error;
+- cancellation after a transport has left the writer blocked returns
+  `context.Canceled` promptly.
+
+### Complete Verification
+
+```text
+cd backend && go test ./... -count=1
+PASS
+
+cd backend && go vet ./...
+PASS
+
+docker compose config --quiet
+docker compose --profile langfuse config --quiet
+PASS
+
+git diff --check
+PASS
+```
+
+Default Compose services remain `postgres kafka api redis runtime web worker`;
+the `langfuse` profile adds only `exporter`.
+
+### Self-Review
+
+- Canonical standard-library JSON bytes and exact `Content-Length` tests remain
+  green; the new preflight is only a conservative safety boundary before the
+  existing serializer.
+- A forced pipe close is ignored only after `Do` has produced a response, so
+  actual encoding errors remain delivery failures and request-transport errors
+  retain their prior classification.
+- Closed JSON type restrictions, hostile-tail behavior, deterministic span
+  graph validation, permanent delivery gating, and one-time DLQ behavior remain
+  covered by the focused and full suites.
+- No ledger, dispatch, reviewer, schema, configuration, or Compose content was
+  changed for this round.

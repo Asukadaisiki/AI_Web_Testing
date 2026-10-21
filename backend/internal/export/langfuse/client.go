@@ -21,9 +21,20 @@ import (
 
 const DefaultMaxRequestBytes = 1 << 20
 
+const maxIngestionJSONDepth = 128
+
 // ErrRequestTooLarge is returned before HTTP when the encoded ingestion batch
 // exceeds the configured request boundary.
 var ErrRequestTooLarge = errors.New("Langfuse ingestion request exceeds maximum encoded size")
+
+var (
+	sortJSONMapKeys      = sort.Strings
+	newRawMessageDecoder = func(raw json.RawMessage) *json.Decoder {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		return decoder
+	}
+)
 
 // HTTPError is a provider response outside the successful 2xx range.
 type HTTPError struct {
@@ -134,14 +145,16 @@ func (c *HTTPClient) Ingest(ctx context.Context, batch Batch) error {
 	}()
 
 	response, err := c.httpClient.Do(request)
+	writeErr := closeAndJoinIngestionWriter(ctx, bodyReader, writeResult)
 	if err != nil {
-		_ = bodyReader.Close()
-		<-writeResult
 		return fmt.Errorf("request Langfuse ingestion: %w", err)
 	}
 	defer response.Body.Close()
-	if err := <-writeResult; err != nil {
-		return fmt.Errorf("stream Langfuse ingestion batch: %w", err)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
+		return fmt.Errorf("stream Langfuse ingestion batch: %w", writeErr)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -150,10 +163,31 @@ func (c *HTTPClient) Ingest(ctx context.Context, batch Batch) error {
 	return nil
 }
 
+func closeAndJoinIngestionWriter(
+	ctx context.Context,
+	bodyReader *io.PipeReader,
+	writeResult <-chan error,
+) error {
+	if err := ctx.Err(); err != nil {
+		_ = bodyReader.CloseWithError(err)
+	} else {
+		_ = bodyReader.Close()
+	}
+	select {
+	case err := <-writeResult:
+		return err
+	case <-ctx.Done():
+		_ = bodyReader.CloseWithError(ctx.Err())
+		return <-writeResult
+	}
+}
+
 type boundedJSONCounter struct {
-	limit  int
-	length int
-	err    error
+	limit      int
+	length     int
+	depth      int
+	containers int
+	err        error
 }
 
 type ingestionJSONWriter interface {
@@ -161,6 +195,8 @@ type ingestionJSONWriter interface {
 	writeByte(byte)
 	fail(error)
 	errValue() error
+	enterContainer()
+	leaveContainer()
 }
 
 func (w *boundedJSONCounter) writeString(value string) {
@@ -195,8 +231,31 @@ func (w *boundedJSONCounter) errValue() error {
 	return w.err
 }
 
+func (w *boundedJSONCounter) enterContainer() {
+	if w.err != nil {
+		return
+	}
+	if w.depth >= maxIngestionJSONDepth || w.containers == w.limit {
+		w.err = ErrRequestTooLarge
+		return
+	}
+	w.depth++
+	w.containers++
+}
+
+func (w *boundedJSONCounter) leaveContainer() {
+	if w.depth > 0 {
+		w.depth--
+	}
+}
+
+func (w *boundedJSONCounter) hasRoom(size int) bool {
+	return size <= w.limit-w.length
+}
+
 type streamingJSONWriter struct {
 	writer io.Writer
+	depth  int
 	err    error
 }
 
@@ -236,6 +295,23 @@ func (w *streamingJSONWriter) fail(err error) {
 
 func (w *streamingJSONWriter) errValue() error {
 	return w.err
+}
+
+func (w *streamingJSONWriter) enterContainer() {
+	if w.err != nil {
+		return
+	}
+	if w.depth >= maxIngestionJSONDepth {
+		w.err = ErrRequestTooLarge
+		return
+	}
+	w.depth++
+}
+
+func (w *streamingJSONWriter) leaveContainer() {
+	if w.depth > 0 {
+		w.depth--
+	}
 }
 
 func countIngestionRequest(payload ingestionRequest, limit int) (int, error) {
@@ -433,33 +509,13 @@ func writeJSONValue(writer ingestionJSONWriter, value any) {
 			writer.writeString("null")
 			return
 		}
-		writer.writeByte('[')
-		for index, item := range typed {
-			if writer.errValue() != nil {
-				return
-			}
-			if index > 0 {
-				writer.writeByte(',')
-			}
-			writeJSONValue(writer, item)
-		}
-		writer.writeByte(']')
+		writeJSONArray(writer, typed)
 	case []map[string]any:
 		if typed == nil {
 			writer.writeString("null")
 			return
 		}
-		writer.writeByte('[')
-		for index, item := range typed {
-			if writer.errValue() != nil {
-				return
-			}
-			if index > 0 {
-				writer.writeByte(',')
-			}
-			writeJSONMap(writer, item)
-		}
-		writer.writeByte(']')
+		writeJSONMapArray(writer, typed)
 	default:
 		writeUnsupportedJSONValue(writer, value)
 	}
@@ -534,8 +590,11 @@ func writeRawJSONMessage(writer ingestionJSONWriter, raw json.RawMessage) {
 		writer.writeString("null")
 		return
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
+	if counter, ok := writer.(*boundedJSONCounter); ok && !counter.hasRoom(len(raw)) {
+		writer.fail(ErrRequestTooLarge)
+		return
+	}
+	decoder := newRawMessageDecoder(raw)
 	writeDecodedJSONValue(writer, decoder)
 	if writer.errValue() != nil {
 		return
@@ -559,6 +618,11 @@ func writeDecodedJSONValue(writer ingestionJSONWriter, decoder *json.Decoder) {
 	case json.Delim:
 		switch typed {
 		case '{':
+			writer.enterContainer()
+			if writer.errValue() != nil {
+				return
+			}
+			defer writer.leaveContainer()
 			writer.writeByte('{')
 			first := true
 			for decoder.More() {
@@ -589,6 +653,11 @@ func writeDecodedJSONValue(writer ingestionJSONWriter, decoder *json.Decoder) {
 			}
 			writer.writeByte('}')
 		case '[':
+			writer.enterContainer()
+			if writer.errValue() != nil {
+				return
+			}
+			defer writer.leaveContainer()
 			writer.writeByte('[')
 			first := true
 			for decoder.More() {
@@ -637,11 +706,19 @@ func writeJSONMap(writer ingestionJSONWriter, value map[string]any) {
 	if writer.errValue() != nil {
 		return
 	}
+	writer.enterContainer()
+	if writer.errValue() != nil {
+		return
+	}
+	defer writer.leaveContainer()
+	if counter, ok := writer.(*boundedJSONCounter); ok && !counter.mapKeysFit(value) {
+		return
+	}
 	keys := make([]string, 0, len(value))
 	for key := range value {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	sortJSONMapKeys(keys)
 	writer.writeByte('{')
 	for index, key := range keys {
 		if writer.errValue() != nil {
@@ -655,6 +732,63 @@ func writeJSONMap(writer ingestionJSONWriter, value map[string]any) {
 		writeJSONValue(writer, value[key])
 	}
 	writer.writeByte('}')
+}
+
+func (w *boundedJSONCounter) mapKeysFit(value map[string]any) bool {
+	minimum := 2 // Opening and closing object delimiters.
+	index := 0
+	for key := range value {
+		keyBytes := jsonStringLength(key)
+		additional := keyBytes + 1 // Object key and its colon.
+		if index > 0 {
+			additional++ // Delimiter before every key after the first.
+		}
+		if additional > w.limit-w.length-minimum {
+			w.fail(ErrRequestTooLarge)
+			return false
+		}
+		minimum += additional
+		index++
+	}
+	return true
+}
+
+func writeJSONArray(writer ingestionJSONWriter, value []any) {
+	writer.enterContainer()
+	if writer.errValue() != nil {
+		return
+	}
+	defer writer.leaveContainer()
+	writer.writeByte('[')
+	for index, item := range value {
+		if writer.errValue() != nil {
+			return
+		}
+		if index > 0 {
+			writer.writeByte(',')
+		}
+		writeJSONValue(writer, item)
+	}
+	writer.writeByte(']')
+}
+
+func writeJSONMapArray(writer ingestionJSONWriter, value []map[string]any) {
+	writer.enterContainer()
+	if writer.errValue() != nil {
+		return
+	}
+	defer writer.leaveContainer()
+	writer.writeByte('[')
+	for index, item := range value {
+		if writer.errValue() != nil {
+			return
+		}
+		if index > 0 {
+			writer.writeByte(',')
+		}
+		writeJSONMap(writer, item)
+	}
+	writer.writeByte(']')
 }
 
 func writeJSONString(writer ingestionJSONWriter, value string) {
@@ -718,6 +852,45 @@ func writeJSONString(writer ingestionJSONWriter, value string) {
 	}
 	writer.writeString(value[start:])
 	writer.writeByte('"')
+}
+
+func jsonStringLength(value string) int {
+	length := 2
+	for index := 0; index < len(value); {
+		current := value[index]
+		if current < utf8.RuneSelf {
+			if current >= 0x20 && current != '\\' && current != '"' &&
+				current != '<' && current != '>' && current != '&' {
+				length++
+				index++
+				continue
+			}
+			switch current {
+			case '\\', '"':
+				length += 2
+			case '\b', '\f', '\n', '\r', '\t':
+				length += 2
+			default:
+				length += 6
+			}
+			index++
+			continue
+		}
+		runeValue, size := utf8.DecodeRuneInString(value[index:])
+		if runeValue == utf8.RuneError && size == 1 {
+			length += 6
+			index++
+			continue
+		}
+		if runeValue == '\u2028' || runeValue == '\u2029' {
+			length += 6
+			index += size
+			continue
+		}
+		length += size
+		index += size
+	}
+	return length
 }
 
 type ingestionRequest struct {

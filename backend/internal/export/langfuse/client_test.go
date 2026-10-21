@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -178,6 +179,79 @@ func TestIngestionSerializerStopsBeforeHostileTailMarshal(t *testing.T) {
 	}
 }
 
+func TestIngestionSerializerRejectsHugeMapBeforeSortingKeys(t *testing.T) {
+	value := make(map[string]any, 4096)
+	for index := 0; index < 4096; index++ {
+		value[strconv.Itoa(index)] = true
+	}
+	payload := ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create",
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace", Input: value,
+		},
+	}}}
+
+	var sorts atomic.Int64
+	originalSort := sortJSONMapKeys
+	sortJSONMapKeys = func(keys []string) {
+		sorts.Add(1)
+		originalSort(keys)
+	}
+	t.Cleanup(func() {
+		sortJSONMapKeys = originalSort
+	})
+
+	_, err := countIngestionRequest(payload, 256)
+	if !errors.Is(err, ErrRequestTooLarge) {
+		t.Fatalf("count error = %v, want ErrRequestTooLarge", err)
+	}
+	if sorts.Load() != 0 {
+		t.Fatalf("map key sorts = %d, want 0", sorts.Load())
+	}
+}
+
+func TestIngestionSerializerRejectsHugeEscapedRawMessageBeforeDecoding(t *testing.T) {
+	raw := json.RawMessage(`"` + strings.Repeat(`\u0000`, 1024) + `"`)
+	payload := ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create",
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace", Input: raw,
+		},
+	}}}
+
+	var decodes atomic.Int64
+	originalDecoder := newRawMessageDecoder
+	newRawMessageDecoder = func(raw json.RawMessage) *json.Decoder {
+		decodes.Add(1)
+		return originalDecoder(raw)
+	}
+	t.Cleanup(func() {
+		newRawMessageDecoder = originalDecoder
+	})
+
+	_, err := countIngestionRequest(payload, 256)
+	if !errors.Is(err, ErrRequestTooLarge) {
+		t.Fatalf("count error = %v, want ErrRequestTooLarge", err)
+	}
+	if decodes.Load() != 0 {
+		t.Fatalf("raw message decodes = %d, want 0", decodes.Load())
+	}
+}
+
+func TestIngestionSerializerRejectsHugeEscapedString(t *testing.T) {
+	payload := ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create",
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace",
+			Input: strings.Repeat("<>&", 1024),
+		},
+	}}}
+
+	if _, err := countIngestionRequest(payload, 256); !errors.Is(err, ErrRequestTooLarge) {
+		t.Fatalf("count error = %v, want ErrRequestTooLarge", err)
+	}
+}
+
 func TestHTTPClientReturnsTypedClassifiedStatusErrors(t *testing.T) {
 	for _, test := range []struct {
 		status    int
@@ -209,6 +283,74 @@ func TestHTTPClientReturnsTypedClassifiedStatusErrors(t *testing.T) {
 				t.Fatalf("IsTransient(%d) = %v, want %v", test.status, got, test.transient)
 			}
 		})
+	}
+}
+
+func TestHTTPClientReturnsAfterEarlyResponseWithoutConsumingBody(t *testing.T) {
+	for _, status := range []int{http.StatusAccepted, http.StatusBadRequest} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			client := newHTTPTestClient(t, "https://langfuse.example", &http.Client{
+				Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: status,
+						Body:       io.NopCloser(strings.NewReader("response")),
+					}, nil
+				}),
+			})
+
+			result := make(chan error, 1)
+			go func() {
+				result <- client.Ingest(context.Background(), minimalBatch())
+			}()
+
+			select {
+			case err := <-result:
+				if status >= http.StatusBadRequest {
+					var statusErr *HTTPError
+					if !errors.As(err, &statusErr) || statusErr.StatusCode != status {
+						t.Fatalf("ingestion error = %v, want HTTP %d", err, status)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("ingest: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Ingest did not return after transport stopped reading the request body")
+			}
+		})
+	}
+}
+
+func TestHTTPClientCancelsWhenEarlyResponseLeavesWriterBlocked(t *testing.T) {
+	started := make(chan struct{})
+	client := newHTTPTestClient(t, "https://langfuse.example", &http.Client{
+		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			close(started)
+			<-request.Context().Done()
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Body:       io.NopCloser(strings.NewReader("response")),
+			}, nil
+		}),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	result := make(chan error, 1)
+	go func() {
+		result <- client.Ingest(ctx, minimalBatch())
+	}()
+	<-started
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ingestion error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Ingest did not return after cancellation unblocked the writer")
 	}
 }
 
