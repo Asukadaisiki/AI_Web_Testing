@@ -59,9 +59,9 @@ func Load() (Config, error) {
 		Postgres: Postgres{DSN: postgresDSN},
 		Kafka: Kafka{
 			Brokers:      brokers,
-			CommandTopic: envOr("AGENTTRACE_KAFKA_COMMAND_TOPIC", "agenttrace.run-command.v1"),
-			EventTopic:   envOr("AGENTTRACE_KAFKA_EVENT_TOPIC", "agenttrace.events.v1"),
-			DLQTopic:     envOr("AGENTTRACE_KAFKA_DLQ_TOPIC", "agenttrace.dlq.v1"),
+			CommandTopic: envOr("AGENTTRACE_KAFKA_COMMAND_TOPIC", "agenttrace.run.commands.v1"),
+			EventTopic:   envOr("AGENTTRACE_KAFKA_EVENT_TOPIC", "agenttrace.run.events.v1"),
+			DLQTopic:     envOr("AGENTTRACE_KAFKA_DLQ_TOPIC", "agenttrace.run.dlq.v1"),
 			GroupID:      envOr("AGENTTRACE_KAFKA_GROUP_ID", "agenttrace-runtime"),
 		},
 		Redis: Redis{
