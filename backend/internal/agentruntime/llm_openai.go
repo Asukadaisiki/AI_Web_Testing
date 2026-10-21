@@ -10,18 +10,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
 // OpenAIConfig 是 OpenAI 兼容端点（DeepSeek 等）的配置。
 type OpenAIConfig struct {
-	BaseURL     string
-	APIKey      string
-	Model       string
-	Temperature float64
-	MaxTokens   int
-	Timeout     time.Duration
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Temperature     float64
+	MaxTokens       int
+	ReasoningEffort string
+	Timeout         time.Duration
 }
 
 // OpenAILLM 是 OpenAI 兼容的 chat completions 客户端，带 function calling。
@@ -49,6 +51,16 @@ func NewOpenAILLM(config OpenAIConfig, tools []planner.Tool) *OpenAILLM {
 // Label 实现 LLM。
 func (c *OpenAILLM) Label() string {
 	return fmt.Sprintf("%s@%s", c.config.Model, c.config.BaseURL)
+}
+
+// Complete implements model.Model for checkpointed runtime callers while Next
+// remains available to retained v2 planner code.
+func (c *OpenAILLM) Complete(ctx context.Context, request model.Request) (model.Response, error) {
+	message, spent, err := c.Next(ctx, fromModelMessages(request.Messages))
+	if err != nil {
+		return model.Response{}, err
+	}
+	return model.Response{Message: toModelMessages([]Message{message})[0], Usage: spent}, nil
 }
 
 type wireMessage struct {
@@ -82,12 +94,13 @@ type wireToolDefinition struct {
 }
 
 type wireRequest struct {
-	Model       string        `json:"model"`
-	Messages    []wireMessage `json:"messages"`
-	Tools       []wireTool    `json:"tools,omitempty"`
-	ToolChoice  string        `json:"tool_choice,omitempty"`
-	Temperature float64       `json:"temperature"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
+	Model           string        `json:"model"`
+	Messages        []wireMessage `json:"messages"`
+	Tools           []wireTool    `json:"tools,omitempty"`
+	ToolChoice      string        `json:"tool_choice,omitempty"`
+	Temperature     float64       `json:"temperature"`
+	MaxTokens       int           `json:"max_tokens,omitempty"`
+	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
 }
 
 type wireResponse struct {
@@ -176,12 +189,13 @@ func (c *OpenAILLM) RequestSize(messages []Message) (int, error) {
 
 func (c *OpenAILLM) marshalRequest(messages []Message) ([]byte, error) {
 	request := wireRequest{
-		Model:       c.config.Model,
-		Messages:    toWireMessages(messages),
-		Tools:       c.wireTools(),
-		ToolChoice:  "auto",
-		Temperature: c.config.Temperature,
-		MaxTokens:   c.config.MaxTokens,
+		Model:           c.config.Model,
+		Messages:        toWireMessages(messages),
+		Tools:           c.wireTools(),
+		ToolChoice:      "auto",
+		Temperature:     c.config.Temperature,
+		MaxTokens:       c.config.MaxTokens,
+		ReasoningEffort: c.config.ReasoningEffort,
 	}
 	raw, err := json.Marshal(request)
 	if err != nil {
@@ -293,6 +307,14 @@ func toWireMessages(messages []Message) []wireMessage {
 			})
 		}
 		out = append(out, wire)
+	}
+	return out
+}
+
+func fromModelMessages(messages []model.Message) []Message {
+	out := make([]Message, len(messages))
+	for index, message := range messages {
+		out[index] = fromModelMessage(message)
 	}
 	return out
 }

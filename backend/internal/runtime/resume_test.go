@@ -1,0 +1,161 @@
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sync"
+
+	"testing"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/operation"
+)
+
+func TestEngineResumesAfterCompletedOperation(t *testing.T) {
+	store := newMemoryCheckpointStore(commandFor("run-resume"))
+	dispatcher := &fakeDispatcher{result: operation.Result{
+		Status: "succeeded",
+		Output: json.RawMessage(`{"title":"home"}`),
+	}}
+	first := Engine{
+		Model: model.NewScripted([]model.ScriptedStep{
+			{Tool: "inspect", Arguments: json.RawMessage(`{"selector":"h1"}`)},
+		}),
+		Operations: dispatcher,
+		Store:      store,
+	}
+	store.failAfterCommits = 2
+
+	if err := first.Run(context.Background(), commandFor("run-resume")); !errors.Is(err, errInjectedCrash) {
+		t.Fatalf("first run error = %v, want injected crash", err)
+	}
+	if dispatcher.calls != 1 {
+		t.Fatalf("first engine dispatches = %d, want 1", dispatcher.calls)
+	}
+	if got := store.checkpoint.NextCheckpoint; got != 2 {
+		t.Fatalf("checkpoint after durable operation = %d, want 2", got)
+	}
+
+	store.failAfterCommits = 0
+	second := Engine{
+		Model:      model.NewScripted([]model.ScriptedStep{{Final: "resumed answer"}}),
+		Operations: dispatcher,
+		Store:      store,
+	}
+	if err := second.Run(context.Background(), commandFor("run-resume")); err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if dispatcher.calls != 1 {
+		t.Fatalf("resumed engine redispatched completed operation %d times", dispatcher.calls)
+	}
+	if got := store.assistantMessages(); len(got) != 1 || got[0] != "resumed answer" {
+		t.Fatalf("assistant messages = %#v, want resumed answer", got)
+	}
+}
+
+var errInjectedCrash = errors.New("injected process crash")
+
+type fakeDispatcher struct {
+	calls  int
+	result operation.Result
+	err    error
+}
+
+func (d *fakeDispatcher) Dispatch(_ context.Context, _ operation.Call) (operation.Result, error) {
+	d.calls++
+	return d.result, d.err
+}
+
+type memoryCheckpointStore struct {
+	mu               sync.Mutex
+	checkpoint       Checkpoint
+	steps            []StepResult
+	completion       Completion
+	commits          int
+	failAfterCommits int
+}
+
+func newMemoryCheckpointStore(command event.RunCommand) *memoryCheckpointStore {
+	return &memoryCheckpointStore{checkpoint: Checkpoint{RunID: command.RunID, Command: command}}
+}
+
+func (s *memoryCheckpointStore) Load(_ context.Context, runID string) (Checkpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if runID != s.checkpoint.RunID {
+		return Checkpoint{}, errors.New("unknown run")
+	}
+	if s.failAfterCommits > 0 && s.commits >= s.failAfterCommits {
+		return Checkpoint{}, errInjectedCrash
+	}
+	return s.clone(), nil
+}
+
+func (s *memoryCheckpointStore) CommitStep(_ context.Context, step StepResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if step.RunID != s.checkpoint.RunID || step.Checkpoint != s.checkpoint.NextCheckpoint {
+		return errors.New("checkpoint conflict")
+	}
+	s.steps = append(s.steps, step)
+	s.commits++
+	s.checkpoint.NextCheckpoint++
+	if step.Kind == StepModel {
+		s.checkpoint.ModelCalls++
+		s.checkpoint.Messages = append(s.checkpoint.Messages, step.Model.Message)
+		s.checkpoint.PendingOperation = step.OperationCall
+	}
+	if step.Kind == StepOperation {
+		s.checkpoint.Messages = append(s.checkpoint.Messages, model.Message{
+			Role:       model.RoleTool,
+			Content:    string(step.OperationResult.Output),
+			ToolCallID: step.OperationCall.ToolCallID,
+		})
+		s.checkpoint.PendingOperation = nil
+	}
+	return nil
+}
+
+func (s *memoryCheckpointStore) CompleteRun(_ context.Context, completion Completion) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.completion.Status != "" {
+		return nil
+	}
+	s.completion = completion
+	s.checkpoint.Completed = true
+	return nil
+}
+
+func (s *memoryCheckpointStore) assistantMessages() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var messages []string
+	for _, step := range s.steps {
+		if step.Kind == StepModel && step.Model.Message.Content != "" {
+			messages = append(messages, step.Model.Message.Content)
+		}
+	}
+	return messages
+}
+
+func (s *memoryCheckpointStore) clone() Checkpoint {
+	out := s.checkpoint
+	out.Messages = append([]model.Message(nil), s.checkpoint.Messages...)
+	if s.checkpoint.PendingOperation != nil {
+		pending := *s.checkpoint.PendingOperation
+		pending.Arguments = append(json.RawMessage(nil), pending.Arguments...)
+		out.PendingOperation = &pending
+	}
+	return out
+}
+
+func stepKinds(steps []StepResult) []StepKind {
+	kinds := make([]StepKind, len(steps))
+	for i, step := range steps {
+		kinds[i] = step.Kind
+	}
+	return kinds
+}

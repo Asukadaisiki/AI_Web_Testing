@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
@@ -54,6 +55,15 @@ func ScriptedFromJSON(raw []byte) (*ScriptedLLM, error) {
 
 // Label 实现 LLM。
 func (s *ScriptedLLM) Label() string { return "scripted" }
+
+// Complete implements model.Model for checkpointed runtime callers.
+func (s *ScriptedLLM) Complete(ctx context.Context, request model.Request) (model.Response, error) {
+	message, spent, err := s.Next(ctx, fromModelMessages(request.Messages))
+	if err != nil {
+		return model.Response{}, err
+	}
+	return model.Response{Message: toModelMessages([]Message{message})[0], Usage: spent}, nil
+}
 
 // Restart 让脚本从头开始。脚本模型一次只服务一个 run，控制面在每个 run 开始时调用它，
 // 这样"离线跑第二遍"不会撞上已经回放完的脚本。

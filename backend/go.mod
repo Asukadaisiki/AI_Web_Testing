@@ -1,6 +1,6 @@
 module github.com/Asukadaisiki/AI_Web_Testing/backend
 
-go 1.24.0
+go 1.24.11
 
 require (
 	github.com/twmb/franz-go v1.20.7

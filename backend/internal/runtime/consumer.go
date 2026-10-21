@@ -1,0 +1,212 @@
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	inboxconsumer "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
+)
+
+const (
+	runCommandTopic  = "agenttrace.run.commands.v1"
+	runCommandSchema = "agenttrace.run-command.v1"
+	defaultDLQTopic  = "agenttrace.run.dlq.v1"
+)
+
+// CommandRunner processes one immutable run command.
+type CommandRunner interface {
+	Run(context.Context, event.RunCommand) error
+}
+
+// Inbox claims a delivered message before its durable effects execute.
+type Inbox interface {
+	Handle(context.Context, eventbus.Message, func(context.Context) error) error
+}
+
+// DeduplicatedInbox adapts the Task 4 PostgreSQL inbox primitive.
+type DeduplicatedInbox struct {
+	Deduplicator *inboxconsumer.Deduplicator
+}
+
+// Handle applies handler only to the first successful event ID delivery.
+func (i DeduplicatedInbox) Handle(
+	ctx context.Context,
+	message eventbus.Message,
+	handler func(context.Context) error,
+) error {
+	if i.Deduplicator == nil {
+		return errors.New("runtime inbox deduplicator is required")
+	}
+	return i.Deduplicator.Handle(ctx, message, func(ctx context.Context, _ inboxconsumer.Tx, _ eventbus.Message) error {
+		return handler(ctx)
+	})
+}
+
+// Consumer accepts one versioned Kafka command and invokes a checkpointed engine.
+type Consumer struct {
+	Inbox       Inbox
+	Runner      CommandRunner
+	Publisher   eventbus.EventBus
+	Live        live.LiveStore
+	LeaseOwner  string
+	LeaseTTL    time.Duration
+	MaxAttempts int
+	DLQTopic    string
+
+	mu       sync.Mutex
+	attempts map[string]int
+}
+
+// Consume subscribes this runtime to the sole accepted command topic.
+func (c *Consumer) Consume(ctx context.Context, bus eventbus.EventBus, group string) error {
+	if bus == nil {
+		return errors.New("runtime event bus is required")
+	}
+	if strings.TrimSpace(group) == "" {
+		return errors.New("runtime consumer group is required")
+	}
+	return bus.Consume(ctx, runCommandTopic, group, c.Handle)
+}
+
+// Handle processes one Kafka record. It accepts only agenttrace.run-command.v1.
+func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
+	if message.Topic != "" && message.Topic != runCommandTopic {
+		return c.recordFailure(ctx, "", message, fmt.Errorf("unsupported command topic %q", message.Topic))
+	}
+	command, eventID, err := decodeRunCommand(message)
+	if err != nil {
+		return c.recordFailure(ctx, eventID, message, err)
+	}
+	if c.Inbox == nil {
+		return c.recordFailure(ctx, eventID, message, errors.New("runtime inbox is required"))
+	}
+	if c.Runner == nil {
+		return c.recordFailure(ctx, eventID, message, errors.New("runtime command runner is required"))
+	}
+	err = c.Inbox.Handle(ctx, message, func(runCtx context.Context) error {
+		stopLease := c.renewLease(runCtx, command.RunID)
+		defer stopLease()
+		return c.Runner.Run(runCtx, command)
+	})
+	if err != nil {
+		return c.recordFailure(ctx, eventID, message, err)
+	}
+	c.clearAttempts(eventID)
+	return nil
+}
+
+func decodeRunCommand(message eventbus.Message) (event.RunCommand, string, error) {
+	var envelope event.Envelope[json.RawMessage]
+	if err := json.Unmarshal(message.Value, &envelope); err != nil {
+		return event.RunCommand{}, "", fmt.Errorf("decode run command: %w", err)
+	}
+	if envelope.SchemaVersion != runCommandSchema {
+		return event.RunCommand{}, envelope.EventID, fmt.Errorf("unsupported run command schema %q", envelope.SchemaVersion)
+	}
+	var command event.RunCommand
+	if err := json.Unmarshal(envelope.Payload, &command); err != nil {
+		return event.RunCommand{}, envelope.EventID, fmt.Errorf("decode run command payload: %w", err)
+	}
+	if strings.TrimSpace(command.RunID) == "" {
+		return event.RunCommand{}, envelope.EventID, errors.New("run command run id is required")
+	}
+	return command, envelope.EventID, nil
+}
+
+func (c *Consumer) recordFailure(ctx context.Context, eventID string, message eventbus.Message, cause error) error {
+	if eventID == "" {
+		eventID = string(message.Value)
+	}
+	attempt := c.incrementAttempts(eventID)
+	if attempt < c.maxAttempts() {
+		return cause
+	}
+	if c.Publisher == nil {
+		return fmt.Errorf("run command failed after %d attempts: %w", attempt, cause)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"original": json.RawMessage(message.Value),
+		"error":    cause.Error(),
+		"attempt":  attempt,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal run command DLQ: %w", err)
+	}
+	if _, err := c.Publisher.Publish(ctx, c.dlqTopic(), message.Key, payload); err != nil {
+		return fmt.Errorf("publish run command DLQ: %w", err)
+	}
+	c.clearAttempts(eventID)
+	return nil
+}
+
+func (c *Consumer) renewLease(ctx context.Context, runID string) func() {
+	if c.Live == nil || strings.TrimSpace(c.LeaseOwner) == "" {
+		return func() {}
+	}
+	ttl := c.LeaseTTL
+	if ttl <= 0 {
+		ttl = live.LeaseTTL
+	}
+	_ = c.Live.SetLease(ctx, runID, c.LeaseOwner, ttl)
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(maxDuration(ttl/2, time.Second))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				_ = c.Live.SetLease(ctx, runID, c.LeaseOwner, ttl)
+			}
+		}
+	}()
+	return func() { close(stop) }
+}
+
+func (c *Consumer) incrementAttempts(eventID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.attempts == nil {
+		c.attempts = make(map[string]int)
+	}
+	c.attempts[eventID]++
+	return c.attempts[eventID]
+}
+
+func (c *Consumer) clearAttempts(eventID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.attempts, eventID)
+}
+
+func (c *Consumer) maxAttempts() int {
+	if c.MaxAttempts <= 0 {
+		return 3
+	}
+	return c.MaxAttempts
+}
+
+func (c *Consumer) dlqTopic() string {
+	if c.DLQTopic == "" {
+		return defaultDLQTopic
+	}
+	return c.DLQTopic
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if left > right {
+		return left
+	}
+	return right
+}

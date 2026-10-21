@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
@@ -44,4 +45,62 @@ type LLM interface {
 	// 用量与输出一起返回，是为了让 Runtime 能在**同一轮**里决定是否已经超预算，
 	// 而不是等整条链路跑完才发现钱花超了。
 	Next(ctx context.Context, messages []Message) (Message, usage.Usage, error)
+}
+
+// AdaptModel exposes a provider-independent model.Model through the retained
+// v2 planner LLM interface.
+func AdaptModel(value model.Model) LLM {
+	return modelLLM{model: value}
+}
+
+type modelLLM struct {
+	model model.Model
+}
+
+func (l modelLLM) Label() string { return l.model.Label() }
+
+func (l modelLLM) Next(ctx context.Context, messages []Message) (Message, usage.Usage, error) {
+	request := model.Request{Messages: toModelMessages(messages)}
+	response, err := l.model.Complete(ctx, request)
+	if err != nil {
+		return Message{}, usage.Usage{}, err
+	}
+	return fromModelMessage(response.Message), response.Usage, nil
+}
+
+func toModelMessages(messages []Message) []model.Message {
+	out := make([]model.Message, len(messages))
+	for index, message := range messages {
+		out[index] = model.Message{
+			Role:             model.Role(message.Role),
+			Content:          message.Content,
+			ReasoningContent: message.ReasoningContent,
+			ToolCallID:       message.ToolCallID,
+		}
+		for _, call := range message.ToolCalls {
+			out[index].ToolCalls = append(out[index].ToolCalls, model.ToolCall{
+				ID:        call.ID,
+				Name:      call.Name,
+				Arguments: append(json.RawMessage(nil), call.Arguments...),
+			})
+		}
+	}
+	return out
+}
+
+func fromModelMessage(message model.Message) Message {
+	out := Message{
+		Role:             Role(message.Role),
+		Content:          message.Content,
+		ReasoningContent: message.ReasoningContent,
+		ToolCallID:       message.ToolCallID,
+	}
+	for _, call := range message.ToolCalls {
+		out.ToolCalls = append(out.ToolCalls, ToolCall{
+			ID:        call.ID,
+			Name:      call.Name,
+			Arguments: append(json.RawMessage(nil), call.Arguments...),
+		})
+	}
+	return out
 }

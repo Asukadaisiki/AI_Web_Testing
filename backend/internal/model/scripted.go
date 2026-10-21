@@ -1,0 +1,135 @@
+package model
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
+)
+
+// ScriptedStep is one deterministic model response.
+type ScriptedStep struct {
+	Tool      string          `json:"tool"`
+	Arguments json.RawMessage `json:"arguments"`
+	Final     string          `json:"final"`
+	Ask       string          `json:"ask"`
+}
+
+// Scripted replays fixed responses for deterministic tests and offline runs.
+type Scripted struct {
+	mu    sync.Mutex
+	index int
+	steps []ScriptedStep
+	seen  []Message
+	calls [][]Message
+}
+
+// NewScripted creates a deterministic scripted model.
+func NewScripted(steps []ScriptedStep) *Scripted {
+	return &Scripted{steps: append([]ScriptedStep(nil), steps...)}
+}
+
+// ScriptedFromJSON parses {"steps":[...]}.
+func ScriptedFromJSON(raw []byte) (*Scripted, error) {
+	var decoded struct {
+		Steps []ScriptedStep `json:"steps"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("parse scripted model: %w", err)
+	}
+	if len(decoded.Steps) == 0 {
+		return nil, fmt.Errorf("scripted model needs at least one step")
+	}
+	return NewScripted(decoded.Steps), nil
+}
+
+// Label identifies this deterministic provider.
+func (*Scripted) Label() string { return "scripted" }
+
+// Restart replays the fixture from its beginning.
+func (s *Scripted) Restart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.index = 0
+	s.seen = nil
+	s.calls = nil
+}
+
+// Calls returns completed scripted turns.
+func (s *Scripted) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.index
+}
+
+// Seen returns all messages accepted by the fixture.
+func (s *Scripted) Seen() []Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneMessages(s.seen)
+}
+
+// CallsSeen returns request messages for every completion call.
+func (s *Scripted) CallsSeen() [][]Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]Message, len(s.calls))
+	for i := range s.calls {
+		out[i] = cloneMessages(s.calls[i])
+	}
+	return out
+}
+
+// Complete returns the next scripted response. Scripted calls consume no billed usage.
+func (s *Scripted) Complete(_ context.Context, request Request) (Response, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	captured := cloneMessages(request.Messages)
+	s.seen = append(s.seen, captured...)
+	s.calls = append(s.calls, captured)
+	if s.index >= len(s.steps) {
+		return Response{Message: Message{Role: RoleAssistant, Content: "script exhausted"}}, nil
+	}
+	step := s.steps[s.index]
+	s.index++
+	if step.Final != "" {
+		return Response{Message: Message{Role: RoleAssistant, Content: step.Final}}, nil
+	}
+	name, arguments := step.Tool, step.Arguments
+	if step.Ask != "" {
+		name = "ask_user"
+		encoded, err := json.Marshal(map[string]string{"question": step.Ask})
+		if err != nil {
+			return Response{}, err
+		}
+		arguments = encoded
+	}
+	if name == "" {
+		return Response{}, fmt.Errorf("scripted step %d has neither tool nor final", s.index-1)
+	}
+	if len(arguments) == 0 {
+		arguments = json.RawMessage("{}")
+	}
+	return Response{Message: Message{
+		Role: RoleAssistant,
+		ToolCalls: []ToolCall{{
+			ID:        fmt.Sprintf("call_%d", s.index),
+			Name:      name,
+			Arguments: append(json.RawMessage(nil), arguments...),
+		}},
+	}, Usage: usage.Usage{}}, nil
+}
+
+func cloneMessages(messages []Message) []Message {
+	out := make([]Message, len(messages))
+	for i, message := range messages {
+		out[i] = message
+		out[i].ToolCalls = append([]ToolCall(nil), message.ToolCalls...)
+		for j := range out[i].ToolCalls {
+			out[i].ToolCalls[j].Arguments = append(json.RawMessage(nil), message.ToolCalls[j].Arguments...)
+		}
+	}
+	return out
+}

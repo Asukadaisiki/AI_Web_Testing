@@ -12,6 +12,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/feedback"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/planner"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/report"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/store"
@@ -39,6 +40,7 @@ type Config struct {
 	Store                  *store.Store
 	Worker                 *worker.Client
 	LLM                    LLM
+	Model                  model.Model
 	MaxModelCalls          int
 	MaxFreshTotalTokens    int
 	MaxPromptTokensPerCall int
@@ -69,6 +71,9 @@ type Runtime struct {
 
 // New 创建 Runtime。
 func New(config Config) *Runtime {
+	if config.LLM == nil && config.Model != nil {
+		config.LLM = AdaptModel(config.Model)
+	}
 	maxCalls := config.MaxModelCalls
 	if maxCalls <= 0 {
 		maxCalls = 25
