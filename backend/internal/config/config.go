@@ -57,12 +57,13 @@ type Exporter struct {
 
 // Langfuse contains exporter-only provider settings.
 type Langfuse struct {
-	BaseURL      string
-	PublicKey    string
-	SecretKey    string
-	GroupID      string
-	SecretFields []string
-	MaxAttempts  int
+	BaseURL         string
+	PublicKey       string
+	SecretKey       string
+	GroupID         string
+	SecretFields    []string
+	MaxAttempts     int
+	MaxRequestBytes int
 }
 
 func Load() (Config, error) {
@@ -148,6 +149,10 @@ func LoadExporter() (Exporter, error) {
 	if err != nil {
 		return Exporter{}, err
 	}
+	maxRequestBytes, err := positiveIntEnv("AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES", 1<<20)
+	if err != nil {
+		return Exporter{}, err
+	}
 	secretFields := commaSeparated(envOr(
 		"AGENTTRACE_LANGFUSE_REDACT_FIELDS",
 		"authorization,cookie,password,token,api_key,secret",
@@ -161,12 +166,13 @@ func LoadExporter() (Exporter, error) {
 			DLQTopic:   "agenttrace.run.dlq.v1",
 		},
 		Langfuse: Langfuse{
-			BaseURL:      baseURL,
-			PublicKey:    publicKey,
-			SecretKey:    secretKey,
-			GroupID:      envOr("AGENTTRACE_LANGFUSE_GROUP_ID", "agenttrace-langfuse-exporter"),
-			SecretFields: secretFields,
-			MaxAttempts:  maxAttempts,
+			BaseURL:         baseURL,
+			PublicKey:       publicKey,
+			SecretKey:       secretKey,
+			GroupID:         envOr("AGENTTRACE_LANGFUSE_GROUP_ID", "agenttrace-langfuse-exporter"),
+			SecretFields:    secretFields,
+			MaxAttempts:     maxAttempts,
+			MaxRequestBytes: maxRequestBytes,
 		},
 	}, nil
 }

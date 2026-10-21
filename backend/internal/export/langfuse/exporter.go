@@ -27,6 +27,26 @@ const (
 	defaultMaxAttempt = 3
 )
 
+// ErrInvalidCanonicalTrace identifies a trace graph that cannot be mirrored
+// without changing its canonical topology.
+var ErrInvalidCanonicalTrace = errors.New("invalid canonical trace")
+
+type permanentDeliveryError struct {
+	cause error
+}
+
+func (e permanentDeliveryError) Error() string {
+	return e.cause.Error()
+}
+
+func (e permanentDeliveryError) Unwrap() error {
+	return e.cause
+}
+
+func (e permanentDeliveryError) Permanent() bool {
+	return true
+}
+
 // Repository supplies the canonical data mirrored by the exporter.
 type Repository interface {
 	GetProject(context.Context, string) (postgres.Project, error)
@@ -156,6 +176,9 @@ func (e *Exporter) Handle(ctx context.Context, message eventbus.Message) error {
 		return e.exportCompletion(exportCtx, envelope)
 	})
 	if err != nil {
+		if !IsTransient(err) {
+			return e.recordPermanentFailure(ctx, eventID, message, err)
+		}
 		return e.recordFailure(ctx, eventID, message, err)
 	}
 	if e.RetryStore != nil {
@@ -237,6 +260,9 @@ func (e *Exporter) exportCompletion(ctx context.Context, envelope event.Envelope
 		conversation.ProjectID != project.ID {
 		return errors.New("canonical run relationships are inconsistent")
 	}
+	if err := validateSpanGraph(run.ID, spans); err != nil {
+		return err
+	}
 
 	batch := buildBatch(project, conversation, messages, run, spans)
 	redactor := newRedactor(e.SecretFields)
@@ -252,6 +278,80 @@ func (e *Exporter) exportCompletion(ctx context.Context, envelope event.Envelope
 		return fmt.Errorf("ingest Langfuse batch: %w", err)
 	}
 	return nil
+}
+
+func validateSpanGraph(runID string, spans []domain.Span) error {
+	canonicalIDs := make(map[string]struct{}, len(spans))
+	logicalSpans := make(map[string]domain.Span, len(spans))
+	for _, span := range spans {
+		switch {
+		case strings.TrimSpace(span.ID) == "":
+			return invalidCanonicalTrace("span canonical ID is required")
+		case strings.TrimSpace(span.SpanID) == "":
+			return invalidCanonicalTrace("span logical ID is required")
+		case span.RunID != runID:
+			return invalidCanonicalTrace("span %q belongs to run %q", span.ID, span.RunID)
+		}
+		if _, duplicate := canonicalIDs[span.ID]; duplicate {
+			return invalidCanonicalTrace("duplicate canonical span ID %q", span.ID)
+		}
+		if _, duplicate := logicalSpans[span.SpanID]; duplicate {
+			return invalidCanonicalTrace("duplicate logical span ID %q", span.SpanID)
+		}
+		canonicalIDs[span.ID] = struct{}{}
+		logicalSpans[span.SpanID] = span
+	}
+
+	for _, span := range spans {
+		if span.ParentSpanID == "" {
+			continue
+		}
+		if span.ParentSpanID == span.SpanID {
+			return invalidCanonicalTrace("span %q is its own parent", span.SpanID)
+		}
+		if _, exists := logicalSpans[span.ParentSpanID]; !exists {
+			return invalidCanonicalTrace(
+				"span %q references missing parent %q",
+				span.SpanID,
+				span.ParentSpanID,
+			)
+		}
+	}
+
+	const (
+		visiting = 1
+		visited  = 2
+	)
+	state := make(map[string]uint8, len(spans))
+	var visit func(string) error
+	visit = func(spanID string) error {
+		switch state[spanID] {
+		case visiting:
+			return invalidCanonicalTrace("span parent cycle includes %q", spanID)
+		case visited:
+			return nil
+		}
+		state[spanID] = visiting
+		if parentID := logicalSpans[spanID].ParentSpanID; parentID != "" {
+			if err := visit(parentID); err != nil {
+				return err
+			}
+		}
+		state[spanID] = visited
+		return nil
+	}
+	for spanID := range logicalSpans {
+		if err := visit(spanID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func invalidCanonicalTrace(format string, values ...any) error {
+	return permanentDeliveryError{
+		cause: fmt.Errorf("%w: %s", ErrInvalidCanonicalTrace, fmt.Sprintf(format, values...)),
+	}
 }
 
 func buildBatch(
@@ -405,6 +505,25 @@ func (e *Exporter) recordFailure(
 	message eventbus.Message,
 	cause error,
 ) error {
+	return e.recordFailureWithPolicy(ctx, eventID, message, cause, false)
+}
+
+func (e *Exporter) recordPermanentFailure(
+	ctx context.Context,
+	eventID string,
+	message eventbus.Message,
+	cause error,
+) error {
+	return e.recordFailureWithPolicy(ctx, eventID, message, cause, true)
+}
+
+func (e *Exporter) recordFailureWithPolicy(
+	ctx context.Context,
+	eventID string,
+	message eventbus.Message,
+	cause error,
+	permanent bool,
+) error {
 	if e.RetryStore == nil {
 		return cause
 	}
@@ -415,7 +534,7 @@ func (e *Exporter) recordFailure(
 	if increment.DLQHandedOff {
 		return nil
 	}
-	if increment.Attempts < e.maxAttempts() {
+	if !permanent && increment.Attempts < e.maxAttempts() {
 		return cause
 	}
 	original := any(json.RawMessage(message.Value))

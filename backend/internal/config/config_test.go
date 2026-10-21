@@ -108,6 +108,7 @@ func TestLoadExporterEnabledUsesExactTopicsAndRedactionFields(t *testing.T) {
 	setValidExporterEnvironment(t)
 	t.Setenv("AGENTTRACE_LANGFUSE_REDACT_FIELDS", "authorization, password,api_key")
 	t.Setenv("AGENTTRACE_LANGFUSE_MAX_ATTEMPTS", "4")
+	t.Setenv("AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES", "2048")
 
 	cfg, err := LoadExporter()
 	if err != nil {
@@ -123,8 +124,29 @@ func TestLoadExporterEnabledUsesExactTopicsAndRedactionFields(t *testing.T) {
 	if cfg.Langfuse.MaxAttempts != 4 {
 		t.Fatalf("max attempts = %d, want 4", cfg.Langfuse.MaxAttempts)
 	}
+	if cfg.Langfuse.MaxRequestBytes != 2048 {
+		t.Fatalf("max request bytes = %d, want 2048", cfg.Langfuse.MaxRequestBytes)
+	}
 	if len(cfg.Langfuse.SecretFields) != 3 {
 		t.Fatalf("redaction fields = %#v", cfg.Langfuse.SecretFields)
+	}
+}
+
+func TestLoadExporterDefaultsAndValidatesMaximumRequestBytes(t *testing.T) {
+	setValidExporterEnvironment(t)
+	t.Setenv("AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES", "")
+
+	cfg, err := LoadExporter()
+	if err != nil {
+		t.Fatalf("load enabled exporter: %v", err)
+	}
+	if cfg.Langfuse.MaxRequestBytes != 1<<20 {
+		t.Fatalf("default max request bytes = %d, want %d", cfg.Langfuse.MaxRequestBytes, 1<<20)
+	}
+
+	t.Setenv("AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES", "0")
+	if _, err := LoadExporter(); err == nil {
+		t.Fatal("accepted zero maximum request bytes")
 	}
 }
 

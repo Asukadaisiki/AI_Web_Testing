@@ -74,9 +74,10 @@ func startEnabled(ctx context.Context, cfg config.Exporter) error {
 	defer bus.Close()
 
 	client, err := langfuse.NewHTTPClient(langfuse.HTTPConfig{
-		BaseURL:   cfg.Langfuse.BaseURL,
-		PublicKey: cfg.Langfuse.PublicKey,
-		SecretKey: cfg.Langfuse.SecretKey,
+		BaseURL:         cfg.Langfuse.BaseURL,
+		PublicKey:       cfg.Langfuse.PublicKey,
+		SecretKey:       cfg.Langfuse.SecretKey,
+		MaxRequestBytes: cfg.Langfuse.MaxRequestBytes,
 	})
 	if err != nil {
 		return fmt.Errorf("create Langfuse client: %w", err)

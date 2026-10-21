@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -149,6 +150,76 @@ func TestExporterLoadsCanonicalCompletionAndPreservesOrderedSpans(t *testing.T) 
 	}
 }
 
+func TestExporterRejectsInvalidCanonicalSpanGraphBeforeHTTP(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		corrupt func([]domain.Span)
+	}{
+		{
+			name: "duplicate canonical ID",
+			corrupt: func(spans []domain.Span) {
+				spans[1].ID = spans[0].ID
+			},
+		},
+		{
+			name: "duplicate logical ID",
+			corrupt: func(spans []domain.Span) {
+				spans[1].SpanID = spans[0].SpanID
+			},
+		},
+		{
+			name: "missing parent",
+			corrupt: func(spans []domain.Span) {
+				spans[1].ParentSpanID = "logical-missing"
+			},
+		},
+		{
+			name: "self parent",
+			corrupt: func(spans []domain.Span) {
+				spans[1].ParentSpanID = spans[1].SpanID
+			},
+		},
+		{
+			name: "cycle",
+			corrupt: func(spans []domain.Span) {
+				spans[0].ParentSpanID = spans[1].SpanID
+				spans[1].ParentSpanID = spans[0].SpanID
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer server.Close()
+
+			repository := canonicalRepository()
+			test.corrupt(repository.spans)
+			retries := newMemoryRetryStore()
+			exporter := newTestExporter(
+				repository,
+				newHTTPTestClient(t, server.URL, server.Client()),
+			)
+			exporter.RetryStore = retries
+
+			if err := exporter.Handle(
+				context.Background(),
+				completionMessage(t, "evt-invalid-span-"+test.name),
+			); err != nil {
+				t.Fatalf("invalid trace DLQ handoff: %v", err)
+			}
+			if requests.Load() != 0 {
+				t.Fatalf("HTTP requests = %d, want 0", requests.Load())
+			}
+			if retries.handoffCount != 1 {
+				t.Fatalf("DLQ handoffs = %d, want 1", retries.handoffCount)
+			}
+		})
+	}
+}
+
 func TestExporterDuplicateRetryUsesStableLangfuseIdentities(t *testing.T) {
 	var (
 		mu       sync.Mutex
@@ -210,6 +281,110 @@ func TestExporterDuplicateRetryUsesStableLangfuseIdentities(t *testing.T) {
 	}
 	if strings.Contains(string(requests[0]), "secret-test") {
 		t.Fatal("ingestion payload included Langfuse secret key")
+	}
+}
+
+func TestExporterPermanentHTTPFailureHandsOffImmediatelyAndSuppressesReplay(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			retries := newMemoryRetryStore()
+			exporter := newTestExporter(
+				canonicalRepository(),
+				newHTTPTestClient(t, server.URL, server.Client()),
+			)
+			exporter.RetryStore = retries
+			message := completionMessage(t, "evt-permanent-"+http.StatusText(status))
+
+			if err := exporter.Handle(context.Background(), message); err != nil {
+				t.Fatalf("permanent failure handoff: %v", err)
+			}
+			if retries.handoffCount != 1 {
+				t.Fatalf("DLQ handoffs = %d, want 1", retries.handoffCount)
+			}
+			if requests.Load() != 1 {
+				t.Fatalf("HTTP requests = %d, want 1", requests.Load())
+			}
+
+			if err := exporter.Handle(context.Background(), message); err != nil {
+				t.Fatalf("replay after permanent handoff: %v", err)
+			}
+			if retries.handoffCount != 1 || requests.Load() != 1 {
+				t.Fatalf(
+					"replay state = %d handoffs, %d requests; want 1, 1",
+					retries.handoffCount,
+					requests.Load(),
+				)
+			}
+		})
+	}
+}
+
+func TestExporterTransientHTTPFailuresRemainRetryable(t *testing.T) {
+	for _, status := range []int{
+		http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusServiceUnavailable,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			retries := newMemoryRetryStore()
+			exporter := newTestExporter(
+				canonicalRepository(),
+				newHTTPTestClient(t, server.URL, server.Client()),
+			)
+			exporter.RetryStore = retries
+			eventID := "evt-transient-" + http.StatusText(status)
+
+			if err := exporter.Handle(context.Background(), completionMessage(t, eventID)); err == nil {
+				t.Fatal("transient HTTP failure returned nil")
+			}
+			if retries.handoffCount != 0 {
+				t.Fatalf("DLQ handoffs = %d, want 0", retries.handoffCount)
+			}
+			if retries.attempts[eventID] != 1 {
+				t.Fatalf("durable attempts = %d, want 1", retries.attempts[eventID])
+			}
+		})
+	}
+}
+
+func TestExporterNetworkFailureRemainsRetryable(t *testing.T) {
+	var requests atomic.Int64
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return nil, errors.New("connection reset")
+	})}
+	retries := newMemoryRetryStore()
+	exporter := newTestExporter(
+		canonicalRepository(),
+		newHTTPTestClient(t, "https://langfuse.example", httpClient),
+	)
+	exporter.RetryStore = retries
+	const eventID = "evt-network-failure"
+
+	if err := exporter.Handle(context.Background(), completionMessage(t, eventID)); err == nil {
+		t.Fatal("network failure returned nil")
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("HTTP requests = %d, want 1", requests.Load())
+	}
+	if retries.handoffCount != 0 || retries.attempts[eventID] != 1 {
+		t.Fatalf(
+			"network retry state = %d handoffs, %d attempts; want 0, 1",
+			retries.handoffCount,
+			retries.attempts[eventID],
+		)
 	}
 }
 

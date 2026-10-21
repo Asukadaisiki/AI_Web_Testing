@@ -101,7 +101,7 @@ services:
 
   exporter:
     profiles: ["langfuse"]
-    image: golang:1.24
+    image: golang:1.24.11
     working_dir: /app/backend
     command: ["go", "run", "./cmd/agenttrace-exporter"]
     environment:
@@ -113,6 +113,7 @@ services:
       AGENTTRACE_LANGFUSE_SECRET_KEY: ${AGENTTRACE_LANGFUSE_SECRET_KEY:-}
       AGENTTRACE_LANGFUSE_GROUP_ID: ${AGENTTRACE_LANGFUSE_GROUP_ID:-agenttrace-langfuse-exporter}
       AGENTTRACE_LANGFUSE_MAX_ATTEMPTS: ${AGENTTRACE_LANGFUSE_MAX_ATTEMPTS:-3}
+      AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES: ${AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES:-1048576}
       AGENTTRACE_LANGFUSE_REDACT_FIELDS: ${AGENTTRACE_LANGFUSE_REDACT_FIELDS:-authorization,cookie,password,token,api_key,secret}
     depends_on:
       postgres:

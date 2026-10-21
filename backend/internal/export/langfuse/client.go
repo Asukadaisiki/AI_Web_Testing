@@ -7,26 +7,63 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+const DefaultMaxRequestBytes = 1 << 20
+
+// ErrRequestTooLarge is returned before HTTP when the encoded ingestion batch
+// exceeds the configured request boundary.
+var ErrRequestTooLarge = errors.New("Langfuse ingestion request exceeds maximum encoded size")
+
+// HTTPError is a provider response outside the successful 2xx range.
+type HTTPError struct {
+	StatusCode int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("Langfuse ingestion returned HTTP %d", e.StatusCode)
+}
+
+// IsTransient reports whether another delivery may succeed without changing
+// the canonical batch.
+func IsTransient(err error) bool {
+	var statusErr *HTTPError
+	if errors.As(err, &statusErr) {
+		return statusErr.StatusCode == http.StatusRequestTimeout ||
+			statusErr.StatusCode == http.StatusTooManyRequests ||
+			statusErr.StatusCode >= http.StatusInternalServerError
+	}
+	var permanent interface{ Permanent() bool }
+	if errors.As(err, &permanent) && permanent.Permanent() {
+		return false
+	}
+	return !errors.Is(err, ErrRequestTooLarge)
+}
 
 // HTTPConfig configures Langfuse's HTTP ingestion boundary.
 type HTTPConfig struct {
-	BaseURL    string
-	PublicKey  string
-	SecretKey  string
-	HTTPClient *http.Client
+	BaseURL         string
+	PublicKey       string
+	SecretKey       string
+	HTTPClient      *http.Client
+	MaxRequestBytes int
 }
 
 // HTTPClient sends deterministic ingestion batches to Langfuse.
 type HTTPClient struct {
-	endpoint   string
-	publicKey  string
-	secretKey  string
-	httpClient *http.Client
+	endpoint        string
+	publicKey       string
+	secretKey       string
+	httpClient      *http.Client
+	maxRequestBytes int
 }
 
 // NewHTTPClient validates provider configuration without making a network request.
@@ -49,11 +86,19 @@ func NewHTTPClient(config HTTPConfig) (*HTTPClient, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
+	maxRequestBytes := config.MaxRequestBytes
+	if maxRequestBytes == 0 {
+		maxRequestBytes = DefaultMaxRequestBytes
+	}
+	if maxRequestBytes < 0 {
+		return nil, errors.New("Langfuse maximum request bytes must be positive")
+	}
 	return &HTTPClient{
-		endpoint:   strings.TrimRight(baseURL, "/") + "/api/public/ingestion",
-		publicKey:  config.PublicKey,
-		secretKey:  config.SecretKey,
-		httpClient: client,
+		endpoint:        strings.TrimRight(baseURL, "/") + "/api/public/ingestion",
+		publicKey:       config.PublicKey,
+		secretKey:       config.SecretKey,
+		httpClient:      client,
+		maxRequestBytes: maxRequestBytes,
 	}, nil
 }
 
@@ -67,9 +112,9 @@ func (c *HTTPClient) Ingest(ctx context.Context, batch Batch) error {
 	for _, observation := range batch.Observations {
 		payload.Batch = append(payload.Batch, observationEvent(observation))
 	}
-	raw, err := json.Marshal(payload)
+	raw, err := encodeIngestionRequest(payload, c.maxRequestBytes)
 	if err != nil {
-		return fmt.Errorf("marshal Langfuse ingestion batch: %w", err)
+		return fmt.Errorf("encode Langfuse ingestion batch: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(raw))
 	if err != nil {
@@ -80,14 +125,295 @@ func (c *HTTPClient) Ingest(ctx context.Context, batch Batch) error {
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return errors.New("request Langfuse ingestion")
+		return fmt.Errorf("request Langfuse ingestion: %w", err)
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("Langfuse ingestion returned HTTP %d", response.StatusCode)
+		return &HTTPError{StatusCode: response.StatusCode}
 	}
 	return nil
+}
+
+type boundedJSONWriter struct {
+	buffer bytes.Buffer
+	limit  int
+	err    error
+}
+
+func (w *boundedJSONWriter) writeString(value string) {
+	if w.err != nil {
+		return
+	}
+	if len(value) > w.limit-w.buffer.Len() {
+		w.err = ErrRequestTooLarge
+		return
+	}
+	_, w.err = w.buffer.WriteString(value)
+}
+
+func (w *boundedJSONWriter) writeByte(value byte) {
+	if w.err != nil {
+		return
+	}
+	if w.buffer.Len() == w.limit {
+		w.err = ErrRequestTooLarge
+		return
+	}
+	w.err = w.buffer.WriteByte(value)
+}
+
+func encodeIngestionRequest(payload ingestionRequest, limit int) ([]byte, error) {
+	writer := &boundedJSONWriter{limit: limit}
+	writer.writeString(`{"batch":[`)
+	for index, item := range payload.Batch {
+		if index > 0 {
+			writer.writeByte(',')
+		}
+		writeIngestionEvent(writer, item)
+	}
+	writer.writeString(`]}`)
+	if writer.err != nil {
+		if errors.Is(writer.err, ErrRequestTooLarge) {
+			return nil, fmt.Errorf("%w: limit is %d bytes", ErrRequestTooLarge, limit)
+		}
+		return nil, writer.err
+	}
+	return writer.buffer.Bytes(), nil
+}
+
+func writeIngestionEvent(writer *boundedJSONWriter, item ingestionEvent) {
+	writer.writeByte('{')
+	first := true
+	writeJSONField(writer, &first, "id", item.ID)
+	writeJSONField(writer, &first, "type", item.Type)
+	writeTimeField(writer, &first, "timestamp", item.Timestamp)
+	writeFieldName(writer, &first, "body")
+	switch body := item.Body.(type) {
+	case traceBody:
+		writeTraceBody(writer, body)
+	case observationBody:
+		writeObservationBody(writer, body)
+	default:
+		writer.err = fmt.Errorf("unsupported Langfuse ingestion body %T", item.Body)
+	}
+	writer.writeByte('}')
+}
+
+func writeTraceBody(writer *boundedJSONWriter, body traceBody) {
+	writer.writeByte('{')
+	first := true
+	writeJSONField(writer, &first, "id", body.ID)
+	writeJSONField(writer, &first, "sessionId", body.SessionID)
+	writeJSONField(writer, &first, "name", body.Name)
+	if body.Input != nil {
+		writeJSONField(writer, &first, "input", body.Input)
+	}
+	if body.Output != nil {
+		writeJSONField(writer, &first, "output", body.Output)
+	}
+	if len(body.Metadata) > 0 {
+		writeJSONField(writer, &first, "metadata", body.Metadata)
+	}
+	writeTimeField(writer, &first, "timestamp", body.Timestamp)
+	writer.writeByte('}')
+}
+
+func writeObservationBody(writer *boundedJSONWriter, body observationBody) {
+	writer.writeByte('{')
+	first := true
+	writeJSONField(writer, &first, "id", body.ID)
+	writeJSONField(writer, &first, "traceId", body.TraceID)
+	if body.ParentObservationID != "" {
+		writeJSONField(writer, &first, "parentObservationId", body.ParentObservationID)
+	}
+	writeJSONField(writer, &first, "name", body.Name)
+	if body.Input != nil {
+		writeJSONField(writer, &first, "input", body.Input)
+	}
+	if body.Output != nil {
+		writeJSONField(writer, &first, "output", body.Output)
+	}
+	if len(body.Metadata) > 0 {
+		writeJSONField(writer, &first, "metadata", body.Metadata)
+	}
+	writeTimeField(writer, &first, "startTime", body.StartTime)
+	if body.EndTime != nil {
+		writeTimeField(writer, &first, "endTime", *body.EndTime)
+	}
+	if body.Level != "" {
+		writeJSONField(writer, &first, "level", body.Level)
+	}
+	if body.StatusMessage != "" {
+		writeJSONField(writer, &first, "statusMessage", body.StatusMessage)
+	}
+	writer.writeByte('}')
+}
+
+func writeJSONField(writer *boundedJSONWriter, first *bool, name string, value any) {
+	writeFieldName(writer, first, name)
+	writeJSONValue(writer, value)
+}
+
+func writeTimeField(writer *boundedJSONWriter, first *bool, name string, value time.Time) {
+	writeFieldName(writer, first, name)
+	raw, err := value.MarshalJSON()
+	if err != nil {
+		writer.err = fmt.Errorf("encode Langfuse timestamp: %w", err)
+		return
+	}
+	writer.writeString(string(raw))
+}
+
+func writeFieldName(writer *boundedJSONWriter, first *bool, name string) {
+	if !*first {
+		writer.writeByte(',')
+	}
+	*first = false
+	writeJSONString(writer, name)
+	writer.writeByte(':')
+}
+
+func writeJSONValue(writer *boundedJSONWriter, value any) {
+	switch typed := value.(type) {
+	case nil:
+		writer.writeString("null")
+	case bool:
+		writer.writeString(strconv.FormatBool(typed))
+	case string:
+		writeJSONString(writer, typed)
+	case float64:
+		writeJSONFloat(writer, typed, 64)
+	case float32:
+		writeJSONFloat(writer, float64(typed), 32)
+	case int:
+		writer.writeString(strconv.Itoa(typed))
+	case int64:
+		writer.writeString(strconv.FormatInt(typed, 10))
+	case int32:
+		writer.writeString(strconv.FormatInt(int64(typed), 10))
+	case uint:
+		writer.writeString(strconv.FormatUint(uint64(typed), 10))
+	case uint64:
+		writer.writeString(strconv.FormatUint(typed, 10))
+	case uint32:
+		writer.writeString(strconv.FormatUint(uint64(typed), 10))
+	case json.Number:
+		raw := typed.String()
+		if !json.Valid([]byte(raw)) {
+			writer.err = fmt.Errorf("invalid JSON number %q", raw)
+			return
+		}
+		writer.writeString(raw)
+	case map[string]any:
+		writeJSONMap(writer, typed)
+	case []any:
+		writer.writeByte('[')
+		for index, item := range typed {
+			if index > 0 {
+				writer.writeByte(',')
+			}
+			writeJSONValue(writer, item)
+		}
+		writer.writeByte(']')
+	case []map[string]any:
+		writer.writeByte('[')
+		for index, item := range typed {
+			if index > 0 {
+				writer.writeByte(',')
+			}
+			writeJSONMap(writer, item)
+		}
+		writer.writeByte(']')
+	default:
+		writer.err = fmt.Errorf("unsupported Langfuse JSON value %T", value)
+	}
+}
+
+func writeJSONFloat(writer *boundedJSONWriter, value float64, bits int) {
+	if math.IsInf(value, 0) || math.IsNaN(value) {
+		writer.err = fmt.Errorf("unsupported Langfuse JSON number %v", value)
+		return
+	}
+	writer.writeString(strconv.FormatFloat(value, 'g', -1, bits))
+}
+
+func writeJSONMap(writer *boundedJSONWriter, value map[string]any) {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	writer.writeByte('{')
+	for index, key := range keys {
+		if index > 0 {
+			writer.writeByte(',')
+		}
+		writeJSONString(writer, key)
+		writer.writeByte(':')
+		writeJSONValue(writer, value[key])
+	}
+	writer.writeByte('}')
+}
+
+func writeJSONString(writer *boundedJSONWriter, value string) {
+	const hex = "0123456789abcdef"
+
+	writer.writeByte('"')
+	start := 0
+	for index := 0; index < len(value); {
+		current := value[index]
+		if current < utf8.RuneSelf {
+			if current >= 0x20 && current != '\\' && current != '"' &&
+				current != '<' && current != '>' && current != '&' {
+				index++
+				continue
+			}
+			writer.writeString(value[start:index])
+			switch current {
+			case '\\', '"':
+				writer.writeByte('\\')
+				writer.writeByte(current)
+			case '\b':
+				writer.writeString(`\b`)
+			case '\f':
+				writer.writeString(`\f`)
+			case '\n':
+				writer.writeString(`\n`)
+			case '\r':
+				writer.writeString(`\r`)
+			case '\t':
+				writer.writeString(`\t`)
+			default:
+				writer.writeString(`\u00`)
+				writer.writeByte(hex[current>>4])
+				writer.writeByte(hex[current&0xF])
+			}
+			index++
+			start = index
+			continue
+		}
+
+		runeValue, size := utf8.DecodeRuneInString(value[index:])
+		if runeValue == utf8.RuneError && size == 1 {
+			writer.writeString(value[start:index])
+			writer.writeString(`\ufffd`)
+			index++
+			start = index
+			continue
+		}
+		if runeValue == '\u2028' || runeValue == '\u2029' {
+			writer.writeString(value[start:index])
+			writer.writeString(`\u202`)
+			writer.writeByte(hex[runeValue&0xF])
+			index += size
+			start = index
+			continue
+		}
+		index += size
+	}
+	writer.writeString(value[start:])
+	writer.writeByte('"')
 }
 
 type ingestionRequest struct {

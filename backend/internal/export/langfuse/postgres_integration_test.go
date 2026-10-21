@@ -62,6 +62,48 @@ func TestPostgresExporterFailureHandsOffOnceWithoutCanonicalMutation(t *testing.
 	}
 }
 
+func TestPostgresExporterPermanentHTTPFailureHandsOffImmediately(t *testing.T) {
+	ctx, pool, store := newExporterPostgresStore(t)
+	insertCompletedRunFixture(t, ctx, pool)
+
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client, err := NewHTTPClient(HTTPConfig{
+		BaseURL: server.URL, PublicKey: "public-test", SecretKey: "secret-test",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("create Langfuse client: %v", err)
+	}
+	exporter := &Exporter{
+		Repository: store,
+		Inbox: PostgresInbox{
+			Deduplicator: consumer.NewDeduplicator(pool, "agenttrace-langfuse-exporter"),
+		},
+		RetryStore: PostgresRetryStore{
+			Store: store, Consumer: "agenttrace-langfuse-exporter",
+		},
+		Client: client, MaxAttempts: 3,
+	}
+	message := completionMessage(t, "evt-postgres-export")
+
+	if err := exporter.Handle(ctx, message); err != nil {
+		t.Fatalf("permanent HTTP failure handoff: %v", err)
+	}
+	assertExporterDatabaseState(t, ctx, pool, 0, 0, 1)
+	if err := exporter.Handle(ctx, message); err != nil {
+		t.Fatalf("replay after permanent handoff: %v", err)
+	}
+	assertExporterDatabaseState(t, ctx, pool, 0, 0, 1)
+	if requests.Load() != 1 {
+		t.Fatalf("Langfuse requests = %d, want one before permanent handoff", requests.Load())
+	}
+}
+
 func newExporterPostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *postgres.Store) {
 	t.Helper()
 	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
