@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
@@ -139,6 +140,82 @@ func TestPostgresRetryStoreCreatesOneDLQHandoffForConcurrentConsumersAndReplay(t
 	if outboxRows != 1 {
 		t.Fatalf("DLQ outbox rows after replay = %d, want one", outboxRows)
 	}
+}
+
+func TestPostgresRetryStoreDoesNotRecreateRetryAfterConcurrentDLQHandoff(t *testing.T) {
+	ctx, pool, store := newRuntimePostgresStore(t)
+	runner := &recordingRunner{err: errors.New("permanent failure")}
+	retries := PostgresRetryStore{Store: store, Consumer: "runtime"}
+	message := commandMessage(t, "evt-postgres-late-increment", commandFor("run-postgres-late-increment"))
+	retryID := retryEventID("evt-postgres-late-increment", message)
+	outboxID := stableID("consumer-dlq", retryID)
+
+	if got, err := store.IncrementConsumerRetry(ctx, "runtime", retryID, message.Value); err != nil || got != 1 {
+		t.Fatalf("seed retry count = (%d, %v), want (1, nil)", got, err)
+	}
+
+	lateIncrement := &gatedRetryStore{
+		RetryStore: retries,
+		entered:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	deliveryB := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		RetryStore:  lateIncrement,
+		MaxAttempts: 2,
+	}
+	bResult := make(chan error, 1)
+	go func() {
+		bResult <- deliveryB.Handle(ctx, message)
+	}()
+	<-lateIncrement.entered
+
+	deliveryA := Consumer{
+		Inbox:       &memoryInbox{},
+		Runner:      runner,
+		RetryStore:  retries,
+		MaxAttempts: 2,
+	}
+	if err := deliveryA.Handle(ctx, message); err != nil {
+		t.Fatalf("delivery A DLQ handoff: %v", err)
+	}
+	close(lateIncrement.release)
+	if err := <-bResult; err != nil {
+		t.Fatalf("delivery B after concurrent DLQ handoff: %v", err)
+	}
+
+	var retryRows, outboxRows int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM consumer_retry_counts
+		WHERE consumer = 'runtime' AND event_id = $1`, retryID).Scan(&retryRows); err != nil {
+		t.Fatalf("count retry state: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM outbox_events
+		WHERE event_id = $1 AND topic = $2 AND key = $3`,
+		outboxID, defaultDLQTopic, message.Key,
+	).Scan(&outboxRows); err != nil {
+		t.Fatalf("count DLQ outbox event: %v", err)
+	}
+	if retryRows != 0 || outboxRows != 1 {
+		t.Fatalf("retry rows=%d outbox rows=%d, want 0 and 1", retryRows, outboxRows)
+	}
+}
+
+type gatedRetryStore struct {
+	RetryStore
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *gatedRetryStore) Increment(ctx context.Context, eventID string, payload []byte) (RetryIncrement, error) {
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	return s.RetryStore.Increment(ctx, eventID, payload)
 }
 
 func newRuntimePostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *postgres.Store) {

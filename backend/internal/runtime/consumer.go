@@ -33,10 +33,16 @@ type Inbox interface {
 
 // RetryStore records failed deliveries independently of a Consumer process.
 type RetryStore interface {
-	Increment(context.Context, string, []byte) (int, error)
+	Increment(context.Context, string, []byte) (RetryIncrement, error)
 	Clear(context.Context, string) error
 	HandoffDLQ(context.Context, string, DLQHandoff) error
 	HasDLQHandoff(context.Context, string, string) (bool, error)
+}
+
+// RetryIncrement is the outcome of recording a failed delivery.
+type RetryIncrement struct {
+	Attempts     int
+	DLQHandedOff bool
 }
 
 // DLQHandoff describes an idempotent, durable transfer to the DLQ outbox.
@@ -158,17 +164,14 @@ func decodeRunCommand(message eventbus.Message) (event.RunCommand, string, event
 
 func (c *Consumer) recordFailure(ctx context.Context, eventID string, message eventbus.Message, cause error) error {
 	eventID = retryEventID(eventID, message)
-	handedOff, err := c.hasDLQHandoff(ctx, eventID)
-	if err != nil {
-		return fmt.Errorf("check run command DLQ handoff: %w", err)
-	}
-	if handedOff {
-		return nil
-	}
-	attempt, err := c.incrementAttempts(ctx, eventID, message.Value)
+	increment, err := c.incrementAttempts(ctx, eventID, message.Value)
 	if err != nil {
 		return fmt.Errorf("record run command failure: %w", err)
 	}
+	if increment.DLQHandedOff {
+		return nil
+	}
+	attempt := increment.Attempts
 	if attempt < c.maxAttempts() {
 		return cause
 	}
@@ -242,7 +245,7 @@ func (c *Consumer) renewLease(ctx context.Context, runID string) func() {
 	return func() { close(stop) }
 }
 
-func (c *Consumer) incrementAttempts(ctx context.Context, eventID string, payload []byte) (int, error) {
+func (c *Consumer) incrementAttempts(ctx context.Context, eventID string, payload []byte) (RetryIncrement, error) {
 	if c.RetryStore != nil {
 		return c.RetryStore.Increment(ctx, eventID, payload)
 	}
@@ -252,7 +255,7 @@ func (c *Consumer) incrementAttempts(ctx context.Context, eventID string, payloa
 		c.attempts = make(map[string]int)
 	}
 	c.attempts[eventID]++
-	return c.attempts[eventID], nil
+	return RetryIncrement{Attempts: c.attempts[eventID]}, nil
 }
 
 func (c *Consumer) clearAttempts(ctx context.Context, eventID string) error {

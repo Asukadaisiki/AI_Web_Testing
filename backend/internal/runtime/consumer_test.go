@@ -287,15 +287,18 @@ type memoryRetryStore struct {
 	dlq          map[string]DLQHandoff
 }
 
-func (s *memoryRetryStore) Increment(_ context.Context, eventID string, _ []byte) (int, error) {
+func (s *memoryRetryStore) Increment(_ context.Context, eventID string, _ []byte) (RetryIncrement, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, handedOff := s.dlq[eventID]; handedOff {
+		return RetryIncrement{DLQHandedOff: true}, nil
+	}
 	if s.attempts == nil {
 		s.attempts = make(map[string]int)
 	}
 	s.incremented = append(s.incremented, eventID)
 	s.attempts[eventID]++
-	return s.attempts[eventID], nil
+	return RetryIncrement{Attempts: s.attempts[eventID]}, nil
 }
 
 func (s *memoryRetryStore) Clear(_ context.Context, eventID string) error {

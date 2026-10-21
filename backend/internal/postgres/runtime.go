@@ -12,6 +12,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ConsumerRetryIncrement is the outcome of recording a failed consumer delivery.
+type ConsumerRetryIncrement struct {
+	Attempts     int
+	DLQHandedOff bool
+}
+
 // LoadRunCommand returns the immutable command stored with a run.
 func (s *Store) LoadRunCommand(ctx context.Context, runID string) (domain.Run, event.RunCommand, error) {
 	if s == nil || s.pool == nil {
@@ -99,6 +105,91 @@ func (s *Store) IncrementConsumerRetry(
 	return attempts, nil
 }
 
+// IncrementConsumerRetryUnlessDLQHandoff atomically records a failure only
+// while a matching DLQ handoff does not exist. The transaction-scoped lock is
+// shared with HandoffConsumerRetryToOutbox, so a late delivery cannot recreate
+// retry state after the handoff removes it.
+func (s *Store) IncrementConsumerRetryUnlessDLQHandoff(
+	ctx context.Context,
+	consumerName string,
+	eventID string,
+	outboxEventID string,
+	payload []byte,
+) (ConsumerRetryIncrement, error) {
+	if s == nil || s.pool == nil {
+		return ConsumerRetryIncrement{}, errors.New("postgres store is not configured")
+	}
+	if strings.TrimSpace(consumerName) == "" ||
+		strings.TrimSpace(eventID) == "" ||
+		strings.TrimSpace(outboxEventID) == "" {
+		return ConsumerRetryIncrement{}, errors.New("consumer retry identifiers are required")
+	}
+	storedPayload, err := consumerRetryPayload(payload)
+	if err != nil {
+		return ConsumerRetryIncrement{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ConsumerRetryIncrement{}, fmt.Errorf("begin consumer retry increment: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lockConsumerRetry(ctx, tx, consumerName, eventID); err != nil {
+		return ConsumerRetryIncrement{}, err
+	}
+
+	var handedOff bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM outbox_events WHERE event_id = $1
+		)`, outboxEventID).Scan(&handedOff); err != nil {
+		return ConsumerRetryIncrement{}, fmt.Errorf("check consumer retry DLQ handoff: %w", err)
+	}
+	if handedOff {
+		if err := tx.Commit(ctx); err != nil {
+			return ConsumerRetryIncrement{}, fmt.Errorf("commit consumer retry handoff check: %w", err)
+		}
+		return ConsumerRetryIncrement{DLQHandedOff: true}, nil
+	}
+
+	var attempts int
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO consumer_retry_counts (consumer, event_id, payload, attempt_count)
+		VALUES ($1, $2, $3::jsonb, 1)
+		ON CONFLICT (consumer, event_id) DO UPDATE SET
+			attempt_count = consumer_retry_counts.attempt_count + 1,
+			updated_at = now()
+		RETURNING attempt_count`,
+		consumerName, eventID, storedPayload,
+	).Scan(&attempts); err != nil {
+		return ConsumerRetryIncrement{}, fmt.Errorf("increment consumer retry: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ConsumerRetryIncrement{}, fmt.Errorf("commit consumer retry increment: %w", err)
+	}
+	return ConsumerRetryIncrement{Attempts: attempts}, nil
+}
+
+func consumerRetryPayload(payload []byte) ([]byte, error) {
+	if json.Valid(payload) {
+		return payload, nil
+	}
+	storedPayload, err := json.Marshal(map[string]string{"raw": string(payload)})
+	if err != nil {
+		return nil, fmt.Errorf("marshal malformed consumer payload: %w", err)
+	}
+	return storedPayload, nil
+}
+
+func lockConsumerRetry(ctx context.Context, tx pgx.Tx, consumerName string, eventID string) error {
+	if _, err := tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(
+			hashtextextended($1 || ':' || $2, 0::bigint)
+		)`, consumerName, eventID); err != nil {
+		return fmt.Errorf("lock consumer retry transition: %w", err)
+	}
+	return nil
+}
+
 // ClearConsumerRetry removes failure state after a successful delivery or DLQ handoff.
 func (s *Store) ClearConsumerRetry(ctx context.Context, consumerName string, eventID string) error {
 	if s == nil || s.pool == nil {
@@ -147,6 +238,9 @@ func (s *Store) HandoffConsumerRetryToOutbox(
 		return fmt.Errorf("begin consumer retry DLQ handoff: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := lockConsumerRetry(ctx, tx, consumerName, retryEventID); err != nil {
+		return err
+	}
 
 	var present bool
 	err = tx.QueryRow(ctx, `
