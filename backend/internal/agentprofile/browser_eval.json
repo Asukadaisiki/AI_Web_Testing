@@ -1,0 +1,47 @@
+{
+  "id": "browser-eval",
+  "product_name": "AgentTrace Eval Hub",
+  "model": {
+    "provider": "openai-compatible",
+    "name": "glm-5.3-flash",
+    "reasoning_effort": "high"
+  },
+  "operations": [
+    {
+      "name": "browser_execute_case",
+      "description": "Execute a grounded browser evaluation case",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "case"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "case": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      },
+      "callback": {
+        "kind": "http",
+        "url_template": "{{worker_base_url}}/operations/browser_execute_case"
+      },
+      "timeout_ms": 300000,
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_ms": 100
+      },
+      "max_result_bytes": 4194304
+    }
+  ],
+  "safety": {
+    "fresh_context": true,
+    "disposable_fixture_data": true,
+    "irreversible_production_operations": "unsupported"
+  }
+}

@@ -789,6 +789,23 @@ class ExecutionResult(BaseModel):
     error: StepError | None = None
 
 
+class OperationArtifacts(BaseModel):
+    model_config = _CONTRACT_CONFIG
+
+    screenshot_paths: list[str] = Field(default_factory=list)
+
+
+class OperationResult(BaseModel):
+    """Typed callback envelope consumed by the Go operation dispatcher."""
+
+    model_config = _CONTRACT_CONFIG
+
+    status: Literal["succeeded", "failed"]
+    output: ExecutionResult
+    artifacts: OperationArtifacts
+    error: StepError | None = None
+
+
 # --------------------------------------------------------------------------------------
 # HTTP 请求体
 # --------------------------------------------------------------------------------------
@@ -839,6 +856,10 @@ class ExecuteRequest(BaseModel):
     #: 必填：每步截图要落进 `<产物根>/<session_id>/`（CONTRACT §9.2）。
     session_id: str = Field(min_length=1)
     case: dict[str, Any]
+
+
+class OperationExecuteRequest(ExecuteRequest):
+    """Server-dispatched browser operation arguments."""
 
 
 class ErrorResponse(BaseModel):

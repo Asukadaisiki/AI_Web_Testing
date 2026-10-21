@@ -4,6 +4,8 @@ package operation
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"time"
 )
 
 // Call is a model-selected operation invocation with stable tracing identities.
@@ -22,6 +24,25 @@ type Result struct {
 	Output    json.RawMessage `json:"output,omitempty"`
 	Artifacts json.RawMessage `json:"artifacts,omitempty"`
 	Error     json.RawMessage `json:"error,omitempty"`
+}
+
+// Definition is a server-owned operation transport and validation policy.
+type Definition struct {
+	Name           string
+	Description    string
+	InputSchema    json.RawMessage
+	CallbackURL    string
+	Timeout        time.Duration
+	MaxAttempts    int
+	RetryBackoff   time.Duration
+	MaxResultBytes int64
+}
+
+// HTTPConfig contains server-owned dependencies and callback allowlisting.
+type HTTPConfig struct {
+	Client               *http.Client
+	Operations           []Definition
+	ApprovedCallbackURLs []string
 }
 
 // Dispatcher executes an operation. Implementations must use OperationID as
