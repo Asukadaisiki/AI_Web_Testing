@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,6 +105,78 @@ func TestPostgresExporterPermanentHTTPFailureHandsOffImmediately(t *testing.T) {
 	}
 }
 
+func TestPostgresExporterDeliveryGateSerializesTwoInstances(t *testing.T) {
+	ctx, pool, store := newExporterPostgresStore(t)
+	insertCompletedRunFixture(t, ctx, pool)
+
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client, err := NewHTTPClient(HTTPConfig{
+		BaseURL: server.URL, PublicKey: "public-test", SecretKey: "secret-test",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("create Langfuse client: %v", err)
+	}
+
+	releaseRetry := make(chan struct{})
+	retries := blockingPostgresRetryStore{
+		PostgresRetryStore: PostgresRetryStore{
+			Store: store, Consumer: "agenttrace-langfuse-exporter",
+		},
+		entered: make(chan struct{}),
+		release: releaseRetry,
+	}
+	newExporter := func() *Exporter {
+		return &Exporter{
+			Repository: store,
+			Inbox: PostgresInbox{
+				Deduplicator: consumer.NewDeduplicator(pool, "agenttrace-langfuse-exporter"),
+			},
+			RetryStore:   &retries,
+			DeliveryGate: PostgresDeliveryGate{Pool: pool, Consumer: "agenttrace-langfuse-exporter"},
+			Client:       client,
+			MaxAttempts:  3,
+		}
+	}
+	message := completionMessage(t, "evt-postgres-export")
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- newExporter().Handle(ctx, message)
+	}()
+
+	select {
+	case <-retries.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first exporter did not reach durable permanent-failure handling")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- newExporter().Handle(ctx, message)
+	}()
+	close(releaseRetry)
+
+	for name, done := range map[string]<-chan error{"first": firstDone, "second": secondDone} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s exporter handle: %v", name, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s exporter did not finish", name)
+		}
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("Langfuse requests = %d, want one across two exporter instances", requests.Load())
+	}
+	assertExporterDatabaseState(t, ctx, pool, 0, 0, 1)
+}
+
 func newExporterPostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *postgres.Store) {
 	t.Helper()
 	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
@@ -123,6 +196,25 @@ func newExporterPostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *po
 		t.Fatalf("migrate PostgreSQL: %v", err)
 	}
 	return ctx, pool, postgres.NewStore(pool)
+}
+
+type blockingPostgresRetryStore struct {
+	PostgresRetryStore
+	once    sync.Once
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (s *blockingPostgresRetryStore) Increment(
+	ctx context.Context,
+	eventID string,
+	payload []byte,
+) (RetryIncrement, error) {
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	return s.PostgresRetryStore.Increment(ctx, eventID, payload)
 }
 
 func insertCompletedRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {

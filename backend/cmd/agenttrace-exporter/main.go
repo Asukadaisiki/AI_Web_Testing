@@ -91,6 +91,9 @@ func startEnabled(ctx context.Context, cfg config.Exporter) error {
 		RetryStore: langfuse.PostgresRetryStore{
 			Store: store, Consumer: "agenttrace-langfuse-exporter",
 		},
+		DeliveryGate: langfuse.PostgresDeliveryGate{
+			Pool: pool, Consumer: "agenttrace-langfuse-exporter",
+		},
 		Client:       client,
 		SecretFields: cfg.Langfuse.SecretFields,
 		MaxAttempts:  cfg.Langfuse.MaxAttempts,

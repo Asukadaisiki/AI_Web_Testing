@@ -59,6 +59,58 @@ func TestBoundedEncoderMatchesCanonicalJSONEncoding(t *testing.T) {
 	}
 }
 
+func TestBoundedEncoderCountsStandardJSONValuesExactly(t *testing.T) {
+	start := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	payload := ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create", Timestamp: start,
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace",
+			Input:  []int{1, 2, 3},
+			Output: []any(nil),
+			Metadata: map[string]any{
+				"escaped": "<>&\u2028\u2029",
+				"nested":  map[string]int{"b": 2, "a": 1},
+				"nil_map": map[string]any(nil),
+			},
+			Timestamp: start,
+		},
+	}}}
+	want, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal canonical JSON: %v", err)
+	}
+
+	got, err := encodeIngestionRequest(payload, len(want))
+	if err != nil {
+		t.Fatalf("encode bounded request: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("bounded JSON differs:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+func TestBoundedEncoderStopsBeforeHostileTailMarshal(t *testing.T) {
+	var calls atomic.Int64
+	payload := ingestionRequest{Batch: []ingestionEvent{{
+		ID: "event-trace", Type: "trace-create",
+		Body: traceBody{
+			ID: "trace-1", SessionID: "session-1", Name: "trace",
+			Input: []any{
+				strings.Repeat("x", 1024),
+				marshalTail{calls: &calls},
+			},
+		},
+	}}}
+
+	_, err := encodeIngestionRequest(payload, 128)
+	if !errors.Is(err, ErrRequestTooLarge) {
+		t.Fatalf("encode error = %v, want ErrRequestTooLarge", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("hostile tail MarshalJSON calls = %d, want 0", calls.Load())
+	}
+}
+
 func TestHTTPClientReturnsTypedClassifiedStatusErrors(t *testing.T) {
 	for _, test := range []struct {
 		status    int
@@ -174,4 +226,13 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+type marshalTail struct {
+	calls *atomic.Int64
+}
+
+func (tail marshalTail) MarshalJSON() ([]byte, error) {
+	tail.calls.Add(1)
+	return []byte(`"tail"`), nil
 }

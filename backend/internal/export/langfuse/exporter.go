@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -58,6 +60,11 @@ type Repository interface {
 // Inbox commits successful deliveries by event ID.
 type Inbox interface {
 	Handle(context.Context, eventbus.Message, func(context.Context) error) error
+}
+
+// DeliveryGate serializes an exporter delivery across process instances.
+type DeliveryGate interface {
+	Lock(context.Context, string) (func() error, error)
 }
 
 // RetryStore owns durable failure counts and one-time DLQ handoff.
@@ -127,6 +134,7 @@ type Exporter struct {
 	Repository   Repository
 	Inbox        Inbox
 	RetryStore   RetryStore
+	DeliveryGate DeliveryGate
 	Client       Client
 	SecretFields []string
 	MaxAttempts  int
@@ -144,7 +152,7 @@ func (e *Exporter) Consume(ctx context.Context, bus eventbus.EventBus, group str
 }
 
 // Handle processes a single run event without changing canonical product state.
-func (e *Exporter) Handle(ctx context.Context, message eventbus.Message) error {
+func (e *Exporter) Handle(ctx context.Context, message eventbus.Message) (handleErr error) {
 	eventID := fallbackEventID(message)
 	if message.Topic != RunEventsTopic {
 		return e.recordFailure(ctx, eventID, message, fmt.Errorf("unsupported run event topic %q", message.Topic))
@@ -157,6 +165,17 @@ func (e *Exporter) Handle(ctx context.Context, message eventbus.Message) error {
 	eventID = envelope.EventID
 	if envelope.EventType != completionEvent {
 		return nil
+	}
+	if e.DeliveryGate != nil {
+		release, err := e.DeliveryGate.Lock(ctx, eventID)
+		if err != nil {
+			return fmt.Errorf("lock Langfuse exporter delivery: %w", err)
+		}
+		defer func() {
+			if err := release(); err != nil && handleErr == nil {
+				handleErr = fmt.Errorf("release Langfuse exporter delivery lock: %w", err)
+			}
+		}()
 	}
 	outboxEventID := stableID("langfuse-dlq", eventID)
 	if e.RetryStore != nil {
@@ -281,9 +300,16 @@ func (e *Exporter) exportCompletion(ctx context.Context, envelope event.Envelope
 }
 
 func validateSpanGraph(runID string, spans []domain.Span) error {
+	orderedSpans := append([]domain.Span(nil), spans...)
+	sort.Slice(orderedSpans, func(i, j int) bool {
+		if orderedSpans[i].SpanID != orderedSpans[j].SpanID {
+			return orderedSpans[i].SpanID < orderedSpans[j].SpanID
+		}
+		return orderedSpans[i].ID < orderedSpans[j].ID
+	})
 	canonicalIDs := make(map[string]struct{}, len(spans))
 	logicalSpans := make(map[string]domain.Span, len(spans))
-	for _, span := range spans {
+	for _, span := range orderedSpans {
 		switch {
 		case strings.TrimSpace(span.ID) == "":
 			return invalidCanonicalTrace("span canonical ID is required")
@@ -302,7 +328,13 @@ func validateSpanGraph(runID string, spans []domain.Span) error {
 		logicalSpans[span.SpanID] = span
 	}
 
-	for _, span := range spans {
+	spanIDs := make([]string, 0, len(logicalSpans))
+	for spanID := range logicalSpans {
+		spanIDs = append(spanIDs, spanID)
+	}
+	sort.Strings(spanIDs)
+	for _, spanID := range spanIDs {
+		span := logicalSpans[spanID]
 		if span.ParentSpanID == "" {
 			continue
 		}
@@ -340,7 +372,7 @@ func validateSpanGraph(runID string, spans []domain.Span) error {
 		state[spanID] = visited
 		return nil
 	}
-	for spanID := range logicalSpans {
+	for _, spanID := range spanIDs {
 		if err := visit(spanID); err != nil {
 			return err
 		}
@@ -541,10 +573,12 @@ func (e *Exporter) recordFailureWithPolicy(
 	if !json.Valid(message.Value) {
 		original = string(message.Value)
 	}
-	payload, err := json.Marshal(map[string]any{
-		"original": original,
-		"error":    "Langfuse export failed",
-		"attempt":  increment.Attempts,
+	payload, err := json.Marshal(struct {
+		Original any    `json:"original"`
+		Error    string `json:"error"`
+	}{
+		Original: original,
+		Error:    "Langfuse export failed",
 	})
 	if err != nil {
 		return errors.New("marshal Langfuse export DLQ payload")
@@ -612,6 +646,57 @@ func (i PostgresInbox) Handle(
 			return handle(ctx)
 		},
 	)
+}
+
+// PostgresDeliveryGate holds one session advisory lock across the complete
+// exporter delivery. Its distinct namespace keeps the gate ordered before the
+// retry store's transaction advisory lock.
+type PostgresDeliveryGate struct {
+	Pool     *pgxpool.Pool
+	Consumer string
+}
+
+func (g PostgresDeliveryGate) Lock(ctx context.Context, eventID string) (func() error, error) {
+	if g.Pool == nil {
+		return nil, errors.New("Langfuse exporter delivery pool is required")
+	}
+	if strings.TrimSpace(g.Consumer) == "" || strings.TrimSpace(eventID) == "" {
+		return nil, errors.New("Langfuse exporter delivery consumer and event id are required")
+	}
+	conn, err := g.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire Langfuse exporter delivery connection: %w", err)
+	}
+	key := "langfuse-delivery:" + g.Consumer + ":" + eventID
+	if _, err := conn.Exec(ctx, `
+		SELECT pg_advisory_lock(hashtextextended($1, 0::bigint))`, key); err != nil {
+		conn.Release()
+		return nil, fmt.Errorf("acquire Langfuse exporter delivery lock: %w", err)
+	}
+
+	released := false
+	return func() error {
+		if released {
+			return nil
+		}
+		released = true
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var unlocked bool
+		err := conn.QueryRow(releaseCtx, `
+			SELECT pg_advisory_unlock(hashtextextended($1, 0::bigint))`, key).Scan(&unlocked)
+		if err == nil && !unlocked {
+			err = errors.New("Langfuse exporter delivery lock was not held")
+		}
+		if err != nil {
+			_ = conn.Conn().Close(releaseCtx)
+			conn.Release()
+			return fmt.Errorf("release Langfuse exporter delivery lock: %w", err)
+		}
+		conn.Release()
+		return nil
+	}, nil
 }
 
 // PostgresRetryStore adapts the shared durable retry/outbox primitives.

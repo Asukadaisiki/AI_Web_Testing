@@ -220,6 +220,51 @@ func TestExporterRejectsInvalidCanonicalSpanGraphBeforeHTTP(t *testing.T) {
 	}
 }
 
+func TestSpanGraphCycleErrorUsesSortedLogicalID(t *testing.T) {
+	spans := canonicalRepository().spans[:2]
+	spans[0].ParentSpanID = spans[1].SpanID
+	spans[1].ParentSpanID = spans[0].SpanID
+
+	for attempt := 0; attempt < 32; attempt++ {
+		err := validateSpanGraph("run-1", spans)
+		if err == nil {
+			t.Fatal("accepted cyclic span graph")
+		}
+		if got, want := err.Error(), `invalid canonical trace: span parent cycle includes "logical-1"`; got != want {
+			t.Fatalf("cycle error = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestPermanentFailureDLQPayloadDoesNotDependOnAttempts(t *testing.T) {
+	message := completionMessage(t, "evt-permanent-payload")
+	payloadForAttempts := func(attempts int) []byte {
+		retries := newMemoryRetryStore()
+		retries.attempts["evt-permanent-payload"] = attempts
+		exporter := newTestExporter(canonicalRepository(), &recordingClient{})
+		exporter.RetryStore = retries
+
+		if err := exporter.recordPermanentFailure(
+			context.Background(),
+			"evt-permanent-payload",
+			message,
+			errors.New("permanent failure"),
+		); err != nil {
+			t.Fatalf("record permanent failure after %d attempts: %v", attempts, err)
+		}
+		return retries.handoffs["evt-permanent-payload"].Payload
+	}
+
+	first := payloadForAttempts(0)
+	retried := payloadForAttempts(7)
+	if string(first) != string(retried) {
+		t.Fatalf("permanent DLQ payload changed with attempts:\nfirst: %s\nretried: %s", first, retried)
+	}
+	if strings.Contains(string(first), `"attempt"`) {
+		t.Fatalf("permanent DLQ payload contains attempt state: %s", first)
+	}
+}
+
 func TestExporterDuplicateRetryUsesStableLangfuseIdentities(t *testing.T) {
 	var (
 		mu       sync.Mutex

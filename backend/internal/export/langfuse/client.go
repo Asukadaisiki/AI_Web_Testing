@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,54 +136,64 @@ func (c *HTTPClient) Ingest(ctx context.Context, batch Batch) error {
 	return nil
 }
 
-type boundedJSONWriter struct {
-	buffer bytes.Buffer
+type boundedJSONCounter struct {
 	limit  int
+	length int
 	err    error
 }
 
-func (w *boundedJSONWriter) writeString(value string) {
+func (w *boundedJSONCounter) writeString(value string) {
 	if w.err != nil {
 		return
 	}
-	if len(value) > w.limit-w.buffer.Len() {
+	if len(value) > w.limit-w.length {
 		w.err = ErrRequestTooLarge
 		return
 	}
-	_, w.err = w.buffer.WriteString(value)
+	w.length += len(value)
 }
 
-func (w *boundedJSONWriter) writeByte(value byte) {
+func (w *boundedJSONCounter) writeByte(value byte) {
 	if w.err != nil {
 		return
 	}
-	if w.buffer.Len() == w.limit {
+	if w.length == w.limit {
 		w.err = ErrRequestTooLarge
 		return
 	}
-	w.err = w.buffer.WriteByte(value)
+	w.length++
 }
 
 func encodeIngestionRequest(payload ingestionRequest, limit int) ([]byte, error) {
-	writer := &boundedJSONWriter{limit: limit}
-	writer.writeString(`{"batch":[`)
+	counter := &boundedJSONCounter{limit: limit}
+	counter.writeString(`{"batch":[`)
 	for index, item := range payload.Batch {
 		if index > 0 {
-			writer.writeByte(',')
+			counter.writeByte(',')
 		}
-		writeIngestionEvent(writer, item)
+		writeIngestionEvent(counter, item)
 	}
-	writer.writeString(`]}`)
-	if writer.err != nil {
-		if errors.Is(writer.err, ErrRequestTooLarge) {
+	counter.writeString(`]}`)
+	if counter.err != nil {
+		if errors.Is(counter.err, ErrRequestTooLarge) {
 			return nil, fmt.Errorf("%w: limit is %d bytes", ErrRequestTooLarge, limit)
 		}
-		return nil, writer.err
+		return nil, counter.err
 	}
-	return writer.buffer.Bytes(), nil
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Langfuse ingestion batch: %w", err)
+	}
+	if len(raw) != counter.length {
+		return nil, errors.New("Langfuse ingestion JSON length counter mismatch")
+	}
+	return raw, nil
 }
 
-func writeIngestionEvent(writer *boundedJSONWriter, item ingestionEvent) {
+func writeIngestionEvent(writer *boundedJSONCounter, item ingestionEvent) {
+	if writer.err != nil {
+		return
+	}
 	writer.writeByte('{')
 	first := true
 	writeJSONField(writer, &first, "id", item.ID)
@@ -200,7 +211,10 @@ func writeIngestionEvent(writer *boundedJSONWriter, item ingestionEvent) {
 	writer.writeByte('}')
 }
 
-func writeTraceBody(writer *boundedJSONWriter, body traceBody) {
+func writeTraceBody(writer *boundedJSONCounter, body traceBody) {
+	if writer.err != nil {
+		return
+	}
 	writer.writeByte('{')
 	first := true
 	writeJSONField(writer, &first, "id", body.ID)
@@ -219,7 +233,10 @@ func writeTraceBody(writer *boundedJSONWriter, body traceBody) {
 	writer.writeByte('}')
 }
 
-func writeObservationBody(writer *boundedJSONWriter, body observationBody) {
+func writeObservationBody(writer *boundedJSONCounter, body observationBody) {
+	if writer.err != nil {
+		return
+	}
 	writer.writeByte('{')
 	first := true
 	writeJSONField(writer, &first, "id", body.ID)
@@ -250,12 +267,18 @@ func writeObservationBody(writer *boundedJSONWriter, body observationBody) {
 	writer.writeByte('}')
 }
 
-func writeJSONField(writer *boundedJSONWriter, first *bool, name string, value any) {
+func writeJSONField(writer *boundedJSONCounter, first *bool, name string, value any) {
+	if writer.err != nil {
+		return
+	}
 	writeFieldName(writer, first, name)
 	writeJSONValue(writer, value)
 }
 
-func writeTimeField(writer *boundedJSONWriter, first *bool, name string, value time.Time) {
+func writeTimeField(writer *boundedJSONCounter, first *bool, name string, value time.Time) {
+	if writer.err != nil {
+		return
+	}
 	writeFieldName(writer, first, name)
 	raw, err := value.MarshalJSON()
 	if err != nil {
@@ -265,7 +288,10 @@ func writeTimeField(writer *boundedJSONWriter, first *bool, name string, value t
 	writer.writeString(string(raw))
 }
 
-func writeFieldName(writer *boundedJSONWriter, first *bool, name string) {
+func writeFieldName(writer *boundedJSONCounter, first *bool, name string) {
+	if writer.err != nil {
+		return
+	}
 	if !*first {
 		writer.writeByte(',')
 	}
@@ -274,7 +300,10 @@ func writeFieldName(writer *boundedJSONWriter, first *bool, name string) {
 	writer.writeByte(':')
 }
 
-func writeJSONValue(writer *boundedJSONWriter, value any) {
+func writeJSONValue(writer *boundedJSONCounter, value any) {
+	if writer.err != nil {
+		return
+	}
 	switch typed := value.(type) {
 	case nil:
 		writer.writeString("null")
@@ -288,11 +317,19 @@ func writeJSONValue(writer *boundedJSONWriter, value any) {
 		writeJSONFloat(writer, float64(typed), 32)
 	case int:
 		writer.writeString(strconv.Itoa(typed))
+	case int8:
+		writer.writeString(strconv.FormatInt(int64(typed), 10))
+	case int16:
+		writer.writeString(strconv.FormatInt(int64(typed), 10))
 	case int64:
 		writer.writeString(strconv.FormatInt(typed, 10))
 	case int32:
 		writer.writeString(strconv.FormatInt(int64(typed), 10))
 	case uint:
+		writer.writeString(strconv.FormatUint(uint64(typed), 10))
+	case uint8:
+		writer.writeString(strconv.FormatUint(uint64(typed), 10))
+	case uint16:
 		writer.writeString(strconv.FormatUint(uint64(typed), 10))
 	case uint64:
 		writer.writeString(strconv.FormatUint(typed, 10))
@@ -306,10 +343,21 @@ func writeJSONValue(writer *boundedJSONWriter, value any) {
 		}
 		writer.writeString(raw)
 	case map[string]any:
+		if typed == nil {
+			writer.writeString("null")
+			return
+		}
 		writeJSONMap(writer, typed)
 	case []any:
+		if typed == nil {
+			writer.writeString("null")
+			return
+		}
 		writer.writeByte('[')
 		for index, item := range typed {
+			if writer.err != nil {
+				return
+			}
 			if index > 0 {
 				writer.writeByte(',')
 			}
@@ -317,8 +365,15 @@ func writeJSONValue(writer *boundedJSONWriter, value any) {
 		}
 		writer.writeByte(']')
 	case []map[string]any:
+		if typed == nil {
+			writer.writeString("null")
+			return
+		}
 		writer.writeByte('[')
 		for index, item := range typed {
+			if writer.err != nil {
+				return
+			}
 			if index > 0 {
 				writer.writeByte(',')
 			}
@@ -326,11 +381,88 @@ func writeJSONValue(writer *boundedJSONWriter, value any) {
 		}
 		writer.writeByte(']')
 	default:
-		writer.err = fmt.Errorf("unsupported Langfuse JSON value %T", value)
+		writeReflectedJSONValue(writer, reflect.ValueOf(value))
 	}
 }
 
-func writeJSONFloat(writer *boundedJSONWriter, value float64, bits int) {
+func writeReflectedJSONValue(writer *boundedJSONCounter, value reflect.Value) {
+	if writer.err != nil {
+		return
+	}
+	if !value.IsValid() {
+		writer.writeString("null")
+		return
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			writer.writeString("null")
+			return
+		}
+		writeReflectedJSONValue(writer, value.Elem())
+	case reflect.Bool:
+		writer.writeString(strconv.FormatBool(value.Bool()))
+	case reflect.String:
+		writeJSONString(writer, value.String())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		writer.writeString(strconv.FormatInt(value.Int(), 10))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		writer.writeString(strconv.FormatUint(value.Uint(), 10))
+	case reflect.Float32:
+		writeJSONFloat(writer, value.Float(), 32)
+	case reflect.Float64:
+		writeJSONFloat(writer, value.Float(), 64)
+	case reflect.Array, reflect.Slice:
+		if value.Kind() == reflect.Slice && value.IsNil() {
+			writer.writeString("null")
+			return
+		}
+		writer.writeByte('[')
+		for index := 0; index < value.Len(); index++ {
+			if writer.err != nil {
+				return
+			}
+			if index > 0 {
+				writer.writeByte(',')
+			}
+			writeReflectedJSONValue(writer, value.Index(index))
+		}
+		writer.writeByte(']')
+	case reflect.Map:
+		if value.IsNil() {
+			writer.writeString("null")
+			return
+		}
+		if value.Type().Key().Kind() != reflect.String {
+			writer.err = fmt.Errorf("unsupported Langfuse JSON map key %s", value.Type().Key())
+			return
+		}
+		keys := value.MapKeys()
+		sort.Slice(keys, func(i, j int) bool {
+			return keys[i].String() < keys[j].String()
+		})
+		writer.writeByte('{')
+		for index, key := range keys {
+			if writer.err != nil {
+				return
+			}
+			if index > 0 {
+				writer.writeByte(',')
+			}
+			writeJSONString(writer, key.String())
+			writer.writeByte(':')
+			writeReflectedJSONValue(writer, value.MapIndex(key))
+		}
+		writer.writeByte('}')
+	default:
+		writer.err = fmt.Errorf("unsupported Langfuse JSON value %s", value.Type())
+	}
+}
+
+func writeJSONFloat(writer *boundedJSONCounter, value float64, bits int) {
+	if writer.err != nil {
+		return
+	}
 	if math.IsInf(value, 0) || math.IsNaN(value) {
 		writer.err = fmt.Errorf("unsupported Langfuse JSON number %v", value)
 		return
@@ -338,7 +470,10 @@ func writeJSONFloat(writer *boundedJSONWriter, value float64, bits int) {
 	writer.writeString(strconv.FormatFloat(value, 'g', -1, bits))
 }
 
-func writeJSONMap(writer *boundedJSONWriter, value map[string]any) {
+func writeJSONMap(writer *boundedJSONCounter, value map[string]any) {
+	if writer.err != nil {
+		return
+	}
 	keys := make([]string, 0, len(value))
 	for key := range value {
 		keys = append(keys, key)
@@ -346,6 +481,9 @@ func writeJSONMap(writer *boundedJSONWriter, value map[string]any) {
 	sort.Strings(keys)
 	writer.writeByte('{')
 	for index, key := range keys {
+		if writer.err != nil {
+			return
+		}
 		if index > 0 {
 			writer.writeByte(',')
 		}
@@ -356,7 +494,10 @@ func writeJSONMap(writer *boundedJSONWriter, value map[string]any) {
 	writer.writeByte('}')
 }
 
-func writeJSONString(writer *boundedJSONWriter, value string) {
+func writeJSONString(writer *boundedJSONCounter, value string) {
+	if writer.err != nil {
+		return
+	}
 	const hex = "0123456789abcdef"
 
 	writer.writeByte('"')
