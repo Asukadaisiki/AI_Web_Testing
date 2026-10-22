@@ -2,6 +2,7 @@ package v3
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -104,7 +105,12 @@ func redactTraceJSON(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return nil
 	}
 	encoded, err := json.Marshal(redactTraceValue(value))

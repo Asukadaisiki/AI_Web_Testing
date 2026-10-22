@@ -153,14 +153,14 @@ func TestGetTraceRedactsNestedSensitiveCanonicalJSON(t *testing.T) {
 		Spans: []domain.Span{{
 			ID: "span-row-1", RunID: "run_1", TraceID: "trace_1", SpanID: "operation-1",
 			Kind: domain.SpanOperation, Name: "browser_execute_case", Status: "failed",
-			Input: json.RawMessage(`{"case":{"name":"checkout","token":"span-token"}}`),
-			Output: json.RawMessage(`{"summary":"checkout failed","secret":"span-secret"}`),
+			Input:     json.RawMessage(`{"case":{"name":"checkout","token":"span-token"}}`),
+			Output:    json.RawMessage(`{"summary":"checkout failed","secret":"span-secret"}`),
 			StartedAt: now,
 		}},
 		Attempts: []postgres.TraceAttemptDetail{{
 			ID: "attempt-1", SpanID: "operation-1", AttemptNumber: 1,
-			Status: "failed",
-			Error: json.RawMessage(`{"message":"browser failed","nested":{"password":"attempt-password"}}`),
+			Status:    "failed",
+			Error:     json.RawMessage(`{"message":"browser failed","nested":{"password":"attempt-password"}}`),
 			StartedAt: now,
 		}},
 		Usage: []postgres.TraceUsageDetail{{
@@ -171,10 +171,10 @@ func TestGetTraceRedactsNestedSensitiveCanonicalJSON(t *testing.T) {
 		}},
 		Operations: []postgres.TraceOperationDetail{{
 			ID: "evidence-1", SpanID: "operation-1", OperationID: "operation-call-1",
-			Status: "failed",
-			Result: json.RawMessage(`{"steps":[{"status":"failed","token":"result-token"}],"report":{"summary":"visible report"}}`),
+			Status:    "failed",
+			Result:    json.RawMessage(`{"steps":[{"status":"failed","token":"result-token"}],"report":{"summary":"visible report"}}`),
 			Artifacts: json.RawMessage(`[{"kind":"screenshot","path":"failure.png","metadata":{"api_key":"artifact-api-key"}}]`),
-			Error: json.RawMessage(`{"kind":"worker_error","message":"visible failure","nested":{"cookie":"error-cookie"}}`),
+			Error:     json.RawMessage(`{"kind":"worker_error","message":"visible failure","nested":{"cookie":"error-cookie"}}`),
 			CreatedAt: now, UpdatedAt: now,
 		}},
 	}}
@@ -205,6 +205,43 @@ func TestGetTraceRedactsNestedSensitiveCanonicalJSON(t *testing.T) {
 	}
 	if string(repository.trace.Operations[0].Result) != `{"steps":[{"status":"failed","token":"result-token"}],"report":{"summary":"visible report"}}` {
 		t.Fatalf("handler mutated canonical operation result: %s", repository.trace.Operations[0].Result)
+	}
+}
+
+func TestGetTracePreservesLargeIntegersWhileRedactingSensitiveSiblings(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	repository := &fakeRepository{trace: postgres.TraceDetails{
+		Operations: []postgres.TraceOperationDetail{{
+			ID: "evidence-1", OperationID: "operation-call-1", Status: "failed",
+			Result:    json.RawMessage(`{"nested":{"sequence":9007199254740993,"token":"result-token"}}`),
+			Artifacts: json.RawMessage(`[{"metadata":{"size":9007199254740995,"api_key":"artifact-api-key"}}]`),
+			Error:     json.RawMessage(`{"nested":{"code":9007199254740997,"password":"error-password"}}`),
+			CreatedAt: now, UpdatedAt: now,
+		}},
+	}}
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/runs/run_1/trace", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, required := range []string{
+		`"sequence":9007199254740993`,
+		`"size":9007199254740995`,
+		`"code":9007199254740997`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("trace response changed exact integer %q: %s", required, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`"token"`, `"api_key"`, `"password"`,
+		"result-token", "artifact-api-key", "error-password",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("trace response leaked %q: %s", forbidden, body)
+		}
 	}
 }
 
