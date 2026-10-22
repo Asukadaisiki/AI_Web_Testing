@@ -23,6 +23,13 @@ function modelKey(model: ModelRef): string {
   return `${model.provider}\u0000${model.name}`;
 }
 
+function modelLabel(model: ModelRef): string {
+  if (model.provider === 'scripted' && model.name === 'browser-eval-fixture') {
+    return 'Browser evaluation';
+  }
+  return `${model.provider} / ${model.name}`;
+}
+
 export function Composer({
   agents,
   busy,
@@ -142,7 +149,7 @@ export function Composer({
           >
             {models.map((model) => (
               <option key={modelKey(model)} value={modelKey(model)}>
-                {model.provider} / {model.name}
+                {modelLabel(model)}
               </option>
             ))}
           </select>

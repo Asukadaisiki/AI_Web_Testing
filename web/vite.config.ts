@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react';
 import { configDefaults, defineConfig } from 'vitest/config';
 
 /** Go 控制面地址；前端不含任何执行逻辑，只通过代理调用它。 */
-const GO_API = process.env['AGENTTRACE_API_URL'] ?? 'http://api:8080';
+const GO_API = process.env['AGENTTRACE_API_URL'] ?? 'http://127.0.0.1:8080';
 
 /**
  * 代理必须同时挂在 dev 和 preview 上：`server.proxy` 只对 `vite dev` 生效，

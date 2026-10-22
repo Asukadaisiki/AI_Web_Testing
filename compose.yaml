@@ -152,6 +152,8 @@ services:
     image: node:22-alpine
     working_dir: /app/web
     command: ["sh", "-c", "npm ci --cache /tmp/npm-cache && npm run dev -- --host 0.0.0.0"]
+    environment:
+      AGENTTRACE_API_URL: http://api:8080
     depends_on:
       - api
     ports:

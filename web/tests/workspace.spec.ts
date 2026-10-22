@@ -8,6 +8,7 @@ const screenshots = resolve(process.cwd(), '..', 'artifacts', 'ui');
 
 let canonicalRoute = '';
 let fixtureProjectId = '';
+let fixtureProjectName = '';
 
 interface WaitingRunFixture {
   runId: string;
@@ -103,29 +104,89 @@ function readRunStatus(runId: string): string {
   ).trim();
 }
 
-function cleanupFixtureProject(): void {
-  if (fixtureProjectId === '') return;
-  const output = executeFixtureSQL(`BEGIN;
+function findFixtureProjectIds(): string[] {
+  if (fixtureProjectName === '') return [];
+  return executeFixtureSQL(
+    `SELECT id FROM projects WHERE name = '${fixtureProjectName}';`,
+  )
+    .trim()
+    .split('\n')
+    .filter((id) => id !== '');
+}
+
+function fixtureRuntimeIsQuiescent(): boolean {
+  if (fixtureProjectName === '') return true;
+  const output = executeFixtureSQL(`WITH fixture_project AS (
+      SELECT id FROM projects WHERE name = '${fixtureProjectName}'
+    ), fixture_commands AS (
+      SELECT event_id
+      FROM outbox_events
+      WHERE topic = 'agenttrace.run.commands.v1'
+        AND key IN (SELECT id FROM runs WHERE project_id IN (SELECT id FROM fixture_project))
+        AND published_at IS NOT NULL
+    )
+    SELECT
+      (SELECT COUNT(*) FROM runs
+       WHERE project_id IN (SELECT id FROM fixture_project)
+         AND status NOT IN ('succeeded', 'failed', 'cancelled')) = 0,
+      (SELECT COUNT(*) FROM fixture_commands AS command
+       WHERE NOT EXISTS (
+         SELECT 1 FROM inbox_events
+         WHERE consumer = 'agenttrace-runtime'
+           AND event_id = command.event_id
+           AND processed_at IS NOT NULL
+       )) = 0;`);
+  return output.trim() === 't|t';
+}
+
+async function cleanupFixtureProject(): Promise<void> {
+  if (fixtureProjectName === '') return;
+  const fixtureIds = findFixtureProjectIds();
+  expect(fixtureIds).toHaveLength(1);
+  const fixtureProjectID = fixtureIds[0] ?? '';
+
+  executeFixtureSQL(`BEGIN;
     DELETE FROM outbox_events
-    WHERE key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectId}');
-    DELETE FROM consumer_retry_counts AS retries
-    WHERE EXISTS (
-      SELECT 1 FROM runs
-      WHERE project_id = '${fixtureProjectId}'
-        AND retries.payload::text LIKE '%' || runs.id || '%'
+    WHERE topic = 'agenttrace.run.commands.v1'
+      AND published_at IS NULL
+      AND key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}');
+    UPDATE runs
+    SET status = 'cancelled',
+        cancel_requested_at = COALESCE(cancel_requested_at, now()),
+        finished_at = COALESCE(finished_at, now()),
+        updated_at = now()
+    WHERE project_id = '${fixtureProjectID}'
+      AND status NOT IN ('succeeded', 'failed', 'cancelled');
+  COMMIT;`);
+
+  await expect.poll(fixtureRuntimeIsQuiescent, { timeout: 20_000 }).toBe(true);
+
+  const output = executeFixtureSQL(`BEGIN;
+    DELETE FROM consumer_retry_counts
+    WHERE event_id IN (
+      SELECT event_id FROM outbox_events
+      WHERE key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}')
     );
-    DELETE FROM inbox_events AS inbox
-    WHERE EXISTS (
-      SELECT 1 FROM runs
-      WHERE project_id = '${fixtureProjectId}'
-        AND inbox.payload::text LIKE '%' || runs.id || '%'
+    DELETE FROM inbox_events
+    WHERE event_id IN (
+      SELECT event_id FROM outbox_events
+      WHERE key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}')
     );
-    DELETE FROM runs WHERE project_id = '${fixtureProjectId}';
-    DELETE FROM projects WHERE id = '${fixtureProjectId}';
-    SELECT COUNT(*) FROM projects WHERE id = '${fixtureProjectId}';
+    DELETE FROM outbox_events
+    WHERE key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}');
+    DELETE FROM idempotency_keys
+    WHERE scope IN (
+      SELECT 'run-response:' || id FROM runs WHERE project_id = '${fixtureProjectID}'
+    ) OR response #>> '{run_id}' IN (
+      SELECT id FROM runs WHERE project_id = '${fixtureProjectID}'
+    );
+    DELETE FROM runs WHERE project_id = '${fixtureProjectID}';
+    DELETE FROM projects WHERE id = '${fixtureProjectID}';
+    SELECT COUNT(*) FROM projects WHERE name = '${fixtureProjectName}';
   COMMIT;`);
   expect(output.trim()).toBe('0');
   fixtureProjectId = '';
+  fixtureProjectName = '';
 }
 
 function visibleBox(locator: Locator): Promise<ReturnType<Locator['boundingBox']>> {
@@ -140,21 +201,57 @@ async function expectNoOverlap(first: Locator, second: Locator): Promise<void> {
   expect(firstBox.x + firstBox.width).toBeLessThanOrEqual(secondBox.x);
 }
 
+async function expectNoBoxOverlap(first: Locator, second: Locator): Promise<void> {
+  const [firstBox, secondBox] = await Promise.all([visibleBox(first), visibleBox(second)]);
+  expect(firstBox).not.toBeNull();
+  expect(secondBox).not.toBeNull();
+  if (firstBox === null || secondBox === null) return;
+  const overlaps =
+    firstBox.x < secondBox.x + secondBox.width &&
+    secondBox.x < firstBox.x + firstBox.width &&
+    firstBox.y < secondBox.y + secondBox.height &&
+    secondBox.y < firstBox.y + firstBox.height;
+  expect(overlaps).toBe(false);
+}
+
+async function expectSelectedModelIsFullyVisible(select: Locator): Promise<void> {
+  const selectedText = await select.locator('option:checked').textContent();
+  expect(selectedText).toBe('Browser evaluation');
+  await expect(select).toHaveValue(await select.inputValue());
+  await expect
+    .poll(() =>
+      select.evaluate((element, expectedText) => {
+        const selected = element.selectedOptions.item(0);
+        return (
+          selected?.text === expectedText &&
+          element.scrollWidth <= element.clientWidth
+        );
+      }, selectedText),
+    )
+    .toBe(true);
+}
+
+async function expectPaneBodyFitsViewport(page: Page, pane: Locator): Promise<void> {
+  await expect
+    .poll(() =>
+      page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth),
+    )
+    .toBe(true);
+  await expect
+    .poll(() => pane.evaluate((element) => element.scrollWidth <= element.clientWidth))
+    .toBe(true);
+}
+
 async function createCanonicalWorkspace(page: Page): Promise<void> {
   const suffix = `${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
-  const projectName = `E2E canonical ${suffix}`;
+  fixtureProjectName = `E2E canonical ${suffix}`;
   const conversationTitle = `Browser verification ${suffix}`;
 
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel('Project name').fill(projectName);
+  await page.getByLabel('Project name').fill(fixtureProjectName);
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   const projectSelect = page.getByRole('combobox', { name: 'Select project' });
-  const fixtureProjectIds = executeFixtureSQL(
-    `SELECT id FROM projects WHERE name = '${projectName}';`,
-  )
-    .trim()
-    .split('\n')
-    .filter((id) => id !== '');
+  const fixtureProjectIds = findFixtureProjectIds();
   expect(fixtureProjectIds).toHaveLength(1);
   fixtureProjectId = fixtureProjectIds[0] ?? '';
   expect(fixtureProjectId).toMatch(/^prj_[a-zA-Z0-9]+$/);
@@ -172,8 +269,8 @@ async function createCanonicalWorkspace(page: Page): Promise<void> {
 }
 
 test.describe.serial('AgentTrace workspace', () => {
-  test.afterAll(() => {
-    cleanupFixtureProject();
+  test.afterAll(async () => {
+    await cleanupFixtureProject();
   });
 
   test('sends the canonical goal and preserves a populated desktop trace selection', async ({
@@ -198,6 +295,7 @@ test.describe.serial('AgentTrace workspace', () => {
     await expect(trace).toBeVisible();
     await expectNoOverlap(projects, conversation);
     await expectNoOverlap(conversation, trace);
+    await expectSelectedModelIsFullyVisible(page.getByRole('combobox', { name: 'Model' }));
 
     await page.getByRole('textbox', { name: 'Evaluation message' }).fill(canonicalGoal);
     await page.getByRole('button', { name: 'Send message' }).click();
@@ -266,20 +364,32 @@ test.describe.serial('AgentTrace workspace', () => {
     await page.getByRole('button', { name: 'Show trace' }).click();
     await expect(page.getByRole('complementary', { name: 'Run trace and details' })).toBeVisible();
     expect(page.url()).toBe(route);
-    await expect
-      .poll(() =>
-        page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth),
-      )
-      .toBe(true);
     await page.screenshot({
       path: resolve(screenshots, 'narrow-390x844.png'),
       fullPage: false,
     });
     await page.getByRole('button', { name: 'Show projects and conversations' }).click();
-    await expect(page.getByRole('complementary', {
+    const projects = page.getByRole('complementary', {
       name: 'Projects and conversations',
-    })).toBeVisible();
+    });
+    await expect(projects).toBeVisible();
+    await expectPaneBodyFitsViewport(page, projects);
     expect(page.url()).toBe(route);
+    await page.getByRole('button', { name: 'Show conversation' }).click();
+    const conversation = page.getByRole('main', { name: 'Conversation workspace' });
+    await expect(conversation).toBeVisible();
+    await expectPaneBodyFitsViewport(page, conversation);
+    const agent = page.getByRole('combobox', { name: 'Agent' }).locator('xpath=..');
+    const model = page.getByRole('combobox', { name: 'Model' }).locator('xpath=..');
+    const send = page.getByRole('button', { name: 'Send message' });
+    await expectSelectedModelIsFullyVisible(page.getByRole('combobox', { name: 'Model' }));
+    await expectNoBoxOverlap(agent, model);
+    await expectNoBoxOverlap(agent, send);
+    await expectNoBoxOverlap(model, send);
+    await page.getByRole('button', { name: 'Show trace' }).click();
+    const trace = page.getByRole('complementary', { name: 'Run trace and details' });
+    await expect(trace).toBeVisible();
+    await expectPaneBodyFitsViewport(page, trace);
     expect(consoleErrors).toEqual([]);
   });
 
@@ -333,6 +443,6 @@ test.describe.serial('AgentTrace workspace', () => {
       'approved',
     );
     expect(consoleErrors).toEqual([]);
-    cleanupFixtureProject();
+    await cleanupFixtureProject();
   });
 });
