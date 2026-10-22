@@ -378,27 +378,51 @@ func (s *Store) FinishRun(
 		return err
 	}
 
+	var conversationID string
+	if err := tx.QueryRow(ctx, `
+		SELECT conversation_id
+		FROM runs
+		WHERE id = $1`, runID).Scan(&conversationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load completion conversation: %w", err)
+	}
+	if _, err := lockConversation(ctx, tx, conversationID); err != nil {
+		return err
+	}
+	var lockedConversationID string
+	var existing domain.RunStatus
+	if err := tx.QueryRow(ctx, `
+		SELECT conversation_id, status
+		FROM runs
+		WHERE id = $1
+		FOR UPDATE`, runID).Scan(&lockedConversationID, &existing); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lock run for completion: %w", err)
+	}
+	if lockedConversationID != conversationID {
+		return ErrConflict
+	}
+	if existing == domain.RunSucceeded || existing == domain.RunFailed || existing == domain.RunCancelled {
+		if existing != status {
+			return ErrConflict
+		}
+		return tx.Commit(ctx)
+	}
+
 	tag, err := tx.Exec(ctx, `
 		UPDATE runs
 		SET status = $2, error = $3::jsonb, finished_at = now(), updated_at = now()
-		WHERE id = $1
-		  AND status NOT IN ('succeeded', 'failed', 'cancelled')`,
+		WHERE id = $1`,
 		runID, status, nullableJSON(runError))
 	if err != nil {
 		return fmt.Errorf("finish run: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		var existing domain.RunStatus
-		if err := tx.QueryRow(ctx, `SELECT status FROM runs WHERE id = $1`, runID).Scan(&existing); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("read completed run: %w", err)
-		}
-		if existing != status {
-			return ErrConflict
-		}
-		return tx.Commit(ctx)
+		return ErrNotFound
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE spans
@@ -409,7 +433,7 @@ func (s *Store) FinishRun(
 		runID, status); err != nil {
 		return fmt.Errorf("finish trace root: %w", err)
 	}
-	if err := appendAssistantMessage(ctx, tx, runID, assistant); err != nil {
+	if err := appendAssistantMessage(ctx, tx, conversationID, runID, assistant); err != nil {
 		return err
 	}
 	var seq int64
@@ -445,22 +469,9 @@ func (s *Store) FinishRun(
 	return nil
 }
 
-func appendAssistantMessage(ctx context.Context, tx pgx.Tx, runID, content string) error {
+func appendAssistantMessage(ctx context.Context, tx pgx.Tx, conversationID, runID, content string) error {
 	if strings.TrimSpace(content) == "" {
 		return nil
-	}
-	var conversationID string
-	if err := tx.QueryRow(ctx, `
-		SELECT conversation_id
-		FROM runs
-		WHERE id = $1`, runID).Scan(&conversationID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("load assistant conversation: %w", err)
-	}
-	if err := lockConversationOrdinal(ctx, tx, conversationID); err != nil {
-		return err
 	}
 	messageID, err := newID("msg")
 	if err != nil {
@@ -485,23 +496,6 @@ func appendAssistantMessage(ctx context.Context, tx pgx.Tx, runID, content strin
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrNotFound
-	}
-	return nil
-}
-
-// lockConversationOrdinal serializes message ordinal allocation within one conversation.
-func lockConversationOrdinal(ctx context.Context, tx pgx.Tx, conversationID string) error {
-	var found string
-	err := tx.QueryRow(ctx, `
-		SELECT id
-		FROM conversations
-		WHERE id = $1
-		FOR UPDATE`, conversationID).Scan(&found)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("lock conversation ordinal %q: %w", conversationID, err)
 	}
 	return nil
 }

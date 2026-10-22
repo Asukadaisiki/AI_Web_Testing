@@ -29,6 +29,7 @@ GOAL = (
 EXPECTED_REPORT = "Report: the grounded local storefront case passed with browser evidence."
 EXPECTED_FINAL = "Final: Alpha x 2 is in the cart."
 SSE_IDLE_TIMEOUT = 20
+SSE_RETRY_DELAY = 0.1
 
 
 def request_api(
@@ -85,9 +86,12 @@ def consume_terminal_sse(
     last_event_id = ""
     while time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
-        response = open_stream(last_event_id, min(idle_timeout, remaining))
+        if remaining <= 0:
+            break
+        response = None
         current: dict[str, str] = {}
         try:
+            response = open_stream(last_event_id, min(idle_timeout, remaining))
             while time.monotonic() < deadline:
                 try:
                     raw_line = response.readline()
@@ -120,11 +124,15 @@ def consume_terminal_sse(
                 field, separator, value = line.partition(":")
                 if separator:
                     current[field] = value.lstrip()
+        except (OSError, urllib.error.URLError, socket.timeout, TimeoutError):
+            pass
         finally:
             close = getattr(response, "close", None)
             if callable(close):
                 close()
-        time.sleep(min(0.1, idle_timeout))
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(SSE_RETRY_DELAY, max(idle_timeout, 0.001), remaining))
     raise AssertionError(
         f"did not reach succeeded through SSE in {timeout}s; "
         f"last event={last_event}"

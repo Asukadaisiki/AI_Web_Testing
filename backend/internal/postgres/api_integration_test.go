@@ -307,6 +307,125 @@ func TestSubmitResponseSerializesWithConcurrentMessageCreation(t *testing.T) {
 	}
 }
 
+func TestFinishRunAndSubmitResponseUseConversationThenRunLockOrder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+		ConversationID: conversationID,
+		Content:        "need approval",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+		IdempotencyKey: "finish-response-lock-order",
+	})
+	if err != nil {
+		t.Fatalf("create waiting run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'waiting_approval' WHERE id = $1`, run.ID); err != nil {
+		t.Fatalf("put run in approval wait: %v", err)
+	}
+	const lockKey int64 = 118042026
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_hold_finish_after_run_lock() RETURNS trigger AS $$
+		BEGIN
+			IF NEW.status = 'succeeded' AND OLD.status <> 'succeeded' THEN
+				PERFORM pg_advisory_lock(118042026);
+				PERFORM pg_sleep(0.3);
+				PERFORM pg_advisory_unlock(118042026);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_hold_finish_after_run_lock
+		BEFORE UPDATE ON runs
+		FOR EACH ROW
+		EXECUTE FUNCTION test_hold_finish_after_run_lock();`); err != nil {
+		t.Fatalf("install finish overlap trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS test_hold_finish_after_run_lock ON runs`)
+		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS test_hold_finish_after_run_lock()`)
+	})
+
+	finishErrs := make(chan error, 1)
+	go func() {
+		finishErrs <- store.FinishRun(ctx, run.ID, domain.RunSucceeded, nil, "approved",
+			event.Envelope[json.RawMessage]{
+				SchemaVersion: "agenttrace.event.v1",
+				EventID:       "evt-finish-response-lock-order",
+				EventType:     "runtime.completed",
+				AggregateID:   run.ID,
+				CorrelationID: run.ID,
+				OccurredAt:    time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC),
+				Payload:       json.RawMessage(`{"status":"succeeded"}`),
+			})
+	}()
+	for {
+		var acquired bool
+		if err := pool.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKey).Scan(&acquired); err != nil {
+			t.Fatalf("observe finish run lock: %v", err)
+		}
+		if !acquired {
+			break
+		}
+		if _, err := pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey); err != nil {
+			t.Fatalf("release probe advisory lock: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("FinishRun did not reach the deterministic overlap point: %v", ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	responseErrs := make(chan error, 1)
+	go func() {
+		responseErrs <- store.SubmitResponse(ctx, SubmitResponseParams{
+			RunID:          run.ID,
+			Kind:           "approval",
+			Content:        "approved",
+			IdempotencyKey: "finish-response-overlap",
+			Continuation:   true,
+		})
+	}()
+
+	var finishErr, responseErr error
+	select {
+	case finishErr = <-finishErrs:
+	case <-ctx.Done():
+		t.Fatalf("FinishRun timed out: %v", ctx.Err())
+	}
+	select {
+	case responseErr = <-responseErrs:
+	case <-ctx.Done():
+		t.Fatalf("SubmitResponse timed out: %v", ctx.Err())
+	}
+	if finishErr != nil {
+		t.Fatalf("FinishRun failed during lock overlap: %v", finishErr)
+	}
+	if responseErr != nil && !errors.Is(responseErr, ErrConflict) {
+		t.Fatalf("SubmitResponse error = %v, want nil or ErrConflict", responseErr)
+	}
+	finished, err := store.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("read serialized run: %v", err)
+	}
+	if finished.Status != domain.RunSucceeded {
+		t.Fatalf("serialized run status = %q, want succeeded", finished.Status)
+	}
+	var messageCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM messages WHERE conversation_id = $1`, conversationID).Scan(&messageCount); err != nil {
+		t.Fatalf("count serialized messages: %v", err)
+	}
+	if responseErr == nil && messageCount != 3 {
+		t.Fatalf("successful response messages = %d, want 3", messageCount)
+	}
+	if errors.Is(responseErr, ErrConflict) && messageCount != 2 {
+		t.Fatalf("conflicted response messages = %d, want 2", messageCount)
+	}
+}
+
 func TestSubmitResponseMissingRunReturnsNotFound(t *testing.T) {
 	ctx, _, store := newRepositoryTestStore(t)
 	err := store.SubmitResponse(ctx, SubmitResponseParams{
