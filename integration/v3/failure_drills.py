@@ -34,6 +34,33 @@ EVENT_TOPIC = "agenttrace.run.events.v1"
 RUNTIME_CONSUMER = "agenttrace-runtime"
 EXPORTER_CONSUMER = "agenttrace-langfuse-exporter"
 DEFAULT_WAIT_SECONDS = 120.0
+EXPORTER_FIXTURE_ENV = {
+    "AGENTTRACE_LANGFUSE_BASE_URL": "http://127.0.0.1:9",
+    "AGENTTRACE_LANGFUSE_PUBLIC_KEY": "agenttrace-failure-drill-public",
+    "AGENTTRACE_LANGFUSE_SECRET_KEY": "agenttrace-failure-drill-secret",
+}
+
+
+def parse_consumer_group_offsets(output: str, topic: str) -> dict[int, int]:
+    """Extract committed offsets for one topic from Kafka's group description."""
+    offsets: dict[int, int] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 6 or fields[0] == "GROUP" or fields[1] != topic:
+            continue
+        try:
+            partition = int(fields[2])
+            offset = int(fields[3])
+        except ValueError as error:
+            raise AssertionError(
+                f"Kafka group has no committed offset for topic {topic!r}: {line}"
+            ) from error
+        offsets[partition] = offset
+    if not offsets:
+        raise AssertionError(
+            f"Kafka group description has no offsets for topic {topic!r}: {output[-2000:]}"
+        )
+    return offsets
 
 
 @dataclass(frozen=True)
@@ -122,10 +149,8 @@ class FailureDrills:
         self._wait_stack()
         scenario = self._create_workspace("postgres-outage")
         agent = self._agent()
-        command_count = self._scalar(
-            "SELECT count(*) FROM outbox_events WHERE topic = %s",
-            (COMMAND_TOPIC,),
-        )
+        body = self._message_body("postgres-outage", agent)
+        idempotency_key = str(body["idempotency_key"])
         accepted_status: int | None = None
         accepted_body: dict[str, Any] = {}
         self._stop("postgres")
@@ -138,7 +163,7 @@ class FailureDrills:
             accepted_status, accepted_body = request_api(
                 f"/api/v1/conversations/{scenario.conversation_id}/messages",
                 method="POST",
-                body=self._message_body("postgres-outage", agent),
+                body=body,
                 timeout=15,
             )
             if accepted_status != 503:
@@ -150,15 +175,10 @@ class FailureDrills:
             self._start("postgres")
             self._wait_stack()
 
-        after_count = self._scalar(
-            "SELECT count(*) FROM outbox_events WHERE topic = %s",
-            (COMMAND_TOPIC,),
+        self._assert_rejected_postgres_request_absent(
+            conversation_id=scenario.conversation_id,
+            idempotency_key=idempotency_key,
         )
-        if after_count != command_count:
-            raise AssertionError(
-                "PostgreSQL outage created a command outbox row despite HTTP 503; "
-                f"before={command_count}, after={after_count}, body={accepted_body}"
-            )
 
     def exporter_outage(self) -> None:
         """An optional exporter failure cannot block local completion."""
@@ -202,20 +222,20 @@ class FailureDrills:
                 "source command did not produce exactly one inbox row, operation result, "
                 f"and assistant message before duplicate injection: {before}"
             )
+        before_offsets = self._runtime_consumer_offsets()
         self._inject_duplicate_command(payload)
 
-        observed_after = time.monotonic() + 2.0
-
-        def duplicate_remains_deduplicated() -> bool:
-            if time.monotonic() < observed_after:
-                return False
-            return self._duplicate_effect_counts(scenario.run_id, event_id) == before
-
         self._wait(
-            "Kafka-injected duplicate leaves inbox, effect, and result cardinality unchanged",
-            duplicate_remains_deduplicated,
+            "runtime consumer commits the Kafka-injected duplicate command",
+            lambda: self._runtime_consumer_offsets_advanced(before_offsets),
             run_id=scenario.run_id,
         )
+        after = self._duplicate_effect_counts(scenario.run_id, event_id)
+        if after != before:
+            raise AssertionError(
+                "consumed Kafka duplicate changed durable effect cardinalities: "
+                f"before={before}, after={after}"
+            )
 
     def _create_workspace(self, label: str) -> Scenario:
         token = uuid.uuid4().hex
@@ -360,6 +380,36 @@ class FailureDrills:
             raise AssertionError(f"run {run_id} status={status!r}, want queued")
         return published_at is None
 
+    def _assert_rejected_postgres_request_absent(
+        self, *, conversation_id: str, idempotency_key: str
+    ) -> None:
+        message_count, run_count, command_count, idempotency_count = self._row(
+            """
+            SELECT
+              (SELECT count(*) FROM messages
+               WHERE conversation_id = %s AND role = 'user'),
+              (SELECT count(*) FROM runs
+               WHERE conversation_id = %s),
+              (SELECT count(*) FROM outbox_events AS event
+               JOIN runs ON runs.id = event.key
+               WHERE runs.conversation_id = %s AND event.topic = 'agenttrace.run.commands.v1'),
+              (SELECT count(*) FROM idempotency_keys
+               WHERE key = %s)
+            """,
+            (conversation_id, conversation_id, conversation_id, idempotency_key),
+        )
+        counts = (
+            int(message_count),
+            int(run_count),
+            int(command_count),
+            int(idempotency_count),
+        )
+        if counts != (0, 0, 0, 0):
+            raise AssertionError(
+                "PostgreSQL outage request left scoped durable state despite HTTP 503: "
+                f"conversation={conversation_id}, message/run/command/idempotency={counts}"
+            )
+
     def _redis_postgres_poll(self) -> bool:
         status, health = request_api("/api/v1/health")
         redis = health.get("dependencies", {}).get("redis", {})
@@ -404,15 +454,15 @@ class FailureDrills:
         return str(event_id)
 
     def _export_retry_visible(self, completion_event_id: str) -> bool:
-        (retry_count,) = self._row(
+        (attempt_count,) = self._row(
             """
-            SELECT count(*)
+            SELECT attempt_count
             FROM consumer_retry_counts
             WHERE consumer = %s AND event_id = %s
             """,
             (EXPORTER_CONSUMER, completion_event_id),
         )
-        return retry_count >= 1
+        return int(attempt_count) >= 2
 
     def _exporter_caught_up(self) -> bool:
         with psycopg.connect(POSTGRES_DSN, connect_timeout=5) as connection:
@@ -471,6 +521,27 @@ class FailureDrills:
         )
         return str(payload), str(event_id)
 
+    def _runtime_consumer_offsets(self) -> dict[int, int]:
+        result = self._compose(
+            "exec",
+            "-T",
+            "kafka",
+            "/opt/kafka/bin/kafka-consumer-groups.sh",
+            "--bootstrap-server",
+            "kafka:9092",
+            "--describe",
+            "--group",
+            RUNTIME_CONSUMER,
+        )
+        return parse_consumer_group_offsets(result.stdout, COMMAND_TOPIC)
+
+    def _runtime_consumer_offsets_advanced(self, before: dict[int, int]) -> bool:
+        after = self._runtime_consumer_offsets()
+        return any(
+            partition in after and after[partition] > offset
+            for partition, offset in before.items()
+        )
+
     def _duplicate_effect_counts(self, run_id: str, event_id: str) -> tuple[int, int, int]:
         inbox, operation_results, assistant_messages = self._row(
             """
@@ -499,7 +570,14 @@ class FailureDrills:
         )
 
     def _ensure_exporter(self) -> None:
-        self._compose("--profile", "langfuse", "up", "-d", "exporter")
+        self._compose(
+            "--profile",
+            "langfuse",
+            "up",
+            "-d",
+            "exporter",
+            environment=EXPORTER_FIXTURE_ENV,
+        )
         self._wait_service_running("exporter")
 
     def _wait_stack(self) -> None:
@@ -549,8 +627,13 @@ class FailureDrills:
         self,
         *args: str,
         input_text: str | None = None,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         command = ["docker", "compose", *args]
+        child_environment = None
+        if environment is not None:
+            child_environment = os.environ.copy()
+            child_environment.update(environment)
         try:
             result = subprocess.run(
                 command,
@@ -560,6 +643,7 @@ class FailureDrills:
                 capture_output=True,
                 timeout=30,
                 check=False,
+                env=child_environment,
             )
         except subprocess.TimeoutExpired as error:
             raise AssertionError(f"timed out after 30s: {' '.join(command)}") from error
@@ -638,6 +722,10 @@ class FailureDrills:
                 result["outbox"] = outbox
             except Exception as error:
                 result["postgres_error"] = str(error)
+        try:
+            result["runtime_command_offsets"] = self._runtime_consumer_offsets()
+        except Exception as error:
+            result["runtime_command_offsets_error"] = str(error)
         try:
             compose = self._compose("ps", "--format", "json")
             result["services"] = [
