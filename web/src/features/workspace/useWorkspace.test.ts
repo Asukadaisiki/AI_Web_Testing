@@ -11,9 +11,12 @@ import {
   listProjects,
   getHealth,
   type ConversationDetail,
+  type OperationEvidence,
   type Run,
   type Span,
+  type SpanAttempt,
   type Trace,
+  type UsageRecord,
 } from '../../api';
 import { useWorkspace } from './useWorkspace';
 
@@ -208,6 +211,69 @@ describe('workspace request freshness', () => {
     });
     expect(result.current.run?.id).toBe('run-2');
     expect(result.current.spans[0]?.run_id).toBe('run-2');
+  });
+
+  it('clears canonical run state while a newly selected run is loading', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?project=project-1&conversation=conversation-1&run=run-1',
+    );
+    vi.mocked(getConversation).mockResolvedValue(
+      conversation('conversation-1', ['run-1', 'run-2']),
+    );
+    const runTwo = deferred<Run>();
+    const traceTwo = deferred<Trace>();
+    const attempt: SpanAttempt = {
+      id: 'attempt-run-1',
+      span_id: 'span-run-1',
+      attempt_number: 1,
+      status: 'failed',
+      started_at: '2026-10-21T12:00:00Z',
+    };
+    const usage: UsageRecord = {
+      id: 'usage-run-1',
+      span_id: 'span-run-1',
+      input_tokens: 3,
+      output_tokens: 2,
+      total_tokens: 5,
+      cost_micros: 7,
+      details: {},
+      created_at: '2026-10-21T12:00:00Z',
+    };
+    const operation: OperationEvidence = {
+      id: 'operation-run-1',
+      span_id: 'span-run-1',
+      operation_id: 'browser_execute_case',
+      status: 'failed',
+      artifacts: [],
+      created_at: '2026-10-21T12:00:00Z',
+      updated_at: '2026-10-21T12:00:00Z',
+    };
+    vi.mocked(getRun)
+      .mockResolvedValueOnce(run('run-1'))
+      .mockImplementationOnce(() => runTwo.promise);
+    vi.mocked(getTrace)
+      .mockResolvedValueOnce({
+        spans: [span('run-1')],
+        attempts: [attempt],
+        usage: [usage],
+        operation_evidence: [operation],
+      })
+      .mockImplementationOnce(() => traceTwo.promise);
+
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.operationEvidence).toEqual([operation]));
+
+    act(() => result.current.selectRun('run-2'));
+    await waitFor(() => expect(getRun).toHaveBeenCalledWith('run-2'));
+
+    expect(result.current.selection.runId).toBe('run-2');
+    expect(result.current.run).toBeNull();
+    expect(result.current.spans).toEqual([]);
+    expect(result.current.attempts).toEqual([]);
+    expect(result.current.usage).toEqual([]);
+    expect(result.current.operationEvidence).toEqual([]);
   });
 
   it('suppresses an older overlapping run refetch failure', async () => {

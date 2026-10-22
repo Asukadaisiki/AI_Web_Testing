@@ -3,6 +3,7 @@ package v3
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
@@ -67,6 +68,74 @@ type publicOperationEvidence struct {
 	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
+// publicTraceSpan contains the trace node fields the workspace renders. JSON
+// payloads are copied through redactTraceJSON before leaving the API boundary.
+type publicTraceSpan struct {
+	ID           string          `json:"id"`
+	RunID        string          `json:"run_id"`
+	TraceID      string          `json:"trace_id"`
+	SpanID       string          `json:"span_id"`
+	ParentSpanID string          `json:"parent_span_id,omitempty"`
+	Kind         domain.SpanKind `json:"kind"`
+	Name         string          `json:"name"`
+	Status       string          `json:"status"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	Output       json.RawMessage `json:"output,omitempty"`
+	StartedAt    time.Time       `json:"started_at"`
+	EndedAt      *time.Time      `json:"ended_at,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+var traceSecretFields = map[string]struct{}{
+	"authorization": {},
+	"cookie":        {},
+	"password":      {},
+	"token":         {},
+	"api_key":       {},
+	"secret":        {},
+}
+
+// redactTraceJSON keeps the public trace useful while omitting secret-bearing
+// map entries at every nesting level. It always creates a new value, leaving
+// the canonical PostgreSQL payload untouched.
+func redactTraceJSON(raw json.RawMessage) json.RawMessage {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	encoded, err := json.Marshal(redactTraceValue(value))
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+func redactTraceValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if _, secret := traceSecretFields[strings.ToLower(strings.TrimSpace(key))]; secret {
+				continue
+			}
+			result[key] = redactTraceValue(item)
+		}
+		return result
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = redactTraceValue(item)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRepository(w) {
 		return
@@ -99,6 +168,25 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, err)
 		return
 	}
+	spans := make([]publicTraceSpan, 0, len(trace.Spans))
+	for _, span := range trace.Spans {
+		spans = append(spans, publicTraceSpan{
+			ID:           span.ID,
+			RunID:        span.RunID,
+			TraceID:      span.TraceID,
+			SpanID:       span.SpanID,
+			ParentSpanID: span.ParentSpanID,
+			Kind:         span.Kind,
+			Name:         span.Name,
+			Status:       span.Status,
+			Input:        redactTraceJSON(span.Input),
+			Output:       redactTraceJSON(span.Output),
+			StartedAt:    span.StartedAt,
+			EndedAt:      span.EndedAt,
+			CreatedAt:    span.CreatedAt,
+			UpdatedAt:    span.UpdatedAt,
+		})
+	}
 	attempts := make([]publicTraceAttempt, 0, len(trace.Attempts))
 	for _, attempt := range trace.Attempts {
 		attempts = append(attempts, publicTraceAttempt{
@@ -108,7 +196,7 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 			Provider:      attempt.Provider,
 			OperationID:   attempt.OperationID,
 			Status:        attempt.Status,
-			Error:         attempt.Error,
+			Error:         redactTraceJSON(attempt.Error),
 			StartedAt:     attempt.StartedAt,
 			EndedAt:       attempt.EndedAt,
 		})
@@ -125,7 +213,7 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 			OutputTokens:  record.OutputTokens,
 			TotalTokens:   record.TotalTokens,
 			CostMicros:    record.CostMicros,
-			Details:       record.Details,
+			Details:       redactTraceJSON(record.Details),
 			CreatedAt:     record.CreatedAt,
 		})
 	}
@@ -137,15 +225,15 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 			SpanAttemptID: operation.SpanAttemptID,
 			OperationID:   operation.OperationID,
 			Status:        operation.Status,
-			Result:        operation.Result,
-			Artifacts:     operation.Artifacts,
-			Error:         operation.Error,
+			Result:        redactTraceJSON(operation.Result),
+			Artifacts:     redactTraceJSON(operation.Artifacts),
+			Error:         redactTraceJSON(operation.Error),
 			CreatedAt:     operation.CreatedAt,
 			UpdatedAt:     operation.UpdatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"spans":              trace.Spans,
+		"spans":              spans,
 		"attempts":           attempts,
 		"usage":              usage,
 		"operation_evidence": operations,

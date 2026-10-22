@@ -424,12 +424,12 @@ export function useWorkspace(): WorkspaceState {
     setEvents([]);
     setConnected(false);
     setStreamError(null);
+    setRun(null);
+    setSpans([]);
+    setAttempts([]);
+    setUsage([]);
+    setOperationEvidence([]);
     if (runId === null) {
-      setRun(null);
-      setSpans([]);
-      setAttempts([]);
-      setUsage([]);
-      setOperationEvidence([]);
       return;
     }
     let cancelled = false;

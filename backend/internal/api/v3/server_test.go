@@ -147,6 +147,67 @@ func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
 	}
 }
 
+func TestGetTraceRedactsNestedSensitiveCanonicalJSON(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	repository := &fakeRepository{trace: postgres.TraceDetails{
+		Spans: []domain.Span{{
+			ID: "span-row-1", RunID: "run_1", TraceID: "trace_1", SpanID: "operation-1",
+			Kind: domain.SpanOperation, Name: "browser_execute_case", Status: "failed",
+			Input: json.RawMessage(`{"case":{"name":"checkout","token":"span-token"}}`),
+			Output: json.RawMessage(`{"summary":"checkout failed","secret":"span-secret"}`),
+			StartedAt: now,
+		}},
+		Attempts: []postgres.TraceAttemptDetail{{
+			ID: "attempt-1", SpanID: "operation-1", AttemptNumber: 1,
+			Status: "failed",
+			Error: json.RawMessage(`{"message":"browser failed","nested":{"password":"attempt-password"}}`),
+			StartedAt: now,
+		}},
+		Usage: []postgres.TraceUsageDetail{{
+			ID: "usage-1", SpanID: "operation-1", InputTokens: 12, OutputTokens: 8,
+			TotalTokens: 20, CostMicros: 44,
+			Details:   json.RawMessage(`{"cached_tokens":2,"headers":{"authorization":"usage-authorization"}}`),
+			CreatedAt: now,
+		}},
+		Operations: []postgres.TraceOperationDetail{{
+			ID: "evidence-1", SpanID: "operation-1", OperationID: "operation-call-1",
+			Status: "failed",
+			Result: json.RawMessage(`{"steps":[{"status":"failed","token":"result-token"}],"report":{"summary":"visible report"}}`),
+			Artifacts: json.RawMessage(`[{"kind":"screenshot","path":"failure.png","metadata":{"api_key":"artifact-api-key"}}]`),
+			Error: json.RawMessage(`{"kind":"worker_error","message":"visible failure","nested":{"cookie":"error-cookie"}}`),
+			CreatedAt: now, UpdatedAt: now,
+		}},
+	}}
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/runs/run_1/trace", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, forbidden := range []string{
+		`"authorization"`, `"cookie"`, `"password"`, `"token"`, `"api_key"`, `"secret"`,
+		"span-token", "span-secret", "attempt-password", "usage-authorization",
+		"result-token", "artifact-api-key", "error-cookie",
+	} {
+		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
+			t.Fatalf("trace response leaked %q: %s", forbidden, body)
+		}
+	}
+	for _, required := range []string{
+		`"name":"checkout"`, `"summary":"checkout failed"`, `"cached_tokens":2`,
+		`"status":"failed"`, `"summary":"visible report"`, `"kind":"screenshot"`,
+		`"path":"failure.png"`, `"message":"visible failure"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("trace response omitted usable canonical field %q: %s", required, body)
+		}
+	}
+	if string(repository.trace.Operations[0].Result) != `{"steps":[{"status":"failed","token":"result-token"}],"report":{"summary":"visible report"}}` {
+		t.Fatalf("handler mutated canonical operation result: %s", repository.trace.Operations[0].Result)
+	}
+}
+
 func TestSendMessageDuplicateIdempotencyKeyReturnsSameRun(t *testing.T) {
 	repository := &fakeRepository{}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
