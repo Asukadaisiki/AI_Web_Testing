@@ -2,9 +2,18 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import {
+  fixtureCleanupDiagnostics,
+  fixtureCleanupIsSafe,
+  type FixtureCleanupState,
+} from '../test-utils/fixture-cleanup';
+
 const canonicalGoal =
   'Filter alpha, add two items to the cart, and verify the cart summary.';
 const screenshots = resolve(process.cwd(), '..', 'artifacts', 'ui');
+const cleanupAPIRoot = process.env['AGENTTRACE_API_URL'] ?? 'http://127.0.0.1:8080';
+const cleanupTimeoutMS = 20_000;
+const cleanupPollIntervalMS = 250;
 
 let canonicalRoute = '';
 let fixtureProjectId = '';
@@ -114,29 +123,111 @@ function findFixtureProjectIds(): string[] {
     .filter((id) => id !== '');
 }
 
-function fixtureRuntimeIsQuiescent(): boolean {
-  if (fixtureProjectName === '') return true;
-  const output = executeFixtureSQL(`WITH fixture_project AS (
-      SELECT id FROM projects WHERE name = '${fixtureProjectName}'
+function quoteFixtureIDs(ids: string[]): string {
+  for (const id of ids) expect(id).toMatch(/^run_[a-zA-Z0-9]+$/);
+  return ids.map((id) => `'${id}'`).join(', ');
+}
+
+function findFixtureRunIds(fixtureProjectID: string): string[] {
+  expect(fixtureProjectID).toMatch(/^prj_[a-zA-Z0-9]+$/);
+  return executeFixtureSQL(
+    `SELECT id FROM runs WHERE project_id = '${fixtureProjectID}' ORDER BY id;`,
+  )
+    .trim()
+    .split('\n')
+    .filter((id) => id !== '');
+}
+
+function readFixtureCleanupState(
+  fixtureProjectID: string,
+  fixtureRunIds: string[],
+): FixtureCleanupState {
+  const runIDs = quoteFixtureIDs(fixtureRunIds);
+  const scopedRuns = fixtureRunIds.length === 0
+    ? `SELECT id, status FROM runs WHERE false`
+    : `SELECT id, status FROM runs WHERE id IN (${runIDs})`;
+  const scopedOutbox = fixtureRunIds.length === 0
+    ? `SELECT event_id, topic, published_at, locked_by, claim_token FROM outbox_events WHERE false`
+    : `SELECT event_id, topic, published_at, locked_by, claim_token
+       FROM outbox_events WHERE key IN (${runIDs})`;
+  const output = executeFixtureSQL(`WITH fixture_runs AS (
+      ${scopedRuns}
+    ), fixture_outbox AS (
+      ${scopedOutbox}
     ), fixture_commands AS (
-      SELECT event_id
-      FROM outbox_events
+      SELECT event_id, published_at, locked_by, claim_token
+      FROM fixture_outbox
       WHERE topic = 'agenttrace.run.commands.v1'
-        AND key IN (SELECT id FROM runs WHERE project_id IN (SELECT id FROM fixture_project))
-        AND published_at IS NOT NULL
     )
     SELECT
+      ${fixtureRunIds.length},
+      (SELECT COUNT(*) FROM fixture_runs),
+      (SELECT COUNT(*) FROM fixture_runs
+       WHERE status IN ('succeeded', 'failed', 'cancelled')),
       (SELECT COUNT(*) FROM runs
-       WHERE project_id IN (SELECT id FROM fixture_project)
-         AND status NOT IN ('succeeded', 'failed', 'cancelled')) = 0,
+       WHERE project_id = '${fixtureProjectID}'
+         AND id NOT IN (${fixtureRunIds.length === 0 ? "''" : runIDs})),
+      (SELECT COUNT(*) FROM fixture_commands),
+      (SELECT COUNT(*) FROM fixture_commands WHERE published_at IS NOT NULL),
       (SELECT COUNT(*) FROM fixture_commands AS command
-       WHERE NOT EXISTS (
+       WHERE command.published_at IS NOT NULL AND EXISTS (
          SELECT 1 FROM inbox_events
          WHERE consumer = 'agenttrace-runtime'
            AND event_id = command.event_id
            AND processed_at IS NOT NULL
-       )) = 0;`);
-  return output.trim() === 't|t';
+       )),
+      (SELECT COUNT(*) FROM fixture_outbox WHERE published_at IS NULL),
+      (SELECT COUNT(*) FROM fixture_commands
+       WHERE published_at IS NULL
+         AND (locked_by IS NOT NULL OR claim_token IS NOT NULL));`);
+  const counts = output.trim().split('|').map((value) => Number.parseInt(value, 10));
+  expect(counts).toHaveLength(9);
+  expect(counts.every(Number.isFinite)).toBe(true);
+  return {
+    expectedRunCount: counts[0] ?? 0,
+    runCount: counts[1] ?? 0,
+    terminalRunCount: counts[2] ?? 0,
+    unexpectedRunCount: counts[3] ?? 0,
+    commandCount: counts[4] ?? 0,
+    publishedCommandCount: counts[5] ?? 0,
+    processedCommandCount: counts[6] ?? 0,
+    unpublishedOutboxCount: counts[7] ?? 0,
+    claimedUnpublishedCommandCount: counts[8] ?? 0,
+  };
+}
+
+async function requestFixtureCancellation(runId: string): Promise<void> {
+  const response = await fetch(
+    `${cleanupAPIRoot}/api/v1/runs/${encodeURIComponent(runId)}/cancel`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    },
+  );
+  if (response.status !== 202) {
+    const body = (await response.text()).slice(0, 256);
+    throw new Error(`fixture cleanup could not cancel ${runId}: ${response.status} ${body}`);
+  }
+}
+
+async function waitForFixtureCleanupSafety(
+  fixtureProjectID: string,
+  fixtureRunIds: string[],
+): Promise<void> {
+  const deadline = Date.now() + cleanupTimeoutMS;
+  let state = readFixtureCleanupState(fixtureProjectID, fixtureRunIds);
+  while (!fixtureCleanupIsSafe(state)) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `fixture cleanup timed out without deleting data: ${fixtureCleanupDiagnostics(state)}`,
+      );
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, cleanupPollIntervalMS);
+    });
+    state = readFixtureCleanupState(fixtureProjectID, fixtureRunIds);
+  }
 }
 
 async function cleanupFixtureProject(): Promise<void> {
@@ -144,47 +235,52 @@ async function cleanupFixtureProject(): Promise<void> {
   const fixtureIds = findFixtureProjectIds();
   expect(fixtureIds).toHaveLength(1);
   const fixtureProjectID = fixtureIds[0] ?? '';
-
-  executeFixtureSQL(`BEGIN;
-    DELETE FROM outbox_events
-    WHERE topic = 'agenttrace.run.commands.v1'
-      AND published_at IS NULL
-      AND key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}');
-    UPDATE runs
-    SET status = 'cancelled',
-        cancel_requested_at = COALESCE(cancel_requested_at, now()),
-        finished_at = COALESCE(finished_at, now()),
-        updated_at = now()
+  expect(fixtureProjectID).toBe(fixtureProjectId);
+  const fixtureRunIds = findFixtureRunIds(fixtureProjectID);
+  const activeRunIds = executeFixtureSQL(`SELECT id FROM runs
     WHERE project_id = '${fixtureProjectID}'
-      AND status NOT IN ('succeeded', 'failed', 'cancelled');
-  COMMIT;`);
+      AND status NOT IN ('succeeded', 'failed', 'cancelled')
+    ORDER BY id;`)
+    .trim()
+    .split('\n')
+    .filter((id) => id !== '');
+  expect(activeRunIds.every((id) => fixtureRunIds.includes(id))).toBe(true);
+  await Promise.all(activeRunIds.map(requestFixtureCancellation));
 
-  await expect.poll(fixtureRuntimeIsQuiescent, { timeout: 20_000 }).toBe(true);
+  await waitForFixtureCleanupSafety(fixtureProjectID, fixtureRunIds);
 
+  const runIDs = quoteFixtureIDs(fixtureRunIds);
   const output = executeFixtureSQL(`BEGIN;
     DELETE FROM consumer_retry_counts
     WHERE event_id IN (
       SELECT event_id FROM outbox_events
-      WHERE key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}')
+      WHERE key IN (${fixtureRunIds.length === 0 ? "''" : runIDs})
     );
     DELETE FROM inbox_events
     WHERE event_id IN (
       SELECT event_id FROM outbox_events
-      WHERE key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}')
+      WHERE key IN (${fixtureRunIds.length === 0 ? "''" : runIDs})
     );
     DELETE FROM outbox_events
-    WHERE key IN (SELECT id FROM runs WHERE project_id = '${fixtureProjectID}');
+    WHERE key IN (${fixtureRunIds.length === 0 ? "''" : runIDs});
     DELETE FROM idempotency_keys
     WHERE scope IN (
-      SELECT 'run-response:' || id FROM runs WHERE project_id = '${fixtureProjectID}'
+      SELECT 'run-response:' || id FROM runs
+      WHERE project_id = '${fixtureProjectID}' AND id IN (${fixtureRunIds.length === 0 ? "''" : runIDs})
     ) OR response #>> '{run_id}' IN (
-      SELECT id FROM runs WHERE project_id = '${fixtureProjectID}'
+      SELECT id FROM runs
+      WHERE project_id = '${fixtureProjectID}' AND id IN (${fixtureRunIds.length === 0 ? "''" : runIDs})
     );
-    DELETE FROM runs WHERE project_id = '${fixtureProjectID}';
-    DELETE FROM projects WHERE id = '${fixtureProjectID}';
-    SELECT COUNT(*) FROM projects WHERE name = '${fixtureProjectName}';
+    DELETE FROM runs
+    WHERE project_id = '${fixtureProjectID}' AND id IN (${fixtureRunIds.length === 0 ? "''" : runIDs});
+    DELETE FROM projects
+    WHERE id = '${fixtureProjectID}' AND name = '${fixtureProjectName}';
+    SELECT
+      (SELECT COUNT(*) FROM projects
+       WHERE id = '${fixtureProjectID}' AND name = '${fixtureProjectName}'),
+      (SELECT COUNT(*) FROM runs WHERE project_id = '${fixtureProjectID}');
   COMMIT;`);
-  expect(output.trim()).toBe('0');
+  expect(output.trim()).toBe('0|0');
   fixtureProjectId = '';
   fixtureProjectName = '';
 }
