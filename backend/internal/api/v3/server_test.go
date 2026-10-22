@@ -96,6 +96,57 @@ func TestGetRunDoesNotExposeInternalSpecification(t *testing.T) {
 	}
 }
 
+func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	repository := &fakeRepository{trace: postgres.TraceDetails{
+		Spans: []domain.Span{{
+			ID: "span-row-1", RunID: "run_1", TraceID: "trace_1", SpanID: "operation-1",
+			Kind: domain.SpanOperation, Name: "browser_execute_case", Status: "failed",
+			Input: json.RawMessage(`{"case":{"name":"checkout"}}`), StartedAt: now,
+		}},
+		Attempts: []postgres.TraceAttemptDetail{{
+			ID: "attempt-1", SpanID: "operation-1", AttemptNumber: 1,
+			OperationID: "operation-call-1", Status: "failed",
+			Error:     json.RawMessage(`{"kind":"worker_error","message":"browser failed"}`),
+			StartedAt: now,
+		}},
+		Usage: []postgres.TraceUsageDetail{{
+			ID: "usage-1", SpanID: "operation-1", SpanAttemptID: "attempt-1",
+			Provider: "openai-compatible", Model: "fixture",
+			InputTokens: 12, OutputTokens: 8, TotalTokens: 20, CostMicros: 44,
+			Details: json.RawMessage(`{"cached_tokens":2}`), CreatedAt: now,
+		}},
+		Operations: []postgres.TraceOperationDetail{{
+			ID: "evidence-1", SpanID: "operation-1", SpanAttemptID: "attempt-1",
+			OperationID: "operation-call-1", Status: "failed",
+			Result:    json.RawMessage(`{"steps":[{"status":"failed"}]}`),
+			Artifacts: json.RawMessage(`[{"kind":"screenshot","path":"failure.png"}]`),
+			Error:     json.RawMessage(`{"kind":"worker_error","message":"browser failed"}`),
+			CreatedAt: now, UpdatedAt: now,
+		}},
+	}}
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/runs/run_1/trace", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, required := range []string{
+		`"attempts"`, `"attempt_number":1`, `"usage"`, `"total_tokens":20`,
+		`"operation_evidence"`, `"artifacts"`, `"failure.png"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("trace response missing %q: %s", required, body)
+		}
+	}
+	for _, forbidden := range []string{`"request"`, `"response"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("trace response leaked attempt %s: %s", forbidden, body)
+		}
+	}
+}
+
 func TestSendMessageDuplicateIdempotencyKeyReturnsSameRun(t *testing.T) {
 	repository := &fakeRepository{}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
@@ -400,6 +451,7 @@ type fakeRepository struct {
 	response       postgres.SubmitResponseParams
 	pendingOutbox  int
 	run            domain.Run
+	trace          postgres.TraceDetails
 }
 
 func (r *fakeRepository) CreateMessageAndRun(_ context.Context, input postgres.CreateMessageParams) (domain.Message, domain.Run, error) {
@@ -441,6 +493,9 @@ func (r *fakeRepository) GetRun(context.Context, string) (domain.Run, error) {
 	return domain.Run{}, postgres.ErrNotFound
 }
 func (r *fakeRepository) ListTrace(context.Context, string) ([]domain.Span, error) { return nil, nil }
+func (r *fakeRepository) GetTraceDetails(context.Context, string) (postgres.TraceDetails, error) {
+	return r.trace, nil
+}
 
 type fakeEventReader struct{ events []stream.DurableEvent }
 

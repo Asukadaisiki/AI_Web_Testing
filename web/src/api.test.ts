@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, listProjects, parseRunEvent } from './api';
+import {
+  ApiError,
+  getTrace,
+  listAgents,
+  listProjects,
+  parseRunEvent,
+} from './api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -34,5 +40,127 @@ describe('typed API client', () => {
       type: 'token.delta',
       data: { delta: 'hello' },
     });
+  });
+
+  it('rejects malformed successful JSON before it reaches workspace state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('{"projects":null}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    );
+
+    await expect(listProjects()).rejects.toEqual(
+      new ApiError(
+        200,
+        'invalid_response',
+        'Invalid API response at projects: expected an array.',
+      ),
+    );
+  });
+
+  it('parses canonical attempts usage and operation evidence with the trace', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            spans: [{
+              id: 'span-row-1',
+              run_id: 'run-1',
+              trace_id: 'trace-1',
+              span_id: 'operation-1',
+              kind: 'operation',
+              name: 'browser_execute_case',
+              status: 'failed',
+              input: { case: { name: 'checkout' } },
+              started_at: '2026-10-21T12:00:00Z',
+              created_at: '2026-10-21T12:00:00Z',
+              updated_at: '2026-10-21T12:00:01Z',
+            }],
+            attempts: [{
+              id: 'attempt-1',
+              span_id: 'operation-1',
+              attempt_number: 1,
+              operation_id: 'operation-call-1',
+              status: 'failed',
+              error: { message: 'browser failed' },
+              started_at: '2026-10-21T12:00:00Z',
+            }],
+            usage: [{
+              id: 'usage-1',
+              span_id: 'operation-1',
+              span_attempt_id: 'attempt-1',
+              provider: 'openai-compatible',
+              model: 'fixture',
+              input_tokens: 12,
+              output_tokens: 8,
+              total_tokens: 20,
+              cost_micros: 44,
+              details: { cached_tokens: 2 },
+              created_at: '2026-10-21T12:00:01Z',
+            }],
+            operation_evidence: [{
+              id: 'evidence-1',
+              span_id: 'operation-1',
+              span_attempt_id: 'attempt-1',
+              operation_id: 'operation-call-1',
+              status: 'failed',
+              result: { steps: [{ status: 'failed' }] },
+              artifacts: [{ kind: 'screenshot', path: 'failure.png' }],
+              error: { message: 'browser failed' },
+              created_at: '2026-10-21T12:00:01Z',
+              updated_at: '2026-10-21T12:00:01Z',
+            }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    const trace = await getTrace('run-1');
+
+    expect(trace.attempts[0]).toMatchObject({
+      span_id: 'operation-1',
+      attempt_number: 1,
+      status: 'failed',
+    });
+    expect(trace.usage[0]).toMatchObject({ total_tokens: 20, cost_micros: 44 });
+    expect(trace.operation_evidence[0]?.artifacts).toEqual([
+      { kind: 'screenshot', path: 'failure.png' },
+    ]);
+  });
+
+  it('rejects successful agent payloads missing required JSON fields', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            agents: [{
+              id: 'agent-1',
+              product_name: 'Agent',
+              model: {
+                provider: 'openai-compatible',
+                name: 'fixture',
+                reasoning_effort: 'medium',
+              },
+            }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    await expect(listAgents()).rejects.toEqual(
+      new ApiError(
+        200,
+        'invalid_response',
+        'Invalid API response at agents[0].safety: expected a JSON value.',
+      ),
+    );
   });
 });

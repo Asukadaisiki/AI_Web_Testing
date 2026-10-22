@@ -1,25 +1,24 @@
-import { Braces, Clock3, Database, Gauge, Paperclip } from 'lucide-react';
+import {
+  Braces,
+  Clock3,
+  Database,
+  FileText,
+  Gauge,
+  MessageSquareWarning,
+  Paperclip,
+} from 'lucide-react';
+import type {
+  OperationEvidence,
+  SpanAttempt,
+  UsageRecord,
+} from '../../api';
 import type { TraceNode } from './projectTrace';
 
 interface Props {
   node: TraceNode | null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function findField(value: unknown, names: readonly string[]): unknown {
-  const source = asRecord(value);
-  if (source === null) return null;
-  for (const [key, candidate] of Object.entries(source)) {
-    if (names.some((name) => name.toLocaleLowerCase() === key.toLocaleLowerCase())) {
-      return candidate;
-    }
-  }
-  return null;
+  attempts: SpanAttempt[];
+  usage: UsageRecord[];
+  operationEvidence: OperationEvidence[];
 }
 
 function formatJSON(value: unknown): string {
@@ -41,7 +40,18 @@ function duration(node: TraceNode): string {
     : `${String(Math.max(milliseconds, 0))} ms`;
 }
 
-export function TraceDetails({ node }: Props): JSX.Element {
+function formatUsage(record: UsageRecord): string {
+  const cost = (record.cost_micros / 1_000_000).toFixed(6);
+  const model = [record.provider, record.model].filter(Boolean).join(' / ');
+  return `${record.total_tokens.toLocaleString()} total tokens (${record.input_tokens.toLocaleString()} input, ${record.output_tokens.toLocaleString()} output) · $${cost}${model === '' ? '' : ` · ${model}`}`;
+}
+
+export function TraceDetails({
+  node,
+  attempts,
+  usage,
+  operationEvidence,
+}: Props): JSX.Element {
   if (node === null) {
     return (
       <div className="trace-detail-empty">
@@ -49,15 +59,6 @@ export function TraceDetails({ node }: Props): JSX.Element {
       </div>
     );
   }
-
-  const usage =
-    findField(node.output, ['usage']) ?? findField(node.input, ['usage']);
-  const attempts =
-    findField(node.output, ['attempt', 'attempts']) ??
-    findField(node.input, ['attempt', 'attempts']);
-  const evidence =
-    findField(node.output, ['evidence', 'artifacts']) ??
-    findField(node.input, ['evidence', 'artifacts']);
 
   return (
     <article className="trace-details" aria-label={`Trace details for ${node.name}`}>
@@ -95,12 +96,24 @@ export function TraceDetails({ node }: Props): JSX.Element {
           <Database size={14} />
           Attempt
         </summary>
-        {attempts === null ? (
-          <p className="detail-note">
-            Attempt records are not exposed by the current trace API.
-          </p>
+        {attempts.length === 0 ? (
+          <p className="detail-note">No attempt recorded for this span.</p>
         ) : (
-          <pre>{formatJSON(attempts)}</pre>
+          <div className="detail-records">
+            {attempts.map((attempt) => (
+              <div key={attempt.id}>
+                <strong>Attempt {attempt.attempt_number}</strong>
+                <pre>{formatJSON({
+                  status: attempt.status,
+                  provider: attempt.provider,
+                  operation_id: attempt.operation_id,
+                  started_at: attempt.started_at,
+                  ended_at: attempt.ended_at,
+                  error: attempt.error,
+                })}</pre>
+              </div>
+            ))}
+          </div>
         )}
       </details>
 
@@ -109,29 +122,74 @@ export function TraceDetails({ node }: Props): JSX.Element {
           <Gauge size={14} />
           Usage
         </summary>
-        <pre>{formatJSON(usage)}</pre>
+        {usage.length === 0 ? (
+          <p className="detail-note">No usage attributed to this span.</p>
+        ) : (
+          <div className="detail-records">
+            {usage.map((record) => (
+              <div key={record.id}>
+                <strong>{formatUsage(record)}</strong>
+                <pre>{formatJSON(record.details)}</pre>
+              </div>
+            ))}
+          </div>
+        )}
       </details>
 
       <details>
         <summary>
           <Paperclip size={14} />
-          Evidence
+          Execution evidence
         </summary>
-        <pre>{formatJSON(evidence)}</pre>
+        {operationEvidence.length === 0 ? (
+          <p className="detail-note">No operation evidence recorded for this span.</p>
+        ) : (
+          <div className="detail-records">
+            {operationEvidence.map((evidence) => (
+              <div key={evidence.id}>
+                <strong>{evidence.operation_id} · {evidence.status}</strong>
+                <pre>{formatJSON({
+                  result: evidence.result,
+                  artifacts: evidence.artifacts,
+                })}</pre>
+              </div>
+            ))}
+          </div>
+        )}
       </details>
 
       <details>
         <summary>
-          <Braces size={14} />
-          Input
+          <FileText size={14} />
+          Planner / case input
         </summary>
         <pre>{formatJSON(node.input)}</pre>
       </details>
 
       <details>
         <summary>
+          <MessageSquareWarning size={14} />
+          Failure feedback
+        </summary>
+        {operationEvidence.every((evidence) => evidence.error === undefined) &&
+        attempts.every((attempt) => attempt.error === undefined) ? (
+          <p className="detail-note">No failure feedback recorded for this span.</p>
+        ) : (
+          <pre>{formatJSON({
+            operation_errors: operationEvidence.flatMap((evidence) =>
+              evidence.error === undefined ? [] : [evidence.error],
+            ),
+            attempt_errors: attempts.flatMap((attempt) =>
+              attempt.error === undefined ? [] : [attempt.error],
+            ),
+          })}</pre>
+        )}
+      </details>
+
+      <details>
+        <summary>
           <Braces size={14} />
-          Output
+          Canonical output
         </summary>
         <pre>{formatJSON(node.output)}</pre>
       </details>

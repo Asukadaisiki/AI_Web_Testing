@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -26,10 +27,13 @@ import {
   type ConversationDetail,
   type Health,
   type ModelRef,
+  type OperationEvidence,
   type Project,
   type Run,
   type RunEvent,
   type Span,
+  type SpanAttempt,
+  type UsageRecord,
 } from '../../api';
 import { flattenTrace, projectTrace, type TraceNode } from '../trace/projectTrace';
 
@@ -179,6 +183,9 @@ export interface WorkspaceState {
   conversation: ConversationDetail | null;
   run: Run | null;
   spans: Span[];
+  attempts: SpanAttempt[];
+  usage: UsageRecord[];
+  operationEvidence: OperationEvidence[];
   trace: TraceNode[];
   selectedSpan: TraceNode | null;
   events: RunEvent[];
@@ -221,6 +228,9 @@ export function useWorkspace(): WorkspaceState {
   const [conversation, setConversation] = useState<ConversationDetail | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [spans, setSpans] = useState<Span[]>([]);
+  const [attempts, setAttempts] = useState<SpanAttempt[]>([]);
+  const [usage, setUsage] = useState<UsageRecord[]>([]);
+  const [operationEvidence, setOperationEvidence] = useState<OperationEvidence[]>([]);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
@@ -229,6 +239,12 @@ export function useWorkspace(): WorkspaceState {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const activeConversationId = useRef(selection.conversationId);
+  const activeRunId = useRef(selection.runId);
+  const conversationRequest = useRef(0);
+  const runRequest = useRef(0);
+  activeConversationId.current = selection.conversationId;
+  activeRunId.current = selection.runId;
 
   const trace = useMemo(() => projectTrace(spans), [spans]);
   const flattenedTrace = useMemo(() => flattenTrace(trace), [trace]);
@@ -251,16 +267,50 @@ export function useWorkspace(): WorkspaceState {
     return value;
   }, []);
 
-  const loadConversation = useCallback(async (conversationId: string): Promise<ConversationDetail> => {
-    const value = await getConversation(conversationId);
-    setConversation(value);
-    return value;
+  const loadConversation = useCallback(async (
+    conversationId: string,
+  ): Promise<ConversationDetail | null> => {
+    const request = ++conversationRequest.current;
+    try {
+      const value = await getConversation(conversationId);
+      if (
+        request !== conversationRequest.current ||
+        conversationId !== activeConversationId.current
+      ) {
+        return null;
+      }
+      setConversation(value);
+      return value;
+    } catch (failure: unknown) {
+      if (
+        request !== conversationRequest.current ||
+        conversationId !== activeConversationId.current
+      ) {
+        return null;
+      }
+      throw failure;
+    }
   }, []);
 
-  const loadRunData = useCallback(async (runId: string): Promise<void> => {
-    const [nextRun, nextSpans] = await Promise.all([getRun(runId), getTrace(runId)]);
-    setRun(nextRun);
-    setSpans(nextSpans);
+  const loadRunData = useCallback(async (runId: string): Promise<boolean> => {
+    const request = ++runRequest.current;
+    try {
+      const [nextRun, nextTrace] = await Promise.all([getRun(runId), getTrace(runId)]);
+      if (request !== runRequest.current || runId !== activeRunId.current) {
+        return false;
+      }
+      setRun(nextRun);
+      setSpans(nextTrace.spans);
+      setAttempts(nextTrace.attempts);
+      setUsage(nextTrace.usage);
+      setOperationEvidence(nextTrace.operation_evidence);
+      return true;
+    } catch (failure: unknown) {
+      if (request !== runRequest.current || runId !== activeRunId.current) {
+        return false;
+      }
+      throw failure;
+    }
   }, []);
 
   const loadSystemData = useCallback(async (): Promise<void> => {
@@ -346,7 +396,7 @@ export function useWorkspace(): WorkspaceState {
     let cancelled = false;
     void loadConversation(conversationId).then(
       (detail) => {
-        if (cancelled) return;
+        if (cancelled || detail === null) return;
         const runIds = new Set(
           detail.messages.flatMap((message) =>
             message.run_id === undefined || message.run_id === '' ? [] : [message.run_id],
@@ -377,6 +427,9 @@ export function useWorkspace(): WorkspaceState {
     if (runId === null) {
       setRun(null);
       setSpans([]);
+      setAttempts([]);
+      setUsage([]);
+      setOperationEvidence([]);
       return;
     }
     let cancelled = false;
@@ -555,6 +608,9 @@ export function useWorkspace(): WorkspaceState {
     conversation,
     run,
     spans,
+    attempts,
+    usage,
+    operationEvidence,
     trace,
     selectedSpan,
     events,

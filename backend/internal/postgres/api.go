@@ -256,6 +256,198 @@ func (s *Store) ListTrace(ctx context.Context, runID string) ([]domain.Span, err
 	return spans, nil
 }
 
+// TraceDetails is the canonical workspace projection for a run's spans and
+// their persisted attempts, usage, and operation evidence.
+type TraceDetails struct {
+	Spans      []domain.Span
+	Attempts   []TraceAttemptDetail
+	Usage      []TraceUsageDetail
+	Operations []TraceOperationDetail
+}
+
+// TraceAttemptDetail intentionally omits request and response bodies. Span
+// input/output remain the public payload boundary.
+type TraceAttemptDetail struct {
+	ID            string
+	SpanID        string
+	AttemptNumber int
+	Provider      string
+	OperationID   string
+	Status        string
+	Error         json.RawMessage
+	StartedAt     time.Time
+	EndedAt       *time.Time
+}
+
+// TraceUsageDetail is one canonical token and cost record.
+type TraceUsageDetail struct {
+	ID            string
+	SpanID        string
+	SpanAttemptID string
+	Provider      string
+	Model         string
+	InputTokens   int64
+	OutputTokens  int64
+	TotalTokens   int64
+	CostMicros    int64
+	Details       json.RawMessage
+	CreatedAt     time.Time
+}
+
+// TraceOperationDetail is the result and artifact evidence for one operation.
+type TraceOperationDetail struct {
+	ID            string
+	SpanID        string
+	SpanAttemptID string
+	OperationID   string
+	Status        string
+	Result        json.RawMessage
+	Artifacts     json.RawMessage
+	Error         json.RawMessage
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// GetTraceDetails reads one internally consistent trace projection.
+func (s *Store) GetTraceDetails(ctx context.Context, runID string) (TraceDetails, error) {
+	if s == nil || s.pool == nil {
+		return TraceDetails{}, errors.New("postgres store is not configured")
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return TraceDetails{}, fmt.Errorf("begin trace details: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var details TraceDetails
+	spanRows, err := tx.Query(ctx, `
+		SELECT id, run_id, trace_id, span_id, COALESCE(parent_span_id, ''), kind, name, status,
+		       input, output, started_at, ended_at, created_at, updated_at
+		FROM spans
+		WHERE run_id = $1
+		ORDER BY started_at, id`, runID)
+	if err != nil {
+		return TraceDetails{}, fmt.Errorf("list detailed trace spans: %w", err)
+	}
+	for spanRows.Next() {
+		var span domain.Span
+		if err := spanRows.Scan(
+			&span.ID, &span.RunID, &span.TraceID, &span.SpanID, &span.ParentSpanID,
+			&span.Kind, &span.Name, &span.Status, &span.Input, &span.Output,
+			&span.StartedAt, &span.EndedAt, &span.CreatedAt, &span.UpdatedAt,
+		); err != nil {
+			spanRows.Close()
+			return TraceDetails{}, fmt.Errorf("scan detailed trace span: %w", err)
+		}
+		details.Spans = append(details.Spans, span)
+	}
+	if err := spanRows.Err(); err != nil {
+		spanRows.Close()
+		return TraceDetails{}, fmt.Errorf("iterate detailed trace spans: %w", err)
+	}
+	spanRows.Close()
+
+	attemptRows, err := tx.Query(ctx, `
+		SELECT attempt.id, span.span_id, attempt.attempt_number,
+		       COALESCE(attempt.provider, ''), COALESCE(attempt.operation_id, ''),
+		       attempt.status, attempt.error, attempt.started_at, attempt.ended_at
+		FROM span_attempts AS attempt
+		JOIN spans AS span ON span.id = attempt.span_id
+		WHERE span.run_id = $1
+		ORDER BY span.started_at, span.id, attempt.attempt_number`, runID)
+	if err != nil {
+		return TraceDetails{}, fmt.Errorf("list trace attempts: %w", err)
+	}
+	for attemptRows.Next() {
+		var attempt TraceAttemptDetail
+		if err := attemptRows.Scan(
+			&attempt.ID, &attempt.SpanID, &attempt.AttemptNumber,
+			&attempt.Provider, &attempt.OperationID, &attempt.Status, &attempt.Error,
+			&attempt.StartedAt, &attempt.EndedAt,
+		); err != nil {
+			attemptRows.Close()
+			return TraceDetails{}, fmt.Errorf("scan trace attempt: %w", err)
+		}
+		details.Attempts = append(details.Attempts, attempt)
+	}
+	if err := attemptRows.Err(); err != nil {
+		attemptRows.Close()
+		return TraceDetails{}, fmt.Errorf("iterate trace attempts: %w", err)
+	}
+	attemptRows.Close()
+
+	usageRows, err := tx.Query(ctx, `
+		SELECT usage.id, COALESCE(span.span_id, ''), COALESCE(usage.span_attempt_id, ''),
+		       COALESCE(usage.provider, ''), COALESCE(usage.model, ''),
+		       usage.input_tokens, usage.output_tokens, usage.total_tokens,
+		       usage.cost_micros, usage.details, usage.created_at
+		FROM usage_records AS usage
+		LEFT JOIN span_attempts AS attempt ON attempt.id = usage.span_attempt_id
+		LEFT JOIN spans AS span ON span.id = attempt.span_id
+		WHERE usage.run_id = $1
+		ORDER BY usage.created_at, usage.id`, runID)
+	if err != nil {
+		return TraceDetails{}, fmt.Errorf("list trace usage: %w", err)
+	}
+	for usageRows.Next() {
+		var record TraceUsageDetail
+		if err := usageRows.Scan(
+			&record.ID, &record.SpanID, &record.SpanAttemptID,
+			&record.Provider, &record.Model, &record.InputTokens, &record.OutputTokens,
+			&record.TotalTokens, &record.CostMicros, &record.Details, &record.CreatedAt,
+		); err != nil {
+			usageRows.Close()
+			return TraceDetails{}, fmt.Errorf("scan trace usage: %w", err)
+		}
+		details.Usage = append(details.Usage, record)
+	}
+	if err := usageRows.Err(); err != nil {
+		usageRows.Close()
+		return TraceDetails{}, fmt.Errorf("iterate trace usage: %w", err)
+	}
+	usageRows.Close()
+
+	operationRows, err := tx.Query(ctx, `
+		SELECT operation.id, COALESCE(span.span_id, ''),
+		       COALESCE(operation.span_attempt_id, ''), operation.operation_id,
+		       operation.status, operation.result, operation.artifacts, operation.error,
+		       operation.created_at, operation.updated_at
+		FROM operation_results AS operation
+		LEFT JOIN span_attempts AS attempt ON attempt.id = operation.span_attempt_id
+		LEFT JOIN spans AS span ON span.id = attempt.span_id
+		WHERE operation.run_id = $1
+		ORDER BY operation.created_at, operation.id`, runID)
+	if err != nil {
+		return TraceDetails{}, fmt.Errorf("list trace operation evidence: %w", err)
+	}
+	for operationRows.Next() {
+		var operation TraceOperationDetail
+		if err := operationRows.Scan(
+			&operation.ID, &operation.SpanID, &operation.SpanAttemptID,
+			&operation.OperationID, &operation.Status, &operation.Result,
+			&operation.Artifacts, &operation.Error, &operation.CreatedAt,
+			&operation.UpdatedAt,
+		); err != nil {
+			operationRows.Close()
+			return TraceDetails{}, fmt.Errorf("scan trace operation evidence: %w", err)
+		}
+		details.Operations = append(details.Operations, operation)
+	}
+	if err := operationRows.Err(); err != nil {
+		operationRows.Close()
+		return TraceDetails{}, fmt.Errorf("iterate trace operation evidence: %w", err)
+	}
+	operationRows.Close()
+
+	if err := tx.Commit(ctx); err != nil {
+		return TraceDetails{}, fmt.Errorf("commit trace details read: %w", err)
+	}
+	return details, nil
+}
+
 // RequestCancel marks cancellation durably and emits an ordered replay event.
 func (s *Store) RequestCancel(ctx context.Context, runID string) error {
 	if s == nil || s.pool == nil {

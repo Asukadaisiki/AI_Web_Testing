@@ -34,7 +34,7 @@ type Repository interface {
 	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error)
 	CreateMessageAndRun(context.Context, postgres.CreateMessageParams) (domain.Message, domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
-	ListTrace(context.Context, string) ([]domain.Span, error)
+	GetTraceDetails(context.Context, string) (postgres.TraceDetails, error)
 	RequestCancel(context.Context, string) error
 	SubmitResponse(context.Context, postgres.SubmitResponseParams) error
 	PendingOutbox(context.Context) (int, error)

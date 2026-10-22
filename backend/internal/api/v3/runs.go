@@ -1,6 +1,7 @@
 package v3
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -25,6 +26,45 @@ type publicRun struct {
 	FinishedAt        *time.Time       `json:"finished_at,omitempty"`
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
+}
+
+type publicTraceAttempt struct {
+	ID            string          `json:"id"`
+	SpanID        string          `json:"span_id"`
+	AttemptNumber int             `json:"attempt_number"`
+	Provider      string          `json:"provider,omitempty"`
+	OperationID   string          `json:"operation_id,omitempty"`
+	Status        string          `json:"status"`
+	Error         json.RawMessage `json:"error,omitempty"`
+	StartedAt     time.Time       `json:"started_at"`
+	EndedAt       *time.Time      `json:"ended_at,omitempty"`
+}
+
+type publicTraceUsage struct {
+	ID            string          `json:"id"`
+	SpanID        string          `json:"span_id,omitempty"`
+	SpanAttemptID string          `json:"span_attempt_id,omitempty"`
+	Provider      string          `json:"provider,omitempty"`
+	Model         string          `json:"model,omitempty"`
+	InputTokens   int64           `json:"input_tokens"`
+	OutputTokens  int64           `json:"output_tokens"`
+	TotalTokens   int64           `json:"total_tokens"`
+	CostMicros    int64           `json:"cost_micros"`
+	Details       json.RawMessage `json:"details"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+type publicOperationEvidence struct {
+	ID            string          `json:"id"`
+	SpanID        string          `json:"span_id,omitempty"`
+	SpanAttemptID string          `json:"span_attempt_id,omitempty"`
+	OperationID   string          `json:"operation_id"`
+	Status        string          `json:"status"`
+	Result        json.RawMessage `json:"result,omitempty"`
+	Artifacts     json.RawMessage `json:"artifacts"`
+	Error         json.RawMessage `json:"error,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
@@ -54,12 +94,62 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRepository(w) {
 		return
 	}
-	spans, err := s.repository.ListTrace(r.Context(), r.PathValue("id"))
+	trace, err := s.repository.GetTraceDetails(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeRepositoryError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"spans": spans})
+	attempts := make([]publicTraceAttempt, 0, len(trace.Attempts))
+	for _, attempt := range trace.Attempts {
+		attempts = append(attempts, publicTraceAttempt{
+			ID:            attempt.ID,
+			SpanID:        attempt.SpanID,
+			AttemptNumber: attempt.AttemptNumber,
+			Provider:      attempt.Provider,
+			OperationID:   attempt.OperationID,
+			Status:        attempt.Status,
+			Error:         attempt.Error,
+			StartedAt:     attempt.StartedAt,
+			EndedAt:       attempt.EndedAt,
+		})
+	}
+	usage := make([]publicTraceUsage, 0, len(trace.Usage))
+	for _, record := range trace.Usage {
+		usage = append(usage, publicTraceUsage{
+			ID:            record.ID,
+			SpanID:        record.SpanID,
+			SpanAttemptID: record.SpanAttemptID,
+			Provider:      record.Provider,
+			Model:         record.Model,
+			InputTokens:   record.InputTokens,
+			OutputTokens:  record.OutputTokens,
+			TotalTokens:   record.TotalTokens,
+			CostMicros:    record.CostMicros,
+			Details:       record.Details,
+			CreatedAt:     record.CreatedAt,
+		})
+	}
+	operations := make([]publicOperationEvidence, 0, len(trace.Operations))
+	for _, operation := range trace.Operations {
+		operations = append(operations, publicOperationEvidence{
+			ID:            operation.ID,
+			SpanID:        operation.SpanID,
+			SpanAttemptID: operation.SpanAttemptID,
+			OperationID:   operation.OperationID,
+			Status:        operation.Status,
+			Result:        operation.Result,
+			Artifacts:     operation.Artifacts,
+			Error:         operation.Error,
+			CreatedAt:     operation.CreatedAt,
+			UpdatedAt:     operation.UpdatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"spans":              trace.Spans,
+		"attempts":           attempts,
+		"usage":              usage,
+		"operation_evidence": operations,
+	})
 }
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {

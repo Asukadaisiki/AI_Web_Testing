@@ -346,6 +346,29 @@ func TestAppendTraceStepCommitsTraceAndReplaysMatchingPayload(t *testing.T) {
 	assertRowCount(t, ctx, pool, "run_events", 1)
 	assertRowCount(t, ctx, pool, "outbox_events", 2)
 
+	trace, err := store.GetTraceDetails(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get trace details: %v", err)
+	}
+	if len(trace.Spans) != 1 || trace.Spans[0].SpanID != "model-1" {
+		t.Fatalf("trace spans = %#v", trace.Spans)
+	}
+	if len(trace.Attempts) != 1 ||
+		trace.Attempts[0].SpanID != "model-1" ||
+		trace.Attempts[0].ID != "att_test" {
+		t.Fatalf("trace attempts = %#v", trace.Attempts)
+	}
+	if len(trace.Usage) != 1 ||
+		trace.Usage[0].SpanID != "model-1" ||
+		trace.Usage[0].TotalTokens != 15 {
+		t.Fatalf("trace usage = %#v", trace.Usage)
+	}
+	if len(trace.Operations) != 1 ||
+		trace.Operations[0].SpanID != "model-1" ||
+		string(trace.Operations[0].Result) != `{"verified": true}` {
+		t.Fatalf("trace operations = %#v", trace.Operations)
+	}
+
 	var checkpoint int64
 	if err := pool.QueryRow(ctx, `SELECT checkpoint_version FROM runs WHERE id = $1`, run.ID).Scan(&checkpoint); err != nil {
 		t.Fatalf("read checkpoint: %v", err)

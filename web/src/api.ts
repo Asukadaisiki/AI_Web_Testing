@@ -70,12 +70,58 @@ export interface Span {
   kind: SpanKind;
   name: string;
   status: string;
-  input?: unknown;
-  output?: unknown;
+  input?: JSONValue;
+  output?: JSONValue;
   started_at: string;
   ended_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface SpanAttempt {
+  id: string;
+  span_id: string;
+  attempt_number: number;
+  provider?: string;
+  operation_id?: string;
+  status: string;
+  error?: JSONValue;
+  started_at: string;
+  ended_at?: string | null;
+}
+
+export interface UsageRecord {
+  id: string;
+  span_id?: string;
+  span_attempt_id?: string;
+  provider?: string;
+  model?: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_micros: number;
+  details: JSONValue;
+  created_at: string;
+}
+
+export interface OperationEvidence {
+  id: string;
+  span_id?: string;
+  span_attempt_id?: string;
+  operation_id: string;
+  status: string;
+  result?: JSONValue;
+  artifacts: JSONValue;
+  error?: JSONValue;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Trace {
+  spans: Span[];
+  attempts: SpanAttempt[];
+  usage: UsageRecord[];
+  operation_evidence: OperationEvidence[];
 }
 
 export interface RunEvent {
@@ -106,7 +152,7 @@ export interface Agent {
   id: string;
   product_name: string;
   model: ModelRef & { reasoning_effort: string };
-  safety: unknown;
+  safety: JSONValue;
 }
 
 export interface ConversationDetail {
@@ -161,7 +207,393 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
+type ResponseParser<T> = (value: unknown, status: number) => T;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function invalidResponse(status: number, at: string, expected: string): never {
+  throw new ApiError(
+    status,
+    'invalid_response',
+    `Invalid API response at ${at}: expected ${expected}.`,
+  );
+}
+
+function recordValue(value: unknown, status: number, at: string): Record<string, unknown> {
+  if (!isRecord(value)) return invalidResponse(status, at, 'an object');
+  return value;
+}
+
+function arrayValue(value: unknown, status: number, at: string): unknown[] {
+  if (!Array.isArray(value)) return invalidResponse(status, at, 'an array');
+  return value;
+}
+
+function stringValue(value: unknown, status: number, at: string): string {
+  if (typeof value !== 'string') return invalidResponse(status, at, 'a string');
+  return value;
+}
+
+function numberValue(value: unknown, status: number, at: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return invalidResponse(status, at, 'a finite number');
+  }
+  return value;
+}
+
+function optionalString(
+  value: unknown,
+  status: number,
+  at: string,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return stringValue(value, status, at);
+}
+
+function optionalJSON(
+  value: unknown,
+  status: number,
+  at: string,
+): JSONValue | undefined {
+  if (value === undefined) return undefined;
+  return jsonValue(value, status, at);
+}
+
+function jsonValue(value: unknown, status: number, at: string): JSONValue {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => jsonValue(item, status, `${at}[${String(index)}]`));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        jsonValue(item, status, `${at}.${key}`),
+      ]),
+    );
+  }
+  return invalidResponse(status, at, 'a JSON value');
+}
+
+function enumValue<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  status: number,
+  at: string,
+): T {
+  const candidate = stringValue(value, status, at);
+  if (!allowed.includes(candidate as T)) {
+    return invalidResponse(status, at, `one of ${allowed.join(', ')}`);
+  }
+  return candidate as T;
+}
+
+const runStatuses: readonly RunStatus[] = [
+  'queued',
+  'running',
+  'waiting_input',
+  'waiting_approval',
+  'cancelling',
+  'succeeded',
+  'failed',
+  'cancelled',
+];
+
+const spanKinds: readonly SpanKind[] = [
+  'run',
+  'model',
+  'reasoning',
+  'tool',
+  'operation',
+  'report',
+];
+
+function parseProject(value: unknown, status: number, at = 'project'): Project {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    name: stringValue(item['name'], status, `${at}.name`),
+    metadata: jsonValue(item['metadata'], status, `${at}.metadata`),
+    created_at: stringValue(item['created_at'], status, `${at}.created_at`),
+    updated_at: stringValue(item['updated_at'], status, `${at}.updated_at`),
+  };
+}
+
+function parseConversation(
+  value: unknown,
+  status: number,
+  at = 'conversation',
+): Conversation {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    project_id: stringValue(item['project_id'], status, `${at}.project_id`),
+    title: optionalString(item['title'], status, `${at}.title`),
+    metadata: jsonValue(item['metadata'], status, `${at}.metadata`),
+    created_at: stringValue(item['created_at'], status, `${at}.created_at`),
+    updated_at: stringValue(item['updated_at'], status, `${at}.updated_at`),
+  };
+}
+
+function parseMessage(value: unknown, status: number, at: string): Message {
+  const item = recordValue(value, status, at);
+  const metadata =
+    item['metadata'] === undefined
+      ? undefined
+      : jsonValue(item['metadata'], status, `${at}.metadata`);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    conversation_id: stringValue(
+      item['conversation_id'],
+      status,
+      `${at}.conversation_id`,
+    ),
+    run_id: optionalString(item['run_id'], status, `${at}.run_id`),
+    ordinal: numberValue(item['ordinal'], status, `${at}.ordinal`),
+    role: stringValue(item['role'], status, `${at}.role`),
+    content: stringValue(item['content'], status, `${at}.content`),
+    metadata,
+    created_at: stringValue(item['created_at'], status, `${at}.created_at`),
+  };
+}
+
+function parseRun(value: unknown, status: number, at = 'run'): Run {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    project_id: stringValue(item['project_id'], status, `${at}.project_id`),
+    conversation_id: stringValue(
+      item['conversation_id'],
+      status,
+      `${at}.conversation_id`,
+    ),
+    status: enumValue(item['status'], runStatuses, status, `${at}.status`),
+    checkpoint_version: numberValue(
+      item['checkpoint_version'],
+      status,
+      `${at}.checkpoint_version`,
+    ),
+    cancel_requested_at: optionalString(
+      item['cancel_requested_at'],
+      status,
+      `${at}.cancel_requested_at`,
+    ),
+    started_at: optionalString(item['started_at'], status, `${at}.started_at`),
+    finished_at: optionalString(item['finished_at'], status, `${at}.finished_at`),
+    created_at: stringValue(item['created_at'], status, `${at}.created_at`),
+    updated_at: stringValue(item['updated_at'], status, `${at}.updated_at`),
+  };
+}
+
+function parseSpan(value: unknown, status: number, at: string): Span {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    run_id: stringValue(item['run_id'], status, `${at}.run_id`),
+    trace_id: stringValue(item['trace_id'], status, `${at}.trace_id`),
+    span_id: stringValue(item['span_id'], status, `${at}.span_id`),
+    parent_span_id: optionalString(
+      item['parent_span_id'],
+      status,
+      `${at}.parent_span_id`,
+    ),
+    kind: enumValue(item['kind'], spanKinds, status, `${at}.kind`),
+    name: stringValue(item['name'], status, `${at}.name`),
+    status: stringValue(item['status'], status, `${at}.status`),
+    input: optionalJSON(item['input'], status, `${at}.input`),
+    output: optionalJSON(item['output'], status, `${at}.output`),
+    started_at: stringValue(item['started_at'], status, `${at}.started_at`),
+    ended_at:
+      item['ended_at'] === null
+        ? null
+        : optionalString(item['ended_at'], status, `${at}.ended_at`),
+    created_at: stringValue(item['created_at'], status, `${at}.created_at`),
+    updated_at: stringValue(item['updated_at'], status, `${at}.updated_at`),
+  };
+}
+
+function parseSpanAttempt(value: unknown, status: number, at: string): SpanAttempt {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    span_id: stringValue(item['span_id'], status, `${at}.span_id`),
+    attempt_number: numberValue(
+      item['attempt_number'],
+      status,
+      `${at}.attempt_number`,
+    ),
+    provider: optionalString(item['provider'], status, `${at}.provider`),
+    operation_id: optionalString(
+      item['operation_id'],
+      status,
+      `${at}.operation_id`,
+    ),
+    status: stringValue(item['status'], status, `${at}.status`),
+    error: optionalJSON(item['error'], status, `${at}.error`),
+    started_at: stringValue(item['started_at'], status, `${at}.started_at`),
+    ended_at:
+      item['ended_at'] === null
+        ? null
+        : optionalString(item['ended_at'], status, `${at}.ended_at`),
+  };
+}
+
+function parseUsageRecord(value: unknown, status: number, at: string): UsageRecord {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    span_id: optionalString(item['span_id'], status, `${at}.span_id`),
+    span_attempt_id: optionalString(
+      item['span_attempt_id'],
+      status,
+      `${at}.span_attempt_id`,
+    ),
+    provider: optionalString(item['provider'], status, `${at}.provider`),
+    model: optionalString(item['model'], status, `${at}.model`),
+    input_tokens: numberValue(item['input_tokens'], status, `${at}.input_tokens`),
+    output_tokens: numberValue(
+      item['output_tokens'],
+      status,
+      `${at}.output_tokens`,
+    ),
+    total_tokens: numberValue(item['total_tokens'], status, `${at}.total_tokens`),
+    cost_micros: numberValue(item['cost_micros'], status, `${at}.cost_micros`),
+    details: jsonValue(item['details'], status, `${at}.details`),
+    created_at: stringValue(item['created_at'], status, `${at}.created_at`),
+  };
+}
+
+function parseOperationEvidence(
+  value: unknown,
+  status: number,
+  at: string,
+): OperationEvidence {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    span_id: optionalString(item['span_id'], status, `${at}.span_id`),
+    span_attempt_id: optionalString(
+      item['span_attempt_id'],
+      status,
+      `${at}.span_attempt_id`,
+    ),
+    operation_id: stringValue(item['operation_id'], status, `${at}.operation_id`),
+    status: stringValue(item['status'], status, `${at}.status`),
+    result: optionalJSON(item['result'], status, `${at}.result`),
+    artifacts: jsonValue(item['artifacts'], status, `${at}.artifacts`),
+    error: optionalJSON(item['error'], status, `${at}.error`),
+    created_at: stringValue(item['created_at'], status, `${at}.created_at`),
+    updated_at: stringValue(item['updated_at'], status, `${at}.updated_at`),
+  };
+}
+
+function parseConversationDetail(value: unknown, status: number): ConversationDetail {
+  const item = recordValue(value, status, 'conversation_detail');
+  return {
+    conversation: parseConversation(
+      item['conversation'],
+      status,
+      'conversation_detail.conversation',
+    ),
+    messages: arrayValue(item['messages'], status, 'conversation_detail.messages').map(
+      (message, index) =>
+        parseMessage(message, status, `conversation_detail.messages[${String(index)}]`),
+    ),
+  };
+}
+
+function parseCreateMessageResponse(
+  value: unknown,
+  status: number,
+): CreateMessageResponse {
+  const item = recordValue(value, status, 'create_message');
+  return {
+    message_id: stringValue(item['message_id'], status, 'create_message.message_id'),
+    run_id: stringValue(item['run_id'], status, 'create_message.run_id'),
+    status: enumValue(item['status'], runStatuses, status, 'create_message.status'),
+  };
+}
+
+function parseRunActionResponse(value: unknown, status: number): RunActionResponse {
+  const item = recordValue(value, status, 'run_action');
+  return {
+    run_id: stringValue(item['run_id'], status, 'run_action.run_id'),
+    status: stringValue(item['status'], status, 'run_action.status'),
+  };
+}
+
+function parseAgent(value: unknown, status: number, at: string): Agent {
+  const item = recordValue(value, status, at);
+  const model = recordValue(item['model'], status, `${at}.model`);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    product_name: stringValue(item['product_name'], status, `${at}.product_name`),
+    model: {
+      provider: stringValue(model['provider'], status, `${at}.model.provider`),
+      name: stringValue(model['name'], status, `${at}.model.name`),
+      reasoning_effort: stringValue(
+        model['reasoning_effort'],
+        status,
+        `${at}.model.reasoning_effort`,
+      ),
+    },
+    safety: jsonValue(item['safety'], status, `${at}.safety`),
+  };
+}
+
+function parseHealth(value: unknown, status: number): Health {
+  const item = recordValue(value, status, 'health');
+  const dependencies = recordValue(item['dependencies'], status, 'health.dependencies');
+  const parsedDependencies: Record<string, HealthDependency> = {};
+  for (const [name, rawDependency] of Object.entries(dependencies)) {
+    const dependency = recordValue(
+      rawDependency,
+      status,
+      `health.dependencies.${name}`,
+    );
+    const required = dependency['required'];
+    if (typeof required !== 'boolean') {
+      invalidResponse(status, `health.dependencies.${name}.required`, 'a boolean');
+    }
+    parsedDependencies[name] = {
+      status: stringValue(
+        dependency['status'],
+        status,
+        `health.dependencies.${name}.status`,
+      ),
+      required,
+      mode: optionalString(
+        dependency['mode'],
+        status,
+        `health.dependencies.${name}.mode`,
+      ),
+      pending_outbox: numberValue(
+        dependency['pending_outbox'],
+        status,
+        `health.dependencies.${name}.pending_outbox`,
+      ),
+    };
+  }
+  return {
+    status: enumValue(item['status'], ['ok', 'degraded', 'down'], status, 'health.status'),
+    dependencies: parsedDependencies,
+  };
+}
+
+async function requestJSON<T>(
+  path: string,
+  parse: ResponseParser<T>,
+  init?: RequestInit,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, init);
@@ -181,50 +613,74 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
   if (!response.ok) {
-    const failure = body as ErrorResponse | null;
+    const failure = isRecord(body) ? (body as ErrorResponse) : null;
     throw new ApiError(
       response.status,
       failure?.error?.code ?? 'request_failed',
       failure?.error?.message ?? `Request failed with HTTP ${String(response.status)}.`,
     );
   }
-  return body as T;
+  return parse(body, response.status);
 }
 
-function postJSON<T>(path: string, body: unknown): Promise<T> {
-  return requestJSON<T>(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+function postJSON<T>(
+  path: string,
+  body: unknown,
+  parse: ResponseParser<T>,
+): Promise<T> {
+  return requestJSON<T>(
+    path,
+    parse,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export async function listProjects(): Promise<Project[]> {
-  const response = await requestJSON<{ projects: Project[] }>('/projects');
-  return response.projects;
+  return requestJSON('/projects', (value, status) => {
+    const response = recordValue(value, status, 'response');
+    return arrayValue(response['projects'], status, 'projects').map((project, index) =>
+      parseProject(project, status, `projects[${String(index)}]`),
+    );
+  });
 }
 
 export function createProject(name: string): Promise<Project> {
-  return postJSON<Project>('/projects', { name, metadata: {} });
+  return postJSON('/projects', { name, metadata: {} }, parseProject);
 }
 
 export async function listConversations(projectId: string): Promise<Conversation[]> {
-  const response = await requestJSON<{ conversations: Conversation[] }>(
+  return requestJSON(
     `/projects/${encodeURIComponent(projectId)}/conversations`,
+    (value, status) => {
+      const response = recordValue(value, status, 'response');
+      return arrayValue(response['conversations'], status, 'conversations').map(
+        (conversation, index) =>
+          parseConversation(
+            conversation,
+            status,
+            `conversations[${String(index)}]`,
+          ),
+      );
+    },
   );
-  return response.conversations;
 }
 
 export function createConversation(projectId: string, title: string): Promise<Conversation> {
-  return postJSON<Conversation>(
+  return postJSON(
     `/projects/${encodeURIComponent(projectId)}/conversations`,
     { title, metadata: {} },
+    parseConversation,
   );
 }
 
 export function getConversation(conversationId: string): Promise<ConversationDetail> {
-  return requestJSON<ConversationDetail>(
+  return requestJSON(
     `/conversations/${encodeURIComponent(conversationId)}`,
+    parseConversationDetail,
   );
 }
 
@@ -232,44 +688,79 @@ export function createMessage(
   conversationId: string,
   request: CreateMessageRequest,
 ): Promise<CreateMessageResponse> {
-  return postJSON<CreateMessageResponse>(
+  return postJSON(
     `/conversations/${encodeURIComponent(conversationId)}/messages`,
     request,
+    parseCreateMessageResponse,
   );
 }
 
 export function getRun(runId: string): Promise<Run> {
-  return requestJSON<Run>(`/runs/${encodeURIComponent(runId)}`);
+  return requestJSON(`/runs/${encodeURIComponent(runId)}`, parseRun);
 }
 
-export async function getTrace(runId: string): Promise<Span[]> {
-  const response = await requestJSON<{ spans: Span[] }>(
+export async function getTrace(runId: string): Promise<Trace> {
+  return requestJSON(
     `/runs/${encodeURIComponent(runId)}/trace`,
+    (value, status) => {
+      const response = recordValue(value, status, 'response');
+      return {
+        spans: arrayValue(response['spans'], status, 'spans').map((span, index) =>
+          parseSpan(span, status, `spans[${String(index)}]`),
+        ),
+        attempts: arrayValue(response['attempts'], status, 'attempts').map(
+          (attempt, index) =>
+            parseSpanAttempt(attempt, status, `attempts[${String(index)}]`),
+        ),
+        usage: arrayValue(response['usage'], status, 'usage').map((record, index) =>
+          parseUsageRecord(record, status, `usage[${String(index)}]`),
+        ),
+        operation_evidence: arrayValue(
+          response['operation_evidence'],
+          status,
+          'operation_evidence',
+        ).map((evidence, index) =>
+          parseOperationEvidence(
+            evidence,
+            status,
+            `operation_evidence[${String(index)}]`,
+          ),
+        ),
+      };
+    },
   );
-  return response.spans;
 }
 
 export function cancelRun(runId: string): Promise<RunActionResponse> {
-  return postJSON<RunActionResponse>(`/runs/${encodeURIComponent(runId)}/cancel`, {});
+  return postJSON(
+    `/runs/${encodeURIComponent(runId)}/cancel`,
+    {},
+    parseRunActionResponse,
+  );
 }
 
 export function submitRunResponse(
   runId: string,
   request: SubmitResponseRequest,
 ): Promise<RunActionResponse> {
-  return postJSON<RunActionResponse>(
+  return postJSON(
     `/runs/${encodeURIComponent(runId)}/responses`,
     request,
+    parseRunActionResponse,
   );
 }
 
 export async function listAgents(): Promise<Agent[]> {
-  const response = await requestJSON<{ agents: Agent[] }>('/agents');
-  return response.agents;
+  return requestJSON('/agents', (value, status) => {
+    const response = recordValue(value, status, 'response');
+    return arrayValue(response['agents'], status, 'agents').map((agent, index) =>
+      parseAgent(agent, status, `agents[${String(index)}]`),
+    );
+  });
 }
 
 export function getHealth(): Promise<Health> {
-  return requestJSON<Health>('/health');
+  return requestJSON('/health', parseHealth);
 }
 
 export function runEventsURL(runId: string): string {

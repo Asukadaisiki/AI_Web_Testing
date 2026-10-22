@@ -1,6 +1,7 @@
 import { Radio, Rows3 } from 'lucide-react';
 import type { WorkspaceState } from '../workspace/useWorkspace';
 import { TraceDetails } from './TraceDetails';
+import { TraceOverview } from './TraceOverview';
 import { TraceTree } from './TraceTree';
 
 interface Props {
@@ -8,6 +9,17 @@ interface Props {
 }
 
 export function TracePane({ workspace }: Props): JSX.Element {
+  const selectedSpanId = workspace.selectedSpan?.span_id;
+  const attempts = workspace.attempts.filter(
+    (attempt) => attempt.span_id === selectedSpanId,
+  );
+  const usage = workspace.usage.filter(
+    (record) => record.span_id === selectedSpanId,
+  );
+  const operationEvidence = workspace.operationEvidence.filter(
+    (evidence) => evidence.span_id === selectedSpanId,
+  );
+
   return (
     <aside className="pane trace-pane" aria-label="Run trace and details">
       <header className="pane-header trace-header">
@@ -29,6 +41,11 @@ export function TracePane({ workspace }: Props): JSX.Element {
         </div>
       ) : (
         <>
+          <TraceOverview
+            run={workspace.run}
+            usage={workspace.usage}
+            operationEvidence={workspace.operationEvidence}
+          />
           <section className="trace-tree-region" aria-labelledby="trace-tree-heading">
             <div className="trace-region-heading">
               <h3 id="trace-tree-heading">Execution tree</h3>
@@ -41,7 +58,12 @@ export function TracePane({ workspace }: Props): JSX.Element {
             />
           </section>
           <section className="trace-detail-region" aria-label="Selected trace node details">
-            <TraceDetails node={workspace.selectedSpan} />
+            <TraceDetails
+              node={workspace.selectedSpan}
+              attempts={attempts}
+              usage={usage}
+              operationEvidence={operationEvidence}
+            />
           </section>
         </>
       )}
