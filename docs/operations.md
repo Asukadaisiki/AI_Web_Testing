@@ -12,11 +12,14 @@ curl -s http://127.0.0.1:8080/api/v1/health
 `GET /api/v1/health` returns an overall `ok`, `degraded`, or `down` status and
 independent dependency entries for `postgres`, `kafka`, `redis`, `worker`, and
 `langfuse`. PostgreSQL is required: its failure returns HTTP 503 and `down`.
-Kafka, Redis, Worker, and the optional Langfuse exporter can make the response
-`degraded` when they are configured but unavailable. A disabled optional
-dependency remains `disabled` and does not degrade the API. When Redis is down,
-the response marks it with `mode: "postgres_poll"` because SSE falls back to
-durable PostgreSQL events.
+Kafka, Redis, and Worker can make the response `degraded` when unavailable.
+When Redis is down, the response marks it with `mode: "postgres_poll"` because
+SSE falls back to durable PostgreSQL events.
+
+The API currently has no probe for the profile-gated Langfuse exporter, so its
+independent `langfuse` field is always `disabled`. Do not interpret API health
+as an exporter availability check and do not describe an exporter outage as
+causing API health to become `degraded`.
 
 Inspect services and logs without destroying evidence:
 
@@ -67,9 +70,33 @@ docker compose restart redis
 ```
 
 The optional Langfuse exporter is asynchronous. Start it only under the
-`langfuse` profile with valid local environment values. Its retries and DLQ
-handoff must not be treated as a reason to alter an already completed local
-run.
+`langfuse` profile with valid local environment values:
+
+```bash
+docker compose --profile langfuse up -d exporter
+docker compose logs --tail=200 exporter
+```
+
+Diagnose an exporter issue from its own retry state, durable DLQ handoff, and
+Kafka consumer state. These paths never change an already completed local run:
+
+```bash
+docker compose exec -T postgres psql -U agenttrace -d agenttrace -c \
+  "SELECT event_id, attempt_count, updated_at
+   FROM consumer_retry_counts
+   WHERE consumer = 'agenttrace-langfuse-exporter'
+   ORDER BY updated_at DESC;"
+
+docker compose exec -T postgres psql -U agenttrace -d agenttrace -c \
+  "SELECT event_id, key, created_at, published_at, attempt_count, last_error
+   FROM outbox_events
+   WHERE topic = 'agenttrace.run.dlq.v1'
+   ORDER BY created_at DESC;"
+
+docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 \
+  --group agenttrace-langfuse-exporter --describe
+```
 
 ## Data reset
 

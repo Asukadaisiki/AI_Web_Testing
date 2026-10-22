@@ -1,6 +1,6 @@
-"""loop_worker —— v2 的精简 Playwright 执行器。
+"""AgentTrace v3 的 Playwright 浏览器执行器。
 
-唯一权威契约是 `v2/CONTRACT.md`；本包只做一件事：把 case 跑成带证据的 ExecutionResult。
+唯一权威契约是仓库根目录的 `CONTRACT.md`；本包把 case 跑成带证据的 ExecutionResult。
 
 模块分工：
 

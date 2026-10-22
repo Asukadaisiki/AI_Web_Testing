@@ -442,6 +442,22 @@ func TestHealthReportsKafkaAndRedisSeparately(t *testing.T) {
 	}
 }
 
+func TestHealthReportsUnprobedLangfuseAsDisabled(t *testing.T) {
+	handler := newTestServerWithHealth(t, &fakeRepository{}, healthDependencies{
+		Postgres: func(context.Context) error { return nil },
+	})
+
+	response := request(t, handler, http.MethodGet, "/api/v1/health", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var body healthResponse
+	decodeJSON(t, response, &body)
+	if body.Status != "ok" || body.Dependencies["langfuse"].Status != "disabled" {
+		t.Fatalf("health = %#v", body)
+	}
+}
+
 func TestHealthPreservesZeroPendingOutbox(t *testing.T) {
 	handler := newTestServerWithHealth(t, &fakeRepository{pendingOutbox: 0}, healthDependencies{
 		Postgres: func(context.Context) error { return nil },

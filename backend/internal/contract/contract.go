@@ -1,13 +1,12 @@
-// Package contract 是 v2 闭环里所有跨进程数据的唯一权威定义。
+// Package contract 定义 v3 浏览器执行器共享的 case 与结果数据。
 //
 // 镜像位置（改这里必须同步改）：
-//   - v2/CONTRACT.md        人读版
-//   - v2/worker/loop_worker/contracts.py
-//   - v2/web/src/api.ts
+//   - CONTRACT.md
+//   - worker/loop_worker/contracts.py
+//   - web/src/api.ts
 //
-// 设计要点：case 不由模型书写，而由本包的 Derive* 函数根据工具调用构建；
-// 构建完立即调用同一个校验函数，因此"生成的 DSL 过不了校验"在结构上不可能发生。
-// 校验失败一律返回带错误码的 *Violation，模型据此改口重试。
+// v3 模型提供完整 case JSON；本包负责结构校验与默认值归一化。
+// 校验失败一律返回带稳定错误码的 *Violation。
 package contract
 
 import (
@@ -115,7 +114,7 @@ const (
 	PhasePost Phase = "post"
 )
 
-// Locator 描述一个定位器。观测阶段输出的每一条都必须当场验证过。
+// Locator 描述模型提供、由 worker 在执行时解析的定位器。
 type Locator struct {
 	Kind       string `json:"kind"` // role | text | css
 	Role       string `json:"role,omitempty"`
@@ -140,7 +139,7 @@ func (l Locator) Describe() string {
 	}
 }
 
-// Grounding 记录定位器来自哪一次观测，保证 case 可追溯。
+// Grounding 记录模型提供的定位元数据；v3 当前不校验其观测来源。
 type Grounding struct {
 	ObservationID string `json:"observation_id"`
 	PageStateID   string `json:"page_state_id"`
@@ -401,7 +400,7 @@ func validateTarget(index int, target Target) error {
 		target.Grounding.PageURL == "" {
 		return violation(
 			CodeTargetUngrounded, index,
-			"case.steps[%d].target must be grounded against a real observation: observation_id, candidate_id and page_url are required",
+			"case.steps[%d].target requires grounding metadata: observation_id, candidate_id and page_url are required",
 			index,
 		)
 	}

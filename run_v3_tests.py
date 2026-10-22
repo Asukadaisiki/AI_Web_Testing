@@ -21,35 +21,6 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent
 NPM_CACHE = "/tmp/agenttrace-npm-cache"
 TEST_DATABASE_PREFIX = "agenttrace_test_v3_runner_"
-V3_GO_PACKAGES = (
-    ".",
-    "./cmd/agenttrace-api",
-    "./cmd/agenttrace-exporter",
-    "./cmd/agenttrace-runtime",
-    "./internal/agentprofile",
-    "./internal/api/v3",
-    "./internal/config",
-    "./internal/consumer",
-    "./internal/contract",
-    "./internal/domain",
-    "./internal/event",
-    "./internal/eventbus",
-    "./internal/eventbus/kafka",
-    "./internal/export/langfuse",
-    "./internal/live",
-    "./internal/live/redis",
-    "./internal/model",
-    "./internal/operation",
-    "./internal/outbox",
-    "./internal/planner",
-    "./internal/postgres",
-    "./internal/runtime",
-    "./internal/stream",
-    "./internal/testpostgres",
-    "./internal/testredis",
-    "./internal/usage",
-    "./internal/worker",
-)
 CommandExecutor = Callable[..., int]
 
 
@@ -119,7 +90,7 @@ class V3TestRunner:
                     "test",
                     "-p",
                     "1",
-                    *V3_GO_PACKAGES,
+                    "./...",
                 ],
                 self.root,
                 go_env,
@@ -143,7 +114,20 @@ class V3TestRunner:
                 self.root,
                 base_env,
             ),
-            (["python3", "integration/v3/failure_drills.py"], self.root, base_env),
+            (
+                [
+                    "uv",
+                    "run",
+                    "--with",
+                    "psycopg[binary]>=3.2,<4",
+                    "--python",
+                    sys.executable,
+                    "python",
+                    "integration/v3/failure_drills.py",
+                ],
+                self.root,
+                base_env,
+            ),
             (["npm", "run", "test:e2e"], self.root / "web", base_env),
         ):
             self._run(command, cwd, env)

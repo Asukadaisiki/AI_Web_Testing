@@ -114,8 +114,17 @@ class Scenario:
 class FailureDrills:
     """Runs the real Compose failure modes with mandatory service restoration."""
 
-    def __init__(self, *, wait_seconds: float = DEFAULT_WAIT_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        wait_seconds: float = DEFAULT_WAIT_SECONDS,
+        exporter_consumer: str | None = None,
+    ) -> None:
         self.wait_seconds = wait_seconds
+        self.exporter_consumer = exporter_consumer or (
+            f"{EXPORTER_CONSUMER}-failure-{uuid.uuid4().hex}"
+        )
+        self._exporter_fixture_created = False
 
     def kafka_outage(self) -> None:
         """A Kafka outage leaves the accepted command durably queued."""
@@ -221,32 +230,35 @@ class FailureDrills:
 
     def exporter_outage(self) -> None:
         """An optional exporter failure cannot block local completion."""
-        self._ensure_exporter()
-        # The real exporter deliberately replays retained completions from the
-        # beginning for a new group. Wait until each retained completion is
-        # either committed to the inbox or handed to the durable DLQ.
-        self._wait(
-            "exporter catches up with retained completion events",
-            self._exporter_caught_up,
-            timeout=300.0,
-        )
-        scenario: Scenario | None = None
-        completion_event_id = ""
-        self._stop("exporter")
         try:
-            scenario = self._create_run("exporter-outage")
-            self._wait_for_completion(scenario)
-            completion_event_id = self._completion_event_id(scenario.run_id)
-        finally:
-            self._start("exporter")
-            self._wait_service_running("exporter")
+            self._ensure_exporter()
+            # A unique fixture consumer replays retained completions from the
+            # beginning. Wait until each completion is committed or sent to DLQ.
+            self._wait(
+                "exporter catches up with retained completion events",
+                self._exporter_caught_up,
+                timeout=300.0,
+            )
+            scenario: Scenario | None = None
+            completion_event_id = ""
+            self._stop("exporter")
+            try:
+                scenario = self._create_run("exporter-outage")
+                self._wait_for_completion(scenario)
+                completion_event_id = self._completion_event_id(scenario.run_id)
+            finally:
+                self._start("exporter")
+                self._wait_service_running("exporter")
 
-        self._assert_standard_completion(scenario)
-        self._wait(
-            "recovered exporter records a durable failed export retry",
-            lambda: self._export_retry_visible(completion_event_id),
-            run_id=scenario.run_id,
-        )
+            self._assert_standard_completion(scenario)
+            self._wait(
+                "recovered exporter records a durable failed export retry",
+                lambda: self._export_retry_visible(completion_event_id),
+                run_id=scenario.run_id,
+            )
+        finally:
+            if self._exporter_fixture_created:
+                self._remove_exporter_fixture()
 
     def duplicate_command_delivery(self) -> None:
         """A real duplicate Kafka command produces no second durable effect."""
@@ -505,7 +517,7 @@ class FailureDrills:
             FROM consumer_retry_counts
             WHERE consumer = %s AND event_id = %s
             """,
-            (EXPORTER_CONSUMER, completion_event_id),
+            (self.exporter_consumer, completion_event_id),
         )
         return int(attempt_count) >= 2
 
@@ -530,7 +542,7 @@ class FailureDrills:
                     FROM inbox_events
                     WHERE consumer = %s AND event_id = ANY(%s)
                     """,
-                    (EXPORTER_CONSUMER, event_ids),
+                    (self.exporter_consumer, event_ids),
                 )
                 observed = {str(row[0]) for row in cursor.fetchall()}
                 dlq_ids = {
@@ -710,15 +722,28 @@ class FailureDrills:
         )
 
     def _ensure_exporter(self) -> None:
+        if self._service_running("exporter"):
+            raise AssertionError(
+                "exporter is already running; refusing to replace operator configuration"
+            )
+        environment = dict(EXPORTER_FIXTURE_ENV)
+        environment["AGENTTRACE_LANGFUSE_GROUP_ID"] = self.exporter_consumer
+        # Once provisioning starts, this drill owns any container Compose may
+        # create, including one left behind by a partial command failure.
+        self._exporter_fixture_created = True
         self._compose(
             "--profile",
             "langfuse",
             "up",
             "-d",
             "exporter",
-            environment=EXPORTER_FIXTURE_ENV,
+            environment=environment,
         )
         self._wait_service_running("exporter")
+
+    def _remove_exporter_fixture(self) -> None:
+        self._compose("--profile", "langfuse", "rm", "-f", "-s", "exporter")
+        self._exporter_fixture_created = False
 
     def _wait_stack(self) -> None:
         try:

@@ -20,6 +20,3 @@ dev = [
 [tool.uv]
 # This directory is run in place; uv resolves loop_worker from the cwd.
 package = false
-
-[tool.uv.pip]
-index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"

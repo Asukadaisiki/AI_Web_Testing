@@ -2,9 +2,8 @@ package contract
 
 // Element 是观测到的页面元素。
 //
-// Locators 是按偏好排序、且已在页面上就地验证过的定位器（CONTRACT.md §3.1）。
-// 只有 match_count == 1 的定位器才允许出现在这里，这保证"观测时能解析、
-// 执行时能命中"，也是旧版 BUG-211 一类问题的根治手段。
+// Locators 按生产者偏好排序并记录匹配数；当前 v3 操作边界不校验这些
+// 匹配数是否来自实时页面。
 type Element struct {
 	Ref               string            `json:"ref"`
 	Tag               string            `json:"tag"`
@@ -73,9 +72,8 @@ type CandidateRelation struct {
 	Label string `json:"label,omitempty"`
 }
 
-// ActionCandidate is a system-verified target option from the latest observation.
-// Models may select it by candidate_id; the planner still validates action
-// compatibility and uses only the verified locator stored here.
+// ActionCandidate describes target metadata carried by an observation.
+// Current v3 operation validation does not verify candidate provenance.
 type ActionCandidate struct {
 	CandidateID string              `json:"candidate_id"`
 	Kind        string              `json:"kind"`
@@ -91,8 +89,7 @@ type ActionCandidate struct {
 	Confidence  string              `json:"confidence"`
 }
 
-// TargetSpec 是 v2 结构化定位请求。模型提供 object/scope 语义；系统仍只
-// 输出已在 Observation 中验证过的 locator。
+// TargetSpec 是可选的结构化定位元数据；模型提供 object/scope 语义。
 type TargetSpec struct {
 	Object   TargetObject `json:"object"`
 	Scope    *TargetScope `json:"scope,omitempty"`
@@ -116,7 +113,7 @@ type TargetScope struct {
 	Ref          string `json:"ref,omitempty"`
 }
 
-// Observation 是一次页面观测，也是接地的唯一依据。
+// Observation 是共享 case 格式中的页面观测表示。
 type Observation struct {
 	ObservationID string `json:"observation_id"`
 	PageStateID   string `json:"page_state_id"`

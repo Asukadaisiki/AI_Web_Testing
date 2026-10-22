@@ -67,6 +67,10 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
+      args:
+        UV_PACKAGE_BASE: ${UV_PACKAGE_BASE:-https://files.pythonhosted.org}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
     working_dir: /app/worker
     command: ["uv", "run", "--no-sync", "uvicorn", "loop_worker.main:app", "--host", "0.0.0.0", "--port", "8100"]
     environment:
@@ -81,6 +85,7 @@ services:
     working_dir: /app/backend
     command: ["go", "run", "./cmd/agenttrace-api"]
     environment:
+      GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
       AGENTTRACE_POSTGRES_DSN: ${AGENTTRACE_POSTGRES_DSN:-postgres://agenttrace:agenttrace@postgres:5432/agenttrace?sslmode=disable}
       AGENTTRACE_KAFKA_BROKERS: ${AGENTTRACE_KAFKA_BROKERS:-kafka:9092}
       AGENTTRACE_REDIS_ADDR: ${AGENTTRACE_REDIS_ADDR:-redis:6379}
@@ -105,6 +110,7 @@ services:
     working_dir: /app/backend
     command: ["go", "run", "./cmd/agenttrace-runtime"]
     environment:
+      GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
       AGENTTRACE_POSTGRES_DSN: ${AGENTTRACE_POSTGRES_DSN:-postgres://agenttrace:agenttrace@postgres:5432/agenttrace?sslmode=disable}
       AGENTTRACE_KAFKA_BROKERS: ${AGENTTRACE_KAFKA_BROKERS:-kafka:9092}
       AGENTTRACE_REDIS_ADDR: ${AGENTTRACE_REDIS_ADDR:-redis:6379}
@@ -130,6 +136,7 @@ services:
     working_dir: /app/backend
     command: ["go", "run", "./cmd/agenttrace-exporter"]
     environment:
+      GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
       AGENTTRACE_LANGFUSE_ENABLED: "true"
       AGENTTRACE_POSTGRES_DSN: ${AGENTTRACE_POSTGRES_DSN:-postgres://agenttrace:agenttrace@postgres:5432/agenttrace?sslmode=disable}
       AGENTTRACE_KAFKA_BROKERS: ${AGENTTRACE_KAFKA_BROKERS:-kafka:9092}

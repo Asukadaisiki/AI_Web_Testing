@@ -1,6 +1,6 @@
-"""CONTRACT.md 的 pydantic 镜像。
+"""AgentTrace v3 CONTRACT.md 的 Pydantic 镜像。
 
-唯一权威是 `v2/CONTRACT.md`；本文件只是它的可执行副本。改契约的正确流程见 CONTRACT.md 开头。
+唯一权威是仓库根目录的 `CONTRACT.md`；本文件是跨语言可执行副本。
 
 本模块只做"形状 + 阶段规则"的校验，不含任何浏览器行为：
 
@@ -394,8 +394,8 @@ def _validate_target(target: Target) -> None:
     ):
         raise CaseInvalid(
             CODE_TARGET_UNGROUNDED,
-            "target must be grounded against a real observation: observation_id, "
-            "candidate_id and page_url are required",
+            "target requires grounding metadata: observation_id, candidate_id "
+            "and page_url are required",
         )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -60,33 +61,7 @@ class V3RunnerTest(unittest.TestCase):
                     "test",
                     "-p",
                     "1",
-                    ".",
-                    "./cmd/agenttrace-api",
-                    "./cmd/agenttrace-exporter",
-                    "./cmd/agenttrace-runtime",
-                    "./internal/agentprofile",
-                    "./internal/api/v3",
-                    "./internal/config",
-                    "./internal/consumer",
-                    "./internal/contract",
-                    "./internal/domain",
-                    "./internal/event",
-                    "./internal/eventbus",
-                    "./internal/eventbus/kafka",
-                    "./internal/export/langfuse",
-                    "./internal/live",
-                    "./internal/live/redis",
-                    "./internal/model",
-                    "./internal/operation",
-                    "./internal/outbox",
-                    "./internal/planner",
-                    "./internal/postgres",
-                    "./internal/runtime",
-                    "./internal/stream",
-                    "./internal/testpostgres",
-                    "./internal/testredis",
-                    "./internal/usage",
-                    "./internal/worker",
+                    "./...",
                 ),
                 ("uv", "run", "python", "-m", "unittest", "discover", "-s", "tests", "-t", "."),
                 ("npm", "test", "--", "--run"),
@@ -99,7 +74,16 @@ class V3RunnerTest(unittest.TestCase):
                     "python",
                     "integration/v3/canonical_scenario.py",
                 ),
-                ("python3", "integration/v3/failure_drills.py"),
+                (
+                    "uv",
+                    "run",
+                    "--with",
+                    "psycopg[binary]>=3.2,<4",
+                    "--python",
+                    sys.executable,
+                    "python",
+                    "integration/v3/failure_drills.py",
+                ),
                 ("npm", "run", "test:e2e"),
             ],
         )

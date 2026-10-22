@@ -4,8 +4,19 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app/worker
 
+ARG UV_PACKAGE_BASE=https://files.pythonhosted.org
+ARG DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+
 COPY worker/pyproject.toml worker/uv.lock ./
-RUN uv sync --frozen --no-dev
-RUN uv run --no-sync playwright install --with-deps chromium
+RUN if [ "$UV_PACKAGE_BASE" != "https://files.pythonhosted.org" ]; then \
+        sed -i "s#https://files.pythonhosted.org#${UV_PACKAGE_BASE%/}#g" uv.lock; \
+    fi \
+    && UV_HTTP_TIMEOUT=120 UV_HTTP_RETRIES=5 uv sync --frozen --no-dev
+RUN sed -i \
+        -e "s#http://deb.debian.org/debian-security#${DEBIAN_SECURITY_MIRROR%/}#g" \
+        -e "s#http://deb.debian.org/debian#${DEBIAN_MIRROR%/}#g" \
+        /etc/apt/sources.list.d/debian.sources \
+    && uv run --no-sync playwright install --with-deps chromium
 
 COPY worker/loop_worker ./loop_worker
