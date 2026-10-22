@@ -348,6 +348,7 @@ func (s *Store) FinishRun(
 	runID string,
 	status domain.RunStatus,
 	runError json.RawMessage,
+	assistant string,
 	envelope event.Envelope[json.RawMessage],
 ) error {
 	if s == nil || s.pool == nil {
@@ -399,6 +400,18 @@ func (s *Store) FinishRun(
 		}
 		return tx.Commit(ctx)
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE spans
+		SET status = $2, ended_at = now(), updated_at = now()
+		WHERE run_id = $1
+		  AND kind = 'run'
+		  AND ended_at IS NULL`,
+		runID, status); err != nil {
+		return fmt.Errorf("finish trace root: %w", err)
+	}
+	if err := appendAssistantMessage(ctx, tx, runID, assistant); err != nil {
+		return err
+	}
 	var seq int64
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = $1`, runID).Scan(&seq); err != nil {
@@ -428,6 +441,39 @@ func (s *Store) FinishRun(
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit completion: %w", err)
+	}
+	return nil
+}
+
+func appendAssistantMessage(ctx context.Context, tx pgx.Tx, runID, content string) error {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	messageID, err := newID("msg")
+	if err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO messages (id, conversation_id, ordinal, role, content, metadata)
+		SELECT
+			$1,
+			r.conversation_id,
+			COALESCE((
+				SELECT MAX(ordinal)
+				FROM messages
+				WHERE conversation_id = r.conversation_id
+			), 0) + 1,
+			'assistant',
+			$3,
+			jsonb_build_object('run_id', r.id)
+		FROM runs AS r
+		WHERE r.id = $2`,
+		messageID, runID, content)
+	if err != nil {
+		return fmt.Errorf("insert assistant message: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotFound
 	}
 	return nil
 }

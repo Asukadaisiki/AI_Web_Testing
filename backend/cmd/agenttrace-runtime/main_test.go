@@ -14,7 +14,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
 )
 
-func TestSelectModelUsesScriptedFixtureWhenConfigured(t *testing.T) {
+func TestSelectModelUsesCheckpointedScriptedFixtureWhenConfigured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fixture.json")
 	if err := os.WriteFile(path, []byte(`{"steps":[{"final":"done"}]}`), 0o600); err != nil {
 		t.Fatalf("write scripted fixture: %v", err)
@@ -23,8 +23,11 @@ func TestSelectModelUsesScriptedFixtureWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("select model: %v", err)
 	}
-	if _, ok := selected.(*model.Scripted); !ok {
-		t.Fatalf("model = %T, want scripted", selected)
+	if _, ok := selected.(*model.CheckpointedScripted); !ok {
+		t.Fatalf("model = %T, want checkpointed scripted", selected)
+	}
+	if _, ok := selected.(model.CheckpointedModel); !ok {
+		t.Fatalf("model = %T, want durable checkpointed model", selected)
 	}
 }
 

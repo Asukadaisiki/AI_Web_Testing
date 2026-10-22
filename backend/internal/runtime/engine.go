@@ -78,7 +78,7 @@ func (e Engine) runModel(ctx context.Context, checkpoint Checkpoint) error {
 	if err := e.Store.StartAttempt(ctx, step); err != nil {
 		return fmt.Errorf("start model attempt: %w", err)
 	}
-	response, err := e.Model.Complete(ctx, request)
+	response, err := completeModel(ctx, e.Model, checkpoint, request)
 	if err != nil {
 		return e.complete(ctx, checkpoint, CompletionFailed, "", fmt.Errorf("model completion: %w", err))
 	}
@@ -104,6 +104,18 @@ func (e Engine) runModel(ctx context.Context, checkpoint Checkpoint) error {
 		return e.complete(ctx, checkpoint, CompletionSucceeded, response.Message.Content, nil)
 	}
 	return nil
+}
+
+func completeModel(
+	ctx context.Context,
+	selected model.Model,
+	checkpoint Checkpoint,
+	request model.Request,
+) (model.Response, error) {
+	if checkpointed, ok := selected.(model.CheckpointedModel); ok {
+		return checkpointed.CompleteForRun(ctx, checkpoint.RunID, checkpoint.ModelCalls, request)
+	}
+	return selected.Complete(ctx, request)
 }
 
 func (e Engine) runOperation(ctx context.Context, checkpoint Checkpoint) error {

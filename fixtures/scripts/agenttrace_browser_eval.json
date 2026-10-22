@@ -1,0 +1,284 @@
+{
+  "steps": [
+    {
+      "tool": "browser_execute_case",
+      "arguments": {
+        "session_id": "canonical-storefront-qa",
+        "case": {
+          "case_version": "loop.case.v1",
+          "name": "Canonical local storefront evaluation",
+          "goal": "Filter alpha, add two items to the cart, and verify the cart summary.",
+          "base_url": "http://fixture-site",
+          "steps": [
+            {
+              "index": 0,
+              "action": "goto",
+              "intent": "Open the local catalog",
+              "value": "http://fixture-site/index.html",
+              "preconditions": [],
+              "postconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "index.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            },
+            {
+              "index": 1,
+              "action": "input",
+              "intent": "Filter for alpha",
+              "value": "alpha",
+              "target": {
+                "hint": "Search items",
+                "locator": {
+                  "kind": "role",
+                  "role": "textbox",
+                  "name": "Search items",
+                  "exact": true
+                },
+                "grounding": {
+                  "observation_id": "obs_catalog",
+                  "page_state_id": "page_catalog",
+                  "candidate_id": "catalog-search",
+                  "page_url": "http://fixture-site/index.html"
+                }
+              },
+              "preconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "index.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "postconditions": [
+                {
+                  "type": "value_equals",
+                  "value": "alpha",
+                  "timeout_ms": 5000
+                },
+                {
+                  "type": "text_gone",
+                  "value": "Tip: type in the search box",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            },
+            {
+              "index": 2,
+              "action": "click",
+              "intent": "Apply the catalog filter",
+              "target": {
+                "hint": "Filter",
+                "locator": {
+                  "kind": "role",
+                  "role": "button",
+                  "name": "Filter",
+                  "exact": true
+                },
+                "grounding": {
+                  "observation_id": "obs_catalog",
+                  "page_state_id": "page_catalog",
+                  "candidate_id": "catalog-filter",
+                  "page_url": "http://fixture-site/index.html"
+                }
+              },
+              "preconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "index.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "postconditions": [
+                {
+                  "type": "text_gone",
+                  "value": "Beta",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            },
+            {
+              "index": 3,
+              "action": "click",
+              "intent": "Open the alpha detail page",
+              "target": {
+                "hint": "Alpha",
+                "locator": {
+                  "kind": "role",
+                  "role": "link",
+                  "name": "Alpha",
+                  "exact": true
+                },
+                "grounding": {
+                  "observation_id": "obs_catalog_filtered",
+                  "page_state_id": "page_catalog_filtered",
+                  "candidate_id": "catalog-alpha",
+                  "page_url": "http://fixture-site/index.html"
+                }
+              },
+              "preconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "index.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "postconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "detail.html",
+                  "timeout_ms": 5000
+                },
+                {
+                  "type": "text_gone",
+                  "value": "Loading details",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            },
+            {
+              "index": 4,
+              "action": "input",
+              "intent": "Set cart quantity to two",
+              "value": "2",
+              "target": {
+                "hint": "Quantity",
+                "locator": {
+                  "kind": "role",
+                  "role": "spinbutton",
+                  "name": "Quantity",
+                  "exact": true
+                },
+                "grounding": {
+                  "observation_id": "obs_detail",
+                  "page_state_id": "page_detail",
+                  "candidate_id": "detail-quantity",
+                  "page_url": "http://fixture-site/detail.html?item=alpha"
+                }
+              },
+              "preconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "detail.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "postconditions": [
+                {
+                  "type": "value_equals",
+                  "value": "2",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            },
+            {
+              "index": 5,
+              "action": "click",
+              "intent": "Add alpha to the cart",
+              "target": {
+                "hint": "Add to cart",
+                "locator": {
+                  "kind": "role",
+                  "role": "button",
+                  "name": "Add to cart",
+                  "exact": true
+                },
+                "grounding": {
+                  "observation_id": "obs_detail",
+                  "page_state_id": "page_detail",
+                  "candidate_id": "detail-add-to-cart",
+                  "page_url": "http://fixture-site/detail.html?item=alpha"
+                }
+              },
+              "preconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "detail.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "postconditions": [
+                {
+                  "type": "text_visible",
+                  "value": "Added!",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            },
+            {
+              "index": 6,
+              "action": "click",
+              "intent": "Open the cart",
+              "target": {
+                "hint": "View Cart",
+                "locator": {
+                  "kind": "role",
+                  "role": "link",
+                  "name": "View Cart",
+                  "exact": true
+                },
+                "grounding": {
+                  "observation_id": "obs_detail_added",
+                  "page_state_id": "page_detail_added",
+                  "candidate_id": "detail-view-cart",
+                  "page_url": "http://fixture-site/detail.html?item=alpha"
+                }
+              },
+              "preconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "detail.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "postconditions": [
+                {
+                  "type": "url_changes",
+                  "value": "changed",
+                  "timeout_ms": 5000
+                },
+                {
+                  "type": "url_contains",
+                  "value": "cart.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            },
+            {
+              "index": 7,
+              "action": "assert_text",
+              "intent": "Verify the cart summary",
+              "value": "Alpha x 2",
+              "preconditions": [
+                {
+                  "type": "url_contains",
+                  "value": "cart.html",
+                  "timeout_ms": 5000
+                }
+              ],
+              "postconditions": [
+                {
+                  "type": "text_visible",
+                  "value": "Alpha x 2",
+                  "timeout_ms": 5000
+                }
+              ],
+              "timeout_ms": 10000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "final": "Report: the grounded local storefront case passed with browser evidence. Final: Alpha x 2 is in the cart."
+    }
+  ]
+}

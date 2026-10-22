@@ -60,6 +60,7 @@ type TraceStep struct {
 // TraceAttemptStart records an external call before it begins.
 type TraceAttemptStart struct {
 	ExpectedCheckpoint int64
+	Root               *domain.Span
 	Span               domain.Span
 	Attempt            TraceAttempt
 }
@@ -90,6 +91,11 @@ func (s *Store) StartTraceAttempt(ctx context.Context, started TraceAttemptStart
 	}
 	if checkpoint != started.ExpectedCheckpoint {
 		return ErrConflict
+	}
+	if started.Root != nil {
+		if _, err := insertStartedSpan(ctx, tx, *started.Root); err != nil {
+			return err
+		}
 	}
 	spanID, err := insertStartedSpan(ctx, tx, started.Span)
 	if err != nil {
@@ -273,6 +279,17 @@ func validateTraceStep(step TraceStep) error {
 func validateTraceAttemptStart(started TraceAttemptStart) error {
 	span := started.Span
 	attempt := started.Attempt
+	if started.Root != nil {
+		root := *started.Root
+		switch {
+		case root.ID == "" || root.RunID != span.RunID || root.TraceID != span.TraceID:
+			return errors.New("trace root must belong to the started span")
+		case root.SpanID == "" || root.Kind != domain.SpanRun || root.Name == "" || root.Status == "":
+			return errors.New("trace root span is invalid")
+		case root.ParentSpanID != "" || root.StartedAt.IsZero() || root.EndedAt != nil:
+			return errors.New("trace root must be unfinished and parentless")
+		}
+	}
 	switch {
 	case strings.TrimSpace(span.ID) == "":
 		return errors.New("started trace span id is required")

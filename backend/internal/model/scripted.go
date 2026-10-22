@@ -26,13 +26,24 @@ type Scripted struct {
 	calls [][]Message
 }
 
+// CheckpointedScripted replays fixture steps from the durable model-call count.
+// It is intended for long-lived runtimes that execute more than one run.
+type CheckpointedScripted struct {
+	*Scripted
+}
+
 // NewScripted creates a deterministic scripted model.
 func NewScripted(steps []ScriptedStep) *Scripted {
 	return &Scripted{steps: append([]ScriptedStep(nil), steps...)}
 }
 
+// NewCheckpointedScripted creates a deterministic model safe for run replay.
+func NewCheckpointedScripted(steps []ScriptedStep) *CheckpointedScripted {
+	return &CheckpointedScripted{Scripted: NewScripted(steps)}
+}
+
 // ScriptedFromJSON parses {"steps":[...]}.
-func ScriptedFromJSON(raw []byte) (*Scripted, error) {
+func ScriptedFromJSON(raw []byte) (*CheckpointedScripted, error) {
 	var decoded struct {
 		Steps []ScriptedStep `json:"steps"`
 	}
@@ -42,7 +53,7 @@ func ScriptedFromJSON(raw []byte) (*Scripted, error) {
 	if len(decoded.Steps) == 0 {
 		return nil, fmt.Errorf("scripted model needs at least one step")
 	}
-	return NewScripted(decoded.Steps), nil
+	return NewCheckpointedScripted(decoded.Steps), nil
 }
 
 // Label identifies this deterministic provider.
@@ -116,6 +127,57 @@ func (s *Scripted) Complete(_ context.Context, request Request) (Response, error
 		Role: RoleAssistant,
 		ToolCalls: []ToolCall{{
 			ID:        fmt.Sprintf("call_%d", s.index),
+			Name:      name,
+			Arguments: append(json.RawMessage(nil), arguments...),
+		}},
+	}, Usage: usage.Usage{}}, nil
+}
+
+// CompleteForRun selects a scripted response from the durable model-call count.
+// This keeps the fixture rerunnable across independent runs and process restarts.
+func (s *CheckpointedScripted) CompleteForRun(
+	_ context.Context,
+	_ string,
+	modelCalls int,
+	request Request,
+) (Response, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if modelCalls < 0 {
+		return Response{}, fmt.Errorf("scripted model call count must not be negative")
+	}
+	captured := cloneMessages(request.Messages)
+	s.seen = append(s.seen, captured...)
+	s.calls = append(s.calls, captured)
+	if modelCalls >= len(s.steps) {
+		return Response{Message: Message{Role: RoleAssistant, Content: "script exhausted"}}, nil
+	}
+	return scriptedResponse(s.steps[modelCalls], modelCalls)
+}
+
+func scriptedResponse(step ScriptedStep, index int) (Response, error) {
+	if step.Final != "" {
+		return Response{Message: Message{Role: RoleAssistant, Content: step.Final}}, nil
+	}
+	name, arguments := step.Tool, step.Arguments
+	if step.Ask != "" {
+		name = "ask_user"
+		encoded, err := json.Marshal(map[string]string{"question": step.Ask})
+		if err != nil {
+			return Response{}, err
+		}
+		arguments = encoded
+	}
+	if name == "" {
+		return Response{}, fmt.Errorf("scripted step %d has neither tool nor final", index)
+	}
+	if len(arguments) == 0 {
+		arguments = json.RawMessage("{}")
+	}
+	return Response{Message: Message{
+		Role: RoleAssistant,
+		ToolCalls: []ToolCall{{
+			ID:        fmt.Sprintf("call_%d", index+1),
 			Name:      name,
 			Arguments: append(json.RawMessage(nil), arguments...),
 		}},

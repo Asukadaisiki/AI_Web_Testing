@@ -62,6 +62,13 @@ type Model interface {
 	Label() string
 }
 
+// CheckpointedModel can deterministically replay a response selected by durable
+// run state instead of mutable process-local call order.
+type CheckpointedModel interface {
+	Model
+	CompleteForRun(context.Context, string, int, Request) (Response, error)
+}
+
 // RequestSizer reports the exact serialized transport request size.
 type RequestSizer interface {
 	RequestSize(Request) (int, error)

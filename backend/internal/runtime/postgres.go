@@ -106,14 +106,15 @@ func (s PostgresCheckpointStore) Load(ctx context.Context, runID string) (Checkp
 func (s PostgresCheckpointStore) StartAttempt(ctx context.Context, step StepResult) error {
 	now := time.Now().UTC()
 	span := domain.Span{
-		ID:        step.LogicalSpanID,
-		RunID:     step.RunID,
-		TraceID:   stableID("trace", step.RunID),
-		SpanID:    step.LogicalSpanID,
-		Kind:      spanKind(step.Kind),
-		Name:      string(step.Kind),
-		Status:    "started",
-		StartedAt: now,
+		ID:           step.LogicalSpanID,
+		RunID:        step.RunID,
+		TraceID:      stableID("trace", step.RunID),
+		SpanID:       step.LogicalSpanID,
+		ParentSpanID: RunSpanID(step.RunID),
+		Kind:         spanKind(step.Kind),
+		Name:         string(step.Kind),
+		Status:       "started",
+		StartedAt:    now,
 	}
 	attempt := postgres.TraceAttempt{
 		ID:            step.AttemptID,
@@ -143,8 +144,18 @@ func (s PostgresCheckpointStore) StartAttempt(ctx context.Context, step StepResu
 	}
 	return s.Store.StartTraceAttempt(ctx, postgres.TraceAttemptStart{
 		ExpectedCheckpoint: step.Checkpoint,
-		Span:               span,
-		Attempt:            attempt,
+		Root: &domain.Span{
+			ID:        RunSpanID(step.RunID),
+			RunID:     step.RunID,
+			TraceID:   stableID("trace", step.RunID),
+			SpanID:    RunSpanID(step.RunID),
+			Kind:      domain.SpanRun,
+			Name:      "run",
+			Status:    "running",
+			StartedAt: now,
+		},
+		Span:    span,
+		Attempt: attempt,
 	})
 }
 
@@ -166,15 +177,16 @@ func (s PostgresCheckpointStore) CommitStep(ctx context.Context, step StepResult
 		Payload:       payload,
 	}
 	span := domain.Span{
-		ID:        step.LogicalSpanID,
-		RunID:     step.RunID,
-		TraceID:   stableID("trace", step.RunID),
-		SpanID:    step.LogicalSpanID,
-		Kind:      spanKind(step.Kind),
-		Name:      string(step.Kind),
-		Status:    stepStatus(step),
-		StartedAt: now,
-		EndedAt:   &now,
+		ID:           step.LogicalSpanID,
+		RunID:        step.RunID,
+		TraceID:      stableID("trace", step.RunID),
+		SpanID:       step.LogicalSpanID,
+		ParentSpanID: RunSpanID(step.RunID),
+		Kind:         spanKind(step.Kind),
+		Name:         string(step.Kind),
+		Status:       stepStatus(step),
+		StartedAt:    now,
+		EndedAt:      &now,
 	}
 	attempt := postgres.TraceAttempt{
 		ID:            step.AttemptID,
@@ -239,7 +251,14 @@ func (s PostgresCheckpointStore) CompleteRun(ctx context.Context, completion Com
 	if completion.Error != "" {
 		runError, _ = json.Marshal(map[string]string{"message": completion.Error})
 	}
-	return s.Store.FinishRun(ctx, completion.RunID, completionStatus(completion.Status), runError, envelope)
+	return s.Store.FinishRun(
+		ctx,
+		completion.RunID,
+		completionStatus(completion.Status),
+		runError,
+		completion.Assistant,
+		envelope,
+	)
 }
 
 func applyStep(checkpoint *Checkpoint, step StepResult) {

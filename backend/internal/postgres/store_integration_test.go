@@ -42,6 +42,50 @@ func TestCreateMessageAndRunReplaysMatchingIdempotencyRequest(t *testing.T) {
 	assertRowCount(t, ctx, pool, "outbox_events", 1)
 }
 
+func TestFinishRunPersistsOneAssistantMessage(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+		ConversationID: conversationID,
+		Content:        "verify the cart",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+		IdempotencyKey: "completion-message",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	completedAt := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	completion := event.Envelope[json.RawMessage]{
+		SchemaVersion: "agenttrace.event.v1",
+		EventID:       "evt-completion-message",
+		EventType:     "runtime.completed",
+		AggregateID:   run.ID,
+		CorrelationID: run.ID,
+		OccurredAt:    completedAt,
+		Payload:       json.RawMessage(`{"status":"succeeded"}`),
+	}
+	const assistant = "Report: cart passed."
+	if err := store.FinishRun(ctx, run.ID, domain.RunSucceeded, nil, assistant, completion); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+	if err := store.FinishRun(ctx, run.ID, domain.RunSucceeded, nil, assistant, completion); err != nil {
+		t.Fatalf("replay completion: %v", err)
+	}
+
+	var count int
+	var content string
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), coalesce(max(content), '')
+		FROM messages
+		WHERE conversation_id = $1 AND role = 'assistant'`, conversationID).Scan(&count, &content); err != nil {
+		t.Fatalf("load assistant message: %v", err)
+	}
+	if count != 1 || content != assistant {
+		t.Fatalf("assistant messages = count %d content %q, want one %q", count, content, assistant)
+	}
+}
+
 func TestCreateMessageAndRunRejectsMismatchedIdempotencyRequest(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)
@@ -138,9 +182,13 @@ func TestStartTraceAttemptDoesNotAdvanceCheckpointAndCompletes(t *testing.T) {
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	started := TraceAttemptStart{
 		ExpectedCheckpoint: 1,
+		Root: &domain.Span{
+			ID: "spn_root", RunID: run.ID, TraceID: "trc_started", SpanID: "run-root",
+			Kind: domain.SpanRun, Name: "run", Status: "running", StartedAt: now,
+		},
 		Span: domain.Span{
 			ID: "spn_started", RunID: run.ID, TraceID: "trc_started", SpanID: "model-1",
-			Kind: domain.SpanModel, Name: "model", Status: "started",
+			ParentSpanID: "run-root", Kind: domain.SpanModel, Name: "model", Status: "started",
 			Input: json.RawMessage(`{"messages":[{"role":"user","content":"hello"}]}`), StartedAt: now,
 		},
 		Attempt: TraceAttempt{
@@ -162,15 +210,28 @@ func TestStartTraceAttemptDoesNotAdvanceCheckpointAndCompletes(t *testing.T) {
 	if checkpoint != 1 {
 		t.Fatalf("checkpoint after start = %d, want 1", checkpoint)
 	}
-	assertRowCount(t, ctx, pool, "spans", 1)
+	assertRowCount(t, ctx, pool, "spans", 2)
 	assertRowCount(t, ctx, pool, "span_attempts", 1)
+	var rootCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM spans
+		WHERE run_id = $1
+		  AND span_id = 'run-root'
+		  AND kind = 'run'
+		  AND parent_span_id IS NULL`, run.ID).Scan(&rootCount); err != nil {
+		t.Fatalf("count trace root: %v", err)
+	}
+	if rootCount != 1 {
+		t.Fatalf("trace root count = %d, want 1", rootCount)
+	}
 
 	finished := now.Add(time.Second)
 	step := TraceStep{
 		ExpectedCheckpoint: 1,
 		Span: domain.Span{
 			ID: "spn_started", RunID: run.ID, TraceID: "trc_started", SpanID: "model-1",
-			Kind: domain.SpanModel, Name: "model", Status: "succeeded",
+			ParentSpanID: "run-root", Kind: domain.SpanModel, Name: "model", Status: "succeeded",
 			Input:  json.RawMessage(`{"messages":[{"role":"user","content":"hello"}]}`),
 			Output: json.RawMessage(`{"content":"done"}`), StartedAt: finished, EndedAt: &finished,
 		},

@@ -86,6 +86,11 @@ func LogicalSpanID(runID string, checkpoint int64, kind StepKind) string {
 	return stableID("span", runID, fmt.Sprintf("%d", checkpoint), string(kind))
 }
 
+// RunSpanID derives the deterministic root span for a run.
+func RunSpanID(runID string) string {
+	return stableID("span", runID, "run")
+}
+
 // AttemptID derives a stable attempt identity from its logical span and attempt number.
 func AttemptID(logicalSpanID string, attempt int) string {
 	return stableID("attempt", logicalSpanID, fmt.Sprintf("%d", attempt))

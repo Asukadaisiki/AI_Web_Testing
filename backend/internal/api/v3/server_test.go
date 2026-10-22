@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,36 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/stream"
 )
+
+func TestArtifactsServesConfiguredSharedVolumeFile(t *testing.T) {
+	artifactDir := t.TempDir()
+	artifactPath := filepath.Join(artifactDir, "run_1", "evidence.png")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("create artifact directory: %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("browser screenshot"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	profile, err := agentprofile.LoadBrowserEval("https://worker.internal")
+	if err != nil {
+		t.Fatalf("load browser profile: %v", err)
+	}
+	handler := New(ServerConfig{
+		Repository:  &fakeRepository{},
+		Profile:     profile,
+		ArtifactDir: artifactDir,
+		Stream:      stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}),
+		Live:        live.NewMemoryStore(),
+	}).Handler()
+
+	response := request(t, handler, http.MethodGet, "/artifacts/run_1/evidence.png", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if response.Body.String() != "browser screenshot" {
+		t.Fatalf("artifact = %q, want browser screenshot", response.Body.String())
+	}
+}
 
 func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 	repository := &fakeRepository{}

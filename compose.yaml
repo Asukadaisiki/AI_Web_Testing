@@ -13,7 +13,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"
 
   redis:
     image: redis:7-alpine
@@ -44,12 +44,37 @@ services:
       timeout: 10s
       retries: 18
 
-  worker:
-    image: ghcr.io/astral-sh/uv:0.7-python3.14-bookworm
-    working_dir: /app/worker
-    command: ["uv", "run", "uvicorn", "loop_worker.main:app", "--host", "0.0.0.0", "--port", "8100"]
+  kafka-init:
+    image: apache/kafka:3.9.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      [
+        "bash",
+        "-ec",
+        "for topic in agenttrace.run.commands.v1 agenttrace.run.events.v1 agenttrace.run.dlq.v1; do /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic \"$$topic\" --partitions 1 --replication-factor 1; done"
+      ]
+
+  fixture-site:
+    image: nginx:1.28-alpine
     volumes:
-      - .:/app
+      - ./worker/fixtures/site:/usr/share/nginx/html:ro
+    ports:
+      - "127.0.0.1:8123:80"
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    working_dir: /app/worker
+    command: ["uv", "run", "--no-sync", "uvicorn", "loop_worker.main:app", "--host", "0.0.0.0", "--port", "8100"]
+    environment:
+      LOOP_ARTIFACTS_DIR: /artifacts
+    depends_on:
+      - fixture-site
+    volumes:
+      - artifacts:/artifacts
 
   api:
     image: golang:1.24
@@ -63,12 +88,12 @@ services:
       AGENTTRACE_HTTP_ADDR: :8080
       AGENTTRACE_ARTIFACT_DIR: /artifacts
       AGENTTRACE_MODEL_NAME: ${AGENTTRACE_MODEL_NAME:-glm-5.3-flash}
-      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT:-/app/backend/testdata/scripted-model.json}
+      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT:-/app/fixtures/scripts/agenttrace_browser_eval.json}
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     ports:
       - "8080:8080"
     volumes:
@@ -89,12 +114,12 @@ services:
       AGENTTRACE_MODEL_NAME: ${AGENTTRACE_MODEL_NAME:-glm-5.3-flash}
       AGENTTRACE_MODEL_REASONING_EFFORT: ${AGENTTRACE_MODEL_REASONING_EFFORT:-high}
       AGENTTRACE_MODEL_API_KEY: ${AGENTTRACE_MODEL_API_KEY:-}
-      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT:-/app/backend/testdata/scripted-model.json}
+      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT:-/app/fixtures/scripts/agenttrace_browser_eval.json}
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     volumes:
       - .:/app
       - artifacts:/artifacts

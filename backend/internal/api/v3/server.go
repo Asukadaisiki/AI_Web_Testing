@@ -58,6 +58,7 @@ type ServerConfig struct {
 	Stream            *stream.Service
 	Live              live.LiveStore
 	Health            HealthDependencies
+	ArtifactDir       string
 	HeartbeatInterval time.Duration
 	SSEWriteTimeout   time.Duration
 }
@@ -117,6 +118,9 @@ func New(config ServerConfig) *Server {
 	mux.HandleFunc("POST /api/v1/runs/{id}/responses", server.handleResponse)
 	mux.HandleFunc("GET /api/v1/agents", server.handleAgents)
 	mux.HandleFunc("GET /api/v1/health", server.handleHealth)
+	if config.ArtifactDir != "" {
+		mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(config.ArtifactDir))))
+	}
 	server.handler = mux
 	return server
 }

@@ -96,11 +96,12 @@ func run() error {
 
 	store := postgres.NewStore(pool)
 	api := v3.New(v3.ServerConfig{
-		Repository: store,
-		Profile:    profile,
-		Model:      configuredModel(cfg.Model, profile),
-		Stream:     stream.NewService(stream.NewPostgreSQLReader(pool), liveStore, stream.Config{}),
-		Live:       liveStore,
+		Repository:  store,
+		Profile:     profile,
+		Model:       configuredModel(cfg.Model, profile),
+		Stream:      stream.NewService(stream.NewPostgreSQLReader(pool), liveStore, stream.Config{}),
+		Live:        liveStore,
+		ArtifactDir: cfg.ArtifactDir,
 		Health: v3.HealthDependencies{
 			Postgres: pool.Ping,
 			Kafka:    bus.Health,
