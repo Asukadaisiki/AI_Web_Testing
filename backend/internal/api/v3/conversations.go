@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
 
@@ -52,6 +53,9 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeRepositoryError(w, err)
 		return
+	}
+	if messages == nil {
+		messages = []domain.Message{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conversation": conversation,

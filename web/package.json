@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "test": "vitest",
+    "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=/tmp/agenttrace-playwright playwright test",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 5174 --strictPort"
@@ -17,6 +18,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.7.5",

@@ -89,4 +89,8 @@ describe('workspace state', () => {
     expect(keepSelectedSpan('model-1', before)).toBe('model-1');
     expect(keepSelectedSpan('model-1', after)).toBe('model-1');
   });
+
+  it('retains a restored node while its trace is loading', () => {
+    expect(keepSelectedSpan('operation-1', [])).toBe('operation-1');
+  });
 });

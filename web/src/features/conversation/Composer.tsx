@@ -38,7 +38,12 @@ export function Composer({
 
   const models = useMemo(() => {
     const unique = new Map<string, ModelRef>();
-    for (const agent of agents) unique.set(modelKey(agent.model), agent.model);
+    for (const agent of agents) {
+      unique.set(modelKey(agent.model), {
+        provider: agent.model.provider,
+        name: agent.model.name,
+      });
+    }
     return [...unique.values()];
   }, [agents]);
 

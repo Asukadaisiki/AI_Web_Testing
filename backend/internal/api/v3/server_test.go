@@ -100,6 +100,28 @@ func TestSendMessageRejectsUnconfiguredModel(t *testing.T) {
 	assertErrorCode(t, response, http.StatusBadRequest, "model_not_available")
 }
 
+func TestGetConversationSerializesEmptyMessagesAsArray(t *testing.T) {
+	repository := &fakeRepository{conversation: postgres.Conversation{
+		ID: "conv_empty", ProjectID: "prj_1", Title: "Empty", Metadata: json.RawMessage(`{}`),
+	}}
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/conversations/conv_empty", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	decodeJSON(t, response, &body)
+	if body.Messages == nil {
+		t.Fatalf("messages = null, want []: %s", response.Body.String())
+	}
+	if len(body.Messages) != 0 {
+		t.Fatalf("messages = %#v, want []", body.Messages)
+	}
+}
+
 func TestGetRunDoesNotExposeInternalSpecification(t *testing.T) {
 	repository := &fakeRepository{run: domain.Run{
 		ID:             "run_1",
@@ -580,6 +602,8 @@ type fakeRepository struct {
 	cancelledRunID string
 	response       postgres.SubmitResponseParams
 	pendingOutbox  int
+	conversation   postgres.Conversation
+	messages       []domain.Message
 	run            domain.Run
 	trace          postgres.TraceDetails
 }
@@ -614,6 +638,9 @@ func (r *fakeRepository) CreateConversation(context.Context, postgres.CreateConv
 	return postgres.Conversation{}, nil
 }
 func (r *fakeRepository) GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error) {
+	if r.conversation.ID != "" {
+		return r.conversation, r.messages, nil
+	}
 	return postgres.Conversation{}, nil, postgres.ErrNotFound
 }
 func (r *fakeRepository) GetRun(context.Context, string) (domain.Run, error) {

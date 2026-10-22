@@ -116,6 +116,7 @@ export function keepSelectedSpan(
   nodes: readonly TraceNode[],
 ): string | null {
   const flattened = flattenTrace(nodes);
+  if (flattened.length === 0) return selectedSpanId;
   if (
     selectedSpanId !== null &&
     flattened.some((node) => node.span_id === selectedSpanId)
@@ -239,10 +240,13 @@ export function useWorkspace(): WorkspaceState {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const activeProjectId = useRef(selection.projectId);
   const activeConversationId = useRef(selection.conversationId);
   const activeRunId = useRef(selection.runId);
+  const systemDataRequest = useRef(0);
   const conversationRequest = useRef(0);
   const runRequest = useRef(0);
+  activeProjectId.current = selection.projectId;
   activeConversationId.current = selection.conversationId;
   activeRunId.current = selection.runId;
 
@@ -314,21 +318,24 @@ export function useWorkspace(): WorkspaceState {
   }, []);
 
   const loadSystemData = useCallback(async (): Promise<void> => {
+    const request = ++systemDataRequest.current;
     const [nextProjects, nextAgents, nextHealth] = await Promise.all([
-      loadProjects(),
+      listProjects(),
       listAgents(),
       getHealth(),
     ]);
+    if (request !== systemDataRequest.current) return;
+    setProjects(nextProjects);
     setAgents(nextAgents);
     setHealth(nextHealth);
     if (
       nextProjects.length > 0 &&
-      (selection.projectId === null ||
-        !nextProjects.some((project) => project.id === selection.projectId))
+      (activeProjectId.current === null ||
+        !nextProjects.some((project) => project.id === activeProjectId.current))
     ) {
       dispatchSelection({ type: 'project', projectId: nextProjects[0]?.id ?? null });
     }
-  }, [loadProjects, selection.projectId]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -514,6 +521,7 @@ export function useWorkspace(): WorkspaceState {
   const addProject = useCallback(
     async (name: string): Promise<void> => {
       await perform(async () => {
+        systemDataRequest.current += 1;
         const created = await createProject(name);
         await loadProjects();
         dispatchSelection({ type: 'project', projectId: created.id });
