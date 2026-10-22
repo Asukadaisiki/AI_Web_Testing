@@ -424,6 +424,7 @@ func TestHealthReportsKafkaAndRedisSeparately(t *testing.T) {
 		Kafka:    func(context.Context) error { return errors.New("kafka unavailable") },
 		Redis:    func(context.Context) error { return errors.New("redis unavailable") },
 		Worker:   func(context.Context) error { return errors.New("worker unavailable") },
+		Langfuse: func(context.Context) error { return errors.New("langfuse unavailable") },
 	})
 
 	response := request(t, handler, http.MethodGet, "/api/v1/health", "")
@@ -435,7 +436,8 @@ func TestHealthReportsKafkaAndRedisSeparately(t *testing.T) {
 	if body.Status != "degraded" ||
 		body.Dependencies["kafka"].Status != "down" ||
 		body.Dependencies["kafka"].PendingOutbox != 3 ||
-		body.Dependencies["redis"].Mode != "postgres_poll" {
+		body.Dependencies["redis"].Mode != "postgres_poll" ||
+		body.Dependencies["langfuse"].Status != "down" {
 		t.Fatalf("health = %#v", body)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testredis"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -115,7 +116,11 @@ func integrationRedisClient(t *testing.T) *goredis.Client {
 	if address == "" {
 		t.Skip("AGENTTRACE_TEST_REDIS_ADDR is not configured")
 	}
-	client := goredis.NewClient(&goredis.Options{Addr: address})
+	target, err := testredis.Target(address, os.Getenv("AGENTTRACE_TEST_REDIS_DB"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := goredis.NewClient(&goredis.Options{Addr: target.Address, DB: target.Database})
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		t.Fatalf("ping redis: %v", err)
 	}

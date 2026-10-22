@@ -11,9 +11,32 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestRepositoryPostgresDSNRequiresExplicitIsolatedDatabase(t *testing.T) {
+	for _, dsn := range []string{
+		"",
+		"postgres://agenttrace:agenttrace@127.0.0.1:5433/agenttrace?sslmode=disable",
+		"postgres://agenttrace:agenttrace@127.0.0.1:5433/postgres?sslmode=disable",
+	} {
+		if _, err := repositoryTestDatabaseName(dsn); err == nil {
+			t.Fatalf("repositoryTestDatabaseName(%q) accepted a non-isolated target", dsn)
+		}
+	}
+
+	database, err := repositoryTestDatabaseName(
+		"postgres://agenttrace:agenttrace@127.0.0.1:5433/agenttrace_test_repository?sslmode=disable",
+	)
+	if err != nil {
+		t.Fatalf("repositoryTestDatabaseName: %v", err)
+	}
+	if database != "agenttrace_test_repository" {
+		t.Fatalf("database = %q", database)
+	}
+}
 
 func TestCreateMessageAndRunReplaysMatchingIdempotencyRequest(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
@@ -592,6 +615,9 @@ func newRepositoryTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Stor
 	if dsn == "" {
 		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN is not configured")
 	}
+	if _, err := repositoryTestDatabaseName(dsn); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -603,6 +629,10 @@ func newRepositoryTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *Stor
 		t.Fatalf("migrate test database: %v", err)
 	}
 	return ctx, pool, NewStore(pool)
+}
+
+func repositoryTestDatabaseName(dsn string) (string, error) {
+	return testpostgres.DatabaseName(dsn)
 }
 
 func createConversationFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {

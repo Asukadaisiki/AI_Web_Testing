@@ -1,255 +1,79 @@
-# 单闭环重构（分支 `v2`）
+# AgentTrace Eval Hub v3
 
-## 这是什么
+AgentTrace Eval Hub turns a conversation request into a durable, browser-backed
+evaluation run. PostgreSQL is the system of record, Kafka carries commands and
+events, Redis provides best-effort live updates, and the Python worker executes
+the local storefront fixture with Playwright.
 
-从零实现**唯一一条闭环**，不掺任何其他功能：
+## Start the canonical stack
 
-```
-输入 → 规划(agentruntime) → 执行 → 报告 → 失败回灌 → 输入
-```
-
-仓库只有两个分支，项目都在仓库根：
-
-| 分支 | 内容 |
-|---|---|
-| `v1` | 旧项目（保留原有提交历史），**只作参考，不改动**。物理副本在 `.legacy-v1/`（已 gitignore，含 2.4 GB 缓存与不可再生的 `.pgdata`） |
-| `v2` | 本分支：独立模块，有自己的 Go module、Python 包、前端工程与 SQLite 库 |
-
-两个分支**没有共同祖先**（v2 是根提交），所以不要在它们之间 merge，只用 `git checkout` 切换。
-
-## 会话（session）—— 一条目标，多轮
-
-一条闭环里"目标"会重复出现：第 1 轮失败 → 回灌 → 第 2 轮还是同一个目标。所以
-**会话是目标，run 是轮次**（`CONTRACT.md` §9）：
-
-```
-session (sess_…)  一个目标 + 它的全部轮次
-  ├── run (run_…) 第 1 轮
-  ├── run (run_…) 第 2 轮（由第 1 轮的失败回灌产生，parent_run_id 指回上一轮）
-  └── …
-```
-
-- 用例、报告、证据产物**全部绑在会话上**：证据落在 `<LOOP_ARTIFACTS_DIR>/<session_id>/`，
-  `screenshot_path` 是**相对产物根**的路径（`sess_4d1a/exec_…_0.png`）。
-- 会话**没有状态机**，列表里显示的 `status` 就是它最新一轮的状态；`usage` 是全会话累计。
-- `bsess_…` 是执行器内部的浏览器会话句柄，与领域会话 `sess_…` 不是一回事。
-
-## 一次输入，自主规划
-
-用户在创建 session 时一次性给出完整目标；例如真实电商基线需要同时包含入口 URL、测试账号、
-测试密码、期望登录名、商品、数量和预期购物车结果。账号密码在本项目中是普通测试数据，直接写在
-goal 里即可；系统不要求脱敏，不使用 `secret_ref`，也没有凭据保险库。只有目标确实缺少必要信息，
-或站点出现必须由用户处理的 auth/captcha blocker 时，规划器才会 `ask_user`。
-
-规划器每轮都从后端持有的规范状态重新构造请求，而不是累加完整对话历史：
-
-1. 稳定的系统提示和原始目标；
-2. 按确定顺序序列化的已提交步骤前缀；
-3. 一个当前页面的有界 `PageView`；
-4. 一个紧凑的最近结果、最多 8 个失败签名和剩余预算。
-
-完整 Observation 始终留在服务端参与接地、指纹和重放。给模型的 `PageView` 最多包含 20 个元素、
-12 个动作候选、8 个 scope、5 个 blocker；旧 PageView、旧工具结果和 assistant 文本不会重发。
-目标解析仍优先使用普通 hint/TargetSpec；仅当普通解析失败时，后端才会用 hint 与 object
-name/text/aliases 匹配最新完整 Observation 中动作、role 兼容的 ActionCandidate。规范化值完全
-相等，或一侧至少两个完整 token 被另一侧全部覆盖，才构成实质匹配；必须恰好一个兼容候选达到该
-标准，分数高低不能消除多候选歧义。该候选仍须通过最新观测与 locator 校验；有效严格 scope 只允许
-被语义分数显著更强的候选覆盖。
-
-会改变页面的步骤只有在完成派生与校验、执行作者态动作并确认 postconditions 全部满足后才会提交。
-派生、目标解析、动作执行或作者态 expectation 失败时不会进入 case；动作可能改变页面时，后端会
-重建浏览器并重放已提交前缀。`assert_text` 和 `assert_url` 也必须先由当前完整 Observation
-验证通过才会提交；文本按每个可见 element 的 Name/Text/FullText 和每个可见 structure 的
-FullText 分别做规范化匹配，不跨节点拼接。已提交断言仍由全新干跑复验；`finish_case` 若在第
-`k` 步失败，也只有后端可以删除 `k..end` 并重放 `0..k-1`，模型没有删除已提交步骤的工具。
-调用 `finish_case` 前，模型必须回看已提交步骤，确保 goal 中每项明确预期结果都在相关最终状态上
-有断言或动作 postcondition 作为证据。仅导航到页面或看到相关对象不构成结果证明；较早输入某个值
-也不证明该值在后续或最终页面仍然成立，goal 要求的最终值和数量必须在该页面明确断言。
-
-## 为什么重做执行器与契约
-
-上一版坏在两处，都出在数据契约：
-
-1. **AI 生成的 DSL 过不了校验** —— 模型手写 JSON，系统再去校验；契约的合法取值散落在 Go、Python、提示词共 6 处，模型必然撞上其中某一条。
-2. **AI 生成的就是错的** —— 模型凭想象写目标与条件（元素不存在、条件在运行时永远不成立），错误要到执行期才暴露。
-
-本版的结构性对策：
-
-| 问题 | 对策 |
-|---|---|
-| 模型手写 JSON 会撞契约 | **模型不写 JSON**。模型只能调用结构化工具；case 由 Go 侧根据工具调用逐条构建，构建过程本身就是校验 |
-| 模型凭空写目标 | `click` / `input` 的 `target` **必须当场对最近一次真实观测解析成功**，否则工具返回候选列表让模型改口 |
-| 模型把条件写错阶段 | 条件**由 Go 派生**，模型只表达期望（`expect_text` / `expect_url` / `expect_gone` / `expect_value`），阶段规则只有一张表 |
-| 首步 goto 的前置条件永远不成立 | case **必须首步为 goto**；首步无前置条件，后续步骤的前置条件由 Go 从观测页 URL 派生，天然可满足 |
-| 同一对象多副身子 | 只有一种形态：`cases.payload_json`（不可变工件，按内容哈希寻址）。执行、报告都读它，无回退链 |
-| 模型生成的用例"就是错的" | `finish_case` **不落库，先干跑**：在全新浏览器上下文里跑通才允许进入审批。跑不通就把失败步骤结构化回给模型 |
-| 定位器在观测时能中、执行时不中 | 观测阶段**就地验证**定位器，只有 `match_count == 1` 的才输出；偏好 role（可访问名）→ text → css |
-| Go 与 Python 各写一份契约 | `fixtures/contract/case_contract.json` 两侧共读，必须给出相同的 accept 与错误码（`CONTRACT.md` §2.4） |
-
-## 目录
-
-```
-README.md        本文件
-CONTRACT.md      数据契约（唯一权威，人读版）
-test.config.json 全部测试入口的唯一配置（端口/目录/浏览器/模型）
-run_tests.py     按上面那份配置跑全部测试层
-plan/            重构计划与诊断（v1 结构问题的证据与分期方案，决策记录）
-backend/         Go：agentruntime + planner 工具 + executor 桥 + report + feedback + API（SQLite）
-worker/          Python：全新精简 Playwright 执行器（5 个 action）
-web/             React：4 个页面
-fixtures/        离线夹具（契约一致性用例、工具调用脚本、静态测试页）
-data/            SQLite 文件与证据产物（data/sessions/<session_id>/）
-```
-
-## 4 个页面（不多不少）
-
-| 路径 | 页面 | 作用 |
-|---|---|---|
-| `/?session=<id>` | 输入/会话 | 输入目标（= 建会话）→ 会话卡片 + 轮次表 + 当前轮 SSE 时间线 → 审批 |
-| `/executions/:id` | 执行详情 | 每步状态 + 证据（截图、console、network、URL 前后） |
-| `/runs/:id/report` | 报告 | 汇总 + 失败信号表 |
-| `/runs/:id/injection` | 错误注入 | 失败回灌候选 → 编辑 → 确认 → 在**同一会话**里开下一轮 |
-
-侧边栏列的是**会话**（目标 + 最新状态 + 轮次数 + 累计用量），点进去看它的每一轮。
-
-## 运行
+The default Compose stack uses the checked-in scripted model fixture. It does
+not need model credentials.
 
 ```bash
-# 1) 执行器（Python，:8100）
-cd worker && uv sync && uv run uvicorn loop_worker.main:app --port 8100
-
-# 2) 控制面（Go，:8101）
-cd backend && go run ./cmd/loopd
-
-# 3) Web（Vite，:5174）
-cd web && npm install && npm run dev
+cp .env.example .env
+docker compose up -d --build
+curl http://127.0.0.1:8080/api/v1/health
 ```
 
-### 离线验证（不调用模型、不花钱）
+Services exposed to the host are API `:8080`, Web `:5174`, fixture site `:8123`,
+and PostgreSQL `:5433`. Compose starts PostgreSQL, Kafka, Redis, fixture site,
+worker, API, runtime, and Web. `kafka-init` creates the three required topics.
 
-**一个入口**，读 `test.config.json`：
+The optional asynchronous Langfuse exporter is not part of the default stack
+and requires real provider values only when explicitly enabled:
 
 ```bash
-python run_tests.py            # 全部层
-python run_tests.py --list     # 看有哪些层
-python run_tests.py --layer 契约   # 只跑名字含"契约"的层
-python run_tests.py --verify   # 各层跑完再跑真实浏览器页面验证（需先起控制面与 preview）
+AGENTTRACE_LANGFUSE_BASE_URL=https://langfuse.example \
+AGENTTRACE_LANGFUSE_PUBLIC_KEY=... \
+AGENTTRACE_LANGFUSE_SECRET_KEY=... \
+docker compose --profile langfuse up -d exporter
 ```
 
-它按顺序跑这 6 层：
+Never commit `.env` or provider credentials. The API reports this optional
+integration as `disabled`; exporter failures never block a local run.
+
+## Verify
+
+Run the complete v3 sequence against an already healthy Compose stack:
 
 ```bash
-# 契约一致性：Go 与 Python 共读同一份夹具，错误码必须逐字一致
-cd backend && go test ./internal/contract/
-cd worker && uv run python -m unittest tests.test_contract_conformance
+python run_v3_tests.py
+python integration/v3/failure_drills.py
+```
 
-# 闭环全链路：假执行器 + 脚本模型，确定性验证 规划/审批/执行/报告/回灌/提问/改口
-cd backend && go test ./...
+On macOS hosts without a `python` alias, `python3 run_v3_tests.py` and
+`python3 integration/v3/failure_drills.py` are equivalent. The runner uses
+`/tmp/agenttrace-npm-cache`, Playwright uses `/tmp/agenttrace-playwright`, and
+Go destructive integration helpers receive an isolated
+`agenttrace_test_v3_runner_*` database. It neither shuts down Compose nor
+removes service logs.
 
-# 真执行器（需要 Playwright 浏览器）
+Individual layers:
+
+```bash
+cd backend && go test -p 1 ./...
 cd worker && uv run python -m unittest discover -s tests -t .
-
-# 完整电商闭环：脚本模型 + 真浏览器 + 控制面 + 报告与截图服务
-cd worker && uv run python ../integration/ecommerce_closed_loop.py
-
-# 前端类型与构建
-cd web && npm run build
+cd web && npm test -- --run && npm run build && npm run test:e2e
+uv run --with 'psycopg[binary]>=3.2,<4' python integration/v3/canonical_scenario.py
 ```
 
-端口、数据目录、浏览器路径、模型都从 `test.config.json` 读，不再散在各处。
-```
+For operations, reset procedures, backlog inspection, and failure recovery, see
+[`docs/operations.md`](docs/operations.md). The architecture and canonical
+browser scenario are documented in
+[`docs/architecture.md`](docs/architecture.md).
 
-### 不花钱地跑一次真实闭环（脚本模型 + 真浏览器）
+## Source layout
 
-`LOOP_LLM_SCRIPT` 一旦设置，控制面就用离线脚本替代真实模型：整条闭环照跑，
-浏览器是真浏览器，但模型调用是零成本的固定脚本。
-
-```bash
-# 站点夹具
-cd worker && uv run python -m http.server 8123 --directory fixtures/site
-
-# 执行器（另开一个终端）
-cd worker && uv run uvicorn loop_worker.main:app --port 8100
-
-# 控制面（另开一个终端；脚本见 fixtures/scripts/catalog_alpha.json）
-cd backend && LOOP_LLM_SCRIPT=../fixtures/scripts/catalog_alpha.json go run ./cmd/loopd
-```
-
-然后 `POST /api/sessions` 建会话（含第 1 轮）、轮询、`POST /api/runs/{id}/approve`、
-看 `/api/runs/{id}/report`。回灌确认走 `POST /api/runs/{id}/feedback/confirm`，
-新轮次落在**同一个会话**里。
-
-`fixtures/scripts/catalog_alpha.json` 里的 URL 指向 `127.0.0.1:8123`，与上面第 1 步对应。
-
-## 配置
-
-| 变量 | 说明 |
-|---|---|
-| `LOOP_LLM_SCRIPT` | 指向脚本 JSON；设置后走离线脚本模型（零成本），优先于下面的真实模型配置 |
-| `LOOP_LLM_PROVIDER` | `lark`（火山方舟/Ark）、`deepseek` 或 `openai`（任意 OpenAI 兼容端点） |
-| `LOOP_LLM_API_KEY_ENV` | 给出**变量名**，从该变量读密钥（对应配置里的 `apiKeyEnv`）。推荐用这个，密钥不进命令行 |
-| `LOOP_LLM_API_KEY` | 直接给密钥值；与上面二选一，同时设置时以它为准 |
-| `LOOP_LLM_MODEL` / `LOOP_LLM_BASE_URL` | 覆盖模型与端点；不设则用提供方默认值 |
-| `LOOP_WORKER_URL` | 执行器地址，默认 `http://127.0.0.1:8100` |
-| `LOOP_ADDR` | 控制面监听地址，默认 `127.0.0.1:8101` |
-| `LOOP_DATA_DIR` | 数据目录，默认 `<v2 根>/data`（从工作目录向上找 `CONTRACT.md` + `backend/`） |
-| `LOOP_DB_PATH` / `LOOP_ARTIFACTS_DIR` | 覆盖 SQLite 路径 / 证据目录。证据目录必须与执行器一致，否则截图 404 |
-| `LOOP_MAX_MODEL_CALLS` | 调用次数上限，默认 `25` |
-| `LOOP_MAX_TOTAL_TOKENS` | **成本熔断**：整个 run 累计 token 超过它就中止，默认 1500000；设 `0` 关闭 |
-| `LOOP_MAX_FRESH_TOTAL_TOKENS` | 整个 run 的 fresh token 累计上限，默认 `300000`；设 `0` 关闭 |
-| `LOOP_MAX_PROMPT_TOKENS_PER_CALL` | 单次已完成模型调用的 prompt token 上限，默认 `30000`；设 `0` 关闭 |
-| `LOOP_MAX_REQUEST_BYTES` | 发起模型调用前的完整序列化请求大小上限，默认 `98304` bytes（96 KiB）；设 `0` 关闭 |
-| `PLAYWRIGHT_BROWSERS_PATH` | 执行器需要；本机浏览器在 `D:\PlaywrightBrowsers` |
-
-缺密钥会直接启动失败，不会静默降级到别的模型。`/api/health` 会回报当前模型、端点，
-以及证据目录是否与执行器一致。
-
-### 真实模型：火山方舟（Ark）
-
-provider 默认值就是 `lark` 的正式配置，所以只需要提供方 + 密钥来源两项：
-
-```powershell
-cd v2\backend
-$env:LOOP_LLM_PROVIDER   = 'lark'
-$env:LOOP_LLM_API_KEY_ENV = 'LARK_API_KEY'   # 密钥从同名环境变量读，不写进命令行
-$env:LARK_API_KEY        = '<your key>'
-go run ./cmd/loopd
-```
-
-对应的默认值是 `baseURL = https://ark.cn-beijing.volces.com/api/plan/v3`、
-`model = deepseek-v4.1-flash[1m]`。端点**不要**带 `/chat/completions`：客户端会自己追加。
-换模型只改 `LOOP_LLM_MODEL`（例如 `deepseek-v4-pro[1m]`）。
-
-### 成本
-
-每次模型调用的 `usage` 都会增量累加到 `model_usage` 表（一个 run 一行），并同时发一条
-`model_usage` SSE 事件，所以**规划过程中就能看着成本涨**。`GET /api/runs` 与
-`GET /api/runs/{id}` 都带 `usage` 对象：
-
-```json
-{"model_calls":7,"prompt_tokens":41230,"completion_tokens":1180,
- "total_tokens":42410,"fresh_prompt_tokens":18230,"fresh_total_tokens":19410,
- "reasoning_tokens":640,"cached_tokens":23000}
-```
-
-字段含义：
-
-- raw：`prompt_tokens`、`completion_tokens` 和 `total_tokens` 是提供方报告的原始用量；
-  `total_tokens` 缺失时按前两者之和补齐。
-- cached：`cached_tokens` 是 `prompt_tokens` 中命中提示词缓存的部分，不是额外 token。
-- fresh：`fresh_prompt_tokens = max(prompt_tokens - cached_tokens, 0)`；
-  `fresh_total_tokens = fresh_prompt_tokens + completion_tokens`。
-- `reasoning_tokens` 已包含在 `completion_tokens` 内。cached、fresh、reasoning 都是成本构成，
-  不能与 raw total 再相加。
-
-前端只显示 token，不做金额换算。raw total 熔断仍保留为总量保护；fresh total 单独限制新增成本，
-单次 prompt 和序列化 request 则分别限制上下文与请求体增长。每次已完成调用的用量都先记账、
-再判断 token 熔断；request bytes 在网络调用前检查。
-
-超预算时 run 直接失败（`status=failed`，不是 case 失败），错误信息给出已用/上限与调法；
-超预算那一次调用的用量同样记账。离线脚本模型不报用量，因此熔断对它天然不生效——
-这正是离线验证可以反复跑的前提。
-
-## 明确不做
-
-用例库、套件、回归、定位调试页、research 试点、多 profile、契约生成器、微服务、鉴权、视觉定位。**一概不做。**
+| Path | Responsibility |
+| --- | --- |
+| `backend/cmd/agenttrace-api` | HTTP API, PostgreSQL writes, and outbox relay |
+| `backend/cmd/agenttrace-runtime` | Kafka command consumer and durable run runtime |
+| `backend/cmd/agenttrace-exporter` | Optional Langfuse event exporter |
+| `backend/internal/api/v3` | REST, SSE, health, and artifact contracts |
+| `backend/internal/domain`, `event`, `operation` | Run, event, and operation contracts |
+| `backend/internal/postgres` | PostgreSQL schema and durable repositories |
+| `worker/loop_worker` | Worker HTTP API and Playwright execution |
+| `web/src/features/workspace` | Three-column project, conversation, and trace workspace |
+| `fixtures/contract/case_contract.json` | Retained browser case contract |
+| `integration/v3` | Canonical Compose scenario and failure drills |

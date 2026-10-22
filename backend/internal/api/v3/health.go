@@ -24,6 +24,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"kafka":    checkDependency(r.Context(), s.health.Kafka, false),
 		"redis":    checkDependency(r.Context(), s.health.Redis, false),
 		"worker":   checkDependency(r.Context(), s.health.Worker, false),
+		"langfuse": checkDependency(r.Context(), s.health.Langfuse, false),
 	}
 	if dependencies["redis"].Status != "ok" {
 		redis := dependencies["redis"]
@@ -45,7 +46,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	response.Status = "ok"
 	for name, dependency := range dependencies {
-		if name != "postgres" && dependency.Status != "ok" {
+		if name != "postgres" && dependency.Status == "down" {
 			response.Status = "degraded"
 			break
 		}

@@ -107,6 +107,10 @@ func run() error {
 			Kafka:    bus.Health,
 			Redis:    redisHealth,
 			Worker:   workerHealthCheck(cfg.WorkerURL),
+			// Langfuse runs in an optional, asynchronous Compose profile. The
+			// API has no control-plane endpoint for that process, so a nil
+			// check reports it as disabled instead of inventing a probe.
+			Langfuse: nil,
 		},
 	})
 	server := &http.Server{

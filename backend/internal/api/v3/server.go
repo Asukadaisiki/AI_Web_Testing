@@ -46,6 +46,7 @@ type HealthDependencies struct {
 	Kafka    func(context.Context) error
 	Redis    func(context.Context) error
 	Worker   func(context.Context) error
+	Langfuse func(context.Context) error
 }
 
 type healthDependencies = HealthDependencies

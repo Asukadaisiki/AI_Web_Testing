@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/operation"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -500,16 +500,5 @@ func newRuntimePostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *pos
 }
 
 func runtimeTestDatabaseName(dsn string) (string, error) {
-	config, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		return "", fmt.Errorf("parse PostgreSQL test DSN: %w", err)
-	}
-	database := config.ConnConfig.Database
-	if database != "agenttrace_test" && !strings.HasPrefix(database, "agenttrace_test_") {
-		return "", fmt.Errorf(
-			"refusing destructive PostgreSQL reset for database %q: require agenttrace_test or agenttrace_test_*",
-			database,
-		)
-	}
-	return database, nil
+	return testpostgres.DatabaseName(dsn)
 }

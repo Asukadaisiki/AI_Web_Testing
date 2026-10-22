@@ -3,7 +3,7 @@
 .gotmp/
 *.exe
 
-# 运行期数据：SQLite 库与执行证据
+# Runtime data and execution evidence
 data/
 
 # Python
@@ -14,6 +14,8 @@ __pycache__/
 # Node
 node_modules/
 dist/
+test-results/
+playwright-report/
 
 # 本地环境
 .env
@@ -30,3 +32,7 @@ data/
 # 能力缺口取证工具的产物（worker/tests/_explore_capability.py 生成）
 worker/capability-dump.json
 worker/capability-dump.txt
+
+# macOS metadata and v3 local caches
+.DS_Store
+.pytest_cache/

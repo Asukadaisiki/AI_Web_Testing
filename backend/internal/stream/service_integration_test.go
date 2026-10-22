@@ -10,6 +10,8 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	liveredis "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live/redis"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testredis"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -19,6 +21,13 @@ func TestPostgreSQLReplaySurvivesRedisFlushDB(t *testing.T) {
 	redisAddress := os.Getenv("AGENTTRACE_TEST_REDIS_ADDR")
 	if postgresDSN == "" || redisAddress == "" {
 		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN and AGENTTRACE_TEST_REDIS_ADDR are required")
+	}
+	if _, err := testpostgres.DatabaseName(postgresDSN); err != nil {
+		t.Fatal(err)
+	}
+	redisTarget, err := testredis.Target(redisAddress, os.Getenv("AGENTTRACE_TEST_REDIS_DB"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := context.Background()
@@ -35,7 +44,7 @@ func TestPostgreSQLReplaySurvivesRedisFlushDB(t *testing.T) {
 	}
 	insertRunEventsFixture(t, ctx, pool)
 
-	rawRedis := goredis.NewClient(&goredis.Options{Addr: redisAddress})
+	rawRedis := goredis.NewClient(&goredis.Options{Addr: redisTarget.Address, DB: redisTarget.Database})
 	t.Cleanup(func() { _ = rawRedis.Close() })
 	if err := rawRedis.Ping(ctx).Err(); err != nil {
 		t.Fatalf("ping redis: %v", err)

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -13,6 +14,9 @@ func TestMigrateAppliesSchemaOnceAndEnforcesContracts(t *testing.T) {
 	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN is not configured")
+	}
+	if _, err := testpostgres.DatabaseName(dsn); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := context.Background()
@@ -63,6 +67,9 @@ func TestMigrateSerializesConcurrentInitialMigration(t *testing.T) {
 	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN is not configured")
+	}
+	if _, err := testpostgres.DatabaseName(dsn); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx := context.Background()

@@ -14,14 +14,20 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus/kafka"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestKafkaComposeDeliversRunMessagesInOrderAndDeduplicatesInbox(t *testing.T) {
+	const integrationTopic = "agenttrace.test.commands.v1"
+
 	brokers := os.Getenv("AGENTTRACE_TEST_KAFKA_BROKERS")
 	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
 	if brokers == "" || dsn == "" {
 		t.Skip("AGENTTRACE_TEST_KAFKA_BROKERS and AGENTTRACE_TEST_POSTGRES_DSN are required")
+	}
+	if _, err := testpostgres.DatabaseName(dsn); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -42,7 +48,7 @@ func TestKafkaComposeDeliversRunMessagesInOrderAndDeduplicatesInbox(t *testing.T
 	first := envelope(t, "evt_kafka_first_"+runID, runID, 1)
 	second := envelope(t, "evt_kafka_second_"+runID, runID, 2)
 	for _, value := range [][]byte{first, second} {
-		if _, err := publisher.Publish(ctx, "agenttrace.run.commands.v1", runID, value); err != nil {
+		if _, err := publisher.Publish(ctx, integrationTopic, runID, value); err != nil {
 			t.Fatalf("publish run message: %v", err)
 		}
 	}
@@ -56,7 +62,7 @@ func TestKafkaComposeDeliversRunMessagesInOrderAndDeduplicatesInbox(t *testing.T
 	defer stopConsume()
 	done := make(chan error, 1)
 	go func() {
-		done <- consumerBus.Consume(consumeCtx, "agenttrace.run.commands.v1", "agenttrace-task4-"+runID, func(_ context.Context, message eventbus.Message) error {
+		done <- consumerBus.Consume(consumeCtx, integrationTopic, "agenttrace-task4-"+runID, func(_ context.Context, message eventbus.Message) error {
 			var parsed struct {
 				EventID string `json:"event_id"`
 			}

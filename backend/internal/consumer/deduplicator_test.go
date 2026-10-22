@@ -8,6 +8,7 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/testpostgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,6 +66,9 @@ func newConsumerTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN is not configured")
+	}
+	if _, err := testpostgres.DatabaseName(dsn); err != nil {
+		t.Fatal(err)
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
