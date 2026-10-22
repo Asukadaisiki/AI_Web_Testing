@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -39,6 +40,8 @@ EXPORTER_FIXTURE_ENV = {
     "AGENTTRACE_LANGFUSE_PUBLIC_KEY": "agenttrace-failure-drill-public",
     "AGENTTRACE_LANGFUSE_SECRET_KEY": "agenttrace-failure-drill-secret",
 }
+KAFKA_RECORD_LINE = re.compile(r"^Partition:(\d+)\tOffset:(\d+)\t(.+)$")
+MAX_KAFKA_RECORD_OUTPUT = 20_000
 
 
 def parse_consumer_group_offsets(output: str, topic: str) -> dict[int, int]:
@@ -61,6 +64,42 @@ def parse_consumer_group_offsets(output: str, topic: str) -> dict[int, int]:
             f"Kafka group description has no offsets for topic {topic!r}: {output[-2000:]}"
         )
     return offsets
+
+
+@dataclass(frozen=True)
+class KafkaRecordLocation:
+    """A record's immutable location in a Kafka topic."""
+
+    partition: int
+    offset: int
+
+
+def parse_kafka_consumer_records(
+    output: str,
+) -> list[tuple[KafkaRecordLocation, str]]:
+    """Parse Kafka CLI records with their partition and offset metadata."""
+    if len(output) > MAX_KAFKA_RECORD_OUTPUT:
+        raise AssertionError(
+            "malformed Kafka record output exceeds "
+            f"{MAX_KAFKA_RECORD_OUTPUT} byte limit"
+        )
+    records: list[tuple[KafkaRecordLocation, str]] = []
+    for line in output.splitlines():
+        if not line or line.startswith("Processed a total of "):
+            continue
+        match = KAFKA_RECORD_LINE.match(line)
+        if match is None:
+            raise AssertionError(f"malformed Kafka record output: {line[:500]}")
+        records.append(
+            (
+                KafkaRecordLocation(
+                    partition=int(match.group(1)),
+                    offset=int(match.group(2)),
+                ),
+                match.group(3),
+            )
+        )
+    return records
 
 
 @dataclass(frozen=True)
@@ -222,12 +261,18 @@ class FailureDrills:
                 "source command did not produce exactly one inbox row, operation result, "
                 f"and assistant message before duplicate injection: {before}"
             )
-        before_offsets = self._runtime_consumer_offsets()
+        before_end_offsets = self._command_topic_end_offsets()
         self._inject_duplicate_command(payload)
+        duplicate_record = self._find_injected_duplicate_record(
+            before_end_offsets=before_end_offsets,
+            event_id=event_id,
+            payload=payload,
+        )
 
         self._wait(
-            "runtime consumer commits the Kafka-injected duplicate command",
-            lambda: self._runtime_consumer_offsets_advanced(before_offsets),
+            "runtime consumer commits past the injected duplicate command "
+            f"at partition={duplicate_record.partition}, offset={duplicate_record.offset}",
+            lambda: self._runtime_consumer_record_committed(duplicate_record),
             run_id=scenario.run_id,
         )
         after = self._duplicate_effect_counts(scenario.run_id, event_id)
@@ -535,12 +580,107 @@ class FailureDrills:
         )
         return parse_consumer_group_offsets(result.stdout, COMMAND_TOPIC)
 
-    def _runtime_consumer_offsets_advanced(self, before: dict[int, int]) -> bool:
-        after = self._runtime_consumer_offsets()
-        return any(
-            partition in after and after[partition] > offset
-            for partition, offset in before.items()
+    def _runtime_consumer_record_committed(self, record: KafkaRecordLocation) -> bool:
+        """Kafka consumer commits the next offset, so it must exceed record offset."""
+        return self._runtime_consumer_offsets().get(record.partition, -1) > record.offset
+
+    def _command_topic_end_offsets(self) -> dict[int, int]:
+        result = self._compose(
+            "exec",
+            "-T",
+            "kafka",
+            "/opt/kafka/bin/kafka-get-offsets.sh",
+            "--bootstrap-server",
+            "kafka:9092",
+            "--topic",
+            COMMAND_TOPIC,
+            "--time",
+            "-1",
         )
+        offsets: dict[int, int] = {}
+        for line in result.stdout.splitlines():
+            fields = line.rsplit(":", 2)
+            if len(fields) != 3 or fields[0] != COMMAND_TOPIC:
+                raise AssertionError(f"malformed Kafka end offset output: {line[:500]}")
+            try:
+                partition, offset = int(fields[1]), int(fields[2])
+            except ValueError as error:
+                raise AssertionError(
+                    f"malformed Kafka end offset output: {line[:500]}"
+                ) from error
+            offsets[partition] = offset
+        if not offsets:
+            raise AssertionError(
+                "Kafka returned no command topic end offsets: "
+                f"{result.stdout[-2000:]}"
+            )
+        return offsets
+
+    def _find_injected_duplicate_record(
+        self,
+        *,
+        before_end_offsets: dict[int, int],
+        event_id: str,
+        payload: str,
+    ) -> KafkaRecordLocation:
+        """Locate this injection using the immutable event ID and exact JSON payload."""
+        try:
+            expected_payload = json.loads(payload)
+        except json.JSONDecodeError as error:
+            raise AssertionError(f"stored command payload is not JSON: {payload[:500]}") from error
+
+        candidates: list[KafkaRecordLocation] = []
+        for partition, start_offset in sorted(before_end_offsets.items()):
+            records = self._command_topic_records_from(partition, start_offset)
+            for location, record_payload in records:
+                try:
+                    decoded_payload = json.loads(record_payload)
+                except json.JSONDecodeError as error:
+                    raise AssertionError(
+                        "Kafka command record is not JSON at "
+                        f"partition={location.partition}, offset={location.offset}: "
+                        f"{record_payload[:500]}"
+                    ) from error
+                if (
+                    decoded_payload.get("event_id") == event_id
+                    and decoded_payload == expected_payload
+                ):
+                    candidates.append(location)
+        if len(candidates) != 1:
+            raise AssertionError(
+                "could not uniquely locate injected duplicate Kafka command by event_id "
+                f"and exact payload: event_id={event_id}, candidates={candidates}"
+            )
+        return candidates[0]
+
+    def _command_topic_records_from(
+        self, partition: int, start_offset: int
+    ) -> list[tuple[KafkaRecordLocation, str]]:
+        result = self._compose(
+            "exec",
+            "-T",
+            "kafka",
+            "/opt/kafka/bin/kafka-console-consumer.sh",
+            "--bootstrap-server",
+            "kafka:9092",
+            "--topic",
+            COMMAND_TOPIC,
+            "--partition",
+            str(partition),
+            "--offset",
+            str(start_offset),
+            "--timeout-ms",
+            "3000",
+            "--formatter",
+            "kafka.tools.DefaultMessageFormatter",
+            "--property",
+            "print.partition=true",
+            "--property",
+            "print.offset=true",
+            "--property",
+            "print.value=true",
+        )
+        return parse_kafka_consumer_records(result.stdout)
 
     def _duplicate_effect_counts(self, run_id: str, event_id: str) -> tuple[int, int, int]:
         inbox, operation_results, assistant_messages = self._row(
@@ -675,7 +815,7 @@ class FailureDrills:
             time.sleep(0.25)
         raise AssertionError(
             f"timed out after {timeout:.0f}s waiting for {description}; "
-            f"last_error={last_error}; {self._diagnostics(run_id)}"
+            f"last_error={last_error}; {self._diagnostics(run_id)[:6000]}"
         )
 
     def _row(self, query: str, values: tuple[object, ...]) -> tuple[Any, ...]:
