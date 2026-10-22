@@ -74,7 +74,7 @@ def assert_canonical_run(
                     f"expected one succeeded scoped run, got count={run_count}, status={status!r}"
                 )
 
-            (root_spans, model_children, operation_children) = _one(
+            (root_spans, canonical_shape, report_output) = _one(
                 cursor,
                 """
                 WITH root AS (
@@ -84,25 +84,26 @@ def assert_canonical_run(
                 )
                 SELECT
                   (SELECT count(*) FROM root),
-                  count(*) FILTER (
-                    WHERE spans.kind = 'model'
-                      AND spans.parent_span_id IN (SELECT span_id FROM root)
+                  array_agg(
+                    spans.kind || ':' || spans.name
+                    ORDER BY spans.started_at, spans.id
+                  ) FILTER (
+                    WHERE spans.parent_span_id IN (SELECT span_id FROM root)
                   ),
-                  count(*) FILTER (
-                    WHERE spans.kind = 'operation'
-                      AND spans.parent_span_id IN (SELECT span_id FROM root)
-                  )
+                  string_agg(spans.output::text, '') FILTER (WHERE spans.kind = 'report')
                 FROM spans
                 WHERE run_id = %s
                 """,
                 (run_id, run_id),
             )
-            if root_spans != 1 or model_children < 2 or operation_children != 1:
+            expected_shape = ["model:plan", "operation:operation", "report:report", "model:final"]
+            if root_spans != 1 or canonical_shape != expected_shape:
                 raise AssertionError(
-                    "expected one Trace root with at least two model children and "
-                    f"one operation child, got root={root_spans}, "
-                    f"model={model_children}, operation={operation_children}"
+                    "expected canonical Trace shape run -> model plan -> operation -> report -> "
+                    f"model final, got root={root_spans}, children={canonical_shape}"
                 )
+            if "grounded local storefront case passed" not in str(report_output):
+                raise AssertionError(f"expected report summary in report span, got {report_output}")
 
             (operation_results, evidence_with_screenshot) = _one(
                 cursor,

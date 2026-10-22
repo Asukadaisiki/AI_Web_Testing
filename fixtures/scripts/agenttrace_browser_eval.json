@@ -1,6 +1,7 @@
 {
   "steps": [
     {
+      "stage": "plan",
       "tool": "browser_execute_case",
       "arguments": {
         "session_id": "canonical-storefront-qa",
@@ -278,7 +279,11 @@
       }
     },
     {
-      "final": "Report: the grounded local storefront case passed with browser evidence. Final: Alpha x 2 is in the cart."
+      "report": "Report: the grounded local storefront case passed with browser evidence."
+    },
+    {
+      "stage": "final",
+      "final": "Final: Alpha x 2 is in the cart."
     }
   ]
 }

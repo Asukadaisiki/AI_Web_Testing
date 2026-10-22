@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -25,10 +26,9 @@ GOAL = (
     "Filter the local catalog for alpha, open its detail page, add two items to "
     "the cart, and verify the cart summary."
 )
-EXPECTED_FINAL = (
-    "Report: the grounded local storefront case passed with browser evidence. "
-    "Final: Alpha x 2 is in the cart."
-)
+EXPECTED_REPORT = "Report: the grounded local storefront case passed with browser evidence."
+EXPECTED_FINAL = "Final: Alpha x 2 is in the cart."
+SSE_IDLE_TIMEOUT = 20
 
 
 def request_api(
@@ -76,22 +76,26 @@ def require_status(
     return body
 
 
-def wait_for_terminal_sse(run_id: str, *, timeout: float = 120) -> dict[str, Any]:
-    """Consume durable SSE replay until the runtime's terminal event arrives."""
-    request = urllib.request.Request(
-        f"{API_BASE_URL}/api/v1/runs/{run_id}/events",
-        headers={"Accept": "text/event-stream"},
-    )
+def consume_terminal_sse(
+    open_stream: Any, *, timeout: float, idle_timeout: float
+) -> dict[str, Any]:
+    """Read/reconnect an SSE stream until a succeeded runtime completion arrives."""
     deadline = time.monotonic() + timeout
     last_event: dict[str, Any] = {}
-    current: dict[str, str] = {}
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+    last_event_id = ""
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        response = open_stream(last_event_id, min(idle_timeout, remaining))
+        current: dict[str, str] = {}
+        try:
             while time.monotonic() < deadline:
                 try:
-                    line = response.readline().decode("utf-8").rstrip("\r\n")
-                except TimeoutError:
-                    continue
+                    raw_line = response.readline()
+                except (TimeoutError, socket.timeout):
+                    break
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8").rstrip("\r\n")
                 if not line:
                     if "data" not in current:
                         continue
@@ -101,6 +105,8 @@ def wait_for_terminal_sse(run_id: str, *, timeout: float = 120) -> dict[str, Any
                         "event": current.get("event", ""),
                         "data": data,
                     }
+                    if last_event["id"]:
+                        last_event_id = last_event["id"]
                     current = {}
                     completion = data.get("payload", {})
                     if (
@@ -114,14 +120,36 @@ def wait_for_terminal_sse(run_id: str, *, timeout: float = 120) -> dict[str, Any
                 field, separator, value = line.partition(":")
                 if separator:
                     current[field] = value.lstrip()
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-        raise AssertionError(
-            f"run_id={run_id} SSE stream failed; last event={last_event}: {error}"
-        ) from error
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+        time.sleep(min(0.1, idle_timeout))
     raise AssertionError(
-        f"run_id={run_id} did not reach succeeded through SSE in {timeout}s; "
+        f"did not reach succeeded through SSE in {timeout}s; "
         f"last event={last_event}"
     )
+
+
+def wait_for_terminal_sse(run_id: str, *, timeout: float = 120) -> dict[str, Any]:
+    """Consume durable SSE replay until the runtime's terminal event arrives."""
+    def open_stream(last_event_id: str, read_timeout: float) -> Any:
+        headers = {"Accept": "text/event-stream"}
+        if last_event_id:
+            headers["Last-Event-ID"] = last_event_id
+        request = urllib.request.Request(
+            f"{API_BASE_URL}/api/v1/runs/{run_id}/events", headers=headers
+        )
+        return urllib.request.urlopen(request, timeout=read_timeout)
+
+    try:
+        return consume_terminal_sse(
+            open_stream, timeout=timeout, idle_timeout=SSE_IDLE_TIMEOUT
+        )
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+        raise AssertionError(
+            f"run_id={run_id} SSE stream failed: {error}"
+        ) from error
 
 
 def wait_for_published_completion(
@@ -165,7 +193,7 @@ def assert_api_outcome(project_id: str, conversation_id: str, run_id: str) -> No
         raise AssertionError(f"run_id={run_id} expected user/assistant messages: {messages}")
     if messages[1].get("content") != EXPECTED_FINAL:
         raise AssertionError(
-            f"run_id={run_id} assistant report/final mismatch: {messages[1]!r}"
+            f"run_id={run_id} assistant final mismatch: {messages[1]!r}"
         )
 
     status, trace = request_api(f"/api/v1/runs/{run_id}/trace")
@@ -175,18 +203,25 @@ def assert_api_outcome(project_id: str, conversation_id: str, run_id: str) -> No
     root_ids = {root.get("span_id") for root in roots}
     if len(roots) != 1:
         raise AssertionError(f"run_id={run_id} expected one Trace root: {spans}")
-    if not any(
-        span.get("kind") == "model" and span.get("parent_span_id") in root_ids
+    children = [
+        span
         for span in spans
-    ):
-        raise AssertionError(f"run_id={run_id} trace has no model child: {spans}")
-    if not any(
-        span.get("kind") == "operation"
-        and span.get("name") == "operation"
-        and span.get("parent_span_id") in root_ids
-        for span in spans
-    ):
-        raise AssertionError(f"run_id={run_id} trace has no browser operation child: {spans}")
+        if span.get("parent_span_id") in root_ids and span.get("kind") != "run"
+    ]
+    shape = [(span.get("kind"), span.get("name")) for span in children]
+    expected_shape = [
+        ("model", "plan"),
+        ("operation", "operation"),
+        ("report", "report"),
+        ("model", "final"),
+    ]
+    if shape != expected_shape:
+        raise AssertionError(
+            f"run_id={run_id} canonical trace shape={shape}, want {expected_shape}"
+        )
+    report = children[2]
+    if EXPECTED_REPORT not in json.dumps(report.get("output", {}), sort_keys=True):
+        raise AssertionError(f"run_id={run_id} report summary missing from span: {report}")
 
     evidence = trace.get("operation_evidence", [])
     if len(evidence) != 1 or evidence[0].get("status") != "succeeded":

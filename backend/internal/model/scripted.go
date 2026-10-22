@@ -13,6 +13,8 @@ import (
 type ScriptedStep struct {
 	Tool      string          `json:"tool"`
 	Arguments json.RawMessage `json:"arguments"`
+	Report    string          `json:"report"`
+	Stage     Stage           `json:"stage"`
 	Final     string          `json:"final"`
 	Ask       string          `json:"ask"`
 }
@@ -103,34 +105,9 @@ func (s *Scripted) Complete(_ context.Context, request Request) (Response, error
 	if s.index >= len(s.steps) {
 		return Response{Message: Message{Role: RoleAssistant, Content: "script exhausted"}}, nil
 	}
-	step := s.steps[s.index]
+	index := s.index
 	s.index++
-	if step.Final != "" {
-		return Response{Message: Message{Role: RoleAssistant, Content: step.Final}}, nil
-	}
-	name, arguments := step.Tool, step.Arguments
-	if step.Ask != "" {
-		name = "ask_user"
-		encoded, err := json.Marshal(map[string]string{"question": step.Ask})
-		if err != nil {
-			return Response{}, err
-		}
-		arguments = encoded
-	}
-	if name == "" {
-		return Response{}, fmt.Errorf("scripted step %d has neither tool nor final", s.index-1)
-	}
-	if len(arguments) == 0 {
-		arguments = json.RawMessage("{}")
-	}
-	return Response{Message: Message{
-		Role: RoleAssistant,
-		ToolCalls: []ToolCall{{
-			ID:        fmt.Sprintf("call_%d", s.index),
-			Name:      name,
-			Arguments: append(json.RawMessage(nil), arguments...),
-		}},
-	}, Usage: usage.Usage{}}, nil
+	return scriptedResponse(s.steps[index], index)
 }
 
 // CompleteForRun selects a scripted response from the durable model-call count.
@@ -156,8 +133,15 @@ func (s *CheckpointedScripted) CompleteForRun(
 }
 
 func scriptedResponse(step ScriptedStep, index int) (Response, error) {
+	if step.Report != "" {
+		return Response{
+			Message: Message{Role: RoleAssistant, Content: step.Report},
+			Report:  step.Report,
+			Stage:   step.Stage,
+		}, nil
+	}
 	if step.Final != "" {
-		return Response{Message: Message{Role: RoleAssistant, Content: step.Final}}, nil
+		return Response{Message: Message{Role: RoleAssistant, Content: step.Final}, Stage: step.Stage}, nil
 	}
 	name, arguments := step.Tool, step.Arguments
 	if step.Ask != "" {
@@ -181,7 +165,7 @@ func scriptedResponse(step ScriptedStep, index int) (Response, error) {
 			Name:      name,
 			Arguments: append(json.RawMessage(nil), arguments...),
 		}},
-	}, Usage: usage.Usage{}}, nil
+	}, Stage: step.Stage, Usage: usage.Usage{}}, nil
 }
 
 func cloneMessages(messages []Message) []Message {

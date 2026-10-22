@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
@@ -52,6 +53,36 @@ func TestEnginePersistsModelAndOperationSpans(t *testing.T) {
 	}
 	if store.completion.Status != CompletionSucceeded {
 		t.Fatalf("completion status = %q, want %q", store.completion.Status, CompletionSucceeded)
+	}
+}
+
+func TestEnginePersistsReportBeforeFinalAssistantMessage(t *testing.T) {
+	store := newMemoryCheckpointStore(commandFor("run-report-stage"))
+	dispatcher := &fakeDispatcher{result: operation.Result{
+		Status: "succeeded",
+		Output: json.RawMessage(`{"evidence":"browser screenshot"}`),
+	}}
+	engine := Engine{
+		Model: model.NewScripted([]model.ScriptedStep{
+			{Stage: model.StagePlan, Tool: "inspect", Arguments: json.RawMessage(`{"url":"https://example.test"}`)},
+			{Report: "Browser case passed with evidence."},
+			{Stage: model.StageFinal, Final: "Final answer."},
+		}),
+		Operations: dispatcher,
+		Store:      store,
+	}
+
+	if err := engine.Run(context.Background(), commandFor("run-report-stage")); err != nil {
+		t.Fatalf("run engine: %v", err)
+	}
+	if got, want := stepKinds(store.steps), []StepKind{StepModel, StepOperation, StepReport, StepModel}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("step kinds = %#v, want %#v", got, want)
+	}
+	if store.steps[0].SpanName != "plan" || store.steps[3].SpanName != "final" {
+		t.Fatalf("model span names = %q, %q, want plan, final", store.steps[0].SpanName, store.steps[3].SpanName)
+	}
+	if got := store.assistantMessages(); len(got) != 1 || got[0] != "Final answer." {
+		t.Fatalf("assistant messages = %#v, want final answer only", got)
 	}
 }
 

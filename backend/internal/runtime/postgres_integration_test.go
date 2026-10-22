@@ -5,12 +5,113 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/operation"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestPostgresCheckpointStoreReplaysReportStageInOrder(t *testing.T) {
+	ctx, pool, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Report stage fixture"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID, Title: "Report stage",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "inspect and report",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
+		IdempotencyKey: "report-stage",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, ok, err := store.ClaimRun(ctx, run.ID, 0); err != nil || !ok {
+		t.Fatalf("claim run = (ok=%v, err=%v)", ok, err)
+	}
+	engine := Engine{
+		Model: model.NewCheckpointedScripted([]model.ScriptedStep{
+			{Stage: model.StagePlan, Tool: "inspect", Arguments: json.RawMessage(`{"url":"https://example.test"}`)},
+			{Report: "Browser case passed with evidence."},
+			{Stage: model.StageFinal, Final: "Final answer."},
+		}),
+		Operations: &fakeDispatcher{result: operation.Result{
+			Status: "succeeded", Output: json.RawMessage(`{"evidence":"browser screenshot"}`),
+		}},
+		Store: PostgresCheckpointStore{Store: store},
+	}
+	command := commandFor(run.ID)
+	if err := engine.Run(ctx, command); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if err := engine.Run(ctx, command); err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+
+	events, err := store.ListRunEvents(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("list run events: %v", err)
+	}
+	var kinds []StepKind
+	for _, durableEvent := range events {
+		if durableEvent.EventType != runtimeStepEventType {
+			continue
+		}
+		var step StepResult
+		if err := json.Unmarshal(durableEvent.Payload, &step); err != nil {
+			t.Fatalf("decode step event: %v", err)
+		}
+		kinds = append(kinds, step.Kind)
+	}
+	if want := []StepKind{StepModel, StepOperation, StepReport, StepModel}; !reflect.DeepEqual(kinds, want) {
+		t.Fatalf("durable step kinds = %#v, want %#v", kinds, want)
+	}
+
+	spans, err := store.ListTrace(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("list trace: %v", err)
+	}
+	var report domain.Span
+	var childNames []string
+	for _, span := range spans {
+		if span.ParentSpanID == RunSpanID(run.ID) {
+			childNames = append(childNames, string(span.Kind)+":"+span.Name)
+		}
+		if span.Kind == domain.SpanReport {
+			report = span
+		}
+	}
+	if want := []string{"model:plan", "operation:operation", "report:report", "model:final"}; !reflect.DeepEqual(childNames, want) {
+		t.Fatalf("trace child names = %#v, want %#v", childNames, want)
+	}
+	if report.SpanID == "" || !strings.Contains(string(report.Output), "Browser case passed with evidence.") {
+		t.Fatalf("report span = %#v, want persisted report summary", report)
+	}
+	var assistantMessages int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM messages
+		WHERE conversation_id = $1 AND role = 'assistant'`, conversation.ID,
+	).Scan(&assistantMessages); err != nil {
+		t.Fatalf("count terminal assistant messages: %v", err)
+	}
+	if assistantMessages != 1 {
+		t.Fatalf("assistant messages = %d, want one terminal final", assistantMessages)
+	}
+}
 
 func TestPostgresRetryStoreHandsWhitespaceEventIDToDLQ(t *testing.T) {
 	ctx, pool, store := newRuntimePostgresStore(t)

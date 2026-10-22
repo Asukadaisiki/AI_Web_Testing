@@ -476,6 +476,19 @@ class ArtifactsDirTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             session_dir("")
 
+    def test_session_dir_rejects_unsafe_session_segments(self) -> None:
+        for session_id in ("..", "nested/id", r"nested\id", "/absolute", "%2e%2e", ""):
+            with self.subTest(session_id=session_id):
+                with self.assertRaises(ValueError):
+                    session_dir(session_id)
+
+    def test_session_dir_accepts_safe_run_and_session_ids(self) -> None:
+        for session_id in ("run_abc123", "sess_abc123", "canonical-storefront-qa"):
+            with self.subTest(session_id=session_id):
+                path = session_dir(session_id)
+                self.assertEqual(path, artifacts_dir() / session_id)
+                self.assertTrue(path.resolve().is_relative_to(artifacts_dir().resolve()))
+
     def test_display_path_is_relative_to_artifacts_root(self) -> None:
         # 契约里存的是 `<session_id>/<文件名>`，控制面直接拼成 /artifacts/<path>。
         with mock.patch.dict(os.environ, {}, clear=False):

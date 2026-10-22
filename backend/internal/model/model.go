@@ -53,8 +53,18 @@ type Request struct {
 // Response is one completed model turn and its normalized provider usage.
 type Response struct {
 	Message Message     `json:"message"`
+	Report  string      `json:"report,omitempty"`
+	Stage   Stage       `json:"stage,omitempty"`
 	Usage   usage.Usage `json:"usage"`
 }
+
+// Stage optionally names the semantic role of a model turn in a trace.
+type Stage string
+
+const (
+	StagePlan  Stage = "plan"
+	StageFinal Stage = "final"
+)
 
 // Model completes requests through a provider or deterministic fixture.
 type Model interface {

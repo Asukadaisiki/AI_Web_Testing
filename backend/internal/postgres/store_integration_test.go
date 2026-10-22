@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,6 +84,84 @@ func TestFinishRunPersistsOneAssistantMessage(t *testing.T) {
 	}
 	if count != 1 || content != assistant {
 		t.Fatalf("assistant messages = count %d content %q, want one %q", count, content, assistant)
+	}
+}
+
+func TestFinishRunSerializesAssistantOrdinalsWithinConversation(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION delay_assistant_message_insert() RETURNS trigger AS $$
+		BEGIN
+			PERFORM pg_sleep(0.2);
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER delay_assistant_message_insert
+		BEFORE INSERT ON messages
+		FOR EACH ROW
+		WHEN (NEW.role = 'assistant')
+		EXECUTE FUNCTION delay_assistant_message_insert();`); err != nil {
+		t.Fatalf("install concurrent insert delay: %v", err)
+	}
+	runs := make([]domain.Run, 2)
+	for index := range runs {
+		_, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+			ConversationID: conversationID,
+			Content:        "concurrent terminal request",
+			AgentID:        "browser-eval",
+			Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+			IdempotencyKey: "concurrent-terminal-" + string(rune('a'+index)),
+		})
+		if err != nil {
+			t.Fatalf("create run %d: %v", index, err)
+		}
+		runs[index] = run
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, len(runs))
+	var group sync.WaitGroup
+	for index, run := range runs {
+		group.Add(1)
+		go func(index int, run domain.Run) {
+			defer group.Done()
+			<-start
+			errs <- store.FinishRun(ctx, run.ID, domain.RunSucceeded, nil,
+				"concurrent assistant response",
+				event.Envelope[json.RawMessage]{
+					SchemaVersion: "agenttrace.event.v1",
+					EventID:       "evt-concurrent-terminal-" + string(rune('a'+index)),
+					EventType:     "runtime.completed",
+					AggregateID:   run.ID,
+					CorrelationID: run.ID,
+					OccurredAt:    time.Date(2026, 10, 21, 12, 0, index, 0, time.UTC),
+					Payload:       json.RawMessage(`{"status":"succeeded"}`),
+				})
+		}(index, run)
+	}
+	close(start)
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent FinishRun: %v", err)
+		}
+	}
+
+	var terminalRuns, assistantMessages, uniqueOrdinals int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM runs WHERE conversation_id = $1 AND status = 'succeeded'),
+			(SELECT count(*) FROM messages WHERE conversation_id = $1 AND role = 'assistant'),
+			(SELECT count(DISTINCT ordinal) FROM messages WHERE conversation_id = $1)`,
+		conversationID,
+	).Scan(&terminalRuns, &assistantMessages, &uniqueOrdinals); err != nil {
+		t.Fatalf("read concurrent terminal persistence: %v", err)
+	}
+	if terminalRuns != 2 || assistantMessages != 2 || uniqueOrdinals != 4 {
+		t.Fatalf("terminal runs=%d assistant messages=%d unique ordinals=%d, want 2, 2, 4",
+			terminalRuns, assistantMessages, uniqueOrdinals)
 	}
 }
 

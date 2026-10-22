@@ -130,7 +130,7 @@ func (s *memoryCheckpointStore) CommitStep(_ context.Context, step StepResult) e
 	s.steps = append(s.steps, step)
 	s.commits++
 	s.checkpoint.NextCheckpoint++
-	if step.Kind == StepModel {
+	if step.Kind == StepModel || step.Kind == StepReport {
 		s.checkpoint.ModelCalls++
 		s.checkpoint.Messages = append(s.checkpoint.Messages, step.Model.Message)
 		s.checkpoint.PendingOperation = step.OperationCall

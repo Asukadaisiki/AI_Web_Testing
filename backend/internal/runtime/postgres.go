@@ -112,7 +112,7 @@ func (s PostgresCheckpointStore) StartAttempt(ctx context.Context, step StepResu
 		SpanID:       step.LogicalSpanID,
 		ParentSpanID: RunSpanID(step.RunID),
 		Kind:         spanKind(step.Kind),
-		Name:         string(step.Kind),
+		Name:         stepSpanName(step),
 		Status:       "started",
 		StartedAt:    now,
 	}
@@ -123,7 +123,7 @@ func (s PostgresCheckpointStore) StartAttempt(ctx context.Context, step StepResu
 		StartedAt:     now,
 	}
 	switch step.Kind {
-	case StepModel:
+	case StepModel, StepReport:
 		request, err := json.Marshal(step.ModelRequest)
 		if err != nil {
 			return fmt.Errorf("marshal started model request: %w", err)
@@ -183,7 +183,7 @@ func (s PostgresCheckpointStore) CommitStep(ctx context.Context, step StepResult
 		SpanID:       step.LogicalSpanID,
 		ParentSpanID: RunSpanID(step.RunID),
 		Kind:         spanKind(step.Kind),
-		Name:         string(step.Kind),
+		Name:         stepSpanName(step),
 		Status:       stepStatus(step),
 		StartedAt:    now,
 		EndedAt:      &now,
@@ -202,9 +202,11 @@ func (s PostgresCheckpointStore) CommitStep(ctx context.Context, step StepResult
 		Event:              durableEvent,
 	}
 	switch step.Kind {
-	case StepModel:
+	case StepModel, StepReport:
 		request, _ := json.Marshal(step.ModelRequest)
 		response, _ := json.Marshal(step.Model)
+		span.Input = request
+		span.Output = response
 		attempt.Provider = "model"
 		attempt.Request = request
 		attempt.Response = response
@@ -216,6 +218,8 @@ func (s PostgresCheckpointStore) CommitStep(ctx context.Context, step StepResult
 	case StepOperation:
 		request, _ := json.Marshal(step.OperationCall)
 		response, _ := json.Marshal(step.OperationResult)
+		span.Input = request
+		span.Output = response
 		attempt.OperationID = step.OperationCall.OperationID
 		attempt.Request = request
 		attempt.Response = response
@@ -228,6 +232,7 @@ func (s PostgresCheckpointStore) CommitStep(ctx context.Context, step StepResult
 			Error:       step.OperationResult.Error,
 		}
 	}
+	traceStep.Span = span
 	return s.Store.AppendTraceStep(ctx, traceStep)
 }
 
@@ -262,7 +267,7 @@ func (s PostgresCheckpointStore) CompleteRun(ctx context.Context, completion Com
 }
 
 func applyStep(checkpoint *Checkpoint, step StepResult) {
-	if step.Kind == StepModel {
+	if step.Kind == StepModel || step.Kind == StepReport {
 		checkpoint.ModelCalls++
 		checkpoint.Messages = append(checkpoint.Messages, step.Model.Message)
 		checkpoint.PendingOperation = step.OperationCall
@@ -286,7 +291,17 @@ func spanKind(kind StepKind) domain.SpanKind {
 	if kind == StepOperation {
 		return domain.SpanOperation
 	}
+	if kind == StepReport {
+		return domain.SpanReport
+	}
 	return domain.SpanModel
+}
+
+func stepSpanName(step StepResult) string {
+	if step.SpanName != "" {
+		return step.SpanName
+	}
+	return string(step.Kind)
 }
 
 func stepStatus(step StepResult) string {

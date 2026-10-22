@@ -83,6 +83,10 @@ func (e Engine) runModel(ctx context.Context, checkpoint Checkpoint) error {
 		return e.complete(ctx, checkpoint, CompletionFailed, "", fmt.Errorf("model completion: %w", err))
 	}
 	step.Model = response
+	if response.Report != "" {
+		step.Kind = StepReport
+	}
+	step.SpanName = modelSpanName(step.Kind, response.Stage)
 	if len(response.Message.ToolCalls) > 1 {
 		return e.complete(ctx, checkpoint, CompletionFailed, "", errors.New("multiple tool calls are not supported"))
 	}
@@ -101,6 +105,9 @@ func (e Engine) runModel(ctx context.Context, checkpoint Checkpoint) error {
 	e.appendLive(ctx, checkpoint.RunID, step)
 	if len(response.Message.ToolCalls) == 0 {
 		checkpoint.NextCheckpoint++
+		if response.Report != "" {
+			return nil
+		}
 		return e.complete(ctx, checkpoint, CompletionSucceeded, response.Message.Content, nil)
 	}
 	return nil
@@ -206,4 +213,16 @@ func modelTools(operations []event.Operation) []model.Tool {
 		})
 	}
 	return tools
+}
+
+func modelSpanName(kind StepKind, stage model.Stage) string {
+	if kind == StepReport {
+		return string(StepReport)
+	}
+	switch stage {
+	case model.StagePlan, model.StageFinal:
+		return string(stage)
+	default:
+		return string(StepModel)
+	}
 }

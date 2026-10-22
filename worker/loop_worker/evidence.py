@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from playwright.async_api import Page
@@ -24,6 +25,7 @@ DEFAULT_ARTIFACTS_DIR = REPO_ROOT / "data" / "sessions"
 
 #: 单步证据里 console / network 的条数上限（防止长跑页面把结果撑爆）
 MAX_EVENTS = 500
+SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
 def artifacts_dir() -> Path:
@@ -36,9 +38,15 @@ def artifacts_dir() -> Path:
 
 def session_dir(session_id: str) -> Path:
     """某个会话的产物目录。session_id 必填——产物必须能归属到会话。"""
-    if not session_id:
-        raise ValueError("session_id is required to locate the artifact directory")
-    return artifacts_dir() / session_id
+    if not SAFE_SESSION_ID.fullmatch(session_id):
+        raise ValueError("session_id must be one safe artifact directory segment")
+    root = artifacts_dir().resolve()
+    resolved = (root / session_id).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("session_id resolves outside the artifact directory") from exc
+    return resolved
 
 
 def display_path(path: Path) -> str:
@@ -144,6 +152,7 @@ __all__ = [
     "DEFAULT_ARTIFACTS_DIR",
     "MAX_EVENTS",
     "REPO_ROOT",
+    "SAFE_SESSION_ID",
     "EvidenceCollector",
     "artifacts_dir",
     "capture_screenshot",

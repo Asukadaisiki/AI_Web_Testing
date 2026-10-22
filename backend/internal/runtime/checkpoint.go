@@ -20,6 +20,7 @@ type StepKind string
 const (
 	StepModel     StepKind = "model"
 	StepOperation StepKind = "operation"
+	StepReport    StepKind = "report"
 )
 
 // CompletionStatus is a terminal run state.
@@ -56,6 +57,7 @@ type StepResult struct {
 	RunID           string
 	Checkpoint      int64
 	Kind            StepKind
+	SpanName        string
 	LogicalSpanID   string
 	AttemptID       string
 	ModelRequest    model.Request

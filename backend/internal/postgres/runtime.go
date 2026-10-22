@@ -449,6 +449,19 @@ func appendAssistantMessage(ctx context.Context, tx pgx.Tx, runID, content strin
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
+	var conversationID string
+	if err := tx.QueryRow(ctx, `
+		SELECT conversation_id
+		FROM runs
+		WHERE id = $1`, runID).Scan(&conversationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load assistant conversation: %w", err)
+	}
+	if err := lockConversationOrdinal(ctx, tx, conversationID); err != nil {
+		return err
+	}
 	messageID, err := newID("msg")
 	if err != nil {
 		return err
@@ -457,23 +470,38 @@ func appendAssistantMessage(ctx context.Context, tx pgx.Tx, runID, content strin
 		INSERT INTO messages (id, conversation_id, ordinal, role, content, metadata)
 		SELECT
 			$1,
-			r.conversation_id,
+			$2,
 			COALESCE((
 				SELECT MAX(ordinal)
 				FROM messages
-				WHERE conversation_id = r.conversation_id
+				WHERE conversation_id = $2
 			), 0) + 1,
 			'assistant',
 			$3,
-			jsonb_build_object('run_id', r.id)
-		FROM runs AS r
-		WHERE r.id = $2`,
-		messageID, runID, content)
+			jsonb_build_object('run_id', $4::text)`,
+		messageID, conversationID, content, runID)
 	if err != nil {
 		return fmt.Errorf("insert assistant message: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// lockConversationOrdinal serializes message ordinal allocation within one conversation.
+func lockConversationOrdinal(ctx context.Context, tx pgx.Tx, conversationID string) error {
+	var found string
+	err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM conversations
+		WHERE id = $1
+		FOR UPDATE`, conversationID).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock conversation ordinal %q: %w", conversationID, err)
 	}
 	return nil
 }
