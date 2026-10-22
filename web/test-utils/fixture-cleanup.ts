@@ -7,7 +7,6 @@ export interface FixtureCleanupState {
   publishedCommandCount: number;
   processedCommandCount: number;
   unpublishedOutboxCount: number;
-  claimedUnpublishedCommandCount: number;
 }
 
 export function fixtureCleanupIsSafe(state: FixtureCleanupState): boolean {
@@ -27,6 +26,5 @@ export function fixtureCleanupDiagnostics(state: FixtureCleanupState): string {
     `unexpected_runs=${state.unexpectedRunCount}`,
     `commands=${state.processedCommandCount}/${state.publishedCommandCount}/${state.commandCount}`,
     `unpublished_outbox=${state.unpublishedOutboxCount}`,
-    `claimed_commands=${state.claimedUnpublishedCommandCount}`,
   ].join(' ');
 }

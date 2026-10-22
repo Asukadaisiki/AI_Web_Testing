@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	inboxconsumer "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
@@ -110,6 +111,82 @@ func TestPostgresCheckpointStoreReplaysReportStageInOrder(t *testing.T) {
 	}
 	if assistantMessages != 1 {
 		t.Fatalf("assistant messages = %d, want one terminal final", assistantMessages)
+	}
+}
+
+func TestPostgresRuntimeInboxTombstoneSkipsLateCommandAfterFixtureRunDeletion(t *testing.T) {
+	ctx, pool, _ := newRuntimePostgresStore(t)
+	const (
+		projectID      = "prj_cleanup_tombstone"
+		conversationID = "conv_cleanup_tombstone"
+		runID          = "run_cleanup_tombstone"
+		eventID        = "evt_cleanup_tombstone"
+	)
+	message := commandMessage(t, eventID, commandFor(runID))
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO projects (id, name) VALUES ($1, 'cleanup tombstone fixture')`,
+		projectID,
+	); err != nil {
+		t.Fatalf("insert fixture project: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO conversations (id, project_id, title) VALUES ($1, $2, 'fixture')`,
+		conversationID, projectID,
+	); err != nil {
+		t.Fatalf("insert fixture conversation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO runs (id, project_id, conversation_id, status, specification)
+		VALUES ($1, $2, $3, 'succeeded', '{}'::jsonb)`,
+		runID, projectID, conversationID,
+	); err != nil {
+		t.Fatalf("insert fixture run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbox_events (id, consumer, event_id, payload, processed_at)
+		VALUES ('inb_cleanup_tombstone', 'agenttrace-runtime', $1, $2::jsonb, now())`,
+		eventID, message.Value,
+	); err != nil {
+		t.Fatalf("insert processed tombstone: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM runs WHERE id = $1`, runID); err != nil {
+		t.Fatalf("delete fixture run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID); err != nil {
+		t.Fatalf("delete fixture project: %v", err)
+	}
+
+	var projectRows, runRows, tombstones int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM projects WHERE id = $1),
+			(SELECT count(*) FROM runs WHERE id = $2),
+			(SELECT count(*) FROM inbox_events
+			 WHERE consumer = 'agenttrace-runtime'
+			   AND event_id = $3
+			   AND processed_at IS NOT NULL)`,
+		projectID, runID, eventID,
+	).Scan(&projectRows, &runRows, &tombstones); err != nil {
+		t.Fatalf("read cleanup facts: %v", err)
+	}
+	if projectRows != 0 || runRows != 0 || tombstones != 1 {
+		t.Fatalf("cleanup facts = projects=%d runs=%d tombstones=%d, want 0, 0, 1",
+			projectRows, runRows, tombstones)
+	}
+
+	runner := &recordingRunner{}
+	consumer := Consumer{
+		Inbox: DeduplicatedInbox{
+			Deduplicator: inboxconsumer.NewDeduplicator(pool, "agenttrace-runtime"),
+		},
+		Runner: runner,
+	}
+	if err := consumer.Handle(ctx, message); err != nil {
+		t.Fatalf("handle late duplicate command: %v", err)
+	}
+	if runner.calls != 0 {
+		t.Fatalf("late duplicate invoked runner %d times, want 0", runner.calls)
 	}
 }
 

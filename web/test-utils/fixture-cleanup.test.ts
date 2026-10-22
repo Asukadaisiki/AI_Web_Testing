@@ -7,21 +7,20 @@ import {
 } from './fixture-cleanup';
 
 describe('fixture cleanup safety', () => {
-  test('does not report a claimed unpublished command as safe to delete', () => {
+  test('does not report a command without its processed runtime tombstone as safe to delete', () => {
     const state: FixtureCleanupState = {
       expectedRunCount: 1,
       runCount: 1,
       terminalRunCount: 1,
       unexpectedRunCount: 0,
       commandCount: 1,
-      publishedCommandCount: 0,
+      publishedCommandCount: 1,
       processedCommandCount: 0,
-      unpublishedOutboxCount: 1,
-      claimedUnpublishedCommandCount: 1,
+      unpublishedOutboxCount: 0,
     };
 
     expect(fixtureCleanupIsSafe(state)).toBe(false);
-    expect(fixtureCleanupDiagnostics(state)).toContain('claimed_commands=1');
+    expect(fixtureCleanupDiagnostics(state)).toContain('commands=0/1/1');
   });
 
   test('does not report an unexpected fixture run as safe to delete', () => {
@@ -34,7 +33,6 @@ describe('fixture cleanup safety', () => {
       publishedCommandCount: 0,
       processedCommandCount: 0,
       unpublishedOutboxCount: 0,
-      claimedUnpublishedCommandCount: 0,
     };
 
     expect(fixtureCleanupIsSafe(state)).toBe(false);

@@ -128,10 +128,28 @@ function quoteFixtureIDs(ids: string[]): string {
   return ids.map((id) => `'${id}'`).join(', ');
 }
 
+function quoteFixtureEventIDs(ids: string[]): string {
+  for (const id of ids) expect(id).toMatch(/^evt_[a-zA-Z0-9]+$/);
+  return ids.map((id) => `'${id}'`).join(', ');
+}
+
 function findFixtureRunIds(fixtureProjectID: string): string[] {
   expect(fixtureProjectID).toMatch(/^prj_[a-zA-Z0-9]+$/);
   return executeFixtureSQL(
     `SELECT id FROM runs WHERE project_id = '${fixtureProjectID}' ORDER BY id;`,
+  )
+    .trim()
+    .split('\n')
+    .filter((id) => id !== '');
+}
+
+function findFixtureCommandEventIDs(fixtureRunIds: string[]): string[] {
+  const runIDs = quoteFixtureIDs(fixtureRunIds);
+  return executeFixtureSQL(
+    `SELECT event_id FROM outbox_events
+     WHERE topic = 'agenttrace.run.commands.v1'
+       AND key IN (${fixtureRunIds.length === 0 ? "''" : runIDs})
+     ORDER BY event_id;`,
   )
     .trim()
     .split('\n')
@@ -176,12 +194,9 @@ function readFixtureCleanupState(
            AND event_id = command.event_id
            AND processed_at IS NOT NULL
        )),
-      (SELECT COUNT(*) FROM fixture_outbox WHERE published_at IS NULL),
-      (SELECT COUNT(*) FROM fixture_commands
-       WHERE published_at IS NULL
-         AND (locked_by IS NOT NULL OR claim_token IS NOT NULL));`);
+      (SELECT COUNT(*) FROM fixture_outbox WHERE published_at IS NULL);`);
   const counts = output.trim().split('|').map((value) => Number.parseInt(value, 10));
-  expect(counts).toHaveLength(9);
+  expect(counts).toHaveLength(8);
   expect(counts.every(Number.isFinite)).toBe(true);
   return {
     expectedRunCount: counts[0] ?? 0,
@@ -192,7 +207,6 @@ function readFixtureCleanupState(
     publishedCommandCount: counts[5] ?? 0,
     processedCommandCount: counts[6] ?? 0,
     unpublishedOutboxCount: counts[7] ?? 0,
-    claimedUnpublishedCommandCount: counts[8] ?? 0,
   };
 }
 
@@ -250,6 +264,8 @@ async function cleanupFixtureProject(): Promise<void> {
   await waitForFixtureCleanupSafety(fixtureProjectID, fixtureRunIds);
 
   const runIDs = quoteFixtureIDs(fixtureRunIds);
+  const commandEventIDs = findFixtureCommandEventIDs(fixtureRunIds);
+  const quotedCommandEventIDs = quoteFixtureEventIDs(commandEventIDs);
   const output = executeFixtureSQL(`BEGIN;
     DELETE FROM consumer_retry_counts
     WHERE event_id IN (
@@ -260,7 +276,12 @@ async function cleanupFixtureProject(): Promise<void> {
     WHERE event_id IN (
       SELECT event_id FROM outbox_events
       WHERE key IN (${fixtureRunIds.length === 0 ? "''" : runIDs})
-    );
+    )
+      AND NOT (
+        consumer = 'agenttrace-runtime'
+        AND processed_at IS NOT NULL
+        AND event_id IN (${commandEventIDs.length === 0 ? "''" : quotedCommandEventIDs})
+      );
     DELETE FROM outbox_events
     WHERE key IN (${fixtureRunIds.length === 0 ? "''" : runIDs});
     DELETE FROM idempotency_keys
@@ -278,9 +299,13 @@ async function cleanupFixtureProject(): Promise<void> {
     SELECT
       (SELECT COUNT(*) FROM projects
        WHERE id = '${fixtureProjectID}' AND name = '${fixtureProjectName}'),
-      (SELECT COUNT(*) FROM runs WHERE project_id = '${fixtureProjectID}');
+      (SELECT COUNT(*) FROM runs WHERE project_id = '${fixtureProjectID}'),
+      (SELECT COUNT(*) FROM inbox_events
+       WHERE consumer = 'agenttrace-runtime'
+         AND event_id IN (${commandEventIDs.length === 0 ? "''" : quotedCommandEventIDs})
+         AND processed_at IS NOT NULL);
   COMMIT;`);
-  expect(output.trim()).toBe('0|0');
+  expect(output.trim()).toBe(`0|0|${commandEventIDs.length}`);
   fixtureProjectId = '';
   fixtureProjectName = '';
 }
