@@ -100,6 +100,48 @@ func TestSendMessageRejectsUnconfiguredModel(t *testing.T) {
 	assertErrorCode(t, response, http.StatusBadRequest, "model_not_available")
 }
 
+func TestListProjectsSerializesEmptyProjectsAsArray(t *testing.T) {
+	handler := newTestServer(t, &fakeRepository{}, stream.NewService(
+		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+	))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/projects", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body struct {
+		Projects []json.RawMessage `json:"projects"`
+	}
+	decodeJSON(t, response, &body)
+	if body.Projects == nil {
+		t.Fatalf("projects = null, want []: %s", response.Body.String())
+	}
+	if len(body.Projects) != 0 {
+		t.Fatalf("projects = %#v, want []", body.Projects)
+	}
+}
+
+func TestListConversationsSerializesEmptyConversationsAsArray(t *testing.T) {
+	handler := newTestServer(t, &fakeRepository{}, stream.NewService(
+		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+	))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/projects/prj_empty/conversations", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body struct {
+		Conversations []json.RawMessage `json:"conversations"`
+	}
+	decodeJSON(t, response, &body)
+	if body.Conversations == nil {
+		t.Fatalf("conversations = null, want []: %s", response.Body.String())
+	}
+	if len(body.Conversations) != 0 {
+		t.Fatalf("conversations = %#v, want []", body.Conversations)
+	}
+}
+
 func TestGetConversationSerializesEmptyMessagesAsArray(t *testing.T) {
 	repository := &fakeRepository{conversation: postgres.Conversation{
 		ID: "conv_empty", ProjectID: "prj_1", Title: "Empty", Metadata: json.RawMessage(`{}`),

@@ -22,6 +22,9 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		writeRepositoryError(w, err)
 		return
 	}
+	if conversations == nil {
+		conversations = []postgres.Conversation{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"conversations": conversations})
 }
 

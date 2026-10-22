@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -18,6 +19,83 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestRuntimePostgresDSNRequiresExplicitIsolatedDatabase(t *testing.T) {
+	tests := []struct {
+		name         string
+		dsn          string
+		wantDatabase string
+		wantErr      string
+	}{
+		{
+			name:    "empty",
+			dsn:     "",
+			wantErr: "database",
+		},
+		{
+			name:    "missing database path",
+			dsn:     "postgres://agenttrace:agenttrace@127.0.0.1:5433?sslmode=disable",
+			wantErr: "database",
+		},
+		{
+			name:    "live agenttrace database",
+			dsn:     "postgres://agenttrace:agenttrace@127.0.0.1:5433/agenttrace?sslmode=disable",
+			wantErr: "agenttrace",
+		},
+		{
+			name:    "postgres database",
+			dsn:     "postgres://agenttrace:agenttrace@127.0.0.1:5433/postgres?sslmode=disable",
+			wantErr: "postgres",
+		},
+		{
+			name:    "template database",
+			dsn:     "postgres://agenttrace:agenttrace@127.0.0.1:5433/template1?sslmode=disable",
+			wantErr: "template1",
+		},
+		{
+			name:    "wrong agenttrace prefix",
+			dsn:     "postgres://agenttrace:agenttrace@127.0.0.1:5433/agenttrace_task13?sslmode=disable",
+			wantErr: "agenttrace_task13",
+		},
+		{
+			name:         "exact isolated database",
+			dsn:          "postgres://agenttrace:agenttrace@127.0.0.1:5433/agenttrace_test?sslmode=disable",
+			wantDatabase: "agenttrace_test",
+		},
+		{
+			name:         "isolated database prefix",
+			dsn:          "postgres://agenttrace:agenttrace@127.0.0.1:5433/agenttrace_test_task13?sslmode=disable",
+			wantDatabase: "agenttrace_test_task13",
+		},
+		{
+			name:         "encoded database with query",
+			dsn:          "postgres://agenttrace:agenttrace@127.0.0.1:5433/agenttrace%5Ftest%5Ftask13?application_name=runtime%20integration&sslmode=disable",
+			wantDatabase: "agenttrace_test_task13",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database, err := runtimeTestDatabaseName(test.dsn)
+			if test.wantErr != "" {
+				if err == nil {
+					t.Fatalf("runtimeTestDatabaseName(%q) = %q, nil error; want rejected database containing %q",
+						test.dsn, database, test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("rejection error = %q, want target database %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("runtimeTestDatabaseName(%q): %v", test.dsn, err)
+			}
+			if database != test.wantDatabase {
+				t.Fatalf("database = %q, want %q", database, test.wantDatabase)
+			}
+		})
+	}
+}
 
 func TestPostgresCheckpointStoreReplaysReportStageInOrder(t *testing.T) {
 	ctx, pool, store := newRuntimePostgresStore(t)
@@ -402,6 +480,10 @@ func newRuntimePostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *pos
 	if dsn == "" {
 		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN is not configured")
 	}
+	_, err := runtimeTestDatabaseName(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -415,4 +497,19 @@ func newRuntimePostgresStore(t *testing.T) (context.Context, *pgxpool.Pool, *pos
 		t.Fatalf("migrate PostgreSQL: %v", err)
 	}
 	return ctx, pool, postgres.NewStore(pool)
+}
+
+func runtimeTestDatabaseName(dsn string) (string, error) {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parse PostgreSQL test DSN: %w", err)
+	}
+	database := config.ConnConfig.Database
+	if database != "agenttrace_test" && !strings.HasPrefix(database, "agenttrace_test_") {
+		return "", fmt.Errorf(
+			"refusing destructive PostgreSQL reset for database %q: require agenttrace_test or agenttrace_test_*",
+			database,
+		)
+	}
+	return database, nil
 }

@@ -21,6 +21,9 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, err)
 		return
 	}
+	if projects == nil {
+		projects = []postgres.Project{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
 }
 
