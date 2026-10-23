@@ -243,9 +243,9 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 			ID:        operation.ID,
 			SpanID:    operation.SpanID,
 			Status:    operation.Status,
-			Result:    redactTraceJSON(operation.Result),
-			Artifacts: redactTraceJSON(operation.Artifacts),
-			Error:     redactTraceJSON(operation.Error),
+			Result:    operation.Result,
+			Artifacts: operation.Artifacts,
+			Error:     operation.Error,
 			CreatedAt: operation.CreatedAt,
 			UpdatedAt: operation.UpdatedAt,
 		})

@@ -288,7 +288,7 @@ func TestGetTraceProjectsUnknownOperationAsSingleFallbackNode(t *testing.T) {
 	}
 }
 
-func TestGetTraceRedactsNestedSensitiveCanonicalJSON(t *testing.T) {
+func TestGetTraceRedactsCanonicalJSONAndPreservesRawDerivedNodes(t *testing.T) {
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	repository := &fakeRepository{trace: postgres.TraceDetails{
 		Spans: []domain.Span{{
@@ -312,8 +312,16 @@ func TestGetTraceRedactsNestedSensitiveCanonicalJSON(t *testing.T) {
 		}},
 		Operations: []postgres.TraceOperationDetail{{
 			ID: "evidence-1", SpanID: "operation-1", OperationID: "operation-call-1",
-			Status:    "failed",
-			Result:    json.RawMessage(`{"steps":[{"status":"failed","token":"result-token"}],"report":{"summary":"visible report"}}`),
+			Status: "failed",
+			Result: json.RawMessage(`{"steps":[{
+				"index":0,
+				"action":"goto",
+				"status":"failed",
+				"started_at":"2026-10-21T12:00:00Z",
+				"duration_ms":500,
+				"token":"result-token",
+				"evidence":{"api_key":"step-api-key"}
+			}],"report":{"summary":"visible report"}}`),
 			Artifacts: json.RawMessage(`[{"kind":"screenshot","path":"failure.png","metadata":{"api_key":"artifact-api-key"}}]`),
 			Error:     json.RawMessage(`{"kind":"worker_error","message":"visible failure","nested":{"cookie":"error-cookie"}}`),
 			CreatedAt: now, UpdatedAt: now,
@@ -325,26 +333,76 @@ func TestGetTraceRedactsNestedSensitiveCanonicalJSON(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	body := response.Body.String()
+	var body struct {
+		Spans             []json.RawMessage `json:"spans"`
+		Attempts          []json.RawMessage `json:"attempts"`
+		Usage             []json.RawMessage `json:"usage"`
+		OperationEvidence []struct {
+			Result    map[string]any `json:"result"`
+			Artifacts []any          `json:"artifacts"`
+			Error     map[string]any `json:"error"`
+		} `json:"operation_evidence"`
+		DerivedNodes []struct {
+			Data     map[string]any `json:"data"`
+			Evidence map[string]any `json:"evidence"`
+		} `json:"derived_nodes"`
+	}
+	decodeJSON(t, response, &body)
+
+	canonical, err := json.Marshal(struct {
+		Spans             []json.RawMessage `json:"spans"`
+		Attempts          []json.RawMessage `json:"attempts"`
+		Usage             []json.RawMessage `json:"usage"`
+		OperationEvidence any               `json:"operation_evidence"`
+	}{
+		Spans: body.Spans, Attempts: body.Attempts, Usage: body.Usage,
+		OperationEvidence: body.OperationEvidence,
+	})
+	if err != nil {
+		t.Fatalf("marshal canonical trace arrays: %v", err)
+	}
 	for _, forbidden := range []string{
 		`"authorization"`, `"cookie"`, `"password"`, `"token"`, `"api_key"`, `"secret"`,
 		"span-token", "span-secret", "attempt-password", "usage-authorization",
-		"result-token", "artifact-api-key", "error-cookie",
+		"result-token", "step-api-key", "artifact-api-key", "error-cookie",
 	} {
-		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
-			t.Fatalf("trace response leaked %q: %s", forbidden, body)
+		if strings.Contains(strings.ToLower(string(canonical)), strings.ToLower(forbidden)) {
+			t.Fatalf("canonical trace arrays leaked %q: %s", forbidden, canonical)
 		}
+	}
+	if len(body.OperationEvidence) != 1 {
+		t.Fatalf("operation evidence count = %d, want 1", len(body.OperationEvidence))
+	}
+	canonicalSteps, ok := body.OperationEvidence[0].Result["steps"].([]any)
+	if !ok || len(canonicalSteps) != 1 {
+		t.Fatalf("canonical steps = %#v, want one step", body.OperationEvidence[0].Result["steps"])
+	}
+	canonicalStep, ok := canonicalSteps[0].(map[string]any)
+	if !ok {
+		t.Fatalf("canonical step = %#v, want object", canonicalSteps[0])
+	}
+	if _, exists := canonicalStep["token"]; exists {
+		t.Fatalf("canonical operation result retained sensitive token: %#v", canonicalStep)
+	}
+	if len(body.DerivedNodes) != 1 {
+		t.Fatalf("derived node count = %d, want 1", len(body.DerivedNodes))
+	}
+	if got := body.DerivedNodes[0].Data["token"]; got != "result-token" {
+		t.Fatalf("derived data token = %#v, want persisted value", got)
+	}
+	if got := body.DerivedNodes[0].Evidence["api_key"]; got != "step-api-key" {
+		t.Fatalf("derived evidence api_key = %#v, want persisted value", got)
 	}
 	for _, required := range []string{
 		`"name":"checkout"`, `"summary":"checkout failed"`, `"cached_tokens":2`,
 		`"status":"failed"`, `"summary":"visible report"`, `"kind":"screenshot"`,
 		`"path":"failure.png"`, `"message":"visible failure"`,
 	} {
-		if !strings.Contains(body, required) {
-			t.Fatalf("trace response omitted usable canonical field %q: %s", required, body)
+		if !strings.Contains(string(canonical), required) {
+			t.Fatalf("canonical trace arrays omitted usable field %q: %s", required, canonical)
 		}
 	}
-	if string(repository.trace.Operations[0].Result) != `{"steps":[{"status":"failed","token":"result-token"}],"report":{"summary":"visible report"}}` {
+	if !strings.Contains(string(repository.trace.Operations[0].Result), `"token":"result-token"`) {
 		t.Fatalf("handler mutated canonical operation result: %s", repository.trace.Operations[0].Result)
 	}
 }
