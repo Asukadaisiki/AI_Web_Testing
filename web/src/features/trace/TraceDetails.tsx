@@ -32,9 +32,9 @@ function formatJSON(value: unknown): string {
 }
 
 function duration(node: TraceNode): string {
-  if (node.ended_at === null || node.ended_at === undefined) return 'In progress';
+  if (node.endedAt === null || node.endedAt === undefined) return 'In progress';
   const milliseconds =
-    new Date(node.ended_at).getTime() - new Date(node.started_at).getTime();
+    new Date(node.endedAt).getTime() - new Date(node.startedAt).getTime();
   return milliseconds >= 1000
     ? `${(milliseconds / 1000).toFixed(2)} s`
     : `${String(Math.max(milliseconds, 0))} ms`;
@@ -52,20 +52,21 @@ export function TraceDetails({
   usage,
   operationEvidence,
 }: Props): JSX.Element {
-  if (node === null) {
+  if (node === null || node.source.type !== 'span') {
     return (
       <div className="trace-detail-empty">
         Select a Trace node to inspect its canonical data.
       </div>
     );
   }
+  const span = node.source.value;
 
   return (
     <article className="trace-details" aria-label={`Trace details for ${node.name}`}>
       <header>
         <p className="eyebrow">{node.kind}</p>
         <h3>{node.name}</h3>
-        <code>{node.span_id}</code>
+        <code>{node.id}</code>
       </header>
 
       <dl className="detail-grid">
@@ -79,14 +80,14 @@ export function TraceDetails({
         </div>
         <div>
           <dt>Started</dt>
-          <dd>{new Date(node.started_at).toLocaleString()}</dd>
+          <dd>{new Date(node.startedAt).toLocaleString()}</dd>
         </div>
         <div>
           <dt>Ended</dt>
           <dd>
-            {node.ended_at === null || node.ended_at === undefined
+            {node.endedAt === null || node.endedAt === undefined
               ? 'In progress'
-              : new Date(node.ended_at).toLocaleString()}
+              : new Date(node.endedAt).toLocaleString()}
           </dd>
         </div>
       </dl>
@@ -163,7 +164,7 @@ export function TraceDetails({
           <FileText size={14} />
           Planner / case input
         </summary>
-        <pre>{formatJSON(node.input)}</pre>
+        <pre>{formatJSON(span.input)}</pre>
       </details>
 
       <details>
@@ -191,12 +192,12 @@ export function TraceDetails({
           <Braces size={14} />
           Canonical output
         </summary>
-        <pre>{formatJSON(node.output)}</pre>
+        <pre>{formatJSON(span.output)}</pre>
       </details>
 
       <div className="detail-updated">
         <Clock3 size={13} />
-        Updated {new Date(node.updated_at).toLocaleString()}
+        Updated {new Date(span.updated_at).toLocaleString()}
       </div>
     </article>
   );

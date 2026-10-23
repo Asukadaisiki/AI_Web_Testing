@@ -7,7 +7,6 @@ import {
   Workflow,
 } from 'lucide-react';
 import type { KeyboardEvent } from 'react';
-import type { SpanKind } from '../../api';
 import { flattenTrace, type TraceNode } from './projectTrace';
 
 interface Props {
@@ -28,7 +27,7 @@ function rows(nodes: readonly TraceNode[], depth = 1): FlatRow[] {
   ]);
 }
 
-function KindIcon({ kind }: { kind: SpanKind }): JSX.Element {
+function KindIcon({ kind }: { kind: TraceNode['kind'] }): JSX.Element {
   switch (kind) {
     case 'model':
       return <Bot size={14} />;
@@ -42,6 +41,10 @@ function KindIcon({ kind }: { kind: SpanKind }): JSX.Element {
       return <FileCheck2 size={14} />;
     case 'run':
       return <Workflow size={14} />;
+    case 'step':
+      return <Workflow size={14} />;
+    case 'unknown_tool':
+      return <Wrench size={14} />;
   }
 }
 
@@ -52,7 +55,7 @@ export function TraceTree({ nodes, selectedSpanId, onSelect }: Props): JSX.Eleme
   function move(nextIndex: number): void {
     const next = flattened[nextIndex];
     if (next === undefined) return;
-    onSelect(next.node.span_id);
+    onSelect(next.node.id);
     document.getElementById(`trace-node-${String(nextIndex)}`)?.focus();
   }
 
@@ -80,15 +83,15 @@ export function TraceTree({ nodes, selectedSpanId, onSelect }: Props): JSX.Eleme
         const child = current.children[0];
         if (child === undefined) break;
         event.preventDefault();
-        const childIndex = flattened.findIndex((row) => row.node.span_id === child.span_id);
+        const childIndex = flattened.findIndex((row) => row.node.id === child.id);
         move(childIndex);
         break;
       }
       case 'ArrowLeft': {
-        if (current.parent_span_id === undefined || current.parent_span_id === '') break;
+        if (current.parentId === undefined) break;
         event.preventDefault();
         const parentIndex = flattened.findIndex(
-          (row) => row.node.span_id === current.parent_span_id,
+          (row) => row.node.id === current.parentId,
         );
         move(parentIndex);
         break;
@@ -105,15 +108,15 @@ export function TraceTree({ nodes, selectedSpanId, onSelect }: Props): JSX.Eleme
       {flattened.map(({ node, depth }, index) => (
         <button
           id={`trace-node-${String(index)}`}
-          key={node.span_id}
+          key={node.id}
           type="button"
           role="treeitem"
           aria-level={depth}
-          aria-selected={node.span_id === selectedSpanId}
+          aria-selected={node.id === selectedSpanId}
           aria-label={`Trace node: ${node.name}`}
-          className={`trace-node${node.span_id === selectedSpanId ? ' is-selected' : ''}`}
+          className={`trace-node${node.id === selectedSpanId ? ' is-selected' : ''}`}
           style={{ '--trace-depth': depth } as React.CSSProperties}
-          onClick={() => onSelect(node.span_id)}
+          onClick={() => onSelect(node.id)}
           onKeyDown={(event) => handleKey(event, index)}
         >
           <span className={`trace-kind trace-kind-${node.kind}`}>

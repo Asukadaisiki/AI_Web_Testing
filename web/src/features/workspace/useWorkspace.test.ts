@@ -11,6 +11,7 @@ import {
   listProjects,
   getHealth,
   type ConversationDetail,
+  type DerivedTraceNode,
   type OperationEvidence,
   type Run,
   type Span,
@@ -100,6 +101,21 @@ function span(runId: string): Span {
   };
 }
 
+function derivedNode(runId: string): DerivedTraceNode {
+  return {
+    id: `derived:span-${runId}:step:0`,
+    parent_span_id: `span-${runId}`,
+    source_evidence_id: `evidence-${runId}`,
+    kind: 'step',
+    name: `step-${runId}`,
+    status: 'succeeded',
+    started_at: '2026-10-21T12:00:00Z',
+    ended_at: '2026-10-21T12:00:01Z',
+    data: {},
+    evidence: {},
+  };
+}
+
 class FakeEventSource {
   onmessage: ((event: MessageEvent<string>) => void) | null = null;
   onopen: (() => void) | null = null;
@@ -134,6 +150,40 @@ beforeEach(() => {
 });
 
 describe('workspace request freshness', () => {
+  it('stores and retains a selected derived node across a refetch', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?project=project-1&conversation=conversation-1&run=run-1',
+    );
+    const step = derivedNode('run-1');
+    vi.mocked(getConversation).mockResolvedValue(conversation('conversation-1', ['run-1']));
+    vi.mocked(getRun).mockResolvedValue(run('run-1'));
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [span('run-1')],
+      attempts: [],
+      usage: [],
+      operation_evidence: [],
+      derived_nodes: [step],
+    });
+
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.derivedNodes).toEqual([step]));
+    expect(result.current.trace[0]?.children[0]).toMatchObject({
+      id: step.id,
+      source: { type: 'derived' },
+    });
+
+    act(() => result.current.selectSpan(step.id));
+    await waitFor(() => expect(result.current.selectedNode?.id).toBe(step.id));
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.selection.spanId).toBe(step.id);
+    expect(result.current.selectedNode?.id).toBe(step.id);
+  });
+
   it('suppresses a stale conversation response after selection changes', async () => {
     window.history.replaceState(
       null,
@@ -182,6 +232,7 @@ describe('workspace request freshness', () => {
     vi.mocked(getTrace).mockImplementation((id) =>
       id === 'run-1' ? firstTrace.promise : secondTrace.promise,
     );
+    const secondDerived = derivedNode('run-2');
 
     const { result } = renderHook(() => useWorkspace());
     await waitFor(() => expect(getRun).toHaveBeenCalledWith('run-1'));
@@ -195,7 +246,7 @@ describe('workspace request freshness', () => {
         attempts: [],
         usage: [],
         operation_evidence: [],
-        derived_nodes: [],
+        derived_nodes: [secondDerived],
       });
     });
     await waitFor(() => expect(result.current.run?.id).toBe('run-2'));
@@ -207,12 +258,13 @@ describe('workspace request freshness', () => {
         attempts: [],
         usage: [],
         operation_evidence: [],
-        derived_nodes: [],
+        derived_nodes: [derivedNode('run-1')],
       });
       await Promise.all([firstRun.promise, firstTrace.promise]);
     });
     expect(result.current.run?.id).toBe('run-2');
     expect(result.current.spans[0]?.run_id).toBe('run-2');
+    expect(result.current.derivedNodes).toEqual([secondDerived]);
   });
 
   it('clears canonical run state while a newly selected run is loading', async () => {
@@ -252,6 +304,7 @@ describe('workspace request freshness', () => {
       created_at: '2026-10-21T12:00:00Z',
       updated_at: '2026-10-21T12:00:00Z',
     };
+    const firstDerived = derivedNode('run-1');
     vi.mocked(getRun)
       .mockResolvedValueOnce(run('run-1'))
       .mockImplementationOnce(() => runTwo.promise);
@@ -261,12 +314,13 @@ describe('workspace request freshness', () => {
         attempts: [attempt],
         usage: [usage],
         operation_evidence: [operation],
-        derived_nodes: [],
+        derived_nodes: [firstDerived],
       })
       .mockImplementationOnce(() => traceTwo.promise);
 
     const { result } = renderHook(() => useWorkspace());
     await waitFor(() => expect(result.current.operationEvidence).toEqual([operation]));
+    expect(result.current.derivedNodes).toEqual([firstDerived]);
 
     act(() => result.current.selectRun('run-2'));
     await waitFor(() => expect(getRun).toHaveBeenCalledWith('run-2'));
@@ -277,6 +331,7 @@ describe('workspace request freshness', () => {
     expect(result.current.attempts).toEqual([]);
     expect(result.current.usage).toEqual([]);
     expect(result.current.operationEvidence).toEqual([]);
+    expect(result.current.derivedNodes).toEqual([]);
   });
 
   it('suppresses an older overlapping run refetch failure', async () => {

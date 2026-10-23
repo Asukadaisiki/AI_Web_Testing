@@ -25,6 +25,7 @@ import {
   type Agent,
   type Conversation,
   type ConversationDetail,
+  type DerivedTraceNode,
   type Health,
   type ModelRef,
   type OperationEvidence,
@@ -119,11 +120,11 @@ export function keepSelectedSpan(
   if (flattened.length === 0) return selectedSpanId;
   if (
     selectedSpanId !== null &&
-    flattened.some((node) => node.span_id === selectedSpanId)
+    flattened.some((node) => node.id === selectedSpanId)
   ) {
     return selectedSpanId;
   }
-  return flattened[0]?.span_id ?? null;
+  return flattened[0]?.id ?? null;
 }
 
 const namedRunEvents = [
@@ -184,11 +185,12 @@ export interface WorkspaceState {
   conversation: ConversationDetail | null;
   run: Run | null;
   spans: Span[];
+  derivedNodes: DerivedTraceNode[];
   attempts: SpanAttempt[];
   usage: UsageRecord[];
   operationEvidence: OperationEvidence[];
   trace: TraceNode[];
-  selectedSpan: TraceNode | null;
+  selectedNode: TraceNode | null;
   events: RunEvent[];
   agents: Agent[];
   health: Health | null;
@@ -229,6 +231,7 @@ export function useWorkspace(): WorkspaceState {
   const [conversation, setConversation] = useState<ConversationDetail | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [spans, setSpans] = useState<Span[]>([]);
+  const [derivedNodes, setDerivedNodes] = useState<DerivedTraceNode[]>([]);
   const [attempts, setAttempts] = useState<SpanAttempt[]>([]);
   const [usage, setUsage] = useState<UsageRecord[]>([]);
   const [operationEvidence, setOperationEvidence] = useState<OperationEvidence[]>([]);
@@ -250,10 +253,13 @@ export function useWorkspace(): WorkspaceState {
   activeConversationId.current = selection.conversationId;
   activeRunId.current = selection.runId;
 
-  const trace = useMemo(() => projectTrace(spans), [spans]);
+  const trace = useMemo(
+    () => projectTrace(spans, derivedNodes),
+    [derivedNodes, spans],
+  );
   const flattenedTrace = useMemo(() => flattenTrace(trace), [trace]);
-  const selectedSpan =
-    flattenedTrace.find((node) => node.span_id === selection.spanId) ?? null;
+  const selectedNode =
+    flattenedTrace.find((node) => node.id === selection.spanId) ?? null;
 
   useEffect(() => {
     writeSelection(selection);
@@ -305,6 +311,7 @@ export function useWorkspace(): WorkspaceState {
       }
       setRun(nextRun);
       setSpans(nextTrace.spans);
+      setDerivedNodes(nextTrace.derived_nodes);
       setAttempts(nextTrace.attempts);
       setUsage(nextTrace.usage);
       setOperationEvidence(nextTrace.operation_evidence);
@@ -433,6 +440,7 @@ export function useWorkspace(): WorkspaceState {
     setStreamError(null);
     setRun(null);
     setSpans([]);
+    setDerivedNodes([]);
     setAttempts([]);
     setUsage([]);
     setOperationEvidence([]);
@@ -616,11 +624,12 @@ export function useWorkspace(): WorkspaceState {
     conversation,
     run,
     spans,
+    derivedNodes,
     attempts,
     usage,
     operationEvidence,
     trace,
-    selectedSpan,
+    selectedNode,
     events,
     agents,
     health,

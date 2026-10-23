@@ -9,7 +9,10 @@ interface Props {
 }
 
 export function TracePane({ workspace }: Props): JSX.Element {
-  const selectedSpanId = workspace.selectedSpan?.span_id;
+  const selectedSpanId =
+    workspace.selectedNode?.source.type === 'span'
+      ? workspace.selectedNode.source.value.span_id
+      : undefined;
   const attempts = workspace.attempts.filter(
     (attempt) => attempt.span_id === selectedSpanId,
   );
@@ -59,7 +62,7 @@ export function TracePane({ workspace }: Props): JSX.Element {
           </section>
           <section className="trace-detail-region" aria-label="Selected trace node details">
             <TraceDetails
-              node={workspace.selectedSpan}
+              node={workspace.selectedNode}
               attempts={attempts}
               usage={usage}
               operationEvidence={operationEvidence}

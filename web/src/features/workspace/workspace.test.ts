@@ -25,13 +25,13 @@ function event(sequence: number | null, type: string): RunEvent {
 }
 
 function node(spanId: string): TraceNode {
-  return {
+  const span = {
     id: `row-${spanId}`,
     run_id: 'run-1',
     trace_id: 'trace-1',
     span_id: spanId,
     parent_span_id: '',
-    kind: 'model',
+    kind: 'model' as const,
     name: spanId,
     status: 'succeeded',
     input: null,
@@ -40,6 +40,15 @@ function node(spanId: string): TraceNode {
     ended_at: '2026-10-21T12:00:01Z',
     created_at: '2026-10-21T12:00:00Z',
     updated_at: '2026-10-21T12:00:01Z',
+  };
+  return {
+    id: spanId,
+    kind: span.kind,
+    name: span.name,
+    status: span.status,
+    startedAt: span.started_at,
+    endedAt: span.ended_at,
+    source: { type: 'span', value: span },
     children: [],
   };
 }

@@ -5,13 +5,14 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type {
   OperationEvidence,
+  Span,
   SpanAttempt,
   UsageRecord,
 } from '../../api';
 import type { TraceNode } from './projectTrace';
 import { TraceDetails } from './TraceDetails';
 
-const node: TraceNode = {
+const span: Span = {
   id: 'span-row-1',
   run_id: 'run-1',
   trace_id: 'trace-1',
@@ -25,6 +26,16 @@ const node: TraceNode = {
   ended_at: '2026-10-21T12:00:01Z',
   created_at: '2026-10-21T12:00:00Z',
   updated_at: '2026-10-21T12:00:01Z',
+};
+
+const node: TraceNode = {
+  id: span.span_id,
+  kind: span.kind,
+  name: span.name,
+  status: span.status,
+  startedAt: span.started_at,
+  endedAt: span.ended_at,
+  source: { type: 'span', value: span },
   children: [],
 };
 
