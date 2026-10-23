@@ -183,12 +183,12 @@ func fallbackNode(parent domain.Span, source Evidence) Node {
 		endedAt = &value
 	}
 
-	data, _ := json.Marshal(map[string]json.RawMessage{
-		"result": rawOrNull(source.Result),
+	data := marshalFallbackPayload(map[string]json.RawMessage{
+		"result": source.Result,
 	})
-	projectedEvidence, _ := json.Marshal(map[string]json.RawMessage{
-		"artifacts": rawOrNull(source.Artifacts),
-		"error":     rawOrNull(source.Error),
+	projectedEvidence := marshalFallbackPayload(map[string]json.RawMessage{
+		"artifacts": source.Artifacts,
+		"error":     source.Error,
 	})
 	return Node{
 		ID:               fmt.Sprintf("derived:%s:unknown_tool", parent.SpanID),
@@ -232,9 +232,24 @@ func nonNegativeInteger(value any) (int64, error) {
 	return integer, nil
 }
 
-func rawOrNull(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 {
-		return json.RawMessage("null")
+func marshalFallbackPayload(fields map[string]json.RawMessage) json.RawMessage {
+	values := make(map[string]any, len(fields))
+	for name, raw := range fields {
+		values[name] = fallbackJSONValue(raw)
 	}
-	return raw
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		panic(fmt.Sprintf("traceprojection: marshal normalized fallback payload: %v", err))
+	}
+	return encoded
+}
+
+func fallbackJSONValue(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	if json.Valid(raw) {
+		return raw
+	}
+	return string(raw)
 }

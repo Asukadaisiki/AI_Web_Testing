@@ -112,6 +112,9 @@ func TestProjectMalformedBrowserResultFallsBack(t *testing.T) {
 		{name: "negative index", result: `{"steps":[
 			{"index":-1,"action":"goto","status":"passed","started_at":"2026-10-23T10:00:00Z","duration_ms":1,"evidence":{}}
 		]}`},
+		{name: "first index differs from position", result: `{"steps":[
+			{"index":1,"action":"goto","status":"passed","started_at":"2026-10-23T10:00:00Z","duration_ms":1,"evidence":{}}
+		]}`},
 		{name: "fractional duration", result: `{"steps":[
 			{"index":0,"action":"goto","status":"passed","started_at":"2026-10-23T10:00:00Z","duration_ms":1.5,"evidence":{}}
 		]}`},
@@ -140,6 +143,40 @@ func TestProjectMalformedBrowserResultFallsBack(t *testing.T) {
 			}})
 			assertUnknownTool(t, nodes, "operation-1", "evidence-1")
 		})
+	}
+}
+
+func TestProjectFallbackPreservesMalformedPayloadsAsStrings(t *testing.T) {
+	parent := operationSpan("operation-1", "browser_execute_case")
+	source := Evidence{
+		ID:        "evidence-1",
+		SpanID:    parent.SpanID,
+		Status:    "failed",
+		Result:    json.RawMessage(`{"steps":`),
+		Artifacts: json.RawMessage(`{"log_path":`),
+		Error:     json.RawMessage(`not-json`),
+	}
+
+	nodes := Project([]domain.Span{parent}, []Evidence{source})
+	assertUnknownTool(t, nodes, parent.SpanID, source.ID)
+
+	var data map[string]any
+	if err := json.Unmarshal(nodes[0].Data, &data); err != nil {
+		t.Fatalf("decode fallback data: %v", err)
+	}
+	if got := data["result"]; got != string(source.Result) {
+		t.Fatalf("result = %#v, want %q", got, source.Result)
+	}
+
+	var projectedEvidence map[string]any
+	if err := json.Unmarshal(nodes[0].Evidence, &projectedEvidence); err != nil {
+		t.Fatalf("decode fallback evidence: %v", err)
+	}
+	if got := projectedEvidence["artifacts"]; got != string(source.Artifacts) {
+		t.Fatalf("artifacts = %#v, want %q", got, source.Artifacts)
+	}
+	if got := projectedEvidence["error"]; got != string(source.Error) {
+		t.Fatalf("error = %#v, want %q", got, source.Error)
 	}
 }
 
