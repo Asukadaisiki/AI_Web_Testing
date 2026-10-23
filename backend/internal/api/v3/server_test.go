@@ -215,7 +215,14 @@ func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
 		Operations: []postgres.TraceOperationDetail{{
 			ID: "evidence-1", SpanID: "operation-1", SpanAttemptID: "attempt-1",
 			OperationID: "operation-call-1", Status: "failed",
-			Result:    json.RawMessage(`{"steps":[{"status":"failed"}]}`),
+			Result: json.RawMessage(`{"steps":[{
+				"index":0,
+				"action":"goto",
+				"status":"failed",
+				"started_at":"2026-10-21T12:00:00Z",
+				"duration_ms":500,
+				"evidence":{"screenshot_path":"failure.png"}
+			}]}`),
 			Artifacts: json.RawMessage(`[{"kind":"screenshot","path":"failure.png"}]`),
 			Error:     json.RawMessage(`{"kind":"worker_error","message":"browser failed"}`),
 			CreatedAt: now, UpdatedAt: now,
@@ -231,6 +238,9 @@ func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
 	for _, required := range []string{
 		`"attempts"`, `"attempt_number":1`, `"usage"`, `"total_tokens":20`,
 		`"operation_evidence"`, `"artifacts"`, `"failure.png"`,
+		`"derived_nodes"`, `"id":"derived:operation-1:step:0"`,
+		`"parent_span_id":"operation-1"`, `"source_evidence_id":"evidence-1"`,
+		`"kind":"step"`,
 	} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("trace response missing %q: %s", required, body)
@@ -240,6 +250,41 @@ func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("trace response leaked attempt %s: %s", forbidden, body)
 		}
+	}
+}
+
+func TestGetTraceProjectsUnknownOperationAsSingleFallbackNode(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	repository := &fakeRepository{trace: postgres.TraceDetails{
+		Spans: []domain.Span{{
+			ID: "span-row-1", RunID: "run_1", TraceID: "trace_1", SpanID: "operation-1",
+			Kind: domain.SpanOperation, Name: "custom_operation", Status: "failed",
+			StartedAt: now,
+		}},
+		Operations: []postgres.TraceOperationDetail{{
+			ID: "evidence-1", SpanID: "operation-1", OperationID: "operation-call-1",
+			Status: "failed", Result: json.RawMessage(`{"message":"custom failure"}`),
+			CreatedAt: now, UpdatedAt: now,
+		}},
+	}}
+	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/runs/run_1/trace", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body struct {
+		DerivedNodes []struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"derived_nodes"`
+	}
+	decodeJSON(t, response, &body)
+	if len(body.DerivedNodes) != 1 {
+		t.Fatalf("derived node count = %d, want 1: %s", len(body.DerivedNodes), response.Body.String())
+	}
+	if node := body.DerivedNodes[0]; node.Kind != "unknown_tool" || node.Name != "unknown_tool" {
+		t.Fatalf("derived node = %#v, want unknown_tool kind and name", node)
 	}
 }
 

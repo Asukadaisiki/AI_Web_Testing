@@ -9,6 +9,7 @@ import (
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/traceprojection"
 )
 
 type responseRequest struct {
@@ -224,6 +225,7 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	operations := make([]publicOperationEvidence, 0, len(trace.Operations))
+	projectionEvidence := make([]traceprojection.Evidence, 0, len(trace.Operations))
 	for _, operation := range trace.Operations {
 		operations = append(operations, publicOperationEvidence{
 			ID:            operation.ID,
@@ -237,12 +239,24 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:     operation.CreatedAt,
 			UpdatedAt:     operation.UpdatedAt,
 		})
+		projectionEvidence = append(projectionEvidence, traceprojection.Evidence{
+			ID:        operation.ID,
+			SpanID:    operation.SpanID,
+			Status:    operation.Status,
+			Result:    redactTraceJSON(operation.Result),
+			Artifacts: redactTraceJSON(operation.Artifacts),
+			Error:     redactTraceJSON(operation.Error),
+			CreatedAt: operation.CreatedAt,
+			UpdatedAt: operation.UpdatedAt,
+		})
 	}
+	derivedNodes := traceprojection.Project(trace.Spans, projectionEvidence)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"spans":              spans,
 		"attempts":           attempts,
 		"usage":              usage,
 		"operation_evidence": operations,
+		"derived_nodes":      derivedNodes,
 	})
 }
 
