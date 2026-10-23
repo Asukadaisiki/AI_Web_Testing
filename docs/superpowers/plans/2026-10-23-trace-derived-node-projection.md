@@ -52,7 +52,7 @@ type Node struct {
 func Project(spans []domain.Span, evidence []Evidence) []Node
 ```
 
-- [ ] **Step 1: Write failing browser projection tests**
+- [x] **Step 1: Write failing browser projection tests**
 
 Create table-driven tests with a canonical `operation` span named
 `browser_execute_case`. Assert:
@@ -85,7 +85,7 @@ if got := nodes[0].EndedAt.Format(time.RFC3339Nano); got != "2026-10-23T10:00:00
 Decode `Data` and `Evidence` and prove `custom_secret` remains present while
 `evidence`, `started_at`, and `status` are absent from `Data`.
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
 Run:
 
@@ -95,7 +95,7 @@ cd backend && go test ./internal/traceprojection -run TestProject -count=1
 
 Expected: FAIL because the package and `Project` do not exist.
 
-- [ ] **Step 3: Implement strict browser projection**
+- [x] **Step 3: Implement strict browser projection**
 
 Implement:
 
@@ -111,7 +111,7 @@ Implement:
 
 Do not import the PostgreSQL package and do not call `redactTraceJSON`.
 
-- [ ] **Step 4: Add fallback and edge-case tests**
+- [x] **Step 4: Add fallback and edge-case tests**
 
 Add tests proving:
 
@@ -125,7 +125,7 @@ steps, missing parent, duplicate evidence for one parent, and deterministic repe
 projection. Assert fallback `Data` contains `result` and fallback `Evidence` contains
 `artifacts` and `error`.
 
-- [ ] **Step 5: Run and format the backend package**
+- [x] **Step 5: Run and format the backend package**
 
 Run:
 
@@ -136,7 +136,7 @@ cd backend && go test ./internal/traceprojection -count=1
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the projection package**
+- [x] **Step 6: Commit the projection package**
 
 ```bash
 git add backend/internal/traceprojection/project.go backend/internal/traceprojection/project_test.go
@@ -155,7 +155,7 @@ git commit -m "feat: project operation evidence into trace nodes"
 - Consumes: `traceprojection.Project([]domain.Span, []traceprojection.Evidence)`.
 - Produces: required JSON response field `"derived_nodes": []`.
 
-- [ ] **Step 1: Extend the handler tests first**
+- [x] **Step 1: Extend the handler tests first**
 
 Update `TestGetTraceExposesRedactedCanonicalDetails` with a complete browser result
 and assert:
@@ -176,7 +176,7 @@ Add a separate unknown-operation test that expects exactly one node with kind an
 name `unknown_tool`. Decode the response into a small test struct so node counts are
 asserted structurally rather than by substring.
 
-- [ ] **Step 2: Run the API tests and verify failure**
+- [x] **Step 2: Run the API tests and verify failure**
 
 Run:
 
@@ -186,7 +186,7 @@ cd backend && go test ./internal/api/v3 -run 'TestGetTrace' -count=1
 
 Expected: FAIL because `derived_nodes` is absent.
 
-- [ ] **Step 3: Wire projection into `handleGetTrace`**
+- [x] **Step 3: Wire projection into `handleGetTrace`**
 
 Map each `postgres.TraceOperationDetail` to `traceprojection.Evidence`, call
 `traceprojection.Project(trace.Spans, projectionEvidence)`, and add:
@@ -203,7 +203,7 @@ writeJSON(w, http.StatusOK, map[string]any{
 
 Leave canonical mapping and redaction code unchanged.
 
-- [ ] **Step 4: Run focused and full backend tests**
+- [x] **Step 4: Run focused and full backend tests**
 
 Run:
 
@@ -215,7 +215,7 @@ cd backend && go test -p 1 ./...
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit API integration**
+- [x] **Step 5: Commit API integration**
 
 ```bash
 git add backend/internal/api/v3/runs.go
@@ -258,7 +258,7 @@ export interface DerivedTraceNode {
 
 - `Trace` gains `derived_nodes: DerivedTraceNode[]`.
 
-- [ ] **Step 1: Add failing parser tests**
+- [x] **Step 1: Add failing parser tests**
 
 Add one valid derived node to the successful `getTrace` fixture and assert:
 
@@ -274,7 +274,7 @@ expect(trace.derived_nodes[0]).toMatchObject({
 Add a test whose derived kind is `other` and expect `getTrace` to reject with an
 `ApiError` pointing at `derived_nodes[0].kind`.
 
-- [ ] **Step 2: Run the API test and verify failure**
+- [x] **Step 2: Run the API test and verify failure**
 
 Run:
 
@@ -284,7 +284,7 @@ cd web && npm test -- --run src/api.test.ts
 
 Expected: FAIL because `Trace` and `getTrace` do not expose `derived_nodes`.
 
-- [ ] **Step 3: Implement the strict derived-node parser**
+- [x] **Step 3: Implement the strict derived-node parser**
 
 Add `derivedTraceKinds`, `parseDerivedTraceNode`, and required mapping:
 
@@ -300,12 +300,12 @@ derived_nodes: arrayValue(
 
 Use `jsonValue` for both `data` and `evidence`.
 
-- [ ] **Step 4: Update all Trace fixtures**
+- [x] **Step 4: Update all Trace fixtures**
 
 Add `derived_nodes: []` to every typed or mocked `Trace` response in frontend unit
 tests. Do not make the API field optional.
 
-- [ ] **Step 5: Run API tests and typecheck**
+- [x] **Step 5: Run API tests and typecheck**
 
 Run:
 
@@ -316,7 +316,7 @@ cd web && npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the frontend contract**
+- [x] **Step 6: Commit the frontend contract**
 
 ```bash
 git add web/src/api.ts web/src/api.test.ts web/src/features/workspace/useWorkspace.test.ts
@@ -334,6 +334,9 @@ git commit -m "feat: parse derived trace nodes"
 - Modify: `web/src/features/workspace/useWorkspace.test.ts`
 - Modify: `web/src/features/workspace/workspace.test.ts`
 - Modify: `web/src/features/trace/TracePane.tsx`
+- Modify: `web/src/features/trace/TraceTree.tsx`
+- Modify: `web/src/features/trace/TraceDetails.tsx`
+- Modify: `web/src/features/trace/TraceDetails.test.tsx`
 
 **Interfaces:**
 - Produces a normalized `TraceNode`:
@@ -362,7 +365,7 @@ export function projectTrace(
 - Workspace exposes `derivedNodes`, `selectedNode`, and keeps the existing URL
   selection property name `spanId`.
 
-- [ ] **Step 1: Write failing tree projection tests**
+- [x] **Step 1: Write failing tree projection tests**
 
 Add tests asserting:
 
@@ -379,7 +382,7 @@ expect(projected[0]?.children[0]).toMatchObject({
 Also cover input-order independence, a missing derived parent being omitted, and a
 canonical orphan remaining a root.
 
-- [ ] **Step 2: Run the projection test and verify failure**
+- [x] **Step 2: Run the projection test and verify failure**
 
 Run:
 
@@ -389,20 +392,20 @@ cd web && npm test -- --run src/features/trace/projectTrace.test.ts
 
 Expected: FAIL because `projectTrace` accepts only spans and nodes inherit `Span`.
 
-- [ ] **Step 3: Implement normalized projection**
+- [x] **Step 3: Implement normalized projection**
 
 Create canonical nodes first, add only derived nodes whose canonical parent exists,
 attach all parents after node creation, sort by `startedAt` then `id`, and update
 `flattenTrace` for the normalized shape.
 
-- [ ] **Step 4: Add failing workspace state tests**
+- [x] **Step 4: Add failing workspace state tests**
 
 Extend hook tests with a derived node response. Assert it is stored, projected,
 selectable by stable derived ID, retained after refetch, and cleared immediately when
 switching runs. Extend stale response tests so an older response cannot replace the
 current run's derived nodes.
 
-- [ ] **Step 5: Update workspace state**
+- [x] **Step 5: Update workspace state**
 
 Add `derivedNodes` state, set it from `nextTrace.derived_nodes`, clear it on run
 changes, and project with:
@@ -415,9 +418,12 @@ const trace = useMemo(
 ```
 
 Update selection helpers to compare `node.id`. Rename the exposed selected value to
-`selectedNode` and update its direct consumers in the same commit.
+`selectedNode` and update its direct consumers in the same commit. Adapt
+`TraceTree.tsx` and the canonical branch of `TraceDetails.tsx` mechanically to the
+normalized field names and `source.value`; do not add collapse behavior or a derived
+details branch until Task 5.
 
-- [ ] **Step 6: Run workspace and projection tests**
+- [x] **Step 6: Run workspace and projection tests**
 
 Run:
 
@@ -431,7 +437,7 @@ cd web && npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit normalized tree state**
+- [x] **Step 7: Commit normalized tree state**
 
 ```bash
 git add web/src/features/trace/projectTrace.ts \
@@ -439,7 +445,9 @@ git add web/src/features/trace/projectTrace.ts \
   web/src/features/workspace/useWorkspace.ts \
   web/src/features/workspace/useWorkspace.test.ts \
   web/src/features/workspace/workspace.test.ts \
-  web/src/features/trace/TracePane.tsx
+  web/src/features/trace/TracePane.tsx \
+  web/src/features/trace/TraceTree.tsx \
+  web/src/features/trace/TraceDetails.tsx
 git commit -m "feat: merge derived nodes into trace tree"
 ```
 
@@ -453,6 +461,7 @@ git commit -m "feat: merge derived nodes into trace tree"
 - Modify: `web/src/features/trace/TraceDetails.tsx`
 - Modify: `web/src/features/trace/TraceDetails.test.tsx`
 - Modify: `web/src/features/trace/TracePane.tsx`
+- Create: `web/src/features/trace/TracePane.test.tsx`
 - Modify: `web/src/styles.css`
 
 **Interfaces:**
@@ -461,7 +470,7 @@ git commit -m "feat: merge derived nodes into trace tree"
 - `TracePane` attributes attempts, usage, and operation evidence only when the
   selected source is a canonical span.
 
-- [ ] **Step 1: Write failing tree interaction tests**
+- [x] **Step 1: Write failing tree interaction tests**
 
 Render an operation with two derived children and assert:
 
@@ -477,7 +486,7 @@ expect(screen.getByText('Step 1: goto')).toBeInTheDocument();
 Add keyboard assertions for Arrow Right, Arrow Left, Arrow Up, Arrow Down, Home, and
 End using visible rows.
 
-- [ ] **Step 2: Run the tree test and verify failure**
+- [x] **Step 2: Run the tree test and verify failure**
 
 Run:
 
@@ -487,14 +496,14 @@ cd web && npm test -- --run src/features/trace/TraceTree.test.tsx
 
 Expected: FAIL because operation collapse controls do not exist.
 
-- [ ] **Step 3: Implement accessible collapse behavior**
+- [x] **Step 3: Implement accessible collapse behavior**
 
 Use local `Set<string>` collapsed state. Render a row wrapper with `role="treeitem"`,
 a sibling chevron icon button, and a selection button so no button contains another
 button. Add `ListChecks` for `step`, `Wrench` for `unknown_tool`, `aria-expanded` on
 operation rows with children, and navigation over visible rows only.
 
-- [ ] **Step 4: Write failing derived detail tests**
+- [x] **Step 4: Write failing derived detail tests**
 
 Render one derived step and one `unknown_tool` node. Assert the selected derived node
 shows:
@@ -505,7 +514,7 @@ shows:
 - screenshot path and preserved custom fields;
 - no `Attempt`, `Usage`, `Canonical output`, or canonical evidence panels.
 
-- [ ] **Step 5: Implement the details branch and pane attribution**
+- [x] **Step 5: Implement the details branch and pane attribution**
 
 In `TraceDetails`, render a dedicated derived-node article before the canonical
 branch. In `TracePane`, derive `selectedSpanId` only when:
@@ -517,13 +526,13 @@ workspace.selectedNode?.source.type === 'span'
 Count nodes with `flattenTrace(workspace.trace).length`, not
 `workspace.spans.length`.
 
-- [ ] **Step 6: Update fixed-layout CSS**
+- [x] **Step 6: Update fixed-layout CSS**
 
 Add stable columns for chevron, kind icon, label, and status. Ensure row wrappers,
 toggle buttons, selection buttons, step/unknown icons, focus state, and narrow-panel
 text truncation use existing color and radius tokens.
 
-- [ ] **Step 7: Run trace component tests and typecheck**
+- [x] **Step 7: Run trace component tests and typecheck**
 
 Run:
 
@@ -537,7 +546,7 @@ cd web && npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit tree UI**
+- [x] **Step 8: Commit tree UI**
 
 ```bash
 git add web/src/features/trace/TraceTree.tsx \
@@ -561,7 +570,7 @@ git commit -m "feat: inspect derived trace steps"
 - Verifies the complete API-to-UI path without changing durable schema or worker
   contracts.
 
-- [ ] **Step 1: Run all backend and frontend checks**
+- [x] **Step 1: Run all backend and frontend checks**
 
 Run:
 
@@ -573,7 +582,7 @@ cd web && npm run build
 
 Expected: PASS.
 
-- [ ] **Step 2: Inspect the Trace API against completed formal runs**
+- [x] **Step 2: Inspect the Trace API against completed formal runs**
 
 For the current 23-step and 35-step runs, request:
 
@@ -598,7 +607,7 @@ Verify structurally that:
 If the current Compose services predate the code change, rebuild only the API and web
 services before repeating the check.
 
-- [ ] **Step 3: Run browser verification at desktop and narrow widths**
+- [x] **Step 3: Run browser verification at desktop and narrow widths**
 
 Use the existing Playwright/browser verification path at `1440x900` and `390x844`.
 Open each formal run, expand and collapse the operation, select early and late steps,
@@ -609,7 +618,7 @@ refresh a selected derived-node URL, and assert:
 - pointer and keyboard navigation follow visible rows;
 - browser console has no errors.
 
-- [ ] **Step 4: Review scope and diff**
+- [x] **Step 4: Review scope and diff**
 
 Run:
 
@@ -622,7 +631,7 @@ git diff --stat 2c67c42..HEAD
 Confirm no database migration, runtime, worker, event, Redis, or unrelated dirty file
 was added to feature commits.
 
-- [ ] **Step 5: Mark this plan complete and commit verification fixes**
+- [x] **Step 5: Mark this plan complete and commit verification fixes**
 
 Change completed checkboxes to `[x]`. Any code fix discovered here must repeat the
 focused test and commit cycle from the task that owns that file. Then commit only the
