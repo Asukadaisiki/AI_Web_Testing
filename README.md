@@ -40,6 +40,13 @@ docker compose --profile langfuse up -d exporter
 Never commit `.env` or provider credentials. The API reports this optional
 integration as `disabled`; exporter failures never block a local run.
 
+## Current progress
+
+The v3-only architecture cutover is complete across the API, runtime, worker,
+and Web workspace. Trace responses now project durable operation evidence into
+derived step nodes, which the workspace merges into its collapsible trace tree.
+Real browser acceptance has been completed for both 23-step and 35-step traces.
+
 ## Verify
 
 Run the complete v3 sequence against an already healthy Compose stack:
@@ -70,7 +77,13 @@ cd backend && go test -p 1 ./...
 cd worker && uv run python -m unittest discover -s tests -t .
 cd web && npm test -- --run && npm run build && npm run test:e2e
 uv run --with 'psycopg[binary]>=3.2,<4' python integration/v3/canonical_scenario.py
+uv run --with 'psycopg[binary]>=3.2,<4' python integration/v3/concurrent_delete_scenario.py
 ```
+
+The concurrent scenario runs multiple projects and conversations through
+PostgreSQL, Kafka, Redis, the scripted model, and the real Playwright worker.
+It also verifies message idempotency, idempotent project/conversation deletion,
+and Kafka replay safety after deletion.
 
 For operations, reset procedures, backlog inspection, and failure recovery, see
 [`docs/operations.md`](docs/operations.md). The architecture and canonical
@@ -87,7 +100,9 @@ browser scenario are documented in
 | `backend/internal/api/v3` | REST, SSE, health, and artifact contracts |
 | `backend/internal/domain`, `event`, `operation` | Run, event, and operation contracts |
 | `backend/internal/postgres` | PostgreSQL schema and durable repositories |
+| `backend/internal/traceprojection` | Derived Trace step projection from operation evidence |
 | `worker/loop_worker` | Worker HTTP API and Playwright execution |
+| `web/src/features/trace` | Trace parsing, tree normalization, and derived-node inspection |
 | `web/src/features/workspace` | Three-column project, conversation, and trace workspace |
 | `fixtures/contract/case_contract.json` | Retained browser case contract |
 | `integration/v3` | Canonical Compose scenario and failure drills |
