@@ -34,8 +34,9 @@ export function projectTrace(
   derivedNodes: readonly DerivedTraceNode[],
 ): TraceNode[] {
   const nodes = new Map<string, TraceNode>();
+  const canonicalNodes = new Map<string, TraceNode>();
   for (const span of spans) {
-    nodes.set(span.span_id, {
+    const node: TraceNode = {
       id: span.span_id,
       parentId:
         span.parent_span_id === undefined || span.parent_span_id === ''
@@ -48,10 +49,12 @@ export function projectTrace(
       endedAt: span.ended_at,
       source: { type: 'span', value: span },
       children: [],
-    });
+    };
+    nodes.set(span.span_id, node);
+    canonicalNodes.set(span.span_id, node);
   }
   for (const derived of derivedNodes) {
-    if (!nodes.has(derived.parent_span_id)) continue;
+    if (!canonicalNodes.has(derived.parent_span_id)) continue;
     nodes.set(derived.id, {
       id: derived.id,
       parentId: derived.parent_span_id,
@@ -67,7 +70,8 @@ export function projectTrace(
 
   const roots: TraceNode[] = [];
   for (const node of nodes.values()) {
-    const parent = node.parentId === undefined ? undefined : nodes.get(node.parentId);
+    const parent =
+      node.parentId === undefined ? undefined : canonicalNodes.get(node.parentId);
     if (parent === undefined || parent === node) {
       roots.push(node);
       continue;

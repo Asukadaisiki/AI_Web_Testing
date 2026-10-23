@@ -120,4 +120,27 @@ describe('projectTrace', () => {
 
     expect(projected).toMatchObject([{ id: 'orphan', parentId: 'missing-parent' }]);
   });
+
+  it('keeps a canonical orphan at the root when its parent ID matches a derived ID', () => {
+    const derivedId = 'derived:operation-1:step:0';
+    const projected = projectTrace(
+      [
+        span('operation-1', '', '2026-10-21T12:00:00Z'),
+        span('orphan', derivedId, '2026-10-21T12:00:02Z'),
+      ],
+      [
+        derivedNode(
+          derivedId,
+          'operation-1',
+          'step',
+          '2026-10-21T12:00:01Z',
+        ),
+      ],
+    );
+
+    expect(projected.map((node) => node.id)).toEqual(['operation-1', 'orphan']);
+    expect(projected[0]?.children).toMatchObject([
+      { id: derivedId, children: [] },
+    ]);
+  });
 });
