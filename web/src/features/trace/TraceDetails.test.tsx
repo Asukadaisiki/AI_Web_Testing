@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  DerivedTraceNode,
   OperationEvidence,
   Span,
   SpanAttempt,
@@ -11,6 +12,8 @@ import type {
 } from '../../api';
 import type { TraceNode } from './projectTrace';
 import { TraceDetails } from './TraceDetails';
+
+afterEach(cleanup);
 
 const span: Span = {
   id: 'span-row-1',
@@ -77,6 +80,42 @@ const operationEvidence: OperationEvidence[] = [{
   updated_at: '2026-10-21T12:00:01Z',
 }];
 
+function derivedNode(
+  kind: DerivedTraceNode['kind'],
+  name: string,
+): TraceNode {
+  const derived: DerivedTraceNode = {
+    id: `derived:operation-1:${kind}:0`,
+    parent_span_id: 'operation-1',
+    source_evidence_id: `evidence-${kind}-1`,
+    kind,
+    name,
+    status: 'succeeded',
+    started_at: '2026-10-21T12:00:00Z',
+    ended_at: '2026-10-21T12:00:01Z',
+    data: {
+      action: 'goto',
+      custom_step_field: 'keep this',
+    },
+    evidence: {
+      screenshot_path: 'artifacts/checkout.png',
+      custom_evidence_field: 'also kept',
+    },
+  };
+
+  return {
+    id: derived.id,
+    parentId: derived.parent_span_id,
+    kind: derived.kind,
+    name: derived.name,
+    status: derived.status,
+    startedAt: derived.started_at,
+    endedAt: derived.ended_at,
+    source: { type: 'derived', value: derived },
+    children: [],
+  };
+}
+
 describe('canonical trace details', () => {
   it('projects attempts usage execution evidence planner case and feedback', () => {
     render(
@@ -94,5 +133,53 @@ describe('canonical trace details', () => {
     expect(screen.getByText(/checkout flow/)).toBeInTheDocument();
     expect(screen.getAllByText(/browser failed/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/not exposed/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('derived trace details', () => {
+  it('renders step data and evidence without canonical span panels', () => {
+    const step = derivedNode('step', 'Step 1: goto');
+    render(
+      <TraceDetails
+        node={step}
+        attempts={attempts}
+        usage={usage}
+        operationEvidence={operationEvidence}
+      />,
+    );
+
+    expect(screen.getByText(step.id)).toBeInTheDocument();
+    expect(screen.getByText('evidence-step-1')).toBeInTheDocument();
+    expect(screen.getByText('succeeded')).toBeInTheDocument();
+    expect(screen.getByText('1.00 s')).toBeInTheDocument();
+    expect(screen.getByText('Step data')).toBeInTheDocument();
+    expect(screen.getByText('Evidence')).toBeInTheDocument();
+    expect(screen.getByText(/artifacts\/checkout\.png/)).toBeInTheDocument();
+    expect(screen.getByText(/custom_step_field/)).toBeInTheDocument();
+    expect(screen.getByText(/custom_evidence_field/)).toBeInTheDocument();
+    expect(screen.queryByText('Attempt')).not.toBeInTheDocument();
+    expect(screen.queryByText('Usage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Execution evidence')).not.toBeInTheDocument();
+    expect(screen.queryByText('Canonical output')).not.toBeInTheDocument();
+  });
+
+  it('renders unknown tools with their own data and evidence', () => {
+    const unknownTool = derivedNode('unknown_tool', 'custom_browser_tool');
+    render(
+      <TraceDetails
+        node={unknownTool}
+        attempts={[]}
+        usage={[]}
+        operationEvidence={[]}
+      />,
+    );
+
+    expect(screen.getByText(unknownTool.id)).toBeInTheDocument();
+    expect(screen.getByText('evidence-unknown_tool-1')).toBeInTheDocument();
+    expect(screen.getByText('Tool data')).toBeInTheDocument();
+    expect(screen.getByText('Evidence')).toBeInTheDocument();
+    expect(screen.queryByText('Attempt')).not.toBeInTheDocument();
+    expect(screen.queryByText('Usage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Canonical output')).not.toBeInTheDocument();
   });
 });

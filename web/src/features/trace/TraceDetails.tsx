@@ -52,13 +52,64 @@ export function TraceDetails({
   usage,
   operationEvidence,
 }: Props): JSX.Element {
-  if (node === null || node.source.type !== 'span') {
+  if (node === null) {
     return (
       <div className="trace-detail-empty">
-        Select a Trace node to inspect its canonical data.
+        Select a Trace node to inspect its details.
       </div>
     );
   }
+
+  if (node.source.type === 'derived') {
+    const derived = node.source.value;
+    const dataLabel = node.kind === 'step' ? 'Step data' : 'Tool data';
+
+    return (
+      <article className="trace-details" aria-label={`Trace details for ${node.name}`}>
+        <header>
+          <p className="eyebrow">{node.kind}</p>
+          <h3>{node.name}</h3>
+          <code>{node.id}</code>
+        </header>
+
+        <dl className="detail-grid">
+          <div>
+            <dt>Source evidence ID</dt>
+            <dd>{derived.source_evidence_id}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{node.status}</dd>
+          </div>
+          <div>
+            <dt>Duration</dt>
+            <dd>{duration(node)}</dd>
+          </div>
+          <div>
+            <dt>Canonical parent</dt>
+            <dd>{derived.parent_span_id}</dd>
+          </div>
+        </dl>
+
+        <details open>
+          <summary>
+            <Braces size={14} />
+            {dataLabel}
+          </summary>
+          <pre>{formatJSON(derived.data)}</pre>
+        </details>
+
+        <details open>
+          <summary>
+            <Paperclip size={14} />
+            Evidence
+          </summary>
+          <pre>{formatJSON(derived.evidence)}</pre>
+        </details>
+      </article>
+    );
+  }
+
   const span = node.source.value;
 
   return (

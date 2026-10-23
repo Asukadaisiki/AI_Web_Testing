@@ -841,7 +841,7 @@ pre {
   width: 100%;
   min-height: 38px;
   padding: 4px 7px 4px calc(7px + (var(--trace-depth) - 1) * 16px);
-  grid-template-columns: 24px minmax(0, 1fr) 12px;
+  grid-template-columns: 24px minmax(0, 1fr);
   align-items: center;
   gap: 5px;
   border: 0;
@@ -856,6 +856,53 @@ pre {
 
 .trace-node.is-selected {
   background: var(--accent-soft);
+}
+
+.trace-node-toggle,
+.trace-node-toggle-spacer {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+}
+
+.trace-node-toggle {
+  display: grid;
+  min-height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.trace-node-toggle:hover {
+  border-color: var(--line);
+  background: var(--surface-strong);
+  color: var(--ink);
+}
+
+.trace-node-select {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0;
+  grid-template-columns: 24px minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  text-align: left;
+}
+
+.trace-node-select:hover {
+  background: var(--surface-strong);
+}
+
+.trace-node.is-selected .trace-node-select:hover {
+  background: transparent;
 }
 
 .trace-kind {

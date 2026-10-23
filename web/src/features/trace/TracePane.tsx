@@ -3,6 +3,7 @@ import type { WorkspaceState } from '../workspace/useWorkspace';
 import { TraceDetails } from './TraceDetails';
 import { TraceOverview } from './TraceOverview';
 import { TraceTree } from './TraceTree';
+import { flattenTrace } from './projectTrace';
 
 interface Props {
   workspace: WorkspaceState;
@@ -12,7 +13,7 @@ export function TracePane({ workspace }: Props): JSX.Element {
   const selectedSpanId =
     workspace.selectedNode?.source.type === 'span'
       ? workspace.selectedNode.source.value.span_id
-      : undefined;
+      : null;
   const attempts = workspace.attempts.filter(
     (attempt) => attempt.span_id === selectedSpanId,
   );
@@ -52,11 +53,11 @@ export function TracePane({ workspace }: Props): JSX.Element {
           <section className="trace-tree-region" aria-labelledby="trace-tree-heading">
             <div className="trace-region-heading">
               <h3 id="trace-tree-heading">Execution tree</h3>
-              <span>{workspace.spans.length} nodes</span>
+              <span>{flattenTrace(workspace.trace).length} nodes</span>
             </div>
             <TraceTree
               nodes={workspace.trace}
-              selectedSpanId={workspace.selection.spanId}
+              selectedNodeId={workspace.selection.spanId}
               onSelect={workspace.selectSpan}
             />
           </section>
