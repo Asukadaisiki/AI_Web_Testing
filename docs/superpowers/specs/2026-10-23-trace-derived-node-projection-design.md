@@ -74,6 +74,12 @@ For an operation step, the runtime already persists:
 - `operation_evidence.result`, which is the worker callback's `output`;
 - `operation_evidence.artifacts` and `operation_evidence.error`.
 
+The runtime creates one operation call per operation span, and PostgreSQL enforces a
+unique `operation_results.operation_id`. The read model therefore expects at most one
+operation evidence record for a canonical operation span. If inconsistent data
+contains more than one, the projector uses the first record in repository order and
+leaves every record visible in the canonical `operation_evidence` array.
+
 For `browser_execute_case`, the result is an `ExecutionResult`:
 
 ```json
@@ -458,6 +464,8 @@ Add table-driven tests for:
 - unregistered operation name producing one `unknown_tool`;
 - malformed known result producing one `unknown_tool`;
 - missing parent evidence producing no node;
+- multiple evidence records for one parent using only the first repository-ordered
+  record without ID collisions;
 - duplicate or non-positional step indexes using the fallback;
 - deterministic output across repeated projection.
 
@@ -497,12 +505,16 @@ viewports:
 - refreshing preserves a selected derived-node deep link;
 - no console errors occur.
 
+Run this verification against both current formal cases, which contain 23 and 35
+persisted steps, so ordering and panel scrolling are exercised at realistic depth.
+
 ## 9. Acceptance Criteria
 
 The change is complete when:
 
-1. A completed `browser_execute_case` with 23 persisted steps shows 23 derived child
-   nodes under its canonical operation span.
+1. A completed `browser_execute_case` with N persisted steps shows exactly N derived
+   child nodes under its canonical operation span, including the current 23-step and
+   35-step formal cases.
 2. Canonical span, attempt, usage, and operation evidence records are unchanged.
 3. Each derived browser step has a stable ID, correct parent, action label, source
    status, and computed timestamps.
