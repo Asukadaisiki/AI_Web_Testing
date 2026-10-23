@@ -86,6 +86,18 @@ export function TraceDetails({
             <dd>{duration(node)}</dd>
           </div>
           <div>
+            <dt>Started</dt>
+            <dd>{new Date(node.startedAt).toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt>Ended</dt>
+            <dd>
+              {node.endedAt === null || node.endedAt === undefined
+                ? 'In progress'
+                : new Date(node.endedAt).toLocaleString()}
+            </dd>
+          </div>
+          <div>
             <dt>Canonical parent</dt>
             <dd>{derived.parent_span_id}</dd>
           </div>

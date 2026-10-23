@@ -137,6 +137,44 @@ describe('canonical trace details', () => {
 });
 
 describe('derived trace details', () => {
+  it('renders started and ended timestamps for a completed derived node', () => {
+    const step = derivedNode('step', 'Step 1: goto');
+    render(
+      <TraceDetails
+        node={step}
+        attempts={[]}
+        usage={[]}
+        operationEvidence={[]}
+      />,
+    );
+
+    expect(screen.getByText('Started').parentElement).toHaveTextContent(
+      new Date(step.startedAt).toLocaleString(),
+    );
+    expect(screen.getByText('Ended').parentElement).toHaveTextContent(
+      new Date(step.endedAt ?? '').toLocaleString(),
+    );
+  });
+
+  it('renders an in-progress end time for an unfinished derived node', () => {
+    const inProgressStep = derivedNode('step', 'Step 2: click');
+    inProgressStep.endedAt = null;
+    if (inProgressStep.source.type === 'derived') {
+      inProgressStep.source.value.ended_at = null;
+    }
+
+    render(
+      <TraceDetails
+        node={inProgressStep}
+        attempts={[]}
+        usage={[]}
+        operationEvidence={[]}
+      />,
+    );
+
+    expect(screen.getByText('Ended').parentElement).toHaveTextContent('In progress');
+  });
+
   it('renders step data and evidence without canonical span panels', () => {
     const step = derivedNode('step', 'Step 1: goto');
     render(
