@@ -117,11 +117,27 @@ export interface OperationEvidence {
   updated_at: string;
 }
 
+export type DerivedTraceKind = 'step' | 'unknown_tool';
+
+export interface DerivedTraceNode {
+  id: string;
+  parent_span_id: string;
+  source_evidence_id: string;
+  kind: DerivedTraceKind;
+  name: string;
+  status: string;
+  started_at: string;
+  ended_at?: string | null;
+  data: JSONValue;
+  evidence: JSONValue;
+}
+
 export interface Trace {
   spans: Span[];
   attempts: SpanAttempt[];
   usage: UsageRecord[];
   operation_evidence: OperationEvidence[];
+  derived_nodes: DerivedTraceNode[];
 }
 
 export interface RunEvent {
@@ -317,6 +333,8 @@ const spanKinds: readonly SpanKind[] = [
   'report',
 ];
 
+const derivedTraceKinds: readonly DerivedTraceKind[] = ['step', 'unknown_tool'];
+
 function parseProject(value: unknown, status: number, at = 'project'): Project {
   const item = recordValue(value, status, at);
   return {
@@ -493,6 +511,37 @@ function parseOperationEvidence(
     error: optionalJSON(item['error'], status, `${at}.error`),
     created_at: stringValue(item['created_at'], status, `${at}.created_at`),
     updated_at: stringValue(item['updated_at'], status, `${at}.updated_at`),
+  };
+}
+
+function parseDerivedTraceNode(
+  value: unknown,
+  status: number,
+  at: string,
+): DerivedTraceNode {
+  const item = recordValue(value, status, at);
+  return {
+    id: stringValue(item['id'], status, `${at}.id`),
+    parent_span_id: stringValue(
+      item['parent_span_id'],
+      status,
+      `${at}.parent_span_id`,
+    ),
+    source_evidence_id: stringValue(
+      item['source_evidence_id'],
+      status,
+      `${at}.source_evidence_id`,
+    ),
+    kind: enumValue(item['kind'], derivedTraceKinds, status, `${at}.kind`),
+    name: stringValue(item['name'], status, `${at}.name`),
+    status: stringValue(item['status'], status, `${at}.status`),
+    started_at: stringValue(item['started_at'], status, `${at}.started_at`),
+    ended_at:
+      item['ended_at'] === null
+        ? null
+        : optionalString(item['ended_at'], status, `${at}.ended_at`),
+    data: jsonValue(item['data'], status, `${at}.data`),
+    evidence: jsonValue(item['evidence'], status, `${at}.evidence`),
   };
 }
 
@@ -724,6 +773,17 @@ export async function getTrace(runId: string): Promise<Trace> {
             evidence,
             status,
             `operation_evidence[${String(index)}]`,
+          ),
+        ),
+        derived_nodes: arrayValue(
+          response['derived_nodes'],
+          status,
+          'derived_nodes',
+        ).map((node, index) =>
+          parseDerivedTraceNode(
+            node,
+            status,
+            `derived_nodes[${String(index)}]`,
           ),
         ),
       };

@@ -115,6 +115,18 @@ describe('typed API client', () => {
               created_at: '2026-10-21T12:00:01Z',
               updated_at: '2026-10-21T12:00:01Z',
             }],
+            derived_nodes: [{
+              id: 'derived:operation-1:step:0',
+              parent_span_id: 'operation-1',
+              source_evidence_id: 'evidence-1',
+              kind: 'step',
+              name: 'Open checkout',
+              status: 'passed',
+              started_at: '2026-10-21T12:00:00Z',
+              ended_at: '2026-10-21T12:00:01Z',
+              data: { index: 0 },
+              evidence: { screenshot: 'failure.png' },
+            }],
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         ),
@@ -132,6 +144,48 @@ describe('typed API client', () => {
     expect(trace.operation_evidence[0]?.artifacts).toEqual([
       { kind: 'screenshot', path: 'failure.png' },
     ]);
+    expect(trace.derived_nodes[0]).toMatchObject({
+      id: 'derived:operation-1:step:0',
+      parent_span_id: 'operation-1',
+      kind: 'step',
+      status: 'passed',
+    });
+  });
+
+  it('rejects a derived trace node with an unknown kind', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            spans: [],
+            attempts: [],
+            usage: [],
+            operation_evidence: [],
+            derived_nodes: [{
+              id: 'derived:operation-1:other:0',
+              parent_span_id: 'operation-1',
+              source_evidence_id: 'evidence-1',
+              kind: 'other',
+              name: 'Other node',
+              status: 'passed',
+              started_at: '2026-10-21T12:00:00Z',
+              data: {},
+              evidence: {},
+            }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    await expect(getTrace('run-1')).rejects.toEqual(
+      new ApiError(
+        200,
+        'invalid_response',
+        'Invalid API response at derived_nodes[0].kind: expected one of step, unknown_tool.',
+      ),
+    );
   });
 
   it('rejects successful agent payloads missing required JSON fields', async () => {

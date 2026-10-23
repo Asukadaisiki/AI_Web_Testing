@@ -195,6 +195,7 @@ describe('workspace request freshness', () => {
         attempts: [],
         usage: [],
         operation_evidence: [],
+        derived_nodes: [],
       });
     });
     await waitFor(() => expect(result.current.run?.id).toBe('run-2'));
@@ -206,6 +207,7 @@ describe('workspace request freshness', () => {
         attempts: [],
         usage: [],
         operation_evidence: [],
+        derived_nodes: [],
       });
       await Promise.all([firstRun.promise, firstTrace.promise]);
     });
@@ -259,6 +261,7 @@ describe('workspace request freshness', () => {
         attempts: [attempt],
         usage: [usage],
         operation_evidence: [operation],
+        derived_nodes: [],
       })
       .mockImplementationOnce(() => traceTwo.promise);
 
@@ -289,6 +292,7 @@ describe('workspace request freshness', () => {
       attempts: [],
       usage: [],
       operation_evidence: [],
+      derived_nodes: [],
     });
 
     const { result } = renderHook(() => useWorkspace());
@@ -321,6 +325,7 @@ describe('workspace request freshness', () => {
         attempts: [],
         usage: [],
         operation_evidence: [],
+        derived_nodes: [],
       });
     });
     await waitFor(() => expect(result.current.run?.checkpoint_version).toBe(2));
@@ -347,6 +352,7 @@ describe('workspace request freshness', () => {
       attempts: [],
       usage: [],
       operation_evidence: [],
+      derived_nodes: [],
     });
 
     const { result } = renderHook(() => useWorkspace());
