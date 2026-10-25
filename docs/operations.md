@@ -62,6 +62,11 @@ docker compose restart runtime
 docker compose logs --tail=200 runtime
 ```
 
+The local runtime defaults to four concurrent command workers
+(`AGENTTRACE_RUNTIME_CONCURRENCY=4`), and the command topic is initialized
+with eight partitions. Keep those defaults for the deterministic stack unless
+an explicit capacity test changes them; changing them is not a recovery step.
+
 Redis is live-experience acceleration only. Its outage does not erase facts or
 cancel a run; SSE readers poll PostgreSQL until Redis is restored:
 
@@ -97,6 +102,28 @@ docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 \
   --group "${AGENTTRACE_LANGFUSE_GROUP_ID:-agenttrace-langfuse-exporter}" --describe
 ```
+
+## Failed-Run reruns
+
+A user rerun creates a new execution for a failed Run's immutable
+specification. It retains the original `source_message_id` and records the
+immediate failed parent as `retry_of_run_id`. Only `failed` Runs are eligible.
+The source Run and its evidence remain immutable; the fresh Run creates new
+evidence and can repeat the original external effects.
+
+Submit a rerun with a stable UUID idempotency key. Repeating the same request
+with the same key returns the same rerun Run ID:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/runs/<failed-run-id>/reruns \
+  -H 'Content-Type: application/json' \
+  -d '{"idempotency_key":"<uuid>"}'
+```
+
+This is separate from Kafka/DLQ retry. Kafka/DLQ handling resumes delivery or
+consumer processing for an existing durable command and does not create a new
+Run. Do not use it as a substitute for a user rerun, and do not assume that a
+user rerun is side-effect-free.
 
 ## Safe workspace deletion
 

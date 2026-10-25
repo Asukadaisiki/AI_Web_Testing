@@ -105,6 +105,14 @@ class V3RunnerTest(unittest.TestCase):
                     "--with",
                     "psycopg[binary]>=3.2,<4",
                     "python",
+                    "integration/v3/concurrency_rerun_scenario.py",
+                ),
+                (
+                    "uv",
+                    "run",
+                    "--with",
+                    "psycopg[binary]>=3.2,<4",
+                    "python",
                     "integration/v3/concurrent_delete_scenario.py",
                 ),
                 (

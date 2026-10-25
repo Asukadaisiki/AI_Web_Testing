@@ -48,3 +48,19 @@ command and event envelopes and have a dedicated DLQ. Redis is not a source of
 truth: when unavailable, the API's SSE stream uses `postgres_poll`. Langfuse
 is an optional profile and asynchronously observes completed work; it is not
 on the request or runtime critical path.
+
+## Failed-Run rerun lineage
+
+A Run records its originating user message in `source_message_id`. A user rerun
+is a new Run with the same `source_message_id` and an immediate parent recorded
+in `retry_of_run_id`; it copies the failed Run's immutable specification,
+receives a new Run ID, and starts at checkpoint zero. The source Run and all of
+its durable evidence remain unchanged. The new execution persists its own
+spans, usage, operation results, events, and artifacts with identities that do
+not overlap the source.
+
+This is a user-requested execution, not Kafka/DLQ delivery recovery. Kafka
+redelivery and DLQ handling retry durable transport or consumer work without
+creating a Run. A user rerun is eligible only when its direct source Run is
+`failed`, uses an idempotency key scoped to that source, and may repeat the
+original external effects.
