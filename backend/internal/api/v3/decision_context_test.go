@@ -32,6 +32,7 @@ func TestProjectDecisionContext(t *testing.T) {
 		input     json.RawMessage
 		output    json.RawMessage
 		want      *publicDecisionContext
+		wantJSON  string
 		forbidden []string
 	}{
 		{
@@ -66,6 +67,19 @@ func TestProjectDecisionContext(t *testing.T) {
 				"must not be projected", `"reasoning_content"`, `"id"`, `"name":"unsupported"`,
 				`"tool_call_id"`, `"ignored_operation"`, `"report"`, `"usage"`,
 			},
+		},
+		{
+			name:  "projects named first tool call when arguments are absent",
+			input: json.RawMessage(`{}`),
+			output: json.RawMessage(`{"message":{"tool_calls":[
+				{"name":"first_operation"},
+				{"name":"later_operation","arguments":{"ignored":true}}
+			]}}`),
+			want: &publicDecisionContext{
+				SelectedOperation: &publicSelectedOperation{Name: "first_operation"},
+			},
+			wantJSON:  `{"selected_operation":{"name":"first_operation","arguments":null}}`,
+			forbidden: []string{`"later_operation"`, `"ignored"`},
 		},
 		{
 			name: "uses latest user and latest tool after that user",
@@ -211,6 +225,9 @@ func TestProjectDecisionContext(t *testing.T) {
 			encoded, err := json.Marshal(got)
 			if err != nil {
 				t.Fatalf("marshal projected context: %v", err)
+			}
+			if test.wantJSON != "" && string(encoded) != test.wantJSON {
+				t.Fatalf("projected context JSON = %s, want %s", encoded, test.wantJSON)
 			}
 			for _, forbidden := range test.forbidden {
 				if strings.Contains(string(encoded), forbidden) {

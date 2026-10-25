@@ -76,7 +76,7 @@ func projectDecisionContext(input, output json.RawMessage) *publicDecisionContex
 		}
 		if len(response.Message.ToolCalls) > 0 {
 			first := response.Message.ToolCalls[0]
-			if first.Name != "" && len(first.Arguments) > 0 {
+			if first.Name != "" {
 				context.SelectedOperation = &publicSelectedOperation{
 					Name:      first.Name,
 					Arguments: append(json.RawMessage(nil), first.Arguments...),
