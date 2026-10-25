@@ -394,7 +394,7 @@ test.describe.serial('AgentTrace workspace', () => {
     await cleanupFixtureProject();
   });
 
-  test('sends the canonical goal and preserves a populated desktop trace selection', async ({
+  test('conversation attempts preserve a populated desktop trace selection', async ({
     page,
   }) => {
     const consoleErrors: string[] = [];
@@ -425,6 +425,15 @@ test.describe.serial('AgentTrace workspace', () => {
     await expect(page.getByRole('region', { name: 'Run completed' })).toBeVisible({
       timeout: 80_000,
     });
+    await expect(conversation.getByRole('button', { name: 'Attempt 1' })).toBeVisible();
+    await expect(conversation.locator('.message-block time').first()).toHaveText(
+      /^\d{2}:\d{2}:\d{2}$/,
+    );
+
+    await trace.getByRole('button', { name: 'Select plan' }).click();
+    const planDetails = page.getByRole('article', { name: 'Trace details for plan' });
+    await expect(planDetails.getByText('Decision context', { exact: true })).toBeVisible();
+    await expect(planDetails).toContainText('browser_execute_case');
 
     const operation = page.getByRole('treeitem', {
       name: 'operation',

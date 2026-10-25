@@ -5,6 +5,7 @@ import {
   Clock3,
   LoaderCircle,
   PauseCircle,
+  RotateCcw,
   XCircle,
 } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
@@ -24,6 +25,7 @@ interface RunStateProps {
     content: string,
     idempotencyKey: string,
   ) => Promise<boolean>;
+  onRerun: () => Promise<boolean>;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -46,6 +48,23 @@ function stringField(value: Record<string, unknown> | null, ...keys: string[]): 
   return '';
 }
 
+export function messageDateKey(value: string): string {
+  const date = new Date(value);
+  return `${String(date.getFullYear())}-${String(date.getMonth())}-${String(date.getDate())}`;
+}
+
+export function formatMessageDate(value: string): string {
+  return new Date(value).toLocaleDateString();
+}
+
+export function formatMessageTime(value: string): string {
+  return new Date(value).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 export function MessageBlock({ message }: MessageProps): JSX.Element {
   const user = message.role === 'user';
   return (
@@ -53,10 +72,7 @@ export function MessageBlock({ message }: MessageProps): JSX.Element {
       <header>
         <strong>{user ? 'You' : 'Agent'}</strong>
         <time dateTime={message.created_at}>
-          {new Date(message.created_at).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
+          {formatMessageTime(message.created_at)}
         </time>
       </header>
       <p>{message.content}</p>
@@ -70,8 +86,10 @@ export function RunStateBlock({
   connected,
   busy,
   onRespond,
+  onRerun,
 }: RunStateProps): JSX.Element {
   const [answer, setAnswer] = useState('');
+  const [rerunning, setRerunning] = useState(false);
   const responseKey = useRef(crypto.randomUUID());
   const completion = [...events]
     .reverse()
@@ -95,6 +113,12 @@ export function RunStateBlock({
       setAnswer('');
       responseKey.current = crypto.randomUUID();
     }
+  }
+
+  async function rerun(): Promise<void> {
+    setRerunning(true);
+    await onRerun();
+    setRerunning(false);
   }
 
   if (run.status === 'queued') {
@@ -209,6 +233,15 @@ export function RunStateBlock({
         <div>
           <strong>Failed</strong>
           <p>{completionError || 'The run failed. Select a Trace node to inspect the recorded cause.'}</p>
+          <button
+            type="button"
+            className="button run-rerun-button"
+            disabled={busy || rerunning}
+            onClick={() => void rerun()}
+          >
+            <RotateCcw size={14} />
+            Rerun failed task
+          </button>
         </div>
       </section>
     );

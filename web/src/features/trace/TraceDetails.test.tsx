@@ -134,6 +134,90 @@ describe('canonical trace details', () => {
     expect(screen.getAllByText(/browser failed/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/not exposed/i)).not.toBeInTheDocument();
   });
+
+  it('shows observable decision context before canonical input and output for model spans', () => {
+    const modelSpan: Span = {
+      ...span,
+      id: 'span-row-model',
+      span_id: 'model-1',
+      kind: 'model',
+      name: 'Plan checkout',
+      decision_context: {
+        objective: { role: 'user', content: 'Check checkout' },
+        prior_observation: { role: 'tool', content: 'Login passed' },
+        selected_operation: {
+          name: 'browser_execute_case',
+          arguments: { case: 'checkout' },
+        },
+        visible_explanation: 'I will validate checkout.',
+      },
+    };
+    const modelNode: TraceNode = {
+      ...node,
+      id: modelSpan.span_id,
+      kind: modelSpan.kind,
+      name: modelSpan.name,
+      source: { type: 'span', value: modelSpan },
+    };
+
+    render(
+      <TraceDetails
+        node={modelNode}
+        attempts={[]}
+        usage={[]}
+        operationEvidence={[]}
+      />,
+    );
+
+    const decisionContext = screen.getByText('Decision context');
+    const input = screen.getByText('Planner / case input');
+    const output = screen.getByText('Canonical output');
+
+    expect(decisionContext).toBeInTheDocument();
+    expect(screen.getByText('Objective')).toBeInTheDocument();
+    expect(screen.getByText('Check checkout')).toBeInTheDocument();
+    expect(screen.getByText('Prior observation')).toBeInTheDocument();
+    expect(screen.getByText('Login passed')).toBeInTheDocument();
+    expect(screen.getByText('Selected operation')).toBeInTheDocument();
+    expect(screen.getByText('browser_execute_case')).toBeInTheDocument();
+    expect(screen.getByText(/"case": "checkout"/)).toBeInTheDocument();
+    expect(screen.getByText('Visible explanation')).toBeInTheDocument();
+    expect(screen.getByText('I will validate checkout.')).toBeInTheDocument();
+    expect(
+      decisionContext.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(
+      decisionContext.compareDocumentPosition(output) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it('omits the decision context panel when a model span has no observable context', () => {
+    const modelSpan: Span = {
+      ...span,
+      id: 'span-row-model-without-context',
+      span_id: 'model-without-context',
+      kind: 'model',
+      name: 'Plan checkout',
+    };
+    const modelNode: TraceNode = {
+      ...node,
+      id: modelSpan.span_id,
+      kind: modelSpan.kind,
+      name: modelSpan.name,
+      source: { type: 'span', value: modelSpan },
+    };
+
+    render(
+      <TraceDetails
+        node={modelNode}
+        attempts={[]}
+        usage={[]}
+        operationEvidence={[]}
+      />,
+    );
+
+    expect(screen.queryByText('Decision context')).toBeNull();
+  });
 });
 
 describe('derived trace details', () => {

@@ -6,6 +6,7 @@ import {
   Gauge,
   MessageSquareWarning,
   Paperclip,
+  Route,
 } from 'lucide-react';
 import type {
   OperationEvidence,
@@ -123,6 +124,8 @@ export function TraceDetails({
   }
 
   const span = node.source.value;
+  const decisionContext =
+    (span.kind === 'model' || span.kind === 'report') ? span.decision_context : undefined;
 
   return (
     <article className="trace-details" aria-label={`Trace details for ${node.name}`}>
@@ -154,6 +157,44 @@ export function TraceDetails({
           </dd>
         </div>
       </dl>
+
+      {decisionContext !== undefined ? (
+        <details className="decision-context" open>
+          <summary>
+            <Route size={14} />
+            Decision context
+          </summary>
+          <dl>
+            {decisionContext.objective !== undefined ? (
+              <div>
+                <dt>Objective</dt>
+                <dd>{decisionContext.objective.content}</dd>
+              </div>
+            ) : null}
+            {decisionContext.prior_observation !== undefined ? (
+              <div>
+                <dt>Prior observation</dt>
+                <dd>{decisionContext.prior_observation.content}</dd>
+              </div>
+            ) : null}
+            {decisionContext.selected_operation !== undefined ? (
+              <div>
+                <dt>Selected operation</dt>
+                <dd>
+                  <strong>{decisionContext.selected_operation.name}</strong>
+                  <pre>{formatJSON(decisionContext.selected_operation.arguments)}</pre>
+                </dd>
+              </div>
+            ) : null}
+            {decisionContext.visible_explanation !== undefined ? (
+              <div>
+                <dt>Visible explanation</dt>
+                <dd>{decisionContext.visible_explanation}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </details>
+      ) : null}
 
       <details open>
         <summary>
