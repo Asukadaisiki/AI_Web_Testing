@@ -45,6 +45,33 @@ func TestConsumerRunsOnlyAgentTraceRunCommandsOnce(t *testing.T) {
 	}
 }
 
+func TestConsumerCommitsInboxForDurablyCompletedRunFailure(t *testing.T) {
+	cause := errors.New("operation callback unavailable")
+	runner := &recordingRunner{err: &terminalRunError{cause: cause}}
+	inbox := &memoryInbox{}
+	retries := &memoryRetryStore{}
+	consumer := Consumer{
+		Inbox:       inbox,
+		Runner:      runner,
+		RetryStore:  retries,
+		MaxAttempts: 2,
+	}
+	message := commandMessage(t, "evt-terminal-run-failure", commandFor("run-terminal-failure"))
+
+	if err := consumer.Handle(context.Background(), message); err != nil {
+		t.Fatalf("terminal run failure: %v", err)
+	}
+	if err := consumer.Handle(context.Background(), message); err != nil {
+		t.Fatalf("terminal run failure replay: %v", err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("runner calls = %d, want one committed inbox delivery", runner.calls)
+	}
+	if len(retries.incremented) != 0 {
+		t.Fatalf("retry increments = %#v, want none for durable terminal failure", retries.incremented)
+	}
+}
+
 func TestConsumerSendsPermanentFailuresToDLQAfterLimit(t *testing.T) {
 	runner := &recordingRunner{err: errors.New("permanent failure")}
 	bus := &eventbus.Fake{}

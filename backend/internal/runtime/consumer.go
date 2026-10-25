@@ -124,7 +124,11 @@ func (c *Consumer) Handle(ctx context.Context, message eventbus.Message) error {
 	err = c.Inbox.Handle(ctx, normalizedMessage, func(runCtx context.Context) error {
 		stopLease := c.renewLease(runCtx, command.RunID)
 		defer stopLease()
-		return c.Runner.Run(runCtx, command)
+		runErr := c.Runner.Run(runCtx, command)
+		if isTerminalRunError(runErr) {
+			return nil
+		}
+		return runErr
 	})
 	if err != nil {
 		return c.recordFailure(ctx, eventID, message, err)

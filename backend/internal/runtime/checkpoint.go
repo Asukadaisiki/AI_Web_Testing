@@ -132,6 +132,25 @@ var (
 	ErrCancelled = errors.New("run cancelled")
 )
 
+// terminalRunError reports a run-level failure after its terminal state is durable.
+// Consumers commit the command inbox entry instead of retrying completed work.
+type terminalRunError struct {
+	cause error
+}
+
+func (e *terminalRunError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *terminalRunError) Unwrap() error {
+	return e.cause
+}
+
+func isTerminalRunError(err error) bool {
+	var terminal *terminalRunError
+	return errors.As(err, &terminal)
+}
+
 func stepEventData(step StepResult) json.RawMessage {
 	value, _ := json.Marshal(map[string]any{
 		"checkpoint": step.Checkpoint,

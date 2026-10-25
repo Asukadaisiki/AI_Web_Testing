@@ -180,7 +180,7 @@ func (e Engine) complete(
 		return fmt.Errorf("complete run: %w", err)
 	}
 	if runErr != nil {
-		return runErr
+		return &terminalRunError{cause: runErr}
 	}
 	return nil
 }
