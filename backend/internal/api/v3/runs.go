@@ -18,6 +18,10 @@ type responseRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
+type rerunRequest struct {
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
 type publicRun struct {
 	ID                string           `json:"id"`
 	ProjectID         string           `json:"project_id"`
@@ -172,6 +176,33 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toPublicRun(run))
+}
+
+func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepository(w) {
+		return
+	}
+	var input rerunRequest
+	if !decodeRequest(w, r, &input) {
+		return
+	}
+	if err := requiredText(input.IdempotencyKey, "idempotency_key"); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	run, err := s.repository.CreateRerun(r.Context(), postgres.CreateRerunParams{
+		RunID:          r.PathValue("id"),
+		IdempotencyKey: input.IdempotencyKey,
+	})
+	if err != nil {
+		writeRepositoryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"run_id":          run.ID,
+		"status":          string(run.Status),
+		"retry_of_run_id": run.RetryOfRunID,
+	})
 }
 
 func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {

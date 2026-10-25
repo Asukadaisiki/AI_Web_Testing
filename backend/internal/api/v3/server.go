@@ -36,6 +36,7 @@ type Repository interface {
 	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, []domain.Run, error)
 	CreateMessageAndRun(context.Context, postgres.CreateMessageParams) (domain.Message, domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
+	CreateRerun(context.Context, postgres.CreateRerunParams) (domain.Run, error)
 	GetTraceDetails(context.Context, string) (postgres.TraceDetails, error)
 	RequestCancel(context.Context, string) error
 	SubmitResponse(context.Context, postgres.SubmitResponseParams) error
@@ -117,6 +118,7 @@ func New(config ServerConfig) *Server {
 	mux.HandleFunc("DELETE /api/v1/conversations/{id}", server.handleDeleteConversation)
 	mux.HandleFunc("POST /api/v1/conversations/{id}/messages", server.handleCreateMessage)
 	mux.HandleFunc("GET /api/v1/runs/{id}", server.handleGetRun)
+	mux.HandleFunc("POST /api/v1/runs/{id}/reruns", server.handleRerun)
 	mux.HandleFunc("GET /api/v1/runs/{id}/trace", server.handleGetTrace)
 	mux.HandleFunc("GET /api/v1/runs/{id}/events", server.handleEvents)
 	mux.HandleFunc("POST /api/v1/runs/{id}/cancel", server.handleCancel)

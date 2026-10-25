@@ -287,6 +287,82 @@ func TestGetRunDoesNotExposeInternalSpecification(t *testing.T) {
 	}
 }
 
+func TestRerunReturnsAcceptedRun(t *testing.T) {
+	repository := &fakeRepository{rerunResult: domain.Run{
+		ID:           "run_new",
+		RetryOfRunID: "run_failed",
+		Status:       domain.RunQueued,
+	}}
+	handler := newTestServer(t, repository, stream.NewService(
+		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+	))
+
+	response := request(t, handler, http.MethodPost, "/api/v1/runs/run_failed/reruns",
+		`{"idempotency_key":"rerun-api-1"}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusAccepted, response.Body.String())
+	}
+	var body struct {
+		RunID        string           `json:"run_id"`
+		Status       domain.RunStatus `json:"status"`
+		RetryOfRunID string           `json:"retry_of_run_id"`
+	}
+	decodeJSON(t, response, &body)
+	if body.RunID != "run_new" || body.Status != domain.RunQueued || body.RetryOfRunID != "run_failed" {
+		t.Fatalf("response = %#v", body)
+	}
+	if repository.rerunInput != (postgres.CreateRerunParams{
+		RunID: "run_failed", IdempotencyKey: "rerun-api-1",
+	}) {
+		t.Fatalf("rerun input = %#v", repository.rerunInput)
+	}
+}
+
+func TestRerunRejectsInvalidRequests(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "missing idempotency key", body: `{}`},
+		{name: "blank idempotency key", body: `{"idempotency_key":"  "}`},
+		{name: "unknown field", body: `{"idempotency_key":"rerun-api-1","unexpected":true}`},
+		{name: "multiple JSON values", body: `{"idempotency_key":"rerun-api-1"} {}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &fakeRepository{}
+			handler := newTestServer(t, repository, stream.NewService(
+				&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+			))
+
+			response := request(t, handler, http.MethodPost, "/api/v1/runs/run_failed/reruns", test.body)
+			assertErrorCode(t, response, http.StatusBadRequest, "invalid_request")
+		})
+	}
+}
+
+func TestRerunMapsRepositoryErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{name: "conflict", err: postgres.ErrConflict, status: http.StatusConflict, code: "conflict"},
+		{name: "not found", err: postgres.ErrNotFound, status: http.StatusNotFound, code: "not_found"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &fakeRepository{rerunErr: test.err}
+			handler := newTestServer(t, repository, stream.NewService(
+				&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+			))
+
+			response := request(t, handler, http.MethodPost, "/api/v1/runs/run_failed/reruns",
+				`{"idempotency_key":"rerun-api-1"}`)
+			assertErrorCode(t, response, test.status, test.code)
+		})
+	}
+}
+
 func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	repository := &fakeRepository{trace: postgres.TraceDetails{
@@ -864,6 +940,9 @@ type fakeRepository struct {
 	messages               []domain.Message
 	runs                   []domain.Run
 	run                    domain.Run
+	rerunInput             postgres.CreateRerunParams
+	rerunResult            domain.Run
+	rerunErr               error
 	trace                  postgres.TraceDetails
 	deleteErr              error
 	deletedProjectIDs      map[string]int
@@ -927,6 +1006,10 @@ func (r *fakeRepository) GetRun(context.Context, string) (domain.Run, error) {
 		return r.run, nil
 	}
 	return domain.Run{}, postgres.ErrNotFound
+}
+func (r *fakeRepository) CreateRerun(_ context.Context, input postgres.CreateRerunParams) (domain.Run, error) {
+	r.rerunInput = input
+	return r.rerunResult, r.rerunErr
 }
 func (r *fakeRepository) ListTrace(context.Context, string) ([]domain.Span, error) { return nil, nil }
 func (r *fakeRepository) GetTraceDetails(context.Context, string) (postgres.TraceDetails, error) {
