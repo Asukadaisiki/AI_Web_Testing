@@ -277,14 +277,28 @@ func (s *Store) CreateRerun(ctx context.Context, p CreateRerunParams) (domain.Ru
 	}
 	defer tx.Rollback(ctx)
 
+	var conversationID string
+	if err := tx.QueryRow(ctx, `
+		SELECT conversation_id
+		FROM runs
+		WHERE id = $1`, p.RunID).Scan(&conversationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Run{}, fmt.Errorf("rerun source %q: %w", p.RunID, ErrNotFound)
+		}
+		return domain.Run{}, fmt.Errorf("read rerun source conversation: %w", err)
+	}
+	projectID, err := lockConversation(ctx, tx, conversationID)
+	if err != nil {
+		return domain.Run{}, err
+	}
 	source, err := scanRun(tx.QueryRow(ctx, `
 		SELECT id, project_id, conversation_id,
 		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
 		       status, specification, checkpoint_version,
 		       cancel_requested_at, started_at, finished_at, created_at, updated_at
 		FROM runs
-		WHERE id = $1
-		FOR UPDATE`, p.RunID))
+		WHERE id = $1 AND project_id = $2 AND conversation_id = $3
+		FOR UPDATE`, p.RunID, projectID, conversationID))
 	if err != nil {
 		return domain.Run{}, fmt.Errorf("lock rerun source: %w", err)
 	}

@@ -132,6 +132,84 @@ func TestCreateRerunAllowsConversationDeletionAfterDelivery(t *testing.T) {
 	assertRowCount(t, ctx, pool, "idempotency_keys", 0)
 }
 
+func TestCreateRerunDoesNotDeadlockConcurrentConversationDeletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, source := createFailedRerunSource(t, ctx, store, conversationID, "delete-rerun-lock-order")
+
+	const lockKey int64 = 118042027
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_hold_rerun_before_idempotency_insert() RETURNS trigger AS $$
+		BEGIN
+			IF NEW.scope LIKE 'run-rerun:%' THEN
+				PERFORM pg_advisory_xact_lock(118042027);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_hold_rerun_before_idempotency_insert
+		BEFORE INSERT ON idempotency_keys
+		FOR EACH ROW
+		EXECUTE FUNCTION test_hold_rerun_before_idempotency_insert();`); err != nil {
+		t.Fatalf("install rerun overlap trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS test_hold_rerun_before_idempotency_insert ON idempotency_keys`)
+		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS test_hold_rerun_before_idempotency_insert()`)
+	})
+
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin overlap lock holder: %v", err)
+	}
+	defer holder.Rollback(context.Background())
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
+		t.Fatalf("hold rerun overlap lock: %v", err)
+	}
+
+	rerunResult := make(chan error, 1)
+	go func() {
+		_, err := store.CreateRerun(ctx, CreateRerunParams{
+			RunID:          source.ID,
+			IdempotencyKey: "delete-rerun-lock-order",
+		})
+		rerunResult <- err
+	}()
+	waitForAdvisoryLockWaiter(t, ctx, pool)
+
+	deleteResult := make(chan error, 1)
+	go func() {
+		deleteResult <- store.DeleteConversation(ctx, conversationID)
+	}()
+	waitForDatabaseLock(t, ctx, pool)
+
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("release rerun overlap lock: %v", err)
+	}
+
+	var rerunErr, deleteErr error
+	select {
+	case rerunErr = <-rerunResult:
+	case <-ctx.Done():
+		t.Fatalf("CreateRerun timed out: %v", ctx.Err())
+	}
+	select {
+	case deleteErr = <-deleteResult:
+	case <-ctx.Done():
+		t.Fatalf("DeleteConversation timed out: %v", ctx.Err())
+	}
+	if rerunErr != nil {
+		t.Fatalf("CreateRerun during deletion overlap: %v", rerunErr)
+	}
+	if !errors.Is(deleteErr, ErrConflict) {
+		t.Fatalf("DeleteConversation during rerun overlap error = %v, want ErrConflict", deleteErr)
+	}
+	assertRowCount(t, ctx, pool, "conversations", 1)
+	assertRowCount(t, ctx, pool, "runs", 2)
+}
+
 func TestDeleteProjectIsIdempotentAndScoped(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	firstConversationID := createConversationFixture(t, ctx, pool)

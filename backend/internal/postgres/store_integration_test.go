@@ -274,11 +274,21 @@ func TestCreateRerunReplaysMatchingIdempotencyRequest(t *testing.T) {
 }
 
 func TestCreateRerunSerializesConcurrentMatchingIdempotencyRequests(t *testing.T) {
-	ctx, _, store := newRepositoryTestStore(t)
-	conversationID := createConversationFixture(t, ctx, store.pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
 	_, source := createFailedRerunSource(t, ctx, store, conversationID, "rerun-concurrent-source")
 
-	start := make(chan struct{})
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin source lock holder: %v", err)
+	}
+	defer holder.Rollback(context.Background())
+	if _, err := holder.Exec(ctx, `SELECT id FROM runs WHERE id = $1 FOR UPDATE`, source.ID); err != nil {
+		t.Fatalf("hold source lock: %v", err)
+	}
+
 	results := make(chan struct {
 		run domain.Run
 		err error
@@ -288,7 +298,6 @@ func TestCreateRerunSerializesConcurrentMatchingIdempotencyRequests(t *testing.T
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			<-start
 			run, err := store.CreateRerun(ctx, CreateRerunParams{
 				RunID:          source.ID,
 				IdempotencyKey: "rerun-concurrent",
@@ -299,7 +308,16 @@ func TestCreateRerunSerializesConcurrentMatchingIdempotencyRequests(t *testing.T
 			}{run: run, err: err}
 		}()
 	}
-	close(start)
+	waitForDatabaseLock(t, ctx, pool)
+	select {
+	case result := <-results:
+		t.Fatalf("CreateRerun completed while source lock was held: %#v", result)
+	default:
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("release source lock: %v", err)
+	}
+
 	done := make(chan struct{})
 	go func() {
 		group.Wait()
@@ -321,6 +339,58 @@ func TestCreateRerunSerializesConcurrentMatchingIdempotencyRequests(t *testing.T
 	}
 	if len(runs) != 2 || runs[0].ID == "" || runs[0].ID != runs[1].ID {
 		t.Fatalf("concurrent reruns = %#v, want one shared identity", runs)
+	}
+}
+
+func waitForDatabaseLock(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+
+	for {
+		var waiting bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND pid <> pg_backend_pid()
+				  AND wait_event_type = 'Lock'
+				  AND COALESCE(wait_event, '') <> 'advisory'
+			)`).Scan(&waiting); err != nil {
+			t.Fatalf("observe database lock wait: %v", err)
+		}
+		if waiting {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("operation did not reach a database lock wait: %v", ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func waitForAdvisoryLockWaiter(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+
+	for {
+		var waiting bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_locks
+				WHERE locktype = 'advisory'
+				  AND NOT granted
+			)`).Scan(&waiting); err != nil {
+			t.Fatalf("observe advisory lock wait: %v", err)
+		}
+		if waiting {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("rerun did not reach the deterministic overlap point: %v", ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
