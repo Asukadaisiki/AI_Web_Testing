@@ -86,6 +86,286 @@ func TestCreateMessageSetsRunLineage(t *testing.T) {
 	}
 }
 
+func TestCreateRerunQueuesImmutableFailedSpecification(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	const (
+		content = "rerun the failed checkout task"
+		agentID = "browser-eval"
+	)
+	model := event.ModelRef{Provider: "scripted", Name: "rerun-fixture"}
+	operations := []event.Operation{{
+		Name:        "browser_execute_case",
+		Description: "execute the checkout fixture",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Callback: event.Callback{
+			Kind: "http",
+			URL:  "http://worker:8100/operations/browser_execute_case",
+		},
+	}}
+	message, source, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+		ConversationID: conversationID,
+		Content:        content,
+		AgentID:        agentID,
+		Model:          model,
+		Operations:     operations,
+		IdempotencyKey: "rerun-source",
+	})
+	if err != nil {
+		t.Fatalf("create rerun source: %v", err)
+	}
+
+	var sourceSpecification runSpecification
+	if err := json.Unmarshal(source.Specification, &sourceSpecification); err != nil {
+		t.Fatalf("decode source specification: %v", err)
+	}
+	sourceSpecification.Command.CheckpointVersion = 9
+	sourceSpecificationJSON, err := json.Marshal(sourceSpecification)
+	if err != nil {
+		t.Fatalf("marshal failed source specification: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE runs
+		SET status = 'failed', checkpoint_version = 9, specification = $2::jsonb
+		WHERE id = $1`, source.ID, sourceSpecificationJSON); err != nil {
+		t.Fatalf("make source failed: %v", err)
+	}
+	source.Status = domain.RunFailed
+	source.CheckpointVersion = 9
+	source.Specification = sourceSpecificationJSON
+
+	var messageCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM messages WHERE conversation_id = $1`, conversationID).Scan(&messageCount); err != nil {
+		t.Fatalf("count source messages: %v", err)
+	}
+
+	rerun, err := store.CreateRerun(ctx, CreateRerunParams{
+		RunID:          source.ID,
+		IdempotencyKey: "rerun-1",
+	})
+	if err != nil {
+		t.Fatalf("create rerun: %v", err)
+	}
+	if rerun.ID == source.ID || rerun.Status != domain.RunQueued {
+		t.Fatalf("rerun = %#v", rerun)
+	}
+	if rerun.SourceMessageID != source.SourceMessageID ||
+		rerun.RetryOfRunID != source.ID ||
+		rerun.CheckpointVersion != 0 {
+		t.Fatalf("rerun lineage/checkpoint = %#v", rerun)
+	}
+
+	var storedSpecification runSpecification
+	if err := json.Unmarshal(rerun.Specification, &storedSpecification); err != nil {
+		t.Fatalf("decode rerun specification: %v", err)
+	}
+	if storedSpecification.AgentID != agentID ||
+		storedSpecification.Command.RunID != rerun.ID ||
+		storedSpecification.Command.CheckpointVersion != 0 ||
+		storedSpecification.Command.Model != model ||
+		len(storedSpecification.Command.Messages) != 1 ||
+		storedSpecification.Command.Messages[0].ID != message.ID ||
+		storedSpecification.Command.Messages[0].Content != content ||
+		len(storedSpecification.Command.Operations) != 1 ||
+		storedSpecification.Command.Operations[0].Name != operations[0].Name ||
+		storedSpecification.Command.Operations[0].Callback != operations[0].Callback {
+		t.Fatalf("rerun specification = %#v", storedSpecification)
+	}
+	assertOperationInputSchema(t, storedSpecification.Command.Operations[0].InputSchema)
+
+	var payload []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT payload
+		FROM outbox_events
+		WHERE key = $1 AND topic = $2`,
+		rerun.ID, runCommandsTopic,
+	).Scan(&payload); err != nil {
+		t.Fatalf("read rerun command outbox: %v", err)
+	}
+	var envelope event.Envelope[event.RunCommand]
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("decode rerun command envelope: %v", err)
+	}
+	if envelope.SchemaVersion != "agenttrace.run-command.v1" ||
+		envelope.EventType != "run.requested" ||
+		envelope.AggregateID != rerun.ID ||
+		envelope.CorrelationID != rerun.ID ||
+		envelope.CausationID != source.ID ||
+		envelope.Payload.RunID != rerun.ID ||
+		envelope.Payload.CheckpointVersion != 0 ||
+		envelope.Payload.Model != model ||
+		len(envelope.Payload.Messages) != 1 ||
+		envelope.Payload.Messages[0].ID != message.ID ||
+		envelope.Payload.Messages[0].Content != content ||
+		len(envelope.Payload.Operations) != 1 ||
+		envelope.Payload.Operations[0].Name != operations[0].Name ||
+		envelope.Payload.Operations[0].Callback != operations[0].Callback {
+		t.Fatalf("rerun command envelope = %#v", envelope)
+	}
+	assertOperationInputSchema(t, envelope.Payload.Operations[0].InputSchema)
+	var actualMessageCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM messages WHERE conversation_id = $1`, conversationID).Scan(&actualMessageCount); err != nil {
+		t.Fatalf("count messages after rerun: %v", err)
+	}
+	if actualMessageCount != messageCount {
+		t.Fatalf("message count = %d, want %d", actualMessageCount, messageCount)
+	}
+}
+
+func TestCreateRerunRejectsNonFailedSourceStatuses(t *testing.T) {
+	statuses := []domain.RunStatus{
+		domain.RunQueued,
+		domain.RunRunning,
+		domain.RunWaitingInput,
+		domain.RunWaitingApproval,
+		domain.RunCancelling,
+		domain.RunSucceeded,
+		domain.RunCancelled,
+	}
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			ctx, pool, store := newRepositoryTestStore(t)
+			conversationID := createConversationFixture(t, ctx, pool)
+			_, source := createFailedRerunSource(t, ctx, store, conversationID, "rerun-status-"+string(status))
+			if _, err := pool.Exec(ctx, `UPDATE runs SET status = $2 WHERE id = $1`, source.ID, status); err != nil {
+				t.Fatalf("set source status %q: %v", status, err)
+			}
+
+			_, err := store.CreateRerun(ctx, CreateRerunParams{
+				RunID:          source.ID,
+				IdempotencyKey: "rerun-rejected",
+			})
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("CreateRerun status %q error = %v, want ErrConflict", status, err)
+			}
+			assertRowCount(t, ctx, pool, "runs", 1)
+			assertRowCount(t, ctx, pool, "outbox_events", 1)
+		})
+	}
+}
+
+func TestCreateRerunReplaysMatchingIdempotencyRequest(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, source := createFailedRerunSource(t, ctx, store, conversationID, "rerun-idempotency-source")
+	params := CreateRerunParams{RunID: source.ID, IdempotencyKey: "rerun-replay"}
+
+	first, err := store.CreateRerun(ctx, params)
+	if err != nil {
+		t.Fatalf("first CreateRerun: %v", err)
+	}
+	second, err := store.CreateRerun(ctx, params)
+	if err != nil {
+		t.Fatalf("replay CreateRerun: %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("rerun replay IDs = %q, %q", first.ID, second.ID)
+	}
+	var outboxCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events
+		WHERE key = $1 AND topic = $2`, first.ID, runCommandsTopic).Scan(&outboxCount); err != nil {
+		t.Fatalf("count rerun outbox records: %v", err)
+	}
+	if outboxCount != 1 {
+		t.Fatalf("rerun outbox records = %d, want 1", outboxCount)
+	}
+}
+
+func TestCreateRerunSerializesConcurrentMatchingIdempotencyRequests(t *testing.T) {
+	ctx, _, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, store.pool)
+	_, source := createFailedRerunSource(t, ctx, store, conversationID, "rerun-concurrent-source")
+
+	start := make(chan struct{})
+	results := make(chan struct {
+		run domain.Run
+		err error
+	}, 2)
+	var group sync.WaitGroup
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			run, err := store.CreateRerun(ctx, CreateRerunParams{
+				RunID:          source.ID,
+				IdempotencyKey: "rerun-concurrent",
+			})
+			results <- struct {
+				run domain.Run
+				err error
+			}{run: run, err: err}
+		}()
+	}
+	close(start)
+	done := make(chan struct{})
+	go func() {
+		group.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent CreateRerun requests did not finish")
+	}
+	close(results)
+
+	var runs []domain.Run
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent CreateRerun: %v", result.err)
+		}
+		runs = append(runs, result.run)
+	}
+	if len(runs) != 2 || runs[0].ID == "" || runs[0].ID != runs[1].ID {
+		t.Fatalf("concurrent reruns = %#v, want one shared identity", runs)
+	}
+}
+
+func TestCreateRerunUsesImmediateFailedParent(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, source := createFailedRerunSource(t, ctx, store, conversationID, "rerun-parent-source")
+
+	first, err := store.CreateRerun(ctx, CreateRerunParams{
+		RunID:          source.ID,
+		IdempotencyKey: "rerun-parent-first",
+	})
+	if err != nil {
+		t.Fatalf("create first rerun: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'failed' WHERE id = $1`, first.ID); err != nil {
+		t.Fatalf("make first rerun failed: %v", err)
+	}
+	second, err := store.CreateRerun(ctx, CreateRerunParams{
+		RunID:          first.ID,
+		IdempotencyKey: "rerun-parent-second",
+	})
+	if err != nil {
+		t.Fatalf("create second rerun: %v", err)
+	}
+	if second.SourceMessageID != source.SourceMessageID || second.RetryOfRunID != first.ID {
+		t.Fatalf("second rerun lineage = %#v", second)
+	}
+	if second.RetryOfRunID == source.ID {
+		t.Fatalf("second rerun retried root source %q, want immediate parent %q", source.ID, first.ID)
+	}
+}
+
+func TestCreateRerunValidatesRequiredParams(t *testing.T) {
+	ctx, _, store := newRepositoryTestStore(t)
+	for _, params := range []CreateRerunParams{
+		{IdempotencyKey: "rerun-validation"},
+		{RunID: "run_validation"},
+	} {
+		if _, err := store.CreateRerun(ctx, params); err == nil {
+			t.Fatalf("CreateRerun(%#v) succeeded without required values", params)
+		}
+	}
+}
+
 func TestRunLineageMigrationBackfillsExistingRows(t *testing.T) {
 	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -731,6 +1011,45 @@ func createConversationFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 		t.Fatalf("insert conversation fixture: %v", err)
 	}
 	return conversationID
+}
+
+func createFailedRerunSource(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	conversationID, idempotencyKey string,
+) (domain.Message, domain.Run) {
+	t.Helper()
+
+	message, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+		ConversationID: conversationID,
+		Content:        "failed rerun source",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		t.Fatalf("create failed rerun source: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE runs SET status = 'failed' WHERE id = $1`, run.ID); err != nil {
+		t.Fatalf("mark rerun source failed: %v", err)
+	}
+	run.Status = domain.RunFailed
+	return message, run
+}
+
+func assertOperationInputSchema(t *testing.T, raw json.RawMessage) {
+	t.Helper()
+
+	var schema struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decode operation input schema: %v", err)
+	}
+	if schema.Type != "object" {
+		t.Fatalf("operation input schema = %s, want type object", raw)
+	}
 }
 
 func traceStepFixture(runID string) TraceStep {

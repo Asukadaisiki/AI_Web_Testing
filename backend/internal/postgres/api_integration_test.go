@@ -79,6 +79,39 @@ func TestGetConversationReturnsRunsAndAttributableMessages(t *testing.T) {
 	}
 }
 
+func TestCreateRerunIsReturnedByConversationRead(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, source := createFailedRerunSource(t, ctx, store, conversationID, "conversation-rerun-source")
+
+	rerun, err := store.CreateRerun(ctx, CreateRerunParams{
+		RunID:          source.ID,
+		IdempotencyKey: "conversation-rerun",
+	})
+	if err != nil {
+		t.Fatalf("create rerun: %v", err)
+	}
+	_, _, runs, err := store.GetConversation(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("conversation runs = %#v, want source and rerun", runs)
+	}
+	var returned domain.Run
+	for _, run := range runs {
+		if run.ID == rerun.ID {
+			returned = run
+			break
+		}
+	}
+	if returned.ID != rerun.ID ||
+		returned.SourceMessageID != source.SourceMessageID ||
+		returned.RetryOfRunID != source.ID {
+		t.Fatalf("returned rerun lineage = %#v", returned)
+	}
+}
+
 func TestResponsePersistsMessageAndContinuationOutbox(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)

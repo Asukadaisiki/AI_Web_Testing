@@ -27,6 +27,16 @@ type createMessageResponse struct {
 	RunID     string `json:"run_id"`
 }
 
+// CreateRerunParams identifies a failed Run and an idempotency key for its fresh execution.
+type CreateRerunParams struct {
+	RunID          string
+	IdempotencyKey string
+}
+
+type createRerunResponse struct {
+	RunID string `json:"run_id"`
+}
+
 type runSpecification struct {
 	AgentID string           `json:"agent_id"`
 	Command event.RunCommand `json:"command"`
@@ -243,6 +253,171 @@ func replayCreatedMessageAndRun(
 		return domain.Message{}, domain.Run{}, fmt.Errorf("read idempotent run: %w", err)
 	}
 	return message, run, nil
+}
+
+// CreateRerun atomically queues a fresh execution of a failed Run's immutable specification.
+func (s *Store) CreateRerun(ctx context.Context, p CreateRerunParams) (domain.Run, error) {
+	if s == nil || s.pool == nil {
+		return domain.Run{}, errors.New("postgres store is not configured")
+	}
+	if err := validateCreateRerunParams(p); err != nil {
+		return domain.Run{}, err
+	}
+	requestHash, err := payloadHash(struct {
+		RunID string `json:"run_id"`
+	}{RunID: p.RunID})
+	if err != nil {
+		return domain.Run{}, err
+	}
+	scope := "run-rerun:" + p.RunID
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("begin create rerun: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	source, err := scanRun(tx.QueryRow(ctx, `
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
+		       cancel_requested_at, started_at, finished_at, created_at, updated_at
+		FROM runs
+		WHERE id = $1
+		FOR UPDATE`, p.RunID))
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("lock rerun source: %w", err)
+	}
+	if source.Status != domain.RunFailed || source.SourceMessageID == "" {
+		return domain.Run{}, ErrConflict
+	}
+
+	var specification runSpecification
+	if err := json.Unmarshal(source.Specification, &specification); err != nil {
+		return domain.Run{}, fmt.Errorf("decode rerun specification: %w", err)
+	}
+	rerunID, err := newID("run")
+	if err != nil {
+		return domain.Run{}, err
+	}
+	eventID, err := newID("evt")
+	if err != nil {
+		return domain.Run{}, err
+	}
+	idempotencyID, err := newID("idem")
+	if err != nil {
+		return domain.Run{}, err
+	}
+	responseJSON, err := json.Marshal(createRerunResponse{RunID: rerunID})
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("marshal rerun idempotency response: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO idempotency_keys (id, scope, key, request_hash, response)
+		VALUES ($1, $2, $3, $4, $5::jsonb)
+		ON CONFLICT (scope, key) DO NOTHING`,
+		idempotencyID, scope, p.IdempotencyKey, requestHash, responseJSON,
+	)
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("insert rerun idempotency key: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		rerun, err := replayCreatedRerun(ctx, tx, scope, p.IdempotencyKey, requestHash)
+		if err != nil {
+			return domain.Run{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return domain.Run{}, fmt.Errorf("commit rerun idempotent replay: %w", err)
+		}
+		return rerun, nil
+	}
+
+	specification.Command.RunID = rerunID
+	specification.Command.CheckpointVersion = 0
+	specificationJSON, err := json.Marshal(specification)
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("marshal rerun specification: %w", err)
+	}
+	rerun, err := scanRun(tx.QueryRow(ctx, `
+		INSERT INTO runs (
+			id, project_id, conversation_id, source_message_id, retry_of_run_id, status, specification
+		)
+		VALUES ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
+		RETURNING id, project_id, conversation_id,
+		          COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		          status, specification, checkpoint_version,
+		          cancel_requested_at, started_at, finished_at, created_at, updated_at`,
+		rerunID, source.ProjectID, source.ConversationID, source.SourceMessageID, source.ID, specificationJSON,
+	))
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("insert rerun: %w", err)
+	}
+	envelope := event.Envelope[event.RunCommand]{
+		SchemaVersion: "agenttrace.run-command.v1",
+		EventID:       eventID,
+		EventType:     "run.requested",
+		AggregateID:   rerun.ID,
+		OccurredAt:    rerun.CreatedAt,
+		CorrelationID: rerun.ID,
+		CausationID:   source.ID,
+		Payload:       specification.Command,
+	}
+	outboxHash, err := payloadHash(envelope)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	inserted, err := insertOutbox(ctx, tx, eventID, runCommandsTopic, rerun.ID, envelope, outboxHash)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if !inserted {
+		return domain.Run{}, fmt.Errorf("new rerun outbox event %q: %w", eventID, ErrConflict)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Run{}, fmt.Errorf("commit create rerun: %w", err)
+	}
+	return rerun, nil
+}
+
+func validateCreateRerunParams(p CreateRerunParams) error {
+	if strings.TrimSpace(p.RunID) == "" || strings.TrimSpace(p.IdempotencyKey) == "" {
+		return errors.New("run id and idempotency key are required")
+	}
+	return nil
+}
+
+func replayCreatedRerun(
+	ctx context.Context,
+	tx pgx.Tx,
+	scope, key, requestHash string,
+) (domain.Run, error) {
+	var (
+		storedHash string
+		response   createRerunResponse
+	)
+	if err := tx.QueryRow(ctx, `
+		SELECT request_hash, response
+		FROM idempotency_keys
+		WHERE scope = $1 AND key = $2
+		FOR UPDATE`,
+		scope, key,
+	).Scan(&storedHash, &response); err != nil {
+		return domain.Run{}, fmt.Errorf("read rerun idempotency replay: %w", err)
+	}
+	if storedHash != requestHash {
+		return domain.Run{}, ErrConflict
+	}
+	rerun, err := scanRun(tx.QueryRow(ctx, `
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
+		       cancel_requested_at, started_at, finished_at, created_at, updated_at
+		FROM runs
+		WHERE id = $1`, response.RunID))
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("read idempotent rerun: %w", err)
+	}
+	return rerun, nil
 }
 
 // ClaimRun atomically transitions a queued or already-running run for the expected checkpoint.

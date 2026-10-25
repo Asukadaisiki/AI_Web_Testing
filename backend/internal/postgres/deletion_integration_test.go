@@ -98,6 +98,40 @@ func TestDeleteConversationRequiresTerminalPublishedProcessedRuns(t *testing.T) 
 	}
 }
 
+func TestCreateRerunAllowsConversationDeletionAfterDelivery(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	_, source := createFailedRerunSource(t, ctx, store, conversationID, "delete-rerun-source")
+	rerun, err := store.CreateRerun(ctx, CreateRerunParams{
+		RunID:          source.ID,
+		IdempotencyKey: "delete-rerun",
+	})
+	if err != nil {
+		t.Fatalf("create rerun: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'failed' WHERE id = $1`, rerun.ID); err != nil {
+		t.Fatalf("make rerun terminal: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE outbox_events
+		SET published_at = now()
+		WHERE key = ANY($1) AND topic = $2`,
+		[]string{source.ID, rerun.ID}, runCommandsTopic,
+	); err != nil {
+		t.Fatalf("mark rerun commands published: %v", err)
+	}
+	markRuntimeCommandProcessed(t, ctx, pool, source.ID)
+	markRuntimeCommandProcessed(t, ctx, pool, rerun.ID)
+
+	if err := store.DeleteConversation(ctx, conversationID); err != nil {
+		t.Fatalf("delete conversation with rerun lineage: %v", err)
+	}
+	assertRowCount(t, ctx, pool, "conversations", 0)
+	assertRowCount(t, ctx, pool, "runs", 0)
+	assertRowCount(t, ctx, pool, "outbox_events", 0)
+	assertRowCount(t, ctx, pool, "idempotency_keys", 0)
+}
+
 func TestDeleteProjectIsIdempotentAndScoped(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	firstConversationID := createConversationFixture(t, ctx, pool)
