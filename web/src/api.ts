@@ -686,6 +686,7 @@ function parseRunActionResponse(value: unknown, status: number): RunActionRespon
 }
 
 function parseRerunResponse(value: unknown, status: number): RerunResponse {
+  if (status !== 202) return invalidResponse(status, 'rerun', 'HTTP 202');
   const item = recordValue(value, status, 'rerun');
   return {
     run_id: stringValue(item['run_id'], status, 'rerun.run_id'),

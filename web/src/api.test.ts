@@ -202,6 +202,32 @@ describe('typed API client', () => {
     });
   });
 
+  it('rejects a valid rerun payload unless the response status is 202', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            run_id: 'run-new',
+            status: 'queued',
+            retry_of_run_id: 'run-failed',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    await expect(rerunRun('run-failed', {
+      idempotency_key: 'rerun-1',
+    })).rejects.toEqual(
+      new ApiError(
+        200,
+        'invalid_response',
+        'Invalid API response at rerun: expected HTTP 202.',
+      ),
+    );
+  });
+
   it('parses canonical attempts usage and operation evidence with the trace', async () => {
     vi.stubGlobal(
       'fetch',

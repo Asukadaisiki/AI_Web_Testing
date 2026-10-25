@@ -609,6 +609,9 @@ export function useWorkspace(): WorkspaceState {
       const created = await rerunRun(runId, {
         idempotency_key: idempotencyKey,
       });
+      if (created.retry_of_run_id !== runId) {
+        throw new Error('Rerun response lineage does not match the selected Run.');
+      }
       rerunKeys.current.delete(runId);
       const detail = await loadConversation(conversationId);
       if (
