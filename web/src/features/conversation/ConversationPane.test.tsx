@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationDetail, Run } from '../../api';
 import type { WorkspaceState } from '../workspace/useWorkspace';
 import { ConversationPane } from './ConversationPane';
+
+afterEach(cleanup);
 
 const originalRun: Run = {
   id: 'run-original',
@@ -123,5 +125,64 @@ describe('ConversationPane', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Attempt 1' }));
 
     expect(workspace.selectRun).toHaveBeenCalledWith(originalRun.id);
+  });
+
+  it('renders messages by ascending ordinal when API input order and timestamps disagree', () => {
+    const workspace = workspaceWithRerun();
+    workspace.conversation = {
+      ...detail,
+      messages: [
+        {
+          ...detail.messages[3],
+          ordinal: 3,
+          created_at: '2026-10-19T23:59:59Z',
+        },
+        {
+          ...detail.messages[0],
+          ordinal: 1,
+          created_at: '2026-10-21T12:00:00Z',
+        },
+        {
+          ...detail.messages[1],
+          ordinal: 2,
+          created_at: '2026-10-20T00:00:00Z',
+        },
+        {
+          ...detail.messages[2],
+          ordinal: 4,
+          created_at: '2026-10-18T00:00:00Z',
+        },
+      ],
+    };
+
+    render(<ConversationPane workspace={workspace} />);
+
+    const contents = Array.from(
+      screen.getByLabelText('Message history').querySelectorAll('.message-block p'),
+      (element) => element.textContent,
+    );
+
+    expect(contents).toEqual([
+      'Check checkout',
+      'The first attempt passed login.',
+      'The rerun failed during checkout.',
+      'Continue after the login check.',
+    ]);
+    expect(screen.getByLabelText('Message history').querySelectorAll('.message-date-separator'))
+      .toHaveLength(3);
+  });
+
+  it('does not render state for a loaded Run that differs from the selected attempt', () => {
+    const workspace = workspaceWithRerun();
+    workspace.run = originalRun;
+
+    render(<ConversationPane workspace={workspace} />);
+
+    expect(screen.getByRole('button', { name: 'Attempt 2' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.queryByRole('region', { name: 'Run completed' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Rerun failed task' })).toBeNull();
   });
 });

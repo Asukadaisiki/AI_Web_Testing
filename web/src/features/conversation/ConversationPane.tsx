@@ -32,6 +32,13 @@ export function ConversationPane({ workspace }: Props): JSX.Element {
       )?.source_message_id ?? null,
     [workspace.conversation, workspace.selection.runId],
   );
+  const messages = useMemo(
+    () =>
+      [...(workspace.conversation?.messages ?? [])].sort(
+        (left, right) => left.ordinal - right.ordinal,
+      ),
+    [workspace.conversation],
+  );
 
   const title =
     workspace.conversation?.conversation.title?.trim() || 'Untitled conversation';
@@ -64,21 +71,22 @@ export function ConversationPane({ workspace }: Props): JSX.Element {
             <span className="loading-bar" />
             <p>Loading conversation...</p>
           </div>
-        ) : workspace.conversation.messages.length === 0 ? (
+        ) : messages.length === 0 ? (
           <div className="center-empty">
             <Bot size={28} />
             <h3>Start an evaluation</h3>
             <p>Select an authorized agent and model, then describe the goal.</p>
           </div>
         ) : (
-          workspace.conversation.messages.map((message, index) => {
+          messages.map((message, index) => {
             const runs = runsBySource.get(message.id);
-            const priorMessage = workspace.conversation?.messages[index - 1];
+            const priorMessage = messages[index - 1];
             const startsDate =
               priorMessage === undefined ||
               messageDateKey(priorMessage.created_at) !== messageDateKey(message.created_at);
             const selectedTask =
-              message.id === selectedTaskSourceId && workspace.run !== null;
+              message.id === selectedTaskSourceId &&
+              workspace.run?.id === workspace.selection.runId;
 
             return (
               <div key={message.id} className="timeline-entry">
