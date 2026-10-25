@@ -141,11 +141,15 @@ func (s *Store) CreateMessageAndRun(
 		return domain.Message{}, domain.Run{}, fmt.Errorf("marshal run specification: %w", err)
 	}
 	run, err := scanRun(tx.QueryRow(ctx, `
-		INSERT INTO runs (id, project_id, conversation_id, status, specification)
-		VALUES ($1, $2, $3, 'queued', $4::jsonb)
-		RETURNING id, project_id, conversation_id, status, specification, checkpoint_version,
+		INSERT INTO runs (
+			id, project_id, conversation_id, source_message_id, status, specification
+		)
+		VALUES ($1, $2, $3, $4, 'queued', $5::jsonb)
+		RETURNING id, project_id, conversation_id,
+		          COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		          status, specification, checkpoint_version,
 		          cancel_requested_at, started_at, finished_at, created_at, updated_at`,
-		runID, projectID, p.ConversationID, specification,
+		runID, projectID, p.ConversationID, message.ID, specification,
 	))
 	if err != nil {
 		return domain.Message{}, domain.Run{}, fmt.Errorf("insert run: %w", err)
@@ -229,7 +233,9 @@ func replayCreatedMessageAndRun(
 		return domain.Message{}, domain.Run{}, fmt.Errorf("read idempotent message: %w", err)
 	}
 	run, err := scanRun(tx.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id, status, specification, checkpoint_version,
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
 		       cancel_requested_at, started_at, finished_at, created_at, updated_at
 		FROM runs
 		WHERE id = $1`, response.RunID))
@@ -253,7 +259,9 @@ func (s *Store) ClaimRun(
 		WHERE id = $1
 		  AND status IN ('queued', 'running')
 		  AND checkpoint_version = $2
-		RETURNING id, project_id, conversation_id, status, specification, checkpoint_version,
+		RETURNING id, project_id, conversation_id,
+		          COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		          status, specification, checkpoint_version,
 		          cancel_requested_at, started_at, finished_at, created_at, updated_at`,
 		runID, expectedCheckpoint,
 	))

@@ -598,9 +598,12 @@ func (r *memoryRepository) GetRun(context.Context, string) (domain.Run, error) {
 	return r.run, nil
 }
 
-func (r *memoryRepository) GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error) {
+func (r *memoryRepository) GetConversation(
+	context.Context,
+	string,
+) (postgres.Conversation, []domain.Message, []domain.Run, error) {
 	r.loads++
-	return r.conversation, append([]domain.Message(nil), r.messages...), nil
+	return r.conversation, append([]domain.Message(nil), r.messages...), nil, nil
 }
 
 func (r *memoryRepository) ListTrace(context.Context, string) ([]domain.Span, error) {

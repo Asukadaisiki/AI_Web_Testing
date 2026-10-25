@@ -189,7 +189,7 @@ func TestListConversationsSerializesEmptyConversationsAsArray(t *testing.T) {
 	}
 }
 
-func TestGetConversationSerializesEmptyMessagesAsArray(t *testing.T) {
+func TestGetConversationSerializesEmptyHistoryAsArrays(t *testing.T) {
 	repository := &fakeRepository{conversation: postgres.Conversation{
 		ID: "conv_empty", ProjectID: "prj_1", Title: "Empty", Metadata: json.RawMessage(`{}`),
 	}}
@@ -201,6 +201,7 @@ func TestGetConversationSerializesEmptyMessagesAsArray(t *testing.T) {
 	}
 	var body struct {
 		Messages []json.RawMessage `json:"messages"`
+		Runs     []json.RawMessage `json:"runs"`
 	}
 	decodeJSON(t, response, &body)
 	if body.Messages == nil {
@@ -208,6 +209,53 @@ func TestGetConversationSerializesEmptyMessagesAsArray(t *testing.T) {
 	}
 	if len(body.Messages) != 0 {
 		t.Fatalf("messages = %#v, want []", body.Messages)
+	}
+	if body.Runs == nil {
+		t.Fatalf("runs = null, want []: %s", response.Body.String())
+	}
+	if len(body.Runs) != 0 {
+		t.Fatalf("runs = %#v, want []", body.Runs)
+	}
+}
+
+func TestGetConversationReturnsPublicRunLineageWithoutSpecification(t *testing.T) {
+	repository := &fakeRepository{
+		conversation: postgres.Conversation{
+			ID: "conv_1", ProjectID: "prj_1", Title: "History", Metadata: json.RawMessage(`{}`),
+		},
+		runs: []domain.Run{{
+			ID:              "run_1",
+			ProjectID:       "prj_1",
+			ConversationID:  "conv_1",
+			SourceMessageID: "msg_1",
+			RetryOfRunID:    "run_original",
+			Status:          domain.RunFailed,
+			Specification:   json.RawMessage(`{"secret":"must-not-leak"}`),
+		}},
+	}
+	handler := newTestServer(t, repository, stream.NewService(
+		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+	))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/conversations/conv_1", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body struct {
+		Runs []struct {
+			SourceMessageID string          `json:"source_message_id"`
+			RetryOfRunID    string          `json:"retry_of_run_id"`
+			Specification   json.RawMessage `json:"specification"`
+		} `json:"runs"`
+	}
+	decodeJSON(t, response, &body)
+	if len(body.Runs) != 1 ||
+		body.Runs[0].SourceMessageID != "msg_1" ||
+		body.Runs[0].RetryOfRunID != "run_original" {
+		t.Fatalf("run lineage = %#v", body.Runs)
+	}
+	if body.Runs[0].Specification != nil {
+		t.Fatalf("conversation run exposed specification: %s", body.Runs[0].Specification)
 	}
 }
 
@@ -814,6 +862,7 @@ type fakeRepository struct {
 	pendingOutbox          int
 	conversation           postgres.Conversation
 	messages               []domain.Message
+	runs                   []domain.Run
 	run                    domain.Run
 	trace                  postgres.TraceDetails
 	deleteErr              error
@@ -864,11 +913,14 @@ func (r *fakeRepository) DeleteConversation(_ context.Context, conversationID st
 	r.deletedConversationIDs[conversationID]++
 	return r.deleteErr
 }
-func (r *fakeRepository) GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error) {
+func (r *fakeRepository) GetConversation(
+	context.Context,
+	string,
+) (postgres.Conversation, []domain.Message, []domain.Run, error) {
 	if r.conversation.ID != "" {
-		return r.conversation, r.messages, nil
+		return r.conversation, r.messages, r.runs, nil
 	}
-	return postgres.Conversation{}, nil, postgres.ErrNotFound
+	return postgres.Conversation{}, nil, nil, postgres.ErrNotFound
 }
 func (r *fakeRepository) GetRun(context.Context, string) (domain.Run, error) {
 	if r.run.ID != "" {

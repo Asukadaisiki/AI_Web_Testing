@@ -24,7 +24,9 @@ func (s *Store) LoadRunCommand(ctx context.Context, runID string) (domain.Run, e
 		return domain.Run{}, event.RunCommand{}, errors.New("postgres store is not configured")
 	}
 	run, err := scanRun(s.pool.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id, status, specification, checkpoint_version,
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
 		       cancel_requested_at, started_at, finished_at, created_at, updated_at
 		FROM runs WHERE id = $1`, runID))
 	if err != nil {

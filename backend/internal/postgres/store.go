@@ -81,6 +81,8 @@ func scanRun(row rowScanner) (domain.Run, error) {
 		&run.ID,
 		&run.ProjectID,
 		&run.ConversationID,
+		&run.SourceMessageID,
+		&run.RetryOfRunID,
 		&run.Status,
 		&run.Specification,
 		&run.CheckpointVersion,

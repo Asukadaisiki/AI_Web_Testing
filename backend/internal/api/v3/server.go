@@ -33,7 +33,7 @@ type Repository interface {
 	ListConversations(context.Context, string) ([]postgres.Conversation, error)
 	CreateConversation(context.Context, postgres.CreateConversationParams) (postgres.Conversation, error)
 	DeleteConversation(context.Context, string) error
-	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error)
+	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, []domain.Run, error)
 	CreateMessageAndRun(context.Context, postgres.CreateMessageParams) (domain.Message, domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
 	GetTraceDetails(context.Context, string) (postgres.TraceDetails, error)

@@ -22,6 +22,8 @@ type Run struct {
 	ID                string          `json:"id"`
 	ProjectID         string          `json:"project_id"`
 	ConversationID    string          `json:"conversation_id"`
+	SourceMessageID   string          `json:"source_message_id,omitempty"`
+	RetryOfRunID      string          `json:"retry_of_run_id,omitempty"`
 	Status            RunStatus       `json:"status"`
 	Specification     json.RawMessage `json:"specification"`
 	CheckpointVersion int64           `json:"checkpoint_version"`

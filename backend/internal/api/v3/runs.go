@@ -22,6 +22,8 @@ type publicRun struct {
 	ID                string           `json:"id"`
 	ProjectID         string           `json:"project_id"`
 	ConversationID    string           `json:"conversation_id"`
+	SourceMessageID   string           `json:"source_message_id,omitempty"`
+	RetryOfRunID      string           `json:"retry_of_run_id,omitempty"`
 	Status            domain.RunStatus `json:"status"`
 	CheckpointVersion int64            `json:"checkpoint_version"`
 	CancelRequestedAt *time.Time       `json:"cancel_requested_at,omitempty"`
@@ -29,6 +31,23 @@ type publicRun struct {
 	FinishedAt        *time.Time       `json:"finished_at,omitempty"`
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
+}
+
+func toPublicRun(run domain.Run) publicRun {
+	return publicRun{
+		ID:                run.ID,
+		ProjectID:         run.ProjectID,
+		ConversationID:    run.ConversationID,
+		SourceMessageID:   run.SourceMessageID,
+		RetryOfRunID:      run.RetryOfRunID,
+		Status:            run.Status,
+		CheckpointVersion: run.CheckpointVersion,
+		CancelRequestedAt: run.CancelRequestedAt,
+		StartedAt:         run.StartedAt,
+		FinishedAt:        run.FinishedAt,
+		CreatedAt:         run.CreatedAt,
+		UpdatedAt:         run.UpdatedAt,
+	}
 }
 
 type publicTraceAttempt struct {
@@ -152,18 +171,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, publicRun{
-		ID:                run.ID,
-		ProjectID:         run.ProjectID,
-		ConversationID:    run.ConversationID,
-		Status:            run.Status,
-		CheckpointVersion: run.CheckpointVersion,
-		CancelRequestedAt: run.CancelRequestedAt,
-		StartedAt:         run.StartedAt,
-		FinishedAt:        run.FinishedAt,
-		CreatedAt:         run.CreatedAt,
-		UpdatedAt:         run.UpdatedAt,
-	})
+	writeJSON(w, http.StatusOK, toPublicRun(run))
 }
 
 func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {

@@ -53,7 +53,7 @@ func (e permanentDeliveryError) Permanent() bool {
 type Repository interface {
 	GetProject(context.Context, string) (postgres.Project, error)
 	GetRun(context.Context, string) (domain.Run, error)
-	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error)
+	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, []domain.Run, error)
 	ListTrace(context.Context, string) ([]domain.Span, error)
 }
 
@@ -267,7 +267,7 @@ func (e *Exporter) exportCompletion(ctx context.Context, envelope event.Envelope
 	if err != nil {
 		return fmt.Errorf("load canonical project: %w", err)
 	}
-	conversation, messages, err := e.Repository.GetConversation(ctx, run.ConversationID)
+	conversation, messages, _, err := e.Repository.GetConversation(ctx, run.ConversationID)
 	if err != nil {
 		return fmt.Errorf("load canonical conversation: %w", err)
 	}

@@ -177,37 +177,67 @@ func (s *Store) CreateConversation(ctx context.Context, p CreateConversationPara
 	return conversation, nil
 }
 
-func (s *Store) GetConversation(ctx context.Context, conversationID string) (Conversation, []domain.Message, error) {
+func (s *Store) GetConversation(
+	ctx context.Context,
+	conversationID string,
+) (Conversation, []domain.Message, []domain.Run, error) {
 	if s == nil || s.pool == nil {
-		return Conversation{}, nil, errors.New("postgres store is not configured")
+		return Conversation{}, nil, nil, errors.New("postgres store is not configured")
 	}
 	conversation, err := scanConversation(s.pool.QueryRow(ctx, `
 		SELECT id, project_id, COALESCE(title, ''), metadata, created_at, updated_at
 		FROM conversations WHERE id = $1`, conversationID))
 	if err != nil {
-		return Conversation{}, nil, fmt.Errorf("get conversation: %w", err)
+		return Conversation{}, nil, nil, fmt.Errorf("get conversation: %w", err)
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, conversation_id, COALESCE(run_id, ''), ordinal, role, content, metadata, created_at
+		SELECT id, conversation_id, COALESCE(run_id, metadata ->> 'run_id', ''),
+		       ordinal, role, content, metadata, created_at
 		FROM messages
 		WHERE conversation_id = $1
 		ORDER BY ordinal ASC`, conversationID)
 	if err != nil {
-		return Conversation{}, nil, fmt.Errorf("list conversation messages: %w", err)
+		return Conversation{}, nil, nil, fmt.Errorf("list conversation messages: %w", err)
 	}
-	defer rows.Close()
 	var messages []domain.Message
 	for rows.Next() {
 		message, err := scanMessage(rows)
 		if err != nil {
-			return Conversation{}, nil, err
+			rows.Close()
+			return Conversation{}, nil, nil, err
 		}
 		messages = append(messages, message)
 	}
 	if err := rows.Err(); err != nil {
-		return Conversation{}, nil, fmt.Errorf("iterate conversation messages: %w", err)
+		rows.Close()
+		return Conversation{}, nil, nil, fmt.Errorf("iterate conversation messages: %w", err)
 	}
-	return conversation, messages, nil
+	rows.Close()
+
+	runRows, err := s.pool.Query(ctx, `
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
+		       cancel_requested_at, started_at, finished_at, created_at, updated_at
+		FROM runs
+		WHERE conversation_id = $1
+		ORDER BY created_at, id`, conversationID)
+	if err != nil {
+		return Conversation{}, nil, nil, fmt.Errorf("list conversation runs: %w", err)
+	}
+	defer runRows.Close()
+	var runs []domain.Run
+	for runRows.Next() {
+		run, err := scanRun(runRows)
+		if err != nil {
+			return Conversation{}, nil, nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := runRows.Err(); err != nil {
+		return Conversation{}, nil, nil, fmt.Errorf("iterate conversation runs: %w", err)
+	}
+	return conversation, messages, runs, nil
 }
 
 func (s *Store) GetRun(ctx context.Context, runID string) (domain.Run, error) {
@@ -215,7 +245,9 @@ func (s *Store) GetRun(ctx context.Context, runID string) (domain.Run, error) {
 		return domain.Run{}, errors.New("postgres store is not configured")
 	}
 	run, err := scanRun(s.pool.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id, status, specification, checkpoint_version,
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
 		       cancel_requested_at, started_at, finished_at, created_at, updated_at
 		FROM runs WHERE id = $1`, runID))
 	if err != nil {
@@ -459,7 +491,9 @@ func (s *Store) RequestCancel(ctx context.Context, runID string) error {
 	}
 	defer tx.Rollback(ctx)
 	run, err := scanRun(tx.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id, status, specification, checkpoint_version,
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
 		       cancel_requested_at, started_at, finished_at, created_at, updated_at
 		FROM runs WHERE id = $1 FOR UPDATE`, runID))
 	if err != nil {
@@ -511,7 +545,9 @@ func (s *Store) SubmitResponse(ctx context.Context, p SubmitResponseParams) erro
 		return err
 	}
 	run, err := scanRun(tx.QueryRow(ctx, `
-		SELECT id, project_id, conversation_id, status, specification, checkpoint_version,
+		SELECT id, project_id, conversation_id,
+		       COALESCE(source_message_id, ''), COALESCE(retry_of_run_id, ''),
+		       status, specification, checkpoint_version,
 		       cancel_requested_at, started_at, finished_at, created_at, updated_at
 		FROM runs WHERE id = $1 FOR UPDATE`, p.RunID))
 	if err != nil {

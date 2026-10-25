@@ -34,6 +34,51 @@ func TestGetProjectReturnsCanonicalMetadata(t *testing.T) {
 	}
 }
 
+func TestGetConversationReturnsRunsAndAttributableMessages(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+	userMessage, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+		ConversationID: conversationID,
+		Content:        "verify the cart",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+		IdempotencyKey: "conversation-history",
+	})
+	if err != nil {
+		t.Fatalf("create message and run: %v", err)
+	}
+	completedAt := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	if err := store.FinishRun(ctx, run.ID, domain.RunSucceeded, nil, "cart passed",
+		event.Envelope[json.RawMessage]{
+			SchemaVersion: "agenttrace.event.v1",
+			EventID:       "evt-conversation-history",
+			EventType:     "runtime.completed",
+			AggregateID:   run.ID,
+			CorrelationID: run.ID,
+			OccurredAt:    completedAt,
+			Payload:       json.RawMessage(`{"status":"succeeded"}`),
+		}); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+
+	conversation, messages, runs, err := store.GetConversation(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if conversation.ID != conversationID || len(runs) != 1 {
+		t.Fatalf("conversation=%#v runs=%#v", conversation, runs)
+	}
+	if runs[0].SourceMessageID != userMessage.ID || runs[0].RetryOfRunID != "" {
+		t.Fatalf("run lineage = %#v", runs[0])
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %#v, want user and assistant messages", messages)
+	}
+	if got := messages[len(messages)-1].RunID; got != run.ID {
+		t.Fatalf("assistant run_id = %q, want %q", got, run.ID)
+	}
+}
+
 func TestResponsePersistsMessageAndContinuationOutbox(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)

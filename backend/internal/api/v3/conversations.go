@@ -52,7 +52,7 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRepository(w) {
 		return
 	}
-	conversation, messages, err := s.repository.GetConversation(r.Context(), r.PathValue("id"))
+	conversation, messages, runs, err := s.repository.GetConversation(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeRepositoryError(w, err)
 		return
@@ -60,9 +60,14 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	if messages == nil {
 		messages = []domain.Message{}
 	}
+	publicRuns := make([]publicRun, 0, len(runs))
+	for _, run := range runs {
+		publicRuns = append(publicRuns, toPublicRun(run))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conversation": conversation,
 		"messages":     messages,
+		"runs":         publicRuns,
 	})
 }
 

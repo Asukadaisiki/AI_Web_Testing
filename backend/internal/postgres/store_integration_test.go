@@ -66,6 +66,83 @@ func TestCreateMessageAndRunReplaysMatchingIdempotencyRequest(t *testing.T) {
 	assertRowCount(t, ctx, pool, "outbox_events", 1)
 }
 
+func TestCreateMessageSetsRunLineage(t *testing.T) {
+	ctx, pool, store := newRepositoryTestStore(t)
+	conversationID := createConversationFixture(t, ctx, pool)
+
+	message, run, err := store.CreateMessageAndRun(ctx, CreateMessageParams{
+		ConversationID: conversationID,
+		Content:        "verify the cart",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+		IdempotencyKey: "message-lineage",
+	})
+	if err != nil {
+		t.Fatalf("create message and run: %v", err)
+	}
+
+	if run.SourceMessageID != message.ID || run.RetryOfRunID != "" {
+		t.Fatalf("run lineage = %#v", run)
+	}
+}
+
+func TestRunLineageMigrationBackfillsExistingRows(t *testing.T) {
+	dsn := os.Getenv("AGENTTRACE_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("AGENTTRACE_TEST_POSTGRES_DSN is not configured")
+	}
+	if _, err := repositoryTestDatabaseName(dsn); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect test database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	resetDatabase(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`); err != nil {
+		t.Fatalf("create migration ledger: %v", err)
+	}
+	for _, migration := range []string{
+		"001_initial.sql",
+		"002_outbox_claim_token.sql",
+		"003_consumer_retry_counts.sql",
+	} {
+		if err := applyMigration(ctx, pool, migration); err != nil {
+			t.Fatalf("apply %s: %v", migration, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO projects (id, name) VALUES ('prj_legacy', 'Legacy');
+		INSERT INTO conversations (id, project_id) VALUES ('conv_legacy', 'prj_legacy');
+		INSERT INTO runs (id, project_id, conversation_id, status, specification)
+		VALUES ('run_legacy', 'prj_legacy', 'conv_legacy', 'failed', '{}');
+		INSERT INTO messages (id, conversation_id, run_id, ordinal, role, content)
+		VALUES ('msg_legacy', 'conv_legacy', 'run_legacy', 1, 'user', 'legacy request')`); err != nil {
+		t.Fatalf("seed legacy run lineage: %v", err)
+	}
+
+	if err := applyMigration(ctx, pool, "004_run_lineage.sql"); err != nil {
+		t.Fatalf("apply 004_run_lineage.sql: %v", err)
+	}
+	var sourceMessageID string
+	if err := pool.QueryRow(ctx, `
+		SELECT source_message_id
+		FROM runs
+		WHERE id = 'run_legacy'`).Scan(&sourceMessageID); err != nil {
+		t.Fatalf("read backfilled source message: %v", err)
+	}
+	if sourceMessageID != "msg_legacy" {
+		t.Fatalf("source_message_id = %q, want %q", sourceMessageID, "msg_legacy")
+	}
+}
+
 func TestFinishRunPersistsOneAssistantMessage(t *testing.T) {
 	ctx, pool, store := newRepositoryTestStore(t)
 	conversationID := createConversationFixture(t, ctx, pool)
