@@ -195,7 +195,10 @@ async def ensure_actionable(
 async def click_target(page: Page, locator: Locator, timeout_ms: int) -> list[RecoveryAttempt]:
     recovery = await ensure_actionable(page, locator, timeout_ms)
     try:
-        await locator.click(timeout=timeout_ms)
+        # `ensure_actionable` already performed the worker's hit-test and blocker
+        # policy. Repeating Playwright's actionability wait here creates a race
+        # with ad-heavy pages that mutate between the two checks.
+        await locator.click(timeout=timeout_ms, force=True)
     except PlaywrightTimeoutError as exc:
         raise step_timeout(f"click timed out after {timeout_ms}ms") from exc
     except PlaywrightError as exc:

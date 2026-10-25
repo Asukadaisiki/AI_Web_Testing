@@ -427,7 +427,8 @@ test.describe.serial('AgentTrace workspace', () => {
     });
 
     const operation = page.getByRole('treeitem', {
-      name: 'Trace node: operation',
+      name: 'operation',
+      exact: true,
     });
     await expect(operation).toBeVisible();
     await operation.click();

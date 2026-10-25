@@ -69,6 +69,7 @@ type DeliveryGate interface {
 
 // RetryStore owns durable failure counts and one-time DLQ handoff.
 type RetryStore interface {
+	DLQEventID(string) string
 	Increment(context.Context, string, []byte) (RetryIncrement, error)
 	Clear(context.Context, string) error
 	HandoffDLQ(context.Context, string, DLQHandoff) error
@@ -177,8 +178,8 @@ func (e *Exporter) Handle(ctx context.Context, message eventbus.Message) (handle
 			}
 		}()
 	}
-	outboxEventID := stableID("langfuse-dlq", eventID)
 	if e.RetryStore != nil {
+		outboxEventID := e.RetryStore.DLQEventID(eventID)
 		handedOff, err := e.RetryStore.HasDLQHandoff(ctx, eventID, outboxEventID)
 		if err != nil {
 			return fmt.Errorf("check Langfuse export DLQ handoff: %w", err)
@@ -584,7 +585,7 @@ func (e *Exporter) recordFailureWithPolicy(
 		return errors.New("marshal Langfuse export DLQ payload")
 	}
 	handoff := DLQHandoff{
-		EventID: stableID("langfuse-dlq", eventID),
+		EventID: e.RetryStore.DLQEventID(eventID),
 		Topic:   DLQTopic,
 		Key:     message.Key,
 		Payload: payload,
@@ -705,12 +706,16 @@ type PostgresRetryStore struct {
 	Consumer string
 }
 
+func (s PostgresRetryStore) DLQEventID(eventID string) string {
+	return stableID("langfuse-dlq", s.Consumer, eventID)
+}
+
 func (s PostgresRetryStore) Increment(ctx context.Context, eventID string, payload []byte) (RetryIncrement, error) {
 	increment, err := s.Store.IncrementConsumerRetryUnlessDLQHandoff(
 		ctx,
 		s.Consumer,
 		eventID,
-		stableID("langfuse-dlq", eventID),
+		s.DLQEventID(eventID),
 		payload,
 	)
 	if err != nil {

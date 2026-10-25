@@ -411,6 +411,12 @@ func TestConsumerDLQHandoffMovesRetryStateToOneOutboxEvent(t *testing.T) {
 	if err := store.HandoffConsumerRetryToOutbox(ctx, consumer, retryID, outboxID, topic, key, dlqPayload); err != nil {
 		t.Fatalf("idempotent handoff consumer retry to outbox: %v", err)
 	}
+	mismatchedPayload := []byte(`{"original":{"event_id":"evt-dlq-handoff"},"error":"different failure","attempt":2}`)
+	if err := store.HandoffConsumerRetryToOutbox(
+		ctx, consumer, retryID, outboxID, topic, key, mismatchedPayload,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mismatched DLQ handoff error = %v, want ErrConflict", err)
+	}
 
 	var retryRows, outboxRows int
 	if err := pool.QueryRow(ctx, `

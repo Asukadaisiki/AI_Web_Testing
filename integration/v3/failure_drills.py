@@ -14,7 +14,6 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
@@ -136,7 +135,7 @@ class FailureDrills:
             scenario = self._submit_run(workspace, "kafka-outage")
             self._wait(
                 "Kafka outage leaves a queued run and unpublished command outbox event",
-                lambda: self._queued_command(scenario.run_id),
+                lambda: self._queued_unpublished_command(scenario.run_id),
                 run_id=scenario.run_id,
             )
         finally:
@@ -181,7 +180,7 @@ class FailureDrills:
             scenario = self._submit_run(workspace, "runtime-restart")
             self._wait(
                 "killed runtime leaves a queued durable command",
-                lambda: self._queued_command(scenario.run_id),
+                lambda: self._queued_durable_command(scenario.run_id),
                 run_id=scenario.run_id,
             )
         finally:
@@ -232,13 +231,6 @@ class FailureDrills:
         """An optional exporter failure cannot block local completion."""
         try:
             self._ensure_exporter()
-            # A unique fixture consumer replays retained completions from the
-            # beginning. Wait until each completion is committed or sent to DLQ.
-            self._wait(
-                "exporter catches up with retained completion events",
-                self._exporter_caught_up,
-                timeout=300.0,
-            )
             scenario: Scenario | None = None
             completion_event_id = ""
             self._stop("exporter")
@@ -421,7 +413,7 @@ class FailureDrills:
                 f"unique_completed_spans={unique_completed_spans}"
             )
 
-    def _queued_command(self, run_id: str) -> bool:
+    def _queued_unpublished_command(self, run_id: str) -> bool:
         status, published_at = self._row(
             """
             SELECT runs.status, outbox_events.published_at
@@ -436,6 +428,22 @@ class FailureDrills:
         if status != "queued":
             raise AssertionError(f"run {run_id} status={status!r}, want queued")
         return published_at is None
+
+    def _queued_durable_command(self, run_id: str) -> bool:
+        status, _ = self._row(
+            """
+            SELECT runs.status, outbox_events.published_at
+            FROM runs
+            JOIN outbox_events
+              ON outbox_events.key = runs.id
+             AND outbox_events.topic = %s
+            WHERE runs.id = %s
+            """,
+            (COMMAND_TOPIC, run_id),
+        )
+        if status != "queued":
+            raise AssertionError(f"run {run_id} status={status!r}, want queued")
+        return True
 
     def _assert_rejected_postgres_request_absent(
         self, *, conversation_id: str, idempotency_key: str
@@ -520,52 +528,6 @@ class FailureDrills:
             (self.exporter_consumer, completion_event_id),
         )
         return int(attempt_count) >= 2
-
-    def _exporter_caught_up(self) -> bool:
-        with psycopg.connect(POSTGRES_DSN, connect_timeout=5) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT event_id
-                    FROM outbox_events
-                    WHERE topic = %s
-                      AND payload ->> 'event_type' = 'runtime.completed'
-                    """,
-                    (EVENT_TOPIC,),
-                )
-                event_ids = [str(row[0]) for row in cursor.fetchall()]
-                if not event_ids:
-                    return True
-                cursor.execute(
-                    """
-                    SELECT event_id
-                    FROM inbox_events
-                    WHERE consumer = %s AND event_id = ANY(%s)
-                    """,
-                    (self.exporter_consumer, event_ids),
-                )
-                observed = {str(row[0]) for row in cursor.fetchall()}
-                dlq_ids = {
-                    self._langfuse_dlq_id(event_id): event_id
-                    for event_id in event_ids
-                }
-                cursor.execute(
-                    """
-                    SELECT event_id
-                    FROM outbox_events
-                    WHERE event_id = ANY(%s)
-                    """,
-                    (
-                        list(dlq_ids),
-                    ),
-                )
-                observed.update(dlq_ids[str(row[0])] for row in cursor.fetchall())
-        return set(event_ids).issubset(observed)
-
-    @staticmethod
-    def _langfuse_dlq_id(event_id: str) -> str:
-        digest = sha256(b"\0" + event_id.encode("utf-8")).hexdigest()[:32]
-        return f"langfuse-dlq_{digest}"
 
     def _command_envelope(self, run_id: str) -> tuple[str, str]:
         payload, event_id = self._row(
@@ -726,6 +688,21 @@ class FailureDrills:
             raise AssertionError(
                 "exporter is already running; refusing to replace operator configuration"
             )
+        self._compose(
+            "exec",
+            "-T",
+            "kafka",
+            "/opt/kafka/bin/kafka-consumer-groups.sh",
+            "--bootstrap-server",
+            "kafka:9092",
+            "--group",
+            self.exporter_consumer,
+            "--topic",
+            EVENT_TOPIC,
+            "--reset-offsets",
+            "--to-latest",
+            "--execute",
+        )
         environment = dict(EXPORTER_FIXTURE_ENV)
         environment["AGENTTRACE_LANGFUSE_GROUP_ID"] = self.exporter_consumer
         # Once provisioning starts, this drill owns any container Compose may

@@ -29,8 +29,10 @@ const (
 type Repository interface {
 	ListProjects(context.Context) ([]postgres.Project, error)
 	CreateProject(context.Context, postgres.CreateProjectParams) (postgres.Project, error)
+	DeleteProject(context.Context, string) error
 	ListConversations(context.Context, string) ([]postgres.Conversation, error)
 	CreateConversation(context.Context, postgres.CreateConversationParams) (postgres.Conversation, error)
+	DeleteConversation(context.Context, string) error
 	GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error)
 	CreateMessageAndRun(context.Context, postgres.CreateMessageParams) (domain.Message, domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
@@ -108,9 +110,11 @@ func New(config ServerConfig) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/projects", server.handleListProjects)
 	mux.HandleFunc("POST /api/v1/projects", server.handleCreateProject)
+	mux.HandleFunc("DELETE /api/v1/projects/{id}", server.handleDeleteProject)
 	mux.HandleFunc("GET /api/v1/projects/{id}/conversations", server.handleListConversations)
 	mux.HandleFunc("POST /api/v1/projects/{id}/conversations", server.handleCreateConversation)
 	mux.HandleFunc("GET /api/v1/conversations/{id}", server.handleGetConversation)
+	mux.HandleFunc("DELETE /api/v1/conversations/{id}", server.handleDeleteConversation)
 	mux.HandleFunc("POST /api/v1/conversations/{id}/messages", server.handleCreateMessage)
 	mux.HandleFunc("GET /api/v1/runs/{id}", server.handleGetRun)
 	mux.HandleFunc("GET /api/v1/runs/{id}/trace", server.handleGetTrace)

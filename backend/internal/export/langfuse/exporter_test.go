@@ -661,6 +661,10 @@ func newMemoryRetryStore() *memoryRetryStore {
 	}
 }
 
+func (s *memoryRetryStore) DLQEventID(eventID string) string {
+	return stableID("langfuse-dlq", eventID)
+}
+
 func (s *memoryRetryStore) Increment(_ context.Context, eventID string, _ []byte) (RetryIncrement, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

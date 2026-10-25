@@ -110,3 +110,23 @@ func TestOperatorFilesDescribePortableV3Startup(t *testing.T) {
 		t.Error("worker package documentation still points to the retired v2 contract")
 	}
 }
+
+func TestComposeEnablesParallelRuntimeDelivery(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "compose.yaml"))
+	if err != nil {
+		t.Fatalf("read compose.yaml: %v", err)
+	}
+	compose := string(content)
+	if !strings.Contains(compose, `AGENTTRACE_KAFKA_PARTITIONS: "8"`) {
+		t.Error("Compose Kafka topics must target eight partitions for high-concurrency workspace runs")
+	}
+	if !strings.Contains(compose, "kafka_init_topics.sh") {
+		t.Error("Compose must run the partition-upgrading Kafka topic initializer")
+	}
+	if !strings.Contains(
+		compose,
+		"AGENTTRACE_RUNTIME_CONCURRENCY: ${AGENTTRACE_RUNTIME_CONCURRENCY:-4}",
+	) {
+		t.Error("Compose runtime must default to four concurrent command workers")
+	}
+}

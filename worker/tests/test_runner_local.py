@@ -34,7 +34,7 @@ from loop_worker.evidence import (  # noqa: E402
     session_dir,
 )
 from loop_worker.observer import observe_page  # noqa: E402
-from loop_worker.runner import run_case  # noqa: E402
+from loop_worker.runner import install_resource_filter, run_case  # noqa: E402
 
 #: 执行器要求每个 case 都声明产物归哪个会话（CONTRACT §9.2）。
 TEST_SESSION = "sess_test"
@@ -96,6 +96,36 @@ def action_step(
 
 
 class RunnerEndToEndTest(unittest.TestCase):
+    def test_resource_filter_aborts_only_configured_hosts(self) -> None:
+        run(self._resource_filter_aborts_only_configured_hosts())
+
+    async def _resource_filter_aborts_only_configured_hosts(self) -> None:
+        handlers = []
+        context = mock.AsyncMock()
+
+        async def capture_handler(pattern, handler):
+            self.assertEqual(pattern, "**/*")
+            handlers.append(handler)
+
+        context.route.side_effect = capture_handler
+        with mock.patch.dict(
+            os.environ,
+            {"LOOP_BLOCKED_RESOURCE_HOSTS": "ads.example, metrics.example"},
+        ):
+            await install_resource_filter(context)
+
+        blocked = mock.AsyncMock()
+        blocked.request.url = "https://ads.example/script.js"
+        allowed = mock.AsyncMock()
+        allowed.request.url = "https://automationexercise.com/login"
+        await handlers[0](blocked)
+        await handlers[0](allowed)
+
+        blocked.abort.assert_awaited_once_with()
+        blocked.continue_.assert_not_awaited()
+        allowed.continue_.assert_awaited_once_with()
+        allowed.abort.assert_not_awaited()
+
     def test_input_with_submit_presses_enter(self) -> None:
         run(self._input_with_submit_presses_enter())
 

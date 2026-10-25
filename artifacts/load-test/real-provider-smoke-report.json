@@ -1,0 +1,53 @@
+{
+  "batch": "3ea45b728119",
+  "cancelled_runs": 0,
+  "config": {
+    "conversations_per_project": 1,
+    "delivery_timeout_seconds": 60,
+    "projects": 1,
+    "run_timeout_seconds": 300,
+    "runs_per_conversation": 1,
+    "submit_workers": 1
+  },
+  "conversations": 1,
+  "cross_conversation_messages": 0,
+  "cross_project_runs": 0,
+  "dlq_events": 0,
+  "duplicate_message_ordinals": 0,
+  "expected_conversations": 1,
+  "expected_projects": 1,
+  "failed_runs": 0,
+  "failures": [],
+  "kafka_partitions": 1,
+  "minimum_peak_concurrency": 1,
+  "model": "glm-5.3-flash",
+  "operation_results": 1,
+  "peak_concurrency": 1,
+  "pending_outbox": 0,
+  "projects": 1,
+  "provider": "openai-compatible",
+  "redis_streams": 1,
+  "requested_runs": 1,
+  "run_duration_seconds": {
+    "max": 34.049,
+    "min": 34.049,
+    "p50": 34.049,
+    "p95": 34.049
+  },
+  "run_ids": [
+    "run_bf6476033bbf668e1a7ba5940d444e3c"
+  ],
+  "runs_with_artifacts": 0,
+  "runs_with_events": 1,
+  "runs_with_operations": 1,
+  "runs_with_screenshots": 1,
+  "runs_with_spans": 1,
+  "runs_with_usage": 1,
+  "scenario": "real-provider-load",
+  "submitted_runs": 1,
+  "succeeded_runs": 1,
+  "timed_out_runs": 0,
+  "total_tokens": 2049,
+  "unprocessed_commands": 0,
+  "wall_seconds": 34.977
+}

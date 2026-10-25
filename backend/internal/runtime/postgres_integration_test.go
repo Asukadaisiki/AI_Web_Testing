@@ -268,6 +268,47 @@ func TestPostgresRuntimeInboxTombstoneSkipsLateCommandAfterFixtureRunDeletion(t 
 	}
 }
 
+func TestPostgresCheckpointStoreClaimsQueuedRunOnFirstLoad(t *testing.T) {
+	ctx, _, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Claim fixture"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID,
+		Title:     "Claim queued run",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "claim on runtime load",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
+		IdempotencyKey: "claim-on-load",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	checkpoint, err := (PostgresCheckpointStore{Store: store}).Load(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("load queued checkpoint: %v", err)
+	}
+	claimed, err := store.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get claimed run: %v", err)
+	}
+	if claimed.Status != domain.RunRunning || claimed.StartedAt == nil {
+		t.Fatalf("claimed run = %#v, want running with started_at", claimed)
+	}
+	if claimed.CheckpointVersion != 1 || checkpoint.NextCheckpoint != 1 {
+		t.Fatalf("checkpoint versions = run %d load %d, want 1",
+			claimed.CheckpointVersion, checkpoint.NextCheckpoint)
+	}
+}
+
 func TestPostgresRetryStoreHandsWhitespaceEventIDToDLQ(t *testing.T) {
 	ctx, pool, store := newRuntimePostgresStore(t)
 	runner := &recordingRunner{err: errors.New("permanent failure")}

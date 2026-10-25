@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 WORKER_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = Path(__file__).resolve().parent
@@ -23,6 +24,29 @@ from loop_worker.runner import run_case  # noqa: E402
 
 
 class GenericActionV2Test(unittest.TestCase):
+    def test_click_does_not_repeat_actionability_after_hit_test(self) -> None:
+        run(self._click_does_not_repeat_actionability_after_hit_test())
+
+    async def _click_does_not_repeat_actionability_after_hit_test(self) -> None:
+        class LocatorAfterVerifiedHitTest:
+            clicked = False
+
+            async def click(self, *, timeout: int, force: bool = False) -> None:
+                if not force:
+                    raise TimeoutError(
+                        "the page changed after the worker's verified hit-test"
+                    )
+                self.clicked = True
+
+        locator = LocatorAfterVerifiedHitTest()
+        with (
+            patch.object(actions, "ensure_actionable", AsyncMock(return_value=[])),
+            patch.object(actions, "wait_for_stable", AsyncMock()),
+        ):
+            await actions.click_target(object(), locator, 1000)
+
+        self.assertTrue(locator.clicked)
+
     def test_form_actions_and_target_assertions_execute_in_browser(self) -> None:
         run(self._form_actions_and_target_assertions_execute_in_browser())
 

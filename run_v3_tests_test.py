@@ -43,6 +43,7 @@ class V3RunnerTest(unittest.TestCase):
         self.assertEqual(
             [command for _, command, _ in executor.calls],
             [
+                (sys.executable, "-m", "unittest", "run_v3_tests_test.py"),
                 (
                     "docker",
                     "compose",
@@ -64,6 +65,30 @@ class V3RunnerTest(unittest.TestCase):
                     "./...",
                 ),
                 ("uv", "run", "python", "-m", "unittest", "discover", "-s", "tests", "-t", "."),
+                (
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "../integration/v3",
+                    "-p",
+                    "test_automation_exercise_scenario.py",
+                ),
+                (
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "../integration/v3",
+                    "-p",
+                    "test_real_provider_load_scenario.py",
+                ),
                 ("npm", "test", "--", "--run"),
                 ("npm", "run", "build"),
                 (
@@ -79,6 +104,14 @@ class V3RunnerTest(unittest.TestCase):
                     "run",
                     "--with",
                     "psycopg[binary]>=3.2,<4",
+                    "python",
+                    "integration/v3/concurrent_delete_scenario.py",
+                ),
+                (
+                    "uv",
+                    "run",
+                    "--with",
+                    "psycopg[binary]>=3.2,<4",
                     "--python",
                     sys.executable,
                     "python",
@@ -87,7 +120,7 @@ class V3RunnerTest(unittest.TestCase):
                 ("npm", "run", "test:e2e"),
             ],
         )
-        go_env = executor.calls[0][2]
+        go_env = executor.calls[1][2]
         self.assertEqual(
             go_env["AGENTTRACE_TEST_POSTGRES_DSN"],
             "postgres://agenttrace:agenttrace@postgres:5432/"
@@ -96,7 +129,7 @@ class V3RunnerTest(unittest.TestCase):
         self.assertEqual(go_env["AGENTTRACE_TEST_KAFKA_BROKERS"], "kafka:9092")
         self.assertEqual(go_env["AGENTTRACE_TEST_REDIS_ADDR"], "redis:6379")
         self.assertEqual(go_env["AGENTTRACE_TEST_REDIS_DB"], "15")
-        self.assertEqual(executor.calls[2][2]["npm_config_cache"], "/tmp/agenttrace-npm-cache")
+        self.assertEqual(executor.calls[5][2]["npm_config_cache"], "/tmp/agenttrace-npm-cache")
 
     def test_stops_at_first_failure_and_prints_the_exact_command(self) -> None:
         executor = RecordingExecutor({("npm", "test", "--", "--run")})
@@ -114,7 +147,7 @@ class V3RunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(run_v3_tests.CommandFailed, "npm test -- --run"):
             runner.run_layers()
 
-        self.assertEqual(len(executor.calls), 3)
+        self.assertEqual(len(executor.calls), 6)
         self.assertIn(
             "FAILED COMMAND: (cd /workspace/web && npm test -- --run)",
             output.getvalue(),

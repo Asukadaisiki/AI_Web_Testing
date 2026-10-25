@@ -48,6 +48,19 @@ func TestEnabledConfigurationRunsCompositionAndReturnsItsError(t *testing.T) {
 	}
 }
 
+func TestExporterConsumerNameUsesConfiguredKafkaGroupForDurableIdentity(t *testing.T) {
+	const group = "agenttrace-langfuse-exporter-failure-isolated"
+	name, err := exporterConsumerName(config.Exporter{
+		Langfuse: config.Langfuse{GroupID: group},
+	})
+	if err != nil {
+		t.Fatalf("resolve exporter consumer name: %v", err)
+	}
+	if name != group {
+		t.Fatalf("consumer name = %q, want %q", name, group)
+	}
+}
+
 func TestConsumeLoopStopsOnContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	bus := &blockingEventBus{started: make(chan eventbus.Message, 1)}

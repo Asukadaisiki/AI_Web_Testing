@@ -12,8 +12,10 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.async_api import Browser
 
@@ -55,6 +57,28 @@ from .locators import to_playwright_locator
 from .observer import new_id
 
 
+async def install_resource_filter(context) -> None:  # noqa: ANN001
+    configured = os.environ.get("LOOP_BLOCKED_RESOURCE_HOSTS", "")
+    blocked_hosts = {
+        host.strip().lower() for host in configured.split(",") if host.strip()
+    }
+    if not blocked_hosts:
+        return
+
+    async def route_request(route) -> None:  # noqa: ANN001
+        host = (urlsplit(route.request.url).hostname or "").lower()
+        blocked = any(
+            host == candidate or host.endswith(f".{candidate}")
+            for candidate in blocked_hosts
+        )
+        if blocked:
+            await route.abort()
+        else:
+            await route.continue_()
+
+    await context.route("**/*", route_request)
+
+
 async def run_case(
     case: dict[str, Any] | Case,
     *,
@@ -85,6 +109,7 @@ async def run_case(
         )
 
     context = await browser.new_context(viewport={"width": 1280, "height": 800})
+    await install_resource_filter(context)
     page = await context.new_page()
     # 兜底超时：不让任何漏传 timeout 的 Playwright 调用吃默认的 30s
     page.set_default_timeout(DEFAULT_STEP_TIMEOUT_MS)

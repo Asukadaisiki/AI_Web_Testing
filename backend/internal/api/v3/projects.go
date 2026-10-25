@@ -48,3 +48,14 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, project)
 }
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepository(w) {
+		return
+	}
+	if err := s.repository.DeleteProject(r.Context(), r.PathValue("id")); err != nil {
+		writeRepositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -65,3 +65,14 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 		"messages":     messages,
 	})
 }
+
+func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepository(w) {
+		return
+	}
+	if err := s.repository.DeleteConversation(r.Context(), r.PathValue("id")); err != nil {
+		writeRepositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

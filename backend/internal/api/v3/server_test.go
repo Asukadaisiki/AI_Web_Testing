@@ -121,6 +121,53 @@ func TestListProjectsSerializesEmptyProjectsAsArray(t *testing.T) {
 	}
 }
 
+func TestDeleteWorkspaceResourcesExposeIdempotentNoContentRoutes(t *testing.T) {
+	repository := &fakeRepository{}
+	handler := newTestServer(t, repository, stream.NewService(
+		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+	))
+
+	for _, test := range []struct {
+		path string
+	}{
+		{path: "/api/v1/projects/prj_1"},
+		{path: "/api/v1/conversations/conv_1"},
+	} {
+		for attempt := 1; attempt <= 2; attempt++ {
+			response := request(t, handler, http.MethodDelete, test.path, "")
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("DELETE %s attempt %d status = %d, want %d: %s",
+					test.path, attempt, response.Code, http.StatusNoContent, response.Body.String())
+			}
+			if response.Body.Len() != 0 {
+				t.Fatalf("DELETE %s attempt %d body = %q, want empty",
+					test.path, attempt, response.Body.String())
+			}
+		}
+	}
+	if len(repository.deletedProjectIDs) != 1 || repository.deletedProjectIDs["prj_1"] != 2 {
+		t.Fatalf("deleted project IDs = %#v", repository.deletedProjectIDs)
+	}
+	if len(repository.deletedConversationIDs) != 1 || repository.deletedConversationIDs["conv_1"] != 2 {
+		t.Fatalf("deleted conversation IDs = %#v", repository.deletedConversationIDs)
+	}
+}
+
+func TestDeleteWorkspaceResourceReportsUnsafeStateAsConflict(t *testing.T) {
+	repository := &fakeRepository{deleteErr: postgres.ErrConflict}
+	handler := newTestServer(t, repository, stream.NewService(
+		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+	))
+
+	for _, path := range []string{
+		"/api/v1/projects/prj_active",
+		"/api/v1/conversations/conv_active",
+	} {
+		response := request(t, handler, http.MethodDelete, path, "")
+		assertErrorCode(t, response, http.StatusConflict, "conflict")
+	}
+}
+
 func TestListConversationsSerializesEmptyConversationsAsArray(t *testing.T) {
 	handler := newTestServer(t, &fakeRepository{}, stream.NewService(
 		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
@@ -761,14 +808,17 @@ func waitForBody(t *testing.T, recorder *httptest.ResponseRecorder, want string)
 }
 
 type fakeRepository struct {
-	message        postgres.CreateMessageParams
-	cancelledRunID string
-	response       postgres.SubmitResponseParams
-	pendingOutbox  int
-	conversation   postgres.Conversation
-	messages       []domain.Message
-	run            domain.Run
-	trace          postgres.TraceDetails
+	message                postgres.CreateMessageParams
+	cancelledRunID         string
+	response               postgres.SubmitResponseParams
+	pendingOutbox          int
+	conversation           postgres.Conversation
+	messages               []domain.Message
+	run                    domain.Run
+	trace                  postgres.TraceDetails
+	deleteErr              error
+	deletedProjectIDs      map[string]int
+	deletedConversationIDs map[string]int
 }
 
 func (r *fakeRepository) CreateMessageAndRun(_ context.Context, input postgres.CreateMessageParams) (domain.Message, domain.Run, error) {
@@ -794,11 +844,25 @@ func (r *fakeRepository) ListProjects(context.Context) ([]postgres.Project, erro
 func (r *fakeRepository) CreateProject(context.Context, postgres.CreateProjectParams) (postgres.Project, error) {
 	return postgres.Project{}, nil
 }
+func (r *fakeRepository) DeleteProject(_ context.Context, projectID string) error {
+	if r.deletedProjectIDs == nil {
+		r.deletedProjectIDs = map[string]int{}
+	}
+	r.deletedProjectIDs[projectID]++
+	return r.deleteErr
+}
 func (r *fakeRepository) ListConversations(context.Context, string) ([]postgres.Conversation, error) {
 	return nil, nil
 }
 func (r *fakeRepository) CreateConversation(context.Context, postgres.CreateConversationParams) (postgres.Conversation, error) {
 	return postgres.Conversation{}, nil
+}
+func (r *fakeRepository) DeleteConversation(_ context.Context, conversationID string) error {
+	if r.deletedConversationIDs == nil {
+		r.deletedConversationIDs = map[string]int{}
+	}
+	r.deletedConversationIDs[conversationID]++
+	return r.deleteErr
 }
 func (r *fakeRepository) GetConversation(context.Context, string) (postgres.Conversation, []domain.Message, error) {
 	if r.conversation.ID != "" {

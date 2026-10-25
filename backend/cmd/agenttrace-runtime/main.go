@@ -40,7 +40,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, cfg.Postgres.DSN)
+	poolConfig, err := runtimePoolConfig(cfg.Postgres.DSN, cfg.RuntimeConcurrency)
+	if err != nil {
+		return fmt.Errorf("configure PostgreSQL pool: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL: %w", err)
 	}
@@ -114,6 +118,18 @@ func run() error {
 		return fmt.Errorf("consume AgentTrace commands: %w", err)
 	}
 	return nil
+}
+
+func runtimePoolConfig(dsn string, concurrency int) (*pgxpool.Config, error) {
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	required := int32(concurrency*2 + 2)
+	if poolConfig.MaxConns < required {
+		poolConfig.MaxConns = required
+	}
+	return poolConfig, nil
 }
 
 func consumeWorkers(ctx context.Context, count int, consume func(context.Context) error) error {

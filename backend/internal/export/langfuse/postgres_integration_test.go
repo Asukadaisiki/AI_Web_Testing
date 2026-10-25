@@ -106,6 +106,57 @@ func TestPostgresExporterPermanentHTTPFailureHandsOffImmediately(t *testing.T) {
 	}
 }
 
+func TestPostgresExporterDLQHandoffIsScopedByConsumerGroup(t *testing.T) {
+	ctx, pool, store := newExporterPostgresStore(t)
+	insertCompletedRunFixture(t, ctx, pool)
+
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client, err := NewHTTPClient(HTTPConfig{
+		BaseURL: server.URL, PublicKey: "public-test", SecretKey: "secret-test",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("create Langfuse client: %v", err)
+	}
+
+	message := completionMessage(t, "evt-postgres-export")
+	for _, consumerName := range []string{"langfuse-group-a", "langfuse-group-b"} {
+		exporter := &Exporter{
+			Repository: store,
+			Inbox: PostgresInbox{
+				Deduplicator: consumer.NewDeduplicator(pool, consumerName),
+			},
+			RetryStore: PostgresRetryStore{
+				Store: store, Consumer: consumerName,
+			},
+			Client: client, MaxAttempts: 3,
+		}
+		if err := exporter.Handle(ctx, message); err != nil {
+			t.Fatalf("%s permanent failure handoff: %v", consumerName, err)
+		}
+	}
+
+	var dlqRows int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events
+		WHERE topic = 'agenttrace.run.dlq.v1'
+		  AND key = 'run-1'`).Scan(&dlqRows); err != nil {
+		t.Fatalf("count group-scoped DLQ outbox events: %v", err)
+	}
+	if dlqRows != 2 {
+		t.Fatalf("group-scoped DLQ outbox rows = %d, want 2", dlqRows)
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("Langfuse requests = %d, want one per consumer group", requests.Load())
+	}
+}
+
 func TestPostgresExporterDeliveryGateSerializesTwoInstances(t *testing.T) {
 	ctx, pool, store := newExporterPostgresStore(t)
 	insertCompletedRunFixture(t, ctx, pool)

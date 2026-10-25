@@ -31,7 +31,7 @@
         "kind": "http",
         "url_template": "{{worker_base_url}}/operations/browser_execute_case"
       },
-      "timeout_ms": 300000,
+      "timeout_ms": 1200000,
       "retry_policy": {
         "max_attempts": 2,
         "backoff_ms": 100

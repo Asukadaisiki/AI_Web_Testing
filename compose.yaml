@@ -49,12 +49,11 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    command:
-      [
-        "bash",
-        "-ec",
-        "for topic in agenttrace.run.commands.v1 agenttrace.run.events.v1 agenttrace.run.dlq.v1 agenttrace.test.commands.v1; do for attempt in $$(seq 1 12); do if /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic \"$$topic\" --partitions 1 --replication-factor 1; then break; fi; if [ \"$$attempt\" -eq 12 ]; then exit 1; fi; sleep 2; done; done"
-      ]
+    command: ["bash", "/opt/agenttrace/kafka_init_topics.sh"]
+    environment:
+      AGENTTRACE_KAFKA_PARTITIONS: "8"
+    volumes:
+      - ./integration/v3/kafka_init_topics.sh:/opt/agenttrace/kafka_init_topics.sh:ro
 
   fixture-site:
     image: nginx:1.28-alpine
@@ -75,6 +74,7 @@ services:
     command: ["uv", "run", "--no-sync", "uvicorn", "loop_worker.main:app", "--host", "0.0.0.0", "--port", "8100"]
     environment:
       LOOP_ARTIFACTS_DIR: /artifacts
+      LOOP_BLOCKED_RESOURCE_HOSTS: pagead2.googlesyndication.com,googleads.g.doubleclick.net,fundingchoicesmessages.google.com,static.cloudflareinsights.com
     depends_on:
       - fixture-site
     volumes:
@@ -93,7 +93,7 @@ services:
       AGENTTRACE_HTTP_ADDR: :8080
       AGENTTRACE_ARTIFACT_DIR: /artifacts
       AGENTTRACE_MODEL_NAME: ${AGENTTRACE_MODEL_NAME:-glm-5.3-flash}
-      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT:-/app/fixtures/scripts/agenttrace_browser_eval.json}
+      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT-/app/fixtures/scripts/agenttrace_browser_eval.json}
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,11 +116,12 @@ services:
       AGENTTRACE_REDIS_ADDR: ${AGENTTRACE_REDIS_ADDR:-redis:6379}
       AGENTTRACE_WORKER_URL: ${AGENTTRACE_WORKER_URL:-http://worker:8100}
       AGENTTRACE_ARTIFACT_DIR: /artifacts
+      AGENTTRACE_RUNTIME_CONCURRENCY: ${AGENTTRACE_RUNTIME_CONCURRENCY:-4}
       AGENTTRACE_MODEL_BASE_URL: ${AGENTTRACE_MODEL_BASE_URL:-https://api.unself.cn/v1}
       AGENTTRACE_MODEL_NAME: ${AGENTTRACE_MODEL_NAME:-glm-5.3-flash}
       AGENTTRACE_MODEL_REASONING_EFFORT: ${AGENTTRACE_MODEL_REASONING_EFFORT:-high}
       AGENTTRACE_MODEL_API_KEY: ${AGENTTRACE_MODEL_API_KEY:-}
-      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT:-/app/fixtures/scripts/agenttrace_browser_eval.json}
+      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT-/app/fixtures/scripts/agenttrace_browser_eval.json}
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,7 +165,7 @@ services:
     depends_on:
       - api
     ports:
-      - "5174:5173"
+      - "5174:5174"
     volumes:
       - .:/app
       - web-node-modules:/app/web/node_modules

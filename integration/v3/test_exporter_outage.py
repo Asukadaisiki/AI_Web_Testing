@@ -50,6 +50,7 @@ class ExporterOutageTest(unittest.TestCase):
             def __init__(self, *, exporter_consumer: str) -> None:
                 super().__init__(exporter_consumer=exporter_consumer)
                 self.environment: dict[str, str] | None = None
+                self.commands: list[tuple[str, ...]] = []
 
             def _service_running(self, service: str) -> bool:
                 if service != "exporter":
@@ -62,9 +63,9 @@ class ExporterOutageTest(unittest.TestCase):
                 input_text: str | None = None,
                 environment: dict[str, str] | None = None,
             ) -> subprocess.CompletedProcess[str]:
-                if args != ("--profile", "langfuse", "up", "-d", "exporter"):
-                    raise AssertionError(f"unexpected fixture command: {args}")
-                self.environment = environment
+                self.commands.append(args)
+                if args == ("--profile", "langfuse", "up", "-d", "exporter"):
+                    self.environment = environment
                 return subprocess.CompletedProcess(args, 0)
 
             def _wait_service_running(self, service: str) -> None:
@@ -86,6 +87,27 @@ class ExporterOutageTest(unittest.TestCase):
                     "agenttrace-langfuse-exporter-failure-test"
                 ),
             },
+        )
+        self.assertEqual(
+            drills.commands,
+            [
+                (
+                    "exec",
+                    "-T",
+                    "kafka",
+                    "/opt/kafka/bin/kafka-consumer-groups.sh",
+                    "--bootstrap-server",
+                    "kafka:9092",
+                    "--group",
+                    "agenttrace-langfuse-exporter-failure-test",
+                    "--topic",
+                    "agenttrace.run.events.v1",
+                    "--reset-offsets",
+                    "--to-latest",
+                    "--execute",
+                ),
+                ("--profile", "langfuse", "up", "-d", "exporter"),
+            ],
         )
 
     def test_exporter_fixture_refuses_to_replace_a_running_operator_exporter(self) -> None:
@@ -162,6 +184,21 @@ class ExporterOutageTest(unittest.TestCase):
         self.assertEqual(
             drills.commands,
             [
+                (
+                    "exec",
+                    "-T",
+                    "kafka",
+                    "/opt/kafka/bin/kafka-consumer-groups.sh",
+                    "--bootstrap-server",
+                    "kafka:9092",
+                    "--group",
+                    drills.exporter_consumer,
+                    "--topic",
+                    "agenttrace.run.events.v1",
+                    "--reset-offsets",
+                    "--to-latest",
+                    "--execute",
+                ),
                 ("--profile", "langfuse", "up", "-d", "exporter"),
                 ("--profile", "langfuse", "rm", "-f", "-s", "exporter"),
             ],

@@ -72,6 +72,11 @@ class V3TestRunner:
 
         for command, cwd, env in (
             (
+                [sys.executable, "-m", "unittest", "run_v3_tests_test.py"],
+                self.root,
+                base_env,
+            ),
+            (
                 [
                     "docker",
                     "compose",
@@ -100,6 +105,38 @@ class V3TestRunner:
                 self.root / "worker",
                 base_env,
             ),
+            (
+                [
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "../integration/v3",
+                    "-p",
+                    "test_automation_exercise_scenario.py",
+                ],
+                self.root / "worker",
+                base_env,
+            ),
+            (
+                [
+                    "uv",
+                    "run",
+                    "python",
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "../integration/v3",
+                    "-p",
+                    "test_real_provider_load_scenario.py",
+                ],
+                self.root / "worker",
+                base_env,
+            ),
             (["npm", "test", "--", "--run"], self.root / "web", base_env),
             (["npm", "run", "build"], self.root / "web", base_env),
             (
@@ -110,6 +147,18 @@ class V3TestRunner:
                     "psycopg[binary]>=3.2,<4",
                     "python",
                     "integration/v3/canonical_scenario.py",
+                ],
+                self.root,
+                base_env,
+            ),
+            (
+                [
+                    "uv",
+                    "run",
+                    "--with",
+                    "psycopg[binary]>=3.2,<4",
+                    "python",
+                    "integration/v3/concurrent_delete_scenario.py",
                 ],
                 self.root,
                 base_env,

@@ -84,7 +84,7 @@ Kafka consumer state. These paths never change an already completed local run:
 docker compose exec -T postgres psql -U agenttrace -d agenttrace -c \
   "SELECT event_id, attempt_count, updated_at
    FROM consumer_retry_counts
-   WHERE consumer = 'agenttrace-langfuse-exporter'
+   WHERE consumer = '${AGENTTRACE_LANGFUSE_GROUP_ID:-agenttrace-langfuse-exporter}'
    ORDER BY updated_at DESC;"
 
 docker compose exec -T postgres psql -U agenttrace -d agenttrace -c \
@@ -95,8 +95,24 @@ docker compose exec -T postgres psql -U agenttrace -d agenttrace -c \
 
 docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 \
-  --group agenttrace-langfuse-exporter --describe
+  --group "${AGENTTRACE_LANGFUSE_GROUP_ID:-agenttrace-langfuse-exporter}" --describe
 ```
+
+## Safe workspace deletion
+
+Delete a conversation or project with the idempotent endpoints:
+
+```bash
+curl -i -X DELETE http://127.0.0.1:8080/api/v1/conversations/<conversation-id>
+curl -i -X DELETE http://127.0.0.1:8080/api/v1/projects/<project-id>
+```
+
+Successful deletion returns HTTP 204, including repeated requests after the
+record is already absent. The API returns HTTP 409 while any scoped run is
+active, an outbox event is unpublished, or a published runtime command has not
+been processed. Safe deletion removes scoped facts and disposable delivery
+records while preserving processed runtime command tombstones, so a retained
+Kafka command cannot recreate deleted work.
 
 ## Data reset
 

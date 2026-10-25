@@ -31,6 +31,30 @@ func TestSelectModelUsesCheckpointedScriptedFixtureWhenConfigured(t *testing.T) 
 	}
 }
 
+func TestRuntimePoolConfigReservesConnectionsForConcurrentInboxHandlers(t *testing.T) {
+	poolConfig, err := runtimePoolConfig(
+		"postgres://agenttrace:agenttrace@postgres:5432/agenttrace?sslmode=disable",
+		8,
+	)
+	if err != nil {
+		t.Fatalf("create runtime pool config: %v", err)
+	}
+	if poolConfig.MaxConns != 18 {
+		t.Fatalf("max connections = %d, want 18", poolConfig.MaxConns)
+	}
+
+	explicit, err := runtimePoolConfig(
+		"postgres://agenttrace:agenttrace@postgres:5432/agenttrace?sslmode=disable&pool_max_conns=24",
+		8,
+	)
+	if err != nil {
+		t.Fatalf("create explicitly sized runtime pool config: %v", err)
+	}
+	if explicit.MaxConns != 24 {
+		t.Fatalf("explicit max connections = %d, want 24", explicit.MaxConns)
+	}
+}
+
 func TestBoundedRunnerHonorsConcurrencyLimit(t *testing.T) {
 	runner := &blockingRunner{started: make(chan struct{}, 2), release: make(chan struct{})}
 	bounded, err := newBoundedRunner(runner, 1)

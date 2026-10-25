@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,6 +56,10 @@ func runConfigured(
 }
 
 func startEnabled(ctx context.Context, cfg config.Exporter) error {
+	consumerName, err := exporterConsumerName(cfg)
+	if err != nil {
+		return err
+	}
 	pool, err := pgxpool.New(ctx, cfg.Postgres.DSN)
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL: %w", err)
@@ -86,13 +91,13 @@ func startEnabled(ctx context.Context, cfg config.Exporter) error {
 	exporter := &langfuse.Exporter{
 		Repository: store,
 		Inbox: langfuse.PostgresInbox{
-			Deduplicator: consumer.NewDeduplicator(pool, "agenttrace-langfuse-exporter"),
+			Deduplicator: consumer.NewDeduplicator(pool, consumerName),
 		},
 		RetryStore: langfuse.PostgresRetryStore{
-			Store: store, Consumer: "agenttrace-langfuse-exporter",
+			Store: store, Consumer: consumerName,
 		},
 		DeliveryGate: langfuse.PostgresDeliveryGate{
-			Pool: pool, Consumer: "agenttrace-langfuse-exporter",
+			Pool: pool, Consumer: consumerName,
 		},
 		Client:       client,
 		SecretFields: cfg.Langfuse.SecretFields,
@@ -111,11 +116,19 @@ func startEnabled(ctx context.Context, cfg config.Exporter) error {
 		<-relayDone
 	}()
 
-	if err := consumeLoop(ctx, exporter, bus, cfg.Langfuse.GroupID); err != nil &&
+	if err := consumeLoop(ctx, exporter, bus, consumerName); err != nil &&
 		!errors.Is(err, context.Canceled) {
 		return fmt.Errorf("consume AgentTrace run events: %w", err)
 	}
 	return nil
+}
+
+func exporterConsumerName(cfg config.Exporter) (string, error) {
+	name := strings.TrimSpace(cfg.Langfuse.GroupID)
+	if name == "" {
+		return "", errors.New("Langfuse exporter consumer group is required")
+	}
+	return name, nil
 }
 
 func consumeLoop(

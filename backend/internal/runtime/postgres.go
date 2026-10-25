@@ -76,6 +76,20 @@ func (s PostgresCheckpointStore) Load(ctx context.Context, runID string) (Checkp
 	if err != nil {
 		return Checkpoint{}, err
 	}
+	if run.Status == domain.RunQueued {
+		claimed, ok, err := s.Store.ClaimRun(ctx, runID, run.CheckpointVersion)
+		if err != nil {
+			return Checkpoint{}, fmt.Errorf("claim queued run: %w", err)
+		}
+		if ok {
+			run = claimed
+		} else {
+			run, command, err = s.Store.LoadRunCommand(ctx, runID)
+			if err != nil {
+				return Checkpoint{}, fmt.Errorf("reload concurrently claimed run: %w", err)
+			}
+		}
+	}
 	checkpoint := Checkpoint{
 		RunID:           runID,
 		Command:         command,

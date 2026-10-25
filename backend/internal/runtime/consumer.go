@@ -172,9 +172,11 @@ func (c *Consumer) recordFailure(ctx context.Context, eventID string, message ev
 		return nil
 	}
 	attempt := increment.Attempts
-	if attempt < c.maxAttempts() {
+	maxAttempts := c.maxAttempts()
+	if attempt < maxAttempts {
 		return cause
 	}
+	attempt = maxAttempts
 	original := any(json.RawMessage(message.Value))
 	if !json.Valid(message.Value) {
 		original = string(message.Value)

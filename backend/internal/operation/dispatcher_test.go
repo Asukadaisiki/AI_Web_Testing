@@ -385,6 +385,12 @@ func TestBrowserEvalProfileUsesServerOwnedWorkerEndpointAndModelDefaults(t *test
 	if definition.CallbackURL != "https://worker.internal/base/operations/browser_execute_case" {
 		t.Fatalf("callback URL = %q", definition.CallbackURL)
 	}
+	if definition.Timeout < 20*time.Minute {
+		t.Fatalf(
+			"operation timeout = %v, want at least 20m including delivery overhead",
+			definition.Timeout,
+		)
+	}
 	if definition.Timeout <= 0 || definition.MaxAttempts < 1 || definition.MaxResultBytes < 1 {
 		t.Fatalf("operation limits are not bounded: %#v", definition)
 	}
