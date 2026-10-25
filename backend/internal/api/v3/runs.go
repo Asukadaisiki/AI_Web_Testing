@@ -96,20 +96,21 @@ type publicOperationEvidence struct {
 // publicTraceSpan contains the trace node fields the workspace renders. JSON
 // payloads are copied through redactTraceJSON before leaving the API boundary.
 type publicTraceSpan struct {
-	ID           string          `json:"id"`
-	RunID        string          `json:"run_id"`
-	TraceID      string          `json:"trace_id"`
-	SpanID       string          `json:"span_id"`
-	ParentSpanID string          `json:"parent_span_id,omitempty"`
-	Kind         domain.SpanKind `json:"kind"`
-	Name         string          `json:"name"`
-	Status       string          `json:"status"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	Output       json.RawMessage `json:"output,omitempty"`
-	StartedAt    time.Time       `json:"started_at"`
-	EndedAt      *time.Time      `json:"ended_at,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID              string                 `json:"id"`
+	RunID           string                 `json:"run_id"`
+	TraceID         string                 `json:"trace_id"`
+	SpanID          string                 `json:"span_id"`
+	ParentSpanID    string                 `json:"parent_span_id,omitempty"`
+	Kind            domain.SpanKind        `json:"kind"`
+	Name            string                 `json:"name"`
+	Status          string                 `json:"status"`
+	Input           json.RawMessage        `json:"input,omitempty"`
+	Output          json.RawMessage        `json:"output,omitempty"`
+	DecisionContext *publicDecisionContext `json:"decision_context,omitempty"`
+	StartedAt       time.Time              `json:"started_at"`
+	EndedAt         *time.Time             `json:"ended_at,omitempty"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
 }
 
 var traceSecretFields = map[string]struct{}{
@@ -216,21 +217,28 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	spans := make([]publicTraceSpan, 0, len(trace.Spans))
 	for _, span := range trace.Spans {
+		input := redactTraceJSON(span.Input)
+		output := redactTraceJSON(span.Output)
+		decision := (*publicDecisionContext)(nil)
+		if span.Kind == domain.SpanModel || span.Kind == domain.SpanReport {
+			decision = projectDecisionContext(input, output)
+		}
 		spans = append(spans, publicTraceSpan{
-			ID:           span.ID,
-			RunID:        span.RunID,
-			TraceID:      span.TraceID,
-			SpanID:       span.SpanID,
-			ParentSpanID: span.ParentSpanID,
-			Kind:         span.Kind,
-			Name:         span.Name,
-			Status:       span.Status,
-			Input:        redactTraceJSON(span.Input),
-			Output:       redactTraceJSON(span.Output),
-			StartedAt:    span.StartedAt,
-			EndedAt:      span.EndedAt,
-			CreatedAt:    span.CreatedAt,
-			UpdatedAt:    span.UpdatedAt,
+			ID:              span.ID,
+			RunID:           span.RunID,
+			TraceID:         span.TraceID,
+			SpanID:          span.SpanID,
+			ParentSpanID:    span.ParentSpanID,
+			Kind:            span.Kind,
+			Name:            span.Name,
+			Status:          span.Status,
+			Input:           input,
+			Output:          output,
+			DecisionContext: decision,
+			StartedAt:       span.StartedAt,
+			EndedAt:         span.EndedAt,
+			CreatedAt:       span.CreatedAt,
+			UpdatedAt:       span.UpdatedAt,
 		})
 	}
 	attempts := make([]publicTraceAttempt, 0, len(trace.Attempts))

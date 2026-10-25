@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -489,6 +490,137 @@ func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("trace response leaked attempt %s: %s", forbidden, body)
 		}
+	}
+}
+
+func TestGetTraceAttachesDecisionContextOnlyToModelAndReportSpans(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	modelInput := json.RawMessage(`{
+		"messages":[
+			{"role":"user","content":"Check checkout"},
+			{"role":"tool","content":"login succeeded","token":"remove-observation-secret"}
+		],
+		"token":"remove-input-secret"
+	}`)
+	modelOutput := json.RawMessage(`{
+		"message":{
+			"content":"I will validate checkout.",
+			"tool_calls":[{
+				"name":"browser_execute_case",
+				"arguments":{"case":"checkout","api_key":"remove-argument-secret"}
+			}]
+		},
+		"secret":"remove-output-secret"
+	}`)
+	repository := &fakeRepository{trace: postgres.TraceDetails{
+		Spans: []domain.Span{
+			{
+				ID: "model-row", RunID: "run_1", TraceID: "trace_1", SpanID: "model-1",
+				Kind: domain.SpanModel, Name: "plan", Status: "succeeded",
+				Input: modelInput, Output: modelOutput, StartedAt: now,
+			},
+			{
+				ID: "report-row", RunID: "run_1", TraceID: "trace_1", SpanID: "report-1",
+				Kind: domain.SpanReport, Name: "report", Status: "succeeded",
+				Input:     json.RawMessage(`{"messages":[{"role":"user","content":"Write report"}]}`),
+				Output:    json.RawMessage(`{"message":{"content":"Visible report"}}`),
+				StartedAt: now,
+			},
+			{
+				ID: "operation-row", RunID: "run_1", TraceID: "trace_1", SpanID: "operation-1",
+				Kind: domain.SpanOperation, Name: "browser_execute_case", Status: "succeeded",
+				Input: modelInput, Output: modelOutput, StartedAt: now,
+			},
+			{
+				ID: "reasoning-row", RunID: "run_1", TraceID: "trace_1", SpanID: "reasoning-1",
+				Kind: domain.SpanReasoning, Name: "reasoning", Status: "succeeded",
+				Input: modelInput, Output: modelOutput, StartedAt: now,
+			},
+			{
+				ID: "malformed-model-row", RunID: "run_1", TraceID: "trace_1", SpanID: "model-2",
+				Kind: domain.SpanModel, Name: "model", Status: "failed",
+				Input: json.RawMessage(`{"messages":[`), Output: json.RawMessage(`{"message":`),
+				StartedAt: now,
+			},
+		},
+	}}
+	handler := newTestServer(t, repository, stream.NewService(
+		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
+	))
+
+	response := request(t, handler, http.MethodGet, "/api/v1/runs/run_1/trace", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body struct {
+		Spans []json.RawMessage `json:"spans"`
+	}
+	decodeJSON(t, response, &body)
+	if len(body.Spans) != 5 {
+		t.Fatalf("span count = %d, want 5", len(body.Spans))
+	}
+
+	type projectedSpan struct {
+		ID              string                 `json:"id"`
+		Kind            domain.SpanKind        `json:"kind"`
+		Input           json.RawMessage        `json:"input"`
+		Output          json.RawMessage        `json:"output"`
+		DecisionContext *publicDecisionContext `json:"decision_context"`
+	}
+	spans := make(map[string]projectedSpan, len(body.Spans))
+	rawSpans := make(map[string]map[string]json.RawMessage, len(body.Spans))
+	for _, raw := range body.Spans {
+		var span projectedSpan
+		if err := json.Unmarshal(raw, &span); err != nil {
+			t.Fatalf("decode projected span: %v", err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatalf("decode projected span fields: %v", err)
+		}
+		spans[span.ID] = span
+		rawSpans[span.ID] = fields
+	}
+
+	wantModelContext := &publicDecisionContext{
+		Objective: &publicDecisionMessage{Role: "user", Content: "Check checkout"},
+		PriorObservation: &publicDecisionMessage{
+			Role: "tool", Content: "login succeeded",
+		},
+		SelectedOperation: &publicSelectedOperation{
+			Name: "browser_execute_case", Arguments: json.RawMessage(`{"case":"checkout"}`),
+		},
+		VisibleExplanation: "I will validate checkout.",
+	}
+	if got := spans["model-row"].DecisionContext; !reflect.DeepEqual(got, wantModelContext) {
+		t.Fatalf("model decision context = %#v, want %#v", got, wantModelContext)
+	}
+	wantReportContext := &publicDecisionContext{
+		Objective:          &publicDecisionMessage{Role: "user", Content: "Write report"},
+		VisibleExplanation: "Visible report",
+	}
+	if got := spans["report-row"].DecisionContext; !reflect.DeepEqual(got, wantReportContext) {
+		t.Fatalf("report decision context = %#v, want %#v", got, wantReportContext)
+	}
+	for _, id := range []string{"operation-row", "reasoning-row", "malformed-model-row"} {
+		if _, exists := rawSpans[id]["decision_context"]; exists {
+			t.Fatalf("%s unexpectedly contains decision_context: %s", id, rawSpans[id]["decision_context"])
+		}
+	}
+
+	if got, want := string(spans["model-row"].Input),
+		`{"messages":[{"content":"Check checkout","role":"user"},{"content":"login succeeded","role":"tool"}]}`; got != want {
+		t.Fatalf("canonical model input = %s, want %s", got, want)
+	}
+	if got, want := string(spans["model-row"].Output),
+		`{"message":{"content":"I will validate checkout.","tool_calls":[{"arguments":{"case":"checkout"},"name":"browser_execute_case"}]}}`; got != want {
+		t.Fatalf("canonical model output = %s, want %s", got, want)
+	}
+	if !strings.Contains(string(repository.trace.Spans[0].Input), "remove-input-secret") ||
+		!strings.Contains(string(repository.trace.Spans[0].Output), "remove-output-secret") ||
+		!strings.Contains(string(repository.trace.Spans[0].Output), "remove-argument-secret") {
+		t.Fatalf("handler mutated canonical model payloads: input=%s output=%s",
+			repository.trace.Spans[0].Input, repository.trace.Spans[0].Output)
 	}
 }
 
