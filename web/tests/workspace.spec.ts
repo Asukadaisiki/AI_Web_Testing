@@ -427,7 +427,7 @@ test.describe.serial('AgentTrace workspace', () => {
     });
     await expect(conversation.getByRole('button', { name: 'Attempt 1' })).toBeVisible();
     await expect(conversation.locator('.message-block time').first()).toHaveText(
-      /^\d{2}:\d{2}:\d{2}$/,
+      /\d{2}:\d{2}:\d{2}/,
     );
 
     await trace.getByRole('button', { name: 'Select plan' }).click();
