@@ -219,19 +219,51 @@ func TestGetConversationSerializesEmptyHistoryAsArrays(t *testing.T) {
 }
 
 func TestGetConversationReturnsPublicRunLineageWithoutSpecification(t *testing.T) {
+	firstCreatedAt := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	firstStartedAt := firstCreatedAt.Add(time.Minute)
+	firstFinishedAt := firstStartedAt.Add(2 * time.Minute)
+	firstUpdatedAt := firstFinishedAt
+	secondCreatedAt := firstCreatedAt.Add(5 * time.Minute)
+	secondStartedAt := secondCreatedAt.Add(time.Minute)
+	secondCancelRequestedAt := secondStartedAt.Add(time.Minute)
+	secondFinishedAt := secondCancelRequestedAt.Add(time.Minute)
+	secondUpdatedAt := secondFinishedAt
 	repository := &fakeRepository{
 		conversation: postgres.Conversation{
 			ID: "conv_1", ProjectID: "prj_1", Title: "History", Metadata: json.RawMessage(`{}`),
 		},
-		runs: []domain.Run{{
-			ID:              "run_1",
-			ProjectID:       "prj_1",
-			ConversationID:  "conv_1",
-			SourceMessageID: "msg_1",
-			RetryOfRunID:    "run_original",
-			Status:          domain.RunFailed,
-			Specification:   json.RawMessage(`{"secret":"must-not-leak"}`),
-		}},
+		runs: []domain.Run{
+			{
+				ID:                "run_first",
+				ProjectID:         "prj_1",
+				ConversationID:    "conv_1",
+				SourceMessageID:   "msg_first",
+				RetryOfRunID:      "",
+				Status:            domain.RunSucceeded,
+				Specification:     json.RawMessage(`{"secret":"first-must-not-leak"}`),
+				CheckpointVersion: 4,
+				CancelRequestedAt: nil,
+				StartedAt:         &firstStartedAt,
+				FinishedAt:        &firstFinishedAt,
+				CreatedAt:         firstCreatedAt,
+				UpdatedAt:         firstUpdatedAt,
+			},
+			{
+				ID:                "run_second",
+				ProjectID:         "prj_1",
+				ConversationID:    "conv_1",
+				SourceMessageID:   "msg_second",
+				RetryOfRunID:      "run_first",
+				Status:            domain.RunFailed,
+				Specification:     json.RawMessage(`{"secret":"second-must-not-leak"}`),
+				CheckpointVersion: 7,
+				CancelRequestedAt: &secondCancelRequestedAt,
+				StartedAt:         &secondStartedAt,
+				FinishedAt:        &secondFinishedAt,
+				CreatedAt:         secondCreatedAt,
+				UpdatedAt:         secondUpdatedAt,
+			},
+		},
 	}
 	handler := newTestServer(t, repository, stream.NewService(
 		&fakeEventReader{}, live.NewMemoryStore(), stream.Config{},
@@ -243,28 +275,45 @@ func TestGetConversationReturnsPublicRunLineageWithoutSpecification(t *testing.T
 	}
 	var body struct {
 		Runs []struct {
+			ID              string          `json:"id"`
 			SourceMessageID string          `json:"source_message_id"`
 			RetryOfRunID    string          `json:"retry_of_run_id"`
 			Specification   json.RawMessage `json:"specification"`
 		} `json:"runs"`
 	}
 	decodeJSON(t, response, &body)
-	if len(body.Runs) != 1 ||
-		body.Runs[0].SourceMessageID != "msg_1" ||
-		body.Runs[0].RetryOfRunID != "run_original" {
-		t.Fatalf("run lineage = %#v", body.Runs)
+	if len(body.Runs) != 2 {
+		t.Fatalf("runs = %#v, want two runs", body.Runs)
 	}
-	if body.Runs[0].Specification != nil {
-		t.Fatalf("conversation run exposed specification: %s", body.Runs[0].Specification)
+	if body.Runs[0].ID != "run_first" ||
+		body.Runs[0].SourceMessageID != "msg_first" ||
+		body.Runs[0].RetryOfRunID != "" {
+		t.Fatalf("first run = %#v", body.Runs[0])
+	}
+	if body.Runs[1].ID != "run_second" ||
+		body.Runs[1].SourceMessageID != "msg_second" ||
+		body.Runs[1].RetryOfRunID != "run_first" {
+		t.Fatalf("second run = %#v", body.Runs[1])
+	}
+	for index, run := range body.Runs {
+		if run.Specification != nil {
+			t.Fatalf("conversation run %d exposed specification: %s", index, run.Specification)
+		}
 	}
 }
 
-func TestGetRunDoesNotExposeInternalSpecification(t *testing.T) {
+func TestGetRunReturnsPublicLineageWithoutSpecification(t *testing.T) {
+	createdAt := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
+	startedAt := createdAt.Add(time.Minute)
+	finishedAt := startedAt.Add(2 * time.Minute)
+	updatedAt := finishedAt
 	repository := &fakeRepository{run: domain.Run{
-		ID:             "run_1",
-		ProjectID:      "prj_1",
-		ConversationID: "conv_1",
-		Status:         domain.RunRunning,
+		ID:              "run_1",
+		ProjectID:       "prj_1",
+		ConversationID:  "conv_1",
+		SourceMessageID: "msg_source",
+		RetryOfRunID:    "run_original",
+		Status:          domain.RunFailed,
 		Specification: json.RawMessage(`{
 			"command":{
 				"operations":[{
@@ -273,12 +322,30 @@ func TestGetRunDoesNotExposeInternalSpecification(t *testing.T) {
 				}]
 			}
 		}`),
+		CheckpointVersion: 8,
+		CancelRequestedAt: nil,
+		StartedAt:         &startedAt,
+		FinishedAt:        &finishedAt,
+		CreatedAt:         createdAt,
+		UpdatedAt:         updatedAt,
 	}}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
 
 	response := request(t, handler, http.MethodGet, "/api/v1/runs/run_1", "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		SourceMessageID string          `json:"source_message_id"`
+		RetryOfRunID    string          `json:"retry_of_run_id"`
+		Specification   json.RawMessage `json:"specification"`
+	}
+	decodeJSON(t, response, &body)
+	if body.SourceMessageID != "msg_source" || body.RetryOfRunID != "run_original" {
+		t.Fatalf("run lineage = %#v", body)
+	}
+	if body.Specification != nil {
+		t.Fatalf("/runs response exposed specification: %s", body.Specification)
 	}
 	for _, forbidden := range []string{"specification", "callback", "worker.internal", "input_schema", "must-not-leak"} {
 		if strings.Contains(strings.ToLower(response.Body.String()), strings.ToLower(forbidden)) {
@@ -349,6 +416,7 @@ func TestRerunMapsRepositoryErrors(t *testing.T) {
 	}{
 		{name: "conflict", err: postgres.ErrConflict, status: http.StatusConflict, code: "conflict"},
 		{name: "not found", err: postgres.ErrNotFound, status: http.StatusNotFound, code: "not_found"},
+		{name: "postgres unavailable", err: errors.New("database unavailable"), status: http.StatusServiceUnavailable, code: "postgres_unavailable"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &fakeRepository{rerunErr: test.err}
