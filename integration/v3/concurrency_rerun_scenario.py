@@ -12,7 +12,9 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -276,6 +278,24 @@ def evidence_ids_disjoint(
     )
 
 
+def peak_concurrency(
+    intervals: Iterable[tuple[datetime | None, datetime | None]],
+) -> int:
+    """Return the maximum active interval count for half-open [start, finish) work."""
+    events: list[tuple[datetime, int]] = []
+    for started_at, finished_at in intervals:
+        if started_at is None or finished_at is None or finished_at <= started_at:
+            continue
+        events.extend(((started_at, 1), (finished_at, -1)))
+
+    active = 0
+    peak = 0
+    for _moment, delta in sorted(events):
+        active += delta
+        peak = max(peak, active)
+    return peak
+
+
 def collect_concurrent_summary(run_ids: list[str]) -> dict[str, int]:
     import psycopg
 
@@ -317,21 +337,13 @@ def collect_concurrent_summary(run_ids: list[str]) -> dict[str, int]:
         ) = map(int, cursor.fetchone())
         cursor.execute(
             """
-            WITH points AS (
-              SELECT started_at AS moment, 1 AS delta
-              FROM runs WHERE id = ANY(%s)
-              UNION ALL
-              SELECT finished_at AS moment, -1 AS delta
-              FROM runs WHERE id = ANY(%s)
-            ), concurrency AS (
-              SELECT sum(delta) OVER (ORDER BY moment, delta DESC) AS active
-              FROM points WHERE moment IS NOT NULL
-            )
-            SELECT coalesce(max(active), 0) FROM concurrency
+            SELECT started_at, finished_at
+            FROM runs
+            WHERE id = ANY(%s)
             """,
-            (run_ids, run_ids),
+            (run_ids,),
         )
-        peak_concurrency = int(cursor.fetchone()[0])
+        peak = peak_concurrency(cursor.fetchall())
     pending_outbox, unprocessed_commands = delivery_counts(run_ids)
     return {
         "terminal_runs": terminal_runs,
@@ -340,7 +352,7 @@ def collect_concurrent_summary(run_ids: list[str]) -> dict[str, int]:
         "cross_project_runs": cross_project_runs,
         "cross_conversation_messages": cross_conversation_messages,
         "duplicate_message_ordinals": duplicate_message_ordinals,
-        "peak_concurrency": peak_concurrency,
+        "peak_concurrency": peak,
         "pending_outbox": pending_outbox,
         "unprocessed_commands": unprocessed_commands,
     }

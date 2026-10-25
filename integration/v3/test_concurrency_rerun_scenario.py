@@ -3,12 +3,56 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta, timezone
 import unittest
 
-from concurrency_rerun_scenario import validate_summary
+from concurrency_rerun_scenario import peak_concurrency, validate_summary
 
 
 class SummaryValidationTest(unittest.TestCase):
+    def test_peak_concurrency_treats_adjacent_intervals_as_non_overlapping(
+        self,
+    ) -> None:
+        start = datetime(2026, 10, 25, tzinfo=timezone.utc)
+
+        peak = peak_concurrency(
+            [
+                (start, start + timedelta(seconds=10)),
+                (start + timedelta(seconds=10), start + timedelta(seconds=20)),
+            ]
+        )
+
+        self.assertEqual(peak, 1)
+
+    def test_peak_concurrency_counts_genuine_overlap(self) -> None:
+        start = datetime(2026, 10, 25, tzinfo=timezone.utc)
+
+        peak = peak_concurrency(
+            [
+                (start, start + timedelta(seconds=20)),
+                (start + timedelta(seconds=5), start + timedelta(seconds=25)),
+                (start + timedelta(seconds=10), start + timedelta(seconds=15)),
+            ]
+        )
+
+        self.assertEqual(peak, 3)
+
+    def test_peak_concurrency_ignores_empty_and_invalid_intervals(self) -> None:
+        start = datetime(2026, 10, 25, tzinfo=timezone.utc)
+
+        self.assertEqual(peak_concurrency([]), 0)
+
+        peak = peak_concurrency(
+            [
+                (None, start + timedelta(seconds=10)),
+                (start, None),
+                (start, start),
+                (start + timedelta(seconds=10), start),
+            ]
+        )
+
+        self.assertEqual(peak, 0)
+
     def test_validation_accepts_the_required_concurrent_rerun_summary(self) -> None:
         validate_summary(
             {
