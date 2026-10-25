@@ -20,6 +20,7 @@ import {
   listConversations,
   listProjects,
   parseRunEvent,
+  rerunRun,
   runEventsURL,
   submitRunResponse,
   type Agent,
@@ -170,12 +171,8 @@ function writeSelection(selection: WorkspaceSelection): void {
   window.history.replaceState(null, '', `${window.location.pathname}${suffix === '' ? '' : `?${suffix}`}`);
 }
 
-function latestRunId(detail: ConversationDetail): string | null {
-  for (let index = detail.messages.length - 1; index >= 0; index -= 1) {
-    const runId = detail.messages[index]?.run_id;
-    if (runId !== undefined && runId !== '') return runId;
-  }
-  return null;
+export function latestRunId(detail: ConversationDetail): string | null {
+  return detail.runs.at(-1)?.id ?? null;
 }
 
 export interface WorkspaceState {
@@ -216,6 +213,7 @@ export interface WorkspaceState {
     content: string,
     idempotencyKey: string,
   ) => Promise<boolean>;
+  rerunFailed: () => Promise<boolean>;
   requestCancel: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -249,6 +247,7 @@ export function useWorkspace(): WorkspaceState {
   const systemDataRequest = useRef(0);
   const conversationRequest = useRef(0);
   const runRequest = useRef(0);
+  const rerunKeys = useRef(new Map<string, string>());
   activeProjectId.current = selection.projectId;
   activeConversationId.current = selection.conversationId;
   activeRunId.current = selection.runId;
@@ -411,14 +410,9 @@ export function useWorkspace(): WorkspaceState {
     void loadConversation(conversationId).then(
       (detail) => {
         if (cancelled || detail === null) return;
-        const runIds = new Set(
-          detail.messages.flatMap((message) =>
-            message.run_id === undefined || message.run_id === '' ? [] : [message.run_id],
-          ),
-        );
         if (
           selection.runId === null ||
-          (runIds.size > 0 && !runIds.has(selection.runId))
+          !detail.runs.some((item) => item.id === selection.runId)
         ) {
           dispatchSelection({ type: 'run', runId: latestRunId(detail) });
         }
@@ -591,6 +585,50 @@ export function useWorkspace(): WorkspaceState {
     [loadRunData, perform, selection.runId],
   );
 
+  const rerunFailed = useCallback(async (): Promise<boolean> => {
+    const selectedRun = run;
+    const runId = selection.runId;
+    const conversationId = selection.conversationId;
+    if (
+      selectedRun === null ||
+      runId === null ||
+      conversationId === null ||
+      selectedRun.id !== runId ||
+      selectedRun.status !== 'failed'
+    ) {
+      return false;
+    }
+
+    let idempotencyKey = rerunKeys.current.get(runId);
+    if (idempotencyKey === undefined) {
+      idempotencyKey = crypto.randomUUID();
+      rerunKeys.current.set(runId, idempotencyKey);
+    }
+
+    return perform(async () => {
+      const created = await rerunRun(runId, {
+        idempotency_key: idempotencyKey,
+      });
+      rerunKeys.current.delete(runId);
+      const detail = await loadConversation(conversationId);
+      if (
+        detail === null ||
+        activeConversationId.current !== conversationId ||
+        activeRunId.current !== runId ||
+        !detail.runs.some((item) => item.id === created.run_id)
+      ) {
+        return;
+      }
+      dispatchSelection({ type: 'run', runId: created.run_id });
+    });
+  }, [
+    loadConversation,
+    perform,
+    run,
+    selection.conversationId,
+    selection.runId,
+  ]);
+
   const requestCancel = useCallback(async (): Promise<void> => {
     if (selection.runId === null) return;
     await perform(async () => {
@@ -648,6 +686,7 @@ export function useWorkspace(): WorkspaceState {
     addConversation,
     sendMessage,
     respond,
+    rerunFailed,
     requestCancel,
     refresh,
   };

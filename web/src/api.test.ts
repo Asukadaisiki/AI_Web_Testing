@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
+  getConversation,
   getTrace,
   listAgents,
   listProjects,
   parseRunEvent,
+  rerunRun,
 } from './api';
 
 afterEach(() => {
@@ -60,6 +62,144 @@ describe('typed API client', () => {
         'Invalid API response at projects: expected an array.',
       ),
     );
+  });
+
+  it('parses conversation runs with their public lineage', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            conversation: {
+              id: 'conversation-1',
+              project_id: 'project-1',
+              title: 'Checkout',
+              metadata: {},
+              created_at: '2026-10-25T12:00:00Z',
+              updated_at: '2026-10-25T12:05:00Z',
+            },
+            messages: [{
+              id: 'message-1',
+              conversation_id: 'conversation-1',
+              run_id: 'run-original',
+              ordinal: 1,
+              role: 'user',
+              content: 'Check checkout',
+              created_at: '2026-10-25T12:00:00Z',
+            }],
+            runs: [{
+              id: 'run-original',
+              project_id: 'project-1',
+              conversation_id: 'conversation-1',
+              source_message_id: 'message-1',
+              status: 'failed',
+              checkpoint_version: 1,
+              created_at: '2026-10-25T12:00:01Z',
+              updated_at: '2026-10-25T12:01:00Z',
+            }, {
+              id: 'run-rerun',
+              project_id: 'project-1',
+              conversation_id: 'conversation-1',
+              source_message_id: 'message-1',
+              retry_of_run_id: 'run-original',
+              status: 'queued',
+              checkpoint_version: 0,
+              created_at: '2026-10-25T12:05:00Z',
+              updated_at: '2026-10-25T12:05:00Z',
+            }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    const detail = await getConversation('conversation-1');
+
+    expect(detail.runs).toHaveLength(2);
+    expect(detail.runs[0]).toMatchObject({
+      id: 'run-original',
+      source_message_id: 'message-1',
+    });
+    expect(detail.runs[0]?.retry_of_run_id).toBeUndefined();
+    expect(detail.runs[1]).toMatchObject({
+      id: 'run-rerun',
+      source_message_id: 'message-1',
+      retry_of_run_id: 'run-original',
+    });
+  });
+
+  it('parses observable decision context on a model span', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            spans: [{
+              id: 'span-row-1',
+              run_id: 'run-1',
+              trace_id: 'trace-1',
+              span_id: 'model-1',
+              kind: 'model',
+              name: 'plan checkout',
+              status: 'succeeded',
+              decision_context: {
+                objective: { role: 'user', content: 'Check checkout' },
+                prior_observation: { role: 'tool', content: 'Login succeeded' },
+                selected_operation: {
+                  name: 'browser_execute_case',
+                  arguments: null,
+                },
+                visible_explanation: 'I will validate checkout.',
+              },
+              started_at: '2026-10-25T12:00:00Z',
+              created_at: '2026-10-25T12:00:00Z',
+              updated_at: '2026-10-25T12:00:01Z',
+            }],
+            attempts: [],
+            usage: [],
+            operation_evidence: [],
+            derived_nodes: [],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    const trace = await getTrace('run-1');
+
+    expect(trace.spans[0]?.decision_context).toEqual({
+      objective: { role: 'user', content: 'Check checkout' },
+      prior_observation: { role: 'tool', content: 'Login succeeded' },
+      selected_operation: {
+        name: 'browser_execute_case',
+        arguments: null,
+      },
+      visible_explanation: 'I will validate checkout.',
+    });
+  });
+
+  it('posts a rerun request and parses the accepted run', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            run_id: 'run-new',
+            status: 'queued',
+            retry_of_run_id: 'run-failed',
+          }),
+          { status: 202, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    await expect(rerunRun('run-failed', {
+      idempotency_key: 'rerun-1',
+    })).resolves.toEqual({
+      run_id: 'run-new',
+      status: 'queued',
+      retry_of_run_id: 'run-failed',
+    });
   });
 
   it('parses canonical attempts usage and operation evidence with the trace', async () => {

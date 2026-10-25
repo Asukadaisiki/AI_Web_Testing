@@ -10,6 +10,7 @@ const run: Run = {
   id: 'run-1',
   project_id: 'project-1',
   conversation_id: 'conversation-1',
+  source_message_id: 'message-1',
   status: 'failed',
   checkpoint_version: 4,
   created_at: '2026-10-21T12:00:00Z',

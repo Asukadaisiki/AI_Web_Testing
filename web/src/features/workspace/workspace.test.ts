@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { RunEvent } from '../../api';
+import type { ConversationDetail, RunEvent } from '../../api';
 import {
   keepSelectedSpan,
+  latestRunId,
   mergeRunEvents,
   workspaceSelectionReducer,
   type WorkspaceSelection,
@@ -54,6 +55,39 @@ function node(spanId: string): TraceNode {
 }
 
 describe('workspace state', () => {
+  it('gets the latest Run only from the canonical conversation runs', () => {
+    const detail: ConversationDetail = {
+      conversation: {
+        id: 'conversation-1',
+        project_id: 'project-1',
+        metadata: {},
+        created_at: '2026-10-25T12:00:00Z',
+        updated_at: '2026-10-25T12:05:00Z',
+      },
+      messages: [{
+        id: 'message-1',
+        conversation_id: 'conversation-1',
+        run_id: 'run-from-message',
+        ordinal: 1,
+        role: 'assistant',
+        content: 'Old message association',
+        created_at: '2026-10-25T12:00:00Z',
+      }],
+      runs: ['run-original', 'run-rerun'].map((id) => ({
+        id,
+        project_id: 'project-1',
+        conversation_id: 'conversation-1',
+        source_message_id: 'message-1',
+        status: 'failed',
+        checkpoint_version: 1,
+        created_at: '2026-10-25T12:00:00Z',
+        updated_at: '2026-10-25T12:05:00Z',
+      })),
+    };
+
+    expect(latestRunId(detail)).toBe('run-rerun');
+  });
+
   it('keeps selected project conversation run and span in one workspace state', () => {
     const selected = workspaceSelectionReducer(emptySelection, {
       type: 'restore',

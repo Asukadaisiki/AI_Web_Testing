@@ -10,6 +10,7 @@ import {
   listConversations,
   listProjects,
   getHealth,
+  rerunRun,
   type ConversationDetail,
   type DerivedTraceNode,
   type OperationEvidence,
@@ -32,6 +33,7 @@ vi.mock('../../api', async () => {
     listConversations: vi.fn(),
     listProjects: vi.fn(),
     getHealth: vi.fn(),
+    rerunRun: vi.fn(),
   };
 });
 
@@ -51,7 +53,11 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function conversation(id: string, runIds: string[] = []): ConversationDetail {
+function conversation(
+  id: string,
+  runIds: string[] = [],
+  messageRunIds: string[] = runIds,
+): ConversationDetail {
   return {
     conversation: {
       id,
@@ -61,7 +67,7 @@ function conversation(id: string, runIds: string[] = []): ConversationDetail {
       created_at: '2026-10-21T12:00:00Z',
       updated_at: '2026-10-21T12:00:00Z',
     },
-    messages: runIds.map((runId, index) => ({
+    messages: messageRunIds.map((runId, index) => ({
       id: `message-${runId}`,
       conversation_id: id,
       run_id: runId,
@@ -70,15 +76,26 @@ function conversation(id: string, runIds: string[] = []): ConversationDetail {
       content: runId,
       created_at: '2026-10-21T12:00:00Z',
     })),
+    runs: runIds.map((runId) => ({
+      id: runId,
+      project_id: 'project-1',
+      conversation_id: id,
+      source_message_id: `message-${runId}`,
+      status: 'running',
+      checkpoint_version: 1,
+      created_at: '2026-10-21T12:00:00Z',
+      updated_at: '2026-10-21T12:00:00Z',
+    })),
   };
 }
 
-function run(id: string): Run {
+function run(id: string, status: Run['status'] = 'running'): Run {
   return {
     id,
     project_id: 'project-1',
     conversation_id: 'conversation-1',
-    status: 'running',
+    source_message_id: `message-${id}`,
+    status,
     checkpoint_version: 1,
     created_at: '2026-10-21T12:00:00Z',
     updated_at: '2026-10-21T12:00:00Z',
@@ -117,9 +134,15 @@ function derivedNode(runId: string): DerivedTraceNode {
 }
 
 class FakeEventSource {
+  static urls: string[] = [];
+
   onmessage: ((event: MessageEvent<string>) => void) | null = null;
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
+
+  constructor(url: string | URL) {
+    FakeEventSource.urls.push(String(url));
+  }
 
   addEventListener(): void {}
   removeEventListener(): void {}
@@ -127,7 +150,9 @@ class FakeEventSource {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
+  FakeEventSource.urls = [];
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.mocked(listProjects).mockResolvedValue([
     {
@@ -143,6 +168,7 @@ beforeEach(() => {
     status: 'ok',
     dependencies: {},
   });
+  vi.mocked(rerunRun).mockReset();
   vi.mocked(listConversations).mockResolvedValue([
     conversation('conversation-1').conversation,
     conversation('conversation-2').conversation,
@@ -419,5 +445,223 @@ describe('workspace request freshness', () => {
     });
 
     expect(result.current.error).toBe('current run failure');
+  });
+});
+
+describe('workspace run selection and rerun', () => {
+  it('retains a restored rerun ID that is present only in conversation runs', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?project=project-1&conversation=conversation-1&run=run-rerun',
+    );
+    vi.mocked(getConversation).mockResolvedValue(
+      conversation(
+        'conversation-1',
+        ['run-original', 'run-rerun'],
+        ['run-original'],
+      ),
+    );
+    vi.mocked(getRun).mockImplementation(async (id) => run(id));
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [],
+      attempts: [],
+      usage: [],
+      operation_evidence: [],
+      derived_nodes: [],
+    });
+
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.run?.id).toBe('run-rerun'));
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.selection.runId).toBe('run-rerun');
+  });
+
+  it('selects the newest conversation run when the restored Run is missing', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?project=project-1&conversation=conversation-1&run=run-missing',
+    );
+    vi.mocked(getConversation).mockResolvedValue(
+      conversation(
+        'conversation-1',
+        ['run-original', 'run-newest'],
+        ['run-original'],
+      ),
+    );
+    vi.mocked(getRun).mockImplementation(async (id) => run(id));
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [],
+      attempts: [],
+      usage: [],
+      operation_evidence: [],
+      derived_nodes: [],
+    });
+
+    const { result } = renderHook(() => useWorkspace());
+
+    await waitFor(() =>
+      expect(result.current.selection.runId).toBe('run-newest'),
+    );
+  });
+
+  it('reruns the selected failed Run, refreshes, selects it, and opens its stream', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?project=project-1&conversation=conversation-1&run=run-failed',
+    );
+    const failedDetail = conversation('conversation-1', ['run-failed']);
+    failedDetail.runs[0] = run('run-failed', 'failed');
+    const rerunDetail = conversation(
+      'conversation-1',
+      ['run-failed', 'run-new'],
+      ['run-failed'],
+    );
+    rerunDetail.runs[0] = run('run-failed', 'failed');
+    rerunDetail.runs[1] = {
+      ...run('run-new', 'queued'),
+      retry_of_run_id: 'run-failed',
+    };
+    vi.mocked(getConversation)
+      .mockResolvedValueOnce(failedDetail)
+      .mockResolvedValue(rerunDetail);
+    vi.mocked(getRun).mockImplementation(async (id) =>
+      run(id, id === 'run-failed' ? 'failed' : 'queued'),
+    );
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [],
+      attempts: [],
+      usage: [],
+      operation_evidence: [],
+      derived_nodes: [],
+    });
+    vi.mocked(rerunRun).mockResolvedValue({
+      run_id: 'run-new',
+      status: 'queued',
+      retry_of_run_id: 'run-failed',
+    });
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue(
+      '00000000-0000-4000-8000-000000000001',
+    );
+
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.run?.status).toBe('failed'));
+
+    let accepted = false;
+    await act(async () => {
+      accepted = await result.current.rerunFailed();
+    });
+
+    expect(accepted).toBe(true);
+    expect(rerunRun).toHaveBeenCalledWith('run-failed', {
+      idempotency_key: '00000000-0000-4000-8000-000000000001',
+    });
+    expect(result.current.conversation?.runs.map((item) => item.id)).toEqual([
+      'run-failed',
+      'run-new',
+    ]);
+    await waitFor(() => expect(result.current.selection.runId).toBe('run-new'));
+    await waitFor(() =>
+      expect(FakeEventSource.urls.at(-1)).toBe('/api/v1/runs/run-new/events'),
+    );
+  });
+
+  it('retains a failed rerun key when transport rejects the request', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?project=project-1&conversation=conversation-1&run=run-failed',
+    );
+    const failedDetail = conversation('conversation-1', ['run-failed']);
+    failedDetail.runs[0] = run('run-failed', 'failed');
+    const rerunDetail = conversation(
+      'conversation-1',
+      ['run-failed', 'run-new'],
+      ['run-failed'],
+    );
+    rerunDetail.runs[0] = run('run-failed', 'failed');
+    rerunDetail.runs[1] = {
+      ...run('run-new', 'queued'),
+      retry_of_run_id: 'run-failed',
+    };
+    vi.mocked(getConversation)
+      .mockResolvedValueOnce(failedDetail)
+      .mockResolvedValue(rerunDetail);
+    vi.mocked(getRun).mockImplementation(async (id) =>
+      run(id, id === 'run-failed' ? 'failed' : 'queued'),
+    );
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [],
+      attempts: [],
+      usage: [],
+      operation_evidence: [],
+      derived_nodes: [],
+    });
+    vi.mocked(rerunRun).mockRejectedValueOnce(new Error('network unavailable'));
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue(
+      '00000000-0000-4000-8000-000000000001',
+    );
+
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.run?.status).toBe('failed'));
+
+    let firstAccepted = true;
+    await act(async () => {
+      firstAccepted = await result.current.rerunFailed();
+    });
+    expect(firstAccepted).toBe(false);
+
+    vi.mocked(rerunRun).mockResolvedValueOnce({
+      run_id: 'run-new',
+      status: 'queued',
+      retry_of_run_id: 'run-failed',
+    });
+    await act(async () => {
+      await result.current.rerunFailed();
+    });
+
+    expect(rerunRun).toHaveBeenNthCalledWith(1, 'run-failed', {
+      idempotency_key: '00000000-0000-4000-8000-000000000001',
+    });
+    expect(rerunRun).toHaveBeenNthCalledWith(2, 'run-failed', {
+      idempotency_key: '00000000-0000-4000-8000-000000000001',
+    });
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns false when the selected Run is not failed', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?project=project-1&conversation=conversation-1&run=run-running',
+    );
+    vi.mocked(getConversation).mockResolvedValue(
+      conversation('conversation-1', ['run-running']),
+    );
+    vi.mocked(getRun).mockResolvedValue(run('run-running'));
+    vi.mocked(getTrace).mockResolvedValue({
+      spans: [],
+      attempts: [],
+      usage: [],
+      operation_evidence: [],
+      derived_nodes: [],
+    });
+
+    const { result } = renderHook(() => useWorkspace());
+    await waitFor(() => expect(result.current.run?.status).toBe('running'));
+
+    let accepted = true;
+    await act(async () => {
+      accepted = await result.current.rerunFailed();
+    });
+
+    expect(accepted).toBe(false);
+    expect(rerunRun).not.toHaveBeenCalled();
   });
 });

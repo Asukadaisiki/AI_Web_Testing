@@ -50,6 +50,8 @@ export interface Run {
   id: string;
   project_id: string;
   conversation_id: string;
+  source_message_id: string;
+  retry_of_run_id?: string;
   status: RunStatus;
   checkpoint_version: number;
   cancel_requested_at?: string;
@@ -60,6 +62,13 @@ export interface Run {
 }
 
 export type SpanKind = 'run' | 'model' | 'reasoning' | 'tool' | 'operation' | 'report';
+
+export interface DecisionContext {
+  objective?: { role: string; content: string };
+  prior_observation?: { role: string; content: string };
+  selected_operation?: { name: string; arguments: JSONValue };
+  visible_explanation?: string;
+}
 
 export interface Span {
   id: string;
@@ -72,6 +81,7 @@ export interface Span {
   status: string;
   input?: JSONValue;
   output?: JSONValue;
+  decision_context?: DecisionContext;
   started_at: string;
   ended_at?: string | null;
   created_at: string;
@@ -174,6 +184,7 @@ export interface Agent {
 export interface ConversationDetail {
   conversation: Conversation;
   messages: Message[];
+  runs: Run[];
 }
 
 export interface CreateMessageRequest {
@@ -198,6 +209,16 @@ export interface SubmitResponseRequest {
 export interface RunActionResponse {
   run_id: string;
   status: string;
+}
+
+export interface RerunRequest {
+  idempotency_key: string;
+}
+
+export interface RerunResponse {
+  run_id: string;
+  status: RunStatus;
+  retry_of_run_id: string;
 }
 
 interface ErrorResponse {
@@ -394,6 +415,16 @@ function parseRun(value: unknown, status: number, at = 'run'): Run {
       status,
       `${at}.conversation_id`,
     ),
+    source_message_id: stringValue(
+      item['source_message_id'],
+      status,
+      `${at}.source_message_id`,
+    ),
+    retry_of_run_id: optionalString(
+      item['retry_of_run_id'],
+      status,
+      `${at}.retry_of_run_id`,
+    ),
     status: enumValue(item['status'], runStatuses, status, `${at}.status`),
     checkpoint_version: numberValue(
       item['checkpoint_version'],
@@ -409,6 +440,68 @@ function parseRun(value: unknown, status: number, at = 'run'): Run {
     finished_at: optionalString(item['finished_at'], status, `${at}.finished_at`),
     created_at: stringValue(item['created_at'], status, `${at}.created_at`),
     updated_at: stringValue(item['updated_at'], status, `${at}.updated_at`),
+  };
+}
+
+function parseDecisionMessage(
+  value: unknown,
+  status: number,
+  at: string,
+): { role: string; content: string } {
+  const item = recordValue(value, status, at);
+  return {
+    role: stringValue(item['role'], status, `${at}.role`),
+    content: stringValue(item['content'], status, `${at}.content`),
+  };
+}
+
+function parseDecisionContext(
+  value: unknown,
+  status: number,
+  at: string,
+): DecisionContext {
+  const item = recordValue(value, status, at);
+  const selectedOperation =
+    item['selected_operation'] === undefined
+      ? undefined
+      : recordValue(
+          item['selected_operation'],
+          status,
+          `${at}.selected_operation`,
+        );
+  return {
+    objective:
+      item['objective'] === undefined
+        ? undefined
+        : parseDecisionMessage(item['objective'], status, `${at}.objective`),
+    prior_observation:
+      item['prior_observation'] === undefined
+        ? undefined
+        : parseDecisionMessage(
+            item['prior_observation'],
+            status,
+            `${at}.prior_observation`,
+          ),
+    selected_operation:
+      selectedOperation === undefined
+        ? undefined
+        : {
+            name: stringValue(
+              selectedOperation['name'],
+              status,
+              `${at}.selected_operation.name`,
+            ),
+            arguments: jsonValue(
+              selectedOperation['arguments'],
+              status,
+              `${at}.selected_operation.arguments`,
+            ),
+          },
+    visible_explanation: optionalString(
+      item['visible_explanation'],
+      status,
+      `${at}.visible_explanation`,
+    ),
   };
 }
 
@@ -429,6 +522,14 @@ function parseSpan(value: unknown, status: number, at: string): Span {
     status: stringValue(item['status'], status, `${at}.status`),
     input: optionalJSON(item['input'], status, `${at}.input`),
     output: optionalJSON(item['output'], status, `${at}.output`),
+    decision_context:
+      item['decision_context'] === undefined
+        ? undefined
+        : parseDecisionContext(
+            item['decision_context'],
+            status,
+            `${at}.decision_context`,
+          ),
     started_at: stringValue(item['started_at'], status, `${at}.started_at`),
     ended_at:
       item['ended_at'] === null
@@ -557,6 +658,10 @@ function parseConversationDetail(value: unknown, status: number): ConversationDe
       (message, index) =>
         parseMessage(message, status, `conversation_detail.messages[${String(index)}]`),
     ),
+    runs: arrayValue(item['runs'], status, 'conversation_detail.runs').map(
+      (run, index) =>
+        parseRun(run, status, `conversation_detail.runs[${String(index)}]`),
+    ),
   };
 }
 
@@ -577,6 +682,19 @@ function parseRunActionResponse(value: unknown, status: number): RunActionRespon
   return {
     run_id: stringValue(item['run_id'], status, 'run_action.run_id'),
     status: stringValue(item['status'], status, 'run_action.status'),
+  };
+}
+
+function parseRerunResponse(value: unknown, status: number): RerunResponse {
+  const item = recordValue(value, status, 'rerun');
+  return {
+    run_id: stringValue(item['run_id'], status, 'rerun.run_id'),
+    status: enumValue(item['status'], runStatuses, status, 'rerun.status'),
+    retry_of_run_id: stringValue(
+      item['retry_of_run_id'],
+      status,
+      'rerun.retry_of_run_id',
+    ),
   };
 }
 
@@ -796,6 +914,17 @@ export function cancelRun(runId: string): Promise<RunActionResponse> {
     `/runs/${encodeURIComponent(runId)}/cancel`,
     {},
     parseRunActionResponse,
+  );
+}
+
+export function rerunRun(
+  runId: string,
+  request: RerunRequest,
+): Promise<RerunResponse> {
+  return postJSON(
+    `/runs/${encodeURIComponent(runId)}/reruns`,
+    request,
+    parseRerunResponse,
   );
 }
 
