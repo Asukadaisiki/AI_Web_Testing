@@ -1,9 +1,10 @@
 import { Bot } from 'lucide-react';
 import { useMemo } from 'react';
-import type { Run } from '../../api';
+import type { Message, Run } from '../../api';
 import { Composer } from './Composer';
 import {
   formatMessageDate,
+  formatMessageTime,
   MessageBlock,
   messageDateKey,
   RunStateBlock,
@@ -12,6 +13,40 @@ import type { WorkspaceState } from '../workspace/useWorkspace';
 
 interface Props {
   workspace: WorkspaceState;
+}
+
+interface TaskTimelineEntry {
+  kind: 'task';
+  source: Message;
+  runs: Run[];
+  selectedRun: Run;
+  responses: Message[];
+}
+
+interface MessageTimelineEntry {
+  kind: 'message';
+  message: Message;
+}
+
+type TimelineEntry = TaskTimelineEntry | MessageTimelineEntry;
+
+function displayStatus(status: Run['status']): string {
+  return status
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function formatAttemptDuration(run: Run): string {
+  if (run.started_at === undefined || run.finished_at === undefined) {
+    return 'Not available';
+  }
+  const milliseconds =
+    new Date(run.finished_at).getTime() - new Date(run.started_at).getTime();
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'Not available';
+  const seconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(seconds / 60);
+  return minutes === 0 ? `${String(seconds)}s` : `${String(minutes)}m ${String(seconds % 60)}s`;
 }
 
 export function ConversationPane({ workspace }: Props): JSX.Element {
@@ -39,6 +74,69 @@ export function ConversationPane({ workspace }: Props): JSX.Element {
       ),
     [workspace.conversation],
   );
+  const timeline = useMemo(() => {
+    const taskSourceIds = new Set(runsBySource.keys());
+    const knownRunIDs = new Set(
+      (workspace.conversation?.runs ?? []).map((run) => run.id),
+    );
+    const responsesByRun = new Map<string, Message[]>();
+    for (const message of messages) {
+      if (
+        taskSourceIds.has(message.id) ||
+        message.run_id === undefined ||
+        !knownRunIDs.has(message.run_id)
+      ) {
+        continue;
+      }
+      const responses = responsesByRun.get(message.run_id) ?? [];
+      responses.push(message);
+      responsesByRun.set(message.run_id, responses);
+    }
+
+    const entries: TimelineEntry[] = [];
+    for (const message of messages) {
+      const runs = runsBySource.get(message.id);
+      if (runs !== undefined) {
+        const selectedRun =
+          message.id === selectedTaskSourceId
+            ? runs.find((run) => run.id === workspace.selection.runId) ?? runs[runs.length - 1]
+            : runs[runs.length - 1];
+        if (selectedRun !== undefined) {
+          entries.push({
+            kind: 'task',
+            source: message,
+            runs,
+            selectedRun,
+            responses: responsesByRun.get(selectedRun.id) ?? [],
+          });
+        }
+        continue;
+      }
+      if (message.run_id !== undefined && knownRunIDs.has(message.run_id)) {
+        continue;
+      }
+      entries.push({ kind: 'message', message });
+    }
+
+    const dateStarts = new Map<string, boolean>();
+    let previousDate: string | undefined;
+    for (const entry of entries) {
+      const displayedMessages =
+        entry.kind === 'task' ? [entry.source, ...entry.responses] : [entry.message];
+      for (const message of displayedMessages) {
+        const date = messageDateKey(message.created_at);
+        dateStarts.set(message.id, date !== previousDate);
+        previousDate = date;
+      }
+    }
+    return { entries, dateStarts };
+  }, [
+    messages,
+    runsBySource,
+    selectedTaskSourceId,
+    workspace.conversation,
+    workspace.selection.runId,
+  ]);
 
   const title =
     workspace.conversation?.conversation.title?.trim() || 'Untitled conversation';
@@ -78,43 +176,110 @@ export function ConversationPane({ workspace }: Props): JSX.Element {
             <p>Select an authorized agent and model, then describe the goal.</p>
           </div>
         ) : (
-          messages.map((message, index) => {
-            const runs = runsBySource.get(message.id);
-            const priorMessage = messages[index - 1];
-            const startsDate =
-              priorMessage === undefined ||
-              messageDateKey(priorMessage.created_at) !== messageDateKey(message.created_at);
+          timeline.entries.map((entry) => {
+            if (entry.kind === 'message') {
+              return (
+                <div key={entry.message.id} className="timeline-entry">
+                  {timeline.dateStarts.get(entry.message.id) ? (
+                    <div className="message-date-separator" role="separator">
+                      <span>{formatMessageDate(entry.message.created_at)}</span>
+                    </div>
+                  ) : null}
+                  <MessageBlock message={entry.message} />
+                </div>
+              );
+            }
+
             const selectedTask =
-              message.id === selectedTaskSourceId &&
-              workspace.run?.id === workspace.selection.runId;
+              entry.source.id === selectedTaskSourceId &&
+              workspace.run?.id === entry.selectedRun.id;
+            const selectedAttemptIndex = entry.runs.indexOf(entry.selectedRun) + 1;
 
             return (
-              <div key={message.id} className="timeline-entry">
-                {startsDate ? (
+              <div key={entry.source.id} className="timeline-entry task-timeline-entry">
+                {timeline.dateStarts.get(entry.source.id) ? (
                   <div className="message-date-separator" role="separator">
-                    <span>{formatMessageDate(message.created_at)}</span>
+                    <span>{formatMessageDate(entry.source.created_at)}</span>
                   </div>
                 ) : null}
-                <MessageBlock message={message} />
-                {runs !== undefined ? (
-                  <nav className="task-attempts" aria-label="Task attempts">
-                    {runs.map((run, attemptIndex) => (
-                      <button
-                        key={run.id}
-                        type="button"
-                        className={
-                          run.id === workspace.selection.runId
-                            ? 'attempt-selector is-active'
-                            : 'attempt-selector'
-                        }
-                        aria-pressed={run.id === workspace.selection.runId}
-                        title={`Attempt ${String(attemptIndex + 1)}: ${run.status.replace('_', ' ')}`}
-                        onClick={() => workspace.selectRun(run.id)}
-                      >
-                        Attempt {attemptIndex + 1}
-                      </button>
+                <MessageBlock message={entry.source} />
+                <nav className="task-attempts" aria-label="Task attempts">
+                  {entry.runs.map((run, attemptIndex) => {
+                    const metadataID = `attempt-${run.id}-metadata`;
+                    return (
+                      <div key={run.id} className="task-attempt">
+                        <button
+                          type="button"
+                          className={
+                            run.id === entry.selectedRun.id
+                              ? 'attempt-selector is-active'
+                              : 'attempt-selector'
+                          }
+                          aria-pressed={run.id === entry.selectedRun.id}
+                          aria-describedby={metadataID}
+                          onClick={() => workspace.selectRun(run.id)}
+                        >
+                          Attempt {attemptIndex + 1}
+                        </button>
+                        <dl id={metadataID} className="attempt-metadata">
+                          <div>
+                            <dt>Status</dt>
+                            <dd>{displayStatus(run.status)}</dd>
+                          </div>
+                          <div>
+                            <dt>Queued</dt>
+                            <dd>
+                              <time dateTime={run.created_at}>
+                                {formatMessageTime(run.created_at)}
+                              </time>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Started</dt>
+                            <dd>
+                              {run.started_at === undefined ? 'Not started' : (
+                                <time dateTime={run.started_at}>
+                                  {formatMessageTime(run.started_at)}
+                                </time>
+                              )}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Finished</dt>
+                            <dd>
+                              {run.finished_at === undefined ? 'In progress' : (
+                                <time dateTime={run.finished_at}>
+                                  {formatMessageTime(run.finished_at)}
+                                </time>
+                              )}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Duration</dt>
+                            <dd>{formatAttemptDuration(run)}</dd>
+                          </div>
+                        </dl>
+                      </div>
+                    );
+                  })}
+                </nav>
+                {entry.responses.length > 0 ? (
+                  <section
+                    className="attempt-responses"
+                    aria-label={`Attempt ${String(selectedAttemptIndex)} responses`}
+                  >
+                    <p>Attempt {selectedAttemptIndex} responses</p>
+                    {entry.responses.map((message) => (
+                      <div key={message.id}>
+                        {timeline.dateStarts.get(message.id) ? (
+                          <div className="message-date-separator" role="separator">
+                            <span>{formatMessageDate(message.created_at)}</span>
+                          </div>
+                        ) : null}
+                        <MessageBlock message={message} />
+                      </div>
                     ))}
-                  </nav>
+                  </section>
                 ) : null}
                 {selectedTask && workspace.run !== null ? (
                   <RunStateBlock

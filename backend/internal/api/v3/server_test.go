@@ -493,7 +493,7 @@ func TestGetTraceExposesRedactedCanonicalDetails(t *testing.T) {
 	}
 }
 
-func TestGetTraceAttachesDecisionContextOnlyToModelAndReportSpans(t *testing.T) {
+func TestGetTraceAttachesDecisionContextOnlyToModelSpans(t *testing.T) {
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	modelInput := json.RawMessage(`{
 		"messages":[
@@ -595,14 +595,7 @@ func TestGetTraceAttachesDecisionContextOnlyToModelAndReportSpans(t *testing.T) 
 	if got := spans["model-row"].DecisionContext; !reflect.DeepEqual(got, wantModelContext) {
 		t.Fatalf("model decision context = %#v, want %#v", got, wantModelContext)
 	}
-	wantReportContext := &publicDecisionContext{
-		Objective:          &publicDecisionMessage{Role: "user", Content: "Write report"},
-		VisibleExplanation: "Visible report",
-	}
-	if got := spans["report-row"].DecisionContext; !reflect.DeepEqual(got, wantReportContext) {
-		t.Fatalf("report decision context = %#v, want %#v", got, wantReportContext)
-	}
-	for _, id := range []string{"operation-row", "reasoning-row", "malformed-model-row"} {
+	for _, id := range []string{"report-row", "operation-row", "reasoning-row", "malformed-model-row"} {
 		if _, exists := rawSpans[id]["decision_context"]; exists {
 			t.Fatalf("%s unexpectedly contains decision_context: %s", id, rawSpans[id]["decision_context"])
 		}

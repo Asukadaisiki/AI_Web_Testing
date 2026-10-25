@@ -17,6 +17,7 @@ const originalRun: Run = {
   status: 'succeeded',
   checkpoint_version: 2,
   created_at: '2026-10-21T12:00:01Z',
+  started_at: '2026-10-21T12:00:05Z',
   updated_at: '2026-10-21T12:03:00Z',
   finished_at: '2026-10-21T12:03:00Z',
 };
@@ -28,6 +29,7 @@ const rerun: Run = {
   status: 'failed',
   checkpoint_version: 1,
   created_at: '2026-10-22T12:00:01Z',
+  started_at: '2026-10-22T12:00:06Z',
   updated_at: '2026-10-22T12:03:00Z',
   finished_at: '2026-10-22T12:03:00Z',
 };
@@ -106,25 +108,59 @@ function workspaceWithRerun(): WorkspaceState {
 }
 
 describe('ConversationPane', () => {
-  it('groups source Runs as ordered attempts while keeping response messages in ordinal order', () => {
+  it('groups selected attempt responses beneath their source task and exposes lifecycle metadata', () => {
     const workspace = workspaceWithRerun();
-    render(<ConversationPane workspace={workspace} />);
+    const rendered = render(<ConversationPane workspace={workspace} />);
 
     expect(screen.getByRole('button', { name: 'Attempt 1' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Attempt 2' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
+    expect(screen.getByText('Succeeded')).toBeInTheDocument();
+    expect(screen.getAllByText('Failed')).toHaveLength(2);
+    expect(screen.getAllByText('Queued')).toHaveLength(2);
+    expect(screen.getAllByText('Started')).toHaveLength(2);
+    expect(screen.getAllByText('Finished')).toHaveLength(2);
+    expect(screen.getByText('2m 55s')).toBeInTheDocument();
+    const attempts = screen.getByRole('navigation', { name: 'Task attempts' });
+    expect(attempts.querySelector(`time[datetime="${rerun.created_at}"]`)).not.toBeNull();
+    expect(attempts.querySelector(`time[datetime="${rerun.started_at ?? ''}"]`)).not.toBeNull();
+    expect(attempts.querySelector(`time[datetime="${rerun.finished_at ?? ''}"]`)).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Rerun failed task' })).toBeInTheDocument();
     expect(screen.getAllByText(/\d{2}:\d{2}:\d{2}/)).not.toHaveLength(0);
     expect(screen.queryByRole('navigation', { name: 'Conversation runs' })).toBeNull();
     expect(screen.getAllByRole('region', { name: 'Run failed' })).toHaveLength(1);
-    expect(screen.getByText('Continue after the login check.')).toBeInTheDocument();
-    expect(screen.getAllByText('Continue after the login check.')).toHaveLength(1);
+    expect(screen.getByText('The rerun failed during checkout.')).toBeInTheDocument();
+    expect(screen.queryByText('The first attempt passed login.')).toBeNull();
+    expect(screen.queryByText('Continue after the login check.')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Attempt 1' }));
 
     expect(workspace.selectRun).toHaveBeenCalledWith(originalRun.id);
+
+    workspace.selection.runId = originalRun.id;
+    workspace.run = originalRun;
+    rendered.rerender(<ConversationPane workspace={workspace} />);
+
+    expect(screen.getByRole('button', { name: 'Attempt 1' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByText('The first attempt passed login.')).toBeInTheDocument();
+    expect(screen.getByText('Continue after the login check.')).toBeInTheDocument();
+    expect(screen.getAllByText('The first attempt passed login.')).toHaveLength(1);
+    expect(screen.getAllByText('Continue after the login check.')).toHaveLength(1);
+    expect(screen.queryByText('The rerun failed during checkout.')).toBeNull();
+    expect(
+      Array.from(
+        screen.getByLabelText('Attempt 1 responses').querySelectorAll('.message-block p'),
+        (element) => element.textContent,
+      ),
+    ).toEqual([
+      'The first attempt passed login.',
+      'Continue after the login check.',
+    ]);
   });
 
   it('renders messages by ascending ordinal when API input order and timestamps disagree', () => {
@@ -162,14 +198,84 @@ describe('ConversationPane', () => {
       (element) => element.textContent,
     );
 
-    expect(contents).toEqual([
-      'Check checkout',
-      'The first attempt passed login.',
-      'The rerun failed during checkout.',
-      'Continue after the login check.',
-    ]);
+    expect(contents).toEqual(['Check checkout', 'The rerun failed during checkout.']);
     expect(screen.getByLabelText('Message history').querySelectorAll('.message-date-separator'))
-      .toHaveLength(3);
+      .toHaveLength(2);
+  });
+
+  it('uses the latest API-order attempt for a task that is not globally selected', () => {
+    const workspace = workspaceWithRerun();
+    const secondOriginal: Run = {
+      ...originalRun,
+      id: 'run-second-original',
+      source_message_id: 'message-second-task',
+      created_at: '2026-10-23T12:00:01Z',
+    };
+    const secondRerun: Run = {
+      ...secondOriginal,
+      id: 'run-second-rerun',
+      retry_of_run_id: secondOriginal.id,
+      created_at: '2026-10-23T12:01:01Z',
+    };
+    workspace.conversation = {
+      ...detail,
+      messages: [
+        ...detail.messages,
+        {
+          id: 'message-second-task',
+          conversation_id: detail.conversation.id,
+          ordinal: 5,
+          role: 'user',
+          content: 'Check the receipt',
+          created_at: '2026-10-23T12:00:00Z',
+        },
+        {
+          id: 'message-second-original-output',
+          conversation_id: detail.conversation.id,
+          run_id: secondOriginal.id,
+          ordinal: 6,
+          role: 'assistant',
+          content: 'Earlier receipt output.',
+          created_at: '2026-10-23T12:00:30Z',
+        },
+        {
+          id: 'message-second-rerun-output',
+          conversation_id: detail.conversation.id,
+          run_id: secondRerun.id,
+          ordinal: 7,
+          role: 'assistant',
+          content: 'Latest receipt output.',
+          created_at: '2026-10-23T12:01:30Z',
+        },
+      ],
+      runs: [...detail.runs, secondOriginal, secondRerun],
+    };
+
+    render(<ConversationPane workspace={workspace} />);
+
+    const attemptGroups = screen.getAllByRole('navigation', { name: 'Task attempts' });
+    expect(attemptGroups).toHaveLength(2);
+    expect(attemptGroups[1]?.querySelectorAll('button')[1]).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByText('Latest receipt output.')).toBeInTheDocument();
+    expect(screen.queryByText('Earlier receipt output.')).toBeNull();
+  });
+
+  it('disables and invokes the failed rerun action with workspace busy state', () => {
+    const workspace = workspaceWithRerun();
+    workspace.busy = true;
+    const rendered = render(<ConversationPane workspace={workspace} />);
+
+    const rerunButton = screen.getByRole('button', { name: 'Rerun failed task' });
+    expect(rerunButton).toBeDisabled();
+
+    workspace.busy = false;
+    rendered.rerender(<ConversationPane workspace={workspace} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Rerun failed task' }));
+
+    expect(workspace.rerunFailed).toHaveBeenCalledTimes(1);
   });
 
   it('does not render state for a loaded Run that differs from the selected attempt', () => {

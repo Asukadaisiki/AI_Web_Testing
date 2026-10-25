@@ -220,7 +220,7 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 		input := redactTraceJSON(span.Input)
 		output := redactTraceJSON(span.Output)
 		decision := (*publicDecisionContext)(nil)
-		if span.Kind == domain.SpanModel || span.Kind == domain.SpanReport {
+		if span.Kind == domain.SpanModel {
 			decision = projectDecisionContext(input, output)
 		}
 		spans = append(spans, publicTraceSpan{
