@@ -16,7 +16,8 @@
   },
   "scripts": {
     "test": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
