@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "pi-browser-harness": "./dist/main.js"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
