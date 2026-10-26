@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -127,6 +128,26 @@ func runSubprocessScenario(scenario string) {
 				os.Exit(0)
 			}
 		}
+
+	case "clean_settled_close_stderr":
+		// Emit a full settled run, then close stderr while staying alive. The
+		// parent's stderr reader finishes (stderrDone closes) while the child
+		// is still running. If the cancel goroutine wrongly sends SIGINT after
+		// a clean exit, the child catches it and writes a marker file.
+		writeEvent(EventStarted, 1, map[string]any{})
+		writeEvent(EventSettled, 2, map[string]any{"assistant_text": "done"})
+		os.Stdout.Sync()
+		os.Stderr.Close()
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT)
+		select {
+		case <-sigCh:
+			if marker := os.Getenv("PIHARNESS_SIGNAL_MARKER"); marker != "" {
+				_ = os.WriteFile(marker, []byte("got-signal"), 0644)
+			}
+		case <-time.After(500 * time.Millisecond):
+		}
+		os.Exit(0)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown scenario: %s\n", scenario)
@@ -281,11 +302,11 @@ func TestRunNonZeroExitAfterFailedReturnsTypedHarnessFailure(t *testing.T) {
 	}
 }
 
-func TestRunZeroExitBeforeTerminalIsPrematureExit(t *testing.T) {
+func TestRunZeroExitBeforeTerminalReturnsErrMissingTerminal(t *testing.T) {
 	runner := newTestRunner("zero_exit_before_terminal")
 	err := runner.Run(context.Background(), sampleRequest(), func(e Event) {})
-	if !errors.Is(err, ErrPrematureExit) {
-		t.Fatalf("expected ErrPrematureExit, got %v", err)
+	if !errors.Is(err, ErrMissingTerminal) {
+		t.Fatalf("expected ErrMissingTerminal, got %v", err)
 	}
 }
 
@@ -335,5 +356,38 @@ func TestRunDoesNotInvokeShell(t *testing.T) {
 	}
 	if strings.HasSuffix(cmd.Path, "sh") || strings.HasSuffix(cmd.Path, "bash") {
 		t.Fatalf("runner must not invoke a shell, got %s", cmd.Path)
+	}
+}
+
+func TestRunCleanExitDoesNotSignalInterrupt(t *testing.T) {
+	// Regression test: after a clean settled exit the cancel goroutine must
+	// not send SIGINT to the (potentially reused) process group. The child
+	// closes stderr early while staying alive so stderrDone fires before the
+	// child exits; if SIGINT is sent the child writes a marker file.
+	markerFile := filepath.Join(t.TempDir(), "signal-marker")
+	runner := newTestRunner("clean_settled_close_stderr")
+	runner.Environment = append(runner.Environment, "PIHARNESS_SIGNAL_MARKER="+markerFile)
+	err := runner.Run(context.Background(), sampleRequest(), func(e Event) {})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if data, rerr := os.ReadFile(markerFile); rerr == nil {
+		t.Fatalf("cancel goroutine sent SIGINT after clean exit; marker content: %s", data)
+	}
+}
+
+func TestRunTimeoutReturnsErrTimeout(t *testing.T) {
+	runner := newTestRunner("trap_interrupt")
+	runner.Timeout = 50 * time.Millisecond
+	start := time.Now()
+	err := runner.Run(context.Background(), sampleRequest(), func(e Event) {})
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("expected ErrTimeout, got %v", err)
+	}
+	// The run must not take significantly longer than the timeout, confirming
+	// the process was terminated rather than running to completion.
+	if elapsed > 2*time.Second {
+		t.Fatalf("run took %v after timeout, expected prompt termination", elapsed)
 	}
 }

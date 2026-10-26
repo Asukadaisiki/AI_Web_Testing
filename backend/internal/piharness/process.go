@@ -189,7 +189,10 @@ func (r *ProcessRunner) Run(ctx context.Context, request Request, onEvent func(E
 		case <-timeoutCh:
 			cancelErr <- ErrTimeout
 		case <-stderrDone:
-			// Process already finished; nothing to cancel.
+			// Process already finished; nothing to cancel. Return so we do
+			// not fall through to signalInterrupt, which would send SIGINT to
+			// a (possibly reused) process group after a clean exit.
+			return
 		}
 		r.signalInterrupt(cmd)
 	}()
@@ -282,12 +285,13 @@ func (r *ProcessRunner) Run(ctx context.Context, request Request, onEvent func(E
 		return nil
 	}
 
-	// No terminal event was emitted before the process exited. Both clean and
-	// non-zero exits without a terminal record are premature.
+	// No terminal event was emitted before the process exited. Distinguish a
+	// clean-but-incomplete exit (zero status, no terminal) from a crash
+	// (non-zero status, no terminal).
 	if waitErr != nil {
 		return fmt.Errorf("%w: %v", ErrPrematureExit, waitErr)
 	}
-	return fmt.Errorf("%w: process exited with status 0 but no terminal event", ErrPrematureExit)
+	return fmt.Errorf("%w: process exited with status 0 but no terminal event", ErrMissingTerminal)
 }
 
 // signalInterrupt sends SIGINT to the child's process group, then waits up to
