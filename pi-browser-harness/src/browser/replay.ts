@@ -38,9 +38,7 @@ export interface DryRunFailure {
 
 export class FatalCaseBuilderError extends Error {
   constructor(
-    public readonly code:
-      | typeof CODE_COMMITTED_PREFIX_REPLAY_FAILED
-      | typeof CODE_NAVIGATION_FAILED,
+    public readonly code: typeof CODE_COMMITTED_PREFIX_REPLAY_FAILED,
     message: string,
     public readonly result?: ToolResult,
   ) {

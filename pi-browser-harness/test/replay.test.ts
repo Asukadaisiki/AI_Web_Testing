@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WorkerClient } from "../src/browser/worker-client.js";
 import {
   CaseBuilder,
+  CODE_COMMITTED_PREFIX_REPLAY_FAILED,
+  CODE_NAVIGATION_FAILED,
   FatalCaseBuilderError,
   type CaseBuilderDeps,
 } from "../src/browser/case-builder.js";
@@ -485,6 +487,27 @@ describe("replay and dry-run repair", () => {
     await expect(builder.prepareDryRunRepair(execution)).rejects.toMatchObject({
       code: "committed_prefix_replay_failed",
     });
+  });
+
+  it("FatalCaseBuilderError code union excludes navigation_failed", () => {
+    // Navigation failures are repairable ToolResults, not fatal errors, so
+    // `navigation_failed` must not appear in the FatalCaseBuilderError code
+    // union. This is enforced at the type level: if `navigation_failed` were
+    // part of the union, the assignment below would fail typecheck.
+    type FatalCode = ConstructorParameters<typeof FatalCaseBuilderError>[0];
+    type NavigationIsNotFatal = typeof CODE_NAVIGATION_FAILED extends FatalCode
+      ? "navigation_failed must not be a fatal code"
+      : true;
+    const _assertNavigationNotFatal: NavigationIsNotFatal = true;
+    void _assertNavigationNotFatal;
+
+    // Runtime sanity: navigation_failed is a distinct repairable code and
+    // the only fatal code is committed_prefix_replay_failed.
+    expect(CODE_NAVIGATION_FAILED).toBe("navigation_failed");
+    expect(CODE_COMMITTED_PREFIX_REPLAY_FAILED).toBe(
+      "committed_prefix_replay_failed",
+    );
+    expect(CODE_NAVIGATION_FAILED).not.toBe(CODE_COMMITTED_PREFIX_REPLAY_FAILED);
   });
 });
 
