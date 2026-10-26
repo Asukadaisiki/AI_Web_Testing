@@ -1,6 +1,10 @@
 {
   "version": "loop.case.v1",
   "note": "Go 与 Python 两侧校验器共读本文件，必须给出相同的 accept 与 code。新增契约规则时必须在这里补用例。",
+  "normalized_before_validation_codes": [
+    "step_index_mismatch",
+    "condition_missing_timeout"
+  ],
   "authoring_action": {
     "request": {
       "action": "assert_element",
@@ -606,6 +610,235 @@
             "timeout_ms": 5000
           }
         ]
+      }
+    },
+    {
+      "name": "accept-all-retained-actions",
+      "expect": { "accept": true },
+      "case": {
+        "case_version": "loop.case.v1",
+        "name": "exercise every retained action",
+        "goal": "prove the shared action vocabulary",
+        "base_url": "https://shop.test",
+        "steps": [
+          {
+            "index": 0,
+            "action": "goto",
+            "intent": "open settings",
+            "value": "https://shop.test/settings",
+            "preconditions": [],
+            "postconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 1,
+            "action": "check",
+            "intent": "check notifications",
+            "target": {
+              "hint": "Notifications",
+              "locator": { "kind": "role", "role": "checkbox", "name": "Notifications", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "check:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "element_state", "value": "checked", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 2,
+            "action": "uncheck",
+            "intent": "uncheck notifications",
+            "target": {
+              "hint": "Notifications",
+              "locator": { "kind": "role", "role": "checkbox", "name": "Notifications", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "uncheck:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "element_state", "value": "unchecked", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 3,
+            "action": "scroll_into_view",
+            "intent": "show advanced settings",
+            "target": {
+              "hint": "Advanced",
+              "locator": { "kind": "text", "text": "Advanced", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "scroll:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "Advanced", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 4,
+            "action": "hover",
+            "intent": "show help",
+            "target": {
+              "hint": "Help",
+              "locator": { "kind": "role", "role": "button", "name": "Help", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "hover:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "Help text", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 5,
+            "action": "dismiss_dialog",
+            "intent": "dismiss the dialog",
+            "target": {
+              "hint": "Close",
+              "locator": { "kind": "role", "role": "button", "name": "Close", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "dismiss:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "text_visible", "value": "Dialog", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_gone", "value": "Dialog", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 6,
+            "action": "upload_file",
+            "intent": "upload avatar",
+            "value": "/tmp/avatar.png",
+            "target": {
+              "hint": "Avatar",
+              "locator": { "kind": "css", "css": "#avatar", "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "upload:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "text_visible", "value": "avatar.png", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 7,
+            "action": "assert_url",
+            "intent": "verify settings URL",
+            "value": "/settings",
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 8,
+            "action": "assert_element",
+            "intent": "verify save button",
+            "target": {
+              "hint": "Save",
+              "locator": { "kind": "role", "role": "button", "name": "Save", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "element:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "element_state", "value": "visible", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 9,
+            "action": "assert_attribute",
+            "intent": "verify save state",
+            "target": {
+              "hint": "Save",
+              "locator": { "kind": "role", "role": "button", "name": "Save", "exact": true, "match_count": 1 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "attribute:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "attribute_equals", "value": "data-state=ready", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          },
+          {
+            "index": 10,
+            "action": "assert_count",
+            "intent": "verify row count",
+            "target": {
+              "hint": "Rows",
+              "locator": { "kind": "css", "css": ".row", "match_count": 3 },
+              "grounding": { "observation_id": "obs_actions", "page_state_id": "ps_actions", "candidate_id": "count:0", "page_url": "https://shop.test/settings" }
+            },
+            "preconditions": [{ "type": "url_contains", "value": "/settings", "timeout_ms": 3000 }],
+            "postconditions": [{ "type": "count_equals", "value": "3", "timeout_ms": 3000 }],
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-version-mismatch",
+      "expect": { "accept": false, "code": "case_version_mismatch" },
+      "case": { "case_version": "loop.case.v2", "name": "wrong version", "goal": "", "base_url": "", "steps": [] }
+    },
+    {
+      "name": "reject-missing-name",
+      "expect": { "accept": false, "code": "case_name_required" },
+      "case": { "case_version": "loop.case.v1", "name": " ", "goal": "", "base_url": "", "steps": [] }
+    },
+    {
+      "name": "reject-empty-steps",
+      "expect": { "accept": false, "code": "case_empty_steps" },
+      "case": { "case_version": "loop.case.v1", "name": "empty", "goal": "", "base_url": "", "steps": [] }
+    },
+    {
+      "name": "reject-missing-intent",
+      "expect": { "accept": false, "code": "step_intent_required" },
+      "case": {
+        "case_version": "loop.case.v1", "name": "missing intent", "goal": "", "base_url": "",
+        "steps": [{ "index": 0, "action": "goto", "intent": " ", "value": "https://shop.test", "preconditions": [], "postconditions": [{ "type": "url_contains", "value": "shop.test" }] }]
+      }
+    },
+    {
+      "name": "reject-unknown-action",
+      "expect": { "accept": false, "code": "step_unknown_action" },
+      "case": {
+        "case_version": "loop.case.v1", "name": "unknown action", "goal": "", "base_url": "",
+        "steps": [
+          { "index": 0, "action": "goto", "intent": "open", "value": "https://shop.test", "preconditions": [], "postconditions": [{ "type": "url_contains", "value": "shop.test" }] },
+          { "index": 1, "action": "double_click", "intent": "unknown", "preconditions": [], "postconditions": [{ "type": "text_visible", "value": "Done" }] }
+        ]
+      }
+    },
+    {
+      "name": "reject-missing-value",
+      "expect": { "accept": false, "code": "step_missing_value" },
+      "case": {
+        "case_version": "loop.case.v1", "name": "missing value", "goal": "", "base_url": "",
+        "steps": [{ "index": 0, "action": "goto", "intent": "open", "preconditions": [], "postconditions": [{ "type": "url_contains", "value": "shop.test" }] }]
+      }
+    },
+    {
+      "name": "reject-missing-target",
+      "expect": { "accept": false, "code": "step_missing_target" },
+      "case": {
+        "case_version": "loop.case.v1", "name": "missing target", "goal": "", "base_url": "",
+        "steps": [
+          { "index": 0, "action": "goto", "intent": "open", "value": "https://shop.test", "preconditions": [], "postconditions": [{ "type": "url_contains", "value": "shop.test" }] },
+          { "index": 1, "action": "click", "intent": "click", "preconditions": [{ "type": "url_contains", "value": "shop.test" }], "postconditions": [{ "type": "text_visible", "value": "Done" }] }
+        ]
+      }
+    },
+    {
+      "name": "reject-unexpected-target",
+      "expect": { "accept": false, "code": "step_unexpected_target" },
+      "case": {
+        "case_version": "loop.case.v1", "name": "unexpected target", "goal": "", "base_url": "",
+        "steps": [{
+          "index": 0, "action": "goto", "intent": "open", "value": "https://shop.test",
+          "target": { "hint": "", "locator": { "kind": "", "match_count": 0 }, "grounding": { "observation_id": "", "page_state_id": "", "candidate_id": "", "page_url": "" } },
+          "preconditions": [], "postconditions": [{ "type": "url_contains", "value": "shop.test" }]
+        }]
+      }
+    },
+    {
+      "name": "reject-condition-missing-value",
+      "expect": { "accept": false, "code": "condition_missing_value" },
+      "case": {
+        "case_version": "loop.case.v1", "name": "condition missing value", "goal": "", "base_url": "",
+        "steps": [{ "index": 0, "action": "goto", "intent": "open", "value": "https://shop.test", "preconditions": [], "postconditions": [{ "type": "url_contains", "value": "" }] }]
+      }
+    },
+    {
+      "name": "reject-non-absolute-goto",
+      "expect": { "accept": false, "code": "goto_value_not_absolute" },
+      "case": {
+        "case_version": "loop.case.v1", "name": "relative goto", "goal": "", "base_url": "",
+        "steps": [{ "index": 0, "action": "goto", "intent": "open", "value": "/products", "preconditions": [], "postconditions": [{ "type": "url_contains", "value": "/products" }] }]
       }
     }
   ]
