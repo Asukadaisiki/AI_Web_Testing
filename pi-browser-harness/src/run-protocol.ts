@@ -200,7 +200,7 @@ export function deriveTerminalVerdict(
   state: TerminalState,
 ): "succeeded" | "failed" {
   return state.assistant_settled &&
-    state.browser_case_verdicts.includes("passed")
+    state.browser_case_verdicts.at(-1) === "passed"
     ? "succeeded"
     : "failed";
 }

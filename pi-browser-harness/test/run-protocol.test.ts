@@ -157,4 +157,19 @@ describe("deriveTerminalVerdict", () => {
       }),
     ).toBe("failed");
   });
+
+  it.each([
+    [["passed", "failed"], "failed"],
+    [["failed", "passed"], "succeeded"],
+  ] as const)(
+    "uses the latest browser case verdict from %j",
+    (browser_case_verdicts, expected) => {
+      expect(
+        deriveTerminalVerdict({
+          assistant_settled: true,
+          browser_case_verdicts,
+        }),
+      ).toBe(expected);
+    },
+  );
 });
