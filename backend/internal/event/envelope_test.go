@@ -21,7 +21,7 @@ func TestEnvelopeRoundTripsRunCommand(t *testing.T) {
 		Payload: RunCommand{
 			RunID:          "run_123",
 			ConversationID: "conv_123",
-			Model:          ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+			Model:          ModelRef{Provider: "scripted", Name: "browser-eval-fixture", ReasoningEffort: "high"},
 			Messages: []domain.Message{
 				{Role: "user", Content: "Log in and verify the cart"},
 			},
@@ -34,6 +34,8 @@ func TestEnvelopeRoundTripsRunCommand(t *testing.T) {
 				},
 			},
 			CheckpointVersion: 3,
+			WorkerURL:         "http://worker:8100",
+			ArtifactScope:     "run_123",
 		},
 	}
 
@@ -53,7 +55,7 @@ func TestEnvelopeRoundTripsRunCommand(t *testing.T) {
 	if output.Payload.RunID != "run_123" || output.Payload.ConversationID != "conv_123" {
 		t.Fatalf("run command IDs = %#v", output.Payload)
 	}
-	if output.Payload.Model != (ModelRef{Provider: "scripted", Name: "browser-eval-fixture"}) {
+	if output.Payload.Model != (ModelRef{Provider: "scripted", Name: "browser-eval-fixture", ReasoningEffort: "high"}) {
 		t.Fatalf("model = %#v", output.Payload.Model)
 	}
 	if len(output.Payload.Messages) != 1 || output.Payload.Messages[0].Content != "Log in and verify the cart" {
@@ -64,6 +66,9 @@ func TestEnvelopeRoundTripsRunCommand(t *testing.T) {
 	}
 	if output.Payload.CheckpointVersion != 3 {
 		t.Fatalf("checkpoint version = %d", output.Payload.CheckpointVersion)
+	}
+	if output.Payload.WorkerURL != "http://worker:8100" || output.Payload.ArtifactScope != "run_123" {
+		t.Fatalf("worker url / artifact scope = %q / %q", output.Payload.WorkerURL, output.Payload.ArtifactScope)
 	}
 }
 

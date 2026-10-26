@@ -66,8 +66,9 @@ func schemaMajor(version string) (int, error) {
 
 // ModelRef identifies a server-approved model.
 type ModelRef struct {
-	Provider string `json:"provider"`
-	Name     string `json:"name"`
+	Provider        string `json:"provider"`
+	Name            string `json:"name"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // Callback describes a server-owned operation callback.
@@ -92,4 +93,6 @@ type RunCommand struct {
 	Messages          []domain.Message `json:"messages"`
 	Operations        []Operation      `json:"operations"`
 	CheckpointVersion int64            `json:"checkpoint_version"`
+	WorkerURL         string           `json:"worker_url,omitempty"`
+	ArtifactScope     string           `json:"artifact_scope,omitempty"`
 }
