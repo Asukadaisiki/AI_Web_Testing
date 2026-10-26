@@ -4,10 +4,12 @@ import type {
   Element,
   Locator,
   Observation,
+  TargetSpec,
 } from "../src/browser/contract.js";
 import {
   FailureLedger,
   StrategyRepeatedError,
+  failureTargetKey,
   pageFingerprint,
 } from "../src/browser/failure-ledger.js";
 
@@ -169,13 +171,13 @@ describe("FailureLedger", () => {
       elements: [control("search", "widget", 1)],
     });
     const ledger = new FailureLedger();
-    ledger.record(current, "click", "  WIDGET \n", "condition_unmet");
+    ledger.record(current, "click", "condition_unmet", undefined, undefined, "  WIDGET \n");
 
-    expect(() => ledger.rejectRepeated(current, "click", "widget")).toThrow(
-      StrategyRepeatedError,
-    );
+    expect(() =>
+      ledger.rejectRepeated(current, "click", undefined, undefined, "widget"),
+    ).toThrow(StrategyRepeatedError);
     try {
-      ledger.rejectRepeated(current, "click", "widget");
+      ledger.rejectRepeated(current, "click", undefined, undefined, "widget");
     } catch (error) {
       expect((error as StrategyRepeatedError).code).toBe(
         "strategy_repeated",
@@ -191,10 +193,50 @@ describe("FailureLedger", () => {
       elements: [control("search", "after", 1)],
     });
     const ledger = new FailureLedger();
-    ledger.record(before, "click", "widget", "condition_unmet");
+    ledger.record(before, "click", "condition_unmet", undefined, undefined, "widget");
 
     expect(() =>
-      ledger.rejectRepeated(after, "click", "widget"),
+      ledger.rejectRepeated(after, "click", undefined, undefined, "widget"),
+    ).not.toThrow();
+  });
+
+  it("treats structurally equivalent specs as the same target key", () => {
+    const specInline: TargetSpec = {
+      object: { role: "Button", text: " Submit " },
+    };
+    const specTopLevel: TargetSpec = {
+      object: {},
+      role: "  BUTTON ",
+      text: "SUBMIT",
+    };
+
+    expect(failureTargetKey(undefined, specInline)).toBe(
+      failureTargetKey(undefined, specTopLevel),
+    );
+
+    const current = observation({
+      elements: [control("search", "widget", 1)],
+    });
+    const ledger = new FailureLedger();
+    ledger.record(current, "click", "condition_unmet", undefined, specInline);
+
+    expect(() =>
+      ledger.rejectRepeated(current, "click", undefined, specTopLevel),
+    ).toThrow(StrategyRepeatedError);
+  });
+
+  it("preserves candidate ID case so differently-cased IDs are distinct", () => {
+    const current = observation({
+      elements: [control("search", "widget", 1)],
+    });
+    const ledger = new FailureLedger();
+    ledger.record(current, "click", "condition_unmet", "Candidate-A");
+
+    expect(() =>
+      ledger.rejectRepeated(current, "click", "Candidate-A"),
+    ).toThrow(StrategyRepeatedError);
+    expect(() =>
+      ledger.rejectRepeated(current, "click", "candidate-a"),
     ).not.toThrow();
   });
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { Action, Locator, Observation } from "./contract.js";
+import type { Action, Locator, Observation, TargetSpec } from "./contract.js";
 
 export const STRATEGY_REPEATED = "strategy_repeated" as const;
 const MAX_FAILURE_SIGNATURES = 8;
@@ -93,13 +93,15 @@ export class FailureLedger {
   record(
     observation: Observation,
     action: Action,
-    targetKey: string,
     errorCode: string,
+    candidateId?: string,
+    spec?: TargetSpec,
+    hint?: string,
   ): void {
     this.remember({
       page_fingerprint: pageFingerprint(observation),
       action,
-      target_key: normalizeTargetKey(targetKey),
+      target_key: failureTargetKey(candidateId, spec, hint),
       error_code: errorCode,
     });
   }
@@ -107,27 +109,88 @@ export class FailureLedger {
   failed(
     observation: Observation,
     action: Action,
-    targetKey: string,
+    candidateId?: string,
+    spec?: TargetSpec,
+    hint?: string,
   ): boolean {
     const fingerprint = pageFingerprint(observation);
-    const normalizedTarget = normalizeTargetKey(targetKey);
+    const targetKey = failureTargetKey(candidateId, spec, hint);
     return this.#signatures.some(
       (signature) =>
         signature.page_fingerprint === fingerprint &&
         signature.action === action &&
-        signature.target_key === normalizedTarget,
+        signature.target_key === targetKey,
     );
   }
 
   rejectRepeated(
     observation: Observation,
     action: Action,
-    targetKey: string,
+    candidateId?: string,
+    spec?: TargetSpec,
+    hint?: string,
   ): void {
-    if (this.failed(observation, action, targetKey)) {
+    if (this.failed(observation, action, candidateId, spec, hint)) {
       throw new StrategyRepeatedError();
     }
   }
+}
+
+/**
+ * Computes a canonical failure target key from a candidate ID, structured
+ * target spec, or free-form hint.  Aligns with the v2 planner
+ * `failureTargetKey`: the candidate ID is compared case-sensitively (trim
+ * only), while spec fields and hints are case-folded and whitespace-normalized
+ * before JSON serialization.
+ */
+export function failureTargetKey(
+  candidateId?: string,
+  spec?: TargetSpec,
+  hint?: string,
+): string {
+  const candidate = (candidateId ?? "").trim();
+  if (candidate !== "") {
+    return candidate;
+  }
+  if (!spec) {
+    return normalize(hint ?? "");
+  }
+
+  const object = { ...spec.object };
+  if (!object.role) object.role = spec.role ?? "";
+  if (!object.text) object.text = spec.text ?? "";
+  if (!object.name) object.name = spec.name ?? "";
+  if (!object.aliases || object.aliases.length === 0) {
+    object.aliases = spec.aliases ?? [];
+  }
+
+  const normalizedObject: Record<string, unknown> = {};
+  const role = normalize(object.role ?? "");
+  if (role) normalizedObject.role = role;
+  const text = normalize(object.text ?? "");
+  if (text) normalizedObject.text = text;
+  const name = normalize(object.name ?? "");
+  if (name) normalizedObject.name = name;
+  const aliases = normalizedStrings(object.aliases ?? []);
+  if (aliases.length > 0) normalizedObject.aliases = aliases;
+
+  const payload: Record<string, unknown> = { object: normalizedObject };
+
+  if (spec.scope) {
+    const scope: Record<string, unknown> = {};
+    const kind = normalize(spec.scope.kind ?? "");
+    if (kind) scope.kind = kind;
+    const containsText = normalize(spec.scope.contains_text ?? "");
+    if (containsText) scope.contains_text = containsText;
+    const ref = (spec.scope.ref ?? "").trim();
+    if (ref) scope.ref = ref;
+    payload.scope = scope;
+  }
+
+  const relation = normalize(spec.relation ?? "");
+  if (relation) payload.relation = relation;
+
+  return JSON.stringify(payload);
 }
 
 function sameSignature(
@@ -183,6 +246,10 @@ function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
 
-function normalizeTargetKey(value: string): string {
+function normalize(value: string): string {
   return value.toLowerCase().trim().split(/\s+/u).filter(Boolean).join(" ");
+}
+
+function normalizedStrings(values: string[]): string[] {
+  return sortedUnique(values.map(normalize).filter(Boolean));
 }
