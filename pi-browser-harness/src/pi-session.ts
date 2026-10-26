@@ -182,11 +182,34 @@ function registerOpenAiCompatibleProvider(
 ): void {
   const baseUrl = requiredEnv("AGENTTRACE_MODEL_BASE_URL");
   const apiKey = requiredEnv("AGENTTRACE_MODEL_API_KEY");
+  const api = resolveProviderApi();
   runtime.registerProvider(provider, {
     baseUrl,
     apiKey,
-    api: "openai-completions",
+    api,
   });
+}
+
+/**
+ * Resolves the OpenAI-compatible provider API surface from
+ * `AGENTTRACE_PI_PROVIDER_API`. Defaults to `"openai-completions"`; supported
+ * values include `"openai-completions"` and `"openai-responses"`.
+ */
+function resolveProviderApi(): "openai-completions" | "openai-responses" {
+  const value = process.env["AGENTTRACE_PI_PROVIDER_API"];
+  if (value === undefined || value.trim() === "") {
+    return "openai-completions";
+  }
+  const trimmed = value.trim();
+  if (trimmed === "openai-responses") {
+    return "openai-responses";
+  }
+  if (trimmed === "openai-completions") {
+    return "openai-completions";
+  }
+  throw new Error(
+    `AGENTTRACE_PI_PROVIDER_API must be "openai-completions" or "openai-responses", got "${trimmed}"`,
+  );
 }
 
 function registerScriptedProvider(runtime: ModelRuntime): void {

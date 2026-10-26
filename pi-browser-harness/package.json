@@ -10,9 +10,6 @@
     "node": ">=22.19.0"
   },
   "pi": {
-    "extensions": [
-      "./dist/extension.js"
-    ],
     "skills": [
       "./resources/skills"
     ]

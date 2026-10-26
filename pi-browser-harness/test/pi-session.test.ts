@@ -1,6 +1,6 @@
 import { Writable } from "node:stream";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ModelRuntime,
@@ -187,5 +187,74 @@ describe("createBrowserSession", () => {
     session.dispose();
 
     expect(fake.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("registerOpenAiCompatibleProvider", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function makeOpenAiRequest(provider = "openai-compatible"): RunRequest {
+    return {
+      ...baseRequest,
+      model: {
+        provider,
+        name: "gpt-test",
+        reasoning_effort: "low",
+      },
+    };
+  }
+
+  it("defaults the provider api to openai-completions", async () => {
+    vi.stubEnv("AGENTTRACE_MODEL_BASE_URL", "https://api.example.com/v1");
+    vi.stubEnv("AGENTTRACE_MODEL_API_KEY", "test-key");
+
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+
+    // The provider is registered before getModel is called; the model is not
+    // in the static catalog so createBrowserSession throws, but the config is
+    // already registered and inspectable.
+    await expect(
+      createBrowserSession(makeOpenAiRequest(), {
+        createAgentSession: async () => ({
+          session: fake as never,
+          extensionsResult: {} as never,
+        }),
+        modelRuntime: runtime,
+        eventWriter: writer,
+      }),
+    ).rejects.toThrow("is not available");
+
+    const config = runtime.getRegisteredProviderConfig("openai-compatible");
+    expect(config).toBeDefined();
+    expect(config!.api).toBe("openai-completions");
+  });
+
+  it("honours AGENTTRACE_PI_PROVIDER_API=openai-responses", async () => {
+    vi.stubEnv("AGENTTRACE_MODEL_BASE_URL", "https://api.example.com/v1");
+    vi.stubEnv("AGENTTRACE_MODEL_API_KEY", "test-key");
+    vi.stubEnv("AGENTTRACE_PI_PROVIDER_API", "openai-responses");
+
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+
+    await expect(
+      createBrowserSession(makeOpenAiRequest(), {
+        createAgentSession: async () => ({
+          session: fake as never,
+          extensionsResult: {} as never,
+        }),
+        modelRuntime: runtime,
+        eventWriter: writer,
+      }),
+    ).rejects.toThrow("is not available");
+
+    const config = runtime.getRegisteredProviderConfig("openai-compatible");
+    expect(config).toBeDefined();
+    expect(config!.api).toBe("openai-responses");
   });
 });
