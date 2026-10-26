@@ -961,6 +961,361 @@ function requireNullableString(
   return field;
 }
 
+function optionalNullableString(
+  value: Record<string, unknown>,
+  key: string,
+  where: string,
+): string | null {
+  return requireNullableString(value, key, where);
+}
+
+function optionalBoolean(
+  value: Record<string, unknown>,
+  key: string,
+  where: string,
+): boolean {
+  return requireBoolean(value, key, where);
+}
+
+function optionalNullableNumber(
+  value: Record<string, unknown>,
+  key: string,
+  where: string,
+): number | null {
+  const field = value[key];
+  if (field === null) {
+    return null;
+  }
+  if (typeof field !== "number" || !Number.isFinite(field)) {
+    throw new WorkerPayloadError(`${where}.${key} must be a number or null`);
+  }
+  return field;
+}
+
+function optionalArray(
+  value: Record<string, unknown>,
+  key: string,
+  where: string,
+): unknown[] | undefined {
+  if (value[key] === undefined) {
+    return undefined;
+  }
+  return requireArray(value, key, where);
+}
+
+function parseStringArray(value: unknown, where: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new WorkerPayloadError(`${where} must be an array`);
+  }
+  return value.map((item, index) => {
+    if (typeof item !== "string") {
+      throw new WorkerPayloadError(`${where}[${index}] must be a string`);
+    }
+    return item;
+  });
+}
+
+function parseStringRecord(value: unknown, where: string): Record<string, string> {
+  const record = payloadRecord(value, where);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, item]) => {
+      if (typeof item !== "string") {
+        throw new WorkerPayloadError(`${where}.${key} must be a string`);
+      }
+      return [key, item];
+    }),
+  );
+}
+
+function parseWorkerLocator(value: unknown, where: string): Locator {
+  const record = payloadRecord(value, where);
+  const kind = requireString(record, "kind", where);
+  const matchCount = requireNumber(record, "match_count", where);
+  if (!Number.isInteger(matchCount)) {
+    throw new WorkerPayloadError(`${where}.match_count must be an integer`);
+  }
+  if (kind === "role") {
+    return {
+      kind,
+      role: requireString(record, "role", where),
+      name: requireString(record, "name", where),
+      exact: requireBoolean(record, "exact", where),
+      match_count: matchCount,
+    };
+  }
+  if (kind === "text") {
+    return {
+      kind,
+      text: requireString(record, "text", where),
+      exact: requireBoolean(record, "exact", where),
+      match_count: matchCount,
+    };
+  }
+  if (kind === "css") {
+    return {
+      kind,
+      css: requireString(record, "css", where),
+      match_count: matchCount,
+    };
+  }
+  throw new WorkerPayloadError(`${where}.kind is invalid`);
+}
+
+function parseBoundingBox(value: unknown, where: string): BoundingBox {
+  const record = payloadRecord(value, where);
+  return {
+    x: requireNumber(record, "x", where),
+    y: requireNumber(record, "y", where),
+    width: requireNumber(record, "width", where),
+    height: requireNumber(record, "height", where),
+  };
+}
+
+function parseElementFormInfo(value: unknown, where: string): ElementFormInfo {
+  const record = payloadRecord(value, where);
+  return {
+    form_ref: requireString(record, "form_ref", where),
+    ...(record.submit_candidate_ref !== undefined
+      ? {
+          submit_candidate_ref: optionalNullableString(
+            record,
+            "submit_candidate_ref",
+            where,
+          ),
+        }
+      : {}),
+    enter_submittable: requireBoolean(record, "enter_submittable", where),
+  };
+}
+
+function parseElement(value: unknown, index: number): Element {
+  const where = `observation.elements[${index}]`;
+  const record = payloadRecord(value, where);
+  return {
+    ref: requireString(record, "ref", where),
+    tag: requireString(record, "tag", where),
+    ...(record.role !== undefined
+      ? { role: optionalNullableString(record, "role", where) }
+      : {}),
+    ...(record.name !== undefined
+      ? { name: optionalNullableString(record, "name", where) }
+      : {}),
+    ...(record.text !== undefined
+      ? { text: optionalNullableString(record, "text", where) }
+      : {}),
+    value: requireNullableString(record, "value", where),
+    visible: requireBoolean(record, "visible", where),
+    enabled: requireBoolean(record, "enabled", where),
+    locators: requireArray(record, "locators", where).map((locator, locatorIndex) =>
+      parseWorkerLocator(locator, `${where}.locators[${locatorIndex}]`),
+    ),
+    ...(record.parent_ref !== undefined
+      ? { parent_ref: optionalNullableString(record, "parent_ref", where) }
+      : {}),
+    ...(record.container_ref !== undefined
+      ? { container_ref: optionalNullableString(record, "container_ref", where) }
+      : {}),
+    ...(record.own_text !== undefined
+      ? { own_text: optionalNullableString(record, "own_text", where) }
+      : {}),
+    ...(record.full_text !== undefined
+      ? { full_text: optionalNullableString(record, "full_text", where) }
+      : {}),
+    ...(record.bbox !== undefined
+      ? { bbox: parseBoundingBox(record.bbox, `${where}.bbox`) }
+      : {}),
+    ...(record.visible_in_viewport !== undefined
+      ? {
+          visible_in_viewport: optionalBoolean(
+            record,
+            "visible_in_viewport",
+            where,
+          ),
+        }
+      : {}),
+    ...(record.z_index !== undefined
+      ? { z_index: optionalNullableNumber(record, "z_index", where) }
+      : {}),
+    ...(record.attributes !== undefined
+      ? {
+          attributes: parseStringRecord(
+            record.attributes,
+            `${where}.attributes`,
+          ),
+        }
+      : {}),
+    ...(record.form !== undefined
+      ? {
+          form:
+            record.form === null
+              ? null
+              : parseElementFormInfo(record.form, `${where}.form`),
+        }
+      : {}),
+  };
+}
+
+function parseStructureNode(value: unknown, index: number): StructureNode {
+  const where = `observation.structures[${index}]`;
+  const record = payloadRecord(value, where);
+  return {
+    ref: requireString(record, "ref", where),
+    kind: requireString(record, "kind", where),
+    tag: requireString(record, "tag", where),
+    ...(record.role !== undefined
+      ? { role: optionalNullableString(record, "role", where) }
+      : {}),
+    ...(record.parent_ref !== undefined
+      ? { parent_ref: optionalNullableString(record, "parent_ref", where) }
+      : {}),
+    full_text: requireString(record, "full_text", where),
+    visible: requireBoolean(record, "visible", where),
+    ...(record.bbox !== undefined
+      ? { bbox: parseBoundingBox(record.bbox, `${where}.bbox`) }
+      : {}),
+    ...(record.attributes !== undefined
+      ? {
+          attributes: parseStringRecord(
+            record.attributes,
+            `${where}.attributes`,
+          ),
+        }
+      : {}),
+    ...(record.submit_candidate_ref !== undefined
+      ? {
+          submit_candidate_ref: optionalNullableString(
+            record,
+            "submit_candidate_ref",
+            where,
+          ),
+        }
+      : {}),
+    ...(record.enter_submittable !== undefined
+      ? {
+          enter_submittable: optionalBoolean(
+            record,
+            "enter_submittable",
+            where,
+          ),
+        }
+      : {}),
+  };
+}
+
+function parseBlocker(value: unknown, where: string): Blocker {
+  const record = payloadRecord(value, where);
+  const confidence = requireString(record, "confidence", where);
+  if (
+    confidence !== "high" &&
+    confidence !== "medium" &&
+    confidence !== "low"
+  ) {
+    throw new WorkerPayloadError(`${where}.confidence is invalid`);
+  }
+  const dismissCandidates = optionalArray(
+    record,
+    "dismiss_candidates",
+    where,
+  );
+  return {
+    kind: requireString(record, "kind", where),
+    ...(record.ref !== undefined
+      ? { ref: optionalNullableString(record, "ref", where) }
+      : {}),
+    confidence,
+    ...(record.covers_target_ref !== undefined
+      ? {
+          covers_target_ref: optionalNullableString(
+            record,
+            "covers_target_ref",
+            where,
+          ),
+        }
+      : {}),
+    ...(dismissCandidates !== undefined
+      ? {
+          dismiss_candidates: dismissCandidates.map((locator, index) =>
+            parseWorkerLocator(
+              locator,
+              `${where}.dismiss_candidates[${index}]`,
+            ),
+          ),
+        }
+      : {}),
+    reason: requireString(record, "reason", where),
+  };
+}
+
+function parseCandidateRelation(
+  value: unknown,
+  where: string,
+): CandidateRelation {
+  const record = payloadRecord(value, where);
+  return {
+    type: requireString(record, "type", where),
+    ref: requireString(record, "ref", where),
+    ...(record.label !== undefined
+      ? { label: optionalNullableString(record, "label", where) }
+      : {}),
+  };
+}
+
+function parseActionCandidate(
+  value: unknown,
+  index: number,
+): ActionCandidate {
+  const where = `observation.action_candidates[${index}]`;
+  const record = payloadRecord(value, where);
+  const confidence = requireString(record, "confidence", where);
+  if (
+    confidence !== "high" &&
+    confidence !== "medium" &&
+    confidence !== "low"
+  ) {
+    throw new WorkerPayloadError(`${where}.confidence is invalid`);
+  }
+  const aliases = optionalArray(record, "aliases", where);
+  const relations = optionalArray(record, "relations", where);
+  return {
+    candidate_id: requireString(record, "candidate_id", where),
+    kind: requireString(record, "kind", where),
+    action: requireString(record, "action", where),
+    target_ref: requireString(record, "target_ref", where),
+    ...(record.role !== undefined
+      ? { role: optionalNullableString(record, "role", where) }
+      : {}),
+    ...(record.name !== undefined
+      ? { name: optionalNullableString(record, "name", where) }
+      : {}),
+    ...(record.text !== undefined
+      ? { text: optionalNullableString(record, "text", where) }
+      : {}),
+    ...(aliases !== undefined
+      ? { aliases: parseStringArray(aliases, `${where}.aliases`) }
+      : {}),
+    ...(record.attributes !== undefined
+      ? {
+          attributes: parseStringRecord(
+            record.attributes,
+            `${where}.attributes`,
+          ),
+        }
+      : {}),
+    ...(relations !== undefined
+      ? {
+          relations: relations.map((relation, relationIndex) =>
+            parseCandidateRelation(
+              relation,
+              `${where}.relations[${relationIndex}]`,
+            ),
+          ),
+        }
+      : {}),
+    locator: parseWorkerLocator(record.locator, `${where}.locator`),
+    confidence,
+  };
+}
+
 function parseStepError(value: unknown, where: string): StepError | null {
   if (value === null) {
     return null;
@@ -987,22 +1342,8 @@ function parseConditionResult(value: unknown, where: string): ConditionResult {
   };
 }
 
-function validateObjectArray(values: unknown[], where: string): void {
-  values.forEach((value, index) => {
-    payloadRecord(value, `${where}[${index}]`);
-  });
-}
-
 export function parseObservation(value: unknown): Observation {
   const record = payloadRecord(value, "observation");
-  const elements = requireArray(record, "elements", "observation");
-  const structures = requireArray(record, "structures", "observation");
-  const blockers = requireArray(record, "blockers", "observation");
-  const candidates = requireArray(record, "action_candidates", "observation");
-  validateObjectArray(elements, "observation.elements");
-  validateObjectArray(structures, "observation.structures");
-  validateObjectArray(blockers, "observation.blockers");
-  validateObjectArray(candidates, "observation.action_candidates");
   return {
     observation_id: requireString(record, "observation_id", "observation"),
     page_state_id: requireString(record, "page_state_id", "observation"),
@@ -1013,10 +1354,19 @@ export function parseObservation(value: unknown): Observation {
     ),
     url: requireString(record, "url", "observation"),
     title: requireString(record, "title", "observation"),
-    elements: elements as Element[],
-    structures: structures as StructureNode[],
-    blockers: blockers as Blocker[],
-    action_candidates: candidates as ActionCandidate[],
+    elements: requireArray(record, "elements", "observation").map(parseElement),
+    structures: requireArray(record, "structures", "observation").map(
+      parseStructureNode,
+    ),
+    blockers: requireArray(record, "blockers", "observation").map(
+      (blocker, index) =>
+        parseBlocker(blocker, `observation.blockers[${index}]`),
+    ),
+    action_candidates: requireArray(
+      record,
+      "action_candidates",
+      "observation",
+    ).map(parseActionCandidate),
     truncated: requireBoolean(record, "truncated", "observation"),
     truncation_reason: requireNullableString(
       record,
@@ -1064,7 +1414,12 @@ function parseEvidence(value: unknown, where: string): Evidence {
     network: networkEntries.map((entry, index) => {
       const item = payloadRecord(entry, `${where}.network[${index}]`);
       const status = item.status;
-      if (status !== null && typeof status !== "number") {
+      if (
+        status !== null &&
+        (typeof status !== "number" ||
+          !Number.isFinite(status) ||
+          !Number.isInteger(status))
+      ) {
         throw new WorkerPayloadError(
           `${where}.network[${index}].status must be a number or null`,
         );
@@ -1078,6 +1433,85 @@ function parseEvidence(value: unknown, where: string): Evidence {
   };
 }
 
+function parseHitTest(value: unknown, where: string): HitTest {
+  const record = payloadRecord(value, where);
+  return {
+    ...(record.target_ref !== undefined
+      ? { target_ref: optionalNullableString(record, "target_ref", where) }
+      : {}),
+    x: requireNumber(record, "x", where),
+    y: requireNumber(record, "y", where),
+    ...(record.hit_ref !== undefined
+      ? { hit_ref: optionalNullableString(record, "hit_ref", where) }
+      : {}),
+    ...(record.hit_tag !== undefined
+      ? { hit_tag: optionalNullableString(record, "hit_tag", where) }
+      : {}),
+    ...(record.hit_role !== undefined
+      ? { hit_role: optionalNullableString(record, "hit_role", where) }
+      : {}),
+    ...(record.hit_text !== undefined
+      ? { hit_text: optionalNullableString(record, "hit_text", where) }
+      : {}),
+    covered: requireBoolean(record, "covered", where),
+    ...(record.blocker_kind !== undefined
+      ? {
+          blocker_kind: optionalNullableString(
+            record,
+            "blocker_kind",
+            where,
+          ),
+        }
+      : {}),
+  };
+}
+
+function parseRecoveryAttempt(
+  value: unknown,
+  where: string,
+): RecoveryAttempt {
+  const record = payloadRecord(value, where);
+  return {
+    blocker: parseBlocker(record.blocker, `${where}.blocker`),
+    action: requireString(record, "action", where),
+    succeeded: requireBoolean(record, "succeeded", where),
+    ...(record.reason !== undefined
+      ? { reason: requireString(record, "reason", where) }
+      : {}),
+    ...(record.before_screenshot_path !== undefined
+      ? {
+          before_screenshot_path: optionalNullableString(
+            record,
+            "before_screenshot_path",
+            where,
+          ),
+        }
+      : {}),
+    ...(record.after_screenshot_path !== undefined
+      ? {
+          after_screenshot_path: optionalNullableString(
+            record,
+            "after_screenshot_path",
+            where,
+          ),
+        }
+      : {}),
+    ...(record.url_before !== undefined
+      ? {
+          url_before: optionalNullableString(record, "url_before", where),
+        }
+      : {}),
+    ...(record.url_after !== undefined
+      ? { url_after: optionalNullableString(record, "url_after", where) }
+      : {}),
+    retried_original_action: requireBoolean(
+      record,
+      "retried_original_action",
+      where,
+    ),
+  };
+}
+
 function parseStepResult(value: unknown, index: number): StepResult {
   const where = `execution result.steps[${index}]`;
   const record = payloadRecord(value, where);
@@ -1086,6 +1520,7 @@ function parseStepResult(value: unknown, index: number): StepResult {
   if (!ACTION_SET.has(action) || (status !== "passed" && status !== "failed")) {
     throw new WorkerPayloadError(`${where} has an invalid action or status`);
   }
+  const recovery = optionalArray(record, "recovery", where);
   return {
     index: requireNumber(record, "index", where),
     action: action as Action,
@@ -1104,13 +1539,30 @@ function parseStepResult(value: unknown, index: number): StepResult {
     evidence: parseEvidence(record.evidence, `${where}.evidence`),
     error: parseStepError(record.error, `${where}.error`),
     ...(record.blocker !== undefined
-      ? { blocker: record.blocker as Blocker | null }
+      ? {
+          blocker:
+            record.blocker === null
+              ? null
+              : parseBlocker(record.blocker, `${where}.blocker`),
+        }
       : {}),
     ...(record.hit_test !== undefined
-      ? { hit_test: record.hit_test as HitTest | null }
+      ? {
+          hit_test:
+            record.hit_test === null
+              ? null
+              : parseHitTest(record.hit_test, `${where}.hit_test`),
+        }
       : {}),
-    ...(record.recovery !== undefined
-      ? { recovery: record.recovery as RecoveryAttempt[] }
+    ...(recovery !== undefined
+      ? {
+          recovery: recovery.map((attempt, recoveryIndex) =>
+            parseRecoveryAttempt(
+              attempt,
+              `${where}.recovery[${recoveryIndex}]`,
+            ),
+          ),
+        }
       : {}),
   };
 }

@@ -27,12 +27,98 @@ const observation: Observation = {
   browser_session_id: "bsess_1",
   url: "https://shop.test/products",
   title: "Products",
-  elements: [],
-  structures: [],
-  blockers: [],
-  action_candidates: [],
+  elements: [
+    {
+      ref: "el_add",
+      tag: "button",
+      role: "button",
+      name: "Add",
+      text: "Add",
+      value: null,
+      visible: true,
+      enabled: true,
+      locators: [
+        {
+          kind: "role",
+          role: "button",
+          name: "Add",
+          exact: true,
+          match_count: 1,
+        },
+      ],
+      parent_ref: "section_products",
+      container_ref: "section_products",
+      own_text: "Add",
+      full_text: "Add",
+      bbox: { x: 10, y: 20, width: 80, height: 30 },
+      visible_in_viewport: true,
+      z_index: 1,
+      attributes: { "data-testid": "add" },
+      form: {
+        form_ref: "form_cart",
+        submit_candidate_ref: "el_submit",
+        enter_submittable: true,
+      },
+    },
+  ],
+  structures: [
+    {
+      ref: "section_products",
+      kind: "region",
+      tag: "section",
+      role: "region",
+      parent_ref: null,
+      full_text: "Products Add",
+      visible: true,
+      bbox: { x: 0, y: 0, width: 400, height: 300 },
+      attributes: { "aria-label": "Products" },
+      submit_candidate_ref: "el_submit",
+      enter_submittable: true,
+    },
+  ],
+  blockers: [
+    {
+      kind: "cookie_banner",
+      ref: "cookie_banner",
+      confidence: "high",
+      covers_target_ref: null,
+      dismiss_candidates: [
+        {
+          kind: "text",
+          text: "Accept",
+          exact: true,
+          match_count: 1,
+        },
+      ],
+      reason: "cookie consent is visible",
+    },
+  ],
+  action_candidates: [
+    {
+      candidate_id: "candidate_add",
+      kind: "control",
+      action: "click",
+      target_ref: "el_add",
+      role: "button",
+      name: "Add",
+      text: "Add",
+      aliases: ["add to cart"],
+      attributes: { "data-testid": "add" },
+      relations: [
+        { type: "inside", ref: "section_products", label: "Products" },
+      ],
+      locator: {
+        kind: "role",
+        role: "button",
+        name: "Add",
+        exact: true,
+        match_count: 1,
+      },
+      confidence: "high",
+    },
+  ],
   truncated: false,
-  truncation_reason: "",
+  truncation_reason: null,
   screenshot_path: "scope/obs_1.png",
 };
 
@@ -98,7 +184,91 @@ const executionResult: ExecutionResult = {
   started_at: "2026-10-26T12:00:00Z",
   finished_at: "2026-10-26T12:00:01Z",
   final_url: "https://shop.test/products",
-  steps: [],
+  steps: [
+    {
+      index: 0,
+      action: "click",
+      status: "passed",
+      started_at: "2026-10-26T12:00:00Z",
+      duration_ms: 1000,
+      url_before: "https://shop.test/products",
+      url_after: "https://shop.test/products",
+      conditions: [
+        {
+          phase: "post",
+          type: "text_visible",
+          value: "Added",
+          satisfied: true,
+          detail: null,
+        },
+      ],
+      evidence: {
+        screenshot_path: "scope/step-0.png",
+        console: [{ level: "info", text: "added" }],
+        network: [
+          {
+            method: "POST",
+            url: "https://shop.test/cart",
+            status: 200,
+          },
+        ],
+      },
+      error: null,
+      blocker: {
+        kind: "cookie_banner",
+        ref: "cookie_banner",
+        confidence: "high",
+        covers_target_ref: "el_add",
+        dismiss_candidates: [
+          {
+            kind: "text",
+            text: "Accept",
+            exact: true,
+            match_count: 1,
+          },
+        ],
+        reason: "cookie consent covered the target",
+      },
+      hit_test: {
+        target_ref: "el_add",
+        x: 50,
+        y: 35,
+        hit_ref: "cookie_banner",
+        hit_tag: "div",
+        hit_role: "dialog",
+        hit_text: "Accept cookies",
+        covered: true,
+        blocker_kind: "cookie_banner",
+      },
+      recovery: [
+        {
+          blocker: {
+            kind: "cookie_banner",
+            ref: "cookie_banner",
+            confidence: "high",
+            covers_target_ref: "el_add",
+            dismiss_candidates: [
+              {
+                kind: "text",
+                text: "Accept",
+                exact: true,
+                match_count: 1,
+              },
+            ],
+            reason: "cookie consent covered the target",
+          },
+          action: "dismiss",
+          succeeded: true,
+          reason: "dismissed cookie banner",
+          before_screenshot_path: "scope/before.png",
+          after_screenshot_path: "scope/after.png",
+          url_before: "https://shop.test/products",
+          url_after: "https://shop.test/products",
+          retried_original_action: true,
+        },
+      ],
+    },
+  ],
   error: null,
 };
 
@@ -254,6 +424,72 @@ describe("WorkerClient", () => {
       statusCode: 200,
       code: "worker_error",
     });
+  });
+
+  it.each([
+    [
+      "navigate element",
+      "/sessions/bsess_1/navigate",
+      { ...observation, elements: [{}] },
+      (client: WorkerClient) =>
+        client.navigate("bsess_1", "https://shop.test/products"),
+    ],
+    [
+      "act blocker",
+      "/sessions/bsess_1/act",
+      {
+        ...actResponse,
+        observation: { ...observation, blockers: [{}] },
+      },
+      (client: WorkerClient) => client.act("bsess_1", actRequest),
+    ],
+    [
+      "execute blocker",
+      "/execute",
+      {
+        ...executionResult,
+        steps: [{ ...executionResult.steps[0], blocker: "invalid" }],
+      },
+      (client: WorkerClient) => client.execute("scope_1", artifact),
+    ],
+    [
+      "execute recovery",
+      "/execute",
+      {
+        ...executionResult,
+        steps: [{ ...executionResult.steps[0], recovery: "invalid" }],
+      },
+      (client: WorkerClient) => client.execute("scope_1", artifact),
+    ],
+  ])("maps a malformed nested %s payload to worker_error", async (
+    _case,
+    expectedPath,
+    payload,
+    request,
+  ) => {
+    const baseUrl = await startServer((incoming, response) => {
+      expect(incoming.url).toBe(expectedPath);
+      sendJson(response, payload);
+    });
+    const client = new WorkerClient(baseUrl);
+
+    await expect(request(client)).rejects.toMatchObject({
+      statusCode: 200,
+      code: "worker_error",
+    });
+  });
+
+  it.each([
+    ["timeoutMs", Number.NaN],
+    ["timeoutMs", Number.POSITIVE_INFINITY],
+    ["timeoutMs", Number.NEGATIVE_INFINITY],
+    ["maxResponseBytes", Number.NaN],
+    ["maxResponseBytes", Number.POSITIVE_INFINITY],
+    ["maxResponseBytes", Number.NEGATIVE_INFINITY],
+  ] as const)("rejects non-finite %s option %s", (option, value) => {
+    expect(
+      () => new WorkerClient("http://worker.test", { [option]: value }),
+    ).toThrow(RangeError);
   });
 
   it("rejects a response larger than the configured byte bound", async () => {

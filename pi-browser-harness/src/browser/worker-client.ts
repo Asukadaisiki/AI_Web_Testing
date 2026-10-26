@@ -47,11 +47,14 @@ export class WorkerClient {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-    if (this.timeoutMs <= 0) {
-      throw new RangeError("timeoutMs must be positive");
+    if (!Number.isInteger(this.timeoutMs) || this.timeoutMs <= 0) {
+      throw new RangeError("timeoutMs must be a positive integer");
     }
-    if (this.maxResponseBytes <= 0) {
-      throw new RangeError("maxResponseBytes must be positive");
+    if (
+      !Number.isInteger(this.maxResponseBytes) ||
+      this.maxResponseBytes <= 0
+    ) {
+      throw new RangeError("maxResponseBytes must be a positive integer");
     }
   }
 
