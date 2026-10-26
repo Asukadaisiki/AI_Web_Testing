@@ -59,7 +59,8 @@ export function createBrowserMcpServer(
   );
 
   const queue = new PromiseQueue();
-  let closed = false;
+  let builderClosed = false;
+  let serverClosed = false;
 
   for (const schema of BROWSER_TOOL_SCHEMAS) {
     mcp.tool(
@@ -74,7 +75,10 @@ export function createBrowserMcpServer(
           return encodeToolOutcome(outcome);
         } catch (error) {
           if (error instanceof FatalCaseBuilderError) {
-            await closeOnce();
+            // Close only the builder; leave the MCP transport open so the SDK
+            // can write the error response to the client. The production
+            // onFatal callback terminates the child afterwards.
+            await closeBuilderOnce();
             options.onFatal?.(error);
           }
           throw error;
@@ -83,14 +87,22 @@ export function createBrowserMcpServer(
     );
   }
 
-  async function closeOnce(): Promise<void> {
-    if (closed) return;
-    closed = true;
+  /** Idempotently closes the authoring browser session (builder) only. */
+  async function closeBuilderOnce(): Promise<void> {
+    if (builderClosed) return;
+    builderClosed = true;
     try {
       await builder.close();
     } catch {
       // best-effort cleanup
     }
+  }
+
+  /** Idempotently closes the builder and the MCP transport. */
+  async function closeOnce(): Promise<void> {
+    if (serverClosed) return;
+    serverClosed = true;
+    await closeBuilderOnce();
     try {
       await mcp.close();
     } catch {
@@ -100,8 +112,12 @@ export function createBrowserMcpServer(
 
   return {
     async connect(transport: Transport): Promise<void> {
+      // Chain any pre-existing onclose handler (e.g. the stdio entry's
+      // process.exit(0)) rather than overwriting it, so transport teardown and
+      // process exit both run.
+      const previousOnClose = transport.onclose;
       transport.onclose = () => {
-        void closeOnce();
+        void closeOnce().finally(() => previousOnClose?.());
       };
       await mcp.connect(transport);
     },

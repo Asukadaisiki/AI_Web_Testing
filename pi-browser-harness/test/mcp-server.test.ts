@@ -10,7 +10,11 @@ import {
   type BrowserMcpBuilder,
 } from "../src/mcp/server.js";
 import { BROWSER_TOOL_NAMES } from "../src/mcp/schemas.js";
-import type { ToolOutcome } from "../src/browser/case-builder.js";
+import {
+  FatalCaseBuilderError,
+  CODE_COMMITTED_PREFIX_REPLAY_FAILED,
+  type ToolOutcome,
+} from "../src/browser/case-builder.js";
 import type { Case, ExecutionResult } from "../src/browser/contract.js";
 
 interface RecordingBuilder extends BrowserMcpBuilder {
@@ -18,10 +22,12 @@ interface RecordingBuilder extends BrowserMcpBuilder {
   closeCount: number;
   maxConcurrent: number;
   setOutcome(name: string, outcome: ToolOutcome): void;
+  setFatal(name: string, error: FatalCaseBuilderError): void;
 }
 
 function makeBuilder(delayMs = 0): RecordingBuilder {
   const outcomes = new Map<string, ToolOutcome>();
+  const fatals = new Map<string, FatalCaseBuilderError>();
   const state = { concurrent: 0, maxConcurrent: 0 };
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const builder = {
@@ -29,6 +35,9 @@ function makeBuilder(delayMs = 0): RecordingBuilder {
     closeCount: 0,
     setOutcome(name: string, outcome: ToolOutcome) {
       outcomes.set(name, outcome);
+    },
+    setFatal(name: string, error: FatalCaseBuilderError) {
+      fatals.set(name, error);
     },
     async call(name: string, args: Record<string, unknown>) {
       state.concurrent += 1;
@@ -38,6 +47,10 @@ function makeBuilder(delayMs = 0): RecordingBuilder {
       }
       calls.push({ name, args });
       state.concurrent -= 1;
+      const fatal = fatals.get(name);
+      if (fatal !== undefined) {
+        throw fatal;
+      }
       const outcome = outcomes.get(name);
       if (outcome !== undefined) {
         return outcome;
@@ -290,5 +303,82 @@ describe("browser MCP server", () => {
     await server.close();
 
     expect(builder.closeCount).toBe(1);
+  });
+
+  it("fatal builder error closes the builder, invokes onFatal, and surfaces the error to the client without closing the transport", async () => {
+    const builder = makeBuilder();
+    const fatal = new FatalCaseBuilderError(
+      CODE_COMMITTED_PREFIX_REPLAY_FAILED,
+      "replay failed",
+    );
+    builder.setFatal("open_page", fatal);
+
+    const onFatalCalls: FatalCaseBuilderError[] = [];
+    const server = createBrowserMcpServer(builder, {
+      onFatal: (error) => onFatalCalls.push(error),
+    });
+    const [serverTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    transports.push(serverTransport, clientTransport);
+    await server.connect(serverTransport);
+
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    await client.connect(clientTransport);
+
+    const callPromise = client.callTool({
+      name: "open_page",
+      arguments: { url: "https://a.test", intent: "open a" },
+    });
+
+    // The SDK surfaces tool-handler throws as a CallToolResult with isError,
+    // not a transport-level rejection. The message must be the fatal error's.
+    const result = (await callPromise) as CallToolResult;
+    expect(result.isError).toBe(true);
+    const text = result.content
+      .filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .join("\n");
+    expect(text).toContain("replay failed");
+
+    // builder is closed exactly once
+    expect(builder.closeCount).toBe(1);
+    // onFatal received the original error
+    expect(onFatalCalls).toHaveLength(1);
+    expect(onFatalCalls[0]).toBe(fatal);
+
+    // transport is still usable: the SDK wrote an error response rather than
+    // dropping the connection. The client can still issue a follow-up call.
+    const followUp = await client.callTool({
+      name: "click",
+      arguments: { hint: "x", intent: "click x", expect_text: "y" },
+    });
+    expect(followUp).toBeDefined();
+
+    await client.close();
+    await server.close();
+  });
+
+  it("connect chains an existing transport.onclose handler so process exit still runs", async () => {
+    const builder = makeBuilder();
+    const server = createBrowserMcpServer(builder);
+    const [serverTransport] = InMemoryTransport.createLinkedPair();
+    transports.push(serverTransport);
+
+    let exitCalled = false;
+    const existingHandler = (): void => {
+      exitCalled = true;
+    };
+    serverTransport.onclose = existingHandler;
+
+    await server.connect(serverTransport);
+
+    // The transport's onclose should now run both the server's closeOnce and
+    // the pre-existing handler (which the stdio entry uses for process.exit).
+    serverTransport.onclose?.();
+    // closeOnce is fire-and-forget; let the microtask flush.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(builder.closeCount).toBe(1);
+    expect(exitCalled).toBe(true);
   });
 });
