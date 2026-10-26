@@ -730,7 +730,7 @@ function validateCondition(
   }
 }
 
-function validateStep(step: Step, index: number): void {
+export function validateStep(step: Step, index: number): void {
   if (step.index !== index) {
     contractError(
       "step_index_mismatch",
@@ -885,6 +885,253 @@ export function validateCase(input: unknown): Case {
   }
   parsed.steps.forEach(validateStep);
   return parsed as Case;
+}
+
+/**
+ * The expectations a model declares for a target action. The planner translates
+ * these into postconditions; at least one must be declared.
+ */
+export interface Expects {
+  text?: string;
+  gone?: string;
+  url?: string;
+  value?: string;
+  element?: string;
+  attribute?: string;
+  count?: string;
+}
+
+export function expectsIsEmpty(expects: Expects): boolean {
+  return (
+    expects.text === undefined &&
+    expects.gone === undefined &&
+    expects.url === undefined &&
+    expects.value === undefined &&
+    expects.element === undefined &&
+    expects.attribute === undefined &&
+    expects.count === undefined
+  );
+}
+
+function expectsToConditions(expects: Expects): Condition[] {
+  const conditions: Condition[] = [];
+  const add = (type: ConditionType, value: string): void => {
+    conditions.push({
+      type,
+      value,
+      timeout_ms: DEFAULT_CONDITION_TIMEOUT_MS,
+    });
+  };
+  if (expects.text !== undefined) add("text_visible", expects.text);
+  if (expects.gone !== undefined) add("text_gone", expects.gone);
+  if (expects.url !== undefined) add("url_contains", expects.url);
+  if (expects.value !== undefined) add("value_equals", expects.value);
+  if (expects.element !== undefined) add("element_state", expects.element);
+  if (expects.attribute !== undefined) add("attribute_equals", expects.attribute);
+  if (expects.count !== undefined) add("count_equals", expects.count);
+  return conditions;
+}
+
+/**
+ * Reduces a page URL to a stable anchor used by `url_contains` preconditions.
+ * A root path is replaced by the host so the anchor never degenerates to "/".
+ */
+export function pageAnchor(rawURL: string): string {
+  try {
+    const parsed = new URL(rawURL);
+    const path = parsed.pathname;
+    if (path === "" || path === "/") {
+      if (parsed.host !== "") {
+        return parsed.host;
+      }
+      return rawURL;
+    }
+    return path;
+  } catch {
+    return rawURL;
+  }
+}
+
+const TARGET_ACTIONS_FOR_DERIVE = new Set<Action>([
+  "click",
+  "input",
+  "select",
+  "check",
+  "uncheck",
+  "scroll_into_view",
+  "hover",
+  "dismiss_dialog",
+  "upload_file",
+  "assert_element",
+  "assert_attribute",
+  "assert_count",
+]);
+
+/**
+ * Derives a navigation step. The goto has no preconditions and a single
+ * `url_contains` postcondition anchored on the page URL.
+ */
+export function deriveGotoStep(
+  index: number,
+  intent: string,
+  rawURL: string,
+): Step {
+  if (!isAbsoluteUrl(rawURL)) {
+    throw new Error(`open_page url must be absolute, got ${JSON.stringify(rawURL)}`);
+  }
+  const step: Step = {
+    index,
+    action: "goto",
+    intent: intent.trim() === "" ? `open ${rawURL}` : intent,
+    value: rawURL,
+    submit: false,
+    preconditions: [],
+    postconditions: [
+      {
+        type: "url_contains",
+        value: pageAnchor(rawURL),
+        timeout_ms: DEFAULT_CONDITION_TIMEOUT_MS,
+      },
+    ],
+    timeout_ms: DEFAULT_STEP_TIMEOUT_MS,
+  };
+  validateStep(step, index);
+  return step;
+}
+
+/**
+ * Derives a target-bearing action or assertion step. The precondition is the
+ * observed page anchor; the postconditions come from the declared expectations.
+ */
+export function deriveActionStep(
+  index: number,
+  action: Action,
+  intent: string,
+  target: Target,
+  value: string | null | undefined,
+  submit: boolean,
+  observedPageURL: string,
+  expects: Expects,
+): Step {
+  if (!TARGET_ACTIONS_FOR_DERIVE.has(action)) {
+    throw new Error(`derive action step: unsupported action ${JSON.stringify(action)}`);
+  }
+  const anchor = pageAnchor(observedPageURL);
+  if (anchor === "") {
+    throw new Error("derive action step: the grounding observation has no page url");
+  }
+  const postconditions = expectsToConditions(expects);
+  if (postconditions.length === 0) {
+    throw new Error(
+      "an action step must declare at least one expectation: expect_text, expect_gone, expect_url, expect_value, expect_element, expect_attribute, or expect_count",
+    );
+  }
+  const step: Step = {
+    index,
+    action,
+    intent,
+    submit,
+    target,
+    preconditions: [
+      {
+        type: "url_contains",
+        value: anchor,
+        timeout_ms: DEFAULT_CONDITION_TIMEOUT_MS,
+      },
+    ],
+    postconditions,
+    timeout_ms: DEFAULT_STEP_TIMEOUT_MS,
+  };
+  if (action === "input" || action === "select" || action === "upload_file") {
+    step.value = value === undefined || value === null ? "" : value;
+  }
+  validateStep(step, index);
+  return step;
+}
+
+/**
+ * Derives a page-level text assertion. The text must already be visible on the
+ * current observation; it is not sent to the worker.
+ */
+export function deriveAssertTextStep(
+  index: number,
+  intent: string,
+  text: string,
+  observedPageURL: string,
+): Step {
+  if (text === "") {
+    throw new Error("assert_text requires a non-empty text");
+  }
+  const anchor = pageAnchor(observedPageURL);
+  if (anchor === "") {
+    throw new Error("assert_text requires a grounded page url");
+  }
+  const step: Step = {
+    index,
+    action: "assert_text",
+    intent,
+    value: text,
+    submit: false,
+    preconditions: [
+      {
+        type: "url_contains",
+        value: anchor,
+        timeout_ms: DEFAULT_CONDITION_TIMEOUT_MS,
+      },
+    ],
+    postconditions: [
+      {
+        type: "text_visible",
+        value: text,
+        timeout_ms: DEFAULT_CONDITION_TIMEOUT_MS,
+      },
+    ],
+    timeout_ms: DEFAULT_STEP_TIMEOUT_MS,
+  };
+  validateStep(step, index);
+  return step;
+}
+
+/**
+ * Derives a page-level URL substring assertion.
+ */
+export function deriveAssertURLStep(
+  index: number,
+  intent: string,
+  contains: string,
+  observedPageURL: string,
+): Step {
+  if (contains === "") {
+    throw new Error("assert_url requires a non-empty substring");
+  }
+  const anchor = pageAnchor(observedPageURL);
+  if (anchor === "") {
+    throw new Error("assert_url requires a grounded page url");
+  }
+  const step: Step = {
+    index,
+    action: "assert_url",
+    intent,
+    value: contains,
+    submit: false,
+    preconditions: [
+      {
+        type: "url_contains",
+        value: anchor,
+        timeout_ms: DEFAULT_CONDITION_TIMEOUT_MS,
+      },
+    ],
+    postconditions: [
+      {
+        type: "url_contains",
+        value: contains,
+        timeout_ms: DEFAULT_CONDITION_TIMEOUT_MS,
+      },
+    ],
+    timeout_ms: DEFAULT_STEP_TIMEOUT_MS,
+  };
+  validateStep(step, index);
+  return step;
 }
 
 export class WorkerPayloadError extends Error {
