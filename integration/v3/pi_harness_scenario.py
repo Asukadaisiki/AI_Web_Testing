@@ -18,6 +18,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 from wait_for_stack import wait_for_stack
@@ -268,37 +269,31 @@ def run_has_failed_assertion_evidence(run_id: str) -> bool:
     with psycopg.connect(POSTGRES_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT
-              operation.status,
-              operation.error ->> 'error',
-              operation.error ->> 'detail',
-              operation.span_attempt_id,
-              operation.artifacts -> 'screenshot_paths'
-            FROM operation_results AS operation
-            JOIN span_attempts AS attempt ON attempt.id = operation.span_attempt_id
-            JOIN spans AS span ON span.id = attempt.span_id
-            WHERE operation.run_id = %s
-              AND span.name = 'mcp__browser_harness__assert_text'
-              AND operation.status = 'failed'
-            ORDER BY operation.id DESC
-            LIMIT 1
+            SELECT EXISTS (
+              SELECT 1
+              FROM operation_results AS operation
+              JOIN span_attempts AS attempt ON attempt.id = operation.span_attempt_id
+              JOIN spans AS span ON span.id = attempt.span_id
+              WHERE operation.run_id = %s
+                AND span.name = 'mcp__browser_harness__assert_text'
+                AND operation.status = 'failed'
+                AND operation.error ->> 'error' = 'condition_unmet'
+                AND NULLIF(BTRIM(operation.error ->> 'detail'), '') IS NOT NULL
+                AND EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements_text(
+                    COALESCE(
+                      operation.artifacts -> 'screenshot_paths',
+                      '[]'::jsonb
+                    )
+                  ) AS screenshot(path)
+                  WHERE BTRIM(screenshot.path) <> ''
+                )
+            )
             """,
             (run_id,),
         )
-        row = cursor.fetchone()
-    if row is None:
-        return False
-    status, error, detail, attempt_id, screenshot_paths = row
-    return (
-        status == "failed"
-        and error == "condition_unmet"
-        and isinstance(detail, str)
-        and detail.strip() != ""
-        and isinstance(attempt_id, str)
-        and attempt_id.strip() != ""
-        and isinstance(screenshot_paths, list)
-        and any(isinstance(path, str) and path.strip() != "" for path in screenshot_paths)
-    )
+        return bool(cursor.fetchone()[0])
 
 
 def assert_pi_harness_path(run_id: str) -> None:
@@ -357,7 +352,13 @@ def assert_concurrent_isolation(run_ids: list[str]) -> None:
         if not paths:
             raise AssertionError(f"run {run_id} produced no scoped operation artifacts")
         for path in paths:
-            if not path.startswith(f"{run_id}/"):
+            relative_path = PurePosixPath(path)
+            if (
+                relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or len(relative_path.parts) < 2
+                or relative_path.parts[0] != run_id
+            ):
                 raise AssertionError(
                     f"run {run_id} has unscoped operation artifact {path!r}"
                 )

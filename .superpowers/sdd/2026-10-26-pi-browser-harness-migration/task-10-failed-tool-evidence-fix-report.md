@@ -166,3 +166,126 @@ intentionally excluded because this task prohibits Docker and Compose.
 None. The live standalone scenario was not run because its HTTP API target
 would be destructive outside the explicitly supplied safe test DSN; the
 required focused and broad local verification commands all passed.
+
+## Fix Round 1
+
+### Review Corrections
+
+- Failed assertion evidence now uses a single `SELECT EXISTS` query containing
+  every acceptance predicate. It cannot select an unrelated failed assertion
+  by operation ID when another failed `assert_text` row fully qualifies.
+- Concurrent artifact validation parses a normalized `PurePosixPath` and
+  rejects absolute paths, parent traversal components, empty artifact names,
+  and paths outside the run ID scope.
+- The deferred backend attempt/idempotency Minor was not changed.
+
+### Prior Evidence Recovery
+
+The original report content committed in `5bbb513` and its Git history contain
+only the paraphrased RED/GREEN summaries already shown above. No exact original
+test-runner transcript is recoverable from the report or Git context, so it
+cannot be reconstructed faithfully.
+
+### RED
+
+Production code was unchanged when the two focused regression tests were
+added:
+
+```bash
+python3 -m unittest integration.v3.test_pi_harness_scenario.FailedEvidenceTest integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest -v
+```
+
+Exact output:
+
+```text
+test_accepts_a_later_qualifying_failed_assertion (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... FAIL
+test_rejects_missing_screenshot_path (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_requires_failed_assert_text_with_stable_error_attempt_and_screenshot (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_accepts_distinct_attempts_and_run_scoped_operation_artifacts (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_absolute_and_parent_traversal_artifact_paths (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... test_rejects_operation_artifact_outside_its_run_scope (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_shared_harness_attempt_ids (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+
+======================================================================
+FAIL: test_accepts_a_later_qualifying_failed_assertion (integration.v3.test_pi_harness_scenario.FailedEvidenceTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/bytedance/project/AI_Web_Testing/.worktrees/pi-browser-harness-migration/integration/v3/test_pi_harness_scenario.py", line 276, in test_accepts_a_later_qualifying_failed_assertion
+    self.assertTrue(run_has_failed_assertion_evidence("run-1"))
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_rejects_absolute_and_parent_traversal_artifact_paths (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) (path='run-1/../run-2/obs_1.png')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/bytedance/project/AI_Web_Testing/.worktrees/pi-browser-harness-migration/integration/v3/test_pi_harness_scenario.py", line 372, in test_rejects_absolute_and_parent_traversal_artifact_paths
+    assert_concurrent_isolation(["run-1", "run-2"])
+AssertionError: AssertionError not raised
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.005s
+
+FAILED (failures=2)
+```
+
+### GREEN
+
+Focused regression verification:
+
+```bash
+python3 -m unittest integration.v3.test_pi_harness_scenario.FailedEvidenceTest integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest -v
+```
+
+Exact output:
+
+```text
+test_accepts_a_later_qualifying_failed_assertion (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_rejects_missing_screenshot_path (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_requires_failed_assert_text_with_stable_error_attempt_and_screenshot (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_accepts_distinct_attempts_and_run_scoped_operation_artifacts (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_absolute_and_parent_traversal_artifact_paths (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_operation_artifact_outside_its_run_scope (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_shared_harness_attempt_ids (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.002s
+
+OK
+```
+
+Non-Docker Python coverage of the changed acceptance code:
+
+```bash
+python3 -m unittest integration.v3.test_pi_harness_scenario.HarnessEventTypesTest integration.v3.test_pi_harness_scenario.TraceShapeTest integration.v3.test_pi_harness_scenario.HarnessAttemptTest integration.v3.test_pi_harness_scenario.FailedEvidenceTest integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest integration.v3.test_pi_harness_scenario.AgentServerProbeTest -v
+```
+
+Exact output:
+
+```text
+test_enumerates_the_complete_protocol_discriminants (integration.v3.test_pi_harness_scenario.HarnessEventTypesTest) ... ok
+test_rejects_raw_steps_projected_as_unknown_tool (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_rejects_unlinked_operation_evidence (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_reports_missing_shape_when_counts_are_zero (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_requires_model_tools_usage_linked_operation_and_execution_steps (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_raises_when_no_harness_attempt_exists (integration.v3.test_pi_harness_scenario.HarnessAttemptTest) ... ok
+test_returns_the_first_attempt_for_a_run (integration.v3.test_pi_harness_scenario.HarnessAttemptTest) ... ok
+test_accepts_a_later_qualifying_failed_assertion (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_rejects_missing_screenshot_path (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_requires_failed_assert_text_with_stable_error_attempt_and_screenshot (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_accepts_distinct_attempts_and_run_scoped_operation_artifacts (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_absolute_and_parent_traversal_artifact_paths (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_operation_artifact_outside_its_run_scope (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_shared_harness_attempt_ids (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_fails_when_a_probe_port_accepts_connections (integration.v3.test_pi_harness_scenario.AgentServerProbeTest) ... ok
+test_passes_when_no_agentserver_port_is_listening (integration.v3.test_pi_harness_scenario.AgentServerProbeTest) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 0.005s
+
+OK
+```
+
+```bash
+git diff --check
+```
+
+Exact output: no output (exit status 0).

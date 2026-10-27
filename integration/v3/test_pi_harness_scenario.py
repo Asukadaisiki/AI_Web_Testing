@@ -218,28 +218,59 @@ class HarnessAttemptTest(unittest.TestCase):
 
 class FailedEvidenceTest(unittest.TestCase):
     def test_requires_failed_assert_text_with_stable_error_attempt_and_screenshot(self) -> None:
-        cursor = _Cursor(
-            one=(
-                "failed",
-                "condition_unmet",
-                "assertion detail",
-                "attempt-1",
-                ["run-1/obs_failed.png"],
-            )
-        )
+        cursor = _Cursor(one=(True,))
         connection = _Connection(cursor)
 
         with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
             self.assertTrue(run_has_failed_assertion_evidence("run-1"))
 
+        self.assertIn("operation.error ->> 'error' = 'condition_unmet'", cursor.query)
+        self.assertIn("operation.error ->> 'detail'", cursor.query)
+        self.assertIn("attempt.id = operation.span_attempt_id", cursor.query)
+        self.assertIn("operation.artifacts -> 'screenshot_paths'", cursor.query)
+
     def test_rejects_missing_screenshot_path(self) -> None:
-        cursor = _Cursor(
-            one=("failed", "condition_unmet", "assertion detail", "attempt-1", [])
-        )
+        cursor = _Cursor(one=(False,))
         connection = _Connection(cursor)
 
         with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
             self.assertFalse(run_has_failed_assertion_evidence("run-1"))
+
+    def test_accepts_a_later_qualifying_failed_assertion(self) -> None:
+        class _CompetingFailureCursor(_Cursor):
+            def __init__(self):
+                super().__init__(
+                    one=(
+                        "failed",
+                        "strategy_repeated",
+                        "retry budget exhausted",
+                        "attempt-1",
+                        ["run-1/obs_retry.png"],
+                    )
+                )
+                self.failed_assertion_rows = [
+                    self._one,
+                    (
+                        "failed",
+                        "condition_unmet",
+                        "assertion detail",
+                        "attempt-2",
+                        ["run-1/obs_failed.png"],
+                    ),
+                ]
+
+            def execute(self, query, params=None):
+                super().execute(query, params)
+                if "SELECT EXISTS" in query:
+                    self._one = (True,)
+
+        cursor = _CompetingFailureCursor()
+        connection = _Connection(cursor)
+
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+            self.assertTrue(run_has_failed_assertion_evidence("run-1"))
+
+        self.assertNotIn("ORDER BY", cursor.query)
 
 
 class ConcurrentIsolationTest(unittest.TestCase):
@@ -305,6 +336,35 @@ class ConcurrentIsolationTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(AssertionError, "unscoped operation artifact"):
                 assert_concurrent_isolation(["run-1", "run-2"])
+
+    def test_rejects_absolute_and_parent_traversal_artifact_paths(self) -> None:
+        attempts = {
+            "run-1": {"id": "hat_1", "provider_attempt_id": "provider-1"},
+            "run-2": {"id": "hat_2", "provider_attempt_id": "provider-2"},
+        }
+
+        for malicious_path in ("/tmp/obs_1.png", "run-1/../run-2/obs_1.png"):
+            with self.subTest(path=malicious_path):
+                cursor = _Cursor(
+                    all=[
+                        ("run-1", [malicious_path]),
+                        ("run-2", ["run-2/obs_2.png"]),
+                    ]
+                )
+                connection = _Connection(cursor)
+
+                with (
+                    patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}),
+                    patch.object(
+                        pi_harness_scenario,
+                        "harness_attempt_for_run",
+                        side_effect=lambda run_id: attempts[run_id],
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        AssertionError, "unscoped operation artifact"
+                    ):
+                        assert_concurrent_isolation(["run-1", "run-2"])
 
 
 class AgentServerProbeTest(unittest.TestCase):
