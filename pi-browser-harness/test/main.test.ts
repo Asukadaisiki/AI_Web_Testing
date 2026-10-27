@@ -155,10 +155,10 @@ describe("main CLI", () => {
     expect(getExitCode()).toBe(1);
   });
 
-  it("SIGTERM calls session.abort() then session.dispose()", async () => {
+  it("SIGTERM aborts and disposes exactly once with exit code 143", async () => {
     const { session, calls } = makeFakeSession({ hang: true });
     const { stream: stdout } = collectingOutput();
-    const { fakeProc, emitter } = makeFakeProcess();
+    const { fakeProc, emitter, getExitCode } = makeFakeProcess();
 
     const codePromise = main({
       deps: await makeDeps(session),
@@ -170,18 +170,20 @@ describe("main CLI", () => {
     // Let the run start and hang on prompt.
     await new Promise((resolve) => setTimeout(resolve, 10));
     emitter.emit("SIGTERM");
+    emitter.emit("SIGTERM");
 
     // The SIGTERM handler aborts and disposes; main then returns normally
     // (the fake process.exit does not terminate).
     await codePromise;
-    expect(calls.abort).toBeGreaterThanOrEqual(1);
-    expect(calls.dispose).toBeGreaterThanOrEqual(1);
+    await vi.waitFor(() => expect(getExitCode()).toBe(143));
+    expect(calls.abort).toBe(1);
+    expect(calls.dispose).toBe(1);
   });
 
-  it("SIGINT calls session.abort() then session.dispose()", async () => {
+  it("SIGINT aborts and disposes exactly once with exit code 130", async () => {
     const { session, calls } = makeFakeSession({ hang: true });
     const { stream: stdout } = collectingOutput();
-    const { fakeProc, emitter } = makeFakeProcess();
+    const { fakeProc, emitter, getExitCode } = makeFakeProcess();
 
     const codePromise = main({
       deps: await makeDeps(session),
@@ -193,12 +195,14 @@ describe("main CLI", () => {
     // Let the run start and hang on prompt.
     await new Promise((resolve) => setTimeout(resolve, 10));
     emitter.emit("SIGINT");
+    emitter.emit("SIGINT");
 
     // The Go runtime sends SIGINT on cancellation; the handler must abort and
     // dispose the session just like SIGTERM.
     await codePromise;
-    expect(calls.abort).toBeGreaterThanOrEqual(1);
-    expect(calls.dispose).toBeGreaterThanOrEqual(1);
+    await vi.waitFor(() => expect(getExitCode()).toBe(130));
+    expect(calls.abort).toBe(1);
+    expect(calls.dispose).toBe(1);
   });
 
   it("exits non-zero when the assistant settles without passing finish evidence", async () => {

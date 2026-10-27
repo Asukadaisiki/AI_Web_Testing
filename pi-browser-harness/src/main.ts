@@ -55,20 +55,35 @@ export async function main(options: MainOptions = {}): Promise<number> {
   });
 
   let settled = false;
-  const onShutdown = async (): Promise<void> => {
+  let disposed = false;
+  const disposeOnce = (): void => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    session.dispose();
+  };
+  let shutdownStarted = false;
+  const onShutdown = async (exitCode: number): Promise<void> => {
+    if (shutdownStarted) {
+      return;
+    }
+    shutdownStarted = true;
     try {
       await session.abort();
     } catch {
       // best effort
     }
-    session.dispose();
-    proc.exit(143);
+    disposeOnce();
+    proc.exit(exitCode);
   };
   // The Go runtime signals the process group with SIGINT on cancellation;
   // handle both SIGTERM and SIGINT so the Pi session is gracefully aborted
   // and disposed before exit.
-  proc.on("SIGTERM", onShutdown);
-  proc.on("SIGINT", onShutdown);
+  const onSigterm = (): void => void onShutdown(143);
+  const onSigint = (): void => void onShutdown(130);
+  proc.on("SIGTERM", onSigterm);
+  proc.on("SIGINT", onSigint);
 
   try {
     await session.prompt(request.goal);
@@ -78,9 +93,9 @@ export async function main(options: MainOptions = {}): Promise<number> {
       error: error instanceof Error ? error.message : String(error),
     });
   } finally {
-    proc.off("SIGTERM", onShutdown);
-    proc.off("SIGINT", onShutdown);
-    session.dispose();
+    proc.off("SIGTERM", onSigterm);
+    proc.off("SIGINT", onSigint);
+    disposeOnce();
   }
 
   if (!settled) {
