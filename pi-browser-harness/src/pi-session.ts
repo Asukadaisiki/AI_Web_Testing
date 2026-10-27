@@ -94,7 +94,13 @@ export async function createBrowserSession(
 
   const resourceLoader =
     deps.resourceLoader ??
-    buildResourceLoader(cwd, deps.extensionFactories, request);
+    buildResourceLoader(
+      cwd,
+      deps.extensionFactories,
+      request,
+      deps.mcpChildPath,
+    );
+  await resourceLoader.reload();
 
   const settingsManager = SettingsManager.inMemory({
     retry: {
@@ -421,6 +427,7 @@ function buildResourceLoader(
   cwd: string,
   extensionFactoriesOverride: InlineExtension[] | undefined,
   request: RunRequest,
+  mcpChildPath: string | undefined,
 ): ResourceLoader {
   const systemPrompt = readFileSync(SYSTEM_PROMPT_PATH, "utf8");
   const { skills } = loadSkillsFromDir({
@@ -432,7 +439,7 @@ function buildResourceLoader(
     extensionFactoriesOverride ?? [
       createMcpExtension(),
       createBrowserHarnessExtension({
-        mcpChildPath: defaultMcpChildPath(),
+        mcpChildPath: mcpChildPath ?? defaultMcpChildPath(),
         workerUrl: request.worker_url,
         artifactScope: request.artifact_scope,
         goal: request.goal,
@@ -454,7 +461,7 @@ function buildResourceLoader(
 }
 
 function defaultMcpChildPath(): string {
-  return fileURLToPath(new URL("../mcp/server.js", import.meta.url));
+  return fileURLToPath(new URL("./mcp/server.js", import.meta.url));
 }
 
 function requiredEnv(name: string): string {

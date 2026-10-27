@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { Writable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -59,6 +60,43 @@ function makeFakeSession(activeTools: string[] = []): FakeSession {
     subscribe: vi.fn(() => () => {}),
     getActiveToolNames: vi.fn(() => activeTools),
   };
+}
+
+async function createDefaultResourceLoader(
+  mcpChildPath?: string,
+): Promise<ResourceLoader> {
+  const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+  const fake = makeFakeSession();
+  const { writer } = makeWriter();
+  let loader: ResourceLoader | undefined;
+
+  await createBrowserSession(baseRequest, {
+    createAgentSession: async (options) => {
+      loader = options.resourceLoader;
+      return { session: fake as never, extensionsResult: {} as never };
+    },
+    modelRuntime: runtime,
+    eventWriter: writer,
+    ...(mcpChildPath === undefined ? {} : { mcpChildPath }),
+  });
+
+  if (loader === undefined) {
+    throw new Error("createAgentSession did not receive a resource loader");
+  }
+  return loader;
+}
+
+async function browserHarnessMcpChildPath(
+  loader: ResourceLoader,
+): Promise<string | undefined> {
+  await loader.reload();
+  const server = loader
+    .getExtensions()
+    .runtime.mcpServers.get("browser-harness");
+  if (server === undefined || !("command" in server.config)) {
+    throw new Error("browser-harness stdio MCP server was not registered");
+  }
+  return server.config.args?.[0];
 }
 
 async function createSessionWithRequest(
@@ -133,6 +171,47 @@ function expectMcpToolArguments(
 }
 
 describe("createBrowserSession", () => {
+  it("reloads the selected resource loader before creating the agent session", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+    const order: string[] = [];
+    const resourceLoader = {
+      async reload() {
+        await Promise.resolve();
+        order.push("reload");
+      },
+    } as ResourceLoader;
+
+    await createBrowserSession(baseRequest, {
+      createAgentSession: async () => {
+        order.push("createAgentSession");
+        return { session: fake as never, extensionsResult: {} as never };
+      },
+      modelRuntime: runtime,
+      eventWriter: writer,
+      resourceLoader,
+    });
+
+    expect(order).toEqual(["reload", "createAgentSession"]);
+  });
+
+  it("passes the injected MCP child path to the default resource loader", async () => {
+    const injectedChildPath = "/tmp/injected-browser-harness-mcp.js";
+    const loader = await createDefaultResourceLoader(injectedChildPath);
+
+    expect(await browserHarnessMcpChildPath(loader)).toBe(injectedChildPath);
+  });
+
+  it("resolves the default MCP child beside compiled pi-session.js", async () => {
+    const loader = await createDefaultResourceLoader();
+    const expectedChildPath = fileURLToPath(
+      new URL("../src/mcp/server.js", import.meta.url),
+    );
+
+    expect(await browserHarnessMcpChildPath(loader)).toBe(expectedChildPath);
+  });
+
   it("forces the checked-in system prompt and an empty append override", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
     const fake = makeFakeSession();
