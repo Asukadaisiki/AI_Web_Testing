@@ -1,6 +1,7 @@
 package piharness
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -248,5 +249,20 @@ func TestDecoderTypedPayloads(t *testing.T) {
 		if ev.Type != tc.typ {
 			t.Fatalf("case %d: type = %s, want %s", i, ev.Type, tc.typ)
 		}
+	}
+}
+
+func TestToolCompletedPayloadPreservesStructuredResult(t *testing.T) {
+	var payload ToolCompletedPayload
+	if err := json.Unmarshal([]byte(`{
+		"tool_call_id":"c1",
+		"tool_name":"mcp__browser_harness__assert_text",
+		"is_error":false,
+		"structured_result":{"ok":false,"error":"condition_unmet"}
+	}`), &payload); err != nil {
+		t.Fatalf("decode tool completion: %v", err)
+	}
+	if string(payload.StructuredResult) != `{"ok":false,"error":"condition_unmet"}` {
+		t.Fatalf("structured result = %s", payload.StructuredResult)
 	}
 }

@@ -145,6 +145,141 @@ func TestPostgresPiTraceStorePersistsFinishCaseEvidence(t *testing.T) {
 	}
 }
 
+func TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence(t *testing.T) {
+	ctx, _, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi failed tool evidence"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID, Title: "Pi failed tool evidence",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "assert missing text",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
+		IdempotencyKey: "pi-failed-tool-evidence",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	piStore := PostgresPiTraceStore{Store: store}
+	command := commandFor(run.ID)
+	command.ConversationID = conversation.ID
+	ref, err := piStore.StartRun(ctx, command)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	const assertTextTool = "mcp__browser_harness__assert_text"
+	events := []piharness.Event{
+		harEvent(piharness.EventStarted, run.ID, ref.ProviderAttemptID, 1, `{}`),
+		harEvent(piharness.EventToolStarted, run.ID, ref.ProviderAttemptID, 2,
+			`{"tool_call_id":"assert-1","tool_name":"`+assertTextTool+`"}`),
+		harEvent(piharness.EventToolCompleted, run.ID, ref.ProviderAttemptID, 3, `{
+			"tool_call_id":"assert-1",
+			"tool_name":"`+assertTextTool+`",
+			"is_error":false,
+			"structured_result":{
+				"ok":false,
+				"error":"condition_unmet",
+				"detail":"the text \"DoesNotExist\" is not present",
+				"page":{"screenshot_path":"`+run.ID+`/obs_failed.png"},
+				"steps":[{"index":0,"action":"goto"}]
+			}
+		}`),
+	}
+	for _, ev := range events {
+		if err := piStore.AppendHarnessEvent(ctx, ref, ev); err != nil {
+			t.Fatalf("append event %d: %v", ev.Sequence, err)
+		}
+	}
+
+	details, err := store.GetTraceDetails(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get trace details: %v", err)
+	}
+	if len(details.Operations) != 1 {
+		t.Fatalf("operation results = %d, want 1", len(details.Operations))
+	}
+	operation := details.Operations[0]
+	if operation.Status != "failed" {
+		t.Fatalf("operation status = %q, want failed", operation.Status)
+	}
+	if operation.SpanAttemptID == "" {
+		t.Fatal("operation has no linked span attempt")
+	}
+	if !strings.Contains(string(operation.Result), `"condition_unmet"`) {
+		t.Fatalf("operation result = %s, want structured failure", operation.Result)
+	}
+	if !strings.Contains(string(operation.Error), `"condition_unmet"`) ||
+		!strings.Contains(string(operation.Error), `DoesNotExist`) {
+		t.Fatalf("operation error = %s, want stable error and detail", operation.Error)
+	}
+	var artifacts map[string]any
+	if err := json.Unmarshal(operation.Artifacts, &artifacts); err != nil {
+		t.Fatalf("decode operation artifacts: %v", err)
+	}
+	if !reflect.DeepEqual(artifacts, map[string]any{
+		"screenshot_paths": []any{run.ID + "/obs_failed.png"},
+	}) {
+		t.Fatalf("operation artifacts = %#v", artifacts)
+	}
+}
+
+func TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion(t *testing.T) {
+	ctx, _, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi finish deferral"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID, Title: "Pi finish deferral",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "finish case",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
+		IdempotencyKey: "pi-finish-deferral",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	piStore := PostgresPiTraceStore{Store: store}
+	command := commandFor(run.ID)
+	command.ConversationID = conversation.ID
+	ref, err := piStore.StartRun(ctx, command)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	for _, ev := range []piharness.Event{
+		harEvent(piharness.EventStarted, run.ID, ref.ProviderAttemptID, 1, `{}`),
+		harEvent(piharness.EventToolStarted, run.ID, ref.ProviderAttemptID, 2,
+			`{"tool_call_id":"finish-1","tool_name":"mcp__browser_harness__finish_case"}`),
+		harEvent(piharness.EventToolCompleted, run.ID, ref.ProviderAttemptID, 3,
+			`{"tool_call_id":"finish-1","tool_name":"mcp__browser_harness__finish_case","is_error":false,"structured_result":{"ok":false,"error":"dry_run_failed"}}`),
+	} {
+		if err := piStore.AppendHarnessEvent(ctx, ref, ev); err != nil {
+			t.Fatalf("append event %d: %v", ev.Sequence, err)
+		}
+	}
+	details, err := store.GetTraceDetails(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get trace details: %v", err)
+	}
+	if len(details.Operations) != 0 {
+		t.Fatalf("finish completion operation results = %d, want 0 before browser.case.completed", len(details.Operations))
+	}
+}
+
 func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
 	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi trace"})

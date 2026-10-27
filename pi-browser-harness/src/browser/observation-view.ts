@@ -72,6 +72,7 @@ export interface ActionCandidateView {
 export interface PageView {
   url: string;
   title: string;
+  screenshot_path: string | null;
   truncated: boolean;
   truncation_reason: string | null;
   blockers: BlockerView[];
@@ -204,6 +205,7 @@ export function buildPageView(
   return {
     url: observation.url,
     title: observation.title,
+    screenshot_path: observation.screenshot_path,
     truncated: observation.truncated || compactOmitted > 0,
     truncation_reason: truncationReason,
     blockers: compactBlockers,

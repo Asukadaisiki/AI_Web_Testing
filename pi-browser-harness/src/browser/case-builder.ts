@@ -575,7 +575,10 @@ export class CaseBuilder implements ReplayContext {
     }
     const observation = this.#observation;
     if (this.#failures.failed(observation, "assert_text", undefined, undefined, text)) {
-      return strategyRepeated();
+      return this.assertionFailure(
+        strategyRepeated(),
+        observation,
+      );
     }
     let step: Step;
     try {
@@ -594,7 +597,10 @@ export class CaseBuilder implements ReplayContext {
         undefined,
         text,
       );
-      return failure("step_rejected", errorMessage(error));
+      return this.assertionFailure(
+        failure("step_rejected", errorMessage(error)),
+        observation,
+      );
     }
     if (!observationHasText(observation, text)) {
       this.#failures.record(
@@ -605,9 +611,12 @@ export class CaseBuilder implements ReplayContext {
         undefined,
         text,
       );
-      return failure(
-        "condition_unmet",
-        `the text ${JSON.stringify(text)} is not present in the current observation`,
+      return this.assertionFailure(
+        failure(
+          "condition_unmet",
+          `the text ${JSON.stringify(text)} is not present in the current observation`,
+        ),
+        observation,
       );
     }
     this.#steps.push(step);
@@ -628,7 +637,10 @@ export class CaseBuilder implements ReplayContext {
     }
     const observation = this.#observation;
     if (this.#failures.failed(observation, "assert_url", undefined, undefined, contains)) {
-      return strategyRepeated();
+      return this.assertionFailure(
+        strategyRepeated(),
+        observation,
+      );
     }
     let step: Step;
     try {
@@ -647,7 +659,10 @@ export class CaseBuilder implements ReplayContext {
         undefined,
         contains,
       );
-      return failure("step_rejected", errorMessage(error));
+      return this.assertionFailure(
+        failure("step_rejected", errorMessage(error)),
+        observation,
+      );
     }
     if (!observation.url.includes(contains)) {
       this.#failures.record(
@@ -658,9 +673,12 @@ export class CaseBuilder implements ReplayContext {
         undefined,
         contains,
       );
-      return failure(
-        "condition_unmet",
-        `the current url ${JSON.stringify(this.#observation.url)} does not contain ${JSON.stringify(contains)}`,
+      return this.assertionFailure(
+        failure(
+          "condition_unmet",
+          `the current url ${JSON.stringify(this.#observation.url)} does not contain ${JSON.stringify(contains)}`,
+        ),
+        observation,
       );
     }
     this.#steps.push(step);
@@ -696,7 +714,7 @@ export class CaseBuilder implements ReplayContext {
     }
     if (execution.status !== "passed") {
       const repair = await this.prepareDryRunRepair(execution, signal);
-      return { result: repair, dryRun: execution };
+      return { result: repair, case: artifact, dryRun: execution };
     }
     return {
       result: {
@@ -736,6 +754,17 @@ export class CaseBuilder implements ReplayContext {
     signal?: AbortSignal,
   ): Promise<ToolResult> {
     return runPrepareDryRunRepair(this, execution, signal);
+  }
+
+  private assertionFailure(
+    result: ToolResult,
+    observation: Observation,
+  ): ToolResult {
+    return {
+      ...result,
+      page: pageView(observation, this.#goal),
+      steps: stepViews(this.#steps),
+    };
   }
 
   private async restoreAfterFailedAction(
@@ -1003,4 +1032,3 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
-

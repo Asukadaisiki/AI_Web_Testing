@@ -15,7 +15,10 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
-const finishCaseToolName = "mcp__browser_harness__finish_case"
+const (
+	browserHarnessToolPrefix = "mcp__browser_harness__"
+	finishCaseToolName       = browserHarnessToolPrefix + "finish_case"
+)
 
 // HarnessAttemptRef is the durable identity of one harness attempt returned to
 // the runtime by StartRun.
@@ -206,6 +209,11 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 		span, attempt := s.toolSpan(ref, ev, "completed")
 		record.Span = &span
 		record.Attempt = &attempt
+		var payload piharness.ToolCompletedPayload
+		_ = json.Unmarshal(ev.Payload, &payload)
+		if isBrowserHarnessTool(payload.ToolName) && payload.ToolName != finishCaseToolName {
+			record.Operation = browserToolOperationResult(ref, ev, attempt.OperationID, payload)
+		}
 	case piharness.EventObservation:
 		spanID, err := s.Store.ActiveToolSpanID(ctx, ref.RunID)
 		if err != nil {
@@ -389,6 +397,79 @@ func deriveBrowserStepArtifacts(dryRun json.RawMessage) json.RawMessage {
 			continue
 		}
 		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	encoded, _ := json.Marshal(map[string][]string{"screenshot_paths": paths})
+	return encoded
+}
+
+func isBrowserHarnessTool(toolName string) bool {
+	return strings.HasPrefix(toolName, browserHarnessToolPrefix)
+}
+
+func browserToolOperationResult(
+	ref HarnessAttemptRef,
+	ev piharness.Event,
+	operationID string,
+	payload piharness.ToolCompletedPayload,
+) *postgres.TraceOperationResult {
+	result := append(json.RawMessage(nil), payload.StructuredResult...)
+	if len(result) == 0 {
+		result = json.RawMessage(`{}`)
+	}
+	var structured struct {
+		OK     bool   `json:"ok"`
+		Error  string `json:"error"`
+		Detail string `json:"detail"`
+	}
+	_ = json.Unmarshal(result, &structured)
+
+	status := "passed"
+	if payload.IsError || !structured.OK {
+		status = "failed"
+	}
+	var errorEvidence json.RawMessage
+	if status == "failed" {
+		errorCode := strings.TrimSpace(structured.Error)
+		if errorCode == "" {
+			if payload.IsError {
+				errorCode = "tool_transport_error"
+			} else {
+				errorCode = "tool_failed"
+			}
+		}
+		detail := strings.TrimSpace(structured.Detail)
+		if detail == "" {
+			if payload.IsError {
+				detail = "tool completion transport marked error"
+			} else {
+				detail = "tool completion has no successful structured result"
+			}
+		}
+		errorEvidence, _ = json.Marshal(map[string]string{
+			"error":  errorCode,
+			"detail": detail,
+		})
+	}
+	return &postgres.TraceOperationResult{
+		ID:          stableID("result", ref.ID, fmt.Sprintf("%d", ev.Sequence)),
+		OperationID: operationID,
+		Status:      status,
+		Result:      result,
+		Artifacts:   deriveBrowserToolArtifacts(result),
+		Error:       errorEvidence,
+	}
+}
+
+func deriveBrowserToolArtifacts(result json.RawMessage) json.RawMessage {
+	var decoded struct {
+		Page struct {
+			ScreenshotPath string `json:"screenshot_path"`
+		} `json:"page"`
+	}
+	_ = json.Unmarshal(result, &decoded)
+	paths := make([]string, 0, 1)
+	if path := strings.TrimSpace(decoded.Page.ScreenshotPath); path != "" {
 		paths = append(paths, path)
 	}
 	encoded, _ := json.Marshal(map[string][]string{"screenshot_paths": paths})

@@ -160,6 +160,7 @@ describe("browser MCP server", () => {
         page: {
           url: "https://a.test",
           title: "A",
+          screenshot_path: null,
           truncated: false,
           truncation_reason: null,
           blockers: [],

@@ -85,6 +85,7 @@ export function mapPiEvent(
     }
 
     case "tool_execution_end": {
+      const structured = extractStructuredContent(event.result, event.toolName);
       const events: MappedEvent[] = [
         {
           type: "pi.tool.completed",
@@ -92,10 +93,13 @@ export function mapPiEvent(
             tool_call_id: event.toolCallId,
             tool_name: event.toolName,
             is_error: Boolean(event.isError),
+            ...(structured !== undefined &&
+            isBrowserHarnessMcpEnvelopeResult(event.result, event.toolName)
+              ? { structured_result: structured }
+              : {}),
           },
         },
       ];
-      const structured = extractStructuredContent(event.result, event.toolName);
       if (structured !== undefined) {
         const observation = structured.page;
         if (observation !== undefined) {
@@ -202,6 +206,20 @@ function extractStructuredContent(
     return mcpStructured as HarnessStructuredContent;
   }
   return structured as HarnessStructuredContent;
+}
+
+function isBrowserHarnessMcpEnvelopeResult(
+  result: unknown,
+  toolName: string,
+): boolean {
+  if (!isRecord(result) || !isRecord(result.structuredContent)) {
+    return false;
+  }
+  return isBrowserHarnessMcpEnvelope(
+    result,
+    result.structuredContent,
+    toolName,
+  );
 }
 
 function isBrowserHarnessMcpEnvelope(

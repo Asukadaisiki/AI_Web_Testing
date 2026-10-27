@@ -129,9 +129,10 @@ type ToolStartedPayload struct {
 }
 
 type ToolCompletedPayload struct {
-	ToolCallID string `json:"tool_call_id"`
-	ToolName   string `json:"tool_name"`
-	IsError    bool   `json:"is_error"`
+	ToolCallID       string          `json:"tool_call_id"`
+	ToolName         string          `json:"tool_name"`
+	IsError          bool            `json:"is_error"`
+	StructuredResult json.RawMessage `json:"structured_result"`
 }
 
 type ObservationPayload struct {

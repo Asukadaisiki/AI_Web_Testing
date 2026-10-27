@@ -19,6 +19,7 @@ from pi_harness_scenario import (
     assert_concurrent_isolation,
     assert_no_agentserver_endpoint,
     harness_attempt_for_run,
+    run_has_failed_assertion_evidence,
     trace_has_required_shape,
 )
 
@@ -215,6 +216,32 @@ class HarnessAttemptTest(unittest.TestCase):
                 harness_attempt_for_run("run-1")
 
 
+class FailedEvidenceTest(unittest.TestCase):
+    def test_requires_failed_assert_text_with_stable_error_attempt_and_screenshot(self) -> None:
+        cursor = _Cursor(
+            one=(
+                "failed",
+                "condition_unmet",
+                "assertion detail",
+                "attempt-1",
+                ["run-1/obs_failed.png"],
+            )
+        )
+        connection = _Connection(cursor)
+
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+            self.assertTrue(run_has_failed_assertion_evidence("run-1"))
+
+    def test_rejects_missing_screenshot_path(self) -> None:
+        cursor = _Cursor(
+            one=("failed", "condition_unmet", "assertion detail", "attempt-1", [])
+        )
+        connection = _Connection(cursor)
+
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+            self.assertFalse(run_has_failed_assertion_evidence("run-1"))
+
+
 class ConcurrentIsolationTest(unittest.TestCase):
     def test_rejects_shared_harness_attempt_ids(self) -> None:
         cursor = _Cursor(all=[("run-1", 3)])
@@ -237,8 +264,13 @@ class ConcurrentIsolationTest(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "share harness attempt ids"):
                 assert_concurrent_isolation(["run-1", "run-2"])
 
-    def test_accepts_distinct_attempts_and_scoped_artifacts(self) -> None:
-        cursor = _Cursor(all=[("run-1", 2), ("run-2", 3)])
+    def test_accepts_distinct_attempts_and_run_scoped_operation_artifacts(self) -> None:
+        cursor = _Cursor(
+            all=[
+                ("run-1", ["run-1/obs_1.png"]),
+                ("run-2", ["run-2/obs_2.png", "run-2/obs_3.png"]),
+            ]
+        )
         connection = _Connection(cursor)
         attempts = {
             "run-1": {"id": "hat_1", "provider_attempt_id": "provider-1"},
@@ -254,6 +286,25 @@ class ConcurrentIsolationTest(unittest.TestCase):
             ),
         ):
             assert_concurrent_isolation(["run-1", "run-2"])
+
+    def test_rejects_operation_artifact_outside_its_run_scope(self) -> None:
+        cursor = _Cursor(all=[("run-1", ["run-2/obs_1.png"]), ("run-2", ["run-2/obs_2.png"])])
+        connection = _Connection(cursor)
+        attempts = {
+            "run-1": {"id": "hat_1", "provider_attempt_id": "provider-1"},
+            "run-2": {"id": "hat_2", "provider_attempt_id": "provider-2"},
+        }
+
+        with (
+            patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}),
+            patch.object(
+                pi_harness_scenario,
+                "harness_attempt_for_run",
+                side_effect=lambda run_id: attempts[run_id],
+            ),
+        ):
+            with self.assertRaisesRegex(AssertionError, "unscoped operation artifact"):
+                assert_concurrent_isolation(["run-1", "run-2"])
 
 
 class AgentServerProbeTest(unittest.TestCase):

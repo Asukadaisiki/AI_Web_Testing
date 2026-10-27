@@ -125,6 +125,43 @@ describe("mapPiEvent", () => {
     });
   });
 
+  it("carries a recoverable browser MCP failure as bounded completion evidence", () => {
+    const state = createTraceMapperState();
+    const structured = {
+      ok: false,
+      error: "condition_unmet",
+      detail: "the text \"DoesNotExist\" is not present",
+      page: {
+        url: "https://shop.test/",
+        title: "Shop",
+        screenshot_path: "run_1/obs_failed.png",
+      },
+      steps: [{ index: 0, action: "goto", intent: "open shop" }],
+    };
+
+    const events = mapPiEvent(
+      toolEnd("call_failed", "mcp__browser_harness__assert_text", {
+        content: [{ type: "text", text: "failed" }],
+        details: { server: "browser-harness", tool: "assert_text" },
+        structuredContent: {
+          content: [{ type: "text", text: "failed" }],
+          structuredContent: structured,
+        },
+      }),
+      state,
+    );
+
+    expect(events[0]).toEqual({
+      type: "pi.tool.completed",
+      payload: {
+        tool_call_id: "call_failed",
+        tool_name: "mcp__browser_harness__assert_text",
+        is_error: false,
+        structured_result: structured,
+      },
+    });
+  });
+
   it("derives a compact browser observation from MCP structured content", () => {
     const state = createTraceMapperState();
     const page = { url: "https://a.test", title: "A", elements: [] };

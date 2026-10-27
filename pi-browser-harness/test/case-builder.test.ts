@@ -332,6 +332,43 @@ describe("CaseBuilder transactional authoring", () => {
     expect(builder.committedSteps[2]?.action).toBe("assert_url");
   });
 
+  it("failed assertions retain the current compact page and committed steps", async () => {
+    const observed = listObservation();
+    observed.screenshot_path = "run_1/obs_failed.png";
+    const server = startServer((req, res) => {
+      if (req.method === "POST" && req.url === "/sessions") {
+        jsonResponse(res, 200, { session_id: "bsess_1" });
+        return;
+      }
+      if (req.method === "POST" && req.url?.endsWith("/navigate")) {
+        jsonResponse(res, 200, observed);
+        return;
+      }
+      jsonResponse(res, 500, { error: "unexpected", detail: req.url });
+    });
+    servers.push(server);
+    const builder = await makeBuilder(server.url);
+
+    await builder.call("open_page", { url: LIST_URL, intent: "open products" });
+    const text = await builder.call("assert_text", {
+      text: "DoesNotExist",
+      intent: "verify missing product",
+    });
+    const url = await builder.call("assert_url", {
+      contains: "/missing",
+      intent: "verify missing path",
+    });
+
+    for (const outcome of [text, url]) {
+      expect(outcome.result.ok).toBe(false);
+      expect(outcome.result.error).toBe("condition_unmet");
+      expect(outcome.result.page?.screenshot_path).toBe("run_1/obs_failed.png");
+      expect(outcome.result.steps).toEqual([
+        expect.objectContaining({ index: 0, action: "goto" }),
+      ]);
+    }
+  });
+
   it("navigation retries transient worker failures three times and reports navigation_failed", async () => {
     let navigateCalls = 0;
     const server = startServer((req, res) => {
@@ -460,5 +497,56 @@ describe("CaseBuilder transactional authoring", () => {
     expect(finished.case).toBeDefined();
     expect(finished.dryRun?.status).toBe("passed");
     expect(finished.case?.steps).toHaveLength(2);
+  });
+
+  it("finish_case retains the authored case when its dry run fails", async () => {
+    const server = startServer((req, res, body) => {
+      if (req.method === "POST" && req.url === "/sessions") {
+        jsonResponse(res, 200, { session_id: "bsess_1" });
+        return;
+      }
+      if (req.method === "POST" && req.url?.endsWith("/navigate")) {
+        jsonResponse(res, 200, listObservation());
+        return;
+      }
+      if (req.method === "POST" && req.url === "/execute") {
+        const payload = body as { case: Case };
+        jsonResponse(res, 200, {
+          execution_id: "exec_failed",
+          status: "failed",
+          started_at: "2026-10-26T12:00:00Z",
+          finished_at: "2026-10-26T12:00:01Z",
+          final_url: LIST_URL,
+          steps: payload.case.steps.map((step) => ({
+            index: step.index,
+            action: step.action,
+            status: "failed",
+            started_at: "2026-10-26T12:00:00Z",
+            duration_ms: 10,
+            url_before: LIST_URL,
+            url_after: LIST_URL,
+            conditions: [],
+            evidence: {
+              screenshot_path: "run_1/dry_run_failed.png",
+              console: [],
+              network: [],
+            },
+            error: { kind: "condition_unmet", message: "missing" },
+          })),
+          error: { kind: "condition_unmet", message: "missing" },
+        } satisfies ExecutionResult);
+        return;
+      }
+      jsonResponse(res, 500, { error: "unexpected", detail: req.url });
+    });
+    servers.push(server);
+    const builder = await makeBuilder(server.url);
+
+    await builder.call("open_page", { url: LIST_URL, intent: "open products" });
+    const finished = await builder.call("finish_case", { name: "failing case" });
+
+    expect(finished.result.ok).toBe(false);
+    expect(finished.case?.steps).toHaveLength(1);
+    expect(finished.dryRun?.status).toBe("failed");
   });
 });

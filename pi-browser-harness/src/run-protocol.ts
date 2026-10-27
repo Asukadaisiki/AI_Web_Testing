@@ -38,6 +38,7 @@ export interface HarnessEventPayloads {
     tool_call_id: string;
     tool_name: string;
     is_error: boolean;
+    structured_result?: Record<string, unknown>;
     [key: string]: unknown;
   };
   "browser.observation": {

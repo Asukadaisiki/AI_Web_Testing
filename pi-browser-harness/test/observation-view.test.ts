@@ -230,6 +230,17 @@ describe("buildPageView", () => {
     expect(view.elements[0]?.locator_kind).toBe("css");
   });
 
+  it("preserves a nullable screenshot path from the observation", () => {
+    expect(
+      buildPageView(
+        observation({ screenshot_path: "run_1/obs_1.png" }),
+        "",
+        null,
+      ).screenshot_path,
+    ).toBe("run_1/obs_1.png");
+    expect(buildPageView(observation(), "", null).screenshot_path).toBeNull();
+  });
+
   it("matches Chinese, Japanese, and Korean goal text", () => {
     const cases = [
       ["搜索蓝色上衣并加入购物车", "加入购物车"],
