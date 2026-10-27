@@ -3,6 +3,9 @@ import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 
 import type { HarnessEventType, HarnessEventPayloads } from "./run-protocol.js";
 
+const BROWSER_HARNESS_TOOL_PREFIX = "mcp__browser_harness__";
+const FINISH_CASE_TOOL = `${BROWSER_HARNESS_TOOL_PREFIX}finish_case`;
+
 /**
  * Mutable state carried across Pi events so the mapper can derive settlement
  * verdicts and avoid emitting usage more than once per assistant message.
@@ -92,7 +95,7 @@ export function mapPiEvent(
           },
         },
       ];
-      const structured = extractStructuredContent(event.result);
+      const structured = extractStructuredContent(event.result, event.toolName);
       if (structured !== undefined) {
         const observation = structured.page;
         if (observation !== undefined) {
@@ -102,14 +105,12 @@ export function mapPiEvent(
           });
         }
         if (
-          structured.case !== undefined &&
-          structured.dry_run !== undefined
+          event.toolName === FINISH_CASE_TOOL &&
+          isRecord(structured.case) &&
+          isDryRunArtifact(structured.dry_run)
         ) {
-          const dryRun = structured.dry_run as {
-            status?: "passed" | "failed" | "error";
-          };
           const verdict: "passed" | "failed" =
-            dryRun.status === "passed" ? "passed" : "failed";
+            structured.dry_run.status === "passed" ? "passed" : "failed";
           state.browser_case_verdicts.push(verdict);
           events.push({
             type: "browser.case.completed",
@@ -180,22 +181,59 @@ function messageKey(message: AssistantMessage): string {
  */
 function extractStructuredContent(
   result: unknown,
+  toolName: string,
 ): HarnessStructuredContent | undefined {
-  if (typeof result !== "object" || result === null) {
+  if (!isRecord(result)) {
     return undefined;
   }
-  const structured = (result as { structuredContent?: unknown })
-    .structuredContent;
-  if (typeof structured !== "object" || structured === null) {
+  const structured = result.structuredContent;
+  if (!isRecord(structured)) {
     return undefined;
   }
-  const mcpStructured = (
-    structured as { structuredContent?: unknown }
-  ).structuredContent;
-  if (typeof mcpStructured === "object" && mcpStructured !== null) {
+  if (isBrowserHarnessMcpEnvelope(result, structured, toolName)) {
+    const mcpStructured = structured.structuredContent;
+    if (!isRecord(mcpStructured)) {
+      return undefined;
+    }
     return mcpStructured as HarnessStructuredContent;
   }
   return structured as HarnessStructuredContent;
+}
+
+function isBrowserHarnessMcpEnvelope(
+  result: Record<string, unknown>,
+  structured: Record<string, unknown>,
+  toolName: string,
+): boolean {
+  const details = result.details;
+  if (!isRecord(details) || typeof details.tool !== "string") {
+    return false;
+  }
+  return (
+    Array.isArray(result.content) &&
+    details.server === "browser-harness" &&
+    toolName === `${BROWSER_HARNESS_TOOL_PREFIX}${details.tool}` &&
+    Array.isArray(structured.content)
+  );
+}
+
+function isDryRunArtifact(
+  value: unknown,
+): value is Record<string, unknown> & {
+  status: "passed" | "failed" | "error";
+} {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.status === "passed" ||
+    value.status === "failed" ||
+    value.status === "error"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 interface HarnessStructuredContent {

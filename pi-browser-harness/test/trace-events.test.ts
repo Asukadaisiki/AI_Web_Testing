@@ -164,6 +164,83 @@ describe("mapPiEvent", () => {
     expect(events[1]?.payload).toEqual({ observation: page });
   });
 
+  it("unwraps only the exact browser-harness Pi MCP adapter envelope", () => {
+    const directPage = { url: "https://direct.test", title: "Direct", elements: [] };
+    const nestedPage = { url: "https://nested.test", title: "Nested", elements: [] };
+    const baseResult = {
+      content: [{ type: "text", text: "Opened page" }],
+      details: { server: "browser-harness", tool: "open_page" },
+      structuredContent: {
+        content: [{ type: "text", text: "Opened page" }],
+        page: directPage,
+        structuredContent: { ok: true, page: nestedPage },
+      },
+    };
+    const cases = [
+      {
+        name: "missing outer content",
+        result: { ...baseResult, content: undefined },
+      },
+      {
+        name: "wrong MCP server",
+        result: {
+          ...baseResult,
+          details: { server: "other-server", tool: "open_page" },
+        },
+      },
+      {
+        name: "wrong MCP tool detail",
+        result: {
+          ...baseResult,
+          details: { server: "browser-harness", tool: "click" },
+        },
+      },
+      {
+        name: "missing inner MCP content",
+        result: {
+          ...baseResult,
+          structuredContent: {
+            page: directPage,
+            structuredContent: { ok: true, page: nestedPage },
+          },
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const events = mapPiEvent(
+        toolEnd("call_1", "mcp__browser_harness__open_page", testCase.result),
+        createTraceMapperState(),
+      );
+
+      expect(
+        events.find((event) => event.type === "browser.observation")?.payload,
+        testCase.name,
+      ).toEqual({ observation: directPage });
+    }
+  });
+
+  it("preserves an ambiguous direct result with domain structuredContent", () => {
+    const state = createTraceMapperState();
+    const page = { url: "https://direct.test", title: "Direct", elements: [] };
+    const events = mapPiEvent(
+      toolEnd("call_1", "mcp__browser_harness__open_page", {
+        structuredContent: {
+          ok: true,
+          page,
+          structuredContent: { kind: "domain-data" },
+        },
+      }),
+      state,
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "pi.tool.completed",
+      "browser.observation",
+    ]);
+    expect(events[1]?.payload).toEqual({ observation: page });
+  });
+
   it("derives objective finish evidence from finish_case structured content", () => {
     const state = createTraceMapperState();
     const caseArtifact = { case_version: "loop.case.v1", steps: [] };
@@ -213,6 +290,81 @@ describe("mapPiEvent", () => {
     expect(state.browser_case_verdicts).toEqual(["passed"]);
   });
 
+  it("ignores passing finish evidence from any other tool", () => {
+    const state = createTraceMapperState();
+    const events = mapPiEvent(
+      toolEnd("call_2", "mcp__browser_harness__click", {
+        structuredContent: {
+          ok: true,
+          case: { case_version: "loop.case.v1", steps: [] },
+          dry_run: { status: "passed", execution_id: "exec_wrong_tool" },
+        },
+      }),
+      state,
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["pi.tool.completed"]);
+    expect(state.browser_case_verdicts).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "missing case",
+      caseValue: undefined,
+      dryRunValue: { status: "passed", execution_id: "exec_valid" },
+    },
+    {
+      name: "null case",
+      caseValue: null,
+      dryRunValue: { status: "passed", execution_id: "exec_valid" },
+    },
+    {
+      name: "array case",
+      caseValue: [],
+      dryRunValue: { status: "passed", execution_id: "exec_valid" },
+    },
+    {
+      name: "missing dry run",
+      caseValue: { case_version: "loop.case.v1", steps: [] },
+      dryRunValue: undefined,
+    },
+    {
+      name: "null dry run",
+      caseValue: { case_version: "loop.case.v1", steps: [] },
+      dryRunValue: null,
+    },
+    {
+      name: "array dry run",
+      caseValue: { case_version: "loop.case.v1", steps: [] },
+      dryRunValue: [],
+    },
+    {
+      name: "invalid dry-run status",
+      caseValue: { case_version: "loop.case.v1", steps: [] },
+      dryRunValue: { status: "unknown", execution_id: "exec_invalid" },
+    },
+  ])(
+    "requires valid object case and dry-run artifacts: $name",
+    ({ caseValue, dryRunValue }) => {
+      const state = createTraceMapperState();
+      const events = mapPiEvent(
+        toolEnd("call_2", "mcp__browser_harness__finish_case", {
+          structuredContent: {
+            ok: true,
+            case: caseValue,
+            dry_run: dryRunValue,
+          },
+        }),
+        state,
+      );
+
+      expect(events.map((event) => event.type)).toEqual([
+        "pi.tool.completed",
+      ]);
+      expect(state.browser_case_verdicts).toEqual([]);
+    },
+  );
+
   it("records a failed dry run as a failed browser case verdict", () => {
     const state = createTraceMapperState();
     mapPiEvent(
@@ -228,6 +380,31 @@ describe("mapPiEvent", () => {
 
     expect(state.browser_case_verdicts).toEqual(["failed"]);
   });
+
+  it.each(["failed", "error"] as const)(
+    "records a nested %s dry run as a failed browser case verdict",
+    (status) => {
+      const state = createTraceMapperState();
+      const events = mapPiEvent(
+        toolEnd("call_2", "mcp__browser_harness__finish_case", {
+          content: [{ type: "text", text: "Finished case" }],
+          details: { server: "browser-harness", tool: "finish_case" },
+          structuredContent: {
+            content: [{ type: "text", text: "Finished case" }],
+            structuredContent: {
+              ok: false,
+              case: { case_version: "loop.case.v1", steps: [] },
+              dry_run: { status, execution_id: `exec_${status}` },
+            },
+          },
+        }),
+        state,
+      );
+
+      expect(events[1]?.payload).toEqual({ verdict: "failed" });
+      expect(state.browser_case_verdicts).toEqual(["failed"]);
+    },
+  );
 
   it("emits harness.settled only on agent_settled with the last assistant text", () => {
     const state = createTraceMapperState();
