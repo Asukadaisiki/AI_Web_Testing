@@ -391,6 +391,74 @@ class AgentServerProbeTest(unittest.TestCase):
                 assert_no_agentserver_endpoint()
 
 
+class StandaloneOrchestrationTest(unittest.TestCase):
+    def test_run_scenario_executes_concurrent_runs_after_cancellation(self) -> None:
+        fixtures = [
+            pi_harness_scenario.RunFixture("", "", "run-canonical"),
+            pi_harness_scenario.RunFixture("", "", "run-failing"),
+            pi_harness_scenario.RunFixture("", "", "run-cancel"),
+            pi_harness_scenario.RunFixture("", "", "run-concurrent-0"),
+            pi_harness_scenario.RunFixture("", "", "run-concurrent-1"),
+        ]
+        attempts = [
+            {
+                "id": "hat-cancel",
+                "attempt_number": 1,
+                "provider_attempt_id": "provider-cancel",
+                "status": "cancelled",
+            },
+            {
+                "id": "hat-canonical",
+                "attempt_number": 1,
+                "provider_attempt_id": "provider-canonical",
+                "status": "finished",
+            },
+            {
+                "id": "hat-rerun",
+                "attempt_number": 1,
+                "provider_attempt_id": "provider-rerun",
+                "status": "finished",
+            },
+        ]
+
+        with (
+            patch.multiple(
+                pi_harness_scenario,
+                wait_for_stack=MagicMock(),
+                assert_no_agentserver_endpoint=MagicMock(),
+                create_workspace=MagicMock(side_effect=fixtures),
+                wait_for_terminal=MagicMock(
+                    side_effect=[
+                        "succeeded",
+                        "failed",
+                        "cancelled",
+                        "succeeded",
+                        "succeeded",
+                        "succeeded",
+                    ]
+                ),
+                assert_pi_harness_path=MagicMock(),
+                trace_has_required_shape=MagicMock(return_value={"trace": True}),
+                run_has_failed_assertion_evidence=MagicMock(return_value=True),
+                cancel_run=MagicMock(),
+                harness_attempt_for_run=MagicMock(side_effect=attempts),
+                assert_concurrent_isolation=MagicMock(),
+                request=MagicMock(return_value={"run_id": "run-rerun"}),
+            ),
+            patch.object(
+                pi_harness_scenario.uuid,
+                "uuid4",
+                return_value=MagicMock(hex="test-batch"),
+            ),
+        ):
+            summary = pi_harness_scenario.run_scenario()
+
+        self.assertEqual(
+            set(summary["concurrent_run_ids"]),
+            {"run-concurrent-0", "run-concurrent-1"},
+        )
+
+
 class ComposeConfigTest(unittest.TestCase):
     def test_runtime_image_builds_the_harness_with_node(self) -> None:
         result = subprocess_run(

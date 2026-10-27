@@ -435,16 +435,16 @@ def run_scenario() -> dict[str, Any]:
     summary["cancelled_harness_status"] = attempt["status"]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        concurrent = list(
+        concurrent_runs = list(
             executor.map(
                 lambda index: create_workspace(f"{batch}-concurrent-{index}"),
                 range(2),
             )
         )
-    for run in concurrent:
+    for run in concurrent_runs:
         wait_for_terminal(run.run_id)
-    assert_concurrent_isolation([run.run_id for run in concurrent])
-    summary["concurrent_run_ids"] = [run.run_id for run in concurrent]
+    assert_concurrent_isolation([run.run_id for run in concurrent_runs])
+    summary["concurrent_run_ids"] = [run.run_id for run in concurrent_runs]
 
     rerun_response = request(
         f"/api/v1/runs/{canonical.run_id}/reruns",
