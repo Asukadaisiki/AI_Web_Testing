@@ -23,8 +23,9 @@ type HarnessProcessRunner interface {
 // harness, persists each event as EvalHub trace evidence, and derives the
 // objective terminal status from the harness verdict.
 type PiRunner struct {
-	Process HarnessProcessRunner
-	Store   PiTraceStore
+	Process   HarnessProcessRunner
+	Store     PiTraceStore
+	WorkerURL string
 }
 
 // Run executes the harness for command and persists its trace. A replay of an
@@ -48,7 +49,7 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		return fmt.Errorf("start pi run: %w", err)
 	}
 
-	request := buildHarnessRequest(command, ref.ProviderAttemptID)
+	request := buildHarnessRequest(command, r.WorkerURL, ref.ProviderAttemptID)
 
 	runState := &piRunState{}
 	processErr := r.Process.Run(ctx, request, func(ev piharness.Event) {
@@ -138,13 +139,16 @@ func (r PiRunner) deriveOutcome(processErr error, state *piRunState, cancelReque
 	return PiRunOutcome{Status: domain.RunFailed, Error: processErr.Error()}
 }
 
-func buildHarnessRequest(command event.RunCommand, providerAttemptID string) piharness.Request {
+func buildHarnessRequest(command event.RunCommand, workerURL, providerAttemptID string) piharness.Request {
 	goal := ""
 	for i := len(command.Messages) - 1; i >= 0; i-- {
 		if command.Messages[i].Role == "user" {
 			goal = command.Messages[i].Content
 			break
 		}
+	}
+	if workerURL == "" {
+		workerURL = command.WorkerURL
 	}
 	return piharness.Request{
 		RunID:     command.RunID,
@@ -155,7 +159,7 @@ func buildHarnessRequest(command event.RunCommand, providerAttemptID string) pih
 			Name:            command.Model.Name,
 			ReasoningEffort: command.Model.ReasoningEffort,
 		},
-		WorkerURL:     command.WorkerURL,
+		WorkerURL:     workerURL,
 		ArtifactScope: command.ArtifactScope,
 	}
 }

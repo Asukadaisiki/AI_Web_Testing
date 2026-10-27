@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadRequiresPostgresAndKafka(t *testing.T) {
 	t.Setenv("AGENTTRACE_POSTGRES_DSN", "")
@@ -147,6 +150,49 @@ func TestLoadExporterDefaultsAndValidatesMaximumRequestBytes(t *testing.T) {
 	t.Setenv("AGENTTRACE_LANGFUSE_MAX_REQUEST_BYTES", "0")
 	if _, err := LoadExporter(); err == nil {
 		t.Fatal("accepted zero maximum request bytes")
+	}
+}
+
+func TestLoadUsesPiHarnessDefaults(t *testing.T) {
+	t.Setenv("AGENTTRACE_POSTGRES_DSN", "postgres://agenttrace:agenttrace@localhost:5432/agenttrace?sslmode=disable")
+	t.Setenv("AGENTTRACE_KAFKA_BROKERS", "localhost:9092")
+	t.Setenv("AGENTTRACE_PI_HARNESS_COMMAND", "")
+	t.Setenv("AGENTTRACE_PI_HARNESS_ENTRY", "")
+	t.Setenv("AGENTTRACE_PI_HARNESS_DIR", "")
+	t.Setenv("AGENTTRACE_PI_HARNESS_TIMEOUT", "")
+	t.Setenv("AGENTTRACE_PI_HARNESS_TERMINATION_GRACE", "")
+	t.Setenv("AGENTTRACE_PI_HARNESS_MAX_LINE_BYTES", "")
+	t.Setenv("AGENTTRACE_PI_HARNESS_MAX_STDERR_BYTES", "")
+	t.Setenv("AGENTTRACE_MODEL_BASE_URL", "")
+	t.Setenv("AGENTTRACE_MODEL_API_KEY", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Harness.Command != "node" {
+		t.Fatalf("harness command = %q, want node", cfg.Harness.Command)
+	}
+	if cfg.Harness.Entry != "/app/pi-browser-harness/dist/main.js" {
+		t.Fatalf("harness entry = %q, want /app/pi-browser-harness/dist/main.js", cfg.Harness.Entry)
+	}
+	if cfg.Harness.Directory != "/app" {
+		t.Fatalf("harness directory = %q, want /app", cfg.Harness.Directory)
+	}
+	if cfg.Harness.Timeout != 20*time.Minute {
+		t.Fatalf("harness timeout = %v, want 20m", cfg.Harness.Timeout)
+	}
+	if cfg.Harness.TerminationGrace != 5*time.Second {
+		t.Fatalf("harness termination grace = %v, want 5s", cfg.Harness.TerminationGrace)
+	}
+	if cfg.Harness.MaxLineBytes != 4194304 {
+		t.Fatalf("harness max line bytes = %d, want 4194304", cfg.Harness.MaxLineBytes)
+	}
+	if cfg.Harness.MaxStderrBytes != 65536 {
+		t.Fatalf("harness max stderr bytes = %d, want 65536", cfg.Harness.MaxStderrBytes)
+	}
+	if cfg.Harness.ProviderBaseURL != "https://api.unself.cn/v1" {
+		t.Fatalf("harness provider base URL = %q, want https://api.unself.cn/v1", cfg.Harness.ProviderBaseURL)
 	}
 }
 

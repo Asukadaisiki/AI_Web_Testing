@@ -11,15 +11,13 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus/kafka"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live"
 	liveredis "github.com/Asukadaisiki/AI_Web_Testing/backend/internal/live/redis"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/operation"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/runtime"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,33 +72,8 @@ func run() error {
 		liveStore = liveredis.NewClient(redisClient)
 	}
 
-	profile, err := agentprofile.LoadBrowserEval(cfg.WorkerURL)
-	if err != nil {
-		return fmt.Errorf("load browser profile: %w", err)
-	}
-	dispatcher, err := operation.NewHTTPDispatcher(operation.HTTPConfig{
-		Operations:           profile.OperationDefinitions(),
-		ApprovedCallbackURLs: profile.ApprovedCallbackURLs(),
-	})
-	if err != nil {
-		return fmt.Errorf("create browser operation dispatcher: %w", err)
-	}
-	selectedModel, err := selectModel(cfg.Model)
-	if err != nil {
-		return err
-	}
-
 	store := postgres.NewStore(pool)
-	engine := runtime.Engine{
-		Model:      selectedModel,
-		Operations: dispatcher,
-		Store:      runtime.PostgresCheckpointStore{Store: store},
-		Live:       liveStore,
-	}
-	runner, err := newBoundedRunner(engine, cfg.RuntimeConcurrency)
-	if err != nil {
-		return err
-	}
+	runner := newCommandRunner(cfg, store)
 	consumerRuntime := &runtime.Consumer{
 		Inbox: runtime.DeduplicatedInbox{
 			Deduplicator: consumer.NewDeduplicator(pool, "agenttrace-runtime"),
@@ -118,6 +91,44 @@ func run() error {
 		return fmt.Errorf("consume AgentTrace commands: %w", err)
 	}
 	return nil
+}
+
+// newCommandRunner builds the sole production CommandRunner: a concurrency-
+// bounded PiRunner that spawns the pi-browser-harness subprocess. The model
+// and HTTP operation dispatcher are intentionally not constructed here; the
+// harness owns both the model turn loop and browser operation dispatch.
+func newCommandRunner(cfg config.Config, store *postgres.Store) runtime.CommandRunner {
+	process := &piharness.ProcessRunner{
+		Command:          cfg.Harness.Command,
+		Args:             []string{cfg.Harness.Entry},
+		WorkingDirectory: cfg.Harness.Directory,
+		Environment:      harnessEnvironment(cfg.Harness),
+		MaxLineBytes:     cfg.Harness.MaxLineBytes,
+		MaxStderrBytes:   cfg.Harness.MaxStderrBytes,
+		TerminationGrace: cfg.Harness.TerminationGrace,
+		Timeout:          cfg.Harness.Timeout,
+	}
+	piRunner := runtime.PiRunner{
+		Process:   process,
+		Store:     runtime.PostgresPiTraceStore{Store: store},
+		WorkerURL: cfg.WorkerURL,
+	}
+	bounded, err := newBoundedRunner(piRunner, cfg.RuntimeConcurrency)
+	if err != nil {
+		panic(err)
+	}
+	return bounded
+}
+
+func harnessEnvironment(h config.Harness) []string {
+	env := os.Environ()
+	if h.ProviderBaseURL != "" {
+		env = append(env, "PI_HARNESS_MODEL_BASE_URL="+h.ProviderBaseURL)
+	}
+	if h.ProviderAPIKey != "" {
+		env = append(env, "PI_HARNESS_MODEL_API_KEY="+h.ProviderAPIKey)
+	}
+	return env
 }
 
 func runtimePoolConfig(dsn string, concurrency int) (*pgxpool.Config, error) {
@@ -160,26 +171,6 @@ func consumeWorkers(ctx context.Context, count int, consume func(context.Context
 		return err
 	}
 	return ctx.Err()
-}
-
-func selectModel(cfg config.Model) (model.Model, error) {
-	if cfg.ScriptPath != "" {
-		raw, err := os.ReadFile(cfg.ScriptPath)
-		if err != nil {
-			return nil, fmt.Errorf("read scripted model fixture: %w", err)
-		}
-		selected, err := model.ScriptedFromJSON(raw)
-		if err != nil {
-			return nil, err
-		}
-		return selected, nil
-	}
-	return model.NewOpenAI(model.OpenAIConfig{
-		BaseURL:         cfg.BaseURL,
-		APIKey:          cfg.APIKey,
-		Model:           cfg.Name,
-		ReasoningEffort: cfg.ReasoningEffort,
-	}), nil
 }
 
 type boundedRunner struct {

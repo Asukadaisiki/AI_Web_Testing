@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/eventbus"
 )
@@ -382,4 +383,19 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatalf("marshal fixture: %v", err)
 	}
 	return raw
+}
+
+func commandFor(runID string) event.RunCommand {
+	return event.RunCommand{
+		RunID:          runID,
+		ConversationID: "conversation-1",
+		Model:          event.ModelRef{Provider: "scripted", Name: "fixture"},
+		Messages: []domain.Message{{
+			ID:             "msg-user",
+			ConversationID: "conversation-1",
+			Ordinal:        1,
+			Role:           "user",
+			Content:        "Inspect the page",
+		}},
+	}
 }

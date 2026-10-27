@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -18,6 +19,22 @@ type Config struct {
 	ArtifactDir        string
 	RuntimeConcurrency int
 	Model              Model
+	Harness            Harness
+}
+
+// Harness configures the pi-browser-harness subprocess that runs browser
+// evaluations. Provider credentials are passed through the harness environment
+// so the runtime never holds them directly.
+type Harness struct {
+	Command          string
+	Entry            string
+	Directory        string
+	ProviderBaseURL  string
+	ProviderAPIKey   string
+	Timeout          time.Duration
+	TerminationGrace time.Duration
+	MaxLineBytes     int
+	MaxStderrBytes   int
 }
 
 type Postgres struct{ DSN string }
@@ -85,6 +102,22 @@ func Load() (Config, error) {
 	}
 
 	redisAddr := strings.TrimSpace(os.Getenv("AGENTTRACE_REDIS_ADDR"))
+	harnessTimeout, err := durationEnv("AGENTTRACE_PI_HARNESS_TIMEOUT", 20*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	harnessGrace, err := durationEnv("AGENTTRACE_PI_HARNESS_TERMINATION_GRACE", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	maxLineBytes, err := positiveIntEnv("AGENTTRACE_PI_HARNESS_MAX_LINE_BYTES", 4194304)
+	if err != nil {
+		return Config{}, err
+	}
+	maxStderrBytes, err := positiveIntEnv("AGENTTRACE_PI_HARNESS_MAX_STDERR_BYTES", 65536)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		HTTPAddr: envOr("AGENTTRACE_HTTP_ADDR", ":8080"),
 		Postgres: Postgres{DSN: postgresDSN},
@@ -110,6 +143,17 @@ func Load() (Config, error) {
 			ReasoningEffort: envOr("AGENTTRACE_MODEL_REASONING_EFFORT", "high"),
 			APIKey:          os.Getenv("AGENTTRACE_MODEL_API_KEY"),
 			ScriptPath:      strings.TrimSpace(os.Getenv("AGENTTRACE_MODEL_SCRIPT")),
+		},
+		Harness: Harness{
+			Command:          envOr("AGENTTRACE_PI_HARNESS_COMMAND", "node"),
+			Entry:            envOr("AGENTTRACE_PI_HARNESS_ENTRY", "/app/pi-browser-harness/dist/main.js"),
+			Directory:        envOr("AGENTTRACE_PI_HARNESS_DIR", "/app"),
+			ProviderBaseURL:  envOr("AGENTTRACE_MODEL_BASE_URL", "https://api.unself.cn/v1"),
+			ProviderAPIKey:   os.Getenv("AGENTTRACE_MODEL_API_KEY"),
+			Timeout:          harnessTimeout,
+			TerminationGrace: harnessGrace,
+			MaxLineBytes:     maxLineBytes,
+			MaxStderrBytes:   maxStderrBytes,
 		},
 	}, nil
 }
@@ -220,6 +264,21 @@ func positiveIntEnv(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be at least 1", key)
 	}
 	return value, nil
+}
+
+func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration: %w", key, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be positive", key)
+	}
+	return parsed, nil
 }
 
 func envOr(key, fallback string) string {

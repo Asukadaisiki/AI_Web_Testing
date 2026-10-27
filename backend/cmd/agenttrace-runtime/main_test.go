@@ -3,31 +3,35 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
-	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/model"
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/runtime"
 )
 
-func TestSelectModelUsesCheckpointedScriptedFixtureWhenConfigured(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "fixture.json")
-	if err := os.WriteFile(path, []byte(`{"steps":[{"final":"done"}]}`), 0o600); err != nil {
-		t.Fatalf("write scripted fixture: %v", err)
+func TestRuntimeWiresPiRunnerAsSoleCommandRunner(t *testing.T) {
+	cfg := config.Config{
+		RuntimeConcurrency: 2,
+		Harness: config.Harness{
+			Command:          "node",
+			Entry:            "/app/pi-browser-harness/dist/main.js",
+			Directory:        "/app",
+			Timeout:          20 * time.Minute,
+			TerminationGrace: 5 * time.Second,
+			MaxLineBytes:     4194304,
+			MaxStderrBytes:   65536,
+		},
 	}
-	selected, err := selectModel(config.Model{ScriptPath: path})
-	if err != nil {
-		t.Fatalf("select model: %v", err)
+	runner := newCommandRunner(cfg, nil)
+	bounded, ok := runner.(*boundedRunner)
+	if !ok {
+		t.Fatalf("command runner = %T, want *boundedRunner", runner)
 	}
-	if _, ok := selected.(*model.CheckpointedScripted); !ok {
-		t.Fatalf("model = %T, want checkpointed scripted", selected)
-	}
-	if _, ok := selected.(model.CheckpointedModel); !ok {
-		t.Fatalf("model = %T, want durable checkpointed model", selected)
+	if _, ok := bounded.runner.(runtime.PiRunner); !ok {
+		t.Fatalf("bounded runner inner = %T, want runtime.PiRunner", bounded.runner)
 	}
 }
 

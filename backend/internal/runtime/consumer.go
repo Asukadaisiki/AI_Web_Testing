@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -300,4 +302,42 @@ func maxDuration(left, right time.Duration) time.Duration {
 		return left
 	}
 	return right
+}
+
+func stableID(prefix string, values ...string) string {
+	hash := sha256.New()
+	for _, value := range values {
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(value))
+	}
+	return prefix + "_" + hex.EncodeToString(hash.Sum(nil)[:16])
+}
+
+// RunSpanID derives the deterministic root span for a run.
+func RunSpanID(runID string) string {
+	return stableID("span", runID, "run")
+}
+
+// AttemptID derives a stable attempt identity from its logical span and attempt number.
+func AttemptID(logicalSpanID string, attempt int) string {
+	return stableID("attempt", logicalSpanID, fmt.Sprintf("%d", attempt))
+}
+
+// terminalRunError reports a run-level failure after its terminal state is durable.
+// Consumers commit the command inbox entry instead of retrying completed work.
+type terminalRunError struct {
+	cause error
+}
+
+func (e *terminalRunError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *terminalRunError) Unwrap() error {
+	return e.cause
+}
+
+func isTerminalRunError(err error) bool {
+	var terminal *terminalRunError
+	return errors.As(err, &terminal)
 }
