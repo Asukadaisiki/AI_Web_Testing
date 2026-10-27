@@ -14,6 +14,52 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
 
+func TestBuildHarnessRequestDefaultsBlankArtifactScopeToRunID(t *testing.T) {
+	command := event.RunCommand{
+		RunID: "run-default-scope",
+		Model: event.ModelRef{
+			Provider:        "openai",
+			Name:            "gpt-5",
+			ReasoningEffort: "high",
+		},
+		Messages: []domain.Message{
+			{Role: "user", Content: "first goal"},
+			{Role: "assistant", Content: "intermediate response"},
+			{Role: "user", Content: "final goal"},
+		},
+		WorkerURL: "http://command-worker:8100",
+	}
+
+	request := buildHarnessRequest(command, "", "attempt-default-scope")
+
+	if request.ArtifactScope != "run-default-scope" {
+		t.Fatalf("artifact scope = %q, want run ID fallback", request.ArtifactScope)
+	}
+	if request.RunID != "run-default-scope" || request.AttemptID != "attempt-default-scope" {
+		t.Fatalf("run ID / attempt ID = %q / %q", request.RunID, request.AttemptID)
+	}
+	if request.Goal != "final goal" {
+		t.Fatalf("goal = %q, want latest user message", request.Goal)
+	}
+	if request.Model.Provider != "openai" || request.Model.Name != "gpt-5" || request.Model.ReasoningEffort != "high" {
+		t.Fatalf("model = %#v, want command model fields", request.Model)
+	}
+	if request.WorkerURL != "http://command-worker:8100" {
+		t.Fatalf("worker URL = %q, want command fallback", request.WorkerURL)
+	}
+}
+
+func TestBuildHarnessRequestPreservesExplicitArtifactScope(t *testing.T) {
+	command := commandFor("run-explicit-scope")
+	command.ArtifactScope = "artifact-scope-explicit"
+
+	request := buildHarnessRequest(command, "http://runtime-worker:8100", "attempt-explicit-scope")
+
+	if request.ArtifactScope != "artifact-scope-explicit" {
+		t.Fatalf("artifact scope = %q, want explicit command scope", request.ArtifactScope)
+	}
+}
+
 func TestPiRunnerReplayOfTerminalRunStartsNoProcess(t *testing.T) {
 	store := &fakePiStore{startErr: postgres.ErrRunAlreadyTerminal}
 	process := &fakeHarnessProcess{err: errors.New("should not run")}

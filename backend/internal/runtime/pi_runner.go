@@ -148,6 +148,10 @@ func buildHarnessRequest(command event.RunCommand, workerURL, providerAttemptID 
 	if workerURL == "" {
 		workerURL = command.WorkerURL
 	}
+	artifactScope := command.ArtifactScope
+	if artifactScope == "" {
+		artifactScope = command.RunID
+	}
 	return piharness.Request{
 		RunID:     command.RunID,
 		AttemptID: providerAttemptID,
@@ -158,6 +162,6 @@ func buildHarnessRequest(command event.RunCommand, workerURL, providerAttemptID 
 			ReasoningEffort: command.Model.ReasoningEffort,
 		},
 		WorkerURL:     workerURL,
-		ArtifactScope: command.ArtifactScope,
+		ArtifactScope: artifactScope,
 	}
 }
