@@ -142,6 +142,28 @@ describe("mapPiEvent", () => {
     expect(events[1]?.payload).toEqual({ observation: page });
   });
 
+  it("derives a browser observation from the Pi MCP adapter result envelope", () => {
+    const state = createTraceMapperState();
+    const page = { url: "https://nested.test", title: "Nested", elements: [] };
+    const events = mapPiEvent(
+      toolEnd("call_1", "mcp__browser_harness__open_page", {
+        content: [{ type: "text", text: "Opened page" }],
+        details: { server: "browser-harness", tool: "open_page" },
+        structuredContent: {
+          content: [{ type: "text", text: "Opened page" }],
+          structuredContent: { ok: true, page },
+        },
+      }),
+      state,
+    );
+
+    expect(events.map((e) => e.type)).toEqual([
+      "pi.tool.completed",
+      "browser.observation",
+    ]);
+    expect(events[1]?.payload).toEqual({ observation: page });
+  });
+
   it("derives objective finish evidence from finish_case structured content", () => {
     const state = createTraceMapperState();
     const caseArtifact = { case_version: "loop.case.v1", steps: [] };
@@ -151,6 +173,33 @@ describe("mapPiEvent", () => {
           ok: true,
           case: caseArtifact,
           dry_run: { status: "passed", execution_id: "exec_1" },
+        },
+      }),
+      state,
+    );
+
+    expect(events.map((e) => e.type)).toEqual([
+      "pi.tool.completed",
+      "browser.case.completed",
+    ]);
+    expect(events[1]?.payload).toEqual({ verdict: "passed" });
+    expect(state.browser_case_verdicts).toEqual(["passed"]);
+  });
+
+  it("derives objective finish evidence from the Pi MCP adapter result envelope", () => {
+    const state = createTraceMapperState();
+    const caseArtifact = { case_version: "loop.case.v1", steps: [] };
+    const events = mapPiEvent(
+      toolEnd("call_2", "mcp__browser_harness__finish_case", {
+        content: [{ type: "text", text: "Finished case" }],
+        details: { server: "browser-harness", tool: "finish_case" },
+        structuredContent: {
+          content: [{ type: "text", text: "Finished case" }],
+          structuredContent: {
+            ok: true,
+            case: caseArtifact,
+            dry_run: { status: "passed", execution_id: "exec_nested" },
+          },
         },
       }),
       state,

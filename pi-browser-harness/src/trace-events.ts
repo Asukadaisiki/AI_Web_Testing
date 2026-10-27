@@ -175,8 +175,8 @@ function messageKey(message: AssistantMessage): string {
 
 /**
  * Extracts the MCP tool structured content from a Pi tool result. Pi wraps MCP
- * results in a `ToolResultMessage`-shaped object; the structured content is the
- * model-facing observation plus any case/dry-run artifacts from `finish_case`.
+ * results in an `AgentToolResult`, whose structured content is the complete MCP
+ * `CallToolResult`. Direct tool results retain the existing single-level shape.
  */
 function extractStructuredContent(
   result: unknown,
@@ -188,6 +188,12 @@ function extractStructuredContent(
     .structuredContent;
   if (typeof structured !== "object" || structured === null) {
     return undefined;
+  }
+  const mcpStructured = (
+    structured as { structuredContent?: unknown }
+  ).structuredContent;
+  if (typeof mcpStructured === "object" && mcpStructured !== null) {
+    return mcpStructured as HarnessStructuredContent;
   }
   return structured as HarnessStructuredContent;
 }
