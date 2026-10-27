@@ -79,7 +79,7 @@ def require_status(
 def consume_terminal_sse(
     open_stream: Any, *, timeout: float, idle_timeout: float
 ) -> dict[str, Any]:
-    """Read/reconnect an SSE stream until a succeeded harness completion arrives."""
+    """Read/reconnect an SSE stream until a harness completion arrives."""
     deadline = time.monotonic() + timeout
     last_event: dict[str, Any] = {}
     last_event_id = ""
@@ -111,11 +111,7 @@ def consume_terminal_sse(
                     if last_event["id"]:
                         last_event_id = last_event["id"]
                     current = {}
-                    completion = data.get("payload", {})
-                    if (
-                        last_event["event"] == "harness.completed"
-                        and completion.get("Status", completion.get("status")) == "succeeded"
-                    ):
+                    if last_event["event"] == "harness.completed":
                         return last_event
                     continue
                 if line.startswith(":"):

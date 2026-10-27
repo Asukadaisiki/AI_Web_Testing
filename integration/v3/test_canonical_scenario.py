@@ -10,6 +10,16 @@ import canonical_scenario
 from canonical_scenario import assert_api_outcome, consume_terminal_sse
 
 
+_HARNESS_COMPLETED_DATA = (
+    b'data: {"aggregate_id":"run_7315076dac8ea9792abc259003e9dd24",'
+    b'"correlation_id":"run_7315076dac8ea9792abc259003e9dd24",'
+    b'"event_id":"event_83ab78e3db854232dc1844395c7ffc88",'
+    b'"event_type":"harness.completed",'
+    b'"occurred_at":"2026-10-27T08:40:50.241701Z",'
+    b'"payload":null,"schema_version":"agenttrace.event.v1"}\n'
+)
+
+
 class _DelayedSSE:
     def __init__(self, lines: list[bytes | Exception]) -> None:
         self._lines = iter(lines)
@@ -43,7 +53,7 @@ class CanonicalSSETest(unittest.TestCase):
                         b"\n",
                         b"id: 9\n",
                         b"event: harness.completed\n",
-                        b'data: {"payload":{"status":"succeeded"}}\n',
+                        _HARNESS_COMPLETED_DATA,
                         b"\n",
                     ]
                 ),
@@ -75,7 +85,7 @@ class CanonicalSSETest(unittest.TestCase):
                     [
                         b"id: 8\n",
                         b"event: harness.completed\n",
-                        b'data: {"payload":{"status":"succeeded"}}\n',
+                        _HARNESS_COMPLETED_DATA,
                         b"\n",
                     ]
                 ),
