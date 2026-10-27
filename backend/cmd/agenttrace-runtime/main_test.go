@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +58,42 @@ func TestRuntimePoolConfigReservesConnectionsForConcurrentInboxHandlers(t *testi
 	if explicit.MaxConns != 24 {
 		t.Fatalf("explicit max connections = %d, want 24", explicit.MaxConns)
 	}
+}
+
+func TestHarnessEnvironmentUsesNodeHarnessModelVariableNames(t *testing.T) {
+	t.Setenv("AGENTTRACE_MODEL_BASE_URL", "https://inherited.example/v1")
+	t.Setenv("AGENTTRACE_MODEL_API_KEY", "inherited-key")
+	t.Setenv("PI_HARNESS_MODEL_BASE_URL", "")
+	t.Setenv("PI_HARNESS_MODEL_API_KEY", "")
+
+	env := harnessEnvironment(config.Harness{
+		ProviderBaseURL: "https://configured.example/v1",
+		ProviderAPIKey:  "configured-key",
+	})
+
+	if got := lastEnvironmentValue(env, "AGENTTRACE_MODEL_BASE_URL"); got != "https://configured.example/v1" {
+		t.Fatalf("model base URL = %q, want configured value", got)
+	}
+	if got := lastEnvironmentValue(env, "AGENTTRACE_MODEL_API_KEY"); got != "configured-key" {
+		t.Fatalf("model API key = %q, want configured value", got)
+	}
+	if got := lastEnvironmentValue(env, "PI_HARNESS_MODEL_BASE_URL"); got != "" {
+		t.Fatalf("legacy model base URL unexpectedly set to %q", got)
+	}
+	if got := lastEnvironmentValue(env, "PI_HARNESS_MODEL_API_KEY"); got != "" {
+		t.Fatalf("legacy model API key unexpectedly set to %q", got)
+	}
+}
+
+func lastEnvironmentValue(env []string, name string) string {
+	prefix := name + "="
+	var value string
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			value = strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return value
 }
 
 func TestBoundedRunnerHonorsConcurrencyLimit(t *testing.T) {

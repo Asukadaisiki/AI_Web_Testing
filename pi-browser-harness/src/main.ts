@@ -64,7 +64,11 @@ export async function main(options: MainOptions = {}): Promise<number> {
     session.dispose();
     proc.exit(143);
   };
+  // The Go runtime signals the process group with SIGINT on cancellation;
+  // handle both SIGTERM and SIGINT so the Pi session is gracefully aborted
+  // and disposed before exit.
   proc.on("SIGTERM", onShutdown);
+  proc.on("SIGINT", onShutdown);
 
   try {
     await session.prompt(request.goal);
@@ -75,6 +79,7 @@ export async function main(options: MainOptions = {}): Promise<number> {
     });
   } finally {
     proc.off("SIGTERM", onShutdown);
+    proc.off("SIGINT", onShutdown);
     session.dispose();
   }
 

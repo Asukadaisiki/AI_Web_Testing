@@ -178,6 +178,29 @@ describe("main CLI", () => {
     expect(calls.dispose).toBeGreaterThanOrEqual(1);
   });
 
+  it("SIGINT calls session.abort() then session.dispose()", async () => {
+    const { session, calls } = makeFakeSession({ hang: true });
+    const { stream: stdout } = collectingOutput();
+    const { fakeProc, emitter } = makeFakeProcess();
+
+    const codePromise = main({
+      deps: await makeDeps(session),
+      input: streamInput([JSON.stringify(validRequest)]),
+      output: stdout,
+      process: fakeProc,
+    });
+
+    // Let the run start and hang on prompt.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    emitter.emit("SIGINT");
+
+    // The Go runtime sends SIGINT on cancellation; the handler must abort and
+    // dispose the session just like SIGTERM.
+    await codePromise;
+    expect(calls.abort).toBeGreaterThanOrEqual(1);
+    expect(calls.dispose).toBeGreaterThanOrEqual(1);
+  });
+
   it("exits non-zero when the assistant settles without passing finish evidence", async () => {
     const { session } = makeFakeSession();
     // Emit settlement but no passing browser case verdict.

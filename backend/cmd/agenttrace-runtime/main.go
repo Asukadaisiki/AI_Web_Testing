@@ -122,11 +122,14 @@ func newCommandRunner(cfg config.Config, store *postgres.Store) runtime.CommandR
 
 func harnessEnvironment(h config.Harness) []string {
 	env := os.Environ()
+	// Pass model credentials under the names the Node harness reads
+	// (AGENTTRACE_MODEL_BASE_URL / AGENTTRACE_MODEL_API_KEY). Explicit
+	// values from config override any inherited runtime environment.
 	if h.ProviderBaseURL != "" {
-		env = append(env, "PI_HARNESS_MODEL_BASE_URL="+h.ProviderBaseURL)
+		env = append(env, "AGENTTRACE_MODEL_BASE_URL="+h.ProviderBaseURL)
 	}
 	if h.ProviderAPIKey != "" {
-		env = append(env, "PI_HARNESS_MODEL_API_KEY="+h.ProviderAPIKey)
+		env = append(env, "AGENTTRACE_MODEL_API_KEY="+h.ProviderAPIKey)
 	}
 	return env
 }
