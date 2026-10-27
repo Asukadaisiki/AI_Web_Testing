@@ -9,8 +9,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   webServer: {
-    command:
-      'AGENTTRACE_API_URL=http://127.0.0.1:8080 npm run dev -- --port 5175',
+    command: 'npm run dev -- --port 5175',
     url: 'http://127.0.0.1:5175',
     reuseExistingServer: false,
   },

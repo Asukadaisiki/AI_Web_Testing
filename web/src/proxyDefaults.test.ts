@@ -26,4 +26,12 @@ describe('Vite API proxy', () => {
       }
     }
   });
+
+  it('lets the Playwright web server inherit the configured API address', async () => {
+    const config = (await import('../playwright.config')).default;
+
+    expect(config.webServer).toMatchObject({
+      command: 'npm run dev -- --port 5175',
+    });
+  });
 });
