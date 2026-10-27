@@ -287,6 +287,103 @@ func TestPiFinishHarnessAttemptSetsTerminalStateAndRootSpan(t *testing.T) {
 	}
 }
 
+func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
+	ctx, pool, store := newHarnessTestStore(t)
+	run := seedRunForHarness(t, ctx, store)
+	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	insertRootSpan(t, ctx, pool, run.ID, "span-run")
+
+	// Two model spans share the same started_at (clock skew / fast emission)
+	// but were produced at different source sequences. The latest-by-sequence
+	// span must win regardless of started_at ordering.
+	now := time.Now().UTC()
+	mkSpan := func(id string, seq int64) domain.Span {
+		return domain.Span{
+			ID: id, RunID: run.ID, TraceID: "trace-1", SpanID: id,
+			ParentSpanID: "span-run", Kind: domain.SpanModel, Name: "message",
+			Status: "succeeded", StartedAt: now, EndedAt: &now,
+		}
+	}
+	mkAttempt := func(id string) TraceAttempt {
+		return TraceAttempt{
+			ID: id, AttemptNumber: 1, Provider: "model", Status: "succeeded",
+			StartedAt: now, EndedAt: &now,
+		}
+	}
+
+	// Insert sequence 1 first, then sequence 2.
+	span1 := mkSpan("span-model-seq1", 1)
+	att1 := mkAttempt("att-model-seq1")
+	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 1,
+		SourceType: "pi.message.completed",
+		Event:      harnessEnvelope(run.ID, attempt.ID, 1, "pi.message.completed", `{"text":"first"}`),
+		Span:       &span1, Attempt: &att1,
+	}); err != nil {
+		t.Fatalf("append seq1: %v", err)
+	}
+	span2 := mkSpan("span-model-seq2", 2)
+	att2 := mkAttempt("att-model-seq2")
+	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 2,
+		SourceType: "pi.message.completed",
+		Event:      harnessEnvelope(run.ID, attempt.ID, 2, "pi.message.completed", `{"text":"second"}`),
+		Span:       &span2, Attempt: &att2,
+	}); err != nil {
+		t.Fatalf("append seq2: %v", err)
+	}
+
+	latest, err := store.LatestModelSpanID(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("latest model span: %v", err)
+	}
+	if latest != "span-model-seq2" {
+		t.Fatalf("latest model span = %q, want span-model-seq2 (ordered by source_sequence)", latest)
+	}
+
+	// Two operation (tool) spans also share started_at; the active one must be
+	// the latest by source sequence.
+	tool1 := domain.Span{
+		ID: "span-tool-seq3", RunID: run.ID, TraceID: "trace-1", SpanID: "span-tool-seq3",
+		ParentSpanID: "span-run", Kind: domain.SpanOperation, Name: "browser",
+		Status: "started", StartedAt: now,
+	}
+	toolAtt1 := TraceAttempt{ID: "att-tool-seq3", AttemptNumber: 1, Status: "started", StartedAt: now}
+	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 3,
+		SourceType: "pi.tool.started",
+		Event:      harnessEnvelope(run.ID, attempt.ID, 3, "pi.tool.started", `{"tool_call_id":"tc1"}`),
+		Span:       &tool1, Attempt: &toolAtt1,
+	}); err != nil {
+		t.Fatalf("append tool seq3: %v", err)
+	}
+	tool2 := domain.Span{
+		ID: "span-tool-seq4", RunID: run.ID, TraceID: "trace-1", SpanID: "span-tool-seq4",
+		ParentSpanID: "span-run", Kind: domain.SpanOperation, Name: "browser",
+		Status: "started", StartedAt: now,
+	}
+	toolAtt2 := TraceAttempt{ID: "att-tool-seq4", AttemptNumber: 1, Status: "started", StartedAt: now}
+	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 4,
+		SourceType: "pi.tool.started",
+		Event:      harnessEnvelope(run.ID, attempt.ID, 4, "pi.tool.started", `{"tool_call_id":"tc2"}`),
+		Span:       &tool2, Attempt: &toolAtt2,
+	}); err != nil {
+		t.Fatalf("append tool seq4: %v", err)
+	}
+
+	active, err := store.ActiveToolSpanID(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("active tool span: %v", err)
+	}
+	if active != "span-tool-seq4" {
+		t.Fatalf("active tool span = %q, want span-tool-seq4 (ordered by source_sequence)", active)
+	}
+}
+
 func TestPiCrashRedeliveryAllocatesNewAttemptWithoutOverwritingEvidence(t *testing.T) {
 	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)

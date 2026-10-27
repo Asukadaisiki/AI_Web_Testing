@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -116,6 +117,70 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	}
 	if !hasCaseOp {
 		t.Fatalf("case operation not found in %#v", details.Operations)
+	}
+}
+
+func TestPostgresPiTraceStoreStartRunUsesCommandCheckpointVersion(t *testing.T) {
+	ctx, pool, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi checkpoint"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID, Title: "Pi checkpoint",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "checkpoint test",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
+		IdempotencyKey: "pi-checkpoint-match",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	// Advance the run's checkpoint as if the engine path had progressed it.
+	if _, err := pool.Exec(ctx, `UPDATE runs SET checkpoint_version = 5 WHERE id = $1`, run.ID); err != nil {
+		t.Fatalf("advance checkpoint: %v", err)
+	}
+
+	piStore := PostgresPiTraceStore{Store: store}
+	command := event.RunCommand{
+		RunID:            run.ID,
+		ConversationID:   conversation.ID,
+		Model:            event.ModelRef{Provider: "pi", Name: "browser-model"},
+		Messages:         []domain.Message{{ID: "m", ConversationID: conversation.ID, Ordinal: 1, Role: "user", Content: "go"}},
+		CheckpointVersion: 5,
+	}
+	if _, err := piStore.StartRun(ctx, command); err != nil {
+		t.Fatalf("start run with matching checkpoint = %v, want nil", err)
+	}
+
+	// A second run with a stale checkpoint must conflict rather than silently
+	// create the root span against an unexpected checkpoint.
+	_, run2, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "checkpoint mismatch",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
+		IdempotencyKey: "pi-checkpoint-mismatch",
+	})
+	if err != nil {
+		t.Fatalf("create run 2: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runs SET checkpoint_version = 7 WHERE id = $1`, run2.ID); err != nil {
+		t.Fatalf("advance run 2 checkpoint: %v", err)
+	}
+	command2 := command
+	command2.RunID = run2.ID
+	command2.CheckpointVersion = 0
+	_, err = piStore.StartRun(ctx, command2)
+	if !errors.Is(err, postgres.ErrConflict) {
+		t.Fatalf("start run with mismatched checkpoint = %v, want ErrConflict", err)
 	}
 }
 

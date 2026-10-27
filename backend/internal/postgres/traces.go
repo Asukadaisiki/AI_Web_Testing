@@ -362,10 +362,10 @@ func upsertSpan(ctx context.Context, tx pgx.Tx, span domain.Span) (string, error
 	err := tx.QueryRow(ctx, `
 		INSERT INTO spans (
 			id, run_id, trace_id, span_id, parent_span_id, kind, name, status,
-			input, output, started_at, ended_at
+			input, output, started_at, ended_at, source_sequence
 		) VALUES (
 			$1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8,
-			$9::jsonb, $10::jsonb, $11, $12
+			$9::jsonb, $10::jsonb, $11, $12, NULLIF($13, 0)
 		)
 		ON CONFLICT (run_id, trace_id, span_id) DO UPDATE SET
 			parent_span_id = EXCLUDED.parent_span_id,
@@ -376,11 +376,12 @@ func upsertSpan(ctx context.Context, tx pgx.Tx, span domain.Span) (string, error
 			output = EXCLUDED.output,
 			started_at = spans.started_at,
 			ended_at = EXCLUDED.ended_at,
+			source_sequence = COALESCE(EXCLUDED.source_sequence, spans.source_sequence),
 			updated_at = now()
 		RETURNING id`,
 		span.ID, span.RunID, span.TraceID, span.SpanID, span.ParentSpanID,
 		span.Kind, span.Name, span.Status, nullableJSON(span.Input), nullableJSON(span.Output),
-		span.StartedAt, span.EndedAt,
+		span.StartedAt, span.EndedAt, span.SourceSequence,
 	).Scan(&persistedID)
 	if err != nil {
 		return "", fmt.Errorf("upsert trace span: %w", err)

@@ -22,6 +22,10 @@ type HarnessAttemptRef struct {
 	RunID             string
 	AttemptNumber     int
 	ProviderAttemptID string
+	// CancelRequested is true when the run had a durable cancel request at the
+	// time the attempt was claimed. deriveOutcome forces RunCancelled in that
+	// case regardless of the harness verdict.
+	CancelRequested bool
 }
 
 // PiRunOutcome describes the terminal verdict derived from a harness run.
@@ -65,6 +69,7 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 		RunID:             attempt.RunID,
 		AttemptNumber:     attempt.AttemptNumber,
 		ProviderAttemptID: attempt.ProviderAttemptID,
+		CancelRequested:   attempt.CancelRequested,
 	}
 	now := time.Now().UTC()
 	rootSpan := domain.Span{
@@ -83,7 +88,7 @@ func (s PostgresPiTraceStore) StartRun(ctx context.Context, command event.RunCom
 	startedSpan := rootSpan
 	startedSpan.Status = "started"
 	started := postgres.TraceAttemptStart{
-		ExpectedCheckpoint: 0,
+		ExpectedCheckpoint: command.CheckpointVersion,
 		Root:               &rootSpan,
 		Span:               startedSpan,
 		Attempt: postgres.TraceAttempt{

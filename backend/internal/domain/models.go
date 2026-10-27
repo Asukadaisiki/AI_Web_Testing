@@ -36,18 +36,19 @@ type Run struct {
 
 // Span is a durable trace-tree node.
 type Span struct {
-	ID           string          `json:"id"`
-	RunID        string          `json:"run_id"`
-	TraceID      string          `json:"trace_id"`
-	SpanID       string          `json:"span_id"`
-	ParentSpanID string          `json:"parent_span_id,omitempty"`
-	Kind         SpanKind        `json:"kind"`
-	Name         string          `json:"name"`
-	Status       string          `json:"status"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	Output       json.RawMessage `json:"output,omitempty"`
-	StartedAt    time.Time       `json:"started_at"`
-	EndedAt      *time.Time      `json:"ended_at,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID             string          `json:"id"`
+	RunID          string          `json:"run_id"`
+	TraceID        string          `json:"trace_id"`
+	SpanID         string          `json:"span_id"`
+	ParentSpanID   string          `json:"parent_span_id,omitempty"`
+	Kind           SpanKind        `json:"kind"`
+	Name           string          `json:"name"`
+	Status         string          `json:"status"`
+	Input          json.RawMessage `json:"input,omitempty"`
+	Output         json.RawMessage `json:"output,omitempty"`
+	StartedAt      time.Time       `json:"started_at"`
+	EndedAt        *time.Time      `json:"ended_at,omitempty"`
+	SourceSequence int64           `json:"source_sequence,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }

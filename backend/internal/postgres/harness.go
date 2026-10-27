@@ -27,6 +27,11 @@ type HarnessAttempt struct {
 	Status            string
 	StartedAt         time.Time
 	FinishedAt        *time.Time
+	// CancelRequested is true when the run had a durable cancel request
+	// (cancel_requested_at set or status cancelling) at the time the attempt
+	// was claimed. The runtime uses it to force RunCancelled regardless of the
+	// harness verdict.
+	CancelRequested bool
 }
 
 // BeginHarnessAttempt atomically claims a queued or active run and allocates a
@@ -109,6 +114,7 @@ func (s *Store) BeginHarnessAttempt(
 		ProviderAttemptID: providerAttemptID,
 		Status:            "active",
 		StartedAt:         startedAt,
+		CancelRequested:   run.CancelRequestedAt != nil || run.Status == domain.RunCancelling,
 	}, nil
 }
 
@@ -204,6 +210,9 @@ func (s *Store) AppendHarnessEvent(ctx context.Context, record HarnessEventRecor
 	}
 
 	if record.Span != nil {
+		// Carry the harness source sequence onto the span so lookups can order
+		// spans deterministically by emission order instead of started_at.
+		record.Span.SourceSequence = record.SourceSequence
 		if _, err := upsertSpan(ctx, tx, *record.Span); err != nil {
 			return err
 		}
@@ -453,7 +462,9 @@ func isTerminalStatus(status domain.RunStatus) bool {
 
 // LatestModelSpanID returns the span_id of the most recent model span for a
 // run, or an empty string if none exists. The runtime uses it to attach a
-// trailing pi.usage record to the matching model attempt.
+// trailing pi.usage record to the matching model attempt. Spans are ordered by
+// their harness source sequence (not started_at) so clock skew or fast
+// consecutive events cannot mis-attach usage.
 func (s *Store) LatestModelSpanID(ctx context.Context, runID string) (string, error) {
 	if s == nil || s.pool == nil {
 		return "", errors.New("postgres store is not configured")
@@ -462,7 +473,7 @@ func (s *Store) LatestModelSpanID(ctx context.Context, runID string) (string, er
 	err := s.pool.QueryRow(ctx, `
 		SELECT span_id FROM spans
 		WHERE run_id = $1 AND kind = 'model'
-		ORDER BY started_at DESC
+		ORDER BY source_sequence DESC
 		LIMIT 1`, runID).Scan(&spanID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
@@ -476,7 +487,8 @@ func (s *Store) LatestModelSpanID(ctx context.Context, runID string) (string, er
 // ActiveToolSpanID returns the span_id of the most recent still-started
 // operation span for a run, or an empty string if none is active. The runtime
 // uses it to attach browser observations and the final case verdict to the
-// matching tool operation.
+// matching tool operation. Spans are ordered by their harness source sequence
+// (not started_at) for deterministic selection under concurrency.
 func (s *Store) ActiveToolSpanID(ctx context.Context, runID string) (string, error) {
 	if s == nil || s.pool == nil {
 		return "", errors.New("postgres store is not configured")
@@ -485,7 +497,7 @@ func (s *Store) ActiveToolSpanID(ctx context.Context, runID string) (string, err
 	err := s.pool.QueryRow(ctx, `
 		SELECT span_id FROM spans
 		WHERE run_id = $1 AND kind = 'operation' AND status = 'started'
-		ORDER BY started_at DESC
+		ORDER BY source_sequence DESC
 		LIMIT 1`, runID).Scan(&spanID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil

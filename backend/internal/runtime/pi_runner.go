@@ -62,7 +62,7 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		processErr = runState.appendErr
 	}
 
-	outcome := r.deriveOutcome(processErr, runState)
+	outcome := r.deriveOutcome(processErr, runState, ref.CancelRequested)
 	if cerr := r.Store.CompleteHarnessRun(ctx, ref, outcome); cerr != nil {
 		if outcome.Status == domain.RunSucceeded {
 			return fmt.Errorf("complete pi run: %w", cerr)
@@ -104,7 +104,13 @@ func (s *piRunState) observe(ev piharness.Event) {
 	}
 }
 
-func (r PiRunner) deriveOutcome(processErr error, state *piRunState) PiRunOutcome {
+func (r PiRunner) deriveOutcome(processErr error, state *piRunState, cancelRequested bool) PiRunOutcome {
+	// A durable cancel request overrides every other verdict: the run was
+	// explicitly cancelled before or during execution, so its terminal state
+	// must be RunCancelled regardless of whether the harness happened to pass.
+	if cancelRequested {
+		return PiRunOutcome{Status: domain.RunCancelled, Error: "run cancelled by durable cancel request", Assistant: state.assistantText}
+	}
 	if processErr == nil {
 		if state.casePassed {
 			return PiRunOutcome{Status: domain.RunSucceeded, Assistant: state.assistantText}

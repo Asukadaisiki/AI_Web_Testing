@@ -99,6 +99,25 @@ func TestPiRunnerFailsOnHarnessFailedEvent(t *testing.T) {
 	}
 }
 
+func TestPiRunnerCancelledWhenDurableCancelRequestedEvenIfCasePasses(t *testing.T) {
+	events := passingEventStream("run-cancel-durable", "att-cancel-durable")
+	store := &fakePiStore{ref: HarnessAttemptRef{
+		ID: "hat-cd", RunID: "run-cancel-durable", AttemptNumber: 1,
+		ProviderAttemptID: "att-cancel-durable",
+		CancelRequested:   true,
+	}}
+	process := &fakeHarnessProcess{events: events}
+	runner := PiRunner{Process: process, Store: store}
+
+	err := runner.Run(context.Background(), commandFor("run-cancel-durable"))
+	if !isTerminalRunError(err) {
+		t.Fatalf("error = %v, want terminalRunError for durable cancel", err)
+	}
+	if store.outcome.Status != domain.RunCancelled {
+		t.Fatalf("outcome status = %q, want cancelled (durable cancel overrides passed case)", store.outcome.Status)
+	}
+}
+
 func TestPiRunnerCancelledOnContextCancellation(t *testing.T) {
 	store := &fakePiStore{ref: HarnessAttemptRef{
 		ID: "hat-4", RunID: "run-cancel", AttemptNumber: 1, ProviderAttemptID: "att-cancel",
