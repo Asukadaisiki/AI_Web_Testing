@@ -8,6 +8,7 @@ import {
   parseRunRequest,
   type HarnessEventPayloads,
 } from "../src/run-protocol.js";
+import type { Case, ExecutionResult } from "../src/browser/contract.js";
 
 const request = {
   protocol_version: "pi-browser-harness.v1",
@@ -22,6 +23,50 @@ const request = {
   worker_url: "http://worker:8100",
   artifact_scope: "run_1",
 };
+
+const browserCase = {
+  case_version: "loop.case.v1",
+  name: "open example",
+  goal: "open the example page",
+  base_url: "https://example.test",
+  steps: [
+    {
+      index: 0,
+      action: "goto",
+      intent: "open the example page",
+      value: "https://example.test",
+      submit: false,
+      preconditions: [],
+      postconditions: [
+        { type: "url_contains", value: "example.test", timeout_ms: 1000 },
+      ],
+      timeout_ms: 1000,
+    },
+  ],
+} satisfies Case;
+
+const dryRun = {
+  execution_id: "execution-1",
+  status: "passed",
+  started_at: "2026-10-26T12:34:56.000Z",
+  finished_at: "2026-10-26T12:34:57.000Z",
+  final_url: "https://example.test",
+  steps: [
+    {
+      index: 0,
+      action: "goto",
+      status: "passed",
+      started_at: "2026-10-26T12:34:56.000Z",
+      duration_ms: 10,
+      url_before: "about:blank",
+      url_after: "https://example.test",
+      conditions: [],
+      evidence: { screenshot_path: null, console: [], network: [] },
+      error: null,
+    },
+  ],
+  error: null,
+} satisfies ExecutionResult;
 
 describe("parseRunRequest", () => {
   it("accepts the strict v1 request", () => {
@@ -107,8 +152,12 @@ describe("HarnessEventWriter", () => {
         tool_name: "navigate",
         is_error: false,
       },
-      "browser.observation": { observation: {} },
-      "browser.case.completed": { verdict: "passed" },
+      "browser.observation": { tool_call_id: "tool_1", observation: {} },
+      "browser.case.completed": {
+        verdict: "passed",
+        case: browserCase,
+        dry_run: dryRun,
+      },
       "harness.settled": { assistant_text: "done" },
       "harness.failed": { error: "failed" },
     } satisfies HarnessEventPayloads;
@@ -124,6 +173,22 @@ describe("HarnessEventWriter", () => {
       "harness.settled",
       "harness.failed",
     ]);
+  });
+
+  it("rejects malformed browser case evidence before writing it", () => {
+    const output = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const writer = new HarnessEventWriter(parseRunRequest(JSON.stringify(request)), output);
+
+    expect(() =>
+      writer.write(
+        "browser.case.completed",
+        { verdict: "passed" } as never,
+      ),
+    ).toThrow("invalid browser.case.completed payload");
   });
 });
 

@@ -45,6 +45,7 @@ type PiTraceStore interface {
 	StartRun(ctx context.Context, command event.RunCommand) (HarnessAttemptRef, error)
 	AppendHarnessEvent(ctx context.Context, ref HarnessAttemptRef, ev piharness.Event) error
 	CompleteHarnessRun(ctx context.Context, ref HarnessAttemptRef, outcome PiRunOutcome) error
+	CancellationRequested(ctx context.Context, runID string) (bool, error)
 }
 
 // PostgresPiTraceStore adapts the PostgreSQL harness persistence API to the
@@ -152,6 +153,15 @@ func (s PostgresPiTraceStore) CompleteHarnessRun(ctx context.Context, ref Harnes
 	})
 }
 
+// CancellationRequested reports whether the authoritative run state requires
+// an active harness process to stop.
+func (s PostgresPiTraceStore) CancellationRequested(ctx context.Context, runID string) (bool, error) {
+	if s.Store == nil {
+		return false, errors.New("postgres pi trace store is not configured")
+	}
+	return s.Store.CancellationRequested(ctx, runID)
+}
+
 func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemptRef, ev piharness.Event) (postgres.HarnessEventRecord, error) {
 	occurredAt := ev.TimestampTime()
 	if occurredAt.IsZero() {
@@ -215,25 +225,35 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 			record.Operation = browserToolOperationResult(ref, ev, attempt.OperationID, payload)
 		}
 	case piharness.EventObservation:
-		spanID, err := s.Store.ActiveToolSpanID(ctx, ref.RunID)
+		var payload piharness.ObservationPayload
+		_ = json.Unmarshal(ev.Payload, &payload)
+		toolAttempt, err := s.Store.ToolAttemptByCallID(
+			ctx, ref.RunID, ref.ID, payload.ToolCallID, ev.Sequence,
+		)
 		if err != nil {
 			return record, err
 		}
-		if spanID != "" {
-			span := domain.Span{
-				ID:           spanID,
-				RunID:        ref.RunID,
-				TraceID:      traceID(ref.RunID),
-				SpanID:       spanID,
-				ParentSpanID: RunSpanID(ref.RunID),
-				Kind:         domain.SpanOperation,
-				Name:         "observation",
-				Status:       "started",
-				StartedAt:    occurredAt,
-				Output:       append(json.RawMessage(nil), ev.Payload...),
-			}
-			record.Span = &span
+		if toolAttempt.SpanID == "" || toolAttempt.SpanAttemptID == "" {
+			return record, errors.New("browser.observation has no matching tool attempt")
 		}
+		spanID := stableID(
+			"span", ref.RunID, ref.ID, "observation", payload.ToolCallID,
+			fmt.Sprintf("%d", ev.Sequence),
+		)
+		span := domain.Span{
+			ID:           spanID,
+			RunID:        ref.RunID,
+			TraceID:      traceID(ref.RunID),
+			SpanID:       spanID,
+			ParentSpanID: toolAttempt.SpanID,
+			Kind:         domain.SpanOperation,
+			Name:         "observation",
+			Status:       "succeeded",
+			StartedAt:    occurredAt,
+			EndedAt:      &occurredAt,
+			Output:       append(json.RawMessage(nil), ev.Payload...),
+		}
+		record.Span = &span
 	case piharness.EventCaseCompleted:
 		finishAttempt, err := s.Store.LatestCompletedToolAttempt(
 			ctx, ref.RunID, ref.ID, finishCaseToolName, ev.Sequence,

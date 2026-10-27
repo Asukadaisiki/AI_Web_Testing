@@ -225,6 +225,52 @@ func TestDecoderRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestDecoderRejectsMalformedBrowserCaseCompletionEvidence(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "previously accepted passed verdict without objective evidence",
+			payload: `{"verdict":"passed"}`,
+		},
+		{
+			name:    "invalid verdict enum",
+			payload: `{"verdict":"unknown","case":{},"dry_run":{}}`,
+		},
+		{
+			name:    "unexpected payload field",
+			payload: `{"verdict":"passed","case":{},"dry_run":{},"steps":[]}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dec := NewDecoder("run_1", "attempt_1")
+			line := `{"type":"browser.case.completed","run_id":"run_1","attempt_id":"attempt_1","sequence":1,"timestamp":"2026-10-26T12:34:56.789Z","payload":` + tc.payload + `}`
+
+			if _, err := dec.Decode([]byte(line)); err == nil {
+				t.Fatal("malformed browser case completion evidence was accepted")
+			}
+		})
+	}
+}
+
+func TestDecoderRejectsBrowserObservationWithoutValidToolCallID(t *testing.T) {
+	for _, payload := range []string{
+		`{"observation":{"url":"http://worker"}}`,
+		`{"tool_call_id":" \t","observation":{"url":"http://worker"}}`,
+	} {
+		dec := NewDecoder("run_1", "attempt_1")
+		line := `{"type":"browser.observation","run_id":"run_1","attempt_id":"attempt_1","sequence":1,"timestamp":"2026-10-26T12:34:56.789Z","payload":` + payload + `}`
+
+		_, err := dec.Decode([]byte(line))
+		if !errors.Is(err, ErrInvalidPayload) {
+			t.Fatalf("decode observation payload %s = %v, want ErrInvalidPayload", payload, err)
+		}
+	}
+}
+
 func TestDecoderTypedPayloads(t *testing.T) {
 	dec := NewDecoder("run_1", "attempt_1")
 
@@ -237,8 +283,8 @@ func TestDecoderTypedPayloads(t *testing.T) {
 		{`{"type":"pi.usage","run_id":"run_1","attempt_id":"attempt_1","sequence":3,"timestamp":"2026-10-26T12:34:58.000Z","payload":{"input_tokens":1,"output_tokens":2}}`, EventUsage},
 		{`{"type":"pi.tool.started","run_id":"run_1","attempt_id":"attempt_1","sequence":4,"timestamp":"2026-10-26T12:34:59.000Z","payload":{"tool_call_id":"c1","tool_name":"navigate"}}`, EventToolStarted},
 		{`{"type":"pi.tool.completed","run_id":"run_1","attempt_id":"attempt_1","sequence":5,"timestamp":"2026-10-26T12:35:00.000Z","payload":{"tool_call_id":"c1","tool_name":"navigate","is_error":false}}`, EventToolCompleted},
-		{`{"type":"browser.observation","run_id":"run_1","attempt_id":"attempt_1","sequence":6,"timestamp":"2026-10-26T12:35:01.000Z","payload":{"observation":{"url":"x"}}}`, EventObservation},
-		{`{"type":"browser.case.completed","run_id":"run_1","attempt_id":"attempt_1","sequence":7,"timestamp":"2026-10-26T12:35:02.000Z","payload":{"verdict":"passed"}}`, EventCaseCompleted},
+		{`{"type":"browser.observation","run_id":"run_1","attempt_id":"attempt_1","sequence":6,"timestamp":"2026-10-26T12:35:01.000Z","payload":{"tool_call_id":"c1","observation":{"url":"x"}}}`, EventObservation},
+		{`{"type":"browser.case.completed","run_id":"run_1","attempt_id":"attempt_1","sequence":7,"timestamp":"2026-10-26T12:35:02.000Z","payload":` + validCaseCompletedPayload() + `}`, EventCaseCompleted},
 	}
 
 	for i, tc := range cases {
@@ -250,6 +296,48 @@ func TestDecoderTypedPayloads(t *testing.T) {
 			t.Fatalf("case %d: type = %s, want %s", i, ev.Type, tc.typ)
 		}
 	}
+}
+
+func validCaseCompletedPayload() string {
+	return `{
+		"verdict":"passed",
+		"case":{
+			"case_version":"loop.case.v1",
+			"name":"open page",
+			"goal":"open the page",
+			"base_url":"https://example.test",
+			"steps":[{
+				"index":0,
+				"action":"goto",
+				"intent":"open the page",
+				"value":"https://example.test",
+				"submit":false,
+				"preconditions":[],
+				"postconditions":[{"type":"url_contains","value":"example.test","timeout_ms":1000}],
+				"timeout_ms":1000
+			}]
+		},
+		"dry_run":{
+			"execution_id":"execution-1",
+			"status":"passed",
+			"started_at":"2026-10-26T12:35:00Z",
+			"finished_at":"2026-10-26T12:35:01Z",
+			"final_url":"https://example.test",
+			"steps":[{
+				"index":0,
+				"action":"goto",
+				"status":"passed",
+				"started_at":"2026-10-26T12:35:00Z",
+				"duration_ms":10,
+				"url_before":"about:blank",
+				"url_after":"https://example.test",
+				"conditions":[],
+				"evidence":{"screenshot_path":null,"console":[],"network":[]},
+				"error":null
+			}],
+			"error":null
+		}
+	}`
 }
 
 func TestToolCompletedPayloadPreservesStructuredResult(t *testing.T) {

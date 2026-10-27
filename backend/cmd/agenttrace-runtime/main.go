@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/consumer"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
@@ -98,6 +99,10 @@ func run() error {
 // and HTTP operation dispatcher are intentionally not constructed here; the
 // harness owns both the model turn loop and browser operation dispatch.
 func newCommandRunner(cfg config.Config, store *postgres.Store) runtime.CommandRunner {
+	profile, err := agentprofile.LoadBrowserEval()
+	if err != nil {
+		panic(fmt.Errorf("load browser profile for runtime: %w", err))
+	}
 	process := &piharness.ProcessRunner{
 		Command:          cfg.Harness.Command,
 		Args:             []string{cfg.Harness.Entry},
@@ -109,9 +114,10 @@ func newCommandRunner(cfg config.Config, store *postgres.Store) runtime.CommandR
 		Timeout:          cfg.Harness.Timeout,
 	}
 	piRunner := runtime.PiRunner{
-		Process:   process,
-		Store:     runtime.PostgresPiTraceStore{Store: store},
-		WorkerURL: cfg.WorkerURL,
+		Process:                process,
+		Store:                  runtime.PostgresPiTraceStore{Store: store},
+		WorkerURL:              cfg.WorkerURL,
+		DefaultReasoningEffort: profile.Model.ReasoningEffort,
 	}
 	bounded, err := newBoundedRunner(piRunner, cfg.RuntimeConcurrency)
 	if err != nil {

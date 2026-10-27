@@ -328,6 +328,9 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	events[3].Payload = json.RawMessage(
 		`{"tool_call_id":"tc1","tool_name":"mcp__browser_harness__finish_case"}`,
 	)
+	events[4].Payload = json.RawMessage(
+		`{"tool_call_id":"tc1","observation":{"url":"http://worker:8100"}}`,
+	)
 	events[5].Payload = json.RawMessage(
 		`{"tool_call_id":"tc1","tool_name":"mcp__browser_harness__finish_case","is_error":false}`,
 	)
@@ -397,6 +400,159 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	}
 	if !hasCaseOp {
 		t.Fatalf("case operation not found in %#v", details.Operations)
+	}
+}
+
+func TestPostgresPiTraceStoreAssociatesObservationsWithExactToolCall(t *testing.T) {
+	ctx, _, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi observation association"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID, Title: "Pi observation association",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "interleave browser tools",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
+		IdempotencyKey: "pi-observation-association",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	piStore := PostgresPiTraceStore{Store: store}
+	command := commandFor(run.ID)
+	command.ConversationID = conversation.ID
+	ref, err := piStore.StartRun(ctx, command)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	const (
+		clickTool = "mcp__browser_harness__click"
+		inputTool = "mcp__browser_harness__input"
+	)
+	for _, ev := range []piharness.Event{
+		harEvent(piharness.EventStarted, run.ID, ref.ProviderAttemptID, 1, `{}`),
+		harEvent(piharness.EventToolStarted, run.ID, ref.ProviderAttemptID, 2,
+			`{"tool_call_id":"call-click","tool_name":"`+clickTool+`"}`),
+		harEvent(piharness.EventToolStarted, run.ID, ref.ProviderAttemptID, 3,
+			`{"tool_call_id":"call-input","tool_name":"`+inputTool+`"}`),
+		harEvent(piharness.EventObservation, run.ID, ref.ProviderAttemptID, 4,
+			`{"tool_call_id":"call-click","observation":{"url":"http://worker/click"}}`),
+		harEvent(piharness.EventToolCompleted, run.ID, ref.ProviderAttemptID, 5,
+			`{"tool_call_id":"call-click","tool_name":"`+clickTool+`","is_error":false,"structured_result":{"ok":true}}`),
+		harEvent(piharness.EventToolCompleted, run.ID, ref.ProviderAttemptID, 6,
+			`{"tool_call_id":"call-input","tool_name":"`+inputTool+`","is_error":false,"structured_result":{"ok":true}}`),
+	} {
+		if err := piStore.AppendHarnessEvent(ctx, ref, ev); err != nil {
+			t.Fatalf("append event %d: %v", ev.Sequence, err)
+		}
+	}
+
+	details, err := store.GetTraceDetails(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get trace details: %v", err)
+	}
+	clickSpanID := stableID("span", run.ID, ref.ID, "tool", "call-click")
+	var observation *domain.Span
+	for i := range details.Spans {
+		if details.Spans[i].Name == "observation" {
+			observation = &details.Spans[i]
+			break
+		}
+	}
+	if observation == nil {
+		t.Fatal("browser observation span was not persisted")
+	}
+	if observation.ParentSpanID != clickSpanID {
+		t.Fatalf(
+			"observation parent span = %q, want exact click span %q",
+			observation.ParentSpanID, clickSpanID,
+		)
+	}
+	if len(details.Operations) != 2 {
+		t.Fatalf("operation results = %d, want 2", len(details.Operations))
+	}
+	operationSpans := map[string]string{}
+	for _, operation := range details.Operations {
+		operationSpans[operation.OperationID] = operation.SpanID
+	}
+	if operationSpans[stableID("operation", run.ID, ref.ID, "call-click")] != clickSpanID {
+		t.Fatalf("click operation links = %#v, want click span %q", operationSpans, clickSpanID)
+	}
+}
+
+func TestPostgresPiTraceStoreRejectsUnknownAndCrossAttemptObservationToolCalls(t *testing.T) {
+	ctx, _, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi invalid observation association"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID, Title: "Pi invalid observation association",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "reject invalid observation association",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
+		IdempotencyKey: "pi-invalid-observation-association",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	piStore := PostgresPiTraceStore{Store: store}
+	command := commandFor(run.ID)
+	command.ConversationID = conversation.ID
+	ref, err := piStore.StartRun(ctx, command)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if err := piStore.AppendHarnessEvent(
+		ctx, ref, harEvent(piharness.EventStarted, run.ID, ref.ProviderAttemptID, 1, `{}`),
+	); err != nil {
+		t.Fatalf("append started: %v", err)
+	}
+	if err := piStore.AppendHarnessEvent(
+		ctx, ref, harEvent(piharness.EventObservation, run.ID, ref.ProviderAttemptID, 2,
+			`{"tool_call_id":"unknown","observation":{"url":"http://worker/unknown"}}`),
+	); err == nil {
+		t.Fatal("append unknown observation tool call = nil, want error")
+	}
+
+	foreign, err := store.BeginHarnessAttempt(ctx, run.ID, "foreign-provider-attempt")
+	if err != nil {
+		t.Fatalf("begin foreign harness attempt: %v", err)
+	}
+	foreignRef := HarnessAttemptRef{
+		ID:                foreign.ID,
+		RunID:             foreign.RunID,
+		AttemptNumber:     foreign.AttemptNumber,
+		ProviderAttemptID: foreign.ProviderAttemptID,
+	}
+	if err := piStore.AppendHarnessEvent(
+		ctx,
+		foreignRef,
+		harEvent(piharness.EventToolStarted, run.ID, foreignRef.ProviderAttemptID, 1,
+			`{"tool_call_id":"foreign","tool_name":"mcp__browser_harness__click"}`),
+	); err != nil {
+		t.Fatalf("append foreign tool start: %v", err)
+	}
+	if err := piStore.AppendHarnessEvent(
+		ctx, ref, harEvent(piharness.EventObservation, run.ID, ref.ProviderAttemptID, 2,
+			`{"tool_call_id":"foreign","observation":{"url":"http://worker/foreign"}}`),
+	); err == nil {
+		t.Fatal("append cross-attempt observation tool call = nil, want error")
 	}
 }
 

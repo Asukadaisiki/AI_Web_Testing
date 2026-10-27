@@ -22,6 +22,31 @@ export interface BrowserHarnessExtensionOptions {
 
 const BROWSER_TOOL_PREFIX = "mcp__browser_harness__";
 
+type ToolRegistrar = (tool: {
+  name: string;
+  executionMode?: "sequential" | "parallel";
+}) => void;
+
+/**
+ * Ensures the built-in MCP extension registers browser tools with Pi's
+ * per-tool sequential execution mode. Pi's MCP server configuration exposes
+ * tool visibility but not execution mode, so this narrowly decorates only the
+ * browser namespace at its supported registerTool boundary.
+ */
+export function createSequentialBrowserMcpToolsExtension(): ExtensionFactory {
+  return (pi: ExtensionAPI): void => {
+    const api = pi as unknown as { registerTool: ToolRegistrar };
+    const registerTool = api.registerTool.bind(pi);
+    api.registerTool = (tool) => {
+      registerTool(
+        tool.name.startsWith(BROWSER_TOOL_PREFIX)
+          ? { ...tool, executionMode: "sequential" }
+          : tool,
+      );
+    };
+  };
+}
+
 /**
  * Creates the browser-harness Pi extension. The extension registers the
  * Run-scoped browser MCP server as a direct-exposure stdio child, blocks every

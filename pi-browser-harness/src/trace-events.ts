@@ -1,6 +1,12 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 
+import {
+  parseExecutionResult,
+  validateCase,
+  type Case,
+  type ExecutionResult,
+} from "./browser/contract.js";
 import type { HarnessEventType, HarnessEventPayloads } from "./run-protocol.js";
 
 const BROWSER_HARNESS_TOOL_PREFIX = "mcp__browser_harness__";
@@ -105,12 +111,12 @@ export function mapPiEvent(
         if (observation !== undefined) {
           events.push({
             type: "browser.observation",
-            payload: { observation },
+            payload: { tool_call_id: event.toolCallId, observation },
           });
         }
         if (
           event.toolName === FINISH_CASE_TOOL &&
-          isRecord(structured.case) &&
+          isBrowserCase(structured.case) &&
           isDryRunArtifact(structured.dry_run)
         ) {
           const verdict: "passed" | "failed" =
@@ -239,19 +245,22 @@ function isBrowserHarnessMcpEnvelope(
   );
 }
 
-function isDryRunArtifact(
-  value: unknown,
-): value is Record<string, unknown> & {
-  status: "passed" | "failed" | "error";
-} {
-  if (!isRecord(value)) {
+function isDryRunArtifact(value: unknown): value is ExecutionResult {
+  try {
+    parseExecutionResult(value);
+    return true;
+  } catch {
     return false;
   }
-  return (
-    value.status === "passed" ||
-    value.status === "failed" ||
-    value.status === "error"
-  );
+}
+
+function isBrowserCase(value: unknown): value is Case {
+  try {
+    validateCase(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

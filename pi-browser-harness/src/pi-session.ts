@@ -22,7 +22,10 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
-import { createBrowserHarnessExtension } from "./extension.js";
+import {
+  createBrowserHarnessExtension,
+  createSequentialBrowserMcpToolsExtension,
+} from "./extension.js";
 import {
   createTraceMapperState,
   mapPiEvent,
@@ -437,6 +440,7 @@ function buildResourceLoader(
 
   const extensionFactories: InlineExtension[] =
     extensionFactoriesOverride ?? [
+      createSequentialBrowserMcpToolsExtension(),
       createMcpExtension(),
       createBrowserHarnessExtension({
         mcpChildPath: mcpChildPath ?? defaultMcpChildPath(),

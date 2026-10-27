@@ -18,6 +18,22 @@ import (
 // such a replay.
 var ErrRunAlreadyTerminal = errors.New("run is already terminal")
 
+// CancellationRequested reports whether the durable run status requires an
+// active harness process to stop.
+func (s *Store) CancellationRequested(ctx context.Context, runID string) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, errors.New("postgres store is not configured")
+	}
+	var status domain.RunStatus
+	if err := s.pool.QueryRow(ctx, `SELECT status FROM runs WHERE id = $1`, runID).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, fmt.Errorf("run %q: %w", runID, ErrNotFound)
+		}
+		return false, fmt.Errorf("read run cancellation status: %w", err)
+	}
+	return status == domain.RunCancelling || status == domain.RunCancelled, nil
+}
+
 // HarnessAttempt is the durable identity for one subprocess execution of a run.
 type HarnessAttempt struct {
 	ID                string
@@ -136,6 +152,15 @@ type HarnessEventRecord struct {
 // CompletedToolAttempt identifies completed operation evidence eligible for a
 // later harness event emitted after the tool completion.
 type CompletedToolAttempt struct {
+	SpanID        string
+	SpanAttemptID string
+	OperationID   string
+}
+
+// ToolAttemptRef identifies one operation span and attempt owned by a harness
+// attempt. It is used to attach follow-on evidence to its originating Pi tool
+// call rather than to whichever tool happened to be active most recently.
+type ToolAttemptRef struct {
 	SpanID        string
 	SpanAttemptID string
 	OperationID   string
@@ -531,6 +556,40 @@ func (s *Store) ActiveToolSpanID(ctx context.Context, runID string) (string, err
 		return "", fmt.Errorf("lookup active tool span: %w", err)
 	}
 	return spanID, nil
+}
+
+// ToolAttemptByCallID returns the exact operation attempt emitted for a Pi
+// tool call before sourceSequence. The lookup is scoped to the owning harness
+// attempt so evidence from a prior or concurrent retry cannot be associated.
+func (s *Store) ToolAttemptByCallID(
+	ctx context.Context,
+	runID, harnessAttemptID, toolCallID string,
+	sourceSequence int64,
+) (ToolAttemptRef, error) {
+	if s == nil || s.pool == nil {
+		return ToolAttemptRef{}, errors.New("postgres store is not configured")
+	}
+	var ref ToolAttemptRef
+	err := s.pool.QueryRow(ctx, `
+		SELECT span.span_id, attempt.id, COALESCE(attempt.operation_id, '')
+		FROM spans AS span
+		JOIN span_attempts AS attempt ON attempt.span_id = span.id
+		WHERE span.run_id = $1
+		  AND span.harness_attempt_id = $2
+		  AND span.kind = 'operation'
+		  AND span.source_sequence < $4
+		  AND attempt.request ->> 'tool_call_id' = $3
+		ORDER BY span.source_sequence DESC, attempt.attempt_number DESC
+		LIMIT 1`,
+		runID, harnessAttemptID, toolCallID, sourceSequence,
+	).Scan(&ref.SpanID, &ref.SpanAttemptID, &ref.OperationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ToolAttemptRef{}, nil
+	}
+	if err != nil {
+		return ToolAttemptRef{}, fmt.Errorf("lookup tool attempt by call id: %w", err)
+	}
+	return ref, nil
 }
 
 // LatestCompletedToolAttempt returns the most recent completed operation

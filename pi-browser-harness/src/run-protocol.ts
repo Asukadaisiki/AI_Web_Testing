@@ -1,5 +1,12 @@
 import type { Writable } from "node:stream";
 
+import {
+  parseExecutionResult,
+  validateCase,
+  type Case,
+  type ExecutionResult,
+} from "./browser/contract.js";
+
 export const RUN_PROTOCOL_VERSION = "pi-browser-harness.v1" as const;
 
 export interface ModelRequest {
@@ -42,14 +49,13 @@ export interface HarnessEventPayloads {
     [key: string]: unknown;
   };
   "browser.observation": {
+    tool_call_id: string;
     observation: unknown;
-    [key: string]: unknown;
   };
   "browser.case.completed": {
     verdict: "passed" | "failed";
-    case?: Record<string, unknown>;
-    dry_run?: Record<string, unknown>;
-    [key: string]: unknown;
+    case: Case;
+    dry_run: ExecutionResult;
   };
   "harness.settled": {
     assistant_text: string;
@@ -185,6 +191,7 @@ export class HarnessEventWriter {
     type: Type,
     payload: HarnessEventPayloads[Type],
   ): Extract<HarnessEvent, { type: Type }> {
+    validateOutgoingPayload(type, payload);
     const event = {
       type,
       run_id: this.request.run_id,
@@ -196,6 +203,50 @@ export class HarnessEventWriter {
 
     this.output.write(`${JSON.stringify(event)}\n`);
     return event;
+  }
+}
+
+function validateOutgoingPayload<Type extends HarnessEventType>(
+  type: Type,
+  payload: HarnessEventPayloads[Type],
+): void {
+  if (type === "browser.observation") {
+    const observation = payload as HarnessEventPayloads["browser.observation"];
+    if (
+      !hasExactKeys(observation, ["tool_call_id", "observation"]) ||
+      !isNonBlankString(observation.tool_call_id)
+    ) {
+      throw new Error("invalid browser.observation payload");
+    }
+    return;
+  }
+  if (type !== "browser.case.completed") {
+    return;
+  }
+
+  const completed = payload as HarnessEventPayloads["browser.case.completed"];
+  if (
+    !hasExactKeys(completed, ["verdict", "case", "dry_run"]) ||
+    (completed.verdict !== "passed" && completed.verdict !== "failed")
+  ) {
+    throw new Error("invalid browser.case.completed payload");
+  }
+  try {
+    const browserCase = validateCase(completed.case);
+    const dryRun = parseExecutionResult(completed.dry_run);
+    if (
+      browserCase.steps.length !== dryRun.steps.length ||
+      browserCase.steps.some(
+        (step, index) =>
+          dryRun.steps[index]?.index !== index ||
+          dryRun.steps[index]?.action !== step.action,
+      ) ||
+      (completed.verdict === "passed") !== (dryRun.status === "passed")
+    ) {
+      throw new Error("browser case evidence is inconsistent");
+    }
+  } catch {
+    throw new Error("invalid browser.case.completed payload");
   }
 }
 

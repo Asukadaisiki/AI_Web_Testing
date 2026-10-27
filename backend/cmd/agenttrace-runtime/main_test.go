@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/agentprofile"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/config"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/runtime"
@@ -31,8 +32,19 @@ func TestRuntimeWiresPiRunnerAsSoleCommandRunner(t *testing.T) {
 	if !ok {
 		t.Fatalf("command runner = %T, want *boundedRunner", runner)
 	}
-	if _, ok := bounded.runner.(runtime.PiRunner); !ok {
+	piRunner, ok := bounded.runner.(runtime.PiRunner)
+	if !ok {
 		t.Fatalf("bounded runner inner = %T, want runtime.PiRunner", bounded.runner)
+	}
+	profile, err := agentprofile.LoadBrowserEval()
+	if err != nil {
+		t.Fatalf("load browser profile: %v", err)
+	}
+	if piRunner.DefaultReasoningEffort != profile.Model.ReasoningEffort {
+		t.Fatalf(
+			"PiRunner default reasoning effort = %q, want profile value %q",
+			piRunner.DefaultReasoningEffort, profile.Model.ReasoningEffort,
+		)
 	}
 }
 

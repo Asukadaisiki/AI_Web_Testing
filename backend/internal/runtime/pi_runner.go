@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/domain"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/event"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
+
+const cancellationPollInterval = 25 * time.Millisecond
 
 // HarnessProcessRunner starts a pi-browser-harness subprocess and streams
 // validated events to a callback. *piharness.ProcessRunner satisfies it.
@@ -23,9 +26,10 @@ type HarnessProcessRunner interface {
 // harness, persists each event as EvalHub trace evidence, and derives the
 // objective terminal status from the harness verdict.
 type PiRunner struct {
-	Process   HarnessProcessRunner
-	Store     PiTraceStore
-	WorkerURL string
+	Process                HarnessProcessRunner
+	Store                  PiTraceStore
+	WorkerURL              string
+	DefaultReasoningEffort string
 }
 
 // Run executes the harness for command and persists its trace. A replay of an
@@ -49,21 +53,35 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		return fmt.Errorf("start pi run: %w", err)
 	}
 
-	request := buildHarnessRequest(command, r.WorkerURL, ref.ProviderAttemptID)
+	request := buildHarnessRequest(
+		command, r.WorkerURL, ref.ProviderAttemptID, r.DefaultReasoningEffort,
+	)
 
 	runState := &piRunState{}
-	processErr := r.Process.Run(ctx, request, func(ev piharness.Event) {
+	processCtx, cancelProcess := context.WithCancel(ctx)
+	watchDone := make(chan struct{})
+	watchExited := make(chan struct{})
+	go r.watchCancellation(ctx, ref.RunID, cancelProcess, watchDone, watchExited)
+
+	processErr := r.Process.Run(processCtx, request, func(ev piharness.Event) {
 		runState.observe(ev)
 		if aerr := r.Store.AppendHarnessEvent(ctx, ref, ev); aerr != nil {
 			runState.appendErr = aerr
 		}
 	})
+	close(watchDone)
+	<-watchExited
+	cancelProcess()
 
 	if runState.appendErr != nil && processErr == nil {
 		processErr = runState.appendErr
 	}
 
-	outcome := r.deriveOutcome(processErr, runState, ref.CancelRequested)
+	cancelRequested, cancelErr := r.Store.CancellationRequested(ctx, ref.RunID)
+	if cancelErr != nil && processErr == nil {
+		processErr = fmt.Errorf("read cancellation state before completion: %w", cancelErr)
+	}
+	outcome := r.deriveOutcome(processErr, runState, ref.CancelRequested || cancelRequested)
 	if cerr := r.Store.CompleteHarnessRun(ctx, ref, outcome); cerr != nil {
 		if outcome.Status == domain.RunSucceeded {
 			return fmt.Errorf("complete pi run: %w", cerr)
@@ -77,6 +95,44 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		outcome.Error = "pi run terminated unsuccessfully"
 	}
 	return &terminalRunError{cause: errors.New(outcome.Error)}
+}
+
+func (r PiRunner) watchCancellation(
+	ctx context.Context,
+	runID string,
+	cancelProcess context.CancelFunc,
+	done <-chan struct{},
+	exited chan<- struct{},
+) {
+	defer close(exited)
+
+	check := func() bool {
+		cancelRequested, err := r.Store.CancellationRequested(ctx, runID)
+		if err != nil || !cancelRequested {
+			return false
+		}
+		cancelProcess()
+		return true
+	}
+	if check() {
+		return
+	}
+
+	ticker := time.NewTicker(cancellationPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			cancelProcess()
+			return
+		case <-ticker.C:
+			if check() {
+				return
+			}
+		}
+	}
 }
 
 type piRunState struct {
@@ -137,7 +193,10 @@ func (r PiRunner) deriveOutcome(processErr error, state *piRunState, cancelReque
 	return PiRunOutcome{Status: domain.RunFailed, Error: processErr.Error()}
 }
 
-func buildHarnessRequest(command event.RunCommand, workerURL, providerAttemptID string) piharness.Request {
+func buildHarnessRequest(
+	command event.RunCommand,
+	workerURL, providerAttemptID, defaultReasoningEffort string,
+) piharness.Request {
 	goal := ""
 	for i := len(command.Messages) - 1; i >= 0; i-- {
 		if command.Messages[i].Role == "user" {
@@ -152,6 +211,10 @@ func buildHarnessRequest(command event.RunCommand, workerURL, providerAttemptID 
 	if strings.TrimSpace(artifactScope) == "" {
 		artifactScope = command.RunID
 	}
+	reasoningEffort := command.Model.ReasoningEffort
+	if strings.TrimSpace(reasoningEffort) == "" {
+		reasoningEffort = defaultReasoningEffort
+	}
 	return piharness.Request{
 		RunID:     command.RunID,
 		AttemptID: providerAttemptID,
@@ -159,7 +222,7 @@ func buildHarnessRequest(command event.RunCommand, workerURL, providerAttemptID 
 		Model: piharness.ModelRequest{
 			Provider:        command.Model.Provider,
 			Name:            command.Model.Name,
-			ReasoningEffort: command.Model.ReasoningEffort,
+			ReasoningEffort: reasoningEffort,
 		},
 		WorkerURL:     workerURL,
 		ArtifactScope: artifactScope,

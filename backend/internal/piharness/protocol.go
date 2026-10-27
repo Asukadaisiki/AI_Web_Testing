@@ -4,10 +4,16 @@
 package piharness
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"strings"
 	"time"
+
+	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/contract"
 )
 
 // ProtocolVersion is the exact protocol identifier this package speaks.
@@ -136,7 +142,8 @@ type ToolCompletedPayload struct {
 }
 
 type ObservationPayload struct {
-	Observation any `json:"observation"`
+	ToolCallID  string `json:"tool_call_id"`
+	Observation any    `json:"observation"`
 }
 
 type CaseCompletedPayload struct {
@@ -162,6 +169,7 @@ var (
 	ErrInvalidSequence   = errors.New("piharness: invalid event sequence")
 	ErrInvalidTimestamp  = errors.New("piharness: invalid or non-UTC timestamp")
 	ErrSecondTerminal    = errors.New("piharness: second terminal record")
+	ErrInvalidPayload    = errors.New("piharness: invalid event payload")
 )
 
 // Decoder validates a stream of JSONL harness events against the request
@@ -218,6 +226,9 @@ func (d *Decoder) Decode(line []byte) (*Event, error) {
 	if _, offset := t.Zone(); offset != 0 {
 		return nil, fmt.Errorf("%w: timestamp is not UTC", ErrInvalidTimestamp)
 	}
+	if err := validateEventPayload(ev); err != nil {
+		return nil, fmt.Errorf("%w for %s: %v", ErrInvalidPayload, ev.Type, err)
+	}
 
 	if d.terminalSeen {
 		return nil, ErrSecondTerminal
@@ -228,4 +239,382 @@ func (d *Decoder) Decode(line []byte) (*Event, error) {
 
 	d.nextSequence++
 	return &ev, nil
+}
+
+func validateEventPayload(ev Event) error {
+	payload, err := objectPayload(ev.Payload)
+	if err != nil {
+		return fmt.Errorf("%w for %s: %v", ErrInvalidPayload, ev.Type, err)
+	}
+
+	switch ev.Type {
+	case EventStarted:
+		return validateExactKeys(payload, nil)
+	case EventMessageCompleted:
+		return requireString(payload, "text")
+	case EventUsage:
+		if err := requireNonNegativeInt(payload, "input_tokens"); err != nil {
+			return err
+		}
+		return requireNonNegativeInt(payload, "output_tokens")
+	case EventToolStarted:
+		if err := requireString(payload, "tool_call_id"); err != nil {
+			return err
+		}
+		return requireString(payload, "tool_name")
+	case EventToolCompleted:
+		if err := requireString(payload, "tool_call_id"); err != nil {
+			return err
+		}
+		if err := requireString(payload, "tool_name"); err != nil {
+			return err
+		}
+		if err := requireBool(payload, "is_error"); err != nil {
+			return err
+		}
+		if raw, ok := payload["structured_result"]; ok {
+			if _, err := objectPayload(raw); err != nil {
+				return fmt.Errorf("structured_result: %w", err)
+			}
+		}
+		return nil
+	case EventObservation:
+		if err := validateExactKeys(payload, []string{"tool_call_id", "observation"}); err != nil {
+			return err
+		}
+		return requireNonBlankString(payload, "tool_call_id")
+	case EventCaseCompleted:
+		return validateCaseCompletion(payload)
+	case EventSettled:
+		return requireString(payload, "assistant_text")
+	case EventFailed:
+		return requireString(payload, "error")
+	default:
+		return fmt.Errorf("unsupported event type %q", ev.Type)
+	}
+}
+
+func validateCaseCompletion(payload map[string]json.RawMessage) error {
+	if err := validateExactKeys(payload, []string{"verdict", "case", "dry_run"}); err != nil {
+		return err
+	}
+	verdict, err := requiredString(payload, "verdict")
+	if err != nil {
+		return err
+	}
+	if verdict != "passed" && verdict != "failed" {
+		return errors.New("verdict must be passed or failed")
+	}
+	caseValue, err := contract.Validate(payload["case"])
+	if err != nil {
+		return fmt.Errorf("case: %w", err)
+	}
+	dryRunStatus, err := validateDryRun(payload["dry_run"], caseValue)
+	if err != nil {
+		return fmt.Errorf("dry_run: %w", err)
+	}
+	if (verdict == "passed") != (dryRunStatus == "passed") {
+		return errors.New("verdict must match dry_run.status")
+	}
+	return nil
+}
+
+func validateDryRun(raw json.RawMessage, browserCase contract.Case) (string, error) {
+	value, err := objectPayload(raw)
+	if err != nil {
+		return "", err
+	}
+	if err := validateExactKeys(value, []string{
+		"execution_id", "status", "started_at", "finished_at", "final_url", "steps", "error",
+	}); err != nil {
+		return "", err
+	}
+	executionID, err := requiredString(value, "execution_id")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(executionID) == "" {
+		return "", errors.New("execution_id must be non-blank")
+	}
+	status, err := requiredString(value, "status")
+	if err != nil {
+		return "", err
+	}
+	if status != "passed" && status != "failed" && status != "error" {
+		return "", errors.New("status must be passed, failed, or error")
+	}
+	startedAt, err := requiredTimestamp(value, "started_at")
+	if err != nil {
+		return "", err
+	}
+	finishedAt, err := requiredTimestamp(value, "finished_at")
+	if err != nil {
+		return "", err
+	}
+	if finishedAt.Before(startedAt) {
+		return "", errors.New("finished_at must not precede started_at")
+	}
+	finalURL, err := requiredString(value, "final_url")
+	if err != nil {
+		return "", err
+	}
+	parsedURL, err := url.ParseRequestURI(finalURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return "", errors.New("final_url must be an absolute URL")
+	}
+	if err := requireStepError(value, "error"); err != nil {
+		return "", err
+	}
+
+	var steps []json.RawMessage
+	if err := json.Unmarshal(value["steps"], &steps); err != nil {
+		return "", errors.New("steps must be an array")
+	}
+	if len(steps) != len(browserCase.Steps) {
+		return "", errors.New("steps must cover the complete browser case")
+	}
+	for index, rawStep := range steps {
+		if err := validateDryRunStep(rawStep, index, browserCase.Steps[index].Action); err != nil {
+			return "", err
+		}
+	}
+	return status, nil
+}
+
+func validateDryRunStep(raw json.RawMessage, index int, action contract.Action) error {
+	step, err := objectPayload(raw)
+	if err != nil {
+		return err
+	}
+	if err := validateAllowedKeys(step, []string{
+		"index", "action", "status", "started_at", "duration_ms", "url_before", "url_after",
+		"conditions", "evidence", "error", "blocker", "hit_test", "recovery",
+	}); err != nil {
+		return err
+	}
+	stepIndex, err := requiredInt(step, "index")
+	if err != nil {
+		return err
+	}
+	if stepIndex != index {
+		return fmt.Errorf("steps[%d].index must be %d", index, index)
+	}
+	stepAction, err := requiredString(step, "action")
+	if err != nil {
+		return err
+	}
+	if stepAction != string(action) {
+		return fmt.Errorf("steps[%d].action must match browser case", index)
+	}
+	stepStatus, err := requiredString(step, "status")
+	if err != nil {
+		return err
+	}
+	if stepStatus != "passed" && stepStatus != "failed" {
+		return fmt.Errorf("steps[%d].status must be passed or failed", index)
+	}
+	if _, err := requiredTimestamp(step, "started_at"); err != nil {
+		return err
+	}
+	if err := requireNonNegativeInt(step, "duration_ms"); err != nil {
+		return err
+	}
+	if _, err := requiredString(step, "url_before"); err != nil {
+		return err
+	}
+	if _, err := requiredString(step, "url_after"); err != nil {
+		return err
+	}
+	if err := requireArray(step, "conditions"); err != nil {
+		return err
+	}
+	if err := validateEvidence(step["evidence"]); err != nil {
+		return err
+	}
+	return requireStepError(step, "error")
+}
+
+func validateEvidence(raw json.RawMessage) error {
+	evidence, err := objectPayload(raw)
+	if err != nil {
+		return err
+	}
+	if err := validateExactKeys(evidence, []string{"screenshot_path", "console", "network"}); err != nil {
+		return err
+	}
+	if err := requireNullableString(evidence, "screenshot_path"); err != nil {
+		return err
+	}
+	if err := requireArray(evidence, "console"); err != nil {
+		return err
+	}
+	return requireArray(evidence, "network")
+}
+
+func requireStepError(value map[string]json.RawMessage, field string) error {
+	raw, ok := value[field]
+	if !ok {
+		return fmt.Errorf("%s is required", field)
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	stepError, err := objectPayload(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
+	if err := validateExactKeys(stepError, []string{"kind", "message"}); err != nil {
+		return err
+	}
+	if err := requireString(stepError, "kind"); err != nil {
+		return err
+	}
+	return requireString(stepError, "message")
+}
+
+func objectPayload(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	var value map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := decoder.Decode(&value); err != nil {
+		return nil, errors.New("must be an object")
+	}
+	if value == nil {
+		return nil, errors.New("must be an object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("must contain one JSON value")
+	}
+	return value, nil
+}
+
+func validateExactKeys(value map[string]json.RawMessage, expected []string) error {
+	if len(value) != len(expected) {
+		return errors.New("has missing or unexpected fields")
+	}
+	if err := validateAllowedKeys(value, expected); err != nil {
+		return err
+	}
+	for _, key := range expected {
+		if _, ok := value[key]; !ok {
+			return fmt.Errorf("%s is required", key)
+		}
+	}
+	return nil
+}
+
+func validateAllowedKeys(value map[string]json.RawMessage, allowed []string) error {
+	for key := range value {
+		if !containsKey(allowed, key) {
+			return fmt.Errorf("unexpected field %q", key)
+		}
+	}
+	return nil
+}
+
+func containsKey(keys []string, want string) bool {
+	for _, key := range keys {
+		if key == want {
+			return true
+		}
+	}
+	return false
+}
+
+func requiredString(value map[string]json.RawMessage, field string) (string, error) {
+	raw, ok := value[field]
+	if !ok {
+		return "", fmt.Errorf("%s is required", field)
+	}
+	var decoded string
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return "", fmt.Errorf("%s must be a string", field)
+	}
+	return decoded, nil
+}
+
+func requireString(value map[string]json.RawMessage, field string) error {
+	_, err := requiredString(value, field)
+	return err
+}
+
+func requireNonBlankString(value map[string]json.RawMessage, field string) error {
+	decoded, err := requiredString(value, field)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(decoded) == "" {
+		return fmt.Errorf("%s must be non-blank", field)
+	}
+	return nil
+}
+
+func requireBool(value map[string]json.RawMessage, field string) error {
+	raw, ok := value[field]
+	if !ok {
+		return fmt.Errorf("%s is required", field)
+	}
+	var decoded bool
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return fmt.Errorf("%s must be a boolean", field)
+	}
+	return nil
+}
+
+func requiredInt(value map[string]json.RawMessage, field string) (int, error) {
+	raw, ok := value[field]
+	if !ok {
+		return 0, fmt.Errorf("%s is required", field)
+	}
+	var decoded int
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return 0, fmt.Errorf("%s must be an integer", field)
+	}
+	return decoded, nil
+}
+
+func requireNonNegativeInt(value map[string]json.RawMessage, field string) error {
+	decoded, err := requiredInt(value, field)
+	if err != nil {
+		return err
+	}
+	if decoded < 0 {
+		return fmt.Errorf("%s must be non-negative", field)
+	}
+	return nil
+}
+
+func requireArray(value map[string]json.RawMessage, field string) error {
+	raw, ok := value[field]
+	if !ok {
+		return fmt.Errorf("%s is required", field)
+	}
+	var decoded []json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded == nil {
+		return fmt.Errorf("%s must be an array", field)
+	}
+	return nil
+}
+
+func requireNullableString(value map[string]json.RawMessage, field string) error {
+	raw, ok := value[field]
+	if !ok {
+		return fmt.Errorf("%s is required", field)
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	return requireString(value, field)
+}
+
+func requiredTimestamp(value map[string]json.RawMessage, field string) (time.Time, error) {
+	text, err := requiredString(value, field)
+	if err != nil {
+		return time.Time{}, err
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be RFC3339", field)
+	}
+	return parsed, nil
 }
