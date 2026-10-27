@@ -394,7 +394,11 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 	insertRootSpan(t, ctx, pool, run.ID, "span-run")
 
 	now := time.Now().UTC()
-	appendCompletedTool := func(sequence int64, spanID, attemptID, operationID, name string) {
+	appendCompletedTool := func(
+		harnessAttemptID string,
+		sequence int64,
+		spanID, attemptID, operationID, name string,
+	) {
 		t.Helper()
 		span := domain.Span{
 			ID: spanID, RunID: run.ID, TraceID: "trace-1", SpanID: spanID,
@@ -406,10 +410,10 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 			Status: "succeeded", StartedAt: now, EndedAt: &now,
 		}
 		if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
-			RunID: run.ID, AttemptID: harnessAttempt.ID, SourceSequence: sequence,
+			RunID: run.ID, AttemptID: harnessAttemptID, SourceSequence: sequence,
 			SourceType: "pi.tool.completed",
 			Event: harnessEnvelope(
-				run.ID, harnessAttempt.ID, sequence, "pi.tool.completed", `{"is_error":false}`,
+				run.ID, harnessAttemptID, sequence, "pi.tool.completed", `{"is_error":false}`,
 			),
 			Span: &span, Attempt: &attempt,
 		}); err != nil {
@@ -418,10 +422,26 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 	}
 
 	const finishTool = "mcp__browser_harness__finish_case"
-	appendCompletedTool(1, "span-finish", "attempt-finish", "operation-finish", finishTool)
-	appendCompletedTool(2, "span-click", "attempt-click", "operation-click", "mcp__browser_harness__click")
+	appendCompletedTool(
+		harnessAttempt.ID,
+		1,
+		"span-finish",
+		"attempt-finish",
+		"operation-finish",
+		finishTool,
+	)
+	appendCompletedTool(
+		harnessAttempt.ID,
+		2,
+		"span-click",
+		"attempt-click",
+		"operation-click",
+		"mcp__browser_harness__click",
+	)
 
-	got, err := store.LatestCompletedToolAttempt(ctx, run.ID, finishTool, 3)
+	got, err := store.LatestCompletedToolAttempt(
+		ctx, run.ID, harnessAttempt.ID, finishTool, 3,
+	)
 	if err != nil {
 		t.Fatalf("latest completed finish tool: %v", err)
 	}
@@ -431,8 +451,17 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 		t.Fatalf("completed finish reference = %#v", got)
 	}
 
-	appendCompletedTool(3, "span-finish-latest", "attempt-finish-latest", "operation-finish-latest", finishTool)
-	latest, err := store.LatestCompletedToolAttempt(ctx, run.ID, finishTool, 4)
+	appendCompletedTool(
+		harnessAttempt.ID,
+		3,
+		"span-finish-latest",
+		"attempt-finish-latest",
+		"operation-finish-latest",
+		finishTool,
+	)
+	latest, err := store.LatestCompletedToolAttempt(
+		ctx, run.ID, harnessAttempt.ID, finishTool, 4,
+	)
 	if err != nil {
 		t.Fatalf("latest completed finish tool after second finish: %v", err)
 	}
@@ -442,12 +471,39 @@ func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testin
 		t.Fatalf("latest completed finish reference = %#v", latest)
 	}
 
-	missing, err := store.LatestCompletedToolAttempt(ctx, run.ID, finishTool, 1)
+	missing, err := store.LatestCompletedToolAttempt(
+		ctx, run.ID, harnessAttempt.ID, finishTool, 1,
+	)
 	if err != nil {
 		t.Fatalf("lookup before finish sequence: %v", err)
 	}
 	if missing != (CompletedToolAttempt{}) {
 		t.Fatalf("lookup before finish sequence = %#v, want empty", missing)
+	}
+
+	retryAttempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-retry")
+	if err != nil {
+		t.Fatalf("begin retry attempt: %v", err)
+	}
+	appendCompletedTool(
+		retryAttempt.ID,
+		1,
+		"span-retry-click",
+		"attempt-retry-click",
+		"operation-retry-click",
+		"mcp__browser_harness__click",
+	)
+	missingCurrentFinish, err := store.LatestCompletedToolAttempt(
+		ctx, run.ID, retryAttempt.ID, finishTool, 2,
+	)
+	if err != nil {
+		t.Fatalf("lookup finish in retry attempt: %v", err)
+	}
+	if missingCurrentFinish != (CompletedToolAttempt{}) {
+		t.Fatalf(
+			"retry lookup reused prior attempt finish = %#v, want empty",
+			missingCurrentFinish,
+		)
 	}
 }
 

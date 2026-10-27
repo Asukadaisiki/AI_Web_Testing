@@ -217,42 +217,46 @@ def trace_has_required_shape(run_id: str) -> dict[str, bool]:
               (SELECT count(*) FROM spans WHERE run_id = %s AND kind = 'model'),
               (SELECT count(*) FROM spans WHERE run_id = %s AND kind = 'operation'),
               (SELECT count(*) FROM usage_records WHERE run_id = %s),
-              (SELECT count(*)
-                 FROM operation_results AS operation
-                 JOIN span_attempts AS attempt
-                   ON attempt.id = operation.span_attempt_id
-                 JOIN spans AS span ON span.id = attempt.span_id
-                WHERE operation.run_id = %s),
-              (SELECT count(*)
-                 FROM operation_results AS operation
-                 JOIN span_attempts AS attempt
-                   ON attempt.id = operation.span_attempt_id
-                 JOIN spans AS span ON span.id = attempt.span_id
-                WHERE operation.run_id = %s
-                  AND jsonb_typeof(operation.result -> 'steps') = 'array'
-                  AND jsonb_array_length(operation.result -> 'steps') > 0),
               (SELECT count(*) FROM run_events WHERE run_id = %s
                  AND payload ->> 'event_type' = 'browser.observation'),
               (SELECT count(*) FROM run_events WHERE run_id = %s
                  AND payload ->> 'event_type' = 'browser.case.completed')
             """,
-            (run_id,) * 7,
+            (run_id,) * 5,
         )
         (
             model_spans,
             operation_spans,
             usage_records,
-            linked_operations,
-            execution_steps,
             observations,
             case_completed,
         ) = map(int, cursor.fetchone())
+
+    trace = request(f"/api/v1/runs/{run_id}/trace")
+    finish_span_ids = {
+        span.get("span_id")
+        for span in trace.get("spans", [])
+        if span.get("kind") == "operation"
+        and span.get("name") == "mcp__browser_harness__finish_case"
+        and span.get("span_id")
+    }
+    linked_finish_span_ids = {
+        evidence.get("span_id")
+        for evidence in trace.get("operation_evidence", [])
+        if evidence.get("span_id") in finish_span_ids
+        and evidence.get("span_attempt_id")
+    }
+    has_projected_finish_step = any(
+        node.get("kind") == "step"
+        and node.get("parent_span_id") in linked_finish_span_ids
+        for node in trace.get("derived_nodes", [])
+    )
     return {
         "model_messages": model_spans >= 1,
         "browser_tools": operation_spans >= 1,
         "usage": usage_records >= 1,
-        "linked_operation": linked_operations >= 1,
-        "execution_steps": execution_steps >= 1,
+        "linked_operation": bool(linked_finish_span_ids),
+        "execution_steps": has_projected_finish_step,
         "observations": observations >= 1,
         "case_completed": case_completed >= 1,
     }

@@ -228,7 +228,7 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 		}
 	case piharness.EventCaseCompleted:
 		finishAttempt, err := s.Store.LatestCompletedToolAttempt(
-			ctx, ref.RunID, finishCaseToolName, ev.Sequence,
+			ctx, ref.RunID, ref.ID, finishCaseToolName, ev.Sequence,
 		)
 		if err != nil {
 			return record, err

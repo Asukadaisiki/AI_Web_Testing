@@ -83,12 +83,49 @@ class _Connection:
         return False
 
 
+def finish_trace(
+    *,
+    span_attempt_id: str = "attempt-finish",
+    derived_kind: str = "step",
+):
+    finish_span_id = "span-finish"
+    return {
+        "spans": [
+            {
+                "span_id": finish_span_id,
+                "kind": "operation",
+                "name": "mcp__browser_harness__finish_case",
+            }
+        ],
+        "operation_evidence": [
+            {
+                "span_id": finish_span_id,
+                "span_attempt_id": span_attempt_id,
+                "result": {"steps": [{"index": 0}]},
+            }
+        ],
+        "derived_nodes": [
+            {
+                "kind": derived_kind,
+                "parent_span_id": finish_span_id,
+            }
+        ],
+    }
+
+
 class TraceShapeTest(unittest.TestCase):
     def test_requires_model_tools_usage_linked_operation_and_execution_steps(self) -> None:
-        cursor = _Cursor(one=(1, 1, 1, 1, 1, 1, 1))
+        cursor = _Cursor(one=(1, 1, 1, 1, 1))
         connection = _Connection(cursor)
 
-        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+        with (
+            patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}),
+            patch.object(
+                pi_harness_scenario,
+                "request",
+                return_value=finish_trace(),
+            ),
+        ):
             shape = trace_has_required_shape("run-1")
 
         self.assertEqual(
@@ -105,28 +142,53 @@ class TraceShapeTest(unittest.TestCase):
         )
 
     def test_rejects_unlinked_operation_evidence(self) -> None:
-        cursor = _Cursor(one=(1, 1, 1, 0, 1, 1, 1))
+        cursor = _Cursor(one=(1, 1, 1, 1, 1))
         connection = _Connection(cursor)
 
-        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+        with (
+            patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}),
+            patch.object(
+                pi_harness_scenario,
+                "request",
+                return_value=finish_trace(span_attempt_id=""),
+            ),
+        ):
             shape = trace_has_required_shape("run-1")
 
         self.assertFalse(shape["linked_operation"])
 
-    def test_rejects_operation_evidence_without_execution_steps(self) -> None:
-        cursor = _Cursor(one=(1, 1, 1, 1, 0, 1, 1))
+    def test_rejects_raw_steps_projected_as_unknown_tool(self) -> None:
+        cursor = _Cursor(one=(1, 1, 1, 1, 1))
         connection = _Connection(cursor)
 
-        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+        with (
+            patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}),
+            patch.object(
+                pi_harness_scenario,
+                "request",
+                return_value=finish_trace(derived_kind="unknown_tool"),
+            ),
+        ):
             shape = trace_has_required_shape("run-1")
 
         self.assertFalse(shape["execution_steps"])
 
     def test_reports_missing_shape_when_counts_are_zero(self) -> None:
-        cursor = _Cursor(one=(0, 0, 0, 0, 0, 0, 0))
+        cursor = _Cursor(one=(0, 0, 0, 0, 0))
         connection = _Connection(cursor)
 
-        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+        with (
+            patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}),
+            patch.object(
+                pi_harness_scenario,
+                "request",
+                return_value={
+                    "spans": [],
+                    "operation_evidence": [],
+                    "derived_nodes": [],
+                },
+            ),
+        ):
             shape = trace_has_required_shape("run-1")
 
         self.assertFalse(any(shape.values()))

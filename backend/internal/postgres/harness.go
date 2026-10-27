@@ -221,8 +221,25 @@ func (s *Store) AppendHarnessEvent(ctx context.Context, record HarnessEventRecor
 		// Carry the harness source sequence onto the span so lookups can order
 		// spans deterministically by emission order instead of started_at.
 		record.Span.SourceSequence = record.SourceSequence
-		if _, err := upsertSpan(ctx, tx, *record.Span); err != nil {
+		persistedSpanID, err := upsertSpan(ctx, tx, *record.Span)
+		if err != nil {
 			return err
+		}
+		tag, err := tx.Exec(ctx, `
+			UPDATE spans
+			SET harness_attempt_id = $2
+			WHERE id = $1
+			  AND (
+			    harness_attempt_id IS NULL
+			    OR harness_attempt_id = $2
+			  )`,
+			persistedSpanID, record.AttemptID,
+		)
+		if err != nil {
+			return fmt.Errorf("link span to harness attempt: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrConflict
 		}
 	}
 	var attemptID string
@@ -517,10 +534,11 @@ func (s *Store) ActiveToolSpanID(ctx context.Context, runID string) (string, err
 }
 
 // LatestCompletedToolAttempt returns the most recent completed operation
-// attempt with the exact name emitted before sourceSequence.
+// attempt with the exact name emitted by one harness attempt before
+// sourceSequence.
 func (s *Store) LatestCompletedToolAttempt(
 	ctx context.Context,
-	runID, operationName string,
+	runID, harnessAttemptID, operationName string,
 	sourceSequence int64,
 ) (CompletedToolAttempt, error) {
 	if s == nil || s.pool == nil {
@@ -532,14 +550,15 @@ func (s *Store) LatestCompletedToolAttempt(
 		FROM spans AS span
 		JOIN span_attempts AS attempt ON attempt.span_id = span.id
 		WHERE span.run_id = $1
+		  AND span.harness_attempt_id = $2
 		  AND span.kind = 'operation'
-		  AND span.name = $2
-		  AND span.source_sequence < $3
+		  AND span.name = $3
+		  AND span.source_sequence < $4
 		  AND span.ended_at IS NOT NULL
 		  AND attempt.ended_at IS NOT NULL
 		ORDER BY span.source_sequence DESC, attempt.attempt_number DESC
 		LIMIT 1`,
-		runID, operationName, sourceSequence,
+		runID, harnessAttemptID, operationName, sourceSequence,
 	).Scan(&ref.SpanID, &ref.SpanAttemptID, &ref.OperationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CompletedToolAttempt{}, nil
