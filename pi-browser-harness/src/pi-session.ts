@@ -14,7 +14,12 @@ import {
   type ModelRuntime,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Message,
+  type ToolCall,
+} from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 import { createBrowserHarnessExtension } from "./extension.js";
@@ -163,9 +168,9 @@ function resolveModel(
 ) {
   const provider = request.model.provider;
   if (provider === "scripted") {
-    registerScriptedProvider(runtime);
+    registerScriptedProvider(runtime, request.model.name);
   } else {
-    registerOpenAiCompatibleProvider(runtime, provider);
+    registerOpenAiCompatibleProvider(runtime, provider, request.model.name);
   }
   const model = runtime.getModel(provider, request.model.name);
   if (model === undefined) {
@@ -179,6 +184,7 @@ function resolveModel(
 function registerOpenAiCompatibleProvider(
   runtime: ModelRuntime,
   provider: string,
+  modelName: string,
 ): void {
   const baseUrl = requiredEnv("AGENTTRACE_MODEL_BASE_URL");
   const apiKey = requiredEnv("AGENTTRACE_MODEL_API_KEY");
@@ -187,6 +193,7 @@ function registerOpenAiCompatibleProvider(
     baseUrl,
     apiKey,
     api,
+    models: [registeredModel(modelName, true)],
   });
 }
 
@@ -212,39 +219,181 @@ function resolveProviderApi(): "openai-completions" | "openai-responses" {
   );
 }
 
-function registerScriptedProvider(runtime: ModelRuntime): void {
+function registerScriptedProvider(runtime: ModelRuntime, modelName: string): void {
   runtime.registerProvider("scripted", {
     api: "pi-messages",
     baseUrl: "http://scripted.local",
     apiKey: "scripted",
-    models: [
-      {
-        id: "browser-fixture",
-        name: "Browser Fixture",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-    ],
-    streamSimple: (_model, _context) => {
+    models: [registeredModel(modelName, false)],
+    streamSimple: (model, context) => {
       const stream = createAssistantMessageEventStream();
-      const message = makeScriptedAssistantMessage("scripted response");
+      const goal = scriptedUserGoal(context.messages);
+      const priorToolResults = context.messages.filter(
+        (message) => message.role === "toolResult",
+      ).length;
+      const message = makeScriptedAssistantMessage(
+        model.id,
+        scriptedResponse(goal, priorToolResults),
+        priorToolResults + 1,
+      );
       stream.end(message);
       return stream;
     },
   });
 }
 
-function makeScriptedAssistantMessage(text: string) {
+function registeredModel(modelName: string, reasoning: boolean) {
+  return {
+    id: modelName,
+    name: modelName,
+    reasoning,
+    input: ["text"] as ("text")[],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4096,
+  };
+}
+
+interface ScriptedTool {
+  name: string;
+  arguments: ToolCall["arguments"];
+}
+
+type ScriptedResponse =
+  | { tool: ScriptedTool }
+  | { text: string };
+
+function scriptedResponse(
+  goal: string,
+  priorToolResults: number,
+): ScriptedResponse {
+  if (goal.includes("DoesNotExist")) {
+    if (priorToolResults === 0) {
+      return {
+        tool: {
+          name: "mcp__browser_harness__open_page",
+          arguments: {
+            url: "http://fixture-site/index.html",
+            intent: "Open the local catalog",
+          },
+        },
+      };
+    }
+    if (priorToolResults === 1) {
+      return {
+        tool: {
+          name: "mcp__browser_harness__assert_text",
+          arguments: { text: "DoesNotExist" },
+        },
+      };
+    }
+    return { text: "Final: DoesNotExist was not found." };
+  }
+
+  const canonicalTools: ScriptedTool[] = [
+    {
+      name: "mcp__browser_harness__open_page",
+      arguments: {
+        url: "http://fixture-site/index.html",
+        intent: "Open the local catalog",
+      },
+    },
+    {
+      name: "mcp__browser_harness__input",
+      arguments: {
+        target: { text: "Search items" },
+        value: "alpha",
+        submit: true,
+        intent: "Filter the catalog to Alpha",
+        expect_value: "alpha",
+        expect_gone: "Beta",
+      },
+    },
+    {
+      name: "mcp__browser_harness__click",
+      arguments: {
+        target: { text: "Alpha" },
+        intent: "Open the Alpha item",
+        expect_url: "detail.html",
+        expect_gone: "Loading details",
+      },
+    },
+    {
+      name: "mcp__browser_harness__input",
+      arguments: {
+        target: { text: "Quantity" },
+        value: "2",
+        intent: "Set quantity to two",
+        expect_value: "2",
+      },
+    },
+    {
+      name: "mcp__browser_harness__click",
+      arguments: {
+        target: { text: "Add to cart" },
+        intent: "Add Alpha to the cart",
+        expect_text: "Added!",
+      },
+    },
+    {
+      name: "mcp__browser_harness__click",
+      arguments: {
+        target: { text: "View Cart" },
+        intent: "Open the cart",
+        expect_url: "cart.html",
+      },
+    },
+    {
+      name: "mcp__browser_harness__assert_text",
+      arguments: { text: "Alpha x 2" },
+    },
+    {
+      name: "mcp__browser_harness__finish_case",
+      arguments: { name: "canonical" },
+    },
+  ];
+
+  const tool = canonicalTools[priorToolResults];
+  return tool === undefined
+    ? { text: "Final: Alpha x 2 is in the cart." }
+    : { tool };
+}
+
+function scriptedUserGoal(messages: Message[]): string {
+  const userMessage = messages.find((message) => message.role === "user");
+  if (userMessage === undefined) {
+    return "";
+  }
+  if (typeof userMessage.content === "string") {
+    return userMessage.content;
+  }
+  return userMessage.content
+    .filter((content) => content.type === "text")
+    .map((content) => content.text)
+    .join("\n");
+}
+
+function makeScriptedAssistantMessage(
+  model: string,
+  response: ScriptedResponse,
+  step: number,
+): AssistantMessage {
   const ts = Date.now();
   return {
     role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
+    content: "tool" in response
+      ? [
+          {
+            type: "toolCall" as const,
+            id: `scripted-tool-${step}`,
+            name: response.tool.name,
+            arguments: response.tool.arguments,
+          },
+        ]
+      : [{ type: "text" as const, text: response.text }],
     api: "pi-messages",
     provider: "scripted",
-    model: "browser-fixture",
+    model,
     usage: {
       input: 10,
       output: 5,
@@ -253,7 +402,7 @@ function makeScriptedAssistantMessage(text: string) {
       totalTokens: 15,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: "stop" as const,
+    stopReason: "tool" in response ? "toolUse" : "stop",
     timestamp: ts,
   };
 }

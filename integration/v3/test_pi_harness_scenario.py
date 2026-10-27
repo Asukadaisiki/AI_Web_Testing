@@ -209,6 +209,15 @@ class ComposeConfigTest(unittest.TestCase):
         self.assertIn("AGENTTRACE_PI_HARNESS_ENTRY", environment_vars)
         self.assertNotIn("AGENTTRACE_MODEL_SCRIPT", environment_vars)
 
+        dockerfile = (
+            pi_harness_scenario.ROOT / "pi-browser-harness" / "Dockerfile"
+        ).read_text()
+        self.assertIn(
+            "/build/pi-browser-harness/node_modules",
+            dockerfile,
+            "runtime image must include the harness production dependencies",
+        )
+
     def test_no_agentserver_service_in_compose(self) -> None:
         result = subprocess_run(["docker", "compose", "config", "--format", "json"])
         self.assertEqual(result.returncode, 0, result.stderr)

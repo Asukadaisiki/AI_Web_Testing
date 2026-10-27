@@ -56,6 +56,64 @@ function makeFakeSession(activeTools: string[] = []): FakeSession {
   };
 }
 
+async function createSessionWithRequest(
+  request: RunRequest,
+  runtime: ModelRuntime,
+): Promise<CreateAgentSessionOptions> {
+  const fake = makeFakeSession();
+  const { writer } = makeWriter();
+  let captured: CreateAgentSessionOptions | undefined;
+
+  await createBrowserSession(request, {
+    createAgentSession: async (options) => {
+      captured = options;
+      return { session: fake as never, extensionsResult: {} as never };
+    },
+    modelRuntime: runtime,
+    eventWriter: writer,
+  });
+
+  if (captured === undefined) {
+    throw new Error("createAgentSession was not called");
+  }
+  return captured;
+}
+
+async function scriptedResponse(
+  runtime: ModelRuntime,
+  modelName: string,
+  goal: string,
+  priorToolResults: number,
+) {
+  const model = runtime.getModel("scripted", modelName);
+  if (model === undefined) {
+    throw new Error(`scripted model ${modelName} was not registered`);
+  }
+
+  return runtime.streamSimple(model, {
+    messages: [
+      { role: "user", content: goal, timestamp: 1 },
+      ...Array.from({ length: priorToolResults }, (_, index) => ({
+        role: "toolResult" as const,
+        toolCallId: `scripted-tool-${index + 1}`,
+        toolName: "mcp__browser_harness__open_page",
+        content: [],
+        isError: false,
+        timestamp: index + 2,
+      })),
+    ],
+  }).result();
+}
+
+function onlyToolCall(message: Awaited<ReturnType<typeof scriptedResponse>>) {
+  expect(message.content).toHaveLength(1);
+  const content = message.content[0];
+  if (content === undefined || content.type !== "toolCall") {
+    throw new Error("expected a tool call");
+  }
+  return content;
+}
+
 describe("createBrowserSession", () => {
   it("forces the checked-in system prompt and an empty append override", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
@@ -190,6 +248,217 @@ describe("createBrowserSession", () => {
   });
 });
 
+describe("registered providers", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("resolves the requested scripted model and passes it to createAgentSession", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const request: RunRequest = {
+      ...baseRequest,
+      model: {
+        ...baseRequest.model,
+        name: "browser-eval-fixture",
+      },
+    };
+
+    const captured = await createSessionWithRequest(request, runtime);
+
+    expect(captured.model).toMatchObject({
+      id: "browser-eval-fixture",
+      name: "browser-eval-fixture",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 128_000,
+      maxTokens: 4096,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it("resolves the requested external model and uses the selected provider API", async () => {
+    vi.stubEnv("AGENTTRACE_MODEL_BASE_URL", "https://api.example.com/v1");
+    vi.stubEnv("AGENTTRACE_MODEL_API_KEY", "test-key");
+    vi.stubEnv("AGENTTRACE_PI_PROVIDER_API", "openai-responses");
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const request: RunRequest = {
+      ...baseRequest,
+      model: {
+        provider: "openai-compatible",
+        name: "gpt-test",
+        reasoning_effort: "low",
+      },
+    };
+
+    const captured = await createSessionWithRequest(request, runtime);
+
+    expect(captured.model).toMatchObject({
+      id: "gpt-test",
+      name: "gpt-test",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 128_000,
+      maxTokens: 4096,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(runtime.getRegisteredProviderConfig("openai-compatible")?.api).toBe(
+      "openai-responses",
+    );
+  });
+});
+
+describe("scripted provider", () => {
+  it("emits the canonical browser tool sequence from prior tool results", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    await createSessionWithRequest(
+      {
+        ...baseRequest,
+        model: {
+          ...baseRequest.model,
+          name: "browser-eval-fixture",
+        },
+      },
+      runtime,
+    );
+    const expected = [
+      {
+        name: "mcp__browser_harness__open_page",
+        arguments: {
+          url: "http://fixture-site/index.html",
+          intent: "Open the local catalog",
+        },
+      },
+      {
+        name: "mcp__browser_harness__input",
+        arguments: {
+          target: { text: "Search items" },
+          value: "alpha",
+          submit: true,
+          intent: "Filter the catalog to Alpha",
+          expect_value: "alpha",
+          expect_gone: "Beta",
+        },
+      },
+      {
+        name: "mcp__browser_harness__click",
+        arguments: {
+          target: { text: "Alpha" },
+          intent: "Open the Alpha item",
+          expect_url: "detail.html",
+          expect_gone: "Loading details",
+        },
+      },
+      {
+        name: "mcp__browser_harness__input",
+        arguments: {
+          target: { text: "Quantity" },
+          value: "2",
+          intent: "Set quantity to two",
+          expect_value: "2",
+        },
+      },
+      {
+        name: "mcp__browser_harness__click",
+        arguments: {
+          target: { text: "Add to cart" },
+          intent: "Add Alpha to the cart",
+          expect_text: "Added!",
+        },
+      },
+      {
+        name: "mcp__browser_harness__click",
+        arguments: {
+          target: { text: "View Cart" },
+          intent: "Open the cart",
+          expect_url: "cart.html",
+        },
+      },
+      {
+        name: "mcp__browser_harness__assert_text",
+        arguments: { text: "Alpha x 2" },
+      },
+      {
+        name: "mcp__browser_harness__finish_case",
+        arguments: { name: "canonical" },
+      },
+    ];
+
+    for (const [step, expectedCall] of expected.entries()) {
+      const response = await scriptedResponse(
+        runtime,
+        "browser-eval-fixture",
+        "Verify the catalog cart",
+        step,
+      );
+      expect(response.stopReason).toBe("toolUse");
+      expect(response.model).toBe("browser-eval-fixture");
+      expect(onlyToolCall(response)).toMatchObject({
+        id: `scripted-tool-${step + 1}`,
+        ...expectedCall,
+      });
+    }
+
+    const finalResponse = await scriptedResponse(
+      runtime,
+      "browser-eval-fixture",
+      "Verify the catalog cart",
+      expected.length,
+    );
+    expect(finalResponse.stopReason).toBe("stop");
+    expect(finalResponse.content).toEqual([
+      { type: "text", text: "Final: Alpha x 2 is in the cart." },
+    ]);
+  });
+
+  it("asserts a missing goal text and never emits finish_case", async () => {
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    await createSessionWithRequest(
+      {
+        ...baseRequest,
+        model: {
+          ...baseRequest.model,
+          name: "browser-eval-fixture",
+        },
+      },
+      runtime,
+    );
+
+    const first = await scriptedResponse(
+      runtime,
+      "browser-eval-fixture",
+      "Find DoesNotExist",
+      0,
+    );
+    const second = await scriptedResponse(
+      runtime,
+      "browser-eval-fixture",
+      "Find DoesNotExist",
+      1,
+    );
+    const finalResponse = await scriptedResponse(
+      runtime,
+      "browser-eval-fixture",
+      "Find DoesNotExist",
+      2,
+    );
+
+    expect(onlyToolCall(first)).toMatchObject({
+      name: "mcp__browser_harness__open_page",
+    });
+    expect(onlyToolCall(second)).toMatchObject({
+      name: "mcp__browser_harness__assert_text",
+      arguments: { text: "DoesNotExist" },
+    });
+    expect(finalResponse.stopReason).toBe("stop");
+    expect(finalResponse.content).not.toContainEqual(
+      expect.objectContaining({
+        type: "toolCall",
+        name: "mcp__browser_harness__finish_case",
+      }),
+    );
+  });
+});
+
 describe("registerOpenAiCompatibleProvider", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -214,19 +483,14 @@ describe("registerOpenAiCompatibleProvider", () => {
     const fake = makeFakeSession();
     const { writer } = makeWriter();
 
-    // The provider is registered before getModel is called; the model is not
-    // in the static catalog so createBrowserSession throws, but the config is
-    // already registered and inspectable.
-    await expect(
-      createBrowserSession(makeOpenAiRequest(), {
-        createAgentSession: async () => ({
-          session: fake as never,
-          extensionsResult: {} as never,
-        }),
-        modelRuntime: runtime,
-        eventWriter: writer,
+    await createBrowserSession(makeOpenAiRequest(), {
+      createAgentSession: async () => ({
+        session: fake as never,
+        extensionsResult: {} as never,
       }),
-    ).rejects.toThrow("is not available");
+      modelRuntime: runtime,
+      eventWriter: writer,
+    });
 
     const config = runtime.getRegisteredProviderConfig("openai-compatible");
     expect(config).toBeDefined();
@@ -242,16 +506,14 @@ describe("registerOpenAiCompatibleProvider", () => {
     const fake = makeFakeSession();
     const { writer } = makeWriter();
 
-    await expect(
-      createBrowserSession(makeOpenAiRequest(), {
-        createAgentSession: async () => ({
-          session: fake as never,
-          extensionsResult: {} as never,
-        }),
-        modelRuntime: runtime,
-        eventWriter: writer,
+    await createBrowserSession(makeOpenAiRequest(), {
+      createAgentSession: async () => ({
+        session: fake as never,
+        extensionsResult: {} as never,
       }),
-    ).rejects.toThrow("is not available");
+      modelRuntime: runtime,
+      eventWriter: writer,
+    });
 
     const config = runtime.getRegisteredProviderConfig("openai-compatible");
     expect(config).toBeDefined();

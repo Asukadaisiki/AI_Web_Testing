@@ -12,7 +12,8 @@ COPY pi-browser-harness/package.json pi-browser-harness/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY pi-browser-harness/ ./
-RUN npm run build
+RUN npm run build \
+    && npm prune --omit=dev
 
 # ---- Stage 2: runtime with Go + Node.js + built harness ----
 FROM golang:1.24-bookworm AS runtime
@@ -39,6 +40,7 @@ WORKDIR /app
 COPY --from=harness-build /build/pi-browser-harness/dist /app/pi-browser-harness/dist
 COPY --from=harness-build /build/pi-browser-harness/resources /app/pi-browser-harness/resources
 COPY --from=harness-build /build/pi-browser-harness/package.json /app/pi-browser-harness/package.json
+COPY --from=harness-build /build/pi-browser-harness/node_modules /app/pi-browser-harness/node_modules
 
 # Copy the Go source so the runtime can run the consumer.
 COPY backend /app/backend
