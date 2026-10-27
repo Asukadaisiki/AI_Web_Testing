@@ -6,7 +6,6 @@ import {
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
-  createMcpExtension,
   loadSkillsFromDir,
   type CreateAgentSessionOptions,
   type CreateAgentSessionResult,
@@ -441,7 +440,6 @@ function buildResourceLoader(
   const extensionFactories: InlineExtension[] =
     extensionFactoriesOverride ?? [
       createSequentialBrowserMcpToolsExtension(),
-      createMcpExtension(),
       createBrowserHarnessExtension({
         mcpChildPath: mcpChildPath ?? defaultMcpChildPath(),
         workerUrl: request.worker_url,

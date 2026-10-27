@@ -301,6 +301,67 @@ func TestPiRunnerCancellationImmediatelyBeforeCompletionOverridesPassedVerdict(t
 	}
 }
 
+func TestPiRunnerReturnsCancellationCommittedAfterFinalCancellationRead(t *testing.T) {
+	store := &fakePiStore{
+		ref: HarnessAttemptRef{
+			ID: "hat-commit-cancel", RunID: "run-commit-cancel", AttemptNumber: 1,
+			ProviderAttemptID: "att-commit-cancel",
+		},
+		completeStatus: domain.RunCancelled,
+	}
+	process := &fakeHarnessProcess{
+		events: passingEventStream("run-commit-cancel", "att-commit-cancel"),
+	}
+	runner := PiRunner{Process: process, Store: store}
+
+	err := runner.Run(context.Background(), commandFor("run-commit-cancel"))
+	if !isTerminalRunError(err) {
+		t.Fatalf("run error = %v, want terminalRunError for committed cancellation", err)
+	}
+	if !strings.Contains(err.Error(), "cancel") {
+		t.Fatalf("run error = %v, want cancellation error", err)
+	}
+}
+
+func TestPiRunnerCompletionPersistenceErrorsAreRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		processErr     error
+		completeStatus domain.RunStatus
+	}{
+		{name: "passed_case_cancelled_status", completeStatus: domain.RunCancelled},
+		{name: "failed_outcome", processErr: errors.New("harness failed"), completeStatus: domain.RunFailed},
+		{name: "cancelled_outcome", processErr: context.Canceled, completeStatus: domain.RunCancelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runID := "run-complete-error-" + tc.name
+			attemptID := "att-complete-error-" + tc.name
+			completeErr := errors.New("terminal persistence failed")
+			store := &fakePiStore{
+				ref: HarnessAttemptRef{
+					ID: runID + "-harness", RunID: runID, AttemptNumber: 1,
+					ProviderAttemptID: attemptID,
+				},
+				completeStatus: tc.completeStatus,
+				completeErr:    completeErr,
+			}
+			process := &fakeHarnessProcess{
+				events: passingEventStream(runID, attemptID),
+				err:    tc.processErr,
+			}
+			runner := PiRunner{Process: process, Store: store}
+
+			err := runner.Run(context.Background(), commandFor(runID))
+			if !errors.Is(err, completeErr) {
+				t.Errorf("run error = %v, want completion persistence cause %v", err, completeErr)
+			}
+			if isTerminalRunError(err) {
+				t.Errorf("run error = %v, want retryable error, not terminalRunError", err)
+			}
+		})
+	}
+}
+
 func TestPiRunnerCancelledOnContextCancellation(t *testing.T) {
 	store := &fakePiStore{ref: HarnessAttemptRef{
 		ID: "hat-4", RunID: "run-cancel", AttemptNumber: 1, ProviderAttemptID: "att-cancel",
@@ -417,6 +478,8 @@ type fakePiStore struct {
 	events                []piharness.Event
 	outcome               PiRunOutcome
 	completed             bool
+	completeStatus        domain.RunStatus
+	completeErr           error
 	cancellationRequested bool
 }
 
@@ -434,12 +497,15 @@ func (f *fakePiStore) AppendHarnessEvent(_ context.Context, _ HarnessAttemptRef,
 	return nil
 }
 
-func (f *fakePiStore) CompleteHarnessRun(_ context.Context, _ HarnessAttemptRef, outcome PiRunOutcome) error {
+func (f *fakePiStore) CompleteHarnessRun(_ context.Context, _ HarnessAttemptRef, outcome PiRunOutcome) (domain.RunStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.outcome = outcome
+	if f.completeStatus != "" {
+		f.outcome.Status = f.completeStatus
+	}
 	f.completed = true
-	return nil
+	return f.outcome.Status, f.completeErr
 }
 
 func (f *fakePiStore) CancellationRequested(_ context.Context, _ string) (bool, error) {

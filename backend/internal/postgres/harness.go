@@ -341,74 +341,95 @@ type HarnessFinish struct {
 	Status    domain.RunStatus
 	Error     json.RawMessage
 	Assistant string
-	Event     event.Envelope[json.RawMessage]
+	// Event supplies replay identity and occurrence metadata; persistence derives
+	// the terminal type and payload from the effective status.
+	Event event.Envelope[json.RawMessage]
 }
 
 // FinishHarnessAttempt atomically records terminal run state, finishes the
 // harness attempt and root span, appends the assistant message, and emits the
 // terminal durable event. Replaying the same terminal state is a no-op; a
-// conflicting terminal state is an error.
-func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) error {
+// conflicting terminal state is an error. The returned status is the effective
+// verdict chosen under the run lock; a durable cancellation overrides the input.
+func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) (domain.RunStatus, error) {
 	if s == nil || s.pool == nil {
-		return errors.New("postgres store is not configured")
+		return "", errors.New("postgres store is not configured")
 	}
 	if strings.TrimSpace(finish.RunID) == "" || strings.TrimSpace(finish.AttemptID) == "" {
-		return errors.New("harness finish run and attempt ids are required")
+		return "", errors.New("harness finish run and attempt ids are required")
 	}
 	if finish.Status != domain.RunSucceeded &&
 		finish.Status != domain.RunFailed &&
 		finish.Status != domain.RunCancelled {
-		return errors.New("harness finish status must be terminal")
+		return "", errors.New("harness finish status must be terminal")
 	}
 	if err := finish.Event.Validate(); err != nil {
-		return fmt.Errorf("validate harness finish event: %w", err)
-	}
-	hash, err := payloadHash(finish.Event)
-	if err != nil {
-		return err
+		return "", fmt.Errorf("validate harness finish event: %w", err)
 	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin finish harness attempt: %w", err)
+		return "", fmt.Errorf("begin finish harness attempt: %w", err)
 	}
 	defer tx.Rollback(ctx)
-
-	existingHash, err := outboxPayloadHash(ctx, tx, finish.Event.EventID)
-	if err == nil {
-		if existingHash != hash {
-			return ErrConflict
-		}
-		return tx.Commit(ctx)
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return err
-	}
 
 	var conversationID string
 	if err := tx.QueryRow(ctx, `
 		SELECT conversation_id FROM runs WHERE id = $1`, finish.RunID).Scan(&conversationID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return "", ErrNotFound
 		}
-		return fmt.Errorf("load harness finish conversation: %w", err)
+		return "", fmt.Errorf("load harness finish conversation: %w", err)
 	}
 	if _, err := lockConversation(ctx, tx, conversationID); err != nil {
-		return err
+		return "", err
 	}
 	var existingStatus domain.RunStatus
 	if err := tx.QueryRow(ctx, `
 		SELECT status FROM runs WHERE id = $1 FOR UPDATE`, finish.RunID).Scan(&existingStatus); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return "", ErrNotFound
 		}
-		return fmt.Errorf("lock run for harness finish: %w", err)
+		return "", fmt.Errorf("lock run for harness finish: %w", err)
+	}
+	if existingStatus == domain.RunCancelling || existingStatus == domain.RunCancelled {
+		finish.Status = domain.RunCancelled
+	}
+	if finish.Status == domain.RunCancelled {
+		finish.Error = json.RawMessage(`{"message":"run cancelled"}`)
+	}
+
+	// Derive both event identity and evidence from the locked terminal decision.
+	finish.Event.EventID += ":" + string(finish.Status)
+	finish.Event.EventType = "harness.completed"
+	finish.Event.AggregateID = finish.RunID
+	finish.Event.CorrelationID = finish.RunID
+	finish.Event.Payload, err = json.Marshal(struct {
+		Status domain.RunStatus `json:"status"`
+		Error  json.RawMessage  `json:"error,omitempty"`
+	}{Status: finish.Status, Error: finish.Error})
+	if err != nil {
+		return finish.Status, fmt.Errorf("marshal harness terminal payload: %w", err)
+	}
+	hash, err := payloadHash(finish.Event)
+	if err != nil {
+		return finish.Status, err
+	}
+	existingHash, err := outboxPayloadHash(ctx, tx, finish.Event.EventID)
+	if err == nil {
+		if existingHash != hash {
+			return finish.Status, ErrConflict
+		}
+		return finish.Status, tx.Commit(ctx)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return finish.Status, err
 	}
 	if isTerminalStatus(existingStatus) {
 		if existingStatus != finish.Status {
-			return ErrConflict
+			return existingStatus, ErrConflict
 		}
-		return tx.Commit(ctx)
+		return existingStatus, tx.Commit(ctx)
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -417,7 +438,7 @@ func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) 
 		WHERE id = $1`,
 		finish.RunID, finish.Status, nullableJSON(finish.Error),
 	); err != nil {
-		return fmt.Errorf("finish harness run: %w", err)
+		return finish.Status, fmt.Errorf("finish harness run: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE spans
@@ -426,49 +447,49 @@ func (s *Store) FinishHarnessAttempt(ctx context.Context, finish HarnessFinish) 
 		  AND kind = 'run'
 		  AND ended_at IS NULL`,
 		finish.RunID, finish.Status); err != nil {
-		return fmt.Errorf("finish harness trace root: %w", err)
+		return finish.Status, fmt.Errorf("finish harness trace root: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE harness_attempts
 		SET status = $2, finished_at = now()
 		WHERE id = $1`,
 		finish.AttemptID, finish.Status); err != nil {
-		return fmt.Errorf("finish harness attempt: %w", err)
+		return finish.Status, fmt.Errorf("finish harness attempt: %w", err)
 	}
 	if err := appendAssistantMessage(ctx, tx, conversationID, finish.RunID, finish.Assistant); err != nil {
-		return err
+		return finish.Status, err
 	}
 	var seq int64
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = $1`, finish.RunID).Scan(&seq); err != nil {
-		return fmt.Errorf("next harness finish event sequence: %w", err)
+		return finish.Status, fmt.Errorf("next harness finish event sequence: %w", err)
 	}
 	payload, err := json.Marshal(finish.Event)
 	if err != nil {
-		return fmt.Errorf("marshal harness finish event: %w", err)
+		return finish.Status, fmt.Errorf("marshal harness finish event: %w", err)
 	}
 	rowID, err := newID("rev")
 	if err != nil {
-		return err
+		return finish.Status, err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO run_events (id, run_id, seq, event_type, payload, occurred_at)
 		VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
 		rowID, finish.RunID, seq, finish.Event.EventType, payload, finish.Event.OccurredAt,
 	); err != nil {
-		return fmt.Errorf("insert harness finish event: %w", err)
+		return finish.Status, fmt.Errorf("insert harness finish event: %w", err)
 	}
 	inserted, err := insertOutbox(ctx, tx, finish.Event.EventID, runEventsTopic, finish.RunID, finish.Event, hash)
 	if err != nil {
-		return err
+		return finish.Status, err
 	}
 	if !inserted {
-		return ErrConflict
+		return finish.Status, ErrConflict
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit harness finish: %w", err)
+		return finish.Status, fmt.Errorf("commit harness finish: %w", err)
 	}
-	return nil
+	return finish.Status, nil
 }
 
 func validateHarnessEventRecord(record HarnessEventRecord) error {

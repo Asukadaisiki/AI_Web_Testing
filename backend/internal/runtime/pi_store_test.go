@@ -345,11 +345,15 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 		}
 	}
 
-	if err := piStore.CompleteHarnessRun(ctx, ref, PiRunOutcome{
+	status, err := piStore.CompleteHarnessRun(ctx, ref, PiRunOutcome{
 		Status:    domain.RunSucceeded,
 		Assistant: "final answer",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("complete run: %v", err)
+	}
+	if status != "succeeded" {
+		t.Fatalf("returned status = %q, want succeeded", status)
 	}
 
 	finished, err := store.GetRun(ctx, run.ID)
@@ -620,7 +624,7 @@ func TestPostgresPiTraceStoreStartRunUsesCommandCheckpointVersion(t *testing.T) 
 	}
 }
 
-func TestPostgresPiTraceStoreCancelledRunPersistsCancelledState(t *testing.T) {
+func TestPostgresPiTraceStoreDurableCancellationOverridesSuccessfulOutcome(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
 	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi cancel"})
 	if err != nil {
@@ -653,11 +657,17 @@ func TestPostgresPiTraceStoreCancelledRunPersistsCancelledState(t *testing.T) {
 	if err := piStore.AppendHarnessEvent(ctx, ref, harEvent(piharness.EventStarted, run.ID, ref.ProviderAttemptID, 1, `{}`)); err != nil {
 		t.Fatalf("append started: %v", err)
 	}
-	if err := piStore.CompleteHarnessRun(ctx, ref, PiRunOutcome{
-		Status: domain.RunCancelled,
-		Error:  "context canceled",
-	}); err != nil {
+	if err := store.RequestCancel(ctx, run.ID); err != nil {
+		t.Fatalf("request durable cancellation: %v", err)
+	}
+	status, err := piStore.CompleteHarnessRun(ctx, ref, PiRunOutcome{
+		Status: domain.RunSucceeded,
+	})
+	if err != nil {
 		t.Fatalf("complete cancelled: %v", err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("returned status = %q, want cancelled", status)
 	}
 	finished, err := store.GetRun(ctx, run.ID)
 	if err != nil {

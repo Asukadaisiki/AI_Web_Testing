@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,7 +104,7 @@ func TestPiBeginHarnessAttemptRejectsTerminalRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin harness attempt: %v", err)
 	}
-	if err := store.FinishHarnessAttempt(ctx, HarnessFinish{
+	if _, err := store.FinishHarnessAttempt(ctx, HarnessFinish{
 		RunID: run.ID, AttemptID: attempt.ID, Status: domain.RunSucceeded,
 		Event: event.Envelope[json.RawMessage]{
 			SchemaVersion: "agenttrace.event.v1",
@@ -247,7 +248,7 @@ func TestPiFinishHarnessAttemptSetsTerminalStateAndRootSpan(t *testing.T) {
 	now := time.Now().UTC()
 	insertRootSpan(t, ctx, pool, run.ID, "span-run")
 
-	if err := store.FinishHarnessAttempt(ctx, HarnessFinish{
+	if _, err := store.FinishHarnessAttempt(ctx, HarnessFinish{
 		RunID: run.ID, AttemptID: attempt.ID, Status: domain.RunFailed,
 		Error:     json.RawMessage(`{"message":"boom"}`),
 		Assistant: "assistant text",
@@ -284,6 +285,183 @@ func TestPiFinishHarnessAttemptSetsTerminalStateAndRootSpan(t *testing.T) {
 	}
 	if attemptStatus != string(domain.RunFailed) {
 		t.Fatalf("attempt status = %q, want failed", attemptStatus)
+	}
+}
+
+func TestPiFinishHarnessAttemptDurableCancellationWinsBlockedSuccess(t *testing.T) {
+	baseCtx, pool, store := newHarnessTestStore(t)
+	ctx, cancel := context.WithTimeout(baseCtx, 10*time.Second)
+	defer cancel()
+	run := seedRunForHarness(t, ctx, store)
+	attempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att-cancel-race")
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	insertRootSpan(t, ctx, pool, run.ID, "span-run")
+
+	lock, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin cancellation transaction: %v", err)
+	}
+	defer lock.Rollback(baseCtx)
+	var lockedStatus string
+	if err := lock.QueryRow(ctx, `SELECT status FROM runs WHERE id = $1 FOR UPDATE`, run.ID).Scan(&lockedStatus); err != nil {
+		t.Fatalf("lock run: %v", err)
+	}
+	var lockPID int
+	if err := lock.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&lockPID); err != nil {
+		t.Fatalf("read lock backend: %v", err)
+	}
+
+	finish := HarnessFinish{
+		RunID: run.ID, AttemptID: attempt.ID, Status: domain.RunSucceeded,
+		Assistant: "passed before cancellation",
+		Event: event.Envelope[json.RawMessage]{
+			SchemaVersion: "agenttrace.event.v1",
+			EventID:       "evt-success-cancel-race",
+			EventType:     "harness.completed",
+			AggregateID:   run.ID,
+			CorrelationID: run.ID,
+			OccurredAt:    time.Now().UTC(),
+			Payload:       json.RawMessage(`{}`),
+		},
+	}
+	type finishResult struct {
+		status domain.RunStatus
+		err    error
+	}
+	done := make(chan finishResult, 1)
+	go func() {
+		status, err := store.FinishHarnessAttempt(ctx, finish)
+		done <- finishResult{status: status, err: err}
+	}()
+	// Wait for PostgreSQL to confirm that completion reached the locked run.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var blocked bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND wait_event_type = 'Lock'
+				  AND query LIKE '%SELECT status FROM runs WHERE id = $1 FOR UPDATE%'
+				  AND $1::int = ANY(pg_blocking_pids(pid))
+			)`, lockPID).Scan(&blocked); err != nil {
+			t.Fatalf("observe blocked completion: %v", err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case result := <-done:
+			t.Fatalf("completion returned before cancellation: %v", result.err)
+		case <-ctx.Done():
+			t.Fatal("completion did not block on the run lock")
+		case <-ticker.C:
+		}
+	}
+	if _, err := lock.Exec(ctx, `
+		UPDATE runs SET status = 'cancelling', cancel_requested_at = now(), updated_at = now()
+		WHERE id = $1`, run.ID); err != nil {
+		t.Fatalf("record durable cancellation: %v", err)
+	}
+	if err := lock.Commit(ctx); err != nil {
+		t.Fatalf("commit durable cancellation: %v", err)
+	}
+	result := <-done
+	if result.err != nil {
+		t.Fatalf("finish blocked success: %v", result.err)
+	}
+	if result.status != "cancelled" {
+		t.Errorf("returned status = %q, want cancelled", result.status)
+	}
+
+	var runStatus, rootStatus, attemptStatus string
+	var runError, terminalEnvelope, outboxEnvelope json.RawMessage
+	if err := pool.QueryRow(ctx, `SELECT status, error FROM runs WHERE id = $1`, run.ID).Scan(&runStatus, &runError); err != nil {
+		t.Fatalf("read completed run: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM spans WHERE run_id = $1 AND kind = 'run'`, run.ID).Scan(&rootStatus); err != nil {
+		t.Fatalf("read root span: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM harness_attempts WHERE id = $1`, attempt.ID).Scan(&attemptStatus); err != nil {
+		t.Fatalf("read harness attempt: %v", err)
+	}
+	for name, status := range map[string]string{
+		"run": runStatus, "root span": rootStatus, "harness attempt": attemptStatus,
+	} {
+		if status != "cancelled" {
+			t.Errorf("%s status = %q, want cancelled", name, status)
+		}
+	}
+	if !strings.Contains(string(runError), "cancel") {
+		t.Errorf("run error = %s, want cancellation error", runError)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT payload FROM run_events WHERE run_id = $1 AND event_type = 'harness.completed'`,
+		run.ID).Scan(&terminalEnvelope); err != nil {
+		t.Fatalf("read terminal event: %v", err)
+	}
+	var terminal event.Envelope[struct {
+		Status string          `json:"status"`
+		Error  json.RawMessage `json:"error"`
+	}]
+	if err := json.Unmarshal(terminalEnvelope, &terminal); err != nil {
+		t.Fatalf("decode terminal event: %v", err)
+	}
+	if terminal.Payload.Status != "cancelled" {
+		t.Errorf("terminal event status = %q, want cancelled", terminal.Payload.Status)
+	}
+	if !strings.Contains(string(terminal.Payload.Error), "cancel") {
+		t.Errorf("terminal event error = %s, want cancellation error", terminal.Payload.Error)
+	}
+	if string(terminal.Payload.Error) != string(runError) {
+		t.Errorf("terminal event error = %s, differs from run error %s", terminal.Payload.Error, runError)
+	}
+	if !strings.HasSuffix(terminal.EventID, ":cancelled") {
+		t.Errorf("terminal event ID = %q, want effective cancelled identity", terminal.EventID)
+	}
+	if err := pool.QueryRow(ctx, `SELECT payload FROM outbox_events WHERE event_id = $1`, terminal.EventID).Scan(&outboxEnvelope); err != nil {
+		t.Fatalf("read terminal outbox event: %v", err)
+	}
+	if string(outboxEnvelope) != string(terminalEnvelope) {
+		t.Errorf("outbox and durable terminal events differ")
+	}
+
+	for _, proposedStatus := range []domain.RunStatus{domain.RunSucceeded, domain.RunFailed, domain.RunCancelled} {
+		replay := finish
+		replay.Status = proposedStatus
+		replay.Error = json.RawMessage(`{"message":"late harness outcome"}`)
+		status, err := store.FinishHarnessAttempt(ctx, replay)
+		if err != nil || status != "cancelled" {
+			t.Fatalf("replay with proposed %q = (%q, %v), want (cancelled, nil)", proposedStatus, status, err)
+		}
+	}
+	var terminalEvents, outboxEvents, assistantMessages int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM run_events WHERE run_id = $1 AND event_type = 'harness.completed'`,
+		run.ID).Scan(&terminalEvents); err != nil {
+		t.Fatalf("count replayed terminal events: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM outbox_events WHERE event_id = $1`, terminal.EventID).Scan(&outboxEvents); err != nil {
+		t.Fatalf("count replayed outbox events: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM messages WHERE metadata->>'run_id' = $1 AND role = 'assistant'`,
+		run.ID).Scan(&assistantMessages); err != nil {
+		t.Fatalf("count replayed assistant messages: %v", err)
+	}
+	if terminalEvents != 1 || outboxEvents != 1 || assistantMessages != 1 {
+		t.Errorf("replay counts = terminal:%d outbox:%d assistant:%d, want 1 each",
+			terminalEvents, outboxEvents, assistantMessages)
+	}
+	conflict := finish
+	conflict.Event.OccurredAt = conflict.Event.OccurredAt.Add(time.Second)
+	status, err := store.FinishHarnessAttempt(ctx, conflict)
+	if status != "cancelled" || !errors.Is(err, ErrConflict) {
+		t.Errorf("conflicting replay = (%q, %v), want (cancelled, ErrConflict)", status, err)
 	}
 }
 

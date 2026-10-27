@@ -3,6 +3,7 @@ package piharness
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -254,6 +255,173 @@ func TestDecoderRejectsMalformedBrowserCaseCompletionEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecoderNestedExecutionElements(t *testing.T) {
+	type fieldCase struct {
+		name  string
+		wrong []string
+	}
+	type elementCase struct {
+		name  string
+		entry string
+		valid bool
+	}
+	stringTypes := []string{`null`, `42`, `true`, `[]`, `{}`}
+	groups := []struct {
+		field    string
+		valid    string
+		controls []string
+		fields   []fieldCase
+	}{
+		{
+			field: "conditions",
+			valid: `{"phase":"post","type":"url_contains","value":"example.test","satisfied":true,"detail":null}`,
+			controls: []string{
+				`{"phase":"pre","type":"","value":"","satisfied":false,"detail":"not satisfied"}`,
+				`{"phase":"post","type":"worker_custom","value":"","satisfied":true,"detail":"","extra":42}`,
+			},
+			fields: []fieldCase{
+				{"phase", append([]string{`"during"`, `""`}, stringTypes...)},
+				{"type", stringTypes},
+				{"value", stringTypes},
+				{"satisfied", []string{`null`, `"true"`, `1`, `[]`, `{}`}},
+				{"detail", []string{`42`, `true`, `[]`, `{}`}},
+			},
+		},
+		{
+			field: "console",
+			valid: `{"level":"info","text":"page loaded"}`,
+			controls: []string{
+				`{"level":"","text":""}`,
+				`{"level":"worker_custom","text":"diagnostic","extra":null}`,
+			},
+			fields: []fieldCase{
+				{"level", stringTypes},
+				{"text", stringTypes},
+			},
+		},
+		{
+			field: "network",
+			valid: `{"method":"GET","url":"https://example.test","status":200}`,
+			controls: []string{
+				`{"method":"POST","url":"/relative","status":null}`,
+				`{"method":"","url":"","status":-1}`,
+				`{"method":"GET","url":"/decimal","status":200.0}`,
+				`{"method":"GET","url":"/exponent","status":2e2}`,
+				`{"method":"GET","url":"/large","status":1e20,"extra":false}`,
+			},
+			fields: []fieldCase{
+				{"method", stringTypes},
+				{"url", stringTypes},
+				{"status", []string{`"200"`, `true`, `[]`, `{}`, `200.5`, `1e999`}},
+			},
+		},
+	}
+
+	for _, group := range groups {
+		t.Run(group.field, func(t *testing.T) {
+			cases := []elementCase{
+				{"valid required fields", group.valid, true},
+			}
+			for _, control := range group.controls {
+				cases = append(cases, elementCase{"valid " + control, control, true})
+			}
+			for _, entry := range []string{`null`, `42`, `"scalar"`, `true`, `[]`, `{}`} {
+				cases = append(cases, elementCase{"non-object or empty " + entry, entry, false})
+			}
+			for _, field := range group.fields {
+				for _, wrong := range append([]string{""}, field.wrong...) {
+					var entry map[string]json.RawMessage
+					if err := json.Unmarshal([]byte(group.valid), &entry); err != nil {
+						t.Fatal(err)
+					}
+					name := "missing " + field.name
+					if wrong == "" {
+						delete(entry, field.name)
+					} else {
+						name = field.name + " wrong type or value " + wrong
+						entry[field.name] = json.RawMessage(wrong)
+					}
+					encoded, err := json.Marshal(entry)
+					if err != nil {
+						t.Fatal(err)
+					}
+					cases = append(cases, elementCase{name, string(encoded), false})
+				}
+			}
+
+			t.Run("valid empty array", func(t *testing.T) {
+				line := nestedCaseCompletedLine(t, group.field, []json.RawMessage{})
+				if _, err := NewDecoder("run_1", "attempt_1").Decode(line); err != nil {
+					t.Fatalf("valid empty array rejected: %v", err)
+				}
+			})
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					// A valid prefix and another malformed entry expose skipped elements.
+					entries := []json.RawMessage{
+						json.RawMessage(group.valid), json.RawMessage(tc.entry),
+					}
+					if !tc.valid {
+						entries = append(entries, json.RawMessage(`null`))
+					}
+					dec := NewDecoder("run_1", "attempt_1")
+					event, err := dec.Decode(nestedCaseCompletedLine(t, group.field, entries))
+					if tc.valid {
+						if err != nil {
+							t.Fatalf("valid nested execution element rejected: %v", err)
+						}
+						if event == nil {
+							t.Fatal("valid nested execution returned no event")
+						}
+						return
+					}
+					if !errors.Is(err, ErrInvalidPayload) {
+						t.Fatalf("malformed nested execution element: want ErrInvalidPayload, got %v", err)
+					}
+					if event != nil {
+						t.Fatal("malformed nested execution returned an event")
+					}
+					if !strings.Contains(err.Error(), group.field+"[1]") ||
+						strings.Contains(err.Error(), group.field+"[2]") {
+						t.Fatalf("only the first malformed element should be reported: %v", err)
+					}
+					if _, err := dec.Decode(nestedCaseCompletedLine(t, group.field, []json.RawMessage{
+						json.RawMessage(group.valid),
+					})); err != nil {
+						t.Fatalf("rejected payload consumed decoder sequence: %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func nestedCaseCompletedLine(t *testing.T, field string, entries []json.RawMessage) []byte {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(validCaseCompletedPayload()), &payload); err != nil {
+		t.Fatal(err)
+	}
+	step := payload["dry_run"].(map[string]any)["steps"].([]any)[0].(map[string]any)
+	if field == "conditions" {
+		step[field] = entries
+	} else {
+		step["evidence"].(map[string]any)[field] = entries
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := json.Marshal(Event{
+		Type: EventCaseCompleted, RunID: "run_1", AttemptID: "attempt_1",
+		Sequence: 1, Timestamp: "2026-10-26T12:34:56.789Z", Payload: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return line
 }
 
 func TestDecoderRejectsBrowserObservationWithoutValidToolCallID(t *testing.T) {

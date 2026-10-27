@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -425,8 +426,14 @@ func validateDryRunStep(raw json.RawMessage, index int, action contract.Action) 
 	if _, err := requiredString(step, "url_after"); err != nil {
 		return err
 	}
-	if err := requireArray(step, "conditions"); err != nil {
+	conditions, err := requiredArray(step, "conditions")
+	if err != nil {
 		return err
+	}
+	for index, condition := range conditions {
+		if err := validateConditionResult(condition); err != nil {
+			return fmt.Errorf("conditions[%d]: %w", index, err)
+		}
 	}
 	if err := validateEvidence(step["evidence"]); err != nil {
 		return err
@@ -445,10 +452,111 @@ func validateEvidence(raw json.RawMessage) error {
 	if err := requireNullableString(evidence, "screenshot_path"); err != nil {
 		return err
 	}
-	if err := requireArray(evidence, "console"); err != nil {
+	console, err := requiredArray(evidence, "console")
+	if err != nil {
 		return err
 	}
-	return requireArray(evidence, "network")
+	for index, entry := range console {
+		if err := validateConsoleEntry(entry); err != nil {
+			return fmt.Errorf("console[%d]: %w", index, err)
+		}
+	}
+	network, err := requiredArray(evidence, "network")
+	if err != nil {
+		return err
+	}
+	for index, entry := range network {
+		if err := validateNetworkEntry(entry); err != nil {
+			return fmt.Errorf("network[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateConditionResult(raw json.RawMessage) error {
+	condition, err := objectPayload(raw)
+	if err != nil {
+		return err
+	}
+	phase, err := requiredString(condition, "phase")
+	if err != nil {
+		return err
+	}
+	if phase != "pre" && phase != "post" {
+		return errors.New("phase must be pre or post")
+	}
+	if err := requireExecutionString(condition, "type"); err != nil {
+		return err
+	}
+	if err := requireExecutionString(condition, "value"); err != nil {
+		return err
+	}
+	if err := requireExecutionBool(condition, "satisfied"); err != nil {
+		return err
+	}
+	return requireNullableString(condition, "detail")
+}
+
+func validateConsoleEntry(raw json.RawMessage) error {
+	entry, err := objectPayload(raw)
+	if err != nil {
+		return err
+	}
+	if err := requireExecutionString(entry, "level"); err != nil {
+		return err
+	}
+	return requireExecutionString(entry, "text")
+}
+
+func validateNetworkEntry(raw json.RawMessage) error {
+	entry, err := objectPayload(raw)
+	if err != nil {
+		return err
+	}
+	if err := requireExecutionString(entry, "method"); err != nil {
+		return err
+	}
+	if err := requireExecutionString(entry, "url"); err != nil {
+		return err
+	}
+	status, ok := entry["status"]
+	if !ok {
+		return errors.New("status is required")
+	}
+	if bytes.Equal(bytes.TrimSpace(status), []byte("null")) {
+		return nil
+	}
+	// Match TypeScript's Number.isInteger, including decimal and exponent JSON.
+	var decoded float64
+	if err := json.Unmarshal(status, &decoded); err != nil || math.Trunc(decoded) != decoded {
+		return errors.New("status must be an integer or null")
+	}
+	return nil
+}
+
+// Pointer decoding rejects null rather than accepting a primitive zero value.
+func requireExecutionString(value map[string]json.RawMessage, field string) error {
+	raw, ok := value[field]
+	if !ok {
+		return fmt.Errorf("%s is required", field)
+	}
+	var decoded *string
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded == nil {
+		return fmt.Errorf("%s must be a string", field)
+	}
+	return nil
+}
+
+func requireExecutionBool(value map[string]json.RawMessage, field string) error {
+	raw, ok := value[field]
+	if !ok {
+		return fmt.Errorf("%s is required", field)
+	}
+	var decoded *bool
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded == nil {
+		return fmt.Errorf("%s must be a boolean", field)
+	}
+	return nil
 }
 
 func requireStepError(value map[string]json.RawMessage, field string) error {
@@ -584,16 +692,16 @@ func requireNonNegativeInt(value map[string]json.RawMessage, field string) error
 	return nil
 }
 
-func requireArray(value map[string]json.RawMessage, field string) error {
+func requiredArray(value map[string]json.RawMessage, field string) ([]json.RawMessage, error) {
 	raw, ok := value[field]
 	if !ok {
-		return fmt.Errorf("%s is required", field)
+		return nil, fmt.Errorf("%s is required", field)
 	}
 	var decoded []json.RawMessage
 	if err := json.Unmarshal(raw, &decoded); err != nil || decoded == nil {
-		return fmt.Errorf("%s must be an array", field)
+		return nil, fmt.Errorf("%s must be an array", field)
 	}
-	return nil
+	return decoded, nil
 }
 
 func requireNullableString(value map[string]json.RawMessage, field string) error {

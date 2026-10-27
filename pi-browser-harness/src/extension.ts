@@ -1,7 +1,8 @@
-import type {
-  ExtensionAPI,
-  ExtensionFactory,
-  McpServerConfig,
+import {
+  createMcpExtension,
+  type ExtensionAPI,
+  type ExtensionFactory,
+  type McpServerConfig,
 } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -22,11 +23,6 @@ export interface BrowserHarnessExtensionOptions {
 
 const BROWSER_TOOL_PREFIX = "mcp__browser_harness__";
 
-type ToolRegistrar = (tool: {
-  name: string;
-  executionMode?: "sequential" | "parallel";
-}) => void;
-
 /**
  * Ensures the built-in MCP extension registers browser tools with Pi's
  * per-tool sequential execution mode. Pi's MCP server configuration exposes
@@ -34,16 +30,24 @@ type ToolRegistrar = (tool: {
  * browser namespace at its supported registerTool boundary.
  */
 export function createSequentialBrowserMcpToolsExtension(): ExtensionFactory {
-  return (pi: ExtensionAPI): void => {
-    const api = pi as unknown as { registerTool: ToolRegistrar };
-    const registerTool = api.registerTool.bind(pi);
-    api.registerTool = (tool) => {
+  return (pi: ExtensionAPI) => {
+    const registerTool = pi.registerTool.bind(pi);
+    const registerBrowserTool: ExtensionAPI["registerTool"] = (tool) => {
       registerTool(
         tool.name.startsWith(BROWSER_TOOL_PREFIX)
           ? { ...tool, executionMode: "sequential" }
           : tool,
       );
     };
+    const proxy = new Proxy(pi, {
+      get(target, key, receiver) {
+        if (key !== "registerTool") {
+          return Reflect.get(target, key, receiver);
+        }
+        return registerBrowserTool;
+      },
+    });
+    return createMcpExtension()(proxy);
   };
 }
 

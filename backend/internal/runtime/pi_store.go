@@ -44,7 +44,7 @@ type PiRunOutcome struct {
 type PiTraceStore interface {
 	StartRun(ctx context.Context, command event.RunCommand) (HarnessAttemptRef, error)
 	AppendHarnessEvent(ctx context.Context, ref HarnessAttemptRef, ev piharness.Event) error
-	CompleteHarnessRun(ctx context.Context, ref HarnessAttemptRef, outcome PiRunOutcome) error
+	CompleteHarnessRun(ctx context.Context, ref HarnessAttemptRef, outcome PiRunOutcome) (domain.RunStatus, error)
 	CancellationRequested(ctx context.Context, runID string) (bool, error)
 }
 
@@ -123,13 +123,13 @@ func (s PostgresPiTraceStore) AppendHarnessEvent(ctx context.Context, ref Harnes
 	return s.Store.AppendHarnessEvent(ctx, record)
 }
 
-// CompleteHarnessRun records the terminal run state for a harness attempt.
-func (s PostgresPiTraceStore) CompleteHarnessRun(ctx context.Context, ref HarnessAttemptRef, outcome PiRunOutcome) error {
+// CompleteHarnessRun records and returns the authoritative terminal run state.
+func (s PostgresPiTraceStore) CompleteHarnessRun(ctx context.Context, ref HarnessAttemptRef, outcome PiRunOutcome) (domain.RunStatus, error) {
 	if s.Store == nil {
-		return errors.New("postgres pi trace store is not configured")
+		return "", errors.New("postgres pi trace store is not configured")
 	}
 	now := time.Now().UTC()
-	eventID := stableID("event", ref.RunID, "harness-terminal", string(outcome.Status))
+	eventID := stableID("event", ref.RunID, "harness-terminal")
 	var errorPayload json.RawMessage
 	if outcome.Error != "" {
 		errorPayload, _ = json.Marshal(map[string]string{"message": outcome.Error})
@@ -141,7 +141,6 @@ func (s PostgresPiTraceStore) CompleteHarnessRun(ctx context.Context, ref Harnes
 		AggregateID:   ref.RunID,
 		CorrelationID: ref.RunID,
 		OccurredAt:    now,
-		Payload:       errorPayload,
 	}
 	return s.Store.FinishHarnessAttempt(ctx, postgres.HarnessFinish{
 		RunID:     ref.RunID,

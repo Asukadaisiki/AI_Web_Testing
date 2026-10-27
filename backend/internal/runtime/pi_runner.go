@@ -82,14 +82,18 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 		processErr = fmt.Errorf("read cancellation state before completion: %w", cancelErr)
 	}
 	outcome := r.deriveOutcome(processErr, runState, ref.CancelRequested || cancelRequested)
-	if cerr := r.Store.CompleteHarnessRun(ctx, ref, outcome); cerr != nil {
-		if outcome.Status == domain.RunSucceeded {
-			return fmt.Errorf("complete pi run: %w", cerr)
-		}
-		return &terminalRunError{cause: fmt.Errorf("complete pi run: %w", cerr)}
+	status, completeErr := r.Store.CompleteHarnessRun(ctx, ref, outcome)
+	if completeErr != nil {
+		return fmt.Errorf("complete pi run: %w", completeErr)
+	}
+	if status != "" {
+		outcome.Status = status
 	}
 	if outcome.Status == domain.RunSucceeded {
 		return nil
+	}
+	if outcome.Status == domain.RunCancelled {
+		outcome.Error = "run cancelled"
 	}
 	if outcome.Error == "" {
 		outcome.Error = "pi run terminated unsuccessfully"
