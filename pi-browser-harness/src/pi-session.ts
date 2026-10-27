@@ -283,7 +283,10 @@ function scriptedResponse(
       return {
         tool: {
           name: "mcp__browser_harness__assert_text",
-          arguments: { text: "DoesNotExist" },
+          arguments: {
+            text: "DoesNotExist",
+            intent: "Verify the missing product is visible",
+          },
         },
       };
     }
@@ -301,7 +304,7 @@ function scriptedResponse(
     {
       name: "mcp__browser_harness__input",
       arguments: {
-        target: { text: "Search items" },
+        target: { object: { text: "Search items" } },
         value: "alpha",
         submit: true,
         intent: "Filter the catalog to Alpha",
@@ -312,7 +315,7 @@ function scriptedResponse(
     {
       name: "mcp__browser_harness__click",
       arguments: {
-        target: { text: "Alpha" },
+        target: { object: { text: "Alpha" } },
         intent: "Open the Alpha item",
         expect_url: "detail.html",
         expect_gone: "Loading details",
@@ -321,7 +324,7 @@ function scriptedResponse(
     {
       name: "mcp__browser_harness__input",
       arguments: {
-        target: { text: "Quantity" },
+        target: { object: { text: "Quantity" } },
         value: "2",
         intent: "Set quantity to two",
         expect_value: "2",
@@ -330,7 +333,7 @@ function scriptedResponse(
     {
       name: "mcp__browser_harness__click",
       arguments: {
-        target: { text: "Add to cart" },
+        target: { object: { text: "Add to cart" } },
         intent: "Add Alpha to the cart",
         expect_text: "Added!",
       },
@@ -338,14 +341,17 @@ function scriptedResponse(
     {
       name: "mcp__browser_harness__click",
       arguments: {
-        target: { text: "View Cart" },
+        target: { object: { text: "View Cart" } },
         intent: "Open the cart",
         expect_url: "cart.html",
       },
     },
     {
       name: "mcp__browser_harness__assert_text",
-      arguments: { text: "Alpha x 2" },
+      arguments: {
+        text: "Alpha x 2",
+        intent: "Verify the final cart quantity",
+      },
     },
     {
       name: "mcp__browser_harness__finish_case",

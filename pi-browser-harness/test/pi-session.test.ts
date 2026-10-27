@@ -1,6 +1,7 @@
 import { Writable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import {
   ModelRuntime,
@@ -8,6 +9,10 @@ import {
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 
+import {
+  BROWSER_TOOL_SCHEMAS,
+  type BrowserToolName,
+} from "../src/mcp/schemas.js";
 import { createBrowserSession } from "../src/pi-session.js";
 import { HarnessEventWriter, type RunRequest } from "../src/run-protocol.js";
 
@@ -112,6 +117,19 @@ function onlyToolCall(message: Awaited<ReturnType<typeof scriptedResponse>>) {
     throw new Error("expected a tool call");
   }
   return content;
+}
+
+function expectMcpToolArguments(
+  fullName: string,
+  arguments_: Record<string, unknown>,
+): void {
+  const name = fullName.replace(
+    "mcp__browser_harness__",
+    "",
+  ) as BrowserToolName;
+  const schema = BROWSER_TOOL_SCHEMAS.find((item) => item.name === name);
+  expect(schema, `schema for ${fullName} must exist`).toBeDefined();
+  expect(z.object(schema!.inputSchema).safeParse(arguments_).success).toBe(true);
 }
 
 describe("createBrowserSession", () => {
@@ -331,7 +349,7 @@ describe("scripted provider", () => {
       {
         name: "mcp__browser_harness__input",
         arguments: {
-          target: { text: "Search items" },
+          target: { object: { text: "Search items" } },
           value: "alpha",
           submit: true,
           intent: "Filter the catalog to Alpha",
@@ -342,7 +360,7 @@ describe("scripted provider", () => {
       {
         name: "mcp__browser_harness__click",
         arguments: {
-          target: { text: "Alpha" },
+          target: { object: { text: "Alpha" } },
           intent: "Open the Alpha item",
           expect_url: "detail.html",
           expect_gone: "Loading details",
@@ -351,7 +369,7 @@ describe("scripted provider", () => {
       {
         name: "mcp__browser_harness__input",
         arguments: {
-          target: { text: "Quantity" },
+          target: { object: { text: "Quantity" } },
           value: "2",
           intent: "Set quantity to two",
           expect_value: "2",
@@ -360,7 +378,7 @@ describe("scripted provider", () => {
       {
         name: "mcp__browser_harness__click",
         arguments: {
-          target: { text: "Add to cart" },
+          target: { object: { text: "Add to cart" } },
           intent: "Add Alpha to the cart",
           expect_text: "Added!",
         },
@@ -368,14 +386,17 @@ describe("scripted provider", () => {
       {
         name: "mcp__browser_harness__click",
         arguments: {
-          target: { text: "View Cart" },
+          target: { object: { text: "View Cart" } },
           intent: "Open the cart",
           expect_url: "cart.html",
         },
       },
       {
         name: "mcp__browser_harness__assert_text",
-        arguments: { text: "Alpha x 2" },
+        arguments: {
+          text: "Alpha x 2",
+          intent: "Verify the final cart quantity",
+        },
       },
       {
         name: "mcp__browser_harness__finish_case",
@@ -392,10 +413,12 @@ describe("scripted provider", () => {
       );
       expect(response.stopReason).toBe("toolUse");
       expect(response.model).toBe("browser-eval-fixture");
-      expect(onlyToolCall(response)).toMatchObject({
+      const call = onlyToolCall(response);
+      expect(call).toMatchObject({
         id: `scripted-tool-${step + 1}`,
         ...expectedCall,
       });
+      expectMcpToolArguments(call.name, call.arguments);
     }
 
     const finalResponse = await scriptedResponse(
@@ -445,10 +468,15 @@ describe("scripted provider", () => {
     expect(onlyToolCall(first)).toMatchObject({
       name: "mcp__browser_harness__open_page",
     });
-    expect(onlyToolCall(second)).toMatchObject({
+    const missingTextCall = onlyToolCall(second);
+    expect(missingTextCall).toMatchObject({
       name: "mcp__browser_harness__assert_text",
-      arguments: { text: "DoesNotExist" },
+      arguments: {
+        text: "DoesNotExist",
+        intent: "Verify the missing product is visible",
+      },
     });
+    expectMcpToolArguments(missingTextCall.name, missingTextCall.arguments);
     expect(finalResponse.stopReason).toBe("stop");
     expect(finalResponse.content).not.toContainEqual(
       expect.objectContaining({

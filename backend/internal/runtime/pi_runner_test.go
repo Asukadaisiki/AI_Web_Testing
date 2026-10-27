@@ -52,6 +52,29 @@ func TestPiRunnerSucceedsWhenCasePassesBeforeSettled(t *testing.T) {
 	}
 }
 
+func TestPiRunnerFailsWhenLatestCaseVerdictFailsAfterEarlierPass(t *testing.T) {
+	events := []piharness.Event{
+		harEvent(piharness.EventStarted, "run-latest-failed", "att-latest-failed", 1, `{}`),
+		harEvent(piharness.EventCaseCompleted, "run-latest-failed", "att-latest-failed", 2, `{"verdict":"passed"}`),
+		harEvent(piharness.EventCaseCompleted, "run-latest-failed", "att-latest-failed", 3, `{"verdict":"failed"}`),
+		harEvent(piharness.EventSettled, "run-latest-failed", "att-latest-failed", 4, `{"assistant_text":"done"}`),
+	}
+	store := &fakePiStore{ref: HarnessAttemptRef{
+		ID: "hat-latest-failed", RunID: "run-latest-failed", AttemptNumber: 1,
+		ProviderAttemptID: "att-latest-failed",
+	}}
+	process := &fakeHarnessProcess{events: events}
+	runner := PiRunner{Process: process, Store: store}
+
+	err := runner.Run(context.Background(), commandFor("run-latest-failed"))
+	if !isTerminalRunError(err) {
+		t.Fatalf("error = %v, want terminalRunError", err)
+	}
+	if store.outcome.Status != domain.RunFailed {
+		t.Fatalf("outcome status = %q, want failed from the latest browser case verdict", store.outcome.Status)
+	}
+}
+
 func TestPiRunnerFailsWhenSettledWithoutPassedCase(t *testing.T) {
 	events := []piharness.Event{
 		harEvent(piharness.EventStarted, "run-no-pass", "att-no-pass", 1, `{}`),

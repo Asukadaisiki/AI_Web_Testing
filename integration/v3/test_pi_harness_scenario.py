@@ -6,7 +6,12 @@ import json
 import os
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+TEST_DIR = str(Path(__file__).resolve().parent)
+if TEST_DIR not in sys.path:
+    sys.path.insert(0, TEST_DIR)
 
 import pi_harness_scenario
 from pi_harness_scenario import (

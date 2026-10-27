@@ -65,3 +65,71 @@ The exact root-level command requested by the brief,
 test collection because the existing test uses sibling absolute imports
 (`pi_harness_scenario`). The repository-supported invocation above passes; no
 unrelated Python import/package restructuring was added.
+
+## Fix Round 1/5
+
+### Changes
+
+- Added the schema-required exact `intent` values to the scripted canonical
+  and `DoesNotExist` `assert_text` calls, and wrapped each canonical target in
+  the registered `target.object` shape. Focused tests validate every canonical
+  payload through the registered MCP Zod schemas.
+- Replaced Pi runtime's historical any-pass state with the latest
+  `browser.case.completed` verdict, so a later failed case controls outcome.
+- Added a local import-path bootstrap to preserve both root-level and
+  `integration/v3` unittest invocations.
+
+### RED
+
+```text
+$ npm test --cache /tmp/agenttrace-npm-cache -- --run test/pi-session.test.ts
+Test Files  1 failed (1)
+Tests       2 failed | 10 passed (12)
+
+The canonical assert_text payload failed the registered MCP Zod schema because
+intent was missing; the DoesNotExist assertion was missing its expected intent.
+
+$ go test ./internal/runtime -run TestPiRunnerFailsWhenLatestCaseVerdictFailsAfterEarlierPass -count=1
+--- FAIL: TestPiRunnerFailsWhenLatestCaseVerdictFailsAfterEarlierPass
+    pi_runner_test.go:71: error = <nil>, want terminalRunError
+FAIL
+
+$ python3 -m unittest integration/v3/test_pi_harness_scenario.py
+ModuleNotFoundError: No module named 'pi_harness_scenario'
+
+$ npm test --cache /tmp/agenttrace-npm-cache -- --run test/pi-session.test.ts
+Test Files  1 failed (1)
+Tests       1 failed | 11 passed (12)
+
+The expanded canonical MCP schema check rejected target: {text: ...}; the
+registered target schema requires target: {object: {text: ...}}.
+```
+
+### GREEN
+
+```text
+$ npm test --cache /tmp/agenttrace-npm-cache -- --run test/pi-session.test.ts
+Test Files  1 passed (1)
+Tests       12 passed (12)
+
+$ go test ./internal/runtime -count=1
+ok  	github.com/Asukadaisiki/AI_Web_Testing/backend/internal/runtime
+
+$ python3 -m unittest integration/v3/test_pi_harness_scenario.py
+Ran 11 tests
+OK
+
+$ cd integration/v3 && python3 -m unittest test_pi_harness_scenario.py
+Ran 11 tests
+OK
+
+$ npm test --cache /tmp/agenttrace-npm-cache -- --run
+Test Files  14 passed (14)
+Tests       146 passed (146)
+
+$ npm run typecheck --cache /tmp/agenttrace-npm-cache
+tsc --noEmit
+
+$ npm run build --cache /tmp/agenttrace-npm-cache
+tsc -p tsconfig.build.json
+```

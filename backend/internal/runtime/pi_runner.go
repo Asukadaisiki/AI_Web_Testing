@@ -80,10 +80,10 @@ func (r PiRunner) Run(ctx context.Context, command event.RunCommand) error {
 }
 
 type piRunState struct {
-	casePassed    bool
-	assistantText string
-	failureError  string
-	appendErr     error
+	latestCaseVerdict string
+	assistantText     string
+	failureError      string
+	appendErr         error
 }
 
 func (s *piRunState) observe(ev piharness.Event) {
@@ -91,9 +91,7 @@ func (s *piRunState) observe(ev piharness.Event) {
 	case piharness.EventCaseCompleted:
 		var payload piharness.CaseCompletedPayload
 		_ = json.Unmarshal(ev.Payload, &payload)
-		if payload.Verdict == "passed" {
-			s.casePassed = true
-		}
+		s.latestCaseVerdict = payload.Verdict
 	case piharness.EventSettled:
 		var payload piharness.SettledPayload
 		_ = json.Unmarshal(ev.Payload, &payload)
@@ -113,12 +111,12 @@ func (r PiRunner) deriveOutcome(processErr error, state *piRunState, cancelReque
 		return PiRunOutcome{Status: domain.RunCancelled, Error: "run cancelled by durable cancel request", Assistant: state.assistantText}
 	}
 	if processErr == nil {
-		if state.casePassed {
+		if state.latestCaseVerdict == "passed" {
 			return PiRunOutcome{Status: domain.RunSucceeded, Assistant: state.assistantText}
 		}
 		return PiRunOutcome{
 			Status:    domain.RunFailed,
-			Error:     "harness settled without a passing browser case",
+			Error:     "harness settled without a passing latest browser case",
 			Assistant: state.assistantText,
 		}
 	}
