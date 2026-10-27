@@ -447,16 +447,20 @@ def run_scenario() -> dict[str, Any]:
     summary["concurrent_run_ids"] = [run.run_id for run in concurrent_runs]
 
     rerun_response = request(
-        f"/api/v1/runs/{canonical.run_id}/reruns",
+        f"/api/v1/runs/{failing.run_id}/reruns",
         method="POST",
         body={"idempotency_key": f"pi-harness-rerun-{batch}"},
         expected=202,
     )
     rerun_id = str(rerun_response["run_id"])
     rerun_status = wait_for_terminal(rerun_id)
-    if rerun_status != "succeeded":
-        raise AssertionError(f"rerun did not succeed: {rerun_status}")
-    source_attempt = harness_attempt_for_run(canonical.run_id)
+    if rerun_status != "failed":
+        raise AssertionError(f"rerun did not fail durably: {rerun_status}")
+    if not run_has_failed_assertion_evidence(rerun_id):
+        raise AssertionError(
+            f"rerun {rerun_id} has no durable failed assert_text evidence"
+        )
+    source_attempt = harness_attempt_for_run(failing.run_id)
     rerun_attempt = harness_attempt_for_run(rerun_id)
     if source_attempt["id"] == rerun_attempt["id"]:
         raise AssertionError("rerun reused the source harness attempt id")
