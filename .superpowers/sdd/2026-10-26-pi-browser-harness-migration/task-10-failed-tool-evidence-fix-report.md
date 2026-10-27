@@ -289,3 +289,402 @@ git diff --check
 ```
 
 Exact output: no output (exit status 0).
+
+## Fix Round 2
+
+### Faithful Test-Only RED Reconstruction
+
+The original RED is now reproduced, rather than inferred. A unique detached
+temporary worktree was created outside the repository at:
+
+```text
+/tmp/ai-web-testing-task10-red-20261027165418-63376
+```
+
+Its detached `HEAD` was `a2f4aae`. Only these test files from
+`a2f4aae..5bbb513` were applied there:
+
+```text
+backend/internal/piharness/protocol_test.go
+backend/internal/runtime/pi_store_test.go
+integration/v3/test_pi_harness_scenario.py
+pi-browser-harness/test/case-builder.test.ts
+pi-browser-harness/test/mcp-server.test.ts
+pi-browser-harness/test/observation-view.test.ts
+pi-browser-harness/test/trace-events.test.ts
+```
+
+No production diff was applied. The temporary worktree used a
+`pi-browser-harness/node_modules` symlink to the current worktree only; no
+production or test file in the current worktree was changed. The exact
+commands below were run against that test-only reconstruction. Output is
+recorded as captured stdout and stderr; terminal color control sequences are
+omitted from the Markdown rendering only.
+
+#### RED: Pi Focused Tests
+
+```bash
+cd pi-browser-harness
+npm test -- --run \
+  test/trace-events.test.ts \
+  test/observation-view.test.ts \
+  test/assertions.test.ts \
+  test/case-builder.test.ts
+```
+
+Relevant stdout:
+
+```text
+> @agenttrace/pi-browser-harness@0.1.0 test
+> vitest --run test/trace-events.test.ts test/observation-view.test.ts test/assertions.test.ts test/case-builder.test.ts
+
+ RUN  v4.0.4 /private/tmp/ai-web-testing-task10-red-20261027165418-63376/pi-browser-harness
+
+ ❯ test/trace-events.test.ts (24 tests | 1 failed) 7ms
+ ❯ test/observation-view.test.ts (6 tests | 1 failed) 18ms
+ ✓ test/assertions.test.ts (10 tests) 3ms
+ ❯ test/case-builder.test.ts (10 tests | 2 failed) 272ms
+
+ Test Files  3 failed | 1 passed (4)
+      Tests  4 failed | 46 passed (50)
+```
+
+Relevant stderr:
+
+```text
+ FAIL  test/case-builder.test.ts > CaseBuilder transactional authoring > failed assertions retain the current compact page and committed steps
+AssertionError: expected undefined to be 'run_1/obs_failed.png' // Object.is equality
+
+- Expected:
+"run_1/obs_failed.png"
+
++ Received:
+undefined
+
+ ❯ test/case-builder.test.ts:365:52
+    363|       expect(outcome.result.ok).toBe(false);
+    364|       expect(outcome.result.error).toBe("condition_unmet");
+    365|       expect(outcome.result.page?.screenshot_path).toBe("run_1/obs_fai…
+       |                                                    ^
+    366|       expect(outcome.result.steps).toEqual([
+    367|         expect.objectContaining({ index: 0, action: "goto" }),
+
+ FAIL  test/case-builder.test.ts > CaseBuilder transactional authoring > finish_case retains the authored case when its dry run fails
+AssertionError: Target cannot be null or undefined.
+
+ ❯ test/case-builder.test.ts:549:34
+    547|
+    548|     expect(finished.result.ok).toBe(false);
+    549|     expect(finished.case?.steps).toHaveLength(1);
+       |                                  ^
+    550|     expect(finished.dryRun?.status).toBe("failed");
+    551|   });
+
+ FAIL  test/observation-view.test.ts > buildPageView > preserves a nullable screenshot path from the observation
+AssertionError: expected undefined to be 'run_1/obs_1.png' // Object.is equality
+
+- Expected:
+"run_1/obs_1.png"
+
++ Received:
+undefined
+
+ ❯ test/observation-view.test.ts:240:7
+    238|         null,
+    239|       ).screenshot_path,
+    240|     ).toBe("run_1/obs_1.png")
+       |       ^
+    241|     expect(buildPageView(observation(), "", null).screenshot_path).toB…
+    242|   });
+
+ FAIL  test/trace-events.test.ts > mapPiEvent > carries a recoverable browser MCP failure as bounded completion evidence
+AssertionError: expected { type: 'pi.tool.completed', …(1) } to deeply equal { type: 'pi.tool.completed', …(1) }
+
+- Expected
++ Received
+
+  {
+    "payload": {
+      "is_error": false,
+-     "structured_result": {
+-       "detail": "the text \"DoesNotExist\" is not present",
+-       "error": "condition_unmet",
+-       "ok": false,
+-       "page": {
+-         "screenshot_path": "run_1/obs_failed.png",
+-         "title": "Shop",
+-         "url": "https://shop.test/",
+-       },
+-       "steps": [
+-         {
+-           "action": "goto",
+-           "index": 0,
+-           "intent": "open shop",
+-         },
+-       ],
+-     },
+      "tool_call_id": "call_failed",
+      "tool_name": "mcp__browser_harness__assert_text",
+    },
+    "type": "pi.tool.completed",
+  }
+
+ ❯ test/trace-events.test.ts:154:23
+    152|     );
+    153|
+    154|     expect(events[0]).toEqual({
+       |                       ^
+    155|       type: "pi.tool.completed",
+    156|       payload: {
+```
+
+Exit status: `1`.
+
+```bash
+npm run typecheck
+```
+
+Relevant stdout:
+
+```text
+> @agenttrace/pi-browser-harness@0.1.0 typecheck
+> tsc --noEmit
+
+test/case-builder.test.ts(365,35): error TS2339: Property 'screenshot_path' does not exist on type 'PageView'.
+test/mcp-server.test.ts(163,11): error TS2353: Object literal may only specify known properties, and 'screenshot_path' does not exist in type 'PageView'.
+test/observation-view.test.ts(239,9): error TS2339: Property 'screenshot_path' does not exist on type 'PageView'.
+test/observation-view.test.ts(241,51): error TS2339: Property 'screenshot_path' does not exist on type 'PageView'.
+```
+
+stderr: empty. Exit status: `2`.
+
+#### RED: Go Focused Tests
+
+```bash
+cd backend
+AGENTTRACE_TEST_POSTGRES_DSN='postgres://agenttrace:agenttrace@127.0.0.1:5432/agenttrace_test?sslmode=disable' \
+  go test -count=1 -p 1 ./internal/runtime -run 'TestPostgresPiTraceStore.*(Tool|Finish)' -v
+```
+
+Relevant stdout:
+
+```text
+=== RUN   TestPostgresPiTraceStorePersistsFinishCaseEvidence
+--- PASS: TestPostgresPiTraceStorePersistsFinishCaseEvidence (0.70s)
+=== RUN   TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence
+    pi_store_test.go:207: operation results = 0, want 1
+--- FAIL: TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence (0.36s)
+=== RUN   TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion
+--- PASS: TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion (0.21s)
+FAIL
+FAIL	github.com/Asukadaisiki/AI_Web_Testing/backend/internal/runtime	1.897s
+FAIL
+```
+
+stderr: empty. Exit status: `1`.
+
+```bash
+go test -count=1 ./internal/piharness -v
+```
+
+Relevant stdout:
+
+```text
+FAIL	github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness [build failed]
+FAIL
+```
+
+Relevant stderr:
+
+```text
+# github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness [github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness.test]
+internal/piharness/protocol_test.go:265:20: payload.StructuredResult undefined (type ToolCompletedPayload has no field or method StructuredResult)
+internal/piharness/protocol_test.go:266:46: payload.StructuredResult undefined (type ToolCompletedPayload has no field or method StructuredResult)
+```
+
+Exit status: `1`.
+
+#### RED: Python Focused Tests
+
+```bash
+python3 -m unittest \
+  integration.v3.test_pi_harness_scenario.TraceShapeTest \
+  integration.v3.test_pi_harness_scenario.FailedEvidenceTest \
+  integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest -v
+```
+
+stdout: empty.
+
+stderr:
+
+```text
+test_pi_harness_scenario (unittest.loader._FailedTest) ... ERROR
+test_pi_harness_scenario (unittest.loader._FailedTest) ... ERROR
+test_pi_harness_scenario (unittest.loader._FailedTest) ... ERROR
+
+======================================================================
+ERROR: test_pi_harness_scenario (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_pi_harness_scenario
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 154, in loadTestsFromName
+    module = __import__(module_name)
+  File "/private/tmp/ai-web-testing-task10-red-20261027165418-63376/integration/v3/test_pi_harness_scenario.py", line 17, in <module>
+    from pi_harness_scenario import (
+ImportError: cannot import name 'run_has_failed_assertion_evidence' from 'pi_harness_scenario' (/private/tmp/ai-web-testing-task10-red-20261027165418-63376/integration/v3/pi_harness_scenario.py)
+
+======================================================================
+ERROR: test_pi_harness_scenario (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_pi_harness_scenario
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 154, in loadTestsFromName
+    module = __import__(module_name)
+  File "/private/tmp/ai-web-testing-task10-red-20261027165418-63376/integration/v3/test_pi_harness_scenario.py", line 17, in <module>
+    from pi_harness_scenario import (
+ImportError: cannot import name 'run_has_failed_assertion_evidence' from 'pi_harness_scenario' (/private/tmp/ai-web-testing-task10-red-20261027165418-63376/integration/v3/pi_harness_scenario.py)
+
+======================================================================
+ERROR: test_pi_harness_scenario (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_pi_harness_scenario
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 154, in loadTestsFromName
+    module = __import__(module_name)
+  File "/private/tmp/ai-web-testing-task10-red-20261027165418-63376/integration/v3/test_pi_harness_scenario.py", line 17, in <module>
+    from pi_harness_scenario import (
+ImportError: cannot import name 'run_has_failed_assertion_evidence' from 'pi_harness_scenario' (/private/tmp/ai-web-testing-task10-red-20261027165418-63376/integration/v3/pi_harness_scenario.py)
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.000s
+
+FAILED (errors=3)
+```
+
+Exit status: `1`.
+
+### Fresh GREEN Evidence
+
+The same focused commands were rerun on current `ddb09da` in the current
+worktree. The Go runtime command used only the supplied `agenttrace_test` DSN.
+
+#### GREEN: Pi Focused Tests
+
+```bash
+cd pi-browser-harness
+npm test -- --run \
+  test/trace-events.test.ts \
+  test/observation-view.test.ts \
+  test/assertions.test.ts \
+  test/case-builder.test.ts
+```
+
+Relevant stdout:
+
+```text
+> @agenttrace/pi-browser-harness@0.1.0 test
+> vitest --run test/trace-events.test.ts test/observation-view.test.ts test/assertions.test.ts test/case-builder.test.ts
+
+ RUN  v4.0.4 /Users/bytedance/project/AI_Web_Testing/.worktrees/pi-browser-harness-migration/pi-browser-harness
+
+ ✓ test/trace-events.test.ts (24 tests) 5ms
+ ✓ test/observation-view.test.ts (6 tests) 16ms
+ ✓ test/assertions.test.ts (10 tests) 3ms
+ ✓ test/case-builder.test.ts (10 tests) 277ms
+
+ Test Files  4 passed (4)
+      Tests  50 passed (50)
+```
+
+stderr: empty. Exit status: `0`.
+
+```bash
+npm run typecheck
+```
+
+Relevant stdout:
+
+```text
+> @agenttrace/pi-browser-harness@0.1.0 typecheck
+> tsc --noEmit
+```
+
+stderr: empty. Exit status: `0`.
+
+#### GREEN: Go Focused Tests
+
+```bash
+cd backend
+AGENTTRACE_TEST_POSTGRES_DSN='postgres://agenttrace:agenttrace@127.0.0.1:5432/agenttrace_test?sslmode=disable' \
+  go test -count=1 -p 1 ./internal/runtime -run 'TestPostgresPiTraceStore.*(Tool|Finish)' -v
+```
+
+Relevant stdout:
+
+```text
+=== RUN   TestPostgresPiTraceStorePersistsFinishCaseEvidence
+--- PASS: TestPostgresPiTraceStorePersistsFinishCaseEvidence (0.26s)
+=== RUN   TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence
+--- PASS: TestPostgresPiTraceStorePersistsFailedBrowserToolEvidence (0.26s)
+=== RUN   TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion
+--- PASS: TestPostgresPiTraceStoreDefersFinishCaseResultToCaseCompletion (0.23s)
+PASS
+ok  	github.com/Asukadaisiki/AI_Web_Testing/backend/internal/runtime	1.422s
+```
+
+stderr: empty. Exit status: `0`.
+
+```bash
+go test -count=1 ./internal/piharness -v
+```
+
+Relevant stdout:
+
+```text
+=== RUN   TestToolCompletedPayloadPreservesStructuredResult
+--- PASS: TestToolCompletedPayloadPreservesStructuredResult (0.00s)
+PASS
+ok  	github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness	1.412s
+```
+
+stderr: empty. Exit status: `0`.
+
+#### GREEN: Python Focused Tests
+
+```bash
+python3 -m unittest \
+  integration.v3.test_pi_harness_scenario.TraceShapeTest \
+  integration.v3.test_pi_harness_scenario.FailedEvidenceTest \
+  integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest -v
+```
+
+stdout: empty.
+
+stderr:
+
+```text
+test_rejects_raw_steps_projected_as_unknown_tool (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_rejects_unlinked_operation_evidence (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_reports_missing_shape_when_counts_are_zero (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_requires_model_tools_usage_linked_operation_and_execution_steps (integration.v3.test_pi_harness_scenario.TraceShapeTest) ... ok
+test_accepts_a_later_qualifying_failed_assertion (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_rejects_missing_screenshot_path (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_requires_failed_assert_text_with_stable_error_attempt_and_screenshot (integration.v3.test_pi_harness_scenario.FailedEvidenceTest) ... ok
+test_accepts_distinct_attempts_and_run_scoped_operation_artifacts (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_absolute_and_parent_traversal_artifact_paths (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_operation_artifact_outside_its_run_scope (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+test_rejects_shared_harness_attempt_ids (integration.v3.test_pi_harness_scenario.ConcurrentIsolationTest) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.005s
+
+OK
+```
+
+Exit status: `0`.
+
+### Round 2 Scope
+
+No Docker or Compose command was run. No production or test file was changed
+in this round. The temporary detached worktree was removed before this
+report-only update was committed.
