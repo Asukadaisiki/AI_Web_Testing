@@ -1,5 +1,7 @@
-import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
 import { Writable } from "node:stream";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -16,6 +18,17 @@ import {
 } from "../src/mcp/schemas.js";
 import { createBrowserSession } from "../src/pi-session.js";
 import { HarnessEventWriter, type RunRequest } from "../src/run-protocol.js";
+
+const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const TYPESCRIPT_COMPILER_PATH = fileURLToPath(
+  new URL("../node_modules/typescript/bin/tsc", import.meta.url),
+);
+const BUILT_PI_SESSION_PATH = fileURLToPath(
+  new URL("../dist/pi-session.js", import.meta.url),
+);
+const BUILT_MCP_CHILD_PATH = fileURLToPath(
+  new URL("../dist/mcp/server.js", import.meta.url),
+);
 
 const baseRequest: RunRequest = {
   protocol_version: "pi-browser-harness.v1",
@@ -86,10 +99,9 @@ async function createDefaultResourceLoader(
   return loader;
 }
 
-async function browserHarnessMcpChildPath(
+function browserHarnessMcpChildPath(
   loader: ResourceLoader,
-): Promise<string | undefined> {
-  await loader.reload();
+): string | undefined {
   const server = loader
     .getExtensions()
     .runtime.mcpServers.get("browser-harness");
@@ -200,17 +212,42 @@ describe("createBrowserSession", () => {
     const injectedChildPath = "/tmp/injected-browser-harness-mcp.js";
     const loader = await createDefaultResourceLoader(injectedChildPath);
 
-    expect(await browserHarnessMcpChildPath(loader)).toBe(injectedChildPath);
+    expect(browserHarnessMcpChildPath(loader)).toBe(injectedChildPath);
   });
 
-  it("resolves the default MCP child beside compiled pi-session.js", async () => {
-    const loader = await createDefaultResourceLoader();
-    const expectedChildPath = fileURLToPath(
-      new URL("../src/mcp/server.js", import.meta.url),
+  it("registers the emitted MCP child from the compiled session module", async () => {
+    rmSync(new URL("../dist", import.meta.url), {
+      recursive: true,
+      force: true,
+    });
+    execFileSync(
+      process.execPath,
+      [TYPESCRIPT_COMPILER_PATH, "--project", "tsconfig.build.json"],
+      { cwd: PACKAGE_ROOT },
     );
 
-    expect(await browserHarnessMcpChildPath(loader)).toBe(expectedChildPath);
-  });
+    const compiledModule = (await import(
+      `${pathToFileURL(BUILT_PI_SESSION_PATH).href}?test=${Date.now()}`
+    )) as typeof import("../src/pi-session.js");
+    const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+    const fake = makeFakeSession();
+    const { writer } = makeWriter();
+    let registeredChildArg: string | undefined;
+
+    await compiledModule.createBrowserSession(baseRequest, {
+      createAgentSession: async (options) => {
+        registeredChildArg = browserHarnessMcpChildPath(
+          options.resourceLoader as ResourceLoader,
+        );
+        return { session: fake as never, extensionsResult: {} as never };
+      },
+      modelRuntime: runtime,
+      eventWriter: writer,
+    });
+
+    expect(registeredChildArg).toBe(BUILT_MCP_CHILD_PATH);
+    expect(existsSync(BUILT_MCP_CHILD_PATH)).toBe(true);
+  }, 30_000);
 
   it("forces the checked-in system prompt and an empty append override", async () => {
     const runtime = await ModelRuntime.create({ refreshOnCreate: false });
