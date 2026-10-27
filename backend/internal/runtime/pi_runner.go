@@ -149,7 +149,7 @@ func buildHarnessRequest(command event.RunCommand, workerURL, providerAttemptID 
 		workerURL = command.WorkerURL
 	}
 	artifactScope := command.ArtifactScope
-	if artifactScope == "" {
+	if strings.TrimSpace(artifactScope) == "" {
 		artifactScope = command.RunID
 	}
 	return piharness.Request{

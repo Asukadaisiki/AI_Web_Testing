@@ -49,13 +49,24 @@ func TestBuildHarnessRequestDefaultsBlankArtifactScopeToRunID(t *testing.T) {
 	}
 }
 
+func TestBuildHarnessRequestDefaultsWhitespaceOnlyArtifactScopeToRunID(t *testing.T) {
+	command := commandFor("run-whitespace-scope")
+	command.ArtifactScope = " \t\n"
+
+	request := buildHarnessRequest(command, "http://runtime-worker:8100", "attempt-whitespace-scope")
+
+	if request.ArtifactScope != "run-whitespace-scope" {
+		t.Fatalf("artifact scope = %q, want run ID fallback", request.ArtifactScope)
+	}
+}
+
 func TestBuildHarnessRequestPreservesExplicitArtifactScope(t *testing.T) {
 	command := commandFor("run-explicit-scope")
-	command.ArtifactScope = "artifact-scope-explicit"
+	command.ArtifactScope = " artifact-scope-explicit "
 
 	request := buildHarnessRequest(command, "http://runtime-worker:8100", "attempt-explicit-scope")
 
-	if request.ArtifactScope != "artifact-scope-explicit" {
+	if request.ArtifactScope != " artifact-scope-explicit " {
 		t.Fatalf("artifact scope = %q, want explicit command scope", request.ArtifactScope)
 	}
 }
