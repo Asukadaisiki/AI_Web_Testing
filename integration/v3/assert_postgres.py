@@ -59,6 +59,21 @@ def assert_canonical_run(
                     f"scenario conversation, got user={user_messages}, "
                     f"assistant={assistant_messages}, total={all_messages}"
                 )
+            (assistant_content,) = _one(
+                cursor,
+                """
+                SELECT content
+                FROM messages
+                WHERE conversation_id = %s AND role = 'assistant'
+                ORDER BY ordinal DESC
+                LIMIT 1
+                """,
+                (conversation_id,),
+            )
+            if assistant_content != "Final: Alpha x 2 is in the cart.":
+                raise AssertionError(
+                    f"expected canonical Pi final assistant message, got {assistant_content!r}"
+                )
 
             (run_count, status) = _one(
                 cursor,
@@ -74,69 +89,99 @@ def assert_canonical_run(
                     f"expected one succeeded scoped run, got count={run_count}, status={status!r}"
                 )
 
-            (root_spans, canonical_shape, report_output) = _one(
+            (
+                root_spans,
+                completed_model_spans,
+                browser_operation_spans,
+                finish_spans,
+            ) = _one(
                 cursor,
                 """
-                WITH root AS (
-                  SELECT span_id
-                  FROM spans
-                  WHERE run_id = %s AND kind = 'run'
-                )
                 SELECT
-                  (SELECT count(*) FROM root),
-                  array_agg(
-                    spans.kind || ':' || spans.name
-                    ORDER BY spans.started_at, spans.id
-                  ) FILTER (
-                    WHERE spans.parent_span_id IN (SELECT span_id FROM root)
+                  count(*) FILTER (WHERE kind = 'run'),
+                  count(*) FILTER (
+                    WHERE kind = 'model'
+                      AND status = 'succeeded'
+                      AND ended_at IS NOT NULL
                   ),
-                  string_agg(spans.output::text, '') FILTER (WHERE spans.kind = 'report')
+                  count(*) FILTER (
+                    WHERE kind = 'operation'
+                      AND name LIKE 'mcp__browser_harness__%%'
+                  ),
+                  count(*) FILTER (
+                    WHERE kind = 'operation'
+                      AND name = 'mcp__browser_harness__finish_case'
+                  )
                 FROM spans
                 WHERE run_id = %s
                 """,
-                (run_id, run_id),
+                (run_id,),
             )
-            expected_shape = ["model:plan", "operation:operation", "report:report", "model:final"]
-            if root_spans != 1 or canonical_shape != expected_shape:
+            if (
+                root_spans != 1
+                or completed_model_spans < 1
+                or browser_operation_spans < 1
+                or finish_spans != 1
+            ):
                 raise AssertionError(
-                    "expected canonical Trace shape run -> model plan -> operation -> report -> "
-                    f"model final, got root={root_spans}, children={canonical_shape}"
+                    "expected one root, completed model spans, browser MCP operations, "
+                    f"and one finish span; got root={root_spans}, "
+                    f"models={completed_model_spans}, operations={browser_operation_spans}, "
+                    f"finish={finish_spans}"
                 )
-            if "grounded local storefront case passed" not in str(report_output):
-                raise AssertionError(f"expected report summary in report span, got {report_output}")
 
-            (operation_results, evidence_with_screenshot) = _one(
+            (
+                finish_results,
+                evidence_with_screenshot,
+                evidence_with_steps,
+            ) = _one(
                 cursor,
                 """
                 SELECT
                   count(*),
                   count(*) FILTER (
-                    WHERE artifacts ? 'screenshot_paths'
+                    WHERE operation.artifacts ? 'screenshot_paths'
                       AND jsonb_array_length(artifacts -> 'screenshot_paths') > 0
+                  ),
+                  count(*) FILTER (
+                    WHERE jsonb_typeof(operation.result -> 'steps') = 'array'
+                      AND jsonb_array_length(operation.result -> 'steps') > 0
                   )
-                FROM operation_results
-                WHERE run_id = %s AND status = 'succeeded'
+                FROM operation_results AS operation
+                JOIN span_attempts AS attempt
+                  ON attempt.id = operation.span_attempt_id
+                JOIN spans AS span ON span.id = attempt.span_id
+                WHERE operation.run_id = %s
+                  AND operation.status = 'passed'
+                  AND span.name = 'mcp__browser_harness__finish_case'
                 """,
                 (run_id,),
             )
-            if (operation_results, evidence_with_screenshot) != (1, 1):
+            if (finish_results, evidence_with_screenshot, evidence_with_steps) != (
+                1,
+                1,
+                1,
+            ):
                 raise AssertionError(
-                    "expected one successful browser operation with screenshot metadata, "
-                    f"got operations={operation_results}, evidence={evidence_with_screenshot}"
+                    "expected one linked passed finish result with screenshot metadata "
+                    f"and dry-run steps, got operations={finish_results}, "
+                    f"screenshots={evidence_with_screenshot}, steps={evidence_with_steps}"
                 )
 
             (usage_records, total_tokens) = _one(
                 cursor,
                 """
-                SELECT count(*), coalesce(sum(total_tokens), 0)
-                FROM usage_records
-                WHERE run_id = %s
+                SELECT count(*), coalesce(sum(usage.total_tokens), 0)
+                FROM usage_records AS usage
+                JOIN span_attempts AS attempt ON attempt.id = usage.span_attempt_id
+                JOIN spans AS span ON span.id = attempt.span_id
+                WHERE usage.run_id = %s AND span.kind = 'model'
                 """,
                 (run_id,),
             )
-            if usage_records < 2 or total_tokens != 0:
+            if usage_records < 1 or total_tokens <= 0:
                 raise AssertionError(
-                    "expected final scripted-model usage records with zero billed tokens, "
+                    "expected positive model token usage, "
                     f"got records={usage_records}, total_tokens={total_tokens}"
                 )
 
@@ -176,10 +221,10 @@ def assert_canonical_run(
                 """
                 SELECT
                   count(*) FILTER (
-                    WHERE payload ->> 'event_type' = 'runtime.completed'
+                    WHERE payload ->> 'event_type' = 'harness.completed'
                   ),
                   count(*) FILTER (
-                    WHERE payload ->> 'event_type' = 'runtime.completed'
+                    WHERE payload ->> 'event_type' = 'harness.completed'
                       AND published_at IS NULL
                   )
                 FROM outbox_events

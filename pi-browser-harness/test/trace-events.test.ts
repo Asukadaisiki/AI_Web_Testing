@@ -244,12 +244,13 @@ describe("mapPiEvent", () => {
   it("derives objective finish evidence from finish_case structured content", () => {
     const state = createTraceMapperState();
     const caseArtifact = { case_version: "loop.case.v1", steps: [] };
+    const dryRun = { status: "passed", execution_id: "exec_1" };
     const events = mapPiEvent(
       toolEnd("call_2", "mcp__browser_harness__finish_case", {
         structuredContent: {
           ok: true,
           case: caseArtifact,
-          dry_run: { status: "passed", execution_id: "exec_1" },
+          dry_run: dryRun,
         },
       }),
       state,
@@ -259,13 +260,18 @@ describe("mapPiEvent", () => {
       "pi.tool.completed",
       "browser.case.completed",
     ]);
-    expect(events[1]?.payload).toEqual({ verdict: "passed" });
+    expect(events[1]?.payload).toEqual({
+      verdict: "passed",
+      case: caseArtifact,
+      dry_run: dryRun,
+    });
     expect(state.browser_case_verdicts).toEqual(["passed"]);
   });
 
   it("derives objective finish evidence from the Pi MCP adapter result envelope", () => {
     const state = createTraceMapperState();
     const caseArtifact = { case_version: "loop.case.v1", steps: [] };
+    const dryRun = { status: "passed", execution_id: "exec_nested" };
     const events = mapPiEvent(
       toolEnd("call_2", "mcp__browser_harness__finish_case", {
         content: [{ type: "text", text: "Finished case" }],
@@ -275,7 +281,7 @@ describe("mapPiEvent", () => {
           structuredContent: {
             ok: true,
             case: caseArtifact,
-            dry_run: { status: "passed", execution_id: "exec_nested" },
+            dry_run: dryRun,
           },
         },
       }),
@@ -286,7 +292,11 @@ describe("mapPiEvent", () => {
       "pi.tool.completed",
       "browser.case.completed",
     ]);
-    expect(events[1]?.payload).toEqual({ verdict: "passed" });
+    expect(events[1]?.payload).toEqual({
+      verdict: "passed",
+      case: caseArtifact,
+      dry_run: dryRun,
+    });
     expect(state.browser_case_verdicts).toEqual(["passed"]);
   });
 
@@ -385,6 +395,8 @@ describe("mapPiEvent", () => {
     "records a nested %s dry run as a failed browser case verdict",
     (status) => {
       const state = createTraceMapperState();
+      const caseArtifact = { case_version: "loop.case.v1", steps: [] };
+      const dryRun = { status, execution_id: `exec_${status}` };
       const events = mapPiEvent(
         toolEnd("call_2", "mcp__browser_harness__finish_case", {
           content: [{ type: "text", text: "Finished case" }],
@@ -393,15 +405,19 @@ describe("mapPiEvent", () => {
             content: [{ type: "text", text: "Finished case" }],
             structuredContent: {
               ok: false,
-              case: { case_version: "loop.case.v1", steps: [] },
-              dry_run: { status, execution_id: `exec_${status}` },
+              case: caseArtifact,
+              dry_run: dryRun,
             },
           },
         }),
         state,
       );
 
-      expect(events[1]?.payload).toEqual({ verdict: "failed" });
+      expect(events[1]?.payload).toEqual({
+        verdict: "failed",
+        case: caseArtifact,
+        dry_run: dryRun,
+      });
       expect(state.browser_case_verdicts).toEqual(["failed"]);
     },
   );

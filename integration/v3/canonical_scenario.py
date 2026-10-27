@@ -1,4 +1,4 @@
-"""Run the deterministic AgentTrace v3 browser evaluation through Compose."""
+"""Run the deterministic AgentTrace v3 Pi browser evaluation."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ GOAL = (
     "Filter the local catalog for alpha, open its detail page, add two items to "
     "the cart, and verify the cart summary."
 )
-EXPECTED_REPORT = "Report: the grounded local storefront case passed with browser evidence."
 EXPECTED_FINAL = "Final: Alpha x 2 is in the cart."
 SSE_IDLE_TIMEOUT = 20
 SSE_RETRY_DELAY = 0.1
@@ -80,7 +79,7 @@ def require_status(
 def consume_terminal_sse(
     open_stream: Any, *, timeout: float, idle_timeout: float
 ) -> dict[str, Any]:
-    """Read/reconnect an SSE stream until a succeeded runtime completion arrives."""
+    """Read/reconnect an SSE stream until a succeeded harness completion arrives."""
     deadline = time.monotonic() + timeout
     last_event: dict[str, Any] = {}
     last_event_id = ""
@@ -114,7 +113,7 @@ def consume_terminal_sse(
                     current = {}
                     completion = data.get("payload", {})
                     if (
-                        last_event["event"] == "runtime.completed"
+                        last_event["event"] == "harness.completed"
                         and completion.get("Status", completion.get("status")) == "succeeded"
                     ):
                         return last_event
@@ -140,7 +139,7 @@ def consume_terminal_sse(
 
 
 def wait_for_terminal_sse(run_id: str, *, timeout: float = 120) -> dict[str, Any]:
-    """Consume durable SSE replay until the runtime's terminal event arrives."""
+    """Consume durable SSE replay until the harness terminal event arrives."""
     def open_stream(last_event_id: str, read_timeout: float) -> Any:
         headers = {"Accept": "text/event-stream"}
         if last_event_id:
@@ -211,32 +210,61 @@ def assert_api_outcome(project_id: str, conversation_id: str, run_id: str) -> No
     root_ids = {root.get("span_id") for root in roots}
     if len(roots) != 1:
         raise AssertionError(f"run_id={run_id} expected one Trace root: {spans}")
-    children = [
+    model_spans = [
         span
         for span in spans
-        if span.get("parent_span_id") in root_ids and span.get("kind") != "run"
+        if span.get("parent_span_id") in root_ids
+        and span.get("kind") == "model"
+        and span.get("status") == "succeeded"
     ]
-    shape = [(span.get("kind"), span.get("name")) for span in children]
-    expected_shape = [
-        ("model", "plan"),
-        ("operation", "operation"),
-        ("report", "report"),
-        ("model", "final"),
+    if not model_spans:
+        raise AssertionError(f"run_id={run_id} has no completed model span: {spans}")
+    browser_spans = [
+        span
+        for span in spans
+        if span.get("parent_span_id") in root_ids
+        and span.get("kind") == "operation"
+        and str(span.get("name", "")).startswith("mcp__browser_harness__")
     ]
-    if shape != expected_shape:
+    finish_spans = [
+        span
+        for span in browser_spans
+        if span.get("name") == "mcp__browser_harness__finish_case"
+    ]
+    if not browser_spans or len(finish_spans) != 1:
         raise AssertionError(
-            f"run_id={run_id} canonical trace shape={shape}, want {expected_shape}"
+            f"run_id={run_id} expected browser MCP spans and one finish span: {spans}"
         )
-    report = children[2]
-    if EXPECTED_REPORT not in json.dumps(report.get("output", {}), sort_keys=True):
-        raise AssertionError(f"run_id={run_id} report summary missing from span: {report}")
+    finish_span_id = finish_spans[0].get("span_id")
 
-    evidence = trace.get("operation_evidence", [])
-    if len(evidence) != 1 or evidence[0].get("status") != "succeeded":
-        raise AssertionError(f"run_id={run_id} missing successful operation evidence: {evidence}")
+    evidence = [
+        item
+        for item in trace.get("operation_evidence", [])
+        if item.get("span_id") == finish_span_id
+    ]
+    if (
+        len(evidence) != 1
+        or evidence[0].get("status") != "passed"
+        or not evidence[0].get("span_attempt_id")
+    ):
+        raise AssertionError(f"run_id={run_id} missing linked passed finish evidence: {evidence}")
+    dry_run_steps = evidence[0].get("result", {}).get("steps", [])
+    if not dry_run_steps:
+        raise AssertionError(f"run_id={run_id} finish evidence has no dry-run steps: {evidence}")
     screenshot_paths = evidence[0].get("artifacts", {}).get("screenshot_paths", [])
     if not screenshot_paths:
         raise AssertionError(f"run_id={run_id} operation evidence has no screenshots: {evidence}")
+
+    derived_steps = [
+        node
+        for node in trace.get("derived_nodes", [])
+        if node.get("kind") == "step"
+        and node.get("parent_span_id") == finish_span_id
+    ]
+    if not derived_steps:
+        raise AssertionError(
+            f"run_id={run_id} has no browser steps parented by the finish span: {trace}"
+        )
 
     status, artifact = request_bytes(f"/artifacts/{screenshot_paths[-1]}")
     if status != 200 or not artifact:
@@ -246,8 +274,14 @@ def assert_api_outcome(project_id: str, conversation_id: str, run_id: str) -> No
         )
 
     usage = trace.get("usage", [])
-    if len(usage) < 2 or usage[-1].get("total_tokens") != 0:
-        raise AssertionError(f"run_id={run_id} final scripted usage is missing: {usage}")
+    model_span_ids = {span.get("span_id") for span in model_spans}
+    model_tokens = sum(
+        int(item.get("total_tokens", 0))
+        for item in usage
+        if item.get("span_id") in model_span_ids
+    )
+    if model_tokens <= 0:
+        raise AssertionError(f"run_id={run_id} positive model usage is missing: {usage}")
 
 
 def main() -> int:

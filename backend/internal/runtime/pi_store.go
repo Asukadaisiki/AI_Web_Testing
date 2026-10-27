@@ -15,6 +15,8 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/usage"
 )
 
+const finishCaseToolName = "mcp__browser_harness__finish_case"
+
 // HarnessAttemptRef is the durable identity of one harness attempt returned to
 // the runtime by StartRun.
 type HarnessAttemptRef struct {
@@ -225,9 +227,16 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 			record.Span = &span
 		}
 	case piharness.EventCaseCompleted:
-		spanID, err := s.Store.ActiveToolSpanID(ctx, ref.RunID)
+		finishAttempt, err := s.Store.LatestCompletedToolAttempt(
+			ctx, ref.RunID, finishCaseToolName, ev.Sequence,
+		)
 		if err != nil {
 			return record, err
+		}
+		if finishAttempt.SpanID == "" || finishAttempt.SpanAttemptID == "" {
+			return record, errors.New(
+				"browser.case.completed has no completed finish_case attempt",
+			)
 		}
 		var payload piharness.CaseCompletedPayload
 		_ = json.Unmarshal(ev.Payload, &payload)
@@ -235,29 +244,21 @@ func (s PostgresPiTraceStore) deriveEvent(ctx context.Context, ref HarnessAttemp
 		if verdict == "" {
 			verdict = "unknown"
 		}
+		operationID := finishAttempt.OperationID
+		if operationID == "" {
+			operationID = stableID("operation", ref.RunID, ref.ID, "case")
+		}
 		operationResult := postgres.TraceOperationResult{
 			ID:          stableID("result", ref.ID, fmt.Sprintf("%d", ev.Sequence)),
-			OperationID: stableID("operation", ref.RunID, ref.ID, "case"),
+			OperationID: operationID,
 			Status:      verdict,
-			Result:      append(json.RawMessage(nil), ev.Payload...),
-			Artifacts:   deriveBrowserStepArtifacts(ev.Payload),
+			Result:      append(json.RawMessage(nil), payload.DryRun...),
+			Artifacts:   deriveBrowserStepArtifacts(payload.DryRun),
 		}
 		record.Operation = &operationResult
-		if spanID != "" {
-			span := domain.Span{
-				ID:           spanID,
-				RunID:        ref.RunID,
-				TraceID:      traceID(ref.RunID),
-				SpanID:       spanID,
-				ParentSpanID: RunSpanID(ref.RunID),
-				Kind:         domain.SpanOperation,
-				Name:         "browser.case",
-				Status:       verdict,
-				StartedAt:    occurredAt,
-				EndedAt:      &occurredAt,
-				Output:       append(json.RawMessage(nil), ev.Payload...),
-			}
-			record.Span = &span
+		record.Attempt = &postgres.TraceAttempt{
+			ID:            finishAttempt.SpanAttemptID,
+			AttemptNumber: 1,
 		}
 	case piharness.EventSettled, piharness.EventFailed:
 		// Terminal evidence is recorded by CompleteHarnessRun.
@@ -367,22 +368,30 @@ func (s PostgresPiTraceStore) toolSpan(ref HarnessAttemptRef, ev piharness.Event
 	return span, attempt
 }
 
-func deriveBrowserStepArtifacts(casePayload json.RawMessage) json.RawMessage {
-	var decoded map[string]any
-	if err := json.Unmarshal(casePayload, &decoded); err != nil {
-		return json.RawMessage(`[]`)
+func deriveBrowserStepArtifacts(dryRun json.RawMessage) json.RawMessage {
+	var decoded struct {
+		Steps []struct {
+			Evidence struct {
+				ScreenshotPath string `json:"screenshot_path"`
+			} `json:"evidence"`
+		} `json:"steps"`
 	}
-	steps, _ := decoded["steps"]
-	if steps == nil {
-		steps = decoded["execution_steps"]
+	_ = json.Unmarshal(dryRun, &decoded)
+
+	paths := make([]string, 0, len(decoded.Steps))
+	seen := make(map[string]struct{}, len(decoded.Steps))
+	for _, step := range decoded.Steps {
+		path := step.Evidence.ScreenshotPath
+		if path == "" {
+			continue
+		}
+		if _, duplicate := seen[path]; duplicate {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
 	}
-	if steps == nil {
-		return json.RawMessage(`[]`)
-	}
-	encoded, err := json.Marshal(steps)
-	if err != nil {
-		return json.RawMessage(`[]`)
-	}
+	encoded, _ := json.Marshal(map[string][]string{"screenshot_paths": paths})
 	return encoded
 }
 

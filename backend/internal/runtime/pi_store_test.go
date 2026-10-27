@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,6 +12,138 @@ import (
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/piharness"
 	"github.com/Asukadaisiki/AI_Web_Testing/backend/internal/postgres"
 )
+
+func TestPostgresPiTraceStorePersistsFinishCaseEvidence(t *testing.T) {
+	ctx, _, store := newRuntimePostgresStore(t)
+	project, err := store.CreateProject(ctx, postgres.CreateProjectParams{Name: "Pi finish evidence"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	conversation, err := store.CreateConversation(ctx, postgres.CreateConversationParams{
+		ProjectID: project.ID, Title: "Pi finish evidence",
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	_, run, err := store.CreateMessageAndRun(ctx, postgres.CreateMessageParams{
+		ConversationID: conversation.ID,
+		Content:        "finish the browser case",
+		AgentID:        "browser-eval",
+		Model:          event.ModelRef{Provider: "pi", Name: "browser-model"},
+		IdempotencyKey: "pi-finish-evidence",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	piStore := PostgresPiTraceStore{Store: store}
+	command := commandFor(run.ID)
+	command.ConversationID = conversation.ID
+	ref, err := piStore.StartRun(ctx, command)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	const finishTool = "mcp__browser_harness__finish_case"
+	events := []piharness.Event{
+		harEvent(piharness.EventStarted, run.ID, ref.ProviderAttemptID, 1, `{}`),
+		harEvent(piharness.EventToolStarted, run.ID, ref.ProviderAttemptID, 2,
+			`{"tool_call_id":"finish-1","tool_name":"`+finishTool+`"}`),
+		harEvent(piharness.EventToolCompleted, run.ID, ref.ProviderAttemptID, 3,
+			`{"tool_call_id":"finish-1","tool_name":"`+finishTool+`","is_error":false}`),
+		harEvent(piharness.EventCaseCompleted, run.ID, ref.ProviderAttemptID, 4, `{
+			"verdict":"passed",
+			"case":{"case_version":"loop.case.v1","steps":[{"action":"goto"}]},
+			"dry_run":{
+				"status":"passed",
+				"execution_id":"exec-1",
+				"steps":[
+					{"index":0,"action":"goto","status":"passed","started_at":"2026-10-26T12:00:00Z","duration_ms":10,"evidence":{"screenshot_path":"run/first.png"}},
+					{"index":1,"action":"click","status":"passed","started_at":"2026-10-26T12:00:01Z","duration_ms":20,"evidence":{"screenshot_path":"run/first.png"}},
+					{"index":2,"action":"assert","status":"passed","started_at":"2026-10-26T12:00:02Z","duration_ms":30,"evidence":{"screenshot_path":""}},
+					{"index":3,"action":"verify","status":"passed","started_at":"2026-10-26T12:00:03Z","duration_ms":40,"evidence":{"screenshot_path":"run/final.png"}}
+				]
+			}
+		}`),
+	}
+	if err := piStore.AppendHarnessEvent(ctx, ref, events[0]); err != nil {
+		t.Fatalf("append started event: %v", err)
+	}
+	unlinked := harEvent(
+		piharness.EventCaseCompleted,
+		run.ID,
+		ref.ProviderAttemptID,
+		2,
+		`{"verdict":"passed","case":{},"dry_run":{"status":"passed","steps":[]}}`,
+	)
+	if err := piStore.AppendHarnessEvent(ctx, ref, unlinked); err == nil {
+		t.Fatal("append case completion without a completed finish attempt = nil, want error")
+	}
+	for _, ev := range events[1:] {
+		if err := piStore.AppendHarnessEvent(ctx, ref, ev); err != nil {
+			t.Fatalf("append event %d: %v", ev.Sequence, err)
+		}
+	}
+
+	details, err := store.GetTraceDetails(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get trace details: %v", err)
+	}
+	var finishSpans []domain.Span
+	for _, span := range details.Spans {
+		if span.Kind == domain.SpanOperation {
+			finishSpans = append(finishSpans, span)
+		}
+	}
+	if len(finishSpans) != 1 {
+		t.Fatalf("operation spans = %d, want exactly the finish tool span", len(finishSpans))
+	}
+	finishSpan := finishSpans[0]
+	if finishSpan.Name != finishTool {
+		t.Fatalf("finish span name = %q, want %q", finishSpan.Name, finishTool)
+	}
+	if len(details.Operations) != 1 {
+		t.Fatalf("operation results = %d, want 1", len(details.Operations))
+	}
+	operation := details.Operations[0]
+	if operation.Status != "passed" {
+		t.Fatalf("operation status = %q, want passed", operation.Status)
+	}
+	if operation.SpanID != finishSpan.SpanID || operation.SpanAttemptID == "" {
+		t.Fatalf(
+			"operation links = span %q attempt %q, want finish span %q and a linked attempt",
+			operation.SpanID, operation.SpanAttemptID, finishSpan.SpanID,
+		)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(operation.Result, &result); err != nil {
+		t.Fatalf("decode operation result: %v", err)
+	}
+	if !reflect.DeepEqual(result, map[string]any{
+		"status":       "passed",
+		"execution_id": "exec-1",
+		"steps": []any{
+			map[string]any{"index": float64(0), "action": "goto", "status": "passed", "started_at": "2026-10-26T12:00:00Z", "duration_ms": float64(10), "evidence": map[string]any{"screenshot_path": "run/first.png"}},
+			map[string]any{"index": float64(1), "action": "click", "status": "passed", "started_at": "2026-10-26T12:00:01Z", "duration_ms": float64(20), "evidence": map[string]any{"screenshot_path": "run/first.png"}},
+			map[string]any{"index": float64(2), "action": "assert", "status": "passed", "started_at": "2026-10-26T12:00:02Z", "duration_ms": float64(30), "evidence": map[string]any{"screenshot_path": ""}},
+			map[string]any{"index": float64(3), "action": "verify", "status": "passed", "started_at": "2026-10-26T12:00:03Z", "duration_ms": float64(40), "evidence": map[string]any{"screenshot_path": "run/final.png"}},
+		},
+	}) {
+		t.Fatalf("operation result = %s, want the dry_run object", operation.Result)
+	}
+
+	var artifacts map[string]any
+	if err := json.Unmarshal(operation.Artifacts, &artifacts); err != nil {
+		t.Fatalf("decode operation artifacts: %v", err)
+	}
+	wantArtifacts := map[string]any{
+		"screenshot_paths": []any{"run/first.png", "run/final.png"},
+	}
+	if !reflect.DeepEqual(artifacts, wantArtifacts) {
+		t.Fatalf("operation artifacts = %#v, want %#v", artifacts, wantArtifacts)
+	}
+}
 
 func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	ctx, _, store := newRuntimePostgresStore(t)
@@ -56,6 +190,17 @@ func TestPostgresPiTraceStorePersistsFullEventStream(t *testing.T) {
 	}
 
 	events := passingEventStream(run.ID, ref.ProviderAttemptID)
+	events[3].Payload = json.RawMessage(
+		`{"tool_call_id":"tc1","tool_name":"mcp__browser_harness__finish_case"}`,
+	)
+	events[5].Payload = json.RawMessage(
+		`{"tool_call_id":"tc1","tool_name":"mcp__browser_harness__finish_case","is_error":false}`,
+	)
+	events[6].Payload = json.RawMessage(`{
+		"verdict":"passed",
+		"case":{"case_version":"loop.case.v1","steps":[]},
+		"dry_run":{"status":"passed","steps":[]}
+	}`)
 	for _, ev := range events {
 		if err := piStore.AppendHarnessEvent(ctx, ref, ev); err != nil {
 			t.Fatalf("append event %d: %v", ev.Sequence, err)
@@ -150,10 +295,10 @@ func TestPostgresPiTraceStoreStartRunUsesCommandCheckpointVersion(t *testing.T) 
 
 	piStore := PostgresPiTraceStore{Store: store}
 	command := event.RunCommand{
-		RunID:            run.ID,
-		ConversationID:   conversation.ID,
-		Model:            event.ModelRef{Provider: "pi", Name: "browser-model"},
-		Messages:         []domain.Message{{ID: "m", ConversationID: conversation.ID, Ordinal: 1, Role: "user", Content: "go"}},
+		RunID:             run.ID,
+		ConversationID:    conversation.ID,
+		Model:             event.ModelRef{Provider: "pi", Name: "browser-model"},
+		Messages:          []domain.Message{{ID: "m", ConversationID: conversation.ID, Ordinal: 1, Role: "user", Content: "go"}},
 		CheckpointVersion: 5,
 	}
 	if _, err := piStore.StartRun(ctx, command); err != nil {

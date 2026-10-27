@@ -133,6 +133,14 @@ type HarnessEventRecord struct {
 	Operation      *TraceOperationResult
 }
 
+// CompletedToolAttempt identifies completed operation evidence eligible for a
+// later harness event emitted after the tool completion.
+type CompletedToolAttempt struct {
+	SpanID        string
+	SpanAttemptID string
+	OperationID   string
+}
+
 // AppendHarnessEvent atomically validates the harness attempt identity and the
 // exact next source sequence, then persists the event and its optional trace
 // evidence. An exact replay (same source identity and payload) is a no-op. The
@@ -506,4 +514,38 @@ func (s *Store) ActiveToolSpanID(ctx context.Context, runID string) (string, err
 		return "", fmt.Errorf("lookup active tool span: %w", err)
 	}
 	return spanID, nil
+}
+
+// LatestCompletedToolAttempt returns the most recent completed operation
+// attempt with the exact name emitted before sourceSequence.
+func (s *Store) LatestCompletedToolAttempt(
+	ctx context.Context,
+	runID, operationName string,
+	sourceSequence int64,
+) (CompletedToolAttempt, error) {
+	if s == nil || s.pool == nil {
+		return CompletedToolAttempt{}, errors.New("postgres store is not configured")
+	}
+	var ref CompletedToolAttempt
+	err := s.pool.QueryRow(ctx, `
+		SELECT span.span_id, attempt.id, COALESCE(attempt.operation_id, '')
+		FROM spans AS span
+		JOIN span_attempts AS attempt ON attempt.span_id = span.id
+		WHERE span.run_id = $1
+		  AND span.kind = 'operation'
+		  AND span.name = $2
+		  AND span.source_sequence < $3
+		  AND span.ended_at IS NOT NULL
+		  AND attempt.ended_at IS NOT NULL
+		ORDER BY span.source_sequence DESC, attempt.attempt_number DESC
+		LIMIT 1`,
+		runID, operationName, sourceSequence,
+	).Scan(&ref.SpanID, &ref.SpanAttemptID, &ref.OperationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CompletedToolAttempt{}, nil
+	}
+	if err != nil {
+		return CompletedToolAttempt{}, fmt.Errorf("lookup latest completed tool attempt: %w", err)
+	}
+	return ref, nil
 }

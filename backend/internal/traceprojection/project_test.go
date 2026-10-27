@@ -96,6 +96,30 @@ func TestProjectBrowserSteps(t *testing.T) {
 	}
 }
 
+func TestProjectPiFinishCaseBrowserSteps(t *testing.T) {
+	parent := operationSpan("finish-operation", "mcp__browser_harness__finish_case")
+	evidence := Evidence{
+		ID:     "finish-evidence",
+		SpanID: parent.SpanID,
+		Status: "passed",
+		Result: browserResult("verify"),
+	}
+
+	nodes := Project([]domain.Span{parent}, []Evidence{evidence})
+	if len(nodes) != 1 {
+		t.Fatalf("node count = %d, want 1", len(nodes))
+	}
+	if nodes[0].Kind != "step" {
+		t.Fatalf("node kind = %q, want step", nodes[0].Kind)
+	}
+	if nodes[0].ParentSpanID != parent.SpanID {
+		t.Fatalf("parent span ID = %q, want %q", nodes[0].ParentSpanID, parent.SpanID)
+	}
+	if nodes[0].Name != "Step 1: verify" {
+		t.Fatalf("node name = %q, want Step 1: verify", nodes[0].Name)
+	}
+}
+
 func TestProjectMalformedBrowserResultFallsBack(t *testing.T) {
 	tests := []struct {
 		name   string

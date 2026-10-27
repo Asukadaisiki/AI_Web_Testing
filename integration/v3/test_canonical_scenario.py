@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import urllib.error
 import unittest
+from unittest.mock import patch
 
 import canonical_scenario
-from canonical_scenario import consume_terminal_sse
+from canonical_scenario import assert_api_outcome, consume_terminal_sse
 
 
 class _DelayedSSE:
@@ -41,7 +42,7 @@ class CanonicalSSETest(unittest.TestCase):
                         b": heartbeat\n",
                         b"\n",
                         b"id: 9\n",
-                        b"event: runtime.completed\n",
+                        b"event: harness.completed\n",
                         b'data: {"payload":{"status":"succeeded"}}\n',
                         b"\n",
                     ]
@@ -54,7 +55,7 @@ class CanonicalSSETest(unittest.TestCase):
         )
 
         self.assertEqual(event["id"], "9")
-        self.assertEqual(event["event"], "runtime.completed")
+        self.assertEqual(event["event"], "harness.completed")
 
     def test_retries_open_failure_and_resumes_with_last_durable_event_id(self) -> None:
         clock = _Clock()
@@ -73,7 +74,7 @@ class CanonicalSSETest(unittest.TestCase):
                 _DelayedSSE(
                     [
                         b"id: 8\n",
-                        b"event: runtime.completed\n",
+                        b"event: harness.completed\n",
                         b'data: {"payload":{"status":"succeeded"}}\n',
                         b"\n",
                     ]
@@ -104,6 +105,102 @@ class CanonicalSSETest(unittest.TestCase):
         self.assertEqual([event_id for event_id, _ in attempts], ["", "", "7"])
         self.assertEqual([round(value, 2) for _, value in attempts], [0.05, 0.05, 0.03])
         self.assertLessEqual(clock.now, 0.13)
+
+
+class CanonicalPiTraceTest(unittest.TestCase):
+    def test_accepts_linked_pi_finish_evidence_and_derived_steps(self) -> None:
+        finish_span_id = "span-finish"
+        responses = {
+            "/api/v1/runs/run-1": (
+                200,
+                {
+                    "status": "succeeded",
+                    "project_id": "project-1",
+                    "conversation_id": "conversation-1",
+                },
+            ),
+            "/api/v1/conversations/conversation-1": (
+                200,
+                {
+                    "messages": [
+                        {"role": "user", "content": canonical_scenario.GOAL},
+                        {
+                            "role": "assistant",
+                            "content": canonical_scenario.EXPECTED_FINAL,
+                        },
+                    ]
+                },
+            ),
+            "/api/v1/runs/run-1/trace": (
+                200,
+                {
+                    "spans": [
+                        {"span_id": "span-run", "kind": "run", "name": "run"},
+                        {
+                            "span_id": "span-model",
+                            "parent_span_id": "span-run",
+                            "kind": "model",
+                            "name": "message",
+                            "status": "succeeded",
+                        },
+                        {
+                            "span_id": "span-open",
+                            "parent_span_id": "span-run",
+                            "kind": "operation",
+                            "name": "mcp__browser_harness__open_page",
+                            "status": "succeeded",
+                        },
+                        {
+                            "span_id": finish_span_id,
+                            "parent_span_id": "span-run",
+                            "kind": "operation",
+                            "name": "mcp__browser_harness__finish_case",
+                            "status": "succeeded",
+                        },
+                    ],
+                    "operation_evidence": [
+                        {
+                            "span_id": finish_span_id,
+                            "span_attempt_id": "attempt-finish",
+                            "status": "passed",
+                            "result": {"status": "passed", "steps": [{"index": 0}]},
+                            "artifacts": {
+                                "screenshot_paths": ["run-1/final.png"]
+                            },
+                        }
+                    ],
+                    "derived_nodes": [
+                        {
+                            "kind": "step",
+                            "parent_span_id": finish_span_id,
+                            "source_evidence_id": "evidence-finish",
+                        }
+                    ],
+                    "usage": [
+                        {
+                            "span_id": "span-model",
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "total_tokens": 15,
+                        }
+                    ],
+                },
+            ),
+        }
+
+        with (
+            patch.object(
+                canonical_scenario,
+                "request_api",
+                side_effect=lambda path: responses[path],
+            ),
+            patch.object(
+                canonical_scenario,
+                "request_bytes",
+                return_value=(200, b"png"),
+            ),
+        ):
+            assert_api_outcome("project-1", "conversation-1", "run-1")
 
 
 if __name__ == "__main__":

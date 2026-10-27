@@ -114,7 +114,11 @@ export function mapPiEvent(
           state.browser_case_verdicts.push(verdict);
           events.push({
             type: "browser.case.completed",
-            payload: { verdict },
+            payload: {
+              verdict,
+              case: structured.case,
+              dry_run: structured.dry_run,
+            },
           });
         }
       }

@@ -190,7 +190,7 @@ func TestPiAppendHarnessEventPersistsSpanAttemptUsageAndOperation(t *testing.T) 
 
 	now := time.Now().UTC()
 	span := domain.Span{
-		ID:        "span-model-1", RunID: run.ID, TraceID: "trace-1", SpanID: "span-model-1",
+		ID: "span-model-1", RunID: run.ID, TraceID: "trace-1", SpanID: "span-model-1",
 		ParentSpanID: "span-run", Kind: domain.SpanModel, Name: "message", Status: "succeeded",
 		StartedAt: now, EndedAt: &now,
 	}
@@ -210,10 +210,10 @@ func TestPiAppendHarnessEventPersistsSpanAttemptUsageAndOperation(t *testing.T) 
 
 	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt.ID, SourceSequence: 1, SourceType: "pi.message.completed",
-		Event:   harnessEnvelope(run.ID, attempt.ID, 1, "pi.message.completed", `{"text":"hi"}`),
-		Span:    &span,
-		Attempt: &trAttempt,
-		Usage:   &usage,
+		Event:     harnessEnvelope(run.ID, attempt.ID, 1, "pi.message.completed", `{"text":"hi"}`),
+		Span:      &span,
+		Attempt:   &trAttempt,
+		Usage:     &usage,
 		Operation: &op,
 	}); err != nil {
 		t.Fatalf("append event with evidence: %v", err)
@@ -384,6 +384,73 @@ func TestPiSpanLookupOrdersBySourceSequenceNotStartedAt(t *testing.T) {
 	}
 }
 
+func TestPiCompletedToolAttemptLookupSelectsExactNameAndSourceSequence(t *testing.T) {
+	ctx, pool, store := newHarnessTestStore(t)
+	run := seedRunForHarness(t, ctx, store)
+	harnessAttempt, err := store.BeginHarnessAttempt(ctx, run.ID, "pi-att")
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	insertRootSpan(t, ctx, pool, run.ID, "span-run")
+
+	now := time.Now().UTC()
+	appendCompletedTool := func(sequence int64, spanID, attemptID, operationID, name string) {
+		t.Helper()
+		span := domain.Span{
+			ID: spanID, RunID: run.ID, TraceID: "trace-1", SpanID: spanID,
+			ParentSpanID: "span-run", Kind: domain.SpanOperation, Name: name,
+			Status: "succeeded", StartedAt: now, EndedAt: &now,
+		}
+		attempt := TraceAttempt{
+			ID: attemptID, AttemptNumber: 1, OperationID: operationID,
+			Status: "succeeded", StartedAt: now, EndedAt: &now,
+		}
+		if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
+			RunID: run.ID, AttemptID: harnessAttempt.ID, SourceSequence: sequence,
+			SourceType: "pi.tool.completed",
+			Event: harnessEnvelope(
+				run.ID, harnessAttempt.ID, sequence, "pi.tool.completed", `{"is_error":false}`,
+			),
+			Span: &span, Attempt: &attempt,
+		}); err != nil {
+			t.Fatalf("append completed tool %d: %v", sequence, err)
+		}
+	}
+
+	const finishTool = "mcp__browser_harness__finish_case"
+	appendCompletedTool(1, "span-finish", "attempt-finish", "operation-finish", finishTool)
+	appendCompletedTool(2, "span-click", "attempt-click", "operation-click", "mcp__browser_harness__click")
+
+	got, err := store.LatestCompletedToolAttempt(ctx, run.ID, finishTool, 3)
+	if err != nil {
+		t.Fatalf("latest completed finish tool: %v", err)
+	}
+	if got.SpanID != "span-finish" ||
+		got.SpanAttemptID != "attempt-finish" ||
+		got.OperationID != "operation-finish" {
+		t.Fatalf("completed finish reference = %#v", got)
+	}
+
+	appendCompletedTool(3, "span-finish-latest", "attempt-finish-latest", "operation-finish-latest", finishTool)
+	latest, err := store.LatestCompletedToolAttempt(ctx, run.ID, finishTool, 4)
+	if err != nil {
+		t.Fatalf("latest completed finish tool after second finish: %v", err)
+	}
+	if latest.SpanID != "span-finish-latest" ||
+		latest.SpanAttemptID != "attempt-finish-latest" ||
+		latest.OperationID != "operation-finish-latest" {
+		t.Fatalf("latest completed finish reference = %#v", latest)
+	}
+
+	missing, err := store.LatestCompletedToolAttempt(ctx, run.ID, finishTool, 1)
+	if err != nil {
+		t.Fatalf("lookup before finish sequence: %v", err)
+	}
+	if missing != (CompletedToolAttempt{}) {
+		t.Fatalf("lookup before finish sequence = %#v, want empty", missing)
+	}
+}
+
 func TestPiCrashRedeliveryAllocatesNewAttemptWithoutOverwritingEvidence(t *testing.T) {
 	ctx, pool, store := newHarnessTestStore(t)
 	run := seedRunForHarness(t, ctx, store)
@@ -404,7 +471,7 @@ func TestPiCrashRedeliveryAllocatesNewAttemptWithoutOverwritingEvidence(t *testi
 	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt1.ID, SourceSequence: 1, SourceType: "pi.message.completed",
 		Event: harnessEnvelope(run.ID, attempt1.ID, 1, "pi.message.completed", `{"text":"first"}`),
-		Span: &span1, Attempt: &att1,
+		Span:  &span1, Attempt: &att1,
 	}); err != nil {
 		t.Fatalf("append attempt 1 event: %v", err)
 	}
@@ -426,7 +493,7 @@ func TestPiCrashRedeliveryAllocatesNewAttemptWithoutOverwritingEvidence(t *testi
 	if err := store.AppendHarnessEvent(ctx, HarnessEventRecord{
 		RunID: run.ID, AttemptID: attempt2.ID, SourceSequence: 1, SourceType: "pi.message.completed",
 		Event: harnessEnvelope(run.ID, attempt2.ID, 1, "pi.message.completed", `{"text":"second"}`),
-		Span: &span2, Attempt: &att2,
+		Span:  &span2, Attempt: &att2,
 	}); err != nil {
 		t.Fatalf("append attempt 2 event: %v", err)
 	}

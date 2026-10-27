@@ -216,9 +216,21 @@ def trace_has_required_shape(run_id: str) -> dict[str, bool]:
             SELECT
               (SELECT count(*) FROM spans WHERE run_id = %s AND kind = 'model'),
               (SELECT count(*) FROM spans WHERE run_id = %s AND kind = 'operation'),
-              (SELECT count(*) FROM spans WHERE run_id = %s AND kind = 'report'),
               (SELECT count(*) FROM usage_records WHERE run_id = %s),
-              (SELECT count(*) FROM operation_results WHERE run_id = %s),
+              (SELECT count(*)
+                 FROM operation_results AS operation
+                 JOIN span_attempts AS attempt
+                   ON attempt.id = operation.span_attempt_id
+                 JOIN spans AS span ON span.id = attempt.span_id
+                WHERE operation.run_id = %s),
+              (SELECT count(*)
+                 FROM operation_results AS operation
+                 JOIN span_attempts AS attempt
+                   ON attempt.id = operation.span_attempt_id
+                 JOIN spans AS span ON span.id = attempt.span_id
+                WHERE operation.run_id = %s
+                  AND jsonb_typeof(operation.result -> 'steps') = 'array'
+                  AND jsonb_array_length(operation.result -> 'steps') > 0),
               (SELECT count(*) FROM run_events WHERE run_id = %s
                  AND payload ->> 'event_type' = 'browser.observation'),
               (SELECT count(*) FROM run_events WHERE run_id = %s
@@ -229,18 +241,18 @@ def trace_has_required_shape(run_id: str) -> dict[str, bool]:
         (
             model_spans,
             operation_spans,
-            report_spans,
             usage_records,
-            operation_results,
+            linked_operations,
+            execution_steps,
             observations,
             case_completed,
         ) = map(int, cursor.fetchone())
     return {
         "model_messages": model_spans >= 1,
         "browser_tools": operation_spans >= 1,
-        "report": report_spans >= 1,
         "usage": usage_records >= 1,
-        "execution_steps": operation_results >= 1,
+        "linked_operation": linked_operations >= 1,
+        "execution_steps": execution_steps >= 1,
         "observations": observations >= 1,
         "case_completed": case_completed >= 1,
     }

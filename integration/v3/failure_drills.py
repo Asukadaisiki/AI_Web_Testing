@@ -392,7 +392,7 @@ class FailureDrills:
                   (SELECT count(*) FROM messages
                    WHERE metadata ->> 'run_id' = %s AND role = 'assistant'),
                   (SELECT count(*) FROM outbox_events
-                   WHERE key = %s AND payload ->> 'event_type' = 'runtime.completed'),
+                   WHERE key = %s AND payload ->> 'event_type' = 'harness.completed'),
                   (SELECT count(*) FROM spans
                    WHERE run_id = %s AND status = 'succeeded' AND ended_at IS NOT NULL),
                   (SELECT count(DISTINCT span_id) FROM spans
@@ -513,7 +513,7 @@ class FailureDrills:
             FROM outbox_events
             WHERE key = %s
               AND topic = %s
-              AND payload ->> 'event_type' = 'runtime.completed'
+              AND payload ->> 'event_type' = 'harness.completed'
             """,
             (run_id, EVENT_TOPIC),
         )

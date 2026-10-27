@@ -36,7 +36,8 @@ type Node struct {
 type projector func(domain.Span, Evidence) ([]Node, error)
 
 var projectors = map[string]projector{
-	"browser_execute_case": projectBrowserSteps,
+	"browser_execute_case":              projectBrowserSteps,
+	"mcp__browser_harness__finish_case": projectBrowserSteps,
 }
 
 // Project converts the first repository-ordered evidence record for each

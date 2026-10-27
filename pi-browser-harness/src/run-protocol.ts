@@ -46,6 +46,8 @@ export interface HarnessEventPayloads {
   };
   "browser.case.completed": {
     verdict: "passed" | "failed";
+    case?: Record<string, unknown>;
+    dry_run?: Record<string, unknown>;
     [key: string]: unknown;
   };
   "harness.settled": {

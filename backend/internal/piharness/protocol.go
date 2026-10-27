@@ -139,7 +139,9 @@ type ObservationPayload struct {
 }
 
 type CaseCompletedPayload struct {
-	Verdict string `json:"verdict"`
+	Verdict string          `json:"verdict"`
+	Case    json.RawMessage `json:"case"`
+	DryRun  json.RawMessage `json:"dry_run"`
 }
 
 type SettledPayload struct {

@@ -84,7 +84,7 @@ class _Connection:
 
 
 class TraceShapeTest(unittest.TestCase):
-    def test_requires_model_operation_report_usage_and_execution(self) -> None:
+    def test_requires_model_tools_usage_linked_operation_and_execution_steps(self) -> None:
         cursor = _Cursor(one=(1, 1, 1, 1, 1, 1, 1))
         connection = _Connection(cursor)
 
@@ -96,13 +96,31 @@ class TraceShapeTest(unittest.TestCase):
             {
                 "model_messages": True,
                 "browser_tools": True,
-                "report": True,
                 "usage": True,
+                "linked_operation": True,
                 "execution_steps": True,
                 "observations": True,
                 "case_completed": True,
             },
         )
+
+    def test_rejects_unlinked_operation_evidence(self) -> None:
+        cursor = _Cursor(one=(1, 1, 1, 0, 1, 1, 1))
+        connection = _Connection(cursor)
+
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+            shape = trace_has_required_shape("run-1")
+
+        self.assertFalse(shape["linked_operation"])
+
+    def test_rejects_operation_evidence_without_execution_steps(self) -> None:
+        cursor = _Cursor(one=(1, 1, 1, 1, 0, 1, 1))
+        connection = _Connection(cursor)
+
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg(connection)}):
+            shape = trace_has_required_shape("run-1")
+
+        self.assertFalse(shape["execution_steps"])
 
     def test_reports_missing_shape_when_counts_are_zero(self) -> None:
         cursor = _Cursor(one=(0, 0, 0, 0, 0, 0, 0))
