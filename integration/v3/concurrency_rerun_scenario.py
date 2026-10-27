@@ -152,6 +152,7 @@ def create_run(
             "model": {
                 "provider": str(agent["model"]["provider"]),
                 "name": str(agent["model"]["name"]),
+                "reasoning_effort": str(agent["model"].get("reasoning_effort", "")),
             },
             "idempotency_key": (
                 f"concurrency-rerun-{batch}-{conversation.conversation_id}-{index}"

@@ -3,12 +3,16 @@
 AgentTrace Eval Hub turns a conversation request into a durable, browser-backed
 evaluation run. PostgreSQL is the system of record, Kafka carries commands and
 events, Redis provides best-effort live updates, and the Python worker executes
-the local storefront fixture with Playwright.
+the local storefront fixture with Playwright. The production agent loop runs
+inside a per-Run **Pi browser harness** subprocess: Pi owns model selection,
+conversation context, turns, and tool dispatch, and exposes only Run-scoped
+browser MCP tools backed by deterministic TypeScript logic and the worker HTTP
+API. The Go runtime remains the durable command consumer and Trace writer.
 
 ## Clean start
 
-The default Compose stack uses the checked-in scripted model fixture. It does
-not need model credentials.
+The default Compose stack uses the Pi harness with the scripted fixture
+provider and the real Playwright worker. It does not need model credentials.
 
 ```bash
 cp .env.example .env
@@ -98,9 +102,12 @@ browser scenario are documented in
 | `backend/cmd/agenttrace-runtime` | Kafka command consumer and durable run runtime |
 | `backend/cmd/agenttrace-exporter` | Optional Langfuse event exporter |
 | `backend/internal/api/v3` | REST, SSE, health, and artifact contracts |
-| `backend/internal/domain`, `event`, `operation` | Run, event, and operation contracts |
+| `backend/internal/domain`, `event` | Run and event contracts |
+| `backend/internal/piharness` | Pi harness process and JSONL protocol |
 | `backend/internal/postgres` | PostgreSQL schema and durable repositories |
 | `backend/internal/traceprojection` | Derived Trace step projection from operation evidence |
+| `pi-browser-harness` | Pi package: system prompt, browser-case-authoring skill, MCP browser tools, and deterministic case builder |
+| `pi-browser-harness/Dockerfile` | Multi-stage image: builds the harness with Node.js and installs it alongside the Go runtime |
 | `worker/loop_worker` | Worker HTTP API and Playwright execution |
 | `web/src/features/trace` | Trace parsing, tree normalization, and derived-node inspection |
 | `web/src/features/workspace` | Three-column project, conversation, and trace workspace |

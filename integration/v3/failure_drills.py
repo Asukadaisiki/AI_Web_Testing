@@ -353,6 +353,7 @@ class FailureDrills:
             "model": {
                 "provider": agent.get("model", {}).get("provider"),
                 "name": agent.get("model", {}).get("name"),
+                "reasoning_effort": agent.get("model", {}).get("reasoning_effort"),
             },
             "idempotency_key": f"failure-drill-{label}-{uuid.uuid4()}",
         }

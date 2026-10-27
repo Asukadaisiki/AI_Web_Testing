@@ -77,7 +77,7 @@ func run() error {
 			return redisClient.Ping(checkCtx).Err()
 		}
 	}
-	profile, err := agentprofile.LoadBrowserEval(cfg.WorkerURL)
+	profile, err := agentprofile.LoadBrowserEval()
 	if err != nil {
 		return fmt.Errorf("load browser profile: %w", err)
 	}
@@ -139,10 +139,10 @@ func run() error {
 }
 
 func configuredModel(cfg config.Model, profile agentprofile.Profile) event.ModelRef {
-	if cfg.ScriptPath != "" {
-		return event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"}
+	if cfg.APIKey == "" {
+		return event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture", ReasoningEffort: profile.Model.ReasoningEffort}
 	}
-	return event.ModelRef{Provider: profile.Model.Provider, Name: cfg.Name}
+	return event.ModelRef{Provider: profile.Model.Provider, Name: cfg.Name, ReasoningEffort: profile.Model.ReasoningEffort}
 }
 
 func relayLoop(ctx context.Context, relay *outbox.Relay) {

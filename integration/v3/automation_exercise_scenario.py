@@ -764,6 +764,7 @@ def run_scenario(config: ScenarioConfig | None = None) -> dict[str, Any]:
     agent = agents[0]
     provider = str(agent.get("model", {}).get("provider", ""))
     model_name = str(agent.get("model", {}).get("name", ""))
+    reasoning_effort = str(agent.get("model", {}).get("reasoning_effort", ""))
     if provider != "openai-compatible":
         raise AssertionError(
             f"real-provider scenario requires openai-compatible, got {provider!r}"
@@ -778,7 +779,7 @@ def run_scenario(config: ScenarioConfig | None = None) -> dict[str, Any]:
                 lambda task: _create_project_and_conversation(task, batch), tasks
             )
         )
-    model = {"provider": provider, "name": model_name}
+    model = {"provider": provider, "name": model_name, "reasoning_effort": reasoning_effort}
     runs, statuses = _submit_runs_serially(
         tasks,
         locations,

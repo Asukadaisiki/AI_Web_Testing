@@ -139,7 +139,7 @@ def create_run(
         body={
             "content": content,
             "agent_id": "browser-eval",
-            "model": {"provider": "scripted", "name": "browser-eval-fixture"},
+            "model": {"provider": "scripted", "name": "browser-eval-fixture", "reasoning_effort": "high"},
             "idempotency_key": idempotency_key or f"parallel-{uuid.uuid4()}",
         },
         expected=202,
@@ -385,7 +385,7 @@ def test_message_idempotency() -> RunFixture:
         body={
             "content": "different content",
             "agent_id": "browser-eval",
-            "model": {"provider": "scripted", "name": "browser-eval-fixture"},
+            "model": {"provider": "scripted", "name": "browser-eval-fixture", "reasoning_effort": "high"},
             "idempotency_key": key,
         },
         expected=409,

@@ -622,6 +622,7 @@ def run_scenario(config: LoadConfig) -> dict[str, Any]:
     agent = agents[0]
     provider = str(agent.get("model", {}).get("provider", ""))
     model_name = str(agent.get("model", {}).get("name", ""))
+    reasoning_effort = str(agent.get("model", {}).get("reasoning_effort", ""))
     if provider != "openai-compatible":
         raise AssertionError(
             f"real-provider load requires openai-compatible, got {provider!r}"
@@ -657,7 +658,7 @@ def run_scenario(config: LoadConfig) -> dict[str, Any]:
         for conversation in conversations
         for run_index in range(config.runs_per_conversation)
     ]
-    model = {"provider": provider, "name": model_name}
+    model = {"provider": provider, "name": model_name, "reasoning_effort": reasoning_effort}
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=config.submit_workers
     ) as executor:

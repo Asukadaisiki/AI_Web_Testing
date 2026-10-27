@@ -59,11 +59,11 @@ func TestOperatorFilesDescribePortableV3Startup(t *testing.T) {
 	}
 
 	envExample := read(".env.example")
-	if !strings.Contains(
-		envExample,
-		"AGENTTRACE_MODEL_SCRIPT=/app/fixtures/scripts/agenttrace_browser_eval.json",
-	) {
-		t.Error(".env.example must preserve the canonical scripted browser fixture")
+	if strings.Contains(envExample, "AGENTTRACE_MODEL_SCRIPT=") {
+		t.Error(".env.example must not set AGENTTRACE_MODEL_SCRIPT; the Pi harness is the production path")
+	}
+	if !strings.Contains(envExample, "AGENTTRACE_PI_HARNESS_ENTRY=") {
+		t.Error(".env.example must configure the Pi harness entry point")
 	}
 
 	compose := read("compose.yaml")
@@ -86,11 +86,11 @@ func TestOperatorFilesDescribePortableV3Startup(t *testing.T) {
 	}
 
 	contract := read("CONTRACT.md")
-	if !strings.Contains(contract, "scripted model fixture supplies the complete browser case JSON") {
-		t.Error("contract must describe the scripted v3 browser case source")
+	if !strings.Contains(contract, "Pi browser harness") {
+		t.Error("contract must describe the Pi browser harness production path")
 	}
-	if strings.Contains(contract, "models do not write selectors, conditions, or raw case JSON") {
-		t.Error("contract still describes the retired planner behavior")
+	if strings.Contains(contract, "model writes complete case JSON") {
+		t.Error("contract must not claim the model writes complete case JSON")
 	}
 	if !strings.Contains(contract, "model-supplied grounding metadata") {
 		t.Error("contract must not claim model-supplied grounding is observation-verified")

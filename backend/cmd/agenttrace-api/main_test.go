@@ -37,10 +37,11 @@ func TestWorkerHealthCheckRejectsUnavailableWorker(t *testing.T) {
 }
 
 func TestConfiguredModelUsesServerModeIdentity(t *testing.T) {
-	profile, err := agentprofile.LoadBrowserEval("https://worker.internal")
+	profile, err := agentprofile.LoadBrowserEval()
 	if err != nil {
 		t.Fatalf("load browser profile: %v", err)
 	}
+	reasoningEffort := profile.Model.ReasoningEffort
 	for _, test := range []struct {
 		name string
 		cfg  config.Model
@@ -48,13 +49,13 @@ func TestConfiguredModelUsesServerModeIdentity(t *testing.T) {
 	}{
 		{
 			name: "scripted",
-			cfg:  config.Model{ScriptPath: "testdata/scripted-model.json", Name: "ignored"},
-			want: event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture"},
+			cfg:  config.Model{APIKey: "", Name: "ignored"},
+			want: event.ModelRef{Provider: "scripted", Name: "browser-eval-fixture", ReasoningEffort: reasoningEffort},
 		},
 		{
 			name: "external",
-			cfg:  config.Model{Name: "glm-5.3-flash"},
-			want: event.ModelRef{Provider: "openai-compatible", Name: "glm-5.3-flash"},
+			cfg:  config.Model{APIKey: "secret-key", Name: "glm-5.3-flash"},
+			want: event.ModelRef{Provider: "openai-compatible", Name: "glm-5.3-flash", ReasoningEffort: reasoningEffort},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -30,7 +30,7 @@ func TestArtifactsServesConfiguredSharedVolumeFile(t *testing.T) {
 	if err := os.WriteFile(artifactPath, []byte("browser screenshot"), 0o600); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	profile, err := agentprofile.LoadBrowserEval("https://worker.internal")
+	profile, err := agentprofile.LoadBrowserEval()
 	if err != nil {
 		t.Fatalf("load browser profile: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 	response := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", `{
 		"content":"verify the cart",
 		"agent_id":"browser-eval",
-		"model":{"provider":"openai-compatible","name":"glm-5.3-flash"},
+		"model":{"provider":"openai-compatible","name":"glm-5.3-flash","reasoning_effort":"high"},
 		"idempotency_key":"request-1"
 	}`)
 	if response.Code != http.StatusAccepted {
@@ -80,11 +80,11 @@ func TestSendMessageReturns202AndStableIDs(t *testing.T) {
 	if repository.message.AgentID != "browser-eval" {
 		t.Fatalf("agent id = %q", repository.message.AgentID)
 	}
-	if repository.message.Model != (event.ModelRef{Provider: "openai-compatible", Name: "glm-5.3-flash"}) {
+	if repository.message.Model != (event.ModelRef{Provider: "openai-compatible", Name: "glm-5.3-flash", ReasoningEffort: "high"}) {
 		t.Fatalf("stored model = %#v, want configured model", repository.message.Model)
 	}
-	if len(repository.message.Operations) != 1 || repository.message.Operations[0].Callback.URL == "" {
-		t.Fatalf("run operations = %#v, want server-owned browser operation", repository.message.Operations)
+	if len(repository.message.Operations) != 0 {
+		t.Fatalf("run operations = %#v, want none: the harness owns browser tool dispatch", repository.message.Operations)
 	}
 }
 
@@ -811,7 +811,7 @@ func TestGetTracePreservesLargeIntegersWhileRedactingSensitiveSiblings(t *testin
 func TestSendMessageDuplicateIdempotencyKeyReturnsSameRun(t *testing.T) {
 	repository := &fakeRepository{}
 	handler := newTestServer(t, repository, stream.NewService(&fakeEventReader{}, live.NewMemoryStore(), stream.Config{}))
-	body := `{"content":"verify the cart","agent_id":"browser-eval","model":{"provider":"openai-compatible","name":"glm-5.3-flash"},"idempotency_key":"request-1"}`
+	body := `{"content":"verify the cart","agent_id":"browser-eval","model":{"provider":"openai-compatible","name":"glm-5.3-flash","reasoning_effort":"high"},"idempotency_key":"request-1"}`
 
 	first := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", body)
 	second := request(t, handler, http.MethodPost, "/api/v1/conversations/conv_1/messages", body)
@@ -997,7 +997,7 @@ func TestEventsEncodeEphemeralEventsWithoutID(t *testing.T) {
 }
 
 func TestEventsHeartbeatAndRequestCancellation(t *testing.T) {
-	profile, err := agentprofile.LoadBrowserEval("https://worker.internal")
+	profile, err := agentprofile.LoadBrowserEval()
 	if err != nil {
 		t.Fatalf("load browser profile: %v", err)
 	}
@@ -1047,7 +1047,7 @@ func newTestServer(t *testing.T, repository *fakeRepository, service *stream.Ser
 
 func newTestServerWithLive(t *testing.T, repository *fakeRepository, service *stream.Service, liveStore live.LiveStore) http.Handler {
 	t.Helper()
-	profile, err := agentprofile.LoadBrowserEval("https://worker.internal")
+	profile, err := agentprofile.LoadBrowserEval()
 	if err != nil {
 		t.Fatalf("load browser profile: %v", err)
 	}
@@ -1067,7 +1067,7 @@ func newTestServerWithLive(t *testing.T, repository *fakeRepository, service *st
 
 func newTestServerWithHealth(t *testing.T, repository *fakeRepository, health healthDependencies) http.Handler {
 	t.Helper()
-	profile, err := agentprofile.LoadBrowserEval("https://worker.internal")
+	profile, err := agentprofile.LoadBrowserEval()
 	if err != nil {
 		t.Fatalf("load browser profile: %v", err)
 	}

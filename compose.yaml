@@ -93,7 +93,6 @@ services:
       AGENTTRACE_HTTP_ADDR: :8080
       AGENTTRACE_ARTIFACT_DIR: /artifacts
       AGENTTRACE_MODEL_NAME: ${AGENTTRACE_MODEL_NAME:-glm-5.3-flash}
-      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT-/app/fixtures/scripts/agenttrace_browser_eval.json}
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,7 +105,11 @@ services:
       - artifacts:/artifacts
 
   runtime:
-    image: golang:1.24
+    build:
+      context: .
+      dockerfile: pi-browser-harness/Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     working_dir: /app/backend
     command: ["go", "run", "./cmd/agenttrace-runtime"]
     environment:
@@ -121,14 +124,13 @@ services:
       AGENTTRACE_MODEL_NAME: ${AGENTTRACE_MODEL_NAME:-glm-5.3-flash}
       AGENTTRACE_MODEL_REASONING_EFFORT: ${AGENTTRACE_MODEL_REASONING_EFFORT:-high}
       AGENTTRACE_MODEL_API_KEY: ${AGENTTRACE_MODEL_API_KEY:-}
-      AGENTTRACE_MODEL_SCRIPT: ${AGENTTRACE_MODEL_SCRIPT-/app/fixtures/scripts/agenttrace_browser_eval.json}
+      AGENTTRACE_PI_HARNESS_ENTRY: ${AGENTTRACE_PI_HARNESS_ENTRY:-/app/pi-browser-harness/dist/main.js}
     depends_on:
       postgres:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
     volumes:
-      - .:/app
       - artifacts:/artifacts
 
   exporter:

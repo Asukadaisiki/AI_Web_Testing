@@ -64,11 +64,13 @@ func schemaMajor(version string) (int, error) {
 	return major, nil
 }
 
-// ModelRef identifies a server-approved model.
+// ModelRef identifies a server-approved model. ReasoningEffort is immutable
+// and always serialized so a restarted runtime can reconstruct the Pi harness
+// request from PostgreSQL alone.
 type ModelRef struct {
 	Provider        string `json:"provider"`
 	Name            string `json:"name"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 // Callback describes a server-owned operation callback.

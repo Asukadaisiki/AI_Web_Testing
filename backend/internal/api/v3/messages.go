@@ -43,7 +43,6 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		Content:        input.Content,
 		AgentID:        s.profile.ID,
 		Model:          s.model,
-		Operations:     s.profile.RunOperations(),
 		IdempotencyKey: input.IdempotencyKey,
 	})
 	if err != nil {

@@ -54,13 +54,10 @@ class ComposeRealProviderConfigTest(unittest.TestCase):
             [("5174", 5174)],
         )
 
-    def test_explicit_empty_script_path_disables_the_scripted_model(self) -> None:
-        environment = os.environ.copy()
-        environment["AGENTTRACE_MODEL_SCRIPT"] = ""
+    def test_pi_harness_entry_is_configured_for_runtime(self) -> None:
         result = subprocess.run(
             ["docker", "compose", "config", "--format", "json"],
             cwd=ROOT,
-            env=environment,
             text=True,
             capture_output=True,
             check=False,
@@ -68,10 +65,9 @@ class ComposeRealProviderConfigTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         services = json.loads(result.stdout)["services"]
-        self.assertEqual(services["api"]["environment"]["AGENTTRACE_MODEL_SCRIPT"], "")
-        self.assertEqual(
-            services["runtime"]["environment"]["AGENTTRACE_MODEL_SCRIPT"], ""
-        )
+        runtime_env = services["runtime"]["environment"]
+        self.assertIn("AGENTTRACE_PI_HARNESS_ENTRY", runtime_env)
+        self.assertNotIn("AGENTTRACE_MODEL_SCRIPT", runtime_env)
 
 
 class KafkaTopicInitTest(unittest.TestCase):

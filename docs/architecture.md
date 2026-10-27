@@ -3,20 +3,28 @@
 AgentTrace Eval Hub v3 is one durable browser-evaluation workflow. The React
 workspace presents projects, conversations, and run traces in three columns.
 The API stores requests in PostgreSQL and appends outbox rows atomically. Kafka
-delivers commands to the runtime, which uses the scripted model fixture by
-default and calls the Playwright worker. The worker evaluates the local fixture
-site and returns evidence that becomes durable run events and trace details.
+delivers commands to the runtime, which starts one per-Run **Pi browser harness**
+subprocess. The harness embeds Pi, force-loads the browser-case-authoring skill,
+and exposes only Run-scoped browser MCP tools backed by deterministic TypeScript
+logic and the Playwright worker. The worker evaluates the local fixture site and
+returns evidence that becomes durable run events and trace details. The Go
+runtime consumes the harness's newline-delimited event stream and writes Trace
+records and terminal Run status to PostgreSQL.
 
 PostgreSQL preserves facts; Kafka preserves delivery; Redis preserves live experience.
 
 ## Canonical browser scenario
 
-`integration/v3/canonical_scenario.py` creates a project and conversation,
-sends the deterministic browser-evaluation request, follows the run SSE stream
-until it succeeds, and verifies PostgreSQL facts and browser evidence. The
-scripted model drives the local storefront fixture: filter `alpha`, open the
+`integration/v3/pi_harness_scenario.py` creates a project and conversation,
+sends the deterministic browser-evaluation request through the Pi harness,
+follows the run until it succeeds, and verifies PostgreSQL facts, harness
+attempt identity, and browser evidence. The harness uses the scripted fixture
+provider and drives the local storefront fixture: filter `alpha`, open the
 detail page, add two items, and verify the cart summary. It runs entirely
-against Compose services and does not need an external model key.
+against Compose services and does not need an external model key. The scenario
+also asserts that a failed browser assertion produces a failed Run with
+evidence, that cancellation releases the harness process, that concurrent Runs
+own distinct harness attempts, and that a rerun creates a fresh harness attempt.
 
 The retained browser-case interoperability contract remains
 `fixtures/contract/case_contract.json`. It is consumed by the worker contract
@@ -31,9 +39,14 @@ flowchart LR
     API --> OUTBOX[PostgreSQL outbox]
     OUTBOX --> KAFKA[(Kafka delivery)]
     KAFKA --> RUNTIME[AgentTrace runtime]
-    RUNTIME --> WORKER[Playwright worker]
+    RUNTIME --> PI[Pi browser harness subprocess]
+    PI --> MCP[Browser MCP tools]
+    MCP --> CASEBUILDER[Deterministic case builder]
+    MCP --> WORKER[Playwright worker]
     WORKER --> FIXTURE[Local storefront fixture]
-    WORKER --> RUNTIME
+    WORKER --> MCP
+    PI -. JSONL events .-> RUNTIME
+    RUNTIME --> PG
     RUNTIME --> KAFKA
     KAFKA --> API
     API <--> REDIS[(Redis live updates)]

@@ -13,8 +13,8 @@ persistence or legacy session-control fallback.
 | Workspace HTTP, SSE, and health | `backend/internal/api/v3` |
 | Durable run, event, and Trace types | `backend/internal/domain`, `backend/internal/event` |
 | PostgreSQL transactions and Trace projection | `backend/internal/postgres` |
-| Runtime checkpoints and model/operation loop | `backend/internal/runtime` |
-| Server-owned operation schemas and callback validation | `backend/internal/operation`, `backend/internal/agentprofile` |
+| Runtime checkpoints and Pi harness execution | `backend/internal/runtime`, `backend/internal/piharness` |
+| Server-owned model defaults and safety policy | `backend/internal/agentprofile` |
 | Browser case, observation, and execution types | `backend/internal/contract` |
 | Worker HTTP service and Playwright execution | `worker/loop_worker/main.py`, `runner.py` |
 | Cross-language browser fixture cases | `fixtures/contract/case_contract.json` |
@@ -42,10 +42,15 @@ a second persisted message, span, operation result, or terminal transition.
 `GET /api/v1/runs/{id}/events` replays durable PostgreSQL events and may use
 Redis only to reduce live-update latency.
 
-The browser operation name is `browser_execute_case`. Its callback URL is
-selected from the server-owned browser agent profile, never from browser input.
-The operation request includes a stable run ID, span ID, and operation ID; the
-worker treats the operation ID as its idempotency key.
+The production agent loop runs inside a per-Run Pi browser harness subprocess.
+The Go runtime starts one isolated harness process per active Run, feeds it a
+single `pi-browser-harness.v1` request on stdin, and consumes newline-delimited
+JSONL events from stdout. The harness embeds Pi, force-loads the
+browser-case-authoring skill, and exposes only Run-scoped browser MCP tools
+backed by deterministic TypeScript logic and the worker HTTP API. The runtime
+maps harness events to durable Trace records and derives terminal Run status
+only from objective browser execution evidence. Assistant prose and Pi
+settlement never override the objective execution verdict.
 
 ## Browser Case
 
@@ -61,12 +66,14 @@ A case is the only executable browser artifact:
 }
 ```
 
-`steps` is non-empty and its first action is `goto`. The selected model supplies
-the `browser_execute_case` tool arguments, including the complete case JSON.
-The scripted model fixture supplies the complete browser case JSON
-deterministically in the default local stack. The operation schema is the
-server-side input boundary, `backend/internal/contract.Validate` validates the
-Go representation, and `worker/loop_worker/contracts.py` is its Python mirror.
+`steps` is non-empty and its first action is `goto`. The case is authored
+through the browser-case-authoring skill and browser MCP tools exposed by the
+Pi harness, not by the model emitting raw case JSON. The deterministic case
+builder grounds targets, validates expectations, and runs a fresh-context dry
+run before `finish_case` can settle a passing evaluation. The operation schema
+is the server-side input boundary, `backend/internal/contract.Validate`
+validates the Go representation, and `worker/loop_worker/contracts.py` is its
+Python mirror.
 
 Each step has `index`, `action`, human-readable `intent`, optional `value`,
 optional grounded `target`, `preconditions`, `postconditions`, and
@@ -186,11 +193,12 @@ already part of prompt tokens; neither is added twice. The normalized type is
 `backend/internal/usage.Usage`; runtime writes it with the corresponding
 durable Trace attempt.
 
-The runtime presents the durable conversation and server-owned operation
-schemas to the selected model. The default scripted model returns the
-deterministic canonical operation request from
-`fixtures/scripts/agenttrace_browser_eval.json`; an OpenAI-compatible model may
-instead produce schema-valid operation arguments at runtime.
+The runtime passes the durable conversation, server-owned model defaults, and
+reasoning effort to the Pi harness. The harness selects the model provider and
+owns the conversation context, turns, and tool dispatch. The default scripted
+fixture provider returns deterministic model responses for the local stack; an
+OpenAI-compatible provider may instead be configured at runtime. Provider
+configuration is environment-owned and never enters Run history as a secret.
 
 ## Optional Langfuse Export
 

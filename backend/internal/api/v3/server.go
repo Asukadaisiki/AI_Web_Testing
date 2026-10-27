@@ -98,6 +98,9 @@ func New(config ServerConfig) *Server {
 	if model.Name == "" {
 		model.Name = config.Profile.Model.Name
 	}
+	if model.ReasoningEffort == "" {
+		model.ReasoningEffort = config.Profile.Model.ReasoningEffort
+	}
 	server := &Server{
 		repository: config.Repository,
 		profile:    config.Profile,
